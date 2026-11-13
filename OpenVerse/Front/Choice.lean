@@ -851,7 +851,7 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     let ord := info.fields
     let names := fs.filterMap fun | .decl _ f none false _ => some f | _ => none
     if ord.isEmpty || names.length != fs.length then
-      return noLift p "a construction here, whose fields' order is not known (in a recursive function computed eagerly)" e
+      return noLift p "a construction here, whose fields' order is not known yet" e
     if let some f := names.find? (fun f => (names.filter (· == f)).length > 1) then
       return noLift p s!"a construction that gives field '{f}' twice" e
     let idx := fun (f : String) => (ord.map (·.1)).idxOf f
@@ -1760,8 +1760,8 @@ end
 def eagerWhy : String :=
   "such a function must be <computes>, keep no local state, and reach nothing that prints or calls Err(), " ++
   "as all its values are computed at a call (#235), unless it is taken lazily: clauses, then a choice whose " ++
-  "alternatives are values, calls of its recursive group, or such a call or a choice with code after it that may " ++
-  "reach another, not in a field of a class's construction (#246, #283)"
+  "alternatives are values or calls of functions with several values (its group's, or others it calls, taken " ++
+  "with it), or such a call or a choice with code after it that may reach another (#246, #283)"
 
 /-- (#283) Whether an alternative in normal form (`normAlt`) is one the
     lazy machine takes: its prefix plain, a choice's alternatives such again,
@@ -2030,10 +2030,12 @@ def markRecG (g : String) (grp : List String) : SExpr → SExpr :=
 partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List String := [])
     (loops : List String := []) (clash : List (String × List String) := [])
     (inDflt : List (String × String) := []) (groups : List (String × List String) := [])
-    (fieldOrder : String → FieldOrder := fun _ => {}) :
+    (fieldOrder : String → FieldOrder := fun _ => {}) (memberFns : List (String × MFn) := []) :
     StateT Nat (Except String) SExpr := do
-  -- (`inDflt`: the defaults being inlined, function and parameter, #283)
-  let go := fun x => inlineCalls mv x recs loops clash inDflt groups fieldOrder
+  -- (`inDflt`: the defaults being inlined, function and parameter, #283;
+  -- `memberFns`: the functions a group's machine takes that are inlined
+  -- elsewhere, with their returns taken out as the group's are, #283)
+  let go := fun x => inlineCalls mv x recs loops clash inDflt groups fieldOrder memberFns
   match e with
   | .app p (.ident _ "$dispatch") (.ident q g :: .block tp tmpl :: as) false =>
     -- (an overridden method's dispatch, #283: an inlined call whose
@@ -2168,7 +2170,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
             -- (one that calls `g` again omitting it: as at a call)
             if inDflt.contains (g, sp.name) then
               throw s!"{p.show}: the default of ?{sp.name} of {shownFnName g} uses itself (a call of {shownFnName g} that omits ?{sp.name})"
-            let d' ← inlineCalls mv (renameTypes ρ d) recs loops clash ((g, sp.name) :: inDflt) groups fieldOrder
+            let d' ← inlineCalls mv (renameTypes ρ d) recs loops clash ((g, sp.name) :: inDflt) groups fieldOrder memberFns
             let earlier := (f.params.take k).map fun e => SExpr.tuple q [.ident q e.name, .ident q (tag e.name)]
             return some (.decl q (tag sp.name) (tyOf sp.ty) false
               (.app q (.ident q "$paramDefault") [.ident q g, .ident q sp.name, .block q earlier, d'] false))
@@ -2226,7 +2228,8 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
         let tail' ← if grp.length ≤ 1 then pure (markRec g tail) else do
           let mut members : List SExpr := []
           for h in grp.filter (· != g) do
-            let some fh := mv.lookup h | throw s!"{p.show}: internal: the group of {g} (#283)"
+            let some fh := (memberFns.lookup h).orElse fun _ => mv.lookup h
+              | throw s!"{p.show}: internal: the group of {g} (#283)"
             let tagH (n : String) : String := s!"${h.replace "::" "_"}_{n}_{site}"
             let renH := (fh.params.map (·.name) ++ localsOf fh.body).eraseDups.map fun n => (n, tagH n)
             let ρH := fh.tparams.map fun tp => (tp.name, memberTypeName h tp.name)
@@ -3502,6 +3505,13 @@ partial def mapConsumersM [Monad m] (has : SExpr → Bool) (f : Consumer → m (
     notes (`$noteTypes`, `Requests.nested`): the consumer's place and `n`. -/
 def nestKey (p : Pos) (n : String) : String := s!"{p.file}:{p.line}:{p.col}/{n}"
 
+/-- (#283) The structs and classes `e` constructs with a field whose value has
+    something `point` sees. -/
+partial def constructsWith (point : SExpr → Bool) (e : SExpr) : List String :=
+  (match e with
+    | .construct _ n _ fs => if fs.any (anyE point) then [n] else []
+    | _ => []) ++ e.children.flatMap (constructsWith point)
+
 /-- (#283) The names a consumer takes from the code of the function `f` it
     is in: those it uses that `f`'s parameters or locals bind, not its own. -/
 def Consumer.caps (c : Consumer) (f : MFn) : List String :=
@@ -3578,14 +3588,16 @@ def noteConsumers (f : MFn) (has : SExpr → Bool) : SExpr :=
     several values inlined at their calls; whether some are taken lazily
     (#246), whose consumers need a class of stack cells; the uses of methods
     whose family an elaboration is to pick; the calls of overloaded
-    functions whose overload an elaboration is to pick; and the consumers
-    whose names' types an elaboration is to note (#283, `nestFns`). -/
+    functions whose overload an elaboration is to pick; the consumers
+    whose names' types an elaboration is to note (#283, `nestFns`); and the
+    structs and classes whose field orders it is to note (#283). -/
 structure Inlined where
   tops : List STop
   lazy : Bool := false
   familySites : List (Pos × String) := []
   overloadSites : List (Pos × String) := []
   nestedSites : List String := []
+  fieldSites : List String := []
 
 /-- The functions of the program that have several values, inlined at their
     calls (see above); the program unchanged when there are none. Also
@@ -3599,7 +3611,7 @@ structure Inlined where
     their consumers are functions of their own already.) -/
 partial def inlineFns (tops : List STop) (eager : List String) (lazy : List String)
     (overloadPicks : List (Pos × String)) (nested : List (String × STy))
-    (sites methodOvSites : List (Pos × String)) (pending : List Pos := [])
+    (orders : List (String × List (String × Bool))) (sites methodOvSites : List (Pos × String)) (pending : List Pos := [])
     (checking : List (Pos × SExpr) := []) (nestDone : Bool := false) : Except String Inlined := do
   -- (#283) overloaded functions: each overload a function of its own,
   -- `F$mvK`. A call of `F` is one of the overload the arguments' types
@@ -3632,18 +3644,11 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
     if let some (_, o') := overloadPicks.find? fun (q', o') => q' == q && o' != o then
       throw s!"{q.show}: this call takes the overload {ovShown o} in the clauses copied for one alternative of a choice and {ovShown o'} in those copied for another, and which overload with several values a call takes is decided before types: not supported yet (#283)"
   let rawMfs := fns.filter (mv.contains ·.1)
-  -- (#283) a struct's fields in declaration order, the order its
-  -- constructions evaluate them in, for the lifter where a lazily taken
-  -- group's code is normalized; a generic one's too, whose construction
-  -- names its type arguments; not a class's, whose layout (its supers'
-  -- fields, an interface's) is the elaborator's)
-  let structOrders : List (String × FieldOrder) := tops.filterMap fun
-    | .const _ n _ (.structDef _ _ _ fs) =>
-      some (n, { fields := fs.map fun (f, _, d, _) => (f, match d with
-        | some d => !stable (fun _ => true) d
-        | none => false) })
-    | _ => none
-  let fieldOrder (n : String) : FieldOrder := (structOrders.lookup n).getD {}
+  -- (#283) a struct's or class's fields in the order its constructions
+  -- evaluate them in, for the lifter where a lazily taken group's code is
+  -- normalized: the elaborator's (`TyEnv.fieldOrder`), as an earlier
+  -- elaboration noted it (`orders`)
+  let fieldOrder (n : String) : FieldOrder := { fields := (orders.lookup n).getD [] }
   -- Analyze recursive shapes after source returns have selected their paths.
   -- Keep original bodies for checking and nonrecursive inline boundaries.
   let mfs ← rawMfs.mapM fun (n, f) => do
@@ -3700,8 +3705,7 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
     return seen
   let groupOf (g : String) : List String :=
     g :: (mfs.map (·.1)).filter fun h => h != g && (reachSet g).contains h && (reachSet h).contains g
-  let groupOK (g : String) (frames : Bool) : Bool :=
-    let grp := groupOf g
+  let groupOK (grp : List String) (frames : Bool) : Bool :=
     grp.all fun h => match mfs.lookup h with
       | some f => ((callees.lookup h).getD []).all grp.contains &&
         (loopShape? h mv f.body grp frames (f.params.map (·.name)) fieldOrder).isSome
@@ -3715,6 +3719,14 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
     match rawMfs.lookup h with
     | some f => f.fx.contains "computes" && !anyE (fun | .set .. | .decl _ _ _ true _ => true | _ => false) f.body
     | none => false
+  -- (#283) the functions one machine takes lazily: a group's strongly
+  -- connected functions, and, for one taken lazily (not computable), every
+  -- function with several values its code calls, those that one calls, and
+  -- so on: a call of one is a choice point of the machine as a call of the
+  -- group is, the callee's code a member's
+  let machineOf (g : String) : List String :=
+    let grp := groupOf g
+    if computable g then grp else grp ++ (reachSet g).filter (!grp.contains ·)
   -- (#283) a consumer, in the code of a recursive group taken lazily (one
   -- not computable), of a call of a function with several values, its
   -- group's or another's: a function of its own (`nestFns`), and the
@@ -3723,23 +3735,36 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
   -- with one value (`pending`), their calls as written, as the uses of a
   -- method's family are in the first elaboration, and their bodies note them
   -- (`noteConsumers`).
+  let has (e : SExpr) : Bool := anyE (fun
+    | .app _ (.ident _ h) _ _ => mv.contains h || h == "$dispatch"
+    | _ => false) e
+  -- (the function defined at `p`: a candidate, or an overload of one)
+  let isAt (p : Pos) : STop → Bool
+    | .fn q n .. => q == p && ((rawMfs.lookup n).isSome || ovNamesAll.contains n)
+    | _ => false
+  let withBody (p : Pos) (b : SExpr) (t : STop) : STop := match t with
+    | .fn q n ps tps fx r _ => if isAt p t then .fn q n ps tps fx r b else t
+    | t => t
+  -- (#283) the functions `hs` kept with one value until an elaboration has
+  -- noted what their normal form needs: their calls as written, their
+  -- bodies for checking, noting their consumers' names' types
+  -- (`noteConsumers`), as the uses of a method's family are in the first
+  -- elaboration; with the others analysed again without them
+  let keepPending (hs : List String) : Except String Inlined := do
+    let marked := hs.eraseDups.filterMap fun h =>
+      (rawMfs.lookup h).map fun f => (f.pos, unpickOverloads ovNamesAll (noteConsumers f has))
+    let tops := marked.foldl (fun ts (p, b) => ts.map (withBody p b)) tops
+    inlineFns tops eager lazy overloadPicks nested orders sites methodOvSites (pending ++ marked.map (·.1)) checking true
+  -- (the functions of the machines of groups taken lazily, not computable)
+  let lazyRoots := recs.filter fun g => !computable g && !(groupOf g).any eager.contains
   if !nestDone then
-    let has (e : SExpr) : Bool := anyE (fun
-      | .app _ (.ident _ h) _ _ => mv.contains h || h == "$dispatch"
-      | _ => false) e
     let consumers (f : MFn) : List Consumer :=
       ((mapConsumersM (m := StateM (List Consumer)) has (fun c => do modify (· ++ [c]); pure c.code) f.body).run []).2
-    let targets := (recs.filter fun g => !computable g && !(groupOf g).any eager.contains).filterMap fun g =>
+    let members := (lazyRoots.flatMap machineOf).eraseDups
+    let targets := members.filterMap fun g =>
       (rawMfs.lookup g).bind fun f => if (consumers f).isEmpty then none else some (g, f)
     if !targets.isEmpty then
       let ty (p : Pos) (n : String) : Option STy := nested.lookup (nestKey p n)
-      -- (the function defined at `p`: a candidate, or an overload of one)
-      let isAt (p : Pos) : STop → Bool
-        | .fn q n .. => q == p && ((rawMfs.lookup n).isSome || ovNamesAll.contains n)
-        | _ => false
-      let withBody (p : Pos) (b : SExpr) (t : STop) : STop := match t with
-        | .fn q n ps tps fx r _ => if isAt p t then .fn q n ps tps fx r b else t
-        | t => t
       if targets.all fun (_, f) => (consumers f).all fun c => (c.caps f ++ c.outs).all (ty c.pos · |>.isSome) then
         let mut tops := tops
         let mut checking := checking
@@ -3750,11 +3775,8 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
             | .fn q _ _ _ _ _ b => if isAt f.pos t then some (q, b) else none
             | _ => none
           tops := tops.map (withBody f.pos body) ++ more
-        return ← inlineFns tops eager lazy overloadPicks nested sites methodOvSites pending checking true
-      let marked := (targets.flatMap fun (g, _) => groupOf g).eraseDups.filterMap fun h =>
-        (rawMfs.lookup h).map fun f => (f.pos, unpickOverloads ovNamesAll (noteConsumers f has))
-      let tops := marked.foldl (fun ts (p, b) => ts.map (withBody p b)) tops
-      let r ← inlineFns tops eager lazy overloadPicks nested sites methodOvSites (pending ++ marked.map (·.1)) checking true
+        return ← inlineFns tops eager lazy overloadPicks nested orders sites methodOvSites pending checking true
+      let r ← keepPending (targets.flatMap fun (g, _) => groupOf g)
       return { r with nestedSites := targets.flatMap fun (_, f) => (consumers f).map (nestKey ·.pos "") }
   let loops : List String := recs.filter fun g =>
     let grp := groupOf g
@@ -3768,14 +3790,33 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
         | i@(.ite ..) => !isBranchy.complete i && (namesUsed i).any grp.contains
         | _ => false) f.body).getD false
     if grp.any eager.contains || erasesRecursive then false else
-    let shaped (frames : Bool) : Bool := match mfs.lookup g with
-      | some f => if (groupOf g).length == 1 then (callees.lookup g).getD [] == [g] &&
+    let shaped (frames : Bool) : Bool :=
+      let grp := if frames then machineOf g else groupOf g
+      match mfs.lookup g with
+      | some f => if grp.length == 1 then (callees.lookup g).getD [] == [g] &&
           (loopShape? g mv f.body (frames := frames) (params := f.params.map (·.name)) (fieldOrder := fieldOrder)).isSome
-        else groupOK g frames
+        else groupOK grp frames
       | none => false
     shaped false || (!computable g && shaped true)
   let loopGroups : List (String × List String) :=
-    loops.filterMap fun g => let grp := groupOf g; if grp.length > 1 then some (g, grp) else none
+    loops.filterMap fun g => let grp := machineOf g; if grp.length > 1 then some (g, grp) else none
+  let inMachine (n : String) : Bool := loopGroups.any (·.2.contains n)
+  -- (#283) a struct or class constructed with a choice point in a field, in
+  -- the code of a group taken lazily, is lifted in its fields' order, the
+  -- elaborator's: until an elaboration has noted it, the group is kept with
+  -- one value and the elaboration notes it (`Requests.fieldOrders`), as it
+  -- notes consumers' types
+  let unordered (g : String) : List String :=
+    let grp := machineOf g
+    let point (x : SExpr) : Bool := isChoice x || match x with
+      | .app _ (.ident _ h) _ _ => grp.contains h
+      | _ => false
+    (grp.flatMap fun h => ((mfs.lookup h).map fun f => constructsWith point f.body).getD []).filter
+      (orders.lookup · |>.isNone)
+  let waiting := lazyRoots.filter fun g => !loops.contains g && !(unordered g).isEmpty
+  if !waiting.isEmpty then
+    let r ← keepPending (waiting.flatMap machineOf)
+    return { r with fieldSites := (waiting.flatMap unordered).eraseDups }
   let mut needAll := recs.filter (!loops.contains ·)
   let mut grew := true
   while grew do
@@ -3788,7 +3829,7 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
     -- normalization would remove its registration after an early return.
     let hasReturn := anyE (fun | .ret .. => true | _ => false) f.body
     if ((stmtsOf f.body).any isDefer || (hasReturn && anyE isDefer f.body)) &&
-        (recs.contains n || needAll.contains n) then
+        (recs.contains n || needAll.contains n || inMachine n) then
       throw s!"{f.pos.show}: {shownFnName n} has several values and a defer:, and is recursive or called by a recursive one (so its values are computed at the call, or taken lazily): not supported yet (#235, #283)"
   -- (effect-free: <computes> and no local state; that nothing they may
   -- run prints or calls `Err()` is checked on their Verse Core code, which
@@ -3809,6 +3850,10 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
       throw s!"{f.pos.show}: {n} has several values, and {n} is also the name of a parameter, local, field or method: rename one, as calls of {n} are inlined (#235)"
     -- (a name its body uses from outside that is bound somewhere too is
     -- checked where the body is inlined, `$freeNames`, #283)
+  -- (the functions machines take that are not recursive, inlined elsewhere
+  -- with their bodies as written: in a machine, with their returns taken out
+  -- as a group's are, #283)
+  let memberFns := mfs.filter fun (n, _) => !loops.contains n && inMachine n
   let mfs := mfs.map fun (n, f) =>
     (n, if loops.contains n then f else if needAll.contains n then
       { f with body := eraseReturnTails f.body } else (rawMfs.lookup n).getD f)
@@ -3832,7 +3877,7 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
     if us.isEmpty || (recs.contains n && !loops.contains n) then none else some (n, us)
   let picked : SExpr → SExpr := if overloadPicks.isEmpty then id else pickOverloads ovNamesAll overloadPicks mv.contains
   let go (e : SExpr) : StateT Nat (Except String) SExpr :=
-    inlineCalls mfs (picked e) recs loops clash (groups := loopGroups) (fieldOrder := fieldOrder)
+    inlineCalls mfs (picked e) recs loops clash (groups := loopGroups) (fieldOrder := fieldOrder) (memberFns := memberFns)
   let goPs (ps : List SParam) : StateT Nat (Except String) (List SParam) :=
     ps.mapM fun sp => do return { sp with default := ← sp.default.mapM go }
   let (tops', nextSite) ← (tops.filterMapM (m := StateT Nat (Except String)) fun t => do
@@ -3889,8 +3934,9 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
     earlier elaboration noted them (#283). -/
 def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List String := [])
     (picks : List (Pos × String) := []) (lazy : List String := []) (overloadPicks : List (Pos × String) := [])
-    (nested : List (String × STy) := []) : Except String Inlined := do
+    (nested : List (String × STy) := []) (orders : List (String × List (String × Bool)) := []) :
+    Except String Inlined := do
   let (tops, sites, methodOvSites) ← methodFns tops reserved picks overloadPicks
-  inlineFns tops eager lazy overloadPicks nested sites methodOvSites
+  inlineFns tops eager lazy overloadPicks nested orders sites methodOvSites
 
 end OpenVerse.Front.Choice

@@ -1,0 +1,64 @@
+digits 2
+digits 1
+v 12
+v 17
+v 62
+v 67
+digits 2
+digits 1
+taken 62
+x 1 1
+x 2 2
+big 2
+v 4
+v 22
+down 1
+down 2
+v 12
+down 1
+v 11
+down 1
+down 2
+down 1
+taken 11
+v 0
+v 20
+v 10
+v 20
+v 11
+v 16
+v 61
+v 66
+v 11
+v 8
+v 110
+v 107
+v 103
+v 111
+word 2
+s 2 a
+word 1
+s 1 a
+v 2
+s 1 bb
+v 3
+s 2 bb
+word 1
+s 1 a
+v 3
+s 1 bb
+v 4
+word 2
+s 2 bb
+word 1
+s 1 bb
+taken 4
+v 3
+v 101
+v 102
+v 200
+v 23
+v 17
+v 3
+v -3
+exit=0

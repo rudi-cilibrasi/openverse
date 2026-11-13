@@ -1430,7 +1430,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       -- (the values at the function's result type, at the type arguments
       -- this call gives, for a generic one)
       let lift := firstLiftOf ctx c2 p g lp b.name b.ty rest fxB (ctx.suspends && Suspend.hasSusp isS inner) lg.vty lg.instances
-        lg.frames lg.kTy lg.frameTys
+        lg.frames lg.kTy lg.frameTys lg.memberTys
       modify fun st => { st with loopFirst := st.loopFirst ++
         [{ g, pos := p, itemCode := lg.itemCode, argSet := lg.argSet, lift }] }
       let bindX ← coerce p ⟨lg.value, lg.vty⟩ ty

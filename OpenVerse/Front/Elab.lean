@@ -117,8 +117,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- and the calls whose overload the arguments' types pick
   -- (#283) and the consumers in recursive groups' code whose names' types
   -- an elaboration is to note
-  let ⟨resolved, lazy, familySites, overloadSites, nestedSites⟩ ← Choice.inlineMulti resolved reserved
+  let ⟨resolved, lazy, familySites, overloadSites, nestedSites, fieldSites⟩ ← Choice.inlineMulti resolved reserved
     opts.requests.eager opts.requests.families opts.requests.lazy opts.requests.overloads opts.requests.nested
+    opts.requests.fieldOrders
   -- (#246) the class of the stack cells of lazily taken ones
   let helpers := helpers ++ (← if lazy then lazyTops else pure [])
   -- (#283) and of the cells of the vars their frames set
@@ -610,7 +611,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                              let i := henv.info d
                              if i.isIface || i.isAbstract then m else
                              (henv.supers d).foldl (fun m T => m.insert T ((m[T]?.getD []) ++ [d])) m) {},
-                           abstracts := abstracts.toList, fnRequests := opts.requests.fns, familySites, familyStubs := stubs.map (·.1), overloadSites, nestedSites, methodRequests := opts.requests.methods,
+                           abstracts := abstracts.toList, fnRequests := opts.requests.fns, familySites, familyStubs := stubs.map (·.1), overloadSites, nestedSites, fieldSites, methodRequests := opts.requests.methods,
                            castRequests := opts.requests.casts, loopRequests := opts.requests.loops }
   env := { env with varFields := varFields, uniques := uniques,
                     overriders := (overridePairs.toList.map fun (_, dm, _) => (dm.splitOn ".").headD "") ++
@@ -1441,9 +1442,12 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   if needs.overloads.isEmpty then needs := needs.merge { overloads := overloadSites.map fun (q, _) => (q, "") }
   -- (and the types of the names of consumers in recursive groups' code,
   -- whose groups this one kept with one value: `$noteTypes`)
-  if !needs.eager.isEmpty || !needs.families.isEmpty || !needs.overloads.isEmpty || !nestedSites.isEmpty then
+  -- (and the field orders of the structs and classes those groups construct
+  -- with a choice point in a field, `TyEnv.fieldOrder`)
+  if !needs.eager.isEmpty || !needs.families.isEmpty || !needs.overloads.isEmpty || !nestedSites.isEmpty ||
+      !fieldSites.isEmpty then
     return .asking { eager := needs.eager, families := needs.families, overloads := needs.overloads,
-                     nested := needs.nested }
+                     nested := needs.nested, fieldOrders := fieldSites.map fun n => (n, env.fieldOrder n) }
   -- (#214) and functions wanted as values at types no class of theirs
   -- gives, adapters for methods wanted as values, (#243) branches of casts
   -- that refine type arguments, lifted into functions, and helpers that
@@ -1678,14 +1682,16 @@ partial def topDefaultCount : STop → Nat
     (`elabProgramCore` goes no further than the first it finds):
     1. how the source's choices are inlined (#283): eager groups, lazily
        taken functions, the families of methods' uses, the overloads of
-       calls and the types of consumers' names in recursive groups' code;
+       calls, the types of consumers' names in recursive groups' code and
+       the field orders of what that code constructs;
     2. the classes' layout (#351): hidden fields for all of a class's type
        parameters;
     3. the functions added: functions as values (#214), method adapters, the
        branches of refining casts (#243), and the functions of lazily taken
        calls and the helpers of consumers of choices (#246, #335). -/
 def Requests.tier (r : Requests) : Nat :=
-  if !r.eager.isEmpty || !r.families.isEmpty || !r.overloads.isEmpty || !r.lazy.isEmpty || !r.nested.isEmpty then 1
+  if !r.eager.isEmpty || !r.families.isEmpty || !r.overloads.isEmpty || !r.lazy.isEmpty || !r.nested.isEmpty ||
+      !r.fieldOrders.isEmpty then 1
   else if !r.witnesses.isEmpty then 2
   else 3
 
@@ -1693,7 +1699,7 @@ def Requests.tier (r : Requests) : Nat :=
 def Requests.upTo (r : Requests) (k : Nat) : Requests :=
   if k ≥ 3 then r else
   { eager := r.eager, families := r.families, overloads := r.overloads, lazy := r.lazy, nested := r.nested,
-    witnesses := if k = 2 then r.witnesses else [] }
+    fieldOrders := r.fieldOrders, witnesses := if k = 2 then r.witnesses else [] }
 
 /-- Elaborate a parsed program (`elabProgramCore`), with the names of the
     functions a constructor or an overload becomes shown as written: `K$init`

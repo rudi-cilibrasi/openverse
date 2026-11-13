@@ -459,6 +459,10 @@ structure Requests where
       own (`Choice.nestFns`) is made with; and for a `for` that can fail,
       `$fails`. -/
   nested : List (String × STy) := []
+  /-- (#283) The field orders of the structs and classes constructed with a
+      choice point in a field in a recursive group's code
+      (`TyEnv.fieldOrder`), which `inlineMulti`'s lifter takes them in. -/
+  fieldOrders : List (String × List (String × Bool)) := []
   /-- Functions wanted as values at closed function types no class of
       theirs gives (#214): a class for each. -/
   fns : List (String × Ty) := []
@@ -491,6 +495,7 @@ def Requests.merge (a b : Requests) : Requests where
   families := mergeByKey id a.families b.families
   overloads := mergeByKey id a.overloads b.overloads
   nested := mergeByKey (·.1) a.nested b.nested
+  fieldOrders := mergeByKey (·.1) a.fieldOrders b.fieldOrders
   fns := mergeByKey id a.fns b.fns
   methods := mergeByKey (·.key) a.methods b.methods
   casts := mergeByKey (·.key) a.casts b.casts
@@ -508,6 +513,7 @@ def Requests.without (r old : Requests) : Requests where
   families := dropByKey id r.families old.families
   overloads := dropByKey id r.overloads old.overloads
   nested := dropByKey (·.1) r.nested old.nested
+  fieldOrders := dropByKey (·.1) r.fieldOrders old.fieldOrders
   fns := dropByKey id r.fns old.fns
   methods := dropByKey (·.key) r.methods old.methods
   casts := dropByKey (·.key) r.casts old.casts
@@ -516,6 +522,7 @@ def Requests.without (r old : Requests) : Requests where
 
 def Requests.isEmpty (r : Requests) : Bool :=
   r.eager.isEmpty && r.lazy.isEmpty && r.families.isEmpty && r.overloads.isEmpty && r.nested.isEmpty &&
+    r.fieldOrders.isEmpty &&
     r.fns.isEmpty && r.methods.isEmpty &&
     r.casts.isEmpty && r.loops.isEmpty && r.witnesses.isEmpty
 
@@ -668,6 +675,10 @@ structure LoopGen where
   /-- Each frame's hole's and code's types, when not the result type. -/
   frameTys : List (Option Ty × Option Ty) := []
   kTy : Option Ty := none
+  /-- (#283) The members whose values are of a type of their own, which does
+      not coerce to the result type: functions the group's code calls apart
+      from its own, their values going to the frames after their calls. -/
+  memberTys : List (String × Ty) := []
   /-- (#283) With continuation members: the flag a value sets when it comes
       to a choice point in a member's code, then breaking out of the
       consumer's failure context so that what it did up to there stays; the
@@ -933,7 +944,8 @@ def Ctx.rootsOf (ctx : Ctx) (c m : String) : List String :=
 def Ctx.failabilityKnown (ctx : Ctx) : EM Bool := do
   let st ← get
   return st.needs.fns.isEmpty && st.needs.methods.isEmpty && ctx.types.familySites.isEmpty &&
-    ctx.types.overloadSites.isEmpty && ctx.types.nestedSites.isEmpty && !ctx.typeOnly
+    ctx.types.overloadSites.isEmpty && ctx.types.nestedSites.isEmpty && ctx.types.fieldSites.isEmpty &&
+    !ctx.typeOnly
 
 /-- (#283) A use `R.M` at `p` whose family of methods only the class of
     `R` tells, one of `TyEnv.familySites`: the root of `M` above that class
