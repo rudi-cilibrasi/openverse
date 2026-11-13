@@ -49,7 +49,7 @@ structure Lift where
   bound : String
   /-- The class cast to: it and the classes below it get pins in Verse
       Core, which the dispatch to the function refines by. Empty for a
-      chain's branch (`castChains`, #53), which each class's own cast
+      chain's branch (`castChains`, #53, #351), which each class's own cast
       calls. -/
   target : String
   /-- The function made from the branch: its name, its parameters (the

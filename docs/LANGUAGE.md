@@ -680,13 +680,18 @@ circle := class(shape, labelled):
   `b'` are `pairE`'s `a` and `b`, unknown but fixed for the branch; their
   values, which the branch's own generic calls at them need, come from the
   object, which holds them in hidden fields as #209's existential classes'
-  objects do. A cast to an interface opens its type arguments too (#53):
-  `c2[C]`, for `C:container(u)` and `c2(t) := interface(container([]t))`,
-  types the branch with `u = []t'`. An interface has no hidden fields, so
-  such a cast tests each class below both, the topmost of its class chain
-  there, as a cast to it, whose branch calls the function the cast's
-  branch is made into, with the values of `T`'s type arguments that class
-  gives. The value of what follows such a cast in its failure
+  objects do. A cast to an interface opens its type arguments too, and so
+  does a cast to a class or interface beside the object's type, neither
+  above nor below it (#53, #351): `c2[C]`, for `C:container(u)` and `c2(t)
+  := interface(container([]t))`, types the branch with `u = []t'`, and
+  `i1[I]`, for `I:i2(u)`, with `I`'s class and `i1`'s type arguments
+  related as the classes and interfaces above both say (`t' = u` when
+  `i1(t)` and `i2(t)` both extend `base(t)`), the others opened
+  (`i1(t')`, whatever the classes below both give `i1`). An interface has
+  no hidden fields, so such a cast tests each class below both, the
+  topmost of its class chain there, as a cast to it, whose branch calls the
+  function the cast's branch is made into, with the values of `T`'s type
+  arguments that class gives. The value of what follows such a cast in its failure
   context, and the names it binds that a branch or body uses, cannot be of
   a type that names an opened one. An opened parameter is as comparable as the one it stands
   for, and also when comparability of a refined type requires that component
@@ -852,9 +857,6 @@ circle := class(shape, labelled):
     by fields that are no `var`s from a cast's name (#250);
   - a branch of such a cast with a `return`, or a `break` that leaves it,
     where the `if`'s value is used at a type not known there (#243);
-  - a cast from a reference to an interface that a class gives type
-    arguments that are not a prefix of its own, or to one above it (#351),
-    to a class or interface neither above nor below it;
   - a variable, in generic code, of a class or interface type that
     requires an instance of itself (`Next:node(t)`) at type arguments that
     every class below it fixes otherwise: its hidden placeholder object

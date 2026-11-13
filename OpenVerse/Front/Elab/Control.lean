@@ -398,9 +398,9 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   let rx ← elabE { ctx with canFail := true, inTaking := true } x none
   let some (S, sargs, targs, common, eqs, opened) := refiningCast? env T rx.ty (env.tvars.map (·.1))
     | do set st0; return none
-  -- (#53: to an interface whose type arguments it opens: a cast to each
-  -- class below both, whose branch calls this one's function, which takes
-  -- `T`'s type arguments' values)
+  -- (#53, #351: to a type beside the object's, or to an interface whose type
+  -- arguments it opens: a cast to each class below both, whose branch calls
+  -- this one's function, which takes `T`'s type arguments' values)
   let chain := castChains env S T opened
   if !env.isRefClass S || (!opened.isEmpty && !env.isRefClass T) then set st0; return none
   -- (#250: `T` has Verse Core type arguments past the object's, or not as
@@ -635,7 +635,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       if sp.name.startsWith "$type" then .app p (.ident p "$witness") [.ident p (sp.name.drop 5).toString] false
       else .ident p sp.name
     if chain then
-      -- (#53: then a cast of the object to each class below both, the
+      -- (#53, #351: then a cast of the object to each class below both, the
       -- topmost of its class chain there, as a cast of its own (plain,
       -- refining or opening), whose branch calls the function with the
       -- object, which it gives `T`'s type arguments as that class has them,

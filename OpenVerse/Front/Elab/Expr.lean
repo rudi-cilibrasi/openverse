@@ -655,8 +655,6 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
   -- of a failure context, whose rest is a function of its own
   if bracket && env.viewed.contains S && !(env.coreArgs T (((env.sparams.lookup T).getD []).map fun (v, k) => Ty.param v k)).isEmpty then
     let what := s!"a cast of {withArticle r.ty.show}, an interface referred to through views, to {T}"
-    if !(env.isSub S T || env.isSub T S) then
-      eerr p s!"{what}, which is neither above nor below {S}, is not supported yet (#351)"
     if env.isSub S T then
       eerr p s!"{what}, which is above {S}, cannot fail: use {T}(…), an upcast (#351)"
     -- (no class below both whose view and pins can give the object's type
@@ -664,9 +662,9 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
     if ((env.concreteBelow S).filter (env.isSub · T)).all fun d =>
         (env.viewArgs? S d (env.coreArgs S sargs) (rigid := false)).isNone then
       eerr p s!"{withArticle r.ty.show} is never {withArticle T}: no class below both gives {S} those type arguments, so {T}[…] would always fail"
-    -- (one a clause does not take either; to an interface whose type
-    -- arguments it opens, a clause takes it as a cast to each class below
-    -- both, #53)
+    -- (one a clause does not take either; to a type beside it, or to an
+    -- interface whose type arguments it opens, a clause takes it as a cast
+    -- to each class below both, #53)
     if (refiningCast? env T r.ty).isNone then
       eerr p s!"{what} would leave {T}'s type arguments unknown: they are not {S}'s (#351, #53)"
     let theirs := if (env.sparams.lookup T).isNone then s!"the type arguments {T} fixes" else s!"{T}'s type arguments"
@@ -677,8 +675,13 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
   let parametric := (env.sparams.lookup T).isSome || !(env.coreArgs T []).isEmpty
   if (env.concreteBelow S).all (fun d => !env.isSub d T) then
     eerr p s!"no class is below both {r.ty.show} and {T}, so {T}[…] would always fail"
+  -- (#351, #53: to a type beside it, whose type arguments the classes and
+  -- interfaces above both relate to the object's, and open otherwise: as a
+  -- clause, a cast to each class below both)
   if parametric && !(env.isSub S T || env.isSub T S) then
-    eerr p s!"cannot cast {withArticle S} to {T}: {T}'s type arguments would be unknown (they are not {S}'s)"
+    let some (_, _, _, _, _, opened) := refiningCast? env T r.ty
+      | eerr p s!"cannot cast {withArticle S} to {T}: {T}'s type arguments would be unknown (they are not {S}'s)"
+    throw (Refine.castRefusal { pos := p, opens := !opened.isEmpty } s!"a cast of {withArticle r.ty.show} to {T}, which is neither above nor below {S}, works {Refine.castRefusalNote}, D := {T}[X], whose rest then has {T}'s type arguments (#351, #53)")
   let targs := if env.isSub S T then env.upArgs S sargs T else env.argsBelow S sargs T
   if parametric && (env.coreArgs T targs).length > (env.coreArgs S sargs).length then
     let unknown := s!"cannot cast {withArticle r.ty.show} to {T}: {T} has type parameters that {S} does not have, which would be unknown here"

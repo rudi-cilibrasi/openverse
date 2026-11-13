@@ -2557,7 +2557,11 @@ pins and open their arguments as `$ext i`, as a method's dispatch does.
 An interface has no hidden fields, and the classes below it hold their
 type arguments at places of their own, so a cast to an interface that
 opens its type arguments (#53, `c2[C]` for `C:container(u)` and `c2(t) :=
-interface(container([]t))`) cannot read them from one place. Such a cast is a chain (`castChains`): the branch is
+interface(container([]t))`) cannot read them from one place. Nor can a cast
+to a type beside the object's (#351, `i1[I]` for `I:i2(u)`), whose type
+arguments `refiningCast?` relates to the object's through the classes and
+interfaces above both (each class below both reaches each of them at one
+instance), fresh otherwise. Both are chains (`castChains`): the branch is
 lifted as for any cast, but its function takes the values of the opened
 type arguments as a generic function takes any (`Lift.opened` is empty,
 and `Lift.target` too, as no class is cast to), and the `if` becomes a cast

@@ -358,7 +358,8 @@ def firstKey (ctx : Ctx) (p : Pos) (lp : List SExpr) (b : String) (bty : Option 
 /-- A cast `T[X]`, `X` of type `xty`, that holds only under a refinement of
     the code's type parameters (#243): `T` fixes or repeats type arguments
     of `X`'s class, which agree with `X`'s only when they are unified (as
-    `elabCast` refuses), or opens them (#250), also to an interface (#53). `X`'s class and type arguments, `T`'s type
+    `elabCast` refuses), or opens them (#250), also to an interface (#53)
+    or beside `X`'s type (#351). `X`'s class and type arguments, `T`'s type
     arguments, the classes the cast tests for, the equations of the
     refinement and the opened type parameters; `none` for any other cast. -/
 def refiningCast? (env : TyEnv) (T : String) (xty : Ty) (avoid : List String := []) :
@@ -377,7 +378,17 @@ def refiningCast? (env : TyEnv) (T : String) (xty : Ty) (avoid : List String := 
   let fresh := (ps.zip names).map fun ((_, c), n) => Ty.param n c
   let openedBy (μ : List (String × Ty)) : List (String × String × Bool) :=
     (ps.zip names).filterMap fun ((v, c), n) => if (μ.lookup n).isSome then none else some (n, v, c)
-  if !(env.isSub S T || env.isSub T S) then none
+  -- (#351, #53: a type beside the object's, neither above nor below it: its
+  -- type arguments relate to the object's as the classes and interfaces
+  -- above both say, which a class below both reaches at one instance each;
+  -- the others are opened, a test of each class below both giving them)
+  if !(env.isSub S T || env.isSub T S) then
+    -- (the fresh ones on the left, bound first)
+    let eqs := ((env.supers S).filter fun A => A != S && env.isSub T A).flatMap fun A =>
+      (env.upArgs T fresh A).zip (env.upArgs S sargs A)
+    let some μ := Ty.unifyEqs (fun _ _ => none) [] eqs | none
+    if (env.refineComparable? μ (env.comparableArgs T fresh)).isNone then none
+    return (S, sargs, fresh, common, eqs, openedBy μ)
   let rargs := env.coreArgs S sargs
   let tv := env.coreVars T
   -- (#351: an object referred to through views relates its type arguments
@@ -419,12 +430,13 @@ def refiningCast? (env : TyEnv) (T : String) (xty : Ty) (avoid : List String := 
         (bounds.getD []).all (names.contains ·.1) then none
     some (S, sargs, targs, common, eqs, opened)
 
-/-- (#53) A refining cast that is a chain of casts, one to each class
-    below both the object's class `S` and `T` (`castTops`): to an interface
-    whose type arguments it opens, which no hidden field holds. The branch is then one function, generic over `T`'s type
+/-- (#53, #351) A refining cast that is a chain of casts, one to each class
+    below both the object's class `S` and `T` (`castTops`): to a type beside
+    `S`'s, or to an interface whose type arguments it opens, which no hidden
+    field holds. The branch is then one function, generic over `T`'s type
     arguments, which each class's branch calls at its own. -/
-def castChains (env : TyEnv) (_S T : String) (opened : List (String × String × Bool)) : Bool :=
-  (env.info T).isIface && !opened.isEmpty
+def castChains (env : TyEnv) (S T : String) (opened : List (String × String × Bool)) : Bool :=
+  !(env.isSub S T || env.isSub T S) || ((env.info T).isIface && !opened.isEmpty)
 
 /-- The classes below both `S` and `T` whose class parent is not, with a
     concrete class below them: each concrete class below both is below
