@@ -84,7 +84,8 @@ def typeEnvironment (classes : Classes) (fields : Fields) (methods : Methods) (s
   env := { env with structs := structs.toList }
   -- what `<persistable>` requires of a struct (Book of Verse ch. 17,
   -- `EffectPolicy.specifierPlaces`): no type parameters, and fields whose
-  -- types persist, not `any`, a rational, a function, an interface or a class
+  -- types persist, not `any`, `comparable` (ch. 17, 178: "Abstract interface
+  -- type"), a rational, a function, an interface or a class
   -- (openverse has no persistable classes), nor a struct that is not
   -- `<persistable>`. (An enum's `<persistable>` the parser takes and drops:
   -- every enum is taken to persist.)
@@ -92,7 +93,7 @@ def typeEnvironment (classes : Classes) (fields : Fields) (methods : Methods) (s
     | .const _ n _ none (.structDef _ _ specs _) => if specs.contains "persistable" then some n else none
     | _ => none
   let rec persists : Ty → Bool
-    | .any | .rational | .param .. => false
+    | .any | .dyn | .rational | .param .. => false
     | .arr t | .opt t => persists t
     | .tup ts => ts.attach.all fun ⟨t, _⟩ => persists t
     | .map k v => persists k && persists v

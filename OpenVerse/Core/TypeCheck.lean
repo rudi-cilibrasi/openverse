@@ -164,7 +164,7 @@ theorem VTy.join_sub : ∀ (t u j : VTy), VTy.join t u = some j → t.sub j = tr
     cases u <;> simp [VTy.join] at h
     obtain ⟨js, hj, rfl⟩ := h
     simpa [VTy.sub] using VTy.joinL_sub _ _ _ hj
-  | .int, u, j, h | .logic, u, j, h | .char, u, j, h | .float, u, j, h | .var _, u, j, h => by
+  | .int, u, j, h | .logic, u, j, h | .char, u, j, h | .float, u, j, h | .dyn, u, j, h | .var _, u, j, h => by
     cases u <;> simp [VTy.join] at h <;> (try obtain ⟨rfl, rfl⟩ := h) <;> (try subst h) <;>
       exact ⟨VTy.sub_refl _, VTy.sub_refl _⟩
   | .vref es as, u, j, h => by
@@ -524,6 +524,15 @@ def tcDispatchAny (S : Sigs) (Γ : List VTy) (us : List Nat) (y y' f : Nat) (m :
 section
 variable (S : Sigs) (Γ : List VTy) (ρ : VTy)
 
+/-- What a primitive application is checked at, where a `dyn` is expected:
+    a constructor at its own shape with `dyn` parts (so that an array of
+    values of several types is an `arr dyn`), any other at `dyn`. -/
+def dynHint : Prim → List Expr → Option VTy
+  | .mkArr, _ | .concat, _ => some (.arr .dyn)
+  | .mkTup, es => some (.tup (es.map fun _ => .dyn))
+  | .mkSome, _ => some (.opt .dyn)
+  | _, _ => some .dyn
+
 mutual
 /-- `tc e none` infers a type of `e`; `tc e (some τ)` checks `e` against `τ`,
     up to subtyping. -/
@@ -632,6 +641,13 @@ def tc : Expr → Option VTy → Option VTy
     | some (.vref _ _) => expect m (.ref us [])
     | _ => none
   | .heap _ _, _ => none
+  -- (every value is a `dyn`: a constructor checks its parts at `dyn`, so
+  -- that an array of values of several types is an `arr dyn`, and any other
+  -- primitive is checked at `dyn`, else inferred)
+  | .prim op es, some .dyn =>
+    match tcPrim op es (dynHint op es) with
+    | some _ => some .dyn
+    | none => (tcPrim op es none).map fun _ => .dyn
   | .prim op es, m => tcPrim op es m
 /-- `tc` for a primitive application. -/
 def tcPrim : Prim → List Expr → Option VTy → Option VTy
@@ -1448,8 +1464,23 @@ theorem tc_sound_aux : ∀ (n : Nat) (e : Expr), sizeOf e < n → TcOK S Γ ρ e
         exact expect_typed h (.print (typed_of_check (IH e (by simp <;> omega)) hc))
       · simp at h
     | prim op es =>
-      simp only [tc] at h
-      exact tcPrim_sound_of (fun e he => IH e (sizeOf_lt_of_mem_args he)) h
+      have ihs := fun e he => IH e (sizeOf_lt_of_mem_args (op := op) (es := es) he)
+      by_cases hd : m = some .dyn
+      · -- (at `dyn`: typed at the type `tcPrim` gives, below `dyn`)
+        subst hd
+        simp only [tc] at h
+        split at h
+        · next τ'' hp =>
+          simp only [Option.some.injEq] at h; subst h
+          exact ⟨.sub (tcPrim_sound_of ihs hp).1 (VTy.sub_dyn _), by simp⟩
+        · obtain ⟨τ'', hp, rfl⟩ := Option.map_eq_some_iff.mp h
+          exact ⟨.sub (tcPrim_sound_of ihs hp).1 (VTy.sub_dyn _), by simp⟩
+      · have hm : tc S Γ ρ (.prim op es) m = tcPrim S Γ ρ op es m := by
+          cases m with
+          | none => simp [tc]
+          | some τ' => cases τ' <;> simp_all [tc]
+        rw [hm] at h
+        exact tcPrim_sound_of ihs h
 
 /-- **The checker is sound**: whatever `tc` accepts is typed. -/
 theorem tc_sound {e : Expr} {m τ} (h : tc S Γ ρ e m = some τ) : Typed S Γ ρ e τ :=

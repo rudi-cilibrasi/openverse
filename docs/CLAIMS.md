@@ -233,13 +233,51 @@ Value.veq_iff : ∀ (a b : Value), a.veq b = true ↔ a.norm = b.norm
 @Value.veq_of_isEmpty : ∀ {a b : Value}, a.isEmpty = true → b.isEmpty = true → a.veq b = true
 ```
 
-## `veq_iff_eq_of_hasTy`: on two values of one type, Verse's equality is structural equality
+## `veq_iff_eq_of_hasTy`: on two values of one type without dyn, Verse's equality is structural equality
 
 `OpenVerse/Core/Typing.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
 veq_iff_eq_of_hasTy : ∀ (Ξ : HeapTy) (a b : Value) (τ : VTy),
-  hasTy Ξ a τ = true → hasTy Ξ b τ = true → (a.veq b = true ↔ a = b)
+  τ.dynFree = true → hasTy Ξ a τ = true → hasTy Ξ b τ = true → (a.veq b = true ↔ a = b)
+```
+
+## `veq_box`: boxing a comparable value preserves and reflects Verse's equality on one type
+
+`OpenVerse/Core/Comparable.lean`; axioms: [propext, Classical.choice, Quot.sound]
+
+```lean
+veq_box : ∀ (Ξ : HeapTy) (c : Code) (a b : Value),
+  hasTy Ξ a c.vty = true → hasTy Ξ b c.vty = true → (c.box a).veq (c.box b) = a.veq b
+```
+
+## `box_veq_iff_eq`: the boxes of two values of one comparable type are equal exactly when the values are
+
+`OpenVerse/Core/Comparable.lean`; axioms: [propext, Classical.choice, Quot.sound]
+
+```lean
+box_veq_iff_eq : ∀ (Ξ : HeapTy) (c : Code) (a b : Value),
+  c.vty.dynFree = true → hasTy Ξ a c.vty = true → hasTy Ξ b c.vty = true → ((c.box a).veq (c.box b) = true ↔ a = b)
+```
+
+## `box_tag_ne`: boxes under two different codes (enums, structs, char32) are never equal
+
+`OpenVerse/Core/Comparable.lean`; axioms: [propext, Classical.choice, Quot.sound]
+
+```lean
+@box_tag_ne : ∀ {k l : Nat},
+  k ≠ l → ∀ (c d : Code) (a b : Value), ((Code.tagged k c).box a).veq ((Code.tagged l d).box b) = false
+```
+
+## `box_plain_tagged`: a tagged box never equals the box of a code with no tag (an enum's value is no int)
+
+`OpenVerse/Core/Comparable.lean`; axioms: [propext, Classical.choice, Quot.sound]
+
+```lean
+box_plain_tagged : ∀ (Ξ : HeapTy) (c : Code),
+  c.plain = true →
+    ∀ (a : Value),
+      hasTy Ξ a c.vty = true → ∀ (k : Nat) (d : Code) (b : Value), (c.box a).veq ((Code.tagged k d).box b) = false
 ```
 
 ## `Eval.typed`: preservation

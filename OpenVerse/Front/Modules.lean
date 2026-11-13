@@ -70,7 +70,7 @@ partial def SExpr.identPath : SExpr → Option (List String)
     with (Book of Verse ch. 16, "Automatic Qualification": `int` is
     `(/Verse.org/Verse:)int`). -/
 def builtinTypes : List String :=
-  ["int", "logic", "char", "char32", "string", "void", "float", "rational", "any"]
+  ["int", "logic", "char", "char32", "string", "void", "float", "rational", "any", "comparable"]
 
 /-- What a qualifier `(q:)` names (docs/research/qualified-names.md). -/
 inductive Qual where

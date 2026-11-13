@@ -51,6 +51,16 @@ partial def elabExtensionCallWith
     else extCall
   return some ⟨.seq (.assign slot r.e) rc.e, rc.ty⟩
 
+/-- `comparable(X)`: `X` boxed as a `comparable` (Book of Verse ch. 11,
+    `comparable(15) = comparable(15)`). -/
+def elabComparableWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p : Pos)
+    (args : List SExpr) : EM R := do
+  let [a] := args | eerr p "comparable(…) takes one value"
+  let r ← elabE ctx a none
+  if !isComparable ctx.types r.ty then
+    eerr a.pos (notComparable ctx.types r.ty "the value of comparable(…)")
+  return ⟨← coerce a.pos r .dyn, .dyn⟩
+
 set_option maxHeartbeats 800000 in
 /-- `t(X)` (`elabAppBaseWith`): `X` converted to the type `t`, a value of a
     type that is a subtype of it, then of `t` (Book of Verse tests,
@@ -186,6 +196,7 @@ partial def elabAppBaseWith
       let [a] := args | eerr p "any(…) takes one value"
       let r ← elabE ctx a none
       return ⟨← coerce a.pos r .any, .any⟩
+    | "comparable" => elabComparableWith elabE ctx p args
     | "Print" =>
       let es ← elabArgs ctx p args [Ty.string]
       return ⟨.print es.head!, .void⟩

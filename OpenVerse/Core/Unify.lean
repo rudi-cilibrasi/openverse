@@ -32,7 +32,7 @@ def VTy.usizeL : List VTy → Nat
 end
 
 theorem VTy.usize_pos : ∀ t : VTy, 0 < t.usize
-  | .int | .logic | .char | .float | .var _ => by simp [VTy.usize]
+  | .int | .logic | .char | .float | .dyn | .var _ => by simp [VTy.usize]
   | .arr _ | .opt _ | .tup _ | .ref _ _ | .vref _ _ => by simp [VTy.usize]
 
 mutual
@@ -81,7 +81,7 @@ def Unify.single (x : Nat) (t : VTy) : Nat → VTy := fun j => if j = x then t e
 
 mutual
 theorem VTy.lt_nvars : ∀ (t : VTy) (j : Nat), t.hasVar j = true → j < t.nvars
-  | .int, _, h | .logic, _, h | .char, _, h | .float, _, h => by simp [VTy.hasVar] at h
+  | .int, _, h | .logic, _, h | .char, _, h | .float, _, h | .dyn, _, h => by simp [VTy.hasVar] at h
   | .var i, j, h => by simp [VTy.hasVar] at h; subst h; simp [VTy.nvars]
   | .arr t, j, h | .opt t, j, h => by
     simp only [VTy.hasVar] at h; simpa [VTy.nvars] using VTy.lt_nvars t j h
@@ -99,7 +99,7 @@ end
 
 mutual
 theorem VTy.nvars_le : ∀ (t : VTy) (n : Nat), (∀ j, t.hasVar j = true → j < n) → t.nvars ≤ n
-  | .int, _, _ | .logic, _, _ | .char, _, _ | .float, _, _ => by simp [VTy.nvars]
+  | .int, _, _ | .logic, _, _ | .char, _, _ | .float, _, _ | .dyn, _, _ => by simp [VTy.nvars]
   | .var i, n, h => by simp only [VTy.nvars]; exact h i (by simp [VTy.hasVar])
   | .arr t, n, h | .opt t, n, h => by
     simpa [VTy.nvars] using VTy.nvars_le t n (fun j hj => h j (by simpa [VTy.hasVar] using hj))
@@ -116,7 +116,7 @@ end
 mutual
 /-- A type's variables are below `n` exactly when each one it mentions is. -/
 theorem VTy.varsBelow_iff : ∀ (t : VTy) (n : Nat), t.varsBelow n = true ↔ ∀ j, t.hasVar j = true → j < n
-  | .int, _ | .logic, _ | .char, _ | .float, _ => by simp [VTy.varsBelow, VTy.hasVar]
+  | .int, _ | .logic, _ | .char, _ | .float, _ | .dyn, _ => by simp [VTy.varsBelow, VTy.hasVar]
   | .var i, n => by simp [VTy.varsBelow, VTy.hasVar]
   | .arr t, n | .opt t, n => by simpa [VTy.varsBelow, VTy.hasVar] using VTy.varsBelow_iff t n
   | .tup ts, n | .ref _ ts, n | .vref _ ts, n => by simpa [VTy.varsBelow, VTy.hasVar] using VTy.varsBelowL_iff ts n
@@ -207,7 +207,7 @@ theorem Unify.countP_lt_of_imp {α} (p q : α → Bool) : ∀ (l : List α), (�
 mutual
 theorem VTy.hasVar_subst {σ : Nat → VTy} {j : Nat} :
     ∀ u : VTy, (u.subst σ).hasVar j = true → ∃ k, u.hasVar k = true ∧ (σ k).hasVar j = true
-  | .int, h | .logic, h | .char, h | .float, h => by simp [VTy.hasVar] at h
+  | .int, h | .logic, h | .char, h | .float, h | .dyn, h => by simp [VTy.hasVar] at h
   | .var k, h => ⟨k, by simp [VTy.hasVar], by simpa using h⟩
   | .arr u, h | .opt u, h => by
     obtain ⟨k, hk, hj⟩ := VTy.hasVar_subst u (by simpa [VTy.hasVar] using h)
@@ -335,7 +335,8 @@ def unify : Eqs → Option (Nat → VTy)
   | (a, .var y) :: r =>
     if a.hasVar y then none
     else (unify (Eqs.subst (Unify.single y a) r)).map (Unify.thenSubst y a)
-  | (.int, .int) :: r | (.logic, .logic) :: r | (.char, .char) :: r | (.float, .float) :: r => unify r
+  | (.int, .int) :: r | (.logic, .logic) :: r | (.char, .char) :: r | (.float, .float) :: r
+  | (.dyn, .dyn) :: r => unify r
   | (.arr a, .arr b) :: r | (.opt a, .opt b) :: r => unify ((a, b) :: r)
   | (.tup as, .tup bs) :: r =>
     if as.length = bs.length then unify (as.zip bs ++ r) else none
@@ -355,7 +356,10 @@ decreasing_by
   · rename_i h1
     exact Or.inl (Eqs.count_elim (by simpa using h1) (by simp [Eqs.has, VTy.hasVar])
       (fun j hj => by simp [Eqs.has, hj]) (fun j hj => by simp [Eqs.has, hj]))
-  -- (the four scalar types)
+  -- (the five scalar types)
+  · refine Or.inr ⟨Eqs.count_le (fun j hj => ?_), ?_⟩
+    · simp [Eqs.has, hj]
+    · simp [Eqs.size, VTy.usize]
   · refine Or.inr ⟨Eqs.count_le (fun j hj => ?_), ?_⟩
     · simp [Eqs.has, hj]
     · simp [Eqs.size, VTy.usize]
@@ -451,7 +455,7 @@ theorem VTy.usize_le_usizeL {t : VTy} : ∀ {ts : List VTy}, t ∈ ts → t.usiz
 mutual
 theorem VTy.usize_le_subst {R : Nat → VTy} {x : Nat} :
     ∀ u : VTy, u.hasVar x = true → (R x).usize ≤ (u.subst R).usize
-  | .int, h | .logic, h | .char, h | .float, h => by simp [VTy.hasVar] at h
+  | .int, h | .logic, h | .char, h | .float, h | .dyn, h => by simp [VTy.hasVar] at h
   | .var k, h => by simp [VTy.hasVar] at h; subst h; simp
   | .arr u, h | .opt u, h => by
     have := VTy.usize_le_subst (R := R) u (by simpa [VTy.hasVar] using h)
@@ -481,7 +485,7 @@ theorem VTy.occurs_no_unifier {R : Nat → VTy} {x : Nat} {t : VTy} (hx : t.hasV
   have hlt : (R x).usize < (t.subst R).usize := by
     cases t with
     | var k => simp [VTy.hasVar] at hx; subst hx; exact absurd rfl ht
-    | int | logic | char | float => simp [VTy.hasVar] at hx
+    | int | logic | char | float | dyn => simp [VTy.hasVar] at hx
     | arr u | opt u =>
       have := VTy.usize_le_subst u (R := R) (by simpa [VTy.hasVar] using hx)
       simp [VTy.usize]; omega
@@ -569,45 +573,46 @@ theorem unify_spec (eqs : Eqs) : UnifySpec eqs := by
       cases a <;> simp_all [unify]
     exact UnifySpec.of_elim (by simpa using hocc) hu
       (fun R => by simp [Eqs.unifies_cons, eq_comm]) ih
-  | case7 r ih | case8 r ih | case9 r ih | case10 r ih =>
+  | case7 r ih | case8 r ih | case9 r ih | case10 r ih | case11 r ih =>
     exact UnifySpec.of_equiv (by simp [unify]) (fun R => by simp [Eqs.unifies_cons]) ih
-  | case11 a b r ih | case12 a b r ih =>
+  | case12 a b r ih | case13 a b r ih =>
     exact UnifySpec.of_equiv (by simp [unify]) (fun R => by simp [Eqs.unifies_cons]) ih
-  | case13 as bs r hlen ih =>
+  | case14 as bs r hlen ih =>
     exact UnifySpec.of_equiv (by simp [unify, hlen])
       (fun R => by simp [Eqs.unifies_cons, Eqs.unifies_append, Eqs.unifies_zip hlen]) ih
-  | case14 as bs r hlen =>
+  | case15 as bs r hlen =>
     exact UnifySpec.of_none (by simp [unify, hlen]) fun R hR => by
       have h := (Eqs.unifies_cons.mp hR).1
       simp at h
       exact hlen (by simpa using congrArg List.length h)
-  | case15 ts as us bs r h ih =>
+  | case16 ts as us bs r h ih =>
     obtain ⟨rfl, hlen⟩ := h
     exact UnifySpec.of_equiv (by simp [unify, hlen])
       (fun R => by simp [Eqs.unifies_cons, Eqs.unifies_append, Eqs.unifies_zip hlen, VTy.subst,
         VTy.substL_eq_map]) ih
-  | case16 ts as us bs r h =>
+  | case17 ts as us bs r h =>
     exact UnifySpec.of_none (by simp [unify, h]) fun R hR => by
       have he := (Eqs.unifies_cons.mp hR).1
       simp [VTy.subst, VTy.substL_eq_map] at he
       exact h ⟨he.1, by simpa using congrArg List.length he.2⟩
-  | case17 es as fs bs r h ih =>
+  | case18 es as fs bs r h ih =>
     obtain ⟨rfl, hlen⟩ := h
     exact UnifySpec.of_equiv (by simp [unify, hlen])
       (fun R => by simp [Eqs.unifies_cons, Eqs.unifies_append, Eqs.unifies_zip hlen, VTy.subst,
         VTy.substL_eq_map]) ih
-  | case18 es as fs bs r h =>
+  | case19 es as fs bs r h =>
     exact UnifySpec.of_none (by simp [unify, h]) fun R hR => by
       have he := (Eqs.unifies_cons.mp hR).1
       simp [VTy.subst, VTy.substL_eq_map] at he
       exact h ⟨he.1, by simpa using congrArg List.length he.2⟩
-  | case19 head tail h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 =>
-    refine UnifySpec.of_none (by rw [unify.eq_13 head tail h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11]) fun R hR => ?_
+  | case20 head tail h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 =>
+    refine UnifySpec.of_none (by rw [unify.eq_14 head tail h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12]) fun R hR => ?_
     rcases head with ⟨a, b⟩
     have he := (Eqs.unifies_cons.mp hR).1
     cases a <;> cases b <;> first
       | exact h1 _ _ rfl | exact h2 _ _ rfl | exact h3 rfl | exact h4 rfl | exact h5 rfl | exact h6 rfl
-      | exact h7 _ _ rfl | exact h8 _ _ rfl | exact h9 _ _ rfl | exact h10 _ _ _ _ rfl | exact h11 _ _ _ _ rfl
+      | exact h7 rfl | exact h8 _ _ rfl | exact h9 _ _ rfl | exact h10 _ _ rfl | exact h11 _ _ _ _ rfl
+      | exact h12 _ _ _ _ rfl
       | (simp only [VTy.subst] at he; cases he)
 
 /-- `unify` gives a unifier. -/

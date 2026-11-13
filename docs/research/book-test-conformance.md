@@ -114,8 +114,8 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   parser tests and other syntax (192); bitwise functions (159, pinned, not
   implemented), free `ToChar` and `ToChar32` the API reference does not
   declare (145), `ToDiagnostic` (93). The largest semantic gaps are types as
-  values (196), `comparable` as a type (125, not built: [its rules and a
-  design](comparable-type.md)) and VerseVM-only union types (136).
+  values (196), `comparable` as a type (125; built since: [After
+  `comparable`](#after-comparable)) and VerseVM-only union types (136).
 
 ## How the harness reads a test file
 
@@ -446,11 +446,11 @@ cases it would turn into agreements.
 | qualified names | 162 → 26 | `Tests/ShadowDefinition.versetest:113`: `(c52:)F(X:int)` beside an inherited `F` | `a second method F beside the one c52 inherits` | none | yes: [Qualified names](../LANGUAGE.md#qualified-names) | done ([After qualified names](#after-qualified-names)); left: two members of one name in a class (12), the test runner's package path (5), other features' forms (9) |
 | union types | 136 | `Tests/Union.versetest:21`: `u:=union{U:u}` | parse error | all `verse_vm_only`; not in the Book's chapters | no | front-end and Core; low priority |
 | attributes | 134 | `Tests/Attributes/Attributes.versetest:16`: an `@attribute` before a definition (valid syntax) | `unexpected character '@'` | 1 `verse_vm_only` | no; the Book's ch. 12 and 18 | parser form for built-in attributes; custom attributes (`class(attribute)`) a front-end feature |
-| `comparable` as a type | 126 | `Tests/Comparable.versetest:3`: `Equal(X:t, Y:comparable)` | `unknown type 'comparable'` | 1 `verse_vm_only` | in part: only as a bound, `t:subtype(comparable)` | front-end and Core: a type of comparable values, as `any` is |
+| `comparable` as a type | 126 → 26 ([After `comparable`](#after-comparable)) | `Tests/Comparable.versetest:3`: `Equal(X:t, Y:comparable)` | `unknown type 'comparable'` | 1 `verse_vm_only` | yes: [comparable](../LANGUAGE.md#comparable); left: `concrete_subtype`, field overrides, class variance, `weak_map` | done |
 | `ToDiagnostic` | 93 | `Tests/Intrinsics/ToDiagnostic.versetest:22` | `unknown function 'ToDiagnostic'` | 7 `verse_vm_only` | no | front-end and runtime: a `diagnostic` printer of every value |
 | class and function specifiers | 86 → 84 | `Tests/Effects.versetest:304`: `c:=class<abstract>{F()<converges>:void}` | `<converges> is unsupported` (#494); `<castable>`, `<final_super>` (#11), `<persistable>`, `<native_callable>` | 71 `verse_vm_todo` (`GetCastableFinalSuperClass.versetest`) | yes: [effect contracts](../LANGUAGE.md#effect-contracts), #11 | front-end features, one each |
 | extension methods | 53 → 0 | `Tests/ExtensionFields.versetest:6`: `(I:int).Method()<computes>:int=I` | `expected an identifier, found '('` | none | yes: [Extension methods](../LANGUAGE.md#extension-methods) | done ([After extension methods](#after-extension-methods)) |
-| comparisons of different types | 51 → 16 ([After the empty value](#after-the-empty-value)) | `Tests/Operators/CompareString.versetest:168`: `DoesTupleEqualString(A:tuple(t,t,t), B:string …)=A=B` | `'=' compares values of different types, tuple(t, t, t) and string, whose values in common Verse Core cannot compare` | none | yes: [Equality and the empty value](../LANGUAGE.md#equality-and-the-empty-value) | generic code: a type parameter's instance at run time ([empty-values.md](empty-values.md), part 2) |
+| comparisons of different types | 51 → 16 → 0 ([After the empty value](#after-the-empty-value), [After `comparable`](#after-comparable)) | `Tests/Operators/CompareString.versetest:168`: `DoesTupleEqualString(A:tuple(t,t,t), B:string …)=A=B` | `'=' compares values of different types, tuple(t, t, t) and string, whose values in common Verse Core cannot compare` | none | yes: [Equality and the empty value](../LANGUAGE.md#equality-and-the-empty-value) | generic code: a type parameter's instance at run time ([empty-values.md](empty-values.md), part 2) |
 | live variables | 50 | `Tests/upon.versetest:7`: `upon(1){2}` | parse error | all `verse_vm_only`; the Book's ch. 15 is marked "Unreleased Feature" | no | front-end, Core and runtime |
 | nested functions and lambdas | 44 | `Tests/NestedFunctions.versetest:41`: `G():int = X` inside `F` | `a definition in a module must start at the module body's column` | 25 `verse_vm_only`; the Book's ch. 6 marks nested functions "Unreleased Feature" | yes: [Not supported in v1](../LANGUAGE.md#not-supported-in-v1), [closure design](closure-design.md), #492 | front-end and Core (closures) |
 | type aliases | 40 → 1 | `Tests/Effects.versetest:305`: `t:=type{F()<converges>:void}` | `expected ':', found '('`: a function type written with a name for `_`, and `<converges>` | none | yes: [Type aliases](../LANGUAGE.md#type-aliases) | done ([After the type aliases](#after-the-type-aliases)) |
@@ -955,6 +955,57 @@ refused by the parser.
   `<public>`; no program of the frozen corpus is refused, as its generators
   write no module whose members are used outside it.
 
+## After `comparable`
+
+`comparable` is a type ([its design and what it rests
+on](comparable-type.md), [LANGUAGE.md](../LANGUAGE.md#comparable)): a value
+of every comparable type converts to it boxed, `=` with it compares value
+and type, it keys maps and joins unrelated comparable types, and a generic
+function's type parameter is boxed by the evidence of its
+`subtype(comparable)`. Against the baseline of access specifiers (main
+`9263665`: 7,535 agree, 2,028 refuse, 170 accept, 50 differ), 135 cases
+more agree and none less: **7,670 agree, 1,893 refuse, 170 accept, 50
+differ** (re-recorded from a fresh run; the same 135 against the readings
+audit's baseline).
+
+| Cause before | Cases | Agree now | Left |
+|---|---|---|---|
+| `comparable` as a type | 126 | 100: `Comparable` 41 (the generic `Equal` and `NotEqual` included), `EnumCompare` 12, `RollbackTortureTest` 10, `SOL-5496` 7, `CompareString` 6, `ParametricTypes` 4, `BinaryAddArray` 4, `Attributes/unique` 4, `Map` 3, `Any` 2, `LogicalOr` 2, and `CompareRational`, `NamedParameterOverloads`, `FlowControl/Case`, `ComparableInterface`, `SOL-6529` one each | 26 |
+| comparisons of a tuple of type parameters and a string | 16 | 16 (`CompareString` 168 to 182 and `:decls`, by boxes) | 0 |
+| joins of comparable types | 16 | 16 (`Any` 111 to 126: `?int` and `?float` at `?comparable`; `LogicalOr` 133 to 140: `?E` and `?F`) | |
+| others | 3 | `BinaryAddArray:45` (`[]int + []float`), `ConcatenateMaps:60` (`[string]int` and `[string]float`), `DisjointTypesAllowedInComparisonAndPointerDeref:3` (an `if` of an int and a string compared) | |
+
+The 26 left need other features: `concrete_subtype(comparable)` (10,
+`MetatypeConcreteSubtype`), a field overridden at a narrower type (4,
+`MetatypeConcreteSubtype` 116, 284, 289, 294), variance of parametric
+classes and interfaces at `comparable` (6, `SOL-6739`), a function type's
+join at a parameter of type `comparable` (1, `Comparable:216`,
+VerseVM-only), `weak_map` (1), a `set` through a call (1, `Map:472`) and
+`GetRandomInt` (2, `FORT-995029`).
+
+**The programs whose bytes or output changed** (the byte-identity oracle
+over the suites and the frozen corpus, against the base, main `7bf6dbd`
+with #602; a program whose bytes changed was run with both compilers in
+Lean and C): none's output changed. 111 changed bytes: 109 because two
+comparable types with nothing in common now join at `comparable`, not
+`any` (ch. 1, 1276; ch. 14): 98 generated `heterogeneous-*` programs (a
+choice of an int and a string), and the tests `any`, `if_join_order`,
+`choice_heterogeneous_contracts`, `choice_heterogeneous_fields`,
+`choice_branch_calls_join`, `choice_dictionary_associated_later_argument`,
+`choice_dictionary_correlated`, `choice_first_unrelated`, `choice_more`,
+`class_cast_refine_first_join`, `class_cast_refine_if_type`; and 2 because
+generic code now compares a type parameter with another type by boxes
+(`generics` and `empty_values_nested`: `X = true`, `X = false`, `X = ""`).
+Three error tests changed their message: `array_elements_differ` (a
+`[]comparable` now: "no ToString for comparable"; `array_elements_any`
+keeps the `[]any` case), `concatenate_maps_types` (maps of an int and a
+string join at `[int]comparable`; the refusal is now of a class value) and
+`qualified_path_not_type` (the built-in types listed include
+`comparable`); three compile now and compare as the Book does, so they
+left `tests/errors`: `eq_core_values`, `eq_core_params` and
+`eq_generic_tuple_string` (their cases are in `tests/verse/comparable_type`
+and `comparable_generic`).
+
 ## Ten causes to remove first
 
 Ranked by cases moved per unit of risk. A count is the upper bound above;
@@ -1024,9 +1075,9 @@ the `ToDiagnostic` printer (93), and `of`/`at` calls (27, a parser form the
 Book's chapters do not describe); type aliases and extension methods are
 done ([After the type aliases](#after-the-type-aliases), [After extension
 methods](#after-extension-methods)).
-The larger semantic items, types as values (198) and `comparable` as a type
-(125; [the Book's rules and two designs](comparable-type.md)), need Core work
-and an owner's design; union types (136) and live variables
+The larger semantic item, types as values (198), needs Core work and an
+owner's design (`comparable` as a type is built: [After
+`comparable`](#after-comparable)); union types (136) and live variables
 (50) are VerseVM-only or unreleased. The empty-values equality (30 different
 outputs) is dangerous but changes Core equality: it needs an owner
 decision first; [the readings audit](readings-audit.md) designs the
