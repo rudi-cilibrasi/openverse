@@ -1,3 +1,5 @@
+# set A.Data[K] op= e: the key, then e (which replaces Data), then the old value read from the new
+# Data; a key out of its range then fails the clause, e's effects rolled back with it
 cell:=class{var N:int=0}
 ca:=class:
     H:cell
@@ -18,4 +20,4 @@ Main():void=
     Q:=cb{H:=H,I:=2}
     Rows:=for(A:=(Dup(P)|Dup(Q)),R:=set A.Data[A.Key()]+=A.RHS()):block{Print("body {R}");R}
     Print("done {Rows.Length} {H.N}")
-    if(P.Data[0]=14,Q.Data[0]=0)then Print("state ok") else Print("bad state")
+    if(P.Data[0]=107,Q.Data[0]=0)then Print("state ok") else Print("bad state")

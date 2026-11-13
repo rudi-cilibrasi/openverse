@@ -1416,6 +1416,26 @@ def Ctx.implFor? (ctx : Ctx) (d r m : String) : Option String :=
 
 def p2 (op : Prim) (a b : Expr) : Expr := .prim op [a, b]
 
+/-- `void` occurs in the type: as it, or inside containers, tuples and type
+    arguments. -/
+partial def Ty.mentionsVoid : Ty → Bool
+  | .void => true
+  | .arr t | .opt t => t.mentionsVoid
+  | .map k v => k.mentionsVoid || v.mentionsVoid
+  | .tup ts | .struct _ ts => ts.any Ty.mentionsVoid
+  | _ => false
+
+/-- The type with `tuple()`, which takes the empty value alone, for each
+    `void`, which takes any value and makes it the empty value. -/
+partial def Ty.voidToUnit : Ty → Ty
+  | .void => .tup []
+  | .arr t => .arr t.voidToUnit
+  | .opt t => .opt t.voidToUnit
+  | .map k v => .map k.voidToUnit v.voidToUnit
+  | .tup ts => .tup (ts.map Ty.voidToUnit)
+  | .struct n ts => .struct n (ts.map Ty.voidToUnit)
+  | t => t
+
 /-- What the values of two types have in common, for `=` between them. -/
 inductive Common where
   /-- no value -/
@@ -1456,10 +1476,16 @@ partial def TyEnv.common (env : TyEnv) (a b : Ty) : Common :=
     else .nothing
   | a, b => if a.emptyValue?.isSome && b.emptyValue?.isSome then .empty else .nothing
 
-/-- Some Verse Core value has both types: equal scalars, the empty array of
-    every array type and `none` of every option type, tuples part by part;
-    type variables and references may. -/
-partial def _root_.OpenVerse.VTy.overlaps : VTy → VTy → Bool
+/-- The type holds one of Verse Core's four empty values (`Value.isEmpty`). -/
+def _root_.OpenVerse.VTy.holdsEmpty : VTy → Bool
+  | .logic | .opt _ | .arr _ | .tup [] => true
+  | _ => false
+
+/-- Verse Core's equality (`Value.veq`) can find a value of one type equal to
+    one of the other: equal scalars; the empty values of two types that hold
+    one; tuples part by part; type variables and references may. -/
+partial def _root_.OpenVerse.VTy.overlaps (a b : VTy) : Bool :=
+  (a.holdsEmpty && b.holdsEmpty) || match a, b with
   | .int, .int | .logic, .logic | .char, .char | .float, .float => true
   | .arr _, .arr _ | .opt _, .opt _ => true
   | .tup xs, .tup ys => xs.length == ys.length && (xs.zip ys).all fun (x, y) => x.overlaps y
@@ -1475,20 +1501,19 @@ inductive CmpPlan where
       (an `int` and a `char32` or an enum, two structs of one layout) -/
   | never
   /-- only the empty value in common, as Verse Core holds it at each, and
-      other values Verse Core could find equal or the empty values differ -/
+      other values Verse Core could find equal (`[]int` and `[]char32`) -/
   | empty (ex ey : Value)
   /-- other values in common that Verse Core holds differently, or could
-      not tell from those that are not (`?logic` and `?void`,
-      `[]tuple(int, []int)` and `[]tuple(int, []char32)`, a tuple of type
-      parameters and a string) -/
+      not tell from those that are not (`[]tuple(int, []int)` and
+      `[]tuple(int, []char32)`, a tuple of type parameters and a string) -/
   | refuse
 
-/-- Verse Core's equality of a value of `a` and one of `b` is Verse's: part
-    by part, where the types are the same, or what they have in common
-    (`TyEnv.common`) Verse Core holds alike and it finds no other values
-    equal (an `int` and a `float`; `[]int` and `string`, whose one common
-    value is `array{}` at both). Type parameters and classes (references)
-    are compared as Verse Core compares them. -/
+/-- Verse Core's equality (`Value.veq`, which relates the empty values) of
+    a value of `a` and one of `b` is Verse's: part by part, where the types
+    are the same, or what they have in common (`TyEnv.common`) is the empty
+    value at most and it finds no other values equal (an `int` and a
+    `float`; `logic` and `[]int`; `?logic` and `?void`). Type parameters and
+    classes (references) are compared as Verse Core compares them. -/
 partial def TyEnv.coreExact (env : TyEnv) (a b : Ty) : Bool :=
   let fieldTys (n : String) (ts : List Ty) : List Ty := (env.fields n ts).map (·.2.1)
   let (va, vb) := (a.toVTy env, b.toVTy env)
@@ -1507,12 +1532,35 @@ partial def TyEnv.coreExact (env : TyEnv) (a b : Ty) : Bool :=
     else !va.overlaps vb
   | _, _ => match env.common a b with
     | .nothing => !va.overlaps vb
-    -- (the empty values one, and no other values that could be equal: an
-    -- array and a map of parts that no Verse Core value has both types of)
-    | .empty => a.emptyValue? == b.emptyValue? && match va, vb with
+    -- (Verse Core's equality relates the empty values; no other values
+    -- could be equal: an array and a map of parts that no two Verse Core
+    -- values of the two types are equal in)
+    | .empty => match va, vb with
       | .arr x, .arr y | .opt x, .opt y => !x.overlaps y
       | _, _ => true
     | .values => false
+
+/-- Converting a value of `a` to `b` keeps any two values apart that were
+    apart: no part becomes `void` or `any`, which make every value one, so a
+    comparison may convert an operand to the other's type
+    (`(1, 2) = array{(), ()}` must not hold). -/
+partial def TyEnv.lossless (env : TyEnv) (a b : Ty) : Bool :=
+  if a == b then true else
+  match a, b with
+  | _, .void | _, .any => false
+  | .int, .rational | .never, _ => true
+  | .refine n, t => match env.refines.lookup n with
+    | some (base, _) => env.lossless base t
+    | none => false
+  | .arr x, .arr y | .opt x, .opt y => env.lossless x y
+  | .map k v, .map k' v' => env.lossless k k' && env.lossless v v'
+  | .tup xs, .tup ys => xs.length == ys.length && (xs.zip ys).all fun (x, y) => env.lossless x y
+  | .tup xs, .arr y => xs.all (env.lossless · y)
+  | .struct S xs, .struct T ys =>
+    if env.classes.contains S && env.classes.contains T then true
+    else S == T && (((env.fields S xs).map (·.2.1)).zip ((env.fields T ys).map (·.2.1))).all
+      fun (x, y) => env.lossless x y
+  | _, _ => false
 
 /-- How `=` and `<>` compare a value of `a` with one of `b`, different
     types: by Verse Core's equality where that is Verse's

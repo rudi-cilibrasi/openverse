@@ -1,15 +1,15 @@
 key a
 rhs a
-body 8 11
+body 37 11
 key a
 rhs a
-body 15 22
+body 37 22
 key b
 rhs b
-body 17 33
+body 37 33
 key b
 rhs b
-body 24 44
+body 37 44
 done 4 44
 state ok
 exit=0

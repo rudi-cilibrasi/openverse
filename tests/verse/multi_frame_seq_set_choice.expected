@@ -1,11 +1,11 @@
 add 1 2
 add 2 4
 v 4
-add 1 6
-add 2 8
-v 8
-add 2 7
-v 7
+add 1 7
+add 2 11
+v 11
+add 2 16
+v 16
 add 1 6
 add 2 8
 taken 8

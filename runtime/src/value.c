@@ -212,12 +212,27 @@ int vx_heap_keep(vx_heap *h, size_t mark, vx_val *root)
 
 /* -------------------------------------------------------------- equality */
 
+/* The empty value of Verse (Book of Verse ch. 2), which the runtime holds
+ * four ways, one per type that has it, as Verse Core does (Value.isEmpty):
+ * (LOGIC, 0), (NONE, 0), and an array or a tuple of no elements. */
+static int is_empty(const vx_heap *h, const vx_val *v)
+{
+    switch (v->tag) {
+    case VX_T_LOGIC: return v->bits == 0;
+    case VX_T_NONE:  return 1;
+    case VX_T_ARR:
+    case VX_T_TUP:   return vx_obj_len(h, (size_t)v->bits) == 0;
+    default:         return 0;
+    }
+}
+
 /* 0: different, 1: equal, 2: distinct objects of the same tag and length
- * (compare the elements). */
+ * (compare the elements). Verse's equality (Value.veq): structural, but any
+ * two empty values are equal. */
 static int shallow_eq(const vx_heap *h, const vx_val *a, const vx_val *b)
 {
     if (a->tag != b->tag)
-        return 0;
+        return is_empty(h, a) && is_empty(h, b);
     if (!vx_isref(a))
         return a->bits == b->bits;
     if (a->bits == b->bits)

@@ -1596,13 +1596,15 @@ partial def choiceMemberOperations (bindings : ChoiceAliases) (body : SExpr) : L
     match choiceIndexedField target with
     | some (receiver, _, indices) =>
       indices.flatMap (choiceMemberOperations bindings) ++ choiceMemberOperations bindings receiver ++
+        choiceMemberOperations bindings value ++
         (if op.isSome then choiceMemberOperations bindings target ++ choiceMemberOperations bindings old else []) ++
-        choiceMemberOperations bindings value ++ (if depends receiver then [(e, bindings)] else [])
+        (if depends receiver then [(e, bindings)] else [])
     | none => match target with
       | .member _ receiver _ =>
         choiceMemberOperations bindings receiver ++
+          choiceMemberOperations bindings value ++
           (if op.isSome then choiceMemberOperations bindings old else []) ++
-          choiceMemberOperations bindings value ++ (if depends receiver then [(e, bindings)] else [])
+          (if depends receiver then [(e, bindings)] else [])
       | _ => match choiceWritePath target with
         | some (root, steps) =>
           (steps.filterMap (·.2.2)).flatMap (choiceMemberOperations bindings) ++
@@ -2073,10 +2075,12 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       | .member p receiver field => some (p, receiver, field, [], false, true, none)
       | .set p target@(.member _ receiver field) op value =>
         if !choiceFieldPath receiver then none else
+        -- (for `op=` too only the new value: the operation's own `set`
+        -- reads the old one through the receiver after it, as `set P op= e`
+        -- evaluates e before it reads P)
         let arguments := match op, value with
-          | none, _ => [value]
-          | some _, .app _ (.ident _ "$withOld") [saved, rhs] false => [saved, rhs]
-          | some _, _ => [target, value]
+          | some _, .app _ (.ident _ "$withOld") [_, rhs] false => [rhs]
+          | _, _ => [value]
         some (p, receiver, field, arguments, false, false, some op)
       | .set p target op value => do
         let (receiver, field, keys) ← choiceIndexedField target
@@ -2160,7 +2164,9 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
             | .map keyTy next =>
               keys := keys ++ [keyTy]
               leaf := next
-              indexedDecides := indexedDecides || i + 1 < indices.length
+              -- (a map's key reference is `<decides>`, also the last key's,
+              -- which inserts: the Book of Verse's API reference)
+              indexedDecides := true
             | _ => break
           if keys.length != indices.length then break
           let keyTy := if keys.length == 1 then keys.head! else Ty.tup keys
@@ -2172,7 +2178,7 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
           continue
         cases := cases ++ [{
           receiver := actual,
-          inputs := if op.isSome then [fieldTy, fieldTy] else [fieldTy],
+          inputs := [fieldTy],
           result := fieldTy, specs := if op.isSome then ["reads", "writes"] else ["writes"] }]
       else if isField then
         match actual with
@@ -2303,9 +2309,7 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
         SExpr.app p0 target [index] true) (.member p0 values[1]! method)
       SExpr.set p0 target op rhs
     else if let some op := setter then
-      let rhs := if op.isSome then SExpr.app p0 (.ident p0 "$withOld") [values[1]!, values[2]!] false
-        else values[1]!
-      SExpr.set p0 (.member p0 values.head! method) op rhs
+      SExpr.set p0 (.member p0 values.head! method) op values[1]!
     else if callable then SExpr.app p0 values.head! values.tail bracket else
       if isField then SExpr.member p0 values.head! method else
       .app p0 (.member p0 values.head! method) (choiceForwardArguments arguments values.tail) bracket

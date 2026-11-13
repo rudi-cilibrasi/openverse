@@ -1,3 +1,5 @@
+# set A.State.X += A.RHS(), a struct field of an object: RHS replaces State first, then the old value
+# is read from the new State, which is rebuilt with its tail
 cell:=class{var N:int=0}
 sa:=struct{X:int;Tail:int}
 sb:=struct{X:rational;Tail:int}
@@ -17,4 +19,4 @@ Main():void=
         Q:=cb{H:=H,State:=sb{X:=Half,Tail:=2}}
         Rows:=for(A:=(Dup(P)|Dup(Q)),set A.State.X+=A.RHS()):block{Print("body {H.N}");0}
         Print("done {Rows.Length} {H.N}")
-        if(P.State.X=15,P.State.Tail=200,Q.State.X=29/2,Q.State.Tail=200)then Print("state ok") else Print("bad state")
+        if(P.State.X=107,P.State.Tail=200,Q.State.X=107,Q.State.Tail=200)then Print("state ok") else Print("bad state")

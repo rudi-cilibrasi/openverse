@@ -131,8 +131,9 @@ not an `array{a₀, …}`, which would run `aₙ₋₁` before `a₀`'s value wa
 - **A choice or a call with several values in a `set`'s path** (#283), as
   `set A[0 | 1] = X`: `liftClauseM` binds the path's indices to names
   (`setPrefix`, as for a new value that needs code before it), lifts those
-  bindings in order (`Choice.pathHas` says when), then for `op=` reads the
-  old value, then lifts the new value: the order `set` evaluates them in.
+  bindings in order (`Choice.pathHas` says when), then lifts the new value;
+  the `set` itself then reads the old value, for `op=`: the order `set`
+  evaluates them in.
   An index's choice is then an ordinary binding, a generator in a `for`.
   When the clauses after such a choice have another one, so that the copies
   would double with each (#335), they become a function of their own,
@@ -961,8 +962,9 @@ code after it, which is its frame.
   the lifter binds it as it binds a choice), then decomposed again. A
   `set`'s or a `var`'s value that is a choice with such a call as one
   alternative, which the lifter keeps as a binding of its own, is bound
-  first as `normClauses` binds one (`setClauses`: the path's prefix, for
-  `op=` the old value, then the choice), as for the elaborator's clauses. The
+  first as `normClauses` binds one (`setClauses`: the path's prefix, then
+  the choice; for `op=` the `set` reads the old value after it), as for the
+  elaborator's clauses. The
   field orders of a struct's or a class's construction are the elaborator's,
   one definition (`TyEnv.fieldOrder`, which `choiceOrder` gives the lifter
   too: a class's superclass's fields first, then its interfaces', then its
@@ -1242,7 +1244,7 @@ keep the order: a round that asks goes no further than the phase that asks,
 and the next one runs every phase again. Read off the list, a program is
 refused, first to last, for:
 
-- its effect annotations, specifiers out of place and source profile, a type with a built-in type's name, a reserved name defined, a name defined twice, a name an enclosing scope defines (but a function a call can tell apart from it, checked with the signatures, 15), a `return` outside a function's body, a `defer:` where a value is taken, a `for` of literal clauses only, its modules and qualifiers (a qualifier that names nothing or not where its definition is, an ambiguous bare name beside a qualified definition), its type aliases (one that names itself or an alias defined after it, or is used before its definition, or whose name a definition takes), a constant that depends on itself, and subscribable events (1); the choices it inlines and the requests it carries (2); its overloaded methods (3);
+- its effect annotations, specifiers out of place and source profile, a type with a built-in type's name, a reserved name defined, a name defined twice, a name an enclosing scope defines (but a function a call can tell apart from it, checked with the signatures, 15), a `return` outside a function's body, a `defer:` where a value is taken, a `for` of literal clauses only, its modules and qualifiers (a qualifier that names nothing or not where its definition is, an ambiguous bare name beside a qualified definition), its type aliases (one that names itself or an alias defined after it, or is used before its definition, or whose name a definition takes), a constant that depends on itself or names one defined after it in its scope, and subscribable events (1); the choices it inlines and the requests it carries (2); its overloaded methods (3);
 - its classes: their parents (unknown, a struct, wrong type arguments, an interface extending a class, two superclasses, a `<final>` one, a cycle), `<castable>` ones with type parameters and those below `<final_super_base>` ones, and construction effects (4); their fields, inherited, overriding and own, against the methods above them, and a `<concrete>` class's defaults (5); their methods: duplicates, parameter names, qualified implementations, overrides and `<final>`, abstract methods and the implementations every concrete class needs (6);
 - the types those give: comparable type arguments to parents and a `<persistable>` struct's fields (7), bounds (8), one instance of an interface per class (9), the Verse Core type arguments of overrides (10), recursive structs and map keys (11);
 - its functions' names and overloads (12), their signatures and effect annotations (13), constants whose type cannot be inferred and the defaults function types write (14); then the signature checks (15): overloads a call cannot tell apart, an extension method that repeats a method of its receiver's class, overrides and implementations whose signature or effects differ, an overriding field's type, and, last, a field two interfaces give defaults;
@@ -1538,25 +1540,37 @@ doubles. In the binary format a float literal is the primitive `fofBits` of
 an int literal of its bits, so the loader (`load.c`, QuickProof-proved) is
 unchanged; only its bound on primitive codes grows.
 
-## Equality across types: decided by the front end
+## Equality: Verse Core's veq, and the front end across types
 
 Verse's `=` is equality of values (Book of Verse ch. 2 and 4): values of
-different types are different, but for the one empty value (`false`, `()`,
-the empty option, array, string and map) and a value two types share (a
-tuple and the array of its elements, an int and its rational). Verse Core's
-`eq` is structural on representations, so it holds the empty value four
-ways (`.logic false`, `.tup []`, `.none`, `.arr #[]`) and holds an `int`, a
-`char32` and an enum alike. The front end therefore decides each `=` and
-`<>` of two different types from the types alone (`TyEnv.cmpPlan`,
-`Elab/Context.lean`): Verse Core's `eq` where it is Verse's
-(`TyEnv.coreExact`, which keeps the code of every comparison it already
-answered right), a test that fails or holds where the types have nothing
-in common, a test of both operands' emptiness where they have only the
-empty value in common, and a refusal where they have other values in
-common that Verse Core holds differently (the empty value inside a
-container). The last, and generic code, wait on Verse Core relating the
-empty values in `eq` ([research/empty-values.md](research/empty-values.md),
-part 2, design B); the proofs, OVBC and the C runtime are unchanged.
+different types are different, but the empty value (`false`, `()`, the
+empty option, array, string and map) is one value, and a value two types
+share (a tuple and the array of its elements, an int and its rational) is
+one. Verse Core holds the empty value four ways, one per type that has it
+(`.logic false`, `.tup []`, `.none`, `.arr #[]`), so its `eq` and `ne` are
+`Value.veq` (`Value.lean`): structural equality, except that any two empty
+values are equal, at every depth. It is characterized by `veq_iff`
+(equality once each empty value is made `()`), so it is an equivalence and
+a congruence for the constructors that hold values, and on two values of
+one type it is `=` (`veq_iff_eq_of_hasTy`): programs that compare values of
+one type compute as before. The C runtime's `shallow_eq` (`value.c`) takes
+two empty values of different tags as equal. A map's lookup, `case`, the
+array methods that search by value and struct equality are code that calls
+`eq`, so they follow. No proof needed more than that: the typing of `eq`
+reads only its left operand, and `Eval.eq_slot` compares ints, which
+`veq_int_right` makes `=`.
+
+What Verse Core cannot tell is values of different types it holds alike
+(an `int`, a `char32` and an enum; two structs of one layout). The front
+end decides those from the two types (`TyEnv.cmpPlan`, `Elab/Context.lean`):
+Verse Core's `eq` where it is Verse's (`TyEnv.coreExact`), a test that
+fails or holds where the types have nothing in common, a test of both
+operands' emptiness where only the empty value is common and other values
+could be found equal, a lossless conversion of an operand (`TyEnv.lossless`)
+where values are shared as a tuple and an array, and a refusal where
+neither is possible. Generic code compares a type parameter as Verse Core
+compares its instance; values of types it holds alike would need run-time
+types ([research/empty-values.md](research/empty-values.md)).
 
 ## Rationals: helpers written in Verse
 

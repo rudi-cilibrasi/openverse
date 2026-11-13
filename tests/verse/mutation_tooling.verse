@@ -16,7 +16,7 @@ Main():void =
     # also as a step of a path
     var S:score = score{Best := option{3}}
     if (set S.Best? *= 7, B := S.Best?) then Print("best {B}")
-    set S.Tags["a"] = option{1}
+    if (set S.Tags["a"] = option{1}) {}
     if (set S.Tags["a"]? += 1, T := S.Tags["a"], U := T?) then Print("tag a {U}")
     if (set S.Tags["b"]? = 1) then Print("unreachable") else Print("no tag b")
     # let(defs){body}: the definitions are visible in the body only

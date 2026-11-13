@@ -157,9 +157,18 @@ partial def elabAppBaseWith
       let es ← elabArgs ctx p args [Ty.string]
       return ⟨.print es.head!, .void⟩
     | "ConcatenateMaps" =>
-      -- the entries of every map, a later map's value winning for a key (Book
-      -- of Verse ch. 9): the first copied, then each other's pairs put in turn
-      let some a0 := args.head? | eerr p "ConcatenateMaps takes at least one map"
+      -- the entries of every map laid down in turn, a later map's pair
+      -- replacing an earlier one's of its key, at its own place (the Book of
+      -- Verse's API reference: "the entries are laid down left first, then
+      -- right, and a map keeps only the last value given for a key";
+      -- `Tests/Intrinsics/ConcatenateMaps.versetest` 21, 33: the later map's
+      -- order): the first copied, then for each other the pairs kept whose
+      -- key it does not have, then its pairs
+      -- (two maps, the Book of Verse's ch. 3: "It takes exactly two maps";
+      -- more are merged by chained calls)
+      if args.length != 2 then
+        eerr p s!"ConcatenateMaps takes two maps, not {args.length} (to merge more, chain the calls: ConcatenateMaps(ConcatenateMaps(A, B), C))"
+      let some a0 := args.head? | eerr p "ConcatenateMaps takes two maps"
       -- the maps' type: the expected one, else the first argument's that has
       -- one alone (an empty map{} has none)
       let mapExp : Option Ty ← match exp with
@@ -200,12 +209,12 @@ partial def elabAppBaseWith
         let ts ← fresh jt
         let tpair ← fresh (.tup [kt, vt])
         let tk ← fresh kt
-        let tv ← fresh vt
-        let ti ← fresh .int
-        let tidx ← fresh .int
-        let put := Expr.seq (.assign tk (.prim (.tupGet 0) [.local tpair]))
-          (.seq (.assign tv (.prim (.tupGet 1) [.local tpair])) (mapPut tm tk tv ti tidx))
-        code := .seq code (.seq (.assign ts (← elabArgumentCoerceWith elabE ctx a.pos r jt)) (.forE tpair (.local ts) (.lit (.logic true)) put))
+        let tq ← fresh (.tup [kt, vt])
+        -- (a pair stays, at its place, when the later map has no pair of its key)
+        let absent := Expr.notE (.seq (.assign tk (.prim (.tupGet 0) [.local tpair])) (mapLookup ts tk tq))
+        let kept := Expr.forE tpair (.local tm) absent (.local tpair)
+        code := .seq code (.seq (.assign ts (← elabArgumentCoerceWith elabE ctx a.pos r jt))
+          (.assign tm (.prim .concat [kept, .local ts])))
       return ⟨.seq code (.local tm), jt⟩
     | "ToString" =>
       match args with

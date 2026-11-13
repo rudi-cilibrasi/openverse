@@ -2045,7 +2045,9 @@ class Gen:
                         M.append('set %s.%s.%s += %s' % (v, f.name, R.choice(vs).name, lit(1, 9)))
                 elif fty[0] == 'map':
                     for key in R.sample('abc', R.randint(1, 3)):
-                        M.append('set %s.%s["%s"] = %s' % (v, f.name, key, R.choice(cands)))
+                        # (a set through a map's key is in a failure context: its key's
+                        # reference is <decides>, the Book of Verse's API reference)
+                        M.append('if (set %s.%s["%s"] = %s) {}' % (v, f.name, key, R.choice(cands)))
                 else:
                     ws = [R.choice(cands) for _ in range(R.randint(1, 3))]
                     M.append('set %s.%s = %s.%s + array{%s}' % (v, f.name, v, f.name, ', '.join(ws)))
@@ -2225,7 +2227,7 @@ class Gen:
             if f.ty[0] == 'opt':
                 M.append('    if (Mod[%s, 5] = 0) then set %s.%s = option{%s}' % (i, w, f.name, v))
             elif f.ty[0] == 'map':
-                M.append('    if (Q := Mod[%s, 4]) then set %s.%s["k{Q}"] = %s' % (i, w, f.name, v))
+                M.append('    if (Q := Mod[%s, 4], set %s.%s["k{Q}"] = %s) {}' % (i, w, f.name, v))
             else:
                 M.append('    if (Mod[%s, 50] = 0) then set %s.%s = %s.%s + array{%s}' % (i, w, f.name, w, f.name, v))
         sub = self.main_ctx(objs + [(v, c)], c, v + '.')

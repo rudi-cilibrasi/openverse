@@ -1,7 +1,7 @@
 # Type aliases beside the forms that begin with `(` and the built-ins as
 # values: `whole := (int)` is an alias, `(T){…}` constructs through one, a
-# destructured tuple's elements take aliases' types, and `Root := Sqrt` is a
-# constant, a built-in's value
+# destructured tuple's elements take aliases' types, and `Root:float->float =
+# Sqrt` is a constant, a built-in's value (a constant states its type, ch. 16)
 whole := (int)
 pt := tuple(int, string)
 box(t:type) := class:
@@ -12,7 +12,7 @@ point := struct:
     X:int
     Y:int
 pt2 := point
-Root := Sqrt
+Root:float->float = Sqrt
 Apply(F(:float):float, X:float):float = F(X)
 Pair():pt = (3, "three")
 Main():void =

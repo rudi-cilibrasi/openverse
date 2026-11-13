@@ -49,7 +49,7 @@ private def cases : List (String × String) := [
   ("branch join", caller "    var Stored:u=D\n    if(true?)then set Stored=Dummy\n    P.Up(Stored).Up(X).N"),
   ("loop back edge", caller "    var Stored:u=D\n    loop:\n        set Stored=Dummy\n        break\n    P.Up(Stored).Up(X).N"),
   ("array update", caller "    var Stored:[]u=array{D}\n    if(set Stored[0]=Dummy){}\n    if(V:=Stored[0])then P.Up(V).Up(X).N else 0"),
-  ("map update", caller "    var Stored:[int]u=map{0=>D}\n    set Stored[0]=Dummy\n    if(V:=Stored[0])then P.Up(V).Up(X).N else 0"),
+  ("map update", caller "    var Stored:[int]u=map{0=>D}\n    if(set Stored[0]=Dummy){}\n    if(V:=Stored[0])then P.Up(V).Up(X).N else 0"),
   ("object alias", "cell(v:type):=class:\n    var Value:v\n" ++
     caller "    C:=cell(u){Value:=D}\n    Alias:=C\n    set Alias.Value=Dummy\n    P.Up(C.Value).Up(X).N"),
   ("indexed object alias", "cell(v:type):=class:\n    var Value:v\n" ++

@@ -146,7 +146,7 @@ def main : IO Unit := do
       "Concatenate takes arrays, or an array of arrays"),
     ("variadic concatenate", "Caller(A:t,B:[]int,D:evidence([]int,t) where t:type)<computes>:[]int=Concatenate(A,B)",
       "Concatenate takes arrays, found t"),
-    ("whole-map concatenate", "Caller(A:t,D:evidence([int]int,t) where t:type)<computes>:[int]int=ConcatenateMaps(A)",
+    ("whole-map concatenate", "Caller(A:t,D:evidence([int]int,t) where t:type)<computes>:[int]int=ConcatenateMaps(A,A)",
       "ConcatenateMaps takes maps, not t"),
     ("map-value concatenate", "Caller(A:[int]t,B:[int]int,D:evidence(int,t) where t:type)<computes>:[int]int=ConcatenateMaps(A,B)",
       "ConcatenateMaps takes maps of one type"),

@@ -246,10 +246,11 @@ def expand (tops : List STop) : Except String (List STop) := do
         checkNames p bodyArity params body
         scope := { scope with known := scope.known.insert n { pos := p, params, body } }
         continue
-      -- (a module's data states its type, Book of Verse ch. 16: the parser
-      -- leaves `X := c` to this pass, as `c` may be a type)
-      if (qualParts n).length > 1 && !(qualParts n).any (·.startsWith "$") && e.asType?.isSome then
-        throw s!"{p.show}: a constant in a module needs its type: write {(qualParts n).getLastD n}:t = …"
+      -- (a module's data states its type, Book of Verse ch. 16, also at the
+      -- top level: the parser leaves `X := c` to this pass, as `c` may be a
+      -- type)
+      if !(qualParts n).any (·.startsWith "$") && e.asType?.isSome && !e.isTypeLikeForm then
+        throw s!"{p.show}: a constant {if (qualParts n).length > 1 then "in a module" else "at the top level"} needs its type: write {(qualParts n).getLastD n}:t = … (Book of Verse ch. 16: \"type inference with := alone is not allowed\")"
     out := out.push (← if aliases.isEmpty then pure t else scope.top t)
   return out.toList
 

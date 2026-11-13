@@ -1083,6 +1083,12 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
     | _ => false
   let operand (e : SExpr) (other : Ty) : EM R := do
     if let (true, some v) := (emptyLit e, other.emptyValue?) then return ⟨.lit v, other⟩
+    -- (at a type with `void` in it, the operand's parts would be made the
+    -- empty value, as `void` takes any value: `array{()} = array{5}` must not
+    -- hold; it is elaborated with no expected type, else at the type with
+    -- `tuple()` for `void`, which takes the empty value alone)
+    if other.mentionsVoid then
+      return ← tryCatch (elabE ctx e none) fun _ => elabE ctx e (some other.voidToUnit)
     elabE ctx e (some other)
   -- (one first, the other operand's type gives it: that operand is
   -- elaborated first, and the literal, which does nothing, compared with
@@ -1115,14 +1121,16 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
     -- to the other's, `p(tuple(int, int))` to `p([]int)`)
     let fields (n : String) (ts : List Ty) : Ty := .tup ((ctx.types.fields n ts).map (·.2.1))
     if let (.struct S xs, .struct T ys) := (r.ty, other) then
-      if S == T && !ctx.types.classes.contains S && !ctx.types.coreExact r.ty other then
+      if S == T && !ctx.types.classes.contains S && !ctx.types.coreExact r.ty other &&
+          ctx.types.lossless r.ty other then
         return ← tryCatch (do
           let some e ← convert (← get).env r.e (fields S xs) (fields T ys) | return r
           return ⟨.assign (← fresh other) e, other⟩) fun _ => return r
     let converts := match r.ty, other with
       | .tup _, .arr _ => true
       | t, u => ratMismatch t u
-    if !converts then return r
+    -- (only where no part becomes `void`, `TyEnv.lossless`)
+    if !converts || !ctx.types.lossless r.ty other then return r
     tryCatch (return ⟨← coerce p r other, other⟩) fun _ => return r
   -- (an int and a rational, #116: as rationals; `=` and `<>` of a rational
   -- and another type are those of different types)

@@ -619,4 +619,83 @@ def LResOK (Ξ : HeapTy) (ts : List VTy) (ρ : VTy) : LRes → Prop
   | .ok vs => allTys Ξ vs ts = true
   | .stop r => ResOK Ξ VTy.void ρ r ∧ r.isOk = false
 
+/-! ### `veq` on values of one type -/
+
+open Value in
+/-- Two values of one type have one constructor, but for an empty option
+    and a full one. -/
+theorem hasTy_kind (Ξ : HeapTy) (a b : Value) (τ : VTy) (ha : hasTy Ξ a τ = true)
+    (hb : hasTy Ξ b τ = true) :
+    kind a = kind b ∨ (kind a = 6 ∧ kind b = 7) ∨ (kind a = 7 ∧ kind b = 6) := by
+  cases τ <;> cases a <;> simp_all [hasTy, Value.kind] <;> cases b <;> simp_all [hasTy]
+
+open Value in
+mutual
+/-- On values of one type, `veq` is equality: each type holds the empty
+    value one way, so only a comparison of values of different types (in
+    generic code, or across types) can tell `veq` from `=`. -/
+theorem veq_iff_eq_of_hasTy (Ξ : HeapTy) : ∀ (a b : Value) (τ : VTy),
+    hasTy Ξ a τ = true → hasTy Ξ b τ = true → (veq a b = true ↔ a = b)
+  | .int x, .int y, _, _, _ => by simp [veq]
+  | .logic x, .logic y, _, _, _ => by cases x <;> cases y <;> simp [veq]
+  | .char x, .char y, _, _, _ => by simp [veq]
+  | .float x, .float y, _, _, _ => by simp [veq]
+  | .arr a, .arr b, .arr t, ha, hb => by
+    have ih := veqList_iff_eq_of_allTy Ξ a.toList b.toList t (by simpa [hasTy] using ha)
+      (by simpa [hasTy] using hb)
+    simp only [veq, Bool.and_eq_true, beq_iff_eq, Value.arr.injEq]
+    rw [ih]
+    constructor
+    · rintro ⟨-, h⟩; exact Array.toList_inj.mp h
+    · rintro rfl; exact ⟨rfl, rfl⟩
+  | .tup xs, .tup ys, .tup ts, ha, hb => by
+    have ih := veqList_iff_eq_of_allTys Ξ xs ys ts (by simpa [hasTy] using ha) (by simpa [hasTy] using hb)
+    simp only [veq, Value.tup.injEq]; exact ih
+  | .none, .none, _, _, _ => by simp [veq]
+  | .none, .some _, _, _, _ => by simp [veq, isEmpty]
+  | .some _, .none, _, _, _ => by simp [veq, isEmpty]
+  | .some x, .some y, .opt t, ha, hb => by
+    have ih := veq_iff_eq_of_hasTy Ξ x y t (by simpa [hasTy] using ha) (by simpa [hasTy] using hb)
+    simp only [veq, Value.some.injEq]; exact ih
+  | .ref x, .ref y, _, _, _ => by simp [veq]
+  | .int _, .logic _, τ, ha, hb | .int _, .char _, τ, ha, hb | .int _, .float _, τ, ha, hb | .int _, .arr _, τ, ha, hb
+  | .int _, .tup _, τ, ha, hb | .int _, .none, τ, ha, hb | .int _, .some _, τ, ha, hb | .int _, .ref _, τ, ha, hb
+  | .logic _, .int _, τ, ha, hb | .logic _, .char _, τ, ha, hb | .logic _, .float _, τ, ha, hb | .logic _, .arr _, τ, ha, hb
+  | .logic _, .tup _, τ, ha, hb | .logic _, .none, τ, ha, hb | .logic _, .some _, τ, ha, hb | .logic _, .ref _, τ, ha, hb
+  | .char _, .int _, τ, ha, hb | .char _, .logic _, τ, ha, hb | .char _, .float _, τ, ha, hb | .char _, .arr _, τ, ha, hb
+  | .char _, .tup _, τ, ha, hb | .char _, .none, τ, ha, hb | .char _, .some _, τ, ha, hb | .char _, .ref _, τ, ha, hb
+  | .float _, .int _, τ, ha, hb | .float _, .logic _, τ, ha, hb | .float _, .char _, τ, ha, hb | .float _, .arr _, τ, ha, hb
+  | .float _, .tup _, τ, ha, hb | .float _, .none, τ, ha, hb | .float _, .some _, τ, ha, hb | .float _, .ref _, τ, ha, hb
+  | .arr _, .int _, τ, ha, hb | .arr _, .logic _, τ, ha, hb | .arr _, .char _, τ, ha, hb | .arr _, .float _, τ, ha, hb
+  | .arr _, .tup _, τ, ha, hb | .arr _, .none, τ, ha, hb | .arr _, .some _, τ, ha, hb | .arr _, .ref _, τ, ha, hb
+  | .tup _, .int _, τ, ha, hb | .tup _, .logic _, τ, ha, hb | .tup _, .char _, τ, ha, hb | .tup _, .float _, τ, ha, hb
+  | .tup _, .arr _, τ, ha, hb | .tup _, .none, τ, ha, hb | .tup _, .some _, τ, ha, hb | .tup _, .ref _, τ, ha, hb
+  | .none, .int _, τ, ha, hb | .none, .logic _, τ, ha, hb | .none, .char _, τ, ha, hb | .none, .float _, τ, ha, hb
+  | .none, .arr _, τ, ha, hb | .none, .tup _, τ, ha, hb | .none, .ref _, τ, ha, hb | .some _, .int _, τ, ha, hb
+  | .some _, .logic _, τ, ha, hb | .some _, .char _, τ, ha, hb | .some _, .float _, τ, ha, hb | .some _, .arr _, τ, ha, hb
+  | .some _, .tup _, τ, ha, hb | .some _, .ref _, τ, ha, hb | .ref _, .int _, τ, ha, hb | .ref _, .logic _, τ, ha, hb
+  | .ref _, .char _, τ, ha, hb | .ref _, .float _, τ, ha, hb | .ref _, .arr _, τ, ha, hb | .ref _, .tup _, τ, ha, hb
+  | .ref _, .none, τ, ha, hb | .ref _, .some _, τ, ha, hb =>
+    absurd (hasTy_kind Ξ _ _ τ ha hb) (by simp [kind])
+theorem veqList_iff_eq_of_allTy (Ξ : HeapTy) : ∀ (xs ys : List Value) (t : VTy),
+    allTy Ξ xs t = true → allTy Ξ ys t = true → (veqList xs ys = true ↔ xs = ys)
+  | [], [], _, _, _ => by simp [veqList]
+  | [], _ :: _, _, _, _ => by simp [veqList]
+  | _ :: _, [], _, _, _ => by simp [veqList]
+  | x :: xs, y :: ys, t, ha, hb => by
+    simp only [allTy, Bool.and_eq_true] at ha hb
+    simp only [veqList, Bool.and_eq_true, List.cons.injEq]
+    rw [veq_iff_eq_of_hasTy Ξ x y t ha.1 hb.1, veqList_iff_eq_of_allTy Ξ xs ys t ha.2 hb.2]
+theorem veqList_iff_eq_of_allTys (Ξ : HeapTy) : ∀ (xs ys : List Value) (ts : List VTy),
+    allTys Ξ xs ts = true → allTys Ξ ys ts = true → (veqList xs ys = true ↔ xs = ys)
+  | [], [], _, _, _ => by simp [veqList]
+  | [], _ :: _, _, _, hb => by cases ‹List VTy› <;> simp_all [allTys]
+  | _ :: _, [], _, ha, _ => by cases ‹List VTy› <;> simp_all [allTys]
+  | x :: xs, y :: ys, t :: ts, ha, hb => by
+    simp only [allTys, Bool.and_eq_true] at ha hb
+    simp only [veqList, Bool.and_eq_true, List.cons.injEq]
+    rw [veq_iff_eq_of_hasTy Ξ x y t ha.1 hb.1, veqList_iff_eq_of_allTys Ξ xs ys ts ha.2 hb.2]
+  | _ :: _, _ :: _, [], ha, _ => by simp [allTys] at ha
+end
+
 end OpenVerse

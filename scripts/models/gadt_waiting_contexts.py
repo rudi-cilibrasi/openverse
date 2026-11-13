@@ -66,7 +66,8 @@ else:
     print('box(t:type):=class' + ('(holder)' if shape == 'view' else '') + ':\n    X:t')
     print('    ' + header.replace('Run(', 'Run<override>(' if shape == 'view' else 'Run('))
     print('Make():box(string)=box(string){X:="tag"}')
-    print('B:holder=Make()' if shape == 'view' else 'B:=Make()')
+    # (a constant at the top level states its type, Book of Verse ch. 16)
+    print('B:holder=Make()' if shape == 'view' else 'B:box(string)=Make()')
     call = 'B.Run(P,H)'
 print(f'''Use(P:pair(a,b),H:cell where a:type,b:type)<suspends>:int=
     defer:Print("source {{H.N}}")

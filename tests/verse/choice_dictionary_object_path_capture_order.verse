@@ -1,3 +1,6 @@
+# set A.Items[A.Outer()].Data[A.Inner()] += A.RHS(): the keys (which move Items), then the object
+# they name, then RHS (which replaces that object's Data and moves Items again), then the old value
+# read from the captured object's new Data
 cell:=class{var N:int=0}
 leafa:=class{var Data:[]int=array{0,0}}
 leafb:=class{var Data:[]rational=array{0,0}}
@@ -33,4 +36,4 @@ Main():void=
         Q:=cb{H:=H,Original:=Q0,Other:=Q1,Last:=Q2,Items:=map{"k"=>Q0}}
         Rows:=for(A:=(Dup(P)|Dup(Q)),set A.Items[A.Outer()].Data[A.Inner()]+=A.RHS()):block{Print("body {H.N}");0}
         Print("done {Rows.Length} {H.N}")
-        if(P2.Data[0]=64,P2.Data[1]=400,Q2.Data[0]=29/2,Q2.Data[1]=400,P0.Data[0]=0,P1.Data[0]=0,Q0.Data[0]=0,Q1.Data[0]=0)then Print("state ok") else Print("bad state")
+        if(P2.Data[0]=307,P2.Data[1]=400,Q2.Data[0]=307,Q2.Data[1]=400,P0.Data[0]=0,P1.Data[0]=0,Q0.Data[0]=0,Q1.Data[0]=0)then Print("state ok") else Print("bad state")

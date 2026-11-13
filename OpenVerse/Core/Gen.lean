@@ -152,7 +152,7 @@ partial def genArr (env : Env) (d : Nat) : G Expr := do
 /-- A statement (its value is not interesting). -/
 partial def genStmt (env : Env) (d : Nat) : G Expr := do
   if d == 0 then return .print (p .toStr [← genInt env 0])
-  match ← below 13 with
+  match ← below 15 with
   | 0 | 1 | 2 => return .print (p .toStr [← genInt env (d-1)])
   | 3 => return .print (p .concat [.lit (Value.ofString "s:"), p .toStr [← genInt env (d-1)]])
   | 4 =>
@@ -180,7 +180,66 @@ partial def genStmt (env : Env) (d : Nat) : G Expr := do
   | 11 =>
     -- store a fresh array in a field (maybe of an object the caller passed)
     return .heap (.set (← below 2)) [← genRef env (d-1), ← genArr env (d-1)]
+  | 12 | 13 => genValTest env (d-1)
   | _ => return .print (.lit (Value.ofString (← pick ["a", "", "rolled?", "x y"])))
+
+/-- A value, often holding the empty value at some depth, in each of the
+    four ways Verse Core holds it (`.logic false`, `()`, `none`, `[]`, also
+    `""` and an empty `mkArr`/`mkTup`), so that `eq`, `ne`, a map's lookup
+    (an array of key-value pairs searched by `eq` on the keys) and a search of
+    an array by `eq` compare them across their representations. -/
+partial def genVal (env : Env) (d : Nat) : G Expr := do
+  let empty : G Expr := do
+    match ← below 7 with
+    | 0 => return .lit (.logic false)
+    | 1 => return .lit .void
+    | 2 => return .lit .none
+    | 3 => return .lit Value.emptyArray
+    | 4 => return .lit (Value.ofString "")
+    | 5 => return p .mkArr []
+    | _ => return p .mkTup []
+  if d == 0 then
+    if (← chance 60) then return ← empty
+    return .lit (← pick [.int 0, .int 1, .logic true, .char 97, Value.ofString "a"])
+  match ← below 9 with
+  | 0 | 1 | 2 => empty
+  | 3 => return p .mkSome [← genVal env (d-1)]
+  | 4 | 5 =>
+    let n ← below 3
+    let mut es := #[]
+    for _ in [0:n] do es := es.push (← genVal env (d-1))
+    return p .mkArr es.toList
+  | 6 | 7 =>
+    let n ← below 3
+    let mut es := #[]
+    for _ in [0:n] do es := es.push (← genVal env (d-1))
+    return p .mkTup es.toList
+  | _ => genVal env 0
+
+/-- A test of values with the empty value at some depth: `eq` or `ne` of two,
+    a map's lookup by a key, or a search of an array, printed. -/
+partial def genValTest (env : Env) (d : Nat) : G Expr := do
+  let yn (c : Expr) : Expr := .ite c (.print (.lit (Value.ofString "y"))) (.print (.lit (Value.ofString "n")))
+  match ← below 3 with
+  | 0 => return yn (p (← pick [.eq, .ne]) [← genVal env d, ← genVal env d])
+  | 1 =>
+    -- a map: pairs of a key and an int, looked up as the front end does
+    if env.slots == 0 then return yn (p .eq [← genVal env d, ← genVal env d])
+    let t ← below env.slots
+    let n ← below 4
+    let mut ps := #[]
+    for i in [0:n] do ps := ps.push (p .mkTup [← genVal env d, .lit (.int i)])
+    let look := p .index [.forE t (p .mkArr ps.toList) (p .eq [p (.tupGet 0) [.local t], ← genVal env d])
+      (p (.tupGet 1) [.local t]), .lit (.int 0)]
+    return .ite look (.print (p .toStr [look])) (.print (.lit (Value.ofString "missing")))
+  | _ =>
+    -- a search: how many elements of an array are the value
+    if env.slots == 0 then return yn (p .ne [← genVal env d, ← genVal env d])
+    let t ← below env.slots
+    let n ← below 4
+    let mut es := #[]
+    for _ in [0:n] do es := es.push (← genVal env d)
+    return .print (p .toStr [p .len [.forE t (p .mkArr es.toList) (p .eq [.local t, ← genVal env d]) (.local t)]])
 
 /-- A primitive applied to values of the wrong shape (a type error), or a
     stray `Err()`. -/
@@ -209,6 +268,13 @@ def program (seed : Nat) : Prog := Id.run do
       let env : Env := { slots, fns := (fns.toList.zip (List.range fns.size)).map fun (f, j) => (j, f.arity),
                          nextCounter := slots }
       let body ← genStmt env 4
+      -- (Main first compares values with the empty value at some depth, so
+      -- that most programs do before an error may end them)
+      let body ← if isMain then do
+          let mut tests := body
+          for _ in [0:4] do tests := .seq (← genValTest env 3) tests
+          pure tests
+        else pure body
       let tail ← genInt env 2
       -- start the non-parameter slots as ints or objects (they begin as `void`)
       let mut init := Expr.lit .void

@@ -766,7 +766,15 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         | .decl gp n none false (.range _ lo hi) => do
           let es ← elabInts { c with canFail := true, inTaking := true } gp [lo, hi]
           let (slot, c1) ← declare c n .int
-          pure (slot, Expr.prim .range es, c1, Expr.lit (.logic true))
+          -- (a bound that fails gives no iterations, its effects and the
+          -- other bound's rolled back, as a failing source does: Book of
+          -- Verse ch. 7, "that iteration is skipped"; `for.versetest:317`)
+          let src := Expr.prim .range es
+          let src ← if src.mayFail ctx.sigProg then do
+              let tmp ← fresh (.arr .int)
+              pure (Expr.orE tmp src (.lit Value.emptyArray))
+            else pure src
+          pure (slot, src, c1, Expr.lit (.logic true))
         | .gen gp x idx srcE => do
           let rs ← elabE { c with canFail := true, inTaking := true } srcE none
           let rs ← elabContainerReceiverWith elabE c gp rs (fun

@@ -1,0 +1,6 @@
+upper fails: 0 0
+lower then upper: 0 0
+both succeed: 2 2
+inner 11
+inner bumps: 1
+exit=0
