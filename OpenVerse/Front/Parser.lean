@@ -1490,7 +1490,7 @@ partial def parseClassItem (c : Nat) :
                           pure (some q)
       | none => pure none
     else pure none
-  -- `(R:t).M(…)`: an extension method in the class, its method `.M`, whose
+  -- `(R:t).M(…)`: an extension method in the class, its method `$ext:M`, whose
   -- first parameter is the receiver (Book of Verse ch. 6)
   let ext ← if isVar || qual.isSome then pure none else parseExtensionHead?
   let name ← match qual, ext with
@@ -1689,7 +1689,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
           continue
         bump
       continue
-    -- `(R:t).M(…)`: an extension method, the function `.M` whose first
+    -- `(R:t).M(…)`: an extension method, the function `$ext:M` whose first
     -- parameter is the receiver (Book of Verse ch. 6)
     let ext ← parseExtensionHead?
     let name0 ← match ext with
