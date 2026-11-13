@@ -684,10 +684,12 @@ circle := class(shape, labelled):
   does a cast to a class or interface beside the object's type, neither
   above nor below it (#53, #351): `c2[C]`, for `C:container(u)` and `c2(t)
   := interface(container([]t))`, types the branch with `u = []t'`, and
-  `i1[I]`, for `I:i2(u)`, with `I`'s class and `i1`'s type arguments
-  related as the classes and interfaces above both say (`t' = u` when
-  `i1(t)` and `i2(t)` both extend `base(t)`), the others opened
-  (`i1(t')`, whatever the classes below both give `i1`). An interface has
+  `i1[I]`, for `I:i2(u)`, with `i1`'s type arguments related to `I`'s as
+  the classes and interfaces above both say (`t' = u` when `i1(t)` and
+  `i2(t)` both extend `base(t)`), and opened otherwise (`i1(t')`,
+  whatever the classes below both give `i1`): it succeeds when the
+  object's class is below `i1`, as a cast between any class and interface
+  types does (Book of Verse ch. 10, "Castable"). An interface has
   no hidden fields, so such a cast tests each class below both, the
   topmost of its class chain there, as a cast to it, whose branch calls the
   function the cast's branch is made into, with the values of `T`'s type
