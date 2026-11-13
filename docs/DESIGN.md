@@ -1189,7 +1189,7 @@ is thrown in one place, a phase or `elabProgramCore` itself, and each point
 where an elaboration asks for something and goes no further
 (`Compiled.asking`) is a line of `elabProgramCore`.
 
-1. `admitSource` (`Elab/Source.lean`): the source and the entry expression pass the effect policy (with where each specifier may go, `EffectPolicy.specifierPlaces`) and the source profile; the rules of the source as written hold (no reserved name defined, each name defined once in its scope, no `return` in a constant's value or a field's default, a `defer:` only as a statement, no `for` of literal clauses only); modules are resolved, type aliases are written out where they are used (`Aliases.expand`), no constant depends on itself, the defaults function types write are set apart, and the helpers the program needs are added (`Admitted`).
+1. `admitSource` (`Elab/Source.lean`): the source and the entry expression pass the effect policy (with where each specifier may go, `EffectPolicy.specifierPlaces`) and the source profile; the rules of the source as written hold (no reserved name defined, each name defined once in its scope, no `return` in a constant's value or a field's default, a `defer:` only as a statement, no `for` of literal clauses only); modules are resolved, with every qualifier (`Resolver.qualifier`), type aliases are written out where they are used (`Aliases.expand`), no constant depends on itself, the defaults function types write are set apart, and the helpers the program needs are added (`Admitted`).
 2. `inlineSource`: functions with several values are inlined at their calls, the functions earlier rounds asked for are added and admitted, and function values become interfaces and classes (`Source`, with the sites the inlining notes).
 3. `argsAndMethodOverloads`: `Args` and the entry expression's `$Do` are added, and overloaded methods are renamed by their parameter lists (`Definitions`).
 4. `classHierarchy` (`Elab/Classes.lean`): the classes and interfaces and their hierarchy, checked (`Classes`, with the lookups over it).
@@ -1219,7 +1219,7 @@ keep the order: a round that asks goes no further than the phase that asks,
 and the next one runs every phase again. Read off the list, a program is
 refused, first to last, for:
 
-- its effect annotations, specifiers out of place and source profile, a type with a built-in type's name, a reserved name defined, a name defined twice, a `return` outside a function's body, a `defer:` where a value is taken, a `for` of literal clauses only, its modules, its type aliases (one that names itself or an alias defined after it, or is used before its definition, or whose name a definition takes), a constant that depends on itself, and subscribable events (1); the choices it inlines and the requests it carries (2); its overloaded methods (3);
+- its effect annotations, specifiers out of place and source profile, a type with a built-in type's name, a reserved name defined, a name defined twice, a `return` outside a function's body, a `defer:` where a value is taken, a `for` of literal clauses only, its modules and qualifiers (a qualifier that names nothing or not where its definition is, an ambiguous bare name beside a qualified definition), its type aliases (one that names itself or an alias defined after it, or is used before its definition, or whose name a definition takes), a constant that depends on itself, and subscribable events (1); the choices it inlines and the requests it carries (2); its overloaded methods (3);
 - its classes: their parents (unknown, a struct, wrong type arguments, an interface extending a class, two superclasses, a `<final>` one, a cycle), `<castable>` ones with type parameters and those below `<final_super_base>` ones, and construction effects (4); their fields, inherited, overriding and own, against the methods above them, and a `<concrete>` class's defaults (5); their methods: duplicates, parameter names, qualified implementations, overrides and `<final>`, abstract methods and the implementations every concrete class needs (6);
 - the types those give: comparable type arguments to parents and a `<persistable>` struct's fields (7), bounds (8), one instance of an interface per class (9), the Verse Core type arguments of overrides (10), recursive structs and map keys (11);
 - its functions' names and overloads (12), their signatures and effect annotations (13), constants whose type cannot be inferred and the defaults function types write (14); then the signature checks (15): overloads a call cannot tell apart, overrides and implementations whose signature or effects differ, an overriding field's type, and, last, a field two interfaces give defaults;
@@ -1336,6 +1336,51 @@ member. Elaboration's own shadowing check can't do that second check: after
 flattening, a local `X` and the member `m::X` have different names. The
 elaborator sees an ordinary flat program, so nothing behind it changes:
 Core, the checks, the proofs and the C runtime.
+
+## Qualified names: one resolver for every qualifier
+
+A qualifier `(q:)` (Book of Verse ch. 9, 10 and 16; the rules are pinned in
+[research/qualified-names.md](research/qualified-names.md)) names a scope: a
+qualified name is looked up in exactly that scope, and a qualified
+definition's qualifier names where it is defined. The modules' renaming is
+where names are resolved by scope, so it resolves every qualifier too: one
+function, `Resolver.qualifier`, says what `q` names (`Qual`): a module (found
+as a name is, then its submodules), a type (a class, interface, struct or
+enum), `local`, `super`, or the path `/Verse.org/Verse`, whose built-in types
+openverse stands in for (any other path is refused). The parser keeps what
+was written: a use `(q:)x` as `Self.(q:)x`, a module member's qualifier as a
+marker `$qual:A::x|q`, a class member's, an enum value's or a struct field's
+in its name, a local's or a parameter's in its name. Each site then looks up
+or checks in the scope `q` names:
+
+- a use becomes what it names: `(M:)x` the member `M::x`, `(e:)v` the value
+  `e.v`, `(c:)F` of `Self` the field `F` when `c` declares it (and no other
+  class above does), `(local:)X` the local, `(/Verse.org/Verse:)int` `int`;
+- a definition's qualifier must name its own scope, and is dropped: `(M:)x`
+  is `M::x`, `(c:)m` is `m`, `(e:)v` is `v`;
+- a class-scoped method qualifier stays, resolved to the class's qualified
+  name, for the classes' elaboration, which knows the slots (#70): an
+  override `(r:)M<override>` implements the slot `r` introduces, and a call
+  `X.(r:)M(…)` is refused unless `r` introduces `M`. `(super:)` is left as
+  before.
+
+So `(M:)F` (#145), `(i:)M` (#70) and `(super:)` go through the resolver, and
+nothing after the renaming knows a qualifier was written but in a class's
+`(c:)M`. A program that writes no qualifier skips it unless it has modules
+(the parser adds a marker, as for rationals), so the renaming's own messages
+reach only programs with modules or qualifiers.
+
+**`(local:)`** lets a local or a parameter take the name of a definition
+outside its code, which the renaming otherwise refuses (no local may shadow
+what it would rewrite). The renaming therefore tracks the locals in scope:
+it walks a body's sequences (a block's items, an `if`'s conditions, a
+`for`'s clauses) with the locals defined so far, each marked when written
+`(local:)`. A `(local:)X` local is named `(local:)X`, which no other name
+spells, so the elaborator's shadowing checks, which compare names, see none;
+`(local:)X` and a bare `X` with no other definition of the name become that
+name, and a bare `X` that also names a definition outside the code is
+refused as ambiguous. The elaborator, Core and the runtime see an ordinary
+local.
 
 ## Type aliases: a substitution before elaboration
 

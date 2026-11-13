@@ -43,6 +43,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Array methods | (also of a tuple of one element type, which is an array where one is expected: `('a', 'b', 'c').Slice[1]`) `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`, `A.RemoveFirstElement[x]`, `A.Remove[i, j]` (half-open), `A.ReplaceElement[i, x]`, `A.ReplaceFirstElement[x, y]`, `A.Insert[i, B]`, `A.Last[]`, `A.Last[n]` (the element n before the last) (all failable); `A.RemoveAllElements(x)`, `A.ReplaceAllElements(x, y)`, `A.ReplaceAll(Pattern, Replacement)` (contiguous subarrays, left to right, not overlapping; an empty pattern changes nothing), `Concatenate(A, B, …)` or `Concatenate(Arrays)` (#150) (never failing) | §9.1 |
 | Built-ins | `Print(s)`, `ToString(x)` (int, float, char, string), `Floor[F]`, `Ceil[F]`, `Round[F]`, `Int[F]` (of a float, failable), `Floor(R)`, `Ceil(R)` (of a rational or an int, never failing; `Floor(X / Y)` fails when `Y = 0`, as `X / Y` does), `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Clamp(Val, A, B)` (the median of the three, of ints or of floats, NaN ordering above +Inf), `Sgn(X)` (-1, 0 or 1 of an int or a float, NaN of NaN), `F.IsFinite[]` (as `IsFinite[F]`), `Err()`; the conversions of chars and code points as methods (see [char32](#char32)): `C.ToCodeUnit()`, `C.ToAsciiChar32[]` of a char, `C.ToCodePoint()`, `C.ToAsciiString()` of a char32, `N.ToChar[]`, `N.ToChar32[]` of an int | API reference |
 | Modules | `name := module:` (nested), `M.F`, `A.B.F`, the types `M.c` and values `M.c{…}`, `(M:)F`, `using{M}` at file or module scope, `<public>` members (`<internal>` is the default); see [Modules](#modules) | ch. 16 |
+| Qualified names | `(M:)x`, `(c:)m`, `(e:)v`, `(local:)X`, `(/Verse.org/Verse:)int`, in uses and in definitions' heads: a qualifier names a scope, the name is looked up in exactly that scope, and a definition's qualifier names where it is defined; see [Qualified names](#qualified-names) | ch. 9, 10, 16 |
 | Concurrency | `<suspends>` functions and methods, `Sleep`, `sync`, `race`, `rush`, `branch`, `spawn` with `task(t)` and `Await`, `event(t)` with `Signal` and `Await`, `subscribable_event(t)` (or `subscribable_event()`) with `Subscribe` and `Cancel` (see [Function values](#function-values)), cancellation with `defer:`, under a deterministic scheduler; see [Concurrency](#concurrency) | ch. 14 |
 | Program entry | `Main()` — see the exit protocol in [`FORMAT.md`](FORMAT.md) | (not in the book) |
 
@@ -117,7 +118,10 @@ parameter or local, a type parameter, a field), may take one of these names
 (`reservedNames` in `Front/Syntax.lean`): `_`, which the Book reserves
 (ch. 1: "The single underscore `_` is reserved and cannot be used as an
 identifier"); the built-in names `Self`, `subtype`, `castable_subtype` and
-`local`; and the names the Book's tests reserve for the future
+`local`, `true` and `false`, and the effects' names, `suspends`, `decides`,
+`varies`, `reads`, `writes`, `allocates`, `computes`, `converges` and
+`transacts`, which the Book's tests refuse as definitions' names, qualified
+or not (`Enum.versetest`, `Effects.versetest`); and the names the Book's tests reserve for the future
 (`Tests/NamesReservedForFuture.versetest`; the Book's prose gives no list):
 `abstracts`, `as`, `assert`, `backslash`, `bag`, `char8`, `char16`,
 `collection`, `contravariant`, `covariant`, `element`, `embargo`, `ensure`,
@@ -129,7 +133,9 @@ identifier"); the built-in names `Self`, `subtype`, `castable_subtype` and
 `sequence`, `string8`, `string16`, `string32`, `subclass`, `succeeds`,
 `syntax`, `throws`, `trait`, `truth`, `try`, `union`, `using`, `verify`,
 `when`, `while`. openverse reads `first`, `assert` and `let` as macros
-before `{` or `(`, and `using` is a keyword. The function type
+before `{` or `(`, and `using` is a keyword. A qualifier does not lift the
+rule (`(m:)local` is refused), but an enum's value qualified with its enum
+may take any name, a keyword's too ([Qualified names](#qualified-names)). The function type
 `type{_(:int):int}` writes `_` as no definition's name, and stays allowed.
 
 ## Parametric functions
@@ -678,13 +684,17 @@ circle := class(shape, labelled):
     interface that a subclass adds. A default of the class's own interfaces
     implements only the slots above it.
   - **Calls.** A call through an `i1` uses slot `i1`. `X.(i1:)M()` names it,
-    and inside a method a bare `(i1:)M()` is `Self.(i1:)M()`. A call through
+    and inside a method a bare `(i1:)M()` is `Self.(i1:)M()`. The qualifier
+    names the class or interface that introduces `M`: one that inherits or
+    overrides it is refused ([Qualified names](#qualified-names)). A call through
     a type whose slots some class below implements differently is refused as
     ambiguous, so every static path to a slot reaches the same code.
   - **`(super:)M()`** in `(r:)M` is slot `r`'s implementation above. In a
     plain `M` it is refused when the slots above differ.
   - **Restrictions.** A class gives `M` plainly or qualified, not both. A
-    plain `M<override>` in a subclass implements all its slots.
+    plain `M<override>` in a subclass implements all its slots. `(c:)M` in
+    class `c` itself is `M`, unless a class above has an `M`: that would be
+    a second method `M`, which openverse refuses.
 - **Casts.** `T[X]` is `X` as a `T`, failing unless `X`'s class is below
   `T`. `T(X)` converts to a supertype and cannot fail.
 - **Parametric classes.** A parametric class is a reference like any other
@@ -2109,7 +2119,8 @@ Main():void =
   If two modules opened at the same scope give the name, it is ambiguous
   and an error. The first definition or module found is the one meant.
 - `(M:)F` and `(A.B:)F` are `M.F` and `A.B.F` (#145): values, functions,
-  the type `(M:)c` and the construction `(M:)c{…}` (#147).
+  the type `(M:)c` and the construction `(M:)c{…}` (#147); a member may be
+  defined `(M:)F` in `M` (see [Qualified names](#qualified-names)).
 - `M.F`, `A.B.F`, the type `M.c`, the value `M.c{…}`, a delegation
   `M.D<constructor>(…)` and a qualifier `X.(M.i:)F()` name a member. `M`
   is looked up like any name; if a value is found instead, `.F` is its
@@ -2123,6 +2134,76 @@ Main():void =
 
 Modules exist only in the front end. Each member becomes a definition of
 its qualified name before elaboration, and messages show it as `M.F`.
+
+## Qualified names
+
+A qualifier `(q:)` names a scope, and a qualified name is looked up in
+exactly that scope and nowhere else (Book of Verse ch. 9, 10 and 16; the
+rules, their sources and the readings are pinned in
+[research/qualified-names.md](research/qualified-names.md)):
+
+```verse
+Store := module:
+    Factor<public>:int = 7
+    (Store:)Twice<public>(X:int):int = 2 * X       # Twice, a member of Store
+    Scale<public>((local:)Factor:int):int =         # a parameter named like Store.Factor
+        (local:)Factor * (Store:)Factor
+counter := class:
+    var (counter:)Total<public>:int = 0             # the field Total
+    Add<public>():int =
+        set (counter:)Total += 1
+        (counter:)Total
+keyword := enum{(keyword:)for, (keyword:)if}       # values named like keywords
+
+Main():void =
+    Print("{(Store:)Twice(3)} {Store.Scale(2)} {counter{}.Add()}")   # 6 14 1
+```
+
+- **What a qualifier names.** `(M:)` and `(A.B:)` a module, found as any
+  name is, from the use outward; `(c:)` a class, interface, struct or enum
+  (or an alias of one); `(local:)` the locals of the code it is written in;
+  `(super:)` the implementation above a method ([Classes](#classes)); a path
+  `(/Verse.org/Verse:)` openverse's built-in types. Any other path names a
+  package or an engine module openverse has no stand-in for, and is refused;
+  so is a qualifier that names nothing.
+- **Uses.** `(M:)x` is `M`'s member `x` (as `M.x`); `M.(M:)x` too. `(e:)v`
+  is the enum's value `e.v`. `(c:)F`, `Self.(c:)F` and `X.(c:)F` are the
+  field `F` that `c` declares itself, of an `X` of `c` or a class below it;
+  `X.(c:)M(…)` calls the method `M` that `c` *introduces* (a class or
+  interface that inherits or overrides `M` is refused: qualify with the one
+  that declares it first, as the Book's tests do). `(local:)X` is the local
+  `X`, defined `(local:)` or not; `(/Verse.org/Verse:)int` is `int`.
+  `using{(A:)B}` is `using{A.B}`. A redundant qualifier is no error.
+- **Definitions.** A definition's qualifier names where it is defined:
+  `(M:)x` in module `M`; `(c:)m` or `(c:)F:t` in class `c` (a member that
+  then is `m` or `F`), and `(r:)M<override>` in a class below `r`, which
+  implements the `M` that `r` introduces ([Overloading](#overloading),
+  [Classes](#classes)); `(e:)v` in enum `e`, where `v` may be a keyword or a
+  reserved word; `(s:)f` in struct `s`; `(local:)X` for a local, a `var`, a
+  `for` variable or a parameter, in any code (a function's body, a class
+  block, a constant's value). The top level has no name or path, so a
+  top-level definition takes no qualifier.
+- **`(local:)` and shadowing.** A local or parameter cannot be named like a
+  visible module member, or like a field or method of its class
+  ([Modules](#modules), [Classes](#classes)); a `(local:)` one may. Its
+  uses then write `(local:)X` wherever that other definition is visible: a
+  bare `X` there is ambiguous, and an error. Where no other definition has
+  the name, a bare `X` is the local. A `(local:)X` cannot be defined again in
+  a nested scope, take a type parameter's name, or be a named parameter.
+- **A class's qualified member.** `(c:)m` in class `c` beside a top-level `m`
+  is allowed; a bare `m` in `c`'s code, where both are visible, is ambiguous.
+  `(c:)m` in a class that inherits an `m` would be a second `m` (Book ch.
+  10, "Methods with Same Name"): openverse keeps one member of a name per
+  class and refuses it.
+- **Refused.** A qualifier that is not where the definition is (`(M:)X` in
+  module `M.N`, `(c:)X` on a local, `(local:)` on a member or in a `using`),
+  a qualifier that names nothing, a path other than `/Verse.org/Verse`'s
+  types, and `X.(c:)F` when two classes or interfaces above `X`'s class
+  declare a field `F` (openverse merges them).
+
+Qualifiers never reach the elaborator but a class's `(c:)M`: the modules'
+renaming resolves every one (see
+[DESIGN.md](DESIGN.md#qualified-names-one-resolver-for-every-qualifier)).
 
 ## Programs of several files
 
@@ -2408,6 +2489,8 @@ Main()<suspends>:void =
 | Comparability | `comparable` covers the primitive types, enums, structs and containers of comparable types (§4.9) | so is every openverse type, except a type parameter not declared `subtype(comparable)` and the containers of one |
 | Inferring type arguments | not described | first-order matching against the expected result type, then the arguments; no subtyping other than `false` (matches anything) and `void` (accepts anything) |
 | Access specifiers other than `<public>` | `<internal>` (the default), `<private>`, `<protected>`, … (ch. 16) | a module member is `<public>` or internal (visible in its module and its submodules); other specifiers, a struct field's, and a `<public>` definition whose type names an internal one (a type alias of an internal class, ch. 11), are accepted and not enforced |
+| A qualifier without a `using` | "A qualifier only says which `F` is meant among the ones already in scope" (ch. 10): `(Top.M:)F` with no `using` is unknown | the qualifier is found as any name is, then the name is looked up in exactly that scope: `(M:)F` is `M.F` (#145) |
+| A module's member `(M:)x` used bare in `M` beside an outer `x` | both are candidates, told apart by their parameters, else ambiguous (`ModuleDefinitions.versetest`, `vmodule` tests) | the inner one, as for any member; in a class's code and for `(local:)`, where the tests refuse it, ambiguous |
 | `ToString` of a float | "the shortest" (an example: `98.5`) | the shortest decimal that reads back as the float, the closest of the shortest, in Python's `repr` layout (exponent at `≥ 1e16` and `< 1e-4`); `Inf`, `-Inf`, `NaN` |
 | `NaN < X` | not stated | fails (IEEE: NaN orders with nothing); `NaN = NaN` succeeds (the Book) |
 | `=` between different types | not stated | refused when two scalar types (int, float, char, …) meet at the same place, also inside containers (`array{1} = array{1.0}`), as Verse Core holds them differently |
@@ -2430,7 +2513,7 @@ Main()<suspends>:void =
 
 `ToString` of rationals (see [rational](#rational)), float functions beyond those of [float](#float), the bitwise functions `BitAnd`, `BitOr`, `BitXor`, `BitNot`, `BitShiftLeft`, `BitShiftRight` (see [the pinned rules](research/book-library-functions.md#bitwise-functions-not-implemented)),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
-`weak_map`, `comparable` as a type (only as a bound, `t:subtype(comparable)`: see [the Book's rules and a design](research/comparable-type.md)), module paths `using{/Verse.org/…}` (accepted and ignored) and paths as values, the
+`weak_map`, `comparable` as a type (only as a bound, `t:subtype(comparable)`: see [the Book's rules and a design](research/comparable-type.md)), module paths `using{/Verse.org/…}` (accepted and ignored), paths as values and path qualifiers other than `(/Verse.org/Verse:)` of a built-in type, two members of one name in a class (`(c:)M` beside an inherited `M`, Book ch. 10), the
 specific overload/call gaps listed under [Overloading](#overloading), nested
 functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice), concurrency beyond [Concurrency](#concurrency), and the unsupported
 effect/construction contracts listed under [Effect contracts](#effect-contracts).
