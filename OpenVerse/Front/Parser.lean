@@ -1411,10 +1411,29 @@ partial def parseInterp (parts : List StrPart) : PM (List SPart) := do
       | .ok toks =>
         let saved ← get
         set ({ toks } : PSt)
-        let e ← parseExpr 0
+        -- (several values, `{2, 3}` or `{2, 3, ?Factor := 4}`, are the
+        -- arguments of a call of `ToString`, Book of Verse tests,
+        -- Literals/String.versetest 242, 243)
+        let item : PM SExpr := do
+          let t ← peekT
+          if t.isSym "?" && (← peekT 1).identName?.isSome && (← peekT 2).isSym ":=" then
+            bump
+            let n ← expectIdent
+            bump
+            return .decl t.pos ("?" ++ n) none false (← parseExpr 0)
+          parseExpr 0
+        let first ← peekT
+        let mut items := #[← item]
+        while (← peekT).isSym "," do
+          bump
+          items := items.push (← item)
         let rest ← peekT
         if !rest.isEof then perr rest "unexpected tokens in interpolation"
         set saved
+        let e : SExpr := match items.toList with
+          | [e@(.decl _ n _ _ _)] => if n.startsWith "?" then .app first.pos (.ident first.pos "ToString") [e] false else e
+          | [e] => e
+          | es => .app first.pos (.ident first.pos "ToString") es false
         out := out.push (.code e)
   return out.toList
 
