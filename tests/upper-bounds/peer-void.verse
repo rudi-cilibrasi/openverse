@@ -20,5 +20,6 @@ Main():void=
     Empty:?int=false
     N:?void=Upper(Base,Empty)
     if(N?)then Print("bad")else Print("none {C.N}")
-    R:=Keep(KeepZero(car{}))
+    Z:tuple()=KeepZero(())
+    R:=Keep(car{})
     Print("{R.Name} {C.N}")
