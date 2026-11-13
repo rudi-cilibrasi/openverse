@@ -27,7 +27,8 @@
   `0oHH` char literals (one or two hex digits: that UTF-8 code unit, so
   `0o41` is 'A'; `0o` is not octal), `0uHHHHHH` char32 literals (a Unicode
   scalar value, up to `0u10FFFF`), string
-  literals with escapes and `{…}` interpolation, float literals, path
+  literals with escapes and `{…}` interpolation, float literals (with an
+  optional width suffix: `f64`; `f32` and `f16` are lexed and refused), path
   literals (`/Verse.org/Random`, where an operand starts: see `readPath`),
   and the operator symbols of ch. 4.
 
@@ -58,6 +59,9 @@ inductive Tok where
   /-- A path literal `/Verse.org/Random` (Book of Verse ch. 1, "Path
       Literals"; ch. 16, "Paths"). -/
   | path  : String → Tok
+  /-- A float literal of a width openverse lacks, `1.5f32` or `1.5f16`: its
+      text (Book of Verse ch. 1: "All floats are 64-bit"). -/
+  | floatWidth : String → Tok
   | sym   : String → Tok
   | eof   : Tok
   deriving Repr, Inhabited
@@ -82,6 +86,7 @@ def Tok.describe : Tok → String
   | .float b => s!"float {VFloat.render b}"
   | .str _ => "string literal"
   | .path p => s!"path {p}"
+  | .floatWidth f => s!"float {f}"
   | .sym s => s!"'{s}'"
   | .eof => "end of file"
 
@@ -282,7 +287,7 @@ def keywords : List String :=
     a name other than a keyword, a literal, or a closing bracket or `?`. -/
 def Tok.endsOperand : Tok → Bool
   | .ident x => !keywords.contains x
-  | .int _ | .char _ | .char32 _ | .float _ | .str _ | .path _ => true
+  | .int _ | .char _ | .char32 _ | .float _ | .floatWidth _ | .str _ | .path _ => true
   | .sym s => [")", "]", "}", "?"].contains s
   | .eof => false
 
@@ -388,9 +393,17 @@ partial def lexAll (acc : Array Token) : LexM (Array Token) := do
         let expAhead : LexM Bool := do
           return (← isE) && ((← digitAt 1) || (((← peekC 1) == some '+' || (← peekC 1) == some '-') && (← digitAt 2)))
         let frac := (← peekC) == some '.' && (← digitAt 1)
-        if frac || (← expAhead) then
+        -- (a width suffix: `f64`, or `f32`, `f16`, not followed by a letter,
+        -- digit or `_`, Book of Verse ch. 1, "Float Literals")
+        let width : LexM (Option String) := do
+          let w := String.ofList [(← peekC 1).getD ' ', (← peekC 2).getD ' ']
+          if (← peekC) == some 'f' && ["64", "32", "16"].contains w &&
+              !(((← peekC 3).map isIdChar).getD false) then return some w
+          return none
+        if frac || (← expAhead) || (← width).isSome then
           -- a float (#127): digits, then `.` and digits, or an exponent `e±N`,
-          -- or both (`1e3` too, as in shipped Verse); the nearest double
+          -- or both (`1e3` too, as in shipped Verse), then an optional width
+          -- suffix (`12.34f64`, `1234f64`); the nearest double
           -- (`Float.ofScientific` rounds correctly)
           let mut f := ""
           if frac then
@@ -403,8 +416,14 @@ partial def lexAll (acc : Array Token) : LexM (Array Token) := do
             if (← peekC) == some '+' || (← peekC) == some '-' then advance
             let es ← readWhile Char.isDigit ""
             ex := if neg then -(es.toNat! : Int) else es.toNat!
+          let w ← width
+          if w.isSome then advance; advance; advance
           if ((← peekC).map isIdChar).getD false then
-            lexErr "a float literal is digits, a point and digits, then an optional exponent (1.5, 2.0e-7, 1e3)"
+            lexErr "a float literal is digits, a point and digits, then an optional exponent and suffix f64 (1.5, 2.0e-7, 1e3, 12.34f64)"
+          -- (`f32`, `f16`: a float openverse does not have, which the
+          -- elaborator refuses by its text)
+          if w != some "64" && w.isSome then
+            return (← lexAll (← emit (.floatWidth (String.ofList (s.cs.extract s.pos (← get).pos).toList))))
           let m := (d ++ f).toNat!
           let e10 : Int := ex - f.length
           let x : Float := if e10 < 0 then Float.ofScientific m true e10.natAbs else Float.ofScientific m false e10.toNat

@@ -1021,6 +1021,8 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
   -- (a path is a name no identifier spells: the elaborator refuses it as
   -- a value, Book of Verse ch. 16)
   | .path p => bump; return .ident t.pos p
+  -- (as is a float literal of a width openverse lacks, `1.5f32`)
+  | .floatWidth f => bump; return .ident t.pos f
   | .sym "(" =>
     if (← peekT 1).isKw "super" && (← peekT 2).isSym ":" && (← peekT 3).isSym ")" then
       -- `(super:)M`: the parent's implementation of a method

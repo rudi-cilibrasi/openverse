@@ -392,9 +392,12 @@ partial def elabExprInitialWith
           | "Inf" => return ⟨.lit (.float 0x7FF0000000000000), .float⟩
           | "NaN" => return ⟨.lit (.float VFloat.nanBits), .float⟩
           | _ =>
-            -- (a path literal, which the parser reads as a name)
+            -- (a path literal, or a float literal of a width openverse lacks,
+            -- which the parser reads as a name)
             if n.startsWith "/" then
               eerr p s!"the path {n} as a value is not supported: openverse has no module values (a path in using\{…} is accepted and ignored)"
+            if n.front.isDigit then
+              eerr p s!"the float literal {n} is not supported: openverse's floats are 64-bit (write f64 or no suffix)"
             eerr p s!"unknown identifier '{Choice.shownName n}'"
   -- a constructor's `block:` (#11): it cannot fail, as a class's cannot
   | _ => next ctx se exp
