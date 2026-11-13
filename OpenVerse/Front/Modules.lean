@@ -25,15 +25,17 @@
   A qualifier `(q:)` names a scope, and every one written goes through one
   resolver (`Qual`, `Resolver.qualifier`): `q` is found as a name is (a
   module, then its submodules, or a class, interface, struct or enum),
-  `local` is the locals of the code it is written in (not supported yet),
-  and `super` the implementation above a method. A qualified name is looked
-  up in exactly that scope: `(M:)F` is `M`'s `F`, `(e:)v` the enum's value;
-  a class's `(c:)M` is left for the elaboration of classes, which knows what
-  each class introduces. A qualified definition's qualifier names where it
-  is defined: its module, its class (or, for an override, what introduces
-  the member), its enum or struct. A class's member `(c:)x` used bare in the
-  class, where a definition outside the class is named so too, is
-  ambiguous.
+  `local` is the locals of the code it is written in, and `super` the
+  implementation above a method. A qualified name is looked up in exactly
+  that scope: `(M:)F`
+  is `M`'s `F`, `(local:)X` a local, `(e:)v` the enum's value; a class's
+  `(c:)M` is left for the elaboration of classes, which knows what each
+  class introduces. A qualified definition's qualifier names where it is
+  defined: its module, its class (or, for an override, what introduces the
+  member), its enum or struct, or `local` for a local or a parameter, which
+  may then take the name of a definition outside the code (the anti-shadowing
+  rule's way out, Book ch. 16, "Local Qualifiers"); a bare use of that name
+  is then ambiguous.
 -/
 import OpenVerse.Front.Syntax
 import Std.Data.HashSet
@@ -77,7 +79,8 @@ inductive Qual where
   | super
 
 /-- How the names of one scope resolve: values, binders (refused when they
-    would shadow a member), type names, paths `A.B.F` and qualifiers. -/
+    would shadow a member), type names, paths `A.B.F`, qualifiers, and the
+    locals the code so far has defined. -/
 structure Resolver where
   val  : Pos → String → Except String String
   bind : Pos → String → Except String Unit
@@ -93,6 +96,9 @@ structure Resolver where
       be visible here (after the module's first `start` parts). -/
   memberOf : Pos → List String → Nat → String → Except String String :=
     fun _ path _ f => pure (qualJoin (path ++ [f]))
+  /-- Whether a bare name names a definition outside the code: a module's
+      member, a top-level one, a member of the class whose code it is. -/
+  outer : Pos → String → Bool := fun _ _ => false
   /-- The class whose method or default this is. -/
   selfClass : Option String := none
   /-- Whether a type's qualified name is an enum's. -/
@@ -106,12 +112,44 @@ structure Resolver where
   /-- Whether a bare name names a definition outside every class: a
       module's member or a top-level one. -/
   global : Pos → String → Bool := fun _ _ => false
+  /-- The type parameters in scope. -/
+  tparams : List String := []
+  /-- The locals in scope, innermost first: each name as a bare use writes
+      it, and whether `(local:)` defined it. -/
+  locals : List (String × Bool) := []
 
 /-- A method name: `(i:)M`'s interface `i` (or `M.i`) resolved as a type. -/
 def Resolver.method (r : Resolver) (p : Pos) (m : String) : Except String String := do
   if let some (q, x) := splitQual? m then return s!"({← r.ty p q}:){x}"
   return m
 
+/-- A binder of the code: its name as the elaboration sees it (`(local:)X`
+    for `(local:)X`, which no other name spells, so it shadows nothing), and
+    the resolver of the code after it. `(local:)X` may take the name of a
+    definition outside the code, not of another local in scope nor of a type
+    parameter (Book of Verse ch. 16, "Local Qualifiers"; tests,
+    `QualifiedIdentifier.versetest`); a plain one may take none
+    (`Resolver.bind`). -/
+def Resolver.binder (r : Resolver) (p : Pos) (n : String) : Except String (String × Resolver) := do
+  match splitQual? n with
+  | some (q, x) =>
+    match ← r.qualifier p q with
+    | .locals =>
+      if r.locals.any (·.1 == x) then
+        throw s!"{p.show}: '{x}' is already defined here, by a local of the enclosing code: (local:) does not let a local be defined again (Book of Verse ch. 16, \"Local Qualifiers\")"
+      if r.tparams.contains x then
+        throw s!"{p.show}: '{x}' is already defined, as a type parameter: (local:) qualifies a local only"
+      return (s!"(local:){x}", { r with locals := (x, true) :: r.locals })
+    | _ =>
+      throw s!"{p.show}: ({q}:){x}: a local is defined in the code it is written in, so its qualifier is (local:); a qualifier names where the definition is"
+  | none =>
+    if n.startsWith "?" then return (n, r)
+    r.bind p n
+    if r.locals.any (· == (n, true)) then
+      throw s!"{p.show}: '{n}' is already defined here, as (local:){n}"
+    return (n, { r with locals := (n, false) :: r.locals })
+
+mutual
 /-- Rewrite the names of an expression (see `Resolver`). -/
 partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fun e =>
   let go := SExpr.mapNamesM r
@@ -130,12 +168,19 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
         | some qd => return .ident p s!"$ctor:{qd}"
         | none => throw s!"{p.show}: unknown constructor {d}"
       return .ident p s!"$ctor:{← r.val p d}"
+    -- (a local `(local:)X`, bare: it, unless a definition outside the code
+    -- is named so too, Book of Verse tests, FN41.00-FirstAdded.versetest)
+    if r.locals.lookup n == some true then
+      if r.outer p n then
+        throw s!"{p.show}: '{n}' is ambiguous here: the local (local:){n} and a definition outside this code are both named so; write (local:){n} for the local (Book of Verse ch. 16, \"Local Qualifiers\")"
+      return .ident p s!"(local:){n}"
     -- (a member `(c:)x` of the class whose code this is, bare, where a
     -- definition outside the class is named so too: Book of Verse ch. 10,
     -- "Methods with Same Name"; tests, ModuleDefinitions.versetest)
-    if let some c := r.selfQualified.lookup n then
-      if r.global p n then
-        throw s!"{p.show}: '{n}' is ambiguous here: the member ({c}:){n} and a definition outside the class are both named so; qualify it, ({c}:){n} for the member"
+    if r.locals.lookup n == none then
+      if let some c := r.selfQualified.lookup n then
+        if r.global p n then
+          throw s!"{p.show}: '{n}' is ambiguous here: the member ({c}:){n} and a definition outside the class are both named so; qualify it, ({c}:){n} for the member"
     return .ident p (← r.val p n)
   | .member p x m => do
     if let some (q, f) := splitQual? m then
@@ -143,7 +188,11 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
         -- `(q:)f`, parsed as `Self.(q:)f`: `f` in the scope `q` names
         match ← r.qualifier p q with
         | .module path start => return .ident p (← r.memberOf p path start f)
-        | .locals => throw s!"{p.show}: (local:){f}: (local:) is not supported yet"
+        | .locals =>
+          match r.locals.lookup f with
+          | some true => return .ident p s!"(local:){f}"
+          | some false => return .ident p f
+          | none => throw s!"{p.show}: (local:){f}: there is no local {f} here (a parameter, or a definition before this use in the enclosing code)"
         | .super => return .member p x m
         | .type c =>
           -- (an enum's value, `e.v`; a field of `Self` its class, or one
@@ -169,13 +218,16 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
     if let some comps := x.identPath then
       if let some qn ← r.qual p (comps ++ [m]) then return .ident p qn
     return .member p (← go x) m
-  | .gen p x k s => do
-    r.bind p x
-    if let some k := k then r.bind p k
-    return .gen p x k (← go s)
-  | .decl p n ty v x => do
-    if !n.startsWith "?" then r.bind p n
-    return .decl p n (← ty.mapM (goT p)) v (← go x)
+  | .gen .. | .decl .. => do return (← SExpr.mapItemM r e).1
+  | .block p items => return .block p (← SExpr.mapSeqM r items).1
+  -- (an `if`'s conditions and a `for`'s clauses are a sequence whose
+  -- definitions its branch or body sees)
+  | .ite p cs t u => do
+    let (cs, r') ← SExpr.mapSeqM r cs
+    return .ite p cs (← t.mapNamesM r') (← u.mapM go)
+  | .forE p cs b => do
+    let (cs, r') ← SExpr.mapSeqM r cs
+    return .forE p cs (← b.mapNamesM r')
   -- (a struct's field types and defaults, which `children` leaves out)
   | .structDef p tps specs fs =>
     let own := tps.map (·.name)
@@ -192,6 +244,32 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
   | .construct p n ts fs => return .construct p (← r.ty p n) (← ts.mapM (goT p)) (← fs.mapM goField)
   | e => e.mapChildrenM go
 
+/-- A sequence's items (a block's, an `if`'s conditions, a `for`'s clauses),
+    each seeing the locals those before it define, and the resolver after
+    them. -/
+partial def SExpr.mapSeqM (r : Resolver) (es : List SExpr) : Except String (List SExpr × Resolver) := do
+  let mut r := r
+  let mut out : Array SExpr := #[]
+  for e in es do
+    let (e', r') ← SExpr.mapItemM r e
+    out := out.push e'
+    r := r'
+  return (out.toList, r)
+
+/-- An item of a sequence, and the resolver after it: a definition's local
+    is seen by what follows it, not by its own value. -/
+partial def SExpr.mapItemM (r : Resolver) : SExpr → Except String (SExpr × Resolver)
+  | .decl p n ty v x => do
+    let (n', r') ← r.binder p n
+    return (.decl p n' (← ty.mapM (STy.mapNamesM (r.ty p))) v (← x.mapNamesM r), r')
+  | .gen p x k s => do
+    let (x', r1) ← r.binder p x
+    let (k', r2) ← match k with
+      | some k => do let (k', r2) ← r1.binder p k; pure (some k', r2)
+      | none => pure (none, r1)
+    return (.gen p x' k' (← s.mapNamesM r), r2)
+  | e => do return (← e.mapNamesM r, r)
+end
 
 /-- Resolve the modules and the qualified names of a parsed program (see
     the file's header). -/
@@ -393,14 +471,21 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
   let infoOf (c : String) := classInfo.find? (·.1 == c)
   let membersOf (c : String) : List String :=
     ((above c).flatMap fun x => ((infoOf x).map (·.2.2.1)).getD []).eraseDups
+  let allMembersOf (c : String) : List String :=
+    ((above c).flatMap fun x => ((infoOf x).map (·.2.2.2.1)).getD []).eraseDups
   let declares (c f : String) : Bool := ((infoOf c).map (·.2.2.2.2.1.contains f)).getD false
   let enums : Std.HashSet String := Std.HashSet.ofList (real.filterMap fun
     | .const _ n _ (.enumDef ..) => some n
     | _ => none)
   let rAt (sc excl : List String) (self : Option String := none) : Resolver :=
+    let members := (self.map allMembersOf).getD []
     { val := resolve "value" sc, bind := bind sc, ty := tyName sc excl, qual := qual sc,
       qualifier := qualifier sc excl,
       modulePath := modulePath sc, memberOf := memberOf sc,
+      outer := fun p n => members.contains n || match find sc p n with
+        | .ok (some _) => true
+        | .ok none => false
+        | .error _ => true,
       selfClass := self, isEnum := enums.contains,
       selfField := fun c f => match self with
         | some n => (above n).filter (declares · f) == [c]
@@ -410,11 +495,19 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
       global := fun p n => match find sc p n with
         | .ok (some _) => true
         | .ok none => false
-        | .error _ => true }
-  let params (r : Resolver) (p : Pos) (ps : List SParam) : Except String (List SParam) := do
-    for prm in ps do r.bind p prm.name
-    ps.mapM fun prm => do
-      return { prm with ty := ← prm.ty.mapNamesM (r.ty p), default := ← prm.default.mapM (·.mapNamesM r) }
+        | .error _ => true,
+      tparams := excl }
+  -- the parameters, and the resolver of the body, which sees them
+  let params (r : Resolver) (p : Pos) (ps : List SParam) : Except String (List SParam × Resolver) := do
+    let mut r' := r
+    let mut names : Array String := #[]
+    for prm in ps do
+      let (n', r'') ← r'.binder p prm.name
+      names := names.push n'
+      r' := r''
+    let ps ← (ps.zip names.toList).mapM fun (prm, n') => do
+      return { prm with name := n', ty := ← prm.ty.mapNamesM (r.ty p), default := ← prm.default.mapM (·.mapNamesM r) }
+    return (ps, r')
   -- a qualified definition's qualifier names where it is: its module
   -- (Book of Verse ch. 10, "Nested Module Qualification"; ch. 16)
   for (p, s) in markers "$qual:" do
@@ -444,7 +537,7 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
     | .fn p n ps tps effs ret body =>
       let r := rAt (scopeOf n) (tps.map (·.name))
       let tps ← tps.mapM (·.mapBoundNamesM (r.ty p))
-      let ps ← params r p ps
+      let (ps, rb) ← params r p ps
       let isCtor := effs.any (·.startsWith "$constructor:")
       let effs ← effs.mapM fun e =>
         if e.startsWith "$constructor:" then do return s!"$constructor:{← r.ty p (e.drop "$constructor:".length).toString}"
@@ -453,10 +546,10 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
       let body ← match isCtor, body with
         | true, .block bp items => do
           let items ← items.mapM fun
-            | .decl dp dn ty v x => do return .decl dp dn (← ty.mapM (·.mapNamesM (r.ty dp))) v (← x.mapNamesM r)
-            | it => it.mapNamesM r
+            | .decl dp dn ty v x => do return .decl dp dn (← ty.mapM (·.mapNamesM (r.ty dp))) v (← x.mapNamesM rb)
+            | it => it.mapNamesM rb
           pure (SExpr.block bp items)
-        | _, _ => body.mapNamesM r
+        | _, _ => body.mapNamesM rb
       return .fn p n ps tps effs (← ret.mapNamesM (r.ty p)) body
     | .const p n ty body =>
       let r := rAt (scopeOf n) []
@@ -510,8 +603,8 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
         | .fn mp mn mps mtps meffs mret mbody =>
           let rm := rAt (scopeOf n) (tps.map (·.name) ++ mtps.map (·.name)) (some n)
           let mtps ← mtps.mapM (·.mapBoundNamesM (rm.ty mp))
-          let mps ← params rm mp mps
-          return .fn mp (← memberName mp mn false) mps mtps meffs (← mret.mapNamesM (rm.ty mp)) (← mbody.mapNamesM rm)
+          let (mps, rmb) ← params rm mp mps
+          return .fn mp (← memberName mp mn false) mps mtps meffs (← mret.mapNamesM (rm.ty mp)) (← mbody.mapNamesM rmb)
         | m => pure m
       return .classDef p n tps specs parents isI fields ovs methods
 

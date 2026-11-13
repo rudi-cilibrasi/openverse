@@ -194,8 +194,9 @@ partial def parseSpecs : PM (List String) := do
 def cmpOps : List String := ["=", "<>", "<", "<=", ">", ">="]
 
 /-- At a `(` (the token `off` ahead): the qualifier of `(i:)M`, `(M.i:)M`
-    (#70, #112) or `(e:)v`, if one starts there, and how many tokens it
-    takes (through the `:)`). What it names is `resolveModules`' to decide. -/
+    (#70, #112), `(e:)v` or `(local:)X`, if one starts there, and how many
+    tokens it takes (through the `:)`). What it names is `resolveModules`'
+    to decide. -/
 def peekQual (off : Nat := 0) : PM (Option (String × Nat)) := do
   if !(← peekT off).isSym "(" then return none
   let some q0 := (← peekT (off + 1)).identName? | return none
@@ -372,7 +373,7 @@ partial def parseExpr (stop : Nat) : PM SExpr := do
   let t1 ← peekT 1
   if t.isKw "var" then
     bump
-    let n ← expectIdent
+    let n ← expectBinder
     expectSym ":"
     let ty ← parseType
     let a ← peekT
@@ -394,6 +395,24 @@ partial def parseExpr (stop : Nat) : PM SExpr := do
   else if t.identName?.isSome && t1.isSym ":=" then
     bump; bump
     return .decl t.pos t.identName?.get! none false (← parseValue stop)
+  else if let some (q, k) ← peekQual then
+    -- `(local:)X := e`, `(local:)X:t = e`: a qualified local's definition
+    -- (its qualifier is `resolveModules`' to check); otherwise a use
+    let n ← peekT k
+    let n1 ← peekT (k + 1)
+    if n.identName?.isNone || !(n1.isSym ":=" || (n1.isSym ":" && !(← peekT (k + 2)).bol)) then
+      return ← parseRange stop
+    let saved ← get
+    for _ in [0:k + 2] do bump
+    let name := s!"({q}:){n.identName?.get!}"
+    if n1.isSym ":=" then return .decl t.pos name none false (← parseValue stop)
+    let ty ← parseType
+    let a ← peekT
+    if a.isSym "=" || a.isSym ":=" then
+      bump
+      return .decl t.pos name (some ty) false (← parseValue stop)
+    set saved
+    parseRange stop
   else if t.identName?.isSome && t1.isSym ":" && !(← peekT 2).bol then
     -- (a typed declaration has its type on the line of its `:`; `sync:`
     -- and the like start an indented block)
@@ -867,6 +886,22 @@ partial def parseIf (stop : Nat) : PM SExpr := do
     ends at a line starting at column `stop` or before). -/
 partial def parseClause (stop : Nat := 0) : PM SExpr := do
   let t ← peekT
+  -- `(local:)X : src`: a qualified generator (`(local:)X := e` is a binding,
+  -- as `parseExpr` reads it)
+  if let some (q, k) ← peekQual then
+    if ((← peekT k).identName?).isSome && (← peekT (k + 1)).isSym ":" then
+      let saved ← get
+      for _ in [0:k] do bump
+      let x := s!"({q}:){← expectIdent}"
+      let typed ← (do
+          bump
+          let ty ← parseType
+          let a ← peekT
+          if a.isSym "=" || a.isSym ":=" then bump; return some ty else return none) <|> pure none
+      if let some ty := typed then return .decl t.pos x (some ty) false (← parseValue stop)
+      set saved
+      for _ in [0:k + 2] do bump
+      return .gen t.pos x none (← parseExpr stop)
   let t1 ← peekT 1
   match t.identName? with
   | some i =>
@@ -1129,8 +1164,8 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
       return .member t.pos (.ident t.pos "(super:)") (← expectIdent)
     if let some (q, k) ← peekQual then
       -- `(q:)x`: `Self.(q:)x`, which `resolveModules` reads by what `q`
-      -- names: a module's member, an enum's value, or a qualified member of
-      -- the current object (#70)
+      -- names: a module's member, a local, an enum's value, or a qualified
+      -- member of the current object (#70)
       for _ in [0:k] do bump
       let m ← expectQualifiedName
       -- (`(M:)c{…}`: a construction of the module's `c`, #147)
@@ -1318,6 +1353,13 @@ def parseFnBody : PM SExpr := do
     is that parameter. -/
 partial def parseParamItem : PM (Pos × String × STy × Bool × Option SExpr × List (String × STy × List Nat)) := do
   let t ← peekT
+  -- `(local:)X:t`: a qualified parameter (Book of Verse ch. 16, "Local
+  -- Qualifiers"), not a group
+  if (← peekQual).isSome then
+    let pn ← expectBinder
+    let pty ← if (← peekT).isSym "(" then parseFnSig else do expectSym ":"; parseType
+    let dflt ← if (← peekT).isSym "=" then do bump; pure (some (← parseExpr 0)) else pure none
+    return (t.pos, pn, pty, false, dflt, [])
   if t.isSym "(" then
     bump
     let mut items := #[]
@@ -1336,6 +1378,8 @@ partial def parseParamItem : PM (Pos × String × STy × Bool × Option SExpr ×
     return (t.pos, "", .tup (items.toList.map (·.2.2.1)), false, none, binds)
   let named := t.isSym "?"
   if named then bump
+  if named && (← peekQual).isSome then
+    perr (← peekT) "a named parameter cannot be qualified: its name is how a call gives it (Book of Verse tests, DefaultNamed.versetest)"
   -- (`F(:t)`: an unnamed parameter, as function types write one; its name
   -- is "", which the parameter list makes one no program can write)
   let pn ← if !named && t.isSym ":" then pure "" else expectIdent
