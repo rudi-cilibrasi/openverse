@@ -164,7 +164,11 @@ partial def elabAppBaseWith
       -- `Tests/Intrinsics/ConcatenateMaps.versetest` 21, 33: the later map's
       -- order): the first copied, then for each other the pairs kept whose
       -- key it does not have, then its pairs
-      let some a0 := args.head? | eerr p "ConcatenateMaps takes at least one map"
+      -- (two maps, the Book of Verse's ch. 3: "It takes exactly two maps";
+      -- more are merged by chained calls)
+      if args.length != 2 then
+        eerr p s!"ConcatenateMaps takes two maps, not {args.length} (to merge more, chain the calls: ConcatenateMaps(ConcatenateMaps(A, B), C))"
+      let some a0 := args.head? | eerr p "ConcatenateMaps takes two maps"
       -- the maps' type: the expected one, else the first argument's that has
       -- one alone (an empty map{} has none)
       let mapExp : Option Ty ← match exp with
