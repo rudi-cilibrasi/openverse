@@ -3,7 +3,7 @@
 The rules openverse takes for qualified names `(q:)x`, every form the Book
 of Verse writes, where each may be written, what it means and what is an
 error; the readings openverse had to choose; how qualification meets the
-open shadowing decision; and the design, one resolver for every qualifier.
+Book's shadowing rule, which openverse now follows; and the design, one resolver for every qualifier.
 [LANGUAGE.md](../LANGUAGE.md#qualified-names) states the rules for users;
 [DESIGN.md](../DESIGN.md#qualified-names-one-resolver-for-every-qualifier)
 says how they are built.
@@ -145,10 +145,10 @@ it does not make it win.
    (`ModuleDefinitions:62, 78, 229`, all `vmodule`); `ParametricFunctions`
    uses its module's `(M:)class2(t:type)` bare, as `class2(tuple(int, t))`,
    beside a top-level `class2` that takes no type argument, and expects it to
-   work. openverse takes the inner one, as its documented lookup does for any
-   member (the shadowing decision below); the tests' only such use is one the
-   inner fits. Inside a class and for `(local:)`, where the tests refuse the
-   bare use, openverse refuses it too.
+   work. openverse takes the inner one (a module's own definitions come first
+   in its lookup); the tests' only such use is one the inner fits. Inside a
+   class and for `(local:)`, where the tests refuse the bare use, openverse
+   refuses it too.
 3. **A local's scope starts after its definition**, for `(local:)` locals as
    for openverse's others: in `(local:)A := A+1`, `A` is the outer one. The
    Book's version 41.00 calls that `A` ambiguous (`FN41.00-FirstAdded.versetest`,
@@ -172,32 +172,77 @@ it does not make it win.
 
 ## Shadowing
 
-The survey's open owner decision, "shadowing across scopes", is whether a
-member of a module, class or enum may take the name of an enclosing
-definition: ch. 10 (lines 894-951) refuses it, while openverse's documented
-lookup (a name is looked up from its definition's module outward,
-[Modules](../LANGUAGE.md#modules)) allows it and takes the inner one. This
-work does not change that reading.
+The owner has since decided to follow the Book here too ("for everything we
+go by the book for now"), so openverse's documented inner-first reading,
+under which a member could take the name of an enclosing definition, is
+gone. The rule, as the Book's prose and tests pin it:
 
-What qualified names need from it, and what they do not:
-
-- **Locals need nothing new.** openverse already refuses a local, parameter or
-  class member named like a visible module member, and a local named like a
-  field or method of its class, as the Book does (`QualifiedIdentifier:186-195`,
-  `ShadowDefinition:319-325`). `(local:)` is that rule's way out, in both
-  readings: a `(local:)` definition may take the name, and its bare uses are
-  then ambiguous where the other definition is visible.
-- **Members need nothing either.** Under the Book's rule, a qualified member
-  (`(M:)x`, `(c:)m`) is how a member takes an enclosing definition's name
-  (`Modules/Module:229-237`: "_qualified_ explicit module definitions … _may_
-  shadow any other definition in a different scope"); under openverse's, an
-  unqualified one may too. A qualified definition is accepted in both, and
-  openverse keeps the qualifier's mark (`$qual:`) where a check could read it.
-- **If the owner adopts the Book's rule**, the check would refuse an
-  unqualified member that takes an enclosing definition's name and accept a
-  qualified one; a bare use inside a module of a qualified member and an
-  outer definition would become ambiguous where both fit (reading 2), and
-  the 18 "duplicate definitions" cases of the survey would agree.
+- **The rule.** "In most contexts, you cannot redefine names that already
+  exist in an enclosing scope. This applies to functions, variables,
+  classes, interfaces, and modules" (ch. 10, lines 894-896); "The
+  prohibition holds regardless of definition order" (line 951); "nested
+  definitions cannot shadow outer definitions with the same name" (ch. 16,
+  line 934). openverse checks it in `checkNoShadowing`, beside the "defined
+  once in its scope" check (`checkDefinedOnce`, `admitSource`).
+- **Which scopes.** The top level and the modules nest; a class, an
+  interface, a struct and an enum are scopes inside the one they are defined
+  in, and a function's parameters and locals inside the function's. Sibling
+  scopes do not meet: two functions' locals, two loops' variables
+  (`QualifiedIdentifier:197-217`), a field of one class and a parameter of
+  another function (no test refuses them).
+- **Which definitions.** Every kind: a module's member or a module named like
+  a definition of a module around it or of the top level
+  (`ShadowDefinition:270-299, 331-341`, `Modules/Module:220-226`,
+  `Enum.versetest:121`); a class's or an interface's field or method named
+  like a definition of the scope the type is defined in or around it, the
+  type itself included (`ShadowDefinition:4, 296, 328-329`,
+  `Overloading.versetest:171`: `f := class: f():f`); an enum's value named
+  like the enum or a definition around it (`QualifiedIdentifier:310`); a
+  struct's field likewise (no test; the prose's "variables", and a field is
+  a class's data member's counterpart); a parameter (`ShadowDefinition:356`,
+  a `vpackage` test); a local (`QualifiedIdentifier:186-195`,
+  `ShadowDefinition:319-325`, which openverse already refused where names are
+  resolved).
+- **What counts as the same name.** One spelling. Functions are the one
+  exception: they overload across scopes as in one, so a function, a method
+  or a parameter of a function type may take the name of a function around
+  it when no call fits both (`Overloading.versetest:41-43`, "Test overloading
+  a function across different scopes": `f():void` beside a parameter
+  `f(x:int):void`, and beside a method `f(x:int):void`); with parameters a
+  call could fit both they are refused (`ShadowDefinition:4`: `F(X:int):int`
+  and a method `F(X:int):int`; `:350-353`, a module's `F():void`). A
+  function and anything else of one name are refused (a value, a type, a
+  module: `ShadowDefinition:328-341`, `Overloading.versetest:162-168`).
+  openverse checks a function or a method against an enclosing function
+  where it checks overloads, with the same distinctness test
+  (`checkSignatures`); a parameter of a function type it lets take the name
+  unchecked (a reading: in the function's body the name is the parameter).
+- **What is exempt.** A qualified definition, `(M:)x`, `(c:)m`, `(e:)v`,
+  `(local:)X`: "If you want to intentionally shadow something, you must use
+  explicit qualifiers to make your intent clear" (ch. 16, line 934;
+  `Modules/Module:228-237`). An override (`M<override>`, `(r:)M<override>`,
+  a field's `F<override>`): it implements an inherited member, it defines no
+  name. openverse's entry point `Main`, which the Book does not have: a
+  module's `Main` shadows nothing (the Book's runner has no top-level `Main`;
+  `Operators/LogicalOr.versetest:153-162` defines one in a module). Not
+  covered: a member named like a public member of a module a `using` opens
+  (the tests that pin it are `vmodule` ones), and a definition named like a
+  built-in other than a reserved name (`enum{public}`,
+  `QualifiedIdentifier:315`, is the one test; openverse knows no definition
+  named `public`).
+- **How a qualifier lifts it.** The inner definition written `(q:)x`, `q`
+  its own scope, is accepted; a bare `x` where both are visible is then
+  ambiguous in a class's code and for `(local:)` (above), and the inner one
+  inside a module (reading 2). openverse's message names both definitions
+  and the qualifier to write: "the field 'Limit' of thing has the name of
+  the constant Limit (2:0): Verse does not allow shadowing (Book of Verse
+  ch. 10); rename one, or qualify this one, (thing:)Limit".
+- **Prose and tests.** They agree where both speak. The prose is silent on
+  functions overloading across scopes, which the tests allow (above), and on
+  struct fields, which openverse treats as class fields; ch. 10's
+  "Restrictions" (lines 1189-1191) says there is no `(local:)` for a local
+  named like a member, which the tests contradict (`QualifiedIdentifier:446-465`,
+  `SOL-7579`): openverse follows the tests there.
 
 ## Design: one resolver for every qualifier
 

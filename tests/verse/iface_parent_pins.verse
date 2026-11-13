@@ -23,11 +23,11 @@ bigbox(t:type, w:type) := class(box(t)):
     W:w
     Get<override>():[]t = array{Value, Value, Value}
 pair(k:type, v:type) := class(kv(k, v)):
-    K:k
+    (pair:)K:k
     V:v
-    Get<override>():tuple(k, v) = (K, V)
-    Fetch<override>()<suspends>:tuple(k, v) = (K, V)
-    Key<override>():k = K
+    Get<override>():tuple(k, v) = ((pair:)K, V)
+    Fetch<override>()<suspends>:tuple(k, v) = ((pair:)K, V)
+    Key<override>():k = (pair:)K
 obox(t:type) := class(c3(t)):
     O:?t
     Get<override>():[]?t = array{O}

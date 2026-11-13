@@ -2274,7 +2274,9 @@ Main():void =
   time, up to the top level. At each scope, the scope's own definitions
   come first, then the members of the modules it opens with `using{M}`.
   If two modules opened at the same scope give the name, it is ambiguous
-  and an error. The first definition or module found is the one meant.
+  and an error. The first definition or module found is the one meant;
+  only a qualified definition may have the name of one around it
+  ([Shadowing](#shadowing)).
 - `(M:)F` and `(A.B:)F` are `M.F` and `A.B.F` (#145): values, functions,
   the type `(M:)c` and the construction `(M:)c{…}` (#147); a member may be
   defined `(M:)F` in `M` (see [Qualified names](#qualified-names)).
@@ -2288,12 +2290,53 @@ Main():void =
 - An extension method `(R:t).M(…)` of a module is found by calls `X.M(…)`
   as its members' names are, `<public>` from outside
   ([Extension methods](#extension-methods)).
-- Verse does not allow shadowing. A local, parameter or class member
-  (inherited ones included) named like a visible module or module member
-  (its own module's, or an open module's) is an error.
+- Verse does not allow shadowing (Book of Verse ch. 10, "Shadowing and
+  Qualification"): see [Shadowing](#shadowing). A local, parameter or class
+  member (inherited ones included) named like a visible module or module
+  member (its own module's, or an open module's) is an error too.
 
 Modules exist only in the front end. Each member becomes a definition of
 its qualified name before elaboration, and messages show it as `M.F`.
+
+## Shadowing
+
+No definition takes the name of a definition of a scope around it, whichever
+is written first (Book of Verse ch. 10, "Shadowing and Qualification": "you
+cannot redefine names that already exist in an enclosing scope"; the rule
+is pinned in [research/qualified-names.md](research/qualified-names.md#shadowing)):
+
+```verse
+Limit:int = 3
+box := class:
+    (box:)Limit:int = 10        # Limit:int = 10 would be refused
+    Twice():int = 2 * (box:)Limit
+Main():void = Print("{Limit} {box{}.Twice()}")   # 3 20
+```
+
+- **Scopes.** The top level and the modules nest; a class, an interface, a
+  struct or an enum is a scope inside the one it is defined in; a function's
+  parameters and locals are inside the function's. A member of a module, a
+  module, a field or method of a class or interface, a struct's field, an
+  enum's value, a parameter and a local cannot take the name of a definition
+  of a scope around it, the type it belongs to included (`c := class:
+  c():c` is refused). Sibling scopes do not meet.
+- **Functions overload across scopes.** A function or a method may take the
+  name of a function around it when no call could fit both (`F()` and a
+  method `F(X:int)`), as overloads in one scope may
+  ([Overloading](#overloading)); one a call could fit both of is refused. A
+  parameter of a function type may take such a name; in the function's body
+  the name is the parameter. A function and a definition of another kind
+  never share a name.
+- **Exempt.** A qualified definition, which says where it is: `(M:)x`,
+  `(c:)m`, `(e:)v`, `(local:)X` ([Qualified names](#qualified-names)); its
+  bare uses are then ambiguous where the other definition is visible (in a
+  class's code and for `(local:)`), or the inner one (in a module). An
+  override, which defines no name. The entry point `Main`, which is
+  openverse's and not the Book's.
+- The message names both definitions and the qualifier to write: "the field
+  'Limit' of box has the name of the constant Limit (1:0): Verse does not
+  allow shadowing (Book of Verse ch. 10); rename one, or qualify this one,
+  (box:)Limit".
 
 ## Qualified names
 
@@ -2345,14 +2388,14 @@ Main():void =
   block, a constant's value). The top level has no name or path, so a
   top-level definition takes no qualifier.
 - **`(local:)` and shadowing.** A local or parameter cannot be named like a
-  visible module member, or like a field or method of its class
-  ([Modules](#modules), [Classes](#classes)); a `(local:)` one may. Its
+  definition around it ([Shadowing](#shadowing)); a `(local:)` one may. Its
   uses then write `(local:)X` wherever that other definition is visible: a
   bare `X` there is ambiguous, and an error. Where no other definition has
   the name, a bare `X` is the local. A `(local:)X` cannot be defined again in
   a nested scope, take a type parameter's name, or be a named parameter.
 - **A class's qualified member.** `(c:)m` in class `c` beside a top-level `m`
-  is allowed; a bare `m` in `c`'s code, where both are visible, is ambiguous.
+  is allowed (an unqualified one is refused, [Shadowing](#shadowing)); a bare
+  `m` in `c`'s code, where both are visible, is ambiguous.
   `(c:)m` in a class that inherits an `m` would be a second `m` (Book ch.
   10, "Methods with Same Name"): openverse keeps one member of a name per
   class and refuses it.
@@ -2651,7 +2694,7 @@ Main()<suspends>:void =
 | Inferring type arguments | not described | first-order matching against the expected result type, then the arguments; no subtyping other than `false` (matches anything) and `void` (accepts anything) |
 | Access specifiers other than `<public>` | `<internal>` (the default), `<private>`, `<protected>`, … (ch. 16) | a module member is `<public>` or internal (visible in its module and its submodules); other specifiers, a struct field's, and a `<public>` definition whose type names an internal one (a type alias of an internal class, ch. 11), are accepted and not enforced |
 | A qualifier without a `using` | "A qualifier only says which `F` is meant among the ones already in scope" (ch. 10): `(Top.M:)F` with no `using` is unknown | the qualifier is found as any name is, then the name is looked up in exactly that scope: `(M:)F` is `M.F` (#145) |
-| A module's member `(M:)x` used bare in `M` beside an outer `x` | both are candidates, told apart by their parameters, else ambiguous (`ModuleDefinitions.versetest`, `vmodule` tests) | the inner one, as for any member; in a class's code and for `(local:)`, where the tests refuse it, ambiguous |
+| A module's member `(M:)x` used bare in `M` beside an outer `x` | both are candidates, told apart by their parameters, else ambiguous (`ModuleDefinitions.versetest`, `vmodule` tests) | the inner one (only a qualified member may share an outer definition's name, [Shadowing](#shadowing)); in a class's code and for `(local:)`, where the tests refuse it, ambiguous |
 | `ToString` of a float | "the shortest" (an example: `98.5`) | the shortest decimal that reads back as the float, the closest of the shortest, in Python's `repr` layout (exponent at `≥ 1e16` and `< 1e-4`); `Inf`, `-Inf`, `NaN` |
 | `NaN < X` | not stated | fails (IEEE: NaN orders with nothing); `NaN = NaN` succeeds (the Book) |
 | `=` between different types | not stated | refused when two scalar types (int, float, char, …) meet at the same place, also inside containers (`array{1} = array{1.0}`), as Verse Core holds them differently |

@@ -3,10 +3,10 @@
 # it; one tuple argument is spread over the parameters, as at a method's call
 K : int = 100
 c := class:
-    K : int
+    (c:)K : int
     Add(A : int)<transacts>:int = A + 1
-    Vals()<transacts>:int = Add(K) | K
-    Pair(A : int, B : int)<transacts>:int = A + K | B + K
+    Vals()<transacts>:int = Add((c:)K) | (c:)K
+    Pair(A : int, B : int)<transacts>:int = A + (c:)K | B + (c:)K
     Other()<transacts>:int = 0
 sub := class(c):
     Other<override>()<transacts>:int =

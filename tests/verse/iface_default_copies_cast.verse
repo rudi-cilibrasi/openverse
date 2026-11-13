@@ -17,7 +17,7 @@ c2(t:type) := interface(container([]t)):
 box(a:type) := class(c2(a)):
     X:a
     Q:pair(a, int)
-    Help():int = 3
+    (box:)Help():int = 3
     V<override>():a = X
     P<override>():pair(a, int) = Q
 closed := class(c2(int)):

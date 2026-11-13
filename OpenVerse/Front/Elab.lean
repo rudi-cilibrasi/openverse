@@ -295,7 +295,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- field through one at its place)
   let env := { env with fieldAccBase := declared.tops.length + declared.gsigs.size }
   let sigs ← inferSignatures env declared admitted.typeDefaults opts.requests
-  checkSignatures env sigs classes.defs fields methods
+  checkSignatures env sigs classes.defs fields methods admitted.scopePairs
   let defaults ← elabFieldDefaults env sigs methods.tops classes.defs
   let elaborated ← elabFunctions env sigs opts.requests
   let needs := roundNeeds elaborated defaults.needs source

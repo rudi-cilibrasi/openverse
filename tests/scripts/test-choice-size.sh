@@ -1408,8 +1408,10 @@ if kind in ('context-method-nested', 'context-method-nested-dispatch'):
 Apply(F:type{_(:t)<computes>:t},X:t where t:type)<computes>:t=F(X)''')
     dispatch = kind.endswith('dispatch')
     if dispatch:
+        # (the method is qualified: a top-level Apply has its parameters, Book
+        # of Verse ch. 10, "Shadowing and Qualification")
         print('''holder:=class:
-    Apply(F:type{_(:t)<computes>:t},X:t where t:type)<computes>:t=F(X)''')
+    (holder:)Apply(F:type{_(:t)<computes>:t},X:t where t:type)<computes>:t=F(X)''')
     receiver = 'box{}'
     for _ in range(count * 4):
         receiver = f'{"H.Apply" if dispatch else "Apply"}(({receiver}).Same,box{{}})'

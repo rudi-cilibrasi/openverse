@@ -379,6 +379,18 @@ def extensionMethod? (n : String) : Option String :=
     some (((last.drop extensionPrefix.length).toString.splitOn "$ov").headD "")
   else none
 
+/-- A function defined in a module or a class with the name of a function of
+    a scope around it (`checkNoShadowing`, `checkSignatures`): where the inner one is, its
+    signatures' name (`A::F`, `c.F`), the outer one's and where it is, and
+    the qualifier that would say which one the inner one is. -/
+structure ScopePair where
+  pos : Pos
+  inner : String
+  outer : String
+  outerPos : Pos
+  qualifier : String
+  deriving Inhabited
+
 /-- Why a type's name is not one (`resolveTy`, and a type alias's names). -/
 def unknownTypeMessage (n : String) : String :=
   s!"unknown type '{n}' (supported: int, logic, char, string, void, []t, ?t, tuple(…), and structs and enums)"

@@ -16,10 +16,10 @@ c2(t:type) := interface(container([]t)):
         (super:)Sum(?Pre := Pre + Help()) + Limit
 box(a:type) := class(c2(a)):
     X:a
-    Limit:int = 9
+    (box:)Limit:int = 9
     Pre:int = 50
     Y:int = 60
-    Help():int = 1000
+    (box:)Help():int = 1000
     V<override>():a = X
 G(C:container(u) where u:type):u = C.Get()
 S(C:container(u) where u:type):int = C.Sum(?Pre := 5)

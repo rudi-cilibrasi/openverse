@@ -1,5 +1,5 @@
 # expect: found type{_(:int)<computes>:string}
-Id(X:t where t:type)<computes>:t=X
+Ident(X:t where t:type)<computes>:t=X
 Twice(F:type{_(:t)<computes>:t},X:t where t:type)<computes>:t=F(X)|F(X)
 reader:=class:
     Id(X:int)<computes>:string="method {X}"

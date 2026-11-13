@@ -10,7 +10,7 @@ dog := class(animal):
     Name<override>:string = "dog"
 Describe(A:animal, ?Prefix:string = "a "):string = Prefix + A.Name
 speaker := class:
-    Describe(A:animal, ?Prefix:string = "the "):string = Prefix + A.Name
+    (speaker:)Describe(A:animal, ?Prefix:string = "the "):string = Prefix + A.Name
 Use(F:type{_(?A:int):int}):int = F(?A := 1)
 Opt(?A:int = 5):int = A
 Main():void =

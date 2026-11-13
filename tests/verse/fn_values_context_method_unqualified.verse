@@ -1,5 +1,5 @@
-Id(X:t where t:type)<computes>:t=X
-UseGlobal():int=block{F:type{_(:int)<computes>:int}=Id;F(1)}
+Ident(X:t where t:type)<computes>:t=X
+UseGlobal():int=block{F:type{_(:int)<computes>:int}=Ident;F(1)}
 Apply(F:type{_(:u)<computes>:u},X:u where u:subtype(comparable))<computes>:int=if(F(X)=X)then 1 else -1
 box(t:type):=class:
     V:t
