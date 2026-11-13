@@ -1581,6 +1581,13 @@ where interfaces would say more than the Book's metatypes (a join keeps no
 concreteness, and castability only of a castable bound), are restricted in
 `joinTy`. No Verse Core is added.
 
+A type given as an argument and used as a type (`FalseOption(t:type):?t`)
+is a type parameter whose argument the call writes: `TypeArguments.desugar`,
+before `TypeValues.desugar`, makes such a function generic over `t`, its
+parameter `$typeArgument:t:?t`, and a call's argument there, a type as
+written, the value `(?int)(false)` of that parameter, from which the call's
+type argument and witness come as any generic call's do.
+
 ## Fields with accessors: calls of their class's methods
 
 A field `var X<getter(G)><setter(S)>:t = external{}` has no storage

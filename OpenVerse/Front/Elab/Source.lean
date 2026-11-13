@@ -6,6 +6,7 @@ import OpenVerse.Front.Aliases
 import OpenVerse.Front.BuiltinValues
 import OpenVerse.Front.Bitwise
 import OpenVerse.Front.TypeValues
+import OpenVerse.Front.TypeArguments
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -585,6 +586,8 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   Access.checkConsistency levels resolved
   let access := Access.Env.of levels (Access.Sites.of resolved) resolved
   Access.checkUses access resolved
+  -- (types given as arguments and used as types: type parameters)
+  let resolved ← TypeArguments.desugar resolved
   -- (types as values, `subtype(t)` and its kin: classes and interfaces)
   let resolved ← TypeValues.desugar resolved
   -- (fields with accessors: checked, and their accessors' type written)

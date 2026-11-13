@@ -2204,9 +2204,21 @@ Main():void =
   constructs the class `T` holds with its defaults; no field may be given.
 - Type values are not compared (the Book's tests: "We can't yet compare
   the subtype values"). `subtype(t)` of a type that is no class or
-  interface (`subtype(int)`), `concrete_subtype(comparable)`, a metatype as
-  a type parameter's bound and a type given as an argument (`F(t:type):?t`)
-  are not supported.
+  interface (`subtype(int)`), `concrete_subtype(comparable)` and a metatype
+  as a type parameter's bound are not supported.
+- **A type given as an argument.** A function's parameter `t:type` that the
+  function uses as a type (`FalseOption(t:type):?t = false`, the Book's
+  tests) is a type parameter whose argument the call writes:
+  `FalseOption(int)`, `Pair(int, 1, 2)` with `Pair(t:type, X:t, Y:t)`. The
+  function is generic over `t`, so checked once, and the call passes the
+  type's witness, as a generic call does. The argument is a type as written:
+  a type's name (`int`, `logic`, a class's, a struct's) or a parametric type
+  applied (`c(int)`, `tuple(int, float)`); `[]int` and `?int` are not yet
+  written as arguments. Refused: a value there, a type parameter there (the
+  BPVM's link error; VerseVM accepts it), such a parameter after a parameter
+  whose type uses it (`F(X:t, t:type)`, the Book's tests, 3502), and such a
+  parameter of a method.
+  A parameter `t:type` used as a value is a type value's (above).
 - **Conversions.** `t(X)`, with `t` a built-in type's, a struct's or an
   enum's name, or a type written in parentheses, `(?int)(X)`, `([]int)(X)`,
   is `X` converted to `t`: `X` must have a type that is a subtype of `t`

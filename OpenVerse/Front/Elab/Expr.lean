@@ -1117,7 +1117,11 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
     -- `tuple()` for `void`, which takes the empty value alone)
     if other.mentionsVoid then
       return ← tryCatch (elabE ctx e none) fun _ => elabE ctx e (some other.voidToUnit)
-    elabE ctx e (some other)
+    -- (the other's type is a hint: a value of another type is compared as
+    -- one too, `False(int) = False(logic)`, Book of Verse tests,
+    -- TypeParam.versetest:59, where a generic call would take its type
+    -- arguments from it; the first refusal stands when neither works)
+    tryCatch (elabE ctx e (some other)) fun err => tryCatch (elabE ctx e none) fun _ => throw err
   -- (one first, the other operand's type gives it: that operand is
   -- elaborated first, and the literal, which does nothing, compared with
   -- it; the result is the left operand, the empty value; two of them are

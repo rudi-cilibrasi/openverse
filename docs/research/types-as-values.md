@@ -64,7 +64,7 @@ how they are built.
 | `castable_subtype(c)` (`Castable.versetest` 91-170) | about 20 | yes: an interface of the castable classes' values | yes; as a type parameter's bound (`where t:castable_subtype(c)`, 519-563) not: a bound of #502's kind |
 | `type`, the type of every type value (`f(c:subtype(C)):type = c`, `Subtype.versetest` 99-103) | 4 | yes, for class values | yes; of other types' values not |
 | `subtype(int)`, `subtype([]C)`, a value `int` of `type` (`Subtype.versetest` 114-119, `TypeParam.versetest`, `TypeValue.versetest`) | about 20 | in part: values of other types than classes carry nothing the program can use but `type` itself, so they need no witness; each needs a class of its own in this design | no: refused ("openverse writes subtype of a class or an interface only") |
-| a type given as an argument and used as a type, `False(t:type):?t = false`, `Bar(t:type)` (`TypeParam.versetest` 41-61) | 3 | no | no: a dependent parameter; Core's generic functions take a type parameter's witness, not a type the code reads (below) |
+| a type given as an argument and used as a type, `False(t:type):?t = false`, `FalseOption(t:type)`, `EmptyArray(t:type)` (`TypeParam.versetest` 57-60, `ParametricTypes.versetest` 613-624) | 6 | yes: a generic call with the type given | yes (`TypeArguments`); `Bar(t)` of a type parameter `t` not, as the BPVM's link error (`TypeParam.versetest` 41-52) |
 | `concrete_subtype(comparable)`, `concrete_subtype(any)` (`MetatypeConcreteSubtype.versetest` 13-41) | 10 | no | no: needs a value's type at run time (the `comparable` agent's `dyn` boxes carry one; constructing through it needs the class of a box) |
 | `classifiable_subset(t)` (`ClassifiableSubset.versetest`) | 21 | no | no: a set of types, which the Book's chapters do not describe |
 | a metatype as a type parameter's bound, `where t:subtype(class1)` (`ParametricFunctions.versetest` 46-57, 237-248) | 8 | front end, #502's checked upper-bound evidence | no (#502) |
@@ -120,14 +120,21 @@ object, made by the front end with no Verse Core added
   could add them as it adds classes' (`$type:int`); left, as a value of
   `subtype(int)` has no operation the Book's tests use (they store it).
 - **A type given as an argument and used as a type** (`False(t:type):?t`):
-  Verse Core's generic functions are checked once for every instance and
-  take a witness value per type parameter (`LANGUAGE.md`, Parametric
-  functions); a parameter `t:type` the code uses as a type is such a type
-  parameter whose argument the caller writes, `False(int)`: the front end
-  can read a call `F(int)` of a function whose parameter `t:type` names a
-  type in its signature as the generic call `F` with `t := int` and the
-  witness of `int`, which needs no Core change; a `t` passed on as a value
-  (`Bar(t)`) is the witness itself. Not built.
+  built, by the design that was left here. Verse Core's generic functions
+  are checked once for every instance and take a witness value per type
+  parameter (`LANGUAGE.md`, Parametric functions); a parameter `t:type` the
+  code uses as a type is such a type parameter whose argument the caller
+  writes. `TypeArguments.desugar`, before `TypeValues.desugar`, makes the
+  function generic over `t` and the parameter, in its place,
+  `$typeArgument:t:?t`, which nothing reads; a call's argument there, a type
+  as written, becomes that parameter's value `(?int)(false)`, from which the
+  call's type argument is inferred, with `int`'s witness: no Core change. A
+  type parameter given there (`Foo(:t where t:type):void = Bar(t)`) is
+  refused, the BPVM's link error 9001 (`TypeParam.versetest:43`), which the
+  VerseVM twin (:49) accepts: openverse keeps the case it agrees with. A
+  comparison's operand takes its type from the other's only as a hint, so
+  `False(int) = False(logic)` compares a `?int` and a `?logic`, as any two
+  comparable values (`TypeParam.versetest:59`).
 - **`concrete_subtype(comparable)` and `concrete_subtype(any)`**: the bound
   is no class, so no `$type:C` is below it in this design; the values are
   classes' (`c:concrete_subtype(comparable) = c` with `c` `<unique>`), so

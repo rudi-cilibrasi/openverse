@@ -1732,6 +1732,8 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
     bump
     -- (`logic(X)`: `X` converted to logic, Book of Verse tests, Cast.versetest:59)
     if (← peekT).isSym "(" && !(← peekT).spaced then return .ident t.pos "logic"
+    -- (`F(logic)`: the type, as an argument, a type given as one)
+    if (← peekT).isSym ")" || (← peekT).isSym "," then return .ident t.pos "logic"
     if (← peekT).isSym "{" then bump; return .logicLit t.pos (← parseBraced t.pos)
     return .logicLit t.pos (← parseBody stop)
   | .ident x =>
