@@ -173,7 +173,8 @@ def checkName (p : Pos) (specs : List String) : Except String Unit := do
 def checkField (p : Pos) (place : Place) (name : String) (specs varSpecs : List String) (hasValue : Bool) :
     Except String Unit := do
   checkNonFunction p "field" specs place
-  if let some sp := varSpecs.find? (!isAccess ·) then
+  if let some sp := varSpecs.find? (fun sp => !isAccess sp && known sp) then
+
     reject p s!"<{sp}> is not allowed on var: var takes the field's write access, an access specifier (Book of Verse ch. 12)"
   checkPlace p .var varSpecs
   checkOverrideAccess p name specs varSpecs

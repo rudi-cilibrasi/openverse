@@ -6,9 +6,14 @@ Gameplay := module:
     item<SharedGameplayScope> := class:
         ID<public>:int
     CreateItem<SharedGameplayScope>(TheID:int):item = item{ID := TheID}
+    stock<public> := class:
+        var<SharedGameplayScope> Count<public>:int = 0     # read anywhere, set in the scope
 Inventory := module:
     using{Gameplay}
     AddToInventory<public>(ItemID:int):int = CreateItem(ItemID).ID
+    Restock<public>(S:stock):int =
+        set S.Count += 2
+        S.Count
 Crafting := module:
     using{Gameplay}
     CraftItem<public>(Recipe:[]int)<decides>:int = CreateItem(Recipe[0]).ID
@@ -22,4 +27,7 @@ Physics := module:
         S.Size
 Main():void =
     Print("{Inventory.AddToInventory(7)} {Physics.Report()}")
+    S := Gameplay.stock{}
+    Print("{Inventory.Restock(S)} {S.Count}")
+
     if (X := Crafting.CraftItem[array{3}]) then Print("{X}")
