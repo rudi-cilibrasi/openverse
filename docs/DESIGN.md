@@ -1395,6 +1395,39 @@ flowchart LR
   `F$fn{}`, typed as the function type expected, else as its own.
 - **A call of a value is a method call** of its shape's `$call…`. It is
   dispatched like any interface method, by the class's tag.
+- **Named parameters are part of a shape** (#503). They follow the
+  positional ones in the order of their names, so the order a type writes
+  them in does not matter: `type{_(:int, ?B:int):int}` is `$fn2?B(int, int,
+  int)`, whose method `$call?B($X0:$a0, ?B:$a1)` a call names `B` of, by the
+  ordinary method-call rules (written order, missing and unknown names).
+  `Shape.within` is the Book's subtyping: the same positional parameters,
+  the other's names among one's own, a default for each of one's own it
+  lacks, and one for each it lets callers omit. A function's value class
+  implements each shape of the program its own is within, as before. Its
+  method for a shape passes exactly that shape's arguments, by name, so a
+  parameter the shape lacks is not passed: the function's own default runs
+  at the call, in its scope and declaration order, and a bound method's
+  dispatches on its receiver as any call does. No default is copied and no
+  second kind of adapter exists. A shape extends the shapes it is within
+  at the arguments their parameters select (`Shape.select`), so values
+  convert to types with fewer names by interface subtyping.
+- **An optional parameter in a type makes an open shape.** `?C:int = …` in a
+  type (its default is not part of it) gives `$fn3?B?C=`, with no method of
+  its own. It is below each closed shape of the program that gives some of
+  its optional parameters (`Shape.supplying`), and a call names the method of
+  the one its arguments give. When the program has no such shape,
+  `fnValueCall` asks for it as a function type and the program is
+  elaborated again, as for #214's requests. Only the closed shapes a program
+  calls or writes exist: an open shape's 2ⁿ closed ones are never all made.
+  A function's own shape is open where its named parameters have defaults,
+  so `F := Log` keeps `Log`'s defaults.
+- **Named functions get value classes where the program as written names
+  them.** The function-value scan sees the program after the choice
+  inliner, whose markers name the functions with several values they inline
+  as arguments. Functions with named parameters, values only since #503,
+  are scanned in the program as written too (`desugar`'s `written`), so they
+  gain no class there. Other functions keep the over-approximation they had,
+  and so keep their bytes.
 - **Generic code comes free.** A class like `F$fn` fixes its shapes' type
   arguments. So `Map(Xs:[]t, F:type{_(:t):u})` calls `Double` under the
   refinement of #142, and its Verse Core type stays `$fn1(t, u)`. That is

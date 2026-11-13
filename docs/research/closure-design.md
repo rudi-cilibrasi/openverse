@@ -60,8 +60,8 @@ Check every nested body at its declaration, even when unused. Capture
 analysis must include references in defaults, transitive nested captures and
 types/witnesses, not just identifiers in the final expression. Preserve
 declaration scope when checking defaults; evaluate a chosen default at the
-call, in the existing argument/default order. Named function values remain
-subject to [#503](https://github.com/rudi-cilibrasi/openverse/issues/503).
+call, in the existing argument/default order. Named function values follow
+the [#503 rules](named-function-values.md).
 
 ## Captures, state and lifetime
 

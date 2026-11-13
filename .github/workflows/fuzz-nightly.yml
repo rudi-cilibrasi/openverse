@@ -71,7 +71,7 @@ jobs:
             echo "FUZZ_CALL_PACKING=$((60 * k))"
             echo "FUZZ_CLOCK_DOMAIN=$((100 * k))"
             echo "FUZZ_MODEL_GADT=$((150 * k))"; echo "FUZZ_MODEL_MV=$((140 * k))"; echo "FUZZ_CONC=$((160 * k))"
-            echo "FUZZ_MODEL_FIFO=$((60 * k))"
+            echo "FUZZ_MODEL_FIFO=$((60 * k))"; echo "FUZZ_MODEL_NAMED_VALUES=$((120 * k))"
             echo "FUZZ_CONC_POLY=$((60 * k))"; echo "FUZZ_FIELDS=$((60 * k))"; echo "FUZZ_MODEL_GENERIC=$((150 * k))"
             echo "FUZZ_MODEL_CONSTRUCT=$((60 * k))"
             echo "FUZZ_MODEL_INITIALIZERS=$((96 * k))"

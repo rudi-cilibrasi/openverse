@@ -281,9 +281,33 @@ Main():void =
   overrides, failure and suspension use the same captured receiver and
   argument order as ordinary calls. Without an expected function type,
   a method value keeps its declared shape.
-- Overloaded functions and methods and ones with named parameters cannot
-  be used as values. Local function declarations and lambda expressions are
-  unsupported. The pinned Book marks nested functions unreleased and arrow
+- **Named parameters** (#503). A function type may name parameters after
+  its positional ones: `type{_(:string, ?Color:string):string}`. The names
+  are part of the type and match by name, in any order; a positional
+  parameter's name is not. `?N:t = e` in a type lets a caller of the value
+  omit `N`. As the Book says, `e` is not part of the type, and it is not
+  checked. A function, or a method bound to its receiver, is a value of a
+  function type with the same positional parameters when the type's names
+  are among its own, it has a default for each one the type leaves out, and
+  it has a default for each one the type lets callers omit. So
+  `Log(Message:string, ?Level:int=1, ?Color:string="white")` is a
+  `type{_(:string):string}`, a `type{_(:string, ?Color:string):string}` and
+  its own type, `type{_(:string, ?Color:string = …, ?Level:int = …):string}`,
+  which `F := Log` has. A call through a value gives its positional
+  arguments, then named ones: every one its type requires, and only ones it
+  has. The explicit arguments run as written; then each omitted default runs
+  once, at the call, in declaration order and in the function's scope. A
+  bound method's defaults read the receiver's fields as they are then, and
+  are its dynamic class's. A value converts to the function types above its
+  type: `type{_(?A:int = …):int}` is below `type{_(?A:int):int}` and below
+  `type{_():int}`. Generic functions and methods, effects, failure and
+  rollback, suspension, variance and escaping values work as for other
+  function values. Not supported: a function whose named parameter has its
+  own name (`F(?F:int)`) as a value, and a type's default of another type is
+  not refused. See the [pinned rules](research/named-function-values.md).
+- Overloaded functions and methods cannot be used as values (Book of Verse
+  ch. 6, "Capture"), with or without named parameters. Local function
+  declarations and lambda expressions are unsupported. The pinned Book marks nested functions unreleased and arrow
   lambdas unsupported; this is not a versioned UEFN compatibility result.
   See the [closure design and release evidence](research/closure-design.md)
   for the proposed capture/lifetime rules and implementation gates.
@@ -384,10 +408,7 @@ Verse ch. 6): `Describe(X:int)`, `Describe(S:string)`, `Describe(X:int, Y:int)`.
     different overload's positional parameters; its receiver and producer
     are evaluated once, before named arguments and defaults;
   - generic upper bounds other than `type` and `subtype(comparable)` are
-    unsupported (#502);
-  - named-parameter function values and default-eliding adapters are
-    unsupported, although the pinned Book describes them (#503). This
-    differs from overloaded-name capture, which the Book forbids.
+    unsupported (#502).
 
 ## Parametric structs
 
