@@ -638,11 +638,16 @@ def fresh (τ : VTy) : M Nat :=
 def freshT (τ : VTy) : M Nat :=
   modifyGet fun st => (st.Γ.size, { st with Γ := st.Γ.push τ, trans := st.trans.push true })
 
-def infer (e : Expr) : M VTy := do
+/-- The type of `e`, a value kept across a suspension point: inferred, or,
+    for one with no type of its own (`""`, `if … then array{} else
+    array{}`), `hint`, the type it is checked against, when known (#188). -/
+def infer (e : Expr) (hint : Option VTy := none) : M VTy := do
   let env ← read
-  match tc env.S (← get).Γ.toList env.ρ e none with
-  | some τ => pure τ
-  | none => throw "internal error: lowering a <suspends> function: cannot infer the type of a value kept across a suspension point"
+  let Γ := (← get).Γ.toList
+  if let some τ := tc env.S Γ env.ρ e none then return τ
+  if let some h := hint then
+    if (tc env.S Γ env.ρ e (some h)).isSome then return h
+  throw "internal error: lowering a <suspends> function: cannot infer the type of a value kept across a suspension point"
 
 def isMark (env : Env) (f : Nat) : Bool := f == env.syncMark || f == env.raceMark || f == env.rushMark
 
@@ -922,13 +927,13 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
     if ← hasS filt then throw "internal error: a suspending call in a failure context"
     if !(← hasS body) then
       -- only the array suspends: compute it first
-      let a ← fresh (← infer it)
+      let a ← fresh (← infer it ((← get).Γ[i]?.map .arr))
       let pre ← block it (some (.assign a ·))
       let fe ← loopify (.forE i (.local a) filt body) k.isSome
       return pre ++ [← emit (pure (app k (retToDone (← read).inArmR (← read).leafOpt fe)))]
     -- a loop over an index (and the array of the body's values, when used)
     let (filt, body, finish) ← protectForBreaks filt body
-    let a ← fresh (← infer it)
+    let a ← fresh (← infer it ((← get).Γ[i]?.map .arr))
     let ix ← fresh .int
     let next : Expr := .assign ix (.prim .add [.local ix, int 1])
     let elem : Expr := .seq (.prim .lt [.local ix, .prim .len [.local a]])
@@ -938,7 +943,7 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
       block (.seq (.assign a it) (.seq (.assign ix (int 0))
         (finish (.loop (.ite elem (.seq next (.ite filt (.seq body vd) vd)) .brk)) none))) none
     | some k =>
-      let acc ← fresh (← infer e)
+      let acc ← fresh (← infer e (← read).expTy)
       let add : Expr := .assign acc (.prim .concat [.local acc, .prim .mkArr [body]])
       block (.seq (.assign a it) (.seq (.assign ix (int 0)) (.seq (.assign acc (.lit Value.emptyArray))
         (finish (.loop (.ite elem (.seq next (.ite filt (.seq add vd) vd)) .brk)) (some (.local acc)))))) (some k)
@@ -1008,10 +1013,12 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
       | some k => return pre ++ [s, ← emit (pure (k v))]
     | none => return pre ++ [← emit (pure (app k (.call g rs)))]
   | .prim p es =>
-    -- (an array's or tuple's parts are checked against its expected type's)
+    -- (an array's or tuple's parts are checked against its expected type's,
+    -- and the arrays a concatenation joins against it)
     let hints : List (Option VTy) := match p, (← read).expTy with
       | .mkArr, some (.arr τ) => es.map fun _ => some τ
       | .mkTup, some (.tup ts) => ts.map some
+      | .concat, some τ@(.arr _) => es.map fun _ => some τ
       | _, _ => []
     let (pre, rs) ← operands es hints
     return pre ++ [← emit (pure (app k (.prim p rs)))]
@@ -1048,16 +1055,10 @@ partial def operands (es : List Expr) (hints : List (Option VTy) := []) : M (Lis
     for (e, i) in es.zipIdx do
       if i > j || (i < j && stable e) then rs := rs.push (retToDone (← read).inArmR (← read).leafOpt (← loopify e))
       else
-        -- (one with no type of its own, `if … then array{} else array{}`:
-        -- the type it is checked against, when known, #188)
-        let env ← read
-        let Γ := (← get).Γ.toList
-        let τ ← match tc env.S Γ env.ρ e none, hints[i]? with
-          | some τ, _ => pure τ
-          | none, some (some h) => if (tc env.S Γ env.ρ e (some h)).isSome then pure h else infer e
-          | none, _ => infer e
+        let τ ← infer e (hints[i]?).join
         let t ← fresh τ
-        pre := pre ++ (← block e (some (.assign t ·)))
+        -- (lowered as the value its temporary checks against)
+        pre := pre ++ (← withReader (fun env => { env with expTy := some τ }) (block e (some (.assign t ·))))
         rs := rs.push (.local t)
     return (pre.toList, rs.toList)
 

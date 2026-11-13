@@ -287,7 +287,7 @@ partial def elabBranch (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   let r ← elabE armCtx body none
   modify fun st => { st with pendingSourceSuspends := sourceBefore }
   noteBackgroundCaptures ctx (Suspend.slotsOf r.e)
-  return ⟨.call mark.idx [.prim .mkArr [.seq r.e (.lit .void)]], .void⟩
+  return ⟨.call mark.idx [.prim .mkArr [.seq (← inferable r) (.lit .void)]], .void⟩
 
 partial def elabDefersCore (ctx : Ctx) (ds : List (SExpr × List Local)) : EM Expr := do
   let mut acc : Expr := .lit .void
@@ -298,7 +298,7 @@ partial def elabDefersCore (ctx : Ctx) (ds : List (SExpr × List Local)) : EM Ex
                            inDefer := true, inLoop := false, defers := [], loopDefers := 0,
                            locals := locs, inTaking := false, liftWhy := "" }
     let r ← elabE dctx d none
-    acc := .seq r.e acc
+    acc := .seq (← inferable r) acc
   return acc
 
 /-- A call of an overloaded function or method (#74): the one overload
@@ -426,9 +426,12 @@ partial def resolveOverload (ctx : Ctx) (p : Pos) (name : String) (ovs : List St
     let shown := ok.map fun o => s!"({", ".intercalate (((sigOf o).map (·.params)).getD [] |>.map Ty.show)})"
     eerr p s!"this call of {name} fits more than one overload: {" and ".intercalate shown}"
 
-/-- A sequence of statements, threading the scope; the value is the last one's. -/
-partial def elabSeq (ctx : Ctx) (ss : List SExpr) (exp : Option Ty) : EM (R × Ctx) :=
-  elabSeqIn false ctx ss exp
+/-- Clauses (a condition's, a filter's, the code before a value), threading
+    the scope: their names stay in it, and their value, the last one's,
+    nothing takes (`inferable`). -/
+partial def elabSeq (ctx : Ctx) (ss : List SExpr) (exp : Option Ty) : EM (R × Ctx) := do
+  let (r, c) ← elabSeqIn false ctx ss exp
+  return (⟨← inferable r, r.ty⟩, c)
 
 /-- `elabSeq`, and, for a sequence whose names end with it (`closed`: a
     block) in a failure context, a cast that refines type arguments there
@@ -473,8 +476,9 @@ partial def elabSeqIn (closed : Bool) (ctx : Ctx) (ss : List SExpr) (exp : Optio
           throw err
         | none => throw err
     if rest.isEmpty then return (r, ctx')
+    let e ← inferable r
     let (r2, ctx'') ← elabSeqIn closed ctx' rest exp
-    return (⟨.seq r.e r2.e, r2.ty⟩, ctx'')
+    return (⟨.seq e r2.e, r2.ty⟩, ctx'')
 
 partial def elabArgs (ctx : Ctx) (p : Pos) (args : List SExpr) (tys : List Ty) : EM (List Expr) := do
   if args.length != tys.length then
@@ -884,7 +888,7 @@ partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bra
   | .arr t, [i], true =>
     let ri := widenR ctx.types (← elabE ctx i (some .int))
     if ri.ty != .int then eerr p s!"an array index must be an int, found {ri.ty.show}"
-    return ⟨p2 .index r.e ri.e, t⟩
+    return ⟨p2 .index (← inferable r) ri.e, t⟩
   | .map kt vt, [k], true =>
     let tm ← fresh r.ty
     let rk ← elabE ctx k (some kt)
@@ -893,7 +897,7 @@ partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bra
     return ⟨.seq (.assign tm r.e) (.seq (.assign tk (← coerce p rk kt)) (mapLookup tm tk tp)), vt⟩
   | .tup ts, [.int _ k], false =>
     if k < 0 || k.toNat ≥ ts.length then eerr p s!"tuple index {k} out of range"
-    return ⟨.prim (.tupGet k.toNat) [r.e], ts[k.toNat]!⟩
+    return ⟨.prim (.tupGet k.toNat) [← inferable r], ts[k.toNat]!⟩
   | t, _, _ => eerr p s!"cannot call or index a value of type {t.show}"
 
 /-- Two types with an int in one where the other has a rational, at the
@@ -1605,8 +1609,9 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       elabOneChoice ctx b rest
     | none =>
       let (r, c1) ← elabStmt ctx cl none
+      let e ← inferable r
       let (inner, c2) ← elabOneGo c1 rest
-      return (.seq r.e inner, c2)
+      return (.seq e inner, c2)
 
 partial def elabOneChoice (ctx : Ctx) (b : Choice.Binding) (rest : List SExpr) : EM (Expr × Ctx) := do
   let p := b.pos
@@ -1969,8 +1974,7 @@ partial def elabDefaultDispatch (ctx : Ctx) (p : Pos) (fname : String)
 partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option Ty := none) : EM R := do
   ctx.noteFamily p r.ty m
   match r.ty, m with
-  | .arr _, "Length" => return ⟨.prim .len [r.e], .int⟩
-  | .map _ _, "Length" => return ⟨.prim .len [r.e], .int⟩
+  | .arr _, "Length" | .map _ _, "Length" => return ⟨.prim .len [← inferable r], .int⟩
   | .struct sn targs, f =>
     match fieldIndex (ctx.types.fields sn targs) f with
     | some (k, t) =>
