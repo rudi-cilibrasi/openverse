@@ -49,6 +49,11 @@ def checkSpecs (p : Pos) (subject : String) (specs : List String)
     reject p s!"<computes> excludes the heap effects (<reads>, <writes>, <allocates>, <transacts>) that {subject} also has"
   if specs.contains "suspends" && specs.contains "decides" then
     reject p s!"{subject} is both <suspends> and <decides>, which exclude each other"
+  -- (Book of Verse ch. 13: "`<transacts>` implies `reads`, `writes` and
+  -- `allocates`")
+  if specs.contains "transacts" then
+    if let some sp := ["reads", "writes", "allocates"].find? specs.contains then
+      reject p s!"<{sp}> on {subject} is redundant: <transacts> implies it"
   let mut seen : List String := []
   for sp in specs do
     if effectNames.contains sp then

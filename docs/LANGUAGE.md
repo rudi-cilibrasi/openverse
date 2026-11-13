@@ -169,7 +169,9 @@ Combine(A:t1, B:t2 where t1:type, t2:type):tuple(t1, t2) = (A, B)
 The supported effect vocabulary is `computes`, `reads`, `writes`, `allocates`,
 `transacts`, `decides` and `suspends`. Function declarations and function types
 reject duplicate or contradictory effects, and reject unknown execution
-specifiers before lowering can erase them (#494).
+specifiers before lowering can erase them (#494). They also reject a redundant
+one, as classes, interfaces and structs do: `<transacts>` implies `<reads>`,
+`<writes>` and `<allocates>` (ch. 13), so `<transacts><allocates>` is refused.
 
 `predicts` and `converges` are explicitly unsupported, including on abstract
 signatures and function types. The pinned Book calls prediction unreleased
