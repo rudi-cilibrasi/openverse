@@ -273,6 +273,10 @@ structure TyEnv where
   /-- The enums declared `enum<open>` (Book of Verse ch. 9): a `case` on one
       needs `_`, as it may gain values. -/
   openEnums : List String := []
+  /-- The `case` arms marked `@ignore_unreachable`, by where `elabCase`
+      reports an arm never reached: such an arm is kept, and never runs
+      when it is never reached (Book of Verse tests, `Enum.versetest`). -/
+  ignoredArms : List Pos := []
   /-- The `var` fields of each class, inherited ones included (#34). -/
   varFields : List (String × String) := []
   /-- The `<unique>` classes: compared by identity (#34). -/

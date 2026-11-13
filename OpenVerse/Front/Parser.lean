@@ -52,6 +52,14 @@ structure PSt where
       (`?N:t = e`), not yet given out: where, the parameter's name and
       type, the default (#503). -/
   typeDefaults : Array (Pos × String × STy × SExpr) := #[]
+  /-- The attributes of the members of the definition being read (a class's
+      or an interface's fields and methods, a struct's fields, an enum's
+      values), not yet given out: where, the member's place and name, the
+      attribute (`Attributes`). -/
+  attrs : Array (Pos × String × String × SExpr) := #[]
+  /-- The `case` arms marked `@ignore_unreachable`, by their pattern's
+      position (Book of Verse tests, `Enum.versetest` 506-592). -/
+  ignoredArms : Array Pos := #[]
 
 abbrev PM := StateT PSt (Except String)
 
@@ -279,6 +287,55 @@ def fieldsFollow (stop : Nat) : PM Bool := do
   let n ← peekT 1
   return b.isSym ":" && n.bol && n.col > stop && !n.isEof
 
+/-- The place a definition is at, for its attributes (`Attributes`). -/
+def STop.attrPlace : STop → String
+  | .fn _ _ _ _ specs .. => if specs.any (·.startsWith "$constructor:") then "constructor" else "function"
+  | .const _ n _ _ v =>
+    if n.startsWith "$module:" then "module" else match v with
+    | .structDef .. => "struct"
+    | .enumDef .. => "enum"
+    | .typeAlias .. | .refineDef .. => "alias"
+    | .app _ (.ident _ "$scope") _ _ => "scope"
+    | _ => "data"
+  | .classDef _ _ _ _ _ _ isI .. => if isI then "interface" else "class"
+
+/-- The name an attribute record gives a definition (`attrPlace`). -/
+def STop.attrName : STop → String
+  | .fn _ n .. | .classDef _ n .. => n
+  | .const _ n .. => if n.startsWith "$module:" then (n.drop "$module:".length).toString else n
+
+/-- A definition with the specifier `sp` added to those of its name. -/
+def STop.addSpec (sp : String) : STop → STop
+  | .fn p n ps tps specs r b => .fn p n ps tps (specs ++ [sp]) r b
+  | .const p n specs t v => .const p n (specs ++ [sp]) t v
+  | .classDef p n ns tps specs ps i fs ms => .classDef p n (ns ++ [sp]) tps specs ps i fs ms
+
+/-- The record of attribute `e`, written at `p` on the definition `target`
+    at `place`, in the scope `pfx`: a constant `$attr:L_C` whose specifiers
+    are the place and the target, which `Attributes.apply` reads and removes. -/
+def attrTop (pfx : String) (p : Pos) (place target : String) (e : SExpr) : STop :=
+  .const p s!"{pfx}{attrPrefix}{p.line}_{p.col}{if p.file.isEmpty then "" else "_" ++ p.file}" [place, target] none e
+
+/-- `tops` with the attributes `attrs` given to the first definition from
+    index `start` on (past the markers of its qualifier and the defaults its
+    function types write): `@name` among the specifiers of its name, and
+    the records (`attrTop`) after it. -/
+def attachAttrs (tops : Array STop) (start : Nat) (attrs : List (Pos × SExpr)) (pfx : String) :
+    Except String (Array STop) := do
+  let isMarker : STop → Bool := fun
+    | .const _ n .. =>
+      let last := (n.splitOn "::").getLast?.getD n
+      last.startsWith "$qual:" || last.startsWith "$open:" || last.startsWith typeDefaultPrefix ||
+        last.startsWith attrPrefix
+    | _ => false
+  let some i := (List.range (tops.size - start)).map (· + start) |>.find? (fun i => !isMarker tops[i]!)
+    | let p := (attrs.head?.map (·.1)).getD {line := 0, col := 0}
+      throw s!"{p.show}: an attribute is followed by the definition it is on"
+  let d := tops[i]!
+  let d := attrs.foldl (fun d (_, e) => d.addSpec ("@" ++ e.attrHead)) d
+  let recs := attrs.map fun (p, e) => attrTop pfx p d.attrPlace d.attrName e
+  return (tops.set! i d) ++ recs.toArray
+
 mutual
 partial def parseType : PM STy := do
   let t ← parseTypeAtom
@@ -412,10 +469,66 @@ partial def parseFnSig : PM STy := do
   expectSym ":"
   return .fn ps.toList effs.toList (← parseType)
 
+/-- An attribute, at its `@` (Book of Verse ch. 12, "Annotations and
+    Metadata"; its tests, `Attributes.versetest`, `TimSyntax.versetest`): a
+    name, perhaps dotted (`@a.bb`), then its arguments `(…)` right after it,
+    or its fields `{…}` on its line (`@available {MinUploadedAtFNVersion :=
+    3800}`), or both (`@attr(a:=1){b:=1}`, kept as `$attrCall`). A space, a
+    new line or another attribute follows it: `@doc;`, `@doc:foo` and
+    `X:int=@doc()4` are errors. -/
+partial def parseAttr : PM SExpr := do
+  let a ← peekT
+  bump
+  let t ← peekT
+  let n0 ← match t.tok with
+    | .ident x => do bump; pure x
+    | _ => perr t s!"expected the name of an attribute after '@', found {t.tok.describe}"
+  let p := a.pos
+  let mut head : SExpr := .ident p n0
+  let mut name := n0
+  while (← peekT).isSym "." && !(← peekT).spaced do
+    bump
+    let m ← expectIdent
+    head := .member p head m
+    name := name ++ "." ++ m
+  let mut e := head
+  let o ← peekT
+  if o.isSym "(" && !o.spaced then
+    bump
+    e := .app p head (← parseArgs ")") false
+  let b ← peekT
+  if b.isSym "{" && !b.bol then
+    bump
+    let fs ← parseItems "}" true
+    e := match e with
+      | .app .. => .app p (.ident p "$attrCall") [e, .construct p name [] fs] false
+      | _ => .construct p name [] fs
+  let n ← peekT
+  if !(n.isSym "@" || n.spaced) then
+    perr n s!"an attribute is followed by a space, a new line or another attribute, not {n.tok.describe} (Book of Verse tests, Attributes.versetest)"
+  return e
+
+/-- The attributes from here on, each at its `@`, in order. -/
+partial def parseAttrs : PM (List (Pos × SExpr)) := do
+  let mut attrs := #[]
+  while (← peekT).isSym "@" do
+    let p := (← peekT).pos
+    attrs := attrs.push (p, ← parseAttr)
+  return attrs.toList
+
 /-- Lowest precedence: declarations, `set`, ranges. -/
 partial def parseExpr (stop : Nat) : PM SExpr := do
   let t ← peekT
   let t1 ← peekT 1
+  -- `@ignore_unreachable e` is `e`: openverse refuses no code it cannot
+  -- reach but a `case`'s arms (`parseCase`); other attributes on an
+  -- expression or a local definition, `$attributes`, are refused by
+  -- `Attributes.apply` (Book of Verse tests: 3604)
+  if t.isSym "@" then
+    let attrs ← parseAttrs
+    let e ← parseExpr stop
+    if attrs.all (fun | (_, .ident _ "ignore_unreachable") => true | _ => false) then return e
+    return .app t.pos (.ident t.pos "$attributes") (attrs.map (·.2) ++ [e]) false
   if t.isKw "var" then
     bump
     let n ← expectBinder
@@ -1019,12 +1132,26 @@ partial def parseCase (stop : Nat) : PM SExpr := do
   bump
   let scrut ← parseParenExpr o.pos
   let parseArm (c : Nat) : PM (Option SExpr × SExpr) := do
+    -- (`@ignore_unreachable` on an arm: it may be one never reached, Book
+    -- of Verse tests, `Enum.versetest` 506-592)
+    let a0 ← peekT
+    let mut ignored := false
+    if a0.isSym "@" then
+      for (q, attr) in ← parseAttrs do
+        match attr with
+        | .ident _ "ignore_unreachable" => ignored := true
+        | _ => throw s!"{q.show}: a case arm takes no attribute but @ignore_unreachable"
     let a ← peekT
     let pat ← if a.isKw "_" || (match a.tok with | .ident "_" => true | _ => false) then do
         bump; pure none
       else some <$> parseAdd 0
     expectSym "=>"
-    return (pat, ← parseValue c)
+    let v ← parseValue c
+    -- (marked by where `elabCase` reports an arm never reached)
+    if ignored then
+      let q := (pat.map (·.pos)).getD v.pos
+      modify fun st => { st with ignoredArms := st.ignoredArms.push q }
+    return (pat, v)
   let o ← peekT
   let mut arms := #[]
   if o.isSym ":" then
@@ -1055,8 +1182,16 @@ partial def parseCase (stop : Nat) : PM SExpr := do
   let _ := stop
   return .caseE t.pos scrut arms.toList
 
-/-- One struct field: `[var<specs>] Name<specs>:type [= default]`. -/
+/-- One struct field: `[var<specs>] Name<specs>:type [= default]`, after
+    its attributes, as a class's (`parseClassItem`). -/
 partial def parseField (c : Nat) : PM SField := do
+  let attrs ← parseAttrs
+  let f ← parseField0 c
+  if attrs.isEmpty then return f
+  modify fun st => { st with attrs := st.attrs ++ (attrs.map fun (p, e) => (p, "structField", f.name, e)).toArray }
+  return { f with specs := f.specs ++ attrs.map fun (_, e) => "@" ++ e.attrHead }
+
+partial def parseField0 (c : Nat) : PM SField := do
   let start ← peekT
   let isVar := (← peekT).isKw "var"
   if isVar then bump
@@ -1124,10 +1259,15 @@ partial def parseEnumBody (p : Pos) : PM SExpr := do
   -- (a value `(e:)v`, qualified with its enum, may take a reserved word's or
   -- a keyword's name, Book of Verse ch. 9: `resolveModules` checks `e`)
   let value : PM String := do
-    if let some (q, k) ← peekQual then
-      for _ in [0:k] do bump
-      return s!"({q}:){← expectQualifiedName}"
-    expectIdent
+    -- (its attributes: their records, `PSt.attrs`)
+    let attrs ← parseAttrs
+    let v ← (do
+      if let some (q, k) ← peekQual then
+        for _ in [0:k] do bump
+        return s!"({q}:){← expectQualifiedName}"
+      expectIdent)
+    modify fun st => { st with attrs := st.attrs ++ (attrs.map fun (p, e) => (p, "enumerator", v, e)).toArray }
+    return v
   if o.isSym ":" then
     bump
     let n ← peekT
@@ -1398,6 +1538,8 @@ def parseFnBody : PM SExpr := do
     is that parameter. -/
 partial def parseParamItem : PM (Pos × String × STy × Bool × Option SExpr × List (String × STy × List Nat)) := do
   let t ← peekT
+  if t.isSym "@" then
+    perr t "an attribute cannot be written on a parameter: attributes go on the definitions of a module, a class, an interface, a struct or an enum (Book of Verse tests, Function.versetest, deprecated.versetest: 3596)"
   -- `(local:)X:t`: a qualified parameter (Book of Verse ch. 16, "Local
   -- Qualifiers"), not a group
   if (← peekQual).isSome then
@@ -1593,7 +1735,7 @@ partial def parseCtorBody (stop : Nat) : PM (List SExpr) := do
 
 /-- One item of a class body at column `c`: a field `[var] Name:type [= e]`
     or a method `Name(params)<effects>:type = body`. -/
-partial def parseClassItem (c : Nat) : PM (Sum SField STop) := do
+partial def parseClassItem0 (c : Nat) : PM (Sum SField STop) := do
   let t ← peekT
   -- `block:` runs when an instance is constructed: the method `$block`
   if t.isKw "block" then
@@ -1641,6 +1783,23 @@ partial def parseClassItem (c : Nat) : PM (Sum SField STop) := do
   if ext.isSome then perr a "expected '=' before the extension method's body"
   -- no body: an abstract method
   return .inr (.fn t.pos name ps tps (pre ++ effs ++ ["$abstract"]) ret (.block t.pos []))
+
+/-- One item of a class body at column `c`, after its attributes, if any
+    (`parseClassItem0`): its attributes among the specifiers of its name,
+    `@name`, and their records (`PSt.attrs`, given out after the class). -/
+partial def parseClassItem (c : Nat) : PM (Sum SField STop) := do
+  let attrs ← parseAttrs
+  let item ← parseClassItem0 c
+  if attrs.isEmpty then return item
+  let specs := attrs.map fun (_, e) => "@" ++ e.attrHead
+  let (place, name, item) := match item with
+    | .inl f => (if f.isOverride then "field:override" else "field", f.name, Sum.inl { f with specs := f.specs ++ specs })
+    | .inr m => match m with
+      | .fn _ n _ _ mspecs .. =>
+        (if mspecs.contains "override" then "method:override" else "method", n, .inr (specs.foldl (fun (m : STop) sp => STop.addSpec sp m) m))
+      | _ => ("method", "", .inr m)
+  modify fun st => { st with attrs := st.attrs ++ (attrs.map fun (p, e) => (p, place, name, e)).toArray }
+  return item
 
 /-- `class` or `interface` (after the keyword): specifiers, the parents
     `(base, interface₁, …)`, then `:` + items or `{ items }`. -/
@@ -1751,26 +1910,54 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
     let ds := (← get).typeDefaults
     modify fun st => { st with typeDefaults := #[] }
     return ds.map fun (p, n, t, e) => .const p s!"{pfx}{typeDefaultPrefix}{n}" [] (some t) e
+  -- (after a definition, the records of its members' attributes, each
+  -- naming its member `owner.M`)
+  let memberAttrs (owner : String) : PM (Array STop) := do
+    let as := (← get).attrs
+    modify fun st => { st with attrs := #[] }
+    return as.map fun (p, place, m, e) => attrTop pfx p place s!"{owner}.{m}" e
   let saved := (← get).topCol
   modify fun st => { st with topCol := col }
   -- (definitions on one line are separated by `;` or `,`: `X:int=0, Y:int=0`,
   -- Book of Verse ch. 1, "Semicolons vs Commas")
   let mut afterSep := false
+  -- (the attributes of the definition read last, from where it starts in
+  -- `tops`, and its name)
+  let mut pending : List (Pos × SExpr) := []
+  let mut pendingFrom := 0
+  let mut owner := ""
   repeat
-    tops := tops ++ (← typeDefaults)
-    let t ← peekT
+    if !pending.isEmpty then
+      tops ← ofExcept (attachAttrs tops pendingFrom pending pfx)
+      pending := []
+    tops := tops ++ (← memberAttrs owner) ++ (← typeDefaults)
+    let t0 ← peekT
     if braced then
-      if t.isEof then perr t "expected '}' to end the module"
-      if t.isSym "}" then bump; break
-      if t.isSym ";" || t.isSym "," then bump; continue
+      if t0.isEof then perr t0 "expected '}' to end the module"
+      if t0.isSym "}" then bump; break
+      if t0.isSym ";" || t0.isSym "," then bump; continue
     else
-      if t.isEof then break
-      if col > 0 && t.bol && t.col < col then break
-      if !t.bol && (t.isSym ";" || t.isSym ",") then bump; afterSep := true; continue
-      if (!t.bol && !afterSep) || (t.bol && t.col != col) then
-        perr t (if col == 0 then "a top-level definition must start at column 0"
+      if t0.isEof then break
+      if col > 0 && t0.bol && t0.col < col then break
+      if !t0.bol && (t0.isSym ";" || t0.isSym ",") then bump; afterSep := true; continue
+      if (!t0.bol && !afterSep) || (t0.bol && t0.col != col) then
+        perr t0 (if col == 0 then "a top-level definition must start at column 0"
           else "a definition in a module must start at the module body's column")
       afterSep := false
+    -- `@name` before a definition: its attributes (Book of Verse ch. 12,
+    -- "Annotations and Metadata"), on its line or on lines of their own at
+    -- the definition's column
+    if t0.isSym "@" then
+      pending ← parseAttrs
+      pendingFrom := tops.size
+      let d ← peekT
+      if d.isEof || (braced && d.isSym "}") || d.isSym ";" || d.isSym "," then
+        perr d "an attribute is followed by the definition it is on"
+      if !braced && d.bol && d.col != col then
+        perr d (if col == 0 then "a top-level definition must start at column 0"
+          else "a definition in a module must start at the module body's column")
+      if d.isKw "using" then perr d "an attribute goes on a definition, not on using"
+    let t ← peekT
     if t.isKw "using" || (t.isKw "import" && (← peekT 1).isSym "{") then
       -- `using{"relative_path"}` imports a file or directory (#27); other
       -- `using { /Verse.org/… }` module paths are accepted and ignored
@@ -1820,6 +2007,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
       | some _ => do pure (extensionName (← expectIdent))
       | none => expectIdent
     let name := pfx ++ name0
+    owner := name
     if let some q := qual? then tops := tops.push (marker t.pos s!"$qual:{name}|{q}")
     let pre ← parseSpecs
     let n ← peekT
@@ -1960,7 +2148,8 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
       if a.isSym "=" || a.isSym ":=" then bump else perr a "expected '=' in a constant definition"
       tops := tops.push (.const t.pos name pre (some ty) (← parseFnBody))
     else perr n s!"expected '(', ':' or ':=' after '{name}'"
-  tops := tops ++ (← typeDefaults)
+  if !pending.isEmpty then tops ← ofExcept (attachAttrs tops pendingFrom pending pfx)
+  tops := tops ++ (← memberAttrs owner) ++ (← typeDefaults)
   modify fun st => { st with topCol := saved }
   return tops.toList
 
@@ -2029,19 +2218,28 @@ def withRatMarker (toks : Array Token) (tops : List STop) : List STop :=
   if toks.any (·.identName? == some "ReplaceAll") then tops ++ [.const p replaceAllMarker [] none (.block p [])]
   else tops
 
+/-- The definitions of a source file, and the marker of its `case` arms
+    marked `@ignore_unreachable` (`ignoredArmsMarker`), if any. -/
+def withIgnoredArms (tops : List STop) (st : PSt) : List STop :=
+  if st.ignoredArms.isEmpty then tops else
+  let p : Pos := { line := 0, col := 0 }
+  tops ++ [.const p ignoredArmsMarker [] none (.block p (st.ignoredArms.toList.map (.ident · "")))]
+
 /-- Parse a source file: its definitions, and the files it imports. `file`
     names it in error positions (empty for the main file). -/
+
 def parseProgramImports (src : String) (file : String := "") :
     Except String (List STop × List (Pos × String)) := do
   let toks ← lexSource src
   let toks := if file.isEmpty then toks else toks.map fun t => { t with file }
   let (tops, st) ← parseTops.run { toks }
-  return (withRatMarker toks tops, st.imports.toList)
+  return (withRatMarker toks (withIgnoredArms tops st), st.imports.toList)
 
 /-- Parse a whole Verse source file. -/
 def parseProgram (src : String) : Except String (List STop) := do
   let toks ← lexSource src
-  return withRatMarker toks (← parseTops.run' { toks })
+  let (tops, st) ← parseTops.run { toks }
+  return withRatMarker toks (withIgnoredArms tops st)
 
 /-- Parse the source of built-in helpers, renaming the given names to
     `$name`, which no program can write or define. -/

@@ -41,6 +41,8 @@ structure Admitted where
   constructionFx : Std.HashMap String (List String)
   /-- What the elaboration needs to judge a use of a class's member (`Access.Env`). -/
   access : Access.Env := {}
+  /-- The `case` arms marked `@ignore_unreachable` (`ignoredArmsMarker`). -/
+  ignoredArms : List Pos := []
 
 /-- Each name is defined once in its scope, the top level or a module: only
     functions of one scope share a name, as its overloads. A class, an
@@ -348,8 +350,11 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   SourceProfile.check opts.profile allTops0r opts.entry
   -- rationals (#116): the helpers, for a program that may use them
   let isRatMarker : STop → Bool := fun
-    | .const _ n _ _ _ => n == ratMarker || n == replaceAllMarker
+    | .const _ n _ _ _ => n == ratMarker || n == replaceAllMarker || n == ignoredArmsMarker
     | _ => false
+  let ignoredArms := allTops0r.flatMap fun
+    | .const _ n _ _ (.block _ es) => if n == ignoredArmsMarker then es.map (·.pos) else []
+    | _ => []
   let usesReplaceAll := allTops0r.any (fun | .const _ n _ _ _ => n == replaceAllMarker | _ => false) || opts.entry.isSome
   let usesRat := allTops0r.any isRatMarker || opts.entry.isSome
   -- (a type of the program's own cannot take a built-in type's name)
@@ -440,7 +445,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
       budgets.insert n (EffectPolicy.constructionFx specs)
     | _ => budgets) ({} : Std.HashMap String (List String))
   return { resolved, rawEntry, typeDefaults, helpers, intrinsicCalls, concurrencyNames, usesConc, constructionFx, access,
-           scopePairs }
+           scopePairs, ignoredArms }
 
 /-- A program's source as elaborated (`inlineSource`). -/
 structure Source where
@@ -455,6 +460,8 @@ structure Source where
   constructionFx : Std.HashMap String (List String)
   /-- `Admitted.access`. -/
   access : Access.Env := {}
+  /-- `Admitted.ignoredArms`. -/
+  ignoredArms : List Pos := []
 
   /-- The uses of methods whose family the receiver's class picks (#283). -/
   familySites : List (Pos × String)
@@ -563,7 +570,8 @@ def inlineSource (allTops0r : List STop) (requests : Requests) (admitted : Admit
       (resolved.drop (resolved.length - admitted.rawEntry.length)) (requests.fns.map fun (n, t) => (n, t.toSTy))
       requests.methods written))
   let entryTop := resolved.drop (resolved.length - admitted.rawEntry.length)
-  return { tops := allTops00, entry := entryTop, constructionFx, access := admitted.access, familySites,
+  return { tops := allTops00, entry := entryTop, constructionFx, access := admitted.access,
+           ignoredArms := admitted.ignoredArms, familySites,
            overloadSites, nestedSites, fieldSites }
 
 

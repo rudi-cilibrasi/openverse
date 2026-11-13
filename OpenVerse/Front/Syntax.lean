@@ -358,9 +358,37 @@ inductive STop where
     elaborator checks it at `t` and drops it (#503). -/
 def typeDefaultPrefix : String := "$typeDefault:"
 
-/-- Whether a definition holds a default a function type writes. -/
+/-- The name an attribute's expression starts with: `deprecated` of
+    `deprecated{…}`, `a.bb` of `@a.bb`. -/
+partial def SExpr.attrHead : SExpr → String
+  | .ident _ n => n
+  | .member _ x m => x.attrHead ++ "." ++ m
+  | .app _ (.ident _ "$attrCall") (c :: _) _ => c.attrHead
+  | .app _ h _ _ => h.attrHead
+  | .construct _ n _ _ => n
+  | _ => ""
+
+/-- A marker of the `case` arms marked `@ignore_unreachable`: a constant
+    whose value is a block of one name at each arm's place (`TyEnv.ignoredArms`). -/
+def ignoredArmsMarker : String := "$uses:ignoredArms"
+
+/-- The name of the record of an attribute (Book of Verse ch. 12,
+    "Annotations and Metadata"), after the definition it is on: `$attr:L_C`,
+    whose specifiers are where it is and what, and whose value is the
+    attribute as written (`Attributes.apply` reads and removes it). -/
+def attrPrefix : String := "$attr:"
+
+/-- The name of a constant that holds an attribute's value, or a field's,
+    `$attrCheck:N@a` for the attribute `@a`, of its type: the elaborator checks it there,
+    as it does a function type's default, and drops it (`Attributes`). -/
+def attrCheckPrefix : String := "$attrCheck:"
+
+/-- Whether a definition holds a default a function type writes, or an
+    attribute's value: checked at its type and dropped. -/
 def STop.isTypeDefault : STop → Bool
-  | .const _ n .. => ((n.splitOn "::").getLast?.getD n).startsWith typeDefaultPrefix
+  | .const _ n .. =>
+    let last := (n.splitOn "::").getLast?.getD n
+    last.startsWith typeDefaultPrefix || last.startsWith attrCheckPrefix
   | _ => false
 
 /-- Names no definition may take, at any scope (a module's, a class's, a

@@ -2515,8 +2515,10 @@ partial def elabCase (ctx : Ctx) (p : Pos) (scrut : SExpr) (arms : List (Option 
     let mut results : Array (Option Expr × R) := #[]
     for (pat, v) in arms do
       -- (an arm after `_`, or with a pattern an earlier one has, is never
-      -- reached: Book of Verse ch. 9, "Unreachable Case Detection")
-      if results.any (·.1.isNone) then
+      -- reached: Book of Verse ch. 9, "Unreachable Case Detection"; unless
+      -- it is marked `@ignore_unreachable`, its tests, `Enum.versetest`)
+      let ignored := ctx.types.ignoredArms.contains ((pat.map (·.pos)).getD v.pos)
+      if results.any (·.1.isNone) && !ignored then
         eerr ((pat.map (·.pos)).getD v.pos) "this case arm is never reached: it comes after _, which matches everything"
       let rv ← elabE ctx v exp
       match pat with
@@ -2525,7 +2527,7 @@ partial def elabCase (ctx : Ctx) (p : Pos) (scrut : SExpr) (arms : List (Option 
         let rp ← elabE ctx pe (some rs.ty)
         if rp.ty != rs.ty then eerr pe.pos s!"pattern of type {rp.ty.show} for a value of type {rs.ty.show}"
         if let .lit v := rp.e then
-          if results.any (fun | (some (.lit w), _) => reprStr w == reprStr v | _ => false) then
+          if !ignored && results.any (fun | (some (.lit w), _) => reprStr w == reprStr v | _ => false) then
             eerr pe.pos "this case arm is never reached: an earlier arm has the same pattern"
         -- (a pattern is tested in a condition, #156)
         if Suspend.hasSusp (fun f => ctx.sigs.any fun s => s.idx == f && s.suspends) rp.e then
