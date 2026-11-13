@@ -17,7 +17,7 @@
     the core theorems) before anyone runs it.
 -/
 import OpenVerse.Front.Elab.Source
-import OpenVerse.Front.Elab.Signatures
+import OpenVerse.Front.Elab.Functions
 import OpenVerse.Front.SignalAdmission
 import OpenVerse.Front.InitializerConvergence
 
@@ -1125,59 +1125,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   checkSignatures env { tops, generics, sigs, gsigs, prog := sigProg } cdefs
     { map := fullMap, overrides := fieldOverrides, defaultClashes }
     { tops := allTops, stubs, abstracts, overridePairs, implChecks }
-  -- what each heap effect is, for messages
-  let fxWhat : String → String
-    | "reads" => "reads a var field"
-    | "writes" => "sets a var field"
-    | "allocates" => "constructs an object that has a var field or is <unique>"
-    | k => k
-  let fxCheck (name : String) (allowed : List String) (st : ESt) : Except String Unit := do
-    -- writes first, then reads, then allocations
-    let order := ["writes", "reads", "allocates"]
-    for k in order do
-      for (k', kp, via) in st.fx do
-        if k' == k && !allowed.contains k then
-          let what := match via with
-            | some f => s!"{f}, which has the effect <{k}>"
-            | none => fxWhat k
-          let spec := if allowed.isEmpty then "<computes>" else String.intercalate "" (allowed.map (s!"<{·}>"))
-          let fix := if allowed.isEmpty then "remove <computes>" else s!"add <{k}> or <transacts>"
-          throw s!"{kp.show}: {name} {what}, which its effects ({spec}) do not allow: {fix}"
-  -- A mutable or unique instance needs allocation even when no source
-  -- expression uses the type. Inherited mutable fields/identity count too.
-  for cd in cdefs do
-    if let some allowed := env.constructionFx[cd.name]? then
-      if env.isUnique cd.name || (env.fields cd.name).any (fun (f, _, _) => env.isVarField cd.name f) then
-        fxCheck s!"construction of {cd.name}" allowed
-          { fx := [("allocates", cd.pos, none)] }
-  let mut fieldNeeds : Requests := {}
-  let mut initializerBodies : List (String × String × Pos × Expr) := []
-  -- check every field default once, with its struct's type parameters opaque
-  -- (a default is elaborated again, at its field's type, at each construction
-  -- that omits the field)
-  for t in allTops do
-    match t with
-    | .const _ n none (.structDef _ _ _ _) =>
-      let nps := ((env.sparams.lookup n).getD []).map fun (v, c) => Ty.param v c
-      let senv := { env with
-        tvars := (env.sparams.lookup n).getD [] |>.map fun (v, c) => (v, Ty.param v c)
-        boundFacts := (env.sbounds.lookup n).getD [] }
-      let allowed := env.constructionFx[n]?.getD heapFx
-      let ctx : Ctx := { sigs := allSigs, sigProg, types := senv, canFail := true,
-                          fnFx := allowed, inDefaultCheck := true }
-      for (f, ft, d) in (env.structs.lookup n).getD [] do
-        if let some d := d then
-          -- (an inherited default sees its home class's type parameters, #39)
-          let home := (env.defaultHome.lookup (n, f)).getD n
-          let hσ := (((env.sparams.lookup home).getD []).map (·.1)).zip (env.argsAt n nps home)
-          let ctx := { ctx with defaults := [(n, f)], types := { senv with tvars := hσ } }
-          match (do coerce d.pos (← elabE ctx d (some ft)) ft : EM Expr).run { env } with
-          | .ok (body, st) =>
-            fxCheck s!"default of field '{f}' of {n}" allowed st
-            initializerBodies := initializerBodies ++ [(n, f, d.pos, body)]
-            fieldNeeds := fieldNeeds.merge { methods := st.needs.methods, loops := st.needs.loops, subtypes := st.needs.subtypes }
-          | .error msg => throw s!"{msg} (in the default of field '{f}' of {n})"
-    | _ => pure ()
+  let defaults ← elabFieldDefaults env { tops, generics, sigs, gsigs, prog := sigProg } allTops cdefs
   -- a function: its body under the type environment `env` (which binds the
   -- type parameters `tps` of a generic function to themselves), after the
   -- initialisation of every non-parameter slot (OpenVerse.Core.Typing); its
@@ -1322,7 +1270,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- their first success consume, #246)
   let loopFirst := elaborated.toList.flatMap (·.loopFirst)
   let failCalls := elaborated.foldl (fun acc f => acc ++ f.failCalls) #[]
-  let mut needs := elaborated.foldl (fun acc f => acc.merge f.needs) fieldNeeds
+  let mut needs := elaborated.foldl (fun acc f => acc.merge f.needs) defaults.needs
   -- (#283) the eager groups, the families of the uses of methods whose
   -- receivers' classes this one found, and the overloads of the calls whose
   -- arguments' types it found; those it did not reach, of no family or
@@ -1436,7 +1384,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       if cd.methods.any (fun | .fn _ "$block" .. => true | _ => false) then
         some (cd.name ++ ".$block") else none
     let mut verified : Std.HashSet Nat := {}
-    for (owner, field, pos, body) in initializerBodies do
+    for (owner, field, pos, body) in defaults.bodies do
       match (InitializerConvergence.checkExpr fns ordinary (construction ++ admitted.intrinsicCalls) [] body).run verified with
       | .ok (_, checked) => verified := checked
       | .error reason =>
