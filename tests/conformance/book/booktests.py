@@ -389,7 +389,8 @@ TEST_MODULES = ["CoroUtils", "TestUtils", "ProfUtils", "FunctionUtils", "FloatCo
 TEST_NAMES = {
     "FloatConstants": ["DoubleMax", "PosInfty", "SmallestNormal", "HalfSmallestNormal",
                        "LargestSubnormal", "SmallestSubnormal", "SmallestNormalTimesOneHalf",
-                       "JustUnderHalfSmallestNormal"],
+                       "JustUnderHalfSmallestNormal", "Pow2_52", "Pow2_64", "Pow2_Minus25",
+                       "Pow2_Minus28"],
     "CoroUtils": ["LogEvent", "GetEventLogString", "WaitTicks", "Tick", "GetNumActiveCoroutines",
                   "SuppressNextReset", "ResetThenLogEvent", "SignalTransacts"],
     "TestUtils": ["InvokeTransacts", "AreClassesEqual", "BitcastFloatToInt"],

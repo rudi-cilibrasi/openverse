@@ -206,6 +206,12 @@ def peekQual : PM (Option (String × Nat)) := do
   if (← peekT k).isSym ":" && (← peekT (k + 1)).isSym ")" then return some (q, k + 2)
   return none
 
+/-- A block's statements, each destructuring's declarations spliced in
+    (`parseStmt`). -/
+def spliceStmts (es : List SExpr) : List SExpr := es.flatMap fun
+  | .app _ (.ident _ "$destructure") ds false => ds
+  | e => [e]
+
 /-- Whether a construction's fields start here: a `{` on this line, or a
     `:` that ends its line before an indented block (an archetype block,
     Book of Verse tests: `X := class1:` and `Property1 := 0` indented). -/
@@ -624,6 +630,49 @@ partial def parseParenItems : PM (List SExpr × Bool) := do
   if commas && semis then perr (← peekT) "cannot mix ',' and ';' separators"
   return (items.toList, commas)
 
+/-- A parenthesized expression after its `(`, at `p`: one item, a tuple
+    (items separated by `,`) or a sequence (by `;` or new lines). -/
+partial def parseParenExpr (p : Pos) : PM SExpr := do
+  let (items, commas) ← parseParenItems
+  match items with
+  | [] => return .tuple p []
+  | [e] => return e
+  | es => return if commas then .tuple p es else .block p es
+
+/-- A statement of a block: an expression, or a tuple's destructuring
+    `(X:t, _, Z:u) = e` (Book of Verse tests, Tuple.versetest), when at
+    least one element is named: `e` in a fresh name, then each named
+    element bound in order, `_` skipping one. Its declarations are spliced
+    into the block (`spliceStmts`), so the names are the block's. -/
+partial def parseStmt (c : Nat) : PM SExpr := do
+  let t ← peekT
+  if t.isSym "(" then
+    let saved ← get
+    let pattern? ← (do
+        bump
+        let mut items : Array (Option (String × STy)) := #[]
+        repeat
+          if (← peekT).identName? == some "_" then bump; items := items.push none
+          else
+            let x ← expectIdent
+            expectSym ":"
+            items := items.push (some (x, ← parseType))
+          if (← peekT).isSym "," then bump else break
+        expectSym ")"
+        let a ← peekT
+        if !(a.isSym "=" || a.isSym ":=") || items.all (·.isNone) then throw "not a destructuring"
+        bump
+        return some items) <|> pure none
+    if let some items := pattern? then
+      let tuple := s!"$tuple{t.line}_{t.col}"
+      let e ← parseValue c
+      let p := t.pos
+      let names := items.toList.zipIdx.filterMap fun (it, i) => it.map fun (x, ty) =>
+        SExpr.decl p x (some ty) false (.app p (.ident p tuple) [.int p i] false)
+      return .app p (.ident p "$destructure") (.decl p tuple none false e :: names) false
+    set saved
+  parseExpr c
+
 /-- An indented block whose items start at column `c`, each read by `item`. -/
 partial def parseIndentedWith (item : Nat → PM SExpr) (c : Nat) : PM (List SExpr) := do
   withBlock (← peekT) do
@@ -642,27 +691,27 @@ partial def parseIndentedWith (item : Nat → PM SExpr) (c : Nat) : PM (List SEx
     return stmts.toList
 
 /-- An indented block whose statements start at column `c`. -/
-partial def parseIndented (c : Nat) : PM (List SExpr) := parseIndentedWith parseExpr c
+partial def parseIndented (c : Nat) : PM (List SExpr) := spliceStmts <$> parseIndentedWith parseStmt c
 
 /-- A braced block after its `{`, up to the `}` (consumed). -/
 partial def parseBraced (p : Pos) : PM SExpr := do
   if (← peekT).isSym "}" then bump; return .block p []
   let c := (← peekT).col
   let stmts ← withBlock (← peekT) do
-    let mut stmts := #[← parseExpr c]
+    let mut stmts := #[← parseStmt c]
     repeat
       let t ← peekT
       checkIndent t
       if t.isSym ";" || t.isSym "," then
         bump
         -- (`{a; b;}`: a `;` may end the block)
-        if !(t.isSym ";" && (← peekT).isSym "}") then stmts := stmts.push (← parseExpr c)
+        if !(t.isSym ";" && (← peekT).isSym "}") then stmts := stmts.push (← parseStmt c)
       else if t.isSym "}" then break
-      else if t.bol && !t.isEof then stmts := stmts.push (← parseExpr c)
+      else if t.bol && !t.isEof then stmts := stmts.push (← parseStmt c)
       else perr t s!"expected ';', a new line or '}', found {t.tok.describe}"
     return stmts
   bump
-  return .block p stmts.toList
+  return .block p (spliceStmts stmts.toList)
 
 /-- Items after a `{`, up to the `}` (consumed), separated by `;`, `,` or
     new lines: the clauses of `if{…}`, `for{…}`, `first{…}` and `assert{…}`. -/
@@ -864,8 +913,10 @@ partial def parseCase (stop : Nat) : PM SExpr := do
   let t ← peekT
   bump
   -- (the value in parentheses, perhaps a sequence: `case(Bar; Baz)`)
-  if !(← peekT).isSym "(" then perr (← peekT) s!"expected '(', found {(← peekT).tok.describe}"
-  let scrut ← parsePrimary 0
+  let o ← peekT
+  if !o.isSym "(" then perr o s!"expected '(', found {o.tok.describe}"
+  bump
+  let scrut ← parseParenExpr o.pos
   let parseArm (c : Nat) : PM (Option SExpr × SExpr) := do
     let a ← peekT
     let pat ← if a.isKw "_" || (match a.tok with | .ident "_" => true | _ => false) then do
@@ -1056,12 +1107,22 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
       if ← fieldsFollow stop then
         return .construct t.pos s!"{q}.{m}" [] (← parseFields)
       return .member t.pos (.ident t.pos "Self") s!"({q}:){m}"
+    -- `(t(int)){…}`: a construction of a parenthesized type (Book of Verse
+    -- tests, ParametricTypes.versetest), as `t(int){…}` is
+    let saved ← get
+    let made? ← (do
+        bump
+        let ty ← parseType
+        expectSym ")"
+        if !(← fieldsFollow stop) then throw "not a construction"
+        match ty with
+        | .name n => return some (n, ([] : List STy))
+        | .app n ts => return some (n, ts)
+        | _ => throw "not a construction") <|> pure none
+    if let some (n, ts) := made? then return .construct t.pos n ts (← parseFields)
+    set saved
     bump
-    let (items, commas) ← parseParenItems
-    match items with
-    | [] => return .tuple t.pos []
-    | [e] => return e
-    | es => return if commas then .tuple t.pos es else .block t.pos es
+    parseParenExpr t.pos
   | .sym "{" => bump; parseBraced t.pos
   | .ident "if" => parseIf stop
   | .ident "for" => parseFor stop
@@ -1100,12 +1161,14 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
     else
       bump; return .ident t.pos (t.identName?.getD "sync")
   | .ident "let" =>
-    if (← peekT 1).isSym "(" then
-      -- `let(defs){body}`: the definitions are visible in the body only, and
-      -- the value is the body's
+    let n1 ← peekT 1
+    if n1.isSym "(" || n1.isSym "{" then
+      -- `let(defs){body}`, and `let{defs} do body` (Tim Sweeney's tests):
+      -- the definitions are visible in the body only, and the value is the
+      -- body's
       bump; bump
-      let (defs, _) ← parseParenItems
-      let body ← parseBody stop
+      let defs ← if n1.isSym "(" then (·.1) <$> parseParenItems else parseBracedItems parseExpr
+      let body ← if n1.isSym "(" then parseBody stop else do expectKw "do"; parseBranch stop
       return .block t.pos (defs ++ [.block t.pos [body]])
     else
       bump; return .ident t.pos "let"

@@ -3,6 +3,7 @@
 import OpenVerse.Front.Elab.Lowering
 import OpenVerse.Front.InitializerConvergence
 import OpenVerse.Front.Aliases
+import OpenVerse.Front.BuiltinValues
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -228,6 +229,9 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   -- type aliases: each written out where it is used, so that nothing after
   -- this knows aliases exist
   let resolved ← Aliases.expand resolved
+  -- (the built-ins it names as values, as definitions of their own: after
+  -- the aliases, whose names are no values' and bind nothing)
+  let resolved := BuiltinValues.wrappers resolved ++ resolved
   let (typeDefaults, resolved) := resolved.partition (·.isTypeDefault)
   checkConstantCycles resolved
   let resolved := if opts.extendedDefaults then resolved

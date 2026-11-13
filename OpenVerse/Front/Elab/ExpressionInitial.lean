@@ -398,6 +398,10 @@ partial def elabExprInitialWith
               eerr p s!"the path {n} as a value is not supported: openverse has no module values (a path in using\{…} is accepted and ignored)"
             if n.front.isDigit then
               eerr p s!"the float literal {n} is not supported: openverse's floats are 64-bit (write f64 or no suffix)"
+            -- (a built-in of one signature named as a value is a function of
+            -- the program's, `BuiltinValues`; another is not)
+            if builtins.contains n || softBuiltins.contains n then
+              eerr p s!"the built-in {n} cannot be used as a value: it is overloaded, generic or a name programs cannot define; define a function that calls it"
             eerr p s!"unknown identifier '{Choice.shownName n}'"
   -- a constructor's `block:` (#11): it cannot fail, as a class's cannot
   | _ => next ctx se exp
