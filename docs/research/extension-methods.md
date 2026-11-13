@@ -146,44 +146,67 @@ openverse already has functions with overloading by parameter types (#74,
 qualification, modules that resolve every name before elaboration, and
 built-in methods on types that are no classes (`.Length`, the array
 methods, the conversions of chars). The simplest reading that is true to
-the rules above:
+the rules above, stated before it was built and built as stated:
 
-> An extension method `(R:t).M(…)` is the function `.M(R:t, …)`: an
+> An extension method `(R:t).M(…)` is the function `$ext:M(R:t, …)`: an
 > ordinary function whose first parameter is the receiver, under a name no
 > program can write. A call `X.M(…)` whose name an extension method in
-> scope has is the call `.M(X, …)`, unless `X`'s type has a member `M` of
-> its own.
+> scope has is the call `$ext:M(X, …)`, unless `X`'s type has a member `M`
+> of its own that the call fits.
+
+(The name was first `.M`; a function whose name has a `.` is a method's,
+`c.M`, in the elaborator, so `$ext:`, the prefix of the compiler's names,
+is its mark. Messages show `M`.)
 
 **What is reused.** Everything a function has: overloads, told apart by the
 receiver's type and the parameters', and the check that a call could not
 fit two; generic receivers and parameters (a `where` inside the receiver's
 parentheses joins the function's type parameters); named parameters and
 defaults; effects, `<decides>` and the `[]` it needs; a tuple argument
-spread over the parameters after the receiver, as a method's arguments are;
-bodies with several values, which the choice inliner takes as it takes any
-function's; `spawn`. The receiver is evaluated before the arguments, as a
-method's receiver is.
+spread over the parameters after the receiver, as a method's arguments are
+(`Sig.hasReceiver`); bodies with several values, which the choice inliner
+takes as it takes any function's; `spawn` and `<suspends>`. The receiver is
+evaluated once, before the arguments, as a method's receiver is.
 
-**Scope** is the modules' (`Front/Modules.lean`): a method call's name is
-looked up as `.M`, from the call's scope outward and among the modules its
-scope opens, as a function's name is; a call that finds one becomes the
-function call there, before anything else sees it. An extension method a
-call does not see leaves it a member call, which the receiver's type then
-refuses as it does today (`int has no method 'M'`). In a class, the class's
-own extension methods are its methods (a closure over `Self`), so a call
-`X.M(…)` in the class's methods is `.M(X, …)` of `Self`.
+**What is added.** The definition head (`parseExtensionHead?`, the
+receiver group before the name); in `Front/Modules.lean`, the lookup of
+`$ext:M` for a call `X.M(…)` (`Resolver.ext`) and, in a method, for a bare
+call (`Resolver.selfExt`); in the elaborator, `elabExtensionCallWith` (the
+receiver once, the type's own member or the extension method, ambiguity),
+`Ctx.hasOwnMember` (the members a type has: fields, methods, the built-in
+methods, which now share one list, `arrayMethods`), the check that an
+extension method does not repeat a method of its class (`checkSignatures`)
+and the refusal of `X.M` as a value. Nothing is deleted; Verse Core, the
+proofs, OVBC and the runtime are unchanged, and a program without an
+extension method is elaborated exactly as before (the modules' pass takes
+its early way out for it).
+
+**Scope** is the modules': a method call's name is looked up as `$ext:M`,
+from the call's scope outward and among the modules its scope opens, as a
+function's name is; a call that finds one becomes the function call there,
+before the choice inliner and the function values see it. An extension
+method a call does not see leaves it a member call, which the receiver's
+type then refuses as before (`int has no method 'M'`). In a class, the
+class's own extension methods are its methods (a closure over `Self`), so
+a call `X.M(…)` in the class's methods is `$ext:M(X, …)` of `Self`.
 
 **The receiver's members.** At the function call the elaborator types the
-receiver once. If its type has a member `M` (a field, a method, a method of
-a class above, a built-in method of an array, a char or a number), the call
-is that member's, as written; if an overload of `.M` takes the receiver as
-well, the call is ambiguous and refused (3518). An extension method on a
-class or interface that has a method `M` of the same parameters is refused
-where it is defined (3532), as an overload a call could not tell apart.
+receiver once. If its type has no member `M`, the call is the function's.
+If it has one (a field, a method, an inherited one, a built-in method of an
+array, a char, a number or a task), the call is the one of the two it fits,
+each tried as overload resolution tries an overload; fitting both is
+ambiguous (3518). An extension method on a class or interface that has a
+method `M` a call could not tell apart from it is refused where it is
+defined (3532).
 
-**Refused.** `X.M` not called, when `.M` is an extension method's (ch. 6
+**A bare call in a method**, `M(…)` with an extension method `M` in scope,
+is the extension method's call with `Self` or the call as written,
+whichever it fits, and ambiguous when it fits both (`SOL-3515`).
+
+**Refused.** `X.M` not called, when `M` is an extension method's (ch. 6
 "must be called"); a receiver that is not one parameter, a named one or one
-with a default; `(R:t).M:t` (no extension fields); a reserved name.
+with a default; `(R:t).M:t` (no extension fields); a reserved name; a
+`<constructor>`.
 
 **Where the proposed reading does not hold.** "An ordinary function whose
 first parameter is the receiver, found by method-call syntax when the
@@ -197,10 +220,11 @@ generics, effects, parameters and bodies. It needs three corrections:
    argument tuple, two parameters, so `(X:int).M()` and `M(X:int)` never
    overlap).
 2. *Members and extension methods are candidates of one call.* "When the
-   receiver's type has no member" is right when only one fits; when an
-   extension method takes the receiver too, the call is ambiguous
-   (`ExtensionFields.versetest:106-124`), and a class's own method may not
-   be repeated (3532).
+   receiver's type has no member" is right when only one fits; when the
+   extension method fits as well, the call is ambiguous
+   (`ExtensionFields.versetest:106-124`), when only it fits it is called
+   (a method `Put(I:int)` and an extension `(B:box).Put(S:string)`), and a
+   class's own method may not be repeated (3532).
 3. *A bare call in a method.* The tests call an extension method of `Self`'s
    class without a receiver (`SOL-3515`), as a method is.
 
@@ -209,9 +233,67 @@ extension methods in the API reference, and the array methods are "the
 array extension `Last`" (ch. 16:578). In openverse they are compiled where
 they are called (`scalarMethod?`, `elabMethod`), with Verse Core's
 operations inline. Under this design they are members of their receiver
-types for the one lookup a call makes: a program's extension method of
-the same name on another type is called, and one that takes the same
-receiver makes the call ambiguous, as two extension methods would. Making
-them declarations of a prelude, `(Byte:char).ToCodeUnit()<computes>:int =
+types for the one lookup a call makes (`Ctx.hasOwnMember`): a program's
+extension method of the same name on another type is called, and one that
+takes the same receiver makes the call ambiguous, as two extension methods
+would. Making them declarations of a prelude, `(Byte:char).ToCodeUnit()<computes>:int =
 …`, would make each call a call of a function, so every program that uses
-one would change its bytecode: a follow-up of its own.
+one would change its bytecode, and the inline array methods would need
+generic functions with `<decides>` bodies of their own: a follow-up.
+
+## Readings openverse takes
+
+- **Innermost first.** As for a function's name, the first scope outward
+  that has `$ext:M` (its own definitions, then the modules it opens) gives
+  the call's overloads; two modules opened at one scope that both give it
+  make the call ambiguous. Verse may gather overloads from several scopes;
+  the Book says nothing of it.
+- **`tuple()` is `void`**, which overlaps every type in an overload, so
+  `(X:tuple()).Extension()` beside `(A:int).Extension()`
+  (`ExtensionFields.versetest:45-47`, valid there) is refused as two
+  overloads a call cannot tell apart, as `F(X:tuple())` beside `F(A:int)`
+  is ([Overloading](../LANGUAGE.md#overloading)).
+- **"The same signature"** (3532) is read as openverse's overload rule: a
+  call could fit both.
+- **A field counts as a member**: `X.F(…)` with a field `F` is the field's
+  call or index, unless only an extension method `F` fits.
+- **An extension method in a class** is a method of the class: it is called
+  in the class's methods, with `Self`, and is not visible outside.
+- **`<override>`**, on an extension method in a class, overrides as a
+  method's would; the Book does not describe it, and nothing tests it.
+
+## The Book's tests
+
+With the survey's harness ([After extension
+methods](book-test-conformance.md#after-extension-methods)): 37 cases more
+agree (33 the survey counted under extension methods, 4 under unnamed
+parameters), none fewer, and none became an accepted refusal or a
+different result; 11 expected errors that agreed by a parse error of the
+form now agree by the rule they test. The test runner's own extension
+methods (`TakeExtension`, `PlusTwo`, `TestParametricExtensionMethod`) are
+not translatable.
+
+## What is left
+
+- **Qualified extension methods**, `X.(Utils:)Shout()` and the path
+  qualifiers of `Bugs/SOL-8768-QualificationOfExtensionFields.versetest`
+  (`(InPlayer:player).(/Verse.org/VerseTests/MyModule:)DoSomething`): the
+  qualified names' work, which would let `(M:)` select `M::$ext:F`.
+- **`tuple()` as a type of its own**, apart from `void`: an owner decision
+  (3 cases).
+- **A receiver typed by its context**: `map{}.RemoveKey[0]` with
+  `(Input:[int]u where u:type)`, where Verse's empty map has a type of its
+  own (1 case; empty containers).
+- **Several values and a member of one name.** The choice inliner takes a
+  call `$ext:M(X, …)` of an extension method with several values before
+  the elaborator sees `X`'s type, so `X`'s own member `M` is not considered
+  there: `c{}.Vals()` is refused ("expected int, found c") when `c` has a
+  method `Vals()` and an extension method `(I:int).Vals()` has several
+  values, and taken by a generic one, `(X:t where t:type).Vals()`, where
+  Verse would call it ambiguous. A method with several values, `Vals()`,
+  is not inlined either when an extension method `Vals` is in scope (the
+  call is refused). Each needs the elaboration's answer before the
+  inliner, a request of a round of its own; no test has either.
+- **Messages** do not say that an extension method exists but is not
+  visible (`int has no method 'Ext'`), nor name the receiver when its type
+  is the one an extension method's overloads do not take.
