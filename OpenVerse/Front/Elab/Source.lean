@@ -34,6 +34,25 @@ structure Admitted where
       (`EffectPolicy.constructionFx`), by its name. -/
   constructionFx : Std.HashMap String (List String)
 
+/-- Each name is defined once in its scope, the top level or a module: only
+    functions of one scope share a name, as its overloads. A class, an
+    interface, a struct, an enum, a constant and a function of one name are
+    two definitions of it (two modules of one name, and a module and a
+    definition, are `resolveModules`' to refuse). -/
+def checkDefinedOnce (tops : List STop) : Except String Unit := do
+  -- (each qualified name seen, and whether only functions have it so far)
+  let mut seen : Std.HashMap String Bool := {}
+  for t in tops do
+    let (p, n, isFn) := match t with
+      | .fn p n .. => (p, n, true)
+      | .const p n .. | .classDef p n .. => (p, n, false)
+    -- (not the parser's markers, `$module:…`, nor the compiler's names)
+    if (qualParts n).any (·.startsWith "$") then continue
+    if let some onlyFns := seen[n]? then
+      if !(isFn && onlyFns) then
+        throw s!"{p.show}: '{".".intercalate (qualParts n)}' is defined twice (only functions can be overloaded)"
+    seen := seen.insert n isFn
+
 /-- No definition takes a reserved name (`reservedNames`), at any scope. -/
 def checkReservedNames (tops : List STop) : Except String Unit := do
   for t in tops do
@@ -60,7 +79,8 @@ def checkReturns (tops : List STop) : Except String Unit := do
 /-- Source admission and the prelude, the first phase of `elabProgramCore`:
     the source and the entry expression are admitted by the effect policy and
     the source profile; the program's own types do not take built-in names,
-    no definition takes a reserved one (`checkReservedNames`), and its
+    no definition takes a reserved one (`checkReservedNames`), each name is
+    defined once in its scope (`checkDefinedOnce`), and its
     constants and field defaults have no `return` (`checkReturns`);
     modules are resolved (#112); and the helpers the program needs are added,
     those the source names alike kept apart from them (#210). -/
@@ -80,6 +100,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
       if ("char32" :: typeNames).contains n then throw s!"{p.show}: {n} is a built-in type"
     | _ => pure ()
   checkReservedNames allTops0r
+  checkDefinedOnce allTops0r
   checkReturns allTops0r
   let helpers ← if usesRat then ratTops else pure []
   let helpers := helpers ++ (← if usesReplaceAll then replaceAllTops else pure [])
