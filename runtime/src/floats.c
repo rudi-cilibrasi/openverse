@@ -3,11 +3,9 @@
  *
  * A float value holds the bits of a canonical IEEE double: one NaN, and +0
  * for -0 (vx_fcanon).  The conversions to int (vx_ftoint) and the decimal
- * rendering (vx_fmt) work from the bits; the rendering is the shortest
- * decimal that reads back as the double (the closest of the shortest), in
- * Python's repr layout.  Lean computes the same thing exactly with integers;
- * here the digits come from printf's correctly rounded "%.*e" and are
- * checked with strtod's correctly rounded reading.
+ * rendering (vx_fmt) work from the bits; the rendering is ToString's fixed
+ * point with six digits after the point, printf's "%.6f".  Lean computes the
+ * same thing exactly with integers.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -93,95 +91,22 @@ int vx_ftoint(int mode, uint64_t b, int64_t *out)
     return VX_OK;
 }
 
-/* The digits (no trailing zeros) and the decimal point position of a
-   positive finite double: d = 0.digits * 10^decpt. */
-static void shortest(double d, char *digits, int *decpt)
-{
-    char buf[40];
-    int p;
-    for (p = 1; p <= 17; p++) {
-        uint64_t D = 0;
-        int x = 0, nd = 0, q;
-        const char *s;
-        snprintf(buf, sizeof buf, "%.*e", p - 1, d);
-        /* the digits D and the exponent x of "d.ddde±x" */
-        for (s = buf; *s != 'e'; s++)
-            if (*s >= '0' && *s <= '9') { D = D * 10 + (uint64_t)(*s - '0'); nd++; }
-        x = atoi(s + 1);
-        q = x - nd + 1;
-        if (strtod(buf, NULL) != d) {
-            /* the neighbour on the other side of d */
-            uint64_t D2 = strtod(buf, NULL) < d ? D + 1 : D - 1;
-            char nb[40];
-            if (D2 == 0)
-                continue;
-            snprintf(nb, sizeof nb, "%llue%d", (unsigned long long)D2, q);
-            if (strtod(nb, NULL) != d)
-                continue;
-            D = D2;
-        }
-        /* strip the trailing zeros */
-        while (D != 0 && D % 10 == 0) { D /= 10; q++; }
-        snprintf(digits, 24, "%llu", (unsigned long long)D);
-        *decpt = (int)strlen(digits) + q;
-        return;
-    }
-    /* (17 digits always suffice) */
-    snprintf(buf, sizeof buf, "%.16e", d);
-    {
-        uint64_t D = 0;
-        int nd = 0, x, q;
-        const char *s;
-        for (s = buf; *s != 'e'; s++)
-            if (*s >= '0' && *s <= '9') { D = D * 10 + (uint64_t)(*s - '0'); nd++; }
-        x = atoi(s + 1);
-        q = x - nd + 1;
-        while (D != 0 && D % 10 == 0) { D /= 10; q++; }
-        snprintf(digits, 24, "%llu", (unsigned long long)D);
-        *decpt = (int)strlen(digits) + q;
-    }
-}
-
-/* VFloat.render, into out (at least 40 bytes); returns the length. */
+/* VFloat.fixed6, ToString of a float (the Book's API: "Fixed point with
+   exactly six digits after the decimal point, always"): NaN, Inf, -Inf, or
+   C's "%.6f" of the double, which is its exact value rounded to a multiple of
+   10^-6 in the current rounding mode (round to nearest, ties to even: Verse
+   never changes it), every digit before the point, and a '-' whenever the
+   double is negative.  Lean computes the same digits with integers.  out
+   holds at least VX_FMT_MAX bytes (the longest result, -DBL_MAX, is 317);
+   returns the length. */
 size_t vx_fmt(uint64_t b, char *out)
 {
-    char ds[24];
-    int decpt, n, k;
-    size_t len = 0;
-    double d;
+    int len;
     if (b == VX_NAN_BITS) { strcpy(out, "NaN"); return 3; }
     if (!finite_bits(b)) {
         strcpy(out, (b >> 63) ? "-Inf" : "Inf");
         return strlen(out);
     }
-    if (b == 0) { strcpy(out, "0.0"); return 3; }
-    d = vx_fval(b);
-    if (d < 0) { out[len++] = '-'; d = -d; }
-    shortest(d, ds, &decpt);
-    n = (int)strlen(ds);
-    if (decpt <= -4 || decpt > 16) {
-        int x = decpt - 1;
-        out[len++] = ds[0];
-        if (n > 1) {
-            out[len++] = '.';
-            for (k = 1; k < n; k++) out[len++] = ds[k];
-        }
-        len += (size_t)sprintf(out + len, "e%c%02d", x < 0 ? '-' : '+', x < 0 ? -x : x);
-    } else if (decpt <= 0) {
-        out[len++] = '0';
-        out[len++] = '.';
-        for (k = 0; k < -decpt; k++) out[len++] = '0';
-        for (k = 0; k < n; k++) out[len++] = ds[k];
-    } else if (decpt >= n) {
-        for (k = 0; k < n; k++) out[len++] = ds[k];
-        for (k = 0; k < decpt - n; k++) out[len++] = '0';
-        out[len++] = '.';
-        out[len++] = '0';
-    } else {
-        for (k = 0; k < decpt; k++) out[len++] = ds[k];
-        out[len++] = '.';
-        for (k = decpt; k < n; k++) out[len++] = ds[k];
-    }
-    out[len] = 0;
-    return len;
+    len = snprintf(out, VX_FMT_MAX, "%.6f", vx_fval(b));
+    return len < 0 ? 0 : (size_t)len;
 }

@@ -2220,7 +2220,7 @@ Area(R:float):float = 3.14159 * R * R
 
 Main():void =
     Count:int = 5
-    Print("{Area(2.0)} {Count * 1.5} {0.1 + 0.2}")   # 12.56636 7.5 0.30000000000000004
+    Print("{Area(2.0)} {Count * 1.5} {0.1 + 0.2}")   # 12.566360 7.500000 0.300000
     if (N := Round[2.5], M := Int[-1.7]) then Print("{N} {M}")   # 2 -1
     Print("{1.0 / 0.0} {0.0 / 0.0}")                 # Inf NaN
 ```
@@ -2253,9 +2253,18 @@ Main():void =
   replaces the built-in for every call, whatever the argument types. A local
   or a method may not take those names; a field may, and in its class's
   methods the name still means the built-in.
-- `ToString` gives the shortest decimal that reads back as the float, laid
-  out as Python's `repr` (`98.5`, `1.0`, `1e+16`, `1.5e-07`), and `Inf`,
-  `-Inf`, `NaN`.
+- `ToString`, and string interpolation, which calls it, give fixed point
+  with exactly six digits after the point (the Book's API and
+  `FloatToString.versetest`): the float's exact value rounded to a multiple
+  of 10^-6, a tie to the even digit (`98.500000`, `1.234568` for
+  `1.2345678901234567`, `0.007812` for `0.0078125`), every digit before the
+  point (`1.0e100` prints its exact binary value, 101 digits, then
+  `.000000`), a `-` whenever the float is negative, also when every digit
+  is zero (`-0.000000` for `-1.0e-300`; `-0.0` is `0.0`, which prints
+  `0.000000`), and `Inf`, `-Inf`, `NaN`. It is lossy: to show a value's
+  bits, print it times a power of two. (Until the Book's rule was adopted,
+  openverse printed the shortest decimal that reads back, `98.5`, as ch. 2's
+  example does; [the audit](research/readings-audit.md#tostring-of-a-float).)
 
 ### Scalar Math API inventory (#490)
 
@@ -2918,7 +2927,7 @@ Main()<suspends>:void =
 | Inferring type arguments | not described | first-order matching against the expected result type, then the arguments; no subtyping other than `false` (matches anything) and `void` (accepts anything) |
 | A qualifier without a `using` | "A qualifier only says which `F` is meant among the ones already in scope" (ch. 10): `(Top.M:)F` with no `using` is unknown | the qualifier is found as any name is, then the name is looked up in exactly that scope: `(M:)F` is `M.F` (#145) |
 | A module's member `(M:)x` used bare in `M` beside an outer `x` | both are candidates, told apart by their parameters, else ambiguous (`ModuleDefinitions.versetest`, `vmodule` tests) | the inner one (only a qualified member may share an outer definition's name, [Shadowing](#shadowing)); in a class's code and for `(local:)`, where the tests refuse it, ambiguous |
-| `ToString` of a float | the API and the tests: fixed point with six decimals (`FloatToString.versetest`, `1.000000`); ch. 2's example: `98.5` (the change needs Core and the runtime: [the audit](research/readings-audit.md#tostring-of-a-float)) | the shortest decimal that reads back as the float, the closest of the shortest, in Python's `repr` layout (exponent at `≥ 1e16` and `< 1e-4`); `Inf`, `-Inf`, `NaN` |
+| `ToString` of a float | the API and the tests: fixed point with six decimals (`FloatToString.versetest`, `1.000000`); ch. 2's example: `98.5` (the Book disagrees with itself: [the audit](research/readings-audit.md#tostring-of-a-float)) | the API's and the tests': six digits after the point, the exact value rounded half to even, every integer digit, the sign kept (`-0.000000`); `Inf`, `-Inf`, `NaN`; interpolation calls `ToString` (ch. 2) ([float](#float)) |
 | `NaN < X` | `not (Nan < 1.0)`, `Nan = Nan` (ch. 1, ch. 2) | fails (IEEE: NaN orders with nothing); `NaN = NaN` succeeds (the Book) |
 | `=` between different types | "Comparisons between different types still compile, but they always fail" (ch. 4); the empty value is one value of `logic`, `void`, `tuple()`, options, arrays, strings and maps (ch. 2) | the Book's (see [Equality and the empty value](#equality-and-the-empty-value)), at every depth and in generic code; refused between type parameters, a tuple of them and a string, and types whose common values Verse Core cannot tell apart; in generic code, types Verse Core holds alike (a `char32` and an `int`) compare as Verse Core holds them |
 | `false` where a map is expected | prose: accepted (ch. 2); tests: refused (`Map.versetest` 343) | refused, as the tests (it equals an empty map) |

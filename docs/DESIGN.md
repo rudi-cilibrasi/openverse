@@ -1592,14 +1592,17 @@ them), so the theorems' axioms now include it besides `propext` and
 `Quot.sound` (`docs/CLAIMS.md`).
 
 Two things are computed exactly from the bits, in Lean with integers and in
-C with integer arithmetic and correctly rounded `printf`/`strtod`:
+C with integer arithmetic and correctly rounded `printf`:
 
 - the conversions to int (`Floor`, `Ceil`, `Round` with ties to even,
   `Int`), which fail on NaN or an infinity, and raise the overflow error out
   of range;
-- `ToString`: for each length `p`, the correctly rounded `p`-digit decimal
-  or its neighbour on the other side of the value, the first that reads
-  back as it, laid out as Python's `repr`.
+- `ToString` (`VFloat.fixed6`, the Book's API): the magnitude in millionths,
+  `m·2^e·10^6` rounded half to even by one integer division, laid out with
+  six digits after the point and a `-` from the sign bit; in C, `"%.6f"`
+  (exact in glibc, and rounding in the default mode, ties to even). The
+  shortest round-trip decimal (`VFloat.render`) is kept for the compiler's
+  messages.
 
 `scripts/fuzz-floats.sh` checks both implementations against Python's
 doubles. In the binary format a float literal is the primitive `fofBits` of

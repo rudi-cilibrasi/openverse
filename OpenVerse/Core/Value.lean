@@ -417,7 +417,8 @@ theorem veq_int_right (v : Value) (j : Int) : veq v (.int j) = decide (v = .int 
 theorem veq_example : veq (.arr #[.logic false]) (.arr #[.tup []]) = true := by decide
 
 
-/-- Render a value the way the reference implementation prints it (`ToString`). -/
+/-- Render a value for the compiler's messages: as `ToString` prints it, but a
+    float as the shortest decimal that reads back as it (`VFloat.render`). -/
 partial def render : Value → String
   | .int i => toString i
   | .logic b => if b then "true" else "false"

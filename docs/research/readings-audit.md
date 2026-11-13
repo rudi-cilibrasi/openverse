@@ -49,7 +49,7 @@ Verdicts:
 | Access specifiers | `<public>` and internal only | ch. 12 | 107 accepted refusals | not audited here: a later piece of its own |
 | A qualifier without a `using` (#601's row) | `(M:)F` found as `M.F` | `10_classes_interfaces.md:1157-1160`: "A qualifier only says which `F` is meant among the ones already in scope; it does not itself bring anything into scope. Drop the `using` declarations and `(Top.M:)F(0)` … becomes an unknown identifier" | none listed by the row | **contradicts** the prose, as the row says; the qualified names' subject (#601), kept there (#145): not changed here (owner list) |
 | A module's member used bare beside an outer name (#601's row) | the inner one | silent | `Modules/ModuleDefinitions.versetest` and the `vmodule` tests make both candidates (told apart by parameters, else ambiguous) | **contradicts** the tests, as the row says; #601's subject: not changed here |
-| `ToString` of a float | the shortest round-trip decimal | `02_primitives.md:858`: `# Both produce: "Age: 25, Score: 98.5"`; the API (line 4555, `ToString(Val:float)`): "Fixed point with exactly six digits after the decimal point, always" | `Intrinsics/FloatToString.versetest` 15-24: `"1.000000"`, `"1234567890123456.000000"`, 1e100 in full | **contradicts** the API and the tests (the ch. 2 example dissents, owner list); needs the C runtime and Core's formatter: **designed, not changed** ([below](#tostring-of-a-float)) |
+| `ToString` of a float | the shortest round-trip decimal | `02_primitives.md:858`: `# Both produce: "Age: 25, Score: 98.5"`; the API (line 4555, `ToString(Val:float)`): "Fixed point with exactly six digits after the decimal point, always" | `Intrinsics/FloatToString.versetest` 15-24: `"1.000000"`, `"1234567890123456.000000"`, 1e100 in full | **contradicts** the API and the tests (the ch. 2 example dissents, owner list); needs the C runtime and Core's formatter: designed here, **changed** in `feat/core-book-primitives` ([below](#tostring-of-a-float)) |
 | `NaN < X` | fails; `NaN = NaN` succeeds | `01_expressions.md:124-126`: `not (Nan < 1.0)`, `Nan = Nan  # But equality succeeds`; `02_primitives.md:378-379` | `Operators/CompareFloat.versetest:57, 58` | **agrees**; the row's "not stated" corrected |
 | `=` between different types, `false` as a map, `X?` of a logic, `true` as a type | #600's | ch. 2 and ch. 4, as the rows quote | as the rows quote | #600's (equality and the empty value), not changed here; `false` as a map is on the owner's page already |
 | Ordering of rationals | exact; an int compares with a rational | `04_operators.md:318-321` and the API declare `<` … for `int` and `float` only | none order rationals (`CompareRational.versetest` 5, 11 test `=`) | **Book silent** (the Book declares no ordering of rationals; no test refuses one): keep |
@@ -268,6 +268,52 @@ rational value; the float fuzzer's Python oracle becomes `'%.6f' % x`. Every
 program that prints a float changes its output. Cases that would move:
 `FloatToString.versetest` 15, 18, 19, 21-24.
 
+**Changed** (`feat/core-book-primitives`). The rule, pinned exactly:
+
+- *Six digits after the point, every digit before it.* The API
+  (`verse_runtime_api.html:4555`, `ToString(Val:float)`): "Fixed point with
+  exactly six digits after the decimal point, always: never scientific
+  notation, never fewer digits, never more. … It is lossy —
+  1.2345678901234567 prints as 1.234568 … It can be enormous — 1e100 prints
+  as 101 digits followed by .000000, and the largest finite float as 309
+  digits. And it collapses everything small — every subnormal prints as
+  0.000000." The tests: `FloatToString.versetest:18` `"1.000000"`, `:19`
+  `"1.500000"`, `:21` `"1.234568"`, `:22` `"1234567890123456.000000"`, `:23`
+  and `:24` the exact binary values of `1e100` and `12.34e100` in full,
+  `:25` the largest double's 309 digits, `:26` the smallest subnormal
+  `"0.000000"`. The integer digits are the exact value of the double, not a
+  rounding of it to 17 digits.
+- *Rounding.* The Book states no rule for the seventh digit; its examples
+  have no ties. openverse takes C's `%.6f` in the default rounding mode:
+  the exact binary value rounded to the nearest multiple of 10^-6, a tie
+  to the even last digit (`0.0078125`, which is 2^-7 exactly, prints
+  `0.007812`; `0.0234375` prints `0.023438`). Python's `'%.6f'` gives the
+  same, and is the fuzzer's oracle.
+- *Signs.* The API: "The sign survives even when the digits do not, so a
+  tiny negative value prints as -0.000000"; the test `:26`
+  (`TestSignedFloatToString` of the smallest subnormal) expects
+  `"-0.000000"` for its negation. A float with its sign bit set prints a
+  `-`, also when every digit is zero. openverse has no negative zero (ch. 11,
+  below), so `ToString(-0.0)` is `0.000000`.
+- *Specials.* `NaN`, `Inf`, `-Inf` (the API; the tests `:16`, `:27`).
+- *Interpolation.* `02_primitives.md:847`: "String interpolation implicitly
+  calls `ToString()` on embedded values"; `:682`: "Interpolation works for
+  any value that has a `ToString()` function in scope". `"{F}"` is
+  `ToString(F)`, the same formatter, in openverse as before.
+
+Lean computes the digits with integers from the bits (`VFloat.fixed6`: the
+magnitude `m·2^e·10^6` rounded half to even by one division); C calls
+`snprintf("%.6f")` (glibc's is exact and rounds in the current mode, ties
+to even), into a buffer of 330 bytes (the longest result is 317). The
+shortest round-trip rendering (`VFloat.render`) stays for the compiler's
+own messages (a float literal named in a diagnostic). Moved: 7 cases,
+`FloatToString.versetest` 15, 18, 19, 21-24 (different → agrees). Every
+program that prints a float changes its output; see [the survey's section
+for this work](book-test-conformance.md).
+
+A new place where the Book disagrees with itself ([For the
+owner](#negative-zero)): whether `-0.0` exists.
+
 ### The scheduler rows
 
 The Book's tested ch. 14 examples and its API contradict three scheduler
@@ -322,7 +368,14 @@ page](https://github.com/rudi-cilibrasi/openverse/wiki/Where-the-Book-disagrees-
 
 - **Prose** (ch. 2, `02_primitives.md:853-858`): `Score := 98.5` … `# Both produce: "Age: 25, Score: 98.5"`.
 - **API and tests:** the API's `ToString(Val:float)`: "Fixed point with exactly six digits after the decimal point, always"; `Intrinsics/FloatToString.versetest:18`: `"1.000000"`, `:22`: `"1234567890123456.000000"`.
-- **openverse today:** the shortest round-trip decimal (`98.5`), the prose's. The change is designed above (C runtime and Core).
+- **openverse now:** the API's and the tests' (`98.500000`), in Core and the C runtime ([above](#tostring-of-a-float)); until `feat/core-book-primitives`, the shortest round-trip decimal (`98.5`), the prose's.
+
+### Negative zero
+
+- **Prose** (ch. 11, `11_types.md:691-694`): "IEEE 754 distinguishes between `+0.0` and `-0.0`. In verse Zero is just Zero, with no distinction between positve or negative. When any expression evaluates to Zero, the sign is discarded"; its tested example (`<!-- 30 -->`, `:696-712`) checks `-0.0 = +0.0`, which both readings satisfy.
+- **API:** `prefix'-'(Value:float)` (`verse_runtime_api.html:404`): "A sign-bit flip, so negating zero genuinely produces -0.0 — a different bit pattern from 0.0, yet one that compares equal to it under Verse's extensional equality"; `ToString(Val:float)` (`:4555`): "a tiny negative value prints as -0.000000: a value that compares equal to 0.0 under Verse's extensional float equality yet prints differently from it", which only a negative zero can be.
+- **Tests:** none negate a zero and print it (`FloatToString.versetest:15` prints `0.0` only, not through `TestSignedFloatToString`).
+- **openverse:** ch. 11's: every float is canonical, `+0` for `-0` (DESIGN, "Floats: canonical bits"), so `ToString(-0.0)` is `0.000000`; a negative nonzero float too small for six digits prints `-0.000000`, as the API says.
 
 ### `?` on other values
 

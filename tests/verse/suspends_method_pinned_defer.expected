@@ -1,9 +1,9 @@
-get 1.0 exits
+get 1.000000 exits
 arm exits
-get 2.0 exits
-G 2.0 exits
+get 2.000000 exits
+G 2.000000 exits
 2
-get 3.0 exits
-G 3.0 exits
+get 3.000000 exits
+G 3.000000 exits
 cancelled
 exit=0
