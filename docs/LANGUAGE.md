@@ -26,7 +26,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Comments | `#` to the end of the line, nested `<# … #>`, `<#>` indented comments (the rest of the line and every following line indented more than it; see [Source text](#source-text)) | ch. 0 |
 | Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` printable ASCII U+0020–U+007E, or an escape), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates), `float` `1.5`, `2.0e-7`, `1e3` (digits, then a point and digits or an exponent or both; the nearest double) | §1.3–1.7 |
 | Types | `int`, `logic`, `char`, `char32`, `any` (see [any](#any)), `rational` (see [rational](#rational)), `float` (see [float](#float)), refinement types `type{_X:int where 0 <= _X, _X <= 120}` (see [Refinement types](#refinement-types)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void`, function types `type{_(:int)<decides>:int}`, with named parameters `type{_(:int, ?B:int):int}`, and `int->int` (see [Function values](#function-values)); a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
-| Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e` / `C := e`; locals `X := e`, `X:t = e`, `var X:t = e`; no shadowing | §3.1–3.4 |
+| Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e` / `C := e`; locals `X := e`, `X:t = e`, `var X:t = e`; no shadowing; no [reserved name](#reserved-names) | §3.1–3.4 |
 | Mutation | `set X = e`, `set X += e` (`-=`, `*=`), `set A[i] = e` (fails out of range; returns `e`), and paths `set S.F.G = e`, `set A[i][j] op= e`, `set M[k].F = e`: indices and keys evaluated once, left to right, then the new value (for `op=`, after the old one is read: `set X += e` is `set X = X + e`), then the variable rebuilt; an index out of range or a missing intermediate key fails, while the last key of a path inserts | §3.3, §3.5, §9.3 |
 | Blocks | indented (`:`), braced (`{ }`), inline (`then`/`do`), `block:`, `( a; b )` sequences | §2.2–2.4 |
 | Operators | `* + -`, unary `-`, comparisons `= <> < <= > >=` (failable, return the left operand, chains check every pair), `and`, `or`, `not` (below the comparisons, above `and`: `not X = Y` is `not (X = Y)`), `?`, `.Length`, `A[i]`, `T(k)` | ch. 4 |
@@ -87,6 +87,28 @@ lines are exempt. Indented blocks are those after `:` (and a function's
 `case {…}` whose first element starts a line; lines inside parentheses,
 brackets, or a braced block that starts on the line of its `{`, are checked
 against the enclosing indented block.
+
+### Reserved names
+
+No definition, at any scope (a module's or a class's member, a function's
+parameter or local, a type parameter, a field), may take one of these names
+(`reservedNames` in `Front/Syntax.lean`): `_`, which the Book reserves
+(ch. 1: "The single underscore `_` is reserved and cannot be used as an
+identifier"); the built-in names `Self`, `subtype`, `castable_subtype` and
+`local`; and the names the Book's tests reserve for the future
+(`Tests/NamesReservedForFuture.versetest`; the Book's prose gives no list):
+`abstracts`, `as`, `assert`, `backslash`, `bag`, `char8`, `char16`,
+`collection`, `contravariant`, `covariant`, `element`, `embargo`, `ensure`,
+`fails`, `find`, `first`, `float16`, `float32`, `float64`, `float128`,
+`fold`, `function`, `given`, `guard`, `implies`, `instance`, `int8`,
+`int16`, `int32`, `int64`, `interacts`, `introspects`, `invariant`,
+`iterates`, `known`, `last`, `let`, `markup`, `nat`, `nat8`, `nat16`,
+`nat32`, `nat64`, `over`, `permutation`, `provided`, `random`, `repeat`,
+`sequence`, `string8`, `string16`, `string32`, `subclass`, `succeeds`,
+`syntax`, `throws`, `trait`, `truth`, `try`, `union`, `using`, `verify`,
+`when`, `while`. openverse reads `first`, `assert` and `let` as macros
+before `{` or `(`, and `using` is a keyword. The function type
+`type{_(:int):int}` writes `_` as no definition's name, and stays allowed.
 
 ## Parametric functions
 
@@ -910,13 +932,14 @@ circle := class(shape, labelled):
     filters and bindings succeed: `for{X := 1..4; X * X}`.
   - `first{c}` fails when `c` does, else it is `c`'s value; `first(c){b}`
     runs `b`, which sees `c`'s names, once `c` succeeds, and fails when `c`
-    does. Without a body after it, `first(…)` is a call.
+    does. Without a body after it, `first(…)` is a call, of a function no
+    program can define (`first` is a [reserved name](#reserved-names)).
   - `assert{c}` is a runtime error (as `Err()`, with no message) unless
     `c` succeeds.
   Without a [choice](#choice), `first` is the first and only success, and
   `first{c}` can only fail when `c` can. These macros
   take no body (`for{c} {b}` is refused), and `first` and `assert` before
-  `{` are the macros, not a struct of that name. A void branch makes an
+  `{` are the macros (no struct can take either name). A void branch makes an
   `if` void (void accepts any value), so `if{X := e} else {Print("none")}`
   is a statement.
 - **The command line**:

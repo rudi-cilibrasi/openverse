@@ -3,9 +3,6 @@
 # The value of a clause list is its last clause's: a binding's name, or the
 # expression's value.
 
-# without a body after it, first(…) is still a call
-first(X:int, ?By:int = 1):int = X + By
-
 Main():void =
     Xs := array{1, 5, 2, 7}
     # if{c}: c in a failure context (its output too)
@@ -33,11 +30,6 @@ Main():void =
     if (first(Xs[9]) { Print("not printed") }) {} else { Print("first failed") }
     Hs := for { X := 0..4; first { Y := Xs[X]; Y * 2 } }
     Print("{Hs.Length}")
-    Print("{first(3)}")
-    Print("{first(?By := 4, 3)}")
-    # a block on the line after a call of first is a statement of its own
-    Y := first(1)
-    { Print("block {Y}") }
     # a void branch makes the if void, as a statement (void accepts any value)
     if { X := Xs[9] } else { Print("none") }
     if { Xs[9] } else if { Xs[1] > 9 } else { Print("neither") }

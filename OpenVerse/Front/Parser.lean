@@ -1319,6 +1319,8 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
       -- `using{"relative_path"}` imports a file or directory (#27); other
       -- `using { /Verse.org/… }` module paths are accepted and ignored
       bump
+      -- (`using` is reserved: `using:int = 42` is no definition)
+      if !(← peekT).isSym "{" then perr (← peekT) s!"expected '\{' after using, found {(← peekT).tok.describe}"
       if (← peekT).isSym "{" then
         if let .str parts := (← peekT 1).tok then
           let path := String.join (parts.filterMap fun | .text s => some s | _ => none)

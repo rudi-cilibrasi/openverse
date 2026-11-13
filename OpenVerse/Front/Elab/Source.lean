@@ -34,6 +34,13 @@ structure Admitted where
       (`EffectPolicy.constructionFx`), by its name. -/
   constructionFx : Std.HashMap String (List String)
 
+/-- No definition takes a reserved name (`reservedNames`), at any scope. -/
+def checkReservedNames (tops : List STop) : Except String Unit := do
+  for t in tops do
+    for (p, n) in t.definedNames do
+      let n := (n.splitOn "::").getLast?.getD n
+      if reservedNames.contains n then throw s!"{p.show}: '{n}' is reserved: no definition can take it"
+
 /-- `return` leaves a function's body, so it is refused where there is none: in
     a constant's value, and in a field's default, which is evaluated where an
     object is constructed and would leave the function that constructs it. -/
@@ -53,7 +60,8 @@ def checkReturns (tops : List STop) : Except String Unit := do
 /-- Source admission and the prelude, the first phase of `elabProgramCore`:
     the source and the entry expression are admitted by the effect policy and
     the source profile; the program's own types do not take built-in names,
-    and its constants and field defaults have no `return` (`checkReturns`);
+    no definition takes a reserved one (`checkReservedNames`), and its
+    constants and field defaults have no `return` (`checkReturns`);
     modules are resolved (#112); and the helpers the program needs are added,
     those the source names alike kept apart from them (#210). -/
 def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitted := do
@@ -71,6 +79,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
     | .const p n _ (.structDef ..) | .const p n _ (.enumDef ..) | .classDef p n .. =>
       if ("char32" :: typeNames).contains n then throw s!"{p.show}: {n} is a built-in type"
     | _ => pure ()
+  checkReservedNames allTops0r
   checkReturns allTops0r
   let helpers ← if usesRat then ratTops else pure []
   let helpers := helpers ++ (← if usesReplaceAll then replaceAllTops else pure [])

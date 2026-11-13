@@ -63,9 +63,9 @@ elif mode == 1:
     params = f'a:type,b:{bound}' if control else 'v:type'
     argty = '[]b' if control else 'v'
     ret = '[]b' if control else 'v'
-    print(f'''first(a:type) := interface {{ Tag():a }}
+    print(f'''leading(a:type) := interface {{ Tag():a }}
 sink(v:type) := interface {{ Get(Z:v,?Extra:v)<suspends>:v }}
-both(a:type,b:{bound}) := class(first(a),sink([]b)):
+both(a:type,b:{bound}) := class(leading(a),sink([]b)):
     TagValue:a
     Seed:b
     Tag<override>():a=TagValue
