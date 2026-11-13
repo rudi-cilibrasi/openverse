@@ -17,17 +17,21 @@
     string literals (which cannot contain one);
   * columns count characters, so a tab is one column; each token that starts
     a line carries its line's indentation (its leading tabs and spaces), which
-    the parser checks for a consistent use of tabs and spaces.
+    the parser checks for a consistent use of tabs and spaces, and has the
+    indentation's width as its column, also when block comments precede it.
 
   Supported lexical syntax (Book of Verse, ch. 1 "Expressions", ch. 2
   "Primitives"): `#` line comments, nested `<# … #>` block comments, `<#>`
   indented comments, identifiers, decimal and `0x` hex integer literals,
-  `'c'` char literals (`c` printable ASCII U+0020–U+007E, or an escape),
+  `'c'` char literals (`c` one character other than a line break, or an
+  escape; a non-ASCII one is a char32),
   `0oHH` char literals (one or two hex digits: that UTF-8 code unit, so
   `0o41` is 'A'; `0o` is not octal), `0uHHHHHH` char32 literals (a Unicode
   scalar value, up to `0u10FFFF`), string
-  literals with escapes and `{…}` interpolation, and the operator symbols
-  of ch. 4. Not supported: float literals, path literals.
+  literals with escapes and `{…}` interpolation, float literals (with an
+  optional width suffix: `f64`; `f32` and `f16` are lexed and refused), path
+  literals (`/Verse.org/Random`, where an operand starts: see `readPath`),
+  and the operator symbols of ch. 4.
 
   A `<#>` indented comment is the rest of its line and every following line
   indented more than the line that contains the `<#>` (blank lines included).
@@ -55,6 +59,12 @@ inductive Tok where
   /-- A float literal (#127): the bits of the nearest double, canonical. -/
   | float : UInt64 → Tok
   | str   : List StrPart → Tok
+  /-- A path literal `/Verse.org/Random` (Book of Verse ch. 1, "Path
+      Literals"; ch. 16, "Paths"). -/
+  | path  : String → Tok
+  /-- A float literal of a width openverse lacks, `1.5f32` or `1.5f16`: its
+      text (Book of Verse ch. 1: "All floats are 64-bit"). -/
+  | floatWidth : String → Tok
   | sym   : String → Tok
   | eof   : Tok
   deriving Repr, Inhabited
@@ -78,6 +88,8 @@ def Tok.describe : Tok → String
   | .char32 c => s!"char32 {c}"
   | .float b => s!"float {VFloat.render b}"
   | .str _ => "string literal"
+  | .path p => s!"path {p}"
+  | .floatWidth f => s!"float {f}"
   | .sym s => s!"'{s}'"
   | .eof => "end of file"
 
@@ -284,6 +296,63 @@ def hexVal (c : Char) : Nat :=
   else if 'a' ≤ c ∧ c ≤ 'f' then c.toNat - 'a'.toNat + 10
   else c.toNat - 'A'.toNat + 10
 
+/-- The identifiers the parser reserves for its forms. -/
+def keywords : List String :=
+  ["if", "then", "else", "for", "do", "loop", "break", "return", "var", "set", "and", "or",
+   "not", "case", "block", "option", "logic", "array", "using", "struct", "enum", "map", "where",
+   "defer"]
+
+/-- Whether a token can end an operand, so that a `/` after it divides:
+    a name other than a keyword, a literal, or a closing bracket or `?`. -/
+def Tok.endsOperand : Tok → Bool
+  | .ident x => !keywords.contains x
+  | .int _ | .char _ | .char32 _ | .float _ | .floatWidth _ | .str _ | .path _ => true
+  | .sym s => [")", "]", "}", "?"].contains s
+  | .eof => false
+
+/-- The characters of a path's label: ASCII letters and digits, `.`, `-`. -/
+def isLabelChar (c : Char) : Bool := c.isAlphanum || c == '.' || c == '-'
+
+/-- A path literal, at its `/` (Book of Verse ch. 1, "Path Literals"; ch. 16,
+    "Paths"): `/` and a label, which starts with a letter or digit, then
+    optionally `@` and a label (`/user@example.com`), then segments `/X`,
+    each an identifier (which may end in a quoted part, `/a/b'+'`) that a
+    qualifier `(/path:)` may precede. A path cannot be followed by `/` or
+    `@`: `/a/1b` and `/a@b@c` are errors. -/
+partial def readPath : LexM String := do
+  advance
+  let mut p := "/" ++ (← readWhile isLabelChar "")
+  if (← peekC) == some '@' then
+    advance
+    if !(((← peekC).map Char.isAlphanum).getD false) then
+      lexErr "expected a label after '@' in a path: a letter or digit, then letters, digits, '.' and '-'"
+    p := p ++ "@" ++ (← readWhile isLabelChar "")
+  repeat
+    if (← peekC) != some '/' then break
+    let qualified := (← peekC 1) == some '(' && (← peekC 2) == some '/'
+    if !qualified && !(((← peekC 1).map isIdStart).getD false) then break
+    advance
+    if qualified then
+      advance
+      let q ← readPath
+      if (← peekC) != some ':' || (← peekC 1) != some ')' then
+        lexErr "expected ':)' to end the qualifier of a path's segment"
+      advance; advance
+      p := p ++ "/(" ++ q ++ ":)"
+      if !(((← peekC).map isIdStart).getD false) then lexErr "expected an identifier after a path's qualifier"
+    else p := p ++ "/"
+    p := p ++ (← readWhile isIdChar "")
+    -- (`b'+'`: an identifier with a quoted part)
+    if (← peekC) == some '\'' then
+      advance
+      let q ← readWhile (fun c => c != '\'' && c != '\n' && c != '\r') ""
+      if q.isEmpty || (← peekC) != some '\'' then lexErr "expected the quoted part of a path's identifier, ending in '"
+      advance
+      p := p ++ "'" ++ q ++ "'"
+  if (← peekC) == some '/' || (← peekC) == some '@' then
+    lexErr "a path's segments after its label are identifiers: '/' must be followed by a letter or '_', and '@' comes once, after the first label"
+  return p
+
 /-- The symbols, longest first. -/
 def symbols : List String :=
   ["<decides>", ":=", "<>", "<=", ">=", "..", "->", "=>", "+=", "-=", "*=", "/=",
@@ -298,9 +367,13 @@ def matchSym (cs : Array Char) (pos : Nat) : Option String :=
 partial def lexAll (acc : Array Token) : LexM (Array Token) := do
   skipSpace
   let s ← get
+  -- (the first token of a line has the line's indentation as its column,
+  -- also after a block comment: `<#C0#>f():void = 3` starts at column 0,
+  -- Book of Verse tests, Roundtrip/Comments)
+  let ind := if s.bol then indentAt s.cs s.lineStart else ""
   let mk (t : Tok) : Token :=
-    { tok := t, line := s.line, col := s.col, bol := s.bol,
-      indent := if s.bol then indentAt s.cs s.lineStart else "" }
+    { tok := t, line := s.line, col := if s.bol then ind.length else s.col, bol := s.bol,
+      indent := ind }
   let emit (t : Tok) : LexM (Array Token) := do
     modify fun st => { st with bol := false }
     return acc.push (mk t)
@@ -343,9 +416,17 @@ partial def lexAll (acc : Array Token) : LexM (Array Token) := do
         let expAhead : LexM Bool := do
           return (← isE) && ((← digitAt 1) || (((← peekC 1) == some '+' || (← peekC 1) == some '-') && (← digitAt 2)))
         let frac := (← peekC) == some '.' && (← digitAt 1)
-        if frac || (← expAhead) then
+        -- (a width suffix: `f64`, or `f32`, `f16`, not followed by a letter,
+        -- digit or `_`, Book of Verse ch. 1, "Float Literals")
+        let width : LexM (Option String) := do
+          let w := String.ofList [(← peekC 1).getD ' ', (← peekC 2).getD ' ']
+          if (← peekC) == some 'f' && ["64", "32", "16"].contains w &&
+              !(((← peekC 3).map isIdChar).getD false) then return some w
+          return none
+        if frac || (← expAhead) || (← width).isSome then
           -- a float (#127): digits, then `.` and digits, or an exponent `e±N`,
-          -- or both (`1e3` too, as in shipped Verse); the nearest double
+          -- or both (`1e3` too, as in shipped Verse), then an optional width
+          -- suffix (`12.34f64`, `1234f64`); the nearest double
           -- (`Float.ofScientific` rounds correctly)
           let mut f := ""
           if frac then
@@ -358,8 +439,14 @@ partial def lexAll (acc : Array Token) : LexM (Array Token) := do
             if (← peekC) == some '+' || (← peekC) == some '-' then advance
             let es ← readWhile Char.isDigit ""
             ex := if neg then -(es.toNat! : Int) else es.toNat!
+          let w ← width
+          if w.isSome then advance; advance; advance
           if ((← peekC).map isIdChar).getD false then
-            lexErr "a float literal is digits, a point and digits, then an optional exponent (1.5, 2.0e-7, 1e3)"
+            lexErr "a float literal is digits, a point and digits, then an optional exponent and suffix f64 (1.5, 2.0e-7, 1e3, 12.34f64)"
+          -- (`f32`, `f16`: a float openverse does not have, which the
+          -- elaborator refuses by its text)
+          if w != some "64" && w.isSome then
+            return (← lexAll (← emit (.floatWidth (String.ofList (s.cs.extract s.pos (← get).pos).toList))))
           let m := (d ++ f).toNat!
           let e10 : Int := ex - f.length
           let x : Float := if e10 < 0 then Float.ofScientific m true e10.natAbs else Float.ofScientific m false e10.toNat
@@ -381,16 +468,20 @@ partial def lexAll (acc : Array Token) : LexM (Array Token) := do
           | some e => advance; pure e
           | none => lexErr "bad escape in char literal"
         | some ch => do
-          if ch.toNat ≥ 128 then
-            lexErr s!"a char literal must be ASCII: write {uPlus ch.toNat} as the char32 literal 0u{(String.ofList (Nat.toDigits 16 ch.toNat)).toUpper}"
-          if ch.toNat < 0x20 || ch.toNat == 0x7F then
-            let hint := if ch == '\t' then " (write '\\t' for a tab)" else ""
-            lexErr s!"a char literal must be a printable ASCII character or an escape, not {uPlus ch.toNat}{hint}"
+          -- (any character a string may hold: other controls than a tab
+          -- are not Verse source, and a line break ends the literal)
+          if breakLen #[ch] 0 > 0 then lexErr "unterminated char literal"
           advance; pure ch
         | none => lexErr "unterminated char literal"
       if (← peekC) != some '\'' then lexErr "char literal must be one character"
       advance
-      lexAll (← emit (.char ch.toNat))
+      -- (a non-ASCII character is a char32, Book of Verse ch. 1, "Character
+      -- Literals": `'😀'` is `0u1f600`)
+      lexAll (← emit (if ch.toNat < 128 then .char ch.toNat else .char32 ch.toNat))
+    else if c == '/' && (((← peekC 1).map Char.isAlphanum).getD false) &&
+        !((acc.back?.map (·.tok.endsOperand)).getD false) then
+      -- (a `/` where an operand starts, before a letter or digit)
+      lexAll (← emit (.path (← readPath)))
     else match matchSym s.cs s.pos with
       | some sym =>
         for _ in [0:sym.length] do advance
