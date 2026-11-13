@@ -1057,7 +1057,7 @@ output, which matter more than their number.
 9. **Bitwise functions (159 refusals; Core and runtime, or Verse Core's
    operations).** `BitAnd`, `BitOr`, `BitXor`, `BitNot`, `BitShiftLeft`,
    `BitShiftRight` on `int`, pinned in [the library
-   note](book-library-functions.md#bitwise-functions-not-implemented):
+   note](book-library-functions.md#bitwise-functions):
    either new primitives next to the nine whose C is proved by QuickProof's
    `arith_exact` and whose Lean seams are in `Core/Seams.lean`, or code over
    the existing ones, as the character conversions are. 84 untagged and 13

@@ -143,6 +143,7 @@ check "refining source-task cleanup (${FUZZ_MODEL_TASK_ORDER:-64} seed pairs)" \
 check "waiting consumers in parameter defaults (${FUZZ_MODEL_WAITING_DEFAULTS:-144} seed pairs)" \
   bash tests/scripts/test-waiting-defaults.sh "${FUZZ_MODEL_WAITING_DEFAULTS:-144}" "$seed"
 check "float fuzzing (${FUZZ_FLOATS:-200} programs, against Python's doubles)" scripts/fuzz-floats.sh "${FUZZ_FLOATS:-200}" "$seed"
+check "bitwise fuzzing (${FUZZ_BITWISE:-200} programs, against Python's ints in 64 bits)" scripts/fuzz-bitwise.sh "${FUZZ_BITWISE:-200}" "$seed"
 check "scalar float math (${FUZZ_FLOAT_MATH:-64} random cases and fixed edges)" \
   bash tests/scripts/test-float-math.sh "${FUZZ_FLOAT_MATH:-64}" "$seed"
 check "scalar float math regression (one-ulp tiny normal, seed 23801198)" \

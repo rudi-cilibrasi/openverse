@@ -4,6 +4,7 @@ import OpenVerse.Front.Elab.Lowering
 import OpenVerse.Front.InitializerConvergence
 import OpenVerse.Front.Aliases
 import OpenVerse.Front.BuiltinValues
+import OpenVerse.Front.Bitwise
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -21,8 +22,8 @@ structure Admitted where
       from the definitions: `inferSignatures` checks them. -/
   typeDefaults : List STop
   /-- The compiler's definitions the program needs: the rationals' (#116),
-      `ReplaceAll`'s, the concurrency prelude's (#156) and subscribable
-      events' (#210, #220). -/
+      `ReplaceAll`'s, the bitwise functions', the concurrency prelude's
+      (#156) and subscribable events' (#210, #220). -/
   helpers : List STop
   /-- The functions of `helpers` that implement finite intrinsic operations
       (`InitializerConvergence`). -/
@@ -348,10 +349,15 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   SourceProfile.check opts.profile allTops0r opts.entry
   -- rationals (#116): the helpers, for a program that may use them
   let isRatMarker : STop → Bool := fun
-    | .const _ n _ _ _ => n == ratMarker || n == replaceAllMarker
+    | .const _ n _ _ _ => n == ratMarker || n == replaceAllMarker || n == bitwiseMarker
     | _ => false
   let usesReplaceAll := allTops0r.any (fun | .const _ n _ _ _ => n == replaceAllMarker | _ => false) || opts.entry.isSome
-  let usesRat := allTops0r.any isRatMarker || opts.entry.isSome
+  let usesRat := allTops0r.any (fun | .const _ n _ _ _ => n == ratMarker || n == replaceAllMarker | _ => false) ||
+    opts.entry.isSome
+  -- the bitwise functions' helpers, for a program that names one (also in
+  -- its entry expression)
+  let usesBitwise := allTops0r.any (fun | .const _ n _ _ _ => n == bitwiseMarker | _ => false) ||
+    (opts.entry.map mentionsBitwise).getD false
   -- (a type of the program's own cannot take a built-in type's name)
   for t in allTops0r do
     match t with
@@ -366,9 +372,12 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   checkForClauses allTops0r
   let helpers ← if usesRat then ratTops else pure []
   let helpers := helpers ++ (← if usesReplaceAll then replaceAllTops else pure [])
+  let helpers := helpers ++ (← if usesBitwise then bitwiseTops else pure [])
   -- These compiler-owned implementations expand finite intrinsic operations:
   -- Euclid/continued fractions decrease absolute remainders; ReplaceAll
-  -- advances through a finite input. Ordinary source names cannot supply them.
+  -- advances through a finite input; the bitwise helpers halve or double an
+  -- int64 at most 64 times (a left shift ends at the overflow error by then).
+  -- Ordinary source names cannot supply them.
   let intrinsicCalls := helpers.filterMap fun | .fn _ n .. => some n | _ => none
   let allTops000 := allTops0r.filter (!isRatMarker ·)
   -- modules (#112): every reference to a member, qualified (the entry

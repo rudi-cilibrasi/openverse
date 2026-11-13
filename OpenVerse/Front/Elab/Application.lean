@@ -60,6 +60,25 @@ def elabComparableWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx
     eerr a.pos (notComparable ctx.types r.ty "the value of comparable(…)")
   return ⟨← coerce a.pos r .dyn, .dyn⟩
 
+/-- A bitwise function (the Book's ch. 4 and API): of ints, as two's
+    complement sign-extended without limit, a result out of the int range
+    the overflow error; the shifts fail on a negative count. `BitNot(X)` is
+    `-1 - X`; the others call helpers written in Verse (`Front/Bitwise.lean`),
+    each argument evaluated once, in order. -/
+def elabBitwise (elabInts : Ctx → Pos → List SExpr → EM (List Expr)) (ctx : Ctx) (p : Pos)
+    (name : String) (args : List SExpr) (bracket : Bool) : EM R := do
+  let shift := name == "BitShiftLeft" || name == "BitShiftRight"
+  if shift && !bracket then eerr p s!"{name} can fail: call it with {name}[…]"
+  if !shift && bracket then eerr p s!"{name} cannot fail: call it with {name}(…)"
+  let arity := if name == "BitNot" then 1 else 2
+  if args.length != arity then
+    eerr p s!"{name} takes {if arity == 1 then "one int" else "two ints"}, found {args.length} argument(s)"
+  let es ← elabInts ctx p args
+  if name == "BitNot" then return ⟨.prim .sub [.lit (.int (-1)), es[0]!], .int⟩
+  let helper := "$bit" ++ (name.drop 3).toString
+  let some s := ctx.sig? helper | eerr p s!"internal error: the bitwise helper {helper} is missing"
+  return ⟨.call s.idx es, .int⟩
+
 set_option maxHeartbeats 800000 in
 partial def elabAppBaseWith
     (elabE : Ctx → SExpr → Option Ty → EM R)
@@ -382,6 +401,8 @@ partial def elabAppBaseWith
           (.seq (.assign lo (pick (le tb tc) tb tc)) (.seq (.assign hi (pick (le tb tc) tc tb))
           (.seq (.assign m (pick (le ta hi) ta hi)) (pick (le lo m) m lo)))))), t⟩
       | _, _ => eerr p s!"{name} takes {if name == "Clamp" then "three arguments" else "one argument"}"
+    | "BitAnd" | "BitOr" | "BitXor" | "BitNot" | "BitShiftLeft" | "BitShiftRight" =>
+      elabBitwise elabInts ctx p name args bracket
     | "Err" =>
       modify fun st => if st.errAt.isNone then { st with errAt := some p } else st
       return ⟨.prim .userErr [], .never⟩

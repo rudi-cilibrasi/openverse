@@ -1720,6 +1720,33 @@ wide implementation is tested against independent exact-fraction oracles;
 it is outside QuickProof's existing two-int arithmetic law. See
 [the rational seam](SEAMS.md#4-rational-arithmetic).
 
+## Bitwise functions: helpers written in Verse
+
+The Book's bitwise functions (ch. 4) are written with Verse Core's existing
+operations, as the rationals' helpers are, so Verse Core, its proofs, the
+binary format, the loader and the C runtime are unchanged. Six new
+primitives were the other route; their opcodes would change the header and
+the loader that the QuickProof theorems pin, whose proofs must then be
+replayed. `BitNot(X)` is `-1 - X` inline. `Front/Bitwise.lean` holds the
+others as Verse source, added to a program that names one (the parser's
+marker `$uses:bitwise`, or the entry expression), renamed `$bitAnd` etc.:
+
+- `BitAnd`, `BitOr`, `BitXor`: the operands' bits from the lowest up, by
+  `Floor(X / 2)` (toward minus infinity, so a negative number's bits are
+  its two's complement), until both operands are 0 or -1, every bit above
+  being the sign's; the bits seen are summed, and the rest, the operation
+  of the two signs from bit `i` up, weigh `-2^i` together. At most 63
+  rounds; every number computed is in range.
+- `BitShiftLeft[X, N]`: fails for `N < 0`, else doubles `X` up to `N` times
+  or until it is 0, a doubling out of range being the overflow error
+  (which an out-of-range result always reaches, and an in-range one never).
+- `BitShiftRight[X, N]`: fails for `N < 0`, else halves `X` up to `N` times
+  or until it is 0 or -1.
+
+`scripts/fuzz-bitwise.sh` checks both implementations against Python's
+unbounded ints with the int64 range, programs ending with the overflow
+error included.
+
 ## Generic functions: polymorphic Verse Core
 
 A generic function `F(X:t where t:type)` is elaborated once, with each type

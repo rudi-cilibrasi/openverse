@@ -42,7 +42,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Enums | `name := enum:` / `enum{A, B}`, `name.A`, equality, `case` that needs no `_` when every value is named (an enumerator is its index in Verse Core); `enum<open>` may gain values, so a `case` on one needs `_` or a failure context (`<closed>` is the default) | ch. 9 |
 | Maps | `[k]v`, `map{k => v, …}` (a key given twice keeps its last value, at its last position), `M[k]` (fails on a missing key), `set M[k] = v` (insert or update; in Verse the key's reference is `<decides>`, the Book's API reference, so such a `set`, also as a path's last step, `set S.M[k] = v`, is written in a failure context, as the Book's tests do, `if (set M0[0] = 42)`, `(set Map[I] = I) or Err()`; its last key inserts, so it succeeds; its value is `v`), `set M[k] op= v` (fails on a missing key), `.Length`, `for (V : M)`, `for (K -> V : M)` in insertion order, `ConcatenateMaps(M1, M2)` (exactly two maps, ch. 3: more by chained calls; their pairs laid down in turn, as `map{…}` lays its own: a key both maps have takes the second map's value at the second map's place, the Book's API reference and `ConcatenateMaps.versetest` 21, 33), order-sensitive equality (a map is the array of its pairs in Verse Core) | §3, §9.3 |
 | Array methods | (also of a tuple of one element type, which is an array where one is expected: `('a', 'b', 'c').Slice[1]`) `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`, `A.RemoveFirstElement[x]`, `A.Remove[i, j]` (half-open), `A.ReplaceElement[i, x]`, `A.ReplaceFirstElement[x, y]`, `A.Insert[i, B]`, `A.Last[]`, `A.Last[n]` (the element n before the last) (all failable); `A.RemoveAllElements(x)`, `A.ReplaceAllElements(x, y)`, `A.ReplaceAll(Pattern, Replacement)` (contiguous subarrays, left to right, not overlapping; an empty pattern changes nothing), `Concatenate(A, B, …)` or `Concatenate(Arrays)` (#150) (never failing) | §9.1 |
-| Built-ins | `Print(s)`, `ToString(x)` (int, float, char, string), `Floor[F]`, `Ceil[F]`, `Round[F]`, `Int[F]` (of a float, failable), `Floor(R)`, `Ceil(R)` (of a rational or an int, never failing; `Floor(X / Y)` fails when `Y = 0`, as `X / Y` does), `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Clamp(Val, A, B)` (the median of the three, of ints or of floats, NaN ordering above +Inf), `Sgn(X)` (-1, 0 or 1 of an int or a float, NaN of NaN), `F.IsFinite[]` (as `IsFinite[F]`), `Err()`; the conversions of chars and code points as methods (see [char32](#char32)): `C.ToCodeUnit()`, `C.ToAsciiChar32[]` of a char, `C.ToCodePoint()`, `C.ToAsciiString()` of a char32, `N.ToChar[]`, `N.ToChar32[]` of an int | API reference |
+| Built-ins | `Print(s)`, `ToString(x)` (int, float, char, string), `Floor[F]`, `Ceil[F]`, `Round[F]`, `Int[F]` (of a float, failable), `Floor(R)`, `Ceil(R)` (of a rational or an int, never failing; `Floor(X / Y)` fails when `Y = 0`, as `X / Y` does), `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Clamp(Val, A, B)` (the median of the three, of ints or of floats, NaN ordering above +Inf), `Sgn(X)` (-1, 0 or 1 of an int or a float, NaN of NaN), `F.IsFinite[]` (as `IsFinite[F]`), `BitAnd(X, Y)`, `BitOr`, `BitXor`, `BitNot(X)`, `BitShiftLeft[X, N]`, `BitShiftRight[X, N]` (see [Bitwise functions](#bitwise-functions)), `Err()`; the conversions of chars and code points as methods (see [char32](#char32)): `C.ToCodeUnit()`, `C.ToAsciiChar32[]` of a char, `C.ToCodePoint()`, `C.ToAsciiString()` of a char32, `N.ToChar[]`, `N.ToChar32[]` of an int | API reference |
 | Modules | `name := module:` (nested), `M.F`, `A.B.F`, the types `M.c` and values `M.c{…}`, `(M:)F`, `using{M}` at file or module scope, `<public>` members (`<internal>` is the default); see [Modules](#modules) | ch. 16 |
 | Access | `<public>`, `<internal>` (the default), `<protected>`, `<private>`, `<scoped{M, …}>` and `S := scoped{…}`, `<epic_internal>`, on modules, their definitions, a class's members and constructor, and `var<w> X<r>:t`; checked where each use is written, and no definition exposes a less visible one; see [Access](#access) | ch. 12 |
 | Qualified names | `(M:)x`, `(c:)m`, `(e:)v`, `(local:)X`, `(/Verse.org/Verse:)int`, in uses and in definitions' heads: a qualifier names a scope, the name is looked up in exactly that scope, and a definition's qualifier names where it is defined; see [Qualified names](#qualified-names) | ch. 9, 10, 16 |
@@ -2314,6 +2314,40 @@ their earlier effect handling; this change enforces `<reads>` on the new
 seven without changing those existing programs. The broader effect audit
 is tracked in #494; `<predicts>` is not currently enforced.
 
+## Bitwise functions
+
+The Book's ch. 4 ("Bitwise Operations", "Bit Shift Operations") and its
+API reference: of ints, on their two's complement bit patterns, "sign-extended
+forever to the left", on openverse's 64-bit ints (the Blueprint VM's: a
+result out of range is the overflow error, exit 2; [the pinned
+rules](research/book-library-functions.md#bitwise-functions)):
+
+```verse
+Main():void =
+    Print("{BitAnd(12, 10)} {BitOr(12, 10)} {BitXor(12, 10)} {BitNot(12)}")   # 8 14 6 -13
+    if (L := BitShiftLeft[-5, 2], R := BitShiftRight[-97, 5]) then Print("{L} {R}")   # -20 -4
+    if (not BitShiftLeft[5, -1]) then Print("a negative count fails")
+```
+
+- `BitAnd(X, Y)`, `BitOr(X, Y)`, `BitXor(X, Y)` and `BitNot(X)` (which is
+  `-X - 1`) never fail and are never out of range.
+- `BitShiftLeft[X, N]` is `X · 2^N` and `BitShiftRight[X, N]` is
+  `Floor(X / 2^N)` (an arithmetic shift: toward minus infinity, so 0 or -1
+  once every bit is shifted out, `BitShiftRight[-1, 1000]` is -1); both
+  fail when `N < 0`. A left shift out of range is the overflow error
+  (`BitShiftLeft[1, 63]`; `BitShiftLeft[-1, 63]` is the least int;
+  `BitShiftLeft[0, N]` is 0 for every `N ≥ 0`).
+- Each argument is evaluated once, in order; floats are refused. They are
+  soft built-ins, as `Clamp` is (a program may define its own), and of one
+  signature, so a program may name one as a value (`F(:int, :int):int`,
+  the shifts `<decides>`).
+- On VerseVM ints are unbounded and so are these; openverse's are not
+  (see [Readings](#readings-openverse-takes), `int` range), so the Book's
+  `verse_vm_only` cases with operands beyond 64 bits differ.
+- They are written in Verse with Verse Core's existing operations
+  (`Front/Bitwise.lean`; DESIGN.md, "Bitwise functions"): no Verse Core,
+  format or runtime change.
+
 ## rational
 
 `X / Y` on ints is a `rational`, and fails when `Y = 0` (Book of Verse
@@ -2951,8 +2985,7 @@ Main()<suspends>:void =
 
 ## Not supported in v1
 
-`ToString` of rationals (see [rational](#rational)), float functions beyond those of [float](#float), the bitwise functions `BitAnd`, `BitOr`, `BitXor`, `BitNot`, `BitShiftLeft`, `BitShiftRight` (see [the pinned rules](research/book-library-functions.md#bitwise-functions-not-implemented)),
-the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
+`ToString` of rationals (see [rational](#rational)), float functions beyond those of [float](#float), the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, what [comparable](#comparable) lists as not yet, module paths `using{/Verse.org/…}` (accepted and ignored), paths as values and path qualifiers other than `(/Verse.org/Verse:)` of a built-in type, two members of one name in a class (`(c:)M` beside an inherited `M`, Book ch. 10), the
 specific overload/call gaps listed under [Overloading](#overloading), nested
 functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice), concurrency beyond [Concurrency](#concurrency), and the unsupported
