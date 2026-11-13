@@ -328,11 +328,16 @@ def Ctx.choiceCoercionBody (ctx : Ctx) (body : SExpr) : SExpr :=
     .tuple p [.ident p dictionary.name, .construct p "$choiceConversion" [source.toSTy, target.toSTy] []]), body] false
 
 /-- (#243, #246, #335) The locals in scope that `code` uses, in order of
-    first use: what a function made from `code` takes as parameters. A
-    generated function is keyed by what its code depends on, these with what
-    of them it depends on among them (`firstKey`, `contKey`, `refineTagOf`),
-    so that each elaboration of the code that would make the same function
-    finds it, and none that would make another does. -/
+    first use: what a function made from `code` captures (`firstLiftOf`,
+    `contLiftOf`, `contForLiftOf`, a `for`'s stages). A generated function
+    is keyed by what its code depends on: its place and code, and these
+    locals with what the function depends on of each (`firstKey`: type and
+    mutability; `contKey`: type; `refineTagOf`, in a source context: type,
+    mutability and frame storage), so that each elaboration of the code
+    that would make the same function finds it, and none that would make
+    another does. So a name the elaborator makes for such a local says no
+    more than its place (`$forReturn…`): one that counted the locals in
+    scope differed between the source and each continuation's function. -/
 def Ctx.usedLocals (ctx : Ctx) (code : SExpr) : List Local :=
   (Choice.namesUsed code).filterMap ctx.lookup
 
@@ -746,8 +751,8 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     | some l => pure l
     | none => throw s!"internal: parameter {n}"
   -- (the consumer's names the clauses after it use, in order of first use)
-  let caps : List Local := (Choice.namesUsed (ctx.choiceCoercionBody (.block p rest))).eraseDups.filterMap fun n =>
-    if pnames.contains n then none else ctx.lookup n
+  let caps : List Local := (ctx.usedLocals (ctx.choiceCoercionBody (.block p rest))).filter
+    (!pnames.contains ·.name)
   let setNames := Choice.setsIn (.block p rest)
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
   -- (its own binding too: a call in the clauses of another such call's
@@ -939,7 +944,7 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
     else pure none
   let breaks := firstBreaks rest
   let rest := if breaks then rest.map Refine.liftBreaks else rest
-  let caps : List Local := (Choice.namesUsed (ctx.choiceCoercionBody (.block p rest))).eraseDups.filterMap ctx.lookup
+  let caps : List Local := ctx.usedLocals (ctx.choiceCoercionBody (.block p rest))
   let setNames := Choice.setsIn (.block p rest)
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
   let binds := (b :: Choice.boundIn rest).eraseDups
@@ -1085,7 +1090,7 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
     | .app _ (.ident _ "$forReturnBody") [.block _ [_, .set _ (.ident _ _) none _], _, _] false => true
     | _ => false
   if !breaks && (Refine.findPart Refine.isBreak true (.block p rest)).isSome then throw "a break"
-  let caps : List Local := (Choice.namesUsed (ctx.choiceCoercionBody (.block p (rest ++ [body])))).eraseDups.filterMap ctx.lookup
+  let caps : List Local := ctx.usedLocals (ctx.choiceCoercionBody (.block p (rest ++ [body])))
   let setNames := Choice.setsIn (.block p (rest ++ [body]))
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
   let (tps, typeParams, typeArgs) ← contTypes ctx p (bty :: caps.map (·.ty)) [vty] written
@@ -1205,7 +1210,7 @@ def forStagePrefixOf (ctx : Ctx) (plan : Choice.ForStagePlan) (args : List Ty) (
   let clauses := clauses.map fun e => Refine.substTypes σt (qualify e)
   let body := Refine.substTypes σt (qualify body)
   let written := ctx.choiceCoercionBody (.block p (clauses ++ [body] ++ (copyNames ++ borrowNames).map (SExpr.ident p ·)))
-  let caps := (Choice.namesUsed written).eraseDups.filterMap ctx.lookup
+  let caps := ctx.usedLocals written
   let key := s!"prefix{flat}" ++ plan.key ++ contKey ctx p "$prepare" [written] ++ forStageCaptureKey ctx args caps
   let name := s!"{plan.base}$prepare{key.hash}"
   let (tps, more, witnesses) ← contTypes ctx p (caps.map (·.ty)) args written
@@ -1251,7 +1256,7 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
   let clauses := clauses.map qualify
   let body := qualify body
   let written := ctx.choiceCoercionBody (.block p (clauses ++ [body] ++ (ctx.forStageCopies ++ ctx.forStageBorrows).map (SExpr.ident p ·)))
-  let caps := (Choice.namesUsed written).eraseDups.filterMap ctx.lookup
+  let caps := ctx.usedLocals written
   let key := s!"env{ctx.forStageFlat}" ++ plan.key ++ contKey ctx p "$resume" [written] ++ forStageCaptureKey ctx ctx.forStageArgs caps
   let name := s!"{plan.base}$env{key.hash}"
   let args := ctx.forStageArgs
