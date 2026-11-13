@@ -97,6 +97,8 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
                   otherwise)
        nogdefer  (no defer: in a generator's code: its own, its else's block's, or Odv's, a
                   function with several values it calls, #283; on with frames otherwise)
+       nocase    (no case whose arms are a branchy if's branches, #283; on with bif otherwise)
+       noretscope (no return of RT2 or RT3 in a block or a case's arm, #283; on otherwise)
        nocls     (no call of a generator of itself in a field of a class's construction,
                   ocls{A := …, B := …}, whose superclass's field B is evaluated first,
                   #283; on with seq otherwise)
@@ -524,6 +526,12 @@ RRB = random.Random(seed * 1000003 + 283392)
 #       Print("e{RTy}")                     _ => Print("e{RTy}")
 # (with RET_DEFER, the branch's defer:s in the block, or the inner if a case)
 RTV = random.Random(seed * 1000003 + 283297)
+# ---- #283, with bif (nocase turns it off): at times a case whose arms are a branchy if's
+# branches, `(case (S) { 1 => (A | B), 3 => C, _ => (D | E) })`, where a branchy if may be: the
+# scrutinee once, then the first arm whose pattern it equals, or `_`'s, its alternatives the
+# case's, as the if chain that picks the arm, which adds no choice of its own (#331). A stream
+# of its own decides, so seeds keep their other programs.
+RCASE = random.Random(seed * 1000003 + 283299)
 # ---- #283, flag frames (on with lazy; noframes turns it off): a generator's call of
 # itself may have code after it, which runs on each of the call's values (a return
 # frame): an alternative `Gz0(N - 1, A) + e` (e any value, with no var), `L + Gz0(…)`
@@ -668,7 +676,7 @@ class Return(Exception):
 
 # the kinds of node whose insides are failure contexts of their own (or an
 # inlined function's arguments), where a lifted call's clauses are not the test's
-NESTED = ('not', 'logic', 'optor', 'orx', 'ifx', 'bif', 'mcall', 'choice', 'blk', 'cons', 'ccons', 'na', 'nam', 'mvm', 'rt', 'rt2', 'rt3', 'ovl',
+NESTED = ('not', 'logic', 'optor', 'orx', 'ifx', 'bif', 'casex', 'mcall', 'choice', 'blk', 'cons', 'ccons', 'na', 'nam', 'mvm', 'rt', 'rt2', 'rt3', 'ovl',
           'ow2')
 
 
@@ -758,6 +766,12 @@ def gen_e(scope, vars_, d, ch):
         m = gen_gcall(scope, vars_, d)
         if m is not None:
             return m
+    if BIF and 'nocase' not in flags and ch and NCH[0] < 4 and d < 3 and RCASE.random() < 0.05 \
+            and (not MV or PROD[0] * 3 <= CTX['plim']) and not lift_block():
+        NCH[0] += 1
+        if MV:
+            PROD[0] *= 3
+        return gen_case(scope, vars_, d)
     if BIF and ch and NCH[0] < 4 and d < 3 and R.random() < (0.4 if 'heavy' in flags else 0.14) \
             and (not MV or PROD[0] * 3 <= CTX['plim']) and not lift_block():
         NCH[0] += 1
@@ -1914,6 +1928,23 @@ def gen_bif0(scope, vars_, d):
     return ('bif', arms, els, R.random() < 0.5)
 
 
+def gen_case(scope, vars_, d):
+    """(#283) a case whose arms are a branchy if's branches; its scrutinee with no choice."""
+    saved_inbif = CTX.get('inbif')
+    CTX['inbif'] = True
+    try:
+        scrut = gen_e(scope, vars_, d + 1, False)
+        pats = sorted(R.sample(range(-1, 6), R.randint(1, 3)))
+        arms = [(pt, branch_alts(scope, vars_, d)) for pt in pats]
+        els = branch_alts(scope, vars_, d)
+        if any(is_call(x) for _, a in arms for x in a) or any(is_call(x) for x in els):
+            arms = [(pt, [unblock(x) for x in a]) for pt, a in arms]
+            els = [unblock(x) for x in els]
+        return ('casex', scrut, arms, els)
+    finally:
+        CTX['inbif'] = saved_inbif
+
+
 def gen_cmp(scope, vars_, d, ch):
     if CTX['fmax'] is not None and 'nocmpcall' in flags:
         # (a call of a function with several values in a comparison in a
@@ -2054,6 +2085,9 @@ def show(e):
         for i, (cl, alts) in enumerate(e[1]):
             out += ('if' if i == 0 else ' else if') + f' ({show_cl(cl, ", ")}) then {show_alts(alts)}'
         return '(' + out + f' else {show_alts(e[2])})'
+    if t == 'casex':
+        arms = ''.join(f'{pt} => {show_alts(a)}, ' for pt, a in e[2])
+        return f'(case ({show(e[1])}) {{ {arms}_ => {show_alts(e[3])} }})'
     raise AssertionError(e)
 
 
@@ -2140,7 +2174,7 @@ def failable(scope, vars_):
 
 def top_choice_e(e):
     t = e[0]
-    if t in ('choice', 'bif', 'mcall', 'rcall', 'gcall', 'nam', 'mvm', 'rt', 'rt2', 'rt3', 'ovl', 'ows', 'ow2', 'om', 'owr'):
+    if t in ('choice', 'bif', 'casex', 'mcall', 'rcall', 'gcall', 'nam', 'mvm', 'rt', 'rt2', 'rt3', 'ovl', 'ows', 'ow2', 'om', 'owr'):
         return True
     if t in ('owone', 'ow1', 'om1'):
         return top_choice_e(e[1])
@@ -2640,6 +2674,12 @@ def ev(e, st, k, mode):
         if res is not None:
             return ev(e[2], res[1], k, mode)
         return ev(e[3], st, k, mode)
+    if t == 'casex':
+        # (#283: the scrutinee, then the picked arm's alternatives, as a branchy if's branch)
+        def kcase(v, s):
+            alts = next((a for pt, a in e[2] if pt == v), e[3])
+            return bif_alts(alts, s, k, mode)
+        return ev(e[1], st, kcase, mode)
     raise AssertionError(e)
 
 

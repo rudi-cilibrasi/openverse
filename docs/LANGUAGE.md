@@ -1060,6 +1060,16 @@ Main():void =
   for (Z := if (V := M?) then Two(V) else Down(2)) { … }   # Two's values; or Down's
   ```
 
+  So may a `case` whose arms have them (#283): it is the `if` chain that
+  picks its arm, `K := case (e) { p₀ => 0, … }` (its scrutinee once, first,
+  its patterns as written, so it fails, or is refused as not exhaustive, as
+  the `case` would), then `if (K = 0) then a₀ else if …`, with no choice of
+  its own; the picked arm's values are the `case`'s:
+
+  ```verse
+  for (X := 1..3, V := (case (X) { 1 => 10 | 11, 2 => Two(20), _ => 5 })) { … }   # 10, 11; 20, 21; 5
+  ```
+
   An `if` chain without a final `else` still has type `void`. Each value
   of the selected branch gives one `void` result. If no condition
   succeeds, the implicit branch gives one `void` result.

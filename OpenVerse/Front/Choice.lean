@@ -287,6 +287,9 @@ partial def hasLiftable : SExpr → Bool
   -- (a construction's field values and a block's clauses, #283)
   | .construct _ _ _ fs => fs.any fun | .decl _ _ _ _ x => hasLiftable x | x => hasLiftable x
   | .block _ ss => ss.any liftsHere
+  -- (#283) a `case`'s scrutinee and arms, as the `if` chain that selects its
+  -- arm is lifted (`caseIf`)
+  | .caseE _ x arms => hasLiftable x || arms.any fun (_, a) => hasLiftable a
   | _ => false
 
 /-- A clause with something to lift into the clauses it is among: in a
@@ -504,6 +507,24 @@ def hasReturn : SExpr → Bool := anyE fun | .ret .. => true | _ => false
 def stmtsOf : SExpr → List SExpr
   | .block _ ss => ss
   | e => [e]
+
+/-- (#283) A `case` as the `if` chain that selects its arm, where its arms
+    are taken apart (a `return` in one, a choice to lift): the arm picked by
+    its number first, `k := case (e) { p₀ => 0,
+    p₁ => 1, … }` (the same patterns, so the same failure when none matches),
+    then `if (k = 0) then a₀ else if (k = 1) then a₁ … else aₙ`. None when its
+    scrutinee has a `return`. -/
+def caseIf (k : String) : SExpr → Option (SExpr × SExpr)
+  | .caseE p e arms => do
+    guard (!hasReturn e)
+    let (_, lastArm) ← arms.getLast?
+    let sel := SExpr.decl p k none false (.caseE p e (arms.zipIdx.map fun ((pat, _), i) => (pat, .int p i)))
+    -- (each `if` at its arm's place, so names made for it are its own)
+    let chain := (arms.dropLast.zipIdx).foldr (fun ((_, a), i) acc =>
+      let q := a.pos
+      SExpr.ite q [.cmp q (.ident q k) [("=", .int q i)]] a (some acc)) lastArm
+    return (sel, chain)
+  | _ => none
 
 /-- Calls of the functions `mv` as `$inline` markers with an empty template:
     enough to see whether a body has several values. -/
@@ -749,6 +770,15 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
       LM.bind p "c" (.app p (.ident p "$branchChoice") [e] false)
     else
       LM.bind p "c" (.app p (.ident p "$branchChoice") [fillElse e] false) (some (.name "void"))
+  | .caseE p x arms =>
+    -- (#283) a `case`: its scrutinee first; then, with something to lift in
+    -- an arm, the `if` chain that selects it (`caseIf`), a block of its
+    -- selector and the `if`, lifted as any block and `if` are
+    let e' := SExpr.caseE p (← liftE isVal isField x) arms
+    if !arms.any (hasLiftable ·.2) then return e'
+    match caseIf (← LM.fresh p "k") e' with
+    | some (sel, chain) => liftE isVal isField (.block p [sel, chain])
+    | none => return e'
   | .app p (.ident q "$each") [.app p2 g args br] false =>
     -- (a call of a recursive function with several values, #235: the
     -- choices in its arguments lifted, then each argument bound, so that
@@ -1897,21 +1927,6 @@ def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String
     let vs := ((localDecls body).map (·.1)).eraseDups.filter fun x =>
       set.contains x && anyE (fun | .decl _ y (some _) true _ => y == x | _ => false) body
     if !frames || vs.isEmpty then none else loopShapeOf? g mv (cellVars vs body) grp frames params fieldOrder
-
-/-- (#283) A `case` with a `return` in an arm as the `if` chain that selects
-    its arm: the arm picked by its number first, `k := case (e) { p₀ => 0,
-    p₁ => 1, … }` (the same patterns, so the same failure when none matches),
-    then `if (k = 0) then a₀ else if (k = 1) then a₁ … else aₙ`. None when its
-    scrutinee has a `return`. -/
-def caseIf (k : String) : SExpr → Option (SExpr × SExpr)
-  | .caseE p e arms => do
-    guard (!hasReturn e)
-    let (_, lastArm) ← arms.getLast?
-    let sel := SExpr.decl p k none false (.caseE p e (arms.zipIdx.map fun ((pat, _), i) => (pat, .int p i)))
-    let chain := (arms.dropLast.zipIdx).foldr (fun ((_, a), i) acc =>
-      SExpr.ite p [.cmp p (.ident p k) [("=", .int p i)]] a (some acc)) lastArm
-    return (sel, chain)
-  | _ => none
 
 /-- How many `if`s with a `return` in them `e` has (#283), a `case`'s arms
     counted as the `if` chain that selects them (`caseIf`). -/
