@@ -51,11 +51,11 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   APIs (persistence, JSON, natives; 345); compiler tooling such as bytecode
   and digests (128); VM-conditional code inside a definition (37) and one
   file that defines `Main` itself (1).
-- Of the **9,783 translatable cases**, openverse **agrees on 8,179 (84%)**,
-  refuses 1,374 valid programs, **accepts 135 refused ones**, gives a
+- Of the **9,783 translatable cases**, openverse **agrees on 8,207 (84%)**,
+  refuses 1,346 valid programs, **accepts 135 refused ones**, gives a
   **different result in 95** (82 of them `verse_vm_only` cases of unbounded
   ints) and hits **no internal error**. On test cases alone (without
-  `:decls`) it agrees on 8,015 of 9,567. (When the survey was
+  `:decls`) it agrees on 8,042 of 9,567. (When the survey was
   taken, at `0e69cfb`: 6,409 agreed, 2,817 refused, 482 accepted, 86
   differed and 4 internal errors; before the parser forms, at main
   `99ed203`: 6,417 agreed, 2,809 refused, 482 accepted, 86 differed; with
@@ -1221,6 +1221,17 @@ then 50, then 65 better).
   refusal to the rules above; `ParametricFunctions.versetest` 192, 327, 464,
   546, 653 and `TypeParam.versetest:32`, `GenerateFunctionForParametricInterface:10`,
   `FORT-741838:83`: past the type arguments to what is left).
+- **With source upper bounds.** Merged with [After source upper
+  bounds](#after-source-upper-bounds) (#610), a parameter `t:subtype(c)` or
+  `t:castable_subtype(c)` a function uses as a type is a bounded type
+  argument (`where t:subtype(c)`), so 11 cases more agree that need both:
+  `ParametricFunctions.versetest` 84, 89, 94, 103, 109, 147, 152, 155, 164
+  (its declarations give types as arguments and bound type parameters) and
+  `ParametricTypes.versetest` 1305, 1313 (`u:subtype(t)` of an earlier type
+  argument; 1321 and 1329, of function types, are left). Re-recorded from a
+  fresh run on the merged compiler: **8,207 agree, 1,346 refuse, 135
+  accept, 95 differ**; `compare` against each branch's baseline: 0 worse,
+  76 better than #610's, 28 better than this one's.
 - **Programs.** Against main `532f79d`, over every suite and the corpus
   `corpus2`, no program's bytes, output or messages changed but the new
   tests, `field_accessors` (the refusal of the form, removed),
