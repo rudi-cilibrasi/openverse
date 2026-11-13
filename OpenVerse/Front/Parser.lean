@@ -294,11 +294,14 @@ partial def parseFnSig : PM STy := do
           modify fun st => { st with typeDefaults := st.typeDefaults.push (d.pos, n, t, e) }
         ps := ps.push (STy.namedParam n optional t)
       else
-        -- (a positional parameter may be named, `X:t`; the name is not
-        -- part of the type)
-        if ((← peekT).identName?).isSome && (← peekT 1).isSym ":" then bump
-        expectSym ":"
-        ps := ps.push (← parseType)
+        -- (a positional parameter may be named, `X:t`, or written as a
+        -- function's signature, `F(:t):u`; the name is not part of the type)
+        if ((← peekT).identName?).isSome && (← peekT 1).isSym "(" then
+          bump; ps := ps.push (← parseFnSig)
+        else
+          if ((← peekT).identName?).isSome && (← peekT 1).isSym ":" then bump
+          expectSym ":"
+          ps := ps.push (← parseType)
       if (← peekT).isSym "," then bump else break
   expectSym ")"
   let mut effs := #[]
@@ -1088,11 +1091,14 @@ partial def parseParamItem : PM (Pos × String × STy × Bool × Option SExpr ×
       perr t s!"a named parameter inside a tuple parameter (?{n}) is not supported yet"
     if let #[one] := items then return one
     let binds := items.toList.zipIdx.flatMap fun ((_, n, ty, _, _, inner), i) =>
-      if inner.isEmpty then [(n, ty, [i])] else inner.map fun (m, mt, path) => (m, mt, i :: path)
+      if !inner.isEmpty then inner.map fun (m, mt, path) => (m, mt, i :: path)
+      else if n.isEmpty then [] else [(n, ty, [i])]
     return (t.pos, "", .tup (items.toList.map (·.2.2.1)), false, none, binds)
   let named := t.isSym "?"
   if named then bump
-  let pn ← expectIdent
+  -- (`F(:t)`: an unnamed parameter, as function types write one; its name
+  -- is "", which the parameter list makes one no program can write)
+  let pn ← if !named && t.isSym ":" then pure "" else expectIdent
   -- (`F(:t):u`: a parameter of a function type, written as a function's
   -- signature, Book of Verse ch. 6)
   let pty ← if (← peekT).isSym "(" then parseFnSig else do expectSym ":"; parseType
@@ -1114,7 +1120,7 @@ partial def parseParamList : PM (Array SParam × Array TParam × List SExpr) := 
     repeat
       let (q, pn, pty, named, dflt, inner) ← parseParamItem
       let dflt := dflt.map (·.substIdents σ)
-      let pn := if inner.isEmpty then pn else s!"$tuple{ps.size}"
+      let pn := if !inner.isEmpty then s!"$tuple{ps.size}" else if pn.isEmpty then s!"$unnamed{ps.size}" else pn
       for (n, ty, path) in inner do
         let e := path.foldl (fun e (i : Nat) => SExpr.app q e [.int q (Int.ofNat i)] false) (.ident q pn)
         σ := σ ++ [(n, e)]
@@ -1310,6 +1316,20 @@ partial def parseClassBody (p : Pos) (name : String) (tps : List TParam) (isIfac
     (if blocks.isEmpty then [] else [.fn p "$block" [] [] [] (.name "void") (.block p blocks)])
   return .classDef p name tps specs parents.toList isIface fields overrides methods
 
+/-- The type parameters of `name(t:type, u:subtype(…), …) := class …` or
+    `:= struct …` defined at `p`; `n` is where a malformed one is reported.
+    One may be unnamed, `t(:type)` (Book of Verse tests), as nothing then
+    names it. -/
+def typeParamsOf (p : Pos) (n : Token) (ps : Array SParam) : PM (List TParam) :=
+  ps.toList.mapM fun prm => do
+    match prm.named, prm.default, prm.ty with
+    | false, none, .name "type" => pure { pos := p, name := prm.name, constraint := "type" }
+    | false, none, .app "subtype" [bound] => pure (TParam.withUpperBound p prm.name bound)
+    | _, _, _ =>
+      -- (a group has no name the program wrote)
+      let w := if prm.name.startsWith "$tuple" then "t" else prm.name
+      perr n s!"a parameter of a parametric type is written {w}:type or {w}:subtype(…)"
+
 /-- The definitions at column `col`, their names qualified by `pfx` (the
     enclosing modules, `A::B::`, #112). A module is flattened: its members
     are definitions of qualified names, and markers record the module
@@ -1434,12 +1454,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
         let isIface := (← peekT 1).isKw "interface"
         bump; bump
         if !tps.isEmpty then perr n "a parametric type takes its parameters without a where clause"
-        let tparams ← ps.toList.mapM fun prm => do
-          match prm.named, prm.default, prm.ty with
-            | false, none, .name "type" => pure { pos := t.pos, name := prm.name, constraint := "type" }
-            | false, none, .app "subtype" [bound] => pure (TParam.withUpperBound t.pos prm.name bound)
-            | _, _, _ => perr n s!"a parameter of a parametric type is written {prm.name}:type or {prm.name}:subtype(…)"
-        tops := tops.push (← parseClassBody t.pos name tparams isIface)
+        tops := tops.push (← parseClassBody t.pos name (← typeParamsOf t.pos n ps) isIface)
         continue
       if (← peekT).isSym ":=" && (← peekT 1).isKw "struct" then
         ofExcept <| EffectPolicy.checkNonFunction t.pos "type declaration" pre
@@ -1447,11 +1462,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
         let d ← peekT
         bump
         if !tps.isEmpty then perr d "a parametric type takes its parameters without a where clause"
-        let tparams ← ps.toList.mapM fun prm => do
-          match prm.named, prm.default, prm.ty with
-            | false, none, .name "type" => pure { pos := t.pos, name := prm.name, constraint := "type" }
-            | false, none, .app "subtype" [bound] => pure (TParam.withUpperBound t.pos prm.name bound)
-            | _, _, _ => perr n s!"a parameter of a parametric type is written {prm.name}:type or {prm.name}:subtype(…)"
+        let tparams ← typeParamsOf t.pos n ps
         match ← parseFnBody with
         | .structDef bp [] specs fs => tops := tops.push (.const t.pos name none (.structDef bp tparams specs fs))
         | _ => perr d s!"only structs can be parametric in openverse ({name})"
