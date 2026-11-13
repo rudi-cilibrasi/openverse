@@ -643,7 +643,10 @@ partial def parseBraced (p : Pos) : PM SExpr := do
     repeat
       let t ← peekT
       checkIndent t
-      if t.isSym ";" || t.isSym "," then bump; stmts := stmts.push (← parseExpr c)
+      if t.isSym ";" || t.isSym "," then
+        bump
+        -- (`{a; b;}`: a `;` may end the block)
+        if !(t.isSym ";" && (← peekT).isSym "}") then stmts := stmts.push (← parseExpr c)
       else if t.isSym "}" then break
       else if t.bol && !t.isEof then stmts := stmts.push (← parseExpr c)
       else perr t s!"expected ';', a new line or '}', found {t.tok.describe}"
@@ -661,7 +664,9 @@ partial def parseBracedItems (item : Nat → PM SExpr) : PM (List SExpr) := do
     repeat
       let t ← peekT
       checkIndent t
-      if t.isSym ";" || t.isSym "," then bump; items := items.push (← item c)
+      if t.isSym ";" || t.isSym "," then
+        bump
+        if !(t.isSym ";" && (← peekT).isSym "}") then items := items.push (← item c)
       else if t.isSym "}" then break
       else if t.bol && !t.isEof then items := items.push (← item c)
       else perr t s!"expected ';', a new line or '}', found {t.tok.describe}"
