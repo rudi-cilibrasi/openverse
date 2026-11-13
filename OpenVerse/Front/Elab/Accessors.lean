@@ -143,10 +143,31 @@ def accessorDecides (ctx : Ctx) (p : Pos) (place : AccessorPlace) (kind m : Stri
     eerr p s!"{place.written} is a field with accessors whose {kind} {m} for this path can fail: use it in a failure context"
   return s.decides
 
-/-- The position of the calls of accessors the elaboration writes: no
-    source definition's, so that the accessors' own access does not judge
-    them (`checkMemberAccess`): a field's does. -/
-def accessorCallPos : Pos := { line := 0, col := 0 }
+/-- The context of a call of an accessor the elaboration writes for a use of
+    a field: marked, so that the accessor's own access does not judge it
+    (`Ctx.accessorCall`, `elabMethodCall`): the field's does, where it is
+    used. -/
+def accessorCtx (ctx : Ctx) : Ctx := { ctx with accessorCall := true }
+
+/-- The indices and keys of a path into a field's value, each evaluated into
+    a slot, in order, and the arguments the accessor is then called with
+    (a struct's field by its name, a string). -/
+def accessorKeys (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (steps : List PlaceStep) :
+    EM (List Expr × List Local × List SExpr) := do
+  let mut code : Array Expr := #[]
+  let mut locals : List Local := []
+  let mut keys : Array SExpr := #[]
+  for step in steps do
+    match step with
+    | (kp, .inr k) =>
+      let rk ← elabE { ctx with locals := locals ++ ctx.locals } k none
+      let ks ← fresh rk.ty
+      code := code.push (.assign ks rk.e)
+      let kName := s!"$accessorKey{ks}"
+      locals := { name := kName, slot := ks, ty := rk.ty, mutable := false } :: locals
+      keys := keys.push (.ident kp kName)
+    | step => keys := keys.push (accessorStepArg step)
+  return (code.toList, locals, keys.toList)
 
 /-- A read of a field with accessors, and of a path into its value: one call
     of the getter that takes the path (Book of Verse ch. 10, "Fields with
@@ -162,18 +183,18 @@ def elabAccessorRead (elabE : Ctx → SExpr → Option Ty → EM R)
   let slot ← fresh o.ty
   let name := s!"$accessorReceiver{slot}"
   let ctx' := { ctx with locals := { name, slot, ty := o.ty, mutable := false } :: ctx.locals }
-  let q := accessorCallPos
-  let r ← elabApp ctx' q (.member q (.ident q name) place.field.getter)
-    (accessorArg q :: place.steps.map accessorStepArg) decides exp
-  return ⟨.seq (.assign slot o.e) r.e, r.ty⟩
+  let (keyCode, keyLocals, keys) ← accessorKeys elabE ctx' place.steps
+  let q := place.pos
+  let ctx'' := accessorCtx { ctx' with locals := keyLocals ++ ctx'.locals }
+  let r ← elabApp ctx'' q (.member q (.ident q name) place.field.getter) (accessorArg q :: keys) decides exp
+  return ⟨(Expr.assign slot o.e :: keyCode).foldr Expr.seq r.e, r.ty⟩
 
 /-- The call of an accessor `m` (with no path) on an object of class `d`
     held in slot `yd`, at `ty`. -/
 def accessorOn (elabApp : Ctx → Pos → SExpr → List SExpr → Bool → Option Ty → EM R) (ctx : Ctx)
-    (d : String) (yd : Nat) (m : String) (args : List SExpr) (ty : Option Ty) : EM R := do
-  let q := accessorCallPos
+    (q : Pos) (d : String) (yd : Nat) (m : String) (args : List SExpr) (ty : Option Ty) : EM R := do
   let name := s!"$accessorObject{yd}"
-  let ctx' := { ctx with locals := { name, slot := yd, ty := .struct d [], mutable := false } :: ctx.locals }
+  let ctx' := accessorCtx { ctx with locals := { name, slot := yd, ty := .struct d [], mutable := false } :: ctx.locals }
   elabApp ctx' q (.member q (.ident q name) m) (accessorArg q :: args) false ty
 
 /-- A read of a field `place.cls` has with storage, which classes below give
@@ -188,7 +209,7 @@ def elabOverriddenRead (elabE : Ctx → SExpr → Option Ty → EM R)
   let mut acc ← coerce p plain place.ty
   for (d, a) in place.overrides.reverse do
     let yd ← fresh (.struct d [])
-    let r ← accessorOn elabApp ctx d yd a.getter [] (some place.ty)
+    let r ← accessorOn elabApp ctx place.pos d yd a.getter [] (some place.ty)
     acc := .ite (.assign yd (.heap (.isTag [env.tagOf d]) [.local x])) (← coerce p r place.ty) acc
   return acc
 
@@ -244,7 +265,7 @@ def elabAccessorSet? (elabE : Ctx → SExpr → Option Ty → EM R)
     if !place.steps.isEmpty then
       eerr p s!"{place.written} of {place.cls} is a field with accessors in classes below it: setting a path into its value through {place.cls} is not supported yet"
     checkMemberAccess env place.pos place.cls place.written (write := true)
-    let q := accessorCallPos
+    let q := place.pos
     let o ← elabE ctx place.recv none
     let x ← fresh o.ty
     let oName := s!"$accessorReceiver{x}"
@@ -271,7 +292,7 @@ def elabAccessorSet? (elabE : Ctx → SExpr → Option Ty → EM R)
     let mut acc : Expr := .seq plain.e (.local ns)
     for (d, a) in place.overrides.reverse do
       let yd ← fresh (.struct d [])
-      let r ← accessorOn elabApp ctx3 d yd a.setter [.ident q nName] none
+      let r ← accessorOn elabApp ctx3 q d yd a.setter [.ident q nName] none
       acc := .ite (.assign yd (.heap (.isTag [env.tagOf d]) [.local x])) (.seq r.e (.local ns)) acc
     let y ← fresh place.ty
     code := code.push (.assign y acc)
@@ -294,7 +315,7 @@ def elabAccessorSet? (elabE : Ctx → SExpr → Option Ty → EM R)
   let n := place.steps.length
   let setDecides ← accessorDecides ctx p place "setter" place.field.setter (n + 1)
   let getDecides ← if op.isSome then accessorDecides ctx p place "getter" place.field.getter n else pure false
-  let q := accessorCallPos
+  let q := place.pos
   -- the receiver, then the indices, then the value, each in a slot
   let mut code : Array Expr := #[]
   let mut locals := ctx.locals
@@ -322,7 +343,7 @@ def elabAccessorSet? (elabE : Ctx → SExpr → Option Ty → EM R)
       -- (the old value through the getter, after the value)
       let vs ← fresh rv.ty
       code := code.push (.assign vs rv.e)
-      let old ← elabApp ctx1 q (.member q (.ident q oName) place.field.getter)
+      let old ← elabApp (accessorCtx ctx1) q (.member q (.ident q oName) place.field.getter)
         (accessorArg q :: keys.toList) getDecides (some valueTy)
       let olds ← fresh old.ty
       code := code.push (.assign olds old.e)
@@ -333,7 +354,7 @@ def elabAccessorSet? (elabE : Ctx → SExpr → Option Ty → EM R)
   let ns ← fresh valueTy
   code := code.push (.assign ns newValue)
   let ctx3 := { ctx1 with locals := { name := s!"$accessorNew{ns}", slot := ns, ty := valueTy, mutable := false } :: ctx1.locals }
-  let call ← elabApp ctx3 q (.member q (.ident q oName) place.field.setter)
+  let call ← elabApp (accessorCtx ctx3) q (.member q (.ident q oName) place.field.setter)
     (accessorArg q :: keys.toList ++ [.ident q s!"$accessorNew{ns}"]) setDecides none
   code := code.push call.e
   return some ⟨code.toList.foldr Expr.seq (.local ns), valueTy⟩
@@ -346,7 +367,7 @@ def elabAccessorSet? (elabE : Ctx → SExpr → Option Ty → EM R)
     object's fields) and those of the others, for their setters. -/
 def accessorValues (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (name : String) (tas : List Ty)
     (fs : List (String × Ty × Option SExpr)) (storedValue : String → Ty → Option SExpr → EM Expr)
-    (gives : List (String × SExpr)) : EM (List Expr × List Expr × List (AccessorField × Nat × Ty)) := do
+    (gives : List (String × SExpr)) : EM (List Expr × List Expr × List (AccessorField × Nat × Ty × Pos)) := do
   let env := ctx.types
   let declIx (a : AccessorField) : Nat :=
     (env.accessors.findIdx? fun b => b.owner == a.owner && b.name == a.name).getD 0
@@ -356,7 +377,7 @@ def accessorValues (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (n
   let anchored (a : AccessorField) : Bool := a.prev.any names.contains || a.next.any names.contains
   let mut pre : Array Expr := #[]
   let mut stored : Array Expr := #[]
-  let mut vals : Array (AccessorField × Nat × Ty) := #[]
+  let mut vals : Array (AccessorField × Nat × Ty × Pos) := #[]
   let mut order : Array (Sum (String × Ty × Option SExpr) (AccessorField × Ty × SExpr)) := #[]
   for field@(f, _, _) in fs do
     for x@(a, _, _) in accs do
@@ -377,7 +398,7 @@ def accessorValues (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (n
       let e ← coerce rhs.pos (← elabE ctx rhs (some t)) t
       let s ← fresh t
       pre := pre.push (.assign s e)
-      vals := vals.push (a, s, t)
+      vals := vals.push (a, s, t, rhs.pos)
   return (pre.toList, stored.toList, vals.toList)
 
 /-- The calls of the setters of the fields with accessors a construction
@@ -387,11 +408,11 @@ def accessorValues (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (n
     661-681: `set X = 10` in a `block:` is what stays; 565-589: a setter sees
     the other fields set). -/
 def accessorSetters (elabApp : Ctx → Pos → SExpr → List SExpr → Bool → Option Ty → EM R)
-    (ctx : Ctx) (ty : Ty) (vals : List (AccessorField × Nat × Ty)) (x : Nat) : EM (List Expr) := do
-  let q := accessorCallPos
+    (ctx : Ctx) (ty : Ty) (vals : List (AccessorField × Nat × Ty × Pos)) (x : Nat) : EM (List Expr) := do
   let self := s!"$new{x}"
-  let ctx0 := { ctx with locals := { name := self, slot := x, ty, mutable := false } :: ctx.locals }
-  vals.mapM fun (a, vs, t) => do
+  let ctx0 := accessorCtx { ctx with locals := { name := self, slot := x, ty, mutable := false } :: ctx.locals }
+  -- (each at the place of its value, `X := V`)
+  vals.mapM fun (a, vs, t, q) => do
     let vName := s!"$accessorValue{vs}"
     let ctx' := { ctx0 with locals := { name := vName, slot := vs, ty := t, mutable := false } :: ctx0.locals }
     return (← elabApp ctx' q (.member q (.ident q self) a.setter) [accessorArg q, .ident q vName] false none).e

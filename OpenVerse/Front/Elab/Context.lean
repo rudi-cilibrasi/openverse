@@ -355,6 +355,10 @@ structure Ctx where
   inLoop  : Bool := false
   /-- In a named parameter's default, elaborated at a call: no `return`. -/
   inParamDefault : Bool := false
+  /-- A call of a field's accessor that the elaboration writes for a use of
+      the field (`Elab/Accessors.lean`): the method's own access does not
+      judge it, the field's does (`elabMethodCall`). -/
+  accessorCall : Bool := false
   /-- The `defer:` bodies of the function's enclosing scopes, innermost first
       (#80): a `return` runs them all, a `break` those registered inside its
       loop (all but the first `loopDefers`). -/

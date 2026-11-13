@@ -1616,9 +1616,12 @@ the places of a path that reach a field with accessors by the names the
 path writes and its receivers' types (an elaboration that keeps nothing);
 a path into the field's value, up to an object, is one call of the overload
 of the getter or setter that takes the path's indices and field names, and
-one through an object reads the field, then goes on. The calls are written
-at a position of no source definition, so the accessors' own access does
-not judge them: the field's does, where it is used. A field with storage
+one through an object reads the field, then goes on. Each call is written
+at the place of the use it stands for (the field, or for a construction the
+field's value), so a refusal inside it points there, and is marked
+(`Ctx.accessorCall`) so that the accessor's own access does not judge it:
+the field's does, where it is used (`elabMethodCall` clears the mark for
+the rest of the call). A field with storage
 that a class below gives accessors is read and set through the type above
 with a test of the object's class, as a field at different places is.
 A construction that gives such fields evaluates every value into a slot in
