@@ -1350,9 +1350,10 @@ Lean and C agree.
 ## Modules: a renaming before elaboration
 
 Modules (#112) never reach Verse Core. The parser flattens
-`name := module:` into definitions of qualified names (`A::B::F`). It
-leaves markers for the modules, their `<public>` members and their
-`using{M}`s. `Front/Modules.lean` then rewrites every reference by lexical
+`name := module:` into definitions of qualified names (`A::B::F`), each
+with the specifiers written on it. It leaves markers for the modules (with
+theirs) and their `using{M}`s. `Front/Modules.lean` then rewrites every reference by lexical
+
 scope. It walks from the definition's module outward; at each scope it
 looks first at the scope's own definitions, then at the modules opened
 there. It also checks visibility, and that no binder shadows a module or a

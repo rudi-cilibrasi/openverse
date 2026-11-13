@@ -64,7 +64,7 @@ private def classOperation (upper : Ty) : Option ChoiceOperations :=
     "$testClassOperation" (.ident p "Row") row { plan } call [.ident p "X"] cases
 
 private def declarationParams : STop → List TParam
-  | .fn _ _ _ tps .. | .classDef _ _ tps .. => tps
+  | .fn _ _ _ tps .. | .classDef _ _ _ tps .. => tps
   | _ => []
 
 private def familyName (ops : ChoiceOperations) : Option String := do
@@ -154,7 +154,7 @@ def main : IO Unit := do
     let (request, _, _) ← getOK "retain actual captured relations before local initialization"
       (forStageEnvOf ctx stage p [] (.block p [.ident p "Carrier", .int p 0]))
     let relations := request.extraFns.flatMap fun
-      | .classDef _ owner _ _ _ _ fields _ _ => fields.filterMap fun (name, ty, _, mutable) =>
+      | .classDef _ owner _ _ _ _ _ fields _ => fields.filterMap fun ⟨name, ty, _, mutable, _, _⟩ =>
           declaredRelation? owner name ty mutable
       | _ => []
     need "resume fields preserve only actual readonly proof capabilities"

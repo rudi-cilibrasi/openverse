@@ -223,7 +223,7 @@ private def resolutionContracts : IO Unit := do
   let dictionary ← getOK "retain bounds on a nominal dictionary family"
     (nominal constrained pos "node" "vehicle")
   match dictionary with
-  | .classDef _ _ [parameter] .. =>
+  | .classDef _ _ _ [parameter] .. =>
     need "a generic dictionary does not erase its nominal parameter bound"
       (reprStr parameter.upperBound == reprStr (some (STy.name "vehicle")))
   | _ => throw (IO.userError "unexpected nominal dictionary declaration")
@@ -244,8 +244,8 @@ private def metadataContracts : IO Unit := do
   let resolved ← getOK "resolve bound metadata" (resolveModules parsed)
   for name in ["M::F", "M::packet", "M::boxed"] do
     let params ← getSome s!"missing bound declaration {name}" (resolved.findSome? fun
-      | .fn _ n _ tps .. | .classDef _ n tps .. => if n == name then some tps else none
-      | .const _ n _ (.structDef _ tps _ _) => if n == name then some tps else none
+      | .fn _ n _ tps .. | .classDef _ n _ tps .. => if n == name then some tps else none
+      | .const _ n _ _ (.structDef _ tps _ _) => if n == name then some tps else none
       | _ => none)
     let bound ← getSome s!"missing bound in {name}" ((params.find? (·.name == "u")).bind (·.upperBound))
     need s!"qualified parametric bound lost in {name}"
@@ -262,7 +262,7 @@ private def metadataContracts : IO Unit := do
   let parsed ← getOK "parse inlined bound metadata" (parseProgram source)
   let inlined := (← getOK "inline bound metadata" (Choice.inlineMulti parsed [])).tops
   let constraints := inlined.flatMap fun
-    | .fn _ _ _ _ _ _ body | .const _ _ _ body => protocolParams body
+    | .fn _ _ _ _ _ _ body | .const _ _ _ _ body => protocolParams body
     | _ => []
   let bounded := constraints.filter (·.upperBound.isSome)
   need "inlining retains bounds" (!bounded.isEmpty)
@@ -300,13 +300,13 @@ private partial def rewriteTop (replacements : List (String × SExpr)) : STop �
       let value ← param.default.mapM (rewrite replacements)
       return { param with ty, default := value }
     return .fn p name ps tps specs (← ret.mapNamesM rename) (← rewrite replacements body)
-  | .classDef p name tps specs parents iface fields overrides methods => do
+  | .classDef p name nsp tps specs parents iface fields methods => do
     let rename (name : String) : Except String String := pure (if name == "evidence" then family else name)
-    let fields ← fields.mapM fun (name, ty, value, mutable) => do
-      return (name, ← ty.mapNamesM rename, ← value.mapM (rewrite replacements), mutable)
-    return .classDef p name tps specs (← parents.mapM (·.mapNamesM rename)) iface fields overrides
+    let fields ← fields.mapM fun f => do
+      return { f with ty := ← f.ty.mapNamesM rename, default := ← f.default.mapM (rewrite replacements) }
+    return .classDef p name nsp tps specs (← parents.mapM (·.mapNamesM rename)) iface fields
       (← methods.mapM (rewriteTop replacements))
-  | .const p name ty body => return .const p name ty (← rewrite replacements body)
+  | .const p name sp ty body => return .const p name sp ty (← rewrite replacements body)
 
 private def source := "
 vehicle:=class<computes>:
@@ -577,10 +577,10 @@ Main():void=
 "
 
 private def tupleRelations (tops : List STop) : List STop := tops.map fun
-  | .classDef p "tuple_bridge" tps specs parents iface fields overrides methods =>
-    .classDef p "tuple_bridge" tps specs parents iface
+  | .classDef p "tuple_bridge" nsp tps specs parents iface fields methods =>
+    .classDef p "tuple_bridge" nsp tps specs parents iface
       (fields ++ relationFields p "tuple_bridge"
-        [(.name "t", .tup [.name "a", .name "b"])]) overrides methods
+        [(.name "t", .tup [.name "a", .name "b"])]) methods
   | top => top
 
 private def ordinaryStateSource := "
@@ -764,13 +764,13 @@ private def interiorCancelSource := receiverCancelSource
 /-- Compiler-API fixture: explicit, checked source dictionaries become private
     receiver fields. Source upper-bound syntax is still guarded. -/
 private partial def receiverFields : STop → STop
-  | .classDef p owner params specs parents iface fields overrides methods =>
-    .classDef p owner params specs parents iface
-      (fields.map fun (name, ty, value, mutable) =>
-        (if name == "ReceiverEvidence" then fieldName "carrier" "s" else name,
-         ty, value.map privateFields, mutable)) overrides (methods.map receiverFields)
+  | .classDef p owner nsp params specs parents iface fields methods =>
+    .classDef p owner nsp params specs parents iface
+      (fields.map fun f =>
+        { f with name := if f.name == "ReceiverEvidence" then fieldName "carrier" "s" else f.name,
+                 default := f.default.map privateFields }) (methods.map receiverFields)
   | .fn p name ps params specs ret body => .fn p name ps params specs ret (privateFields body)
-  | .const p name ty body => .const p name ty (privateFields body)
+  | .const p name sp ty body => .const p name sp ty (privateFields body)
 where
   privateFields (body : SExpr) : SExpr := Choice.mapE (fun
     | .ident p "ReceiverEvidence" => some (.ident p (fieldName "carrier" "s"))
@@ -901,14 +901,14 @@ private def receiverContracts : IO Unit := do
   let added := addFields parsed
   need "proof field injection is idempotent" (reprStr (addFields added) == reprStr added)
   let fields ← getSome "missing generated proof field" (added.findSome? fun
-    | .classDef _ "holder" _ _ _ _ fields .. => some fields
+    | .classDef _ "holder" _ _ _ _ _ fields .. => some fields
     | _ => none)
   need "bounded class carries one readonly typed proof with a checked default"
-    (fields.length == 2 && fields.any fun (name, ty, value, mutable) =>
+    (fields.length == 2 && fields.any fun ⟨name, ty, value, mutable, _, _⟩ =>
       name == fieldName "holder" "t" && !mutable && value.isSome &&
       reprStr ty == reprStr (STy.app family [.name "vehicle", .name "t"]))
   let packet (tops : List STop) := tops.findSome? fun
-    | .const _ "packet" _ body => some (reprStr body)
+    | .const _ "packet" _ _ body => some (reprStr body)
     | _ => none
   need "value struct representation is unchanged" (packet parsed == packet added)
 
@@ -1322,13 +1322,13 @@ def main (args : List String) : IO Unit := do
     (elabProgram entryTops { entry := some entry, profile := .choiceFree })
   need "entry dictionary preserves admitted bytecode" (autoEntry.prog.encode == strictEntry.prog.encode)
   checkTrace "entry-only dictionary discovery" autoEntry "9\n"
-  let badRequest := STop.classDef pos "$subtypeNominalBad" [] ["predicts"] [] false [] [] []
+  let badRequest := STop.classDef pos "$subtypeNominalBad" [] [] ["predicts"] [] false [] []
   let main := STop.fn pos "Main" [] [] [] (.name "void") (.tuple pos [])
   expectError "materialized dictionary effects remain checked" "<predicts>"
     (elabProgramCore [main] { requests := { subtypes := [badRequest] } })
   let task := STy.app "task" [.name "int"]
-  let taskDictionary := STop.classDef pos "$subtypeNominalPrelude" [] ["computes"]
-    [.app family [task, task]] false [] []
+  let taskDictionary := STop.classDef pos "$subtypeNominalPrelude" [] [] ["computes"]
+    [.app family [task, task]] false []
     [.fn pos "Up" [{ name := "X", ty := task }] [] ["override", "computes"] task (.ident pos "X")]
   let _ ← getOK "materialized subtype request loads its own library types"
     (elabProgram [main] { requests := { subtypes := [taskDictionary] } })

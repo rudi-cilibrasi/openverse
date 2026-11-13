@@ -4,9 +4,10 @@
   docs/research/qualified-names.md).
 
   The parser flattens `name := module:` into definitions of qualified names
-  (`A::B::F`) and leaves markers: `$module:A::B`, `$public:A::B::F`,
-  `$open:A::|M` (a `using{M}` written in module `A`) and `$qual:A::F|q` (a
-  definition written `(q:)F`). This pass rewrites every reference to a
+  (`A::B::F`) and leaves markers: `$module:A::B` (with the module's
+  specifiers), `$open:A::|M` (a `using{M}` written in module `A`) and
+  `$qual:A::F|q` (a definition written `(q:)F`). This pass rewrites every reference to a
+
   module member to its qualified name, before elaboration, which then sees
   an ordinary flat program:
 
@@ -283,8 +284,8 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
     let own := tps.map (·.name)
     let inner : Resolver := { r with ty := fun q n => if own.contains n then pure n else r.ty q n }
     return .structDef p (← tps.mapM (·.mapBoundNamesM (inner.ty p))) specs
-      (← fs.mapM fun (n, t, d, v) => do
-        return (n, ← t.mapNamesM (inner.ty p), ← d.mapM (·.mapNamesM inner), v))
+      (← fs.mapM fun f => do
+        return { f with ty := ← f.ty.mapNamesM (inner.ty p), default := ← f.default.mapM (·.mapNamesM inner) })
   -- (a type alias's type, its own parameters excepted)
   | .typeAlias p tps t =>
     let own := tps.map (·.name)
@@ -340,12 +341,12 @@ structure ClassNames where
     the file's header). -/
 def resolveModules (tops : List STop) : Except String (List STop) := do
   let markers (pre : String) : List (Pos × String) := tops.filterMap fun
-    | .const p n _ _ => if n.startsWith pre then some (p, (n.drop pre.length).toString) else none
+    | .const p n _ _ _ => if n.startsWith pre then some (p, (n.drop pre.length).toString) else none
     | _ => none
-  let isMarker (n : String) := n.startsWith "$module:" || n.startsWith "$public:" || n.startsWith "$open:" ||
+  let isMarker (n : String) := n.startsWith "$module:" || n.startsWith "$open:" ||
     n.startsWith "$qual:" || n == qualifierMarker
   let real := tops.filter fun
-    | .const _ n _ _ => !isMarker n
+    | .const _ n _ _ _ => !isMarker n
     | _ => true
   let modules := (markers "$module:").map (·.2)
   -- (extension methods, which calls `X.M(…)` find: Book of Verse ch. 6)
@@ -356,7 +357,14 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
     | _ => false
   if modules.isEmpty && (markers "$open:").isEmpty && (markers qualifierMarker).isEmpty && !hasExt then
     return real
-  let publics := (markers "$public:").map (·.2)
+  -- (the definitions and modules written `<public>`, each where it is)
+  let publicDefs : List (Pos × String) := tops.filterMap fun
+    | .fn p n _ _ specs .. | .const p n specs .. | .classDef p n specs .. =>
+      if !specs.contains "public" then none
+      else if n.startsWith "$module:" then some (p, (n.drop "$module:".length).toString)
+      else if isMarker n then none
+      else some (p, n)
+  let publics := publicDefs.map (·.2)
   let defs : List String := real.map fun
     | .fn _ n .. | .const _ n .. | .classDef _ n .. => n
   let defsS : Std.HashSet String := Std.HashSet.ofList defs
@@ -370,7 +378,7 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
     if seenM.contains m then throw s!"{p.show}: module {shown m} is defined twice"
     seenM := seenM.insert m
   -- (one name's overloads share their visibility)
-  for (p, n) in markers "$public:" do
+  for (p, n) in publicDefs do
     if n.contains ':' && (defs.filter (· == n)).length != (publics.filter (· == n)).length && defsS.contains n then
       throw s!"{p.show}: the overloads of {shown n} must all be <public> or all internal"
   let inside (sc m : List String) : Bool := m.length ≤ sc.length && sc.take m.length == m
@@ -526,7 +534,7 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
   -- aliases' pass writes out later: a qualifier may name a class through
   -- one, docs/research/type-aliases.md), for the comparisons below
   let aliasOf : List (String × String) := real.filterMap fun
-    | .const p n none body =>
+    | .const p n _ none body =>
       let named : Option String := match body with
         | .typeAlias _ [] (.name x) => some x
         | .typeAlias .. => none
@@ -546,20 +554,20 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
     return c
   -- each class's names (`ClassNames`)
   let classInfo : List (String × ClassNames) ← real.filterMapM fun
-    | .classDef p n tps _ parents _ fields ovs methods => do
+    | .classDef p n _ tps _ parents _ fields methods => do
       let ps ← parents.mapM fun t => do
         match ← t.mapNamesM (tyNameQ (scopeOf n) (tps.map (·.name)) p) with
         | .name q | .app q _ => pure q
         | _ => pure ""
-      let own := fields.map (·.1) ++ methods.filterMap fun
+      let own := fields.map (·.name) ++ methods.filterMap fun
         | .fn _ mn .. => if mn.startsWith "(" || mn.startsWith "$" then none else some mn
         | _ => none
-      let all := fields.map (bareName ·.1) ++ methods.filterMap fun
+      let all := fields.map (bareName ·.name) ++ methods.filterMap fun
         | .fn _ mn .. => if mn.startsWith "$" then none else some (bareName mn)
         | _ => none
-      let declared := (fields.map (·.1)).filter (!ovs.contains ·) |>.map bareName
+      let declared := fields.filter (!·.isOverride) |>.map (bareName ·.name)
       -- (the members written `(n:)x`, `n` the class itself)
-      let ownQualified ← (fields.map (·.1) ++ methods.filterMap fun
+      let ownQualified ← (fields.map (·.name) ++ methods.filterMap fun
           | .fn _ mn .. => some mn
           | _ => none).filterMapM fun x => do
         let some (q, y) := splitQual? x | return none
@@ -593,7 +601,7 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
   let allMembersOf := ofClasses (·.all)
   let declares (c f : String) : Bool := ((infoOf c).map (·.declared.contains f)).getD false
   let enums : Std.HashSet String := Std.HashSet.ofList (real.filterMap fun
-    | .const _ n _ (.enumDef ..) => some n
+    | .const _ n _ _ (.enumDef ..) => some n
     | _ => none)
   let rAt (sc excl : List String) (self : Option String := none) : Resolver :=
     let members := (self.map allMembersOf).getD []
@@ -669,15 +677,15 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
           pure (SExpr.block bp items)
         | _, _ => body.mapNamesM rb
       return .fn p n ps tps effs (← ret.mapNamesM (r.ty p)) body
-    | .const p n ty body =>
+    | .const p n cspecs ty body =>
       let r := rAt (scopeOf n) []
       let body ← match body with
         | .enumDef ep vs isOpen => do pure (SExpr.enumDef ep (← vs.mapM (ownName n "a value" p)) isOpen)
         | .structDef sp tps specs fs => do
-          pure (SExpr.structDef sp tps specs (← fs.mapM fun (f, ft, d, v) => do return (← ownName n "a field" sp f, ft, d, v)))
+          pure (SExpr.structDef sp tps specs (← fs.mapM fun f => do return { f with name := ← ownName n "a field" sp f.name }))
         | b => pure b
-      return .const p n (← ty.mapM (·.mapNamesM (r.ty p))) (← body.mapNamesM r)
-    | .classDef p n tps specs parents isI fields ovs methods =>
+      return .const p n cspecs (← ty.mapM (·.mapNamesM (r.ty p))) (← body.mapNamesM r)
+    | .classDef p n nsp tps specs parents isI fields methods =>
       let r := rAt (scopeOf n) (tps.map (·.name)) (some n)
       let tps ← tps.mapM (·.mapBoundNamesM (r.ty p))
       for m in membersOf n do r.bind p m
@@ -707,16 +715,10 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
         | .locals => throw s!"{mp.show}: (local:){y}: (local:) qualifies a function's locals, and {y} is a member of {shown n}"
         | .super => throw s!"{mp.show}: (super:){y}: (super:) qualifies a call of the implementation above, not a definition"
         | _ => throw s!"{mp.show}: ({q}:){y}: a member's qualifier names its class, or, for an override, the class or interface that introduces it"
-      let fieldNames ← fields.mapM fun (fn, _, _, _) => memberName p fn true
-      let renamed := (fields.map (·.1)).zip fieldNames
-      let ovs := ovs.map fun o => (renamed.lookup o).getD o
-      let specs := specs.map fun sp =>
-        if sp.startsWith "$final:" then
-          let f := (sp.drop "$final:".length).toString
-          s!"$final:{(renamed.lookup f).getD f}"
-        else sp
-      let fields ← (fields.zip fieldNames).mapM fun ((_, ty, d, v), fn) => do
-        return (fn, ← ty.mapNamesM (r.ty p), ← d.mapM (·.mapNamesM r), v)
+      let fields ← fields.mapM fun f => do
+        return { f with name := ← memberName p f.name true, ty := ← f.ty.mapNamesM (r.ty p),
+                        default := ← f.default.mapM (·.mapNamesM r) }
+
       let methods ← methods.mapM fun m => do
         match m with
         | .fn mp mn mps mtps meffs mret mbody =>
@@ -730,6 +732,6 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
           let (mps, rmb) ← params rm mp mps
           return .fn mp (← memberName mp mn false) mps mtps meffs (← mret.mapNamesM (rm.ty mp)) (← mbody.mapNamesM rmb)
         | m => pure m
-      return .classDef p n tps specs parents isI fields ovs methods
+      return .classDef p n nsp tps specs parents isI fields methods
 
 end OpenVerse.Front

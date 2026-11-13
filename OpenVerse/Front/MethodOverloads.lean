@@ -51,7 +51,7 @@ def MethodOverloads.of (tops : List STop) : MethodOverloads := Id.run do
       tp.upperBound.map fun upper => (i, upper.substNames ρ)
     if bounds.isEmpty then parameters else parameters ++ reprStr bounds
   let classDefs : List (String × List TParam × List STy × List STop) := tops.filterMap fun
-    | .classDef _ n tps _ parents _ _ _ methods => some (n, tps, parents, methods)
+    | .classDef _ n _ tps _ parents _ _ methods => some (n, tps, parents, methods)
     | _ => none
   let parentName : STy → Option String := fun | .name q => some q | .app q _ => some q | _ => none
   let mut hier : List (String × String) := classDefs.map fun (n, _) => (n, n)
@@ -159,7 +159,7 @@ def MethodOverloads.of (tops : List STop) : MethodOverloads := Id.run do
     (`MethodOverloads.name`), a qualified one's `(q:)M$ovK` (#125). -/
 def MethodOverloads.apply (mo : MethodOverloads) (tops : List STop) : Except String (List STop) :=
   tops.mapM fun
-    | .classDef cp n tps specs parents isI fields ovs methods => do
+    | .classDef cp n nsp tps specs parents isI fields methods => do
       let ms ← methods.mapM fun
         | .fn mp mn ps mtps effs ret body => do
           -- `(q:)M`, implementing `q`'s overload of `M` that has its list
@@ -181,7 +181,7 @@ def MethodOverloads.apply (mo : MethodOverloads) (tops : List STop) : Except Str
             else return .fn mp mn ps mtps effs ret body
           | none => return .fn mp (mo.name n mn tps mtps ps (effs.contains "override") none) ps mtps effs ret body
         | m => pure m
-      return .classDef cp n tps specs parents isI fields ovs ms
+      return .classDef cp n nsp tps specs parents isI fields ms
     | t => pure t
 
 end OpenVerse.Front

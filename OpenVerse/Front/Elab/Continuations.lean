@@ -201,7 +201,7 @@ partial def writesTps (tps : List String) (e : SExpr) : Bool :=
     (match e with
     | .decl _ _ (some t) _ _ => Choice.styMentions tps t
     | .construct _ n ts _ => tps.contains n || ts.any (Choice.styMentions tps)
-    | .structDef _ _ _ fs => fs.any fun (_, t, _, _) => Choice.styMentions tps t
+    | .structDef _ _ _ fs => fs.any fun f => Choice.styMentions tps f.ty
     | .refineDef _ _ t _ => Choice.styMentions tps t
     | .ident _ n => tps.contains n
     | _ => false) || e.children.any (writesTps tps)
@@ -1202,7 +1202,7 @@ def forStagePlanOf (ctx : Ctx) (p : Pos) (key : String) (clauses : List SExpr)
     value := vty.toSTy, copies, borrowed, specs, outcome, sourceSuspends }
   let valueTy := if outcome then STy.opt (.arr plan.value) else .arr plan.value
   let ret := if copies.isEmpty then valueTy else .tup (valueTy :: copies.map (·.2))
-  let cls := STop.classDef p base tps [] [] true [] []
+  let cls := STop.classDef p base [] tps [] [] true []
     [.fn p method [] [] ("$abstract" :: specs) ret (.tuple p [])]
   return {
     stageOnly := true, stagePlan := some plan, key, pos := p, name := base,
@@ -1324,7 +1324,8 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
     | b => b
   let localName (n : String) := if n == "Self" then "$sourceSelf" else n
   let captureName (l : Local) (j : Nat) := if l.typeValue then s!"$w.capture{j}" else s!"$capture{j}"
-  let fields := caps.zipIdx.map fun (l, j) => (captureName l j, l.ty.toSTy, none, false)
+  let fields := caps.zipIdx.map fun (l, j) => ({ name := captureName l j, ty := l.ty.toSTy } : SField)
+
   -- Captured values may themselves have constrained types. Their local
   -- annotations are checked before every capture has been initialized, so
   -- retain the actual captured relations on Self as readonly proof fields.
@@ -1365,7 +1366,8 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
   let resumeInfo : Choice.ForResume := {
     name := s!"{name}.{plan.method}", storage,
     inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag, sourceContext := sourceContextOf ctx }
-  let cls := STop.classDef p name tps [] [forStageView plan.base (args.map Ty.toSTy)] false fields [] [method]
+  let cls := STop.classDef p name [] tps [] [forStageView plan.base (args.map Ty.toSTy)] false fields [method]
+
   let req : Choice.FirstLift := {
     stageOnly := true, resumes := [resumeInfo], key, pos := p, name,
     params := [], specs := ["computes"], ret := .name "void", body := .tuple p [],
@@ -1441,7 +1443,7 @@ def choiceNumericConversions (ctx : Ctx) (stem : String) (ops0 : ChoiceOperation
     let variables := ["$convertSource", "$convertTarget"]
     let tps : List TParam := variables.map fun n => { pos := p, name := n, constraint := "type" }
     let familyTy := STy.app family (variables.map STy.name)
-    let iface := STop.classDef p family tps [] [] true [] []
+    let iface := STop.classDef p family [] tps [] [] true []
       [.fn p "$apply" [{ name := "$value", ty := .name "$convertSource" }] []
         ["$abstract", "computes"] (.name "$convertTarget") (.tuple p [])]
     let applyFn := STop.fn p (family ++ "$apply")
@@ -1453,7 +1455,7 @@ def choiceNumericConversions (ctx : Ctx) (stem : String) (ops0 : ChoiceOperation
     for (actual, i) in actuals.zipIdx do
       let impl := s!"{family}$case{i}"
       let instanceTy := STy.app family [Ty.int.toSTy, actual.toSTy]
-      definitions := definitions ++ [STop.classDef p impl [] [] [instanceTy] false [] []
+      definitions := definitions ++ [STop.classDef p impl [] [] [] [instanceTy] false []
         [.fn p "$apply" [{ name := "$value", ty := Ty.int.toSTy }] [] ["override", "computes"]
           actual.toSTy (.ident p "$value")]]
       bindings := bindings ++ [[SExpr.decl p name (some instanceTy) false
@@ -1803,7 +1805,7 @@ def choiceGenericOperation (ctx : Ctx) (stem : String) (receiver : SExpr) (recei
   let params (types : List Ty) : List SParam := types.zipIdx.map fun (ty, i) => { name := s!"$input{i}", ty := ty.toSTy }
   let values := (List.range (arguments.length + 1)).map fun i => SExpr.ident p0 s!"$input{i}"
   let methodTps ← choiceMethodTParams p0 methodVars (bounds.map (fun b => SubtypeEvidence.Bound.subst b classRename))
-  let iface := STop.classDef p0 family classTps [] [] true [] []
+  let iface := STop.classDef p0 family [] classTps [] [] true []
     [.fn p0 "$apply" (params declarationSignature.dropLast) methodTps ("$abstract" :: specs)
       declarationSignature.getLast!.toSTy (.tuple p0 [])]
   let applyFn := STop.fn p0 (family ++ "$apply")
@@ -1823,7 +1825,7 @@ def choiceGenericOperation (ctx : Ctx) (stem : String) (receiver : SExpr) (recei
     let implementationTps ← choiceMethodTParams p0 methodVars (row.methodBounds.map (fun b => SubtypeEvidence.Bound.subst b rename))
     let body := SExpr.app p0 (.member p0 values.head! method) (choiceForwardArguments arguments values.tail) bracket
     let body := if borrows then choiceDefaultContext ctx body else body
-    definitions := definitions ++ [STop.classDef p0 impl implementationClassTps [] [parentTy] false [] []
+    definitions := definitions ++ [STop.classDef p0 impl [] implementationClassTps [] [parentTy] false []
       [.fn p0 "$apply" (params implementationTypes.dropLast) implementationTps ("override" :: specs)
         implementationTypes.getLast!.toSTy body]]
     let value := SExpr.construct p impl (vars.map fun (n, _) => .name n) []
@@ -1865,7 +1867,7 @@ def choicePathDictionary (stem role : String) (ops : ChoiceOperations)
   let familyTy := STy.app family variables
   let params (types : List STy) : List SParam := types.zipIdx.map fun (ty, i) => { name := s!"$pathInput{i}", ty }
   let values := (List.range (signature.length - 1)).map fun i => SExpr.ident p s!"$pathInput{i}"
-  let iface := STop.classDef p family tparams [] [] true [] []
+  let iface := STop.classDef p family [] tparams [] [] true []
     [.fn p "$apply" (params variables.dropLast) [] ("$abstract" :: specs) variables.getLast! (.tuple p [])]
   let applyFn := STop.fn p (family ++ "$apply")
     ({ name := "$Self", ty := familyTy } :: params variables.dropLast) tparams specs variables.getLast!
@@ -1878,7 +1880,7 @@ def choicePathDictionary (stem role : String) (ops : ChoiceOperations)
     let canonicalVars := Ty.mergeParamBounds (canonicalTypes.flatMap Ty.paramsC)
     let implTps := canonicalVars.map fun (n, b) =>
       ({ pos := p, name := n, constraint := if b then "comparable" else "type" } : TParam)
-    definitions := definitions ++ [.classDef p impl implTps [] [.app family (canonicalTypes.map Ty.toSTy)] false [] []
+    definitions := definitions ++ [.classDef p impl [] implTps [] [.app family (canonicalTypes.map Ty.toSTy)] false []
       [.fn p "$apply" (params (canonicalTypes.dropLast.map Ty.toSTy)) [] ("override" :: specs)
         canonicalTypes.getLast!.toSTy bodies[i]!]]
     let valueTy := STy.app family (types.map Ty.toSTy)
@@ -2284,7 +2286,7 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
     let familyTy := STy.app family variables
     let params (types : List STy) : List SParam := types.zipIdx.map fun (ty, i) => { name := s!"$input{i}", ty }
     let values := (List.range (arguments.length + 1)).map fun i => SExpr.ident p0 s!"$input{i}"
-    let iface := STop.classDef p0 family tps [] [] true [] []
+    let iface := STop.classDef p0 family [] tps [] [] true []
       [.fn p0 "$apply" (params variables.dropLast) [] ("$abstract" :: specs) variables.getLast! (.tuple p0 [])]
     let applyFn := STop.fn p0 (family ++ "$apply")
       -- Pin the dictionary's class arguments before using an expected
@@ -2315,7 +2317,7 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       let vars := classVariables[i]!
       let implTps := contracts[i]!.get!
       let parentTy := STy.app family ((canonicalInputs ++ [canonicalRet]).map Ty.toSTy)
-      definitions := definitions ++ [.classDef p0 impl implTps [] [parentTy] false [] []
+      definitions := definitions ++ [.classDef p0 impl [] implTps [] [parentTy] false []
         [.fn p0 "$apply" (params (canonicalInputs.map Ty.toSTy)) [] ("override" :: specs) canonicalRet.toSTy
           operation]]
       let valueTy := STy.app family ((row.receiver :: row.inputs ++ [row.result]).map Ty.toSTy)

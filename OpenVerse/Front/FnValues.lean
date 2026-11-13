@@ -227,7 +227,7 @@ partial def _root_.OpenVerse.Front.SExpr.tyNames : SExpr → List String
   -- (type definitions, which `children` leaves out)
   | .structDef _ tps _ fs =>
     tps.flatMap (fun tp => tp.upperBound.toList.flatMap STy.allNames) ++
-      fs.flatMap fun (_, t, d, _) => t.allNames ++ (d.map SExpr.tyNames).getD []
+      fs.flatMap fun f => f.ty.allNames ++ (f.default.map SExpr.tyNames).getD []
   | .refineDef _ _ t cs => t.allNames ++ cs.flatMap SExpr.tyNames
   | e => e.children.flatMap SExpr.tyNames
 
@@ -236,10 +236,10 @@ partial def _root_.OpenVerse.Front.STop.usesType (n : String) : STop → Bool
   | .fn _ _ ps tps _ r body =>
     (tps.flatMap (fun tp => tp.upperBound.toList.flatMap STy.allNames) ++
       ps.flatMap (·.ty.allNames) ++ r.allNames ++ body.tyNames).contains n
-  | .const _ _ t e => ((t.map STy.allNames).getD [] ++ e.tyNames).contains n
-  | .classDef _ _ tps _ parents _ fields _ methods =>
+  | .const _ _ _ t e => ((t.map STy.allNames).getD [] ++ e.tyNames).contains n
+  | .classDef _ _ _ tps _ parents _ fields methods =>
     (tps.flatMap (fun tp => tp.upperBound.toList.flatMap STy.allNames) ++ parents.flatMap STy.allNames ++
-      fields.flatMap (fun (_, t, d, _) => t.allNames ++ (d.map SExpr.tyNames).getD [])).contains n ||
+      fields.flatMap (fun f => f.ty.allNames ++ (f.default.map SExpr.tyNames).getD [])).contains n ||
       methods.any (STop.usesType n)
 
 mutual
@@ -264,8 +264,8 @@ partial def _root_.OpenVerse.Front.SExpr.scan : SExpr → List Shape × List Str
     let (s, n) := e.scan
     ((t.map STy.fnShapes).getD [] ++ s, n)
   | .structDef _ tps _ fs =>
-    let (s, n) := scanL (fs.filterMap (·.2.2.1))
-    (tps.flatMap (fun tp => tp.upperBound.toList.flatMap STy.fnShapes) ++ fs.flatMap (·.2.1.fnShapes) ++ s, n)
+    let (s, n) := scanL (fs.filterMap (·.default))
+    (tps.flatMap (fun tp => tp.upperBound.toList.flatMap STy.fnShapes) ++ fs.flatMap (·.ty.fnShapes) ++ s, n)
   | .refineDef _ _ t cs =>
     let (s, n) := scanL cs
     (t.fnShapes ++ s, n)
@@ -294,17 +294,17 @@ partial def _root_.OpenVerse.Front.STop.scan (bound : List String := []) (meths 
     let mine := ps.map (·.name) ++ bound
     (tps.flatMap (fun tp => tp.upperBound.toList.flatMap STy.fnShapes) ++
       r.fnShapes ++ pss.flatMap (·.1) ++ s, (pss.flatMap (·.2) ++ n).filter (!mine.contains ·))
-  | .const _ _ t e =>
+  | .const _ _ _ t e =>
     let (s, n) := e.scan
     ((t.map STy.fnShapes).getD [] ++ s, n)
-  | .classDef _ _ tps _ parents _ fields _ methods =>
+  | .classDef _ _ _ tps _ parents _ fields methods =>
     let ms := methods.map (STop.scan bound)
-    let (s, n) := scanL (fields.filterMap (·.2.2.1))
+    let (s, n) := scanL (fields.filterMap (·.default))
     let self (x : String) : String := if meths.contains x then "." ++ x else x
     -- (a field's default is elaborated without `Self`: it names the
     -- top-level function, not a method or field of the class)
     (tps.flatMap (fun tp => tp.upperBound.toList.flatMap STy.fnShapes) ++
-      parents.flatMap STy.fnShapes ++ fields.flatMap (·.2.1.fnShapes) ++ s ++ ms.flatMap (·.1),
+      parents.flatMap STy.fnShapes ++ fields.flatMap (·.ty.fnShapes) ++ s ++ ms.flatMap (·.1),
       n ++ (ms.flatMap (·.2)).map self)
 
 /-- Whether a type is comparable whatever the classes: built from the
@@ -518,7 +518,7 @@ def parentName : STy → Option String
 /-- Each class's name, parents, fields and methods. -/
 def classDefs (tops : List STop) : List (String × List STy × List String × List String) :=
   tops.filterMap fun
-    | .classDef _ n _ _ ps _ fs _ ms => some (n, ps, fs.map (·.1), ms.filterMap fun
+    | .classDef _ n _ _ _ ps _ fs ms => some (n, ps, fs.map (·.1), ms.filterMap fun
         | .fn _ m .. => some m
         | _ => none)
     | _ => none
@@ -601,7 +601,7 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
   -- (the declaration an override overrides: the nearest class or interface
   -- above that declares the method)
   let classOf (c : String) : Option (List TParam × List STy × List STop) := tops.findSome? fun
-    | .classDef _ n tps _ ps _ _ _ ms => if n == c then some (tps, ps, ms) else none
+    | .classDef _ n _ tps _ ps _ _ ms => if n == c then some (tps, ps, ms) else none
     | _ => none
   let rec declOf (fuel : Nat) (c m : String) : Option (List TParam × List STy × List String) :=
     match fuel, classOf c with
@@ -620,7 +620,7 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
     | _, _ => none
   let mvalues : List (Pos × String × List TParam × List TParam × String × List SParam × List String × STy) :=
     tops.flatMap fun
-      | .classDef _ c tps _ _ _ _ _ ms => ms.filterMap fun
+      | .classDef _ c _ tps _ _ _ _ ms => ms.filterMap fun
         | .fn mp m ps mtps effs r b =>
           let targs := ps.map (·.ty) ++ [r]
           -- An override with a different signature needs its own value
@@ -732,11 +732,11 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
         if i < s.positional then { name := s!"$X{i}", ty := .name s!"$a{i}" }
         else { name := s.named[i - s.positional]!, ty := .name s!"$a{i}", named := true })
       [] (s.effs ++ ["$abstract"]) (.name "$r") (.block p0 [])
-    out := out ++ [.classDef p0 s.name (tps k) [] parents true [] [] (if s.closed then [call] else [])]
+    out := out ++ [.classDef p0 s.name [] (tps k) [] parents true [] (if s.closed then [call] else [])]
   for (p, n, ps, effs, r) in values do
     let (own, ts) := ownShape ps effs
     let fits := shapes.filter (own.within ·)
-    out := out ++ [.classDef p s!"{n}$fn" [] [] (classParents own (ts ++ [r]) fits) false [] []
+    out := out ++ [.classDef p s!"{n}$fn" [] [] [] (classParents own (ts ++ [r]) fits) false []
       (callMethods p own (ts ++ [r]) fits (xs p own.positional) fun args => .app p (.ident p n) args own.decides)]
   -- (#214) a value class per closed function type `t` (its parameters' and
   -- result's types `ts`) a value of shape `own` is asked for at and fits
@@ -744,11 +744,11 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
   -- those above it) at the type's own arguments; `pargs` are the positional
   -- arguments of `call`
   let variant (p : Pos) (owner : String) (own t : Shape) (ts : List STy) (pargs : List SExpr)
-      (call : List SExpr → SExpr) (fields : List (String × STy × Option SExpr × Bool) := []) : Option STop :=
+      (call : List SExpr → SExpr) (fields : List SField := []) : Option STop :=
     -- (the effects and names only: a tuple parameter may be flattened, #231)
     if !{ own with arity := t.positional + own.named.length }.within t then none else
     let fits := shapes.filter (t.within ·)
-    some (.classDef p owner [] [] (classParents t ts fits) false fields [] (callMethods p t ts fits pargs call))
+    some (.classDef p owner [] [] [] (classParents t ts fits) false fields (callMethods p t ts fits pargs call))
   -- (#503) the types of the named parameters `t` names, of a function of
   -- shape `own` with parameter types `ts`, when it has them all
   let namedAt (own t : Shape) (ts : List STy) : Option (List STy) :=
@@ -797,8 +797,8 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
       let sh := { own with arity := a.params.length }
       let fits := shapes.filter (sh.within ·)
       let owner := s!"{n}$fn{a.suffix}"
-      out := out ++ [.classDef p owner a.tparams [] (classParents sh (a.params ++ [a.ret]) fits) false
-        (SubtypeEvidence.relationFields p owner a.relations) []
+      out := out ++ [.classDef p owner [] a.tparams [] (classParents sh (a.params ++ [a.ret]) fits) false
+        (SubtypeEvidence.relationFields p owner a.relations)
         (callMethods p sh (a.params ++ [a.ret]) fits a.args fun args => .app p (.ident p n) args own.decides)]
     let ts := (ownShape ps effs).2
     let tpn := tps.map (·.name)
@@ -827,9 +827,9 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
       let sh := { own with arity := a.params.length }
       let fits := shapes.filter (sh.within ·)
       let owner := s!"{c}${m}$fn{a.suffix}"
-      out := out ++ [.classDef p owner a.tparams [] (classParents sh (a.params ++ [a.ret]) fits) false
-        ([("$self", selfTy.substNames a.subst, none, false)] ++
-          SubtypeEvidence.relationFields p owner a.relations) [] (callMethods p sh (a.params ++ [a.ret]) fits a.args call)]
+      out := out ++ [.classDef p owner [] a.tparams [] (classParents sh (a.params ++ [a.ret]) fits) false
+        ([{ name := "$self", ty := selfTy.substNames a.subst }] ++
+          SubtypeEvidence.relationFields p owner a.relations) (callMethods p sh (a.params ++ [a.ret]) fits a.args call)]
     -- (#231) a method of a class without type parameters as a value at a
     -- closed function type it fits by variance, asked for as `.{c}${m}`:
     -- `{c}${m}$fn${k}`, holding the receiver
@@ -842,15 +842,15 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
         if !exactly own t (ts ++ [r]) (tqs ++ [u]) && t.positional == own.positional &&
             (tqs.zip (ts.take own.positional ++ named)).all (fun (a, b) => subAt anc a b) && subAt anc r u then
           if let some v := variant p s!"{c}${m}$fn${k}" own t (tqs ++ [u]) (xs p own.positional) call
-              [("$self", .name c, none, false)] then
+              [{ name := "$self", ty := .name c }] then
             out := out ++ [v]
             k := k + 1
   for (r, i) in methodRequests.zipIdx do
     let own := r.shape
     let fits := shapes.filter fun s => s != own && own.within s
-    out := out ++ [.classDef r.pos (r.className i) r.tparams [] (classParents own (r.params ++ [r.ret]) fits) false
+    out := out ++ [.classDef r.pos (r.className i) [] r.tparams [] (classParents own (r.params ++ [r.ret]) fits) false
       (SubtypeEvidence.relationFields r.pos (r.className i) r.relations ++
-        [("$self", r.receiver, none, false)]) []
+        [{ name := "$self", ty := r.receiver }])
       (callMethods r.pos own (r.params ++ [r.ret]) (own :: fits) r.args fun args =>
         .app r.pos (.member r.pos (.ident r.pos "$self") r.method) args r.decides)]
   return tops ++ out

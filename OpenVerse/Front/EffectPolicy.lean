@@ -61,8 +61,9 @@ def Place.what : Place → String
     What each requires of what it is on is checked where that is known:
     `<final>` a member's body or value (`checkField`, `checkPlaces`), and
     of a field that nothing below overrides it nor a construction sets it
-    (`classFields`, `elabConstructionValue`: the parser keeps it among the
-    class's specifiers as `$final:F`); `<abstract>` and `<concrete>` not
+    (`classFields`, `elabConstructionValue`: the field keeps its specifiers,
+    `SField.specs`); `<abstract>` and `<concrete>` not
+
     together (`checkPlaces`);
     `<concrete>` a default for every field (a struct's in `checkPlaces`, a
     class's with its inherited fields, `classFields`); `<castable>` and
@@ -178,9 +179,9 @@ partial def checkExpr (e : SExpr) (file : String := "") : Except String Unit := 
   | .structDef _ params specs fields =>
     checkData p "struct" specs
     checkTParams params
-    for (_, ty, value, _) in fields do
-      checkTy p ty
-      value.forM (checkExpr · p.file)
+    for f in fields do
+      checkTy p f.ty
+      f.default.forM (checkExpr · p.file)
   | .refineDef _ _ base conditions => do
     checkTy p base
     conditions.forM (checkExpr · p.file)
@@ -200,16 +201,16 @@ partial def checkTop (top : STop) (owner : String := "") : Except String Unit :=
       param.default.forM (checkExpr · p.file)
     checkTy p ret
     checkExpr body p.file
-  | .const p _ ty value => do
+  | .const p _ _ ty value => do
     ty.forM (checkTy p)
     checkExpr value p.file
-  | .classDef p name tparams specs parents _ fields _ methods =>
+  | .classDef p name _ tparams specs parents _ fields methods =>
     checkData p "class/interface" specs
     checkTParams tparams
     parents.forM (checkTy p)
-    for (_, ty, value, _) in fields do
-      checkTy p ty
-      value.forM (checkExpr · p.file)
+    for f in fields do
+      checkTy p f.ty
+      f.default.forM (checkExpr · p.file)
     methods.forM (checkTop · (name ++ "."))
 
 /-- The places of the specifiers the source keeps (`checkPlace`): of its
@@ -224,18 +225,19 @@ def checkPlaces (tops : List STop) : Except String Unit := do
   for top in tops do
     match top with
     | .fn p _ _ _ specs .. => checkPlace p .function specs
-    | .classDef p n _ specs _ isI _ _ methods =>
+    | .classDef p n _ _ specs _ isI _ methods =>
       checkPlace p (if isI then .interfaceType else .classType) specs
       -- (`C{}` constructs a `<concrete>` class, and nothing an `<abstract>` one)
       if specs.contains "abstract" && specs.contains "concrete" then
         reject p s!"{n} cannot be both <abstract> and <concrete>: a concrete class is constructed with {n}\{}, an abstract one never"
       for m in methods do
         if let .fn mp _ _ _ mspecs .. := m then method mp mspecs
-    | .const p n _ (.structDef _ _ specs fields) =>
+    | .const p n _ _ (.structDef _ _ specs fields) =>
       checkPlace p .structType specs
       if specs.contains "concrete" then
-        if let some (f, _) := fields.find? (·.2.2.1.isNone) then
-          reject p s!"{n} is <concrete>, so its field '{f}' needs a default"
+        if let some f := fields.find? (·.default.isNone) then
+          reject p s!"{n} is <concrete>, so its field '{f.name}' needs a default"
+
     | .const .. => pure ()
 
 /-- Check every loaded definition, including unused imports, before a source

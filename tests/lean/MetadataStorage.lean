@@ -26,12 +26,11 @@ private partial def roles (dummy : Bool) : STop → Except String STop
           (name == "ForwardMeta" && param.name == "M"))) ||
           (name == "IgnoreMeta" && param.name == "M") }
     return .fn p name ps tps specs (← ret.mapNamesM rename) (evidenceBody body)
-  | .classDef p name tps specs parents iface fields overrides methods => do
+  | .classDef p name nsp tps specs parents iface fields methods => do
     let rename (n : String) : Except String String :=
       pure (if n == "evidence" then SubtypeEvidence.family else n)
-    let fields ← fields.mapM fun (field, ty, value, mutable) =>
-      return (field, ← ty.mapNamesM rename, value, mutable)
-    return .classDef p name tps specs parents iface fields overrides (← methods.mapM (roles dummy))
+    let fields ← fields.mapM fun f => do return { f with ty := ← f.ty.mapNamesM rename }
+    return .classDef p name nsp tps specs parents iface fields (← methods.mapM (roles dummy))
   | top => pure top
 
 private def caller (body : String) : String :=

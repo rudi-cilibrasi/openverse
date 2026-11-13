@@ -82,16 +82,16 @@ def checkNoShadowing (tops : List STop) : Except String (List ScopePair) := do
   let shown (ps : List String) : String := ".".intercalate ps
   -- (definitions written `(M:)x` in their module)
   let qualified : List String := tops.filterMap fun
-    | .const _ n _ _ => if n.startsWith "$qual:" then ((n.drop "$qual:".length).toString.splitOn "|").head? else none
+    | .const _ n _ _ _ => if n.startsWith "$qual:" then ((n.drop "$qual:".length).toString.splitOn "|").head? else none
     | _ => none
   -- the definitions of the top level and the modules: each one's scope, name,
   -- what it is and where
   let kind : STop → String
     | .fn .. => "function"
-    | .classDef _ _ _ _ _ isI .. => if isI then "interface" else "class"
-    | .const _ _ _ (.structDef ..) => "struct"
-    | .const _ _ _ (.enumDef ..) => "enum"
-    | .const _ _ _ (.refineDef ..) | .const _ _ _ (.typeAlias ..) => "type"
+    | .classDef _ _ _ _ _ _ isI .. => if isI then "interface" else "class"
+    | .const _ _ _ _ (.structDef ..) => "struct"
+    | .const _ _ _ _ (.enumDef ..) => "enum"
+    | .const _ _ _ _ (.refineDef ..) | .const _ _ _ _ (.typeAlias ..) => "type"
     | .const .. => "constant"
   let defs : List (List String × String × String × Pos) := tops.filterMap fun t =>
     let (p, n) := match t with
@@ -145,7 +145,7 @@ def checkNoShadowing (tops : List STop) : Except String (List ScopePair) := do
         let x := parts.getLastD n
         pairs := pairs ++ (← fnOuters p "the function" x "" (shown parts.dropLast) n (outers parts.dropLast false x))
       params parts.dropLast p (shown parts) ps
-    | .const p n _ body =>
+    | .const p n _ _ body =>
       let parts := qualParts n
       if n.startsWith "$module:" then
         let mp := qualParts (n.drop "$module:".length).toString
@@ -162,18 +162,19 @@ def checkNoShadowing (tops : List STop) : Except String (List ScopePair) := do
         for v in vs do
           if !v.startsWith "(" then refuse p "the value" v s!" of {shown parts}" x (outers sc true v)
       | .structDef _ _ _ fs =>
-        for (f, _, _, _) in fs do
+        for ⟨f, _, _, _, _, _⟩ in fs do
           if !f.startsWith "(" then refuse p "the field" f s!" of {shown parts}" x (outers sc true f)
       | _ => pure ()
-    | .classDef p n _ _ _ isI fields ovs methods =>
+    | .classDef p n _ _ _ _ isI fields methods =>
       let parts := qualParts n
       let sc := parts.dropLast
       let x := parts.getLastD n
       if !qualified.contains n then
         refuse p s!"the {if isI then "interface" else "class"}" x "" (shown sc) (outers sc false x)
-      for (f, _, _, _) in fields do
-        if !f.startsWith "(" && !ovs.contains f then
-          refuse p "the field" f s!" of {shown parts}" x (outers sc true f)
+      for fd in fields do
+        if !fd.name.startsWith "(" && !fd.isOverride then
+          refuse p "the field" fd.name s!" of {shown parts}" x (outers sc true fd.name)
+
       for m in methods do
         if let .fn mp mn mps _ effs .. := m then
           if !mn.startsWith "(" && !mn.startsWith "$" && !effs.contains "override" then
@@ -185,8 +186,8 @@ def checkNoShadowing (tops : List STop) : Except String (List ScopePair) := do
     with the constants its value names. -/
 partial def constantUses (tops : List STop) : List (Pos × String × List String) :=
   let consts : List (Pos × String × SExpr) := tops.filterMap fun
-    | .const _ _ _ (.structDef ..) | .const _ _ _ (.enumDef ..) | .const _ _ _ (.refineDef ..) => none
-    | .const p n _ e => if (qualParts n).any (·.startsWith "$") then none else some (p, n, e)
+    | .const _ _ _ _ (.structDef ..) | .const _ _ _ _ (.enumDef ..) | .const _ _ _ _ (.refineDef ..) => none
+    | .const p n _ _ e => if (qualParts n).any (·.startsWith "$") then none else some (p, n, e)
     | _ => none
   let names : Std.HashSet String := Std.HashSet.ofList (consts.map (·.2.1))
   let rec uses : SExpr → List String
@@ -252,13 +253,14 @@ end
     expected"): not a block's last, whose value is the block's, nor an operand
     (`A and defer{…}`), a branch or a body of its own. -/
 partial def checkDefers (tops : List STop) : Except String Unit := do
-  let goField (fs : List (String × STy × Option SExpr × Bool)) : Except String Unit :=
-    fs.forM fun (_, _, d, _) => d.forM checkDefersIn
+  let goField (fs : List SField) : Except String Unit :=
+    fs.forM fun f => f.default.forM checkDefersIn
+
   let rec goTop : STop → Except String Unit
     | .fn _ _ ps _ _ _ body => do ps.forM (·.default.forM checkDefersIn); checkDefersIn body
-    | .const _ _ _ (.structDef _ _ _ fs) => goField fs
-    | .const _ _ _ e => checkDefersIn e
-    | .classDef _ _ _ _ _ _ fs _ ms => do goField fs; ms.forM goTop
+    | .const _ _ _ _ (.structDef _ _ _ fs) => goField fs
+    | .const _ _ _ _ e => checkDefersIn e
+    | .classDef _ _ _ _ _ _ _ fs ms => do goField fs; ms.forM goTop
   tops.forM goTop
 
 /-- A literal value, which neither fails nor has several values. -/
@@ -284,14 +286,14 @@ partial def checkForClauses (tops : List STop) : Except String Unit := do
       if cs.all literalClause then
         throw s!"{p.show}: this for has no generator (X : A, or X := A..B) and its clauses cannot fail, so it would run its body once: write X : A to iterate over A (Book of Verse ch. 7)"
       cs.forM go; go b
-    | .structDef _ _ _ fs => fs.forM fun (_, _, d, _) => d.forM go
+    | .structDef _ _ _ fs => fs.forM fun f => f.default.forM go
     | e => e.children.forM go
   for t in tops do
     match t with
     | .fn _ _ ps _ _ _ body => ps.forM (·.default.forM go); go body
-    | .const _ _ _ e => go e
-    | .classDef _ _ _ _ _ _ fs _ ms =>
-      fs.forM fun (_, _, d, _) => d.forM go
+    | .const _ _ _ _ e => go e
+    | .classDef _ _ _ _ _ _ _ fs ms =>
+      fs.forM fun f => f.default.forM go
       for m in ms do
         if let .fn _ _ ps _ _ _ body := m then ps.forM (·.default.forM go); go body
 
@@ -302,11 +304,11 @@ def checkReturns (tops : List STop) : Except String Unit := do
   let ret? : SExpr → Option SExpr := Refine.findPart (fun | .ret .. => true | _ => false) false
   for t in tops do
     match t with
-    | .const _ n _ (.structDef _ _ _ fs) | .classDef _ n _ _ _ _ fs _ _ =>
-      for (f, _, d, _) in fs do
+    | .const _ n _ _ (.structDef _ _ _ fs) | .classDef _ n _ _ _ _ _ fs _ =>
+      for ⟨f, _, d, _, _, _⟩ in fs do
         if let some r := d.bind ret? then
           throw s!"{r.pos.show}: return is not allowed in a field's default (of '{f}' in {n})"
-    | .const _ n _ e =>
+    | .const _ n _ _ e =>
       if let some r := ret? e then
         throw s!"{r.pos.show}: return is not allowed in a constant's value (of {n}), which is in no function"
     | .fn .. => pure ()
@@ -326,14 +328,14 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   SourceProfile.check opts.profile allTops0r opts.entry
   -- rationals (#116): the helpers, for a program that may use them
   let isRatMarker : STop → Bool := fun
-    | .const _ n _ _ => n == ratMarker || n == replaceAllMarker
+    | .const _ n _ _ _ => n == ratMarker || n == replaceAllMarker
     | _ => false
-  let usesReplaceAll := allTops0r.any (fun | .const _ n _ _ => n == replaceAllMarker | _ => false) || opts.entry.isSome
+  let usesReplaceAll := allTops0r.any (fun | .const _ n _ _ _ => n == replaceAllMarker | _ => false) || opts.entry.isSome
   let usesRat := allTops0r.any isRatMarker || opts.entry.isSome
   -- (a type of the program's own cannot take a built-in type's name)
   for t in allTops0r do
     match t with
-    | .const p n _ (.structDef ..) | .const p n _ (.enumDef ..) | .classDef p n .. =>
+    | .const p n _ _ (.structDef ..) | .const p n _ _ (.enumDef ..) | .classDef p n .. =>
       if ("char32" :: typeNames).contains n then throw s!"{p.show}: {n} is a built-in type"
     | _ => pure ()
   checkReservedNames allTops0r
@@ -398,7 +400,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   -- field packets implement source expressions; they acquire no extra source
   -- contract merely because their implementation uses a data type.
   let constructionFx := resolved.foldl (fun budgets top => match top with
-    | .classDef _ n _ specs .. | .const _ n _ (.structDef _ _ specs _) =>
+    | .classDef _ n _ _ specs .. | .const _ n _ _ (.structDef _ _ specs _) =>
       budgets.insert n (EffectPolicy.constructionFx specs)
     | _ => budgets) ({} : Std.HashMap String (List String))
   return { resolved, rawEntry, typeDefaults, helpers, intrinsicCalls, concurrencyNames, usesConc, constructionFx,
@@ -439,7 +441,7 @@ def inlineSource (allTops0r : List STop) (requests : Requests) (admitted : Admit
   let reserved : List String := ["Length", "Slice", "Find", "Insert", "Remove", "RemoveElement",
     "RemoveFirstElement", "RemoveAllElements", "ReplaceElement", "ReplaceAllElements", "ReplaceAll", "Last",
     "Signal", "Await", "Cancel"] ++ admitted.helpers.flatMap fun
-      | .classDef _ _ _ _ _ _ fs _ ms => fs.map (·.1) ++ ms.filterMap fun | .fn _ m .. => some m | _ => none
+      | .classDef _ _ _ _ _ _ _ fs ms => fs.map (·.1) ++ ms.filterMap fun | .fn _ m .. => some m | _ => none
       | _ => []
   -- (#283) and the uses of methods whose family the receiver's class picks,
   -- and the calls whose overload the arguments' types pick
@@ -456,8 +458,8 @@ def inlineSource (allTops0r : List STop) (requests : Requests) (admitted : Admit
   let cellsIn (ps : List SParam) (b : SExpr) : Bool := cells b || ps.any (·.default.any cells)
   let usesCells := lazy && resolved.any fun
     | .fn _ _ ps _ _ _ b => cellsIn ps b
-    | .const _ _ _ e => cells e
-    | .classDef _ _ _ _ _ _ fs _ ms => fs.any (·.2.2.1.any cells) ||
+    | .const _ _ _ _ e => cells e
+    | .classDef _ _ _ _ _ _ _ fs ms => fs.any (·.default.any cells) ||
         ms.any fun | .fn _ _ ps _ _ _ b => cellsIn ps b | _ => false
   let helpers := helpers ++ (← if usesCells then varcellTops else pure [])
   -- the branches of casts that refine type arguments, as functions (#243)
@@ -497,7 +499,7 @@ def inlineSource (allTops0r : List STop) (requests : Requests) (admitted : Admit
   -- Enforce it too; unannotated implementation types retain inferred effects.
   let constructionFx := (resolved ++ helpers).foldl (fun budgets top =>
     let data := match top with
-      | .classDef _ n _ specs .. | .const _ n _ (.structDef _ _ specs _) => some (n, specs)
+      | .classDef _ n _ _ specs .. | .const _ n _ _ (.structDef _ _ specs _) => some (n, specs)
       | _ => none
     match data with
     | some (n, specs) =>
@@ -548,7 +550,7 @@ def argsAndMethodOverloads (tops entry : List STop) (args : Option (List String)
     match args with
     | some as =>
       if defines "Args" then []
-      else [.const { line := 0, col := 0 } "Args" (some (.arr (.name "string")))
+      else [.const { line := 0, col := 0 } "Args" [] (some (.arr (.name "string")))
               (.arrayLit { line := 0, col := 0 } (as.map fun a => .str { line := 0, col := 0 } [.text a]))]
     | none => []
   -- overloaded methods (#106): a method name declared with two or more

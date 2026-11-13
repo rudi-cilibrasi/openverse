@@ -1019,20 +1019,19 @@ partial def parseCase (stop : Nat) : PM SExpr := do
   let _ := stop
   return .caseE t.pos scrut arms.toList
 
-/-- One struct field: `[var] Name:type [= default]`. -/
-partial def parseField (c : Nat) : PM (String × STy × Option SExpr × Bool) := do
+/-- One struct field: `[var] Name<specs>:type [= default]`. -/
+partial def parseField (c : Nat) : PM SField := do
   let start ← peekT
   let isVar := (← peekT).isKw "var"
   if isVar then bump
   let n ← expectBinder
-  -- (`X<public>:int`: a field's access specifiers, accepted, not enforced)
   let specs ← parseSpecs
   expectSym ":"
   let ty ← parseType
   let a ← peekT
   let d ← if a.isSym "=" || a.isSym ":=" then do bump; pure (some (← parseValue c)) else pure none
   ofExcept <| EffectPolicy.checkField start.pos specs d.isSome
-  return (n, ty, d, isVar)
+  return { name := n, ty, default := d, isVar, specs }
 
 /-- `struct` (after the keyword): optional specifiers, then `:` + fields or `{ fields }`. -/
 partial def parseStructBody (p : Pos) : PM SExpr := do
@@ -1557,8 +1556,7 @@ partial def parseCtorBody (stop : Nat) : PM (List SExpr) := do
 
 /-- One item of a class body at column `c`: a field `[var] Name:type [= e]`
     or a method `Name(params)<effects>:type = body`. -/
-partial def parseClassItem (c : Nat) :
-    PM (Sum ((String × STy × Option SExpr × Bool) × List String) STop) := do
+partial def parseClassItem (c : Nat) : PM (Sum SField STop) := do
   let t ← peekT
   -- `block:` runs when an instance is constructed: the method `$block`
   if t.isKw "block" then
@@ -1585,7 +1583,7 @@ partial def parseClassItem (c : Nat) :
     let a ← peekT
     let d ← if a.isSym "=" || a.isSym ":=" then do bump; pure (some (← parseValue c)) else pure none
     ofExcept <| EffectPolicy.checkField t.pos pre d.isSome
-    return .inl ((name, ty, d, isVar), pre)
+    return .inl { name, ty, default := d, isVar, specs := pre }
   if isVar then perr t "expected a field after var"
   expectSym "("
   let (ps, tps, binds) ← parseParamList
@@ -1604,7 +1602,8 @@ partial def parseClassItem (c : Nat) :
 
 /-- `class` or `interface` (after the keyword): specifiers, the parents
     `(base, interface₁, …)`, then `:` + items or `{ items }`. -/
-partial def parseClassBody (p : Pos) (name : String) (tps : List TParam) (isIface : Bool) : PM STop := do
+partial def parseClassBody (p : Pos) (name : String) (nameSpecs : List String) (tps : List TParam)
+    (isIface : Bool) : PM STop := do
   let specs ← parseSpecs
   let mut parents := #[]
   -- (`class()`: no parents, as `class`)
@@ -1641,13 +1640,7 @@ partial def parseClassBody (p : Pos) (name : String) (tps : List TParam) (isIfac
       if a.isSym "," || a.isSym ";" then bump; continue
       items := items.push (← parseClassItem 0)
   else perr o s!"expected ':' or '\{' after {if isIface then "interface" else "class"}"
-  let fields := items.toList.filterMap fun | .inl (f, _) => some f | .inr _ => none
-  let overrides := items.toList.filterMap fun | .inl ((n, _), sp) => if sp.contains "override" then some n else none | _ => none
-  -- (a `<final>` field, which no class below may give another value, is
-  -- kept among the class's specifiers as `$final:F`)
-  let specs := specs ++ items.toList.filterMap fun
-    | .inl ((n, _), sp) => if sp.contains "final" then some s!"$final:{n}" else none
-    | _ => none
+  let fields := items.toList.filterMap fun | .inl f => some f | .inr _ => none
   let methods := items.toList.filterMap fun | .inr m => some m | .inl _ => none
   -- the `block:` clauses, in order, as one method
   let isBlock : STop → Bool := fun | .fn _ "$block" .. => true | _ => false
@@ -1657,7 +1650,7 @@ partial def parseClassBody (p : Pos) (name : String) (tps : List TParam) (isIfac
       throw s!"{q.line}:{q.col}: interface {name} cannot have a block: clause"
   let methods := methods.filter (!isBlock ·) ++
     (if blocks.isEmpty then [] else [.fn p "$block" [] [] [] (.name "void") (.block p blocks)])
-  return .classDef p name tps specs parents.toList isIface fields overrides methods
+  return .classDef p name nameSpecs tps specs parents.toList isIface fields methods
 
 /-- Whether a type is written as a value can be: a name, or a name applied
     to such (`c`, `box(int)`), which may be a constant's or a call. -/
@@ -1703,19 +1696,19 @@ def typeParamsOf (p : Pos) (n : Token) (ps : Array SParam) : PM (List TParam) :=
 /-- The definitions at column `col`, their names qualified by `pfx` (the
     enclosing modules, `A::B::`, #112). A module is flattened: its members
     are definitions of qualified names, and markers record the module
-    (`$module:A`), its `<public>` members (`$public:A::F`) and its
-    `using{M}`s (`$open:A::|M`), for the names' resolution in Elab. With
+    (`$module:A`, with its specifiers) and its `using{M}`s (`$open:A::|M`),
+    for the names' resolution in Elab. With
     `braced`, the definitions of `module{…}`, through the `}`. -/
 partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM (List STop) := do
   let mut tops := #[]
-  let marker (p : Pos) (m : String) : STop := .const p m none (.block p [])
+  let marker (p : Pos) (m : String) (specs : List String := []) : STop := .const p m specs none (.block p [])
   -- (#503) after a definition, the defaults its function types write, each
   -- a constant `$typeDefault:N` of the parameter's type in its scope, which
   -- the elaborator checks and drops
   let typeDefaults : PM (Array STop) := do
     let ds := (← get).typeDefaults
     modify fun st => { st with typeDefaults := #[] }
-    return ds.map fun (p, n, t, e) => .const p s!"{pfx}{typeDefaultPrefix}{n}" (some t) e
+    return ds.map fun (p, n, t, e) => .const p s!"{pfx}{typeDefaultPrefix}{n}" [] (some t) e
   let saved := (← get).topCol
   modify fun st => { st with topCol := col }
   -- (definitions on one line are separated by `;` or `,`: `X:int=0, Y:int=0`,
@@ -1789,7 +1782,6 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
     let pre ← parseSpecs
     let n ← peekT
     if ext.isSome && !n.isSym "(" then perr n noExtensionFields
-    if pre.contains "public" then tops := tops.push (marker t.pos s!"$public:{name}")
     -- `name := module:` and its definitions, indented (Book of Verse ch. 16)
     if n.isSym ":=" && (← peekT 1).isKw "module" then
       ofExcept <| EffectPolicy.checkNonFunction t.pos "module" pre
@@ -1806,7 +1798,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
           let b ← peekT
           parseTopsIn (if b.bol then b.col else col) (name ++ "::") (braced := true)
         else perr o "expected ':' or '{' after module"
-      tops := tops.push (marker t.pos s!"$module:{name}")
+      tops := tops.push (marker t.pos s!"$module:{name}" pre)
       tops := tops ++ inner.toArray
       continue
     -- a constant has the effects of its initialiser (#35)
@@ -1855,7 +1847,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
         let isIface := (← peekT 1).isKw "interface"
         bump; bump
         if !tps.isEmpty then perr n "a parametric type takes its parameters without a where clause"
-        tops := tops.push (← parseClassBody t.pos name (← typeParamsOf t.pos n ps) isIface)
+        tops := tops.push (← parseClassBody t.pos name pre (← typeParamsOf t.pos n ps) isIface)
         continue
       if (← peekT).isSym ":=" && (← peekT 1).isKw "struct" then
         ofExcept <| EffectPolicy.checkNonFunction t.pos "type declaration" pre
@@ -1865,7 +1857,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
         if !tps.isEmpty then perr d "a parametric type takes its parameters without a where clause"
         let tparams ← typeParamsOf t.pos n ps
         match ← parseFnBody with
-        | .structDef bp [] specs fs => tops := tops.push (.const t.pos name none (.structDef bp tparams specs fs))
+        | .structDef bp [] specs fs => tops := tops.push (.const t.pos name pre none (.structDef bp tparams specs fs))
         | _ => perr d s!"only structs can be parametric in openverse ({name})"
         continue
       -- `name(u:type, …) := t`: a parametric type alias (Book of Verse ch.
@@ -1877,7 +1869,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
         if !tps.isEmpty then perr d "a parametric type takes its parameters without a where clause"
         let tparams ← typeParamsOf t.pos n ps
         let a ← peekT
-        tops := tops.push (.const t.pos name none (.typeAlias a.pos tparams (← parseType)))
+        tops := tops.push (.const t.pos name pre none (.typeAlias a.pos tparams (← parseType)))
         continue
       let effs ← parseSpecs
       expectSym ":"
@@ -1887,16 +1879,16 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
       tops := tops.push (.fn t.pos name ps.toList tps.toList (pre ++ effs) ret (withBinds binds (← parseFnBody)))
     else if n.isSym ":=" && (← peekT 1).isKw "interface" then
       bump; bump
-      tops := tops.push (← parseClassBody t.pos name [] true)
+      tops := tops.push (← parseClassBody t.pos name pre [] true)
     else if n.isSym ":=" && (← peekT 1).isKw "class" then
       bump; bump
-      tops := tops.push (← parseClassBody t.pos name [] false)
+      tops := tops.push (← parseClassBody t.pos name pre [] false)
     else if n.isSym ":=" then
       bump
       let a ← peekT
       -- `name := t`: a type alias, when `t` is written as only a type can be
       if let some ty ← typeAliasRHS? then
-        tops := tops.push (.const t.pos name none (.typeAlias a.pos [] ty))
+        tops := tops.push (.const t.pos name pre none (.typeAlias a.pos [] ty))
         continue
       let b ← parseFnBody
       -- (a module's data states its type, Book of Verse ch. 16; `X := c`,
@@ -1905,13 +1897,13 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
         match b with
         | .structDef .. | .enumDef .. | .refineDef .. => pure ()
         | b => if b.asType?.isNone then perr n s!"a constant in a module needs its type: write {name0}:t = …"
-      tops := tops.push (.const t.pos name none b)
+      tops := tops.push (.const t.pos name pre none b)
     else if n.isSym ":" then
       bump
       let ty ← parseType
       let a ← peekT
       if a.isSym "=" || a.isSym ":=" then bump else perr a "expected '=' in a constant definition"
-      tops := tops.push (.const t.pos name (some ty) (← parseFnBody))
+      tops := tops.push (.const t.pos name pre (some ty) (← parseFnBody))
     else perr n s!"expected '(', ':' or ':=' after '{name}'"
   tops := tops ++ (← typeDefaults)
   modify fun st => { st with topCol := saved }
@@ -1977,9 +1969,9 @@ partial def usesQualifiers (toks : Array Token) : Bool := Id.run do
 
 def withRatMarker (toks : Array Token) (tops : List STop) : List STop :=
   let p : Pos := { line := 0, col := 0 }
-  let tops := if usesRational toks then tops ++ [.const p ratMarker none (.block p [])] else tops
-  let tops := if usesQualifiers toks then tops ++ [.const p qualifierMarker none (.block p [])] else tops
-  if toks.any (·.identName? == some "ReplaceAll") then tops ++ [.const p replaceAllMarker none (.block p [])]
+  let tops := if usesRational toks then tops ++ [.const p ratMarker [] none (.block p [])] else tops
+  let tops := if usesQualifiers toks then tops ++ [.const p qualifierMarker [] none (.block p [])] else tops
+  if toks.any (·.identName? == some "ReplaceAll") then tops ++ [.const p replaceAllMarker [] none (.block p [])]
   else tops
 
 /-- Parse a source file: its definitions, and the files it imports. `file`

@@ -40,15 +40,15 @@ def Bound.ty (bound : Bound) : Ty := .struct family [bound.base, bound.derived]
     Value structs keep their existing equality representation. Inherited
     fields are substituted by the ordinary class-field layout pass. -/
 def addFields (tops : List STop) : List STop := tops.map fun
-  | .classDef p owner params specs parents iface fields overrides methods =>
+  | .classDef p owner nsp params specs parents iface fields methods =>
     let proofs := params.filterMap fun parameter => do
       let base ← parameter.upperBound
       let name := fieldName owner parameter.name
-      if fields.any (·.1 == name) then none else
+      if fields.any (·.name == name) then none else
         let ty := STy.app family [base, .name parameter.name]
-        some (name, ty, some (.app p (.ident p "$subtypeWitness")
-          [.construct p family [base, .name parameter.name] []] false), false)
-    .classDef p owner params specs parents iface (fields ++ proofs) overrides methods
+        some { name, ty, default := some (.app p (.ident p "$subtypeWitness")
+          [.construct p family [base, .name parameter.name] []] false) }
+    .classDef p owner nsp params specs parents iface (fields ++ proofs) methods
   | top => top
 
 /-- Only an actual dictionary type establishes a relation. In particular, a
@@ -71,37 +71,37 @@ def protocol (p : Pos) : List STop := Id.run do
   let input : SParam := { name := "$input", ty := c }
   let up (value : SExpr) := SExpr.app p (.member p value "Up") [.ident p "$input"] false
   let lift (name : String) (params : List TParam) (base derived : STy) : STop :=
-    .classDef p name params ["computes"] [dict base derived] false
-      [("$element", dict a c, none, false)] []
+    .classDef p name [] params ["computes"] [dict base derived] false
+      [{ name := "$element", ty := dict a c }]
       [.fn p "Up" [{ name := "$input", ty := derived }] [] ["override", "computes"] base
         (.app p (.ident p "$subtypeLift") [.ident p "$input", .ident p "$element"] false)]
   return [
-    .classDef p family [tp "$subtypeA", tp "$subtypeC"] ["computes"] [] true [] []
+    .classDef p family [] [tp "$subtypeA", tp "$subtypeC"] ["computes"] [] true []
       [.fn p "Up" [input] [] ["$abstract", "computes"] a (.tuple p [])],
-    .classDef p identityFamily [tp "$subtypeC"] ["computes"] [dict c c] false [] []
+    .classDef p identityFamily [] [tp "$subtypeC"] ["computes"] [dict c c] false []
       [.fn p "Up" [input] [] ["override", "computes"] c (.ident p "$input")],
-    .classDef p rationalFamily [] ["computes"] [dict (.name "rational") (.name "int")] false [] []
+    .classDef p rationalFamily [] [] ["computes"] [dict (.name "rational") (.name "int")] false []
       [.fn p "Up" [{ name := "$input", ty := .name "int" }] [] ["override", "computes"]
         (.name "rational") (.ident p "$input")],
-    .classDef p eraseFamily [tp "$subtypeC"] ["computes"] [dict (.name "any") c] false [] []
+    .classDef p eraseFamily [] [tp "$subtypeC"] ["computes"] [dict (.name "any") c] false []
       [.fn p "Up" [input] [] ["override", "computes"] (.name "any") (.ident p "$input")],
-    .classDef p discardFamily [tp "$subtypeC"] ["computes"] [dict (.name "void") c] false [] []
+    .classDef p discardFamily [] [tp "$subtypeC"] ["computes"] [dict (.name "void") c] false []
       [.fn p "Up" [input] [] ["override", "computes"] (.name "void") (.ident p "$input")],
-    .classDef p bottomFamily [tp "$subtypeA"] ["computes"] [dict a (.name "$never")] false [] []
+    .classDef p bottomFamily [] [tp "$subtypeA"] ["computes"] [dict a (.name "$never")] false []
       [.fn p "Up" [{ name := "$input", ty := .name "$never" }] [] ["override", "computes"] a
         (.app p (.ident p "Err") [] false)],
     lift arrayFamily [tp "$subtypeA", tp "$subtypeC"] (.arr a) (.arr c),
     lift optionFamily [tp "$subtypeA", tp "$subtypeC"] (.opt a) (.opt c),
-    .classDef p mapFamily
+    .classDef p mapFamily []
       [{ pos := p, name := "$subtypeKA", constraint := "comparable" },
        { pos := p, name := "$subtypeKC", constraint := "comparable" }, tp "$subtypeA", tp "$subtypeC"]
       ["computes"] [dict (.map ka a) (.map kc c)] false
-      [("$key", dict ka kc, none, false), ("$element", dict a c, none, false)] []
+      [{ name := "$key", ty := dict ka kc }, { name := "$element", ty := dict a c }]
       [.fn p "Up" [{ name := "$input", ty := .map kc c }] [] ["override", "computes"] (.map ka a)
         (.app p (.ident p "$subtypeLift") [.ident p "$input", .ident p "$key", .ident p "$element"] false)],
-    .classDef p composeFamily [tp "$subtypeA", tp "$subtypeB", tp "$subtypeC"]
+    .classDef p composeFamily [] [tp "$subtypeA", tp "$subtypeB", tp "$subtypeC"]
       ["computes"] [dict a c] false
-      [("$outer", dict a b, none, false), ("$inner", dict b c, none, false)] []
+      [{ name := "$outer", ty := dict a b }, { name := "$inner", ty := dict b c }]
       [.fn p "Up" [input] [] ["override", "computes"] a
         (.app p (.member p (.ident p "$outer") "Up") [up (.ident p "$inner")] false)]]
 
@@ -114,9 +114,9 @@ def tupleDeclaration (p : Pos) (arity : Nat) : STop :=
   let params := (names.map (fun i => s!"$tupleA{i}") ++ names.map (fun i => s!"$tupleC{i}")).map
     fun name => ({ pos := p, name, constraint := "type" } : TParam)
   let fields := (bases.zip derived).zipIdx.map fun ((a, c), i) =>
-    (s!"$element{i}", STy.app family [a, c], none, false)
-  .classDef p (tupleFamily arity) params ["computes"]
-    [.app family [.tup bases, .tup derived]] false fields []
+    ({ name := s!"$element{i}", ty := STy.app family [a, c] } : SField)
+  .classDef p (tupleFamily arity) [] params ["computes"]
+    [.app family [.tup bases, .tup derived]] false fields
     [.fn p "Up" [{ name := "$input", ty := .tup derived }] [] ["override", "computes"] (.tup bases)
       (.app p (.ident p "$subtypeLift")
         (.ident p "$input" :: names.map (fun i => .ident p s!"$element{i}")) false)]
@@ -129,9 +129,9 @@ def tupleArrayDeclaration (p : Pos) (arity : Nat) : Except String STop := do
   let params := ("$tupleA" :: names.map (fun i => s!"$tupleC{i}")).map
     fun name => ({ pos := p, name, constraint := "type" } : TParam)
   let fields := derived.zipIdx.map fun (ty, i) =>
-    (s!"$element{i}", STy.app family [base, ty], none, false)
-  return .classDef p (tupleArrayFamily arity) params ["computes"]
-    [.app family [.arr base, .tup derived]] false fields []
+    ({ name := s!"$element{i}", ty := STy.app family [base, ty] } : SField)
+  return .classDef p (tupleArrayFamily arity) [] params ["computes"]
+    [.app family [.arr base, .tup derived]] false fields
     [.fn p "Up" [{ name := "$input", ty := .tup derived }] [] ["override", "computes"] (.arr base)
       (.app p (.ident p "$subtypeLift")
         (.ident p "$input" :: names.map (fun i => .ident p s!"$element{i}")) false)]
@@ -143,8 +143,8 @@ def refinementFamily (source : String) (target : Ty) : String :=
     concrete source result. It never uses a literal to invent membership. -/
 def refinementDeclaration (env : TyEnv) (p : Pos) (source : String) (target : Ty) : Except String STop := do
   unless env.refinementSubtype source target do throw s!"invalid refinement subtype evidence for {source}"
-  return .classDef p (refinementFamily source target) [] ["computes"]
-    [.app family [target.toSTy, .name source]] false [] []
+  return .classDef p (refinementFamily source target) [] [] ["computes"]
+    [.app family [target.toSTy, .name source]] false []
     [.fn p "Up" [{ name := "$input", ty := .name source }] [] ["override", "computes"]
       target.toSTy (.ident p "$input")]
 
@@ -171,8 +171,8 @@ def nominal (env : TyEnv) (p : Pos) (source target : String) : Except String STo
   let owner := nominalFamily source target
   let extra := (sourceBounds.filter (!covered.contains ·)).map fun (base, derived) =>
     (base.toSTy, derived.toSTy)
-  return .classDef p owner tps ["computes"]
-    [(.struct family [base, derived] : Ty).toSTy] false (relationFields p owner extra) []
+  return .classDef p owner [] tps ["computes"]
+    [(.struct family [base, derived] : Ty).toSTy] false (relationFields p owner extra)
     [.fn p "Up" [{ name := "$input", ty := derived.toSTy }] [] ["override", "computes"]
       base.toSTy (.ident p "$input")]
 

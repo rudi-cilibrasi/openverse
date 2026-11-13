@@ -47,8 +47,8 @@ def main : IO Unit := do
   let p : Pos := { line := 8, col := 3, file := "initializer-api.verse" }
   let helper := STop.fn p "Helper" [] [] ["computes"] (.name "int") (.int p 42)
   let main := STop.fn p "Main" [] [] [] (.name "void") (.tuple p [])
-  let packet (target : String) := STop.const p "Packet" none
-    (.structDef p [] [] [("N", .name "int", some (.app p (.ident p target) [] false), false)])
+  let packet (target : String) := STop.const p "Packet" [] none
+    (.structDef p [] [] [{ name := "N", ty := .name "int", default := some (.app p (.ident p target) [] false) }])
   refused "raw AST" "initializer-api.verse:8:3" (elabProgramCore [helper, packet "Helper", main])
   let request (extra : List STop) : Choice.FirstLift :=
     { (default : Choice.FirstLift) with

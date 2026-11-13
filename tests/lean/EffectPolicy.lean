@@ -34,13 +34,13 @@ def main : IO Unit := do
   -- This bypasses parsing, and exercises types/defaults which generic child
   -- visitors treat as leaves. Refusals must occur before unrelated typing.
   let places : List STop := [
-    .const p "Unused" (some (.arr bad)) (.arrayLit p []),
-    .const p "Packet" none (.structDef p [] [] [("F", bad, none, false)]),
-    .const p "Refined" none (.refineDef p "X" (.name "int")
+    .const p "Unused" [] (some (.arr bad)) (.arrayLit p []),
+    .const p "Packet" [] none (.structDef p [] [] [{ name := "F", ty := bad }]),
+    .const p "Refined" [] none (.refineDef p "X" (.name "int")
       [.decl p "F" (some bad) false (.ident p "Never")]),
     .fn p "Unused" [defaultParam] [] [] (.name "int") (.int p 1),
-    .classDef p "Unused" [] [] [] false [("F", bad, none, false)] [] [],
-    .classDef p "Unused" [] [] [] true [] []
+    .classDef p "Unused" [] [] [] [] false [{ name := "F", ty := bad }] [],
+    .classDef p "Unused" [] [] [] [] true []
       [.fn p "Get" [] [] ["$abstract"] bad (.tuple p [])]]
   for (top, i) in places.zipIdx do
     expectError s!"AST place {i}" "api.verse:12:7" (elabProgramCore [top, main])
@@ -80,15 +80,16 @@ def main : IO Unit := do
   expectError "construction core" "construction of cell" (elabProgramCore constructionTops)
   for effect in ["decides", "suspends"] do
     expectError "AST data effect" s!"<{effect}> is not allowed"
-      (elabProgramCore [.const p "Packet" none (.structDef p [] [effect] []), main])
-  let packet := STop.const p "Packet" none (.structDef p [] ["computes"] [])
+      (elabProgramCore [.const p "Packet" [] none (.structDef p [] [effect] []), main])
+  let packet := STop.const p "Packet" [] none (.structDef p [] ["computes"] [])
   let usePacket := STop.fn p "Use" [] [] ["computes"] (.name "Packet")
     (.construct p "Packet" [] [])
   let _ ← requireOK "AST pure struct" (elabProgramCore [packet, usePacket, main])
   expectError "AST default construction budget" "declared construction budget"
-    (elabProgramCore [STop.const p "Packet" none (.structDef p [] [] []), usePacket, main])
-  let materializedCell (specs : List String) := STop.classDef p "Cell" [] specs [] false
-    [("N", .name "int", some (.int p 0), true)] [] []
+    (elabProgramCore [STop.const p "Packet" [] none (.structDef p [] [] []), usePacket, main])
+  let materializedCell (specs : List String) := STop.classDef p "Cell" [] [] specs [] false
+    [{ name := "N", ty := .name "int", default := some (.int p 0), isVar := true }] []
+
   let stage (specs : List String) : Choice.FirstLift :=
     { (default : Choice.FirstLift) with
         stageOnly := true, key := "api-stage", name := "$stage", pos := p,

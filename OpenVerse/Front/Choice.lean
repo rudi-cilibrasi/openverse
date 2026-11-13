@@ -423,7 +423,7 @@ def descendM [Monad m] (go : SExpr → m SExpr) : SExpr → m SExpr
   | .construct p n ts fs => return .construct p n ts (← fs.mapM fun
       | .decl q fn t v x => do return .decl q fn t v (← go x)
       | a => go a)
-  | .structDef p tps specs fs => return .structDef p tps specs (← fs.mapM fun (n, t, d, v) => do return (n, t, ← d.mapM go, v))
+  | .structDef p tps specs fs => return .structDef p tps specs (← fs.mapM fun f => do return { f with default := ← f.default.mapM go })
   | e => e.mapChildrenM go
 
 /-- `e` with `f` applied top-down: where `f` gives a replacement, it is used
@@ -1287,7 +1287,7 @@ partial def namesUsed (e : SExpr) : List String :=
     | .app _ (.ident _ "$constructHints") _ false => []
     | .ident _ n => [n]
     -- (a struct's field defaults, which `children` leaves out)
-    | .structDef _ _ _ fs => fs.flatMap fun (_, _, d, _) => (d.map go).getD []
+    | .structDef _ _ _ fs => fs.flatMap fun f => (f.default.map go).getD []
     | e => e.children.flatMap go
   (go e).eraseDups
 
@@ -2494,7 +2494,7 @@ partial def valueUse? (mv : List String) : SExpr → Option (Pos × String)
   | .app _ (.ident _ "$dispatch") (_ :: as) _ => as.findSome? (valueUse? mv)
   | .app _ (.ident _ _) as _ => as.findSome? (valueUse? mv)
   | .ident p n => if mv.contains n then some (p, n) else none
-  | .structDef _ _ _ fs => (fs.filterMap (·.2.2.1)).findSome? (valueUse? mv)
+  | .structDef _ _ _ fs => (fs.filterMap (·.default)).findSome? (valueUse? mv)
   | e => e.children.findSome? (valueUse? mv)
 
 /-- Source storage retained by a generated resume method. The method's
@@ -3237,7 +3237,7 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
     (overloadPicks : List (Pos × String) := []) :
     Except String (List STop × List (Pos × String) × List (Pos × String)) := do
   let classes := tops.filterMap fun
-    | .classDef _ n tps _ pa ii fs _ ms => some (n, (pa, ii, fs, ms, tps))
+    | .classDef _ n _ tps _ pa ii fs ms => some (n, (pa, ii, fs, ms, tps))
     | _ => none
   if classes.isEmpty then return (tops, [], [])
   -- (#106) a method declaration's name is its list's (`M$ovK`) if its name
@@ -3271,8 +3271,8 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
   -- and of the prelude, `reserved`: `R.M` may be any of them)
   let allFields : List String := classes.flatMap (fun (_, (_, _, fs, _, _)) => fs.map (·.1)) ++
     tops.flatMap (fun
-      | .const _ _ _ (.structDef _ _ _ fs) => fs.map (·.1)
-      | .const _ _ _ (.enumDef _ vs _) => vs
+      | .const _ _ _ _ (.structDef _ _ _ fs) => fs.map (·.1)
+      | .const _ _ _ _ (.enumDef _ vs _) => vs
       | _ => []) ++ reserved
   let topNames : List String := tops.filterMap fun | .fn _ n .. | .const _ n .. | .classDef _ n .. => some n
   let localBinders : List String := tops.flatMap fun
@@ -3436,9 +3436,9 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
     ps.map fun sp => { sp with default := sp.default.map (rw fs trial inC) }
   let rwTops (fs : List (String × MFam)) (trial : Bool) : List STop := tops.map fun
     | .fn p n ps tps fx r b => .fn p n (rwPs fs trial none ps) tps fx r (rw fs trial none b)
-    | .const p n ty e => .const p n ty (rw fs trial none e)
-    | .classDef p n tps sp pa ii fs' ov ms =>
-      .classDef p n tps sp pa ii (fs'.map fun (f, t, d, v) => (f, t, d.map (rw fs trial (some n)), v)) ov (ms.map fun
+    | .const p n sp ty e => .const p n sp ty (rw fs trial none e)
+    | .classDef p n nsp tps sp pa ii fs' ms =>
+      .classDef p n nsp tps sp pa ii (fs'.map fun f => { f with default := f.default.map (rw fs trial (some n)) }) (ms.map fun
         | .fn p2 m ps fx2 x r b => .fn p2 m (rwPs fs trial (some n) ps) fx2 x r (rw fs trial (some n) b)
         | s => s)
   -- (in the trial, calls of the families go through `$fam`)
@@ -3511,8 +3511,8 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
     | .fn _ m .. => m
     | _ => ""
   let out := (rwTops sel false).map fun
-    | .classDef p n tps sp pa ii fs ov ms =>
-      .classDef p n tps sp pa ii fs ov ((ms.filter fun
+    | .classDef p n nsp tps sp pa ii fs ms =>
+      .classDef p n nsp tps sp pa ii fs ((ms.filter fun
           | d@(.fn _ m ..) => let x := slotName n d; !(selAt n x).any (·.direct && !shared x && !overloaded m)
           | _ => true).map fun
         | d@(.fn p2 m ps tps2 fx r _) =>
@@ -3524,8 +3524,8 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
   -- (the bodies of a definition, each with the class it is in)
   let bodiesOf : STop → List (Option String × SExpr)
     | .fn _ _ ps _ _ _ b => (b :: ps.filterMap (·.default)).map (none, ·)
-    | .const _ _ _ e => [(none, e)]
-    | .classDef _ c _ _ _ _ fs _ ms => (fs.filterMap (·.2.2.1) ++ ms.flatMap fun
+    | .const _ _ _ _ e => [(none, e)]
+    | .classDef _ c _ _ _ _ _ fs ms => (fs.filterMap (·.default) ++ ms.flatMap fun
         | .fn _ _ ps _ _ _ b => b :: ps.filterMap (·.default)
         | _ => []).map (some c, ·)
   -- (what is left of their names is a use as a value: refused, as for a
@@ -3801,8 +3801,8 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
   -- (every name the program binds: parameters, locals, fields, methods)
   let binders : List String := (tops.flatMap fun
     | .fn _ _ ps _ _ _ b => ps.map (·.name) ++ localsOf b
-    | .const _ _ _ (.structDef _ _ _ fs) => fs.map (·.1)
-    | .classDef _ _ _ _ _ _ fs _ ms => fs.map (·.1) ++ ms.flatMap fun
+    | .const _ _ _ _ (.structDef _ _ _ fs) => fs.map (·.1)
+    | .classDef _ _ _ _ _ _ _ fs ms => fs.map (·.1) ++ ms.flatMap fun
         | .fn _ m ps _ _ _ b => m :: ps.map (·.name) ++ localsOf b
         | _ => []
     | _ => []).eraseDups
@@ -3993,8 +3993,8 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
   let defaults (ps : List SParam) : List SExpr := ps.filterMap (·.default)
   let bodies : List SExpr := tops.flatMap fun
     | .fn _ _ ps _ _ _ b => b :: defaults ps
-    | .const _ _ _ e => [e]
-    | .classDef _ _ _ _ _ _ fs _ ms => fs.filterMap (·.2.2.1) ++ ms.flatMap fun
+    | .const _ _ _ _ e => [e]
+    | .classDef _ _ _ _ _ _ _ fs ms => fs.filterMap (·.default) ++ ms.flatMap fun
         | .fn _ _ ps _ _ _ b => b :: defaults ps
         | _ => []
   for b in bodies do
@@ -4031,13 +4031,14 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
       if mv.contains n then
         return some (.fn p n ps tps fx r (checkBody checked))
       return some (.fn p n (← goPs ps) tps fx r (← go b))
-    | .const p n ty e => return some (.const p n ty (← go e))
-    | .classDef p n tps sp pa ii fs ov ms =>
-      let fs' ← fs.mapM fun (fn, t, d, v) => do return (fn, t, ← d.mapM go, v)
+    | .const p n sp ty e => return some (.const p n sp ty (← go e))
+    | .classDef p n nsp tps sp pa ii fs ms =>
+      let fs' ← fs.mapM fun f => do return { f with default := ← f.default.mapM go }
+
       let ms' ← ms.mapM fun
         | .fn p2 n2 ps2 tps2 fx2 r2 b2 => do return STop.fn p2 n2 (← goPs ps2) tps2 fx2 r2 (← go b2)
         | m => pure m
-      return some (.classDef p n tps sp pa ii fs' ov ms')).run 0
+      return some (.classDef p n nsp tps sp pa ii fs' ms')).run 0
   -- (`F$all` for each that needs one: the array of its values)
   let (alls, _) ← (needAll.filterMapM (m := StateT Nat (Except String)) fun g => do
     let some f := mfs.lookup g | return none
