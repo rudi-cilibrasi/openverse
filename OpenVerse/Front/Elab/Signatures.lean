@@ -395,7 +395,10 @@ def checkSignatures (env : TyEnv) (sigs : Signatures) (cdefs : List CDef) (field
             let sh (s : Sig) := ", ".intercalate ((s.params.zip (List.range s.params.length)).map fun (t, i) =>
               let npos := s.params.length - s.named.length
               if i < npos then t.show else s!"?{((s.named.drop (i - npos)).head?.map (·.1)).getD "?"}:{t.show}")
-            throw s!"{pos.show}: {n} is defined twice with parameters a call cannot tell apart, ({sh sb}) and ({sh sa}): overloads must take disjoint types"
+            let shown := match extensionMethod? n with
+              | some m => s!"the extension method {m}"
+              | none => n
+            throw s!"{pos.show}: {shown} is defined twice with parameters a call cannot tell apart, ({sh sb}) and ({sh sa}): overloads must take disjoint types"
         | _, _ => pure ()
   -- the overloads of a method a class sees take parameters no call fits two
   -- of (#106: a subclass's new overload too; an override has its method's)
@@ -425,6 +428,26 @@ def checkSignatures (env : TyEnv) (sigs : Signatures) (cdefs : List CDef) (field
             let owner (x : String) := (x.splitOn ".").head!
             let cp := ((cdefs.find? (·.name == c)).map (·.pos)).getD { line := 0, col := 0 }
             throw s!"{cp.show}: {c} has overloads of {mn} a call cannot tell apart, ({sh sb}) in {owner b} and ({sh sa}) in {owner a}: overloads must take disjoint types (an override has the same parameters as its method)"
+  -- an extension method on a class or an interface does not repeat a method
+  -- it has, own or inherited: a call could not tell them apart (Book of
+  -- Verse ch. 6, "Extension methods cannot have the same signature as
+  -- methods defined directly in classes or interfaces")
+  for se in allSigs do
+    let some m := extensionMethod? se.name | continue
+    -- (not one in a class, a method of the class)
+    if se.name.contains '.' then continue
+    let some (.struct c _) := se.params.head? | continue
+    if !env.classes.contains c then continue
+    let classArgs := ((env.sparams.lookup c).getD []).map fun (v, k) => Ty.param v k
+    for o in m :: ((env.methodOverloads.lookup m).getD []) do
+      let some e := (env.supers c).find? fun e => allSigs.any (·.name == s!"{e}.{o}") | continue
+      let some sm := allSigs.find? (·.name == s!"{e}.{o}") | continue
+      let σ := (((env.sparams.lookup e).getD []).map (·.1)).zip (env.upArgs c classArgs e)
+      let own := { sm with params := (sm.params.drop 1).map (·.subst σ), bounds := [] }
+      if !sigsDistinct own { se with params := se.params.drop 1, bounds := [] } then
+        let pos := ((sigs.tops ++ sigs.generics).findSome? fun | .fn q n .. => if n == se.name then some q else none | _ => none).getD { line := 0, col := 0 }
+        let whose := if e == c then s!"{c}'s method {m}" else s!"the method {m} {c} inherits from {e}"
+        throw s!"{pos.show}: the extension method {m} on {c} has the parameters of {whose}, ({", ".intercalate (own.params.map Ty.show)}): a call could not tell them apart (Book of Verse ch. 6)"
   -- an override has the signature of the method it overrides, and an
   -- overriding field the inherited field's type (Book of Verse ch. 10)
   -- an override may return a class below the declared one (covariant results)

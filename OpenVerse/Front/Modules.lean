@@ -54,6 +54,12 @@ structure Resolver where
   bind : Pos → String → Except String Unit
   ty   : Pos → String → Except String String
   qual : Pos → List String → Except String (Option String)
+  /-- The extension method a call `X.M(…)` names here, as a value's name
+      resolves: `$ext:M`, qualified (Book of Verse ch. 6). -/
+  ext  : Pos → String → Except String (Option String) := fun _ _ => pure none
+  /-- In a method, the extension method a bare call `M(…)` may name with
+      `Self` as its receiver, as `ext`. -/
+  selfExt : Pos → String → Except String (Option String) := fun _ _ => pure none
 
 /-- A method name: `(i:)M`'s interface `i` (or `M.i`) resolved as a type. -/
 def Resolver.method (r : Resolver) (p : Pos) (m : String) : Except String String := do
@@ -90,6 +96,27 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
     if let some comps := x.identPath then
       if let some qn ← r.qual p (comps ++ [m]) then return .ident p qn
     return .member p (← go x) (← r.method p m)
+  -- `X.M(…)` whose name an extension method in scope has: the call
+  -- `$ext:M(X, …)` of it (Book of Verse ch. 6, "Extension Methods"), which
+  -- takes `X`'s own member `M` instead where `X`'s type has one (`elabApp`)
+  | .app p f@(.member mp _ m) args b => do
+    let f ← go f
+    let args ← args.mapM go
+    if let .member _ x _ := f then
+      if !(x matches .ident _ "(super:)") then
+        if let some q ← r.ext mp m then return .app p (.ident mp q) (x :: args) b
+    return .app p f args b
+  -- in a method, a bare call `M(…)` whose name an extension method in scope
+  -- has: the call `$ext:M(Self, …)` of it, or `M(…)` as written, whichever
+  -- the call fits (`elabApp`; Book of Verse tests, `SOL-3515`)
+  | .app p f@(.ident ip n) args b => do
+    let f ← go f
+    let args ← args.mapM go
+    if let .ident _ n' := f then
+      if !n.startsWith "$" then
+        if let some q ← r.selfExt ip n then
+          return .app p (.ident ip q) (.ident ip (implicitSelfPrefix ++ n') :: args) b
+    return .app p f args b
   | .gen p x k s => do
     r.bind p x
     if let some k := k then r.bind p k
@@ -123,7 +150,13 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
     | .const _ n _ _ => !isMarker n
     | _ => true
   let modules := (markers "$module:").map (·.2)
-  if modules.isEmpty && (markers "$open:").isEmpty then return real
+  -- (extension methods, which calls `X.M(…)` find: Book of Verse ch. 6)
+  let isExt (n : String) : Bool := (extensionMethod? n).isSome
+  let hasExt := real.any fun
+    | .fn _ n .. => isExt n
+    | .classDef _ _ _ _ _ _ _ _ ms => ms.any fun | .fn _ n .. => isExt n | _ => false
+    | _ => false
+  if modules.isEmpty && (markers "$open:").isEmpty && !hasExt then return real
   let publics := (markers "$public:").map (·.2)
   let defs : List String := real.map fun
     | .fn _ n .. | .const _ n .. | .classDef _ n .. => n
@@ -242,11 +275,19 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
       | none => throw s!"{p.show}: unknown type '{n}'"
     resolve "type" sc p n
   let scopeOf (n : String) : List String := (qualParts n).dropLast
+  -- the extension method `X.M(…)` names from scope `sc`, `$ext:M` found as
+  -- a value's name is (none: `X`'s member `M`)
+  let extAt (sc : List String) (p : Pos) (m : String) : Except String (Option String) := do
+    if !hasExt || m.startsWith "(" || m.startsWith "$" then return none
+    match ← find sc p (extensionName m) with
+    | some (false, cand) => return some (qualJoin cand)
+    | _ => return none
   let rAt (sc excl : List String) : Resolver :=
-    { val := resolve "value" sc, bind := bind sc, ty := tyName sc excl, qual := qual sc }
+    { val := resolve "value" sc, bind := bind sc, ty := tyName sc excl, qual := qual sc, ext := extAt sc }
   -- each class's members, its own and inherited (a method body sees them
-  -- bare, so none may be named like a visible member)
-  let classInfo : List (String × List String × List String) ← real.filterMapM fun
+  -- bare, so none may be named like a visible member), and its extension
+  -- methods (`$ext:M`, which its methods' calls `X.M(…)` find)
+  let classInfo : List (String × List String × List String × List String) ← real.filterMapM fun
     | .classDef p n tps _ parents _ fields _ methods => do
       let r := rAt (scopeOf n) (tps.map (·.name))
       let ps ← parents.mapM fun t => do
@@ -256,10 +297,14 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
       let own := fields.map (·.1) ++ methods.filterMap fun
         | .fn _ mn .. => if mn.startsWith "(" || mn.startsWith "$" then none else some mn
         | _ => none
-      return some (n, ps, own)
+      let exts := methods.filterMap fun
+        | .fn _ mn .. => if isExt mn then some mn else none
+        | _ => none
+      return some (n, ps, own, exts)
     | _ => return none
   let budget := 1 + classInfo.foldl (fun a (_, ps, _) => a + ps.length + 1) 0
-  let membersOf (c : String) : List String := Id.run do
+  -- (`what` of each class at or above `c`)
+  let ofClasses (what : List String × List String → List String) (c : String) : List String := Id.run do
     let mut seen : List String := []
     let mut todo := [c]
     let mut out : List String := []
@@ -270,10 +315,11 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
         todo := rest
         if !seen.contains x then
           seen := x :: seen
-          if let some (_, ps, own) := classInfo.find? (·.1 == x) then
-            out := out ++ own
+          if let some (_, ps, own, exts) := classInfo.find? (·.1 == x) then
+            out := out ++ what (own, exts)
             todo := todo ++ ps
     return out.eraseDups
+  let membersOf := ofClasses (·.1)
   let params (r : Resolver) (p : Pos) (ps : List SParam) : Except String (List SParam) := do
     for prm in ps do r.bind p prm.name
     ps.mapM fun prm => do
@@ -310,6 +356,11 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
         match m with
         | .fn mp mn mps mtps meffs mret mbody =>
           let rm := rAt (scopeOf n) (tps.map (·.name) ++ mtps.map (·.name))
+          -- (the class's extension methods first: methods of `Self`)
+          let exts := ofClasses (·.2) n
+          let ext (q : Pos) (x : String) : Except String (Option String) :=
+            if exts.contains (extensionName x) then pure (some (extensionName x)) else rm.ext q x
+          let rm := { rm with ext, selfExt := ext }
           let mtps ← mtps.mapM (·.mapBoundNamesM (rm.ty mp))
           let mps ← params rm mp mps
           return .fn mp (← rm.method mp mn) mps mtps meffs (← mret.mapNamesM (rm.ty mp)) (← mbody.mapNamesM rm)
