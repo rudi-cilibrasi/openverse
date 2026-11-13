@@ -423,6 +423,17 @@ complete without yielding when no other task is runnable at that point of a
 its deadline. Each is a change to the proved scheduler model and to
 `runtime/`, a piece of its own.
 
+**As built** (`feat/core-book-primitives`). The scheduler is neither Core's
+nor the C runtime's: it is Verse in the front end's prelude
+(`Front/ConcurrencyPrelude.lean`), lowered with every suspends function into
+ordinary Verse Core (DESIGN, "Concurrency"), so Core, its proofs and the C
+runtime are unchanged by all three. `Sleep(S)` rounds up and `Sleep(0.0)`
+completes at once, unconditionally, as eight tested examples have it, not
+only in a `race`'s first pass ([the rules](scheduler-conformance.md#the-books-scheduler-rules));
+the later arms of a `race` resolved in its first pass already never began.
+An awaiter running inside `Signal` is not built: [the
+obstacle](scheduler-conformance.md#awaiters-run-inside-signal-not-built).
+
 ### Warnings
 
 **Built** (the first of the load-bearing readings, [below](#the-load-bearing-readings-built)).

@@ -235,3 +235,57 @@ The Book disagrees with itself.
   `Sleep(0.0)` never lets another task run (the API says the same of a
   negative duration); a loop that should give way writes a positive one.
 
+### Awaiters run inside `Signal` (not built)
+
+- **API** (`event`, line 4346): waiting tasks are "resumed first, in the
+  order they suspended"; line 4510: "Signal returns before the resumed
+  tasks have finished", that is, after each has run to its next wait.
+- **Tests:** `Event.versetest:27` (one task's `sync`: an arm awaits four
+  times while its sibling signals four times in a loop that never waits,
+  and the awaiter receives `(1, 2, 3, 4)`: it runs inside each `Signal`);
+  `Bugs/FORT-1126351-RaceArmsDoNotStartAfterResolution.versetest:33` (an
+  arm's `E1.Signal()` resumes the arm awaiting `E1`, which wins the `race`
+  inside the `Signal`; the signalling arm goes on to its next wait, and the
+  arm after it never starts); `when.versetest:179-188` and
+  `Coroutines/Concurrency.versetest:1568-1580` (another task's awaiter has
+  run when `Signal` returns); `Coroutines/SpawnAndTask.versetest:318`
+  (awaiters of one task's end resume in the order they began waiting,
+  `A2C2B3`, not the arms' order). None of these is translatable by the
+  harness (the test runner's `CoroUtils`, or a `spawn` in an assertion,
+  which is a failure context), so no case moves either way.
+- **How many awaiters one `Signal` wakes:** ch. 14 says both "Each signal
+  delivers one value to each awaiting task" (`:1451-1452`) and "each
+  `Signal()` wakes exactly one awaiter" (`:1486-1488`); no test has two
+  awaiters of one event at one `Signal`. openverse keeps waking every
+  awaiter (the API's "waiting tasks", plural).
+- **openverse:** unchanged: `Signal` marks its awaiters woken and returns;
+  they go on when the scheduler next polls them, in its order, or, with
+  `--event-fifo` (#513), in the order they suspended, once the signalling
+  task waits. Both flags stay as they were: `--event-fifo` is the API's
+  order but not its timing, and the Book fixes the timing too, so making
+  it the default alone would be half the rule; `--signal-no-rollback`
+  (#515) stays opt-in, as the Book's tests have `Signal` succeed in
+  `<decides>` functions (`Event.versetest` 83, 117), which the default
+  (allowed, rolled back) does.
+- **The obstacle.** A suspended task is resumed only from its root, down
+  its chain of frames (DESIGN, "Concurrency: suspends functions as
+  frames"); a frame's suspension point is stored when it suspends. Inside
+  a `Signal`, the signalling task's own frames are running: the points
+  they hold are the old ones, so resuming its root again would re-run
+  what ran since. The awaiters of `Event.versetest:27` and FORT-1126351 are
+  arms of that same task, and an arm has no way to be resumed on its own:
+  its resume function takes the enclosing function's slots as arguments,
+  which only that function, mid-run, has. Building the rule needs every
+  arm, as every root, a resumption entry that reads all it needs from its
+  frame; each awaiter recording the innermost such strand it waits in;
+  `Signal` resuming each woken strand, in suspension order, unless it is
+  running, and the task's order (#513's drain) moved into it; and a
+  `race` resolved inside a `Signal` stopping its unstarted arms and
+  cancelling the started ones when the signalling arm next waits. That is
+  a change to the lowering of every suspends function (`Front/Suspend.lean`,
+  `Elab/Lowering.lean`), the scheduler models (`sched_gen*.py`,
+  `event_fifo.py`) and the FIFO machinery, which this work leaves for a
+  piece of its own. Running only the other tasks' awaiters inside
+  `Signal` (the drain exists) would land half of it: the same task's arms
+  would still wait for `Signal` to return.
+
