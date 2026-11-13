@@ -172,6 +172,9 @@ partial def elabExprMarkersWith
       canFail := mode == "true", defers := [], forReturnSlot := some slot,
       forBreakCapture := some breaking, forBreakSlot := none, inLoop := true, loopDefers := 0,
       loopRollback := mode == "true" || ctx.inRollback } body exp
+  -- (#283) a family's stub, `Err()`: a program with a call of it is
+  -- refused (`elabProgramCore`)
+  | .app p (.ident _ "$familyStub") [] false => elabE ctx (.app p (.ident p "Err") [] false) exp
   -- (#283, `Choice.bifToExcl`) a block as an `if`'s branch binding a name
   -- its condition binds
   | .app _ (.ident _ "$shadows") [.ident q n] false =>
