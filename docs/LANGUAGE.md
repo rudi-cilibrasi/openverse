@@ -1400,6 +1400,23 @@ Main():void =
   right (`N = 0 or T[N - 1] > 1`) and of an `if` without `else` as a
   statement.
 
+  A call of the function, or of another function with several values, in a
+  failure context of its code (an `if`'s conditions, the operand of `not`,
+  `option{…}`, `logic{…}` or `first{…}`, the left of `or`) is no choice point
+  of it: that context takes the call's first success, as it would anywhere,
+  while the function's own values are being taken, and the call's code
+  takes its own in turn (#283). What a rejected attempt does is undone, and
+  what the succeeding one does stays, as in any condition:
+
+  ```verse
+  T(N:int)<transacts>:int =
+      if (N <= 0) then 0 else:
+          Print("t {N}")
+          if (T(N - 1) > 0) then (N | 10 * N) else (N | 100 * N)
+  Main()<transacts>:void =
+      for (V := T(2)) { Print("v {V}") }     # t 2, t 1, v 2, v 20
+  ```
+
   A returning branch may contain plain clauses and
   nested conditionals before its value. A `return` at the end of the body or
   in an `if` branch ends that invocation, yielding its operand's values in order;
@@ -1497,10 +1514,10 @@ Main():void =
   `<computes>`, keeps local state, or may print or call `Err()`. Its choice
   points must be where a choice is lifted from (a comparison's later
   operand, a `set`'s value, a named argument, a struct's field, `and`'s
-  operands, an `if`'s branch, the right of `or`), so not in a condition
-  (an `if`'s, `not`'s, the left of `or`) or a loop, where a call would
-  take the function's values while its own are being taken, nor in a
-  class's or generic struct's construction (#283). Also a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`
+  operands, an `if`'s branch, the right of `or`), so not in a loop of its
+  code (a `for`'s clauses), where a call takes all the function's values
+  while its own are being taken, nor in a class's or generic struct's
+  construction (#283). Also a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`
   other than at the end of its body or in an `if`'s branches, a method of a class or
   interface below two others that each declare its name without `<override>`,
   `<suspends>`, one used as a function value, and, since its body is inlined where other names may be

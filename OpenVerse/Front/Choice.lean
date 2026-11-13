@@ -1758,8 +1758,8 @@ def eagerWhy : String :=
   "such a function must be <computes>, keep no local state, and reach nothing that prints or calls Err(), " ++
   "as all its values are computed at a call (#235), unless it is taken lazily: clauses, then a choice whose " ++
   "alternatives are values, calls of its recursive group, or such a call or a choice with code after it that may " ++
-  "reach another, not in a condition (an if's, not's, the left of or) or a loop, which would take a call's values " ++
-  "while its own are taken, nor in a field of a class's or a generic struct's construction (#246, #283)"
+  "reach another, not in a loop, which would take a call's values while its own are taken, nor in a field of a " ++
+  "class's or a generic struct's construction (#246, #283)"
 
 /-- (#283) Whether an alternative in normal form (`normAlt`) is one the
     lazy machine takes: its prefix plain, a choice's alternatives such again,
@@ -2637,6 +2637,17 @@ partial def pickOverloads (ovs : List String) (picks : List (Pos × String)) (se
       return .app p (.ident q g) (as.map (pickOverloads ovs picks sel)) br
     | _ => none) e
 
+/-- (#283) `e` with each call of an overload's own function `F$mvK` of one
+    of `ovs` a call of `F` again, as written, whose overload the elaborator
+    picks (`pickOverloads` undone). -/
+partial def unpickOverloads (ovs : List String) (e : SExpr) : SExpr :=
+  mapE (fun
+    | .app p (.ident q g) as br => match g.splitOn "$mv" with
+      | [f, k] => if ovs.contains f && k.toNat?.isSome then
+          some (.app p (.ident q f) (as.map (unpickOverloads ovs)) br) else none
+      | _ => none
+    | _ => none) e
+
 /-- The calls `F(args)` in `e`, by their place (#283). -/
 partial def callUses (e : SExpr) : List (Pos × String) :=
   (match e with | .app p (.ident _ f) _ _ => [(p, f)] | _ => []) ++ e.children.flatMap callUses
@@ -3437,18 +3448,147 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
     (calls inC b).filter fun (p, m) => pending m && (overloadPicks.lookup p).isNone
   return (out ++ implFns sel, sites, ovSites.eraseDups)
 
+/-- (#283) A consumer in a recursive group's code of a call of a function
+    with several values: the failure context that takes the call's values.
+    Its `code` is an `if`'s conditions (`conds`), or the clauses of the
+    operand of `not`, `option{…}`, `logic{…}`, `first{…}` or the left of
+    `or`, its last one binding the operand's value, whose first success is
+    taken (`first`). `outs` are what it gives the code after it: the names
+    the conditions bind, or the value's name. -/
+structure Consumer where
+  pos : Pos
+  code : List SExpr
+  first : Bool
+  conds : Bool
+  outs : List String
+
+/-- The clauses `cs` with their last value bound to a name, `v` unless the
+    last clause binds one, as `firstOfClauses` does. -/
+def valueOf (p : Pos) (v : String) (cs : List SExpr) : List SExpr × String :=
+  match cs.getLast? with
+  | some (.decl _ x _ _ _) => (cs, x)
+  | some e => (cs.dropLast ++ [.decl e.pos v none false e], v)
+  | none => ([.decl p v none false (.tuple p [])], v)
+
+/-- (#283) Each outermost consumer in `e` (`Consumer`) of a call that `has`
+    sees, replaced by what `f` gives: an `if`'s conditions, or the clauses of
+    a block in place of the operand. -/
+partial def mapConsumersM [Monad m] (has : SExpr → Bool) (f : Consumer → m (List SExpr)) (e : SExpr) : m SExpr := do
+  let go := mapConsumersM has f
+  let operand (q : Pos) (x : SExpr) : m SExpr := do
+    let (code, v) := valueOf q s!"$nest{q.line}_{q.col}v" (stmtsOf x)
+    return .block q (← f { pos := q, code, first := true, conds := false, outs := [v] })
+  match e with
+  | .ite p cs t u =>
+    let cs ← if cs.any has then f { pos := p, code := cs, first := true, conds := true, outs := boundIn cs }
+      else cs.mapM go
+    return .ite p cs (← go t) (← u.mapM go)
+  | .notE p x => if has x then return .notE p (← operand p x) else descendM go e
+  | .orE p a b => if has a then return .orE p (← operand p a) (← go b) else descendM go e
+  | .optionLit p x => if has x then return .optionLit p (← operand p x) else descendM go e
+  | .logicLit p x => if has x then return .logicLit p (← operand p x) else descendM go e
+  | .app p (.ident q "$first") [x] false =>
+    if has x then return .app p (.ident q "$first") [← operand p x] false else descendM go e
+  | e => descendM go e
+
+/-- (#283) The key of a consumer's name `n` in the types an elaboration
+    notes (`$noteTypes`, `Requests.nested`): the consumer's place and `n`. -/
+def nestKey (p : Pos) (n : String) : String := s!"{p.file}:{p.line}:{p.col}/{n}"
+
+/-- (#283) The names a consumer takes from the code of the function `f` it
+    is in: those it uses that `f`'s parameters or locals bind, not its own. -/
+def Consumer.caps (c : Consumer) (f : MFn) : List String :=
+  let own := f.params.map (·.name) ++ localsOf f.body
+  let inner := localsOf (.block c.pos c.code)
+  (namesUsed (.block c.pos c.code)).filter fun n => own.contains n && !inner.contains n
+
+/-- (#283) A recursive function's (`g`, `f`) consumers of calls of functions
+    with several values (`has`), each a function of its own, and its body with
+    each a call of it, a plain one: so a consumer in a group's code is a
+    consumer like any other, and its own nested one a call of itself. The
+    function's body is the consumer as written: its clauses under `first{…}`
+    (`<decides>`), then the tuple of what it gives (`outs`),
+    the final values of the function's `var`s it sets (copied in as
+    `FirstLift`'s are) and `true`. It takes the names it uses from the
+    function's code, at the types an earlier elaboration noted (`ty`), and
+    the function's type parameters they mention; its effects are the
+    function's. -/
+def nestFns (g : String) (f : MFn) (has : SExpr → Bool) (ty : Pos → String → Option STy) :
+    Except String (SExpr × List STop) := do
+  let isVar (e : SExpr) (n : String) : Bool := anyE (fun | .decl _ x _ true _ => x == n | _ => false) e
+  let rw (c : Consumer) : StateT (List STop) (Except String) (List SExpr) := do
+    let p := c.pos
+    let tyOf (n : String) : StateT (List STop) (Except String) STy := match ty p n with
+      | some t => pure t
+      | none => throw s!"{p.show}: internal: no type noted for {n} (#283)"
+    let caps := c.caps f
+    let sets := (setsIn (.block p c.code)).eraseDups.filter fun n => caps.contains n && isVar f.body n
+    let capTys ← caps.mapM tyOf
+    let outTys ← c.outs.mapM tyOf
+    let tps := f.tparams.filter fun tp => capTys.any (styMentions [tp.name])
+    if let some tp := f.tparams.find? (fun tp => !tps.contains tp && outTys.any (styMentions [tp.name])) then
+      throw s!"{p.show}: {shownFnName g} has several values, and this failure context in its code takes the values of a call and gives a value of type {tp.name}, which none of the names it uses has: not supported yet (#283)"
+    let name := s!"{g}$nest{p.line}_{p.col}"
+    let params : List SParam := (caps.zip capTys).map fun (n, t) =>
+      { name := if sets.contains n then s!"{n}$in" else n, ty := t }
+    let setTys := sets.map fun n => ((caps.zip capTys).lookup n).getD (.name "void")
+    let copies := (sets.zip setTys).map fun (n, t) => SExpr.decl p n (some t) true (.ident p s!"{n}$in")
+    let tup := SExpr.tuple p ((c.outs ++ sets).map (SExpr.ident p ·) ++ [.ident p "true"])
+    let body := SExpr.block p (copies ++
+      if c.first then [.app p (.ident p "$first") [.block p (c.code ++ [tup])] false] else c.code ++ [tup])
+    let fx := f.fx.filter (· != "decides") ++ (if c.first then ["decides"] else [])
+    modify (· ++ [.fn p name params tps fx (.tup (outTys ++ setTys ++ [.name "logic"])) body])
+    -- (where it was: the call, then what it gives, the `var`s set again)
+    let n := s!"$nest{p.line}_{p.col}n"
+    let field (i : Nat) : SExpr := .app p (.ident p n) [.int p (i : Int)] false
+    let outs := (c.outs.zip outTys).zipIdx.map fun ((o, t), i) =>
+      let v := c.code.any (isVar · o)
+      SExpr.decl p o (if v then some t else none) v (field i)
+    let back := sets.zipIdx.map fun (s, j) => SExpr.set p (.ident p s) none (field (c.outs.length + j))
+    let call := SExpr.app p (.ident p name) (caps.map (SExpr.ident p ·)) c.first
+    return [.decl p n none false call] ++ outs ++ back ++ (if c.conds then [] else c.outs.map (SExpr.ident p ·))
+  let (body, fns) ← (mapConsumersM has rw f.body).run []
+  return (body, fns)
+
+/-- (#283) The body of a function `f` whose consumers' types are not noted
+    yet, for checking only: as `checkBody`, with each consumer noting the
+    types of the names it takes and gives (`$noteTypes`, where they are all
+    in scope: after an `if`'s conditions, or after the operand's value is
+    bound). -/
+def noteConsumers (f : MFn) (has : SExpr → Bool) : SExpr :=
+  let note (c : Consumer) : Id (List SExpr) :=
+    let mark := SExpr.app c.pos (.ident c.pos "$noteTypes")
+      (.str c.pos [.text (nestKey c.pos "")] :: (c.caps f ++ c.outs).map (SExpr.ident c.pos ·)) false
+    if c.conds then c.code ++ [mark] else c.code ++ [mark] ++ c.outs.map (SExpr.ident c.pos ·)
+  checkBody (Id.run (mapConsumersM has note f.body))
+
+/-- What `inlineMulti` gives: the program with the functions that have
+    several values inlined at their calls; whether some are taken lazily
+    (#246), whose consumers need a class of stack cells; the uses of methods
+    whose family an elaboration is to pick; the calls of overloaded
+    functions whose overload an elaboration is to pick; and the consumers
+    whose names' types an elaboration is to note (#283, `nestFns`). -/
+structure Inlined where
+  tops : List STop
+  lazy : Bool := false
+  familySites : List (Pos × String) := []
+  overloadSites : List (Pos × String) := []
+  nestedSites : List String := []
+
 /-- The functions of the program that have several values, inlined at their
     calls (see above); the program unchanged when there are none. Also
     whether some are taken lazily (#246), whose consumers need a class of
     stack cells, the uses of methods whose family an elaboration is to pick
     (`methodFns`, by `picks`), and the calls of overloaded functions whose
-    overload an elaboration is to pick (by `overloadPicks`). -/
-def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List String := [])
-    (picks : List (Pos × String) := []) (lazy : List String := []) (overloadPicks : List (Pos × String) := []) :
-    Except String (List STop × Bool × List (Pos × String) × List (Pos × String)) := do
-  -- (methods with several values as functions first, #283; `reserved`:
-  -- the members of built-in types and of the prelude)
-  let (tops, sites, methodOvSites) ← methodFns tops reserved picks overloadPicks
+    overload an elaboration is to pick (by `overloadPicks`). (`inlineFns`
+    after `methodFns`: `pending`, the places of functions kept with one value
+    until their consumers' types are noted; `checking`, the bodies functions
+    are checked with, by place, when they are not theirs; `nestDone`, whether
+    their consumers are functions of their own already.) -/
+partial def inlineFns (tops : List STop) (eager : List String) (lazy : List String)
+    (overloadPicks : List (Pos × String)) (nested : List (String × STy))
+    (sites methodOvSites : List (Pos × String)) (pending : List Pos := [])
+    (checking : List (Pos × SExpr) := []) (nestDone : Bool := false) : Except String Inlined := do
   -- (#283) overloaded functions: each overload a function of its own,
   -- `F$mvK`. A call of `F` is one of the overload the arguments' types
   -- pick, which an earlier elaboration noted by its place (`overloadPicks`),
@@ -3458,9 +3598,13 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
   -- (which have several values, with every picked call one of its
   -- overload's function; then the functions with the calls of those that
   -- have several values so, the others' calls as written)
-  let mv := multiValued (overloadCandidates tops overloadPicks fun _ => true)
-  let fns := overloadCandidates tops overloadPicks mv.contains
-  if mv.isEmpty then return (tops, false, sites, methodOvSites)
+  -- (#283) not those kept with one value until their consumers' types are
+  -- noted, `pending`)
+  let candidates (sel : String → Bool) : List (String × MFn) :=
+    (overloadCandidates tops overloadPicks sel).filter (!pending.contains ·.2.pos)
+  let mv := multiValued (candidates fun _ => true)
+  let fns := candidates mv.contains
+  if mv.isEmpty then return { tops, familySites := sites, overloadSites := methodOvSites }
   -- (the overloaded ones with an overload that has several values: their
   -- calls not picked yet are noted by the elaboration, for the next one)
   let ovMv := ovNamesAll.filter fun f => (ovOf f).any (mv.contains ·.1)
@@ -3558,6 +3702,47 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
     match rawMfs.lookup h with
     | some f => f.fx.contains "computes" && !anyE (fun | .set .. | .decl _ _ _ true _ => true | _ => false) f.body
     | none => false
+  -- (#283) a consumer, in the code of a recursive group taken lazily (one
+  -- not computable), of a call of a function with several values, its
+  -- group's or another's: a function of its own (`nestFns`), and the
+  -- functions analysed again with it. Until an elaboration has noted the
+  -- types of the names those take and give, the group's functions are kept
+  -- with one value (`pending`), their calls as written, as the uses of a
+  -- method's family are in the first elaboration, and their bodies note them
+  -- (`noteConsumers`).
+  if !nestDone then
+    let has (e : SExpr) : Bool := anyE (fun
+      | .app _ (.ident _ h) _ _ => mv.contains h || h == "$dispatch"
+      | _ => false) e
+    let consumers (f : MFn) : List Consumer :=
+      ((mapConsumersM (m := StateM (List Consumer)) has (fun c => do modify (· ++ [c]); pure c.code) f.body).run []).2
+    let targets := (recs.filter fun g => !computable g && !(groupOf g).any eager.contains).filterMap fun g =>
+      (rawMfs.lookup g).bind fun f => if (consumers f).isEmpty then none else some (g, f)
+    if !targets.isEmpty then
+      let ty (p : Pos) (n : String) : Option STy := nested.lookup (nestKey p n)
+      -- (the function defined at `p`: a candidate, or an overload of one)
+      let isAt (p : Pos) : STop → Bool
+        | .fn q n .. => q == p && ((rawMfs.lookup n).isSome || ovNamesAll.contains n)
+        | _ => false
+      let withBody (p : Pos) (b : SExpr) (t : STop) : STop := match t with
+        | .fn q n ps tps fx r _ => if isAt p t then .fn q n ps tps fx r b else t
+        | t => t
+      if targets.all fun (_, f) => (consumers f).all fun c => (c.caps f ++ c.outs).all (ty c.pos · |>.isSome) then
+        let mut tops := tops
+        let mut checking := checking
+        for (g, f) in targets do
+          let (body, more) ← nestFns g f has ty
+          -- (each still checked as written)
+          checking := checking ++ tops.filterMap fun t => match t with
+            | .fn q _ _ _ _ _ b => if isAt f.pos t then some (q, b) else none
+            | _ => none
+          tops := tops.map (withBody f.pos body) ++ more
+        return ← inlineFns tops eager lazy overloadPicks nested sites methodOvSites pending checking true
+      let marked := (targets.flatMap fun (g, _) => groupOf g).eraseDups.filterMap fun h =>
+        (rawMfs.lookup h).map fun f => (f.pos, unpickOverloads ovNamesAll (noteConsumers f has))
+      let tops := marked.foldl (fun ts (p, b) => ts.map (withBody p b)) tops
+      let r ← inlineFns tops eager lazy overloadPicks nested sites methodOvSites (pending ++ marked.map (·.1)) checking true
+      return { r with nestedSites := targets.flatMap fun (_, f) => (consumers f).map (nestKey ·.pos "") }
   let loops : List String := recs.filter fun g =>
     let grp := groupOf g
     -- An incomplete tail erases its values. A returning any-valued group
@@ -3640,16 +3825,21 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
   let (tops', nextSite) ← (tops.filterMapM (m := StateT Nat (Except String)) fun t => do
     match t with
     | .fn p n ps tps fx r b =>
+      -- (#283) one kept with one value until its consumers' types are
+      -- noted: its body for checking already, as written
+      if pending.contains p then return some (.fn p n ps tps fx r b)
+      -- (checked as written, when its consumers are functions of their own)
+      let checked := (checking.lookup p).getD b
       -- (an overload of an overloaded one, #283: as its own analysis says,
       -- by its place: one with several values kept for checking, one
       -- with one value compiled, as it is called as written)
       if ovMv.contains n then
         let own := ((ovOf n).find? fun (_, q, _) => q.line == p.line && q.col == p.col && q.file == p.file).map (·.1)
-        if own.any mv.contains then return some (.fn p n ps tps fx r (checkBody b))
+        if own.any mv.contains then return some (.fn p n ps tps fx r (checkBody checked))
         return some (.fn p n (← goPs ps) tps fx r (← go b))
       -- (its own name kept, so that messages name it: nothing calls it)
       if mv.contains n then
-        return some (.fn p n ps tps fx r (checkBody b))
+        return some (.fn p n ps tps fx r (checkBody checked))
       return some (.fn p n (← goPs ps) tps fx r (← go b))
     | .const p n ty e => return some (.const p n ty (← go e))
     | .classDef p n tps sp pa ii fs ov ms =>
@@ -3672,11 +3862,22 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
   -- (#283) each overload of an overloaded one kept as `F$mvK` too, for
   -- its signature where its calls are inlined (effects, defaults)
   let ovKept : List STop := ovMv.flatMap fun f => (ovOf f).filterMap fun (k, p, m) =>
-    if mv.contains k then some (.fn p k m.params m.tparams m.fx m.ret (checkBody m.body)) else none
+    if mv.contains k then some (.fn p k m.params m.tparams m.fx m.ret (checkBody ((checking.lookup p).getD m.body))) else none
   -- (#283) the calls of those with an overload that has several values whose
   -- overload is not picked yet: the elaboration notes it, for the next one
   -- (`Requests.overloads`)
   let ovSites := (bodies.flatMap callUses).filter fun (q, f) => ovMv.contains f && (overloadPicks.lookup q).isNone
-  return (tops' ++ ovKept ++ alls, !loops.isEmpty, sites, (ovSites ++ methodOvSites).eraseDups)
+  return { tops := tops' ++ ovKept ++ alls, lazy := !loops.isEmpty, familySites := sites,
+           overloadSites := (ovSites ++ methodOvSites).eraseDups }
+
+/-- `inlineFns` after `methodFns`: methods with several values as functions
+    first (#283; `reserved`: the members of built-in types and of the
+    prelude). `nested`: the types of the names consumers take and give, as an
+    earlier elaboration noted them (#283). -/
+def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List String := [])
+    (picks : List (Pos × String) := []) (lazy : List String := []) (overloadPicks : List (Pos × String) := [])
+    (nested : List (String × STy) := []) : Except String Inlined := do
+  let (tops, sites, methodOvSites) ← methodFns tops reserved picks overloadPicks
+  inlineFns tops eager lazy overloadPicks nested sites methodOvSites
 
 end OpenVerse.Front.Choice

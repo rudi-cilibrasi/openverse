@@ -1041,7 +1041,7 @@ partial def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   -- checked when that consumer elaborates; they do not escape the helper.
   let safeMarkers := ["$sourceSuper", "$methodMiss", "$methodCast", "$methodCase", "$methodType", "$methodParams", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
     "$forReturns", "$forReturnBody", "$forClauseExits", "$choiceOperation", "$choiceGenericOperation", "$choiceFixedOperation", "$choiceCoercions", "$choiceDictionary", "$defer", "$deferExits", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
-    "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$declNames", "$callArgs", "$callSingleton", "$then"]
+    "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$noteTypes", "$declNames", "$callArgs", "$callSingleton", "$then"]
   let rec blocked (e : SExpr) : Bool :=
     match e with
     -- Starting a task is immediate. elabSpawn checks its arguments in the

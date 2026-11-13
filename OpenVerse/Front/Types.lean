@@ -247,6 +247,10 @@ structure TyEnv where
       whether they have several values (`Choice.inlineMulti`), by place and
       name: their elaboration notes the overload each takes (`ESt.needs`). -/
   overloadSites : List (Pos × String) := []
+  /-- (#283) The consumers in recursive groups' code whose names' types this
+      elaboration notes (`$noteTypes`), by `Choice.nestKey`: their groups are
+      kept with one value until then (`Choice.inlineFns`). -/
+  nestedSites : List String := []
   /-- Typed variance adapters for methods with a fixed receiver signature. -/
   methodRequests : List FnValues.MethodRequest := []
   /-- The order of the slots holding values of the type parameters, when it
