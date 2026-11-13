@@ -316,7 +316,7 @@ partial def elabExprInitialWith
               | some (k, _) =>
                 let _ := k
                 if (ts.all fun u => u.params.isEmpty) &&
-                    !ctx.types.fnRequests.contains (n, t) && fnFits ctx.types s t then some t else none
+                    !ctx.types.requests.fns.contains (n, t) && fnFits ctx.types s t then some t else none
               | none => none
             | _ => none
           if s.isConst then

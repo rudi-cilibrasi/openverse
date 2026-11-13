@@ -114,7 +114,7 @@ partial def elabExprValues (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R :=
   elabExprValuesWith elabE (elabSeqIn true) elabApp ratCall elabCmp (@elabMember) elabConstruct elabMapLit ctx se exp
 
 partial def elabExprControl (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R :=
-  elabExprControlWith elabE elabStmt elabDefers elabRefineExit elabSeq (@elabRefinedIf) elabSet (@elabFor) elabOneClauses elabCase ctx se exp
+  elabExprControlWith elabE elabStmt elabDefers elabRefineExit elabSeq (@elabRefinedIf) refinedIfType elabSet (@elabFor) elabOneClauses elabCase ctx se exp
 
 partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) :=
   elabStmtWith elabE ctx se exp
@@ -350,7 +350,7 @@ partial def elabBranch (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   let r ← elabE armCtx body none
   modify fun st => { st with pendingSourceSuspends := sourceBefore }
   noteBackgroundCaptures ctx (Suspend.slotsOf r.e)
-  return ⟨.call mark.idx [.prim .mkArr [.seq (← inferable r) (.lit .void)]], .void⟩
+  return ⟨.call mark.idx [.prim .mkArr [← discardValue r]], .void⟩
 
 partial def elabDefersCore (ctx : Ctx) (ds : List (SExpr × List Local)) : EM Expr := do
   let mut acc : Expr := .lit .void
@@ -407,7 +407,7 @@ partial def resolveOverload (ctx : Ctx) (p : Pos) (name : String) (ovs : List St
       | .arrayLit _ es => s!"arr {es.length}"
       | .bin _ o _ _ => s!"bin {o}"
       | _ => "_"
-    let inputs := (ctx.captureEvidence ((Choice.namesUsed a).eraseDups.filterMap ctx.lookup)).map fun l =>
+    let inputs := (ctx.capturesOf a).map fun l =>
       (l.name, l.ty, l.typeValue)
     let typing := reprStr (inputs, ctx.types.tvars, ctx.selfClass, ctx.selfMethod)
     let key := s!"{a.pos.line}:{a.pos.col}:{a.pos.file}:{shape}:{typing}"
@@ -726,8 +726,7 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
       eerr p s!"{what}, which is above {S}, cannot fail: use {T}(…), an upcast (#351)"
     -- (no class below both whose view and pins can give the object's type
     -- arguments: it would always fail, as main says of a positional one)
-    if ((env.concreteBelow S).filter (env.isSub · T)).all fun d =>
-        (env.viewArgs? S d (env.coreArgs S sargs) (rigid := false)).isNone then
+    if !viewsMayBe env S sargs T then
       eerr p s!"{withArticle r.ty.show} is never {withArticle T}: no class below both gives {S} those type arguments, so {T}[…] would always fail"
     -- (one a clause does not take either; to a type beside it, or to an
     -- interface whose type arguments it opens, a clause takes it as a cast
@@ -790,8 +789,13 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
 
 /-- `elabRefinedIfWith`, given this block's functions (#325). -/
 partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (body0 : SExpr)
-    (elseE : Option SExpr) (exp : Option Ty) (made : Bool := false) (ifType : Bool := false) : EM (Option R) :=
-  elabRefinedIfWith elabApp elabE withDeferMark ctx p _dp D T x body0 elseE exp made (ifType := ifType)
+    (elseE : Option SExpr) (exp : Option Ty) (made : Bool := false) : EM (Option R) :=
+  elabRefinedIfWith elabApp elabE withDeferMark ctx p _dp D T x body0 elseE exp made
+
+/-- `refinedIfTypeWith`, given this block's functions. -/
+partial def refinedIfType (ctx : Ctx) (p : Pos) (D T : String) (x body ee : SExpr) :
+    EM (Option (Ty × Bool)) :=
+  refinedIfTypeWith elabE ctx p D T x body ee
 
 /-- `elabGenericCallWith`, given this block's functions (#325). -/
 partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) (exp : Option Ty) :
@@ -1470,7 +1474,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
           let slot ← fresh ty
           return ← elabOneGo { ctx with locals := { name := b.name, slot, ty, mutable := false } :: ctx.locals } rest
         let key := contKey ctx p b.name (i :: rest) ++ firstReturnKey ctx rest
-        let request := ctx.types.loopRequests.find? (·.key == key)
+        let request := ctx.types.requests.loops.find? (·.key == key)
         let hasLater := rest.any fun cl => match Choice.binding? cl with
           | some { branchy := some next, .. } => choiceHasCast ctx next
           | some { alts, .. } => alts.any Choice.hasLiftable
@@ -1483,13 +1487,11 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
           let fx := (← get).fx
           match contLiftOf ctx c2 p b.name [i] rest fx with
           | .ok lift =>
-            modify fun s => { s with loopFirst := s.loopFirst ++
-              [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
+            askHelper p lift
             -- (what follows the clauses is not the trial's)
             return (code, { c2 with trial := ctx.trial })
           | .error _ => set st0
-        let request := request.filter fun l =>
-          ctx.acceptsHelper l
+        let request := request.filter ctx.acceptsHelper
         let binds := (b.name :: Choice.boundIn rest).eraseDups
         let vars := rest.filterMap fun | .decl _ n _ true _ => some n | _ => none
         let tup := SExpr.tuple p (binds.map (SExpr.ident p ·) ++ [.ident p "true"])
@@ -1527,7 +1529,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       -- (when what it runs once for all the values of an item has effects,
       -- asked for by an earlier elaboration: a call of a function of its
       -- own that runs the clauses after it too, then the names they bind)
-      if let some l := (if ctx.typeOnly then none else ctx.types.loopRequests.find? (·.key == firstKey ctx p lp b.name b.ty rest)) then
+      if let some l := (if ctx.typeOnly then none else ctx.types.requests.loops.find? (·.key == firstKey ctx p lp b.name b.ty rest)) then
         let t := s!"$ft{p.line}_{p.col}"
         let (code, c) ← elabOneGo ctx ([.decl p t none false (.app p (.ident p l.name) l.args true)] ++
           firstUnpack p l t)
@@ -1632,13 +1634,11 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
           | some b => b.composed
           | none => false
         if !b.alts.isEmpty then
-          let req := if ctx.typeOnly then none else ctx.types.loopRequests.find? (·.key == contKey ctx p b.name (b.alts ++ rest) ++ firstReturnKey ctx rest)
-          -- (asked for where more effects are allowed than here, as in a
-          -- function of its own of a call taken lazily, #246: copied)
-          let fits (l : Choice.FirstLift) : Bool :=
-            ctx.acceptsHelper l
+          let req := if ctx.typeOnly then none else ctx.types.requests.loops.find? (·.key == contKey ctx p b.name (b.alts ++ rest) ++ firstReturnKey ctx rest)
           if let some l := req then
-            if !fits l then return ← finish (elabOneGo ctx copied)
+            -- (asked for where more effects are allowed than here, as in a
+            -- function of its own of a call taken lazily, #246: copied)
+            if !ctx.acceptsHelper l then return ← finish (elabOneGo ctx copied)
             -- (the call a clause, whose failure goes back into the
             -- alternative's own choices, then its tuple the value)
             let kt := s!"{t}k"
@@ -1675,9 +1675,8 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
             let fxB := (← get).fx
             match (if ok then contLiftOf ctx c1 p b.name b.alts rest fxB else .error "alternatives of different types") with
             | .ok lift =>
-              let use : LoopUse := { g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }
               modify fun st => { st with fx := fx0 }
-              modify fun st => { st with loopFirst := st.loopFirst ++ [use] }
+              askHelper p lift
               for (k, q, via) in fxB do noteFx q [k] via
               return ← finish (pure (code1, c1))
             | .error _ => set st0
@@ -1703,8 +1702,8 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
                   return some (lift, effects)) (fun _ => pure none)
                 set prefixState
                 if let some (lift, effects) := trial then
-                  modify fun st => { st with fx := fx0, loopFirst := st.loopFirst ++
-                    [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
+                  modify fun st => { st with fx := fx0 }
+                  askHelper p lift
                   for (k, q, via) in prefixState.fx ++ effects do noteFx q [k] via
                   let packetTy ← resolveTy ctx.types p (lift.joinedRet.getD lift.ret)
                   let packet ← fresh packetTy
@@ -2241,7 +2240,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
                     return ⟨.seq (.assign tv r.e) (← coerce p rv t), t⟩
                   | none =>
                     let key := s!".{x0}${f}"
-                    if !env.fnRequests.contains (key, t) && fnTyFits env (typeOf x0) t then
+                    if !env.requests.fns.contains (key, t) && fnTyFits env (typeOf x0) t then
                       noteNeeds { fns := [(key, t)] }
                       return ⟨.seq r.e (.prim .userErr []), t⟩
           -- A generic receiver fixes its method's signature too. Requested
@@ -2252,7 +2251,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
                 if !(methodTps x).isEmpty then continue
                 let receiver := Ty.struct x (env.argsAt sn targs x)
                 let some (req, args) ← methodVarianceRequest ctx p x f receiver (typeOf x) target | continue
-                if let some i := env.methodRequests.findIdx? (·.key == req.key) then
+                if let some i := env.requests.methods.findIdx? (·.key == req.key) then
                   let cls := req.className i
                   let tv ← fresh r.ty
                   let nm := s!"$recv{tv}"

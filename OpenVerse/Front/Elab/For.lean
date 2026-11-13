@@ -102,10 +102,10 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     let bound := { c with locals := { name, slot, ty := bty, mutable := false } :: c.locals }
     let required := if stagePlan.isSome then stageBorrows else []
     let written := SExpr.block q (rest ++ [bd] ++ required.map (SExpr.ident q ·))
-    let caps := bound.captureEvidence (bound.usedLocals written)
+    let caps := bound.capturesOf written
     let key := "stageOrdinary" ++ contKey bound q name (alts ++ rest ++ [bd]) ++
       forStageCaptureKey bound stageArgs caps
-    let known := c.types.loopRequests.findSome? (fun l => l.stagePlan.filter (·.key == key))
+    let known := c.types.requests.loops.findSome? (fun l => l.stagePlan.filter (·.key == key))
     let value? ← if let some outer := stagePlan then do
         let subst := (outer.tparams.map (·.name)).zip (stageArgs.map Ty.toSTy)
         pure (some (← resolveTy c.types q (outer.value.substNames subst), true, before.fx, outer.sourceSuspends))
@@ -139,8 +139,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       | .ok prepare => pure prepare
       | .error _ => return none
     let prepare := { prepare with extraFns := prepare.extraFns ++ extraTops }
-    let hasPlan := c.types.loopRequests.any (·.key == request.key)
-    let hasPrefix := c.types.loopRequests.any (·.key == prepare.key)
+    let hasPlan := c.types.requests.loops.any (·.key == request.key)
+    let hasPrefix := c.types.requests.loops.any (·.key == prepare.key)
     modify fun st => { st with
       fx := effects,
       pendingSourceSuspends := st.pendingSourceSuspends + (if sourceSuspends then 1 else 0) }
@@ -148,8 +148,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       (some prepare.name)
     if !c.typeOnly then
       for req in (if hasPlan then [] else [request]) ++ (if hasPrefix then [] else [prepare]) do
-        modify fun st => { st with loopFirst := st.loopFirst ++
-          [{ g := "", pos := q, itemCode := .lit .void, argSet := none, lift := .ok req }] }
+        askHelper q req
       modify fun st => { st with
         forStageUses := st.forStageUses + 1,
         pendingSuspendingCasts := st.pendingSuspendingCasts + (if c.suspends && (!hasPlan || !hasPrefix) then 1 else 0),
@@ -170,7 +169,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       let (req, obj, ty) ← match forStageEnvOf { c with forStageArgs := stageArgs, forStageFlat := flatOverride.getD stageFlat, forStageCopies := stageCopies, forStageBorrows := stageBorrows } plan p clauses bd with
         | .ok r => pure r
         | .error why => eerr p s!"cannot stage this for: {why} (#417)"
-      let r ← if c.types.loopRequests.any (·.key == req.key) then do
+      let r ← if c.types.requests.loops.any (·.key == req.key) then do
           -- Only this synthetic environment allocation is an implementation
           -- effect. Its fields are local reads, evaluated before allocation.
           let fx := (← get).fx
@@ -179,8 +178,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           modify fun st => { st with fx }
           pure (⟨e, ty⟩ : R)
         else do
-          modify fun st => { st with loopFirst := st.loopFirst ++
-            [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok req }] }
+          askHelper p req
           pure (⟨.prim .userErr [], ty⟩ : R)
       if gs.isEmpty then return r
       return ⟨.prim .mkArr [r.e], .arr r.ty⟩
@@ -227,9 +225,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               return (.seq codeA f, a, t)
             let restCl := after ++ moreCl
             let key := (if bodyFail then "fo" else "f") ++ contKey cA b.pos b.name (i :: restCl ++ [bd])
-            let req := cA.types.loopRequests.find? (·.key == key)
-            let fits (l : Choice.FirstLift) : Bool :=
-              cA.acceptsHelper l
+            let req := cA.types.requests.loops.find? (·.key == key)
             if req.isNone && (contForLiftOf cA b.pos b.name ty .void [i] restCl bd bodyFail).toOption.isSome then
               -- Elaborate the suffix once, in its source context. Otherwise
               -- an inner lift can retain an outer var's old name after the
@@ -247,11 +243,10 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                   -- This body moves to an immediate helper, which discovers
                   -- its own locals and lifts: the trial asked for none of
                   -- them (`Ctx.keepsLifts`), only the continuations in it.
-                  modify fun st => { st with loopFirst := st.loopFirst ++
-                    [{ g := "", pos := b.pos, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
+                  askHelper b.pos lift
                   return (codeA, .prim .userErr [], t)
                 | .error why => eerr b.pos s!"cannot share the refining for's suffix: {why} (#417)"
-            if let some l := req.filter fits then
+            if let some l := req.filter cA.acceptsHelper then
               let kv := s!"$refineFor{b.pos.line}_{b.pos.col}{b.name}v"
               let kt := kv ++ "t"
               let elem := kv ++ "e"
@@ -297,11 +292,11 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               let cB := { cA with locals := { name := b.name, slot, ty, mutable := false } :: cA.locals }
               let (f, a, t) ← exclIter cB after more bd stageOverride
               return (.seq codeA f, a, t)
-            let rootCaptures := cA.captureEvidence (cA.usedLocals (.block p (i :: restCl ++ [bd])))
+            let rootCaptures := cA.capturesOf (.block p (i :: restCl ++ [bd]))
             let key := "stage" ++ contKey cA b.pos b.name (i :: restCl ++ [bd]) ++
               forStageCaptureKey cA [] (rootCaptures.filter (·.storage.isSome))
             let plan? := stagePlan.orElse fun _ =>
-              cA.types.loopRequests.findSome? (fun l => l.stagePlan.filter (·.key == key))
+              cA.types.requests.loops.findSome? (fun l => l.stagePlan.filter (·.key == key))
             if plan?.isNone then
               let saved ← get
               let slot ← fresh ty
@@ -320,8 +315,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               let req ← match forStagePlanOf { cA with fnFx := allowed } b.pos key (i :: restCl) bd value bodyFail [] sourceSuspends with
                 | .ok req => pure req
                 | .error why => eerr b.pos s!"cannot stage this refining for: {why} (#417)"
+              askHelper b.pos req
               modify fun st => { st with
-                loopFirst := st.loopFirst ++ [{ g := "", pos := b.pos, itemCode := .lit .void, argSet := none, lift := .ok req }],
                 pendingSuspendingCasts := st.pendingSuspendingCasts + 1,
                 pendingWaitingCasts := st.pendingWaitingCasts + 1,
                 forStageUses := st.forStageUses + 1 }
@@ -345,9 +340,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             let nextReq ← match forStagePlanOf suffixCtx b.pos tailKey restCl bd resultTy plan.outcome borrowNames plan.sourceSuspends with
               | .ok req => pure req
               | .error why => eerr b.pos s!"cannot type this waiting for's suffix: {why} (#417)"
-            if !cA.types.loopRequests.any (·.key == nextReq.key) then
-              modify fun st => { st with loopFirst := st.loopFirst ++
-                [{ g := "", pos := b.pos, itemCode := .lit .void, argSet := none, lift := .ok nextReq }] }
+            if !cA.types.requests.loops.any (·.key == nextReq.key) then
+              askHelper b.pos nextReq
               return (codeA, .prim .userErr [], if stagePlan.isSome then Ty.struct plan.base rootArgs else resultTy)
             let some nextPlan := nextReq.stagePlan | eerr b.pos "internal: missing suffix plan"
             let nextArgs := nextPlan.tparams.map fun tp =>
@@ -357,9 +351,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             let suffix ← match forStagePrefixOf suffixCtx nextPlan nextArgs b.pos restCl bd (stageOverride.getD stageFlat) nextCopies nextBorrows with
               | .ok req => pure req
               | .error why => eerr b.pos s!"cannot share this waiting for's suffix: {why} (#335, #417)"
-            if !cA.types.loopRequests.any (·.key == suffix.key) then
-              modify fun st => { st with loopFirst := st.loopFirst ++
-                [{ g := "", pos := b.pos, itemCode := .lit .void, argSet := none, lift := .ok suffix }] }
+            if !cA.types.requests.loops.any (·.key == suffix.key) then
+              askHelper b.pos suffix
               return (codeA, .prim .userErr [], if stagePlan.isSome then Ty.struct plan.base rootArgs else resultTy)
             let stageTypes := rootArgs.map Ty.toSTy
             let consume (arm : SExpr) : SExpr :=
@@ -445,7 +438,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           let (f, a, t) ← exclIter c (cl.takeWhile (!isGen ·)) (groups (cl.dropWhile (!isGen ·))) pb transfer
           if !flat || stagePlan.isSome then return (f, a, t)
           match t with
-          | .arr t' => return (f, .prim .flatten [← inferable ⟨a, .arr t⟩], t')
+          | .arr t' => return (f, ← flattenValues ⟨a, .arr t⟩, t')
           | _ => eerr gp "internal: a continuation's values"
         let runPath := runPathIn cA
         -- (#335, phase 2b: another such choice, or an exclusive one, in the
@@ -465,16 +458,14 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           return (codeA, .prim .userErr [], value)
         let contOK := stagePlan.isNone && restCl.any isCF && forBodySafe cA bd && xty.isSome
         let req := if !contOK || cA.typeOnly then none else
-          cA.types.loopRequests.find? (·.key == (if bodyFail then "fo" else "f") ++ contKey cA gp x (altsS ++ restCl ++ [bd]))
-        let fits (l : Choice.FirstLift) : Bool :=
-          cA.acceptsHelper l
+          cA.types.requests.loops.find? (·.key == (if bodyFail then "fo" else "f") ++ contKey cA gp x (altsS ++ restCl ++ [bd]))
         let kv := s!"$xk{gp.line}_{gp.col}{x}v"
         let plan : List (List SExpr × SExpr × Bool) ← if let some (prepare, plan, _, true) := staged then
             let (callCl, resumed) := forStageInvoke gp prepare plan.borrowed bd
             pure (alts.zipIdx.map fun ((gs, r), i) => (liftP gs r i ++ callCl, resumed, true))
           else match req with
           | some l =>
-            if fits l then
+            if cA.acceptsHelper l then
               let call : SExpr := .app gp (.ident gp l.name) l.args true
               let callCl : List SExpr := if l.sets.isEmpty then [.decl gp kv none false call] else
                 let kt := s!"$xk{gp.line}_{gp.col}{x}t"
@@ -498,9 +489,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                 if forContWaits cA st0 (← get) [f0, a0] then set st0 else
                   match contForLiftOf cA gp x bty t0 altsS restCl bd bodyFail with
                   | .ok lift =>
-                    let use : LoopUse := { g := "", pos := gp, itemCode := .lit .void, argSet := none, lift := .ok lift }
-                    modify fun st => { st with loopFirst := st.loopFirst ++ [use] }
-                    if cA.suspends then return (codeA, .prim .userErr [], t0)
+                    askHelper gp lift
                     return (Expr.seq codeA f0, a0, t0)
                   | .error _ => set st0
             pure (alts.zipIdx.map fun ((gs, r), i) => (liftP gs r i ++ restCl, bd, false))
@@ -601,18 +590,16 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                             pure (⟨← coerce gp r ty, ty⟩ : R)
                           else pure r
                         let .arr (.arr t) := r.ty | eerr gp "internal: a staged continuation's values"
-                        parts := parts ++ [⟨.prim .flatten [← inferable r], .arr t⟩]
+                        parts := parts ++ [⟨← flattenValues r, .arr t⟩]
                       let some first := parts.head? | eerr gp "internal: a choice without alternatives"
                       return ⟨parts.tail.foldl (fun acc r => p2 .concat acc r.e) first.e, first.ty⟩
           -- Failable bodies return outcomes so failure stops the entire
           -- for, rather than merely rejecting one continuation call.
           if forBodySafe c bd then
             let req := if c.typeOnly then none else
-              c.types.loopRequests.find? (·.key == (if bodyFail then "fo" else "f") ++ contKey c gp b.name (b.alts ++ restCl ++ [bd]))
-            let fits (l : Choice.FirstLift) : Bool :=
-              c.acceptsHelper l
+              c.types.requests.loops.find? (·.key == (if bodyFail then "fo" else "f") ++ contKey c gp b.name (b.alts ++ restCl ++ [bd]))
             if let some l := req then
-              if fits l then
+              if c.acceptsHelper l then
                 let kv := s!"{site}v"
                 let mut parts : List R := []
                 for (a, i) in b.alts.zipIdx do
@@ -625,7 +612,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                   let vals : SExpr := if bodyFail then .app gp (.ident gp "$forOutcomeValues") [.ident gp kv] false else .ident gp kv
                   let r ← forW (liftA a i ++ (l.casePrelude[i]?.getD []) ++ callCl) vals
                   match r.ty with
-                  | .arr (.arr t) => parts := parts ++ [⟨.prim .flatten [← inferable r], .arr t⟩]
+                  | .arr (.arr t) => parts := parts ++ [⟨← flattenValues r, .arr t⟩]
                   | _ => eerr gp "internal: a continuation's values"
                 let some r0 := parts.head? | eerr gp "internal: a choice without alternatives"
                 return ⟨parts.tail.foldl (fun acc r => p2 .concat acc r.e) r0.e, r0.ty⟩
@@ -652,9 +639,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                       let .arr vty := r0.ty | throw "no values"
                       contForLiftOf c gp b.name bty vty b.alts restCl bd bodyFail) with
                   | .ok lift =>
-                    let use : LoopUse := { g := "", pos := gp, itemCode := .lit .void, argSet := none, lift := .ok lift }
-                    modify fun st => { st with loopFirst := st.loopFirst ++ [use] }
-                    if c.suspends then return ⟨.prim .userErr [], r0.ty⟩
+                    askHelper gp lift
                     return r0
                   | .error _ => set st0
               else if !same && tys.length == b.alts.length && !c.constructProbe then
@@ -691,8 +676,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                   return some (lift, result, effects)) (fun _ => pure none)
                 set before
                 if let some (lift, result, effects) := trial then
-                  modify fun st => { st with loopFirst := st.loopFirst ++
-                    [{ g := "", pos := gp, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
+                  askHelper gp lift
                   for (k, q, via) in effects do noteFx q [k] via
                   return ⟨.prim .userErr [], result⟩
                 set st0
@@ -723,7 +707,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             let bindX ← coerce gp ⟨lg.value, lg.vty⟩ ty
             let one ← fresh .void
             let iter := Expr.forE one (.lit (.arr #[.tup []])) (.seq (.assign xs bindX) filtE) arr
-            pure (Expr.prim .flatten [← inferable ⟨iter, .arr (.arr ety)⟩], ety, true)
+            pure (← flattenValues ⟨iter, .arr (.arr ety)⟩, ety, true)
           else do
             let (filt, c2) ← elabFilters c1 fs
             let bindX ← coerce gp ⟨lg.value, lg.vty⟩ ty
@@ -853,7 +837,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           | .lit _ => filtE
           | e => .seq e filtE
         if peel then return ⟨.seq filt arr, .arr ety⟩
-        return ⟨.prim .flatten [← inferable ⟨Expr.forE slot src filt arr, .arr (.arr ety)⟩], .arr ety⟩
+        return ⟨← flattenValues ⟨Expr.forE slot src filt arr, .arr (.arr ety)⟩, .arr ety⟩
       let (filt, c2) ← elabFilters c1 fs
       let filt := if fs.isEmpty then pre else
         match pre with
@@ -865,7 +849,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       | [] => return ⟨loopE, .arr inner.ty⟩
       | _ =>
         match inner.ty with
-        | .arr t => return ⟨.prim .flatten [← inferable ⟨loopE, .arr inner.ty⟩], .arr t⟩
+        | .arr t => return ⟨← flattenValues ⟨loopE, .arr inner.ty⟩, .arr t⟩
         | _ => eerr p "internal: nested for"
   match pre with
   | [] =>
@@ -895,7 +879,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       | .arr t =>
         if firstDecides then return ⟨.seq filt inner.e, .arr t⟩
         let iter := Expr.forE slot (.lit (.arr #[.tup []])) filt inner.e
-        return ⟨.prim .flatten [← inferable ⟨iter, .arr inner.ty⟩], .arr t⟩
+        return ⟨← flattenValues ⟨iter, .arr inner.ty⟩, .arr t⟩
       | _ => eerr p "internal: nested for"
 
 end OpenVerse.Front
