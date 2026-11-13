@@ -547,7 +547,8 @@ partial def parsePostfix (stop : Nat) : PM SExpr := do
     else break
   return e
 
-/-- Comma-separated arguments up to `close` (consumed). Newlines are whitespace. -/
+/-- Comma-separated arguments up to `close` (consumed), each perhaps a
+    `;` sequence. Newlines are whitespace. -/
 partial def parseArgs (close : String) : PM (List SExpr) := parseItems close false
 
 /-- A construction's field initializers, at the `{` or `:` that
@@ -572,7 +573,13 @@ partial def parseItems (close : String) (lines : Bool) : PM (List SExpr) := do
       let n ← expectIdent
       bump
       return .decl t.pos ("?" ++ n) none false (← parseExpr 0)
-    parseExpr 0
+    let e ← parseExpr 0
+    -- (an argument may be a sequence, `F(1; 2)`, whose last value is passed,
+    -- Book of Verse ch. 1, "Semicolons vs Commas")
+    if lines || !(← peekT).isSym ";" then return e
+    let mut es := #[e]
+    while (← peekT).isSym ";" do bump; es := es.push (← parseExpr 0)
+    return .block t.pos es.toList
   let mut args := #[← arg]
   let mut commas := false
   let mut semis := false
@@ -841,9 +848,9 @@ partial def parseFor (stop : Nat) : PM SExpr := do
 partial def parseCase (stop : Nat) : PM SExpr := do
   let t ← peekT
   bump
-  expectSym "("
-  let scrut ← parseExpr 0
-  expectSym ")"
+  -- (the value in parentheses, perhaps a sequence: `case(Bar; Baz)`)
+  if !(← peekT).isSym "(" then perr (← peekT) s!"expected '(', found {(← peekT).tok.describe}"
+  let scrut ← parsePrimary 0
   let parseArm (c : Nat) : PM (Option SExpr × SExpr) := do
     let a ← peekT
     let pat ← if a.isKw "_" || (match a.tok with | .ident "_" => true | _ => false) then do
