@@ -22,7 +22,8 @@
   Supported lexical syntax (Book of Verse, ch. 1 "Expressions", ch. 2
   "Primitives"): `#` line comments, nested `<# … #>` block comments, `<#>`
   indented comments, identifiers, decimal and `0x` hex integer literals,
-  `'c'` char literals (`c` printable ASCII U+0020–U+007E, or an escape),
+  `'c'` char literals (`c` one character other than a line break, or an
+  escape; a non-ASCII one is a char32),
   `0oHH` char literals (one or two hex digits: that UTF-8 code unit, so
   `0o41` is 'A'; `0o` is not octal), `0uHHHHHH` char32 literals (a Unicode
   scalar value, up to `0u10FFFF`), string
@@ -422,16 +423,16 @@ partial def lexAll (acc : Array Token) : LexM (Array Token) := do
           | some e => advance; pure e
           | none => lexErr "bad escape in char literal"
         | some ch => do
-          if ch.toNat ≥ 128 then
-            lexErr s!"a char literal must be ASCII: write {uPlus ch.toNat} as the char32 literal 0u{(String.ofList (Nat.toDigits 16 ch.toNat)).toUpper}"
-          if ch.toNat < 0x20 || ch.toNat == 0x7F then
-            let hint := if ch == '\t' then " (write '\\t' for a tab)" else ""
-            lexErr s!"a char literal must be a printable ASCII character or an escape, not {uPlus ch.toNat}{hint}"
+          -- (any character a string may hold: other controls than a tab
+          -- are not Verse source, and a line break ends the literal)
+          if breakLen #[ch] 0 > 0 then lexErr "unterminated char literal"
           advance; pure ch
         | none => lexErr "unterminated char literal"
       if (← peekC) != some '\'' then lexErr "char literal must be one character"
       advance
-      lexAll (← emit (.char ch.toNat))
+      -- (a non-ASCII character is a char32, Book of Verse ch. 1, "Character
+      -- Literals": `'😀'` is `0u1f600`)
+      lexAll (← emit (if ch.toNat < 128 then .char ch.toNat else .char32 ch.toNat))
     else if c == '/' && (((← peekC 1).map Char.isAlphanum).getD false) &&
         !((acc.back?.map (·.tok.endsOperand)).getD false) then
       -- (a `/` where an operand starts, before a letter or digit)
