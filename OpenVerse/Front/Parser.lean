@@ -134,6 +134,13 @@ def clausesValue (cs : List SExpr) : List SExpr × SExpr :=
 /-- `t` cannot continue an expression whose statement column is `stop`. -/
 def Token.offside (t : Token) (stop : Nat) : Bool := (t.bol && t.col ≤ stop) || t.isEof
 
+/-- After the `:` of a body whose construct is at column `col`: the body is
+    empty when its next token starts a line no deeper than `col`, or ends
+    the file. A body after `:` may be empty wherever one may be written,
+    as `{}` may (Book of Verse tests: `class<concrete>:` with nothing, an
+    empty `then:`). -/
+def Token.endsEmptyBody (n : Token) (col : Nat) : Bool := n.offside col
+
 def expectSym (s : String) : PM Unit := do
   let t ← peekT
   if t.isSym s then bump else perr t s!"expected '{s}', found {t.tok.describe}"
@@ -593,8 +600,8 @@ partial def parseBody (stop : Nat) : PM SExpr := do
   if t.isSym ":" then
     bump
     let n ← peekT
+    if n.endsEmptyBody stop then return .block t.pos []
     if n.bol then
-      if n.col ≤ stop then perr n "expected an indented block"
       return .block t.pos (← parseIndented n.col)
     else return .block t.pos [← parseExpr stop]
   else if t.isSym "{" then
@@ -774,17 +781,17 @@ partial def parseStructBody (p : Pos) : PM SExpr := do
   if o.isSym ":" then
     bump
     let n ← peekT
-    if n.isEof || (n.bol && n.col ≤ (← get).topCol) then perr n "expected the struct's fields, indented"
     let c := n.col
-    fields ← withBlock n do
-      let mut fields := #[← parseField c]
-      repeat
-        let a ← peekT
-        checkIndent a
-        if a.isSym ";" then bump; fields := fields.push (← parseField c)
-        else if a.bol && a.col == c && !a.isEof then fields := fields.push (← parseField c)
-        else break
-      return fields
+    if !n.endsEmptyBody (← get).topCol then
+      fields ← withBlock n do
+        let mut fields := #[← parseField c]
+        repeat
+          let a ← peekT
+          checkIndent a
+          if a.isSym ";" then bump; fields := fields.push (← parseField c)
+          else if a.bol && a.col == c && !a.isEof then fields := fields.push (← parseField c)
+          else break
+        return fields
   else if o.isSym "{" then
     bump
     repeat
@@ -817,17 +824,17 @@ partial def parseEnumBody (p : Pos) : PM SExpr := do
   if o.isSym ":" then
     bump
     let n ← peekT
-    if n.isEof || (n.bol && n.col ≤ (← get).topCol) then perr n "expected the enum's values, indented"
     let c := n.col
-    names ← withBlock n do
-      let mut names := #[← expectIdent]
-      repeat
-        let a ← peekT
-        checkIndent a
-        if a.isSym "," || a.isSym ";" then bump; names := names.push (← expectIdent)
-        else if a.bol && a.col == c && !a.isEof then names := names.push (← expectIdent)
-        else break
-      return names
+    if !n.endsEmptyBody (← get).topCol then
+      names ← withBlock n do
+        let mut names := #[← expectIdent]
+        repeat
+          let a ← peekT
+          checkIndent a
+          if a.isSym "," || a.isSym ";" then bump; names := names.push (← expectIdent)
+          else if a.bol && a.col == c && !a.isEof then names := names.push (← expectIdent)
+          else break
+        return names
   else if o.isSym "{" then
     bump
     repeat
@@ -1171,11 +1178,11 @@ partial def parseCtorBody (stop : Nat) : PM (List SExpr) := do
   if !t.isSym ":" then perr t s!"expected ':' or '\{' after the constructor's class, found {t.tok.describe}"
   bump
   let n ← peekT
+  if n.endsEmptyBody stop then return []
   if !n.bol then
     let mut items := #[← parseCtorItem stop]
     while (← peekT).isSym ";" do bump; items := items.push (← parseCtorItem stop)
     return items.toList
-  if n.col ≤ stop then perr n "expected the constructor's body, indented"
   let c := n.col
   withBlock n do
     let mut items := #[← parseCtorItem c]
@@ -1249,18 +1256,17 @@ partial def parseClassBody (p : Pos) (name : String) (tps : List TParam) (isIfac
   if o.isSym ":" then
     bump
     let n ← peekT
-    if n.isEof || (n.bol && n.col ≤ (← get).topCol) then
-      perr n s!"expected the indented body of {if isIface then "interface" else "class"} {name.replace "::" "."}"
     let c := n.col
-    items ← withBlock n do
-      let mut items := #[← parseClassItem c]
-      repeat
-        let a ← peekT
-        checkIndent a
-        if a.isSym ";" then bump; items := items.push (← parseClassItem c)
-        else if a.bol && a.col == c && !a.isEof then items := items.push (← parseClassItem c)
-        else break
-      return items
+    if !n.endsEmptyBody (← get).topCol then
+      items ← withBlock n do
+        let mut items := #[← parseClassItem c]
+        repeat
+          let a ← peekT
+          checkIndent a
+          if a.isSym ";" then bump; items := items.push (← parseClassItem c)
+          else if a.bol && a.col == c && !a.isEof then items := items.push (← parseClassItem c)
+          else break
+        return items
   else if o.isSym "{" then
     bump
     repeat
@@ -1355,8 +1361,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
       let inner ← if o.isSym ":" then do
           bump
           let b ← peekT
-          -- (an empty module has nothing indented after it)
-          if b.isEof || (b.bol && b.col ≤ col) then pure []
+          if b.endsEmptyBody col then pure []
           else if !b.bol then perr b "expected the module's definitions, indented on the following lines"
           else withBlock b (parseTopsIn b.col (name ++ "::"))
         else if o.isSym "{" then do
