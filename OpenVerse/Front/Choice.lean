@@ -2111,7 +2111,7 @@ def shownFnName (n : String) : String :=
   let base (sep n : String) : String := match n.splitOn sep with
     | [f, k] => if !f.isEmpty && k.all Char.isDigit && !k.isEmpty then f else n
     | _ => n
-  let n := base "$ov" (base "$mv" n)
+  let n := base "$ov" (base "$mv" (base "$copy" n))
   if n.startsWith "$" then n else (n.replace "::" ".").replace "$" "."
 
 /-- The calls of `g` in `e` (its consumer's code, #246) as `$rec(args)`. -/
@@ -2129,6 +2129,21 @@ def markRecG (g : String) (grp : List String) : SExpr → SExpr :=
       else if grp.contains h then some (.app p (.ident p "$recTo") (.ident q h :: as) false)
       else none
     | _ => none
+
+/-- (#283) Whether `n` is a copy of a function that `instanceCopies` made,
+    `F$copyK`. -/
+def isInstanceCopy (n : String) : Bool :=
+  match n.splitOn "$copy" with
+  | [f, k] => !f.isEmpty && !k.isEmpty && k.all Char.isDigit
+  | _ => false
+
+/-- (#283) The holes of a copy's frames (`instanceCopies`) renamed for it,
+    `$frame…@F$copyK`: one machine may take the copy and the function it is a
+    copy of, whose frames are told apart by their holes (`loopFlatWith`'s
+    `$sameFrame`, `firstBody`). -/
+def copyHoles (h : String) (e : SExpr) : SExpr :=
+  let holes := (namesUsed e).filter (·.startsWith "$frame")
+  renameE (holes.eraseDups.map fun n => (n, s!"{n}@{h}")) e
 
 /-- Replace each call of a function of `mv` by `$inline(F, template, args…)`,
     each with its own call site (`n`, the sites so far); a call of one of
@@ -2344,6 +2359,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
             let some (clsH, tailH) := loopShape? h (mv.map (·.1)) (renameTypes ρH (renameE renH fh.body)) grp (frames := true)
               (fh.params.map (tagH ·.name)) fieldOrder
               | throw s!"{p.show}: internal: the shape of {h} (#283)"
+            let (clsH, tailH) := if isInstanceCopy h then (clsH.map (copyHoles h), copyHoles h tailH) else (clsH, tailH)
             members := members ++ [.app q (.ident q "$member") [.ident q h,
               .block q (fh.params.map fun sp => SExpr.ident q (tagH sp.name)), .block q clsH,
               .decl q (tagH "$r") (some (styRename ρH fh.ret)) false (markRecG h grp tailH)] false]
@@ -4035,15 +4051,74 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
   return { tops := tops' ++ ovKept ++ alls, lazy := !loops.isEmpty, familySites := sites,
            overloadSites := (ovSites ++ methodOvSites).eraseDups }
 
+/-- (#283) The calls of `h` in `e` that `here` sees made calls of `h'`. -/
+partial def renameCalls (h h' : String) (here : SExpr → Bool) : SExpr → SExpr :=
+  mapE fun
+    | e@(.app p (.ident r n) as br) =>
+      if n == h && here e then some (.app p (.ident r h') (as.map (renameCalls h h' here)) br) else none
+    | _ => none
+
+/-- (#283) The callee of the call at `q` in `e`. -/
+partial def calleeAt (q : Pos) (e : SExpr) : Option String :=
+  match e with
+  | .app p (.ident _ h) _ _ => if p == q then some h else e.children.findSome? (calleeAt q)
+  | _ => e.children.findSome? (calleeAt q)
+
+/-- (#283) Each call of `calls`, by its place and the function whose code it
+    is in, a call of a copy of its callee of its own, `F$copyK` (`K` the
+    call's place in `calls`, shown as `F`; its calls of itself the copy's):
+    so the machine of a lazily taken group that takes the callee at another
+    instance of its type parameters than the one it took first takes that
+    copy as another member, at that instance (`Requests.instanceCalls`), as
+    a function called at two instances is two members. Refused for a callee
+    recursive with that function, or with another: a group's own function
+    is taken at one instance for a whole search. -/
+def instanceCopies (tops : List STop) (calls : List (Pos × String)) : Except String (List STop) :=
+  calls.zipIdx.foldlM (init := tops) fun tops ((q, caller), k) => do
+    let fnNamed (n : String) : List STop := tops.filter fun | .fn _ m .. => m == n | _ => false
+    let codeOf : STop → List SExpr
+      | .fn _ _ ps _ _ _ b => b :: ps.filterMap (·.default)
+      | _ => []
+    let some h := (fnNamed caller).findSome? fun t => (codeOf t).findSome? (calleeAt q)
+      | throw s!"{q.show}: internal: no call here in {shownFnName caller} (#283)"
+    let [.fn p _ ps tps fx r b] := fnNamed h
+      | throw s!"{q.show}: {shownFnName h} has several values and is overloaded, and this call is taken at another instance of its type parameters than another in one search: not supported yet (#283)"
+    -- (whether `a` calls `z`, directly or not)
+    let calls (n : String) : List String := (fnNamed n).flatMap fun t => (codeOf t).flatMap namesUsed
+    let reaches (a z : String) : Bool := Id.run do
+      let mut seen : List String := []
+      let mut todo := calls a
+      while !todo.isEmpty do
+        let x := todo.head!
+        todo := todo.tail!
+        if x == z then return true
+        if !seen.contains x then
+          seen := x :: seen
+          todo := calls x ++ todo
+      return false
+    if reaches h caller || (calls h).any (fun x => x != h && reaches x h) then
+      throw s!"{q.show}: {shownFnName h} has several values and is called here at another instance of its type parameters than its machine takes it at in one search, and it is recursive with {if reaches h caller then shownFnName caller else "another function"}: not supported yet (#283)"
+    let copy := s!"{h}$copy{k}"
+    let rename (here : SExpr → Bool) : SExpr → SExpr := renameCalls h copy here
+    let inFn (t : STop) (f : SExpr → SExpr) : STop := match t with
+      | .fn p' n ps' tps' fx' r' b' => .fn p' n (ps'.map fun sp => { sp with default := sp.default.map f }) tps' fx' r' (f b')
+      | t => t
+    let tops := tops.map fun t => match t with
+      | .fn _ n .. => if n == caller then inFn t (rename (·.pos == q)) else t
+      | t => t
+    return tops ++ [inFn (.fn p copy ps tps fx r b) (rename fun _ => true)]
+
 /-- `inlineFns` after `methodFns`: methods with several values as functions
     first (#283; `reserved`: the members of built-in types and of the
     prelude). `nested`: the types of the names consumers take and give, as an
-    earlier elaboration noted them (#283). -/
+    earlier elaboration noted them (#283); `instanceCalls`, the calls to give
+    copies of their callees of their own (`instanceCopies`). -/
 def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List String := [])
     (picks : List (Pos × String) := []) (lazy : List String := []) (overloadPicks : List (Pos × String) := [])
-    (nested : List (String × STy) := []) (orders : List (String × List (String × Bool)) := []) :
-    Except String Inlined := do
+    (nested : List (String × STy) := []) (orders : List (String × List (String × Bool)) := [])
+    (instanceCalls : List (Pos × String) := []) : Except String Inlined := do
   let (tops, sites, methodOvSites) ← methodFns tops reserved picks overloadPicks
+  let tops ← instanceCopies tops instanceCalls
   inlineFns tops eager lazy overloadPicks nested orders sites methodOvSites
 
 end OpenVerse.Front.Choice

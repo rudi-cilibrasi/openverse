@@ -1292,6 +1292,7 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
   -- in an isolated probe whose slots, effects and helper requests are reset.
   -- Later edges are checked against the established instance when lowered,
   -- just as self-recursive lazy calls keep their invocation's parameter types.
+  let mut copyAt : Option (Pos × String) := none
   if instances.length < templates.length then
     let mut todo := instances.map (·.1)
     let mut errors : List (String × String) := []
@@ -1318,31 +1319,16 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
       while true do
         let (ca, alt) :: more := work | break
         work := more
-        if let .app _ (.ident _ "$then") (pt :: .ident _ hn :: k :: rest) false := alt then
-          if let some cs := Choice.alts? pt then work := cs.map (ca, ·) ++ work
-          -- (an `if`'s leaf with a frame of its own)
-          if let .app _ (.ident _ "$then") _ false := pt then work := (ca, pt) :: work
-          if let some (ccls, ctail) := Choice.contOf? k then
-            let cf ← match rest with
-              | [.block _ ss] => do pure (← elabSeq ca ss none).2
-              | _ => pure ca
-            let hty := (← match Choice.alts? pt, pt with
-              | some cs, _ => probeHoleWith elabE ca rty cs
-              | none, .app _ (.ident _ "$rec") _ false | none, .app _ (.ident _ "$recTo") _ false => pure none
-              | none, _ => probeHoleWith elabE ca rty [pt]).getD rty
-            let hl : Local := { name := hn, slot := ← fresh hty, ty := hty, mutable := false }
-            let (_, cm) ← elabSeq { cf with locals := hl :: cf.locals } ccls none
-            let mcode ← elabLoopTailWith elabSeq cm ctail probeK 0
-            work := work ++ mcode.arms.toList.flatMap fun (ca2, alts2) => alts2.map (ca2, ·)
-        let alt := match alt with
+        -- (a call, whole or as a point: its function's instance, found here
+        -- first, at the call's types)
+        let point := match alt with
           | .app _ (.ident _ "$then") (c :: _) false => c
           | a => a
-        let call := match alt with
+        let call := match point with
           | .app q (.ident _ "$rec") as false => some (q, h, as)
           | .app q (.ident _ "$recTo") (.ident _ target :: as) false => some (q, target, as)
           | _ => none
         if let some (q, target, as) := call then
-          if (instances.lookup target).isSome then continue
           let some targetSig := ctx.sig? target | eerr q s!"internal: no signature for {target} (#283)"
           -- (at the result type, as the group's own functions' calls; else, a
           -- function the group's code calls whose values go to the frame after
@@ -1352,21 +1338,77 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
               (.app q (.ident q target) as targetSig.decides) exp
             let .tup types := packet.ty | eerr q "internal: a mutual argument type packet"
             pure (Except.ok ((targetSig.tparams.map (·.1)).zip types))) (fun err => pure (.error err))
-          let attempt ← match ← probe (some rty) with
+          let inferred : EM (Except String (List (String × Ty))) := do
+            match ← probe (some rty) with
             | .ok σ => pure (Except.ok σ)
             | .error err => do
               match ← probe none with
               | .ok σ => pure (Except.ok σ)
               | .error _ => pure (.error err)
-          match attempt with
-          | .ok σ =>
-            instances := instances ++ [(target, σ)]
-            todo := todo ++ [target]
-          | .error err => errors := errors ++ [(target, err)]
+          match instances.lookup target with
+          | some σt =>
+            -- (#283) a generic function the code of another (`h`) calls at
+            -- another instance than the one it is taken at, whose arguments
+            -- do not fit that one: that call is asked to call a copy of it of
+            -- its own (`Requests.instanceCalls`), and the machine is not built
+            if copyAt.isNone && !targetSig.tparams.isEmpty && target != g && target != h &&
+                !ctx.types.requests.instanceCalls.contains (q, h) then
+              let st ← get
+              if let .ok σ' := ← inferred then
+                if σ' != σt then
+                  let ls ← targetSig.params.mapM fun t => do
+                    let t := t.subst σt
+                    return ({ name := "$arg", slot := ← fresh t, ty := t, mutable := false } : Local)
+                  let fits ← tryCatch (do
+                      let _ ← elabLoopArgsWith elabE { ca with canFail := true, inTaking := true } q target as ls
+                        (ls.map (·.slot)) σt
+                      pure true) fun _ => pure false
+                  if !fits then copyAt := some (q, h)
+              set st
+          | none =>
+            match ← inferred with
+            | .ok σ =>
+              instances := instances ++ [(target, σ)]
+              todo := todo ++ [target]
+            | .error err => errors := errors ++ [(target, err)]
+        if let .app _ (.ident _ "$then") (pt :: .ident _ hn :: k :: rest) false := alt then
+          if let some cs := Choice.alts? pt then work := cs.map (ca, ·) ++ work
+          -- (an `if`'s leaf with a frame of its own)
+          if let .app _ (.ident _ "$then") _ false := pt then work := (ca, pt) :: work
+          if let some (ccls, ctail) := Choice.contOf? k then
+            let cf ← match rest with
+              | [.block _ ss] => do pure (← elabSeq ca ss none).2
+              | _ => pure ca
+            -- (a call's hole at its values' type, at its function's instance,
+            -- when that does not coerce to the result type, #283)
+            let callTy : Option Ty ← match call with
+              | some (_, target, _) => match (ctx.sig? target), instances.lookup target with
+                | some sig, some σt => do
+                  let t := sig.ret.subst σt
+                  let st ← get
+                  let fits ← tryCatch (do let _ ← coerce p ⟨.lit .void, t⟩ rty; pure true) (fun _ => pure false)
+                  set st
+                  pure (if fits then none else some t)
+                | _, _ => pure none
+              | none => pure none
+            let hty := (← match Choice.alts? pt, pt with
+              | some cs, _ => probeHoleWith elabE ca rty cs
+              | none, .app _ (.ident _ "$rec") _ false | none, .app _ (.ident _ "$recTo") _ false => pure callTy
+              | none, _ => probeHoleWith elabE ca rty [pt]).getD rty
+            let hl : Local := { name := hn, slot := ← fresh hty, ty := hty, mutable := false }
+            let (_, cm) ← elabSeq { cf with locals := hl :: cf.locals } ccls none
+            let mcode ← elabLoopTailWith elabSeq cm ctail probeK 0
+            work := work ++ mcode.arms.toList.flatMap fun (ca2, alts2) => alts2.map (ca2, ·)
       restoreConstructProbe ctx saved
     for (h, _, _, _) in templates do
       if (instances.lookup h).isNone then
         throw ((errors.lookup h).getD s!"cannot infer {h}'s mutual generator instance (#283)")
+  -- (#283) with a call asked to call a copy of its own: a machine with no
+  -- values, a placeholder for this elaboration, which goes no further
+  if let some key := copyAt then
+    noteNeeds { instanceCalls := [key] }
+    return { init := vd, step := vd, sp := ← fresh .int, has := ← fresh .logic, value := .prim .fail [],
+             after := vd, vty := rty, itemCode := vd, argSet := none }
   -- (#283) the type of each member's values, when it does not coerce to the
   -- result type: a function with several values the group's code calls
   -- apart from its own (`Choice.machineOf`), whose values go to the frame
@@ -1525,7 +1567,8 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
     let some (h, hpls, _, _) := ms[jm]? | eerr q "internal: a call in a group (#283)"
     let ts ← hpls.mapM fun l => fresh l.ty
     -- (#283) a generic member is taken at one instance for the whole search:
-    -- a call of it at another is refused, saying so
+    -- a call of it at another that no copy of it takes (above) is refused,
+    -- saying so
     let generic := ((ctx.sig? h).map (!·.tparams.isEmpty)).getD false
     let assigns ← tryCatch (elabLoopArgsWith elabE actx q h args' hpls ts ((instances.lookup h).getD []))
       fun err => throw (if generic && h != g then

@@ -1521,16 +1521,25 @@ Main():void =
   type), so its clauses are a failure context of their own, and when they
   fail it has no values and, in a `for`, what came before the call stays.
   Its `defer:` runs as each of its values leaves it, as where it is inlined.
-  A generic one is taken at one instance of its type parameters for a whole
-  search, as a generic group's own functions are; a call of it at another
-  is refused for now:
+  A generic one may be called at several instances of its type parameters
+  in one search (#283): it is taken at each as a callee of its own (one at
+  each instance where the first call's does not fit), so the values are
+  those of the call at its arguments' types, as anywhere. A generic group's
+  own functions are taken at one instance for a whole search: a call of one
+  at another, or of a callee recursive with them, is refused.
 
   ```verse
   Two(N:int)<transacts>:int = N | N + 5
   Digits(N:int)<transacts>:int =
       if (N <= 0) then 0 else Digits(N - 1) * 10 + Two(N)
+  Pair(X:t, Y:t where t:type)<transacts>:t = X | Y
+  T(N:int)<transacts>:int =
+      if (N <= 0) then 0 else:
+          S := Pair("a", "bb")
+          T(N - 1) + Pair(N, 10) + S.Length
   Main()<transacts>:void =
       for (V := Digits(2)) { Print("v {V}") }   # v 12, v 17, v 62, v 67
+      for (V := T(1)) { Print("v {V}") }        # v 2, v 11, v 3, v 12
   ```
 
   A returning branch may contain plain clauses and

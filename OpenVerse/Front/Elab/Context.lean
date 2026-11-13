@@ -493,6 +493,7 @@ def Requests.merge (a b : Requests) : Requests where
   overloads := mergeByKey id a.overloads b.overloads
   nested := mergeByKey (·.1) a.nested b.nested
   fieldOrders := mergeByKey (·.1) a.fieldOrders b.fieldOrders
+  instanceCalls := mergeByKey id a.instanceCalls b.instanceCalls
   fns := mergeByKey id a.fns b.fns
   methods := mergeByKey (·.key) a.methods b.methods
   subtypes := SubtypeEvidence.mergeRequests a.subtypes b.subtypes
@@ -512,6 +513,7 @@ def Requests.without (r old : Requests) : Requests where
   overloads := dropByKey id r.overloads old.overloads
   nested := dropByKey (·.1) r.nested old.nested
   fieldOrders := dropByKey (·.1) r.fieldOrders old.fieldOrders
+  instanceCalls := dropByKey id r.instanceCalls old.instanceCalls
   fns := dropByKey id r.fns old.fns
   methods := dropByKey (·.key) r.methods old.methods
   subtypes := dropByKey SubtypeEvidence.declarationName r.subtypes old.subtypes
@@ -521,7 +523,7 @@ def Requests.without (r old : Requests) : Requests where
 
 def Requests.isEmpty (r : Requests) : Bool :=
   r.eager.isEmpty && r.lazy.isEmpty && r.families.isEmpty && r.overloads.isEmpty && r.nested.isEmpty &&
-    r.fieldOrders.isEmpty &&
+    r.fieldOrders.isEmpty && r.instanceCalls.isEmpty &&
     r.fns.isEmpty && r.methods.isEmpty &&
     r.casts.isEmpty && r.loops.isEmpty && r.witnesses.isEmpty && r.subtypes.isEmpty
 

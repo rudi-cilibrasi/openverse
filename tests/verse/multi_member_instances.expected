@@ -1,0 +1,62 @@
+three
+three
+t 2
+t 11
+t 2
+t 11
+three
+t 3
+t 12
+t 3
+t 12
+three
+t 2
+t 11
+t 2
+t 11
+three
+t 3
+t 12
+t 3
+t 12
+three
+three
+first 12
+pick
+pick
+a 3
+a 101
+pick
+a 4
+a 102
+r 12
+r 12
+r 12
+r 12
+m 2
+m 8
+m 4
+m 10
+pair
+pair
+pair
+d 1
+d 101
+pair
+d 0
+d 100
+pair
+pair
+d 2
+d 102
+pair
+d 0
+d 100
+pair
+pair
+pair
+pair
+pair
+pair
+first 103
+exit=0
