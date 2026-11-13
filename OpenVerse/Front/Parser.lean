@@ -622,6 +622,35 @@ partial def parseBracedItems (item : Nat → PM SExpr) : PM (List SExpr) := do
   bump
   return items.toList
 
+/-- The items of `array` or `map` written after `:` (an indented block, or
+    the rest of its line) or `.` (one, on its line), separated by `,`, `;`
+    or new lines (Book of Verse tests: `array:` and `1,2;`, `map:` and a
+    line per entry). -/
+partial def parseItemBlock {α : Type} [Inhabited α] (item : Nat → PM α) (stop : Nat) : PM (List α) := do
+  let o ← peekT
+  if !(o.isSym ":" || o.isSym ".") then perr o s!"expected '\{', ':' or '.', found {o.tok.describe}"
+  bump
+  let n ← peekT
+  if o.isSym "." then
+    if n.bol || n.isEof then perr n "expected an expression after '.', on its line"
+    return [← item stop]
+  if n.endsEmptyBody stop then return []
+  let c := n.col
+  withBlock n do
+    let mut items := #[← item c]
+    repeat
+      let t ← peekT
+      checkIndent t
+      if t.isSym "," || t.isSym ";" then
+        bump
+        -- (a separator may end a line)
+        let u ← peekT
+        if !u.bol && !u.isEof then items := items.push (← item c)
+      else if t.bol && t.col == c && !t.isEof then items := items.push (← item c)
+      else if t.bol && t.col > c then perr t "unexpected indentation"
+      else break
+    return items.toList
+
 /-- The body of a construct: `: block`, `:` + inline expression, `{ block }`,
     or `.` + inline expression. -/
 partial def parseBody (stop : Nat) : PM SExpr := do
@@ -1061,24 +1090,35 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
       return .ret t.pos none
     return .ret t.pos (some (← parseExpr stop))
   | .ident "array" =>
-    bump; expectSym "{"; return .arrayLit t.pos (← parseArgs "}")
+    bump
+    if (← peekT).isSym "{" then bump; return .arrayLit t.pos (← parseArgs "}")
+    return .arrayLit t.pos (← parseItemBlock (fun c => parseExpr c) stop)
   | .ident "map" =>
-    bump; expectSym "{"
+    bump
+    let entry (c : Nat) : PM (SExpr × SExpr) := do
+      let k ← parseExpr c
+      expectSym "=>"
+      return (k, ← parseExpr c)
+    if !(← peekT).isSym "{" then return .mapLit t.pos (← parseItemBlock entry stop)
+    bump
     let mut entries := #[]
     repeat
       let a ← peekT
       if a.isSym "}" then bump; break
       if a.isSym "," then bump; continue
-      let k ← parseExpr 0
-      expectSym "=>"
-      entries := entries.push (k, ← parseExpr 0)
+      entries := entries.push (← entry 0)
     return .mapLit t.pos entries.toList
   | .ident "struct" => bump; parseStructBody t.pos
   | .ident "enum" => bump; parseEnumBody t.pos
+  -- (`option:`, `option. e`: the body as any other)
   | .ident "option" =>
-    bump; expectSym "{"; return .optionLit t.pos (← parseBraced t.pos)
+    bump
+    if (← peekT).isSym "{" then bump; return .optionLit t.pos (← parseBraced t.pos)
+    return .optionLit t.pos (← parseBody stop)
   | .ident "logic" =>
-    bump; expectSym "{"; return .logicLit t.pos (← parseBraced t.pos)
+    bump
+    if (← peekT).isSym "{" then bump; return .logicLit t.pos (← parseBraced t.pos)
+    return .logicLit t.pos (← parseBody stop)
   | .ident x =>
     if keywords.contains x then perr t s!"unexpected keyword '{x}'"
     bump; return .ident t.pos x
