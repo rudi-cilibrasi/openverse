@@ -95,20 +95,12 @@ def madeName (k site : String) (p : Pos) : String := s!"${k}{sitePart site}{p.li
     to lift in a branch that `isBranchy` leaves there: a call with several
     values, or a choice inside a branch's expression (`has`, `hasLiftable`,
     says which). Each branch is lifted in its own path of an exclusive
-    choice (#314, #331). -/
+    choice (#314, #331); a block as a branch has its names renamed for it
+    where it is lifted (`bifToExcl`), its `defer:`s after its value
+    (`deferLast`), as any block's. -/
 def branchesLift (has : SExpr → Bool) (e : SExpr) : Bool :=
   match e with
-  | .ite .. =>
-    let as := arms e
-    -- (a block as a branch, #283: its names renamed for it where it is
-    -- lifted, `bifToExcl`, its `defer:`s after its value, `deferLast`; not
-    -- one with a range of its own, as #302 refuses for any block)
-    let blockOK : SExpr → Bool
-      | .block _ ss => !ss.any fun
-          | .decl _ _ none false (.range ..) | .gen .. => true
-          | _ => false
-      | _ => true
-    as.all (fun (_, v) => blockOK v) && as.any fun (_, v) => has v
+  | .ite .. => (arms e).any fun (_, v) => has v
   | _ => false
 
 /-- (#283) Whether the elaborator takes this `if` with choices in its
@@ -295,6 +287,9 @@ partial def hasLiftable : SExpr → Bool
   -- (a construction's field values and a block's clauses, #283)
   | .construct _ _ _ fs => fs.any fun | .decl _ _ _ _ x => hasLiftable x | x => hasLiftable x
   | .block _ ss => ss.any liftsHere
+  -- (#283) a `case`'s scrutinee and arms, as the `if` chain that selects its
+  -- arm is lifted (`caseIf`)
+  | .caseE _ x arms => hasLiftable x || arms.any fun (_, a) => hasLiftable a
   | _ => false
 
 /-- A clause with something to lift into the clauses it is among: in a
@@ -513,6 +508,24 @@ def stmtsOf : SExpr → List SExpr
   | .block _ ss => ss
   | e => [e]
 
+/-- (#283) A `case` as the `if` chain that selects its arm, where its arms
+    are taken apart (a `return` in one, a choice to lift): the arm picked by
+    its number first, `k := case (e) { p₀ => 0,
+    p₁ => 1, … }` (the same patterns, so the same failure when none matches),
+    then `if (k = 0) then a₀ else if (k = 1) then a₁ … else aₙ`. None when its
+    scrutinee has a `return`. -/
+def caseIf (k : String) : SExpr → Option (SExpr × SExpr)
+  | .caseE p e arms => do
+    guard (!hasReturn e)
+    let (_, lastArm) ← arms.getLast?
+    let sel := SExpr.decl p k none false (.caseE p e (arms.zipIdx.map fun ((pat, _), i) => (pat, .int p i)))
+    -- (each `if` at its arm's place, so names made for it are its own)
+    let chain := (arms.dropLast.zipIdx).foldr (fun ((_, a), i) acc =>
+      let q := a.pos
+      SExpr.ite q [.cmp q (.ident q k) [("=", .int q i)]] a (some acc)) lastArm
+    return (sel, chain)
+  | _ => none
+
 /-- Calls of the functions `mv` as `$inline` markers with an empty template:
     enough to see whether a body has several values. -/
 def markCalls (mv : List String) : SExpr → SExpr :=
@@ -693,6 +706,14 @@ def deferLast (p : Pos) (dv : String) (ss : List SExpr) : List SExpr :=
     | _ => rest ++ [.decl p dv none false l, run, .ident p dv]
   | none => ss
 
+/-- (#283) A block whose clauses are taken apart, with its own `defer:`s after
+    its value (`deferLast`, its value's name made from its place): what a
+    lazily taken group's code does with a block the lifter would lift, so
+    they run as each value leaves it there too. -/
+def deferLastBlock : SExpr → SExpr
+  | .block p ss => .block p (deferLast p (madeName "dv" "" p) ss)
+  | e => e
+
 mutual
 /-- An inlined call's parameters bound to its arguments, lifted, in order
     (#235): `pre` is the template's parameter bindings (with `$arg` where
@@ -749,6 +770,15 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
       LM.bind p "c" (.app p (.ident p "$branchChoice") [e] false)
     else
       LM.bind p "c" (.app p (.ident p "$branchChoice") [fillElse e] false) (some (.name "void"))
+  | .caseE p x arms =>
+    -- (#283) a `case`: its scrutinee first; then, with something to lift in
+    -- an arm, the `if` chain that selects it (`caseIf`), a block of its
+    -- selector and the `if`, lifted as any block and `if` are
+    let e' := SExpr.caseE p (← liftE isVal isField x) arms
+    if !arms.any (hasLiftable ·.2) then return e'
+    match caseIf (← LM.fresh p "k") e' with
+    | some (sel, chain) => liftE isVal isField (.block p [sel, chain])
+    | none => return e'
   | .app p (.ident q "$each") [.app p2 g args br] false =>
     -- (a call of a recursive function with several values, #235: the
     -- choices in its arguments lifted, then each argument bound, so that
@@ -892,9 +922,11 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     -- own), its last expression the value; its `defer:`s after the value,
     -- `deferLast`, so they run as each value leaves it
     -- (a range bound with no type is a for's generator: in a block it is an
-    -- error, which it must stay)
-    if ss.any (fun | .decl _ _ none false (.range ..) | .gen .. => true | _ => false) then
-      return noLift p "a block that binds a range (a..b), which only a for clause can" e
+    -- error, which it must stay, so it stays an expression, a range only the
+    -- iterated expression of a `for` may be: the Book of Verse's rule)
+    let ss := ss.map fun
+      | .decl q x none false r@(.range ..) => .decl q x none false (.block r.pos [r])
+      | s => s
     let ssD ← if ss.any isDefer then do pure (deferLast p (← LM.fresh p "dv") ss) else pure ss
     let tag ← LM.fresh p "b"
     -- (its names are not in scope where it is, as for a block's own,
@@ -1432,6 +1464,32 @@ where
       set (i + 1)
       return leaf i e
 
+/-- (#283) A function's body with its own `defer:`s after each value of its
+    last expression (`deferLast`'s placing, leaf by leaf, `mapLoopLeaves`):
+    so they run as each value leaves it, and an `if` that ends it still picks
+    its branch as the function's path, as without them, its conditions the
+    call's code, not each value's. As `deferLast` when that expression has an
+    `if` with no `else` among its branches, or is not a value. -/
+def deferLastLeaves (p : Pos) (ss : List SExpr) : List SExpr :=
+  if !ss.any isDefer || ss.getLast?.any isDefer then deferLast p (madeName "dv" "" p) ss else
+  let (stmts, ds) := pendingIn [] ss
+  let run := SExpr.block p (ds ++ [.int p 0])
+  let vals := ss.filterMap fun | .decl _ x _ false _ => some x | _ => none
+  let leaf (v : SExpr) : SExpr :=
+    if pureVal vals v then .block v.pos [run, v] else
+    let dv := madeName "dv" "" v.pos
+    .block v.pos [.decl v.pos dv none false v, run, .ident v.pos dv]
+  let rec complete : SExpr → Bool
+    | .ite _ _ t (some u) => complete t && complete u
+    | .ite _ _ _ none => false
+    | _ => true
+  match stmts.getLast? with
+  | some (.decl q x t false rhs) =>
+    if complete rhs then stmts.dropLast ++ [.decl q x t false (mapLoopLeaves leaf rhs)]
+    else deferLast p (madeName "dv" "" p) ss
+  | some l => if complete l then stmts.dropLast ++ [mapLoopLeaves leaf l] else deferLast p (madeName "dv" "" p) ss
+  | none => ss
+
 /-- (#283) The frame code of an `if`'s leaves after its first, which has the
     code: the frame is that one, its hole's last (`loopFlatWith`), so the
     code after the `if` is not copied into each leaf. -/
@@ -1511,8 +1569,10 @@ partial def frameOf? (isPoint plain inert : SExpr → Bool) (h : String) (e : SE
       | .code _, x :: xs => (acc ++ [SPart.code x], xs)
       | part, xs => (acc ++ [part], xs)) (([] : List SPart), codes')
     return (c, .str p ps', pre)
-  -- (a block: its clauses before the one with the point run before it)
-  | .block p ss => do
+  -- (a block: its clauses before the one with the point run before it; its
+  -- own `defer:`s after its value, `deferLastBlock`)
+  | b@(.block p _) => do
+    let ss := stmtsOf (deferLastBlock b)
     let i ← ss.findIdx? (!plain ·)
     let rest := ss.drop (i + 1)
     match ss[i]! with
@@ -1671,11 +1731,16 @@ partial def normAlt (ops : ShapeOps) (a : SExpr) : Option SExpr := do
   if ops.plain a then return (match a with
     | .app _ (.ident _ "$returnTail") _ false => a
     | a => eraseReturnTails a)
+  -- (a block taken apart: its own `defer:`s after its value, as the lifter
+  -- places them, so they run as each value leaves it)
+  let a := deferLastBlock a
   -- (a block that starts with a choice bound, with plain code after it: the
   -- choice of that code after each alternative, as `lastChoiceTail`)
   if let .block _ ss@(_ :: _ :: _) := a then
     if let some ([], tail) := lastChoiceTail ops.plain ss.dropLast ss.getLast! then
-      if let some as := alts? tail then return mk a.pos (← as.mapM (normAlt ops))
+      -- (one of them with code before a choice of its own enters a member
+      -- that runs it, `enterOf`, as anywhere a choice's alternatives are)
+      if let some as := alts? tail then return mk a.pos ((← as.mapM (normAlt ops)).map enterOf)
   -- (#283) an `if` with plain conditions and a point in a branch is one too:
   -- its branch's values go to the code after it
   let ifPoint : SExpr → Bool
@@ -1863,13 +1928,16 @@ def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String
       set.contains x && anyE (fun | .decl _ y (some _) true _ => y == x | _ => false) body
     if !frames || vs.isEmpty then none else loopShapeOf? g mv (cellVars vs body) grp frames params fieldOrder
 
-/-- How many `if`s with a `return` in them `e` has (#283). -/
+/-- How many `if`s with a `return` in them `e` has (#283), a `case`'s arms
+    counted as the `if` chain that selects them (`caseIf`). -/
 partial def countRetIfs (e : SExpr) : Nat :=
+  let sum (ss : List SExpr) : Nat := (ss.map countRetIfs).foldl (· + ·) 0
   match e with
   | .ite _ cs t u? =>
-    (if hasReturn t || u?.any hasReturn then 1 else 0) + (cs.map countRetIfs).foldl (· + ·) 0 +
-      ((stmtsOf t).map countRetIfs).foldl (· + ·) 0 + ((u?.map fun u => ((stmtsOf u).map countRetIfs).foldl (· + ·) 0).getD 0)
-  | .block _ ss => (ss.map countRetIfs).foldl (· + ·) 0
+    (if hasReturn t || u?.any hasReturn then 1 else 0) + sum cs + sum (stmtsOf t) + ((u?.map (sum ∘ stmtsOf)).getD 0)
+  | .block _ ss => sum ss
+  | .caseE _ _ arms =>
+    (if arms.any (hasReturn ·.2) then arms.length - 1 else 0) + sum (arms.flatMap (stmtsOf ·.2))
   | _ => 0
 
 /-- The statements `ss` with their last value returned (#283): the value of
@@ -1884,6 +1952,12 @@ partial def tailReturns (ss : List SExpr) : List SExpr :=
     | .decl q x _ _ _ => ss ++ [.ret q (some (.ident q x))]
     | .ite q cs t u? =>
       init ++ [.ite q cs (.block q (tailReturns (stmtsOf t))) (u?.map fun u => .block q (tailReturns (stmtsOf u)))]
+    -- (#283) a block, or a `case`, with a `return` in it: its value, or its
+    -- arms', returned in it, so that it is a scope taken out as a branch is
+    | .block q bs => if hasReturn last then init ++ [.block q (tailReturns bs)] else init ++ [.ret q (some last)]
+    | .caseE q e arms =>
+      if !arms.any (hasReturn ·.2) then init ++ [.ret q (some last)] else
+      init ++ [.caseE q e (arms.map fun (pat, a) => (pat, .block a.pos (tailReturns (stmtsOf a))))]
     | e => if isDefer e then ss ++ [.ret e.pos none] else init ++ [.ret e.pos (some e)]
 
 /-- A normalized returning conditional: branch selection adds no generator
@@ -1942,6 +2016,18 @@ partial def elimPlainReturns (fresh : Nat → String) (n : Nat) (multi : SExpr �
       let (ub, n2) ← elimPlainReturns fresh n1 multi ret tailBlocks (us ++ rest)
       let cs := cs.map (renameE ρt)
       some (returnBranches p k cs tb ub multi ret tailBlocks, n2)
+  -- (#283) a block with a `return` in it, a scope of its own: its statements
+  -- in its place, its names renamed for it, as an `if`'s branch's are
+  | s@(.block _ bs) :: rest =>
+    if !hasReturn s then (elimPlainReturns fresh n multi ret tailBlocks rest).map fun (r, n') => (s :: r, n')
+    else elimPlainReturns fresh (n + 1) multi ret tailBlocks
+      (bs.map (renameE (branchNames s!"{fresh n}b" bs [])) ++ rest)
+  -- (#283) a `case` with a `return` in an arm: the `if` chain it selects with
+  | s@(.caseE ..) :: rest =>
+    if !hasReturn s then (elimPlainReturns fresh n multi ret tailBlocks rest).map fun (r, n') => (s :: r, n')
+    else do
+      let (sel, chain) ← caseIf (fresh n) s
+      elimPlainReturns fresh (n + 1) multi ret tailBlocks (sel :: chain :: rest)
   | s :: rest =>
     if hasReturn s then none
     else (elimPlainReturns fresh n multi ret tailBlocks rest).map fun (r, n') => (s :: r, n')
@@ -1995,6 +2081,23 @@ partial def elimScopedReturns (fresh : Nat → String) (multi : SExpr → Bool) 
       let (tb, n1) ← elimScopedReturns fresh multi ret (n + 1) t.pos (ts.map (renameE ρt)) [] parents
       let (ub, n2) ← elimScopedReturns fresh multi ret n1 q (us.map (renameE ρu)) [] parents
       some (returnBranches q k (cs.map (renameE ρt)) tb ub multi ret, n2)
+  -- (#283) a block with a `return` in it: a scope inside this one, as an
+  -- `if`'s branch is, its names renamed for it
+  | s@(.block q bs) :: rest => do
+    if !hasReturn s then
+      let (rest, n') ← elimScopedReturns fresh multi ret n p rest ds outer
+      some (s :: rest, n')
+    else
+      let parents := { pos := p, rest, defers := ds } :: outer
+      elimScopedReturns fresh multi ret (n + 1) q (bs.map (renameE (branchNames s!"{fresh n}b" bs []))) [] parents
+  -- (#283) a `case` with a `return` in an arm: the `if` chain it selects with
+  | s@(.caseE ..) :: rest => do
+    if !hasReturn s then
+      let (rest, n') ← elimScopedReturns fresh multi ret n p rest ds outer
+      some (s :: rest, n')
+    else
+      let (sel, chain) ← caseIf (fresh n) s
+      elimScopedReturns fresh multi ret (n + 1) p (sel :: chain :: rest) ds outer
   | s :: rest => do
     if hasReturn s then none else
       let (rest, n') ← elimScopedReturns fresh multi ret n p rest ds outer
@@ -2017,7 +2120,7 @@ def shownFnName (n : String) : String :=
   let base (sep n : String) : String := match n.splitOn sep with
     | [f, k] => if !f.isEmpty && k.all Char.isDigit && !k.isEmpty then f else n
     | _ => n
-  let n := base "$ov" (base "$mv" n)
+  let n := base "$ov" (base "$mv" (base "$copy" n))
   if n.startsWith "$" then n else (n.replace "::" ".").replace "$" "."
 
 /-- The calls of `g` in `e` (its consumer's code, #246) as `$rec(args)`. -/
@@ -2035,6 +2138,21 @@ def markRecG (g : String) (grp : List String) : SExpr → SExpr :=
       else if grp.contains h then some (.app p (.ident p "$recTo") (.ident q h :: as) false)
       else none
     | _ => none
+
+/-- (#283) Whether `n` is a copy of a function that `instanceCopies` made,
+    `F$copyK`. -/
+def isInstanceCopy (n : String) : Bool :=
+  match n.splitOn "$copy" with
+  | [f, k] => !f.isEmpty && !k.isEmpty && k.all Char.isDigit
+  | _ => false
+
+/-- (#283) The holes of a copy's frames (`instanceCopies`) renamed for it,
+    `$frame…@F$copyK`: one machine may take the copy and the function it is a
+    copy of, whose frames are told apart by their holes (`loopFlatWith`'s
+    `$sameFrame`, `firstBody`). -/
+def copyHoles (h : String) (e : SExpr) : SExpr :=
+  let holes := (namesUsed e).filter (·.startsWith "$frame")
+  renameE (holes.eraseDups.map fun n => (n, s!"{n}@{h}")) e
 
 /-- Replace each call of a function of `mv` by `$inline(F, template, args…)`,
     each with its own call site (`n`, the sites so far); a call of one of
@@ -2250,6 +2368,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
             let some (clsH, tailH) := loopShape? h (mv.map (·.1)) (renameTypes ρH (renameE renH fh.body)) grp (frames := true)
               (fh.params.map (tagH ·.name)) fieldOrder
               | throw s!"{p.show}: internal: the shape of {h} (#283)"
+            let (clsH, tailH) := if isInstanceCopy h then (clsH.map (copyHoles h), copyHoles h tailH) else (clsH, tailH)
             members := members ++ [.app q (.ident q "$member") [.ident q h,
               .block q (fh.params.map fun sp => SExpr.ident q (tagH sp.name)), .block q clsH,
               .decl q (tagH "$r") (some (styRename ρH fh.ret)) false (markRecG h grp tailH)] false]
@@ -3449,7 +3568,7 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
     if let some (_, o') := overloadPicks.find? fun (p', o') => p' == p && o' != o && o' != "" && o != "" then
       let declares (c o : String) : Bool := (declsOf o).any fun (d, _) => (anc c).contains d
       if (selNames.contains o || selNames.contains o') && classes.any fun (c, _) => declares c o && declares c o' then
-        throw s!"{p.show}: this call takes {listShown o} in the clauses copied for one alternative of a choice and {listShown o'} in those copied for another, and which list of an overloaded method with several values a call takes is decided before types: not supported yet (#283)"
+        throw s!"{p.show}: this call takes {listShown o} in the clauses copied for one alternative of a choice and {listShown o'} in those copied for another, and which list of an overloaded method with several values a call takes is decided before types: not supported yet (#283); write the clauses after the choice apart for its alternatives, or give the lists names of their own"
   -- (#106) the calls of an overloaded method with a selected list whose
   -- list is not picked yet, `R.M(args)` or, in a class's body, `M(args)`:
   -- the elaboration notes the list each takes, for the next round
@@ -3656,7 +3775,7 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
     | none => shownFnName o
   for (q, o) in overloadPicks.filter fun (_, o) => ovNamesAll.contains ((o.splitOn "$ov").headD o) do
     if let some (_, o') := overloadPicks.find? fun (q', o') => q' == q && o' != o then
-      throw s!"{q.show}: this call takes the overload {ovShown o} in the clauses copied for one alternative of a choice and {ovShown o'} in those copied for another, and which overload with several values a call takes is decided before types: not supported yet (#283)"
+      throw s!"{q.show}: this call takes the overload {ovShown o} in the clauses copied for one alternative of a choice and {ovShown o'} in those copied for another, and which overload with several values a call takes is decided before types: not supported yet (#283); write the clauses after the choice apart for its alternatives, or give the overloads names of their own"
   let rawMfs := fns.filter (mv.contains ·.1)
   -- (#283) a struct's or class's fields in the order its constructions
   -- evaluate them in, for the lifter where a lazily taken group's code is
@@ -3665,13 +3784,19 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
   let fieldOrder (n : String) : FieldOrder := { fields := (orders.lookup n).getD [] }
   -- Analyze recursive shapes after source returns have selected their paths.
   -- Keep original bodies for checking and nonrecursive inline boundaries.
+  -- (#283) Its own `defer:`s after its value, as an inlined body's are, so
+  -- they run as each value leaves it where it is taken lazily or computed
+  -- at the call too: with returns, `elimReturns` places them at each exit.
   let mfs ← rawMfs.mapM fun (n, f) => do
-    if !anyE (fun | .ret .. => true | _ => false) f.body then return (n, f)
+    if !anyE (fun | .ret .. => true | _ => false) f.body then
+      return (n, if (stmtsOf f.body).any isDefer then { f with body := .block f.pos (deferLastLeaves f.pos (stmtsOf f.body)) } else f)
     let retIfs := (stmtsOf f.body).foldl (init := 0) fun acc s => acc + countRetIfs s
     if retIfs > 16 then
       throw s!"{f.pos.show}: {shownFnName n} has several values and {retIfs} ifs with a return: more than 16, and the code of an inlined call doubles with each, until choices compose without copying the clauses after them (#283)"
     let some (ss, _) := elimReturns (fun i => s!"$k{i}") 0 (fun _ => false) none (stmtsOf f.body) true
-      | throw s!"{f.pos.show}: {shownFnName n} has several values and a return other than in the branches of an if, which would leave its caller once inlined (#235, #283)"
+      | throw (if anyE (fun | x@(.forE ..) | x@(.loop ..) => hasReturn x | _ => false) f.body then
+          s!"{f.pos.show}: {shownFnName n} has several values and a return in a for or a loop, which would leave its caller once inlined: not supported yet (#235, #283); find what the loop looks for first (in a var it sets, or a for's array) and return in an if after it"
+        else s!"{f.pos.show}: {shownFnName n} has several values and a return inside an expression or a condition, which would leave its caller once inlined (#235, #283): return in an if's branch, a block or a case's arm")
     return (n, { f with body := .block f.pos ss })
   -- (every name the program binds: parameters, locals, fields, methods)
   let binders : List String := (tops.flatMap fun
@@ -3838,13 +3963,6 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
     for g in needAll do
       for h in (callees.lookup g).getD [] do
         if !needAll.contains h then needAll := needAll ++ [h]; grew := true
-  for (n, f) in rawMfs do
-    -- Recursive cleanup still needs an invocation scope, including when
-    -- normalization would remove its registration after an early return.
-    let hasReturn := anyE (fun | .ret .. => true | _ => false) f.body
-    if ((stmtsOf f.body).any isDefer || (hasReturn && anyE isDefer f.body)) &&
-        (recs.contains n || needAll.contains n || inMachine n) then
-      throw s!"{f.pos.show}: {shownFnName n} has several values and a defer:, and is recursive or called by a recursive one (so its values are computed at the call, or taken lazily): not supported yet (#235, #283)"
   -- (effect-free: <computes> and no local state; that nothing they may
   -- run prints or calls `Err()` is checked on their Verse Core code, which
   -- shows every call, `checkEager`)
@@ -3942,15 +4060,74 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
   return { tops := tops' ++ ovKept ++ alls, lazy := !loops.isEmpty, familySites := sites,
            overloadSites := (ovSites ++ methodOvSites).eraseDups }
 
+/-- (#283) The calls of `h` in `e` that `here` sees made calls of `h'`. -/
+partial def renameCalls (h h' : String) (here : SExpr → Bool) : SExpr → SExpr :=
+  mapE fun
+    | e@(.app p (.ident r n) as br) =>
+      if n == h && here e then some (.app p (.ident r h') (as.map (renameCalls h h' here)) br) else none
+    | _ => none
+
+/-- (#283) The callee of the call at `q` in `e`. -/
+partial def calleeAt (q : Pos) (e : SExpr) : Option String :=
+  match e with
+  | .app p (.ident _ h) _ _ => if p == q then some h else e.children.findSome? (calleeAt q)
+  | _ => e.children.findSome? (calleeAt q)
+
+/-- (#283) Each call of `calls`, by its place and the function whose code it
+    is in, a call of a copy of its callee of its own, `F$copyK` (`K` the
+    call's place in `calls`, shown as `F`; its calls of itself the copy's):
+    so the machine of a lazily taken group that takes the callee at another
+    instance of its type parameters than the one it took first takes that
+    copy as another member, at that instance (`Requests.instanceCalls`), as
+    a function called at two instances is two members. Refused for a callee
+    recursive with that function, or with another: a group's own function
+    is taken at one instance for a whole search. -/
+def instanceCopies (tops : List STop) (calls : List (Pos × String)) : Except String (List STop) :=
+  calls.zipIdx.foldlM (init := tops) fun tops ((q, caller), k) => do
+    let fnNamed (n : String) : List STop := tops.filter fun | .fn _ m .. => m == n | _ => false
+    let codeOf : STop → List SExpr
+      | .fn _ _ ps _ _ _ b => b :: ps.filterMap (·.default)
+      | _ => []
+    let some h := (fnNamed caller).findSome? fun t => (codeOf t).findSome? (calleeAt q)
+      | throw s!"{q.show}: internal: no call here in {shownFnName caller} (#283)"
+    let [.fn p _ ps tps fx r b] := fnNamed h
+      | throw s!"{q.show}: {shownFnName h} has several values and is overloaded, and this call is taken at another instance of its type parameters than another in one search: not supported yet (#283)"
+    -- (whether `a` calls `z`, directly or not)
+    let calls (n : String) : List String := (fnNamed n).flatMap fun t => (codeOf t).flatMap namesUsed
+    let reaches (a z : String) : Bool := Id.run do
+      let mut seen : List String := []
+      let mut todo := calls a
+      while !todo.isEmpty do
+        let x := todo.head!
+        todo := todo.tail!
+        if x == z then return true
+        if !seen.contains x then
+          seen := x :: seen
+          todo := calls x ++ todo
+      return false
+    if reaches h caller || (calls h).any (fun x => x != h && reaches x h) then
+      throw s!"{q.show}: {shownFnName h} has several values and is called here at another instance of its type parameters than its machine takes it at in one search, and it is recursive with {if reaches h caller then shownFnName caller else "another function"}: not supported yet (#283)"
+    let copy := s!"{h}$copy{k}"
+    let rename (here : SExpr → Bool) : SExpr → SExpr := renameCalls h copy here
+    let inFn (t : STop) (f : SExpr → SExpr) : STop := match t with
+      | .fn p' n ps' tps' fx' r' b' => .fn p' n (ps'.map fun sp => { sp with default := sp.default.map f }) tps' fx' r' (f b')
+      | t => t
+    let tops := tops.map fun t => match t with
+      | .fn _ n .. => if n == caller then inFn t (rename (·.pos == q)) else t
+      | t => t
+    return tops ++ [inFn (.fn p copy ps tps fx r b) (rename fun _ => true)]
+
 /-- `inlineFns` after `methodFns`: methods with several values as functions
     first (#283; `reserved`: the members of built-in types and of the
     prelude). `nested`: the types of the names consumers take and give, as an
-    earlier elaboration noted them (#283). -/
+    earlier elaboration noted them (#283); `instanceCalls`, the calls to give
+    copies of their callees of their own (`instanceCopies`). -/
 def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List String := [])
     (picks : List (Pos × String) := []) (lazy : List String := []) (overloadPicks : List (Pos × String) := [])
-    (nested : List (String × STy) := []) (orders : List (String × List (String × Bool)) := []) :
-    Except String Inlined := do
+    (nested : List (String × STy) := []) (orders : List (String × List (String × Bool)) := [])
+    (instanceCalls : List (Pos × String) := []) : Except String Inlined := do
   let (tops, sites, methodOvSites) ← methodFns tops reserved picks overloadPicks
+  let tops ← instanceCopies tops instanceCalls
   inlineFns tops eager lazy overloadPicks nested orders sites methodOvSites
 
 end OpenVerse.Front.Choice
