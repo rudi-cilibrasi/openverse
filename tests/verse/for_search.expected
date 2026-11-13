@@ -1,0 +1,27 @@
+kept 1 2
+undone 0 1
+inner 7 3 4
+before 1 0
+i 2
+body 2 2 20
+i 3
+body 3 2 50
+body 3 3 50
+filters 50
+ch 2 2 6
+ch 3 2 7
+ch 3 3 7
+ex 11 11 107
+choice 107
+w 3 4 4
+q 2 2 2 1
+q 3 2 2 2
+q 3 3 3 2
+q 2
+m 2 a 20
+m 2 b 20
+s 2 z 21
+map 21
+body fails 0
+fail 0 0
+exit=0

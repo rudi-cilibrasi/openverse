@@ -26,5 +26,7 @@ Main():void =
         Print("saved {P.X} {P.Y} cell {P.D.N}")
     if (P := pack{X := 1 | 2, Y := 10 | 20}, P.Y = 20):
         Print("first {P.X} {P.Y} cell {P.D.N}")
+    # (D's default runs before Y's choice; neither alternative succeeds, so no
+    # value reaches the body and the search undoes it, output too)
     Empty := for (P := pack{X := 0, Y := None[] | None[]}) { P }
     Print("empty {Empty.Length}")

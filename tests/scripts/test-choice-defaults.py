@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Construction fields, modeled in declaration order independently of lowering.
 
-A prefix default commits when the next field opens a generator. A scalar
+A prefix default commits when the next field opens a generator (the old rule
+for what a for undoes); by the Book of Verse's rule, which a for whose choices
+are of values follows (OV_FOR_BOOK, docs/research/readings-audit.md, "What a
+for undoes"), it is undone with X's value when no Y of it reaches the body. A scalar
 selected branch shares the earlier generator's filter. Rejected filters roll
 back allocations, writes and output; a failed body keeps them and stops all
 remaining values. Objects saved from later values share the prefix cell.
@@ -17,6 +20,9 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
+# (the kinds of choice point whose fors follow the Book's rule, as in
+# scripts/models/mv.py: by default those the compiler gives it)
+FOR_BOOK = set(__import__('os').environ.get('OV_FOR_BOOK', 'plain,choice').split(',')) - {''}
 COUNT = int(sys.argv[1]) if len(sys.argv) > 1 else 60
 FIRST = int(sys.argv[2]) if len(sys.argv) > 2 else 1
 
@@ -121,10 +127,14 @@ Wrap(P:{cty}):{cty} = P
     Print("length {{Ps.Length}}")
 '''
 
+    kinds = ({'choice'} | ({'call'} if composed_x or kind == 'composed' else set())
+             | ({'exclusive'} if kind.startswith('branch') else set()))
+    book = 'all' in FOR_BOOK or kinds <= FOR_BOOK
     out, saved, code = [], [], 0
     found = False
     for x in xs:
         before_x = len(out)
+        reached = False
         if trace_x and not composed_x:
             out.append(f'x {x}')
         out.append('new cell')
@@ -145,6 +155,7 @@ Wrap(P:{cty}):{cty} = P
                 found = True
                 break
             out.append(f'got {x} {y} cell {cell["n"]} empty 0')
+            reached = True
             if mode == 'fail' and y == stop:
                 out.append('fail')
                 code = 1
@@ -152,7 +163,7 @@ Wrap(P:{cty}):{cty} = P
             saved.append((x, y, cell))
         if found or code:
             break
-        if mode == 'first':
+        if mode == 'first' or (book and not reached):
             del out[before_x:]
     if mode == 'first' and not found:
         out.append('none')
