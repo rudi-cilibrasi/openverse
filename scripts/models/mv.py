@@ -11,7 +11,8 @@
 # methods with several values from #310 (overridden from #328, of one name in unrelated classes from #283's
 # shared families), returns in functions with several values from #312,
 # and a choice after such a return's if, or in its value, from #318;
-# return frames (a recursive call with code after it) from #283.
+# return frames (a recursive call with code after it) from #283, and a generator's call of itself
+# in a failure context of its own code (a consumer of it there) from #283's nested consumers.
 """Random programs with choices INSIDE expressions (PR #234, phase 2), and an
 independent model written from docs/LANGUAGE.md's "Choice" section (not from
 scripts/gen-choice.py, and not from the lifting code).
@@ -88,6 +89,9 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
                   its bound choice: a named argument, a construction's field, a
                   comparison's later operand, a set's value, an if's branch, or's
                   right, #283; on with seq otherwise)
+       nonested  (no call of a generator of itself in a failure context of its own
+                  code, which consumes it: an if's condition, or's left, option{},
+                  not, logic{}, a for, #283; on with seq otherwise)
        noovw     (no overloads Ow of one name with one value or several, OwOne calling
                   the one with one value, OwR recursive, owc/owd's overloaded method Om,
                   #283's overloads picked in rounds; on in half the programs otherwise)
@@ -180,6 +184,10 @@ def chk(v):
 
 class Fail(Exception):
     pass
+
+
+class ForBodyFail(Exception):
+    """(#283) a for's body failed: the for fails, not only that iteration."""
 
 
 # (a path that prints over OUT_MAX lines, a model that takes over EV_MAX steps, or one that
@@ -559,6 +567,20 @@ RENT = random.Random(seed * 1000003 + 283289)
 # value read before the call, or `set Vl = Gz0(N - 1, A) + Vl`; an `if`'s branch. A stream of
 # its own.
 RLIFT = random.Random(seed * 1000003 + 283292)
+# ---- #283, flag nested (on with seq; nonested turns it off): a call of a generator of itself in a
+# failure context of its own code, which consumes it there, taking its first success (or a for all
+# its values) while the generator's own values are taken: an if's condition, `Wn := (if (N > lo,
+# Gz[N - 1, a] > k) then x else y)`; or's left, `Wn := (Gz[N - 1, a] > k or x)`; option{},
+# `Wn := (option{Gz[N - 1, a] > k}? or x)`; in a <decides> one, not and logic{} as clauses,
+# `not (Gz[N - 1, a] > k)`, `logic{Gz[N - 1, a] > k}?`; and a for over its values that sets a var
+# of the generator, `for (N > lo, Xn := Gz[N - 1, a]) { set Vn += Xn }`, in a <decides> one at times
+# with a body that may fail, `{ set Vn += Xn; Xn < k }`, which fails the for. Its place: the code after
+# the generator's bound choice (a <decides> one's), or after the choice bound in its else's block,
+# whose value then reads the result, with that choice's name at times in the call; or its clauses,
+# before its choice, guarded by N so that its calls end (an if with a print in each branch, or a
+# for with one in its body). The model is the same CPS: the context runs the call as it would
+# anywhere, each call's code taking its own in turn. A stream of its own.
+RNEST = random.Random(seed * 1000003 + 283293)
 SQN = [0]
 USED = set()     # (generator, in a for): the calls the tests make, for MVSEQ's statistics
 FRN = [0]
@@ -579,6 +601,7 @@ SEQ = FRAMES and 'noseq' not in flags
 TYPED = SEQ and 'notyped' not in flags
 ENTER = SEQ and 'noenter' not in flags
 LIFTED = SEQ and 'nolifted' not in flags
+NEST = SEQ and 'nonested' not in flags
 REFUSED = [False]
 
 
@@ -876,6 +899,9 @@ def ub_e(e, n):
             return ub_e(x[1], n) + ub_e(x[2], n) if x[0] == 'orx' else ub_e(x[2], n) + ub_e(x[3], n)
         if e[0] == 'choice':
             return sum(ub_e(a, n) for a in e[1])
+        if e[0] == 'snest':
+            # (#283, flag nested: a consumer, one value whatever its call's)
+            return 1
         if e[0] == 'gblk':
             return sum(ub_e(a, n) for a in e[2]) * ub_e(e[3], n) * ub_e(e[4], n)
     if isinstance(e, (tuple, list)):
@@ -1088,6 +1114,8 @@ def gen_gfunc(i):
         enter_shapes(f, i, sc, ctr)
     if LIFTED:
         lifted_shapes(f, i, sc, ctr, stmts)
+    if NEST:
+        nested_shapes(f, i, sc, ctr, stmts)
     f['stmts'] = stmts
     f['lifted'] = lifted(f)
     CTX.update(ctrs=None, nofail=False, nochoice=False, noprint=False, fmax=None, take=None)
@@ -1263,6 +1291,68 @@ def lifted_shapes(f, i, sc, ctr, stmts):
     else:
         v[3][0] = ('gblk', x, galts, post, last)
     f['seq'] = f.get('seq', set()) | {'lifted-' + kind}
+
+
+def nested_shapes(f, i, sc, ctr, stmts):
+    """(#283, flag nested) a call of generator f of itself in a failure context of its own code,
+    which consumes it there (RNEST alone): after its bound choice (a <decides> one's) or after the
+    choice bound in its else's block, its value then reading the result; or in its clauses, guarded
+    by N so that its calls end."""
+    if RNEST.random() >= 0.35:
+        return
+    v = f['val']
+    blk = not f['decides'] and v[0] == 'gbif' and v[3] and v[3][0][0] == 'gblk'
+    lo = f['lo']
+    where = RNEST.choice(['clauses', 'after']) if (f['decides'] or blk) else 'clauses'
+    if where == 'after':
+        if f['decides']:
+            x, post, last = f.get('bound') or ('Wf', [], ('ref', 'Wf'))
+        else:
+            _, x, galts, post, last = v[3][0]
+        # (not a bound choice of strings, `Ws`, typed_shapes': the call's argument is an int)
+        names = sc + ([x] if x != 'Ws' else [])
+        kinds = ['if', 'or', 'opt', 'for'] + (['not', 'logic'] if f['decides'] else [])
+    else:
+        names = sc
+        kinds = ['if', 'for']
+    kind = RNEST.choice(kinds)
+    a = ('ref', RNEST.choice(names)) if RNEST.random() < 0.5 else ('lit', RNEST.randint(0, 3))
+    call = ('gself', i, [('bin', '-', ('ref', 'N'), ('lit', 1)), a] + ([('ref', 'C')] if ctr else []))
+    test = ('cmp', call, [(RNEST.choice(['>', '<', '>=', '<>']), ('lit', RNEST.randint(-1, 3)))])
+    guard = [('filter', ('cmp', ('ref', 'N'), [('>', ('lit', lo))]))] if where == 'clauses' else []
+    w, xn, vn = f"Wn{i}", f"Xn{i}", f"Vn{i}"
+
+    def val():
+        n = ('lit', RNEST.randint(0, 4))
+        return ('tell', sqfresh(), n) if where == 'clauses' or RNEST.random() < 0.4 else n
+    if kind == 'if':
+        st = ('slet', w, ('ifx', guard + [('filter', test)], val(), val()))
+    elif kind == 'or':
+        st = ('slet', w, ('orx', test, val()))
+    elif kind == 'opt':
+        st = ('slet', w, ('optor', [('filter', test)], val()))
+    elif kind == 'not':
+        st = ('sclause', ('not', [('filter', test)]))
+    elif kind == 'logic':
+        st = ('sclause', ('logic', [('filter', test)]))
+    else:
+        stmts.append(('svar', vn, ('lit', RNEST.randint(0, 3))))
+        pr = sqfresh() if RNEST.random() < 0.6 else None
+        # (a body that may fail, which fails the for and so the generator's value: a <decides> one's)
+        lim = RNEST.randint(1, 6) if f['decides'] and RNEST.random() < 0.4 else None
+        st = ('sfor', guard + [('bind', xn, call)], ('ref', vn), pr, lim)
+    st = ('snest', kind, st)
+    if where == 'clauses':
+        stmts.append(st)
+    else:
+        post = post + [st]
+        if kind in ('if', 'or', 'opt', 'for'):
+            last = ('bin', '+', ('ref', vn if kind == 'for' else w), last)
+        if f['decides']:
+            f['bound'] = (x, post, last)
+        else:
+            v[3][0] = ('gblk', x, galts, post, last)
+    f['seq'] = f.get('seq', set()) | {f'nested-{kind}'}
 
 
 FX_NODES = ('sprint', 'snext', 'tell', 'bprint', 'cnext', 'cadd', 'print', 'next', 'add', 'seti', 'setf')
@@ -2446,6 +2536,31 @@ def run_body(stmts, val, st, k, mode):
         o = lookup(st, c[1]) + '.C'
         st.vars[o] += 1
         return nxt(st)
+    if t == 'snest':
+        # (#283: a consumer in a generator's code, as anywhere)
+        return run_body([c[2]] + stmts[1:], val, st, k, mode)
+    if t == 'sclause':
+        return run_clauses([c[1]], st, nxt, mode)
+    if t == 'sfor':
+        # (all the values its clauses give, what each iteration does kept, as any for's; a body
+        # that fails fails the for, LANGUAGE.md's reading, so the code it is in)
+        def kfor(s):
+            x = c[1][-1][1]
+            o = c[2][1]
+            s.vars[o] = chks(s.vars[o] + s.binds[x], s)
+            if c[3]:
+                s.out.append(c[3])
+            if c[4] is not None and not s.binds[x] < c[4]:
+                raise ForBodyFail()
+            return s
+        s0 = st.copy()
+        try:
+            st = run_clauses(c[1], s0, kfor, 'all')
+        except ForBodyFail:
+            raise Fail()
+        except Fail:
+            pass
+        return nxt(st)
     raise AssertionError(c)
 
 
@@ -2611,6 +2726,14 @@ def show_s(c):
         return show(c[1])[1:-1]
     if t == 'snext':
         return f"{c[1]}.Next()"
+    if t == 'snest':
+        return show_s(c[2])
+    if t == 'sclause':
+        return show_c(c[1])
+    if t == 'sfor':
+        body = (f"set {c[2][1]} += {c[1][-1][1]}" + (f'; Print("{c[3]}")' if c[3] else "") +
+                (f"; {c[1][-1][1]} < {c[4]}" if c[4] is not None else ""))
+        return f"for ({show_cl(c[1], ', ')}) {{ {body} }}"
     raise AssertionError(c)
 
 

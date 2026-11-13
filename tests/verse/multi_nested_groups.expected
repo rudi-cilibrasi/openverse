@@ -1,0 +1,60 @@
+even 4
+even 2
+v 4
+v 40
+even 2
+v 2
+v 3
+even 2
+taken 3
+pick 3
+pick 2
+pick 1
+y
+x
+walk 2
+walk 1
+v 2
+walk 1
+v 1
+v 5
+v 6
+step 4 2
+step 2 2
+v 4
+v 2
+step 2 1
+v 0
+over 2
+over 1
+v 2
+v 10
+s
+tell 2
+tell 1
+v 3
+v 3
+v 2
+tell 2
+taken 2
+after 1 1
+after 2 10
+v 10
+after 1 2
+after 2 2
+after 1 1
+v 20
+after 1 1
+after 2 10
+v 10
+after 2 2
+after 1 1
+v 20
+after 1 2
+after 2 2
+after 1 1
+taken 20
+v 101
+v 204
+taken 101
+exit=0
