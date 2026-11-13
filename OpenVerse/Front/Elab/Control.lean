@@ -649,6 +649,19 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   let elseOf : EM R := match elseE with
     | none => pure ⟨.lit .void, .void⟩
     | some ee => elabE ctx ee exp
+  -- (with no expected type, the `else` as it is, or why not, for `elseAt`)
+  let elseAlone : EM (Except String R) :=
+    if exp.isSome || elseE.isNone then Except.ok <$> elseOf
+    else tryCatch (Except.ok <$> elseOf) fun err => pure (.error err)
+  -- (the `else` at the `if`'s type `τ`: as it is, when it is one there;
+  -- with no expected type, else against `τ`, as `ifBranches` takes it:
+  -- `array{}`, `map{}`, `false` for an option have none alone)
+  let elseAgainst (τ : Ty) (err : String) : EM R := match elseE, exp with
+    | some ee, none => tryCatch (elabE ctx ee (some τ)) fun _ => throw err
+    | _, _ => throw err
+  let elseAt (alone : Except String R) (τ : Ty) : EM Expr := match alone with
+    | .ok re => tryCatch (coerce p re τ) fun err => do coerce p (← elseAgainst τ err) τ
+    | .error err => do coerce p (← elseAgainst τ err) τ
   let tag := refineTagOf ctx x written elseE exp
   let key := Refine.keyOf p D tag
   let liftName := s!"$refine{p.line}_{p.col}_{D}" ++ (if p.file.isEmpty then "" else s!"_{p.file}") ++ tag
@@ -696,17 +709,11 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let fxB := (← get).fx
     modify fun st => { st with fx := fx0 }
     for (k, q, via) in fxB do noteFx q [k] via
-    let re ← elseOf
-    -- Preserve the dispatch shape when lowering either side. Task starts
-    -- need lowering too, but only a wait exposes copies of shared slots.
-    let hasPending := (← get).pendingSuspendingCasts != pending0
-    let needsFrame (f : Nat) := isS f || ctx.sigs.any (fun s => s.idx == f && s.name == "$branchMark")
-    let suspendsB := ctx.suspends && (hasPending || Suspend.hasSusp needsFrame rb.e || Suspend.hasSusp needsFrame re.e)
-    let elseWaits := ctx.suspends && ((← get).pendingWaitingCasts != waitingThen || waits re.e)
+    let alone ← elseAlone
     -- (an `else` that gives no value, as the rest of a failure context has,
     -- `elabSeqIn`: the branch's type, which code outside it must be able to
     -- name)
-    let retOfBranch := elseE.isSome && exp.isNone && re.ty == .never
+    let retOfBranch := elseE.isSome && exp.isNone && (match alone with | .ok re => re.ty == .never | .error _ => false)
     let branchTy := branchTyOf rb.ty
     let τ' : Ty ← match elseE, exp with
       | none, _ => pure .void
@@ -714,6 +721,15 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       | some ee, none => if retOfBranch then pure branchTy else match τ? with
         | some t => pure t
         | none => ifTy ee
+    let re ← match alone with
+      | .ok re => pure re
+      | .error err => elseAgainst τ' err
+    -- Preserve the dispatch shape when lowering either side. Task starts
+    -- need lowering too, but only a wait exposes copies of shared slots.
+    let hasPending := (← get).pendingSuspendingCasts != pending0
+    let needsFrame (f : Nat) := isS f || ctx.sigs.any (fun s => s.idx == f && s.name == "$branchMark")
+    let suspendsB := ctx.suspends && (hasPending || Suspend.hasSusp needsFrame rb.e || Suspend.hasSusp needsFrame re.e)
+    let elseWaits := ctx.suspends && ((← get).pendingWaitingCasts != waitingThen || waits re.e)
     if let some (n, v, _) := opened.find? fun (n, _, _) => τ'.params.contains n then
       eerr p s!"cannot cast {withArticle rx.ty.show} to {T} here: the cast opens {T}'s type argument {v} for the code after it, outside which its value, {withArticle τ'.show}, would name what is unknown (#250)"
     let ret := refine τ'
@@ -816,8 +832,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
         | none, none => pure none
       let rc ← elabE ctxO chainE expC
       if pre.isEmpty then return some rc
-      let re ← elseOf
-      let eE ← coerce p re rc.ty
+      let eE ← elseAt (← elseAlone) rc.ty
       let cond := pre.foldr Expr.seq (.heap (.isTag (common.map env.tagOf)) [.local y])
       return some ⟨.ite cond rc.e eE, rc.ty⟩
     -- (then: the object in a slot, and one dispatch per set of pins)
@@ -826,7 +841,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       | e => do
         let y ← fresh rx.ty
         pure ([Expr.assign y e], y)
-    let re ← elseOf
+    let alone ← elseAlone
     -- (the branch's own type, when the first elaboration took it; at
     -- another expected type, refused as it was there; with none, the
     -- `if`'s, as the first elaboration found it)
@@ -839,7 +854,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       | some _, some t, none => pure t
       | some _, none, some t => resolveTy env p t
       | some ee, none, none => ifTy ee
-    let eE ← coerce p re τ'
+    let eE ← elseAt alone τ'
     let rargs := env.coreArgs S sargs
     let atR := rargs.zipIdx.map fun (r, j) => (pinArg j, r)
     let needOf (pins : List (Option Ty)) := (rargs.zip pins).filterMap fun (a, pin) => match pin with
