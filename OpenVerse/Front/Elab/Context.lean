@@ -456,15 +456,15 @@ structure Ctx where
     effects before their own signature can reach its fixed point. -/
 def Ctx.infersHeapFx (ctx : Ctx) : Bool :=
   ctx.frameName.endsWith ".$block" || defaultBridge ctx.frameName ||
-    ctx.types.castRequests.any (·.name == ctx.frameName)
+    ctx.types.requests.casts.any (·.name == ctx.frameName)
 
 /-- A generated frame does not make an immediate source operation suspend. -/
 def Ctx.sourceSuspends (ctx : Ctx) (f : Nat) : Bool :=
   ctx.sigs.any fun s => s.idx == f && s.suspends &&
     if s.name.startsWith "$refine" then
-      ((ctx.types.castRequests.find? (·.name == s.name)).map (·.sourceSuspends)).getD true
+      ((ctx.types.requests.casts.find? (·.name == s.name)).map (·.sourceSuspends)).getD true
     else if s.name.startsWith "$forStage" && s.name.endsWith "$resume" then
-      ((ctx.types.loopRequests.findSome? fun l =>
+      ((ctx.types.requests.loops.findSome? fun l =>
         l.stagePlan.filter (fun p => s.name.endsWith ("." ++ p.method))).map (·.sourceSuspends)).getD true
     else true
 
@@ -472,59 +472,12 @@ def Ctx.sourceWaits (ctx : Ctx) (e : Expr) : Bool :=
   Suspend.countSusp ctx.sourceSuspends (fun _ => false) false
     (fun f => ctx.sigs.any fun s => s.idx == f && (s.name == "$spawnMark" || s.name == "$branchMark")) e > 0
 
+/-- Whether a helper asked for in another elaboration, where its heap
+    effects may have been allowed, can be called here: this function infers
+    its own, or allows all of the helper's. -/
 def Ctx.acceptsHelper (ctx : Ctx) (lift : Choice.FirstLift) : Bool :=
   ctx.infersHeapFx ||
     (lift.specs.filter (["reads", "writes", "allocates"].contains ·)).all ctx.fnFx.contains
-
-/-- What an elaboration of the program asks for that only types tell, for
-    the program to be elaborated again with it (`Compiled.needs`), and what
-    earlier elaborations asked for (`Options.requests`): `elabProgram`
-    elaborates the program in rounds until one asks for nothing new. -/
-structure Requests where
-  /-- Pure mutual groups that retain the eager polymorphic-recursion path. -/
-  eager : List String := []
-  /-- (#283) Recursive functions with several values whose values would be
-      computed at the call, but something they run prints or calls
-      `Err()`: taken lazily if their shape allows. -/
-  lazy : List String := []
-  /-- (#283) For each use `R.M` of a method several classes or interfaces
-      declare apart, by its place: the root its receiver's class is below,
-      whose family it takes (`Choice.famAt`). -/
-  families : List (Pos × String) := []
-  /-- (#283) For each call of an overloaded function with an overload that
-      has several values, by its place: the overload it takes (`F$ovK`),
-      whose own function it calls (`Choice.inlineMulti`). -/
-  overloads : List (Pos × String) := []
-  /-- (#283) For each consumer in a recursive group's code of a call of a
-      function with several values, the types of the names it takes from
-      that code and gives it (`Choice.nestKey`), which its function of its
-      own (`Choice.nestFns`) is made with; and for a `for` that can fail,
-      `$fails`. -/
-  nested : List (String × STy) := []
-  /-- (#283) The field orders of the structs and classes constructed with a
-      choice point in a field in a recursive group's code
-      (`TyEnv.fieldOrder`), which `inlineMulti`'s lifter takes them in. -/
-  fieldOrders : List (String × List (String × Bool)) := []
-  /-- Functions wanted as values at closed function types no class of
-      theirs gives (#214): a class for each. -/
-  fns : List (String × Ty) := []
-  /-- Methods wanted as values at function types their own fit only by
-      variance: an adapter for each, by key. -/
-  methods : List FnValues.MethodRequest := []
-  /-- Canonical checked upcast dictionaries discovered by elaboration. -/
-  subtypes : List STop := []
-  /-- Branches of casts that refine type arguments (#243): a function for
-      each, by key. -/
-  casts : List Refine.Lift := []
-  /-- Functions of their own for lazily taken calls whose effects need them
-      (#246), the continuations, stages and helpers that consumers of
-      choices are lowered with (#335), and the helpers that forward calls
-      to the defaults of their named parameters: by key. -/
-  loops : List Choice.FirstLift := []
-  /-- Classes with a class parent that list an interface at type arguments
-      that are not a prefix of their own (#351): hidden fields for all of
-      their type parameters. -/
-  witnesses : List String := []
 
 /-- `old`, then those of `new` whose key none before them has. -/
 def mergeByKey [BEq κ] (key : α → κ) (old new : List α) : List α :=
@@ -578,6 +531,8 @@ def Requests.isEmpty (r : Requests) : Bool :=
     its own it is compiled as when that code has effects, or why it cannot
     be. -/
 structure LoopUse where
+  /-- The function; `""` for a helper asked for whenever it can be made
+      (`askHelper`). -/
   g : String
   pos : Pos
   itemCode : Expr
@@ -646,6 +601,13 @@ abbrev EM := StateT ESt (Except String)
 /-- Ask for `r`, for the program to be elaborated again with it. -/
 def noteNeeds (r : Requests) : EM Unit :=
   modify fun st => { st with needs := st.needs.merge r }
+
+/-- (#335, #417) Ask for `lift`, made at `p`: a continuation, or a `for`'s
+    stage, prefix or environment, which `checkLoopFirst` asks the next
+    elaboration for whenever it can be made. -/
+def askHelper (p : Pos) (lift : Choice.FirstLift) : EM Unit :=
+  modify fun st => { st with loopFirst := st.loopFirst ++
+    [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
 
 /-- Give a disposable polymorphic suffix trial its own type witnesses.
     The generated continuation will obtain them from its actual arguments. -/
@@ -1714,6 +1676,12 @@ def inferable (r : R) : EM Expr := do
   if !r.e.untyped || r.e.noValue then return r.e
   return .assign (← fresh r.ty) r.e
 
+/-- `r` run for its effects, its value dropped: `void`. -/
+def discardValue (r : R) : EM Expr := return .seq (← inferable r) (.lit .void)
+
+/-- The values of `r`, an array of arrays, in one array. -/
+def flattenValues (r : R) : EM Expr := return .prim .flatten [← inferable r]
+
 /-- Convert a value `e` of type `a` to the supertype `b`, when `a` is a class
     below the class or interface `b`, or an array or option of such (arrays
     and options are covariant): the options of the classes below `a` move to
@@ -1751,7 +1719,7 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
   -- `int` is a subtype of `rational` (#116): `X` is `X / 1`
   | .int, .rational => return some (.prim .mkTup [e, .lit (.int 1)])
   -- Every value can be erased or discarded, including within containers (#138).
-  | _, .any | _, .void => return some (.seq (← inferable ⟨e, a⟩) (.lit .void))
+  | _, .any | _, .void => return some (← discardValue ⟨e, a⟩)
   -- a refinement is its base (#136); the base is the refinement only for a
   -- literal that meets its conditions (else a cast, `age[X]`)
   -- (a refinement within another's interval is one of it, #143)
@@ -1869,7 +1837,7 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
     let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push target })
     return .assign x (.seq r.e (.prim .userErr []))
   if r.ty == target || r.ty == .never then return r.e
-  if target == .void then return .seq (← inferable r) (.lit .void)
+  if target == .void then return ← discardValue r
   match ← convert (← get).env r.e r.ty target with
   | some e =>
     -- a typed temporary: the checker cannot infer the type of an empty option
