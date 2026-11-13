@@ -269,9 +269,10 @@ partial def elabExprControlWith
         | none => match ctx.forReturnSlot.bind ctx.lookup with
           | some { ty := .opt t, .. } => pure t
           | _ => pure ctx.retTy
-      -- (named by its place alone, the same in every function the consumer
-      -- is elaborated in, whose continuations' keys name it, `contKey`;
-      -- told apart by the scope only from one of the same place in scope)
+      -- (named by its place, which is the same in every function the
+      -- consumer is elaborated in, the source, a trial and each
+      -- continuation's, whose keys name it, `contKey`; and by the locals in
+      -- scope only should one of the same place be in scope already)
       let place := s!"$forReturn{p.line}_{p.col}" ++ (if p.file.isEmpty then "" else s!"_{p.file}")
       let name := if (ctx.lookup place).isSome then s!"{place}_{ctx.locals.length}" else place
       let slot ← fresh (.opt sourceRet)
