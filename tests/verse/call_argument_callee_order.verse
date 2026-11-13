@@ -5,9 +5,11 @@ Get():type{_():int}=block{Print("callee");Zero}
 Unit():tuple()=Print("unit")
 holder:=class:
     var F:type{_():int}=Zero
+# (a tuple() result is the empty value: the body ends with it, Book of Verse ch. 2)
 Change(H:holder):tuple()=
     Print("change")
     set H.F=One
+    ()
 Main():void=
     Print("{Get()(Unit())}")
     H:=holder{}

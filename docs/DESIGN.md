@@ -1537,6 +1537,26 @@ doubles. In the binary format a float literal is the primitive `fofBits` of
 an int literal of its bits, so the loader (`load.c`, QuickProof-proved) is
 unchanged; only its bound on primitive codes grows.
 
+## Equality across types: decided by the front end
+
+Verse's `=` is equality of values (Book of Verse ch. 2 and 4): values of
+different types are different, but for the one empty value (`false`, `()`,
+the empty option, array, string and map) and a value two types share (a
+tuple and the array of its elements, an int and its rational). Verse Core's
+`eq` is structural on representations, so it holds the empty value four
+ways (`.logic false`, `.tup []`, `.none`, `.arr #[]`) and holds an `int`, a
+`char32` and an enum alike. The front end therefore decides each `=` and
+`<>` of two different types from the types alone (`TyEnv.cmpPlan`,
+`Elab/Context.lean`): Verse Core's `eq` where it is Verse's
+(`TyEnv.coreExact`, which keeps the code of every comparison it already
+answered right), a test that fails or holds where the types have nothing
+in common, a test of both operands' emptiness where they have only the
+empty value in common, and a refusal where they have other values in
+common that Verse Core holds differently (the empty value inside a
+container). The last, and generic code, wait on Verse Core relating the
+empty values in `eq` ([research/empty-values.md](research/empty-values.md),
+part 2, design B); the proofs, OVBC and the C runtime are unchanged.
+
 ## Rationals: helpers written in Verse
 
 A `rational` (#116) is a front-end type whose Verse Core form is the tuple

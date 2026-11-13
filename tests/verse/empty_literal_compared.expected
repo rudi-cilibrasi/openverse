@@ -1,6 +1,5 @@
-not same
-differ
-void ne
-unit ne
-rev ne
+same
+not differ
+void eq
+rev eq
 exit=0

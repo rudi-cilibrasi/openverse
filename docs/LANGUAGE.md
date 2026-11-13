@@ -15,7 +15,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 **Contents**
 
 - The language: [Supported](#supported) · [Source profiles](#source-profiles) · [Source text](#source-text) · [Parametric functions](#parametric-functions) · [Function values](#function-values) · [Extension methods](#extension-methods) · [defer](#defer) · [Overloading](#overloading) · [Parametric structs](#parametric-structs) · [Classes](#classes) · [Mutation, macros, tooling](#mutation-macros-tooling) · [Choice](#choice)
-- More types: [any](#any) · [Refinement types](#refinement-types) · [Type aliases](#type-aliases) · [float](#float) · [rational](#rational) · [char32](#char32)
+- More types: [any](#any) · [Equality and the empty value](#equality-and-the-empty-value) · [Refinement types](#refinement-types) · [Type aliases](#type-aliases) · [float](#float) · [rational](#rational) · [char32](#char32)
 - Programs: [Modules](#modules) · [Programs of several files](#programs-of-several-files) · [Concurrency](#concurrency)
 - [Readings openverse takes](#readings-openverse-takes) · [Not supported in v1](#not-supported-in-v1)
 
@@ -25,11 +25,11 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 |---|---|---|
 | Comments | `#` to the end of the line, nested `<# … #>`, `<#>` indented comments (the rest of the line and every following line indented more than it; see [Source text](#source-text)) | ch. 0 |
 | Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` an ASCII character other than a line break, a tab included, or an escape; a non-ASCII one, `'é'`, is a `char32`, Book of Verse ch. 1), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates), `float` `1.5`, `2.0e-7`, `1e3`, `12.34f64`, `1234f64` (digits, then a point and digits or an exponent or both, or the suffix `f64`, which may follow either; the nearest double, which must be finite: `2.0e308` is refused; `f32` and `f16` are read and refused as not supported); paths `/Verse.org/Random` parse (in `using{…}`, ignored; as values, refused; see [Source text](#source-text)) | §1.3–1.7 |
-| Types | `int`, `logic`, `char`, `char32`, `any` (see [any](#any)), `rational` (see [rational](#rational)), `float` (see [float](#float)), refinement types `type{_X:int where 0 <= _X, _X <= 120}` (see [Refinement types](#refinement-types)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void`, function types `type{_(:int)<decides>:int}`, with named parameters `type{_(:int, ?B:int):int}`, and `int->int` (see [Function values](#function-values)); type aliases `player_id := int`, `pair(t:type) := tuple(t, t)` (see [Type aliases](#type-aliases)); a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
+| Types | `int`, `logic`, `char`, `char32`, `any` (see [any](#any)), `rational` (see [rational](#rational)), `float` (see [float](#float)), refinement types `type{_X:int where 0 <= _X, _X <= 120}` (see [Refinement types](#refinement-types)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void` (which takes any value; `tuple()` is the type of the empty value alone, see [Equality and the empty value](#equality-and-the-empty-value)), function types `type{_(:int)<decides>:int}`, with named parameters `type{_(:int, ?B:int):int}`, and `int->int` (see [Function values](#function-values)); type aliases `player_id := int`, `pair(t:type) := tuple(t, t)` (see [Type aliases](#type-aliases)); a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
 | Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e` / `C := e` (`C := e` names a type when `e` is one: [Type aliases](#type-aliases)) (definitions on one line, at the top level or in a module, are separated by `;` or `,`: `X:int=0, Y:int=0`; a constant may use one defined after it, but not itself, directly or through other constants); locals `X := e`, `X:t = e`, `var X:t = e`, and a tuple destructured, `(X:int, _, Z:string) = e` (each named element a local of the block, `_` skipping one, `e` evaluated once); no shadowing; no name defined twice in a scope but [overloaded](#overloading) functions; no [reserved name](#reserved-names) | §3.1–3.4 |
 | Mutation | `set X = e`, `set X += e` (`-=`, `*=`), `set A[i] = e` (fails out of range; returns `e`), and paths `set S.F.G = e`, `set A[i][j] op= e`, `set M[k].F = e`: indices and keys evaluated once, left to right, then the new value (for `op=`, after the old one is read: `set X += e` is `set X = X + e`), then the variable rebuilt; an index out of range or a missing intermediate key fails, while the last key of a path inserts | §3.3, §3.5, §9.3 |
 | Blocks | indented (`:`), braced (`{ }`), inline (`then`/`do`), `.` and an expression on its line wherever `:` or `{…}` may start a body (`if (c). e else. f`, `for (X:Xs). e`, `spawn. F()`, `loop. break`; also `option`, `logic`, and `array` and `map`, whose `:` blocks separate their items by `,`, `;` or new lines: `array:` and the lines `1`, `2`; in braces an array's elements are separated by commas, or by `;` and new lines, not both: `array{1; 2; 3}`), `block:`, `( a; b )` sequences, also as an argument (`F(Log(); 42)` passes 42) and as a `case`'s value (`case(a; b)`); `;` separates the items of a block and may end a line or a braced block (`{1; 2;}` is `{1; 2}`) (the next item then follows the line rules, so a class's last field may end in `;`); a body after `:` may be empty wherever one may be written, as `{}` may (`class:`, `struct:`, `then:`, … whose next line is no deeper than the construct, or nothing follows); a function's or method's braced body may put its `{` on the next line, at the definition's column; a value after `=`, `:=`, `set … =` or a `case` arm's `=>` that starts a later line, deeper, is the indented block of those lines (`Value :=` and the lines `1`, `2`, `3` is `3`), as a function's body is | §2.2–2.4 |
-| Operators | `* + -`, unary `-`, comparisons `= <> < <= > >=` (failable, return the left operand, chains check every pair), `and`, `or`, `not` (below the comparisons, above `and`: `not X = Y` is `not (X = Y)`), `?`, `.Length`, `A[i]`, `T(k)` | ch. 4 |
+| Operators | `* + -`, unary `-`, comparisons `= <> < <= > >=` (failable, return the left operand, chains check every pair; `=` and `<>` of any two comparable types, by value: see [Equality and the empty value](#equality-and-the-empty-value)), `and`, `or`, `not` (below the comparisons, above `and`: `not X = Y` is `not (X = Y)`), `?`, `.Length`, `A[i]`, `T(k)` | ch. 4 |
 | Failure | failure contexts (`if` conditions, `for` clauses, `option{}`, `logic{}`, `not`, left of `or`, `<decides>` bodies) with rollback of `var` writes **and output**; an `if` condition, `logic{…}` and the operand of `not` must be able to fail (the Book's tests refuse `not` of one that cannot; the left of `or` may not, as in the Book's own `(set Map[I] = I) or Err()`) | ch. 8 |
 | Control | `if`/`else if`/`else` (all styles: the conditions in `(…)`, followed by a body or `then`; or as `{…}`, `:` and a block, or `.` and an expression, followed by `then` and a branch, or by nothing, which is the clause macro `if{c}` (see [Mutation, macros, tooling](#mutation-macros-tooling)): `if:`…`then:`, `if:`…`else:`, `if. c then. a else. b`; `for` likewise, with `do`), `for` with `X : array`, `I -> X : array`, `X := a..b`, filters, bindings, several generators (cartesian product), and with none, failable clauses that run the body at most once (clauses of literals only, `for(X := array{1, 2})`, are refused: `X : array{1, 2}` iterates), `loop`/`break`, `return` (in a function's body: not in a constant's value or a field's default, which no function encloses), `case` with literal patterns and `_` (an arm after `_`, or with an earlier arm's pattern, is never reached and refused, ch. 9) | ch. 7 |
 | Choice | `a \| b \| …` with several values in spatial order, in a clause of an `if` condition, `first{…}`, `option{…}`, `logic{…}`, `not` or `or` (the first success) or of a `for` (all of them), also inside expressions (`(1 \| 2) + (10 \| 20)`, `X = 1 \| 2`, `X > 0 and (1 \| 2)`, `M? or (1 \| 2)`); see [Choice](#choice) (#208) | (the Verse Calculus) |
@@ -1968,6 +1968,54 @@ Nothing can be done with an `any`: it has no equality (so it is no map
 key), no `ToString`, and no cast back. So in Verse Core it is `void`: a
 value becomes an `any` by being evaluated.
 
+## Equality and the empty value
+
+Verse has one empty value, written `false` or `()` (Book of Verse ch. 2,
+"void, true, tuple() and false"): it is the `logic` false, the value of
+`void` and `tuple()`, the empty option, and the empty array, string and
+map. `=` and `<>` compare values (ch. 4: "Comparisons between different
+types still compile, but they always fail"), so any two comparable types
+may be compared, and two values of different types are equal only when
+they are one value: the empty value, a tuple and the array of its
+elements (`('a', 'b') = "ab"`), an int and the rational it is, or
+containers and one struct's instances of such
+(`p(tuple(int, int)){X := (1, 2)} = p([]int){X := array{1, 2}}`):
+
+```verse
+Main():void =
+    A:[]int = array{}
+    O:?int = false
+    M:[string]int = map{}
+    if (A = false, false = A, O = "", () = M, A = O) then Print("one value")
+    if (not 0 = 0.0, not 0u41 = 65, not array{1} = "a") then Print("different types")
+```
+
+The front end decides it from the two types (`TyEnv.cmpPlan`, research
+note [empty-values.md](research/empty-values.md)): Verse Core's equality
+where it is Verse's; otherwise two types with nothing in common are never
+equal (Verse Core holds a `char32`, an enum and an `int` alike, so it would
+find `0u41 = 65`), and two with only the empty value in common are equal
+exactly when both are empty. An empty `array{}` or `map{}` compared with a
+value of another type is that type's empty value. Refused: two types with
+other values in common that Verse Core holds differently, as the empty
+value inside containers, tuples or structs (`option{false} = option{()}`,
+which the Book's equality holds), and comparisons in generic code of two
+type parameters, or of one and a type several types share in Verse Core.
+In generic code a type parameter is compared as Verse Core compares its
+instance, so `X = false` for an empty `X:t` at `t = []int` fails, where the
+Book's holds. Both wait on Verse Core relating the empty values
+([empty-values.md](research/empty-values.md), part 2, design B).
+
+`void` takes any value and makes it the empty value; `tuple()` is the type
+of the empty value alone: `false`, `()` and a `void` value convert to it,
+it converts to `void`, to an array and, as the Book's `true` does ("true is
+a subtype of logic"), to `logic` as `false`, and `X:tuple() = 1` is
+refused. `false` converts to an empty option or array but not to a map
+(the Book's tests refuse it, `Tests/Map.versetest` 343, though its prose
+allows it). As overloads, two types that both hold the empty value are not
+distinct (`logic`, options, arrays, strings, maps, `tuple()`); `void` is
+distinct from none; `tuple()` is distinct from `int`.
+
 ## Refinement types
 
 A refinement type is an int or a float that meets conditions (Book of Verse
@@ -2217,12 +2265,11 @@ A `char32` is a Unicode scalar value (`0u…` literals). It is an `int` in Verse
 proofs and the C runtime are unchanged. `=`, `<>`, `<`, `<=`, `>`, `>=` and
 `case` work on it, and it has no arithmetic. `ToString` and string
 interpolation encode it as UTF-8, its one to four bytes, by code that the
-elaborator generates (Core has no conversion from int to char). `=` and `<>`
-between values of different types that are the same in Core are an error
-(a `char32` or an enum and an `int`, two structs with the same fields, or
-containers of such), since they would compare equal there; so are those
-between two type parameters, or between one and a type with an `int` or a
-tuple, which an instance could make the same. A
+elaborator generates (Core has no conversion from int to char). A `char32`
+and an `int`, which Verse Core holds alike, are never equal, as values of
+different types ([Equality and the empty value](#equality-and-the-empty-value));
+`=` and `<>` between two type parameters, or between one and a type with an
+`int` or a tuple, which an instance could make the same, are refused. A
 non-ASCII character in quotes is a `char32` literal (`'😀'` is `0u1F600`,
 Book of Verse ch. 1, "Character Literals"); an ASCII one is a `char`.
 
@@ -2697,7 +2744,10 @@ Main()<suspends>:void =
 | A module's member `(M:)x` used bare in `M` beside an outer `x` | both are candidates, told apart by their parameters, else ambiguous (`ModuleDefinitions.versetest`, `vmodule` tests) | the inner one (only a qualified member may share an outer definition's name, [Shadowing](#shadowing)); in a class's code and for `(local:)`, where the tests refuse it, ambiguous |
 | `ToString` of a float | "the shortest" (an example: `98.5`) | the shortest decimal that reads back as the float, the closest of the shortest, in Python's `repr` layout (exponent at `≥ 1e16` and `< 1e-4`); `Inf`, `-Inf`, `NaN` |
 | `NaN < X` | not stated | fails (IEEE: NaN orders with nothing); `NaN = NaN` succeeds (the Book) |
-| `=` between different types | not stated | refused when two scalar types (int, float, char, …) meet at the same place, also inside containers (`array{1} = array{1.0}`), as Verse Core holds them differently |
+| `=` between different types | "Comparisons between different types still compile, but they always fail" (ch. 4); the empty value is one value of `logic`, `void`, `tuple()`, options, arrays, strings and maps (ch. 2) | the Book's (see [Equality and the empty value](#equality-and-the-empty-value)); refused where Verse Core holds a common value differently (the empty value inside containers, `option{false} = option{()}`) and between type parameters; a type parameter is compared as Verse Core compares its instance |
+| `false` where a map is expected | prose: accepted (ch. 2); tests: refused (`Map.versetest` 343) | refused, as the tests (it equals an empty map) |
+| `X?` of a logic | "equivalent to comparing against true" (ch. 4); the tests: `true?` is the empty value (`BoolQuery.versetest` 3, 4) | `true?` is `true`, not yet the tests' empty value ([empty-values.md](research/empty-values.md), 3.1) |
+| `true` as a type | the type of the empty value, as `tuple()` (ch. 2) | not a type name yet: openverse's `branch:` gives `void`, which `true` would take (`FORT-582630-BranchResult.versetest` refuses it) |
 | Ordering of rationals | not stated (§2 lists `<` … for `int` and `float`) | exact (by continued fractions, so it cannot overflow), and an int compares with a rational |
 | Order of a choice's values | (not in the Book; the Verse Calculus: spatial) | spatial: the leftmost choice varies slowest, as nested generators do (#208) |
 | Code before a choice | (the Verse Calculus is pure) | runs once, also within an expression (the operands before the choice are evaluated first, as written); each alternative runs the code after the choice, from where the choice was reached; in an `if` or `first{}`, one that leads to no success, and to no `return` or `break`, is rolled back (as backtracking does); in a `for`, the choice is a generator, so only an alternative whose own clauses fail is (#208) |

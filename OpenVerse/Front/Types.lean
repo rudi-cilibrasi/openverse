@@ -436,14 +436,37 @@ def TyEnv.slotImpls (env : TyEnv) (impl : String → Option String) (ups : List 
    | some e => [e]
    | none => best).filterMap impl
 
+/-- The empty value as Verse Core holds it at a type that has it. Verse has
+    one empty value, written `false` or `()` (Book of Verse ch. 2, "void,
+    true, tuple() and false"): it is the `logic` false, the `void` and
+    `tuple()` value, the empty option, and the empty array, string and map. -/
+def Ty.emptyValue? : Ty → Option Value
+  | .logic => some (.logic false)
+  | .void | .tup [] => some .void
+  | .opt _ => some .none
+  | .arr _ | .map _ _ => some Value.emptyArray
+  | _ => none
+
+/-- The types of the empty value alone: `tuple()`, and `void`, which takes any value and makes it that one (Book of Verse
+    ch. 2: "Any value converts to `void`"). -/
+def Ty.isUnit : Ty → Bool
+  | .void | .tup [] => true
+  | _ => false
+
 /-- Disjoint overload domains (Book ch. 6 and `IndistinctOverloads.versetest`).
-    Empty containers and unknown types remain overlapping. A nonempty tuple
+    Types that both have the empty value (`Ty.emptyValue?`: a logic, an
+    option, an array, a string, a map, `tuple()`) overlap; `void`, which
+    takes any value, and unknown types overlap every type. A nonempty tuple
     separates from an array if one element does, from a map if its key is
     disjoint from int, and from an option if its element is disjoint from int.
     Function types cannot separate from arrays or maps, regardless of their
     signatures; this is an admission rule, not a container/function coercion.
     Class/interface and numeric overlap rules are unchanged. -/
-private def TyEnv.disjointStep (env : TyEnv) (apart : Ty → Ty → Bool) : Ty → Ty → Bool
+private def TyEnv.disjointStep (env : TyEnv) (apart : Ty → Ty → Bool) (a b : Ty) : Bool :=
+  -- (two types that both have the empty value have that value in common:
+  -- `false` is an empty array, map, option, string, a logic and `()`)
+  if a.emptyValue?.isSome && b.emptyValue?.isSome then false else
+  match a, b with
   | .void, _ | _, .void | .param .., _ | _, .param .. | .never, _ | _, .never => false
   -- (every value is an any, #138)
   | .any, _ | _, .any => false
@@ -457,9 +480,6 @@ private def TyEnv.disjointStep (env : TyEnv) (apart : Ty → Ty → Bool) : Ty �
   -- (an int is also a rational, #116)
   | .int, .rational | .rational, .int => false
   | .tup as, .tup bs => as.length != bs.length || (as.zip bs).any fun (a, b) => apart a b
-  | .arr _, .arr _ | .arr _, .map .. | .map .., .arr _ | .map .., .map .. | .opt _, .opt _ => false
-  -- `false` is also an empty array, an empty option and a logic
-  | .opt _, .logic | .logic, .opt _ | .arr _, .opt _ | .opt _, .arr _ | .arr _, .logic | .logic, .arr _ => false
   | .tup ts, .arr t => ts.any (apart · t)
   | .arr t, .tup ts => ts.any (apart t ·)
   | .tup ts, .map k _ => !ts.isEmpty && apart .int k
