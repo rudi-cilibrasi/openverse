@@ -168,4 +168,80 @@ def upperBounds (env : TyEnv) (tops : List STop) : Except String TyEnv := do
           | .ok _ => pure ()
   return env
 
+/-- The interfaces referred to through views (`interfaceViews`). -/
+structure Views where
+  /-- The interfaces whose Verse Core type arguments at a class below them are
+      not a prefix of the class's, referred to through views (#351), and the
+      interfaces above them (`TyEnv.viewed`). -/
+  viewed : List String
+  /-- The classes whose hidden fields must hold all their type parameters for
+      that, which they do not yet: the next elaboration gives them those
+      (`Requests.witnesses`). -/
+  witnessNeeds : List String
+
+/-- Views (#351), a phase of `elabProgramCore`: a class implements one instance
+    of each interface above it (#53); an interface whose Verse Core type
+    arguments at a class below it are not a prefix of the class's is referred
+    to through views, and the classes below it, and those whose default
+    bridges or spawn adapters open type parameters (`requests.loops`), need
+    hidden fields for all of their type parameters. -/
+def interfaceViews (env : TyEnv) (cdefs : List CDef) (requests : Requests) : Except String Views := do
+  -- a class overrides a method only if its Verse Core type arguments are its
+  -- own distinct type parameters, as many as the declaring class's: code
+  -- generic over that class can then call its implementation (it could not
+  -- give it a type argument it fixes, nor one it adds)
+  let core (c : String) : List Ty :=
+    env.coreArgs c (((env.sparams.lookup c).getD []).map fun (v, k) => Ty.param v k)
+  -- a class below an interface has as its Verse Core type arguments first
+  -- those it gives the interface: references to the interface have those,
+  -- and dispatch and field reads through them recover the class's (#53);
+  -- its other type parameters come after, held by its objects in hidden
+  -- fields, and a dispatch from the interface opens them, as for a class
+  -- whose parent's type arguments do not give them (#209, #276)
+  let mut viewed : List String := []
+  let mut witnessNeeds : List String := []
+  for cd in cdefs do
+    if !cd.isIface then
+      -- (an interface reached through two parents at different type
+      -- arguments: the class would implement two instances of it, #53)
+      -- (compared as resolved types: equal ones may be written differently)
+      -- (each listing: `iargs` keeps one entry per listed parent, also one
+      -- listed twice)
+      let insts := env.iargs.flatMap fun ((c, q), tys) =>
+        if c == cd.name && (env.info q).isIface then env.ifaceInstances q tys else []
+      let sh (ts : List Ty) : String := ", ".intercalate (ts.map Ty.show)
+      for (i, ia) in insts do
+        if let some (_, ib) := insts.find? fun (j, jb) => j == i && jb != ia then
+          throw s!"{cd.pos.show}: {cd.name} implements {i} at two instances, {i}({sh ia}) and {i}({sh ib}), through the interfaces it lists: a class implements one instance of an interface (#53)"
+      let ps := ((env.sparams.lookup cd.name).getD []).map fun (v, k) => Ty.param v k
+      for i in (env.supers cd.name).filter (env.info · |>.isIface) do
+        let ia := env.upArgs cd.name ps i
+        -- (at the interface's Verse Core type arguments, which also hold
+        -- those it gives its own parents, `c2(t)`'s `[]t, t`)
+        if !((env.coreArgs i ia).isPrefixOf (core cd.name)) then
+          -- (#351) references to the interface go through views, each class
+          -- below with its own; its fields would be at other places in its
+          -- classes, which no view gives
+          -- (a dispatch through a view reads all of the class's type
+          -- arguments from its hidden fields, which a class without a class
+          -- parent has for all of them; one with one, which adds the
+          -- interface, has them for all only when asked, and the program is
+          -- elaborated again, `Requests.witnesses`)
+          if let some q := (env.info cd.name).parent then
+            if !env.isSub q i && !requests.witnesses.contains cd.name && !witnessNeeds.contains cd.name then
+              witnessNeeds := witnessNeeds ++ [cd.name]
+          viewed := viewed ++ [i]
+  for lift in requests.loops do
+    if defaultBridge lift.name || spawnAdapter lift.name then
+      let cls := (lift.name.splitOn ".").headD ""
+      let needed := lift.specs.filterMap fun flag =>
+        if flag.startsWith "$selfTp:" then some (flag.drop 8).toString else none
+      if needed.any (fun n => (env.witnessField? cls n).isNone) &&
+          !requests.witnesses.contains cls && !witnessNeeds.contains cls then
+        witnessNeeds := witnessNeeds ++ [cls]
+  -- (and the interfaces above them, which see their classes through a
+  -- prefix of what they do)
+  return { viewed := (viewed ++ viewed.flatMap fun i => (env.supers i).filter (env.info · |>.isIface)).eraseDups,
+           witnessNeeds }
+
 end OpenVerse.Front

@@ -109,64 +109,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let tops := methods.tops.filter (!isTypeDef ·)
   let mut env ← typeEnvironment classes fields methods source admitted.concurrencyNames opts.requests
   env ← upperBounds env methods.tops
-  -- a class overrides a method only if its Verse Core type arguments are its
-  -- own distinct type parameters, as many as the declaring class's: code
-  -- generic over that class can then call its implementation (it could not
-  -- give it a type argument it fixes, nor one it adds)
-  let core (c : String) : List Ty :=
-    env.coreArgs c (((env.sparams.lookup c).getD []).map fun (v, k) => Ty.param v k)
-  -- a class below an interface has as its Verse Core type arguments first
-  -- those it gives the interface: references to the interface have those,
-  -- and dispatch and field reads through them recover the class's (#53);
-  -- its other type parameters come after, held by its objects in hidden
-  -- fields, and a dispatch from the interface opens them, as for a class
-  -- whose parent's type arguments do not give them (#209, #276)
-  let mut viewed : List String := []
-  let mut witnessNeeds : List String := []
-  for cd in classes.defs do
-    if !cd.isIface then
-      -- (an interface reached through two parents at different type
-      -- arguments: the class would implement two instances of it, #53)
-      -- (compared as resolved types: equal ones may be written differently)
-      -- (each listing: `iargs` keeps one entry per listed parent, also one
-      -- listed twice)
-      let insts := env.iargs.flatMap fun ((c, q), tys) =>
-        if c == cd.name && (env.info q).isIface then env.ifaceInstances q tys else []
-      let sh (ts : List Ty) : String := ", ".intercalate (ts.map Ty.show)
-      for (i, ia) in insts do
-        if let some (_, ib) := insts.find? fun (j, jb) => j == i && jb != ia then
-          throw s!"{cd.pos.show}: {cd.name} implements {i} at two instances, {i}({sh ia}) and {i}({sh ib}), through the interfaces it lists: a class implements one instance of an interface (#53)"
-      let ps := ((env.sparams.lookup cd.name).getD []).map fun (v, k) => Ty.param v k
-      for i in (env.supers cd.name).filter (env.info · |>.isIface) do
-        let ia := env.upArgs cd.name ps i
-        -- (at the interface's Verse Core type arguments, which also hold
-        -- those it gives its own parents, `c2(t)`'s `[]t, t`)
-        if !((env.coreArgs i ia).isPrefixOf (core cd.name)) then
-          -- (#351) references to the interface go through views, each class
-          -- below with its own; its fields would be at other places in its
-          -- classes, which no view gives
-          -- (a dispatch through a view reads all of the class's type
-          -- arguments from its hidden fields, which a class without a class
-          -- parent has for all of them; one with one, which adds the
-          -- interface, has them for all only when asked, and the program is
-          -- elaborated again, `Requests.witnesses`)
-          if let some q := (env.info cd.name).parent then
-            if !env.isSub q i && !opts.requests.witnesses.contains cd.name && !witnessNeeds.contains cd.name then
-              witnessNeeds := witnessNeeds ++ [cd.name]
-          viewed := viewed ++ [i]
-  for lift in opts.requests.loops do
-    if defaultBridge lift.name || spawnAdapter lift.name then
-      let cls := (lift.name.splitOn ".").headD ""
-      let needed := lift.specs.filterMap fun flag =>
-        if flag.startsWith "$selfTp:" then some (flag.drop 8).toString else none
-      if needed.any (fun n => (env.witnessField? cls n).isNone) &&
-          !opts.requests.witnesses.contains cls && !witnessNeeds.contains cls then
-        witnessNeeds := witnessNeeds ++ [cls]
-  if !witnessNeeds.isEmpty then
-    return .asking { witnesses := witnessNeeds }
-  -- (and the interfaces above them, which see their classes through a
-  -- prefix of what they do)
-  env := { env with viewed := (viewed ++ viewed.flatMap fun i => (env.supers i).filter (env.info · |>.isIface)).eraseDups }
+  let views ← interfaceViews env classes.defs opts.requests
+  if !views.witnessNeeds.isEmpty then
+    return .asking { witnesses := views.witnessNeeds }
+  env := { env with viewed := views.viewed }
   for (mp, dm, qm) in methods.overridePairs do
     let d := (dm.splitOn ".").head!
     let q := (qm.splitOn ".").head!
