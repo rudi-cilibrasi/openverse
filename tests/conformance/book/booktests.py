@@ -422,7 +422,10 @@ TEST_NAMES = {
         "test_struct", "test_class_alias", "test_struct_alias", "test_var",
         "native_persistable_class1", "native_persistable_struct1", "native_persistable_enum1",
         "native_persistable_struct2", "external_persistable_class1",
-        "external_persistable_struct1", "external_persistable_enum1"],
+        "external_persistable_struct1", "external_persistable_enum1",
+        # extension methods of the test runner ("The method is defined in
+        # /Verse.org/Tests/VerseTestScriptCmd", ExtensionFields.versetest:157)
+        "TakeExtension", "PlusTwo", "TestParametricExtensionMethod"],
 }
 # Engine APIs the Book's Runtime API reference places outside the language:
 # persistence, JSON, Unreal objects and AutoRTFM. A case using one is not
