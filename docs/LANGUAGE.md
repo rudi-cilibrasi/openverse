@@ -1185,6 +1185,43 @@ Main():void =
   `X := Upto[1, 3] | 9`, `set X = Upto[1, 3] | 9`): their values come in
   order, alternative by alternative (#283).
 
+  When such alternatives' values are of different types
+  (`A := Dup(a{}) | Dup(b{})`, `Dup` a generic function with several
+  values), the clauses after the choice are compiled for each alternative
+  (#335: once, through operation dictionaries, where they can be, else
+  copied), and in them `A` has each alternative's own type: `A.M()` calls
+  `a`'s `M` in one and `b`'s in the other, and an overloaded function takes
+  each one's overload. So does what runs for each value: a `for`'s body, the
+  value of `first{…}` or `option{…}`. What runs once, after the first
+  success is taken (an `if`'s branches, the code after `first{…}`,
+  `option{…}`, `not` or the left of `or`), sees each name the clauses bind
+  at one type, the join of its types in the alternatives (#283): their
+  nearest common supertype, else `any` (classes with no common base, `int`
+  and `string`), as for an `if`'s branches, and inside an array, an option
+  or a tuple, element by element (`[]a` and `[]b` join as `[]any`, where an
+  `if`'s branches of those types join as `any`). A name of one type in
+  every alternative keeps it:
+
+  ```verse
+  a := class:
+      M()<transacts>:int = 1 | 2
+  b := class:
+      M()<transacts>:int = 30 | 40
+  Dup(V:t where t:type):t = V | V
+  Main()<transacts>:void =
+      if (A := (Dup(a{}) | Dup(b{})), X := A.M(), X > 2) then Print("{X}")   # 30: X an int, A an any
+  ```
+
+  Such an `any` can be passed to or kept where an `any` is taken, and
+  nothing else ([any](#any)): using it as its class (`A.M()`, `A.F`, an
+  argument of type `a`, a cast `a[A]`) is an error that names the choice;
+  do that in the clauses after the choice, or take the values in a `for`.
+  Classes with more than one nearest common supertype (two interfaces,
+  neither below the other) have no join, and such a condition is refused,
+  as such an `if`'s value is. A choice whose alternatives have no values
+  or clauses of their own (`a{} | b{}`) has the join of its values' types,
+  in the clauses after it too.
+
   Such a call is inlined: its arguments are evaluated first, in order, then
   its body runs in the caller's clauses, so the body's effects are rolled
   back or kept as the caller's are; the caller needs the callee's declared
@@ -1233,10 +1270,11 @@ Main():void =
   whose values are of different types (`for (A := (Dup(a{}) | Dup(b{})),
   X := A.M())`, #335): each alternative's call is in the family of its
   receiver's class, `a`'s or `b`'s, or of its `M` with one value. Where such
-  a choice's first success is taken (an `if` condition, `first{…}`), its
-  values need a type above them all, as what the condition binds has one
-  after it; values of unrelated classes are refused there (take them in a
-  `for`, or give the classes a common base class). An overloaded `M` (#106) is a method
+  a choice's first success is taken (an `if` condition, `first{…}`,
+  `option{…}`, `not`, the left of `or`), the same, and what the condition
+  binds has, after it, the join of its types in the alternatives, an `any`
+  for unrelated classes (#283, see the alternatives with values of their own
+  above). An overloaded `M` (#106) is a method
   for each of its parameter lists, each its own family: a call takes the
   list its arguments fit, as any call does, found as an overloaded
   function's call's overload is (the program elaborated once to find it,
@@ -1559,7 +1597,9 @@ compiler.
 `any` is the top type (Book of Verse ch. 11, #138): every value is an
 `any`, and `any(X)` makes one explicitly. Where no type is expected, two
 types with nothing in common join at `any`: `if (C?) then 42 else "text"`,
-`array{15.61, "Message", 3}` (a `[]any`). Classes with two common
+`array{15.61, "Message", 3}` (a `[]any`), and so does a name bound by the
+first success of the clauses after a choice whose values are of such
+types, after them ([Choice](#choice), #283). Classes with two common
 supertypes are still an ambiguity, and an expected type still decides
 (`X:int = if (C?) then 1 else "a"` is refused).
 
