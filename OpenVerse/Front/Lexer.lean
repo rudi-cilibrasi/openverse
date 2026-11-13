@@ -345,6 +345,9 @@ partial def lexAll (acc : Array Token) : LexM (Array Token) := do
           let m := (d ++ f).toNat!
           let e10 : Int := ex - f.length
           let x : Float := if e10 < 0 then Float.ofScientific m true e10.natAbs else Float.ofScientific m false e10.toNat
+          -- (one that rounds to infinity is out of range, as an int literal
+          -- past 64 bits is)
+          if x.isInf then errHere "this float literal is out of range: it rounds to infinity (the largest float is 1.7976931348623157e+308)"
           return (← lexAll (← emit (.float (VFloat.canon x))))
         lexAll (← emit (.int d.toNat!))
     else if c == '"' then
