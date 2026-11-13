@@ -21,8 +21,9 @@ and docs/LANGUAGE.md, not from the compiler:
 - the receiver runs once, when the value is made;
 - a failed <decides> call leaves no output and no change.
 
-Modes, by seed: 0 a function at a type, 1 through a function taking it and
-one returning it, 2 the function's own type (unannotated), 3 a bound method
+Modes, by seed: 0 a function at a type, 1 through a function taking it (a
+parameter written as a type or as a signature, `G(:log, ?A:int = 0):string`)
+and one returning it, 2 the function's own type (unannotated), 3 a bound method
 (live field, maybe an override), 4 <decides> calls that may fail, 5 a
 refusal (a type or a call the rules exclude).
 """
@@ -114,10 +115,17 @@ def result(env, prefix=''):
     return prefix + ' '.join([str(env[f'P{j}']) for j in range(npos)] + [f'{x}={env[x]}' for x in names])
 
 
+def sig_text(tnamed):
+    """tnamed: [(name, optional)] in the type's written order. A type's
+    default is not part of it: each writing picks its own, a literal or a
+    top-level constant, both of the parameter's type."""
+    ps = [':log'] + [':int'] * npos + \
+        [f'?{x}:int' + (rng.choice([' = 0', ' = Base', f' = {rng.randrange(9)}']) if o else '') for x, o in tnamed]
+    return '(' + ', '.join(ps) + ')' + effects + ':string'
+
+
 def type_text(tnamed):
-    """tnamed: [(name, optional)] in the type's written order."""
-    ps = [':log'] + [':int'] * npos + [f'?{x}:int' + (' = 0' if o else '') for x, o in tnamed]
-    return 'type{_(' + ', '.join(ps) + ')' + effects + ':string}'
+    return 'type{_' + sig_text(tnamed) + '}'
 
 
 def type_shown(tnamed):
@@ -274,7 +282,9 @@ else:
             text, pred = call(t, params)
             calls.append(f'    Print(G({text}))')
             lines.extend(pred)
-        prog.append(f'Apply(L:log, G:{type_text(t)}):void =\n' + '\n'.join(calls))
+        # (the parameter written as a type, or as a signature)
+        param = f'G:{type_text(t)}' if rng.random() < 0.5 else f'G{sig_text(t)}'
+        prog.append(f'Apply(L:log, {param}):void =\n' + '\n'.join(calls))
         main.append('    Apply(L, Fn)')
         main.append('    F := Make()')
         emit_call('F', t, params)
