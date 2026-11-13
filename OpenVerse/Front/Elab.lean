@@ -16,6 +16,7 @@
   * The result is checked with `Prog.check` (proved to imply the hypotheses of
     the core theorems) before anyone runs it.
 -/
+import OpenVerse.Front.Elab.Source
 import OpenVerse.Front.Elab.Signatures
 import OpenVerse.Front.SignalAdmission
 import OpenVerse.Front.InitializerConvergence
@@ -263,28 +264,13 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     (FnValues.desugar (resolved.take (resolved.length - rawEntry.length) ++ helpers)
       (resolved.drop (resolved.length - rawEntry.length)) (opts.requests.fns.map fun (n, t) => (n, t.toSTy)) opts.requests.methods))
   let entryTop := resolved.drop (resolved.length - rawEntry.length)
-  -- the command line: `Args`, and an entry expression
-  let defines (n : String) := allTops00.any fun
-    | .fn _ m .. | .const _ m .. | .classDef _ m .. => m == n
-  let argsTop : List STop :=
-    match opts.args with
-    | some as =>
-      if defines "Args" then []
-      else [.const { line := 0, col := 0 } "Args" (some (.arr (.name "string")))
-              (.arrayLit { line := 0, col := 0 } (as.map fun a => .str { line := 0, col := 0 } [.text a]))]
-    | none => []
-  -- overloaded methods (#106): a method name declared with two or more
-  -- parameter lists is renamed, in every class and interface, by its list
-  -- (`M$ovN`, `MethodOverloads`): an override has its method's list, so its
-  -- name too
-  let mo := MethodOverloads.of (allTops00 ++ argsTop ++ entryTop)
-  let allTops0 ← mo.apply (allTops00 ++ argsTop ++ entryTop)
+  let defs ← argsAndMethodOverloads allTops00 entryTop opts.args
   -- classes and interfaces (#14, #18): each is a struct whose fields are
   -- those inherited first, then its own; each method `M` of `c` a function
   -- `c.M` whose first parameter is `Self`, generic over the class's type
   -- parameters and then its own; an abstract method one whose body is
   -- unreachable
-  let cdefs : List CDef := allTops0.filterMap fun
+  let cdefs : List CDef := defs.tops.filterMap fun
     | .classDef p n tps specs parents isIface fields overrides methods =>
       let names := parents.map fun | .name q => q | .app q _ => q | _ => "?"
       let args := parents.map fun | .app _ as => as | _ => []
@@ -315,7 +301,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let mut ifaces : Array String := #[]
     for (q, qargs) in cd.parents.zip cd.parentArgs do
       let some qd := cdef? q
-        | if allTops0.any (fun | .const _ n' none (.structDef ..) => n' == q | _ => false) then
+        | if defs.tops.any (fun | .const _ n' none (.structDef ..) => n' == q | _ => false) then
             throw s!"{p.show}: {q} is a struct: only classes and interfaces can be inherited from"
           else throw s!"{p.show}: unknown class or interface '{q}'"
       if qargs.length != qd.tps.length then
@@ -539,17 +525,17 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       | some e => some (p, k, ps, tps, effs.filter (· != e), (e.drop "$constructor:".length).toString, items)
       | none => none
     | _ => none
-  let ctors := allTops0.filterMap ctorOf
-  for t in allTops0 do
+  let ctors := defs.tops.filterMap ctorOf
+  for t in defs.tops do
     match t with
     | .classDef .. => pure ()
     | t => if (ctorOf t).isNone then expanded := expanded.push t
-  let ctorTargs : List (String × List STy) := allTops0.filterMap fun
+  let ctorTargs : List (String × List STy) := defs.tops.filterMap fun
     | t@(.fn _ k _ _ _ (.app _ ts) _) => if (ctorOf t).isSome then some (k, ts) else none
     | _ => none
   expanded := expanded ++
     (← expandCtors ctors cdef? fullOf (fun c => henv.supers c) (fun k => (ctorTargs.lookup k).getD [])
-      (allTops0.filterMap fun t => match t, ctorOf t with
+      (defs.tops.filterMap fun t => match t, ctorOf t with
         | .fn _ k _ _ _ (.app _ ts) _, some _ => some (k, ts)
         | .fn _ k _ _ _ _ _, some _ => some (k, [])
         | _, _ => none)).toArray
@@ -1047,9 +1033,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let tops := renamed.toList
   env := { env with overloads := ovMap,
                     methodOverloads :=
-                      let bases := (mo.lists.map (·.1.2)).eraseDups
+                      let bases := (defs.methodOverloads.lists.map (·.1.2)).eraseDups
                       bases.map fun mn =>
-                        let n := (mo.lists.filter (·.1.2 == mn)).foldl (fun acc (_, sigs) => max acc sigs.length) 0
+                        let n := (defs.methodOverloads.lists.filter (·.1.2 == mn)).foldl (fun acc (_, sigs) => max acc sigs.length) 0
                         (mn, (List.range n).map fun k => s!"{mn}$ov{k}") }
   -- generic functions (those with a `where` clause) are numbered after the
   -- other functions and constants
