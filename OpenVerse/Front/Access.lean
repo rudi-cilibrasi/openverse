@@ -388,3 +388,118 @@ def checkUses (env : Env) (tops : List STop) : Except String Unit := do
 
 
 end OpenVerse.Front.Access
+
+namespace OpenVerse.Front.Access
+
+/-- The type definitions of a program, by qualified name: its classes,
+    interfaces, structs, enums, refinement types and type aliases. -/
+def typeDefs (tops : List STop) : Std.HashSet String :=
+  let named : Std.HashSet String := tops.foldl (fun s t => match t with
+    | .classDef _ n .. => s.insert n
+    | .const _ n _ none (.structDef ..) | .const _ n _ none (.enumDef ..)
+    | .const _ n _ none (.refineDef ..) | .const _ n _ none (.typeAlias ..) => s.insert n
+    | _ => s) {}
+  -- (an alias `a := c`, written as a value could be: the aliases' pass decides)
+  tops.foldl (fun s t => match t with
+    | .const _ n _ none e => match e.asType? with
+      | some ty => if ty.names.any named.contains then s.insert n else s
+      | none => s
+    | _ => s) named
+
+/-- A definition `what` whose effective audience is `e`, at `p`, names the
+    types `tys`: each of the program's (`defs`) is at least as visible
+    (Book of Verse tests, DigestVisibility: "dependencies of definitions are
+    as accessible as the definitions themselves", 3593; ch. 11: "A type alias
+    cannot be more public than the type it aliases"). -/
+def checkExposes (lv : Levels) (defs : Std.HashSet String) (below : String → String → Bool)
+    (p : Pos) (what : String) (e : Eff) (tys : List STy) (bound : List String := []) : Except String Unit := do
+  for t in tys do
+    for n in t.names do
+      if bound.contains n || !defs.contains n then continue
+      let et := lv.definition n
+      if !e.inside below moduleOfName et then
+        let a := (et.find? fun b => !e.any (·.inside below moduleOfName b)).getD .everyone
+        throw s!"{p.show}: {what} names {shown n}, which is less visible: {shown n} is {a.what}, and a definition exposes nothing less visible than itself (Book of Verse tests, DigestVisibility, TypeAlias)"
+
+/-- The aliases of a resolved program, before they are written out: each
+    `a<access> := t` is no more visible than what `t` names (Book of Verse
+    ch. 11). -/
+def checkAliases (lv : Levels) (tops : List STop) : Except String Unit := do
+  let defs := typeDefs tops
+  let below := fun (_ _ : String) => false
+  for t in tops do
+    if let .const p n _ none body := t then
+      if !defs.contains n then continue
+      let (tps, ty?) : List String × Option STy := match body with
+        | .typeAlias _ tps ty => (tps.map (·.name), some ty)
+        | .structDef .. | .enumDef .. | .refineDef .. => ([], none)
+        | e => ([], e.asType?)
+      if let some ty := ty? then
+        checkExposes lv defs below p s!"the type alias {shown n}" (lv.definition n) [ty] tps
+
+/-- The consistency rules of a resolved program, its aliases written out:
+    a definition's signature names nothing less visible than the definition
+    (a function's or method's parameters, result and type parameters'
+    bounds, a constant's or field's type, a struct's fields; an override is
+    judged in its own class, AccessLevelInheritance.versetest:863), a
+    class's or interface's field with no default is at least as visible as
+    its constructor, which must give it a value (Classes/AccessSpecifiers
+    410-433), and a field's var is at least as restrictive as reading it
+    (ch. 12, "The write specifier must be at least as restrictive as the read
+    specifier"). -/
+def checkConsistency (lv : Levels) (tops : List STop) : Except String Unit := do
+  let defs := typeDefs tops
+  let above := hierarchy tops
+  let below (c d : String) : Bool := (above c).contains d
+  let hidden (n : String) : Bool :=
+    let last := (n.splitOn "::").getLastD n
+    last.startsWith "$" && !last.startsWith extensionPrefix
+  -- (each member's level: written, or, for an override, that of what it overrides)
+  let declared : Std.HashMap String (Option String) := tops.foldl (fun m t => match t with
+    | .classDef _ c _ _ _ _ _ fs ms =>
+      let m := fs.foldl (fun m f => if f.isOverride then m else m.insert s!"{c}.{bareName f.name}" (levelOf f.specs)) m
+      ms.foldl (fun m x => match x with
+        | .fn _ mn _ _ sp .. => if sp.contains "override" then m else m.insert s!"{c}.{bareName mn}" (levelOf sp)
+        | _ => m) m
+    | _ => m) {}
+  let levelIn (c x : String) (written : Option String) (isOverride : Bool) : Option String :=
+    if !isOverride then written
+    else ((above c).drop 1).findSome? (fun d => declared[s!"{d}.{bareName x}"]?) |>.getD none
+  for t in tops do
+    match t with
+    | .fn p n ps tps specs ret _ =>
+      if hidden n then continue
+      checkExposes lv defs below p s!"{shown n}" (lv.definition n)
+        (ret :: ps.map (·.ty) ++ tps.filterMap (·.upperBound)) (tps.map (·.name))
+    | .const p n _ (some ty) _ =>
+      if hidden n then continue
+      checkExposes lv defs below p s!"{shown n}" (lv.definition n) [ty]
+    | .const p n _ none (.structDef _ tps _ fs) =>
+      checkExposes lv defs below p s!"the struct {shown n}" (lv.definition n) (fs.map (·.ty)) (tps.map (·.name))
+    | .classDef p c _ tps specs _ _ fs ms =>
+      if hidden c then continue
+      let m := moduleOfName c
+      let ce := lv.definition c
+      let ctor := ctorEff specs m c ++ ce
+      let memberEff (lvl : Option String) : Eff :=
+        audience lvl m (some c) :: (if lvl == some "protected" then ctor else ce)
+      let cps := tps.map (·.name)
+      for f in fs do
+        let lvl := levelIn c f.name (levelOf f.specs) f.isOverride
+        checkExposes lv defs below p s!"the field {bareName f.name} of {shown c}" (memberEff lvl) [f.ty] cps
+        if f.default.isNone && !f.isOverride && !(ctor.inside below moduleOfName (memberEff lvl)) then
+          let a := (memberEff lvl).headD .everyone
+          throw s!"{p.show}: the field {bareName f.name} of {shown c} has no default, so a construction gives it one, but it is {a.what} where {shown c}'s constructor is wider: give it a default, or an access at least as visible as the constructor (Book of Verse tests, Classes/AccessSpecifiers)"
+        if let some w := levelOf f.varSpecs then
+          let r := audience (levelOf f.specs) m (some c)
+          if !(audience (some w) m (some c)).inside below moduleOfName r then
+            throw s!"{p.show}: var<{w}> {bareName f.name}: setting it is more visible than reading it, {r.what}; the write access is at least as restrictive as the read access (Book of Verse ch. 12)"
+      for x in ms do
+        if let .fn mp mn mps mtps mspecs mret _ := x then
+          if mn.startsWith "$" then continue
+          let lvl := levelIn c mn (levelOf mspecs) (mspecs.contains "override")
+          checkExposes lv defs below mp s!"the method {bareName mn} of {shown c}" (memberEff lvl)
+            (mret :: mps.map (·.ty) ++ mtps.filterMap (·.upperBound)) (cps ++ mtps.map (·.name))
+    | _ => pure ()
+
+end OpenVerse.Front.Access

@@ -359,14 +359,21 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
     | some e => [.fn e.pos "$Do" [] [] ["decides"] (.name "void") (.app e.pos (.ident e.pos "$Show") [e] false)]
     | none => []
   let resolved ← resolveModules (allTops000 ++ rawEntry)
+  -- (access, Book of Verse ch. 12: the levels written on the definitions and
+  -- modules; a type alias is no more visible than what it names)
+  let levels := Access.Levels.of allTops0r
+  Access.checkAliases levels resolved
   -- type aliases: each written out where it is used, so that nothing after
   -- this knows aliases exist
   let resolved ← Aliases.expand resolved
-  -- access (Book of Verse ch. 12): the constructions, parents and overrides
-  -- of the program as written, and what the elaboration needs to judge the
-  -- members it reaches through values (`Access`)
-  let access := Access.Env.of (Access.Levels.of allTops0r) (Access.Sites.of resolved) resolved
+  -- access: each definition exposes nothing less visible than itself; the
+  -- constructions, parents and overrides of the program as written; and
+  -- what the elaboration needs to judge the members it reaches through
+  -- values (`Access`)
+  Access.checkConsistency levels resolved
+  let access := Access.Env.of levels (Access.Sites.of resolved) resolved
   Access.checkUses access resolved
+
   -- (the built-ins it names as values, as definitions of their own: after
   -- the aliases, whose names are no values' and bind nothing)
   let resolved := BuiltinValues.wrappers resolved ++ resolved

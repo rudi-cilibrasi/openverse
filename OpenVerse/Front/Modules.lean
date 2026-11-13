@@ -38,7 +38,7 @@
   rule's way out, Book ch. 16, "Local Qualifiers"); a bare use of that name
   is then ambiguous.
 -/
-import OpenVerse.Front.Syntax
+import OpenVerse.Front.Access
 import Std.Data.HashSet
 
 namespace OpenVerse.Front
@@ -357,19 +357,13 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
     | _ => false
   if modules.isEmpty && (markers "$open:").isEmpty && (markers qualifierMarker).isEmpty && !hasExt then
     return real
-  -- (the definitions and modules written `<public>`, each where it is)
-  let publicDefs : List (Pos × String) := tops.filterMap fun
-    | .fn p n _ _ specs .. | .const p n specs .. | .classDef p n specs .. =>
-      if !specs.contains "public" then none
-      else if n.startsWith "$module:" then some (p, (n.drop "$module:".length).toString)
-      else if isMarker n then none
-      else some (p, n)
-  let publics := publicDefs.map (·.2)
+  -- (the access levels written on the definitions and modules, Book of
+  -- Verse ch. 12: `Access`)
+  let levels := Access.Levels.of tops
   let defs : List String := real.map fun
     | .fn _ n .. | .const _ n .. | .classDef _ n .. => n
   let defsS : Std.HashSet String := Std.HashSet.ofList defs
   let modsS : Std.HashSet String := Std.HashSet.ofList modules
-  let pubS : Std.HashSet String := Std.HashSet.ofList publics
   let shown (n : String) : String := ".".intercalate (qualParts n)
   let shownP (ps : List String) : String := ".".intercalate ps
   let mut seenM : Std.HashSet String := {}
@@ -377,11 +371,24 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
     if defsS.contains m then throw s!"{p.show}: {shown m} is defined twice (a module and a definition)"
     if seenM.contains m then throw s!"{p.show}: module {shown m} is defined twice"
     seenM := seenM.insert m
-  -- (one name's overloads share their visibility)
-  for (p, n) in publicDefs do
-    if n.contains ':' && (defs.filter (· == n)).length != (publics.filter (· == n)).length && defsS.contains n then
-      throw s!"{p.show}: the overloads of {shown n} must all be <public> or all internal"
+  -- (one name's overloads share their access)
+  let fnLevels : Std.HashMap String (List (Option String)) := real.foldl (fun m t => match t with
+    | .fn _ n _ _ specs .. => m.insert n (Access.levelOf specs :: m.getD n [])
+    | _ => m) {}
+  for t in real do
+    if let .fn p n _ _ specs .. := t then
+      let ls := fnLevels.getD n []
+      if n.contains ':' && ls.any (· != Access.levelOf specs) then
+        if Access.levelOf specs == some "public" then
+          throw s!"{p.show}: the overloads of {shown n} must all be <public> or all internal"
+        if !ls.contains (some "public") then
+          throw s!"{p.show}: the overloads of {shown n} must all have one access level"
+
   let inside (sc m : List String) : Bool := m.length ≤ sc.length && sc.take m.length == m
+  -- whether code in module `sc` may name the definition or module `lvl`
+  -- (whose own module is `lvl.dropLast`): its access level admits it
+  let admitsAt (sc lvl : List String) : Bool :=
+    (Access.audience levels[qualJoin lvl]? lvl.dropLast).admits (fun _ _ => false) { module := sc }
   -- the definition or module a name gives from scope `sc`, the innermost
   -- (`true`: a module)
   let lookup (sc : List String) (n : String) : Option (Bool × List String) := Id.run do
@@ -396,8 +403,10 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
     for k in [start + 1 : path.length + 1] do
       let lvl := path.take k
       let owner := lvl.dropLast
-      if !inside sc owner && !pubS.contains (qualJoin lvl) then
-        throw s!"{p.show}: {shownP lvl} is internal to {shownP owner}: mark it <public> to use it outside"
+      if !admitsAt sc lvl then
+        match Access.audience levels[qualJoin lvl]? owner with
+        | .within _ => throw s!"{p.show}: {shownP lvl} is internal to {shownP owner}: mark it <public> to use it outside"
+        | a => throw s!"{p.show}: {shownP lvl} is {a.what}, and this code is not (Book of Verse ch. 12)"
   -- the modules opened, each with the scope it is open in
   let mut opens : List (List String × List String) := []
   for (p, s) in markers "$open:" do
@@ -421,7 +430,7 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
       -- opened before, in scope)
       let viaOpen : Option (List String) := opens.findSome? fun (osc, m) =>
         if inside sc osc && modsS.contains (qualJoin (m ++ [head])) &&
-            (pubS.contains (qualJoin (m ++ [head])) || inside sc m) then some (m ++ [head]) else none
+            admitsAt sc (m ++ [head]) then some (m ++ [head]) else none
       let base ← match lookup sc head, viaOpen with
         | some (true, b), _ => pure b
         | none, some b => pure b
@@ -444,7 +453,8 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
       let here : List (Bool × List String) := ((opens.filter (·.1 == pre)).filterMap fun (_, m) =>
         let c := m ++ [n]
         let q := qualJoin c
-        if !(pubS.contains q || inside sc m) then none
+        if !admitsAt sc c then none
+
         else if defsS.contains q then some (false, c)
         else if modsS.contains q then some (true, c)
         else none).eraseDups
