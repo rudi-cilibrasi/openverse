@@ -175,11 +175,12 @@ partial def elabExprControlWith
     -- likewise for the families of methods' uses, #283: `failabilityKnown`)
     if !(rc.e.mayFail ctx.sigProg) && (← ctx.failabilityKnown) then
       eerr p "the condition of this if cannot fail (Verse requires a failable condition)"
+    let cond ← inferable rc
     let thenCtx := { ctxT with canFail := ctx.canFail, inTaking := ctx.inTaking }
     match elseE with
     | none =>
       let rt ← elabE thenCtx thenE (some .void)
-      return ⟨.ite rc.e (← coerce p rt .void) (.lit .void), .void⟩
+      return ⟨.ite cond (← coerce p rt .void) (.lit .void), .void⟩
     | some ee =>
       -- (#366) a then branch that needs the else branch's type (`array{}`
       -- first): the else on its own first, then the then against it; when
@@ -195,7 +196,7 @@ partial def elabExprControlWith
               let re ← elabE c2 ee none
               let rt ← elabE { thenCtx with retries := ctx.retries + 1 } thenE (some re.ty)
               let ty ← join p rt.ty re.ty none
-              pure (some ⟨Expr.ite rc.e (← coerce p rt ty) (← coerce p re ty), ty⟩)) fun _ => pure none
+              pure (some ⟨Expr.ite cond (← coerce p rt ty) (← coerce p re ty), ty⟩)) fun _ => pure none
           match alt? with
           | some r => return r
           | none => throw err
@@ -229,10 +230,10 @@ partial def elabExprControlWith
         | some (rt', re') =>
           if let some ty' := joinTy (← get).env rt'.ty re'.ty none then
             if ty' != .any then
-              return ⟨.ite rc.e (← coerce p rt' ty') (← coerce p re' ty'), ty'⟩
+              return ⟨.ite cond (← coerce p rt' ty') (← coerce p re' ty'), ty'⟩
           set stAfter
         | none => set stAfter
-      return ⟨.ite rc.e (← coerce p rt ty) (← coerce p re ty), ty⟩
+      return ⟨.ite cond (← coerce p rt ty) (← coerce p re ty), ty⟩
   | .forE p clauses body => do
     -- (#243, #351) a clause that casts as only a failure context's clause
     -- may: as written, else with the rest of its clauses as one block
@@ -341,7 +342,7 @@ partial def elabExprControlWith
       inChoice := false, forBreakSlot := none, forBreakCapture := none,
       refineExits := { ctx.refineExits with brk := none } }
     let r ← elabE lctx body none
-    return ⟨.loop r.e, .void⟩
+    return ⟨.loop (← inferable r), .void⟩
   | .brk p =>
     if ctx.inChoice then
       eerr p "internal: a break in first-success clauses that do not forward one (#283)"

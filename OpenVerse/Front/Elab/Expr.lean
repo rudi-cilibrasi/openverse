@@ -473,8 +473,9 @@ partial def elabSeqIn (closed : Bool) (ctx : Ctx) (ss : List SExpr) (exp : Optio
           throw err
         | none => throw err
     if rest.isEmpty then return (r, ctx')
+    let e ← inferable r
     let (r2, ctx'') ← elabSeqIn closed ctx' rest exp
-    return (⟨.seq r.e r2.e, r2.ty⟩, ctx'')
+    return (⟨.seq e r2.e, r2.ty⟩, ctx'')
 
 partial def elabArgs (ctx : Ctx) (p : Pos) (args : List SExpr) (tys : List Ty) : EM (List Expr) := do
   if args.length != tys.length then
@@ -880,7 +881,7 @@ partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bra
   | .arr t, [i], true =>
     let ri := widenR ctx.types (← elabE ctx i (some .int))
     if ri.ty != .int then eerr p s!"an array index must be an int, found {ri.ty.show}"
-    return ⟨p2 .index r.e ri.e, t⟩
+    return ⟨p2 .index (← inferable r) ri.e, t⟩
   | .map kt vt, [k], true =>
     let tm ← fresh r.ty
     let rk ← elabE ctx k (some kt)
@@ -889,7 +890,7 @@ partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bra
     return ⟨.seq (.assign tm r.e) (.seq (.assign tk (← coerce p rk kt)) (mapLookup tm tk tp)), vt⟩
   | .tup ts, [.int _ k], false =>
     if k < 0 || k.toNat ≥ ts.length then eerr p s!"tuple index {k} out of range"
-    return ⟨.prim (.tupGet k.toNat) [r.e], ts[k.toNat]!⟩
+    return ⟨.prim (.tupGet k.toNat) [← inferable r], ts[k.toNat]!⟩
   | t, _, _ => eerr p s!"cannot call or index a value of type {t.show}"
 
 /-- Two types with an int in one where the other has a rational, at the
@@ -1949,8 +1950,7 @@ partial def elabDefaultDispatch (ctx : Ctx) (p : Pos) (fname : String)
 partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option Ty := none) : EM R := do
   ctx.noteFamily p r.ty m
   match r.ty, m with
-  | .arr _, "Length" => return ⟨.prim .len [r.e], .int⟩
-  | .map _ _, "Length" => return ⟨.prim .len [r.e], .int⟩
+  | .arr _, "Length" | .map _ _, "Length" => return ⟨.prim .len [← inferable r], .int⟩
   | .struct sn targs, f =>
     match fieldIndex (ctx.types.fields sn targs) f with
     | some (k, t) =>

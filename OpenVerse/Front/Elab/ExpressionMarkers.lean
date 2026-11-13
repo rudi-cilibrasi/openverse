@@ -83,7 +83,7 @@ partial def elabExprMarkersWith
   | .app p (.ident _ "$forStageFlatten") [value] false => do
     let r ← elabE ctx value none
     match r.ty with
-    | .arr (.arr t) => return ⟨.prim .flatten [r.e], .arr t⟩
+    | .arr (.arr t) => return ⟨.prim .flatten [← inferable r], .arr t⟩
     | .opt (.arr (.arr t)) =>
       let result ← fresh r.ty
       let slot ← fresh (.arr (.arr t))
