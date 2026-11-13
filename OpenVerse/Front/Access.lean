@@ -101,7 +101,7 @@ def Audience.admits (below : String → String → Bool) (s : Site) : Audience �
 
 def Eff.admits (below : String → String → Bool) (s : Site) (e : Eff) : Bool := e.all (·.admits below s)
 
-/-- The first audience of `e` that does not admit code at `s`. -/
+/-- The first audience of `e` that does not allow code at `s`. -/
 def Eff.denial (below : String → String → Bool) (s : Site) (e : Eff) : Option Audience :=
   e.find? (!·.admits below s)
 
@@ -292,7 +292,7 @@ def Env.member? (env : Env) (supers : List String) (m : String) : Option Member 
   let ds := supers.filterMap fun c => env.members[s!"{c}.{sourceName (bareName m)}"]?
   (ds.find? (!·.isOverride)).orElse fun _ => ds.head?
 
-/-- Why code may not use `what`, which audience `a` does not admit it to. -/
+/-- Why code may not use `what`, which audience `a` does not allow it to. -/
 def Audience.refusal (what : String) : Audience → String
   | .within m => s!"{what} is internal to {shownModule m}: mark it <public> to use it outside (Book of Verse ch. 12)"
   | .scoped m gs => s!"{what} is scoped to {", ".intercalate ((m :: gs).eraseDups.map shownModule)}: only code there may use it (Book of Verse ch. 12)"
@@ -357,9 +357,9 @@ partial def constructions : SExpr → List (Pos × String × List (Pos × String
 /-- The uses of a resolved program that name a class's constructor or members
     without a value's type: each construction `c{F := e, …}` and constructor
     function `F<constructor>(…) := c:` needs `c`'s constructor and each field
-    it gives to admit it (Book of Verse tests, ArchetypeAccessSpecifiers;
+    it gives to allow it (Book of Verse tests, ArchetypeAccessSpecifiers;
     ch. 12 example 15: a field given is read); a class's parents' constructors
-    admit it (`class<internal>` "forces folks outside the owning module to
+    allow it (`class<internal>` "forces folks outside the owning module to
     use a constructor function", and subclassing does not get around it); and
     an override overrides a member its class may use (Book of Verse tests,
     AccessLevelInheritance: 3593). -/

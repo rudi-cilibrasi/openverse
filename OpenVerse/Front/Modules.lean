@@ -394,7 +394,7 @@ def resolveSpecifiers (tops : List STop) : Except String (List STop) := do
     let own ← specs.mapM fun sp => if sp.startsWith "scoped{" then canonical (scopeOf n) p sp else pure sp
     levels := levels.insert n (Access.scopedLevel (← refs.mapM (moduleAt (scopeOf n) p)), Access.levelOf own)
   -- the access level `r` (`S`, `M.S`) names from scope `sc`: from `sc`
-  -- outward, then among those of the modules opened there that admit `sc`
+  -- outward, then among those of the modules opened there that allow `sc`
   let opens : List (List String × String) := tops.filterMap fun
     | .const _ n .. =>
       if !n.startsWith "$open:" then none else
