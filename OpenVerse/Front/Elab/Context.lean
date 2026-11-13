@@ -261,6 +261,18 @@ structure ConstructHint where
   aliases : List (String × Ty)
   ty : Ty
 
+/-- What a trial elaborates (#243, #335, #453): code whose elaboration is
+    discarded, as the next elaboration compiles it in a function of its own
+    made from what this one asks for. -/
+inductive Trial where
+  /-- A refining cast's branch, compiled in the function made from it,
+      which keeps the branch's continuation scope (`Ctx.refineScope`). -/
+  | branch
+  /-- The clauses after a composed choice (and a `for`'s body), compiled in
+      their continuation, which has a continuation scope of its own. -/
+  | continuation
+  deriving BEq, Repr, Inhabited
+
 structure Ctx where
   /-- How many retries without an expected type enclose this point: a later
       branch is elaborated against the first's type, else on its own (to
@@ -333,11 +345,12 @@ structure Ctx where
   /-- A moved continuation's casts have fresh capture/storage metadata,
       independently of the class-copy tag and continuation sharing keys. -/
   refineScope : String := ""
-  /-- In the branch of a refining cast elaborated for its type and effects
-      only (#243): the next elaboration calls the function made from it
-      instead, where the casts inside it are elaborated again, and the lifts
-      whose tags depend on the context (`refineTagOf`) are asked for. -/
-  inRefinedTrial : Bool := false
+  /-- The trial this code is elaborated in, if any. A request made in a
+      trial is kept only where the function the code is compiled in makes
+      the same one (`Ctx.keepsLifts`); that function makes the others in the
+      next elaboration. Inside a continuation's trial, every trial is the
+      continuation's (`Ctx.withTrial`), as all of its code moves with it. -/
+  trial : Option Trial := none
   /-- In a method `c.M` (or `c.(r:)M`): `M` (or `(r:)M`), for `(super:)`. -/
   selfMethod : Option String := none
   /-- In a constructor's items (the function `K$init`, #72): no `return`. -/
