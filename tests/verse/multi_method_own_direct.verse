@@ -13,7 +13,7 @@ solo(t:type) := class:
 All(B:solo(a),X:b,Y:b where a:type,b:type):[]tuple(a,b) =
     for(V:=B.Both(X,?Y:=Y)): V
 First(B:solo(a),X:b,W:w where a:type,b:type,w:type):?tuple(a,b,int) =
-    option{V:=B.Repeat[X,2], E:[]w=Concatenate(), V(2)=0, V}
+    option{V:=B.Repeat[X,2]; E:[]w=Concatenate(); V(2)=0; V}
 Main():void =
     I:=solo(int){Value:=7}
     for(V:All(I,"x","y")): Print("all {V(0)} {V(1)}")

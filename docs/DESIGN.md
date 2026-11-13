@@ -1458,6 +1458,20 @@ members), and that the names in an alias's type are types', each with as
 many type arguments as it takes (the rest of an alias's type is checked
 where it is used, as written there).
 
+## Commas in blocks: tuples in the parser
+
+In a block, statements that commas join on a line are one tuple (the Book
+of Verse, ch. 1), read by `parseStmtTuple`: values make `.tuple`;
+definitions alone are spliced into the block as its statements, as a
+destructuring's are (`spliceStmts`); a mix becomes the definitions and,
+for each value, a definition of a name no program can write
+(`$commaL_C_i`, a `var`'s value copied to one too), then the tuple of those
+names, so the elaborator sees only what it already takes, and the order of
+evaluation is the source's. Blocks read so are the indented and the braced
+ones (`parseIndented`, `parseBraced`); the arms of `sync`, `race` and
+`rush` (`parseBraced … (arms := true)`), clause lists, constructions'
+fields and collections' items keep commas as separators.
+
 ## Destructured parameters: a desugaring in the parser
 
 A parameter group `(B:int, (C:int, D:int))` (Book of Verse ch. 6) is one

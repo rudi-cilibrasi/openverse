@@ -1485,7 +1485,7 @@ class Gen:
 {run}(X:b,Y:a,W:w where a:subtype(comparable),b:type,w:type):?tuple(b,a,int) =
     H:={cell}{{}}
     var Seen:int=0
-    Result:=option{{V:={call(first_entry, 'X', 'Y', first_depth, 'H')}, E:[]w=Concatenate(),set Seen+=V(2),V(2)>={first_cut},V}}
+    Result:=option{{V:={call(first_entry, 'X', 'Y', first_depth, 'H')}; E:[]w=Concatenate();set Seen+=V(2);V(2)>={first_cut};V}}
     Print("mut state {{H.N}} {{Seen}}")
     Result''')
         if RECURSIVE_RETURNS and random.Random(self.seed * 1000033 + 466).random() < 0.5:

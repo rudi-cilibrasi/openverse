@@ -79,7 +79,7 @@ The readings outside the table that the survey names:
 | `set M[k] = v` on a map can fail | never fails, allowed anywhere | the API (line 424): `operator'()'(Map:ref([t]u, [t]v), Key:t)…<decides>…`, "This is what makes `set M[Key] = Value` work on a map variable … Assigning through that reference inserts a key that is not yet present"; `03_containers.md:686`: "If you try to modify a key that is not present, the operation fails" (of `+=`); `05_mutability.md:344` (an array's index out of range fails); `01_expressions.md:994`: a `set` "returns the value being assigned" | `RollbackTortureTest.versetest:18` `(set Map[I] = I) or Err()`; `Mutability.versetest:248` `if (set M0[0] = 42)`; `Bugs/FORT-623803-STMRollbackAfterReturn.versetest:15` `if: set R[0] = R[0] or Err()` on a map; every map `set` in the tests is in a failure context | **contradicts**: a set through a map's key is `<decides>` (its last key still inserts); a plain variable's cannot fail; its value is the value set: **changed** |
 | The left of `or` must be able to fail | not required | silent | `Operators/LogicalOr.versetest:143` ("the left operand is required to be fallible", 3513) | **contradicts**; with the map `set` failable the Book's own `(set Map[I] = I) or Err()` passes: **changed** |
 | Rollback of a `for` iteration | a source's or a range bound's effects kept when later clauses fail | `08_failure.md:92`: "The `for` expression creates a failure context for each iteration of the domain clause"; `:147` (provisional changes) | `FlowControl/for.versetest` 362, 371, 392; `Range.versetest` 140, 159; `SoftwareTransactionalMemory.versetest` 88 (74 and 81 moved with the range bound) | **contradicts**, deeply load-bearing: **designed, not changed** ([below](#rollback-of-a-for-iteration)) |
-| Commas and semicolons in blocks | `,` separates a block's statements like `;` | `01_expressions.md:1048`: "Commas within parentheses create *tuples*"; `:1153-1156`: `option{1, 2}?` is `(1, 2)`; `:1119-1129`: in a block "semicolons and commas are interchangeable as separators between definitions" | `SemicolonsVsCommas.versetest` 70 (`Value :=` then `1, 2, 3` is `(1,2,3)`), 95 (`{3,X}`), 100 (`option{1,2}`); `Option.versetest:44`; `for.versetest:293`; 22 parser cases (`TimSyntax.versetest:224` `"1,2"`, …) | **contradicts**: **designed and prototyped, not changed** ([below](#commas-in-blocks)) |
+| Commas and semicolons in blocks | `,` separates a block's statements like `;` | `01_expressions.md:1048`: "Commas within parentheses create *tuples*"; `:1153-1156`: `option{1, 2}?` is `(1, 2)`; `:1119-1129`: in a block "semicolons and commas are interchangeable as separators between definitions" | `SemicolonsVsCommas.versetest` 70 (`Value :=` then `1, 2, 3` is `(1,2,3)`), 95 (`{3,X}`), 100 (`option{1,2}`); `Option.versetest:44`; `for.versetest:293`; 22 parser cases (`TimSyntax.versetest:224` `"1,2"`, …) | **contradicts**: **changed** ([below](#commas-in-blocks)) |
 | What the Book calls warnings | code after `return`/`break`, `_` after a closed enum's every value, `return 3` in a `:void` function: accepted silently | `09_structs_enums.md:297-318`, `:411` ("⚠ Warning - unreachable wildcard"), `07_control.md:423-435` ("you'll get a warning") | `assert_semantic_error(2000)` (`Reachability.versetest` 5, 11, 23 "Treat unreachable expressions after break as warning not error"), 2302 (`Enum.versetest:356`), 2002 (`Return.versetest:179`, "produces a warning"): the runner counts a warning as a diagnostic | **contradicts** (a diagnostic the Book gives and openverse did not): **changed**, with the warning channel ([below](#warnings)) |
 | `break` in a `for` body | refused ("only inside loop (not for)") | `07_control.md:764`: "The `break` statement cannot exit `for` loops early" | `SOL-4199-BreakFromIf.versetest:38-48`: "`break` in a `for` body is allowed and breaks the surrounding `loop`" | **the Book disagrees with itself** (owner list); not changed |
 
@@ -200,6 +200,28 @@ agree with the compiler over a wide seed range. Cases that would move:
 `for.versetest` 362, 371, 392, `Range.versetest` 140, 159,
 `SoftwareTransactionalMemory.versetest` 88.
 
+**Not built: the obstacle** (with the other three load-bearing readings,
+[below](#the-load-bearing-readings-built)). The tests pin two more facts
+the design must keep: the first generator's own source and the clauses
+before it are inside the search (`Range.versetest:140`, `for (J:(set X =
+array{666}); I := GetLower()..GetUpper())` undoes the `set`; `for.versetest:362`
+undoes `X.Inc()` of the range bound), and an alternative of an outer
+generator whose inner search finds nothing is undone before the next one
+starts (`for.versetest:382`, "Only two increments since no values with I=2
+reaches the body"). openverse's `for` is not lowered in one place: plain
+generators are nested `forE`s; a choice is a generator of `altE`; a lazily
+taken call (#246) is a private loop (`elabLoopGen`) that gives its values
+one at a time with rollback boundaries of its own; an exclusive choice
+(#314) has paths; a composed choice's clauses move into a continuation
+(`$contf…`, #335); a waiting consumer is staged (#417, `$forStage`,
+`$forPrepare`, `$forResume…`). Each commits a source and the clauses before
+the next generator as it goes, and each needs the search with one
+transaction per alternative; the models (`mv.py`'s rollback "to the most
+recent generator", `generic_mv.py`, `choice_break.py`,
+`choice_heterogeneous.py`, `gen-choice.py`) must predict it first.
+Changing plain generators alone would leave a `for` over a choice under
+the old rule, half the reading, so none of it is made yet.
+
 ### `return` and `break` in a failure context
 
 **Built** (the second of the load-bearing readings, [below](#the-load-bearing-readings-built)).
@@ -284,30 +306,44 @@ exits, `firstUnpack`'s forwarding, `FirstLift.returnExit`/`breakExit`,
 
 ### Commas in blocks
 
+**Built** (the fourth of the load-bearing readings, [below](#the-load-bearing-readings-built)).
+
 **The Book's rule.** In a block, `;` and new lines make a sequence and `,`
-makes a tuple: `{1.0, 2}` is a `tuple(float, int)`, `option{1, 2}` holds
-`(1, 2)`, `Value :=` and the line `1, 2, 3` is `(1, 2, 3)`; definitions
-joined by commas are the block's definitions (ch. 1's `X:int = 0, Y:int =
-0`). `if (…)`, `for (…)` and the clause macros keep commas as clause
-separators (ch. 1, `:1159-1174`).
+makes a tuple: `01_expressions.md:1048`, "Commas within parentheses create
+*tuples*"; `:1153-1156`, "In `option{}` constructor - follows the standard
+sequence vs tuple rule: … `option{1, 2}?` … Comma: tuple, wraps the tuple";
+its tests: `SemicolonsVsCommas.versetest:70` (`Value :=` and the line
+`1, 2, 3` is `(1,2,3)`), `:91` (`F():tuple(float,int)={1.0,2}`), `:95`
+(`for(X:=1..2){3,X} = array{(3,1),(3,2)}`), `:100` (`option{1,2}?=(1,2)`),
+`:103` (`block{3.0,4}`), `:106` (`case(0){_=>{3.0,4}}`); `Option.versetest:44`,
+`FlowControl/for.versetest:293` (`{Character,Index}`). Definitions joined by
+commas in a block are its definitions (`:1119-1129`, "Within block
+expressions (braces), semicolons and commas are interchangeable as
+separators between definitions", `X:int = 0, Y:int = 0`); `logic{true?,
+true?}` is valid (`:1140-1146`), as a tuple of two queries is. Separators
+stay commas in clause lists (`for (X := 1..3, X <> 2)`, `:1159-1174`), in
+the arms of `sync`, `race` and `rush` (`Reachability.versetest:98-108`,
+`sync{F(0), F(1)}`), in a construction's fields and in collections' items.
+A group mixing definitions and values: no test pins it; openverse reads it
+as the prose implies, each element in order, a definition visible to the
+elements after it and after the group: `(V := X, V > 0, V)` is `V := X;
+T := V > 0; (V, T, V)`.
 
-**Design.** In the parser, a block's statement and the ones a comma joins to
-it are a tuple (`parseStmtTuple`, prototyped), all-definition groups spliced
-as statements; a comma at the start of a line that ends a nested block is
-the enclosing list's (the prototype missed this, which broke
-`gadt_refine`'s programs). A group mixing definitions and values needs one
-more rule, which the Book's prose implies and no test pins: the
-definitions visible to the later elements and after the group, so
-`(V := X, V > 0, V)` is `V := X; T1 := V > 0; (V, T1, V)`.
+**What openverse does.** `parseStmtTuple` (`Front/Parser.lean`): a block's
+statement and those a comma joins to it on its line are a tuple, a group
+of definitions alone the block's definitions, a mixed group its
+definitions and, for each value, a definition of its own, then the tuple
+(a `var`'s value copied where it is defined). A comma that starts a line
+is not the group's (the prototype took it, which broke `gadt_refine`'s
+programs: it ends the block, and belongs to the list around it).
 
-**What depends on the old reading.** The generator `generic_mv.py`
-(`option{V := …, E:[]w = …, set …, V(2) >= 7, V}`: 149 corpus programs),
-and tests `class_cast_refine_for_choice`, `class_cast_refine_first_choice`,
-`multi_method_own_direct`, `multi_method_cross_super_lazy`,
-`multi_generic_mutual(_extra_types)`, `choice_immediate_suspends_refined_boundaries`,
-which use commas as separators in `option{…}` or braces. Cases that would
-move: `SemicolonsVsCommas.versetest` 70, 95, 100, `Option.versetest:44`,
-`for.versetest:293` and the 22 parser cases.
+**What depended on the old reading.** The generator `generic_mv.py`
+(`option{V := …, E:[]w = …, set …, V(2) >= 7, V}`, 53 programs of the
+regenerated corpus) now separates those clauses with `;`, and so do the
+tests `multi_generic_mutual(_extra_types)`, `multi_method_own_direct` and
+`multi_method_cross_super_lazy`, each with its output unchanged (the others
+the audit listed use commas where they stay separators). New:
+`commas_tuples.verse`, `errors/comma_tuple_body`.
 
 ### `ToString` of a float
 
@@ -416,6 +452,15 @@ of the readings audit (7,390 agree, 2,066 refuse, 277 accept, 50 differ).
    Moved: 17 cases agree (accepted before): `SOL-4199-BreakFromIf.versetest`
    4, 15, 51, 60, 87, `Reachability.versetest` 12-15, `Return.versetest`
    115, 118, 148, 158, 159, 161, 162, 163.
+3. **Rollback of a `for` iteration**: not built ([the obstacle](#rollback-of-a-for-iteration)).
+4. **Commas in blocks** ([the rule](#commas-in-blocks)). Moved: 28 cases
+   agree: `SemicolonsVsCommas.versetest` 70, 91, 95, 100, 103, 106,
+   `Option.versetest:44`, `FlowControl/for.versetest:293`,
+   `Bugs/2021-09-03-OptionalTupleAssertionFailure.versetest:3`,
+   `v1-Mix-comma-and-semicolon-in-archetype-instantiation.versetest` 232 and
+   `:decls`, and 17 parser cases (`TimSyntax.versetest` 72, 75, 220, 224,
+   226, 229, 231, 242, 257, 264, 265, 268, 272, 275, 276, `Tuple.versetest`
+   67, 70).
 
 ## For the owner
 
