@@ -2450,12 +2450,19 @@ partial def elabCase (ctx : Ctx) (p : Pos) (scrut : SExpr) (arms : List (Option 
   let elabArms : List (Option SExpr × SExpr) → EM (Expr × Ty) := fun arms => do
     let mut results : Array (Option Expr × R) := #[]
     for (pat, v) in arms do
+      -- (an arm after `_`, or with a pattern an earlier one has, is never
+      -- reached: Book of Verse ch. 9, "Unreachable Case Detection")
+      if results.any (·.1.isNone) then
+        eerr ((pat.map (·.pos)).getD v.pos) "this case arm is never reached: it comes after _, which matches everything"
       let rv ← elabE ctx v exp
       match pat with
       | none => results := results.push (none, rv)
       | some pe =>
         let rp ← elabE ctx pe (some rs.ty)
         if rp.ty != rs.ty then eerr pe.pos s!"pattern of type {rp.ty.show} for a value of type {rs.ty.show}"
+        if let .lit v := rp.e then
+          if results.any (fun | (some (.lit w), _) => reprStr w == reprStr v | _ => false) then
+            eerr pe.pos "this case arm is never reached: an earlier arm has the same pattern"
         -- (a pattern is tested in a condition, #156)
         if Suspend.hasSusp (fun f => ctx.sigs.any fun s => s.idx == f && s.suspends) rp.e then
           eerr pe.pos "a case pattern cannot suspend: it is tested as a condition (#156)"
