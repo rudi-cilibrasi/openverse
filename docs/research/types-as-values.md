@@ -61,13 +61,13 @@ how they are built.
 | a class or an interface named as a value of `subtype(c)`, stored, passed, returned, upcast (`Subtype.versetest` 66-96, 140-190; ch. 11's examples) | about 45 | yes: a value of a class of its own, the metatypes interfaces | yes |
 | a cast through a type value, `t[X]` with `t:subtype(c)`, and a join of two class values (`Cast.versetest` 98-149) | 8 | yes: the cast is a method of the value | yes |
 | `concrete_subtype(c)`, construction through it, `T{}` (ch. 11's `spawner`; `MetatypeConcreteSubtype.versetest` 300-329) | about 12 | yes: the construction is a method of the value | yes, `T{}` with no field given; a value's own class with fields (`Type := concrete_class; Type{Value := 42}`, :153) not |
-| `castable_subtype(c)` (`Castable.versetest` 91-170) | about 20 | yes: an interface of the castable classes' values | yes; as a type parameter's bound (`where t:castable_subtype(c)`, 519-563) not: a bound of #502's kind |
+| `castable_subtype(c)` (`Castable.versetest` 91-170) | about 20 | yes: an interface of the castable classes' values | yes; and as a type parameter's bound (`where t:castable_subtype(c)`, 519-563, #502: `subtype(c)` and castability, [upper-bound-evidence.md](upper-bound-evidence.md#what-stays-refused)) |
 | `type`, the type of every type value (`f(c:subtype(C)):type = c`, `Subtype.versetest` 99-103) | 4 | yes, for class values | yes; of other types' values not |
 | `subtype(int)`, `subtype([]C)`, a value `int` of `type` (`Subtype.versetest` 114-119, `TypeParam.versetest`, `TypeValue.versetest`) | about 20 | in part: values of other types than classes carry nothing the program can use but `type` itself, so they need no witness; each needs a class of its own in this design | no: refused ("openverse writes subtype of a class or an interface only") |
 | a type given as an argument and used as a type, `False(t:type):?t = false`, `Bar(t:type)` (`TypeParam.versetest` 41-61) | 3 | no | no: a dependent parameter; Core's generic functions take a type parameter's witness, not a type the code reads (below) |
 | `concrete_subtype(comparable)`, `concrete_subtype(any)` (`MetatypeConcreteSubtype.versetest` 13-41) | 10 | no | no: needs a value's type at run time (the `comparable` agent's `dyn` boxes carry one; constructing through it needs the class of a box) |
 | `classifiable_subset(t)` (`ClassifiableSubset.versetest`) | 21 | no | no: a set of types, which the Book's chapters do not describe |
-| a metatype as a type parameter's bound, `where t:subtype(class1)` (`ParametricFunctions.versetest` 46-57, 237-248) | 8 | front end, #502's checked upper-bound evidence | no (#502) |
+| a metatype as a type parameter's bound, `where t:subtype(class1)` (`ParametricFunctions.versetest` 46-57, 237-248) | 8 | front end, #502's checked upper-bound evidence | yes (#502); `concrete_subtype(c)` as a bound not |
 | comparison of type values (`TestUtils.AreClassesEqual`) | — | — | not translatable (the test runner's); the Book: "We can't yet compare the subtype values" |
 
 ## Design (as built): a type value is a witness object

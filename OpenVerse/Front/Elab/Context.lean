@@ -975,7 +975,12 @@ def resolveTParams (env : TyEnv) (tps : List TParam) : Except String ResolvedTPa
     -- rejecting a legitimate specialized bound merely for its shape.
     let derived := Ty.param parameter.name ((params.lookup parameter.name).getD false)
     pure (some ({ base, derived } : SubtypeEvidence.Bound))
-  let resolved : ResolvedTParams := { params, bounds }
+  -- (a castable_subtype(c) bound is subtype(c) and the castability its
+  -- marker interface stands for, `UpperBounds.markCastable`, each a relation
+  -- with its own evidence)
+  let castable := (tps.filter fun tp => tp.constraint == "castable_subtype" && tp.upperBound.isSome).map fun tp =>
+    ({ base := .struct castableClassMarker [], derived := Ty.param tp.name ((params.lookup tp.name).getD false) } : SubtypeEvidence.Bound)
+  let resolved : ResolvedTParams := { params, bounds := bounds ++ castable }
   let checked := resolved.env env
   for (parameter, bound) in (tps.filter (·.upperBound.isSome)).zip bounds do
     match bound.base.checkBounds checked with

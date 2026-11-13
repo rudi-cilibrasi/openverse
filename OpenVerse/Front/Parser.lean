@@ -1834,13 +1834,13 @@ partial def parseParamList (close : String := ")") : PM (Array SParam × Array T
       expectSym ":"
       let kt ← peekT
       let k ← expectIdent
-      let tp ← if k == "subtype" then do
+      let tp ← if ["subtype", "castable_subtype", "concrete_subtype"].contains k then do
           expectSym "("
           let a ← parseType
           expectSym ")"
-          pure (TParam.withUpperBound vt.pos v a)
+          pure (if k == "subtype" then TParam.withUpperBound vt.pos v a else TParam.withMetatype vt.pos v k a)
         else if k == "type" then pure { pos := vt.pos, name := v, constraint := "type" }
-        else perr kt s!"expected 'type' or 'subtype(…)' for type parameter {v}, found {kt.tok.describe}"
+        else perr kt s!"expected 'type', 'subtype(…)' or 'castable_subtype(…)' for type parameter {v}, found {kt.tok.describe}"
       tps := tps.push tp
       if (← peekT).isSym "," then bump else break
   expectSym close
@@ -2108,6 +2108,11 @@ def typeParamsOf (p : Pos) (n : Token) (ps : Array SParam) : PM (List TParam) :=
     match prm.named, prm.default, prm.ty with
     | false, none, .name "type" => pure { pos := p, name := prm.name, constraint := "type" }
     | false, none, .app "subtype" [bound] => pure (TParam.withUpperBound p prm.name bound)
+    | false, none, .app k [bound] =>
+      if ["castable_subtype", "concrete_subtype"].contains k then pure (TParam.withMetatype p prm.name k bound)
+      else
+        let w := if prm.name.startsWith "$tuple" then "t" else prm.name
+        perr n s!"a parameter of a parametric type is written {w}:type or {w}:subtype(…)"
     | _, _, _ =>
       -- (a group has no name the program wrote)
       let w := if prm.name.startsWith "$tuple" then "t" else prm.name

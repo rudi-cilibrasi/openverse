@@ -1,8 +1,13 @@
-# Checked upper-bound evidence (#502, draft)
+# Checked upper-bound evidence (#502)
 
-Source upper bounds beyond `subtype(comparable)` remain rejected. This document
-describes the implementation under development in #520 and its compiler-API
-contracts. It does not announce source admission or completion of #502.
+Source upper bounds are admitted: a type parameter may be bounded by a class,
+an interface, a parametric type applied, another type parameter, a numeric,
+container or function type, `any`, `void`, `comparable` or
+`castable_subtype(c)`. This document describes the checked evidence that
+implementation rests on (built in #520, admitted in #502's last step), the
+Book's rules it follows ([Rules](#rules-of-the-book-and-what-openverse-follows)),
+and what stays refused, each by a rule of its own
+([What stays refused](#what-stays-refused)).
 
 ## Source contract and evidence
 
@@ -21,7 +26,7 @@ references. A declaration resolves its complete formal scope before validating
 constrained applications. Its own facts justify those applications; facts from
 an unrelated caller do not repair an unconstrained declaration. Type variables
 remain opaque rather than being replaced by upper types.
-Numeric refinements are also supported bound heads in the draft. Their implied
+Numeric refinements are also supported bound heads. Their implied
 comparability propagates through peer bounds, alongside unique-class bounds.
 Specializing a peer bound can produce a primitive or container upper type;
 generated declarations retain and validate that type. Equality-preserving
@@ -61,11 +66,10 @@ object field or a shared local initialized with executable data. Checking the
 write protects every alias, including aliases obtained by indexed reads or
 passed to an unannotated helper. Compiler-owned `$w.` fields retain their
 metadata role without tainting unrelated object fields. This analysis adds no
-Core opcode or runtime tag. `MetadataStorage.lean` retains 15 real/dummy
-rejection pairs and ten opaque-forwarding, real-overwrite and rollback pairs,
+Core opcode or runtime tag. `MetadataStorage.lean` retains 18 real/dummy
+rejection pairs and 16 opaque-forwarding, real-overwrite and rollback pairs,
 including a later GADT refinement and suspension-frame storage. These are
-compiler-API contracts under the public source guard; they do not complete the
-remaining generated-storage and source-admission audits.
+compiler-API contracts; source programs reach the same analysis.
 
 The checked families currently cover:
 
@@ -358,11 +362,10 @@ following the pinned Book's
 [Capture rule](https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#capture).
 Bounded named wrappers may call those overloads and escape as values.
 
-## Verification and remaining admission work
+## Verification
 
 The [acceptance matrix](upper-bound-acceptance.md) maps every #502 requirement
-to concrete artifacts and the evidence still needed for admission. The rows
-are obligations, not a claim that the guarded draft has completed the issue.
+to the concrete artifacts that check it.
 
 `tests/scripts/test-subtype-evidence.sh` runs scope/API contracts and exact
 checked Lean/C artifacts. The container controls use ordinary concrete
@@ -373,12 +376,10 @@ cancellation cleanup. Typed Core map producers also supply raw duplicate-key
 entries; both paths must preserve their cardinality and order, including when
 keys widen.
 
-`tests/scripts/test-upper-bound-source.sh` is the development source acceptance
-suite. It remains outside the ordinary gate while admission is guarded. To
-measure progress, an isolated experimental checkout relaxes only that guard;
-every positive still must pass Core admission, its exact Lean oracle and the C
-oracle. A generic unsupported-feature diagnostic is not a correct negative
-result. No admission bypass is published.
+`tests/scripts/test-upper-bound-source.sh` is the source acceptance suite, and
+`scripts/check.sh` runs it: every positive must pass Core admission, its exact
+Lean oracle and the C oracle, and every refusal must give its own message; a
+generic unsupported-feature diagnostic is not a correct negative result.
 
 The FIFO integration fixtures exercise rush-arm promotion before and after an
 event signal, a rush inside a spawned task, multiple continuing arms, and a
@@ -424,14 +425,15 @@ initializer-convergence policy: constant field defaults remain strict, and
 named parameter defaults do not acquire an unrelated convergence assertion.
 They do not add sibling-field lexical scope to field defaults.
 
-Before source admission, #502 still requires the remaining relation audit
-(including function variance and full refinement/container
-interactions), operation-dictionary and generated/opened/refined adaptation audits,
-full construction/default/qualified-slot coverage, and a complete source
-acceptance run. Context-sensitive literal coercion must not silently become a
-general subtype fact. The final source contract, documented restrictions,
-exact-head AI review and CI/full gate must all agree before the guard is removed
-and the issue is closed.
+Source admission (the last step of #502) was measured before it was made:
+with only the guard lifted, 151 of the 156 guarded acceptance cases passed as
+they were (98 positives in Lean and C, 53 specific refusals) and the gate
+passed but for one error test that expected the guard's message. The five
+failures were fixtures that main's later rules had overtaken (a method named
+as a top-level function a call could also fit, a `return` inside a returned
+value, `tuple()` as the empty value's own type, a float oracle rewritten into
+a string literal); and the Book's tests showed three rules openverse lacked
+(below), which a bound had hidden behind the guard.
 
 The universal-bound regressions include `peer-void-comparable`, which preserves
 a non-comparable class under a comparable peer instantiated as `void`, and
@@ -439,3 +441,98 @@ a non-comparable class under a comparable peer instantiated as `void`, and
 function value. Both have independent concrete controls. A negative refuses
 equality on the original lower peer under only a comparable upper; the numeric
 peer control verifies that equality-preserving bounds still allow equality.
+
+## Rules of the Book, and what openverse follows
+
+The Book's prose (`docs/06_functions.md` "Type Constraints", "Member Access",
+"Polarity and Variance"; `docs/10_classes_interfaces.md` "Advanced Type
+Constraints"; `docs/11_types.md` "Where Clauses"; at the pinned revision) and
+its tests (`Tests/`) agree on bounds wherever both speak; where the prose is
+silent, openverse follows the tests. Cited by file and line:
+
+- **What may be a bound.** A class (`ParametricFunctions.versetest` 31-110;
+  prose ch. 6, 1381: `ProcessVehicle(V:t where t:subtype(vehicle))`), an
+  interface (`ParametricTypes.versetest` 926), a parametric type applied
+  (`Castable.versetest` 540: `castable_subtype(class1(int))`), `comparable`,
+  another type parameter (prose ch. 6, 1410: `Convert(Base:t, Derived:u where
+  t:type, u:subtype(t))`; `ParametricFunctions.versetest` 589 accepts
+  `Foo(X:t where t:subtype(u), u:type):t`), and the metatype
+  `castable_subtype(c)` (`Castable.versetest` 510-603; prose ch. 10, "A
+  `castable_subtype` constraint goes further: it requires an argument that
+  can be used as the target of a runtime cast"). openverse also takes the
+  numeric, container, function, `any` and `void` uppers of [the
+  table](#source-contract-and-evidence), which the Book's tests write only
+  in `CompatibilityConstraints.versetest` 599 (`subtype(float)`,
+  `subtype(int)`, in virtual packages the harness cannot translate).
+  Several bounds on one parameter are refused by both (prose ch. 11, 521:
+  "Using the same type in multiple constraints is not yet supported",
+  its test 3588/3503/3532), and by openverse.
+- **Member lookup** through the bound (prose ch. 6, 1414-1451: "you can access
+  members that exist on the base type", `E.Name`, `E.GetStatus()`;
+  `Castable.versetest` 547: `X.Value * 2` through `castable_subtype`).
+- **Results at the argument's precise type** (prose ch. 6, 1367: "The function
+  still returns type `t`, not the base type"; 1435: "`Info(0)` has type
+  player"; `ParametricFunctions.versetest` 46-75: `F():class2 =
+  AsClass1(class2{})` valid, `F():class2 = AsClass1(class1{})` and `F():int =
+  AsClass1(class1{})` error 3510).
+- **Inference and instances.** An instance outside the bound is error 3509
+  (`ParametricFunctions.versetest` 36: `AsClass1(0)`; prose ch. 10, 1973:
+  "ERROR: int is not a subtype of entity"; `Castable.versetest` 514, 586: a
+  class that is not castable); an unbounded `t` passed where a bound is
+  needed is 3509 too (`ParametricFunctions.versetest` 31), and a bound that
+  implies the needed one is valid (`ParametricTypes.versetest` 1338-1351;
+  prose ch. 10, 2019: a function taking a constrained class "has to repeat
+  the constraint"). Type applications are checked where written, a type
+  alias's included, used or not (`ParametricTypes.versetest` 639, 3509).
+  A type parameter no parameter's type determines is error 3503
+  (`ParametricFunctions.versetest` 336-374, 586). openverse applies that to
+  bounded type parameters and those a bound names; for unbounded ones it
+  keeps its documented reading that the expected result may give them
+  (`docs/LANGUAGE.md`, "Readings"), which ~90 of its own programs rely on.
+- **Overload distinctness.** Not pinned beyond the general rule
+  (`ParametricFunctions.versetest` 332: `F(:t where t:type)` and `F(:int)`
+  overlap, 3532). openverse treats disjoint sibling-class bounds as distinct
+  and keeps interface, ancestor and empty-container overlap.
+- **Variance.** Maps are covariant in keys and values (prose ch. 6, 1504;
+  `ParametricFunctions.versetest` 580). A bounded generic function is a
+  value only at a type whose parameter has the bound
+  (`ParametricFunctions.versetest` 237-251: valid with `t:subtype(class1)`,
+  3510 with `t:type`); openverse agrees.
+- **Visibility.** A public parametric type's bound names nothing less
+  visible (`ParametricTypes.versetest` 1284, 1294, 3593; the same snippets
+  are valid under `?UploadedAtFNVersion := 3500`, a version gate openverse
+  has no counterpart for).
+- **Casts.** A value of a bounded type parameter is not cast directly
+  (`Bugs/FORT-1059276.versetest` 10-15: `i[X]` with `X:t`,
+  `t:castable_subtype(c)`, is 3509; 3-8: `Y:c = X; i[Y]` is valid).
+- **Where prose and tests differ.** One place: the prose's
+  `Convert(Base:t, Derived:u where t:type, u:subtype(t))` (ch. 6, 1410) is
+  valid, while `ParametricFunctions.versetest` 134-145 keeps, commented out,
+  tests of `u:subtype(t)` with the note "`subtype` doesn't support type
+  variable argument". Commented-out cases are no tests; the live test 589
+  accepts a bound naming a type parameter, as the prose does, and so does
+  openverse (with evidence for `set C = B` of the commented test too).
+
+## What stays refused
+
+Each by its own rule and message, not by a blanket guard:
+
+| Refused | Rule and why | Book |
+| --- | --- | --- |
+| an instance outside a bound | the bound's evidence cannot be made | 3509 |
+| a bounded type parameter no parameter determines | its evidence must come from an argument's type | 3503 |
+| a public parametric type with a less visible bound | a definition exposes nothing less visible | 3593 |
+| several bounds on one type parameter | not supported, as in the Book | 3588 |
+| `concrete_subtype(c)` as a bound | a class below a `<concrete>` one need not be concrete (`TypeValues`), so it is no subtype relation a bound's evidence can carry | (valid in `MetatypeConcreteSubtype.versetest` 49) |
+| a cast of a bounded value, `i[X]` | upcast it first | 3509 |
+| a cast to or construction of a type parameter, `t[X]`, `t{}` | no type value of `t` is passed (the prose's `dynamic_handler` in ch. 10 casts with `t[Item]`) | valid in the prose |
+| a write through a container upper, `set X[0] = …` with `X:t` | no conversion back to `t` exists | not tested |
+| variance of an existing function object | a bound adapts a method expression, not a function value already made (`method-value-stored-refusal`) | not tested |
+| `subtype(t)` of a type parameter, a type given as an argument (`F(t:type, X:t)`) | types as values hold classes and interfaces only (`types-as-values.md`) | valid (`ParametricTypes.versetest` 1305-1329, `TypeParam.versetest`) |
+
+The castability of `castable_subtype(c)` is a subtype relation: a program that
+writes such a bound has a hidden interface `$castableClass` above every
+`<castable>` class and interface, so above the classes below them, and the
+bound is the two relations `subtype(c)` and `subtype($castableClass)`, each
+with its own checked nominal evidence (`UpperBounds.markCastable`).
+

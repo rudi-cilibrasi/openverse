@@ -46,8 +46,8 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   APIs (persistence, JSON, natives; 345); compiler tooling such as bytecode
   and digests (128); VM-conditional code inside a definition (37) and one
   file that defines `Main` itself (1).
-- Of the **9,783 translatable cases**, openverse **agrees on 8,114 (83%)**,
-  refuses 1,439 valid programs, **accepts 135 refused ones**, gives a
+- Of the **9,783 translatable cases**, openverse **agrees on 8,131 (83%)**,
+  refuses 1,422 valid programs, **accepts 135 refused ones**, gives a
   **different result in 95** (82 of them `verse_vm_only` cases of unbounded
   ints) and hits **no internal error**. On test cases alone (without
   `:decls`) it agrees on 7,954 of 9,567. (When the survey was
@@ -77,7 +77,9 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   the base of [attributes, types as values and the syntax
   forms](#after-attributes-types-as-values-and-the-syntax-forms); with
   them: 8,004 agreed, 1,598 refused, 135 accepted, 46 differed, the base of
-  [the Book's primitives](#after-the-books-primitives).)
+  [the Book's primitives](#after-the-books-primitives); with them, at main
+  `84ee83c`: 8,114 agreed, 1,439 refused, 135 accepted, 95 differed, the
+  base of [source upper bounds](#after-source-upper-bounds).)
 - An agreement on an expected error is weak evidence: 2,940 expected errors
   agree, but only 1,233 of them are refused by a check of a language rule
   (and 17 more, whose codes are all warnings, get openverse's warning);
@@ -1147,6 +1149,45 @@ one-tick wait now write `Sleep(0.01)` and print what they printed,
 `scheduler_audit_sleep` shows the new rule, and 7 generated `conc-*`
 programs (zero durations) change their output, each reproduced exactly when
 their zero sleeps are made one tick.
+
+## After source upper bounds
+
+Source upper bounds admitted (#502; [the rules and what stays
+refused](upper-bound-evidence.md#rules-of-the-book-and-what-openverse-follows)):
+the guard that refused every bound but `subtype(comparable)` lifted, three
+rules a bound had hidden behind it added, and `castable_subtype(c)` taken
+as a bound. Against the baseline of main `84ee83c` (8,114 agree, 1,439
+refuse, 135 accept, 95 differ), 17 cases more agree and none fewer: **8,131
+agree, 1,422 refuse, 135 accept, 95 differ** (re-recorded from a fresh run).
+
+| Cause (cases at the base) | Agree now | Left |
+|---|---:|---|
+| metatypes (137 refused) | 17: `ParametricFunctions.versetest` 46, 51, 57, 237, 248, 589; `ParametricTypes.versetest` 1338, 1354; `Castable.versetest` 519, 527, 536, 553, 558, 634, 677, 710 and its decls | 118; 2 of the 137 (`Castable.versetest` 563, 601) get past the bound to a generic function joined as a value with no expected type (#214), now under types-other (137 → 139) |
+
+- **Agreeing for the right reason now.** Lifting the guard alone made four
+  cases that agreed through its message accepted, each a rule openverse
+  lacked, and each now refused by it: a bounded type parameter no
+  parameter determines (`ParametricFunctions.versetest` 586, 3503), a type
+  alias whose type applies a bound it breaks (`ParametricTypes.versetest`
+  639, 3509), and a public parametric type with a less visible bound
+  (`ParametricTypes.versetest` 1284, 1294, 3593). Of the 33 cases the guard
+  decided on main, the 16 that agreed through its refusal agree now with
+  messages of their own, 7 that it refused agree now, and 10 are refused
+  for another feature (`ParametricFunctions.versetest`'s declarations, which
+  give a type as an argument, `F(t:type, X:t)`).
+- **Left of the cause.** `subtype(t)` of a type parameter and a type given
+  as an argument (`ParametricTypes.versetest` 1305-1329, `TypeParam.versetest`,
+  `FORT-1059276.versetest`, `SOL-8302…`; with `ParametricFunctions.versetest`'s
+  declarations, about 45 cases), `concrete_subtype(c)` as a bound
+  (`MetatypeConcreteSubtype.versetest` 49, refused by rule), and the
+  metatypes of other types than classes.
+- **Programs.** Against main, over every suite and the corpus of 2,734
+  generated programs (`corpus2`), no program that compiled on main changed
+  its bytes, output or messages. Two messages of refused programs changed:
+  `tests/errors/generic_constraint` (an unknown bound, `subtype(printable)`,
+  is the unknown type's error now) and the overloading matrix's
+  `class_bound`, which now runs and prints 2; and the 155 upper-bound
+  fixtures the guard refused now run or give their own refusals.
 
 ## Ten causes to remove first
 

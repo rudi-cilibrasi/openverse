@@ -45,6 +45,8 @@ structure Admitted where
   access : Access.Env := {}
   /-- The `case` arms marked `@ignore_unreachable` (`ignoredArmsMarker`). -/
   ignoredArms : List Pos := []
+  /-- The type aliases, each by its name, written out (`Aliases.expand`). -/
+  aliases : List (String × Aliases.Alias) := []
 
 /-- Each name is defined once in its scope, the top level or a module: only
     functions of one scope share a name, as its overloads. A class, an
@@ -577,7 +579,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   Access.checkAliases levels resolved
   -- type aliases: each written out where it is used, so that nothing after
   -- this knows aliases exist
-  let resolved ← Aliases.expand resolved
+  let (resolved, aliases) ← Aliases.expand resolved
   -- access: each definition exposes nothing less visible than itself; the
   -- constructions, parents and overrides of the program as written; and
   -- what the elaboration needs to judge the members it reaches through
@@ -587,6 +589,8 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   Access.checkUses access resolved
   -- (types as values, `subtype(t)` and its kin: classes and interfaces)
   let resolved ← TypeValues.desugar resolved
+  -- (a castable_subtype(c) bound's castability, a subtype relation)
+  let resolved := UpperBounds.markCastable resolved
 
   -- (the built-ins it names as values, as definitions of their own: after
   -- the aliases, whose names are no values' and bind nothing)
@@ -633,7 +637,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
       budgets.insert n (EffectPolicy.constructionFx specs)
     | _ => budgets) ({} : Std.HashMap String (List String))
   return { resolved, rawEntry, typeDefaults, helpers, intrinsicCalls, concurrencyNames, usesConc, constructionFx, access,
-           scopePairs, ignoredArms }
+           scopePairs, ignoredArms, aliases }
 
 /-- A program's source as elaborated (`inlineSource`). -/
 structure Source where
