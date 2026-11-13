@@ -625,7 +625,7 @@ been a generator there, where a call has none (#312's lesson). The kept
 bodies (`checkBody`), and an `F$all`'s, which is effect-free, see a block
 that binds the receiver and the arguments, then the if-chain on the guards
 (ending in `Err()`, which a call never reaches) or the choice.
-Each method of a family stays in its class as a stub, `Choice.familyStub`, elaborated as `Err()`, which no call reaches, so that the elaborator still checks it as a member: `<final>`, its signature and effects against the one it overrides, and an abstract one implemented. That no call reaches one holds by construction where the program is given out: `elabProgramCore` refuses a program any of whose functions calls a stub (`TyEnv.familyStubs`). Verse Core has no calls but those that name their function (a dispatch is a test of the class, then a call), so this covers every way a call is made, generated ones included (an operation dictionary's `$apply`, a method value's adapter, a default's helper), and ones not written yet; `tests/lean/FamilyStubs.lean` makes one and sees it refused. A stub has no method value (`FnValues`): a family's method is no value, and a value of another class's method of that name would otherwise make an adapter for every class that has the name. The dispatch's arguments are bound at the declaring class's parameter types, so `array{}` or `false` gets the type it needs, and one tuple argument to several parameters is taken apart, as at a call. An override that returns a narrower type is refused, since the dispatch is made before types and has the declaring class's return type. An `F$all` body turns every exclusive choice into a choice, nested `for`s included, which is exact as it is effect-free.
+Each method of a family stays in its class as a stub, `Choice.familyStub`, elaborated as `Err()`, which no call reaches, so that the elaborator still checks it as a member: `<final>`, its signature and effects against the one it overrides, and an abstract one implemented. That no call reaches one holds by construction where the program is given out: `elabProgramCore` refuses a program any of whose functions calls a stub (`certify`). Verse Core has no calls but those that name their function (a dispatch is a test of the class, then a call), so this covers every way a call is made, generated ones included (an operation dictionary's `$apply`, a method value's adapter, a default's helper), and ones not written yet; `tests/lean/FamilyStubs.lean` makes one and sees it refused. A stub has no method value (`FnValues`): a family's method is no value, and a value of another class's method of that name would otherwise make an adapter for every class that has the name. The dispatch's arguments are bound at the declaring class's parameter types, so `array{}` or `false` gets the type it needs, and one tuple argument to several parameters is taken apart, as at a call. An override that returns a narrower type is refused, since the dispatch is made before types and has the declaring class's return type. An `F$all` body turns every exclusive choice into a choice, nested `for`s included, which is exact as it is effect-free.
 A call has the declaring class's effects, which bound every implementation's. Parameters' defaults are rewritten too, so a call in a default is refused as any call with several values is outside a failure context, instead of reaching a stub. When the declaring class's implementation is the only one (an abstract override below it), the call is of that function, with no dispatch. A call of one implementation's function in a family with overrides (that one, or `(super:)`) takes one tuple argument apart after the receiver, also where it is not inlined.
 `(super:)M(…)` calls the nearest implementation above directly, and a
 qualified call `R.(c:)M(…)` (#125) dispatches in the family of the root `c`
@@ -1177,6 +1177,62 @@ So a large definition that calls few functions of the block is defined before it
 
 The block then needs between 120000 and 160000 heartbeats. A function with a default argument is passed as an explicit lambda (`fun c q i t pl => elabBranchAlts c q i t pl`), or as the shorter form a body uses (`elabMember`'s four arguments). New elaborator logic can follow the same pattern.
 
+## Elaboration in phases
+
+`elabProgramCore` elaborates a program once (one round, below) and reads as
+the list of its phases. Each phase is a function that takes what it reads and
+gives a small record of what it establishes; the phases that build the type
+environment (`TyEnv`) take it and give it back, and `elabProgramCore` records
+in it what other phases find. The order of the phases is the order of the
+checks, which decides the error a program with two of them gets. Each refusal
+is thrown in one place, a phase or `elabProgramCore` itself, and each point
+where an elaboration asks for something and goes no further
+(`Compiled.asking`) is a line of `elabProgramCore`.
+
+1. `admitSource` (`Elab/Source.lean`): the source and the entry expression pass the effect policy and the source profile, modules are resolved, the defaults function types write are set apart, and the helpers the program needs are added (`Admitted`).
+2. `inlineSource`: functions with several values are inlined at their calls, the functions earlier rounds asked for are added and admitted, and function values become interfaces and classes (`Source`, with the sites the inlining notes).
+3. `argsAndMethodOverloads`: `Args` and the entry expression's `$Do` are added, and overloaded methods are renamed by their parameter lists (`Definitions`).
+4. `classHierarchy` (`Elab/Classes.lean`): the classes and interfaces and their hierarchy, checked (`Classes`, with the lookups over it).
+5. `classFields`: each class's fields, inherited, its own and hidden (`Fields`).
+6. `classMethods`: constructors, each class's struct and methods as functions, and the override and implementation checks (`Methods`).
+7. `typeEnvironment` (`Elab/Environment.lean`): the type environment of the classes, structs, enums, refinement types, type parameters and parents' type arguments.
+8. `upperBounds`: the bounds of type parameters and the relations fields declare, resolved for every header, then checked.
+9. `interfaceViews`: the interfaces referred to through views; a class that then needs hidden fields for all its type parameters makes the elaboration ask for them (`Views`, tier 2).
+10. `pinsAndAccessors`: the pins of the classes dispatched to under a refinement, and the fields read through accessors.
+11. `addPlaceholders`: placeholder classes and prototypes; no struct contains itself, and map keys are comparable.
+12. `functionOverloads` (`Elab/Signatures.lean`): overloaded functions renamed, and the overloads of functions and methods, which the environment records (`Overloads`).
+13. `declareSignatures`: each function's and constant's signature as declared (`Declared`).
+14. `inferSignatures`: the types of unannotated constants, then the defaults function types write checked (#503), then the effects inferred in rounds (`Signatures`).
+15. `checkSignatures`: overloads, overrides, implementations and overriding fields agree, and no field has two interfaces' defaults.
+16. `elabFieldDefaults` (`Elab/Functions.lean`): construction effects, and each field default elaborated once (`FieldDefaults`).
+17. `elabFunctions`: each function and constant, then each generic function once (`ElaboratedFn`), the environment knowing where the accessors are.
+18. `roundNeeds` (`Elab.lean`): what the round asks for; an elaboration that asks how choices are inlined (tier 1), or for functions (tier 3), goes no further.
+19. `mainSignature` and `prepareLowering`: the function the program runs; the accessors, the class table, prototypes and pins, and the refined tests that cannot pass removed (`Lowering`).
+20. The checks of the prepared functions, in order: functions with several values computed at their calls (`checkEager`, which may ask for lazy ones), event signals in failure contexts (with `--signal-no-rollback`), lazily taken calls that need functions of their own (`checkLoopFirst`, which may ask for them), the convergence of field defaults (`checkInitializerConvergence`) and the flow of type metadata (`MetadataFlow.check`).
+21. `lowerProgram`: failure capture, concurrency and the `$Main` prelude (`LoweredProgram`).
+22. `certify`: no call names a family's stub, and the program passes `Prog.check`, `Prog.checkControl` and `Prog.checkTypes` (`Compiled`).
+
+A program with several errors gets the first in this order, and within a
+phase the first in the order the phase goes through the program (its
+definitions, classes or functions as written, the functions by index). Rounds
+keep the order: a round that asks goes no further than the phase that asks,
+and the next one runs every phase again. Read off the list, a program is
+refused, first to last, for:
+
+- its effect annotations and source profile, a type with a built-in type's name, its modules, and subscribable events (1); the choices it inlines and the requests it carries (2); its overloaded methods (3);
+- its classes: their parents (unknown, a struct, wrong type arguments, an interface extending a class, two superclasses, a `<final>` one, a cycle) and construction effects (4); their fields, inherited, overriding and own, against the methods above them (5); their methods: duplicates, parameter names, qualified implementations, overrides and `<final>`, abstract methods and the implementations every concrete class needs (6);
+- the types those give: comparable type arguments to parents (7), bounds (8), one instance of an interface per class (9), the Verse Core type arguments of overrides (10), recursive structs and map keys (11);
+- its functions' names and overloads (12), their signatures and effect annotations (13), constants whose type cannot be inferred and the defaults function types write (14); then the signature checks (15): overloads a call cannot tell apart, overrides and implementations whose signature or effects differ, an overriding field's type, and, last, a field two interfaces give defaults;
+- construction effects and field defaults (16), then each function's and constant's body (17);
+- `Main` (19), the checks of the prepared functions (20), and what the lowering refuses (21); the internal errors of `certify` (22) are elaborator bugs.
+
+Two of these come later than where their cause is found: two interfaces'
+defaults for one field are found with the fields (5) but refused after every
+signature check (15), and an overriding field's type is checked only there,
+once types are resolved. So a program with such a field and, say, an override
+of the wrong signature is refused for the override.
+
+
 ## Elaboration in rounds
 
 Some of what a program needs is known only once its types are: a function
@@ -1214,7 +1270,9 @@ sequence of rounds, not only the last one.
 
 The public `OpenVerse.Front.Elab` module assembles the elaborator from
 `Front/Elab/`: shared context and typing, continuation planning, the existing
-callback-based control/call helpers, expression elaboration, and final lowering.
+callback-based control/call helpers, expression elaboration, final lowering,
+and the phases of a program's elaboration (`Source`, `Classes`, `Environment`,
+`Signatures`, `Functions`; "Elaboration in phases").
 Application and statement handlers receive the recursive entry points as
 callbacks; their public wrappers keep the original signatures. This keeps each
 generated C translation unit below the browser build's 8 MiB optimization
@@ -1278,6 +1336,19 @@ member. Elaboration's own shadowing check can't do that second check: after
 flattening, a local `X` and the member `m::X` have different names. The
 elaborator sees an ordinary flat program, so nothing behind it changes:
 Core, the checks, the proofs and the C runtime.
+
+## Destructured parameters: a desugaring in the parser
+
+A parameter group `(B:int, (C:int, D:int))` (Book of Verse ch. 6) is one
+parameter `$tuple{i}` of its tuple type. The parser starts the body with
+`B := $tuple1(0)`, `C := $tuple1(1)(0)`, … (a constructor gets a `let:`), and
+rewrites later defaults' uses of those names into the same projections. So
+the function's type is the one with a tuple parameter there, and calls,
+overloads, function values and the choice inliner need no second path. A
+group of one parameter is that parameter. Named parameters inside a group
+would need a tuple type with named, omittable elements, which the parser
+refuses; the design is in
+[research/tuple-parameters.md](research/tuple-parameters.md).
 
 ## Floats: canonical bits
 
@@ -1498,6 +1569,9 @@ flowchart LR
 - **Over-approximation.** The pass makes a method's value class whenever
   `X.M` is written outside a call for some `X` and a class declares `M`,
   as it cannot tell a method from a field, or from an array's `Length`.
+  It makes none for a method that is never a value: an overloaded one, and
+  one that takes a name its class inherits without `<override>`, which
+  overloads that name for every receiver that sees it.
   An unused value class changes the bytecode, not the behaviour: a call
   through a function type may dispatch to it, so a value class's `$call…`
   demands no comparable type argument of the caller, as its type arguments

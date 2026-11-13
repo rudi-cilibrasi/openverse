@@ -19,10 +19,6 @@ structure Compiled where
 def Compiled.asking (needs : Requests) : Compiled :=
   { prog := default, sigs := { fns := [] }, slotTys := [], needs }
 
-
-
-
-
 /-- How a program is compiled from the command line: its shell arguments,
     bound to `Args : []string` (unless the program defines `Args`), and an
     expression to run instead of `Main`; and what earlier elaborations of it
@@ -611,21 +607,38 @@ def lowerOpening {α : Type} (low : List Nat → Except String α) : Except Stri
     | .ok _ => return res
   return res
 
-/-- The concurrency lowering (#156), at the end of `elabProgramCore`: each
+/-- What the concurrency lowering gives (`lowerConcurrency`). -/
+structure LoweredConcurrency where
+  /-- The functions, those of the frames, roots and scheduler added. -/
+  fns : Array Fn
+  /-- Each function's slot types. -/
+  slotTys : Array (List VTy)
+  /-- Each function's signature. -/
+  fsigs : List (List VTy × VTy)
+  /-- The class table, with the scheduler's and the roots' fields as the lowering types them. -/
+  classTable : List (List VTy)
+  /-- The frame classes' field types, after the classes'. -/
+  frameClasses : Array (List VTy)
+  /-- `Main`'s call; with a suspends `Main`, the call that starts it. -/
+  mainCall : Expr
+  /-- The frame classes' pins (#244), in their order. -/
+  framePins : List (List (Option VTy))
+  /-- The values of the fields the lowering adds to the scheduler (#362), for its prototype. -/
+  schedMore : List Value
+
+/-- The concurrency lowering (#156), in `lowerProgram`: each
     `<suspends>` function becomes a frame class and its resume, cancel and
     arm functions (`Suspend.lower`), after spawned dispatches are lifted
     (#173); then the task roots (generic ones at their function's type
     arguments, #244), branch wrappers, the scheduler's
     list and, for a suspends `Main`, `$Run` and `$Start`. Gives the
     functions, their slot types and signatures, the class table, the frame
-    classes and their pins, and `Main`'s call. (A function of its own, so that `elabProgramCore` stays within
-    Lean's elaboration limits.) -/
+    classes and their pins, and `Main`'s call (`LoweredConcurrency`). -/
 def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsigs0 : List (List VTy × VTy))
     (protos : HeapTy) (pins : List (List (Option VTy))) (inFn : String → String → String)
     (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (fsigsIn : List (List VTy × VTy)) (classTable0 : List (List VTy))
     (forced : List Nat := []) (frameInfo : Array FrameRefs.Info := #[]) (fifo : Bool := false) :
-    Except String (Array Fn × Array (List VTy) × List (List VTy × VTy) × List (List VTy) × Array (List VTy) × Expr ×
-      List (List (Option VTy)) × List Value) := do
+    Except String LoweredConcurrency := do
   let mut fns := fns0
   let mut slotTys := slotTys0
   let mut fsigs := fsigsIn
@@ -1800,9 +1813,9 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     mainCall := .call (runIdx + 1) []
   fns := fns.map fun fn => { fn with body := Suspend.substCall resumeAnyMark (fun es => .call resumeAnyIdx es) fn.body }
   -- (and the values of the scheduler's fields it adds, #362, for its prototype)
-  return (fns, slotTys, fsigs, classTable, frameClasses, mainCall, framePins.toList,
-    (if leafy then [(match schedLit with | .lit v => v | _ => .none), .int (-1)] else []) ++
-      (if taskClockF.isSome then [.int 0] else []))
+  return { fns, slotTys, fsigs, classTable, frameClasses, mainCall, framePins := framePins.toList,
+           schedMore := (if leafy then [(match schedLit with | .lit v => v | _ => .none), .int (-1)] else []) ++
+             (if taskClockF.isSome then [.int 0] else []) }
 
 /-- Whether `e` itself prints (`Print`), for `checkEager`. -/
 partial def exprPrints : Expr → Bool

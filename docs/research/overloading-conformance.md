@@ -144,9 +144,13 @@ period covers all combinations; nightly checks scale the range.
   [#492](https://github.com/rudi-cilibrasi/openverse/issues/492); lack of local
   overload sets is not counted as released conformance failure here.
 - This is an overload/call-boundary audit, not an exhaustive function grammar
-  audit. Nested destructured/named tuple parameter syntax, extension method
-  syntax and bottom-type expressions inside call arguments are not covered.
-  No conformance result for those forms is implied. Multi-value call boundaries
+  audit. Extension method syntax and bottom-type expressions inside call
+  arguments are not covered. Destructured tuple parameters are now supported
+  and count as tuple parameters for overloads
+  ([overlap refusal](../../tests/errors/tuple_param_overlap.verse)). Named
+  parameters inside them are refused, and their design is open
+  ([rules and map](tuple-parameters.md)). No conformance result for the
+  uncovered forms is implied. Multi-value call boundaries
   remain in [#283](https://github.com/rudi-cilibrasi/openverse/issues/283).
 
 ## Reproduce

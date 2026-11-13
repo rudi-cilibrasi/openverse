@@ -4,10 +4,23 @@ import OpenVerse.Core.Encode
 
 open OpenVerse OpenVerse.Front
 
-/-- Development acceptance tests for #502. These intentionally fail while
-    source bounds remain guarded; the ordinary gate uses the API contracts. -/
+/-- Development acceptance tests for #502 (`docs/research/upper-bound-acceptance.md`).
+    Without `--guarded` they are the evidence for admitting source bounds, run
+    where the guard (`UpperBounds.checkParams`) is relaxed, and they fail while
+    it is in place. With `--guarded`, as the gate runs them, each case in
+    `tests/upper-bounds/guarded.list` must be refused by the guard, and every
+    other case passes as it would without the flag. -/
 def main (args : List String) : IO Unit := do
-  let [out] := args | throw (IO.userError "expected a fresh output directory")
+  let (out, guarded) ← match args with
+    | [out] => pure (out, false)
+    | [out, "--guarded"] => pure (out, true)
+    | _ => throw (IO.userError "expected a fresh output directory, then optionally --guarded")
+  let guardList := "tests/upper-bounds/guarded.list"
+  let listed ← if guarded then
+      pure (((← IO.FS.readFile guardList).splitOn "\n").map (·.trimAscii.toString) |>.filter
+        fun line => line != "" && !line.startsWith "#")
+    else pure []
+  let guard := "(checked upper-bound evidence is not implemented yet, #502)"
   let positive := ["process", "holder", "value", "refined", "choice-valid", "default-valid",
     "context", "override-valid", "receiver-override", "state", "cancel", "interior-path",
     "interior-containers", "interior-nested", "interior-state", "interior-cancel", "overload",
@@ -107,6 +120,22 @@ def main (args : List String) : IO Unit := do
     let root := s!"tests/upper-bounds/{name}"
     let source ← IO.FS.readFile (root ++ ".verse")
     let result := parseProgram source >>= fun tops => elabProgram tops { eventFifo }
+    -- (with the guard in place: refused by it exactly when listed)
+    if guarded then
+      let byGuard := match result with
+        | .error message => (message.splitOn guard).length > 1
+        | .ok _ => false
+      if byGuard && listed.contains artifact then
+        IO.println s!"ok {artifact}: refused by the guard"
+        continue
+      if byGuard then
+        IO.eprintln s!"FAIL {artifact}: refused by the guard, but not listed in {guardList}"
+        failures := failures + 1
+        continue
+      if listed.contains artifact then
+        IO.eprintln s!"FAIL {artifact}: listed in {guardList}, but the guard does not refuse it"
+        failures := failures + 1
+        continue
     if negative.contains name then
       let fragment := (← IO.FS.readFile (root ++ ".error")).trimAscii.toString
       match result with
