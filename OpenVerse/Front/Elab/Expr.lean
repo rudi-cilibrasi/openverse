@@ -1353,6 +1353,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
           | .ok lift =>
             modify fun s => { s with loopFirst := s.loopFirst ++
               [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
+            -- (what follows the clauses is not the trial's)
             return (code, { c2 with trial := ctx.trial })
           | .error _ => set st0
         let request := request.filter fun l =>
@@ -1530,6 +1531,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
             let (code1, c1) ← if ok then elabOneGo (ctx.withTrial .continuation) ([.decl p t none false (alt a0 0)] ++
                 binds.zipIdx.map fun (n, i) => .decl p n none (vars.contains n) (.app p (.ident p t) [.int p (i : Int)] false))
               else pure (Expr.lit .void, ctx)
+            -- (what follows the clauses is not the trial's)
             let c1 := { c1 with trial := ctx.trial }
             let fxB := (← get).fx
             match (if ok then contLiftOf ctx c1 p b.name b.alts rest fxB else .error "alternatives of different types") with
