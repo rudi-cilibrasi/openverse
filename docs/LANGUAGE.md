@@ -60,7 +60,9 @@ openverse follows Verse's lexical grammar for the characters of a file:
   column numbers, for the end of a `#` comment, and for string literals,
   which cannot contain one.
 - Error positions are `line:column`, lines from 1 and columns from 0.
-  Columns count characters, so a tab is one column.
+  Columns count characters, so a tab is one column. The first token of a
+  line has the line's indentation as its column, also after a block
+  comment: `<#C0#>f():void = 3` is a definition at column 0.
 - `<#>` starts an indented comment: the rest of its line, then every
   following line indented more than the line that contains the `<#>` (more
   leading tabs and spaces, counted as columns like the offside rule does),

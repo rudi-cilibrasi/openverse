@@ -17,7 +17,8 @@
     string literals (which cannot contain one);
   * columns count characters, so a tab is one column; each token that starts
     a line carries its line's indentation (its leading tabs and spaces), which
-    the parser checks for a consistent use of tabs and spaces.
+    the parser checks for a consistent use of tabs and spaces, and has the
+    indentation's width as its column, also when block comments precede it.
 
   Supported lexical syntax (Book of Verse, ch. 1 "Expressions", ch. 2
   "Primitives"): `#` line comments, nested `<# … #>` block comments, `<#>`
@@ -348,9 +349,13 @@ def matchSym (cs : Array Char) (pos : Nat) : Option String :=
 partial def lexAll (acc : Array Token) : LexM (Array Token) := do
   skipSpace
   let s ← get
+  -- (the first token of a line has the line's indentation as its column,
+  -- also after a block comment: `<#C0#>f():void = 3` starts at column 0,
+  -- Book of Verse tests, Roundtrip/Comments)
+  let ind := if s.bol then indentAt s.cs s.lineStart else ""
   let mk (t : Tok) : Token :=
-    { tok := t, line := s.line, col := s.col, bol := s.bol,
-      indent := if s.bol then indentAt s.cs s.lineStart else "" }
+    { tok := t, line := s.line, col := if s.bol then ind.length else s.col, bol := s.bol,
+      indent := ind }
   let emit (t : Tok) : LexM (Array Token) := do
     modify fun st => { st with bol := false }
     return acc.push (mk t)
