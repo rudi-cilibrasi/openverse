@@ -511,6 +511,8 @@ def elabProgram (allTops000 : List STop) (opts : Options := {}) : Except String 
           casts := [], loops := bridges ++ newDefaults }
   termination_by (eagerFuel, witnessFuel, fuel)
   let c ← (loop eagerRounds witnessRounds rounds opts.requests).mapError fun msg =>
+    -- (a castable_subtype(c) bound's castability, `UpperBounds.markCastable`)
+    let msg := msg.replace s!"does not satisfy subtype({castableClassMarker})" "is not <castable> (as castable_subtype(…) requires)"
     FnValues.pretty (((((stripOv ((Refine.unmarked msg).replace "$init" "<constructor>")).replace "::" ".").replace "$replaceAll" "ReplaceAll").replace extensionPrefix "").replace "$type:" "")
   -- (and the uses of deprecated definitions, warnings, `Attributes.deprecations`)
   return { c with warnings := orderWarnings (c.warnings ++ deprecated) }

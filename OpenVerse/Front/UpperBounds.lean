@@ -44,4 +44,37 @@ def checkDetermined (fname : String) (params : List SParam) (tparams : List TPar
     unless known.contains tp.name || (tp.upperBound.isNone && !inBounds.contains tp.name) do
       throw s!"{tp.pos.show}: no parameter of {fname} determines its type parameter {tp.name}, so no call can give it one: name {tp.name} in a parameter's type, outside a function type's parameters (the Book's tests, ParametricFunctions.versetest, error 3503)"
 
+/-- The type parameters a definition declares, its methods' too. -/
+partial def tparamsOf : STop → List TParam
+  | .fn _ _ _ tps .. => tps
+  | .const _ _ _ _ (.structDef _ tps _ _) => tps
+  | .classDef _ _ _ tps _ _ _ _ methods => tps ++ methods.flatMap tparamsOf
+  | _ => []
+
+/-- The metatypes openverse takes as a type parameter's bound: `subtype(c)`
+    and `castable_subtype(c)`, which the Book's tests write
+    (`Castable.versetest` 510-603). `concrete_subtype(c)` is refused: the
+    instance it asks for is a class marked `<concrete>` (`TypeValues`), which
+    a class below one is not, so it is no subtype relation a bound's checked
+    evidence can carry. -/
+def checkKinds (params : List TParam) : Except String Unit := do
+  for tp in params do
+    if tp.constraint == "concrete_subtype" && tp.upperBound.isSome then
+      throw s!"{tp.pos.show}: {tp.name}:concrete_subtype(…) is not supported as a type parameter's bound: a concrete class's subclasses need not be concrete, so it is no subtype relation; write {tp.name}:subtype(…)"
+
+/-- A program that writes a `castable_subtype(c)` bound has the interface
+    `castableClassMarker`, above each `<castable>` class and interface (and
+    so above the classes below them, as castability is inherited): the bound
+    is `subtype(c)` and `subtype(castableClassMarker)` together, each with its
+    own checked evidence (`resolveTParams`). Unchanged otherwise. -/
+def markCastable (tops : List STop) : List STop :=
+  if !(tops.flatMap tparamsOf).any (·.constraint == "castable_subtype") then tops else
+  let p0 : Pos := { line := 0, col := 0 }
+  let marker : STop := .classDef p0 castableClassMarker [] [] ["computes"] [] true [] []
+  marker :: tops.map fun
+    | .classDef p n nsp tps specs parents isI fs ms =>
+      .classDef p n nsp tps specs (if specs.contains "castable" then parents ++ [.name castableClassMarker] else parents)
+        isI fs ms
+    | t => t
+
 end OpenVerse.Front.UpperBounds

@@ -245,6 +245,7 @@ partial def checkTy (p : Pos) : STy → Except String Unit
 
 def checkTParams (params : List TParam) : Except String Unit := do
   for param in params do param.upperBound.forM (checkTy param.pos)
+  UpperBounds.checkKinds params
 
 partial def checkExpr (e : SExpr) (file : String := "") : Except String Unit := do
   let p := if e.pos.file.isEmpty then { e.pos with file } else e.pos

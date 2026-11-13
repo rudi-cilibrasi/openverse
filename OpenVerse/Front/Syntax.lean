@@ -122,6 +122,17 @@ structure TParam where
   upperBound : Option STy := none
   deriving Repr, Inhabited, BEq
 
+/-- The interface every `<castable>` class and interface is below when a
+    program writes a `castable_subtype(…)` bound (`UpperBounds.markCastable`):
+    the bound's castability is a subtype relation, with checked evidence. -/
+def castableClassMarker : String := "$castableClass"
+
+/-- A metatype written as a type parameter's bound, `t:castable_subtype(c)`
+    or `t:concrete_subtype(c)`: the upper bound `c`, and the metatype kept
+    as its constraint. -/
+def TParam.withMetatype (p : Pos) (name kind : String) (bound : STy) : TParam :=
+  { pos := p, name, constraint := kind, upperBound := some bound }
+
 /-- Keep the established type/comparable spelling while retaining the full
     source type of other bounds. Admission is the elaborator's responsibility. -/
 def TParam.withUpperBound (p : Pos) (name : String) (bound : STy) : TParam :=
