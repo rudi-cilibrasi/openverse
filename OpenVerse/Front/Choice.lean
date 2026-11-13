@@ -863,11 +863,10 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
   -- generator after them)
   | .bin .. | .range .. | .member .. | .query .. | .neg .. | .tuple .. | .arrayLit .. | .str .. | .mapLit .. =>
     return e.withChildren (← liftOps isVal isField e.children)
-  -- (#283) `A and B`: its operands in order, each a block, as each is a scope
-  -- of its own: `A` a clause, then `B` the value
-  | .andE _ a b =>
-    liftInto isVal isField (.block a.pos [a])
-    liftE isVal isField (.block b.pos [b])
+  -- (#283) `A and B`: its operands in order, in one block, as the `and` is
+  -- a scope of its own whose names `B` sees (Book of Verse ch. 7): `A` a
+  -- clause, then `B` the value
+  | .andE p a b => liftE isVal isField (.block p [a, b])
   | .orE .. => liftE isVal isField (orIf (← get).site e)
   | .cmp p a rest => liftCmp isVal isField p (a :: rest.map (·.2)) (rest.map (·.1))
   | .construct p n ts fs =>
