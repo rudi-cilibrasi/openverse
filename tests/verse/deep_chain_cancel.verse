@@ -14,35 +14,35 @@ Down(N:int, Tag:string)<suspends>:int =
 Count(N:int, K:int)<suspends>:int =
     if (N = 0):
         for (I := 1..K):
-            Sleep(0.0)
+            Sleep(0.01)
         K
     else:
         Count(N - 1, K) + 1
 Child(X:int)<suspends>:int =
-    Sleep(0.0)
+    Sleep(0.01)
     X * 10
 Spawner(N:int)<suspends>:int =
     if (N = 0):
         T := spawn{Child(4)}
         branch:
-            Sleep(0.0)
+            Sleep(0.01)
             Print("branch ran")
         V := T.Await()
-        Sleep(0.0)
+        Sleep(0.01)
         V
     else:
         Spawner(N - 1) + 1
 Gen(N:int, X:t where t:type)<suspends>:t =
     if (N = 0):
-        Sleep(0.0)
-        Sleep(0.0)
+        Sleep(0.01)
+        Sleep(0.01)
         X
     else:
         Gen(N - 1, X)
 Main()<suspends>:void =
     T := spawn{Down(8, "a")}
-    Sleep(0.0)
-    Sleep(0.0)
+    Sleep(0.01)
+    Sleep(0.01)
     T.Cancel()
     Print("cancelled")
     W := race:

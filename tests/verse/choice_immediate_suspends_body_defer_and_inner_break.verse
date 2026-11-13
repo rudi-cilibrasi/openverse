@@ -12,5 +12,5 @@ Use(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<suspends>:void =
             break
         Print("body {Total}")
     Print("source {Total}")
-    Sleep(0.0)
+    Sleep(0.01)
 Main()<suspends>:void = Use(dup(int){A:=1,B:=2},dup(string){A:="s",B:="t"})

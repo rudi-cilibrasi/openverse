@@ -7,13 +7,13 @@ dup(t:type) := class(pair(t, t)):
 ThenNested(P:pair(a, b), Q:pair(c, d) where a:type, b:type, c:type, d:type)<suspends>:void =
     if (D := dup[P]):
         if (E := dup[Q]):
-            Sleep(0.0)
+            Sleep(0.01)
             Print("nested then")
 ElseNested(P:pair(a, b), Q:pair(c, d) where a:type, b:type, c:type, d:type)<suspends>:void =
     if (D := dup[P]):
         Print("outer then")
     else if (E := dup[Q]):
-        Sleep(0.0)
+        Sleep(0.01)
         Print("nested else")
 # The else runs in the source function and owns the background task.
 ElseOwner(P:pair(a, b) where a:type, b:type)<suspends>:void =
@@ -23,7 +23,7 @@ ElseOwner(P:pair(a, b) where a:type, b:type)<suspends>:void =
         branch:
             Sleep(1.0)
             Print("background")
-        Sleep(0.0)
+        Sleep(0.01)
         Print("else done")
     Sleep(2.0)
     Print("caller done")

@@ -16,6 +16,7 @@
   * The result is checked with `Prog.check` (proved to imply the hypotheses of
     the core theorems) before anyone runs it.
 -/
+import OpenVerse.Front.TypeValues
 import OpenVerse.Core.Show
 import OpenVerse.Core.Check
 import OpenVerse.Core.Derived
@@ -832,7 +833,8 @@ def builtins : List String :=
     definition, if any, is the one a call means. -/
 def softBuiltins : List String :=
   ["Round", "Int", "Sqrt", "Exp", "Ln", "Log", "Pow", "Sin", "Cos", "Tan", "ArcSin", "ArcCos", "ArcTan",
-   "IsFinite", "Concatenate", "Sinh", "Cosh", "Tanh", "ArSinh", "ArCosh", "ArTanh", "Lerp", "Clamp", "Sgn"]
+   "IsFinite", "Concatenate", "Sinh", "Cosh", "Tanh", "ArSinh", "ArCosh", "ArTanh", "Lerp", "Clamp", "Sgn",
+   "BitAnd", "BitOr", "BitXor", "BitNot", "BitShiftLeft", "BitShiftRight"]
 
 partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .name "int" => pure .int
@@ -2382,7 +2384,14 @@ partial def joinTyShaped (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Boo
         env.isSub S U && env.isSub T U && env.upArgs S as U == us && env.upArgs T bs U == us
       let atU (U : String) : Ty :=
         (Ty.struct U (env.upArgs S as U)).commonBounds (.struct U (env.upArgs T bs U))
-      let cands := (env.supers S).filter fun U => up U (env.upArgs S as U)
+      -- (two type values join at a metatype that constructs neither, as
+      -- a class value's type is its own class, and a join of two keeps only
+      -- the bound above both: Book of Verse tests, Archetypes.versetest:110,
+      -- "Ensure a particular class (rather than a bound)"; `TypeValues`)
+      let typeValues := S.startsWith "$type:" && T.startsWith "$type:"
+      let cands := (env.supers S).filter fun U => up U (env.upArgs S as U) &&
+        !(typeValues && (U.startsWith "concrete_subtype(" || U == "$castable" ||
+          (U.startsWith "castable_subtype(" && !env.isSub U "$castable")))
       let common : Option Ty :=
         match cands.find? fun U => !(env.info U).isIface with
         | some U => some (atU U)
@@ -2390,8 +2399,11 @@ partial def joinTyShaped (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Boo
           match cands.filter (fun U => !cands.any fun U' => U' != U && env.isSub U' U) with
           | [U] => some (atU U)
           | _ => none
+      -- (two type values join at their metatype before the expected type
+      -- is met: Castable.versetest:145, "array-type is []{false, class1}
+      -- which is NOT castable")
       match exp with
-      | some (.struct U us) => if env.classes.contains U && up U us then some (atU U) else common
+      | some (.struct U us) => if !typeValues && env.classes.contains U && up U us then some (atU U) else common
       | _ => common
     else none
   | .arr x, .arr y => (joinTy env x y (match exp with | some (.arr e) => some e | _ => none) true).map .arr
@@ -2440,6 +2452,25 @@ def Ty.looseJoin (t : Ty) : Bool := t == .any || t == .dyn
 def fallbackJoin (env : TyEnv) (a b : Ty) : Ty :=
   if isComparable env a && isComparable env b && a.params.isEmpty && b.params.isEmpty then .dyn
   else .any
+
+/-- The elements of a container literal expected to be of a metatype other
+    than `subtype` (`castable_subtype(A)`, `concrete_subtype(A)`; `TypeValues`)
+    are two or more type values: their join, which is met before the
+    expected type (`joinTy`), must be of it (Book of Verse tests,
+    Castable.versetest 145, 168: "the collective subtype is {false, class1}
+    which is not castable"). -/
+def checkTypeValueJoin (env : TyEnv) (p : Pos) (exp : Option Ty) (tys : List Ty) : Except String Unit := do
+  let some (.struct n []) := exp | return
+  let some (k, _) := TypeValues.bound? n | return
+  if k == "subtype" then return
+  match tys with
+  | t :: rest@(_ :: _) =>
+    let j := rest.foldl (fun acc u => acc.bind fun a => joinTy env a u none) (some t)
+    match j with
+    | some (.struct m []) => if m != n && !env.isSub m n then throw s!"{p.show}: these type values are together a {m}, not a {n}"
+    | some _ => pure ()
+    | none => throw s!"{p.show}: these type values have no metatype in common that is a {n}"
+  | _ => pure ()
 
 /-- The type of a two-branch construct (`joinTy`; a void branch makes it void). -/
 def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty := do

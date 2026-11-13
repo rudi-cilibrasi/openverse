@@ -5,12 +5,12 @@ ra:=class<computes>{K:int}
 rb:=class<computes>{K:int}
 WA(H:cell,X:int)<suspends><transacts>:ra=
     defer:Print("call {H.N}")
-    Sleep(0.0)
+    Sleep(0.01)
     set H.N+=1
     ra{K:=H.N}
 WB(H:cell,X:string)<suspends><transacts>:rb=
     defer:Print("call {H.N}")
-    Sleep(0.0)
+    Sleep(0.01)
     set H.N+=1
     rb{K:=H.N}
 ca:=class{V:int=7;F:type{_(:cell,:int)<suspends><transacts>:ra}=WA}

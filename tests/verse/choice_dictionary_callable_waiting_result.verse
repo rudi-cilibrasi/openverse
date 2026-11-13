@@ -3,8 +3,8 @@ Dup(X:t where t:type)<computes>:t=X|X
 Keep(X:t where t:subtype(comparable))<computes>:int=if(X=X)then 1 else 0
 ra:=class<computes>{K:int=1}
 rb:=class<computes>{K:int=2}
-IA(X:int)<suspends><computes>:ra=block{Sleep(0.0);ra{}}
-SB(X:string)<suspends><computes>:rb=block{Sleep(0.0);rb{}}
+IA(X:int)<suspends><computes>:ra=block{Sleep(0.01);ra{}}
+SB(X:string)<suspends><computes>:rb=block{Sleep(0.01);rb{}}
 ca:=class{V:int=7;F:type{_(:int)<suspends><computes>:ra}=IA}
 cb:=class{V:string="s";F:type{_(:string)<suspends><computes>:rb}=SB}
 Main()<suspends>:void=

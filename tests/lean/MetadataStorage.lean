@@ -78,8 +78,8 @@ private def forwards : List (String × String) := [
   ("metadata function overwritten with data", "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<transacts>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    Stored()"),
   ("nested overwrite returns data", "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<transacts>:int=\n    Saved:=block{var Stored:type{_()<computes>:int}=Dummy;set Stored=F;Stored}\n    Saved()"),
   ("overwrite in condition clauses", "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<transacts>:int=\n    if(var Stored:type{_()<computes>:int}=Dummy,set Stored=F,Value:=Stored(),Value>=0)then Value else 0"),
-  ("opaque metadata alias in suspended stage", "Dup(N:int)<computes>:int=N|N\nCaller(Dummy:u where u:type)<suspends>:[]u=\n    var Stored:u=Dummy\n    Saved:=Stored\n    for(A:=(Dup(1)|Dup(2)),B:=(Dup(1)|Dup(2))):block{Sleep(0.0);Saved}"),
-  ("real overwrite alias in suspended stage", "Dup(N:int)<computes>:int=N|N\nCaller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:[]int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    Saved:=Stored\n    for(A:=(Dup(1)|Dup(2)),B:=(Dup(1)|Dup(2))):block{Sleep(0.0);Saved()}"),
+  ("opaque metadata alias in suspended stage", "Dup(N:int)<computes>:int=N|N\nCaller(Dummy:u where u:type)<suspends>:[]u=\n    var Stored:u=Dummy\n    Saved:=Stored\n    for(A:=(Dup(1)|Dup(2)),B:=(Dup(1)|Dup(2))):block{Sleep(0.01);Saved}"),
+  ("real overwrite alias in suspended stage", "Dup(N:int)<computes>:int=N|N\nCaller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:[]int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    Saved:=Stored\n    for(A:=(Dup(1)|Dup(2)),B:=(Dup(1)|Dup(2))):block{Sleep(0.01);Saved()}"),
   ("mutable implicit evidence after real overwrite", "Caller(X:t,Dummy:evidence(vehicle,t),Real:type{_()<computes>:evidence(vehicle,t)} where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    set Stored=Real()\n    X.N")]
 
 private def compileCase (source : String) (dummy : Bool) : Except String Compiled := do

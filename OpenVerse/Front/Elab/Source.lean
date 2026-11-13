@@ -4,6 +4,8 @@ import OpenVerse.Front.Elab.Lowering
 import OpenVerse.Front.InitializerConvergence
 import OpenVerse.Front.Aliases
 import OpenVerse.Front.BuiltinValues
+import OpenVerse.Front.Bitwise
+import OpenVerse.Front.TypeValues
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -21,8 +23,8 @@ structure Admitted where
       from the definitions: `inferSignatures` checks them. -/
   typeDefaults : List STop
   /-- The compiler's definitions the program needs: the rationals' (#116),
-      `ReplaceAll`'s, the concurrency prelude's (#156) and subscribable
-      events' (#210, #220). -/
+      `ReplaceAll`'s, the bitwise functions', the concurrency prelude's
+      (#156) and subscribable events' (#210, #220). -/
   helpers : List STop
   /-- The functions of `helpers` that implement finite intrinsic operations
       (`InitializerConvergence`). -/
@@ -41,6 +43,8 @@ structure Admitted where
   constructionFx : Std.HashMap String (List String)
   /-- What the elaboration needs to judge a use of a class's member (`Access.Env`). -/
   access : Access.Env := {}
+  /-- The `case` arms marked `@ignore_unreachable` (`ignoredArmsMarker`). -/
+  ignoredArms : List Pos := []
 
 /-- Each name is defined once in its scope, the top level or a module: only
     functions of one scope share a name, as its overloads. A class, an
@@ -317,6 +321,50 @@ partial def checkForClauses (tops : List STop) : Except String Unit := do
       for m in ms do
         if let .fn _ _ ps _ _ _ body := m then ps.forM (·.default.forM go); go body
 
+/-- The code of a `spawn` cannot leave it: no `return`, and no `break` but
+    of a loop inside it (Book of Verse tests, `SpawnAndTask.versetest` 876-892:
+    "Can't break or return from a spawn", 3551). -/
+partial def checkSpawnExits (tops : List STop) : Except String Unit := do
+  let refuse (p : Pos) (what : String) : Except String Unit :=
+    throw s!"{p.show}: a {what} inside spawn would leave it: the spawned call runs as a task of its own (Book of Verse tests, SpawnAndTask.versetest)"
+  -- (`inLoop`: inside a loop of the spawn's own code)
+  let rec inSpawn (inLoop : Bool) : SExpr → Except String Unit
+    | .ret p _ => refuse p "return"
+    | .brk p => if inLoop then pure () else refuse p "break"
+    | .loop _ b => inSpawn true b
+    | .structDef .. => pure ()
+    | e => e.children.forM (inSpawn inLoop)
+  let rec go : SExpr → Except String Unit
+    | .app _ (.ident _ "$spawn") [b] false => inSpawn false b
+    | .structDef _ _ _ fs => fs.forM fun f => f.default.forM go
+    | e => e.children.forM go
+  for t in tops do
+    match t with
+    | .fn _ _ ps _ _ _ body => ps.forM (·.default.forM go); go body
+    | .const _ _ _ _ e => go e
+    | .classDef _ _ _ _ _ _ _ fs ms =>
+      fs.forM fun f => f.default.forM go
+      for m in ms do
+        if let .fn _ _ ps _ _ _ body := m then ps.forM (·.default.forM go); go body
+
+/-- A `profile` block is code of a function's, not of an initializer: none
+    in a constant's value or a field's default (Book of Verse tests,
+    profile_simple.versetest:144, "Cannot use profiles inside initializers -
+    only allowed inside control-blocks", 3675). -/
+def checkProfiles (tops : List STop) : Except String Unit := do
+  let profile? : SExpr → Option SExpr :=
+    Refine.findPart (fun | .decl _ n .. => n.startsWith "$profile" | _ => false) false
+  let refuse (p : Pos) (what : String) : Except String Unit :=
+    throw s!"{p.show}: profile is not allowed in {what}: an initializer; it measures code of a function's (Book of Verse tests, profile_simple.versetest)"
+  for t in tops do
+    match t with
+    | .const _ _ _ _ (.structDef _ _ _ fs) | .classDef _ _ _ _ _ _ _ fs _ =>
+      for f in fs do
+        if let some r := f.default.bind profile? then refuse r.pos s!"the default of '{f.name}'"
+    | .const _ n _ _ e =>
+      if let some r := profile? e then refuse r.pos s!"the value of {n}"
+    | .fn .. => pure ()
+
 /-- `return` leaves a function's body, so it is refused where there is none: in
     a constant's value, and in a field's default, which is evaluated where an
     object is constructed and would leave the function that constructs it. -/
@@ -333,6 +381,62 @@ def checkReturns (tops : List STop) : Except String Unit := do
         throw s!"{r.pos.show}: return is not allowed in a constant's value (of {n}), which is in no function"
     | .fn .. => pure ()
 
+mutual
+/-- `checkNestedReturns`: code whose value is not returned. -/
+partial def nestedReturnsFree : SExpr → Except String Unit
+  | .ret _ (some e) => nestedReturnsResult e
+  | .structDef .. | .typeAlias .. | .refineDef .. | .enumDef .. => pure ()
+  | e => e.children.forM nestedReturnsFree
+
+/-- `checkNestedReturns`: in result position. -/
+partial def nestedReturnsResult : SExpr → Except String Unit
+  | .ret _ (some e) => nestedReturnsResult e
+  | .ret _ none => pure ()
+  | .block _ es => do
+    es.dropLast.forM nestedReturnsFree
+    es.getLast?.forM nestedReturnsResult
+  | .ite _ cs t (some e) => do cs.forM nestedReturnsFree; nestedReturnsResult t; nestedReturnsResult e
+  | .ite _ cs t none => do cs.forM nestedReturnsFree; nestedReturnsFree t
+  | .caseE _ sc arms => do
+    nestedReturnsFree sc
+    arms.forM fun (pt, v) => do pt.forM nestedReturnsFree; nestedReturnsResult v
+  | .loop _ b => nestedReturnsFree b
+  | .decl _ _ _ _ x => nestedReturnsResult x
+  | .structDef .. | .typeAlias .. | .refineDef .. | .enumDef .. => pure ()
+  | e => e.children.forM nestedReturnsPart
+
+/-- `checkNestedReturns`: a part of a value returned. -/
+partial def nestedReturnsPart : SExpr → Except String Unit
+  | .ret p _ => throw s!"{p.show}: a return inside the value a function returns: a return is that value, or a branch of it, or in code whose value is not returned (Book of Verse tests, Return.versetest: \"Return can't be a subexpression of an explicit or implicit return\")"
+  | .structDef .. | .typeAlias .. | .refineDef .. | .enumDef .. => pure ()
+  | e => e.children.forM nestedReturnsPart
+end
+
+/-- A `return` in a function whose result is not `void` is the value of a
+    function's body, a branch of it or of a `case`, the operand of a
+    `return`, or code whose value is not returned: not a part of a value a
+    function returns (Book of Verse tests, `Return.versetest` 114-162: "Return
+    can't be a subexpression of an explicit or implicit return, with a few
+    exceptions", 3534). The value a function returns (its body's, or a
+    `return`'s operand) is read in *result* position: a block's last item,
+    both branches of an `if` with an `else`, a `case`'s arms and a
+    `return`'s operand are in it too; a block's other items, the conditions
+    of an `if`, the body of a `loop` (whose value is `false`) and of an `if`
+    with no `else` (whose value is `false` too) are code whose value is not
+    returned, where a `return` may be, its own operand in result position;
+    anything else in result position (an operator's operands, a call's
+    arguments, an array's or a tuple's elements, a construction's fields, a
+    `for`'s clauses and body, whose values make its value) is part of the
+    value, where no `return` may be. -/
+partial def checkNestedReturns (tops : List STop) : Except String Unit := do
+  let fn : STop → Except String Unit
+    | .fn _ _ _ _ _ ret body => if ret == .name "void" then pure () else nestedReturnsResult body
+    | _ => pure ()
+  for t in tops do
+    match t with
+    | .fn .. => fn t
+    | .classDef _ _ _ _ _ _ _ _ ms => ms.forM fn
+    | _ => pure ()
 /-- A `return` or a `break` does not leave a failure context (the Book of
     Verse: `FlowControl/Reachability.versetest:12`, "Explicit return out of a
     failure context is not allowed", error 3535;
@@ -417,10 +521,21 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   SourceProfile.check opts.profile allTops0r opts.entry
   -- rationals (#116): the helpers, for a program that may use them
   let isRatMarker : STop → Bool := fun
-    | .const _ n _ _ _ => n == ratMarker || n == replaceAllMarker
+    | .const _ n _ _ _ => n == ratMarker || n == replaceAllMarker || n == ignoredArmsMarker || n == bitwiseMarker
     | _ => false
+  let ignoredArms := allTops0r.flatMap fun
+    | .const _ n _ _ (.block _ es) => if n == ignoredArmsMarker then es.map (·.pos) else []
+    | _ => []
   let usesReplaceAll := allTops0r.any (fun | .const _ n _ _ _ => n == replaceAllMarker | _ => false) || opts.entry.isSome
-  let usesRat := allTops0r.any isRatMarker || opts.entry.isSome
+  -- (the markers but the bitwise functions', as before them)
+  let isHelperMarker : STop → Bool := fun
+    | .const _ n _ _ _ => n == ratMarker || n == replaceAllMarker || n == ignoredArmsMarker
+    | _ => false
+  let usesRat := allTops0r.any isHelperMarker || opts.entry.isSome
+  -- the bitwise functions' helpers, for a program that names one (also in
+  -- its entry expression)
+  let usesBitwise := allTops0r.any (fun | .const _ n _ _ _ => n == bitwiseMarker | _ => false) ||
+    (opts.entry.map mentionsBitwise).getD false
   -- (a type of the program's own cannot take a built-in type's name)
   for t in allTops0r do
     match t with
@@ -432,13 +547,19 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   let scopePairs ← checkNoShadowing allTops0r
   checkReturns allTops0r
   checkJumps allTops0r
+  checkNestedReturns allTops0r
+  checkSpawnExits allTops0r
+  checkProfiles allTops0r
   checkDefers allTops0r
   checkForClauses allTops0r
   let helpers ← if usesRat then ratTops else pure []
   let helpers := helpers ++ (← if usesReplaceAll then replaceAllTops else pure [])
+  let helpers := helpers ++ (← if usesBitwise then bitwiseTops else pure [])
   -- These compiler-owned implementations expand finite intrinsic operations:
   -- Euclid/continued fractions decrease absolute remainders; ReplaceAll
-  -- advances through a finite input. Ordinary source names cannot supply them.
+  -- advances through a finite input; the bitwise helpers halve or double an
+  -- int64 at most 64 times (a left shift ends at the overflow error by then).
+  -- Ordinary source names cannot supply them.
   let intrinsicCalls := helpers.filterMap fun | .fn _ n .. => some n | _ => none
   let allTops000 := allTops0r.filter (!isRatMarker ·)
   -- modules (#112): every reference to a member, qualified (the entry
@@ -464,6 +585,8 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   Access.checkConsistency levels resolved
   let access := Access.Env.of levels (Access.Sites.of resolved) resolved
   Access.checkUses access resolved
+  -- (types as values, `subtype(t)` and its kin: classes and interfaces)
+  let resolved ← TypeValues.desugar resolved
 
   -- (the built-ins it names as values, as definitions of their own: after
   -- the aliases, whose names are no values' and bind nothing)
@@ -510,7 +633,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
       budgets.insert n (EffectPolicy.constructionFx specs)
     | _ => budgets) ({} : Std.HashMap String (List String))
   return { resolved, rawEntry, typeDefaults, helpers, intrinsicCalls, concurrencyNames, usesConc, constructionFx, access,
-           scopePairs }
+           scopePairs, ignoredArms }
 
 /-- A program's source as elaborated (`inlineSource`). -/
 structure Source where
@@ -525,6 +648,8 @@ structure Source where
   constructionFx : Std.HashMap String (List String)
   /-- `Admitted.access`. -/
   access : Access.Env := {}
+  /-- `Admitted.ignoredArms`. -/
+  ignoredArms : List Pos := []
 
   /-- The uses of methods whose family the receiver's class picks (#283). -/
   familySites : List (Pos × String)
@@ -635,7 +760,8 @@ def inlineSource (allTops0r : List STop) (requests : Requests) (admitted : Admit
       (resolved.drop (resolved.length - admitted.rawEntry.length)) (requests.fns.map fun (n, t) => (n, t.toSTy))
       requests.methods written))
   let entryTop := resolved.drop (resolved.length - admitted.rawEntry.length)
-  return { tops := allTops00, entry := entryTop, constructionFx, access := admitted.access, familySites,
+  return { tops := allTops00, entry := entryTop, constructionFx, access := admitted.access,
+           ignoredArms := admitted.ignoredArms, familySites,
            overloadSites, nestedSites, fieldSites }
 
 

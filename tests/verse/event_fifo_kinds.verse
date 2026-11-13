@@ -14,7 +14,7 @@ SignalLater(E:event(int), Delay:float, V:int)<suspends>:void =
 Main()<suspends>:void =
     S := sticky_event(int){}
     A := spawn{Waiter(S, "sA", 0.1)}
-    B := spawn{Waiter(S, "sB", 0.0)}
+    B := spawn{Waiter(S, "sB", 0.01)}
     Sleep(0.2)
     S.Signal(1)
     A.Await()
@@ -22,13 +22,13 @@ Main()<suspends>:void =
     U := subscribable_event(int){}
     Sub := U.Subscribe(Note)
     C := spawn{Waiter(U, "uC", 0.1)}
-    D := spawn{Waiter(U, "uD", 0.0)}
+    D := spawn{Waiter(U, "uD", 0.01)}
     Sleep(0.2)
     U.Signal(2)
     C.Await()
     D.Await()
     E := event(int){}
-    F := spawn{Waiter(E, "F", 0.0)}
+    F := spawn{Waiter(E, "F", 0.01)}
     G := spawn{SignalLater(E, 0.1, 3)}
     sync:
         block:

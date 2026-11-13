@@ -1,0 +1,6 @@
+82:13: warning: color.Green is deprecated
+92:12: warning: OldAPI is deprecated
+92:23: warning: OlderAPI is deprecated: Use NewAPI instead.
+92:53: warning: Limit is deprecated
+94:46: warning: point is deprecated
+94:54: warning: Helper is deprecated

@@ -5,7 +5,7 @@
 Deep(N:int)<suspends>:int =
     if (N = 0):
         for (I := 1..400):
-            Sleep(0.0)
+            Sleep(0.01)
         0
     else:
         Deep(N - 1) + 1

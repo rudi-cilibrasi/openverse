@@ -1341,6 +1341,66 @@ once types are resolved. So a program with such a field and, say, an override
 of the wrong signature is refused for the override.
 
 
+## Applications, in order
+
+An application, `F(…)` or `F[…]`, is elaborated by `elabAppBaseWith`
+(`Elab/Application.lean`), which reads as the list of the kinds of
+application in the order they are tried; each kind is a function of its
+own, with a doc comment that says what it handles. The order decides which
+meaning an application that could have two gets, and which refusal one that
+has none gets. (`elabApp`, `Elab/Expr.lean`, comes first: it expands a tuple
+argument a call cannot take as it is, then comes here.) By its callee:
+
+1. `(t)(X)`, a type written as one: a conversion (`elabWrittenConversion`).
+2. A name `F`, tried as, in turn:
+   1. an extension method's call, which the modules' pass wrote
+      `$ext:M(X, …)` (`elabExtensionCallWith`);
+   2. a local: a cast through a type value, `T[X]`, or the local's value
+      indexed or called (`elabLocalApp`);
+   3. in a method, a method of `Self` or a field of `Self` that has no
+      built-in's name: `Self.F(…)` (`callsSelfMember`);
+   4. a class or interface that is not also a function: a cast (`elabCast`);
+   5. a refinement type: a cast, `age[X]` (`elabRefinementCast`);
+   6. a built-in type, a struct or an enum, without brackets: a conversion,
+      `int(X)` (`convertsByName`, `elabConversionWith`);
+   7. an overloaded function: the overload the call fits
+      (`elabOverloadedCall`);
+   8. a built-in function: the row of its name in `builtinFunctions`
+      (`Elab/Builtins.lean`; `builtinCalled` says which name a call means:
+      `$F` is always the built-in, a soft built-in the program defines is
+      the program's);
+   9. the program's function or constant (`elabFunctionCall`): a generic
+      call, a call with positional arguments (`elabPositionalCall`) or with
+      named ones (`elabNamedArgsCall`), or a constant's value indexed; else
+      the refusal of an abstract class's constructor or of an unknown
+      function.
+3. `(super:)M(…)`: the inherited implementation (`elabSuperCall`).
+4. `X.M(…)` (`elabMemberApp`), tried as, in turn: a type value is refused
+   as a receiver; `Await`, `Cancel` or `Signal` of a type parameter's value
+   (`elabParamConcurrencyCall?`); `Cancel` of a task (`elabTaskCancel?`);
+   `Signal` of an event (`elabEventSignal?`); `Await` of a task or an event
+   (`elabAwait?`); then of the receiver, bound and qualified
+   (`qualifiedReceiver`): an overloaded method (`elabOverloadedMethodCall?`),
+   a method of a class or interface (`elabMethodCall`), a field's value
+   indexed or called, and a built-in type's method (`elabMethod`).
+5. Any other expression: its value indexed or called (`elabValueApp`).
+
+A call of a class's or interface's method (`elabMethodCall`) is checked,
+its receiver evaluated first, then is either a direct call of the one
+implementation every class below the receiver's type has
+(`directImplementation?`, `elabDirectMethodCall`) or a dispatch on the
+class of the receiver's object, whose arguments are evaluated once each
+first (`dispatchArgs`): spawned (`elabSpawnMethodDispatch`), through views
+(`elabViewDispatch`), through a reference (`elabReferenceDispatch`) or
+through a value (`elabValueDispatch`).
+
+The built-in functions are one table, `builtinFunctions`: each row a name,
+an arity (`Arity`, which the elaboration's refusals say: "Pow takes two
+floats") and the function that elaborates a call (`BuiltinCall → EM R`).
+A built-in is added by a row, its elaboration, and its name in `builtins`
+or `softBuiltins` (`Elab/Context.lean`).
+
+
 ## Elaboration in rounds
 
 Some of what a program needs is known only once its types are: a function
@@ -1383,7 +1443,8 @@ callback-based control/call helpers, expression elaboration, final lowering,
 and the phases of a program's elaboration (`Source`, `Classes`, `Environment`,
 `Signatures`, `Functions`; "Elaboration in phases").
 Application and statement handlers receive the recursive entry points as
-callbacks; their public wrappers keep the original signatures. This keeps each
+callbacks (an application's as one record, `AppElab`); their public
+wrappers keep the original signatures. This keeps each
 generated C translation unit below the browser build's 8 MiB optimization
 threshold. The expression entry point uses an exhaustive constructor router
 and four ordered handler stages. Only applications fall through
@@ -1571,6 +1632,41 @@ aliases are written out (so a signature naming an alias names what it
 aliases), with `Access.checkAliases` before, as an alias is a definition
 with an access of its own.
 
+## Attributes: checked and taken out first
+
+An attribute (`@a`, `@a{F := e}`, `@f(…)`; the rules are pinned in
+[research/attributes.md](research/attributes.md)) is kept by the parser in
+two places: among the specifiers of its definition's name, `@a` beside
+`<public>`, and as a record after the definition, `$attr:L_C`, a constant
+whose specifiers are the definition's place and name and whose value is the
+attribute as written (a member's records are given out after its class, as
+the defaults function types write are). `Attributes.apply` is the first
+step of `elabProgram`: it reads the records, checks each attribute against
+its definition's place and its class's scopes, removes the records and the
+`@a` specifiers, and adds for each custom attribute (and for each field
+given to the Book's) a constant `$attrCheck:N@a` of
+its type in the definition's scope, which `checkTypeDefaults` elaborates and
+drops: an attribute's value is checked where the Book checks it and never
+evaluated or compiled. `@available` that versions a definition out removes
+it, and a module's members, before anything resolves a name. No attribute
+reaches Verse Core.
+
+## Types as values: classes the front end writes
+
+A class or interface named as a value, and the metatypes `subtype(c)`,
+`castable_subtype(c)`, `concrete_subtype(c)` and `type`, are written with
+ordinary classes and interfaces by `TypeValues.desugar`, after modules and
+access are resolved ([research/types-as-values.md](research/types-as-values.md)):
+`C` is `$type:C{}`, an object of a class of its own, and each metatype of a
+class `A` an interface below the same metatype of `A`'s parents. A type value
+is the kind of witness #520's evidence is: an object whose methods do what the
+type does, `$cast(A)(X:A)<decides>:A`, given as `C[X]`, and
+`$make(A)():A`, given as `C{}`; the elaborator writes `T[X]` and `T{}` with
+`T` of a metatype as calls of them. Joins of type values, the one place
+where interfaces would say more than the Book's metatypes (a join keeps no
+concreteness, and castability only of a castable bound), are restricted in
+`joinTy`. No Verse Core is added.
+
 ## Type aliases: a substitution before elaboration
 
 A type alias (`player_id := int`, `pair(t:type) := tuple(t, t)`, Book of
@@ -1689,14 +1785,17 @@ them), so the theorems' axioms now include it besides `propext` and
 `Quot.sound` (`docs/CLAIMS.md`).
 
 Two things are computed exactly from the bits, in Lean with integers and in
-C with integer arithmetic and correctly rounded `printf`/`strtod`:
+C with integer arithmetic and correctly rounded `printf`:
 
 - the conversions to int (`Floor`, `Ceil`, `Round` with ties to even,
   `Int`), which fail on NaN or an infinity, and raise the overflow error out
   of range;
-- `ToString`: for each length `p`, the correctly rounded `p`-digit decimal
-  or its neighbour on the other side of the value, the first that reads
-  back as it, laid out as Python's `repr`.
+- `ToString` (`VFloat.fixed6`, the Book's API): the magnitude in millionths,
+  `m·2^e·10^6` rounded half to even by one integer division, laid out with
+  six digits after the point and a `-` from the sign bit; in C, `"%.6f"`
+  (exact in glibc, and rounding in the default mode, ties to even). The
+  shortest round-trip decimal (`VFloat.render`) is kept for the compiler's
+  messages.
 
 `scripts/fuzz-floats.sh` checks both implementations against Python's
 doubles. In the binary format a float literal is the primitive `fofBits` of
@@ -1813,6 +1912,33 @@ soundness, type-safety, scoping and control proofs build as before. The C
 wide implementation is tested against independent exact-fraction oracles;
 it is outside QuickProof's existing two-int arithmetic law. See
 [the rational seam](SEAMS.md#4-rational-arithmetic).
+
+## Bitwise functions: helpers written in Verse
+
+The Book's bitwise functions (ch. 4) are written with Verse Core's existing
+operations, as the rationals' helpers are, so Verse Core, its proofs, the
+binary format, the loader and the C runtime are unchanged. Six new
+primitives were the other route; their opcodes would change the header and
+the loader that the QuickProof theorems pin, whose proofs must then be
+replayed. `BitNot(X)` is `-1 - X` inline. `Front/Bitwise.lean` holds the
+others as Verse source, added to a program that names one (the parser's
+marker `$uses:bitwise`, or the entry expression), renamed `$bitAnd` etc.:
+
+- `BitAnd`, `BitOr`, `BitXor`: the operands' bits from the lowest up, by
+  `Floor(X / 2)` (toward minus infinity, so a negative number's bits are
+  its two's complement), until both operands are 0 or -1, every bit above
+  being the sign's; the bits seen are summed, and the rest, the operation
+  of the two signs from bit `i` up, weigh `-2^i` together. At most 63
+  rounds; every number computed is in range.
+- `BitShiftLeft[X, N]`: fails for `N < 0`, else doubles `X` up to `N` times
+  or until it is 0, a doubling out of range being the overflow error
+  (which an out-of-range result always reaches, and an in-range one never).
+- `BitShiftRight[X, N]`: fails for `N < 0`, else halves `X` up to `N` times
+  or until it is 0 or -1.
+
+`scripts/fuzz-bitwise.sh` checks both implementations against Python's
+unbounded ints with the int64 range, programs ending with the overflow
+error included.
 
 ## Generic functions: polymorphic Verse Core
 
@@ -2410,7 +2536,11 @@ byte.
 rationals' are). A suspends `Main` starts a loop of passes, one per tick,
 each resuming `Main`'s frame. A sleeping frame reports the tick it waits
 for, and the clock then moves to the earliest of them, so idle ticks cost
-nothing.
+nothing. A sleep of `S > 0` seconds waits `Ceil(30·S)` ticks of the binary64
+product, at least one (the first tick at or after its deadline, the Book's
+API); `Sleep(0.0)`, a negative or a NaN duration completes at once, with no
+suspension (`sleepResume` gives 1 on its first poll), as the Book's tested
+examples of ch. 14 have it for zero.
 
 The scheduler holds its task roots as references without type
 arguments; a generic frame that is not a root is resumed by its caller,

@@ -88,6 +88,15 @@ partial def elabReceiverEvidence (ctx : Ctx) (p : Pos)
     coerce p (← elabMember ctx p ⟨.local 0, receiver⟩ fieldName) bound.ty
 
 partial def elabERaw (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
+  -- `T{}` with `T` a type value of `concrete_subtype(A)`: `T.$make(A)()`
+  -- (`TypeValues`)
+  if let .construct p n [] fs := se then
+    if let some l := ctx.lookup n then
+      if let .struct iface [] := l.ty then
+        if let some (k, a) := TypeValues.bound? iface then
+          if k != "concrete_subtype" then eerr p s!"{n}\{…} constructs through a value of concrete_subtype(…), and {n} is a {iface}"
+          if !fs.isEmpty then eerr p s!"{n}\{…} constructs through a type value with no fields given: the class's defaults"
+          return ← elabE ctx (.app p (.member p (.ident p n) (TypeValues.makeMethod a)) [] false) exp
   if !ctx.constructProbe && ctx.constructHints.isNone &&
       Choice.anyE (fun
         | e@(.construct _ n [] _) =>
@@ -708,7 +717,10 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
 
 partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (bracket : Bool)
     (exp : Option Ty) : EM R :=
-  elabAppBaseWith elabE withDeferMark elabSpawn resolveOverload elabArgs elabInts elabApp elabCast elabGenericCall elabMethod elabIndexLike elabSpawnDispatch elabDefaultDispatch (@elabMember) ctx p f args bracket exp
+  elabAppBaseWith { elabE, withDeferMark, elabSpawn, resolveOverload, elabArgs, elabInts, elabApp,
+                    elabCast, elabGenericCall, elabMethod, elabIndexLike, elabSpawnDispatch,
+                    elabDefaultDispatch, elabMember := fun c q r m e => elabMember c q r m e }
+    ctx p f args bracket exp
 
 /-- `T[X]`: `X` as a value of class or interface `T`, failing unless its class
     is below `T`; `T(X)`: an upcast, which cannot fail (Book of Verse ch. 10). -/
@@ -2480,6 +2492,7 @@ partial def elabMapLit (ctx : Ctx) (p : Pos) (entries : List (SExpr × SExpr)) (
     let mut rs : Array (SExpr × R × SExpr × R) := #[]
     for (k, v) in entries do
       rs := rs.push (k, ← elabE ctx k (some kt), v, ← elabE ctx v (some vt0))
+    ofExcept <| checkTypeValueJoin ctx.types p vt? (rs.toList.map (·.2.2.2.ty))
     -- the values' type: the expected one (or the first's) when every value
     -- converts to it, else their join, as for an array literal (#67)
     let vt ← match ← tryCatch (some <$> rs.toList.mapM fun (_, _, v, rv) => coerce v.pos rv vt0) (fun _ => pure none) with
@@ -2516,8 +2529,10 @@ partial def elabCase (ctx : Ctx) (p : Pos) (scrut : SExpr) (arms : List (Option 
     let mut results : Array (Option Expr × R) := #[]
     for (pat, v) in arms do
       -- (an arm after `_`, or with a pattern an earlier one has, is never
-      -- reached: Book of Verse ch. 9, "Unreachable Case Detection")
-      if results.any (·.1.isNone) then
+      -- reached: Book of Verse ch. 9, "Unreachable Case Detection"; unless
+      -- it is marked `@ignore_unreachable`, its tests, `Enum.versetest`)
+      let ignored := ctx.types.ignoredArms.contains ((pat.map (·.pos)).getD v.pos)
+      if results.any (·.1.isNone) && !ignored then
         eerr ((pat.map (·.pos)).getD v.pos) "this case arm is never reached: it comes after _, which matches everything"
       let rv ← elabE ctx v exp
       match pat with
@@ -2527,7 +2542,7 @@ partial def elabCase (ctx : Ctx) (p : Pos) (scrut : SExpr) (arms : List (Option 
         -- "closed, with default, with coverage = unreachable default warning")
         if let .enum n := rs.ty then
           let k := ((ctx.types.enums.lookup n).getD []).length
-          if !ctx.types.openEnums.contains n && k > 0 && (List.range k).all fun i =>
+          if !ignored && !ctx.types.openEnums.contains n && k > 0 && (List.range k).all fun i =>
               results.any fun (pat, _) => match pat with
                 | some (.lit (.int j)) => j == i
                 | _ => false then
@@ -2537,7 +2552,7 @@ partial def elabCase (ctx : Ctx) (p : Pos) (scrut : SExpr) (arms : List (Option 
         let rp ← elabE ctx pe (some rs.ty)
         if rp.ty != rs.ty then eerr pe.pos s!"pattern of type {rp.ty.show} for a value of type {rs.ty.show}"
         if let .lit v := rp.e then
-          if results.any (fun | (some (.lit w), _) => reprStr w == reprStr v | _ => false) then
+          if !ignored && results.any (fun | (some (.lit w), _) => reprStr w == reprStr v | _ => false) then
             eerr pe.pos "this case arm is never reached: an earlier arm has the same pattern"
         -- (a pattern is tested in a condition, #156)
         if Suspend.hasSusp (fun f => ctx.sigs.any fun s => s.idx == f && s.suspends) rp.e then

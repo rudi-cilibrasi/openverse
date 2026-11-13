@@ -1,6 +1,6 @@
 box(t:type):=class:
     V:t
-    Same(X:u where u:type)<suspends>:u=block{Sleep(0.0);X}
+    Same(X:u where u:type)<suspends>:u=block{Sleep(0.01);X}
 pair(a:type,b:type):=class:
     A:a
     B:b

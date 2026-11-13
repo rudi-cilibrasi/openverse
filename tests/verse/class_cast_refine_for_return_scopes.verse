@@ -33,7 +33,7 @@ Wait(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<suspends>:int=
     for(V0:=if(D:=dup[P])then(D.C|D.C+1)else 0):
         for(V1:=if(E:=dup[Q])then(E.C|E.C+1)else 0):
             for(V2:=(Two(0)|Two(2))):
-                Sleep(0.0)
+                Sleep(0.01)
                 set Total+=V0+V1+V2
                 if(Total>30):
                     return Total

@@ -9,7 +9,7 @@ Deep(N:int, K:int, Tag:string)<suspends>:int =
             Print("{Tag} {N} unwinds")
     if (N = 0):
         for (I := 1..K):
-            Sleep(0.0)
+            Sleep(0.01)
         K
     else:
         Deep(N - 1, K, Tag) + 1
@@ -41,6 +41,6 @@ Main()<suspends>:void =
     Print("rush {U}")
     W := spawn{Worker()}
     for (I := 1..20):
-        Sleep(0.0)
+        Sleep(0.01)
     W.Cancel()
     Print("done")

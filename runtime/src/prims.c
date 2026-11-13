@@ -309,7 +309,7 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
     int i1 = n == 1 && is(&a[0], VX_T_INT);
     int ff = n == 2 && is(&a[0], VX_T_FLOAT) && is(&a[1], VX_T_FLOAT);
     int f1 = n == 1 && is(&a[0], VX_T_FLOAT);
-    char fb[48];
+    char fb[VX_FMT_MAX];
 
     if (n == 4 && (op == VX_P_ADD || op == VX_P_SUB || op == VX_P_MUL || op == VX_P_QUOTIENT)) {
         if (is(&a[0], VX_T_INT) && is(&a[1], VX_T_INT) &&
@@ -467,7 +467,7 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
                 int_to_str(c, I(&a[0]), r);
             else if (is(&a[0], VX_T_CHAR))
                 new_from(c, VX_T_ARR, &a[0], 1, r);
-            /* toStrValue (.float b) = .ok (Value.ofString (VFloat.render b)) */
+            /* toStrValue (.float b) = .ok (Value.ofString (VFloat.fixed6 b)) */
             else if (is(&a[0], VX_T_FLOAT))
                 str_of(c, fb, vx_fmt(a[0].bits, fb), r);
             else if (is(&a[0], VX_T_ARR) && all_chars(&c->heap, a[0].bits))

@@ -4,8 +4,8 @@ Keep(X:t where t:subtype(comparable))<computes>:int=if(X=X)then 1 else 0
 Hold(F:t where t:type)<computes>:int=1
 ra:=class<computes>{K:int=1}
 rb:=class<computes>{K:int=2}
-IA(X:int)<suspends><computes>:ra=block{Sleep(0.0);ra{}}
-SB(X:string)<suspends><computes>:rb=block{Sleep(0.0);rb{}}
+IA(X:int)<suspends><computes>:ra=block{Sleep(0.01);ra{}}
+SB(X:string)<suspends><computes>:rb=block{Sleep(0.01);rb{}}
 ca:=class{F:type{_(:int)<suspends><computes>:ra}=IA}
 cb:=class{F:type{_(:string)<suspends><computes>:rb}=SB}
 Main():void=

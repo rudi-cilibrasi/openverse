@@ -21,7 +21,7 @@ Main()<suspends>:void=
     race:
         F(array{5})
         block:
-            Sleep(0.0)
+            Sleep(0.01)
             Print("cancel")
             array{9}
     Print("raced {C.N}")

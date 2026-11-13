@@ -1,5 +1,5 @@
-# expect: a top-level definition must start at column 0
-# The operands can parse; the unsupported arrow expression must still fail.
+# expect: a lambda (…) => … is a nested function, which openverse does not have (#492
+# A lambda parses (the Book of Verse tests, Literals/Function.versetest) and is refused.
 Main():void =
     X := 7
     F := (X) => X + 1

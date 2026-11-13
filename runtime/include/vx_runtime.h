@@ -42,6 +42,7 @@
 double   vx_fval(uint64_t b);
 uint64_t vx_fcanon(double d);
 int      vx_ftoint(int mode, uint64_t b, int64_t *out);
+#define VX_FMT_MAX 330  /* vx_fmt's buffer: the longest result is 317 bytes */
 size_t   vx_fmt(uint64_t b, char *out);
 
 static inline int vx_isref(const vx_val *v)

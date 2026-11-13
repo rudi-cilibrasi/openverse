@@ -17,7 +17,7 @@ Inc(X:int):int = X + 1
 Dbl(X:int):int = X * 2
 Tick()<suspends>:void =
     if (X := 1 | 2, X > 1) then Print("suspends {X}")
-    Sleep(0.0)
+    Sleep(0.01)
 Main()<suspends>:void =
     for (A := dog{} | cat{}) { Print(A.Name()) }
     if (P := Pick[1, 2]) then Print("generic {P}")

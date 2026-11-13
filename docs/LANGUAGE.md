@@ -14,8 +14,8 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 
 **Contents**
 
-- The language: [Supported](#supported) · [Source profiles](#source-profiles) · [Source text](#source-text) · [Parametric functions](#parametric-functions) · [Function values](#function-values) · [Extension methods](#extension-methods) · [defer](#defer) · [Overloading](#overloading) · [Parametric structs](#parametric-structs) · [Classes](#classes) · [Mutation, macros, tooling](#mutation-macros-tooling) · [Warnings](#warnings) · [Choice](#choice)
-- More types: [any](#any) · [Equality and the empty value](#equality-and-the-empty-value) · [Refinement types](#refinement-types) · [Type aliases](#type-aliases) · [float](#float) · [rational](#rational) · [char32](#char32)
+- The language: [Supported](#supported) · [Source profiles](#source-profiles) · [Source text](#source-text) · [Parametric functions](#parametric-functions) · [Function values](#function-values) · [Extension methods](#extension-methods) · [defer](#defer) · [Overloading](#overloading) · [Parametric structs](#parametric-structs) · [Classes](#classes) · [Attributes](#attributes) · [Mutation, macros, tooling](#mutation-macros-tooling) · [Warnings](#warnings) · [Choice](#choice)
+- More types: [any](#any) · [Types as values](#types-as-values) · [Equality and the empty value](#equality-and-the-empty-value) · [Refinement types](#refinement-types) · [Type aliases](#type-aliases) · [float](#float) · [rational](#rational) · [char32](#char32)
 - Programs: [Modules](#modules) · [Programs of several files](#programs-of-several-files) · [Concurrency](#concurrency)
 - [Readings openverse takes](#readings-openverse-takes) · [Not supported in v1](#not-supported-in-v1)
 
@@ -25,15 +25,15 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 |---|---|---|
 | Comments | `#` to the end of the line, nested `<# … #>`, `<#>` indented comments (the rest of the line and every following line indented more than it; see [Source text](#source-text)) | ch. 0 |
 | Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` an ASCII character other than a line break, a tab included, or an escape; a non-ASCII one, `'é'`, is a `char32`, Book of Verse ch. 1), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates), `float` `1.5`, `2.0e-7`, `1e3`, `12.34f64`, `1234f64` (digits, then a point and digits or an exponent or both, or the suffix `f64`, which may follow either; the nearest double, which must be finite: `2.0e308` is refused; `f32` and `f16` are read and refused as not supported); paths `/Verse.org/Random` parse (in `using{…}`, ignored; as values, refused; see [Source text](#source-text)) | §1.3–1.7 |
-| Types | `int`, `logic`, `char`, `char32`, `any` (see [any](#any)), `comparable` (see [comparable](#comparable)), `rational` (see [rational](#rational)), `float` (see [float](#float)), refinement types `type{_X:int where 0 <= _X, _X <= 120}` (see [Refinement types](#refinement-types)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void` (which takes any value; `tuple()` is the type of the empty value alone, see [Equality and the empty value](#equality-and-the-empty-value)), function types `type{_(:int)<decides>:int}`, with named parameters `type{_(:int, ?B:int):int}`, and `int->int` (see [Function values](#function-values)); type aliases `player_id := int`, `pair(t:type) := tuple(t, t)` (see [Type aliases](#type-aliases)); a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
+| Types | `int`, `logic`, `char`, `char32`, `any` (see [any](#any)), `comparable` (see [comparable](#comparable)), `rational` (see [rational](#rational)), `float` (see [float](#float)), refinement types `type{_X:int where 0 <= _X, _X <= 120}` (see [Refinement types](#refinement-types)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void` (which takes any value; `tuple()` is the type of the empty value alone, see [Equality and the empty value](#equality-and-the-empty-value)), function types `type{_(:int)<decides>:int}`, with named parameters `type{_(:int, ?B:int):int}`, and `int->int` (see [Function values](#function-values)); type aliases `player_id := int`, `pair(t:type) := tuple(t, t)` (see [Type aliases](#type-aliases)); types as values of classes and interfaces, `subtype(c)`, `castable_subtype(c)`, `concrete_subtype(c)` and `type` (see [Types as values](#types-as-values)); a conversion written as a call, `int(0)`, `void(0)`, `(?int)(option{0})`, `s(s{})`, of a value of a type that is a subtype of the one named; a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
 | Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e`, which state their type there as in a module (ch. 16: "type inference with `:=` alone is not allowed"; `C := e` names a type, when `e` is one: [Type aliases](#type-aliases)) (definitions on one line, at the top level, in a module or in a block, are separated by `;` or `,`: `X:int=0, Y:int=0`; a constant may use one defined before it in its own scope, a module's or the top level's, and one of another module or of an enclosing scope wherever it is defined, as the Book's tests have it (`DefaultValueAssignment.versetest` 102, 128); not itself, directly or through other constants); locals `X := e`, `X:t = e`, `var X:t = e`, and a tuple destructured, `(X:int, _, Z:string) = e` (each named element a local of the block, `_` skipping one, `e` evaluated once); no shadowing; no name defined twice in a scope but [overloaded](#overloading) functions; no [reserved name](#reserved-names) | §3.1–3.4 |
 | Mutation | `set X = e`, `set X += e` (`-=`, `*=`), `set A[i] = e` (fails out of range; returns `e`), and paths `set S.F.G = e`, `set A[i][j] op= e`, `set M[k].F = e`: indices and keys evaluated once, left to right, then the new value, then the variable rebuilt (for `op=`, the old value is read after the new one, from the variable as the new one left it, which is then rebuilt from that: `set X += e` is `V := e; set X = X + V`, the Book's tests, `ArrayAppend.versetest` 140, 183); an index out of range or a missing intermediate key fails, while the last key of a path inserts | §3.3, §3.5, §9.3 |
 | Blocks | indented (`:`), braced (`{ }`), inline (`then`/`do`), `.` and an expression on its line wherever `:` or `{…}` may start a body (`if (c). e else. f`, `for (X:Xs). e`, `spawn. F()`, `loop. break`; also `option`, `logic`, and `array` and `map`, whose `:` blocks separate their items by `,`, `;` or new lines: `array:` and the lines `1`, `2`; in braces an array's elements are separated by commas, or by `;` and new lines, not both: `array{1; 2; 3}`), `block:`, `( a; b )` sequences, also as an argument (`F(Log(); 42)` passes 42) and as a `case`'s value (`case(a; b)`); `;` and new lines separate the items of a block, and `;` may end a line or a braced block (`{1; 2;}` is `{1; 2}`) (the next item then follows the line rules, so a class's last field may end in `;`); in a block, statements that commas join on a line are a tuple (ch. 1, "Semicolons vs Commas", and its tests, `SemicolonsVsCommas.versetest` 70, 95, 100: `{1.0, 2}` is a `tuple(float, int)`, `option{1, 2}` holds `(1, 2)`, `for (X := 1..2) {3, X}` is an array of pairs), definitions joined so are the block's definitions in turn (`X:int = 0, Y:int = 0`), and a group of definitions and values is each in order, a definition visible to what follows it, then the tuple of their values (`option{V := 3, V > 0, V}` holds `(3, 3, 3)`, a `var`'s value taken where it is defined); the clauses of `if`, `for`, `first` and the clause macros, the arms of `sync`, `race` and `rush`, a construction's fields and an array's or map's items keep commas as separators; a comma that starts a line is not the block's but the list's around it; a body after `:` may be empty wherever one may be written, as `{}` may (`class:`, `struct:`, `then:`, … whose next line is no deeper than the construct, or nothing follows); a function's or method's braced body may put its `{` on the next line, at the definition's column; a value after `=`, `:=`, `set … =` or a `case` arm's `=>` that starts a later line, deeper, is the indented block of those lines (`Value :=` and the lines `1`, `2`, `3` is `3`; and the line `1, 2, 3`, `(1, 2, 3)`), as a function's body is | §2.2–2.4 |
 | Operators | `* + -`, unary `-`, comparisons `= <> < <= > >=` (failable, return the left operand, chains check every pair; `=` and `<>` of any two comparable types, by value: see [Equality and the empty value](#equality-and-the-empty-value)), `and` (a scope of its own, ch. 7: names its left operand defines are visible on its right, and neither side's escape; `A and B and C` is `(A and B) and C`), `or`, `not` (below the comparisons, above `and`: `not X = Y` is `not (X = Y)`), `?`, `.Length`, `A[i]`, `T(k)` | ch. 4 |
 | Failure | failure contexts (`if` conditions, `for` clauses, `option{}`, `logic{}`, `not`, left of `or`, `<decides>` bodies) with rollback of `var` writes **and output**; an `if` condition, `logic{…}`, the operand of `not` and the left of `or` must be able to fail (the Book's tests refuse `not` of one that cannot, and an `or` whose left cannot, `LogicalOr.versetest:143`; its own `(set Map[I] = I) or Err()` has a failable left, a set through a map's key) | ch. 8 |
-| Control | `if`/`else if`/`else` (all styles: the conditions in `(…)`, followed by a body or `then`; or as `{…}`, `:` and a block, or `.` and an expression, followed by `then` and a branch, or by nothing, which is the clause macro `if{c}` (see [Mutation, macros, tooling](#mutation-macros-tooling)): `if:`…`then:`, `if:`…`else:`, `if. c then. a else. b`; `for` likewise, with `do`), `for` with `X : array`, `I -> X : array`, `X := a..b`, filters, bindings, several generators (cartesian product), and with none, failable clauses that run the body at most once (clauses of literals only, `for(X := array{1, 2})`, are refused: `X : array{1, 2}` iterates); a `for`'s clauses are one search, as the Book's tests have it (`FlowControl/for.versetest` 317-392): reaching the body keeps what they did since the last value, a failure undoes back to the element or alternative being tried, and what they did since the last value is undone when no more reaches the body, a source's or a range's bounds' included (which `for`s keep an older rule for now: [Readings](#readings-openverse-takes), "What a `for` undoes"), `loop`/`break`, `return` (in a function's body: not in a constant's value or a field's default, which no function encloses), `case` with literal patterns and `_` (an arm after `_`, or with an earlier arm's pattern, is never reached and refused, ch. 9; a `_` after every value of a closed enum is a [warning](#warnings)); code after a `return` or `break` that is never reached is a [warning](#warnings); no `return` or `break` leaves a failure context, as the Book's tests have it (`Reachability.versetest:12`, "Explicit return out of a failure context is not allowed"; `SOL-4199-BreakFromIf.versetest`): a `return` is refused in an `if`'s conditions, a `for`'s clauses (its body may return), `first`'s clauses, `option{…}`, `logic{…}`, `not`'s operand and the left of `or`, and, in a `<decides>` function, whose body is a failure context, anywhere but in tail position (`Return.versetest:157`: the body's last expression, the branches of an `if` with an `else` and the arms of a `case` in tail position, a block's last expression in tail position, a `return`'s value); a `break`, in those contexts between it and its loop | ch. 7 |
+| Control | `if`/`else if`/`else` (all styles: the conditions in `(…)`, followed by a body or `then`; or as `{…}`, `:` and a block, or `.` and an expression, followed by `then` and a branch, or by nothing, which is the clause macro `if{c}` (see [Mutation, macros, tooling](#mutation-macros-tooling)): `if:`…`then:`, `if:`…`else:`, `if. c then. a else. b`; `for` likewise, with `do`), `for` with `X : array`, `I -> X : array`, `X := a..b`, filters, bindings, several generators (cartesian product), and with none, failable clauses that run the body at most once (clauses of literals only, `for(X := array{1, 2})`, are refused: `X : array{1, 2}` iterates); a `for`'s clauses are one search, as the Book's tests have it (`FlowControl/for.versetest` 317-392): reaching the body keeps what they did since the last value, a failure undoes back to the element or alternative being tried, and what they did since the last value is undone when no more reaches the body, a source's or a range's bounds' included (which `for`s keep an older rule for now: [Readings](#readings-openverse-takes), "What a `for` undoes"), `loop`/`break`, `return` (in a function's body: not in a constant's value or a field's default, which no function encloses; in a function whose result is not `void`, not a part of the value it returns: a `return` is the body's value, a branch of it or of a `case`, a `return`'s operand, or in code whose value is not returned, a block's other items, an `if`'s conditions or an `if` with no `else`, a `loop`, as the Book's tests have it, `Return.versetest` 114-162; `array{0, return A}` and `X + (return 0)` are refused), `profile(Tag): body`, `profile: body` and `profile{body}` (the tag a string, the value the body's; openverse measures nothing; not in an initializer, ch. 7, "Profiling"), `case` with literal patterns and `_` (an arm after `_`, or with an earlier arm's pattern, is never reached and refused, ch. 9; a `_` after every value of a closed enum is a [warning](#warnings)); code after a `return` or `break` that is never reached is a [warning](#warnings); no `return` or `break` leaves a failure context, as the Book's tests have it (`Reachability.versetest:12`, "Explicit return out of a failure context is not allowed"; `SOL-4199-BreakFromIf.versetest`): a `return` is refused in an `if`'s conditions, a `for`'s clauses (its body may return), `first`'s clauses, `option{…}`, `logic{…}`, `not`'s operand and the left of `or`, and, in a `<decides>` function, whose body is a failure context, anywhere but in tail position (`Return.versetest:157`: the body's last expression, the branches of an `if` with an `else` and the arms of a `case` in tail position, a block's last expression in tail position, a `return`'s value); a `break`, in those contexts between it and its loop | ch. 7 |
 | Choice | `a \| b \| …` with several values in spatial order, in a clause of an `if` condition, `first{…}`, `option{…}`, `logic{…}`, `not` or `or` (the first success) or of a `for` (all of them), also inside expressions (`(1 \| 2) + (10 \| 20)`, `X = 1 \| 2`, `X > 0 and (1 \| 2)`, `M? or (1 \| 2)`); see [Choice](#choice) (#208) | (the Verse Calculus) |
-| Functions | a parameter may be unnamed, `F(:int):void = {}`, as in function types (the body cannot name it; so may a parametric type's, `t(:type) := class{}`); a parameter may destructure a tuple, `Func(A:int, (B:int, C:int), D:int)`, to any depth: it is a parameter of the tuple type whose names the body sees (see [the rules](research/tuple-parameters.md); named parameters inside such a group are not supported); a tuple argument expands into parameters (`Describe(MyTuple)`); positional arguments pack into a single tuple parameter, including `tuple()` and singleton tuples; several arguments make a single array parameter (`Sum(1, 2, 3)`), including generic, overloaded, method and spawned calls (#134, #140, #501; nested fields retain their shape, and empty/singleton arrays use explicit array values); recursion, mutual recursion, `<decides>` (called with `F[…]`; other functions with `F(…)`), named parameters `?P:t = default` passed as `?P := e` (positional, then named as written, then defaults; a default may use the parameters before it, and a method's default the method's fields; a call dispatched to an override evaluates that override's own default for an omitted argument; a default is evaluated at the call, its effects counting as the caller's, and cannot return, break or use itself), the heap effects `<computes>`, `<reads>`, `<writes>`, `<allocates>`, `<transacts>` (checked, see [Classes](#classes)), unsupported effect contracts are diagnosed before lowering (see [Effect contracts](#effect-contracts)) | ch. 6, 13 |
+| Functions | a parameter may be unnamed, `F(:int):void = {}`, as in function types (the body cannot name it; so may a parametric type's, `t(:type) := class{}`); a parameter may destructure a tuple, `Func(A:int, (B:int, C:int), D:int)`, to any depth: it is a parameter of the tuple type whose names the body sees (see [the rules](research/tuple-parameters.md); named parameters inside such a group are not supported); a tuple argument expands into parameters (`Describe(MyTuple)`); positional arguments pack into a single tuple parameter, including `tuple()` and singleton tuples; several arguments make a single array parameter (`Sum(1, 2, 3)`), including generic, overloaded, method and spawned calls (#134, #140, #501; nested fields retain their shape, and empty/singleton arrays use explicit array values); recursion, mutual recursion, `<decides>` (called with `F[…]`; other functions with `F(…)`; also `F of X` for `F(X)` and `F at X` for `F[X]`, the argument in braces `F of {42}`, a body after `:` or `.`, or an operand `F of array: …`, and a function defined `F of {I:int}:int = …`, the Book's tests, `Operators/Of.versetest`; `F at {…}` defines nothing), named parameters `?P:t = default` passed as `?P := e` (positional, then named as written, then defaults; a default may use the parameters before it, and a method's default the method's fields; a call dispatched to an override evaluates that override's own default for an omitted argument; a default is evaluated at the call, its effects counting as the caller's, and cannot return, break or use itself), the heap effects `<computes>`, `<reads>`, `<writes>`, `<allocates>`, `<transacts>` (checked, see [Classes](#classes)), unsupported effect contracts are diagnosed before lowering (see [Effect contracts](#effect-contracts)) | ch. 6, 13 |
 | Extension methods | `(R:t).M(…)<effects>:r = body`, at the top level, in a module or in a class, on a receiver of any type (`(:t)` unnamed; a `where` in its parentheses for a generic one), called `X.M(…)`, or `X.M[…]` when `<decides>`; overloaded by the receiver's type and the parameters', scoped like functions, never values; see [Extension methods](#extension-methods) | ch. 6 |
 | Parametric functions | `F(X:t, … where t:type, u:subtype(comparable))`: type parameters in parameter types, the result type and local declarations; type arguments inferred at each call (see [Parametric functions](#parametric-functions)) | Types: where clauses |
 | Structs | `name := struct:` with typed fields and defaults, `name{F := e, …}` (each field given at most once, evaluated in declaration order; separated by commas, or by `;` and new lines, not both; or as an indented block after `name:`, an archetype block; the type may be parenthesized, `(pair(int)){…}`), `S.F`, `set S.F = e` / `op=`, structural equality (a struct is the tuple of its fields in Verse Core) | ch. 9 |
@@ -42,9 +42,10 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Enums | `name := enum:` / `enum{A, B}`, `name.A`, equality, `case` that needs no `_` when every value is named (an enumerator is its index in Verse Core); `enum<open>` may gain values, so a `case` on one needs `_` or a failure context (`<closed>` is the default) | ch. 9 |
 | Maps | `[k]v`, `map{k => v, …}` (a key given twice keeps its last value, at its last position), `M[k]` (fails on a missing key), `set M[k] = v` (insert or update; in Verse the key's reference is `<decides>`, the Book's API reference, so such a `set`, also as a path's last step, `set S.M[k] = v`, is written in a failure context, as the Book's tests do, `if (set M0[0] = 42)`, `(set Map[I] = I) or Err()`; its last key inserts, so it succeeds; its value is `v`), `set M[k] op= v` (fails on a missing key), `.Length`, `for (V : M)`, `for (K -> V : M)` in insertion order, `ConcatenateMaps(M1, M2)` (exactly two maps, ch. 3: more by chained calls; their pairs laid down in turn, as `map{…}` lays its own: a key both maps have takes the second map's value at the second map's place, the Book's API reference and `ConcatenateMaps.versetest` 21, 33), order-sensitive equality (a map is the array of its pairs in Verse Core) | §3, §9.3 |
 | Array methods | (also of a tuple of one element type, which is an array where one is expected: `('a', 'b', 'c').Slice[1]`) `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`, `A.RemoveFirstElement[x]`, `A.Remove[i, j]` (half-open), `A.ReplaceElement[i, x]`, `A.ReplaceFirstElement[x, y]`, `A.Insert[i, B]`, `A.Last[]`, `A.Last[n]` (the element n before the last) (all failable); `A.RemoveAllElements(x)`, `A.ReplaceAllElements(x, y)`, `A.ReplaceAll(Pattern, Replacement)` (contiguous subarrays, left to right, not overlapping; an empty pattern changes nothing), `Concatenate(A, B, …)` or `Concatenate(Arrays)` (#150) (never failing) | §9.1 |
-| Built-ins | `Print(s)`, `ToString(x)` (int, float, char, string), `Floor[F]`, `Ceil[F]`, `Round[F]`, `Int[F]` (of a float, failable), `Floor(R)`, `Ceil(R)` (of a rational or an int, never failing; `Floor(X / Y)` fails when `Y = 0`, as `X / Y` does), `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Clamp(Val, A, B)` (the median of the three, of ints or of floats, NaN ordering above +Inf), `Sgn(X)` (-1, 0 or 1 of an int or a float, NaN of NaN), `F.IsFinite[]` (as `IsFinite[F]`), `Err()`; the conversions of chars and code points as methods (see [char32](#char32)): `C.ToCodeUnit()`, `C.ToAsciiChar32[]` of a char, `C.ToCodePoint()`, `C.ToAsciiString()` of a char32, `N.ToChar[]`, `N.ToChar32[]` of an int | API reference |
+| Built-ins | `Print(s)`, `ToString(x)` (int, float, char, string), `Floor[F]`, `Ceil[F]`, `Round[F]`, `Int[F]` (of a float, failable), `Floor(R)`, `Ceil(R)` (of a rational or an int, never failing; `Floor(X / Y)` fails when `Y = 0`, as `X / Y` does), `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Clamp(Val, A, B)` (the median of the three, of ints or of floats, NaN ordering above +Inf), `Sgn(X)` (-1, 0 or 1 of an int or a float, NaN of NaN), `F.IsFinite[]` (as `IsFinite[F]`), `BitAnd(X, Y)`, `BitOr`, `BitXor`, `BitNot(X)`, `BitShiftLeft[X, N]`, `BitShiftRight[X, N]` (see [Bitwise functions](#bitwise-functions)), `Err()`; the conversions of chars and code points as methods (see [char32](#char32)): `C.ToCodeUnit()`, `C.ToAsciiChar32[]` of a char, `C.ToCodePoint()`, `C.ToAsciiString()` of a char32, `N.ToChar[]`, `N.ToChar32[]` of an int | API reference |
 | Modules | `name := module:` (nested), `M.F`, `A.B.F`, the types `M.c` and values `M.c{…}`, `(M:)F`, `using{M}` at file or module scope, `<public>` members (`<internal>` is the default); see [Modules](#modules) | ch. 16 |
 | Access | `<public>`, `<internal>` (the default), `<protected>`, `<private>`, `<scoped{M, …}>` and `S := scoped{…}`, `<epic_internal>`, on modules, their definitions, a class's members and constructor, and `var<w> X<r>:t`; checked where each use is written, and no definition exposes a less visible one; see [Access](#access) | ch. 12 |
+| Attributes | `@deprecated`, `@experimental`, `@available{MinUploadedAtFNVersion := N}`, custom attributes (a class below `attribute` with its scopes `@attribscope_…`, `@c{F := e}` or a constructor's `@f(…)`) before a definition, a member, a struct's field or an enum's value; `@ignore_unreachable` on an expression or a `case` arm: checked where the Book checks them, metadata but `@available`; see [Attributes](#attributes) | ch. 12 |
 | Qualified names | `(M:)x`, `(c:)m`, `(e:)v`, `(local:)X`, `(/Verse.org/Verse:)int`, in uses and in definitions' heads: a qualifier names a scope, the name is looked up in exactly that scope, and a definition's qualifier names where it is defined; see [Qualified names](#qualified-names) | ch. 9, 10, 16 |
 | Concurrency | `<suspends>` functions and methods, `Sleep`, `sync`, `race`, `rush`, `branch`, `spawn` with `task(t)` and `Await`, `event(t)` with `Signal` and `Await`, `subscribable_event(t)` (or `subscribable_event()`) with `Subscribe` and `Cancel` (see [Function values](#function-values)), cancellation with `defer:`, under a deterministic scheduler; see [Concurrency](#concurrency) | ch. 14 |
 | Program entry | `Main()` — see the exit protocol in [`FORMAT.md`](FORMAT.md) | (not in the book) |
@@ -134,7 +135,9 @@ or not (`Enum.versetest`, `Effects.versetest`); and the names the Book's tests r
 `nat32`, `nat64`, `over`, `permutation`, `provided`, `random`, `repeat`,
 `sequence`, `string8`, `string16`, `string32`, `subclass`, `succeeds`,
 `syntax`, `throws`, `trait`, `truth`, `try`, `union`, `using`, `verify`,
-`when`, `while`. openverse reads `first`, `assert` and `let` as macros
+`when`, `while`; and `of` and `at`, which call a function (`F of X`, `F at
+X`), and which a test calls "The 'at' reserved word"
+(`SemicolonsVsCommas.versetest:52`). openverse reads `first`, `assert` and `let` as macros
 before `{` or `(`, and `using` is a keyword. A qualifier does not lift the
 rule (`(m:)local` is refused), but an enum's value qualified with its enum
 may take any name, a keyword's too ([Qualified names](#qualified-names)). The function type
@@ -1072,6 +1075,68 @@ circle := class(shape, labelled):
     (#157) would have to hold itself (no program can build an object of
     such a type: each would need another first, so use `?node(t)` for a
     link that may be absent);
+
+## Attributes
+
+An attribute is `@` and a name (Book of Verse ch. 12, "Annotations and
+Metadata"; the rules and their sources are pinned in
+[research/attributes.md](research/attributes.md)): `@deprecated`,
+`@available{MinUploadedAtFNVersion := 3000}`, `@gameplay_element{Category :=
+"Combat"}`, `@test("x")`. A space, a new line or another attribute follows
+it (`@doc; X:int=4` and `X:int=@doc()4` are syntax errors). It is written
+before a definition of a module or of the top level (on its line, or on
+lines of its own at the definition's column), a class's or an interface's
+field or method, a struct's field or an enum's value; not on a parameter.
+
+```verse
+@attribscope_function
+perf := class<computes>(attribute):
+    MaxMs:int
+
+@deprecated{Message := "Use NewAPI instead."}
+OldAPI():int = 42
+
+entity := class:
+    @perf{MaxMs := 16}
+    Update():void = {}
+```
+
+- **The Book's attributes.** `@deprecated` (fields `Message`, a string or
+  `false`, and `DiscontinuedAtFNVersion`, an int, which needs a `Message`
+  that is not empty), `@experimental` (not on an override) and `@available`
+  (field `MinUploadedAtFNVersion`, an int literal) go on functions, methods,
+  classes, interfaces, structs, enums and their values, data, modules and
+  type aliases; `@attribscope_class`, `_attribclass`, `_enum`,
+  `_enumerator`, `_interface`, `_function`, `_data` and `_name` on an
+  attribute class. A field the attribute has not, or one given twice, is
+  refused, and so is `@deprecated(…)`.
+- **Custom attributes.** A class below `attribute` is an attribute class;
+  `@c` is its value `c{}`, `@c{F := e}` a value of it, `@f(…)` a call of a
+  constructor function of it, each written where one of the scopes on the
+  class allows (`@attribscope_function` functions and methods,
+  `@attribscope_data` data members, `@attribscope_class` classes, attribute
+  classes included, …). Its value is checked as a value of the class, in
+  the scope around the definition, which sees no class's member, and is
+  never computed. A name that is no attribute class nor a constructor of
+  one is no attribute (`@int`, `@c` of a plain class). An attribute class
+  and its constructors are named in attributes only.
+- **On an expression**, only `@ignore_unreachable` is allowed
+  (`F(@ignore_unreachable return)`): it is the expression, and the code it
+  makes unreachable is no [warning](#warnings). On a `case` arm it lets the
+  arm be one never reached (`@ignore_unreachable E.A => 9` after another
+  `E.A`, or a `_` after every value of a closed enum), which then never
+  runs.
+- **Meaning.** Attributes are metadata: a program cannot read them (ch. 12:
+  "there is no Verse API to query attributes at runtime"), and none changes
+  what a program computes, but `@available`: openverse's programs are in no
+  versioned package, so a definition `@available{MinUploadedAtFNVersion :=
+  N}` is in them unless `N` is `4294967295` or more, which no upload
+  reaches, and then it and a module's members are taken out (a use of it
+  is an unknown name). `@experimental` definitions may be used, as in a
+  package that allows them. A use of a `@deprecated` definition (or of a
+  member of a deprecated module or enum) from code that is not deprecated,
+  and an override of a deprecated member that is not, is a
+  [warning](#warnings), `X is deprecated: Message` (the Book's 2009).
 
 ## Mutation, macros, tooling
 
@@ -2078,6 +2143,49 @@ Main():void =
   type parameter of a class in its methods; `case` on a `comparable`; and
   `concrete_subtype(comparable)`.
 
+## Types as values
+
+A class or an interface is a value of a *metatype* (Book of Verse ch. 11,
+"Metatypes"; the forms, what is built and what is left are in
+[research/types-as-values.md](research/types-as-values.md)):
+
+```verse
+shape := class<abstract>:
+    Area():int
+square := class<concrete>(shape):
+    Area<override>():int = 4
+circle := class<concrete>(shape):
+    Area<override>():int = 3
+
+Make(T:concrete_subtype(shape)):shape = T{}        # constructed through T
+Is(T:subtype(shape), S:shape):int =
+    if (T[S]) then 1 else 0                         # cast through T
+Main():void =
+    Kind:subtype(shape) = square                    # a class as a value
+    Print("{Make(circle).Area()} {Is(Kind, square{})} {Is(Kind, circle{})}")
+```
+
+- **`subtype(c)`** holds `c` and the classes and interfaces below it, of a
+  class or an interface `c`; `subtype(a)` is below `subtype(b)` exactly
+  when `a` is below `b`, and every metatype is below `type`.
+  `castable_subtype(c)` holds the `<castable>` ones, `concrete_subtype(c)`
+  the `<concrete>` ones. A join of two type values (`if (B) then square else
+  circle`) is at the nearest metatype above both, never a
+  `concrete_subtype` and a `castable_subtype` only of a `<castable>` class.
+- **`T[X]`** with `T` a type value is `X` cast to the class `T` holds, failing
+  unless `X`'s class is below it. **`T{}`** with `T:concrete_subtype(c)`
+  constructs the class `T` holds with its defaults; no field may be given.
+- Type values are not compared (the Book's tests: "We can't yet compare
+  the subtype values"). `subtype(t)` of a type that is no class or
+  interface (`subtype(int)`), `concrete_subtype(comparable)`, a metatype as
+  a type parameter's bound and a type given as an argument (`F(t:type):?t`)
+  are not supported.
+- **Conversions.** `t(X)`, with `t` a built-in type's, a struct's or an
+  enum's name, or a type written in parentheses, `(?int)(X)`, `([]int)(X)`,
+  is `X` converted to `t`: `X` must have a type that is a subtype of `t`
+  (`int(0.0)` is refused; `void(0)` takes anything), as `c(X)` is for a
+  class and `comparable(X)` for `comparable`.
+
 ## Equality and the empty value
 
 Verse has one empty value, written `false` or `()` (Book of Verse ch. 2,
@@ -2255,7 +2363,7 @@ Area(R:float):float = 3.14159 * R * R
 
 Main():void =
     Count:int = 5
-    Print("{Area(2.0)} {Count * 1.5} {0.1 + 0.2}")   # 12.56636 7.5 0.30000000000000004
+    Print("{Area(2.0)} {Count * 1.5} {0.1 + 0.2}")   # 12.566360 7.500000 0.300000
     if (N := Round[2.5], M := Int[-1.7]) then Print("{N} {M}")   # 2 -1
     Print("{1.0 / 0.0} {0.0 / 0.0}")                 # Inf NaN
 ```
@@ -2288,9 +2396,18 @@ Main():void =
   replaces the built-in for every call, whatever the argument types. A local
   or a method may not take those names; a field may, and in its class's
   methods the name still means the built-in.
-- `ToString` gives the shortest decimal that reads back as the float, laid
-  out as Python's `repr` (`98.5`, `1.0`, `1e+16`, `1.5e-07`), and `Inf`,
-  `-Inf`, `NaN`.
+- `ToString`, and string interpolation, which calls it, give fixed point
+  with exactly six digits after the point (the Book's API and
+  `FloatToString.versetest`): the float's exact value rounded to a multiple
+  of 10^-6, a tie to the even digit (`98.500000`, `1.234568` for
+  `1.2345678901234567`, `0.007812` for `0.0078125`), every digit before the
+  point (`1.0e100` prints its exact binary value, 101 digits, then
+  `.000000`), a `-` whenever the float is negative, also when every digit
+  is zero (`-0.000000` for `-1.0e-300`; `-0.0` is `0.0`, which prints
+  `0.000000`), and `Inf`, `-Inf`, `NaN`. It is lossy: to show a value's
+  bits, print it times a power of two. (Until the Book's rule was adopted,
+  openverse printed the shortest decimal that reads back, `98.5`, as ch. 2's
+  example does; [the audit](research/readings-audit.md#tostring-of-a-float).)
 
 ### Scalar Math API inventory (#490)
 
@@ -2339,6 +2456,40 @@ are outside this scalar inventory. Existing mathematical built-ins retain
 their earlier effect handling; this change enforces `<reads>` on the new
 seven without changing those existing programs. The broader effect audit
 is tracked in #494; `<predicts>` is not currently enforced.
+
+## Bitwise functions
+
+The Book's ch. 4 ("Bitwise Operations", "Bit Shift Operations") and its
+API reference: of ints, on their two's complement bit patterns, "sign-extended
+forever to the left", on openverse's 64-bit ints (the Blueprint VM's: a
+result out of range is the overflow error, exit 2; [the pinned
+rules](research/book-library-functions.md#bitwise-functions)):
+
+```verse
+Main():void =
+    Print("{BitAnd(12, 10)} {BitOr(12, 10)} {BitXor(12, 10)} {BitNot(12)}")   # 8 14 6 -13
+    if (L := BitShiftLeft[-5, 2], R := BitShiftRight[-97, 5]) then Print("{L} {R}")   # -20 -4
+    if (not BitShiftLeft[5, -1]) then Print("a negative count fails")
+```
+
+- `BitAnd(X, Y)`, `BitOr(X, Y)`, `BitXor(X, Y)` and `BitNot(X)` (which is
+  `-X - 1`) never fail and are never out of range.
+- `BitShiftLeft[X, N]` is `X · 2^N` and `BitShiftRight[X, N]` is
+  `Floor(X / 2^N)` (an arithmetic shift: toward minus infinity, so 0 or -1
+  once every bit is shifted out, `BitShiftRight[-1, 1000]` is -1); both
+  fail when `N < 0`. A left shift out of range is the overflow error
+  (`BitShiftLeft[1, 63]`; `BitShiftLeft[-1, 63]` is the least int;
+  `BitShiftLeft[0, N]` is 0 for every `N ≥ 0`).
+- Each argument is evaluated once, in order; floats are refused. They are
+  soft built-ins, as `Clamp` is (a program may define its own), and of one
+  signature, so a program may name one as a value (`F(:int, :int):int`,
+  the shifts `<decides>`).
+- On VerseVM ints are unbounded and so are these; openverse's are not
+  (see [Readings](#readings-openverse-takes), `int` range), so the Book's
+  `verse_vm_only` cases with operands beyond 64 bits differ.
+- They are written in Verse with Verse Core's existing operations
+  (`Front/Bitwise.lean`; DESIGN.md, "Bitwise functions"): no Verse Core,
+  format or runtime change.
 
 ## rational
 
@@ -2762,7 +2913,9 @@ Main()<suspends>:void =
   `rush` arm that has ended still owns what it started: those are stopped
   in its place in that order, not by their own start among the function's. A `branch` cannot be in a `loop` or `for` body (the Book's
   rule), even through an arm.
-- **`spawn`.** `spawn{F(…)}` starts a task running the call, which must be
+- **`spawn`.** No `return` and no `break` but of a loop inside it is in a
+  `spawn`'s code (the Book's tests, `SpawnAndTask.versetest` 876-892,
+  "Can't break or return from a spawn"). `spawn{F(…)}` starts a task running the call, which must be
   of a suspends function or method (`spawn{Agent.Run()}`, also when
   subclasses override `Run`). Its receiver and supplied arguments run once
   in caller order, then omitted defaults run in declaration order, before
@@ -2898,9 +3051,13 @@ Main()<suspends>:void =
   `Main` goes on first, then each task in the order they were spawned, then
   again while a task ended, a `Signal` woke a task, or a task was cancelled
   (so that those waiting go on in the same tick). Arms that can go on in the same tick do so in source order. `Sleep(S)`
-  uses the binary64 product `T = 30·S` and ties-to-even `Round(T)`, at least
-  one tick, for a supported nonnegative finite input. It always yields,
-  including either signed zero or a positive subnormal. The product must
+  uses the binary64 product `T = 30·S` rounded up, `Ceil(T)`, at least
+  one tick, for a supported positive finite input, also a subnormal one:
+  a sleep wakes at the first tick at or after its deadline (the Book's API
+  reference). `Sleep(0.0)` (and `-0.0`, which is `0.0`) completes at once,
+  without suspending, as the Book's tested examples have it: it gives
+  neither other tasks nor a cancellation a turn, so a loop that should
+  give way sleeps a positive time (`Sleep(0.01)` is one tick). The product must
   be below `2^63`; the largest supported binary64 duration is exactly
   `307445734561825792.0` seconds, giving `2^63 − 2048` ticks. The next
   binary64 duration, `307445734561825856.0`, is outside this domain.
@@ -2952,7 +3109,7 @@ Main()<suspends>:void =
 | Inferring type arguments | not described | first-order matching against the expected result type, then the arguments; no subtyping other than `false` (matches anything) and `void` (accepts anything) |
 | A qualifier without a `using` | "A qualifier only says which `F` is meant among the ones already in scope" (ch. 10): `(Top.M:)F` with no `using` is unknown | the qualifier is found as any name is, then the name is looked up in exactly that scope: `(M:)F` is `M.F` (#145) |
 | A module's member `(M:)x` used bare in `M` beside an outer `x` | both are candidates, told apart by their parameters, else ambiguous (`ModuleDefinitions.versetest`, `vmodule` tests) | the inner one (only a qualified member may share an outer definition's name, [Shadowing](#shadowing)); in a class's code and for `(local:)`, where the tests refuse it, ambiguous |
-| `ToString` of a float | the API and the tests: fixed point with six decimals (`FloatToString.versetest`, `1.000000`); ch. 2's example: `98.5` (the change needs Core and the runtime: [the audit](research/readings-audit.md#tostring-of-a-float)) | the shortest decimal that reads back as the float, the closest of the shortest, in Python's `repr` layout (exponent at `≥ 1e16` and `< 1e-4`); `Inf`, `-Inf`, `NaN` |
+| `ToString` of a float | the API and the tests: fixed point with six decimals (`FloatToString.versetest`, `1.000000`); ch. 2's example: `98.5` (the Book disagrees with itself: [the audit](research/readings-audit.md#tostring-of-a-float)) | the API's and the tests': six digits after the point, the exact value rounded half to even, every integer digit, the sign kept (`-0.000000`); `Inf`, `-Inf`, `NaN`; interpolation calls `ToString` (ch. 2) ([float](#float)) |
 | `NaN < X` | `not (Nan < 1.0)`, `Nan = Nan` (ch. 1, ch. 2) | fails (IEEE: NaN orders with nothing); `NaN = NaN` succeeds (the Book) |
 | `=` between different types | "Comparisons between different types still compile, but they always fail" (ch. 4); the empty value is one value of `logic`, `void`, `tuple()`, options, arrays, strings and maps (ch. 2) | the Book's (see [Equality and the empty value](#equality-and-the-empty-value)), at every depth and in generic code; refused between type parameters, a tuple of them and a string, and types whose common values Verse Core cannot tell apart; in generic code, types Verse Core holds alike (a `char32` and an `int`) compare as Verse Core holds them |
 | `false` where a map is expected | prose: accepted (ch. 2); tests: refused (`Map.versetest` 343) | refused, as the tests (it equals an empty map) |
@@ -2966,19 +3123,19 @@ Main()<suspends>:void =
 | A `defer:` in a function with several values, or in a block of its code | not stated (ch. 7: it runs when its scope exits) | it runs as each value leaves the scope, after the value is computed and before the code after the call or the block, and at a `return` after the return's value; a call or a block whose clauses fail gives no value and runs none; in a `for`, what it does is part of that value's code, undone with it when a later filter rejects the value, whether the call is inlined or taken lazily (#283): **the Book is silent** |
 | A recursive function with several values whose only calls of itself are in failure contexts of its own code | not stated (the Verse Calculus: a call is its body) | inlined, as a function recursive only through another function that consumes it is (the contexts are functions of their own): where its clauses fail in a `for`'s clauses (which keeps the old rule for now, as any `for` taking a call of a function with several values), what those clauses did since their last generator is undone with them, as for any inlined call, not kept as at a lazily taken call, which is a generator of its own (#283): **the Book is silent** |
 | Precedence of `\|` | (not in the Book) | below `+`, above the comparisons: `X = 1 \| 2` is `X = (1 \| 2)` (#208) |
-| `Sleep(0.0)` | "may resume in the same tick" (ch. 14), "One frame" (ch. 14); the API reference: it always yields; the tested ch. 14 example: it completes at once in a `race` ([the audit](research/readings-audit.md#the-scheduler-rows)) | always yields: resumes in the next tick (#156) |
-| `Sleep(S)` rounding | no fixed 30 Hz rounding rule in the pinned chapter or cited Epic timing description | binary64 `Round(30·S)`, ties to even, at least one tick: `Sleep(0.1)` stays at 3 ticks despite binary floats (#156); bounded inputs and checked clock accumulation follow the explicit reference policy above (#514) |
+| `Sleep(0.0)` | "may resume in the same tick" (ch. 14), "One frame" (ch. 14); the API reference: it always yields; the tested ch. 14 examples (`03`, `05` to `11`): it completes at once, in a `race`, a `sync` and plain code: the Book disagrees with itself ([the rules](research/scheduler-conformance.md#sleep00-completes-at-once)) | the tested examples': completes at once, without suspending, as a negative or NaN duration does |
+| `Sleep(S)` rounding | the API: "a sleep resumes on the first update at or after its deadline and never sooner than the next one. Short sleeps therefore round up"; no tick rate | the first tick at or after the deadline: the binary64 product `30·S` rounded up, at least one tick (`Sleep(0.04)` takes 2 ticks; `Sleep(0.1)`, whose product is exactly 3.0, 3); bounded inputs and checked clock accumulation follow the explicit reference policy above (#514) |
 | End of a program with tasks | not stated | the program ends when `Main` does; a `Main` that waits with no task able to run is an error (exit 2) (#156) |
 | Order of a `subscribable_event`'s functions | not stated (ch. 14's example lists them in subscription order) | subscription order; the tasks awaiting the event are woken first and go on after `Signal` returns (#210) |
-| Event waiter resumption | Epic's event/Signal API specifies suspension order | Main/spawn/source-arm scheduler order by default; with `--event-fifo`, suspension order across tasks and arms, after `Signal` returns and the signalling task waits; the default is undecided (#513) |
+| Event waiter resumption | the Book's API: awaiting tasks "resumed first, in the order they suspended", each until it waits again, before `Signal` returns; its tests have an awaiter run inside `Signal` (`Event.versetest:27`, FORT-1126351) | Main/spawn/source-arm scheduler order by default; with `--event-fifo`, suspension order across tasks and arms, after `Signal` returns and the signalling task waits (#513); running awaiters inside `Signal` is not built, [the obstacle](research/scheduler-conformance.md#awaiters-run-inside-signal-not-built) |
 | Signal in a failure context | the published Signal API describes no_rollback, alongside rendered transacts bits; versioned compiler behavior needs separate evidence | transactional Signal and callbacks are allowed and rolled back by default; with `--signal-no-rollback`, a program that may signal an event from a failure context is refused before it runs; the default is undecided (#515) |
 | Extent of a `<#>` comment | "everything indented by four spaces on subsequent lines" (§1.1) | the rest of the `<#>` line and every following line indented more than that line, whatever the amount (blank lines included); `<#>` may also follow code on a line |
 
 ## Not supported in v1
 
-`ToString` of rationals (see [rational](#rational)), float functions beyond those of [float](#float), the bitwise functions `BitAnd`, `BitOr`, `BitXor`, `BitNot`, `BitShiftLeft`, `BitShiftRight` (see [the pinned rules](research/book-library-functions.md#bitwise-functions-not-implemented)),
-the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
+`ToString` of rationals (see [rational](#rational)), float functions beyond those of [float](#float), the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, what [comparable](#comparable) lists as not yet, module paths `using{/Verse.org/…}` (accepted and ignored), paths as values and path qualifiers other than `(/Verse.org/Verse:)` of a built-in type, two members of one name in a class (`(c:)M` beside an inherited `M`, Book ch. 10), the
 specific overload/call gaps listed under [Overloading](#overloading), nested
-functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice), concurrency beyond [Concurrency](#concurrency), and the unsupported
+functions and lambdas (a lambda, `(X:int) => X`, `a => b`, parses, as the Book's tests have it, and is refused; see [release evidence and proposed design](research/closure-design.md)),
+pointers (`e^` and `^t` parse, as the Book's tests have them, and are refused: the Book's chapters define none), specifiers on a macro's name (`for<par>(…)`, parsed and refused, 3604), declarations with no body (`F():void`, `X:int` on their line: parsed and refused, as openverse has no definitions made elsewhere), fields with accessors (`var X<getter(F)><setter(G)>:t = external{}`, ch. 10, "Fields with Accessors": parsed and refused), choice beyond [Choice](#choice), concurrency beyond [Concurrency](#concurrency), and the unsupported
 effect/construction contracts listed under [Effect contracts](#effect-contracts).

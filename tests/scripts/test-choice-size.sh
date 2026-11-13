@@ -605,7 +605,7 @@ if kind.startswith('methodinstance-'):
         params = 'X:u'+(',Y:int' if shape == 'packed' else '')+' where u:type' if family else ('I:u,' if shape == 'partial' else '')+'?X:u='+str(default)+' where u:type'
         ret = result+'(u)' if family else 'u'
         value = result+'(u){V:=X}' if family else 'X'
-        print(cls+':=class{M('+params+')<computes>'+effects+':'+ret+'=block{'+('Sleep(0.0);' if waiting else '')+value+'}}')
+        print(cls+':=class{M('+params+')<computes>'+effects+':'+ret+'=block{'+('Sleep(0.01);' if waiting else '')+value+'}}')
     clauses = ','.join(f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))' for i in range(count))
     statements = [f'B{i}:=A{i}.M('+('Packed' if shape == 'packed' else '' if shape == 'default' else '7')+')' for i in range(count)]
     terms = [f'B{i}'+('.V' if family else '') for i in range(count)]
@@ -865,7 +865,7 @@ if kind.startswith('nested-casts-'):
         print(head + f'    R := for (I := 1..2, {casts}):\n        {total} + I' + first)
     else:
         leaf = {'for-state': 'set Total += I', 'for-return': 'if (I > 1):\n' + '    ' * (n + 3) + 'return Total',
-                'suspends': 'Sleep(0.0)'}[place]
+                'suspends': 'Sleep(0.01)'}[place]
         print(head + '    var Total:int = 0\n    for (I := 1..2):\n' + nest(0, 2, leaf, state=True) + '    Total')
     # (all of the casts succeed; then the last one fails)
     args = lambda last: ', '.join(['Y'] * (n - 1) + [last])
@@ -941,7 +941,7 @@ if kind == 'heterogeneous-nested-for':
 if kind.startswith('conversion-'):
     _, shape, mode = kind.split('-')
     effects = '<suspends>' if mode=='waiting' else ''
-    waiting = 'Sleep(0.0);' if mode=='waiting' else ''
+    waiting = 'Sleep(0.01);' if mode=='waiting' else ''
     refined = shape in ('refined','refineddefault')
     print('ca:=class{var K:int=1}\ncb:=class{var K:rational=1}\nDup(X:t where t:type)<computes>:t=X|X')
     if refined:
@@ -958,7 +958,7 @@ if kind.startswith('conversion-'):
     rhs='1' if shape=='literal' else 'Value()' if shape=='default' else 'Value(P)' if shape=='refineddefault' else 'if(D:=dup[P])then Value(D.C) else Value(4)' if shape=='refined' else 'Value(1)'
     statements=[f'set A{i}.K' + ('=' if refined else '+=') + rhs for i in range(count)]
     if mode=='waiting' and shape=='literal':
-        statements.append('Sleep(0.0)')
+        statements.append('Sleep(0.01)')
     value='block{'+';'.join(statements+['0'])+'}'
     signature='P:pair(a,b) where a:type,b:type' if refined else ''
     print('Run('+signature+')'+effects+':int=')
@@ -1003,7 +1003,7 @@ if kind.startswith('setter-'):
     value='block{'+';'.join(statements+['+'.join(terms)])+'}'
     effects='<suspends>' if mode=='waiting' else ''
     if mode=='waiting':
-        value='block{Sleep(0.0);'+value+'}'
+        value='block{Sleep(0.01);'+value+'}'
     print(f'Run(){effects}:int=')
     if mode=='first':
         print('    if('+clauses+',V:='+value+',V>0)then V else -1')
@@ -1027,7 +1027,7 @@ if kind.startswith('resultalias-'):
             ret = root if shape=='same' else result+('(t)' if generic else '')
             body = 'Self' if shape=='same' else ret+'{'+('V:=V' if generic else '')+'}'
             params = 'Ignored:u where u:type' if generic else ''
-            print(root+('(t:subtype(comparable))' if generic else '')+':=class{K:int=1'+(';V:t' if generic else '')+';Me('+params+')<computes>'+effects+':'+ret+'=block{'+('Sleep(0.0);' if waiting else '')+body+'}}')
+            print(root+('(t:subtype(comparable))' if generic else '')+':=class{K:int=1'+(';V:t' if generic else '')+';Me('+params+')<computes>'+effects+':'+ret+'=block{'+('Sleep(0.01);' if waiting else '')+body+'}}')
     selected = 'Dup(P)|Dup(Q)' if generic else 'Dup(ca{})|Dup(cb{})'
     clauses=','.join(f'A{i}:=({selected})' for i in range(count))
     statements=[];terms=[]
@@ -1036,7 +1036,7 @@ if kind.startswith('resultalias-'):
         statements.extend([f'B{i}:={value}',f'C{i}:=B{i}'])
         terms.append(f'C{i}.K'+(f'+Equal(C{i}.V,X)' if generic else ''))
     if waiting and shape=='field':
-        statements.append('Sleep(0.0)')
+        statements.append('Sleep(0.01)')
     value='block{'+';'.join(statements+['+'.join(terms)])+'}'
     signature='P:ca(t),Q:cb(t),X:t where t:subtype(comparable)' if generic else ''
     print(f'Run({signature}){effects}:int=')
@@ -1055,7 +1055,7 @@ if kind.startswith('alias-'):
     print('Dup(X:t where t:type)<computes>:t=X|X')
     for cls in ['ca','cb']:
         params = 'Ignored:u where u:type' if shape == 'generic' else ''
-        print(cls + ':=class{K:int=1;M(' + params + ')<computes>' + effects + ':' + cls + '=block{' + ('Sleep(0.0);' if waiting else '') + 'Self}}')
+        print(cls + ':=class{K:int=1;M(' + params + ')<computes>' + effects + ':' + cls + '=block{' + ('Sleep(0.01);' if waiting else '') + 'Self}}')
     clauses=[]; aliases=[]
     for i in range(count):
         clauses.append(f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))')
@@ -1087,7 +1087,7 @@ if kind.startswith('member-'):
     elif result:
         print('ra:=class<computes>{K:int=1}\nrb:=class<computes>{K:int=1}')
         effects = '<computes>' + ('<suspends>' if mode == 'waiting' else '')
-        wait = 'Sleep(0.0);' if mode == 'waiting' else ''
+        wait = 'Sleep(0.01);' if mode == 'waiting' else ''
         print('MakeA(X:any)' + effects + ':ra=block{' + wait + 'ra{}}\nMakeB(X:any)' + effects + ':rb=block{' + wait + 'rb{}}')
         print('ca:=class{F:type{_(:any)' + effects + ':ra}=MakeA}\ncb:=class{F:type{_(:any)' + effects + ':rb}=MakeB}')
     else:
@@ -1095,7 +1095,7 @@ if kind.startswith('member-'):
             waits = awaiting and (not mixed or cls == 'cb')
             effects=('<reads><writes>' if cls=='ca' else '<transacts>') if mixed else '<computes>'
             effects += '<suspends>' if waits else ''
-            print(name + '(X:' + ty + ')' + effects + ':int=block{' + ('Sleep(0.0);' if waits else '') + '1}')
+            print(name + '(X:' + ty + ')' + effects + ':int=block{' + ('Sleep(0.01);' if waits else '') + '1}')
             print(cls + ':=class{V:' + ty + '=' + value + ';F:type{_(:' + ty + ')' + effects + ':int}=' + name + '}')
     clauses=','.join(f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))' for i in range(count))
     terms=[]
@@ -1123,7 +1123,7 @@ if kind.startswith('getter-'):
         print('    K:int=1' + ('\n    V:t' if generic else ''))
         result = cls + ('(t)' if generic else '') if shape in ('chained','generic','awaiting') else 'int'
         value = 'Self' if shape in ('chained','generic','awaiting') else 'K'
-        print('    M()<computes>' + ('<suspends>' if awaiting else '') + ':' + result + '=block{' + ('Sleep(0.0);' if awaiting else '') + value + '}')
+        print('    M()<computes>' + ('<suspends>' if awaiting else '') + ':' + result + '=block{' + ('Sleep(0.01);' if awaiting else '') + value + '}')
     params=[];tparams=[];main=[]
     if generic:
         for i in range(count):
@@ -1159,7 +1159,7 @@ if kind.startswith('polymorphic-'):
             print('    V:t')
         result = 'tuple(t,u)' if generic else 'u'
         value = '(V,X)' if generic else 'X'
-        print('    M(X:u where u:type)<computes>' + ('<suspends>' if awaiting else '') + ':' + result + '=block{' + ('Sleep(0.0);' if awaiting else '') + value + '}')
+        print('    M(X:u where u:type)<computes>' + ('<suspends>' if awaiting else '') + ':' + result + '=block{' + ('Sleep(0.01);' if awaiting else '') + value + '}')
     params=[];tparams=[];main=[]
     if generic:
         for i in range(count):
@@ -1208,7 +1208,7 @@ if kind.startswith('dictionary-'):
             print('    K:int=1' + ('\n    V:t' if generic else ''))
             margs = 'X:t' if arguments and generic else 'X:int' if arguments else ''
             value = 'if(X=V)then 1 else 0' if arguments and generic else 'K+X' if arguments else 'K'
-            print('    M('+margs+')<computes>'+('<suspends>' if awaiting else '')+':int=block{'+('Sleep(0.0);' if awaiting else '')+value+'}')
+            print('    M('+margs+')<computes>'+('<suspends>' if awaiting else '')+':int=block{'+('Sleep(0.01);' if awaiting else '')+value+'}')
     params=[];tparams=[];main=[]
     if generic:
         for i in range(count):
@@ -1259,7 +1259,7 @@ if kind.startswith('heterogeneous-'):
     if mode=='first':
         print('    if('+','.join(clauses)+')then Print("{'+('0' if shape=='result' else value)+'}") else Print("none")')
     else:
-        print('    Rows:=for('+','.join(clauses)+'):block{'+('Sleep(0.0);' if mode=='waiting' else '')+value+'}')
+        print('    Rows:=for('+','.join(clauses)+'):block{'+('Sleep(0.01);' if mode=='waiting' else '')+value+'}')
         print('    Print("{Rows.Length}")')
     sys.exit(0)
 if kind == 'immediate-event-refined':
@@ -1276,7 +1276,7 @@ if kind == 'immediate-event-refined':
 if kind == 'immediate-spawn-refined':
     print('pair(a:type,b:type) := class { A:a;B:b }')
     print('dup(t:type) := class(pair(t,t)) { C:int=4 }')
-    print('Child(N:int,X:t,?E:[]t=Concatenate() where t:type)<suspends>:void=Sleep(0.0)')
+    print('Child(N:int,X:t,?E:[]t=Concatenate() where t:type)<suspends>:void=Sleep(0.01)')
     params = ','.join(f'P{i}:pair(a{i},b{i})' for i in range(count))
     tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
     clauses = ','.join(f'A{i}:=if(D{i}:=dup[P{i}])then(D{i}.C|D{i}.C+1)else 0' for i in range(count))
@@ -1321,7 +1321,7 @@ if kind.startswith('context-refining-'):
     if mode == 'first':
         tail = f'if({clauses},set H.N+=1)then H.N else -1'
     else:
-        wait = 'Sleep(0.0);' if mode == 'waiting' else ''
+        wait = 'Sleep(0.01);' if mode == 'waiting' else ''
         tail = f'R:=for({clauses}):block{{{wait}E:[]a0=Concatenate();set H.N+=1;E.Length}};R.Length+H.N'
     expr = f'block{{H:=cell{{}};{tail}}}'
     actuals = ','.join('dup(int){}' if i%2==0 else 'dup(string){}' for i in range(count))
@@ -1497,7 +1497,7 @@ if kind.startswith('waiting-default-'):
     values = [f'if(D{i}:=dup[P{i}])then ' + (f'Lazy[D{i}.C]' if mode == 'lazy' else f'(D{i}.C|D{i}.C+1)') + ' else 0' for i in range(count)]
     if mode == 'composed': values = ['(Two(0)|Two(2))']*count
     clauses = ','.join(f'A{i}:={v},A{i}=0' if mode == 'composed' else f'A{i}:={v},A{i}=4' for i,v in enumerate(values))
-    expr = f'block{{H:=cell{{}};R:=for({clauses}):block{{Sleep(0.0);E:[]a0=Concatenate();set H.N+=1;E.Length}};R.Length+H.N}}'
+    expr = f'block{{H:=cell{{}};R:=for({clauses}):block{{Sleep(0.01);E:[]a0=Concatenate();set H.N+=1;E.Length}};R.Length+H.N}}'
     header = f'Run({params},?N:int={expr} where {types})<suspends>:int=N'
     if shape == 'method':
         print('box(t:type):=class:\n    X:t\n    ' + header)
@@ -1518,7 +1518,7 @@ Lazy(N:int)<computes><decides>:int =
     N>=0
     N|Lazy[N-1]
 Wait(N:int)<suspends>:int =
-    Sleep(0.0)
+    Sleep(0.01)
     N''')
     values = ['(Two(0)|Two(2))'] * count
     if kind == 'waiting-composed-lazy': values = ['(Lazy[1]|Lazy[-1])'] * count
@@ -1538,7 +1538,7 @@ Wait(N:int)<suspends>:int =
     if kind == 'waiting-nested-value':
         print('        for(X:=(Two(0)|Two(2)),Y:=Early(1)):F(A0+X+Y)')
     else:
-        print('        Sleep(0.0)')
+        print('        Sleep(0.01)')
         if generic: print('        set Total+=1')
         if kind == 'waiting-mixed-arrays':
             print('        Empty:[]int=array{}\n        Empty')
@@ -1729,7 +1729,7 @@ if kind.startswith('waiting-refined'):
     if state: print('    var Total:int=0')
     if returning: print('    defer:Print("source")')
     print(f'    {"" if returning else "R:="}for({",".join(clauses)}):')
-    print('        Sleep(0.0)')
+    print('        Sleep(0.01)')
     if opened: print('        Empty:[]t0=array{}')
     if state: print('        set Total+=1')
     print(f'        {"return " if returning else ""}{total}')
@@ -1824,7 +1824,7 @@ if kind.startswith('spawn-default-'):
         print('impl(z:type) := class(base(int)):\n    Marker:z\n    Seed:int=4')
         instance = 'impl(string){Marker:="x"}'
     clauses = ','.join(f'A{i}:=if(D{i}:=dup[P])then(D{i}.C|D{i}.C+1)else 0' if refined else f'A{i}:=(Two(0)|Two(2))' for i in range(count))
-    print(f'    Run<override>(P:pair(c,d),?N:int=Seed where c:type,d:type)<suspends>:int=\n        var Total:int=0\n        for({clauses}):set Total+=1\n        Sleep(0.0)\n        N+Total')
+    print(f'    Run<override>(P:pair(c,d),?N:int=Seed where c:type,d:type)<suspends>:int=\n        var Total:int=0\n        for({clauses}):set Total+=1\n        Sleep(0.01)\n        N+Total')
     print(f'Start(P:{root}(t),X:pair(a,b) where t:type,a:type,b:type):task(int)=spawn{{P.Run(X)}}')
     print(f'Main()<suspends>:void=\n    T:=Start({instance},dup(int){{A:=1,B:=2}})\n    Print("{{T.Await()}}")')
     sys.exit(0)
@@ -1843,7 +1843,7 @@ if kind.startswith('outer-effect-'):
     if kind.endswith('composed'): values = ['(Two(0)|Two(2))'] * count
     if kind.endswith('exclusive'): values = ['Early(0)'] * count
     clauses = ','.join(f'A{i}:={v}' for i,v in enumerate(values))
-    print(f'Run(H:cell,Scope:pair(sx,sy),{params} where sx:type,sy:type,{tparams})<suspends>:int =\n    if(S:=dup[Scope]):\n        Sleep(0.0)\n        for({clauses}):return Operand(H,A0)\n    -1')
+    print(f'Run(H:cell,Scope:pair(sx,sy),{params} where sx:type,sy:type,{tparams})<suspends>:int =\n    if(S:=dup[Scope]):\n        Sleep(0.01)\n        for({clauses}):return Operand(H,A0)\n    -1')
     args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
     print(f'Main()<suspends>:void = Print("{{Run(cell{{}},dup(int){{A:=0,B:=0}},{args})}}")')
     sys.exit(0)
@@ -1858,7 +1858,7 @@ if kind.startswith('suspends-return'):
     if kind.endswith('lazy'): clauses += ',L:=Lazy[H,2]'
     generic = kind.endswith('generic')
     ret_ty, result, fallback = ('a0','P0.A','P0.A') if generic else ('int','Total','-1')
-    print(f'Run({params} where {tparams})<suspends>:{ret_ty} =\n    var Total:int=0\n    H:=counter{{}}\n    defer:Print("source {{Total}}")\n    branch:\n        defer:Print("observer {{Total}}")\n        Sleep(1.0)\n    Sleep(0.0)\n    for({clauses}):\n        defer:set Total+=100\n        set Total+=A0\n        if(A0=5):return {result}\n        A0\n    Sleep(0.1)\n    {fallback}')
+    print(f'Run({params} where {tparams})<suspends>:{ret_ty} =\n    var Total:int=0\n    H:=counter{{}}\n    defer:Print("source {{Total}}")\n    branch:\n        defer:Print("observer {{Total}}")\n        Sleep(1.0)\n    Sleep(0.01)\n    for({clauses}):\n        defer:set Total+=100\n        set Total+=A0\n        if(A0=5):return {result}\n        A0\n    Sleep(0.1)\n    {fallback}')
     args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
     print(f'Main()<suspends>:void = Print("{{Run({args})}}")')
     sys.exit(0)
@@ -1929,7 +1929,7 @@ if kind.startswith('immediate-suspends-'):
     if kind.endswith('exclusive'): values = ['Early(0)'] * count
     clauses = ','.join(f'A{i}:={v}' for i,v in enumerate(values))
     nested = '\n        var Local:int=A0\n        if(F:=dup[P0]):set Local+=F.C\n        set Total+=Local' if kind.endswith('nested') else '\n        set Total+=A0'
-    print(f'Run({params} where {tparams})<suspends>:int =\n    var Total:int=0\n    branch:\n        Sleep(0.1)\n        Print("observe {{Total}}")\n    Sleep(0.0)\n    R:=for({clauses}):\n        Empty:[]a0=Concatenate(){nested}\n        Empty.Length\n    Sleep(0.2)\n    R.Length')
+    print(f'Run({params} where {tparams})<suspends>:int =\n    var Total:int=0\n    branch:\n        Sleep(0.1)\n        Print("observe {{Total}}")\n    Sleep(0.01)\n    R:=for({clauses}):\n        Empty:[]a0=Concatenate(){nested}\n        Empty.Length\n    Sleep(0.2)\n    R.Length')
     args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
     print(f'Main()<suspends>:void = Print("{{Run({args})}}")')
     sys.exit(0)

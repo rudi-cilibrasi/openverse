@@ -29,7 +29,7 @@ MakePt<constructor>((A:int, B:int)) := pt:
 r := class:
     var N:int = 0
 Fill(A:int, (B:tuple(int, int), C:int), R:r)<suspends>:void =
-    Sleep(0.0)
+    Sleep(0.01)
     set R.N = A + B(0) + B(1) + C
 Main()<suspends>:void =
     T := (2, 3)

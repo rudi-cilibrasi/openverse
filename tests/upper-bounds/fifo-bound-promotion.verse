@@ -22,7 +22,7 @@ Racer(X:t,E:event(int) where t:subtype(vehicle))<suspends>:t=
             Print("loser {V} {F(V)}")
         block:
             spawn{Waiter(E,X,"task")}
-            Sleep(0.0)
+            Sleep(0.01)
             Print("winner")
     set X.N=10
     E.Signal(1)

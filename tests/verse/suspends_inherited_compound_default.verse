@@ -7,7 +7,7 @@ top(a:type, b:type) := interface:
 job(t:type) := interface(top(t, int)):
     Make():t
     (top:)Get<override>(X:int)<suspends>:t =
-        Sleep(0.0)
+        Sleep(0.01)
         Make()
 c1(s:type) := class(job(s)):
     V:s

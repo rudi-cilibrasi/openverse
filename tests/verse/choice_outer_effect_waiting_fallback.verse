@@ -24,13 +24,13 @@ waiter := class:
         Write(H,N)
 Use0(P:pair(a,b),Q:pair(c,d),H:cell,W:waiter where a:type,b:type,c:type,d:type)<suspends><writes>:int =
     if(FR:=dup[P]):
-        Sleep(0.0)
+        Sleep(0.01)
         for(A:=(Two(4)|Two(6)),B:=(Two(4)|Two(6))):return W.Value(H,A+B)
     -1
 
 Use1(P:pair(a,b),Q:pair(c,d),H:cell,F:type{_(:cell,:int)<suspends><writes>:int} where a:type,b:type,c:type,d:type)<suspends><writes>:int =
     if(FR:=dup[P]):
-        Sleep(0.0)
+        Sleep(0.01)
         for(A:=(Two(4)|Two(6)),B:=(Two(4)|Two(6))):return F(H,A+B)
     -1
 Main()<suspends>:void =

@@ -16,7 +16,7 @@ Main()<suspends>:void=
     C:=counter{}
     E:=event(int){}
     W:=spawn{AwaitEvent(E,C)}
-    Sleep(0.0)
+    Sleep(0.01)
     E.Signal(7)
     Print("event {W.Await()} {C.N}")
     T:=spawn{Value()}
@@ -27,11 +27,11 @@ Main()<suspends>:void=
     Print("sticky {AwaitSticky(S,C)} {C.N}")
     U:=event(void){}
     Q:=spawn{AwaitUnit(U,C)}
-    Sleep(0.0)
+    Sleep(0.01)
     SignalUnit(U,C)
     Q.Await()
     Print("unit {C.N}")
     L:=spawn{Leaf()}
-    Sleep(0.0)
+    Sleep(0.01)
     CancelTask(L,C)
     Print("cancel {C.N}")

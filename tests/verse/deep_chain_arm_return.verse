@@ -15,7 +15,7 @@ FR()<suspends>:int =
         block:
             Deep(5, "race")
         block:
-            Sleep(0.0)
+            Sleep(0.01)
             return 7
     0
 FU()<suspends>:int =
@@ -23,7 +23,7 @@ FU()<suspends>:int =
         block:
             Deep(5, "rush")
         block:
-            Sleep(0.0)
+            Sleep(0.01)
             return 8
     0
 # returns on the first run: no pass from a recorded frame needed
@@ -33,15 +33,15 @@ FS(Z:int)<suspends>:int =
             Deep(5, "sync0")
         block:
             if (Z > 0):
-                Sleep(0.0)
+                Sleep(0.01)
             return 9
     0
 P(Which:int)<suspends>:void =
     X := if (Which = 0) then FR() else if (Which = 1) then FU() else FS(0)
     Print("F gave {X}")
-    Sleep(0.0)
+    Sleep(0.01)
     Print("P after sleep 1")
-    Sleep(0.0)
+    Sleep(0.01)
     Print("P done")
 Main()<suspends>:void =
     P(0)

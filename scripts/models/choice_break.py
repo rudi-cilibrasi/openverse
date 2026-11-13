@@ -259,7 +259,7 @@ def first_success(seed, expected):
                     f"{ind}    Print(\"for {{B}} {{Total}} {{H.N}}\")")
     inner = (f"loop:\n{ind}defer:\n{ind}    set Total += {loop_delta}\n{ind}    set H.N += {loop_delta}\n"
              f"{ind}    Print(\"loop cleanup {{K}} {{Total}} {{H.N}}\")\n"
-             + (f"{ind}Sleep(0.0)\n" if waits else "")
+             + (f"{ind}Sleep(0.01)\n" if waits else "")
              + f"{ind}{consumer}\n{ind}set K += 1\n{ind}if (K >= {reps}):\n{ind}    break")
     if nested:
         body = ("var J:int = 0\n    loop:\n        defer:\n            Print(\"outer cleanup {J} {Total} {H.N}\")\n"
@@ -436,7 +436,7 @@ body = f'''loop:
                 break
 '''
 if waits:
-    body += '            Sleep(0.0)\n'
+    body += '            Sleep(0.01)\n'
 body += '            Print("body {A} {B} {Total} {H.N}")\n            (A, B)'
 mode = '<suspends>' if suspends else '<transacts>'
 loop = ("R := " if used else "") + f"for ({', '.join(clauses)}):\n            {body}"

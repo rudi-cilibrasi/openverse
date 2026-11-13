@@ -3,10 +3,10 @@
 Main()<suspends>:void =
     rush:
         block:
-            Sleep(0.0)
+            Sleep(0.01)
             Print("winner")
         block:
-            Sleep(0.0)
+            Sleep(0.01)
             Print("loser")
     Print("after rush")
     Sleep(0.1)

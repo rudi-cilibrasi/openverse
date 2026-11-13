@@ -7,5 +7,5 @@ Show(V:int):string="int {V}"
 Show(V:string):string="string {V}"
 Main()<suspends>:void=
     for(A:=(Dup(1)|Dup("x")),B:=(Two(10)|Two(20))):
-        Sleep(0.0)
+        Sleep(0.01)
         Print("fallback {B}")

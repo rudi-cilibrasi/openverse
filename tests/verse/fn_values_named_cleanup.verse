@@ -17,5 +17,5 @@ Main()<suspends>:void =
     F:type{_(:log)<suspends>:void} = Worker
     race:
         F(L)
-        Sleep(0.0)
+        Sleep(0.01)
     Print("after {L.N}")

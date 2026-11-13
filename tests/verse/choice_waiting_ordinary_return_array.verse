@@ -9,7 +9,7 @@ Run()<suspends>:[]int=
         defer:
             set Total+=100
             Print("body cleanup {Total}")
-        Sleep(0.0)
+        Sleep(0.01)
         return array{A,B,Total}
     array{}
 Main()<suspends>:void=

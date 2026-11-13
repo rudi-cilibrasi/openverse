@@ -15,7 +15,7 @@ Early(N:int):int =
         return 0
     N | N + 1
 Refined(P:pair(a, b), Q:pair(c, d) where a:type, b:type, c:type, d:type)<suspends>:void =
-    Sleep(0.0)
+    Sleep(0.01)
     C := counter{}
     var Total:int = 0
     R := for (A := if (D := dup[P]) then (D.C | D.C + 1) else 0, set Total += A,
@@ -25,7 +25,7 @@ Refined(P:pair(a, b), Q:pair(c, d) where a:type, b:type, c:type, d:type)<suspend
         Total
     Print("end {R.Length} {Total} {C.N}")
 Main()<suspends>:void =
-    Sleep(0.0)
+    Sleep(0.01)
     C := counter{}
     var Total:int = 0
     R := for (A := Early(0), set Total += A, B := Early(0), set Total += B,

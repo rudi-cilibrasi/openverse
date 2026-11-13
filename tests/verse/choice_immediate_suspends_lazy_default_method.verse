@@ -14,5 +14,5 @@ Use(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<suspends>:void =
         Print("body {A} {B} {L} {V} {Total}")
         Total
     Print("source {Total} {R.Length}")
-    Sleep(0.0)
+    Sleep(0.01)
 Main()<suspends>:void = Use(dup(int){A:=1,B:=2},dup(string){A:="s",B:="t"})

@@ -12,7 +12,7 @@ Main()<suspends>:void =
             Print("loser {V}")
         block:
             spawn{Waiter(E)}
-            Sleep(0.0)
+            Sleep(0.01)
             Print("winner")
     E.Signal(1)
     Print("signalled")

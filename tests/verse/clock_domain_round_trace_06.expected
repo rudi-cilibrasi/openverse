@@ -1,5 +1,5 @@
 peer
-timer
 tick 1
+timer
 tick 2
 exit=0

@@ -7,6 +7,6 @@ Main()<suspends>:void=
             Print("bad")
         block:
             Print("peer")
-            Sleep(0.0)
+            Sleep(0.01)
             Print("winner")
     Print("done")

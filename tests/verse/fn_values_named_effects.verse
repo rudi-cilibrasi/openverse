@@ -12,7 +12,7 @@ Try(C:cell, X:int, ?Before:int = Bump(C), ?Max:int = 3)<transacts><decides>:int 
     X <= Max
     C.N
 Later(C:cell, ?Ticks:int = 1)<suspends>:void =
-    Sleep(0.0)
+    Sleep(0.01)
     set C.N += Ticks
     Print("later {C.N}")
 Check(X:int, ?Limit:int = 3)<decides><computes>:int =
