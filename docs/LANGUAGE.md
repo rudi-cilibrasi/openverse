@@ -1276,6 +1276,16 @@ Main():void =
   for (Z := if (V := M?) then Two(V) else Down(2)) { … }   # Two's values; or Down's
   ```
 
+  So may a `case` whose arms have them (#283): it is the `if` chain that
+  picks its arm, `K := case (e) { p₀ => 0, … }` (its scrutinee once, first,
+  its patterns as written, so it fails, or is refused as not exhaustive, as
+  the `case` would), then `if (K = 0) then a₀ else if …`, with no choice of
+  its own; the picked arm's values are the `case`'s:
+
+  ```verse
+  for (X := 1..3, V := (case (X) { 1 => 10 | 11, 2 => Two(20), _ => 5 })) { … }   # 10, 11; 20, 21; 5
+  ```
+
   An `if` chain without a final `else` still has type `void`. Each value
   of the selected branch gives one `void` result. If no condition
   succeeds, the implicit branch gives one `void` result.
@@ -1379,8 +1389,12 @@ Main():void =
   order and these default types too. Its defaults and class blocks must
   meet that function's effect restrictions.
 
-  Refused for now: a block with a range of its own as a branch; and
-  a choice anywhere outside these failure contexts. (A field reached
+  A range in a block stays an error wherever the block is lifted to, a
+  branch included (#283): a range is only a `for`'s iterated expression (the
+  Book's rule), so a block's `Y := 1..3` is no generator of the `for` its
+  clauses are lifted into. A choice anywhere outside these failure contexts
+  is refused: there nothing takes its values, but in the body of a function
+  that then has several values (below). (A field reached
   through a receiver that is not a variable or `Self`, as `F().Items[…]`,
   is read after the choice, since only the receiver's value is bound
   first.) `first{…}` with a choice can fail, so it must be in a
@@ -1555,6 +1569,18 @@ Main():void =
   receiver's type (an override may declare fewer). A parameter or local of the method named like a member is refused,
   as anywhere in a class.
 
+  ```verse
+  dice := class:
+      Sides : int
+      Roll()<transacts>:int = 1 | Sides
+  Main()<transacts>:void =
+      D := dice{Sides := 6}
+      for (X := D.Roll(), Y := D.Roll()) { Print("{X}{Y}") }   # 11 16 61 66
+  ```
+
+  The function itself is still checked as any function is (types, effects,
+  `<decides>`), with each choice read as any of its alternatives.
+
   A `return` in the branches of an `if` in such a function's body, after
   its choices, gives the value of the alternative it is reached in, and the
   rest of the body is skipped for it (#283). The `if` stays an `if`, with
@@ -1576,23 +1602,34 @@ Main():void =
   the filters after it reject undoes what came before it, the caller's
   clauses too, unless a choice of the program's own came in between.
 
+  A block (`block:`) and a `case`'s arm are scopes a `return` leaves the
+  invocation from too, as an `if`'s branch is (#283): the rest of the body
+  is skipped for each value of the return, and runs, after the scope, for
+  the paths that fall through it. A `case` with one picks its arm as it
+  would, its scrutinee once, then that arm runs as an `if`'s branch does,
+  so its choices are the arm's own:
+
+  ```verse
+  F(X:int)<transacts>:int =
+      case (X):
+          1 => return 10 | 11
+          2 => Print("two")
+          _ => {}
+      X | X + 1
+  # F(1): 10, 11; F(2): two, then 2, 3
+  ```
+
+  A `return` elsewhere is refused: in a `for` or a `loop` (find what the loop
+  looks for first, in a `var` it sets or a `for`'s array, and return in an
+  `if` after it), or inside an expression or a condition (`X := if (C) then
+  (return 0) else 1`).
+
   Cleanup stays with the scope that registered it. A returning branch runs
   only the `defer:` blocks it reached, from the innermost scope outward and
   last registered first, after saving each return value. A branch that falls
   through runs its cleanup before the rest of the function. A `defer:` after
-  an earlier return path therefore runs only on paths that reach it; it may
-  also be the final statement of a void function.
-
-  ```verse
-  dice := class:
-      Sides : int
-      Roll()<transacts>:int = 1 | Sides
-  Main()<transacts>:void =
-      D := dice{Sides := 6}
-      for (X := D.Roll(), Y := D.Roll()) { Print("{X}{Y}") }   # 11 16 61 66
-  ``` The function itself is still checked
-  as any function is (types, effects, `<decides>`), with each choice read
-  as any of its alternatives.
+  an earlier return path therefore runs only on paths that reach it (code
+  follows it in its block, as for any `defer:`, [defer](#defer)).
 
   A recursive one (that calls itself, directly or not, other than in a
   failure context of its code that takes the call's values, below) is not
@@ -1714,21 +1751,31 @@ Main():void =
   own shape: recursive or not, generic, a method, its values of another
   type), so its clauses are a failure context of their own, and when they
   fail it has no values and, in a `for`, what came before the call stays.
-  A generic one is taken at one instance of its type parameters for a whole
-  search, as a generic group's own functions are; a call of it at another
-  is refused for now:
+  Its `defer:` runs as each of its values leaves it, as where it is inlined.
+  A generic one may be called at several instances of its type parameters
+  in one search (#283): it is taken at each as a callee of its own (one at
+  each instance where the first call's does not fit), so the values are
+  those of the call at its arguments' types, as anywhere. A generic group's
+  own functions are taken at one instance for a whole search: a call of one
+  at another, or of a callee recursive with them, is refused.
 
   ```verse
   Two(N:int)<transacts>:int = N | N + 5
   Digits(N:int)<transacts>:int =
       if (N <= 0) then 0 else Digits(N - 1) * 10 + Two(N)
+  Pair(X:t, Y:t where t:type)<transacts>:t = X | Y
+  T(N:int)<transacts>:int =
+      if (N <= 0) then 0 else:
+          S := Pair("a", "bb")
+          T(N - 1) + Pair(N, 10) + S.Length
   Main()<transacts>:void =
       for (V := Digits(2)) { Print("v {V}") }   # v 12, v 17, v 62, v 67
+      for (V := T(1)) { Print("v {V}") }        # v 2, v 11, v 3, v 12
   ```
 
   A returning branch may contain plain clauses and
-  nested conditionals before its value. A `return` at the end of the body or
-  in an `if` branch ends that invocation, yielding its operand's values in order;
+  nested conditionals before its value. A `return` at the end of the body, or
+  in an `if`'s branch, a block or a `case`'s arm, ends that invocation, yielding its operand's values in order;
   statements after the return are skipped. These returns are normalized
   before choosing lazy or eager recursion. A selected branch's prefix runs
   before its values; if that prefix fails, the invocation fails without
@@ -1749,6 +1796,22 @@ Main():void =
   A returning `any`-valued group with recursive edges in an incomplete tail
   conditional also uses that eager route, so the conditional erases all
   yielded values to `void` while explicit returns retain their operands.
+
+  A recursive one's own `defer:`s, and those of a block in its code whose
+  values are its own, run as each value leaves their scope (#283), as where
+  the function or the block is inlined: after the value is computed and
+  before the code after the call (its return frame), last registered first,
+  and at a `return` after the return's value. A call whose clauses fail gives
+  no value and runs none. In a `for`, what a `defer:` does is part of the
+  value's code, undone with it when a filter after the call rejects it:
+
+  ```verse
+  R(N:int)<transacts>:int =
+      defer: Print("r {N}")
+      if (N <= 0) then (0 | 1) else (N | R(N - 1))
+  Main()<transacts>:void =
+      for (X := R(1)) { Print("v {X}") }   # r 1, v 1, r 0, r 1, v 0, r 0, r 1, v 1
+  ```
 
   When parameters are named, each recursive call
   evaluates positional arguments first, then named arguments as written, then
@@ -1823,14 +1886,29 @@ Main():void =
   `<computes>`, keeps local state, or may print or call `Err()`. Its choice
   points must be where a choice is lifted from (a comparison's later
   operand, a `set`'s value, a named argument, a struct's field, `and`'s
-  operands, an `if`'s branch, the right of `or`) (#283). Also a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`
-  other than at the end of its body or in an `if`'s branches, a method of a class or
+  operands, an `if`'s branch, the right of `or`) (#283). Also one with a `return`
+  in a `for` or a `loop`, or inside an expression or a condition, or more
+  than 16 `if`s with a `return` (the inlined code doubles with each), a method of a class or
   interface below two others that each declare its name without `<override>`,
-  `<suspends>`, one used as a function value, and, since its body is inlined where other names may be
+  one used as a function value, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or
   method anywhere in the program, and a call of one where a name its body
   uses from outside is a parameter, local or member of `Self` in scope.
-  `Main` never has several values.
+  Where a lazily taken one's search takes a generic function at one
+  instance of its type parameters (above), a call of it at another is
+  refused when the function is one of the group's own, is recursive with
+  the function whose code calls it or with another, or is overloaded. A
+  failure context in a recursive one's code that takes a call's values and
+  gives a value of one of its type parameters that none of the names it
+  uses has is refused. A call in the clauses copied for each alternative of
+  a choice whose values are of different types that would take one overload
+  (or one list of an overloaded method) with several values in one copy and
+  another in another is refused, saying to write those clauses apart for
+  the alternatives or to give the overloads names of their own.
+  `Main` never has several values, nor does a `<suspends>` function: a call
+  of one with several would have to be in a failure context, and a failure
+  context cannot suspend (#156); a choice in its body outside a failure
+  context is refused, saying so.
 - **Precedence.** `|` binds looser than arithmetic and tighter than the
   comparisons: `X = 1 | 2` is `X = (1 | 2)`.
 
@@ -2582,6 +2660,7 @@ Main()<suspends>:void =
 | Code before a choice | (the Verse Calculus is pure) | runs once, also within an expression (the operands before the choice are evaluated first, as written); each alternative runs the code after the choice, from where the choice was reached; in an `if` or `first{}`, one that leads to no success, and to no `return` or `break`, is rolled back (as backtracking does); in a `for`, the choice is a generator, so only an alternative whose own clauses fail is (#208) |
 | A choice in an operand of `and` or `or` | not stated (the left of `or` is a failure context, the right is not, §6.2) | `A and B`: `A`'s clauses, then `B`'s, in the context the `and` is in, so `B`'s values for each of `A`'s; `A or B`: `if (T := A) then T else B`, so the left's first success, if it has one, is the only value (the right is not tried when what follows fails), else the right's values, taken by the context the `or` is in (all of them in a `for`), not only its first (#283) |
 | A call of another function with several values in a recursive one's code | not stated (the Verse Calculus: a call is its body) | a choice point of the recursive one, taken with it: when the callee's clauses fail it has no values, and, in a `for`, what came before the call stays, as at a call of the recursive one itself (a lazily taken call is a generator of its own), not undone as at an inlined call (#283) |
+| A `defer:` in a function with several values, or in a block of its code | not stated (ch. 7: it runs when its scope exits) | it runs as each value leaves the scope, after the value is computed and before the code after the call or the block, and at a `return` after the return's value; a call or a block whose clauses fail gives no value and runs none; in a `for`, what it does is part of that value's code, undone with it when a later filter rejects the value, whether the call is inlined or taken lazily (#283) |
 | A recursive function with several values whose only calls of itself are in failure contexts of its own code | not stated (the Verse Calculus: a call is its body) | inlined, as a function recursive only through another function that consumes it is (the contexts are functions of their own): where its clauses fail in a `for`'s clauses, what those clauses did since their last generator is undone with them, as for any inlined call, not kept as at a lazily taken call, which is a generator of its own (#283) |
 | Precedence of `\|` | (not in the Book) | below `+`, above the comparisons: `X = 1 \| 2` is `X = (1 \| 2)` (#208) |
 | `Sleep(0.0)` | "may resume in the same tick" (ch. 14); the API reference: it always yields | always yields: resumes in the next tick (#156) |

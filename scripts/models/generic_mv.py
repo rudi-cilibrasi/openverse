@@ -76,6 +76,9 @@ RSeq = None
 RNest = None
 # (#283: another function with several values as a choice point in a lazy one, LOt; a stream of its own)
 ROther = None
+# (#283: that function called at two instances of its type parameters in one search, LOt2, int and
+# the lazy one's own: a copy of it of its own takes the other; a stream of its own)
+RInst = None
 # (#392: a named parameter with a default; a generator of its own decides, so seeds keep their
 # other programs)
 R392 = None
@@ -86,6 +89,8 @@ RMethod = None
 SHARED = False
 # Source-spelling variants share the existing independent value/effect model.
 RECURSIVE_RETURNS = "no-recursive-returns" not in sys.argv[3:]
+# (#283) returns in a block or a case's arm too (no-return-scopes turns it off)
+RETURN_SCOPES = "no-return-scopes" not in sys.argv[3:]
 
 # ---------------------------------------------------------------- types
 CLASSES = ["cat", "dog", "animal"]
@@ -427,6 +432,13 @@ d{n}({child_tps}) := class({parent}):{extra_field}
             self.src = ("%sTwo(A:t, B:t where t:type)<transacts>:t = A | B\n"
                         "%s(X:t, Y:t, N:int where t:type)<transacts><decides>:t =\n"
                         "    N > 0\n    Print(\"%s {N}\")\n    Z := %s[Y, X, N - 1] | X\n    %sTwo(Z, Y)") % (n, n, n, n, n)
+        elif k == "LOt2":
+            # (#283: as LOt, its Two called at int first, whatever its own type)
+            self.path = "lazy"; self.params = [("X", "t"), ("Y", "t"), ("N", "int")]; self.decides = True; self.fx = True
+            self.src = ("%sTwo(A:t, B:t where t:type)<transacts>:t = A | B\n"
+                        "%s(X:t, Y:t, N:int where t:type)<transacts><decides>:t =\n"
+                        "    N > 0\n    Print(\"%s {N}\")\n    L := %sTwo(N, N + 10)\n    Z := %s[Y, X, N - 1] | X\n"
+                        "    Print(\"%s {N} {L}\")\n    %sTwo(Z, Y)") % (n, n, n, n, n, n, n)
         elif k == "LCmp":
             self.path = "lazy"; self.params = [("A", "arr"), ("X", "t"), ("I", "int")]; self.decides = True; self.cmp = True
             self.src = ("%s(A:[]t, X:t, I:int where t:subtype(comparable))<decides>:t =\n"
@@ -451,13 +463,22 @@ d{n}({child_tps}) := class({parent}):{extra_field}
         if RECURSIVE_RETURNS and self.path in ("lazy", "eager") and random.Random(n).random() < 0.5:
             lines = self.src.splitlines()
             if len(lines) > 1:
+                # (#283: at times each return in a scope other than an if's branch, a block's or a
+                # case's arm's, with the same values; a stream of its own, so seeds keep their
+                # other programs)
+                scoped = RETURN_SCOPES and random.Random(n + "#283scope").random() < 0.5
                 # (the last line's own indentation: in an else block, LSb's)
-                lines[-1] = lines[-1][:len(lines[-1]) - len(lines[-1].lstrip())] + "return " + lines[-1].strip()
+                ind = lines[-1][:len(lines[-1]) - len(lines[-1].lstrip())]
+                lines[-1] = ind + "return " + lines[-1].strip()
                 if k == "LIf":
-                    lines[-1:] = ["    if(N=0): return Y", "    NextN:=N-1",
-                                  f"    return X | {n}[Y,X,NextN]"]
+                    first = ["    case(N):", "        0 => return Y", "        _ => {}"] if scoped else ["    if(N=0): return Y"]
+                    lines[-1:] = first + ["    NextN:=N-1", f"    return X | {n}[Y,X,NextN]"]
                 elif k in ("ERep", "ETree"):
-                    lines[1] = "    if(N<=0):\n        false?\n        return X"
+                    lines[1] = ("    if(N<=0):\n        block:\n            false?\n            return X" if scoped
+                                else "    if(N<=0):\n        false?\n        return X")
+                if scoped:
+                    last = lines[-1]
+                    lines[-1:] = [last[:len(last) - len(last.lstrip())] + "block:", "    " + last]
                 self.src = "\n".join(lines)
 
     def bind_helper(self, h):
@@ -625,6 +646,15 @@ d{n}({child_tps}) := class({parent}):{extra_field}
             return [("count", inner, var + "c"),
                     ("dyn", lambda env: [("print", "%s %d %d" % (self.name, a["N"], env[var + "c"])),
                                          ("choice", [V(a["X"]), V(a["Y"])])])]
+        if k == "LOt2":
+            # (the print, then each of Two's at int: N, N + 10; then each value of the call or X,
+            # the print of both, then each of the other's: Z, Y)
+            if a["N"] <= 0: return [("cond", False)]
+            z, l, n = var + "z", var + "l", a["N"]
+            return [back, ("choice", [[("val", l, n)], [("val", l, n + 10)]]),
+                    ("choice", [call({"X": a["Y"], "Y": a["X"], "N": n - 1}, z), [("val", z, a["X"])]]),
+                    ("dyn", lambda env: [("print", "%s %d %d" % (self.name, n, env[l])),
+                                         ("choice", [V(env[z]), V(a["Y"])])])]
         if k == "LOt":
             # (the print, then each value of the call or X, then each of the other's: Z, Y)
             if a["N"] <= 0: return [("cond", False)]
@@ -727,7 +757,7 @@ class Machine:
 # ---------------------------------------------------------------- the program
 class Gen:
     def __init__(self, seed):
-        global R, R387, R392, RMethod, SHARED, RFrame, RSeq, RNest, ROther
+        global R, R387, R392, RMethod, SHARED, RFrame, RSeq, RNest, ROther, RInst
         R = random.Random(seed)
         R387 = random.Random(seed * 1000003 + 387)
         R392 = random.Random(seed * 1000003 + 392)
@@ -736,6 +766,7 @@ class Gen:
         RSeq = random.Random(seed * 1000003 + 283287)
         RNest = random.Random(seed * 1000003 + 283293)
         ROther = random.Random(seed * 1000003 + 283294)
+        RInst = random.Random(seed * 1000003 + 283298)
         SHARED = random.Random(seed * 1000003 + 2834).random() < 0.4
         self.seed = seed
         self.prods = []
@@ -1018,6 +1049,7 @@ class Gen:
         if RSeq.random() < 0.3: lazy = RSeq.choice(["LSq", "LSc", "LSb"])
         if RNest.random() < 0.3: lazy = RNest.choice(["LNc", "LNf"])
         if ROther.random() < 0.25: lazy = "LOt"
+        if RInst.random() < 0.2: lazy = "LOt2"
         self.producer(lazy); self.producer(R.choice(kinds_e))
         for _ in range(R.randint(0, 2)):
             self.producer(R.choice(kinds_i + kinds_l + kinds_e))

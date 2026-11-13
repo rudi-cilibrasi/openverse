@@ -320,7 +320,7 @@ def inlineSource (allTops0r : List STop) (requests : Requests) (admitted : Admit
   let written := admitted.resolved
   let ⟨resolved, lazy, familySites, overloadSites, nestedSites, fieldSites⟩ ← Choice.inlineMulti admitted.resolved reserved
     requests.eager requests.families requests.lazy requests.overloads requests.nested
-    requests.fieldOrders
+    requests.fieldOrders requests.instanceCalls
   -- (#246) the class of the stack cells of lazily taken ones
   let helpers := admitted.helpers ++ (← if lazy then lazyTops else pure [])
   -- (#283) and of the cells of the vars their frames set

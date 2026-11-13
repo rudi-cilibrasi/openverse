@@ -214,8 +214,16 @@ the names its scope declares after it renamed (`$later'N`, shown as `N`,
 lowers a `defer:` after the rest of its scope, they run as each value
 leaves the block, and not for a value whose clauses fail. The same goes
 for a non-returning function's own `defer:`s, after `$r0` in its `$inline`
-template (not in a recursive one or one reached from it, whose body is a
-function's). Returning functions keep registrations until
+template. A function whose values are taken lazily or computed at the call
+(a recursive one, or one a recursive one's code calls) has its own
+`defer:`s placed so before its body is analysed, after each leaf of its last
+expression (`inlineFns`' `deferLastLeaves`, through its `if`s' branches, so
+an `if` that ends it still picks its branch as the call's code, not each
+value's), so they are code after its value, a return frame of its calls in
+the lazy machine (`lastChoiceTail`), and a block in its code that
+the normal form takes apart (`normAlt`, `frameOf?`) has its own placed so
+too: before #283's last step the function's were refused, and a block's ran
+once, as code of the path that selects it. Returning functions keep registrations until
 `elimScopedReturns` normalizes their scopes. Each `ReturnScope` retains
 its continuation and reached registrations. Branch fallthrough executes
 that branch's cleanup before resuming the parent's continuation. A return
@@ -320,6 +328,19 @@ of "returned or not") makes the `if` such a boundary, where the program
 had none. tim-e1's model found it twice in #312's review: prints in the
 branch, then before the `if`, survived a rejected value. Even the
 caller's earlier clauses would show it.
+
+A block statement and a `case`'s arm with a `return` in them are taken out
+the same way (#283), as the scopes they are: a block's statements go in its
+place, its names renamed for it (`$k…b'N`), with its `defer:`s its own scope's
+in `elimScopedReturns` (a `ReturnScope`, as an `if`'s branch has); a `case`
+is the `if` chain that selects its arm (`Choice.caseIf`): `k := case (e) {
+p₀ => 0, … }`, the same patterns, so the same failure or exhaustiveness, then
+`if (k = 0) then a₀ else if … else aₙ`. A block or a `case` as the body's last
+statement has its value, or its arms', returned in it (`tailReturns`). A
+`return` in a `for` or a `loop` would need the loop to stop with the return's
+values: a function of its own, as `nestFns` makes for a consumer, giving an
+option of the operand and the `var`s it sets (a `for`'s body has no `break`),
+whose call the body then returns from in an `if`; it is refused, saying so.
 
 Recursive multi-value bodies normalize supported returns before recursion
 classification. For lazy analysis, generated branch scopes carry
@@ -492,7 +513,7 @@ or interpreter behavior is needed, and all existing Core checks still run.
 First-success continuation exits retain their previous restrictions.
 Ordinary casts still use the selector path above.
 
-An `if` whose branches have more to lift than a choice of values (#283: a call of a function with several values, recursive or not, or a choice inside a branch's expression) is lifted whole too (`Choice.branchesLift`, which `hasLiftable` and `liftsAsIf` use). A block as a branch has its names renamed for its side (`$…'N`, `bifToExcl`), since the clauses after the `if` follow it in its path, with `$declNames` keeping the no-shadowing check, and its `defer:`s after its value (`deferLast`); not one with a range of its own, as for any block (#302). In a `for`, `bifToExcl` makes it the same exclusive choice, and `exclIter` lifts each branch's call or choice in its path, so the picked branch's own generators are the only ones (#331). Where the first success is taken, `prepare` makes it the choice of its branches, each guarded by the selector (`bifToExcl`, then `exclToChoice`), whose alternatives are lifted as any composed choice's (#296, #338). An `if` whose branches the elaborator takes as they are (`plainBranches`) keeps `elabBranchAlts`, so that code does not change, and so does an `F$all`'s body (`gensOf`, `guardBranches := false`), whose `arrOfE` gives the picked branch's array, whatever is in it. With no type written, the join is found by `elabBranchAlts` with `Ctx.typeOnly` set, which types a branch with something to lift as `option{…}` takes it: at its values' type. In a `for`, `exclIter` does so for `$joinOf`. Where the first success is taken, the guarded choice keeps `$joinOf` as its last argument, and `elabOneGo` types the binding at the join (for `set L = if …`, at `L`'s type) and drops it.
+An `if` whose branches have more to lift than a choice of values (#283: a call of a function with several values, recursive or not, or a choice inside a branch's expression) is lifted whole too (`Choice.branchesLift`, which `hasLiftable` and `liftsAsIf` use). A block as a branch has its names renamed for its side (`$…'N`, `bifToExcl`), since the clauses after the `if` follow it in its path, with `$declNames` keeping the no-shadowing check, and its `defer:`s after its value (`deferLast`); a range it binds stays an expression, so an error, as in any lifted block (a range is only a `for`'s iterated expression; before #283's last step such a block, as a branch or not, was not lifted, refused with a message of its own). In a `for`, `bifToExcl` makes it the same exclusive choice, and `exclIter` lifts each branch's call or choice in its path, so the picked branch's own generators are the only ones (#331). Where the first success is taken, `prepare` makes it the choice of its branches, each guarded by the selector (`bifToExcl`, then `exclToChoice`), whose alternatives are lifted as any composed choice's (#296, #338). An `if` whose branches the elaborator takes as they are (`plainBranches`) keeps `elabBranchAlts`, so that code does not change, and so does an `F$all`'s body (`gensOf`, `guardBranches := false`), whose `arrOfE` gives the picked branch's array, whatever is in it. A `case` with something to lift in an arm (#283) is lifted as the `if` chain that selects its arm (`Choice.caseIf`, from `liftE`): its scrutinee lifted first, then a block of its selector, `K := case (e) { p₀ => 0, … }` with the arms' own patterns, and the chain `if (K = 0) then a₀ else if …`, each `if` at its arm's place, so names made for it (`bifToExcl`'s) are its own; the same chain takes a `return` in an arm out (`elimReturns`). With no type written, the join is found by `elabBranchAlts` with `Ctx.typeOnly` set, which types a branch with something to lift as `option{…}` takes it: at its values' type. In a `for`, `exclIter` does so for `$joinOf`. Where the first success is taken, the guarded choice keeps `$joinOf` as its last argument, and `elabOneGo` types the binding at the join (for `set L = if …`, at `L`'s type) and drops it.
 
 `exclToChoice` stops at a nested `for`. Otherwise an `if` condition with a choice of its own would turn that `for`'s exclusive choices into generators before the `for` sees them. The eager route (`F$all`, #235) refuses a function with a `return`, as before.
 
@@ -761,8 +782,10 @@ twice as long as the last one's whose body runs a step and gives that
 iteration's values: adding each value to an array would copy it each time,
 and the C runtime frees a call's cells only when it returns.
 
-A strongly connected group of such functions (#283: each one's alternatives calls of the group's functions; one result type, none generic) is taken lazily too, as one. So is, with a group taken lazily (one not computable), every function with several values its code calls, and those that one calls, and so on: its machine is closed under calls of functions with several values (`Choice.machineOf`), so that a call of one is a choice point as a call of the group is, the callee's code a member's, recursive or not. There is no rule left that a lazily taken function calls only its own group; a callee is compiled in the machine as the group's own functions are (its returns taken out first, `inlineCalls`' `memberFns`; one with a `defer:` refused, as a recursive one's is), and inlined elsewhere as before.
-- A generic member's instance is found at its calls as a group's own functions' are, at the group's result type, else, when its values go to the frame after its call at a type of their own, at its arguments' alone (`elabLoopGenGroupWith`'s probe).
+A strongly connected group of such functions (#283: each one's alternatives calls of the group's functions; one result type, none generic) is taken lazily too, as one. So is, with a group taken lazily (one not computable), every function with several values its code calls, and those that one calls, and so on: its machine is closed under calls of functions with several values (`Choice.machineOf`), so that a call of one is a choice point as a call of the group is, the callee's code a member's, recursive or not. There is no rule left that a lazily taken function calls only its own group; a callee is compiled in the machine as the group's own functions are (its returns taken out first, `inlineCalls`' `memberFns`, and its `defer:`s after its value), and inlined elsewhere as before.
+- A generic member's instance is found at its calls as a group's own functions' are, at the group's result type, else, when its values go to the frame after its call at a type of their own, at its arguments' alone (`elabLoopGenGroupWith`'s probe), with the names its path's prefix binds before it in scope (a receiver named there, `B := box(string){…}; S := B.Both()`, fixes the class's type arguments).
+- A machine's membership is by function, so by instance: a generic callee called at another instance than the one its first call found, whose arguments do not fit that one (the probe infers another and the call's arguments fail at the first), is another member. The probe asks for it (`Requests.instanceCalls`, tier 1: the call's place and the function whose code it is in), and that machine is a placeholder with no values, so the elaboration goes no further; the next round has `inlineMulti` make that call a call of a copy of the callee of its own, `F$copyK` (`Choice.instanceCopies`; its calls of itself the copy's, shown as `F`), which the machine takes as any member, at its own instance. A copy's frames' holes carry its name (`copyHoles`), as frames are told apart by their holes (`$sameFrame`, `firstBody`). A copy's own generic callees are copied in turn if they need it, each call keyed by the function it is in. A callee recursive with the function that calls it, or with another, is refused, as a group's own function is taken at one instance for a whole search (a copy of it would be one more function of the group, at another instance, and so on); so is an overloaded one (`instanceCopies` copies a function by name). Programs that compiled before ask for none, and keep their bytes.
+- A frame at the top of a member's code gives that member's values: when the member's values are of a type of their own (`ownTys`), the frame's code gives that type (`loopFlatWith`'s `ownOut`), not the group's result type: before, such a callee with a choice point after a call in its code was refused with a type error.
 - A `return` in an `if` after a choice point (a recursive function's own, or a member's) is in code that reaches no other point: a plain frame or a value, whose `if` is a plain one again (`eraseReturnTails` in `normAlt`), its returning branch's value the alternative's. Before, its scopes' markers reached the elaborator (`unknown function '$returnTail'`), for a recursive function too.
 - A member's values may be of a type of their own, one that does not coerce to the group's result type (`LoopGen.memberTys`): they go to the frame after the member's call, whose hole is at that type (`loopFlatWith`'s and `probeHoleWith`'s `recTy`), in that type's value slot, as a choice's values of another type do; where the first success is taken, through that type's `{name}$retN` (`firstLiftOf`'s `memberTys`, `firstBody`'s `ownTy`).
 - Its calls' marker is the called one's, with the others in its last expression: `$group(tail, $member(H, params, clauses, r := tail)…)`, each member's names tagged for the site. A call of the function itself is `$rec`, of another member `$recTo(H, …)` (`Choice.markRecG`).
@@ -1254,7 +1277,8 @@ order of the functions made for them.
 What is asked for is of three tiers, by what it changes (`Requests.tier`),
 and an elaboration asks for one tier at a time: 1. how the source's
 choices are inlined (eager groups, lazily taken functions, families,
-overloads),
+overloads, the copies of generic callees a machine takes at another
+instance),
 2. the classes' layout (hidden fields), 3. the functions added (functions
 and methods as values, cast branches, the functions of lazily taken calls,
 continuations and default helpers). A round that asks for more of one tier
