@@ -2357,7 +2357,7 @@ Main()<suspends>:void =
 
 ## Not supported in v1
 
-`ToString` of rationals (see [rational](#rational)), float functions beyond those of [float](#float),
+`ToString` of rationals (see [rational](#rational)), float functions beyond those of [float](#float), the bitwise functions `BitAnd`, `BitOr`, `BitXor`, `BitNot`, `BitShiftLeft`, `BitShiftRight` (see [the pinned rules](research/book-library-functions.md#bitwise-functions-not-implemented)),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored) and paths as values, the
 specific overload/call gaps listed under [Overloading](#overloading), nested
