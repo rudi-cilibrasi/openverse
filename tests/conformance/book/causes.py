@@ -103,7 +103,8 @@ rule("library-chars", REF, diag=r"unknown function 'ToChar|char32? has no method
 rule("library-diagnostic", REF, diag=r"ToDiagnostic|diagnosable")
 rule("library-other", REF, diag=r"unknown (function|identifier) '(Clamp|Sgn|GetCastableFinalSuperClass\w*|"
      r"GetSecondsSinceEpoch|FitsInPlayerMap|Sin|Cos|Tan|Sinh|Cosh|Tanh|Exp|Ln|Sqrt|ArcSin|ArcCos|ArSinh|"
-     r"ArCosh|ArTanh|Pow2_\w+)'|(int|float|string|tuple\([^)]*\)) has no method")
+     r"ArCosh|ArTanh|Pow2_\w+)'|(int|float|string|tuple\([^)]*\)) has no method|"
+     r"unknown parametric type '(signalable|awaitable)'")
 rule("structural-types", REF, diag=r"unknown (type|function) 'comparable'")
 rule("metatypes", REF, diag=r"unknown parametric type '(subtype|castable_subtype|concrete_subtype|"
      r"castable_concrete_subtype|classifiable_subset)'|unknown type 'type'|unknown (function|identifier) "
@@ -117,13 +118,17 @@ rule("subtyping-to-any", REF, diag=r"expected [^,]*\bany\b[^,]*, found|cannot co
      r"an operand of '=' must be comparable, and any")
 rule("first-forms", REF, diag=r"a generator X : source in first")
 rule("path-literals", REF, diag=r"the path \S+ as a value is not supported")
+rule("named-tuple-elements", REF, diag=r"a named parameter inside a tuple parameter")
+# (`tuple()` is `void` in openverse, and `void` overlaps every type)
+rule("void-overloads", REF, diag=r"a call cannot tell apart, \((void|[^)]*, void)[,)]")
 rule("class-specifiers", REF, diag=r"<final_super>|<persistable>|<castable>|<unique>|<concrete>|"
      r"specifier|not supported yet|is unsupported")
 rule("generators", REF, diag=r"unknown parametric type 'generator'|'generator'")
 # --- then by the source line a parse error points to
 rule("unnamed-parameters", REF, diag=r"expected an identifier, found ':'")
 rule("unnamed-parameters", REF, line=r"[(,]\s*:\s*[A-Za-z_?\[(]", diag=r"\(parse\)")
-rule("extension-methods", REF, line=r"^\s*\([A-Za-z_]*\s*:[^()]*(\([^()]*\))?[^()]*\)\s*\.\s*[A-Za-z_]")
+rule("extension-methods", REF, line=r"^\s*\([A-Za-z_]*\s*:[^()]*(\([^()]*\))?[^()]*\)\s*\.\s*[A-Za-z_]",
+     diag=r"\(parse\)")
 rule("qualified-names", REF, line=r"\((local|super|[A-Za-z_][\w.]*|/[^:)]*):\)\s*[A-Za-z_]")
 rule("qualified-names", REF, diag=r"is not a class or interface above|only a method can be qualified|"
      r"qualified method")

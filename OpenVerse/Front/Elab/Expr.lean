@@ -2200,6 +2200,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
         return ⟨.seq (.assign x r.e) (.assign y acc), t⟩
       return ⟨.prim (.tupGet k) [r.e], t⟩
     | none =>
+      if ctx.extensionNamed f && !ctx.hasOwnMember p r.ty f then eerr p (extensionNoValue f)
       if ctx.types.classes.contains sn then
         if f.startsWith "(" then
           eerr p s!"X.{f}, a qualified method, cannot be used as a value: call it with X.{f}(…) (#210)"
@@ -2319,7 +2320,9 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
           eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (#210)"
         eerr p s!"class {sn} has no field '{f}'"
       eerr p s!"struct {sn} has no field '{f}'"
-  | t, m => eerr p s!"{t.show} has no member '{m}'{ctx.anyWhy r}"
+  | t, m =>
+    if ctx.extensionNamed m then eerr p (extensionNoValue m)
+    eerr p s!"{t.show} has no member '{m}'{ctx.anyWhy r}"
 
 /-- A default's declaration scope, actual home-class arguments and cycle
     check, shared by ordinary and choice-lifted construction operands. -/

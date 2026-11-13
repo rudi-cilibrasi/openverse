@@ -330,6 +330,30 @@ def reservedNames : List String :=
    "sequence", "string8", "string16", "string32", "subclass", "succeeds", "syntax", "throws", "trait",
    "truth", "try", "union", "using", "verify", "when", "while"]
 
+/-- The prefix of an extension method's function's name (`extensionName`). -/
+def extensionPrefix : String := "$ext:"
+
+/-- The function an extension method `(R:t).M(…)` is (Book of Verse ch. 6,
+    "Extension Methods"): `$ext:M`, whose first parameter is the receiver,
+    a name no program can write, so that `M(X)` does not reach it and `M`
+    names no value of it. A call `X.M(…)` that finds `$ext:M` in scope is
+    the call `$ext:M(X, …)` (`resolveModules`). -/
+def extensionName (m : String) : String := extensionPrefix ++ m
+
+/-- The receiver of a bare call `M(…)` in a method that may be an extension
+    method's call with `Self` (`resolveModules`): `$implicitSelf:F`, where
+    `F` is what `M` names as written, the call's other reading. -/
+def implicitSelfPrefix : String := "$implicitSelf:"
+
+/-- The method name of an extension method's function, `$ext:M` at the top
+    level, `A::B::$ext:M` in a module, `$ext:M$ov1` as an overload, a
+    class's `c.$ext:M`: `M`. -/
+def extensionMethod? (n : String) : Option String :=
+  let last := ((n.splitOn "::").getLast?.getD n).splitOn "." |>.getLast?.getD n
+  if last.startsWith extensionPrefix then
+    some (((last.drop extensionPrefix.length).toString.splitOn "$ov").headD "")
+  else none
+
 /-- Why a type's name is not one (`resolveTy`, and a type alias's names). -/
 def unknownTypeMessage (n : String) : String :=
   s!"unknown type '{n}' (supported: int, logic, char, string, void, []t, ?t, tuple(…), and structs and enums)"
