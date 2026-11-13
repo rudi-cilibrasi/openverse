@@ -309,7 +309,7 @@ Main(){mode}:void =
 # kinds the compiler gives that rule. This for's sources are calls of recursive
 # functions taken lazily (kind `call`), in an exclusive choice's branches or a
 # composed choice at times.
-FOR_BOOK = set(__import__('os').environ.get('OV_FOR_BOOK', '').split(',')) - {''}
+FOR_BOOK = set(__import__('os').environ.get('OV_FOR_BOOK', 'plain,choice').split(',')) - {''}
 
 
 def for_book(style):

@@ -42,7 +42,7 @@ import sys
 # composed (one whose alternatives have choices of their own), exclusive (an
 # `if` picking a branch with choices, an `or` with a choice on its right),
 # call (a call of a function with several values anywhere in the clauses).
-FOR_BOOK = set(os.environ.get('OV_FOR_BOOK', '').split(',')) - {''}
+FOR_BOOK = set(os.environ.get('OV_FOR_BOOK', 'plain,choice').split(',')) - {''}
 
 
 def has_call(x):

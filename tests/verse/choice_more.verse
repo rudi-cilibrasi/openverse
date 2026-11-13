@@ -1,7 +1,8 @@
 # choice (#208), the review's cases: in a for, an alternative whose own
-# clauses succeed keeps their effects even when the generators after it give
-# no value (as any generator), while an if rolls it back; set as the last
-# clause of a macro; choices nested 30 deep in conditions (checked once each)
+# clauses succeed but whose later generators give no value is undone, as an
+# if undoes it (the Book of Verse's rule: a for's clauses are one search, and
+# nothing here reaches the body); set as the last clause of a macro; choices
+# nested 30 deep in conditions (checked once each)
 Main():void =
     var N:int = 0
     Xs := for (X := 1 | 2, set N += 1, Print("p{X}"), Y := 3 | 4, Y > 10) { Y }

@@ -705,7 +705,7 @@ d{n}({child_tps}) := class({parent}):{extra_field}
 # clauses lead to no body is undone as a whole (FlowControl/for.versetest
 # 317-392, Range.versetest 140, 159). The old rule keeps what an alternative's
 # own clauses did once they succeed, even when later generators give nothing.
-FOR_BOOK = set(os.environ.get('OV_FOR_BOOK', '').split(',')) - {''}
+FOR_BOOK = set(os.environ.get('OV_FOR_BOOK', 'plain,choice').split(',')) - {''}
 
 
 class Machine:

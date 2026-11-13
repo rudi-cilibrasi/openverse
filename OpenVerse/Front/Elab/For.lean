@@ -17,6 +17,97 @@ def joinOfType (elabBranchAlts : Ctx → Pos → SExpr → Option STy → Option
   restoreConstructProbe ctx st
   return some ty.toSTy
 
+/-! ### What a `for` undoes (the Book of Verse's rule)
+
+A `for`'s clauses are one search, depth first, over the product of its
+generators' values: reaching the body commits what the search did since the
+last success, a failure undoes back to the most recent choice point (the
+element or alternative being tried), and the search's end undoes what it
+did since the last success (`FlowControl/for.versetest` 317-392,
+`Range.versetest` 140, 159; docs/DESIGN.md, "What a `for` undoes"). Nested
+`forE`s keep what a source, a range's bounds or the clauses before the next
+generator did, so they are that search only when none of those can do
+anything that undoing would change; otherwise each generator becomes a
+level of the search below, whose bodies still run outside every failure
+context. -/
+
+/-- One generator of a `for` searched by the Book's rule: the slot of its
+    element, its source, the code that binds the element's names and runs the
+    filters after it, and the slots of the search: the source's value, the
+    cursor (the element the last success went through), and the indices of a
+    probe and of the resumption. -/
+structure ForLevel where
+  slot : Nat
+  src : Expr
+  filt : Expr
+  arr : Nat
+  cur : Nat
+  probeIx : Nat
+  resumeIx : Nat
+
+/-- The last index of the source `l` holds. -/
+def ForLevel.lastIx (l : ForLevel) : Expr := p2 .sub (.prim .len [.local l.arr]) (.lit (.int 1))
+
+/-- Element `j` of the first level, its names bound and its filters run,
+    then the first success of the levels below it. -/
+def ForLevel.probe (l : ForLevel) (j : Expr) (below : Expr) : Expr :=
+  .seq (.assign l.slot (p2 .index (.local l.arr) j)) (.seq l.filt below)
+
+/-- The first success of the levels `ls`, as a failure context does: the
+    first level's source evaluated, then its elements tried in order, each a
+    failure context of its own (`firstE` around a `forE` whose filter is the
+    probe), the cursor left at the one that succeeded. Fails when none does. -/
+def ForLevel.first : List ForLevel → Expr
+  | [] => .lit .void
+  | l :: more =>
+    .seq (.assign l.arr l.src) (Expr.firstE (.forE l.probeIx (.prim .range [.lit (.int 0), l.lastIx])
+      (.seq (.assign l.cur (.local l.probeIx)) (.seq (l.probe (.local l.probeIx) (ForLevel.first more)) Expr.brkV))
+      (.lit .void)))
+
+/-- Whether `e` can do something that undoing it would change: print, set an
+    object's field, call a function (which may do either), or write a slot
+    that `observable` names (a variable of the code around the `for`, or a
+    `var` of its clauses). Conservative: allocating an object or binding a
+    name of the clauses is not observable once undone. -/
+partial def forClauseEffects (observable : Nat → Bool) : Expr → Bool
+  | .lit _ | .local _ | .brk => false
+  | .assign s e => observable s || forClauseEffects observable e
+  | .print _ | .call .. => true
+  | .heap (.set _) _ => true
+  | .heap _ es | .prim _ es => es.any (forClauseEffects observable)
+  | .seq a b => forClauseEffects observable a || forClauseEffects observable b
+  | .ite c t e => forClauseEffects observable c || forClauseEffects observable t || forClauseEffects observable e
+  | .forE _ it f b => forClauseEffects observable it || forClauseEffects observable f || forClauseEffects observable b
+  | .loop e | .ret e => forClauseEffects observable e
+
+/-- A call of a function with several values anywhere in `e`, as the
+    functions are marked before their calls are lifted (`Choice.inlineCalls`:
+    inlined, computed at the call, taken lazily, dispatched, or a point of a
+    lazily taken group's own code). -/
+partial def callsManyValued (e : SExpr) : Bool :=
+  match e with
+  | .app _ (.ident _ f) _ _ =>
+    ["$inline", "$each", "$loop", "$dispatch", "$point"].contains f || e.children.any callsManyValued
+  | _ => e.children.any callsManyValued
+
+/-- The values of the search's levels `ls` once their first success is
+    found: each level a `forE` over the elements from its cursor on, the one
+    there already probed (its names bound, the levels below positioned), each
+    later one probed in its filter, so a failure context of its own; the
+    levels below, or the body, in its body, outside every failure context. -/
+def ForLevel.resume (p : Pos) : List ForLevel → R → EM R
+  | [], body => return body
+  | l :: more, body => do
+    let filt := Expr.ite (p2 .eq (.local l.resumeIx) (.local l.cur)) (.lit .void)
+      (.seq (l.probe (.local l.resumeIx) (ForLevel.first more)) (.lit .void))
+    let inner ← ForLevel.resume p more body
+    let loopE := Expr.forE l.resumeIx (.prim .range [.local l.cur, l.lastIx]) filt inner.e
+    match more with
+    | [] => return ⟨loopE, .arr inner.ty⟩
+    | _ => match inner.ty with
+      | .arr t => return ⟨← flattenValues ⟨loopE, .arr inner.ty⟩, .arr t⟩
+      | _ => eerr p "internal: nested for"
+
 /-- `for`: clauses are generators, bindings and filters; each generator opens
     a nested `forE`, and nested results are flattened (cartesian product,
     leftmost outermost). The clauses are a failure context; the body is not.
@@ -37,6 +128,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
   let ctx := { ctx with liftWhy := "", forStage := none, forStageArgs := [], forStageFlat := false, forStageCopies := [], forStageBorrows := [] }
   -- (a choice is a generator over its alternatives, #208; clauses lifted
   -- already, `prepared`, are not lifted again)
+  let written := clauses
   let clauses := if prepared then clauses else
     Choice.prepare clauses (choiceValues ctx) (choiceField ctx) (fieldOrder := choiceOrder ctx) (keepExcl := true)
       (keepBranches := choiceHasCast ctx)
@@ -160,6 +252,92 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         pendingSuspendingCasts := st.pendingSuspendingCasts + 1,
         pendingWaitingCasts := st.pendingWaitingCasts + 1 }
     return some (prepare, plan, value, !c.typeOnly && hasPlan && hasPrefix)
+  -- Declare `n`, a name a `for`'s clause at `q` binds.
+  let declareAt (q : Pos) (c : Ctx) (n : String) (ty : Ty) : EM (Nat × Ctx) := do
+    if c.lookup n |>.isSome then eerr q s!"'{n}' is already defined"
+    let slot ← fresh ty
+    return (slot, { c with locals := { name := n, slot, ty, mutable := false } :: c.locals })
+  -- A generator over a range, an array, a map or a string, or a choice of
+  -- alternatives that are values (#208): the slot of its element, its source
+  -- (evaluated before its iterations; a failing source gives none), the
+  -- source's type, the context with the names it binds, and the code that
+  -- binds them from the element (a choice's alternative is evaluated there,
+  -- so a failing one is skipped).
+  let elabSource (c : Ctx) (g : SExpr) : EM (Nat × Expr × Ty × Ctx × Expr) := do
+    match g with
+    | .decl gp n none false (.range _ lo hi) => do
+      let es ← elabInts { c with canFail := true, inTaking := true } gp [lo, hi]
+      let (slot, c1) ← declareAt g.pos c n .int
+      -- (a bound that fails gives no iterations, its effects and the
+      -- other bound's rolled back, as a failing source does: Book of
+      -- Verse ch. 7, "that iteration is skipped"; `for.versetest:317`)
+      let src := Expr.prim .range es
+      let src ← if src.mayFail ctx.sigProg then do
+          let tmp ← fresh (.arr .int)
+          pure (Expr.orE tmp src (.lit Value.emptyArray))
+        else pure src
+      pure (slot, src, .arr .int, c1, Expr.lit (.logic true))
+    | .gen gp x idx srcE => do
+      let rs ← elabE { c with canFail := true, inTaking := true } srcE none
+      let rs ← elabContainerReceiverWith elabE c gp rs (fun
+        | .arr _ | .map .. => true
+        | _ => false) "iteration"
+      match rs.ty with
+      | .map kt vt =>
+        -- `for (V : M)` and `for (K -> V : M)`: over the (key, value) pairs
+        let tmp ← fresh rs.ty
+        let src := if (rs.e.mayFail ctx.sigProg) then
+            Expr.orE tmp rs.e (.lit Value.emptyArray) else rs.e
+        let tp ← fresh (.tup [kt, vt])
+        let (pre, c1) ← match idx with
+          | none => do
+            let (xs, c1) ← declareAt g.pos c x vt
+            pure (Expr.assign xs (.prim (.tupGet 1) [.local tp]), c1)
+          | some i => do
+            let (is, c1) ← declareAt g.pos c i kt
+            let (xs, c2) ← declareAt g.pos c1 x vt
+            pure (Expr.seq (.assign is (.prim (.tupGet 0) [.local tp]))
+              (.assign xs (.prim (.tupGet 1) [.local tp])), c2)
+        pure (tp, src, rs.ty, c1, pre)
+      | _ =>
+      match idx with
+      | some i => do
+        -- `I -> X : A`: iterate over the indices of A
+        let ty ← match rs.ty with
+          | .arr t => pure t
+          | t => eerr gp s!"a for generator needs an array, string or map, found {t.show}"
+        let tmp ← fresh rs.ty
+        let src0 := if (rs.e.mayFail ctx.sigProg) then
+            Expr.orE tmp rs.e (.lit Value.emptyArray) else rs.e
+        let ta ← fresh rs.ty
+        let (islot, c1) ← declareAt g.pos c i .int
+        let (xslot, c2) ← declareAt g.pos c1 x ty
+        let src := Expr.seq (.assign ta src0)
+          (.prim .range [.lit (.int 0), p2 .sub (.prim .len [.local ta]) (.lit (.int 1))])
+        pure (islot, src, .arr .int, c2, Expr.assign xslot (p2 .index (.local ta) (.local islot)))
+      | none => do
+      let ty ← match rs.ty with
+        | .arr t => pure t
+        | t => eerr gp s!"a for generator needs an array, string or map, found {t.show}"
+      let tmp ← fresh rs.ty
+      let src := if (rs.e.mayFail ctx.sigProg) then
+          Expr.orE tmp rs.e (.lit Value.emptyArray) else rs.e
+      let (slot, c1) ← declareAt g.pos c x ty
+      pure (slot, src, rs.ty, c1, Expr.lit (.logic true))
+    | .decl gp n _ false _ => do
+      -- `X := a₁ | … | aₙ` (#208): over the alternatives' indices, each
+      -- alternative bound in the filter (so a failing one is skipped)
+      let some b := Choice.binding? g | eerr g.pos "bad for clause"
+      -- (an `if` with choices in its branches picks its branch first, once, #235)
+      let (pre, ty, es, _) ← match b.branchy with
+        | some i => elabBranchAlts { c with canFail := true, inTaking := true } gp i b.ty b.place
+        | none => do let (ty, es) ← elabAlts { c with canFail := true } gp b; pure (none, ty, es, false)
+      checkNewLocal c gp n
+      let k ← fresh .int
+      let (xs, c1) ← declareAt g.pos c n ty
+      let idx := Expr.lit (.arr (choiceIdx es.length))
+      pure (k, (pre.map (Expr.seq · idx)).getD idx, .arr .int, c1, Expr.assign xs (Expr.altE k es))
+    | _ => eerr g.pos "bad for clause"
   -- (`peel`: the first group's filter, then its values, without the loop
   -- over its one element, for a continuation's clauses below)
   let rec build (c : Ctx) (gs : List (SExpr × List SExpr)) (bd : SExpr)
@@ -526,10 +704,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         return ⟨FailCapture.marked hint r.e (.ret packet.e), r.ty⟩
       return r
     | (g, fs) :: more =>
-      let declare (c : Ctx) (n : String) (ty : Ty) : EM (Nat × Ctx) := do
-        if c.lookup n |>.isSome then eerr g.pos s!"'{n}' is already defined"
-        let slot ← fresh ty
-        return (slot, { c with locals := { name := n, slot, ty, mutable := false } :: c.locals })
+      let declare := declareAt g.pos
       -- (a choice whose alternatives have several values themselves, or
       -- clauses to lift, #283: a for of its own for each alternative, with
       -- the clauses after it and the body, their values concatenated, so
@@ -757,80 +932,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         | .arr t => return ⟨.prim .flatten [code], .arr t⟩
         | _ => eerr gp "internal: nested for"
       -- the source: evaluated before the iterations; a failing source gives no iterations
-      let (slot, src, c1, pre) ← match g with
-        | .decl gp n none false (.range _ lo hi) => do
-          let es ← elabInts { c with canFail := true, inTaking := true } gp [lo, hi]
-          let (slot, c1) ← declare c n .int
-          -- (a bound that fails gives no iterations, its effects and the
-          -- other bound's rolled back, as a failing source does: Book of
-          -- Verse ch. 7, "that iteration is skipped"; `for.versetest:317`)
-          let src := Expr.prim .range es
-          let src ← if src.mayFail ctx.sigProg then do
-              let tmp ← fresh (.arr .int)
-              pure (Expr.orE tmp src (.lit Value.emptyArray))
-            else pure src
-          pure (slot, src, c1, Expr.lit (.logic true))
-        | .gen gp x idx srcE => do
-          let rs ← elabE { c with canFail := true, inTaking := true } srcE none
-          let rs ← elabContainerReceiverWith elabE c gp rs (fun
-            | .arr _ | .map .. => true
-            | _ => false) "iteration"
-          match rs.ty with
-          | .map kt vt =>
-            -- `for (V : M)` and `for (K -> V : M)`: over the (key, value) pairs
-            let tmp ← fresh rs.ty
-            let src := if (rs.e.mayFail ctx.sigProg) then
-                Expr.orE tmp rs.e (.lit Value.emptyArray) else rs.e
-            let tp ← fresh (.tup [kt, vt])
-            let (pre, c1) ← match idx with
-              | none => do
-                let (xs, c1) ← declare c x vt
-                pure (Expr.assign xs (.prim (.tupGet 1) [.local tp]), c1)
-              | some i => do
-                let (is, c1) ← declare c i kt
-                let (xs, c2) ← declare c1 x vt
-                pure (Expr.seq (.assign is (.prim (.tupGet 0) [.local tp]))
-                  (.assign xs (.prim (.tupGet 1) [.local tp])), c2)
-            pure (tp, src, c1, pre)
-          | _ =>
-          match idx with
-          | some i => do
-            -- `I -> X : A`: iterate over the indices of A
-            let ty ← match rs.ty with
-              | .arr t => pure t
-              | t => eerr gp s!"a for generator needs an array, string or map, found {t.show}"
-            let tmp ← fresh rs.ty
-            let src0 := if (rs.e.mayFail ctx.sigProg) then
-                Expr.orE tmp rs.e (.lit Value.emptyArray) else rs.e
-            let ta ← fresh rs.ty
-            let (islot, c1) ← declare c i .int
-            let (xslot, c2) ← declare c1 x ty
-            let src := Expr.seq (.assign ta src0)
-              (.prim .range [.lit (.int 0), p2 .sub (.prim .len [.local ta]) (.lit (.int 1))])
-            pure (islot, src, c2, Expr.assign xslot (p2 .index (.local ta) (.local islot)))
-          | none => do
-          let ty ← match rs.ty with
-            | .arr t => pure t
-            | t => eerr gp s!"a for generator needs an array, string or map, found {t.show}"
-          let tmp ← fresh rs.ty
-          let src := if (rs.e.mayFail ctx.sigProg) then
-              Expr.orE tmp rs.e (.lit Value.emptyArray) else rs.e
-          let (slot, c1) ← declare c x ty
-          pure (slot, src, c1, Expr.lit (.logic true))
-        | .decl gp n _ false _ => do
-          -- `X := a₁ | … | aₙ` (#208): over the alternatives' indices, each
-          -- alternative bound in the filter (so a failing one is skipped)
-          let some b := Choice.binding? g | eerr g.pos "bad for clause"
-          -- (an `if` with choices in its branches picks its branch first, once, #235)
-          let (pre, ty, es, _) ← match b.branchy with
-            | some i => elabBranchAlts { c with canFail := true, inTaking := true } gp i b.ty b.place
-            | none => do let (ty, es) ← elabAlts { c with canFail := true } gp b; pure (none, ty, es, false)
-          checkNewLocal c gp n
-          let k ← fresh .int
-          let (xs, c1) ← declare c n ty
-          let idx := Expr.lit (.arr (choiceIdx es.length))
-          pure (k, (pre.map (Expr.seq · idx)).getD idx, c1, Expr.assign xs (Expr.altE k es))
-        | _ => eerr g.pos "bad for clause"
+      let (slot, src, _, c1, pre) ← elabSource c g
       -- (an exclusive choice among the filters, #314: its paths in this
       -- iteration's filter, so that a failure in one rolls back to this
       -- generator, as the `if` it stands for would)
@@ -854,6 +956,72 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         match inner.ty with
         | .arr t => return ⟨← flattenValues ⟨loopE, .arr inner.ty⟩, .arr t⟩
         | _ => eerr p "internal: nested for"
+  -- (A `for` whose generators are over ranges, arrays, maps, strings and
+  -- choices of values, with no call of a function with several values in
+  -- its clauses and no exclusive choice: by the Book's rule, above. One
+  -- whose clauses can do nothing that undoing would change before its last
+  -- generator's elements is the nested `forE`s, as they are that search;
+  -- another is the search. The others keep their lowerings below, which
+  -- keep what a generator's clauses did: docs/DESIGN.md says which.)
+  let plainGen (g : SExpr) : Bool := match g with
+    | .gen .. => true
+    | .decl _ _ none false (.range ..) => true
+    | c => match Choice.binding? c with
+      | some b => !b.composed && b.branchy.isNone && b.each.isNone
+      | none => false
+  if stagePlan.isNone && !prepared && !firstDecides && failure.isNone && !gs.isEmpty &&
+      !written.any callsManyValued && !pre.any isExcl && gs.all (fun (g, fs) => plainGen g && !fs.any isExcl) then
+    let start := (← get).nslots
+    let (preE, unit, c0) ← match pre with
+      | [] => pure (none, 0, ctx)
+      | _ => do
+        let (filt, c1) ← elabFilters ctx pre
+        pure (some filt, ← fresh .void, c1)
+    let mut c := c0
+    let mut levels : Array (Nat × Expr × Ty × Expr) := #[]
+    for (g, fs) in gs do
+      let (slot, src, srcTy, c1, bind) ← elabSource c g
+      let (filt, c2) ← elabFilters c1 fs
+      let filt := if fs.isEmpty then bind else match bind with
+        | .lit _ => filt
+        | e => .seq e filt
+      levels := levels.push (slot, src, srcTy, filt)
+      c := c2
+    let r ← elabE (bodyCtx c) body none
+    let r := if r.ty == .never then { r with e := .seq r.e (.lit .void) } else r
+    let mutable := c.locals.filterMap fun l => if l.mutable && l.slot >= start then some l.slot else none
+    let fx := forClauseEffects fun s => s < start || mutable.contains s
+    let n := levels.size
+    let undoes := preE.any fx || (levels.toList.zipIdx.any fun ((_, src, _, filt), k) =>
+      fx src || (k + 1 < n && fx filt))
+    if !undoes then
+      -- (the nested `forE`s, as `build` makes them)
+      let mut inner : R := r
+      let mut innermost := true
+      for (slot, src, _, filt) in levels.toList.reverse do
+        let loopE := Expr.forE slot src filt inner.e
+        if innermost then inner := ⟨loopE, .arr inner.ty⟩
+        else match inner.ty with
+          | .arr t => inner := ⟨← flattenValues ⟨loopE, .arr inner.ty⟩, .arr t⟩
+          | _ => eerr p "internal: nested for"
+        innermost := false
+      let some filt := preE | return inner
+      let .arr t := inner.ty | eerr p "internal: nested for"
+      return ⟨← flattenValues ⟨.forE unit (.lit (.arr #[.tup []])) filt inner.e, .arr inner.ty⟩, .arr t⟩
+    let mut ls : Array ForLevel := #[]
+    for (slot, src, srcTy, filt) in levels do
+      ls := ls.push { slot, src, filt, arr := ← fresh srcTy, cur := ← fresh .int,
+                      probeIx := ← fresh .int, resumeIx := ← fresh .int }
+    let found := ForLevel.first ls.toList
+    let found := match preE with
+      | some filt => Expr.seq filt found
+      | none => found
+    let values ← ForLevel.resume p ls.toList r
+    -- (in a slot of the values' type: the suspension lowering splits the `if`
+    -- into statements, where an empty array alone has no type)
+    let res ← fresh values.ty
+    return ⟨.seq (.assign res (.lit Value.emptyArray))
+      (.seq (.ite found (.seq (.assign res values.e) (.lit .void)) (.lit .void)) (.local res)), values.ty⟩
   match pre with
   | [] =>
     let r ← build ctx gs body

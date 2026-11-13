@@ -206,7 +206,7 @@ class Fail(Exception):
 # body fails (FlowControl/for.versetest 317-392, Range.versetest 140, 159). The
 # old rule: a failure undoes back to the most recent generator, whose
 # alternative's clauses that succeeded stay, even when later ones give nothing.
-FOR_BOOK = set(os.environ.get('OV_FOR_BOOK', '').split(',')) - {''}
+FOR_BOOK = set(os.environ.get('OV_FOR_BOOK', 'plain,choice').split(',')) - {''}
 FOR_RULE = ['old']    # (the rule of the innermost for being run)
 
 # The kinds of choice point a for's clauses reach, as LANGUAGE.md tells them
