@@ -1255,6 +1255,66 @@ once types are resolved. So a program with such a field and, say, an override
 of the wrong signature is refused for the override.
 
 
+## Applications, in order
+
+An application, `F(…)` or `F[…]`, is elaborated by `elabAppBaseWith`
+(`Elab/Application.lean`), which reads as the list of the kinds of
+application in the order they are tried; each kind is a function of its
+own, with a doc comment that says what it handles. The order decides which
+meaning an application that could have two gets, and which refusal one that
+has none gets. (`elabApp`, `Elab/Expr.lean`, comes first: it expands a tuple
+argument a call cannot take as it is, then comes here.) By its callee:
+
+1. `(t)(X)`, a type written as one: a conversion (`elabWrittenConversion`).
+2. A name `F`, tried as, in turn:
+   1. an extension method's call, which the modules' pass wrote
+      `$ext:M(X, …)` (`elabExtensionCallWith`);
+   2. a local: a cast through a type value, `T[X]`, or the local's value
+      indexed or called (`elabLocalApp`);
+   3. in a method, a method of `Self` or a field of `Self` that has no
+      built-in's name: `Self.F(…)` (`callsSelfMember`);
+   4. a class or interface that is not also a function: a cast (`elabCast`);
+   5. a refinement type: a cast, `age[X]` (`elabRefinementCast`);
+   6. a built-in type, a struct or an enum, without brackets: a conversion,
+      `int(X)` (`convertsByName`, `elabConversionWith`);
+   7. an overloaded function: the overload the call fits
+      (`elabOverloadedCall`);
+   8. a built-in function: the row of its name in `builtinFunctions`
+      (`Elab/Builtins.lean`; `builtinCalled` says which name a call means:
+      `$F` is always the built-in, a soft built-in the program defines is
+      the program's);
+   9. the program's function or constant (`elabFunctionCall`): a generic
+      call, a call with positional arguments (`elabPositionalCall`) or with
+      named ones (`elabNamedArgsCall`), or a constant's value indexed; else
+      the refusal of an abstract class's constructor or of an unknown
+      function.
+3. `(super:)M(…)`: the inherited implementation (`elabSuperCall`).
+4. `X.M(…)` (`elabMemberApp`), tried as, in turn: a type value is refused
+   as a receiver; `Await`, `Cancel` or `Signal` of a type parameter's value
+   (`elabParamConcurrencyCall?`); `Cancel` of a task (`elabTaskCancel?`);
+   `Signal` of an event (`elabEventSignal?`); `Await` of a task or an event
+   (`elabAwait?`); then of the receiver, bound and qualified
+   (`qualifiedReceiver`): an overloaded method (`elabOverloadedMethodCall?`),
+   a method of a class or interface (`elabMethodCall`), a field's value
+   indexed or called, and a built-in type's method (`elabMethod`).
+5. Any other expression: its value indexed or called (`elabValueApp`).
+
+A call of a class's or interface's method (`elabMethodCall`) is checked,
+its receiver evaluated first, then is either a direct call of the one
+implementation every class below the receiver's type has
+(`directImplementation?`, `elabDirectMethodCall`) or a dispatch on the
+class of the receiver's object, whose arguments are evaluated once each
+first (`dispatchArgs`): spawned (`elabSpawnMethodDispatch`), through views
+(`elabViewDispatch`), through a reference (`elabReferenceDispatch`) or
+through a value (`elabValueDispatch`).
+
+The built-in functions are one table, `builtinFunctions`: each row a name,
+an arity (`Arity`, which the elaboration's refusals say: "Pow takes two
+floats") and the function that elaborates a call (`BuiltinCall → EM R`).
+A built-in is added by a row, its elaboration, and its name in `builtins`
+or `softBuiltins` (`Elab/Context.lean`).
+
+
 ## Elaboration in rounds
 
 Some of what a program needs is known only once its types are: a function
@@ -1297,7 +1357,8 @@ callback-based control/call helpers, expression elaboration, final lowering,
 and the phases of a program's elaboration (`Source`, `Classes`, `Environment`,
 `Signatures`, `Functions`; "Elaboration in phases").
 Application and statement handlers receive the recursive entry points as
-callbacks; their public wrappers keep the original signatures. This keeps each
+callbacks (an application's as one record, `AppElab`); their public
+wrappers keep the original signatures. This keeps each
 generated C translation unit below the browser build's 8 MiB optimization
 threshold. The expression entry point uses an exhaustive constructor router
 and four ordered handler stages. Only applications fall through
