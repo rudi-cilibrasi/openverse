@@ -64,7 +64,9 @@ def classify(b):
     product = binary64_nearest(seconds * 30)
     if product is None:
         return dict(kind='unsupported-finite', ticks=None, product='Inf')
-    rounded = nearest_even(product.numerator, product.denominator)
+    # (the first tick at or after the deadline: the product rounded up, the
+    # Book's API reference, "Short sleeps therefore round up")
+    rounded = -((-product.numerator) // product.denominator)
     if rounded >= 2**63:
         return dict(kind='unsupported-finite', ticks=None,
                     product=str(product), rounded=str(rounded))

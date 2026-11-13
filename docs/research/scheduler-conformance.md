@@ -38,7 +38,7 @@ the sources disagree, the table records that disagreement.
 
 | Rule | Upstream evidence | Reference scheduler and trace evidence | Classification |
 | --- | --- | --- | --- |
-| Clock and positive delays | The Book uses simulation updates. Epic permits variable update durations, independent of rendering. Neither cited timing description specifies a fixed 30 Hz rounding rule. | A virtual 30 Hz clock skips idle ticks. Supported nonnegative finite delays use `max(1, Round(30*S))` after binary64 multiplication and ties-to-even rounding. In [sleep](../../tests/verse/scheduler_audit_sleep.verse), `Sleep(0.04)` completes with the first one-tick sleeper. | Explicit reference timing policy; no engine-rate claim. The previous language-table attribution of upward rounding to the Book was unsupported and is removed. |
+| Clock and positive delays | The Book uses simulation updates. Epic permits variable update durations, independent of rendering. Neither cited timing description specifies a fixed 30 Hz rate. The Book's API reference (`Sleep`, line 3939): "a sleep resumes on the first update at or after its deadline and never sooner than the next one. Short sleeps therefore round up". | A virtual 30 Hz clock skips idle ticks. Supported positive finite delays use `max(1, Ceil(30*S))` after binary64 multiplication: the first tick at or after the deadline ([the Book's rules](#the-books-scheduler-rules)). In [sleep](../../tests/verse/scheduler_audit_sleep.verse), `Sleep(0.04)` (1.2 ticks) completes at the second tick, after the first one-tick sleeper. | The API's rounding up; the 30 Hz rate is the reference clock's, no engine-rate claim. |
 | Zero delay | The pinned Book's NextTick discussion permits same-tick resumption for `Sleep(0.0)`. Epic's Sleep page specifies the next update. | Zero always yields and resumes in the next virtual tick; a peer runs before resumption in [sleep](../../tests/verse/scheduler_audit_sleep.verse). | Matches the published Sleep description; the Book snapshot differs. |
 | Negative, NaN and infinite delays | Epic describes negative durations as immediate and positive infinity as indefinite. The cited API does not specify NaN. | Negative/NaN durations return immediately; positive infinity never wakes. [Sleep](../../tests/verse/scheduler_audit_sleep.verse), [cancel](../../tests/verse/scheduler_audit_cancel.verse) and [deadlock](../../tests/verse/scheduler_audit_deadlock.verse) separate these cases. | Negative/infinite cases follow the API; NaN is a reference choice. |
 | Numeric limits | The cited timing sources give no matching finite cutoff or int64 accumulation limit. | The binary64 product `30*S` must be below `2^63`. Finite inputs outside that domain terminate immediately with `error: user`; they do not become infinite waits. Current time plus the rounded ticks uses checked int64 addition and terminates with `error: overflow` beyond the clock maximum. [Bounds](../../tests/verse/scheduler_audit_clock_bounds.verse) now completes across the former cutoff; [overflow](../../tests/verse/scheduler_audit_clock_overflow.verse) retains its deliberate overflow result. | Explicit bounded reference-clock policy ([#514](https://github.com/rudi-cilibrasi/openverse/issues/514)); not measured engine limits. |
@@ -54,7 +54,7 @@ the sources disagree, the table records that disagreement.
 
 For a nonnegative finite binary64 input `S`, the scheduler first computes the
 binary64 product `P = fl(30*S)`. It requires `P < 2^63`, then uses
-`max(1, RoundEven(P))` ticks. The guard precedes integer conversion: a finite
+`max(1, Ceil(P))` ticks (until `feat/core-book-primitives`, `RoundEven(P)`). The guard precedes integer conversion: a finite
 out-of-range `Round` is an overflow error in Core, whereas this input-domain
 policy deliberately reports fatal `Err()` (`error: user`). It is not a
 `<decides>` failure and cannot be caught as a failed condition.
@@ -162,3 +162,32 @@ policies and public-source comparisons, not captured engine outputs. Core's
 `Eval.det`/`Runs.det` guarantees still concern a checked Core execution. VM
 agreement and frontend/model tests do not prove equivalence to an external
 scheduler or correctness of the entire lowering; see [CLAIMS.md](../CLAIMS.md).
+
+## The Book's scheduler rules
+
+The owner's rule is to follow the pinned Book where it and openverse
+disagree. Three scheduler readings were [designed in the readings
+audit](readings-audit.md#the-scheduler-rows); this section pins each from
+the Book (chapters under `docs/`, the API reference
+`docs/api/verse_runtime_api.html` by line, tests under `Tests/`) and says
+what openverse does now.
+
+### `Sleep(S)` rounds up
+
+- **API** (`Sleep`, line 3939): "For positive finite waits, resumption is
+  driven by the world's timer manager, so this measures game time and not
+  wall-clock time, and it is quantised to ticks: a sleep resumes on the
+  first update at or after its deadline and never sooner than the next
+  one. Short sleeps therefore round up, and a chain of them accumulates
+  error".
+- **Chapters and tests:** no tick rate, no rounding rule.
+- **openverse:** the deadline, in ticks of the reference clock's 30 a
+  second, is the binary64 product `30·S`, as before; the sleep wakes at the
+  first tick at or after it, `Ceil(30·S)` ticks later, at least one. (Until
+  now `Round`, ties to even.) `Sleep(0.04)` (1.2 ticks) and
+  `Sleep(0.049999999999999996)` (1.4999999999999998) take two ticks, not
+  one; `Sleep(0.15)` (4.5) five, not four; `Sleep(0.1)`, whose product
+  rounds to exactly 3.0 in binary64, still three. The bounded clock domain
+  (#514) is unchanged: products at or above 2^52 are integers, so the
+  largest supported duration and its ticks are the same.
+

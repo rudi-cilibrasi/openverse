@@ -5,6 +5,9 @@ namespace OpenVerse.Front
 /-- The concurrency helpers (#156), written in Verse: the scheduler's
     state (the clock, in ticks of 1/30 s, and the earliest tick a sleeping
     task waits for), and `Sleep`'s frame with its `new`, `init` and `resume`.
+    A sleep of `S` seconds wakes at the first tick at or after its deadline,
+    the binary64 product `30·S` rounded up, and never sooner than the next
+    one (the Book's API reference: "Short sleeps therefore round up").
     `Sleep` itself is a stub that only marks the suspension point: the
     lowering (`Suspend.lean`) calls the others in its place. -/
 def concPrelude : String := "
@@ -106,7 +109,7 @@ sleepResume(F:sleep, C:sched):int =
         else if (F.Secs >= 0.0):
             Ticks:float = F.Secs * 30.0
             if (Ticks < 9223372036854775808.0):
-                N:int = if (R := Round[Ticks]) then (if (R >= 1) then R else 1) else Err()
+                N:int = if (R := Ceil[Ticks]) then (if (R >= 1) then R else 1) else Err()
                 set F.Wake = C.Now + N
             else:
                 Err()
@@ -154,7 +157,7 @@ def concPreludeFifo : String :=
 def concTops (owned : List String := []) (fifo : Bool := false) : Except String (List STop) :=
   parsePrelude (if fifo then concPreludeFifo else concPrelude) (owned ++ (if fifo then ["CurRoot", "WokenHead",
     "WokenTail", "WaitRoot", "WokenNext", "WT", "WasDone", "Pending", "Probe"] else []) ++ ["sched", "Now", "Next", "sleep", "Pc", "Secs", "Wake", "sleepNew",
-    "sleepInit", "sleepResume", "Sleep", "Round", "Ticks", "syncMark", "raceMark", "S", "F", "C", "N", "R", "A",
+    "sleepInit", "sleepResume", "Sleep", "Ticks", "syncMark", "raceMark", "S", "F", "C", "N", "R", "A",
     "Progress", "Roots", "taskBase", "Done", "Result", "waitf", "T", "X", "waitNew", "waitInit", "waitResume",
     "WaitDone", "Await", "spawnMark", "t", "Sch", "Dead", "evrec", "Got", "Next", "Head", "Tail", "Cur", "W", "L", "V",
     "EvAwait", "E", "branchMark", "rushMark", "signalAll", "H", "StickyAwait", "Last", "CancelCur", "Cancelled", "Running", "Root", "CancelReq", "CurTask", "cancelMark"])

@@ -2908,7 +2908,7 @@ Main()<suspends>:void =
   `Main` goes on first, then each task in the order they were spawned, then
   again while a task ended, a `Signal` woke a task, or a task was cancelled
   (so that those waiting go on in the same tick). Arms that can go on in the same tick do so in source order. `Sleep(S)`
-  uses the binary64 product `T = 30·S` and ties-to-even `Round(T)`, at least
+  uses the binary64 product `T = 30·S` rounded up, `Ceil(T)`, at least
   one tick, for a supported nonnegative finite input. It always yields,
   including either signed zero or a positive subnormal. The product must
   be below `2^63`; the largest supported binary64 duration is exactly
@@ -2976,7 +2976,7 @@ Main()<suspends>:void =
 | A recursive function with several values whose only calls of itself are in failure contexts of its own code | not stated (the Verse Calculus: a call is its body) | inlined, as a function recursive only through another function that consumes it is (the contexts are functions of their own): where its clauses fail in a `for`'s clauses, what those clauses did since their last generator is undone with them, as for any inlined call, not kept as at a lazily taken call, which is a generator of its own (#283) |
 | Precedence of `\|` | (not in the Book) | below `+`, above the comparisons: `X = 1 \| 2` is `X = (1 \| 2)` (#208) |
 | `Sleep(0.0)` | "may resume in the same tick" (ch. 14), "One frame" (ch. 14); the API reference: it always yields; the tested ch. 14 example: it completes at once in a `race` ([the audit](research/readings-audit.md#the-scheduler-rows)) | always yields: resumes in the next tick (#156) |
-| `Sleep(S)` rounding | no fixed 30 Hz rounding rule in the pinned chapter or cited Epic timing description | binary64 `Round(30·S)`, ties to even, at least one tick: `Sleep(0.1)` stays at 3 ticks despite binary floats (#156); bounded inputs and checked clock accumulation follow the explicit reference policy above (#514) |
+| `Sleep(S)` rounding | the API: "a sleep resumes on the first update at or after its deadline and never sooner than the next one. Short sleeps therefore round up"; no tick rate | the first tick at or after the deadline: the binary64 product `30·S` rounded up, at least one tick (`Sleep(0.04)` takes 2 ticks; `Sleep(0.1)`, whose product is exactly 3.0, 3); bounded inputs and checked clock accumulation follow the explicit reference policy above (#514) |
 | End of a program with tasks | not stated | the program ends when `Main` does; a `Main` that waits with no task able to run is an error (exit 2) (#156) |
 | Order of a `subscribable_event`'s functions | not stated (ch. 14's example lists them in subscription order) | subscription order; the tasks awaiting the event are woken first and go on after `Signal` returns (#210) |
 | Event waiter resumption | Epic's event/Signal API specifies suspension order | Main/spawn/source-arm scheduler order by default; with `--event-fifo`, suspension order across tasks and arms, after `Signal` returns and the signalling task waits; the default is undecided (#513) |
