@@ -2114,7 +2114,7 @@ def ev(e, st, k, mode):
         def kmvm(v, s0):
             def alt1(s1, k2):
                 c = s1.vars['S.Cn']
-                s1.vars['S.Cn'] = c + SNX['inc']
+                s1.vars['S.Cn'] = chks(c + SNX['inc'], s1)
                 return k2(chks(v + c, s1), s1)
 
             def alt2(s1, k2):
@@ -2225,13 +2225,15 @@ def ev(e, st, k, mode):
                 return k(v, s)
             raise Fail()
         return ev(e[1], st, kp, mode)
+    # (a counter's `set C += 1` is checked addition, as any: it stops the
+    # program there, before the method returns: fuzz-model-mv seed 4594)
     if t == 'snx':
         v = st.vars['S.Cn']
-        st.vars['S.Cn'] += SNX['inc']
+        st.vars['S.Cn'] = chks(v + SNX['inc'], st)
         return k(v, st)
     if t == 'next':
         v = st.vars['K.C']
-        st.vars['K.C'] += 1
+        st.vars['K.C'] = chks(v + 1, st)
         return k(v, st)
     if t == 'add':
         def kadd(v, s):
@@ -2266,7 +2268,7 @@ def ev(e, st, k, mode):
     if t == 'cnext':
         o = lookup(st, e[1]) + '.C'
         v = st.vars[o]
-        st.vars[o] += 1
+        st.vars[o] = chks(v + 1, st)
         return k(v, st)
     if t == 'cadd':
         o = lookup(st, e[1]) + '.C'
