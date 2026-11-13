@@ -734,7 +734,11 @@ circle := class(shape, labelled):
   they are defined. `Obj.M(…)` evaluates `Obj` before the arguments.
 - **Inheritance.** `c := class(parent, i₁, …)` has at most one class parent
   and any number of interfaces, and `i := interface(j, …)` extends
-  interfaces. Interfaces may declare fields, with or without defaults. A
+  interfaces; no parent is named twice (an interface inherited again
+  through another parent is inherited once, but `class(i, i)` and
+  `interface(i, i)` are refused, the Book's tests, `Interface.versetest:31`,
+  [the rule](research/book-remaining-rules.md#an-interface-named-twice)).
+  Interfaces may declare fields, with or without defaults. A
   class inherits its parent's fields, then those of the interfaces above it
   that are not there yet (once, along a diamond), then its own, and its
   methods:

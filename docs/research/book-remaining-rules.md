@@ -54,3 +54,39 @@ refused at the call for another reason) is left to its calls. The option
 `--extended-defaults`, which keeps openverse's computed field defaults
 (#511), keeps the reading of before as well; openverse's tests of that
 reading (the waiting, dispatched and spawned defaults of #283) select it.
+
+## An interface named twice
+
+**The rule.** A class or an interface names each of its parents once: an
+interface may be inherited again through another parent, but not twice
+directly.
+
+**The Book.** The prose is silent. The tests: "It's ok to inherit the same
+interface more than once, but not directly. This restriction can be
+removed." (`Tests/Interface.versetest:31-32`), then
+`T2 := interface(T1, T1) {}` refused (3592, `:33`), "But indirectly is
+allowed ..." (`:34`), and `C0 := class(T1, T1) {}` (`:40`); "Test that
+redundant inheritance of a interface produces an error." (`:91`,
+`C := class(T, T) {}`); `InterfaceDiamond.versetest:72-75`: "Currently
+fail, but can be implemented. However, it's most likely an error in the
+verse code."
+
+**openverse before.** Accepted: a parent named twice was inherited once.
+
+**openverse now.** `classHierarchy` (`Elab/Classes.lean`) refuses a parent
+named twice with the same type arguments.
+
+## `<override>` in an interface: left
+
+The tests refuse it: "Interfaces can not override anything"
+(`Tests/Interface.versetest:193`, a method `f<override>` and a field
+`var v<override>` of an interface below another, 3523), "Can't override in
+an interface" (`InterfaceWithFields.versetest:312`), and
+`InterfaceDiamond.versetest:89`; the prose is silent. openverse gives an
+interface's default a new body or value in an interface below it (#53's
+interface defaults). The rule is one check (`EffectPolicy.checkPlaces`),
+but measured it refuses 32 of openverse's tests of that feature
+(`iface_default_copies*`, `multi_method_*interface*`, `inheritance`,
+`qualified_slots`, …) and 45 generated programs (`classes` 4, `gadt_open`
+20, `generic-mv` 21): an owner decision whether to retire the feature for
+the Book's 3 cases, so it is left.
