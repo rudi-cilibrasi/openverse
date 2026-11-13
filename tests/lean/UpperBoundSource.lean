@@ -111,7 +111,8 @@ def main (args : List String) : IO Unit := do
     "bound-concatenate-unproved-refusal", "bound-concatenate-shallow-refusal", "bound-concatenate-element-refusal",
     "bound-concatenate-maps-unproved-refusal", "bound-concatenate-effects-refusal", "bound-concatenate-effects-control-refusal",
     "bound-qualified-slots-refusal", "bound-construction-defaults-unproved-refusal",
-    "bound-concurrency-unproved-refusal", "bound-concurrency-cancel-effects-refusal", "bound-concurrency-cancel-effects-control-refusal"]
+    "bound-concurrency-unproved-refusal", "bound-concurrency-cancel-effects-refusal", "bound-concurrency-cancel-effects-control-refusal",
+    "bound-undetermined-refusal", "bound-visibility-refusal", "bound-alias-refusal", "peer-void-tuple-refusal"]
   let mut failures := 0
   let cases := (positive ++ fifo ++ methodValues ++ callables ++ containers ++ iterators ++ operators ++ formatting ++ concatenate ++ construction ++ concurrency ++ negative).map (fun name => (name, fifo.contains name, name)) ++
     ["fifo-bound-sleep", "fifo-bound-sleep-control"].map (fun name => (name, false, name ++ "-default"))
