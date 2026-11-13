@@ -95,6 +95,10 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
        noother   (no call of another function with several values as a choice point in a
                   generator's code: Oxv, Oyv, or another generator, #283; on with seq
                   otherwise)
+       nogdefer  (no defer: in a generator's code: its own, its else's block's, or Odv's, a
+                  function with several values it calls, #283; on with frames otherwise)
+       nocase    (no case whose arms are a branchy if's branches, #283; on with bif otherwise)
+       noretscope (no return of RT2 or RT3 in a block or a case's arm, #283; on otherwise)
        nocls     (no call of a generator of itself in a field of a class's construction,
                   ocls{A := …, B := …}, whose superclass's field B is evaluated first,
                   #283; on with seq otherwise)
@@ -511,6 +515,23 @@ RET_DEFER = RT2 and random.Random(seed * 1000003 + 283391).random() < 0.5
 # test's own: LANGUAGE.md's rule for any scope, whether its clauses are lifted or not. A
 # generator of its own decides, so seeds keep their other programs.
 RRB = random.Random(seed * 1000003 + 283392)
+# ---- #283, with rt2 (noretscope turns it off): at times RT2's and RT3's returning branch is in a
+# block or a case's arm instead of an if's branch, with the same reading: a scope that the return
+# ends the invocation from, the rest of the body skipped for its values. Not modelled apart, as
+# the outputs are the same; a stream of its own, so seeds keep their other programs:
+#   block:                              case (RTy - RTa):
+#       if (RTy = RTa + 1):                 1 => block:
+#           Print("rt")                         Print("rt")
+#           return 99 | 98                      return 99 | 98
+#       Print("e{RTy}")                     _ => Print("e{RTy}")
+# (with RET_DEFER, the branch's defer:s in the block, or the inner if a case)
+RTV = random.Random(seed * 1000003 + 283297)
+# ---- #283, with bif (nocase turns it off): at times a case whose arms are a branchy if's
+# branches, `(case (S) { 1 => (A | B), 3 => C, _ => (D | E) })`, where a branchy if may be: the
+# scrutinee once, then the first arm whose pattern it equals, or `_`'s, its alternatives the
+# case's, as the if chain that picks the arm, which adds no choice of its own (#331). A stream
+# of its own decides, so seeds keep their other programs.
+RCASE = random.Random(seed * 1000003 + 283299)
 # ---- #283, flag frames (on with lazy; noframes turns it off): a generator's call of
 # itself may have code after it, which runs on each of the call's values (a return
 # frame): an alternative `Gz0(N - 1, A) + e` (e any value, with no var), `L + Gz0(…)`
@@ -607,6 +628,18 @@ ROTH = random.Random(seed * 1000003 + 283294)
 # whose fields are evaluated in its order, the superclass's B first, whatever the written one. A
 # stream of its own.
 RCLS = random.Random(seed * 1000003 + 283295)
+# ---- #283, flag gdefer (on with frames; nogdefer turns it off): a defer: that prints, in a
+# generator's code: its own, at the start of its body or after its clauses; one in the block of a
+# branchy generator's else, after its bound choice; or Odv's, Oyv's twin with a defer: of its own,
+#   Odv(OdA:int)<transacts>:int =
+#       defer: Print("odd")
+#       Tell("od", OdA) | OdA + 3
+# called where the generator's code calls Oyv. Each runs as each value leaves its scope: after
+# the value is computed, before the code after the call (the caller's frame), last registered
+# first; a call whose clauses fail gives no value and runs none. The model: the rest of the scope
+# runs with a continuation that prints first (`run_body`'s `sdefer`). A stream of its own, drawn
+# once the generator is made, so seeds where it does not fire keep their programs.
+RGD = random.Random(seed * 1000003 + 283296)
 OTHERS = set()
 USES_CC = [False]
 SQN = [0]
@@ -632,6 +665,7 @@ LIFTED = SEQ and 'nolifted' not in flags
 NEST = SEQ and 'nonested' not in flags
 OTHER = SEQ and 'noother' not in flags
 CLS = SEQ and 'nocls' not in flags
+GDEFER = FRAMES and 'nogdefer' not in flags
 REFUSED = [False]
 
 
@@ -642,7 +676,7 @@ class Return(Exception):
 
 # the kinds of node whose insides are failure contexts of their own (or an
 # inlined function's arguments), where a lifted call's clauses are not the test's
-NESTED = ('not', 'logic', 'optor', 'orx', 'ifx', 'bif', 'mcall', 'choice', 'blk', 'cons', 'ccons', 'na', 'nam', 'mvm', 'rt', 'rt2', 'rt3', 'ovl',
+NESTED = ('not', 'logic', 'optor', 'orx', 'ifx', 'bif', 'casex', 'mcall', 'choice', 'blk', 'cons', 'ccons', 'na', 'nam', 'mvm', 'rt', 'rt2', 'rt3', 'ovl',
           'ow2')
 
 
@@ -732,6 +766,12 @@ def gen_e(scope, vars_, d, ch):
         m = gen_gcall(scope, vars_, d)
         if m is not None:
             return m
+    if BIF and 'nocase' not in flags and ch and NCH[0] < 4 and d < 3 and RCASE.random() < 0.05 \
+            and (not MV or PROD[0] * 3 <= CTX['plim']) and not lift_block():
+        NCH[0] += 1
+        if MV:
+            PROD[0] *= 3
+        return gen_case(scope, vars_, d)
     if BIF and ch and NCH[0] < 4 and d < 3 and R.random() < (0.4 if 'heavy' in flags else 0.14) \
             and (not MV or PROD[0] * 3 <= CTX['plim']) and not lift_block():
         NCH[0] += 1
@@ -1155,8 +1195,39 @@ def gen_gfunc(i):
         class_shapes(f, i, sc, ctr)
     f['stmts'] = stmts
     f['lifted'] = lifted(f)
+    if GDEFER:
+        defer_shapes(f, i)
     CTX.update(ctrs=None, nofail=False, nochoice=False, noprint=False, fmax=None, take=None)
     return f
+
+
+def defer_shapes(f, i):
+    """(#283, flag gdefer) defer:s in generator f, made already (RGD alone): its own, one in its
+    else's block, and Odv for Oyv."""
+    kinds = set()
+    if RGD.random() < 0.25:
+        d = ('sdefer', f"gd{i}")
+        f['stmts'] = [d] + f['stmts'] if RGD.random() < 0.5 else f['stmts'] + [d]
+        kinds.add('defer-own')
+    v = f['val']
+    if not f['decides'] and v[0] == 'gbif' and v[3] and v[3][0][0] == 'gblk' and RGD.random() < 0.4:
+        _, x, galts, post, last = v[3][0]
+        v[3][0] = ('gblk', x, galts, [('sdefer', f"gb{i}")] + post, last)
+        kinds.add('defer-block')
+
+    def swap(x):
+        if isinstance(x, tuple) and x and x[0] == 'gx' and x[1] == 'y' and RGD.random() < 0.4:
+            OTHERS.add('d')
+            kinds.add('defer-other')
+            return ('gx', 'd', swap(x[2]))
+        if isinstance(x, tuple):
+            return tuple(swap(y) for y in x)
+        if isinstance(x, list):
+            return [swap(y) for y in x]
+        return x
+    if 'y' in OTHERS:
+        f['val'] = swap(f['val'])
+    f['gdefer'] = kinds
 
 
 def seq_call(i, sc, ctr):
@@ -1857,6 +1928,23 @@ def gen_bif0(scope, vars_, d):
     return ('bif', arms, els, R.random() < 0.5)
 
 
+def gen_case(scope, vars_, d):
+    """(#283) a case whose arms are a branchy if's branches; its scrutinee with no choice."""
+    saved_inbif = CTX.get('inbif')
+    CTX['inbif'] = True
+    try:
+        scrut = gen_e(scope, vars_, d + 1, False)
+        pats = sorted(R.sample(range(-1, 6), R.randint(1, 3)))
+        arms = [(pt, branch_alts(scope, vars_, d)) for pt in pats]
+        els = branch_alts(scope, vars_, d)
+        if any(is_call(x) for _, a in arms for x in a) or any(is_call(x) for x in els):
+            arms = [(pt, [unblock(x) for x in a]) for pt, a in arms]
+            els = [unblock(x) for x in els]
+        return ('casex', scrut, arms, els)
+    finally:
+        CTX['inbif'] = saved_inbif
+
+
 def gen_cmp(scope, vars_, d, ch):
     if CTX['fmax'] is not None and 'nocmpcall' in flags:
         # (a call of a function with several values in a comparison in a
@@ -1907,7 +1995,7 @@ def show(e):
     if t == 'tw':
         return f'Tw({show(e[1])}, {show(e[2])})'
     if t == 'gx':
-        return f"Oxv[{show(e[2])}]" if e[1] == 'x' else f"Oyv({show(e[2])})"
+        return f"Oxv[{show(e[2])}]" if e[1] == 'x' else f"O{e[1]}v({show(e[2])})"
     if t == 'ccons':
         return f'OC(ocls{{A := {show(e[1])}, B := {show(e[2])}}})'
     if t == 'cons':
@@ -1997,6 +2085,9 @@ def show(e):
         for i, (cl, alts) in enumerate(e[1]):
             out += ('if' if i == 0 else ' else if') + f' ({show_cl(cl, ", ")}) then {show_alts(alts)}'
         return '(' + out + f' else {show_alts(e[2])})'
+    if t == 'casex':
+        arms = ''.join(f'{pt} => {show_alts(a)}, ' for pt, a in e[2])
+        return f'(case ({show(e[1])}) {{ {arms}_ => {show_alts(e[3])} }})'
     raise AssertionError(e)
 
 
@@ -2083,7 +2174,7 @@ def failable(scope, vars_):
 
 def top_choice_e(e):
     t = e[0]
-    if t in ('choice', 'bif', 'mcall', 'rcall', 'gcall', 'nam', 'mvm', 'rt', 'rt2', 'rt3', 'ovl', 'ows', 'ow2', 'om', 'owr'):
+    if t in ('choice', 'bif', 'casex', 'mcall', 'rcall', 'gcall', 'nam', 'mvm', 'rt', 'rt2', 'rt3', 'ovl', 'ows', 'ow2', 'om', 'owr'):
         return True
     if t in ('owone', 'ow1', 'om1'):
         return top_choice_e(e[1])
@@ -2410,9 +2501,15 @@ def ev(e, st, k, mode):
                                         s1, k1, mode, True)
 
                 def told(s2, k2):
-                    s2.out.append("oy")
+                    s2.out.append("oy" if e[1] == 'y' else "od")
                     return k2(a, s2)
-                return choice_point([told, (lambda s2, k2: k2(chks(a + 3, s2), s2))], s1, k1, mode, True)
+
+                def kodd(v, s3):
+                    # (#283, flag gdefer: Odv's defer:, as each of its values leaves it)
+                    s3.out.append("odd")
+                    return k1(v, s3)
+                return choice_point([told, (lambda s2, k2: k2(chks(a + 3, s2), s2))], s1,
+                                    kodd if e[1] == 'd' else k1, mode, True)
             if mode == 'all':
                 s0 = s.copy()
                 try:
@@ -2577,6 +2674,12 @@ def ev(e, st, k, mode):
         if res is not None:
             return ev(e[2], res[1], k, mode)
         return ev(e[3], st, k, mode)
+    if t == 'casex':
+        # (#283: the scrutinee, then the picked arm's alternatives, as a branchy if's branch)
+        def kcase(v, s):
+            alts = next((a for pt, a in e[2] if pt == v), e[3])
+            return bif_alts(alts, s, k, mode)
+        return ev(e[1], st, kcase, mode)
     raise AssertionError(e)
 
 
@@ -2659,6 +2762,14 @@ def run_body(stmts, val, st, k, mode):
     if t == 'snest':
         # (#283: a consumer in a generator's code, as anywhere)
         return run_body([c[2]] + stmts[1:], val, st, k, mode)
+    if t == 'sdefer':
+        # (#283: a defer:, which runs as each value leaves this scope, after it is computed and
+        # before the code after it, last registered first: the rest with a continuation that
+        # prints first)
+        def kdf(v, s):
+            s.out.append(c[1])
+            return k(v, s)
+        return run_body(stmts[1:], val, st, kdf, mode)
     if t == 'sclause':
         return run_clauses([c[1]], st, nxt, mode)
     if t == 'sfor':
@@ -2848,6 +2959,8 @@ def show_s(c):
         return f"{c[1]}.Next()"
     if t == 'snest':
         return show_s(c[2])
+    if t == 'sdefer':
+        return f'defer: Print("{c[1]}")'
     if t == 'sclause':
         return show_c(c[1])
     if t == 'sfor':
@@ -3362,7 +3475,16 @@ if RT:
             '        Print("e{RTd}")\n    RTd := RTy * 10\n    RTd\n')
 if RT2:
     for nm, ret in (('RT2', '99 | 98'), ('RT3', '99')):
-        if not RET_DEFER:
+        scope = RTV.choice(['if', 'if', 'block', 'case']) if 'noretscope' not in flags else 'if'
+        if not RET_DEFER and scope == 'block':
+            PRE += (f'{nm}(RTa:int):int =\n    RTy := RTa | RTa + 1 | RTa + 2\n    Print("p{{RTy}}")\n'
+                    f'    block:\n        if (RTy = RTa + 1):\n            Print("rt")\n            return {ret}\n'
+                    f'        Print("e{{RTy}}")\n    Print("q{{RTy}}")\n    RTy * 10 | RTy * 10 + 1\n')
+        elif not RET_DEFER and scope == 'case':
+            PRE += (f'{nm}(RTa:int):int =\n    RTy := RTa | RTa + 1 | RTa + 2\n    Print("p{{RTy}}")\n'
+                    f'    case (RTy - RTa):\n        1 => block:\n            Print("rt")\n            return {ret}\n'
+                    f'        _ => Print("e{{RTy}}")\n    Print("q{{RTy}}")\n    RTy * 10 | RTy * 10 + 1\n')
+        elif not RET_DEFER:
             PRE += (f'{nm}(RTa:int):int =\n    RTy := RTa | RTa + 1 | RTa + 2\n    Print("p{{RTy}}")\n'
                     f'    if (RTy = RTa + 1):\n        Print("rt")\n        return {ret}\n    else:\n'
                     f'        Print("e{{RTy}}")\n    Print("q{{RTy}}")\n    RTy * 10 | RTy * 10 + 1\n')
@@ -3377,6 +3499,14 @@ if RT2:
                 body = ['    if (RTy = RTa + 1):'] + branch + ['        Print("rt")', f'        return {ret}', '    else:',
                     '        if (RTy = RTa):', *('    ' + s for s in branch), '            Print("e{RTy}")',
                     '        else: Print("e{RTy}")', *('    ' + s for s in late[:-1]), '        return RTy * 10 | RTy * 10 + 1']
+            elif scope == 'block':
+                body = ['    if (RTy <= RTa + 1):', '        block:'] + ['    ' + b for b in branch] + [
+                    '            if (RTy = RTa + 1):', '                Print("rt")', f'                return {ret}',
+                    '            Print("e{RTy}")', '    else: Print("e{RTy}")'] + late
+            elif scope == 'case':
+                body = ['    if (RTy <= RTa + 1):'] + branch + ['        case (RTy - RTa):', '            1 => block:',
+                    '                Print("rt")', f'                return {ret}', '            _ => {}',
+                    '        Print("e{RTy}")', '    else: Print("e{RTy}")'] + late
             else:
                 body = ['    if (RTy <= RTa + 1):'] + branch + ['        if (RTy = RTa + 1):',
                     '            Print("rt")', f'            return {ret}', '        Print("e{RTy}")',
@@ -3408,6 +3538,8 @@ if 'x' in OTHERS:
     PRE += 'Oxv(OxA:int)<transacts><decides>:int =\n    Print("ox {OxA}")\n    OxA > 0\n    OxA | OxA + 3\n'
 if 'y' in OTHERS:
     PRE += 'Oyv(OyA:int)<transacts>:int = Tell("oy", OyA) | OyA + 3\n'
+if 'd' in OTHERS:
+    PRE += 'Odv(OdA:int)<transacts>:int =\n    defer: Print("odd")\n    Tell("od", OdA) | OdA + 3\n'
 if USES_CC[0]:
     PRE += ("obase := class:\n    B:int = 0\nocls := class(obase):\n    A:int = 0\n"
             "OC(P:ocls)<computes>:int = P.A * 10 + P.B\n")
@@ -3420,8 +3552,8 @@ if os.environ.get('MVSEQ'):
     # (#283: the generators with choice points in sequence; then each kind the tests call, in a
     # for or where the first success is taken, with effects run as a function of its own or not)
     used = [(k, 'for' if isfor else ('first-lifted' if GFUNCS[i]['lifted'] else 'first'))
-            for i, isfor in sorted(USED) for k in sorted(GFUNCS[i].get('seq', ()))]
-    made = sorted({k for f in GFUNCS for k in f.get('seq', ())})
+            for i, isfor in sorted(USED) for k in sorted(GFUNCS[i].get('seq', set()) | GFUNCS[i].get('gdefer', set()))]
+    made = sorted({k for f in GFUNCS for k in f.get('seq', set()) | f.get('gdefer', set())})
     print(f"seq {sum(1 for f in GFUNCS if f.get('seq'))} " + " ".join(sorted({f"{k}/{c}" for k, c in used})) +
           f" made={','.join(made)}", file=sys.stderr)
 if os.environ.get('MVSTATS'):

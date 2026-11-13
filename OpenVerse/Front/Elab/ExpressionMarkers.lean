@@ -13,10 +13,15 @@ def refuseSeveral (ctx : Ctx) (p : Pos) (what several issue : String) : EM R := 
   if ctx.inTaking then
     if ctx.liftWhy != "" then
       eerr p s!"{what} cannot be lifted from {ctx.liftWhy}, for now (#283)"
-    eerr p (s!"{what} cannot be lifted from here, for now ({issue}): not from a defer:'s body " ++
-      "or a block with a range of its own as a branch")
+    eerr p (s!"{what} cannot be lifted from here, for now ({issue}): not from the body of a loop, " ++
+      "which takes no choice")
+  -- (#283) a `<suspends>` function has one value: a call of one with
+  -- several would be in a failure context, which cannot suspend (#156)
+  let why := if ctx.suspends then
+      "; a <suspends> function cannot have several values, as a call of it would be in a failure context, which cannot suspend (#156)"
+    else ""
   eerr p (s!"{several} must be in a failure context that takes them: " ++
-    s!"an if condition, a for's clauses, first\{…}, option\{…}, logic\{…}, not, or the left of or ({issue})")
+    s!"an if condition, a for's clauses, first\{…}, option\{…}, logic\{…}, not, or the left of or ({issue}){why}")
 
 /-- `refuseSeveral` for a call of `f`, a function with several values (#235). -/
 def refuseCall (ctx : Ctx) (p : Pos) (f : String) : EM R :=

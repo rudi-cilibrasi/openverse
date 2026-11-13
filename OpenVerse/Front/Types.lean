@@ -177,6 +177,12 @@ structure Requests where
       choice point in a field in a recursive group's code
       (`TyEnv.fieldOrder`), which `inlineMulti`'s lifter takes them in. -/
   fieldOrders : List (String × List (String × Bool)) := []
+  /-- (#283) The calls, by their place and the function whose code they are
+      in, of a generic function with several values that a lazily taken
+      group's machine takes at another instance of its type parameters than
+      the one it took first: each a call of a copy of that function of its
+      own (`Choice.inlineMulti`), another member of the machine. -/
+  instanceCalls : List (Pos × String) := []
   /-- Functions wanted as values at closed function types no class of
       theirs gives (#214): a class for each. -/
   fns : List (String × Ty) := []
