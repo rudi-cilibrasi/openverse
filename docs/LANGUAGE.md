@@ -1163,8 +1163,12 @@ Main():void =
   order and these default types too. Its defaults and class blocks must
   meet that function's effect restrictions.
 
-  Refused for now: a block with a range of its own as a branch; and
-  a choice anywhere outside these failure contexts. (A field reached
+  A range in a block stays an error wherever the block is lifted to, a
+  branch included (#283): a range is only a `for`'s iterated expression (the
+  Book's rule), so a block's `Y := 1..3` is no generator of the `for` its
+  clauses are lifted into. A choice anywhere outside these failure contexts
+  is refused: there nothing takes its values, but in the body of a function
+  that then has several values (below). (A field reached
   through a receiver that is not a variable or `Self`, as `F().Items[…]`,
   is read after the choice, since only the receiver's value is bound
   first.) `first{…}` with a choice can fail, so it must be in a
@@ -1658,11 +1662,14 @@ Main():void =
   operands, an `if`'s branch, the right of `or`) (#283). Also one with a `return`
   in a `for` or a `loop`, or inside an expression or a condition, a method of a class or
   interface below two others that each declare its name without `<override>`,
-  `<suspends>`, one used as a function value, and, since its body is inlined where other names may be
+  one used as a function value, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or
   method anywhere in the program, and a call of one where a name its body
   uses from outside is a parameter, local or member of `Self` in scope.
-  `Main` never has several values.
+  `Main` never has several values, nor does a `<suspends>` function: a call
+  of one with several would have to be in a failure context, and a failure
+  context cannot suspend (#156); a choice in its body outside a failure
+  context is refused, saying so.
 - **Precedence.** `|` binds looser than arithmetic and tighter than the
   comparisons: `X = 1 | 2` is `X = (1 | 2)`.
 

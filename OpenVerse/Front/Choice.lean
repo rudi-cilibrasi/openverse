@@ -95,20 +95,12 @@ def madeName (k site : String) (p : Pos) : String := s!"${k}{sitePart site}{p.li
     to lift in a branch that `isBranchy` leaves there: a call with several
     values, or a choice inside a branch's expression (`has`, `hasLiftable`,
     says which). Each branch is lifted in its own path of an exclusive
-    choice (#314, #331). -/
+    choice (#314, #331); a block as a branch has its names renamed for it
+    where it is lifted (`bifToExcl`), its `defer:`s after its value
+    (`deferLast`), as any block's. -/
 def branchesLift (has : SExpr → Bool) (e : SExpr) : Bool :=
   match e with
-  | .ite .. =>
-    let as := arms e
-    -- (a block as a branch, #283: its names renamed for it where it is
-    -- lifted, `bifToExcl`, its `defer:`s after its value, `deferLast`; not
-    -- one with a range of its own, as #302 refuses for any block)
-    let blockOK : SExpr → Bool
-      | .block _ ss => !ss.any fun
-          | .decl _ _ none false (.range ..) | .gen .. => true
-          | _ => false
-      | _ => true
-    as.all (fun (_, v) => blockOK v) && as.any fun (_, v) => has v
+  | .ite .. => (arms e).any fun (_, v) => has v
   | _ => false
 
 /-- (#283) Whether the elaborator takes this `if` with choices in its
@@ -900,9 +892,11 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     -- own), its last expression the value; its `defer:`s after the value,
     -- `deferLast`, so they run as each value leaves it
     -- (a range bound with no type is a for's generator: in a block it is an
-    -- error, which it must stay)
-    if ss.any (fun | .decl _ _ none false (.range ..) | .gen .. => true | _ => false) then
-      return noLift p "a block that binds a range (a..b), which only a for clause can" e
+    -- error, which it must stay, so it stays an expression, a range only the
+    -- iterated expression of a `for` may be: the Book of Verse's rule)
+    let ss := ss.map fun
+      | .decl q x none false r@(.range ..) => .decl q x none false (.block r.pos [r])
+      | s => s
     let ssD ← if ss.any isDefer then do pure (deferLast p (← LM.fresh p "dv") ss) else pure ss
     let tag ← LM.fresh p "b"
     -- (its names are not in scope where it is, as for a block's own,
