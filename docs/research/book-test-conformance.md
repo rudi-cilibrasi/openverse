@@ -739,6 +739,13 @@ differ.
   bytecode but one, `tests/verse/empty_literal_compared.verse`, whose
   comparisons of empty values of different types now hold, as the Book
   says; the overload messages say `tuple()` where they said `void`.
+- **Verse Core's equality** then became Verse's for the empty value at
+  every depth (`Value.veq`, [empty-values.md](empty-values.md#4-design-b-as-built)):
+  no case of the Book's tests changes verdict (a fresh run at main
+  `7bf6dbd` gives the baseline again, 7,374 agree), as none
+  compares empty values held two ways inside containers or through
+  generic code; the 16 refused comparisons of a tuple of type parameters
+  and a string stay refused.
 
 ## After qualified names
 

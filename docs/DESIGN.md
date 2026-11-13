@@ -1539,25 +1539,37 @@ doubles. In the binary format a float literal is the primitive `fofBits` of
 an int literal of its bits, so the loader (`load.c`, QuickProof-proved) is
 unchanged; only its bound on primitive codes grows.
 
-## Equality across types: decided by the front end
+## Equality: Verse Core's veq, and the front end across types
 
 Verse's `=` is equality of values (Book of Verse ch. 2 and 4): values of
-different types are different, but for the one empty value (`false`, `()`,
-the empty option, array, string and map) and a value two types share (a
-tuple and the array of its elements, an int and its rational). Verse Core's
-`eq` is structural on representations, so it holds the empty value four
-ways (`.logic false`, `.tup []`, `.none`, `.arr #[]`) and holds an `int`, a
-`char32` and an enum alike. The front end therefore decides each `=` and
-`<>` of two different types from the types alone (`TyEnv.cmpPlan`,
-`Elab/Context.lean`): Verse Core's `eq` where it is Verse's
-(`TyEnv.coreExact`, which keeps the code of every comparison it already
-answered right), a test that fails or holds where the types have nothing
-in common, a test of both operands' emptiness where they have only the
-empty value in common, and a refusal where they have other values in
-common that Verse Core holds differently (the empty value inside a
-container). The last, and generic code, wait on Verse Core relating the
-empty values in `eq` ([research/empty-values.md](research/empty-values.md),
-part 2, design B); the proofs, OVBC and the C runtime are unchanged.
+different types are different, but the empty value (`false`, `()`, the
+empty option, array, string and map) is one value, and a value two types
+share (a tuple and the array of its elements, an int and its rational) is
+one. Verse Core holds the empty value four ways, one per type that has it
+(`.logic false`, `.tup []`, `.none`, `.arr #[]`), so its `eq` and `ne` are
+`Value.veq` (`Value.lean`): structural equality, except that any two empty
+values are equal, at every depth. It is characterized by `veq_iff`
+(equality once each empty value is made `()`), so it is an equivalence and
+a congruence for the constructors that hold values, and on two values of
+one type it is `=` (`veq_iff_eq_of_hasTy`): programs that compare values of
+one type compute as before. The C runtime's `shallow_eq` (`value.c`) takes
+two empty values of different tags as equal. A map's lookup, `case`, the
+array methods that search by value and struct equality are code that calls
+`eq`, so they follow. No proof needed more than that: the typing of `eq`
+reads only its left operand, and `Eval.eq_slot` compares ints, which
+`veq_int_right` makes `=`.
+
+What Verse Core cannot tell is values of different types it holds alike
+(an `int`, a `char32` and an enum; two structs of one layout). The front
+end decides those from the two types (`TyEnv.cmpPlan`, `Elab/Context.lean`):
+Verse Core's `eq` where it is Verse's (`TyEnv.coreExact`), a test that
+fails or holds where the types have nothing in common, a test of both
+operands' emptiness where only the empty value is common and other values
+could be found equal, a lossless conversion of an operand (`TyEnv.lossless`)
+where values are shared as a tuple and an array, and a refusal where
+neither is possible. Generic code compares a type parameter as Verse Core
+compares its instance; values of types it holds alike would need run-time
+types ([research/empty-values.md](research/empty-values.md)).
 
 ## Rationals: helpers written in Verse
 

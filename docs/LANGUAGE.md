@@ -1991,21 +1991,31 @@ Main():void =
     if (not 0 = 0.0, not 0u41 = 65, not array{1} = "a") then Print("different types")
 ```
 
-The front end decides it from the two types (`TyEnv.cmpPlan`, research
-note [empty-values.md](research/empty-values.md)): Verse Core's equality
-where it is Verse's; otherwise two types with nothing in common are never
-equal (Verse Core holds a `char32`, an enum and an `int` alike, so it would
-find `0u41 = 65`), and two with only the empty value in common are equal
-exactly when both are empty. An empty `array{}` or `map{}` compared with a
-value of another type is that type's empty value. Refused: two types with
-other values in common that Verse Core holds differently, as the empty
-value inside containers, tuples or structs (`option{false} = option{()}`,
-which the Book's equality holds), and comparisons in generic code of two
-type parameters, or of one and a type several types share in Verse Core.
-In generic code a type parameter is compared as Verse Core compares its
-instance, so `X = false` for an empty `X:t` at `t = []int` fails, where the
-Book's holds. Both wait on Verse Core relating the empty values
-([empty-values.md](research/empty-values.md), part 2, design B).
+Verse Core's equality (`Value.veq`, `docs/CLAIMS.md`) is Verse's for the
+empty value: structural, but `false`, `()`, the empty option and the empty
+array, string and map are one value however Verse Core holds them, at every
+depth, so `array{false} = array{()}`, `option{false} = option{()}` and, in
+generic code, `X = false` for an empty `X:t` at any `t` hold. Where Verse
+Core holds values of different types alike, the front end decides from the
+two types (`TyEnv.cmpPlan`, research note
+[empty-values.md](research/empty-values.md)): two types with nothing in
+common are never equal (a `char32`, an enum and an `int`, two structs of
+one layout: `0u41 = 65` fails), and two with only the empty value in common
+whose other values Verse Core could find equal are equal exactly when both
+are empty (`[]int` and `[]char32`). An operand is converted to the other's
+type only where that keeps values apart (a tuple to an array, an int to a
+rational, one struct at another instance), never to `void`: `(1, 2) =
+array{(), ()}` fails. An empty `array{}` or `map{}` compared with a value of
+another type is that type's empty value.
+
+Refused: two type parameters, or one and a type that several types share in
+Verse Core (an instance could make them types Verse Core holds alike), a
+tuple of type parameters against a string, and two types with other values
+in common that Verse Core cannot tell apart (`[]tuple(int, []int)` and
+`[]tuple(int, []char32)`). In generic code a type parameter is compared as
+Verse Core compares its instance, so values of types it holds alike are
+equal there where the Book's differ (a `char32` and an `int`; an empty
+struct and `()`); that needs run-time types.
 
 `void` takes any value and makes it the empty value; `tuple()` is the type
 of the empty value alone: `false`, `()` and a `void` value convert to it,
@@ -2748,7 +2758,7 @@ Main()<suspends>:void =
 | A module's member `(M:)x` used bare in `M` beside an outer `x` | both are candidates, told apart by their parameters, else ambiguous (`ModuleDefinitions.versetest`, `vmodule` tests) | the inner one (only a qualified member may share an outer definition's name, [Shadowing](#shadowing)); in a class's code and for `(local:)`, where the tests refuse it, ambiguous |
 | `ToString` of a float | the API and the tests: fixed point with six decimals (`FloatToString.versetest`, `1.000000`); ch. 2's example: `98.5` (the change needs Core and the runtime: [the audit](research/readings-audit.md#tostring-of-a-float)) | the shortest decimal that reads back as the float, the closest of the shortest, in Python's `repr` layout (exponent at `≥ 1e16` and `< 1e-4`); `Inf`, `-Inf`, `NaN` |
 | `NaN < X` | `not (Nan < 1.0)`, `Nan = Nan` (ch. 1, ch. 2) | fails (IEEE: NaN orders with nothing); `NaN = NaN` succeeds (the Book) |
-| `=` between different types | "Comparisons between different types still compile, but they always fail" (ch. 4); the empty value is one value of `logic`, `void`, `tuple()`, options, arrays, strings and maps (ch. 2) | the Book's (see [Equality and the empty value](#equality-and-the-empty-value)); refused where Verse Core holds a common value differently (the empty value inside containers, `option{false} = option{()}`) and between type parameters; a type parameter is compared as Verse Core compares its instance |
+| `=` between different types | "Comparisons between different types still compile, but they always fail" (ch. 4); the empty value is one value of `logic`, `void`, `tuple()`, options, arrays, strings and maps (ch. 2) | the Book's (see [Equality and the empty value](#equality-and-the-empty-value)), at every depth and in generic code; refused between type parameters, a tuple of them and a string, and types whose common values Verse Core cannot tell apart; in generic code, types Verse Core holds alike (a `char32` and an `int`) compare as Verse Core holds them |
 | `false` where a map is expected | prose: accepted (ch. 2); tests: refused (`Map.versetest` 343) | refused, as the tests (it equals an empty map) |
 | `X?` of a logic | "equivalent to comparing against true" (ch. 4); the tests: `true?` is the empty value (`BoolQuery.versetest` 3, 4) | `true?` is `true`, not yet the tests' empty value ([empty-values.md](research/empty-values.md), 3.1) |
 | `true` as a type | the type of the empty value, as `tuple()` (ch. 2) | not a type name yet: openverse's `branch:` gives `void`, which `true` would take (`FORT-582630-BranchResult.versetest` refuses it) |

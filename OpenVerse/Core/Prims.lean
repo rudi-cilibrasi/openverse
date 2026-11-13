@@ -178,11 +178,13 @@ def Prim.apply (op : Prim) (vs : List Value) : Res :=
     | [.int a, .int b] => cmpRes (decide (a ≥ b)) (Value.ofInt a)
     | [.char a, .char b] => cmpRes (decide (a ≥ b)) (.char a)
     | _ => .err .type
+  -- Verse's equality of values (`Value.veq`): structural, but for the one
+  -- empty value, which Verse Core holds four ways (Book of Verse ch. 2)
   | .eq => match vs with
-    | [a, b] => cmpRes (decide (a = b)) a
+    | [a, b] => cmpRes (Value.veq a b) a
     | _ => .err .type
   | .ne => match vs with
-    | [a, b] => cmpRes (decide (a ≠ b)) a
+    | [a, b] => cmpRes (!Value.veq a b) a
     | _ => .err .type
   | .query => match vs with
     | [.logic b] => if b then .ok (.logic true) else .fail

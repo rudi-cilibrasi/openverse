@@ -109,6 +109,7 @@ check() {
 }
 check "class-feature fuzzing (${FUZZ_CLASSES:-200} programs)" scripts/fuzz-classes.sh "${FUZZ_CLASSES:-200}" "$seed"
 check "differential fuzzing (${FUZZ:-1000} random programs)" scripts/fuzz-diff.sh "${FUZZ:-1000}" "$seed"
+check "equality model fuzzing (${FUZZ_EQUALITY:-150} programs, against the Book's equality)" scripts/fuzz-equality.sh "${FUZZ_EQUALITY:-150}" "$seed"
 check "Verse test suite, Lean and C" scripts/test-verse.sh --c
 check "overloading conformance matrix" bash tests/scripts/test-overload-conformance.sh
 check "effect admission and executable controls" bash tests/scripts/test-effect-admission.sh
