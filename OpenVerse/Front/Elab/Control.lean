@@ -423,12 +423,15 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     it, one test per set of pins among the classes tested, as a refined
     method call is: `Typed.dispatch` types the call under the refinement,
     with the object (as `D`) and those locals passed at their refined
-    types. `none` when the cast does not refine: the plain path. -/
+    types. `none` when the cast does not refine: the plain path. With
+    `ifType`, only the `if`'s type with no expected type, as any `if`'s
+    (`ifBranches`), and in its code, as a `logic`, whether its branch is
+    elaborated at that type, not its own. -/
 partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr → Bool → Option Ty → EM R)
     (elabE : Ctx → SExpr → Option Ty → EM R) (withMark : Ctx → Expr → EM Expr) (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (body0 : SExpr)
     (elseE : Option SExpr) (exp : Option Ty) (made : Bool := false)
     (escRet : Option (Ty × Refine.Exits) := none)
-    (outsideWrites : List Nat := []) :
+    (outsideWrites : List Nat := []) (ifType : Bool := false) :
     EM (Option R) := do
   let ctx := ctx.choiceCoercionScope
   -- (the lift's tag is of the branch as written, before choice conversions
@@ -470,6 +473,48 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       ctx.locals.map fun l => { l with ty := refine l.ty, storage := l.storage.map (·.subst μT) },
     types := { env with tvars := (env.tvars.map (fun (n, t) => (n, refine t)) ++
       opened.map (fun (n, _, c) => (n, Ty.param n c))) } }
+  -- (the branch's type under the refinement, as code outside it names it: a
+  -- local it gives at its own type there, the most general)
+  let own (v : SExpr) (t : Ty) : Ty := match v with
+    | .ident _ n => if Refine.isCastObj n then ((ctx.lookup n).map (·.ty)).getD (refine t) else refine t
+    | _ => refine t
+  let branchTyOf (t : Ty) : Ty := match Refine.valueOf body, t with
+    | .tuple _ vs, .tup ts => if vs.length == ts.length then .tup ((vs.zip ts).map fun (v, t) => own v t) else refine t
+    | v, t => own v t
+  -- (with no expected type, the `if`'s type is any `if`'s, `ifBranches`,
+  -- its branch typed under the refinement: at a type asked for, when it is
+  -- one there, else at its own; the same in every elaboration, which may
+  -- find the branch's function made or not; nothing is kept. The branch's
+  -- own type is one under the refinement, which code outside it may name
+  -- otherwise: one that is the `else`'s there makes the `if` the `else`'s,
+  -- as their join, before any other comparison. And whether the branch
+  -- must be elaborated at that type: when it has none alone, or its own
+  -- does not join into it there, `if (C) then false else option{4}`, `if
+  -- (C) then 1 else "a"`, at `any`)
+  let ifTyAt (ee : SExpr) : EM (Ty × Bool) := do
+    let st ← get
+    let thenAt (k : Nat) (e : Option Ty) : EM R := do
+      let rb ← elabE { refined (← fresh dTy) with typeOnly := true, retries := k } (Refine.exitsAsErr body) (e.map refine)
+      let fits ← match e with
+        | some t => tryCatch (do discard <| coerce p rb (refine t); pure true) fun _ => pure false
+        | none => pure false
+      return ⟨rb.e, if fits then e.getD rb.ty else branchTyOf rb.ty⟩
+    let elseAt (k : Nat) (e : Option Ty) : EM R := elabE { ctx with typeOnly := true, retries := k } ee e
+    let own? ← tryCatch (some <$> thenAt ctx.retries none) fun _ => pure none
+    let re? ← tryCatch (some <$> elseAt ctx.retries none) fun _ => pure none
+    let fitsElse ← match re? with
+      | some re => tryCatch (do pure ((← thenAt ctx.retries (some re.ty)).ty == re.ty)) fun _ => pure false
+      | none => pure false
+    let τ ← match re?, fitsElse with
+      | some re, true => pure re.ty
+      | _, _ => ifBranches p none ctx.retries thenAt elseAt fun _ _ ty => pure ty
+    let env' := (← get).env
+    set st
+    return (τ, own?.all fun b => joinTy env' b.ty (refine τ) none != some (refine τ))
+  let ifTy (ee : SExpr) : EM Ty := return (← ifTyAt ee).1
+  if ifType then
+    let (τ, atType) ← ifTyAt (elseE.getD (Refine.noValue p))
+    return some ⟨.lit (.logic atType), τ⟩
   -- (the locals the branch uses, in order of first use)
   let caps : List Local := ctx.captureEvidence ((Choice.namesUsed body).filterMap fun n =>
     if n == D then none else ctx.locals.find? (·.name == n)) [D]
@@ -498,19 +543,21 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
         if escapes && escapesAlways (Choice.stmtsOf body) then pure (some .elseAfter)
         else do
           let st ← get
-          let τ? ← tryCatch (do pure (some (← elabE { ctx with typeOnly := true } ee none).ty)) fun _ => pure none
-          -- (an `else` that gives no value tells no type: the branch's own,
-          -- under the refinement, when it ends, as the first elaboration
-          -- finds it, if code outside it can name it)
-          let own? ← if τ? != some .never then pure none else
-            tryCatch (do
-              let τ := (← elabE { refined (← fresh dTy) with typeOnly := true } (Refine.exitsAsErr body) none).ty
-              pure (if opened.any (fun (n, _, _) => τ.params.contains n) then none else some τ)) fun _ => pure none
-          let τ? := own?.orElse fun _ => τ?
+          let τe? ← tryCatch (do pure (some (← elabE { ctx with typeOnly := true } ee none).ty)) fun _ => pure none
           set st
+          -- (the `if`'s type, as any `if`'s; for an `else` that gives no
+          -- value, the branch's own, if code outside it can name it)
+          let r? ← tryCatch (some <$> ifTyAt ee) fun _ => pure none
+          let τ? := r?.map (·.1)
+          let names (τ : Ty) : Bool := !opened.any fun (n, _, _) => τ.params.contains n
+          let own? := if τe? == some .never then τ?.filter names else none
+          let τ? := if τe? == some .never then own? else τ?
           if !escapes then
             -- Discard a statement's value before building the copy-out tuple.
-            pure (some (if τ?.any (· == .void) then .none else .raw (own?.map Ty.toSTy)))
+            -- (the value at the `if`'s type, unless the new `if`, of tuples,
+            -- finds it: the `else`'s, which the branch's own joins)
+            let at? := own?.orElse fun _ => if τ? == τe? && r?.any (!·.2) then none else τ?
+            pure (some (if τ?.any (· == .void) then .none else .raw (at?.map Ty.toSTy)))
           else
             pure (τ?.bind fun τ => if τ == .never then none
               else some (if τ == .void then ExitVal.none else .opt τ.toSTy))
@@ -581,7 +628,12 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let ctxB := { ctxB with constructHints := ctxB.constructHints.map (·.map retarget) }
     let body := pruneConstructHints ctxB liftName
       (pruneConstructHints { ctxB with frameName := ctx.frameName } liftName body)
-    let rb ← elabE ctxB body (if elseE.isNone then some .void else exp.map refine)
+    -- (with no expected type, at the `if`'s, `ifTy`, as an `if`'s branches
+    -- are: `false` against an `else`'s option is its empty one)
+    let τ? : Option Ty ← match elseE, exp with
+      | some ee, none => some <$> ifTy ee
+      | _, _ => pure none
+    let rb ← elabE ctxB body (if elseE.isNone then some .void else (exp.orElse fun _ => τ?).map refine)
     let waitingThen := (← get).pendingWaitingCasts
     let thenWaits := ctx.suspends && (waitingThen != waiting0 || waits rb.e)
     let sourceSuspends := ctx.suspends && ((← get).pendingSourceSuspends != source0 || ctx.sourceWaits rb.e)
@@ -603,15 +655,13 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     -- `elabSeqIn`: the branch's type, which code outside it must be able to
     -- name)
     let retOfBranch := elseE.isSome && exp.isNone && re.ty == .never
-    -- (a local from outside the branch that it gives, at its own type there,
-    -- which refines to its type in the branch: the most general)
-    let own (v : SExpr) (t : Ty) : Ty := match v with
-      | .ident _ n => if Refine.isCastObj n then ((ctx.lookup n).map (·.ty)).getD (refine t) else refine t
-      | _ => refine t
-    let branchTy : Ty := match Refine.valueOf body, rb.ty with
-      | .tuple _ vs, .tup ts => if vs.length == ts.length then .tup ((vs.zip ts).map fun (v, t) => own v t) else refine rb.ty
-      | v, t => own v t
-    let τ' : Ty := if elseE.isNone then .void else if retOfBranch then branchTy else exp.getD re.ty
+    let branchTy := branchTyOf rb.ty
+    let τ' : Ty ← match elseE, exp with
+      | none, _ => pure .void
+      | some _, some t => pure t
+      | some ee, none => if retOfBranch then pure branchTy else match τ? with
+        | some t => pure t
+        | none => ifTy ee
     if let some (n, v, _) := opened.find? fun (n, _, _) => τ'.params.contains n then
       eerr p s!"cannot cast {withArticle rx.ty.show} to {T} here: the cast opens {T}'s type argument {v} for the code after it, outside which its value, {withArticle τ'.show}, would name what is unknown (#250)"
     let ret := refine τ'
@@ -726,15 +776,17 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
         pure ([Expr.assign y e], y)
     let re ← elseOf
     -- (the branch's own type, when the first elaboration took it; at
-    -- another expected type, refused as it was there)
-    let τ' : Ty ← if elseE.isNone then pure .void else match exp, l.branchTy with
-      | some t, some _ =>
+    -- another expected type, refused as it was there; with none, the
+    -- `if`'s, as the first elaboration found it)
+    let τ' : Ty ← match elseE, exp, l.branchTy with
+      | none, _, _ => pure .void
+      | some _, some t, some _ =>
         let ret ← resolveTy env p l.ret
         if ret != t.subst μT then eerr p s!"expected {t.show}, found {ret.show} (the branch of the cast to {shown})"
         pure t
-      | some t, none => pure t
-      | none, some t => resolveTy env p t
-      | none, none => pure re.ty
+      | some _, some t, none => pure t
+      | some _, none, some t => resolveTy env p t
+      | some ee, none, none => ifTy ee
     let eE ← coerce p re τ'
     let rargs := env.coreArgs S sargs
     let atR := rargs.zipIdx.map fun (r, j) => (pinArg j, r)

@@ -10,7 +10,7 @@ partial def elabExprControlWith
     (elabDefers : Ctx → List (SExpr × List Local) → EM Expr)
     (elabRefineExit : Ctx → Pos → List SExpr → List SExpr → EM R)
     (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx))
-    (elabRefinedIf : Ctx → Pos → Pos → String → String → SExpr → SExpr → Option SExpr → Option Ty → (made : optParam Bool false) → EM (Option R))
+    (elabRefinedIf : Ctx → Pos → Pos → String → String → SExpr → SExpr → Option SExpr → Option Ty → (made : optParam Bool false) → (ifType : optParam Bool false) → EM (Option R))
     (elabSet : Ctx → Pos → SExpr → Option String → SExpr → EM R)
     (elabFor : Ctx → Pos → List SExpr → SExpr → (prepared : optParam Bool false) → (firstDecides : optParam Bool false) → (failure : optParam (Option SExpr) none) → EM R)
     (elabOneClauses : Ctx → List SExpr → EM (R × Ctx))
@@ -37,6 +37,23 @@ partial def elabExprControlWith
     -- cast's own path makes, #400's review)
     let asWritten := ctx.asWritten
     let ctx := { ctx with asWritten := false }
+    -- (with no expected type, one with a cast that refines as clause `k` and
+    -- an `else`: any `if`'s type, `ifBranches`, the branch, the clauses
+    -- after the cast and `thenE`, typed under the refinement, as
+    -- `elabRefinedIf` finds it, the clauses before it as they are; nothing
+    -- is kept, so that every elaboration decides the same)
+    let refinedIfTy (k : Nat) (ee : SExpr) : EM (Option (Ty × Bool)) := do
+      let st ← get
+      let some (dp, d, T, x) := conds[k]?.bind Refine.castClause? | return none
+      let τ? ← tryCatch (do
+          let c ← if k == 0 then pure ctx else
+            pure (← elabSeq { ctx with canFail := true, inTaking := true, typeOnly := true } (conds.take k) none).2
+          let branch := Refine.castRest p (conds.drop (k + 1)) thenE (some (Refine.noValue p))
+          let r? ← elabRefinedIf { c with canFail := ctx.canFail, inTaking := ctx.inTaking, typeOnly := true }
+            p dp d T x branch (some ee) none (made := true) (ifType := true)
+          pure (r?.map fun r => (r.ty, match r.e with | .lit (.logic true) => true | _ => false))) fun _ => pure none
+      set st
+      return τ?
     let nested (k : Nat) (_ : String) : EM (Option R) := do
       let castC := conds[k]!
       let st0 ← get
@@ -70,11 +87,13 @@ partial def elabExprControlWith
         -- (the `else` once, outside the clauses' names, #400's review:
         -- the branch gives an option of its value, or `true` for a
         -- `void` `if`, `false` when a clause fails, as #286's)
-        let attempt (τ : Ty) : EM R := do
+        -- (`thenE`'s value bound at `at?`: the `if`'s type, when the rule
+        -- takes the branch at it, `refinedIfTy`; else at its own)
+        let attempt (τ : Ty) (at? : Option STy := none) : EM R := do
           let isVoid := τ == .void
           let v := s!"$lc{p.line}_{p.col}"
           let thenV : SExpr := if isVoid then .block p [thenE, .ident p "true"]
-            else .block p [.decl p v none false thenE, .optionLit p (.ident p v)]
+            else .block p [.decl p v at? false thenE, .optionLit p (.ident p v)]
           let outer := SExpr.ite p (pre ++ [tq]) (.ite p innerC thenV (some (.ident p "false")))
             (some (.ident p "false"))
           let rty : Ty := if isVoid then .logic else .opt τ
@@ -89,6 +108,8 @@ partial def elabExprControlWith
         match exp with
         | some τ => return some (← attempt τ)
         | none =>
+          if let some (τ, atType) ← refinedIfTy k ee then
+            return some (← attempt τ (if atType then some τ.toSTy else none))
           let st1 ← get
           let re ← elabE ctx ee none
           set st1
@@ -130,14 +151,14 @@ partial def elabExprControlWith
         -- it fails, the if fails, as a branch does; only `false`, the rest
         -- having failed, runs `E`)
         let v := s!"$cv{p.line}_{p.col}"
-        let innerOf (τ : Ty) : SExpr :=
+        let innerOf (τ : Ty) (at? : Option STy := none) : SExpr :=
           let thenV : SExpr := if τ == .void then .block p [thenE, .ident p "true"]
-            else .block p [.decl p v none false thenE, .optionLit p (.ident p v)]
+            else .block p [.decl p v at? false thenE, .optionLit p (.ident p v)]
           Refine.castRest p more thenV (some (.ident p "false"))
         let rtyOf (τ : Ty) : Ty := if τ == .void then .logic else .opt τ
-        let attempt (τ : Ty) : EM (Option R) := do
+        let attempt (τ : Ty) (at? : Option STy := none) : EM (Option R) := do
           let isVoid := τ == .void
-          let inner := innerOf τ
+          let inner := innerOf τ at?
           let rty : Ty := rtyOf τ
           match ← elabRefinedIf ctx p dp d T x inner (some (.ident p "false")) (some rty) (made := true) with
           | some r =>
@@ -149,24 +170,28 @@ partial def elabExprControlWith
             let xv ← fresh τ
             return some ⟨.seq (.assign t r.e) (.ite (.assign xv (.prim .query [.local t])) (.local xv) eE), τ⟩
           | none => return none
-        -- (without an expected type: the else's, else void, as a statement
-        -- whose branches' types differ)
-        -- (a later elaboration decides as the first did: by the result
-        -- type of the function it asked for, `logic` for void)
+        -- (without an expected type: any `if`'s, `refinedIfTy`; when that
+        -- cannot be found, the else's, else void, as a statement whose
+        -- branches' types differ, a later elaboration deciding as the first
+        -- did: by the result type of the function it asked for, `logic` for
+        -- void)
         let r? ← match exp with
           | some t => attempt t
           | none => do
-            let st0 ← get
-            let re ← elabE ctx ee none
-            set st0
-            -- (in a source context, the lift's tag depends on its type)
-            let asked (τ : Ty) := ctx.types.castRequests.find? (·.key ==
-              Refine.keyOf p d (refineTagOf ctx x (innerOf τ) (some (.ident p "false")) (some (rtyOf τ))))
-            match (asked .void).orElse fun _ => asked re.ty with
-            | some l => attempt (match l.ret with | .name "logic" => .void | _ => re.ty)
+            match ← refinedIfTy 0 ee with
+            | some (τ, atType) => attempt τ (if atType then some τ.toSTy else none)
             | none =>
-              if re.ty == .void then attempt .void
-              else tryCatch (attempt re.ty) fun _ => attempt .void
+              let st0 ← get
+              let re ← elabE ctx ee none
+              set st0
+              -- (in a source context, the lift's tag depends on its type)
+              let asked (τ : Ty) := ctx.types.castRequests.find? (·.key ==
+                Refine.keyOf p d (refineTagOf ctx x (innerOf τ) (some (.ident p "false")) (some (rtyOf τ))))
+              match (asked .void).orElse fun _ => asked re.ty with
+              | some l => attempt (match l.ret with | .name "logic" => .void | _ => re.ty)
+              | none =>
+                if re.ty == .void then attempt .void
+                else tryCatch (attempt re.ty) fun _ => attempt .void
         if let some r := r? then return r
     let (rc, ctxT) ← if Choice.hasChoice conds (choiceOrder ctx) then elabOneClauses { ctx with canFail := true } conds
       else elabSeq { ctx with canFail := true, inTaking := true } conds none
@@ -181,58 +206,9 @@ partial def elabExprControlWith
       let rt ← elabE thenCtx thenE (some .void)
       return ⟨.ite rc.e (← coerce p rt .void) (.lit .void), .void⟩
     | some ee =>
-      -- (#366) a then branch that needs the else branch's type (`array{}`
-      -- first): the else on its own first, then the then against it; when
-      -- that fails too, the then branch's own error, as before
-      let st0 ← get
-      let rt? ← tryCatch (do pure (Except.ok (← elabE thenCtx thenE exp))) fun e => pure (Except.error e)
-      let rt ← match rt? with
-        | .ok rt => pure rt
-        | .error err =>
-          if exp.isSome || ctx.retries ≥ 3 then throw err
-          let c2 := { ctx with retries := ctx.retries + 1 }
-          let alt? ← tryCatch (do
-              let re ← elabE c2 ee none
-              let rt ← elabE { thenCtx with retries := ctx.retries + 1 } thenE (some re.ty)
-              let ty ← join p rt.ty re.ty none
-              pure (some ⟨Expr.ite rc.e (← coerce p rt ty) (← coerce p re ty), ty⟩)) fun _ => pure none
-          match alt? with
-          | some r => return r
-          | none => throw err
-      -- the else branch against the then branch's type (for `array{}`,
-      -- `false`), else on its own, to join with it (#32)
-      let re ← match exp with
-        | some _ => elabE ctx ee exp
-        | none =>
-          if ctx.retries ≥ 3 then elabE ctx ee (some rt.ty)
-          else
-            let c2 := { ctx with retries := ctx.retries + 1 }
-            tryCatch (elabE c2 ee (some rt.ty)) fun _ => elabE c2 ee none
-      let ty ← join p rt.ty re.ty exp
-      -- (#366) with nothing in common, the then branch against the else
-      -- branch's type instead: `if (C) then false else option{4}` is a
-      -- `?int`, as the other order is; else `any`, as before
-      -- (from the state before the branches, the else on its own first:
-      -- the first try's code and slots are not kept. Each retry raises
-      -- `retries`, so an `if` nested n deep without a type is elaborated at
-      -- most a constant number of times per level for the first three
-      -- levels and once below: bounded, though multiplicative, tim-cc's
-      -- review of #368)
-      if ty == .any && exp.isNone && rt.ty != .any && re.ty != .any && ctx.retries < 3 then
-        let stAfter ← get
-        set st0
-        let c2 := { ctx with retries := ctx.retries + 1 }
-        match ← tryCatch (do
-            let re' ← elabE c2 ee none
-            let rt' ← elabE { thenCtx with retries := ctx.retries + 1 } thenE (some re'.ty)
-            pure (some (rt', re'))) (fun _ => pure none) with
-        | some (rt', re') =>
-          if let some ty' := joinTy (← get).env rt'.ty re'.ty none then
-            if ty' != .any then
-              return ⟨.ite rc.e (← coerce p rt' ty') (← coerce p re' ty'), ty'⟩
-          set stAfter
-        | none => set stAfter
-      return ⟨.ite rc.e (← coerce p rt ty) (← coerce p re ty), ty⟩
+      ifBranches p exp ctx.retries (fun k e => elabE { thenCtx with retries := k } thenE e)
+        (fun k e => elabE { ctx with retries := k } ee e)
+        fun rt re ty => return ⟨.ite rc.e (← coerce p rt ty) (← coerce p re ty), ty⟩
   | .forE p clauses body => do
     -- (#243, #351) a clause that casts as only a failure context's clause
     -- may: as written, else with the rest of its clauses as one block

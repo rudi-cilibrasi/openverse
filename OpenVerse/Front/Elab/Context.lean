@@ -2050,6 +2050,56 @@ def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty := do
       if (exp.isNone || exp == some .any) && !ambiguousJoin (← get).env a b then return .any
       eerr p s!"the branches have different types: {a.show} and {b.show}"
 
+/-- An `if … then … else …`'s branches and its type, which `finish` takes
+    (#32, #366): at an expected type, both at it; with none, the `then`
+    alone, the `else` against its type (else alone), and their `join` (a
+    branch that is `void` makes the `if` `void`). When the `then` has no
+    type alone (`array{}`), or nothing in common with the `else` (`any`),
+    the `then` against the `else`'s type instead: `if (C?) then false else
+    option{4}` is a `?int`. `thenAt k e` and `elseAt k e` elaborate a branch
+    at `e` with `retries := k`: each retry is a level deeper, three at most,
+    so nested `if`s are elaborated a bounded number of times (tim-cc's review
+    of #368). The one rule of every `if`, a refining cast's too. -/
+def ifBranches (p : Pos) (exp : Option Ty) (retries : Nat) (thenAt elseAt : Nat → Option Ty → EM R)
+    (finish : R → R → Ty → EM α) : EM α := do
+  let st0 ← get
+  let rt? ← tryCatch (do pure (Except.ok (← thenAt retries exp))) fun e => pure (Except.error e)
+  let rt ← match rt? with
+    | .ok rt => pure rt
+    | .error err =>
+      -- (a `then` that needs the `else`'s type, `array{}`: the `else`
+      -- alone first, then the `then` against it; when that fails too, the
+      -- `then`'s own error)
+      if exp.isSome || retries ≥ 3 then throw err
+      let alt? ← tryCatch (do
+          let re ← elseAt (retries + 1) none
+          let rt ← thenAt (retries + 1) (some re.ty)
+          pure (some (← finish rt re (← join p rt.ty re.ty none)))) fun _ => pure none
+      match alt? with
+      | some r => return r
+      | none => throw err
+  let re ← match exp with
+    | some _ => elseAt retries exp
+    | none =>
+      if retries ≥ 3 then elseAt retries (some rt.ty)
+      else tryCatch (elseAt (retries + 1) (some rt.ty)) fun _ => elseAt (retries + 1) none
+  let ty ← join p rt.ty re.ty exp
+  -- (with nothing in common, from the state before the branches: the
+  -- first try's code and slots are not kept)
+  if ty == .any && exp.isNone && rt.ty != .any && re.ty != .any && retries < 3 then
+    let stAfter ← get
+    set st0
+    match ← tryCatch (do
+        let re' ← elseAt (retries + 1) none
+        let rt' ← thenAt (retries + 1) (some re'.ty)
+        pure (some (rt', re'))) (fun _ => pure none) with
+    | some (rt', re') =>
+      if let some ty' := joinTy (← get).env rt'.ty re'.ty none then
+        if ty' != .any then return ← finish rt' re' ty'
+      set stAfter
+    | none => set stAfter
+  finish rt re ty
+
 /-- A generated result packet joins each field independently. In particular,
     an erased value must not erase the packet's remaining bindings/flags. -/
 partial def choiceResultType (env : TyEnv) (types : List Ty) : Option Ty := do
