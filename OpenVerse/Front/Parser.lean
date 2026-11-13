@@ -569,20 +569,23 @@ partial def parseParenItems : PM (List SExpr × Bool) := do
   if commas && semis then perr (← peekT) "cannot mix ',' and ';' separators"
   return (items.toList, commas)
 
-/-- An indented block whose statements start at column `c`. -/
-partial def parseIndented (c : Nat) : PM (List SExpr) := do
+/-- An indented block whose items start at column `c`, each read by `item`. -/
+partial def parseIndentedWith (item : Nat → PM SExpr) (c : Nat) : PM (List SExpr) := do
   withBlock (← peekT) do
-    let mut stmts := #[← parseExpr c]
+    let mut stmts := #[← item c]
     repeat
       let t ← peekT
       checkIndent t
-      if t.isSym ";" then bump; stmts := stmts.push (← parseExpr c)
+      if t.isSym ";" then bump; stmts := stmts.push (← item c)
       else if t.isEof then break
       else if t.bol && t.col == c && !t.isKw "else" && !t.isKw "then" && !t.isSym "}" && !t.isSym ")" then
-        stmts := stmts.push (← parseExpr c)
+        stmts := stmts.push (← item c)
       else if t.bol && t.col > c then perr t "unexpected indentation"
       else break
     return stmts.toList
+
+/-- An indented block whose statements start at column `c`. -/
+partial def parseIndented (c : Nat) : PM (List SExpr) := parseIndentedWith parseExpr c
 
 /-- A braced block after its `{`, up to the `}` (consumed). -/
 partial def parseBraced (p : Pos) : PM SExpr := do
@@ -648,45 +651,56 @@ partial def parseBranch (stop : Nat) : PM SExpr := do
   | e@(.app _ (.ident _ "$defer") _ _) => return .block t.pos [e]
   | e => return e
 
+/-- The clauses of `if` or `for` written without parentheses, at their `{`,
+    `:` or `.`: `{…}` (perhaps none); `:` and an indented block, or an
+    expression on its line; `.` and an expression on its line. Each is read
+    by `item`. -/
+partial def parseClauses (kw : String) (item : Nat → PM SExpr) (stop : Nat) : PM (List SExpr) := do
+  let o ← peekT
+  bump
+  if o.isSym "{" then return ← parseBracedItems item
+  let n ← peekT
+  if n.offside stop || (o.isSym "." && n.bol) then
+    perr n s!"expected the clauses of {kw} after '{if o.isSym "." then "." else ":"}'"
+  if n.bol then parseIndentedWith item n.col else return [← item stop]
+
+/-- `if`: its conditions in parentheses, then a body or `then` and a branch;
+    or its clauses as `{…}`, `:` and a block, or `.` and an expression
+    (`parseClauses`), then `then` and a branch, or nothing: the clause macro
+    `if{c}`, which has no value, and `if{c} else e`, whose value is that of
+    `c`'s last clause when `c` succeeds, else `e`'s. The clauses run in a
+    failure context. -/
 partial def parseIf (stop : Nat) : PM SExpr := do
   let t ← peekT
   let ifLine ← lineColAt (← get).pos
   bump
-  if (← peekT).isSym "{" then
-    -- `if{c}` and `if{c} else e`: `c` in a
-    -- failure context; with `else`, the value is that of `c`'s last clause
-    -- when `c` succeeds, else `e`'s
-    let b ← peekT
-    bump
-    let cs ← parseBracedItems parseExpr
-    if cs.isEmpty then perr b "'if{}' needs a clause"
-    if (← peekT).isKw "else" then
-      bump
-      let (cs, v) := clausesValue cs
-      if (← peekT).isKw "if" then return .ite t.pos cs v (some (← parseIf stop))
-      return .ite t.pos cs v (some (← parseBranch stop))
-    noMacroBody "if" (← peekT) "its value is its last clause's; write 'if (…):' for a body"
-    return .ite t.pos cs (.block b.pos []) none
-  let conds ← if (← peekT).isSym ":" then do
-      -- `if:` followed by an indented block of conditions, then `then:`
-      bump
-      let n ← peekT
-      let cs ← parseIndented n.col
-      expectKw "then"
-      pure cs
-    else do
-      expectSym "("
-      let (items, _) ← parseParenItems
-      pure items
-  let thenE ← if (← peekT).isKw "then" then do bump; parseBranch stop else parseBody stop
-  let e ← peekT
-  -- an `else` that starts a line belongs to the `if` whose line has its
-  -- indentation, not to a more indented one (#159)
-  if e.isKw "else" && !(e.bol && e.col < ifLine) then
+  -- (an `else` that starts a line belongs to the `if` whose line has its
+  -- indentation, not to a more indented one, #159)
+  let elseNext : PM Bool := do
+    let e ← peekT
+    return e.isKw "else" && !(e.bol && e.col < ifLine)
+  let withElse (conds : List SExpr) (thenE : SExpr) : PM SExpr := do
+    if !(← elseNext) then return .ite t.pos conds thenE none
     bump
     if (← peekT).isKw "if" then return .ite t.pos conds thenE (some (← parseIf stop))
     return .ite t.pos conds thenE (some (← parseBranch stop))
-  return .ite t.pos conds thenE none
+  let o ← peekT
+  if o.isSym "(" then
+    bump
+    let (conds, _) ← parseParenItems
+    let thenE ← if (← peekT).isKw "then" then do bump; parseBranch stop else parseBody stop
+    return ← withElse conds thenE
+  if !o.startsBody then perr o s!"expected '(', '\{', ':' or '.' after if, found {o.tok.describe}"
+  let cs ← parseClauses "if" parseExpr stop
+  if cs.isEmpty then perr o "'if{}' needs a clause"
+  if (← peekT).isKw "then" then
+    bump
+    return ← withElse cs (← parseBranch stop)
+  if ← elseNext then
+    let (cs, v) := clausesValue cs
+    return ← withElse cs v
+  noMacroBody "if" (← peekT) "its value is its last clause's; write 'if (…):' for a body"
+  return .ite t.pos cs (.block o.pos []) none
 
 /-- One `for` clause: a generator, a binding, or a filter (an expression
     ends at a line starting at column `stop` or before). -/
@@ -716,32 +730,38 @@ partial def parseClause (stop : Nat := 0) : PM SExpr := do
     else parseExpr stop
   | none => parseExpr stop
 
+/-- `for`: its clauses in parentheses, then a body or `do` and a branch; or
+    its clauses as `{…}`, `:` and a block, or `.` and an expression
+    (`parseClauses`), then `do` and a branch, or nothing: the clause macro
+    `for{c}`, the value of `c`'s last clause for each way the clauses
+    succeed. -/
 partial def parseFor (stop : Nat) : PM SExpr := do
   let t ← peekT
   bump
-  if (← peekT).isSym "{" then
-    -- `for{c}`: the value of `c`'s last clause, for each
-    -- way the clauses succeed
-    let b ← peekT
+  let o ← peekT
+  if o.isSym "(" then
     bump
-    let cs ← parseBracedItems (fun c => parseClause c)
-    if cs.isEmpty then perr b "'for{}' needs a generator"
-    noMacroBody "for" (← peekT) "its value is its last clause's; write 'for (…):' for a body"
-    let (cs, v) := clausesValue cs
-    return .forE t.pos cs v
-  expectSym "("
-  let mut clauses := #[]
-  if !(← peekT).isSym ")" then
-    clauses := clauses.push (← parseClause)
-    repeat
-      let s ← peekT
-      if s.isSym "," || s.isSym ";" then bump; clauses := clauses.push (← parseClause)
-      else if s.isSym ")" then break
-      else if s.bol then clauses := clauses.push (← parseClause)
-      else perr s s!"expected ',' or ')' in for clauses, found {s.tok.describe}"
-  expectSym ")"
-  let body ← if (← peekT).isKw "do" then do bump; parseBranch stop else parseBody stop
-  return .forE t.pos clauses.toList body
+    let mut clauses := #[]
+    if !(← peekT).isSym ")" then
+      clauses := clauses.push (← parseClause)
+      repeat
+        let s ← peekT
+        if s.isSym "," || s.isSym ";" then bump; clauses := clauses.push (← parseClause)
+        else if s.isSym ")" then break
+        else if s.bol then clauses := clauses.push (← parseClause)
+        else perr s s!"expected ',' or ')' in for clauses, found {s.tok.describe}"
+    expectSym ")"
+    let body ← if (← peekT).isKw "do" then do bump; parseBranch stop else parseBody stop
+    return .forE t.pos clauses.toList body
+  if !o.startsBody then perr o s!"expected '(', '\{', ':' or '.' after for, found {o.tok.describe}"
+  let cs ← parseClauses "for" (fun c => parseClause c) stop
+  if cs.isEmpty then perr o "'for{}' needs a generator"
+  if (← peekT).isKw "do" then
+    bump
+    return .forE t.pos cs (← parseBranch stop)
+  noMacroBody "for" (← peekT) "its value is its last clause's; write 'for (…):' for a body"
+  let (cs, v) := clausesValue cs
+  return .forE t.pos cs v
 
 partial def parseCase (stop : Nat) : PM SExpr := do
   let t ← peekT
