@@ -224,9 +224,11 @@ partial def _root_.OpenVerse.Front.STy.fnShapes : STy → List Shape
   | .tup ts | .app _ ts => ts.flatMap STy.fnShapes
   | .map a b => a.fnShapes ++ b.fnShapes
   | .fn ps es r =>
-    -- (a type both <decides> and <suspends> has none: `resolveTy` refuses it)
+    -- (a type both <decides> and <suspends>, or naming a parameter twice,
+    -- has none: `resolveTy` refuses it)
     let s := (fnTyShape ps es r).1
-    (if s.decides && s.suspends then [] else [s]) ++ ps.flatMap STy.fnShapes ++ r.fnShapes
+    (if s.decides && s.suspends || s.named.eraseDups.length != s.named.length then [] else [s]) ++
+      ps.flatMap STy.fnShapes ++ r.fnShapes
 
 /-- The type names an expression mentions: in its types and constructions. -/
 partial def _root_.OpenVerse.Front.SExpr.tyNames : SExpr → List String

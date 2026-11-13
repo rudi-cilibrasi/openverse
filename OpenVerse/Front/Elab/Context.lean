@@ -854,9 +854,12 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .fn ps es r => do
     if es.contains "decides" && es.contains "suspends" then
       eerr p "a function type cannot be both <suspends> and <decides>, which exclude each other"
-    let (sh, ts, r) := FnValues.fnTyShape ps es r
-    if let some n := sh.named.find? fun n => (sh.named.filter (· == n)).length > 1 then
+    let named := ps.filterMap fun q => q.asNamedParam?.map (·.1)
+    if (ps.drop (ps.length - named.length)).any (·.asNamedParam?.isNone) then
+      eerr p "in a function type, every parameter after a named one must be named"
+    if let some n := named.find? fun n => (named.filter (· == n)).length > 1 then
       eerr p s!"a function type names its parameter ?{n} twice"
+    let (sh, ts, r) := FnValues.fnTyShape ps es r
     resolveTy env p (.app sh.name (ts ++ [r]))
   | .map k v => do
     let kt ← resolveTy env p k

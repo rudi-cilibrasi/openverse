@@ -189,8 +189,7 @@ partial def parseTypeAtom : PM STy := do
         -- (`?N:t` is a named parameter, whose name is part of the type,
         -- and `?N:t = e` one a caller may omit: the type does not include
         -- `e`, Book of Verse ch. 6, #503)
-        let q ← peekT
-        if q.isSym "?" then
+        if (← peekT).isSym "?" then
           bump
           let n ← expectIdent
           expectSym ":"
@@ -209,8 +208,6 @@ partial def parseTypeAtom : PM STy := do
               bump
           ps := ps.push (STy.namedParam n optional t)
         else
-          if ps.any (·.asNamedParam?.isSome) then
-            perr q "in a function type, every parameter after a named one must be named"
           -- (a positional parameter may be named, `X:t`; the name is not
           -- part of the type)
           if ((← peekT).identName?).isSome && (← peekT 1).isSym ":" then bump
