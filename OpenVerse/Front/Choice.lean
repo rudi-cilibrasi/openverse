@@ -1758,8 +1758,7 @@ def eagerWhy : String :=
   "such a function must be <computes>, keep no local state, and reach nothing that prints or calls Err(), " ++
   "as all its values are computed at a call (#235), unless it is taken lazily: clauses, then a choice whose " ++
   "alternatives are values, calls of its recursive group, or such a call or a choice with code after it that may " ++
-  "reach another, not in a loop, which would take a call's values while its own are taken, nor in a field of a " ++
-  "class's or a generic struct's construction (#246, #283)"
+  "reach another, not in a field of a class's or a generic struct's construction (#246, #283)"
 
 /-- (#283) Whether an alternative in normal form (`normAlt`) is one the
     lazy machine takes: its prefix plain, a choice's alternatives such again,
@@ -3453,8 +3452,9 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
     Its `code` is an `if`'s conditions (`conds`), or the clauses of the
     operand of `not`, `option{…}`, `logic{…}`, `first{…}` or the left of
     `or`, its last one binding the operand's value, whose first success is
-    taken (`first`). `outs` are what it gives the code after it: the names
-    the conditions bind, or the value's name. -/
+    taken (`first`); or a `for` bound to a name, which takes them all. `outs`
+    are what it gives the code after it: the names the conditions bind, or
+    the value's name. -/
 structure Consumer where
   pos : Pos
   code : List SExpr
@@ -3472,7 +3472,7 @@ def valueOf (p : Pos) (v : String) (cs : List SExpr) : List SExpr × String :=
 
 /-- (#283) Each outermost consumer in `e` (`Consumer`) of a call that `has`
     sees, replaced by what `f` gives: an `if`'s conditions, or the clauses of
-    a block in place of the operand. -/
+    a block in place of the operand or of the `for`. -/
 partial def mapConsumersM [Monad m] (has : SExpr → Bool) (f : Consumer → m (List SExpr)) (e : SExpr) : m SExpr := do
   let go := mapConsumersM has f
   let operand (q : Pos) (x : SExpr) : m SExpr := do
@@ -3489,6 +3489,10 @@ partial def mapConsumersM [Monad m] (has : SExpr → Bool) (f : Consumer → m (
   | .logicLit p x => if has x then return .logicLit p (← operand p x) else descendM go e
   | .app p (.ident q "$first") [x] false =>
     if has x then return .app p (.ident q "$first") [← operand p x] false else descendM go e
+  | .forE p .. =>
+    if !has e then descendM go e else
+    let v := s!"$nest{p.line}_{p.col}v"
+    return .block p (← f { pos := p, code := [.decl p v none false e], first := false, conds := false, outs := [v] })
   | e => descendM go e
 
 /-- (#283) The key of a consumer's name `n` in the types an elaboration
@@ -3507,7 +3511,7 @@ def Consumer.caps (c : Consumer) (f : MFn) : List String :=
     each a call of it, a plain one: so a consumer in a group's code is a
     consumer like any other, and its own nested one a call of itself. The
     function's body is the consumer as written: its clauses under `first{…}`
-    (`<decides>`), then the tuple of what it gives (`outs`),
+    (`<decides>`), or its `for`, then the tuple of what it gives (`outs`),
     the final values of the function's `var`s it sets (copied in as
     `FirstLift`'s are) and `true`. It takes the names it uses from the
     function's code, at the types an earlier elaboration noted (`ty`), and
@@ -3553,8 +3557,8 @@ def nestFns (g : String) (f : MFn) (has : SExpr → Bool) (ty : Pos → String �
 /-- (#283) The body of a function `f` whose consumers' types are not noted
     yet, for checking only: as `checkBody`, with each consumer noting the
     types of the names it takes and gives (`$noteTypes`, where they are all
-    in scope: after an `if`'s conditions, or after the operand's value is
-    bound). -/
+    in scope: after an `if`'s conditions, or after the operand's or the
+    `for`'s value is bound). -/
 def noteConsumers (f : MFn) (has : SExpr → Bool) : SExpr :=
   let note (c : Consumer) : Id (List SExpr) :=
     let mark := SExpr.app c.pos (.ident c.pos "$noteTypes")

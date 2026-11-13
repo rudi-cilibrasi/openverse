@@ -1,0 +1,33 @@
+sum 1 1
+sum 2 3
+v 3
+v 4
+sum 1 1
+sum 2 3
+taken 4
+count 1 1
+count 2 0
+v 0
+v 2
+count 1 1
+count 2 0
+taken 2
+body 1 1
+body 2 1
+v 1
+v 2
+body 1 1
+body 2 1
+taken 2
+v 33
+v 330
+each 1 1 10
+each 1 1 20
+v 11
+each 1 2 10
+each 1 2 20
+v 21
+each 1 2 10
+each 1 2 20
+taken 21
+exit=0

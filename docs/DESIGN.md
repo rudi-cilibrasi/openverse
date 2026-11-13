@@ -956,19 +956,21 @@ code after it, which is its frame.
 **Consumers in a group's own code (#283).** A call of a function with
 several values, the group's or another's, in a failure context of the
 group's code (an `if`'s conditions; the operand of `not`, `option{…}`,
-`logic{…}` or `first{…}`; the left of `or`) is no choice point of the group:
-that context consumes the call, taking its first success while the group's
-values are being taken. The group's code is a template inlined where it is
+`logic{…}` or `first{…}`; the left of `or`) or in a `for` of it is no choice
+point of the group: that context consumes the call, taking its first success
+(or the `for` all its values) while the group's values are being taken. The group's code is a template inlined where it is
 consumed, so such a consumer would need the template inside itself. It is a
 consumer like any other instead, in a function of its own:
 - `inlineFns` (for a group taken lazily, one not computable) makes each
   outermost one a function, `G$nestL_C` (`Choice.nestFns`), whose body is the
   consumer as written: its clauses under `first{…}`, giving the names they
-  bind (an operand's value bound to a name, `valueOf`), then the final values
-  of the group's `var`s they set, copied in as `$in` parameters as
-  `FirstLift`'s are. It is `<decides>`, with the group's effects. The group's
-  code calls it where the consumer was, a plain call, binds those names from
-  its result and sets those `var`s again.
+  bind (an operand's value bound to a name, `valueOf`), or the `for`, giving
+  its value; then the final values of the group's `var`s they set, copied in
+  as `$in` parameters as `FirstLift`'s are. It has the group's effects,
+  `<decides>` for a condition's and not for a `for`'s. The group's code calls
+  it where the consumer was, a plain call, binds those names from its result
+  and sets those `var`s again. A `for` with such a call anywhere in it moves
+  whole, so a condition in its body with one moves with it.
 - There the call is compiled as any consumer compiles one: inlined, taken by
   the lazy loop, or by `FirstLift`'s functions where it has effects; and the
   group's code in it calls the same function again. So a group whose only
@@ -991,8 +993,6 @@ consumer like any other instead, in a function of its own:
   compile byte for byte as before.
 
 Not yet (#283), each refused with a message, and the route each would take:
-- A call of the group in a loop of its own code (a `for`'s clauses): the
-  same consumer, of all its values, in a function of its own.
 - A construction of a class or a generic struct with a point in a field:
   the lifter keeps those (`$noLift`) for any choice, as their fields'
   order is known only to the elaborator.
