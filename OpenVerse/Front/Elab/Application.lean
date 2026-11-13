@@ -1,5 +1,5 @@
 /- Elaboration application; public declarations retain OpenVerse.Front names. -/
-import OpenVerse.Front.Elab.Control
+import OpenVerse.Front.Elab.Builtins
 import OpenVerse.Front.TypeValues
 
 namespace OpenVerse.Front
@@ -51,16 +51,6 @@ partial def elabExtensionCallWith
     else extCall
   return some ⟨.seq (.assign slot r.e) rc.e, rc.ty⟩
 
-/-- `comparable(X)`: `X` boxed as a `comparable` (Book of Verse ch. 11,
-    `comparable(15) = comparable(15)`). -/
-def elabComparableWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p : Pos)
-    (args : List SExpr) : EM R := do
-  let [a] := args | eerr p "comparable(…) takes one value"
-  let r ← elabE ctx a none
-  if !isComparable ctx.types r.ty then
-    eerr a.pos (notComparable ctx.types r.ty "the value of comparable(…)")
-  return ⟨← coerce a.pos r .dyn, .dyn⟩
-
 set_option maxHeartbeats 800000 in
 /-- `t(X)` (`elabAppBaseWith`): `X` converted to the type `t`, a value of a
     type that is a subtype of it, then of `t` (Book of Verse tests,
@@ -90,8 +80,6 @@ partial def elabAppBaseWith
     (elabMember : Ctx → Pos → R → String → optParam (Option Ty) none → EM R)
     (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (bracket : Bool)
     (exp : Option Ty) : EM R := do
-  let needBracket (name : String) : EM Unit := do
-    if !bracket then eerr p s!"{name} can fail: call it with {name}[…]"
   let indexLike (source : SExpr) (value : R) : EM R := do
     if !ctx.typeOnly && ctx.isTypeValue source then
       let view ← match ctx.callableView source.pos value.ty with
@@ -157,409 +145,140 @@ partial def elabAppBaseWith
         ctx.noteOverload p name o
         elabApp ctx p (.ident p o) args bracket exp) args
     else
-    -- (a soft built-in the program defines is the program's; `$F` is the
-    -- built-in `F` whatever the program defines, as a prelude or a
-    -- built-in's value definition calls it)
-    let hidden := (name.drop 1).toString
-    let builtinName :=
-      if name.startsWith "$" && (builtins.contains hidden || softBuiltins.contains hidden) then hidden
-      else if (softBuiltins.contains name || name == "any") && (ctx.sig? name).isSome then "$program" else name
-    let name := if builtinName == "$program" then name else builtinName
-    match builtinName with
-    | "Concatenate" =>
-      -- (#150) an array of arrays flattened, or several arrays one after
-      -- the other (as a tuple of them converts to an array of arrays)
-      match args with
-      | [] => match exp with
-        | some (.arr t) => return ⟨.lit Value.emptyArray, .arr t⟩
-        | _ => eerr p "Concatenate() needs an expected array type"
-      | [a] =>
-        let r ← elabE ctx a (match exp with | some t => some (.arr t) | none => none)
-        let r ← elabArrayArgumentWith elabE ctx a.pos r 2 "Concatenate"
-        match r.ty with
-        | .arr (.arr t) =>
-          -- (through a typed temporary: an empty literal has no type of its own)
-          let tv ← fresh r.ty
-          return ⟨.seq (.assign tv r.e) (.prim .flatten [.local tv]), .arr t⟩
-        | t => eerr p s!"Concatenate takes arrays, or an array of arrays, found {t.show}"
-      | a :: rest =>
-        let r0 ← elabE ctx a exp
-        let r0 ← elabArrayArgumentWith elabE ctx a.pos r0 1 "Concatenate"
-        let .arr t := r0.ty | eerr a.pos s!"Concatenate takes arrays, found {r0.ty.show}"
-        let mut acc := r0.e
-        for b in rest do
-          let rb ← elabE ctx b (some (.arr t))
-          acc := p2 .concat acc (← elabArgumentCoerceWith elabE ctx b.pos rb (.arr t))
-        return ⟨acc, .arr t⟩
-    | "any" =>
-      -- `any(X)`: X as an `any` (#138), evaluated
-      let [a] := args | eerr p "any(…) takes one value"
-      let r ← elabE ctx a none
-      return ⟨← coerce a.pos r .any, .any⟩
-    | "comparable" => elabComparableWith elabE ctx p args
-    | "Print" =>
-      let es ← elabArgs ctx p args [Ty.string]
-      return ⟨.print es.head!, .void⟩
-    | "ConcatenateMaps" =>
-      -- the entries of every map laid down in turn, a later map's pair
-      -- replacing an earlier one's of its key, at its own place (the Book of
-      -- Verse's API reference: "the entries are laid down left first, then
-      -- right, and a map keeps only the last value given for a key";
-      -- `Tests/Intrinsics/ConcatenateMaps.versetest` 21, 33: the later map's
-      -- order): the first copied, then for each other the pairs kept whose
-      -- key it does not have, then its pairs
-      -- (two maps, the Book of Verse's ch. 3: "It takes exactly two maps";
-      -- more are merged by chained calls)
-      if args.length != 2 then
-        eerr p s!"ConcatenateMaps takes two maps, not {args.length} (to merge more, chain the calls: ConcatenateMaps(ConcatenateMaps(A, B), C))"
-      let some a0 := args.head? | eerr p "ConcatenateMaps takes two maps"
-      -- the maps' type: the expected one, else the first argument's that has
-      -- one alone (an empty map{} has none)
-      let mapExp : Option Ty ← match exp with
-        | some t@(.map ..) => pure (some t)
-        | _ =>
-          let st ← get
-          let mut found : Option Ty := none
-          for a in args do
-            if found.isNone then
-              found ← tryCatch (do
-                let r ← elabE ctx a none
-                let r ← elabContainerReceiverWith elabE ctx a.pos r (fun | .map .. => true | _ => false) "ConcatenateMaps"
-                pure (match r.ty with | t@(.map ..) => some t | _ => none))
-                (fun _ => pure none)
-          set st
-          pure found
-      let mut rs : Array R := #[]
-      let mut jt? : Option Ty := none
-      for a in args do
-        let r ← elabE ctx a mapExp
-        let r ← elabContainerReceiverWith elabE ctx a.pos r (fun | .map .. => true | _ => false) "ConcatenateMaps"
-        let .map _ _ := r.ty | eerr a.pos s!"ConcatenateMaps takes maps, not {r.ty.show}"
-        match jt? with
-        | none => jt? := some r.ty
-        | some j =>
-          let j' ← tryCatch (join a.pos j r.ty mapExp) (fun _ =>
-            match SubtypeEvidence.joinView? ctx.types ctx.evidenceTypes [j, r.ty] mapExp with
-            | some target => pure target
-            | none => eerr a.pos s!"ConcatenateMaps takes maps of one type, not {j.show} and {r.ty.show}")
-          jt? := some j'
-        rs := rs.push r
-      let some jt := jt? | eerr p "ConcatenateMaps takes at least one map"
-      let .map kt vt := jt | eerr p s!"ConcatenateMaps takes maps, not {jt.show}"
-      let tm ← fresh jt
-      let some r0 := rs[0]? | eerr p "ConcatenateMaps takes at least one map"
-      let mut code : Expr := .assign tm (← elabArgumentCoerceWith elabE ctx a0.pos r0 jt)
-      for (r, a) in rs.toList.tail.zip args.tail do
-        let ts ← fresh jt
-        let tpair ← fresh (.tup [kt, vt])
-        let tk ← fresh kt
-        let tq ← fresh (.tup [kt, vt])
-        -- (a pair stays, at its place, when the later map has no pair of its key)
-        let absent := Expr.notE (.seq (.assign tk (.prim (.tupGet 0) [.local tpair])) (mapLookup ts tk tq))
-        let kept := Expr.forE tpair (.local tm) absent (.local tpair)
-        code := .seq code (.seq (.assign ts (← elabArgumentCoerceWith elabE ctx a.pos r jt))
-          (.assign tm (.prim .concat [kept, .local ts])))
-      return ⟨.seq code (.local tm), jt⟩
-    | "ToString" =>
-      match args with
-      | [a] => return ⟨← elabToStringWith elabE ctx p (← elabE ctx a none), Ty.string⟩
-      | _ => eerr p "ToString takes one argument"
-    | "Abs" =>
-      -- (of a float, #127; each argument elaborated once)
-      match args with
-      | [a] =>
-        let r := widenR ctx.types (← elabArithmeticOperandWith elabE ctx p (← elabE ctx a none) name)
-        if r.ty == .float then return ⟨.prim .fabs [r.e], .float⟩
-        return ⟨.prim .abs [← coerce a.pos r .int], .int⟩
-      | _ => eerr p "Abs takes one argument"
-    | "Sqrt" | "Exp" | "Ln" | "Log" | "Pow" | "Sin" | "Cos" | "Tan" | "ArcSin" | "ArcCos" | "ArcTan"
-    | "IsFinite" | "Sinh" | "Cosh" | "Tanh" | "ArSinh" | "ArCosh" | "ArTanh" | "Lerp" =>
-      -- the mathematical functions of floats (#132); only IsFinite fails
-      if name == "IsFinite" then needBracket name
-      else if bracket then eerr p s!"{name} cannot fail: call it with {name}(…)"
-      if ["Sinh", "Cosh", "Tanh", "ArSinh", "ArCosh", "ArTanh", "Lerp"].contains name then
-        noteFx p ["reads"] (some name)
-      let fl (a : SExpr) : EM Expr := do
-        let r := widenR ctx.types (← elabE ctx a (some .float))
-        if r.ty != .float then eerr a.pos s!"{name} takes floats, found {r.ty.show}"
-        return r.e
-      let unary : String → Option Prim
-        | "Sqrt" => some .fsqrt | "Exp" => some .fexp | "Ln" => some .fln | "Sin" => some .fsin
-        | "Cos" => some .fcos | "Tan" => some .ftan | "ArcSin" => some .fasin | "ArcCos" => some .facos
-        | "ArcTan" => some .fatan | "IsFinite" => some .fisFinite
-        | "Sinh" => some .fsinh | "Cosh" => some .fcosh | "Tanh" => some .ftanh
-        | "ArSinh" => some .fasinh | "ArCosh" => some .facosh | "ArTanh" => some .fatanh
-        | _ => none
-      match name, args with
-      | "Lerp", [a, b, parameter] =>
-        let ta ← fresh .float
-        let ea ← fl a
-        let tb ← fresh .float
-        let eb ← fl b
-        let tp ← fresh .float
-        let ep ← fl parameter
-        let one := Expr.lit (.float 0x3FF0000000000000)
-        let blend := p2 .fadd (p2 .fmul (.local ta) (p2 .fsub one (.local tp)))
-          (p2 .fmul (.local tb) (.local tp))
-        return ⟨.seq (.assign ta ea) (.seq (.assign tb eb) (.seq (.assign tp ep) blend)), .float⟩
-      | "Pow", [a, b] => return ⟨p2 .fpow (← fl a) (← fl b), .float⟩
-      | "ArcTan", [y, x] => return ⟨p2 .fatan2 (← fl y) (← fl x), .float⟩
-      | "Log", [b, x] =>
-        -- (`Log(Base, X)` is `Ln(X) / Ln(Base)`, the base evaluated first)
-        let tb ← fresh .float
-        let eb ← fl b
-        let ex ← fl x
-        return ⟨.seq (.assign tb eb) (p2 .fdiv (.prim .fln [ex]) (.prim .fln [.local tb])), .float⟩
-      | n, [a] =>
-        match unary n with
-        | some op => return ⟨.prim op [← fl a], .float⟩
-        | none => eerr p s!"{name} takes {if name == "Lerp" then "three" else "two"} floats"
-      | _, _ => eerr p s!"{name} takes {if name == "Lerp" then "three floats" else if name == "Pow" || name == "Log" then "two floats" else if name == "ArcTan" then "one or two floats" else "one float"}"
-    | "Round" | "Int" =>
-      -- a float to an int (#127): `Round` ties to even, `Int` towards zero;
-      -- failing on NaN, an infinity or out of range
-      needBracket name
-      match args with
-      | [a] =>
-        let r := widenR ctx.types (← elabE ctx a (some .float))
-        if r.ty != .float then eerr p s!"{name} takes a float, found {r.ty.show}"
-        return ⟨.prim (if name == "Round" then .fround else .ftrunc) [r.e], .int⟩
-      | _ => eerr p s!"{name} takes one argument"
-    | "Floor" | "Ceil" =>
-      -- (of a float, #127: failable, so with brackets; of a rational or
-      -- an int, with either, as the Book writes both)
-      let ofFloat (r : R) : EM R := do
-        if !bracket then eerr p s!"{name} of a float can fail: call it with {name}[…]"
-        return ⟨.prim (if name == "Floor" then .ffloor else .fceil) [r.e], .int⟩
-      match args with
-      | [.bin bp "/" a b] =>
-        let ra := widenR ctx.types (← elabArithmeticOperandWith elabE ctx bp (← elabE ctx a none) name)
-        let rb := widenR ctx.types (← elabArithmeticOperandWith elabE ctx bp
-          (← elabE ctx b (if ra.ty == .float then some .float else none)) name)
-        if ra.ty == .float && rb.ty == .float then return ← ofFloat ⟨p2 .fdiv ra.e rb.e, .float⟩
-        if ra.ty == .float || rb.ty == .float then
-          eerr bp s!"no operator '/' for {ra.ty.show} and {rb.ty.show} (an int is not a float: write X * 1.0)"
-        if ra.ty == .rational || rb.ty == .rational then
-          return ⟨← roundRational (name == "Ceil") (← rationalBinary bp .quotient ra rb), .int⟩
-        let es := [← coerce a.pos ra .int, ← coerce b.pos rb .int]
-        return ⟨.prim (if name == "Floor" then .floorDiv else .ceilDiv) es, .int⟩
-      | [e] =>
-        -- (of a rational, #116: its denominator is positive, so this never
-        -- fails; of an int, the int)
-        let r := widenR ctx.types (← elabArithmeticOperandWith elabE ctx p (← elabE ctx e none) name)
-        match r.ty with
-        | .int => return r
-        | .float => ofFloat r
-        | .rational =>
-          return ⟨← roundRational (name == "Ceil") r.e, .int⟩
-        | t => eerr p s!"{name} takes a rational or an int, found {t.show}"
-      | _ => eerr p s!"{name} takes one argument"
-    | "Quotient" => needBracket name; return ⟨.prim .quotient (← elabInts ctx p args), .int⟩
-    | "Mod" => needBracket name; return ⟨.prim .modulo (← elabInts ctx p args), .int⟩
-    | "Min" | "Max" =>
-      -- (of floats, #127: NaN when either is)
-      -- (each argument elaborated once)
-      let [a, b] := args | eerr p s!"{name} takes two arguments"
-      let ra := widenR ctx.types (← elabArithmeticOperandWith elabE ctx p (← elabE ctx a none) name)
-      let rb := widenR ctx.types (← elabArithmeticOperandWith elabE ctx p
-        (← elabE ctx b (if ra.ty == .float || ra.ty == .int then some ra.ty else none)) name)
-      if ra.ty == .float then
-        if rb.ty != .float then eerr p s!"{name} takes two floats or two ints, found float and {rb.ty.show}"
-        return ⟨p2 (if name == "Min" then .fmin else .fmax) ra.e rb.e, .float⟩
-      let es := [← coerce a.pos ra .int, ← coerce b.pos rb .int]
-      let ta ← fresh .int
-      let tb ← fresh .int
-      let op := if name == "Min" then Prim.le else Prim.ge
-      return ⟨.seq (.assign ta es[0]!) (.seq (.assign tb es[1]!)
-        (.ite (p2 op (.local ta) (.local tb)) (.local ta) (.local tb))), .int⟩
-    | "Clamp" | "Sgn" =>
-      -- (the Book's Runtime API and Epic's: `Clamp(Val, A, B)`, the median of
-      -- the three, so the order of A and B does not matter, of ints or of
-      -- floats, among which NaN orders above +Inf; `Sgn(X)`, -1, 0 or 1 of
-      -- an int or a float, NaN of NaN; each argument evaluated once, in order)
-      if bracket then eerr p s!"{name} cannot fail: call it with {name}(…)"
-      let some a0 := args.head? | eerr p s!"{name} takes {if name == "Clamp" then "three arguments" else "one argument"}"
-      let r0 := widenR ctx.types (← elabArithmeticOperandWith elabE ctx p (← elabE ctx a0 none) name)
-      let isF := r0.ty == .float
-      let t : Ty := if isF then .float else .int
-      let operand (a : SExpr) (r : R) : EM Expr := do
-        if isF then
-          if r.ty != .float then eerr a.pos s!"{name} takes floats or ints, found float and {r.ty.show}"
-          return r.e
-        coerce a.pos r .int
-      let lit (i : Int) : Expr := .lit (if isF then .float (VFloat.canon (Float.ofInt i)) else .int i)
-      let ta ← fresh t
-      let ea ← operand a0 r0
-      match name, args with
-      | "Sgn", [_] =>
-        let (gt, lt) := if isF then (Prim.fgt, Prim.flt) else (Prim.gt, Prim.lt)
-        -- (NaN, and zero, are their own sign)
-        return ⟨.seq (.assign ta ea) (.ite (p2 gt (.local ta) (lit 0)) (lit 1)
-          (.ite (p2 lt (.local ta) (lit 0)) (lit (-1)) (.local ta))), t⟩
-      | "Clamp", [_, a, b] =>
-        let ra := widenR ctx.types (← elabE ctx a (some t))
-        let tb ← fresh t
-        let ea' ← operand a ra
-        let rb := widenR ctx.types (← elabE ctx b (some t))
-        let tc ← fresh t
-        let eb ← operand b rb
-        -- `X ≤ Y`, NaN above every float: X ≤ Y (Verse Core's `fle`, which
-        -- holds of a NaN and itself), or Y is NaN (not ≤ +Inf)
-        let le (x y : Nat) : Expr :=
-          if isF then .ite (p2 .fle (.local x) (.local y)) (.local x)
-            (.ite (p2 .fle (.local y) (.lit (.float 0x7FF0000000000000))) (.prim .fail []) (.local x))
-          else p2 .le (.local x) (.local y)
-        let (lo, hi, m) := (← fresh t, ← fresh t, ← fresh t)
-        let pick (c : Expr) (x y : Nat) : Expr := .ite c (.local x) (.local y)
-        return ⟨.seq (.assign ta ea) (.seq (.assign tb ea') (.seq (.assign tc eb)
-          (.seq (.assign lo (pick (le tb tc) tb tc)) (.seq (.assign hi (pick (le tb tc) tc tb))
-          (.seq (.assign m (pick (le ta hi) ta hi)) (pick (le lo m) m lo)))))), t⟩
-      | _, _ => eerr p s!"{name} takes {if name == "Clamp" then "three arguments" else "one argument"}"
-    | "Err" =>
-      modify fun st => if st.errAt.isNone then { st with errAt := some p } else st
-      return ⟨.prim .userErr [], .never⟩
-    | "$Show" =>
-      -- the entry of `openverse run FILE do EXPR`: print the value when it
-      -- has a ToString, else just evaluate it
-      match args with
-      | [a] =>
-        let r := widenR ctx.types (← elabPrintableValueWith elabE ctx p (← elabE ctx a none))
-        match r.ty with
-        | .int | .char | .char32 | .float | .arr .char => return ⟨.print (← toStringOf p r), .void⟩
-        | _ => return ⟨← discardValue r, .void⟩
-      | _ => eerr p "internal: $Show"
-    | _ =>
-      -- `Sleep` (#156): the concurrency helpers' unless the program has its own
-      let name := if name == "Sleep" && (ctx.sig? "Sleep").isNone then "$Sleep" else name
-      if name == "$Sleep" && (ctx.sig? name).isNone then
-        eerr p "Sleep suspends: it can only be called in a <suspends> function (#156)"
-      match ctx.sig? name with
-      | some s =>
-        -- a call has its callee's effects
-        noteFx p s.fx (some (if s.isConst then s!"uses the constant {name}" else s!"calls {name}"))
-        if s.isConst then
-          indexLike f ⟨.call s.idx [], s.ret⟩
-        else
-          let args := packCallArgs p s args
-          if s.decides && !bracket then eerr p s!"{name} is <decides>: call it with {name}[…]"
-          -- the call syntax marks failure (Book of Verse §8.1)
-          if !s.decides && bracket then eerr p s!"{name} cannot fail: call it with {name}(…)"
-          if s.suspends then
-            let shown := if name == "$EvAwait" then "Await"
-              else if name.startsWith "$" then (name.drop 1).toString else name
-            if !ctx.suspends then eerr p s!"{shown} suspends: it can only be called in a <suspends> function (#156)"
-            if ctx.inDefer then eerr p s!"{shown} suspends, and a defer cannot suspend (#156)"
-            if ctx.canFail then eerr p s!"{shown} suspends, and a failure context (a condition, a filter, or a <decides> call's arguments) cannot (#156)"
-          if !s.tparams.isEmpty then
-            let r ← elabGenericCall ctx p s args exp
-            if s.suspends then return ⟨← withDeferMark ctx r.e, r.ty⟩ else return r
-          let isNamed : SExpr → Bool
-            | .decl _ n _ _ _ => n.startsWith "?"
-            | _ => false
-          -- (a suspension point records the defers active there, #156)
-          let mark (e : Expr) : EM Expr := if s.suspends then withDeferMark ctx e else pure e
-          if s.named.isEmpty && !args.any isNamed then
-            if args.length == 1 && s.params.length > 1 then
-              for k in List.range s.params.length do ctx.checkArgumentRole s args[0]! k
-            else
-              for (argument, index) in args.zipIdx do
-                ctx.checkArgumentRole s argument (if s.params.length == 1 then 0 else index)
-            -- a tuple for several parameters is expanded into them (Book of
-            -- Verse ch. 3: `Describe(MyTuple)` is `Describe(1, "two")`)
-            if let [a] := args then
-              if s.params.length > 1 then
-                let r ← elabE ctx a (some (.tup s.params))
-                if let .tup ts := r.ty then
-                  if ts.length == s.params.length then
-                    let tt ← fresh r.ty
-                    -- (an element that never gives a value left before the
-                    -- call: `Err()` in its place, of every type, #290)
-                    let parts ← ((s.params.zip ts).zip (List.range ts.length)).mapM fun ((pt, et), i) =>
-                      if et == .never then pure (.prim .userErr [])
-                      else coerce a.pos ⟨.prim (.tupGet i) [.local tt], et⟩ pt
-                    return ⟨← mark (.seq (.assign tt r.e) (.call s.idx parts)), s.ret⟩
-                let (shown, off) := match name.splitOn "." with
-                  | [_, m] => if s.pnames.head? == some "Self" then (m, 1) else (name, 0)
-                  | _ => (name, 0)
-                eerr p s!"{shown} takes {s.params.length - off} argument(s), found 1 (of type {r.ty.show})"
-            -- several arguments for one array parameter make the array
-            -- (`Sum(1, 2, 3, 4)`, as a tuple converts to an array)
-            if let [.arr et] := s.params then
-              if args.length > 1 then
-                let es ← elabArgs ctx p args (args.map fun _ => et)
-                return ⟨← mark (.call s.idx [.prim .mkArr es]), s.ret⟩
-            let es ← elabArgs ctx p args s.params
-            return ⟨← mark (.call s.idx es), s.ret⟩
-          -- named arguments: evaluate positional arguments left to right, then named ones as
-          -- written, then the defaults of those omitted (Book of Verse §2.5), into temporaries
-          let npos := s.params.length - s.named.length
-          let pos := args.filter (!isNamed ·)
-          let named := args.filterMap fun a => match a with
-            | .decl ap n _ _ rhs => if n.startsWith "?" then some (ap, (n.drop 1).toString, rhs) else none
-            | _ => none
-          if pos.length != npos then
-            -- a method's receiver is its first positional argument
-            let (shown, off) := match name.splitOn "." with
-              | [_, m] => (m, 1)
-              | _ => (name, 0)
-            eerr p s!"{shown} takes {npos - off} positional argument(s), found {pos.length - off}"
-          for ((ap, n, _), i) in named.zip (List.range named.length) do
-            if (s.named.find? (·.1 == n)).isNone then eerr ap s!"{name} has no parameter ?{n}"
-            if (named.take i).any (·.2.1 == n) then eerr ap s!"?{n} is given twice"
-          let ptys := s.params.toArray
-          let mut steps : Array Expr := #[]
-          let mut slots : Array (Option Nat) := Array.replicate s.params.length none
-          for (a, k) in pos.zip (List.range npos) do
-            ctx.checkArgumentRole s a k
+    let (builtin, name) := builtinCalled ctx name
+    if let some b := builtinFunctions.find? (·.name == builtin) then
+      return ← b.elaborate { elabE, elabArgs, elabInts, ctx, p, name, arity := b.arity, args, bracket, exp }
+    -- `Sleep` (#156): the concurrency helpers' unless the program has its own
+    let name := if name == "Sleep" && (ctx.sig? "Sleep").isNone then "$Sleep" else name
+    if name == "$Sleep" && (ctx.sig? name).isNone then
+      eerr p "Sleep suspends: it can only be called in a <suspends> function (#156)"
+    match ctx.sig? name with
+    | some s =>
+      -- a call has its callee's effects
+      noteFx p s.fx (some (if s.isConst then s!"uses the constant {name}" else s!"calls {name}"))
+      if s.isConst then
+        indexLike f ⟨.call s.idx [], s.ret⟩
+      else
+        let args := packCallArgs p s args
+        if s.decides && !bracket then eerr p s!"{name} is <decides>: call it with {name}[…]"
+        -- the call syntax marks failure (Book of Verse §8.1)
+        if !s.decides && bracket then eerr p s!"{name} cannot fail: call it with {name}(…)"
+        if s.suspends then
+          let shown := if name == "$EvAwait" then "Await"
+            else if name.startsWith "$" then (name.drop 1).toString else name
+          if !ctx.suspends then eerr p s!"{shown} suspends: it can only be called in a <suspends> function (#156)"
+          if ctx.inDefer then eerr p s!"{shown} suspends, and a defer cannot suspend (#156)"
+          if ctx.canFail then eerr p s!"{shown} suspends, and a failure context (a condition, a filter, or a <decides> call's arguments) cannot (#156)"
+        if !s.tparams.isEmpty then
+          let r ← elabGenericCall ctx p s args exp
+          if s.suspends then return ⟨← withDeferMark ctx r.e, r.ty⟩ else return r
+        let isNamed : SExpr → Bool
+          | .decl _ n _ _ _ => n.startsWith "?"
+          | _ => false
+        -- (a suspension point records the defers active there, #156)
+        let mark (e : Expr) : EM Expr := if s.suspends then withDeferMark ctx e else pure e
+        if s.named.isEmpty && !args.any isNamed then
+          if args.length == 1 && s.params.length > 1 then
+            for k in List.range s.params.length do ctx.checkArgumentRole s args[0]! k
+          else
+            for (argument, index) in args.zipIdx do
+              ctx.checkArgumentRole s argument (if s.params.length == 1 then 0 else index)
+          -- a tuple for several parameters is expanded into them (Book of
+          -- Verse ch. 3: `Describe(MyTuple)` is `Describe(1, "two")`)
+          if let [a] := args then
+            if s.params.length > 1 then
+              let r ← elabE ctx a (some (.tup s.params))
+              if let .tup ts := r.ty then
+                if ts.length == s.params.length then
+                  let tt ← fresh r.ty
+                  -- (an element that never gives a value left before the
+                  -- call: `Err()` in its place, of every type, #290)
+                  let parts ← ((s.params.zip ts).zip (List.range ts.length)).mapM fun ((pt, et), i) =>
+                    if et == .never then pure (.prim .userErr [])
+                    else coerce a.pos ⟨.prim (.tupGet i) [.local tt], et⟩ pt
+                  return ⟨← mark (.seq (.assign tt r.e) (.call s.idx parts)), s.ret⟩
+              let (shown, off) := match name.splitOn "." with
+                | [_, m] => if s.pnames.head? == some "Self" then (m, 1) else (name, 0)
+                | _ => (name, 0)
+              eerr p s!"{shown} takes {s.params.length - off} argument(s), found 1 (of type {r.ty.show})"
+          -- several arguments for one array parameter make the array
+          -- (`Sum(1, 2, 3, 4)`, as a tuple converts to an array)
+          if let [.arr et] := s.params then
+            if args.length > 1 then
+              let es ← elabArgs ctx p args (args.map fun _ => et)
+              return ⟨← mark (.call s.idx [.prim .mkArr es]), s.ret⟩
+          let es ← elabArgs ctx p args s.params
+          return ⟨← mark (.call s.idx es), s.ret⟩
+        -- named arguments: evaluate positional arguments left to right, then named ones as
+        -- written, then the defaults of those omitted (Book of Verse §2.5), into temporaries
+        let npos := s.params.length - s.named.length
+        let pos := args.filter (!isNamed ·)
+        let named := args.filterMap fun a => match a with
+          | .decl ap n _ _ rhs => if n.startsWith "?" then some (ap, (n.drop 1).toString, rhs) else none
+          | _ => none
+        if pos.length != npos then
+          -- a method's receiver is its first positional argument
+          let (shown, off) := match name.splitOn "." with
+            | [_, m] => (m, 1)
+            | _ => (name, 0)
+          eerr p s!"{shown} takes {npos - off} positional argument(s), found {pos.length - off}"
+        for ((ap, n, _), i) in named.zip (List.range named.length) do
+          if (s.named.find? (·.1 == n)).isNone then eerr ap s!"{name} has no parameter ?{n}"
+          if (named.take i).any (·.2.1 == n) then eerr ap s!"?{n} is given twice"
+        let ptys := s.params.toArray
+        let mut steps : Array Expr := #[]
+        let mut slots : Array (Option Nat) := Array.replicate s.params.length none
+        for (a, k) in pos.zip (List.range npos) do
+          ctx.checkArgumentRole s a k
+          let t := ptys[k]!
+          let ta ← fresh t
+          steps := steps.push (.assign ta (← coerce a.pos (← elabE ctx a (some t)) t))
+          slots := slots.set! k (some ta)
+        for (ap, n, rhs) in named do
+          let k := npos + (s.named.findIdx? (·.1 == n)).get!
+          ctx.checkArgumentRole s rhs k
+          let t := ptys[k]!
+          let ta ← fresh t
+          steps := steps.push (.assign ta (← coerce ap (← elabE ctx rhs (some t)) t))
+          slots := slots.set! k (some ta)
+        for ((n, dflt), j) in s.named.zip (List.range s.named.length) do
+          let k := npos + j
+          if slots[k]!.isNone then
+            let some d := dflt | eerr p s!"{name} needs the argument ?{n}, which has no default"
             let t := ptys[k]!
             let ta ← fresh t
-            steps := steps.push (.assign ta (← coerce a.pos (← elabE ctx a (some t)) t))
+            -- (the default sees the parameters before it, in their temporaries)
+            let earlier : List Local := ((s.pnames.zip (List.range k)).filterMap fun (pn, j) =>
+              (slots[j]!).map fun sl => ({ name := pn, slot := sl, ty := ptys[j]!, mutable := false, typeValue := s.typeValues.contains j } : Local)).reverse
+            -- (a method's: its receiver's fields too, through `Self`; a
+            -- copy's in its interface's scope, as its body, #53)
+            let selfC : Option String :=
+              if s.pnames.head? == some "Self" then s.scope.orElse fun _ => (s.name.splitOn ".").head? else none
+            -- (its own context: no return or break into the caller, failure
+            -- only for a <decides> callee, and not its own default again)
+            let key := (s.name, s!"?{n}")
+            if ctx.defaults.contains key then
+              eerr p s!"the default of ?{n} of {name} uses itself (a call of {name} that omits ?{n})"
+            let dctx := { ctx with locals := earlier, selfClass := selfC,
+                                   selfMethod := if selfC.isSome then (s.name.splitOn ".").getLast? else none,
+                                   inParamDefault := true,
+                                   inLoop := false, canFail := ctx.canFail && s.decides,
+                                   inRollback := ctx.inRollback || ctx.canFail,
+                                   suspends := ctx.suspends && s.suspends,
+                                   defaults := key :: ctx.defaults }
+            dctx.checkArgumentRole s d k
+            let rd ← fxAt p (do coerce p (← elabE dctx d (some t)) t)
+            if !s.decides && rd.mayFail ctx.sigProg then
+              eerr p s!"the default of ?{n} of {name} can fail, but {name} is not <decides>"
+            steps := steps.push (.assign ta rd)
             slots := slots.set! k (some ta)
-          for (ap, n, rhs) in named do
-            let k := npos + (s.named.findIdx? (·.1 == n)).get!
-            ctx.checkArgumentRole s rhs k
-            let t := ptys[k]!
-            let ta ← fresh t
-            steps := steps.push (.assign ta (← coerce ap (← elabE ctx rhs (some t)) t))
-            slots := slots.set! k (some ta)
-          for ((n, dflt), j) in s.named.zip (List.range s.named.length) do
-            let k := npos + j
-            if slots[k]!.isNone then
-              let some d := dflt | eerr p s!"{name} needs the argument ?{n}, which has no default"
-              let t := ptys[k]!
-              let ta ← fresh t
-              -- (the default sees the parameters before it, in their temporaries)
-              let earlier : List Local := ((s.pnames.zip (List.range k)).filterMap fun (pn, j) =>
-                (slots[j]!).map fun sl => ({ name := pn, slot := sl, ty := ptys[j]!, mutable := false, typeValue := s.typeValues.contains j } : Local)).reverse
-              -- (a method's: its receiver's fields too, through `Self`; a
-              -- copy's in its interface's scope, as its body, #53)
-              let selfC : Option String :=
-                if s.pnames.head? == some "Self" then s.scope.orElse fun _ => (s.name.splitOn ".").head? else none
-              -- (its own context: no return or break into the caller, failure
-              -- only for a <decides> callee, and not its own default again)
-              let key := (s.name, s!"?{n}")
-              if ctx.defaults.contains key then
-                eerr p s!"the default of ?{n} of {name} uses itself (a call of {name} that omits ?{n})"
-              let dctx := { ctx with locals := earlier, selfClass := selfC,
-                                     selfMethod := if selfC.isSome then (s.name.splitOn ".").getLast? else none,
-                                     inParamDefault := true,
-                                     inLoop := false, canFail := ctx.canFail && s.decides,
-                                     inRollback := ctx.inRollback || ctx.canFail,
-                                     suspends := ctx.suspends && s.suspends,
-                                     defaults := key :: ctx.defaults }
-              dctx.checkArgumentRole s d k
-              let rd ← fxAt p (do coerce p (← elabE dctx d (some t)) t)
-              if !s.decides && rd.mayFail ctx.sigProg then
-                eerr p s!"the default of ?{n} of {name} can fail, but {name} is not <decides>"
-              steps := steps.push (.assign ta rd)
-              slots := slots.set! k (some ta)
-          let call := Expr.call s.idx (slots.toList.map fun o => Expr.local o.get!)
-          let e := steps.toList.foldr Expr.seq call
-          return ⟨← mark e, s.ret⟩
-      | none =>
-        if (ctx.sig? s!"{name}$init").isSome || (ctx.types.overloads.lookup s!"{name}$init").isSome then
-          eerr p s!"{name} constructs an abstract class: it can only be delegated to, as {name}<constructor>(…) in a constructor of a class below it"
-        eerr p s!"unknown function '{name}'"
+        let call := Expr.call s.idx (slots.toList.map fun o => Expr.local o.get!)
+        let e := steps.toList.foldr Expr.seq call
+        return ⟨← mark e, s.ret⟩
+    | none =>
+      if (ctx.sig? s!"{name}$init").isSome || (ctx.types.overloads.lookup s!"{name}$init").isSome then
+        eerr p s!"{name} constructs an abstract class: it can only be delegated to, as {name}<constructor>(…) in a constructor of a class below it"
+      eerr p s!"unknown function '{name}'"
   | .member mp (.ident _ "(super:)") m =>
     -- `(super:)M(…)`: the implementation the current method's class inherits
     let some c := ctx.selfClass | eerr p "(super:) can only be used in a method"
