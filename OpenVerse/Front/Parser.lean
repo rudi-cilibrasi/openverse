@@ -19,6 +19,16 @@
   the block uses. The parser keeps these on a stack (`PSt.blocks`) and checks
   the first token of each line when it is consumed, and when it ends a block;
   blank and comment-only lines have no token and are exempt.
+
+  Bodies, one rule wherever a construct takes one (`Token.startsBody`): `:`
+  and an indented block, the rest of the line, or nothing (an empty body,
+  `Token.endsEmptyBody`); `{…}`; or `.` and an expression on its line. A
+  value after `=`, `:=` or `=>` that starts a later line is the indented
+  block of those lines (`parseValue`). `if`, `for` and `first` take their
+  clauses in parentheses, or as such a body (`parseClauses`), then `then`
+  or `do` and a branch, or nothing (the clause macros). A construction's
+  fields follow its type's name in `{…}` or, after a `:` that ends the
+  line, as an indented block (`fieldsFollow`).
 -/
 import OpenVerse.Front.Lexer
 import OpenVerse.Front.Syntax
@@ -732,10 +742,10 @@ partial def parseBranch (stop : Nat) : PM SExpr := do
   | e@(.app _ (.ident _ "$defer") _ _) => return .block t.pos [e]
   | e => return e
 
-/-- The clauses of `if` or `for` written without parentheses, at their `{`,
-    `:` or `.`: `{…}` (perhaps none); `:` and an indented block, or an
-    expression on its line; `.` and an expression on its line. Each is read
-    by `item`. -/
+/-- The clauses of `if`, `for` or `first` written without parentheses, at
+    their `{`, `:` or `.`: `{…}` (perhaps none); `:` and an indented block,
+    or an expression on its line; `.` and an expression on its line. Each
+    is read by `item`. -/
 partial def parseClauses (kw : String) (item : Nat → PM SExpr) (stop : Nat) : PM (List SExpr) := do
   let o ← peekT
   bump
