@@ -149,7 +149,8 @@ def checkNoShadowing (tops : List STop) : Except String (List ScopePair) := do
       let parts := qualParts n
       if n.startsWith "$module:" then
         let mp := qualParts (n.drop "$module:".length).toString
-        refuse p "the module" (mp.getLastD "") "" (shown mp.dropLast) (outers mp.dropLast false (mp.getLastD ""))
+        if !qualified.contains (qualJoin mp) then
+          refuse p "the module" (mp.getLastD "") "" (shown mp.dropLast) (outers mp.dropLast false (mp.getLastD ""))
         continue
       if parts.any (·.startsWith "$") then continue
       let sc := parts.dropLast
