@@ -107,8 +107,7 @@ partial def elabExprMarkersWith
       | .ok req => pure req
       | .error why => eerr p s!"cannot prepare this refining for: {why} (#417)"
     if !ctx.types.loopRequests.any (·.key == req.key) then
-      modify fun st => { st with loopFirst := st.loopFirst ++
-        [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok req }] }
+      askHelper p req
       let ty ← resolveTy ctx.types p req.ret
       return ⟨.prim .userErr [], ty⟩
     elabApp ctx p (.ident p req.name) req.args true exp

@@ -148,8 +148,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       (some prepare.name)
     if !c.typeOnly then
       for req in (if hasPlan then [] else [request]) ++ (if hasPrefix then [] else [prepare]) do
-        modify fun st => { st with loopFirst := st.loopFirst ++
-          [{ g := "", pos := q, itemCode := .lit .void, argSet := none, lift := .ok req }] }
+        askHelper q req
       modify fun st => { st with
         forStageUses := st.forStageUses + 1,
         pendingSuspendingCasts := st.pendingSuspendingCasts + (if c.suspends && (!hasPlan || !hasPrefix) then 1 else 0),
@@ -179,8 +178,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           modify fun st => { st with fx }
           pure (⟨e, ty⟩ : R)
         else do
-          modify fun st => { st with loopFirst := st.loopFirst ++
-            [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok req }] }
+          askHelper p req
           pure (⟨.prim .userErr [], ty⟩ : R)
       if gs.isEmpty then return r
       return ⟨.prim .mkArr [r.e], .arr r.ty⟩
@@ -247,8 +245,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                   -- This body moves to an immediate helper, which discovers
                   -- its own locals and lifts: the trial asked for none of
                   -- them (`Ctx.keepsLifts`), only the continuations in it.
-                  modify fun st => { st with loopFirst := st.loopFirst ++
-                    [{ g := "", pos := b.pos, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
+                  askHelper b.pos lift
                   return (codeA, .prim .userErr [], t)
                 | .error why => eerr b.pos s!"cannot share the refining for's suffix: {why} (#417)"
             if let some l := req.filter fits then
@@ -320,8 +317,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               let req ← match forStagePlanOf { cA with fnFx := allowed } b.pos key (i :: restCl) bd value bodyFail [] sourceSuspends with
                 | .ok req => pure req
                 | .error why => eerr b.pos s!"cannot stage this refining for: {why} (#417)"
+              askHelper b.pos req
               modify fun st => { st with
-                loopFirst := st.loopFirst ++ [{ g := "", pos := b.pos, itemCode := .lit .void, argSet := none, lift := .ok req }],
                 pendingSuspendingCasts := st.pendingSuspendingCasts + 1,
                 pendingWaitingCasts := st.pendingWaitingCasts + 1,
                 forStageUses := st.forStageUses + 1 }
@@ -346,8 +343,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               | .ok req => pure req
               | .error why => eerr b.pos s!"cannot type this waiting for's suffix: {why} (#417)"
             if !cA.types.loopRequests.any (·.key == nextReq.key) then
-              modify fun st => { st with loopFirst := st.loopFirst ++
-                [{ g := "", pos := b.pos, itemCode := .lit .void, argSet := none, lift := .ok nextReq }] }
+              askHelper b.pos nextReq
               return (codeA, .prim .userErr [], if stagePlan.isSome then Ty.struct plan.base rootArgs else resultTy)
             let some nextPlan := nextReq.stagePlan | eerr b.pos "internal: missing suffix plan"
             let nextArgs := nextPlan.tparams.map fun tp =>
@@ -358,8 +354,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               | .ok req => pure req
               | .error why => eerr b.pos s!"cannot share this waiting for's suffix: {why} (#335, #417)"
             if !cA.types.loopRequests.any (·.key == suffix.key) then
-              modify fun st => { st with loopFirst := st.loopFirst ++
-                [{ g := "", pos := b.pos, itemCode := .lit .void, argSet := none, lift := .ok suffix }] }
+              askHelper b.pos suffix
               return (codeA, .prim .userErr [], if stagePlan.isSome then Ty.struct plan.base rootArgs else resultTy)
             let stageTypes := rootArgs.map Ty.toSTy
             let consume (arm : SExpr) : SExpr :=
@@ -498,8 +493,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                 if forContWaits cA st0 (← get) [f0, a0] then set st0 else
                   match contForLiftOf cA gp x bty t0 altsS restCl bd bodyFail with
                   | .ok lift =>
-                    let use : LoopUse := { g := "", pos := gp, itemCode := .lit .void, argSet := none, lift := .ok lift }
-                    modify fun st => { st with loopFirst := st.loopFirst ++ [use] }
+                    askHelper gp lift
                     if cA.suspends then return (codeA, .prim .userErr [], t0)
                     return (Expr.seq codeA f0, a0, t0)
                   | .error _ => set st0
@@ -652,8 +646,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                       let .arr vty := r0.ty | throw "no values"
                       contForLiftOf c gp b.name bty vty b.alts restCl bd bodyFail) with
                   | .ok lift =>
-                    let use : LoopUse := { g := "", pos := gp, itemCode := .lit .void, argSet := none, lift := .ok lift }
-                    modify fun st => { st with loopFirst := st.loopFirst ++ [use] }
+                    askHelper gp lift
                     if c.suspends then return ⟨.prim .userErr [], r0.ty⟩
                     return r0
                   | .error _ => set st0
@@ -691,8 +684,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                   return some (lift, result, effects)) (fun _ => pure none)
                 set before
                 if let some (lift, result, effects) := trial then
-                  modify fun st => { st with loopFirst := st.loopFirst ++
-                    [{ g := "", pos := gp, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
+                  askHelper gp lift
                   for (k, q, via) in effects do noteFx q [k] via
                   return ⟨.prim .userErr [], result⟩
                 set st0

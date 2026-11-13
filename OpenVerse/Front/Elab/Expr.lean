@@ -1480,8 +1480,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
           let fx := (← get).fx
           match contLiftOf ctx c2 p b.name [i] rest fx with
           | .ok lift =>
-            modify fun s => { s with loopFirst := s.loopFirst ++
-              [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
+            askHelper p lift
             -- (what follows the clauses is not the trial's)
             return (code, { c2 with trial := ctx.trial })
           | .error _ => set st0
@@ -1665,9 +1664,8 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
             let fxB := (← get).fx
             match (if ok then contLiftOf ctx c1 p b.name b.alts rest fxB else .error "alternatives of different types") with
             | .ok lift =>
-              let use : LoopUse := { g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }
               modify fun st => { st with fx := fx0 }
-              modify fun st => { st with loopFirst := st.loopFirst ++ [use] }
+              askHelper p lift
               for (k, q, via) in fxB do noteFx q [k] via
               return ← finish (pure (code1, c1))
             | .error _ => set st0
@@ -1693,8 +1691,8 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
                   return some (lift, effects)) (fun _ => pure none)
                 set prefixState
                 if let some (lift, effects) := trial then
-                  modify fun st => { st with fx := fx0, loopFirst := st.loopFirst ++
-                    [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
+                  modify fun st => { st with fx := fx0 }
+                  askHelper p lift
                   for (k, q, via) in prefixState.fx ++ effects do noteFx q [k] via
                   let packetTy ← resolveTy ctx.types p (lift.joinedRet.getD lift.ret)
                   let packet ← fresh packetTy

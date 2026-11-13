@@ -567,6 +567,8 @@ def Requests.isEmpty (r : Requests) : Bool :=
     its own it is compiled as when that code has effects, or why it cannot
     be. -/
 structure LoopUse where
+  /-- The function; `""` for a helper asked for whenever it can be made
+      (`askHelper`). -/
   g : String
   pos : Pos
   itemCode : Expr
@@ -635,6 +637,13 @@ abbrev EM := StateT ESt (Except String)
 /-- Ask for `r`, for the program to be elaborated again with it. -/
 def noteNeeds (r : Requests) : EM Unit :=
   modify fun st => { st with needs := st.needs.merge r }
+
+/-- (#335, #417) Ask for `lift`, made at `p`: a continuation, or a `for`'s
+    stage, prefix or environment, which `checkLoopFirst` asks the next
+    elaboration for whenever it can be made. -/
+def askHelper (p : Pos) (lift : Choice.FirstLift) : EM Unit :=
+  modify fun st => { st with loopFirst := st.loopFirst ++
+    [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
 
 /-- Give a disposable polymorphic suffix trial its own type witnesses.
     The generated continuation will obtain them from its actual arguments. -/
