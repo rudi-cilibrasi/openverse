@@ -122,32 +122,26 @@ def Shape.supplying (s : Shape) (names : List String) : Shape :=
   let dropped := s.optional.filter (!names.contains ·)
   { s with arity := s.arity - dropped.length, named := s.named.filter (!dropped.contains ·), optional := [] }
 
-/-- The shape interface named `n`. -/
-def parse (n : String) : Option Shape :=
+/-- The shape interface named `n`, and the effect specifiers its name
+    writes. -/
+def parseWritten (n : String) : Option (Shape × List String) :=
   if !n.startsWith "$fn" then none else
   match (n.drop 3).toString.splitOn ":" with
   | head :: effs =>
     match head.splitOn "?" with
     | a :: names =>
       a.toNat?.map fun k =>
-        shapeOf k effs (names.map (·.replace "=" "")) (names.filterMap fun n =>
-          if n.endsWith "=" then some (n.dropEnd 1).toString else none)
+        (shapeOf k effs (names.map (·.replace "=" "")) (names.filterMap fun n =>
+          if n.endsWith "=" then some (n.dropEnd 1).toString else none), effs)
     | [] => none
   | [] => none
 
+/-- The shape interface named `n`. -/
+def parse (n : String) : Option Shape := (parseWritten n).map (·.1)
+
 /-- Whether `n` is a shape's interface; its arity and effects, as named. -/
 def parseName (n : String) : Option (Nat × List String) :=
-  if !n.startsWith "$fn" then none else
-  match (n.drop 3).toString.splitOn ":" with
-  | head :: effs => ((head.splitOn "?").headD "").toNat?.map fun k => (k, effs)
-  | [] => none
-
-/-- The method a value of shape interface `n` is called through, by a call
-    that names `names`. -/
-def callOf (n : String) (names : List String := []) : String :=
-  match parse n with
-  | some s => (s.supplying names).call
-  | none => "$call"
+  (parseWritten n).map fun (s, effs) => (s.arity, effs)
 
 /-- A function type as Verse writes it: `type{_(:int, ?B:string)<decides>:float}`,
     an optional parameter `?C:int = …` (the type has no default). -/
@@ -156,10 +150,6 @@ def Shape.show (s : Shape) (ps : List String) (r : String) (effs : List String :
     s!"?{n}:{t}" ++ if s.optional.contains n then " = …" else ""
   "type{_(" ++ ", ".intercalate ((ps.take s.positional).map (":" ++ ·) ++ named) ++ ")" ++
     String.join (effs.map fun e => s!"<{e}>") ++ ":" ++ r ++ "}"
-
-/-- A function type of positional parameters as Verse writes it. -/
-def showFn (effs : List String) (ps : List String) (r : String) : String :=
-  (shapeOf ps.length effs).show ps r
 
 /-- An error message with the hidden names read as Verse: `F$fn.$call…`
     is `F` called as a value, another `$call…` a function value, a shape's

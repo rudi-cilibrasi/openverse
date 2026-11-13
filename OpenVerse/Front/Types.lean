@@ -89,9 +89,9 @@ partial def Ty.show : Ty → String
   | .struct n [] => n
   | .struct n ts =>
     -- (a function type, #210)
-    match FnValues.parse n, FnValues.parseName n with
-    | some s, some (_, effs) => s.show ((ts.take s.arity).map Ty.show) ((ts.drop s.arity).headD .void).show effs
-    | _, _ => n ++ "(" ++ ", ".intercalate (ts.map Ty.show) ++ ")"
+    match FnValues.parseWritten n with
+    | some (s, effs) => s.show ((ts.take s.arity).map Ty.show) ((ts.drop s.arity).headD .void).show effs
+    | none => n ++ "(" ++ ", ".intercalate (ts.map Ty.show) ++ ")"
   | .enum n => n
   | .map k v => "[" ++ k.show ++ "]" ++ v.show
   | .param n _ => n
@@ -111,9 +111,9 @@ partial def Ty.toSTy : Ty → STy
   | .tup ts => .tup (ts.map Ty.toSTy)
   | .map k v => .map k.toSTy v.toSTy
   | .struct n [] => .name n
-  | .struct n ts => match FnValues.parse n, FnValues.parseName n with
-    | some s, some (_, effs) => s.toSTy ((ts.take s.arity).map Ty.toSTy) ((ts.drop s.arity).headD .void).toSTy effs
-    | _, _ => .app n (ts.map Ty.toSTy)
+  | .struct n ts => match FnValues.parseWritten n with
+    | some (s, effs) => s.toSTy ((ts.take s.arity).map Ty.toSTy) ((ts.drop s.arity).headD .void).toSTy effs
+    | none => .app n (ts.map Ty.toSTy)
 
 /-- Substitute type arguments for type parameters. -/
 partial def Ty.subst (σ : List (String × Ty)) : Ty → Ty
