@@ -11,7 +11,7 @@ namespace OpenVerse
 
 mutual
 theorem VTy.closed_subst (θ : Nat → VTy) : ∀ t : VTy, t.closed = true → t.subst θ = t
-  | .int, _ | .logic, _ | .char, _ | .float, _ => by simp
+  | .int, _ | .logic, _ | .char, _ | .float, _ | .dyn, _ => by simp
   | .ref _ args, h => by simp only [VTy.closed] at h; simpa using VTy.closedL_subst θ args h
   | .vref _ args, h => by simp only [VTy.closed] at h; simpa using VTy.closedL_subst θ args h
   | .var _, h => by simp [VTy.closed] at h
@@ -29,7 +29,7 @@ mutual
 /-- A type is closed once closed types are substituted for its variables. -/
 theorem VTy.subst_closed {σ : Nat → VTy} (hσ : ∀ j, (σ j).closed = true) :
     ∀ t : VTy, (t.subst σ).closed = true
-  | .int | .logic | .char | .float => by simp [VTy.closed]
+  | .int | .logic | .char | .float | .dyn => by simp [VTy.closed]
   | .var j => by simpa using hσ j
   | .arr t | .opt t => by simpa [VTy.closed] using VTy.subst_closed hσ t
   | .tup ts | .ref _ ts | .vref _ ts => by simpa [VTy.closed] using VTy.substL_closed hσ ts
@@ -46,7 +46,7 @@ theorem VTy.closedL_iff : ∀ {ts : List VTy}, VTy.closedL ts = true ↔ ∀ t �
 mutual
 theorem VTy.subst_comp (θ₁ θ₂ : Nat → VTy) : ∀ t : VTy,
     (t.subst θ₁).subst θ₂ = t.subst (fun j => (θ₁ j).subst θ₂)
-  | .int | .logic | .char | .float | .var _ => by simp
+  | .int | .logic | .char | .float | .dyn | .var _ => by simp
   | .ref _ args => by simpa using VTy.substL_comp θ₁ θ₂ args
   | .vref _ args => by simpa using VTy.substL_comp θ₁ θ₂ args
   | .arr t => by simp [VTy.subst_comp θ₁ θ₂ t]
@@ -60,7 +60,7 @@ end
 
 mutual
 theorem VTy.subst_id : ∀ t : VTy, t.subst VTy.var = t
-  | .int | .logic | .char | .float | .var _ => by simp
+  | .int | .logic | .char | .float | .dyn | .var _ => by simp
   | .ref _ args => by simpa using VTy.substL_id args
   | .vref _ args => by simpa using VTy.substL_id args
   | .arr t => by simp [VTy.subst_id t]
@@ -88,7 +88,7 @@ mutual
 /-- Substitutions that agree below `n` agree on a type whose variables are below `n`. -/
 theorem VTy.subst_congr {σ σ' : Nat → VTy} {n : Nat} (hσ : ∀ j < n, σ j = σ' j) :
     ∀ t : VTy, t.varsBelow n = true → t.subst σ = t.subst σ'
-  | .int, _ | .logic, _ | .char, _ | .float, _ => by simp
+  | .int, _ | .logic, _ | .char, _ | .float, _ | .dyn, _ => by simp
   | .var j, h => by simp only [VTy.varsBelow, decide_eq_true_eq] at h; simp [hσ j h]
   | .arr t, h => by simp only [VTy.varsBelow] at h; simp [VTy.subst_congr hσ t h]
   | .opt t, h => by simp only [VTy.varsBelow] at h; simp [VTy.subst_congr hσ t h]
@@ -108,7 +108,7 @@ mutual
 /-- Substitutions that agree on a type's variables agree on it. -/
 theorem VTy.subst_congr_vars {σ σ' : Nat → VTy} :
     ∀ t : VTy, (∀ j, t.hasVar j = true → σ j = σ' j) → t.subst σ = t.subst σ'
-  | .int, _ | .logic, _ | .char, _ | .float, _ => by simp
+  | .int, _ | .logic, _ | .char, _ | .float, _ | .dyn, _ => by simp
   | .var j, h => by simpa using h j (by simp [VTy.hasVar])
   | .arr t, h => by simp [VTy.subst_congr_vars t (fun j hj => h j (by simpa [VTy.hasVar] using hj))]
   | .opt t, h => by simp [VTy.subst_congr_vars t (fun j hj => h j (by simpa [VTy.hasVar] using hj))]
@@ -127,7 +127,7 @@ mutual
 /-- Two substitutions that agree on a type agree on its variables. -/
 theorem VTy.vars_of_subst_eq {σ σ' : Nat → VTy} :
     ∀ t : VTy, t.subst σ = t.subst σ' → ∀ j, t.hasVar j = true → σ j = σ' j
-  | .int, _, _, h | .logic, _, _, h | .char, _, _, h | .float, _, _, h => by simp [VTy.hasVar] at h
+  | .int, _, _, h | .logic, _, _, h | .char, _, _, h | .float, _, _, h | .dyn, _, _, h => by simp [VTy.hasVar] at h
   | .var i, he, j, h => by simp [VTy.hasVar] at h; subst h; simpa using he
   | .arr t, he, j, h => VTy.vars_of_subst_eq t (by simpa using he) j (by simpa [VTy.hasVar] using h)
   | .opt t, he, j, h => VTy.vars_of_subst_eq t (by simpa using he) j (by simpa [VTy.hasVar] using h)
@@ -149,7 +149,7 @@ mutual
 /-- A variable of a type whose instance is closed is instantiated by a closed type. -/
 theorem VTy.closed_of_subst {σ : Nat → VTy} :
     ∀ t : VTy, (t.subst σ).closed = true → ∀ j, t.hasVar j = true → (σ j).closed = true
-  | .int, _, _, h | .logic, _, _, h | .char, _, _, h | .float, _, _, h => by simp [VTy.hasVar] at h
+  | .int, _, _, h | .logic, _, _, h | .char, _, _, h | .float, _, _, h | .dyn, _, _, h => by simp [VTy.hasVar] at h
   | .var i, hc, j, h => by simp [VTy.hasVar] at h; subst h; simpa using hc
   | .arr t, hc, j, h => VTy.closed_of_subst t (by simpa [VTy.closed] using hc) j (by simpa [VTy.hasVar] using h)
   | .opt t, hc, j, h => VTy.closed_of_subst t (by simpa [VTy.closed] using hc) j (by simpa [VTy.hasVar] using h)
@@ -170,7 +170,7 @@ end
 mutual
 /-- A closed type has no variables. -/
 theorem VTy.hasVar_closed : ∀ t : VTy, t.closed = true → ∀ j, t.hasVar j = false
-  | .int, _, _ | .logic, _, _ | .char, _, _ | .float, _, _ => by simp [VTy.hasVar]
+  | .int, _, _ | .logic, _, _ | .char, _, _ | .float, _, _ | .dyn, _, _ => by simp [VTy.hasVar]
   | .var _, h, _ => by simp [VTy.closed] at h
   | .arr t, h, j => by simp only [VTy.closed] at h; simpa [VTy.hasVar] using VTy.hasVar_closed t h j
   | .opt t, h, j => by simp only [VTy.closed] at h; simpa [VTy.hasVar] using VTy.hasVar_closed t h j

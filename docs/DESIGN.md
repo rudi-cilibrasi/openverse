@@ -1629,7 +1629,7 @@ one. Verse Core holds the empty value four ways, one per type that has it
 values are equal, at every depth. It is characterized by `veq_iff`
 (equality once each empty value is made `()`), so it is an equivalence and
 a congruence for the constructors that hold values, and on two values of
-one type it is `=` (`veq_iff_eq_of_hasTy`): programs that compare values of
+one type without `dyn` it is `=` (`veq_iff_eq_of_hasTy`): programs that compare values of
 one type compute as before. The C runtime's `shallow_eq` (`value.c`) takes
 two empty values of different tags as equal. A map's lookup, `case`, the
 array methods that search by value and struct equality are code that calls
@@ -1644,10 +1644,58 @@ Verse Core's `eq` where it is Verse's (`TyEnv.coreExact`), a test that
 fails or holds where the types have nothing in common, a test of both
 operands' emptiness where only the empty value is common and other values
 could be found equal, a lossless conversion of an operand (`TyEnv.lossless`)
-where values are shared as a tuple and an array, and a refusal where
-neither is possible. Generic code compares a type parameter as Verse Core
-compares its instance; values of types it holds alike would need run-time
-types ([research/empty-values.md](research/empty-values.md)).
+where values are shared as a tuple and an array, and boxes where neither
+is possible (next section). Generic code compares a type parameter with
+another type by boxes too, so values of types Verse Core holds alike are
+told apart there as well.
+
+## comparable: boxes in Verse Core's `dyn`
+
+`comparable` (Book of Verse ch. 11) is the type of every comparable value,
+with `=` by value and type: `0 = 0.0` fails, an enum's value never equals
+another enum's or an int. A Verse Core value does not say its Verse type (an
+enum's value is an `int`, a struct a tuple), so the front end **boxes** a
+value when it becomes a `comparable`, and Verse Core's `veq` on boxes is
+the Book's equality ([research/comparable-type.md](research/comparable-type.md),
+"Design A, made exact"):
+
+- **The box** (`Code.box`, `OpenVerse/Core/Comparable.lean`) puts a code,
+  an int, around the values whose representation another type shares
+  (`tup [int k, v]`: `char32`, each enum, each struct, a rational that is no
+  int, a map that is not empty), and makes one representation of what Verse
+  identifies (a tuple as the array of its elements, an integral rational as
+  its int). An `int`, `float`, `logic`, `char`, string or `<unique>` object,
+  and arrays and options of those, are their own boxes. Proved: boxing
+  preserves and reflects `veq` on one code (`veq_box`, so two values of one
+  type have equal boxes exactly when they are equal, `box_veq_iff_eq`);
+  boxes under different codes, and a tagged box and an untagged code's, are
+  never equal (`box_tag_ne`, `box_plain_tagged`); the empty values, a tuple
+  and its array, an integral rational and its int stay one value.
+- **Verse Core** gains one type, `VTy.dyn`, of every value (`hasTy v .dyn`,
+  `t.sub .dyn`): converting to it is subsumption, the identity, so OVBC, the
+  loader and the C runtime are unchanged (a `[]comparable` is an array of
+  values of several kinds, which `vx_equal` already compares cell by cell).
+  The checker checks a constructor at `dyn` with `dyn` parts (`dynHint`).
+  `veq_iff_eq_of_hasTy` holds at the types without `dyn` (`dynFree`), every
+  type there was before; at `dyn` the empty value is held four ways and
+  `veq` is the equality wanted.
+- **The front end** emits the box code (`boxValue`, `Elab/Context.lean`)
+  where a value converts to `comparable` (`convert`), and compares boxes
+  (`CmpPlan.boxed`) where either type has `comparable` in it, where a type
+  parameter meets another type, and where values Verse Core holds
+  differently may be equal (the old refusals). The join of two comparable
+  types with nothing else in common is `comparable` (`fallbackJoin`, and
+  inside containers `joinTy`).
+- **Generic code**: a type parameter's value is boxed by its instance's box,
+  passed as #520's evidence of `t:subtype(comparable)`: the dictionary
+  `$subtypeEvidence(comparable, t)`, whose `Up` boxes. A function that
+  boxes a `t` gets that bound (`Requests.boxes`, discovered by elaborating
+  and elaborated again), and a call proves it at its instance: a closed
+  type's family `$subtypeBox_T` (`Plan.box`, `Up` returns its input at
+  `comparable`, which the ordinary conversion boxes), the caller's own
+  evidence, or a container of the caller's type parameters lifted by #520's
+  families and boxed. Other generic functions take no dictionary and keep
+  their bytes.
 
 ## Rationals: helpers written in Verse
 

@@ -13,8 +13,9 @@ methods](#after-extension-methods), the empty value and comparisons of
 [After the empty value](#after-the-empty-value), the qualified names and
 the Book's shadowing rule of [After qualified names](#after-qualified-names),
 the readings of [After the readings audit](#after-the-readings-audit),
-the access specifiers of [After access specifiers](#after-access-specifiers)
-and the load-bearing readings of [After the load-bearing
+the access specifiers of [After access specifiers](#after-access-specifiers),
+`comparable` as a type of [After `comparable`](#after-comparable) and the
+load-bearing readings of [After the load-bearing
 readings](#after-the-load-bearing-readings),
 against the Book at
 [`beaa719ba165cbf33eff462f2b0fe078a6dd9ab0`](https://github.com/verselang/book/tree/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests),
@@ -43,10 +44,10 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   APIs (persistence, JSON, natives; 345); compiler tooling such as bytecode
   and digests (128); VM-conditional code inside a definition (37) and one
   file that defines `Main` itself (1).
-- Of the **9,783 translatable cases**, openverse **agrees on 7,597 (78%)**,
-  refuses 2,004 valid programs, **accepts 136 refused ones**, gives a
+- Of the **9,783 translatable cases**, openverse **agrees on 7,732 (79%)**,
+  refuses 1,869 valid programs, **accepts 136 refused ones**, gives a
   **different result in 46** and hits **no internal error**. On test cases
-  alone (without `:decls`) it agrees on 7,449 of 9,567. (When the survey was
+  alone (without `:decls`) it agrees on 7,579 of 9,567. (When the survey was
   taken, at `0e69cfb`: 6,409 agreed, 2,817 refused, 482 accepted, 86
   differed and 4 internal errors; before the parser forms, at main
   `99ed203`: 6,417 agreed, 2,809 refused, 482 accepted, 86 differed; with
@@ -65,13 +66,15 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   audit](#after-the-readings-audit); with that, at main `ce5e444`: 7,390
   agreed, 2,066 refused, 277 accepted, 50 differed, the base of [access
   specifiers](#after-access-specifiers); with them, at main `9263665`:
-  7,535 agreed, 2,028 refused, 170 accepted, 50 differed, the base of [the
+  7,535 agreed, 2,028 refused, 170 accepted, 50 differed, the base of
+  [`comparable`](#after-comparable); with it, at main `77bc509`: 7,670
+  agreed, 1,893 refused, 170 accepted, 50 differed, the base of [the
   load-bearing readings](#after-the-load-bearing-readings).)
 - An agreement on an expected error is weak evidence: 2,940 expected errors
-  agree, but only 1,212 of them are refused by a check of a language rule
+  agree, but only 1,233 of them are refused by a check of a language rule
   (and 17 more, whose codes are all warnings, get openverse's warning);
   1,236 are refused by the parser (the lexer's and parser's own checks
-  included) and 475 for a missing feature.
+  included) and 454 for a missing feature.
 - **Internal errors**: none ([Internal errors](#internal-errors)). The three
   programs that failed `Prog.checkTypes` (`X:int = return`, `() = ""`, a
   `void` parameter compared with `""`) are refused or compile, and Lean's
@@ -121,8 +124,8 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   parser tests and other syntax (192); bitwise functions (159, pinned, not
   implemented), free `ToChar` and `ToChar32` the API reference does not
   declare (145), `ToDiagnostic` (93). The largest semantic gaps are types as
-  values (196), `comparable` as a type (125, not built: [its rules and a
-  design](comparable-type.md)) and VerseVM-only union types (136).
+  values (196), `comparable` as a type (125; built since: [After
+  `comparable`](#after-comparable)) and VerseVM-only union types (136).
 
 ## How the harness reads a test file
 
@@ -254,19 +257,19 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| all test cases (assertions and files without one) | 13197 | 7449 | 136 | 1936 | 46 | 3630 | 0 |
-| shared definitions of a file (`:decls`) | 307 | 148 | 0 | 68 | 0 | 91 | 0 |
-| **total** | 13504 | 7597 | 136 | 2004 | 46 | 3721 | 0 |
+| all test cases (assertions and files without one) | 13197 | 7579 | 136 | 1806 | 46 | 3630 | 0 |
+| shared definitions of a file (`:decls`) | 307 | 153 | 0 | 63 | 0 | 91 | 0 |
+| **total** | 13504 | 7732 | 136 | 1869 | 46 | 3721 | 0 |
 
 ### By form
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `assert` | 6671 | 3116 | 0 | 1370 | 46 | 2139 | 0 |
+| `assert` | 6671 | 3236 | 0 | 1250 | 46 | 2139 | 0 |
 | `assert_semantic_error` | 3460 | 2618 | 99 | 0 | 0 | 743 | 0 |
-| `assert_valid` | 1637 | 726 | 0 | 392 | 0 | 519 | 0 |
+| `assert_valid` | 1637 | 736 | 0 | 382 | 0 | 519 | 0 |
 | `assert_valid_syntax` | 439 | 347 | 0 | 92 | 0 | 0 | 0 |
-| `decls` | 307 | 148 | 0 | 68 | 0 | 91 | 0 |
+| `decls` | 307 | 153 | 0 | 63 | 0 | 91 | 0 |
 | `assert_roundtrip` | 304 | 267 | 0 | 35 | 0 | 2 | 0 |
 | `assert_syntax_error` | 303 | 300 | 3 | 0 | 0 | 0 | 0 |
 | `assert_runtime_error` | 140 | 30 | 0 | 43 | 0 | 67 | 0 |
@@ -287,8 +290,8 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| no VM restriction | 12208 | 7319 | 98 | 1514 | 19 | 3258 | 0 |
-| `verse_vm_only` | 702 | 203 | 5 | 365 | 27 | 102 | 0 |
+| no VM restriction | 12208 | 7451 | 98 | 1382 | 19 | 3258 | 0 |
+| `verse_vm_only` | 702 | 206 | 5 | 362 | 27 | 102 | 0 |
 | `bp_vm_only` | 366 | 67 | 33 | 14 | 0 | 252 | 0 |
 | `verse_vm_todo` (BPVM only; a known VerseVM failure) | 219 | 8 | 0 | 111 | 0 | 100 | 0 |
 | `auto_qualify_todo` | 9 | 0 | 0 | 0 | 0 | 9 | 0 |
@@ -297,14 +300,14 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| (top level) | 5575 | 3151 | 76 | 1100 | 6 | 1242 | 0 |
-| Operators/ | 1203 | 1022 | 4 | 76 | 28 | 73 | 0 |
-| Bugs/ | 1185 | 724 | 36 | 176 | 0 | 249 | 0 |
+| (top level) | 5575 | 3233 | 76 | 1018 | 6 | 1242 | 0 |
+| Operators/ | 1203 | 1060 | 4 | 38 | 28 | 73 | 0 |
+| Bugs/ | 1185 | 733 | 36 | 167 | 0 | 249 | 0 |
 | Literals/ | 1020 | 815 | 0 | 171 | 0 | 34 | 0 |
 | Serialization/ | 991 | 0 | 0 | 0 | 0 | 991 | 0 |
-| Attributes/ | 795 | 421 | 3 | 125 | 0 | 246 | 0 |
-| FlowControl/ | 484 | 390 | 6 | 39 | 4 | 45 | 0 |
-| Intrinsics/ | 437 | 297 | 0 | 107 | 8 | 25 | 0 |
+| Attributes/ | 795 | 425 | 3 | 121 | 0 | 246 | 0 |
+| FlowControl/ | 484 | 391 | 6 | 38 | 4 | 45 | 0 |
+| Intrinsics/ | 437 | 298 | 0 | 106 | 8 | 25 | 0 |
 | Math/ | 321 | 157 | 0 | 160 | 0 | 4 | 0 |
 | Classes/ | 317 | 227 | 3 | 10 | 0 | 77 | 0 |
 | Versions/ | 289 | 6 | 0 | 0 | 0 | 283 | 0 |
@@ -327,7 +330,7 @@ the parser in 1,236 (most semantic-error snippets among them use a form
 openverse does not parse, such as `@attribute`; the lexer's and parser's
 own checks, of comments, float literals, specifiers and an extension
 method's receiver, count here), from a diagnostic that says openverse
-lacks a feature or a name in 475, and from a rule check in 1,212. Only these 1,212 show
+lacks a feature or a name in 454, and from a rule check in 1,233. Only these 1,233 show
 openverse checking the rule the test is about, and even they are not
 compared by code. Of the 300 agreeing syntax errors, 8 parse once wrapped
 in a function body, so openverse refuses
@@ -455,11 +458,11 @@ cases it would turn into agreements.
 | qualified names | 162 → 26 | `Tests/ShadowDefinition.versetest:113`: `(c52:)F(X:int)` beside an inherited `F` | `a second method F beside the one c52 inherits` | none | yes: [Qualified names](../LANGUAGE.md#qualified-names) | done ([After qualified names](#after-qualified-names)); left: two members of one name in a class (12), the test runner's package path (5), other features' forms (9) |
 | union types | 136 | `Tests/Union.versetest:21`: `u:=union{U:u}` | parse error | all `verse_vm_only`; not in the Book's chapters | no | front-end and Core; low priority |
 | attributes | 134 | `Tests/Attributes/Attributes.versetest:16`: an `@attribute` before a definition (valid syntax) | `unexpected character '@'` | 1 `verse_vm_only` | no; the Book's ch. 12 and 18 | parser form for built-in attributes; custom attributes (`class(attribute)`) a front-end feature |
-| `comparable` as a type | 126 | `Tests/Comparable.versetest:3`: `Equal(X:t, Y:comparable)` | `unknown type 'comparable'` | 1 `verse_vm_only` | in part: only as a bound, `t:subtype(comparable)` | front-end and Core: a type of comparable values, as `any` is |
+| `comparable` as a type | 126 → 26 ([After `comparable`](#after-comparable)) | `Tests/Comparable.versetest:3`: `Equal(X:t, Y:comparable)` | `unknown type 'comparable'` | 1 `verse_vm_only` | yes: [comparable](../LANGUAGE.md#comparable); left: `concrete_subtype`, field overrides, class variance, `weak_map` | done |
 | `ToDiagnostic` | 93 | `Tests/Intrinsics/ToDiagnostic.versetest:22` | `unknown function 'ToDiagnostic'` | 7 `verse_vm_only` | no | front-end and runtime: a `diagnostic` printer of every value |
 | class and function specifiers | 86 → 84 | `Tests/Effects.versetest:304`: `c:=class<abstract>{F()<converges>:void}` | `<converges> is unsupported` (#494); `<castable>`, `<final_super>` (#11), `<persistable>`, `<native_callable>` | 71 `verse_vm_todo` (`GetCastableFinalSuperClass.versetest`) | yes: [effect contracts](../LANGUAGE.md#effect-contracts), #11 | front-end features, one each |
 | extension methods | 53 → 0 | `Tests/ExtensionFields.versetest:6`: `(I:int).Method()<computes>:int=I` | `expected an identifier, found '('` | none | yes: [Extension methods](../LANGUAGE.md#extension-methods) | done ([After extension methods](#after-extension-methods)) |
-| comparisons of different types | 51 → 16 ([After the empty value](#after-the-empty-value)) | `Tests/Operators/CompareString.versetest:168`: `DoesTupleEqualString(A:tuple(t,t,t), B:string …)=A=B` | `'=' compares values of different types, tuple(t, t, t) and string, whose values in common Verse Core cannot compare` | none | yes: [Equality and the empty value](../LANGUAGE.md#equality-and-the-empty-value) | generic code: a type parameter's instance at run time ([empty-values.md](empty-values.md), part 2) |
+| comparisons of different types | 51 → 16 → 0 ([After the empty value](#after-the-empty-value), [After `comparable`](#after-comparable)) | `Tests/Operators/CompareString.versetest:168`: `DoesTupleEqualString(A:tuple(t,t,t), B:string …)=A=B` | `'=' compares values of different types, tuple(t, t, t) and string, whose values in common Verse Core cannot compare` | none | yes: [Equality and the empty value](../LANGUAGE.md#equality-and-the-empty-value) | generic code: a type parameter's instance at run time ([empty-values.md](empty-values.md), part 2) |
 | live variables | 50 | `Tests/upon.versetest:7`: `upon(1){2}` | parse error | all `verse_vm_only`; the Book's ch. 15 is marked "Unreleased Feature" | no | front-end, Core and runtime |
 | nested functions and lambdas | 44 | `Tests/NestedFunctions.versetest:41`: `G():int = X` inside `F` | `a definition in a module must start at the module body's column` | 25 `verse_vm_only`; the Book's ch. 6 marks nested functions "Unreleased Feature" | yes: [Not supported in v1](../LANGUAGE.md#not-supported-in-v1), [closure design](closure-design.md), #492 | front-end and Core (closures) |
 | type aliases | 40 → 1 | `Tests/Effects.versetest:305`: `t:=type{F()<converges>:void}` | `expected ':', found '('`: a function type written with a name for `_`, and `<converges>` | none | yes: [Type aliases](../LANGUAGE.md#type-aliases) | done ([After the type aliases](#after-the-type-aliases)) |
@@ -964,15 +967,67 @@ refused by the parser.
   `<public>`; no program of the frozen corpus is refused, as its generators
   write no module whose members are used outside it.
 
+## After `comparable`
+
+`comparable` is a type ([its design and what it rests
+on](comparable-type.md), [LANGUAGE.md](../LANGUAGE.md#comparable)): a value
+of every comparable type converts to it boxed, `=` with it compares value
+and type, it keys maps and joins unrelated comparable types, and a generic
+function's type parameter is boxed by the evidence of its
+`subtype(comparable)`. Against the baseline of access specifiers (main
+`9263665`: 7,535 agree, 2,028 refuse, 170 accept, 50 differ), 135 cases
+more agree and none less: **7,670 agree, 1,893 refuse, 170 accept, 50
+differ** (re-recorded from a fresh run; the same 135 against the readings
+audit's baseline).
+
+| Cause before | Cases | Agree now | Left |
+|---|---|---|---|
+| `comparable` as a type | 126 | 100: `Comparable` 41 (the generic `Equal` and `NotEqual` included), `EnumCompare` 12, `RollbackTortureTest` 10, `SOL-5496` 7, `CompareString` 6, `ParametricTypes` 4, `BinaryAddArray` 4, `Attributes/unique` 4, `Map` 3, `Any` 2, `LogicalOr` 2, and `CompareRational`, `NamedParameterOverloads`, `FlowControl/Case`, `ComparableInterface`, `SOL-6529` one each | 26 |
+| comparisons of a tuple of type parameters and a string | 16 | 16 (`CompareString` 168 to 182 and `:decls`, by boxes) | 0 |
+| joins of comparable types | 16 | 16 (`Any` 111 to 126: `?int` and `?float` at `?comparable`; `LogicalOr` 133 to 140: `?E` and `?F`) | |
+| others | 3 | `BinaryAddArray:45` (`[]int + []float`), `ConcatenateMaps:60` (`[string]int` and `[string]float`), `DisjointTypesAllowedInComparisonAndPointerDeref:3` (an `if` of an int and a string compared) | |
+
+The 26 left need other features: `concrete_subtype(comparable)` (10,
+`MetatypeConcreteSubtype`), a field overridden at a narrower type (4,
+`MetatypeConcreteSubtype` 116, 284, 289, 294), variance of parametric
+classes and interfaces at `comparable` (6, `SOL-6739`), a function type's
+join at a parameter of type `comparable` (1, `Comparable:216`,
+VerseVM-only), `weak_map` (1), a `set` through a call (1, `Map:472`) and
+`GetRandomInt` (2, `FORT-995029`).
+
+**The programs whose bytes or output changed** (the byte-identity oracle
+over the suites and the frozen corpus, against the base, main `7bf6dbd`
+with #602; a program whose bytes changed was run with both compilers in
+Lean and C): none's output changed. 111 changed bytes: 109 because two
+comparable types with nothing in common now join at `comparable`, not
+`any` (ch. 1, 1276; ch. 14): 98 generated `heterogeneous-*` programs (a
+choice of an int and a string), and the tests `any`, `if_join_order`,
+`choice_heterogeneous_contracts`, `choice_heterogeneous_fields`,
+`choice_branch_calls_join`, `choice_dictionary_associated_later_argument`,
+`choice_dictionary_correlated`, `choice_first_unrelated`, `choice_more`,
+`class_cast_refine_first_join`, `class_cast_refine_if_type`; and 2 because
+generic code now compares a type parameter with another type by boxes
+(`generics` and `empty_values_nested`: `X = true`, `X = false`, `X = ""`).
+Three error tests changed their message: `array_elements_differ` (a
+`[]comparable` now: "no ToString for comparable"; `array_elements_any`
+keeps the `[]any` case), `concatenate_maps_types` (maps of an int and a
+string join at `[int]comparable`; the refusal is now of a class value) and
+`qualified_path_not_type` (the built-in types listed include
+`comparable`); three compile now and compare as the Book does, so they
+left `tests/errors`: `eq_core_values`, `eq_core_params` and
+`eq_generic_tuple_string` (their cases are in `tests/verse/comparable_type`
+and `comparable_generic`).
+
 ## After the load-bearing readings
 
 [The readings audit](readings-audit.md#the-load-bearing-readings-built)
 had designed four readings and left them, as load-bearing. Three were then
 built, one commit each; the rollback of a `for` iteration is not built yet
 ([the obstacle](readings-audit.md#rollback-of-a-for-iteration)). Against
-the baseline of access specifiers (main `9263665`: 7,535 agree, 2,028
-refuse, 170 accept, 50 differ), 62 cases more agree and none fewer: 7,597
-agree, 2,004 refuse, 136 accept, 46 differ.
+the baseline of `comparable` (main `77bc509`: 7,670 agree, 1,893 refuse,
+170 accept, 50 differ), 62 cases more agree and none fewer: **7,732 agree,
+1,869 refuse, 136 accept, 46 differ** (re-recorded from a fresh run; the
+same 62 against the baseline of access specifiers).
 
 | Reading | Agree now |
 |---|---|
@@ -993,7 +1048,8 @@ error tests whose subject was such a jump are deleted and 20 rewritten
 with their output unchanged, and no other program's bytes change; with
 commas, 53 programs of the old `generic_mv.py`, whose `option{}` clauses
 were separated by commas, hold a tuple and are refused, and nothing else
-changes.
+changes. Against main `77bc509`, the merge changes exactly these programs
+(482 of 5,710) and no other.
 
 ## Ten causes to remove first
 
@@ -1064,9 +1120,9 @@ load-bearing readings](#after-the-load-bearing-readings)): the `ToDiagnostic` pr
 Book's chapters do not describe); type aliases and extension methods are
 done ([After the type aliases](#after-the-type-aliases), [After extension
 methods](#after-extension-methods)).
-The larger semantic items, types as values (198) and `comparable` as a type
-(125; [the Book's rules and two designs](comparable-type.md)), need Core work
-and an owner's design; union types (136) and live variables
+The larger semantic item, types as values (198), needs Core work and an
+owner's design (`comparable` as a type is built: [After
+`comparable`](#after-comparable)); union types (136) and live variables
 (50) are VerseVM-only or unreleased. The empty-values equality (30 different
 outputs) is dangerous but changes Core equality: it needs an owner
 decision first; [the readings audit](readings-audit.md) designs the
@@ -1175,7 +1231,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `Any.versetest` | 83 | 62 | 0 | 18 | 0 | 3 | 0 |
+| `Any.versetest` | 83 | 72 | 0 | 8 | 0 | 3 | 0 |
 | `ArchetypeAccessSpecifiers.versetest` | 11 | 11 | 0 | 0 | 0 | 0 | 0 |
 | `Archetypes.versetest` | 41 | 34 | 0 | 0 | 0 | 7 | 0 |
 | `Array.versetest` | 22 | 17 | 0 | 5 | 0 | 0 | 0 |
@@ -1203,7 +1259,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Attributes/native.versetest` | 20 | 1 | 0 | 0 | 0 | 19 | 0 |
 | `Attributes/override.versetest` | 16 | 12 | 0 | 4 | 0 | 0 | 0 |
 | `Attributes/scoped.versetest` | 51 | 33 | 0 | 0 | 0 | 18 | 0 |
-| `Attributes/unique.versetest` | 34 | 15 | 0 | 10 | 0 | 9 | 0 |
+| `Attributes/unique.versetest` | 34 | 19 | 0 | 6 | 0 | 9 | 0 |
 | `AutoQualification.versetest` | 29 | 0 | 0 | 0 | 0 | 29 | 0 |
 | `BigArray.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/2020-04-16-ForLoopIteratorVarScoping.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
@@ -1232,7 +1288,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/2020-10-26-DefineLocalWithMutatingAssignment.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/2021-03-23-CoroutineOverrideParameterNameMismatch.versetest` | 2 | 1 | 0 | 1 | 0 | 0 | 0 |
 | `Bugs/2021-03-23-InterfaceDefaultCoroutineImplementation.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
-| `Bugs/2021-04-26-DisjointTypesAllowedInComparisonAndPointerDeref.versetest` | 3 | 1 | 0 | 2 | 0 | 0 | 0 |
+| `Bugs/2021-04-26-DisjointTypesAllowedInComparisonAndPointerDeref.versetest` | 3 | 2 | 0 | 1 | 0 | 0 | 0 |
 | `Bugs/2021-08-18-DisjointResultInNestedIf.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/2021-08-23-struct_in_struct_sol-1986.versetest` | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/2021-08-26-UsingFunctionAsTypeInItsOwnDefinition.versetest` | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
@@ -1409,7 +1465,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/SOL-5386-CrashUsingSuperToCallOverrideInParametricClass.versetest` | 5 | 3 | 0 | 0 | 0 | 2 | 0 |
 | `Bugs/SOL-5452-NullDereferenceAfterRuntimeError.versetest` | 2 | 1 | 0 | 1 | 0 | 0 | 0 |
 | `Bugs/SOL-5477-CrashInGenClassDefinition.versetest` | 2 | 1 | 1 | 0 | 0 | 0 | 0 |
-| `Bugs/SOL-5496-CaseCodeBlocksWithoutScopes.versetest` | 8 | 1 | 0 | 7 | 0 | 0 | 0 |
+| `Bugs/SOL-5496-CaseCodeBlocksWithoutScopes.versetest` | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-5551-UsingTypeAlias.versetest.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-5564-PublicOverrideOfDefinitionInNonPublicScope.versetest` | 3 | 1 | 0 | 0 | 0 | 2 | 0 |
 | `Bugs/SOL-5706-CompilerCrashWhenUsingSyncExpressionInCertainCircumstances.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
@@ -1423,7 +1479,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/SOL-6116-DiamondInheritance.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-6137-ConcurrencyMacrosNotIntroducingScope.versetest` | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-6177-SubtypingIgnoresInheritedMembers.versetest` | 7 | 7 | 0 | 0 | 0 | 0 | 0 |
-| `Bugs/SOL-6529-WarnAboutAlwaysFailingContainerLookups.versetest` | 6 | 5 | 0 | 1 | 0 | 0 | 0 |
+| `Bugs/SOL-6529-WarnAboutAlwaysFailingContainerLookups.versetest` | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-6739-ParametricTypeMeetAndJoin.versetest` | 25 | 10 | 0 | 15 | 0 | 0 | 0 |
 | `Bugs/SOL-6934-OptionTypeIgnoresHashabilityOfValue.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
 | `Bugs/SOL-6945-JoinOfTupleOfNamedElementsAndArray.versetest` | 8 | 6 | 0 | 2 | 0 | 0 | 0 |
@@ -1501,8 +1557,8 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Classes/VarPointingToClass.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `ClassifiableSubset.versetest` | 36 | 9 | 0 | 27 | 0 | 0 | 0 |
 | `CoercedOverrides.versetest` | 10 | 3 | 0 | 4 | 0 | 3 | 0 |
-| `Comparable.versetest` | 49 | 7 | 0 | 42 | 0 | 0 | 0 |
-| `ComparableInterface.versetest` | 17 | 12 | 0 | 5 | 0 | 0 | 0 |
+| `Comparable.versetest` | 49 | 48 | 0 | 1 | 0 | 0 | 0 |
+| `ComparableInterface.versetest` | 17 | 13 | 0 | 4 | 0 | 0 | 0 |
 | `CompatibilityConstraints.versetest` | 320 | 0 | 0 | 0 | 0 | 320 | 0 |
 | `ComputationLimit.versetest` | 3 | 2 | 0 | 0 | 0 | 1 | 0 |
 | `Coroutines/Concurrency.versetest` | 86 | 11 | 1 | 1 | 0 | 73 | 0 |
@@ -1527,7 +1583,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `DynamicallyTypedSubobjectInstantiation.versetest` | 16 | 16 | 0 | 0 | 0 | 0 | 0 |
 | `Effects.versetest` | 336 | 256 | 8 | 5 | 0 | 67 | 0 |
 | `Enum.versetest` | 71 | 60 | 1 | 6 | 0 | 4 | 0 |
-| `EnumCompare.versetest` | 12 | 0 | 0 | 12 | 0 | 0 | 0 |
+| `EnumCompare.versetest` | 12 | 12 | 0 | 0 | 0 | 0 | 0 |
 | `Escape.versetest` | 5 | 5 | 0 | 0 | 0 | 0 | 0 |
 | `EvaluationOrder.versetest` | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
 | `Event.versetest` | 6 | 0 | 0 | 4 | 0 | 2 | 0 |
@@ -1541,7 +1597,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Failure.versetest` | 34 | 31 | 0 | 0 | 0 | 3 | 0 |
 | `Features/DefaultValueAssignment.versetest` | 67 | 18 | 3 | 1 | 0 | 45 | 0 |
 | `FlowControl/Break.versetest` | 17 | 15 | 2 | 0 | 0 | 0 | 0 |
-| `FlowControl/Case.versetest` | 71 | 68 | 1 | 1 | 0 | 1 | 0 |
+| `FlowControl/Case.versetest` | 71 | 69 | 1 | 0 | 0 | 1 | 0 |
 | `FlowControl/Concurrency/branch.versetest` | 10 | 4 | 0 | 1 | 0 | 5 | 0 |
 | `FlowControl/Continue.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
 | `FlowControl/If.versetest` | 94 | 94 | 0 | 0 | 0 | 0 | 0 |
@@ -1592,7 +1648,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Intrinsics/CharConversionExtensionMethods.versetest` | 15 | 15 | 0 | 0 | 0 | 0 | 0 |
 | `Intrinsics/CharToString.versetest` | 10 | 10 | 0 | 0 | 0 | 0 | 0 |
 | `Intrinsics/Concatenate.versetest` | 25 | 19 | 0 | 6 | 0 | 0 | 0 |
-| `Intrinsics/ConcatenateMaps.versetest` | 29 | 26 | 0 | 3 | 0 | 0 | 0 |
+| `Intrinsics/ConcatenateMaps.versetest` | 29 | 27 | 0 | 2 | 0 | 0 | 0 |
 | `Intrinsics/Err.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `Intrinsics/FloatToString.versetest` | 12 | 3 | 0 | 0 | 7 | 2 | 0 |
 | `Intrinsics/IntToString.versetest` | 11 | 11 | 0 | 0 | 0 | 0 | 0 |
@@ -1614,7 +1670,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `LocalizationJoin.versetest` | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
 | `MacroForms.versetest` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
 | `ManyEmergentTypes.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
-| `Map.versetest` | 104 | 81 | 5 | 18 | 0 | 0 | 0 |
+| `Map.versetest` | 104 | 84 | 5 | 15 | 0 | 0 | 0 |
 | `MapOrder.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | `Math/Bitwise.versetest` | 174 | 11 | 0 | 159 | 0 | 4 | 0 |
 | `Math/Math.versetest` | 77 | 76 | 0 | 1 | 0 | 0 | 0 |
@@ -1633,7 +1689,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Modules/Using.versetest` | 22 | 1 | 0 | 0 | 0 | 21 | 0 |
 | `Modules/Using2.versetest` | 9 | 3 | 3 | 0 | 0 | 3 | 0 |
 | `Mutability.versetest` | 55 | 53 | 1 | 1 | 0 | 0 | 0 |
-| `NamedParameterOverloads.versetest` | 36 | 35 | 0 | 1 | 0 | 0 | 0 |
+| `NamedParameterOverloads.versetest` | 36 | 36 | 0 | 0 | 0 | 0 | 0 |
 | `NamedParamsFromNative.versetest` | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
 | `NamesReservedForFuture.versetest` | 69 | 69 | 0 | 0 | 0 | 0 | 0 |
 | `NativeDeepMutability.versetest` | 19 | 0 | 0 | 0 | 0 | 19 | 0 |
@@ -1648,7 +1704,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `ObjectToJson.versetest` | 4 | 0 | 0 | 0 | 0 | 4 | 0 |
 | `Operators/Associativity.versetest` | 16 | 15 | 0 | 0 | 1 | 0 | 0 |
 | `Operators/At.versetest` | 15 | 3 | 0 | 12 | 0 | 0 | 0 |
-| `Operators/BinaryAddArray.versetest` | 14 | 9 | 0 | 5 | 0 | 0 | 0 |
+| `Operators/BinaryAddArray.versetest` | 14 | 14 | 0 | 0 | 0 | 0 | 0 |
 | `Operators/BinaryAddFloat.versetest` | 36 | 22 | 0 | 0 | 0 | 14 | 0 |
 | `Operators/BinaryAddInt.versetest` | 43 | 32 | 0 | 1 | 8 | 2 | 0 |
 | `Operators/BinaryAddString.versetest` | 16 | 14 | 0 | 2 | 0 | 0 | 0 |
@@ -1668,15 +1724,15 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Operators/CompareInt.versetest` | 36 | 36 | 0 | 0 | 0 | 0 | 0 |
 | `Operators/CompareMap.versetest` | 97 | 84 | 4 | 9 | 0 | 0 | 0 |
 | `Operators/CompareOption.versetest` | 18 | 18 | 0 | 0 | 0 | 0 | 0 |
-| `Operators/CompareRational.versetest` | 4 | 3 | 0 | 1 | 0 | 0 | 0 |
-| `Operators/CompareString.versetest` | 148 | 126 | 0 | 22 | 0 | 0 | 0 |
+| `Operators/CompareRational.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
+| `Operators/CompareString.versetest` | 148 | 148 | 0 | 0 | 0 | 0 | 0 |
 | `Operators/CompareStruct.versetest` | 36 | 32 | 0 | 0 | 0 | 4 | 0 |
 | `Operators/CompareTuple.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
 | `Operators/CompareTypeChecking.versetest` | 39 | 39 | 0 | 0 | 0 | 0 | 0 |
 | `Operators/DisallowedOperatorDefinitions.versetest` | 30 | 30 | 0 | 0 | 0 | 0 | 0 |
 | `Operators/LogicalAnd.versetest` | 9 | 8 | 0 | 0 | 1 | 0 | 0 |
 | `Operators/LogicalNot.versetest` | 11 | 11 | 0 | 0 | 0 | 0 | 0 |
-| `Operators/LogicalOr.versetest` | 90 | 80 | 0 | 10 | 0 | 0 | 0 |
+| `Operators/LogicalOr.versetest` | 90 | 90 | 0 | 0 | 0 | 0 | 0 |
 | `Operators/Negate.versetest` | 6 | 5 | 0 | 0 | 1 | 0 | 0 |
 | `Operators/Of.versetest` | 15 | 1 | 0 | 14 | 0 | 0 | 0 |
 | `Operators/PostAt.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
@@ -1691,7 +1747,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `PackageCycles.versetest` | 15 | 0 | 0 | 0 | 0 | 15 | 0 |
 | `ParametricCastingIsDisallowed.versetest` | 11 | 10 | 0 | 1 | 0 | 0 | 0 |
 | `ParametricFunctions.versetest` | 106 | 46 | 9 | 47 | 0 | 4 | 0 |
-| `ParametricTypes.versetest` | 274 | 149 | 4 | 98 | 0 | 23 | 0 |
+| `ParametricTypes.versetest` | 274 | 153 | 4 | 94 | 0 | 23 | 0 |
 | `Parentheses.versetest` | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | `Path.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `PersistentJson.versetest` | 103 | 1 | 0 | 0 | 0 | 102 | 0 |
@@ -1711,7 +1767,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `ResolvingIdentifiers.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
 | `RetryTransactionUnderAutoRTFM.versetest` | 12 | 0 | 0 | 0 | 0 | 12 | 0 |
 | `RollbackMutablity.versetest` | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
-| `RollbackTortureTest.versetest` | 15 | 3 | 0 | 10 | 0 | 2 | 0 |
+| `RollbackTortureTest.versetest` | 15 | 13 | 0 | 0 | 0 | 2 | 0 |
 | `Roundtrip/Comments.versetest` | 96 | 81 | 0 | 14 | 0 | 1 | 0 |
 | `Roundtrip/Definitions.versetest` | 13 | 13 | 0 | 0 | 0 | 0 | 0 |
 | `Roundtrip/For.versetest` | 6 | 6 | 0 | 0 | 0 | 0 | 0 |

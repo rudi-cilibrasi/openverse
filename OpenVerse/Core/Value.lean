@@ -176,7 +176,7 @@ of those four are equal, at every depth (`array{false} = array{()}`).
 equal once every empty value in them is made `()` (`norm`); so it is an
 equivalence (`veq_refl`, `veq_comm`, `veq_trans`) and a congruence for the
 constructors that hold values (`veq_some`, `veq_tup_of_get`,
-`veq_arr_of_get`). On two values of one type it is `=`
+`veq_arr_of_get`). On two values of one type without `dyn` it is `=`
 (`veq_iff_eq_of_hasTy`, `Typing.lean`): each type holds the empty value one
 way. -/
 

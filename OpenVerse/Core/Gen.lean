@@ -187,7 +187,10 @@ partial def genStmt (env : Env) (d : Nat) : G Expr := do
     four ways Verse Core holds it (`.logic false`, `()`, `none`, `[]`, also
     `""` and an empty `mkArr`/`mkTup`), so that `eq`, `ne`, a map's lookup
     (an array of key-value pairs searched by `eq` on the keys) and a search of
-    an array by `eq` compare them across their representations. -/
+    an array by `eq` compare them across their representations; or a box
+    of a `comparable` (`Core/Comparable.lean`: `tup [int k, …]` under a
+    code `k`, an int, a float, a char, an array of values of several
+    types), as `dyn` values compare. -/
 partial def genVal (env : Env) (d : Nat) : G Expr := do
   let empty : G Expr := do
     match ← below 7 with
@@ -200,8 +203,9 @@ partial def genVal (env : Env) (d : Nat) : G Expr := do
     | _ => return p .mkTup []
   if d == 0 then
     if (← chance 60) then return ← empty
-    return .lit (← pick [.int 0, .int 1, .logic true, .char 97, Value.ofString "a"])
-  match ← below 9 with
+    return .lit (← pick [.int 0, .int 1, .logic true, .char 97, Value.ofString "a", .float 0,
+      .tup [.int 0, .int 65], .tup [.int 3, .int 0], .tup [.int 4, .int 0]])
+  match ← below 10 with
   | 0 | 1 | 2 => empty
   | 3 => return p .mkSome [← genVal env (d-1)]
   | 4 | 5 =>
@@ -214,6 +218,8 @@ partial def genVal (env : Env) (d : Nat) : G Expr := do
     let mut es := #[]
     for _ in [0:n] do es := es.push (← genVal env (d-1))
     return p .mkTup es.toList
+  -- (a box under a code, of a value of any shape)
+  | 8 => return p .mkTup [.lit (.int (← below 5)), ← genVal env (d-1)]
   | _ => genVal env 0
 
 /-- A test of values with the empty value at some depth: `eq` or `ne` of two,

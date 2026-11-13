@@ -20,7 +20,7 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
       let ty := ty?.getD r.ty
       if ty == .never then
         eerr p (if n.startsWith "$" then "cannot infer the type of this clause's value" else s!"cannot infer the type of '{n}'")
-      let e ← ctx.coerce p r ty
+      let e ← coerceBoxWith elabE ctx p r ty
       let slot ← fresh ty
       let storage := copied.orElse (fun _ => ctx.resumeStorage.lookup n) |>.orElse fun _ => if isVar && ctx.suspends then
         some { frame := ctx.frameName, name := s!"{p.file}:{p.line}:{p.col}:{n}", args := ctx.frameArgs } else none

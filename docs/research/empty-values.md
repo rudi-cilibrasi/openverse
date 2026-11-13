@@ -534,9 +534,9 @@ its model of the Book's equality.
 
 | Program | openverse | Book |
 |---|---|---|
-| `Same(X:t, Y:u where t:subtype(comparable), u:subtype(comparable))<decides>:void = X = Y` | refused: two type parameters | compiles |
-| `Same(A:tuple(t, t, t), B:string where …) = A = B` (`CompareString` 167 to 182) | refused (`tests/errors/eq_generic_tuple_string.verse`) | compares as values |
-| `IsFalse(X:t where t:subtype(comparable))<decides>:void = X = false`, `IsFalse[s{}]` with `s := struct{}` | holds: Verse Core holds an empty struct as `()` (it failed before Verse Core's `eq` related the empty values, by luck); `s{} = false` itself fails | fails: a struct is not the empty value |
+| `Same(X:t, Y:u where t:subtype(comparable), u:subtype(comparable))<decides>:void = X = Y` | refused: two type parameters (now compares their boxes: [comparable-type.md](comparable-type.md)) | compiles |
+| `Same(A:tuple(t, t, t), B:string where …) = A = B` (`CompareString` 167 to 182) | refused (now compares boxes, `tests/verse/comparable_generic.verse`) | compares as values |
+| `IsFalse(X:t where t:subtype(comparable))<decides>:void = X = false`, `IsFalse[s{}]` with `s := struct{}` | held: Verse Core holds an empty struct as `()`; now fails, the struct's box carries its code | fails: a struct is not the empty value |
 | `true? = false` (`BoolQuery` 3, 4, `LogicalAnd` 29, `Precedence` 121) | fails: `true?` is `true` | the tests: holds; the prose (ch. 8, 57: "When applied to any other value, it succeeds with that value") says `true?` is `true` |
 | `true` as a type name | unknown | the type of the empty value; `FORT-582630-BranchResult.versetest:3` needs `branch:` to have its body's type, which the Book's prose does not state |
 

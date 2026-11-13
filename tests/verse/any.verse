@@ -1,9 +1,12 @@
-# any (#138): unrelated types join at any, any(X) evaluates X, and an any is opaque
+# any (#138): unrelated types join at any (at comparable when both are
+# comparable, Book of Verse ch. 1), any(X) evaluates X, and an any is opaque
+c := class{}
 GetValue(UseNumber:logic):any = if (UseNumber?) then 42 else "text"
 Keep(X:t where t:type):t = X
 Main():void =
     var Count:int = 0
     V := if (Count = 0) then 1 else "one"
+    VA := if (Count = 0) then 1 else c{}
     A := array{15.61, "Message", 3}
     B:[]any = array{1, "x"}
     Print("{A.Length} {B.Length}")
