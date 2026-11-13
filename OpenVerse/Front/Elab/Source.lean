@@ -197,8 +197,8 @@ partial def constantUses (tops : List STop) : List (Pos × String × List String
 /-- A constant's value is computed from the constants it names, so none may
     name itself, directly or through others (`X:int = X`, or `I:int = J` and
     `J:int = I`): its computation would never end (as a field default that
-    depends on itself, which the elaboration of defaults refuses). A
-    constant may name one defined after it. -/
+    depends on itself, which the elaboration of defaults refuses). (One
+    defined after it in its own scope is refused too, `checkConstantOrder`.) -/
 def checkConstantCycles (tops : List STop) : Except String Unit := do
   let graph := constantUses tops
   let shown (n : String) : String := ".".intercalate (qualParts n)
@@ -216,6 +216,24 @@ def checkConstantCycles (tops : List STop) : Except String Unit := do
         if !seen.contains u then
           seen := u :: seen
           todo := todo ++ [(u, path ++ [m])]
+
+/-- A constant's value may name a constant of its own scope (a module, or the
+    top level) only when that one is defined before it, in the same file: the
+    Book of Verse's tests, `Features/DefaultValueAssignment.versetest` 102 and
+    128 ("module variable initializers can't refer to module variables that
+    succeed them in the same module"), refuse one defined after it, and allow
+    one of another module or of an enclosing scope, defined before or after
+    (`c22`). (One that depends on itself is `checkConstantCycles`'s.) -/
+def checkConstantOrder (tops : List STop) : Except String Unit := do
+  let graph := constantUses tops
+  let shown (n : String) : String := ".".intercalate (qualParts n)
+  let scope (n : String) : List String := (qualParts n).dropLast
+  for ((p, n, uses), i) in graph.zipIdx do
+    for u in uses do
+      if let some j := graph.findIdx? (·.2.1 == u) then
+        let q := graph[j]!.1
+        if j > i && scope u == scope n && q.file == p.file then
+          throw s!"{p.show}: the value of the constant {shown n} names {shown u}, which is defined after it in the same scope ({q.show}): a constant may only use one defined before it (Book of Verse's tests, DefaultValueAssignment.versetest)"
 
 /-- No definition takes a reserved name (`reservedNames`), at any scope. -/
 def checkReservedNames (tops : List STop) : Except String Unit := do
@@ -363,6 +381,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   let resolved := BuiltinValues.wrappers resolved ++ resolved
   let (typeDefaults, resolved) := resolved.partition (·.isTypeDefault)
   checkConstantCycles resolved
+  checkConstantOrder resolved
   let resolved := if opts.extendedDefaults then resolved
     else resolved.map InitializerConvergence.markSource
   -- Resolve source names before deciding which soft-library definitions are

@@ -77,9 +77,10 @@ Log():void = Print("logged")
 # same at every type argument
 IsTrue(X:t where t:subtype(comparable))<decides>:void = X = true
 
-# constants may call generic functions, and refer to constants defined later
-Answer := Identity(Later)
+# constants may call generic functions, and refer to constants defined before
+# them in their scope
 Later := 42
+Answer := Identity(Later)
 Names:[]string = Repeat("n", 2)
 
 point := struct:
