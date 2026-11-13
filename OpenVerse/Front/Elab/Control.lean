@@ -942,24 +942,24 @@ def withCastClauses (ctx : Ctx) (cs : List SExpr) (after : SExpr) (isGen : SExpr
     let moved (computed : Bool) := Refine.castRestClauses (cs.take k) cast refusal.opens (cs.drop (k + 1)) after
       isGen ctx.types.classes.contains (fun n => (ctx.lookup n).any (!·.mutable)) computed lift
       (fun f => !ctx.types.varFields.any (·.2 == f))
-    let (cs', after', _, _) ← match moved false with
+    let first ← match moved false with
       | .ok r => pure r
       | .error why => throw s!"{err} ({why})"
     -- (a later cast of an object computed among the moved clauses is cast
     -- again from that object, bound first, when `after` needs it: when it
     -- is refused without)
     let st1 ← get
-    match ← tryCatch (Except.ok <$> rebuild cs' after') (fun err => pure (Except.error err)) with
+    match ← tryCatch (Except.ok <$> rebuild first.clauses first.after) (fun err => pure (Except.error err)) with
     | .ok r => return some r
     | .error err1 =>
       -- (#250: saying which later casts are not cast again, as their objects
       -- may name type arguments a cast opens and are no fields read from it)
       let err1 := match moved true with
-        | .ok (_, _, _, e :: es) => s!"{err1} ({if es.isEmpty then s!"the cast that binds {e} is" else s!"the casts that bind {", ".intercalate (e :: es)} are"} not repeated where the clauses' names are used, as its object may name type arguments a cast before it opens and is not read from that cast's name by fields that are no vars (#250))"
+        | .ok { notAgain := e :: es, .. } => s!"{err1} ({if es.isEmpty then s!"the cast that binds {e} is" else s!"the casts that bind {", ".intercalate (e :: es)} are"} not repeated where the clauses' names are used, as its object may name type arguments a cast before it opens and is not read from that cast's name by fields that are no vars (#250))"
         | _ => err1
-      let .ok (cs'', after'', true, _) := moved true | throw err1
+      let .ok again@{ objectsAgain := true, .. } := moved true | throw err1
       set st1
-      return some (← tryCatch (rebuild cs'' after'') fun _ => throw err1)
+      return some (← tryCatch (rebuild again.clauses again.after) fun _ => throw err1)
 
 /-- Infer a producer's signature instance from its canonical arguments. -/
 def loopInstanceOf (ctx : Ctx) (p : Pos) (sig : Sig) (types : List Ty) : EM (List (String × Ty)) := do
