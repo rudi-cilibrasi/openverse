@@ -102,11 +102,6 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let classes ← classHierarchy defs.tops source.constructionFx
   let fields ← classFields classes opts.requests
   let methods ← classMethods defs.tops classes fields
-  -- the type definitions: `name := struct …` and `name := enum …`
-  let isTypeDef : STop → Bool
-    | .const _ _ none (.structDef ..) | .const _ _ none (.enumDef ..) | .const _ _ none (.refineDef ..) => true
-    | _ => false
-  let tops := methods.tops.filter (!isTypeDef ·)
   let mut env ← typeEnvironment classes fields methods source admitted.concurrencyNames opts.requests
   env ← upperBounds env methods.tops
   let views ← interfaceViews env classes.defs opts.requests
@@ -115,158 +110,16 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   env := { env with viewed := views.viewed }
   env ← pinsAndAccessors env methods opts.requests
   env ← addPlaceholders env
-  -- overloading (#74): functions of one name, each renamed `F$ovN`; a call
-  -- takes the one its arguments fit (`elabApp`), and no call fits two
-  let fnNames := tops.filterMap fun | .fn _ n .. => some n | _ => none
-  let ovNames := (fnNames.filter fun n => (fnNames.filter (· == n)).length > 1 && !n.contains '.').eraseDups
-  let mut ovMap : List (String × List String) := []
-  let mut renamed : Array STop := #[]
-  for t in tops do
-    match t with
-    | .fn p n ps tps effs ret body =>
-      if ovNames.contains n then
-        if n == "Main" then throw s!"{p.show}: Main cannot be overloaded"
-        if builtins.contains n then throw s!"{p.show}: '{n}' is a built-in function"
-        if tops.any (fun | .const _ m .. | .classDef _ m .. => m == n | _ => false) ||
-            env.classes.contains n || (env.structs.lookup n).isSome || (env.enums.lookup n).isSome then
-          throw s!"{p.show}: '{n}' is defined twice (only functions can be overloaded)"
-        let prev := (ovMap.lookup n).getD []
-        let m := s!"{n}$ov{prev.length}"
-        ovMap := (ovMap.filter (·.1 != n)) ++ [(n, prev ++ [m])]
-        renamed := renamed.push (.fn p m ps tps effs ret body)
-      else renamed := renamed.push t
-    | t => renamed := renamed.push t
-  let tops := renamed.toList
-  env := { env with overloads := ovMap,
-                    methodOverloads :=
-                      let bases := (defs.methodOverloads.lists.map (·.1.2)).eraseDups
-                      bases.map fun mn =>
-                        let n := (defs.methodOverloads.lists.filter (·.1.2 == mn)).foldl (fun acc (_, sigs) => max acc sigs.length) 0
-                        (mn, (List.range n).map fun k => s!"{mn}$ov{k}") }
-  -- generic functions (those with a `where` clause) are numbered after the
-  -- other functions and constants
-  let isGeneric : STop → Bool
-    | .fn _ _ _ (_ :: _) .. => true
-    | _ => false
-  let generics := tops.filter isGeneric
-  let names := tops.map fun | .fn _ n .. => n | .const _ n .. => n | .classDef _ n .. => n
-  let tops := tops.filter (!isGeneric ·)
-  for (n, i) in names.zip (List.range names.length) do
-    if names.take i |>.contains n then throw s!"'{n}' is defined twice (only functions can be overloaded)"
-    if builtins.contains n then throw s!"'{n}' is a built-in function"
+  let overloads ← functionOverloads env methods.tops defs.methodOverloads
+  env := { env with overloads := overloads.functions, methodOverloads := overloads.methods }
+  let declared ← declareSignatures env overloads.tops opts.requests
+  let tops := declared.tops
+  let generics := declared.generics
+  let mut sigs := declared.sigs
+  let mut gsigs := declared.gsigs
   -- A cast discovered before a default helper must acquire the helper
   -- effects once its body is known, before checking the source caller.
   let inferredBridge (n : String) := defaultBridge n || opts.requests.casts.any (·.name == n)
-  -- a function's parameter and result types
-  let fnTypes (env : TyEnv) (p : Pos) (n : String) (ps : List SParam) (effs : List String) (ret : STy) :
-      Except String (List Ty × Ty) := do
-    if effs.contains "suspends" then
-      if effs.contains "decides" then
-        throw s!"{p.show}: {n} is both <suspends> and <decides>, which exclude each other"
-      if n.endsWith "$init" then
-        throw s!"{p.show}: a <suspends> constructor is not supported (#156)"
-    let (tys, rt) ← resolveSignatureTypes env p ps ret n
-    -- named parameters come last (Book of Verse §8.2)
-    let rec namedLast : List SParam → Bool
-      | [] => true
-      | q :: qs => if q.named then qs.all (·.named) else namedLast qs
-    if !namedLast ps then throw s!"{p.show}: in {n}, every parameter after a named one must be named"
-    return (tys, rt)
-  -- signatures: functions from their annotations, constants from theirs or by inference
-  let mut sigs : Array Sig := #[]
-  for (top, idx) in tops.zip (List.range tops.length) do
-    match top with
-    | .fn p n ps _ effs ret _ =>
-      let (tys, rt) ← fnTypes env p n ps effs ret
-      if (["converges", "computes", "transacts"].filter effs.contains).length > 1 then
-        throw s!"{p.show}: {n} has more than one of <converges>, <computes> and <transacts> (they exclude each other)"
-      if effs.contains "computes" && ("transacts" :: heapFx).any effs.contains then
-        throw s!"{p.show}: <computes> excludes the heap effects (<reads>, <writes>, <allocates>, <transacts>) that {n} also has"
-      sigs := sigs.push { idx, name := n, params := tys, ret := rt, decides := effs.contains "decides",
-                          suspends := effs.contains "suspends",
-                          -- (a `block:`'s effects are inferred below, from none, as a
-                          -- constant's: blocks that construct each other's classes)
-                          fx := if n.endsWith ".$block" || defaultBridge n || (n.splitOn "$default$").length > 1 then [] else allowedFx effs,
-                          isConst := false,
-                          named := (ps.filter (·.named)).map fun q => (q.name, q.default),
-                          pnames := ps.map (·.name), scope := copyScope? effs,
-                          typeValues := ps.zipIdx.filterMap fun (param, i) => if param.typeValue then some i else none }
-    | .const p n sty _ =>
-      let rt ← match sty with
-        | some t => do let (rt, _) ← (resolveTy env p t).run {}; pure rt
-        | none => pure .never   -- inferred below
-      -- a constant's heap effects are inferred below, from none
-      sigs := sigs.push { idx, name := n, params := [], ret := rt, decides := false, isConst := true, fx := [] }
-    | .classDef .. => pure ()   -- expanded above
-  -- the signatures of the generic functions, over their type parameters
-  let mut gsigs : Array Sig := #[]
-  for (top, gidx) in generics.zip (List.range generics.length) do
-    match top with
-    | .fn p n ps tps effs ret _ =>
-      if n == "Main" then throw s!"{p.show}: Main cannot be generic"
-      let resolved ← resolveTParams env tps
-      let resolved ← match ps.head? with
-        | some receiver => do
-          let unchecked := resolved.env { env with sbounds := [] }
-          let ty ← (resolveTy unchecked p receiver.ty).run' { env := unchecked }
-          match ty with
-          | .struct owner args =>
-            if ["Self", "$Self"].contains receiver.name && n.startsWith (owner ++ ".") then
-              let σ := (((env.sparams.lookup owner).getD []).map (·.1)).zip args
-              let extra := ((env.sbounds.lookup owner).getD []).map fun (base, derived) =>
-                (SubtypeEvidence.Bound.mk base derived).subst σ
-              pure { resolved with bounds := (resolved.bounds ++ extra).eraseDups }
-            else pure resolved
-          | _ => pure resolved
-        | none => pure resolved
-      let tparams := resolved.params
-      let genv := resolved.env env
-      let (tys, rt) ← fnTypes genv p n ps effs ret
-      if (["converges", "computes", "transacts"].filter effs.contains).length > 1 then
-        throw s!"{p.show}: {n} has more than one of <converges>, <computes> and <transacts> (they exclude each other)"
-      if effs.contains "computes" && ("transacts" :: heapFx).any effs.contains then
-        throw s!"{p.show}: <computes> excludes the heap effects (<reads>, <writes>, <allocates>, <transacts>) that {n} also has"
-      -- (#209) a method of a class with type parameters that its parent's
-      -- type arguments do not give reads their values from its receiver
-      -- (an overriding implementation: what a dispatch that opens them
-      -- reaches; the class's other methods are called at known types)
-      -- (#250: the function a cast's branch is lifted into, from the object,
-      -- the cast's subject, its first parameter)
-      let lifted := opts.requests.casts.find? (·.name == n)
-      let selfTps : List String := if defaultBridge n || spawnAdapter n then
-          (effs.filterMap fun e => if e.startsWith "$selfTp:" then some (e.drop 8).toString else none).filter
-            (fun v => tparams.any (·.1 == v))
-        else if let some l := lifted then
-          (l.opened.map (·.1)).filter fun v => tparams.any (·.1 == v) else
-        match n.splitOn "." with
-        | [c, m] =>
-          -- Bound-method value adapters and registered resume methods can
-          -- open receiver parameters absent from their value signatures.
-          let valueCall := m == "$call" || m.startsWith "$call:"
-          let dictionaryCall := m == "$apply" && c.startsWith "$choiceOperationDictionary"
-          let resumeCall := opts.requests.loops.any (fun l => l.resumes.any (·.name == n))
-          if effs.contains "override" && env.classes.contains c && env.isRefClass c &&
-              (!m.startsWith "$" || valueCall || dictionaryCall || resumeCall) &&
-              (match tys.head? with | some (.struct c' _) => c' == c | _ => false) then
-            -- (#351: below an interface referred to through views, every
-            -- type parameter, which a dispatch through a view may open)
-            (if env.viewed.any (env.isSub c ·) then ((env.sparams.lookup c).getD []).map (·.1)
-             else env.addedParams c).filter fun v => tparams.any (·.1 == v) && (env.witnessField? c v).isSome
-          else []
-        | _ => []
-      -- generic functions come after the others
-      let selfBounds := (tys.head?.map fun receiver =>
-        SubtypeEvidence.fieldsForBounds env receiver resolved.bounds).getD []
-      gsigs := gsigs.push { idx := tops.length + gidx, name := n, params := tys, ret := rt, selfTps,
-                            decides := effs.contains "decides", isConst := false,
-                            suspends := effs.contains "suspends",
-                            -- (a parametric class's `block:`: inferred from none, #41)
-                            fx := if n.endsWith ".$block" || defaultBridge n then [] else allowedFx effs,
-                            tparams, bounds := resolved.bounds, selfBounds,
-                            named := (ps.filter (·.named)).map fun q => (q.name, q.default),
-                            pnames := ps.map (·.name), scope := copyScope? effs,
-                            typeValues := ps.zipIdx.filterMap fun (param, i) => if param.typeValue then some i else none }
-    | _ => pure ()
   let mkSigProg (sigs : Array Sig) : Prog :=
     { fns := (sigs ++ gsigs).toList.map fun s =>
         { name := s.name, arity := s.frame.arity, nslots := 0,
