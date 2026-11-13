@@ -101,168 +101,12 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let defs ← argsAndMethodOverloads source.tops source.entry opts.args
   let classes ← classHierarchy defs.tops source.constructionFx
   let fields ← classFields classes opts.requests
-  -- the methods
-  let mut expanded : Array STop := #[]
-  let mut abstracts : Array (String × String) := #[]
-  let mut overridePairs : Array (Pos × String × String) := #[]
-  let mut implChecks : Array (Pos × String × String × String) := #[]
-  -- constructor functions (#11): `K<constructor>(ps) := c:` and its items
-  let ctorOf (t : STop) :
-      Option (Pos × String × List SParam × List TParam × List String × String × List SExpr) :=
-    match t with
-    | .fn p k ps tps effs _ (.block _ items) =>
-      match effs.find? (·.startsWith "$constructor:") with
-      | some e => some (p, k, ps, tps, effs.filter (· != e), (e.drop "$constructor:".length).toString, items)
-      | none => none
-    | _ => none
-  let ctors := defs.tops.filterMap ctorOf
-  for t in defs.tops do
-    match t with
-    | .classDef .. => pure ()
-    | t => if (ctorOf t).isNone then expanded := expanded.push t
-  let ctorTargs : List (String × List STy) := defs.tops.filterMap fun
-    | t@(.fn _ k _ _ _ (.app _ ts) _) => if (ctorOf t).isSome then some (k, ts) else none
-    | _ => none
-  expanded := expanded ++
-    (← expandCtors ctors classes.cdef? fields.of (fun c => classes.henv.supers c) (fun k => (ctorTargs.lookup k).getD [])
-      (defs.tops.filterMap fun t => match t, ctorOf t with
-        | .fn _ k _ _ _ (.app _ ts) _, some _ => some (k, ts)
-        | .fn _ k _ _ _ _ _, some _ => some (k, [])
-        | _, _ => none)).toArray
-  for cd in classes.defs do
-    let n := cd.name
-    let fs := fields.of n
-    expanded := expanded.push (.const cd.pos n none (.structDef cd.pos cd.tps cd.specs fs))
-    let selfTy : STy := if cd.tps.isEmpty then .name n else .app n (cd.tps.map fun tp => STy.name tp.name)
-    for (m, mi) in cd.methods.zip (List.range cd.methods.length) do
-      match m with
-      | .fn mp mn ps mtps effs ret body =>
-        if fs.any (·.1 == methodBase mn) then throw s!"{mp.show}: '{methodBase mn}' is both a field and a method of {n}"
-        if mn != "$block" && (cd.methods.take mi).any (fun | .fn _ x .. => x == mn | _ => false) then
-          throw s!"{mp.show}: {n} defines {mn} twice with the same parameters"
-        if ps.any (·.name == "Self") then throw s!"{mp.show}: a method parameter cannot be called Self"
-        if builtins.contains (methodBase mn) || softBuiltins.contains (methodBase mn) then throw s!"{mp.show}: a method cannot be called {methodBase mn}, the name of a built-in function"
-        -- (a copy of an interface's default: as in the interface, #53)
-        let scope := (copyScope? effs).getD n
-        for prm in ps do
-          if (fields.of scope).any (·.1 == prm.name) || (classes.henv.supers scope).any (classes.declaresBase · prm.name) then
-            throw s!"{mp.show}: parameter '{prm.name}' of {mn} is already a field or method of {scope}; Verse does not allow shadowing"
-        -- a class's `block:` clauses: run at construction, after those of the
-        -- classes above it, so never overridden
-        -- overriding (Book of Verse ch. 10: `M<override>`, the same signature)
-        let isOverride := effs.contains "override"
-        -- `(q:)M`: implements slot q of M (#70), q the interface that
-        -- introduces M
-        let qual? : Option (String × String) :=
-          if mn.startsWith "(" then match (mn.drop 1).toString.splitOn ":)" with
-            | [q, m'] => some (q, m')
-            | _ => none
-          else none
-        if let some (q, m') := qual? then
-          if !((classes.henv.supers n).drop 1).contains q then
-            throw s!"{mp.show}: ({q}:){m'}: {q} is not a class or interface above {n}"
-          let roots := classes.henv.rootsOf (classes.declares · m') q
-          let qualify := " or ".intercalate (roots.map fun r => s!"({r}:)")
-          if roots.isEmpty then throw s!"{mp.show}: ({q}:){m'}: {q} has no method {m'}"
-          if !classes.declares q m' then
-            throw s!"{mp.show}: ({q}:){m'}: {q} does not declare {m'} itself; qualify it with {qualify}"
-          if roots != [q] then
-            throw s!"{mp.show}: ({q}:){m'}: {q}'s {m'} overrides another; qualify it with the interface that introduces {m'}, {qualify}"
-          if !isOverride then throw s!"{mp.show}: ({q}:){m'} must be marked <override>"
-          if effs.contains "$abstract" then throw s!"{mp.show}: ({q}:){m'} needs a body"
-          if cd.methods.any (fun | .fn _ x .. => x == m' | _ => false) then
-            throw s!"{mp.show}: {n} implements {m'} both plainly and as ({q}:){m'}: give one or the other"
-        -- what the method overrides: the declarations above it in its slots
-        -- (for `(q:)m'`, those below q, and the `(q:)m'` above), and for a
-        -- plain one the qualified implementations above too
-        let ups1 := (classes.henv.supers n).drop 1
-        let overridden : List (String × String) :=
-          if mn == "$block" then [] else match qual? with
-          | some (q, m') =>
-            (ups1.filter fun e => classes.declares e m' && classes.henv.isSub e q).map (·, m') ++
-              (ups1.filter (classes.declares · mn)).map (·, mn)
-          | none =>
-            (ups1.filter (classes.declares · mn)).map (·, mn) ++
-              ups1.flatMap fun e => (classes.henv.rootsOf (classes.declares · mn) n).filterMap fun r =>
-                if classes.declares e s!"({r}:){mn}" then some (e, s!"({r}:){mn}") else none
-        match overridden with
-        | [] =>
-          if isOverride then
-            if (classes.henv.supers n).any (fun e => ((classes.cdef? e).map fun ed => ed.methods.any fun
-                | .fn _ x .. => x.startsWith s!"{mn}$ov" | _ => false).getD false) then
-              throw s!"{mp.show}: {mn}<override> has the parameters of no overload of {mn} above {n}"
-            throw s!"{mp.show}: {mn}<override> does not override an inherited method"
-        | qs@((q, _) :: _) =>
-          if !isOverride then throw s!"{mp.show}: {mn} is inherited from {q}: mark it {mn}<override> to override it"
-          for (q, x) in qs do
-            match (classes.cdef? q).bind (CDef.methodNamed · x) with
-            | some (.fn _ _ _ qtps qeffs _ _) =>
-              -- (a copy is exempt, and a copy's `<final>` is its interface's,
-              -- which the message names)
-              if qeffs.contains "final" && !qeffs.contains "$copy" && !effs.contains "$copy" then
-                throw s!"{mp.show}: {q}.{x} is <final>: it cannot be overridden"
-              -- (a method with its own type parameters overrides one with as
-              -- many, compared up to their names below)
-              if qtps.length != mtps.length then
-                throw s!"{mp.show}: {mn} has {mtps.length} type parameter(s) of its own, and {q}.{x}, which it overrides, {qtps.length}"
-            | _ => pure ()
-            overridePairs := overridePairs.push (mp, s!"{n}.{mn}", s!"{q}.{x}")
-        let body ← if effs.contains "$abstract" then do
-            if !cd.isIface && !cd.specs.contains "abstract" then
-              throw s!"{mp.show}: {mn} has no body: give it one, or make {n} <abstract>"
-            abstracts := abstracts.push (n, mn)
-            pure (SExpr.app mp (.ident mp "Err") [] false)   -- never called
-          else pure body
-        expanded := expanded.push
-          (.fn mp s!"{n}.{mn}" ({ name := "Self", ty := selfTy } :: ps) (cd.tps ++ mtps) effs ret body)
-      | _ => pure ()
-  -- a concrete class implements every method it has, each unambiguously
-  for cd in classes.defs do
-    let i := classes.henv.info cd.name
-    if i.isIface || i.isAbstract then continue
-    let ups := classes.henv.supers cd.name
-    let names := (ups.flatMap fun u => ((classes.cdef? u).map (·.methods)).getD [] |>.filterMap fun
-      | .fn _ x .. => some x
-      | _ => none).eraseDups
-    -- (a `block:` is not a method: each class runs its own; a qualified
-    -- `(q:)M` implements q's M, below)
-    for mn in names.filter (fun x => x != "$block" && !x.startsWith "(") do
-      let decls := ups.filter (classes.declares · mn)
-      -- each slot (#70): its implementation, as `Ctx.implFor?` chooses at a
-      -- call, satisfies every declaration in the slot
-      let roots := classes.henv.rootsOf (classes.declares · mn) cd.name
-      let implAt (r e : String) : Option String :=
-        if classes.hasBody e s!"({r}:){mn}" then some s!"{e}.({r}:){mn}"
-        else if classes.hasBody e mn then some s!"{e}.{mn}" else none
-      let clsOf (f : String) : String := (f.splitOn ".").head!
-      let mut chosen : List String := []
-      for r in roots do
-        match classes.henv.slotImpls (implAt r) ups r with
-        | [] => throw s!"{cd.pos.show}: {cd.name} must implement {mn} (declared abstract in {r})"
-        | f :: g :: _ =>
-          throw s!"{cd.pos.show}: {cd.name} inherits {mn} from both {clsOf f} and {clsOf g}: override it in {cd.name}"
-        | [f] =>
-          chosen := chosen ++ [f]
-          for q in decls.filter (classes.henv.isSub · r) do
-            if f != s!"{q}.{mn}" then implChecks := implChecks.push (cd.pos, cd.name, f, s!"{q}.{mn}")
-      -- without a qualified implementation, one implementation for all slots
-      let qualified := ups.any fun e => roots.any fun r => classes.declares e s!"({r}:){mn}"
-      match chosen.eraseDups with
-      | f :: g :: _ =>
-        if !qualified then
-          throw s!"{cd.pos.show}: {cd.name} inherits {mn} from both {clsOf f} and {clsOf g}: override it in {cd.name}"
-      | _ => pure ()
-  let allTops := expanded.toList
-  -- (#283) the methods that are a family's stub (`Choice.familyStub`), as
-  -- functions, each where it is declared
-  let stubs : List (String × Pos) := allTops.filterMap fun
-    | .fn q n _ _ _ _ b => if Choice.isFamilyStub b then some (n, q) else none
-    | _ => none
+  let methods ← classMethods defs.tops classes fields
   -- the type definitions: `name := struct …` and `name := enum …`
   let isTypeDef : STop → Bool
     | .const _ _ none (.structDef ..) | .const _ _ none (.enumDef ..) | .const _ _ none (.refineDef ..) => true
     | _ => false
-  let tops := allTops.filter (!isTypeDef ·)
+  let tops := methods.tops.filter (!isTypeDef ·)
   let varFields : List (String × String) := classes.defs.flatMap fun cd =>
     (fields.of cd.name).filterMap fun (f, _, _, isVar) => if isVar then some (cd.name, f) else none
   let uniques : List String := (classes.defs.filter (·.specs.contains "unique")).map (·.name)
@@ -274,12 +118,12 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                              let i := classes.henv.info d
                              if i.isIface || i.isAbstract then m else
                              (classes.henv.supers d).foldl (fun m T => m.insert T ((m[T]?.getD []) ++ [d])) m) {},
-                           abstracts := abstracts.toList, requests := opts.requests, familySites := source.familySites, familyStubs := stubs.map (·.1),
+                           abstracts := methods.abstracts.toList, requests := opts.requests, familySites := source.familySites, familyStubs := methods.stubs.map (·.1),
                            overloadSites := source.overloadSites, nestedSites := source.nestedSites,
                            fieldSites := source.fieldSites }
   env := { env with varFields := varFields, uniques := uniques,
-                    overriders := (overridePairs.toList.map fun (_, dm, _) => (dm.splitOn ".").headD "") ++
-                      (implChecks.toList.map fun (_, _, impl, _) => (impl.splitOn ".").headD "") ++
+                    overriders := (methods.overridePairs.toList.map fun (_, dm, _) => (dm.splitOn ".").headD "") ++
+                      (methods.implChecks.toList.map fun (_, _, impl, _) => (impl.splitOn ".").headD "") ++
                       -- (#250: and the targets of refining casts, whose own
                       -- pins relate their type arguments to the object's, as
                       -- the dispatch to the branch refines by: also one that
@@ -296,7 +140,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       ((classes.cdef? x).map fun xd => xd.fields.any fun (g, _, d, _) => g == f && d.isSome).getD false).getD c
   env := { env with defaultHome := classes.defs.flatMap fun cd =>
     (fields.of cd.name).filterMap fun (f, _, d, _) => d.map fun _ => ((cd.name, f), homeOf cd.name f) }
-  for t in allTops do
+  for t in methods.tops do
     match t with
     | .const _ n none (.enumDef _ vals isOpen) =>
       env := { env with enums := env.enums ++ [(n, vals)],
@@ -308,14 +152,14 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       env := { env with refines := env.refines ++ [(n, base, ← refineConds p v base conds)] }
     | _ => pure ()
   -- the type parameters of parametric structs
-  for t in allTops do
+  for t in methods.tops do
     match t with
     | .const _ n none (.structDef _ tps@(_ :: _) _ _) =>
       env := { env with sparams := env.sparams ++ [(n, ← checkTParams env tps)] }
     | _ => pure ()
   let shell := env
   let mut structs := #[]
-  for t in allTops do
+  for t in methods.tops do
     match t with
     | .const p n none (.structDef _ _ _ fs) =>
       let senv := { shell with tvars := (shell.sparams.lookup n).getD [] |>.map fun (v, c) => (v, Ty.param v c) }
@@ -361,7 +205,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   env := { env with iargs := iargs.toList }
   -- Resolve every constrained nominal header before validating any use of
   -- one. This makes forward declarations independent of source order.
-  let constrainedTypes := allTops.filterMap fun
+  let constrainedTypes := methods.tops.filterMap fun
     | .const p name none (.structDef _ tps _ fields) =>
       let relations := fields.filterMap fun (field, ty, _, mutable) =>
         SubtypeEvidence.declaredRelation? name field ty mutable
@@ -461,7 +305,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- (and the interfaces above them, which see their classes through a
   -- prefix of what they do)
   env := { env with viewed := (viewed ++ viewed.flatMap fun i => (env.supers i).filter (env.info · |>.isIface)).eraseDups }
-  for (mp, dm, qm) in overridePairs do
+  for (mp, dm, qm) in methods.overridePairs do
     let d := (dm.splitOn ".").head!
     let q := (qm.splitOn ".").head!
     let mn := (dm.splitOn ".").getLast!
@@ -481,15 +325,15 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- (the pins of the classes in override pairs, once, #238; not of every
   -- class, as a class whose Verse Core type would contain itself is refused
   -- only below, and computing its pins would not end)
-  let pinClasses := (overridePairs.toList.flatMap fun (_, dm, qm) =>
+  let pinClasses := (methods.overridePairs.toList.flatMap fun (_, dm, qm) =>
       [(dm.splitOn ".").head!, (qm.splitOn ".").head!]).eraseDups
   env := { env with pinsMap := pinClasses.foldl (fun m d => m.insert d (env.pinsOf d)) {} }
   let fixes (e q : String) : Bool :=
     ((env.pinsOf q).zip (env.pinsOf e)).any (fun (a, b) => a != b) || (env.pinsOf e).length > (env.pinsOf q).length
   let headOf (f : String) : String := (f.splitOn ".").head!
-  let fixers := (overridePairs.toList.filterMap fun (_, dm, qm) =>
+  let fixers := (methods.overridePairs.toList.filterMap fun (_, dm, qm) =>
       if fixes (headOf dm) (headOf qm) then some (headOf dm) else none) ++
-    (implChecks.toList.filterMap fun (_, _, impl, decl) =>
+    (methods.implChecks.toList.filterMap fun (_, _, impl, decl) =>
       if fixes (headOf impl) (headOf decl) then some (headOf impl) else none)
   -- (and the classes that fix an interface's type arguments, below an
   -- interface whose fields sit at different places in its classes: its
@@ -861,10 +705,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       | _ => pure ()
     if !changed then break
   let sigProg := mkSigProg sigs
-  checkSignatures env { tops, generics, sigs, gsigs, prog := sigProg } classes.defs
-    fields
-    { tops := allTops, stubs, abstracts, overridePairs, implChecks }
-  let defaults ← elabFieldDefaults env { tops, generics, sigs, gsigs, prog := sigProg } allTops classes.defs
+  checkSignatures env { tops, generics, sigs, gsigs, prog := sigProg } classes.defs fields methods
+  let defaults ← elabFieldDefaults env { tops, generics, sigs, gsigs, prog := sigProg } methods.tops classes.defs
   -- (the accessors come right after the functions, #157)
   env := { env with fieldAccBase := tops.length + gsigs.size, signalNoRollback := opts.signalNoRollback }
   let genvOf (g : Sig) : TyEnv := g.typeEnv env
@@ -1037,7 +879,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let pins := (List.range classTable.length).map (fun t => (pins[t]?).getD []) ++ framePins
   certify { prog := { fns := fns.toList, main },
             sigs := { fns := fsigs, classes := classTable ++ frameClasses.toList, protos, pins }, slotTys }
-    stubs opts.debug
+    methods.stubs opts.debug
 
 /-- `F$ovN` (an overload, #74) shown as `F`: every `$ov` and the digits after it removed. -/
 def stripOv (msg0 : String) : String := Id.run do
