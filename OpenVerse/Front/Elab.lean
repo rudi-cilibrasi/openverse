@@ -23,6 +23,7 @@ import OpenVerse.Front.InitializerConvergence
 
 namespace OpenVerse.Front
 open OpenVerse
+
 /-- What an elaboration asks for (`Requests`, by tiers: `Requests.tier`): what
     its functions and the fields' defaults ask, and (#283) the families and
     overloads of the inlining's sites it did not reach (`Source`). -/
@@ -270,7 +271,9 @@ def certify (lowered : LoweredProgram) (stubs : List (String × Pos)) (debug : B
   return { prog := P, sigs := S, slotTys := slotTys.toList }
 
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
-    and `Prog.checkTypes`. -/
+    and `Prog.checkTypes`, by its phases, in order (`docs/DESIGN.md`, "Elaboration
+    in phases"); an elaboration that finds a need goes no further, and asks for
+    it (`Compiled.asking`). -/
 def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except String Compiled := do
   let admitted ← admitSource allTops0r opts
   let source ← inlineSource allTops0r opts.requests admitted
@@ -278,22 +281,21 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let classes ← classHierarchy defs.tops source.constructionFx
   let fields ← classFields classes opts.requests
   let methods ← classMethods defs.tops classes fields
-  let mut env ← typeEnvironment classes fields methods source admitted.concurrencyNames opts.requests
-  env ← upperBounds env methods.tops
+  let env ← typeEnvironment classes fields methods source admitted.concurrencyNames opts.requests
+  let env ← upperBounds env methods.tops
   let views ← interfaceViews env classes.defs opts.requests
   if !views.witnessNeeds.isEmpty then
     return .asking { witnesses := views.witnessNeeds }
-  env := { env with viewed := views.viewed }
-  env ← pinsAndAccessors env methods opts.requests
-  env ← addPlaceholders env
+  let env ← pinsAndAccessors { env with viewed := views.viewed } methods opts.requests
+  let env ← addPlaceholders env
   let overloads ← functionOverloads env methods.tops defs.methodOverloads
-  env := { env with overloads := overloads.functions, methodOverloads := overloads.methods }
+  let env := { env with overloads := overloads.functions, methodOverloads := overloads.methods }
   let declared ← declareSignatures env overloads.tops opts.requests
   let sigs ← inferSignatures env declared opts.requests
   checkSignatures env sigs classes.defs fields methods
   let defaults ← elabFieldDefaults env sigs methods.tops classes.defs
   -- (the accessors come right after the functions, #157)
-  env := { env with fieldAccBase := sigs.tops.length + sigs.gsigs.size, signalNoRollback := opts.signalNoRollback }
+  let env := { env with fieldAccBase := sigs.tops.length + sigs.gsigs.size, signalNoRollback := opts.signalNoRollback }
   let elaborated ← elabFunctions env sigs opts.requests
   let needs := roundNeeds elaborated defaults.needs source
   -- (#283) the eager groups, the families of the uses of methods whose
