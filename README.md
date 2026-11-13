@@ -167,6 +167,7 @@ Main():void =
 | [`docs/FORMAT.md`](docs/FORMAT.md) | OVBC, the binary format the runtime loads, and the exit codes |
 | [`proofs/quickproof/README.md`](proofs/quickproof/README.md) | the laws about the C runtime, their status, and how to re-check them |
 | [`docs/research/book-of-verse-digest.md`](docs/research/book-of-verse-digest.md) | the Book of Verse, quoted rule by rule |
+| [`docs/research/book-test-conformance.md`](docs/research/book-test-conformance.md) | openverse run on every case of the Book's own test suite: verdicts, causes, what to do next |
 
 ## Trust
 
