@@ -58,6 +58,13 @@ namespace BuiltinCall
 def wrongArity (c : BuiltinCall) (noun : String) : EM α :=
   eerr c.p s!"{c.name} takes {c.arity.show noun}"
 
+/-- A call with the number of arguments the built-in takes, as its arity
+    says, of the kind `noun`: else `BitAnd takes two ints, found 1
+    argument(s)`. -/
+def checkArity (c : BuiltinCall) (noun : String) : EM Unit := do
+  if !c.arity.admits c.args.length then
+    eerr c.p s!"{c.name} takes {c.arity.show noun}, found {c.args.length} argument(s)"
+
 /-- A built-in that can fail is called `F[…]` (Book of Verse §8.1). -/
 def needBracket (c : BuiltinCall) : EM Unit := do
   if !c.bracket then eerr c.p s!"{c.name} can fail: call it with {c.name}[…]"
@@ -300,11 +307,11 @@ def elabFloorCeil (up : Bool) (c : BuiltinCall) : EM R := do
     | t => eerr p s!"{name} takes a rational or an int, found {t.show}"
   | _ => c.wrongArity "argument"
 
-/-- `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean): a primitive of ints that can
-    fail (when `Y` is 0). The number of arguments is not checked here:
-    `elabInts` takes as many as are written. -/
+/-- `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean): a primitive of two ints that
+    can fail (when `Y` is 0). -/
 def failableInts (op : Prim) (c : BuiltinCall) : EM R := do
   c.needBracket
+  c.checkArity "int"
   return ⟨.prim op (← c.elabInts c.ctx c.p c.args), .int⟩
 
 /-- `Min(X, Y)`, `Max(X, Y)` (`isMin`): of two ints, or of two floats
@@ -379,8 +386,7 @@ def elabClampOrSgn (c : BuiltinCall) : EM R := do
     order. -/
 def elabBitwise (shift : Bool) (c : BuiltinCall) : EM R := do
   if shift then c.needBracket else c.noBracket
-  if !c.arity.admits c.args.length then
-    eerr c.p s!"{c.name} takes {c.arity.show "int"}, found {c.args.length} argument(s)"
+  c.checkArity "int"
   let es ← c.elabInts c.ctx c.p c.args
   if c.name == "BitNot" then return ⟨.prim .sub [.lit (.int (-1)), es[0]!], .int⟩
   let helper := "$bit" ++ (c.name.drop 3).toString
