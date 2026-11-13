@@ -23,6 +23,123 @@ import OpenVerse.Front.InitializerConvergence
 
 namespace OpenVerse.Front
 open OpenVerse
+/-- What an elaboration asks for (`Requests`, by tiers: `Requests.tier`): what
+    its functions and the fields' defaults ask, and (#283) the families and
+    overloads of the inlining's sites it did not reach (`Source`). -/
+def roundNeeds (elaborated : Array ElaboratedFn) (fieldNeeds : Requests) (source : Source) : Requests := Id.run do
+  let mut needs := elaborated.foldl (fun acc f => acc.merge f.needs) fieldNeeds
+  if needs.families.isEmpty then needs := needs.merge { families := source.familySites.map fun (q, _) => (q, "") }
+  if needs.overloads.isEmpty then needs := needs.merge { overloads := source.overloadSites.map fun (q, _) => (q, "") }
+  return needs
+
+/-- The function the program runs: `Main`, or with an entry expression its
+    function `$Do`, which takes no parameters. -/
+def mainSignature (sigs : Signatures) (entry : Option SExpr) : Except String Sig := do
+  match sigs.sigs.toList.find? (·.name == (if entry.isSome then "$Do" else "Main")) with
+  | some s =>
+    if s.isConst || !s.params.isEmpty then throw "Main must be a function with no parameters"
+    pure s
+  | none => throw "the program has no Main() function"
+
+/-- The functions of a program prepared for lowering (`prepareLowering`). -/
+structure Lowering where
+  /-- The functions, by index, then the accessors (#157). -/
+  fns : Array Fn
+  /-- Each function's slot types. -/
+  slotTys : Array (List VTy)
+  /-- What each function does with its type metadata (`MetadataFlow`). -/
+  metadata : Array MetadataFlow.Info
+  /-- Their signatures, the class table, the prototypes and the classes' pins. -/
+  sigs : Sigs
+
+/-- Preparation for lowering, a phase of `elabProgramCore`: the elaborated
+    functions, then the accessors (#157), with their signatures, the class
+    table (#34, #39), the prototypes (#37) and the pins (#142, #351); and the
+    refined tests that can never pass removed (#186). -/
+def prepareLowering (env : TyEnv) (sigs : Signatures) (elaborated : Array ElaboratedFn) : Lowering := Id.run do
+  let genvOf (g : Sig) : TyEnv := g.typeEnv env
+  let mut fns := elaborated.map (·.fn)
+  let mut slotTys := elaborated.map (·.slotTys)
+  let mut metadataInfo := elaborated.map (·.metadata)
+  let fsigs0 := sigs.sigs.toList.map (fun s => (spawnParamTypes env s.name (s.params.map (Ty.toVTy env)), s.ret.toVTy env)) ++
+    sigs.gsigs.toList.map fun g =>
+      let genv := genvOf g
+      (spawnParamTypes genv g.name (g.frame.argumentTypes.map (Ty.toVTy genv)), g.ret.toVTy genv)
+  -- the class table: the fields of each class, by tag (#34); the prototypes (#37)
+  -- (a parametric class's field types mention its type parameters, #39)
+  -- each field as `TyEnv.fieldSrc` gives it (the topmost interface that
+  -- declares it, else the topmost class in the chain that has it), in
+  -- terms of the Verse Core type arguments the hierarchy shares: an
+  -- `intbox := class(base(int))`'s inherited `Value` is `var 0`, as in `base`
+  let classTable := env.classes.map fun d =>
+    if env.isRefClass d then (env.fields d).map fun (f, t, _) =>
+      (env.coreFieldTy d f).getD (t.toVTy { env with tvars := env.coreVars d })
+    else []
+  let protos := env.protos.map fun (d, t, _) => (t, (env.coreArgs d []).map (Ty.toVTy env))
+  -- (a class below an interface referred to through views has pins on all of
+  -- its Verse Core type arguments, so that a dispatch through a view opens
+  -- them, `Typed.dispatch_view`, #351)
+  let pins := env.classes.map fun d =>
+    if env.isRefClass d then env.lowerPins (env.dispatchPins d) else []
+  -- the accessors (#157): for each (class, field), `get(Self)` and
+  -- `set(Self, V)`, generic over the class's type argument positions
+  let mut accSigs : Array (List VTy × VTy) := #[]
+  for (d, f) in env.fieldAcc do
+    let tag := env.tagOf d
+    let kd := ((fieldIndex (env.fields d) f).map (·.1)).getD 0
+    let m := (env.coreArgs d (((env.sparams.lookup d).getD []).map fun (v, c) => Ty.param v c)).length
+    let selfTy : VTy := .ref [tag] ((List.range m).map VTy.var)
+    let fTy : VTy := ((classTable[tag]?).bind (·[kd]?)).getD .int
+    fns := fns.push { name := s!"{d}.$get.{f}", arity := 1, nslots := 1, decides := false, writes := false,
+                      body := .heap (.get kd) [.local 0] }
+    slotTys := slotTys.push [selfTy]
+    metadataInfo := metadataInfo.push {}
+    accSigs := accSigs.push ([selfTy], fTy)
+    fns := fns.push { name := s!"{d}.$set.{f}", arity := 2, nslots := 2, decides := false, writes := true,
+                      body := .heap (.set kd) [.local 0, .local 1] }
+    slotTys := slotTys.push [selfTy, fTy]
+    metadataInfo := metadataInfo.push {
+      metadataWrites := if f.startsWith "$w." then [(0, kd)] else [] }
+    accSigs := accSigs.push ([selfTy, fTy], fTy)
+  let fsigs0 := fsigs0 ++ accSigs.toList
+  -- (a refined test, #142, of classes whose pins the receiver's closed type
+  -- arguments rule out can never pass, and the checker types such a test
+  -- only when the pins can agree: it goes, #186)
+  let S00 : Sigs := { fns := fsigs0, classes := classTable, protos, pins }
+  for gi in List.range fns.size do
+    let fn := fns[gi]!
+    fns := fns.set! gi { fn with body := Suspend.pruneDead S00 ((slotTys[gi]?).getD []) fn.body }
+    metadataInfo := metadataInfo.modify gi fun info => { info with
+      body := info.body.map (Suspend.pruneDead S00 ((slotTys[gi]?).getD [])) }
+  return { fns, slotTys, metadata := metadataInfo, sigs := S00 }
+
+/-- Initializer convergence (#511): each field default's code, `bodies`,
+    converges, calling only functions that do (`InitializerConvergence`):
+    those the source marks, the construction blocks of `cdefs` and the
+    compiler's intrinsic operations `intrinsicCalls`. -/
+def checkInitializerConvergence (fns : Array Fn) (sigs : Signatures) (cdefs : List CDef)
+    (bodies : List (String × String × Pos × Expr)) (intrinsicCalls : List String) : Except String Unit := do
+  let ordinary := (sigs.tops ++ sigs.generics).filterMap fun
+    | .fn _ n _ _ specs .. =>
+      if specs.contains InitializerConvergence.sourceCallMarker then some n else none
+    | _ => none
+  let construction := cdefs.filterMap fun cd =>
+    if cd.methods.any (fun | .fn _ "$block" .. => true | _ => false) then
+      some (cd.name ++ ".$block") else none
+  let mut verified : Std.HashSet Nat := {}
+  for (owner, field, pos, body) in bodies do
+    match (InitializerConvergence.checkExpr fns ordinary (construction ++ intrinsicCalls) [] body).run verified with
+    | .ok (_, checked) => verified := checked
+    | .error reason =>
+      throw s!"{pos.show}: default of field '{field}' of {owner} requires convergence: {reason} (#511; --extended-defaults retains the OpenVerse extension without a convergence assertion)"
+
+/-- The hidden fields that hold type metadata (#209, `$w.`), of each class by
+    its tag, for `MetadataFlow`. -/
+def metadataFields (env : TyEnv) : Array (List Nat) :=
+  env.classes.toArray.map fun c =>
+    (env.fields c).zipIdx.filterMap fun ((name, _, _), i) =>
+      if name.startsWith "$w." then some i else none
+
 /-- A program as the lowering leaves it (`lowerProgram`), before `certify`:
     its Verse Core functions, their signatures with the class table, the
     prototypes and the classes' pins (`Sigs`), and each function's slot types. -/
@@ -30,6 +147,65 @@ structure LoweredProgram where
   prog : Prog
   sigs : Sigs
   slotTys : Array (List VTy)
+
+/-- Lowering, a phase of `elabProgramCore`: failure capture (`FailCapture`);
+    with concurrency (`usesConc`, #156), the suspends functions as frame
+    classes and their functions (`lowerConcurrency`); and with prototypes or
+    a suspends `Main`, a prelude `$Main` that allocates them and calls it
+    (#37). -/
+def lowerProgram (env : TyEnv) (sigs : Signatures) (mainSig : Sig) (lowering : Lowering)
+    (frameInfo : Array FrameRefs.Info) (usesConc eventFifo : Bool) : Except String LoweredProgram := do
+  let mut fns := lowering.fns
+  let mut slotTys := lowering.slotTys
+  let mut classTable := lowering.sigs.classes
+  let protos := lowering.sigs.protos
+  let pins := lowering.sigs.pins
+  -- with prototypes, the program starts with a prelude that allocates them
+  -- and then calls `Main` (#37)
+  let mut protoList := env.protos.map fun (_, t, vs) => (t, vs)
+  let mut frameClasses : Array (List VTy) := #[]
+  let mut framePins : List (List (Option VTy)) := []
+  let mut mainCall : Expr := .call mainSig.idx []
+  -- (an error of the lowering names a function: with its position)
+  let inFn := inFnMsg (sigs.tops ++ sigs.generics)
+  let (capturedFns, capturedSlots, capturedSigs) ← FailCapture.lower fns slotTys lowering.sigs
+  fns := capturedFns
+  slotTys := capturedSlots
+  let fsigs0 := capturedSigs.fns
+  let mut fsigs := fsigs0
+  -- concurrency (#156): each <suspends> function `g` becomes a frame class
+  -- and the functions `g$new`, `g$reset` and `g$resume` (`Suspend.lean`);
+  -- `g`'s own index is `g$resume`'s, as only suspends code calls it
+  let beforeConcurrency := fns
+  if usesConc then
+    let (fns1, slotTys1, fsigs1, classTable1, frameClasses1, mainCall1, framePins1, schedMore) ←
+      lowerOpening fun forced =>
+        lowerConcurrency env sigs.sigs sigs.gsigs mainSig fsigs0 protos pins inFn fns slotTys fsigs classTable forced frameInfo
+          eventFifo
+    if !schedMore.isEmpty then
+      let schedTag := env.tagOf "$sched"
+      protoList := protoList.map fun (t, vs) => if t == schedTag then (t, vs ++ schedMore) else (t, vs)
+    fns := fns1
+    slotTys := slotTys1
+    fsigs := fsigs1
+    classTable := classTable1
+    frameClasses := frameClasses1
+    mainCall := mainCall1
+    framePins := framePins1
+  let mut main := mainSig.idx
+  if !protoList.isEmpty || mainSig.suspends then
+    main := fns.size
+    fns := fns.push { name := "$Main", arity := 0, nslots := 0, decides := mainSig.decides,
+                      writes := mainSig.fx.contains "writes" || mainSig.suspends,
+                      body := protoPrelude protoList mainCall }
+    slotTys := slotTys.push []
+    fsigs := fsigs ++ [([], if mainSig.suspends then VTy.void else mainSig.ret.toVTy env)]
+  if usesConc then
+    fns := CompilerWrites.propagate beforeConcurrency fns
+  -- (the frame classes' pins after the classes', #244)
+  let pins := (List.range classTable.length).map (fun t => (pins[t]?).getD []) ++ framePins
+  return { prog := { fns := fns.toList, main },
+           sigs := { fns := fsigs, classes := classTable ++ frameClasses.toList, protos, pins }, slotTys }
 
 /-- Certification, the last phase of `elabProgramCore`: the lowered program is
     given out with its certificate (`Compiled`) only if no call in it names a
@@ -118,27 +294,14 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let defaults ← elabFieldDefaults env sigs methods.tops classes.defs
   -- (the accessors come right after the functions, #157)
   env := { env with fieldAccBase := sigs.tops.length + sigs.gsigs.size, signalNoRollback := opts.signalNoRollback }
-  let genvOf (g : Sig) : TyEnv := g.typeEnv env
   let elaborated ← elabFunctions env sigs opts.requests
-  let mut fns := elaborated.map (·.fn)
-  let mut slotTys := elaborated.map (·.slotTys)
-  -- (where each function calls `Err()`, by its index, #235)
-  let errs := elaborated.map (·.errAt)
-  let frameInfo := elaborated.map (·.frames)
-  let mut metadataInfo := elaborated.map (·.metadata)
-  -- (the lazily taken functions with several values that contexts taking
-  -- their first success consume, #246)
-  let loopFirst := elaborated.toList.flatMap (·.loopFirst)
-  let failCalls := elaborated.foldl (fun acc f => acc ++ f.failCalls) #[]
-  let mut needs := elaborated.foldl (fun acc f => acc.merge f.needs) defaults.needs
+  let needs := roundNeeds elaborated defaults.needs source
   -- (#283) the eager groups, the families of the uses of methods whose
   -- receivers' classes this one found, and the overloads of the calls whose
   -- arguments' types it found; those it did not reach, of no family or
   -- overload, so that the last elaboration has none to find (and knows what
   -- can fail): the program is elaborated again with them, so this one goes
   -- no further
-  if needs.families.isEmpty then needs := needs.merge { families := source.familySites.map fun (q, _) => (q, "") }
-  if needs.overloads.isEmpty then needs := needs.merge { overloads := source.overloadSites.map fun (q, _) => (q, "") }
   -- (and the types of the names of consumers in recursive groups' code,
   -- whose groups this one kept with one value: `$noteTypes`)
   -- (and the field orders of the structs and classes those groups construct
@@ -153,142 +316,35 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- forward calls to the defaults of their named parameters: likewise, as
   -- this one has placeholders for them
   if !needs.isEmpty then return .asking needs
-  let mainSig ← match sigs.sigs.toList.find? (·.name == (if opts.entry.isSome then "$Do" else "Main")) with
-    | some s =>
-      if s.isConst || !s.params.isEmpty then throw "Main must be a function with no parameters"
-      pure s
-    | none => throw "the program has no Main() function"
-  -- with prototypes, the program starts with a prelude that allocates them
-  -- and then calls `Main` (#37)
-  let mut protoList := env.protos.map fun (_, t, vs) => (t, vs)
-  let fsigs0 := sigs.sigs.toList.map (fun s => (spawnParamTypes env s.name (s.params.map (Ty.toVTy env)), s.ret.toVTy env)) ++
-    sigs.gsigs.toList.map fun g =>
-      let genv := genvOf g
-      (spawnParamTypes genv g.name (g.frame.argumentTypes.map (Ty.toVTy genv)), g.ret.toVTy genv)
-  -- the class table: the fields of each class, by tag (#34); the prototypes (#37)
-  -- (a parametric class's field types mention its type parameters, #39)
-  -- each field as `TyEnv.fieldSrc` gives it (the topmost interface that
-  -- declares it, else the topmost class in the chain that has it), in
-  -- terms of the Verse Core type arguments the hierarchy shares: an
-  -- `intbox := class(base(int))`'s inherited `Value` is `var 0`, as in `base`
-  let mut classTable := env.classes.map fun d =>
-    if env.isRefClass d then (env.fields d).map fun (f, t, _) =>
-      (env.coreFieldTy d f).getD (t.toVTy { env with tvars := env.coreVars d })
-    else []
-  let protos := env.protos.map fun (d, t, _) => (t, (env.coreArgs d []).map (Ty.toVTy env))
-  -- (a class below an interface referred to through views has pins on all of
-  -- its Verse Core type arguments, so that a dispatch through a view opens
-  -- them, `Typed.dispatch_view`, #351)
-  let pins := env.classes.map fun d =>
-    if env.isRefClass d then env.lowerPins (env.dispatchPins d) else []
-  -- concurrency (#156): each <suspends> function `g` becomes a frame class
-  -- and the functions `g$new`, `g$reset` and `g$resume` (`Suspend.lean`);
-  -- `g`'s own index is `g$resume`'s, as only suspends code calls it
-  -- the accessors (#157): for each (class, field), `get(Self)` and
-  -- `set(Self, V)`, generic over the class's type argument positions
-  let mut accSigs : Array (List VTy × VTy) := #[]
-  for (d, f) in env.fieldAcc do
-    let tag := env.tagOf d
-    let kd := ((fieldIndex (env.fields d) f).map (·.1)).getD 0
-    let m := (env.coreArgs d (((env.sparams.lookup d).getD []).map fun (v, c) => Ty.param v c)).length
-    let selfTy : VTy := .ref [tag] ((List.range m).map VTy.var)
-    let fTy : VTy := ((classTable[tag]?).bind (·[kd]?)).getD .int
-    fns := fns.push { name := s!"{d}.$get.{f}", arity := 1, nslots := 1, decides := false, writes := false,
-                      body := .heap (.get kd) [.local 0] }
-    slotTys := slotTys.push [selfTy]
-    metadataInfo := metadataInfo.push {}
-    accSigs := accSigs.push ([selfTy], fTy)
-    fns := fns.push { name := s!"{d}.$set.{f}", arity := 2, nslots := 2, decides := false, writes := true,
-                      body := .heap (.set kd) [.local 0, .local 1] }
-    slotTys := slotTys.push [selfTy, fTy]
-    metadataInfo := metadataInfo.push {
-      metadataWrites := if f.startsWith "$w." then [(0, kd)] else [] }
-    accSigs := accSigs.push ([selfTy, fTy], fTy)
-  let fsigs0 := fsigs0 ++ accSigs.toList
-  let mut fsigs := fsigs0
-  let mut frameClasses : Array (List VTy) := #[]
-  let mut framePins : List (List (Option VTy)) := []
-  let mut mainCall : Expr := .call mainSig.idx []
-  -- (an error of the lowering names a function: with its position)
-  let inFn := inFnMsg (sigs.tops ++ sigs.generics)
-  -- (a refined test, #142, of classes whose pins the receiver's closed type
-  -- arguments rule out can never pass, and the checker types such a test
-  -- only when the pins can agree: it goes, #186)
-  let S00 : Sigs := { fns := fsigs0, classes := classTable, protos, pins }
-  for gi in List.range fns.size do
-    let fn := fns[gi]!
-    fns := fns.set! gi { fn with body := Suspend.pruneDead S00 ((slotTys[gi]?).getD []) fn.body }
-    metadataInfo := metadataInfo.modify gi fun info => { info with
-      body := info.body.map (Suspend.pruneDead S00 ((slotTys[gi]?).getD [])) }
+  let mainSig ← mainSignature sigs opts.entry
+  let lowering := prepareLowering env sigs elaborated
+  -- (where each function calls `Err()`, by its index, #235)
+  let errs := elaborated.map (·.errAt)
   -- (#235) the functions with several values computed at their calls
-  let lazyNeeds ← checkEager fns errs (fun g => ((sigs.tops ++ sigs.generics).findSome? fun
+  let lazyNeeds ← checkEager lowering.fns errs (fun g => ((sigs.tops ++ sigs.generics).findSome? fun
     | .fn p n .. => if n == g then some p else none
     | _ => none)) opts.requests.lazy
   if !lazyNeeds.isEmpty then
     return .asking { lazy := lazyNeeds }
+  let failCalls := elaborated.foldl (fun acc f => acc ++ f.failCalls) #[]
   -- (#515, `--signal-no-rollback`) no event signal from a failure context
   if opts.signalNoRollback then
-    if let some ((p, what), way) := SignalAdmission.checkSites fns failCalls then
+    if let some ((p, what), way) := SignalAdmission.checkSites lowering.fns failCalls then
       throw s!"{p.show}: this {what} may signal an event ({" → ".intercalate way}) in a failure context, which --signal-no-rollback refuses: the published Verse API makes an event's Signal <no_rollback> (#515)"
+  -- (the lazily taken functions with several values that contexts taking
+  -- their first success consume, #246)
+  let loopFirst := elaborated.toList.flatMap (·.loopFirst)
   -- (#246) and functions of their own for the lazily taken calls whose
   -- effects need them: the program is elaborated again, with them
-  let loopNeeds ← checkLoopFirst fns loopFirst opts.requests.loops
+  let loopNeeds ← checkLoopFirst lowering.fns loopFirst opts.requests.loops
   if !loopNeeds.isEmpty then
     return .asking { loops := loopNeeds }
   if !opts.extendedDefaults then
-    let ordinary := (sigs.tops ++ sigs.generics).filterMap fun
-      | .fn _ n _ _ specs .. =>
-        if specs.contains InitializerConvergence.sourceCallMarker then some n else none
-      | _ => none
-    let construction := classes.defs.filterMap fun cd =>
-      if cd.methods.any (fun | .fn _ "$block" .. => true | _ => false) then
-        some (cd.name ++ ".$block") else none
-    let mut verified : Std.HashSet Nat := {}
-    for (owner, field, pos, body) in defaults.bodies do
-      match (InitializerConvergence.checkExpr fns ordinary (construction ++ admitted.intrinsicCalls) [] body).run verified with
-      | .ok (_, checked) => verified := checked
-      | .error reason =>
-        throw s!"{pos.show}: default of field '{field}' of {owner} requires convergence: {reason} (#511; --extended-defaults retains the OpenVerse extension without a convergence assertion)"
-  let metadataFields := env.classes.toArray.map fun c =>
-    (env.fields c).zipIdx.filterMap fun ((name, _, _), i) =>
-      if name.startsWith "$w." then some i else none
-  MetadataFlow.check fns metadataInfo metadataFields opts.debug
-  let (capturedFns, capturedSlots, capturedSigs) ← FailCapture.lower fns slotTys S00
-  fns := capturedFns
-  slotTys := capturedSlots
-  let fsigs0 := capturedSigs.fns
-  fsigs := fsigs0
-  let beforeConcurrency := fns
-  if admitted.usesConc then
-    let (fns1, slotTys1, fsigs1, classTable1, frameClasses1, mainCall1, framePins1, schedMore) ←
-      lowerOpening fun forced =>
-        lowerConcurrency env sigs.sigs sigs.gsigs mainSig fsigs0 protos pins inFn fns slotTys fsigs classTable forced frameInfo
-          opts.eventFifo
-    if !schedMore.isEmpty then
-      let schedTag := env.tagOf "$sched"
-      protoList := protoList.map fun (t, vs) => if t == schedTag then (t, vs ++ schedMore) else (t, vs)
-    fns := fns1
-    slotTys := slotTys1
-    fsigs := fsigs1
-    classTable := classTable1
-    frameClasses := frameClasses1
-    mainCall := mainCall1
-    framePins := framePins1
-  let mut main := mainSig.idx
-  if !protoList.isEmpty || mainSig.suspends then
-    main := fns.size
-    fns := fns.push { name := "$Main", arity := 0, nslots := 0, decides := mainSig.decides,
-                      writes := mainSig.fx.contains "writes" || mainSig.suspends,
-                      body := protoPrelude protoList mainCall }
-    slotTys := slotTys.push []
-    fsigs := fsigs ++ [([], if mainSig.suspends then VTy.void else mainSig.ret.toVTy env)]
-  if admitted.usesConc then
-    fns := CompilerWrites.propagate beforeConcurrency fns
-  -- (the frame classes' pins after the classes', #244)
-  let pins := (List.range classTable.length).map (fun t => (pins[t]?).getD []) ++ framePins
-  certify { prog := { fns := fns.toList, main },
-            sigs := { fns := fsigs, classes := classTable ++ frameClasses.toList, protos, pins }, slotTys }
-    methods.stubs opts.debug
+    checkInitializerConvergence lowering.fns sigs classes.defs defaults.bodies admitted.intrinsicCalls
+  MetadataFlow.check lowering.fns lowering.metadata (metadataFields env) opts.debug
+  let frameInfo := elaborated.map (·.frames)
+  certify (← lowerProgram env sigs mainSig lowering frameInfo admitted.usesConc opts.eventFifo) methods.stubs
+    opts.debug
 
 /-- `F$ovN` (an overload, #74) shown as `F`: every `$ov` and the digits after it removed. -/
 def stripOv (msg0 : String) : String := Id.run do
