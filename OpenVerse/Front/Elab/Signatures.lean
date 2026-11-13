@@ -233,7 +233,9 @@ def Signatures.all (s : Signatures) : List Sig := s.sigs.toList ++ s.gsigs.toLis
 /-- The defaults function types write (#503, `STop.isTypeDefault`): each
     checked at its parameter's type with literals and top-level names only,
     as the pinned Book says nothing of what else one may use, in a trial that
-    keeps nothing: a default is not part of its type and never runs. -/
+    keeps nothing: a default is not part of its type and never runs. The
+    values of custom attributes (`Attributes`, `attrCheckPrefix`) are checked
+    so too, each at its attribute's class. -/
 def checkTypeDefaults (ctx : Ctx) (defaults : List STop) : Except String Unit := do
   for top in defaults do
     let .const p n _ (some ty) d := top | continue
@@ -244,6 +246,8 @@ def checkTypeDefaults (ctx : Ctx) (defaults : List STop) : Except String Unit :=
       if r.e.mayFail ctx.sigProg then eerr p "it can fail"
       discard <| coerce p r t
     if let .error e := trial.run { env := ctx.types } then
+      if ((n.splitOn "::").getLast?.getD n).startsWith attrCheckPrefix then
+        throw s!"{e} (the attribute @{((n.splitOn "@").getLast?).getD ""}: its value, or a field's, is checked at its type, in the scope around the definition it is on, and never runs; Book of Verse ch. 12)"
       throw s!"{e} (the default of ?{param} in a function type: not part of the type, it is checked at the parameter's type, with literals and top-level names only, #503)"
 
 /-- Constant types and effects (#35), a phase of `elabProgramCore`: the type of

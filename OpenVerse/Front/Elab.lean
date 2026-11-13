@@ -20,6 +20,7 @@ import OpenVerse.Front.Elab.Environment
 import OpenVerse.Front.Elab.Functions
 import OpenVerse.Front.SignalAdmission
 import OpenVerse.Front.InitializerConvergence
+import OpenVerse.Front.Attributes
 import OpenVerse.Front.Reachability
 
 namespace OpenVerse.Front
@@ -450,7 +451,9 @@ def Requests.upTo (r : Requests) (k : Nat) : Requests :=
     tier and of the tiers above it only, as what the source or the classes
     are changes what the tiers below ask for: those are asked for again, and
     their budgets of rounds start again. -/
-def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String Compiled :=
+def elabProgram (allTops000 : List STop) (opts : Options := {}) : Except String Compiled := do
+  -- (attributes, checked and taken out before anything reads the program)
+  let (allTops00, deprecated) ← Attributes.apply allTops000
   let defaults := allTops00.foldl (fun n t => n + topDefaultCount t) 0
   let classes := allTops00.filter (fun | .classDef .. => true | _ => false) |>.length
   -- (tier 3: each round asks for new functions only, so a few rounds do)
@@ -506,8 +509,10 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
         loop eagerFuel witnessFuel fuel { req.merge { fns := new.fns, methods := new.methods, subtypes := new.subtypes } with
           casts := [], loops := bridges ++ newDefaults }
   termination_by (eagerFuel, witnessFuel, fuel)
-  (loop eagerRounds witnessRounds rounds opts.requests).mapError fun msg =>
-    FnValues.pretty ((((stripOv ((Refine.unmarked msg).replace "$init" "<constructor>")).replace "::" ".").replace "$replaceAll" "ReplaceAll").replace extensionPrefix "")
+  let c ← (loop eagerRounds witnessRounds rounds opts.requests).mapError fun msg =>
+    FnValues.pretty (((((stripOv ((Refine.unmarked msg).replace "$init" "<constructor>")).replace "::" ".").replace "$replaceAll" "ReplaceAll").replace extensionPrefix "").replace "$type:" "")
+  -- (and the uses of deprecated definitions, warnings, `Attributes.deprecations`)
+  return { c with warnings := orderWarnings (c.warnings ++ deprecated) }
 
 /-- Parse and elaborate Verse source text. -/
 def compileChecked (src : String) (opts : Options := {}) : Except String Compiled := do

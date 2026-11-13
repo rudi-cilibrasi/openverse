@@ -172,6 +172,11 @@ def checkName (p : Pos) (specs : List String) : Except String Unit := do
     so it needs one (`hasValue`). -/
 def checkField (p : Pos) (place : Place) (name : String) (specs varSpecs : List String) (hasValue : Bool) :
     Except String Unit := do
+  -- (a field with accessors, `var X<getter(GetX)><setter(SetX)>:t =
+  -- external{}`, Book of Verse ch. 10, "Fields with Accessors", an
+  -- internal feature, ch. 12: not supported)
+  if let some sp := specs.find? (fun sp => sp.startsWith "getter(" || sp.startsWith "setter(") then
+    reject p s!"<{sp}>: {name} is a field with accessors, which read and set it through methods (Book of Verse ch. 10, \"Fields with Accessors\"), which openverse does not support"
   checkNonFunction p "field" specs place
   if let some sp := varSpecs.find? (fun sp => !isAccess sp && known sp) then
 

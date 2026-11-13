@@ -14,9 +14,11 @@ methods](#after-extension-methods), the empty value and comparisons of
 the Book's shadowing rule of [After qualified names](#after-qualified-names),
 the readings of [After the readings audit](#after-the-readings-audit),
 the access specifiers of [After access specifiers](#after-access-specifiers),
-`comparable` as a type of [After `comparable`](#after-comparable) and the
+`comparable` as a type of [After `comparable`](#after-comparable), the
 load-bearing readings of [After the load-bearing
-readings](#after-the-load-bearing-readings),
+readings](#after-the-load-bearing-readings) and the attributes, types as
+values and syntax forms of [After attributes, types as values and the
+syntax forms](#after-attributes-types-as-values-and-the-syntax-forms),
 against the Book at
 [`beaa719ba165cbf33eff462f2b0fe078a6dd9ab0`](https://github.com/verselang/book/tree/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests),
 the revision the other research notes pin. The Book's
@@ -44,8 +46,8 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   APIs (persistence, JSON, natives; 345); compiler tooling such as bytecode
   and digests (128); VM-conditional code inside a definition (37) and one
   file that defines `Main` itself (1).
-- Of the **9,783 translatable cases**, openverse **agrees on 7,732 (79%)**,
-  refuses 1,869 valid programs, **accepts 136 refused ones**, gives a
+- Of the **9,783 translatable cases**, openverse **agrees on 8,004 (82%)**,
+  refuses 1,598 valid programs, **accepts 135 refused ones**, gives a
   **different result in 46** and hits **no internal error**. On test cases
   alone (without `:decls`) it agrees on 7,579 of 9,567. (When the survey was
   taken, at `0e69cfb`: 6,409 agreed, 2,817 refused, 482 accepted, 86
@@ -69,7 +71,10 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   7,535 agreed, 2,028 refused, 170 accepted, 50 differed, the base of
   [`comparable`](#after-comparable); with it, at main `77bc509`: 7,670
   agreed, 1,893 refused, 170 accepted, 50 differed, the base of [the
-  load-bearing readings](#after-the-load-bearing-readings).)
+  load-bearing readings](#after-the-load-bearing-readings); with them, at
+  main `34e76e1`: 7,732 agreed, 1,869 refused, 136 accepted, 46 differed,
+  the base of [attributes, types as values and the syntax
+  forms](#after-attributes-types-as-values-and-the-syntax-forms).)
 - An agreement on an expected error is weak evidence: 2,940 expected errors
   agree, but only 1,233 of them are refused by a check of a language rule
   (and 17 more, whose codes are all warnings, get openverse's warning);
@@ -1050,6 +1055,54 @@ commas, 53 programs of the old `generic_mv.py`, whose `option{}` clauses
 were separated by commas, hold a tuple and are refused, and nothing else
 changes. Against main `77bc509`, the merge changes exactly these programs
 (482 of 5,710) and no other.
+
+## After attributes, types as values and the syntax forms
+
+Three groups of refusals were then taken, one cause per commit:
+attributes, with the rules of [attributes.md](attributes.md); types as
+values, the part the front end can build, with the map and the design of
+[types-as-values.md](types-as-values.md); and the syntax the parser still
+refused ([LANGUAGE.md](../LANGUAGE.md#attributes) describes each). Against
+the baseline of the load-bearing readings (main `34e76e1`: 7,732 agree,
+1,869 refuse, 136 accept, 46 differ), 273 cases more agree and one fewer:
+**8,004 agree, 1,598 refuse, 135 accept, 46 differ** (re-recorded from a
+fresh run).
+
+| Cause (cases at the base) | Agree now | Left, and why |
+|---|---:|---|
+| attributes (137) | 94: `Attributes/Attributes.versetest` 16-31 (9); `CustomAttributes.versetest` 23-73 (10); `available.versetest` 6-62, 290, `:decls` (11); `deprecated.versetest` (36); `2021-10-05-AttributeNames` 3-5; `SOL-1729…:decls`; `Enum.versetest` 75, 525-592 (6); `Reachability.versetest:94`; `Return.versetest` 85-88, 139, 140, `:decls`; `Roundtrip/Comments` 126-144 (4); `KnownBugs:62`; `SemicolonsVsCommas:97`; `TimSyntax` 172-175 | 35: fields with accessors `<getter(…)><setter(…)>` (32, parsed and refused), `WebDataSyncService` (2: a module's `var` of a `weak_map`), `TimSyntax:138` (`x:=3` untyped at the top level) |
+| types as values (238, with the structural types `comparable` left) | 87: `Cast.versetest` 57-71, 98-149; `Subtype.versetest` 66-103, 148-185; `Castable.versetest` 91-374 (20); `MetatypeConcreteSubtype` 4, 8, 99, 314, 320, 326; `Any.versetest` 25, 30; `SOL-7475` 4, 41, 45, `:decls`; `TypeParam:10`; `TypeValue:58`; `ParametricTypes:239`; two `:decls`; and the 3 type conversions (`Cast.versetest` 59, 61, 62) | 135: a metatype as a type parameter's bound (`where t:castable_subtype(c)`, `ParametricFunctions` 39, `Castable` 9, #502); `classifiable_subset` (20); metatypes of other types than classes (`subtype(int)`, `castable_subtype(any)`: `Subtype` 113-142, `Castable` 609-654); `castable_concrete_subtype` (6); `type` values of other types and a type given as an argument (`TypeParam`, `ParametricTypes` 605-1329); `concrete_subtype(comparable)` |
+| other syntax (126) and block forms (16) | 61: `F of X`, `F at X` (`Operators/Of`, `At`, 26; `SemicolonsVsCommas` 39, 40); `profile` (`profile_simple`, 10); pointers `e^`, `^t` (`Roundtrip/Comments` 77-82, `Roundtrip/Operators` 10-13, `Pointers:5`); module items at their own columns (`AccessLevelInheritance` 605, 619, 849, `Module:167`); declarations with no body (`Roundtrip/Newlines` 4, 18); `FunctionTypes` 15, 29; `TimSyntax` 133, 283, 297, 298, 324 | 80: Tim Sweeney's parser tests (35: specifiers on names, `a<b>->c`, which comparisons make ambiguous; `&x`, `do:=3`, `capture{…}`), a module's `var` (`weak_map`, 6), types in type parameters' places (`TypeParam`, 5), function types written as signatures (`FunctionTypes`, 5), a constructor's delegation outside a constructor (`Classes/Constructor`, 5), roundtrip tests (6), live variables (`when`, 2), and 16 more of one or two each |
+| lambdas, nested functions and their parameters (55) | 24: lambdas parse (`Literals/Function.versetest`, `FunctionTypes` 8-31, `TimSyntax:367`), refused as nested functions in programs | 33: nested functions (#492) |
+| control forms (7 accepted) | 2: `Return.versetest` 114, 117 (a `return` inside a returned `for`) | |
+
+- **Rules the new forms reached**, which openverse now checks, so that the
+  cases that agreed through a parse error still agree: a `return` is no part
+  of the value a function returns (`Return.versetest` 120-133, 3534); no
+  `return` or `break` leaves a `spawn` (`SpawnAndTask.versetest` 878, 887,
+  3551); no `profile` in an initializer (`profile_simple.versetest:144`,
+  3675); a join of type values is at their metatype before the expected
+  type, castable only when its bound is (`Castable.versetest` 145, 168,
+  3509); an attribute class is named in attributes only (`SOL-1729…` 16-52,
+  3670); and the attributes' own rules (where, what, fields). The uses of
+  deprecated definitions are warnings (2009), through the compiler's
+  warnings: 23 cases.
+- **Moved the wrong way** (1): `deprecated.versetest:435`,
+  `using{/Verse.org/VerseTests/TestModule}` of a deprecated module, which
+  expects the warning 2009 and agreed through the parse error of
+  `@deprecated`: openverse ignores a `using` of a package's path, here the
+  test runner's (the harness's: such paths are left, [After qualified
+  names](#after-qualified-names)), so it gives no warning.
+- **Programs.** Against main `34e76e1`, over every suite and the corpus of
+  2,734 generated programs (`corpus2`), no program's bytes, output or
+  messages changed but: the new tests; two error tests of an arrow
+  expression, which now expect the lambda's refusal
+  (`unsupported_arrow_expression`, `unsupported_arrow_zero`); and two tests
+  of values that never come, `never_spreads_maps` and
+  `tuple_never_conversions`, whose `return F((return 9, 3))` the rule above
+  refuses, rewritten `R := F((return 9, 3)); return R`, with their output
+  unchanged and their warnings at their new lines. `of` and `at` became
+  reserved words; no program of openverse's named anything so.
 
 ## Ten causes to remove first
 

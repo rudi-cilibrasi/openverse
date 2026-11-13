@@ -206,6 +206,7 @@ partial def elabExprValuesWith
       let r ← elabE ctx e elemExp
       let t := elemExp.getD r.ty
       let rs ← rest.mapM fun e' => elabE ctx e' (some t)
+      ofExcept <| checkTypeValueJoin ctx.types p elemExp ((r :: rs).map (·.ty))
       let all := (e :: rest).zip (r :: rs)
       -- the expected element type (or the first's), when every element
       -- converts to it; else the join of their types (classes at a common

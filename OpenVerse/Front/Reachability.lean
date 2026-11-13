@@ -20,8 +20,11 @@ structure Ends where
   fails : Bool := false
   deriving Inhabited
 
-/-- The warnings found so far, each with where it is. -/
-abbrev WM := StateM (Array (Pos × String))
+/-- The warnings found so far, each with where it is, under the positions of
+    the code marked `@ignore_unreachable` (Book of Verse ch. 12; its tests,
+    `Reachability.versetest:94`: "can be used on a break/return to suppress
+    unreachable warnings in subsequent code"). -/
+abbrev WM := ReaderT (List Pos) (StateM (Array (Pos × String)))
 
 def message : String :=
   "this code is never reached: the code before it always returns or breaks"
@@ -94,6 +97,14 @@ partial def operands (node : SExpr) (es : List SExpr) (own : Bool := false) : WM
   return { fails := fails || own }
 
 partial def go (e : SExpr) : WM Ends := do
+  -- (code marked `@ignore_unreachable`: what it makes unreachable is taken
+  -- as reported)
+  if (← read).contains e.pos then
+    let r ← goRaw e
+    return { r with ends := r.ends.map fun _ => true }
+  goRaw e
+
+partial def goRaw (e : SExpr) : WM Ends := do
   match e with
   | .ret _ none => return { ends := some false }
   | .ret p (some x) =>
@@ -234,9 +245,13 @@ partial def ofTop : STop → WM Unit
       if let some d := f.default then let _ ← go d
     for m in ms do ofTop m
 
-/-- Every place where code is never reached, in the program's definitions. -/
+/-- Every place where code is never reached, in the program's definitions,
+    but after code marked `@ignore_unreachable` (`ignoredArmsMarker`). -/
 def warnings (tops : List STop) : Array (Pos × String) :=
-  ((tops.forM ofTop).run #[]).2
+  let ignored := tops.flatMap fun
+    | .const _ n _ _ (.block _ es) => if n == ignoredArmsMarker then es.map (·.pos) else []
+    | _ => []
+  (((tops.forM ofTop).run ignored).run #[]).2
 
 end Reachability
 end OpenVerse.Front
