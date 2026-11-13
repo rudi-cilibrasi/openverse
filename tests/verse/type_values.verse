@@ -13,10 +13,10 @@ C2 := class:
     f1():void={set m0 = C1}
     f3(classArg:subtype(C0)):void={set m0 = classArg}
     f4(classArg:subtype(C1)):void={set m0 = classArg}
-base := class{ N:int = 0 }
+base := class<concrete>{ N:int = 0 }
 class1 := class(base) { N<override>:int = 1 }
-class2 := class(class1) { N<override>:int = 2 }
-classA := class(base){ N<override>:int = 10 }
+class2 := class<concrete>(class1) { N<override>:int = 2 }
+classA := class<concrete>(base){ N<override>:int = 10 }
 classB := class(classA){ N<override>:int = 11 }
 Pick(B:logic, X:base):int =
     t := if (B?) then class2 else classB

@@ -15,8 +15,8 @@
     `T[X]` with `T:subtype(A)` is `T.$cast(A)[A[X]]`;
   - `castable_subtype(A)`, below `subtype(A)`, which `$type:C` is when `C`
     is `<castable>`;
-  - `concrete_subtype(A)`, below `subtype(A)`, for each `A` above a class
-    that `C{}` constructs, which declares `$make(A)():A`, which `$type:C`
+  - `concrete_subtype(A)`, below `subtype(A)`, which `$type:C` is when `C`
+    is `<concrete>`, and which declares `$make(A)():A`, which `$type:C`
     gives as `C{}`, so that `T{}` with `T:concrete_subtype(A)` is
     `T.$make(A)()`.
 
@@ -157,8 +157,11 @@ def desugar (tops : List STop) : Except String (List STop) := do
       match classes.find? (·.1 == s) with
       | some (_, _, _, _, _, fs) => fs.all (·.default.isSome)
       | none => true
+    -- (a concrete class is one marked <concrete>, whose fields all have
+    -- defaults: Book of Verse ch. 11, "concrete_subtype"; its tests,
+    -- MetatypeConcreteSubtype.versetest:40, refuse a class that is not)
     match classes.find? (·.1 == n) with
-    | some (_, _, specs, _, isI, _) => !isI && !specs.contains "abstract" && (supers n).all fieldsHaveDefaults
+    | some (_, _, specs, _, isI, _) => !isI && specs.contains "concrete" && (supers n).all fieldsHaveDefaults
     | none => false
   -- the metatypes the program writes, and the classes it names as values
   let mut targets : List (String × String) := []
