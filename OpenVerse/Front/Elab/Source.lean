@@ -53,6 +53,42 @@ def checkDefinedOnce (tops : List STop) : Except String Unit := do
         throw s!"{p.show}: '{".".intercalate (qualParts n)}' is defined twice (only functions can be overloaded)"
     seen := seen.insert n isFn
 
+/-- The constants of a program, modules resolved, in the order written: each
+    with the constants its value names. -/
+partial def constantUses (tops : List STop) : List (Pos × String × List String) :=
+  let consts : List (Pos × String × SExpr) := tops.filterMap fun
+    | .const _ _ _ (.structDef ..) | .const _ _ _ (.enumDef ..) | .const _ _ _ (.refineDef ..) => none
+    | .const p n _ e => if (qualParts n).any (·.startsWith "$") then none else some (p, n, e)
+    | _ => none
+  let names : Std.HashSet String := Std.HashSet.ofList (consts.map (·.2.1))
+  let rec uses : SExpr → List String
+    | .ident _ n => if names.contains n then [n] else []
+    | e => e.children.flatMap uses
+  consts.map fun (p, n, e) => (p, n, (uses e).eraseDups)
+
+/-- A constant's value is computed from the constants it names, so none may
+    name itself, directly or through others (`X:int = X`, or `I:int = J` and
+    `J:int = I`): its computation would never end (as a field default that
+    depends on itself, which the elaboration of defaults refuses). A
+    constant may name one defined after it. -/
+def checkConstantCycles (tops : List STop) : Except String Unit := do
+  let graph := constantUses tops
+  let shown (n : String) : String := ".".intercalate (qualParts n)
+  for (p, n, _) in graph do
+    -- (a path from `n` back to it, breadth first)
+    let mut seen : List String := []
+    let mut todo : List (String × List String) := [(n, [])]
+    while !todo.isEmpty do
+      let (m, path) := todo.head!
+      todo := todo.tail!
+      for u in ((graph.find? (·.2.1 == m)).map (·.2.2)).getD [] do
+        if u == n then
+          let via := (path ++ [m]).drop 1
+          throw s!"{p.show}: the value of the constant {shown n} depends on itself{if via.isEmpty then "" else s!" (through {", ".intercalate (via.map shown)})"}"
+        if !seen.contains u then
+          seen := u :: seen
+          todo := todo ++ [(u, path ++ [m])]
+
 /-- No definition takes a reserved name (`reservedNames`), at any scope. -/
 def checkReservedNames (tops : List STop) : Except String Unit := do
   for t in tops do
@@ -82,7 +118,8 @@ def checkReturns (tops : List STop) : Except String Unit := do
     no definition takes a reserved one (`checkReservedNames`), each name is
     defined once in its scope (`checkDefinedOnce`), and its
     constants and field defaults have no `return` (`checkReturns`);
-    modules are resolved (#112); and the helpers the program needs are added,
+    modules are resolved (#112), and no constant depends on itself
+    (`checkConstantCycles`); and the helpers the program needs are added,
     those the source names alike kept apart from them (#210). -/
 def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitted := do
   EffectPolicy.check allTops0r opts.entry
@@ -116,6 +153,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
     | none => []
   let resolved ← resolveModules (allTops000 ++ rawEntry)
   let (typeDefaults, resolved) := resolved.partition (·.isTypeDefault)
+  checkConstantCycles resolved
   let resolved := if opts.extendedDefaults then resolved
     else resolved.map InitializerConvergence.markSource
   -- Resolve source names before deciding which soft-library definitions are
