@@ -1688,6 +1688,10 @@ first has no type on its own, every branch is tried against a later one's
 type. So `if (C?) then false else option{4}` is a `?int`, as
 `if (C?) then option{4} else false` is, and so is the choice
 `false | option{4}`; `if (C?) then array{} else array{4}` is a `[]int`.
+Whatever the condition: an index, a `<decides>` call or a cast among its
+clauses, first, later or alone, takes it as any (`if (X := Xs[1], X > 1)
+then array{X} else array{}` is a `[]int`), and a cast that refines type
+arguments types the branch under its refinement (#243, #583).
 
 Nothing can be done with an `any`: it has no equality (so it is no map
 key), no `ToString`, and no cast back. So in Verse Core it is `void`: a
