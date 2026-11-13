@@ -1193,8 +1193,9 @@ Main():void =
   `a`'s `M` in one and `b`'s in the other, and an overloaded function takes
   each one's overload. So does what runs for each value: a `for`'s body, the
   value of `first{…}` or `option{…}`. What runs once, after the first
-  success is taken (an `if`'s branches, the code after `first{…}`,
-  `option{…}`, `not` or the left of `or`), sees each name the clauses bind
+  success is taken (an `if`'s branches, the body of `first(…){…}`, the code
+  after `first{…}`, `option{…}`, `if{…}`, `logic{…}`, `assert{…}`, `not`
+  or the left of `or`), sees each name the clauses bind
   at one type, the join of its types in the alternatives (#283): their
   nearest common supertype, else `any` (classes with no common base, `int`
   and `string`), as for an `if`'s branches, and inside an array, an option
@@ -1213,14 +1214,18 @@ Main():void =
   ```
 
   Such an `any` can be passed to or kept where an `any` is taken, and
-  nothing else ([any](#any)): using it as its class (`A.M()`, `A.F`, an
-  argument of type `a`, a cast `a[A]`) is an error that names the choice;
-  do that in the clauses after the choice, or take the values in a `for`.
-  Classes with more than one nearest common supertype (two interfaces,
-  neither below the other) have no join, and such a condition is refused,
-  as such an `if`'s value is. A choice whose alternatives have no values
-  or clauses of their own (`a{} | b{}`) has the join of its values' types,
-  in the clauses after it too.
+  nothing else ([any](#any)): using a name the condition binds as its
+  class (`A.M()`, `A.F`, an argument of type `a`, a cast `a[A]`) is an error
+  that names the choice; do that in the clauses after the choice, or take
+  the values in a `for`. Classes with more than one nearest common
+  supertype (two interfaces, neither below the other) have no join, and
+  such a condition is refused, used after it or not, as such an `if`'s
+  value is. A choice whose alternatives have no values or clauses of their
+  own (`a{} | b{}`) has the join of its values' types, in the clauses after
+  it too. So does one in the body of a function with several values (a
+  `<decides>` one included), which is checked on its own with each choice
+  at its alternatives' join (#283): `A.M()` after such a choice there is
+  refused, though the copies at a call would compile.
 
   Such a call is inlined: its arguments are evaluated first, in order, then
   its body runs in the caller's clauses, so the body's effects are rolled
