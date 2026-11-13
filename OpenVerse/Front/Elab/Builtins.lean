@@ -13,6 +13,12 @@ inductive Arity where
   /-- any number -/
   | any
 
+/-- Whether a call with `n` arguments has the number the arity says. -/
+def Arity.admits (n : Nat) : Arity → Bool
+  | .exactly k => n == k
+  | .oneOrTwo => n == 1 || n == 2
+  | .any => true
+
 /-- `Arity.show "float"`: "one float", "two floats", "one or two floats". -/
 def Arity.show (noun : String) : Arity → String
   | .exactly n =>
@@ -365,6 +371,22 @@ def elabClampOrSgn (c : BuiltinCall) : EM R := do
       (.seq (.assign m (pick (le ta hi) ta hi)) (pick (le lo m) m lo)))))), t⟩
   | _, _ => c.wrongArity "argument"
 
+/-- A bitwise function (the Book's ch. 4 and API): of ints, as two's
+    complement sign-extended without limit, a result out of the int range
+    the overflow error; the shifts (`shift`) fail on a negative count, so
+    they are called `F[…]`. `BitNot(X)` is `-1 - X`; the others call helpers
+    written in Verse (`Front/Bitwise.lean`), each argument evaluated once, in
+    order. -/
+def elabBitwise (shift : Bool) (c : BuiltinCall) : EM R := do
+  if shift then c.needBracket else c.noBracket
+  if !c.arity.admits c.args.length then
+    eerr c.p s!"{c.name} takes {c.arity.show "int"}, found {c.args.length} argument(s)"
+  let es ← c.elabInts c.ctx c.p c.args
+  if c.name == "BitNot" then return ⟨.prim .sub [.lit (.int (-1)), es[0]!], .int⟩
+  let helper := "$bit" ++ (c.name.drop 3).toString
+  let some s := c.ctx.sig? helper | eerr c.p s!"internal error: the bitwise helper {helper} is missing"
+  return ⟨.call s.idx es, .int⟩
+
 /-- `Err()`: the program stops with an error; its value is of every type.
     The first place it is called is noted (`errAt`). Its arguments, if any
     are written, are not looked at. -/
@@ -433,6 +455,12 @@ def builtinFunctions : List Builtin := [
   ⟨"Max", .exactly 2, elabMinMax false⟩,
   ⟨"Clamp", .exactly 3, elabClampOrSgn⟩,
   ⟨"Sgn", .exactly 1, elabClampOrSgn⟩,
+  ⟨"BitAnd", .exactly 2, elabBitwise false⟩,
+  ⟨"BitOr", .exactly 2, elabBitwise false⟩,
+  ⟨"BitXor", .exactly 2, elabBitwise false⟩,
+  ⟨"BitNot", .exactly 1, elabBitwise false⟩,
+  ⟨"BitShiftLeft", .exactly 2, elabBitwise true⟩,
+  ⟨"BitShiftRight", .exactly 2, elabBitwise true⟩,
   ⟨"Err", .any, elabErr⟩,
   ⟨"$Show", .exactly 1, elabShow⟩]
 

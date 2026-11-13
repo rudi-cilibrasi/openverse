@@ -17,21 +17,21 @@ Allocate(H:cell,N:int)<allocates>:int =
     T.V
 Use0(P:pair(a,b),Q:pair(c,d),R:pair(e,f),H:cell where a:type,b:type,c:type,d:type,e:type,f:type)<suspends><writes>:int =
     if(F:=dup[P]):
-        Sleep(0.0)
+        Sleep(0.01)
         for(A:=if(D:=dup[P])then(D.C|D.C+1)else 0,B:=if(E:=dup[Q])then(E.C|E.C+1)else 0):
             Print("value {Write(H,A+B)}")
     -1
 
 Use1(P:pair(a,b),Q:pair(c,d),R:pair(e,f),H:cell where a:type,b:type,c:type,d:type,e:type,f:type)<suspends><reads>:int =
     if(F:=dup[P]):
-        Sleep(0.0)
+        Sleep(0.01)
         for(A:=if(true?)then Two(4)else Two(9),B:=if(true?)then Two(4)else Two(9)):
             Print("value {Read(H,A+B)}")
     -1
 
 Use2(P:pair(a,b),Q:pair(c,d),R:pair(e,f),H:cell where a:type,b:type,c:type,d:type,e:type,f:type)<suspends><allocates>:int =
     if(F:=dup[P]):
-        Sleep(0.0)
+        Sleep(0.01)
         for(A:=(Two(4)|Two(6)),B:=(Two(4)|Two(6))):
             Print("value {Allocate(H,A+B)}")
     -1

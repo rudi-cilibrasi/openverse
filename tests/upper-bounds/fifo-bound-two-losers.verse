@@ -22,20 +22,20 @@ Racer(X:t,E:event(int) where t:subtype(vehicle))<suspends>:t=
             Print("first loser {V} {F(V)}")
         block:
             spawn{Waiter(E,X,"task")}
-            Sleep(0.0)
+            Sleep(0.01)
             Print("winner")
         block:
             defer:Print("cleanup second {Read(X)}")
             F:=Make(X)
-            Sleep(0.0)
-            Sleep(0.0)
+            Sleep(0.01)
+            Sleep(0.01)
             V:=E.Await()
             Print("second loser {V} {F(V)}")
     set X.N=10
     E.Signal(1)
     Print("signalled")
-    Sleep(0.0)
-    Sleep(0.0)
+    Sleep(0.01)
+    Sleep(0.01)
     E.Signal(2)
     Sleep(0.1)
     X

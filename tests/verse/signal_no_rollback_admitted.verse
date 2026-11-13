@@ -15,7 +15,7 @@ Note(E:event(int), N:int):int =
 Positive(N:int)<decides>:void = N > 0
 Log(N:int):void = Print("heard {N}")
 Shouter(E:event(int))<suspends>:void =
-    Sleep(0.0)
+    Sleep(0.01)
     E.Signal(5)
 Start(E:event(int)):int =
     spawn{Shouter(E)}
@@ -40,17 +40,17 @@ Main()<suspends>:void =
         loop:
             V := E.Await()
             Print("awaited {V}")
-    Sleep(0.0)
+    Sleep(0.01)
     if (Positive[1]):
         E.Signal(1)
         U.Signal(1)
     else:
         S.Signal(0)
-    Sleep(0.0)
+    Sleep(0.01)
     for (X := (Two(0) | Two(2)), Y := (Two(0) | Two(2)), X = 0):
         U.Signal(Y)
     if (Positive[2]) then Print("note {Note(E, 2)}")
-    Sleep(0.0)
+    Sleep(0.01)
     S.Signal(3)
     Print("sticky {S.Await()}")
     C.Cancel()

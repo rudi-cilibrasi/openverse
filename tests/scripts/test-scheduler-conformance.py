@@ -64,7 +64,7 @@ with tempfile.TemporaryDirectory(prefix='openverse-scheduler-conformance-') as d
               (int(code.strip()), stdout, stderr.read_text() if stderr.exists() else ''))
 
     controls = [
-        ('deadlock', 'Sleep(Inf)', 'Sleep(0.0)', 'waiting\nafter\n'),
+        ('deadlock', 'Sleep(Inf)', 'Sleep(0.01)', 'waiting\nafter\n'),
         ('clock_bounds', '1000000000000000.0', '999999999999999.0',
          'below cutoff\nabove cutoff\n'),
         ('clock_overflow', 'I=400', 'I=2', 'before\nafter\n'),

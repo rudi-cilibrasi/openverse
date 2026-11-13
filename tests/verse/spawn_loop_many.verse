@@ -6,9 +6,9 @@ Tick(N:int)<suspends>:void =
 Sum(Xs:[]int)<suspends>:int =
     var S:int = 0
     for (X : Xs):
-        Sleep(0.0)
+        Sleep(0.01)
         if (Y := option{X}?):
-            Sleep(0.0)
+            Sleep(0.01)
             set S += Y
     S
 Main()<suspends>:void =

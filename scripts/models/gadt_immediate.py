@@ -129,7 +129,7 @@ dup(t:type) := class(pair(t,t)) {{ C:int }}
         Sleep(0.1)
         Print("observe {{Total}}")
         set Total+={observer_step}
-    Sleep(0.0)
+    Sleep(0.01)
 {consumer}Main()<suspends>:void =
     P:={p.replace('}',f',C:={pc}}}') if p_hit else p}
     Q:={q.replace('}',f',C:={qc}}}') if q_hit else q}

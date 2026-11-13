@@ -5,9 +5,9 @@ Main()<suspends>:void=
             Print("timer")
         block:
             Print("peer")
-            Sleep(0.0)
+            Sleep(0.01)
             Print("tick 1")
-            Sleep(0.0)
+            Sleep(0.01)
             Print("tick 2")
-            Sleep(0.0)
+            Sleep(0.01)
             Print("tick 3")

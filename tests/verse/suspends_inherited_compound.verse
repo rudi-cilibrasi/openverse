@@ -14,10 +14,10 @@ i2(p0:type, p1:type) := interface(i1(p1)):
 c1(t0:type) := class(i2(string, t0)):
     Mi2<override>(X:string):string = "c1.Mi2"
     Si2<override>(X:string)<suspends>:string =
-        Sleep(0.0)
+        Sleep(0.01)
         "c1.Si2 {X}"
     Ti2<override>(X:string, Y:t0)<suspends>:t0 =
-        Sleep(0.0)
+        Sleep(0.01)
         Y
     Mi1<override>(X:t0):string = "c1.Mi1"
     Mi0<override>(X:t0):string = "c1.Mi0"

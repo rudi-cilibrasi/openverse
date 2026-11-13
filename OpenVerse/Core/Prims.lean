@@ -89,7 +89,7 @@ def VFloat.toIntRes (r : VFloat.Rounding) (b : UInt64) : Res :=
 def toStrValue : Value → Res
   | .int i => .ok (Value.ofArray ((intBytes i).map Value.char).toArray)
   | .char c => .ok (Value.ofArray #[.char c])
-  | .float b => .ok (Value.ofString (VFloat.render b))
+  | .float b => .ok (Value.ofString (VFloat.fixed6 b))
   | .arr vs => match asBytes vs.toList with
     | some _ => .ok (Value.ofArray vs)
     | none => .err .type

@@ -48,7 +48,7 @@ Count(Is:[]i2(u) where u:type):tuple(int, int) =
 # suspending in the branch
 Wait(I:i2(u) where u:type)<suspends>:int =
     if (J := i1[I]) then:
-        Sleep(0.0)
+        Sleep(0.01)
         J.A() * 7
     else 0
 # a method, whose branch names Self's members bare

@@ -6,7 +6,7 @@ Fact(N:int)<suspends>:int =
     Sleep(0.1)
     N * Fact(N - 1)
 Echo(X:t where t:type)<suspends>:t =
-    Sleep(0.0)
+    Sleep(0.01)
     X
 Pick(B:logic)<suspends>:string =
     if (B?):

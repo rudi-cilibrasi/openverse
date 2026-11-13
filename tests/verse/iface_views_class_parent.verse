@@ -15,7 +15,7 @@ q(u:type, t:type) := class(p(u), container(t)):
     V:t
     Get<override>():t = V
     Wait<override>(X:t)<suspends>:t =
-        Sleep(0.0)
+        Sleep(0.01)
         X
     Put<override>(X:u):int = 2
 r(t:type) := class(q(string, []t)):

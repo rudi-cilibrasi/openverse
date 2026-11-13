@@ -1797,7 +1797,7 @@ class Gen:
             self.susp_main = True
         sx = '<suspends>' if su else ''
         def pause():
-            return ['        Sleep(0.0)'] if su and chance(0.5) else []
+            return ['        Sleep(0.01)'] if su and chance(0.5) else []
         xe, xl, xa, xp, xf, xt = (self.fresh(x) for x in ['xe', 'xl', 'xa', 'xp', 'xf', 'xt'])
         ev, nm, run = (self.fresh(x) for x in ['Ev', 'Nm', 'XRun'])
         V, L1, R1, P1, T1 = (self.fresh(x) for x in ['XV', 'XL', 'XR', 'XP', 'XT'])

@@ -161,8 +161,9 @@ def layout (ds : String) (decpt : Int) : String :=
   else
     s!"{ds.take decpt.toNat}.{ds.drop decpt.toNat}"
 
-/-- `ToString` of a float: `NaN`, `Inf`, `-Inf`, or the shortest decimal
-    that reads back as it, laid out as Python's `repr` does. -/
+/-- The shortest decimal that reads back as a float, laid out as Python's
+    `repr` does; `NaN`, `Inf`, `-Inf`. The compiler's messages name float
+    literals so; `ToString` is `fixed6`. -/
 def render (b : UInt64) : String :=
   if b == nanBits then "NaN"
   else if !isFinite b then (if b.toNat ≥ 2 ^ 63 then "-Inf" else "Inf")
@@ -179,6 +180,29 @@ def render (b : UInt64) : String :=
     let ds := digits D
     let decpt : Int := ds.length + q
     (if neg then "-" else "") ++ layout ds decpt
+
+/-! ### `ToString`: fixed point with six digits after the point -/
+
+/-- `ToString` of a float (the Book's API, `ToString(Val:float)`: "Fixed
+    point with exactly six digits after the decimal point, always"): `NaN`,
+    `Inf`, `-Inf`, or the float's exact value rounded to a multiple of
+    10^-6, a tie to the even last digit, with every digit before the point
+    and a `-` whenever the float is negative, also when every digit is zero.
+    This is C's `%.6f` in the default rounding mode. -/
+def fixed6 (b : UInt64) : String :=
+  if b == nanBits then "NaN"
+  else if !isFinite b then (if b.toNat ≥ 2 ^ 63 then "-Inf" else "Inf")
+  else
+    -- (zero's parts are `(false, 0, -1074)`)
+    let (neg, m, e) := parts b
+    -- the magnitude in millionths: m · 2^e · 10^6, rounded half to even
+    let n : Nat :=
+      if e ≥ 0 then m * 2 ^ e.toNat * 10 ^ 6 else divRound (m * 10 ^ 6) (2 ^ (-e).toNat)
+    let ds := (toString n).toList
+    -- (at least one digit before the point)
+    let ds := List.replicate (7 - ds.length) '0' ++ ds
+    let k := ds.length - 6
+    (if neg then "-" else "") ++ String.ofList (ds.take k) ++ "." ++ String.ofList (ds.drop k)
 
 end VFloat
 

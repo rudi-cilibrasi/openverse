@@ -7,7 +7,7 @@ Waiter(E:event(int), N:int)<suspends>:int =
     V := E.Await()
     V + N
 Grow(X:t, N:int where t:type)<suspends>:int =
-    Sleep(0.0)
+    Sleep(0.01)
     if (N > 0) then Grow(array{X}, N - 1) else 0
 Main()<suspends>:void =
     E := event(int){}

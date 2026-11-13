@@ -4,7 +4,11 @@ gives it, computed by Python's IEEE doubles under Verse's rules: one NaN,
 equal to itself; no negative zero; Min/Max NaN when either is; Round ties to
 even; Floor/Ceil/Round/Int fail on NaN or an infinity (a result out of the int
 range is a runtime error, so the generator leaves those out);
-ToString the shortest repr ("Inf", "-Inf", "NaN").
+ToString fixed point with six digits after the point, the exact binary value
+rounded half to even, a negative value keeping its sign ("-0.000000"), and
+"Inf", "-Inf", "NaN" (the Book's API: Python's '%.6f'). As six digits hide
+most of a small value's bits, each value is printed a second time multiplied
+by 2^64 (exact, unless it overflows), which shows them.
 
 usage: gen-floats.py SEED OUT.verse OUT.expected
 """
@@ -30,7 +34,11 @@ def show(x):
         return "NaN"
     if math.isinf(x):
         return "Inf" if x > 0 else "-Inf"
-    return repr(x)
+    return '%.6f' % x
+
+
+SCALE = 2.0 ** 64
+SCALE_LIT = "18446744073709551616.0"
 
 
 def lit():
@@ -235,6 +243,9 @@ for i in range(rng.randint(10, 25)):
     names.append(name)
     lines.append(f'    Print("{name} = {{{name}}}")')
     out.append(f"{name} = {show(env[name])}")
+    # (the value's bits, which six digits hide: times 2^64)
+    lines.append(f'    Print("{name}*2^64 = {{{name} * {SCALE_LIT}}}")')
+    out.append(f"{name}*2^64 = {show(canon(env[name] * SCALE))}")
     if rng.random() < 0.4:
         c, d = pick(), pick()
         op = rng.choice(["=", "<>", "<", "<=", ">", ">="])

@@ -5,7 +5,7 @@ Early(N:int)<computes>:int=
 Run(Next:int)<suspends>:[][]int=
     var Total:int=0
     R:=for(A:=Early(-1),set Total+=A,B:=Early(-2),set Total+=B,C:=Early(Next)):
-        Sleep(0.0)
+        Sleep(0.01)
         set Total+=C
         Print("body {A} {B} {C} {Total}")
         array{A,B,C}

@@ -16,7 +16,7 @@ Start(P:pair(a,b),Q:base(c),X:c where a:type,b:type,c:type)<transacts>:task(int)
 StartWaiting(P:pair(a,b),Q:base(c),X:c where a:type,b:type,c:type)<suspends><transacts>:task(int)=
     defer:Print("waiting cleanup")
     if(D:=dup[P]):
-        Sleep(0.0)
+        Sleep(0.01)
         return spawn{Q.Go(X)}
     spawn{Q.Go(X,?N:=0)}
 Main()<suspends><transacts>:void=

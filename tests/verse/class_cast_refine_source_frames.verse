@@ -33,7 +33,7 @@ Nested(P:pair(a, b), Q:pair(c, d) where a:type, b:type, c:type, d:type)<suspends
         if (E := dup[Q]):
             set X = D.B
             set Y = D.B
-            Sleep(0.0)
+            Sleep(0.01)
         Y
     else:
         P.A
@@ -63,12 +63,12 @@ Scopes(P:pair(a, b) where a:type, b:type)<suspends>:void =
             Print("first scope {X}")
         if (D := dup[P]):
             set X = 7
-            Sleep(0.0)
+            Sleep(0.01)
     block:
         var X:int = 10
         if (D := dup[P]):
             set X = 9
-            Sleep(0.0)
+            Sleep(0.01)
     Sleep(1.0)
 ImmediateLocal(P:pair(a, b), Q:pair(c, d) where a:type, b:type, c:type, d:type)<suspends>:void =
     var X:int = 0

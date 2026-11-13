@@ -14,7 +14,7 @@ Run(S:state)<suspends>:int=
             defer:
                 set S.N+=1
                 Print("return arm {S.N}")
-            Sleep(0.0)
+            Sleep(0.01)
             return 7
         block:
             defer:

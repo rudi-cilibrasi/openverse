@@ -4,7 +4,7 @@ Use(P:pair(a,b),Hit:logic where a:type,b:type)<suspends>:void=
     defer:Print("source")
     sync:
         block:
-            Sleep(0.0)
+            Sleep(0.01)
             if(D:=dup[P]):
                 branch:
                     defer:Print("A {D.C}")

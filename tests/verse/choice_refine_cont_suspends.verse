@@ -12,7 +12,7 @@ Run(P:pair(a,b),Limit:int where a:type,b:type)<suspends>:string =
     for(A:=(Dup(1)|Dup("s"))):
         for(I:=0..Limit):
             if(D:=dup[P]):
-                Sleep(0.0)
+                Sleep(0.01)
                 set N+=1
                 if(N=Limit+3):
                     return "{A} {I} {D.C} {N}"

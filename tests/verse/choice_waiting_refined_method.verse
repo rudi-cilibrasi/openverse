@@ -6,7 +6,7 @@ Lazy(N:int)<computes><decides>:int =
     N>=0
     N|Lazy[N-1]
 Wait(N:int)<suspends>:int =
-    Sleep(0.0)
+    Sleep(0.01)
     N
 waiter := class:
     Get(N:int)<suspends>:int=Wait(N)

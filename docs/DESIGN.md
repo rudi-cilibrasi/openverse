@@ -1699,14 +1699,17 @@ them), so the theorems' axioms now include it besides `propext` and
 `Quot.sound` (`docs/CLAIMS.md`).
 
 Two things are computed exactly from the bits, in Lean with integers and in
-C with integer arithmetic and correctly rounded `printf`/`strtod`:
+C with integer arithmetic and correctly rounded `printf`:
 
 - the conversions to int (`Floor`, `Ceil`, `Round` with ties to even,
   `Int`), which fail on NaN or an infinity, and raise the overflow error out
   of range;
-- `ToString`: for each length `p`, the correctly rounded `p`-digit decimal
-  or its neighbour on the other side of the value, the first that reads
-  back as it, laid out as Python's `repr`.
+- `ToString` (`VFloat.fixed6`, the Book's API): the magnitude in millionths,
+  `m·2^e·10^6` rounded half to even by one integer division, laid out with
+  six digits after the point and a `-` from the sign bit; in C, `"%.6f"`
+  (exact in glibc, and rounding in the default mode, ties to even). The
+  shortest round-trip decimal (`VFloat.render`) is kept for the compiler's
+  messages.
 
 `scripts/fuzz-floats.sh` checks both implementations against Python's
 doubles. In the binary format a float literal is the primitive `fofBits` of
@@ -1823,6 +1826,33 @@ soundness, type-safety, scoping and control proofs build as before. The C
 wide implementation is tested against independent exact-fraction oracles;
 it is outside QuickProof's existing two-int arithmetic law. See
 [the rational seam](SEAMS.md#4-rational-arithmetic).
+
+## Bitwise functions: helpers written in Verse
+
+The Book's bitwise functions (ch. 4) are written with Verse Core's existing
+operations, as the rationals' helpers are, so Verse Core, its proofs, the
+binary format, the loader and the C runtime are unchanged. Six new
+primitives were the other route; their opcodes would change the header and
+the loader that the QuickProof theorems pin, whose proofs must then be
+replayed. `BitNot(X)` is `-1 - X` inline. `Front/Bitwise.lean` holds the
+others as Verse source, added to a program that names one (the parser's
+marker `$uses:bitwise`, or the entry expression), renamed `$bitAnd` etc.:
+
+- `BitAnd`, `BitOr`, `BitXor`: the operands' bits from the lowest up, by
+  `Floor(X / 2)` (toward minus infinity, so a negative number's bits are
+  its two's complement), until both operands are 0 or -1, every bit above
+  being the sign's; the bits seen are summed, and the rest, the operation
+  of the two signs from bit `i` up, weigh `-2^i` together. At most 63
+  rounds; every number computed is in range.
+- `BitShiftLeft[X, N]`: fails for `N < 0`, else doubles `X` up to `N` times
+  or until it is 0, a doubling out of range being the overflow error
+  (which an out-of-range result always reaches, and an in-range one never).
+- `BitShiftRight[X, N]`: fails for `N < 0`, else halves `X` up to `N` times
+  or until it is 0 or -1.
+
+`scripts/fuzz-bitwise.sh` checks both implementations against Python's
+unbounded ints with the int64 range, programs ending with the overflow
+error included.
 
 ## Generic functions: polymorphic Verse Core
 
@@ -2420,7 +2450,11 @@ byte.
 rationals' are). A suspends `Main` starts a loop of passes, one per tick,
 each resuming `Main`'s frame. A sleeping frame reports the tick it waits
 for, and the clock then moves to the earliest of them, so idle ticks cost
-nothing.
+nothing. A sleep of `S > 0` seconds waits `Ceil(30·S)` ticks of the binary64
+product, at least one (the first tick at or after its deadline, the Book's
+API); `Sleep(0.0)`, a negative or a NaN duration completes at once, with no
+suspension (`sleepResume` gives 1 on its first poll), as the Book's tested
+examples of ch. 14 have it for zero.
 
 The scheduler holds its task roots as references without type
 arguments; a generic frame that is not a root is resumed by its caller,

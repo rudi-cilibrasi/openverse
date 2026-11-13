@@ -6,13 +6,13 @@ Lazy(N:int)<computes><decides>:int =
     N>=0
     N|Lazy[N-1]
 Wait(N:int)<suspends>:int =
-    Sleep(0.0)
+    Sleep(0.01)
     N
 Use(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<suspends>:void =
     defer:Print("void source")
     for(A:=if(D:=dup[P])then(D.C|D.C+1)else 0,B:=if(E:=dup[Q])then(E.C|E.C+1)else 0):
         defer:Print("void body")
-        Sleep(0.0)
+        Sleep(0.01)
         Print("void {A} {B}")
         return
     Print("bad")

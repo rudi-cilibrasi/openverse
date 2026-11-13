@@ -222,7 +222,7 @@ for (n, ps, parent, mt, dflt) in ifs:
             lines.append(f"    U_{f}(V:{ty(T)}):void = set {f} = V")
         if SUSP:
             lines.append(f"    SD_{f}()<suspends>:{ty(T)} =")
-            lines.append(f"        Sleep(0.0)")
+            lines.append(f"        Sleep(0.01)")
             lines.append(f"        {f}")
     m = f"    M{n}(X:{ty(mt)}):string"
     lines.append(m + (f' = "{n}.def"' if dflt else ''))
@@ -251,7 +251,7 @@ for cc in classes:
             body.append(f'    P{n}<override>(X:{ty(mt)}, Y:w where w:type):tuple({ty(mt)}, w) = (X, Y)')
             if SUSP:
                 body.append(f'    S{n}<override>(X:{ty(mt)})<suspends>:string =')
-                body.append(f'        Sleep(0.0)')
+                body.append(f'        Sleep(0.01)')
                 body.append(f'        "{name}.S{n}"')
     COV[name] = {}
     for (n, a) in ifaces_of(name, own):
@@ -278,7 +278,7 @@ for (n, ps, parent, mt, dflt) in ifs:
             lines.append(f"SF_{f}({X}, V:{ty(T)}{w}):void = set X.{f} = V")
         if SUSP:
             lines.append(f"GSF_{f}({X}{w})<suspends>:{ty(T)} =")
-            lines.append(f"        Sleep(0.0)")
+            lines.append(f"        Sleep(0.01)")
             lines.append(f"        X.{f}")
 for (n, ps, parent, mt, dflt) in ifs:
     if ps:

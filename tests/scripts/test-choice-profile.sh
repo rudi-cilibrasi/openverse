@@ -59,7 +59,7 @@ dup(t:type):=class(pair(t,t)){C:int=4}
 Read(P:pair(a,b) where a:type,b:type):int=if(D:=dup[P])then D.C else 0
 Main():void=Print("{Read(dup(int){A:=1,B:=2})}")''',
         'scheduler': '''Wait(N:int)<suspends>:int=
-    Sleep(0.0)
+    Sleep(0.01)
     Print("wait {N}")
     N
 Main()<suspends>:void=

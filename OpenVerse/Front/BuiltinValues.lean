@@ -28,7 +28,12 @@ def signatures : List (String × List String × List String × String) :=
   [("Pow", ["float", "float"], ["computes"], "float"), ("Log", ["float", "float"], ["computes"], "float"),
    ("Lerp", ["float", "float", "float"], ["reads"], "float"),
    ("IsFinite", ["float"], ["computes", "decides"], "float"),
-   ("Round", ["float"], ["computes", "decides"], "int"), ("Int", ["float"], ["computes", "decides"], "int")]
+   ("Round", ["float"], ["computes", "decides"], "int"), ("Int", ["float"], ["computes", "decides"], "int"),
+   -- the bitwise functions (ch. 4)
+   ("BitAnd", ["int", "int"], ["computes"], "int"), ("BitOr", ["int", "int"], ["computes"], "int"),
+   ("BitXor", ["int", "int"], ["computes"], "int"), ("BitNot", ["int"], ["computes"], "int"),
+   ("BitShiftLeft", ["int", "int"], ["computes", "decides"], "int"),
+   ("BitShiftRight", ["int", "int"], ["computes", "decides"], "int")]
 
 /-- The names an expression uses as values (not as the head of a call), with
     where, and the names it binds. -/

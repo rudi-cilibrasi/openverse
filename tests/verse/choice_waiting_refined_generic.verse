@@ -6,11 +6,11 @@ Lazy(N:int)<computes><decides>:int =
     N>=0
     N|Lazy[N-1]
 Wait(N:int)<suspends>:int =
-    Sleep(0.0)
+    Sleep(0.01)
     N
 Use(P:pair(a,b),Q:pair(c,d),First:b where a:type,b:type,c:type,d:type)<suspends>:[]b =
     for(A:b=if(D:=dup[P])then(D.A|D.B)else P.B,B:=if(E:=dup[Q])then(E.C|E.C+1)else 0):
-        Sleep(0.0)
+        Sleep(0.01)
         Empty:[]b=array{}
         A
 Main()<suspends>:void =

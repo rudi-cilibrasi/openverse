@@ -6,14 +6,14 @@ Lazy(N:int)<computes><decides>:int =
     N>=0
     N|Lazy[N-1]
 Wait(N:int)<suspends>:int =
-    Sleep(0.0)
+    Sleep(0.01)
     N
 expr(t:type):=class{}
 pairE(a:type,b:type):=class(expr(tuple(a,b))){L:a;R:b}
 Use(E:expr(t),Fallback:t,Q:pair(c,d),Hit:logic where t:type,c:type,d:type)<suspends>:[]t =
     for(V:t=if(D:=pairE[E])then((D.L,D.R)|(D.L,D.R))else Fallback,
         W:=if(F:=dup[Q])then(F.C|F.C+1)else 0):
-        Sleep(0.0)
+        Sleep(0.01)
         Empty:[]t=array{}
         Print("opened {W}")
         V

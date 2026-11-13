@@ -152,7 +152,7 @@ partial def genArr (env : Env) (d : Nat) : G Expr := do
 /-- A statement (its value is not interesting). -/
 partial def genStmt (env : Env) (d : Nat) : G Expr := do
   if d == 0 then return .print (p .toStr [← genInt env 0])
-  match ← below 15 with
+  match ← below 16 with
   | 0 | 1 | 2 => return .print (p .toStr [← genInt env (d-1)])
   | 3 => return .print (p .concat [.lit (Value.ofString "s:"), p .toStr [← genInt env (d-1)]])
   | 4 =>
@@ -181,6 +181,15 @@ partial def genStmt (env : Env) (d : Nat) : G Expr := do
     -- store a fresh array in a field (maybe of an object the caller passed)
     return .heap (.set (← below 2)) [← genRef env (d-1), ← genArr env (d-1)]
   | 12 | 13 => genValTest env (d-1)
+  | 14 =>
+    -- `ToString` of a float, fixed point with six digits: of any bits (huge,
+    -- tiny, negative, NaNs, infinities), or of a dyadic value, where the
+    -- seventh digit can be a tie
+    let bits : UInt64 ← if (← chance 50) then next else do
+      let f := Float.ofNat (← below 2000000) / Float.ofNat (2 ^ (← below 30))
+      pure (if (← chance 30) then (-f).toBits else f.toBits)
+    let i : Int := if bits.toNat ≥ 2 ^ 63 then (bits.toNat : Int) - 2 ^ 64 else bits.toNat
+    return .print (p .toStr [p .fofBits [.lit (.int i)]])
   | _ => return .print (.lit (Value.ofString (← pick ["a", "", "rolled?", "x y"])))
 
 /-- A value, often holding the empty value at some depth, in each of the

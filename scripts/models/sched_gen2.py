@@ -22,7 +22,7 @@ branches, last started first, after the function's defers)."""
 import random, sys, os
 from collections import Counter
 
-TICKS = {"0.0": 1, "0.1": 3, "0.2": 6, "0.3": 9, "0.5": 15, "1.0": 30}
+TICKS = {"0.0": 0, "0.1": 3, "0.2": 6, "0.3": 9, "0.5": 15, "1.0": 30}
 DURS = list(TICKS)
 
 
@@ -151,6 +151,10 @@ S = None  # the scheduler of the current model run
 
 def m_sleep(d):
     ticks = TICKS[d] if isinstance(d, str) else d
+    # (Sleep(0.0) completes at once, without suspending: the Book's tested
+    # examples in ch. 14; any positive duration waits at least one tick)
+    if ticks == 0:
+        return
     wake = S.clock + max(1, ticks)
     S.sleepers[wake] += 1
     try:
