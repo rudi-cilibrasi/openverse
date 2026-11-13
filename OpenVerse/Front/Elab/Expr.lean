@@ -2343,6 +2343,9 @@ partial def elabConstructionValue (ctx : Ctx) (p : Pos) (name : String) (targs :
     | a => eerr a.pos "a struct field is given as Name := value"
   for (f, _) in given do
     if (fs.find? (·.1 == f)).isNone then eerr p s!"struct {name} has no field '{f}'"
+    -- (a `<final>` field keeps its default: no construction gives it a value)
+    if let some (q, _) := ctx.types.finalFields.find? fun (q, g) => g == f && ctx.types.isSub name q then
+      eerr p s!"field '{f}' is <final> in {q}: a construction of {name} cannot give it a value"
   -- (only the first would be evaluated)
   if let some f := (given.map (·.1)).find? (fun f => (given.filter (·.1 == f)).length > 1) then
     eerr p s!"field '{f}' of {name} is given twice"

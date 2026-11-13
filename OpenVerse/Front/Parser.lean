@@ -1374,7 +1374,7 @@ partial def parseCtorBody (stop : Nat) : PM (List SExpr) := do
 /-- One item of a class body at column `c`: a field `[var] Name:type [= e]`
     or a method `Name(params)<effects>:type = body`. -/
 partial def parseClassItem (c : Nat) :
-    PM (Sum ((String × STy × Option SExpr × Bool) × Bool) STop) := do
+    PM (Sum ((String × STy × Option SExpr × Bool) × List String) STop) := do
   let t ← peekT
   -- `block:` runs when an instance is constructed: the method `$block`
   if t.isKw "block" then
@@ -1401,7 +1401,7 @@ partial def parseClassItem (c : Nat) :
     let a ← peekT
     let d ← if a.isSym "=" || a.isSym ":=" then do bump; pure (some (← parseValue c)) else pure none
     ofExcept <| EffectPolicy.checkField t.pos pre d.isSome
-    return .inl ((name, ty, d, isVar), pre.contains "override")
+    return .inl ((name, ty, d, isVar), pre)
   if isVar then perr t "expected a field after var"
   expectSym "("
   let (ps, tps, binds) ← parseParamList
@@ -1455,7 +1455,12 @@ partial def parseClassBody (p : Pos) (name : String) (tps : List TParam) (isIfac
       items := items.push (← parseClassItem 0)
   else perr o s!"expected ':' or '\{' after {if isIface then "interface" else "class"}"
   let fields := items.toList.filterMap fun | .inl (f, _) => some f | .inr _ => none
-  let overrides := items.toList.filterMap fun | .inl ((n, _), true) => some n | _ => none
+  let overrides := items.toList.filterMap fun | .inl ((n, _), sp) => if sp.contains "override" then some n else none | _ => none
+  -- (a `<final>` field, which no class below may give another value, is
+  -- kept among the class's specifiers as `$final:F`)
+  let specs := specs ++ items.toList.filterMap fun
+    | .inl ((n, _), sp) => if sp.contains "final" then some s!"$final:{n}" else none
+    | _ => none
   let methods := items.toList.filterMap fun | .inr m => some m | .inl _ => none
   -- the `block:` clauses, in order, as one method
   let isBlock : STop → Bool := fun | .fn _ "$block" .. => true | _ => false

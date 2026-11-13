@@ -59,7 +59,11 @@ def Place.what : Place → String
     Verse's tests do (`Tests/Attributes/`, `Castable.versetest`; ch. 10: only
     a class may be `<abstract>`, ch. 17: `<persistable>` classes and structs).
     What each requires of what it is on is checked where that is known:
-    `<final>` a member's body or value (`checkField`, `checkPlaces`);
+    `<final>` a member's body or value (`checkField`, `checkPlaces`), and
+    of a field that nothing below overrides it nor a construction sets it
+    (`classFields`, `elabConstructionValue`: the parser keeps it among the
+    class's specifiers as `$final:F`); `<abstract>` and `<concrete>` not
+    together (`checkPlaces`);
     `<concrete>` a default for every field (a struct's in `checkPlaces`, a
     class's with its inherited fields, `classFields`); `<castable>` and
     `<final_super_base>` of the classes below (`classHierarchy`); a
@@ -217,8 +221,11 @@ def checkPlaces (tops : List STop) : Except String Unit := do
   for top in tops do
     match top with
     | .fn p _ _ _ specs .. => checkPlace p .function specs
-    | .classDef p _ _ specs _ isI _ _ methods =>
+    | .classDef p n _ specs _ isI _ _ methods =>
       checkPlace p (if isI then .interfaceType else .classType) specs
+      -- (`C{}` constructs a `<concrete>` class, and nothing an `<abstract>` one)
+      if specs.contains "abstract" && specs.contains "concrete" then
+        reject p s!"{n} cannot be both <abstract> and <concrete>: a concrete class is constructed with {n}\{}, an abstract one never"
       for m in methods do
         if let .fn mp _ _ _ mspecs .. := m then method mp mspecs
     | .const p n _ (.structDef _ _ specs fields) =>

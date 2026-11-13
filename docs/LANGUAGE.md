@@ -234,9 +234,9 @@ of them; the Book's tests `Tests/Attributes/` and `Castable.versetest`):
 
 | specifier | on | requires |
 |---|---|---|
-| `<abstract>` | a class (ch. 10; not a method, a field, an interface or a struct) | |
+| `<abstract>` | a class (ch. 10; not a method, a field, an interface or a struct) | not `<concrete>` too |
 | `<concrete>` | a class or a struct | a default for every field, inherited ones and an interface's included (ch. 10, "Concrete") |
-| `<final>` | a class, a method or a field (not an interface, a struct, a module's function) | a method's body, a field's value |
+| `<final>` | a class, a method or a field (not an interface, a struct, a module's function) | a method's body, a field's value; no class below overrides a `<final>` field and no construction gives it a value |
 | `<final_super>` | a class (not supported yet, #11) | |
 | `<final_super_base>` | a class or an interface | a class right below it is `<final_super>` |
 | `<castable>` | a class or an interface | no type parameters, nor in a class or interface below it |

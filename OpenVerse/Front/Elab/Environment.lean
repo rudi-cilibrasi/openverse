@@ -20,7 +20,9 @@ def typeEnvironment (classes : Classes) (fields : Fields) (methods : Methods) (s
   let varFields : List (String × String) := classes.defs.flatMap fun cd =>
     (fields.of cd.name).filterMap fun (f, _, _, isVar) => if isVar then some (cd.name, f) else none
   let uniques : List String := (classes.defs.filter (·.specs.contains "unique")).map (·.name)
-  let mut env : TyEnv := { constructionFx := source.constructionFx, concurrencyNames, classes := classes.henv.classes, cinfo := classes.henv.cinfo, cinfoMap := classes.henv.cinfoMap,
+  let finalFields : List (String × String) := classes.defs.flatMap fun cd =>
+    cd.specs.filterMap fun sp => if sp.startsWith "$final:" then some (cd.name, (sp.drop "$final:".length).toString) else none
+  let mut env : TyEnv := { constructionFx := source.constructionFx, concurrencyNames, finalFields, classes := classes.henv.classes, cinfo := classes.henv.cinfo, cinfoMap := classes.henv.cinfoMap,
                            classIx := classes.henv.classes.zipIdx.foldl (fun m (n, i) => m.insert n i) {},
                            belowReady := true,
                            supersMap := classes.henv.classes.foldl (fun m d => m.insert d (classes.henv.supers d)) {},

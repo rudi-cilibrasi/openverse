@@ -230,6 +230,10 @@ def classFields (classes : Classes) (requests : Requests) : Except String Fields
             throw s!"{cd.pos.show}: {f}<override> must give a new default: write {f}<override>:t = e"
           if !cd.overrides.contains f then
             throw s!"{cd.pos.show}: field '{f}' of {cd.name} has the name of an inherited field (write {f}<override>:t = … to give it a new default)"
+          -- (`<final>`: no class below gives it another default)
+          if let some q := ((classes.henv.supers cd.name).drop 1).find? fun q =>
+              ((classes.cdef? q).map (·.specs.contains s!"$final:{f}")).getD false then
+            throw s!"{cd.pos.show}: field '{f}' is <final> in {q}: {cd.name} cannot override it"
           let (_, sty0, _, v0) := fs[k]!
           if isVar != v0 then
             throw s!"{cd.pos.show}: {f}<override> cannot change whether the field is a var"
