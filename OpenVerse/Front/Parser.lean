@@ -2264,6 +2264,13 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) (par
       expectSym ":"
       let ret ← parseType
       let a ← peekT
+      -- (a declaration with no body, `F():void` on its line: Book of Verse
+      -- tests, Roundtrip/Newlines.versetest; openverse has no functions
+      -- defined elsewhere, refused)
+      if a.isEof || (a.bol && a.col ≤ (← get).topCol) || (!a.bol && (a.isSym ";" || a.isSym ",")) then
+        tops := tops.push (.fn t.pos name ps.toList tps.toList (pre ++ effs) ret
+          (refusedForm t.pos s!"{name0}(…) has no body: a declaration of a function defined elsewhere, which openverse has none of (native functions are not supported, #494)" []))
+        continue
       if a.isSym "=" || a.isSym ":=" then bump else perr a "expected '=' before the function body"
 
       tops := tops.push (.fn t.pos name ps.toList tps.toList (pre ++ effs) ret (withBinds binds (← parseFnBody)))
@@ -2303,6 +2310,10 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) (par
       bump
       let ty ← parseType
       let a ← peekT
+      if a.isEof || (a.bol && a.col ≤ (← get).topCol) || (!a.bol && (a.isSym ";" || a.isSym ",")) then
+        tops := tops.push (.const t.pos name pre (some ty)
+          (refusedForm t.pos s!"{name0}:t has no value: a declaration of data defined elsewhere, which openverse has none of" []))
+        continue
       if a.isSym "=" || a.isSym ":=" then bump else perr a "expected '=' in a constant definition"
       tops := tops.push (.const t.pos name pre (some ty) (← parseFnBody))
     else perr n s!"expected '(', ':' or ':=' after '{name}'"
