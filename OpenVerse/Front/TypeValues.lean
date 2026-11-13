@@ -13,7 +13,8 @@
     every type value is; it declares the cast through the value,
     `$cast(A)(X:A)<decides>:A`, which `$type:C` gives as `C[X]`, so that
     `T[X]` with `T:subtype(A)` is `T.$cast(A)[A[X]]`;
-  - `castable_subtype(A)`, below `subtype(A)`, for a `<castable>` `A`;
+  - `castable_subtype(A)`, below `subtype(A)`, which `$type:C` is when `C`
+    is `<castable>`;
   - `concrete_subtype(A)`, below `subtype(A)`, for each `A` above a class
     that `C{}` constructs, which declares `$make(A)():A`, which `$type:C`
     gives as `C{}`, so that `T{}` with `T:concrete_subtype(A)` is
@@ -177,15 +178,13 @@ def desugar (tops : List STop) : Except String (List STop) := do
     if t.mentions "type" then usesType := true
   let values : List String := (tops.flatMap valueNames).filter isClass |>.eraseDups
   if targets.isEmpty && !usesType && values.isEmpty then return tops
-  -- (each metatype's argument: a class or an interface; castable_subtype's
-  -- one that is <castable>: Book of Verse tests, Subtype.versetest 104-126,
-  -- 3509)
+  -- (each metatype's argument: a class or an interface, Book of Verse
+  -- tests, Subtype.versetest 104-126, 3509; openverse writes subtype(t) of
+  -- no other type)
   for (k, a) in targets do
     let p := ((wherePos.lookup (k, a)).map (·.show ++ ": ")).getD ""
     if !isClass a then
       throw s!"{p}{k}({a}): openverse writes {k} of a class or an interface only, not of {a} (types as values: docs/research/types-as-values.md)"
-    if k == "castable_subtype" && !castable a then
-      throw s!"{p}castable_subtype({a}): {a} is not <castable> (Book of Verse ch. 11; its tests, Subtype.versetest, 3509)"
   -- the interfaces: of each class above a target or a value, upwards closed
   -- (each after the classes above it, as a class is defined after its parents)
   let closure0 : List String := (targets.map (·.2) ++ values).flatMap supers |>.eraseDups
@@ -196,9 +195,12 @@ def desugar (tops : List STop) : Except String (List STop) := do
     .classDef p0 (ifaceName "subtype" a) [] [] []
       (if (parentsOf a).isEmpty then [.name "type"] else (parentsOf a).map (.name <| ifaceName "subtype" ·))
       true [] [.fn p0 (castMethod a) [{ name := "X", ty := .name a }] [] ["decides", "$abstract"] (.name a) (.block p0 [])]
-  let castIfaces : List STop := (closure.filter castable).map fun a =>
+  -- (castable_subtype(A) of any A, whose values are the <castable> classes
+  -- below it: Castable.versetest 91-135, "class1 is not castable, so cannot
+  -- be assigned. The arg to castable_subtype is ok")
+  let castIfaces : List STop := closure.map fun a =>
     .classDef p0 (ifaceName "castable_subtype" a) [] [] []
-      (.name (ifaceName "subtype" a) :: ((parentsOf a).filter castable).map (.name <| ifaceName "castable_subtype" ·)) true [] []
+      (.name (ifaceName "subtype" a) :: (parentsOf a).map (.name <| ifaceName "castable_subtype" ·)) true [] []
   let concreteIfaces : List STop := closure.map fun a =>
     .classDef p0 (ifaceName "concrete_subtype" a) [] [] []
       (.name (ifaceName "subtype" a) :: (parentsOf a).map (.name <| ifaceName "concrete_subtype" ·)) true []
@@ -210,9 +212,14 @@ def desugar (tops : List STop) : Except String (List STop) := do
     let parents : List STy := [.name (ifaceName "subtype" c)] ++ (if castable c then [.name (ifaceName "castable_subtype" c)] else []) ++
       (if concrete c then [.name (ifaceName "concrete_subtype" c)] else [])
     let x : SExpr := .ident p0 "X"
+    -- (a cast to an interface or class no class is below always fails, as
+    -- openverse's `C[X]` would refuse to write)
+    let inhabited := classes.any fun (d, _, _, _, isI, _) => !isI && (supers d).contains c
+    let fails (a : String) : SExpr :=
+      .block p0 [.decl p0 "$none" (some (.opt (.name a))) false (.ident p0 "false"), .query p0 (.ident p0 "$none")]
     let casts : List STop := ups.map fun a =>
       .fn p0 (castMethod a) [{ name := "X", ty := .name a }] [] ["override", "decides"] (.name a)
-        (.app p0 (.ident p0 c) [x] true)
+        (if inhabited then .app p0 (.ident p0 c) [x] true else fails a)
     let makes : List STop := if concrete c then (ups.map fun a =>
       .fn p0 (makeMethod a) [] [] ["override"] (.name a) (.construct p0 c [] [])) else []
     .classDef p0 (valueClass c) [] [] [] parents false [] (casts ++ makes)

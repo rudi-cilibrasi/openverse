@@ -2380,7 +2380,13 @@ partial def joinTyShaped (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Boo
         env.isSub S U && env.isSub T U && env.upArgs S as U == us && env.upArgs T bs U == us
       let atU (U : String) : Ty :=
         (Ty.struct U (env.upArgs S as U)).commonBounds (.struct U (env.upArgs T bs U))
-      let cands := (env.supers S).filter fun U => up U (env.upArgs S as U)
+      -- (two type values join at a metatype that constructs neither, as
+      -- a class value's type is its own class, and a join of two keeps only
+      -- the bound above both: Book of Verse tests, Archetypes.versetest:110,
+      -- "Ensure a particular class (rather than a bound)"; `TypeValues`)
+      let typeValues := S.startsWith "$type:" && T.startsWith "$type:"
+      let cands := (env.supers S).filter fun U => up U (env.upArgs S as U) &&
+        !(typeValues && U.startsWith "concrete_subtype(")
       let common : Option Ty :=
         match cands.find? fun U => !(env.info U).isIface with
         | some U => some (atU U)
