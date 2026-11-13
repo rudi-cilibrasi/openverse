@@ -160,8 +160,10 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         pendingSuspendingCasts := st.pendingSuspendingCasts + 1,
         pendingWaitingCasts := st.pendingWaitingCasts + 1 }
     return some (prepare, plan, value, !c.typeOnly && hasPlan && hasPrefix)
+  -- (`peel`: the first group's filter, then its values, without the loop
+  -- over its one element, for a continuation's clauses below)
   let rec build (c : Ctx) (gs : List (SExpr × List SExpr)) (bd : SExpr)
-      (stageHere : Bool := true) (flatOverride : Option Bool := none) : EM R := do
+      (stageHere : Bool := true) (flatOverride : Option Bool := none) (peel : Bool := false) : EM R := do
     if let some plan := stagePlan.filter (fun _ => stageHere) then
       let clauses := gs.flatMap fun (g, fs) => g :: fs
       let (req, obj, ty) ← match forStageEnvOf { c with forStageArgs := stageArgs, forStageFlat := flatOverride.getD stageFlat, forStageCopies := stageCopies, forStageBorrows := stageBorrows } plan p clauses bd with
@@ -442,7 +444,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           let (f, a, t) ← exclIter c (cl.takeWhile (!isGen ·)) (groups (cl.dropWhile (!isGen ·))) pb transfer
           if !flat || stagePlan.isSome then return (f, a, t)
           match t with
-          | .arr t' => return (f, .prim .flatten [a], t')
+          | .arr t' => return (f, .prim .flatten [← inferable ⟨a, .arr t⟩], t')
           | _ => eerr gp "internal: a continuation's values"
         let runPath := runPathIn cA
         -- (#335, phase 2b: another such choice, or an exclusive one, in the
@@ -598,7 +600,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                             pure (⟨← coerce gp r ty, ty⟩ : R)
                           else pure r
                         let .arr (.arr t) := r.ty | eerr gp "internal: a staged continuation's values"
-                        parts := parts ++ [⟨.prim .flatten [r.e], .arr t⟩]
+                        parts := parts ++ [⟨.prim .flatten [← inferable r], .arr t⟩]
                       let some first := parts.head? | eerr gp "internal: a choice without alternatives"
                       return ⟨parts.tail.foldl (fun acc r => p2 .concat acc r.e) first.e, first.ty⟩
           -- Failable bodies return outcomes so failure stops the entire
@@ -622,7 +624,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                   let vals : SExpr := if bodyFail then .app gp (.ident gp "$forOutcomeValues") [.ident gp kv] false else .ident gp kv
                   let r ← forW (liftA a i ++ (l.casePrelude[i]?.getD []) ++ callCl) vals
                   match r.ty with
-                  | .arr (.arr t) => parts := parts ++ [⟨.prim .flatten [r.e], .arr t⟩]
+                  | .arr (.arr t) => parts := parts ++ [⟨.prim .flatten [← inferable r], .arr t⟩]
                   | _ => eerr gp "internal: a continuation's values"
                 let some r0 := parts.head? | eerr gp "internal: a choice without alternatives"
                 return ⟨parts.tail.foldl (fun acc r => p2 .concat acc r.e) r0.e, r0.ty⟩
@@ -719,8 +721,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             let (filtE, arr, ety) ← exclIter c1 fs more bd flatOverride
             let bindX ← coerce gp ⟨lg.value, lg.vty⟩ ty
             let one ← fresh .void
-            pure (Expr.prim .flatten [.forE one (.lit (.arr #[.tup []])) (.seq (.assign xs bindX) filtE) arr],
-              ety, true)
+            let iter := Expr.forE one (.lit (.arr #[.tup []])) (.seq (.assign xs bindX) filtE) arr
+            pure (Expr.prim .flatten [← inferable ⟨iter, .arr (.arr ety)⟩], ety, true)
           else do
             let (filt, c2) ← elabFilters c1 fs
             let bindX ← coerce gp ⟨lg.value, lg.vty⟩ ty
@@ -846,7 +848,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         let filt := match pre with
           | .lit _ => filtE
           | e => .seq e filtE
-        return ⟨.prim .flatten [Expr.forE slot src filt arr], .arr ety⟩
+        if peel then return ⟨.seq filt arr, .arr ety⟩
+        return ⟨.prim .flatten [← inferable ⟨Expr.forE slot src filt arr, .arr (.arr ety)⟩], .arr ety⟩
       let (filt, c2) ← elabFilters c1 fs
       let filt := if fs.isEmpty then pre else
         match pre with
@@ -858,7 +861,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       | [] => return ⟨loopE, .arr inner.ty⟩
       | _ =>
         match inner.ty with
-        | .arr t => return ⟨.prim .flatten [loopE], .arr t⟩
+        | .arr t => return ⟨.prim .flatten [← inferable ⟨loopE, .arr inner.ty⟩], .arr t⟩
         | _ => eerr p "internal: nested for"
   match pre with
   | [] =>
@@ -871,14 +874,10 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     if pre.any isExcl then
       -- (named for the depth too: a for of an alternative's, inside this
       -- one's clauses, has the same position)
-      let r ← build ctx ((.gen p s!"$u{p.line}_{p.col}_{ctx.locals.length}" none (.arrayLit p [.tuple p []]), pre) :: gs) body false
       -- (a continuation's, #335: its filter, then its values, failing where
       -- the filter fails, as the caller's filter would with it copied in)
-      if firstDecides then
-        match r.e with
-        | .prim .flatten [.forE _ _ filt arr] => return ⟨.seq filt arr, r.ty⟩
-        | _ => eerr p "internal: a continuation's clauses"
-      return r
+      return ← build ctx ((.gen p s!"$u{p.line}_{p.col}_{ctx.locals.length}" none (.arrayLit p [.tuple p []]), pre) :: gs) body false
+        (peel := firstDecides)
     -- filters before any generator: iterate once over a one-element array
     let (filt, c1) ← elabFilters ctx pre
     let slot ← fresh .void
@@ -891,7 +890,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       match inner.ty with
       | .arr t =>
         if firstDecides then return ⟨.seq filt inner.e, .arr t⟩
-        return ⟨.prim .flatten [.forE slot (.lit (.arr #[.tup []])) filt inner.e], .arr t⟩
+        let iter := Expr.forE slot (.lit (.arr #[.tup []])) filt inner.e
+        return ⟨.prim .flatten [← inferable ⟨iter, .arr inner.ty⟩], .arr t⟩
       | _ => eerr p "internal: nested for"
 
 end OpenVerse.Front

@@ -1,0 +1,9 @@
+block
+deferred
+clause
+filter 1
+filter 3
+choice 2
+first 1
+2 3
+exit=0

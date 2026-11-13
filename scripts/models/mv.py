@@ -540,6 +540,10 @@ RSEQ = random.Random(seed * 1000003 + 283287)
 # with a choice of strings in its expression, `(("a" | "bb").Length + 2)`: the code after a choice
 # whose values are not the generator's type; a stream of its own.
 RTY = random.Random(seed * 1000003 + 283288)
+# (and at times an empty string in place of one of those literals, `("" | "bb")`, `("" | "")`,
+# which has no type of its own in Verse Core: a stream of its own, drawn after RTY's, so that a
+# program is RTY's but for its empty strings)
+REMPTY = random.Random(seed * 1000003 + 283293)
 # ---- #283, flag enter (on with seq; noenter turns it off): an alternative, one of several, with
 # code before a choice in it, `Tell("sqN", 2) + (Gz0(N - 1, A) | 3)`: that code runs after the
 # generator's choice point and before the alternative's own, once for each time the alternative
@@ -1155,10 +1159,9 @@ def typed_shapes(f, i, sc, ctr):
     its expression."""
     def call(a):
         return ('gself', i, [('bin', '-', ('ref', 'N'), ('lit', 1)), a] + ([('ref', 'C')] if ctr else []))
-    # (no empty string: `if (false?) then "" else ""` is refused as an internal error, which
-    # the body a function with several values keeps for checking makes of `("" | "")`, a bug
-    # apart from #283)
-    lit = lambda: ('str', RTY.choice(['a', 'bb', 'ccc', 'dddd']))
+    def lit():
+        s = RTY.choice(['a', 'bb', 'ccc', 'dddd'])
+        return ('str', '' if REMPTY.random() < 0.3 else s)
     v = f['val']
     if f['decides'] and RTY.random() < 0.25:
         strs = [lit() for _ in range(RTY.randint(1, 2))]
