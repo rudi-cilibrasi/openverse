@@ -522,6 +522,28 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
     match ← find sc p (extensionName m) with
     | some (false, cand) => return some (qualJoin cand)
     | _ => return none
+  -- the type a qualifier names through aliases (`a := c`, which the type
+  -- aliases' pass writes out later: a qualifier may name a class through
+  -- one, docs/research/type-aliases.md), for the comparisons below
+  let aliasOf : List (String × String) := real.filterMap fun
+    | .const p n none body =>
+      let named : Option String := match body with
+        | .typeAlias _ [] (.name x) => some x
+        | .typeAlias .. => none
+        | e => match e.asType? with
+          | some (.name x) => some x
+          | _ => none
+      named.bind fun x => match tyName (scopeOf n) [] p x with
+        | .ok c => if c == n then none else some (n, c)
+        | .error _ => none
+    | _ => none
+  let canon (c : String) : String := Id.run do
+    let mut c := c
+    for _ in [0:aliasOf.length] do
+      match aliasOf.lookup c with
+      | some d => c := d
+      | none => break
+    return c
   -- each class's names (`ClassNames`)
   let classInfo : List (String × ClassNames) ← real.filterMapM fun
     | .classDef p n tps _ parents _ fields ovs methods => do
@@ -542,7 +564,7 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
           | _ => none).filterMapM fun x => do
         let some (q, y) := splitQual? x | return none
         match qualifier (scopeOf n) (tps.map (·.name)) p q with
-        | .ok (.type c) => return if c == n then some y else none
+        | .ok (.type c) => return if canon c == n then some y else none
         | _ => return none
       let exts := methods.filterMap fun
         | .fn _ mn .. => if isExt mn then some mn else none
@@ -582,9 +604,9 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
         | .ok (some _) => true
         | .ok none => false
         | .error _ => true,
-      selfClass := self, isEnum := enums.contains,
+      selfClass := self, isEnum := fun c => enums.contains (canon c),
       selfField := fun c f => match self with
-        | some n => (above n).filter (declares · f) == [c]
+        | some n => (above n).filter (declares · f) == [canon c]
         | none => false,
       selfQualified := (self.map fun n => (above n).flatMap fun x =>
         (((infoOf x).map (·.ownQualified)).getD []).map (·, shown x)).getD [],
@@ -624,7 +646,7 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
   let ownName (n what : String) (p : Pos) (x : String) : Except String String := do
     let some (q, y) := splitQual? x | return x
     match ← qualifier (scopeOf n) [] p q with
-    | .type c => if c == n then return y
+    | .type c => if canon c == n then return y
                  throw s!"{p.show}: ({q}:){y}: {y} is {what} of {shown n}, not of {q}: a definition's qualifier names where it is defined"
     | .locals => throw s!"{p.show}: (local:){y}: (local:) qualifies a function's locals, and {y} is {what} of {shown n}"
     | _ => throw s!"{p.show}: ({q}:){y}: {y} is {what} of {shown n}: a definition's qualifier names where it is defined"
@@ -672,6 +694,7 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
         let some (q, y) := splitQual? x | return x
         match ← r.qualifier mp q with
         | .type c =>
+          let c := canon c
           if c == n then
             if !inherited.contains y then return y
             if field then
