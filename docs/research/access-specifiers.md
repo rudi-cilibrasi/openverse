@@ -356,8 +356,9 @@ a `<protected>` method of a `<public>` class may not name an
   the reading that also covers `scoped.versetest:448`, where nothing is
   overridden.
 - **Overloads of one name in one class or module** have one access (an
-  openverse rule that the modules' renaming already had for modules): no
-  test gives two overloads of one name different access in one scope.
+  openverse rule that the modules' renaming already had for modules, now
+  also for a class's methods, as a use reaches them by name): no test gives
+  two overloads of one name different access in one scope.
 
 ## Design
 
@@ -392,17 +393,21 @@ list of overriding fields (its fields' specifiers say it).
    the parser and `EffectPolicy.specifierPlaces`, the one table of where each
    specifier may be written, which gains the access specifiers and the places
    a module, a struct's field and `var`.
-2. *Module members* are resolved by the modules' renaming
+2. *Access levels* are written out first (`resolveSpecifiers`, in the
+   module pass): `<scoped{A, B.C}>`'s modules found from where it is
+   written, and a name of an access level `S := scoped{…}` replaced by what
+   it names; a specifier that is no keyword and names no level is refused.
+3. *Module members* are resolved by the modules' renaming
    (`Front/Modules.lean`), which knows the code each use is written in: every
    level of a path (`M.F`, `A.B.c`, a qualifier, a `using{A.B}`) and every
    member a `using` opens must admit the use; a member a `using` opens that
    the use cannot see does not make a name ambiguous (`SOL-7898-…:36`).
-3. *Constructions, parents and overrides* are names of classes and members
+4. *Constructions, parents and overrides* are names of classes and members
    known without types: `Access.check`, run on the resolved program, finds
    the class a construction `c{…}` or a parent names and the fields given,
    and what an override overrides, and checks them at the code they are
    written in.
-4. *Members reached through a value* (`X.F`, `X.M(…)`, `set X.F`, a member
+5. *Members reached through a value* (`X.F`, `X.M(…)`, `set X.F`, a member
    used bare in a method) need `X`'s class, which only the elaborator knows.
    It asks `Access` where it resolves the member, with the code the use is
    written in found by position: `Access.Sites`, made from the resolved
@@ -412,14 +417,23 @@ list of overriding fields (its fields' specifiers say it).
    written. Code the compiler writes (helpers, function-value classes)
    reaches no member it could not, and a use whose position is in no source
    definition is the compiler's.
-5. *Consistency* is `Access.checkConsistency`, on the resolved program before
-   type aliases are written out (an alias is a definition with an access of
-   its own): for each definition, the types its signature names, each
-   containing its effective audience; each field with no value against its
-   class's constructor; each `var`'s write access against its read access.
+6. *Consistency* is `Access.checkConsistency`, on the resolved program once
+   type aliases are written out (so a signature that names an alias names
+   what it aliases), with `Access.checkAliases` before, for an alias, a
+   definition with an access of its own: for each definition, the types its
+   signature names, each containing its effective audience; each field with
+   no value against its class's constructor; each `var`'s write access
+   against its read access.
 
 Errors follow the phases (DESIGN.md, "Elaboration in phases"): placement
 with the parser and the effect policy; module members with the renaming;
 constructions, parents, overrides and consistency right after it, before
 type aliases are written out; members reached through values with the
 elaboration of functions.
+
+As built, the design held, with one addition: the access levels are written
+out in a step of their own before names are resolved (item 2), as a scope
+names modules and a specifier may name a level; and the module pass's
+`<epic_internal>` came with the consistency rules, since admitting it
+before them would have accepted `DigestVisibility.versetest` 126, 127, 152,
+154 and 156 for a step.

@@ -44,6 +44,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Array methods | (also of a tuple of one element type, which is an array where one is expected: `('a', 'b', 'c').Slice[1]`) `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`, `A.RemoveFirstElement[x]`, `A.Remove[i, j]` (half-open), `A.ReplaceElement[i, x]`, `A.ReplaceFirstElement[x, y]`, `A.Insert[i, B]`, `A.Last[]`, `A.Last[n]` (the element n before the last) (all failable); `A.RemoveAllElements(x)`, `A.ReplaceAllElements(x, y)`, `A.ReplaceAll(Pattern, Replacement)` (contiguous subarrays, left to right, not overlapping; an empty pattern changes nothing), `Concatenate(A, B, …)` or `Concatenate(Arrays)` (#150) (never failing) | §9.1 |
 | Built-ins | `Print(s)`, `ToString(x)` (int, float, char, string), `Floor[F]`, `Ceil[F]`, `Round[F]`, `Int[F]` (of a float, failable), `Floor(R)`, `Ceil(R)` (of a rational or an int, never failing; `Floor(X / Y)` fails when `Y = 0`, as `X / Y` does), `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Clamp(Val, A, B)` (the median of the three, of ints or of floats, NaN ordering above +Inf), `Sgn(X)` (-1, 0 or 1 of an int or a float, NaN of NaN), `F.IsFinite[]` (as `IsFinite[F]`), `Err()`; the conversions of chars and code points as methods (see [char32](#char32)): `C.ToCodeUnit()`, `C.ToAsciiChar32[]` of a char, `C.ToCodePoint()`, `C.ToAsciiString()` of a char32, `N.ToChar[]`, `N.ToChar32[]` of an int | API reference |
 | Modules | `name := module:` (nested), `M.F`, `A.B.F`, the types `M.c` and values `M.c{…}`, `(M:)F`, `using{M}` at file or module scope, `<public>` members (`<internal>` is the default); see [Modules](#modules) | ch. 16 |
+| Access | `<public>`, `<internal>` (the default), `<protected>`, `<private>`, `<scoped{M, …}>` and `S := scoped{…}`, `<epic_internal>`, on modules, their definitions, a class's members and constructor, and `var<w> X<r>:t`; checked where each use is written, and no definition exposes a less visible one; see [Access](#access) | ch. 12 |
 | Qualified names | `(M:)x`, `(c:)m`, `(e:)v`, `(local:)X`, `(/Verse.org/Verse:)int`, in uses and in definitions' heads: a qualifier names a scope, the name is looked up in exactly that scope, and a definition's qualifier names where it is defined; see [Qualified names](#qualified-names) | ch. 9, 10, 16 |
 | Concurrency | `<suspends>` functions and methods, `Sleep`, `sync`, `race`, `rush`, `branch`, `spawn` with `task(t)` and `Await`, `event(t)` with `Signal` and `Await`, `subscribable_event(t)` (or `subscribable_event()`) with `Subscribe` and `Cancel` (see [Function values](#function-values)), cancellation with `defer:`, under a deterministic scheduler; see [Concurrency](#concurrency) | ch. 14 |
 | Program entry | `Main()` — see the exit protocol in [`FORMAT.md`](FORMAT.md) | (not in the book) |
@@ -243,7 +244,7 @@ of them; the Book's tests `Tests/Attributes/` and `Castable.versetest`):
 |---|---|---|
 | `<abstract>` | a class (ch. 10; not a method, a field, an interface or a struct) | not `<concrete>` too |
 | `<concrete>` | a class or a struct | a default for every field, inherited ones and an interface's included (ch. 10, "Concrete") |
-| `<final>` | a class, a method or a field (not an interface, a struct, a module's function) | a method's body, a field's value; no class below overrides a `<final>` field and no construction gives it a value |
+| `<final>` | a class, a method or a field, a struct's included (not an interface, a struct, a module's function) | a method's body, a field's value; no class below overrides a `<final>` field and no construction gives it a value |
 | `<final_super>` | a class (not supported yet, #11) | |
 | `<final_super_base>` | a class or an interface | a class right below it is `<final_super>` |
 | `<castable>` | a class or an interface | no type parameters, nor in a class or interface below it |
@@ -254,9 +255,10 @@ of them; the Book's tests `Tests/Attributes/` and `Castable.versetest`):
 Anywhere else, on a definition's name (`c<castable> := class{}`) or after the
 keyword of another kind (`interface<abstract>`, `struct<final>`), each is
 refused. Enums take `<open>`, `<closed>` and `<persistable>`; access
-specifiers are accepted where the parser takes them (see
-[Readings](#readings-openverse-takes)), and effects are the subject of the
-rest of this section.
+specifiers go where [Access](#access) says, in the same table; a specifier
+that is no keyword openverse knows and names no access level
+(`<intrinsic>`) is refused; and effects are the subject of the rest of this
+section.
 
 ## Function values
 
@@ -2128,9 +2130,11 @@ Main():void =
   each is given, are checked where the alias is defined; the rest (a map
   key or a type argument that must be comparable) where it is used, as if
   the type were written there.
-- **Not enforced.** `<protected>` or `<private>` on an alias, and a
-  `<public>` alias of an internal type, which the Book refuses, are
-  accepted, as access specifiers are ([Readings](#readings-openverse-takes)).
+- **Access.** An alias is `<internal>` by default, or `<public>`,
+  `<scoped{…}>` or `<epic_internal>` (`<protected>` and `<private>` are
+  for a class's members), and is no more visible than what it names: `c :=
+  class{}` and `a<public> := c` is an error (Book of Verse ch. 11; see
+  [Access](#access)).
 
 ## float
 
@@ -2315,7 +2319,7 @@ spell := module:
         Factor<public>:int = 7
         Scale<public>(X:int):int = X * Factor
     wand<public> := class:
-        Power:int
+        Power<public>:int
         Cast<public>():int = Power * Inner.Factor + Base
 
 using{spell}
@@ -2345,10 +2349,12 @@ Main():void =
 - `M.F`, `A.B.F`, the type `M.c`, the value `M.c{…}`, a delegation
   `M.D<constructor>(…)` and a qualifier `X.(M.i:)F()` name a member. `M`
   is looked up like any name; if a value is found instead, `.F` is its
-  field. Each level used from outside it must be `<public>`, including
-  each module of a `using{A.B}`. Members are `<internal>` by default:
-  visible in their module and its submodules. A name's overloads are all
-  `<public>` or all internal.
+  field. Each level used from outside it must be `<public>` (or admit the
+  use otherwise, [Access](#access)), including each module of a
+  `using{A.B}`. Members are `<internal>` by default: visible in their
+  module and its submodules. A name's overloads have one access level. A
+  member a `using` opens that the use may not see does not make a name
+  ambiguous.
 - An extension method `(R:t).M(…)` of a module is found by calls `X.M(…)`
   as its members' names are, `<public>` from outside
   ([Extension methods](#extension-methods)).
@@ -2359,6 +2365,89 @@ Main():void =
 
 Modules exist only in the front end. Each member becomes a definition of
 its qualified name before elaboration, and messages show it as `M.F`.
+
+## Access
+
+An access specifier says from where a definition may be used (Book of Verse
+ch. 12; the rules, with their sources in the Book's chapters and tests, are
+pinned in [research/access-specifiers.md](research/access-specifiers.md)):
+
+```verse
+Store<public> := module:
+    inventory<public> := class<internal>:            # constructed only in Store
+        var<private> Items<public>:[]string = array{}  # read anywhere, set by inventory
+        Capacity<private>:int = 2
+        AddItem<public>(Name:string)<transacts><decides>:void =
+            Items.Length < Capacity
+            set Items += array{Name}
+    MakeInventory<public>():inventory = inventory{}
+entity := class:
+    var Health<protected>:int = 100                 # entity and the classes below it
+player := class(entity):
+    Hit():int =
+        set Health -= 25
+        Health
+
+Main():void =
+    Bag := Store.MakeInventory()
+    if (Bag.AddItem["sword"]) then Print("{Bag.Items.Length}")   # 1
+    Print("{player{}.Hit()}")                                      # 75
+```
+
+- **What each admits.** A use is written in code at a module (the top level
+  is the program's root module) and, in a method, a field's default or a
+  `block:`, at a class. `<public>`: any code. `<internal>`, the default:
+  code in the definition's module or a module inside it. `<protected>`:
+  code of the definition's class or interface, or of one below it, in any
+  module. `<private>`: code of the class itself, not of one below it.
+  `<scoped{M, N.P}>`: code in the definition's module or in one of the
+  modules named, or inside them; an access level may be named, `S :=
+  scoped{M, N}` and `<S>` or `<A.S>`, and has an access of its own.
+  `<epic_internal>`: Epic's code, which a program is (a reading, below).
+- **A path.** A use names a path, and each step must admit it: `A.B.c`
+  needs `A`, `B` and `c`. A member reached through a value, `X.F`, is
+  admitted where its declaration (the one that introduces it, whose access
+  its overrides have) is: its own access, its class's, and its class's
+  modules'. Scoping a definition does not scope its members.
+- **Where each is written.** A module and a module's definition (function,
+  constant, class, interface, struct, enum, type alias): `<public>`,
+  `<internal>`, `<scoped>` or `<epic_internal>`. A class's or interface's
+  field or method: any. A struct's field: `<public>` only (its fields are
+  public). After `class`, its constructor's: not `<private>`; after
+  `struct` or `interface`: not `<protected>` nor `<private>`. On `var`, a
+  field's write access. One access specifier per place; none on an
+  override, which has the access of what it overrides; none on a local or a
+  parameter; a function's is written on its name, `F<public>(…)`.
+- **Read and write.** `var<w> X<r>:t` is read where `<r>` admits and set
+  where both do (`<w>` absent restricts nothing more); `<w>` is at least as
+  restrictive as `<r>`. A construction gives a field a value where reading
+  admits it.
+- **Constructors.** `c<public> := class<internal>{…}` is a type all may
+  use and only its module constructs or extends: from outside, a function
+  of its module makes one. `class<protected>` is constructed by the classes
+  below. A construction `c{F := e}` needs the constructor and each field it
+  gives; a class needs its direct parents' constructors.
+- **A definition exposes nothing less visible than itself.** The types a
+  function's or method's parameters, result and bounds, a constant's or
+  field's type, a struct's fields and a type alias name (type arguments
+  included) are each at least as visible as the definition, judged with
+  what it is in: a `<public>` function in an internal module or class may
+  name an internal class; a `<protected>` method of a `<public>` class
+  reaches classes below it in any module, so it may not; a `<private>` one
+  may. A class's or interface's field with no default is at least as
+  visible as the class's constructor, which gives it its value.
+- **Readings.** openverse has no packages: a program is one, its top level
+  the root module, standing where the Book's test snippets do, in an
+  Epic-internal scope, so `<epic_internal>` admits all of the program and
+  orders above `<internal>` and `<scoped>`, below `<public>`. A scope names
+  modules of the program; a package's path (`scoped{/Verse.org}`) is
+  refused. A name's overloads in one module or class have one access.
+
+Access is a compile-time rule: nothing is generated for it. A module's
+members are checked where the modules' renaming resolves them; a
+construction, a parent and an override on the resolved program; a member
+reached through a value where the elaborator finds it (see
+[DESIGN.md](DESIGN.md#access-one-order-checked-where-names-are-resolved)).
 
 ## Shadowing
 
@@ -2753,7 +2842,6 @@ Main()<suspends>:void =
 | `return` or `break` inside a failure context | refused by the tests (`SOL-4199-BreakFromIf.versetest`, `Reachability.versetest` 12-15): openverse's reading contradicts them; the change is designed, not made ([the audit](research/readings-audit.md#return-and-break-in-a-failure-context)) | leaves the function, or the loop around the context; no rollback of what the condition did, also after a choice in it, whose alternatives that failed before were rolled back (#283) |
 | Comparability | `comparable` covers the primitive types, enums, structs, `<unique>` classes and containers of comparable types (ch. 4); not functions, `any`, nor classes and interfaces without `<unique>` (ch. 11, `CompareInstance.versetest:11`) | the Book's: the types it names, and a type parameter declared `subtype(comparable)` |
 | Inferring type arguments | not described | first-order matching against the expected result type, then the arguments; no subtyping other than `false` (matches anything) and `void` (accepts anything) |
-| Access specifiers other than `<public>` | `<internal>` (the default), `<private>`, `<protected>`, … (ch. 16) | a module member is `<public>` or internal (visible in its module and its submodules); other specifiers, a struct field's, and a `<public>` definition whose type names an internal one (a type alias of an internal class, ch. 11), are accepted and not enforced |
 | A qualifier without a `using` | "A qualifier only says which `F` is meant among the ones already in scope" (ch. 10): `(Top.M:)F` with no `using` is unknown | the qualifier is found as any name is, then the name is looked up in exactly that scope: `(M:)F` is `M.F` (#145) |
 | A module's member `(M:)x` used bare in `M` beside an outer `x` | both are candidates, told apart by their parameters, else ambiguous (`ModuleDefinitions.versetest`, `vmodule` tests) | the inner one (only a qualified member may share an outer definition's name, [Shadowing](#shadowing)); in a class's code and for `(local:)`, where the tests refuse it, ambiguous |
 | `ToString` of a float | the API and the tests: fixed point with six decimals (`FloatToString.versetest`, `1.000000`); ch. 2's example: `98.5` (the change needs Core and the runtime: [the audit](research/readings-audit.md#tostring-of-a-float)) | the shortest decimal that reads back as the float, the closest of the shortest, in Python's `repr` layout (exponent at `≥ 1e16` and `< 1e-4`); `Inf`, `-Inf`, `NaN` |
