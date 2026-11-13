@@ -177,6 +177,7 @@ the repository.
 | Escaping | returned from `Make()`, in a field, in an array | exit 4: parse error | `11 3 3` | `11 3 3` | [escape](../../tests/verse/fn_values_named_escape.verse) |
 | Failure and rollback | `<decides>` with a write before the failing check | exit 4: parse error | `ok 3 1`, `fail 1`, `ok 9 2` | as expected | [effects](../../tests/verse/fn_values_named_effects.verse) |
 | Suspension | `Wait(?Ticks:int = 2)<suspends>` as `type{_()<suspends>:int}` | exit 4: "has named parameters" | `2` | `2` | [effects](../../tests/verse/fn_values_named_effects.verse) |
+| Cleanup | a `<suspends>` value's call cancelled by `race`; its default logs, its `defer` prints | exit 4: "has named parameters" | `default`, `cleanup 1`, `after 1` | as expected | [cleanup](../../tests/verse/fn_values_named_cleanup.verse) |
 | Required name left out of the type | `Need(?A:int)` as `type{_():int}` | exit 4: "has named parameters" | refused | refused: expected `type{_():int}`, found `type{_(?A:int):int}` | [required](../../tests/errors/fn_value_named_required.verse) |
 | Name the function lacks | `F2(?A:int = 2)` as `type{_(?B:int):int}` | exit 4: parse error | refused | refused | [unknown](../../tests/errors/fn_value_named_unknown.verse) |
 | Call omits a required name | `F()` for `F:type{_(?A:int):int}` | exit 4: parse error | refused | refused: "needs the argument ?A" | [call_missing](../../tests/errors/fn_value_named_call_missing.verse) |
