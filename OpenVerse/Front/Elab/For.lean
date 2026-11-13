@@ -105,7 +105,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     let caps := bound.capturesOf written
     let key := "stageOrdinary" ++ contKey bound q name (alts ++ rest ++ [bd]) ++
       forStageCaptureKey bound stageArgs caps
-    let known := c.types.loopRequests.findSome? (fun l => l.stagePlan.filter (·.key == key))
+    let known := c.types.requests.loops.findSome? (fun l => l.stagePlan.filter (·.key == key))
     let value? ← if let some outer := stagePlan then do
         let subst := (outer.tparams.map (·.name)).zip (stageArgs.map Ty.toSTy)
         pure (some (← resolveTy c.types q (outer.value.substNames subst), true, before.fx, outer.sourceSuspends))
@@ -139,8 +139,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       | .ok prepare => pure prepare
       | .error _ => return none
     let prepare := { prepare with extraFns := prepare.extraFns ++ extraTops }
-    let hasPlan := c.types.loopRequests.any (·.key == request.key)
-    let hasPrefix := c.types.loopRequests.any (·.key == prepare.key)
+    let hasPlan := c.types.requests.loops.any (·.key == request.key)
+    let hasPrefix := c.types.requests.loops.any (·.key == prepare.key)
     modify fun st => { st with
       fx := effects,
       pendingSourceSuspends := st.pendingSourceSuspends + (if sourceSuspends then 1 else 0) }
@@ -169,7 +169,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       let (req, obj, ty) ← match forStageEnvOf { c with forStageArgs := stageArgs, forStageFlat := flatOverride.getD stageFlat, forStageCopies := stageCopies, forStageBorrows := stageBorrows } plan p clauses bd with
         | .ok r => pure r
         | .error why => eerr p s!"cannot stage this for: {why} (#417)"
-      let r ← if c.types.loopRequests.any (·.key == req.key) then do
+      let r ← if c.types.requests.loops.any (·.key == req.key) then do
           -- Only this synthetic environment allocation is an implementation
           -- effect. Its fields are local reads, evaluated before allocation.
           let fx := (← get).fx
@@ -225,7 +225,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               return (.seq codeA f, a, t)
             let restCl := after ++ moreCl
             let key := (if bodyFail then "fo" else "f") ++ contKey cA b.pos b.name (i :: restCl ++ [bd])
-            let req := cA.types.loopRequests.find? (·.key == key)
+            let req := cA.types.requests.loops.find? (·.key == key)
             let fits (l : Choice.FirstLift) : Bool :=
               cA.acceptsHelper l
             if req.isNone && (contForLiftOf cA b.pos b.name ty .void [i] restCl bd bodyFail).toOption.isSome then
@@ -298,7 +298,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             let key := "stage" ++ contKey cA b.pos b.name (i :: restCl ++ [bd]) ++
               forStageCaptureKey cA [] (rootCaptures.filter (·.storage.isSome))
             let plan? := stagePlan.orElse fun _ =>
-              cA.types.loopRequests.findSome? (fun l => l.stagePlan.filter (·.key == key))
+              cA.types.requests.loops.findSome? (fun l => l.stagePlan.filter (·.key == key))
             if plan?.isNone then
               let saved ← get
               let slot ← fresh ty
@@ -342,7 +342,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             let nextReq ← match forStagePlanOf suffixCtx b.pos tailKey restCl bd resultTy plan.outcome borrowNames plan.sourceSuspends with
               | .ok req => pure req
               | .error why => eerr b.pos s!"cannot type this waiting for's suffix: {why} (#417)"
-            if !cA.types.loopRequests.any (·.key == nextReq.key) then
+            if !cA.types.requests.loops.any (·.key == nextReq.key) then
               askHelper b.pos nextReq
               return (codeA, .prim .userErr [], if stagePlan.isSome then Ty.struct plan.base rootArgs else resultTy)
             let some nextPlan := nextReq.stagePlan | eerr b.pos "internal: missing suffix plan"
@@ -353,7 +353,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             let suffix ← match forStagePrefixOf suffixCtx nextPlan nextArgs b.pos restCl bd (stageOverride.getD stageFlat) nextCopies nextBorrows with
               | .ok req => pure req
               | .error why => eerr b.pos s!"cannot share this waiting for's suffix: {why} (#335, #417)"
-            if !cA.types.loopRequests.any (·.key == suffix.key) then
+            if !cA.types.requests.loops.any (·.key == suffix.key) then
               askHelper b.pos suffix
               return (codeA, .prim .userErr [], if stagePlan.isSome then Ty.struct plan.base rootArgs else resultTy)
             let stageTypes := rootArgs.map Ty.toSTy
@@ -460,7 +460,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           return (codeA, .prim .userErr [], value)
         let contOK := stagePlan.isNone && restCl.any isCF && forBodySafe cA bd && xty.isSome
         let req := if !contOK || cA.typeOnly then none else
-          cA.types.loopRequests.find? (·.key == (if bodyFail then "fo" else "f") ++ contKey cA gp x (altsS ++ restCl ++ [bd]))
+          cA.types.requests.loops.find? (·.key == (if bodyFail then "fo" else "f") ++ contKey cA gp x (altsS ++ restCl ++ [bd]))
         let fits (l : Choice.FirstLift) : Bool :=
           cA.acceptsHelper l
         let kv := s!"$xk{gp.line}_{gp.col}{x}v"
@@ -602,7 +602,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           -- for, rather than merely rejecting one continuation call.
           if forBodySafe c bd then
             let req := if c.typeOnly then none else
-              c.types.loopRequests.find? (·.key == (if bodyFail then "fo" else "f") ++ contKey c gp b.name (b.alts ++ restCl ++ [bd]))
+              c.types.requests.loops.find? (·.key == (if bodyFail then "fo" else "f") ++ contKey c gp b.name (b.alts ++ restCl ++ [bd]))
             let fits (l : Choice.FirstLift) : Bool :=
               c.acceptsHelper l
             if let some l := req then

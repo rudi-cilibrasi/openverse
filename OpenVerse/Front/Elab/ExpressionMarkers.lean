@@ -98,7 +98,7 @@ partial def elabExprMarkersWith
         (.prim .mkSome [.prim .flatten [.local slot]]) (.lit .none)), .opt (.arr t)⟩
     | _ => eerr p "internal: staged flatten values"
   | .app p (.ident _ "$forPrepare") [.str _ [.text base], .decl _ _ (some view) _ _, .block _ copyIds, .block _ borrowIds, .ident _ flat, .block _ clauses, body] false => do
-    let some plan := ctx.types.loopRequests.findSome? (fun l => l.stagePlan.filter (·.base == base))
+    let some plan := ctx.types.requests.loops.findSome? (fun l => l.stagePlan.filter (·.base == base))
       | eerr p "internal: missing for prepare plan"
     let .struct _ args ← resolveTy ctx.types p view | eerr p "internal: for prepare view"
     let copyNames := forStageCopyNames copyIds
@@ -106,14 +106,14 @@ partial def elabExprMarkersWith
     let req ← match forStagePrefixOf ctx plan args p clauses body (flat == "true") copyNames borrowNames with
       | .ok req => pure req
       | .error why => eerr p s!"cannot prepare this refining for: {why} (#417)"
-    if !ctx.types.loopRequests.any (·.key == req.key) then
+    if !ctx.types.requests.loops.any (·.key == req.key) then
       askHelper p req
       let ty ← resolveTy ctx.types p req.ret
       return ⟨.prim .userErr [], ty⟩
     elabApp ctx p (.ident p req.name) req.args true exp
   | .app p (.ident _ "$forStage") [.str _ [.text base], .decl _ _ (some view) _ _, .block _ copyIds, .block _ borrowIds, .ident _ root, .ident _ flat, .block _ clauses, body] false => do
     let some plan := (ctx.forStage.filter (·.base == base)).orElse fun _ =>
-        ctx.types.loopRequests.findSome? (fun l => l.stagePlan.filter (·.base == base))
+        ctx.types.requests.loops.findSome? (fun l => l.stagePlan.filter (·.base == base))
       | eerr p "internal: missing for stage plan"
     let .struct _ args ← resolveTy ctx.types p view | eerr p "internal: for stage view"
     let copyNames := forStageCopyNames copyIds
@@ -134,7 +134,7 @@ partial def elabExprMarkersWith
       | .opt (.arr _) => forOutcomeValues ctx p input
       | _ => pure input
     let .arr (.struct base _) := r.ty | eerr p "internal: for resume environments"
-    let some plan := ctx.types.loopRequests.findSome? (fun l => l.stagePlan.filter (·.base == base))
+    let some plan := ctx.types.requests.loops.findSome? (fun l => l.stagePlan.filter (·.base == base))
       | eerr p "internal: missing for resume plan"
     let slot ← fresh r.ty
     let source := s!"{base}$ready"

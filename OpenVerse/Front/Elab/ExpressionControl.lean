@@ -185,7 +185,7 @@ partial def elabExprControlWith
               let re ← elabE ctx ee none
               set st0
               -- (in a source context, the lift's tag depends on its type)
-              let asked (τ : Ty) := ctx.types.castRequests.find? (·.key ==
+              let asked (τ : Ty) := ctx.types.requests.casts.find? (·.key ==
                 Refine.keyOf p d (refineTagOf ctx x (innerOf τ) (some (.ident p "false")) (some (rtyOf τ))))
               match (asked .void).orElse fun _ => asked re.ty with
               | some l => attempt (match l.ret with | .name "logic" => .void | _ => re.ty)

@@ -627,8 +627,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                              let i := henv.info d
                              if i.isIface || i.isAbstract then m else
                              (henv.supers d).foldl (fun m T => m.insert T ((m[T]?.getD []) ++ [d])) m) {},
-                           abstracts := abstracts.toList, fnRequests := opts.requests.fns, familySites, familyStubs := stubs.map (·.1), overloadSites, nestedSites, methodRequests := opts.requests.methods,
-                           castRequests := opts.requests.casts, loopRequests := opts.requests.loops }
+                           abstracts := abstracts.toList, requests := opts.requests, familySites, familyStubs := stubs.map (·.1),
+                           overloadSites, nestedSites }
   env := { env with varFields := varFields, uniques := uniques,
                     overriders := (overridePairs.toList.map fun (_, dm, _) => (dm.splitOn ".").headD "") ++
                       (implChecks.toList.map fun (_, _, impl, _) => (impl.splitOn ".").headD "") ++
@@ -883,7 +883,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let spawnFixers := opts.requests.loops.filterMap fun lift =>
     if (lift.name.splitOn "$dispatchDefaultsSpawn").length > 1 then
       some ((lift.name.splitOn ".").headD "") else none
-  let fixers := fixers ++ accFixers.toList ++ env.castRequests.map (·.target) ++ spawnFixers
+  let fixers := fixers ++ accFixers.toList ++ env.requests.casts.map (·.target) ++ spawnFixers
   env := { env with pinned := env.classes.filter fun d => fixers.any fun f => d == f || (env.supers d).contains f,
                     fieldAcc := fieldAcc.toList }
   -- (#157) a hidden class below each generic class or interface whose

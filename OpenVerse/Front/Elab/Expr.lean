@@ -1466,7 +1466,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
           let slot ← fresh ty
           return ← elabOneGo { ctx with locals := { name := b.name, slot, ty, mutable := false } :: ctx.locals } rest
         let key := contKey ctx p b.name (i :: rest) ++ firstReturnKey ctx rest
-        let request := ctx.types.loopRequests.find? (·.key == key)
+        let request := ctx.types.requests.loops.find? (·.key == key)
         let hasLater := rest.any fun cl => match Choice.binding? cl with
           | some { branchy := some next, .. } => choiceHasCast ctx next
           | some { alts, .. } => alts.any Choice.hasLiftable
@@ -1522,7 +1522,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       -- (when what it runs once for all the values of an item has effects,
       -- asked for by an earlier elaboration: a call of a function of its
       -- own that runs the clauses after it too, then the names they bind)
-      if let some l := (if ctx.typeOnly then none else ctx.types.loopRequests.find? (·.key == firstKey ctx p lp b.name b.ty rest)) then
+      if let some l := (if ctx.typeOnly then none else ctx.types.requests.loops.find? (·.key == firstKey ctx p lp b.name b.ty rest)) then
         let t := s!"$ft{p.line}_{p.col}"
         let (code, c) ← elabOneGo ctx ([.decl p t none false (.app p (.ident p l.name) l.args true)] ++
           firstUnpack p l t)
@@ -1620,7 +1620,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
           | some b => b.composed
           | none => false
         if !b.alts.isEmpty then
-          let req := if ctx.typeOnly then none else ctx.types.loopRequests.find? (·.key == contKey ctx p b.name (b.alts ++ rest) ++ firstReturnKey ctx rest)
+          let req := if ctx.typeOnly then none else ctx.types.requests.loops.find? (·.key == contKey ctx p b.name (b.alts ++ rest) ++ firstReturnKey ctx rest)
           -- (asked for where more effects are allowed than here, as in a
           -- function of its own of a call taken lazily, #246: copied)
           let fits (l : Choice.FirstLift) : Bool :=
@@ -2234,7 +2234,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
                     return ⟨.seq (.assign tv r.e) (← coerce p rv t), t⟩
                   | none =>
                     let key := s!".{x0}${f}"
-                    if !env.fnRequests.contains (key, t) && fnTyFits env (typeOf x0) t then
+                    if !env.requests.fns.contains (key, t) && fnTyFits env (typeOf x0) t then
                       noteNeeds { fns := [(key, t)] }
                       return ⟨.seq r.e (.prim .userErr []), t⟩
           -- A generic receiver fixes its method's signature too. Requested
@@ -2245,7 +2245,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
                 if !(methodTps x).isEmpty then continue
                 let receiver := Ty.struct x (env.argsAt sn targs x)
                 let some (req, args) ← methodVarianceRequest ctx p x f receiver (typeOf x) target | continue
-                if let some i := env.methodRequests.findIdx? (·.key == req.key) then
+                if let some i := env.requests.methods.findIdx? (·.key == req.key) then
                   let cls := req.className i
                   let tv ← fresh r.ty
                   let nm := s!"$recv{tv}"

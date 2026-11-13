@@ -586,7 +586,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   -- dispatch the lowering takes as a suspends method's call, #243; the
   -- `else` is the caller's code, which may suspend as any)
   let isS (f : Nat) : Bool := ctx.sigs.any fun s => s.idx == f && s.suspends
-  let immediateLifts := env.castRequests.filter (!·.waits) |>.map (·.name)
+  let immediateLifts := env.requests.casts.filter (!·.waits) |>.map (·.name)
   -- Cancellation itself is immediate. Keep scanning its receiver.
   let mayWait (f : Nat) : Bool :=
     ctx.sigs.any fun s => s.idx == f && s.suspends && s.name != "$cancelMark" && !immediateLifts.contains s.name
@@ -605,7 +605,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   let availableTypes : List Ty := env.tvars.map (fun binding => Ty.subst μT binding.2) ++
     opened.map (fun binding => Ty.param binding.1 binding.2.2)
   let available := Ty.mergeParamBounds (availableTypes.flatMap Ty.paramsC)
-  match env.castRequests.find? (·.key == key) with
+  match env.requests.casts.find? (·.key == key) with
   | none =>
     -- (first: the branch in the refined world)
     let dslot ← fresh dTy

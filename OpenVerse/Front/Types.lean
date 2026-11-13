@@ -148,6 +148,53 @@ structure ClassInfo where
   isFinal : Bool := false
   deriving Inhabited
 
+/-- What an elaboration of the program asks for that only types tell, for
+    the program to be elaborated again with it (`Compiled.needs`), and what
+    earlier elaborations asked for (`Options.requests`): `elabProgram`
+    elaborates the program in rounds until one asks for nothing new. -/
+structure Requests where
+  /-- Pure mutual groups that retain the eager polymorphic-recursion path. -/
+  eager : List String := []
+  /-- (#283) Recursive functions with several values whose values would be
+      computed at the call, but something they run prints or calls
+      `Err()`: taken lazily if their shape allows. -/
+  lazy : List String := []
+  /-- (#283) For each use `R.M` of a method several classes or interfaces
+      declare apart, by its place: the root its receiver's class is below,
+      whose family it takes (`Choice.rootsAt`). -/
+  families : List (Pos × String) := []
+  /-- (#283) For each call of an overloaded function with an overload that
+      has several values, by its place: the overload it takes (`F$ovK`),
+      whose own function it calls (`Choice.inlineMulti`). -/
+  overloads : List (Pos × String) := []
+  /-- (#283) For each consumer in a recursive group's code of a call of a
+      function with several values, the types of the names it takes from
+      that code and gives it (`Choice.nestKey`), which its function of its
+      own (`Choice.nestFns`) is made with; and for a `for` that can fail,
+      `$fails`. -/
+  nested : List (String × STy) := []
+  /-- Functions wanted as values at closed function types no class of
+      theirs gives (#214): a class for each. -/
+  fns : List (String × Ty) := []
+  /-- Methods wanted as values at function types their own fit only by
+      variance: an adapter for each, by key. -/
+  methods : List FnValues.MethodRequest := []
+  /-- Canonical checked upcast dictionaries discovered by elaboration. -/
+  subtypes : List STop := []
+  /-- Branches of casts that refine type arguments (#243): a function for
+      each, by key. -/
+  casts : List Refine.Lift := []
+  /-- Functions of their own for lazily taken calls whose effects need them
+      (#246), the continuations, stages and helpers that consumers of
+      choices are lowered with (#335), and the helpers that forward calls
+      to the defaults of their named parameters: by key. -/
+  loops : List Choice.FirstLift := []
+  /-- Classes with a class parent that list an interface at type arguments
+      that are not a prefix of their own (#351): hidden fields for all of
+      their type parameters. -/
+  witnesses : List String := []
+  deriving Inhabited
+
 /-- The user-defined types of a program. -/
 structure TyEnv where
   /-- Public helper names owned by source declarations use private identities
@@ -240,8 +287,6 @@ structure TyEnv where
       dispatched under the refinement the class's pins give, as a method. -/
   fieldAcc : List (String × String) := []
   fieldAccBase : Nat := 0
-  /-- The functions asked for as values at closed function types (#214). -/
-  fnRequests : List (String × Ty) := []
   /-- (#283) The uses `R.M` whose family of methods `M` only the class of
       `R` tells (`Choice.methodFns`), by place and `M`: their elaboration
       notes the root that class is below (`ESt.needs`). -/
@@ -258,8 +303,6 @@ structure TyEnv where
       elaboration notes (`$noteTypes`), by `Choice.nestKey`: their groups are
       kept with one value until then (`Choice.inlineFns`). -/
   nestedSites : List String := []
-  /-- Typed variance adapters for methods with a fixed receiver signature. -/
-  methodRequests : List FnValues.MethodRequest := []
   /-- The order of the slots holding values of the type parameters, when it
       is not that of `tvars` (a method that reads some from its receiver,
       #209, has those after the others). -/
@@ -285,13 +328,10 @@ structure TyEnv where
       generic function or struct definition, the type arguments of a struct
       construction when its field defaults are elaborated. -/
   tvars : List (String × Ty) := []
-  /-- The branches of casts that refine type arguments asked for in an
-      earlier elaboration (#243), each lifted into a function. -/
-  castRequests : List Refine.Lift := []
-  /-- Lazily taken calls where the first success is taken whose effects
-      need functions of their own, asked for in an earlier elaboration
-      (#246). -/
-  loopRequests : List Choice.FirstLift := []
+  /-- What earlier elaborations asked for (`Options.requests`): the
+      functions as values, method adapters, branches of refining casts and
+      helpers this one makes and calls. -/
+  requests : Requests := {}
   deriving Inhabited
 
 /-- The fields of struct `n` applied to the type arguments `args`. -/
