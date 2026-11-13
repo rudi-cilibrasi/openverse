@@ -2,8 +2,11 @@
 
 This matrix preserves the complete scope of #502. The published compiler still
 rejects source upper bounds beyond `subtype(comparable)`. Compiler-API contracts
-run with that guard intact. Source fixtures run only in a separate development
-checkout with the guard relaxed. Passing that experimental suite does not prove
+run with that guard intact. Source fixtures run as admission evidence only in a
+separate development checkout with the guard relaxed; the ordinary gate runs
+them with `--guarded`, which checks that the guard refuses exactly the cases in
+`tests/upper-bounds/guarded.list` and that every other case passes, so the suite
+cannot rot unnoticed. Passing that experimental suite does not prove
 admission readiness, and a scoped review of guarded infrastructure does not
 approve removing the guard.
 
@@ -31,7 +34,7 @@ they do not replace the remaining audits in the last column.
 | Full relation audit | `SubtypeContainers.lean`, `SubtypeRelations.lean`; container, refinement, numeric, void and bottom source pairs; `bound-concatenate-maps` key/order controls. | Finish the relation/operation cross-product audit, including empty tuple-to-array, container/refinement interactions and function adaptation. Record each unsupported case with a matching concrete baseline or a specification justification. |
 | Concurrency intrinsics and optional Signal admission through bounds | `ContainerViews.lean` finite concurrency domains, actual/absent/dummy/ambiguous views and ordinary/intrinsic specificity; five `SubtypeEvidenceInputs.lean` intrinsic/specificity real/dummy controls. `bound-concurrency-helpers` and control check event/task/sticky waits, precise results, once-only receivers, unit signals and cancellation. `bound-concurrency-specificity` and control retain a more-specific ordinary method with a redundant readonly holder proof and reversed argument positions. Direct/default Signal policy pairs check legacy rollback and opt-in refusals in both source profiles. | Independently review the final intrinsic conversion, ordinary-member specificity and failure-call tracking integration. Existing suspension restrictions remain in force, including the bounded/concrete cancellation-in-filter refusals. |
 | Independent accepted/refused and state/order/rollback/cancellation Lean/C oracles | `test-subtype-evidence.sh` runs the checked API artifacts. `test-upper-bound-source.sh` runs exact source oracles, specific refusals and admitted choice-free bytecode comparisons. `bound-concatenate-state` adds array/map once-only, alias, rollback, failure, task and cancellation controls. | Run both suites on the final integrated head. An exact stdout oracle and a concrete control are required; matching Lean/C alone can share a frontend mistake. |
-| Source admission, integration and review | `UpperBounds.checkParams` still guards admission; source tests remain outside the ordinary gate. Draft #520 has scoped reviews of guarded checkpoints. | Finish the obligations above; integrate the source suite into the ordinary gate; obtain fresh independent review of the actual admission change and exact-head green CI/full gate before merging and closing #502. |
+| Source admission, integration and review | `UpperBounds.checkParams` still guards admission; the ordinary gate runs the source suite only with `--guarded`. Draft #520 has scoped reviews of guarded checkpoints. | Finish the obligations above; integrate the source suite into the ordinary gate; obtain fresh independent review of the actual admission change and exact-head green CI/full gate before merging and closing #502. |
 
 The full gate also covers ordinary-source compatibility, both source profiles,
 runtime/sanitizers, size budgets, proof pins and fuzzers. Browser-unit compilation
