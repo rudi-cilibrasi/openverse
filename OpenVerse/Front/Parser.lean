@@ -191,7 +191,14 @@ partial def parseSpecs : PM (List String) := do
     else break
   return specs.toList
 
+/-- A function's access specifier is written on its name, `F<public>(…)`, not
+    among its effects after the parameters (Book of Verse ch. 12). -/
+def accessOnName (p : Pos) (name : String) (effs : List String) : PM Unit := do
+  if let some sp := effs.find? EffectPolicy.isAccess then
+    throw s!"{p.show}: <{sp}> after the parameters of {name}: an access specifier is written on the name, {name}<{sp}>(…)"
+
 def cmpOps : List String := ["=", "<>", "<", "<=", ">", ">="]
+
 
 /-- At a `(` (the token `off` ahead): the qualifier of `(i:)M`, `(M.i:)M`
     (#70, #112), `(local:)X` or a path's `(/a/b:)X`, if one starts there, and
@@ -1019,19 +1026,20 @@ partial def parseCase (stop : Nat) : PM SExpr := do
   let _ := stop
   return .caseE t.pos scrut arms.toList
 
-/-- One struct field: `[var] Name<specs>:type [= default]`. -/
+/-- One struct field: `[var<specs>] Name<specs>:type [= default]`. -/
 partial def parseField (c : Nat) : PM SField := do
   let start ← peekT
   let isVar := (← peekT).isKw "var"
   if isVar then bump
+  let varSpecs : List String := []
   let n ← expectBinder
   let specs ← parseSpecs
   expectSym ":"
   let ty ← parseType
   let a ← peekT
   let d ← if a.isSym "=" || a.isSym ":=" then do bump; pure (some (← parseValue c)) else pure none
-  ofExcept <| EffectPolicy.checkField start.pos specs d.isSome
-  return { name := n, ty, default := d, isVar, specs }
+  ofExcept <| EffectPolicy.checkField start.pos .structField n specs varSpecs d.isSome
+  return { name := n, ty, default := d, isVar, specs, varSpecs }
 
 /-- `struct` (after the keyword): optional specifiers, then `:` + fields or `{ fields }`. -/
 partial def parseStructBody (p : Pos) : PM SExpr := do
@@ -1564,6 +1572,8 @@ partial def parseClassItem (c : Nat) : PM (Sum SField STop) := do
     return .inr (.fn t.pos "$block" [] [] [] (.name "void") body)
   let isVar := t.isKw "var"
   if isVar then bump
+  let varSpecs : List String := []
+
   -- `(q:)M`, `(q:)F:t`: a member whose qualifier names where it is defined:
   -- the class itself, or, for an override, what introduces it (an
   -- implementation of interface `q`'s `M` only, #70); `resolveModules` and
@@ -1582,14 +1592,15 @@ partial def parseClassItem (c : Nat) : PM (Sum SField STop) := do
     let ty ← parseType
     let a ← peekT
     let d ← if a.isSym "=" || a.isSym ":=" then do bump; pure (some (← parseValue c)) else pure none
-    ofExcept <| EffectPolicy.checkField t.pos pre d.isSome
-    return .inl { name, ty, default := d, isVar, specs := pre }
+    ofExcept <| EffectPolicy.checkField t.pos .field name pre varSpecs d.isSome
+    return .inl { name, ty, default := d, isVar, specs := pre, varSpecs }
   if isVar then perr t "expected a field after var"
   expectSym "("
   let (ps, tps, binds) ← parseParamList
   let ps := (ext.map (·.1)).toList ++ ps.toList
   let tps := ((ext.map (·.2)).getD []) ++ tps.toList
   let effs ← parseSpecs
+  accessOnName t.pos name effs
   expectSym ":"
   let ret ← parseType
   let a ← peekT
@@ -1872,10 +1883,12 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
         tops := tops.push (.const t.pos name pre none (.typeAlias a.pos tparams (← parseType)))
         continue
       let effs ← parseSpecs
+      accessOnName t.pos name0 effs
       expectSym ":"
       let ret ← parseType
       let a ← peekT
       if a.isSym "=" || a.isSym ":=" then bump else perr a "expected '=' before the function body"
+
       tops := tops.push (.fn t.pos name ps.toList tps.toList (pre ++ effs) ret (withBinds binds (← parseFnBody)))
     else if n.isSym ":=" && (← peekT 1).isKw "interface" then
       bump; bump
