@@ -82,7 +82,7 @@ partial def elabExprControlWith
           let t ← fresh rty
           if isVoid then
             let eE ← elabE ctx ee none
-            return ⟨.seq (.assign t r.e) (.ite (.prim .query [.local t]) (.lit .void) (.seq eE.e (.lit .void))), .void⟩
+            return ⟨.seq (.assign t r.e) (.ite (.prim .query [.local t]) (.lit .void) (.seq (← inferable eE) (.lit .void))), .void⟩
           let eE ← coerce p (← elabE ctx ee (some τ)) τ
           let xv ← fresh τ
           return ⟨.seq (.assign t r.e) (.ite (.assign xv (.prim .query [.local t])) (.local xv) eE), τ⟩
@@ -144,7 +144,7 @@ partial def elabExprControlWith
             let t ← fresh rty
             if isVoid then
               let eE ← elabE ctx ee none
-              return some ⟨.seq (.assign t r.e) (.ite (.prim .query [.local t]) (.lit .void) (.seq eE.e (.lit .void))), .void⟩
+              return some ⟨.seq (.assign t r.e) (.ite (.prim .query [.local t]) (.lit .void) (.seq (← inferable eE) (.lit .void))), .void⟩
             let eE ← coerce p (← elabE ctx ee (some τ)) τ
             let xv ← fresh τ
             return some ⟨.seq (.assign t r.e) (.ite (.assign xv (.prim .query [.local t])) (.local xv) eE), τ⟩
@@ -175,12 +175,11 @@ partial def elabExprControlWith
     -- likewise for the families of methods' uses, #283: `failabilityKnown`)
     if !(rc.e.mayFail ctx.sigProg) && (← ctx.failabilityKnown) then
       eerr p "the condition of this if cannot fail (Verse requires a failable condition)"
-    let cond ← inferable rc
     let thenCtx := { ctxT with canFail := ctx.canFail, inTaking := ctx.inTaking }
     match elseE with
     | none =>
       let rt ← elabE thenCtx thenE (some .void)
-      return ⟨.ite cond (← coerce p rt .void) (.lit .void), .void⟩
+      return ⟨.ite rc.e (← coerce p rt .void) (.lit .void), .void⟩
     | some ee =>
       -- (#366) a then branch that needs the else branch's type (`array{}`
       -- first): the else on its own first, then the then against it; when
@@ -196,7 +195,7 @@ partial def elabExprControlWith
               let re ← elabE c2 ee none
               let rt ← elabE { thenCtx with retries := ctx.retries + 1 } thenE (some re.ty)
               let ty ← join p rt.ty re.ty none
-              pure (some ⟨Expr.ite cond (← coerce p rt ty) (← coerce p re ty), ty⟩)) fun _ => pure none
+              pure (some ⟨Expr.ite rc.e (← coerce p rt ty) (← coerce p re ty), ty⟩)) fun _ => pure none
           match alt? with
           | some r => return r
           | none => throw err
@@ -230,10 +229,10 @@ partial def elabExprControlWith
         | some (rt', re') =>
           if let some ty' := joinTy (← get).env rt'.ty re'.ty none then
             if ty' != .any then
-              return ⟨.ite cond (← coerce p rt' ty') (← coerce p re' ty'), ty'⟩
+              return ⟨.ite rc.e (← coerce p rt' ty') (← coerce p re' ty'), ty'⟩
           set stAfter
         | none => set stAfter
-      return ⟨.ite cond (← coerce p rt ty) (← coerce p re ty), ty⟩
+      return ⟨.ite rc.e (← coerce p rt ty) (← coerce p re ty), ty⟩
   | .forE p clauses body => do
     -- (#243, #351) a clause that casts as only a failure context's clause
     -- may: as written, else with the rest of its clauses as one block

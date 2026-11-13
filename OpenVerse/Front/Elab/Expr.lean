@@ -287,7 +287,7 @@ partial def elabBranch (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   let r ← elabE armCtx body none
   modify fun st => { st with pendingSourceSuspends := sourceBefore }
   noteBackgroundCaptures ctx (Suspend.slotsOf r.e)
-  return ⟨.call mark.idx [.prim .mkArr [.seq r.e (.lit .void)]], .void⟩
+  return ⟨.call mark.idx [.prim .mkArr [.seq (← inferable r) (.lit .void)]], .void⟩
 
 partial def elabDefersCore (ctx : Ctx) (ds : List (SExpr × List Local)) : EM Expr := do
   let mut acc : Expr := .lit .void
@@ -298,7 +298,7 @@ partial def elabDefersCore (ctx : Ctx) (ds : List (SExpr × List Local)) : EM Ex
                            inDefer := true, inLoop := false, defers := [], loopDefers := 0,
                            locals := locs, inTaking := false, liftWhy := "" }
     let r ← elabE dctx d none
-    acc := .seq r.e acc
+    acc := .seq (← inferable r) acc
   return acc
 
 /-- A call of an overloaded function or method (#74): the one overload
@@ -426,9 +426,12 @@ partial def resolveOverload (ctx : Ctx) (p : Pos) (name : String) (ovs : List St
     let shown := ok.map fun o => s!"({", ".intercalate (((sigOf o).map (·.params)).getD [] |>.map Ty.show)})"
     eerr p s!"this call of {name} fits more than one overload: {" and ".intercalate shown}"
 
-/-- A sequence of statements, threading the scope; the value is the last one's. -/
-partial def elabSeq (ctx : Ctx) (ss : List SExpr) (exp : Option Ty) : EM (R × Ctx) :=
-  elabSeqIn false ctx ss exp
+/-- Clauses (a condition's, a filter's, the code before a value), threading
+    the scope: their names stay in it, and their value, the last one's,
+    nothing takes (`inferable`). -/
+partial def elabSeq (ctx : Ctx) (ss : List SExpr) (exp : Option Ty) : EM (R × Ctx) := do
+  let (r, c) ← elabSeqIn false ctx ss exp
+  return (⟨← inferable r, r.ty⟩, c)
 
 /-- `elabSeq`, and, for a sequence whose names end with it (`closed`: a
     block) in a failure context, a cast that refines type arguments there
@@ -1586,8 +1589,9 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       elabOneChoice ctx b rest
     | none =>
       let (r, c1) ← elabStmt ctx cl none
+      let e ← inferable r
       let (inner, c2) ← elabOneGo c1 rest
-      return (.seq r.e inner, c2)
+      return (.seq e inner, c2)
 
 partial def elabOneChoice (ctx : Ctx) (b : Choice.Binding) (rest : List SExpr) : EM (Expr × Ctx) := do
   let p := b.pos

@@ -81,7 +81,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     | [] => return (.lit (.logic true), c)
     | _ =>
       let (r, c') ← elabSeq { c with canFail := true, inTaking := true } fs none
-      return (← inferable r, c')
+      return (r.e, c')
   -- The ordinary composed/exclusive paths use the same handoff as a
   -- refining path. Probe a suffix once at its binding's common type;
   -- type-only probes recurse through these same shared suffixes.

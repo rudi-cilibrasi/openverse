@@ -260,7 +260,7 @@ partial def elabAppBaseWith
         let r ← elabE ctx a none
         match r.ty with
         | .int | .char | .float | .arr .char => return ⟨.print (← toStringOf p r), .void⟩
-        | _ => return ⟨.seq r.e (.lit .void), .void⟩
+        | _ => return ⟨.seq (← inferable r) (.lit .void), .void⟩
       | _ => eerr p "internal: $Show"
     | _ =>
       -- `Sleep` (#156): the concurrency helpers' unless the program has its own
