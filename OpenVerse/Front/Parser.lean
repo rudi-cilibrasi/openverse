@@ -560,8 +560,8 @@ partial def parseFields : PM (List SExpr) := do
   if b.isSym "{" then parseItems "}" true else parseIndented (← peekT).col
 
 /-- Items up to `close` (consumed), separated by commas, or, with `lines`,
-    by `;` and new lines instead (a construction's fields); new lines are
-    whitespace otherwise. -/
+    by `;` and new lines instead (a construction's fields, an array's
+    elements); new lines are whitespace otherwise. -/
 partial def parseItems (close : String) (lines : Bool) : PM (List SExpr) := do
   if (← peekT).isSym close then bump; return []
   -- `?Name := e` is a named argument, kept as a declaration of `?Name`
@@ -1143,7 +1143,9 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
     return .ret t.pos (some (← parseExpr stop))
   | .ident "array" =>
     bump
-    if (← peekT).isSym "{" then bump; return .arrayLit t.pos (← parseArgs "}")
+    -- (`array{1; 2; 3}`: its elements separated as a construction's fields,
+    -- Book of Verse ch. 1, "Semicolons vs Commas")
+    if (← peekT).isSym "{" then bump; return .arrayLit t.pos (← parseItems "}" true)
     return .arrayLit t.pos (← parseItemBlock (fun c => parseExpr c) stop)
   | .ident "map" =>
     bump
