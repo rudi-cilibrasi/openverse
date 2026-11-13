@@ -1873,11 +1873,13 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
       | 0 => throw "internal error: classes still asking for hidden fields after several elaborations (#351)"
     | _ =>
       if new.isEmpty then
-        -- (functions and methods are asked for only when not requested yet)
-        if c.needs.casts.isEmpty && c.needs.loops.isEmpty && c.needs.subtypes.isEmpty then return c
+        if c.needs.isEmpty then return c
+        -- (all asked for before: an elaboration asks for functions and
+        -- methods only when they are not requested yet, and one that asks
+        -- for anything has no program, `Compiled.asking`)
         if fuel == 0 then
           throw "internal error: casts that refine type arguments, or lazily taken calls, still to lift after several elaborations (#243, #246)"
-        throw "internal error: a cast that refines type arguments, or a lazily taken call's function, was asked for again (#243, #246)"
+        throw "internal error: a function as a value, a method adapter, a cast that refines type arguments, or a lazily taken call's function was asked for again (#214, #243, #246)"
       let newDefaults := new.loops.filter fun l => defaultBridge l.name
       match fuel with
       | 0 =>
