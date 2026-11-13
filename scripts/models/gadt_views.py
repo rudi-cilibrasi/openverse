@@ -5,6 +5,10 @@ interfaces with fields and default methods and classes below them (with
 class parents, compound and closed arguments), whose values are read,
 set, dispatched on and cast back, directly and from generic code, also
 through <suspends> methods. Each program's output is predicted.
+On a stream of its own, at times casts beside the object's type (ja[I] for
+I:jc(u), related through jb; jd[I], opened, given through a view) and to
+an interface that gives its parent type arguments of its own (jx[C] for
+C:ja(u)), in an if, a <decides> body or a for (#351, #53).
 
 usage: gadt_views.py SEED OUT.exp > PROGRAM.verse
 (from the reviews' view generators, vgen/vgen399/vgen405)"""
@@ -408,5 +412,120 @@ for (n, a), members in groups.items():
 lines.append('    Print("end")')
 exp.append("end")
 lines[mainAt:mainAt] = list(SHOWN.values())
+
+# (#53, #351, on a stream of its own, so each seed's program above stays
+# as it was) at times casts to an interface beside the object's, neither
+# above nor below it (ja[I] for I:jc(u): its type argument is u, as both
+# extend jb; jd[I]: opened, a class giving it string through a view), and
+# to an interface that gives its parent type arguments of its own (jx[C]
+# for C:ja(u), u = []t' with t' opened), after clauses with effects at
+# times, in an if, a <decides> body or a for.  The model: a cast succeeds
+# iff the object's class is below the target; a failed condition undoes
+# its output and writes.
+RX = random.Random(seed * 1000003 + 53)
+if RX.random() < 0.5:
+    nA, nC, nX, nK = RX.randint(1, 9), RX.randint(1, 9), RX.randint(1, 9), RX.randint(10, 19)
+    ctx = RX.choice(['if', 'decides', 'for'])
+    pre = []
+    for i in range(RX.randint(0, 2)):
+        if RX.random() < 0.5: pre.append(('print', i))
+        else: pre.append(('add', RX.randint(1, 4)))
+    def pre_t():
+        return [f'Print("x{a}")' if k == 'print' else f'set H.N += {a}' for k, a in pre]
+    defs = f'''jb(t:type) := interface:
+    Id():t
+ja(t:type) := interface(jb(t)):
+    A():int
+jc(t:type) := interface(jb(t)):
+    C():int
+jd(t:type) := interface:
+    D():t
+jx(t:type) := interface(ja([]t)):
+    X():int
+ka(t:type) := class(ja(t), jc(t)):
+    V:t
+    Id<override>():t = V
+    A<override>():int = {nA}
+    C<override>():int = {nC}
+kb := class(ja(int), jc(int), jd(string)):
+    Id<override>():int = {nK}
+    A<override>():int = {nA + 1}
+    C<override>():int = {nC + 1}
+    D<override>():string = "kb"
+kc(t:type) := class(jc(t)):
+    V:t
+    Id<override>():t = V
+    C<override>():int = {nC + 2}
+kx(t:type) := class(jx(t)):
+    W:t
+    Id<override>():[]t = array{{W, W}}
+    A<override>():int = {nA + 3}
+    X<override>():int = {nX}
+kxi := class(jx(int)):
+    Id<override>():[]int = array{{{nK}}}
+    A<override>():int = {nA + 4}
+    X<override>():int = {nX + 1}
+xcell := class:
+    var N:int = 0
+XWrap(X:t where t:type):[]t = array{{X}}'''.split('\n')
+    cl = ', '.join(pre_t() + ['J := ja[I]'])
+    if ctx == 'if':
+        defs += [f'XF1(I:jc(u), H:xcell where u:type)<transacts>:?u =',
+                 f'    if ({cl}) then option{{J.Id()}} else false']
+    elif ctx == 'decides':
+        defs += [f'XF1(I:jc(u), H:xcell where u:type)<transacts><decides>:u =']
+        defs += [f'    {t}' for t in pre_t()] + ['    J := ja[I]', '    J.Id()']
+    else:
+        defs += [f'XF1(Is:[]jc(u), H:xcell where u:type)<transacts>:[]u =',
+                 f'    for (I : Is, {cl}) {{ J.Id() }}']
+    defs += ['XF2(C:ja(u) where u:type):int =',
+             '    if (X := jx[C]) then X.X() * 10 + X.Id().Length + X.A() * 100 else -1',
+             'XF3(I:jc(int)):int =',
+             '    if (J := jd[I]) then XWrap(J.D()).Length + J.Id() * 0 else 0']
+    # (jd and jc have no interface above both: J is a jd(t'), whose Id is no member)
+    defs[-1] = '    if (J := jd[I]) then XWrap(J.D()).Length else 0'
+    lines[mainAt:mainAt] = defs
+    st_n = 0; out = []
+    # objects at jc(int): ka(int), kb, kc(int)
+    def obj1():
+        k = RX.choice(['ka', 'kb', 'kc'])
+        v = RX.randint(0, 9)
+        return (k, v, {'ka': f'ka(int){{V := {v}}}', 'kb': 'kb{}', 'kc': f'kc(int){{V := {v}}}'}[k])
+    def run1(o):
+        # (the clauses, then the cast: None when they fail)
+        global st_n
+        n0, o0 = st_n, len(out)
+        for k, a in pre:
+            if k == 'print': out.append(f'x{a}')
+            else: st_n += a
+        if o[0] == 'kc':
+            st_n = n0; del out[o0:]; return None
+        return o[1] if o[0] == 'ka' else nK
+    objs1 = [obj1() for _ in range(RX.randint(1, 3))]
+    lines.append('    XH := xcell{}')
+    if ctx == 'for':
+        lines.append(f'    XIs:[]jc(int) = array{{{", ".join(o[2] for o in objs1)}}}')
+        lines.append('    for (V : XF1(XIs, XH)) { Print("f1 {V}") }')
+        vals = [v for v in (run1(o) for o in objs1) if v is not None]
+        exp.extend(out); out.clear(); exp.extend(f'f1 {v}' for v in vals)
+    else:
+        for o in objs1:
+            call = f'XF1[{o[2]}, XH]' if ctx == 'decides' else f'XF1({o[2]}, XH)?'
+            lines.append(f'    if (V := {call}) then Print("f1 {{V}} {{XH.N}}") else Print("f1 no {{XH.N}}")')
+            v = run1(o)
+            exp.extend(out); out.clear()
+            exp.append(f'f1 {v} {st_n}' if v is not None else f'f1 no {st_n}')
+    lines.append('    Print("f1 {XH.N}")'); exp.append(f'f1 {st_n}')
+    # objects at ja([]int): ka([]int), kx(int), kxi
+    for _ in range(RX.randint(1, 3)):
+        k = RX.choice(['ka', 'kx', 'kxi'])
+        w = RX.randint(0, 9)
+        t = {'ka': f'ka([]int){{V := array{{{w}}}}}', 'kx': f'kx(int){{W := {w}}}', 'kxi': 'kxi{}'}[k]
+        lines.append(f'    Print("f2 {{XF2({t})}}")')
+        exp.append('f2 ' + str({'ka': -1, 'kx': nX * 10 + 2 + (nA + 3) * 100, 'kxi': (nX + 1) * 10 + 1 + (nA + 4) * 100}[k]))
+    for _ in range(RX.randint(1, 2)):
+        o = obj1()
+        lines.append(f'    Print("f3 {{XF3({o[2]})}}")')
+        exp.append(f'f3 {1 if o[0] == "kb" else 0}')
 sys.stdout.write('\n'.join(lines) + '\n')
 open(sys.argv[2], 'w').write('exit=0\n' + '\n'.join(exp) + '\n')

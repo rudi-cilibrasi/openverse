@@ -1,5 +1,6 @@
-# expect: cannot cast a container(u) to c2: c2 has type parameters that container does not have
-# (an interface has no hidden fields to read a cast's opened type parameters from, #53)
+# (#53) a cast to an interface that gives its parent type arguments of its own
+# opens them: a test of each class below both, each calling the branch's
+# function at that class's (box's t, from its hidden field)
 container(t:type) := interface:
     Get():t
 c2(t:type) := interface(container([]t)):

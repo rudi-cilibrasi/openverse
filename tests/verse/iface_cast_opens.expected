@@ -1,0 +1,13 @@
+box 2 2
+sbox 2 2
+tb 1 1
+ib 3 3
+not c2
+again 2
+none
+size 2
+size 3
+picked ib 1
+not c2 1
+none 1
+exit=0
