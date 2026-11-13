@@ -382,7 +382,10 @@ Verse ch. 7): at the scope's end, after its value is computed, or on a
 `return` or `break` that leaves it. Several run last registered first. A
 scope that fails runs none, since its effects are rolled back. A `defer:`
 block cannot be empty, fail, `return`, or `break` out of itself, and it is a
-statement, not a value. Lowering: the deferred block is placed after the
+statement, not a value: code follows it in its block, whose value is the
+last expression's (ch. 7: it "cannot be used in positions where a value is
+expected"), so a block cannot end with one, nor an `if`'s or a `for`'s
+clauses, and it is no operand (`A and defer{…}`). Lowering: the deferred block is placed after the
 rest of its scope, and before each `return` (after its value) and `break`
 that leaves it.
 

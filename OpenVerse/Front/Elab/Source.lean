@@ -96,6 +96,41 @@ def checkReservedNames (tops : List STop) : Except String Unit := do
       let n := (n.splitOn "::").getLast?.getD n
       if reservedNames.contains n then throw s!"{p.show}: '{n}' is reserved: no definition can take it"
 
+mutual
+/-- `checkDefers` in an expression. -/
+partial def checkDefersIn : SExpr → Except String Unit
+  | .block _ es => checkDefersSeq es
+  -- (an `if`'s or a `for`'s clauses are a sequence too, whose value is the
+  -- last one's)
+  | .ite _ cs t e => do checkDefersSeq cs; checkDefersIn t; e.forM checkDefersIn
+  | .forE _ cs b => do checkDefersSeq cs; checkDefersIn b
+  | .app p (.ident _ "$defer") _ _ =>
+    throw s!"{p.show}: defer: is a statement: it has no value, so it cannot end a block or be where a value is taken (Book of Verse ch. 7)"
+  | e => e.children.forM checkDefersIn
+
+/-- `checkDefers` in a sequence: a defer with code after it is a statement,
+    whose body is checked. -/
+partial def checkDefersSeq (es : List SExpr) : Except String Unit := do
+  for (e, i) in es.zipIdx do
+    match e with
+    | .app _ (.ident _ "$defer") args _ => if i + 1 < es.length then args.forM checkDefersIn else checkDefersIn e
+    | e => checkDefersIn e
+end
+
+/-- A `defer:` is a statement of a block, with code after it in the block
+    (Book of Verse ch. 7: it "cannot be used in positions where a value is
+    expected"): not a block's last, whose value is the block's, nor an operand
+    (`A and defer{…}`), a branch or a body of its own. -/
+partial def checkDefers (tops : List STop) : Except String Unit := do
+  let goField (fs : List (String × STy × Option SExpr × Bool)) : Except String Unit :=
+    fs.forM fun (_, _, d, _) => d.forM checkDefersIn
+  let rec goTop : STop → Except String Unit
+    | .fn _ _ ps _ _ _ body => do ps.forM (·.default.forM checkDefersIn); checkDefersIn body
+    | .const _ _ _ (.structDef _ _ _ fs) => goField fs
+    | .const _ _ _ e => checkDefersIn e
+    | .classDef _ _ _ _ _ _ fs _ ms => do goField fs; ms.forM goTop
+  tops.forM goTop
+
 /-- `return` leaves a function's body, so it is refused where there is none: in
     a constant's value, and in a field's default, which is evaluated where an
     object is constructed and would leave the function that constructs it. -/
@@ -140,6 +175,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   checkReservedNames allTops0r
   checkDefinedOnce allTops0r
   checkReturns allTops0r
+  checkDefers allTops0r
   let helpers ← if usesRat then ratTops else pure []
   let helpers := helpers ++ (← if usesReplaceAll then replaceAllTops else pure [])
   -- These compiler-owned implementations expand finite intrinsic operations:

@@ -21,7 +21,7 @@ Main():void =
     if (F[false]) then Print("no") else Print("failed")
     Print("{G(true)}")
     Print("{G(false)}")
-    if (1 = 1) then defer{Print("x")}
+    if (1 = 1) then { defer{Print("x")}; {} }
     B:logic = true
     if (X := B?) then Print("query ok")
     Print("y")
