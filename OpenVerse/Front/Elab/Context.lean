@@ -106,6 +106,10 @@ structure Local where
   ty      : Ty
   mutable : Bool
   storage : Option SourceStorage := none
+  /-- (#283) An `any` bound by the first success of the clauses after the
+      choice bound here, which has the join of its types in the choice's
+      alternatives (`Ctx.anyWhy`). -/
+  joinedAt : Option Pos := none
   typeValue : Bool := false
 
 /-- The heap effects (`<transacts>` allows all of them). -/
@@ -488,6 +492,7 @@ def Requests.merge (a b : Requests) : Requests where
   families := mergeByKey id a.families b.families
   overloads := mergeByKey id a.overloads b.overloads
   nested := mergeByKey (·.1) a.nested b.nested
+  fieldOrders := mergeByKey (·.1) a.fieldOrders b.fieldOrders
   fns := mergeByKey id a.fns b.fns
   methods := mergeByKey (·.key) a.methods b.methods
   subtypes := SubtypeEvidence.mergeRequests a.subtypes b.subtypes
@@ -506,6 +511,7 @@ def Requests.without (r old : Requests) : Requests where
   families := dropByKey id r.families old.families
   overloads := dropByKey id r.overloads old.overloads
   nested := dropByKey (·.1) r.nested old.nested
+  fieldOrders := dropByKey (·.1) r.fieldOrders old.fieldOrders
   fns := dropByKey id r.fns old.fns
   methods := dropByKey (·.key) r.methods old.methods
   subtypes := dropByKey SubtypeEvidence.declarationName r.subtypes old.subtypes
@@ -515,6 +521,7 @@ def Requests.without (r old : Requests) : Requests where
 
 def Requests.isEmpty (r : Requests) : Bool :=
   r.eager.isEmpty && r.lazy.isEmpty && r.families.isEmpty && r.overloads.isEmpty && r.nested.isEmpty &&
+    r.fieldOrders.isEmpty &&
     r.fns.isEmpty && r.methods.isEmpty &&
     r.casts.isEmpty && r.loops.isEmpty && r.witnesses.isEmpty && r.subtypes.isEmpty
 
@@ -680,6 +687,10 @@ structure LoopGen where
   /-- Each frame's hole's and code's types, when not the result type. -/
   frameTys : List (Option Ty × Option Ty) := []
   kTy : Option Ty := none
+  /-- (#283) The members whose values are of a type of their own, which does
+      not coerce to the result type: functions the group's code calls apart
+      from its own, their values going to the frames after their calls. -/
+  memberTys : List (String × Ty) := []
   /-- (#283) With continuation members: the flag a value sets when it comes
       to a choice point in a member's code, then breaking out of the
       consumer's failure context so that what it did up to there stays; the
@@ -712,6 +723,16 @@ structure R where
   e  : Expr
   ty : Ty
 
+/-- (#283) For an error at a use of an `any` as a value of a class: when it
+    is a name bound by the first success of the clauses after a choice
+    (`Local.joinedAt`), why it is an `any` there, and which choice. -/
+def Ctx.anyWhy (ctx : Ctx) (r : R) : String :=
+  match r.ty, r.e with
+  | .any, .local s => match ctx.locals.find? (·.slot == s) with
+    | some { name, joinedAt := some q, .. } =>
+      s!" ({name} is an any here: after the first success of the choice at {q.show}, what the clauses after it bind has the join of its types in its alternatives (#283); use {name} as its class in those clauses, where it has each one's own type, or take the values in a for)"
+    | _ => ""
+  | _, _ => ""
 
 /-- A new slot of the current frame, holding values of type `t`. -/
 def fresh (t : Ty) : EM Nat :=
@@ -1302,7 +1323,8 @@ def Ctx.rootsOf (ctx : Ctx) (c m : String) : List String :=
 def Ctx.failabilityKnown (ctx : Ctx) : EM Bool := do
   let st ← get
   return st.needs.fns.isEmpty && st.needs.methods.isEmpty && ctx.types.familySites.isEmpty &&
-    ctx.types.overloadSites.isEmpty && ctx.types.nestedSites.isEmpty && !ctx.typeOnly
+    ctx.types.overloadSites.isEmpty && ctx.types.nestedSites.isEmpty && ctx.types.fieldSites.isEmpty &&
+    !ctx.typeOnly
 
 /-- (#283) A use `R.M` at `p` whose family of methods only the class of
     `R` tells, one of `TyEnv.familySites`: the root of `M` above that class
@@ -1829,6 +1851,10 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
           eerr p s!"{withArticle base.show} is {withArticle n} only after a cast: write {n}[X], which fails when X is not one"
     eerr p s!"expected {target.show}, found {r.ty.show}"
 
+/-- `coerce`, whose error says why a name is an `any` (`Ctx.anyWhy`). -/
+def Ctx.coerce (ctx : Ctx) (p : Pos) (r : R) (target : Ty) : EM Expr :=
+  tryCatch (Front.coerce p r target) fun e => throw (e ++ ctx.anyWhy r)
+
 /-- Save rational operands in written order, then pass their int parts to
     an exact primitive. Repeated projections never repeat an operand. -/
 def rationalBinary (p : Pos) (op : Prim) (a b : R) : EM Expr := do
@@ -2010,6 +2036,14 @@ def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty := do
       if (exp.isNone || exp == some .any) && !ambiguousJoin (← get).env a b then return .any
       eerr p s!"the branches have different types: {a.show} and {b.show}"
 
+/-- (#283, #335) The first success of clauses lifted already (`$firstP`),
+    whose value is a result packet, the tuple of the names they bind: an
+    alternative of the choice of copies of the clauses after a choice, one
+    for each of its alternatives (`elabOneGo`). -/
+def isFirstPacket : SExpr → Bool
+  | .app _ (.ident _ "$firstP") [_] false => true
+  | _ => false
+
 /-- An `if … then … else …`'s branches and its type, which `finish` takes
     (#32, #366): at an expected type, both at it; with none, the `then`
     alone, the `else` against its type (else alone), and their `join` (a
@@ -2079,6 +2113,28 @@ partial def choiceResultType (env : TyEnv) (types : List Ty) : Option Ty := do
     if a == .void || b == .void then some .void else
     (joinTy env a b none).orElse fun _ =>
       if ambiguousJoin env a b then none else some .any) first
+
+/-- (#283, #335) The type of a choice of `isFirstPacket`s, of these types:
+    their join field by field (`choiceResultType`), as the packets of clauses
+    shared by the alternatives have, so that a name of unrelated types in two
+    of them is an `any`, not the whole tuple. A name whose types have more
+    than one nearest common supertype has none: refused, naming it. -/
+def packetJoin (p : Pos) (packet : SExpr) (types : List Ty) : EM Ty := do
+  let env := (← get).env
+  if let some t := choiceResultType env types then return t
+  let names := match packet with
+    | .app _ _ [.block _ items] _ => match items.getLast? with
+      | some (.tuple _ es) => es.map fun | SExpr.ident _ n => n | _ => "$"
+      | _ => []
+    | _ => []
+  let unjoined := names.zipIdx.findSome? fun (n, j) =>
+    let column := types.filterMap fun | Ty.tup ts => ts[j]? | _ => none
+    if (choiceResultType env column).isSome then none else some (n, column.eraseDups)
+  match unjoined with
+  | some (n, ts) =>
+    let what := if n.startsWith "$" then "a value of the clauses after it" else n
+    eerr p s!"after the first success of this choice, {what} would be of type {" or ".intercalate (ts.map (·.show))}, which have more than one nearest common supertype (#283)"
+  | none => eerr p "the alternatives have ambiguous result types"
 
 /-- A common class view suffices when the suffix only accesses fields whose
     instantiated types agree in every alternative. Bare values, methods and

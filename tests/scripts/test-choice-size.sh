@@ -545,6 +545,8 @@ kinds=(
   recursive-if-for
   recursive-nested-first
   recursive-nested-for
+  recursive-other-first
+  recursive-other-for
   recursive-sequence-first
   recursive-sequence-for
   recursive-sequence-calls-first
@@ -1657,6 +1659,26 @@ if kind.startswith('recursive-nested-'):
              f'    Print("x {{X{i + 1}}}")' for i in range(count)]
     body = '\n'.join(steps)
     print(f'''F(N:int)<transacts><decides>:int =
+    Print("f {{N}}")
+    N > 0
+    X0 := F[N - 1] | N
+{body}
+    X{count}''')
+    if kind.endswith('first'):
+        print('Main()<transacts>:void = if (X := F[2], X > 100) then Print("{X}") else Print("none")')
+    else:
+        print('Main()<transacts>:void = Print("{(for (X := F[2], X > 100): X).Length}")')
+    sys.exit(0)
+if kind.startswith('recursive-other-'):
+    # (#283) calls of another function with several values in sequence in a
+    # recursive one's code, each a choice point of its machine: the callee
+    # is one member, its code compiled once, whatever the number of calls
+    steps = [f'    X{i + 1} := X{i} * 2 + OtherVals(X{i} + {i})\n    Print("x {{X{i + 1}}}")' for i in range(count)]
+    body = '\n'.join(steps)
+    print(f'''OtherVals(N:int)<transacts>:int =
+    Print("two {{N}}")
+    N | N + 1
+F(N:int)<transacts><decides>:int =
     Print("f {{N}}")
     N > 0
     X0 := F[N - 1] | N

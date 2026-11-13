@@ -173,6 +173,10 @@ structure Requests where
       own (`Choice.nestFns`) is made with; and for a `for` that can fail,
       `$fails`. -/
   nested : List (String × STy) := []
+  /-- (#283) The field orders of the structs and classes constructed with a
+      choice point in a field in a recursive group's code
+      (`TyEnv.fieldOrder`), which `inlineMulti`'s lifter takes them in. -/
+  fieldOrders : List (String × List (String × Bool)) := []
   /-- Functions wanted as values at closed function types no class of
       theirs gives (#214): a class for each. -/
   fns : List (String × Ty) := []
@@ -303,6 +307,10 @@ structure TyEnv where
       elaboration notes (`$noteTypes`), by `Choice.nestKey`: their groups are
       kept with one value until then (`Choice.inlineFns`). -/
   nestedSites : List String := []
+  /-- (#283) The structs and classes whose field orders this elaboration notes
+      (`TyEnv.fieldOrder`, `Requests.fieldOrders`): constructed with a choice
+      point in a field in the code of groups kept with one value until then. -/
+  fieldSites : List String := []
   /-- The order of the slots holding values of the type parameters, when it
       is not that of `tvars` (a method that reads some from its receiver,
       #209, has those after the others). -/
@@ -345,6 +353,17 @@ def TyEnv.fields (env : TyEnv) (n : String) (args : List Ty := []) : List (Strin
     let σ := (ps.map (·.1)).zip args
     fs.map fun (f, t, d) => (f, t.subst σ, d)
   | none => fs
+
+/-- A struct's or class's fields in the order its constructions evaluate
+    them in, each with whether its default is more than a literal: the
+    lifter's view of a construction (`Choice.FieldOrder`), for the
+    elaborator's and, noted by an earlier elaboration, for `inlineMulti`'s
+    (#283); none for a type of no fields known. -/
+def TyEnv.fieldOrder (env : TyEnv) (n : String) : List (String × Bool) :=
+  if (env.structs.lookup n).isNone then [] else
+    (env.fields n).map fun (f, _, d) => (f, match d with
+      | some d => !Choice.stable (fun _ => true) d
+      | none => false)
 
 def TyEnv.info (env : TyEnv) (c : String) : ClassInfo :=
   match env.cinfoMap[c]? with
