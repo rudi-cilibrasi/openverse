@@ -297,6 +297,14 @@ partial def STy.couldBeValue : STy → Bool
   | .app n ts => !n.startsWith "$" && !n.startsWith "?" && ts.all STy.couldBeValue
   | _ => false
 
+/-- A `profile` block (`parsePrimary`): its tag, checked as a string, then
+    its body, whose value is the block's. A body with nothing in it is
+    refused (Book of Verse tests, profile_simple.versetest: 3560). -/
+def profileOf (p : Pos) (tag : Option SExpr) (body : SExpr) : PM SExpr := do
+  if body == .block body.pos [] then throw s!"{p.show}: profile needs a body: the code it measures"
+  let tagged := tag.toList.map fun t => SExpr.decl p s!"$profile{p.line}_{p.col}" (some (.name "string")) false t
+  return if tagged.isEmpty then body else .block p (tagged ++ [body])
+
 /-- A form openverse parses and has no meaning for, `$refused(msg, e…)`:
     `Attributes.apply` refuses it with `msg` before anything else reads the
     program (the Book's tests parse it: pointers, lambdas, a macro's
@@ -1503,6 +1511,24 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
   | .ident "block" => bump; parseBody stop
   -- `sync:` and `race:` (#156): each statement of the block is an arm
   -- `branch:` (#156): a background task over the enclosing function's frame
+  -- `profile(Tag): body`, `profile: body`, `profile{body}` (Book of Verse
+  -- ch. 7, "Profiling": it "measures execution time" and its value is the
+  -- body's, "without changing the program's behavior"): the tag, a string,
+  -- then the body; openverse measures nothing (`profileOf`)
+  | .ident "profile" =>
+    let n ← peekT 1
+    if n.startsBody && !n.bol then
+      bump
+      return ← profileOf t.pos none (← parseBody stop)
+    if n.isSym "(" && !n.spaced then
+      let saved ← get
+      bump; bump
+      let tag ← parseExpr 0
+      if (← peekT).isSym ")" && (← peekT 1).startsBody && !(← peekT 1).bol then
+        bump
+        return ← profileOf t.pos (some tag) (← parseBody stop)
+      set saved
+    bump; return .ident t.pos "profile"
   | .ident "branch" =>
     let n ← peekT 1
     if n.startsBody then
