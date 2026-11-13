@@ -1654,9 +1654,9 @@ def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty := do
       eerr p s!"the branches have different types: {a.show} and {b.show}"
 
 /-- (#283, #335) The first success of clauses lifted already (`$firstP`),
-    whose value is a result packet, the tuple of the names they bind: each
-    alternative of the choice that copies the clauses after a choice for
-    each of its alternatives. -/
+    whose value is a result packet, the tuple of the names they bind: an
+    alternative of the choice of copies of the clauses after a choice, one
+    for each of its alternatives (`elabOneGo`). -/
 def isFirstPacket : SExpr → Bool
   | .app _ (.ident _ "$firstP") [_] false => true
   | _ => false
@@ -1681,16 +1681,27 @@ partial def choiceResultType (env : TyEnv) (types : List Ty) : Option Ty := do
     (joinTy env a b none).orElse fun _ =>
       if ambiguousJoin env a b then none else some .any) first
 
-/-- (#283) For the message when these result packets of `isFirstPacket`s have
-    no join: the first name they bind whose types in them have none, and
-    those types. -/
-def packetUnjoined (env : TyEnv) (packet : SExpr) (types : List Ty) : Option (String × List Ty) := do
-  let .app _ _ [.block _ items] _ := packet | none
-  let .tuple _ es ← items.getLast? | none
-  es.zipIdx.findSome? fun (e, j) =>
-    let column := types.filterMap fun | .tup ts => ts[j]? | _ => none
-    if (choiceResultType env column).isSome then none
-    else some ((match e with | .ident _ n => n | _ => "$"), column.eraseDups)
+/-- (#283, #335) The type of a choice of `isFirstPacket`s, of these types:
+    their join field by field (`choiceResultType`), as the packets of clauses
+    shared by the alternatives have, so that a name of unrelated types in two
+    of them is an `any`, not the whole tuple. A name whose types have more
+    than one nearest common supertype has none: refused, naming it. -/
+def packetJoin (p : Pos) (packet : SExpr) (types : List Ty) : EM Ty := do
+  let env := (← get).env
+  if let some t := choiceResultType env types then return t
+  let names := match packet with
+    | .app _ _ [.block _ items] _ => match items.getLast? with
+      | some (.tuple _ es) => es.map fun | SExpr.ident _ n => n | _ => "$"
+      | _ => []
+    | _ => []
+  let unjoined := names.zipIdx.findSome? fun (n, j) =>
+    let column := types.filterMap fun | Ty.tup ts => ts[j]? | _ => none
+    if (choiceResultType env column).isSome then none else some (n, column.eraseDups)
+  match unjoined with
+  | some (n, ts) =>
+    let what := if n.startsWith "$" then "a value of the clauses after it" else n
+    eerr p s!"after the first success of this choice, {what} would be of type {" or ".intercalate (ts.map (·.show))}, which have more than one nearest common supertype (#283)"
+  | none => eerr p "the alternatives have ambiguous result types"
 
 /-- A common class view suffices when the suffix only accesses fields whose
     instantiated types agree in every alternative. Bare values, methods and

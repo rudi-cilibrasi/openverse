@@ -1247,20 +1247,9 @@ partial def elabAlts (ctx : Ctx) (p : Pos) (b : Choice.Binding) : EM (Ty × List
       else
         let c2 := { ctx with retries := ctx.retries + 1 }
         tryCatch (elabE c2 a (some r0.ty)) fun _ => elabE c2 a none
-    -- (#283, #335) the first successes of the clauses after a choice, copied
-    -- for each of its alternatives, each giving the names they bind
-    -- (`isFirstPacket`): field by field, as the packets of those clauses
-    -- shared by the alternatives are (`choiceResultType`), so that a name of
-    -- unrelated types in two copies is an `any` after them, not the tuple
-    let ty ← if alts.all isFirstPacket then
-        let packets := (r0 :: rs).map (·.ty)
-        match choiceResultType (← get).env packets with
-        | some t => pure t
-        | none => match packetUnjoined (← get).env a0 packets with
-          | some (n, ts) =>
-            let what := if n.startsWith "$" then "a value of the clauses after it" else n
-            eerr p s!"after the first success of this choice, {what} would be of type {" or ".intercalate (ts.map (·.show))}, which have more than one nearest common supertype (#283)"
-          | none => eerr p "the alternatives have ambiguous result types"
+    -- (#283, #335: the copies of the clauses after a choice, each giving the
+    -- names they bind, join field by field)
+    let ty ← if alts.all isFirstPacket then packetJoin p a0 ((r0 :: rs).map (·.ty))
       else rs.foldlM (fun acc r => join p acc r.ty none) r0.ty
     if ty == .never then eerr p "cannot infer the type of this choice"
     -- (#366) with nothing in common, every alternative against a later
