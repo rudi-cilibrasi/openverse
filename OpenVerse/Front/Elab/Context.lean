@@ -150,6 +150,15 @@ structure Sig where
   typeValues : List Nat := []
   deriving Inhabited
 
+/-- A function's own shape as a value (#503: its named parameters,
+    optional where they have defaults), and its parameters' types in that
+    shape's order. -/
+def Sig.valueShape (s : Sig) : FnValues.Shape × List Ty :=
+  let npos := s.params.length - s.named.length
+  let (sh, order) := ({ arity := 0, decides := s.decides, suspends := s.suspends, fx := s.fx } : FnValues.Shape).withParams
+    (s.params.zipIdx.map fun (_, i) => if i < npos then none else (s.named[i - npos]?).map fun (n, d) => (n, d.isSome))
+  (sh, order.filterMap (s.params[·]?))
+
 def Sig.frame (s : Sig) : SubtypeEvidence.Frame :=
   { explicit := s.params, params := s.tparams, selfParams := s.selfTps,
     bounds := s.bounds, selfBounds := s.selfBounds }
@@ -213,31 +222,34 @@ def spawnParamTypes (env : TyEnv) (name : String) (types : List VTy) : List VTy 
 def fnFits (env : TyEnv) (s : Sig) (t : Ty) : Bool :=
   match t with
   | .struct m ts =>
-    match FnValues.parseName m with
-    | some (k, effs) =>
-      -- (the effects only: a tuple parameter may be flattened, #231)
-      let sh : FnValues.Shape := ⟨k, s.decides, s.suspends, s.fx⟩
+    match FnValues.parse m with
+    | some tsh =>
+      let k := tsh.positional
+      let (own, ownTs) := s.valueShape
+      let params := ownTs.take own.positional
       let qs0 := ts.take k
-      let u := (ts.drop k).headD .void
-      let subAt (a b : Ty) : Bool := a == b || (a == .int && b == .rational) || match a, b with
-        | .struct x [], .struct y [] => x != y && env.isSub x y
-        | _, _ => false
-      -- (#231) the parameters as the type wants them: as they are, a single
-      -- tuple parameter unflattened into the type's, or the parameters
-      -- flattened into the type's single tuple parameter
+      let u := (ts.drop tsh.arity).headD .void
+      let subAt := env.convertsAt
+      -- (#231) the positional parameters as the type wants them: as they
+      -- are, a single tuple parameter unflattened into the type's, or the
+      -- parameters flattened into the type's single tuple parameter; the
+      -- named ones by name (#503)
       let reshaped : Option (List Ty × List Ty) :=
-        if k == s.params.length then some (s.params, qs0)
-        else match s.params, qs0 with
+        if k == params.length then some (params, qs0)
+        else match params, qs0 with
           | [.tup es], _ => if es.length == k then some (es, qs0) else none
-          | _, [.tup es] => if es.length == s.params.length then some (s.params, es) else none
+          | _, [.tup es] => if es.length == params.length then some (params, es) else none
           -- (a single parameter, a type parameter say, at the tuple of the
           -- type's parameters: matching decides)
-          | [_], _ => if k ≥ 2 then some (s.params, [.tup qs0]) else none
+          | [_], _ => if k ≥ 2 then some (params, [.tup qs0]) else none
           | _, _ => none
-      match reshaped with
-      | none => false
-      | some (ps, qs) =>
-      sh.within (FnValues.shapeOf k effs) &&
+      let named := tsh.named.mapM fun n => (own.named.idxOf? n).bind (ownTs[own.positional + ·]?)
+      match reshaped, named with
+      | some (ps, qs), some named =>
+      let ps := ps ++ named
+      let qs := qs ++ (ts.drop k).take tsh.named.length
+      -- (the effects and names only: a tuple parameter may be flattened)
+      { own with arity := k + own.named.length }.within tsh &&
         if s.tparams.isEmpty then
           (qs.zip ps).all (fun (q, p) => subAt q p) && subAt s.ret u
         else
@@ -249,26 +261,36 @@ def fnFits (env : TyEnv) (s : Sig) (t : Ty) : Bool :=
                   env.boundSubtype (bound.derived.subst σ) (bound.base.subst σ))
             | none => false
           | none => false
+      | _, _ => false
     | none => false
   | _ => false
 
-/-- A generic value's instance at its own parameter/result shape. Unlike
-    closed specialization, the expected type may mention the caller's
-    parameters. `fixed` pins a bound method's receiver arguments. Bounds
-    are checked here before constructing its value class. -/
-def fnValueArgs (env : TyEnv) (s : Sig) (t : Ty) (fixed : List (String × Ty) := []) : Option (List Ty) := do
+/-- A generic value's instance at its own parameter/result shape `own`, at
+    arguments `args` (its parameters', then its result's), as a value of
+    function type `t`, a shape above `own` (#503). Unlike closed
+    specialization, the expected type may mention the caller's parameters.
+    `fixed` pins a bound method's receiver arguments. Bounds are checked
+    here before constructing its value class. -/
+def fnShapeArgs (env : TyEnv) (own : FnValues.Shape) (args : List Ty) (tparams : List (String × Bool))
+    (bounds : List SubtypeEvidence.Bound) (t : Ty) (fixed : List (String × Ty) := []) : Option (List Ty) := do
   let .struct m ts := t | none
-  let some (k, es) := FnValues.parseName m | none
-  if k != s.params.length || ts.length != k + 1 then none else do
-    let own : FnValues.Shape := ⟨k, s.decides, s.suspends, s.fx⟩
-    if !own.within (FnValues.shapeOf k es) then none else do
-      let σ ← ((s.params ++ [s.ret]).zip ts).foldlM (fun σ (a, b) => a.matchArg env σ b) fixed
-      let σ ← SubtypeEvidence.infer env s.bounds σ true ((s.tparams.filter (·.2)).map (·.1))
-      if !((s.params ++ [s.ret]).zip ts).all (fun (a, b) => (a.subst σ).eqv b) then none else
-      if !s.bounds.all (fun bound => env.boundSubtype (bound.derived.subst σ) (bound.base.subst σ)) then none else
-      s.tparams.mapM fun (v, cmp) => do
+  let tsh ← FnValues.parse m
+  if !own.within tsh || args.length != own.arity + 1 then none else do
+    let args := own.select tsh args
+    if ts.length != args.length then none else do
+      let σ ← (args.zip ts).foldlM (fun σ (a, b) => a.matchArg env σ b) fixed
+      let σ ← SubtypeEvidence.infer env bounds σ true ((tparams.filter (·.2)).map (·.1))
+      if !(args.zip ts).all (fun (a, b) => (a.subst σ).eqv b) then none else
+      if !bounds.all (fun bound => env.boundSubtype (bound.derived.subst σ) (bound.base.subst σ)) then none else
+      tparams.mapM fun (v, cmp) => do
         let t ← σ.lookup v
         if cmp && !t.comparable env then none else some t
+
+/-- A generic function's instance as a value of function type `t`
+    (`fnShapeArgs` at its own shape). -/
+def fnValueArgs (env : TyEnv) (s : Sig) (t : Ty) (fixed : List (String × Ty) := []) : Option (List Ty) :=
+  let (own, ts) := s.valueShape
+  fnShapeArgs env own (ts ++ [s.ret]) s.tparams s.bounds t fixed
 
 /-- A symbolic adapter's parameters come from its own first function shape,
     including tuple adaptation. The original function signature stays intact. -/
@@ -276,14 +298,9 @@ def fnClassArgs (env : TyEnv) (cls : String) (target : Ty)
     (fixed : List (String × Ty) := []) : Option (List Ty) := do
   if !env.classes.contains cls then none else do
     let iface ← (env.info cls).ifaces.head?
-    let (k, es) ← FnValues.parseName iface
-    let ts := (env.iargs.lookup (cls, iface)).getD []
-    let sig : Sig := {
-      idx := 0, name := cls, params := ts.take k, ret := (ts.drop k).headD .void,
-      decides := es.contains "decides", isConst := false,
-      tparams := (env.sparams.lookup cls).getD [], fx := allowedFx es, suspends := es.contains "suspends",
-      bounds := ((env.sbounds.lookup cls).getD []).map fun (base, derived) => ⟨base, derived⟩ }
-    fnValueArgs env sig target fixed
+    let own ← FnValues.parse iface
+    fnShapeArgs env own ((env.iargs.lookup (cls, iface)).getD []) ((env.sparams.lookup cls).getD [])
+      (((env.sbounds.lookup cls).getD []).map fun (base, derived) => ⟨base, derived⟩) target fixed
 
 /-- A construction instance found with its original expected context. -/
 structure ConstructHint where
@@ -636,6 +653,24 @@ abbrev EM := StateT ESt (Except String)
 def noteNeeds (r : Requests) : EM Unit :=
   modify fun st => { st with needs := st.needs.merge r }
 
+/-- The method that a call with arguments `args` of a value of shape
+    interface `n` at `ts` calls: that of the closed shape its named
+    arguments give (#503). A shape with optional parameters is below the
+    program's closed shapes that give some of them (`FnValues.desugar`);
+    one that a call needs and the program lacks is asked for, as a
+    function type (the program is elaborated again with it), and `none`
+    stands in for the call meanwhile. -/
+def fnValueCall (ctx : Ctx) (n : String) (ts : List Ty) (args : List SExpr) : EM (Option String) := do
+  let some sh := FnValues.parse n | return some "$call"
+  let called := sh.supplying (args.filterMap fun
+    | .decl _ x .. => if x.startsWith "?" then some (x.drop 1).toString else none
+    | _ => none)
+  if sh.closed || ctx.types.classes.contains called.name then return some called.call
+  let ty : Ty := .struct called.name (sh.select called ts)
+  if ctx.types.fnRequests.contains ("", ty) then return some called.call
+  noteNeeds { fns := [("", ty)] }
+  return none
+
 /-- Give a disposable polymorphic suffix trial its own type witnesses.
     The generated continuation will obtain them from its actual arguments. -/
 def choiceTypeContext (ctx : Ctx) (plan : ChoiceTypes.Plan) : EM Ctx := do
@@ -819,7 +854,10 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .fn ps es r => do
     if es.contains "decides" && es.contains "suspends" then
       eerr p "a function type cannot be both <suspends> and <decides>, which exclude each other"
-    resolveTy env p (.app (FnValues.shapeOf ps.length es).name (ps ++ [r]))
+    let (sh, ts, r) := FnValues.fnTyShape ps es r
+    if let some n := sh.named.find? fun n => (sh.named.filter (· == n)).length > 1 then
+      eerr p s!"a function type names its parameter ?{n} twice"
+    resolveTy env p (.app sh.name (ts ++ [r]))
   | .map k v => do
     let kt ← resolveTy env p k
     if !kt.comparable env then eerr p (notComparable env kt "a map key")
@@ -1881,17 +1919,25 @@ def methodVarianceRequest (ctx : Ctx) (p : Pos) (owner method : String)
     (receiver own target : Ty) : EM (Option (FnValues.MethodRequest × List Ty)) := do
   let .struct on ots := own | return none
   let .struct tn tts := target | return none
-  let some (n, oe) := FnValues.parseName on | return none
-  let some (k, te) := FnValues.parseName tn | return none
-  if ots.length != n + 1 || tts.length != k + 1 ||
-      !(FnValues.shapeOf k oe).within (FnValues.shapeOf k te) then return none
+  let some os := FnValues.parse on | return none
+  let some ts := FnValues.parse tn | return none
+  let n := os.positional
+  let k := ts.positional
+  let te := ts.effs
+  -- (the effects and names, #503: tuple adaptation may change the
+  -- positional parameters)
+  if ots.length != os.arity + 1 || tts.length != ts.arity + 1 ||
+      !{ os with arity := k + os.named.length }.within ts then return none
   -- Exact signatures and ordinary effect subtyping keep their existing
   -- adapter, including receiver bounds supplied by a GADT view.
-  if n == k && ots == tts then return none
+  if os.within ts && os.select ts ots == tts then return none
   let ps := ots.take n
   let qs := tts.take k
-  let r := (ots.drop n).headD .void
-  let u := (tts.drop k).headD .void
+  -- (the named parameters the type has, by name: the method's types, the type's)
+  let ownNamed := ts.named.filterMap fun x => (os.named.idxOf? x).bind (ots[n + ·]?)
+  let typeNamed := (tts.drop k).take ts.named.length
+  let r := (ots.drop os.arity).headD .void
+  let u := (tts.drop ts.arity).headD .void
   let xs := (List.range k).map fun i => SExpr.ident p s!"$X{i}"
   let tuple? : Ty → Option (List Ty)
     | .void => some []
@@ -1923,7 +1969,8 @@ def methodVarianceRequest (ctx : Ctx) (p : Pos) (owner method : String)
     if plan.valid ctx.types ctx.evidenceTypes then some [bound] else none
   let some resultRelations := conversion r u | return none
   for (kind, ps, qs, args) in choices do
-    let some inputRelations := (qs.zip ps).mapM (fun (q, p) => conversion q p) | continue
+    let some inputRelations := ((qs ++ typeNamed).zip (ps ++ ownNamed)).mapM (fun (q, p) => conversion q p)
+      | continue
     let unscoped := { ctx.types with boundFacts := [] }
     let applicationRelations := (SubtypeEvidence.applicationBounds ctx.types [receiver, own, target]).filter fun bound =>
       !unscoped.boundSubtype bound.derived bound.base
@@ -1935,16 +1982,17 @@ def methodVarianceRequest (ctx : Ctx) (p : Pos) (owner method : String)
     let names := vars.zipIdx.map fun ((n, _), i) => (n, STy.name s!"$methodVariance{i}")
     let st := fun t : Ty => t.toSTy.substNames names
     let receiver := st receiver
-    let params := (tts.take k).map st
+    let params := (tts.take ts.arity).map st
     let ret := st u
     let bounds := vars.map (·.2)
     let relations := relations.map fun bound => (st bound.base, st bound.derived)
     let key := reprStr (owner, method, receiver, params, te, ret, bounds, kind) ++
-      (if relations.isEmpty then "" else reprStr relations)
+      (if relations.isEmpty then "" else reprStr relations) ++ ts.namesTag
     let req : FnValues.MethodRequest := {
       key, relations,
       pos := p, owner, method, receiver, params, effs := te, ret, args,
-      decides := oe.contains "decides",
+      named := ts.named, optional := ts.optional,
+      decides := os.decides,
       tparams := vars.zipIdx.map fun ((_, cmp), i) => {
         pos := p, name := s!"$methodVariance{i}", constraint := if cmp then "comparable" else "type" } }
     return some (req, vars.map fun (n, cmp) => Ty.param n cmp)

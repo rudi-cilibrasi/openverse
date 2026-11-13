@@ -89,9 +89,9 @@ partial def Ty.show : Ty → String
   | .struct n [] => n
   | .struct n ts =>
     -- (a function type, #210)
-    match FnValues.parseName n with
-    | some (k, effs) => FnValues.showFn effs ((ts.take k).map Ty.show) ((ts.drop k).headD .void).show
-    | none => n ++ "(" ++ ", ".intercalate (ts.map Ty.show) ++ ")"
+    match FnValues.parse n, FnValues.parseName n with
+    | some s, some (_, effs) => s.show ((ts.take s.arity).map Ty.show) ((ts.drop s.arity).headD .void).show effs
+    | _, _ => n ++ "(" ++ ", ".intercalate (ts.map Ty.show) ++ ")"
   | .enum n => n
   | .map k v => "[" ++ k.show ++ "]" ++ v.show
   | .param n _ => n
@@ -111,9 +111,9 @@ partial def Ty.toSTy : Ty → STy
   | .tup ts => .tup (ts.map Ty.toSTy)
   | .map k v => .map k.toSTy v.toSTy
   | .struct n [] => .name n
-  | .struct n ts => match FnValues.parseName n with
-    | some (k, effs) => .fn ((ts.take k).map Ty.toSTy) effs ((ts.drop k).headD .void).toSTy
-    | none => .app n (ts.map Ty.toSTy)
+  | .struct n ts => match FnValues.parse n, FnValues.parseName n with
+    | some s, some (_, effs) => s.toSTy ((ts.take s.arity).map Ty.toSTy) ((ts.drop s.arity).headD .void).toSTy effs
+    | _, _ => .app n (ts.map Ty.toSTy)
 
 /-- Substitute type arguments for type parameters. -/
 partial def Ty.subst (σ : List (String × Ty)) : Ty → Ty
@@ -1226,20 +1226,33 @@ def Ty.mergeParamBounds (xs : List (String × Bool)) : List (String × Bool) :=
   xs.foldl (fun acc (n, cmp) => if acc.any (·.1 == n) then
     acc.map fun (m, old) => (m, old || (m == n && cmp)) else acc ++ [(n, cmp)]) []
 
+/-- `a` is `b` or a subtype a call converts to it at a parameter or a
+    result (#214): `int` to `rational`, a class to one above it, and a
+    function type to one whose shape is above its own at the same
+    arguments (#503). -/
+def TyEnv.convertsAt (env : TyEnv) (a b : Ty) : Bool :=
+  a == b || (a == .int && b == .rational) || match a, b with
+    | .struct x [], .struct y [] => x != y && env.isSub x y
+    | .struct x xs, .struct y ys =>
+      match FnValues.parse x, FnValues.parse y with
+      | some s, some t => s.within t && s.select t xs == ys
+      | _, _ => false
+    | _, _ => false
+
 /-- A value of function type `own` (a shape's interface at its arguments)
-    fits function type `t` by variance (#231): the same arity, effects among
-    `t`'s, contravariant parameters and a covariant result. -/
+    fits function type `t` by variance (#231): a shape above its own (the
+    same positional parameters, effects among `t`'s, names it has, #503),
+    contravariant parameters and a covariant result. -/
 def fnTyFits (env : TyEnv) (own t : Ty) : Bool :=
   match own, t with
   | .struct om ots, .struct tm tts =>
-    match FnValues.parseName om, FnValues.parseName tm with
-    | some (k, oe), some (k', te) =>
-      let subAt (a b : Ty) : Bool := a == b || (a == .int && b == .rational) || match a, b with
-        | .struct x [], .struct y [] => x != y && env.isSub x y
-        | _, _ => false
-      k == k' && (FnValues.shapeOf k oe).within (FnValues.shapeOf k te) &&
-        ((tts.take k).zip (ots.take k)).all (fun (q, p) => subAt q p) &&
-        subAt ((ots.drop k).headD .void) ((tts.drop k).headD .void)
+    match FnValues.parse om, FnValues.parse tm with
+    | some os, some ts =>
+      let subAt := env.convertsAt
+      let ots := os.select ts ots
+      os.within ts && ots.length == tts.length &&
+        ((tts.take ts.arity).zip (ots.take ts.arity)).all (fun (q, p) => subAt q p) &&
+        subAt ((ots.drop ts.arity).headD .void) ((tts.drop ts.arity).headD .void)
     | _, _ => false
   | _, _ => false
 

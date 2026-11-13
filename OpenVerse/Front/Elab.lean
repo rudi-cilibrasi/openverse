@@ -118,6 +118,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- and the calls whose overload the arguments' types pick
   -- (#283) and the consumers in recursive groups' code whose names' types
   -- an elaboration is to note
+  let written := resolved
   let ⟨resolved, lazy, familySites, overloadSites, nestedSites⟩ ← Choice.inlineMulti resolved reserved
     opts.requests.eager opts.requests.families opts.requests.lazy opts.requests.overloads opts.requests.nested
   -- (#246) the class of the stack cells of lazily taken ones
@@ -190,7 +191,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- (the entry expression is scanned too)
   let allTops00 := copyIfaceDefaults (SubtypeEvidence.addFields
     (FnValues.desugar (resolved.take (resolved.length - rawEntry.length) ++ helpers)
-      (resolved.drop (resolved.length - rawEntry.length)) (opts.requests.fns.map fun (n, t) => (n, t.toSTy)) opts.requests.methods))
+      (resolved.drop (resolved.length - rawEntry.length)) (opts.requests.fns.map fun (n, t) => (n, t.toSTy))
+      opts.requests.methods written))
   let entryTop := resolved.drop (resolved.length - rawEntry.length)
   -- the command line: `Args`, and an entry expression
   let defines (n : String) := allTops00.any fun

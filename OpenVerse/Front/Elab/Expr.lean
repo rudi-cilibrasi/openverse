@@ -285,8 +285,10 @@ partial def elabSpawnIn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
             let name := s!"$spawnValue{slot}"
             let cctx := { ctx with locals := {
               name, slot, ty := rx.ty, mutable := false, typeValue := ctx.isTypeValue f } :: ctx.locals }
+            let some call ← fnValueCall ctx shape (match rx.ty with | .struct _ ts => ts | _ => []) args
+              | return ⟨.seq rx.e (.prim .userErr []), .void⟩
             let r ← elabApp { cctx with defers := [], suspends := true, canFail := false } q
-              (.member f.pos (.ident f.pos name) ("$spawnMethod:" ++ FnValues.callOf shape)) args br none
+              (.member f.pos (.ident f.pos name) ("$spawnMethod:" ++ call)) args br none
             return ⟨.seq (.assign slot rx.e) r.e, r.ty⟩
       set saved
   -- (the call runs in the new task, which may wait, also when spawned from
@@ -935,25 +937,34 @@ partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bra
   let r ← elabCallableReceiver ctx p r
   -- a call of a function value (#210): of its shape's method
   if let .struct n ts := r.ty then
-    if let some (_, effs) := FnValues.parseName n then
+    if let some sh := FnValues.parse n then
+      let effs := sh.effs
       if effs.contains "decides" && !bracket then
         eerr p s!"a value of type {r.ty.show} can fail: call it with […]"
       if !effs.contains "decides" && bracket then
         eerr p s!"a value of type {r.ty.show} cannot fail: call it with (…)"
       if effs.contains "suspends" && !ctx.suspends then
         eerr p s!"a value of type {r.ty.show} suspends: it can only be called in a <suspends> function (#156)"
-      -- (one tuple argument flattens into several parameters)
-      let k := (FnValues.parseName n).elim 0 (·.1)
+      -- (one tuple argument flattens into several parameters; named ones
+      -- are passed by name, #503)
+      let k := sh.positional
       let shape : Sig := { idx := 0, name := n, params := ts.take k, ret := .void, decides := false, isConst := false }
       let args := packCallArgs p shape args false
-      if args.length != k && !(args.length == 1 && k > 1) then
-        eerr p s!"a value of type {r.ty.show} takes {k} argument(s), found {args.length}"
+      let names := args.filterMap fun | .decl _ x .. => if x.startsWith "?" then some (x.drop 1).toString else none | _ => none
+      if let some x := names.find? (!sh.named.contains ·) then
+        eerr p s!"a value of type {r.ty.show} has no parameter ?{x}"
+      let npos := args.length - names.length
+      if npos != k && !(npos == 1 && k > 1) then
+        eerr p s!"a value of type {r.ty.show} takes {k} {if sh.named.isEmpty then "" else "positional "}argument(s), found {npos}"
+      if let some x := sh.named.find? fun x => !sh.optional.contains x && !names.contains x then
+        eerr p s!"a value of type {r.ty.show} needs the argument ?{x}"
+      let some call ← fnValueCall ctx n ts args | return ⟨.seq r.e (.prim .userErr []), (ts.drop sh.arity).headD .void⟩
       let t ← fresh r.ty
       if !ctx.typeOnly then
         modify fun st => { st with metadataUses := t :: st.metadataUses }
       let nm := s!"$fnval{t}"
       let ctx' := { ctx with locals := { name := nm, slot := t, ty := r.ty, mutable := false } :: ctx.locals }
-      let rc ← elabApp ctx' p (.member p (.ident p nm) (FnValues.callOf n)) args bracket none
+      let rc ← elabApp ctx' p (.member p (.ident p nm) call) args bracket none
       -- A type-only operation dictionary may discard this call's Expr
       -- while retaining its result type. Keep the source wait visible to
       -- the enclosing continuation; merely reading a callable stays immediate.
@@ -2168,7 +2179,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
         let hasValue := (ctx.types.supers sn).any fun x => ctx.types.classes.contains s!"{x}${f}$fn"
         let genericMethod (m : String) : Bool :=
           match ctx.methodDecl? sn m with
-          | some owner => (ctx.sig? s!"{owner}.{m}").any fun sg => sg.named.isEmpty &&
+          | some owner => (ctx.sig? s!"{owner}.{m}").any fun sg =>
               sg.tparams.length > ((ctx.types.sparams.lookup owner).getD []).length
           | none => false
         if ctx.hasMethod sn f || (visibleOv.length == 1 && (hasValue || genericMethod visibleOv.head!)) then
@@ -2198,9 +2209,9 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
           let methodTps (x : String) := ((env.sparams.lookup s!"{x}${f}$fn").getD []).drop
             ((env.sparams.lookup x).getD []).length
           if let some target@(.struct shape _) := exp then
-            if let some (k, _) := FnValues.parseName shape then
+            if let some sh := FnValues.parse shape then
               for x in candidates do
-                for cls in [s!"{x}${f}$fn", s!"{x}${f}$fnPack", s!"{x}${f}$fnUnpack{k}"] do
+                for cls in [s!"{x}${f}$fn", s!"{x}${f}$fnPack", s!"{x}${f}$fnUnpack{sh.positional}"] do
                   if !env.classes.contains cls then continue
                   let some (_, selfTy, _) := (env.fields cls []).find? (·.1 == "$self") | continue
                   let receiver := Ty.struct x (env.argsAt sn targs x)
@@ -2263,7 +2274,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
               -- refuses it, before the round that knows the use's family
               match (ctx.methodDecl? sn fv).filter (env.familyStubs.contains s!"{·}.{fv}") with
               | some owner => eerr p s!"{owner.replace "::" "."}.{f} has several values, so it cannot be used as a function value (#235, #283)"
-              | none => eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a method with named parameters is not a value, #210)"
+              | none => eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (#210)"
           let cls := s!"{x}${f}$fn"
           let xargs := env.argsAt sn targs x
           let t ← fresh r.ty
@@ -2273,7 +2284,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
           let own := typeOf x
           return ⟨.seq (.assign t r.e) (← coerce p rv own), own⟩
         if visibleOv.length == 1 then
-          eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a method with named parameters is not a value, #210)"
+          eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (#210)"
         eerr p s!"class {sn} has no field '{f}'"
       eerr p s!"struct {sn} has no field '{f}'"
   | t, m => eerr p s!"{t.show} has no member '{m}'"
