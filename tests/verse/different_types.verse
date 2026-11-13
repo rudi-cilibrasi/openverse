@@ -35,4 +35,9 @@ Main():void =
     if (R := 2 / 2) then Print("{Show(logic{array{1} = array{R}})} {Show(logic{R = 1.0})} {Show(logic{0 = false})} {Show(logic{R = (1, 1)})}")
     Print("{Show(logic{s{} = ()})} {Show(logic{s{} <> ()})} {Show(logic{true = option{0}})}")
     Print("{Show(logic{pc(int){X := 0} = pc(float){X := 0.0}})} {Show(logic{pc(int){X := 0} <> pc(float){X := 0.0}})}")
+    # (one struct at two instances: its fields compared as values, a tuple as
+    # the array of its elements, an int as a rational; Book of Verse
+    # Tests/Operators/CompareStruct.versetest 40 to 45)
+    Print("{Show(logic{pc([]int){X := array{1, 2}} = pc(tuple(int, int)){X := (1, 2)}})} {Show(logic{pc([]int){X := array{1, 2}} = pc(tuple(int, int)){X := (2, 3)}})}")
+    if (R := 2 / 2) then Print("{Show(logic{pc(int){X := 1} = pc(rational){X := R}})} {Show(logic{pc(int){X := 2} <> pc(rational){X := R}})}")
     if (0u41 = 65 = 65) then Print("chain y") else Print("chain n")

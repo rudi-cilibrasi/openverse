@@ -821,7 +821,6 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .name "rational" => pure .rational
   | .name "string" => pure Ty.string
   | .name "void" => pure .void
-  | .name "true" => pure (.tup [])
   | .name "float" => pure .float
   | .name "any" => pure .any
   | .name "$never" => pure .never
@@ -840,8 +839,8 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
     else eerr p (unknownTypeMessage n)
   | .arr t => return .arr (← resolveTy env p t)
   | .opt t => return .opt (← resolveTy env p t)
-  -- (`tuple()` and `true` are the type of the empty value alone; `void`
-  -- takes any value, Book of Verse ch. 2: `Ty.isUnit`)
+  -- (`tuple()` is the type of the empty value alone; `void` takes any
+  -- value, Book of Verse ch. 2: `Ty.isUnit`)
   | .tup [] => pure (.tup [])
   | .tup ts => return .tup (← ts.mapM (resolveTy env p))
   -- a function type: its shape's interface (#210)
@@ -1461,28 +1460,54 @@ inductive CmpPlan where
   /-- only the empty value in common, as Verse Core holds it at each, and
       other values Verse Core could find equal or the empty values differ -/
   | empty (ex ey : Value)
-  /-- other values in common that Verse Core could not tell from those that
-      are not (`[]tuple(int, []int)` and `[]tuple(int, []char32)`) -/
+  /-- other values in common that Verse Core holds differently, or could
+      not tell from those that are not (`?logic` and `?void`,
+      `[]tuple(int, []int)` and `[]tuple(int, []char32)`, a tuple of type
+      parameters and a string) -/
   | refuse
 
-/-- How `=` and `<>` compare a value of `a` with one of `b`, different types
-    (`TyEnv.common`): by Verse Core's equality when that is Verse's, which
-    it is when what they have in common Verse Core holds alike and nothing
-    else it could find equal. -/
-def TyEnv.cmpPlan (env : TyEnv) (a b : Ty) : CmpPlan :=
+/-- Verse Core's equality of a value of `a` and one of `b` is Verse's: part
+    by part, where the types are the same, or what they have in common
+    (`TyEnv.common`) Verse Core holds alike and it finds no other values
+    equal (an `int` and a `float`; `[]int` and `string`, whose one common
+    value is `array{}` at both). Type parameters and classes (references)
+    are compared as Verse Core compares them. -/
+partial def TyEnv.coreExact (env : TyEnv) (a b : Ty) : Bool :=
+  let fieldTys (n : String) (ts : List Ty) : List Ty := (env.fields n ts).map (·.2.1)
   let (va, vb) := (a.toVTy env, b.toVTy env)
+  if a == b then true else
+  match a, b with
+  | .param .., _ | _, .param .. => true
+  | .refine n, t | t, .refine n => match env.refines.lookup n with
+    | some (base, _) => env.coreExact base t
+    | none => false
+  | .opt x, .opt y | .arr x, .arr y => env.coreExact x y
+  | .map k v, .map k' v' => env.coreExact (.tup [k, v]) (.tup [k', v'])
+  | .tup xs, .tup ys => xs.length != ys.length || (xs.zip ys).all fun (x, y) => env.coreExact x y
+  | .struct S xs, .struct T ys =>
+    if env.classes.contains S || env.classes.contains T then true
+    else if S == T then (fieldTys S xs).zip (fieldTys T ys) |>.all fun (x, y) => env.coreExact x y
+    else !va.overlaps vb
+  | _, _ => match env.common a b with
+    | .nothing => !va.overlaps vb
+    -- (the empty values one, and no other values that could be equal: an
+    -- array and a map of parts that no Verse Core value has both types of)
+    | .empty => a.emptyValue? == b.emptyValue? && match va, vb with
+      | .arr x, .arr y | .opt x, .opt y => !x.overlaps y
+      | _, _ => true
+    | .values => false
+
+/-- How `=` and `<>` compare a value of `a` with one of `b`, different
+    types: by Verse Core's equality where that is Verse's
+    (`TyEnv.coreExact`), else by what they have in common (`TyEnv.common`):
+    nothing, never equal; the empty value only, equal when both are empty;
+    other values, refused. -/
+def TyEnv.cmpPlan (env : TyEnv) (a b : Ty) : CmpPlan :=
+  if env.coreExact a b then .core else
   match env.common a b, a.emptyValue?, b.emptyValue? with
-  | .nothing, _, _ => if va.overlaps vb then .never else .core
-  | .empty, some ea, some eb =>
-    -- (Verse Core's equality is Verse's when the empty values are one and
-    -- no other values could be equal there: arrays or options of parts
-    -- that no Verse Core value has both types of)
-    let others : Bool := match va, vb with
-      | .arr x, .arr y | .opt x, .opt y => x.overlaps y
-      | _, _ => false
-    if ea == eb && !others then .core else .empty ea eb
-  | .empty, _, _ => .core
-  | .values, _, _ => if va == vb then .refuse else .core
+  | .nothing, _, _ => .never
+  | .empty, some ea, some eb => .empty ea eb
+  | _, _, _ => .refuse
 
 /-- `x op y` (`=` or `<>`) of the slots `x` and `y`, of types that have the
     empty value only in common, which Verse Core holds as `ex` and `ey`:

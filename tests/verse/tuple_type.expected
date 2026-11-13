@@ -2,7 +2,7 @@
 unit
 x y
 flag
-true out
+unit out
 42 42
 42 10 210
 0

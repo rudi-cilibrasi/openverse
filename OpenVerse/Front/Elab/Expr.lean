@@ -1067,7 +1067,7 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
         eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show} (an int and a rational inside them: convert the ints first)"
       match ctx.types.cmpPlan ta tb with
       | .refuse =>
-        eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show}, with values in common that Verse Core cannot tell from others (not supported)"
+        eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show}, whose values in common Verse Core cannot compare (not supported)"
       | plan => return plan
     else if !((ta == .int && tb == .int) || (ta == .char && tb == .char) || (ta == .char32 && tb == .char32) ||
         (ta == .float && tb == .float)) then
@@ -1110,6 +1110,15 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
   -- container of ints one of rationals, #116: converted to the other
   -- operand's type when it converts, it is compared as one)
   let toOther (r : R) (other : Ty) : EM R := do
+    -- (a struct at other type arguments that Verse Core does not compare as
+    -- Verse does: the tuple of its fields, as Verse Core holds it, converted
+    -- to the other's, `p(tuple(int, int))` to `p([]int)`)
+    let fields (n : String) (ts : List Ty) : Ty := .tup ((ctx.types.fields n ts).map (·.2.1))
+    if let (.struct S xs, .struct T ys) := (r.ty, other) then
+      if S == T && !ctx.types.classes.contains S && !ctx.types.coreExact r.ty other then
+        return ← tryCatch (do
+          let some e ← convert (← get).env r.e (fields S xs) (fields T ys) | return r
+          return ⟨.assign (← fresh other) e, other⟩) fun _ => return r
     let converts := match r.ty, other with
       | .tup _, .arr _ => true
       | t, u => ratMismatch t u

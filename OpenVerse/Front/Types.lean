@@ -447,8 +447,7 @@ def Ty.emptyValue? : Ty → Option Value
   | .arr _ | .map _ _ => some Value.emptyArray
   | _ => none
 
-/-- The types of the empty value alone: `tuple()` (also written `true`),
-    and `void`, which takes any value and makes it that one (Book of Verse
+/-- The types of the empty value alone: `tuple()`, and `void`, which takes any value and makes it that one (Book of Verse
     ch. 2: "Any value converts to `void`"). -/
 def Ty.isUnit : Ty → Bool
   | .void | .tup [] => true
