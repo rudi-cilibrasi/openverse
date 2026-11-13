@@ -102,7 +102,7 @@ partial def elabERaw (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   match se with
   | .int .. | .char .. | .char32 .. | .float .. | .str .. | .ident .. | .app .. =>
     elabExprInitialWith elabE elabOneClauses elabSpawnBound elabFieldDefault elabConstruct elabExprMarkers ctx se exp
-  | .member .. | .construct .. | .mapLit .. | .structDef .. | .enumDef .. | .refineDef .. | .query .. | .neg .. | .notE .. | .bin .. | .cmp .. | .andE .. | .orE .. | .range .. | .tuple .. | .block .. | .arrayLit .. | .optionLit .. | .logicLit .. =>
+  | .member .. | .construct .. | .mapLit .. | .structDef .. | .enumDef .. | .refineDef .. | .typeAlias .. | .query .. | .neg .. | .notE .. | .bin .. | .cmp .. | .andE .. | .orE .. | .range .. | .tuple .. | .block .. | .arrayLit .. | .optionLit .. | .logicLit .. =>
     elabExprValues ctx se exp
   | .ite .. | .forE .. | .gen .. | .loop .. | .brk .. | .ret .. | .caseE .. | .decl .. | .set .. =>
     elabExprControl ctx se exp
@@ -810,6 +810,13 @@ partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) 
     out of range (or, for `Find`, when there is no such element). -/
 partial def elabMethod (ctx : Ctx) (p : Pos) (r : R) (m : String) (args : List SExpr) (bracket : Bool) :
     EM R := do
+  -- (the methods of chars, code points, ints and floats)
+  if let some res ← scalarMethod? p r m args bracket then return res
+  -- (a tuple of one element type is an array of its elements where an array
+  -- is expected, as its receiver is: `('a', 'b').Slice[1]`)
+  let r ← match r.ty with
+    | .tup (t0 :: ts) => if ts.all (· == t0) then pure ⟨← coerce p r (.arr t0), .arr t0⟩ else pure r
+    | _ => pure r
   let .arr t := r.ty | eerr p s!"{r.ty.show} has no method '{m}'{ctx.anyWhy r}"
   -- (the methods that cannot fail take parentheses, #150)
   let total := ["RemoveAllElements", "ReplaceAllElements", "ReplaceAll"].contains m
@@ -1111,7 +1118,11 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
     let ra ← asArr ra rb.ty
     let rb ← asArr rb ra.ty
     checkTys op ra.ty rb.ty
-    return result (p2 (ordOf op ra.ty) ra.e rb.e) ra.ty
+    -- (Verse Core checks the right operand at the left's type, else infers
+    -- its type: one of another type that has no type of its own, `""` after
+    -- `()`, goes through a temporary of its type, `inferable`)
+    let eb ← if ra.ty.toVTy ctx.types == rb.ty.toVTy ctx.types then pure rb.e else inferable rb
+    return result (p2 (ordOf op ra.ty) ra.e eb) ra.ty
   | _ =>
     -- a chain: each operand is evaluated once, every adjacent pair is checked,
     -- and the result is the leftmost operand (Book of Verse §5.4)
@@ -2339,6 +2350,9 @@ partial def elabConstructionValue (ctx : Ctx) (p : Pos) (name : String) (targs :
     | a => eerr a.pos "a struct field is given as Name := value"
   for (f, _) in given do
     if (fs.find? (·.1 == f)).isNone then eerr p s!"struct {name} has no field '{f}'"
+    -- (a `<final>` field keeps its default: no construction gives it a value)
+    if let some (q, _) := ctx.types.finalFields.find? fun (q, g) => g == f && ctx.types.isSub name q then
+      eerr p s!"field '{f}' is <final> in {q}: a construction of {name} cannot give it a value"
   -- (only the first would be evaluated)
   if let some f := (given.map (·.1)).find? (fun f => (given.filter (·.1 == f)).length > 1) then
     eerr p s!"field '{f}' of {name} is given twice"
@@ -2446,12 +2460,19 @@ partial def elabCase (ctx : Ctx) (p : Pos) (scrut : SExpr) (arms : List (Option 
   let elabArms : List (Option SExpr × SExpr) → EM (Expr × Ty) := fun arms => do
     let mut results : Array (Option Expr × R) := #[]
     for (pat, v) in arms do
+      -- (an arm after `_`, or with a pattern an earlier one has, is never
+      -- reached: Book of Verse ch. 9, "Unreachable Case Detection")
+      if results.any (·.1.isNone) then
+        eerr ((pat.map (·.pos)).getD v.pos) "this case arm is never reached: it comes after _, which matches everything"
       let rv ← elabE ctx v exp
       match pat with
       | none => results := results.push (none, rv)
       | some pe =>
         let rp ← elabE ctx pe (some rs.ty)
         if rp.ty != rs.ty then eerr pe.pos s!"pattern of type {rp.ty.show} for a value of type {rs.ty.show}"
+        if let .lit v := rp.e then
+          if results.any (fun | (some (.lit w), _) => reprStr w == reprStr v | _ => false) then
+            eerr pe.pos "this case arm is never reached: an earlier arm has the same pattern"
         -- (a pattern is tested in a condition, #156)
         if Suspend.hasSusp (fun f => ctx.sigs.any fun s => s.idx == f && s.suspends) rp.e then
           eerr pe.pos "a case pattern cannot suspend: it is tested as a condition (#156)"

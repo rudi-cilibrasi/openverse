@@ -183,8 +183,9 @@ def checkNewLocal (ctx : Ctx) (p : Pos) (n : String) : EM Unit := do
   if ctx.lookup n |>.isSome then
     let n := Choice.shownName n
     eerr p s!"'{n}' is already defined; Verse does not allow shadowing (use set {n} = … for a var)"
-  -- (nor a soft built-in's: a local cannot hide one, #132)
-  if (ctx.sig? n).isSome || builtins.contains n || softBuiltins.contains n then
+  -- (nor a soft built-in's: a local cannot hide one, #132; nor an
+  -- overloaded function's, whose overloads have names of their own, #74)
+  if (ctx.sig? n).isSome || (ctx.types.overloads.lookup n).isSome || builtins.contains n || softBuiltins.contains n then
     eerr p s!"'{n}' is already the name of a function or constant"
   if let some c := ctx.selfClass then
     if (ctx.types.fields c).any (·.1 == n) || ctx.hasMethod c n ||

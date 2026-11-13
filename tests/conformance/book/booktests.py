@@ -389,7 +389,8 @@ TEST_MODULES = ["CoroUtils", "TestUtils", "ProfUtils", "FunctionUtils", "FloatCo
 TEST_NAMES = {
     "FloatConstants": ["DoubleMax", "PosInfty", "SmallestNormal", "HalfSmallestNormal",
                        "LargestSubnormal", "SmallestSubnormal", "SmallestNormalTimesOneHalf",
-                       "JustUnderHalfSmallestNormal"],
+                       "JustUnderHalfSmallestNormal", "Pow2_52", "Pow2_64", "Pow2_Minus25",
+                       "Pow2_Minus28"],
     "CoroUtils": ["LogEvent", "GetEventLogString", "WaitTicks", "Tick", "GetNumActiveCoroutines",
                   "SuppressNextReset", "ResetThenLogEvent", "SignalTransacts"],
     "TestUtils": ["InvokeTransacts", "AreClassesEqual", "BitcastFloatToInt"],
@@ -884,6 +885,11 @@ def run_program(path):
     if os.path.exists(vbc):
         os.remove(vbc)
     rc, out, err = run([OPENVERSE, "run", path, "--fuel", FUEL, "--emit", vbc])
+    # (the Lean runtime out of memory: its allocator prints this and exits with
+    # 1, which no Lean program can catch; it is the resource limit cverse
+    # reports as `limit: memory`, exit 3: docs/FORMAT.md, "Exit protocol")
+    if rc == 1 and first_line(err) == "INTERNAL PANIC: out of memory":
+        rc, err = 3, "limit: memory\n"
     r = {"rc": rc, "out": out, "err": err, "diag": diag(err, path)}
     if rc is None:
         r["internal"] = "hang (Lean): no result in %ds" % TIMEOUT
@@ -981,7 +987,8 @@ def verdict(c, results, parsed, work):
             return "agrees", "%s: %s" % (outcome, shown)
         return "wrong-output", outcome
     if c.expect == "runs":
-        if rc in (0, 2):
+        # (a runtime error, here as for `runtime-error`, may be a resource limit)
+        if rc in (0, 2, 3):
             return "agrees", outcome
         return "wrong-output", outcome
     return "internal-error", "harness: no expectation"

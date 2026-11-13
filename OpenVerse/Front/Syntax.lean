@@ -165,6 +165,11 @@ inductive SExpr where
   /-- `type{_X:t where c₁, c₂, …}`: a refinement type (Book of Verse ch. 11):
       the variable, the base type and the conditions. -/
   | refineDef : Pos → String → STy → List SExpr → SExpr
+  /-- `t` in `name := t` or `name(u:type, …) := t`, at the top level or in a
+      module: a type alias, a name for the type `t`, with its parameters (Book
+      of Verse ch. 10, "Aliases"; ch. 11, "Type Aliases"). `Aliases.expand`
+      writes `t` wherever the name is used, before elaboration. -/
+  | typeAlias : Pos → List TParam → STy → SExpr
   /-- `Name{F := e, …}` or `name(t₁, …){F := e, …}`: a struct value. -/
   | construct : Pos → String → List STy → List SExpr → SExpr
   /-- `map{k => v, …}`. -/
@@ -182,7 +187,8 @@ def SExpr.pos : SExpr → Pos
   | .orE p _ _ | .range p _ _ | .tuple p _ | .block p _ | .arrayLit p _
   | .optionLit p _ | .logicLit p _ | .ite p _ _ _ | .forE p _ _ | .gen p _ _ _
   | .loop p _ | .brk p | .ret p _ | .caseE p _ _ | .decl p _ _ _ _ | .set p _ _ _
-  | .structDef p _ _ _ | .enumDef p _ _ | .refineDef p _ _ _ | .construct p _ _ _ | .mapLit p _ => p
+  | .structDef p _ _ _ | .enumDef p _ _ | .refineDef p _ _ _ | .typeAlias p _ _ | .construct p _ _ _
+  | .mapLit p _ => p
 
 /-- Immediate expression children, in source order, including call heads,
     construction field bindings and case patterns. Type definitions are
@@ -203,7 +209,7 @@ def SExpr.children : SExpr → List SExpr
   | .caseE _ sc arms => sc :: arms.flatMap fun (pt, v) => pt.toList ++ [v]
   | .mapLit _ kvs => kvs.flatMap fun (k, v) => [k, v]
   | .int .. | .char .. | .char32 .. | .float .. | .ident .. | .brk ..
-  | .structDef .. | .enumDef .. | .refineDef .. => []
+  | .structDef .. | .enumDef .. | .refineDef .. | .typeAlias .. => []
 
 /-- `e` with `f` applied to each of its immediate children, the ones
     `children` lists, in that order; everything else is kept. -/
@@ -236,7 +242,22 @@ def SExpr.mapChildrenM [Monad m] (f : SExpr → m SExpr) (e : SExpr) : m SExpr :
   | .caseE p sc arms => return .caseE p (← f sc) (← arms.mapM fun (pt, v) => do return (← pt.mapM f, ← f v))
   | .mapLit p kvs => return .mapLit p (← kvs.mapM fun (k, v) => do return (← f k, ← f v))
   | .int .. | .char .. | .char32 .. | .float .. | .ident .. | .brk ..
-  | .structDef .. | .enumDef .. | .refineDef .. => return e
+  | .structDef .. | .enumDef .. | .refineDef .. | .typeAlias .. => return e
+
+/-- The type an expression writes when its names are types' names: a name,
+    `M.c`, or a name applied to such (`box(int)`; `c()` is `c`). A definition
+    `X := e` at the top level or in a module whose `e` is one is a type alias
+    when it is a type (`Aliases.writesType`). -/
+partial def SExpr.asType? : SExpr → Option STy
+  | .ident _ n => some (.name n)
+  | .member _ x m =>
+    if m.startsWith "(" then none else match x.asType? with
+      | some (.name q) => some (.name s!"{q}.{m}")
+      | _ => none
+  | .app _ f args false => match f.asType? with
+    | some (.name n) => if args.isEmpty then some (.name n) else (args.mapM SExpr.asType?).map (.app n)
+    | _ => none
+  | _ => none
 
 /-- `e` with each identifier that `σ` names replaced by its expression
     (Verse has no shadowing, so a name means one thing in `e`). -/
@@ -288,6 +309,60 @@ def typeDefaultPrefix : String := "$typeDefault:"
 def STop.isTypeDefault : STop → Bool
   | .const _ n .. => ((n.splitOn "::").getLast?.getD n).startsWith typeDefaultPrefix
   | _ => false
+
+/-- Names no definition may take, at any scope (a module's, a class's, a
+    function's parameters and locals). The Book of Verse says it of `_`
+    (ch. 1: "The single underscore `_` is reserved and cannot be used as an
+    identifier"); its tests reserve the others: the names of
+    `Tests/NamesReservedForFuture.versetest` for the future (with `first`,
+    `assert` and `let`, which openverse also reads as macros before `{` or
+    `(`, and `using`, one of the parser's `keywords`, which no name can be
+    anyway), and the built-in names `Self`, `subtype`, `castable_subtype`
+    and `local` (`Self.versetest`, `Subtype.versetest`,
+    `QualifiedIdentifier.versetest`). -/
+def reservedNames : List String :=
+  ["_", "Self", "subtype", "castable_subtype", "local",
+   "abstracts", "as", "assert", "backslash", "bag", "char8", "char16", "collection", "contravariant",
+   "covariant", "element", "embargo", "ensure", "fails", "find", "first", "float16", "float32", "float64",
+   "float128", "fold", "function", "given", "guard", "implies", "instance", "int8", "int16", "int32",
+   "int64", "interacts", "introspects", "invariant", "iterates", "known", "last", "let", "markup",
+   "permutation", "nat", "nat8", "nat16", "nat32", "nat64", "over", "provided", "random", "repeat",
+   "sequence", "string8", "string16", "string32", "subclass", "succeeds", "syntax", "throws", "trait",
+   "truth", "try", "union", "using", "verify", "when", "while"]
+
+/-- Why a type's name is not one (`resolveTy`, and a type alias's names). -/
+def unknownTypeMessage (n : String) : String :=
+  s!"unknown type '{n}' (supported: int, logic, char, string, void, []t, ?t, tuple(…), and structs and enums)"
+
+/-- The names a definition introduces as written, each where it is written:
+    its own (the last part of a module member's `A::B::F`), its type
+    parameters and parameters, a struct's or class's fields and methods, and
+    the locals and generators of its bodies and defaults. A qualified method
+    `(c:)F`, a named argument `?X := e`, a construction's `F := e` and the
+    compiler's `$` names are not definitions. -/
+partial def SExpr.definedNames : SExpr → List (Pos × String)
+  | .decl p n _ _ x => (if n.startsWith "?" then [] else [(p, n)]) ++ x.definedNames
+  | .gen p x k s => (p, x) :: (k.toList.map (p, ·)) ++ s.definedNames
+  | .construct _ _ _ fs => fs.flatMap fun
+    | .decl _ _ _ _ x => x.definedNames
+    | f => f.definedNames
+  | .structDef p tps _ fs => tps.map (fun tp => (tp.pos, tp.name)) ++
+      fs.flatMap fun (n, _, d, _) => (p, n) :: (d.map SExpr.definedNames).getD []
+  | .typeAlias _ tps _ => tps.map fun tp => (tp.pos, tp.name)
+  | e => e.children.flatMap SExpr.definedNames
+
+partial def STop.definedNames : STop → List (Pos × String)
+  | .fn p n ps tps _ _ body =>
+    (if n.startsWith "(" then [] else [(p, n)]) ++ tps.map (fun tp => (tp.pos, tp.name)) ++
+      ps.flatMap (fun prm => (p, prm.name) :: (prm.default.map SExpr.definedNames).getD []) ++ body.definedNames
+  | .const p n _ body =>
+    -- (a module's marker, `$module:A::B`, defines `B`)
+    (if n.startsWith "$module:" then [(p, (n.drop "$module:".length).toString)]
+     else [(p, n)]) ++ body.definedNames
+  | .classDef p n tps _ _ _ fs _ ms =>
+    (p, n) :: tps.map (fun tp => (tp.pos, tp.name)) ++
+      fs.flatMap (fun (f, _, d, _) => (p, f) :: (d.map SExpr.definedNames).getD []) ++
+      ms.flatMap STop.definedNames
 
 /-- Type aliases mentioned as bare names; applications keep declaration heads. -/
 partial def STy.bareNames : STy → List String

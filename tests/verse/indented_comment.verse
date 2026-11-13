@@ -3,7 +3,7 @@
     indented more than it.
 
     Blank lines inside are part of it, and so is Main():void = Print("no").
-        Deeper lines are too. <# and #> mean nothing here.
+        Deeper lines are too. A block comment <# here #> is one inside it.
 
 Main():void =
     Print("one")
@@ -19,6 +19,6 @@ Main():void =
         Print("hidden too")
     else:
         Print("not printed")
-    # `<#` opens a nested block comment only when the next character is not `>`
+    # block comments nest
     <# outer <# inner #> still outer #>
     Print("five")

@@ -2,6 +2,8 @@
    `elabProgramCore`); public declarations retain OpenVerse.Front names. -/
 import OpenVerse.Front.Elab.Lowering
 import OpenVerse.Front.InitializerConvergence
+import OpenVerse.Front.Aliases
+import OpenVerse.Front.BuiltinValues
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -34,13 +36,165 @@ structure Admitted where
       (`EffectPolicy.constructionFx`), by its name. -/
   constructionFx : Std.HashMap String (List String)
 
+/-- Each name is defined once in its scope, the top level or a module: only
+    functions of one scope share a name, as its overloads. A class, an
+    interface, a struct, an enum, a constant and a function of one name are
+    two definitions of it (two modules of one name, and a module and a
+    definition, are `resolveModules`' to refuse). -/
+def checkDefinedOnce (tops : List STop) : Except String Unit := do
+  -- (each qualified name seen, and whether only functions have it so far)
+  let mut seen : Std.HashMap String Bool := {}
+  for t in tops do
+    let (p, n, isFn) := match t with
+      | .fn p n .. => (p, n, true)
+      | .const p n .. | .classDef p n .. => (p, n, false)
+    -- (not the parser's markers, `$module:…`, nor the compiler's names)
+    if (qualParts n).any (·.startsWith "$") then continue
+    if let some onlyFns := seen[n]? then
+      if !(isFn && onlyFns) then
+        throw s!"{p.show}: '{".".intercalate (qualParts n)}' is defined twice (only functions can be overloaded)"
+    seen := seen.insert n isFn
+
+/-- The constants of a program, modules resolved, in the order written: each
+    with the constants its value names. -/
+partial def constantUses (tops : List STop) : List (Pos × String × List String) :=
+  let consts : List (Pos × String × SExpr) := tops.filterMap fun
+    | .const _ _ _ (.structDef ..) | .const _ _ _ (.enumDef ..) | .const _ _ _ (.refineDef ..) => none
+    | .const p n _ e => if (qualParts n).any (·.startsWith "$") then none else some (p, n, e)
+    | _ => none
+  let names : Std.HashSet String := Std.HashSet.ofList (consts.map (·.2.1))
+  let rec uses : SExpr → List String
+    | .ident _ n => if names.contains n then [n] else []
+    | e => e.children.flatMap uses
+  consts.map fun (p, n, e) => (p, n, (uses e).eraseDups)
+
+/-- A constant's value is computed from the constants it names, so none may
+    name itself, directly or through others (`X:int = X`, or `I:int = J` and
+    `J:int = I`): its computation would never end (as a field default that
+    depends on itself, which the elaboration of defaults refuses). A
+    constant may name one defined after it. -/
+def checkConstantCycles (tops : List STop) : Except String Unit := do
+  let graph := constantUses tops
+  let shown (n : String) : String := ".".intercalate (qualParts n)
+  for (p, n, _) in graph do
+    -- (a path from `n` back to it, breadth first)
+    let mut seen : List String := []
+    let mut todo : List (String × List String) := [(n, [])]
+    while !todo.isEmpty do
+      let (m, path) := todo.head!
+      todo := todo.tail!
+      for u in ((graph.find? (·.2.1 == m)).map (·.2.2)).getD [] do
+        if u == n then
+          let via := (path ++ [m]).drop 1
+          throw s!"{p.show}: the value of the constant {shown n} depends on itself{if via.isEmpty then "" else s!" (through {", ".intercalate (via.map shown)})"}"
+        if !seen.contains u then
+          seen := u :: seen
+          todo := todo ++ [(u, path ++ [m])]
+
+/-- No definition takes a reserved name (`reservedNames`), at any scope. -/
+def checkReservedNames (tops : List STop) : Except String Unit := do
+  for t in tops do
+    for (p, n) in t.definedNames do
+      let n := (n.splitOn "::").getLast?.getD n
+      if reservedNames.contains n then throw s!"{p.show}: '{n}' is reserved: no definition can take it"
+
+mutual
+/-- `checkDefers` in an expression. -/
+partial def checkDefersIn : SExpr → Except String Unit
+  | .block _ es => checkDefersSeq es
+  -- (an `if`'s or a `for`'s clauses are a sequence too, whose value is the
+  -- last one's)
+  | .ite _ cs t e => do checkDefersSeq cs; checkDefersIn t; e.forM checkDefersIn
+  | .forE _ cs b => do checkDefersSeq cs; checkDefersIn b
+  | .app p (.ident _ "$defer") _ _ =>
+    throw s!"{p.show}: defer: is a statement: it has no value, so it cannot end a block or be where a value is taken (Book of Verse ch. 7)"
+  | e => e.children.forM checkDefersIn
+
+/-- `checkDefers` in a sequence: a defer with code after it is a statement,
+    whose body is checked. -/
+partial def checkDefersSeq (es : List SExpr) : Except String Unit := do
+  for (e, i) in es.zipIdx do
+    match e with
+    | .app _ (.ident _ "$defer") args _ => if i + 1 < es.length then args.forM checkDefersIn else checkDefersIn e
+    | e => checkDefersIn e
+end
+
+/-- A `defer:` is a statement of a block, with code after it in the block
+    (Book of Verse ch. 7: it "cannot be used in positions where a value is
+    expected"): not a block's last, whose value is the block's, nor an operand
+    (`A and defer{…}`), a branch or a body of its own. -/
+partial def checkDefers (tops : List STop) : Except String Unit := do
+  let goField (fs : List (String × STy × Option SExpr × Bool)) : Except String Unit :=
+    fs.forM fun (_, _, d, _) => d.forM checkDefersIn
+  let rec goTop : STop → Except String Unit
+    | .fn _ _ ps _ _ _ body => do ps.forM (·.default.forM checkDefersIn); checkDefersIn body
+    | .const _ _ _ (.structDef _ _ _ fs) => goField fs
+    | .const _ _ _ e => checkDefersIn e
+    | .classDef _ _ _ _ _ _ fs _ ms => do goField fs; ms.forM goTop
+  tops.forM goTop
+
+/-- A literal value, which neither fails nor has several values. -/
+partial def SExpr.isLiteral : SExpr → Bool
+  | .int .. | .char .. | .char32 .. | .float .. => true
+  | .str _ parts => parts.all fun | .text _ => true | .code _ => false
+  | .ident _ n => n == "true" || n == "false"
+  | .tuple _ es | .arrayLit _ es => es.all SExpr.isLiteral
+  | .mapLit _ kvs => kvs.all fun (k, v) => k.isLiteral && v.isLiteral
+  | _ => false
+
+/-- A `for` with no generator runs its body at most once, when its clauses
+    succeed (Book of Verse ch. 7, "For Without a Generator"): clauses that
+    cannot fail, no clause at all, or literals and bindings of literals
+    (`for(X := array{1, 2})` for `for(X : array{1, 2})`, `for(1)`), are
+    refused, as the Book's tests do ("Not an iterable"). -/
+partial def checkForClauses (tops : List STop) : Except String Unit := do
+  let literalClause : SExpr → Bool
+    | .decl _ _ _ false v => v.isLiteral
+    | c => c.isLiteral
+  let rec go : SExpr → Except String Unit
+    | .forE p cs b => do
+      if cs.all literalClause then
+        throw s!"{p.show}: this for has no generator (X : A, or X := A..B) and its clauses cannot fail, so it would run its body once: write X : A to iterate over A (Book of Verse ch. 7)"
+      cs.forM go; go b
+    | .structDef _ _ _ fs => fs.forM fun (_, _, d, _) => d.forM go
+    | e => e.children.forM go
+  for t in tops do
+    match t with
+    | .fn _ _ ps _ _ _ body => ps.forM (·.default.forM go); go body
+    | .const _ _ _ e => go e
+    | .classDef _ _ _ _ _ _ fs _ ms =>
+      fs.forM fun (_, _, d, _) => d.forM go
+      for m in ms do
+        if let .fn _ _ ps _ _ _ body := m then ps.forM (·.default.forM go); go body
+
+/-- `return` leaves a function's body, so it is refused where there is none: in
+    a constant's value, and in a field's default, which is evaluated where an
+    object is constructed and would leave the function that constructs it. -/
+def checkReturns (tops : List STop) : Except String Unit := do
+  let ret? : SExpr → Option SExpr := Refine.findPart (fun | .ret .. => true | _ => false) false
+  for t in tops do
+    match t with
+    | .const _ n _ (.structDef _ _ _ fs) | .classDef _ n _ _ _ _ fs _ _ =>
+      for (f, _, d, _) in fs do
+        if let some r := d.bind ret? then
+          throw s!"{r.pos.show}: return is not allowed in a field's default (of '{f}' in {n})"
+    | .const _ n _ e =>
+      if let some r := ret? e then
+        throw s!"{r.pos.show}: return is not allowed in a constant's value (of {n}), which is in no function"
+    | .fn .. => pure ()
+
 /-- Source admission and the prelude, the first phase of `elabProgramCore`:
     the source and the entry expression are admitted by the effect policy and
-    the source profile; the program's own types do not take built-in names;
-    modules are resolved (#112); and the helpers the program needs are added,
+    the source profile; the program's own types do not take built-in names,
+    no definition takes a reserved one (`checkReservedNames`), each name is
+    defined once in its scope (`checkDefinedOnce`), and its
+    constants and field defaults have no `return` (`checkReturns`);
+    modules are resolved (#112), and no constant depends on itself
+    (`checkConstantCycles`); and the helpers the program needs are added,
     those the source names alike kept apart from them (#210). -/
 def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitted := do
   EffectPolicy.check allTops0r opts.entry
+  EffectPolicy.checkPlaces allTops0r
   SourceProfile.check opts.profile allTops0r opts.entry
   -- rationals (#116): the helpers, for a program that may use them
   let isRatMarker : STop → Bool := fun
@@ -54,6 +208,11 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
     | .const p n _ (.structDef ..) | .const p n _ (.enumDef ..) | .classDef p n .. =>
       if ("char32" :: typeNames).contains n then throw s!"{p.show}: {n} is a built-in type"
     | _ => pure ()
+  checkReservedNames allTops0r
+  checkDefinedOnce allTops0r
+  checkReturns allTops0r
+  checkDefers allTops0r
+  checkForClauses allTops0r
   let helpers ← if usesRat then ratTops else pure []
   let helpers := helpers ++ (← if usesReplaceAll then replaceAllTops else pure [])
   -- These compiler-owned implementations expand finite intrinsic operations:
@@ -67,7 +226,14 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
     | some e => [.fn e.pos "$Do" [] [] ["decides"] (.name "void") (.app e.pos (.ident e.pos "$Show") [e] false)]
     | none => []
   let resolved ← resolveModules (allTops000 ++ rawEntry)
+  -- type aliases: each written out where it is used, so that nothing after
+  -- this knows aliases exist
+  let resolved ← Aliases.expand resolved
+  -- (the built-ins it names as values, as definitions of their own: after
+  -- the aliases, whose names are no values' and bind nothing)
+  let resolved := BuiltinValues.wrappers resolved ++ resolved
   let (typeDefaults, resolved) := resolved.partition (·.isTypeDefault)
+  checkConstantCycles resolved
   let resolved := if opts.extendedDefaults then resolved
     else resolved.map InitializerConvergence.markSource
   -- Resolve source names before deciding which soft-library definitions are

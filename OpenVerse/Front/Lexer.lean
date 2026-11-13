@@ -36,7 +36,9 @@
   A `<#>` indented comment is the rest of its line and every following line
   indented more than the line that contains the `<#>` (blank lines included).
   It ends before the first non-blank line indented no more than that line.
-  `<#` opens a nested block comment only when the next character is not `>`.
+  `<#` opens a nested block comment only when the next character is not `>`,
+  also inside a `#` or `<#>` comment, where a `#>` that closes none is an
+  error; inside a string literal, a block comment is removed.
 -/
 import OpenVerse.Core.Float
 namespace OpenVerse.Front
@@ -160,11 +162,6 @@ def checkChars : LexM Unit := do
       return t
     throw s!"{at_.line}:{at_.col}: character {uPlus s.cs[i]!.toNat} is not allowed in Verse source"
 
-/-- Skip to the end of the current line (the line break is not consumed). -/
-partial def skipRestOfLine : LexM Unit := do
-  let s ← get
-  if s.pos < s.cs.size && breakLen s.cs s.pos == 0 then advance; skipRestOfLine
-
 /-- Skip a nested block comment; the opening `<#` is already consumed. -/
 partial def skipBlockComment (depth : Nat) : LexM Unit := do
   match ← peekC, ← peekC 1 with
@@ -175,6 +172,21 @@ partial def skipBlockComment (depth : Nat) : LexM Unit := do
     if (← peekC 2) == some '>' then advance; skipBlockComment depth
     else advance; advance; skipBlockComment (depth + 1)
   | _, _ => advance; skipBlockComment depth
+
+/-- Skip to the end of the current line (the line break is not consumed): the
+    rest of a `#` comment, or a line of a `<#>` one. The markers of block
+    comments still count there, as in the Book of Verse's tests of the
+    lexical grammar (`TimSyntax.versetest`): `<#` opens a nested block
+    comment, which may end on a later line, and a `#>` that closes none is
+    an error (`<#>` is neither). -/
+partial def skipRestOfLine : LexM Unit := do
+  let s ← get
+  if s.pos < s.cs.size && breakLen s.cs s.pos == 0 then
+    match ← peekC, ← peekC 1, ← peekC 2 with
+    | some '#', some '>', _ => lexErr "'#>' closes no block comment"
+    | some '<', some '#', some '>' => advance; advance; advance; skipRestOfLine
+    | some '<', some '#', _ => advance; advance; skipBlockComment 1; skipRestOfLine
+    | _, _, _ => advance; skipRestOfLine
 
 /-- Skip a `<#>` indented comment, at its `<#>`: the rest of the line, then
     every following line that is blank or indented more than the line of the
@@ -258,6 +270,12 @@ partial def readString (parts : Array StrPart) (cur : String) : LexM (List StrPa
       | some e => advance; readString parts (cur.push e)
       | none => lexErr s!"unknown escape \\{c}"
     | none => lexErr "unterminated string literal"
+  -- (a block comment inside a string is removed, Book of Verse ch. 1: "The
+  -- compiler removes comments from strings"; `\<\#` is the text `<#`)
+  | some '<' =>
+    if (← peekC 1) == some '#' && (← peekC 2) != some '>' then
+      advance; advance; skipBlockComment 1; readString parts cur
+    else advance; readString parts (cur.push '<')
   | some '{' =>
     advance
     let s ← get
@@ -432,6 +450,9 @@ partial def lexAll (acc : Array Token) : LexM (Array Token) := do
           let m := (d ++ f).toNat!
           let e10 : Int := ex - f.length
           let x : Float := if e10 < 0 then Float.ofScientific m true e10.natAbs else Float.ofScientific m false e10.toNat
+          -- (one that rounds to infinity is out of range, as an int literal
+          -- past 64 bits is)
+          if x.isInf then errHere "this float literal is out of range: it rounds to infinity (the largest float is 1.7976931348623157e+308)"
           return (← lexAll (← emit (.float (VFloat.canon x))))
         lexAll (← emit (.int d.toNat!))
     else if c == '"' then

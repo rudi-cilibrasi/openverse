@@ -213,6 +213,9 @@ structure TyEnv where
   /-- Source construction contracts, collected before helper generation.
       Compiler implementation types have no source-declared budget. -/
   constructionFx : Std.HashMap String (List String) := {}
+  /-- The `<final>` fields, each with the class or interface that declares
+      it: no class below gives it another default, no construction a value. -/
+  finalFields : List (String × String) := []
   /-- Each struct: its fields in order (name, type, default value). The
       field types of a parametric struct mention its parameters as `Ty.param`. -/
   structs : List (String × List (String × Ty × Option SExpr)) := []

@@ -152,6 +152,8 @@ check "scheduler model fuzzing (${FUZZ_MODEL_SCHED:-50} programs, against a mode
   scripts/fuzz-model-sched.sh "${FUZZ_MODEL_SCHED:-50}" "$seed"
 check "GADT model fuzzing (${FUZZ_MODEL_GADT:-150} programs, against twenty-nine models of the docs)" \
   scripts/fuzz-model-gadt.sh "${FUZZ_MODEL_GADT:-150}" "$seed"
+check "GADT models through type aliases (${FUZZ_MODEL_GADT_ALIASES:-150} programs, their types' names written through aliases)" \
+  scripts/fuzz-model-gadt.sh "${FUZZ_MODEL_GADT_ALIASES:-150}" "$seed" --aliases
 check "FIFO event model fuzzing (${FUZZ_MODEL_FIFO:-60} programs, --event-fifo)" \
   scripts/fuzz-model-fifo.sh "${FUZZ_MODEL_FIFO:-60}" "$seed"
 check "heterogeneous choice model fuzzing (${FUZZ_MODEL_HETEROGENEOUS:-120} programs)" \

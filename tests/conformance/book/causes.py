@@ -136,6 +136,8 @@ rule("var-specifiers", REF, line=r"\bvar\s*<|<getter\(|<setter\(")
 rule("live-variables", REF, line=r"\b(live|when|upon|await|batch)\b")
 rule("union-types", REF, line=r"\bunion\b")
 rule("union-types", REF, prog=r":=\s*union\b")
+# (`scoped_X := scoped{X}`, an access scope: not a type)
+rule("syntax-other", REF, line=r"\bscoped\s*\{")
 rule("type-aliases", REF, diag=r"a constant in a module needs its type")
 rule("type-aliases", REF, line=r"^\s*[A-Za-z_]\w*\s*:=\s*(\?|\[|type\s*\{|tuple\(|int\b|float\b|string\b|"
      r"logic\b|[a-z_]\w*\s*->|subtype\(|[a-z_]\w*\s*$)")

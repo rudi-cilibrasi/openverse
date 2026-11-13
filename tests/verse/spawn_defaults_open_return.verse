@@ -1,6 +1,6 @@
-first(a:type) := interface { Tag():a }
+leading(a:type) := interface { Tag():a }
 sink(b:type) := interface { Get(?Extra:b)<suspends>:b }
-both(a:type,b:subtype(comparable)) := class(first(a),sink(b)):
+both(a:type,b:subtype(comparable)) := class(leading(a),sink(b)):
     V:a
     SeedB:b
     Tag<override>():a=V

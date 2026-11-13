@@ -66,8 +66,14 @@ partial def elabAppBaseWith
         ctx.noteOverload p name o
         elabApp ctx p (.ident p o) args bracket exp) args
     else
-    -- (a soft built-in the program defines is the program's)
-    let builtinName := if (softBuiltins.contains name || name == "any") && (ctx.sig? name).isSome then "$program" else name
+    -- (a soft built-in the program defines is the program's; `$F` is the
+    -- built-in `F` whatever the program defines, as a prelude or a
+    -- built-in's value definition calls it)
+    let hidden := (name.drop 1).toString
+    let builtinName :=
+      if name.startsWith "$" && (builtins.contains hidden || softBuiltins.contains hidden) then hidden
+      else if (softBuiltins.contains name || name == "any") && (ctx.sig? name).isSome then "$program" else name
+    let name := if builtinName == "$program" then name else builtinName
     match builtinName with
     | "Concatenate" =>
       -- (#150) an array of arrays flattened, or several arrays one after
@@ -208,17 +214,16 @@ partial def elabAppBaseWith
         | some op => return ⟨.prim op [← fl a], .float⟩
         | none => eerr p s!"{name} takes {if name == "Lerp" then "three" else "two"} floats"
       | _, _ => eerr p s!"{name} takes {if name == "Lerp" then "three floats" else if name == "Pow" || name == "Log" then "two floats" else if name == "ArcTan" then "one or two floats" else "one float"}"
-    | "Round" | "$Round" | "Int" =>
+    | "Round" | "Int" =>
       -- a float to an int (#127): `Round` ties to even, `Int` towards zero;
       -- failing on NaN, an infinity or out of range
-      let shown := if name == "$Round" then "Round" else name
-      needBracket shown
+      needBracket name
       match args with
       | [a] =>
         let r := widenR ctx.types (← elabE ctx a (some .float))
-        if r.ty != .float then eerr p s!"{shown} takes a float, found {r.ty.show}"
-        return ⟨.prim (if shown == "Round" then .fround else .ftrunc) [r.e], .int⟩
-      | _ => eerr p s!"{shown} takes one argument"
+        if r.ty != .float then eerr p s!"{name} takes a float, found {r.ty.show}"
+        return ⟨.prim (if name == "Round" then .fround else .ftrunc) [r.e], .int⟩
+      | _ => eerr p s!"{name} takes one argument"
     | "Floor" | "Ceil" =>
       -- (of a float, #127: failable, so with brackets; of a rational or
       -- an int, with either, as the Book writes both)
@@ -266,6 +271,49 @@ partial def elabAppBaseWith
       let op := if name == "Min" then Prim.le else Prim.ge
       return ⟨.seq (.assign ta es[0]!) (.seq (.assign tb es[1]!)
         (.ite (p2 op (.local ta) (.local tb)) (.local ta) (.local tb))), .int⟩
+    | "Clamp" | "Sgn" =>
+      -- (the Book's Runtime API and Epic's: `Clamp(Val, A, B)`, the median of
+      -- the three, so the order of A and B does not matter, of ints or of
+      -- floats, among which NaN orders above +Inf; `Sgn(X)`, -1, 0 or 1 of
+      -- an int or a float, NaN of NaN; each argument evaluated once, in order)
+      if bracket then eerr p s!"{name} cannot fail: call it with {name}(…)"
+      let some a0 := args.head? | eerr p s!"{name} takes {if name == "Clamp" then "three arguments" else "one argument"}"
+      let r0 := widenR ctx.types (← elabArithmeticOperandWith elabE ctx p (← elabE ctx a0 none) name)
+      let isF := r0.ty == .float
+      let t : Ty := if isF then .float else .int
+      let operand (a : SExpr) (r : R) : EM Expr := do
+        if isF then
+          if r.ty != .float then eerr a.pos s!"{name} takes floats or ints, found float and {r.ty.show}"
+          return r.e
+        coerce a.pos r .int
+      let lit (i : Int) : Expr := .lit (if isF then .float (VFloat.canon (Float.ofInt i)) else .int i)
+      let ta ← fresh t
+      let ea ← operand a0 r0
+      match name, args with
+      | "Sgn", [_] =>
+        let (gt, lt) := if isF then (Prim.fgt, Prim.flt) else (Prim.gt, Prim.lt)
+        -- (NaN, and zero, are their own sign)
+        return ⟨.seq (.assign ta ea) (.ite (p2 gt (.local ta) (lit 0)) (lit 1)
+          (.ite (p2 lt (.local ta) (lit 0)) (lit (-1)) (.local ta))), t⟩
+      | "Clamp", [_, a, b] =>
+        let ra := widenR ctx.types (← elabE ctx a (some t))
+        let tb ← fresh t
+        let ea' ← operand a ra
+        let rb := widenR ctx.types (← elabE ctx b (some t))
+        let tc ← fresh t
+        let eb ← operand b rb
+        -- `X ≤ Y`, NaN above every float: X ≤ Y (Verse Core's `fle`, which
+        -- holds of a NaN and itself), or Y is NaN (not ≤ +Inf)
+        let le (x y : Nat) : Expr :=
+          if isF then .ite (p2 .fle (.local x) (.local y)) (.local x)
+            (.ite (p2 .fle (.local y) (.lit (.float 0x7FF0000000000000))) (.prim .fail []) (.local x))
+          else p2 .le (.local x) (.local y)
+        let (lo, hi, m) := (← fresh t, ← fresh t, ← fresh t)
+        let pick (c : Expr) (x y : Nat) : Expr := .ite c (.local x) (.local y)
+        return ⟨.seq (.assign ta ea) (.seq (.assign tb ea') (.seq (.assign tc eb)
+          (.seq (.assign lo (pick (le tb tc) tb tc)) (.seq (.assign hi (pick (le tb tc) tc tb))
+          (.seq (.assign m (pick (le ta hi) ta hi)) (pick (le lo m) m lo)))))), t⟩
+      | _, _ => eerr p s!"{name} takes {if name == "Clamp" then "three arguments" else "one argument"}"
     | "Err" =>
       modify fun st => if st.errAt.isNone then { st with errAt := some p } else st
       return ⟨.prim .userErr [], .never⟩

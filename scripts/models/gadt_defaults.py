@@ -61,11 +61,11 @@ Main():void=
     Print("length {{R.Length}}")''')
         lines = ['length 2']
     else:
-        print(f'''first(t:type) := interface:
+        print(f'''leading(t:type) := interface:
     Tag():t
 sink(t:type) := interface:
     F(?N:int=0):int
-both(a:type,b:type) := class(first(a),sink(b)):
+both(a:type,b:type) := class(leading(a),sink(b)):
     V:a
     Seed:int={k}
     Tag<override>():a=V

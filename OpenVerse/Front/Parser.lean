@@ -206,6 +206,12 @@ def peekQual : PM (Option (String × Nat)) := do
   if (← peekT k).isSym ":" && (← peekT (k + 1)).isSym ")" then return some (q, k + 2)
   return none
 
+/-- A block's statements, each destructuring's declarations spliced in
+    (`parseStmt`). -/
+def spliceStmts (es : List SExpr) : List SExpr := es.flatMap fun
+  | .app _ (.ident _ "$destructure") ds false => ds
+  | e => [e]
+
 /-- Whether a construction's fields start here: a `{` on this line, or a
     `:` that ends its line before an indented block (an archetype block,
     Book of Verse tests: `X := class1:` and `Property1 := 0` indented). -/
@@ -624,6 +630,49 @@ partial def parseParenItems : PM (List SExpr × Bool) := do
   if commas && semis then perr (← peekT) "cannot mix ',' and ';' separators"
   return (items.toList, commas)
 
+/-- A parenthesized expression after its `(`, at `p`: one item, a tuple
+    (items separated by `,`) or a sequence (by `;` or new lines). -/
+partial def parseParenExpr (p : Pos) : PM SExpr := do
+  let (items, commas) ← parseParenItems
+  match items with
+  | [] => return .tuple p []
+  | [e] => return e
+  | es => return if commas then .tuple p es else .block p es
+
+/-- A statement of a block: an expression, or a tuple's destructuring
+    `(X:t, _, Z:u) = e` (Book of Verse tests, Tuple.versetest), when at
+    least one element is named: `e` in a fresh name, then each named
+    element bound in order, `_` skipping one. Its declarations are spliced
+    into the block (`spliceStmts`), so the names are the block's. -/
+partial def parseStmt (c : Nat) : PM SExpr := do
+  let t ← peekT
+  if t.isSym "(" then
+    let saved ← get
+    let pattern? ← (do
+        bump
+        let mut items : Array (Option (String × STy)) := #[]
+        repeat
+          if (← peekT).identName? == some "_" then bump; items := items.push none
+          else
+            let x ← expectIdent
+            expectSym ":"
+            items := items.push (some (x, ← parseType))
+          if (← peekT).isSym "," then bump else break
+        expectSym ")"
+        let a ← peekT
+        if !(a.isSym "=" || a.isSym ":=") || items.all (·.isNone) then throw "not a destructuring"
+        bump
+        return some items) <|> pure none
+    if let some items := pattern? then
+      let tuple := s!"$tuple{t.line}_{t.col}"
+      let e ← parseValue c
+      let p := t.pos
+      let names := items.toList.zipIdx.filterMap fun (it, i) => it.map fun (x, ty) =>
+        SExpr.decl p x (some ty) false (.app p (.ident p tuple) [.int p i] false)
+      return .app p (.ident p "$destructure") (.decl p tuple none false e :: names) false
+    set saved
+  parseExpr c
+
 /-- An indented block whose items start at column `c`, each read by `item`. -/
 partial def parseIndentedWith (item : Nat → PM SExpr) (c : Nat) : PM (List SExpr) := do
   withBlock (← peekT) do
@@ -642,27 +691,27 @@ partial def parseIndentedWith (item : Nat → PM SExpr) (c : Nat) : PM (List SEx
     return stmts.toList
 
 /-- An indented block whose statements start at column `c`. -/
-partial def parseIndented (c : Nat) : PM (List SExpr) := parseIndentedWith parseExpr c
+partial def parseIndented (c : Nat) : PM (List SExpr) := spliceStmts <$> parseIndentedWith parseStmt c
 
 /-- A braced block after its `{`, up to the `}` (consumed). -/
 partial def parseBraced (p : Pos) : PM SExpr := do
   if (← peekT).isSym "}" then bump; return .block p []
   let c := (← peekT).col
   let stmts ← withBlock (← peekT) do
-    let mut stmts := #[← parseExpr c]
+    let mut stmts := #[← parseStmt c]
     repeat
       let t ← peekT
       checkIndent t
       if t.isSym ";" || t.isSym "," then
         bump
         -- (`{a; b;}`: a `;` may end the block)
-        if !(t.isSym ";" && (← peekT).isSym "}") then stmts := stmts.push (← parseExpr c)
+        if !(t.isSym ";" && (← peekT).isSym "}") then stmts := stmts.push (← parseStmt c)
       else if t.isSym "}" then break
-      else if t.bol && !t.isEof then stmts := stmts.push (← parseExpr c)
+      else if t.bol && !t.isEof then stmts := stmts.push (← parseStmt c)
       else perr t s!"expected ';', a new line or '}', found {t.tok.describe}"
     return stmts
   bump
-  return .block p stmts.toList
+  return .block p (spliceStmts stmts.toList)
 
 /-- Items after a `{`, up to the `}` (consumed), separated by `;`, `,` or
     new lines: the clauses of `if{…}`, `for{…}`, `first{…}` and `assert{…}`. -/
@@ -864,8 +913,10 @@ partial def parseCase (stop : Nat) : PM SExpr := do
   let t ← peekT
   bump
   -- (the value in parentheses, perhaps a sequence: `case(Bar; Baz)`)
-  if !(← peekT).isSym "(" then perr (← peekT) s!"expected '(', found {(← peekT).tok.describe}"
-  let scrut ← parsePrimary 0
+  let o ← peekT
+  if !o.isSym "(" then perr o s!"expected '(', found {o.tok.describe}"
+  bump
+  let scrut ← parseParenExpr o.pos
   let parseArm (c : Nat) : PM (Option SExpr × SExpr) := do
     let a ← peekT
     let pat ← if a.isKw "_" || (match a.tok with | .ident "_" => true | _ => false) then do
@@ -911,14 +962,12 @@ partial def parseField (c : Nat) : PM (String × STy × Option SExpr × Bool) :=
   let n ← expectIdent
   -- (`X<public>:int`: a field's access specifiers, accepted, not enforced)
   let specs ← parseSpecs
-  ofExcept <| EffectPolicy.checkNonFunction start.pos "field" specs
   expectSym ":"
   let ty ← parseType
   let a ← peekT
-  if a.isSym "=" || a.isSym ":=" then
-    bump
-    return (n, ty, some (← parseValue c), isVar)
-  return (n, ty, none, isVar)
+  let d ← if a.isSym "=" || a.isSym ":=" then do bump; pure (some (← parseValue c)) else pure none
+  ofExcept <| EffectPolicy.checkField start.pos specs d.isSome
+  return (n, ty, d, isVar)
 
 /-- `struct` (after the keyword): optional specifiers, then `:` + fields or `{ fields }`. -/
 partial def parseStructBody (p : Pos) : PM SExpr := do
@@ -1058,12 +1107,22 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
       if ← fieldsFollow stop then
         return .construct t.pos s!"{q}.{m}" [] (← parseFields)
       return .member t.pos (.ident t.pos "Self") s!"({q}:){m}"
+    -- `(t(int)){…}`: a construction of a parenthesized type (Book of Verse
+    -- tests, ParametricTypes.versetest), as `t(int){…}` is
+    let saved ← get
+    let made? ← (do
+        bump
+        let ty ← parseType
+        expectSym ")"
+        if !(← fieldsFollow stop) then throw "not a construction"
+        match ty with
+        | .name n => return some (n, ([] : List STy))
+        | .app n ts => return some (n, ts)
+        | _ => throw "not a construction") <|> pure none
+    if let some (n, ts) := made? then return .construct t.pos n ts (← parseFields)
+    set saved
     bump
-    let (items, commas) ← parseParenItems
-    match items with
-    | [] => return .tuple t.pos []
-    | [e] => return e
-    | es => return if commas then .tuple t.pos es else .block t.pos es
+    parseParenExpr t.pos
   | .sym "{" => bump; parseBraced t.pos
   | .ident "if" => parseIf stop
   | .ident "for" => parseFor stop
@@ -1102,12 +1161,14 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
     else
       bump; return .ident t.pos (t.identName?.getD "sync")
   | .ident "let" =>
-    if (← peekT 1).isSym "(" then
-      -- `let(defs){body}`: the definitions are visible in the body only, and
-      -- the value is the body's
+    let n1 ← peekT 1
+    if n1.isSym "(" || n1.isSym "{" then
+      -- `let(defs){body}`, and `let{defs} do body` (Tim Sweeney's tests):
+      -- the definitions are visible in the body only, and the value is the
+      -- body's
       bump; bump
-      let (defs, _) ← parseParenItems
-      let body ← parseBody stop
+      let defs ← if n1.isSym "(" then (·.1) <$> parseParenItems else parseBracedItems parseExpr
+      let body ← if n1.isSym "(" then parseBody stop else do expectKw "do"; parseBranch stop
       return .block t.pos (defs ++ [.block t.pos [body]])
     else
       bump; return .ident t.pos "let"
@@ -1376,7 +1437,7 @@ partial def parseCtorBody (stop : Nat) : PM (List SExpr) := do
 /-- One item of a class body at column `c`: a field `[var] Name:type [= e]`
     or a method `Name(params)<effects>:type = body`. -/
 partial def parseClassItem (c : Nat) :
-    PM (Sum ((String × STy × Option SExpr × Bool) × Bool) STop) := do
+    PM (Sum ((String × STy × Option SExpr × Bool) × List String) STop) := do
   let t ← peekT
   -- `block:` runs when an instance is constructed: the method `$block`
   if t.isKw "block" then
@@ -1398,12 +1459,12 @@ partial def parseClassItem (c : Nat) :
   if qual.isSome && (← peekT).isSym ":" then perr (← peekT) "only a method can be qualified with (interface:)"
   if (← peekT).isSym ":" then
     -- a field, `Name<override>:t = e` giving an inherited field a new default
-    ofExcept <| EffectPolicy.checkNonFunction t.pos "field" pre
     bump
     let ty ← parseType
     let a ← peekT
     let d ← if a.isSym "=" || a.isSym ":=" then do bump; pure (some (← parseValue c)) else pure none
-    return .inl ((name, ty, d, isVar), pre.contains "override")
+    ofExcept <| EffectPolicy.checkField t.pos pre d.isSome
+    return .inl ((name, ty, d, isVar), pre)
   if isVar then perr t "expected a field after var"
   expectSym "("
   let (ps, tps, binds) ← parseParamList
@@ -1457,7 +1518,12 @@ partial def parseClassBody (p : Pos) (name : String) (tps : List TParam) (isIfac
       items := items.push (← parseClassItem 0)
   else perr o s!"expected ':' or '\{' after {if isIface then "interface" else "class"}"
   let fields := items.toList.filterMap fun | .inl (f, _) => some f | .inr _ => none
-  let overrides := items.toList.filterMap fun | .inl ((n, _), true) => some n | _ => none
+  let overrides := items.toList.filterMap fun | .inl ((n, _), sp) => if sp.contains "override" then some n else none | _ => none
+  -- (a `<final>` field, which no class below may give another value, is
+  -- kept among the class's specifiers as `$final:F`)
+  let specs := specs ++ items.toList.filterMap fun
+    | .inl ((n, _), sp) => if sp.contains "final" then some s!"$final:{n}" else none
+    | _ => none
   let methods := items.toList.filterMap fun | .inr m => some m | .inl _ => none
   -- the `block:` clauses, in order, as one method
   let isBlock : STop → Bool := fun | .fn _ "$block" .. => true | _ => false
@@ -1469,10 +1535,37 @@ partial def parseClassBody (p : Pos) (name : String) (tps : List TParam) (isIfac
     (if blocks.isEmpty then [] else [.fn p "$block" [] [] [] (.name "void") (.block p blocks)])
   return .classDef p name tps specs parents.toList isIface fields overrides methods
 
-/-- The type parameters of `name(t:type, u:subtype(…), …) := class …` or
-    `:= struct …` defined at `p`; `n` is where a malformed one is reported.
-    One may be unnamed, `t(:type)` (Book of Verse tests), as nothing then
-    names it. -/
+/-- Whether a type is written as a value can be: a name, or a name applied
+    to such (`c`, `box(int)`), which may be a constant's or a call. -/
+partial def STy.couldBeValue : STy → Bool
+  | .name n => !keywords.contains n && !n.startsWith "$"
+  | .app n ts => !n.startsWith "$" && !n.startsWith "?" && ts.all STy.couldBeValue
+  | _ => false
+
+/-- After the `:=` of a definition at the top level or in a module: the type
+    of a type alias, when the definition's value is written as only a type
+    can be (`?int`, `[]t`, `[k]v`, `tuple(…)`, `t->u`, `type{_(…):r}`,
+    `logic`; Book of Verse ch. 11, "Type Aliases"), through the end of the
+    definition. A name, or a name applied to names (`c`, `box(int)`), could
+    be a value too: it is parsed as one, and `Aliases.expand` decides by
+    what the names are. -/
+def typeAliasRHS? : PM (Option STy) := do
+  let t ← peekT
+  if t.bol || t.isEof then return none
+  let saved ← get
+  let ty? ← tryCatch (some <$> parseType) fun _ => pure none
+  if let some ty := ty? then
+    let n ← peekT
+    let ends := n.isEof || (n.bol && n.col ≤ (← get).topCol) ||
+      (!n.bol && (n.isSym ";" || n.isSym "," || n.isSym "}"))
+    if ends && !ty.couldBeValue then return some ty
+  set saved
+  return none
+
+/-- The type parameters of `name(t:type, u:subtype(…), …) := class …`,
+    `:= struct …` or a type alias's, defined at `p`; `n` is where a malformed
+    one is reported. One may be unnamed, `t(:type)` (Book of Verse tests), as
+    nothing then names it. -/
 def typeParamsOf (p : Pos) (n : Token) (ps : Array SParam) : PM (List TParam) :=
   ps.toList.mapM fun prm => do
     match prm.named, prm.default, prm.ty with
@@ -1523,6 +1616,8 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
       -- `using{"relative_path"}` imports a file or directory (#27); other
       -- `using { /Verse.org/… }` module paths are accepted and ignored
       bump
+      -- (`using` is reserved: `using:int = 42` is no definition)
+      if !(← peekT).isSym "{" then perr (← peekT) s!"expected '\{' after using, found {(← peekT).tok.describe}"
       if (← peekT).isSym "{" then
         if let .str parts := (← peekT 1).tok then
           let path := String.join (parts.filterMap fun | .text s => some s | _ => none)
@@ -1574,7 +1669,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
       continue
     -- a constant has the effects of its initialiser (#35)
     if !n.isSym "(" then
-      ofExcept <| EffectPolicy.checkUnsupported t.pos pre
+      ofExcept <| EffectPolicy.checkName t.pos pre
       if let some e := pre.find? EffectPolicy.effectNames.contains then
         perr n s!"a constant cannot have the effect specifier <{e}>: it has the effects of its initialiser"
     if n.isSym "(" then
@@ -1625,6 +1720,17 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
         | .structDef bp [] specs fs => tops := tops.push (.const t.pos name none (.structDef bp tparams specs fs))
         | _ => perr d s!"only structs can be parametric in openverse ({name})"
         continue
+      -- `name(u:type, …) := t`: a parametric type alias (Book of Verse ch.
+      -- 10, "Aliases")
+      if (← peekT).isSym ":=" then
+        ofExcept <| EffectPolicy.checkNonFunction t.pos "type declaration" pre
+        let d ← peekT
+        bump
+        if !tps.isEmpty then perr d "a parametric type takes its parameters without a where clause"
+        let tparams ← typeParamsOf t.pos n ps
+        let a ← peekT
+        tops := tops.push (.const t.pos name none (.typeAlias a.pos tparams (← parseType)))
+        continue
       let effs ← parseSpecs
       expectSym ":"
       let ret ← parseType
@@ -1639,12 +1745,18 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
       tops := tops.push (← parseClassBody t.pos name [] false)
     else if n.isSym ":=" then
       bump
+      let a ← peekT
+      -- `name := t`: a type alias, when `t` is written as only a type can be
+      if let some ty ← typeAliasRHS? then
+        tops := tops.push (.const t.pos name none (.typeAlias a.pos [] ty))
+        continue
       let b ← parseFnBody
-      -- (a module's data states its type, Book of Verse ch. 16)
+      -- (a module's data states its type, Book of Verse ch. 16; `X := c`,
+      -- where `c` may be a type, is `Aliases.expand`'s to decide)
       if !pfx.isEmpty then
         match b with
         | .structDef .. | .enumDef .. | .refineDef .. => pure ()
-        | _ => perr n s!"a constant in a module needs its type: write {name0}:t = …"
+        | b => if b.asType?.isNone then perr n s!"a constant in a module needs its type: write {name0}:t = …"
       tops := tops.push (.const t.pos name none b)
     else if n.isSym ":" then
       bump

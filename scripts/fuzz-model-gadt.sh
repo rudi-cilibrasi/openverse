@@ -14,20 +14,29 @@
 # with later casts of an opening cast's fields from #250's follow-up),
 # each predicting the program's output, or the message of the refusal it
 # expects. Each seed uses one model in turn. Lean must match the model, and C
-# must match Lean; no program may hit an internal error.
-#   usage: scripts/fuzz-model-gadt.sh [COUNT [FIRST_SEED]]
+# must match Lean; no program may hit an internal error. With --aliases, each
+# program's types are written through type aliases first
+# (scripts/models/aliases.py, a random stream of its own): an alias is the type
+# it names, so the model's expectation holds as it is.
+#   usage: scripts/fuzz-model-gadt.sh [COUNT [FIRST_SEED [--aliases]]]
 set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-n="${1:-60}"; first="${2:-1}"
+n="${1:-60}"; first="${2:-1}"; aliases="${3:-}"
+tag=gadt; [[ $aliases == --aliases ]] && tag=gadt-aliases
 ov="$root/.lake/build/bin/openverse"; cv="$root/runtime/build/cverse"
 gens=(gadt_rel gadt_rel2 gadt_exist gadt_refine gadt_open gadt_bounds gadt_covariant gadt_immediate gadt_super gadt_defaults gadt_spawn_defaults gadt_method_values gadt_function_values gadt_function_tuples gadt_method_instances gadt_method_tuples gadt_spawn_callers gadt_spawn_body gadt_event_body gadt_first_returns gadt_choice_values gadt_waiting_effects gadt_context_methods gadt_method_variance gadt_contexts gadt_task_order gadt_waiting_contexts gadt_views gadt_cast_contexts)
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 ok=0; ref=0; bad=0
 for ((s=first; s<first+n; s++)); do
   g="${gens[$((s % ${#gens[@]}))]}"
-  save() { cp "$tmp/p.verse" "$root/fuzz-model-gadt-$s.verse"; cp "$tmp/p.exp" "$root/fuzz-model-gadt-$s.expected"; }
+  save() { cp "$tmp/p.verse" "$root/fuzz-model-$tag-$s.verse"; cp "$tmp/p.exp" "$root/fuzz-model-$tag-$s.expected"; }
   python3 -I "$root/scripts/models/$g.py" "$s" "$tmp/p.exp" > "$tmp/p.verse" 2> "$tmp/gen.err" ||
     { bad=$((bad+1)); echo "GENERATOR FAILED $g seed $s: $(tail -1 "$tmp/gen.err")"; continue; }
+  if [[ $aliases == --aliases ]]; then
+    python3 -I "$root/scripts/models/aliases.py" "$s" < "$tmp/p.verse" > "$tmp/a.verse" 2> "$tmp/gen.err" ||
+      { bad=$((bad+1)); echo "ALIASES FAILED $g seed $s: $(tail -1 "$tmp/gen.err")"; continue; }
+    mv "$tmp/a.verse" "$tmp/p.verse"
+  fi
   rm -f "$tmp/p.vbc"
   # Only these lexical-field variants call ordinary Sum/Lazy default helpers.
   compat=()
@@ -39,19 +48,19 @@ for ((s=first; s<first+n; s++)); do
   if [[ $want == 4 ]]; then
     msg=$(sed -n 2p "$tmp/p.exp")
     if [[ $le == 4 ]] && grep -qF "$msg" "$tmp/l.err" && ! grep -q "internal" "$tmp/l.err"; then ref=$((ref+1)); continue; fi
-    bad=$((bad+1)); save; echo "EXPECTED REFUSAL $g seed $s (exit $le, saved fuzz-model-gadt-$s.verse): $(head -c 200 "$tmp/l.err")"; continue
+    bad=$((bad+1)); save; echo "EXPECTED REFUSAL $g seed $s (exit $le, saved fuzz-model-$tag-$s.verse): $(head -c 200 "$tmp/l.err")"; continue
   fi
   if [[ $le != "$want" ]]; then
-    bad=$((bad+1)); save; echo "LEAN EXIT $le $g seed $s (saved fuzz-model-gadt-$s.verse): $(head -c 200 "$tmp/l.err")"; continue
+    bad=$((bad+1)); save; echo "LEAN EXIT $le $g seed $s (saved fuzz-model-$tag-$s.verse): $(head -c 200 "$tmp/l.err")"; continue
   fi
   if ! diff -q <(tail -n +2 "$tmp/p.exp") "$tmp/l.out" > /dev/null; then
-    bad=$((bad+1)); save; echo "MODEL MISMATCH $g seed $s (saved fuzz-model-gadt-$s.verse)"; continue
+    bad=$((bad+1)); save; echo "MODEL MISMATCH $g seed $s (saved fuzz-model-$tag-$s.verse)"; continue
   fi
   timeout 120 "$cv" "$tmp/p.vbc" > "$tmp/c.out" 2> "$tmp/c.err"; ce=$?
   if [[ $ce != "$want" ]] || ! cmp -s "$tmp/l.out" "$tmp/c.out" || ! cmp -s "$tmp/l.err" "$tmp/c.err"; then
-    bad=$((bad+1)); save; echo "C MISMATCH $g seed $s (C exit $ce, saved fuzz-model-gadt-$s.verse)"; continue
+    bad=$((bad+1)); save; echo "C MISMATCH $g seed $s (C exit $ce, saved fuzz-model-$tag-$s.verse)"; continue
   fi
   ok=$((ok+1))
 done
-echo "fuzz-model-gadt: $n programs from seed $first, $ok ran as the model says, $ref refused as it says, $bad bad"
+echo "fuzz-model-$tag: $n programs from seed $first, $ok ran as the model says, $ref refused as it says, $bad bad"
 [[ $bad -eq 0 ]]
