@@ -1,0 +1,11 @@
+# Path literals (Book of Verse ch. 1, "Path Literals"; ch. 16, "Paths"): a
+# '/' where an operand starts, before a letter or digit, begins a path; after
+# an operand (a name, a literal, a closing bracket) it divides. A path in
+# using{…} is accepted and ignored.
+using{/Verse.org/Simulation}
+using { /user@example.com/My-Module.v2/Sub/(/a/b:)c/d'+' }
+
+Main():void =
+    X := 12
+    if (A := Floor(X/3), B := Floor((X)/4), C := Floor(X /6), D := Floor(X / 12)):
+        Print("{A} {B} {C} {D}")

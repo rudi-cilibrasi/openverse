@@ -24,20 +24,20 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Area | Supported | Book |
 |---|---|---|
 | Comments | `#` to the end of the line, nested `<# … #>`, `<#>` indented comments (the rest of the line and every following line indented more than it; see [Source text](#source-text)) | ch. 0 |
-| Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` printable ASCII U+0020–U+007E, or an escape), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates), `float` `1.5`, `2.0e-7`, `1e3` (digits, then a point and digits or an exponent or both; the nearest double) | §1.3–1.7 |
-| Types | `int`, `logic`, `char`, `char32`, `any` (see [any](#any)), `rational` (see [rational](#rational)), `float` (see [float](#float)), refinement types `type{_X:int where 0 <= _X, _X <= 120}` (see [Refinement types](#refinement-types)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void`, function types `type{_(:int)<decides>:int}` and `int->int` (see [Function values](#function-values)); a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
-| Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e` / `C := e`; locals `X := e`, `X:t = e`, `var X:t = e`; no shadowing | §3.1–3.4 |
+| Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` an ASCII character other than a line break, a tab included, or an escape; a non-ASCII one, `'é'`, is a `char32`, Book of Verse ch. 1), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates), `float` `1.5`, `2.0e-7`, `1e3`, `12.34f64`, `1234f64` (digits, then a point and digits or an exponent or both, or the suffix `f64`, which may follow either; the nearest double; `f32` and `f16` are read and refused as not supported); paths `/Verse.org/Random` parse (in `using{…}`, ignored; as values, refused; see [Source text](#source-text)) | §1.3–1.7 |
+| Types | `int`, `logic`, `char`, `char32`, `any` (see [any](#any)), `rational` (see [rational](#rational)), `float` (see [float](#float)), refinement types `type{_X:int where 0 <= _X, _X <= 120}` (see [Refinement types](#refinement-types)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void`, function types `type{_(:int)<decides>:int}`, with named parameters `type{_(:int, ?B:int):int}`, and `int->int` (see [Function values](#function-values)); a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
+| Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e` / `C := e` (definitions on one line, at the top level or in a module, are separated by `;` or `,`: `X:int=0, Y:int=0`); locals `X := e`, `X:t = e`, `var X:t = e`; no shadowing | §3.1–3.4 |
 | Mutation | `set X = e`, `set X += e` (`-=`, `*=`), `set A[i] = e` (fails out of range; returns `e`), and paths `set S.F.G = e`, `set A[i][j] op= e`, `set M[k].F = e`: indices and keys evaluated once, left to right, then the new value (for `op=`, after the old one is read: `set X += e` is `set X = X + e`), then the variable rebuilt; an index out of range or a missing intermediate key fails, while the last key of a path inserts | §3.3, §3.5, §9.3 |
-| Blocks | indented (`:`), braced (`{ }`), inline (`then`/`do`), `block:`, `( a; b )` sequences | §2.2–2.4 |
+| Blocks | indented (`:`), braced (`{ }`), inline (`then`/`do`), `.` and an expression on its line wherever `:` or `{…}` may start a body (`if (c). e else. f`, `for (X:Xs). e`, `spawn. F()`, `loop. break`; also `option`, `logic`, and `array` and `map`, whose `:` blocks separate their items by `,`, `;` or new lines: `array:` and the lines `1`, `2`; in braces an array's elements are separated by commas, or by `;` and new lines, not both: `array{1; 2; 3}`), `block:`, `( a; b )` sequences, also as an argument (`F(Log(); 42)` passes 42) and as a `case`'s value (`case(a; b)`); `;` separates the items of a block and may end a line or a braced block (`{1; 2;}` is `{1; 2}`) (the next item then follows the line rules, so a class's last field may end in `;`); a body after `:` may be empty wherever one may be written, as `{}` may (`class:`, `struct:`, `then:`, … whose next line is no deeper than the construct, or nothing follows); a function's or method's braced body may put its `{` on the next line, at the definition's column; a value after `=`, `:=`, `set … =` or a `case` arm's `=>` that starts a later line, deeper, is the indented block of those lines (`Value :=` and the lines `1`, `2`, `3` is `3`), as a function's body is | §2.2–2.4 |
 | Operators | `* + -`, unary `-`, comparisons `= <> < <= > >=` (failable, return the left operand, chains check every pair), `and`, `or`, `not` (below the comparisons, above `and`: `not X = Y` is `not (X = Y)`), `?`, `.Length`, `A[i]`, `T(k)` | ch. 4 |
 | Failure | failure contexts (`if` conditions, `for` clauses, `option{}`, `logic{}`, `not`, left of `or`, `<decides>` bodies) with rollback of `var` writes **and output** | ch. 8 |
-| Control | `if`/`else if`/`else` (all styles, `if:`…`then:`), `for` with `X : array`, `I -> X : array`, `X := a..b`, filters, bindings, several generators (cartesian product), `loop`/`break`, `return`, `case` with literal patterns and `_` | ch. 7 |
+| Control | `if`/`else if`/`else` (all styles: the conditions in `(…)`, followed by a body or `then`; or as `{…}`, `:` and a block, or `.` and an expression, followed by `then` and a branch, or by nothing, which is the clause macro `if{c}` (see [Mutation, macros, tooling](#mutation-macros-tooling)): `if:`…`then:`, `if:`…`else:`, `if. c then. a else. b`; `for` likewise, with `do`), `for` with `X : array`, `I -> X : array`, `X := a..b`, filters, bindings, several generators (cartesian product), `loop`/`break`, `return`, `case` with literal patterns and `_` | ch. 7 |
 | Choice | `a \| b \| …` with several values in spatial order, in a clause of an `if` condition, `first{…}`, `option{…}`, `logic{…}`, `not` or `or` (the first success) or of a `for` (all of them), also inside expressions (`(1 \| 2) + (10 \| 20)`, `X = 1 \| 2`, `X > 0 and (1 \| 2)`, `M? or (1 \| 2)`); see [Choice](#choice) (#208) | (the Verse Calculus) |
-| Functions | a tuple argument expands into parameters (`Describe(MyTuple)`); positional arguments pack into a single tuple parameter, including `tuple()` and singleton tuples; several arguments make a single array parameter (`Sum(1, 2, 3)`), including generic, overloaded, method and spawned calls (#134, #140, #501; nested fields retain their shape, and empty/singleton arrays use explicit array values); recursion, mutual recursion, `<decides>` (called with `F[…]`; other functions with `F(…)`), named parameters `?P:t = default` passed as `?P := e` (positional, then named as written, then defaults; a default may use the parameters before it, and a method's default the method's fields; a call dispatched to an override evaluates that override's own default for an omitted argument; a default is evaluated at the call, its effects counting as the caller's, and cannot return, break or use itself), the heap effects `<computes>`, `<reads>`, `<writes>`, `<allocates>`, `<transacts>` (checked, see [Classes](#classes)), unsupported effect contracts are diagnosed before lowering (see [Effect contracts](#effect-contracts)) | ch. 6, 13 |
+| Functions | a parameter may be unnamed, `F(:int):void = {}`, as in function types (the body cannot name it; so may a parametric type's, `t(:type) := class{}`); a parameter may destructure a tuple, `Func(A:int, (B:int, C:int), D:int)`, to any depth: it is a parameter of the tuple type whose names the body sees (see [the rules](research/tuple-parameters.md); named parameters inside such a group are not supported); a tuple argument expands into parameters (`Describe(MyTuple)`); positional arguments pack into a single tuple parameter, including `tuple()` and singleton tuples; several arguments make a single array parameter (`Sum(1, 2, 3)`), including generic, overloaded, method and spawned calls (#134, #140, #501; nested fields retain their shape, and empty/singleton arrays use explicit array values); recursion, mutual recursion, `<decides>` (called with `F[…]`; other functions with `F(…)`), named parameters `?P:t = default` passed as `?P := e` (positional, then named as written, then defaults; a default may use the parameters before it, and a method's default the method's fields; a call dispatched to an override evaluates that override's own default for an omitted argument; a default is evaluated at the call, its effects counting as the caller's, and cannot return, break or use itself), the heap effects `<computes>`, `<reads>`, `<writes>`, `<allocates>`, `<transacts>` (checked, see [Classes](#classes)), unsupported effect contracts are diagnosed before lowering (see [Effect contracts](#effect-contracts)) | ch. 6, 13 |
 | Parametric functions | `F(X:t, … where t:type, u:subtype(comparable))`: type parameters in parameter types, the result type and local declarations; type arguments inferred at each call (see [Parametric functions](#parametric-functions)) | Types: where clauses |
-| Structs | `name := struct:` with typed fields and defaults, `name{F := e, …}` (each field given at most once, evaluated in declaration order), `S.F`, `set S.F = e` / `op=`, structural equality (a struct is the tuple of its fields in Verse Core) | ch. 9 |
+| Structs | `name := struct:` with typed fields and defaults, `name{F := e, …}` (each field given at most once, evaluated in declaration order; separated by commas, or by `;` and new lines, not both; or as an indented block after `name:`, an archetype block), `S.F`, `set S.F = e` / `op=`, structural equality (a struct is the tuple of its fields in Verse Core) | ch. 9 |
 | Parametric structs | `pair(t:type, u:type) := struct:`, the type `pair(int, string)`, values `pair(int, string){First := 1, Second := "a"}` (or `pair{…}` where the expected type gives the type arguments); see [Parametric structs](#parametric-structs) | ch. 9 |
-| Classes | `name := class:` and `name(t:type) := class:` with fields and methods; `class(parent, interface, …)`, `interface`, `<abstract>`, `<override>`, `<final>`, `(super:)`, virtual dispatch, casts `T[X]` and `T(X)`; no `var` fields; see [Classes](#classes) | ch. 10 |
+| Classes | `name := class:` and `name(t:type) := class:` with fields and methods; `class(parent, interface, …)` (`class()` has none, as `class`; a type `t()` or value `t(){…}` with no type arguments is `t`, `t{…}`), `interface`, `<abstract>`, `<override>`, `<final>`, `(super:)`, virtual dispatch, casts `T[X]` and `T(X)`; no `var` fields; see [Classes](#classes) | ch. 10 |
 | Enums | `name := enum:` / `enum{A, B}`, `name.A`, equality, `case` that needs no `_` when every value is named (an enumerator is its index in Verse Core); `enum<open>` may gain values, so a `case` on one needs `_` or a failure context (`<closed>` is the default) | ch. 9 |
 | Maps | `[k]v`, `map{k => v, …}` (a key given twice keeps its last value, at its last position), `M[k]` (fails on a missing key), `set M[k] = v` (insert or update, never fails), `set M[k] op= v` (fails on a missing key), `.Length`, `for (V : M)`, `for (K -> V : M)` in insertion order, `ConcatenateMaps(M1, M2, …)` (a later map's value wins for a key, which keeps its first position), order-sensitive equality (a map is the array of its pairs in Verse Core) | §3, §9.3 |
 | Array methods | `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`, `A.RemoveFirstElement[x]`, `A.Remove[i, j]` (half-open), `A.ReplaceElement[i, x]`, `A.ReplaceFirstElement[x, y]`, `A.Insert[i, B]`, `A.Last[]`, `A.Last[n]` (the element n before the last) (all failable); `A.RemoveAllElements(x)`, `A.ReplaceAllElements(x, y)`, `A.ReplaceAll(Pattern, Replacement)` (contiguous subarrays, left to right, not overlapping; an empty pattern changes nothing), `Concatenate(A, B, …)` or `Concatenate(Arrays)` (#150) (never failing) | §9.1 |
@@ -60,7 +60,9 @@ openverse follows Verse's lexical grammar for the characters of a file:
   column numbers, for the end of a `#` comment, and for string literals,
   which cannot contain one.
 - Error positions are `line:column`, lines from 1 and columns from 0.
-  Columns count characters, so a tab is one column.
+  Columns count characters, so a tab is one column. The first token of a
+  line has the line's indentation as its column, also after a block
+  comment: `<#C0#>f():void = 3` is a definition at column 0.
 - `<#>` starts an indented comment: the rest of its line, then every
   following line indented more than the line that contains the `<#>` (more
   leading tabs and spaces, counted as columns like the offside rule does),
@@ -72,6 +74,18 @@ openverse follows Verse's lexical grammar for the characters of a file:
   letter, digit or `_`; anything else (`0o`, `0o123`, `0o4g`) is an error.
   Its value is that UTF-8 code unit, so `0oC3` is a valid `char` although it
   is not ASCII.
+- A path literal (Book of Verse ch. 1, "Path Literals"; ch. 16, "Paths") is
+  `/` and a label, then optionally `@` and a label, then segments `/X`: a
+  label is ASCII letters, digits, `.` and `-`, starting with a letter or
+  digit; a segment is an identifier, which may end in a quoted part
+  (`/a/b'+'`) and may be preceded by a qualifier (`/a/(/b:)c`). A path
+  cannot be followed by `/` or `@` (`/a/1b`, `/a@b@c` are errors). A `/`
+  starts a path only where an operand starts and before a letter or digit:
+  after a name other than a keyword, a literal or a closing bracket, `/`
+  divides, so `X/2`, `F()/2` and `X /2` are divisions and `/a/b-c` is the
+  path `/a/b` minus `c`. A path parses wherever an expression may start
+  and in `using{…}`, which accepts and ignores it; as a value it is
+  refused ("not supported": openverse has no module values).
 
 **Indentation.** The indentation of a line is its leading string of tabs and
 spaces. The offside rule compares columns, and a tab is one column, so to
@@ -281,9 +295,40 @@ Main():void =
   overrides, failure and suspension use the same captured receiver and
   argument order as ordinary calls. Without an expected function type,
   a method value keeps its declared shape.
-- Overloaded functions and methods and ones with named parameters cannot
-  be used as values. Local function declarations and lambda expressions are
-  unsupported. The pinned Book marks nested functions unreleased and arrow
+- **Named parameters** (#503). A function type may name parameters after
+  its positional ones: `type{_(:string, ?Color:string):string}`. The names
+  are part of the type and match by name, in any order; a positional
+  parameter's name is not. `?N:t = e` in a type lets a caller of the value
+  omit `N`. As the Book says, `e` is not part of the type, and it never
+  runs; it is checked at `N`'s type, with literals and top-level names only
+  (a local, a parameter or a type parameter there is refused). A function, or a method bound to its receiver, is a value of a
+  function type with the same positional parameters when the type's names
+  are among its own, it has a default for each one the type leaves out, and
+  it has a default for each one the type lets callers omit. So
+  `Log(Message:string, ?Level:int=1, ?Color:string="white")` is a
+  `type{_(:string):string}`, a `type{_(:string, ?Color:string):string}` and
+  its own type, `type{_(:string, ?Color:string = …, ?Level:int = …):string}`,
+  which `F := Log` has. A call through a value gives its positional
+  arguments, then named ones: every one its type requires, and only ones it
+  has. The explicit arguments run as written; then each omitted default runs
+  once, at the call, in declaration order and in the function's scope. A
+  bound method's defaults read the receiver's fields as they are then, and
+  are its dynamic class's; an override that gives a named parameter a
+  default is, from a receiver of its class, a value of the types that leave
+  that parameter out. A value converts to the function types above its
+  type: `type{_(?A:int = …):int}` is below `type{_(?A:int):int}` and below
+  `type{_():int}`. Generic functions and methods, effects, failure and
+  rollback, suspension, variance and escaping values work as for other
+  function values. A parameter may also be written as a signature, as the
+  Book's examples do: `Map(Items:[]t, F(:t)<transacts>:u where t:type,
+  u:type)`, `?Say():string = Hello`, also among a function type's own
+  parameters: `A(F(:int):int, X:int):int`. Not supported: a function whose named
+  parameter has its own name (`F(?F:int)`) as a value; named parameters
+  inside a tuple parameter, and tuples with named elements. See the
+  [pinned rules](research/named-function-values.md).
+- Overloaded functions and methods cannot be used as values (Book of Verse
+  ch. 6, "Capture"), with or without named parameters. Local function
+  declarations and lambda expressions are unsupported. The pinned Book marks nested functions unreleased and arrow
   lambdas unsupported; this is not a versioned UEFN compatibility result.
   See the [closure design and release evidence](research/closure-design.md)
   for the proposed capture/lifetime rules and implementation gates.
@@ -384,10 +429,7 @@ Verse ch. 6): `Describe(X:int)`, `Describe(S:string)`, `Describe(X:int, Y:int)`.
     different overload's positional parameters; its receiver and producer
     are evaluated once, before named arguments and defaults;
   - generic upper bounds other than `type` and `subtype(comparable)` are
-    unsupported (#502);
-  - named-parameter function values and default-eliding adapters are
-    unsupported, although the pinned Book describes them (#503). This
-    differs from overloaded-name capture, which the Book forbids.
+    unsupported (#502).
 
 ## Parametric structs
 
@@ -876,14 +918,21 @@ circle := class(shape, labelled):
 - **Clause macros** (`if{…}`, `for{…}`, `first{…}`, `first(…){…}` and
   `assert{…}`). Each takes clauses in braces, separated by
   `;`, `,` or new lines, run in a failure context; their value is the last
-  clause's: a binding's name, or the expression's value.
+  clause's: a binding's name, or the expression's value. `if` and `for`
+  may also take their clauses as `:` and an indented block or `.` and an
+  expression, and are these macros unless `then` (`if`) or `do` (`for`)
+  and a branch follow.
   - `if{c}` runs `c` and has no value; `if{c} else e` (also `else if{…}`) is
     the value of `c` when it succeeds, else `e`'s.
   - `for{c}` is the array of `c`'s values, for each way its generators,
     filters and bindings succeed: `for{X := 1..4; X * X}`.
   - `first{c}` fails when `c` does, else it is `c`'s value; `first(c){b}`
     runs `b`, which sees `c`'s names, once `c` succeeds, and fails when `c`
-    does. Without a body after it, `first(…)` is a call.
+    does. Without a body after it, `first(…)` is a call. `first` reads its
+    clauses as `for` does, and takes `first(c). b`, `first(c) do b` and
+    `first:` with the clauses indented, then `do:` and a body or nothing; a
+    generator `X : Xs` in `first` parses and is refused as not supported
+    yet.
   - `assert{c}` is a runtime error (as `Err()`, with no message) unless
     `c` succeeds.
   Without a [choice](#choice), `first` is the first and only success, and
@@ -1916,8 +1965,8 @@ between values of different types that are the same in Core are an error
 containers of such), since they would compare equal there; so are those
 between two type parameters, or between one and a type with an `int` or a
 tuple, which an instance could make the same. A
-non-ASCII character in quotes is refused, with the `0u` literal to write
-instead: a `'c'` literal is ASCII.
+non-ASCII character in quotes is a `char32` literal (`'😀'` is `0u1F600`,
+Book of Verse ch. 1, "Character Literals"); an ASCII one is a `char`.
 
 ## Modules
 
@@ -2273,7 +2322,7 @@ Main()<suspends>:void =
 
 `ToString` of rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
-`weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), the
+`weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored) and paths as values, the
 specific overload/call gaps listed under [Overloading](#overloading), nested
 functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice), concurrency beyond [Concurrency](#concurrency), and the unsupported
 effect/construction contracts listed under [Effect contracts](#effect-contracts).

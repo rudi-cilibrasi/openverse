@@ -319,6 +319,8 @@ partial def elabExprInitialWith
                     !ctx.types.requests.fns.contains (n, t) && fnFits ctx.types s t then some t else none
               | none => none
             | _ => none
+          if s.named.any (·.1 == n) then
+            eerr p s!"'{n}' has a named parameter ?{n}, which hides it in a call of its value: such a function cannot be used as a value (#503)"
           if s.isConst then
             noteFx p s.fx (some s!"uses the constant {n}")
             -- (#515: a use runs the constant's initialiser)
@@ -340,20 +342,28 @@ partial def elabExprInitialWith
           else if !s.tparams.isEmpty then
             if let some ty := exp then
               if let .struct shape _ := ty then
-                if let some (k, _) := FnValues.parseName shape then
-                  for cls in [s!"{n}$fn", s!"{n}$fnPack", s!"{n}$fnUnpack{k}"] do
+                if let some sh := FnValues.parse shape then
+                  for cls in [s!"{n}$fn", s!"{n}$fnPack", s!"{n}$fnUnpack{sh.positional}"] do
                     let some args := fnClassArgs ctx.types cls ty | continue
                     let r ← elabConstruct ctx p cls [] [] (some (.struct cls args))
                     return ⟨← coerce p r ty, ty⟩
             if let some t := askFor then
               noteNeeds { fns := [(n, t)] }
               return ⟨.prim .userErr [], t⟩
+            -- (#503: whatever its type arguments, its named parameters do
+            -- not fit the type's)
+            let (own, ts) := s.valueShape
+            if let some t@(.struct m _) := exp then
+              if let some tsh := FnValues.parse m then
+                let named : FnValues.Shape := { tsh with arity := tsh.positional + own.named.length, named := own.named, optional := own.optional }
+                if !named.within tsh then
+                  eerr p s!"expected {t.show}, found {(Ty.struct own.name (ts ++ [s.ret])).show}"
             eerr p s!"'{n}' is generic: a function type determining all its type arguments and satisfying its bounds must be expected (#214, #209)"
           else if ctx.types.classes.contains s!"{n}$fn" then
             -- a function as a value (#210): its class's object, of the
             -- function type expected, else of its own
-            let sh : FnValues.Shape := ⟨s.params.length, s.decides, s.suspends, s.fx⟩
-            let own : Ty := .struct sh.name (s.params ++ [s.ret])
+            let (sh, ts) := s.valueShape
+            let own : Ty := .struct sh.name (ts ++ [s.ret])
             let ty := match exp with
               | some t@(.struct m _) => if (FnValues.parseName m).isSome then t else own
               | _ => own
@@ -372,8 +382,6 @@ partial def elabExprInitialWith
           else if let some t := askFor then
             noteNeeds { fns := [(n, t)] }
             return ⟨.prim .userErr [], t⟩
-          else if !s.named.isEmpty then
-            eerr p s!"'{n}' has named parameters: such a function cannot be used as a value (a function type has no named parameters)"
           else eerr p s!"'{n}' is a function: call it with {n}(…)"
         | none =>
           if (ctx.types.overloads.lookup n).isSome then
@@ -383,7 +391,14 @@ partial def elabExprInitialWith
           | "PiFloat" => return ⟨.lit (.float (VFloat.canon 3.141592653589793)), .float⟩
           | "Inf" => return ⟨.lit (.float 0x7FF0000000000000), .float⟩
           | "NaN" => return ⟨.lit (.float VFloat.nanBits), .float⟩
-          | _ => eerr p s!"unknown identifier '{Choice.shownName n}'"
+          | _ =>
+            -- (a path literal, or a float literal of a width openverse lacks,
+            -- which the parser reads as a name)
+            if n.startsWith "/" then
+              eerr p s!"the path {n} as a value is not supported: openverse has no module values (a path in using\{…} is accepted and ignored)"
+            if n.front.isDigit then
+              eerr p s!"the float literal {n} is not supported: openverse's floats are 64-bit (write f64 or no suffix)"
+            eerr p s!"unknown identifier '{Choice.shownName n}'"
   -- a constructor's `block:` (#11): it cannot fail, as a class's cannot
   | _ => next ctx se exp
 

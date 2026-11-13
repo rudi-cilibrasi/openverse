@@ -1,0 +1,4 @@
+default
+cleanup 1
+after 1
+exit=0

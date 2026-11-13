@@ -1,4 +1,5 @@
-# expect: named parameters
+# expect: expected type{_(:int):int}, found type{_(?X:int = …):int}
+# (Named takes ?X by name, not a positional argument, #503)
 box(t:type,u:type):=class:
     V:t
     Extra:u
