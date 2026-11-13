@@ -790,8 +790,8 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
 
 /-- `elabRefinedIfWith`, given this block's functions (#325). -/
 partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (body0 : SExpr)
-    (elseE : Option SExpr) (exp : Option Ty) (made : Bool := false) : EM (Option R) :=
-  elabRefinedIfWith elabApp elabE withDeferMark ctx p _dp D T x body0 elseE exp made
+    (elseE : Option SExpr) (exp : Option Ty) (made : Bool := false) (ifType : Bool := false) : EM (Option R) :=
+  elabRefinedIfWith elabApp elabE withDeferMark ctx p _dp D T x body0 elseE exp made (ifType := ifType)
 
 /-- `elabGenericCallWith`, given this block's functions (#325). -/
 partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) (exp : Option Ty) :
