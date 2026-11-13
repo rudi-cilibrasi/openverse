@@ -76,10 +76,14 @@ partial def elabExprValuesWith
         [.prim .neg [.prim (.tupGet 0) [.local t]], .prim (.tupGet 1) [.local t]]), .rational⟩
     if r.ty != .int then eerr p s!"unary '-' needs an int, rational or float, found {r.ty.show}"
     return litAt ctx.types exp ⟨.prim .neg [r.e], .int⟩
-  | .notE _ e =>
+  | .notE p e =>
     -- (with a choice, its first success, #208)
     let e := (Choice.takeFirst? e (choiceOrder ctx)).getD e
     let r ← operand { ctx with canFail := true, inTaking := true } e none
+    -- (a failure context of an expression that cannot fail, as an `if`'s
+    -- condition and `logic{…}`: `not` of one always fails)
+    if !(r.e.mayFail ctx.sigProg) && (← ctx.failabilityKnown) then
+      eerr p "the operand of not cannot fail (Verse requires a failable one: not of it always fails)"
     return ⟨Expr.notE (← inferable r), .void⟩
   | .bin p "/" a b =>
     -- `X / Y` on ints: a rational, failing when `Y = 0` (#116)
