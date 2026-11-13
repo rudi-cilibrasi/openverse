@@ -93,7 +93,7 @@ separately below.
 
 | Form | Program | Expectation |
 |---|---|---|
-| `assert`, `assert_runtime_error`, `assert_success_or_runtime_error` | the file's `using`s and the shared definitions the body needs, then `Main()<decides>:void = BODY` (braced bodies stay braced, indented ones indented) | `assert`: `Main` succeeds (exit 0); `assert_runtime_error`: a runtime error (exit 2) or resource limit (exit 3); `…_or_runtime_error`: exit 0 or 2 |
+| `assert`, `assert_runtime_error`, `assert_success_or_runtime_error` | the file's `using`s and the shared definitions the body needs, then `Main()<decides>:void = BODY` (braced bodies stay braced, indented ones indented) | `assert`: `Main` succeeds (exit 0); `assert_runtime_error`: a runtime error (exit 2) or resource limit (exit 3); `…_or_runtime_error`: exit 0, 2 or 3 |
 | `assert_valid`, `assert_link_valid` | the snippet alone, `;`-separated top-level definitions on lines of their own, and `Main():void = {}` unless it defines `Main` | accepted |
 | `assert_semantic_error`, `assert_link_error`, `assert_ir_error` | as `assert_valid` | refused (exit 4); the error codes are recorded, not compared |
 | `assert_syntax_error` | the snippet exactly as written, parsed with openverse's parser; when that parses, the snippet and `Main():void = {}` compiled | refused |
