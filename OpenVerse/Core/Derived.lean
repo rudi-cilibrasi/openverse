@@ -217,7 +217,7 @@ theorem Eval.eq_slot {P s k v} (j : Int) (hk : readSlot s k = .ok v) :
   have h := Eval.prim_ok (P := P) (op := .eq)
     (EvalList.cons_ok (hk ▸ (Eval.local (P := P) (s := s) (i := k)))
       (EvalList.cons_ok (Eval.lit (v := .int j)) .nil))
-  simpa [Prim.apply] using h
+  simpa [Prim.apply, Value.veq_int_right] using h
 
 /-- **Selecting an alternative.** When slot `k` holds `j + i`, `altFrom k j
     as` behaves exactly as `as[i]`. -/

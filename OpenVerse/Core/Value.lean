@@ -163,6 +163,260 @@ end
 
 instance : DecidableEq Value := decEq
 
+/-! ### Verse's equality of values (`veq`)
+
+Verse has one empty value, written `false` or `()` (Book of Verse ch. 2,
+"void, true, tuple() and false"): it is the logic false, the value of
+`void` and `tuple()`, the empty option, and the empty array, string and
+map. Verse Core holds it four ways, one per type that has it:
+`.logic false`, `.tup []`, `.none` and `.arr #[]`. `veq` is the equality
+of Verse: the structural equality of values (`decEq`), except that any two
+of those four are equal, at every depth (`array{false} = array{()}`).
+`veq_iff` characterizes it: two values are `veq` exactly when they are
+equal once every empty value in them is made `()` (`norm`); so it is an
+equivalence (`veq_refl`, `veq_comm`, `veq_trans`) and a congruence for the
+constructors that hold values (`veq_some`, `veq_tup_of_get`,
+`veq_arr_of_get`). On two values of one type it is `=`
+(`veq_iff_eq_of_hasTy`, `Typing.lean`): each type holds the empty value one
+way. -/
+
+/-- The empty value of Verse (`false`, `()`, the empty option, array, string
+    and map, Book of Verse ch. 2), as Verse Core holds it at each type:
+    `.logic false`, `.tup []`, `.none`, `.arr #[]`. -/
+def isEmpty : Value → Bool
+  | .logic false | .tup [] | .none => true
+  | .arr a => a.isEmpty
+  | _ => false
+
+mutual
+/-- Verse's equality of values: structural, except that any two of the
+    four representations of the empty value are equal, at every depth. -/
+def veq : Value → Value → Bool
+  | .int x, .int y => x == y
+  | .logic x, .logic y => x == y
+  | .char x, .char y => x == y
+  | .float x, .float y => x == y
+  | .arr a, .arr b => a.size == b.size && veqList a.toList b.toList
+  | .tup xs, .tup ys => veqList xs ys
+  | .none, .none => true
+  | .some x, .some y => veq x y
+  | .ref x, .ref y => x == y
+  | a, b => a.isEmpty && b.isEmpty
+/-- `veq`, element by element, of two lists of the same length. -/
+def veqList : List Value → List Value → Bool
+  | [], [] => true
+  | a :: as, b :: bs => veq a b && veqList as bs
+  | _, _ => false
+end
+
+mutual
+/-- `v` with each empty value, at every depth, made `()`. -/
+def norm : Value → Value
+  | .logic false => void
+  | .none => void
+  | .arr ⟨[]⟩ => void
+  | .arr ⟨v :: vs⟩ => .arr ⟨normList (v :: vs)⟩
+  | .tup vs => .tup (normList vs)
+  | .some v => .some (norm v)
+  | v => v
+def normList : List Value → List Value
+  | [] => []
+  | v :: vs => norm v :: normList vs
+end
+
+theorem normList_length : ∀ (vs : List Value), (normList vs).length = vs.length
+  | [] => rfl
+  | _ :: vs => by simp [normList, normList_length vs]
+
+theorem norm_eq_void_iff (v : Value) : norm v = void ↔ v.isEmpty = true := by
+  match v with
+  | .int _ => simp [norm, isEmpty, void]
+  | .logic b => cases b <;> simp [norm, isEmpty, void]
+  | .char _ => simp [norm, isEmpty, void]
+  | .float _ => simp [norm, isEmpty, void]
+  | .arr ⟨[]⟩ => simp [norm, isEmpty, void]
+  | .arr ⟨_ :: _⟩ => simp [norm, isEmpty, void]
+  | .tup [] => simp [norm, normList, isEmpty, void]
+  | .tup (_ :: _) => simp [norm, normList, isEmpty, void]
+  | .none => simp [norm, isEmpty, void]
+  | .some _ => simp [norm, isEmpty, void]
+  | .ref _ => simp [norm, isEmpty, void]
+
+/-- The constructor of a value. -/
+def kind : Value → Nat
+  | .int _ => 0 | .logic _ => 1 | .char _ => 2 | .float _ => 3 | .arr _ => 4
+  | .tup _ => 5 | .none => 6 | .some _ => 7 | .ref _ => 8
+
+/-- A value that is not empty keeps its constructor under `norm`. -/
+theorem kind_norm (v : Value) (h : v.isEmpty = false) : kind (norm v) = kind v := by
+  match v with
+  | .int _ => simp [norm]
+  | .logic b => cases b <;> simp_all [norm, isEmpty]
+  | .char _ => simp [norm]
+  | .float _ => simp [norm]
+  | .arr ⟨[]⟩ => simp [isEmpty] at h
+  | .arr ⟨_ :: _⟩ => simp [norm, kind]
+  | .tup _ => simp [norm, kind]
+  | .none => simp [isEmpty] at h
+  | .some _ => simp [norm, kind]
+  | .ref _ => simp [norm]
+
+/-- Values of different constructors are `veq` exactly when both are empty,
+    and `norm` makes them equal exactly then. -/
+theorem veq_cross (a b : Value) (hk : kind a ≠ kind b) : veq a b = true ↔ norm a = norm b := by
+  have hv : veq a b = (a.isEmpty && b.isEmpty) := by
+    cases a <;> cases b <;> simp_all [kind, veq]
+  rw [hv]
+  cases ha : a.isEmpty <;> cases hb : b.isEmpty
+  · simp only [Bool.and_self, Bool.false_eq_true, false_iff]
+    intro h; exact hk (by rw [← kind_norm a ha, ← kind_norm b hb, h])
+  · simp only [Bool.false_and, Bool.false_eq_true, false_iff]
+    rw [(norm_eq_void_iff b).mpr hb]; intro h
+    have := (norm_eq_void_iff a).mp h; simp_all
+  · simp only [Bool.and_false, Bool.false_eq_true, false_iff]
+    rw [(norm_eq_void_iff a).mpr ha]; intro h
+    have := (norm_eq_void_iff b).mp h.symm; simp_all
+  · simp only [Bool.and_self, true_iff]
+    rw [(norm_eq_void_iff a).mpr ha, (norm_eq_void_iff b).mpr hb]
+
+mutual
+theorem veq_iff : ∀ (a b : Value), veq a b = true ↔ norm a = norm b
+  | .int x, .int y => by simp [veq, norm]
+  | .logic x, .logic y => by cases x <;> cases y <;> simp [veq, norm, void]
+  | .char x, .char y => by simp [veq, norm]
+  | .float x, .float y => by simp [veq, norm]
+  | .arr ⟨xs⟩, .arr ⟨ys⟩ => by
+    have ih := veqList_iff xs ys
+    cases xs with
+    | nil => cases ys with
+      | nil => simp [veq, veqList, norm]
+      | cons y ys => simp [veq, norm, normList, void]
+    | cons x xs => cases ys with
+      | nil => simp [veq, norm, normList, void]
+      | cons y ys =>
+        simp only [veq, norm, Array.size, List.length_cons, Bool.and_eq_true, beq_iff_eq,
+          Value.arr.injEq, Array.mk.injEq]
+        constructor
+        · intro ⟨_, h⟩; exact ih.mp h
+        · intro h
+          refine ⟨?_, ih.mpr h⟩
+          have := congrArg List.length h
+          simpa [normList_length] using this
+  | .tup xs, .tup ys => by
+    have ih := veqList_iff xs ys
+    simp only [veq, norm, Value.tup.injEq]; exact ih
+  | .none, .none => by simp [veq, norm]
+  | .some x, .some y => by
+    have ih := veq_iff x y
+    simp only [veq, norm, Value.some.injEq]; exact ih
+  | .ref x, .ref y => by simp [veq, norm]
+  | .int _, .logic _ | .int _, .char _ | .int _, .float _ | .int _, .arr _
+  | .int _, .tup _ | .int _, .none | .int _, .some _ | .int _, .ref _
+  | .logic _, .int _ | .logic _, .char _ | .logic _, .float _ | .logic _, .arr _
+  | .logic _, .tup _ | .logic _, .none | .logic _, .some _ | .logic _, .ref _
+  | .char _, .int _ | .char _, .logic _ | .char _, .float _ | .char _, .arr _
+  | .char _, .tup _ | .char _, .none | .char _, .some _ | .char _, .ref _
+  | .float _, .int _ | .float _, .logic _ | .float _, .char _ | .float _, .arr _
+  | .float _, .tup _ | .float _, .none | .float _, .some _ | .float _, .ref _
+  | .arr _, .int _ | .arr _, .logic _ | .arr _, .char _ | .arr _, .float _
+  | .arr _, .tup _ | .arr _, .none | .arr _, .some _ | .arr _, .ref _
+  | .tup _, .int _ | .tup _, .logic _ | .tup _, .char _ | .tup _, .float _
+  | .tup _, .arr _ | .tup _, .none | .tup _, .some _ | .tup _, .ref _
+  | .none, .int _ | .none, .logic _ | .none, .char _ | .none, .float _
+  | .none, .arr _ | .none, .tup _ | .none, .some _ | .none, .ref _
+  | .some _, .int _ | .some _, .logic _ | .some _, .char _ | .some _, .float _
+  | .some _, .arr _ | .some _, .tup _ | .some _, .none | .some _, .ref _
+  | .ref _, .int _ | .ref _, .logic _ | .ref _, .char _ | .ref _, .float _
+  | .ref _, .arr _ | .ref _, .tup _ | .ref _, .none | .ref _, .some _ =>
+    veq_cross _ _ (by simp [kind])
+theorem veqList_iff : ∀ (xs ys : List Value), veqList xs ys = true ↔ normList xs = normList ys
+  | [], [] => by simp [veqList, normList]
+  | [], _ :: _ => by simp [veqList, normList]
+  | _ :: _, [] => by simp [veqList, normList]
+  | x :: xs, y :: ys => by
+    have h1 := veq_iff x y
+    have h2 := veqList_iff xs ys
+    simp only [veqList, normList, Bool.and_eq_true, List.cons.injEq]
+    rw [h1, h2]
+end
+
+/-- `veq` is reflexive. -/
+theorem veq_refl (a : Value) : veq a a = true := (veq_iff a a).mpr rfl
+
+/-- `veq` is symmetric. -/
+theorem veq_comm (a b : Value) : veq a b = veq b a := by
+  cases h : veq b a
+  · cases h' : veq a b
+    · rfl
+    · have := (veq_iff a b).mp h'
+      have := (veq_iff b a).mpr this.symm
+      simp_all
+  · exact (veq_iff a b).mpr ((veq_iff b a).mp h).symm
+
+/-- `veq` is transitive. -/
+theorem veq_trans {a b c : Value} (h1 : veq a b = true) (h2 : veq b c = true) : veq a c = true :=
+  (veq_iff a c).mpr (((veq_iff a b).mp h1).trans ((veq_iff b c).mp h2))
+
+/-- Equal values are `veq`. -/
+theorem veq_of_eq {a b : Value} (h : a = b) : veq a b = true := h ▸ veq_refl a
+
+/-- Any two empty values are `veq`: `false`, `()`, the empty option, array,
+    string and map are one value. -/
+theorem veq_of_isEmpty {a b : Value} (ha : a.isEmpty = true) (hb : b.isEmpty = true) :
+    veq a b = true :=
+  (veq_iff a b).mpr (((norm_eq_void_iff a).mpr ha).trans ((norm_eq_void_iff b).mpr hb).symm)
+
+/-- A value `veq` to an empty value is empty. -/
+theorem isEmpty_of_veq {a b : Value} (h : veq a b = true) (ha : a.isEmpty = true) :
+    b.isEmpty = true :=
+  (norm_eq_void_iff b).mp (((veq_iff a b).mp h).symm.trans ((norm_eq_void_iff a).mpr ha))
+
+/-- `veqList` is `veq` element by element, on lists of one length. -/
+theorem veqList_iff_get : ∀ (xs ys : List Value),
+    veqList xs ys = true ↔ xs.length = ys.length ∧
+      ∀ (i : Nat) (hx : i < xs.length) (hy : i < ys.length), veq xs[i] ys[i] = true
+  | [], [] => by simp [veqList]
+  | [], _ :: _ => by simp [veqList]
+  | _ :: _, [] => by simp [veqList]
+  | x :: xs, y :: ys => by
+    simp only [veqList, Bool.and_eq_true, List.length_cons, Nat.add_right_cancel_iff]
+    rw [veqList_iff_get xs ys]
+    constructor
+    · rintro ⟨h0, hl, hs⟩
+      refine ⟨hl, fun i hx hy => ?_⟩
+      cases i with
+      | zero => exact h0
+      | succ i => exact hs i (by simpa using hx) (by simpa using hy)
+    · rintro ⟨hl, hs⟩
+      exact ⟨hs 0 (by simp) (by simp), hl,
+        fun i hx hy => hs (i + 1) (by simpa using hx) (by simpa using hy)⟩
+
+/-- Congruence: options of `veq` values are `veq`. -/
+theorem veq_some (x y : Value) : veq (.some x) (.some y) = veq x y := rfl
+
+/-- Congruence: tuples of `veq` values, element by element, are `veq`. -/
+theorem veq_tup_of_get {xs ys : List Value} (hl : xs.length = ys.length)
+    (h : ∀ (i : Nat) (hx : i < xs.length) (hy : i < ys.length), veq xs[i] ys[i] = true) :
+    veq (.tup xs) (.tup ys) = true := by
+  simp only [veq]; exact (veqList_iff_get xs ys).mpr ⟨hl, h⟩
+
+/-- Congruence: arrays of `veq` values, element by element, are `veq`. -/
+theorem veq_arr_of_get {xs ys : List Value} (hl : xs.length = ys.length)
+    (h : ∀ (i : Nat) (hx : i < xs.length) (hy : i < ys.length), veq xs[i] ys[i] = true) :
+    veq (.arr ⟨xs⟩) (.arr ⟨ys⟩) = true := by
+  simp only [veq, Bool.and_eq_true, beq_iff_eq]
+  exact ⟨by simpa using hl, (veqList_iff_get xs ys).mpr ⟨hl, h⟩⟩
+
+/-- A value `veq` to an int is that int. -/
+theorem veq_int_right (v : Value) (j : Int) : veq v (.int j) = decide (v = .int j) := by
+  cases v with
+  | int a => by_cases h : a = j <;> simp [veq, h]
+  | _ => simp [veq, isEmpty]
+
+/-- `array{false} = array{()}`: one empty value inside an array, held two ways. -/
+theorem veq_example : veq (.arr #[.logic false]) (.arr #[.tup []]) = true := by decide
+
+
 /-- Render a value the way the reference implementation prints it (`ToString`). -/
 partial def render : Value → String
   | .int i => toString i

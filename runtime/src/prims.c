@@ -375,8 +375,8 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
         if (ii) { cmp(r, I(&a[0]) >= I(&a[1]), &a[0]); return; }
         if (cc) { cmp(r, a[0].bits >= a[1].bits, &a[0]); return; }
         break;
-    /* | .eq, [a, b] => cmpRes (decide (a = b)) a
-       | .ne, [a, b] => cmpRes (decide (a ≠ b)) a */
+    /* | .eq, [a, b] => cmpRes (Value.veq a b) a
+       | .ne, [a, b] => cmpRes (!Value.veq a b) a  (vx_equal) */
     case VX_P_EQ:
     case VX_P_NE:
         if (n == 2) {
