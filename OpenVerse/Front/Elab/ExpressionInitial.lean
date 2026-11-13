@@ -289,9 +289,6 @@ partial def elabExprInitialWith
       match exp with
       | some (.opt t) => return ⟨.lit .none, .opt t⟩
       | some (.arr t) => return ⟨.lit Value.emptyArray, .arr t⟩
-      -- ("`false` is accepted wherever an empty array or map is expected",
-      -- Book of Verse ch. 2)
-      | some (.map k v) => return ⟨.lit Value.emptyArray, .map k v⟩
       | some .void => return ⟨.lit .void, .void⟩
       | some (.tup []) => return ⟨.lit .void, .tup []⟩
       | _ => return ⟨.lit (.logic false), .logic⟩
