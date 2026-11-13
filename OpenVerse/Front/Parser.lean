@@ -624,6 +624,15 @@ partial def parseParenItems : PM (List SExpr × Bool) := do
   if commas && semis then perr (← peekT) "cannot mix ',' and ';' separators"
   return (items.toList, commas)
 
+/-- A parenthesized expression after its `(`, at `p`: one item, a tuple
+    (items separated by `,`) or a sequence (by `;` or new lines). -/
+partial def parseParenExpr (p : Pos) : PM SExpr := do
+  let (items, commas) ← parseParenItems
+  match items with
+  | [] => return .tuple p []
+  | [e] => return e
+  | es => return if commas then .tuple p es else .block p es
+
 /-- An indented block whose items start at column `c`, each read by `item`. -/
 partial def parseIndentedWith (item : Nat → PM SExpr) (c : Nat) : PM (List SExpr) := do
   withBlock (← peekT) do
@@ -864,8 +873,10 @@ partial def parseCase (stop : Nat) : PM SExpr := do
   let t ← peekT
   bump
   -- (the value in parentheses, perhaps a sequence: `case(Bar; Baz)`)
-  if !(← peekT).isSym "(" then perr (← peekT) s!"expected '(', found {(← peekT).tok.describe}"
-  let scrut ← parsePrimary 0
+  let o ← peekT
+  if !o.isSym "(" then perr o s!"expected '(', found {o.tok.describe}"
+  bump
+  let scrut ← parseParenExpr o.pos
   let parseArm (c : Nat) : PM (Option SExpr × SExpr) := do
     let a ← peekT
     let pat ← if a.isKw "_" || (match a.tok with | .ident "_" => true | _ => false) then do
@@ -1056,12 +1067,22 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
       if ← fieldsFollow stop then
         return .construct t.pos s!"{q}.{m}" [] (← parseFields)
       return .member t.pos (.ident t.pos "Self") s!"({q}:){m}"
+    -- `(t(int)){…}`: a construction of a parenthesized type (Book of Verse
+    -- tests, ParametricTypes.versetest), as `t(int){…}` is
+    let saved ← get
+    let made? ← (do
+        bump
+        let ty ← parseType
+        expectSym ")"
+        if !(← fieldsFollow stop) then throw "not a construction"
+        match ty with
+        | .name n => return some (n, ([] : List STy))
+        | .app n ts => return some (n, ts)
+        | _ => throw "not a construction") <|> pure none
+    if let some (n, ts) := made? then return .construct t.pos n ts (← parseFields)
+    set saved
     bump
-    let (items, commas) ← parseParenItems
-    match items with
-    | [] => return .tuple t.pos []
-    | [e] => return e
-    | es => return if commas then .tuple t.pos es else .block t.pos es
+    parseParenExpr t.pos
   | .sym "{" => bump; parseBraced t.pos
   | .ident "if" => parseIf stop
   | .ident "for" => parseFor stop
