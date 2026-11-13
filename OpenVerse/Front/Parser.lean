@@ -262,6 +262,8 @@ partial def parseTypeAtom : PM STy := do
         -- none, the concurrency prelude's `$subev0`, #220)
         if (← peekT).isSym ")" && n == "subscribable_event" then
           bump; return .name "$subev0"
+        -- (`c1()`: no type arguments, the type `c1`)
+        if (← peekT).isSym ")" then bump; return .name n
         let mut ts := #[← parseType]
         while (← peekT).isSym "," do bump; ts := ts.push (← parseType)
         expectSym ")"
@@ -486,6 +488,9 @@ partial def parsePostfix (stop : Nat) : PM SExpr := do
               -- (`subscribable_event(){}`, #220)
               else if (← peekT).isSym ")" && n == "subscribable_event" then
                 n := "$subev0"
+              -- (`c1(){…}`: no type arguments, `c1{…}`)
+              else if (← peekT).isSym ")" then
+                pure ()
               else
                 ts := #[← parseType]
                 while (← peekT).isSym "," do bump; ts := ts.push (← parseType)
@@ -1260,11 +1265,13 @@ partial def parseClassItem (c : Nat) :
 partial def parseClassBody (p : Pos) (name : String) (tps : List TParam) (isIface : Bool) : PM STop := do
   let specs ← parseSpecs
   let mut parents := #[]
+  -- (`class()`: no parents, as `class`)
   if (← peekT).isSym "(" then
     bump
-    repeat
-      parents := parents.push (← parseType)
-      if (← peekT).isSym "," then bump else break
+    if !(← peekT).isSym ")" then
+      repeat
+        parents := parents.push (← parseType)
+        if (← peekT).isSym "," then bump else break
     expectSym ")"
   let o ← peekT
   let mut items := #[]
