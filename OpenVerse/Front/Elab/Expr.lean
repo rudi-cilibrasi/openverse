@@ -2505,6 +2505,7 @@ partial def elabMapLit (ctx : Ctx) (p : Pos) (entries : List (SExpr × SExpr)) (
     let mut rs : Array (SExpr × R × SExpr × R) := #[]
     for (k, v) in entries do
       rs := rs.push (k, ← elabE ctx k (some kt), v, ← elabE ctx v (some vt0))
+    ofExcept <| checkTypeValueJoin ctx.types p vt? (rs.toList.map (·.2.2.2.ty))
     -- the values' type: the expected one (or the first's) when every value
     -- converts to it, else their join, as for an array literal (#67)
     let vt ← match ← tryCatch (some <$> rs.toList.mapM fun (_, _, v, rv) => coerce v.pos rv vt0) (fun _ => pure none) with

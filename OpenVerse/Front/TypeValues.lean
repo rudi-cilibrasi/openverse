@@ -72,6 +72,9 @@ def kinds : List String := ["subtype", "castable_subtype", "concrete_subtype"]
 /-- The interface of the metatype `k` of `A`: `subtype(A)`. -/
 def ifaceName (k a : String) : String := s!"{k}({a})"
 
+/-- The mark of the `castable_subtype(A)` of a `<castable>` `A`. -/
+def castableMark : String := "$castable"
+
 /-- The class of the value `C`. -/
 def valueClass (c : String) : String := s!"$type:{c}"
 
@@ -201,9 +204,12 @@ def desugar (tops : List STop) : Except String (List STop) := do
   -- (castable_subtype(A) of any A, whose values are the <castable> classes
   -- below it: Castable.versetest 91-135, "class1 is not castable, so cannot
   -- be assigned. The arg to castable_subtype is ok")
+  -- (with the mark `$castable` when `A` itself is: a join of two values
+  -- keeps castable_subtype(A) only then, Castable.versetest 145-168)
   let castIfaces : List STop := closure.map fun a =>
     .classDef p0 (ifaceName "castable_subtype" a) [] [] []
-      (.name (ifaceName "subtype" a) :: (parentsOf a).map (.name <| ifaceName "castable_subtype" ·)) true [] []
+      (.name (ifaceName "subtype" a) :: (parentsOf a).map (.name <| ifaceName "castable_subtype" ·) ++
+        (if castable a then [.name castableMark] else [])) true [] []
   let concreteIfaces : List STop := closure.map fun a =>
     .classDef p0 (ifaceName "concrete_subtype" a) [] [] []
       (.name (ifaceName "subtype" a) :: (parentsOf a).map (.name <| ifaceName "concrete_subtype" ·)) true []
@@ -236,7 +242,8 @@ def desugar (tops : List STop) : Except String (List STop) := do
     | e => e
   -- (a call's or cast's head and a member's object are no values)
   let tops := tops.map fun t => (STop.mapAll g (protectHeads f) t)
-  return root :: subIfaces ++ castIfaces ++ concreteIfaces ++ valueClasses ++ tops
+  return root :: .classDef p0 castableMark [] [] [] [] true [] [] :: subIfaces ++ castIfaces ++ concreteIfaces ++
+    valueClasses ++ tops
 
 end TypeValues
 end OpenVerse.Front
