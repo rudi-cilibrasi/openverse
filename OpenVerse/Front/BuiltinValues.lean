@@ -50,11 +50,12 @@ partial def scanTop : STop → List (Pos × String) × List String
   | .fn _ n ps _ _ _ b =>
     let (u, bs) := scan.scanAll (b :: ps.filterMap (·.default))
     (u, n :: ps.map (·.name) ++ bs)
-  | .const _ n _ e => let (u, bs) := scan e; (u, n :: bs)
-  | .classDef _ n _ _ _ _ fs _ ms =>
-    let (u, bs) := scan.scanAll (fs.filterMap (·.2.2.1))
+  | .const _ n _ _ e => let (u, bs) := scan e; (u, n :: bs)
+  | .classDef _ n _ _ _ _ _ fs ms =>
+    let (u, bs) := scan.scanAll (fs.filterMap (·.default))
     let inner := ms.map scanTop
-    (u ++ inner.flatMap (·.1), n :: fs.map (·.1) ++ bs ++ inner.flatMap (·.2))
+    (u ++ inner.flatMap (·.1), n :: fs.map (·.name) ++ bs ++ inner.flatMap (·.2))
+
 
 /-- The definitions of the built-ins `tops` names as values and neither
     defines nor binds. -/

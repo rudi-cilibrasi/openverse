@@ -59,7 +59,7 @@ def elabFieldDefaults (env : TyEnv) (sigs : Signatures) (tops : List STop) (cdef
   -- that omits the field)
   for t in tops do
     match t with
-    | .const _ n none (.structDef _ _ _ _) =>
+    | .const _ n _ none (.structDef _ _ _ _) =>
       let nps := ((env.sparams.lookup n).getD []).map fun (v, c) => Ty.param v c
       let senv := { env with
         tvars := (env.sparams.lookup n).getD [] |>.map fun (v, c) => (v, Ty.param v c)
@@ -205,7 +205,7 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests) :
     | .fn p n ps _ _ _ body =>
       elaborated := elaborated.push (← elabFn allSigs sigs.prog requests env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
         (evidenceSignature := some sig))
-    | .const p n _ body =>
+    | .const p n _ _ body =>
       -- a constant is computed at each use, so it would be a new object each
       -- time (until Verse Core has global state)
       if sig.ret.holdsMutable env then

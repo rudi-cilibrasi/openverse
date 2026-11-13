@@ -10,6 +10,7 @@
 import OpenVerse.Core.Typing
 import OpenVerse.Front.FnValues
 import OpenVerse.Front.Refine
+import OpenVerse.Front.Access
 import Std.Data.HashMap
 
 namespace OpenVerse.Front
@@ -213,6 +214,10 @@ structure TyEnv where
   /-- Source construction contracts, collected before helper generation.
       Compiler implementation types have no source-declared budget. -/
   constructionFx : Std.HashMap String (List String) := {}
+  /-- The source's access specifiers, as the elaboration of a member reached
+      through a value judges its use (`Access.Env`). -/
+  access : Access.Env := {}
+
   /-- The `<final>` fields, each with the class or interface that declares
       it: no class below gives it another default, no construction a value. -/
   finalFields : List (String × String) := []

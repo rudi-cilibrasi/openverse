@@ -11,8 +11,9 @@ functions of [After the library functions](#after-the-library-functions)
 the extension methods of [After extension
 methods](#after-extension-methods), the empty value and comparisons of
 [After the empty value](#after-the-empty-value), the qualified names and
-the Book's shadowing rule of [After qualified names](#after-qualified-names)
-and the readings of [After the readings audit](#after-the-readings-audit),
+the Book's shadowing rule of [After qualified names](#after-qualified-names),
+the readings of [After the readings audit](#after-the-readings-audit)
+and the access specifiers of [After access specifiers](#after-access-specifiers),
 against the Book at
 [`beaa719ba165cbf33eff462f2b0fe078a6dd9ab0`](https://github.com/verselang/book/tree/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests),
 the revision the other research notes pin. The Book's
@@ -40,10 +41,10 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   APIs (persistence, JSON, natives; 345); compiler tooling such as bytecode
   and digests (128); VM-conditional code inside a definition (37) and one
   file that defines `Main` itself (1).
-- Of the **9,783 translatable cases**, openverse **agrees on 7,390 (76%)**,
-  refuses 2,066 valid programs, **accepts 277 refused ones**, gives a
+- Of the **9,783 translatable cases**, openverse **agrees on 7,535 (77%)**,
+  refuses 2,028 valid programs, **accepts 170 refused ones**, gives a
   **different result in 50** and hits **no internal error**. On test cases
-  alone (without `:decls`) it agrees on 7,243 of 9,567. (When the survey was
+  alone (without `:decls`) it agrees on 7,388 of 9,567. (When the survey was
   taken, at `0e69cfb`: 6,409 agreed, 2,817 refused, 482 accepted, 86
   differed and 4 internal errors; before the parser forms, at main
   `99ed203`: 6,417 agreed, 2,809 refused, 482 accepted, 86 differed; with
@@ -59,11 +60,13 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   agreed, 2,164 refused, 307 accepted, 58 differed, the base of the
   qualified names; with them, at main `7bf6dbd`: 7,374 agreed, 2,069
   refused, 282 accepted, 58 differed, the base of [the readings
-  audit](#after-the-readings-audit).)
-- An agreement on an expected error is weak evidence: 2,799 expected errors
-  agree, but only 1,074 of them are refused by a check of a language rule;
-  1,233 are refused by the parser (the lexer's and parser's own checks
-  included) and 492 for a missing feature.
+  audit](#after-the-readings-audit); with that, at main `ce5e444`: 7,390
+  agreed, 2,066 refused, 277 accepted, 50 differed, the base of [access
+  specifiers](#after-access-specifiers).)
+- An agreement on an expected error is weak evidence: 2,906 expected errors
+  agree, but only 1,195 of them are refused by a check of a language rule;
+  1,236 are refused by the parser (the lexer's and parser's own checks
+  included) and 475 for a missing feature.
 - **Internal errors**: none ([Internal errors](#internal-errors)). The three
   programs that failed `Prog.checkTypes` (`X:int = return`, `() = ""`, a
   `void` parameter compared with `""`) are refused or compile, and Lean's
@@ -81,9 +84,9 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   the Book's chapter 1 requires. Still accepted or different: `true?`
   is `true`, which the tests make the empty value (4 cases; `false`, `()`,
   `""`, `array{}`, `map{}` and an empty option are one value now, [After
-  the empty value](#after-the-empty-value)); access specifiers are
-  not enforced (also a `<public>` type alias of an internal type, 12 cases
-  the type aliases moved from agreeing). A member of a module or class that
+  the empty value](#after-the-empty-value)). Access specifiers are
+  enforced, and their 107 accepted refusals agree ([After access
+  specifiers](#after-access-specifiers)). A member of a module or class that
   took the name of an enclosing definition, which chapter 10 refuses, is
   refused now ([After qualified names](#after-qualified-names)). [The
   readings audit](#after-the-readings-audit) took the readings the tests
@@ -106,7 +109,8 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   fewer), and extension methods ([After extension
   methods](#after-extension-methods), 37 more, none fewer), and qualified
   names ([After qualified names](#after-qualified-names), 102 more, and 18
-  with the Book's shadowing rule). Left: attributes (134), Tim Sweeney's
+  with the Book's shadowing rule), and access specifiers ([After access
+  specifiers](#after-access-specifiers), 145 more, none fewer). Left: attributes (134), Tim Sweeney's
   parser tests and other syntax (192); bitwise functions (159, pinned, not
   implemented), free `ToChar` and `ToChar32` the API reference does not
   declare (145), `ToDiagnostic` (93). The largest semantic gaps are types as
@@ -243,17 +247,17 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| all test cases (assertions and files without one) | 13197 | 7243 | 277 | 1997 | 50 | 3630 | 0 |
+| all test cases (assertions and files without one) | 13197 | 7388 | 170 | 1959 | 50 | 3630 | 0 |
 | shared definitions of a file (`:decls`) | 307 | 147 | 0 | 69 | 0 | 91 | 0 |
-| **total** | 13504 | 7390 | 277 | 2066 | 50 | 3721 | 0 |
+| **total** | 13504 | 7535 | 170 | 2028 | 50 | 3721 | 0 |
 
 ### By form
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `assert` | 6671 | 3109 | 0 | 1373 | 50 | 2139 | 0 |
-| `assert_semantic_error` | 3460 | 2477 | 240 | 0 | 0 | 743 | 0 |
-| `assert_valid` | 1637 | 685 | 0 | 433 | 0 | 519 | 0 |
+| `assert` | 6671 | 3110 | 0 | 1372 | 50 | 2139 | 0 |
+| `assert_semantic_error` | 3460 | 2584 | 133 | 0 | 0 | 743 | 0 |
+| `assert_valid` | 1637 | 722 | 0 | 396 | 0 | 519 | 0 |
 | `assert_valid_syntax` | 439 | 330 | 0 | 109 | 0 | 0 | 0 |
 | `decls` | 307 | 147 | 0 | 69 | 0 | 91 | 0 |
 | `assert_roundtrip` | 304 | 267 | 0 | 35 | 0 | 2 | 0 |
@@ -276,7 +280,7 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| no VM restriction | 12208 | 7112 | 239 | 1576 | 23 | 3258 | 0 |
+| no VM restriction | 12208 | 7257 | 132 | 1538 | 23 | 3258 | 0 |
 | `verse_vm_only` | 702 | 203 | 5 | 365 | 27 | 102 | 0 |
 | `bp_vm_only` | 366 | 67 | 33 | 14 | 0 | 252 | 0 |
 | `verse_vm_todo` (BPVM only; a known VerseVM failure) | 219 | 8 | 0 | 111 | 0 | 100 | 0 |
@@ -286,22 +290,22 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| (top level) | 5575 | 3082 | 110 | 1132 | 9 | 1242 | 0 |
+| (top level) | 5575 | 3126 | 77 | 1121 | 9 | 1242 | 0 |
 | Operators/ | 1203 | 1022 | 4 | 76 | 28 | 73 | 0 |
-| Bugs/ | 1185 | 713 | 43 | 180 | 0 | 249 | 0 |
+| Bugs/ | 1185 | 717 | 42 | 177 | 0 | 249 | 0 |
 | Literals/ | 1020 | 815 | 0 | 171 | 0 | 34 | 0 |
 | Serialization/ | 991 | 0 | 0 | 0 | 0 | 991 | 0 |
-| Attributes/ | 795 | 377 | 23 | 149 | 0 | 246 | 0 |
+| Attributes/ | 795 | 421 | 3 | 125 | 0 | 246 | 0 |
 | FlowControl/ | 484 | 362 | 33 | 39 | 5 | 45 | 0 |
 | Intrinsics/ | 437 | 297 | 0 | 107 | 8 | 25 | 0 |
 | Math/ | 321 | 157 | 0 | 160 | 0 | 4 | 0 |
-| Classes/ | 317 | 198 | 32 | 10 | 0 | 77 | 0 |
+| Classes/ | 317 | 227 | 3 | 10 | 0 | 77 | 0 |
 | Versions/ | 289 | 4 | 0 | 2 | 0 | 283 | 0 |
 | Roundtrip/ | 255 | 229 | 0 | 24 | 0 | 2 | 0 |
 | Coroutines/ | 229 | 21 | 1 | 3 | 0 | 204 | 0 |
-| Modules/ | 219 | 64 | 9 | 9 | 0 | 137 | 0 |
+| Modules/ | 219 | 69 | 4 | 9 | 0 | 137 | 0 |
 | Features/ | 67 | 18 | 3 | 1 | 0 | 45 | 0 |
-| Interfaces/ | 41 | 15 | 19 | 0 | 0 | 7 | 0 |
+| Interfaces/ | 41 | 34 | 0 | 0 | 0 | 7 | 0 |
 | Bytecode/ | 27 | 2 | 0 | 0 | 0 | 25 | 0 |
 | Exercises/ | 17 | 14 | 0 | 3 | 0 | 0 | 0 |
 | Incremental/ | 16 | 0 | 0 | 0 | 0 | 16 | 0 |
@@ -309,12 +313,12 @@ cases are refusals.
 | CanCallerAccessEpicInternal/ | 7 | 0 | 0 | 0 | 0 | 7 | 0 |
 | AssetUsage/ | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 
-Of the 2,799 expected errors openverse agrees with, the refusal came from
-the parser in 1,233 (most semantic-error snippets among them use a form
+Of the 2,906 expected errors openverse agrees with, the refusal came from
+the parser in 1,236 (most semantic-error snippets among them use a form
 openverse does not parse, such as `@attribute`; the lexer's and parser's
 own checks, of comments, float literals, specifiers and an extension
 method's receiver, count here), from a diagnostic that says openverse
-lacks a feature or a name in 489, and from a rule check in 1,073. Only these 1,073 show
+lacks a feature or a name in 475, and from a rule check in 1,195. Only these 1,195 show
 openverse checking the rule the test is about, and even they are not
 compared by code. Of the 300 agreeing syntax errors, 8 parse once wrapped
 in a function body, so openverse refuses
@@ -380,7 +384,7 @@ expects:
 
 | Cause | Cases (parser forms → now) | Example | openverse | The test | Marked | openverse documents it | Size |
 |---|---:|---|---|---|---|---|---|
-| access specifiers | 95 → 107 (12 `<public>` type aliases of internal types, which agreed when no alias parsed) | `Tests/ArchetypeAccessSpecifiers.versetest:43`: `my_struct<public> := struct<protected>{x<public>:int}` | accepted | errors 3593, 3594, 3543, 3650, 3642: a `<private>`, `<protected>` or `<internal>` member used outside its scope, a specifier where none is allowed or two of them, access narrowed by an override | none | yes: Readings, "accepted and not enforced" | front-end: visibility per specifier, extending module visibility |
+| access specifiers | 95 → 107 (12 `<public>` type aliases of internal types, which agreed when no alias parsed) → 0 ([After access specifiers](#after-access-specifiers)) | `Tests/ArchetypeAccessSpecifiers.versetest:43`: `my_struct<public> := struct<protected>{x<public>:int}` | accepted | errors 3593, 3594, 3543, 3650, 3642: a `<private>`, `<protected>` or `<internal>` member used outside its scope, a specifier where none is allowed or two of them, access narrowed by an override | none | yes: Readings, "accepted and not enforced" | front-end: visibility per specifier, extending module visibility |
 | reserved names | 83 → 2 → 0 (`Union.versetest` 23, 290: a top-level constant states its type, the readings audit) | `Tests/NamesReservedForFuture.versetest:137`: `_:int = 42` | accepted | error 3514: 65 names reserved for the future (`as`, `bag`, `element`, `find`, `first`, `repeat`, …), `_`, and the built-in names `subtype`, `castable_subtype`, `Self` and `local` as definitions; 3547: `while := 42` and two others | none; the Book (ch. 1): "The single underscore `_` is reserved"; the digest notes the Book gives no list | no | a message |
 | unreachable code | 39 → 30 | `Tests/FlowControl/Reachability.versetest:12`: `F():int={if(return 0=1) {0} else {1}; 1+2}` | accepted | errors 2000, 2002, 2302, 3535, 3616: code after `return`, `break` or a `case` that always returns, unreachable or repeated `case` arms | none | no | front-end: a reachability pass |
 | failure where it is not allowed | 35 → 30 → 29 (`LogicalOr.versetest:143`: the left of `or` must be able to fail, the readings audit) | `Tests/Effects.versetest:537`: `c:=class{X:int=option{0}?}` | accepted | error 3512: a failable field default, a failable default of a named parameter (16 in `DefaultNamed.versetest`), a `loop` as an `if` condition; 3513: `not` of an expression that cannot fail | 3 `bp_vm_only`, 1 `verse_vm_only` | in part: a default "is evaluated at the call, its effects counting as the caller's" ([Supported](../LANGUAGE.md#supported), Functions) | a message |
@@ -435,7 +439,7 @@ cases it would turn into agreements.
 | Cause | Cases | Example | openverse | Marked | openverse documents it | Size |
 |---|---:|---|---|---|---|---|
 | types as values | 196 | `Tests/Cast.versetest:69`: `assert{void(0)}` | `unknown function 'void'` | 10 `verse_vm_only` | in part: `t:subtype(…)` bounds of type parameters are supported, source upper bounds refused (#502) | front-end feature, and Core for `type` values: `subtype(t)`, `castable_subtype(t)`, `concrete_subtype(t)`, conversions `int(0)`, classes as values |
-| other syntax | 192 | `Tests/TimSyntax.versetest:224`: `"1,2"` (valid syntax) | parse errors of many kinds: Tim Sweeney's parser tests (51), `of` and `at` calls (15), `<scoped{…}>` specifiers and `scoped{…}` definitions (19), `profile` blocks (8), comments inside a definition (`Roundtrip/Comments.versetest`, 8), pointers `^` (5), module items at uneven columns (4), commas between expressions at statement level (also `Obj.Get, Obj.Set` as a function's value: 33 `ParametricFunctions.versetest` cases its modules' qualified classes led to), … ([After the parser forms](#after-the-parser-forms)) | 4 `verse_vm_only` | no | parser forms and features, many small ones |
+| other syntax | 192 → 174 (the 19 `scoped{…}` cases agree: [After access specifiers](#after-access-specifiers)) | `Tests/TimSyntax.versetest:224`: `"1,2"` (valid syntax) | parse errors of many kinds: Tim Sweeney's parser tests (51), `of` and `at` calls (15), `<scoped{…}>` specifiers and `scoped{…}` definitions (19), `profile` blocks (8), comments inside a definition (`Roundtrip/Comments.versetest`, 8), pointers `^` (5), module items at uneven columns (4), commas between expressions at statement level (also `Obj.Get, Obj.Set` as a function's value: 33 `ParametricFunctions.versetest` cases its modules' qualified classes led to), … ([After the parser forms](#after-the-parser-forms)) | 4 `verse_vm_only` | no | parser forms and features, many small ones |
 | bitwise functions | 159 | `Tests/Math/Bitwise.versetest:36`: `assert{BitNot(0) = -1}` | `unknown function 'BitNot'` | 62 `verse_vm_only` (unbounded ints), 13 `bp_vm_only` (runtime errors for shifts) | no; the Book's ch. 4, "Bitwise Operations" | Core and runtime: six `int` primitives, their Lean seams and C |
 | character conversions | 145 | `Tests/Literals/Char.versetest:86`: `RequireChar8Equal[HexLiteral, ToChar(Utf8CodeUnit)]` | `unknown function 'ToChar'`: free functions `ToChar(N)` and `ToChar32(N)`, called with parentheses as total functions, which neither the API reference nor Epic's pages declare (the methods `N.ToChar[]`, `N.ToChar32[]` are `<decides>`); most likely the test runner's | none | yes: [char32](../LANGUAGE.md#char32) has the methods | none known |
 | other type rules | 134 → 131 (a `set` through a map's key as an `if`'s condition, `Mutability.versetest:248`, `FORT-623803-STMRollbackAfterReturn.versetest` 22 and `:decls`, agree: the readings audit) | `Tests/Bugs/2021-09-03-OptionalTupleAssertionFailure.versetest:3`: `X:?tuple(int,int)=option{1,2}` | `expected ?tuple(int, int), found ?int` (see commas, above); also the `message` type, an overloaded function as a value, `Concatenate()` with no arguments, map keys of a sibling class, types of one name told apart by their parameters (`SOL-7503`, 4), … | 8 `verse_vm_only` | no | each small |
@@ -444,7 +448,7 @@ cases it would turn into agreements.
 | attributes | 134 | `Tests/Attributes/Attributes.versetest:16`: an `@attribute` before a definition (valid syntax) | `unexpected character '@'` | 1 `verse_vm_only` | no; the Book's ch. 12 and 18 | parser form for built-in attributes; custom attributes (`class(attribute)`) a front-end feature |
 | `comparable` as a type | 126 | `Tests/Comparable.versetest:3`: `Equal(X:t, Y:comparable)` | `unknown type 'comparable'` | 1 `verse_vm_only` | in part: only as a bound, `t:subtype(comparable)` | front-end and Core: a type of comparable values, as `any` is |
 | `ToDiagnostic` | 93 | `Tests/Intrinsics/ToDiagnostic.versetest:22` | `unknown function 'ToDiagnostic'` | 7 `verse_vm_only` | no | front-end and runtime: a `diagnostic` printer of every value |
-| class and function specifiers | 86 | `Tests/Effects.versetest:304`: `c:=class<abstract>{F()<converges>:void}` | `<converges> is unsupported` (#494); `<castable>`, `<final_super>` (#11), `<persistable>`, `<native_callable>` | 71 `verse_vm_todo` (`GetCastableFinalSuperClass.versetest`) | yes: [effect contracts](../LANGUAGE.md#effect-contracts), #11 | front-end features, one each |
+| class and function specifiers | 86 → 84 | `Tests/Effects.versetest:304`: `c:=class<abstract>{F()<converges>:void}` | `<converges> is unsupported` (#494); `<castable>`, `<final_super>` (#11), `<persistable>`, `<native_callable>` | 71 `verse_vm_todo` (`GetCastableFinalSuperClass.versetest`) | yes: [effect contracts](../LANGUAGE.md#effect-contracts), #11 | front-end features, one each |
 | extension methods | 53 → 0 | `Tests/ExtensionFields.versetest:6`: `(I:int).Method()<computes>:int=I` | `expected an identifier, found '('` | none | yes: [Extension methods](../LANGUAGE.md#extension-methods) | done ([After extension methods](#after-extension-methods)) |
 | comparisons of different types | 51 → 16 ([After the empty value](#after-the-empty-value)) | `Tests/Operators/CompareString.versetest:168`: `DoesTupleEqualString(A:tuple(t,t,t), B:string …)=A=B` | `'=' compares values of different types, tuple(t, t, t) and string, whose values in common Verse Core cannot compare` | none | yes: [Equality and the empty value](../LANGUAGE.md#equality-and-the-empty-value) | generic code: a type parameter's instance at run time ([empty-values.md](empty-values.md), part 2) |
 | live variables | 50 | `Tests/upon.versetest:7`: `upon(1){2}` | parse error | all `verse_vm_only`; the Book's ch. 15 is marked "Unreleased Feature" | no | front-end, Core and runtime |
@@ -463,7 +467,7 @@ cases it would turn into agreements.
 | joins | 28 | `Tests/Bugs/2021-04-26-DisjointTypesAllowedInComparisonAndPointerDeref.versetest:4`: `0=(false? or 0)` | `the branches have different types: logic and int` (also `?int` and `?float`) | none | in part: unrelated types join at `any` ([any](../LANGUAGE.md#any)), not inside options or `or` | front-end |
 | `true` and `false` as types | 20 | `Tests/Subtype.versetest:113`: `m0:subtype(true)` | `unknown type 'true'` | none | no; the Book's ch. 2 | front-end |
 | block forms | 17 | `Tests/Operators/At.versetest:40`: `F at array:` and an indented block | `at` and `of` calls with a block (12), `profile:` (`unknown struct 'profile'`, 2), … | none | yes: [Supported](../LANGUAGE.md#supported), Blocks | parser forms (`of`, `at`) and features |
-| `var` specifiers and accessors | 16 | `Tests/Attributes/AccessLevelInheritance.versetest:444`: `var<private> Field<public>:int = 42` | `expected an identifier, found '<'` | none | no | parser and front-end |
+| `var` specifiers and accessors | 16 → 0 (12 agree, [After access specifiers](#after-access-specifiers); getter and setter accessors, 3, are counted under attributes, a misindented case under other syntax) | `Tests/Attributes/AccessLevelInheritance.versetest:444`: `var<private> Field<public>:int = 42` | `expected an identifier, found '<'` | none | no | parser and front-end |
 | unnamed parameters | 14 → 10 | `Tests/FlowControl/Return.versetest:34`: `f(x:int):void={ g(:int):void={} }` | the forms of other features with an unnamed parameter: nested functions (2), type aliases (1), `castable_subtype` bounds (2), types as values, `:C=C{}`; extension methods (4) agree now | none | yes: [Supported](../LANGUAGE.md#supported), Functions | the features' |
 | lambdas | 14 | `Tests/Literals/Function.versetest:5`: `()=>a` (valid syntax) | parse error: lambdas `(X:int) => X` (11, which the tests call an error outside a map literal), `(1+2)(3) {4}` (2), `a{b},(c){d}` (1) | none | no | parser form: `=>` refused outside a map literal |
 | path literals | 14 | `Tests/Bugs/FORT-582128-PathLiteralAsValue.versetest:5`: `Alias:=import(/Verse.org)` | `unknown function 'import'` (13, 12 of them aliases of the test runner's modules); `/a,/b` at statement level (1); a path as a value gives "the path /a as a value is not supported" | none | yes: [Source text](../LANGUAGE.md#source-text) | front-end feature: `import` aliases (the Book's ch. 16) |
@@ -902,6 +906,55 @@ both compilers):
   that holds (`X <> 1000003`), and regenerated at those seeds its 281
   programs that run agree with the model.
 
+## After access specifiers
+
+Access specifiers were then built, with the rules of
+[access-specifiers.md](access-specifiers.md): what each of `<public>`,
+`<internal>`, `<protected>`, `<private>`, `<scoped{…}>` and
+`<epic_internal>` admits, where each may be written, overrides, `var<…>`'s
+write access, constructors, and the rule that a definition exposes nothing
+less visible than itself ([LANGUAGE.md](../LANGUAGE.md#access)). Against
+the baseline of the readings audit (main `ce5e444`: 7,390 agree, 2,066
+refuse, 277 accept, 50 differ), 145 cases more agree and none fewer: 7,535
+agree, 2,028 refuse, 170 accept, 50 differ. Every accepted refusal of the
+cause "access specifiers" agrees (107):
+
+| Rule | Cases |
+|---|---:|
+| where a specifier may be written, one in a place (3594, 3543, 3642): `ArchetypeAccessSpecifiers` 43, 45, 49; `Classes/AccessSpecifiers` 350, 355, 360, 364, 447-464; `InterfaceAccessVisibility` 36-38; `Interfaces/AccessSpecifiers` 256, 261; `Modules/Module:36`; `ModuleDefinitions` 129, 130, 315, 316; `scoped:91` | 24 |
+| none on an override (3650): `AccessLevelInheritance` 13, 23, 43, 55, 130, 711, 761, 787, 799, 811 | 10 |
+| a member used where its access does not admit it, through a value or bare (3593): `Classes/AccessSpecifiers` 51-132, `Interfaces/AccessSpecifiers` 51-132 (12), `AccessLevelInheritance` 676, 835, `SOL-5564:3` | 15 |
+| a constructor, `class<internal>` and `class<protected>`, in a construction or as a parent: `ArchetypeAccessSpecifiers` 15, 22, 36; `Classes/AccessSpecifiers:438`; `InterfaceAccessVisibility:9`; `ParametricTypes:478` | 6 |
+| an override of a member its class may not use: `AccessLevelInheritance` 33, 67, 751, 823; `Classes/AccessSpecifiers:467` | 5 |
+| a signature that names something less visible (3593): `DigestVisibility` 20, 27, 72-103, 115; `TypeAlias` 228-239 (11); `ParametricTypes` 1260, 1272 | 22 |
+| a field with no default less visible than its constructor: `Classes/AccessSpecifiers` 205, 212, 412-427; `Interfaces/AccessSpecifiers` 285-306 | 22 |
+| a specifier that is no keyword and names no access level: `Attributes/intrinsic` 4, 5, 9 | 3 |
+
+And 38 valid programs it refused agree: `var<w> X<r>` parses (12:
+`AccessLevelInheritance` 257, 270, 299, 344, 357, 369, 429, 444, 493;
+`scoped` 496, 509; `InterfaceWithFields:636`); `<scoped{…}>` and `S :=
+scoped{…}` (19: `AccessLevelInheritance` 142, 159, 181; `scoped` 5, 12,
+19, 26, 33, 53, 60, 381, 410, 419; `SOL-7898` 151, 172, 182, where a member
+a `using` opens that the use may not see is no candidate; `Interface` 338,
+358, 368); and `<epic_internal>` (7: `DigestVisibility` 122, 128-130, 153,
+155, 157). 12 of the 107 are refused by checks the parser makes (where a
+specifier goes, and none on an override), which the harness counts as
+refused by the parser.
+
+- **Left** in these files: `AccessLevelInheritance` 605, 619, 849 and
+  `Modules/Module:167` (definitions at column 3 of the test file, other
+  syntax), 669 and `:decls` (a module defined twice, partial modules), 863
+  (an override of a field with no new default, overrides of fields);
+  `ComparableInterface:37`, `ModuleDefinitions` 164 and 279 and
+  `Interface:33` for other causes; getter and setter accessors (3). The
+  package-scoped cases (`vpackage`, `CanCallerAccessEpicInternal/`, most of
+  `Modules/AccessSpecifiers` and `scoped`) are not translatable.
+- **Programs.** No program's bytes changed (the byte-identity oracle over
+  every suite and the frozen corpus). Six of openverse's tests used a
+  class's internal field or method from outside its module and now mark it
+  `<public>`; no program of the frozen corpus is refused, as its generators
+  write no module whose members are used outside it.
+
 ## Ten causes to remove first
 
 Ranked by cases moved per unit of risk. A count is the upper bound above;
@@ -946,12 +999,10 @@ output, which matter more than their number.
 7. **Block and dot forms (163 refusals; parser forms). Done**, but for
    generators in `first`, which parse and need the elaborator (a lazy
    generator, as `for`'s, stopped at the first success).
-8. **Access specifiers (87 accepted refusals; a front-end feature).**
-   Enforce `<private>`, `<protected>` and `<internal>` on members, fields
-   and archetypes and refuse contradictory or misplaced ones, extending the
-   module visibility check of [Modules](../LANGUAGE.md#modules). This
-   retires a documented reading (Readings, access specifiers), so it is an
-   owner decision; the tests give 87 exact oracles.
+8. **Done since: access specifiers (107 accepted refusals; a front-end
+   feature).** Enforced as [access-specifiers.md](access-specifiers.md)
+   pins them, the documented reading retired; all 107 agree, and 38
+   refusals more ([After access specifiers](#after-access-specifiers)).
 9. **Bitwise functions (159 refusals; Core and runtime, or Verse Core's
    operations).** `BitAnd`, `BitOr`, `BitXor`, `BitNot`, `BitShiftLeft`,
    `BitShiftRight` on `int`, pinned in [the library
@@ -1035,7 +1086,7 @@ explained in its commit.
 Grouped by the causes of the tables above. Lines are given per file, with
 `(b)` for `bp_vm_only` and `(v)` for `verse_vm_only` cases.
 
-**Accepted: access specifiers** (107): `ArchetypeAccessSpecifiers.versetest` 15, 22, 36, 43, 45, 49; `Attributes/AccessLevelInheritance.versetest` 13, 23, 33, 43, 55, 67, 130, 676, 711, 751, 761, 787, 799, 811, 823, 835; `Attributes/intrinsic.versetest` 4, 5, 9; `Attributes/scoped.versetest` 91; `Bugs/SOL-5564-PublicOverrideOfDefinitionInNonPublicScope.versetest` 3; `Classes/AccessSpecifiers.versetest` 51, 62, 73, 85, 109, 132, 205, 212, 350, 355, 360, 364, 412, 413, 414, 415, 419, 420, 425, 426, 427, 438, 447, 451, 455, 458, 461, 464, 467; `DigestVisibility.versetest` 20, 27, 72, 79, 85, 91, 97, 103, 115; `InterfaceAccessVisibility.versetest` 9, 36, 37, 38; `Interfaces/AccessSpecifiers.versetest` 51, 62, 73, 85, 109, 132, 256, 261, 285, 286, 287, 288, 292, 293, 297, 298, 304, 305, 306; `Modules/Module.versetest` 36; `Modules/ModuleDefinitions.versetest` 129, 130, 315, 316; `ParametricTypes.versetest` 478, 1260, 1272; `TypeAlias.versetest` 228, 229, 230, 231, 233, 234, 235, 236, 237, 238, 239
+**Accepted: access specifiers** (0): all 107 agree now ([After access specifiers](#after-access-specifiers)).
 
 **Accepted: failure where it is not allowed** (29): `Bugs/SOL-1987-IfDoesNotDetectNestedConditional.versetest` 22; `Bugs/SOL-4199-BreakFromIf.versetest` 80; `DefaultNamed.versetest` 820, 824, 844, 852, 853, 854, 859, 861, 862, 867, 868, 870, 875, 876, 877, 878; `Effects.versetest` 490, 537, 551, 552, 557(b), 558(b), 565(b), 573(v); `FlowControl/Case.versetest` 291; `FlowControl/for.versetest` 223; `ParametricTypes.versetest` 465
 
@@ -1085,13 +1136,13 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | `Any.versetest` | 83 | 62 | 0 | 18 | 0 | 3 | 0 |
-| `ArchetypeAccessSpecifiers.versetest` | 11 | 5 | 6 | 0 | 0 | 0 | 0 |
+| `ArchetypeAccessSpecifiers.versetest` | 11 | 11 | 0 | 0 | 0 | 0 | 0 |
 | `Archetypes.versetest` | 41 | 34 | 0 | 0 | 0 | 7 | 0 |
 | `Array.versetest` | 22 | 17 | 0 | 5 | 0 | 0 | 0 |
 | `ArrayAppend.versetest` | 27 | 11 | 0 | 10 | 1 | 5 | 0 |
 | `AssetUsage/IncrementalAssetUsage.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `AssignmentSequencing.versetest` | 7 | 3 | 0 | 4 | 0 | 0 | 0 |
-| `Attributes/AccessLevelInheritance.versetest` | 66 | 32 | 16 | 18 | 0 | 0 | 0 |
+| `Attributes/AccessLevelInheritance.versetest` | 66 | 60 | 0 | 6 | 0 | 0 | 0 |
 | `Attributes/AccessSpecifiersDisallowedOnLocalVars.versetest` | 9 | 9 | 0 | 0 | 0 | 0 | 0 |
 | `Attributes/Attributes.versetest` | 34 | 21 | 0 | 11 | 0 | 2 | 0 |
 | `Attributes/CustomAttributes.versetest` | 47 | 36 | 0 | 11 | 0 | 0 | 0 |
@@ -1108,10 +1159,10 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Attributes/experimental.versetest` | 47 | 1 | 0 | 0 | 0 | 46 | 0 |
 | `Attributes/export_metadata.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `Attributes/final.versetest` | 22 | 21 | 1 | 0 | 0 | 0 | 0 |
-| `Attributes/intrinsic.versetest` | 7 | 4 | 3 | 0 | 0 | 0 | 0 |
+| `Attributes/intrinsic.versetest` | 7 | 7 | 0 | 0 | 0 | 0 | 0 |
 | `Attributes/native.versetest` | 20 | 1 | 0 | 0 | 0 | 19 | 0 |
 | `Attributes/override.versetest` | 16 | 12 | 0 | 4 | 0 | 0 | 0 |
-| `Attributes/scoped.versetest` | 51 | 20 | 1 | 12 | 0 | 18 | 0 |
+| `Attributes/scoped.versetest` | 51 | 33 | 0 | 0 | 0 | 18 | 0 |
 | `Attributes/unique.versetest` | 34 | 15 | 0 | 10 | 0 | 9 | 0 |
 | `AutoQualification.versetest` | 29 | 0 | 0 | 0 | 0 | 29 | 0 |
 | `BigArray.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
@@ -1320,7 +1371,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/SOL-5477-CrashInGenClassDefinition.versetest` | 2 | 1 | 1 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-5496-CaseCodeBlocksWithoutScopes.versetest` | 8 | 1 | 0 | 7 | 0 | 0 | 0 |
 | `Bugs/SOL-5551-UsingTypeAlias.versetest.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
-| `Bugs/SOL-5564-PublicOverrideOfDefinitionInNonPublicScope.versetest` | 3 | 0 | 1 | 0 | 0 | 2 | 0 |
+| `Bugs/SOL-5564-PublicOverrideOfDefinitionInNonPublicScope.versetest` | 3 | 1 | 0 | 0 | 0 | 2 | 0 |
 | `Bugs/SOL-5706-CompilerCrashWhenUsingSyncExpressionInCertainCircumstances.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-5777-AutoRTFMForLoopCrash.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-5838-JoinOfClassesWithCommonBaseClassWithInterfaceInheritance.versetest` | 4 | 2 | 2 | 0 | 0 | 0 | 0 |
@@ -1351,7 +1402,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/SOL-7778_EnumeratorsAliasingReservedWords.versetest` | 24 | 5 | 0 | 0 | 0 | 19 | 0 |
 | `Bugs/SOL-7781-ConcreteClassDoesntEnforceDefaultValuesForInterfaceFields.versetest` | 7 | 4 | 2 | 0 | 0 | 1 | 0 |
 | `Bugs/SOL-7849-CannotAccessDataFieldsInParametricInterfaces.versetest` | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
-| `Bugs/SOL-7898-DisambiguateSuperTypesByAccess.versetest` | 18 | 15 | 0 | 3 | 0 | 0 | 0 |
+| `Bugs/SOL-7898-DisambiguateSuperTypesByAccess.versetest` | 18 | 18 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-8109-ParserStackOverflow.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-8137-AttributeLocalizesIsNotAllowedOnLocalVariables.versetest` | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
 | `Bugs/SOL-8267-InterfaceDefaultsAreNotReinstantiated.versetest` | 6 | 2 | 0 | 3 | 0 | 1 | 0 |
@@ -1396,7 +1447,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `CanCallerAccessEpicInternal/SpawnRoot.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `Cast.versetest` | 65 | 47 | 0 | 18 | 0 | 0 | 0 |
 | `Castable.versetest` | 101 | 44 | 0 | 39 | 0 | 18 | 0 |
-| `Classes/AccessSpecifiers.versetest` | 61 | 19 | 29 | 0 | 0 | 13 | 0 |
+| `Classes/AccessSpecifiers.versetest` | 61 | 48 | 0 | 0 | 0 | 13 | 0 |
 | `Classes/Class.versetest` | 42 | 42 | 0 | 0 | 0 | 0 | 0 |
 | `Classes/ClassBlockClause.versetest` | 24 | 16 | 1 | 0 | 0 | 7 | 0 |
 | `Classes/Constructor.versetest` | 61 | 15 | 1 | 6 | 0 | 39 | 0 |
@@ -1431,7 +1482,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `DefaultNamed.versetest` | 142 | 110 | 21 | 1 | 0 | 10 | 0 |
 | `Definitions.versetest` | 16 | 15 | 0 | 1 | 0 | 0 | 0 |
 | `DigestGeneration.versetest` | 43 | 1 | 0 | 0 | 0 | 42 | 0 |
-| `DigestVisibility.versetest` | 47 | 15 | 9 | 7 | 0 | 16 | 0 |
+| `DigestVisibility.versetest` | 47 | 31 | 0 | 0 | 0 | 16 | 0 |
 | `Duplication.versetest` | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
 | `DynamicallyTypedSubobjectInstantiation.versetest` | 16 | 16 | 0 | 0 | 0 | 0 | 0 |
 | `Effects.versetest` | 336 | 256 | 8 | 5 | 0 | 67 | 0 |
@@ -1479,12 +1530,12 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Incremental/10_statistics_replayed.versetest` | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
 | `IndistinctOverloads.versetest` | 20 | 20 | 0 | 0 | 0 | 0 | 0 |
 | `IntAsRational.versetest` | 14 | 14 | 0 | 0 | 0 | 0 | 0 |
-| `Interface.versetest` | 109 | 93 | 5 | 8 | 0 | 3 | 0 |
-| `InterfaceAccessVisibility.versetest` | 19 | 8 | 4 | 0 | 0 | 7 | 0 |
+| `Interface.versetest` | 109 | 96 | 5 | 5 | 0 | 3 | 0 |
+| `InterfaceAccessVisibility.versetest` | 19 | 12 | 0 | 0 | 0 | 7 | 0 |
 | `InterfaceDiamond.versetest` | 18 | 16 | 2 | 0 | 0 | 0 | 0 |
 | `InterfaceWithAccessors.versetest` | 6 | 3 | 0 | 3 | 0 | 0 | 0 |
-| `InterfaceWithFields.versetest` | 37 | 24 | 0 | 12 | 0 | 1 | 0 |
-| `Interfaces/AccessSpecifiers.versetest` | 41 | 15 | 19 | 0 | 0 | 7 | 0 |
+| `InterfaceWithFields.versetest` | 37 | 25 | 0 | 11 | 0 | 1 | 0 |
+| `Interfaces/AccessSpecifiers.versetest` | 41 | 34 | 0 | 0 | 0 | 7 | 0 |
 | `Intrinsics/Abs.versetest` | 19 | 16 | 0 | 0 | 1 | 2 | 0 |
 | `Intrinsics/ArrayFind.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
 | `Intrinsics/ArrayInsert.versetest` | 18 | 18 | 0 | 0 | 0 | 0 | 0 |
@@ -1535,8 +1586,8 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Modules/AccessSpecifiers.versetest` | 34 | 0 | 0 | 0 | 0 | 34 | 0 |
 | `Modules/AssetAccessibility.versetest` | 4 | 0 | 0 | 0 | 0 | 4 | 0 |
 | `Modules/Import.versetest` | 7 | 0 | 0 | 0 | 0 | 7 | 0 |
-| `Modules/Module.versetest` | 58 | 38 | 1 | 3 | 0 | 16 | 0 |
-| `Modules/ModuleDefinitions.versetest` | 62 | 20 | 5 | 1 | 0 | 36 | 0 |
+| `Modules/Module.versetest` | 58 | 39 | 0 | 3 | 0 | 16 | 0 |
+| `Modules/ModuleDefinitions.versetest` | 62 | 24 | 1 | 1 | 0 | 36 | 0 |
 | `Modules/ModuleScopedInstances.versetest` | 9 | 0 | 0 | 0 | 0 | 9 | 0 |
 | `Modules/PartialModuleDefinitions.versetest` | 14 | 2 | 0 | 5 | 0 | 7 | 0 |
 | `Modules/Using.versetest` | 22 | 1 | 0 | 0 | 0 | 21 | 0 |
@@ -1600,7 +1651,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `PackageCycles.versetest` | 15 | 0 | 0 | 0 | 0 | 15 | 0 |
 | `ParametricCastingIsDisallowed.versetest` | 11 | 10 | 0 | 1 | 0 | 0 | 0 |
 | `ParametricFunctions.versetest` | 106 | 46 | 9 | 47 | 0 | 4 | 0 |
-| `ParametricTypes.versetest` | 274 | 146 | 7 | 98 | 0 | 23 | 0 |
+| `ParametricTypes.versetest` | 274 | 149 | 4 | 98 | 0 | 23 | 0 |
 | `Parentheses.versetest` | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | `Path.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `PersistentJson.versetest` | 103 | 1 | 0 | 0 | 0 | 102 | 0 |
@@ -1660,7 +1711,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `TransactionalTaskScope.versetest` | 7 | 0 | 0 | 7 | 0 | 0 | 0 |
 | `Tuple.versetest` | 70 | 55 | 1 | 2 | 0 | 12 | 0 |
 | `Type.versetest` | 37 | 34 | 0 | 3 | 0 | 0 | 0 |
-| `TypeAlias.versetest` | 79 | 52 | 11 | 2 | 0 | 14 | 0 |
+| `TypeAlias.versetest` | 79 | 63 | 0 | 2 | 0 | 14 | 0 |
 | `TypeChecking.versetest` | 53 | 53 | 0 | 0 | 0 | 0 | 0 |
 | `TypeParam.versetest` | 15 | 1 | 0 | 14 | 0 | 0 | 0 |
 | `TypeSpec.versetest` | 5 | 4 | 0 | 1 | 0 | 0 | 0 |

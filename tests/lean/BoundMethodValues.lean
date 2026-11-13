@@ -71,11 +71,11 @@ def main : IO Unit := do
       | .tup [_, .name "int"] => true | _ => false)
   let generated := FnValues.desugar [] [] [] [argument]
   let fields := generated.findSome? fun
-    | .classDef _ name _ _ _ _ fields _ _ =>
+    | .classDef _ name _ _ _ _ _ fields _ =>
       if name == argument.className 0 then some fields else none
     | _ => none
   need "generated adapter stores a readonly real relation field"
-    (fields.any fun fields => fields.any fun (name, ty, _, mutable) =>
+    (fields.any fun fields => fields.any fun ⟨name, ty, _, mutable, _, _⟩ =>
       (SubtypeEvidence.declaredRelation? (argument.className 0) name ty mutable).isSome)
   need "upper-bound evidence does not justify reverse narrowing"
     (match request (context) reader (fn [t] vehicle) (fn [vehicle] vehicle) with

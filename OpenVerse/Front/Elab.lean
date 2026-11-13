@@ -385,10 +385,10 @@ partial def liftDepth (e : SExpr) : Nat :=
 partial def topLiftDepth : STop → Nat
   | .fn _ _ ps _ _ _ body =>
     (ps.filterMap (·.default)).foldl (fun n e => max n (liftDepth e)) (liftDepth body)
-  | .const _ _ _ e => liftDepth e
-  | .classDef _ _ _ _ _ _ fields _ methods =>
+  | .const _ _ _ _ e => liftDepth e
+  | .classDef _ _ _ _ _ _ _ fields methods =>
     methods.foldl (fun n t => max n (topLiftDepth t))
-      (fields.foldl (fun n (_, _, e, _) => max n (e.map liftDepth |>.getD 0)) 0)
+      (fields.foldl (fun n f => max n (f.default.map liftDepth |>.getD 0)) 0)
 
 /-- Named defaults can discover forwarding helpers along a dependency
     chain. Interface copies may instantiate each source method per class. -/
