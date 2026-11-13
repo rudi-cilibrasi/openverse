@@ -10,7 +10,8 @@ partial def elabExprControlWith
     (elabDefers : Ctx → List (SExpr × List Local) → EM Expr)
     (elabRefineExit : Ctx → Pos → List SExpr → List SExpr → EM R)
     (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx))
-    (elabRefinedIf : Ctx → Pos → Pos → String → String → SExpr → SExpr → Option SExpr → Option Ty → (made : optParam Bool false) → (ifType : optParam Bool false) → EM (Option R))
+    (elabRefinedIf : Ctx → Pos → Pos → String → String → SExpr → SExpr → Option SExpr → Option Ty → (made : optParam Bool false) → EM (Option R))
+    (refinedIfType : Ctx → Pos → String → String → SExpr → SExpr → SExpr → EM (Option (Ty × Bool)))
     (elabSet : Ctx → Pos → SExpr → Option String → SExpr → EM R)
     (elabFor : Ctx → Pos → List SExpr → SExpr → (prepared : optParam Bool false) → (firstDecides : optParam Bool false) → (failure : optParam (Option SExpr) none) → EM R)
     (elabOneClauses : Ctx → List SExpr → EM (R × Ctx))
@@ -39,19 +40,18 @@ partial def elabExprControlWith
     let ctx := { ctx with asWritten := false }
     -- (with no expected type, one with a cast that refines as clause `k` and
     -- an `else`: any `if`'s type, `ifBranches`, the branch, the clauses
-    -- after the cast and `thenE`, typed under the refinement, as
-    -- `elabRefinedIf` finds it, the clauses before it as they are; nothing
+    -- after the cast and `thenE`, typed under the refinement
+    -- (`refinedIfType`), the clauses before it as they are; nothing
     -- is kept, so that every elaboration decides the same)
     let refinedIfTy (k : Nat) (ee : SExpr) : EM (Option (Ty × Bool)) := do
       let st ← get
-      let some (dp, d, T, x) := conds[k]?.bind Refine.castClause? | return none
+      let some (_, d, T, x) := conds[k]?.bind Refine.castClause? | return none
       let τ? ← tryCatch (do
           let c ← if k == 0 then pure ctx else
             pure (← elabSeq { ctx with canFail := true, inTaking := true, typeOnly := true } (conds.take k) none).2
           let branch := Refine.castRest p (conds.drop (k + 1)) thenE (some (Refine.noValue p))
-          let r? ← elabRefinedIf { c with canFail := ctx.canFail, inTaking := ctx.inTaking, typeOnly := true }
-            p dp d T x branch (some ee) none (made := true) (ifType := true)
-          pure (r?.map fun r => (r.ty, match r.e with | .lit (.logic true) => true | _ => false))) fun _ => pure none
+          refinedIfType { c with canFail := ctx.canFail, inTaking := ctx.inTaking, typeOnly := true } p d T x branch ee)
+        fun _ => pure none
       set st
       return τ?
     let nested (k : Nat) (_ : String) : EM (Option R) := do

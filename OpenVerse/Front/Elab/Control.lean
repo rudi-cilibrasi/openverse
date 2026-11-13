@@ -415,36 +415,47 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     | ty => eerr p s!"{ty.show} has no field '{f}'"
   | _ => eerr p "openverse supports set X = …, and set on a path of fields, indices and keys from a variable (set S.F[i].G = …); not through a tuple element or a call result"
 
-/-- `if (D := T[X]) then Body else Else`, where the cast holds only under a
-    refinement of the code's type parameters (#243). `Body` is lifted into
-    a generic function (`Refine.functions`), asked for in a first
-    elaboration, which elaborates `Body` in the refined world to find its
-    type, effects and the locals it uses. Then the `if` is a dispatch to
-    it, one test per set of pins among the classes tested, as a refined
-    method call is: `Typed.dispatch` types the call under the refinement,
-    with the object (as `D`) and those locals passed at their refined
-    types. `none` when the cast does not refine: the plain path. With
-    `ifType`, only the `if`'s type with no expected type, as any `if`'s
-    (`ifBranches`), and in its code, as a `logic`, whether its branch is
-    elaborated at that type, not its own. -/
-partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr → Bool → Option Ty → EM R)
-    (elabE : Ctx → SExpr → Option Ty → EM R) (withMark : Ctx → Expr → EM Expr) (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (body0 : SExpr)
-    (elseE : Option SExpr) (exp : Option Ty) (made : Bool := false)
-    (escRet : Option (Ty × Refine.Exits) := none)
-    (outsideWrites : List Nat := []) (ifType : Bool := false) :
-    EM (Option R) := do
-  let ctx := ctx.choiceCoercionScope
-  -- (the lift's tag is of the branch as written, before choice conversions
-  -- wrap it, as `elabExprControlWith` computes it too)
-  let written := body0
-  let body0 := ctx.choiceCoercionBody body0
+/-- (#243) The world under a cast `D := T[X]` that holds only under a
+    refinement of the code's type parameters, where its branch is typed
+    (`refinedCastWith`). -/
+structure RefinedCast where
+  /-- `X`. -/
+  rx : R
+  /-- `X`'s class and its type arguments. -/
+  S : String
+  sargs : List Ty
+  /-- `T`'s type arguments (a comparable one the cast opens, as such). -/
+  targs : List Ty
+  /-- The classes below both, which the cast tests for. -/
+  common : List String
+  /-- (#250) The type arguments the cast opens: each, the type parameter it
+      stands for, and whether it is comparable. -/
+  opened : List (String × String × Bool)
+  /-- (#53, #351) A cast to each class below both (`castChains`). -/
+  chain : Bool
+  /-- (#250) `T` has Verse Core type arguments past the object's, or not as
+      its own type parameters: its tests open them, as a method's dispatch
+      does. -/
+  wide : Bool
+  /-- The refinement. -/
+  μT : List (String × Ty)
+  /-- The object as a `T`, refined. -/
+  dTy : Ty
+  /-- The context under the refinement, the object as `D` in the slot given. -/
+  refined : Nat → Ctx
+  /-- The branch's type under the refinement, as code outside it names it. -/
+  branchTyOf : Ty → Ty
+  /-- With no expected type and the `else` given: the `if`'s type, and
+      whether its branch must be elaborated at that type, not its own. -/
+  ifTyAt : SExpr → EM (Ty × Bool)
+
+/-- The world under `D := T[X]` (`RefinedCast`), for its branch `body` (in a
+    method, `Self`'s members qualified) in `ctx`; `none`, and the state as it
+    was, when the cast does not refine. -/
+def refinedCastWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p : Pos) (D T : String)
+    (x body : SExpr) : EM (Option RefinedCast) := do
   let env := ctx.types
   if !env.classes.contains T then return none
-  -- (in a method: the members of `Self` the branch names bare, as members
-  -- of `Self`, which its function takes as a parameter)
-  let body := match ctx.selfClass with
-    | some c => selfQualify ctx c body0
-    | none => body0
   let st0 ← get
   let rx ← elabE { ctx with canFail := true, inTaking := true } x none
   let some (S, sargs, targs, common, eqs, opened) := refiningCast? env T rx.ty (env.tvars.map (·.1))
@@ -458,11 +469,8 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   -- its own type parameters: its tests open them, as a method's dispatch does)
   let wide := !((env.coreVars T).length == (env.coreArgs S sargs).length &&
     (env.coreVars T).all fun (v, _) => !v.startsWith "$arg")
-  let coreFields (n : String) (ts : List Ty) : Option (List Ty) :=
-    if env.classes.contains n then none else some ((env.fields n ts).map (·.2.1))
   let some (μT, opened) := castRefinement? env eqs opened (env.comparableArgs T targs) | do set st0; return none
   let targs := targs.map fun t => t.subst (opened.filterMap fun (n, _, c) => if c then some (n, Ty.param n true) else none)
-  let shown := (Ty.struct T targs).show
   -- (the world under the refinement: the object as a `T`, in `dslot`, the
   -- locals and the code's type parameters refined, and the type arguments
   -- the cast opens, #250)
@@ -511,10 +519,55 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let env' := (← get).env
     set st
     return (τ, own?.all fun b => joinTy env' b.ty (refine τ) none != some (refine τ))
+  return some { rx, S, sargs, targs, common, opened, chain, wide, μT, dTy, refined, branchTyOf, ifTyAt }
+
+/-- (#243) With no expected type, the type of `if (D := T[X]) then body
+    else ee` whose cast refines, as any `if`'s (`RefinedCast.ifTyAt`), and
+    whether its branch is elaborated at that type, not its own; `none` when
+    the cast does not refine. -/
+def refinedIfTypeWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p : Pos) (D T : String)
+    (x body ee : SExpr) : EM (Option (Ty × Bool)) := do
+  -- (the branch as `elabRefinedIfWith` elaborates it)
+  let ctx := ctx.choiceCoercionScope
+  let body := ctx.choiceCoercionBody body
+  let body := match ctx.selfClass with | some c => selfQualify ctx c body | none => body
+  let some cast ← refinedCastWith elabE ctx p D T x body | return none
+  some <$> cast.ifTyAt ee
+
+/-- `if (D := T[X]) then Body else Else`, where the cast holds only under a
+    refinement of the code's type parameters (#243). `Body` is lifted into
+    a generic function (`Refine.functions`), asked for in a first
+    elaboration, which elaborates `Body` in the refined world to find its
+    type, effects and the locals it uses. Then the `if` is a dispatch to
+    it, one test per set of pins among the classes tested, as a refined
+    method call is: `Typed.dispatch` types the call under the refinement,
+    with the object (as `D`) and those locals passed at their refined
+    types. `none` when the cast does not refine: the plain path. -/
+partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr → Bool → Option Ty → EM R)
+    (elabE : Ctx → SExpr → Option Ty → EM R) (withMark : Ctx → Expr → EM Expr) (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (body0 : SExpr)
+    (elseE : Option SExpr) (exp : Option Ty) (made : Bool := false)
+    (escRet : Option (Ty × Refine.Exits) := none)
+    (outsideWrites : List Nat := []) :
+    EM (Option R) := do
+  let ctx := ctx.choiceCoercionScope
+  -- (the lift's tag is of the branch as written, before choice conversions
+  -- wrap it, as `elabExprControlWith` computes it too)
+  let written := body0
+  let body0 := ctx.choiceCoercionBody body0
+  let env := ctx.types
+  -- (in a method: the members of `Self` the branch names bare, as members
+  -- of `Self`, which its function takes as a parameter)
+  let body := match ctx.selfClass with
+    | some c => selfQualify ctx c body0
+    | none => body0
+  let st0 ← get
+  let some { rx, S, sargs, targs, common, opened, chain, wide, μT, dTy, refined, branchTyOf, ifTyAt } ←
+      refinedCastWith elabE ctx p D T x body | return none
+  let coreFields (n : String) (ts : List Ty) : Option (List Ty) :=
+    if env.classes.contains n then none else some ((env.fields n ts).map (·.2.1))
+  let shown := (Ty.struct T targs).show
+  let refine (t : Ty) : Ty := t.subst μT
   let ifTy (ee : SExpr) : EM Ty := return (← ifTyAt ee).1
-  if ifType then
-    let (τ, atType) ← ifTyAt (elseE.getD (Refine.noValue p))
-    return some ⟨.lit (.logic atType), τ⟩
   -- (what the branch's function captures: `D` is its first parameter)
   let caps : List Local := ctx.capturesOf body [D]
   -- (the `var`s from outside it that the branch sets, its `return`s and its

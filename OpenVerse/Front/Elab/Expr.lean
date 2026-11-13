@@ -114,7 +114,7 @@ partial def elabExprValues (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R :=
   elabExprValuesWith elabE (elabSeqIn true) elabApp ratCall elabCmp (@elabMember) elabConstruct elabMapLit ctx se exp
 
 partial def elabExprControl (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R :=
-  elabExprControlWith elabE elabStmt elabDefers elabRefineExit elabSeq (@elabRefinedIf) elabSet (@elabFor) elabOneClauses elabCase ctx se exp
+  elabExprControlWith elabE elabStmt elabDefers elabRefineExit elabSeq (@elabRefinedIf) refinedIfType elabSet (@elabFor) elabOneClauses elabCase ctx se exp
 
 partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) :=
   elabStmtWith elabE ctx se exp
@@ -789,8 +789,13 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
 
 /-- `elabRefinedIfWith`, given this block's functions (#325). -/
 partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (body0 : SExpr)
-    (elseE : Option SExpr) (exp : Option Ty) (made : Bool := false) (ifType : Bool := false) : EM (Option R) :=
-  elabRefinedIfWith elabApp elabE withDeferMark ctx p _dp D T x body0 elseE exp made (ifType := ifType)
+    (elseE : Option SExpr) (exp : Option Ty) (made : Bool := false) : EM (Option R) :=
+  elabRefinedIfWith elabApp elabE withDeferMark ctx p _dp D T x body0 elseE exp made
+
+/-- `refinedIfTypeWith`, given this block's functions. -/
+partial def refinedIfType (ctx : Ctx) (p : Pos) (D T : String) (x body ee : SExpr) :
+    EM (Option (Ty × Bool)) :=
+  refinedIfTypeWith elabE ctx p D T x body ee
 
 /-- `elabGenericCallWith`, given this block's functions (#325). -/
 partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) (exp : Option Ty) :
