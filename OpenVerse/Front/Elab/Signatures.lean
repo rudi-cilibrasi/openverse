@@ -213,8 +213,8 @@ structure Signatures where
   sigs : Array Sig
   /-- The signatures of `generics`, over their type parameters. -/
   gsigs : Array Sig
-  /-- The program calls are elaborated against (`Ctx.sigProg`), for what a call
-      can do (`Expr.mayFail`, `Expr.writesHeap`): `sigs`, then `gsigs`. -/
+  /-- The program calls are elaborated against (`Ctx.sigProg`), for whether a
+      call can fail (`Expr.mayFail`): `sigs`, then `gsigs`. -/
   prog : Prog
 
 /-- Every signature: the functions' and constants', then the generic functions'. -/

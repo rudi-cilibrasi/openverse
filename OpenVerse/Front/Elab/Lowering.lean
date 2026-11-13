@@ -19,10 +19,6 @@ structure Compiled where
 def Compiled.asking (needs : Requests) : Compiled :=
   { prog := default, sigs := { fns := [] }, slotTys := [], needs }
 
-
-
-
-
 /-- How a program is compiled from the command line: its shell arguments,
     bound to `Args : []string` (unless the program defines `Args`), and an
     expression to run instead of `Main`; and what earlier elaborations of it
@@ -630,15 +626,14 @@ structure LoweredConcurrency where
   /-- The values of the fields the lowering adds to the scheduler (#362), for its prototype. -/
   schedMore : List Value
 
-/-- The concurrency lowering (#156), at the end of `elabProgramCore`: each
+/-- The concurrency lowering (#156), in `lowerProgram`: each
     `<suspends>` function becomes a frame class and its resume, cancel and
     arm functions (`Suspend.lower`), after spawned dispatches are lifted
     (#173); then the task roots (generic ones at their function's type
     arguments, #244), branch wrappers, the scheduler's
     list and, for a suspends `Main`, `$Run` and `$Start`. Gives the
     functions, their slot types and signatures, the class table, the frame
-    classes and their pins, and `Main`'s call (`LoweredConcurrency`). (A function of its own, so that `elabProgramCore` stays within
-    Lean's elaboration limits.) -/
+    classes and their pins, and `Main`'s call (`LoweredConcurrency`). -/
 def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsigs0 : List (List VTy × VTy))
     (protos : HeapTy) (pins : List (List (Option VTy))) (inFn : String → String → String)
     (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (fsigsIn : List (List VTy × VTy)) (classTable0 : List (List VTy))

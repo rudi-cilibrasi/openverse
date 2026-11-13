@@ -153,15 +153,14 @@ def classFields (classes : Classes) (requests : Requests) : Except String Fields
   -- the fields of each class: its superclass's, then those of the
   -- interfaces above it that are not there yet (once, along a diamond), then
   -- its own (an `<override>` field gives an inherited one a new default)
-  let mut full : Array (String × List (String × STy × Option SExpr × Bool)) := #[]
   let mut fieldOverrides : Array (Pos × String × String × STy) := #[]
   let mut defaultClashes : Array String := #[]
-  -- (each class's fields by name too: lookups in `full` made this cubic)
+  -- (each class's fields by name, in a map: lookups in a list made this cubic)
   let mut fullMap : Std.HashMap String (List (String × STy × Option SExpr × Bool)) := {}
   for _ in [0:classes.defs.length + 1] do
     -- (until a pass resolves nothing more, or every class is resolved)
-    if full.size == classes.defs.length then break
-    let before := full.size
+    if fullMap.size == classes.defs.length then break
+    let before := fullMap.size
     for cd in classes.defs do
       if fullMap.contains cd.name then continue
       let inherited? : Option (List (String × STy × Option SExpr × Bool)) :=
@@ -302,9 +301,8 @@ def classFields (classes : Classes) (requests : Requests) : Except String Fields
           -- which a dispatch through a view opens, #351)
           if requests.witnesses.contains cd.name || !qargs.any (fun | .name v => v == tp.name | _ => false) then
             fs := fs ++ [(s!"$w.{cd.name}.{tp.name}", .name tp.name, some (.ident cd.pos "$witness"), false)]
-      full := full.push (cd.name, fs)
       fullMap := fullMap.insert cd.name fs
-    if full.size == before then break
+    if fullMap.size == before then break
   let fields : Fields := { map := fullMap, overrides := fieldOverrides, defaultClashes }
   for cd in classes.defs do
     for (f, _, _, _) in fields.of cd.name do
