@@ -2114,6 +2114,20 @@ partial def elabDefaultDispatch (ctx : Ctx) (p : Pos) (fname : String)
 
 /-- `e.m`: `.Length` of an array or string, or a field of a struct. -/
 partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option Ty := none) : EM R := do
+  -- `X.(c:)F`, a field: the one `c` declares itself, of an `X` below `c`
+  -- (a qualifier names where the definition is, docs/research/qualified-names.md)
+  if let (.struct sn targs, some (q, f)) := (r.ty, splitQual? m) then
+    if ctx.types.classes.contains sn && (fieldIndex (ctx.types.fields sn targs) f).isSome then
+      let has (c : String) : Bool := (ctx.types.fields c []).any (·.1 == f)
+      let declares (c : String) : Bool := has c && !((ctx.types.supers c).drop 1).any has
+      if !(ctx.types.isSub sn q) then eerr p s!"X.({q}:){f}: {sn} is not below {q}"
+      if !declares q then
+        eerr p s!"X.({q}:){f}: {q} does not declare the field {f} itself: a qualifier names where the definition is"
+      -- (a class above that declares one too: openverse keeps one field of
+      -- a name, so the qualifier could not tell them apart)
+      if let some d := ((ctx.types.supers sn).filter fun c => c != q && declares c).head? then
+        eerr p s!"X.({q}:){f}: {sn} has the field {f} of {q} and the one of {d}: openverse keeps one field of a name in a class, so it cannot tell them apart"
+      return ← elabMember ctx p r f exp
   let r ← elabBoundReceiver ctx p r m
   ctx.noteFamily p r.ty m
   match r.ty, m with

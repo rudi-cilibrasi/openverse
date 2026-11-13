@@ -1,11 +1,14 @@
 /-
-  OpenVerse front end — modules (#112, Book of Verse ch. 16).
+  OpenVerse front end — modules (#112, Book of Verse ch. 16) and qualified
+  names (Book of Verse ch. 9, 10 and 16; the rules are pinned in
+  docs/research/qualified-names.md).
 
   The parser flattens `name := module:` into definitions of qualified names
-  (`A::B::F`) and leaves markers: `$module:A::B`, `$public:A::B::F` and
-  `$open:A::|M` (a `using{M}` written in module `A`). This pass rewrites
-  every reference to a module member to its qualified name, before
-  elaboration, which then sees an ordinary flat program:
+  (`A::B::F`) and leaves markers: `$module:A::B`, `$public:A::B::F`,
+  `$open:A::|M` (a `using{M}` written in module `A`) and `$qual:A::F|q` (a
+  definition written `(q:)F`). This pass rewrites every reference to a
+  module member to its qualified name, before elaboration, which then sees
+  an ordinary flat program:
 
   - a bare name resolves from the definition's module outward (its own
     members, then the enclosing modules'), then among the public members of
@@ -18,6 +21,19 @@
   Verse forbids shadowing, so a local may not have a name a resolution
   would rewrite (a member of the module or of an open one): that is refused
   here (elaboration's own check sees only the flat names).
+
+  A qualifier `(q:)` names a scope, and every one written goes through one
+  resolver (`Qual`, `Resolver.qualifier`): `q` is found as a name is (a
+  module, then its submodules, or a class, interface, struct or enum),
+  `local` is the locals of the code it is written in (not supported yet),
+  and `super` the implementation above a method. A qualified name is looked
+  up in exactly that scope: `(M:)F` is `M`'s `F`, `(e:)v` the enum's value;
+  a class's `(c:)M` is left for the elaboration of classes, which knows what
+  each class introduces. A qualified definition's qualifier names where it
+  is defined: its module, its class (or, for an override, what introduces
+  the member), its enum or struct. A class's member `(c:)x` used bare in the
+  class, where a definition outside the class is named so too, is
+  ambiguous.
 -/
 import OpenVerse.Front.Syntax
 import Std.Data.HashSet
@@ -47,18 +63,53 @@ partial def SExpr.identPath : SExpr → Option (List String)
   | .member _ e m => (e.identPath).map (· ++ [m])
   | _ => none
 
+/-- What a qualifier `(q:)` names (docs/research/qualified-names.md). -/
+inductive Qual where
+  /-- A module, by its parts: its members (`start`: how many of the parts
+      the first name found reaches, which need no visibility check). -/
+  | module (path : List String) (start : Nat)
+  /-- A class, interface, struct or enum (or an alias of one), by its
+      qualified name: its members, which the elaboration of classes knows. -/
+  | type (name : String)
+  /-- `(local:)`: the locals of the code it is written in. -/
+  | locals
+  /-- `(super:)`: the implementation above a method (the elaborator's). -/
+  | super
+
 /-- How the names of one scope resolve: values, binders (refused when they
-    would shadow a member), type names and paths `A.B.F`. -/
+    would shadow a member), type names, paths `A.B.F` and qualifiers. -/
 structure Resolver where
   val  : Pos → String → Except String String
   bind : Pos → String → Except String Unit
   ty   : Pos → String → Except String String
   qual : Pos → List String → Except String (Option String)
+  /-- What a qualifier names from this scope (a renamer that only maps
+      names takes it as a type's). -/
+  qualifier : Pos → String → Except String Qual := fun p q => do return .type (← ty p q)
+  /-- The module a chain of names `A.B` is, from this scope, if it is one
+      (with `Qual.module`'s `start`). -/
+  modulePath : Pos → List String → Except String (Option (List String × Nat)) := fun _ _ => pure none
+  /-- A module's member `F`, as a qualified name, checked to exist and to
+      be visible here (after the module's first `start` parts). -/
+  memberOf : Pos → List String → Nat → String → Except String String :=
+    fun _ path _ f => pure (qualJoin (path ++ [f]))
+  /-- The class whose method or default this is. -/
+  selfClass : Option String := none
+  /-- Whether a type's qualified name is an enum's. -/
+  isEnum : String → Bool := fun _ => false
+  /-- `c` declares the field `F` itself, and is the class `selfClass` or
+      above it, where no other class or interface declares an `F`. -/
+  selfField : String → String → Bool := fun _ _ => false
+  /-- The members `selfClass` and the classes above it define qualified
+      with their own class, `(c:)x`, each with that class. -/
+  selfQualified : List (String × String) := []
+  /-- Whether a bare name names a definition outside every class: a
+      module's member or a top-level one. -/
+  global : Pos → String → Bool := fun _ _ => false
 
 /-- A method name: `(i:)M`'s interface `i` (or `M.i`) resolved as a type. -/
 def Resolver.method (r : Resolver) (p : Pos) (m : String) : Except String String := do
-  if m.startsWith "(" then
-    if let [q, x] := (m.drop 1).toString.splitOn ":)" then return s!"({← r.ty p q}:){x}"
+  if let some (q, x) := splitQual? m then return s!"({← r.ty p q}:){x}"
   return m
 
 /-- Rewrite the names of an expression (see `Resolver`). -/
@@ -79,17 +130,45 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
         | some qd => return .ident p s!"$ctor:{qd}"
         | none => throw s!"{p.show}: unknown constructor {d}"
       return .ident p s!"$ctor:{← r.val p d}"
+    -- (a member `(c:)x` of the class whose code this is, bare, where a
+    -- definition outside the class is named so too: Book of Verse ch. 10,
+    -- "Methods with Same Name"; tests, ModuleDefinitions.versetest)
+    if let some c := r.selfQualified.lookup n then
+      if r.global p n then
+        throw s!"{p.show}: '{n}' is ambiguous here: the member ({c}:){n} and a definition outside the class are both named so; qualify it, ({c}:){n} for the member"
     return .ident p (← r.val p n)
   | .member p x m => do
-    -- `(M:)F`, parsed as `Self.(M:)F`: when `M` is a module, its member `F`
-    -- (#145), as `M.F`; else a qualified member of `Self`
-    if let .ident _ "Self" := x then
-      if m.startsWith "(" then
-        if let [q, f] := (m.drop 1).toString.splitOn ":)" then
-          if let some qn ← r.qual p (q.splitOn "." ++ [f]) then return .ident p qn
+    if let some (q, f) := splitQual? m then
+      if let .ident _ "Self" := x then
+        -- `(q:)f`, parsed as `Self.(q:)f`: `f` in the scope `q` names
+        match ← r.qualifier p q with
+        | .module path start => return .ident p (← r.memberOf p path start f)
+        | .locals => throw s!"{p.show}: (local:){f}: (local:) is not supported yet"
+        | .super => return .member p x m
+        | .type c =>
+          -- (an enum's value, `e.v`; a field of `Self` its class, or one
+          -- above it, declares)
+          if r.isEnum c then return .member p (.ident p c) f
+          if r.selfField c f then return .member p x f
+          return .member p x s!"({c}:){f}"
+      -- `X.(q:)f`: a member of `X` as `q` has it; `M.(M:)F` is `M.F`
+      -- (Book of Verse ch. 16: `MyModule.(MyModule:)Last(X)`)
+      if let some comps := x.identPath then
+        if let some (path, start) ← r.modulePath p comps then
+          match ← r.qualifier p q with
+          | .module qp _ =>
+            if qp != path then
+              throw s!"{p.show}: {".".intercalate comps}.({q}:){f}: {q} is not the module {".".intercalate comps}"
+            return .ident p (← r.memberOf p path start f)
+          | _ => throw s!"{p.show}: {".".intercalate comps}.({q}:){f}: a module's member is qualified with the module"
+      match ← r.qualifier p q with
+      | .type c => return .member p (← go x) s!"({c}:){f}"
+      | .super => return .member p (← go x) m
+      | .locals => throw s!"{p.show}: X.(local:){f}: (local:) qualifies a local, not a member of a value"
+      | _ => throw s!"{p.show}: X.({q}:){f}: a member of a value is qualified with a class or an interface"
     if let some comps := x.identPath then
       if let some qn ← r.qual p (comps ++ [m]) then return .ident p qn
-    return .member p (← go x) (← r.method p m)
+    return .member p (← go x) m
   | .gen p x k s => do
     r.bind p x
     if let some k := k then r.bind p k
@@ -113,17 +192,20 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
   | .construct p n ts fs => return .construct p (← r.ty p n) (← ts.mapM (goT p)) (← fs.mapM goField)
   | e => e.mapChildrenM go
 
-/-- Resolve the modules of a parsed program (see the file's header). -/
+
+/-- Resolve the modules and the qualified names of a parsed program (see
+    the file's header). -/
 def resolveModules (tops : List STop) : Except String (List STop) := do
   let markers (pre : String) : List (Pos × String) := tops.filterMap fun
     | .const p n _ _ => if n.startsWith pre then some (p, (n.drop pre.length).toString) else none
     | _ => none
-  let isMarker (n : String) := n.startsWith "$module:" || n.startsWith "$public:" || n.startsWith "$open:"
+  let isMarker (n : String) := n.startsWith "$module:" || n.startsWith "$public:" || n.startsWith "$open:" ||
+    n.startsWith "$qual:" || n == qualifierMarker
   let real := tops.filter fun
     | .const _ n _ _ => !isMarker n
     | _ => true
   let modules := (markers "$module:").map (·.2)
-  if modules.isEmpty && (markers "$open:").isEmpty then return real
+  if modules.isEmpty && (markers "$open:").isEmpty && (markers qualifierMarker).isEmpty then return real
   let publics := (markers "$public:").map (·.2)
   let defs : List String := real.map fun
     | .fn _ n .. | .const _ n .. | .classDef _ n .. => n
@@ -165,6 +247,16 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
       let sc := (qualParts sc0).filter (· != "")
       let comps := qualParts path
       let head := comps.headD ""
+      -- (`using{(A:)B}`: the module `B` of the module `A`, as `using{A.B}`;
+      -- a module's using is a module's, Book of Verse tests,
+      -- QualifiedIdentifier.versetest)
+      let (head, comps) ← match splitQual? head with
+        | some (q, m) =>
+          if q == "local" then
+            throw s!"{p.show}: using\{(local:){m}}: (local:) qualifies a function's locals, and a using names a module"
+          let qs := q.splitOn "."
+          pure (qs.headD q, qs.drop 1 ++ m :: comps.drop 1)
+        | none => pure (head, comps.drop 1)
       -- (the head: a module in scope, or a public submodule of a module
       -- opened before, in scope)
       let viaOpen : Option (List String) := opens.findSome? fun (osc, m) =>
@@ -173,10 +265,10 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
       let base ← match lookup sc head, viaOpen with
         | some (true, b), _ => pure b
         | none, some b => pure b
-        | _, _ => throw s!"{p.show}: unknown module {shown path}"
+        | _, _ => throw s!"{p.show}: unknown module {shownP (head :: comps)}"
       let mut cur := base
-      for c in comps.drop 1 do
-        if !modsS.contains (qualJoin (cur ++ [c])) then throw s!"{p.show}: unknown module {shown path}"
+      for c in comps do
+        if !modsS.contains (qualJoin (cur ++ [c])) then throw s!"{p.show}: unknown module {shownP (head :: comps)}"
         cur := cur ++ [c]
       checkVis sc p cur base.length
       opens := opens ++ [(sc, cur)]
@@ -215,24 +307,33 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
       | none => none
     if let some cand := hit then
       throw s!"{p.show}: '{n}' is already defined (as {shownP cand}); Verse does not allow shadowing"
+  -- a module's member `last`, from scope `sc`: it exists, and each level
+  -- after the first `start` parts is visible
+  let memberOf (sc : List String) (p : Pos) (path : List String) (start : Nat) (last : String) :
+      Except String String := do
+    let qn := path ++ [last]
+    if !defsS.contains (qualJoin qn) then
+      if modsS.contains (qualJoin qn) then throw s!"{p.show}: module {shownP qn} is not a value"
+      throw s!"{p.show}: module {shownP path} has no member {last}"
+    checkVis sc p qn start
+    return qualJoin qn
+  -- the module a chain of names is, from scope `sc` (and how many of its
+  -- parts the first name found), if it is one
+  let modulePath (sc : List String) (p : Pos) (comps : List String) : Except String (Option (List String × Nat)) := do
+    let some (true, base) ← find sc p (comps.headD "") | return none
+    let mut path := base
+    for c in comps.drop 1 do
+      if !modsS.contains (qualJoin (path ++ [c])) then return none
+      path := path ++ [c]
+    return some (path, base.length)
   -- a path (module parts, then a member), from scope `sc`
   let qual (sc : List String) (p : Pos) (comps : List String) : Except String (Option String) := do
     match comps with
-    | head :: rest@(_ :: _) =>
-      -- (a value's name: `X.F` is its field)
-      let some (true, base) ← find sc p head | return none
-      let mut path := base
-      for c in rest.dropLast do
-        -- (`M.v.F`: the field `F` of the member `M.v`, resolved as a prefix)
-        if !modsS.contains (qualJoin (path ++ [c])) then return none
-        path := path ++ [c]
-      let last := rest.getLast!
-      let qn := path ++ [last]
-      if !defsS.contains (qualJoin qn) then
-        if modsS.contains (qualJoin qn) then throw s!"{p.show}: module {shownP qn} is not a value"
-        throw s!"{p.show}: module {shownP path} has no member {last}"
-      checkVis sc p qn base.length
-      return some (qualJoin qn)
+    | _ :: _ :: _ =>
+      -- (a value's name: `X.F` is its field; `M.v.F`: the field `F` of the
+      -- member `M.v`, resolved as a prefix)
+      let some (path, start) ← modulePath sc p comps.dropLast | return none
+      return some (← memberOf sc p path start comps.getLast!)
     | _ => return none
   let tyName (sc excl : List String) (p : Pos) (n : String) : Except String String := do
     if excl.contains n then return n
@@ -241,43 +342,103 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
       | some qn => return qn
       | none => throw s!"{p.show}: unknown type '{n}'"
     resolve "type" sc p n
+  -- what a qualifier names from scope `sc`: `local`, `super`, else a
+  -- module (then its submodules) or a type, found as a name is
+  let qualifier (sc excl : List String) (p : Pos) (q : String) : Except String Qual := do
+    if q == "local" then return .locals
+    if q == "super" then return .super
+    if let some (path, start) ← modulePath sc p (q.splitOn ".") then return .module path start
+    return .type (← tyName sc excl p q)
   let scopeOf (n : String) : List String := (qualParts n).dropLast
-  let rAt (sc excl : List String) : Resolver :=
-    { val := resolve "value" sc, bind := bind sc, ty := tyName sc excl, qual := qual sc }
-  -- each class's members, its own and inherited (a method body sees them
-  -- bare, so none may be named like a visible member)
-  let classInfo : List (String × List String × List String) ← real.filterMapM fun
-    | .classDef p n tps _ parents _ fields _ methods => do
-      let r := rAt (scopeOf n) (tps.map (·.name))
+  -- each class's parents, its members the anti-shadowing check reads (its
+  -- own, unqualified), all its members as a use names them bare, and the
+  -- fields it declares itself (not those it overrides)
+  let classInfo : List (String × List String × List String × List String × List String × List String) ← real.filterMapM fun
+    | .classDef p n tps _ parents _ fields ovs methods => do
       let ps ← parents.mapM fun t => do
-        match ← t.mapNamesM (r.ty p) with
+        match ← t.mapNamesM (tyName (scopeOf n) (tps.map (·.name)) p) with
         | .name q | .app q _ => pure q
         | _ => pure ""
       let own := fields.map (·.1) ++ methods.filterMap fun
         | .fn _ mn .. => if mn.startsWith "(" || mn.startsWith "$" then none else some mn
         | _ => none
-      return some (n, ps, own)
+      let all := fields.map (bareName ·.1) ++ methods.filterMap fun
+        | .fn _ mn .. => if mn.startsWith "$" then none else some (bareName mn)
+        | _ => none
+      let declared := (fields.map (·.1)).filter (!ovs.contains ·) |>.map bareName
+      -- (the members written `(n:)x`, `n` the class itself)
+      let ownQualified ← (fields.map (·.1) ++ methods.filterMap fun
+          | .fn _ mn .. => some mn
+          | _ => none).filterMapM fun x => do
+        let some (q, y) := splitQual? x | return none
+        match qualifier (scopeOf n) (tps.map (·.name)) p q with
+        | .ok (.type c) => return if c == n then some y else none
+        | _ => return none
+      return some (n, ps, own, all, declared, ownQualified)
     | _ => return none
   let budget := 1 + classInfo.foldl (fun a (_, ps, _) => a + ps.length + 1) 0
-  let membersOf (c : String) : List String := Id.run do
+  -- the classes and interfaces `c` is below, itself first
+  let above (c : String) : List String := Id.run do
     let mut seen : List String := []
     let mut todo := [c]
-    let mut out : List String := []
     for _ in [0:budget] do
       match todo with
       | [] => break
       | x :: rest =>
         todo := rest
         if !seen.contains x then
-          seen := x :: seen
-          if let some (_, ps, own) := classInfo.find? (·.1 == x) then
-            out := out ++ own
-            todo := todo ++ ps
-    return out.eraseDups
+          seen := seen ++ [x]
+          if let some (_, ps, _) := classInfo.find? (·.1 == x) then todo := todo ++ ps
+    return seen
+  let infoOf (c : String) := classInfo.find? (·.1 == c)
+  let membersOf (c : String) : List String :=
+    ((above c).flatMap fun x => ((infoOf x).map (·.2.2.1)).getD []).eraseDups
+  let declares (c f : String) : Bool := ((infoOf c).map (·.2.2.2.2.1.contains f)).getD false
+  let enums : Std.HashSet String := Std.HashSet.ofList (real.filterMap fun
+    | .const _ n _ (.enumDef ..) => some n
+    | _ => none)
+  let rAt (sc excl : List String) (self : Option String := none) : Resolver :=
+    { val := resolve "value" sc, bind := bind sc, ty := tyName sc excl, qual := qual sc,
+      qualifier := qualifier sc excl,
+      modulePath := modulePath sc, memberOf := memberOf sc,
+      selfClass := self, isEnum := enums.contains,
+      selfField := fun c f => match self with
+        | some n => (above n).filter (declares · f) == [c]
+        | none => false,
+      selfQualified := (self.map fun n => (above n).flatMap fun x =>
+        (((infoOf x).map (·.2.2.2.2.2)).getD []).map (·, shown x)).getD [],
+      global := fun p n => match find sc p n with
+        | .ok (some _) => true
+        | .ok none => false
+        | .error _ => true }
   let params (r : Resolver) (p : Pos) (ps : List SParam) : Except String (List SParam) := do
     for prm in ps do r.bind p prm.name
     ps.mapM fun prm => do
       return { prm with ty := ← prm.ty.mapNamesM (r.ty p), default := ← prm.default.mapM (·.mapNamesM r) }
+  -- a qualified definition's qualifier names where it is: its module
+  -- (Book of Verse ch. 10, "Nested Module Qualification"; ch. 16)
+  for (p, s) in markers "$qual:" do
+    if let [n, q] := s.splitOn "|" then
+      let sc := scopeOf n
+      let x := (qualParts n).getLastD n
+      if sc.isEmpty then
+        throw s!"{p.show}: ({q}:){x}: {x} is defined at the top level, which has no name or path in openverse; a definition's qualifier names where it is defined: write {x}"
+      match ← qualifier sc [] p q with
+      | .module path _ =>
+        if path != sc then
+          throw s!"{p.show}: ({q}:){x}: {x} is defined in the module {shownP sc}, not in {shownP path}: a definition's qualifier names where it is defined"
+      | .locals => throw s!"{p.show}: (local:){x}: (local:) qualifies a function's locals, and {x} is a member of the module {shownP sc}"
+      | _ => throw s!"{p.show}: ({q}:){x}: {x} is defined in the module {shownP sc}, and {q} is no module: a definition's qualifier names where it is defined"
+  -- a member's name as written in type `n`: `(q:)x`'s qualifier names `n`
+  -- (its enum's value, its struct's field) (Book of Verse ch. 9, "Explicit
+  -- Qualification")
+  let ownName (n what : String) (p : Pos) (x : String) : Except String String := do
+    let some (q, y) := splitQual? x | return x
+    match ← qualifier (scopeOf n) [] p q with
+    | .type c => if c == n then return y
+                 throw s!"{p.show}: ({q}:){y}: {y} is {what} of {shown n}, not of {q}: a definition's qualifier names where it is defined"
+    | .locals => throw s!"{p.show}: (local:){y}: (local:) qualifies a function's locals, and {y} is {what} of {shown n}"
+    | _ => throw s!"{p.show}: ({q}:){y}: {y} is {what} of {shown n}: a definition's qualifier names where it is defined"
   real.mapM fun t => do
     match t with
     | .fn p n ps tps effs ret body =>
@@ -299,20 +460,58 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
       return .fn p n ps tps effs (← ret.mapNamesM (r.ty p)) body
     | .const p n ty body =>
       let r := rAt (scopeOf n) []
+      let body ← match body with
+        | .enumDef ep vs isOpen => do pure (SExpr.enumDef ep (← vs.mapM (ownName n "a value" p)) isOpen)
+        | .structDef sp tps specs fs => do
+          pure (SExpr.structDef sp tps specs (← fs.mapM fun (f, ft, d, v) => do return (← ownName n "a field" sp f, ft, d, v)))
+        | b => pure b
       return .const p n (← ty.mapM (·.mapNamesM (r.ty p))) (← body.mapNamesM r)
     | .classDef p n tps specs parents isI fields ovs methods =>
-      let r := rAt (scopeOf n) (tps.map (·.name))
+      let r := rAt (scopeOf n) (tps.map (·.name)) (some n)
       let tps ← tps.mapM (·.mapBoundNamesM (r.ty p))
       for m in membersOf n do r.bind p m
       let parents ← parents.mapM (·.mapNamesM (r.ty p))
-      let fields ← fields.mapM fun (fn, ty, d, v) => do return (fn, ← ty.mapNamesM (r.ty p), ← d.mapM (·.mapNamesM r), v)
+      -- (what the classes above have: a member qualified with its own class
+      -- introduces a name none of them has, Book of Verse ch. 10)
+      let inherited := ((above n).drop 1).flatMap fun x => ((infoOf x).map (·.2.2.2.1)).getD []
+      -- a member's name as written: `(q:)x`, `q` its own class (the name
+      -- is then `x`, unless a class above has an `x`: a second `x`, the
+      -- elaboration of classes' to refuse), or what introduces the member
+      -- it overrides (`(i:)M<override>`, #70; the elaboration of classes
+      -- checks it); `(local:)` qualifies no member
+      let memberName (mp : Pos) (x : String) (field : Bool) : Except String String := do
+        let some (q, y) := splitQual? x | return x
+        match ← r.qualifier mp q with
+        | .type c =>
+          if c == n then
+            if !inherited.contains y then return y
+            if field then
+              throw s!"{mp.show}: ({q}:){y}: a field {y} beside the one {shown n} inherits: openverse does not support two fields of one name in a class"
+            return s!"({c}:){y}"
+          if field then
+            if (above n).contains c && declares c y then return y
+            throw s!"{mp.show}: ({q}:){y}: {q} is not {shown n}, nor a class or interface above it that declares the field {y}"
+          return s!"({c}:){y}"
+        | .locals => throw s!"{mp.show}: (local:){y}: (local:) qualifies a function's locals, and {y} is a member of {shown n}"
+        | .super => throw s!"{mp.show}: (super:){y}: (super:) qualifies a call of the implementation above, not a definition"
+        | _ => throw s!"{mp.show}: ({q}:){y}: a member's qualifier names its class, or, for an override, the class or interface that introduces it"
+      let fieldNames ← fields.mapM fun (fn, _, _, _) => memberName p fn true
+      let renamed := (fields.map (·.1)).zip fieldNames
+      let ovs := ovs.map fun o => (renamed.lookup o).getD o
+      let specs := specs.map fun sp =>
+        if sp.startsWith "$final:" then
+          let f := (sp.drop "$final:".length).toString
+          s!"$final:{(renamed.lookup f).getD f}"
+        else sp
+      let fields ← (fields.zip fieldNames).mapM fun ((_, ty, d, v), fn) => do
+        return (fn, ← ty.mapNamesM (r.ty p), ← d.mapM (·.mapNamesM r), v)
       let methods ← methods.mapM fun m => do
         match m with
         | .fn mp mn mps mtps meffs mret mbody =>
-          let rm := rAt (scopeOf n) (tps.map (·.name) ++ mtps.map (·.name))
+          let rm := rAt (scopeOf n) (tps.map (·.name) ++ mtps.map (·.name)) (some n)
           let mtps ← mtps.mapM (·.mapBoundNamesM (rm.ty mp))
           let mps ← params rm mp mps
-          return .fn mp (← rm.method mp mn) mps mtps meffs (← mret.mapNamesM (rm.ty mp)) (← mbody.mapNamesM rm)
+          return .fn mp (← memberName mp mn false) mps mtps meffs (← mret.mapNamesM (rm.ty mp)) (← mbody.mapNamesM rm)
         | m => pure m
       return .classDef p n tps specs parents isI fields ovs methods
 

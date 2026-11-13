@@ -193,18 +193,35 @@ partial def parseSpecs : PM (List String) := do
 
 def cmpOps : List String := ["=", "<>", "<", "<=", ">", ">="]
 
-/-- At a `(`: the qualifier of `(i:)M` or `(M.i:)M` (#70, #112), if one
-    starts here, and how many tokens it takes (through the `:)`). -/
-def peekQual : PM (Option (String × Nat)) := do
-  if !(← peekT).isSym "(" then return none
-  let some q0 := (← peekT 1).identName? | return none
+/-- At a `(` (the token `off` ahead): the qualifier of `(i:)M`, `(M.i:)M`
+    (#70, #112) or `(e:)v`, if one starts there, and how many tokens it
+    takes (through the `:)`). What it names is `resolveModules`' to decide. -/
+def peekQual (off : Nat := 0) : PM (Option (String × Nat)) := do
+  if !(← peekT off).isSym "(" then return none
+  let some q0 := (← peekT (off + 1)).identName? | return none
   let mut q := q0
   let mut k := 2
-  while (← peekT k).isSym "." && ((← peekT (k + 1)).identName?).isSome do
-    q := q ++ "." ++ ((← peekT (k + 1)).identName?).getD ""
+  while (← peekT (off + k)).isSym "." && ((← peekT (off + k + 1)).identName?).isSome do
+    q := q ++ "." ++ ((← peekT (off + k + 1)).identName?).getD ""
     k := k + 2
-  if (← peekT k).isSym ":" && (← peekT (k + 1)).isSym ")" then return some (q, k + 2)
+  if (← peekT (off + k)).isSym ":" && (← peekT (off + k + 1)).isSym ")" then return some (q, k + 2)
   return none
+
+/-- The name after a qualifier `(q:)`: an identifier, or a keyword, which a
+    qualifier lets an enum's value take (Book of Verse ch. 9: `(e:)for`). -/
+def expectQualifiedName : PM String := do
+  let t ← peekT
+  match t.tok with
+  | .ident x => bump; return x
+  | _ => perr t s!"expected an identifier after the qualifier, found {t.tok.describe}"
+
+/-- A definition's name: `X`, or `(q:)X` as written, qualified (the
+    qualifier names where it is defined, `resolveModules` checks). -/
+def expectBinder : PM String := do
+  if let some (q, k) ← peekQual then
+    for _ in [0:k] do bump
+    return s!"({q}:){← expectIdent}"
+  expectIdent
 
 /-- A block's statements, each destructuring's declarations spliced in
     (`parseStmt`). -/
@@ -505,6 +522,10 @@ partial def parseUnary (stop : Nat) : PM SExpr := do
     class or struct, #112). -/
 partial def SExpr.dottedName? : SExpr → Option String
   | .ident _ n => some n
+  -- (`(M:)c(t){…}`: a module's parametric class, as `M.c(t){…}`)
+  | .member _ (.ident _ "Self") m => match splitQual? m with
+    | some (q, x) => if q.startsWith "/" || q == "local" then none else some s!"{q}.{x}"
+    | none => some s!"Self.{m}"
   | .member _ x m => if m.startsWith "(" then none else (SExpr.dottedName? x).map (· ++ "." ++ m)
   | _ => none
 
@@ -959,7 +980,7 @@ partial def parseField (c : Nat) : PM (String × STy × Option SExpr × Bool) :=
   let start ← peekT
   let isVar := (← peekT).isKw "var"
   if isVar then bump
-  let n ← expectIdent
+  let n ← expectBinder
   -- (`X<public>:int`: a field's access specifiers, accepted, not enforced)
   let specs ← parseSpecs
   expectSym ":"
@@ -1020,20 +1041,27 @@ partial def parseEnumBody (p : Pos) : PM SExpr := do
     if sp == "open" then isOpen := true
   let o ← peekT
   let mut names := #[]
+  -- (a value `(e:)v`, qualified with its enum, may take a reserved word's or
+  -- a keyword's name, Book of Verse ch. 9: `resolveModules` checks `e`)
+  let value : PM String := do
+    if let some (q, k) ← peekQual then
+      for _ in [0:k] do bump
+      return s!"({q}:){← expectQualifiedName}"
+    expectIdent
   if o.isSym ":" then
     bump
     let n ← peekT
     let c := n.col
     if !n.endsEmptyBody (← get).topCol then
       names ← withBlock n do
-        let mut names := #[← expectIdent]
+        let mut names := #[← value]
         repeat
           let a ← peekT
           checkIndent a
           if a.isSym "," || a.isSym ";" then
             bump
-            if (← peekT).continuesBlock c then names := names.push (← expectIdent)
-          else if a.bol && a.col == c && !a.isEof then names := names.push (← expectIdent)
+            if (← peekT).continuesBlock c then names := names.push (← value)
+          else if a.bol && a.col == c && !a.isEof then names := names.push (← value)
           else break
         return names
   else if o.isSym "{" then
@@ -1042,7 +1070,7 @@ partial def parseEnumBody (p : Pos) : PM SExpr := do
       let a ← peekT
       if a.isSym "}" then bump; break
       if a.isSym "," || a.isSym ";" then bump; continue
-      names := names.push (← expectIdent)
+      names := names.push (← value)
   else perr o "expected ':' or '{' after enum"
   return .enumDef p names.toList isOpen
 
@@ -1100,9 +1128,11 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
       bump; bump; bump; bump
       return .member t.pos (.ident t.pos "(super:)") (← expectIdent)
     if let some (q, k) ← peekQual then
-      -- `(i:)M`: `Self.(i:)M`, a qualified member of the current object (#70)
+      -- `(q:)x`: `Self.(q:)x`, which `resolveModules` reads by what `q`
+      -- names: a module's member, an enum's value, or a qualified member of
+      -- the current object (#70)
       for _ in [0:k] do bump
-      let m ← expectIdent
+      let m ← expectQualifiedName
       -- (`(M:)c{…}`: a construction of the module's `c`, #147)
       if ← fieldsFollow stop then
         return .construct t.pos s!"{q}.{m}" [] (← parseFields)
@@ -1445,18 +1475,12 @@ partial def parseClassItem (c : Nat) :
     return .inr (.fn t.pos "$block" [] [] [] (.name "void") body)
   let isVar := t.isKw "var"
   if isVar then bump
-  -- `(i:)M`: an implementation of interface `i`'s `M` only
-  let qual ← if !isVar then do
-      match ← peekQual with
-      | some (q, k) => do for _ in [0:k] do bump
-                          pure (some q)
-      | none => pure none
-    else pure none
-  let name ← match qual with
-    | some q => do pure s!"({q}:){← expectIdent}"
-    | none => expectIdent
+  -- `(q:)M`, `(q:)F:t`: a member whose qualifier names where it is defined:
+  -- the class itself, or, for an override, what introduces it (an
+  -- implementation of interface `q`'s `M` only, #70); `resolveModules` and
+  -- the classes' elaboration check `q`
+  let name ← expectBinder
   let pre ← parseSpecs
-  if qual.isSome && (← peekT).isSym ":" then perr (← peekT) "only a method can be qualified with (interface:)"
   if (← peekT).isSym ":" then
     -- a field, `Name<override>:t = e` giving an inherited field a new default
     bump
@@ -1622,10 +1646,15 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
         if let .str parts := (← peekT 1).tok then
           let path := String.join (parts.filterMap fun | .text s => some s | _ => none)
           modify fun st => { st with imports := st.imports.push (t.pos, path) }
-        else if ((← peekT 1).identName?).isSome then
-          -- `using{M}`, `using{A.B}`: a module's public members, unqualified
+        else if ((← peekT 1).identName?).isSome || (← peekQual 1).isSome then
+          -- `using{M}`, `using{A.B}`, `using{(A:)B}`: a module's public
+          -- members, unqualified
           bump
-          let mut path := ← expectIdent
+          let mut path ← (do
+            if let some (q, k) ← peekQual then
+              for _ in [0:k] do bump
+              return s!"({q}:){← expectIdent}"
+            expectIdent)
           while (← peekT).isSym "." do bump; path := path ++ "::" ++ (← expectIdent)
           expectSym "}"
           tops := tops.push (marker t.pos s!"$open:{pfx}|{path}")
@@ -1643,8 +1672,15 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
           continue
         bump
       continue
+    -- (`(q:)name`: a qualified definition, whose qualifier must name the
+    -- module it is in, `$qual:A::name|q` for `resolveModules` to check)
+    let qual? ← match ← peekQual with
+      | some (q, k) => do for _ in [0:k] do bump
+                          pure (some q)
+      | none => pure none
     let name0 ← expectIdent
     let name := pfx ++ name0
+    if let some q := qual? then tops := tops.push (marker t.pos s!"$qual:{name}|{q}")
     let pre ← parseSpecs
     let n ← peekT
     if pre.contains "public" then tops := tops.push (marker t.pos s!"$public:{name}")
@@ -1803,9 +1839,33 @@ def textUsesRational (src : String) : Bool :=
 /-- A marker that the source may use `ReplaceAll` (#150). -/
 def replaceAllMarker : String := "$uses:replaceAll"
 
+/-- Whether the source writes a qualifier other than `(super:)`: `(`, a
+    name, `.` and names, then `:)` (`peekQual`'s shape), also in a string's
+    interpolations. -/
+partial def usesQualifiers (toks : Array Token) : Bool := Id.run do
+  for i in [0:toks.size] do
+    if let .str parts := toks[i]!.tok then
+      for part in parts do
+        if let .code src l c := part then
+          if let .ok inner := lex src l c then
+            if usesQualifiers inner then return true
+    if !toks[i]!.isSym "(" then continue
+    let mut k := i + 1
+    match (toks[k]?.map (·.tok) : Option Tok) with
+    | some (.ident x) =>
+      if x == "super" || keywords.contains x then continue
+      k := k + 1
+      while (toks[k]?.map (·.isSym ".")) == some true && ((toks[k + 1]?.bind (·.identName?))).isSome do
+        k := k + 2
+    | _ => continue
+    if (toks[k]?.map (·.isSym ":")) == some true && (toks[k + 1]?.map (·.isSym ")")) == some true then
+      return true
+  return false
+
 def withRatMarker (toks : Array Token) (tops : List STop) : List STop :=
   let p : Pos := { line := 0, col := 0 }
   let tops := if usesRational toks then tops ++ [.const p ratMarker none (.block p [])] else tops
+  let tops := if usesQualifiers toks then tops ++ [.const p qualifierMarker none (.block p [])] else tops
   if toks.any (·.identName? == some "ReplaceAll") then tops ++ [.const p replaceAllMarker none (.block p [])]
   else tops
 

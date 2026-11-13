@@ -539,6 +539,12 @@ partial def elabAppBaseWith
     let (r, m) ← match r0.ty, m0.startsWith "(", (m0.drop 1).toString.splitOn ":)" with
       | .struct c ts, true, [q, mq] =>
         if !(ctx.types.isSub c q) then eerr p s!"{c} is not below {q}"
+        -- (a qualifier names where the method is: the class or interface
+        -- that introduces it, not one that inherits or overrides it, Book of
+        -- Verse tests, SOL-3564-CallingSuperClassMethodFromOverriddenMethod)
+        if (ctx.methodDecl? q mq).isSome && !(ctx.rootsOf q mq).contains q then
+          let roots := ctx.rootsOf q mq
+          eerr p s!"X.({q}:){mq}: {q} does not introduce {mq}, it {if (ctx.sig? s!"{q}.{mq}").isSome then "overrides" else "inherits"} it: a qualifier names where the method is defined, {" or ".intercalate (roots.map fun r => s!"({r}:)")}"
         -- (converted: a receiver of a type with no instance is unreachable)
         let qt : Ty := .struct q (ctx.types.upArgs c ts q)
         pure (⟨← coerce p r0 qt, qt⟩, mq)
