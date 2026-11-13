@@ -8,9 +8,11 @@
   written as only a type can be (`?int`, `[]t`, `int->int`, `tuple(…)`,
   `type{_(…):t}`: `SExpr.typeAlias`). `name := c` and `name := box(int)`
   could also be constants; once the modules' names are resolved, this pass
-  decides by what `c` and `box` are: a definition is an alias when the name
-  its value is headed by is a type's (a built-in type, a class, interface,
-  struct, enum, refinement type or alias).
+  decides by what `c` and `box` are: a definition is an alias when its value
+  is a type's name (a built-in type, a class, interface, struct, enum,
+  refinement type or alias), or a parametric type's applied to as many types
+  as it has parameters (`writesType`): `X := c(Y)`, a cast of a constant,
+  stays a constant.
 
   It then writes, in every other definition, the type an alias names
   wherever the alias is used (its type arguments for its parameters) and
@@ -43,11 +45,6 @@ def builtinTypes : List String :=
 
 /-- A qualified name as a program writes it: `A.B.c` for `A::B::c`. -/
 def shown (n : String) : String := ".".intercalate (n.splitOn "::")
-
-/-- The name a type is headed by: `c` of `c` and of `c(int)`. -/
-def head? : STy → Option String
-  | .name n | .app n _ => some n
-  | _ => none
 
 /-- The aliases a definition can use: those defined before it (`known`),
     out of all the program's (`all`). -/
@@ -145,44 +142,89 @@ partial def Scope.top (s : Scope) : STop → Except String STop
       (← fields.mapM fun (f, t, d, v) => do return (f, ← s.ty p t, ← d.mapM s.expr, v)) ovs
       (← methods.mapM s.top)
 
+/-- Whether `t`, written as a value could be (`SExpr.asType?`), is a type:
+    a type's name, or a parametric type's name applied to as many types as
+    it has parameters. `arity n` is `none` when `n` is no type's name, and
+    `some none` for the prelude's types, whose arities are its own. So
+    `box(int)` is a type, and `c(X)`, the cast of a constant to a class,
+    and `any(X)` are not. -/
+partial def writesType (arity : String → Option (Option Nat)) : STy → Bool
+  | .name n => (arity n).isSome
+  | .app n ts => match arity n with
+    | some none => ts.all (writesType arity)
+    | some (some k) => k == ts.length && ts.all (writesType arity)
+    | none => false
+  | _ => true
+
+/-- Each name in an alias's type, its aliases written out, is a type's or a
+    parameter's, applied to as many type arguments as it takes. -/
+partial def checkNames (p : Pos) (arity : String → Option (Option Nat)) (params : List String) :
+    STy → Except String Unit
+  | .name n => do
+    if params.contains n || n.startsWith "$" then return
+    match arity n with
+    | none => throw s!"{p.show}: {unknownTypeMessage (shown n)}"
+    | some (some k) =>
+      if k > 0 then throw s!"{p.show}: {shown n} is parametric: write {shown n}(…) with {k} type argument(s)"
+    | some none => pure ()
+  | .app n ts => do
+    -- (`?N`: a function type's named parameter, #503)
+    if !n.startsWith "?" && !n.startsWith "$" then
+      match arity n with
+      | none => throw s!"{p.show}: {unknownTypeMessage (shown n)}"
+      | some (some k) =>
+        if k != ts.length then throw s!"{p.show}: {shown n} takes {k} type argument(s), found {ts.length}"
+      | some none => pure ()
+    ts.forM (checkNames p arity params)
+  | .arr t | .opt t => checkNames p arity params t
+  | .tup ts => ts.forM (checkNames p arity params)
+  | .map k v => do checkNames p arity params k; checkNames p arity params v
+  | .fn ps _ r => do ps.forM (checkNames p arity params); checkNames p arity params r
+
 /-- The program's definitions, modules resolved, with every type alias
     written out where it is used and the aliases' definitions dropped (see
     the file's header). -/
 def expand (tops : List STop) : Except String (List STop) := do
-  -- the types the program defines
-  let defined : Std.HashSet String := Std.HashSet.ofList (tops.filterMap fun
-    | .classDef _ n .. | .const _ n none (.structDef ..) | .const _ n none (.enumDef ..)
-    | .const _ n none (.refineDef ..) => some n
+  -- the types the program defines, with their numbers of type parameters
+  let defined : Std.HashMap String Nat := Std.HashMap.ofList (tops.filterMap fun
+    | .classDef _ n tps .. | .const _ n none (.structDef _ tps ..) => some (n, tps.length)
+    | .const _ n none (.enumDef ..) | .const _ n none (.refineDef ..) => some (n, 0)
     | _ => none)
-  let isType (aliases : Std.HashSet String) (n : String) : Bool :=
-    builtinTypes.contains n || n == "comparable" || PreludeNeeds.names.contains n ||
-      defined.contains n || aliases.contains n
+  let typeArity (aliases : Std.HashMap String Nat) (n : String) : Option (Option Nat) :=
+    if builtinTypes.contains n || n == "comparable" then some (some 0)
+    else if let some k := defined[n]? then some (some k)
+    else if let some k := aliases[n]? then some (some k)
+    else if PreludeNeeds.names.contains n then some none
+    else none
   -- the definitions `name := e` that may be aliases: the type each writes,
-  -- and whether the parser knows it is one
-  let written : List (String × STy × Bool) := tops.filterMap fun
-    | .const _ n none (.typeAlias _ _ t) => some (n, t, true)
-    | .const _ n none e => e.asType?.map (n, ·, false)
+  -- its number of parameters, and whether the parser knows it is one
+  let written : List (String × STy × Nat × Bool) := tops.filterMap fun
+    | .const _ n none (.typeAlias _ tps t) => some (n, t, tps.length, true)
+    | .const _ n none e => e.asType?.map (n, ·, 0, false)
     | _ => none
   if written.isEmpty then return tops
-  -- (one whose type is headed by an alias's name is one too, wherever that
-  -- alias is defined: `b := a` and `a := int`, in either order)
-  let mut aliases : Std.HashSet String :=
-    Std.HashSet.ofList (written.filterMap fun (n, _, explicit) => if explicit then some n else none)
+  -- (one whose value is a type that names aliases is one too, wherever they
+  -- are defined: `b := a` and `a := int`, in either order)
+  let mut aliases : Std.HashMap String Nat := Std.HashMap.ofList
+    (written.filterMap fun (n, _, k, explicit) => if explicit then some (n, k) else none)
   for _ in [0:written.length] do
-    let more := written.filter fun (n, t, _) => !aliases.contains n && (head? t).any (isType aliases)
+    let more := written.filter fun (n, t, _, _) => !aliases.contains n && writesType (typeArity aliases) t
     if more.isEmpty then break
-    aliases := more.foldl (fun s (n, _, _) => s.insert n) aliases
+    aliases := more.foldl (fun s (n, _, k, _) => s.insert n k) aliases
   -- no definition, at any scope, takes a top-level alias's name (a module's
   -- are `resolveModules`' to check, as its other members')
-  let global := aliases.toList.filter fun n => (qualParts n).length == 1
+  let global := aliases.keys.filter fun n => (qualParts n).length == 1
   for t in tops do
     let own := match t with
       | .fn _ n .. | .const _ n .. | .classDef _ n .. => n
     for (p, n) in t.definedNames do
       if n != own && global.contains n then
         throw s!"{p.show}: '{n}' is already defined (as a type alias); Verse does not allow shadowing"
-  let mut scope : Scope := { all := aliases }
+  let mut scope : Scope := { all := Std.HashSet.ofList aliases.keys }
   let mut out : Array STop := #[]
+  -- (in an alias's type, its aliases written out: no alias, and `comparable`
+  -- is no type yet)
+  let bodyArity (n : String) : Option (Option Nat) := if n == "comparable" then none else typeArity {} n
   for t in tops do
     if let .const p n none e := t then
       if aliases.contains n then
@@ -197,13 +239,10 @@ def expand (tops : List STop) : Except String (List STop) := do
         if ty.allNames.contains n then
           throw s!"{p.show}: the type alias {shown n} names itself, so writing it out would never end (Book of Verse ch. 10, \"Disallowed: Direct Type Alias Recursion\"); a class can hold a value of its own type"
         let body ← scope.ty p ty
-        -- (each name in it a type's: an alias is checked where it is used,
-        -- its names where it is defined)
+        -- (an alias's type is checked where it is used, as written there;
+        -- its names, and their numbers of type arguments, where it is defined)
         let params := tps.map (·.name)
-        for m in body.allNames do
-          if !params.contains m && !m.startsWith "?" && !m.startsWith "$" &&
-              !(isType {} m && m != "comparable") then
-            throw s!"{p.show}: {unknownTypeMessage (shown m)}"
+        checkNames p bodyArity params body
         scope := { scope with known := scope.known.insert n { pos := p, params, body } }
         continue
       -- (a module's data states its type, Book of Verse ch. 16: the parser

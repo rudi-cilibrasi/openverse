@@ -247,7 +247,7 @@ def SExpr.mapChildrenM [Monad m] (f : SExpr → m SExpr) (e : SExpr) : m SExpr :
 /-- The type an expression writes when its names are types' names: a name,
     `M.c`, or a name applied to such (`box(int)`; `c()` is `c`). A definition
     `X := e` at the top level or in a module whose `e` is one is a type alias
-    when the name it is headed by is a type's (`Aliases.expand`). -/
+    when it is a type (`Aliases.writesType`). -/
 partial def SExpr.asType? : SExpr → Option STy
   | .ident _ n => some (.name n)
   | .member _ x m =>

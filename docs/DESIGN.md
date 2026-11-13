@@ -1346,11 +1346,13 @@ the struct, enum and refinement definitions that are constants' values too)
 when `t` is written as only a type can be. `name := c` and `name := box(int)`
 could be constants as well, so it keeps them as expressions.
 `Front/Aliases.lean` runs right after the modules' renaming, when every name
-is qualified, and decides by what the head name is: a definition is an alias
-when its value's head names a type (a built-in one, a class, interface,
-struct, enum, refinement type, or an alias, wherever defined). One rule
-decides "a type or a value", and no program that compiled before changes
-meaning: a class's name was no value, so `X := c` was refused.
+is qualified, and decides by what the names are: a definition is an alias
+when its value is a type's name (a built-in one, a class, interface,
+struct, enum, refinement type, or an alias, wherever defined), or a
+parametric type's name applied to as many types as it has parameters
+(`writesType`). One rule decides "a type or a value", and no program that
+compiled before changes meaning: a type's name was no value, so `X := c`
+was refused, and `X := c(Y)`, a cast of a constant, stays a constant.
 
 The pass then goes through the definitions in order, with the aliases
 defined so far. An alias's type is written out with those, so it names none

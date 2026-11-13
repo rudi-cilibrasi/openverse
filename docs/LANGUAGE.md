@@ -1849,10 +1849,12 @@ Main():void =
 - **A type or a value.** A definition `name := e` at the top level or in a
   module defines a type alias when `e` is a type: written as only a type
   can be (`?t`, `[]t`, `[k]v`, `tuple(…)`, `t->u`, `type{_(…):r}`,
-  `logic`), or a name, `M.c`, or a name applied to types (`box(int)`)
-  whose name is a type's (a built-in type, a class, interface, struct,
-  enum, refinement type, or another alias). Otherwise it is a constant:
-  `X := Y` with `Y` a constant, `X := F` with `F` a function, `X := F(1)`.
+  `logic`), or the name of a type (a built-in type, a class, interface,
+  struct, enum, refinement type, or another alias; also `M.c`), or a
+  parametric type's name applied to as many types as it has parameters
+  (`box(int)`). Otherwise it is a constant: `X := Y` with `Y` a constant,
+  `X := F` with `F` a function, `X := F(1)`, and `X := c(Y)` and
+  `X := any(Y)`, a cast and a conversion of the constant `Y`.
   `name(t:type, …) := e` is always a type: a parametric class, interface,
   struct, or alias. A definition with a written type, `X:t = e`, is never
   an alias. (`X := c` with `c` a class was refused before aliases: `c` was

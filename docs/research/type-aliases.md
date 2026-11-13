@@ -117,11 +117,13 @@ The tests add:
    definition with a written type (`T1:subtype(C0)= C0`) is no alias. The
    reading: `name := e` at the top level or in a module is an alias when
    `e` is a type, that is, written as only a type can be (`?int`, `[]t`,
-   `int->int`, `tuple(…)`, `type{_(…):r}`), or a name, or a name applied to
-   types, whose name is a type's; else it is a constant. Before aliases,
-   such a name was no value (`X := c` with `c` a class was refused as
-   "unknown identifier 'c'"), so the rule changes the meaning of no
-   program that compiled. `name(u:type, …) := t` is always a type.
+   `int->int`, `tuple(…)`, `type{_(…):r}`), or a type's name, or a
+   parametric type's name applied to as many types as it has parameters;
+   else it is a constant. Before aliases, a type's name was no value (`X :=
+   c` with `c` a class was refused as "unknown identifier 'c'"), and
+   `X := c(Y)` with `Y` a constant, a cast, and `X := any(Y)` remain
+   constants, so the rule changes the meaning of no program that compiled.
+   `name(u:type, …) := t` is always a type.
 3. **Where.** Module scope only: the top level or a module, never a class
    or a function (lines 1389-1390, tests 100-103). openverse parses an
    alias only as a top-level or module definition; `O := ?int` in a class
