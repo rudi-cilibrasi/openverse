@@ -3568,7 +3568,7 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
     if let some (_, o') := overloadPicks.find? fun (p', o') => p' == p && o' != o && o' != "" && o != "" then
       let declares (c o : String) : Bool := (declsOf o).any fun (d, _) => (anc c).contains d
       if (selNames.contains o || selNames.contains o') && classes.any fun (c, _) => declares c o && declares c o' then
-        throw s!"{p.show}: this call takes {listShown o} in the clauses copied for one alternative of a choice and {listShown o'} in those copied for another, and which list of an overloaded method with several values a call takes is decided before types: not supported yet (#283)"
+        throw s!"{p.show}: this call takes {listShown o} in the clauses copied for one alternative of a choice and {listShown o'} in those copied for another, and which list of an overloaded method with several values a call takes is decided before types: not supported yet (#283); write the clauses after the choice apart for its alternatives, or give the lists names of their own"
   -- (#106) the calls of an overloaded method with a selected list whose
   -- list is not picked yet, `R.M(args)` or, in a class's body, `M(args)`:
   -- the elaboration notes the list each takes, for the next round
@@ -3775,7 +3775,7 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
     | none => shownFnName o
   for (q, o) in overloadPicks.filter fun (_, o) => ovNamesAll.contains ((o.splitOn "$ov").headD o) do
     if let some (_, o') := overloadPicks.find? fun (q', o') => q' == q && o' != o then
-      throw s!"{q.show}: this call takes the overload {ovShown o} in the clauses copied for one alternative of a choice and {ovShown o'} in those copied for another, and which overload with several values a call takes is decided before types: not supported yet (#283)"
+      throw s!"{q.show}: this call takes the overload {ovShown o} in the clauses copied for one alternative of a choice and {ovShown o'} in those copied for another, and which overload with several values a call takes is decided before types: not supported yet (#283); write the clauses after the choice apart for its alternatives, or give the overloads names of their own"
   let rawMfs := fns.filter (mv.contains ·.1)
   -- (#283) a struct's or class's fields in the order its constructions
   -- evaluate them in, for the lifter where a lazily taken group's code is
