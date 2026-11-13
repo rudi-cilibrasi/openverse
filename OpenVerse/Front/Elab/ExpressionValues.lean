@@ -147,15 +147,21 @@ partial def elabExprValuesWith
     | _, ta, tb => eerr p s!"no operator '{op}' for {ta.show} and {tb.show}"
   | .cmp p a rest => elabCmp ctx p a rest
   | .andE _ a b =>
-    -- each operand is its own scope, a block: names defined in `a` are not
-    -- visible in `b`, and names from either side do not escape the `and`
-    let (ra, _) ← elabBlock ctx [a] none
-    let ea ← inferable ra
-    let (rb, _) ← elabBlock ctx [b] exp
-    return ⟨Expr.andE ea rb.e, rb.ty⟩
+    -- the whole `and` is a scope of its own, a block of `a` then `b`: names
+    -- defined in `a` are visible in `b`, and names from neither side escape
+    -- the `and` (Book of Verse ch. 7: "`e0 and e1` evaluates the entire
+    -- expression in a new lexical scope"; ch. 1: "Variable bindings do not
+    -- escape from logical operations")
+    return (← elabBlock ctx [a, b] exp).1
   | .orE p a b =>
     let a := (Choice.takeFirst? a (choiceOrder ctx)).getD a
     let ra ← operand { ctx with canFail := true, inTaking := true } a exp
+    -- (the left operand of `or` must be able to fail, as `not`'s: the Book of
+    -- Verse's tests, `Operators/LogicalOr.versetest:143`, error 3513; its
+    -- `(set Map[I] = I) or Err()` has a failable left, a set through a map's
+    -- key)
+    if !(ra.e.mayFail ctx.sigProg) && (← ctx.failabilityKnown) then
+      eerr p "the left operand of or cannot fail (Verse requires a failable one: or of it never takes its right)"
     let rb ← match exp with
       | some _ => operand ctx b exp
       | none =>

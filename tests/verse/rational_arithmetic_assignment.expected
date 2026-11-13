@@ -1,5 +1,5 @@
-saved 1 2
-one 1 1
-rollback 1 1
-half 0 1
+after rhs 101 101
+two hundred 200 200
+rollback 200 200
+half 100 100
 exit=0

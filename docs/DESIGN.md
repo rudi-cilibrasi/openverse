@@ -131,8 +131,9 @@ not an `array{a₀, …}`, which would run `aₙ₋₁` before `a₀`'s value wa
 - **A choice or a call with several values in a `set`'s path** (#283), as
   `set A[0 | 1] = X`: `liftClauseM` binds the path's indices to names
   (`setPrefix`, as for a new value that needs code before it), lifts those
-  bindings in order (`Choice.pathHas` says when), then for `op=` reads the
-  old value, then lifts the new value: the order `set` evaluates them in.
+  bindings in order (`Choice.pathHas` says when), then lifts the new value;
+  the `set` itself then reads the old value, for `op=`: the order `set`
+  evaluates them in.
   An index's choice is then an ordinary binding, a generator in a `for`.
   When the clauses after such a choice have another one, so that the copies
   would double with each (#335), they become a function of their own,
@@ -961,8 +962,9 @@ code after it, which is its frame.
   the lifter binds it as it binds a choice), then decomposed again. A
   `set`'s or a `var`'s value that is a choice with such a call as one
   alternative, which the lifter keeps as a binding of its own, is bound
-  first as `normClauses` binds one (`setClauses`: the path's prefix, for
-  `op=` the old value, then the choice), as for the elaborator's clauses. The
+  first as `normClauses` binds one (`setClauses`: the path's prefix, then
+  the choice; for `op=` the `set` reads the old value after it), as for the
+  elaborator's clauses. The
   field orders of a struct's or a class's construction are the elaborator's,
   one definition (`TyEnv.fieldOrder`, which `choiceOrder` gives the lifter
   too: a class's superclass's fields first, then its interfaces', then its
@@ -1242,7 +1244,7 @@ keep the order: a round that asks goes no further than the phase that asks,
 and the next one runs every phase again. Read off the list, a program is
 refused, first to last, for:
 
-- its effect annotations, specifiers out of place and source profile, a type with a built-in type's name, a reserved name defined, a name defined twice, a name an enclosing scope defines (but a function a call can tell apart from it, checked with the signatures, 15), a `return` outside a function's body, a `defer:` where a value is taken, a `for` of literal clauses only, its modules and qualifiers (a qualifier that names nothing or not where its definition is, an ambiguous bare name beside a qualified definition), its type aliases (one that names itself or an alias defined after it, or is used before its definition, or whose name a definition takes), a constant that depends on itself, and subscribable events (1); the choices it inlines and the requests it carries (2); its overloaded methods (3);
+- its effect annotations, specifiers out of place and source profile, a type with a built-in type's name, a reserved name defined, a name defined twice, a name an enclosing scope defines (but a function a call can tell apart from it, checked with the signatures, 15), a `return` outside a function's body, a `defer:` where a value is taken, a `for` of literal clauses only, its modules and qualifiers (a qualifier that names nothing or not where its definition is, an ambiguous bare name beside a qualified definition), its type aliases (one that names itself or an alias defined after it, or is used before its definition, or whose name a definition takes), a constant that depends on itself or names one defined after it in its scope, and subscribable events (1); the choices it inlines and the requests it carries (2); its overloaded methods (3);
 - its classes: their parents (unknown, a struct, wrong type arguments, an interface extending a class, two superclasses, a `<final>` one, a cycle), `<castable>` ones with type parameters and those below `<final_super_base>` ones, and construction effects (4); their fields, inherited, overriding and own, against the methods above them, and a `<concrete>` class's defaults (5); their methods: duplicates, parameter names, qualified implementations, overrides and `<final>`, abstract methods and the implementations every concrete class needs (6);
 - the types those give: comparable type arguments to parents and a `<persistable>` struct's fields (7), bounds (8), one instance of an interface per class (9), the Verse Core type arguments of overrides (10), recursive structs and map keys (11);
 - its functions' names and overloads (12), their signatures and effect annotations (13), constants whose type cannot be inferred and the defaults function types write (14); then the signature checks (15): overloads a call cannot tell apart, an extension method that repeats a method of its receiver's class, overrides and implementations whose signature or effects differ, an overriding field's type, and, last, a field two interfaces give defaults;

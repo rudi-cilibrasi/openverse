@@ -280,6 +280,16 @@ partial def SExpr.asType? : SExpr → Option STy
     | _ => none
   | _ => none
 
+/-- A definition's value that names a type, a scope or a module in a form
+    openverse does not take yet (`union{…}`, `scoped{…}`, `import(…)`,
+    `subtype(t)` and its kin): `X := e` with such an `e` is no data, so the
+    rule that a module's data states its type (Book of Verse ch. 16) leaves it
+    to the refusal of its form. -/
+def SExpr.isTypeLikeForm : SExpr → Bool
+  | .app _ (.ident _ h) _ _ | .construct _ h _ _ =>
+    ["union", "scoped", "import", "subtype", "castable_subtype", "concrete_subtype", "type"].contains h
+  | _ => false
+
 /-- `e` with each identifier that `σ` names replaced by its expression
     (Verse has no shadowing, so a name means one thing in `e`). -/
 partial def SExpr.substIdents (σ : List (String × SExpr)) (e : SExpr) : SExpr :=

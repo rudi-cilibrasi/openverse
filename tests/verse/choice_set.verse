@@ -1,5 +1,5 @@
-# choice (#208) as the value of set: the indices of the path, then (for op=)
-# the old value, then the choice, as set evaluates; the alternatives at the
+# choice (#208) as the value of set: the indices of the path, then the
+# choice, then (for op=) the old value, as set evaluates; the alternatives at the
 # destination's type; nested joins past the retry bound
 animal := class:
     Name():string = "animal"

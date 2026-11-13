@@ -1899,12 +1899,14 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
         tops := tops.push (.const t.pos name none (.typeAlias a.pos [] ty))
         continue
       let b ← parseFnBody
-      -- (a module's data states its type, Book of Verse ch. 16; `X := c`,
-      -- where `c` may be a type, is `Aliases.expand`'s to decide)
-      if !pfx.isEmpty then
-        match b with
-        | .structDef .. | .enumDef .. | .refineDef .. => pure ()
-        | b => if b.asType?.isNone then perr n s!"a constant in a module needs its type: write {name0}:t = …"
+      -- (a module's data states its type, Book of Verse ch. 16, also at a
+      -- file's top level, which is a module's scope (the Book's tests,
+      -- `Union.versetest` 23, 290); `X := c`, where `c` may be a type, is
+      -- `Aliases.expand`'s to decide)
+      match b with
+      | .structDef .. | .enumDef .. | .refineDef .. => pure ()
+      | b => if b.asType?.isNone && !b.isTypeLikeForm then
+          perr n s!"a constant {if pfx.isEmpty then "at the top level" else "in a module"} needs its type: write {name0}:t = … (Book of Verse ch. 16: \"type inference with := alone is not allowed\")"
       tops := tops.push (.const t.pos name none b)
     else if n.isSym ":" then
       bump

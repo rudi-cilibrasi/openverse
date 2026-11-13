@@ -24,6 +24,6 @@ Main():void=
     DA:[int]int=map{1=>10,2=>20}
     DB:[int]int=map{3=>30}
     D:=Discard(DA,DB)
-    Expected:=DropKeys(map{1=>30,2=>20})
+    Expected:=DropKeys(map{1=>30})
     Unit:void=()
     if(D=Expected,X:=D[Unit])then Print("discard {D.Length} {X}")

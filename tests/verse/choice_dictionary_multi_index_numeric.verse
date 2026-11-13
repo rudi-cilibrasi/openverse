@@ -1,3 +1,5 @@
+# set A.Data[0][0] += A.RHS() of ints and rationals: RHS replaces Data first, then the old value is
+# read
 ca:=class:
     var Data:[][]int=array{array{0,0}}
     RHS()<transacts>:int=block{set Data=array{array{10,20}};7}
@@ -13,5 +15,5 @@ Main():void=
         Q:=cb{Data:=array{array{Initial,Tail}}}
         Rows:=for(A:=(Dup(P)|Dup(Q)),set A.Data[0][0]+=A.RHS()):0
         Print("{Rows.Length}")
-        if(P.Data[0][0]=14,P.Data[0][1]=20)then Print("int ok") else Print("bad int")
-        if(Q.Data[0][0]=44/3,Q.Data[0][1]=5/2)then Print("ratio ok") else Print("bad ratio")
+        if(P.Data[0][0]=17,P.Data[0][1]=20)then Print("int ok") else Print("bad int")
+        if(Q.Data[0][0]=17/2,Q.Data[0][1]=5/2)then Print("ratio ok") else Print("bad ratio")

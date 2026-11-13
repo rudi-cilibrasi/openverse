@@ -1,5 +1,5 @@
 # (#283) A choice with a call of the recursive function as one alternative,
-# as a set's value (`=`, or `+=` with its old value read before the choice)
+# as a set's value (`=`, or `+=` with its old value read after the choice)
 # or a var's initial value: bound first, as such a choice anywhere, so each of
 # its values goes to the code after it, as `X := 10 + (T(N - 1) | 5)` does.
 Add(N:int)<transacts>:int =

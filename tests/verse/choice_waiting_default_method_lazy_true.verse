@@ -10,7 +10,7 @@ box(t:type):=class:
     Run(P:pair(a,b),H:cell,?N:int=block{R:=for(V:=if(D:=dup[P])then(D.C|D.C+1)else 0,L:=Lazy[V]):block{defer:Print("body {H.N}");Sleep(0.1);set H.N+=V;V};R.Length} where a:type,b:type)<suspends>:int=N
 Make():box(string)=box(string){X:="tag"}
 
-B:=Make()
+B:box(string)=Make()
 Use(P:pair(a,b),H:cell where a:type,b:type)<suspends>:int=
     defer:Print("source {H.N}")
     B.Run(P,H)

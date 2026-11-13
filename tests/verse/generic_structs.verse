@@ -34,7 +34,7 @@ Push(B:box(t), X:t where t:type):box(t) =
 
 Put(K:keyed(k, v), Key:k, Value:v where k:subtype(comparable), v:type):keyed(k, v) =
     var M:[k]v = K.Entries
-    set M[Key] = Value
+    if (set M[Key] = Value) {}
     keyed(k, v){Entries := M}
 
 FirstsOf(Ps:[]pair(t, u) where t:type, u:type):[]t = for (P : Ps) { P.First }
@@ -87,7 +87,7 @@ Main():void =
     Ps := array{MakePair(1, "a"), MakePair(2, "b"), MakePair(3, "c")}
     for (F : FirstsOf(Ps)) { Print("{F}") }
     var Cache:[pair(int, int)]string = map{}
-    set Cache[MakePair(1, 2)] = "one-two"
+    if (set Cache[MakePair(1, 2)] = "one-two") {}
     if (V := Cache[pair(int, int){First := 1, Second := 2}]) then Print(V)
     Print("nested {Nest(1, 12)} deep")
     Li := MakeListing("x", 7)
