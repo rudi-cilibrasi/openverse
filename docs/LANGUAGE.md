@@ -777,6 +777,47 @@ circle := class(shape, labelled):
     plain `M<override>` in a subclass implements all its slots. `(c:)M` in
     class `c` itself is `M`, unless a class above has an `M`: that would be
     a second method `M`, which openverse refuses.
+- **Fields with accessors** (Book of Verse ch. 10, "Fields with
+  Accessors"; ch. 12, "Getter and Setter Accessors"; the rules and their
+  sources are pinned in [research/accessors.md](research/accessors.md)).
+  `var X<getter(G)><setter(S)>:t = external{}` in a class or an interface
+  is a field with no storage: a read of `O.X` (or of `X` in a method) is
+  `O.G(…)`, a `set O.X = v` is `O.S(…, v)`, whose value is `v`.
+  - **Declaring.** One `<getter(…)>` and one `<setter(…)>`, on a `var` of a
+    class or an interface (not a struct); the default `external{}` or none,
+    and then every construction gives the field. `G` and `S` are methods of
+    the class or of one above it (a method of an interface is one), each
+    taking first an unnamed parameter of the type `accessor`:
+    `G(:accessor):t` and `S(:accessor, V:t):void`, at the field's type
+    exactly; their other overloads read and set paths (below). Not of a
+    tuple type (the Book's tests).
+  - **Overriding.** A field with accessors is not overridden, and its
+    accessors are not overridden below the class or interface that declares
+    it. A class may give a field with storage of a class or interface above
+    it accessors, `var X<override><getter(G)><setter(S)>:t = external{}`:
+    its objects then read and set `X` through them, also through the type
+    above, where the object's class decides (a test of it, as for a field at
+    different places).
+  - **Paths.** `O.X[I]`, `O.X.F[J]`: a path into the field's value, up to
+    the first object in it, is one call of the overload of `G` (or of `S`,
+    for a `set`) that takes, after the accessor, the path's indices and the
+    names of the struct fields it goes through, as strings, then for `S` the
+    value: `GetX(:accessor, I:int)<decides>:int`. Such an overload must
+    exist; one that can fail is used in a failure context. A path that goes
+    on into an object reads the field with `G`, then goes on in the object;
+    `O.X.Length` reads `O.X`.
+  - **Order.** `O`, then the indices, then `v`; for `set O.X op= v`, then the
+    old value through `G`, then `S`. A construction evaluates its fields'
+    values in the order they are declared, those with accessors among them,
+    makes the object, calls the setters of the fields with accessors it
+    gives, in that order, then runs the `block:` clauses.
+  - **Access.** A use of the field is judged by the field's access (and its
+    `var`'s for a `set`), not by its accessors': a `<public>` field may have
+    `<private>` accessors. The accessors cannot be called otherwise, since
+    no program can make the value of their first parameter.
+  - **Not supported:** a constructor function that gives a field with
+    accessors; a path into such a field's value through a type above a
+    class that gives a field with storage accessors.
 - **Casts.** `T[X]` is `X` as a `T`, failing unless `X`'s class is below
   `T`. `T(X)` converts to a supertype and cannot fail.
 - **Parametric classes.** A parametric class is a reference like any other
@@ -3122,5 +3163,5 @@ Main()<suspends>:void =
 `weak_map`, what [comparable](#comparable) lists as not yet, module paths `using{/Verse.org/…}` (accepted and ignored), paths as values and path qualifiers other than `(/Verse.org/Verse:)` of a built-in type, two members of one name in a class (`(c:)M` beside an inherited `M`, Book ch. 10), the
 specific overload/call gaps listed under [Overloading](#overloading), nested
 functions and lambdas (a lambda, `(X:int) => X`, `a => b`, parses, as the Book's tests have it, and is refused; see [release evidence and proposed design](research/closure-design.md)),
-pointers (`e^` and `^t` parse, as the Book's tests have them, and are refused: the Book's chapters define none), specifiers on a macro's name (`for<par>(…)`, parsed and refused, 3604), declarations with no body (`F():void`, `X:int` on their line: parsed and refused, as openverse has no definitions made elsewhere), fields with accessors (`var X<getter(F)><setter(G)>:t = external{}`, ch. 10, "Fields with Accessors": parsed and refused), choice beyond [Choice](#choice), concurrency beyond [Concurrency](#concurrency), and the unsupported
+pointers (`e^` and `^t` parse, as the Book's tests have them, and are refused: the Book's chapters define none), specifiers on a macro's name (`for<par>(…)`, parsed and refused, 3604), declarations with no body (`F():void`, `X:int` on their line: parsed and refused, as openverse has no definitions made elsewhere), choice beyond [Choice](#choice), concurrency beyond [Concurrency](#concurrency), and the unsupported
 effect/construction contracts listed under [Effect contracts](#effect-contracts).

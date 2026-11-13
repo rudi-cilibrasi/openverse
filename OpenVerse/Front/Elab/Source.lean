@@ -587,6 +587,8 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   Access.checkUses access resolved
   -- (types as values, `subtype(t)` and its kin: classes and interfaces)
   let resolved ← TypeValues.desugar resolved
+  -- (fields with accessors: checked, and their accessors' type written)
+  let resolved ← Accessors.desugar resolved
 
   -- (the built-ins it names as values, as definitions of their own: after
   -- the aliases, whose names are no values' and bind nothing)

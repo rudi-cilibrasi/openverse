@@ -1,0 +1,21 @@
+GetItems
+3
+GetItems[1]
+2
+SetItems[2]
+GetItems
+3
+out of range
+GetP A
+1
+SetP A
+GetP B[0]
+10
+SetP B[0]
+GetP B[0]
+7
+GetItems
+SetItems
+GetItems
+4
+exit=0

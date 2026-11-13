@@ -65,6 +65,10 @@ structure CDef where
   isIface : Bool
   fields : List SField
   methods : List STop
+  /-- Its fields with accessors, which have no storage, so are none of
+      `fields` (`Accessors`), each with the fields with storage declared
+      right before and right after it, which place it among them. -/
+  accessors : List (SField × Option String × Option String) := []
 
 /-- The fields a class declares `<override>`, giving inherited ones new defaults. -/
 def CDef.overrides (cd : CDef) : List String := (cd.fields.filter (·.isOverride)).map (·.name)

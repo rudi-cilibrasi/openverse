@@ -82,6 +82,17 @@ def typeEnvironment (classes : Classes) (fields : Fields) (methods : Methods) (s
       structs := structs.push (n, fields)
     | _ => pure ()
   env := { env with structs := structs.toList }
+  -- the fields with accessors, their types resolved (`Accessors`)
+  let mut accessors : Array AccessorField := #[]
+  for cd in classes.defs do
+    let cenv := { env with tvars := ((env.sparams.lookup cd.name).getD []).map fun (v, c) => (v, Ty.param v c) }
+    for (f, prev, next) in cd.accessors do
+      let (ty, _) ← (resolveTy cenv cd.pos f.ty).run {}
+      let getter := (Accessors.named? "getter" f.specs).headD ""
+      let setter := (Accessors.named? "setter" f.specs).headD ""
+      let external := f.specs.contains Accessors.externalSpec
+      accessors := accessors.push { owner := cd.name, name := f.name, getter, setter, ty, external, prev, next }
+  env := { env with accessors := accessors.toList }
   -- what `<persistable>` requires of a struct (Book of Verse ch. 17,
   -- `EffectPolicy.specifierPlaces`): no type parameters, and fields whose
   -- types persist, not `any`, `comparable` (ch. 17, 178: "Abstract interface

@@ -1581,6 +1581,38 @@ where interfaces would say more than the Book's metatypes (a join keeps no
 concreteness, and castability only of a castable bound), are restricted in
 `joinTy`. No Verse Core is added.
 
+## Fields with accessors: calls of their class's methods
+
+A field `var X<getter(G)><setter(S)>:t = external{}` has no storage
+([research/accessors.md](research/accessors.md)). The parser keeps
+`getter(G)`, `setter(S)` among the field's specifiers and checks one of each
+on a class's or interface's `var` (`EffectPolicy.checkField`);
+`Accessors.desugar`, after `TypeValues.desugar`, checks the rest as written
+(the default, the accessors' signatures, no override of the field or of its
+accessors below where it is declared), makes `external{}` the specifier
+`external`, and writes the accessors' first parameter's type, `accessor`, as
+the struct `$accessor`, which no program can name, so that nothing but the
+field calls them. The classes' phase sets such fields apart from the stored
+ones (`CDef.accessors`, with the stored fields around each), and the type
+environment records them, their types resolved (`TyEnv.accessors`).
+
+The elaborator then writes each use as calls (`Elab/Accessors.lean`), from
+three places: `elabERaw` for a read, `elabSet` for a `set`, before
+`elabSetWith`, and `elabConstructionValue` for a construction. Each finds
+the places of a path that reach a field with accessors by the names the
+path writes and its receivers' types (an elaboration that keeps nothing);
+a path into the field's value, up to an object, is one call of the overload
+of the getter or setter that takes the path's indices and field names, and
+one through an object reads the field, then goes on. The calls are written
+at a position of no source definition, so the accessors' own access does
+not judge them: the field's does, where it is used. A field with storage
+that a class below gives accessors is read and set through the type above
+with a test of the object's class, as a field at different places is.
+A construction that gives such fields evaluates every value into a slot in
+the order the fields are declared, makes the object, calls the setters and
+runs the `block:` clauses. A program with no field with accessors takes
+none of these paths, so its code is unchanged. No Verse Core is added.
+
 ## Type aliases: a substitution before elaboration
 
 A type alias (`player_id := int`, `pair(t:type) := tuple(t, t)`, Book of

@@ -1,0 +1,12 @@
+100
+42
+42
+50
+7
+9
+SetLimit(10) block : 0 of 10
+count
+max
+SetCount(50) SetLimit(30) block : 20 of 30
+20
+exit=0

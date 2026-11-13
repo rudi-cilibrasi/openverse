@@ -1,5 +1,6 @@
 /- Elaboration expr; public declarations retain OpenVerse.Front names. -/
 import OpenVerse.Front.Elab.Application
+import OpenVerse.Front.Elab.Accessors
 import OpenVerse.Front.Elab.Statement
 import OpenVerse.Front.Elab.ExpressionControl
 import OpenVerse.Front.Elab.ExpressionValues
@@ -88,6 +89,10 @@ partial def elabReceiverEvidence (ctx : Ctx) (p : Pos)
     coerce p (← elabMember ctx p ⟨.local 0, receiver⟩ fieldName) bound.ty
 
 partial def elabERaw (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
+  -- a read that ends a path through a field with accessors: its getter's
+  -- call (`Elab/Accessors.lean`)
+  if !ctx.types.accessors.isEmpty then
+    if let some r ← elabAccessorRead? elabE elabApp (fun c q r m => elabMember c q r m) ctx se exp then return r
   -- `T{}` with `T` a type value of `concrete_subtype(A)`: `T.$make(A)()`
   -- (`TypeValues`)
   if let .construct p n [] fs := se then
@@ -1215,6 +1220,12 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
 
 /-- `elabSetWith`, given this block's functions (#325). -/
 partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (rhs0 : SExpr) : EM R := do
+  -- a place through a field with accessors: its setter's call
+  -- (`Elab/Accessors.lean`)
+  if !ctx.types.accessors.isEmpty then
+    if let some r ← elabAccessorSet? elabE elabApp elabSet (fun c q r m => elabMember c q r m)
+        (fun c q l o r => elabSetWith elabE (fun c q r m => elabMember c q r m) c q l o r) ctx p lhs0 op rhs0 then
+      return r
   let rec firstField : SExpr → Option (String × String)
     | .member _ (.ident _ root) field => some (root, field)
     | .member _ receiver _ | .app _ receiver _ true | .query _ receiver => firstField receiver
@@ -2415,6 +2426,18 @@ partial def elabConstructionValue (ctx : Ctx) (p : Pos) (name : String) (targs :
   let given ← args.mapM fun a => match a with
     | .decl _ f none false rhs => pure (f, rhs)
     | a => eerr a.pos "a struct field is given as Name := value"
+  -- (the fields with accessors it gives, set apart: their setters are
+  -- called on the new object, `accessorConstruction`; one with no
+  -- `external{}` must be given)
+  let (accGiven, given) := if ctx.types.accessors.isEmpty then ([], given)
+    else given.partition fun (f, _) => (ctx.types.accessorOf? name tas f).isSome
+  if !ctx.types.accessors.isEmpty && ctx.types.classes.contains name then
+    if let some f := (accGiven.map (·.1)).find? (fun f => (accGiven.filter (·.1 == f)).length > 1) then
+      eerr p s!"field '{f}' of {name} is given twice"
+    for a in ctx.types.accessors do
+      if !a.external && ctx.types.isSub name a.owner && !(ctx.types.info name).isIface &&
+          !(ctx.types.info name).isAbstract && !accGiven.any (·.1 == a.name) then
+        eerr p s!"field '{a.name}' of {name} has accessors and no default external\{}: a construction gives it a value (Book of Verse ch. 12)"
   for (f, _) in given do
     if (fs.find? (·.1 == f)).isNone then eerr p s!"struct {name} has no field '{f}'"
     -- (a `<final>` field keeps its default: no construction gives it a value)
@@ -2423,12 +2446,17 @@ partial def elabConstructionValue (ctx : Ctx) (p : Pos) (name : String) (targs :
   -- (only the first would be evaluated)
   if let some f := (given.map (·.1)).find? (fun f => (given.filter (·.1 == f)).length > 1) then
     eerr p s!"field '{f}' of {name} is given twice"
-  let es ← fs.mapM fun (f, t, dflt) => do
+  let storedValue (f : String) (t : Ty) (dflt : Option SExpr) : EM Expr := do
     match given.lookup f, dflt with
     | some rhs, _ => coerce p (← elabE ctx rhs (some t)) t
     | none, some d =>
       elabFieldDefault ctx p name tas f t d
     | none, none => eerr p s!"field '{f}' of {name} has no default value and must be given"
+  -- (with fields with accessors given, every value in a slot, in the order
+  -- the fields are declared, `accessorValues`)
+  let (pre, es, accVals) ← if accGiven.isEmpty then
+      pure ([], ← fs.mapM fun (f, t, dflt) => storedValue f t dflt, [])
+    else accessorValues elabE ctx name tas fs storedValue accGiven
   if ctx.types.classes.contains name then
     let i := ctx.types.info name
     if i.isIface then eerr p s!"{name} is an interface: it cannot be constructed"
@@ -2441,6 +2469,10 @@ partial def elabConstructionValue (ctx : Ctx) (p : Pos) (name : String) (targs :
       let chain := ((ctx.types.supers name).filter fun d => !(ctx.types.info d).isIface).reverse
       let blocks := chain.filterMap fun d => (ctx.sig? s!"{d}.$block").map (d, ·)
       if blocks.isEmpty then
+        if !accGiven.isEmpty then
+          let x ← fresh ty
+          let setters ← accessorSetters elabApp ctx ty accVals x
+          return ⟨(pre ++ [Expr.assign x (.heap (.new (ctx.types.tagOf name)) es)] ++ setters).foldr .seq (.local x), ty⟩
         -- a parametric class's object goes through a temporary of its type,
         -- which gives the checker its type arguments (#39)
         -- (and so does a pinned class's, whose pins may be on more type
@@ -2462,8 +2494,14 @@ partial def elabConstructionValue (ctx : Ctx) (p : Pos) (name : String) (targs :
           let ctx' := { ctx with locals := { name := self, slot := x, ty := dty, mutable := false } :: ctx.locals }
           let rc ← elabApp ctx' p (.ident p s!"{d}.$block") [.ident p self] false none
           calls := calls ++ [rc.e]
-      return ⟨.seq (.assign x (.heap (.new (ctx.types.tagOf name)) es)) (calls.foldr .seq (.local x)), ty⟩
+      -- (the setters of the fields with accessors given, before the
+      -- `block:` clauses)
+      let setters ← if accGiven.isEmpty then pure [] else accessorSetters elabApp ctx ty accVals x
+      return ⟨(pre ++ [Expr.assign x (.heap (.new (ctx.types.tagOf name)) es)] ++ setters ++ calls).foldr .seq (.local x), ty⟩
     let x ← fresh ty
+    if !accGiven.isEmpty then
+      let setters ← accessorSetters elabApp ctx ty accVals x
+      return ⟨(pre ++ [Expr.assign x (classWrap ctx.types name name (.prim .mkTup es))] ++ setters).foldr .seq (.local x), ty⟩
     return ⟨.assign x (classWrap ctx.types name name (.prim .mkTup es)), ty⟩
   -- A struct's fields may need their expected types (empty arrays/options
   -- and computed defaults). Preserve the resolved instance before a Core

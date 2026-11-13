@@ -1363,7 +1363,7 @@ partial def parseField0 (c : Nat) : PM SField := do
   let ty ← parseType
   let a ← peekT
   let d ← if a.isSym "=" || a.isSym ":=" then do bump; pure (some (← parseValue c)) else pure none
-  ofExcept <| EffectPolicy.checkField start.pos .structField n specs varSpecs d.isSome
+  ofExcept <| EffectPolicy.checkField start.pos .structField n specs varSpecs d.isSome isVar
   return { name := n, ty, default := d, isVar, specs, varSpecs }
 
 /-- `struct` (after the keyword): optional specifiers, then `:` + fields or `{ fields }`. -/
@@ -1991,7 +1991,7 @@ partial def parseClassItem0 (c : Nat) : PM (Sum SField STop) := do
     let ty ← parseType
     let a ← peekT
     let d ← if a.isSym "=" || a.isSym ":=" then do bump; pure (some (← parseValue c)) else pure none
-    ofExcept <| EffectPolicy.checkField t.pos .field name pre varSpecs d.isSome
+    ofExcept <| EffectPolicy.checkField t.pos .field name pre varSpecs d.isSome isVar
     return .inl { name, ty, default := d, isVar, specs := pre, varSpecs }
   if isVar then perr t "expected a field after var"
   expectSym "("

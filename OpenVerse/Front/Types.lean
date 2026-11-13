@@ -219,6 +219,25 @@ structure Requests where
   boxes : List (String × String) := []
   deriving Inhabited
 
+/-- A field with accessors (Book of Verse ch. 10, "Fields with Accessors";
+    `Accessors`): it has no storage, and a read of it is a call of its class's
+    method `getter`, a `set` one of `setter` (`Elab/Accessors.lean`). -/
+structure AccessorField where
+  /-- The class or interface that declares it. -/
+  owner : String
+  name : String
+  getter : String
+  setter : String
+  /-- Its type, in terms of `owner`'s type parameters (`Ty.param`). -/
+  ty : Ty
+  /-- Its default is `external{}`: a construction need not give it. -/
+  external : Bool
+  /-- The fields with storage of `owner` declared right before and right
+      after it: a construction evaluates its value between theirs. -/
+  prev : Option String := none
+  next : Option String := none
+  deriving Inhabited
+
 /-- The user-defined types of a program. -/
 structure TyEnv where
   /-- Public helper names owned by source declarations use private identities
@@ -280,6 +299,9 @@ structure TyEnv where
   boundFacts : List (Ty × Ty) := []
   /-- Each enum: its enumerators in order. -/
   enums : List (String × List String) := []
+  /-- The fields with accessors of the classes and interfaces, none of them
+      among `structs`' fields (`Accessors`). -/
+  accessors : List AccessorField := []
   /-- The refinement types (#136): each one's base type (int or float) and
       conditions, `_X op bound` (op `<`, `<=`, `>` or `>=`). -/
   refines : List (String × Ty × List (String × Value)) := []
