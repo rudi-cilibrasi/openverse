@@ -385,6 +385,33 @@ exclusive choices without continuations, which needs the continuation's
 clauses copied (or its slots in an object) and #335's code-size test to
 stay within bounds; the lazily taken calls are the largest.
 
+**The models and the programs.** Each of the five models that encoded "a
+failure rolls back to the most recent generator" (`mv.py`, `generic_mv.py`,
+`choice_break.py`, `choice_heterogeneous.py`, `gen-choice.py`), and
+`tests/scripts/test-choice-defaults.py`'s, states the rule compositionally
+(a choice point in a `for` with no alternative reaching the body fails, as a
+step does; reaching the body commits), behind `OV_FOR_BOOK`: the kinds of
+choice point whose `for`s follow it (`plain`, `choice`, `composed`,
+`exclusive`, `call`, or `all`), each model classifying its `for`s by what
+their clauses reach. By default the kinds built, `plain,choice`; with the
+flag off (`OV_FOR_BOOK=none`) every prediction is the original model's.
+The whole reading (`all`) changes the prediction of 61 of 300 `gen-choice`
+programs, 77 of 300 `choice_break`, 181 of 300 `choice_heterogeneous`, 134
+of 400 `mv` and 188 of 400 `generic_mv`; the part built changes 407
+of 4,000 `gen-choice` programs, 90 of 3,000 `mv`, and none of
+`choice_break`'s, `choice_heterogeneous`'s or `generic_mv`'s, whose `for`s
+all take calls of functions with several values. Against the final
+compiler, in Lean and C: `gen-choice` 4,000 seeds, `choice_break` 2,000
+(each two programs), `choice_heterogeneous` 2,000, `mv` 3,000,
+`generic_mv` 2,000, none different from its model (`test-choice-defaults`
+900 programs); with the old predictions, the fuzzers fail on exactly the
+programs whose prediction the rule changes (4 of the first 60
+`test-choice-defaults` seeds, for instance). Over the suites and the frozen
+corpus (5,713 programs, against main `34e76e1`), 59 programs print
+differently, each the rule's: 40 `gen-choice` and 14 `mv` programs that
+their models now predict exactly, the two tests above and the three new
+ones; 507 more change their bytes alone, and no message changes.
+
 ### `return` and `break` in a failure context
 
 **Built** (the second of the load-bearing readings, [below](#the-load-bearing-readings-built)).
