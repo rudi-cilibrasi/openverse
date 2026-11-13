@@ -61,7 +61,13 @@ The model:
     whose method of that name is ordinary has its one value;
   * generic overloads (#283), told apart by arity: a call takes the overload
     its arguments fit and has its values (one, or several), an overload may
-    call its function's own name, and so may a generic class's method's list.
+    call its function's own name, and so may a generic class's method's list;
+  * type parameters with upper bounds (#502; a stream of its own): a member
+    read through a class bound is the instance's (its override), a result is
+    at the argument's precise type, a peer u:subtype(t) gives a t, a []t
+    filtered on a bound member keeps its elements' class, an int is halved
+    as the rational its bound makes it, an array upper is indexed and
+    measured, and a bounded class's method has several values.
 """
 import random, sys, os, re
 
@@ -1081,6 +1087,87 @@ class Gen:
             self.main.append('Print("plain {plainvals{}.Vals()}")')
             self.m.out.append("plain 0")
         self.generic_overloads()
+        self.bounded_generics()
+
+    def bounded_generics(self):
+        # (#502: type parameters with upper bounds, class, peer, container and numeric ones,
+        # in functions with several values: members read through the bound dispatch to the
+        # precise class, results keep the precise type, and where the first success is taken
+        # a rejected alternative's output is rolled back; a stream of its own decides, so
+        # seeds keep their other programs)
+        rng = random.Random(self.seed * 1000003 + 502)
+        if rng.random() >= 0.5:
+            self.boundsrc = ""
+            return
+        self.boundsrc = (
+            "bveh := class:\n"
+            "    Speed:int = 1\n"
+            "    Kind():string = \"veh\"\n"
+            "bcar := class(bveh):\n"
+            "    Doors:int = 4\n"
+            "    Kind<override>():string = \"car\"\n"
+            "btruck := class(bveh):\n"
+            "    Load:int = 9\n"
+            "    Kind<override>():string = \"truck\"\n"
+            "BTag(X:t where t:subtype(bveh))<transacts>:t =\n"
+            "    Print(\"tag {X.Kind()} {X.Speed}\")\n"
+            "    X\n"
+            "BBoth(X:t, Y:t where t:subtype(bveh))<transacts>:t = BTag(X) | BTag(Y)\n"
+            "BUp(Base:t, V:u where t:subtype(bveh), u:subtype(t))<computes>:t = V\n"
+            "BFast(Xs:[]t, Min:int where t:subtype(bveh))<transacts>:[]t = for (X:Xs, X.Speed > Min) { X }\n"
+            "BHalf(X:t where t:subtype(rational))<computes><decides>:int = Floor[X / 2]\n"
+            "BAll(Xs:t where t:subtype([]int))<transacts>:int = (if (F := Xs[0]) then F else -1) | Xs.Length\n"
+            "bbox(t:subtype(bveh)) := class:\n"
+            "    Item:t\n"
+            "    Get()<transacts>:t = Item | Item\n"
+            "    Pace()<computes>:int = Item.Speed\n")
+        out = self.m.out
+        def veh(kind):
+            sp = rng.randint(0, 6)
+            if kind == "bcar":
+                d = rng.randint(1, 5)
+                return ("bcar{Speed := %d, Doors := %d}" % (sp, d), sp, d)
+            ld = rng.randint(1, 5)
+            return ("btruck{Speed := %d, Load := %d}" % (sp, ld), sp, ld)
+        own = {"bcar": "Doors", "btruck": "Load"}
+        kindname = {"bcar": "car", "btruck": "truck"}
+        for _ in range(rng.randint(1, 4)):
+            k = rng.choice(["both", "first", "up", "fast", "half", "all", "box"])
+            kind = rng.choice(["bcar", "btruck"])
+            if k in ("both", "first"):
+                a, b = veh(kind), veh(kind)
+                if k == "both":
+                    self.main.append('for (A := BBoth(%s, %s)) { Print("both {A.%s} {A.Kind()}") }' % (a[0], b[0], own[kind]))
+                    for x in (a, b):
+                        out += ["tag %s %d" % (kindname[kind], x[1]), "both %d %s" % (x[2], kindname[kind])]
+                else:
+                    cut = rng.randint(0, 6)
+                    self.main.append('if (A := BBoth(%s, %s), A.Speed > %d) then Print("bfirst {A.%s}") else Print("bfirst none")'
+                                     % (a[0], b[0], cut, own[kind]))
+                    got = [x for x in (a, b) if x[1] > cut]
+                    out += ["tag %s %d" % (kindname[kind], got[0][1]), "bfirst %d" % got[0][2]] if got else ["bfirst none"]
+            elif k == "up":
+                a = veh(kind)
+                self.main.append('Print("up {BUp(bveh{}, %s).Kind()}")' % a[0])
+                out.append("up %s" % kindname[kind])
+            elif k == "fast":
+                xs = [veh(kind) for _ in range(rng.randint(1, 3))]
+                cut = rng.randint(0, 5)
+                self.main.append('for (X : BFast(array{%s}, %d)) { Print("fast {X.%s}") }'
+                                 % (", ".join(x[0] for x in xs), cut, own[kind]))
+                out += ["fast %d" % x[2] for x in xs if x[1] > cut]
+            elif k == "half":
+                n = rng.randint(-9, 9)
+                self.main.append('if (H := BHalf[%d]) { Print("half {H}") }' % n)
+                out.append("half %d" % (n // 2))
+            elif k == "all":
+                xs = [rng.randint(-5, 9) for _ in range(rng.randint(1, 3))]
+                self.main.append('for (V := BAll(array{%s})) { Print("ball {V}") }' % ", ".join(map(str, xs)))
+                out += ["ball %d" % xs[0], "ball %d" % len(xs)]
+            else:
+                a = veh(kind)
+                self.main.append('for (V := bbox(%s){Item := %s}.Get()) { Print("box {V.%s} {V.Kind()}") }' % (kind, a[0], own[kind]))
+                out += ["box %d %s" % (a[2], kindname[kind])] * 2
 
     def generic_overloads(self):
         # (#283: generic overloads with several values or one, told apart by arity; their own
@@ -1575,6 +1662,7 @@ Tell(S:string, X:int)<transacts>:int =
         body = pre + "\n".join(p.src for p in self.prods) + "\n"
         if self.consumers: body += "\n".join(self.consumers) + "\n"
         body += getattr(self, "ovsrc", "")
+        body += getattr(self, "boundsrc", "")
         body += "Main():void =\n" + "".join("    %s\n" % l for l in self.main)
         return body
 
@@ -1590,8 +1678,9 @@ def main():
     with open(os.path.join(outdir, "p.verse"), "w") as f: f.write(src)
     with open(os.path.join(outdir, "p.expected"), "w") as f: f.write(exp)
     with open(os.path.join(outdir, "p.meta"), "w") as f:
-        f.write("paths=%s kinds=%s methods=%s\n" % (",".join(sorted(g.paths)), ",".join(p.kind for p in g.prods),
-                ",".join(getattr(p, "method_shape", "direct") for p in g.prods if p.kind == "IMeth")))
+        f.write("paths=%s kinds=%s methods=%s bounds=%s\n" % (",".join(sorted(g.paths)), ",".join(p.kind for p in g.prods),
+                ",".join(getattr(p, "method_shape", "direct") for p in g.prods if p.kind == "IMeth"),
+                "yes" if getattr(g, "boundsrc", "") else "no"))
 
 if __name__ == "__main__":
     main()
