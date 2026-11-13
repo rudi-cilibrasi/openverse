@@ -1301,7 +1301,8 @@ def nested_shapes(f, i, sc, ctr, stmts):
             x, post, last = f.get('bound') or ('Wf', [], ('ref', 'Wf'))
         else:
             _, x, galts, post, last = v[3][0]
-        names = sc + [x]
+        # (not a bound choice of strings, `Ws`, typed_shapes': the call's argument is an int)
+        names = sc + ([x] if x != 'Ws' else [])
         kinds = ['if', 'or', 'opt', 'for'] + (['not', 'logic'] if f['decides'] else [])
     else:
         names = sc
