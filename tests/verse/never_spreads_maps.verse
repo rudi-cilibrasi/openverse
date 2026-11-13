@@ -9,14 +9,20 @@ Pair(X:t, Y:t where t:type):t = Y
 Add(X:int, Y:int):int = X + Y
 Meth(K:int):int =
     O := c{B := 100}
-    if (K = 2) then return O.Add((return 9, 3))
+    if (K = 2):
+        R := O.Add((return 9, 3))
+        return R
     O.Add((K, 3))
 Gen(K:int):int =
-    if (K = 2) then return Pair((return 9, 3))
+    if (K = 2):
+        R := Pair((return 9, 3))
+        return R
     Pair((K, 3))
 Val(K:int):int =
     G := Add
-    if (K = 2) then return G((return 9, 3))
+    if (K = 2):
+        R := G((return 9, 3))
+        return R
     G((K, 3))
 box := class:
     V:int

@@ -335,6 +335,63 @@ def checkReturns (tops : List STop) : Except String Unit := do
         throw s!"{r.pos.show}: return is not allowed in a constant's value (of {n}), which is in no function"
     | .fn .. => pure ()
 
+mutual
+/-- `checkNestedReturns`: code whose value is not returned. -/
+partial def nestedReturnsFree : SExpr → Except String Unit
+  | .ret _ (some e) => nestedReturnsResult e
+  | .structDef .. | .typeAlias .. | .refineDef .. | .enumDef .. => pure ()
+  | e => e.children.forM nestedReturnsFree
+
+/-- `checkNestedReturns`: in result position. -/
+partial def nestedReturnsResult : SExpr → Except String Unit
+  | .ret _ (some e) => nestedReturnsResult e
+  | .ret _ none => pure ()
+  | .block _ es => do
+    es.dropLast.forM nestedReturnsFree
+    es.getLast?.forM nestedReturnsResult
+  | .ite _ cs t (some e) => do cs.forM nestedReturnsFree; nestedReturnsResult t; nestedReturnsResult e
+  | .ite _ cs t none => do cs.forM nestedReturnsFree; nestedReturnsFree t
+  | .caseE _ sc arms => do
+    nestedReturnsFree sc
+    arms.forM fun (pt, v) => do pt.forM nestedReturnsFree; nestedReturnsResult v
+  | .loop _ b => nestedReturnsFree b
+  | .decl _ _ _ _ x => nestedReturnsResult x
+  | .structDef .. | .typeAlias .. | .refineDef .. | .enumDef .. => pure ()
+  | e => e.children.forM nestedReturnsPart
+
+/-- `checkNestedReturns`: a part of a value returned. -/
+partial def nestedReturnsPart : SExpr → Except String Unit
+  | .ret p _ => throw s!"{p.show}: a return inside the value a function returns: a return is that value, or a branch of it, or in code whose value is not returned (Book of Verse tests, Return.versetest: \"Return can't be a subexpression of an explicit or implicit return\")"
+  | .structDef .. | .typeAlias .. | .refineDef .. | .enumDef .. => pure ()
+  | e => e.children.forM nestedReturnsPart
+end
+
+/-- A `return` in a function whose result is not `void` is the value of a
+    function's body, a branch of it or of a `case`, the operand of a
+    `return`, or code whose value is not returned: not a part of a value a
+    function returns (Book of Verse tests, `Return.versetest` 114-162: "Return
+    can't be a subexpression of an explicit or implicit return, with a few
+    exceptions", 3534). The value a function returns (its body's, or a
+    `return`'s operand) is read in *result* position: a block's last item,
+    both branches of an `if` with an `else`, a `case`'s arms and a
+    `return`'s operand are in it too; a block's other items, the conditions
+    of an `if`, the body of a `loop` (whose value is `false`) and of an `if`
+    with no `else` (whose value is `false` too) are code whose value is not
+    returned, where a `return` may be, its own operand in result position;
+    anything else in result position (an operator's operands, a call's
+    arguments, an array's or a tuple's elements, a construction's fields, a
+    `for`'s clauses and body, whose values make its value) is part of the
+    value, where no `return` may be. -/
+partial def checkNestedReturns (tops : List STop) : Except String Unit := do
+  let fn : STop → Except String Unit
+    | .fn _ _ _ _ _ ret body => if ret == .name "void" then pure () else nestedReturnsResult body
+    | _ => pure ()
+  for t in tops do
+    match t with
+    | .fn .. => fn t
+    | .classDef _ _ _ _ _ _ _ _ ms => ms.forM fn
+    | _ => pure ()
+
 /-- Source admission and the prelude, the first phase of `elabProgramCore`:
     the source and the entry expression are admitted by the effect policy and
     the source profile; the program's own types do not take built-in names,
@@ -367,6 +424,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   checkDefinedOnce allTops0r
   let scopePairs ← checkNoShadowing allTops0r
   checkReturns allTops0r
+  checkNestedReturns allTops0r
   checkDefers allTops0r
   checkForClauses allTops0r
   let helpers ← if usesRat then ratTops else pure []
