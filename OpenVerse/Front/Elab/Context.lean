@@ -1273,6 +1273,44 @@ def TyEnv.viewFits (env : TyEnv) (a b : Ty) : Option (List Nat × Bool) :=
     some (fits, (VTy.ref fits as).sub (.vref es bs))
   | _, _ => none
 
+/-- `e` gives no value: it breaks, returns, fails or is `Err()` (after
+    whatever it does first), so Verse Core checks it against every type. -/
+partial def _root_.OpenVerse.Expr.noValue : Expr → Bool
+  | .brk | .ret _ | .prim .fail [] | .prim .userErr [] => true
+  | .seq _ b => b.noValue
+  | .ite _ t e => t.noValue && e.noValue
+  | _ => false
+
+/-- Verse Core infers no type for `e` (`tc e none` is `none`) though it
+    checks against some: an empty literal (`""`, `array{}`, `map{}`, `false`
+    as an empty option) has every type of its shape, code that gives no
+    value every type, and a construct that `tc` types from its parts when it
+    infers (an `if`'s branches, a sequence's last expression, an array's
+    first element, a tuple's elements, a comparison's left operand, …) none
+    when they have none. -/
+partial def _root_.OpenVerse.Expr.untyped : Expr → Bool
+  | .lit (.ref _) => false
+  | .lit v => (litTy v).isNone
+  | .seq _ b => b.untyped
+  | .ite _ t e => t.untyped && e.untyped
+  -- (a body that gives no value is checked at `void`)
+  | .forE _ _ _ b => b.untyped && !b.noValue
+  | .prim .mkArr es => (es.head?.map Expr.untyped).getD true
+  | .prim .mkTup es => es.any Expr.untyped
+  | .prim .mkSome [a] | .prim .query [a] | .prim .eq [a, _] | .prim .ne [a, _] => a.untyped
+  | .prim .concat [a, b] => a.untyped && b.untyped
+  | e => e.noValue
+
+/-- `r` where Verse Core infers a type instead of checking one: the operand
+    of `.Length`, an index, a projection or a flattening, a statement or a
+    condition whose value nothing takes. A value with no type of its own
+    there (`Expr.untyped`: `""`, `if (C?) then "" else ""`, a tuple with
+    one) goes through a temporary of the type it was elaborated at; any
+    other code is as it is (code that gives no value has every type). -/
+def inferable (r : R) : EM Expr := do
+  if !r.e.untyped || r.e.noValue then return r.e
+  return .assign (← fresh r.ty) r.e
+
 /-- Convert a value `e` of type `a` to the supertype `b`, when `a` is a class
     below the class or interface `b`, or an array or option of such (arrays
     and options are covariant): the options of the classes below `a` move to
@@ -1310,7 +1348,7 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
   -- `int` is a subtype of `rational` (#116): `X` is `X / 1`
   | .int, .rational => return some (.prim .mkTup [e, .lit (.int 1)])
   -- every value is an `any`, evaluated (#138)
-  | _, .any => return some (.seq e (.lit .void))
+  | _, .any => return some (.seq (← inferable ⟨e, a⟩) (.lit .void))
   -- a refinement is its base (#136); the base is the refinement only for a
   -- literal that meets its conditions (else a cast, `age[X]`)
   -- (a refinement within another's interval is one of it, #143)
@@ -1425,7 +1463,7 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
     let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push target })
     return .assign x (.seq r.e (.prim .userErr []))
   if r.ty == target || r.ty == .never then return r.e
-  if target == .void then return .seq r.e (.lit .void)
+  if target == .void then return .seq (← inferable r) (.lit .void)
   match ← convert (← get).env r.e r.ty target with
   | some e =>
     -- a typed temporary: the checker cannot infer the type of an empty option

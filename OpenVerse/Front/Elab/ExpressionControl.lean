@@ -82,7 +82,7 @@ partial def elabExprControlWith
           let t ← fresh rty
           if isVoid then
             let eE ← elabE ctx ee none
-            return ⟨.seq (.assign t r.e) (.ite (.prim .query [.local t]) (.lit .void) (.seq eE.e (.lit .void))), .void⟩
+            return ⟨.seq (.assign t r.e) (.ite (.prim .query [.local t]) (.lit .void) (.seq (← inferable eE) (.lit .void))), .void⟩
           let eE ← coerce p (← elabE ctx ee (some τ)) τ
           let xv ← fresh τ
           return ⟨.seq (.assign t r.e) (.ite (.assign xv (.prim .query [.local t])) (.local xv) eE), τ⟩
@@ -144,7 +144,7 @@ partial def elabExprControlWith
             let t ← fresh rty
             if isVoid then
               let eE ← elabE ctx ee none
-              return some ⟨.seq (.assign t r.e) (.ite (.prim .query [.local t]) (.lit .void) (.seq eE.e (.lit .void))), .void⟩
+              return some ⟨.seq (.assign t r.e) (.ite (.prim .query [.local t]) (.lit .void) (.seq (← inferable eE) (.lit .void))), .void⟩
             let eE ← coerce p (← elabE ctx ee (some τ)) τ
             let xv ← fresh τ
             return some ⟨.seq (.assign t r.e) (.ite (.assign xv (.prim .query [.local t])) (.local xv) eE), τ⟩
@@ -346,7 +346,7 @@ partial def elabExprControlWith
       inChoice := false, forBreakSlot := none, forBreakCapture := none,
       refineExits := { ctx.refineExits with brk := none } }
     let r ← elabE lctx body none
-    return ⟨.loop r.e, .void⟩
+    return ⟨.loop (← inferable r), .void⟩
   | .brk p =>
     if ctx.inChoice then
       eerr p "internal: a break in first-success clauses that do not forward one (#283)"
