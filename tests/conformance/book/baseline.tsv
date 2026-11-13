@@ -4740,12 +4740,12 @@ Tests/FlowControl/for.versetest:317	agrees
 Tests/FlowControl/for.versetest:324	agrees
 Tests/FlowControl/for.versetest:330	agrees
 Tests/FlowControl/for.versetest:337	agrees
-Tests/FlowControl/for.versetest:344	wrong-output
+Tests/FlowControl/for.versetest:344	agrees
 Tests/FlowControl/for.versetest:352	agrees
-Tests/FlowControl/for.versetest:362	wrong-output
-Tests/FlowControl/for.versetest:371	wrong-output
+Tests/FlowControl/for.versetest:362	agrees
+Tests/FlowControl/for.versetest:371	agrees
 Tests/FlowControl/for.versetest:385	agrees
-Tests/FlowControl/for.versetest:392	wrong-output
+Tests/FlowControl/for.versetest:392	agrees
 Tests/FlowControl/for.versetest:401	agrees
 Tests/FlowControl/for.versetest:413	agrees
 Tests/FlowControl/for.versetest:417	agrees
@@ -10069,8 +10069,8 @@ Tests/Range.versetest:121	agrees
 Tests/Range.versetest:125	agrees
 Tests/Range.versetest:129	agrees
 Tests/Range.versetest:133	agrees
-Tests/Range.versetest:140	wrong-output
-Tests/Range.versetest:159	wrong-output
+Tests/Range.versetest:140	agrees
+Tests/Range.versetest:159	agrees
 Tests/Range.versetest:169	agrees
 Tests/Range.versetest:decls	agrees
 Tests/Rational.versetest:5	agrees
@@ -11703,7 +11703,7 @@ Tests/SoftwareTransactionalMemory.versetest:59	agrees
 Tests/SoftwareTransactionalMemory.versetest:66	agrees
 Tests/SoftwareTransactionalMemory.versetest:74	agrees
 Tests/SoftwareTransactionalMemory.versetest:81	agrees
-Tests/SoftwareTransactionalMemory.versetest:88	wrong-output
+Tests/SoftwareTransactionalMemory.versetest:88	agrees
 Tests/SoftwareTransactionalMemory.versetest:95	agrees
 Tests/SoftwareTransactionalMemory.versetest:103	agrees
 Tests/SoftwareTransactionalMemory.versetest:111	agrees

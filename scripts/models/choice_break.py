@@ -303,6 +303,22 @@ Main(){mode}:void =
 ''')
 
 
+# The rule a `for` follows (docs/research/readings-audit.md, "What a for
+# undoes"): `OV_FOR_BOOK`, a comma-separated list of the kinds of choice point
+# whose fors follow the Book of Verse's rule (`all`: every for), by default the
+# kinds the compiler gives that rule. This for's sources are calls of recursive
+# functions taken lazily (kind `call`), in an exclusive choice's branches or a
+# composed choice at times.
+FOR_BOOK = set(__import__('os').environ.get('OV_FOR_BOOK', 'plain,choice').split(',')) - {''}
+
+
+def for_book(style):
+    kinds = {'call'} | ({'composed'} if style == 'composed' else {'exclusive'} if style == 'exclusive' else set())
+    if refined:
+        kinds.add('exclusive')
+    return 'all' in FOR_BOOK or kinds <= FOR_BOOK
+
+
 if "--first-success" in sys.argv[3:]:
     first_success(int(sys.argv[1]), sys.argv[2])
     sys.exit(0)
@@ -327,10 +343,14 @@ reachable = [(a, b) for a in range(na, -1, -1) for b in range(nb, -1, -1)
 rng.choice([-1] + [a * 10 + b for a, b in reachable])
 
 # Each real generator begins its own filter snapshot. No producer effects.
+# (By the Book of Verse's rule, OV_FOR_BOOK below, a value of A none of whose
+# values of B reaches the body is undone with what its clauses did: the for's
+# clauses are one search, and a choice point with no success fails.)
 total = field = count = 0
 out = []
 for a in range(na, -1, -1):
     before_a = total, field, len(out)
+    count_a = count
     total += a
     field += a + 1
     out.append(f"a {a} {total} {field}")
@@ -353,6 +373,9 @@ for a in range(na, -1, -1):
         out.append(f"local cleanup {total} {field}")
         out.append(f"body {a} {b} {total} {field}")
         count += 1
+    if for_book(source_style) and count == count_a:
+        total, field, size = before_a
+        del out[size:]
 out.append(f"completed {count if used else field}")
 total += loop_delta
 field += loop_delta

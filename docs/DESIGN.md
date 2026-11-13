@@ -26,7 +26,9 @@ field `get` and `set`, `tag`, `isTag`). Every surface construct is a
 - `not`, `or`, `and`, `option{}` and `logic{}` are built from `if`
   (`Core/Derived.lean`), and the rollback laws the Book states are theorems
   about these definitions;
-- multi-generator `for` is nested single-generator `for` plus `flatten`;
+- multi-generator `for` is nested single-generator `for` plus `flatten`,
+  and, when its clauses do something before its last generator, a search
+  that resumes them (see [What a `for` undoes](#what-a-for-undoes-one-search));
 - a choice `a | b` is a `for` over its alternatives' indices (see
   [Choice](#choice-iteration-over-alternatives));
 - comparison chains use temporaries, so each operand is evaluated once;
@@ -80,6 +82,90 @@ copy-the-whole-state model, for every sequence of 32 operations on up to 3
 nested contexts (the bounds a VST proof needs; the code has no depth limit
 of its own).
 
+## What a `for` undoes: one search
+
+The Book of Verse's tests fix what a `for` undoes
+(`FlowControl/for.versetest` 317-392, `Range.versetest` 140, 159,
+`SoftwareTransactionalMemory.versetest` 74-88; the cases, by hand, are in
+[the readings audit](research/readings-audit.md#what-a-for-undoes)). One
+definition covers every `for`:
+
+- its clauses are a **search**, depth first in spatial order, of *steps*
+  (code with one outcome: a filter, a binding, a `set`, a source or a
+  range's bounds evaluated) and *choice points* (a generator's elements, a
+  choice's alternatives, the values of a call of a function with several
+  values, each binding names before the clauses after it);
+- a failing step backtracks to the most recent choice point with an
+  alternative left, undoing what was done since it took its current
+  alternative or since the last success, whichever is later;
+- reaching the body is a **success**, which commits: what the search did
+  since the last success stays. The body runs outside every failure
+  context; its failure is the `for`'s;
+- when the search ends, what it did since the last success is undone.
+
+So a *search step*, from one success to the next, is one transaction, and
+each alternative tried in it a nested one. Read compositionally: a choice
+point in a `for` fails when none of its alternatives reaches the body, as a
+step does. A first-success context is the same search stopped at its first
+success (`Expr.firstE`, `Expr.chooseFirst`, below); a `for` goes on after
+each. Every kind of choice point is an instance: a range's bounds and a
+source are steps, then a choice point over their elements; a choice is a
+choice point over its alternatives, each alternative's own code inside it; a
+call with several values is its arguments (steps) and the callee's body as
+more of the search; an exclusive `if` is a step and its picked branch's
+code; a refining cast a step; nothing in the clauses waits.
+
+**The lowering (`ForLevel`, `Elab/For.lean`).** Verse Core can undo only
+an `if`'s condition and a `forE`'s filter, and cannot re-enter nested
+filters once it has left them, so a search step that stops at the body must
+resume from slots. Each generator is a *level*: its source's value in a
+slot `A`, the index `I` of the element the search is at, a flag `act` (that
+element went through the last success, so the levels below it may have
+more) and the element's code (`X := A[I]`, the binding `altE` makes for a
+choice, then the filters after it). One search step is:
+
+```
+step = found := false; (if (not started) then (clauses before the first generator; A₁ := source₁; I₁ := -1; act₁ := false));
+       level₁; found?
+levelₖ = loop {                                   # each level's code once
+    resuming := actₖ; actₖ := false
+    if (not resuming) then (Iₖ += 1; if (Iₖ ≥ |Aₖ|) then break)
+    if ((if (not resuming) then (bind Aₖ[Iₖ]; filters; Aₖ₊₁ := sourceₖ₊₁; Iₖ₊₁ := -1; actₖ₊₁ := false));
+        levelₖ₊₁; found?)
+    then (actₖ := true; break)
+}
+levelₙ = loop { Iₙ += 1; if (Iₙ ≥ |Aₙ|) then break; if (bind Aₙ[Iₙ]; filters) then (found := true; break) }
+for = rounds of: for d in 1..size (not done) { if (step) then (started := true; array{body}) else (done := true; array{}) }
+```
+
+Each try of an element is an `if`'s condition, so a failure context of its
+own, which undoes the element's code and the levels below it when they find
+nothing; a resumed element keeps its names and is not run again, so what
+it did, committed at the last success, stays; the step is one failure
+context, so when the search ends what it did since the last success is
+undone. The body runs in a round's `forE` body, between steps, outside
+every failure context: nothing is journaled while it runs, it can wait (the
+suspension lowering turns the round into a loop, as for any `for`), fail
+or return. The rounds, each a `forE` over a range twice as long as the last,
+collect the values in linear time, as `elabLoopGen`'s do for a lazily taken
+call, and, as there, a nested continuation's failed outcome, which breaks
+the nearest `loop` (`forOutcomeSlot`), is forwarded after the rounds. Every
+level's code appears once. When nothing before the last generator's
+elements can change what undoing would restore (`forClauseEffects`: a
+`Print`, a field's `set`, a call, a write of a variable of the code around
+or a `var` of the clauses), the nested `forE`s below are that search, and
+the `for` keeps them, byte for byte.
+
+**Which `for`s.** This serves every `for` whose generators are over ranges,
+arrays, maps and strings and choices of values (#208, below: an index
+generator whose element binds `altE`), with no call of a function with
+several values in its clauses (`callsManyValued`) and no exclusive choice.
+The others keep the lowerings of the [Choice](#choice-iteration-over-alternatives)
+section below, which keep what a generator's clauses did once they succeed
+(the old rule), entirely; what each needs to come under the search is in
+[the readings audit](research/readings-audit.md#what-a-for-undoes), and
+LANGUAGE.md says which `for`s follow which rule.
+
 ## Choice: iteration over alternatives
 
 A choice `a₀ | … | aₙ₋₁` (#208) has several values, which the nearest
@@ -94,7 +180,7 @@ not an `array{a₀, …}`, which would run `aₙ₋₁` before `a₀`'s value wa
 
 - **In a `for`**, `X := a₀ | …` is one more generator, over
   `#[0, …, n-1]`, whose filter binds `X := altE K as` before the clause's
-  filters. The groups and `flatten` of multi-generator `for` are unchanged.
+  filters: one more level of [the search](#what-a-for-undoes-one-search).
 - **For the first success**, the clauses are compiled to code that `break`s
   when they succeed, inside `Expr.firstE c = loop{c; fail}`. Each choice is
   `Expr.chooseFirst`: a `for` whose filter binds the alternative, runs the

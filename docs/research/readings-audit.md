@@ -54,7 +54,7 @@ Verdicts:
 | `=` between different types, `false` as a map, `X?` of a logic, `true` as a type | #600's | ch. 2 and ch. 4, as the rows quote | as the rows quote | #600's (equality and the empty value), not changed here; `false` as a map is on the owner's page already |
 | Ordering of rationals | exact; an int compares with a rational | `04_operators.md:318-321` and the API declare `<` … for `int` and `float` only | none order rationals (`CompareRational.versetest` 5, 11 test `=`) | **Book silent** (the Book declares no ordering of rationals; no test refuses one): keep |
 | Order of a choice's values | spatial | no choice `\|` in the chapters; `07_control.md:711-716`: nested generators give the cartesian product, leftmost outermost | `Operators/BinaryOps.versetest:3`: `a\|b` is a syntax error (3101, the code of syntax not yet supported) | **Book silent**: choice is an openverse feature from the Verse Calculus; keep |
-| Code before a choice | runs once; alternatives rolled back in `if`/`first{}`; in a `for` only an alternative's own clauses | `08_failure.md:147`: "changes … are provisional—they only become permanent if the entire context succeeds"; `07_control.md:196-198` | none with a choice; for a `for` without one see [rollback of a `for` iteration](#rollback-of-a-for-iteration) | **Book silent** on choice; the `for` part is the rollback reading below |
+| Code before a choice | runs once; alternatives rolled back in `if`/`first{}`; in a `for` only an alternative's own clauses | `08_failure.md:147`: "changes … are provisional—they only become permanent if the entire context succeeds"; `07_control.md:196-198` | none with a choice; for a `for` without one see [what a `for` undoes](#what-a-for-undoes) | **Book silent** on choice; the `for` part follows the rollback reading below: a choice is one more choice point of the `for`'s search, so in a `for` too an alternative none of whose values reaches the body is undone (built for choices of values; a `for` with a composed or exclusive choice or a call of a function with several values keeps the old rule for now) |
 | A choice in an operand of `and` or `or` | `A`'s clauses then `B`'s; `if (T := A) then T else B` | `08_failure.md:216-218`: `or` "tries each option in order, stopping at the first success" | none with a choice | **Book silent** |
 | The three rows on functions with several values (#283) | as the rows say | silent (`yield` is not supported, `Yield.versetest:4-7`) | none | **Book silent** |
 | Precedence of `\|` | below `+`, above comparisons | the precedence table (`04_operators.md:44-55`) has no `\|` | `BinaryOps.versetest:3` refuses `a\|b`; the commented-out `TimSyntax.versetest:280` puts `\|` below `:=` | **Book silent** |
@@ -78,7 +78,7 @@ The readings outside the table that the survey names:
 | A module-level `X := e` states its type | required in a `module:`, not at a file's top level | `16_modules.md:149-150`: "All data definitions at module scope must also explicitly specify their type; type inference with `:=` alone is not allowed" | `Union.versetest` 23, 290 (`verse_vm_only`, at a file's top level: 3547) | **contradicts** at the top level: **changed** |
 | `set M[k] = v` on a map can fail | never fails, allowed anywhere | the API (line 424): `operator'()'(Map:ref([t]u, [t]v), Key:t)…<decides>…`, "This is what makes `set M[Key] = Value` work on a map variable … Assigning through that reference inserts a key that is not yet present"; `03_containers.md:686`: "If you try to modify a key that is not present, the operation fails" (of `+=`); `05_mutability.md:344` (an array's index out of range fails); `01_expressions.md:994`: a `set` "returns the value being assigned" | `RollbackTortureTest.versetest:18` `(set Map[I] = I) or Err()`; `Mutability.versetest:248` `if (set M0[0] = 42)`; `Bugs/FORT-623803-STMRollbackAfterReturn.versetest:15` `if: set R[0] = R[0] or Err()` on a map; every map `set` in the tests is in a failure context | **contradicts**: a set through a map's key is `<decides>` (its last key still inserts); a plain variable's cannot fail; its value is the value set: **changed** |
 | The left of `or` must be able to fail | not required | silent | `Operators/LogicalOr.versetest:143` ("the left operand is required to be fallible", 3513) | **contradicts**; with the map `set` failable the Book's own `(set Map[I] = I) or Err()` passes: **changed** |
-| Rollback of a `for` iteration | a source's or a range bound's effects kept when later clauses fail | `08_failure.md:92`: "The `for` expression creates a failure context for each iteration of the domain clause"; `:147` (provisional changes) | `FlowControl/for.versetest` 362, 371, 392; `Range.versetest` 140, 159; `SoftwareTransactionalMemory.versetest` 88 (74 and 81 moved with the range bound) | **contradicts**, deeply load-bearing: **designed, not changed** ([below](#rollback-of-a-for-iteration)) |
+| Rollback of a `for` iteration | a source's or a range bound's effects kept when later clauses fail | `08_failure.md:92`: "The `for` expression creates a failure context for each iteration of the domain clause"; `:147` (provisional changes) | `FlowControl/for.versetest` 344, 362, 371, 392; `Range.versetest` 140, 159; `SoftwareTransactionalMemory.versetest` 88 (74 and 81 moved with the range bound) | **contradicts**, deeply load-bearing: **changed** for the `for`s of the Book's forms and of choices of values; designed for the rest ([below](#what-a-for-undoes)) |
 | Commas and semicolons in blocks | `,` separates a block's statements like `;` | `01_expressions.md:1048`: "Commas within parentheses create *tuples*"; `:1153-1156`: `option{1, 2}?` is `(1, 2)`; `:1119-1129`: in a block "semicolons and commas are interchangeable as separators between definitions" | `SemicolonsVsCommas.versetest` 70 (`Value :=` then `1, 2, 3` is `(1,2,3)`), 95 (`{3,X}`), 100 (`option{1,2}`); `Option.versetest:44`; `for.versetest:293`; 22 parser cases (`TimSyntax.versetest:224` `"1,2"`, …) | **contradicts**: **changed** ([below](#commas-in-blocks)) |
 | What the Book calls warnings | code after `return`/`break`, `_` after a closed enum's every value, `return 3` in a `:void` function: accepted silently | `09_structs_enums.md:297-318`, `:411` ("⚠ Warning - unreachable wildcard"), `07_control.md:423-435` ("you'll get a warning") | `assert_semantic_error(2000)` (`Reachability.versetest` 5, 11, 23 "Treat unreachable expressions after break as warning not error"), 2302 (`Enum.versetest:356`), 2002 (`Return.versetest:179`, "produces a warning"): the runner counts a warning as a diagnostic | **contradicts** (a diagnostic the Book gives and openverse did not): **changed**, with the warning channel ([below](#warnings)) |
 | `break` in a `for` body | refused ("only inside loop (not for)") | `07_control.md:764`: "The `break` statement cannot exit `for` loops early" | `SOL-4199-BreakFromIf.versetest:38-48`: "`break` in a `for` body is allowed and breaks the surrounding `loop`" | **the Book disagrees with itself** (owner list); not changed |
@@ -158,69 +158,259 @@ in [the survey's "After the readings audit"](book-test-conformance.md#after-the-
 
 ## Designed, not changed
 
-### Rollback of a `for` iteration
+### What a `for` undoes
+
+**Built for the `for`s of the Book's forms and choices of values; designed,
+not built, for the rest** (the third of the load-bearing readings,
+[below](#the-load-bearing-readings-built); before this work the section was
+"Rollback of a `for` iteration").
 
 **The Book's rule.** The tests fix it exactly: a `for`'s clauses, from one
 success to the next, are one failure context with backtracking. Effects
 made while searching for the next combination of the generators' values are
 kept once a combination reaches the body (each success commits), and are
 undone when the search ends with none; inside the search, a failing
-alternative undoes back to its own choice point. `for.versetest:335`
+alternative undoes back to its own choice point. `for.versetest:330`
 (`for(I:=1..X.Inc(); I <> 1; S.QInc[])`, `X.V = 2`) keeps the source's
-effect because a later element succeeds; `:362` undoes `Y.Inc()` of the
-rejected `I = 2`; `Range.versetest:140` undoes the source's `set X` because
-no element succeeds; `:159` undoes the bounds' effects for each rejected
-`J`. openverse never undoes past a generator: what a source or a range bound
-did stays.
-
-**Design (front end, no new Core).** Core's `forE i src filt body` already
-rolls back a failing filter; `ite` rolls back a failing condition. Lower a
-`for` whose clauses have a generator after effectful code as a `loop` whose
-step is `ite (search) (body; collect) (brk)`: `search` resumes the
-generators from slots that hold, per generator, its source array and its
-index; it advances the innermost generator, re-evaluating the inner sources
-and the clauses in between, each alternative an `ite` of its own (so a
-failing one undoes to its choice point), and fails when the outermost is
-exhausted, so the `ite` undoes everything since the last success. A `for`
-without effects before an inner generator keeps today's nested `forE`
-(byte-identical), so the change is confined to programs the reading
-affects.
-
-**What depends on the old reading.** The `for` lowering in
-`Front/Elab/For.lean` and its choice paths (#208 generators of `\|`, #235
-multi-value calls taken lazily, #283 staged and refining continuations,
-#314 exclusive choices, #417 staging), the [Choice](../LANGUAGE.md#choice)
-row "Code before a choice" ("in a `for`, … only an alternative whose own
-clauses fail is" rolled back), and the models that encode it:
-`scripts/models/mv.py` ("a failure rolls back to the most recent
-generator… effects of segments that succeeded are kept, even if later
-generators give nothing"), `generic_mv.py`, `choice_break.py`,
-`choice_heterogeneous.py` and `gen-choice.py`. Each must change first, then
-agree with the compiler over a wide seed range. Cases that would move:
-`for.versetest` 362, 371, 392, `Range.versetest` 140, 159,
-`SoftwareTransactionalMemory.versetest` 88.
-
-**Not built: the obstacle** (with the other three load-bearing readings,
-[below](#the-load-bearing-readings-built)). The tests pin two more facts
-the design must keep: the first generator's own source and the clauses
+effect because a later element succeeds; `:344` undoes it because none
+does; `:362` undoes `Y.Inc()` of the rejected `I = 2`;
+`Range.versetest:140` undoes the source's `set X` because no element
+succeeds; `:159` undoes the bounds' effects for each rejected `J`. Two more
+facts the tests pin: the first generator's own source and the clauses
 before it are inside the search (`Range.versetest:140`, `for (J:(set X =
-array{666}); I := GetLower()..GetUpper())` undoes the `set`; `for.versetest:362`
-undoes `X.Inc()` of the range bound), and an alternative of an outer
-generator whose inner search finds nothing is undone before the next one
-starts (`for.versetest:382`, "Only two increments since no values with I=2
-reaches the body"). openverse's `for` is not lowered in one place: plain
-generators are nested `forE`s; a choice is a generator of `altE`; a lazily
-taken call (#246) is a private loop (`elabLoopGen`) that gives its values
-one at a time with rollback boundaries of its own; an exclusive choice
-(#314) has paths; a composed choice's clauses move into a continuation
-(`$contf…`, #335); a waiting consumer is staged (#417, `$forStage`,
-`$forPrepare`, `$forResume…`). Each commits a source and the clauses before
-the next generator as it goes, and each needs the search with one
-transaction per alternative; the models (`mv.py`'s rollback "to the most
-recent generator", `generic_mv.py`, `choice_break.py`,
-`choice_heterogeneous.py`, `gen-choice.py`) must predict it first.
-Changing plain generators alone would leave a `for` over a choice under
-the old rule, half the reading, so none of it is made yet.
+array{666}); I := GetLower()..GetUpper())`, undoes the `set`;
+`for.versetest:344` undoes `X.Inc()` of the range bound), and an
+alternative of an outer generator whose inner search finds nothing is
+undone before the next one starts (`for.versetest:368`, "Only two
+increments since no values with I=2 reaches the body"). The prose agrees:
+`08_failure.md:92`, "The `for` expression creates a failure context for
+each iteration of the domain clause", where an iteration is that search
+for the next combination, and `07_control.md:740-741`, "When any
+expression in the iteration header fails, that iteration is skipped".
+openverse never undid past a generator: what a source, a range bound, or
+the clauses before the next generator did stayed.
+
+**The rule as one definition.** A `for`'s clauses are a *search*. Each
+clause is either a *step*, code with one outcome (a filter, a binding, a
+`set`, a `Print`, a source or a range's bounds evaluated), which succeeds or
+fails and may change the state, or a *choice point*, code with alternatives
+in order, each of which binds names and is followed by the clauses after
+it. The search runs depth first, in spatial order (the leftmost choice
+point varies slowest), and:
+
+1. A step that fails *backtracks*: to the most recent choice point that
+   has an alternative left, undoing everything done since that choice point
+   took its current alternative, or since the last success if that is later.
+2. Reaching the end of the clauses is a *success*. It commits: what the
+   search did since the last success (or since the `for` began) is kept,
+   whatever happens later. The body then runs, outside every failure
+   context: its effects stay, its value is collected, and its failure is
+   the `for`'s (which the enclosing failure context undoes as any failure).
+   Then the search backtracks, as after a failure, with nothing to undo.
+3. When no choice point has an alternative left, the search ends: what it
+   did since the last success is undone, and the `for`'s value is the
+   array of the bodies' values.
+
+A *search step* is what lies between two successes (or between the `for`'s
+start and its first success, or its last success and its end): one
+transaction, which commits at the body and aborts at the end, with each
+alternative tried inside it a nested transaction, aborted when the search
+backtracks out of it. Stated compositionally, as the models state it: a
+choice point in a `for` tries its alternatives in turn, each from the state
+the previous one left (the state after its last body, or the state at the
+choice point if it reached none), and *fails*, as a step does, when none of
+its alternatives reaches the body. A first-success context (an `if`'s
+conditions, `first`, `option{…}`, `logic{…}`, `not`, the left of `or`) is
+the same search stopped at its first success, which openverse already
+compiles so (`Expr.firstE`, `Expr.chooseFirst`). So there is one rule, the
+search; a `for` goes on after each success, the others stop. Two
+consequences that the old rule did not have: a choice point with one
+alternative is the same as a step, so whether an `if` adds a choice point
+(#331) no longer matters to what is undone; and a clause's place relative to
+the generators only decides which choice point a failure goes back to.
+
+**Each kind of choice point, an instance of it.**
+
+- `X := A..B`: the steps "evaluate `A`", "evaluate `B`", then a choice
+  point over `A`, `A + 1`, …, `B` (none when `A > B`).
+- `X : E` and `K -> X : E`, over an array, a string or a map: the step
+  "evaluate `E`", then a choice point over its elements (pairs), in order.
+- A choice `X := a₁ | … | aₙ` (and `set L = a₁ | …`, and a choice inside an
+  expression, which is lifted to a binding before it): a choice point over
+  the alternatives; alternative `i` runs `aᵢ`'s own code (its steps and its
+  choice points, when it has values or clauses of its own) and binds `X`.
+  A parenthesized choice as an alternative is spliced in.
+- A call of a function with several values: its arguments are steps; then
+  the callee's body is part of the search, its steps steps (its `defer:`
+  running as each value leaves it), its choices and its calls of such
+  functions choice points, and the call's values are the successes of that
+  part. Inlined (not recursive), computed at the call (`<computes>`, no
+  effects, so the same tree with nothing to undo) or taken lazily
+  (recursive, a tree of unbounded depth explored one value at a time): one
+  search in each case.
+- An `if`, a `case` or an `or` that picks a branch with choices (an
+  exclusive choice, #314, #331): a step (its conditions, each a
+  first-success context of its own, and the pick), then the picked branch's
+  code; it adds no choice point.
+- A refining cast (`D := dog[A]` as a clause, or in the condition of a
+  picked branch, #243): a step.
+- A waiting clause: there is none. The clauses are a failure context, which
+  cannot wait (#156); the body may wait, and does so between two search
+  steps, outside both.
+
+**The Book's cases, by hand and as run** (`scripts/book-conformance.sh show
+FILE:LINE` gives each program; "before" is the base `34e76e1`, "now" this
+work, in Lean and C):
+
+| Case | The Book expects | Before | Now |
+|---|---|---|---|
+| `for.versetest:309` | `{1,2}`, `X.V = 2`, `S.V = 2`: each element succeeds | agrees | agrees |
+| `:317` | `{}`, `X.V = 1`, `S.V = 0`: the bound `X.QInc[]` fails, its `set` undone | agrees (#604's range bound) | agrees |
+| `:324` | `{1,2}`, `X.V = 2` | agrees | agrees |
+| `:330` | `{2}`, `X.V = 2`, `S.V = 1`: `I = 1` fails its filter, `I = 2` commits `X.Inc()` | agrees | agrees |
+| `:337` | `{2}`, `X.V = 2`, `S.V = 1`: `I = 1`'s `S.QInc[]` undone with its failing `I <> 1` | agrees | agrees |
+| `:344` | `{}`, `X.V = 1`, `S.V = 0`: nothing succeeds, so `X.Inc()` is undone | `X.V = 2` | agrees |
+| `:352` | the body `I < 2` fails at `I = 2`: the `for` fails, the `if` undoes all | agrees | agrees |
+| `:362` | `{11,12,13,31,32,33,34}`, `X.V = 3`, `Y.V = 4`, `S.V = 7`: `I = 2`'s `Y.Inc()` undone, so `I = 3` sees `J` in `1..4` | `Y.V = 5` and `35` | agrees |
+| `:371` | the same with the inner generator a `for` of its own: `{{11,12,13},{},{31,…,34}}`; the inner `for` for `I = 2` undoes its own source | `Y.V = 5` | agrees |
+| `:385` | `:309` with the value unused | agrees | agrees |
+| `:392` | `:362` with the value unused | `Y.V = 5` | agrees |
+| `:401` | a body that writes, over `0..Length` | agrees | agrees |
+| `Range.versetest:140` | `X = {42}`, `Sum = 0`: `J`'s source `set X` undone, `666..42` being empty | `X = {666}` | agrees |
+| `Range.versetest:159` | `X = {42,666}`, `Sum = 0`, `Counter.X = 2`: each `J`'s bounds undone | `Err()` (the bounds' `set` kept) | agrees |
+| `SoftwareTransactionalMemory.versetest:43`, `:52` | `{1,3,6}`, `Verify[6]`: filters that fail undone | agree | agree |
+| `:66` | `{3,4}`, `Verify[4]` | agrees | agrees |
+| `:74`, `:81` | `{}`, `Verify[0]`: a failing bound undoes both | agree (#604) | agree |
+| `:88` | `{}`, `Verify[0]`: no `V` succeeds, so both bounds' `AddReturn` are undone | `Verify[2]` fails | agrees |
+| `:95`, `:103` | the body fails: the `for` fails, the `if` undoes all | agree | agree |
+| `:111` | `{1,2}`, `Verify[2]` | agrees | agrees |
+
+The Book does not disagree with itself on this rule: no test or sentence
+keeps a source's or a clause's effects when nothing after it reaches the
+body. Its `for` has no choice (`a|b` is a syntax error there,
+`BinaryOps.versetest:3`), so for choices, calls with several values and
+exclusive choices the Book is silent, and the rule above is openverse's
+extension of the Book's one rule to them, by the definition, not a
+reading of its own.
+
+**The design.** The definition is a search with a transaction per step;
+the question is how to run it in Verse Core, which has no continuations, a
+rollback only around an `if`'s condition and a `for`'s filter, and whose C
+runtime journals every write made inside one. Two designs were weighed:
+
+- *The body inside the transaction*: each alternative's subtree, the body
+  included, in the alternative's filter, which fails when no body ran. It is
+  the definition read compositionally and is linear, but the body would run
+  inside a failure context: a body that waits could not (#156), a body's
+  failure would have to be told from the search's, and every write of every
+  body would be journaled until the whole `for` ends.
+- *A search step that stops at the body*: the body runs between steps,
+  outside every failure context. Verse Core cannot leave nested filters and
+  come back into them, so the step must be resumable from slots: per
+  generator, its source's value, the index of its current element and
+  whether that element is active (went through the last success).
+
+openverse takes the second (`ForLevel`, `Elab/For.lean`; docs/DESIGN.md,
+"What a `for` undoes: one search", gives the code). Each generator is a
+*level*, a `loop` whose iteration tries one element: an active one is
+resumed (its names stay bound, its code is not run again, the levels below
+continue from where they are), any other is the next element, bound, its
+filters run and the level below entered. Each try is an `if`'s condition,
+so a failure context of its own, which the levels below failing undo; the
+last level always moves on. One search step is a failure context around
+the levels, which runs, in the first step only, the clauses before the
+first generator and its source; the `for` runs steps in rounds of `forE`s
+twice as long as the last (`if (step) then body`), as a lazily taken call's
+private loop does (`elabLoopGen`), so the values are collected in linear
+time, and the body runs in a round's body, between two steps, outside every
+failure context: it may wait, fail or return as before, and nothing is
+journaled while it runs. A nested continuation's failed outcome, which
+breaks the nearest loop, is forwarded after the rounds, as there. Each
+generator's code appears once. A first design probed each level's first
+success inside the failure context of the level above and resumed the
+rest from a cursor; it needed no loop around the body, but copied a
+generator's code once per level above it, so its code grew with the square
+of the number of generators (`test-choice-size.sh`'s `open-function-for`,
+eight choices in a row, grew 3.05 times from four to eight, over its
+limit of 3; it is 1.8 times now). When nothing before the last generator's
+elements can do anything that undoing would change (no `Print`, no write
+of a field or of a variable of the code around, or a `var` of the clauses,
+no call), the nested `forE`s are that search, and stay: those `for`s keep
+their bytes.
+
+**What follows the rule now, and what does not yet.** The lowering above
+serves every `for` whose generators are over ranges, arrays, maps and
+strings and choices of values (#208's `altE`, a parenthesized choice spliced
+in, a choice in an expression lifted to one), with no call of a function
+with several values anywhere in its clauses and no exclusive choice: two of
+the six lowerings (the nested `forE`s and #208's choice), and all the
+Book's own `for`s. A `for` with anything else keeps, entirely, the old rule
+(what a generator's clauses did stays once they succeed): one with a call
+of a function with several values (inlined, #235; computed at the call,
+#235; taken lazily, #246, `elabLoopGen`), a choice whose alternatives have
+values or clauses of their own (#283, `$contf`, #335), an exclusive choice
+(#314, #331), a refining cast (#243) or a waiting consumer (#417's staging,
+which only those lowerings use). What stands in the way of each, and the
+design that would bring it under the rule:
+
+- *Composed and exclusive choices* (#283, #314): their alternatives or
+  paths have levels of their own, so the levels are a tree, not a list: a
+  level over the alternatives' indices (or an exclusive choice's selector)
+  whose element code picks the subtree, and which picks it again from the
+  saved index when the step resumes it. The clauses after such a choice are copied
+  into each subtree, which #335's continuations avoided by moving them and
+  the body into a function; a continuation cannot hold a search's cursors
+  across the body (its frame is gone), so under the rule the clauses after
+  the choice must be copied, or their levels' slots kept in an object the
+  continuation is given. The heterogeneous copies (#335, a binding of a
+  different type per alternative) are subtrees with bodies of their own.
+- *Calls of functions with several values*: an inlined one becomes the
+  clauses and choices above, so it follows with them; one computed at the
+  call is an array level (its arguments' effects are a step), so it could
+  follow now but for the classification that keeps one rule per `for`; a
+  lazily taken one (#246) is a tree of unbounded depth, so its alternatives'
+  nested transactions need recursion: a function of its own per search step
+  (as the first-success contexts already compile one, `Choice.FirstLift`)
+  that descends again to the deepest choice point each step, from a stack
+  of the alternatives taken, without running again the code above it.
+- *Waiting consumers* (#417): under the rule the body runs between steps,
+  outside the search, so a waiting body needs no staging once its `for` is
+  lowered as above; the staged prefix and environment (`$forStage`,
+  `$forPrepare`, `$forResume…`) exist because the other lowerings put the
+  rest of the clauses and the body in a filter or a continuation, and
+  would go with them.
+
+The smallest complete next step is the tree of levels for composed and
+exclusive choices without continuations, which needs the continuation's
+clauses copied (or its slots in an object) and #335's code-size test to
+stay within bounds; the lazily taken calls are the largest.
+
+**The models and the programs.** Each of the five models that encoded "a
+failure rolls back to the most recent generator" (`mv.py`, `generic_mv.py`,
+`choice_break.py`, `choice_heterogeneous.py`, `gen-choice.py`), and
+`tests/scripts/test-choice-defaults.py`'s, states the rule compositionally
+(a choice point in a `for` with no alternative reaching the body fails, as a
+step does; reaching the body commits), behind `OV_FOR_BOOK`: the kinds of
+choice point whose `for`s follow it (`plain`, `choice`, `composed`,
+`exclusive`, `call`, or `all`), each model classifying its `for`s by what
+their clauses reach. By default the kinds built, `plain,choice`; with the
+flag off (`OV_FOR_BOOK=none`) every prediction is the original model's.
+The whole reading (`all`) changes the prediction of 61 of 300 `gen-choice`
+programs, 77 of 300 `choice_break`, 181 of 300 `choice_heterogeneous`, 134
+of 400 `mv` and 188 of 400 `generic_mv`; the part built changes 407
+of 4,000 `gen-choice` programs, 90 of 3,000 `mv`, and none of
+`choice_break`'s, `choice_heterogeneous`'s or `generic_mv`'s, whose `for`s
+all take calls of functions with several values. Against the final
+compiler, in Lean and C: `gen-choice` 4,000 seeds, `choice_break` 2,000
+(each two programs), `choice_heterogeneous` 2,000, `mv` 3,000,
+`generic_mv` 2,000, none different from its model (`test-choice-defaults`
+900 programs); with the old predictions, the fuzzers fail on exactly the
+programs whose prediction the rule changes (4 of the first 60
+`test-choice-defaults` seeds, for instance). Over the suites and the frozen
+corpus (5,713 programs, against main `34e76e1`), 59 programs print
+differently, each the rule's: 40 `gen-choice` and 14 `mv` programs that
+their models now predict exactly, the two tests above and the three new
+ones; 507 more change their bytes alone, and no message changes.
 
 ### `return` and `break` in a failure context
 
@@ -509,7 +699,19 @@ of the readings audit (7,390 agree, 2,066 refuse, 277 accept, 50 differ).
    Moved: 17 cases agree (accepted before): `SOL-4199-BreakFromIf.versetest`
    4, 15, 51, 60, 87, `Reachability.versetest` 12-15, `Return.versetest`
    115, 118, 148, 158, 159, 161, 162, 163.
-3. **Rollback of a `for` iteration**: not built ([the obstacle](#rollback-of-a-for-iteration)).
+3. **What a `for` undoes** ([the rule](#what-a-for-undoes)): built for the `for`s
+   whose generators are over ranges, arrays, maps and strings and choices of
+   values; the others keep the old rule (designed there). Moved: 7 cases
+   agree (different output before): `FlowControl/for.versetest` 344, 362,
+   371, 392, `Range.versetest` 140, 159,
+   `SoftwareTransactionalMemory.versetest:88`. Tests: `choice_more` and
+   `choice_construct_default_order` expected the old rule (each has a `for`
+   whose later clauses reach no body: said in each); new: `for_search`,
+   `for_search_waits` (a body that waits, between the search's steps),
+   `for_search_old_paths` (the boundary). The models predict it for the
+   kinds built (`OV_FOR_BOOK`, by default `plain,choice`): the five named
+   above and `tests/scripts/test-choice-defaults.py`'s (a construction's
+   prefix default in a `for`), which also kept the old rule.
 4. **Commas in blocks** ([the rule](#commas-in-blocks)). Moved: 28 cases
    agree: `SemicolonsVsCommas.versetest` 70, 91, 95, 100, 103, 106,
    `Option.versetest:44`, `FlowControl/for.versetest:293`,

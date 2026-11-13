@@ -67,6 +67,23 @@ for d in levels:
     d['want'] %= d['mod']
 h = total = 0
 lines = []
+
+# The rule a `for` follows (docs/research/readings-audit.md, "What a for
+# undoes"): `OV_FOR_BOOK`, a comma-separated list of the kinds of choice point
+# whose fors follow the Book of Verse's rule (`all`: every for), by default the
+# kinds the compiler gives that rule. By that rule
+# the for's clauses are one search that goes on after each success: reaching
+# the body commits, an alternative whose clauses lead to no body is undone as
+# a whole, and a choice point none of whose alternatives does fails. This
+# for's choices are composed of calls of producers with several values (kinds
+# `composed`, `call`), of different types, with an array generator after them;
+# its body waits in the waiting mode.
+FOR_BOOK = set(__import__('os').environ.get('OV_FOR_BOOK', 'plain,choice').split(',')) - {''}
+
+
+def for_book():
+    kinds = {'composed', 'call', 'plain'}
+    return 'all' in FOR_BOOK or kinds <= FOR_BOOK
 elapsed = 0.0
 bumped = False
 
@@ -146,7 +163,12 @@ if mode == 'first':
 else:
     values = []
     interrupted = False
-    for score in walk(0, []):
+
+    class Interrupted(Exception):
+        pass
+
+    def body(score):
+        global h, total, elapsed, bumped, interrupted
         if mode == 'waiting':
             finish = elapsed + 0.1
             if not bumped and finish >= 0.05:
@@ -155,12 +177,53 @@ else:
             if cancel and finish > 0.250001:
                 lines.append(f'body {h} {total}')
                 interrupted = True
-                break
+                raise Interrupted()
             elapsed = finish
         h += boost + score
         total += score
         values.append(score)
         lines.append(f'body {h} {total}')
+
+    def restore(saved):
+        global h, total
+        h, total = saved[:2]
+        del lines[saved[2]:]
+
+    def run_book(i, values):
+        # (the Book's rule: a choice point's alternative whose clauses lead to
+        # no body is undone as a whole, the prefix of a producer included,
+        # and a choice point none of whose alternatives does fails)
+        d = levels[i]
+        got = False
+        for j in range(2):
+            saved = (h, total, len(lines))
+            prefix(i, j)
+            sub = False
+            for original in d['scores'][j]:
+                s = original + (i + 1 if a.writes else 0)
+                saved2 = (h, total, len(lines))
+                if filt(i, s, j):
+                    if i + 1 < n:
+                        if run_book(i + 1, values + [s]):
+                            sub = True
+                            continue
+                    elif not empty:
+                        body(sum(values) + s)
+                        sub = True
+                        continue
+                restore(saved2)
+            if not sub:
+                restore(saved)
+            got = got or sub
+        return got
+    try:
+        if for_book():
+            run_book(0, [])
+        else:
+            for score in walk(0, []):
+                body(score)
+    except Interrupted:
+        pass
     answer = -1 if interrupted else 10000 * len(values) + 100 * total + (sum(values) if packed else 0)
 lines.append(f'source {h} {total}')
 if mode == 'waiting':

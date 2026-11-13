@@ -29,8 +29,48 @@ docs/LANGUAGE.md ("Choice"), not from the compiler:
   it stands for), and only when it has none are the right's values the
   `or`'s; `not` takes its first success and keeps nothing.
 """
+import os
 import random
 import sys
+
+# The rule a `for` follows (docs/research/readings-audit.md, "What a `for`
+# undoes"): `OV_FOR_BOOK`, a comma-separated list of the kinds of choice point
+# whose fors follow the Book of Verse's rule (`all`: every for), by default
+# those the compiler gives that rule; a for that reaches another kind keeps
+# the old one. Kinds: plain (ranges), choice (a choice whose alternatives are
+# values: none has a choice of its own, a parenthesized choice spliced in),
+# composed (one whose alternatives have choices of their own), exclusive (an
+# `if` picking a branch with choices, an `or` with a choice on its right),
+# call (a call of a function with several values anywhere in the clauses).
+FOR_BOOK = set(os.environ.get('OV_FOR_BOOK', 'plain,choice').split(',')) - {''}
+
+
+def has_call(x):
+    """a call of a function with several values: an inlined one's alternatives
+    ('pv'), or a call of one ('mcall', 'rcall')"""
+    if isinstance(x, tuple) and x and x[0] in ('pv', 'mcall', 'rcall'):
+        return True
+    return isinstance(x, (tuple, list)) and any(has_call(y) for y in x)
+
+
+def clause_kinds(c):
+    k = c[0]
+    kinds = {'call'} if has_call(c) else set()
+    if k == 'range':
+        kinds.add('plain')
+    elif k in ('choice', 'setchoice'):
+        alts = flat_alts(c[2]) if k == 'choice' else c[2]
+        kinds.add('composed' if any(a[0] == 'plus' for a in alts) else 'choice')
+    elif k in ('bchoice', 'or'):
+        kinds.add('exclusive')
+    return kinds
+
+
+def for_rule(cls):
+    kinds = set()
+    for c in cls:
+        kinds |= clause_kinds(c)
+    return 'book' if 'all' in FOR_BOOK or kinds <= FOR_BOOK else 'old'
 
 
 class St:
@@ -272,6 +312,51 @@ def is_gen(c):
 
 
 def run_for(cls, body, st):
+    """A for, under the rule `for_rule` gives for its clauses."""
+    if for_rule(cls) == 'book':
+        return run_for_book(cls, body, st)
+    return run_for_old(cls, body, st)
+
+
+def run_for_book(cls, body, st):
+    """A for, by the Book of Verse's rule (FlowControl/for.versetest 317-392,
+    Range.versetest 140, 159): its clauses are one search, depth first, as a
+    first-success context's are, that goes on after each success. Reaching
+    the body commits what was done since the last success; a failure undoes
+    back to the most recent choice point (an alternative's own clauses, or
+    an alternative whose later clauses found no success, as a whole); when
+    the search ends, what it did since the last success is undone. So a
+    choice point none of whose alternatives reaches the body fails."""
+    def go(i, s):
+        # (the state after the last body this subtree ran, or None when it
+        # ran none: s is then dropped, undone)
+        if i == len(cls):
+            st.assign(s)
+            body(st)
+            return st.copy()
+        c = cls[i]
+        if c[0] == 'or':
+            r = or_left(c, s)
+            if r is not None:
+                return go(i + 1, r)
+        if not is_gen(c):
+            return go(i + 1, s) if apply(c, s) else None
+        cur, got = s, None
+        for a in alts_at(c, s):
+            s0 = cur.copy()
+            v = alt_eval(a, s0)
+            if v is None:
+                continue
+            take(c, s0, v)
+            r = go(i + 1, s0)
+            if r is not None:
+                cur = got = r
+        return got
+
+    go(0, st.copy())
+
+
+def run_for_old(cls, body, st):
     """A for: each success of the clauses runs body(st). A generator's
     alternative and the clauses after it, up to the next generator, are one
     unit: rolled back when one of them fails, else kept (in st) before the
