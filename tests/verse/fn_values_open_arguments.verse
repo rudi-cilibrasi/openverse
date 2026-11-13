@@ -6,8 +6,8 @@ Map(F:type{_(:a):b},X:a where a:type,b:type):b=F(X)
 Show(X:int):string="show {X}"
 Shadow(Id:type{_(:int):string}):string=Map(Id,5)
 reader:=class:
-    Id:type{_(:int):string}=Show
-    Read():string=Map(Id,6)
+    (reader:)Id:type{_(:int):string}=Show
+    Read():string=Map((reader:)Id,6)
 Logged():int=
     Print("argument")
     4

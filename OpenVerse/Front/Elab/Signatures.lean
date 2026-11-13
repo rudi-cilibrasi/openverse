@@ -373,7 +373,7 @@ def inferSignatures (env : TyEnv) (declared : Declared) (typeDefaults : List STo
     has the inherited field's type; and, last, no field has two interfaces'
     defaults (`Fields.defaultClashes`). -/
 def checkSignatures (env : TyEnv) (sigs : Signatures) (cdefs : List CDef) (fields : Fields)
-    (methods : Methods) : Except String Unit := do
+    (methods : Methods) (scopePairs : List ScopePair := []) : Except String Unit := do
   let allSigs := sigs.all
   -- overloads take parameters no call fits both of (Book of Verse ch. 6)
   let sigNamed (s : Sig) : List (String × Bool × Ty) :=
@@ -400,6 +400,23 @@ def checkSignatures (env : TyEnv) (sigs : Signatures) (cdefs : List CDef) (field
               | none => n
             throw s!"{pos.show}: {shown} is defined twice with parameters a call cannot tell apart, ({sh sb}) and ({sh sa}): overloads must take disjoint types"
         | _, _ => pure ()
+  -- a function or a method with the name of a function around it: two
+  -- overloads, which no call may fit both of (Book of Verse ch. 10,
+  -- "Shadowing and Qualification"; tests, `Overloading.versetest`:
+  -- functions overload across scopes; `checkNoShadowing`)
+  let overloadsOf (n : String) : List Sig := allSigs.filter fun sg =>
+    sg.name == n || (sg.name.startsWith (n ++ "$ov") && (sg.name.drop (n.length + 3)).toString.all Char.isDigit)
+  for pr in scopePairs do
+    -- (a method's signature, `c.M`, has `Self` first)
+    let method := ((qualParts pr.inner).getLastD "").contains '.'
+    for si in overloadsOf pr.inner do
+      let si := if method then { si with params := si.params.drop 1 } else si
+      for so in overloadsOf pr.outer do
+        if !sigsDistinct si so then
+          let sh (s : Sig) := ", ".intercalate (s.params.map Ty.show)
+          let shownIn := ".".intercalate (qualParts pr.inner)
+          let x := (((qualParts pr.inner).getLastD "").splitOn ".").getLastD ""
+          throw s!"{pr.pos.show}: {shownIn} has the name of the function {".".intercalate (qualParts pr.outer)} ({pr.outerPos.show}), and a call could fit both, ({sh si}) and ({sh so}): Verse does not allow shadowing (Book of Verse ch. 10); rename one, give them disjoint parameters, or qualify this one, ({pr.qualifier}:){x}"
   -- the overloads of a method a class sees take parameters no call fits two
   -- of (#106: a subclass's new overload too; an override has its method's)
   for c in env.classes do

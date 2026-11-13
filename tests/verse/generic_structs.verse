@@ -37,7 +37,7 @@ Put(K:keyed(k, v), Key:k, Value:v where k:subtype(comparable), v:type):keyed(k, 
     set M[Key] = Value
     keyed(k, v){Entries := M}
 
-Firsts(Ps:[]pair(t, u) where t:type, u:type):[]t = for (P : Ps) { P.First }
+FirstsOf(Ps:[]pair(t, u) where t:type, u:type):[]t = for (P : Ps) { P.First }
 
 # polymorphic recursion through a parametric struct: d(t), d(d(t)), …
 d(t:type) := struct:
@@ -85,7 +85,7 @@ Main():void =
     L := labelled{Name := "origin", At := pair(int, int){First := 0, Second := 0}}
     Print("{L.Name} at ({L.At.First}, {L.At.Second})")
     Ps := array{MakePair(1, "a"), MakePair(2, "b"), MakePair(3, "c")}
-    for (F : Firsts(Ps)) { Print("{F}") }
+    for (F : FirstsOf(Ps)) { Print("{F}") }
     var Cache:[pair(int, int)]string = map{}
     set Cache[MakePair(1, 2)] = "one-two"
     if (V := Cache[pair(int, int){First := 1, Second := 2}]) then Print(V)

@@ -10,7 +10,7 @@ Go(P:tuple(int,int),?B:int,?A:int=block{Print("default {P(0)} {B}");P(1)+B})<sus
     Print("body {P(0)} {P(1)} {B} {A}")
     Sleep(Inf)
 worker:=class:
-    Go(P:tuple(int,int),?B:int,?A:int=0)<suspends>:void=Print("base")
+    (worker:)Go(P:tuple(int,int),?B:int,?A:int=0)<suspends>:void=Print("base")
 child:=class(worker):
     Go<override>(P:tuple(int,int),?B:int,?A:int=block{Print("method default");P(1)+B})<suspends>:void=
         defer{Print("method cleanup {A}")}

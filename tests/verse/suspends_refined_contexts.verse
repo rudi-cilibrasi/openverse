@@ -30,11 +30,11 @@ G(B:box(t), X:t where t:type)<suspends>:t =
             X
     Print("n={N} {B.Size()}")
     R
-H(H:holder(t), X:t where t:type)<suspends>:t =
+H(Held:holder(t), X:t where t:type)<suspends>:t =
     Sleep(0.1)
-    set H.Item = X
+    set Held.Item = X
     Sleep(0.1)
-    H.Item
+    Held.Item
 Main()<suspends>:void =
     Print("{G(int_box{V := 4}, 0)}")
     Print("{G(box(string){V := "q"}, "x")}")

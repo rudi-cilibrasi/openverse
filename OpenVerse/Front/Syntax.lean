@@ -15,6 +15,23 @@ structure Pos where
 def Pos.show (p : Pos) : String :=
   if p.file.isEmpty then s!"{p.line}:{p.col}" else s!"{p.file}:{p.line}:{p.col}"
 
+/-- A qualified name `(q:)x` as written: its qualifier and its name (`q` may
+    be a path whose segments are qualified themselves, `/a/(/b:)c`: the name
+    is what follows the last `:)`). -/
+def splitQual? (n : String) : Option (String × String) :=
+  if !n.startsWith "(" then none else
+  match (n.drop 1).toString.splitOn ":)" with
+  | [] | [_] => none
+  | parts => some (":)".intercalate parts.dropLast, parts.getLast!)
+
+/-- A definition's name as a program can use it bare: `X` for `(q:)X`. -/
+def bareName (n : String) : String := ((splitQual? n).map (·.2)).getD n
+
+/-- A marker that the source writes a qualifier `(q:)` other than
+    `(super:)`: `resolveModules` then reads the program's names, as it does
+    those of a program with modules. -/
+def qualifierMarker : String := "$uses:qualifiers"
+
 /-- Surface types. -/
 inductive STy where
   /-- `int`, `logic`, `char`, `string`, `void` -/
@@ -250,6 +267,10 @@ def SExpr.mapChildrenM [Monad m] (f : SExpr → m SExpr) (e : SExpr) : m SExpr :
     when it is a type (`Aliases.writesType`). -/
 partial def SExpr.asType? : SExpr → Option STy
   | .ident _ n => some (.name n)
+  -- (`(M:)c`, as `M.c`)
+  | .member _ (.ident _ "Self") m => match splitQual? m with
+    | some (q, c) => if q == "local" || q.startsWith "/" then none else some (.name s!"{q}.{c}")
+    | none => some (.name s!"Self.{m}")
   | .member _ x m =>
     if m.startsWith "(" then none else match x.asType? with
       | some (.name q) => some (.name s!"{q}.{m}")
@@ -319,9 +340,13 @@ def STop.isTypeDefault : STop → Bool
     `(`, and `using`, one of the parser's `keywords`, which no name can be
     anyway), and the built-in names `Self`, `subtype`, `castable_subtype`
     and `local` (`Self.versetest`, `Subtype.versetest`,
-    `QualifiedIdentifier.versetest`). -/
+    `QualifiedIdentifier.versetest`), `true` and `false` (`Enum.versetest`
+    refuses `(m:)true:=enum{a}`) and the effects' names, which are built-in
+    classes (`Effects.versetest` refuses `(m:)suspends := class{}`); a
+    qualifier does not lift it. -/
 def reservedNames : List String :=
-  ["_", "Self", "subtype", "castable_subtype", "local",
+  ["_", "Self", "subtype", "castable_subtype", "local", "true", "false",
+   "suspends", "decides", "varies", "reads", "writes", "allocates", "computes", "converges", "transacts",
    "abstracts", "as", "assert", "backslash", "bag", "char8", "char16", "collection", "contravariant",
    "covariant", "element", "embargo", "ensure", "fails", "find", "first", "float16", "float32", "float64",
    "float128", "fold", "function", "given", "guard", "implies", "instance", "int8", "int16", "int32",
@@ -354,6 +379,18 @@ def extensionMethod? (n : String) : Option String :=
     some (((last.drop extensionPrefix.length).toString.splitOn "$ov").headD "")
   else none
 
+/-- A function defined in a module or a class with the name of a function of
+    a scope around it (`checkNoShadowing`, `checkSignatures`): where the inner one is, its
+    signatures' name (`A::F`, `c.F`), the outer one's and where it is, and
+    the qualifier that would say which one the inner one is. -/
+structure ScopePair where
+  pos : Pos
+  inner : String
+  outer : String
+  outerPos : Pos
+  qualifier : String
+  deriving Inhabited
+
 /-- Why a type's name is not one (`resolveTy`, and a type alias's names). -/
 def unknownTypeMessage (n : String) : String :=
   s!"unknown type '{n}' (supported: int, logic, char, string, void, []t, ?t, tuple(…), and structs and enums)"
@@ -361,31 +398,32 @@ def unknownTypeMessage (n : String) : String :=
 /-- The names a definition introduces as written, each where it is written:
     its own (the last part of a module member's `A::B::F`), its type
     parameters and parameters, a struct's or class's fields and methods, and
-    the locals and generators of its bodies and defaults. A qualified method
-    `(c:)F`, a named argument `?X := e`, a construction's `F := e` and the
-    compiler's `$` names are not definitions. -/
+    the locals and generators of its bodies and defaults, each by the name a
+    use may write bare (`X` for `(local:)X`). A qualified method `(c:)F`, a
+    named argument `?X := e`, a construction's `F := e` and the compiler's
+    `$` names are not definitions. -/
 partial def SExpr.definedNames : SExpr → List (Pos × String)
-  | .decl p n _ _ x => (if n.startsWith "?" then [] else [(p, n)]) ++ x.definedNames
-  | .gen p x k s => (p, x) :: (k.toList.map (p, ·)) ++ s.definedNames
+  | .decl p n _ _ x => (if n.startsWith "?" then [] else [(p, bareName n)]) ++ x.definedNames
+  | .gen p x k s => (p, bareName x) :: (k.toList.map (p, ·)) ++ s.definedNames
   | .construct _ _ _ fs => fs.flatMap fun
     | .decl _ _ _ _ x => x.definedNames
     | f => f.definedNames
   | .structDef p tps _ fs => tps.map (fun tp => (tp.pos, tp.name)) ++
-      fs.flatMap fun (n, _, d, _) => (p, n) :: (d.map SExpr.definedNames).getD []
+      fs.flatMap fun (n, _, d, _) => (p, bareName n) :: (d.map SExpr.definedNames).getD []
   | .typeAlias _ tps _ => tps.map fun tp => (tp.pos, tp.name)
   | e => e.children.flatMap SExpr.definedNames
 
 partial def STop.definedNames : STop → List (Pos × String)
   | .fn p n ps tps _ _ body =>
     (if n.startsWith "(" then [] else [(p, n)]) ++ tps.map (fun tp => (tp.pos, tp.name)) ++
-      ps.flatMap (fun prm => (p, prm.name) :: (prm.default.map SExpr.definedNames).getD []) ++ body.definedNames
+      ps.flatMap (fun prm => (p, bareName prm.name) :: (prm.default.map SExpr.definedNames).getD []) ++ body.definedNames
   | .const p n _ body =>
     -- (a module's marker, `$module:A::B`, defines `B`)
     (if n.startsWith "$module:" then [(p, (n.drop "$module:".length).toString)]
      else [(p, n)]) ++ body.definedNames
   | .classDef p n tps _ _ _ fs _ ms =>
     (p, n) :: tps.map (fun tp => (tp.pos, tp.name)) ++
-      fs.flatMap (fun (f, _, d, _) => (p, f) :: (d.map SExpr.definedNames).getD []) ++
+      fs.flatMap (fun (f, _, d, _) => (p, bareName f) :: (d.map SExpr.definedNames).getD []) ++
       ms.flatMap STop.definedNames
 
 /-- Type aliases mentioned as bare names; applications keep declaration heads. -/

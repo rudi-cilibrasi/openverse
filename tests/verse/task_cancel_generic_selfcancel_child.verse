@@ -6,8 +6,8 @@ C(X:t, N:string where t:type)<suspends>:t =
     Sleep(0.5)
     Print("C end {N}")
     X
-Kid(P:task(t), X:t, N:string where t:type)<suspends>:t =
-    P.Cancel()
+Kid(Parent:task(t), X:t, N:string where t:type)<suspends>:t =
+    Parent.Cancel()
     Sleep(0.6)
     Print("Kid end {N}")
     X

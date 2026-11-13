@@ -32,6 +32,10 @@ structure Admitted where
   concurrencyNames : List (String × String)
   /-- Whether the program uses concurrency (#156), so is lowered for it. -/
   usesConc : Bool
+  /-- The functions defined in a module or a class with the name of a
+      function around them, which no call may fit both of
+      (`checkNoShadowing`, `checkSignatures`). -/
+  scopePairs : List ScopePair := []
   /-- The construction effects each class and struct of the source declares
       (`EffectPolicy.constructionFx`), by its name. -/
   constructionFx : Std.HashMap String (List String)
@@ -54,6 +58,128 @@ def checkDefinedOnce (tops : List STop) : Except String Unit := do
       if !(isFn && onlyFns) then
         throw s!"{p.show}: '{".".intercalate (qualParts n)}' is defined twice (only functions can be overloaded)"
     seen := seen.insert n isFn
+
+/-- No definition takes the name of a definition of a scope around it
+    (Book of Verse ch. 10, "Shadowing and Qualification": "you cannot
+    redefine names that already exist in an enclosing scope"; the rule is
+    pinned in docs/research/qualified-names.md, "Shadowing"), whichever is
+    written first: a module's member or a module, named like a definition
+    of a module around it or of the top level; a class's or an interface's
+    member, an enum's value or a struct's field, named like a definition of
+    the scope the type is defined in or of one around it (the type itself
+    included); a function's parameter, likewise. Functions overload across
+    scopes as in one (Book of Verse tests, `Overloading.versetest`, "Test
+    overloading a function across different scopes"): a function or method
+    and a function around it of its name are returned, for
+    `checkSignatures` to require that no call fits both, and a parameter of
+    a function type may take an enclosing function's name. A qualified
+    definition, `(M:)x`, `(c:)m`, `(e:)v`, `(local:)X`, says where it is,
+    and may; an override implements an inherited member and is none; the
+    entry point `Main`, which the Book does not have, shadows nothing.
+    Locals are checked where names are resolved (`resolveModules`, the
+    elaborator). -/
+def checkNoShadowing (tops : List STop) : Except String (List ScopePair) := do
+  let shown (ps : List String) : String := ".".intercalate ps
+  -- (definitions written `(M:)x` in their module)
+  let qualified : List String := tops.filterMap fun
+    | .const _ n _ _ => if n.startsWith "$qual:" then ((n.drop "$qual:".length).toString.splitOn "|").head? else none
+    | _ => none
+  -- the definitions of the top level and the modules: each one's scope, name,
+  -- what it is and where
+  let kind : STop → String
+    | .fn .. => "function"
+    | .classDef _ _ _ _ _ isI .. => if isI then "interface" else "class"
+    | .const _ _ _ (.structDef ..) => "struct"
+    | .const _ _ _ (.enumDef ..) => "enum"
+    | .const _ _ _ (.refineDef ..) | .const _ _ _ (.typeAlias ..) => "type"
+    | .const .. => "constant"
+  let defs : List (List String × String × String × Pos) := tops.filterMap fun t =>
+    let (p, n) := match t with
+      | .fn p n .. | .const p n .. | .classDef p n .. => (p, n)
+    if n.startsWith "$module:" then
+      let ps := qualParts (n.drop "$module:".length).toString
+      some (ps.dropLast, ps.getLastD "", "module", p)
+    else
+      let ps := qualParts n
+      if ps.any (·.startsWith "$") || n == "Main" then none else some (ps.dropLast, ps.getLastD n, kind t, p)
+  -- the definitions a scope `sc`, or one around it (`within`: `sc` itself
+  -- too), has of name `x`
+  let outers (sc : List String) (within : Bool) (x : String) : List (List String × String × String × Pos) :=
+    defs.filter fun (s, y, _, _) => y == x && s.length ≤ sc.length && sc.take s.length == s &&
+      (within || s.length < sc.length)
+  let message (p : Pos) (what x whr qual : String) : List String × String × String × Pos → String
+    | (s, _, k, q) =>
+      s!"{p.show}: {what} '{x}'{whr} has the name of the {k} {shown (s ++ [x])} ({q.show}): Verse does not allow shadowing (Book of Verse ch. 10); rename one, or qualify this one, ({qual}:){x}"
+  let refuse (p : Pos) (what x whr qual : String) (os : List (List String × String × String × Pos)) : Except String Unit :=
+    match os.head? with
+    | some o => throw (message p what x whr qual o)
+    | none => pure ()
+  let mut pairs : Array ScopePair := #[]
+  -- a function or method `inner`: refused beside a definition around it
+  -- that is no function, else paired with each function around it
+  let fnOuters (p : Pos) (what x whr qual inner : String) (os : List (List String × String × String × Pos)) :
+      Except String (List ScopePair) := do
+    refuse p what x whr qual (os.filter (·.2.2.1 != "function"))
+    return os.map fun (s, _, _, q) => { pos := p, inner, outer := qualJoin (s ++ [x]), outerPos := q, qualifier := qual }
+  let params (sc : List String) (p : Pos) (owner : String) (ps : List SParam) : Except String Unit :=
+    ps.forM fun prm =>
+      if prm.name.isEmpty || prm.name.startsWith "$" || prm.name.startsWith "(" then pure ()
+      else
+        let os := outers sc true prm.name
+        -- (a parameter of a function type overloads as a function does)
+        let os : List (List String × String × String × Pos) := match prm.ty with
+          | .fn .. => os.filter fun (_, _, k, _) => k != "function"
+          | _ => os
+        match prm.named, os.head? with
+        -- (a named parameter, which no qualifier may name: its name is how a
+        -- call gives it)
+        | true, some (s, _, k, q) =>
+          throw s!"{p.show}: the named parameter '?{prm.name}' of {owner} has the name of the {k} {shown (s ++ [prm.name])} ({q.show}): Verse does not allow shadowing (Book of Verse ch. 10); rename one"
+        | _, _ => refuse p "the parameter" prm.name s!" of {owner}" "local" os
+  for t in tops do
+    match t with
+    | .fn p n ps .. =>
+      let parts := qualParts n
+      if parts.any (·.startsWith "$") then continue
+      if !qualified.contains n then
+        let x := parts.getLastD n
+        pairs := pairs ++ (← fnOuters p "the function" x "" (shown parts.dropLast) n (outers parts.dropLast false x))
+      params parts.dropLast p (shown parts) ps
+    | .const p n _ body =>
+      let parts := qualParts n
+      if n.startsWith "$module:" then
+        let mp := qualParts (n.drop "$module:".length).toString
+        if !qualified.contains (qualJoin mp) then
+          refuse p "the module" (mp.getLastD "") "" (shown mp.dropLast) (outers mp.dropLast false (mp.getLastD ""))
+        continue
+      if parts.any (·.startsWith "$") then continue
+      let sc := parts.dropLast
+      let x := parts.getLastD n
+      if !qualified.contains n then refuse p s!"the {kind t}" x "" (shown sc) (outers sc false x)
+      -- (an enum's values and a struct's fields, which a qualifier may name)
+      match body with
+      | .enumDef _ vs _ =>
+        for v in vs do
+          if !v.startsWith "(" then refuse p "the value" v s!" of {shown parts}" x (outers sc true v)
+      | .structDef _ _ _ fs =>
+        for (f, _, _, _) in fs do
+          if !f.startsWith "(" then refuse p "the field" f s!" of {shown parts}" x (outers sc true f)
+      | _ => pure ()
+    | .classDef p n _ _ _ isI fields ovs methods =>
+      let parts := qualParts n
+      let sc := parts.dropLast
+      let x := parts.getLastD n
+      if !qualified.contains n then
+        refuse p s!"the {if isI then "interface" else "class"}" x "" (shown sc) (outers sc false x)
+      for (f, _, _, _) in fields do
+        if !f.startsWith "(" && !ovs.contains f then
+          refuse p "the field" f s!" of {shown parts}" x (outers sc true f)
+      for m in methods do
+        if let .fn mp mn mps _ effs .. := m then
+          if !mn.startsWith "(" && !mn.startsWith "$" && !effs.contains "override" then
+            pairs := pairs ++ (← fnOuters mp "the method" mn s!" of {shown parts}" x s!"{n}.{mn}" (outers sc true mn))
+          params sc mp s!"{shown parts}.{bareName mn}" mps
+  return pairs.toList
 
 /-- The constants of a program, modules resolved, in the order written: each
     with the constants its value names. -/
@@ -212,6 +338,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
     | _ => pure ()
   checkReservedNames allTops0r
   checkDefinedOnce allTops0r
+  let scopePairs ← checkNoShadowing allTops0r
   checkReturns allTops0r
   checkDefers allTops0r
   checkForClauses allTops0r
@@ -274,7 +401,8 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
     | .classDef _ n _ specs .. | .const _ n _ (.structDef _ _ specs _) =>
       budgets.insert n (EffectPolicy.constructionFx specs)
     | _ => budgets) ({} : Std.HashMap String (List String))
-  return { resolved, rawEntry, typeDefaults, helpers, intrinsicCalls, concurrencyNames, usesConc, constructionFx }
+  return { resolved, rawEntry, typeDefaults, helpers, intrinsicCalls, concurrencyNames, usesConc, constructionFx,
+           scopePairs }
 
 /-- A program's source as elaborated (`inlineSource`). -/
 structure Source where

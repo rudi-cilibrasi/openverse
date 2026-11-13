@@ -1,10 +1,10 @@
 # P (resumed by the scheduler) spawns C, whose first run cancels P, which is
 # running. Expected: P is cancelled at its next wait (as a task cancelling
 # itself is); C goes on: C cancelled P / P after spawn / P defer / C end / end
-C(P:task(int))<suspends>:int =
+C(Parent:task(int))<suspends>:int =
     defer:
         Print("C defer")
-    P.Cancel()
+    Parent.Cancel()
     Print("C cancelled P")
     Sleep(0.5)
     Print("C end")

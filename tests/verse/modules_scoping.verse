@@ -5,10 +5,10 @@ Config := module:
     Speed<public>:int = 99
 Game := module:
     # (Game's own Config, a value, comes before the module Config)
-    Config:settings = settings{}
+    (Game:)Config:settings = settings{}
     Get<public>():int = Config.Speed
 Lib := module:
-    Fact<public>(N:int):int = 0
+    (Lib:)Fact<public>(N:int):int = 0
     base<public> := class:
         W<public>:int = 0
     MakeBase<public><constructor>(X:int) := base:

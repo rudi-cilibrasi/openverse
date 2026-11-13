@@ -4,7 +4,7 @@
 # element with an int, in `not`
 c := class:
     B:int
-    Add(X:int, Y:int):int = X + Y + B
+    (c:)Add(X:int, Y:int):int = X + Y + B
 Pair(X:t, Y:t where t:type):t = Y
 Add(X:int, Y:int):int = X + Y
 Meth(K:int):int =
