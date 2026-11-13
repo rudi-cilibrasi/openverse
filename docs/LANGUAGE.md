@@ -68,6 +68,14 @@ openverse follows Verse's lexical grammar for the characters of a file:
   indented no more than that line. `<#` opens a nested block comment only
   when the next character is not `>`; inside a block comment, `<#>` opens
   nothing, so its `#>` closes the block comment.
+- The markers of block comments count inside a `#` comment and a `<#>`
+  comment too, as in the Book's tests of the lexical grammar
+  (`TimSyntax.versetest`): there `<#` opens a nested block comment, which
+  may end on a later line (the `#` comment then goes on to the end of that
+  line), and a `#>` that closes no block comment is an error, anywhere.
+- A block comment inside a string literal is removed from it (ch. 1: "The
+  compiler removes comments from strings": `"abc<#comment#>def"` is
+  `"abcdef"`); `\<\#` is the text `<#`, and `<#>` and `#` are text there.
 - A `0o` char literal is `0o` and one or two hex digits, not followed by a
   letter, digit or `_`; anything else (`0o`, `0o123`, `0o4g`) is an error.
   Its value is that UTF-8 code unit, so `0oC3` is a valid `char` although it
