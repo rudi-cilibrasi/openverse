@@ -807,7 +807,7 @@ def builtins : List String :=
     definition, if any, is the one a call means. -/
 def softBuiltins : List String :=
   ["Round", "Int", "Sqrt", "Exp", "Ln", "Log", "Pow", "Sin", "Cos", "Tan", "ArcSin", "ArcCos", "ArcTan",
-   "IsFinite", "Concatenate", "Sinh", "Cosh", "Tanh", "ArSinh", "ArCosh", "ArTanh", "Lerp"]
+   "IsFinite", "Concatenate", "Sinh", "Cosh", "Tanh", "ArSinh", "ArCosh", "ArTanh", "Lerp", "Clamp", "Sgn"]
 
 partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .name "int" => pure .int
@@ -2343,21 +2343,23 @@ def utf8Of (tc : Nat) : EM Expr := do
         .assign r2 (m (.local r) 4096), .assign d (q (.local r2) 64), .assign e (m (.local r2) 64)]) four
       (.prim .userErr []))))
 
-/-- The conversions of chars and code points, as methods of their
-    receivers: of a char, `C.ToCodeUnit()` (0 to 255) and
+/-- The conversions of chars and code points, and `IsFinite` of a float, as
+    methods of their receivers: of a char, `C.ToCodeUnit()` (0 to 255) and
     `C.ToAsciiChar32[]` (failing above 127); of a char32, `C.ToCodePoint()`
     and `C.ToAsciiString()` (its UTF-8 encoding); of an int, `N.ToChar[]`
     (failing outside 0 to 255) and `N.ToChar32[]` (failing on a negative,
-    a surrogate 0xD800 to 0xDFFF, or above 0x10FFFF). They are the Book's
-    Runtime API ("char and char32"); none takes an argument, those that can
-    fail take brackets, and each is written with Verse Core's operations (a
-    char32 is an int there). `none` for another method. -/
+    a surrogate 0xD800 to 0xDFFF, or above 0x10FFFF); of a float,
+    `F.IsFinite[]` (`F`, failing on an infinity or NaN). They are the Book's
+    Runtime API ("char and char32") and Epic's (`IsFinite`); none takes an
+    argument, those that can fail take brackets, and each is written with
+    Verse Core's operations (a char32 is an int there). `none` for another
+    method. -/
 def scalarMethod? (p : Pos) (r0 : R) (m : String) (args : List SExpr) (bracket : Bool) :
     EM (Option R) := do
   let r := widenR (← get).env r0
   let decides? : Option Bool := match r.ty, m with
     | .char, "ToCodeUnit" | .char32, "ToCodePoint" | .char32, "ToAsciiString" => some false
-    | .char, "ToAsciiChar32" | .int, "ToChar" | .int, "ToChar32" => some true
+    | .char, "ToAsciiChar32" | .int, "ToChar" | .int, "ToChar32" | .float, "IsFinite" => some true
     | _, _ => none
   let some decides := decides? | return none
   let call := if decides then s!"X.{m}[]" else s!"X.{m}()"
@@ -2377,8 +2379,9 @@ def scalarMethod? (p : Pos) (r0 : R) (m : String) (args : List SExpr) (bracket :
     let surrogate := Expr.seq (p2 .ge v (int 0xD800)) (p2 .le v (int 0xDFFF))
     return some ⟨.seq first (.seq (p2 .ge v (int 0)) (.seq (p2 .le v (int 0x10FFFF))
       (.ite surrogate (.prim .fail []) v))), .char32⟩
-  | _ =>
+  | "ToAsciiChar32" =>
     return some ⟨.seq first (.seq (p2 .lt v (.lit (.char 128))) (← codeUnitOf tv)), .char32⟩
+  | _ => return some ⟨.prim .fisFinite [r.e], .float⟩
 
 /-- A Verse Core type that several front-end types have: one with an
     `int` (also a char32 or an enum), a tuple (also a struct), or a type
