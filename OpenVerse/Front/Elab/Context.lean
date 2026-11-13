@@ -345,10 +345,11 @@ structure Ctx where
   /-- A moved continuation's casts have fresh capture/storage metadata,
       independently of the class-copy tag and continuation sharing keys. -/
   refineScope : String := ""
-  /-- In a trial, what of: a request made here is kept only where the code's
-      own function makes it alike (`Ctx.keepsLifts`), and else that function
-      makes it in the next elaboration. The innermost trial of a
-      continuation's is one too, as its code moves with the continuation. -/
+  /-- The trial this code is elaborated in, if any. A request made in a
+      trial is kept only where the function the code is compiled in makes
+      the same one (`Ctx.keepsLifts`); that function makes the others in the
+      next elaboration. Inside a continuation's trial, every trial is the
+      continuation's (`Ctx.withTrial`), as all of its code moves with it. -/
   trial : Option Trial := none
   /-- In a method `c.M` (or `c.(r:)M`): `M` (or `(r:)M`), for `(super:)`. -/
   selfMethod : Option String := none

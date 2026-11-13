@@ -241,10 +241,9 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               if forContWaits cA st0 (← get) [values.e] then set st0 else
                 match contForLiftOf cA b.pos b.name ty t [i] restCl bd bodyFail with
                 | .ok lift =>
-                  -- This body moves to an immediate helper. Its trial's
-                  -- source-frame locals/cast requests do not exist in the
-                  -- final suspending caller; discover them in the helper.
-                  if cA.suspends then restoreForContTrial st0
+                  -- This body moves to an immediate helper, which discovers
+                  -- its own locals and lifts: the trial asked for none of
+                  -- them (`Ctx.keepsLifts`), only the continuations in it.
                   modify fun st => { st with loopFirst := st.loopFirst ++
                     [{ g := "", pos := b.pos, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
                   return (codeA, .prim .userErr [], t)
@@ -496,7 +495,6 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                 if forContWaits cA st0 (← get) [f0, a0] then set st0 else
                   match contForLiftOf cA gp x bty t0 altsS restCl bd bodyFail with
                   | .ok lift =>
-                    if cA.suspends then restoreForContTrial st0
                     let use : LoopUse := { g := "", pos := gp, itemCode := .lit .void, argSet := none, lift := .ok lift }
                     modify fun st => { st with loopFirst := st.loopFirst ++ [use] }
                     if cA.suspends then return (codeA, .prim .userErr [], t0)
@@ -651,7 +649,6 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                       let .arr vty := r0.ty | throw "no values"
                       contForLiftOf c gp b.name bty vty b.alts restCl bd bodyFail) with
                   | .ok lift =>
-                    if c.suspends then restoreForContTrial st0
                     let use : LoopUse := { g := "", pos := gp, itemCode := .lit .void, argSet := none, lift := .ok lift }
                     modify fun st => { st with loopFirst := st.loopFirst ++ [use] }
                     if c.suspends then return ⟨.prim .userErr [], r0.ty⟩

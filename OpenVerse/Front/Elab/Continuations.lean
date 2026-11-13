@@ -665,17 +665,22 @@ def refineTagOf (ctx : Ctx) (x body : SExpr) (els : Option SExpr) (exp : Option 
 def Ctx.withTrial (ctx : Ctx) (t : Trial) : Ctx :=
   { ctx with trial := if ctx.trial == some .continuation then ctx.trial else some t }
 
-/-- (#243, #453) Whether a refining cast's lift asked for here is kept: an
-    elaboration that is a trial (`Ctx.trial`) leaves no request that the
-    function its code is compiled in would make otherwise, which makes it
-    in the next elaboration. A continuation has a scope of its own
-    (`refineScope`, in its casts' tags), so no lift asked for in its trial
-    is the one its function asks for; nor one in a branch's trial whose tag
-    depends on the source context, which the function made from the branch
-    computes with its own captures and result type (`refineTagOf`). Asked
-    for there, each level of nesting lifted the casts inside it once more,
-    the earlier copies never called. A continuation asked for in a trial is
-    kept: its key (`contKey`) is the same in the function. -/
+/-- (#243, #453) Whether a refining cast's lift asked for here is kept. A
+    trial (`Ctx.trial`) keeps a request only where the function its code is
+    compiled in makes the same one, which the next elaboration then finds;
+    any other would never be called, and that function makes its own in the
+    next elaboration. Of what a trial asks for, only a lift's key names the
+    scope it is asked for in (its tag, `refineTagOf`). A continuation's
+    function has a scope of its own (`refineScope`), so no lift asked for in
+    its trial is one it asks for; nor is one asked for in a branch's trial
+    whose tag depends on the source context, which the function made from
+    the branch computes with its own captures and result type. (Asked for
+    there, each level of nesting lifted the casts inside it once more, the
+    earlier copies never called.) The continuations a trial asks for are
+    kept, in a `<suspends>` caller as in any: their keys (`contKey`) are the
+    same in the function, so nesting takes no more elaborations. The rest of
+    a trial's state goes with the elaboration, which asks for its
+    continuation and so is not the last. -/
 def Ctx.keepsLifts (ctx : Ctx) : Bool :=
   match ctx.trial with
   | none => true
@@ -1052,12 +1057,6 @@ def forContWaits (ctx : Ctx) (before after : ESt) (code : List Expr) : Bool :=
   ctx.suspends && (before.pendingSuspendingCasts != after.pendingSuspendingCasts ||
     before.pendingWaitingCasts != after.pendingWaitingCasts ||
     code.any (Suspend.hasSusp fun f => ctx.sigs.any fun s => s.idx == f && s.suspends))
-
-/-- An admitted continuation rediscovers its local/frame metadata in its
-    own helper. Its heap effects still belong to the enclosing source. -/
-def restoreForContTrial (saved : ESt) : EM Unit := do
-  let fx := (← get).fx
-  set { saved with fx }
 
 /-- (#335, phase 2) The continuation of a composed choice in a `for`: a
     function that runs the clauses after it (`rest`) and the body, failing

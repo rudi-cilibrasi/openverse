@@ -2480,9 +2480,15 @@ An immediate choice continuation in a suspending caller keeps value copies
 and normal copy-out. Admission checks its typed calls and pending refining
 lifts for suspension. Its discovery trial is disposable: the moved body
 discovers locals and nested lifts in the helper, whose refinement scope
-keeps their storage metadata distinct from the original source frame. In
-any caller, a continuation's trial asks for no refining lift
-(`Ctx.keepsLifts`), as only the helper's scope is the one used.
+keeps their storage metadata distinct from the original source frame. So
+a continuation's trial asks for no refining lift (`Ctx.keepsLifts`), as
+only the helper's scope is the one used, and keeps the continuations it
+asks for, whose keys the helper computes alike; this holds in any caller,
+suspending or not, and the rest of the trial's state goes with the
+elaboration, which asking for the continuation makes not the last. (The
+trial in a suspending caller used to restore the whole state but its
+effects, which dropped the nested continuations too: each level of
+nesting took two more elaborations.)
 An accepted trial retains its heap-effect records for the enclosing
 source or refining lift. Discarding those records would incorrectly give
 that lift a computes-only signature. Waiting and unsuccessful trials
