@@ -103,16 +103,20 @@ def declareSignatures (env : TyEnv) (tops : List STop) (requests : Requests) :
       | q :: qs => if q.named then qs.all (·.named) else namedLast qs
     if !namedLast ps then throw s!"{p.show}: in {n}, every parameter after a named one must be named"
     return (tys, rt)
+  -- a function's effects that exclude each other: at most one of <converges>,
+  -- <computes> and <transacts>, and <computes> with no heap effect
+  let checkExclusive (p : Pos) (n : String) (effs : List String) : Except String Unit := do
+    if (["converges", "computes", "transacts"].filter effs.contains).length > 1 then
+      throw s!"{p.show}: {n} has more than one of <converges>, <computes> and <transacts> (they exclude each other)"
+    if effs.contains "computes" && ("transacts" :: heapFx).any effs.contains then
+      throw s!"{p.show}: <computes> excludes the heap effects (<reads>, <writes>, <allocates>, <transacts>) that {n} also has"
   -- signatures: functions from their annotations, constants from theirs or by inference
   let mut sigs : Array Sig := #[]
   for (top, idx) in tops.zip (List.range tops.length) do
     match top with
     | .fn p n ps _ effs ret _ =>
       let (tys, rt) ← fnTypes env p n ps effs ret
-      if (["converges", "computes", "transacts"].filter effs.contains).length > 1 then
-        throw s!"{p.show}: {n} has more than one of <converges>, <computes> and <transacts> (they exclude each other)"
-      if effs.contains "computes" && ("transacts" :: heapFx).any effs.contains then
-        throw s!"{p.show}: <computes> excludes the heap effects (<reads>, <writes>, <allocates>, <transacts>) that {n} also has"
+      checkExclusive p n effs
       sigs := sigs.push { idx, name := n, params := tys, ret := rt, decides := effs.contains "decides",
                           suspends := effs.contains "suspends",
                           -- (a `block:`'s effects are inferred below, from none, as a
@@ -153,10 +157,7 @@ def declareSignatures (env : TyEnv) (tops : List STop) (requests : Requests) :
       let tparams := resolved.params
       let genv := resolved.env env
       let (tys, rt) ← fnTypes genv p n ps effs ret
-      if (["converges", "computes", "transacts"].filter effs.contains).length > 1 then
-        throw s!"{p.show}: {n} has more than one of <converges>, <computes> and <transacts> (they exclude each other)"
-      if effs.contains "computes" && ("transacts" :: heapFx).any effs.contains then
-        throw s!"{p.show}: <computes> excludes the heap effects (<reads>, <writes>, <allocates>, <transacts>) that {n} also has"
+      checkExclusive p n effs
       -- (#209) a method of a class with type parameters that its parent's
       -- type arguments do not give reads their values from its receiver
       -- (an overriding implementation: what a dispatch that opens them
@@ -253,6 +254,9 @@ def inferSignatures (env : TyEnv) (declared : Declared) (typeDefaults : List STo
         { name := s.name, arity := s.frame.arity, nslots := 0,
           decides := s.decides, writes := s.fx.contains "writes", body := .lit .void },
       main := 0 }
+  -- (the context each elaboration here starts from, under the signatures so far)
+  let ctxOf (sigs gsigs : Array Sig) (types : TyEnv) : Ctx :=
+    { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs gsigs, types }
   -- infer the types of unannotated constants: in order, in rounds, so that a
   -- constant may use one defined after it (until a round makes no progress)
   let unannotated := (declared.tops.zip (List.range declared.tops.length)).filter fun
@@ -264,7 +268,7 @@ def inferSignatures (env : TyEnv) (declared : Declared) (typeDefaults : List STo
     for (top, idx) in todo do
       match top with
       | .const _ _ _ body =>
-        let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs gsigs, types := env }
+        let ctx := ctxOf sigs gsigs env
         match (elabE ctx body none).run { env } with
         | .ok (r, _) =>
           if r.ty == .never then left := left.push (top, idx)
@@ -277,11 +281,11 @@ def inferSignatures (env : TyEnv) (declared : Declared) (typeDefaults : List STo
   for (top, _) in todo do
     match top with
     | .const p n _ body =>
-      let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs gsigs, types := env }
+      let ctx := ctxOf sigs gsigs env
       let (r, _) ← (elabE ctx body none).run { env }
       if r.ty == .never then throw s!"{p.show}: cannot infer the type of '{n}'"
     | _ => pure ()
-  checkTypeDefaults { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs gsigs, types := env } typeDefaults
+  checkTypeDefaults (ctxOf sigs gsigs env) typeDefaults
   -- the heap effects of a constant are those of its initialiser (#35), which
   -- runs at each use: in rounds, from none, since constants use each other
   for _ in [0:declared.tops.length + declared.generics.length + 1] do
@@ -289,7 +293,7 @@ def inferSignatures (env : TyEnv) (declared : Declared) (typeDefaults : List STo
     for (top, idx) in declared.tops.zip (List.range declared.tops.length) do
       match top with
       | .const _ _ _ body =>
-        let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs gsigs, types := env }
+        let ctx := ctxOf sigs gsigs env
         match elabBody ctx body (some sigs[idx]!.ret) { env } with
         | .ok (_, st) =>
           let fx := heapFx.filter fun k => st.fx.any (·.1 == k)
@@ -301,7 +305,7 @@ def inferSignatures (env : TyEnv) (declared : Declared) (typeDefaults : List STo
       -- does a default an overloaded constructor fills in (#99)
       | .fn p n ps _ _ _ body =>
         if (n.splitOn "$default$").length > 1 then
-          let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs gsigs, types := env }
+          let ctx := ctxOf sigs gsigs env
           match elabBody ctx body (some sigs[idx]!.ret) { env } with
           | .ok (_, st) =>
             let fx := heapFx.filter fun k => st.fx.any (·.1 == k)
@@ -313,7 +317,7 @@ def inferSignatures (env : TyEnv) (declared : Declared) (typeDefaults : List STo
           let s := sigs[idx]!
           let locals := (ps.zip (List.range ps.length)).zip s.params |>.map fun ((prm, i), t) =>
             ({ name := prm.name, slot := i, ty := t, mutable := false, typeValue := prm.typeValue } : Local)
-          let base : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs gsigs, types := env,
+          let base : Ctx := { ctxOf sigs gsigs env with
                               locals := locals.reverse, retTy := s.ret, canFail := s.decides, suspends := s.suspends, fnFx := s.fx }
           let ctx ← functionBodyCtx requests base p n s.tparams s.scope
           match elabBody ctx body (some s.ret) { env, nslots := ps.length, slotTys := s.params.toArray, frameSlots := ctx.locals.filterMap fun l => l.storage.map (l.slot, ·) } with
@@ -342,7 +346,7 @@ def inferSignatures (env : TyEnv) (declared : Declared) (typeDefaults : List STo
             | some l => (l.opened.lookup v).bind (env.witnessField? l.target ·)
             | none => env.witnessField? ((n.splitOn ".").headD "") v
           let genv := { g.typeEnv env with dictOrder := dictTps.map (·.1), selfWitness := g.selfTps.map fun v => (v, (selfField v).getD 0) }
-          let base : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs gsigs, types := genv,
+          let base : Ctx := { ctxOf sigs gsigs genv with
                               locals := locals.reverse, retTy := g.ret, canFail := g.decides, suspends := g.suspends,
                               dictBase := g.frame.witnessBase, dictVars := dictTps.map (·.1), fnFx := g.fx }
           let ctx ← functionBodyCtx requests base p n g.tparams g.scope
