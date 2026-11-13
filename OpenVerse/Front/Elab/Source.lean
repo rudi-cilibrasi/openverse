@@ -34,9 +34,26 @@ structure Admitted where
       (`EffectPolicy.constructionFx`), by its name. -/
   constructionFx : Std.HashMap String (List String)
 
+/-- `return` leaves a function's body, so it is refused where there is none: in
+    a constant's value, and in a field's default, which is evaluated where an
+    object is constructed and would leave the function that constructs it. -/
+def checkReturns (tops : List STop) : Except String Unit := do
+  let ret? : SExpr → Option SExpr := Refine.findPart (fun | .ret .. => true | _ => false) false
+  for t in tops do
+    match t with
+    | .const _ n _ (.structDef _ _ _ fs) | .classDef _ n _ _ _ _ fs _ _ =>
+      for (f, _, d, _) in fs do
+        if let some r := d.bind ret? then
+          throw s!"{r.pos.show}: return is not allowed in a field's default (of '{f}' in {n})"
+    | .const _ n _ e =>
+      if let some r := ret? e then
+        throw s!"{r.pos.show}: return is not allowed in a constant's value (of {n}), which is in no function"
+    | .fn .. => pure ()
+
 /-- Source admission and the prelude, the first phase of `elabProgramCore`:
     the source and the entry expression are admitted by the effect policy and
-    the source profile; the program's own types do not take built-in names;
+    the source profile; the program's own types do not take built-in names,
+    and its constants and field defaults have no `return` (`checkReturns`);
     modules are resolved (#112); and the helpers the program needs are added,
     those the source names alike kept apart from them (#210). -/
 def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitted := do
@@ -54,6 +71,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
     | .const p n _ (.structDef ..) | .const p n _ (.enumDef ..) | .classDef p n .. =>
       if ("char32" :: typeNames).contains n then throw s!"{p.show}: {n} is a built-in type"
     | _ => pure ()
+  checkReturns allTops0r
   let helpers ← if usesRat then ratTops else pure []
   let helpers := helpers ++ (← if usesReplaceAll then replaceAllTops else pure [])
   -- These compiler-owned implementations expand finite intrinsic operations:
