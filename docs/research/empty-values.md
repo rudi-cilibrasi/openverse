@@ -327,6 +327,9 @@ the type of `branch:` is concurrency's to settle first.
 
 ## 3. Part 2: what the front end cannot reach
 
+(Design B is built: [section 4](#4-design-b-as-built). This part is the
+design as it was written, with what differed then.)
+
 ### 3.1 What still differs
 
 Where the static types are not both known, or the empty values sit inside
@@ -477,3 +480,56 @@ Step order for B, each keeping `scripts/check.sh` green:
 Separately, in the front end: the value of `X?` on a logic (the Book's
 tests: the empty value, so `X:logic = true?` would be `false`), and `true`
 as a type name once `branch:` has its body's type.
+
+## 4. Design B, as built
+
+**`Value.veq`** (`OpenVerse/Core/Value.lean`) is Verse's equality of
+values: structural, like `decEq`, except that any two of the four empty
+values (`Value.isEmpty`: `.logic false`, `.tup []`, `.none`, an array of no
+elements) are equal, at every depth. Proved, with the axioms the other
+theorems use (`propext`, `Classical.choice`, `Quot.sound`):
+
+- `veq_iff : veq a b = true ↔ norm a = norm b`, where `norm` makes each
+  empty value, at every depth, `()`; hence `veq_refl`, `veq_comm`,
+  `veq_trans`, `veq_of_eq`.
+- `veq_of_isEmpty`: any two empty values are `veq`; `isEmpty_of_veq`.
+- Congruence for the constructors that hold values: `veq_some`,
+  `veq_tup_of_get`, `veq_arr_of_get`, `veqList_iff_get`;
+  `veq_example`: `veq (.arr #[.logic false]) (.arr #[.tup []]) = true`.
+- `veq_int_right`: a value `veq` to an int is that int.
+- `veq_iff_eq_of_hasTy` (`Typing.lean`): on two values of one type, `veq`
+  is `=`, so programs that compare values of one type compute as before.
+
+**Where equality is decided at run time.** Only Verse Core's `eq` and `ne`
+(`Prims.lean`: `cmpRes (Value.veq a b) a`) and the C runtime's `vx_equal`
+(`value.c`: `shallow_eq` takes two empty values of different tags as
+equal). Everything else calls `eq`: a map's lookup and insertion
+(`mapLookup`, `mapFind`, `mapPut`: `M[k]`, `set M[k] = v`, a key given
+twice in `map{…}`, `ConcatenateMaps`), `case` on values, the array methods
+that search by value (`Find`, `RemoveFirstElement`, `RemoveAllElements`,
+`ReplaceFirstElement`, `ReplaceAllElements`, `ReplaceAll`), struct and
+tuple equality, the front end's emptiness tests. OVBC, the loader and its
+QuickProof are unchanged. The only theorem that reads `eq`'s result,
+`Eval.eq_slot` (`Derived.lean`), keeps its statement.
+
+**The front end** (`TyEnv.cmpPlan`) counts the empty values as one
+(`TyEnv.coreExact`, `VTy.holdsEmpty`), so the nested rows of 3.1 hold;
+converts an operand only losslessly (`TyEnv.lossless`: never a part to
+`void`, so `(1, 2) = array{(), ()}` fails); and elaborates an operand
+compared with a type that has `void` in it with no expected type (`void`
+made its parts `()`: `array{()} = array{5}` held).
+
+**What still differs from the Book:**
+
+| Program | openverse | Book |
+|---|---|---|
+| `Same(X:t, Y:u where t:subtype(comparable), u:subtype(comparable))<decides>:void = X = Y` | refused: two type parameters | compiles |
+| `Same(A:tuple(t, t, t), B:string where …) = A = B` (`CompareString` 167 to 182) | refused (`tests/errors/eq_generic_tuple_string.verse`) | compares as values |
+| `IsFalse(X:t where t:subtype(comparable))<decides>:void = X = false`, `IsFalse[s{}]` with `s := struct{}` | holds: Verse Core holds an empty struct as `()` (it failed before Verse Core's `eq` related the empty values, by luck); `s{} = false` itself fails | fails: a struct is not the empty value |
+| `true? = false` (`BoolQuery` 3, 4, `LogicalAnd` 29, `Precedence` 121) | fails: `true?` is `true` | the tests: holds; the prose (ch. 8, 57: "When applied to any other value, it succeeds with that value") says `true?` is `true` |
+| `true` as a type name | unknown | the type of the empty value; `FORT-582630-BranchResult.versetest:3` needs `branch:` to have its body's type, which the Book's prose does not state |
+
+The last two are the separate front-end items of 3.4: the Book's prose and
+its tests disagree on the value of `X?` of a logic, and `true` waits on the
+type of `branch:`, so neither is done.
+

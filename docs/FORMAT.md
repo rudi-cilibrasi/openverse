@@ -95,6 +95,10 @@ the function's header (whose `nnodes` is 4).
 | 8 | modulo | 18 | mkSome | 28 | userErr |
 | 9 | lt | 19 | concat | | |
 
+`eq` (13) and `ne` (14) are Verse's equality of values (`Value.veq`):
+structural, except that the empty values `.logic false`, `.tup []`, `.none`
+and an array of no elements are all equal, at every depth.
+
 Codes 0 (`add`), 1 (`sub`), 2 (`mul`) and 7 (`quotient`) also have a
 four-int rational form (#489): arguments `(a,b,c,d)` denote `a/b` and
 `c/d`, and the result is the reduced tuple `(numerator,denominator)`.
