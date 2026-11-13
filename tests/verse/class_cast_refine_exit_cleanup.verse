@@ -80,6 +80,8 @@ RefinedReturn(P:pair(a, b) where a:type, b:type):b =
         set Count = D.C
         return D.A
     P.B
+# (a <decides> function's return is in tail position, a branch of its last if,
+# Return.versetest:157)
 DecidesReturn(P:pair(a, b), Values:[]int where a:type, b:type)<decides>:int =
     var Value:int = 0
     defer: Print("decides cleanup {Value}")
@@ -87,7 +89,8 @@ DecidesReturn(P:pair(a, b), Values:[]int where a:type, b:type)<decides>:int =
         defer: set Value = 9
         set Value = D.C
         return Values[Value]
-    -1
+    else:
+        -1
 Main():void =
     P := dup(int){A := 1, B := 2}
     Q := dup(string){A := "a", B := "b"}

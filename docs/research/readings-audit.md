@@ -43,7 +43,7 @@ Verdicts:
 | `?` on other values | only `logic` and `?t` | `08_failure.md:57`: "`?` turns any value into a failable expression"; `04_operators.md:384` and the API: `logic` and `?t` only | `Option.versetest:113`, `Array.versetest:112`, `Map.versetest:344` refuse `?` of int, array, map (3509) | **the Book disagrees with itself** (ch. 8 against ch. 4, API, tests); openverse follows the tests: keep (owner list) |
 | Output inside a failed failure context | rolled back with the writes | chapters silent on the global `Print`; the API's `log` class (a different function): "If the transaction rolls back the lines are still printed, each prefixed with (Rolling Back)" | none (no test checks output) | **Book silent** on `Print`: keep; the `log` text noted for the owner |
 | `Main` failing | exit 1 | no entry point | none | **Book silent** |
-| `return` or `break` inside a failure context | leaves the function or the loop; what the context did is kept | `07_control.md:530-531`: `break` "must appear in a code block, not as part of a complex expression"; `:1067-1069`: `return` in "tail position" | `Bugs/SOL-4199-BreakFromIf.versetest` 4, 15, 51, 60 (`break` in an `if` condition, `for` domain, `option`, `logic`: 3658), 87 (`return` in an `if` condition: 3535); `FlowControl/Reachability.versetest` 12-15 ("Explicit return out of a failure context is not allowed"); `Return.versetest` 115, 118, 158-163 (in `<decides>` bodies, not in tail position) | **contradicts**, deeply load-bearing: **designed, not changed** ([below](#return-and-break-in-a-failure-context)) |
+| `return` or `break` inside a failure context | leaves the function or the loop; what the context did is kept | `07_control.md:530-531`: `break` "must appear in a code block, not as part of a complex expression"; `:1067-1069`: `return` in "tail position" | `Bugs/SOL-4199-BreakFromIf.versetest` 4, 15, 51, 60 (`break` in an `if` condition, `for` domain, `option`, `logic`: 3658), 87 (`return` in an `if` condition: 3535); `FlowControl/Reachability.versetest` 12-15 ("Explicit return out of a failure context is not allowed"); `Return.versetest` 115, 118, 158-163 (in `<decides>` bodies, not in tail position) | **contradicts**, deeply load-bearing: **changed** ([below](#return-and-break-in-a-failure-context)) |
 | Comparability | the row said every type but an unbounded type parameter | `04_operators.md:359-367` (comparable types; "Unique classes … identity equality only"); `11_types.md:195`: "A function value is not comparable"; `:225`: "`any` is not comparable" | `Operators/CompareInstance.versetest:11` (a class without `<unique>`), `Any.versetest:137`, `Map.versetest:50-58` | **agrees**; the row described openverse wrongly (it refuses classes without `<unique>`, interfaces, `any`, functions): row corrected |
 | Inferring type arguments | first-order matching | `06_functions.md:1318-1320` (from the arguments), `:1358` (`t = []int via conversion`): no algorithm | `ParametricFunctions.versetest` 224, 229, 263, 269 agree | **Book silent** |
 | Access specifiers | `<public>` and internal only | ch. 12 | 107 accepted refusals | not audited here: a later piece of its own |
@@ -79,8 +79,8 @@ The readings outside the table that the survey names:
 | `set M[k] = v` on a map can fail | never fails, allowed anywhere | the API (line 424): `operator'()'(Map:ref([t]u, [t]v), Key:t)…<decides>…`, "This is what makes `set M[Key] = Value` work on a map variable … Assigning through that reference inserts a key that is not yet present"; `03_containers.md:686`: "If you try to modify a key that is not present, the operation fails" (of `+=`); `05_mutability.md:344` (an array's index out of range fails); `01_expressions.md:994`: a `set` "returns the value being assigned" | `RollbackTortureTest.versetest:18` `(set Map[I] = I) or Err()`; `Mutability.versetest:248` `if (set M0[0] = 42)`; `Bugs/FORT-623803-STMRollbackAfterReturn.versetest:15` `if: set R[0] = R[0] or Err()` on a map; every map `set` in the tests is in a failure context | **contradicts**: a set through a map's key is `<decides>` (its last key still inserts); a plain variable's cannot fail; its value is the value set: **changed** |
 | The left of `or` must be able to fail | not required | silent | `Operators/LogicalOr.versetest:143` ("the left operand is required to be fallible", 3513) | **contradicts**; with the map `set` failable the Book's own `(set Map[I] = I) or Err()` passes: **changed** |
 | Rollback of a `for` iteration | a source's or a range bound's effects kept when later clauses fail | `08_failure.md:92`: "The `for` expression creates a failure context for each iteration of the domain clause"; `:147` (provisional changes) | `FlowControl/for.versetest` 362, 371, 392; `Range.versetest` 140, 159; `SoftwareTransactionalMemory.versetest` 88 (74 and 81 moved with the range bound) | **contradicts**, deeply load-bearing: **designed, not changed** ([below](#rollback-of-a-for-iteration)) |
-| Commas and semicolons in blocks | `,` separates a block's statements like `;` | `01_expressions.md:1048`: "Commas within parentheses create *tuples*"; `:1153-1156`: `option{1, 2}?` is `(1, 2)`; `:1119-1129`: in a block "semicolons and commas are interchangeable as separators between definitions" | `SemicolonsVsCommas.versetest` 70 (`Value :=` then `1, 2, 3` is `(1,2,3)`), 95 (`{3,X}`), 100 (`option{1,2}`); `Option.versetest:44`; `for.versetest:293`; 22 parser cases (`TimSyntax.versetest:224` `"1,2"`, …) | **contradicts**: **designed and prototyped, not changed** ([below](#commas-in-blocks)) |
-| What the Book calls warnings | code after `return`/`break`, `_` after a closed enum's every value, `return 3` in a `:void` function: accepted silently | `09_structs_enums.md:297-318`, `:411` ("⚠ Warning - unreachable wildcard"), `07_control.md:423-435` ("you'll get a warning") | `assert_semantic_error(2000)` (`Reachability.versetest` 5, 11, 23 "Treat unreachable expressions after break as warning not error"), 2302 (`Enum.versetest:356`), 2002 (`Return.versetest:179`, "produces a warning"): the runner counts a warning as a diagnostic | **contradicts** (a diagnostic the Book gives and openverse does not): **designed** ([below](#warnings)) |
+| Commas and semicolons in blocks | `,` separates a block's statements like `;` | `01_expressions.md:1048`: "Commas within parentheses create *tuples*"; `:1153-1156`: `option{1, 2}?` is `(1, 2)`; `:1119-1129`: in a block "semicolons and commas are interchangeable as separators between definitions" | `SemicolonsVsCommas.versetest` 70 (`Value :=` then `1, 2, 3` is `(1,2,3)`), 95 (`{3,X}`), 100 (`option{1,2}`); `Option.versetest:44`; `for.versetest:293`; 22 parser cases (`TimSyntax.versetest:224` `"1,2"`, …) | **contradicts**: **changed** ([below](#commas-in-blocks)) |
+| What the Book calls warnings | code after `return`/`break`, `_` after a closed enum's every value, `return 3` in a `:void` function: accepted silently | `09_structs_enums.md:297-318`, `:411` ("⚠ Warning - unreachable wildcard"), `07_control.md:423-435` ("you'll get a warning") | `assert_semantic_error(2000)` (`Reachability.versetest` 5, 11, 23 "Treat unreachable expressions after break as warning not error"), 2302 (`Enum.versetest:356`), 2002 (`Return.versetest:179`, "produces a warning"): the runner counts a warning as a diagnostic | **contradicts** (a diagnostic the Book gives and openverse did not): **changed**, with the warning channel ([below](#warnings)) |
 | `break` in a `for` body | refused ("only inside loop (not for)") | `07_control.md:764`: "The `break` statement cannot exit `for` loops early" | `SOL-4199-BreakFromIf.versetest:38-48`: "`break` in a `for` body is allowed and breaks the surrounding `loop`" | **the Book disagrees with itself** (owner list); not changed |
 
 ## The changes
@@ -200,60 +200,150 @@ agree with the compiler over a wide seed range. Cases that would move:
 `for.versetest` 362, 371, 392, `Range.versetest` 140, 159,
 `SoftwareTransactionalMemory.versetest` 88.
 
+**Not built: the obstacle** (with the other three load-bearing readings,
+[below](#the-load-bearing-readings-built)). The tests pin two more facts
+the design must keep: the first generator's own source and the clauses
+before it are inside the search (`Range.versetest:140`, `for (J:(set X =
+array{666}); I := GetLower()..GetUpper())` undoes the `set`; `for.versetest:362`
+undoes `X.Inc()` of the range bound), and an alternative of an outer
+generator whose inner search finds nothing is undone before the next one
+starts (`for.versetest:382`, "Only two increments since no values with I=2
+reaches the body"). openverse's `for` is not lowered in one place: plain
+generators are nested `forE`s; a choice is a generator of `altE`; a lazily
+taken call (#246) is a private loop (`elabLoopGen`) that gives its values
+one at a time with rollback boundaries of its own; an exclusive choice
+(#314) has paths; a composed choice's clauses move into a continuation
+(`$contf…`, #335); a waiting consumer is staged (#417, `$forStage`,
+`$forPrepare`, `$forResume…`). Each commits a source and the clauses before
+the next generator as it goes, and each needs the search with one
+transaction per alternative; the models (`mv.py`'s rollback "to the most
+recent generator", `generic_mv.py`, `choice_break.py`,
+`choice_heterogeneous.py`, `gen-choice.py`) must predict it first.
+Changing plain generators alone would leave a `for` over a choice under
+the old rule, half the reading, so none of it is made yet.
+
 ### `return` and `break` in a failure context
 
-**The Book's rule.** A `return` may not leave a failure context (an `if`'s
-conditions, a `for`'s clauses, `option{}`, `logic{}`, `not`'s operand, the
-left of `or`; also a `<decides>` body anywhere but in tail position,
-`Return.versetest` 158-163), and a `break` may not leave one for its loop
-(`SOL-4199` 3658). openverse lets both leave, keeping what the context did
-(#283 extends this through choices).
+**Built** (the second of the load-bearing readings, [below](#the-load-bearing-readings-built)).
 
-**Design.** A source check before elaboration (prototyped as `checkJumps`
-in `Front/Elab/Source.lean`: two flags, a failure context since the
-function's body and since the innermost loop, reset by `loop`), and the
-tail-position rule for `<decides>` bodies. It is not made because what
-depends on the old reading is large: it refuses 88 of openverse's own test
-programs (73 in `tests/verse`, among them every `choice_clause_break_*`,
-`choice_clause_return_*`, `choice_first_break_*`, `choice_first_return_*`,
-`choice_block_defer_exits*`; 15 in `tests/errors`; 2 upper-bound controls),
-302 programs of the frozen corpus (the generators `choice_break.py`:
-`break-first` 71 and `break-for` 80; `gadt_first_returns.py` 20;
-`gadt_immediate.py` 4; `mv.py`'s `bif`, `mv` and `rec` modes 125), and the
-elaborator's paths for jumps out of failure contexts (#283's clause breaks
-and returns, `$deferExits`, `forBreakSlot`, `forExitPacket`), which become
-dead code. Making it is retiring those tests and models, removing those
-paths, and rewriting the generators, a piece of its own. Cases that would
-move: `SOL-4199-BreakFromIf.versetest` 4, 15, 51, 60, 87,
-`Reachability.versetest` 12-15, `Return.versetest` 115, 118, 148, 158, 159,
-161-163.
+**The Book's rule, as its tests pin it.** A failure context is an `if`'s
+conditions, a `for`'s clauses (its domain), `first`'s clauses
+(`08_failure.md:108`), `option{…}`, `logic{…}`, `not`'s operand, the left of
+`or`, and a `<decides>` function's body (`08_failure.md:122`: "Functions
+marked with `<decides>` create a failure context for their entire body").
+
+- A `return` may not leave one (error 3535): in an `if`'s condition,
+  `Reachability.versetest:12-15` ("Explicit return out of a failure context
+  is not allowed") and `SOL-4199-BreakFromIf.versetest:86-95` ("`return` in
+  an `if` condition is disallowed"); in `option{}`, `Return.versetest:129`.
+  In a `<decides>` function it may be only in tail position:
+  `Return.versetest:157`, "Explicit return can only occur in failure
+  contexts in a tail position"; refused: `{return X; 0<>0}` (158),
+  `{if(X<>0) {return X}; 0<>0}` (159), `{loop {return X}; 0<>0}` (162),
+  `{for(Y:=0..X,X*Y=100){return Y}; 0<>0}` (163), an `else`-less `if`'s
+  return as the body (148), `for(Y:=0..X){return array{0}; 0}` (115); valid:
+  `return X` as the body (137), both branches of an `if` with an `else` as
+  the body (160). Tail position, as read from these: the body's last
+  expression, the last of a block in tail position, the branches of an `if`
+  with an `else` in tail position, a `case`'s arms in tail position, the
+  right of `and` and `or` in tail position, and a `return`'s value (140).
+- A `break` may not leave one for its loop (error 3658): an `if`'s
+  condition (`SOL-4199-BreakFromIf.versetest:3-12`, "`break` is not allowed
+  in an `if` condition"), a `for` domain (`:14-30`), `option` (`:50-56`),
+  `logic` (`:59-65`), `not` (`:67-71`), the left of `or` (`:73-77`); ch. 7,
+  `07_control.md:530-531`: "The `break` statement must appear in a code
+  block, not as part of a complex expression".
+- Allowed: a `return` in a `for`'s body of a function that is not
+  `<decides>` (`Reachability.versetest:18`, `Return.versetest:152`), in an
+  `if`'s branch (`07_control.md:1065-1093`, the tested examples 46-48); a
+  `break` in an `if`'s branch inside a loop; a loop's body is not a failure
+  context, so a `break` there in a `<decides>` function stays (the Book's
+  `SOL-4199-BreakFromIf.versetest:79-84` refuses a failable expression in a
+  loop, 3512, a rule of its own openverse does not have). A `break` in a
+  `for`'s body is where the Book disagrees with itself ([For the
+  owner](#break-in-a-for-body)): the tests allow it (`:38-48`), the prose
+  refuses it; the failure-context rule does not refuse it (a `for`'s body is
+  no failure context), and openverse keeps its own refusal ("break is only
+  allowed inside loop (not for)").
+- Not this rule: 3534, a `return` as a strict subexpression of the value a
+  function returns, explicitly or implicitly (`Return.versetest:110-133`,
+  `F(X:int):int=X+(return 0)`): openverse accepts those still (with a
+  warning, code never reached).
+
+**What openverse does.** `checkJumps` (`Front/Elab/Source.lean`), a check of
+the source before elaboration: a `return` with a failure context between it
+and its function's body, or in a `<decides>` function anywhere but in tail
+position, and a `break` with one between it and its loop, are refused.
+
+**What it refused, and what went.** 84 of openverse's test programs had a
+jump out of a failure context (none, of the Book's): 66 whose subject it
+was (#283's breaks and returns in the clauses of first-success consumers
+and of `for`s with choices, #246's returns after lazy generators, the
+cleanup such a jump runs from a lifted block) are deleted, and 18 whose
+subject is something else are rewritten to the allowed form, each with
+its output unchanged (a `<decides>` function's early return as a branch of
+its last `if`, a jump out of `not` or `option{}` moved to an `if`'s
+branch). 14 error tests of how such jumps combine with other refusals are
+deleted, one (`signal_no_rollback_break_clause`) rewritten; 11 new refusal
+tests (`tests/errors/jump_*`) and `jumps_allowed.verse` are added. Of the
+upper-bound fixtures, `bound-defer-exits(-control)` is deleted and
+`bound-frame-cells-break(-control)` rewritten. The generators: `mv.py`
+loses #284/#287's return among a test's clauses, `generic_mv.py` and
+`choice_break.py`'s exclusive sources put a `<decides>` function's early
+return in tail position, `gadt_first_returns.py` returns from the branch,
+`gadt_immediate.py` loses its clause returns, and `choice_break.py` loses
+its breaks among filters and first-success clauses (it models their
+rollback, in a loop's body). 404 programs of the regenerated corpus are
+refused (every one by this rule). The elaborator's paths that only such
+programs reached are deleted (no allowed program's bytecode changed):
+the `for`'s clause-break flag and its forwarding (`forBreakSlot`,
+`forBreakCapture`, `$forClauseExits`, `forwardSourceBreak`), the break
+packets of first-success clauses (`elabFirstGo`'s flag, `firstBreaks`), and
+the return and break packets of first-success helpers (`firstResult`'s
+exits, `firstUnpack`'s forwarding, `FirstLift.returnExit`/`breakExit`,
+`FirstReturn`, the always-empty `normalResult` of `Choice.firstBody` and
+`firstReturnBody`).
 
 ### Commas in blocks
 
+**Built** (the fourth of the load-bearing readings, [below](#the-load-bearing-readings-built)).
+
 **The Book's rule.** In a block, `;` and new lines make a sequence and `,`
-makes a tuple: `{1.0, 2}` is a `tuple(float, int)`, `option{1, 2}` holds
-`(1, 2)`, `Value :=` and the line `1, 2, 3` is `(1, 2, 3)`; definitions
-joined by commas are the block's definitions (ch. 1's `X:int = 0, Y:int =
-0`). `if (…)`, `for (…)` and the clause macros keep commas as clause
-separators (ch. 1, `:1159-1174`).
+makes a tuple: `01_expressions.md:1048`, "Commas within parentheses create
+*tuples*"; `:1153-1156`, "In `option{}` constructor - follows the standard
+sequence vs tuple rule: … `option{1, 2}?` … Comma: tuple, wraps the tuple";
+its tests: `SemicolonsVsCommas.versetest:70` (`Value :=` and the line
+`1, 2, 3` is `(1,2,3)`), `:91` (`F():tuple(float,int)={1.0,2}`), `:95`
+(`for(X:=1..2){3,X} = array{(3,1),(3,2)}`), `:100` (`option{1,2}?=(1,2)`),
+`:103` (`block{3.0,4}`), `:106` (`case(0){_=>{3.0,4}}`); `Option.versetest:44`,
+`FlowControl/for.versetest:293` (`{Character,Index}`). Definitions joined by
+commas in a block are its definitions (`:1119-1129`, "Within block
+expressions (braces), semicolons and commas are interchangeable as
+separators between definitions", `X:int = 0, Y:int = 0`); `logic{true?,
+true?}` is valid (`:1140-1146`), as a tuple of two queries is. Separators
+stay commas in clause lists (`for (X := 1..3, X <> 2)`, `:1159-1174`), in
+the arms of `sync`, `race` and `rush` (`Reachability.versetest:98-108`,
+`sync{F(0), F(1)}`), in a construction's fields and in collections' items.
+A group mixing definitions and values: no test pins it; openverse reads it
+as the prose implies, each element in order, a definition visible to the
+elements after it and after the group: `(V := X, V > 0, V)` is `V := X;
+T := V > 0; (V, T, V)`.
 
-**Design.** In the parser, a block's statement and the ones a comma joins to
-it are a tuple (`parseStmtTuple`, prototyped), all-definition groups spliced
-as statements; a comma at the start of a line that ends a nested block is
-the enclosing list's (the prototype missed this, which broke
-`gadt_refine`'s programs). A group mixing definitions and values needs one
-more rule, which the Book's prose implies and no test pins: the
-definitions visible to the later elements and after the group, so
-`(V := X, V > 0, V)` is `V := X; T1 := V > 0; (V, T1, V)`.
+**What openverse does.** `parseStmtTuple` (`Front/Parser.lean`): a block's
+statement and those a comma joins to it on its line are a tuple, a group
+of definitions alone the block's definitions, a mixed group its
+definitions and, for each value, a definition of its own, then the tuple
+(a `var`'s value copied where it is defined). A comma that starts a line
+is not the group's (the prototype took it, which broke `gadt_refine`'s
+programs: it ends the block, and belongs to the list around it).
 
-**What depends on the old reading.** The generator `generic_mv.py`
-(`option{V := …, E:[]w = …, set …, V(2) >= 7, V}`: 149 corpus programs),
-and tests `class_cast_refine_for_choice`, `class_cast_refine_first_choice`,
-`multi_method_own_direct`, `multi_method_cross_super_lazy`,
-`multi_generic_mutual(_extra_types)`, `choice_immediate_suspends_refined_boundaries`,
-which use commas as separators in `option{…}` or braces. Cases that would
-move: `SemicolonsVsCommas.versetest` 70, 95, 100, `Option.versetest:44`,
-`for.versetest:293` and the 22 parser cases.
+**What depended on the old reading.** The generator `generic_mv.py`
+(`option{V := …, E:[]w = …, set …, V(2) >= 7, V}`, 53 programs of the
+regenerated corpus) now separates those clauses with `;`, and so do the
+tests `multi_generic_mutual(_extra_types)`, `multi_method_own_direct` and
+`multi_method_cross_super_lazy`, each with its output unchanged (the others
+the audit listed use commas where they stay separators). New:
+`commas_tuples.verse`, `errors/comma_tuple_body`.
 
 ### `ToString` of a float
 
@@ -289,23 +379,88 @@ its deadline. Each is a change to the proved scheduler model and to
 
 ### Warnings
 
-The Book's tests check three warnings with `assert_semantic_error`: 2000
-(code after a `return` or `break`, or after a statement every path of
-which jumps), 2302 (a `case`'s `_` after a closed enum's every value) and
-2002 (`return` of a value in a `:void` function). They are warnings, not
-errors: "Treat unreachable expressions after break as warning not error"
-(`Reachability.versetest:22`), and the program compiles and runs.
-**The smallest honest channel:** `openverse check`, `run` and `emit` print
-each warning to standard error as `FILE:LINE:COL: warning: …` and go on,
-the exit status unchanged; a program with warnings is still accepted. The
-Book harness then reads an expected 2000, 2002 or 2302 as satisfied by such
-a warning (not by a refusal). The checks are a reachability pass (a
-statement after one that cannot complete normally: `return`, `break`, an
-`if` whose branches all jump, a `loop` with no `break`, `sync` with a
-jumping arm), and two checks the elaborator has the information for
-(`case` arms against a closed enum's values; `return e` in a `:void`
-function where `e` is not `void`). 30 accepted refusals of the survey's
-"unreachable code" would agree.
+**Built** (the first of the load-bearing readings, [below](#the-load-bearing-readings-built)).
+
+**The Book's rule.** Some diagnostics are warnings: the program compiles and
+runs. The prose: `09_structs_enums.md:297`, "Adding one anyway triggers an
+unreachable code warning" (a `_` after a closed enum's every value), and
+its table at `:411`, "Closed | Full | Yes | Any | ⚠ Warning - unreachable
+wildcard"; `07_control.md:423-424`, "If you add a wildcard when all cases are
+covered, you'll get a warning that the wildcard is unreachable". The tests
+name each with a code in the 2000s, checked by `assert_semantic_error`:
+`FlowControl/Reachability.versetest:3` ("Test that a warning is produced
+for unreachable code following a return"), `:22` ("Treat unreachable
+expressions after break as warning not error"); `Return.versetest:177`
+("explicitly returning a non-void value from a function with a void return
+type produces a warning"). The codes the translatable tests name, and what
+each is:
+
+| Code | What | Cases (all warning codes) | openverse |
+|---|---|---|---|
+| 2000 | code never reached: after a `return` or `break` (`Reachability.versetest` 5, 11), after an `if` both of whose branches leave (11, 39), after a block that always leaves (57), after a `loop` that only a `return` leaves (76), the operation of an operand that leaves (91, `F(return)`), after a `sync` one of whose arms leaves (99, 100) or a `race`/`rush` all of whose arms do (107, 108); after a `case` all of whose arms leave (`Case.versetest` 272, 280) | 13, and with errors in 15 more | warns (`Front/Reachability.lean`) |
+| 2002 | a `return` of a value in a `:void` function (`Return.versetest:179`; `:182`, `return F()` of a `void` `F`, is valid) | 1 | warns (the elaborator, with the value's type) |
+| 2302 | a `case` arm never reached: `_` after a closed enum's every value (`Enum.versetest:356`, `Case.versetest:154`, `SOL-4194-…:20`), or after a union's (`Union.versetest` 175, 450, VerseVM-only) | 3 (and 2 of unions, which openverse does not parse) | warns (`elabCase`) |
+| 2003, 2004 | `(a:)F()` in an override of `F`, where `(super:)F()` is meant (`SOL-3564-…versetest` 7, 18, 32, 45, 80) | 5 | not given: 4 still accepted silently |
+| 2001 | an empty `defer:` (`defer.versetest:915`) | 1 | refused (agrees as an expected error) |
+| 2017 | a map lookup that always fails (`SOL-6529-…versetest` 23-27) | 3 | refused for another reason |
+| 2009 | a use of a `@deprecated` definition | 26 translatable | refused: attributes do not parse |
+| 2005, 2007, 2008, 2011-2016, 2018, 2019, 2304, 2306, 2307 | versions, packages and their scopes | — | not translatable (`vpackage`) |
+
+What is not reached, as the tests pin it: the code after an expression
+that never completes normally, reported once where it starts.
+`Reachability.versetest` 8-10, 18 (`for(x:=0..10){return x}; 1+2`: a
+`for` may run its body no time), 98, 104, 105 (a `race` or `rush` with one
+arm that leaves) and 113 are valid. Two things the tests leave open, which
+openverse reads conservatively: a `loop` that nothing leaves, in a
+`<suspends>` function (`Break.versetest:20`, `Coroutines/IteratedPrimitives.versetest:5`,
+both `assert_valid`, have code after one): no warning (a `loop` that a
+`return` leaves and no `break` does warns, `:76`); and an expression that
+may fail before it leaves, in a failure context (`if (not (K = 2, return
+42))`): the context's `else` is reached, so only the operation is
+reported. The Book's `@ignore_unreachable` (`Reachability.versetest:94`) is
+an attribute, which openverse does not parse.
+
+**The channel.** `openverse check`, `run` and `emit` print each warning to
+standard error as `FILE:LINE:COL: warning: …`, in the order of the source,
+before anything else, and go on, the exit status unchanged; a refused
+program prints its error alone ([FORMAT.md](../FORMAT.md), "Exit
+protocol"). `scripts/test-verse.sh` compares a test's warnings with
+`NAME.warnings` (none without one) and the rest of standard error between
+Lean and C. The Book harness takes an expected error whose codes are all
+warnings (2000-2999) as satisfied by a warning ("warned"; a refusal still
+agrees, as for every expected error, the codes not compared), and notes a
+warning where a case expects none (it does not judge it: the Book's runner
+checks a warning's code only where a case names it).
+
+## The load-bearing readings, built
+
+After the nine changes above, the four readings this note designed and left
+were built, one commit each (with work-in-progress commits inside the long
+ones), in this order. "Moved" counts the Book's cases against the baseline
+of the readings audit (7,390 agree, 2,066 refuse, 277 accept, 50 differ).
+
+1. **Warnings** ([the rule](#warnings)). Moved: 17 cases agree (accepted
+   silently before): `Reachability.versetest` 5, 11, 23, 39, 57, 76, 91, 99,
+   100, 107, 108, `Case.versetest` 154, 272, 280, `Enum.versetest:356`,
+   `SOL-4194-AssertOnMalformedCaseContainingDataDefinition.versetest:20`
+   (2000 and 2302) and `Return.versetest:179` (2002). Tests: 18 of
+   openverse's programs have code the rule finds never reached (each
+   checked by hand: code after a `return` or `break`, after a `sync` one of
+   whose arms returns, the tuple or map an operand's `return` leaves
+   unmade), and say so in `NAME.warnings`; new: `warnings.verse`.
+2. **`return` and `break` in a failure context** ([the rule](#return-and-break-in-a-failure-context)).
+   Moved: 17 cases agree (accepted before): `SOL-4199-BreakFromIf.versetest`
+   4, 15, 51, 60, 87, `Reachability.versetest` 12-15, `Return.versetest`
+   115, 118, 148, 158, 159, 161, 162, 163.
+3. **Rollback of a `for` iteration**: not built ([the obstacle](#rollback-of-a-for-iteration)).
+4. **Commas in blocks** ([the rule](#commas-in-blocks)). Moved: 28 cases
+   agree: `SemicolonsVsCommas.versetest` 70, 91, 95, 100, 103, 106,
+   `Option.versetest:44`, `FlowControl/for.versetest:293`,
+   `Bugs/2021-09-03-OptionalTupleAssertionFailure.versetest:3`,
+   `v1-Mix-comma-and-semicolon-in-archetype-instantiation.versetest` 232 and
+   `:decls`, and 17 parser cases (`TimSyntax.versetest` 72, 75, 220, 224,
+   226, 229, 231, 242, 257, 264, 265, 268, 272, 275, 276, `Tuple.versetest`
+   67, 70).
 
 ## For the owner
 
@@ -365,6 +520,12 @@ page](https://github.com/rudi-cilibrasi/openverse/wiki/Where-the-Book-disagrees-
 - **Prose** (`07_control.md:764`): "The `break` statement cannot exit `for` loops early."
 - **Tests:** `Bugs/SOL-4199-BreakFromIf.versetest:38-48`: "`break` in a `for` body is allowed and breaks the surrounding `loop`", which leaves the `for` too.
 - **openverse today:** refuses a `break` in a `for` body ("break is only allowed inside loop (not for)").
+
+### `break` as part of an expression
+
+- **Prose** (`07_control.md:529-530`): "The `break` statement must appear in a code block, not as part of a complex expression."
+- **Tests:** `SemicolonsVsCommas.versetest:97`: `assert{loop{1, @ignore_unreachable break}}`, a `break` as a tuple's element, expected to run (and `Reachability.versetest:91` takes `F(return)`, a `return` as an argument, with a warning).
+- **openverse now:** the tests' (a `break` or `return` may be an operand, outside a failure context; the code after it is never reached, a warning).
 
 ### `set X op= e`
 

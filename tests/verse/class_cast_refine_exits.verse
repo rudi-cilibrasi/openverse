@@ -1,6 +1,7 @@
 # Refining casts whose branch sets vars from outside it and returns or breaks out (#243), the shapes the
 # review of #395 found: the vars are set before the caller returns (a defer: sees them), nested casts,
-# a failure in a return's or the branch's value is the function's (<decides>), an if as a statement
+# a failure in a return's or the branch's value is the function's (<decides>, where a return is in
+# tail position, Return.versetest:157: a branch of the body's last if), an if as a statement
 # with an else
 pair(t:type, u:type) := class:
     A:t
@@ -35,25 +36,23 @@ InnerDefer(P:pair(a, b), Q:pair(c, d) where a:type, b:type, c:type, d:type)<tran
 DecRet(P:pair(a, b), Xs:[]int where a:type, b:type)<decides>:int =
     if (D := dup[P]):
         return Xs[D.C]
-    0
+    else:
+        0
 DecRetVal(P:pair(a, b), Xs:[]int where a:type, b:type)<decides>:int =
-    X:int = if (D := dup[P]):
-        if (D.C > 0) then return Xs[D.C]
-        7
+    if (D := dup[P]):
+        if (D.C > 0) then return Xs[D.C] else 7
     else:
         8
-    X
 PlainRet(Xs:[]int, K:int)<decides>:int =
     if (K > 0):
         return Xs[K]
-    0
+    else:
+        0
 ValFail(P:pair(a, b), Xs:[]int where a:type, b:type)<decides>:int =
-    X:int = if (D := dup[P]):
-        if (D.C > 50) then return 1
-        Xs[D.C]
+    if (D := dup[P]):
+        if (D.C > 50) then return 1 else Xs[D.C]
     else:
         Xs[9]
-    X
 NoEsc(P:pair(a, b), Xs:[]int where a:type, b:type)<decides>:int =
     X:int = if (D := dup[P]):
         Xs[D.C]

@@ -1,4 +1,6 @@
 # Returns and failures must cross lazy loops before leaving their source loop.
+# (Fails, a <decides> function, has no return: there it would have to be in tail
+# position, Return.versetest:157, and a for's body is none.)
 pair(a:type,b:type) := class:
     A:a
     B:b
@@ -41,8 +43,6 @@ Double(P:pair(a,b),H:counter where a:type,b:type)<suspends>:int =
 Fails(P:pair(a,b),H:counter where a:type,b:type)<transacts><decides>:int =
     loop:
         for (L := Lazy[H,2], V := if (D := dup[P]) then (D.C | D.C + 1) else 0):
-            if (V = 999):
-                return V
             Print("failed body {L} {V}")
             false?
             V

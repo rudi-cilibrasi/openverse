@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Source-loop model for for filters: break crosses producers; failure rolls back.
+"""Source-loop model for for filters: failure rolls back, in a loop's body.
+
+(It modelled a `break` among a for's filters, crossing producers, and among
+the clauses of first-success contexts: a `break` or `return` cannot leave a
+failure context, the Book of Verse's tests, `SOL-4199-BreakFromIf.versetest`,
+`Reachability.versetest:12`, so the loops are left after the contexts now.)
 
 Some consumers select their lazy sources under independent
 refining casts. Both actual receivers hit, so the source-loop oracle and
@@ -7,8 +12,8 @@ the existing random program distribution stay unchanged, including waits.
 Plain, composed and exclusive wrappers enumerate the same lazy values.
 --unrefined emits the equivalent original sources for implementation controls.
 --plain-sources/--composed-sources/--exclusive-sources select that emitter profile.
---first-success instead models a break in the clauses of an if condition,
-first{} or option{} with choices (first_success below).
+--first-success instead models the clauses of an if condition, first{} or
+option{} with choices in a loop's body (first_success below).
 """
 import random
 import sys
@@ -16,20 +21,16 @@ from pathlib import Path
 
 
 def first_success(seed, expected):
-    """A loop whose body takes the first success of clauses with choices,
-    with a break among them (#283). The search is depth first: each
+    """A loop whose body takes the first success of clauses with choices
+    (#283). The search is depth first: each
     alternative starts from the state where its choice was reached, so one
     that fails is rolled back, and so is the whole context when none
     succeeds (output too: Print is transactional). An effectful recursive
     generator (Visit) is a choice of its value and a call of itself, after
-    its own clauses, as the Verse Calculus reads it. A break keeps what the
-    clauses did up to it, as with no choice, and leaves the loop: the
-    cleanup of the scopes it leaves runs (a block's, then the loop's). A
-    block's defer: runs as each of its values leaves it, and at a break or
-    return that leaves it (after the return's value), whether the block has
-    a choice of its own, which lifts its clauses into the condition's, or
-    not: LANGUAGE.md's rule for any scope. A return leaves the function,
-    running the cleanup of every scope it leaves, innermost first."""
+    its own clauses, as the Verse Calculus reads it. A block's defer: runs
+    as each of its values leaves it, whether the block has a choice of its
+    own, which lifts its clauses into the condition's, or not: LANGUAGE.md's
+    rule for any scope. The loop is left by a break after the context."""
     rng = random.Random(seed)
     suspends = rng.choice([False, True])
     waits = suspends and rng.choice([False, True])
@@ -135,8 +136,7 @@ def first_success(seed, expected):
     clauses = []
     bound = []
     n_choices = rng.randint(1, 3)
-    n_breaks = rng.choice([0, 1, 1, 1, 2])
-    plan = ["choice"] * n_choices + ["break"] * n_breaks + ["filter"] + \
+    plan = ["choice"] * n_choices + ["filter"] + \
         [rng.choice(["total", "hn", "print", "filter", "block"]) for _ in range(rng.randint(1, 4))]
     rng.shuffle(plan)
     for i, what in enumerate(plan):
@@ -169,17 +169,10 @@ def first_success(seed, expected):
         elif what == "filter":
             pt, pv = pick_pred(bound, iteration=not bound)
             clauses.append((pt, lambda env, st, rest, pv=pv: rest(env, st) if pv(env) else ("fail",)))
-        elif what == "break":
-            if rng.random() < 0.15:
-                clauses.append(("break", lambda env, st, rest: ("break", st)))
-            else:
-                pt, pv = pick_pred(bound, iteration=True)
-                clauses.append((f"if ({pt}) then break else 0",
-                                lambda env, st, rest, pv=pv: ("break", st) if pv(env) else rest(env, st)))
         else:
-            # (a block of its own, with a defer: that a break or return leaving
-            # it runs; at times with a choice of its own, W, before or after
-            # the defer:, then each of its values leaves the block in turn)
+            # (a block of its own, with a defer:; at times with a choice of
+            # its own, W, before or after the defer:, then each of its values
+            # leaves the block in turn)
             name = f"Z{i}"
             own = rng.random() < 0.6
             inner = list(bound)
@@ -187,18 +180,9 @@ def first_success(seed, expected):
                 w = f"W{i}"
                 ctext, cgen = pick_choice(i, bound)
                 inner.append(w)
-            pt, pv = pick_pred(inner, iteration=True)
             vt, vv = pick_expr(inner)
-            ret = rng.random() < 0.35
-            if ret:
-                rt, rv = pick_expr(inner)
 
-            def leave(env, st, rest, i=i, name=name, pv=pv, vv=vv, ret=ret, rv=rv if ret else None):
-                if pv(env):
-                    # (a return's value first, then the block's cleanup)
-                    value = rv(env) if ret else None
-                    st.out.append(f"bd{i} {st.total} {st.hn}")
-                    return ("return", st, value) if ret else ("break", st)
+            def leave(env, st, rest, i=i, name=name, vv=vv):
                 v = vv(env)
                 st.out.append(f"bd{i} {st.total} {st.hn}")
                 return rest({**env, name: v}, st)
@@ -210,8 +194,7 @@ def first_success(seed, expected):
                     return cgen(env, st, lambda v, st2: leave({**env, w: v}, st2, rest))
             else:
                 step = leave
-            exit_text = f"return {rt}" if ret else "break"
-            clauses.append((f"{name} := block{{ {'; '.join(stmts)}; if ({pt}) then {exit_text}; {vt} }}", step))
+            clauses.append((f"{name} := block{{ {'; '.join(stmts)}; {vt} }}", step))
             bound.append(name)
     first_choice = next(n for n in bound if n.startswith("X"))
 
@@ -223,24 +206,12 @@ def first_success(seed, expected):
     # The run, as the program does it.
     st = St()
     J = 0
-    returned = None
     while True:
         J += 1
         K = 0
         while True:
             r = search({"K": K, "J": J}, st.copy())
-            if r[0] == "return":
-                # (it leaves the loops, each running its cleanup, then the function)
-                st, returned = r[1], r[2]
-                st.total += loop_delta
-                st.hn += loop_delta
-                st.out.append(f"loop cleanup {K} {st.total} {st.hn}")
-                if nested:
-                    st.out.append(f"outer cleanup {J} {st.total} {st.hn}")
-                break
-            if r[0] == "break":
-                st = r[1]
-            elif form == "for":
+            if form == "for":
                 if r[0] == "ok":
                     st = r[2]
                 st.out.append(f"for {1 if r[0] == 'ok' else 0} {st.total} {st.hn}")
@@ -250,20 +221,19 @@ def first_success(seed, expected):
                 st.out.append(" ".join(["then"] + [str(r[1][n]) for n in shown] + [str(st.total), str(st.hn)]))
             else:
                 st.out.append(f"else {st.total} {st.hn}")
-            if r[0] != "break":
-                K += 1
+            K += 1
             st.total += loop_delta
             st.hn += loop_delta
             st.out.append(f"loop cleanup {K} {st.total} {st.hn}")
-            if r[0] == "break" or K >= reps:
+            if K >= reps:
                 break
-        if not nested or returned is not None:
+        if not nested:
             break
         st.out.append(f"outer {J} {K}")
         st.out.append(f"outer cleanup {J} {st.total} {st.hn}")
         if J >= outer_reps:
             break
-    answer = st.total if returned is None else returned
+    answer = st.total
     st.total += fn_delta
     st.hn += fn_delta
     st.out.append(f"function cleanup {st.total} {st.hn}")
@@ -284,7 +254,7 @@ def first_success(seed, expected):
         consumer = (f"Opt := option{{{'; '.join(texts)}; {first_choice}}}\n{ind}if (R := Opt?):\n{ind}    {then}\n"
                     f"{ind}else:\n{ind}    Print(\"else {{Total}} {{H.N}}\")")
     else:
-        # (in a for's filters: a source break crosses the for too)
+        # (in a for's filters)
         consumer = (f"for (Y := 0..0, B := (if ({', '.join(texts)}) then 1 else 0)):\n"
                     f"{ind}    Print(\"for {{B}} {{Total}} {{H.N}}\")")
     inner = (f"loop:\n{ind}defer:\n{ind}    set Total += {loop_delta}\n{ind}    set H.N += {loop_delta}\n"
@@ -352,12 +322,13 @@ for style in ("plain", "composed", "exclusive"):
 body_delta, filter_delta, loop_delta, fn_delta = [rng.randint(1, 7) for _ in range(4)]
 reachable = [(a, b) for a in range(na, -1, -1) for b in range(nb, -1, -1)
              if a >= cut_a and b >= cut_b]
-stop = rng.choice([-1] + [a * 10 + b for a, b in reachable])
+# (the stream as it was when a break could stop the for among its filters:
+# seeds keep their other draws)
+rng.choice([-1] + [a * 10 + b for a, b in reachable])
 
 # Each real generator begins its own filter snapshot. No producer effects.
 total = field = count = 0
 out = []
-stopped = False
 for a in range(na, -1, -1):
     before_a = total, field, len(out)
     total += a
@@ -376,22 +347,13 @@ for a in range(na, -1, -1):
             total, field, size = before_b
             del out[size:]
             continue
-        if a * 10 + b == stop:
-            total += filter_delta
-            field += filter_delta
-            out.append(f"filter cleanup {total} {field}")
-            stopped = True
-            break
         out.append(f"keep {a} {b}")
         total += body_delta
         field += body_delta
         out.append(f"local cleanup {total} {field}")
         out.append(f"body {a} {b} {total} {field}")
         count += 1
-    if stopped:
-        break
-if not stopped:
-    out.append(f"completed {count if used else field}")
+out.append(f"completed {count if used else field}")
 total += loop_delta
 field += loop_delta
 out.append(f"loop cleanup {total} {field}")
@@ -411,13 +373,16 @@ RefLazy(N:int)<transacts><decides>:counter =
     N >= 0
     counter{N:=N} | RefLazy[N-1]
 '''
+# (exclusive: a <decides> function's return is in tail position, a branch of
+# its last if: anywhere else it would leave its failure context, which the
+# Book of Verse refuses, Return.versetest:157)
 if source_style == "exclusive":
     pre += '''ExLazy(N:int)<computes><decides>:int =
     if(N<0):return Lazy[N]
-    Lazy[N]
+    else:Lazy[N]
 ExRefLazy(N:int)<transacts><decides>:counter =
     if(N<0):return RefLazy[N]
-    RefLazy[N]
+    else:RefLazy[N]
 '''
 if refined:
     pre += 'pair(a:type,b:type) := class {}\ndup(t:type) := class(pair(t,t)) { C:int }\n'
@@ -440,14 +405,7 @@ clauses.append(f"{'EB' if refs_b else 'B'} := {source_b}")
 if refs_b:
     clauses.append("B := EB.N")
 clauses += ["set Total += B", "set H.N += B + 1", 'Print("b {B} {Total} {H.N}")', f"B >= {cut_b}",
-            f'''if (A * 10 + B = {stop}):
-                defer:
-                    set Total += {filter_delta}
-                    set H.N += {filter_delta}
-                    Print("filter cleanup {{Total}} {{H.N}}")
-                break
-            else:
-                Print("keep {{A}} {{B}}")''']
+            'Print("keep {A} {B}")']
 body = f'''loop:
                 defer: Print("local cleanup {{Total}} {{H.N}}")
                 set Total += {body_delta}
@@ -475,8 +433,6 @@ print(pre + f'''Run(H:counter{params}){mode}:int =
             Print("loop cleanup {{Total}} {{H.N}}")
         {loop}
         Print("completed {{{finish}}}")
-        if ({stop} >= 0):
-            Err()
         break
     Total
 Main(){mode}:void =

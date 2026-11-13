@@ -15,7 +15,7 @@ for ((s=first; s<first+n; s++)); do
       [[ ! -f "$tmp/p.verse" || ! -f "$tmp/want.out" ]]; then
     bad=$((bad+1)); echo "GENERATOR FAILED seed $s"; continue
   fi
-  timeout 60 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" > "$tmp/l.out" 2>&1; le=$?
+  timeout 60 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" > "$tmp/l.out" 2>&1; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.out"
   ok=1
   if [[ $le -ne 0 ]] || ! cmp -s "$tmp/l.out" "$tmp/want.out"; then ok=0
   elif [[ ! -s "$tmp/p.vbc" ]]; then ok=0

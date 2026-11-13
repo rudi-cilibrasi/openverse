@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""First-success returns preserve rollback, producer prefixes and snapshots."""
+"""First-success returns preserve rollback, producer prefixes and snapshots.
+
+The return is in the branch of the if whose condition takes the first
+success, its value bound by the condition's last clause: a return cannot
+leave the condition, a failure context (the Book of Verse's tests,
+`Reachability.versetest:12`). --control writes the producers without
+choices."""
 import argparse
 from pathlib import Path
 import random
@@ -67,15 +73,12 @@ if args.control and kind != 2:
     prod_a, prod_b = '|'.join(map(str, av)), '|'.join(map(str, bv))
 clauses = [f'A:={prod_a}', f'set H.N+={da}', 'set Total+=A',
            f'B:={prod_b}', f'set H.N+={db}', 'set Total+=B']
-if args.control and stop:
-    # The old compiler can bind the operand as a normal condition value,
-    # then return it from the branch. No later clause ran in the source.
+if stop:
+    # (the operand, bound by the condition's last clause, returned from the
+    # branch: no clause after it runs)
     clauses += ['Returned:=Value[H,A+B,Total,Z]']
     branch = 'return Returned'
 else:
-    if not args.control:
-        decision = 'true' if stop else 'false'
-        clauses += [f'if({decision}?)then return Value[H,A+B,Total,Z] else 0']
     clauses += [f'Mod[A+B,{modulus}]={remainder}', 'After:[]t=Concatenate()']
     branch = 'Print("then {A+B} {After.Length} {Total} {H.N}")'
 print(f'''    if({','.join(clauses)}):{branch}

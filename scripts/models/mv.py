@@ -5,7 +5,7 @@
 # for the reviews of #234, #239 and #245 (choice and functions with several values, #208, #235),
 # laziness from the review of #267 (generators taken where they are consumed, #246),
 # exact effects where the first success is taken from the review of #275,
-# consumers in methods from the review of #279, a return in a test's clauses from #284 and #287,
+# consumers in methods from the review of #279,
 # alternatives with several values from the review of #296, blocks and constructions from #302,
 # named arguments from #305, functions with several values and named parameters from #307,
 # methods with several values from #310 (overridden from #328, of one name in unrelated classes from #283's
@@ -54,8 +54,6 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
        lazy      (recursive generators taken lazily, #246/#267; on by default
                   with mv, rec and bif; nolazy turns it off)
        noforset  (no op= / indexed set in a for)
-       noret     (no `if (A op B) then return else true` among a test's clauses,
-                  on with lazy otherwise, #284/#287)
        nort      (no call of RT, a function with several values with an early return
                   whose value is a choice; on with lazy otherwise, #312)
        nomvm     (no bare call, in a test that runs as a method, of that class's own
@@ -312,15 +310,10 @@ FXFIRST = [0]
 # such a field after a generator call keeps only the successful attempt's
 # value, as a local's would: the model treats the fields as the test's vars.
 METH = LAZY and 'nometh' not in flags
-# ---- #284/#287, flag ret (on with lazy; noret turns it off): a test's if or
-# for has a clause `if (A op B) then return else true` (A, B names bound before
-# it, the test's vars, literals). A return inside a failure context leaves the
-# function, and nothing the condition did is rolled back (LANGUAGE.md); the
-# test prints its state in a defer:, so it is still checked. After a call of a
-# generator with effects where the first success is taken (run as a function
-# of its own, #275), a return now uses an explicit source exit. The legacy
-# refusal flag preserves older source/oracle pairs for baseline controls.
-RET = LAZY and 'noret' not in flags
+# (#284/#287's return among a test's clauses, `if (A op B) then return else
+# true`, is gone: a return cannot leave a failure context, the Book of Verse's
+# tests, Reachability.versetest:12; the return in the branch of RT and RT2 below
+# leaves none)
 # ---- #296, flag altch (on with lazy; noaltch turns it off): an alternative
 # of a choice in a test's code may have several values of its own (a choice
 # inside an expression, a call of a function with several values or of a
@@ -509,13 +502,6 @@ RT2 = RT and 'nort2' not in flags
 # after its returning path are reached only on fallthrough. Keep this draw
 # independent of the expression generator and its existing seed streams.
 RET_DEFER = RT2 and random.Random(seed * 1000003 + 283391).random() < 0.5
-# ---- #283, with ret: at times the test's return is in a block of its own with a choice of its
-# own and a defer: (its clauses lifted into the test's), returning on some of its values:
-#   Xn := block{ defer: Print("rbN"); Wn := a | b; if (Wn op L) then return else true; Wn }
-# The defer: runs as each value leaves the block, and at the return, which leaves it, before the
-# test's own: LANGUAGE.md's rule for any scope, whether its clauses are lifted or not. A
-# generator of its own decides, so seeds keep their other programs.
-RRB = random.Random(seed * 1000003 + 283392)
 # ---- #283, with rt2 (noretscope turns it off): at times RT2's and RT3's returning branch is in a
 # block or a case's arm instead of an if's branch, with the same reading: a scope that the return
 # ends the invocation from, the rest of the body skipped for its values. Not modelled apart, as
@@ -667,13 +653,6 @@ NEST = SEQ and 'nonested' not in flags
 OTHER = SEQ and 'noother' not in flags
 CLS = SEQ and 'nocls' not in flags
 GDEFER = FRAMES and 'nogdefer' not in flags
-REFUSED = [False]
-
-
-class Return(Exception):
-    def __init__(self, st):
-        self.st = st
-
 
 # the kinds of node whose insides are failure contexts of their own (or an
 # inlined function's arguments), where a lifted call's clauses are not the test's
@@ -2251,11 +2230,6 @@ def show_c(c):
         return f"not ({show_cl(c[1], '; ')})"
     if t == 'logic':
         return f"logic{{{show_cl(c[1], '; ')}}}?"
-    if t == 'ret':
-        return f"if ({show(c[1])[1:-1]}) then return else true"
-    if t == 'rblk':
-        return (f'{c[1]} := block{{ defer: Print("{c[5]}"); {c[2]} := {show(c[3])}; '
-                f'if ({show(c[4])[1:-1]}) then return else true; {c[2]} }}')
     raise AssertionError(c)
 
 
@@ -2893,22 +2867,6 @@ def run_clauses(cl, st, k, mode):
         if res is not None:
             raise Fail()
         return nxt(st)
-    if t == 'ret':
-        if first_inner(lambda s, kk: ev(c[1], s, kk, 'first'), st) is not None:
-            raise Return(st)       # (leaves the test with the state as it is)
-        return nxt(st)
-    if t == 'rblk':
-        # (each value of the block's choice: its return leaves the block, running its
-        # defer:, else the value does as it leaves the block)
-        def krb(v, s):
-            s.binds[c[2]] = v
-            leaving = first_inner(lambda s2, kk: ev(c[4], s2, kk, 'first'), s) is not None
-            s.out.append(c[5])
-            if leaving:
-                raise Return(s)
-            s.binds[c[1]] = v
-            return nxt(s)
-        return ev(c[3], st, krb, mode)
     if t == 'logic':
         res = first_inner(lambda s, kk: run_clauses(c[1], s, lambda s2: kk(None, s2), 'first'), st)
         if res is None:
@@ -3179,7 +3137,6 @@ lines = []
 out = []
 tests = []
 OVERFLOW = [False]
-SKIPRET = [False]
 if REC:
     lines += ["CTw(A:int, B:int)<computes>:int = A * 10 + B",
               "CPos(X:int)<computes><decides>:int =", "    X > 0", "    X"]
@@ -3280,28 +3237,6 @@ for ti in range(NT):
         e = ('bin', '+', ('tell', fresh("t"), leaf([], vars_)), ('choice', [('lit', 1), ('lit', 2)]))
         cl.insert(0, ('bind', x, e))
         scope = [x] + scope
-    has_ret = False
-    if RET and kind in ('if', 'for') and R.random() < 0.35:
-        # where: before the first clause with a lifted call (it runs), or, at
-        # times, after one whose call is at the clause's top.
-        lp = [lift_pos(c) if kind == 'if' else None for c in cl]
-        j = next((i for i, x in enumerate(lp) if x), len(cl))
-        if j < len(cl) and lp[j] == "top" and R.random() < 0.4:
-            pos = R.randint(j + 1, len(cl))
-            REFUSED[0] = 'legacy-first-return-refusal' in flags
-        else:
-            pos = R.randint(0, j)
-        sc = [c[1] for c in cl[:pos] if c[0] in ('bind', 'range')]
-        cl.insert(pos, ('ret', ('cmp', leaf(sc, vars_), [(R.choice(OPS), leaf(sc, vars_))])))
-        has_ret = True
-        if RRB.random() < 0.4 and not lift_block() and (not MV or PROD[0] * 2 <= CTX['plim']):
-            if MV:
-                PROD[0] *= 2
-            w = fresh("W")
-            alts = [('tell', fresh("t"), ('lit', RRB.randint(-1, 5))), ('lit', RRB.randint(-1, 5))]
-            RRB.shuffle(alts)
-            cl[pos] = ('rblk', fresh("X"), w, ('choice', alts),
-                       ('cmp', ('ref', w), [(RRB.choice(OPS), ('lit', RRB.randint(-1, 5)))]), fresh("rb"))
     show_state = ('Print("st {' + vars_[0] + '} {' + vars_[1] + '} {K.C} {J.C} '
                   '{A[0] or 9}{A[1] or 9}{A[2] or 9}{A[3] or 9} {F}' + (' {Cn}' if meth else '') + '")')
 
@@ -3360,15 +3295,12 @@ for ti in range(NT):
             L.append(f'        Print("then {vals_str}")')
             L.append("    else:")
             L.append('        Print("else")')
-            try:
-                res = first_inner(lambda s, kk: run_clauses(cl, s, lambda s2: kk(None, s2), 'first'), st)
-                if res is not None:
-                    st = res[1]
-                    st.out.append(f"then {vals(st)}")
-                else:
-                    st.out.append("else")
-            except Return as r:
-                st = r.st
+            res = first_inner(lambda s, kk: run_clauses(cl, s, lambda s2: kk(None, s2), 'first'), st)
+            if res is not None:
+                st = res[1]
+                st.out.append(f"then {vals(st)}")
+            else:
+                st.out.append("else")
         elif kind in ('first', 'ifmacro', 'option', 'or'):
             body = show_cl(cl, '; ')
             if kind == 'first':
@@ -3413,8 +3345,6 @@ for ti in range(NT):
                 st = run_clauses(cl, s0, fbody, 'all')
             except Fail:
                 pass
-            except Return as r:
-                st = r.st
         else:  # formacro
             last = cl[-1]
             L.append(f"    Vs := for{{{show_cl(cl, '; ')}}}")
@@ -3432,31 +3362,26 @@ for ti in range(NT):
             st.out += [f"e {v}" for v in vs]
     except StOverflow as ov:
         # (the program stops in this test: the later ones never run)
-        if has_ret:
-            SKIPRET[0] = True    # (whether its defer runs then is not modelled)
         L.append("    " + show_state)
         lines += as_method(L)
         tests.append(name)
         out += [f"== {name}"] + ov.st.out
         OVERFLOW[0] = True
         break
-    if has_ret:
-        L[7:7] = ["    defer:", "        " + show_state]     # (after F's declaration)
-    else:
-        L.append("    " + show_state)
+    L.append("    " + show_state)
     tout = st.out + [state_line(st)]
     lines += as_method(L)
     tests.append(name)
     out += [f"== {name}"] + tout
 
-if HM and not OVERFLOW[0] and not REFUSED[0]:
+if HM and not OVERFLOW[0]:
     hm_decls, hm_test, hm_out = gen_hetero_methods(random.Random(seed * 1000003 + 283336),
                                                    random.Random(seed * 1000003 + 283580))
     lines += hm_decls + hm_test
     tests.append("HetMethods")
     out += ["== HetMethods"] + hm_out
 
-if BIF and not OVERFLOW[0] and not REFUSED[0]:
+if BIF and not OVERFLOW[0]:
     incomplete_src, incomplete_out = gen_incomplete_if(random.Random(seed * 1000003 + 283))
     lines += incomplete_src
     tests.append("IncompleteIf")
@@ -3559,9 +3484,4 @@ if os.environ.get('MVSEQ'):
           f" made={','.join(made)}", file=sys.stderr)
 if os.environ.get('MVSTATS'):
     print(f"stats gens={len(GFUNCS)} gfor={STATS['gfor']} gfirst={STATS['gfirst']} gback={STATS['gback']} lfirst={STATS['lfirst']} lback={STATS['lback']} lmeth={STATS['lmeth']}", file=sys.stderr)
-if SKIPRET[0]:
-    open(f"{outdir}/p.expected", "w").write("SKIP (a return in a test that overflows)\n")
-elif REFUSED[0]:
-    open(f"{outdir}/p.expected", "w").write("exit=4\n")
-else:
-    open(f"{outdir}/p.expected", "w").write("".join(l + "\n" for l in out) + ("exit=2\n" if OVERFLOW[0] else "exit=0\n"))
+open(f"{outdir}/p.expected", "w").write("".join(l + "\n" for l in out) + ("exit=2\n" if OVERFLOW[0] else "exit=0\n"))
