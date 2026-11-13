@@ -42,18 +42,24 @@ partial def elabExprControlWith
     -- an `else`: any `if`'s type, `ifBranches`, the branch, the clauses
     -- after the cast and `thenE`, typed under the refinement
     -- (`refinedIfType`), the clauses before it as they are; nothing
-    -- is kept, so that every elaboration decides the same)
+    -- is kept, so that every elaboration decides the same. `none` when the
+    -- clause is no cast that refines: an index or a call, `D := F[X]`, looks
+    -- the same (`Refine.castClause?`), and so does a cast of no type
+    -- arguments. When the rule gives the `if` no type, why not.)
     let refinedIfTy (k : Nat) (ee : SExpr) : EM (Option (Ty × Bool)) := do
       let st ← get
       let some (_, d, T, x) := conds[k]?.bind Refine.castClause? | return none
-      let τ? ← tryCatch (do
-          let c ← if k == 0 then pure ctx else
-            pure (← elabSeq { ctx with canFail := true, inTaking := true, typeOnly := true } (conds.take k) none).2
-          let branch := Refine.castRest p (conds.drop (k + 1)) thenE (some (Refine.noValue p))
-          refinedIfType { c with canFail := ctx.canFail, inTaking := ctx.inTaking, typeOnly := true } p d T x branch ee)
-        fun _ => pure none
+      let c ← if k == 0 then pure ctx else
+        pure (← elabSeq { ctx with canFail := true, inTaking := true, typeOnly := true } (conds.take k) none).2
+      let branch := Refine.castRest p (conds.drop (k + 1)) thenE (some (Refine.noValue p))
+      let τ? ← refinedIfType { c with canFail := ctx.canFail, inTaking := ctx.inTaking, typeOnly := true } p d T x branch ee
       set st
       return τ?
+    -- (at an expected type `τ`, `attempt`'s branch as it is, else, when
+    -- that is refused, at `τ`, as an `if`'s branches are, `ifBranches`, and
+    -- as with the cast alone: `false` for an option has no type of its own)
+    let atExpected {α : Type} (τ : Ty) (attempt : Ty → Option STy → EM α) : EM α :=
+      tryCatch (attempt τ none) fun err => tryCatch (attempt τ (some τ.toSTy)) fun _ => throw err
     let nested (k : Nat) (_ : String) : EM (Option R) := do
       let castC := conds[k]!
       let st0 ← get
@@ -106,15 +112,10 @@ partial def elabExprControlWith
           let xv ← fresh τ
           return ⟨.seq (.assign t r.e) (.ite (.assign xv (.prim .query [.local t])) (.local xv) eE), τ⟩
         match exp with
-        | some τ => return some (← attempt τ)
+        | some τ => return some (← atExpected τ fun τ at? => attempt τ at?)
         | none =>
-          if let some (τ, atType) ← refinedIfTy k ee then
-            return some (← attempt τ (if atType then some τ.toSTy else none))
-          let st1 ← get
-          let re ← elabE ctx ee none
-          set st1
-          if re.ty == .void then return some (← attempt .void)
-          return some (← tryCatch (attempt re.ty) fun _ => do set st1; attempt .void)
+          let some (τ, atType) ← refinedIfTy k ee | return none
+          return some (← attempt τ (if atType then some τ.toSTy else none))
     -- (and in a failure context, the branches, which are in it too: a cast
     -- in one that is an expression makes it the block of it)
     let branches : List (SExpr × (SExpr → EM R)) := if !ctx.canFail then [] else
@@ -170,28 +171,14 @@ partial def elabExprControlWith
             let xv ← fresh τ
             return some ⟨.seq (.assign t r.e) (.ite (.assign xv (.prim .query [.local t])) (.local xv) eE), τ⟩
           | none => return none
-        -- (without an expected type: any `if`'s, `refinedIfTy`; when that
-        -- cannot be found, the else's, else void, as a statement whose
-        -- branches' types differ, a later elaboration deciding as the first
-        -- did: by the result type of the function it asked for, `logic` for
-        -- void)
+        -- (without an expected type: any `if`'s, `refinedIfTy`; none for a
+        -- clause that is no cast that refines, which the `if` takes as any)
         let r? ← match exp with
-          | some t => attempt t
+          | some t => atExpected t fun τ at? => attempt τ at?
           | none => do
             match ← refinedIfTy 0 ee with
             | some (τ, atType) => attempt τ (if atType then some τ.toSTy else none)
-            | none =>
-              let st0 ← get
-              let re ← elabE ctx ee none
-              set st0
-              -- (in a source context, the lift's tag depends on its type)
-              let asked (τ : Ty) := ctx.types.requests.casts.find? (·.key ==
-                Refine.keyOf p d (refineTagOf ctx x (innerOf τ) (some (.ident p "false")) (some (rtyOf τ))))
-              match (asked .void).orElse fun _ => asked re.ty with
-              | some l => attempt (match l.ret with | .name "logic" => .void | _ => re.ty)
-              | none =>
-                if re.ty == .void then attempt .void
-                else tryCatch (attempt re.ty) fun _ => attempt .void
+            | none => pure none
         if let some r := r? then return r
     let (rc, ctxT) ← if Choice.hasChoice conds (choiceOrder ctx) then elabOneClauses { ctx with canFail := true } conds
       else elabSeq { ctx with canFail := true, inTaking := true } conds none
