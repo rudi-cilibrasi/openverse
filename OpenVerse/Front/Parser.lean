@@ -219,6 +219,12 @@ partial def parseSpecs : PM (List String) := do
         | _ => perr (← peekT) "expected an effect or specifier name"
       if n == "scoped" && (← peekT).isSym "{" then
         n := s!"scoped\{{",".intercalate (← parseScopeRefs)}}"
+      -- (`<getter(GetX)>`, `<setter(SetX)>`: a field's accessors, Book of
+      -- Verse ch. 10, "Fields with Accessors", kept as `getter(GetX)`)
+      else if (n == "getter" || n == "setter") && (← peekT).isSym "(" then
+        bump
+        n := s!"{n}({← expectIdent})"
+        expectSym ")"
       else
         while (← peekT).isSym "." do bump; n := n ++ "." ++ (← expectIdent)
       expectSym ">"
