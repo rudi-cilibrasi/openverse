@@ -171,7 +171,9 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
       match tysA[kr]!, f? with
       | .struct sn _, some f =>
         if !ctx.types.isVarField sn f then eerr sp (classSetMsg sn f)
+        checkMemberAccess ctx.types sp sn f (write := true)
       | _, _ => eerr p "internal: set path"
+
     if refLevel?.isNone && !l.mutable then
       eerr p s!"'{root}' is not a var; declare it with var {root}:t = …"
     -- read one step of the container in slot `c` of type `cty`
@@ -379,6 +381,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
           let some (k, t) := fieldIndex (ctx.types.fields sn targs) f
             | eerr p s!"class {sn} has no field '{f}'"
           if !ctx.types.isVarField sn f then eerr p (classSetMsg sn f)
+          checkMemberAccess ctx.types p sn f (write := true)
           let r ← rhsAt t
           noteFx p (if op.isSome then ["reads", "writes"] else ["writes"])
           let v ← match op with

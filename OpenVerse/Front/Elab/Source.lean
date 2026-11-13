@@ -39,6 +39,8 @@ structure Admitted where
   /-- The construction effects each class and struct of the source declares
       (`EffectPolicy.constructionFx`), by its name. -/
   constructionFx : Std.HashMap String (List String)
+  /-- What the elaboration needs to judge a use of a class's member (`Access.Env`). -/
+  access : Access.Env := {}
 
 /-- Each name is defined once in its scope, the top level or a module: only
     functions of one scope share a name, as its overloads. A class, an
@@ -360,6 +362,11 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   -- type aliases: each written out where it is used, so that nothing after
   -- this knows aliases exist
   let resolved ← Aliases.expand resolved
+  -- access (Book of Verse ch. 12): the constructions, parents and overrides
+  -- of the program as written, and what the elaboration needs to judge the
+  -- members it reaches through values (`Access`)
+  let access := Access.Env.of (Access.Levels.of allTops0r) (Access.Sites.of resolved) resolved
+  Access.checkUses access resolved
   -- (the built-ins it names as values, as definitions of their own: after
   -- the aliases, whose names are no values' and bind nothing)
   let resolved := BuiltinValues.wrappers resolved ++ resolved
@@ -403,7 +410,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
     | .classDef _ n _ _ specs .. | .const _ n _ _ (.structDef _ _ specs _) =>
       budgets.insert n (EffectPolicy.constructionFx specs)
     | _ => budgets) ({} : Std.HashMap String (List String))
-  return { resolved, rawEntry, typeDefaults, helpers, intrinsicCalls, concurrencyNames, usesConc, constructionFx,
+  return { resolved, rawEntry, typeDefaults, helpers, intrinsicCalls, concurrencyNames, usesConc, constructionFx, access,
            scopePairs }
 
 /-- A program's source as elaborated (`inlineSource`). -/
@@ -417,6 +424,9 @@ structure Source where
   entry : List STop
   /-- `Admitted.constructionFx`, and those that materialized requests declare. -/
   constructionFx : Std.HashMap String (List String)
+  /-- `Admitted.access`. -/
+  access : Access.Env := {}
+
   /-- The uses of methods whose family the receiver's class picks (#283). -/
   familySites : List (Pos × String)
   /-- The calls whose overload the arguments' types pick (#283). -/
@@ -524,8 +534,9 @@ def inlineSource (allTops0r : List STop) (requests : Requests) (admitted : Admit
       (resolved.drop (resolved.length - admitted.rawEntry.length)) (requests.fns.map fun (n, t) => (n, t.toSTy))
       requests.methods written))
   let entryTop := resolved.drop (resolved.length - admitted.rawEntry.length)
-  return { tops := allTops00, entry := entryTop, constructionFx, familySites, overloadSites, nestedSites,
-           fieldSites }
+  return { tops := allTops00, entry := entryTop, constructionFx, access := admitted.access, familySites,
+           overloadSites, nestedSites, fieldSites }
+
 
 /-- A program's definitions complete (`argsAndMethodOverloads`), as the class
     phases start from them. -/

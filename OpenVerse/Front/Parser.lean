@@ -1031,7 +1031,7 @@ partial def parseField (c : Nat) : PM SField := do
   let start ← peekT
   let isVar := (← peekT).isKw "var"
   if isVar then bump
-  let varSpecs : List String := []
+  let varSpecs ← if isVar then parseSpecs else pure []
   let n ← expectBinder
   let specs ← parseSpecs
   expectSym ":"
@@ -1572,7 +1572,9 @@ partial def parseClassItem (c : Nat) : PM (Sum SField STop) := do
     return .inr (.fn t.pos "$block" [] [] [] (.name "void") body)
   let isVar := t.isKw "var"
   if isVar then bump
-  let varSpecs : List String := []
+  -- (`var<private> X<public>:t`: its write access, Book of Verse ch. 12)
+  let varSpecs ← if isVar then parseSpecs else pure []
+
 
   -- `(q:)M`, `(q:)F:t`: a member whose qualifier names where it is defined:
   -- the class itself, or, for an override, what introduces it (an
