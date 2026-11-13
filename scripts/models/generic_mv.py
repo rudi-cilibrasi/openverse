@@ -694,9 +694,26 @@ d{n}({child_tps}) := class({parent}):{extra_field}
         raise ValueError(k)
 
 # ---------------------------------------------------------------- the model's executor
+# The rule a `for` follows (docs/research/readings-audit.md, "What a for
+# undoes"): `OV_FOR_BOOK`, a comma-separated list of the kinds of choice point
+# whose fors follow the Book of Verse's rule (`all`: every for), by default the
+# kinds the compiler gives that rule; a for that reaches another kind keeps the
+# old one. Every for of this model takes the values of calls of functions with
+# several values (kind `call`). By that rule a
+# for's clauses are one search, as a first-success context's are, that goes on
+# after each success: reaching the body commits, and an alternative whose
+# clauses lead to no body is undone as a whole (FlowControl/for.versetest
+# 317-392, Range.versetest 140, 159). The old rule keeps what an alternative's
+# own clauses did once they succeed, even when later generators give nothing.
+FOR_BOOK = set(os.environ.get('OV_FOR_BOOK', '').split(',')) - {''}
+
+
 class Machine:
     def __init__(self):
         self.out = []
+        # (the bodies run so far, and the rule of the innermost for)
+        self.commits = 0
+        self.book = [False]
 
     def fail(self, mode, seg):
         del self.out[seg:]
@@ -739,10 +756,11 @@ class Machine:
                     _, var, w, z = ins
                     alts = [[("val", var, env[w])], [("val", var, z)]]
                 for alt in alts:
-                    snap = len(self.out)
+                    snap, commits = len(self.out), self.commits
                     cont = (lambda e, s, seq=seq, i=i: self.run(seq, i + 1, e, k, mode, s))
                     if self.run(alt, 0, env, cont, mode, snap): return True
-                    if mode == "first": del self.out[snap:]
+                    if mode == "first" or (self.book[-1] and self.commits == commits):
+                        del self.out[snap:]
                 return False
             else:
                 raise ValueError(op)
@@ -761,12 +779,20 @@ class Machine:
         del self.out[snap:]
         return None
 
-    def forall(self, seq, body, env=None):
+    def forall(self, seq, body, env=None, kinds=frozenset({'call'})):
         env = env or {}
-        snap = len(self.out)
+        snap, commits = len(self.out), self.commits
         def k(e, s):
+            self.commits += 1
             body(e); return False
-        self.run(seq, 0, env, k, "for", snap)
+        self.book.append('all' in FOR_BOOK or kinds <= FOR_BOOK)
+        try:
+            self.run(seq, 0, env, k, "for", snap)
+            # (the Book's rule: what the search did since the last success is undone)
+            if self.book[-1] and self.commits == commits:
+                del self.out[snap:]
+        finally:
+            self.book.pop()
 
 # ---------------------------------------------------------------- the program
 class Gen:

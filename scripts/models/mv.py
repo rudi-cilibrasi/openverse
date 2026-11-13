@@ -195,6 +195,95 @@ class Fail(Exception):
     pass
 
 
+# The rule a `for` follows (docs/research/readings-audit.md, "What a `for`
+# undoes"): `OV_FOR_BOOK`, a comma-separated list of the kinds of choice point
+# (below) whose fors follow the Book of Verse's rule (`all`: every for), by
+# default those the compiler gives that rule; a for that reaches another kind
+# keeps the old one. By that rule a
+# for's clauses are one search, as a first-success context's are, that goes on
+# after each success: reaching the body commits, a failure undoes back to the
+# last choice point, and a choice point none of whose alternatives reaches the
+# body fails (FlowControl/for.versetest 317-392, Range.versetest 140, 159). The
+# old rule: a failure undoes back to the most recent generator, whose
+# alternative's clauses that succeeded stay, even when later ones give nothing.
+FOR_BOOK = set(os.environ.get('OV_FOR_BOOK', '').split(',')) - {''}
+FOR_RULE = ['old']    # (the rule of the innermost for being run)
+
+# The kinds of choice point a for's clauses reach, as LANGUAGE.md tells them
+# apart: plain (a range), choice (a choice whose alternatives are values: none
+# has a choice or a call with several values of its own, a parenthesized
+# choice spliced in), composed (one whose alternatives do), exclusive (an `if`
+# or `case` that picks a branch with a choice, an `or` with one on its right),
+# call (a call of a function or method with several values, anywhere in the
+# clauses, nested failure contexts included).
+MANY_VALUED = {'mcall', 'rcall', 'gcall', 'gself', 'rt', 'rt2', 'rt3', 'nam', 'mvm', 'mvm2',
+               'ovl', 'ows', 'ow2', 'om', 'owr', 'gx', 'gchoice', 'gbif', 'gblk'}
+
+
+def has_call(x):
+    if isinstance(x, tuple) and x and isinstance(x[0], str) and x[0] in MANY_VALUED:
+        return True
+    return isinstance(x, (tuple, list)) and any(has_call(y) for y in x)
+
+
+def has_choice(x):
+    """a choice the code around x takes (not one of a failure context inside it)"""
+    if not isinstance(x, tuple) or not x or not isinstance(x[0], str):
+        return isinstance(x, (tuple, list)) and any(has_choice(y) for y in x)
+    t = x[0]
+    if t in ('choice', 'bif', 'casex') or t in MANY_VALUED:
+        return True
+    if t in ('not', 'logic'):
+        return False
+    if t == 'optor':
+        return has_choice(x[2])
+    if t == 'orx':
+        return has_choice(x[2])
+    if t == 'ifx':
+        return has_choice(x[2]) or has_choice(x[3])
+    return any(has_choice(y) for y in x[1:])
+
+
+def e_kinds(x):
+    """the kinds of the choice points the for takes from x"""
+    if not isinstance(x, tuple) or not x or not isinstance(x[0], str):
+        return set().union(*(e_kinds(y) for y in x)) if isinstance(x, (tuple, list)) else set()
+    t = x[0]
+    if t == 'choice':
+        alts = [a for a in x[1] if not (isinstance(a, tuple) and a and a[0] == 'choice')]
+        return {'composed'} if any(has_choice(a) for a in alts) else {'choice'}
+    if t in ('bif', 'casex'):
+        return {'exclusive'}
+    if t in ('not', 'logic'):
+        return set()
+    if t in ('optor', 'orx'):
+        return {'exclusive'} if has_choice(x[2]) else set()
+    if t == 'ifx':
+        return {'exclusive'} if has_choice(x[2]) or has_choice(x[3]) else set()
+    if t == 'range':
+        return {'plain'}
+    if t == 'setc':
+        return {'choice'} | e_kinds(x[2])
+    return set().union(*(e_kinds(y) for y in x[1:]))
+
+
+def for_kinds(cl):
+    return e_kinds(list(cl)) | ({'call'} if has_call(cl) else set())
+
+
+def for_book():
+    return FOR_RULE[-1] == 'book'
+
+
+def run_for_clauses(cl, st, k, kinds=None):
+    """A for's clauses, all their successes, under the rule for its kinds."""
+    FOR_RULE.append('book' if 'all' in FOR_BOOK or (kinds is not None and kinds <= FOR_BOOK) else 'old')
+    try:
+        return run_clauses(cl, st, k, 'all')
+    finally:
+        FOR_RULE.pop()
+
+
 class ForBodyFail(Exception):
     """(#283) a for's body failed: the for fails, not only that iteration."""
 
@@ -1568,10 +1657,11 @@ def gen_call(fi, vals, st, k, mode):
     for (p, _), v in zip(f['params'], vals):
         st.binds[f"{fr}.{p}"] = v
     LASTG[0] = f.get('lifted', False)
-    if mode == 'all':
+    if mode == 'all' and not for_book():
         # (in a for, a call whose clauses fail gives no values: what its
         # arguments and the clauses before it did stays, and its clauses' own
-        # effects go, LANGUAGE.md, as for an eager one)
+        # effects go, LANGUAGE.md, as for an eager one; by the Book's rule, its
+        # failure is any clause's, undone back to the last choice point)
         s0 = st.copy()
         try:
             return run_body(stmts, val, st, k, mode)
@@ -2266,13 +2356,19 @@ def choice_point(thunks, st, k, mode, gen=False):
                         STATS['lback'] += 1
                 continue
         raise Fail()
-    cur = st
+    cur, got = st, False
     for th in thunks:
         s1 = cur.copy()
         try:
             cur = th(s1, k)
+            got = True
         except Fail:
             pass
+    if not got and for_book():
+        # (the Book's rule: a choice point none of whose alternatives
+        # reaches the body fails, so what came before it since the last
+        # success is undone with the alternative it is in)
+        raise Fail()
     return cur
 
 
@@ -2488,7 +2584,7 @@ def ev(e, st, k, mode):
                     return k1(v, s3)
                 return choice_point([told, (lambda s2, k2: k2(chks(a + 3, s2), s2))], s1,
                                     kodd if e[1] == 'd' else k1, mode, True)
-            if mode == 'all':
+            if mode == 'all' and not for_book():
                 s0 = s.copy()
                 try:
                     return body(s, k)
@@ -2763,7 +2859,7 @@ def run_body(stmts, val, st, k, mode):
             return s
         s0 = st.copy()
         try:
-            st = run_clauses(c[1], s0, kfor, 'all')
+            st = run_for_clauses(c[1], s0, kfor, for_kinds(c[1]))
         except ForBodyFail:
             raise Fail()
         except Fail:
@@ -3342,7 +3438,7 @@ for ti in range(NT):
                 return s
             s0 = st.copy()
             try:
-                st = run_clauses(cl, s0, fbody, 'all')
+                st = run_for_clauses(cl, s0, fbody, for_kinds(cl))
             except Fail:
                 pass
         else:  # formacro
@@ -3356,7 +3452,7 @@ for ti in range(NT):
                 return s
             s0 = st.copy()
             try:
-                st = run_clauses(cl, s0, fbody2, 'all')
+                st = run_for_clauses(cl, s0, fbody2, for_kinds(cl))
             except Fail:
                 pass
             st.out += [f"e {v}" for v in vs]
