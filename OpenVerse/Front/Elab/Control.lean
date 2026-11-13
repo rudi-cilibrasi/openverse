@@ -515,9 +515,8 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   if ifType then
     let (τ, atType) ← ifTyAt (elseE.getD (Refine.noValue p))
     return some ⟨.lit (.logic atType), τ⟩
-  -- (the locals the branch uses, in order of first use)
-  let caps : List Local := ctx.captureEvidence ((Choice.namesUsed body).filterMap fun n =>
-    if n == D then none else ctx.locals.find? (·.name == n)) [D]
+  -- (what the branch's function captures: `D` is its first parameter)
+  let caps : List Local := ctx.capturesOf body [D]
   -- (the `var`s from outside it that the branch sets, its `return`s and its
   -- `break`s that leave it, `refineExits`: copies in the branch, and its
   -- function returns what they say, which the caller does after the `if`;

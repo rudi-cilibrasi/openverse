@@ -407,7 +407,7 @@ partial def resolveOverload (ctx : Ctx) (p : Pos) (name : String) (ovs : List St
       | .arrayLit _ es => s!"arr {es.length}"
       | .bin _ o _ _ => s!"bin {o}"
       | _ => "_"
-    let inputs := (ctx.captureEvidence ((Choice.namesUsed a).eraseDups.filterMap ctx.lookup)).map fun l =>
+    let inputs := (ctx.capturesOf a).map fun l =>
       (l.name, l.ty, l.typeValue)
     let typing := reprStr (inputs, ctx.types.tvars, ctx.selfClass, ctx.selfMethod)
     let key := s!"{a.pos.line}:{a.pos.col}:{a.pos.file}:{shape}:{typing}"

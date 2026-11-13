@@ -102,7 +102,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     let bound := { c with locals := { name, slot, ty := bty, mutable := false } :: c.locals }
     let required := if stagePlan.isSome then stageBorrows else []
     let written := SExpr.block q (rest ++ [bd] ++ required.map (SExpr.ident q ·))
-    let caps := bound.captureEvidence (bound.usedLocals written)
+    let caps := bound.capturesOf written
     let key := "stageOrdinary" ++ contKey bound q name (alts ++ rest ++ [bd]) ++
       forStageCaptureKey bound stageArgs caps
     let known := c.types.loopRequests.findSome? (fun l => l.stagePlan.filter (·.key == key))
@@ -297,7 +297,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               let cB := { cA with locals := { name := b.name, slot, ty, mutable := false } :: cA.locals }
               let (f, a, t) ← exclIter cB after more bd stageOverride
               return (.seq codeA f, a, t)
-            let rootCaptures := cA.captureEvidence (cA.usedLocals (.block p (i :: restCl ++ [bd])))
+            let rootCaptures := cA.capturesOf (.block p (i :: restCl ++ [bd]))
             let key := "stage" ++ contKey cA b.pos b.name (i :: restCl ++ [bd]) ++
               forStageCaptureKey cA [] (rootCaptures.filter (·.storage.isSome))
             let plan? := stagePlan.orElse fun _ =>
