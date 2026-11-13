@@ -418,6 +418,10 @@ def classMethods (tops : List STop) (classes : Classes) (fields : Fields) : Exce
             | _ => none
           else none
         if let some (q, m') := qual? then
+          -- (`(n:)M` in `n` itself is `M`, unless a class above has an `M`:
+          -- `resolveModules` keeps the qualifier then)
+          if q == n then
+            throw s!"{mp.show}: ({q}:){m'}: a second method {m'} beside the one {n} inherits (Book of Verse ch. 10, \"Methods with Same Name\"): openverse does not support two methods of one name in a class; override the inherited one with {m'}<override>, or give this one another name"
           if !((classes.henv.supers n).drop 1).contains q then
             throw s!"{mp.show}: ({q}:){m'}: {q} is not a class or interface above {n}"
           let roots := classes.henv.rootsOf (classes.declares · m') q

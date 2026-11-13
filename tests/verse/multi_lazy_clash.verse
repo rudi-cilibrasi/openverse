@@ -2,8 +2,8 @@
 Limit:int = 3
 Step(N:int)<computes>:int = N + 1
 thing := class:
-    Limit:int = 10
-    Step:int = 2
+    (thing:)Limit:int = 10
+    (thing:)Step:int = 2
 Upto(A:int)<computes><decides>:int =
     A <= Limit
     A | Upto[Step(A)]

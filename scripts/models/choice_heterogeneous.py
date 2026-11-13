@@ -216,7 +216,9 @@ if a.methods:
         print('write_payload:=class{var K:int;Kind:int}')
     control_ty = 'write_payload' if a.writes else 'tuple(int,int)'
     key, kind = ('X.K', 'X.Kind') if a.writes else ('X(0)', 'X(1)')
-    print('Score(H:cell,X:' + control_ty + (',Arg:int' if method_arguments else '') + (',Ignored:u' if a.generic_methods else '') + (',?Stamp:int=Default(H,'+key+')' if a.named_methods else '') + (' where u:type' if a.generic_methods else '') + ')<transacts>:int=')
+    # (named apart from the classes' methods Score, which a call of a
+    # generic one could also fit: Verse does not allow shadowing)
+    print('ControlScore(H:cell,X:' + control_ty + (',Arg:int' if method_arguments else '') + (',Ignored:u' if a.generic_methods else '') + (',?Stamp:int=Default(H,'+key+')' if a.named_methods else '') + (' where u:type' if a.generic_methods else '') + ')<transacts>:int=')
     print(f'    if({kind}=0)then Print("m a {{{key}}}") else Print("m b {{{key}}}")')
     print(f'    set H.N+=({kind}+1)*({key}+1)' + ('+Arg' if method_arguments else '') + '\n    ' + key)
     if a.writes:
@@ -279,7 +281,7 @@ for i, d in enumerate(levels):
         extra = ','.join(([f'Argument(H,{i+1})'] if method_arguments else []) + (['X'] if a.generic_methods else []))
         if a.packed_methods and not a.control:
             extra = f'PackedArgument(H,{i+1},X)'
-        score = f'Score(H,A{i}' + (',' + extra if extra else '') + ')' if a.control else f'A{i}.F(A{i}.H,A{i}.K' + (',' + extra if extra else '') + ')' if a.callable_fields else f'A{i}.' + ('Read' if a.members else 'Score') + f'({extra})' + ('.K' if a.members else '')
+        score = f'ControlScore(H,A{i}' + (',' + extra if extra else '') + ')' if a.control else f'A{i}.F(A{i}.H,A{i}.K' + (',' + extra if extra else '') + ')' if a.callable_fields else f'A{i}.' + ('Read' if a.members else 'Score') + f'({extra})' + ('.K' if a.members else '')
     if a.nested_writes and not a.control:
         score = score.replace(f'A{i}.', f'A{i}.C.')
     clauses.append(f"A{i}:=({'|'.join(producers)})")

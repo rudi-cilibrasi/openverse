@@ -2,14 +2,14 @@
 # first run cancels P (two levels up, P running). Expected: P is cancelled
 # at its next wait; C and G go on:
 # G cancelled P / C goes on / P goes on / P defer / G end / C end / end
-G(P:task(int))<suspends>:int =
-    P.Cancel()
+G(Parent:task(int))<suspends>:int =
+    Parent.Cancel()
     Print("G cancelled P")
     Sleep(0.2)
     Print("G end")
     0
-C(P:task(int))<suspends>:int =
-    spawn{G(P)}
+C(Parent:task(int))<suspends>:int =
+    spawn{G(Parent)}
     Print("C goes on")
     Sleep(0.3)
     Print("C end")

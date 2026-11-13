@@ -23,8 +23,8 @@ G(S : string)<transacts>:c =
     Print(S)
     c{K := 2}
 dice := class:
-    Sides : int
-    Roll()<transacts>:int = 1 | Sides
+    (dice:)Sides : int
+    Roll()<transacts>:int = 1 | (dice:)Sides
 player := class:
     D : dice
     Two()<transacts>:int = D.Roll() + D.Roll() * 10

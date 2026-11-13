@@ -39,10 +39,6 @@ structure Alias where
   params : List String
   body : STy
 
-/-- The built-in types' names. -/
-def builtinTypes : List String :=
-  ["int", "logic", "char", "char32", "string", "void", "float", "rational", "any"]
-
 /-- A qualified name as a program writes it: `A.B.c` for `A::B::c`. -/
 def shown (n : String) : String := ".".intercalate (n.splitOn "::")
 

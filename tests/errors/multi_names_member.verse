@@ -3,7 +3,7 @@
 Limit:int = 3
 Small():int = 1 | Limit
 thing := class:
-    Limit:int = 10
+    (thing:)Limit:int = 10
     Show():void =
         for (X := Small()) { Print("{X}") }
 Main():void = thing{}.Show()

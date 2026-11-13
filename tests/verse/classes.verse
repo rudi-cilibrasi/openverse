@@ -37,7 +37,7 @@ config := struct:
     Max:int = Limit
 
 widget := class:
-    Limit:int = 99
+    (widget:)Limit:int = 99
     Make():config = config{}
 
 record := struct:

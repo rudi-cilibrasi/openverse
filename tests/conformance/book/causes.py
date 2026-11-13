@@ -131,7 +131,8 @@ rule("extension-methods", REF, line=r"^\s*\([A-Za-z_]*\s*:[^()]*(\([^()]*\))?[^(
      diag=r"\(parse\)")
 rule("qualified-names", REF, line=r"\((local|super|[A-Za-z_][\w.]*|/[^:)]*):\)\s*[A-Za-z_]")
 rule("qualified-names", REF, diag=r"is not a class or interface above|only a method can be qualified|"
-     r"qualified method")
+     r"qualified method|a second method|keeps one field of a name|does not introduce|"
+     r"has no module at the path|which has no name or path in openverse|stands in for /Verse.org/Verse")
 rule("nested-tuple-parameters", REF, diag=r"expected an identifier, found '\('")
 rule("path-literals", REF, line=r"^\s*/[A-Za-z0-9]|import\s*\(|\(/[A-Za-z]")
 rule("attributes", REF, diag=r"unexpected character '@'")

@@ -10,9 +10,9 @@ base := class:
     X:int = 9
 sub(t:type) := class(base, holder(t)):
     Y:int = 1
-H(H:holder(int)):int = H.Item
-Bump(H:holder(int)):void = set H.Item = H.Item + 1
-G(H:holder(t) where t:type):t = H.Item
+H(Held:holder(int)):int = Held.Item
+Bump(Held:holder(int)):void = set Held.Item = Held.Item + 1
+G(Held:holder(t) where t:type):t = Held.Item
 Main()<suspends>:void =
     I := intbox{Item := 1}
     Bump(I)

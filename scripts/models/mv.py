@@ -3343,8 +3343,10 @@ for ti in range(NT):
                 M += ["    Nx<override>()<transacts>:int =", "        set Cn += 2", "        Cn - 2"]
             M.append(f"    {mv}<override>(Mp{ti}:int):int = Mp{ti} * 3 | (super:){mv}(Mp{ti}) | Mp{ti} - 1")
         M.append(f"{name}():void = {name}c{{}}.Run()")
-        if CTX.get('mvm_used') and CTX.get('mvm_const'):
-            M.insert(0, f"N{ti}a:int = {100 + ti}")    # (a constant named like the field)
+        # (a constant named like the field was written here when
+        # CTX['mvm_const']: Verse does not allow a field to take the name of a
+        # definition around its class, Book of Verse ch. 10, so it no longer is;
+        # the draw stays, so the programs after it are the same)
         return M
     binds = [c[1] for c in cl if c[0] in ('bind', 'range', 'sbind')]
     vals_str = " ".join("{" + b + "}" for b in binds)

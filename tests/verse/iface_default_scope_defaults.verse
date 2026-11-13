@@ -19,11 +19,11 @@ c2(t:type) := interface(container([]t)):
     Sup<override>(?Pre:int = (super:)Base()):int = Pre
 box(a:type) := class(c2(a)):
     X:a
-    Limit:int = 9
-    Help():int = 1000
+    (box:)Limit:int = 9
+    (box:)Help():int = 1000
     V<override>():a = X
 closed := class(c2(int)):
-    Limit:string = "nine"
+    (closed:)Limit:string = "nine"
     V<override>():int = 5
 S(C:c2(u) where u:type):string = "{C.Sum()} {C.Lim()} {C.Sup()}"
 K(C:container(u) where u:type):int = C.Sum(?Pre := 5)

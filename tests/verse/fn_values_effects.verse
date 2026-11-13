@@ -12,7 +12,7 @@ D(X:int)<decides>:int =
 Use(F:int->int):int = F(1)
 UseD(F:type{_(:int)<decides>:int}):int = if (Y := F[1]) then Y else -1
 a := class:
-    Double:int = 7
+    (a:)Double:int = 7
 b := class:
     Get():int->int = Double
 Double(X:int):int = 2 * X

@@ -11,10 +11,10 @@ c2(t:type) := interface(container([]t)):
 box(a:type) := class(c2(a)):
     X:a
     V<override>():a = X
-    Help():int = 5
+    (box:)Help():int = 5
 bl(a:type) := class(c2(a)):
     X:a
-    Limit:int = 7
+    (bl:)Limit:int = 7
     V<override>():a = X
 G(C:container(u) where u:type):u = C.Get()
 Main():void =
