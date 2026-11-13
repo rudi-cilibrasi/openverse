@@ -1228,8 +1228,8 @@ Tests/Bugs/2023-02-20-UseAfterFreeWhenCoercingNestedStructsToDynamicallyTypedVal
 Tests/Bugs/2023-02-20-UseAfterFreeWhenCoercingNestedStructsToDynamicallyTypedValue.versetest:decls	agrees
 Tests/Bugs/2023-02-22-NullDereferenceInResolveIdentifier.versetest:3	agrees
 Tests/Bugs/2023-03-24-OverloadedFunctionMustBeInvoked.versetest:3	agrees
-Tests/Bugs/2023-04-28-IncorrectNameMangling.versetest:12	disagrees-refuses
-Tests/Bugs/2023-04-28-IncorrectNameMangling.versetest:21	disagrees-refuses
+Tests/Bugs/2023-04-28-IncorrectNameMangling.versetest:12	agrees
+Tests/Bugs/2023-04-28-IncorrectNameMangling.versetest:21	agrees
 Tests/Bugs/2023-04-28-IncorrectNameMangling.versetest:decls	disagrees-refuses
 Tests/Bugs/2024-12-02-VerseVMPropertyGeneratorGetOrCreateTupleTypeCrash.versetest:1	agrees
 Tests/Bugs/2026-01-26-FindFirstAsyncSubExprMissingOverrides.versetest:5	disagrees-refuses
@@ -7847,7 +7847,7 @@ Tests/NestedFunctions.versetest:290	not-translatable
 Tests/NestedNamedTupleParameters.versetest:6	disagrees-refuses
 Tests/NestedNamedTupleParameters.versetest:10	agrees
 Tests/NestedNamedTupleParameters.versetest:18	disagrees-refuses
-Tests/NestedNamedTupleParameters.versetest:23	disagrees-refuses
+Tests/NestedNamedTupleParameters.versetest:23	agrees
 Tests/NestedNamedTupleParameters.versetest:29	disagrees-refuses
 Tests/NestedNamedTupleParameters.versetest:39	disagrees-refuses
 Tests/NestedNamedTupleParameters.versetest:50	disagrees-refuses
@@ -7876,9 +7876,9 @@ Tests/NestedObjects.versetest:58	agrees
 Tests/NestedObjects.versetest:68	agrees
 Tests/NestedObjects.versetest:78	agrees
 Tests/NestedObjects.versetest:decls	agrees
-Tests/NestedTupleParameters.versetest:8	disagrees-refuses
-Tests/NestedTupleParameters.versetest:11	disagrees-refuses
-Tests/NestedTupleParameters.versetest:15	disagrees-refuses
+Tests/NestedTupleParameters.versetest:8	agrees
+Tests/NestedTupleParameters.versetest:11	agrees
+Tests/NestedTupleParameters.versetest:15	agrees
 Tests/NestedTupleParameters.versetest:25	not-translatable
 Tests/NestedTupleParameters.versetest:31	not-translatable
 Tests/NestedTupleParameters.versetest:38	not-translatable
@@ -7889,9 +7889,9 @@ Tests/NestedTupleParameters.versetest:58	disagrees-refuses
 Tests/NestedTupleParameters.versetest:62	disagrees-refuses
 Tests/NestedTupleParameters.versetest:65	disagrees-refuses
 Tests/NestedTupleParameters.versetest:69	disagrees-refuses
-Tests/NestedTupleParameters.versetest:85	disagrees-refuses
+Tests/NestedTupleParameters.versetest:85	agrees
 Tests/NestedTupleParameters.versetest:112	agrees
-Tests/NestedTupleParameters.versetest:decls	disagrees-refuses
+Tests/NestedTupleParameters.versetest:decls	agrees
 Tests/ObjectToJson.versetest:23	not-translatable
 Tests/ObjectToJson.versetest:94	not-translatable
 Tests/ObjectToJson.versetest:197	not-translatable
