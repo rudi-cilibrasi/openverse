@@ -2778,9 +2778,9 @@ def rootsAt (anc : String → List String) (roots : List String) (picks : List (
 
 /-- (#283) The body a method of a family with several values keeps in its
     class, where the elaborator still checks it as a member, while its
-    implementation is a function and each call of it is rewritten: no call
-    may name it (`Err()` if one did; the elaborator refuses a program with
-    one). -/
+    implementation is a function and each call of it is rewritten. It is
+    elaborated as `Err()`, and `elabProgramCore` gives out no program in
+    which a function calls one (`TyEnv.familyStubs`). -/
 def familyStub (p : Pos) : SExpr := .app p (.ident p "$familyStub") [] false
 
 /-- Whether `e` is a family's stub (`familyStub`). -/
@@ -3348,10 +3348,10 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
   let selNames := sel.map (·.1)
   -- (the selected family class `c`'s method `m` is of, if any)
   let selAt (c m : String) : Option MFam := (sel.find? fun (x, f) => x == m && (anc c).contains f.root).map (·.2)
-  -- (each of a family with overrides stays in its class as a stub, `Err()`,
-  -- which no call reaches: so the elaborator still checks it as a member,
-  -- <final>, its signature and effects against the one it overrides, an
-  -- abstract one implemented)
+  -- (each of a family with overrides stays in its class as a stub,
+  -- `familyStub`, which no call reaches: so the elaborator still checks it
+  -- as a member, <final>, its signature and effects against the one it
+  -- overrides, an abstract one implemented)
   let stub (q : Pos) : SExpr := familyStub q
   -- (one overridden nowhere, `direct`, is taken out, as there is nothing
   -- to check it against, unless its name is `shared`, or overloaded in any

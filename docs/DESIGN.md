@@ -520,7 +520,7 @@ the classes below it, `M(args)` becomes `C$M(Self, args)`. Each class or
 interface that declares `M` without `<override>` is the root of a family
 (`MFam`), `M` and its overrides below it. When one root declares `M`,
 `R.M` names its family whatever `R` is, without types. When unrelated ones
-do (`shared`), `famAt` takes the family of the root the receiver's class is
+do (`shared`), `rootsAt` takes the family of the root the receiver's class is
 below: `Self`'s and a bare call's from the enclosing class, known without
 types, any other receiver's from an earlier elaboration. The first leaves
 those uses as written, ordinary calls (a family's method stays in its class
@@ -532,17 +532,41 @@ with eager groups (`Requests.eager`). That elaboration does not
 judge what can fail (`Ctx.failabilityKnown`), as a call may yet get several
 values, and the uses it does not reach are of no family, so the last one has
 none left. Each use is then rewritten as in a program with that family
-alone, so the fixpoint is exact, and so is the code. A family that has several values only through such uses has its
+alone, so the fixpoint is exact, and so is the code. One place may be
+elaborated at receivers of several classes: the clauses after a choice whose
+values are of different types, copied for each alternative (#335), note
+each copy's root. Such a use reaches several roots, and so does one that no
+elaboration reached or that one reached only at a receiver of no class (a
+type parameter of clauses shared by the alternatives, `""`), which may be of
+any root. It becomes the receiver bound once, then a case per root,
+`if ($d := $methodCast(root[$r])) then … else …`, of that root's family's
+call with `$d` the receiver, or `$d.M(args)` as written where the root's
+`M` has one value (`rwFamCalls`' `across`). The receiver's class picks the
+case, which its type tells where the copy is elaborated: the elaborator
+drops the other cases before elaborating them (`pruneMethodCases`, as for a
+family with refining casts), so each copy compiles its own family's call.
+A receiver of no class cannot be cast, so clauses with such a use cannot be
+shared through an operation dictionary and are copied; a dictionary also
+declines a family's stub, the method `$apply` would call having several
+values, which no operation gives. A `for` takes the copies' values one
+after another. Where the first success is taken, the names the clauses
+bind need one type after them: when the choice's values have none above
+them all, `elabOneGo` refuses it, saying to take them in a `for`. A family that has several values only through such uses has its
 own uses noted in a later round; each round notes more, so they end. An
 overloaded method (#106) is one method for each of its lists, named as the
 elaborator names them, `M$ovK` (`MethodOverloads`, which both use); a
 family is of one of them. A call of an overloaded `M` (`R.M(args)`, bare,
 `(super:)`) is of the list an earlier elaboration found it takes, noted by
 the call's place as an overloaded function's call is (`Requests.overloads`,
-`Ctx.noteOverload`, `rwFamCalls`' `slotAt`), and as written, of one value,
-before; then of its family, by its class or a pick of its own. The
+`Ctx.noteOverload`, `rwFamCalls`' `slotsAt`), and as written, of one value,
+before; then of its family, by its class or a pick of its own. Lists are a
+hierarchy's (`MethodOverloads`), so a call copied for receivers of several
+hierarchies takes one of each, each in its root's case; two lists of one
+hierarchy, which the arguments' types would have to pick, are refused. The
 methods of such a name keep stubs in their classes, so the elaborator's
-lists are the same. A class below two roots of `M` is refused when a family
+lists are the same; so does a direct family's method whose name another
+hierarchy overloads, as a use's list, and so its family, is not known in
+the first round. A class below two roots of `M` is refused when a family
 of `M` has several values. For
 an interface (#283) the dispatch's root is the interface, its receiver
 typed at it and cast to each implementing class, and its default
@@ -598,7 +622,7 @@ been a generator there, where a call has none (#312's lesson). The kept
 bodies (`checkBody`), and an `F$all`'s, which is effect-free, see a block
 that binds the receiver and the arguments, then the if-chain on the guards
 (ending in `Err()`, which a call never reaches) or the choice.
-Each method of a family stays in its class as a stub, `Err()`, which no call reaches, so that the elaborator still checks it as a member: `<final>`, its signature and effects against the one it overrides, and an abstract one implemented. The dispatch's arguments are bound at the declaring class's parameter types, so `array{}` or `false` gets the type it needs, and one tuple argument to several parameters is taken apart, as at a call. An override that returns a narrower type is refused, since the dispatch is made before types and has the declaring class's return type. An `F$all` body turns every exclusive choice into a choice, nested `for`s included, which is exact as it is effect-free.
+Each method of a family stays in its class as a stub, `Choice.familyStub`, elaborated as `Err()`, which no call reaches, so that the elaborator still checks it as a member: `<final>`, its signature and effects against the one it overrides, and an abstract one implemented. That no call reaches one holds by construction where the program is given out: `elabProgramCore` refuses a program any of whose functions calls a stub (`TyEnv.familyStubs`). Verse Core has no calls but those that name their function (a dispatch is a test of the class, then a call), so this covers every way a call is made, generated ones included (an operation dictionary's `$apply`, a method value's adapter, a default's helper), and ones not written yet; `tests/lean/FamilyStubs.lean` makes one and sees it refused. A stub has no method value (`FnValues`): a family's method is no value, and a value of another class's method of that name would otherwise make an adapter for every class that has the name. The dispatch's arguments are bound at the declaring class's parameter types, so `array{}` or `false` gets the type it needs, and one tuple argument to several parameters is taken apart, as at a call. An override that returns a narrower type is refused, since the dispatch is made before types and has the declaring class's return type. An `F$all` body turns every exclusive choice into a choice, nested `for`s included, which is exact as it is effect-free.
 A call has the declaring class's effects, which bound every implementation's. Parameters' defaults are rewritten too, so a call in a default is refused as any call with several values is outside a failure context, instead of reaching a stub. When the declaring class's implementation is the only one (an abstract override below it), the call is of that function, with no dispatch. A call of one implementation's function in a family with overrides (that one, or `(super:)`) takes one tuple argument apart after the receiver, also where it is not inlined.
 `(super:)M(…)` calls the nearest implementation above directly, and a
 qualified call `R.(c:)M(…)` (#125) dispatches in the family of the root `c`
@@ -697,7 +721,11 @@ method's use is (below, "Elaboration in rounds").
 - A call is of one overload wherever its code is elaborated: one in clauses
   copied for alternatives of a choice whose values are of different types
   (#335), that takes one overload in a copy and another in another, is
-  refused.
+  refused. (A method's family is picked per copy by the receiver's class, a
+  case per root that the elaborator drops by the receiver's type; an
+  overload would need a case per overload dropped by the arguments' types,
+  which fitting an overload decides with coercion trials, in `EM`, where
+  `pruneMethodCases` is pure.)
 
 A self-recursive one shaped as a generator (#246; `Choice.loopShape?`:
 clauses without choices, then a choice, or an `if … else …` of choices and

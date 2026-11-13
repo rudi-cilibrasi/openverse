@@ -2130,13 +2130,10 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
                 noteNeeds { methods := [req] }
                 return ⟨.seq r.e (.prim .userErr []), target⟩
           let some x := (candidates.find? fun x => exp == some (typeOf x)).orElse fun _ => candidates.head?
-            | match ctx.methodDecl? sn fv with
-              | some owner =>
-                -- (#283, a family's stub: before the round that knows its
-                -- family, as `Choice.methodFns` says it)
-                if env.familyStubs.contains s!"{owner}.{fv}" then
-                  eerr p s!"{owner.replace "::" "."}.{f} has several values, so it cannot be used as a function value (#235, #283)"
-                eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a method with named parameters is not a value, #210)"
+            | -- (#283) a family's stub has none: refused as `Choice.methodFns`
+              -- refuses it, before the round that knows the use's family
+              match (ctx.methodDecl? sn fv).filter (env.familyStubs.contains s!"{·}.{fv}") with
+              | some owner => eerr p s!"{owner.replace "::" "."}.{f} has several values, so it cannot be used as a function value (#235, #283)"
               | none => eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a method with named parameters is not a value, #210)"
           let cls := s!"{x}${f}$fn"
           let xargs := env.argsAt sn targs x
