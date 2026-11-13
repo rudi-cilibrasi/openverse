@@ -329,6 +329,19 @@ had none. tim-e1's model found it twice in #312's review: prints in the
 branch, then before the `if`, survived a rejected value. Even the
 caller's earlier clauses would show it.
 
+A block statement and a `case`'s arm with a `return` in them are taken out
+the same way (#283), as the scopes they are: a block's statements go in its
+place, its names renamed for it (`$k…b'N`), with its `defer:`s its own scope's
+in `elimScopedReturns` (a `ReturnScope`, as an `if`'s branch has); a `case`
+is the `if` chain that selects its arm (`Choice.caseIf`): `k := case (e) {
+p₀ => 0, … }`, the same patterns, so the same failure or exhaustiveness, then
+`if (k = 0) then a₀ else if … else aₙ`. A block or a `case` as the body's last
+statement has its value, or its arms', returned in it (`tailReturns`). A
+`return` in a `for` or a `loop` would need the loop to stop with the return's
+values: a function of its own, as `nestFns` makes for a consumer, giving an
+option of the operand and the `var`s it sets (a `for`'s body has no `break`),
+whose call the body then returns from in an `if`; it is refused, saying so.
+
 Recursive multi-value bodies normalize supported returns before recursion
 classification. For lazy analysis, generated branch scopes carry
 `$returnTail(block{…})`: only these scopes split into invocation prefixes

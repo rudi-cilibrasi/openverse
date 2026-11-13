@@ -513,6 +513,17 @@ RET_DEFER = RT2 and random.Random(seed * 1000003 + 283391).random() < 0.5
 # test's own: LANGUAGE.md's rule for any scope, whether its clauses are lifted or not. A
 # generator of its own decides, so seeds keep their other programs.
 RRB = random.Random(seed * 1000003 + 283392)
+# ---- #283, with rt2 (noretscope turns it off): at times RT2's and RT3's returning branch is in a
+# block or a case's arm instead of an if's branch, with the same reading: a scope that the return
+# ends the invocation from, the rest of the body skipped for its values. Not modelled apart, as
+# the outputs are the same; a stream of its own, so seeds keep their other programs:
+#   block:                              case (RTy - RTa):
+#       if (RTy = RTa + 1):                 1 => block:
+#           Print("rt")                         Print("rt")
+#           return 99 | 98                      return 99 | 98
+#       Print("e{RTy}")                     _ => Print("e{RTy}")
+# (with RET_DEFER, the branch's defer:s in the block, or the inner if a case)
+RTV = random.Random(seed * 1000003 + 283297)
 # ---- #283, flag frames (on with lazy; noframes turns it off): a generator's call of
 # itself may have code after it, which runs on each of the call's values (a return
 # frame): an alternative `Gz0(N - 1, A) + e` (e any value, with no var), `L + Gz0(…)`
@@ -3424,7 +3435,16 @@ if RT:
             '        Print("e{RTd}")\n    RTd := RTy * 10\n    RTd\n')
 if RT2:
     for nm, ret in (('RT2', '99 | 98'), ('RT3', '99')):
-        if not RET_DEFER:
+        scope = RTV.choice(['if', 'if', 'block', 'case']) if 'noretscope' not in flags else 'if'
+        if not RET_DEFER and scope == 'block':
+            PRE += (f'{nm}(RTa:int):int =\n    RTy := RTa | RTa + 1 | RTa + 2\n    Print("p{{RTy}}")\n'
+                    f'    block:\n        if (RTy = RTa + 1):\n            Print("rt")\n            return {ret}\n'
+                    f'        Print("e{{RTy}}")\n    Print("q{{RTy}}")\n    RTy * 10 | RTy * 10 + 1\n')
+        elif not RET_DEFER and scope == 'case':
+            PRE += (f'{nm}(RTa:int):int =\n    RTy := RTa | RTa + 1 | RTa + 2\n    Print("p{{RTy}}")\n'
+                    f'    case (RTy - RTa):\n        1 => block:\n            Print("rt")\n            return {ret}\n'
+                    f'        _ => Print("e{{RTy}}")\n    Print("q{{RTy}}")\n    RTy * 10 | RTy * 10 + 1\n')
+        elif not RET_DEFER:
             PRE += (f'{nm}(RTa:int):int =\n    RTy := RTa | RTa + 1 | RTa + 2\n    Print("p{{RTy}}")\n'
                     f'    if (RTy = RTa + 1):\n        Print("rt")\n        return {ret}\n    else:\n'
                     f'        Print("e{{RTy}}")\n    Print("q{{RTy}}")\n    RTy * 10 | RTy * 10 + 1\n')
@@ -3439,6 +3459,14 @@ if RT2:
                 body = ['    if (RTy = RTa + 1):'] + branch + ['        Print("rt")', f'        return {ret}', '    else:',
                     '        if (RTy = RTa):', *('    ' + s for s in branch), '            Print("e{RTy}")',
                     '        else: Print("e{RTy}")', *('    ' + s for s in late[:-1]), '        return RTy * 10 | RTy * 10 + 1']
+            elif scope == 'block':
+                body = ['    if (RTy <= RTa + 1):', '        block:'] + ['    ' + b for b in branch] + [
+                    '            if (RTy = RTa + 1):', '                Print("rt")', f'                return {ret}',
+                    '            Print("e{RTy}")', '    else: Print("e{RTy}")'] + late
+            elif scope == 'case':
+                body = ['    if (RTy <= RTa + 1):'] + branch + ['        case (RTy - RTa):', '            1 => block:',
+                    '                Print("rt")', f'                return {ret}', '            _ => {}',
+                    '        Print("e{RTy}")', '    else: Print("e{RTy}")'] + late
             else:
                 body = ['    if (RTy <= RTa + 1):'] + branch + ['        if (RTy = RTa + 1):',
                     '            Print("rt")', f'            return {ret}', '        Print("e{RTy}")',

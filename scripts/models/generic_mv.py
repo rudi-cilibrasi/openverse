@@ -86,6 +86,8 @@ RMethod = None
 SHARED = False
 # Source-spelling variants share the existing independent value/effect model.
 RECURSIVE_RETURNS = "no-recursive-returns" not in sys.argv[3:]
+# (#283) returns in a block or a case's arm too (no-return-scopes turns it off)
+RETURN_SCOPES = "no-return-scopes" not in sys.argv[3:]
 
 # ---------------------------------------------------------------- types
 CLASSES = ["cat", "dog", "animal"]
@@ -451,13 +453,22 @@ d{n}({child_tps}) := class({parent}):{extra_field}
         if RECURSIVE_RETURNS and self.path in ("lazy", "eager") and random.Random(n).random() < 0.5:
             lines = self.src.splitlines()
             if len(lines) > 1:
+                # (#283: at times each return in a scope other than an if's branch, a block's or a
+                # case's arm's, with the same values; a stream of its own, so seeds keep their
+                # other programs)
+                scoped = RETURN_SCOPES and random.Random(n + "#283scope").random() < 0.5
                 # (the last line's own indentation: in an else block, LSb's)
-                lines[-1] = lines[-1][:len(lines[-1]) - len(lines[-1].lstrip())] + "return " + lines[-1].strip()
+                ind = lines[-1][:len(lines[-1]) - len(lines[-1].lstrip())]
+                lines[-1] = ind + "return " + lines[-1].strip()
                 if k == "LIf":
-                    lines[-1:] = ["    if(N=0): return Y", "    NextN:=N-1",
-                                  f"    return X | {n}[Y,X,NextN]"]
+                    first = ["    case(N):", "        0 => return Y", "        _ => {}"] if scoped else ["    if(N=0): return Y"]
+                    lines[-1:] = first + ["    NextN:=N-1", f"    return X | {n}[Y,X,NextN]"]
                 elif k in ("ERep", "ETree"):
-                    lines[1] = "    if(N<=0):\n        false?\n        return X"
+                    lines[1] = ("    if(N<=0):\n        block:\n            false?\n            return X" if scoped
+                                else "    if(N<=0):\n        false?\n        return X")
+                if scoped:
+                    last = lines[-1]
+                    lines[-1:] = [last[:len(last) - len(last.lstrip())] + "block:", "    " + last]
                 self.src = "\n".join(lines)
 
     def bind_helper(self, h):

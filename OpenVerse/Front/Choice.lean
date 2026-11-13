@@ -1904,13 +1904,31 @@ def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String
       set.contains x && anyE (fun | .decl _ y (some _) true _ => y == x | _ => false) body
     if !frames || vs.isEmpty then none else loopShapeOf? g mv (cellVars vs body) grp frames params fieldOrder
 
-/-- How many `if`s with a `return` in them `e` has (#283). -/
+/-- (#283) A `case` with a `return` in an arm as the `if` chain that selects
+    its arm: the arm picked by its number first, `k := case (e) { p₀ => 0,
+    p₁ => 1, … }` (the same patterns, so the same failure when none matches),
+    then `if (k = 0) then a₀ else if (k = 1) then a₁ … else aₙ`. None when its
+    scrutinee has a `return`. -/
+def caseIf (k : String) : SExpr → Option (SExpr × SExpr)
+  | .caseE p e arms => do
+    guard (!hasReturn e)
+    let (_, lastArm) ← arms.getLast?
+    let sel := SExpr.decl p k none false (.caseE p e (arms.zipIdx.map fun ((pat, _), i) => (pat, .int p i)))
+    let chain := (arms.dropLast.zipIdx).foldr (fun ((_, a), i) acc =>
+      SExpr.ite p [.cmp p (.ident p k) [("=", .int p i)]] a (some acc)) lastArm
+    return (sel, chain)
+  | _ => none
+
+/-- How many `if`s with a `return` in them `e` has (#283), a `case`'s arms
+    counted as the `if` chain that selects them (`caseIf`). -/
 partial def countRetIfs (e : SExpr) : Nat :=
+  let sum (ss : List SExpr) : Nat := (ss.map countRetIfs).foldl (· + ·) 0
   match e with
   | .ite _ cs t u? =>
-    (if hasReturn t || u?.any hasReturn then 1 else 0) + (cs.map countRetIfs).foldl (· + ·) 0 +
-      ((stmtsOf t).map countRetIfs).foldl (· + ·) 0 + ((u?.map fun u => ((stmtsOf u).map countRetIfs).foldl (· + ·) 0).getD 0)
-  | .block _ ss => (ss.map countRetIfs).foldl (· + ·) 0
+    (if hasReturn t || u?.any hasReturn then 1 else 0) + sum cs + sum (stmtsOf t) + ((u?.map (sum ∘ stmtsOf)).getD 0)
+  | .block _ ss => sum ss
+  | .caseE _ _ arms =>
+    (if arms.any (hasReturn ·.2) then arms.length - 1 else 0) + sum (arms.flatMap (stmtsOf ·.2))
   | _ => 0
 
 /-- The statements `ss` with their last value returned (#283): the value of
@@ -1925,6 +1943,12 @@ partial def tailReturns (ss : List SExpr) : List SExpr :=
     | .decl q x _ _ _ => ss ++ [.ret q (some (.ident q x))]
     | .ite q cs t u? =>
       init ++ [.ite q cs (.block q (tailReturns (stmtsOf t))) (u?.map fun u => .block q (tailReturns (stmtsOf u)))]
+    -- (#283) a block, or a `case`, with a `return` in it: its value, or its
+    -- arms', returned in it, so that it is a scope taken out as a branch is
+    | .block q bs => if hasReturn last then init ++ [.block q (tailReturns bs)] else init ++ [.ret q (some last)]
+    | .caseE q e arms =>
+      if !arms.any (hasReturn ·.2) then init ++ [.ret q (some last)] else
+      init ++ [.caseE q e (arms.map fun (pat, a) => (pat, .block a.pos (tailReturns (stmtsOf a))))]
     | e => if isDefer e then ss ++ [.ret e.pos none] else init ++ [.ret e.pos (some e)]
 
 /-- A normalized returning conditional: branch selection adds no generator
@@ -1983,6 +2007,18 @@ partial def elimPlainReturns (fresh : Nat → String) (n : Nat) (multi : SExpr �
       let (ub, n2) ← elimPlainReturns fresh n1 multi ret tailBlocks (us ++ rest)
       let cs := cs.map (renameE ρt)
       some (returnBranches p k cs tb ub multi ret tailBlocks, n2)
+  -- (#283) a block with a `return` in it, a scope of its own: its statements
+  -- in its place, its names renamed for it, as an `if`'s branch's are
+  | s@(.block _ bs) :: rest =>
+    if !hasReturn s then (elimPlainReturns fresh n multi ret tailBlocks rest).map fun (r, n') => (s :: r, n')
+    else elimPlainReturns fresh (n + 1) multi ret tailBlocks
+      (bs.map (renameE (branchNames s!"{fresh n}b" bs [])) ++ rest)
+  -- (#283) a `case` with a `return` in an arm: the `if` chain it selects with
+  | s@(.caseE ..) :: rest =>
+    if !hasReturn s then (elimPlainReturns fresh n multi ret tailBlocks rest).map fun (r, n') => (s :: r, n')
+    else do
+      let (sel, chain) ← caseIf (fresh n) s
+      elimPlainReturns fresh (n + 1) multi ret tailBlocks (sel :: chain :: rest)
   | s :: rest =>
     if hasReturn s then none
     else (elimPlainReturns fresh n multi ret tailBlocks rest).map fun (r, n') => (s :: r, n')
@@ -2036,6 +2072,23 @@ partial def elimScopedReturns (fresh : Nat → String) (multi : SExpr → Bool) 
       let (tb, n1) ← elimScopedReturns fresh multi ret (n + 1) t.pos (ts.map (renameE ρt)) [] parents
       let (ub, n2) ← elimScopedReturns fresh multi ret n1 q (us.map (renameE ρu)) [] parents
       some (returnBranches q k (cs.map (renameE ρt)) tb ub multi ret, n2)
+  -- (#283) a block with a `return` in it: a scope inside this one, as an
+  -- `if`'s branch is, its names renamed for it
+  | s@(.block q bs) :: rest => do
+    if !hasReturn s then
+      let (rest, n') ← elimScopedReturns fresh multi ret n p rest ds outer
+      some (s :: rest, n')
+    else
+      let parents := { pos := p, rest, defers := ds } :: outer
+      elimScopedReturns fresh multi ret (n + 1) q (bs.map (renameE (branchNames s!"{fresh n}b" bs []))) [] parents
+  -- (#283) a `case` with a `return` in an arm: the `if` chain it selects with
+  | s@(.caseE ..) :: rest => do
+    if !hasReturn s then
+      let (rest, n') ← elimScopedReturns fresh multi ret n p rest ds outer
+      some (s :: rest, n')
+    else
+      let (sel, chain) ← caseIf (fresh n) s
+      elimScopedReturns fresh multi ret (n + 1) p (sel :: chain :: rest) ds outer
   | s :: rest => do
     if hasReturn s then none else
       let (rest, n') ← elimScopedReturns fresh multi ret n p rest ds outer
@@ -3716,7 +3769,9 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
     if retIfs > 16 then
       throw s!"{f.pos.show}: {shownFnName n} has several values and {retIfs} ifs with a return: more than 16, and the code of an inlined call doubles with each, until choices compose without copying the clauses after them (#283)"
     let some (ss, _) := elimReturns (fun i => s!"$k{i}") 0 (fun _ => false) none (stmtsOf f.body) true
-      | throw s!"{f.pos.show}: {shownFnName n} has several values and a return other than in the branches of an if, which would leave its caller once inlined (#235, #283)"
+      | throw (if anyE (fun | x@(.forE ..) | x@(.loop ..) => hasReturn x | _ => false) f.body then
+          s!"{f.pos.show}: {shownFnName n} has several values and a return in a for or a loop, which would leave its caller once inlined: not supported yet (#235, #283); find what the loop looks for first (in a var it sets, or a for's array) and return in an if after it"
+        else s!"{f.pos.show}: {shownFnName n} has several values and a return inside an expression or a condition, which would leave its caller once inlined (#235, #283): return in an if's branch, a block or a case's arm")
     return (n, { f with body := .block f.pos ss })
   -- (every name the program binds: parameters, locals, fields, methods)
   let binders : List String := (tops.flatMap fun

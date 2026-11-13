@@ -1360,6 +1360,28 @@ Main():void =
   the filters after it reject undoes what came before it, the caller's
   clauses too, unless a choice of the program's own came in between.
 
+  A block (`block:`) and a `case`'s arm are scopes a `return` leaves the
+  invocation from too, as an `if`'s branch is (#283): the rest of the body
+  is skipped for each value of the return, and runs, after the scope, for
+  the paths that fall through it. A `case` with one picks its arm as it
+  would, its scrutinee once, then that arm runs as an `if`'s branch does,
+  so its choices are the arm's own:
+
+  ```verse
+  F(X:int)<transacts>:int =
+      case (X):
+          1 => return 10 | 11
+          2 => Print("two")
+          _ => {}
+      X | X + 1
+  # F(1): 10, 11; F(2): two, then 2, 3
+  ```
+
+  A `return` elsewhere is refused: in a `for` or a `loop` (find what the loop
+  looks for first, in a `var` it sets or a `for`'s array, and return in an
+  `if` after it), or inside an expression or a condition (`X := if (C) then
+  (return 0) else 1`).
+
   Cleanup stays with the scope that registered it. A returning branch runs
   only the `defer:` blocks it reached, from the innermost scope outward and
   last registered first, after saving each return value. A branch that falls
@@ -1512,8 +1534,8 @@ Main():void =
   ```
 
   A returning branch may contain plain clauses and
-  nested conditionals before its value. A `return` at the end of the body or
-  in an `if` branch ends that invocation, yielding its operand's values in order;
+  nested conditionals before its value. A `return` at the end of the body, or
+  in an `if`'s branch, a block or a `case`'s arm, ends that invocation, yielding its operand's values in order;
   statements after the return are skipped. These returns are normalized
   before choosing lazy or eager recursion. A selected branch's prefix runs
   before its values; if that prefix fails, the invocation fails without
@@ -1625,7 +1647,7 @@ Main():void =
   points must be where a choice is lifted from (a comparison's later
   operand, a `set`'s value, a named argument, a struct's field, `and`'s
   operands, an `if`'s branch, the right of `or`) (#283). Also one with a `return`
-  other than at the end of its body or in an `if`'s branches, a method of a class or
+  in a `for` or a `loop`, or inside an expression or a condition, a method of a class or
   interface below two others that each declare its name without `<override>`,
   `<suspends>`, one used as a function value, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or
