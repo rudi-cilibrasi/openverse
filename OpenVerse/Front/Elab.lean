@@ -588,9 +588,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       | _ => pure ()
   let allTops := expanded.toList
   -- (#283) the methods that are a family's stub (`Choice.familyStub`), as
-  -- functions: name, where declared, and as written
-  let stubs : List (String × Pos × String) := allTops.filterMap fun
-    | .fn q n _ _ _ _ b => if Choice.isFamilyStub b then some (n, q, Choice.shownFnName n) else none
+  -- functions, each where it is declared
+  let stubs : List (String × Pos) := allTops.filterMap fun
+    | .fn q n _ _ _ _ b => if Choice.isFamilyStub b then some (n, q) else none
     | _ => none
   -- the type definitions: `name := struct …` and `name := enum …`
   let isTypeDef : STop → Bool
@@ -608,7 +608,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                              let i := henv.info d
                              if i.isIface || i.isAbstract then m else
                              (henv.supers d).foldl (fun m T => m.insert T ((m[T]?.getD []) ++ [d])) m) {},
-                           abstracts := abstracts.toList, fnRequests := opts.requests.fns, familySites, overloadSites, methodRequests := opts.requests.methods,
+                           abstracts := abstracts.toList, fnRequests := opts.requests.fns, familySites, familyStubs := stubs.map (·.1), overloadSites, methodRequests := opts.requests.methods,
                            castRequests := opts.requests.casts, loopRequests := opts.requests.loops }
   env := { env with varFields := varFields, uniques := uniques,
                     overriders := (overridePairs.toList.map fun (_, dm, _) => (dm.splitOn ".").headD "") ++
@@ -1570,15 +1570,15 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   if usesConc then
     fns := CompilerWrites.propagate beforeConcurrency fns
   let P : Prog := { fns := fns.toList, main }
-  -- (#283) no function calls a family's stub (`Choice.familyStub`): each
-  -- call of the family's method was rewritten not to be one, and a call of
-  -- it would run its `Err()`. Whatever code made it, a call names its
-  -- function (dispatch is a test of the class, then a call), so a stub no
-  -- call names never runs
+  -- (#283) no call names a family's stub (`Choice.familyStub`), whose body
+  -- is `Err()`: each call of a method of the family was rewritten not to be
+  -- one, and a stub has no value (`FnValues`). Verse Core has no calls but
+  -- those naming their function (dispatch is a test of the class, then a
+  -- call), so whatever code made them, no stub runs
   for fn in P.fns do
     for (g, _) in Suspend.callsOf fn.body do
-      if let some (q, shown) := (P.fns[g]?).bind fun callee => stubs.lookup callee.name then
-        throw s!"{q.show}: a call of {shown}, a method with several values, is compiled as a call of a method of one value (in {Choice.shownFnName fn.name}), its family not known where it is chosen: not supported yet (#283)"
+      if let some q := (P.fns[g]?).bind fun callee => stubs.lookup callee.name then
+        throw s!"{q.show}: {Choice.shownFnName P.fns[g]!.name} has several values, but a call of it in {Choice.shownFnName fn.name} is compiled as one of a method of one value, where its receiver's class was not known: not supported yet (#283)"
   if !P.check then
     let bad := P.fns.filter fun fn => (!fn.decides && fn.body.mayFail P) ||
       (!fn.writes && fn.body.writesHeap P) || !(fn.body.scoped P fn.nslots)

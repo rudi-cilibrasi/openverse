@@ -2755,21 +2755,26 @@ structure MFam where
   cases : List (String × String) := []
   deriving Inhabited
 
-/-- The family of `fams` (keyed by method name) that a use `R.M` at `q`
-    reaches, in the body of class `inC` (#283). When one class or interface
-    declares `M` (overrides aside), its family, whatever `R` is. When
-    several do apart (`shared`), each is the root of a family of its own,
-    and the receiver's class tells which: `Self`'s is the enclosing class,
-    any other receiver's the class an earlier elaboration found it of,
-    whose root it noted by `q` (`picks`). None for another root's `M`, an
-    ordinary method, or before that elaboration. -/
-def famAt (anc : String → List String) (fams : List (String × MFam)) (shared : String → Bool)
-    (picks : List (Pos × String)) (inC : Option String) (q : Pos) (recv : SExpr) (m : String) : Option MFam :=
-  let fs := (fams.filter (·.1 == m)).map (·.2)
-  if !shared m then fs.head? else
+/-- The roots of a method's families (`roots`: the classes and interfaces
+    that declare it without `<override>`) that a use `R.M` at `q` reaches,
+    in the body of class `inC` (#283). When one declares it, that one,
+    whatever `R` is. When several do apart, each is the root of a family of
+    its own, and the receiver's class tells which: `Self`'s is the
+    enclosing class; any other receiver's is the class an earlier
+    elaboration found it of, whose root it noted by `q` (`picks`). The code
+    at `q` may be elaborated at several receiver types (the clauses after a
+    choice whose values are of different types, copied for each, #335): then
+    each root noted. A receiver of no class (`""`: of a type parameter, those
+    clauses shared, or one no elaboration reached) may be of any of them.
+    None before that elaboration. -/
+def rootsAt (anc : String → List String) (roots : List String) (picks : List (Pos × String))
+    (inC : Option String) (q : Pos) (recv : SExpr) : List String :=
+  if roots.length ≤ 1 then roots else
   match recv, inC with
-  | .ident _ "Self", some d => fs.find? fun f => (anc d).contains f.root
-  | _, _ => (picks.lookup q).bind fun r => fs.find? (·.root == r)
+  | .ident _ "Self", some d => roots.filter (anc d).contains
+  | _, _ =>
+    let noted := picks.filterMap fun (q', r) => if q' == q then some r else none
+    if noted.contains "" then roots else roots.filter noted.contains
 
 /-- (#283) The body a method of a family with several values keeps in its
     class, where the elaborator still checks it as a member, while its
@@ -2792,7 +2797,7 @@ def qualified (m : String) : Option String × String :=
 
 /-- The calls of the methods of `fams` in `e` (#283), `inC` the class whose
     body this is (`anc` gives a class's ancestors, nearest first), each of
-    the family `famAt` gives (`shared`, `picks`):
+    the families of the roots `rootsAt` gives (`roots`, `picks`):
     - `R.M(args)` is a call of `M`'s function with `R` first. With
       overrides, it dispatches on the receiver's class: `$dispatch(root$M,
       block{ $r : root := $arg; $a… := $arg; $kv := $excl(…) }, R, args…)`,
@@ -2813,6 +2818,14 @@ def qualified (m : String) : Option String × String :=
       view is bound, and records its static declaration's result type.
       Exact class cases can then omit implementations outside that view.
       With `trial`, it is a call of `root$M$fam` instead, for the fixpoint.
+    - `R.M(args)` that reaches several roots (`rootsAt`) is the receiver
+      bound once, then a case per root, `if ($d := $methodCast(root[$r]))
+      then … else …`, of value that root's family's call (above) with `$d`
+      for `R`, or `$d.M(args)` as written where the root's `M` has one
+      value: the receiver's class picks the case, which its type tells
+      where the code is elaborated (each copy of the clauses after a choice
+      whose values are of different classes, #335: the elaborator drops the
+      others, `pruneMethodCases`). The arguments are evaluated in the case.
     - `M(args)` in the body of a class below the root is `Self.M(args)`.
     - `(super:)M(args)` is a call of the nearest implementation above.
     - `R.(c:)M(args)` (#125) is a call in the family of the root `c` is
@@ -2823,9 +2836,9 @@ def qualified (m : String) : Option String × String :=
 partial def rwFamCalls (anc : String → List String) (fams : List (String × MFam)) (trial : Bool)
     (inC : Option String) (e : SExpr) (isIface : String → Bool := fun _ => false)
     (typeView : String → String → List (String × STy) := fun _ _ => [])
-    (shared : String → Bool := fun _ => false) (picks : List (Pos × String) := [])
+    (roots : String → List String := fun _ => []) (picks : List (Pos × String) := [])
     (slotAt : Pos → String → Option String := fun _ m => some m) : SExpr :=
-  let rw := fun x => rwFamCalls anc fams trial inC x isIface typeView shared picks slotAt
+  let rw := fun x => rwFamCalls anc fams trial inC x isIface typeView roots picks slotAt
   let below (f : MFam) (d : String) : List String := f.impls.filter fun x => x != d && (anc x).contains d
   -- (#375's review) an interface's default yields to every class's own
   -- implementation, as dispatch gives: a class's chain wins over the
@@ -2967,6 +2980,23 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
       let dispatch := SExpr.app p (.ident p "$dispatch") (.ident q (methodFnName f.root m) :: .block p tmpl :: actual :: vals) false
       if !keepStatic then dispatch else
         .block p [.decl p raw none false recv, dispatch]
+  -- (a use that reaches several roots, each's family or `M` as written: the
+  -- receiver bound once, then a case per root; its name for messages only,
+  -- the method's, no function's)
+  let across (p q : Pos) (m : String) (cases : List (String × Option MFam)) (recv : SExpr) (args : List SExpr)
+      (br : Bool) : SExpr :=
+    let site := s!"{p.line}_{p.col}"
+    let (r, kv) := (s!"$rr{site}", s!"$rk{site}")
+    let arm (x : (String × Option MFam) × Nat) (rest : SExpr) : SExpr :=
+      let ((root, f), i) := x
+      let d := s!"$rd{i}_{site}"
+      let body := match f with
+        | some f => call p q m f (.ident p d) args br
+        | none => .app p (.member q (.ident p d) m) args br
+      .ite p [.decl p d none false (.app p (.ident p "$methodCast") [.app p (.ident p root) [.ident p r] true] false)]
+        body (some rest)
+    let cases := cases.zipIdx.foldr arm (.app p (.ident p "$methodMiss") [] false)
+    .app p (.ident p "$dispatch") [.ident q m, .block p [.decl p r none false (.ident p "$arg"), .decl p kv none false cases], recv] false
   mapE (fun
     | .app p (.member q recv m) args br => do
       let (within, m) := qualified m
@@ -2980,7 +3010,12 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
       | _, _, some c =>
         ((fams.find? fun (x, f) => x == m && (anc c).contains f.root).map (·.2)).map fun f =>
           call p q m f (rw recv) (args.map rw) br
-      | _, _, none => (famAt anc fams shared picks inC q recv m).map fun f => call p q m f (rw recv) (args.map rw) br
+      | _, _, none =>
+        let cases := (rootsAt anc (roots m) picks inC q recv).map fun r =>
+          (r, (fams.find? fun (x, f) => x == m && f.root == r).map (·.2))
+        match cases with
+        | [(_, some f)] => some (call p q m f (rw recv) (args.map rw) br)
+        | _ => if cases.all (·.2.isNone) then none else some (across p q m cases (rw recv) (args.map rw) br)
     | .app p (.ident q m) args br => do
       let d ← inC
       let m ← slotAt p m
@@ -3019,7 +3054,9 @@ partial def memberUses (e : SExpr) : List (Option Pos × Pos × SExpr × String)
     `M` below it. Inlining has no types, so when one root declares `M`,
     `R.M` names its family whatever `R` is; when several do, `R.M` names
     the family of the root `R`'s class is below, which an earlier
-    elaboration noted by the place of `R.M` (`picks`, `famAt`). The uses
+    elaboration noted by the place of `R.M` (`picks`, `rootsAt`), or, where
+    that place is elaborated at receivers of several classes, a case for
+    each (`rwFamCalls`). The uses
     not picked yet are returned with the program, for the elaboration to
     note; they stay as written until then. Such a method's name is no
     field, enumerator or member of a built-in type, no top-level name and
@@ -3102,7 +3139,7 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
   -- the root of a family of its own, the declarations below it)
   let rootsOf (n : String) : List String := ((declsOf n).filter fun (_, m) => !isOverride m).map (·.1)
   -- (a name several of them declare apart: the family of a use `R.n` is
-  -- that of the root `R`'s class is below, which types tell, `famAt`)
+  -- that of the root `R`'s class is below, which types tell, `rootsAt`)
   let shared (n : String) : Bool := (rootsOf n).eraseDups.length > 1
   -- (the declarations of `n` below root `r`, and those below no root)
   let famDecls (n r : String) : List (String × STop) :=
@@ -3191,7 +3228,7 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
     | some (_, ii, _, _, _) => ii
     | none => false
   let rw := fun fs trial inC e => rwFamCalls anc fs trial inC e isIfaceC
-    (fun c root => (rootView (classes.length + 1) c root).getD []) shared picks slotAt
+    (fun c root => (rootView (classes.length + 1) c root).getD []) (fun n => (rootsOf n).eraseDups) picks slotAt
   -- (a method's body as the function's: its members qualified by `Self`,
   -- then `Self` the parameter `$Self`)
   let fnOf (fs : List (String × MFam)) (trial : Bool) (c : String) : STop → Option STop
@@ -3325,13 +3362,13 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
         | _ => []).map (some c, ·)
   -- (what is left of their names is a use as a value: refused, as for a
   -- function's; a name of theirs is nothing else's, or one whose family
-  -- the receiver's class gives, `famAt`)
+  -- the receiver's class gives, `rootsAt`)
   for t in out do
     for (inC, b) in bodiesOf t do
       let b := eraseCallHeads selNames b
       for (m, f) in sel do
         let use : SExpr → Bool := fun
-          | .member q r x => x == m && (famAt anc sel shared picks inC q r m).any (·.root == f.root)
+          | .member q r x => x == m && (rootsAt anc (rootsOf m).eraseDups picks inC q r).contains f.root
           | .ident _ x => x == m && (!shared m || inC.any fun d => (anc d).contains f.root)
           | _ => false
         if anyE use b then
@@ -3350,10 +3387,6 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
       | .ident _ "Self", some _ | .ident _ "(super:)", _ => true
       | _, _ => false
     if shared m && selNames.contains m && !byClass && (picks.lookup q).isNone then some (q, m) else none
-  -- (one use is of one receiver's type wherever its code is elaborated)
-  for (q, r) in picks do
-    if let some (_, r') := picks.find? fun (q', r') => q' == q && r' != r then
-      throw s!"{q.show}: internal: a receiver of a class below {shown r} and of one below {shown r'} (#283)"
   -- (#106) the calls of an overloaded method with a selected list whose
   -- list is not picked yet, `R.M(args)` or, in a class's body, `M(args)`:
   -- the elaboration notes the list each takes, for the next round

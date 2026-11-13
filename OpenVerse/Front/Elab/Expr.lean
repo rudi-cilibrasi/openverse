@@ -1331,6 +1331,11 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
         if !refined then
           if Choice.plainBranches Choice.hasLiftable i then
             return ← elabOneChoice ctx b rest
+          -- (#283) one with nothing left to lift, the cases its receiver's
+          -- type rules out dropped (`pruneMethodBinding`): an `if` of one
+          -- value, bound as any (`prepare` would give it back as it is)
+          if b.place.isNone && !Choice.hasLiftable i then
+            return ← elabOneGo ctx (.decl p b.name b.ty false i :: rest)
           return ← elabOneGo ctx (Choice.prepare [cl] (choiceValues ctx) (choiceField ctx)
             (site := b.name) (fieldOrder := choiceOrder ctx) ++ rest)
         if ctx.typeOnly then
@@ -1571,6 +1576,14 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
                   let (_, result) ← elabOneGo bound (firstUnpack p lift name)
                   return ← finish (pure (.prim .userErr [], { result with locals := result.locals.filter (·.name != name) }))
                 set st0
+              -- (#283, #335) not shared, so copied for each value's type:
+              -- where the first success is taken, what they bind has one
+              -- type after them, which values with nothing above both lack
+              if let t0 :: ts := tys then
+                if (ts.foldlM (fun acc ty => joinTy ctx.types acc ty none) t0).isNone then
+                  let other := (ts.find? (· != t0)).getD t0
+                  let what := if b.name.startsWith "$" then "its value" else b.name
+                  eerr p s!"the values of this choice are of types with nothing above both, {t0.show} and {other.show}, and the clauses after it cannot be shared by them (#335): copied for each, {what} would have no one type after them, where the first success is taken: not supported yet (#283); take the values in a for, or make in each alternative what needs its own type"
         return ← finish (elabOneGo ctx copied)
       let p := b.pos
       let n := b.name
@@ -2117,7 +2130,14 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
                 noteNeeds { methods := [req] }
                 return ⟨.seq r.e (.prim .userErr []), target⟩
           let some x := (candidates.find? fun x => exp == some (typeOf x)).orElse fun _ => candidates.head?
-            | eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a method with named parameters is not a value, #210)"
+            | match ctx.methodDecl? sn fv with
+              | some owner =>
+                -- (#283, a family's stub: before the round that knows its
+                -- family, as `Choice.methodFns` says it)
+                if env.familyStubs.contains s!"{owner}.{fv}" then
+                  eerr p s!"{owner.replace "::" "."}.{f} has several values, so it cannot be used as a function value (#235, #283)"
+                eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a method with named parameters is not a value, #210)"
+              | none => eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a method with named parameters is not a value, #210)"
           let cls := s!"{x}${f}$fn"
           let xargs := env.argsAt sn targs x
           let t ← fresh r.ty
