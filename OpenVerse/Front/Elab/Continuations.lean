@@ -447,19 +447,24 @@ def refiningCast? (env : TyEnv) (T : String) (xty : Ty) (avoid : List String := 
 def castChains (env : TyEnv) (S T : String) (opened : List (String × String × Bool)) : Bool :=
   !(env.isSub S T || env.isSub T S) || ((env.info T).isIface && !opened.isEmpty)
 
+/-- (#351) Whether an `S(sargs)`, referred to through views, may be a `T`:
+    a concrete class below both gives `S` those type arguments by its view
+    and pins (`elabCast` refuses `T[…]` as never succeeding otherwise). -/
+def viewsMayBe (env : TyEnv) (S : String) (sargs : List Ty) (T : String) : Bool :=
+  ((env.concreteBelow S).filter (env.isSub · T)).any fun d =>
+    (env.viewArgs? S d (env.coreArgs S sargs) (rigid := false)).isSome
+
 /-- The classes below both `S` and `T` whose class parent is not, with a
     concrete class below them: each concrete class below both is below
     exactly one of them, along its class chain. Of those, the ones an
     `S(sargs)` may be: a cast to it refines or opens type arguments, or
-    agrees with the object's (through views, as one of its classes' view
-    gives them), as `elabCast` refuses the others as never succeeding. -/
+    agrees with the object's (through views, `viewsMayBe`), as `elabCast`
+    refuses the others as never succeeding. -/
 def castTops (env : TyEnv) (S : String) (sargs : List Ty) (T : String) (avoid : List String) : List String :=
   let both (c : String) : Bool := !(env.info c).isIface && env.isSub c S && env.isSub c T
   let may (d : String) : Bool :=
     (refiningCast? env d (.struct S sargs) avoid).isSome ||
-    if env.viewed.contains S then
-      ((env.concreteBelow S).filter (env.isSub · d)).any fun e =>
-        (env.viewArgs? S e (env.coreArgs S sargs) (rigid := false)).isSome
+    if env.viewed.contains S then viewsMayBe env S sargs d
     else env.coreArgs d (env.argsBelow S sargs d) == env.coreArgs S sargs
   env.classes.filter fun c => both c && !((env.info c).parent.any both) && !(env.concreteBelow c).isEmpty && may c
 

@@ -726,8 +726,7 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
       eerr p s!"{what}, which is above {S}, cannot fail: use {T}(…), an upcast (#351)"
     -- (no class below both whose view and pins can give the object's type
     -- arguments: it would always fail, as main says of a positional one)
-    if ((env.concreteBelow S).filter (env.isSub · T)).all fun d =>
-        (env.viewArgs? S d (env.coreArgs S sargs) (rigid := false)).isNone then
+    if !viewsMayBe env S sargs T then
       eerr p s!"{withArticle r.ty.show} is never {withArticle T}: no class below both gives {S} those type arguments, so {T}[…] would always fail"
     -- (one a clause does not take either; to a type beside it, or to an
     -- interface whose type arguments it opens, a clause takes it as a cast
