@@ -66,8 +66,14 @@ partial def elabAppBaseWith
         ctx.noteOverload p name o
         elabApp ctx p (.ident p o) args bracket exp) args
     else
-    -- (a soft built-in the program defines is the program's)
-    let builtinName := if (softBuiltins.contains name || name == "any") && (ctx.sig? name).isSome then "$program" else name
+    -- (a soft built-in the program defines is the program's; `$F` is the
+    -- built-in `F` whatever the program defines, as a prelude or a
+    -- built-in's value definition calls it)
+    let hidden := (name.drop 1).toString
+    let builtinName :=
+      if name.startsWith "$" && (builtins.contains hidden || softBuiltins.contains hidden) then hidden
+      else if (softBuiltins.contains name || name == "any") && (ctx.sig? name).isSome then "$program" else name
+    let name := if builtinName == "$program" then name else builtinName
     match builtinName with
     | "Concatenate" =>
       -- (#150) an array of arrays flattened, or several arrays one after
@@ -208,17 +214,16 @@ partial def elabAppBaseWith
         | some op => return ⟨.prim op [← fl a], .float⟩
         | none => eerr p s!"{name} takes {if name == "Lerp" then "three" else "two"} floats"
       | _, _ => eerr p s!"{name} takes {if name == "Lerp" then "three floats" else if name == "Pow" || name == "Log" then "two floats" else if name == "ArcTan" then "one or two floats" else "one float"}"
-    | "Round" | "$Round" | "Int" =>
+    | "Round" | "Int" =>
       -- a float to an int (#127): `Round` ties to even, `Int` towards zero;
       -- failing on NaN, an infinity or out of range
-      let shown := if name == "$Round" then "Round" else name
-      needBracket shown
+      needBracket name
       match args with
       | [a] =>
         let r := widenR ctx.types (← elabE ctx a (some .float))
-        if r.ty != .float then eerr p s!"{shown} takes a float, found {r.ty.show}"
-        return ⟨.prim (if shown == "Round" then .fround else .ftrunc) [r.e], .int⟩
-      | _ => eerr p s!"{shown} takes one argument"
+        if r.ty != .float then eerr p s!"{name} takes a float, found {r.ty.show}"
+        return ⟨.prim (if name == "Round" then .fround else .ftrunc) [r.e], .int⟩
+      | _ => eerr p s!"{name} takes one argument"
     | "Floor" | "Ceil" =>
       -- (of a float, #127: failable, so with brackets; of a rational or
       -- an int, with either, as the Book writes both)

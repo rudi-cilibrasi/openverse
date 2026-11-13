@@ -2,6 +2,7 @@
    `elabProgramCore`); public declarations retain OpenVerse.Front names. -/
 import OpenVerse.Front.Elab.Lowering
 import OpenVerse.Front.InitializerConvergence
+import OpenVerse.Front.BuiltinValues
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -224,6 +225,8 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
     | some e => [.fn e.pos "$Do" [] [] ["decides"] (.name "void") (.app e.pos (.ident e.pos "$Show") [e] false)]
     | none => []
   let resolved ← resolveModules (allTops000 ++ rawEntry)
+  -- (the built-ins it names as values, as definitions of their own)
+  let resolved := BuiltinValues.wrappers resolved ++ resolved
   let (typeDefaults, resolved) := resolved.partition (·.isTypeDefault)
   checkConstantCycles resolved
   let resolved := if opts.extendedDefaults then resolved

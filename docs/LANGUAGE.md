@@ -383,6 +383,17 @@ Main():void =
   parameter has its own name (`F(?F:int)`) as a value; named parameters
   inside a tuple parameter, and tuples with named elements. See the
   [pinned rules](research/named-function-values.md).
+- A built-in function of one signature is a function like any other: named
+  as a value (`CheckSpecials[Sin, NaN, NaN]`, as the Book's tests write), it
+  is a value of its type and effects: `Sqrt`, `Exp`, `Ln`, `Sin`, `Cos`,
+  `Tan`, `ArcSin`, `ArcCos`, `Pow`, `Log` (`<computes>`), `Sinh`, `Cosh`,
+  `Tanh`, `ArSinh`, `ArCosh`, `ArTanh`, `Lerp` (`<reads>`), `IsFinite`,
+  `Round`, `Int` (`<computes><decides>`). The program gets an ordinary
+  definition of the built-in, which calls it, unless it defines or binds
+  that name itself. The others are no values: overloaded (`Abs`, `Min`,
+  `Max`, `Floor`, `Ceil`, `ArcTan`, `Clamp`, `Sgn`, `ToString`), generic
+  (`Concatenate`, `ConcatenateMaps`) or names a program cannot define
+  (`Quotient`, `Mod`, `Print`, `Err`).
 - Overloaded functions and methods cannot be used as values (Book of Verse
   ch. 6, "Capture"), with or without named parameters. Local function
   declarations and lambda expressions are unsupported. The pinned Book marks nested functions unreleased and arrow
