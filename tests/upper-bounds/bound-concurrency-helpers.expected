@@ -1,0 +1,6 @@
+event 7 1
+task precise 2
+sticky 9 3
+unit 5
+cleanup
+cancel 6

@@ -1,0 +1,5 @@
+tuple array 7 8 2
+erased tuple array 2
+nested tuple array 10 2
+inferred tuple array 7
+inferred reverse 0

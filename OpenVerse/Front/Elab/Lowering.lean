@@ -19,25 +19,9 @@ structure Compiled where
 def Compiled.asking (needs : Requests) : Compiled :=
   { prog := default, sigs := { fns := [] }, slotTys := [], needs }
 
-/-- Names a type parameter cannot have. -/
-def typeNames : List String :=
-  ["int", "logic", "char", "string", "void", "float", "rational", "any", "comparable", "type", "subtype"]
 
-/-- The type parameters of a generic function or a parametric struct: name,
-    and whether declared `subtype(comparable)`. -/
-def checkTParams (env : TyEnv) (tps : List TParam) : Except String (List (String × Bool)) := do
-  let mut out : Array (String × Bool) := #[]
-  for tp in tps do
-    if out.any (·.1 == tp.name) then
-      throw s!"{tp.pos.show}: type parameter {tp.name} is declared twice (several constraints on one type parameter are not supported)"
-    if typeNames.contains tp.name || (env.structs.lookup tp.name).isSome ||
-        (env.enums.lookup tp.name).isSome then
-      throw s!"{tp.pos.show}: type parameter {tp.name} has the name of a type"
-    match tp.constraint with
-    | "type" => out := out.push (tp.name, false)
-    | "comparable" => out := out.push (tp.name, true)
-    | c => throw s!"{tp.pos.show}: unknown constraint subtype({c}) (openverse supports {tp.name}:type and {tp.name}:subtype(comparable))"
-  return out.toList
+
+
 
 /-- How a program is compiled from the command line: its shell arguments,
     bound to `Args : []string` (unless the program defines `Args`), and an
@@ -686,7 +670,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       | some sg =>
         let dictTps := sg.tparams.filter (fun (v, _) => !sg.selfTps.contains v) ++
           sg.tparams.filter (fun (v, _) => sg.selfTps.contains v)
-        sg.tparams.filterMap fun (v, _) => (dictTps.findIdx? (·.1 == v)).map (fns[gi]!.arity - sg.ndicts + ·)
+        sg.tparams.filterMap fun (v, _) => (dictTps.findIdx? (·.1 == v)).map (sg.frame.witnessBase + ·)
       | none => []
     let (body, acc) := (Suspend.liftChains spawnMark dispBase witnesses fns[gi]!.body).run lifted
     -- (every spawn is now of a call, which `spawnSites` finds: its task's

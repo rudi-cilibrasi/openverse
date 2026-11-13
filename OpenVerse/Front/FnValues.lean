@@ -1,4 +1,4 @@
-import OpenVerse.Front.Syntax
+import OpenVerse.Front.SubtypeSyntax
 import OpenVerse.Front.Choice
 
 /-!
@@ -135,17 +135,21 @@ partial def _root_.OpenVerse.Front.SExpr.tyNames : SExpr → List String
   | .decl _ _ t _ e => (t.map STy.allNames).getD [] ++ e.tyNames
   | .construct _ n ts args => n :: ts.flatMap STy.allNames ++ args.flatMap SExpr.tyNames
   -- (type definitions, which `children` leaves out)
-  | .structDef _ _ _ fs => fs.flatMap fun (_, t, d, _) => t.allNames ++ (d.map SExpr.tyNames).getD []
+  | .structDef _ tps _ fs =>
+    tps.flatMap (fun tp => tp.upperBound.toList.flatMap STy.allNames) ++
+      fs.flatMap fun (_, t, d, _) => t.allNames ++ (d.map SExpr.tyNames).getD []
   | .refineDef _ _ t cs => t.allNames ++ cs.flatMap SExpr.tyNames
   | e => e.children.flatMap SExpr.tyNames
 
 /-- Whether a definition mentions the type `n`. -/
 partial def _root_.OpenVerse.Front.STop.usesType (n : String) : STop → Bool
-  | .fn _ _ ps _ _ r body =>
-    (ps.flatMap (·.ty.allNames) ++ r.allNames ++ body.tyNames).contains n
+  | .fn _ _ ps tps _ r body =>
+    (tps.flatMap (fun tp => tp.upperBound.toList.flatMap STy.allNames) ++
+      ps.flatMap (·.ty.allNames) ++ r.allNames ++ body.tyNames).contains n
   | .const _ _ t e => ((t.map STy.allNames).getD [] ++ e.tyNames).contains n
-  | .classDef _ _ _ _ parents _ fields _ methods =>
-    (parents.flatMap STy.allNames ++ fields.flatMap (fun (_, t, d, _) => t.allNames ++ (d.map SExpr.tyNames).getD [])).contains n ||
+  | .classDef _ _ tps _ parents _ fields _ methods =>
+    (tps.flatMap (fun tp => tp.upperBound.toList.flatMap STy.allNames) ++ parents.flatMap STy.allNames ++
+      fields.flatMap (fun (_, t, d, _) => t.allNames ++ (d.map SExpr.tyNames).getD [])).contains n ||
       methods.any (STop.usesType n)
 
 mutual
@@ -169,9 +173,9 @@ partial def _root_.OpenVerse.Front.SExpr.scan : SExpr → List Shape × List Str
   | .decl _ _ t _ e =>
     let (s, n) := e.scan
     ((t.map STy.fnShapes).getD [] ++ s, n)
-  | .structDef _ _ _ fs =>
+  | .structDef _ tps _ fs =>
     let (s, n) := scanL (fs.filterMap (·.2.2.1))
-    (fs.flatMap (·.2.1.fnShapes) ++ s, n)
+    (tps.flatMap (fun tp => tp.upperBound.toList.flatMap STy.fnShapes) ++ fs.flatMap (·.2.1.fnShapes) ++ s, n)
   | .refineDef _ _ t cs =>
     let (s, n) := scanL cs
     (t.fnShapes ++ s, n)
@@ -194,21 +198,23 @@ partial def _root_.OpenVerse.Front.SParam.scan (q : SParam) : List Shape × List
     method, `.M`. -/
 partial def _root_.OpenVerse.Front.STop.scan (bound : List String := []) (meths : List String := []) :
     STop → List Shape × List String
-  | .fn _ _ ps _ _ r body =>
+  | .fn _ _ ps tps _ r body =>
     let (s, n) := scanL [body]
     let pss := ps.map SParam.scan
     let mine := ps.map (·.name) ++ bound
-    (r.fnShapes ++ pss.flatMap (·.1) ++ s, (pss.flatMap (·.2) ++ n).filter (!mine.contains ·))
+    (tps.flatMap (fun tp => tp.upperBound.toList.flatMap STy.fnShapes) ++
+      r.fnShapes ++ pss.flatMap (·.1) ++ s, (pss.flatMap (·.2) ++ n).filter (!mine.contains ·))
   | .const _ _ t e =>
     let (s, n) := e.scan
     ((t.map STy.fnShapes).getD [] ++ s, n)
-  | .classDef _ _ _ _ parents _ fields _ methods =>
+  | .classDef _ _ tps _ parents _ fields _ methods =>
     let ms := methods.map (STop.scan bound)
     let (s, n) := scanL (fields.filterMap (·.2.2.1))
     let self (x : String) : String := if meths.contains x then "." ++ x else x
     -- (a field's default is elaborated without `Self`: it names the
     -- top-level function, not a method or field of the class)
-    (parents.flatMap STy.fnShapes ++ fields.flatMap (·.2.1.fnShapes) ++ s ++ ms.flatMap (·.1),
+    (tps.flatMap (fun tp => tp.upperBound.toList.flatMap STy.fnShapes) ++
+      parents.flatMap STy.fnShapes ++ fields.flatMap (·.2.1.fnShapes) ++ s ++ ms.flatMap (·.1),
       n ++ (ms.flatMap (·.2)).map self)
 
 /-- The function types inside a type: parameters, effects, result. -/
@@ -290,6 +296,25 @@ structure GenericAdapter where
   args : List SExpr
   /-- A bare parameter replaced by tuple components, also in a receiver. -/
   subst : List (String × STy) := []
+  /-- Complete relations that cannot be represented by a bound on one
+      component after a whole formal becomes a tuple. -/
+  relations : List (STy × STy) := []
+
+/-- Parameters known from the value shape also determine parameters in their
+    upper bounds. The converse is not inference: an upper type alone cannot
+    determine an absent lower type. -/
+def boundInferredNames (tps : List TParam) (types : List STy)
+    (relations : List (STy × STy) := []) : List String := Id.run do
+  let names := tps.map (·.name)
+  let mut known := names.filter fun name => types.any (·.mentions name)
+  let bounds := relations ++ tps.filterMap fun tp => tp.upperBound.map (·, STy.name tp.name)
+  for _ in [0:tps.length + 1] do
+    let before := known
+    for (upper, lower) in bounds do
+      if (lower.bareNames.filter names.contains).all known.contains then
+        known := (known ++ upper.bareNames.filter names.contains).eraseDups
+    if known == before then break
+  return known
 
 /-- A requested method adapter whose receiver fixes the source signature.
     Parameters are freshened before recording it, so requests are independent
@@ -306,9 +331,32 @@ structure MethodRequest where
   ret : STy
   args : List SExpr
   decides : Bool
+  relations : List (STy × STy) := []
 
 def MethodRequest.className (r : MethodRequest) (i : Nat) : String :=
   s!"{r.owner}${r.method}$fnVariance{i}"
+
+def mergeMethodRequests (old new : List MethodRequest) : List MethodRequest :=
+  new.foldl (fun acc r => if acc.any (·.key == r.key) then acc else acc ++ [r]) old
+
+/-- A class/interface upper bound excludes tuple instances, also through a
+    peer chain. An unanchored peer cycle does not establish that exclusion. -/
+private def tupleInstancePossible (tps : List TParam) (name : String) : Bool :=
+  go (tps.length + 1) name
+where
+  go : Nat → String → Bool
+    | 0, _ => true
+    | fuel + 1, name =>
+      match (tps.find? (·.name == name)).bind (·.upperBound) with
+      | none => true
+      | some (.name peer) => tps.any (·.name == peer) && go fuel peer
+      | some _ => false
+
+private def tupleComparable (tps : List TParam) (name : String) : Bool :=
+  -- A whole-tuple conversion to a comparable peer (possibly void) does not
+  -- establish equality for each original component. A direct comparable
+  -- constraint on this tuple parameter does establish it.
+  (tps.find? (·.name == name)).any (·.constraint == "comparable")
 
 /-- Tuple calls at the arities present in the program. A bare parameter can
     become the tuple of the target arguments; its comparable bound then
@@ -328,20 +376,41 @@ def genericAdapters (p : Pos) (n : String) (ps : List STy) (tps : List TParam) (
         suffix := s!"Unpack{ts.length}", tparams := tps, params := ts, ret := r,
         args := [.tuple p (xs ts.length)] }]
   | [.name v] =>
-    if let some tp := tps.find? (·.name == v) then
+    if let some tp := tps.find? (fun tp => tp.name == v && tupleInstancePossible tps v) then
       for k in arities do
-        let components := (List.range k).map fun i => { tp with name := s!"$tupleValue_{n}_{k}_{i}" }
+        let components := (List.range k).map fun i => ({
+          pos := tp.pos, name := s!"$tupleValue_{n}_{k}_{i}",
+          constraint := if tupleComparable tps v then "comparable" else "type" } : TParam)
         let types := components.map fun t => STy.name t.name
         let σ := [(v, STy.tup types)]
+        -- Keep the entire relation. tuple(a,b) <: t says nothing about
+        -- whether a <: t or b <: t, even when t occurs only in this bound.
+        let retained := tps.flatMap fun original => if original.name == v then components else
+          let upper := original.upperBound.map (·.substNames σ)
+          -- Keep bounds still expressible on the retained binder. Besides
+          -- avoiding redundant proofs, this retains comparability implied
+          -- by a nominal unique bound before field types are resolved.
+          let upper := upper.filter fun | .name _ | .app .. => true | _ => false
+          [{ original with
+            upperBound := upper,
+            constraint := if upper.isSome then original.constraint else
+              if tupleComparable tps original.name then "comparable" else "type" }]
+        let relations := tps.filterMap fun original => do
+          let base ← original.upperBound
+          let base := base.substNames σ
+          if retained.any (fun kept => kept.name == original.name &&
+              kept.upperBound.any (fun upper => reprStr upper == reprStr base)) then none else
+            some (base, (STy.name original.name).substNames σ)
         out := out ++ [{
           suffix := s!"Unpack{k}",
-          tparams := tps.flatMap (fun t => if t.name == v then components else [t]),
+          tparams := retained, relations,
           params := types, ret := r.substNames σ, args := [.tuple p (xs k)], subst := σ }]
   | _ => pure ()
   -- Never introduce an unusable extra class merely because a different
   -- function type was written elsewhere. The original adapter is unchanged.
   return out.take 1 ++ (out.drop 1).filter fun a =>
-    a.tparams.all fun tp => (a.params ++ [a.ret] ++ captured.map (·.substNames a.subst)).any (·.mentions tp.name)
+    let known := boundInferredNames a.tparams (a.params ++ [a.ret] ++ captured.map (·.substNames a.subst)) a.relations
+    a.tparams.all fun tp => known.contains tp.name
 
 /-- Add the shapes' interfaces and the value classes of the functions used
     as values (#210). A function is used as a value when its name occurs
@@ -421,7 +490,8 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
           -- Member scanning also sees unrelated fields. A parameter absent
           -- from the signature can never be inferred at value creation, and
           -- an unused adapter would itself contain an uninferrable call.
-          let inferable := mtps.all fun tp => targs.any (·.mentions tp.name)
+          let known := boundInferredNames (tps ++ mtps) (targs ++ [STy.app c (tps.map fun tp => .name tp.name)])
+          let inferable := mtps.all fun tp => known.contains tp.name
           -- (#283) and none for a family's stub: a method with several values
           -- is no value (`Choice.methodFns` refuses one as a value)
           if members.contains m && needed && !overloaded && inferable && ps.all (!·.named) && !m.contains '$' &&
@@ -430,7 +500,7 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
             -- caller substitutes: its `u` may be a different method's `u`.
             let names := mtps.zipIdx.map fun (tp, i) => (tp.name, s!"$methodValue_{c}_{m}_{i}")
             let σ := names.map fun (a, b) => (a, STy.name b)
-            some (mp, c, tps, mtps.map (fun tp => { tp with name := (names.lookup tp.name).getD tp.name }), m,
+            some (mp, c, tps, mtps.map (·.rename names), m,
               ps.map (fun sp => { sp with ty := sp.ty.substNames σ }), effs, r.substNames σ)
           else none
         | _ => none
@@ -456,7 +526,7 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
       up ++ up.flatMap (ancOf fuel)
     | _, _ => []
   let anc := ancOf (defs.length + 1)
-  if values.isEmpty && mvalues.isEmpty && gvalues.isEmpty && methodRequests.isEmpty &&
+  if values.isEmpty && mvalues.isEmpty && gvalues.isEmpty && requests.isEmpty && methodRequests.isEmpty &&
       (scans.all fun (s, _) => s.isEmpty) then return tops
   -- every shape written, and each value's own (a value's type when nothing
   -- else gives one)
@@ -465,7 +535,10 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
       gvalues.map (fun (_, _, ps, _, effs, _) => shapeOf ps.length effs) ++
       mvalues.map (fun (_, _, _, _, _, ps, effs, _) => shapeOf ps.length effs) ++
       methodRequests.flatMap (fun r => shapeOf r.params.length r.effs ::
-        r.receiver.fnShapes ++ r.params.flatMap STy.fnShapes ++ r.ret.fnShapes) do
+        r.receiver.fnShapes ++ r.params.flatMap STy.fnShapes ++ r.ret.fnShapes ++
+        r.tparams.flatMap (fun tp => tp.upperBound.toList.flatMap STy.fnShapes) ++
+        r.relations.flatMap (fun (upper, lower) => upper.fnShapes ++ lower.fnShapes)) ++
+      requests.flatMap (fun (_, ty) => ty.fnShapes) do
     if !shapes.contains s then shapes := shapes ++ [s]
   let arities := (shapes.map (·.arity)).eraseDups
   for (p, n, ps, tps, effs, r) in gvalues do
@@ -557,8 +630,10 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
         STop.fn p s.call (params a.params) [] (s.effs ++ ["override"]) a.ret
           (.app p (.ident p n) a.args own.decides)
       let fits := sh :: fits.filter (· != sh)
-      out := out ++ [.classDef p s!"{n}$fn{a.suffix}" a.tparams []
-        (fits.map fun s => STy.app s.name (a.params ++ [a.ret])) false [] [] methods]
+      let owner := s!"{n}$fn{a.suffix}"
+      out := out ++ [.classDef p owner a.tparams []
+        (fits.map fun s => STy.app s.name (a.params ++ [a.ret])) false
+        (SubtypeEvidence.relationFields p owner a.relations) [] methods]
     let tpn := tps.map (·.name)
     let mut k := 0
     for (qs, es, u) in requested n do
@@ -583,9 +658,11 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
         STop.fn p s.call (params a.params) [] (s.effs ++ ["override"]) a.ret
           (.app p (.member p (.ident p "$self") m) a.args own.decides)
       let fits := sh :: fits.filter (· != sh)
-      out := out ++ [.classDef p s!"{c}${m}$fn{a.suffix}" a.tparams []
+      let owner := s!"{c}${m}$fn{a.suffix}"
+      out := out ++ [.classDef p owner a.tparams []
         (fits.map fun s => STy.app s.name (a.params ++ [a.ret])) false
-        [("$self", selfTy.substNames a.subst, none, false)] [] methods]
+        ([("$self", selfTy.substNames a.subst, none, false)] ++
+          SubtypeEvidence.relationFields p owner a.relations) [] methods]
     -- (#231) a method of a class without type parameters as a value at a
     -- closed function type it fits by variance, asked for as `.{c}${m}`:
     -- `{c}${m}$fn${k}`, holding the receiver
@@ -614,7 +691,8 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
         (.app r.pos (.member r.pos (.ident r.pos "$self") r.method) r.args r.decides)
     out := out ++ [.classDef r.pos (r.className i) r.tparams []
       (fits.map fun s => STy.app s.name (r.params ++ [r.ret])) false
-      [("$self", r.receiver, none, false)] [] methods]
+      (SubtypeEvidence.relationFields r.pos (r.className i) r.relations ++
+        [("$self", r.receiver, none, false)]) [] methods]
   return tops ++ out
 
 end FnValues

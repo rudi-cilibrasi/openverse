@@ -1,0 +1,6 @@
+integer 7 [7]
+scalars 2.5 z λ text
+refined 3 2.5 precise 3 3
+characters ok ok hi
+empty ''
+default 3 method 3

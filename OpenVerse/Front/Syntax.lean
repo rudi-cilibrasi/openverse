@@ -81,7 +81,18 @@ structure TParam where
   name : String
   /-- The constraint as written: `type`, or the argument of `subtype(…)`. -/
   constraint : String
+  /-- A non-comparable upper bound, retained as a type rather than a name:
+      it may be qualified, parametric, or refer to another type parameter. -/
+  upperBound : Option STy := none
   deriving Repr, Inhabited, BEq
+
+/-- Keep the established type/comparable spelling while retaining the full
+    source type of other bounds. Admission is the elaborator's responsibility. -/
+def TParam.withUpperBound (p : Pos) (name : String) (bound : STy) : TParam :=
+  match bound with
+  | .name "comparable" => { pos := p, name, constraint := "comparable" }
+  | .name n | .app n _ => { pos := p, name, constraint := n, upperBound := some bound }
+  | _ => { pos := p, name, constraint := "bound", upperBound := some bound }
 
 mutual
 inductive SExpr where
@@ -222,6 +233,9 @@ structure SParam where
   named : Bool := false
   /-- `?Name:t = e`: the value when the call omits it. -/
   default : Option SExpr := none
+  /-- Compiler-only type-value argument. Its dummy value can initialize
+      slots, but cannot establish an executable subtype relation. -/
+  typeValue : Bool := false
   deriving Repr, Inhabited
 
 /-- A top-level definition. A function's type parameters are those of its
@@ -261,5 +275,26 @@ partial def STy.substNames (σ : List (String × STy)) : STy → STy
   | .map k v => .map (k.substNames σ) (v.substNames σ)
   | .app n ts => .app n (ts.map (STy.substNames σ))
   | .fn ps es r => .fn (ps.map (STy.substNames σ)) es (r.substNames σ)
+
+/-- Rename binders and every peer-parameter reference in their upper bounds
+    together. Renaming just the binder changes a dependent constraint. -/
+def TParam.rename (tp : TParam) (names : List (String × String)) : TParam :=
+  { tp with
+    name := (names.lookup tp.name).getD tp.name
+    upperBound := tp.upperBound.map (·.substNames (names.map fun (a, b) => (a, STy.name b))) }
+
+/-- Inlined generic calls retain complete bounds in their private parameter
+    protocol. Type/comparable parameters keep their established two-item form.
+    The extra type packet is metadata, never an executable construction. -/
+def TParam.marker (tp : TParam) (p : Pos) : SExpr :=
+  .tuple p ([.ident p tp.name, .ident p tp.constraint] ++
+    (tp.upperBound.toList.map fun bound => .construct p "$upperBound" [bound] []))
+
+def TParam.ofMarker : SExpr → Except String TParam
+  | .tuple p [.ident _ name, .ident _ constraint] => pure { pos := p, name, constraint }
+  | .tuple p [.ident _ name, .ident _ constraint,
+      .construct _ "$upperBound" [bound] []] =>
+    pure { pos := p, name, constraint, upperBound := some bound }
+  | e => .error s!"{e.pos.show}: internal: malformed generic constraint metadata"
 
 end OpenVerse.Front

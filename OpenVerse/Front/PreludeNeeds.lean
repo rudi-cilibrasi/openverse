@@ -43,7 +43,8 @@ partial def expr (types values : List String) (e : SExpr) : List String :=
     ns ++ expr types vs b
   | .structDef _ tps _ fs =>
     let types := tps.map (·.name) ++ types
-    fs.flatMap fun (_, t, d, _) => ty types t ++ d.toList.flatMap (expr types [])
+    tps.flatMap (fun p => p.upperBound.toList.flatMap (ty types)) ++
+      fs.flatMap fun (_, t, d, _) => ty types t ++ d.toList.flatMap (expr types [])
   | .refineDef _ n t cs => ty types t ++ cs.flatMap (expr types (n :: values))
   | _ =>
     let here := match e with
@@ -60,13 +61,14 @@ partial def top (members : List (String × List String)) (types values : List St
     let types := tps.map (·.name) ++ types
     let (_, defaults) := ps.foldl (fun (vs, ns) p =>
       (p.name :: vs, ns ++ ty types p.ty ++ p.default.toList.flatMap (expr types vs))) (values, [])
-    (if es.contains "suspends" then ["$suspends"] else []) ++ ty types r ++ defaults ++
+    (if es.contains "suspends" then ["$suspends"] else []) ++
+      tps.flatMap (fun p => p.upperBound.toList.flatMap (ty types)) ++ ty types r ++ defaults ++
       expr types (ps.map (·.name) ++ values) b
   | .const _ _ t e => t.toList.flatMap (ty types) ++ expr types values e
   | .classDef _ n tps _ parents _ fs _ ms =>
     let types := tps.map (·.name) ++ types
     let values := ((members.lookup n).getD []) ++ values
-    parents.flatMap (ty types) ++
+    tps.flatMap (fun p => p.upperBound.toList.flatMap (ty types)) ++ parents.flatMap (ty types) ++
       fs.flatMap (fun (_, t, d, _) => ty types t ++ d.toList.flatMap (expr types [])) ++
       ms.flatMap (top members types values)
 

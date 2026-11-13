@@ -350,10 +350,13 @@ def Ctx.usedLocals (ctx : Ctx) (code : SExpr) : List Local :=
 def firstKey (ctx : Ctx) (p : Pos) (lp : List SExpr) (b : String) (bty : Option STy)
     (rest : List SExpr) : String :=
   let written := SExpr.block p (lp ++ rest)
-  let inputs := (ctx.usedLocals written).map fun l => (l.name, l.ty, l.mutable)
+  let captures := ctx.captureEvidence (ctx.usedLocals written)
+  let inputs := captures.map fun l => (l.name, l.ty, l.mutable)
+  let roles := captures.filterMap fun l => if l.typeValue then some l.name else none
+  let roleKey := if roles.isEmpty then "" else "$typeValues:" ++ reprStr roles
   let aliases := ctx.types.tvars.filter fun (n, _) =>
     writesTps [n] written || ((bty.map (Choice.styMentions [n])).getD false)
-  reprStr (p, b, bty, lp, rest, inputs, aliases, ctx.selfClass, ctx.liftTag, ctx.inlineScopes) ++ sourceContextKey ctx ++ firstReturnKey ctx rest
+  reprStr (p, b, bty, lp, rest, inputs, aliases, ctx.selfClass, ctx.liftTag, ctx.inlineScopes) ++ roleKey ++ sourceContextKey ctx ++ firstReturnKey ctx rest
 
 /-- A cast `T[X]`, `X` of type `xty`, that holds only under a refinement of
     the code's type parameters (#243): `T` fixes or repeats type arguments
@@ -744,7 +747,7 @@ def contTypes (ctx : Ctx) (p : Pos) (inputs outputs : List Ty) (written : SExpr)
   if extra.any (fun (n, _) => !available.any (·.1 == n)) then
     throw "a continuation type parameter has no witness in this context"
   return (tps.map (fun (n, cmp) => { pos := p, name := n, constraint := if cmp then "comparable" else "type" }),
-    extra.map (fun (n, _) => { name := s!"$type{n}", ty := .name n }),
+    extra.map (fun (n, _) => { name := s!"$type{n}", ty := .name n, typeValue := true }),
     extra.map (fun (n, _) => .app p (.ident p "$witness") [.ident p n] false))
 
 /-- (#246) The function of its own a lazily taken call where the first
@@ -789,8 +792,8 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     | some l => pure l
     | none => throw s!"internal: parameter {n}"
   -- (the consumer's names the clauses after it use, in order of first use)
-  let caps : List Local := (ctx.usedLocals (ctx.choiceCoercionBody (.block p rest))).filter
-    (!pnames.contains ·.name)
+  let caps : List Local := ctx.captureEvidence ((ctx.usedLocals (ctx.choiceCoercionBody (.block p rest))).filter
+    (!pnames.contains ·.name)) pnames
   let setNames := Choice.setsIn (.block p rest)
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
   -- (its own binding too: a call in the clauses of another such call's
@@ -809,7 +812,7 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
       (sig.params.map (·.subst σ) ++ caps.map (·.ty)).flatMap Ty.params
   let missing := tps.filter fun tp => memberInputs.any (!·.contains tp.name) &&
     !typeParams.any (·.name == s!"$type{tp.name}")
-  let typeParams := typeParams ++ missing.map (fun tp => ({ name := s!"$type{tp.name}", ty := .name tp.name } : SParam))
+  let typeParams := typeParams ++ missing.map (fun tp => ({ name := s!"$type{tp.name}", ty := .name tp.name, typeValue := true } : SParam))
   let typeArgs := typeArgs ++ missing.map (fun tp => SExpr.app p (.ident p "$witness") [.ident p tp.name] false)
   let name := s!"$first{p.line}_{p.col}_{key.hash}" ++ (if p.file.isEmpty then "" else s!"_{p.file}")
   -- Every recursive edge, including a mutual member's, forwards the same
@@ -836,11 +839,11 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
   let heap := ["reads", "writes", "allocates"].filter fun k =>
     fxB.any (·.1 == k) || ((g :: mnames).any fun h => ((ctx.sig? h).map (·.fx.contains k)).getD false)
   let capPs : List SParam :=
-    caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy }
+    caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy, typeValue := l.typeValue }
   -- (#283) with return frames, the continuation they are pushed on, after
   -- the parameters; empty at the consumer's call
   let kPs : List SParam := kTy.toList.map fun t => { name := "$K", ty := t.toSTy }
-  let params : List SParam := pls.map (fun l => { name := l.name, ty := l.ty.toSTy }) ++ kPs ++ capPs
+  let params : List SParam := pls.map (fun l => { name := l.name, ty := l.ty.toSTy, typeValue := l.typeValue }) ++ kPs ++ capPs
   let specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"]
   let (ret, normal, returnExit, breakExit) := firstResult p name bls sets source breaks
   let normal? := if returnExit.isSome || breakExit.isSome then some normal else none
@@ -866,8 +869,8 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
       let aliases := σ.map fun (n, t) => (Choice.memberTypeName h n, t.toSTy)
       let hcls := hcls.map (Refine.substTypes aliases)
       let htail := Refine.substTypes aliases htail
-      let hparams : List SParam ← (hps.zip (sig.params.map (·.subst σ))).mapM fun
-        | (.ident _ n, t) => pure { name := n, ty := t.toSTy }
+      let hparams : List SParam ← (hps.zip (sig.params.map (·.subst σ))).zipIdx.mapM fun
+        | ((.ident _ n, t), i) => pure { name := n, ty := t.toSTy, typeValue := sig.typeValues.contains i }
         | _ => throw "internal: a $member parameter (#283)"
       let body := Choice.firstBody (nameOf h) p b bty hcls htail rest binds setsT capArgs (some vty.toSTy) nameOf
         (fun target => recArgs (some (target.getD h))) normal? frames retName fTys retOf
@@ -936,7 +939,8 @@ def contKey (ctx : Ctx) (p : Pos) (b : String) (rest : List SExpr) : String :=
     | none => rest
   -- (with their types: a `for`'s body copied once per alternative of a
   -- choice has the same place, with names of other types)
-  let caps := (ctx.usedLocals (.block p rest)).map fun l => s!"{l.name}:{reprStr l.ty}"
+  let caps := (ctx.captureEvidence (ctx.usedLocals (.block p rest))).map fun l =>
+    s!"{l.name}:{reprStr l.ty}" ++ (if l.typeValue then ":typeValue" else "")
   -- A type used only by a written annotation has no captured value. Its
   -- instance still distinguishes helpers made at a shared source position.
   let written := ctx.types.tvars.filterMap fun (n, t) =>
@@ -982,7 +986,7 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
     else pure none
   let breaks := firstBreaks rest
   let rest := if breaks then rest.map Refine.liftBreaks else rest
-  let caps : List Local := ctx.usedLocals (ctx.choiceCoercionBody (.block p rest))
+  let caps : List Local := ctx.captureEvidence (ctx.usedLocals (ctx.choiceCoercionBody (.block p rest)))
   let setNames := Choice.setsIn (.block p rest)
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
   let binds := (b :: Choice.boundIn rest).eraseDups
@@ -1001,7 +1005,7 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
   -- (the `var`s it sets, copied from parameters named `m$in`, and given back)
   let copies := sets.map fun l => SExpr.decl p l.name (some l.ty.toSTy) true (.ident p s!"{l.name}$in")
   let params : List SParam := { name := b, ty := bl.ty.toSTy } ::
-    caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy }
+    caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy, typeValue := l.typeValue }
   -- (`$firstP`: the clauses are lifted already, the consumer's, which lifting
   -- again would bind twice, as for #275's functions)
   return { key, pos := p, name, returnExit, breakExit, sourceContext := sourceContextOf ctx, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
@@ -1128,7 +1132,7 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
     | .app _ (.ident _ "$forReturnBody") [.block _ [_, .set _ (.ident _ _) none _], _, _] false => true
     | _ => false
   if !breaks && (Refine.findPart Refine.isBreak true (.block p rest)).isSome then throw "a break"
-  let caps : List Local := ctx.usedLocals (ctx.choiceCoercionBody (.block p (rest ++ [body])))
+  let caps : List Local := ctx.captureEvidence (ctx.usedLocals (ctx.choiceCoercionBody (.block p (rest ++ [body]))))
   let setNames := Choice.setsIn (.block p (rest ++ [body]))
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
   let (tps, typeParams, typeArgs) ← contTypes ctx p (bty :: caps.map (·.ty)) [vty] written
@@ -1136,7 +1140,7 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
   let heap := ["reads", "writes", "allocates"].filter fun k => ctx.fnFx.contains k
   let copies := sets.map fun l => SExpr.decl p l.name (some l.ty.toSTy) true (.ident p s!"{l.name}$in")
   let params : List SParam := { name := b, ty := bty.toSTy } ::
-    caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy }
+    caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy, typeValue := l.typeValue }
   let vals := s!"{b}$vals"
   let valueTy : STy := if outcome then .opt (.arr vty.toSTy) else .arr vty.toSTy
   let failure : SExpr := if sets.isEmpty then .ident p "false" else
@@ -1173,7 +1177,7 @@ def forStagePlanOf (ctx : Ctx) (p : Pos) (key : String) (clauses : List SExpr)
   let body := qualify body
   let written := ctx.choiceCoercionBody (.block p (clauses ++ [body] ++ required.map (SExpr.ident p ·)))
   let used := Choice.namesUsed written
-  let caps := used.eraseDups.filterMap ctx.lookup
+  let caps := ctx.captureEvidence (used.eraseDups.filterMap ctx.lookup)
   let setNames := Choice.setsIn written
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
   let inputs := (caps.flatMap fun l => l.storage.toList.flatMap (·.args)) ++ ctx.choiceCoercions.map (·.1.ty)
@@ -1248,11 +1252,11 @@ def forStagePrefixOf (ctx : Ctx) (plan : Choice.ForStagePlan) (args : List Ty) (
   let clauses := clauses.map fun e => Refine.substTypes σt (qualify e)
   let body := Refine.substTypes σt (qualify body)
   let written := ctx.choiceCoercionBody (.block p (clauses ++ [body] ++ (copyNames ++ borrowNames).map (SExpr.ident p ·)))
-  let caps := ctx.usedLocals written
+  let caps := ctx.captureEvidence (ctx.usedLocals written)
   let key := s!"prefix{flat}" ++ plan.key ++ contKey ctx p "$prepare" [written] ++ forStageCaptureKey ctx args caps
   let name := s!"{plan.base}$prepare{key.hash}"
   let (tps, more, witnesses) ← contTypes ctx p (caps.map (·.ty)) args written
-  let params := caps.map fun l => ({ name := if l.mutable then l.name ++ "$in" else l.name, ty := l.ty.toSTy } : SParam)
+  let params := caps.map fun l => ({ name := if l.mutable then l.name ++ "$in" else l.name, ty := l.ty.toSTy, typeValue := l.typeValue } : SParam)
   let init := caps.filterMap fun l => if !l.mutable then none else some
     (SExpr.decl p l.name (some l.ty.toSTy) true
       (.app p (.ident p "$refineCopyIn") [.ident p (l.name ++ "$in")] false))
@@ -1294,7 +1298,7 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
   let clauses := clauses.map qualify
   let body := qualify body
   let written := ctx.choiceCoercionBody (.block p (clauses ++ [body] ++ (ctx.forStageCopies ++ ctx.forStageBorrows).map (SExpr.ident p ·)))
-  let caps := ctx.usedLocals written
+  let caps := ctx.captureEvidence (ctx.usedLocals written)
   let key := s!"env{ctx.forStageFlat}" ++ plan.key ++ contKey ctx p "$resume" [written] ++ forStageCaptureKey ctx ctx.forStageArgs caps
   let name := s!"{plan.base}$env{key.hash}"
   let args := ctx.forStageArgs
@@ -1309,12 +1313,22 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
     | .app p (.ident _ "$forReturns") args false => .app p (.ident p "$forReturnBody") args false
     | b => b
   let localName (n : String) := if n == "Self" then "$sourceSelf" else n
-  let fields := caps.zipIdx.map fun (l, j) => (s!"$capture{j}", l.ty.toSTy, none, false)
+  let captureName (l : Local) (j : Nat) := if l.typeValue then s!"$w.capture{j}" else s!"$capture{j}"
+  let fields := caps.zipIdx.map fun (l, j) => (captureName l j, l.ty.toSTy, none, false)
+  -- Captured values may themselves have constrained types. Their local
+  -- annotations are checked before every capture has been initialized, so
+  -- retain the actual captured relations on Self as readonly proof fields.
+  -- Dummy type values contribute no capability, and construction must still
+  -- provide each dictionary from the caller's current frame.
+  let relations := (SubtypeEvidence.capabilities ctx.types (caps.map fun l =>
+    (l.name, if l.typeValue then Ty.void else l.ty))).map (fun plan => plan.bound ctx.types) |>.eraseDups
+  let fields := fields ++ SubtypeEvidence.relationFields p name (relations.map fun bound =>
+    (bound.base.toSTy, bound.derived.toSTy))
   let borrowed (l : Local) := l.storage.filter fun s =>
     !(ctx.sig? s.frame).any (!·.suspends)
   let init := caps.zipIdx.flatMap fun (l, j) =>
     let value := SExpr.app p (.ident p "$forEnvCapture")
-      [.member p (.ident p "Self") s!"$capture{j}"] false
+      [.member p (.ident p "Self") (captureName l j)] false
     if (borrowed l).isSome then
       let saved := s!"$captureInit{j}"
       [SExpr.decl p saved (some l.ty.toSTy) false value,
@@ -1347,7 +1361,7 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
     params := [], specs := ["computes"], ret := .name "void", body := .tuple p [],
     binds := [], sets := [], args := [], extraFns := [cls] }
   let obj := SExpr.construct p name (tps.map fun tp => .name tp.name)
-    (caps.zipIdx.map fun (l, j) => .decl p s!"$capture{j}" none false (.ident p l.name))
+    (caps.zipIdx.map fun (l, j) => .decl p (captureName l j) none false (.ident p l.name))
   return (req, obj, .struct plan.base args)
 
 /-- A failed body is unwrapped in an iteration body. Inside an outcome
@@ -1609,10 +1623,26 @@ structure ChoiceOperationCase where
   result : Ty
   specs : List String
   methodVars : List (String × Bool) := []
+  methodBounds : List SubtypeEvidence.Bound := []
   omittedDefaults : Bool := false
   instanceDefaults : Bool := false
   fixedInstance : Option (String × List Ty) := none
   indexedDecides : Bool := true
+
+/-- A shared operation must declare the method constraints it quantifies.
+    Source-path lowering remains available when a relation cannot be stated
+    on one retained binder; it must never be erased to an unconstrained one. -/
+def choiceMethodTParams (p : Pos) (vars : List (String × Bool))
+    (bounds : List SubtypeEvidence.Bound) : Option (List TParam) := do
+  let bounds := bounds.eraseDups
+  if bounds.any (fun bound => match bound.derived with
+      | .param name _ => !vars.any (·.1 == name)
+      | _ => true) then none else do
+  vars.mapM fun (name, comparable) =>
+    match bounds.filter (fun bound => bound.derived == .param name comparable) with
+    | [] => some { pos := p, name, constraint := if comparable then "comparable" else "type" }
+    | [bound] => some (TParam.withUpperBound p name bound.base.toSTy)
+    | _ => none
 
 def choiceOrderedArguments (args : List SExpr) : List SExpr :=
   let named : SExpr → Bool := fun | .decl _ n .. => n.startsWith "?" | _ => false
@@ -1709,7 +1739,13 @@ def choiceGenericOperation (ctx : Ctx) (stem : String) (receiver : SExpr) (recei
   let methodTypes := methodVars.map fun (n, b) => (n, Ty.param n b)
   let methodNames := methodVars.map (·.1)
   let cases := cases.map fun (row : ChoiceOperationCase) => { row with
-    inputs := row.inputs.map (Ty.subst methodTypes), result := row.result.subst methodTypes }
+    inputs := row.inputs.map (Ty.subst methodTypes), result := row.result.subst methodTypes,
+    methodBounds := row.methodBounds.map (fun b => SubtypeEvidence.Bound.subst b methodTypes) }
+  let bounds : List SubtypeEvidence.Bound := (cases.head?.map (·.methodBounds)).getD [] |>.eraseDups
+  if cases.any (fun row => row.methodBounds.eraseDups.length != bounds.length ||
+      !bounds.all row.methodBounds.contains) then none else do
+  let p0 : Pos := { line := 0, col := 0 }
+  let sourceMethodTps ← choiceMethodTParams p0 methodVars bounds
   let mut extended := ops.plan
   let mut inputs : List Ty := []
   for j in List.range arguments.length do
@@ -1721,37 +1757,48 @@ def choiceGenericOperation (ctx : Ctx) (stem : String) (receiver : SExpr) (recei
   -- before that method is invoked. Such a type needs a richer schema.
   if extendedPlan.instances.any (fun row => row.any fun (_, ty) => ty.params.any methodNames.contains) then none else do
   let signature := receiverTy :: inputs ++ [result]
-  let classVars := Ty.mergeParamBounds (signature.flatMap Ty.paramsC) |>.filter (!methodNames.contains ·.1)
-  let p0 : Pos := { line := 0, col := 0 }
+  let boundTypes := bounds.flatMap fun bound => [bound.base, bound.derived]
+  let applications := signature ++ boundTypes ++ cases.flatMap fun row => row.receiver :: row.inputs ++ [row.result]
+  let unscoped := { ctx.types with boundFacts := [] }
+  let classBounds : List SubtypeEvidence.Bound := (SubtypeEvidence.applicationBounds ctx.types applications).filter fun bound =>
+    !(bound.base.params ++ bound.derived.params).any methodNames.contains &&
+      !unscoped.boundSubtype bound.derived bound.base
+  let classBoundTypes : List Ty := classBounds.flatMap fun bound => [bound.base, bound.derived]
+  let classVars := Ty.mergeParamBounds ((signature ++ boundTypes ++ classBoundTypes).flatMap Ty.paramsC) |>.filter (!methodNames.contains ·.1)
   let specs := (if cases.any (·.specs.contains "suspends") then ["suspends"] else []) ++
     (if bracket then ["decides"] else []) ++
     (let effects := heapFx.filter fun k => cases.any fun row => (allowedFx row.specs).contains k
      if effects.isEmpty then ["computes"] else effects)
-  let canonical := cases.map fun row =>
-    let types := row.receiver :: row.inputs ++ [row.result]
-    let vars := Ty.mergeParamBounds (types.flatMap Ty.paramsC) |>.filter (!methodNames.contains ·.1)
+  let canonical : List (List Ty × List (String × Bool) × List (String × Ty)) :=
+      (cases.zip extendedPlan.instances).map fun (row, instanceTypes) =>
+    let types : List Ty := row.receiver :: row.inputs ++ [row.result]
+    let allTypes := types ++ boundTypes ++ classBoundTypes.map (Ty.subst instanceTypes)
+    let vars := (Ty.mergeParamBounds (allTypes.flatMap Ty.paramsC)).filter fun entry => !methodNames.contains entry.1
     let rename := vars.zipIdx.map fun ((n, b), i) => (n, Ty.param s!"$operationT{i}" b)
-    (types.map (·.subst rename), vars, rename)
+    (types.map (Ty.subst rename), vars, rename)
   let context := if borrows then reprStr (choiceDefaultContext ctx (.tuple p [])) else ""
   let labels := arguments.map fun | .decl _ n .. => n | _ => ""
   let familyKey := if !borrows && labels.all (· == "") then reprStr (method, specs, methodVars, canonical.map (·.1)) else
     reprStr (method, specs, methodVars, canonical.map (·.1), labels, context)
+  let familyKey := familyKey ++ (if bounds.isEmpty then "" else reprStr (bounds.map fun bound =>
+    ((bound.base.subst (canonical.head!.2.2)).toSTy, (bound.derived.subst (canonical.head!.2.2)).toSTy)))
+  let familyKey := familyKey ++ (if classBounds.isEmpty then "" else reprStr (classBounds.map fun bound =>
+    ((bound.base.subst (canonical.head!.2.2)).toSTy, (bound.derived.subst (canonical.head!.2.2)).toSTy)))
   let family := s!"$choiceOperationDictionary{familyKey.hash}{if borrows then "$choiceDefault" else ""}"
   let classNames := classVars.zipIdx.map fun ((_, b), i) => (s!"$operationClass{i}", b)
   let classRename := classVars.zip classNames |>.map fun ((old, _), (name, bound)) => (old, Ty.param name bound)
   let declarationSignature := signature.map (·.subst classRename)
   let classArgs := classNames.map fun (n, _) => STy.name n
-  let tparams (vars : List (String × Bool)) : List TParam := vars.map fun (name, bound) =>
-    { pos := p0, name, constraint := if bound then "comparable" else "type" }
+  let classTps ← choiceMethodTParams p0 classNames (classBounds.map (fun b => SubtypeEvidence.Bound.subst b classRename))
   let params (types : List Ty) : List SParam := types.zipIdx.map fun (ty, i) => { name := s!"$input{i}", ty := ty.toSTy }
   let values := (List.range (arguments.length + 1)).map fun i => SExpr.ident p0 s!"$input{i}"
-  let methodTps := tparams methodVars
-  let iface := STop.classDef p0 family (tparams classNames) [] [] true [] []
+  let methodTps ← choiceMethodTParams p0 methodVars (bounds.map (fun b => SubtypeEvidence.Bound.subst b classRename))
+  let iface := STop.classDef p0 family classTps [] [] true [] []
     [.fn p0 "$apply" (params declarationSignature.dropLast) methodTps ("$abstract" :: specs)
       declarationSignature.getLast!.toSTy (.tuple p0 [])]
   let applyFn := STop.fn p0 (family ++ "$apply")
     ({ name := "$Self", ty := .app family classArgs } :: params declarationSignature.dropLast)
-    (tparams classNames ++ methodTps) specs declarationSignature.getLast!.toSTy
+    (classTps ++ methodTps) specs declarationSignature.getLast!.toSTy
     (.app p0 (.member p0 (.ident p0 "$Self") "$apply") values bracket)
   let mut definitions : List STop := [iface, applyFn]
   let mut bindings : List (List SExpr) := []
@@ -1761,16 +1808,21 @@ def choiceGenericOperation (ctx : Ctx) (stem : String) (receiver : SExpr) (recei
     let parentTy := STy.app family (actualClassArgs.map fun t => (Ty.subst rename t).toSTy)
     let implementationTypes := (row.receiver :: row.inputs ++ [row.result]).map (Ty.subst rename)
     let canonicalVars := vars.zipIdx.map fun ((_, b), j) => (s!"$operationT{j}", b)
+    let implementationClassTps ← choiceMethodTParams p0 canonicalVars
+      (classBounds.map (fun b => SubtypeEvidence.Bound.subst (SubtypeEvidence.Bound.subst b instanceTypes) rename))
+    let implementationTps ← choiceMethodTParams p0 methodVars (row.methodBounds.map (fun b => SubtypeEvidence.Bound.subst b rename))
     let body := SExpr.app p0 (.member p0 values.head! method) (choiceForwardArguments arguments values.tail) bracket
     let body := if borrows then choiceDefaultContext ctx body else body
-    definitions := definitions ++ [STop.classDef p0 impl (tparams canonicalVars) [] [parentTy] false [] []
-      [.fn p0 "$apply" (params implementationTypes.dropLast) methodTps ("override" :: specs)
+    definitions := definitions ++ [STop.classDef p0 impl implementationClassTps [] [parentTy] false [] []
+      [.fn p0 "$apply" (params implementationTypes.dropLast) implementationTps ("override" :: specs)
         implementationTypes.getLast!.toSTy body]]
     let value := SExpr.construct p impl (vars.map fun (n, _) => .name n) []
     bindings := bindings ++ [[SExpr.decl p s!"{stem}$op{ops.params.length}" (some (.app family (actualClassArgs.map Ty.toSTy))) false
       (.app p (.ident p "$choiceDictionary") [value] false)]]
   let name := s!"{stem}$op{ops.params.length}"
-  let methodMetadata := methodVars.map fun (n, b) => SExpr.tuple p [.str p [.text n], .int p (if b then 1 else 0)]
+  let methodMetadata := (methodVars.zip sourceMethodTps).map fun ((n, b), tp) => SExpr.tuple p
+    ([.str p [.text n], .int p (if b then 1 else 0)] ++
+      tp.upperBound.toList.map (fun upper => .construct p "$upperBound" [upper] []))
   let instances := extendedPlan.instances.map fun row => SExpr.block p (extendedPlan.params.map fun (n, b) =>
     SExpr.tuple p [.construct p "$choiceVariable" [(Ty.param n b).toSTy] [],
       .construct p "$choiceInstance" [((row.lookup n).getD (.param n b)).toSTy] []])
@@ -1974,6 +2026,7 @@ def choiceFixedOperationCase (elabE : Ctx → SExpr → Option Ty → EM R) (ctx
     if substitution.any (fun (_, ty) => ty.params.any (row.methodVars.map (·.1)).contains) then return none
     return some { row with
       inputs := row.inputs.map (·.subst substitution), result := row.result.subst substitution,
+      methodBounds := row.methodBounds.map (fun bound => bound.subst substitution),
       methodVars := [], fixedInstance := some (implementation, types) }) (fun _ => pure none)
   set saved
   return result
@@ -2145,10 +2198,12 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
         let substitution := (classVars.map (·.1)).zip (ctx.types.upArgs cls classArgs owner)
         let inputs := supplied.map fun ty => ((ty.subst methodRename).subst substitution).subst ctx.types.tvars
         let result := ((signature.ret.subst methodRename).subst substitution).subst ctx.types.tvars
+        let methodBounds := (signature.methodBounds classVars.length).map fun bound =>
+          ((bound.subst methodRename).subst substitution).subst ctx.types.tvars
         let specs := (if signature.fx.isEmpty then ["computes"] else signature.fx) ++
           (if signature.decides then ["decides"] else []) ++
           (if signature.suspends then ["suspends"] else [])
-        cases := cases ++ [{ receiver := actual, inputs, result, specs, methodVars, omittedDefaults, instanceDefaults }]
+        cases := cases ++ [{ receiver := actual, inputs, result, specs, methodVars, methodBounds, omittedDefaults, instanceDefaults }]
     if cases.length != plan.instances.length then
       -- A checked function-valued field fixes its result before its
       -- arguments are available, just as a monomorphic method does.
@@ -2185,10 +2240,23 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       (let effects := heapFx.filter fun k => cases.any fun row => (allowedFx row.specs).contains k
        if effects.isEmpty then ["computes"] else effects)
     let p0 : Pos := { line := 0, col := 0 }
-    let canonical := cases.map fun row =>
+    let unscoped := { ctx.types with boundFacts := [] }
+    let classBounds : List (List SubtypeEvidence.Bound) := cases.map fun row =>
+      (SubtypeEvidence.applicationBounds ctx.types (row.receiver :: row.inputs ++ [row.result]) ++
+        row.methodBounds).filter fun bound =>
+        !unscoped.boundSubtype bound.derived bound.base
+    let classVariables : List (List (String × Bool)) := (cases.zip classBounds).map fun (row, bounds) =>
+      Ty.mergeParamBounds ((row.receiver :: row.inputs ++ [row.result] ++
+        bounds.flatMap (fun b => [b.base, b.derived])).flatMap Ty.paramsC)
+    let renames : List (List (String × Ty)) := classVariables.map fun vars => vars.zipIdx.map fun ((name, bound), i) =>
+      (name, Ty.param s!"$operationT{i}" bound)
+    let canonicalBounds : List (List SubtypeEvidence.Bound) := (classBounds.zip renames).map fun (bounds, rename) =>
+      bounds.map fun bound => SubtypeEvidence.Bound.subst bound rename
+    let contracts : List (Option (List TParam)) := (classVariables.zip canonicalBounds).map fun (vars, bounds) =>
+      choiceMethodTParams p0 (vars.zipIdx.map fun (entry, i) => (s!"$operationT{i}", entry.2)) bounds
+    if contracts.any (·.isNone) then continue
+    let canonical := (cases.zip renames).map fun (row, rename) =>
       let types := row.receiver :: row.inputs
-      let vars := Ty.mergeParamBounds ((types ++ [row.result]).flatMap Ty.paramsC)
-      let rename := vars.zipIdx.map fun ((name, bound), i) => (name, Ty.param s!"$operationT{i}" bound)
       (types.map (·.subst rename), row.result.subst rename)
     let operationName := if indexed then "$indexSet:" ++ method ++ (if indices.length == 1 then "" else s!":{indices.length}") ++ ((setter.getD none).map (":" ++ ·)).getD "" else
       if let some op := setter then "$set:" ++ method ++ ":" ++ op.getD "=" else
@@ -2197,6 +2265,8 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
     let labels := arguments.map fun | .decl _ n .. => n | _ => ""
     let familyKey := if !borrows && labels.all (· == "") then reprStr (operationName, specs, canonical) else
       reprStr (operationName, specs, canonical, labels, context)
+    let familyKey := familyKey ++ (if classBounds.all (·.isEmpty) then "" else reprStr (canonicalBounds.map fun bounds =>
+      bounds.map fun bound => (bound.base.toSTy, bound.derived.toSTy)))
     let family := s!"$choiceOperationDictionary{familyKey.hash}{if borrows then "$choiceDefault" else ""}"
     let names := "$operationReceiver" :: ((List.range arguments.length).map fun i => s!"$operationArgument{i}") ++ ["$operationResult"]
     let variables := names.map STy.name
@@ -2232,10 +2302,8 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
     let mut bindings : List (List SExpr) := []
     for ((row, (canonicalInputs, canonicalRet)), i) in (cases.zip canonical).zipIdx do
       let impl := s!"{family}$case{i}"
-      let vars := Ty.mergeParamBounds ((row.receiver :: row.inputs ++ [row.result]).flatMap Ty.paramsC)
-      let canonicalVars := Ty.mergeParamBounds ((canonicalInputs ++ [canonicalRet]).flatMap Ty.paramsC)
-      let implTps := canonicalVars.map fun (n, cmp) =>
-        ({ pos := p0, name := n, constraint := if cmp then "comparable" else "type" } : TParam)
+      let vars := classVariables[i]!
+      let implTps := contracts[i]!.get!
       let parentTy := STy.app family ((canonicalInputs ++ [canonicalRet]).map Ty.toSTy)
       definitions := definitions ++ [.classDef p0 impl implTps [] [parentTy] false [] []
         [.fn p0 "$apply" (params (canonicalInputs.map Ty.toSTy)) [] ("override" :: specs) canonicalRet.toSTy

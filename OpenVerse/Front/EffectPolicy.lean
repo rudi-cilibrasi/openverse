@@ -1,5 +1,5 @@
 /- Source effect admission before function-value and continuation lowering. -/
-import OpenVerse.Front.Syntax
+import OpenVerse.Front.UpperBounds
 
 namespace OpenVerse.Front.EffectPolicy
 
@@ -86,13 +86,18 @@ partial def checkTy (p : Pos) : STy → Except String Unit
     ps.forM (checkTy p)
     checkTy p ret
 
+def checkTParams (params : List TParam) : Except String Unit := do
+  for param in params do param.upperBound.forM (checkTy param.pos)
+  UpperBounds.checkParams params
+
 partial def checkExpr (e : SExpr) (file : String := "") : Except String Unit := do
   let p := if e.pos.file.isEmpty then { e.pos with file } else e.pos
   match e with
   | .decl _ _ ty _ _ => ty.forM (checkTy p)
   | .construct _ _ args _ => args.forM (checkTy p)
-  | .structDef _ _ specs fields =>
+  | .structDef _ params specs fields =>
     checkData p "struct" specs
+    checkTParams params
     for (_, ty, value, _) in fields do
       checkTy p ty
       value.forM (checkExpr · p.file)
@@ -104,8 +109,9 @@ partial def checkExpr (e : SExpr) (file : String := "") : Except String Unit := 
 
 partial def checkTop (top : STop) (owner : String := "") : Except String Unit := do
   match top with
-  | .fn p name params _ specs ret body =>
+  | .fn p name params tparams specs ret body =>
     checkSpecs p (owner ++ name) specs
+    checkTParams tparams
     for param in params do
       checkTy p param.ty
       param.default.forM (checkExpr · p.file)
@@ -114,8 +120,9 @@ partial def checkTop (top : STop) (owner : String := "") : Except String Unit :=
   | .const p _ ty value => do
     ty.forM (checkTy p)
     checkExpr value p.file
-  | .classDef p name _ specs parents _ fields _ methods =>
+  | .classDef p name tparams specs parents _ fields _ methods =>
     checkData p "class/interface" specs
+    checkTParams tparams
     parents.forM (checkTy p)
     for (_, ty, value, _) in fields do
       checkTy p ty

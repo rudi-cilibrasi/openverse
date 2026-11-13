@@ -28,9 +28,66 @@ partial def choiceCoerceResult (ctx : Ctx) (p : Pos) (r : R) (exp : Option Ty) :
 partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   let ctx := ctx.choiceCoercionScope
   let result ← elabECore ctx se exp
-  choiceCoerceResult ctx se.pos result exp
+  let result ← choiceCoerceResult ctx se.pos result exp
+  -- Dataflow propagates roles through ordinary expressions. Only metadata
+  -- origins need a marker; wrapping forwarding/control expressions can
+  -- change the saved-local shape required by refinement copy-out.
+  let origin := match se with
+    | .ident _ name => name == "$witness"
+    | .member _ _ field => field.startsWith "$w."
+    | .app _ (.ident _ name) _ false => ["$typeValue", "$witness", "$stageWitness"].contains name
+    | _ => false
+  if ctx.typeOnly || !origin || result.ty == .never || result.ty == .void then return result
+  if let .ident .. := se then
+    if let .local slot := result.e then
+      modify fun st => { st with metadataSeeds := slot :: st.metadataSeeds }
+      return result
+  -- A wrapper can mark an otherwise real local as metadata. Give that
+  -- occurrence its own slot; never change the original local's role.
+  let slot ← fresh result.ty
+  modify fun st => { st with metadataSeeds := slot :: st.metadataSeeds }
+  return ⟨.assign slot result.e, result.ty⟩
 
 partial def elabECore (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
+  let result ← elabERaw ctx se exp
+  if let some target := exp then
+    if target != .void && result.ty != target && result.ty != .never &&
+        (!result.ty.params.isEmpty || !target.params.isEmpty) then
+      let locals := ctx.evidenceTypes
+      if let some plan := SubtypeEvidence.find? ctx.types locals ⟨target, result.ty⟩ then
+        if plan.usesLocal then return ← elabSubtypeUp ctx se.pos result target plan
+  return result
+
+partial def elabSubtypeUp (ctx : Ctx) (p : Pos) (value : R) (target : Ty)
+    (plan : SubtypeEvidence.Plan) : EM R :=
+  elabSubtypeUpWith elabE ctx p value target plan
+
+partial def elabBoundReceiver (ctx : Ctx) (p : Pos) (value : R) (member : String) : EM R :=
+  elabBoundReceiverWith elabE ctx p value member
+
+partial def elabCallableReceiver (ctx : Ctx) (p : Pos) (value : R) : EM R := do
+  let view ← match ctx.callableView p value.ty with
+    | .ok view => pure view
+    | .error message => throw message
+  let some target := view | return value
+  if target == value.ty then return value
+  let some plan := SubtypeEvidence.find? ctx.types ctx.evidenceTypes ⟨target, value.ty⟩
+    | eerr p "internal: a callable bound lost its lexical dictionary"
+  elabSubtypeUp ctx p value target plan
+
+partial def elabReceiverEvidence (ctx : Ctx) (p : Pos)
+    (frame : SubtypeEvidence.Frame) : EM (List Expr) :=
+  frame.receiverBounds.mapM fun (_, bound, field) => do
+    let some receiver := frame.explicit.head? | eerr p "internal: receiver evidence has no receiver"
+    let .struct owner args := receiver | eerr p "internal: receiver evidence needs a class"
+    if !ctx.types.isRefClass owner then eerr p "internal: receiver evidence needs a reference class"
+    let some (fieldName, fieldTy, _) := (ctx.types.fields owner args)[field]?
+      | eerr p "internal: receiver evidence field is missing"
+    if !fieldName.startsWith SubtypeEvidence.fieldPrefix || ctx.types.isVarField owner fieldName || fieldTy != bound.ty then
+      eerr p "internal: receiver evidence field has the wrong type"
+    coerce p (← elabMember ctx p ⟨.local 0, receiver⟩ fieldName) bound.ty
+
+partial def elabERaw (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   if !ctx.constructProbe && ctx.constructHints.isNone &&
       Choice.anyE (fun
         | e@(.construct _ n [] _) =>
@@ -195,7 +252,8 @@ partial def elabSpawnIn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
             eerr p "the arguments of a spawned call cannot suspend (#156)"
           let slot ← fresh rx.ty
           let name := s!"$spawnReceiver{slot}"
-          let cctx := { ctx with locals := { name, slot, ty := rx.ty, mutable := false } :: ctx.locals }
+          let cctx := { ctx with locals := {
+            name, slot, ty := rx.ty, mutable := false, typeValue := ctx.isTypeValue obj } :: ctx.locals }
           let r ← elabApp { cctx with defers := [], suspends := true, canFail := false } q
             (.member mp (.ident mp name) ("$spawnMethod:" ++ m0)) args br none
           modify fun st => { st with pendingSourceSuspends := sourceBefore }
@@ -211,17 +269,22 @@ partial def elabSpawnIn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
       | _ => true
     if value then
       let saved ← get
-      let rx? ← tryCatch (some <$> elabE { ctx with defers := [], suspends := true, canFail := false } f none)
+      let rx? ← tryCatch (do
+        let value ← elabE { ctx with defers := [], suspends := true, canFail := false } f none
+        some <$> elabCallableReceiver ctx f.pos value)
         (fun _ => pure none)
       if let some rx := rx? then
         if let .struct shape _ := rx.ty then
           if (FnValues.parseName shape).isSome then
+            if !ctx.typeOnly && ctx.isTypeValue f then
+              eerr f.pos "dummy type value cannot be an executable function"
             let isS (f : Nat) := ctx.sigs.any fun s => s.idx == f && s.suspends
             if Suspend.countSusp isS (fun _ => false) false (· == mark.idx) rx.e > 0 then
               eerr p "the arguments of a spawned call cannot suspend (#156)"
             let slot ← fresh rx.ty
             let name := s!"$spawnValue{slot}"
-            let cctx := { ctx with locals := { name, slot, ty := rx.ty, mutable := false } :: ctx.locals }
+            let cctx := { ctx with locals := {
+              name, slot, ty := rx.ty, mutable := false, typeValue := ctx.isTypeValue f } :: ctx.locals }
             let r ← elabApp { cctx with defers := [], suspends := true, canFail := false } q
               (.member f.pos (.ident f.pos name) ("$spawnMethod:" ++ FnValues.callOf shape)) args br none
             return ⟨.seq (.assign slot rx.e) r.e, r.ty⟩
@@ -344,8 +407,8 @@ partial def resolveOverload (ctx : Ctx) (p : Pos) (name : String) (ovs : List St
       | .arrayLit _ es => s!"arr {es.length}"
       | .bin _ o _ _ => s!"bin {o}"
       | _ => "_"
-    let inputs := (Choice.namesUsed a).eraseDups.filterMap fun n =>
-      (ctx.lookup n).map fun l => (n, l.ty)
+    let inputs := (ctx.captureEvidence ((Choice.namesUsed a).eraseDups.filterMap ctx.lookup)).map fun l =>
+      (l.name, l.ty, l.typeValue)
     let typing := reprStr (inputs, ctx.types.tvars, ctx.selfClass, ctx.selfMethod)
     let key := s!"{a.pos.line}:{a.pos.col}:{a.pos.file}:{shape}:{typing}"
     if let some r := (← get).natTys[key]? then return r
@@ -856,6 +919,20 @@ partial def elabMethod (ctx : Ctx) (p : Pos) (r : R) (m : String) (args : List S
 
 /-- `A[i]` on an array (failable) or `T(k)` on a tuple. -/
 partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bracket : Bool) : EM R := do
+  let containers : Ty → Bool := fun
+    | .arr _ | .map .. => bracket
+    | .tup _ => !bracket
+    | _ => false
+  let container ← match ctx.containerView p r.ty containers "index" with
+    | .ok view => pure view
+    | .error message => throw message
+  if container.isSome then
+    let callable ← match ctx.callableView p r.ty with
+      | .ok view => pure view
+      | .error message => throw message
+    if callable.isSome then eerr p s!"ambiguous callable/index bound of {r.ty.show}"
+  let r ← elabContainerReceiverWith elabE ctx p r containers "index"
+  let r ← elabCallableReceiver ctx p r
   -- a call of a function value (#210): of its shape's method
   if let .struct n ts := r.ty then
     if let some (_, effs) := FnValues.parseName n then
@@ -872,6 +949,8 @@ partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bra
       if args.length != k && !(args.length == 1 && k > 1) then
         eerr p s!"a value of type {r.ty.show} takes {k} argument(s), found {args.length}"
       let t ← fresh r.ty
+      if !ctx.typeOnly then
+        modify fun st => { st with metadataUses := t :: st.metadataUses }
       let nm := s!"$fnval{t}"
       let ctx' := { ctx with locals := { name := nm, slot := t, ty := r.ty, mutable := false } :: ctx.locals }
       let rc ← elabApp ctx' p (.member p (.ident p nm) (FnValues.callOf n)) args bracket none
@@ -985,7 +1064,22 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
     else if !((ta == .int && tb == .int) || (ta == .char && tb == .char) || (ta == .char32 && tb == .char32) ||
         (ta == .float && tb == .float)) then
       eerr p s!"'{op}' compares ints, chars, char32s or floats, found {ta.show} and {tb.show}"
-  let ra := widenR ctx.types (← elabE ctx a none)
+  let accepts : Ty → Bool := fun ty => arithmeticType ctx.types ty || ty == .char || ty == .char32
+  let numeric (value : R) : EM R := do
+    return widenR ctx.types (← elabValueViewWith elabE ctx p value accepts "comparison")
+  let source := widenR ctx.types (← elabE ctx a none)
+  let view ← match ctx.valueView p source.ty accepts "comparison" with
+    | .ok view => pure view
+    | .error message => throw message
+  let (ra, original) ← match view with
+    | none => pure (source, none)
+    | some _ => do
+      let slot ← fresh source.ty
+      let converted ← numeric ⟨.local slot, source.ty⟩
+      pure (⟨.seq (.assign slot source.e) converted.e, converted.ty⟩, some (slot, source.ty))
+  let result (code : Expr) (ty : Ty) : R := match original with
+    | some (slot, ty) => ⟨.seq code (.local slot), ty⟩
+    | none => ⟨code, ty⟩
   -- (an array and a tuple compare as arrays: the tuple is converted)
   let asArr (r : R) (other : Ty) : EM R := do
     match r.ty, other with
@@ -993,16 +1087,16 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
     | _, _ => return r
   match rest with
   | [(op, b)] =>
-    let rb := widenR ctx.types (← elabE ctx b (some ra.ty))
+    let rb ← numeric (← elabE ctx b (some ra.ty))
     if ra.ty == .rational || rb.ty == .rational then
       let ta ← fresh ra.ty
       let tb ← fresh rb.ty
       let test ← ratTest ctx p op ⟨.local ta, ra.ty⟩ ⟨.local tb, rb.ty⟩
-      return ⟨.seq (.assign ta ra.e) (.seq (.assign tb rb.e) (.seq test (.local ta))), ra.ty⟩
+      return result (.seq (.assign ta ra.e) (.seq (.assign tb rb.e) (.seq test (.local ta)))) ra.ty
     let ra ← asArr ra rb.ty
     let rb ← asArr rb ra.ty
     checkTys op ra.ty rb.ty
-    return ⟨p2 (ordOf op ra.ty) ra.e rb.e, ra.ty⟩
+    return result (p2 (ordOf op ra.ty) ra.e rb.e) ra.ty
   | _ =>
     -- a chain: each operand is evaluated once, every adjacent pair is checked,
     -- and the result is the leftmost operand (Book of Verse §5.4)
@@ -1011,7 +1105,7 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
     let mut prevTy := ra.ty
     let mut steps : Array Expr := #[.assign t0 ra.e]
     for (op, b) in rest do
-      let rb := widenR ctx.types (← elabE ctx b (some prevTy))
+      let rb ← numeric (← elabE ctx b (some prevTy))
       let rb ← asArr rb prevTy
       -- (the previous operand, as an array when this one is)
       let prevE ← match prevTy, rb.ty with
@@ -1027,10 +1121,32 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
         steps := steps.push (p2 (ordOf op prevTy) prevE (.local tb))
       prev := tb
       prevTy := rb.ty
-    return ⟨steps.foldr Expr.seq (.local t0), ra.ty⟩
+    return result (steps.foldr Expr.seq (.local t0)) ra.ty
 
 /-- `elabSetWith`, given this block's functions (#325). -/
-partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (rhs0 : SExpr) : EM R :=
+partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (rhs0 : SExpr) : EM R := do
+  let rec firstField : SExpr → Option (String × String)
+    | .member _ (.ident _ root) field => some (root, field)
+    | .member _ receiver _ | .app _ receiver _ true | .query _ receiver => firstField receiver
+    | _ => none
+  if let some (root, field) := firstField lhs0 then
+    if let some binding := ctx.lookup root then
+      if let .param .. := binding.ty then
+        let receiver ← elabBoundReceiver ctx p ⟨.local binding.slot, binding.ty⟩ field
+        if receiver.ty != binding.ty then
+          let slot ← fresh receiver.ty
+          let name := s!"$subtypeSet{slot}"
+          let rec replaceRoot : SExpr → SExpr
+            | .ident q n => if n == root then .ident q name else .ident q n
+            | .member q value member => .member q (replaceRoot value) member
+            | .app q value args true => .app q (replaceRoot value) args true
+            | .query q value => .query q (replaceRoot value)
+            | value => value
+          let inner := { ctx with locals := { name, slot, ty := receiver.ty, mutable := false } :: ctx.locals }
+          let direct := match lhs0 with | .member _ (.ident _ _) _ => true | _ => false
+          let rootPrelude := if direct then none else some (name, receiver.e)
+          let result ← elabSetWith elabE (fun c q r m => elabMember c q r m) inner p (replaceRoot lhs0) op rhs0 rootPrelude
+          return ⟨if direct then .seq (.assign slot receiver.e) result.e else result.e, result.ty⟩
   elabSetWith elabE (fun c q r m => elabMember c q r m) ctx p lhs0 op rhs0
 
 /-- `for` (#208, #314): `elabForWith`, given this block's functions (#325). -/
@@ -1838,7 +1954,8 @@ partial def elabSpawnBound (ctx : Ctx) (p : Pos) (fname adapter : String)
       if i < npos then value else .decl p s!"?{(s.named[i - npos]!).1}" none false value
     let lift : Choice.FirstLift := {
       key := s!"defaults:spawnBody:{adapter}", pos := p, name := adapter,
-      params := (s.pnames.zip params).map fun (n, t) => { name := n, ty := t.toSTy },
+      params := (s.pnames.zip params).zipIdx.map fun ((n, t), i) =>
+        { name := n, ty := t.toSTy, typeValue := s.typeValues.contains i },
       tparams := tps.map fun (n, c) =>
         { pos := p, name := n, constraint := if c then "comparable" else "type" },
       specs := (if s.fx.isEmpty then ["computes"] else s.fx) ++ ["suspends"] ++ selfTps.map ("$selfTp:" ++ ·),
@@ -1901,7 +2018,7 @@ partial def elabSpawnDispatch (ctx : Ctx) (p : Pos) (cls fname declared : String
   let stack := ctx.defaults.map fun (f, n) => SExpr.tuple p [.str p [.text f], .str p [.text n]]
   let lift : Choice.FirstLift := {
     key, pos := p, name,
-    params := given.map fun i => { name := s.pnames[i]!, ty := fullParams[i]!.toSTy },
+    params := given.map fun i => { name := s.pnames[i]!, ty := fullParams[i]!.toSTy, typeValue := s.typeValues.contains i },
     tparams := tps.map fun (n, c) =>
       { pos := p, name := n, constraint := if c then "comparable" else "type" },
     specs := ["transacts"] ++ cps.map (fun (n, _) => "$selfTp:" ++ n),
@@ -1949,7 +2066,7 @@ partial def elabDefaultDispatch (ctx : Ctx) (p : Pos) (fname : String)
   let used := (s.ret :: types).flatMap Ty.params
   let tps := s.tparams.filter fun (n, _) => used.contains n
   let params : List SParam := given.map fun i =>
-    { name := s.pnames[i]!, ty := s.params[i]!.toSTy }
+    { name := s.pnames[i]!, ty := s.params[i]!.toSTy, typeValue := s.typeValues.contains i }
   let forwarded := given.map fun i =>
     let v := SExpr.ident p s.pnames[i]!
     if i < npos then v else SExpr.decl p s!"?{(s.named[i - npos]!).1}" none false v
@@ -1972,6 +2089,7 @@ partial def elabDefaultDispatch (ctx : Ctx) (p : Pos) (fname : String)
 
 /-- `e.m`: `.Length` of an array or string, or a field of a struct. -/
 partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option Ty := none) : EM R := do
+  let r ← elabBoundReceiver ctx p r m
   ctx.noteFamily p r.ty m
   match r.ty, m with
   | .arr _, "Length" | .map _ _, "Length" => return ⟨.prim .len [← inferable r], .int⟩
@@ -2169,6 +2287,17 @@ partial def elabFieldDefault (ctx : Ctx) (p : Pos) (name : String) (tas : List T
   let dctx := { ctx with locals := [], selfClass := none, types := { ctx.types with tvars := hσ } }
   if dctx.defaults.contains (name, f) then
     eerr p s!"the default of field '{f}' of {name} depends on itself"
+  if f.startsWith SubtypeEvidence.fieldPrefix && !ctx.types.isVarField name f then
+    if let (.app _ (.ident _ "$subtypeWitness") [.construct _ "$subtypeEvidence" [base, derived] []] false,
+        some bound) := (d, SubtypeEvidence.boundOf? t) then
+      let declared ← resolveTy dctx.types p (.app SubtypeEvidence.family [base, derived])
+      if declared != t then eerr p "internal: a receiver proof default has the wrong type"
+      if ctx.inDefaultCheck && ctx.types.boundSubtype bound.derived bound.base then
+        return .prim .userErr []
+      let locals := ctx.evidenceTypes
+      let some plan := SubtypeEvidence.find? ctx.types locals bound
+        | eerr p s!"type {bound.derived.show} does not satisfy subtype({bound.base.show}) in construction of {name}"
+      return ← fxAt p (do coerce p (← elabSubtypeValueWith elabE ctx p plan bound) t)
   fxAt p (do coerce p (← elabE { dctx with defaults := (name, f) :: dctx.defaults } d (some t)) t)
 
 /-- `name{F := e, …}` or `name(t₁, …){F := e, …}`: the struct's fields in

@@ -56,14 +56,198 @@ def defaultTypes (ctx : Ctx) (p : Pos) (s : Sig) (σ : List (String × Ty)) (d :
   return ({ ctx.types with tvars := aliases ++ core.map (fun (n, cmp) => (n, Ty.param n cmp)) },
     substDefaultTypes rename d)
 
+partial def elabSubtypeValueWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
+    (p : Pos) (plan : SubtypeEvidence.Plan) (bound : SubtypeEvidence.Bound) : EM R := do
+  let missing := plan.nominals.filter fun (source, target) =>
+    !ctx.types.classes.contains (SubtypeEvidence.nominalFamily source target)
+  let tuples := plan.tupleArities.filter fun arity =>
+    !ctx.types.classes.contains (SubtypeEvidence.tupleFamily arity)
+  let tupleArrays := plan.tupleArrayArities.filter fun arity =>
+    !ctx.types.classes.contains (SubtypeEvidence.tupleArrayFamily arity)
+  let refinements := plan.refinements.filter fun (source, target) =>
+    !ctx.types.classes.contains (SubtypeEvidence.refinementFamily source target)
+  if !missing.isEmpty || !tuples.isEmpty || !tupleArrays.isEmpty || !refinements.isEmpty then
+    let declarations ← missing.mapM fun (source, target) =>
+      match SubtypeEvidence.nominal ctx.types p source target with
+      | .ok declaration => pure declaration
+      | .error message => eerr p message
+    let declarations := declarations ++ tuples.map (SubtypeEvidence.tupleDeclaration p)
+    let declarations ← tupleArrays.foldlM (fun declarations arity =>
+      match SubtypeEvidence.tupleArrayDeclaration p arity with
+      | .ok declaration => pure (declarations ++ [declaration])
+      | .error message => eerr p message) declarations
+    let declarations ← refinements.foldlM (fun declarations (source, target) =>
+      match SubtypeEvidence.refinementDeclaration ctx.types p source target with
+      | .ok declaration => pure (declarations ++ [declaration])
+      | .error message => eerr p message) declarations
+    noteNeeds { subtypes := declarations }
+    return ⟨.prim .userErr [], bound.ty⟩
+  elabE ctx (plan.value ctx.types p) (some bound.ty)
+
+/-- Compiler-owned container Up bodies. Every component conversion is an
+    ordinary checked call on an explicitly supplied dictionary. The input
+    and dictionaries are saved once; traversal preserves array/map order,
+    map entry order (even duplicate keys), option absence and tuple shape. No
+    runtime cast or map reconstruction is involved. -/
+partial def elabSubtypeLiftWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
+    (p : Pos) (input : SExpr) (dictionaries : List SExpr) (exp : Option Ty) : EM R := do
+  let some target := exp | eerr p "internal: a subtype lift requires its declared result"
+  let value ← elabE ctx input none
+  let inputSlot ← fresh value.ty
+  let (components, traversal) ← match value.ty, target with
+    | .arr c, .arr a | .opt c, .opt a => do
+      let element ← fresh c
+      pure ([(SubtypeEvidence.Bound.mk a c, Expr.local element)], some element)
+    | .map k c, .map l a => do
+      if !isComparable ctx.types k || !isComparable ctx.types l then
+        eerr p "internal: subtype map keys must be comparable"
+      let element ← fresh (.tup [k, c])
+      pure ([(SubtypeEvidence.Bound.mk l k, Expr.prim (.tupGet 0) [.local element]),
+        (SubtypeEvidence.Bound.mk a c, Expr.prim (.tupGet 1) [.local element])], some element)
+    | .tup cs, .tup bases => do
+      if cs.length != bases.length then eerr p "internal: subtype tuple arities differ"
+      pure ((bases.zip cs).zipIdx.map (fun ((a, c), i) =>
+        (SubtypeEvidence.Bound.mk a c, Expr.prim (.tupGet i) [.local inputSlot])), none)
+    | .tup cs, .arr a => do
+      if cs.isEmpty then eerr p "internal: an empty tuple is not a tuple-to-array subtype"
+      pure (cs.zipIdx.map (fun (c, i) =>
+        (SubtypeEvidence.Bound.mk a c, Expr.prim (.tupGet i) [.local inputSlot])), none)
+    | _, _ => eerr p "internal: unsupported subtype container shape"
+  if components.length != dictionaries.length then eerr p "internal: missing subtype component dictionaries"
+  let mut setup : List (Nat × Expr) := [(inputSlot, value.e)]
+  let mut outputs : List Expr := []
+  for ((bound, operand), dictionary) in components.zip dictionaries do
+    if ctx.isTypeValue dictionary then eerr p "internal: a dummy type value is not subtype evidence"
+    let proof ← elabE ctx dictionary (some bound.ty)
+    let proofExpr ← coerce p proof bound.ty
+    let proofSlot ← fresh bound.ty
+    let componentSlot ← fresh bound.derived
+    let proofName := s!"$subtypeLiftProof{proofSlot}"
+    let componentName := s!"$subtypeLiftValue{componentSlot}"
+    let inner := { ctx with locals :=
+      { name := proofName, slot := proofSlot, ty := bound.ty, mutable := false } ::
+      { name := componentName, slot := componentSlot, ty := bound.derived, mutable := false } :: ctx.locals }
+    let result ← elabE inner (.app p (.member p (.ident p proofName) "Up")
+      [.ident p componentName] false) (some bound.base)
+    setup := setup ++ [(proofSlot, proofExpr)]
+    outputs := outputs ++ [.seq (.assign componentSlot operand) (← coerce p result bound.base)]
+  let body ← match value.ty, target, traversal, outputs with
+    | .arr _, .arr _, some element, [output] =>
+      pure (.forE element (.local inputSlot) (.lit (.logic true)) output)
+    | .opt _, .opt _, some element, [output] =>
+      pure (.ite (.assign element (.prim .query [.local inputSlot]))
+        (.prim .mkSome [output]) (.lit .none))
+    | .map _ _, .map _ _, some element, [key, output] =>
+      pure (.forE element (.local inputSlot) (.lit (.logic true))
+        (.prim .mkTup [key, output]))
+    | .tup _, .tup _, none, _ => pure (.prim .mkTup outputs)
+    | .tup _, .arr _, none, _ => pure (.prim .mkArr outputs)
+    | _, _, _, _ => eerr p "internal: invalid subtype traversal"
+  return ⟨setup.foldr (fun (slot, expression) rest => .seq (.assign slot expression) rest) body, target⟩
+
+partial def elabSubtypeUpWith (elabE : Ctx → SExpr → Option Ty → EM R)
+    (ctx : Ctx) (p : Pos) (value : R) (target : Ty) (plan : SubtypeEvidence.Plan) : EM R := do
+  let locals := ctx.evidenceTypes
+  if !plan.valid ctx.types locals || plan.bound ctx.types != ⟨target, value.ty⟩ then
+    eerr p "internal: subtype view has no valid lexical evidence"
+  let slot ← fresh value.ty
+  let name := s!"$subtypeInput{slot}"
+  let inner := { ctx with locals := { name, slot, ty := value.ty, mutable := false } :: ctx.locals }
+  let dictionary ← elabSubtypeValueWith elabE ctx p plan ⟨target, value.ty⟩
+  let dictionarySlot ← fresh dictionary.ty
+  let dictionaryName := s!"$subtypeDictionary{dictionarySlot}"
+  let inner := { inner with locals :=
+    { name := dictionaryName, slot := dictionarySlot, ty := dictionary.ty, mutable := false } :: inner.locals }
+  let call := SExpr.app p (.member p (.ident p dictionaryName) "Up") [.ident p name] false
+  let result ← elabE inner call (some target)
+  return ⟨.seq (.assign slot value.e) (.seq (.assign dictionarySlot dictionary.e)
+    (← coerce p result target)), target⟩
+
+/-- Convert a once-elaborated argument after view-based inference. Ordinary
+    conversions keep their path; an actual dictionary handles an opaque view. -/
+partial def elabArgumentCoerceWith (elabE : Ctx → SExpr → Option Ty → EM R)
+    (ctx : Ctx) (p : Pos) (value : R) (target : Ty) : EM Expr := do
+  if value.ty != target && value.ty != .never && target != .void then
+    if let some plan := SubtypeEvidence.find? ctx.types ctx.evidenceTypes ⟨target, value.ty⟩ then
+      if plan.usesLocal then return (← elabSubtypeUpWith elabE ctx p value target plan).e
+  coerce p value target
+
+partial def elabValueViewWith (elabE : Ctx → SExpr → Option Ty → EM R)
+    (ctx : Ctx) (p : Pos) (value : R) (accepts : Ty → Bool) (operation : String) : EM R := do
+  let view ← match ctx.valueView p value.ty accepts operation with
+    | .ok view => pure view
+    | .error message => throw message
+  let some target := view | return value
+  let some plan := SubtypeEvidence.find? ctx.types ctx.evidenceTypes ⟨target, value.ty⟩
+    | eerr p "internal: a value view lost its lexical dictionary"
+  elabSubtypeUpWith elabE ctx p value target plan
+
+partial def elabContainerReceiverWith (elabE : Ctx → SExpr → Option Ty → EM R)
+    (ctx : Ctx) (p : Pos) (value : R) (accepts : Ty → Bool) (operation : String) : EM R :=
+  elabValueViewWith elabE ctx p value accepts operation
+
+partial def elabArrayArgumentWith (elabE : Ctx → SExpr → Option Ty → EM R)
+    (ctx : Ctx) (p : Pos) (value : R) (depth : Nat) (operation : String) : EM R := do
+  let view ← match ctx.arrayView p value.ty depth operation with
+    | .ok view => pure view
+    | .error message => throw message
+  let some target := view | return value
+  if target == value.ty then return value
+  let some plan := SubtypeEvidence.find? ctx.types ctx.evidenceTypes ⟨target, value.ty⟩
+    | eerr p "internal: an array argument lost its lexical dictionary"
+  elabSubtypeUpWith elabE ctx p value target plan
+
+/-- Keep opaque operands precise outside the operation. Numeric and optional
+    array views must come from actual proofs, including refined numeric uppers. -/
+partial def elabArithmeticOperandWith (elabE : Ctx → SExpr → Option Ty → EM R)
+    (ctx : Ctx) (p : Pos) (value : R) (operation : String) (arrays : Bool := false) : EM R :=
+  elabValueViewWith elabE ctx p value (fun
+    | .arr _ => arrays
+    | ty => arithmeticType ctx.types ty) operation
+
+partial def elabPrintableValueWith (elabE : Ctx → SExpr → Option Ty → EM R)
+    (ctx : Ctx) (p : Pos) (value : R) : EM R := do
+  let view ← match ctx.formattingView p value.ty with
+    | .ok view => pure view
+    | .error message => throw message
+  let some target := view | return value
+  let some plan := SubtypeEvidence.find? ctx.types ctx.evidenceTypes ⟨target, value.ty⟩
+    | eerr p "internal: a formatting view lost its lexical dictionary"
+  elabSubtypeUpWith elabE ctx p value target plan
+
+partial def elabToStringWith (elabE : Ctx → SExpr → Option Ty → EM R)
+    (ctx : Ctx) (p : Pos) (value : R) : EM Expr := do
+  let converted ← elabPrintableValueWith elabE ctx p value
+  toStringOf p (widenR ctx.types converted)
+
+partial def elabBoundReceiverWith (elabE : Ctx → SExpr → Option Ty → EM R)
+    (ctx : Ctx) (p : Pos) (value : R) (member : String) : EM R := do
+  let view ← match ctx.boundView p value.ty member with
+    | .ok view => pure view
+    | .error message => throw message
+  let some target := view | return value
+  let locals := ctx.evidenceTypes
+  let some plan := SubtypeEvidence.find? ctx.types locals ⟨target, value.ty⟩
+    | eerr p "internal: a bound view lost its lexical dictionary"
+  elabSubtypeUpWith elabE ctx p value target plan
+
 /-- A call of a generic function. Its type arguments are inferred by matching
     its signature: the result type against the expected type (unless that is
     `void`, which accepts anything), then each parameter type against its
     argument's, left to right. An argument whose parameter type is already
     determined is elaborated against it, so `array{}` and `false` work. -/
 partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) (exp : Option Ty)
-    (packArgs : Bool := false) (inst : List (String × Ty) := []) :
+    (packArgs : Bool := false) (inst : List (String × Ty) := []) (resultRetry : Bool := true) :
     EM R := do
+  -- A partially inferred result may suggest a type that later violates a
+  -- bound. Retry argument/default inference from the original compiler
+  -- state, preserving explicit instances and reporting the original error
+  -- if neither trial works. Source arguments are still evaluated once.
+  if resultRetry && !s.bounds.isEmpty && exp.isSome then
+    let before ← get
+    return ← tryCatch (elabGenericCallWith elabE ctx p s args exp packArgs inst false) fun original => do
+      set before
+      tryCatch (elabGenericCallWith elabE ctx p s args none packArgs inst false) fun _ => throw original
   let args := packCallArgs p s args
   let s := if packArgs then { s with ret := .tup s.params } else s
   -- named arguments (#119): positional ones, then named ones as written,
@@ -92,6 +276,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
   -- index of its parameter
   let given : List (SExpr × Nat) := (pos.zip (List.range npos)) ++ named.map fun (_, n, rhs) =>
     (rhs, npos + (s.named.findIdx? (·.1 == n)).getD 0)
+  for (argument, index) in given do ctx.checkArgumentRole s argument index
   let ptys := s.params.toArray
   let mut σ : List (String × Ty) := inst
   -- Member dispatch has already saved the receiver in a typed local. Its
@@ -109,7 +294,8 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
             σ := σ ++ fixed.filter (fun (n, _) => (σ.lookup n).isNone)
   if let some et := exp then
     if !(et == .void) then
-      if let some σ' := s.ret.matchArg ctx.types σ et then σ := σ'
+      if let some σ' := s.ret.matchArg ctx.types σ et then
+        if s.bounds.isEmpty || SubtypeEvidence.acceptsKnownBounds ctx.evidenceEnv s.bounds σ' then σ := σ'
   let bound (σ : List (String × Ty)) (t : Ty) := t.params.all fun v => (σ.lookup v).isSome
   -- Empty values and generic function identifiers need an expected type,
   -- so elaborate them after other arguments, while still evaluating in order.
@@ -132,22 +318,33 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
           let v := (pt.params.filter fun v => (σ.lookup v).isNone).headD "t"
           eerr a.pos s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
         let r ← elabE ctx a none
-        match pt.matchArg ctx.types σ r.ty with
+        match ctx.matchArgument σ pt r.ty with
         | some σ' =>
           σ := σ'
+          if !s.bounds.isEmpty then
+            let some inferred := SubtypeEvidence.infer ctx.evidenceEnv s.bounds σ
+              | eerr a.pos s!"cannot infer nominal bound arguments of {s.name}"
+            σ := inferred
           if pass == 0 && !bound σ pt then
             deferred := deferred.set! i true
           else
-            es := es.set! i (← coerce a.pos r (pt.subst σ))
+            es := es.set! i (← elabArgumentCoerceWith elabE ctx a.pos r (pt.subst σ))
         | none => eerr a.pos s!"expected {(pt.subst σ).show}, found {r.ty.show} (in a call of {s.name})"
   -- the arguments, in their temporaries, then the defaults
+  let inferred ← match SubtypeEvidence.infer (if s.bounds.isEmpty then ctx.types else ctx.evidenceEnv) s.bounds σ with
+    | some inferred => pure inferred
+    | none => eerr p s!"cannot infer a consistent upper-bound instance of {s.name}"
+  σ := inferred
   let mut steps : Array Expr := #[]
   let mut slots : Array (Option Nat) := Array.replicate s.params.length none
+  let mut roles : Array Bool := s.params.toArray.mapIdx fun index _ => s.typeValues.contains index
+  let mut defaultEvidence : List (SubtypeEvidence.Bound × Local) := []
   if !plain then
-    for ((_, k), i) in given.zip (List.range given.length) do
+    for ((argument, k), i) in given.zip (List.range given.length) do
       let ta ← fresh (ptys[k]!.subst σ)
       steps := steps.push (.assign ta es[i]!)
       slots := slots.set! k (some ta)
+      roles := roles.set! k (roles[k]! || ctx.isTypeValue argument)
     for ((n, dflt), j) in s.named.zip (List.range s.named.length) do
       let k := npos + j
       if slots[k]!.isNone then
@@ -155,7 +352,24 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
         let pt := ptys[k]!
         -- (the default sees the parameters before it, in their temporaries)
         let earlier : List Local := ((s.pnames.zip (List.range k)).filterMap fun (pn, j) =>
-          (slots[j]!).map fun sl => ({ name := pn, slot := sl, ty := ptys[j]!.subst σ, mutable := false } : Local)).reverse
+          (slots[j]!).map fun sl => ({ name := pn, slot := sl, ty := ptys[j]!.subst σ, mutable := false, typeValue := roles[j]! } : Local)).reverse
+        -- A named default sees the callee's declared relations at this
+        -- actual instance, never arbitrary caller source names. Resolve
+        -- actual dictionaries now, save them in fresh current-frame slots,
+        -- and reuse those same values for the final call's proof arguments.
+        for declared in s.bounds do
+          if !(declared.base.params ++ declared.derived.params).all (fun name => (σ.lookup name).isSome) then continue
+          let required := declared.subst σ
+          if defaultEvidence.any (·.1 == required) then continue
+          let proofCtx := { ctx with locals := defaultEvidence.map (·.2) ++ earlier ++ ctx.locals }
+          let some plan := SubtypeEvidence.find? proofCtx.types proofCtx.evidenceTypes required | continue
+          if !plan.valid proofCtx.types proofCtx.evidenceTypes then eerr p "internal: invalid default subtype evidence"
+          let proof ← elabSubtypeValueWith elabE proofCtx p plan required
+          let slot ← fresh required.ty
+          steps := steps.push (.assign slot (← coerce p proof required.ty))
+          let saved : Local := {
+            name := s!"$subtypeDefault_{s.name}_{slot}", slot, ty := required.ty, mutable := false }
+          defaultEvidence := defaultEvidence ++ [(required, saved)]
         let key := (s.name, s!"?{n}")
         if ctx.defaults.contains key then
           eerr p s!"the default of ?{n} of {s.name} uses itself (a call of {s.name} that omits ?{n})"
@@ -166,7 +380,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
         -- Written types belong to the callee, with the arguments inferred
         -- so far. A caller's type aliases are outside this default's scope.
         let (types, d) ← defaultTypes ctx p s σ d
-        let dctx := { ctx with locals := earlier, selfClass := selfC,
+        let dctx := { ctx with locals := defaultEvidence.map (·.2) ++ earlier, selfClass := selfC,
                                selfMethod := if selfC.isSome then (s.name.splitOn ".").getLast? else none,
                                inParamDefault := true,
                                types,
@@ -177,22 +391,29 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
         -- (its type: the parameter's, or what the default gives a type
         -- parameter nothing else determined)
         let σ0 := σ
+        dctx.checkArgumentRole s d k
         if !bound σ0 pt && (← argNeedsTypeWith elabE dctx d) then
           let v := (pt.params.filter fun v => (σ0.lookup v).isNone).headD "t"
           eerr p s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
         let (rd, σ1) ← fxAt p (do
           let r ← elabE dctx d (if bound σ0 pt then some (pt.subst σ0) else none)
           let σ1 ← if bound σ0 pt then pure σ0 else
-            match pt.matchArg ctx.types σ0 r.ty with
+            match dctx.matchArgument σ0 pt r.ty with
             | some σ' => pure σ'
             | none => eerr p s!"the default of ?{n} of {s.name} is a {r.ty.show}, not a {(pt.subst σ0).show}"
-          return (← coerce p r (pt.subst σ1), σ1))
+          return (← elabArgumentCoerceWith elabE dctx p r (pt.subst σ1), σ1))
         σ := σ1
         if !s.decides && rd.mayFail ctx.sigProg then
           eerr p s!"the default of ?{n} of {s.name} can fail, but {s.name} is not <decides>"
         let ta ← fresh (pt.subst σ)
         steps := steps.push (.assign ta rd)
         slots := slots.set! k (some ta)
+        roles := roles.set! k (roles[k]! || dctx.isTypeValue d)
+  let inferred ← match SubtypeEvidence.infer (if s.bounds.isEmpty then ctx.types else ctx.evidenceEnv) s.bounds σ true
+      ((s.tparams.filter (·.2)).map (·.1)) with
+    | some inferred => pure inferred
+    | none => eerr p s!"cannot infer a consistent upper-bound instance of {s.name}"
+  σ := inferred
   let mut targs : Array Ty := #[]
   for (v, cmp) in s.tparams do
     let some t := σ.lookup v
@@ -204,6 +425,15 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
     if cmp && !valueCall && !t.comparable ctx.types then
       eerr p (notComparable ctx.types t s!"type parameter {v} of {s.name}")
     targs := targs.push t
+  -- Prove every relation at this call's actual types. Keep evidence in
+  -- lexical form until ordinary elaboration resolves the current frame.
+  let evidencePlans ← s.frame.callBounds.mapM fun (_, required) => do
+    let required := required.subst σ
+    let locals := ctx.evidenceTypes
+    let some plan := SubtypeEvidence.find? ctx.types locals required
+      | eerr p s!"type {required.derived.show} does not satisfy subtype({required.base.show}) in a call of {s.name}"
+    if !plan.valid ctx.types locals then eerr p "internal: invalid subtype evidence plan"
+    return (required, plan)
   -- A lazy recursive edge needs the ordinary call's arguments/defaults,
   -- evaluated once in order, before pushing its next producer item.
   if ctx.typeOnly && ctx.callInstanceProbe == some s.name then
@@ -223,8 +453,11 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
       if t.params.any (·.startsWith "$ext") then
         eerr p s!"cannot call {s.name} here yet: its type parameter {v} would mention type arguments that the dispatch opens, apart from the caller's, and no value of those can be passed (#209)"
       witness ctx.types ctx.dictBase ctx.dictVars t
-  if plain then return ⟨.call s.idx (es.toList ++ dicts), s.ret.subst σ⟩
-  let call := Expr.call s.idx (slots.toList.map (fun o => Expr.local o.get!) ++ dicts)
+  let evidence ← evidencePlans.mapM fun (required, plan) => do
+    if let some (_, saved) := defaultEvidence.find? (·.1 == required) then return Expr.local saved.slot
+    coerce p (← elabSubtypeValueWith elabE ctx p plan required) required.ty
+  if plain then return ⟨.call s.idx (es.toList ++ evidence ++ dicts), s.ret.subst σ⟩
+  let call := Expr.call s.idx (slots.toList.map (fun o => Expr.local o.get!) ++ evidence ++ dicts)
   return ⟨steps.toList.foldr Expr.seq call, s.ret.subst σ⟩
 
 /-- Bind a recursive edge at the producer's current parameter instance.

@@ -1,0 +1,11 @@
+frame 1 11 7
+frame 2 31 7
+value 31 precise
+frame 2 33 7
+value 33 precise
+none
+frame 1 11 7
+frame 2 31 7
+first 31 precise
+break cleanup 9
+break 9

@@ -72,6 +72,8 @@ if lake env lean -j1 --run tests/lean/ConcurrencyPrelude.lean >"$logs/prelude-co
 else
   rc=$?; cat "$logs/prelude-contracts"; exit "$rc"
 fi
+echo "== checked subtype evidence contracts"
+tests/scripts/test-subtype-evidence.sh
 echo "== family stub contracts"
 if lake env lean -j1 --run tests/lean/FamilyStubs.lean >"$logs/stub-contracts" 2>&1; then
   cat "$logs/stub-contracts"

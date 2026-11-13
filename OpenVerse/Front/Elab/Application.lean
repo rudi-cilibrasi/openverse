@@ -23,10 +23,17 @@ partial def elabAppBaseWith
     (exp : Option Ty) : EM R := do
   let needBracket (name : String) : EM Unit := do
     if !bracket then eerr p s!"{name} can fail: call it with {name}[…]"
+  let indexLike (source : SExpr) (value : R) : EM R := do
+    if !ctx.typeOnly && ctx.isTypeValue source then
+      let view ← match ctx.callableView source.pos value.ty with
+        | .ok view => pure view
+        | .error message => throw message
+      if view.isSome then eerr source.pos "dummy type value cannot be an executable function"
+    elabIndexLike ctx p value args bracket
   match f with
   | .ident _ name =>
     match ctx.lookup name with
-    | some l => elabIndexLike ctx p ⟨.local l.slot, l.ty⟩ args bracket
+    | some l => indexLike f ⟨.local l.slot, l.ty⟩
     | none =>
     -- in a method, a method of `Self`, or a field of `Self` indexed
     let selfMember? : Bool := match ctx.selfClass with
@@ -71,6 +78,7 @@ partial def elabAppBaseWith
         | _ => eerr p "Concatenate() needs an expected array type"
       | [a] =>
         let r ← elabE ctx a (match exp with | some t => some (.arr t) | none => none)
+        let r ← elabArrayArgumentWith elabE ctx a.pos r 2 "Concatenate"
         match r.ty with
         | .arr (.arr t) =>
           -- (through a typed temporary: an empty literal has no type of its own)
@@ -79,11 +87,12 @@ partial def elabAppBaseWith
         | t => eerr p s!"Concatenate takes arrays, or an array of arrays, found {t.show}"
       | a :: rest =>
         let r0 ← elabE ctx a exp
+        let r0 ← elabArrayArgumentWith elabE ctx a.pos r0 1 "Concatenate"
         let .arr t := r0.ty | eerr a.pos s!"Concatenate takes arrays, found {r0.ty.show}"
         let mut acc := r0.e
         for b in rest do
           let rb ← elabE ctx b (some (.arr t))
-          acc := p2 .concat acc (← coerce b.pos rb (.arr t))
+          acc := p2 .concat acc (← elabArgumentCoerceWith elabE ctx b.pos rb (.arr t))
         return ⟨acc, .arr t⟩
     | "any" =>
       -- `any(X)`: X as an `any` (#138), evaluated
@@ -106,7 +115,10 @@ partial def elabAppBaseWith
           let mut found : Option Ty := none
           for a in args do
             if found.isNone then
-              found ← tryCatch (do let r ← elabE ctx a none; pure (match r.ty with | t@(.map ..) => some t | _ => none))
+              found ← tryCatch (do
+                let r ← elabE ctx a none
+                let r ← elabContainerReceiverWith elabE ctx a.pos r (fun | .map .. => true | _ => false) "ConcatenateMaps"
+                pure (match r.ty with | t@(.map ..) => some t | _ => none))
                 (fun _ => pure none)
           set st
           pure found
@@ -114,19 +126,22 @@ partial def elabAppBaseWith
       let mut jt? : Option Ty := none
       for a in args do
         let r ← elabE ctx a mapExp
+        let r ← elabContainerReceiverWith elabE ctx a.pos r (fun | .map .. => true | _ => false) "ConcatenateMaps"
         let .map _ _ := r.ty | eerr a.pos s!"ConcatenateMaps takes maps, not {r.ty.show}"
         match jt? with
         | none => jt? := some r.ty
         | some j =>
           let j' ← tryCatch (join a.pos j r.ty mapExp) (fun _ =>
-            eerr a.pos s!"ConcatenateMaps takes maps of one type, not {j.show} and {r.ty.show}")
+            match SubtypeEvidence.joinView? ctx.types ctx.evidenceTypes [j, r.ty] mapExp with
+            | some target => pure target
+            | none => eerr a.pos s!"ConcatenateMaps takes maps of one type, not {j.show} and {r.ty.show}")
           jt? := some j'
         rs := rs.push r
       let some jt := jt? | eerr p "ConcatenateMaps takes at least one map"
       let .map kt vt := jt | eerr p s!"ConcatenateMaps takes maps, not {jt.show}"
       let tm ← fresh jt
       let some r0 := rs[0]? | eerr p "ConcatenateMaps takes at least one map"
-      let mut code : Expr := .assign tm (← coerce a0.pos r0 jt)
+      let mut code : Expr := .assign tm (← elabArgumentCoerceWith elabE ctx a0.pos r0 jt)
       for (r, a) in rs.toList.tail.zip args.tail do
         let ts ← fresh jt
         let tpair ← fresh (.tup [kt, vt])
@@ -136,17 +151,17 @@ partial def elabAppBaseWith
         let tidx ← fresh .int
         let put := Expr.seq (.assign tk (.prim (.tupGet 0) [.local tpair]))
           (.seq (.assign tv (.prim (.tupGet 1) [.local tpair])) (mapPut tm tk tv ti tidx))
-        code := .seq code (.seq (.assign ts (← coerce a.pos r jt)) (.forE tpair (.local ts) (.lit (.logic true)) put))
+        code := .seq code (.seq (.assign ts (← elabArgumentCoerceWith elabE ctx a.pos r jt)) (.forE tpair (.local ts) (.lit (.logic true)) put))
       return ⟨.seq code (.local tm), jt⟩
     | "ToString" =>
       match args with
-      | [a] => return ⟨← toStringOf p (← elabE ctx a none), Ty.string⟩
+      | [a] => return ⟨← elabToStringWith elabE ctx p (← elabE ctx a none), Ty.string⟩
       | _ => eerr p "ToString takes one argument"
     | "Abs" =>
       -- (of a float, #127; each argument elaborated once)
       match args with
       | [a] =>
-        let r ← elabE ctx a none
+        let r := widenR ctx.types (← elabArithmeticOperandWith elabE ctx p (← elabE ctx a none) name)
         if r.ty == .float then return ⟨.prim .fabs [r.e], .float⟩
         return ⟨.prim .abs [← coerce a.pos r .int], .int⟩
       | _ => eerr p "Abs takes one argument"
@@ -212,8 +227,9 @@ partial def elabAppBaseWith
         return ⟨.prim (if name == "Floor" then .ffloor else .fceil) [r.e], .int⟩
       match args with
       | [.bin bp "/" a b] =>
-        let ra ← elabE ctx a none
-        let rb ← elabE ctx b (if ra.ty == .float then some .float else none)
+        let ra := widenR ctx.types (← elabArithmeticOperandWith elabE ctx bp (← elabE ctx a none) name)
+        let rb := widenR ctx.types (← elabArithmeticOperandWith elabE ctx bp
+          (← elabE ctx b (if ra.ty == .float then some .float else none)) name)
         if ra.ty == .float && rb.ty == .float then return ← ofFloat ⟨p2 .fdiv ra.e rb.e, .float⟩
         if ra.ty == .float || rb.ty == .float then
           eerr bp s!"no operator '/' for {ra.ty.show} and {rb.ty.show} (an int is not a float: write X * 1.0)"
@@ -224,7 +240,7 @@ partial def elabAppBaseWith
       | [e] =>
         -- (of a rational, #116: its denominator is positive, so this never
         -- fails; of an int, the int)
-        let r := widenR ctx.types (← elabE ctx e none)
+        let r := widenR ctx.types (← elabArithmeticOperandWith elabE ctx p (← elabE ctx e none) name)
         match r.ty with
         | .int => return r
         | .float => ofFloat r
@@ -238,8 +254,9 @@ partial def elabAppBaseWith
       -- (of floats, #127: NaN when either is)
       -- (each argument elaborated once)
       let [a, b] := args | eerr p s!"{name} takes two arguments"
-      let ra ← elabE ctx a none
-      let rb ← elabE ctx b (if ra.ty == .float || ra.ty == .int then some ra.ty else none)
+      let ra := widenR ctx.types (← elabArithmeticOperandWith elabE ctx p (← elabE ctx a none) name)
+      let rb := widenR ctx.types (← elabArithmeticOperandWith elabE ctx p
+        (← elabE ctx b (if ra.ty == .float || ra.ty == .int then some ra.ty else none)) name)
       if ra.ty == .float then
         if rb.ty != .float then eerr p s!"{name} takes two floats or two ints, found float and {rb.ty.show}"
         return ⟨p2 (if name == "Min" then .fmin else .fmax) ra.e rb.e, .float⟩
@@ -257,9 +274,9 @@ partial def elabAppBaseWith
       -- has a ToString, else just evaluate it
       match args with
       | [a] =>
-        let r ← elabE ctx a none
+        let r := widenR ctx.types (← elabPrintableValueWith elabE ctx p (← elabE ctx a none))
         match r.ty with
-        | .int | .char | .float | .arr .char => return ⟨.print (← toStringOf p r), .void⟩
+        | .int | .char | .char32 | .float | .arr .char => return ⟨.print (← toStringOf p r), .void⟩
         | _ => return ⟨.seq (← inferable r) (.lit .void), .void⟩
       | _ => eerr p "internal: $Show"
     | _ =>
@@ -272,7 +289,7 @@ partial def elabAppBaseWith
         -- a call has its callee's effects
         noteFx p s.fx (some (if s.isConst then s!"uses the constant {name}" else s!"calls {name}"))
         if s.isConst then
-          elabIndexLike ctx p ⟨.call s.idx [], s.ret⟩ args bracket
+          indexLike f ⟨.call s.idx [], s.ret⟩
         else
           let args := packCallArgs p s args
           if s.decides && !bracket then eerr p s!"{name} is <decides>: call it with {name}[…]"
@@ -293,6 +310,11 @@ partial def elabAppBaseWith
           -- (a suspension point records the defers active there, #156)
           let mark (e : Expr) : EM Expr := if s.suspends then withDeferMark ctx e else pure e
           if s.named.isEmpty && !args.any isNamed then
+            if args.length == 1 && s.params.length > 1 then
+              for k in List.range s.params.length do ctx.checkArgumentRole s args[0]! k
+            else
+              for (argument, index) in args.zipIdx do
+                ctx.checkArgumentRole s argument (if s.params.length == 1 then 0 else index)
             -- a tuple for several parameters is expanded into them (Book of
             -- Verse ch. 3: `Describe(MyTuple)` is `Describe(1, "two")`)
             if let [a] := args then
@@ -339,12 +361,14 @@ partial def elabAppBaseWith
           let mut steps : Array Expr := #[]
           let mut slots : Array (Option Nat) := Array.replicate s.params.length none
           for (a, k) in pos.zip (List.range npos) do
+            ctx.checkArgumentRole s a k
             let t := ptys[k]!
             let ta ← fresh t
             steps := steps.push (.assign ta (← coerce a.pos (← elabE ctx a (some t)) t))
             slots := slots.set! k (some ta)
           for (ap, n, rhs) in named do
             let k := npos + (s.named.findIdx? (·.1 == n)).get!
+            ctx.checkArgumentRole s rhs k
             let t := ptys[k]!
             let ta ← fresh t
             steps := steps.push (.assign ta (← coerce ap (← elabE ctx rhs (some t)) t))
@@ -357,7 +381,7 @@ partial def elabAppBaseWith
               let ta ← fresh t
               -- (the default sees the parameters before it, in their temporaries)
               let earlier : List Local := ((s.pnames.zip (List.range k)).filterMap fun (pn, j) =>
-                (slots[j]!).map fun sl => ({ name := pn, slot := sl, ty := ptys[j]!, mutable := false } : Local)).reverse
+                (slots[j]!).map fun sl => ({ name := pn, slot := sl, ty := ptys[j]!, mutable := false, typeValue := s.typeValues.contains j } : Local)).reverse
               -- (a method's: its receiver's fields too, through `Self`; a
               -- copy's in its interface's scope, as its body, #53)
               let selfC : Option String :=
@@ -374,6 +398,7 @@ partial def elabAppBaseWith
                                      inRollback := ctx.inRollback || ctx.canFail,
                                      suspends := ctx.suspends && s.suspends,
                                      defaults := key :: ctx.defaults }
+              dctx.checkArgumentRole s d k
               let rd ← fxAt p (do coerce p (← elabE dctx d (some t)) t)
               if !s.decides && rd.mayFail ctx.sigProg then
                 eerr p s!"the default of ?{n} of {name} can fail, but {name} is not <decides>"
@@ -404,8 +429,28 @@ partial def elabAppBaseWith
     let impl ← superImpl ctx p c m
     elabApp ctx p (.ident mp impl) (.ident mp "Self" :: args) bracket exp
   | .member mp obj m0 =>
+    if !ctx.typeOnly && ctx.isTypeValue obj then
+      eerr mp "dummy type value cannot be an executable method receiver"
     let spawning := m0.startsWith "$spawnMethod:"
     let m0 := if spawning then (m0.drop 13).toString else m0
+    if args.isEmpty && ["Await", "Cancel", "Signal"].contains m0 then
+      let before ← get
+      let receiver ← elabE ctx obj none
+      if let .param .. := receiver.ty then
+        let view ← match ctx.concurrencyView mp receiver.ty m0 with
+          | .ok view => pure view
+          | .error message => throw message
+        if let some target := view then
+          let converted ← elabArgumentCoerceWith elabE ctx mp receiver target
+          let slot ← fresh target
+          let name := s!"$concurrencyReceiver{slot}"
+          let binding : Local := {
+            name, slot, ty := target, mutable := false, typeValue := ctx.isTypeValue obj }
+          let inner := { ctx with locals := binding :: ctx.locals }
+          let method := if spawning then "$spawnMethod:" ++ m0 else m0
+          let result ← elabApp inner p (.member mp (.ident mp name) method) args bracket exp
+          return ⟨.seq (.assign slot converted) result.e, result.ty⟩
+      set before
     -- `T.Await()` of a task (#156): the helper `$Await(T)`
     -- `T.Cancel()` of a task (#156): the mark `$cancelMark(T)`, which the
     -- lowering turns into the cancellation of the task's root
@@ -440,7 +485,7 @@ partial def elabAppBaseWith
           return ← elabApp ctx p (.ident mp "$StickyAwait") [obj] false exp
         else pure ()
       | _ => pure ()
-    let r0 ← elabE ctx obj none
+    let r0 ← elabBoundReceiverWith elabE ctx p (← elabE ctx obj none) m0
     ctx.noteFamily mp r0.ty m0
     -- `X.(i:)M(…)`: `X` as an `i`, so `i`'s `M` (a qualified call)
     let (r, m) ← match r0.ty, m0.startsWith "(", (m0.drop 1).toString.splitOn ":)" with
@@ -492,6 +537,8 @@ partial def elabAppBaseWith
         if ms.named.isEmpty && args.length + 1 != ms.params.length then
           eerr p s!"{m} takes {ms.params.length - 1} argument(s), found {args.length}"
         let slot ← fresh r.ty
+        if !ctx.typeOnly then
+          modify fun st => { st with metadataUses := slot :: st.metadataUses }
         let recv := s!"$recv{slot}"
         let ds := env.concreteBelow c
         -- one implementation for every class below the receiver's type, above
@@ -522,7 +569,8 @@ partial def elabAppBaseWith
               let es ← fresh (.struct e (argsAt e))
               pure ([Expr.assign es (← coerce p ⟨.local slot, r.ty⟩ (.struct e (argsAt e)))], es)
             else pure ([], slot)
-          let ctx' := { ctx with locals := { name := recv, slot := eslot, ty := .struct e (argsAt e), mutable := false } :: ctx.locals }
+          let ctx' := { ctx with
+            locals := { name := recv, slot := eslot, ty := .struct e (argsAt e), mutable := false, typeValue := ctx.isTypeValue obj } :: ctx.locals }
           let rc ← if spawning then
               elabSpawn ctx' p (.app p (.ident mp fname) (.ident mp recv :: args) bracket)
             else elabApp ctx' p (.ident mp fname) (.ident mp recv :: args) bracket exp
@@ -556,7 +604,7 @@ partial def elabAppBaseWith
         for (ap, n, _) in namedArgs do
           if (ms.named.find? (·.1 == n)).isNone then eerr ap s!"{m} has no parameter ?{n}"
         let mut pre : Array Expr := #[.assign slot r.e]
-        let mut locs : List Local := [{ name := recv, slot, ty := r.ty, mutable := false }]
+        let mut locs : List Local := [{ name := recv, slot, ty := r.ty, mutable := false, typeValue := ctx.isTypeValue obj }]
         let mut argIds : Array SExpr := #[]
         -- the method's own type parameters, from the expected result type
         -- (unless void), then from the arguments, as for a generic call: an
@@ -587,23 +635,23 @@ partial def elabAppBaseWith
               if contextual[i]! then
                 eerr a.pos s!"cannot infer the type parameters of {m} from the arguments of this call"
               let r ← elabE ctx a none
-              match t.matchArg ctx.types σu r.ty with
+              match ctx.matchArgument σu t r.ty with
               | some σ' =>
                 σu := own? σ'
                 let t' := t.subst σu
                 if t'.params.any ownNames.contains then
                   if pass == 0 then deferred := deferred.set! i true
                   else eerr a.pos s!"cannot infer the type parameters of {m} from this argument"
-                else done := done.set! i (some (← coerce a.pos r t', t'))
+                else done := done.set! i (some (← elabArgumentCoerceWith elabE ctx a.pos r t', t'))
               | none => eerr a.pos s!"expected {showT t}, found {r.ty.show} (in a call of {m})"
             else
               done := done.set! i (some (← coerce a.pos (← elabE ctx a (some t)) t, t))
         let mut namedSlots : List (String × Nat) := []
-        for ((_, _, name), d) in given.zip done.toList do
+        for ((argument, _, name), d) in given.zip done.toList do
           let some (e, t) := d | eerr p s!"cannot infer the type parameters of {m} from the arguments of this call"
           let ta ← fresh t
           pre := pre.push (.assign ta e)
-          locs := { name := s!"$arg{ta}", slot := ta, ty := t, mutable := false } :: locs
+          locs := { name := s!"$arg{ta}", slot := ta, ty := t, mutable := false, typeValue := ctx.isTypeValue argument } :: locs
           match name with
           | none => argIds := argIds.push (.ident mp s!"$arg{ta}")
           | some n => namedSlots := namedSlots ++ [(n, ta)]
@@ -887,10 +935,10 @@ partial def elabAppBaseWith
         return ⟨pre.toList.foldr Expr.seq (.assign y acc), msRet⟩
       else if (ctx.types.fields c targs).any (·.1 == m) then
         -- `S.F[i]`, `S.F(k)`: a field, indexed
-        elabIndexLike ctx p (← elabMember ctx p r m) args bracket
+        indexLike f (← elabMember ctx p r m)
       else if ctx.types.classes.contains c then eerr p s!"class {c} has no method '{m}'"
       else eerr p s!"struct {c} has no field '{m}' (structs have no methods)"
     | _ => elabMethod ctx p r m args bracket
-  | _ => elabIndexLike ctx p (← elabE ctx f none) args bracket
+  | _ => indexLike f (← elabE ctx f none)
 
 end OpenVerse.Front
