@@ -1182,11 +1182,20 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
         if let some (q, target, as) := call then
           if (instances.lookup target).isSome then continue
           let some targetSig := ctx.sig? target | eerr q s!"internal: no signature for {target} (#283)"
-          let attempt ← tryCatch (do
+          -- (at the result type, as the group's own functions' calls; else, a
+          -- function the group's code calls whose values go to the frame after
+          -- its call, at its arguments' alone, #283)
+          let probe (exp : Option Ty) : EM (Except String (List (String × Ty))) := tryCatch (do
             let packet ← elabE { ca with callInstanceProbe := some target }
-              (.app q (.ident q target) as targetSig.decides) (some rty)
+              (.app q (.ident q target) as targetSig.decides) exp
             let .tup types := packet.ty | eerr q "internal: a mutual argument type packet"
             pure (Except.ok ((targetSig.tparams.map (·.1)).zip types))) (fun err => pure (.error err))
+          let attempt ← match ← probe (some rty) with
+            | .ok σ => pure (Except.ok σ)
+            | .error err => do
+              match ← probe none with
+              | .ok σ => pure (Except.ok σ)
+              | .error _ => pure (.error err)
           match attempt with
           | .ok σ =>
             instances := instances ++ [(target, σ)]

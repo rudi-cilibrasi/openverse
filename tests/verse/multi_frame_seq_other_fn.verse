@@ -5,7 +5,7 @@
 # failure context of their own: when they fail it has no values and, in a
 # for, what came before the call stays), a recursive one, a generic one, a
 # method, one with a named parameter or a return, one whose values are of
-# another type, one with a condition that takes a third one's values, and a
+# another type, a generic one at another type than the function's, one with a condition that takes a third one's values, and a
 # callee of a mutual pair.
 Two(N:int)<transacts>:int = N | N + 5
 Digits(N:int)<transacts>:int =
@@ -59,6 +59,11 @@ Gates(N:int)<transacts>:int = if (N <= 0) then 0 else Gates(N - 1) + Gate(N)
 Sign(N:int)<transacts>:int = N | -N
 Even(N:int)<transacts>:int = if (N <= 0) then 0 else Odd(N - 1) + Sign(N)
 Odd(N:int)<transacts>:int = if (N <= 0) then 1 else Even(N - 1) * 10
+Both(X:t, Y:t where t:type)<transacts>:t = X | Y
+Strs(N:int)<transacts>:int =
+    if (N <= 0) then 0 else:
+        S := Both("x", "yy")
+        Strs(N - 1) * 10 + S.Length
 Main()<transacts>:void =
     for (V := Digits(2)) { Print("v {V}") }
     if (V := Digits(2), V > 20) then Print("taken {V}")
@@ -73,3 +78,4 @@ Main()<transacts>:void =
     if (V := Lengths(2), V > 3) then Print("taken {V}")
     for (V := Gates(2)) { Print("v {V}") }
     for (V := Even(3)) { Print("v {V}") }
+    for (V := Strs(2)) { Print("v {V}") }

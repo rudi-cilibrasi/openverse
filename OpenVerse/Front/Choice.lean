@@ -1661,7 +1661,12 @@ mutual
     after it is named as #283's first frames were, after the alternative;
     others after the point and its kind. -/
 partial def normAlt (ops : ShapeOps) (a : SExpr) : Option SExpr := do
-  if ops.isRec a || ops.plain a then return a
+  if ops.isRec a then return a
+  -- (a value: its `if`s with a `return` in a branch plain ones again, as an
+  -- eager body's, #283; a tail's own scope stays the tail's)
+  if ops.plain a then return (match a with
+    | .app _ (.ident _ "$returnTail") _ false => a
+    | a => eraseReturnTails a)
   -- (a block that starts with a choice bound, with plain code after it: the
   -- choice of that code after each alternative, as `lastChoiceTail`)
   if let .block _ ss@(_ :: _ :: _) := a then
@@ -1683,11 +1688,14 @@ partial def normAlt (ops : ShapeOps) (a : SExpr) : Option SExpr := do
     let h := if ops.isRec c && ops.plain k then s!"$frame{a.pos.line}_{a.pos.col}"
       else s!"$frame{c.pos.line}_{c.pos.col}{if ops.isRec c then "k" else if ifPoint c then "i" else "c"}"
     let k := renameE [(hole, h)] k
+    -- (a frame that reaches no other point: plain code, its `if`s with a
+    -- `return` in a branch plain ones again, as an eager body's, #283)
+    let plainFrame (k : SExpr) : SExpr := eraseReturnTails k
     if ifPoint c then
       -- (an `if`: entered as `enterOf` enters a member, its conditions the
       -- member's path, each leaf's values going to the frame, one for all,
       -- its code in the first leaf only, `sameFrame`)
-      let k ← if ops.plain k then some k else contBody? ops k
+      let k ← if ops.plain k then some (plainFrame k) else contBody? ops k
       let tail := mapLoopLeavesIdx (fun i v => .app v.pos (.ident v.pos "$then")
         [v, .ident v.pos h, if i == 0 then k else sameFrame v.pos] false) (← normTail ops c)
       let q := a.pos
@@ -1700,7 +1708,7 @@ partial def normAlt (ops : ShapeOps) (a : SExpr) : Option SExpr := do
         let cs ← cs.mapM (normAlt ops)
         pure (mk c.pos (cs.map enterOf))
       | none => pure c
-    let k ← if ops.plain k then some k else contBody? ops k
+    let k ← if ops.plain k then some (plainFrame k) else contBody? ops k
     let q := a.pos
     return .app q (.ident q "$then") ([c, .ident q h, k] ++ (if pre.isEmpty then [] else [.block q pre])) false
 

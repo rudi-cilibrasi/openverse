@@ -1,4 +1,4 @@
-# expect: 8:17: expected int, found string (Two is taken with T, at one instance of its type parameters for a whole search: a call of it at another is not supported yet, #283)
+# expect: 9:23: expected string, found int (Two is taken with T, at one instance of its type parameters for a whole search: a call of it at another is not supported yet, #283)
 # (#283) A generic function with several values that a recursive one's code
 # calls is taken with it at one instance of its type parameters for a whole
 # search, as a generic group's own functions are.
