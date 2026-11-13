@@ -290,6 +290,7 @@ partial def elabExprInitialWith
       | some (.opt t) => return ⟨.lit .none, .opt t⟩
       | some (.arr t) => return ⟨.lit Value.emptyArray, .arr t⟩
       | some .void => return ⟨.lit .void, .void⟩
+      | some (.tup []) => return ⟨.lit .void, .tup []⟩
       | _ => return ⟨.lit (.logic false), .logic⟩
     | _ =>
       match ctx.lookup n with

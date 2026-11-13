@@ -159,7 +159,8 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
   let (receiverInits, st0) ← (elabReceiverEvidence ctx p frame).run st0
   let ((r, _), st) ← elabBody ctx body (some ret) st0
   let (e, st) ← (coerce p r ret).run st
-  let e := if ret == .void then Expr.seq e (.lit .void) else e
+  -- (a body whose result is the empty value ends with it: `void`, `tuple()`)
+  let e := if ret.isUnit then Expr.seq e (.lit .void) else e
   let selfInits : List Expr := (dictTps.drop (dictTps.length - selfTps.length)).map fun (v, _) =>
     .heap (.get (selfField v)) [.local 0]
   let selfInits := selfInits ++ receiverInits

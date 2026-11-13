@@ -55,7 +55,9 @@ CASES = [
     # arrays/maps; it must not reject ordinary classes or these other pairs.
     ('a', '[]int', True, 'A', 'array{N}'),
     ('a', '[logic]int', True, 'A', 'map{true=>N}'),
-    ('[logic]int', '?int', True, 'map{true=>N}', 'option{N}'),
+    # (a map and an option both have the empty value, `false`: they overlap
+    # as an array and an option do, Book of Verse ch. 2)
+    ('[logic]int', '?int', False, '', ''),
     ('type{_(:int)<computes>:int}', '?int', True, 'Scalar', 'option{N}'),
     ('type{_(:int)<computes>:int}', 'tuple(int,int)', True, 'Scalar', '(N,N)'),
 ]
