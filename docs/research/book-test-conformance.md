@@ -986,23 +986,25 @@ VerseVM-only), `weak_map` (1), a `set` through a call (1, `Map:472`) and
 **The programs whose bytes or output changed** (the byte-identity oracle
 over the suites and the frozen corpus, against the base, main `7bf6dbd`
 with #602; a program whose bytes changed was run with both compilers in
-Lean and C): none's output changed. 109 changed bytes, each because two
+Lean and C): none's output changed. 111 changed bytes: 109 because two
 comparable types with nothing in common now join at `comparable`, not
-`any` (ch. 1, 1276; ch. 14): 100 generated `heterogeneous-*` programs (a
+`any` (ch. 1, 1276; ch. 14): 98 generated `heterogeneous-*` programs (a
 choice of an int and a string), and the tests `any`, `if_join_order`,
+`choice_heterogeneous_contracts`, `choice_heterogeneous_fields`,
 `choice_branch_calls_join`, `choice_dictionary_associated_later_argument`,
 `choice_dictionary_correlated`, `choice_first_unrelated`, `choice_more`,
 `class_cast_refine_first_join`, `class_cast_refine_if_type`; and 2 because
 generic code now compares a type parameter with another type by boxes
 (`generics` and `empty_values_nested`: `X = true`, `X = false`, `X = ""`).
-Four error tests changed: `array_elements_differ` (a `[]comparable` now:
-"no ToString for comparable"; `array_elements_any` keeps the `[]any`
-case), `concatenate_maps_types` (maps of an int and a string join at
-`[int]comparable`; the refusal is now of a class value),
+Three error tests changed their message: `array_elements_differ` (a
+`[]comparable` now: "no ToString for comparable"; `array_elements_any`
+keeps the `[]any` case), `concatenate_maps_types` (maps of an int and a
+string join at `[int]comparable`; the refusal is now of a class value) and
 `qualified_path_not_type` (the built-in types listed include
-`comparable`), and `eq_core_values`, `eq_core_params` and
-`eq_generic_tuple_string` compile and compare as the Book does (their cases
-are in `tests/verse/comparable_type` and `comparable_generic`).
+`comparable`); three compile now and compare as the Book does, so they
+left `tests/errors`: `eq_core_values`, `eq_core_params` and
+`eq_generic_tuple_string` (their cases are in `tests/verse/comparable_type`
+and `comparable_generic`).
 
 ## Ten causes to remove first
 
