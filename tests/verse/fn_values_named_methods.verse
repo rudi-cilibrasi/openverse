@@ -2,7 +2,8 @@
 # evaluated once, when the value is made; each call evaluates the omitted
 # defaults then, reading the receiver's current fields, and dispatches as a
 # call does, so an override's own default is the one that runs (Book of
-# Verse ch. 6: defaults read the instance's overridden members).
+# Verse ch. 6: defaults read the instance's overridden members). An
+# override with a default of its own is a value of a type that omits it.
 game := class:
     var DefaultSpeed:float = 1.0
     CurrentSpeed(?Speed:float = DefaultSpeed)<transacts>:float = Speed
@@ -25,6 +26,10 @@ rect := class(shape):
 box(t:type) := class:
     V:t
     Get(?Or:t = V):t = Or
+strict := class:
+    Pick(?X:int):int = X
+lenient := class(strict):
+    Pick<override>(?X:int = 5):int = X + 1
 MakeGame():game =
     Print("receiver")
     game{}
@@ -50,3 +55,8 @@ Main():void =
     Get:type{_():string} = Bx.Get
     GetOr:type{_(?Or:string):string} = Bx.Get
     Print("{Get()} {GetOr(?Or := "w")}")
+    Le := lenient{}
+    P:type{_():int} = Le.Pick
+    St:strict = Le
+    Q:type{_(?X:int):int} = St.Pick
+    Print("{P()} {Q(?X := 1)}")

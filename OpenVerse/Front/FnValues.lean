@@ -613,17 +613,18 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
   let classOf (c : String) : Option (List TParam × List STy × List STop) := tops.findSome? fun
     | .classDef _ n tps _ ps _ _ _ ms => if n == c then some (tps, ps, ms) else none
     | _ => none
-  let rec declOf (fuel : Nat) (c m : String) : Option (List TParam × List STy) :=
+  let rec declOf (fuel : Nat) (c m : String) : Option (List TParam × List STy × List String) :=
     match fuel, classOf c with
     | fuel + 1, some (_, ps, _) => (ps.filterMap parentName).findSome? fun q =>
       match classOf q with
       | some (qtps, _, qms) =>
-        let own : STop → Option (List STy) := fun
+        let own : STop → Option (List STy × List String) := fun
           | .fn _ m' qps _ qeffs qr _ =>
-            if m' == m && !qeffs.contains "override" then some (qps.map (·.ty) ++ [qr]) else none
+            if m' == m && !qeffs.contains "override" then some (qps.map (·.ty) ++ [qr], (ownShape qps qeffs).1.optional)
+            else none
           | _ => none
         match qms.findSome? own with
-        | some targs => some (qtps, targs)
+        | some (targs, optional) => some (qtps, targs, optional)
         | none => declOf fuel q m
       | none => none
     | _, _ => none
@@ -633,13 +634,15 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
         | .fn mp m ps mtps effs r b =>
           let targs := ps.map (·.ty) ++ [r]
           -- An override with a different signature needs its own value
-          -- class (a narrower result, #219). Otherwise the declaration's
-          -- adapter already dispatches to it, including generic receivers;
-          -- duplicating adapters along a chain grows their dispatch again.
+          -- class (a narrower result, #219; defaults for other named
+          -- parameters, #503). Otherwise the declaration's adapter already
+          -- dispatches to it, including generic receivers; duplicating
+          -- adapters along a chain grows their dispatch again.
           let needed := !effs.contains "override" || match declOf (tops.length + 1) c m with
-            | some (_, dtargs) =>
+            | some (_, dtargs, doptional) =>
               dtargs.length != targs.length ||
-                (dtargs.zip targs).any fun (a, b) => reprStr a != reprStr b
+                (dtargs.zip targs).any (fun (a, b) => reprStr a != reprStr b) ||
+                doptional != (ownShape ps effs).1.optional
             | none => true
           -- Repeated, compound and hidden receiver arguments use ordinary
           -- GADT dispatch. The captured receiver retains their witnesses.
