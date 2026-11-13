@@ -2545,13 +2545,6 @@ structure ForStagePlan where
   sourceSuspends : Bool := false
   deriving Inhabited
 
-/-- A source return's saved operand and exit packet for a first-success helper. -/
-structure FirstReturn where
-  ty : STy
-  value : Option String
-  packet : List SExpr
-  deriving Inhabited
-
 /-- (#246) A lazily taken call, where the first success is taken, whose
     clauses, conditions or calls of itself have effects: compiled as a
     function of its own, recursive, so that each alternative and each call
@@ -2567,11 +2560,6 @@ structure FirstLift where
       failure context where the code cannot fail (`Ctx.inRollback`): its
       body runs inside that context too. -/
   rollback : Bool := false
-  /-- The packets of the source exits its clauses have, a `return` and a
-      `break` that leaves them, the function's own exits as a refining
-      lift's are (`Refine.Exits`); the caller exits again (`firstUnpack`). -/
-  returnExit : Option FirstReturn := none
-  breakExit : Option (List SExpr) := none
   /-- A stage request supplies classes rather than a callable helper. -/
   stageOnly : Bool := false
   resumes : List ForResume := []
@@ -2618,11 +2606,11 @@ def firstValue (b : String) (bty ret : Option STy) (rest : List SExpr) (tup : SE
     of a lazily taken call with return frames: the value given to the
     continuation `$K`'s frames (`$frameApply`), then as `firstValue`. -/
 def firstReturnBody (p : Pos) (b : String) (bty : Option STy) (rest : List SExpr) (binds : List String)
-    (sets : List (String × STy)) (ret : Option STy) (normalResult : Option SExpr)
+    (sets : List (String × STy)) (ret : Option STy)
     (frames : List (String × List String × SExpr)) (memberFn : Nat → Option String := fun _ => none)
     (caps : List SExpr := []) (frameTys : List (Option STy × Option STy) := []) : SExpr :=
-  let tup : SExpr := normalResult.getD (.tuple p (binds.map (SExpr.ident p ·) ++ sets.map (fun (m, _) => SExpr.ident p m) ++
-    [.ident p "true"]))
+  let tup : SExpr := .tuple p (binds.map (SExpr.ident p ·) ++ sets.map (fun (m, _) => SExpr.ident p m) ++
+    [.ident p "true"])
   let copies := sets.map fun (m, t) => SExpr.decl p m (some t) true (.ident p s!"{m}$in")
   let liveIds (lives : List String) : List SExpr := lives.map (SExpr.ident p ·)
   if (List.range frames.length).all (memberFn · |>.isNone) && frameTys.all (fun (i, o) => i.isNone && o.isNone) then
@@ -2665,11 +2653,11 @@ partial def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy
     (rest : List SExpr) (binds : List String) (sets : List (String × STy)) (caps : List SExpr)
     (ret : Option STy := none) (helperOf : String → String := fun _ => helper)
     (recArgs : Option String → Pos → List SExpr → List SExpr × List SExpr := fun _ _ as => ([], as))
-    (normalResult : Option SExpr := none) (frames : List (String × List String × SExpr) := [])
+    (frames : List (String × List String × SExpr) := [])
     (retFn : String := "") (frameTys : List (Option STy × Option STy) := [])
     (retOf : Option STy → String := fun _ => retFn) (ownTy : Option STy := none) : SExpr :=
-  let tup : SExpr := normalResult.getD (.tuple p (binds.map (SExpr.ident p ·) ++ sets.map (fun (m, _) => SExpr.ident p m) ++
-    [.ident p "true"]))
+  let tup : SExpr := .tuple p (binds.map (SExpr.ident p ·) ++ sets.map (fun (m, _) => SExpr.ident p m) ++
+    [.ident p "true"])
   let recur (target : Option String) (h : String) (q : Pos) (as : List SExpr) (k : List SExpr) : SExpr :=
     let (pre, args) := recArgs target q as
     let call := SExpr.app q (.ident q h) (args ++ k ++ caps) true

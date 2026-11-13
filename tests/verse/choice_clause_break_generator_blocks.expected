@@ -1,7 +1,0 @@
-loop 4
-source 4
-result 99
-loop 4
-source 4
-result 99
-exit=0

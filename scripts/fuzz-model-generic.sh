@@ -21,7 +21,7 @@ for ((s=first; s<first+n; s++)); do
     { bad=$((bad+1)); echo "GENERATOR FAILED seed $s: $(tail -1 "$tmp/gen.err")"; continue; }
   for p in $(sed -n 's/^paths=\([^ ]*\).*/\1/p' "$tmp/p.meta" | tr , ' '); do paths[$p]=$(( ${paths[$p]:-0} + 1 )); done
   rm -f "$tmp/p.vbc"
-  timeout 60 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?
+  timeout 60 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.err"
   if [[ $(tail -n 1 "$tmp/p.expected") == exit=4 ]]; then
     if [[ $le -eq 4 && ! -s "$tmp/l.out" ]] &&
         ! grep -qi internal "$tmp/l.err" &&

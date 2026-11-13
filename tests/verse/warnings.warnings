@@ -1,0 +1,5 @@
+10:13: warning: this _ arm is never reached: the arms before it name every value of the closed enum light
+14:4: warning: this return gives a value of type int, which a function whose result is void discards
+21:4: warning: this code is never reached: the code before it always returns or breaks
+29:4: warning: this code is never reached: the code before it always returns or breaks
+32:25: warning: this code is never reached: the code before it always returns or breaks

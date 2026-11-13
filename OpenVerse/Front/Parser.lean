@@ -659,7 +659,7 @@ partial def parseArgs (close : String) : PM (List SExpr) := parseItems close fal
 partial def parseFields : PM (List SExpr) := do
   let b ← peekT
   bump
-  if b.isSym "{" then parseItems "}" true else parseIndented (← peekT).col
+  if b.isSym "{" then parseItems "}" true else spliceStmts <$> parseIndentedWith parseStmt (← peekT).col
 
 /-- Items up to `close` (consumed), separated by commas, or, with `lines`,
     by `;` and new lines instead (a construction's fields, an array's
@@ -758,6 +758,46 @@ partial def parseStmt (c : Nat) : PM SExpr := do
     set saved
   parseExpr c
 
+/-- A statement of a block, and the ones a comma on its line joins to it
+    (the Book of Verse, ch. 1, "Semicolons vs Commas": in a block, `;` and
+    new lines make a sequence and `,` a tuple; its tests,
+    `SemicolonsVsCommas.versetest` 70, 95, 100: `Value :=` and the line
+    `1, 2, 3` is `(1, 2, 3)`, `{3, X}` and `option{1, 2}` hold a tuple): the
+    tuple of them. When every one is a definition, they are the block's
+    definitions in turn (ch. 1: "semicolons and commas are interchangeable
+    as separators between definitions", `X:int = 0, Y:int = 0`). When some
+    are, each element in order, a definition as itself and any other bound
+    to a name of its own, then the tuple of their values, so a definition is
+    visible to the elements after it and after the group: `(V := X, V > 0,
+    V)` is `V := X; T := V > 0; (V, T, V)` (a `var`'s value is taken where
+    it is defined). A comma that starts a line is not the group's: it ends
+    the block, and belongs to the list around it. -/
+partial def parseStmtTuple (c : Nat) : PM SExpr := do
+  let t ← peekT
+  let first ← parseStmt c
+  let comma : PM Bool := do
+    let n ← peekT
+    return n.isSym "," && !n.bol
+  if !(← comma) then return first
+  let mut items := #[first]
+  while ← comma do
+    bump
+    items := items.push (← parseStmt c)
+  let isDecl : SExpr → Bool := fun
+    | .decl .. | .app _ (.ident _ "$destructure") _ false => true
+    | _ => false
+  let es := items.toList
+  if es.all isDecl then return .app t.pos (.ident t.pos "$destructure") (spliceStmts es) false
+  if !es.any isDecl then return .tuple t.pos es
+  let name (i : Nat) : String := s!"$comma{t.line}_{t.col}_{i}"
+  let parts := es.zipIdx.map fun (e, i) => match e with
+    | .decl q n _ false _ => ([e], SExpr.ident q (bareName n))
+    | .decl q n _ true _ => ([e, .decl q (name i) none false (.ident q (bareName n))], .ident q (name i))
+    | .app q (.ident _ "$destructure") ds@(.decl _ tup _ _ _ :: _) false => (ds, .ident q tup)
+    | e => ([.decl e.pos (name i) none false e], .ident e.pos (name i))
+  return .app t.pos (.ident t.pos "$destructure")
+    (parts.flatMap (·.1) ++ [.tuple t.pos (parts.map (·.2))]) false
+
 /-- An indented block whose items start at column `c`, each read by `item`. -/
 partial def parseIndentedWith (item : Nat → PM SExpr) (c : Nat) : PM (List SExpr) := do
   withBlock (← peekT) do
@@ -775,24 +815,29 @@ partial def parseIndentedWith (item : Nat → PM SExpr) (c : Nat) : PM (List SEx
       else break
     return stmts.toList
 
-/-- An indented block whose statements start at column `c`. -/
-partial def parseIndented (c : Nat) : PM (List SExpr) := spliceStmts <$> parseIndentedWith parseStmt c
+/-- An indented block whose statements start at column `c` (statements a
+    comma joins are a tuple, `parseStmtTuple`). -/
+partial def parseIndented (c : Nat) : PM (List SExpr) := spliceStmts <$> parseIndentedWith parseStmtTuple c
 
-/-- A braced block after its `{`, up to the `}` (consumed). -/
-partial def parseBraced (p : Pos) : PM SExpr := do
+/-- A braced block after its `{`, up to the `}` (consumed): its statements
+    separated by `;` and new lines, statements a comma joins a tuple
+    (`parseStmtTuple`); with `arms`, the arms of `sync`, `race` and `rush`,
+    separated by commas too. -/
+partial def parseBraced (p : Pos) (arms : Bool := false) : PM SExpr := do
   if (← peekT).isSym "}" then bump; return .block p []
   let c := (← peekT).col
+  let stmt : Nat → PM SExpr := if arms then parseStmt else parseStmtTuple
   let stmts ← withBlock (← peekT) do
-    let mut stmts := #[← parseStmt c]
+    let mut stmts := #[← stmt c]
     repeat
       let t ← peekT
       checkIndent t
-      if t.isSym ";" || t.isSym "," then
+      if t.isSym ";" || (arms && t.isSym ",") then
         bump
         -- (`{a; b;}`: a `;` may end the block)
-        if !(t.isSym ";" && (← peekT).isSym "}") then stmts := stmts.push (← parseStmt c)
+        if !(t.isSym ";" && (← peekT).isSym "}") then stmts := stmts.push (← stmt c)
       else if t.isSym "}" then break
-      else if t.bol && !t.isEof then stmts := stmts.push (← parseStmt c)
+      else if t.bol && !t.isEof then stmts := stmts.push (← stmt c)
       else perr t s!"expected ';', a new line or '}', found {t.tok.describe}"
     return stmts
   bump
@@ -849,7 +894,7 @@ partial def parseItemBlock {α : Type} [Inhabited α] (item : Nat → PM α) (st
 
 /-- The body of a construct: `: block`, `:` + inline expression, `{ block }`,
     or `.` + inline expression. -/
-partial def parseBody (stop : Nat) : PM SExpr := do
+partial def parseBody (stop : Nat) (arms : Bool := false) : PM SExpr := do
   let t ← peekT
   if t.isSym "." then
     bump
@@ -864,7 +909,7 @@ partial def parseBody (stop : Nat) : PM SExpr := do
       return .block t.pos (← parseIndented n.col)
     else return .block t.pos [← parseExpr stop]
   else if t.isSym "{" then
-    bump; parseBraced t.pos
+    bump; parseBraced t.pos arms
   else perr t s!"expected ':', '\{' or '.', found {t.tok.describe}"
 
 /-- `then` / `else` / `do` parts: a body, or an inline expression. -/
@@ -1264,7 +1309,7 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
     if n.startsBody then
       bump
       let kw := if t.isKw "sync" then "$sync" else if t.isKw "race" then "$race" else "$rush"
-      let arms := match ← parseBody stop with
+      let arms := match ← parseBody stop (arms := true) with
         | .block _ es => es
         | e => [e]
       return .app t.pos (.ident t.pos kw) arms false

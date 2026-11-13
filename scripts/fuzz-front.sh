@@ -39,7 +39,7 @@ acc=0; rej=0; bad=0
 for f in "$tmp"/m*.verse; do
   # one compilation: it writes the bytecode (so a mutant without one never got past the front
   # end), then the Lean interpreter runs it
-  timeout 20 "$ov" run "$f" --emit "$f.vbc" --fuel 200000 >"$f.l" 2>"$f.le"; le=$?
+  timeout 20 "$ov" run "$f" --emit "$f.vbc" --fuel 200000 >"$f.l" 2>"$f.le"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$f.le"
   # (Lean out of memory under check.sh's cap, CHECK_MEM_GB: a resource limit, as exit 3 is, which
   # the Lean runtime reports with its own panic and exit 1 (docs/FORMAT.md, "Exit protocol"). An
   # endless search Lean runs with far more memory per unit of fuel than C does: in the nightly

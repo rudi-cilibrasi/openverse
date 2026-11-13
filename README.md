@@ -103,7 +103,7 @@ models in `scripts/models/`. `scripts/check.sh` runs each from a fixed seed (`FU
 | `scripts/fuzz-model-mv.sh` | choice and functions with several values |
 | `scripts/fuzz-model-generic.sh` | generic functions with several values, on each compilation path and consumer |
 | `scripts/fuzz-model-heterogeneous.sh` | composed choices over mixed types: rollback, copy-outs, waiting and cancellation (with `--methods`, `--members` and other modes for dictionaries) |
-| `scripts/fuzz-model-breaks.sh` | `break` out of source loops from `for` filters and from first-success clauses with choices, with rollback; `break` and `return` out of blocks with a `defer:`, with a choice of their own or not |
+| `scripts/fuzz-model-breaks.sh` | rollback in source loops: `for` filters over producers, and first-success clauses with choices, among them blocks with a `defer:`, with a choice of their own or not, in a loop's body |
 | `scripts/fuzz-model-gadt.sh` | classes that fix, repeat or hide type arguments, and casts on them; interfaces seen through views (fields, defaults, generic calls) |
 | `scripts/fuzz-model-named-values.sh` | function values of functions with named parameters: which types they fit, written order, defaults at the call, bound receivers, rollback, refusals; with `--tuples`, destructured tuple parameters |
 | `scripts/fuzz-model-sched.sh` | the scheduler: `spawn`, `branch`, events, `sync`/`race`/`rush`, cancellation and `Sleep` |

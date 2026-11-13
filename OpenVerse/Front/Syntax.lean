@@ -223,6 +223,13 @@ def SExpr.pos : SExpr → Pos
   | .structDef p _ _ _ | .enumDef p _ _ | .refineDef p _ _ _ | .typeAlias p _ _ | .construct p _ _ _
   | .mapLit p _ => p
 
+/-- Where an expression's text starts: a call's, an index's, a member's, a
+    query's, a binary operation's and a comparison's at their first operand
+    (the parser places them at the operator). -/
+def SExpr.start : SExpr → Pos
+  | .app _ f _ _ | .member _ f _ | .query _ f | .bin _ _ f _ | .cmp _ f _ => f.start
+  | e => e.pos
+
 /-- Immediate expression children, in source order, including call heads,
     construction field bindings and case patterns. Type definitions are
     leaves: analyses of their field defaults or refinement conditions must

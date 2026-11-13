@@ -881,6 +881,19 @@ def diag(err, path):
     return d
 
 
+def split_warnings(err, path):
+    """The compiler's warnings (`PATH:LINE:COL: warning: ...`, printed before
+    the program runs: docs/FORMAT.md, "Exit protocol"), and the rest of
+    standard error, the run's."""
+    warnings, rest = [], []
+    for l in (err or "").split("\n"):
+        if l.startswith(path + ":") and ": warning: " in l and not rest:
+            warnings.append(l[len(path) + 1:])
+        else:
+            rest.append(l)
+    return warnings, "\n".join(rest)
+
+
 def run_program(path):
     """Compile and run a program with the Lean interpreter and, when it compiles,
     with the C runtime. Returns a dict describing the outcome."""
@@ -888,12 +901,13 @@ def run_program(path):
     if os.path.exists(vbc):
         os.remove(vbc)
     rc, out, err = run([OPENVERSE, "run", path, "--fuel", FUEL, "--emit", vbc])
+    warnings, err = split_warnings(err, path)
     # (the Lean runtime out of memory: its allocator prints this and exits with
     # 1, which no Lean program can catch; it is the resource limit cverse
     # reports as `limit: memory`, exit 3: docs/FORMAT.md, "Exit protocol")
     if rc == 1 and first_line(err) == "INTERNAL PANIC: out of memory":
         rc, err = 3, "limit: memory\n"
-    r = {"rc": rc, "out": out, "err": err, "diag": diag(err, path)}
+    r = {"rc": rc, "out": out, "err": err, "diag": diag(err, path), "warnings": warnings}
     if rc is None:
         r["internal"] = "hang (Lean): no result in %ds" % TIMEOUT
         return r
@@ -931,6 +945,14 @@ def refusal_kind(phase, diagnostic):
     if phase == "parse":
         return "parse"
     return "unsupported" if UNSUPPORTED.search(diagnostic) else "rule"
+
+
+def warning_codes(codes):
+    """Whether an expected error's codes are all the Book compiler's warnings
+    (its diagnostics 2000-2999: unreachable code 2000, `return` of a value in
+    a `:void` function 2002, a `case` arm never reached 2302, ...)."""
+    cs = [x.strip() for x in (codes or "").split(",") if x.strip()]
+    return bool(cs) and all(x.isdigit() and 2000 <= int(x) < 3000 for x in cs)
 
 
 VERDICTS = ["agrees", "disagrees-accepts", "disagrees-refuses", "wrong-output",
@@ -977,13 +999,24 @@ def verdict(c, results, parsed, work):
         return "disagrees-refuses", "refused (%s): %s" % (kind, r["diag"])
     outcome = {0: "succeeded", 1: "failed", 2: "runtime error", 3: "resource limit"}[rc]
     shown = first_line(r["err"])
+    warned = r.get("warnings") or []
+    # (an expected error whose codes are all warnings, 2000-2999, is the Book
+    # compiler's warning, given with the program compiled: a warning
+    # satisfies it, Reachability.versetest:22, "Treat unreachable expressions
+    # after break as warning not error"; a refusal still agrees, as for any
+    # expected error, the codes not compared)
+    if c.expect == "error" and warned and warning_codes(c.codes):
+        return "agrees", "warned (%s): %s" % (outcome, warned[0])
+    # (a warning where the case expects none is noted, not judged: the Book's
+    # runner checks a warning's code only where a case names it)
+    note = " (warning: %s)" % warned[0] if warned else ""
     if c.expect == "error":
-        return "disagrees-accepts", "accepted (%s)" % outcome
+        return "disagrees-accepts", "accepted (%s)%s" % (outcome, note)
     if c.expect == "valid":
-        return "agrees", "accepted"
+        return "agrees", "accepted" + note
     if c.expect == "succeeds":
         if rc == 0:
-            return "agrees", "succeeded"
+            return "agrees", "succeeded" + note
         return "wrong-output", "%s: %s" % (outcome, shown)
     if c.expect == "runtime-error":
         if rc in (2, 3):
