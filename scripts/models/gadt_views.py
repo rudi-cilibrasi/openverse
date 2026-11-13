@@ -5,6 +5,8 @@ interfaces with fields and default methods and classes below them (with
 class parents, compound and closed arguments), whose values are read,
 set, dispatched on and cast back, directly and from generic code, also
 through <suspends> methods. Each program's output is predicted.
+On a stream of its own, at times casts to an interface that gives its
+parent type arguments of its own (jx[C] for C:ja(u), #53).
 
 usage: gadt_views.py SEED OUT.exp > PROGRAM.verse
 (from the reviews' view generators, vgen/vgen399/vgen405)"""
@@ -408,5 +410,66 @@ for (n, a), members in groups.items():
 lines.append('    Print("end")')
 exp.append("end")
 lines[mainAt:mainAt] = list(SHOWN.values())
+
+# (#53, on a stream of its own, so each seed's program above stays as it
+# was) at times casts to an interface that gives its parent type arguments
+# of its own (jx[C] for C:ja(u), u = []t' with t' opened).  The model: a
+# cast succeeds iff the object's class is below the target.
+RX = random.Random(seed * 1000003 + 53)
+if RX.random() < 0.5:
+    nA, nC, nX, nK = RX.randint(1, 9), RX.randint(1, 9), RX.randint(1, 9), RX.randint(10, 19)
+    ctx = RX.choice(['if', 'decides', 'for'])
+    pre = []
+    for i in range(RX.randint(0, 2)):
+        if RX.random() < 0.5: pre.append(('print', i))
+        else: pre.append(('add', RX.randint(1, 4)))
+    def pre_t():
+        return [f'Print("x{a}")' if k == 'print' else f'set H.N += {a}' for k, a in pre]
+    defs = f'''jb(t:type) := interface:
+    Id():t
+ja(t:type) := interface(jb(t)):
+    A():int
+jc(t:type) := interface(jb(t)):
+    C():int
+jd(t:type) := interface:
+    D():t
+jx(t:type) := interface(ja([]t)):
+    X():int
+ka(t:type) := class(ja(t), jc(t)):
+    V:t
+    Id<override>():t = V
+    A<override>():int = {nA}
+    C<override>():int = {nC}
+kb := class(ja(int), jc(int), jd(string)):
+    Id<override>():int = {nK}
+    A<override>():int = {nA + 1}
+    C<override>():int = {nC + 1}
+    D<override>():string = "kb"
+kc(t:type) := class(jc(t)):
+    V:t
+    Id<override>():t = V
+    C<override>():int = {nC + 2}
+kx(t:type) := class(jx(t)):
+    W:t
+    Id<override>():[]t = array{{W, W}}
+    A<override>():int = {nA + 3}
+    X<override>():int = {nX}
+kxi := class(jx(int)):
+    Id<override>():[]int = array{{{nK}}}
+    A<override>():int = {nA + 4}
+    X<override>():int = {nX + 1}
+xcell := class:
+    var N:int = 0
+XWrap(X:t where t:type):[]t = array{{X}}'''.split('\n')
+    defs += ['XF2(C:ja(u) where u:type):int =',
+             '    if (X := jx[C]) then X.X() * 10 + X.Id().Length + X.A() * 100 else -1']
+    lines[mainAt:mainAt] = defs
+    # objects at ja([]int): ka([]int), kx(int), kxi
+    for _ in range(RX.randint(1, 3)):
+        k = RX.choice(['ka', 'kx', 'kxi'])
+        w = RX.randint(0, 9)
+        t = {'ka': f'ka([]int){{V := array{{{w}}}}}', 'kx': f'kx(int){{W := {w}}}', 'kxi': 'kxi{}'}[k]
+        lines.append(f'    Print("f2 {{XF2({t})}}")')
+        exp.append('f2 ' + str({'ka': -1, 'kx': nX * 10 + 2 + (nA + 3) * 100, 'kxi': (nX + 1) * 10 + 1 + (nA + 4) * 100}[k]))
 sys.stdout.write('\n'.join(lines) + '\n')
 open(sys.argv[2], 'w').write('exit=0\n' + '\n'.join(exp) + '\n')

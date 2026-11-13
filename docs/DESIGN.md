@@ -2554,6 +2554,26 @@ its callers pass none. The target gets those hidden fields as a class
 with an override below does. Its tests are keyed by all of each class's
 pins and open their arguments as `$ext i`, as a method's dispatch does.
 
+An interface has no hidden fields, and the classes below it hold their
+type arguments at places of their own, so a cast to an interface that
+opens its type arguments (#53, `c2[C]` for `C:container(u)` and `c2(t) :=
+interface(container([]t))`) cannot read them from one place. Such a cast is a chain (`castChains`): the branch is
+lifted as for any cast, but its function takes the values of the opened
+type arguments as a generic function takes any (`Lift.opened` is empty,
+and `Lift.target` too, as no class is cast to), and the `if` becomes a cast
+to each class below both that is topmost in its class chain there and may
+be the object (`castTops`), each a cast of its own, `if ($castAs… :=
+d[$castChain…]) then $refine…($castAs…, Y₁, …) else …`, ending in the
+`else`: one to a class with type parameters of its own reads them from its
+hidden fields as above, and the call of the branch's function passes their
+values on, at the type arguments that class gives `T` (the object as a
+`T`, inferred by `matchArg`'s upcast). The object is in a slot first; one
+that is no local is evaluated with a test of all the classes tested, as a
+dispatch's is. The branch is so compiled once, at the refinement the
+declarations give, whatever each class gives `T`; each class's cast is a
+small function of its own when it refines or opens. No class is pinned for
+the branch's lift; each class's cast pins its own target.
+
 ## Typing the heap
 
 Phase 3 (#20) adds a heap of objects, each with a class tag and fields

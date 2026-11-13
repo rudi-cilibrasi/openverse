@@ -48,7 +48,9 @@ structure Lift where
   pos : Pos
   bound : String
   /-- The class cast to: it and the classes below it get pins in Verse
-      Core, which the dispatch to the function refines by. -/
+      Core, which the dispatch to the function refines by. Empty for a
+      chain's branch (`castChains`, #53), which each class's own cast
+      calls. -/
   target : String
   /-- The function made from the branch: its name, its parameters (the
       bound name first, then the locals the branch uses, each at its type
@@ -68,7 +70,8 @@ structure Lift where
   /-- The type arguments the cast opens (#250), which `target` has and the
       object's type does not name: each type parameter of the function made
       for them, with the name of `target`'s type parameter it stands for,
-      whose value it reads from the object's hidden field. -/
+      whose value it reads from the object's hidden field (none for a
+      chain's branch, whose callers pass their values). -/
   opened : List (String × String) := []
   /-- The branch, when it is not taken from the source as written: in a
       method, with the members of `Self` it names bare made `Self.member`. -/

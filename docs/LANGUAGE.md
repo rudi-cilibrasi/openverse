@@ -680,7 +680,13 @@ circle := class(shape, labelled):
   `b'` are `pairE`'s `a` and `b`, unknown but fixed for the branch; their
   values, which the branch's own generic calls at them need, come from the
   object, which holds them in hidden fields as #209's existential classes'
-  objects do. The value of what follows such a cast in its failure
+  objects do. A cast to an interface opens its type arguments too (#53):
+  `c2[C]`, for `C:container(u)` and `c2(t) := interface(container([]t))`,
+  types the branch with `u = []t'`. An interface has no hidden fields, so
+  such a cast tests each class below both, the topmost of its class chain
+  there, as a cast to it, whose branch calls the function the cast's
+  branch is made into, with the values of `T`'s type arguments that class
+  gives. The value of what follows such a cast in its failure
   context, and the names it binds that a branch or body uses, cannot be of
   a type that names an opened one. An opened parameter is as comparable as the one it stands
   for, and also when comparability of a refined type requires that component
@@ -792,7 +798,8 @@ circle := class(shape, labelled):
   The interfaces a class lists may not reach one interface at two instances
   (`class(pi(int), pi(string))`). Inherited field defaults see their
   own class's type parameters. A cast `square[S]` takes its type arguments
-  from `S`'s, and is refused when it would need more. A method
+  from `S`'s, and one that would need more opens them, as a clause of a
+  failure context only (see above). A method
   of a parametric class is generic over the class's type parameters, then
   its own. The type arguments come from the receiver, and the body is
   checked once in Verse Core (see
@@ -854,10 +861,6 @@ circle := class(shape, labelled):
     (#157) would have to hold itself (no program can build an object of
     such a type: each would need another first, so use `?node(t)` for a
     link that may be absent);
-  - in code generic over an interface's parent, a cast to an interface
-    that gives that parent type arguments of its own (`c2(t) :=
-    interface(container([]t))`) whose type parameters would be unknown
-    (#53).
 
 ## Mutation, macros, tooling
 

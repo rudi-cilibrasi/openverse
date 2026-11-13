@@ -398,6 +398,10 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   let rx ← elabE { ctx with canFail := true, inTaking := true } x none
   let some (S, sargs, targs, common, eqs, opened) := refiningCast? env T rx.ty (env.tvars.map (·.1))
     | do set st0; return none
+  -- (#53: to an interface whose type arguments it opens: a cast to each
+  -- class below both, whose branch calls this one's function, which takes
+  -- `T`'s type arguments' values)
+  let chain := castChains env S T opened
   if !env.isRefClass S || (!opened.isEmpty && !env.isRefClass T) then set st0; return none
   -- (#250: `T` has Verse Core type arguments past the object's, or not as
   -- its own type parameters: its tests open them, as a method's dispatch does)
@@ -601,12 +605,12 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let specs := (if heap.isEmpty then ["computes"] else heap) ++ (if decides then ["decides"] else []) ++
       (if suspendsB then ["suspends"] else [])
     let lift : Refine.Lift := {
-      pos := p, bound := D, target := T, tag, continuationScope := ctx.refineScope,
+      pos := p, bound := D, target := if chain then "" else T, tag, continuationScope := ctx.refineScope,
       name := liftName,
       params := ((D, dTy) :: sig).map (fun (n, t) => { name := n, ty := t.toSTy }) ++
         extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n },
       tparams := tps.map fun (n, c) => { pos := p, name := n, constraint := if c then "comparable" else "type" },
-      specs, ret := ret.toSTy, branchTy := if retOfBranch then some τ'.toSTy else none, subst := σ, opened := opened.map fun (n, v, _) => (n, v), waits := thenWaits, sourceSuspends,
+      specs, ret := ret.toSTy, branchTy := if retOfBranch then some τ'.toSTy else none, subst := σ, opened := if chain then [] else opened.map fun (n, v, _) => (n, v), waits := thenWaits, sourceSuspends,
       exits := Refine.Exits.substTypes ((escRet.map (·.2)).getD {}) σ,
       storage := storage.map fun (n, s) => (n, { frame := s.frame, name := s.name, args := s.args.map Ty.toSTy }),
       inRepeat := ctx.inRepeat, sourceContext := sourceContextOf ctx, liftTag := some ctx.liftTag,
@@ -627,6 +631,44 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     -- the dispatch may, in the branch's function or in the `else`)
     return some ⟨if decides || re.e.mayFail ctx.sigProg then .prim .fail [] else .prim .userErr [], τ'⟩
   | some l =>
+    let argOf (sp : SParam) : SExpr :=
+      if sp.name.startsWith "$type" then .app p (.ident p "$witness") [.ident p (sp.name.drop 5).toString] false
+      else .ident p sp.name
+    if chain then
+      -- (#53: then a cast of the object to each class below both, the
+      -- topmost of its class chain there, as a cast of its own (plain,
+      -- refining or opening), whose branch calls the function with the
+      -- object, which it gives `T`'s type arguments as that class has them,
+      -- with their values; the object in a slot first, evaluated where a
+      -- test of all those classes is, so that its effects roll back and its
+      -- failure takes the else when none is the object's)
+      let (pre, y) ← match rx.e with
+        | .local y => pure ([], y)
+        | e => do
+          let y ← fresh rx.ty
+          pure ([Expr.assign y e], y)
+      -- (named by the place and the bound name, which tell apart the casts
+      -- of one condition, as their lifts' keys do)
+      let obj := s!"$castChain{p.line}_{p.col}_{D}"
+      let ctxO := { ctx with locals := { name := obj, slot := y, ty := rx.ty, mutable := false } :: ctx.locals }
+      let err : SExpr := .app p (.ident p "Err") [] false
+      let tops := castTops env S sargs T (env.tvars.map (·.1))
+      let chainE := tops.foldr (fun d acc =>
+        let bound := s!"$castAs{p.line}_{p.col}_{D}_{d}"
+        some (.ite p [.decl p bound none false (.app p (.ident p d) [.ident p obj] true)]
+          (.app p (.ident p l.name) (.ident p bound :: (l.params.drop 1).map argOf) (l.specs.contains "decides")) acc))
+        (if pre.isEmpty then elseE else some err)
+      let some chainE := chainE | eerr p s!"no class is below both {rx.ty.show} and {T}, so {T}[…] would always fail"
+      let expC : Option Ty ← if elseE.isNone then pure (some .void) else match exp, l.branchTy with
+        | some t, _ => pure (some t)
+        | none, some t => some <$> resolveTy env p t
+        | none, none => pure none
+      let rc ← elabE ctxO chainE expC
+      if pre.isEmpty then return some rc
+      let re ← elseOf
+      let eE ← coerce p re rc.ty
+      let cond := pre.foldr Expr.seq (.heap (.isTag (common.map env.tagOf)) [.local y])
+      return some ⟨.ite cond rc.e eE, rc.ty⟩
     -- (then: the object in a slot, and one dispatch per set of pins)
     let (pre, y) ← match rx.e with
       | .local y => pure ([], y)
@@ -718,9 +760,6 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
         unrefine := unrefine ++ ctx.unrefine,
         locals := dL :: ctx.locals.map fun loc => { loc with ty := loc.ty.subst μF, storage := loc.storage.map (·.subst μF) },
         types := { env with tvars := env.tvars.map fun (m, t) => (m, t.subst μF) } }
-      let argOf (sp : SParam) : SExpr :=
-        if sp.name.startsWith "$type" then .app p (.ident p "$witness") [.ident p (sp.name.drop 5).toString] false
-        else .ident p sp.name
       let rc ← elabApp ctx' p (.ident p l.name) (l.params.map argOf)
         (l.specs.contains "decides") (some (τ'.subst μF))
       -- (a suspends call carries the defers active at it, which go around

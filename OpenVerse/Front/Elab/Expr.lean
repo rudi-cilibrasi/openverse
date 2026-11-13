@@ -664,10 +664,11 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
     if ((env.concreteBelow S).filter (env.isSub · T)).all fun d =>
         (env.viewArgs? S d (env.coreArgs S sargs) (rigid := false)).isNone then
       eerr p s!"{withArticle r.ty.show} is never {withArticle T}: no class below both gives {S} those type arguments, so {T}[…] would always fail"
-    -- (one a clause does not take either: an interface whose type
-    -- arguments the cast would open, #53)
+    -- (one a clause does not take either; to an interface whose type
+    -- arguments it opens, a clause takes it as a cast to each class below
+    -- both, #53)
     if (refiningCast? env T r.ty).isNone then
-      eerr p s!"{what} would leave {T}'s type arguments unknown: they are not {S}'s, and an interface has no hidden fields to read them from (#351, #53)"
+      eerr p s!"{what} would leave {T}'s type arguments unknown: they are not {S}'s (#351, #53)"
     let theirs := if (env.sparams.lookup T).isNone then s!"the type arguments {T} fixes" else s!"{T}'s type arguments"
     let opens := (refiningCast? env T r.ty).any fun (_, _, _, _, _, opened) => !opened.isEmpty
     throw (Refine.castRefusal { pos := p, opens } s!"{what} works {Refine.castRefusalNote}, D := {T}[X], whose rest then has {theirs} (#351)")
@@ -682,7 +683,7 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
   if parametric && (env.coreArgs T targs).length > (env.coreArgs S sargs).length then
     let unknown := s!"cannot cast {withArticle r.ty.show} to {T}: {T} has type parameters that {S} does not have, which would be unknown here"
     -- (an interface has no hidden fields to read opened ones from, #53)
-    if (env.info T).isIface then eerr p s!"{unknown}: an interface has no hidden fields to read them from (#53, #250)"
+    if (env.info T).isIface && (refiningCast? env T r.ty).isNone then eerr p s!"{unknown} (#53, #250)"
     throw (Refine.castRefusal { pos := p, opens := true } s!"{unknown}: a cast opens them {Refine.castRefusalNote}, D := {T}[X], whose rest then has them (#250)")
   if bracket then
     match env.refineComparable? [] (env.comparableArgs T targs) with

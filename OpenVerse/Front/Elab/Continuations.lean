@@ -358,18 +358,27 @@ def firstKey (ctx : Ctx) (p : Pos) (lp : List SExpr) (b : String) (bty : Option 
 /-- A cast `T[X]`, `X` of type `xty`, that holds only under a refinement of
     the code's type parameters (#243): `T` fixes or repeats type arguments
     of `X`'s class, which agree with `X`'s only when they are unified (as
-    `elabCast` refuses). `X`'s class and type arguments, `T`'s type
-    arguments, the classes the cast tests for, and the equations of the
-    refinement; `none` for any other cast. -/
+    `elabCast` refuses), or opens them (#250), also to an interface (#53). `X`'s class and type arguments, `T`'s type
+    arguments, the classes the cast tests for, the equations of the
+    refinement and the opened type parameters; `none` for any other cast. -/
 def refiningCast? (env : TyEnv) (T : String) (xty : Ty) (avoid : List String := []) :
     Option (String × List Ty × List Ty × List String × List (Ty × Ty) × List (String × String × Bool)) := do
   let .struct S sargs := xty | none
   if !env.classes.contains S || !env.classes.contains T then none
   if (env.sparams.lookup T).isNone && (env.coreArgs T []).isEmpty then none
-  if !(env.isSub S T || env.isSub T S) then none
-  let rargs := env.coreArgs S sargs
   let common := (env.concreteBelow S).filter (env.isSub · T)
   if common.isEmpty then none
+  -- (each of `T`'s type parameters fresh, not a name of `avoid`)
+  let ps := (env.sparams.lookup T).getD []
+  let names : List String := ps.foldl (fun acc (v, _) => Id.run do
+    let mut n := v ++ "'"
+    while avoid.contains n || acc.contains n do n := n ++ "'"
+    return acc ++ [n]) []
+  let fresh := (ps.zip names).map fun ((_, c), n) => Ty.param n c
+  let openedBy (μ : List (String × Ty)) : List (String × String × Bool) :=
+    (ps.zip names).filterMap fun ((v, c), n) => if (μ.lookup n).isSome then none else some (n, v, c)
+  if !(env.isSub S T || env.isSub T S) then none
+  let rargs := env.coreArgs S sargs
   let tv := env.coreVars T
   -- (#351: an object referred to through views relates its type arguments
   -- to `T`'s through `S`'s view of `T`, never by position)
@@ -391,22 +400,16 @@ def refiningCast? (env : TyEnv) (T : String) (xty : Ty) (avoid : List String := 
     -- object's type arguments, the fresh ones bound first; those left
     -- unbound are opened, as comparable as the parameters they stand for)
     if env.isSub S T then none
-    let ps := (env.sparams.lookup T).getD []
-    let names : List String := ps.foldl (fun acc (v, _) => Id.run do
-      let mut n := v ++ "'"
-      while avoid.contains n || acc.contains n do n := n ++ "'"
-      return acc ++ [n]) []
-    let targs := (ps.zip names).map fun ((_, c), n) => Ty.param n c
+    let targs := fresh
     let cargs := env.coreArgs T targs
     if !viewedS && cargs.length < rargs.length then none
     let eqs := if viewedS then (env.viewOf S T cargs).zip rargs
       else (cargs.take rargs.length).zip rargs
     let some μ := Ty.unifyEqs (fun _ _ => none) [] eqs | none
-    let opened := (ps.zip names).filterMap fun ((v, c), n) =>
-      if (μ.lookup n).isSome then none else some (n, v, c)
-    -- (an interface has no hidden fields to read opened ones from, #53:
-    -- such a cast is a plain one, which refuses unknown type arguments)
-    if (env.info T).isIface && !opened.isEmpty then none
+    let opened := openedBy μ
+    -- (an interface has no hidden fields to read opened ones from, #53: its
+    -- tests are of the classes below both, each cast to as itself, whose
+    -- branches call the one function this cast's is made into, `elabRefinedIfWith`)
     -- (nothing to refine, to open, nor past the object's: a plain cast;
     -- through a view, the object's type arguments come from the dispatch,
     -- as a plain cast does not give them, #351)
@@ -415,6 +418,29 @@ def refiningCast? (env : TyEnv) (T : String) (xty : Ty) (avoid : List String := 
     if !viewedS && cargs.length == rargs.length && opened.isEmpty && μ.all (names.contains ·.1) &&
         (bounds.getD []).all (names.contains ·.1) then none
     some (S, sargs, targs, common, eqs, opened)
+
+/-- (#53) A refining cast that is a chain of casts, one to each class
+    below both the object's class `S` and `T` (`castTops`): to an interface
+    whose type arguments it opens, which no hidden field holds. The branch is then one function, generic over `T`'s type
+    arguments, which each class's branch calls at its own. -/
+def castChains (env : TyEnv) (_S T : String) (opened : List (String × String × Bool)) : Bool :=
+  (env.info T).isIface && !opened.isEmpty
+
+/-- The classes below both `S` and `T` whose class parent is not, with a
+    concrete class below them: each concrete class below both is below
+    exactly one of them, along its class chain. Of those, the ones an
+    `S(sargs)` may be: a cast to it refines or opens type arguments, or
+    agrees with the object's (through views, as one of its classes' view
+    gives them), as `elabCast` refuses the others as never succeeding. -/
+def castTops (env : TyEnv) (S : String) (sargs : List Ty) (T : String) (avoid : List String) : List String :=
+  let both (c : String) : Bool := !(env.info c).isIface && env.isSub c S && env.isSub c T
+  let may (d : String) : Bool :=
+    (refiningCast? env d (.struct S sargs) avoid).isSome ||
+    if env.viewed.contains S then
+      ((env.concreteBelow S).filter (env.isSub · d)).any fun e =>
+        (env.viewArgs? S e (env.coreArgs S sargs) (rigid := false)).isSome
+    else env.coreArgs d (env.argsBelow S sargs d) == env.coreArgs S sargs
+  env.classes.filter fun c => both c && !((env.info c).parent.any both) && !(env.concreteBelow c).isEmpty && may c
 
 /-- Unify a refining cast's equations, preserving comparable opened types. -/
 def castRefinement? (env : TyEnv) (eqs : List (Ty × Ty)) (opened : List (String × String × Bool))
