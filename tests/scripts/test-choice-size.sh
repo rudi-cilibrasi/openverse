@@ -574,6 +574,7 @@ kinds=(
   suspends-return
   suspends-return-generic
   suspends-return-lazy
+  trial-cast-clauses
   tuple-super-failure
   tuple-super-first
   tuple-super-for
@@ -811,6 +812,25 @@ if kind.startswith('castclause-'):
         call = f'Run(H, {ys})'
     print('Main()<transacts>:void =\n    H := cell{}\n    Y:pair(int, int) = dup(int){A := 1, B := 2}')
     print(f'    Print("{{{call}}} {{H.N}}")')
+    sys.exit(0)
+if kind == 'trial-cast-clauses':
+    # (#243, #453) refining casts as clauses after two refining choices, in a
+    # consumer taking its first success: each cast is lifted once, in the
+    # continuation's function, and not again in the trial that asks for it
+    # (whose scope is not the continuation's, so the copy was never called)
+    n = count
+    print('pair(a:type, b:type) := class:\n    A:a\n    B:b')
+    print('dup(t:type) := class(pair(t, t)):\n    C:int = 4')
+    qs = ', '.join(f'Q{i}:pair(c{i}, d{i})' for i in range(n))
+    qts = ', '.join(f'c{i}:type, d{i}:type' for i in range(n))
+    casts = ', '.join(f'E{i} := dup[Q{i}]' for i in range(n))
+    total = ' + '.join(f'E{i}.C' for i in range(n))
+    print(f'Run(P:pair(a, b), {qs} where a:type, b:type, {qts}):int =')
+    print(f'    if (W := if (D := dup[P]) then (D.C | D.C + 1) else 0, V := if (F := dup[P]) then (F.C * 10 | F.C * 100) else 0, {casts}, W + V > 50) then W + V + {total} else -1')
+    ys = ', '.join(['Y'] * n)
+    yz = ', '.join(['Y'] * (n - 1) + ['Z'])
+    print('Main():void =\n    Y:pair(int, int) = dup(int){A := 1, B := 2}\n    Z:pair(int, int) = pair(int, int){A := 1, B := 2}')
+    print(f'    Print("{{Run(Y, {ys})}} {{Run(Z, {ys})}} {{Run(Y, {yz})}}")')
     sys.exit(0)
 if kind == 'nested-for-returns':
     # (#335, #437) fors nested `count` deep, each with a refining choice as
@@ -2269,6 +2289,23 @@ PY
       timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
       diff -u "$tmp/expected" "$tmp/lean.out"
       diff -u "$tmp/expected" "$tmp/c.out"
+    fi
+    if [[ $kind == trial-cast-clauses ]]; then
+      # (the first choice's lift, the second's in the continuation, and two
+      # for each cast clause: in the continuation, and in the `then` that
+      # uses what it binds; 3 * count + 3 when the trial made its own)
+      lifts=$(timeout "$limit" "$root/.lake/build/bin/openverse" core "$tmp/p.verse" | grep -c '^fn [0-9]* \$refine' || true)
+      if (( lifts != 2 * count + 2 )); then
+        echo "test-choice-size: $kind with $count casts made $lifts lifts, not $((2 * count + 2))" >&2
+        exit 1
+      fi
+      if (( count == 4 )); then
+        printf '%s\n' "420 -1 -1" >"$tmp/expected"
+        timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+        timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+        diff -u "$tmp/expected" "$tmp/lean.out"
+        diff -u "$tmp/expected" "$tmp/c.out"
+      fi
     fi
     if [[ ( $kind == nested-casts-* || $kind == nested-for-returns ) && $count == 4 ]]; then
       case $kind in
