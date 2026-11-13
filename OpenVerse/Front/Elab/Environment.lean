@@ -15,7 +15,8 @@ open OpenVerse
     parent class (#39) and the parametric interfaces it lists (#53), comparable
     where they must be; and the requests and the inlining's sites (`Source`). -/
 def typeEnvironment (classes : Classes) (fields : Fields) (methods : Methods) (source : Source)
-    (concurrencyNames : List (String × String)) (requests : Requests) : Except String TyEnv := do
+    (concurrencyNames : List (String × String)) (requests : Requests) (signalNoRollback : Bool) :
+    Except String TyEnv := do
   let varFields : List (String × String) := classes.defs.flatMap fun cd =>
     (fields.of cd.name).filterMap fun (f, _, _, isVar) => if isVar then some (cd.name, f) else none
   let uniques : List String := (classes.defs.filter (·.specs.contains "unique")).map (·.name)
@@ -27,7 +28,7 @@ def typeEnvironment (classes : Classes) (fields : Fields) (methods : Methods) (s
                              let i := classes.henv.info d
                              if i.isIface || i.isAbstract then m else
                              (classes.henv.supers d).foldl (fun m T => m.insert T ((m[T]?.getD []) ++ [d])) m) {},
-                           abstracts := methods.abstracts.toList, requests, familySites := source.familySites, familyStubs := methods.stubs.map (·.1),
+                           abstracts := methods.abstracts.toList, requests, signalNoRollback, familySites := source.familySites, familyStubs := methods.stubs.map (·.1),
                            overloadSites := source.overloadSites, nestedSites := source.nestedSites,
                            fieldSites := source.fieldSites }
   env := { env with varFields := varFields, uniques := uniques,

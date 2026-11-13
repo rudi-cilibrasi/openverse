@@ -156,11 +156,6 @@ structure LoweredProgram where
     (#37). -/
 def lowerProgram (env : TyEnv) (sigs : Signatures) (mainSig : Sig) (lowering : Lowering)
     (frameInfo : Array FrameRefs.Info) (usesConc eventFifo : Bool) : Except String LoweredProgram := do
-  let mut fns := lowering.fns
-  let mut slotTys := lowering.slotTys
-  let mut classTable := lowering.sigs.classes
-  let protos := lowering.sigs.protos
-  let pins := lowering.sigs.pins
   -- with prototypes, the program starts with a prelude that allocates them
   -- and then calls `Main` (#37)
   let mut protoList := env.protos.map fun (_, t, vs) => (t, vs)
@@ -169,30 +164,34 @@ def lowerProgram (env : TyEnv) (sigs : Signatures) (mainSig : Sig) (lowering : L
   let mut mainCall : Expr := .call mainSig.idx []
   -- (an error of the lowering names a function: with its position)
   let inFn := inFnMsg (sigs.tops ++ sigs.generics)
-  let (capturedFns, capturedSlots, capturedSigs) ← FailCapture.lower fns slotTys lowering.sigs
-  fns := capturedFns
-  slotTys := capturedSlots
-  let fsigs0 := capturedSigs.fns
+  -- (failure capture, `FailCapture`: the functions, slot types and signatures
+  -- it gives are what the rest of the lowering starts from)
+  let (capturedFns, capturedSlots, captured) ← FailCapture.lower lowering.fns lowering.slotTys lowering.sigs
+  let mut fns := capturedFns
+  let mut slotTys := capturedSlots
+  let fsigs0 := captured.fns
   let mut fsigs := fsigs0
+  let mut classTable := captured.classes
+  let protos := captured.protos
+  let pins := captured.pins
   -- concurrency (#156): each <suspends> function `g` becomes a frame class
   -- and the functions `g$new`, `g$reset` and `g$resume` (`Suspend.lean`);
   -- `g`'s own index is `g$resume`'s, as only suspends code calls it
   let beforeConcurrency := fns
   if usesConc then
-    let (fns1, slotTys1, fsigs1, classTable1, frameClasses1, mainCall1, framePins1, schedMore) ←
-      lowerOpening fun forced =>
-        lowerConcurrency env sigs.sigs sigs.gsigs mainSig fsigs0 protos pins inFn fns slotTys fsigs classTable forced frameInfo
-          eventFifo
-    if !schedMore.isEmpty then
+    let lowered ← lowerOpening fun forced =>
+      lowerConcurrency env sigs.sigs sigs.gsigs mainSig fsigs0 protos pins inFn fns slotTys fsigs classTable forced frameInfo
+        eventFifo
+    if !lowered.schedMore.isEmpty then
       let schedTag := env.tagOf "$sched"
-      protoList := protoList.map fun (t, vs) => if t == schedTag then (t, vs ++ schedMore) else (t, vs)
-    fns := fns1
-    slotTys := slotTys1
-    fsigs := fsigs1
-    classTable := classTable1
-    frameClasses := frameClasses1
-    mainCall := mainCall1
-    framePins := framePins1
+      protoList := protoList.map fun (t, vs) => if t == schedTag then (t, vs ++ lowered.schedMore) else (t, vs)
+    fns := lowered.fns
+    slotTys := lowered.slotTys
+    fsigs := lowered.fsigs
+    classTable := lowered.classTable
+    frameClasses := lowered.frameClasses
+    mainCall := lowered.mainCall
+    framePins := lowered.framePins
   let mut main := mainSig.idx
   if !protoList.isEmpty || mainSig.suspends then
     main := fns.size
@@ -281,7 +280,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let classes ← classHierarchy defs.tops source.constructionFx
   let fields ← classFields classes opts.requests
   let methods ← classMethods defs.tops classes fields
-  let env ← typeEnvironment classes fields methods source admitted.concurrencyNames opts.requests
+  let env ← typeEnvironment classes fields methods source admitted.concurrencyNames opts.requests opts.signalNoRollback
   let env ← upperBounds env methods.tops
   let views ← interfaceViews env classes.defs opts.requests
   if !views.witnessNeeds.isEmpty then
@@ -291,11 +290,13 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let overloads ← functionOverloads env methods.tops defs.methodOverloads
   let env := { env with overloads := overloads.functions, methodOverloads := overloads.methods }
   let declared ← declareSignatures env overloads.tops opts.requests
+  -- (the accessors come right after the functions, #157: known now, so that
+  -- every elaboration from here on, field defaults' too, reads and sets a
+  -- field through one at its place)
+  let env := { env with fieldAccBase := declared.tops.length + declared.gsigs.size }
   let sigs ← inferSignatures env declared admitted.typeDefaults opts.requests
   checkSignatures env sigs classes.defs fields methods
   let defaults ← elabFieldDefaults env sigs methods.tops classes.defs
-  -- (the accessors come right after the functions, #157)
-  let env := { env with fieldAccBase := sigs.tops.length + sigs.gsigs.size, signalNoRollback := opts.signalNoRollback }
   let elaborated ← elabFunctions env sigs opts.requests
   let needs := roundNeeds elaborated defaults.needs source
   -- (#283) the eager groups, the families of the uses of methods whose

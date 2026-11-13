@@ -74,6 +74,8 @@ else
 fi
 echo "== checked subtype evidence contracts"
 tests/scripts/test-subtype-evidence.sh
+echo "== upper-bound source acceptance, with the guard in place (#502)"
+tests/scripts/test-upper-bound-source.sh --guarded
 echo "== family stub contracts"
 if lake env lean -j1 --run tests/lean/FamilyStubs.lean >"$logs/stub-contracts" 2>&1; then
   cat "$logs/stub-contracts"
