@@ -3,6 +3,53 @@ import OpenVerse.Front.Elab.Control
 
 namespace OpenVerse.Front
 open OpenVerse
+
+/-- A call of an extension method's function `name`, `$ext:M` (Book of
+    Verse ch. 6), which the modules' pass made of a call `X.M(…)` as
+    `$ext:M(X, …)`: `X` is evaluated once, before the arguments, and when
+    its type has a member `M` of its own (`Ctx.hasOwnMember`), the call is
+    the one of the two it fits, refused as ambiguous when it fits both, as
+    two overloads would be. A bare call `M(…)` in a method, made
+    `$ext:M($implicitSelf:F, …)`, is the extension method's call with `Self`
+    or `F(…)` as written, whichever it fits, and ambiguous when it fits
+    both. `none`: an ordinary call of the function from here on (its
+    receiver taken, or of no type of its own, as `array{}`, then taken at
+    the parameter's type). -/
+partial def elabExtensionCallWith
+    (elabE : Ctx → SExpr → Option Ty → EM R)
+    (elabApp : Ctx → Pos → SExpr → List SExpr → Bool → Option Ty → EM R)
+    (ctx : Ctx) (p fp : Pos) (name : String) (args : List SExpr) (bracket : Bool)
+    (exp : Option Ty) : EM (Option R) := do
+  let (some m, recv :: rest) := (extensionMethod? name, args) | return none
+  let fits (call : EM R) : EM Bool := do
+    let st ← get
+    let ok ← tryCatch (do discard call; pure true) (fun _ => pure false)
+    set st
+    return ok
+  if let .ident ip n := recv then
+    if n.startsWith implicitSelfPrefix then
+      let written := elabApp ctx p (.ident ip (n.drop implicitSelfPrefix.length).toString) rest bracket exp
+      let withSelf := elabApp ctx p (.ident fp name) (.ident ip "Self" :: rest) bracket exp
+      if !(← fits withSelf) then return some (← written)
+      if ← fits written then
+        eerr p s!"this call of {m} is ambiguous: it fits {m} as written, and the extension method {m} with Self as its receiver (Book of Verse ch. 6)"
+      return some (← withSelf)
+    if n.startsWith "$extReceiver" then return none
+  if ← argNeedsTypeWith elabE ctx recv then return none
+  let r ← elabE ctx recv none
+  let slot ← fresh r.ty
+  let rn := s!"$extReceiver{slot}"
+  let ctx' := { ctx with locals := { name := rn, slot, ty := r.ty, mutable := false,
+                                     typeValue := ctx.isTypeValue recv } :: ctx.locals }
+  let extCall := elabApp ctx' p (.ident fp name) (.ident fp rn :: rest) bracket exp
+  let memberCall := elabApp ctx' p (.member fp (.ident fp rn) m) rest bracket exp
+  let rc ← if !ctx.hasOwnMember fp r.ty m then extCall
+    else if !(← fits extCall) then memberCall
+    else if ← fits memberCall then
+      eerr p s!"this call of {m} is ambiguous: {r.ty.show}'s own {m} and the extension method {m} both take it (Book of Verse ch. 6)"
+    else extCall
+  return some ⟨.seq (.assign slot r.e) rc.e, rc.ty⟩
+
 set_option maxHeartbeats 800000 in
 partial def elabAppBaseWith
     (elabE : Ctx → SExpr → Option Ty → EM R)
@@ -31,7 +78,8 @@ partial def elabAppBaseWith
       if view.isSome then eerr source.pos "dummy type value cannot be an executable function"
     elabIndexLike ctx p value args bracket
   match f with
-  | .ident _ name =>
+  | .ident fp name =>
+    if let some r ← elabExtensionCallWith elabE elabApp ctx p fp name args bracket exp then return r
     match ctx.lookup name with
     | some l => indexLike f ⟨.local l.slot, l.ty⟩
     | none =>

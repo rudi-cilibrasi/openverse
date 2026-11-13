@@ -118,8 +118,8 @@ check "initializer convergence and extended-default models" \
 check "scheduler conformance traces and controls" bash tests/scripts/test-scheduler-conformance.sh
 check "bounded clock domain (${FUZZ_CLOCK_DOMAIN:-100} programs and boundary traces)" \
   bash tests/scripts/test-clock-domain.sh "${FUZZ_CLOCK_DOMAIN:-100}" "$seed"
-check "overload domains (${FUZZ_OVERLOAD_SHAPES:-468} programs, across six contexts)" \
-  bash scripts/fuzz-overload-shapes.sh "${FUZZ_OVERLOAD_SHAPES:-468}" "$seed"
+check "overload domains (${FUZZ_OVERLOAD_SHAPES:-546} programs, across seven contexts)" \
+  bash scripts/fuzz-overload-shapes.sh "${FUZZ_OVERLOAD_SHAPES:-546}" "$seed"
 check "call packing (${FUZZ_CALL_PACKING:-60} programs, across ten contexts)" \
   bash tests/scripts/test-call-packing.sh "${FUZZ_CALL_PACKING:-60}" "$seed"
 check "choice-free source profile" bash tests/scripts/test-choice-profile.sh

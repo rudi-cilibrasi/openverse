@@ -132,8 +132,9 @@ and [receiver/argument/default/rollback traces](../../tests/verse/overload_shape
 exercise accepted execution. [Flattened dispatch](../../tests/verse/overload_shapes_flattened_dispatch.verse)
 also covers inherited generic interfaces, named defaults and generic constructors. The [generated model](../../scripts/models/overload_shapes.py)
 checks each table example in both declaration orders through top-level, named,
-generic, interface/inherited, qualified and constructor calls. A 468-program
-period covers all combinations; nightly checks scale the range.
+generic, interface/inherited, qualified and constructor calls, and as the
+receivers of extension methods ([their rules](extension-methods.md)). A
+546-program period covers all combinations; nightly checks scale the range.
 
 ## Intentional and unreleased boundaries
 
@@ -144,8 +145,9 @@ period covers all combinations; nightly checks scale the range.
   [#492](https://github.com/rudi-cilibrasi/openverse/issues/492); lack of local
   overload sets is not counted as released conformance failure here.
 - This is an overload/call-boundary audit, not an exhaustive function grammar
-  audit. Extension method syntax and bottom-type expressions inside call
-  arguments are not covered. Destructured tuple parameters are now supported
+  audit. Bottom-type expressions inside call arguments are not covered;
+  extension methods are overloads of a function of their own whose first
+  parameter is the receiver, by the same rules. Destructured tuple parameters are now supported
   and count as tuple parameters for overloads
   ([overlap refusal](../../tests/errors/tuple_param_overlap.verse)). Named
   parameters inside them are refused, and their design is open
@@ -164,8 +166,8 @@ bash tests/scripts/test-overload-conformance.sh
 # Also measure the two remaining deviations; write exact current observations.
 bash tests/scripts/test-overload-conformance.sh --include-gaps --report /tmp/overloading.json
 
-# Both orders, six contexts, opaque generic patterns and real call oracles.
-bash scripts/fuzz-overload-shapes.sh 468 1
+# Both orders, seven contexts, opaque generic patterns and real call oracles.
+bash scripts/fuzz-overload-shapes.sh 546 1
 ```
 
 The audit command reports known deviations as `GAP`, never as passing

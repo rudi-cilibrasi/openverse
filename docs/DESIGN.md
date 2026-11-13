@@ -1189,7 +1189,7 @@ is thrown in one place, a phase or `elabProgramCore` itself, and each point
 where an elaboration asks for something and goes no further
 (`Compiled.asking`) is a line of `elabProgramCore`.
 
-1. `admitSource` (`Elab/Source.lean`): the source and the entry expression pass the effect policy (with where each specifier may go, `EffectPolicy.specifierPlaces`) and the source profile; the rules of the source as written hold (no reserved name defined, each name defined once in its scope, no `return` in a constant's value or a field's default, a `defer:` only as a statement, no `for` of literal clauses only); modules are resolved, with every qualifier (`Resolver.qualifier`), type aliases are written out where they are used (`Aliases.expand`), no constant depends on itself, the defaults function types write are set apart, and the helpers the program needs are added (`Admitted`).
+1. `admitSource` (`Elab/Source.lean`): the source and the entry expression pass the effect policy (with where each specifier may go, `EffectPolicy.specifierPlaces`) and the source profile; the rules of the source as written hold (no reserved name defined, each name defined once in its scope, no `return` in a constant's value or a field's default, a `defer:` only as a statement, no `for` of literal clauses only); modules are resolved, with every qualifier (`Resolver.qualifier`), and calls of extension methods made calls of their functions, type aliases are written out where they are used (`Aliases.expand`), no constant depends on itself, the defaults function types write are set apart, and the helpers the program needs are added (`Admitted`).
 2. `inlineSource`: functions with several values are inlined at their calls, the functions earlier rounds asked for are added and admitted, and function values become interfaces and classes (`Source`, with the sites the inlining notes).
 3. `argsAndMethodOverloads`: `Args` and the entry expression's `$Do` are added, and overloaded methods are renamed by their parameter lists (`Definitions`).
 4. `classHierarchy` (`Elab/Classes.lean`): the classes and interfaces and their hierarchy, checked (`Classes`, with the lookups over it).
@@ -1222,7 +1222,7 @@ refused, first to last, for:
 - its effect annotations, specifiers out of place and source profile, a type with a built-in type's name, a reserved name defined, a name defined twice, a `return` outside a function's body, a `defer:` where a value is taken, a `for` of literal clauses only, its modules and qualifiers (a qualifier that names nothing or not where its definition is, an ambiguous bare name beside a qualified definition), its type aliases (one that names itself or an alias defined after it, or is used before its definition, or whose name a definition takes), a constant that depends on itself, and subscribable events (1); the choices it inlines and the requests it carries (2); its overloaded methods (3);
 - its classes: their parents (unknown, a struct, wrong type arguments, an interface extending a class, two superclasses, a `<final>` one, a cycle), `<castable>` ones with type parameters and those below `<final_super_base>` ones, and construction effects (4); their fields, inherited, overriding and own, against the methods above them, and a `<concrete>` class's defaults (5); their methods: duplicates, parameter names, qualified implementations, overrides and `<final>`, abstract methods and the implementations every concrete class needs (6);
 - the types those give: comparable type arguments to parents and a `<persistable>` struct's fields (7), bounds (8), one instance of an interface per class (9), the Verse Core type arguments of overrides (10), recursive structs and map keys (11);
-- its functions' names and overloads (12), their signatures and effect annotations (13), constants whose type cannot be inferred and the defaults function types write (14); then the signature checks (15): overloads a call cannot tell apart, overrides and implementations whose signature or effects differ, an overriding field's type, and, last, a field two interfaces give defaults;
+- its functions' names and overloads (12), their signatures and effect annotations (13), constants whose type cannot be inferred and the defaults function types write (14); then the signature checks (15): overloads a call cannot tell apart, an extension method that repeats a method of its receiver's class, overrides and implementations whose signature or effects differ, an overriding field's type, and, last, a field two interfaces give defaults;
 - construction effects and field defaults (16), then each function's and constant's body (17);
 - `Main` (19), the checks of the prepared functions (20), and what the lowering refuses (21); the internal errors of `certify` (22) are elaborator bugs.
 
@@ -1434,6 +1434,45 @@ group of one parameter is that parameter. Named parameters inside a group
 would need a tuple type with named, omittable elements, which the parser
 refuses; the design is in
 [research/tuple-parameters.md](research/tuple-parameters.md).
+
+## Extension methods: functions that method calls find
+
+An extension method `(R:t).M(…)` (Book of Verse ch. 6;
+[the rules](research/extension-methods.md)) is the function `$ext:M`
+whose first parameter is the receiver. The parser takes the receiver
+group `(R:t).` or `(:t).` before a definition's name, at the top level, in a
+module and in a class (one definition head, `parseExtensionHead?`), and
+gives the definition that name; nothing else is new about the definition,
+so its overloads, generics, defaults, effects, several values and the
+choice inliner's view of it are a function's.
+
+A call needs the scope, which only the modules' pass has, and the
+receiver's type, which only the elaborator has, so each does its half:
+
+1. `Front/Modules.lean` looks a call `X.M(…)` up as `$ext:M`, as it looks
+   up any name (`Resolver.ext`): in the call's module and those around it,
+   then the modules they open, `<public>` from outside; in a class's
+   methods, the class's own `$ext:M` first (a method of `Self`). When it
+   finds one, the call becomes `$ext:M(X, …)`, a function call, before the
+   choice inliner and the function values see it. A bare call `M(…)` in a
+   method becomes `$ext:M($implicitSelf:F, …)` (`Resolver.selfExt`), `F`
+   the name `M` resolves to as written. A call that finds nothing stays a
+   member call. A program without an extension method takes the pass's
+   early way out, as before, so its bytes do not change.
+2. The elaborator (`elabExtensionCallWith`, before `elabAppBaseWith`'s
+   mutual block) evaluates `X` once into a slot, then calls the function
+   with it, or, when `X`'s type has a member `M` of its own
+   (`Ctx.hasOwnMember`: fields, methods, the built-in methods), whichever of
+   the two the call fits, each tried as overload resolution tries one, and
+   refuses the call as ambiguous when both fit. The `$implicitSelf` form is
+   the same choice between `F(…)` and `$ext:M(Self, …)`.
+
+`Sig.hasReceiver` counts an extension method's first parameter as a
+receiver, so that a tuple argument spreads over the parameters after it as
+it does for a method. An extension method on a class or an interface that
+repeats the parameters of one of its methods is refused by
+`checkSignatures`, beside the overloads, and `X.M` without a call by
+`elabMember`, for any `M` an extension method has. Messages show `M`.
 
 ## Floats: canonical bits
 

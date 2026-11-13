@@ -94,6 +94,12 @@ structure Resolver where
   bind : Pos → String → Except String Unit
   ty   : Pos → String → Except String String
   qual : Pos → List String → Except String (Option String)
+  /-- The extension method a call `X.M(…)` names here, as a value's name
+      resolves: `$ext:M`, qualified (Book of Verse ch. 6). -/
+  ext  : Pos → String → Except String (Option String) := fun _ _ => pure none
+  /-- In a method, the extension method a bare call `M(…)` may name with
+      `Self` as its receiver, as `ext`. -/
+  selfExt : Pos → String → Except String (Option String) := fun _ _ => pure none
   /-- What a qualifier names from this scope (a renamer that only maps
       names takes it as a type's). -/
   qualifier : Pos → String → Except String Qual := fun p q => do return .type (← ty p q)
@@ -229,6 +235,27 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
     if let some comps := x.identPath then
       if let some qn ← r.qual p (comps ++ [m]) then return .ident p qn
     return .member p (← go x) m
+  | .app p (.member mp x m) args b => do
+    -- `X.M(…)` whose name an extension method in scope has: the call
+    -- `$ext:M(X, …)` of it (Book of Verse ch. 6, "Extension Methods"), which
+    -- takes `X`'s own member `M` instead where `X`'s type has one (`elabApp`)
+    let f ← go (.member mp x m)
+    let args ← args.mapM go
+    if let .member _ x _ := f then
+      if !(x matches .ident _ "(super:)") then
+        if let some q ← r.ext mp m then return .app p (.ident mp q) (x :: args) b
+    return .app p f args b
+  -- in a method, a bare call `M(…)` whose name an extension method in scope
+  -- has: the call `$ext:M(Self, …)` of it, or `M(…)` as written, whichever
+  -- the call fits (`elabApp`; Book of Verse tests, `SOL-3515`)
+  | .app p f@(.ident ip n) args b => do
+    let f ← go f
+    let args ← args.mapM go
+    if let .ident _ n' := f then
+      if !n.startsWith "$" then
+        if let some q ← r.selfExt ip n then
+          return .app p (.ident ip q) (.ident ip (implicitSelfPrefix ++ n') :: args) b
+    return .app p f args b
   | .gen .. | .decl .. => do return (← SExpr.mapItemM r e).1
   | .block p items => return .block p (← SExpr.mapSeqM r items).1
   -- (an `if`'s conditions and a `for`'s clauses are a sequence whose
@@ -282,6 +309,21 @@ partial def SExpr.mapItemM (r : Resolver) : SExpr → Except String (SExpr × Re
   | e => do return (← e.mapNamesM r, r)
 end
 
+/-- What the renaming knows of a class's names. -/
+structure ClassNames where
+  /-- Its parents, by their qualified names. -/
+  parents : List String
+  /-- Its own members, unqualified: the anti-shadowing check reads them. -/
+  own : List String
+  /-- All its members, as a bare use names them. -/
+  all : List String
+  /-- The fields it declares itself (not those it overrides). -/
+  declared : List String
+  /-- The members it defines qualified with its own name, `(c:)x`. -/
+  ownQualified : List String
+  /-- Its extension methods, `$ext:M`, which its methods' calls find. -/
+  exts : List String
+
 /-- Resolve the modules and the qualified names of a parsed program (see
     the file's header). -/
 def resolveModules (tops : List STop) : Except String (List STop) := do
@@ -294,7 +336,14 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
     | .const _ n _ _ => !isMarker n
     | _ => true
   let modules := (markers "$module:").map (·.2)
-  if modules.isEmpty && (markers "$open:").isEmpty && (markers qualifierMarker).isEmpty then return real
+  -- (extension methods, which calls `X.M(…)` find: Book of Verse ch. 6)
+  let isExt (n : String) : Bool := (extensionMethod? n).isSome
+  let hasExt := real.any fun
+    | .fn _ n .. => isExt n
+    | .classDef _ _ _ _ _ _ _ _ ms => ms.any fun | .fn _ n .. => isExt n | _ => false
+    | _ => false
+  if modules.isEmpty && (markers "$open:").isEmpty && (markers qualifierMarker).isEmpty && !hasExt then
+    return real
   let publics := (markers "$public:").map (·.2)
   let defs : List String := real.map fun
     | .fn _ n .. | .const _ n .. | .classDef _ n .. => n
@@ -454,10 +503,15 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
       | _ => throw s!"{p.show}: ({q}:){c}: a type is qualified with the module that defines it"
     tyName sc excl p n
   let scopeOf (n : String) : List String := (qualParts n).dropLast
-  -- each class's parents, its members the anti-shadowing check reads (its
-  -- own, unqualified), all its members as a use names them bare, and the
-  -- fields it declares itself (not those it overrides)
-  let classInfo : List (String × List String × List String × List String × List String × List String) ← real.filterMapM fun
+  -- the extension method `X.M(…)` names from scope `sc`, `$ext:M` found as
+  -- a value's name is (none: `X`'s member `M`)
+  let extAt (sc : List String) (p : Pos) (m : String) : Except String (Option String) := do
+    if !hasExt || m.startsWith "(" || m.startsWith "$" then return none
+    match ← find sc p (extensionName m) with
+    | some (false, cand) => return some (qualJoin cand)
+    | _ => return none
+  -- each class's names (`ClassNames`)
+  let classInfo : List (String × ClassNames) ← real.filterMapM fun
     | .classDef p n tps _ parents _ fields ovs methods => do
       let ps ← parents.mapM fun t => do
         match ← t.mapNamesM (tyNameQ (scopeOf n) (tps.map (·.name)) p) with
@@ -478,9 +532,12 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
         match qualifier (scopeOf n) (tps.map (·.name)) p q with
         | .ok (.type c) => return if c == n then some y else none
         | _ => return none
-      return some (n, ps, own, all, declared, ownQualified)
+      let exts := methods.filterMap fun
+        | .fn _ mn .. => if isExt mn then some mn else none
+        | _ => none
+      return some (n, { parents := ps, own, all, declared, ownQualified, exts })
     | _ => return none
-  let budget := 1 + classInfo.foldl (fun a (_, ps, _) => a + ps.length + 1) 0
+  let budget := 1 + classInfo.foldl (fun a (_, i) => a + i.parents.length + 1) 0
   -- the classes and interfaces `c` is below, itself first
   let above (c : String) : List String := Id.run do
     let mut seen : List String := []
@@ -492,20 +549,21 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
         todo := rest
         if !seen.contains x then
           seen := seen ++ [x]
-          if let some (_, ps, _) := classInfo.find? (·.1 == x) then todo := todo ++ ps
+          if let some (_, i) := classInfo.find? (·.1 == x) then todo := todo ++ i.parents
     return seen
-  let infoOf (c : String) := classInfo.find? (·.1 == c)
-  let membersOf (c : String) : List String :=
-    ((above c).flatMap fun x => ((infoOf x).map (·.2.2.1)).getD []).eraseDups
-  let allMembersOf (c : String) : List String :=
-    ((above c).flatMap fun x => ((infoOf x).map (·.2.2.2.1)).getD []).eraseDups
-  let declares (c f : String) : Bool := ((infoOf c).map (·.2.2.2.2.1.contains f)).getD false
+  let infoOf (c : String) : Option ClassNames := (classInfo.find? (·.1 == c)).map (·.2)
+  -- (`what` of each class at or above `c`)
+  let ofClasses (what : ClassNames → List String) (c : String) : List String :=
+    ((above c).flatMap fun x => ((infoOf x).map what).getD []).eraseDups
+  let membersOf := ofClasses (·.own)
+  let allMembersOf := ofClasses (·.all)
+  let declares (c f : String) : Bool := ((infoOf c).map (·.declared.contains f)).getD false
   let enums : Std.HashSet String := Std.HashSet.ofList (real.filterMap fun
     | .const _ n _ (.enumDef ..) => some n
     | _ => none)
   let rAt (sc excl : List String) (self : Option String := none) : Resolver :=
     let members := (self.map allMembersOf).getD []
-    { val := resolve "value" sc, bind := bind sc, ty := tyNameQ sc excl, qual := qual sc,
+    { val := resolve "value" sc, bind := bind sc, ty := tyNameQ sc excl, qual := qual sc, ext := extAt sc,
       qualifier := qualifier sc excl,
       modulePath := modulePath sc, memberOf := memberOf sc,
       outer := fun p n => members.contains n || match find sc p n with
@@ -517,7 +575,7 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
         | some n => (above n).filter (declares · f) == [c]
         | none => false,
       selfQualified := (self.map fun n => (above n).flatMap fun x =>
-        (((infoOf x).map (·.2.2.2.2.2)).getD []).map (·, shown x)).getD [],
+        (((infoOf x).map (·.ownQualified)).getD []).map (·, shown x)).getD [],
       global := fun p n => match find sc p n with
         | .ok (some _) => true
         | .ok none => false
@@ -592,7 +650,7 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
       let parents ← parents.mapM (·.mapNamesM (r.ty p))
       -- (what the classes above have: a member qualified with its own class
       -- introduces a name none of them has, Book of Verse ch. 10)
-      let inherited := ((above n).drop 1).flatMap fun x => ((infoOf x).map (·.2.2.2.1)).getD []
+      let inherited := ((above n).drop 1).flatMap fun x => ((infoOf x).map (·.all)).getD []
       -- a member's name as written: `(q:)x`, `q` its own class (the name
       -- is then `x`, unless a class above has an `x`: a second `x`, the
       -- elaboration of classes' to refuse), or what introduces the member
@@ -628,6 +686,11 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
         match m with
         | .fn mp mn mps mtps meffs mret mbody =>
           let rm := rAt (scopeOf n) (tps.map (·.name) ++ mtps.map (·.name)) (some n)
+          -- (the class's extension methods first: methods of `Self`)
+          let exts := ofClasses (·.exts) n
+          let ext (q : Pos) (x : String) : Except String (Option String) :=
+            if exts.contains (extensionName x) then pure (some (extensionName x)) else rm.ext q x
+          let rm := { rm with ext, selfExt := ext }
           let mtps ← mtps.mapM (·.mapBoundNamesM (rm.ty mp))
           let (mps, rmb) ← params rm mp mps
           return .fn mp (← memberName mp mn false) mps mtps meffs (← mret.mapNamesM (rm.ty mp)) (← mbody.mapNamesM rmb)

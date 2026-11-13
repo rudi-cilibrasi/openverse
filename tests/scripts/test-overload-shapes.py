@@ -75,4 +75,4 @@ with tempfile.TemporaryDirectory(prefix='openverse-overload-shapes-') as directo
                  f'Lean={result.returncode,result.stdout,result.stderr}; '
                  f'C={None if c is None else (c.returncode,c.stdout,c.stderr)}')
 print(f'overload-shapes: {count} programs from seed {first}, {accepted} accepted in Lean/C, '
-      f'{refused} expected refusals, both declaration orders and six contexts, no mismatches')
+      f'{refused} expected refusals, both declaration orders and seven contexts, no mismatches')
