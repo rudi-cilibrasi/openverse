@@ -2830,15 +2830,17 @@ def qualified (m : String) : Option String × String :=
     - `(super:)M(args)` is a call of the nearest implementation above.
     - `R.(c:)M(args)` (#125) is a call in the family of the root `c` is
       below.
-    A call's `M` is the method it calls, `slotAt` its place and the name as
+    A call's `M` is the method it calls, `slotsAt` its place and the name as
     written: of an overloaded method, the list the call takes (`M$ovK`), an
-    earlier elaboration found, none before. -/
+    earlier elaboration found, none before; where the call is elaborated at
+    receivers of several hierarchies, each one's list (`R.M(args)` then
+    reaches the roots of each). -/
 partial def rwFamCalls (anc : String → List String) (fams : List (String × MFam)) (trial : Bool)
     (inC : Option String) (e : SExpr) (isIface : String → Bool := fun _ => false)
     (typeView : String → String → List (String × STy) := fun _ _ => [])
     (roots : String → List String := fun _ => []) (picks : List (Pos × String) := [])
-    (slotAt : Pos → String → Option String := fun _ m => some m) : SExpr :=
-  let rw := fun x => rwFamCalls anc fams trial inC x isIface typeView roots picks slotAt
+    (slotsAt : Pos → String → List String := fun _ m => [m]) : SExpr :=
+  let rw := fun x => rwFamCalls anc fams trial inC x isIface typeView roots picks slotsAt
   let below (f : MFam) (d : String) : List String := f.impls.filter fun x => x != d && (anc x).contains d
   -- (#375's review) an interface's default yields to every class's own
   -- implementation, as dispatch gives: a class's chain wins over the
@@ -2980,27 +2982,30 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
       let dispatch := SExpr.app p (.ident p "$dispatch") (.ident q (methodFnName f.root m) :: .block p tmpl :: actual :: vals) false
       if !keepStatic then dispatch else
         .block p [.decl p raw none false recv, dispatch]
-  -- (a use that reaches several roots, each's family or `M` as written: the
-  -- receiver bound once, then a case per root; its name for messages only,
-  -- the method's, no function's)
-  let across (p q : Pos) (m : String) (cases : List (String × Option MFam)) (recv : SExpr) (args : List SExpr)
-      (br : Bool) : SExpr :=
+  -- (a use that reaches several roots, each's family or `M` as written, of
+  -- the list it takes there: the receiver bound once, then a case per
+  -- root; named for the first family's function, whose effects every
+  -- case's caller allows, as the function has that case too)
+  let across (p q : Pos) (cases : List (String × String × Option MFam)) (recv : SExpr)
+      (args : List SExpr) (br : Bool) : SExpr :=
     let site := s!"{p.line}_{p.col}"
     let (r, kv) := (s!"$rr{site}", s!"$rk{site}")
-    let arm (x : (String × Option MFam) × Nat) (rest : SExpr) : SExpr :=
-      let ((root, f), i) := x
+    let arm (x : (String × String × Option MFam) × Nat) (rest : SExpr) : SExpr :=
+      let ((root, slot, f), i) := x
       let d := s!"$rd{i}_{site}"
       let body := match f with
-        | some f => call p q m f (.ident p d) args br
-        | none => .app p (.member q (.ident p d) m) args br
+        | some f => call p q slot f (.ident p d) args br
+        | none => .app p (.member q (.ident p d) slot) args br
       .ite p [.decl p d none false (.app p (.ident p "$methodCast") [.app p (.ident p root) [.ident p r] true] false)]
         body (some rest)
+    let g := (cases.findSome? fun (_, slot, f) => f.map (methodFnName ·.root slot)).getD "$methodMiss"
     let cases := cases.zipIdx.foldr arm (.app p (.ident p "$methodMiss") [] false)
-    .app p (.ident p "$dispatch") [.ident q m, .block p [.decl p r none false (.ident p "$arg"), .decl p kv none false cases], recv] false
+    .app p (.ident p "$dispatch") [.ident q g, .block p [.decl p r none false (.ident p "$arg"), .decl p kv none false cases], recv] false
   mapE (fun
-    | .app p (.member q recv m) args br => do
-      let (within, m) := qualified m
-      let m ← slotAt p m
+    | .app p (.member q recv m0) args br => do
+      let (within, m0) := qualified m0
+      let slots := slotsAt p m0
+      let m ← slots.head?
       match recv, inC, within with
       | .ident _ "(super:)", some d, _ =>
         -- (the nearest implementation above `d` of a family of `m`: of
@@ -3011,14 +3016,14 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
         ((fams.find? fun (x, f) => x == m && (anc c).contains f.root).map (·.2)).map fun f =>
           call p q m f (rw recv) (args.map rw) br
       | _, _, none =>
-        let cases := (rootsAt anc (roots m) picks inC q recv).map fun r =>
-          (r, (fams.find? fun (x, f) => x == m && f.root == r).map (·.2))
+        let cases := slots.flatMap fun s => (rootsAt anc (roots s) picks inC q recv).map fun r =>
+          (r, s, (fams.find? fun (x, f) => x == s && f.root == r).map (·.2))
         match cases with
-        | [(_, some f)] => some (call p q m f (rw recv) (args.map rw) br)
-        | _ => if cases.all (·.2.isNone) then none else some (across p q m cases (rw recv) (args.map rw) br)
+        | [(_, s, some f)] => some (call p q s f (rw recv) (args.map rw) br)
+        | _ => if cases.all (·.2.2.isNone) then none else some (across p q cases (rw recv) (args.map rw) br)
     | .app p (.ident q m) args br => do
       let d ← inC
-      let m ← slotAt p m
+      let m ← (slotsAt p m).head?
       ((fams.find? fun (x, f) => x == m && (anc d).contains f.root).map (·.2)).map fun f =>
         call p q m f (.ident q "Self") (args.map rw) br
     | _ => none) e
@@ -3086,8 +3091,12 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
       let ctps := ((classes.lookup c).map (·.2.2.2.2)).getD []
       .fn p (mo.name c m ctps mtps ps (fx.contains "override") none) ps mtps fx r b
     | d => d
-  let slotAt (p : Pos) (m : String) : Option String :=
-    if overloaded m then (overloadPicks.lookup p).filter (· != "") else some m
+  -- (the lists an earlier elaboration found a call takes, none before: one
+  -- per hierarchy the receiver is of where the call is elaborated at
+  -- several, #335)
+  let slotsAt (p : Pos) (m : String) : List String :=
+    if overloaded m then ((overloadPicks.filter (·.1 == p)).map (·.2)).filter (· != "") |>.eraseDups else [m]
+  let slotAt (p : Pos) (m : String) : Option String := (slotsAt p m).head?
   -- (a method's name as written, for messages)
   let written (n : String) : String := (n.splitOn "$ov").headD n
   let parentNames (pa : List STy) : List String := pa.filterMap fun | .name n => some n | .app n _ => some n | _ => none
@@ -3228,7 +3237,7 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
     | some (_, ii, _, _, _) => ii
     | none => false
   let rw := fun fs trial inC e => rwFamCalls anc fs trial inC e isIfaceC
-    (fun c root => (rootView (classes.length + 1) c root).getD []) (fun n => (rootsOf n).eraseDups) picks slotAt
+    (fun c root => (rootView (classes.length + 1) c root).getD []) (fun n => (rootsOf n).eraseDups) picks slotsAt
   -- (a method's body as the function's: its members qualified by `Self`,
   -- then `Self` the parameter `$Self`)
   let fnOf (fs : List (String × MFam)) (trial : Bool) (c : String) : STop → Option STop
@@ -3336,16 +3345,17 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
   -- abstract one implemented)
   let stub (q : Pos) : SExpr := familyStub q
   -- (one overridden nowhere, `direct`, is taken out, as there is nothing
-  -- to check it against, unless its name is `shared`, or overloaded: a use
-  -- the elaboration picks the family or list of then calls it as written,
-  -- and the elaborator names an overloaded one's lists as here)
+  -- to check it against, unless its name is `shared`, or overloaded in any
+  -- hierarchy: a use the elaboration picks the family or list of then calls
+  -- it as written, and the elaborator names an overloaded one's lists as
+  -- here)
   let slotName (c : String) (d : STop) : String := match slotOf c d with
     | .fn _ m .. => m
     | _ => ""
   let out := (rwTops sel false).map fun
     | .classDef p n tps sp pa ii fs ov ms =>
       .classDef p n tps sp pa ii fs ov ((ms.filter fun
-          | d@(.fn _ m ..) => let x := slotName n d; !(selAt n x).any (·.direct && !shared x && !mo.overloaded n m)
+          | d@(.fn _ m ..) => let x := slotName n d; !(selAt n x).any (·.direct && !shared x && !overloaded m)
           | _ => true).map fun
         | d@(.fn p2 m ps tps2 fx r _) =>
           -- (an abstract one, or one with no body, as written)
@@ -3378,15 +3388,29 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
   -- only `R`'s class can tell, not picked yet: the elaboration notes the
   -- root that class is below, for the next round (`Requests.families`)
   -- (a use of an overloaded name, of the list picked for it)
-  let sites := (tops.flatMap bodiesOf).flatMap fun (inC, b) => (memberUses b).filterMap fun (cp, q, r, m) => do
+  let sites := (tops.flatMap bodiesOf).flatMap fun (inC, b) => (memberUses b).flatMap fun (cp, q, r, m) =>
     let (within, m) := qualified m
-    let m ← match cp with
-      | some p => slotAt p m
-      | none => if overloaded m then none else some m
+    let ms := match cp with
+      | some p => slotsAt p m
+      | none => if overloaded m then [] else [m]
     let byClass := within.isSome || match r, inC with
       | .ident _ "Self", some _ | .ident _ "(super:)", _ => true
       | _, _ => false
-    if shared m && selNames.contains m && !byClass && (picks.lookup q).isNone then some (q, m) else none
+    ms.filter (fun m => shared m && selNames.contains m && !byClass && (picks.lookup q).isNone) |>.map (q, ·)
+  -- (a call takes one list of a hierarchy's wherever it is elaborated: two
+  -- of one class's, copies of the clauses after a choice whose values are
+  -- of different types taking each by its arguments' types, #335, would
+  -- need the arguments' types to pick the case, as the receiver's class
+  -- picks the root's)
+  let listShown (o : String) : String :=
+    match (declsOf o).head? with
+    | some (_, .fn _ _ ps ..) => s!"{written o}({", ".intercalate (ps.map (styShow ·.ty))})"
+    | _ => written o
+  for (p, o) in overloadPicks do
+    if let some (_, o') := overloadPicks.find? fun (p', o') => p' == p && o' != o && o' != "" && o != "" then
+      let declares (c o : String) : Bool := (declsOf o).any fun (d, _) => (anc c).contains d
+      if (selNames.contains o || selNames.contains o') && classes.any fun (c, _) => declares c o && declares c o' then
+        throw s!"{p.show}: this call takes {listShown o} in the clauses copied for one alternative of a choice and {listShown o'} in those copied for another, and which list of an overloaded method with several values a call takes is decided before types: not supported yet (#283)"
   -- (#106) the calls of an overloaded method with a selected list whose
   -- list is not picked yet, `R.M(args)` or, in a class's body, `M(args)`:
   -- the elaboration notes the list each takes, for the next round
@@ -3439,7 +3463,7 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
     match ((overloadIndex? o).bind fun k => (ovOf f)[k]?) with
     | some (_, _, m) => s!"{shownFnName f}({", ".intercalate (m.params.map (styShow ·.ty))})"
     | none => shownFnName o
-  for (q, o) in overloadPicks do
+  for (q, o) in overloadPicks.filter fun (_, o) => ovNamesAll.contains ((o.splitOn "$ov").headD o) do
     if let some (_, o') := overloadPicks.find? fun (q', o') => q' == q && o' != o then
       throw s!"{q.show}: this call takes the overload {ovShown o} in the clauses copied for one alternative of a choice and {ovShown o'} in those copied for another, and which overload with several values a call takes is decided before types: not supported yet (#283)"
   let rawMfs := fns.filter (mv.contains ·.1)
