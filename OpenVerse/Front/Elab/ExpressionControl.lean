@@ -301,7 +301,9 @@ partial def elabExprControlWith
       elabFor ctx p clauses body
     let r ← elaborate
     return ⟨ownBreak.map (fun flag => Expr.seq (.assign flag (.lit (.logic false))) r.e) |>.getD r.e, r.ty⟩
-  | .gen p _ _ _ => eerr p "a generator X : source can only appear in a for clause"
+  -- (the parser makes generators in for clauses, and in first's, which
+  -- reach here)
+  | .gen p _ _ _ => eerr p "a generator X : source in first is not supported yet: openverse takes generators in for clauses only"
   | .loop _ body =>
     let lctx := { ctx with
       inLoop := true, inRepeat := true, loopDefers := ctx.defers.length,
