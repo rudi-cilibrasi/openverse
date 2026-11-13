@@ -1332,8 +1332,12 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
       -- pushed, so a member reached only from it is found)
       let mut work : List (Ctx × SExpr) := code.arms.toList.flatMap fun (ca, alts) => alts.map (ca, ·)
       while true do
-        let (ca, alt) :: more := work | break
+        let (ca0, alt) :: more := work | break
         work := more
+        -- (a point's prefix first, as the point and its frame see its names)
+        let ca ← match alt with
+          | .app _ (.ident _ "$then") [_, _, _, .block _ ss] false => do pure (← elabSeq ca0 ss none).2
+          | _ => pure ca0
         -- (a call, whole or as a point: its function's instance, found here
         -- first, at the call's types)
         let point := match alt with
@@ -1386,14 +1390,11 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
               instances := instances ++ [(target, σ)]
               todo := todo ++ [target]
             | .error err => errors := errors ++ [(target, err)]
-        if let .app _ (.ident _ "$then") (pt :: .ident _ hn :: k :: rest) false := alt then
+        if let .app _ (.ident _ "$then") (pt :: .ident _ hn :: k :: _) false := alt then
           if let some cs := Choice.alts? pt then work := cs.map (ca, ·) ++ work
           -- (an `if`'s leaf with a frame of its own)
           if let .app _ (.ident _ "$then") _ false := pt then work := (ca, pt) :: work
           if let some (ccls, ctail) := Choice.contOf? k then
-            let cf ← match rest with
-              | [.block _ ss] => do pure (← elabSeq ca ss none).2
-              | _ => pure ca
             -- (a call's hole at its values' type, at its function's instance,
             -- when that does not coerce to the result type, #283)
             let callTy : Option Ty ← match call with
@@ -1411,7 +1412,7 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
               | none, .app _ (.ident _ "$rec") _ false | none, .app _ (.ident _ "$recTo") _ false => pure callTy
               | none, _ => probeHoleWith elabE ca rty [pt]).getD rty
             let hl : Local := { name := hn, slot := ← fresh hty, ty := hty, mutable := false }
-            let (_, cm) ← elabSeq { cf with locals := hl :: cf.locals } ccls none
+            let (_, cm) ← elabSeq { ca with locals := hl :: ca.locals } ccls none
             let mcode ← elabLoopTailWith elabSeq cm ctail probeK 0
             work := work ++ mcode.arms.toList.flatMap fun (ca2, alts2) => alts2.map (ca2, ·)
       restoreConstructProbe ctx saved

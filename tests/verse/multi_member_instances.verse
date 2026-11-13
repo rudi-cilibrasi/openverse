@@ -2,7 +2,8 @@
 # instances of its type parameters in one search: each call at an instance other than the first
 # calls a copy of it of its own, another member of the machine, at its instance; in both consumers,
 # with effects, for callees whose code calls another generic one (itself at two instances then),
-# recursive callees, generic methods and mutual groups.
+# recursive callees, generic methods (their receivers named before the call too) and mutual
+# groups.
 Three(X:t where t:type)<transacts>:t =
     Print("three")
     X | X
@@ -35,6 +36,12 @@ M(N:int)<transacts>:int =
     if (N <= 0) then 0 else:
         S := box(string){V := "a"}.Both("bbb")
         M(N - 1) + box(int){V := N}.Both(7) + S.Length
+MB(N:int)<transacts>:int =
+    if (N <= 0) then 0 else:
+        Bs := box(string){V := "a"}
+        S := Bs.Both("bbb")
+        Bi := box(int){V := N}
+        MB(N - 1) + Bi.Both(7) + S.Length
 Pair(X:t, Y:t where t:type)<transacts>:t =
     Print("pair")
     X | Y
@@ -51,5 +58,6 @@ Main()<transacts>:void =
     for (V := A(2)) { Print("a {V}") }
     for (V := R(1)) { Print("r {V}") }
     for (V := M(1)) { Print("m {V}") }
+    for (V := MB(1)) { Print("mb {V}") }
     for (V := D[1]) { Print("d {V}") }
     if (V := D[2], V > 102) then Print("first {V}")
