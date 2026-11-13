@@ -1395,7 +1395,7 @@ Main():void =
   old value (`set K += T(N - 1)`, also as one alternative of a choice
   there, `set K += (T(N - 1) | 5)`, or of a `var`'s initial value), a named
   argument (`Tw(1, ?B := T(N - 1))`), a struct's field in its declaration
-  order, `and`'s operands. An
+  order (a generic struct's too), `and`'s operands. An
   `if` in an expression with one in a branch is one too: its conditions
   run first, then the branch's values each go to the code after the `if`
   (`X := (if (N > 1) then T(N - 1) else (1 | 5))`), as do those of `or`'s
@@ -1524,8 +1524,8 @@ Main():void =
   `<computes>`, keeps local state, or may print or call `Err()`. Its choice
   points must be where a choice is lifted from (a comparison's later
   operand, a `set`'s value, a named argument, a struct's field, `and`'s
-  operands, an `if`'s branch, the right of `or`), so not in a class's or
-  generic struct's construction (#283). Also a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`
+  operands, an `if`'s branch, the right of `or`), so not in a class's
+  construction (#283). Also a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`
   other than at the end of its body or in an `if`'s branches, a method of a class or
   interface below two others that each declare its name without `<override>`,
   `<suspends>`, one used as a function value, and, since its body is inlined where other names may be

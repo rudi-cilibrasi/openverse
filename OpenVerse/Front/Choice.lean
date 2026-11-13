@@ -1761,7 +1761,7 @@ def eagerWhy : String :=
   "such a function must be <computes>, keep no local state, and reach nothing that prints or calls Err(), " ++
   "as all its values are computed at a call (#235), unless it is taken lazily: clauses, then a choice whose " ++
   "alternatives are values, calls of its recursive group, or such a call or a choice with code after it that may " ++
-  "reach another, not in a field of a class's or a generic struct's construction (#246, #283)"
+  "reach another, not in a field of a class's construction (#246, #283)"
 
 /-- (#283) Whether an alternative in normal form (`normAlt`) is one the
     lazy machine takes: its prefix plain, a choice's alternatives such again,
@@ -3629,10 +3629,11 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
   let rawMfs := fns.filter (mv.contains ·.1)
   -- (#283) a struct's fields in declaration order, the order its
   -- constructions evaluate them in, for the lifter where a lazily taken
-  -- group's code is normalized; not a generic one's, whose construction the
-  -- elaborator infers, nor a class's, as for any choice)
+  -- group's code is normalized; a generic one's too, whose construction
+  -- names its type arguments; not a class's, whose layout (its supers'
+  -- fields, an interface's) is the elaborator's)
   let structOrders : List (String × FieldOrder) := tops.filterMap fun
-    | .const _ n _ (.structDef _ tps _ fs) => if !tps.isEmpty then none else
+    | .const _ n _ (.structDef _ _ _ fs) =>
       some (n, { fields := fs.map fun (f, _, d, _) => (f, match d with
         | some d => !stable (fun _ => true) d
         | none => false) })

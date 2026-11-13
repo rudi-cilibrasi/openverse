@@ -935,8 +935,10 @@ code after it, which is its frame.
   alternative, which the lifter keeps as a binding of its own, is bound
   first as `normClauses` binds one (`setClauses`: the path's prefix, for
   `op=` the old value, then the choice), as for the elaborator's clauses. The
-  struct field orders come from the source (`inlineMulti`), for non-generic
-  structs, as the elaborator gives the lifter.
+  struct field orders come from the source (`inlineMulti`), as the
+  elaborator gives the lifter; a generic struct's too, since its
+  construction names its type arguments (`pair(int){…}`), so the fields'
+  expected types are known where they are bound before the point.
 - An `if` in an expression whose conditions have no point and whose
   branches have one (`ifPoint`; the right of `or` as its `if`; one the
   lifter would bind as an exclusive choice, `$branchChoice`, is bound as
@@ -997,9 +999,13 @@ consumer like any other instead, in a function of its own:
   compile byte for byte as before.
 
 Not yet (#283), each refused with a message, and the route each would take:
-- A construction of a class or a generic struct with a point in a field:
-  the lifter keeps those (`$noLift`) for any choice, as their fields'
-  order is known only to the elaborator.
+- A construction of a class with a point in a field: the lifter keeps it
+  (`$noLift`), as the class's layout (its supers' fields first, an
+  interface's fields where each class places them, `<override>` defaults) is
+  known only to the elaborator (`TyEnv.fields`). Route: the field orders of
+  the classes a group's code constructs noted by an earlier elaboration, as
+  the consumers' types are (`Requests.nested`), or that layout computed
+  from the source by the elaborator's own rule, shared with it.
 
 With all of those, `F$all` would be needed by no shape and kept, if at all, only as
 an optimisation of effect-free ones. Deleting it (the owner's decision,
