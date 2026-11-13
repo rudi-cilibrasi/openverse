@@ -990,7 +990,8 @@ circle := class(shape, labelled):
   variable, and fails when the option is empty. It also works as a step of a
   path, as in `set S.Best? *= 7` and `set M[k]? = v`.
 - **`let(defs){body}`** makes `defs` visible in `body`
-  only. Its value is the body's.
+  only. Its value is the body's. The definitions may also be braced, with
+  the body after `do`: `let{X := 3} do X + 1`.
 - **Clause macros** (`if{…}`, `for{…}`, `first{…}`, `first(…){…}` and
   `assert{…}`). Each takes clauses in braces, separated by
   `;`, `,` or new lines, run in a failure context; their value is the last

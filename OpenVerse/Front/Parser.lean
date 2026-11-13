@@ -1100,12 +1100,14 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
     else
       bump; return .ident t.pos (t.identName?.getD "sync")
   | .ident "let" =>
-    if (← peekT 1).isSym "(" then
-      -- `let(defs){body}`: the definitions are visible in the body only, and
-      -- the value is the body's
+    let n1 ← peekT 1
+    if n1.isSym "(" || n1.isSym "{" then
+      -- `let(defs){body}`, and `let{defs} do body` (Tim Sweeney's tests):
+      -- the definitions are visible in the body only, and the value is the
+      -- body's
       bump; bump
-      let (defs, _) ← parseParenItems
-      let body ← parseBody stop
+      let defs ← if n1.isSym "(" then (·.1) <$> parseParenItems else parseBracedItems parseExpr
+      let body ← if n1.isSym "(" then parseBody stop else do expectKw "do"; parseBranch stop
       return .block t.pos (defs ++ [.block t.pos [body]])
     else
       bump; return .ident t.pos "let"
