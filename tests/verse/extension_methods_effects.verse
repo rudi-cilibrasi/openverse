@@ -15,7 +15,7 @@ cell := class:
 (T:tuple(int, int, int)).Each():int = T(0) | T(1) | T(2)
 
 (I:int).Later()<suspends>:int =
-    Sleep(0.0)
+    Sleep(0.01)
     I + 1
 
 Main()<suspends>:void =

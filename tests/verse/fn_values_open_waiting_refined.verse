@@ -1,6 +1,6 @@
 Id(X:t where t:type)<computes>:t=X
 Wait(X:t where t:type)<suspends>:t=
-    Sleep(0.0)
+    Sleep(0.01)
     X
 pair(a:type,b:type):=class:
     A:a

@@ -521,7 +521,7 @@ Main()<suspends>:void=
     race:
         Worker(P,D)
         block:
-            Sleep(0.0)
+            Sleep(0.01)
             Print(\"winner\")
     Print(\"after {A.N} {A.Name}\")
 "
@@ -549,7 +549,7 @@ pair(a:type,b:type):=class<computes>{A:a;B:b}
 dup(v:type):=class<computes>(pair(v,v)){}
 F(P:pair(a,b),D:evidence(vehicle,a) where a:type,b:type)<suspends>:[]int=
     for(A:a=if(Q:=dup[P])then(Q.A|Q.B)else P.A,B:=(0|1)):
-        Sleep(0.0)
+        Sleep(0.01)
         A.Speed
 Main()<suspends>:void=
     R:=F(dup(car){A:=car{},B:=car{Speed:=4}},CarEvidence())
@@ -638,7 +638,7 @@ Main()<suspends>:void=
     race:
         Worker(F)
         block:
-            Sleep(0.0)
+            Sleep(0.01)
             Print(\"winner\")
     Print(\"after\")
 "
@@ -750,7 +750,7 @@ Main()<suspends>:void=
     race:
         H.Run()
         block:
-            Sleep(0.0)
+            Sleep(0.01)
             Print(\"winner\")
     Print(\"after {A.N} {A.Name}\")
 "
@@ -970,7 +970,7 @@ Main()<suspends>:void=
     race:
         Worker(A,D)
         block:
-            Sleep(0.0)
+            Sleep(0.01)
             Print(\"winner\")
     Print(\"after {A.N} {A.Name}\")
 "

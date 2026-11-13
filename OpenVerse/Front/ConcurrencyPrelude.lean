@@ -8,6 +8,9 @@ namespace OpenVerse.Front
     A sleep of `S` seconds wakes at the first tick at or after its deadline,
     the binary64 product `30·S` rounded up, and never sooner than the next
     one (the Book's API reference: "Short sleeps therefore round up").
+    `Sleep(0.0)`, as a negative or NaN duration, completes at once without
+    suspending (the Book's tested examples in ch. 14: "Completes at once,
+    and wins").
     `Sleep` itself is a stub that only marks the suspension point: the
     lowering (`Suspend.lean`) calls the others in its place. -/
 def concPrelude : String := "
@@ -106,7 +109,7 @@ sleepResume(F:sleep, C:sched):int =
         set F.Pc = 1
         if (F.Secs = 1.0 / 0.0):
             set F.Wake = -1
-        else if (F.Secs >= 0.0):
+        else if (F.Secs > 0.0):
             Ticks:float = F.Secs * 30.0
             if (Ticks < 9223372036854775808.0):
                 N:int = if (R := Ceil[Ticks]) then (if (R >= 1) then R else 1) else Err()

@@ -2354,7 +2354,11 @@ byte.
 rationals' are). A suspends `Main` starts a loop of passes, one per tick,
 each resuming `Main`'s frame. A sleeping frame reports the tick it waits
 for, and the clock then moves to the earliest of them, so idle ticks cost
-nothing.
+nothing. A sleep of `S > 0` seconds waits `Ceil(30·S)` ticks of the binary64
+product, at least one (the first tick at or after its deadline, the Book's
+API); `Sleep(0.0)`, a negative or a NaN duration completes at once, with no
+suspension (`sleepResume` gives 1 on its first poll), as the Book's tested
+examples of ch. 14 have it for zero.
 
 The scheduler holds its task roots as references without type
 arguments; a generic frame that is not a root is resumed by its caller,

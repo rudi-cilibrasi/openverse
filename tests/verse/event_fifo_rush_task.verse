@@ -10,13 +10,13 @@ Racer(E:event(int))<suspends>:void =
             V := E.Await()
             Print("loser {V}")
         block:
-            Sleep(0.0)
+            Sleep(0.01)
             Print("winner")
     Print("racer after")
-    Sleep(0.0)
+    Sleep(0.01)
     Print("racer done")
 Signaller(E:event(int))<suspends>:void =
-    Sleep(0.0)
+    Sleep(0.01)
     E.Signal(1)
     Print("signalled")
 Main()<suspends>:void =

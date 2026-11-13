@@ -6,14 +6,14 @@ Lazy(N:int)<computes><decides>:int =
     N>=0
     N|Lazy[N-1]
 Wait(N:int)<suspends>:int =
-    Sleep(0.0)
+    Sleep(0.01)
     N
 Use(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<suspends>:void =
     for(A:=if(D:=dup[P]):
         var Local:int=0
         (block {set Local+=1;Local})|(block {set Local+=10;Local})
     else 0,B:=if(E:=dup[Q])then(E.C|E.C+1)else 0):
-        Sleep(0.0)
+        Sleep(0.01)
         Print("local {A} {B}")
 Main()<suspends>:void =
     Use(dup(int){A:=1,B:=2},dup(string){A:="s",B:="t"})

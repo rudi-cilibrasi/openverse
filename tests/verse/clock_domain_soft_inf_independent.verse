@@ -5,7 +5,7 @@ Main()<suspends>:void=
             Sleep(0.05)
             Print("timer")
         block:
-            Sleep(0.0)
+            Sleep(0.01)
             Print("one")
-            Sleep(0.0)
+            Sleep(0.01)
             Print("two")

@@ -11,9 +11,9 @@ Main()<suspends>:void =
         if (I >= 2000) then break
         set I += 1
         for (C : Cs) do set S += C.V
-        Sleep(0.0)
+        Sleep(0.01)
     Ds := for (C : Cs, C.V <> 2):
-        Sleep(0.0)
+        Sleep(0.01)
         cell(int){V := C.V * 10}
     Es := for (D : Ds) { D.V + 1 }
     Print("{S} {Ds.Length} {Es.Length}")

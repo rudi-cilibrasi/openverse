@@ -4,8 +4,8 @@ Keep(X:t where t:subtype(comparable))<computes>:int=if(X=X)then 1 else 0
 cell:=class{var N:int=0}
 ra:=class<computes>{K:int}
 rb:=class<computes>{K:int}
-WA(H:cell,X:int)<suspends><transacts>:ra=block{Sleep(0.0);set H.N+=1;ra{K:=H.N}}
-WB(H:cell,X:string)<suspends><transacts>:rb=block{Sleep(0.0);set H.N+=1;rb{K:=H.N}}
+WA(H:cell,X:int)<suspends><transacts>:ra=block{Sleep(0.01);set H.N+=1;ra{K:=H.N}}
+WB(H:cell,X:string)<suspends><transacts>:rb=block{Sleep(0.01);set H.N+=1;rb{K:=H.N}}
 ca:=class{V:int=7;F:type{_(:cell,:int)<suspends><transacts>:ra}=WA}
 cb:=class{V:string="s";F:type{_(:cell,:string)<suspends><transacts>:rb}=WB}
 Main()<suspends>:void=

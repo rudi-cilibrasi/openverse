@@ -39,7 +39,7 @@ the sources disagree, the table records that disagreement.
 | Rule | Upstream evidence | Reference scheduler and trace evidence | Classification |
 | --- | --- | --- | --- |
 | Clock and positive delays | The Book uses simulation updates. Epic permits variable update durations, independent of rendering. Neither cited timing description specifies a fixed 30 Hz rate. The Book's API reference (`Sleep`, line 3939): "a sleep resumes on the first update at or after its deadline and never sooner than the next one. Short sleeps therefore round up". | A virtual 30 Hz clock skips idle ticks. Supported positive finite delays use `max(1, Ceil(30*S))` after binary64 multiplication: the first tick at or after the deadline ([the Book's rules](#the-books-scheduler-rules)). In [sleep](../../tests/verse/scheduler_audit_sleep.verse), `Sleep(0.04)` (1.2 ticks) completes at the second tick, after the first one-tick sleeper. | The API's rounding up; the 30 Hz rate is the reference clock's, no engine-rate claim. |
-| Zero delay | The pinned Book's NextTick discussion permits same-tick resumption for `Sleep(0.0)`. Epic's Sleep page specifies the next update. | Zero always yields and resumes in the next virtual tick; a peer runs before resumption in [sleep](../../tests/verse/scheduler_audit_sleep.verse). | Matches the published Sleep description; the Book snapshot differs. |
+| Zero delay | The pinned Book's NextTick discussion permits same-tick resumption for `Sleep(0.0)`; its tested ch. 14 examples have it complete at once. Epic's Sleep page and the Book's API reference specify the next update. | Zero completes at once, without yielding, as negative and NaN durations do ([the Book's rules](#sleep00-completes-at-once)); in [sleep](../../tests/verse/scheduler_audit_sleep.verse) the zero sleeper goes on before its peer starts. | The Book's tested examples; its prose and API differ. |
 | Negative, NaN and infinite delays | Epic describes negative durations as immediate and positive infinity as indefinite. The cited API does not specify NaN. | Negative/NaN durations return immediately; positive infinity never wakes. [Sleep](../../tests/verse/scheduler_audit_sleep.verse), [cancel](../../tests/verse/scheduler_audit_cancel.verse) and [deadlock](../../tests/verse/scheduler_audit_deadlock.verse) separate these cases. | Negative/infinite cases follow the API; NaN is a reference choice. |
 | Numeric limits | The cited timing sources give no matching finite cutoff or int64 accumulation limit. | The binary64 product `30*S` must be below `2^63`. Finite inputs outside that domain terminate immediately with `error: user`; they do not become infinite waits. Current time plus the rounded ticks uses checked int64 addition and terminates with `error: overflow` beyond the clock maximum. [Bounds](../../tests/verse/scheduler_audit_clock_bounds.verse) now completes across the former cutoff; [overflow](../../tests/verse/scheduler_audit_clock_overflow.verse) retains its deliberate overflow result. | Explicit bounded reference-clock policy ([#514](https://github.com/rudi-cilibrasi/openverse/issues/514)); not measured engine limits. |
 | Structured completion and ties | The Book and Epic tutorial describe sync waiting for all, race cancelling losers, and rush allowing unfinished work to continue. | Arms run to a wait/end in source order. Same-tick race completion chooses the earlier arm; an immediate winner prevents later arms from starting. [Ties](../../tests/verse/scheduler_audit_ties.verse) records winner and cleanup. | Common completion behavior; the exact tie/start/cleanup ordering here is the tested reference policy, not a measured engine trace. |
@@ -79,7 +79,8 @@ checked-int/heap proofs remain the trust boundary.
 
 Positive infinity alone is the intentional indefinite input. Negative
 values (including negative infinity) and NaNs retain their immediate
-reference behavior; both signed zeros and positive subnormals yield at
+reference behavior, as both signed zeros now do (the tested examples of
+ch. 14, [below](#sleep00-completes-at-once)); positive subnormals wait at
 least one tick. Infinite terminal deadlock and unsupported finite input
 share the generic `error: user` text, but differ observably: the
 [invalid finite race](../../tests/verse/clock_domain_fatal_first_unsupported.verse)
@@ -190,4 +191,47 @@ what openverse does now.
   rounds to exactly 3.0 in binary64, still three. The bounded clock domain
   (#514) is unchanged: products at or above 2^52 are integers, so the
   largest supported duration and its ticks are the same.
+
+### `Sleep(0.0)` completes at once
+
+The Book disagrees with itself.
+
+- **Prose** (ch. 14): `14_concurrency.md:1210`, "`Sleep(0.0)      # One
+  frame, the smallest possible delay`"; `:1213-1219`, "While it does not
+  add actual delay, it serves two critical purposes. It creates a
+  suspension point, which is where cancellation gets checked, and it
+  yields control to other concurrent tasks, so that no single task can
+  monopolize execution"; `:1227-1228`, "Unlike `Sleep(0.0)` which yields
+  control and may resume in the same tick if no other work is pending".
+- **API** (`Sleep`, line 3939): "0.0 resumes on the next update and,
+  crucially, does yield, which is what makes it the correct body of a
+  per-frame coroutine loop".
+- **Tested examples** (ch. 14's `<!--versetest-->` blocks, each checking a
+  task's effects right after `spawn{…}` returns, with no tick between):
+  `<!-- 03 -->` (`:138-167`, a `sync` of three arms that each
+  `Sleep(0.0)`: "`Loaded.Ids = (1, 2, 3)`"), `<!-- 05 -->` (`:246-274`,
+  `Race.Winner = 2`), `<!-- 06 -->` (`:297-333`, "The square won"),
+  `<!-- 07 -->` (`:342-370`, `Won.Id = 2`), `<!-- 08 -->` (`:378-407`:
+  "`Sleep(0.0)                   # Completes at once, and wins`", "Arm two
+  wins on the first pass through the arm list, before arm three has been
+  entered even once"), `<!-- 09 -->` (`:438-485`, `rush` and `race`,
+  `Trail.Trace = 102`, `RaceLog.Trace = 2`), `<!-- 10 -->` (`:518-548`,
+  "Arm two never got to run, the code after the sync never ran, and 5 came
+  out") and `<!-- 11 -->` (`:555-588`, `Steps.PastSync = 1`). In each, every
+  `Sleep(0.0)` on the task's path completed without suspending: the
+  spawned task ran to its end within the `spawn`.
+- **Book tests** (`Tests/`): none call `Sleep(0.0)`.
+- **openverse:** the tested examples': `Sleep(0.0)` (and `-0.0`, which is
+  `0.0`) completes at once, without suspending, as a negative or NaN
+  duration does; it is no suspension point, so neither cancellation nor
+  other tasks get a turn there. Until now it always yielded, to the next
+  tick. A positive duration, however small, waits at least one tick
+  (`Sleep(0.01)` is one tick, rounded up). The audit had proposed a
+  narrower rule ("complete without yielding when no other task is
+  runnable at that point of a `race`'s first pass"); the examples `03`,
+  `10` and `11` show the same in a `sync` and in plain code, and openverse
+  has no notion of a task that is runnable without running it, so the rule
+  is the examples' without a condition. A loop whose only wait is
+  `Sleep(0.0)` never lets another task run (the API says the same of a
+  negative duration); a loop that should give way writes a positive one.
 

@@ -1,7 +1,7 @@
 # A spawn survives its creator; the command-line host ends with Main.
 Finish()<suspends>:void=
     Print("spawn started")
-    Sleep(0.0)
+    Sleep(0.01)
     Print("spawn finished")
 Never()<suspends>:void=
     defer:Print("pending task cleanup")

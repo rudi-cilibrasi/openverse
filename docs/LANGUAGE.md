@@ -2928,8 +2928,12 @@ Main()<suspends>:void =
   again while a task ended, a `Signal` woke a task, or a task was cancelled
   (so that those waiting go on in the same tick). Arms that can go on in the same tick do so in source order. `Sleep(S)`
   uses the binary64 product `T = 30·S` rounded up, `Ceil(T)`, at least
-  one tick, for a supported nonnegative finite input. It always yields,
-  including either signed zero or a positive subnormal. The product must
+  one tick, for a supported positive finite input, also a subnormal one:
+  a sleep wakes at the first tick at or after its deadline (the Book's API
+  reference). `Sleep(0.0)` (and `-0.0`, which is `0.0`) completes at once,
+  without suspending, as the Book's tested examples have it: it gives
+  neither other tasks nor a cancellation a turn, so a loop that should
+  give way sleeps a positive time (`Sleep(0.01)` is one tick). The product must
   be below `2^63`; the largest supported binary64 duration is exactly
   `307445734561825792.0` seconds, giving `2^63 − 2048` ticks. The next
   binary64 duration, `307445734561825856.0`, is outside this domain.
@@ -2994,7 +2998,7 @@ Main()<suspends>:void =
 | A `defer:` in a function with several values, or in a block of its code | not stated (ch. 7: it runs when its scope exits) | it runs as each value leaves the scope, after the value is computed and before the code after the call or the block, and at a `return` after the return's value; a call or a block whose clauses fail gives no value and runs none; in a `for`, what it does is part of that value's code, undone with it when a later filter rejects the value, whether the call is inlined or taken lazily (#283) |
 | A recursive function with several values whose only calls of itself are in failure contexts of its own code | not stated (the Verse Calculus: a call is its body) | inlined, as a function recursive only through another function that consumes it is (the contexts are functions of their own): where its clauses fail in a `for`'s clauses, what those clauses did since their last generator is undone with them, as for any inlined call, not kept as at a lazily taken call, which is a generator of its own (#283) |
 | Precedence of `\|` | (not in the Book) | below `+`, above the comparisons: `X = 1 \| 2` is `X = (1 \| 2)` (#208) |
-| `Sleep(0.0)` | "may resume in the same tick" (ch. 14), "One frame" (ch. 14); the API reference: it always yields; the tested ch. 14 example: it completes at once in a `race` ([the audit](research/readings-audit.md#the-scheduler-rows)) | always yields: resumes in the next tick (#156) |
+| `Sleep(0.0)` | "may resume in the same tick" (ch. 14), "One frame" (ch. 14); the API reference: it always yields; the tested ch. 14 examples (`03`, `05` to `11`): it completes at once, in a `race`, a `sync` and plain code: the Book disagrees with itself ([the rules](research/scheduler-conformance.md#sleep00-completes-at-once)) | the tested examples': completes at once, without suspending, as a negative or NaN duration does |
 | `Sleep(S)` rounding | the API: "a sleep resumes on the first update at or after its deadline and never sooner than the next one. Short sleeps therefore round up"; no tick rate | the first tick at or after the deadline: the binary64 product `30·S` rounded up, at least one tick (`Sleep(0.04)` takes 2 ticks; `Sleep(0.1)`, whose product is exactly 3.0, 3); bounded inputs and checked clock accumulation follow the explicit reference policy above (#514) |
 | End of a program with tasks | not stated | the program ends when `Main` does; a `Main` that waits with no task able to run is an error (exit 2) (#156) |
 | Order of a `subscribable_event`'s functions | not stated (ch. 14's example lists them in subscription order) | subscription order; the tasks awaiting the event are woken first and go on after `Signal` returns (#210) |

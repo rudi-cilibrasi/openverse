@@ -13,7 +13,7 @@ Trace(Label:string, Value:int)<transacts>:int =
     Print(Label)
     Value
 State(P:pair(a, b) where a:type, b:type)<suspends>:void =
-    Sleep(0.0)
+    Sleep(0.01)
     var Total:int = 0
     R := for (A := 1 | 2, set Total += A, Print("prefix {A}"),
         V := if (D := dup[P]):
@@ -29,7 +29,7 @@ State(P:pair(a, b) where a:type, b:type)<suspends>:void =
         V
     Print("state {Total} {R.Length}")
 LaterEmpty(P:pair(a, b) where a:type, b:type)<suspends>:void =
-    Sleep(0.0)
+    Sleep(0.01)
     var Total:int = 0
     Empty:[]int = array{}
     R := for (A := 1 | 2, set Total += A,
@@ -39,7 +39,7 @@ LaterEmpty(P:pair(a, b) where a:type, b:type)<suspends>:void =
         V
     Print("empty {Total} {R.Length}")
 NoFallback(P:pair(a, b) where a:type, b:type)<suspends>:void =
-    Sleep(0.0)
+    Sleep(0.01)
     H := counter{}
     One := array{1}
     R := for (V := if (D := dup[Read(P, H)]) then (One[D.C] | One[D.C + 1]) else Trace("fallback", 99)):
@@ -47,7 +47,7 @@ NoFallback(P:pair(a, b) where a:type, b:type)<suspends>:void =
         V
     Print("no fallback {H.N} {R.Length}")
 ScalarNoFallback(P:pair(a, b) where a:type, b:type)<suspends>:void =
-    Sleep(0.0)
+    Sleep(0.01)
     H := counter{}
     One := array{1}
     var Total:int = 0
@@ -56,7 +56,7 @@ ScalarNoFallback(P:pair(a, b) where a:type, b:type)<suspends>:void =
         V
     Print("scalar {Total} {H.N} {R.Length}")
 Cleanup(P:pair(a, b) where a:type, b:type)<suspends>:void =
-    Sleep(0.0)
+    Sleep(0.01)
     R := for (V := if (D := dup[P]):
         defer: Print("cleanup")
         D.C | D.C + 1
@@ -67,12 +67,12 @@ Cleanup(P:pair(a, b) where a:type, b:type)<suspends>:void =
         V
     Print("cleaned {R.Length}")
 Typed(P:pair(a, b) where a:type, b:type)<suspends>:[]b =
-    Sleep(0.0)
+    Sleep(0.01)
     for (V:b = if (D := dup[P]) then (D.A | D.B) else P.B):
         E:[]b = array{V}
         V
 Independent(P:pair(a, b), Q:pair(c, d) where a:type, b:type, c:type, d:type)<suspends>:void =
-    Sleep(0.0)
+    Sleep(0.01)
     var Total:int = 0
     R := for (V := if (D := dup[P]) then (D.C | D.C + 1) else 0, set Total += V,
         W := if (E := dup[Q]) then (E.C | E.C + 1) else 0):
@@ -80,7 +80,7 @@ Independent(P:pair(a, b), Q:pair(c, d) where a:type, b:type, c:type, d:type)<sus
         V + W
     Print("independent {Total} {R.Length}")
 Nested(P:pair(a, b) where a:type, b:type)<suspends>:void =
-    Sleep(0.0)
+    Sleep(0.01)
     for (V := if (false?) then -1 else if (D := dup[P], D.C > 0) then (D.C | D.C + 1) else 0):
         Print("nested {V}")
 Main()<suspends>:void =

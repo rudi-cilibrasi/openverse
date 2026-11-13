@@ -10,7 +10,7 @@ Main()<suspends>:void=
     E.Signal(1)
     E.Signal(2)
     Print("sent one two")
-    Sleep(0.0)
+    Sleep(0.01)
     E.Signal(3)
     Print("sent three")
     A.Await()

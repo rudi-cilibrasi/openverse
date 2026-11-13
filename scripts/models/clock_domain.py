@@ -59,7 +59,9 @@ def classify(b):
         return dict(kind='immediate' if immediate else 'indefinite',
                     ticks=0 if immediate else None)
     seconds = rational(b)
-    if seconds < 0:
+    # (a zero, of either sign, completes at once, as a negative duration
+    # does: the Book's tested examples in ch. 14)
+    if seconds <= 0:
         return dict(kind='immediate', ticks=0)
     product = binary64_nearest(seconds * 30)
     if product is None:
@@ -160,7 +162,7 @@ def generate(seed):
         body += ('    sync:\n        block:\n            Sleep(' + literal(a) + ')\n'
                  '            Print("timer")\n        block:\n            Print("peer")\n')
         for j in range(1, steps+1):
-            body += f'            Sleep(0.0)\n            Print("tick {j}")\n'
+            body += f'            Sleep(0.01)\n            Print("tick {j}")\n'
         body += '    Print("done")\n'
         if ca['kind'] == 'unsupported-finite':
             out, status, stderr = '', 2, 'error: user\n'
@@ -180,7 +182,7 @@ def generate(seed):
         body += ('    race:\n        block:\n            defer:Print("cleanup")\n'
                  '            Print("timer")\n            Sleep(' + literal(a) + ')\n'
                  '            Print("timer done")\n        block:\n            Print("peer")\n'
-                 '            Sleep(0.0)\n            Print("peer done")\n    Print("done")\n')
+                 '            Sleep(0.01)\n            Print("peer done")\n    Print("done")\n')
         if ca['kind'] == 'unsupported-finite':
             out, status, stderr = 'timer\n', 2, 'error: user\n'
         elif ca['kind'] == 'immediate':
