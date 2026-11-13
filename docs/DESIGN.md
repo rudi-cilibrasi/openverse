@@ -164,6 +164,7 @@ not an `array{a₀, …}`, which would run `aₙ₋₁` before `a₀`'s value wa
   - Both kinds of continuation retain the type parameters of their inputs, results and written types, including a generic method's `Self`. Parameters not determined by the inputs take an explicit witness argument, so a suffix with an annotation such as `E:[]t` can be shared even when no captured value has type `t`. The generated body substitutes the context's type aliases, and the key includes the written type instances and interface-default copy tag.
   - This immediate protocol is used where the body passes `forBodySafe` (no suspension, non-rollback operation, escaping break, or unsupported marker). Waiting consumers use the staged protocol below; unsupported contexts retain copies (tim-6e's review of #335). Starting a task with `spawn` is immediate: the body check leaves its callee to `elabSpawn`, which checks caller arguments for waits and failure contexts before checking the callee in its task context. Prepared nested consumers, including lazy recursive groups and their generic/default bindings, remain inside the helper and are checked by their own elaboration. Body cleanup is local to that helper. Both non-failable and failable bodies may share lazy suffixes, including after a refining branch. Failable bodies and source returns use explicit outcomes, described below.
   - Method calls are classified from their typed code during the continuation trial. Names such as `Signal`, `Subscribe`, `Cancel` and `Await` alone do not imply suspension: event notification, subscription and subscription cancellation are immediate, transactional operations. A genuinely suspending method still needs a suspending source context and the staged continuation protocol below.
+  - A continuation is keyed by what its code depends on (`contKey`, as `firstKey` and `refineTagOf`, over `Ctx.usedLocals`): the clauses' places, the locals they use with their types, the type variables they write as bound there, and the context. The key is the same in the trial that asks for it (`Ctx.trial`) and in the function of an enclosing continuation that the next round compiles the clauses in, so a continuation asked for in a trial is the one used, and nesting takes no more rounds. A generated local the clauses use is named by its place alone for this: a `for`'s return slot (`$forReturn…`, #437) was numbered by the locals in scope, which differ between the source and each continuation's function, so each level of `for`s nested with refining choices made the continuations inside it again (136 for 16 levels, 120 never called). A refining cast's lift asked for in a continuation's trial is not kept (`Ctx.keepsLifts`), in a `<suspends>` caller as in any: its tag has the continuation's own scope, which the trial does not (before, 3N + 3 lifts for N casts as clauses after two refining choices, N + 1 never called).
   - Continuations also share code inside parameter and field defaults, constructors, class blocks and cleanup. `FirstLift` and staged-resume metadata carry the source's lexical restrictions and active default-dependency stack. Effect inference and final elaboration restore them in each helper; helper keys include this context so a request checked in one scope cannot stand in for another. Moving code therefore retains restrictions on returns, suspension, spawning, repeated/concurrent execution and recursive default dependencies.
   - An exclusive choice's own paths (#314's returns, #331's `if`s, `exclIter`) do the same (phase 2b): when the clauses after it have another such choice, every path ends with a call of the continuation, in the path's part of the iteration's filter, so a failure of its first filter undoes the path as the copy's would, and the path's generators take the continuation's values as their body (`build` takes the body as an argument for this). The first elaboration compiles the first path with the clauses after it, for the values' type, and asks for the continuation; the next compiles every path with the call. Ten calls of a function with a `return` and a choice after it in one `for` take 13 KB and 0.01 s to compile, where copying took 1.2 MB and 0.4 s. Immediate consumers can also share in a `<suspends>` caller; waiting refining consumers use the staged protocol below.
 
@@ -520,7 +521,7 @@ the classes below it, `M(args)` becomes `C$M(Self, args)`. Each class or
 interface that declares `M` without `<override>` is the root of a family
 (`MFam`), `M` and its overrides below it. When one root declares `M`,
 `R.M` names its family whatever `R` is, without types. When unrelated ones
-do (`shared`), `famAt` takes the family of the root the receiver's class is
+do (`shared`), `rootsAt` takes the family of the root the receiver's class is
 below: `Self`'s and a bare call's from the enclosing class, known without
 types, any other receiver's from an earlier elaboration. The first leaves
 those uses as written, ordinary calls (a family's method stays in its class
@@ -532,17 +533,41 @@ with eager groups (`Requests.eager`). That elaboration does not
 judge what can fail (`Ctx.failabilityKnown`), as a call may yet get several
 values, and the uses it does not reach are of no family, so the last one has
 none left. Each use is then rewritten as in a program with that family
-alone, so the fixpoint is exact, and so is the code. A family that has several values only through such uses has its
+alone, so the fixpoint is exact, and so is the code. One place may be
+elaborated at receivers of several classes: the clauses after a choice whose
+values are of different types, copied for each alternative (#335), note
+each copy's root. Such a use reaches several roots, and so does one that no
+elaboration reached or that one reached only at a receiver of no class (a
+type parameter of clauses shared by the alternatives, `""`), which may be of
+any root. It becomes the receiver bound once, then a case per root,
+`if ($d := $methodCast(root[$r])) then … else …`, of that root's family's
+call with `$d` the receiver, or `$d.M(args)` as written where the root's
+`M` has one value (`rwFamCalls`' `across`). The receiver's class picks the
+case, which its type tells where the copy is elaborated: the elaborator
+drops the other cases before elaborating them (`pruneMethodCases`, as for a
+family with refining casts), so each copy compiles its own family's call.
+A receiver of no class cannot be cast, so clauses with such a use cannot be
+shared through an operation dictionary and are copied; a dictionary also
+declines a family's stub, the method `$apply` would call having several
+values, which no operation gives. A `for` takes the copies' values one
+after another. Where the first success is taken, the names the clauses
+bind need one type after them: when the choice's values have none above
+them all, `elabOneGo` refuses it, saying to take them in a `for`. A family that has several values only through such uses has its
 own uses noted in a later round; each round notes more, so they end. An
 overloaded method (#106) is one method for each of its lists, named as the
 elaborator names them, `M$ovK` (`MethodOverloads`, which both use); a
 family is of one of them. A call of an overloaded `M` (`R.M(args)`, bare,
 `(super:)`) is of the list an earlier elaboration found it takes, noted by
 the call's place as an overloaded function's call is (`Requests.overloads`,
-`Ctx.noteOverload`, `rwFamCalls`' `slotAt`), and as written, of one value,
-before; then of its family, by its class or a pick of its own. The
+`Ctx.noteOverload`, `rwFamCalls`' `slotsAt`), and as written, of one value,
+before; then of its family, by its class or a pick of its own. Lists are a
+hierarchy's (`MethodOverloads`), so a call copied for receivers of several
+hierarchies takes one of each, each in its root's case; two lists of one
+hierarchy, which the arguments' types would have to pick, are refused. The
 methods of such a name keep stubs in their classes, so the elaborator's
-lists are the same. A class below two roots of `M` is refused when a family
+lists are the same; so does a direct family's method whose name another
+hierarchy overloads, as a use's list, and so its family, is not known in
+the first round. A class below two roots of `M` is refused when a family
 of `M` has several values. For
 an interface (#283) the dispatch's root is the interface, its receiver
 typed at it and cast to each implementing class, and its default
@@ -598,7 +623,7 @@ been a generator there, where a call has none (#312's lesson). The kept
 bodies (`checkBody`), and an `F$all`'s, which is effect-free, see a block
 that binds the receiver and the arguments, then the if-chain on the guards
 (ending in `Err()`, which a call never reaches) or the choice.
-Each method of a family stays in its class as a stub, `Err()`, which no call reaches, so that the elaborator still checks it as a member: `<final>`, its signature and effects against the one it overrides, and an abstract one implemented. The dispatch's arguments are bound at the declaring class's parameter types, so `array{}` or `false` gets the type it needs, and one tuple argument to several parameters is taken apart, as at a call. An override that returns a narrower type is refused, since the dispatch is made before types and has the declaring class's return type. An `F$all` body turns every exclusive choice into a choice, nested `for`s included, which is exact as it is effect-free.
+Each method of a family stays in its class as a stub, `Choice.familyStub`, elaborated as `Err()`, which no call reaches, so that the elaborator still checks it as a member: `<final>`, its signature and effects against the one it overrides, and an abstract one implemented. That no call reaches one holds by construction where the program is given out: `elabProgramCore` refuses a program any of whose functions calls a stub (`TyEnv.familyStubs`). Verse Core has no calls but those that name their function (a dispatch is a test of the class, then a call), so this covers every way a call is made, generated ones included (an operation dictionary's `$apply`, a method value's adapter, a default's helper), and ones not written yet; `tests/lean/FamilyStubs.lean` makes one and sees it refused. A stub has no method value (`FnValues`): a family's method is no value, and a value of another class's method of that name would otherwise make an adapter for every class that has the name. The dispatch's arguments are bound at the declaring class's parameter types, so `array{}` or `false` gets the type it needs, and one tuple argument to several parameters is taken apart, as at a call. An override that returns a narrower type is refused, since the dispatch is made before types and has the declaring class's return type. An `F$all` body turns every exclusive choice into a choice, nested `for`s included, which is exact as it is effect-free.
 A call has the declaring class's effects, which bound every implementation's. Parameters' defaults are rewritten too, so a call in a default is refused as any call with several values is outside a failure context, instead of reaching a stub. When the declaring class's implementation is the only one (an abstract override below it), the call is of that function, with no dispatch. A call of one implementation's function in a family with overrides (that one, or `(super:)`) takes one tuple argument apart after the receiver, also where it is not inlined.
 `(super:)M(…)` calls the nearest implementation above directly, and a
 qualified call `R.(c:)M(…)` (#125) dispatches in the family of the root `c`
@@ -697,7 +722,11 @@ method's use is (below, "Elaboration in rounds").
 - A call is of one overload wherever its code is elaborated: one in clauses
   copied for alternatives of a choice whose values are of different types
   (#335), that takes one overload in a copy and another in another, is
-  refused.
+  refused. (A method's family is picked per copy by the receiver's class, a
+  case per root that the elaborator drops by the receiver's type; an
+  overload would need a case per overload dropped by the arguments' types,
+  which fitting an overload decides with coercion trials, in `EM`, where
+  `pruneMethodCases` is pure.)
 
 A self-recursive one shaped as a generator (#246; `Choice.loopShape?`:
 clauses without choices, then a choice, or an `if … else …` of choices and
@@ -848,7 +877,10 @@ code after it, which is its frame.
   members' alternatives, their parameters the hole (at the group's result
   type) and the frame's lives, their names in every item as the functions'
   are. Their alternatives are numbered after the functions'; a `$rec` in
-  one calls the function whose code it is.
+  one calls the function whose code it is. A generic group's members' type
+  instances are found at the calls that reach them, continuation members'
+  too: the probe goes through choices' alternatives and through each
+  continuation member's code, elaborated where its frame is pushed.
 - A continuation member's frame applied to a value (`memberArm`, in
   `frameApplyWith`) runs the member's clauses and branch in the value's own
   failure context: a leaf of one alternative goes on there (a value goes to
@@ -878,22 +910,104 @@ code after it, which is its frame.
 - The size modes `recursive-sequence-first`, `-for`, `-calls-first` and
   `-calls-for` check that a sequence of choice points grows linearly.
 
+- A choice's values may be of another type than the group's (`S := "a" |
+  "bb"`, then `T[N - 1] + S.Length`): its frame's hole is at their type
+  (`probeHoleWith`: the choice's first alternative's, a value's or the code's
+  after a call in it, when it does not coerce to the result type, so frames
+  that compiled before keep theirs), and the code of a frame that a choice's
+  frame comes after gives that type (`LoopFrame.inTy`, `outTy`). The frame
+  loop keeps a value slot for each such type besides the result type's: a
+  frame reads its hole from its type's slot and writes its code's value to
+  its own (`frameApplyWith`), and a value of such a choice starts in its
+  type's. A continuation member's own values are at the type of the frame
+  after it. Where the first success is taken, each such type has a `$ret`
+  function of its own, `{name}$retN`, the value given to the one of its
+  type (`firstBody`'s `retOf`), and `$frameReturn` gives the final value at
+  the result type its name, `$Vfin`.
+
+- A point where `frameOf?` does not look (a comparison's later operand, a
+  `set`'s value after its old value, a named argument, a struct's field in
+  its declaration order, `and`'s operands) is reached by the rule the lifter
+  uses for a choice there: the first statement with one is lifted
+  (`liftPoints?`, `liftClause`, each call of the group marked `$point` so
+  the lifter binds it as it binds a choice), then decomposed again. A
+  `set`'s or a `var`'s value that is a choice with such a call as one
+  alternative, which the lifter keeps as a binding of its own, is bound
+  first as `normClauses` binds one (`setClauses`: the path's prefix, for
+  `op=` the old value, then the choice), as for the elaborator's clauses. The
+  struct field orders come from the source (`inlineMulti`), as the
+  elaborator gives the lifter; a generic struct's too, since its
+  construction names its type arguments (`pair(int){…}`), so the fields'
+  expected types are known where they are bound before the point.
+- An `if` in an expression whose conditions have no point and whose
+  branches have one (`ifPoint`; the right of `or` as its `if`; one the
+  lifter would bind as an exclusive choice, `$branchChoice`, is bound as
+  itself) is a point: entered as `enterOf` enters a member, its conditions
+  the member's path, each leaf's values going to one frame shared by all
+  its branches (hole `…i`; its code in the first leaf only, the others
+  `$sameFrame`, which `loopFlatWith` finds by its hole, so the code after
+  `if`s in sequence is not copied into each leaf, size modes
+  `recursive-if-*`; a leaf with a frame of its own is flattened in turn,
+  `flatCount` too).
+  The frame's type is its first leaf's (`probeHoleWith`, through the
+  frames of the leaf).
+- An alternative, one of several, with code before a choice in it (`T(N -
+  1) | Tell("x", 1) + (1 | 2)`): that code runs after the choice it is an
+  alternative of and before its own. It enters a continuation member that
+  runs that code and then its choice, `$then((), h, $cont(code, $then(choice,
+  …)))` (`Choice.enterOf`): a value of no use, `()`, whose frame's hole is
+  `void`, so it is a value with a frame as any choice's alternative is. Alone
+  in its leaf, that code is the leaf's path code instead (`$returnTail`).
+
+**Consumers in a group's own code (#283).** A call of a function with
+several values, the group's or another's, in a failure context of the
+group's code (an `if`'s conditions; the operand of `not`, `option{…}`,
+`logic{…}` or `first{…}`; the left of `or`) or in a `for` of it is no choice
+point of the group: that context consumes the call, taking its first success
+(or the `for` all its values) while the group's values are being taken. The group's code is a template inlined where it is
+consumed, so such a consumer would need the template inside itself. It is a
+consumer like any other instead, in a function of its own:
+- `inlineFns` (for a group taken lazily, one not computable) makes each
+  outermost one a function, `G$nestL_C` (`Choice.nestFns`), whose body is the
+  consumer as written: its clauses under `first{…}`, giving the names they
+  bind (an operand's value bound to a name, `valueOf`), or the `for`, giving
+  its value; then the final values of the group's `var`s they set, copied in
+  as `$in` parameters as `FirstLift`'s are. It has the group's effects,
+  `<decides>` for a condition's, and for a `for`'s when the `for` can fail
+  (its body fails it), which the noting elaboration notes too
+  (`$noteFails`). The group's code calls
+  it where the consumer was, a plain call, binds those names from its result
+  and sets those `var`s again. A `for` with such a call anywhere in it moves
+  whole, so a condition in its body with one moves with it.
+- There the call is compiled as any consumer compiles one: inlined, taken by
+  the lazy loop, or by `FirstLift`'s functions where it has effects; and the
+  group's code in it calls the same function again. So a group whose only
+  recursion went through such a consumer is no longer recursive and is
+  inlined as any function with several values; one that still is keeps the
+  group machine, and its code has no consumer of itself in it. The functions
+  are analysed again with the consumers made calls (`nestDone`), and checked
+  with their bodies as written (`checking`).
+- The function takes the names its clauses use that the group's code binds
+  (`Consumer.caps`), and the group's type parameters their types mention.
+  Their types, and those of what it gives, are the elaborator's: as for the
+  families of methods' uses, an elaboration notes them (`$noteTypes`, by
+  `nestKey`, `Requests.nested`, tier 1). Until then the group's functions
+  are kept with one value (`pending`), their calls as written, their bodies
+  for checking noting the types where the consumers are (`noteConsumers`;
+  calls of overloads' functions as written, `unpickOverloads`, for the
+  elaborator to pick again), and `Ctx.failabilityKnown` is false.
+- Effect-free groups computed at the call keep `F$all`, which takes such a
+  consumer as any of its `for`s does, so that programs that compiled before
+  compile byte for byte as before.
+
 Not yet (#283), each refused with a message, and the route each would take:
-- A choice whose values are of another type than the group's with a point
-  after it (`S := "a" | "bb"`, then `T[N - 1] + S.Length`): the frame loop
-  keeps one value slot, of the result type. Route: a slot per hole type,
-  each frame reading its hole from its own and writing the result type's.
-- A choice with code before it that is not literals or names, in one
-  alternative of several (`T(N - 1) | Tell("x", 1) + (1 | 2)`): that code
-  runs after the first choice and before the second, in that alternative
-  alone. Route: an alternative that is a continuation member entered
-  directly, with no hole (alone in its leaf it is that leaf's path code
-  already, `$returnTail`).
-- A point the normal form does not reach: in a condition (an `if` inside an
-  expression, `and`, `or`, `not`), a `set`'s value, a comparison's later
-  operand, a construction's field, a named argument, a loop. Route: more
-  cases of `frameOf?` (a `set` reads its old value before the point, as a
-  prefix), an `if`'s conditions as a member's path.
+- A construction of a class with a point in a field: the lifter keeps it
+  (`$noLift`), as the class's layout (its supers' fields first, an
+  interface's fields where each class places them, `<override>` defaults) is
+  known only to the elaborator (`TyEnv.fields`). Route: the field orders of
+  the classes a group's code constructs noted by an earlier elaboration, as
+  the consumers' types are (`Requests.nested`), or that layout computed
+  from the source by the elaborator's own rule, shared with it.
 
 With all of those, `F$all` would be needed by no shape and kept, if at all, only as
 an optimisation of effect-free ones. Deleting it (the owner's decision,
@@ -904,9 +1018,12 @@ refusals in `inlineMulti`, `checkEager` with its round of `Requests.lazy`,
 and `Requests.eager`. It would also change semantics: values on demand, so an
 infinite effect-free one stops where the first success is taken, and an
 error in a value never reached no longer stops the program. It first needs
-the lazy route to cover what only `F$all` does now: the choice points in
-sequence above that are not yet taken lazily, a recursive one calling a
-function with several values outside its group, polymorphic recursion in a
+the lazy route to cover what only `F$all` does now: the choice point above
+that is not yet taken lazily (a class's construction), a recursive one
+calling a function with several values outside its group other than in a
+consumer of its code (route: that function's non-recursive body inlined into
+the group's code before its normal form, so that its choices are the
+group's points, `liftPoints?` expanding its `$inline`), polymorphic recursion in a
 mutual group (`Requests.eager`), and an `any`-valued returning group whose tail
 erases its values (`erasesRecursive`).
 
@@ -2303,7 +2420,14 @@ clause's values; as a local from outside the later cast's branch, it
 leaves that branch at its own type, not the refined one, so it can be cast
 again. An object that may name type arguments a cast opens (the first
 cast's, when the refusal says it opens, `Refine.CastRefusal.opens`, or a
-later cast's, which may) is not: `after` could not name its type. A `for`'s clause past the moved clauses that uses `D` is cast again in the
+later cast's, which may) is not: `after` could not name its type. It is
+read again instead when it is read by fields that are no `var`s from the
+name of a cast `after` casts again (`Refine.pathRoot?`, `L := lit[P.L]`):
+`after` casts `P` again and then `P.L`, the same object (a class and the
+fields that are no `var`s of an object do not change), whose type there is
+what that cast gives (#250). As for a computed object, only when `after`
+is refused without it; when it is still refused, the error names the casts
+whose objects are neither. A `for`'s clause past the moved clauses that uses `D` is cast again in the
 same way where it uses it, at that place: a generator's source, a range's
 bounds, a binding's value (so its name stays bound), each alternative of a
 choice (lifted out of the clause first, `lift`), or else the clause itself;
@@ -2384,9 +2508,10 @@ other parameters differently) share one. Such a tag may differ between the
 trial of an enclosing cast's branch, which has the enclosing function's
 locals, its `var`s among them, and no type expected of the branch's value,
 and the function made from that branch, which has its captures as values
-and its result type; so in such a trial (`Ctx.inRefinedTrial`) a cast with
+and its result type; so in such a trial (`Ctx.trial`, a branch's) a cast with
 such a tag asks for no lift, and the function, elaborated in the next round,
-asks for it. (Asked for from both, as when every local and type variable in
+asks for it (`Ctx.keepsLifts`). A continuation's trial asks for no lift at
+all: the continuation's function has a scope of its own (`refineScope`). (Asked for from both, as when every local and type variable in
 scope was in the tag, each level of nesting in a `for`'s body lifted the
 casts inside it again, the earlier copies never called: 136 functions for 16
 levels instead of 16.) A nest of such casts takes one round per level;
@@ -2437,7 +2562,15 @@ An immediate choice continuation in a suspending caller keeps value copies
 and normal copy-out. Admission checks its typed calls and pending refining
 lifts for suspension. Its discovery trial is disposable: the moved body
 discovers locals and nested lifts in the helper, whose refinement scope
-keeps their storage metadata distinct from the original source frame.
+keeps their storage metadata distinct from the original source frame. So
+a continuation's trial asks for no refining lift (`Ctx.keepsLifts`), as
+only the helper's scope is the one used, and keeps the continuations it
+asks for, whose keys the helper computes alike; this holds in any caller,
+suspending or not, and the rest of the trial's state goes with the
+elaboration, which asking for the continuation makes not the last. (The
+trial in a suspending caller used to restore the whole state but its
+effects, which dropped the nested continuations too: each level of
+nesting took two more elaborations.)
 An accepted trial retains its heap-effect records for the enclosing
 source or refining lift. Discarding those records would incorrectly give
 that lift a computes-only signature. Waiting and unsuccessful trials
@@ -2495,6 +2628,30 @@ first parameter, so `.heap (.get k) [.local 0]` as for a method), and
 its callers pass none. The target gets those hidden fields as a class
 with an override below does. Its tests are keyed by all of each class's
 pins and open their arguments as `$ext i`, as a method's dispatch does.
+
+An interface has no hidden fields, and the classes below it hold their
+type arguments at places of their own, so a cast to an interface that
+opens its type arguments (#53, `c2[C]` for `C:container(u)` and `c2(t) :=
+interface(container([]t))`) cannot read them from one place. Nor can a cast
+to a type beside the object's (#351, `i1[I]` for `I:i2(u)`), whose type
+arguments `refiningCast?` relates to the object's through the classes and
+interfaces above both (each class below both reaches each of them at one
+instance), fresh otherwise. Both are chains (`castChains`): the branch is
+lifted as for any cast, but its function takes the values of the opened
+type arguments as a generic function takes any (`Lift.opened` is empty,
+and `Lift.target` too, as no class is cast to), and the `if` becomes a cast
+to each class below both that is topmost in its class chain there and may
+be the object (`castTops`), each a cast of its own, `if ($castAs… :=
+d[$castChain…]) then $refine…($castAs…, Y₁, …) else …`, ending in the
+`else`: one to a class with type parameters of its own reads them from its
+hidden fields as above, and the call of the branch's function passes their
+values on, at the type arguments that class gives `T` (the object as a
+`T`, inferred by `matchArg`'s upcast). The object is in a slot first; one
+that is no local is evaluated with a test of all the classes tested, as a
+dispatch's is. The branch is so compiled once, at the refinement the
+declarations give, whatever each class gives `T`; each class's cast is a
+small function of its own when it refines or opens. No class is pinned for
+the branch's lift; each class's cast pins its own target.
 
 ## Typing the heap
 

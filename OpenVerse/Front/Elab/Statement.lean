@@ -87,6 +87,13 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
       for n in ns do
         if let .ident q n := n then checkNewLocal ctx q n
       pure (⟨.lit .void, .void⟩, ctx)
+    | .app _ (.ident _ "$noteTypes") (.str _ [.text key] :: ns) false => do
+      -- (#283) a consumer in a recursive group's code, kept for checking
+      -- until its function of its own is made (`Choice.nestFns`): the types
+      -- of the names it takes and gives, as they are here
+      for n in ns.filterMap (fun | .ident _ n => some n | _ => none) do
+        if let some l := ctx.lookup n then noteNeeds { nested := [(key ++ n, l.ty.toSTy)] }
+      pure (⟨.lit .void, .void⟩, ctx)
     | .app p (.ident _ "$freeNames") (.ident _ f :: ns) false => do
       -- (#283) the names an inlined body uses from outside: not bound
       -- here, where they would mean something else

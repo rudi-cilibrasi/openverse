@@ -11,7 +11,8 @@
 # methods with several values from #310 (overridden from #328, of one name in unrelated classes from #283's
 # shared families), returns in functions with several values from #312,
 # and a choice after such a return's if, or in its value, from #318;
-# return frames (a recursive call with code after it) from #283.
+# return frames (a recursive call with code after it) from #283, and a generator's call of itself
+# in a failure context of its own code (a consumer of it there) from #283's nested consumers.
 """Random programs with choices INSIDE expressions (PR #234, phase 2), and an
 independent model written from docs/LANGUAGE.md's "Choice" section (not from
 scripts/gen-choice.py, and not from the lifting code).
@@ -80,11 +81,25 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
                   followed by a choice or by another call, a choice followed by a
                   call, a choice bound in a branch with code after it, #283; on
                   with frames otherwise)
+       notyped   (no choice of strings in a generator with a choice point after it,
+                  #283; on with seq otherwise)
+       noenter   (no alternative, one of several, with code before a choice in it,
+                  #283; on with seq otherwise)
+       nolifted  (no call of a generator of itself where the lifter takes it, after
+                  its bound choice: a named argument, a construction's field, a
+                  comparison's later operand, a set's value, an if's branch, or's
+                  right, #283; on with seq otherwise)
+       nonested  (no call of a generator of itself in a failure context of its own
+                  code, which consumes it: an if's condition, or's left, option{},
+                  not, logic{}, a for, #283; on with seq otherwise)
        noovw     (no overloads Ow of one name with one value or several, OwOne calling
                   the one with one value, OwR recursive, owc/owd's overloaded method Om,
                   #283's overloads picked in rounds; on in half the programs otherwise)
        noovm     (no second list, of one value, of a test's class's method with several
                   values; on in half the programs with mvm and meth otherwise)
+       nohm      (no test HetMethods: methods of one name of unrelated classes, called on the
+                  value of a choice whose alternatives are of those classes, #283, #335; on in
+                  a third of the programs otherwise)
 """
 import copy
 import os
@@ -169,6 +184,10 @@ def chk(v):
 
 class Fail(Exception):
     pass
+
+
+class ForBodyFail(Exception):
+    """(#283) a for's body failed: the for fails, not only that iteration."""
 
 
 # (a path that prints over OUT_MAX lines, a model that takes over EV_MAX steps, or one that
@@ -430,6 +449,13 @@ R17 = random.Random(seed * 1000003 + 391)
 # 1000, with nothing to undo. A generator of its own decides, so seeds keep their other programs.
 R18 = random.Random(seed * 1000003 + 2833)
 SHARED = METH and MVM and 'noshared' not in flags and R18.random() < 0.4
+# ---- #283, #335 (nohm turns it off): at times a test of its own, HetMethods, after the others,
+# calls Hm, a method of one name in two or three unrelated classes (each the root of a family of
+# its own when Hm has several values there, or an ordinary method), on the value of a choice whose
+# alternatives are of those classes, so the clauses after it are copied for each and the receiver's
+# class picks the family (gen_hetero_methods). A generator of its own decides, and another makes
+# the test, so seeds keep their other programs.
+HM = 'nohm' not in flags and random.Random(seed * 1000003 + 283335).random() < 0.34
 # ---- #312, flag rt (on with lazy; nort turns it off): a test's expression may call
 #   RT(RTa:int):int =
 #       RTy := RTa | RTa + 1 | RTa + 2
@@ -516,6 +542,45 @@ RVAR = random.Random(seed * 1000003 + 283286)
 # it, `else: Wb := (…); …; Wb + 1` (a `gblk`). The model is the same CPS inlining: the code after a
 # choice point runs on each of its values, the code before the next one once for each of them.
 RSEQ = random.Random(seed * 1000003 + 283287)
+# ---- #283, flag typed (on with seq; notyped turns it off): a <decides> generator's bound choice
+# of strings, `Ws := ("a" | "{Gz0[N - 1, A]}" | "bb")` (a call of itself in it, whose value the
+# string's code takes), with a choice point after it that reads `Ws.Length`, and an alternative
+# with a choice of strings in its expression, `(("a" | "bb").Length + 2)`: the code after a choice
+# whose values are not the generator's type; a stream of its own.
+RTY = random.Random(seed * 1000003 + 283288)
+# (and at times an empty string in place of one of those literals, `("" | "bb")`, `("" | "")`,
+# which has no type of its own in Verse Core: a stream of its own, drawn after RTY's, so that a
+# program is RTY's but for its empty strings)
+REMPTY = random.Random(seed * 1000003 + 283293)
+# ---- #283, flag enter (on with seq; noenter turns it off): an alternative, one of several, with
+# code before a choice in it, `Tell("sqN", 2) + (Gz0(N - 1, A) | 3)`: that code runs after the
+# generator's choice point and before the alternative's own, once for each time the alternative
+# is taken; a stream of its own.
+RENT = random.Random(seed * 1000003 + 283289)
+# ---- #283, flag lifted (on with seq; nolifted turns it off): after a generator's bound choice,
+# a statement with a call of itself where the lifter takes it. In a <decides> one's, guarded by N
+# so that its calls end: `or`'s right, `Wl := (N = 0 or Gz0[N - 1, A] > 1)`, a comparison's
+# later operand in it, `Wl := (N = 0 or 5 > Gz0[N - 1, A])`, an `if`'s branch, `Wl := (if (N > 0)
+# then Gz0[N - 1, A] else (1 | 5))`. In the block of another's else: a named argument,
+# `Wl := NA(N, ?P := Gz0(N - 1, A))`; a construction's field, in its type's order whatever the
+# written one, `Wl := PS(pt{Y := Gz0(N - 1, A), X := 2})`; `set Vl += Gz0(N - 1, A)`, its old
+# value read before the call, or `set Vl = Gz0(N - 1, A) + Vl`; an `if`'s branch. A stream of
+# its own.
+RLIFT = random.Random(seed * 1000003 + 283292)
+# ---- #283, flag nested (on with seq; nonested turns it off): a call of a generator of itself in a
+# failure context of its own code, which consumes it there, taking its first success (or a for all
+# its values) while the generator's own values are taken: an if's condition, `Wn := (if (N > lo,
+# Gz[N - 1, a] > k) then x else y)`; or's left, `Wn := (Gz[N - 1, a] > k or x)`; option{},
+# `Wn := (option{Gz[N - 1, a] > k}? or x)`; in a <decides> one, not and logic{} as clauses,
+# `not (Gz[N - 1, a] > k)`, `logic{Gz[N - 1, a] > k}?`; and a for over its values that sets a var
+# of the generator, `for (N > lo, Xn := Gz[N - 1, a]) { set Vn += Xn }`, in a <decides> one at times
+# with a body that may fail, `{ set Vn += Xn; Xn < k }`, which fails the for. Its place: the code after
+# the generator's bound choice (a <decides> one's), or after the choice bound in its else's block,
+# whose value then reads the result, with that choice's name at times in the call; or its clauses,
+# before its choice, guarded by N so that its calls end (an if with a print in each branch, or a
+# for with one in its body). The model is the same CPS: the context runs the call as it would
+# anywhere, each call's code taking its own in turn. A stream of its own.
+RNEST = random.Random(seed * 1000003 + 283293)
 SQN = [0]
 USED = set()     # (generator, in a for): the calls the tests make, for MVSEQ's statistics
 FRN = [0]
@@ -533,6 +598,10 @@ def ffresh():
     return f"fr{FRN[0]}"
 FRAMES = LAZY and 'noframes' not in flags and 'cf' not in flags
 SEQ = FRAMES and 'noseq' not in flags
+TYPED = SEQ and 'notyped' not in flags
+ENTER = SEQ and 'noenter' not in flags
+LIFTED = SEQ and 'nolifted' not in flags
+NEST = SEQ and 'nonested' not in flags
 REFUSED = [False]
 
 
@@ -823,8 +892,16 @@ def ub_e(e, n):
     if isinstance(e, tuple) and e and isinstance(e[0], str):
         if e[0] in ('gself', 'gcall'):
             return gub(e[1], n - 1)
+        if e[0] == 'slet' and e[1] == 'Wl' and e[2][0] in ('orx', 'ifx'):
+            # (#283, flag lifted: or's values its left's or its right's, an if's one branch's,
+            # so that a call guarded by N, which ends, has a bound that does not)
+            x = e[2]
+            return ub_e(x[1], n) + ub_e(x[2], n) if x[0] == 'orx' else ub_e(x[2], n) + ub_e(x[3], n)
         if e[0] == 'choice':
             return sum(ub_e(a, n) for a in e[1])
+        if e[0] == 'snest':
+            # (#283, flag nested: a consumer, one value whatever its call's)
+            return 1
         if e[0] == 'gblk':
             return sum(ub_e(a, n) for a in e[2]) * ub_e(e[3], n) * ub_e(e[4], n)
     if isinstance(e, (tuple, list)):
@@ -1031,6 +1108,14 @@ def gen_gfunc(i):
         f['val'] = ('gbif', conds, base, alts(True))
     if SEQ:
         seq_shapes(f, i, sc, ctr)
+    if TYPED:
+        typed_shapes(f, i, sc, ctr)
+    if ENTER:
+        enter_shapes(f, i, sc, ctr)
+    if LIFTED:
+        lifted_shapes(f, i, sc, ctr, stmts)
+    if NEST:
+        nested_shapes(f, i, sc, ctr, stmts)
     f['stmts'] = stmts
     f['lifted'] = lifted(f)
     CTX.update(ctrs=None, nofail=False, nochoice=False, noprint=False, fmax=None, take=None)
@@ -1094,6 +1179,180 @@ def seq_shapes(f, i, sc, ctr):
             last = ('bin', '+', seq_call(i, sc + ['Wb'], ctr), ('ref', 'Wb'))
         f['val'] = ('gbif', v[1], v[2], [('gblk', 'Wb', v[3], post, last)])
         f['seq'] = f.get('seq', set()) | {'branch-block'}
+
+
+def typed_shapes(f, i, sc, ctr):
+    """(#283, flag typed) choices of strings in generator f, made already, from RTY alone: its
+    bound choice of strings (a <decides> one), and an alternative with a choice of strings in
+    its expression."""
+    def call(a):
+        return ('gself', i, [('bin', '-', ('ref', 'N'), ('lit', 1)), a] + ([('ref', 'C')] if ctr else []))
+    def lit():
+        s = RTY.choice(['a', 'bb', 'ccc', 'dddd'])
+        return ('str', '' if REMPTY.random() < 0.3 else s)
+    v = f['val']
+    if f['decides'] and RTY.random() < 0.25:
+        strs = [lit() for _ in range(RTY.randint(1, 2))]
+        if RTY.random() < 0.5:
+            strs.insert(RTY.randint(0, len(strs)), ('sfmt', call(('ref', RTY.choice(sc)))))
+        v[1][:] = strs if len(strs) > 1 else strs + [lit()]
+        post = [('sprint', sqfresh())] if RTY.random() < 0.6 else []
+        n = ('slen', ('ref', 'Ws'))
+        if RTY.random() < 0.5:
+            last = ('choice', [('bin', '+', call(n), n), ('ref', 'N')])
+        else:
+            last = ('bin', '*', call(('ref', 'A')), n)
+        f['bound'] = ('Ws', post, last)
+        f['seq'] = f.get('seq', set()) | {'typed-choice'}
+    if RTY.random() < 0.2:
+        alts = v[1] if v[0] == 'gchoice' else v[3]
+        # (in the generator's own choice, not in a bound one, whose values
+        # the code after it takes)
+        if alts and alts[0][0] != 'gblk' and not f.get('bound'):
+            alts.insert(RTY.randint(0, len(alts)),
+                        ('bin', '+', ('slen', ('choice', [lit(), lit()])), ('lit', RTY.randint(0, 3))))
+            f['seq'] = f.get('seq', set()) | {'typed-expr'}
+
+
+def enter_shapes(f, i, sc, ctr):
+    """(#283, flag enter) an alternative, one of several, in generator f, made already, with code
+    before a choice of its own (RENT alone): a call, then a choice of a call of itself or of
+    values."""
+    v = f['val']
+    if RENT.random() < 0.25:
+        alts = v[1] if v[0] == 'gchoice' else v[3]
+        if alts and alts[0][0] != 'gblk' and not f.get('bound'):
+            a = ('ref', RENT.choice(sc)) if RENT.random() < 0.5 else ('lit', RENT.randint(0, 3))
+            inner = [('lit', RENT.randint(0, 4)), ('lit', RENT.randint(0, 4))]
+            if RENT.random() < 0.6:
+                inner[RENT.randint(0, 1)] = ('gself', i, [('bin', '-', ('ref', 'N'), ('lit', 1)), a] +
+                                             ([('ref', 'C')] if ctr else []))
+            # (the code before the choice a call that prints, or one of a function with no effects,
+            # which is still read once, before it)
+            pre = (('tell', sqfresh(), ('lit', RENT.randint(1, 3))) if RENT.random() < 0.6 else
+                   ('tw', ('lit', RENT.randint(0, 2)), a))
+            alts.insert(RENT.randint(0, len(alts)), ('bin', RENT.choice(['+', '*']), pre, ('choice', inner)))
+            f['seq'] = f.get('seq', set()) | {'enter'}
+
+
+def lifted_shapes(f, i, sc, ctr, stmts):
+    """(#283, flag lifted) after a generator's bound choice, a statement with a call of itself
+    where the lifter takes it (RLIFT alone): in a <decides> one's, guarded by N so that the
+    calls end (`or`'s right, a later comparison operand in it, an `if`'s branch); in the block of
+    another's else, where N - 1 is at least its base's (a named argument, a struct's field, a
+    `set`'s value, an `if`'s branch)."""
+    v = f['val']
+    blk = not f['decides'] and v[0] == 'gbif' and v[3] and v[3][0][0] == 'gblk'
+    # (more often in an else's block, which is rarer)
+    if RLIFT.random() >= (0.7 if blk else 0.25) or not (f['decides'] or blk):
+        return
+    a = ('ref', RLIFT.choice(sc)) if RLIFT.random() < 0.5 else ('lit', RLIFT.randint(0, 3))
+    call = ('gself', i, [('bin', '-', ('ref', 'N'), ('lit', 1)), a] + ([('ref', 'C')] if ctr else []))
+    lo = f['lo']
+    other = (('lit', RLIFT.randint(0, 3)) if RLIFT.random() < 0.5 else
+             ('choice', [('lit', RLIFT.randint(0, 3)), ('lit', RLIFT.randint(4, 7))]))
+    if f['decides']:
+        kind = RLIFT.choice(['cmp', 'if', 'or'])
+        base = ('cmp', ('ref', 'N'), [('=', ('lit', lo))])
+        if kind == 'cmp':
+            # (N = lo or K > call: the call a comparison's later operand, in or's right)
+            e = ('orx', base, ('cmp', ('lit', RLIFT.randint(1, 6)), [(RLIFT.choice(['>', '>=']), call)]))
+        elif kind == 'or':
+            e = ('orx', base, ('cmp', call, [(RLIFT.choice(['>', '>=']), ('lit', RLIFT.randint(0, 3)))]))
+        else:
+            e = (('ifx', [('filter', ('cmp', ('ref', 'N'), [('>', ('lit', lo))]))], call, other)
+                 if RLIFT.random() < 0.5 else
+                 ('ifx', [('filter', ('cmp', ('ref', 'N'), [('<=', ('lit', lo))]))], other, call))
+        st = ('slet', 'Wl', e)
+        x, post, last = f.get('bound') or ('Wf', [], ('ref', 'Wf'))
+    else:
+        kinds = (['na'] if NA else []) + (['cons'] if CB else []) + ['set', 'set=', 'if']
+        kind = RLIFT.choice(kinds)
+        if kind == 'na':
+            st = ('slet', 'Wl', ('na', ('ref', 'N'), [('P', call)], RLIFT.randint(0, 1)))
+        elif kind == 'cons':
+            st = ('slet', 'Wl', ('cons', ('lit', RLIFT.randint(0, 3)), call, RLIFT.random() < 0.5))
+        elif kind == 'if':
+            # (in the else, N > lo: either branch may be taken)
+            cond = [('filter', ('cmp', ('ref', 'N'), [(RLIFT.choice(['>', '<']), ('lit', RLIFT.randint(lo, lo + 2)))]))]
+            st = ('slet', 'Wl', ('ifx', cond, call, other) if RLIFT.random() < 0.5 else ('ifx', cond, other, call))
+        else:
+            if not any(c[0] == 'svar' and c[1] == 'Vl' for c in stmts):
+                stmts.append(('svar', 'Vl', ('lit', RLIFT.randint(0, 3))))
+            # (`set +=` reads the old value before the call, `set =` after it, from the var each
+            # value of it has set)
+            st = (('sset', 'Vl', '+=', call) if kind == 'set' else
+                  ('sset', 'Vl', '=', ('bin', '+', call, ('ref', 'Vl'))))
+        _, x, galts, post, last = v[3][0]
+    post = post + [st]
+    last = ('bin', '+', ('ref', 'Vl' if kind in ('set', 'set=') else 'Wl'), last)
+    if f['decides']:
+        f['bound'] = (x, post, last)
+    else:
+        v[3][0] = ('gblk', x, galts, post, last)
+    f['seq'] = f.get('seq', set()) | {'lifted-' + kind}
+
+
+def nested_shapes(f, i, sc, ctr, stmts):
+    """(#283, flag nested) a call of generator f of itself in a failure context of its own code,
+    which consumes it there (RNEST alone): after its bound choice (a <decides> one's) or after the
+    choice bound in its else's block, its value then reading the result; or in its clauses, guarded
+    by N so that its calls end."""
+    if RNEST.random() >= 0.35:
+        return
+    v = f['val']
+    blk = not f['decides'] and v[0] == 'gbif' and v[3] and v[3][0][0] == 'gblk'
+    lo = f['lo']
+    where = RNEST.choice(['clauses', 'after']) if (f['decides'] or blk) else 'clauses'
+    if where == 'after':
+        if f['decides']:
+            x, post, last = f.get('bound') or ('Wf', [], ('ref', 'Wf'))
+        else:
+            _, x, galts, post, last = v[3][0]
+        # (not a bound choice of strings, `Ws`, typed_shapes': the call's argument is an int)
+        names = sc + ([x] if x != 'Ws' else [])
+        kinds = ['if', 'or', 'opt', 'for'] + (['not', 'logic'] if f['decides'] else [])
+    else:
+        names = sc
+        kinds = ['if', 'for']
+    kind = RNEST.choice(kinds)
+    a = ('ref', RNEST.choice(names)) if RNEST.random() < 0.5 else ('lit', RNEST.randint(0, 3))
+    call = ('gself', i, [('bin', '-', ('ref', 'N'), ('lit', 1)), a] + ([('ref', 'C')] if ctr else []))
+    test = ('cmp', call, [(RNEST.choice(['>', '<', '>=', '<>']), ('lit', RNEST.randint(-1, 3)))])
+    guard = [('filter', ('cmp', ('ref', 'N'), [('>', ('lit', lo))]))] if where == 'clauses' else []
+    w, xn, vn = f"Wn{i}", f"Xn{i}", f"Vn{i}"
+
+    def val():
+        n = ('lit', RNEST.randint(0, 4))
+        return ('tell', sqfresh(), n) if where == 'clauses' or RNEST.random() < 0.4 else n
+    if kind == 'if':
+        st = ('slet', w, ('ifx', guard + [('filter', test)], val(), val()))
+    elif kind == 'or':
+        st = ('slet', w, ('orx', test, val()))
+    elif kind == 'opt':
+        st = ('slet', w, ('optor', [('filter', test)], val()))
+    elif kind == 'not':
+        st = ('sclause', ('not', [('filter', test)]))
+    elif kind == 'logic':
+        st = ('sclause', ('logic', [('filter', test)]))
+    else:
+        stmts.append(('svar', vn, ('lit', RNEST.randint(0, 3))))
+        pr = sqfresh() if RNEST.random() < 0.6 else None
+        # (a body that may fail, which fails the for and so the generator's value: a <decides> one's)
+        lim = RNEST.randint(1, 6) if f['decides'] and RNEST.random() < 0.4 else None
+        st = ('sfor', guard + [('bind', xn, call)], ('ref', vn), pr, lim)
+    st = ('snest', kind, st)
+    if where == 'clauses':
+        stmts.append(st)
+    else:
+        post = post + [st]
+        if kind in ('if', 'or', 'opt', 'for'):
+            last = ('bin', '+', ('ref', vn if kind == 'for' else w), last)
+        if f['decides']:
+            f['bound'] = (x, post, last)
+        else:
+            v[3][0] = ('gblk', x, galts, post, last)
+    f['seq'] = f.get('seq', set()) | {f'nested-{kind}'}
 
 
 FX_NODES = ('sprint', 'snext', 'tell', 'bprint', 'cnext', 'cadd', 'print', 'next', 'add', 'seti', 'setf')
@@ -1544,6 +1803,12 @@ def show(e):
     t = e[0]
     if t == 'lit':
         return str(e[1])
+    if t == 'str':
+        return f'"{e[1]}"'
+    if t == 'sfmt':
+        return '"{' + show(e[1]) + '}"'
+    if t == 'slen':
+        return f'{show(e[1])}.Length'
     if t == 'ref':
         return e[1]
     if t == 'tell':
@@ -1875,6 +2140,12 @@ def ev(e, st, k, mode):
         return k(e[1], st)
     if t == 'ref':
         return k(lookup(st, e[1]), st)
+    if t == 'str':
+        return k(e[1], st)
+    if t == 'sfmt':
+        return ev(e[1], st, lambda v, s: k(str(v), s), mode)
+    if t == 'slen':
+        return ev(e[1], st, lambda v, s: k(len(v), s), mode)
     if t == 'tell':
         def k2(v, s):
             s.out.append(e[1])
@@ -2263,6 +2534,31 @@ def run_body(stmts, val, st, k, mode):
         o = lookup(st, c[1]) + '.C'
         st.vars[o] += 1
         return nxt(st)
+    if t == 'snest':
+        # (#283: a consumer in a generator's code, as anywhere)
+        return run_body([c[2]] + stmts[1:], val, st, k, mode)
+    if t == 'sclause':
+        return run_clauses([c[1]], st, nxt, mode)
+    if t == 'sfor':
+        # (all the values its clauses give, what each iteration does kept, as any for's; a body
+        # that fails fails the for, LANGUAGE.md's reading, so the code it is in)
+        def kfor(s):
+            x = c[1][-1][1]
+            o = c[2][1]
+            s.vars[o] = chks(s.vars[o] + s.binds[x], s)
+            if c[3]:
+                s.out.append(c[3])
+            if c[4] is not None and not s.binds[x] < c[4]:
+                raise ForBodyFail()
+            return s
+        s0 = st.copy()
+        try:
+            st = run_clauses(c[1], s0, kfor, 'all')
+        except ForBodyFail:
+            raise Fail()
+        except Fail:
+            pass
+        return nxt(st)
     raise AssertionError(c)
 
 
@@ -2428,6 +2724,14 @@ def show_s(c):
         return show(c[1])[1:-1]
     if t == 'snext':
         return f"{c[1]}.Next()"
+    if t == 'snest':
+        return show_s(c[2])
+    if t == 'sclause':
+        return show_c(c[1])
+    if t == 'sfor':
+        body = (f"set {c[2][1]} += {c[1][-1][1]}" + (f'; Print("{c[3]}")' if c[3] else "") +
+                (f"; {c[1][-1][1]} < {c[4]}" if c[4] is not None else ""))
+        return f"for ({show_cl(c[1], ', ')}) {{ {body} }}"
     raise AssertionError(c)
 
 
@@ -2482,6 +2786,83 @@ def show_func(f):
         L += ["    defer:", f'        Print("{f["defer"]}")']
     L.append("    " + show(f['val']))
     return L
+
+
+def gen_hetero_methods(rng):
+    """(#283, #335) Hm in two or three unrelated classes, with several values or one, at times
+    overridden in a class below (whose override reaches the root's with (super:)), at times with
+    a second list that no call takes (so that hierarchy's lists have names of their own), the
+    classes at times below a base class without Hm; called on the value of a choice whose
+    alternatives are those classes' objects, each twice through HmDup or once as written (one at
+    least twice, so the alternatives have values of their own and the clauses after the choice
+    are copied for each): in a for, with a filter at times, in a for's body, with a later clause
+    that takes each alternative's own type (HmTag, overloaded by class), and, under the base
+    class (where the names the condition binds join), where the first success is taken.
+    Returns the declarations, the test and its output."""
+    n = rng.randint(2, 3)
+    base = rng.random() < 0.5
+    names = ['hma', 'hmb', 'hmc'][:n]
+    vals = {}
+    decls = (['hmbase := class:', '    Hk:int = 0'] if base else [])
+    kinds = [rng.choice(['multi', 'multi', 'one']) for _ in names]
+    if 'multi' not in kinds:
+        kinds[rng.randrange(n)] = 'multi'
+    below = {}
+    for c, kind in zip(names, kinds):
+        k1, k2 = rng.randint(1, 6), rng.randint(-3, 9)
+        decls.append(f"{c} := class{'(hmbase)' if base else ''}:")
+        if kind == 'multi':
+            decls.append(f"    Hm(Hx:int):int = Hx * {k1} | Hx + {k2}")
+            vals[c] = (lambda k1, k2: lambda x: [x * k1, x + k2])(k1, k2)
+        else:
+            decls.append(f"    Hm(Hx:int):int = Hx * {k1} + {k2}")
+            vals[c] = (lambda k1, k2: lambda x: [x * k1 + k2])(k1, k2)
+        if rng.random() < 0.3:
+            decls.append("    Hm(Hs:string):int = Hs.Length")
+        if kind == 'multi' and rng.random() < 0.35:
+            k3 = rng.randint(1, 5)
+            decls += [f"{c}s := class({c}):", f"    Hm<override>(Hx:int):int = Hx - {k3} | (super:)Hm(Hx)"]
+            vals[c + 's'] = (lambda k3, up: lambda x: [x - k3] + up(x))(k3, vals[c])
+            below[c] = c + 's'
+    decls.append("HmDup(V:t where t:type):t = V | V")
+    decls += [f'HmTag(V:{c}):string = "{c}"' for c in names]
+
+    def alts():
+        """a choice of receivers: its source, and the objects' classes (static, and the root's for HmTag)"""
+        cs = [rng.choice(names) for _ in range(rng.randint(2, 3))]
+        twice = [rng.random() < 0.6 for _ in cs]
+        if not any(twice):
+            twice[rng.randrange(len(cs))] = True
+        src, objs = [], []
+        for c, t in zip(cs, twice):
+            cl = below[c] if c in below and rng.random() < 0.5 else c
+            src.append(f"HmDup({cl}{{}})" if t else f"{cl}{{}}")
+            objs += [(cl, c)] * (2 if t else 1)
+        return "(" + " | ".join(src) + ")", objs
+    test, out = ["HetMethods():void ="], []
+    for _ in range(rng.randint(2, 4)):
+        forms = ['for', 'filter', 'body', 'tag'] + (['first'] if base else [])
+        form = rng.choice(forms)
+        src, objs = alts()
+        x = rng.randint(-2, 6)
+        t = rng.randint(-2, 12)
+        if form == 'for':
+            test.append(f'    for (A := {src}, X := A.Hm({x})) {{ Print("h {{X}}") }}')
+            out += [f"h {v}" for cl, _ in objs for v in vals[cl](x)]
+        elif form == 'filter':
+            test.append(f'    for (A := {src}, X := A.Hm({x}), X > {t}) {{ Print("g {{X}}") }}')
+            out += [f"g {v}" for cl, _ in objs for v in vals[cl](x) if v > t]
+        elif form == 'body':
+            test.append(f'    for (A := {src}) {{ for (X := A.Hm({x})) {{ Print("b {{X}}") }} }}')
+            out += [f"b {v}" for cl, _ in objs for v in vals[cl](x)]
+        elif form == 'tag':
+            test.append(f'    for (A := {src}, X := A.Hm({x}), T := HmTag(A)) {{ Print("t {{X}} {{T}}") }}')
+            out += [f"t {v} {c}" for cl, c in objs for v in vals[cl](x)]
+        else:
+            test.append(f'    if (A := {src}, X := A.Hm({x}), X > {t}) {{ Print("f {{X}}") }} else {{ Print("f none") }}')
+            first = next((v for cl, _ in objs for v in vals[cl](x) if v > t), None)
+            out.append("f none" if first is None else f"f {first}")
+    return decls, test, out
 
 
 def gen_incomplete_if(rng):
@@ -2796,6 +3177,12 @@ for ti in range(NT):
     tests.append(name)
     out += [f"== {name}"] + tout
 
+if HM and not OVERFLOW[0] and not REFUSED[0]:
+    hm_decls, hm_test, hm_out = gen_hetero_methods(random.Random(seed * 1000003 + 283336))
+    lines += hm_decls + hm_test
+    tests.append("HetMethods")
+    out += ["== HetMethods"] + hm_out
+
 if BIF and not OVERFLOW[0] and not REFUSED[0]:
     incomplete_src, incomplete_out = gen_incomplete_if(random.Random(seed * 1000003 + 283))
     lines += incomplete_src
@@ -2868,7 +3255,9 @@ if os.environ.get('MVSEQ'):
     # for or where the first success is taken, with effects run as a function of its own or not)
     used = [(k, 'for' if isfor else ('first-lifted' if GFUNCS[i]['lifted'] else 'first'))
             for i, isfor in sorted(USED) for k in sorted(GFUNCS[i].get('seq', ()))]
-    print(f"seq {sum(1 for f in GFUNCS if f.get('seq'))} " + " ".join(sorted({f"{k}/{c}" for k, c in used})), file=sys.stderr)
+    made = sorted({k for f in GFUNCS for k in f.get('seq', ())})
+    print(f"seq {sum(1 for f in GFUNCS if f.get('seq'))} " + " ".join(sorted({f"{k}/{c}" for k, c in used})) +
+          f" made={','.join(made)}", file=sys.stderr)
 if os.environ.get('MVSTATS'):
     print(f"stats gens={len(GFUNCS)} gfor={STATS['gfor']} gfirst={STATS['gfirst']} gback={STATS['gback']} lfirst={STATS['lfirst']} lback={STATS['lback']} lmeth={STATS['lmeth']}", file=sys.stderr)
 if SKIPRET[0]:

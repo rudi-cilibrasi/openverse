@@ -299,6 +299,18 @@ structure ConstructHint where
   aliases : List (String × Ty)
   ty : Ty
 
+/-- What a trial elaborates (#243, #335, #453): code whose elaboration is
+    discarded, as the next elaboration compiles it in a function of its own
+    made from what this one asks for. -/
+inductive Trial where
+  /-- A refining cast's branch, compiled in the function made from it,
+      which keeps the branch's continuation scope (`Ctx.refineScope`). -/
+  | branch
+  /-- The clauses after a composed choice (and a `for`'s body), compiled in
+      their continuation, which has a continuation scope of its own. -/
+  | continuation
+  deriving BEq, Repr, Inhabited
+
 structure Ctx where
   /-- How many retries without an expected type enclose this point: a later
       branch is elaborated against the first's type, else on its own (to
@@ -371,11 +383,12 @@ structure Ctx where
   /-- A moved continuation's casts have fresh capture/storage metadata,
       independently of the class-copy tag and continuation sharing keys. -/
   refineScope : String := ""
-  /-- In the branch of a refining cast elaborated for its type and effects
-      only (#243): the next elaboration calls the function made from it
-      instead, where the casts inside it are elaborated again, and the lifts
-      whose tags depend on the context (`refineTagOf`) are asked for. -/
-  inRefinedTrial : Bool := false
+  /-- The trial this code is elaborated in, if any. A request made in a
+      trial is kept only where the function the code is compiled in makes
+      the same one (`Ctx.keepsLifts`); that function makes the others in the
+      next elaboration. Inside a continuation's trial, every trial is the
+      continuation's (`Ctx.withTrial`), as all of its code moves with it. -/
+  trial : Option Trial := none
   /-- In a method `c.M` (or `c.(r:)M`): `M` (or `(r:)M`), for `(super:)`. -/
   selfMethod : Option String := none
   /-- In a constructor's items (the function `K$init`, #72): no `return`. -/
@@ -478,6 +491,12 @@ structure Requests where
       has several values, by its place: the overload it takes (`F$ovK`),
       whose own function it calls (`Choice.inlineMulti`). -/
   overloads : List (Pos × String) := []
+  /-- (#283) For each consumer in a recursive group's code of a call of a
+      function with several values, the types of the names it takes from
+      that code and gives it (`Choice.nestKey`), which its function of its
+      own (`Choice.nestFns`) is made with; and for a `for` that can fail,
+      `$fails`. -/
+  nested : List (String × STy) := []
   /-- Functions wanted as values at closed function types no class of
       theirs gives (#214): a class for each. -/
   fns : List (String × Ty) := []
@@ -511,6 +530,7 @@ def Requests.merge (a b : Requests) : Requests where
   lazy := mergeByKey id a.lazy b.lazy
   families := mergeByKey id a.families b.families
   overloads := mergeByKey id a.overloads b.overloads
+  nested := mergeByKey (·.1) a.nested b.nested
   fns := mergeByKey id a.fns b.fns
   methods := mergeByKey (·.key) a.methods b.methods
   subtypes := SubtypeEvidence.mergeRequests a.subtypes b.subtypes
@@ -528,6 +548,7 @@ def Requests.without (r old : Requests) : Requests where
   lazy := dropByKey id r.lazy old.lazy
   families := dropByKey id r.families old.families
   overloads := dropByKey id r.overloads old.overloads
+  nested := dropByKey (·.1) r.nested old.nested
   fns := dropByKey id r.fns old.fns
   methods := dropByKey (·.key) r.methods old.methods
   subtypes := dropByKey SubtypeEvidence.declarationName r.subtypes old.subtypes
@@ -536,7 +557,8 @@ def Requests.without (r old : Requests) : Requests where
   witnesses := dropByKey id r.witnesses old.witnesses
 
 def Requests.isEmpty (r : Requests) : Bool :=
-  r.eager.isEmpty && r.lazy.isEmpty && r.families.isEmpty && r.overloads.isEmpty && r.fns.isEmpty && r.methods.isEmpty &&
+  r.eager.isEmpty && r.lazy.isEmpty && r.families.isEmpty && r.overloads.isEmpty && r.nested.isEmpty &&
+    r.fns.isEmpty && r.methods.isEmpty &&
     r.casts.isEmpty && r.loops.isEmpty && r.witnesses.isEmpty && r.subtypes.isEmpty
 
 /-- A lazily taken call where the first success is taken (#246): its
@@ -689,6 +711,8 @@ structure LoopGen where
       each one's hole, lives and code; and the type of the continuation
       they are pushed on, when there are any. -/
   frames : List (String × List String × SExpr) := []
+  /-- Each frame's hole's and code's types, when not the result type. -/
+  frameTys : List (Option Ty × Option Ty) := []
   kTy : Option Ty := none
   /-- (#283) With continuation members: the flag a value sets when it comes
       to a choice point in a member's code, then breaking out of the
@@ -1312,7 +1336,7 @@ def Ctx.rootsOf (ctx : Ctx) (c m : String) : List String :=
 def Ctx.failabilityKnown (ctx : Ctx) : EM Bool := do
   let st ← get
   return st.needs.fns.isEmpty && st.needs.methods.isEmpty && ctx.types.familySites.isEmpty &&
-    ctx.types.overloadSites.isEmpty && !ctx.typeOnly
+    ctx.types.overloadSites.isEmpty && ctx.types.nestedSites.isEmpty && !ctx.typeOnly
 
 /-- (#283) A use `R.M` at `p` whose family of methods only the class of
     `R` tells, one of `TyEnv.familySites`: the root of `M` above that class
@@ -1626,6 +1650,44 @@ def TyEnv.viewFits (env : TyEnv) (a b : Ty) : Option (List Nat × Bool) :=
     some (fits, (VTy.ref fits as).sub (.vref es bs))
   | _, _ => none
 
+/-- `e` gives no value: it breaks, returns, fails or is `Err()` (after
+    whatever it does first), so Verse Core checks it against every type. -/
+partial def _root_.OpenVerse.Expr.noValue : Expr → Bool
+  | .brk | .ret _ | .prim .fail [] | .prim .userErr [] => true
+  | .seq _ b => b.noValue
+  | .ite _ t e => t.noValue && e.noValue
+  | _ => false
+
+/-- Verse Core infers no type for `e` (`tc e none` is `none`) though it
+    checks against some: an empty literal (`""`, `array{}`, `map{}`, `false`
+    as an empty option) has every type of its shape, code that gives no
+    value every type, and a construct that `tc` types from its parts when it
+    infers (an `if`'s branches, a sequence's last expression, an array's
+    first element, a tuple's elements, a comparison's left operand, …) none
+    when they have none. -/
+partial def _root_.OpenVerse.Expr.untyped : Expr → Bool
+  | .lit (.ref _) => false
+  | .lit v => (litTy v).isNone
+  | .seq _ b => b.untyped
+  | .ite _ t e => t.untyped && e.untyped
+  -- (a body that gives no value is checked at `void`)
+  | .forE _ _ _ b => b.untyped && !b.noValue
+  | .prim .mkArr es => (es.head?.map Expr.untyped).getD true
+  | .prim .mkTup es => es.any Expr.untyped
+  | .prim .mkSome [a] | .prim .query [a] | .prim .eq [a, _] | .prim .ne [a, _] => a.untyped
+  | .prim .concat [a, b] => a.untyped && b.untyped
+  | e => e.noValue
+
+/-- `r` where Verse Core infers a type instead of checking one: the operand
+    of `.Length`, an index, a projection or a flattening, a statement or a
+    condition whose value nothing takes. A value with no type of its own
+    there (`Expr.untyped`: `""`, `if (C?) then "" else ""`, a tuple with
+    one) goes through a temporary of the type it was elaborated at; any
+    other code is as it is (code that gives no value has every type). -/
+def inferable (r : R) : EM Expr := do
+  if !r.e.untyped || r.e.noValue then return r.e
+  return .assign (← fresh r.ty) r.e
+
 /-- Convert a value `e` of type `a` to the supertype `b`, when `a` is a class
     below the class or interface `b`, or an array or option of such (arrays
     and options are covariant): the options of the classes below `a` move to
@@ -1662,8 +1724,8 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
   match a, b with
   -- `int` is a subtype of `rational` (#116): `X` is `X / 1`
   | .int, .rational => return some (.prim .mkTup [e, .lit (.int 1)])
-  -- Every value can be erased or discarded, including within containers.
-  | _, .any | _, .void => return some (.seq e (.lit .void))
+  -- Every value can be erased or discarded, including within containers (#138).
+  | _, .any | _, .void => return some (.seq (← inferable ⟨e, a⟩) (.lit .void))
   -- a refinement is its base (#136); the base is the refinement only for a
   -- literal that meets its conditions (else a cast, `age[X]`)
   -- (a refinement within another's interval is one of it, #143)
@@ -1781,7 +1843,7 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
     let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push target })
     return .assign x (.seq r.e (.prim .userErr []))
   if r.ty == target || r.ty == .never then return r.e
-  if target == .void then return .seq r.e (.lit .void)
+  if target == .void then return .seq (← inferable r) (.lit .void)
   match ← convert (← get).env r.e r.ty target with
   | some e =>
     -- a typed temporary: the checker cannot infer the type of an empty option

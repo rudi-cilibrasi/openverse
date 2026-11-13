@@ -41,6 +41,11 @@ The model:
     a choice followed by a call, two calls in sequence in an if's branch; the
     code between two points runs once for each value of the first, and a
     call of itself is a generator of its own there too;
+  * a call of itself in a failure context of its own code (#283): an if's
+    condition takes its first success, a for all its values, while its own
+    values are taken, as anywhere; its only recursion is then through that
+    context, so it is inlined, as a function recursive only through another
+    that consumes it is;
   * early and terminal source returns yield the same ordered values as
     explicit conditional tails, ending only their current invocation;
   * methods may infer their own type parameters independently of receiver
@@ -64,6 +69,8 @@ R387 = None
 RFrame = None
 # (#283: choice points in sequence in a lazy one, LSq, LSc, LSb; a stream of its own)
 RSeq = None
+# (#283: a call of itself in its own if's condition or for, LNc, LNf; a stream of its own)
+RNest = None
 # (#392: a named parameter with a default; a generator of its own decides, so seeds keep their
 # other programs)
 R392 = None
@@ -396,6 +403,18 @@ d{n}({child_tps}) := class({parent}):{extra_field}
             self.src = ("%s(X:t, Y:t, N:int where t:type)<transacts>:t =\n"
                         "    if (N <= 0 or N > 2) then X else:\n        Z := %s(Y, X, N - 1)\n        Print(\"%s {N}\")\n"
                         "        W := %s(Z, Y, N - 1)\n        W | Z") % (n, n, n, n)
+        elif k == "LNc":
+            # (#283: a call of itself in its own if's condition, which takes its first success;
+            # its only recursion, so it is inlined)
+            self.path = "inlined"; self.params = [("X", "t"), ("Y", "t"), ("N", "int")]; self.decides = True; self.fx = True
+            self.src = ("%s(X:t, Y:t, N:int where t:type)<transacts><decides>:t =\n"
+                        "    N > 0\n    Print(\"%s {N}\")\n    if (Z := %s[Y, X, N - 1]) then (Z | X) else Y") % (n, n, n)
+        elif k == "LNf":
+            # (#283: a for over a call of itself in its own code, which takes all its values)
+            self.path = "inlined"; self.params = [("X", "t"), ("Y", "t"), ("N", "int")]; self.decides = True; self.fx = True
+            self.src = ("%s(X:t, Y:t, N:int where t:type)<transacts><decides>:t =\n"
+                        "    N > 0\n    var C:int = 0\n    for (Z := %s[Y, X, N - 1]) { set C += 1 }\n"
+                        "    Print(\"%s {N} {C}\")\n    X | Y") % (n, n, n)
         elif k == "LCmp":
             self.path = "lazy"; self.params = [("A", "arr"), ("X", "t"), ("I", "int")]; self.decides = True; self.cmp = True
             self.src = ("%s(A:[]t, X:t, I:int where t:subtype(comparable))<decides>:t =\n"
@@ -578,6 +597,22 @@ d{n}({child_tps}) := class({parent}):{extra_field}
             return call({"X": a["Y"], "Y": a["X"], "N": a["N"] - 1}, z) + [back,
                     ("dyn", lambda env: call({"X": env[z], "Y": a["Y"], "N": a["N"] - 1}, w)),
                     ("dyn", lambda env: [("choice", [[("val", var, env[w])], [("val", var, env[z])]])])]
+        if k == "LNc":
+            # (the condition a first-success context of its own: its first success kept, Z its
+            # value; else the else branch, Y, what it did undone)
+            if a["N"] <= 0: return [("cond", False)]
+            z = var + "z"
+            inner = self.expand({"X": a["Y"], "Y": a["X"], "N": a["N"] - 1}, z)
+            return [back, ("first", inner, z,
+                           lambda zv: [("choice", [V(zv), V(a["X"])])], V(a["Y"]))]
+        if k == "LNf":
+            # (the for takes every value, each iteration's effects kept; then the print, X | Y)
+            if a["N"] <= 0: return [("cond", False)]
+            z = var + "z"
+            inner = self.expand({"X": a["Y"], "Y": a["X"], "N": a["N"] - 1}, z)
+            return [("count", inner, var + "c"),
+                    ("dyn", lambda env: [("print", "%s %d %d" % (self.name, a["N"], env[var + "c"])),
+                                         ("choice", [V(a["X"]), V(a["Y"])])])]
         if k == "LIf":
             if a["N"] < 0: return [("cond", False)]
             if a["N"] > 0:
@@ -623,6 +658,18 @@ class Machine:
             elif op == "dyn":
                 more = ins[1](env)
                 return self.run(more, 0, env, lambda e, s2, seq=seq, i=i: self.run(seq, i + 1, e, k, mode, s2), mode, seg)
+            elif op == "first":
+                # (#283: a first-success context of its own, as an if's condition: then's code with
+                # its value, else's when it has none)
+                _, inner, z, then, other = ins
+                got = self.first(inner, dict(env))
+                more = then(got[z]) if got is not None else other
+                return self.run(more, 0, env, lambda e, s2, seq=seq, i=i: self.run(seq, i + 1, e, k, mode, s2), mode, seg)
+            elif op == "count":
+                # (#283: a for over every value, what each iteration does kept: their number)
+                n = [0]
+                self.forall(ins[1], lambda e: n.__setitem__(0, n[0] + 1), dict(env))
+                env = dict(env); env[ins[2]] = n[0]
             elif op in ("choice", "choice2"):
                 if op == "choice":
                     alts = ins[1]
@@ -662,13 +709,14 @@ class Machine:
 # ---------------------------------------------------------------- the program
 class Gen:
     def __init__(self, seed):
-        global R, R387, R392, RMethod, SHARED, RFrame, RSeq
+        global R, R387, R392, RMethod, SHARED, RFrame, RSeq, RNest
         R = random.Random(seed)
         R387 = random.Random(seed * 1000003 + 387)
         R392 = random.Random(seed * 1000003 + 392)
         RMethod = random.Random(seed * 1000003 + 283041)
         RFrame = random.Random(seed * 1000003 + 283283)
         RSeq = random.Random(seed * 1000003 + 283287)
+        RNest = random.Random(seed * 1000003 + 283293)
         SHARED = random.Random(seed * 1000003 + 2834).random() < 0.4
         self.seed = seed
         self.prods = []
@@ -949,6 +997,7 @@ class Gen:
         lazy = R.choice(kinds_l)
         if RFrame.random() < 0.3: lazy = "LFr" if RFrame.random() < 0.5 else "LFp"
         if RSeq.random() < 0.3: lazy = RSeq.choice(["LSq", "LSc", "LSb"])
+        if RNest.random() < 0.3: lazy = RNest.choice(["LNc", "LNf"])
         self.producer(lazy); self.producer(R.choice(kinds_e))
         for _ in range(R.randint(0, 2)):
             self.producer(R.choice(kinds_i + kinds_l + kinds_e))
@@ -959,6 +1008,9 @@ class Gen:
         self.method_dispatch()
         self.recursive_named()
         self.mutual_generators()
+        # (#283: a stream of its own, so seeds without it keep their programs)
+        if random.Random(self.seed * 1000003 + 283290).random() < 0.3:
+            self.mutual_sequence()
         if SHARED:
             self.main.append('Print("plain {plainvals{}.Vals()}")')
             self.m.out.append("plain 0")
@@ -1293,6 +1345,45 @@ class Gen:
             self.main.append(f'Print("cont written {{{written}({literal}).Length}}")')
             count = sum(a <= bound and b > cut for a in range(1, 5) for b in range(1, 5))
             self.m.out.append(f"cont written {count}")
+
+    def mutual_sequence(self):
+        """(#283) A generic mutual group whose second member is called only from the code after a
+        choice point in the first (a continuation member's code), so its type instance is found
+        there: A's values are its call of itself's, then the tuple of its arguments, each followed
+        by a print, then B's values on it and it; B's the swapped tuple, then A's on it."""
+        rng = random.Random(self.seed * 1000003 + 283291)
+        a, b = self.fresh('SeqA'), self.fresh('SeqB')
+        n, cut = rng.randint(1, 2), rng.randint(0, 25)
+        (xs, xv), (ys, yv) = rng.choice([(('"s"', 's'), ('7', 7)), (('7', 7), ('"s"', 's'))])
+        self.paths.add('lazy')
+        self.consumers.append(f'''{a}(X:t, Y:u, N:int where t:type, u:type)<transacts><decides>:tuple(t, u, int) =
+    N > 0
+    Z := {a}[X, Y, N - 1] | (X, Y, N)
+    Print("seq a {{N}} {{Z(2)}}")
+    {b}[Z(1), Z(0), N - 1] | Z
+{b}(Y:v, X:w, M:int where v:type, w:type)<transacts><decides>:tuple(w, v, int) =
+    M >= 0
+    (X, Y, M * 10) | {a}[X, Y, M]''')
+        # (each call a generator of its own: what came before it stays when its clauses fail)
+        def seq_a(x, y, k, var):
+            if k <= 0:
+                return [("cond", False)]
+            z = var + "z"
+            def after(env):
+                zv = env[z]
+                return [("print", f"seq a {k} {zv[2]}"),
+                        ("choice", [[("choice", [seq_b(zv[1], zv[0], k - 1, var)])], [("val", var, zv)]])]
+            return [("choice", [[("choice", [seq_a(x, y, k - 1, z)])], [("val", z, (x, y, k))]]), ("dyn", after)]
+        def seq_b(y, x, m, var):
+            if m < 0:
+                return [("cond", False)]
+            return [("choice", [[("val", var, (x, y, m * 10))], [("choice", [seq_a(x, y, m, var)])]])]
+        m = self.m
+        self.main += [f'for (V := {a}[{xs}, {ys}, {n}]) {{ Print("seq got {{V(0)}} {{V(1)}} {{V(2)}}") }}',
+                      f'if (V := {a}[{xs}, {ys}, {n}], V(2) >= {cut}) then Print("seq first {{V(0)}} {{V(1)}} {{V(2)}}") else Print("seq none")']
+        m.forall([("choice", [seq_a(xv, yv, n, "SQ")])], lambda e: m.out.append(f"seq got {e['SQ'][0]} {e['SQ'][1]} {e['SQ'][2]}"))
+        e = m.first([("choice", [seq_a(xv, yv, n, "SQ")]), ("test", lambda env: env["SQ"][2] >= cut)])
+        m.out.append("seq none" if e is None else f"seq first {e['SQ'][0]} {e['SQ'][1]} {e['SQ'][2]}")
 
     def mutual_generators(self):
         """Depth-first tree model with separate item and value transactions."""

@@ -527,6 +527,7 @@ kinds=(
   nested-casts-for-state
   nested-casts-for-value
   nested-casts-suspends
+  nested-for-returns
   open-function-first
   open-function-for
   open-tuple-first
@@ -540,6 +541,10 @@ kinds=(
   own-method-for
   recursive-frame-first
   recursive-frame-for
+  recursive-if-first
+  recursive-if-for
+  recursive-nested-first
+  recursive-nested-for
   recursive-sequence-first
   recursive-sequence-for
   recursive-sequence-calls-first
@@ -571,6 +576,7 @@ kinds=(
   suspends-return
   suspends-return-generic
   suspends-return-lazy
+  trial-cast-clauses
   tuple-super-failure
   tuple-super-first
   tuple-super-for
@@ -808,6 +814,42 @@ if kind.startswith('castclause-'):
         call = f'Run(H, {ys})'
     print('Main()<transacts>:void =\n    H := cell{}\n    Y:pair(int, int) = dup(int){A := 1, B := 2}')
     print(f'    Print("{{{call}}} {{H.N}}")')
+    sys.exit(0)
+if kind == 'trial-cast-clauses':
+    # (#243, #453) refining casts as clauses after two refining choices, in a
+    # consumer taking its first success: each cast is lifted once, in the
+    # continuation's function, and not again in the trial that asks for it
+    # (whose scope is not the continuation's, so the copy was never called)
+    n = count
+    print('pair(a:type, b:type) := class:\n    A:a\n    B:b')
+    print('dup(t:type) := class(pair(t, t)):\n    C:int = 4')
+    qs = ', '.join(f'Q{i}:pair(c{i}, d{i})' for i in range(n))
+    qts = ', '.join(f'c{i}:type, d{i}:type' for i in range(n))
+    casts = ', '.join(f'E{i} := dup[Q{i}]' for i in range(n))
+    total = ' + '.join(f'E{i}.C' for i in range(n))
+    print(f'Run(P:pair(a, b), {qs} where a:type, b:type, {qts}):int =')
+    print(f'    if (W := if (D := dup[P]) then (D.C | D.C + 1) else 0, V := if (F := dup[P]) then (F.C * 10 | F.C * 100) else 0, {casts}, W + V > 50) then W + V + {total} else -1')
+    ys = ', '.join(['Y'] * n)
+    yz = ', '.join(['Y'] * (n - 1) + ['Z'])
+    print('Main():void =\n    Y:pair(int, int) = dup(int){A := 1, B := 2}\n    Z:pair(int, int) = pair(int, int){A := 1, B := 2}')
+    print(f'    Print("{{Run(Y, {ys})}} {{Run(Z, {ys})}} {{Run(Y, {yz})}}")')
+    sys.exit(0)
+if kind == 'nested-for-returns':
+    # (#335, #437) fors nested `count` deep, each with a refining choice as
+    # its clause, and a return from the innermost body: each for's
+    # continuation, whose key names the return's local, is made once
+    n = count
+    print('pair(a:type, b:type) := class:\n    A:a\n    B:b')
+    print('dup(t:type) := class(pair(t, t)):\n    C:int = 4')
+    tps = ', '.join(f'a{i}:type, b{i}:type' for i in range(n))
+    ps = ', '.join(f'P{i}:pair(a{i}, b{i})' for i in range(n))
+    body = ''.join('    ' * (i + 1) + f'for (V{i} := if (D := dup[P{i}]) then (D.C | D.C + 1) else 0):\n' for i in range(n))
+    body += '    ' * (n + 1) + 'return ' + ' + '.join(f'V{i}' for i in range(n)) + '\n'
+    print(f'Run({ps} where {tps}):int =\n{body}    -1')
+    # (all of the casts succeed; then the last one fails)
+    args = lambda last: ', '.join(['Y'] * (n - 1) + [last])
+    print('Main():void =\n    Y:pair(int, int) = dup(int){A := 1, B := 2}\n    Z:pair(int, int) = pair(int, int){A := 1, B := 2}')
+    print(f'    Print("{{Run({args("Y")})}} {{Run({args("Z")})}}")')
     sys.exit(0)
 if kind.startswith('nested-casts-'):
     # (#243) refining casts each in the branch of the one before: each one's
@@ -1585,6 +1627,46 @@ if kind.startswith('recursive-frame-'):
     else:
         print('Main()<transacts>:void = Print("{(for (X := F[2], X > 100): X).Length}")')
     sys.exit(0)
+if kind.startswith('recursive-if-'):
+    # (#283) `if`s in sequence, each with a call of itself in a branch and
+    # code after it that reaches the next: the code after each is its
+    # leaves' one frame, in its first leaf only, not copied into each leaf
+    steps = [f'    X{i + 1} := (if (N > {i % 3}) then F[N - 1] + X{i} else (X{i} | X{i} * {i + 2}))\n'
+             f'    Print("x {{X{i + 1}}}")' for i in range(count)]
+    body = '\n'.join(steps)
+    print(f'''F(N:int)<transacts><decides>:int =
+    Print("f {{N}}")
+    N > 0
+    X0 := F[N - 1] | N
+{body}
+    X{count}''')
+    if kind.endswith('first'):
+        print('Main()<transacts>:void = if (X := F[2], X > 100) then Print("{X}") else Print("none")')
+    else:
+        print('Main()<transacts>:void = Print("{(for (X := F[2], X > 100): X).Length}")')
+    sys.exit(0)
+if kind.startswith('recursive-nested-'):
+    # (#283) conditions in sequence, each taking the first success of a call
+    # of the function itself, a consumer of it in its own code: each is a
+    # function of its own, called where it was, so the function's code has
+    # one call for each. Each such function is a consumer of the group as any
+    # is, with the group's code compiled into it (a FirstLift function where
+    # it has effects), so the code grows with the consumers times the group's
+    # code: about 2.6x from 4 to 8 consumers
+    steps = [f'    X{i + 1} := (if (F[N - 1] > X{i} + {i % 3}) then X{i} + 1 else X{i} * 2)\n'
+             f'    Print("x {{X{i + 1}}}")' for i in range(count)]
+    body = '\n'.join(steps)
+    print(f'''F(N:int)<transacts><decides>:int =
+    Print("f {{N}}")
+    N > 0
+    X0 := F[N - 1] | N
+{body}
+    X{count}''')
+    if kind.endswith('first'):
+        print('Main()<transacts>:void = if (X := F[2], X > 100) then Print("{X}") else Print("none")')
+    else:
+        print('Main()<transacts>:void = Print("{(for (X := F[2], X > 100): X).Length}")')
+    sys.exit(0)
 if kind.startswith('recursive-sequence-'):
     # (#283) choice points in sequence, each with code after it that reaches
     # the next: each a continuation member, compiled once, its frame pushed
@@ -2232,8 +2314,26 @@ PY
       diff -u "$tmp/expected" "$tmp/lean.out"
       diff -u "$tmp/expected" "$tmp/c.out"
     fi
-    if [[ $kind == nested-casts-* && $count == 4 ]]; then
+    if [[ $kind == trial-cast-clauses ]]; then
+      # (the first choice's lift, the second's in the continuation, and two
+      # for each cast clause: in the continuation, and in the `then` that
+      # uses what it binds; 3 * count + 3 when the trial made its own)
+      lifts=$(timeout "$limit" "$root/.lake/build/bin/openverse" core "$tmp/p.verse" | grep -c '^fn [0-9]* \$refine' || true)
+      if (( lifts != 2 * count + 2 )); then
+        echo "test-choice-size: $kind with $count casts made $lifts lifts, not $((2 * count + 2))" >&2
+        exit 1
+      fi
+      if (( count == 4 )); then
+        printf '%s\n' "420 -1 -1" >"$tmp/expected"
+        timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+        timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+        diff -u "$tmp/expected" "$tmp/lean.out"
+        diff -u "$tmp/expected" "$tmp/c.out"
+      fi
+    fi
+    if [[ ( $kind == nested-casts-* || $kind == nested-for-returns ) && $count == 4 ]]; then
       case $kind in
+        nested-for-returns) expected='16 12' ;;
         nested-casts-body) expected='16 3' ;;
         nested-casts-for-body|nested-casts-for-value) expected='17 3' ;;
         nested-casts-for-clauses) expected='17 -1' ;;

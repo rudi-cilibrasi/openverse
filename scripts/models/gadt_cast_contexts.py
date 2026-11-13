@@ -28,6 +28,13 @@ a failure context that fails undoes everything it did, output included; a
 first success of a choice tries its values in order; a for's clauses are a
 failure context per element, its body is not. The then-branch and the body
 see the cast's name and the names the clauses after it bind.
+
+On a stream of its own (so the program above is the seed's as before), at
+times a second family ex(t) with an opening cast P := xp[E] after clauses
+with effects, in an if or a for, then later casts of P's fields (L :=
+xi[P.L], R := xs[P.R], or Q := xp[P.L], L := xi[Q.L]) whose refinements the
+value needs (#250): each is cast again, its object read again, where the
+branch or body uses the names.
 argv: seed expfile
 """
 import random, sys
@@ -338,8 +345,149 @@ else:
         model(o)
 if inside:
     fn = fn.replace(f'D := {target}[P]', f'C0 := Peek[H, 1] + {target}[P].C').replace('D.C', '(C0 - 1)')
+
+st1 = st
+# (#250, on a stream of its own, so each seed's program above stays as it
+# was) at times an opening cast after clauses with effects, in an if or a
+# for, then later casts of its object's fields, read by fields that are no
+# vars from its name (L := xi[P.L], or through a second opening cast, Q :=
+# xp[P.L], L := xi[Q.L]), whose refinements the branch's or body's value
+# needs: t = tuple(int, string), or tuple(tuple(int, b''), b').  The model:
+# each cast succeeds iff the object's class is the target; a failed
+# condition undoes what the clauses did, output included.
+R2 = random.Random(seed * 1000003 + 250)
+OPEN = R2.random() < 0.5
+if OPEN:
+    deep = R2.random() < 0.4
+    ofor = R2.random() < 0.35
+    def pre2(i):
+        k = R2.choice(['print', 'add', 'peek'])
+        if k == 'print': return (f'Print("q{i}")', lambda st, env: st.out.append(f'q{i}'))
+        n = R2.randint(1, 4)
+        if k == 'add':
+            def run(st, env): st.n += n
+            return (f'set H.N += {n}', run)
+        n = 0 if R2.random() < 0.2 else n
+        def run(st, env):
+            if n <= 0: raise Fail()
+            st.n += n
+        return (f'Peek[H, {n}]', run)
+    pres2 = [pre2(i) for i in range(R2.randint(1, 2))]
+    m = R2.randint(0, 6)
+    post = R2.choice(['none', 'cmp', 'print'])
+    post_t = {'none': [], 'cmp': [f'L.V > {m}'], 'print': ['Print("s")']}[post]
+    def post_run(st, env):
+        if post == 'cmp' and not env['L'] > m: raise Fail()
+        if post == 'print': st.out.append('s')
+    # objects: ('xp', l, r) | ('xt',) | ('xi', v) | ('xn',) | ('xs', s) | ('xz',)
+    def leaf_i():
+        return ('xi', R2.randint(0, 9)) if R2.random() < 0.7 else ('xn',)
+    def leaf_s():
+        return ('xs', R2.choice(['a', 'b', 'c'])) if R2.random() < 0.7 else ('xz',)
+    def obj2():
+        if R2.random() < 0.15: return ('xt',)
+        if deep:
+            inner = ('xp', leaf_i(), leaf_s()) if R2.random() < 0.8 else ('xt',)
+            return ('xp', inner, leaf_i())
+        return ('xp', leaf_i(), leaf_s())
+    def text2(o, ty):
+        k = o[0]
+        if k == 'xi': return f'xi{{V := {o[1]}}}'
+        if k == 'xn': return 'xn{}'
+        if k == 'xs': return f'xs{{S := "{o[1]}"}}'
+        if k == 'xz': return 'xz{}'
+        if k == 'xt': return 'xt{}' if ty == 'tuple(int, string)' else 'xt2{}'
+        if ty == 'tuple(int, string)': return f'xp(int, string){{L := {text2(o[1], "int")}, R := {text2(o[2], "string")}}}'
+        return f'xp(tuple(int, string), int){{L := {text2(o[1], "tuple(int, string)")}, R := {text2(o[2], "int")}}}'
+    def ev(o):
+        k = o[0]
+        if k == 'xi': return o[1]
+        if k == 'xn': return 0
+        if k == 'xs': return o[1]
+        if k == 'xz': return 'z'
+        if k == 'xt': return (0, 'z')
+        return (ev(o[1]), ev(o[2]))
+    T2 = 'tuple(tuple(int, string), int)' if deep else 'tuple(int, string)'
+    hdr += """
+ex(t:type) := class<abstract>:
+    Ev():t
+xi := class(ex(int)):
+    V:int
+    Ev<override>():int = V
+xn := class(ex(int)):
+    Ev<override>():int = 0
+xs := class(ex(string)):
+    S:string
+    Ev<override>():string = S
+xz := class(ex(string)):
+    Ev<override>():string = "z"
+xp(a:type, b:type) := class(ex(tuple(a, b))):
+    L:ex(a)
+    R:ex(b)
+    Ev<override>():tuple(a, b) = (L.Ev(), R.Ev())
+xt := class(ex(tuple(int, string))):
+    Ev<override>():tuple(int, string) = (0, "z")
+xt2 := class(ex(tuple(tuple(int, string), int))):
+    Ev<override>():tuple(tuple(int, string), int) = ((0, "z"), 0)"""
+    if deep:
+        casts = ['P := xp[E]', 'Q := xp[P.L]', 'L := xi[Q.L]']
+        val = '((L.V + H.N, Q.R.Ev()), P.R.Ev())'
+    else:
+        casts = ['P := xp[E]', 'L := xi[P.L]', 'R := xs[P.R]']
+        val = '(L.V + H.N, R.S)'
+    clauses = [t for t, _ in pres2] + casts + post_t
+    def cast2(o, env):
+        if o[0] != 'xp': raise Fail()
+        if deep:
+            if o[1][0] != 'xp': raise Fail()
+            if o[1][1][0] != 'xi': raise Fail()
+            env['L'] = o[1][1][1]
+        else:
+            if o[1][0] != 'xi' or o[2][0] != 'xs': raise Fail()
+            env['L'] = o[1][1]
+    def val2(o, env):
+        if deep: return ((env['L'] + st.n, ev(o[1][2])), ev(o[2]))
+        return (env['L'] + st.n, o[2][1])
+    show = '{V(0)(0)} {V(0)(1)} {V(1)}' if deep else '{V(0)} {V(1)}'
+    def shown(v):
+        return f'{v[0][0]} {v[0][1]} {v[1]}' if deep else f'{v[0]} {v[1]}'
+    objs2 = [obj2() for _ in range(R2.randint(2, 4))]
+    if ofor:
+        fn += (f'\nG(Es:[]ex(t), H:cell where t:type)<transacts>:[]t =\n'
+               f'    for (E : Es, {", ".join(clauses)}) {{ {val} }}')
+        main.append('    H2 := cell{}')
+        main.append(f'    Es2:[]ex({T2}) = array{{{", ".join(text2(o, T2) for o in objs2)}}}')
+        main.append(f'    for (V : G(Es2, H2)) {{ Print("G {show}") }}')
+        main.append('    Print("G {H2.N}")')
+        st2 = St(); st = st2
+        vals = []
+        for o in objs2:
+            s0 = st.snap(); env = {}
+            try:
+                for _, r in pres2: r(st, env)
+                cast2(o, env); post_run(st, env)
+            except Fail:
+                st.back(s0); continue
+            vals.append(val2(o, env))
+        out2 = st2.out + [f'G {shown(v)}' for v in vals] + [f'G {st2.n}']
+    else:
+        fn += (f'\nG(E:ex(t), H:cell where t:type)<transacts>:?t =\n'
+               f'    if ({", ".join(clauses)}) then option{{{val}}} else false')
+        main.append('    H2 := cell{}')
+        st2 = St(); st = st2
+        for o in objs2:
+            main.append(f'    E{len(main)}:ex({T2}) = {text2(o, T2)}')
+            main.append(f'    if (V := G(E{len(main) - 1}, H2)?) then Print("G {show} {{H2.N}}") else Print("G no {{H2.N}}")')
+            s0 = st.snap(); env = {}
+            try:
+                for _, r in pres2: r(st, env)
+                cast2(o, env); post_run(st, env)
+                st.out.append(f'G {shown(val2(o, env))} {st.n}')
+            except Fail:
+                st.back(s0); st.out.append(f'G no {st.n}')
+        out2 = st2.out
 print(hdr)
 print(fn.rstrip('\n'))
 print('\n'.join(main))
 with open(out_exp, 'w') as f:
-    f.write('exit=0\n' + ''.join(l + '\n' for l in st.out))
+    f.write('exit=0\n' + ''.join(l + '\n' for l in st1.out + (out2 if OPEN else [])))

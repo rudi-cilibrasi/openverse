@@ -82,7 +82,7 @@ partial def elabExprControlWith
           let t ← fresh rty
           if isVoid then
             let eE ← elabE ctx ee none
-            return ⟨.seq (.assign t r.e) (.ite (.prim .query [.local t]) (.lit .void) (.seq eE.e (.lit .void))), .void⟩
+            return ⟨.seq (.assign t r.e) (.ite (.prim .query [.local t]) (.lit .void) (.seq (← inferable eE) (.lit .void))), .void⟩
           let eE ← coerce p (← elabE ctx ee (some τ)) τ
           let xv ← fresh τ
           return ⟨.seq (.assign t r.e) (.ite (.assign xv (.prim .query [.local t])) (.local xv) eE), τ⟩
@@ -144,7 +144,7 @@ partial def elabExprControlWith
             let t ← fresh rty
             if isVoid then
               let eE ← elabE ctx ee none
-              return some ⟨.seq (.assign t r.e) (.ite (.prim .query [.local t]) (.lit .void) (.seq eE.e (.lit .void))), .void⟩
+              return some ⟨.seq (.assign t r.e) (.ite (.prim .query [.local t]) (.lit .void) (.seq (← inferable eE) (.lit .void))), .void⟩
             let eE ← coerce p (← elabE ctx ee (some τ)) τ
             let xv ← fresh τ
             return some ⟨.seq (.assign t r.e) (.ite (.assign xv (.prim .query [.local t])) (.local xv) eE), τ⟩
@@ -269,7 +269,12 @@ partial def elabExprControlWith
         | none => match ctx.forReturnSlot.bind ctx.lookup with
           | some { ty := .opt t, .. } => pure t
           | _ => pure ctx.retTy
-      let name := s!"$forReturn{p.line}_{p.col}_{ctx.locals.length}"
+      -- (named by its place, which is the same in every function the
+      -- consumer is elaborated in, the source, a trial and each
+      -- continuation's, whose keys name it, `contKey`; and by the locals in
+      -- scope only should one of the same place be in scope already)
+      let place := s!"$forReturn{p.line}_{p.col}" ++ (if p.file.isEmpty then "" else s!"_{p.file}")
+      let name := if (ctx.lookup place).isSome then s!"{place}_{ctx.locals.length}" else place
       let slot ← fresh (.opt sourceRet)
       let breakName := name ++ "$break"
       let breaking ← if breaks then some <$> fresh .logic else pure none
@@ -341,7 +346,7 @@ partial def elabExprControlWith
       inChoice := false, forBreakSlot := none, forBreakCapture := none,
       refineExits := { ctx.refineExits with brk := none } }
     let r ← elabE lctx body none
-    return ⟨.loop r.e, .void⟩
+    return ⟨.loop (← inferable r), .void⟩
   | .brk p =>
     if ctx.inChoice then
       eerr p "internal: a break in first-success clauses that do not forward one (#283)"

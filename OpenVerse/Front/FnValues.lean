@@ -1,4 +1,5 @@
 import OpenVerse.Front.SubtypeSyntax
+import OpenVerse.Front.Choice
 
 /-!
 Function values (#210), defunctionalised before elaboration.
@@ -472,7 +473,7 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
   let mvalues : List (Pos × String × List TParam × List TParam × String × List SParam × List String × STy) :=
     tops.flatMap fun
       | .classDef _ c tps _ _ _ _ _ ms => ms.filterMap fun
-        | .fn mp m ps mtps effs r _ =>
+        | .fn mp m ps mtps effs r b =>
           let targs := ps.map (·.ty) ++ [r]
           -- An override with a different signature needs its own value
           -- class (a narrower result, #219). Otherwise the declaration's
@@ -491,8 +492,10 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
           -- an unused adapter would itself contain an uninferrable call.
           let known := boundInferredNames (tps ++ mtps) (targs ++ [STy.app c (tps.map fun tp => .name tp.name)])
           let inferable := mtps.all fun tp => known.contains tp.name
+          -- (#283) and none for a family's stub: a method with several values
+          -- is no value (`Choice.methodFns` refuses one as a value)
           if members.contains m && needed && !overloaded && inferable && ps.all (!·.named) && !m.contains '$' &&
-              !m.startsWith "(" then
+              !m.startsWith "(" && !Choice.isFamilyStub b then
             -- Keep method parameters apart from the receiver arguments a
             -- caller substitutes: its `u` may be a different method's `u`.
             let names := mtps.zipIdx.map fun (tp, i) => (tp.name, s!"$methodValue_{c}_{m}_{i}")

@@ -1,0 +1,12 @@
+swap 5
+swap none
+swap k
+sum 3 1
+sum none 1
+find 2
+find 101
+count 1 2
+wait 70 0
+h 9
+h none
+exit=0

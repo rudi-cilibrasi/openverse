@@ -1,6 +1,6 @@
-# expect: would leave i2's type arguments unknown: they are not named's, and an interface has no hidden fields to read them from (#351, #53)
-# a cast from named (referred to through views, as it is above i2) to i2(t),
-# whose t no hidden field holds
+# (#351, #53) a cast from named (referred to through views, as it is above
+# i2) to i2(t), whose t it opens: a test of each class below both (c, whose
+# view gives i2 string)
 named := interface:
     Name():string
 i1(t:type) := interface(named):

@@ -1,0 +1,47 @@
+cond 2
+cond 1
+v 2
+v 20
+cond 2
+cond 1
+taken 20
+not 1
+v 1
+v 11
+not 1
+taken 11
+or 2
+or 1
+v 2
+v 12
+or 2
+or 1
+taken 12
+rec 3
+rec 2
+v 3
+rec 2
+v 2
+rec 3
+rec 2
+rec 2
+taken 2
+binds 1 2
+binds 2 12
+v 32
+v 12
+binds 1 2
+binds 2 12
+taken 12
+opt 1 4 0
+opt 2 4 0
+v 4
+v 2
+first 1 20
+first 2 200
+v 200
+v 2
+first 1 20
+first 2 200
+taken 2
+exit=0

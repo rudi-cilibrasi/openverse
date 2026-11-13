@@ -80,7 +80,7 @@ partial def elabExprValuesWith
     -- (with a choice, its first success, #208)
     let e := (Choice.takeFirst? e (choiceOrder ctx)).getD e
     let r ← operand { ctx with canFail := true, inTaking := true } e none
-    return ⟨Expr.notE r.e, .void⟩
+    return ⟨Expr.notE (← inferable r), .void⟩
   | .bin p "/" a b =>
     -- `X / Y` on ints: a rational, failing when `Y = 0` (#116)
     let ra := widenR ctx.types (← elabArithmeticOperandWith elabE ctx p (← elabE ctx a none) "division")
@@ -145,8 +145,9 @@ partial def elabExprValuesWith
     -- each operand is its own scope, a block: names defined in `a` are not
     -- visible in `b`, and names from either side do not escape the `and`
     let (ra, _) ← elabBlock ctx [a] none
+    let ea ← inferable ra
     let (rb, _) ← elabBlock ctx [b] exp
-    return ⟨Expr.andE ra.e rb.e, rb.ty⟩
+    return ⟨Expr.andE ea rb.e, rb.ty⟩
   | .orE p a b =>
     let a := (Choice.takeFirst? a (choiceOrder ctx)).getD a
     let ra ← operand { ctx with canFail := true, inTaking := true } a exp
@@ -238,7 +239,7 @@ partial def elabExprValuesWith
     let e := (Choice.takeFirst? e (choiceOrder ctx)).getD e
     let r ← operand { ctx with canFail := true, inTaking := true } e none
     if !(r.e.mayFail ctx.sigProg) && (← ctx.failabilityKnown) then eerr p "logic{…} needs an expression that can fail"
-    return ⟨Expr.logicE r.e, .logic⟩
+    return ⟨Expr.logicE (← inferable r), .logic⟩
   | _ => eerr se.pos "internal: expression routed to the wrong elaboration stage"
 
 end OpenVerse.Front

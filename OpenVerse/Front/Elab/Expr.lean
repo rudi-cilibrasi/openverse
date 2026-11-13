@@ -350,7 +350,7 @@ partial def elabBranch (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   let r ← elabE armCtx body none
   modify fun st => { st with pendingSourceSuspends := sourceBefore }
   noteBackgroundCaptures ctx (Suspend.slotsOf r.e)
-  return ⟨.call mark.idx [.prim .mkArr [.seq r.e (.lit .void)]], .void⟩
+  return ⟨.call mark.idx [.prim .mkArr [.seq (← inferable r) (.lit .void)]], .void⟩
 
 partial def elabDefersCore (ctx : Ctx) (ds : List (SExpr × List Local)) : EM Expr := do
   let mut acc : Expr := .lit .void
@@ -361,7 +361,7 @@ partial def elabDefersCore (ctx : Ctx) (ds : List (SExpr × List Local)) : EM Ex
                            inDefer := true, inLoop := false, defers := [], loopDefers := 0,
                            locals := locs, inTaking := false, liftWhy := "" }
     let r ← elabE dctx d none
-    acc := .seq r.e acc
+    acc := .seq (← inferable r) acc
   return acc
 
 /-- A call of an overloaded function or method (#74): the one overload
@@ -489,9 +489,12 @@ partial def resolveOverload (ctx : Ctx) (p : Pos) (name : String) (ovs : List St
     let shown := ok.map fun o => s!"({", ".intercalate (((sigOf o).map (·.params)).getD [] |>.map Ty.show)})"
     eerr p s!"this call of {name} fits more than one overload: {" and ".intercalate shown}"
 
-/-- A sequence of statements, threading the scope; the value is the last one's. -/
-partial def elabSeq (ctx : Ctx) (ss : List SExpr) (exp : Option Ty) : EM (R × Ctx) :=
-  elabSeqIn false ctx ss exp
+/-- Clauses (a condition's, a filter's, the code before a value), threading
+    the scope: their names stay in it, and their value, the last one's,
+    nothing takes (`inferable`). -/
+partial def elabSeq (ctx : Ctx) (ss : List SExpr) (exp : Option Ty) : EM (R × Ctx) := do
+  let (r, c) ← elabSeqIn false ctx ss exp
+  return (⟨← inferable r, r.ty⟩, c)
 
 /-- `elabSeq`, and, for a sequence whose names end with it (`closed`: a
     block) in a failure context, a cast that refines type arguments there
@@ -536,8 +539,9 @@ partial def elabSeqIn (closed : Bool) (ctx : Ctx) (ss : List SExpr) (exp : Optio
           throw err
         | none => throw err
     if rest.isEmpty then return (r, ctx')
+    let e ← inferable r
     let (r2, ctx'') ← elabSeqIn closed ctx' rest exp
-    return (⟨.seq r.e r2.e, r2.ty⟩, ctx'')
+    return (⟨.seq e r2.e, r2.ty⟩, ctx'')
 
 partial def elabArgs (ctx : Ctx) (p : Pos) (args : List SExpr) (tys : List Ty) : EM (List Expr) := do
   if args.length != tys.length then
@@ -718,8 +722,6 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
   -- of a failure context, whose rest is a function of its own
   if bracket && env.viewed.contains S && !(env.coreArgs T (((env.sparams.lookup T).getD []).map fun (v, k) => Ty.param v k)).isEmpty then
     let what := s!"a cast of {withArticle r.ty.show}, an interface referred to through views, to {T}"
-    if !(env.isSub S T || env.isSub T S) then
-      eerr p s!"{what}, which is neither above nor below {S}, is not supported yet (#351)"
     if env.isSub S T then
       eerr p s!"{what}, which is above {S}, cannot fail: use {T}(…), an upcast (#351)"
     -- (no class below both whose view and pins can give the object's type
@@ -727,10 +729,11 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
     if ((env.concreteBelow S).filter (env.isSub · T)).all fun d =>
         (env.viewArgs? S d (env.coreArgs S sargs) (rigid := false)).isNone then
       eerr p s!"{withArticle r.ty.show} is never {withArticle T}: no class below both gives {S} those type arguments, so {T}[…] would always fail"
-    -- (one a clause does not take either: an interface whose type
-    -- arguments the cast would open, #53)
+    -- (one a clause does not take either; to a type beside it, or to an
+    -- interface whose type arguments it opens, a clause takes it as a cast
+    -- to each class below both, #53)
     if (refiningCast? env T r.ty).isNone then
-      eerr p s!"{what} would leave {T}'s type arguments unknown: they are not {S}'s, and an interface has no hidden fields to read them from (#351, #53)"
+      eerr p s!"{what} would leave {T}'s type arguments unknown: they are not {S}'s (#351, #53)"
     let theirs := if (env.sparams.lookup T).isNone then s!"the type arguments {T} fixes" else s!"{T}'s type arguments"
     let opens := (refiningCast? env T r.ty).any fun (_, _, _, _, _, opened) => !opened.isEmpty
     throw (Refine.castRefusal { pos := p, opens } s!"{what} works {Refine.castRefusalNote}, D := {T}[X], whose rest then has {theirs} (#351)")
@@ -739,13 +742,18 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
   let parametric := (env.sparams.lookup T).isSome || !(env.coreArgs T []).isEmpty
   if (env.concreteBelow S).all (fun d => !env.isSub d T) then
     eerr p s!"no class is below both {r.ty.show} and {T}, so {T}[…] would always fail"
+  -- (#351, #53: to a type beside it, whose type arguments the classes and
+  -- interfaces above both relate to the object's, and open otherwise: as a
+  -- clause, a cast to each class below both)
   if parametric && !(env.isSub S T || env.isSub T S) then
-    eerr p s!"cannot cast {withArticle S} to {T}: {T}'s type arguments would be unknown (they are not {S}'s)"
+    let some (_, _, _, _, _, opened) := refiningCast? env T r.ty
+      | eerr p s!"cannot cast {withArticle S} to {T}: {T}'s type arguments would be unknown (they are not {S}'s)"
+    throw (Refine.castRefusal { pos := p, opens := !opened.isEmpty } s!"a cast of {withArticle r.ty.show} to {T}, which is neither above nor below {S}, works {Refine.castRefusalNote}, D := {T}[X], whose rest then has {T}'s type arguments (#351, #53)")
   let targs := if env.isSub S T then env.upArgs S sargs T else env.argsBelow S sargs T
   if parametric && (env.coreArgs T targs).length > (env.coreArgs S sargs).length then
     let unknown := s!"cannot cast {withArticle r.ty.show} to {T}: {T} has type parameters that {S} does not have, which would be unknown here"
     -- (an interface has no hidden fields to read opened ones from, #53)
-    if (env.info T).isIface then eerr p s!"{unknown}: an interface has no hidden fields to read them from (#53, #250)"
+    if (env.info T).isIface && (refiningCast? env T r.ty).isNone then eerr p s!"{unknown} (#53, #250)"
     throw (Refine.castRefusal { pos := p, opens := true } s!"{unknown}: a cast opens them {Refine.castRefusalNote}, D := {T}[X], whose rest then has them (#250)")
   if bracket then
     match env.refineComparable? [] (env.comparableArgs T targs) with
@@ -959,7 +967,7 @@ partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bra
   | .arr t, [i], true =>
     let ri := widenR ctx.types (← elabE ctx i (some .int))
     if ri.ty != .int then eerr p s!"an array index must be an int, found {ri.ty.show}"
-    return ⟨p2 .index r.e ri.e, t⟩
+    return ⟨p2 .index (← inferable r) ri.e, t⟩
   | .map kt vt, [k], true =>
     let tm ← fresh r.ty
     let rk ← elabE ctx k (some kt)
@@ -968,7 +976,7 @@ partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bra
     return ⟨.seq (.assign tm r.e) (.seq (.assign tk (← coerce p rk kt)) (mapLookup tm tk tp)), vt⟩
   | .tup ts, [.int _ k], false =>
     if k < 0 || k.toNat ≥ ts.length then eerr p s!"tuple index {k} out of range"
-    return ⟨.prim (.tupGet k.toNat) [r.e], ts[k.toNat]!⟩
+    return ⟨.prim (.tupGet k.toNat) [← inferable r], ts[k.toNat]!⟩
   | t, _, _ => eerr p s!"cannot call or index a value of type {t.show}"
 
 /-- Two types with an int in one where the other has a rational, at the
@@ -1447,6 +1455,11 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
         if !refined then
           if Choice.plainBranches Choice.hasLiftable i then
             return ← elabOneChoice ctx b rest
+          -- (#283) one with nothing left to lift, the cases its receiver's
+          -- type rules out dropped (`pruneMethodBinding`): an `if` of one
+          -- value, bound as any (`prepare` would give it back as it is)
+          if b.place.isNone && !Choice.hasLiftable i then
+            return ← elabOneGo ctx (.decl p b.name b.ty false i :: rest)
           return ← elabOneGo ctx (Choice.prepare [cl] (choiceValues ctx) (choiceField ctx)
             (site := b.name) (fieldOrder := choiceOrder ctx) ++ rest)
         if ctx.typeOnly then
@@ -1462,14 +1475,15 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
         if request.isNone && hasLater then
           let st0 ← get
           let slot ← fresh ty
-          let c := { ctx with locals := { name := b.name, slot, ty, mutable := false } :: ctx.locals }
+          let c := { ctx.withTrial .continuation with locals := { name := b.name, slot, ty, mutable := false } :: ctx.locals }
           let (code, c2) ← elabOneGo c rest
           let fx := (← get).fx
           match contLiftOf ctx c2 p b.name [i] rest fx with
           | .ok lift =>
             modify fun s => { s with loopFirst := s.loopFirst ++
               [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
-            return (code, c2)
+            -- (what follows the clauses is not the trial's)
+            return (code, { c2 with trial := ctx.trial })
           | .error _ => set st0
         let request := request.filter fun l =>
           ctx.acceptsHelper l
@@ -1532,7 +1546,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       -- (the values at the function's result type, at the type arguments
       -- this call gives, for a generic one)
       let lift := firstLiftOf ctx c2 p g lp b.name b.ty rest fxB (ctx.suspends && Suspend.hasSusp isS inner) lg.vty lg.instances
-        lg.frames lg.kTy
+        lg.frames lg.kTy lg.frameTys
       modify fun st => { st with loopFirst := st.loopFirst ++
         [{ g, pos := p, itemCode := lg.itemCode, argSet := lg.argSet, lift }] }
       let bindX ← coerce p ⟨lg.value, lg.vty⟩ ty
@@ -1643,9 +1657,11 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
             let prefixState ← get
             -- (what refuses it known before the trial, which then costs nothing)
             let ok := same && rest.any isComposed
-            let (code1, c1) ← if ok then elabOneGo ctx ([.decl p t none false (alt a0 0)] ++
+            let (code1, c1) ← if ok then elabOneGo (ctx.withTrial .continuation) ([.decl p t none false (alt a0 0)] ++
                 binds.zipIdx.map fun (n, i) => .decl p n none (vars.contains n) (.app p (.ident p t) [.int p (i : Int)] false))
               else pure (Expr.lit .void, ctx)
+            -- (what follows the clauses is not the trial's)
+            let c1 := { c1 with trial := ctx.trial }
             let fxB := (← get).fx
             match (if ok then contLiftOf ctx c1 p b.name b.alts rest fxB else .error "alternatives of different types") with
             | .ok lift =>
@@ -1687,6 +1703,14 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
                   let (_, result) ← elabOneGo bound (firstUnpack p lift name)
                   return ← finish (pure (.prim .userErr [], { result with locals := result.locals.filter (·.name != name) }))
                 set st0
+              -- (#283, #335) not shared, so copied for each value's type:
+              -- where the first success is taken, what they bind has one
+              -- type after them, which values with nothing above both lack
+              if let t0 :: ts := tys then
+                if (ts.foldlM (fun acc ty => joinTy ctx.types acc ty none) t0).isNone then
+                  let other := (ts.find? (· != t0)).getD t0
+                  let what := if b.name.startsWith "$" then "its value" else b.name
+                  eerr p s!"the values of this choice are of types with nothing above both, {t0.show} and {other.show}, and the clauses after it cannot be shared by them (#335): copied for each, {what} would have no one type after them, where the first success is taken: not supported yet (#283); take the values in a for, or make in each alternative what needs its own type"
         return ← finish (elabOneGo ctx copied)
       let p := b.pos
       let n := b.name
@@ -1701,8 +1725,9 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       elabOneChoice ctx b rest
     | none =>
       let (r, c1) ← elabStmt ctx cl none
+      let e ← inferable r
       let (inner, c2) ← elabOneGo c1 rest
-      return (.seq r.e inner, c2)
+      return (.seq e inner, c2)
 
 partial def elabOneChoice (ctx : Ctx) (b : Choice.Binding) (rest : List SExpr) : EM (Expr × Ctx) := do
   let p := b.pos
@@ -1794,7 +1819,7 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
   -- (#283) the return frames of the alternatives that are calls with code
   -- after them, and the continuation they are pushed on, the last name
   -- each item keeps
-  let frames ← loopFramesWith elabSeq armCode.toList
+  let frames ← loopFramesWith elabE elabSeq rty armCode.toList
   let lives := frames.map fun f => f.lives.map (·.ty)
   let kl? : Option Local ← if frames.isEmpty then pure none else do
     let kTy := frameContTy lives
@@ -2067,8 +2092,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
   let r ← elabBoundReceiver ctx p r m
   ctx.noteFamily p r.ty m
   match r.ty, m with
-  | .arr _, "Length" => return ⟨.prim .len [r.e], .int⟩
-  | .map _ _, "Length" => return ⟨.prim .len [r.e], .int⟩
+  | .arr _, "Length" | .map _ _, "Length" => return ⟨.prim .len [← inferable r], .int⟩
   | .struct sn targs, f =>
     match fieldIndex (ctx.types.fields sn targs) f with
     | some (k, t) =>
@@ -2235,7 +2259,11 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
                 noteNeeds { methods := [req] }
                 return ⟨.seq r.e (.prim .userErr []), target⟩
           let some x := (candidates.find? fun x => exp == some (typeOf x)).orElse fun _ => candidates.head?
-            | eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a method with named parameters is not a value, #210)"
+            | -- (#283) a family's stub has none: refused as `Choice.methodFns`
+              -- refuses it, before the round that knows the use's family
+              match (ctx.methodDecl? sn fv).filter (env.familyStubs.contains s!"{·}.{fv}") with
+              | some owner => eerr p s!"{owner.replace "::" "."}.{f} has several values, so it cannot be used as a function value (#235, #283)"
+              | none => eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a method with named parameters is not a value, #210)"
           let cls := s!"{x}${f}$fn"
           let xargs := env.argsAt sn targs x
           let t ← fresh r.ty

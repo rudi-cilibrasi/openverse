@@ -1,0 +1,34 @@
+add 1 2
+add 2 4
+v 4
+add 1 6
+add 2 8
+v 8
+add 2 7
+v 7
+add 1 6
+add 2 8
+taken 8
+put 1 1
+put 2 2
+v 4
+put 1 5
+put 2 6
+v 8
+put 2 5
+v 7
+put 1 5
+put 2 6
+taken 8
+init 1 2
+init 2 4
+v 4
+init 1 6
+init 2 8
+v 8
+init 2 7
+v 7
+init 1 6
+init 2 8
+taken 8
+exit=0

@@ -327,10 +327,30 @@ def Ctx.choiceCoercionBody (ctx : Ctx) (body : SExpr) : SExpr :=
   .app p (.ident p "$choiceCoercions") [.block p (ctx.choiceCoercions.map fun (dictionary, source, target) =>
     .tuple p [.ident p dictionary.name, .construct p "$choiceConversion" [source.toSTy, target.toSTy] []]), body] false
 
+/-- (#243, #246, #335) The locals in scope that `code` uses, in order of
+    first use: what a function made from `code` captures (`firstLiftOf`,
+    `contLiftOf`, `contForLiftOf`, a `for`'s stages). A generated function
+    is keyed by what its code depends on: its place and code, and these
+    locals with what the function depends on of each (`firstKey`: type and
+    mutability; `contKey`: type; `refineTagOf`, in a source context: type,
+    mutability and frame storage), so that each elaboration of the code
+    that would make the same function finds it, and none that would make
+    another does. So a name the elaborator makes for such a local says no
+    more than its place (`$forReturn…`): one that counted the locals in
+    scope differed between the source and each continuation's function. -/
+def Ctx.usedLocals (ctx : Ctx) (code : SExpr) : List Local :=
+  (Choice.namesUsed code).filterMap ctx.lookup
+
+/-- (#246, #338) The key of a lazily taken call's function of its own: its
+    place, binding and code (`lp`, the clauses with it, `rest`, those after
+    it), the locals they use with their types and whether they are `var`s,
+    the type variables they write (or the binding's type names) as bound
+    here, `Self`'s class, the class copy and inlined bodies it is in, the
+    source context and the source's return type when they return. -/
 def firstKey (ctx : Ctx) (p : Pos) (lp : List SExpr) (b : String) (bty : Option STy)
     (rest : List SExpr) : String :=
   let written := SExpr.block p (lp ++ rest)
-  let captures := ctx.captureEvidence ((Choice.namesUsed written).eraseDups.filterMap ctx.lookup)
+  let captures := ctx.captureEvidence (ctx.usedLocals written)
   let inputs := captures.map fun l => (l.name, l.ty, l.mutable)
   let roles := captures.filterMap fun l => if l.typeValue then some l.name else none
   let roleKey := if roles.isEmpty then "" else "$typeValues:" ++ reprStr roles
@@ -341,18 +361,38 @@ def firstKey (ctx : Ctx) (p : Pos) (lp : List SExpr) (b : String) (bty : Option 
 /-- A cast `T[X]`, `X` of type `xty`, that holds only under a refinement of
     the code's type parameters (#243): `T` fixes or repeats type arguments
     of `X`'s class, which agree with `X`'s only when they are unified (as
-    `elabCast` refuses). `X`'s class and type arguments, `T`'s type
-    arguments, the classes the cast tests for, and the equations of the
-    refinement; `none` for any other cast. -/
+    `elabCast` refuses), or opens them (#250), also to an interface (#53)
+    or beside `X`'s type (#351). `X`'s class and type arguments, `T`'s type
+    arguments, the classes the cast tests for, the equations of the
+    refinement and the opened type parameters; `none` for any other cast. -/
 def refiningCast? (env : TyEnv) (T : String) (xty : Ty) (avoid : List String := []) :
     Option (String × List Ty × List Ty × List String × List (Ty × Ty) × List (String × String × Bool)) := do
   let .struct S sargs := xty | none
   if !env.classes.contains S || !env.classes.contains T then none
   if (env.sparams.lookup T).isNone && (env.coreArgs T []).isEmpty then none
-  if !(env.isSub S T || env.isSub T S) then none
-  let rargs := env.coreArgs S sargs
   let common := (env.concreteBelow S).filter (env.isSub · T)
   if common.isEmpty then none
+  -- (each of `T`'s type parameters fresh, not a name of `avoid`)
+  let ps := (env.sparams.lookup T).getD []
+  let names : List String := ps.foldl (fun acc (v, _) => Id.run do
+    let mut n := v ++ "'"
+    while avoid.contains n || acc.contains n do n := n ++ "'"
+    return acc ++ [n]) []
+  let fresh := (ps.zip names).map fun ((_, c), n) => Ty.param n c
+  let openedBy (μ : List (String × Ty)) : List (String × String × Bool) :=
+    (ps.zip names).filterMap fun ((v, c), n) => if (μ.lookup n).isSome then none else some (n, v, c)
+  -- (#351, #53: a type beside the object's, neither above nor below it: its
+  -- type arguments relate to the object's as the classes and interfaces
+  -- above both say, which a class below both reaches at one instance each;
+  -- the others are opened, a test of each class below both giving them)
+  if !(env.isSub S T || env.isSub T S) then
+    -- (the fresh ones on the left, bound first)
+    let eqs := ((env.supers S).filter fun A => A != S && env.isSub T A).flatMap fun A =>
+      (env.upArgs T fresh A).zip (env.upArgs S sargs A)
+    let some μ := Ty.unifyEqs (fun _ _ => none) [] eqs | none
+    if (env.refineComparable? μ (env.comparableArgs T fresh)).isNone then none
+    return (S, sargs, fresh, common, eqs, openedBy μ)
+  let rargs := env.coreArgs S sargs
   let tv := env.coreVars T
   -- (#351: an object referred to through views relates its type arguments
   -- to `T`'s through `S`'s view of `T`, never by position)
@@ -374,22 +414,16 @@ def refiningCast? (env : TyEnv) (T : String) (xty : Ty) (avoid : List String := 
     -- object's type arguments, the fresh ones bound first; those left
     -- unbound are opened, as comparable as the parameters they stand for)
     if env.isSub S T then none
-    let ps := (env.sparams.lookup T).getD []
-    let names : List String := ps.foldl (fun acc (v, _) => Id.run do
-      let mut n := v ++ "'"
-      while avoid.contains n || acc.contains n do n := n ++ "'"
-      return acc ++ [n]) []
-    let targs := (ps.zip names).map fun ((_, c), n) => Ty.param n c
+    let targs := fresh
     let cargs := env.coreArgs T targs
     if !viewedS && cargs.length < rargs.length then none
     let eqs := if viewedS then (env.viewOf S T cargs).zip rargs
       else (cargs.take rargs.length).zip rargs
     let some μ := Ty.unifyEqs (fun _ _ => none) [] eqs | none
-    let opened := (ps.zip names).filterMap fun ((v, c), n) =>
-      if (μ.lookup n).isSome then none else some (n, v, c)
-    -- (an interface has no hidden fields to read opened ones from, #53:
-    -- such a cast is a plain one, which refuses unknown type arguments)
-    if (env.info T).isIface && !opened.isEmpty then none
+    let opened := openedBy μ
+    -- (an interface has no hidden fields to read opened ones from, #53: its
+    -- tests are of the classes below both, each cast to as itself, whose
+    -- branches call the one function this cast's is made into, `elabRefinedIfWith`)
     -- (nothing to refine, to open, nor past the object's: a plain cast;
     -- through a view, the object's type arguments come from the dispatch,
     -- as a plain cast does not give them, #351)
@@ -398,6 +432,30 @@ def refiningCast? (env : TyEnv) (T : String) (xty : Ty) (avoid : List String := 
     if !viewedS && cargs.length == rargs.length && opened.isEmpty && μ.all (names.contains ·.1) &&
         (bounds.getD []).all (names.contains ·.1) then none
     some (S, sargs, targs, common, eqs, opened)
+
+/-- (#53, #351) A refining cast that is a chain of casts, one to each class
+    below both the object's class `S` and `T` (`castTops`): to a type beside
+    `S`'s, or to an interface whose type arguments it opens, which no hidden
+    field holds. The branch is then one function, generic over `T`'s type
+    arguments, which each class's branch calls at its own. -/
+def castChains (env : TyEnv) (S T : String) (opened : List (String × String × Bool)) : Bool :=
+  !(env.isSub S T || env.isSub T S) || ((env.info T).isIface && !opened.isEmpty)
+
+/-- The classes below both `S` and `T` whose class parent is not, with a
+    concrete class below them: each concrete class below both is below
+    exactly one of them, along its class chain. Of those, the ones an
+    `S(sargs)` may be: a cast to it refines or opens type arguments, or
+    agrees with the object's (through views, as one of its classes' view
+    gives them), as `elabCast` refuses the others as never succeeding. -/
+def castTops (env : TyEnv) (S : String) (sargs : List Ty) (T : String) (avoid : List String) : List String :=
+  let both (c : String) : Bool := !(env.info c).isIface && env.isSub c S && env.isSub c T
+  let may (d : String) : Bool :=
+    (refiningCast? env d (.struct S sargs) avoid).isSome ||
+    if env.viewed.contains S then
+      ((env.concreteBelow S).filter (env.isSub · d)).any fun e =>
+        (env.viewArgs? S e (env.coreArgs S sargs) (rigid := false)).isSome
+    else env.coreArgs d (env.argsBelow S sargs d) == env.coreArgs S sargs
+  env.classes.filter fun c => both c && !((env.info c).parent.any both) && !(env.concreteBelow c).isEmpty && may c
 
 /-- Unify a refining cast's equations, preserving comparable opened types. -/
 def castRefinement? (env : TyEnv) (eqs : List (Ty × Ty)) (opened : List (String × String × Bool))
@@ -627,12 +685,9 @@ partial def selfQualify (ctx : Ctx) (c : String) (e : SExpr) : SExpr :=
       `<suspends>` function, all the type variables (its lifts' type
       parameters, `available` in `elabRefinedIfWith`); the inlined bodies it
       is in; and the source's return type, when the branch returns.
-    Such a tag may differ between the trial of an enclosing cast's branch
-    (`Ctx.inRefinedTrial`) and the function made from that branch, which has
-    the trial's captured `var`s as values and its result type as the type
-    expected of the branch's value, so the cast asks for its lift from the
-    function only: asked for from both, each level of nesting lifted the
-    casts inside it once more, the earlier copies never called. -/
+    The tag in a trial (`Ctx.trial`) may differ from the tag in the function
+    the trial's code is compiled in, so a lift is asked for from a trial only
+    where it does not (`Ctx.keepsLifts`). -/
 def refineTagOf (ctx : Ctx) (x body : SExpr) (els : Option SExpr) (exp : Option Ty) : String :=
   let source := sourceContextKey ctx
   if source.isEmpty then ctx.refineScope ++ ctx.liftTag else
@@ -641,8 +696,8 @@ def refineTagOf (ctx : Ctx) (x body : SExpr) (els : Option SExpr) (exp : Option 
   let cast := match ctx.selfClass with
     | some c => selfQualify ctx c cast
     | none => cast
-  let inputs := (Choice.namesUsed cast).filterMap fun n => (ctx.lookup n).map fun l =>
-    (n, l.ty, l.mutable, l.storage.map fun s => (s.frame, s.name, s.args))
+  let inputs := (ctx.usedLocals cast).map fun l =>
+    (l.name, l.ty, l.mutable, l.storage.map fun s => (s.frame, s.name, s.args))
   let vars := (Ty.mergeParamBounds (inputs.flatMap (·.2.1.paramsC))).map fun (v, _) =>
     (v, ctx.types.tvars.lookup v)
   let written := (Refine.typeNames cast ++ Choice.namesUsed cast).filterMap (ctx.types.tvars.lookup ·)
@@ -650,6 +705,33 @@ def refineTagOf (ctx : Ctx) (x body : SExpr) (els : Option SExpr) (exp : Option 
   let uses := reprStr (inputs, vars, written, exp.map (·.subst ctx.types.tvars), available, ctx.inlineScopes) ++
     firstReturnKey ctx [body]
   ctx.refineScope ++ ctx.liftTag ++ s!"$source{(source ++ uses).hash}"
+
+/-- `ctx` for a trial of `t`. Code in a continuation's trial moves with the
+    continuation, whatever trial inside it elaborates it. -/
+def Ctx.withTrial (ctx : Ctx) (t : Trial) : Ctx :=
+  { ctx with trial := if ctx.trial == some .continuation then ctx.trial else some t }
+
+/-- (#243, #453) Whether a refining cast's lift asked for here is kept. A
+    trial (`Ctx.trial`) keeps a request only where the function its code is
+    compiled in makes the same one, which the next elaboration then finds;
+    any other would never be called, and that function makes its own in the
+    next elaboration. Of what a trial asks for, only a lift's key names the
+    scope it is asked for in (its tag, `refineTagOf`). A continuation's
+    function has a scope of its own (`refineScope`), so no lift asked for in
+    its trial is one it asks for; nor is one asked for in a branch's trial
+    whose tag depends on the source context, which the function made from
+    the branch computes with its own captures and result type. (Asked for
+    there, each level of nesting lifted the casts inside it once more, the
+    earlier copies never called.) The continuations a trial asks for are
+    kept, in a `<suspends>` caller as in any: their keys (`contKey`) are the
+    same in the function, so nesting takes no more elaborations. The rest of
+    a trial's state goes with the elaboration, which asks for its
+    continuation and so is not the last. -/
+def Ctx.keepsLifts (ctx : Ctx) : Bool :=
+  match ctx.trial with
+  | none => true
+  | some .branch => (sourceContextKey ctx).isEmpty
+  | some .continuation => false
 
 /-- A continuation keeps the parameters of its inputs, results and written
     types. A parameter not determined by its inputs takes an explicit witness,
@@ -677,7 +759,8 @@ def contTypes (ctx : Ctx) (p : Pos) (inputs outputs : List Ty) (written : SExpr)
 def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : String) (bty : Option STy)
     (rest : List SExpr) (fxB : List (String × Pos × Option String)) (suspends : Bool) (vty : Ty)
     (instances : List (String × List (String × Ty)) := [])
-    (frames : List (String × List String × SExpr) := []) (kTy : Option Ty := none) :
+    (frames : List (String × List String × SExpr) := []) (kTy : Option Ty := none)
+    (frameTys : List (Option Ty × Option Ty) := []) :
     Except String Choice.FirstLift := do
   let ctx := ctx.choiceCoercionScope
   let [_, .block _ ps, .block _ cls, .decl _ _ _ _ tail] := lp | throw "internal: a $loop marker"
@@ -709,8 +792,8 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     | some l => pure l
     | none => throw s!"internal: parameter {n}"
   -- (the consumer's names the clauses after it use, in order of first use)
-  let caps : List Local := ctx.captureEvidence ((Choice.namesUsed (ctx.choiceCoercionBody (.block p rest))).eraseDups.filterMap fun n =>
-    if pnames.contains n then none else ctx.lookup n) pnames
+  let caps : List Local := ctx.captureEvidence ((ctx.usedLocals (ctx.choiceCoercionBody (.block p rest))).filter
+    (!pnames.contains ·.name)) pnames
   let setNames := Choice.setsIn (.block p rest)
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
   -- (its own binding too: a call in the clauses of another such call's
@@ -745,6 +828,14 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     | _ => none
   let nameOf (h : String) : String := if h == g then name else s!"{name}_{h.replace "::" "_"}"
   let retName := s!"{name}$ret"
+  -- (#283) the frames' hole's and code's types, when other than the result
+  -- type; a function that a value is given to for each type values have (a
+  -- choice's going to its frame, a continuation member's own), `retOf`
+  let fTys : List (Option STy × Option STy) := frameTys.map fun (i, o) => (i.map (·.toSTy), o.map (·.toSTy))
+  let valTys : List STy := (fTys.flatMap fun (i, o) => i.toList ++ o.toList).eraseDups
+  let retOf (t : Option STy) : String := match t.bind (fun t => valTys.idxOf? t) with
+    | some i => s!"{retName}{i + 1}"
+    | none => retName
   let heap := ["reads", "writes", "allocates"].filter fun k =>
     fxB.any (·.1 == k) || ((g :: mnames).any fun h => ((ctx.sig? h).map (·.fx.contains k)).getD false)
   let capPs : List SParam :=
@@ -782,7 +873,7 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
         | ((.ident _ n, t), i) => pure { name := n, ty := t.toSTy, typeValue := sig.typeValues.contains i }
         | _ => throw "internal: a $member parameter (#283)"
       let body := Choice.firstBody (nameOf h) p b bty hcls htail rest binds setsT capArgs (some vty.toSTy) nameOf
-        (fun target => recArgs (some (target.getD h))) normal? frames retName
+        (fun target => recArgs (some (target.getD h))) normal? frames retName fTys retOf
       pure (STop.fn p (nameOf h) (hparams ++ kPs ++ capPs ++ typeParams) tps specs ret
         (pruneConstructHints ctx (nameOf h) body))
     | _ => throw "internal: a $member (#283)"
@@ -803,36 +894,52 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     let (ccls, ctail) ← Choice.contOf? code
     let src := origin h
     let lps := (lives.zip (livesTys.getD j [])).map fun (n, t) => ({ name := n, ty := t.toSTy } : SParam)
+    let (hty, own) := (fTys[j]?).getD (none, none)
     let body := Choice.firstBody (nameOf src) p b bty ccls ctail rest binds setsT capArgs (some vty.toSTy) nameOf
-      (fun target => recArgs (some (target.getD src))) normal? frames retName
-    return STop.fn p fn ({ name := h, ty := vty.toSTy } :: lps ++ kPs ++ capPs ++ typeParams) tps specs ret
+      (fun target => recArgs (some (target.getD src))) normal? frames retName fTys retOf own
+    return STop.fn p fn ({ name := h, ty := hty.getD vty.toSTy } :: lps ++ kPs ++ capPs ++ typeParams) tps specs ret
       (pruneConstructHints ctx fn body)
   -- (#283) with return frames: the function each value is given to, then to
-  -- the clauses after the call, once for all the values of every member
-  let retFns : List STop := kPs.map fun kp =>
-    STop.fn p retName ({ name := "$V", ty := vty.toSTy } :: kp :: capPs ++ typeParams) tps specs ret
-      (ctx.choiceCoercionBody <| pruneConstructHints ctx retName
-        (Choice.firstReturnBody p b bty rest binds setsT (some vty.toSTy) normal? frames memberFn capArgs))
+  -- the clauses after the call, once for all the values of every member; one
+  -- for each other type of value too
+  let retFns : List STop := kPs.flatMap fun kp => (none :: valTys.map some).map fun t =>
+    STop.fn p (retOf t) ({ name := "$V", ty := t.getD vty.toSTy } :: kp :: capPs ++ typeParams) tps specs ret
+      (ctx.choiceCoercionBody <| pruneConstructHints ctx (retOf t)
+        (Choice.firstReturnBody p b bty rest binds setsT (some vty.toSTy) normal? frames memberFn capArgs fTys))
   return { key, pos := p, name, returnExit, breakExit, sourceContext := sourceContextOf ctx, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
            params := params ++ typeParams, tparams := tps, specs, ret,
            body := ctx.choiceCoercionBody <| pruneConstructHints ctx name
              (Choice.firstBody name p b bty cls tail rest binds setsT capArgs (some vty.toSTy) nameOf recArgs
-               normal? frames retName),
+               normal? frames retName fTys retOf),
            binds, sets := sets.map (·.name),
            args := pnames.map (SExpr.ident p ·) ++ kPs.map (fun _ => .ident p "false") ++
              caps.map (fun l => .ident p l.name) ++ typeArgs,
            varBinds := (bls.filter (·.mutable)).map (·.name), extraFns := extraFns ++ contFns ++ retFns }
 
-/-- (#335) The key of a continuation: where the composed choice is, its
-    binding, and the consumer's names the clauses after it use (in a method,
-    once its members are `Self`'s, as in the function), as `firstKey`. -/
+/-- (#335) The key of a continuation, the function the clauses after a
+    composed choice (and a `for`'s body) are compiled in: what its code
+    depends on, as `firstKey`'s. The choice's place and binding; the locals
+    the clauses use (`Ctx.usedLocals`; in a method, once its members are
+    `Self`'s, as in the function) with their types (#338: a `for`'s body
+    copied once per alternative of a choice has the same place, with names
+    of other types); the clauses' places (#349: the same choice inside an
+    alternative of another one with a continuation has that one's call after
+    it in the next elaboration); the type variables they write, as bound here
+    (#427: a type only an annotation names still tells instances apart); the
+    class copy (#427) and the inlined bodies (#441) it is in; the source
+    context (#485); and with `--signal-no-rollback`, whether it is in a
+    failure context (#515). It is the same in a trial of the clauses
+    (`Ctx.trial`) as in the function they are compiled in, which the trial
+    asks for, so the next elaboration finds it: nothing in it names the
+    scope it is computed in (a generated local the clauses use is named by
+    its place alone, as `$forReturn…` is). -/
 def contKey (ctx : Ctx) (p : Pos) (b : String) (rest : List SExpr) : String :=
   let rest := match ctx.selfClass with
     | some c => rest.map (selfQualify ctx c)
     | none => rest
   -- (with their types: a `for`'s body copied once per alternative of a
   -- choice has the same place, with names of other types)
-  let caps := (ctx.captureEvidence ((Choice.namesUsed (.block p rest)).eraseDups.filterMap ctx.lookup)).map fun l =>
+  let caps := (ctx.captureEvidence (ctx.usedLocals (.block p rest))).map fun l =>
     s!"{l.name}:{reprStr l.ty}" ++ (if l.typeValue then ":typeValue" else "")
   -- A type used only by a written annotation has no captured value. Its
   -- instance still distinguishes helpers made at a shared source position.
@@ -879,7 +986,7 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
     else pure none
   let breaks := firstBreaks rest
   let rest := if breaks then rest.map Refine.liftBreaks else rest
-  let caps : List Local := ctx.captureEvidence ((Choice.namesUsed (ctx.choiceCoercionBody (.block p rest))).eraseDups.filterMap ctx.lookup)
+  let caps : List Local := ctx.captureEvidence (ctx.usedLocals (ctx.choiceCoercionBody (.block p rest)))
   let setNames := Choice.setsIn (.block p rest)
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
   let binds := (b :: Choice.boundIn rest).eraseDups
@@ -976,7 +1083,7 @@ partial def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   -- checked when that consumer elaborates; they do not escape the helper.
   let safeMarkers := ["$sourceSuper", "$methodMiss", "$methodCast", "$methodCase", "$methodType", "$methodParams", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
     "$forReturns", "$forReturnBody", "$forClauseExits", "$choiceOperation", "$choiceGenericOperation", "$choiceFixedOperation", "$choiceCoercions", "$choiceDictionary", "$defer", "$deferExits", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
-    "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$declNames", "$callArgs", "$callSingleton", "$then"]
+    "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$noteTypes", "$noteFails", "$declNames", "$callArgs", "$callSingleton", "$then"]
   let rec blocked (e : SExpr) : Bool :=
     match e with
     -- Starting a task is immediate. elabSpawn checks its arguments in the
@@ -997,12 +1104,6 @@ def forContWaits (ctx : Ctx) (before after : ESt) (code : List Expr) : Bool :=
   ctx.suspends && (before.pendingSuspendingCasts != after.pendingSuspendingCasts ||
     before.pendingWaitingCasts != after.pendingWaitingCasts ||
     code.any (Suspend.hasSusp fun f => ctx.sigs.any fun s => s.idx == f && s.suspends))
-
-/-- An admitted continuation rediscovers its local/frame metadata in its
-    own helper. Its heap effects still belong to the enclosing source. -/
-def restoreForContTrial (saved : ESt) : EM Unit := do
-  let fx := (← get).fx
-  set { saved with fx }
 
 /-- (#335, phase 2) The continuation of a composed choice in a `for`: a
     function that runs the clauses after it (`rest`) and the body, failing
@@ -1031,7 +1132,7 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
     | .app _ (.ident _ "$forReturnBody") [.block _ [_, .set _ (.ident _ _) none _], _, _] false => true
     | _ => false
   if !breaks && (Refine.findPart Refine.isBreak true (.block p rest)).isSome then throw "a break"
-  let caps : List Local := ctx.captureEvidence ((Choice.namesUsed (ctx.choiceCoercionBody (.block p (rest ++ [body])))).eraseDups.filterMap ctx.lookup)
+  let caps : List Local := ctx.captureEvidence (ctx.usedLocals (ctx.choiceCoercionBody (.block p (rest ++ [body]))))
   let setNames := Choice.setsIn (.block p (rest ++ [body]))
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
   let (tps, typeParams, typeArgs) ← contTypes ctx p (bty :: caps.map (·.ty)) [vty] written
@@ -1151,7 +1252,7 @@ def forStagePrefixOf (ctx : Ctx) (plan : Choice.ForStagePlan) (args : List Ty) (
   let clauses := clauses.map fun e => Refine.substTypes σt (qualify e)
   let body := Refine.substTypes σt (qualify body)
   let written := ctx.choiceCoercionBody (.block p (clauses ++ [body] ++ (copyNames ++ borrowNames).map (SExpr.ident p ·)))
-  let caps := ctx.captureEvidence ((Choice.namesUsed written).eraseDups.filterMap ctx.lookup)
+  let caps := ctx.captureEvidence (ctx.usedLocals written)
   let key := s!"prefix{flat}" ++ plan.key ++ contKey ctx p "$prepare" [written] ++ forStageCaptureKey ctx args caps
   let name := s!"{plan.base}$prepare{key.hash}"
   let (tps, more, witnesses) ← contTypes ctx p (caps.map (·.ty)) args written
@@ -1197,7 +1298,7 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
   let clauses := clauses.map qualify
   let body := qualify body
   let written := ctx.choiceCoercionBody (.block p (clauses ++ [body] ++ (ctx.forStageCopies ++ ctx.forStageBorrows).map (SExpr.ident p ·)))
-  let caps := ctx.captureEvidence ((Choice.namesUsed written).eraseDups.filterMap ctx.lookup)
+  let caps := ctx.captureEvidence (ctx.usedLocals written)
   let key := s!"env{ctx.forStageFlat}" ++ plan.key ++ contKey ctx p "$resume" [written] ++ forStageCaptureKey ctx ctx.forStageArgs caps
   let name := s!"{plan.base}$env{key.hash}"
   let args := ctx.forStageArgs
@@ -2074,6 +2175,9 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       else
         let .struct cls classArgs := actual | break
         let some owner := ctx.methodDecl? cls method | break
+        -- (#283) none for a family's stub: the method has several values,
+        -- which no operation gives; the clauses are copied instead
+        if ctx.types.familyStubs.contains s!"{owner}.{method}" then break
         let some signature := ctx.sig? s!"{owner}.{method}" | break
         let classVars := (ctx.types.sparams.lookup owner).getD []
         let own := signature.tparams.filter fun (n, _) => !classVars.any (·.1 == n)
