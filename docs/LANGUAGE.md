@@ -1226,12 +1226,24 @@ Main():void =
   So a class's `M` with one value stays an ordinary method wherever it is
   called, through a function too, and a function whose values come from
   another class's `M` through a receiver of that class has several values,
-  as when one family has the name. An overloaded `M` (#106) is a method
+  as when one family has the name. The receiver may be of several of those
+  classes where one call is compiled once for each alternative of a choice
+  whose values are of different types (`for (A := (Dup(a{}) | Dup(b{})),
+  X := A.M())`, #335): each alternative's call is in the family of its
+  receiver's class, `a`'s or `b`'s, or of its `M` with one value. Where such
+  a choice's first success is taken (an `if` condition, `first{…}`), its
+  values need a type above them all, as what the condition binds has one
+  after it; values of unrelated classes are refused there (take them in a
+  `for`, or give the classes a common base class). An overloaded `M` (#106) is a method
   for each of its parameter lists, each its own family: a call takes the
   list its arguments fit, as any call does, found as an overloaded
   function's call's overload is (the program elaborated once to find it,
   then again), and then its family as above; bare, through `Self` or
   `(super:)` too. So one list may have several values and another one.
+  Lists are a class hierarchy's, so a call compiled for receivers of
+  unrelated classes takes each one's list; one compiled for alternatives
+  whose arguments' types pick two lists of one class is refused, as a
+  call of an overloaded function with several values is there.
   A class below two roots of `M` (one
   listing two interfaces that both declare it) is refused when one of the
   families has several values. Such a

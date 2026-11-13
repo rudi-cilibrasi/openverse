@@ -2122,6 +2122,9 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       else
         let .struct cls classArgs := actual | break
         let some owner := ctx.methodDecl? cls method | break
+        -- (#283) none for a family's stub: the method has several values,
+        -- which no operation gives; the clauses are copied instead
+        if ctx.types.familyStubs.contains s!"{owner}.{method}" then break
         let some signature := ctx.sig? s!"{owner}.{method}" | break
         let classVars := (ctx.types.sparams.lookup owner).getD []
         let own := signature.tparams.filter fun (n, _) => !classVars.any (·.1 == n)

@@ -1,0 +1,27 @@
+x 1
+x 2
+x 1
+x 2
+x 30
+x 40
+x 30
+x 40
+y 1
+y 2
+y 500
+y 500
+z 1
+z 2
+z 1
+z 2
+z 30
+z 40
+z 30
+z 40
+w 1 a
+w 2 a
+w 1 a
+w 2 a
+w 30 b
+w 40 b
+exit=0

@@ -93,6 +93,9 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
                   #283's overloads picked in rounds; on in half the programs otherwise)
        noovm     (no second list, of one value, of a test's class's method with several
                   values; on in half the programs with mvm and meth otherwise)
+       nohm      (no test HetMethods: methods of one name of unrelated classes, called on the
+                  value of a choice whose alternatives are of those classes, #283, #335; on in
+                  a third of the programs otherwise)
 """
 import copy
 import os
@@ -438,6 +441,13 @@ R17 = random.Random(seed * 1000003 + 391)
 # 1000, with nothing to undo. A generator of its own decides, so seeds keep their other programs.
 R18 = random.Random(seed * 1000003 + 2833)
 SHARED = METH and MVM and 'noshared' not in flags and R18.random() < 0.4
+# ---- #283, #335 (nohm turns it off): at times a test of its own, HetMethods, after the others,
+# calls Hm, a method of one name in two or three unrelated classes (each the root of a family of
+# its own when Hm has several values there, or an ordinary method), on the value of a choice whose
+# alternatives are of those classes, so the clauses after it are copied for each and the receiver's
+# class picks the family (gen_hetero_methods). A generator of its own decides, and another makes
+# the test, so seeds keep their other programs.
+HM = 'nohm' not in flags and random.Random(seed * 1000003 + 283335).random() < 0.34
 # ---- #312, flag rt (on with lazy; nort turns it off): a test's expression may call
 #   RT(RTa:int):int =
 #       RTy := RTa | RTa + 1 | RTa + 2
@@ -2652,6 +2662,83 @@ def show_func(f):
     return L
 
 
+def gen_hetero_methods(rng):
+    """(#283, #335) Hm in two or three unrelated classes, with several values or one, at times
+    overridden in a class below (whose override reaches the root's with (super:)), at times with
+    a second list that no call takes (so that hierarchy's lists have names of their own), the
+    classes at times below a base class without Hm; called on the value of a choice whose
+    alternatives are those classes' objects, each twice through HmDup or once as written (one at
+    least twice, so the alternatives have values of their own and the clauses after the choice
+    are copied for each): in a for, with a filter at times, in a for's body, with a later clause
+    that takes each alternative's own type (HmTag, overloaded by class), and, under the base
+    class (where the names the condition binds join), where the first success is taken.
+    Returns the declarations, the test and its output."""
+    n = rng.randint(2, 3)
+    base = rng.random() < 0.5
+    names = ['hma', 'hmb', 'hmc'][:n]
+    vals = {}
+    decls = (['hmbase := class:', '    Hk:int = 0'] if base else [])
+    kinds = [rng.choice(['multi', 'multi', 'one']) for _ in names]
+    if 'multi' not in kinds:
+        kinds[rng.randrange(n)] = 'multi'
+    below = {}
+    for c, kind in zip(names, kinds):
+        k1, k2 = rng.randint(1, 6), rng.randint(-3, 9)
+        decls.append(f"{c} := class{'(hmbase)' if base else ''}:")
+        if kind == 'multi':
+            decls.append(f"    Hm(Hx:int):int = Hx * {k1} | Hx + {k2}")
+            vals[c] = (lambda k1, k2: lambda x: [x * k1, x + k2])(k1, k2)
+        else:
+            decls.append(f"    Hm(Hx:int):int = Hx * {k1} + {k2}")
+            vals[c] = (lambda k1, k2: lambda x: [x * k1 + k2])(k1, k2)
+        if rng.random() < 0.3:
+            decls.append("    Hm(Hs:string):int = Hs.Length")
+        if kind == 'multi' and rng.random() < 0.35:
+            k3 = rng.randint(1, 5)
+            decls += [f"{c}s := class({c}):", f"    Hm<override>(Hx:int):int = Hx - {k3} | (super:)Hm(Hx)"]
+            vals[c + 's'] = (lambda k3, up: lambda x: [x - k3] + up(x))(k3, vals[c])
+            below[c] = c + 's'
+    decls.append("HmDup(V:t where t:type):t = V | V")
+    decls += [f'HmTag(V:{c}):string = "{c}"' for c in names]
+
+    def alts():
+        """a choice of receivers: its source, and the objects' classes (static, and the root's for HmTag)"""
+        cs = [rng.choice(names) for _ in range(rng.randint(2, 3))]
+        twice = [rng.random() < 0.6 for _ in cs]
+        if not any(twice):
+            twice[rng.randrange(len(cs))] = True
+        src, objs = [], []
+        for c, t in zip(cs, twice):
+            cl = below[c] if c in below and rng.random() < 0.5 else c
+            src.append(f"HmDup({cl}{{}})" if t else f"{cl}{{}}")
+            objs += [(cl, c)] * (2 if t else 1)
+        return "(" + " | ".join(src) + ")", objs
+    test, out = ["HetMethods():void ="], []
+    for _ in range(rng.randint(2, 4)):
+        forms = ['for', 'filter', 'body', 'tag'] + (['first'] if base else [])
+        form = rng.choice(forms)
+        src, objs = alts()
+        x = rng.randint(-2, 6)
+        t = rng.randint(-2, 12)
+        if form == 'for':
+            test.append(f'    for (A := {src}, X := A.Hm({x})) {{ Print("h {{X}}") }}')
+            out += [f"h {v}" for cl, _ in objs for v in vals[cl](x)]
+        elif form == 'filter':
+            test.append(f'    for (A := {src}, X := A.Hm({x}), X > {t}) {{ Print("g {{X}}") }}')
+            out += [f"g {v}" for cl, _ in objs for v in vals[cl](x) if v > t]
+        elif form == 'body':
+            test.append(f'    for (A := {src}) {{ for (X := A.Hm({x})) {{ Print("b {{X}}") }} }}')
+            out += [f"b {v}" for cl, _ in objs for v in vals[cl](x)]
+        elif form == 'tag':
+            test.append(f'    for (A := {src}, X := A.Hm({x}), T := HmTag(A)) {{ Print("t {{X}} {{T}}") }}')
+            out += [f"t {v} {c}" for cl, c in objs for v in vals[cl](x)]
+        else:
+            test.append(f'    if (A := {src}, X := A.Hm({x}), X > {t}) {{ Print("f {{X}}") }} else {{ Print("f none") }}')
+            first = next((v for cl, _ in objs for v in vals[cl](x) if v > t), None)
+            out.append("f none" if first is None else f"f {first}")
+    return decls, test, out
+
+
 def gen_incomplete_if(rng):
     """A conditional chooses a branch once and discards each yielded value."""
     arms = [rng.sample(range(1, 9), rng.randint(2, 4)) for _ in range(rng.randint(1, 2))]
@@ -2963,6 +3050,12 @@ for ti in range(NT):
     lines += as_method(L)
     tests.append(name)
     out += [f"== {name}"] + tout
+
+if HM and not OVERFLOW[0] and not REFUSED[0]:
+    hm_decls, hm_test, hm_out = gen_hetero_methods(random.Random(seed * 1000003 + 283336))
+    lines += hm_decls + hm_test
+    tests.append("HetMethods")
+    out += ["== HetMethods"] + hm_out
 
 if BIF and not OVERFLOW[0] and not REFUSED[0]:
     incomplete_src, incomplete_out = gen_incomplete_if(random.Random(seed * 1000003 + 283))
