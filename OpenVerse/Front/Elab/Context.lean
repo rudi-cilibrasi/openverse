@@ -457,6 +457,12 @@ structure Requests where
       has several values, by its place: the overload it takes (`F$ovK`),
       whose own function it calls (`Choice.inlineMulti`). -/
   overloads : List (Pos × String) := []
+  /-- (#283) For each consumer in a recursive group's code of a call of a
+      function with several values, the types of the names it takes from
+      that code and gives it (`Choice.nestKey`), which its function of its
+      own (`Choice.nestFns`) is made with; and for a `for` that can fail,
+      `$fails`. -/
+  nested : List (String × STy) := []
   /-- Functions wanted as values at closed function types no class of
       theirs gives (#214): a class for each. -/
   fns : List (String × Ty) := []
@@ -488,6 +494,7 @@ def Requests.merge (a b : Requests) : Requests where
   lazy := mergeByKey id a.lazy b.lazy
   families := mergeByKey id a.families b.families
   overloads := mergeByKey id a.overloads b.overloads
+  nested := mergeByKey (·.1) a.nested b.nested
   fns := mergeByKey id a.fns b.fns
   methods := mergeByKey (·.key) a.methods b.methods
   casts := mergeByKey (·.key) a.casts b.casts
@@ -504,6 +511,7 @@ def Requests.without (r old : Requests) : Requests where
   lazy := dropByKey id r.lazy old.lazy
   families := dropByKey id r.families old.families
   overloads := dropByKey id r.overloads old.overloads
+  nested := dropByKey (·.1) r.nested old.nested
   fns := dropByKey id r.fns old.fns
   methods := dropByKey (·.key) r.methods old.methods
   casts := dropByKey (·.key) r.casts old.casts
@@ -511,7 +519,8 @@ def Requests.without (r old : Requests) : Requests where
   witnesses := dropByKey id r.witnesses old.witnesses
 
 def Requests.isEmpty (r : Requests) : Bool :=
-  r.eager.isEmpty && r.lazy.isEmpty && r.families.isEmpty && r.overloads.isEmpty && r.fns.isEmpty && r.methods.isEmpty &&
+  r.eager.isEmpty && r.lazy.isEmpty && r.families.isEmpty && r.overloads.isEmpty && r.nested.isEmpty &&
+    r.fns.isEmpty && r.methods.isEmpty &&
     r.casts.isEmpty && r.loops.isEmpty && r.witnesses.isEmpty
 
 /-- A lazily taken call where the first success is taken (#246): its
@@ -938,7 +947,7 @@ def Ctx.rootsOf (ctx : Ctx) (c m : String) : List String :=
 def Ctx.failabilityKnown (ctx : Ctx) : EM Bool := do
   let st ← get
   return st.needs.fns.isEmpty && st.needs.methods.isEmpty && ctx.types.familySites.isEmpty &&
-    ctx.types.overloadSites.isEmpty && !ctx.typeOnly
+    ctx.types.overloadSites.isEmpty && ctx.types.nestedSites.isEmpty && !ctx.typeOnly
 
 /-- (#283) A use `R.M` at `p` whose family of methods only the class of
     `R` tells, one of `TyEnv.familySites`: the root of `M` above that class

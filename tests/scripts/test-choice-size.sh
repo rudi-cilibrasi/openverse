@@ -543,6 +543,8 @@ kinds=(
   recursive-frame-for
   recursive-if-first
   recursive-if-for
+  recursive-nested-first
+  recursive-nested-for
   recursive-sequence-first
   recursive-sequence-for
   recursive-sequence-calls-first
@@ -1630,6 +1632,28 @@ if kind.startswith('recursive-if-'):
     # code after it that reaches the next: the code after each is its
     # leaves' one frame, in its first leaf only, not copied into each leaf
     steps = [f'    X{i + 1} := (if (N > {i % 3}) then F[N - 1] + X{i} else (X{i} | X{i} * {i + 2}))\n'
+             f'    Print("x {{X{i + 1}}}")' for i in range(count)]
+    body = '\n'.join(steps)
+    print(f'''F(N:int)<transacts><decides>:int =
+    Print("f {{N}}")
+    N > 0
+    X0 := F[N - 1] | N
+{body}
+    X{count}''')
+    if kind.endswith('first'):
+        print('Main()<transacts>:void = if (X := F[2], X > 100) then Print("{X}") else Print("none")')
+    else:
+        print('Main()<transacts>:void = Print("{(for (X := F[2], X > 100): X).Length}")')
+    sys.exit(0)
+if kind.startswith('recursive-nested-'):
+    # (#283) conditions in sequence, each taking the first success of a call
+    # of the function itself, a consumer of it in its own code: each is a
+    # function of its own, called where it was, so the function's code has
+    # one call for each. Each such function is a consumer of the group as any
+    # is, with the group's code compiled into it (a FirstLift function where
+    # it has effects), so the code grows with the consumers times the group's
+    # code: about 2.6x from 4 to 8 consumers
+    steps = [f'    X{i + 1} := (if (F[N - 1] > X{i} + {i % 3}) then X{i} + 1 else X{i} * 2)\n'
              f'    Print("x {{X{i + 1}}}")' for i in range(count)]
     body = '\n'.join(steps)
     print(f'''F(N:int)<transacts><decides>:int =
