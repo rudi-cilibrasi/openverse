@@ -302,8 +302,9 @@ partial def STy.couldBeValue : STy → Bool
     refused (Book of Verse tests, profile_simple.versetest: 3560). -/
 def profileOf (p : Pos) (tag : Option SExpr) (body : SExpr) : PM SExpr := do
   if body == .block body.pos [] then throw s!"{p.show}: profile needs a body: the code it measures"
-  let tagged := tag.toList.map fun t => SExpr.decl p s!"$profile{p.line}_{p.col}" (some (.name "string")) false t
-  return if tagged.isEmpty then body else .block p (tagged ++ [body])
+  -- (the tag, or "", in `$profileL_C`, which marks the block: `checkProfiles`)
+  let tag := tag.getD (.str p [])
+  return .block p [SExpr.decl p s!"$profile{p.line}_{p.col}" (some (.name "string")) false tag, body]
 
 /-- A form openverse parses and has no meaning for, `$refused(msg, e…)`:
     `Attributes.apply` refuses it with `msg` before anything else reads the

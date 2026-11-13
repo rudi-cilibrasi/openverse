@@ -346,6 +346,24 @@ partial def checkSpawnExits (tops : List STop) : Except String Unit := do
       for m in ms do
         if let .fn _ _ ps _ _ _ body := m then ps.forM (·.default.forM go); go body
 
+/-- A `profile` block is code of a function's, not of an initializer: none
+    in a constant's value or a field's default (Book of Verse tests,
+    profile_simple.versetest:144, "Cannot use profiles inside initializers -
+    only allowed inside control-blocks", 3675). -/
+def checkProfiles (tops : List STop) : Except String Unit := do
+  let profile? : SExpr → Option SExpr :=
+    Refine.findPart (fun | .decl _ n .. => n.startsWith "$profile" | _ => false) false
+  let refuse (p : Pos) (what : String) : Except String Unit :=
+    throw s!"{p.show}: profile is not allowed in {what}: an initializer; it measures code of a function's (Book of Verse tests, profile_simple.versetest)"
+  for t in tops do
+    match t with
+    | .const _ _ _ _ (.structDef _ _ _ fs) | .classDef _ _ _ _ _ _ _ fs _ =>
+      for f in fs do
+        if let some r := f.default.bind profile? then refuse r.pos s!"the default of '{f.name}'"
+    | .const _ n _ _ e =>
+      if let some r := profile? e then refuse r.pos s!"the value of {n}"
+    | .fn .. => pure ()
+
 /-- `return` leaves a function's body, so it is refused where there is none: in
     a constant's value, and in a field's default, which is evaluated where an
     object is constructed and would leave the function that constructs it. -/
@@ -453,6 +471,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   checkReturns allTops0r
   checkNestedReturns allTops0r
   checkSpawnExits allTops0r
+  checkProfiles allTops0r
   checkDefers allTops0r
   checkForClauses allTops0r
   let helpers ← if usesRat then ratTops else pure []
