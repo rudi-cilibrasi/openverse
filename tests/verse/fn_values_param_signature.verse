@@ -12,7 +12,7 @@ Fold(Items:[]t, Initial:u, F(:u, :t)<transacts>:u where t:type, u:type)<transact
     for (Item:Items):
         set Acc = F(Acc, Item)
     Acc
-Values := array{1, 2, 3, 4, 5}
+Values:[]int = array{1, 2, 3, 4, 5}
 Square(X:int)<computes>:int = X * X
 IsOdd(X:int)<computes><decides>:void = Mod[X, 2] = 1
 AddTo(Acc:int, X:int)<computes>:int = Acc + X

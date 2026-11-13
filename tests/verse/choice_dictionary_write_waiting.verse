@@ -1,4 +1,4 @@
-# An old field value remains saved across an RHS wait; cancellation skips the store.
+# The old field value is read after an RHS wait; cancellation skips the store.
 base:=class:
     var K:int
     Change()<transacts><suspends>:int=

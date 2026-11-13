@@ -1,4 +1,4 @@
-# Capture the terminal object before the RHS replaces its parent field.
+# Capture the terminal object before the RHS replaces its parent field; read its field after the RHS.
 leaf:=class{var K:int}
 base:=class:
     var C:leaf

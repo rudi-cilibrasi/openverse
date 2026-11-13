@@ -1,3 +1,5 @@
+# set A.Data[0] += A.Zap(): Zap empties Data first, so the old value's read fails, and the clause
+# with it, before an addition that would overflow
 ca:=class:
     var Data:[]int=array{1}
     Zap()<transacts>:int=block{Print("rhs");set Data=array{};9223372036854775807}

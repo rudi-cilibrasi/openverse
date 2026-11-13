@@ -1,3 +1,5 @@
+# set A.Data[A.Outer()][A.Key()] += A.RHS() on maps of maps: the keys, then RHS, which replaces the
+# maps, then the old value read from the new ones
 cell:=class{var N:int=0}
 ca:=class:
     H:cell
@@ -10,7 +12,7 @@ ca:=class:
     RHS()<transacts>:int=
         Print("rhs a")
         set H.N+=10
-        set Data=map{0=>map{9=>900}}
+        set Data=map{0=>map{9=>900,7=>4}}
         3
 cb:=class:
     H:cell
@@ -23,7 +25,7 @@ cb:=class:
     RHS()<transacts>:int=
         Print("rhs b")
         set H.N+=10
-        set Data=map{"o"=>map{"z"=>900}}
+        set Data=map{"o"=>map{"z"=>900,"k"=>13}}
         3
 Dup(X:t where t:type)<computes>:t=X|X
 Main():void=

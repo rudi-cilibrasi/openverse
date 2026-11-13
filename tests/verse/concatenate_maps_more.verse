@@ -21,7 +21,7 @@ Pick(B:logic)<decides>:[int]int =
 Main():void =
     Shapes := ConcatenateMaps(map{1 => square{S := 2}}, map{2 => circle{R := 1}})
     for (K -> V : Shapes) { Print("{K}: {V.Area()}") }
-    M := ConcatenateMaps(Noisy(1, map{1 => 10}), Noisy(2, map{2 => 20}), Noisy(3, map{1 => 30}))
+    M := ConcatenateMaps(ConcatenateMaps(Noisy(1, map{1 => 10}), Noisy(2, map{2 => 20})), Noisy(3, map{1 => 30}))
     for (K -> V : M) { Print("{K}={V}") }
     if (P := ConcatenateMaps(map{1 => 1}, Pick[true])) then Print("{P.Length}")
     if (P := ConcatenateMaps(map{1 => 1}, Pick[false])) then Print("{P.Length}") else Print("failed")

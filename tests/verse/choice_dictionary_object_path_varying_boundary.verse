@@ -1,3 +1,5 @@
+# set A.Data.X += A.RHS(), where Data is a struct for one and an object for the other: the object is
+# the one Data names before RHS replaces it, its X read after RHS; the struct is read after RHS
 cell:=class{var N:int=0}
 sa:=struct{X:int;Tail:int}
 sb:=class{var X:rational}
@@ -19,4 +21,4 @@ Main():void=
         Q:=cb{H:=H,Data:=Old,Prev:=Old}
         Rows:=for(A:=(Dup(P)|Dup(Q)),set A.Data.X+=A.RHS()):block{Print("body {H.N}");0}
         Print("done {Rows.Length} {H.N}")
-        if(P.Data.X=15,P.Data.Tail=200,Old.X=15/2,Q.Prev.X=107,Q.Data.X=100)then Print("state ok") else Print("bad state")
+        if(P.Data.X=107,P.Data.Tail=200,Old.X=15/2,Q.Prev.X=107,Q.Data.X=100)then Print("state ok") else Print("bad state")

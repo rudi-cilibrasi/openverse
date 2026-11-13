@@ -1,2 +1,2 @@
-Merge(A:t where t:type)<computes>:[int]int=ConcatenateMaps(A)
+Merge(A:t where t:type)<computes>:[int]int=ConcatenateMaps(A,A)
 Main():void={}

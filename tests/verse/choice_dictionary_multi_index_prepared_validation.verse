@@ -1,3 +1,5 @@
+# set A.Data[0][0] += (1|A.Refill()): each alternative reads the old value after it runs, so after
+# the body empties Data the plain one fails and the refilling one succeeds
 cell:=class{var N:int=0}
 ca:=class:
     H:cell
