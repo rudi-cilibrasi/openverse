@@ -494,7 +494,6 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                   match contForLiftOf cA gp x bty t0 altsS restCl bd bodyFail with
                   | .ok lift =>
                     askHelper gp lift
-                    if cA.suspends then return (codeA, .prim .userErr [], t0)
                     return (Expr.seq codeA f0, a0, t0)
                   | .error _ => set st0
             pure (alts.zipIdx.map fun ((gs, r), i) => (liftP gs r i ++ restCl, bd, false))
@@ -647,7 +646,6 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                       contForLiftOf c gp b.name bty vty b.alts restCl bd bodyFail) with
                   | .ok lift =>
                     askHelper gp lift
-                    if c.suspends then return ⟨.prim .userErr [], r0.ty⟩
                     return r0
                   | .error _ => set st0
               else if !same && tys.length == b.alts.length && !c.constructProbe then
