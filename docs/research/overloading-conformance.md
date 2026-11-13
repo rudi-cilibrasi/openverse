@@ -55,15 +55,12 @@ Negative fixtures state their expected diagnostic on the first line.
 
 ## Known deviations and implementation follow-ups
 
-Each file in this table is a complete minimal reproducer. Diagnostics below
-omit their source-location prefix;
-the executable matrix checks the diagnostic text as well as status/output.
-All upstream expectations in this table are Book/development expectations,
-with released-UEFN availability unverified.
-
-| Reproducer | Pinned expectation | Current observation | Follow-up |
-| --- | --- | --- | --- |
-| [Class upper bound](../../tests/conformance/overloading/class_bound.verse) | `t:subtype(vehicle)` accepts and preserves `car`; print its `Doors` value `2`, as in the subtype-preserving Book example. | Exit 4: `unknown constraint subtype(vehicle)`. | [#502](https://github.com/rudi-cilibrasi/openverse/issues/502) |
+None is open. The last, a [class upper
+bound](../../tests/conformance/overloading/class_bound.verse) (`t:subtype(vehicle)`
+accepts and preserves `car`; print its `Doors` value `2`, as in the
+subtype-preserving Book example), exited 4 with `unknown constraint
+subtype(vehicle)` until source upper bounds were admitted (#502); it is now a
+supported case of the matrix, its reproducer and expectation retained.
 
 The [named function value](../../tests/conformance/overloading/named_capture.verse)
 case was **not** the overloaded-name capture restriction. The Book's

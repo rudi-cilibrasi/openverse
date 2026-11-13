@@ -762,7 +762,7 @@ private def interiorCancelSource := receiverCancelSource
   |>.replace "set V.N=5" "set X.N=5"
 
 /-- Compiler-API fixture: explicit, checked source dictionaries become private
-    receiver fields. Source upper-bound syntax is still guarded. -/
+    receiver fields, as a source upper bound's are. -/
 private partial def receiverFields : STop → STop
   | .classDef p owner nsp params specs parents iface fields methods =>
     .classDef p owner nsp params specs parents iface
