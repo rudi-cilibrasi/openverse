@@ -2202,10 +2202,22 @@ Main():void =
 - **`T[X]`** with `T` a type value is `X` cast to the class `T` holds, failing
   unless `X`'s class is below it. **`T{}`** with `T:concrete_subtype(c)`
   constructs the class `T` holds with its defaults; no field may be given.
+- **Other types.** `subtype(t)` is also of a type that is no class or
+  interface: a built-in type (`subtype(int)`), a struct, an enum, or an
+  array, option, map or tuple of them (`subtype([]c)`); its values are the
+  types `t` (`X:type = int`, `Identity(point)`), each an object of a class
+  of its own, which nothing reads but a conversion to `type`, and a value
+  of `subtype(t)` holds `t` alone. `castable_subtype` and `concrete_subtype`
+  of such a type are refused, as the Book's tests have them.
+- **`concrete_subtype(any)`** holds the `<concrete>` classes, and
+  **`concrete_subtype(comparable)`** those that are also `<unique>`, so
+  comparable (`concrete_subtype(comparable)` of `float` is refused); nothing
+  is constructed through them (the Book's tests: "comparable cannot be
+  instanced here because we don't know if it's a class type").
 - Type values are not compared (the Book's tests: "We can't yet compare
-  the subtype values"). `subtype(t)` of a type that is no class or
-  interface (`subtype(int)`), `concrete_subtype(comparable)` and a metatype
-  as a type parameter's bound are not supported.
+  the subtype values"). `subtype(any)`, `subtype(comparable)`,
+  `castable_subtype(any)` and a metatype as a type parameter's bound are
+  not supported.
 - **A type given as an argument.** A function's parameter `t:type` that the
   function uses as a type (`FalseOption(t:type):?t = false`, the Book's
   tests) is a type parameter whose argument the call writes:

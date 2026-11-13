@@ -39,16 +39,6 @@ def accessorStruct : String := "$accessor"
     `external{}`, so that a construction need not give it. -/
 def externalSpec : String := "external"
 
-/-- A type as written, for a refusal. -/
-partial def written : STy → String
-  | .name n => n
-  | .arr t => "[]" ++ written t
-  | .opt t => "?" ++ written t
-  | .tup ts => s!"tuple({", ".intercalate (ts.map written)})"
-  | .map k v => s!"[{written k}]{written v}"
-  | .app n ts => s!"{n}({", ".intercalate (ts.map written)})"
-  | .fn ps _ r => s!"type\{_({", ".intercalate (ps.map fun p => ":" ++ written p)}):{written r}}"
-
 /-- Whether a method's first parameter is the accessor, `(:accessor)`. -/
 def takesAccessor (ps : List SParam) : Bool :=
   match ps with
@@ -116,7 +106,7 @@ def desugar (tops : List STop) : Except String (List STop) := do
       -- (ch. 12: "Not all types are supported for accessor fields"; the
       -- Book's tests refuse a tuple, CustomClassVarAccessors.versetest:88)
       if let .tup _ := f.ty then
-        throw s!"{what}: a field with accessors cannot be of a tuple type, {written f.ty}"
+        throw s!"{what}: a field with accessors cannot be of a tuple type, {TypeValues.writtenTy f.ty}"
       -- its accessors: methods of its class or of one above it (the Book's
       -- tests refuse functions, CustomClassVarAccessors.versetest:103)
       let up := supers c
@@ -133,11 +123,11 @@ def desugar (tops : List STop) : Except String (List STop) := do
       -- CustomClassVarAccessors.versetest 67-77, 699-713)
       let getterOk := (defined g).any fun (_, _, ps, _, r) => ps.length == 1 && r == f.ty
       if !getterOk then
-        throw s!"{what}: its getter is {g}(:accessor):{written f.ty}, which {c} does not have"
+        throw s!"{what}: its getter is {g}(:accessor):{TypeValues.writtenTy f.ty}, which {c} does not have"
       let setterOk := (defined s).any fun (_, _, ps, _, r) =>
         ps.length == 2 && (ps.getD 1 default).ty == f.ty && r == .name "void"
       if !setterOk then
-        throw s!"{what}: its setter is {s}(:accessor, :{written f.ty}):void, which {c} does not have"
+        throw s!"{what}: its setter is {s}(:accessor, :{TypeValues.writtenTy f.ty}):void, which {c} does not have"
       -- (not overridden, ch. 10: "a field with accessors declared in an
       -- interface cannot be overridden in an implementing class. The accessor
       -- implementation is fixed by the interface"; ch. 12: "Fields with
@@ -161,7 +151,7 @@ def desugar (tops : List STop) : Except String (List STop) := do
         match inherited with
         | some h =>
           if h.ty != f.ty then
-            throw s!"{what}: it overrides {f.name}:{written h.ty}, so its type is {written h.ty}"
+            throw s!"{what}: it overrides {f.name}:{TypeValues.writtenTy h.ty}, so its type is {TypeValues.writtenTy h.ty}"
         | none => throw s!"{what}: {f.name}<override> overrides no field of a class or interface above {c}"
   let _ := accessorsIn
   -- the accessor's type, a struct no program names, unless the program

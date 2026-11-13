@@ -1579,7 +1579,13 @@ type does, `$cast(A)(X:A)<decides>:A`, given as `C[X]`, and
 `T` of a metatype as calls of them. Joins of type values, the one place
 where interfaces would say more than the Book's metatypes (a join keeps no
 concreteness, and castability only of a castable bound), are restricted in
-`joinTy`. No Verse Core is added.
+`joinTy`. No Verse Core is added. A metatype of another type,
+`subtype(int)`, `subtype([]c)`, is an interface below `type` named by the
+type as written, with no method, and a type's name used as a value an
+object of a class of its own below it; `concrete_subtype(any)` and
+`concrete_subtype(comparable)` are interfaces below `type` that the values
+of the `<concrete>` classes, and of the `<unique>` ones among them,
+implement, with no construction.
 
 A type given as an argument and used as a type (`FalseOption(t:type):?t`)
 is a type parameter whose argument the call writes: `TypeArguments.desugar`,

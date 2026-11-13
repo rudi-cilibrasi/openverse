@@ -100,6 +100,11 @@ partial def elabERaw (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       if let .struct iface [] := l.ty then
         if let some (k, a) := TypeValues.bound? iface then
           if k != "concrete_subtype" then eerr p s!"{n}\{…} constructs through a value of concrete_subtype(…), and {n} is a {iface}"
+          -- (Book of Verse tests, MetatypeConcreteSubtype.versetest:35, 3545:
+          -- "comparable cannot be instanced here because we don't know if
+          -- it's a class type")
+          if a == "comparable" || a == "any" then
+            eerr p s!"{n}\{…} constructs through a value of {iface}, which need not be a class's: it cannot be constructed"
           if !fs.isEmpty then eerr p s!"{n}\{…} constructs through a type value with no fields given: the class's defaults"
           return ← elabE ctx (.app p (.member p (.ident p n) (TypeValues.makeMethod a)) [] false) exp
   if !ctx.constructProbe && ctx.constructHints.isNone &&
