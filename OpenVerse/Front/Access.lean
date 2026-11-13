@@ -498,7 +498,8 @@ def checkConsistency (lv : Levels) (tops : List STop) : Except String Unit := do
       if hidden n then continue
       checkExposes lv defs below p s!"{shown n}" (lv.definition n) [ty]
     | .const p n _ none (.structDef _ tps _ fs) =>
-      checkExposes lv defs below p s!"the struct {shown n}" (lv.definition n) (fs.map (·.ty)) (tps.map (·.name))
+      checkExposes lv defs below p s!"the struct {shown n}" (lv.definition n)
+        (fs.map (·.ty) ++ tps.filterMap (·.upperBound)) (tps.map (·.name))
     | .classDef p c _ tps specs _ _ fs ms =>
       if hidden c then continue
       let m := moduleOfName c
@@ -507,6 +508,10 @@ def checkConsistency (lv : Levels) (tops : List STop) : Except String Unit := do
       let memberEff (lvl : Option String) : Eff :=
         audience lvl m (some c) :: (if lvl == some "protected" then ctor else ce)
       let cps := tps.map (·.name)
+      -- (its type parameters' bounds are part of what it exposes, as a
+      -- function's are: the Book's tests, ParametricTypes.versetest 1284,
+      -- error 3593)
+      checkExposes lv defs below p (shown c) ce (tps.filterMap (·.upperBound)) cps
       for f in fs do
         let lvl := levelIn c f.name (levelOf f.specs) f.isOverride
         checkExposes lv defs below p s!"the field {bareName f.name} of {shown c}" (memberEff lvl) [f.ty] cps

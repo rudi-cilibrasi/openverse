@@ -1,7 +1,9 @@
 vehicle:=class<computes>{N:int=7}
 car:=class<computes>(vehicle){Name:string="precise"}
 Keep(X:t where t:subtype(vehicle))<computes>:t=X
-Return(X:t where t:subtype(vehicle))<computes>:t=Keep(return X)
+Return(X:t where t:subtype(vehicle))<computes>:t=
+    R:t=Keep(return X)
+    R
 Main():void=
     loop:
         V:vehicle=Keep(break)

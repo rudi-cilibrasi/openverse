@@ -710,22 +710,19 @@
     {
       "id": "class_bound",
       "path": "tests/conformance/overloading/class_bound.verse",
-      "classification": "known-gap",
+      "classification": "supported",
       "sources": [
         "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#type-constraints"
       ],
       "basis": "explicit-book-example",
       "issue": 502,
-      "expected": {
-        "exit": 0,
-        "stdout": "2\n"
-      },
-      "observed": {
+      "expectation": "Accept a class upper bound and preserve the exact car result subtype.",
+      "note": "Resolved with #502; original expectation and reproducer retained.",
+      "historical_observation": {
         "exit": 4,
         "diagnostic": "unknown constraint subtype(vehicle)"
       },
-      "expectation": "Accept a class upper bound and preserve the exact car result subtype.",
-      "note": ""
+      "resolved_with_issue": 502
     },
     {
       "id": "named_capture",

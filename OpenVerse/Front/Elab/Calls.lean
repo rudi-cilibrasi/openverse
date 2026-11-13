@@ -276,6 +276,16 @@ partial def elabBoundReceiverWith (elabE : Ctx → SExpr → Option Ty → EM R)
     | eerr p "internal: a bound view lost its lexical dictionary"
   elabSubtypeUpWith elabE ctx p value target plan
 
+/-- Why no instance of `s`'s bounds fits a call whose arguments gave `σ`:
+    the first bound its known type arguments do not satisfy, or else that
+    the bounds have no consistent instance. -/
+def inconsistentInstance (env : TyEnv) (s : Sig) (σ : List (String × Ty)) : String :=
+  let known (t : Ty) := t.params.all fun v => (σ.lookup v).isSome
+  match s.bounds.find? fun b => known b.base && known b.derived &&
+      !env.boundSubtype (b.derived.subst σ) (b.base.subst σ) with
+  | some b => s!"type {(b.derived.subst σ).show} does not satisfy subtype({(b.base.subst σ).show}) in a call of {s.name}"
+  | none => s!"cannot infer a consistent upper-bound instance of {s.name}"
+
 /-- A call of a generic function. Its type arguments are inferred by matching
     its signature: the result type against the expected type (unless that is
     `void`, which accepts anything), then each parameter type against its
@@ -378,7 +388,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
   -- the arguments, in their temporaries, then the defaults
   let inferred ← match SubtypeEvidence.infer (if s.bounds.isEmpty then ctx.types else ctx.evidenceEnv) s.bounds σ with
     | some inferred => pure inferred
-    | none => eerr p s!"cannot infer a consistent upper-bound instance of {s.name}"
+    | none => eerr p (inconsistentInstance ctx.evidenceEnv s σ)
   σ := inferred
   let mut steps : Array Expr := #[]
   let mut slots : Array (Option Nat) := Array.replicate s.params.length none
@@ -457,7 +467,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
   let inferred ← match SubtypeEvidence.infer (if s.bounds.isEmpty then ctx.types else ctx.evidenceEnv) s.bounds σ true
       ((s.tparams.filter (·.2)).map (·.1)) with
     | some inferred => pure inferred
-    | none => eerr p s!"cannot infer a consistent upper-bound instance of {s.name}"
+    | none => eerr p (inconsistentInstance ctx.evidenceEnv s σ)
   σ := inferred
   let mut targs : Array Ty := #[]
   for (v, cmp) in s.tparams do

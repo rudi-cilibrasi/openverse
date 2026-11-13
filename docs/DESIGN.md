@@ -1204,7 +1204,7 @@ where an elaboration asks for something and goes no further
 5. `classFields`: each class's fields, inherited, its own and hidden (`Fields`).
 6. `classMethods`: constructors, each class's struct and methods as functions, and the override and implementation checks (`Methods`).
 7. `typeEnvironment` (`Elab/Environment.lean`): the type environment of the classes, structs, enums, refinement types, type parameters and parents' type arguments.
-8. `upperBounds`: the bounds of type parameters and the relations fields declare, resolved for every header, then checked.
+8. `upperBounds`: the bounds of type parameters and the relations fields declare, resolved for every header, then checked; then `checkAliasBounds`, the bounds of the type applications type aliases write.
 9. `interfaceViews`: the interfaces referred to through views; a class that then needs hidden fields for all its type parameters makes the elaboration ask for them (`Views`, tier 2).
 10. `pinsAndAccessors`: the pins of the classes dispatched to under a refinement, and the fields read through accessors.
 11. `addPlaceholders`: placeholder classes and prototypes; no struct contains itself, and map keys are comparable.
@@ -1928,6 +1928,28 @@ instantiation lets inference take different paths at different types (at
 `void`, for example). Monomorphising the generically checked body is sound,
 but checks each instance separately, multiplies code, and cannot express
 polymorphic recursion.
+
+**Upper bounds (#502).** A bound `t:subtype(c)` is one more hidden
+parameter: a dictionary, an object of the compiler's interface
+`$subtypeEvidence(c, t)` whose `Up` method takes a `t` and gives the `c` it
+is (an upcast for classes, the embedding for `int` below `rational`, a loop
+over a container's elements, a composition along a chain of bounds;
+`SubtypeEvidence.lean`). Every operation on a `t` that the bound allows, a
+member, an index, an arithmetic operand, a call, goes through `Up` on an
+actual dictionary in scope; a static fact about `t` makes none, and the
+dummy value a hidden type parameter holds can never be one: the
+compiler-only provenance analysis (`MetadataFlow`) refuses a program in
+which such a value reaches a dictionary's place. A caller builds the
+dictionary from the instance it infers (checking the bound there) or passes
+on its own. So the bound costs nothing in Verse Core, its format or the C
+runtime: dictionaries are ordinary objects, checked by `Prog.checkTypes`
+like the rest. `castable_subtype(c)` is two such bounds, `c` and a hidden
+interface above every `<castable>` class (`UpperBounds.markCastable`). The
+source rules a bound brings (a bounded type parameter is determined by the
+parameters, a public type's bounds are visible, an alias's applications
+satisfy their bounds) are checked before elaboration or in the
+`upperBounds` phase; the rules and what stays refused are in
+[research/upper-bound-evidence.md](research/upper-bound-evidence.md).
 
 ## Function values: hidden interfaces and classes
 

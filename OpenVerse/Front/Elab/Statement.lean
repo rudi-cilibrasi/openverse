@@ -117,9 +117,6 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
         match TParam.ofMarker marker with
         | .ok tp => pure tp
         | .error message => throw message
-      match UpperBounds.checkParams parameters with
-      | .error message => throw message
-      | .ok _ => pure ()
       let cons := parameters.map fun tp => (tp.name, tp.constraint)
       let formal ← resolveTParams ctx.types parameters
       let names := cons.map (·.1)
@@ -189,9 +186,6 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
         match TParam.ofMarker marker with
         | .ok tp => pure tp
         | .error message => throw message
-      match UpperBounds.checkParams parameters with
-      | .error message => throw message
-      | .ok _ => pure ()
       let cons := parameters.map fun tp => (tp.name, tp.constraint)
       let formal ← resolveTParams ctx.types parameters
       let shownTp (n : String) : String := ((n.dropWhile (· != '_')).drop 1).toString

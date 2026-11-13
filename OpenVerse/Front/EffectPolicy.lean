@@ -254,7 +254,7 @@ partial def checkTy (p : Pos) : STy → Except String Unit
 
 def checkTParams (params : List TParam) : Except String Unit := do
   for param in params do param.upperBound.forM (checkTy param.pos)
-  UpperBounds.checkParams params
+  UpperBounds.checkKinds params
 
 partial def checkExpr (e : SExpr) (file : String := "") : Except String Unit := do
   let p := if e.pos.file.isEmpty then { e.pos with file } else e.pos
@@ -281,6 +281,7 @@ partial def checkTop (top : STop) (owner : String := "") : Except String Unit :=
   | .fn p name params tparams specs ret body =>
     checkSpecs p (owner ++ name) specs
     checkTParams tparams
+    UpperBounds.checkDetermined (owner ++ name) params tparams
     for param in params do
       checkTy p param.ty
       param.default.forM (checkExpr · p.file)

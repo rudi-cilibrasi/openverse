@@ -208,6 +208,24 @@ def upperBounds (env : TyEnv) (tops : List STop) : Except String TyEnv := do
           | .ok _ => pure ()
   return env
 
+/-- The bounds a type alias's type applies, checked where the alias is
+    defined, used or not, as those of every other written type application
+    are (the Book's tests, `ParametricTypes.versetest` 639, error 3509): its
+    parameters are any types, so an application that holds for them all
+    holds for each. A type that does not resolve here is refused where the
+    alias is used. -/
+def checkAliasBounds (env : TyEnv) (aliases : List (String × Aliases.Alias)) : Except String Unit := do
+  if env.sbounds.isEmpty then return
+  for (n, a) in aliases do
+    let tps : List TParam := a.params.map fun v => { pos := a.pos, name := v, constraint := "type" }
+    let some resolved := (resolveTParams env tps).toOption | continue
+    let scope := resolved.env env
+    let unchecked := { scope with sbounds := [] }
+    let some ty := ((resolveTy unchecked a.pos a.body).run' { env := unchecked }).toOption | continue
+    match ty.checkBounds scope with
+    | .error message => throw s!"{a.pos.show}: in the type alias {Aliases.shown n}: {message}"
+    | .ok _ => pure ()
+
 /-- The interfaces referred to through views (`interfaceViews`). -/
 structure Views where
   /-- The interfaces whose Verse Core type arguments at a class below them are

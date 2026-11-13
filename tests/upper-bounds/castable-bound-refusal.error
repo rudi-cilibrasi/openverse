@@ -1,0 +1,1 @@
+type plain is not <castable> (as castable_subtype(…) requires) in a call of F
