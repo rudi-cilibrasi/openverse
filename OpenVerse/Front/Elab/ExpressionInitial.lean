@@ -350,6 +350,14 @@ partial def elabExprInitialWith
             if let some t := askFor then
               noteNeeds { fns := [(n, t)] }
               return ⟨.prim .userErr [], t⟩
+            -- (#503: whatever its type arguments, its named parameters do
+            -- not fit the type's)
+            let (own, ts) := s.valueShape
+            if let some t@(.struct m _) := exp then
+              if let some tsh := FnValues.parse m then
+                let named : FnValues.Shape := { tsh with arity := tsh.positional + own.named.length, named := own.named, optional := own.optional }
+                if !named.within tsh then
+                  eerr p s!"expected {t.show}, found {(Ty.struct own.name (ts ++ [s.ret])).show}"
             eerr p s!"'{n}' is generic: a function type determining all its type arguments and satisfying its bounds must be expected (#214, #209)"
           else if ctx.types.classes.contains s!"{n}$fn" then
             -- a function as a value (#210): its class's object, of the

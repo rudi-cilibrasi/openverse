@@ -298,7 +298,9 @@ Main():void =
   has. The explicit arguments run as written; then each omitted default runs
   once, at the call, in declaration order and in the function's scope. A
   bound method's defaults read the receiver's fields as they are then, and
-  are its dynamic class's. A value converts to the function types above its
+  are its dynamic class's; an override that gives a named parameter a
+  default is, from a receiver of its class, a value of the types that leave
+  that parameter out. A value converts to the function types above its
   type: `type{_(?A:int = …):int}` is below `type{_(?A:int):int}` and below
   `type{_():int}`. Generic functions and methods, effects, failure and
   rollback, suspension, variance and escaping values work as for other

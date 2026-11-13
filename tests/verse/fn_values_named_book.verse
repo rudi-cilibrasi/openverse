@@ -3,6 +3,9 @@
 # names are part of a function type, a parameter with a default may be left
 # out of it, `?N:t = e` lets a caller of the value omit N (the function's own
 # default runs, not e), and a value keeps its own named type unannotated.
+Log(Message:string, ?Level:int=1, ?Color:string="white"):string =
+    "[Level {Level}] {Message} ({Color})"
+Stitch(?First:string, ?Second:string):string = First + Second
 Process(?Required:int, ?Optional:int = 0):int = Required + Optional
 DefaultAll(?A:int = 1, ?B:int = 2):int = A + B
 Seven(?X:int = 7)<computes>:int = X
@@ -19,6 +22,14 @@ Coerce(A:[]int, ?B:int = 2):[]int =
     for (X : A):
         X + B
 Main():void =
+    L1:type{_(:string, ?Color:string):string} = Log
+    L2:type{_(:string):string} = Log
+    L3:type{_(:string, ?Level:int, ?Color:string):string} = Log
+    Print(L1("Hi", ?Color := "red"))
+    Print(L2("Starting"))
+    Print(L3("Error", ?Color := "red", ?Level := 3))
+    Rev:type{_(?Second:string, ?First:string):string} = Stitch
+    Print(Rev(?First := "a", ?Second := "b"))
     P1:type{_(?Required:int):int} = Process
     P2:type{_(?Required:int, ?Optional:int):int} = Process
     P3:type{_():int} = DefaultAll

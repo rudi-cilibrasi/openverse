@@ -107,12 +107,16 @@ Function types:
 2. **Identity.** Named parameters are part of a function type and match by
    name: `type{_(?A:int, ?B:int):int}` and `type{_(?B:int, ?A:int):int}` are
    one type. Their default expressions are not part of the type.
-3. **Subtyping.** A function, or a value of type `s`, is a value of type `t`
-   when they have the same positional parameters and `t`'s names are among its
-   own. Each of its own names that `t` lacks must have a default (`s` lets
-   callers omit it). Each name `t` lets callers omit must also be omittable
-   in `s`. Effects follow the existing rule, contravariant parameter types and
-   a covariant result as the variance rule of #214 already has it.
+3. **Subtyping.** A value of function type `s` is a value of type `t` when
+   they have the same positional parameters and `t`'s names are among `s`'s.
+   Each name of `s` that `t` lacks must be one `s` lets callers omit, and each
+   name `t` lets callers omit must be omittable in `s` too. Its effects must
+   be among `t`'s, and the parameter and result types are the same. A
+   function or method named where a function type is expected fits it on the
+   same terms; its own type marks the named parameters with defaults as
+   omittable. As before (#214), such a name also fits a closed function type
+   by variance: parameter types above the type's and a result below. A value
+   of a function type does not convert to another by variance.
 4. **Calls.** A call through a value gives the positional arguments, then
    named ones in any order. It must give every name the type requires, and
    may give only names the type has. Explicit arguments run in written order.
@@ -120,7 +124,9 @@ Function types:
    in the function's own scope. For a bound method that is its receiver's
    current state and its dynamic class's override.
 5. **Bound methods.** The receiver is evaluated once, when the value is made,
-   as for methods without named parameters.
+   as for methods without named parameters. A method's own type is that of
+   the receiver's static class: an override that adds a default makes the
+   parameter omittable from a receiver of its class.
 6. **Unannotated values.** `F := G` has `G`'s own type, its parameters with
    defaults optional in it.
 7. **Capture.** Overloaded functions and methods still cannot be values,
@@ -149,34 +155,35 @@ Function types:
 
 ## Map
 
-Each program is minimal. "Before" is `d642ffc`, the main this work started
-from. The expected output was derived by hand from the rules above before
-running. "Now" is the same in the Lean interpreter and the C runtime. The
-programs are in the tests named in the last column.
+One minimal program per acceptance item. "Before" is `d642ffc`, the main
+this work started from; the expected output was derived by hand from the
+rules above before running; "now" is the same in the Lean interpreter and
+the C runtime. The last column names the test that covers the same rule in
+the repository.
 
-| Acceptance item | Program | Before | Expected | Now | Test |
+| Acceptance item | Minimal program | Before | Expected | Now | Test |
 | --- | --- | --- | --- | --- | --- |
 | Issue example | `DefaultAll(?X:int=7)<computes>:int=X` as `type{_()<computes>:int}`, called | exit 4: "has named parameters" | `7` | `7` | [named_capture](../../tests/conformance/overloading/named_capture.verse) |
-| Retain required names, omit optional (Book 08) | `Process` as `type{_(?Required:int):int}` and `type{_(?Required:int, ?Optional:int):int}`, `DefaultAll` as `type{_():int}` | exit 4: parse error in the type | `5 8 3` | `5 8 3` | [book](../../tests/verse/fn_values_named_book.verse) |
-| Names are identity (Book 09) | `Calculate(?Amount, ?Rate)` as `type{_(?Value:float, ?Factor:float):float}` | exit 4: parse error | refused | refused: expected `type{_(?Factor:float, ?Value:float):float}` | [renamed](../../tests/errors/fn_value_named_renamed.verse) |
-| No defaults in types (Book 10) | `F1(?X:int=1)` as `type{_(?X:int=99):int}`, `F2()` and `F2(?X := 5)` | exit 4: parse error | `1 5` | `1 5` | [book](../../tests/verse/fn_values_named_book.verse) |
-| Overloaded capture stays refused | two `Process` overloads, one named, as a value | exit 4 | refused | refused: "an overloaded function cannot be used as a value" | [overloaded](../../tests/errors/fn_value_named_overloaded.verse) |
-| Positional and named | `Log(Message, ?Level=1, ?Color="white")` as three types | exit 4: parse error | `[Level 1] Hi (red)` etc. | as expected | [escape](../../tests/verse/fn_values_named_escape.verse) |
-| Written order | `F(T(1), ?D := T(4), ?B := T(2), ?C := T(3))` | exit 4: parse error | `eval 1, 4, 2, 3`, then `1, 2, 3, 4` | as expected | [order](../../tests/verse/fn_values_named_order.verse) |
-| Defaults once, at call time, in order and scope | defaults call a counter and read an earlier parameter and a module constant | exit 4: parse error | each default once per call, in order | as expected | [order](../../tests/verse/fn_values_named_order.verse) |
-| Receiver once, live state | `MakeGame().CurrentSpeed` (prints once), `set G.DefaultSpeed = 3.0` after binding | exit 4: "a method with named parameters is not a value" | `receiver`, `bound`, `1.0 1.0`, `3.0` | as expected | [methods](../../tests/verse/fn_values_named_methods.verse) |
-| Inherited and overridden defaults (Book 07) | `fast_game` overrides `DefaultSpeed`; `slow_game` overrides the method's default | exit 4 | `2.0`, `0.5` | as expected | [methods](../../tests/verse/fn_values_named_methods.verse) |
+| Retain required names, omit optional (Book example 08) | `Process` as `type{_(?Required:int):int}` and as `type{_(?Required:int, ?Optional:int):int}`; `DefaultAll` as `type{_():int}` | exit 4: a parse error in the type | `5`, `8`, `3` | `5`, `8`, `3` | [book](../../tests/verse/fn_values_named_book.verse) |
+| Names are identity (example 09) | `Calculate(?Amount, ?Rate)` as `type{_(?Value:float, ?Factor:float):float}` | exit 4: parse error | refused | refused: expected `type{_(?Factor:float, ?Value:float):float}` | [renamed](../../tests/errors/fn_value_named_renamed.verse) |
+| No defaults in types (example 10) | `F1(?X:int=1)` as `type{_(?X:int=99):int}`; `F2()`, `F2(?X := 5)` | exit 4: parse error | `1 5` | `1 5` | [book](../../tests/verse/fn_values_named_book.verse) |
+| Overloaded capture stays refused | `F(X:int)` and `F(X:string)` as a value | exit 4 | refused | refused: "an overloaded function cannot be used as a value" | [overloaded](../../tests/errors/fn_value_named_overloaded.verse) |
+| Positional and named (example 03) | `Log(Message, ?Level=1, ?Color="white")` at three types | exit 4: parse error | `[Level 1] Hi (red)`, `[Level 1] Starting (white)`, `[Level 3] Error (red)` | as expected | [book](../../tests/verse/fn_values_named_book.verse) |
+| Written order | `F(T(1), ?D := T(4), ?B := T(2), ?C := T(3))`, `T` printing | exit 4: parse error | `eval 1`, `eval 4`, `eval 2`, `eval 3`, `1, 2, 3, 4` | as expected | [order](../../tests/verse/fn_values_named_order.verse) |
+| Defaults once, at the call, in order and scope | `Make(C, ?A = C.Next(), ?B = A * 10 + C.Next())` at `type{_(:counter):int}` twice, then at a type giving `?A` | exit 4: parse error | `made`, `default 1`, `default 2`, `12`, `default 3`, `default 4`, `34`, `default 5`, `75` | as expected | [order](../../tests/verse/fn_values_named_order.verse) |
+| Receiver once, defaults read live state | `MakeGame().CurrentSpeed` (printing `receiver`) called twice; `G.CurrentSpeed` bound, then `set G.DefaultSpeed = 3.0` | exit 4: "a method with named parameters is not a value" | `receiver`, `bound`, `1.0`, `1.0`, `3.0` | as expected | [methods](../../tests/verse/fn_values_named_methods.verse) |
+| Inherited and overridden defaults (example 07) | through a `base_game`: `fast_game` overrides the member the default reads, `slow_game` the method's default | exit 4 | `2.0 1.0` | `2.0 1.0` | [methods](../../tests/verse/fn_values_named_methods.verse) |
 | Generic | `Pick(X:t, ?Y:t = X)` as `type{_(:int):int}` and `type{_(:string, ?Y:string):string}` | exit 4: parse error | `3 b` | `3 b` | [generic](../../tests/verse/fn_values_named_generic.verse) |
-| Escaping | returned, a field, an array | exit 4: parse error | `11 3 3` | `11 3 3` | [escape](../../tests/verse/fn_values_named_escape.verse) |
-| Failure and rollback | `<decides>` with a default that writes, failing | exit 4: parse error | `ok 3 1`, `fail 1`, `ok 9 2` | as expected | [effects](../../tests/verse/fn_values_named_effects.verse) |
+| Escaping | returned from `Make()`, in a field, in an array | exit 4: parse error | `11 3 3` | `11 3 3` | [escape](../../tests/verse/fn_values_named_escape.verse) |
+| Failure and rollback | `<decides>` with a write before the failing check | exit 4: parse error | `ok 3 1`, `fail 1`, `ok 9 2` | as expected | [effects](../../tests/verse/fn_values_named_effects.verse) |
 | Suspension | `Wait(?Ticks:int = 2)<suspends>` as `type{_()<suspends>:int}` | exit 4: "has named parameters" | `2` | `2` | [effects](../../tests/verse/fn_values_named_effects.verse) |
-| Required name left out of type | `Need(?A:int)` as `type{_():int}` | exit 4: "has named parameters" | refused | refused: expected `type{_():int}`, found `type{_(?A:int):int}` | [required](../../tests/errors/fn_value_named_required.verse) |
-| Extra name in type | `F2(?A:int = 2)` as `type{_(?B:int):int}` | exit 4: parse error | refused | refused | [unknown](../../tests/errors/fn_value_named_unknown.verse) |
+| Required name left out of the type | `Need(?A:int)` as `type{_():int}` | exit 4: "has named parameters" | refused | refused: expected `type{_():int}`, found `type{_(?A:int):int}` | [required](../../tests/errors/fn_value_named_required.verse) |
+| Name the function lacks | `F2(?A:int = 2)` as `type{_(?B:int):int}` | exit 4: parse error | refused | refused | [unknown](../../tests/errors/fn_value_named_unknown.verse) |
 | Call omits a required name | `F()` for `F:type{_(?A:int):int}` | exit 4: parse error | refused | refused: "needs the argument ?A" | [call_missing](../../tests/errors/fn_value_named_call_missing.verse) |
-| Optional in type, required in function | `F1(?A:int)` as `type{_(?A:int = 0):int}` | exit 4: parse error | refused | refused | [optional](../../tests/errors/fn_value_named_optional.verse) |
-| Unannotated value (tests 513-519) | `F := F1`, `F(1, ?C := 2)`, `F(1, ?C := 2, ?B := 3)` | exit 4: "has named parameters" | `-1 2` | `-1 2` | [book](../../tests/verse/fn_values_named_book.verse) |
-| Names in any order | `Stitch(?First, ?Second)` as `type{_(?Second:string, ?First:string):string}` | exit 4: parse error | `ab` | `ab` | probes |
+| Omittable in the type, required by the function | `F1(?A:int)` as `type{_(?A:int = 0):int}` | exit 4: parse error | refused | refused | [optional](../../tests/errors/fn_value_named_optional.verse) |
+| Unannotated value (tests 513-519) | `F := F1`; `F(1, ?C := 2)`, `F(1, ?C := 2, ?B := 3)` | exit 4: "has named parameters" | `-1 2` | `-1 2` | [book](../../tests/verse/fn_values_named_book.verse) |
+| Names in any order | `Stitch(?First, ?Second)` as `type{_(?Second:string, ?First:string):string}` | exit 4: parse error | `ab` | `ab` | [book](../../tests/verse/fn_values_named_book.verse) |
 | Value to value | `G:type{_(?A:int = 0):int} = F6`, then `type{_():int}` and `type{_(?A:int):int}` from `G` | exit 4: parse error | `6 2 6 3` | `6 2 6 3` | [book](../../tests/verse/fn_values_named_book.verse) |
-| Value through an optional-typed parameter (JoinTest) | `F2(F:type{_(?A:int = 0):int}) = F() + F(?A := 2)` with `F6` | exit 4: parse error | `8` | `8` | [book](../../tests/verse/fn_values_named_book.verse) |
-| Method at a named type, live default | `B.Add` with `?Extra:int = Base`, `set B.Base = 20` | exit 4 | `3 21` | `3 21` | [methods](../../tests/verse/fn_values_named_methods.verse) |
-| Type default of another type (tests 529-535) | `type{_(?A:int = 'a'):int}` | exit 4: parse error | refused (Book tests) | **accepted**, prints `1` (reading above) | none |
+| Through a parameter whose type omits (JoinTest) | `F2(F:type{_(?A:int = 0):int}) = F() + F(?A := 2)` with `F6` | exit 4: parse error | `8` | `8` | [book](../../tests/verse/fn_values_named_book.verse) |
+| Bound method at named types, live default | `B.Add(X, ?Extra = Base)` at two types, `set B.Base = 20` | exit 4 | `3 21` | `3 21` | [methods](../../tests/verse/fn_values_named_methods.verse) |
+| A type's default of another type (tests 529-535) | `type{_(?A:int = 'a'):int}` | exit 4: parse error | refused (the pinned tests) | **accepted**, prints `1` (see readings) | none |
