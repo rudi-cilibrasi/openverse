@@ -112,159 +112,9 @@ def certify (lowered : LoweredProgram) (stubs : List (String × Pos)) (debug : B
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
 def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except String Compiled := do
-  EffectPolicy.check allTops0r opts.entry
-  SourceProfile.check opts.profile allTops0r opts.entry
-  -- rationals (#116): the helpers, for a program that may use them
-  let isRatMarker : STop → Bool := fun
-    | .const _ n _ _ => n == ratMarker || n == replaceAllMarker
-    | _ => false
-  let usesReplaceAll := allTops0r.any (fun | .const _ n _ _ => n == replaceAllMarker | _ => false) || opts.entry.isSome
-  let usesRat := allTops0r.any isRatMarker || opts.entry.isSome
-  -- (a type of the program's own cannot take a built-in type's name)
-  for t in allTops0r do
-    match t with
-    | .const p n _ (.structDef ..) | .const p n _ (.enumDef ..) | .classDef p n .. =>
-      if ("char32" :: typeNames).contains n then throw s!"{p.show}: {n} is a built-in type"
-    | _ => pure ()
-  let helpers ← if usesRat then ratTops else pure []
-  let helpers := helpers ++ (← if usesReplaceAll then replaceAllTops else pure [])
-  -- These compiler-owned implementations expand finite intrinsic operations:
-  -- Euclid/continued fractions decrease absolute remainders; ReplaceAll
-  -- advances through a finite input. Ordinary source names cannot supply them.
-  let intrinsicCalls := helpers.filterMap fun | .fn _ n .. => some n | _ => none
-  let allTops000 := allTops0r.filter (!isRatMarker ·)
-  -- modules (#112): every reference to a member, qualified (the entry
-  -- expression's too)
-  let rawEntry : List STop := match opts.entry with
-    | some e => [.fn e.pos "$Do" [] [] ["decides"] (.name "void") (.app e.pos (.ident e.pos "$Show") [e] false)]
-    | none => []
-  let resolved ← resolveModules (allTops000 ++ rawEntry)
-  let resolved := if opts.extendedDefaults then resolved
-    else resolved.map InitializerConvergence.markSource
-  -- Resolve source names before deciding which soft-library definitions are
-  -- needed. A module's own event and a type parameter named task are distinct
-  -- from the global helper types. Include public API/generated entry paths.
-  let defines0 (n : String) : Option Pos := resolved.findSome? fun
-    | .classDef p m .. | .fn p m .. | .const p m .. => if m == n then some p else none
-  let owned := PreludeNeeds.names.filter (defines0 · |>.isSome)
-  let requestTops := opts.requests.subtypes ++ Refine.functions opts.requests.casts resolved ++
-    opts.requests.loops.flatMap (fun l =>
-      STop.fn l.pos l.name l.params l.tparams l.specs l.ret l.body :: l.extraFns) ++
-    opts.requests.methods.map (fun r => STop.fn r.pos "$methodRequest"
-      ((r.receiver :: r.params).map fun t => { name := "$arg", ty := t }) r.tparams r.effs r.ret (.block r.pos r.args))
-  let uses := PreludeNeeds.uses (resolved ++ requestTops) ++
-    opts.requests.fns.flatMap (fun (_, t) => t.helperUses)
-  let privateNames := PreludeNeeds.privateNames owned uses
-  let concurrencyNames := privateNames.map fun n => (n, "$" ++ n)
-  let needs (n : String) := uses.contains ((concurrencyNames.lookup n).getD n)
-  let usesSubVoid := uses.contains "$subev0"
-  if usesSubVoid && owned.contains "subscribable_event" then
-    throw "subscribable_event() is the built-in no-payload shorthand; apply a program's own subscribable_event with explicit type arguments"
-  let usesSub := usesSubVoid || needs "subscribable_event" || needs "cancelable"
-  if usesSub then
-    if let some p := defines0 "cancelable" then
-      throw s!"{p.show}: cancelable is the type subscribable_event's Subscribe gives: a program that uses subscribable_event cannot define its own (#210)"
-  let usesConc := usesSub || uses.contains "$suspends" || PreludeNeeds.names.any needs
-  -- Keep source overrides, but isolate helper dependencies from them: builtin
-  -- sticky_event still extends the builtin event when source owns event.
-  let helpers := helpers ++ (← if usesConc then concTops privateNames opts.eventFifo else pure []) ++
-    (← if usesSub then subTops privateNames else pure []) ++ (← if usesSubVoid then subVoidTops privateNames else pure [])
-  -- Collect source contracts while every declaration still has its source
-  -- identity. Function-value classes, continuation frames and constructor
-  -- field packets implement source expressions; they acquire no extra source
-  -- contract merely because their implementation uses a data type.
-  let constructionFx := resolved.foldl (fun budgets top => match top with
-    | .classDef _ n _ specs .. | .const _ n _ (.structDef _ _ specs _) =>
-      budgets.insert n (EffectPolicy.constructionFx specs)
-    | _ => budgets) ({} : Std.HashMap String (List String))
-  -- functions with several values (#235): inlined at their calls
-  -- (#283) the members of built-in types and of the prelude: a method with
-  -- several values may not be named like one, as `R.M` could be it
-  let reserved : List String := ["Length", "Slice", "Find", "Insert", "Remove", "RemoveElement",
-    "RemoveFirstElement", "RemoveAllElements", "ReplaceElement", "ReplaceAllElements", "ReplaceAll", "Last",
-    "Signal", "Await", "Cancel"] ++ helpers.flatMap fun
-      | .classDef _ _ _ _ _ _ fs _ ms => fs.map (·.1) ++ ms.filterMap fun | .fn _ m .. => some m | _ => none
-      | _ => []
-  -- (#283) and the uses of methods whose family the receiver's class picks,
-  -- and the calls whose overload the arguments' types pick
-  -- (#283) and the consumers in recursive groups' code whose names' types
-  -- an elaboration is to note
-  let ⟨resolved, lazy, familySites, overloadSites, nestedSites, fieldSites⟩ ← Choice.inlineMulti resolved reserved
-    opts.requests.eager opts.requests.families opts.requests.lazy opts.requests.overloads opts.requests.nested
-    opts.requests.fieldOrders
-  -- (#246) the class of the stack cells of lazily taken ones
-  let helpers := helpers ++ (← if lazy then lazyTops else pure [])
-  -- (#283) and of the cells of the vars their frames set
-  let cells (e : SExpr) : Bool := Choice.anyE (fun | .construct _ "$varcell" .. => true | _ => false) e
-  let cellsIn (ps : List SParam) (b : SExpr) : Bool := cells b || ps.any (·.default.any cells)
-  let usesCells := lazy && resolved.any fun
-    | .fn _ _ ps _ _ _ b => cellsIn ps b
-    | .const _ _ _ e => cells e
-    | .classDef _ _ _ _ _ _ fs _ ms => fs.any (·.2.2.1.any cells) ||
-        ms.any fun | .fn _ _ ps _ _ _ b => cellsIn ps b | _ => false
-  let helpers := helpers ++ (← if usesCells then varcellTops else pure [])
-  -- the branches of casts that refine type arguments, as functions (#243)
-  -- (in front, as the entry expression is the end)
-  let resolved := Refine.functions opts.requests.casts resolved ++ resolved
-  -- (#246) the functions of their own of lazily taken calls
-  let mut generated : List String := []
-  let mut loopTops : List STop := []
-  for top in opts.requests.loops.flatMap (fun l =>
-      (if l.stageOnly then [] else [STop.fn l.pos l.name l.params l.tparams l.specs l.ret l.body]) ++ l.extraFns) do
-    let name := match top with
-      | .fn _ n .. | .classDef _ n .. => n
-      | _ => ""
-    if name.startsWith "$choiceOperationDictionary" then
-      if generated.contains name then continue
-      generated := name :: generated
-    loopTops := loopTops ++ [top]
-  for request in opts.requests.subtypes do
-    match request with
-    | .classDef p name .. =>
-      if !name.startsWith "$subtypeNominal" && !name.startsWith "$subtypeTuple" &&
-          !name.startsWith "$subtypeRefinement" then
-        throw s!"{p.show}: internal: invalid subtype dictionary request"
-    | _ => throw "internal: a subtype dictionary request must be a class"
-  let resolved := opts.requests.subtypes ++ loopTops ++ resolved
-  let needsSubtype := allTops0r.any UpperBounds.hasBounds || !opts.requests.subtypes.isEmpty ||
-    resolved.any (·.usesType SubtypeEvidence.family)
-  let definesSubtype := (resolved ++ helpers).any fun
-    | .classDef _ name .. => name == SubtypeEvidence.family
-    | _ => false
-  let helpers := helpers ++ (if needsSubtype && !definesSubtype then
-    SubtypeEvidence.protocol { line := 0, col := 0 } else [])
-  -- Public compiler requests must not launder annotations through generated
-  -- source or through function shapes that normalize their effect lists.
-  EffectPolicy.check (resolved ++ helpers)
-  -- A materialized request can itself carry an explicit data contract.
-  -- Enforce it too; unannotated implementation types retain inferred effects.
-  let constructionFx := (resolved ++ helpers).foldl (fun budgets top =>
-    let data := match top with
-      | .classDef _ n _ specs .. | .const _ n _ (.structDef _ _ specs _) => some (n, specs)
-      | _ => none
-    match data with
-    | some (n, specs) =>
-      if budgets.contains n || !specs.any EffectPolicy.effectNames.contains then budgets
-      else budgets.insert n (EffectPolicy.constructionFx specs)
-    | none => budgets) constructionFx
-  for (_, ty) in opts.requests.fns do
-    EffectPolicy.checkTy { line := 0, col := 0 } ty.toSTy
-  for request in opts.requests.methods do
-    EffectPolicy.checkSpecs request.pos request.key request.effs
-    EffectPolicy.checkTParams request.tparams
-    EffectPolicy.checkTy request.pos request.receiver
-    request.params.forM (EffectPolicy.checkTy request.pos)
-    EffectPolicy.checkTy request.pos request.ret
-    request.args.forM (EffectPolicy.checkExpr · request.pos.file)
-  -- (the helpers after: they name nothing of the program's)
-  -- function values (#210): the function types' interfaces, and a class
-  -- for each function used as a value
-  -- (the entry expression is scanned too)
-  let allTops00 := copyIfaceDefaults (SubtypeEvidence.addFields
-    (FnValues.desugar (resolved.take (resolved.length - rawEntry.length) ++ helpers)
-      (resolved.drop (resolved.length - rawEntry.length)) (opts.requests.fns.map fun (n, t) => (n, t.toSTy)) opts.requests.methods))
-  let entryTop := resolved.drop (resolved.length - rawEntry.length)
-  let defs ← argsAndMethodOverloads allTops00 entryTop opts.args
+  let admitted ← admitSource allTops0r opts
+  let source ← inlineSource allTops0r opts.requests admitted
+  let defs ← argsAndMethodOverloads source.tops source.entry opts.args
   -- classes and interfaces (#14, #18): each is a struct whose fields are
   -- those inherited first, then its own; each method `M` of `c` a function
   -- `c.M` whose first parameter is `Self`, generic over the class's type
@@ -332,9 +182,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       frontier := new.flatMap directUp
     if seen.contains cd.name then throw s!"{cd.pos.show}: {cd.name} inherits from itself"
   for cd in cdefs do
-    if let some allowed := constructionFx[cd.name]? then
+    if let some allowed := source.constructionFx[cd.name]? then
       for parent in cd.parents do
-        if let some required := constructionFx[parent]? then
+        if let some required := source.constructionFx[parent]? then
           for effect in required do
             if !allowed.contains effect then
               throw s!"{cd.pos.show}: construction of {cd.name} must allow <{effect}> declared by parent {parent}; add <{effect}> or <transacts> to {cd.name}"
@@ -676,7 +526,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let varFields : List (String × String) := cdefs.flatMap fun cd =>
     (fullOf cd.name).filterMap fun (f, _, _, isVar) => if isVar then some (cd.name, f) else none
   let uniques : List String := (cdefs.filter (·.specs.contains "unique")).map (·.name)
-  let mut env : TyEnv := { constructionFx, concurrencyNames, classes := henv.classes, cinfo := henv.cinfo, cinfoMap := henv.cinfoMap,
+  let mut env : TyEnv := { constructionFx := source.constructionFx, concurrencyNames := admitted.concurrencyNames, classes := henv.classes, cinfo := henv.cinfo, cinfoMap := henv.cinfoMap,
                            classIx := henv.classes.zipIdx.foldl (fun m (n, i) => m.insert n i) {},
                            belowReady := true,
                            supersMap := henv.classes.foldl (fun m d => m.insert d (henv.supers d)) {},
@@ -684,8 +534,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                              let i := henv.info d
                              if i.isIface || i.isAbstract then m else
                              (henv.supers d).foldl (fun m T => m.insert T ((m[T]?.getD []) ++ [d])) m) {},
-                           abstracts := abstracts.toList, requests := opts.requests, familySites, familyStubs := stubs.map (·.1),
-                           overloadSites, nestedSites, fieldSites }
+                           abstracts := abstracts.toList, requests := opts.requests, familySites := source.familySites, familyStubs := stubs.map (·.1),
+                           overloadSites := source.overloadSites, nestedSites := source.nestedSites,
+                           fieldSites := source.fieldSites }
   env := { env with varFields := varFields, uniques := uniques,
                     overriders := (overridePairs.toList.map fun (_, dm, _) => (dm.splitOn ".").headD "") ++
                       (implChecks.toList.map fun (_, _, impl, _) => (impl.splitOn ".").headD "") ++
@@ -1478,16 +1329,16 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- overload, so that the last elaboration has none to find (and knows what
   -- can fail): the program is elaborated again with them, so this one goes
   -- no further
-  if needs.families.isEmpty then needs := needs.merge { families := familySites.map fun (q, _) => (q, "") }
-  if needs.overloads.isEmpty then needs := needs.merge { overloads := overloadSites.map fun (q, _) => (q, "") }
+  if needs.families.isEmpty then needs := needs.merge { families := source.familySites.map fun (q, _) => (q, "") }
+  if needs.overloads.isEmpty then needs := needs.merge { overloads := source.overloadSites.map fun (q, _) => (q, "") }
   -- (and the types of the names of consumers in recursive groups' code,
   -- whose groups this one kept with one value: `$noteTypes`)
   -- (and the field orders of the structs and classes those groups construct
   -- with a choice point in a field, `TyEnv.fieldOrder`)
-  if !needs.eager.isEmpty || !needs.families.isEmpty || !needs.overloads.isEmpty || !nestedSites.isEmpty ||
-      !fieldSites.isEmpty then
+  if !needs.eager.isEmpty || !needs.families.isEmpty || !needs.overloads.isEmpty || !source.nestedSites.isEmpty ||
+      !source.fieldSites.isEmpty then
     return .asking { eager := needs.eager, families := needs.families, overloads := needs.overloads,
-                     nested := needs.nested, fieldOrders := fieldSites.map fun n => (n, env.fieldOrder n) }
+                     nested := needs.nested, fieldOrders := source.fieldSites.map fun n => (n, env.fieldOrder n) }
   -- (#214) and functions wanted as values at types no class of theirs
   -- gives, adapters for methods wanted as values, (#243) branches of casts
   -- that refine type arguments, lifted into functions, and helpers that
@@ -1586,7 +1437,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         some (cd.name ++ ".$block") else none
     let mut verified : Std.HashSet Nat := {}
     for (owner, field, pos, body) in initializerBodies do
-      match (InitializerConvergence.checkExpr fns ordinary (construction ++ intrinsicCalls) [] body).run verified with
+      match (InitializerConvergence.checkExpr fns ordinary (construction ++ admitted.intrinsicCalls) [] body).run verified with
       | .ok (_, checked) => verified := checked
       | .error reason =>
         throw s!"{pos.show}: default of field '{field}' of {owner} requires convergence: {reason} (#511; --extended-defaults retains the OpenVerse extension without a convergence assertion)"
@@ -1600,7 +1451,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let fsigs0 := capturedSigs.fns
   fsigs := fsigs0
   let beforeConcurrency := fns
-  if usesConc then
+  if admitted.usesConc then
     let (fns1, slotTys1, fsigs1, classTable1, frameClasses1, mainCall1, framePins1, schedMore) ←
       lowerOpening fun forced =>
         lowerConcurrency env sigs gsigs mainSig fsigs0 protos pins inFn fns slotTys fsigs classTable forced frameInfo
@@ -1623,7 +1474,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                       body := protoPrelude protoList mainCall }
     slotTys := slotTys.push []
     fsigs := fsigs ++ [([], if mainSig.suspends then VTy.void else mainSig.ret.toVTy env)]
-  if usesConc then
+  if admitted.usesConc then
     fns := CompilerWrites.propagate beforeConcurrency fns
   -- (the frame classes' pins after the classes', #244)
   let pins := (List.range classTable.length).map (fun t => (pins[t]?).getD []) ++ framePins
