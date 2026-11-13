@@ -136,10 +136,20 @@ def protectHeads (f : SExpr → SExpr) (e : SExpr) : SExpr :=
     is in scope. -/
 def desugar (tops : List STop) : Except String (List STop) := do
   -- the classes and interfaces, not parametric, with their parents
-  let classes : List (String × Pos × List String × List String × Bool × List SField) := tops.filterMap fun
+  let classes0 : List (String × Pos × List String × List String × Bool × List SField) := tops.filterMap fun
     | .classDef p n _ [] specs parents isI fs _ =>
       some (n, p, specs, parents.filterMap (fun | .name m => some m | _ => none), isI, fs)
     | _ => none
+  -- (a parent as its class's module writes it, `c` or `M.c`: the class it
+  -- names, from the module outward, `A::B::c`)
+  let names : List String := classes0.map (·.1)
+  let resolve (owner p : String) : String :=
+    let p := p.replace "." "::"
+    let mods := (owner.splitOn "::").dropLast
+    let cands := (List.range (mods.length + 1)).reverse.map fun k =>
+      "::".intercalate (mods.take k ++ [p])
+    (cands.find? names.contains).getD p
+  let classes := classes0.map fun (n, p, specs, ps, isI, fs) => (n, p, specs, ps.map (resolve n), isI, fs)
   let isClass (n : String) : Bool := classes.any (·.1 == n)
   let parentsOf (n : String) : List String :=
     match classes.find? (·.1 == n) with
@@ -155,16 +165,13 @@ def desugar (tops : List STop) : Except String (List STop) := do
     | some (_, _, specs, _, _, _) => specs.contains "castable"
     | none => false
   -- (the fields `C{}` must give none of: its own and those above it)
+  -- (a concrete class is one marked <concrete>, which needs a default for
+  -- every field, inherited ones included, `classFields`: Book of Verse ch.
+  -- 11, "concrete_subtype"; its tests, MetatypeConcreteSubtype.versetest:40,
+  -- refuse a class that is not marked)
   let concrete : String → Bool := fun n =>
-    let fieldsHaveDefaults : String → Bool := fun s =>
-      match classes.find? (·.1 == s) with
-      | some (_, _, _, _, _, fs) => fs.all (·.default.isSome)
-      | none => true
-    -- (a concrete class is one marked <concrete>, whose fields all have
-    -- defaults: Book of Verse ch. 11, "concrete_subtype"; its tests,
-    -- MetatypeConcreteSubtype.versetest:40, refuse a class that is not)
     match classes.find? (·.1 == n) with
-    | some (_, _, specs, _, isI, _) => !isI && specs.contains "concrete" && (supers n).all fieldsHaveDefaults
+    | some (_, _, specs, _, isI, _) => !isI && specs.contains "concrete"
     | none => false
   -- the metatypes the program writes, and the classes it names as values
   let mut targets : List (String × String) := []
@@ -219,7 +226,7 @@ def desugar (tops : List STop) : Except String (List STop) := do
   let valueClasses : List STop := values.map fun c =>
     let ups := supers c
     let parents : List STy := [.name (ifaceName "subtype" c)] ++ (if castable c then [.name (ifaceName "castable_subtype" c)] else []) ++
-      (if concrete c then [.name (ifaceName "concrete_subtype" c)] else [])
+      (if concrete c == true then [.name (ifaceName "concrete_subtype" c)] else [])
     let x : SExpr := .ident p0 "X"
     -- (a cast to an interface or class no class is below always fails, as
     -- openverse's `C[X]` would refuse to write)
@@ -229,7 +236,7 @@ def desugar (tops : List STop) : Except String (List STop) := do
     let casts : List STop := ups.map fun a =>
       .fn p0 (castMethod a) [{ name := "X", ty := .name a }] [] ["override", "decides"] (.name a)
         (if inhabited then .app p0 (.ident p0 c) [x] true else fails a)
-    let makes : List STop := if concrete c then (ups.map fun a =>
+    let makes : List STop := if concrete c == true then (ups.map fun a =>
       .fn p0 (makeMethod a) [] [] ["override"] (.name a) (.construct p0 c [] [])) else []
     .classDef p0 (valueClass c) [] [] [] parents false [] (casts ++ makes)
   -- the program with its metatypes written as the interfaces, and its

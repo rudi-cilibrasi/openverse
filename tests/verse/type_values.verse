@@ -35,6 +35,13 @@ CT0 := class(T0):
 CT1 := class(T1):
     ft0<override>():int = 10
     ft1<override>():int = 11
+mod := module:
+    class_base<public> := class:
+        var Value3<public>:int
+    class11<public> := class<concrete>(class_base):
+        var Value3<override>:int = 123
+    class21<public> := class<concrete>(class11):
+        var Value3<override>:int = 1234
 Upcast(c:subtype(CT1)):type = c
 Names(X:T0, T:subtype(T0)):int = if (Y := T[X]) then Y.ft0() else -1
 Main():void =
@@ -49,3 +56,5 @@ Main():void =
     L1:subtype(T0) = L0
     Z := Upcast(CT1)
     Print("{Names(CT1{}, L1)} {Names(ct0, L1)} {Names(ct0, CT0)} {Names(ct0, CT1)}")
+    type_ref:concrete_subtype(mod.class_base) = mod.class21
+    Print("{type_ref{}.Value3}")
