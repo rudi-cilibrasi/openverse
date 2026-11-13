@@ -1280,12 +1280,12 @@ partial def _root_.OpenVerse.Expr.untyped : Expr → Bool
   | .prim .concat [a, b] => a.untyped && b.untyped
   | e => e.noValue
 
-/-- `r` where Verse Core infers a type instead of checking one: an operand
-    of `.Length`, an index, a projection or `Concatenate`, a statement or a
-    condition whose value nothing takes. Where a value has no type of its
-    own there (`Expr.untyped`: `""`, `if (C?) then "" else ""`, a tuple with
-    one), the type it was elaborated at, through a temporary; as it is
-    otherwise (code that gives no value has every type). -/
+/-- `r` where Verse Core infers a type instead of checking one: the operand
+    of `.Length`, an index, a projection or a flattening, a statement or a
+    condition whose value nothing takes. A value with no type of its own
+    there (`Expr.untyped`: `""`, `if (C?) then "" else ""`, a tuple with
+    one) goes through a temporary of the type it was elaborated at; any
+    other code is as it is (code that gives no value has every type). -/
 def inferable (r : R) : EM Expr := do
   if !r.e.untyped || r.e.noValue then return r.e
   return .assign (← fresh r.ty) r.e

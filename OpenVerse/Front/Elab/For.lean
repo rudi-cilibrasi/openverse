@@ -160,9 +160,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         pendingSuspendingCasts := st.pendingSuspendingCasts + 1,
         pendingWaitingCasts := st.pendingWaitingCasts + 1 }
     return some (prepare, plan, value, !c.typeOnly && hasPlan && hasPrefix)
-  -- (`peel`: the first group's filter, then its values, failing where the
-  -- filter fails, without the loop over its one element: a continuation's
-  -- clauses, #335)
+  -- (`peel`: the first group's filter, then its values, without the loop
+  -- over its one element, for a continuation's clauses below)
   let rec build (c : Ctx) (gs : List (SExpr × List SExpr)) (bd : SExpr)
       (stageHere : Bool := true) (flatOverride : Option Bool := none) (peel : Bool := false) : EM R := do
     if let some plan := stagePlan.filter (fun _ => stageHere) then
