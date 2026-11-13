@@ -1,4 +1,6 @@
 # Rejected searches undo both cleanup effects and output.
+# (The return is in tail position, a branch of the body's last if: the function
+# is <decides>, Return.versetest:157; the late defer: is the else's.)
 cell := class { var N:int=0 }
 Values(H:cell,Mode:int)<transacts><decides>:int =
     Print("entry {Mode}")
@@ -6,10 +8,11 @@ Values(H:cell,Mode:int)<transacts><decides>:int =
         Print("outer {H.N}")
         set H.N+=100
     if(Mode=0):return 9|10
-    defer:
-        Print("late {H.N}")
-        set H.N+=10
-    1|2
+    else:
+        defer:
+            Print("late {H.N}")
+            set H.N+=10
+        1|2
 Main():void =
     A:=cell{}
     if(V:=Values[A,1],V=2)then Print("first {V} {A.N}")

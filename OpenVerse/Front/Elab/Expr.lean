@@ -1466,30 +1466,14 @@ partial def elabOneClauses (ctx : Ctx) (cs : List SExpr) : EM (R × Ctx) := do
 
 /-- `Expr.firstE` of the code of clauses lifted already (`elabOneGo`), and
     the context after them. `firstE`'s loop takes the `break` that ends a
-    success, so a source `break` in them that leaves them for the enclosing
-    loop (#283) sets that loop's break flag first, `Ctx.forBreakSlot`, as one
-    in a `for`'s filters does, after the cleanup it leaves; the flag then
-    breaks again after `firstE`, so a break keeps what the clauses did up to
-    it, as with no choice. One that leaves as an exit packet
-    (`forBreakCapture`, `refineExits`) returns, through any loop. -/
+    success; no source `break` can be among the clauses (`checkJumps`: they
+    are a failure context), so a `break` in them is one of a loop of theirs
+    (`inLoop` false here; `inChoice` says whether a loop is around). -/
 partial def elabFirstGo (ctx : Ctx) (cs : List SExpr) : EM (Expr × Ctx) := do
   let after (c : Ctx) : Ctx := { c with
-    inLoop := ctx.inLoop, inChoice := ctx.inChoice, inTaking := ctx.inTaking, forBreakSlot := ctx.forBreakSlot }
-  if !ctx.inLoop || !firstBreaks cs then
-    -- (with no loop, a `break` is refused where it is; `inChoice` says
-    -- that none is expected here)
-    let (code, c) ← elabOneGo { ctx with inLoop := false, inChoice := ctx.inLoop, inTaking := true } cs
-    return (Expr.firstE code, after c)
-  if ctx.forBreakCapture.isSome || ctx.refineExits.brk.isSome then
-    let (code, c) ← elabOneGo { ctx with inTaking := true } cs
-    return (Expr.firstE code, after c)
-  -- (a `for` around these clauses has made the flag already, and resets it)
-  let flag ← match ctx.forBreakSlot with
-    | some flag => pure flag
-    | none => fresh .logic
-  let (code, c) ← elabOneGo { ctx with inTaking := true, forBreakSlot := some flag } cs
-  let code := Expr.seq (Expr.firstE code) (forwardSourceBreak flag (.lit .void))
-  return (if ctx.forBreakSlot.isNone then .seq (.assign flag (.lit (.logic false))) code else code, after c)
+    inLoop := ctx.inLoop, inChoice := ctx.inChoice, inTaking := ctx.inTaking }
+  let (code, c) ← elabOneGo { ctx with inLoop := false, inChoice := ctx.inLoop, inTaking := true } cs
+  return (Expr.firstE code, after c)
 
 partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
   | [] => return (Expr.brkV, ctx)

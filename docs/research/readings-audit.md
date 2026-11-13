@@ -43,7 +43,7 @@ Verdicts:
 | `?` on other values | only `logic` and `?t` | `08_failure.md:57`: "`?` turns any value into a failable expression"; `04_operators.md:384` and the API: `logic` and `?t` only | `Option.versetest:113`, `Array.versetest:112`, `Map.versetest:344` refuse `?` of int, array, map (3509) | **the Book disagrees with itself** (ch. 8 against ch. 4, API, tests); openverse follows the tests: keep (owner list) |
 | Output inside a failed failure context | rolled back with the writes | chapters silent on the global `Print`; the API's `log` class (a different function): "If the transaction rolls back the lines are still printed, each prefixed with (Rolling Back)" | none (no test checks output) | **Book silent** on `Print`: keep; the `log` text noted for the owner |
 | `Main` failing | exit 1 | no entry point | none | **Book silent** |
-| `return` or `break` inside a failure context | leaves the function or the loop; what the context did is kept | `07_control.md:530-531`: `break` "must appear in a code block, not as part of a complex expression"; `:1067-1069`: `return` in "tail position" | `Bugs/SOL-4199-BreakFromIf.versetest` 4, 15, 51, 60 (`break` in an `if` condition, `for` domain, `option`, `logic`: 3658), 87 (`return` in an `if` condition: 3535); `FlowControl/Reachability.versetest` 12-15 ("Explicit return out of a failure context is not allowed"); `Return.versetest` 115, 118, 158-163 (in `<decides>` bodies, not in tail position) | **contradicts**, deeply load-bearing: **designed, not changed** ([below](#return-and-break-in-a-failure-context)) |
+| `return` or `break` inside a failure context | leaves the function or the loop; what the context did is kept | `07_control.md:530-531`: `break` "must appear in a code block, not as part of a complex expression"; `:1067-1069`: `return` in "tail position" | `Bugs/SOL-4199-BreakFromIf.versetest` 4, 15, 51, 60 (`break` in an `if` condition, `for` domain, `option`, `logic`: 3658), 87 (`return` in an `if` condition: 3535); `FlowControl/Reachability.versetest` 12-15 ("Explicit return out of a failure context is not allowed"); `Return.versetest` 115, 118, 158-163 (in `<decides>` bodies, not in tail position) | **contradicts**, deeply load-bearing: **changed** ([below](#return-and-break-in-a-failure-context)) |
 | Comparability | the row said every type but an unbounded type parameter | `04_operators.md:359-367` (comparable types; "Unique classes … identity equality only"); `11_types.md:195`: "A function value is not comparable"; `:225`: "`any` is not comparable" | `Operators/CompareInstance.versetest:11` (a class without `<unique>`), `Any.versetest:137`, `Map.versetest:50-58` | **agrees**; the row described openverse wrongly (it refuses classes without `<unique>`, interfaces, `any`, functions): row corrected |
 | Inferring type arguments | first-order matching | `06_functions.md:1318-1320` (from the arguments), `:1358` (`t = []int via conversion`): no algorithm | `ParametricFunctions.versetest` 224, 229, 263, 269 agree | **Book silent** |
 | Access specifiers | `<public>` and internal only | ch. 12 | 107 accepted refusals | not audited here: a later piece of its own |
@@ -202,31 +202,85 @@ agree with the compiler over a wide seed range. Cases that would move:
 
 ### `return` and `break` in a failure context
 
-**The Book's rule.** A `return` may not leave a failure context (an `if`'s
-conditions, a `for`'s clauses, `option{}`, `logic{}`, `not`'s operand, the
-left of `or`; also a `<decides>` body anywhere but in tail position,
-`Return.versetest` 158-163), and a `break` may not leave one for its loop
-(`SOL-4199` 3658). openverse lets both leave, keeping what the context did
-(#283 extends this through choices).
+**Built** (the second of the load-bearing readings, [below](#the-load-bearing-readings-built)).
 
-**Design.** A source check before elaboration (prototyped as `checkJumps`
-in `Front/Elab/Source.lean`: two flags, a failure context since the
-function's body and since the innermost loop, reset by `loop`), and the
-tail-position rule for `<decides>` bodies. It is not made because what
-depends on the old reading is large: it refuses 88 of openverse's own test
-programs (73 in `tests/verse`, among them every `choice_clause_break_*`,
-`choice_clause_return_*`, `choice_first_break_*`, `choice_first_return_*`,
-`choice_block_defer_exits*`; 15 in `tests/errors`; 2 upper-bound controls),
-302 programs of the frozen corpus (the generators `choice_break.py`:
-`break-first` 71 and `break-for` 80; `gadt_first_returns.py` 20;
-`gadt_immediate.py` 4; `mv.py`'s `bif`, `mv` and `rec` modes 125), and the
-elaborator's paths for jumps out of failure contexts (#283's clause breaks
-and returns, `$deferExits`, `forBreakSlot`, `forExitPacket`), which become
-dead code. Making it is retiring those tests and models, removing those
-paths, and rewriting the generators, a piece of its own. Cases that would
-move: `SOL-4199-BreakFromIf.versetest` 4, 15, 51, 60, 87,
-`Reachability.versetest` 12-15, `Return.versetest` 115, 118, 148, 158, 159,
-161-163.
+**The Book's rule, as its tests pin it.** A failure context is an `if`'s
+conditions, a `for`'s clauses (its domain), `first`'s clauses
+(`08_failure.md:108`), `option{…}`, `logic{…}`, `not`'s operand, the left of
+`or`, and a `<decides>` function's body (`08_failure.md:122`: "Functions
+marked with `<decides>` create a failure context for their entire body").
+
+- A `return` may not leave one (error 3535): in an `if`'s condition,
+  `Reachability.versetest:12-15` ("Explicit return out of a failure context
+  is not allowed") and `SOL-4199-BreakFromIf.versetest:86-95` ("`return` in
+  an `if` condition is disallowed"); in `option{}`, `Return.versetest:129`.
+  In a `<decides>` function it may be only in tail position:
+  `Return.versetest:157`, "Explicit return can only occur in failure
+  contexts in a tail position"; refused: `{return X; 0<>0}` (158),
+  `{if(X<>0) {return X}; 0<>0}` (159), `{loop {return X}; 0<>0}` (162),
+  `{for(Y:=0..X,X*Y=100){return Y}; 0<>0}` (163), an `else`-less `if`'s
+  return as the body (148), `for(Y:=0..X){return array{0}; 0}` (115); valid:
+  `return X` as the body (137), both branches of an `if` with an `else` as
+  the body (160). Tail position, as read from these: the body's last
+  expression, the last of a block in tail position, the branches of an `if`
+  with an `else` in tail position, a `case`'s arms in tail position, the
+  right of `and` and `or` in tail position, and a `return`'s value (140).
+- A `break` may not leave one for its loop (error 3658): an `if`'s
+  condition (`SOL-4199-BreakFromIf.versetest:3-12`, "`break` is not allowed
+  in an `if` condition"), a `for` domain (`:14-30`), `option` (`:50-56`),
+  `logic` (`:59-65`), `not` (`:67-71`), the left of `or` (`:73-77`); ch. 7,
+  `07_control.md:530-531`: "The `break` statement must appear in a code
+  block, not as part of a complex expression".
+- Allowed: a `return` in a `for`'s body of a function that is not
+  `<decides>` (`Reachability.versetest:18`, `Return.versetest:152`), in an
+  `if`'s branch (`07_control.md:1065-1093`, the tested examples 46-48); a
+  `break` in an `if`'s branch inside a loop; a loop's body is not a failure
+  context, so a `break` there in a `<decides>` function stays (the Book's
+  `SOL-4199-BreakFromIf.versetest:79-84` refuses a failable expression in a
+  loop, 3512, a rule of its own openverse does not have). A `break` in a
+  `for`'s body is where the Book disagrees with itself ([For the
+  owner](#break-in-a-for-body)): the tests allow it (`:38-48`), the prose
+  refuses it; the failure-context rule does not refuse it (a `for`'s body is
+  no failure context), and openverse keeps its own refusal ("break is only
+  allowed inside loop (not for)").
+- Not this rule: 3534, a `return` as a strict subexpression of the value a
+  function returns, explicitly or implicitly (`Return.versetest:110-133`,
+  `F(X:int):int=X+(return 0)`): openverse accepts those still (with a
+  warning, code never reached).
+
+**What openverse does.** `checkJumps` (`Front/Elab/Source.lean`), a check of
+the source before elaboration: a `return` with a failure context between it
+and its function's body, or in a `<decides>` function anywhere but in tail
+position, and a `break` with one between it and its loop, are refused.
+
+**What it refused, and what went.** 84 of openverse's test programs had a
+jump out of a failure context (none, of the Book's): 66 whose subject it
+was (#283's breaks and returns in the clauses of first-success consumers
+and of `for`s with choices, #246's returns after lazy generators, the
+cleanup such a jump runs from a lifted block) are deleted, and 18 whose
+subject is something else are rewritten to the allowed form, each with
+its output unchanged (a `<decides>` function's early return as a branch of
+its last `if`, a jump out of `not` or `option{}` moved to an `if`'s
+branch). 14 error tests of how such jumps combine with other refusals are
+deleted, one (`signal_no_rollback_break_clause`) rewritten; 11 new refusal
+tests (`tests/errors/jump_*`) and `jumps_allowed.verse` are added. Of the
+upper-bound fixtures, `bound-defer-exits(-control)` is deleted and
+`bound-frame-cells-break(-control)` rewritten. The generators: `mv.py`
+loses #284/#287's return among a test's clauses, `generic_mv.py` and
+`choice_break.py`'s exclusive sources put a `<decides>` function's early
+return in tail position, `gadt_first_returns.py` returns from the branch,
+`gadt_immediate.py` loses its clause returns, and `choice_break.py` loses
+its breaks among filters and first-success clauses (it models their
+rollback, in a loop's body). 404 programs of the regenerated corpus are
+refused (every one by this rule). The elaborator's paths that only such
+programs reached are deleted (no allowed program's bytecode changed):
+the `for`'s clause-break flag and its forwarding (`forBreakSlot`,
+`forBreakCapture`, `$forClauseExits`, `forwardSourceBreak`), the break
+packets of first-success clauses (`elabFirstGo`'s flag, `firstBreaks`), and
+the return and break packets of first-success helpers (`firstResult`'s
+exits, `firstUnpack`'s forwarding, `FirstLift.returnExit`/`breakExit`,
+`FirstReturn`, the always-empty `normalResult` of `Choice.firstBody` and
+`firstReturnBody`).
 
 ### Commas in blocks
 
@@ -358,6 +412,10 @@ of the readings audit (7,390 agree, 2,066 refuse, 277 accept, 50 differ).
    checked by hand: code after a `return` or `break`, after a `sync` one of
    whose arms returns, the tuple or map an operand's `return` leaves
    unmade), and say so in `NAME.warnings`; new: `warnings.verse`.
+2. **`return` and `break` in a failure context** ([the rule](#return-and-break-in-a-failure-context)).
+   Moved: 17 cases agree (accepted before): `SOL-4199-BreakFromIf.versetest`
+   4, 15, 51, 60, 87, `Reachability.versetest` 12-15, `Return.versetest`
+   115, 118, 148, 158, 159, 161, 162, 163.
 
 ## For the owner
 

@@ -109,12 +109,10 @@ not an `array{a₀, …}`, which would run `aₙ₋₁` before `a₀`'s value wa
   back before the next one is tried. A body's effects would stay. The
   code is linear in the number of choices: nothing is copied per
   alternative, and `break` already passes `checkControl` inside a `loop`.
-  A source `break` in the clauses (#283), which that `loop` would take for
-  a success, sets its source loop's break flag first, as one in a `for`'s
-  filters does (below), and the flag breaks again after `firstE`
-  (`elabFirstGo`, for `if`, `first{…}` and `$firstP` alike). Its effects
-  stay: Core's `ite` and `for` keep the state a `break` leaves
-  (`chooseFirst_brk`).
+  No source `break` or `return` can be in the clauses: they are a failure
+  context, which neither may leave (`checkJumps`, the Book of Verse's
+  tests), so the `break`s in them are `firstE`'s own and those of loops of
+  their own.
 - **An alternative with values or clauses of its own** (#283), a call of a
   function with several values or a choice inside an expression
   (`A() | B()`, `Upto[1, 3] | 9`), cannot be selected by `altE`: its values
@@ -158,7 +156,7 @@ not an `array{a₀, …}`, which would run `aₙ₋₁` before `a₀`'s value wa
   - The first elaboration elaborates every other alternative alone, without the clauses after it, for its type and for the continuations inside it, so nesting through inlined functions takes no more elaborations.
   - Code and compile time are now linear in the number of such choices in one condition: ten calls of a function with a `return` and a choice after it take 44 KB and 0.04 s, where copying took 2.3 MB and 16 s.
   - Each call is a non-tail call in a filter, so n of them nest n deep in the evaluator's depth budget.
-  - A source return in first-success clauses uses an explicit packet: normal success has an optional tuple of bound names, a return has an optional saved operand, a break that leaves the clauses a flag (#283), and all carry mutable copy-outs. In the helper they are its `Refine.Exits`, as a refining lift's are: a `return`, and a break marked `$refineBreak` (`Refine.liftBreaks`), run the helper's cleanup and return the packet (`elabRefineExit`). The caller (`firstUnpack`) copies variables back before forwarding the return or the break through its own source-exit context (a break marker there is a source break, or that context's own packet) or exposing normal bindings. A failed operand remains search failure. This also works through effectful self/mutual lazy helpers. Return-only type parameters retain witnesses and bounds in the helper signature and key. In a suspending caller, cached condition slots are committed before private cancellation calls and the final return; cancellation callbacks reload their changes into the cache. Synchronization wraps the entire receiver-tag dispatch so its type refinement remains valid.
+  - A first-success helper's packet is the tuple of the names the clauses bind, the copies of the `var`s they set, then `true` (`firstResult`), which the caller unpacks (`firstUnpack`): no source return or break can leave the clauses, a failure context (`checkJumps`). (#283's packets for one, with an optional saved operand or a break flag, forwarded by the caller, are gone with the programs that had one.) In a suspending caller, cached condition slots are committed before private cancellation calls and the final return; cancellation callbacks reload their changes into the cache. Synchronization wraps the entire receiver-tag dispatch so its type refinement remains valid.
   In a `for` (phase 2), such a choice's alternatives are each a `for` of their own. When the clauses after it have another such choice, or an exclusive one, the continuation `$contf…` holds those clauses and the body, and gives the values (and the final values of the `var`s they set).
   - It runs `$forFirst`: `elabFor`'s filter of the first group, then its values. So it fails exactly where the copied form's failure would undo the alternative's own last clauses, since those and the first segment after them were one filter. A later generator that gives nothing does not make it fail, as in the copied form.
   - Each alternative's `for` binds its value, calls it as a clause, and its values are flattened.
@@ -414,21 +412,18 @@ Every nested lazy producer does the same, so an ordinary enclosing generator
 cannot run another iteration after body failure. The check reads only the
 flag; completed body effects and mutable copy-outs remain in place.
 
-Source filter breaks use a separate flag shared by consumers targeting the
-same source loop. The lexical break runs its cleanup and sets the flag;
-each lazy producer forwards it before exposing its accumulated values, and
-so does the `firstE` of first-success clauses with a choice (#283).
-Entering a body-local loop resets that target. Suspension lowering also
+No source `break` can be among a `for`'s filters or first-success clauses,
+failure contexts (`checkJumps`): the flag that carried one across lazy
+producers and `firstE` (#283's `forBreakSlot`) is gone. Suspension lowering
 preserves the control boundary when a `for` becomes an index loop: it
-marks escaping breaks and forwards them after the generated loop. Cached
-frame writes in a condition/filter are stored before an escaping break,
-which bypasses the ordinary success-arm stores. Failure still rolls back
-the condition, and loops inside it keep their own breaks.
+marks escaping breaks and forwards them after the generated loop. Failure
+still rolls back the condition, and loops inside it keep their own breaks.
 The pass introduces no Core operations or changes to either interpreter;
 the resulting program passes the existing effect, scope, control and type
 checks.
 
-A source `for` with body or clause returns has an optional return slot. The body is
+A source `for` with body returns has an optional return slot (none can be in
+its clauses, a failure context, `checkJumps`). The body is
 initially kept as written, so a copied body still returns directly. Moving
 it into a continuation preserves that slot as a mutable capture and gives
 the body a return handler. The handler saves the operand, runs body-local
@@ -439,19 +434,8 @@ stops its private producer loop, then performs the actual return, including
 source defers. Its pre-existing escaping breaks are marked and forwarded
 outside the private loop without running their cleanup twice. Bottom
 element types round-trip through generated signatures as reserved `$never`.
-The handler also encloses a moved continuation's clauses. A successful
-clause return gives the abort packet as a successful helper result, so
-the current filter commits its copy-outs before stopping the consumer.
-A failed return operand remains filter failure and rolls that prefix back.
-Source breaks in those clauses use a captured flag in the same packet.
-The helper runs clause-local cleanup and returns successfully; the caller
-copies back its state, runs the source loop's cleanup, then forwards the
-break through any enclosing refining lift or leaves the loop. Copied
-breaks keep their existing flag and cleanup path, so cleanup is not run
-twice. A new explicit loop owns its break target; a `for` body clears the
-inherited break target, while retaining source-return handling. Break-only
-consumers do not emit a synthetic source return in lexical contexts that
-forbid one.
+The handler also encloses a moved continuation's clauses, which have no
+return of their own. A new explicit loop owns its break target.
 When the body has bottom type, its Core expression is followed by `void`,
 as for tuple and array literal elements. This gives generated arrays an
 inferred element type when suspension lowering saves them across a wait;
@@ -464,8 +448,7 @@ Waiting consumers split preparation from execution. A generated
 immediate `<decides>` prefix runs exactly the current filter's remaining
 clauses, stopping before the next real generator's source/init or the body.
 Failure still fails the caller's filter. Success supplies one typed
-environment; a source return or break supplies the explicit exit packet
-successfully, committing copy-outs before caller cleanup. The environment's
+environment. The environment's
 resume method runs outside that filter and uses the ordinary nested/lazy
 loops, awaiting each body before requesting the next producer value.
 
@@ -1214,7 +1197,7 @@ is thrown in one place, a phase or `elabProgramCore` itself, and each point
 where an elaboration asks for something and goes no further
 (`Compiled.asking`) is a line of `elabProgramCore`.
 
-1. `admitSource` (`Elab/Source.lean`): the source and the entry expression pass the effect policy (with where each specifier may go, `EffectPolicy.specifierPlaces`) and the source profile; the rules of the source as written hold (no reserved name defined, each name defined once in its scope, no `return` in a constant's value or a field's default, a `defer:` only as a statement, no `for` of literal clauses only); no definition takes the name of one around it (`checkNoShadowing`); modules are resolved, with every qualifier (`Resolver.qualifier`), and calls of extension methods made calls of their functions, type aliases are written out where they are used (`Aliases.expand`), no constant depends on itself, the defaults function types write are set apart, and the helpers the program needs are added (`Admitted`).
+1. `admitSource` (`Elab/Source.lean`): the source and the entry expression pass the effect policy (with where each specifier may go, `EffectPolicy.specifierPlaces`) and the source profile; the rules of the source as written hold (no reserved name defined, each name defined once in its scope, no `return` in a constant's value or a field's default, no `return` or `break` that leaves a failure context, `checkJumps`, a `defer:` only as a statement, no `for` of literal clauses only); no definition takes the name of one around it (`checkNoShadowing`); modules are resolved, with every qualifier (`Resolver.qualifier`), and calls of extension methods made calls of their functions, type aliases are written out where they are used (`Aliases.expand`), no constant depends on itself, the defaults function types write are set apart, and the helpers the program needs are added (`Admitted`).
 2. `inlineSource`: functions with several values are inlined at their calls, the functions earlier rounds asked for are added and admitted, and function values become interfaces and classes (`Source`, with the sites the inlining notes).
 3. `argsAndMethodOverloads`: `Args` and the entry expression's `$Do` are added, and overloaded methods are renamed by their parameter lists (`Definitions`).
 4. `classHierarchy` (`Elab/Classes.lean`): the classes and interfaces and their hierarchy, checked (`Classes`, with the lookups over it).
@@ -1244,7 +1227,7 @@ keep the order: a round that asks goes no further than the phase that asks,
 and the next one runs every phase again. Read off the list, a program is
 refused, first to last, for:
 
-- its effect annotations, specifiers out of place and source profile, a type with a built-in type's name, a reserved name defined, a name defined twice, a name an enclosing scope defines (but a function a call can tell apart from it, checked with the signatures, 15), a `return` outside a function's body, a `defer:` where a value is taken, a `for` of literal clauses only, its modules and qualifiers (a qualifier that names nothing or not where its definition is, an ambiguous bare name beside a qualified definition), its type aliases (one that names itself or an alias defined after it, or is used before its definition, or whose name a definition takes), a constant that depends on itself or names one defined after it in its scope, and subscribable events (1); the choices it inlines and the requests it carries (2); its overloaded methods (3);
+- its effect annotations, specifiers out of place and source profile, a type with a built-in type's name, a reserved name defined, a name defined twice, a name an enclosing scope defines (but a function a call can tell apart from it, checked with the signatures, 15), a `return` outside a function's body, a `return` or `break` that leaves a failure context (a `return` in a `<decides>` body anywhere but in tail position), a `defer:` where a value is taken, a `for` of literal clauses only, its modules and qualifiers (a qualifier that names nothing or not where its definition is, an ambiguous bare name beside a qualified definition), its type aliases (one that names itself or an alias defined after it, or is used before its definition, or whose name a definition takes), a constant that depends on itself or names one defined after it in its scope, and subscribable events (1); the choices it inlines and the requests it carries (2); its overloaded methods (3);
 - its classes: their parents (unknown, a struct, wrong type arguments, an interface extending a class, two superclasses, a `<final>` one, a cycle), `<castable>` ones with type parameters and those below `<final_super_base>` ones, and construction effects (4); their fields, inherited, overriding and own, against the methods above them, and a `<concrete>` class's defaults (5); their methods: duplicates, parameter names, qualified implementations, overrides and `<final>`, abstract methods and the implementations every concrete class needs (6);
 - the types those give: comparable type arguments to parents and a `<persistable>` struct's fields (7), bounds (8), one instance of an interface per class (9), the Verse Core type arguments of overrides (10), recursive structs and map keys (11);
 - its functions' names and overloads (12), their signatures and effect annotations (13), constants whose type cannot be inferred and the defaults function types write (14); then the signature checks (15): overloads a call cannot tell apart, an extension method that repeats a method of its receiver's class, overrides and implementations whose signature or effects differ, an overriding field's type, and, last, a field two interfaces give defaults;

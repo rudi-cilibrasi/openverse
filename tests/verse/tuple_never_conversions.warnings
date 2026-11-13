@@ -1,8 +1,5 @@
-7:18: warning: this code is never reached: the code before it always returns or breaks
-12:31: warning: this code is never reached: the code before it always returns or breaks
-15:32: warning: this code is never reached: the code before it always returns or breaks
-18:20: warning: this code is never reached: the code before it always returns or breaks
+9:18: warning: this code is never reached: the code before it always returns or breaks
+14:31: warning: this code is never reached: the code before it always returns or breaks
+17:25: warning: this code is never reached: the code before it always returns or breaks
 21:13: warning: this code is never reached: the code before it always returns or breaks
 32:25: warning: this code is never reached: the code before it always returns or breaks
-35:20: warning: this code is never reached: the code before it always returns or breaks
-37:26: warning: this code is never reached: the code before it always returns or breaks

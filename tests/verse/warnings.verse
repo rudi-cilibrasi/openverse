@@ -27,9 +27,10 @@ Count(Limit:int):int =
         set I += 1
         if (I >= Limit) then return I
     0
-# a jump out of an operand: the tuple is never made, the not takes the failure
+# a jump out of an operand: the tuple is never made
 Odd(K:int):int =
-    if (not (K = 2, return 42)) then 7 else 8
+    T := if (K = 2) then (K, return 42) else (K, 7)
+    T(1)
 # none: code after a for whose body returns, or after a race only one of whose arms does
 First(Xs:[]int):int =
     for (X : Xs):

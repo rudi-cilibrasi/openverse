@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Compare source-loop break/rollback predictions with Lean and C: for each seed, a break in a
-# for's filters, and one in the clauses of an if condition, first{} or option{} with choices,
-# among them blocks with a defer: (and at times a choice of their own) left by a break or return.
+# Compare source-loop rollback predictions with Lean and C: for each seed, a for's filters
+# over producers, and the clauses of an if condition, first{} or option{} with choices,
+# among them blocks with a defer: (and at times a choice of their own), in a loop's body
+# (a break or return among them, which the Book of Verse refuses, is gone).
 set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 n="${1:-60}"; first="${2:-1}"

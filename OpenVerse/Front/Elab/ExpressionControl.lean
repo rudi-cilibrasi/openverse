@@ -226,15 +226,10 @@ partial def elabExprControlWith
       if let some r ← withCastClauses ctx clauses body isGen (elabE { ctx with asWritten := true } se exp)
           (fun clauses body => elabE ctx (.forE p clauses (typed body)) exp) then
         return r
-    let returns := (Refine.findPart (fun | .ret .. => true | _ => false) false (.block p (clauses ++ [body]))).isSome
-    let breaks := (ctx.inLoop || ctx.refineExits.brk.isSome) &&
-      (Refine.findPart Refine.isBreak true (.block p clauses)).isSome
-    let ownBreak ← if ctx.inLoop && breaks && ctx.forBreakSlot.isNone then
-        some <$> fresh .logic
-      else pure none
-    let ctx := { ctx with
-      forOutcomeSlot := none,
-      forBreakSlot := ownBreak.orElse fun _ => if ctx.inLoop then ctx.forBreakSlot else none }
+    -- (a `return` in the body: none can be in the clauses, a failure
+    -- context, nor can a `break`, `checkJumps`)
+    let returns := (Refine.findPart (fun | .ret .. => true | _ => false) false body).isSome
+    let ctx := { ctx with forOutcomeSlot := none }
     let withExits : EM (R × Bool) := do
       let sourceRet ← match ctx.refineExits.ret with
         | some (some (_, t), _) => resolveTy ctx.types p t
@@ -249,19 +244,13 @@ partial def elabExprControlWith
       let place := s!"$forReturn{p.line}_{p.col}" ++ (if p.file.isEmpty then "" else s!"_{p.file}")
       let name := if (ctx.lookup place).isSome then s!"{place}_{ctx.locals.length}" else place
       let slot ← fresh (.opt sourceRet)
-      let breakName := name ++ "$break"
-      let breaking ← if breaks then some <$> fresh .logic else pure none
-      let storage (n : String) : Option SourceStorage := if ctx.suspends then
-        some { frame := ctx.frameName, name := n, args := ctx.frameArgs } else none
-      let returnLocal : Local := { name, slot, ty := .opt sourceRet, mutable := true, storage := storage name }
-      let breakLocal := breaking.map fun slot =>
-        ({ name := breakName, slot, ty := .logic, mutable := true, storage := storage breakName } : Local)
-      let extra := returnLocal :: breakLocal.toList
-      modify fun st => { st with frameSlots := st.frameSlots ++ extra.filterMap (fun l => l.storage.map (l.slot, ·)) }
-      let c := { ctx with locals := extra ++ ctx.locals }
+      let storage : Option SourceStorage := if ctx.suspends then
+        some { frame := ctx.frameName, name, args := ctx.frameArgs } else none
+      let returnLocal : Local := { name, slot, ty := .opt sourceRet, mutable := true, storage }
+      modify fun st => { st with frameSlots := st.frameSlots ++ (storage.map (slot, ·)).toList }
+      let c := { ctx with locals := returnLocal :: ctx.locals }
       let flag ← fresh .logic
       let metadata := SExpr.set p (.ident p name) none (.ident p name)
-      let metadata := if breaking.isSome then .block p [metadata, .set p (.ident p breakName) none (.ident p breakName)] else metadata
       let body := SExpr.app p (.ident p "$forReturns")
         [metadata, .ident p (if ctx.canFail then "true" else "false"), body] false
       let before ← get
@@ -273,19 +262,11 @@ partial def elabExprControlWith
       let result ← fresh (.opt r.ty)
       let value ← fresh r.ty
       let returning := s!"{name}$value"
-      -- Break-only consumers can occur in a defer, branch or constructor,
-      -- whose lexical checks must never see an invented source return.
-      let ret ← if returns then
-          elabE c (.ite p [.decl p returning none false (.query p (.ident p name))]
-            (.ret p (some (.ident p returning))) none) (some .void)
-        else pure ⟨.lit .void, .void⟩
+      let ret ← elabE c (.ite p [.decl p returning none false (.query p (.ident p name))]
+        (.ret p (some (.ident p returning))) none) (some .void)
       let failed := if ctx.canFail then Expr.prim .fail [] else .prim .userErr []
       let normal := Expr.ite (.assign value (.prim .query [.local result])) (.local value) failed
       let leaving := Expr.seq ret.e normal
-      let leaving ← if breaking.isSome then do
-          let stop ← elabE c (.ite p [.query p (.ident p breakName)] (Refine.liftedBreak p) none) (some .void)
-          pure (Expr.seq stop.e leaving)
-        else pure leaving
       let (run, after) ← if ctx.inLoop then do
           let escaped ← fresh .logic
           pure (Expr.seq (.assign escaped (.lit (.logic false))) (forwardForBreaks flag escaped r.e),
@@ -296,21 +277,17 @@ partial def elabExprControlWith
           (.seq (.assign result (.lit .none))
             (.seq (.loop (.seq (.assign result (.prim .mkSome [run])) Expr.brkV))
               (.seq after leaving))))
-      let code := (breaking.map fun slot => Expr.seq (.assign slot (.lit (.logic false))) code).getD code
       return (⟨code, r.ty⟩, waits)
-    let elaborate : EM R := do
-      if !breaks && !returns then
-        return ← elabFor ctx p clauses body
-      if !ctx.suspends then return (← withExits).1
-      -- Immediate consumers and staged waiting consumers carry source exits.
-      -- Other waiting consumers retain their original source-return lowering.
-      let st0 ← get
-      if let some (r, waits) ← tryCatch (some <$> withExits) (fun _ => pure none) then
-        if !waits then return r
-      set st0
-      elabFor ctx p clauses body
-    let r ← elaborate
-    return ⟨ownBreak.map (fun flag => Expr.seq (.assign flag (.lit (.logic false))) r.e) |>.getD r.e, r.ty⟩
+    if !returns then
+      return ← elabFor ctx p clauses body
+    if !ctx.suspends then return (← withExits).1
+    -- Immediate consumers and staged waiting consumers carry source exits.
+    -- Other waiting consumers retain their original source-return lowering.
+    let st0 ← get
+    if let some (r, waits) ← tryCatch (some <$> withExits) (fun _ => pure none) then
+      if !waits then return r
+    set st0
+    elabFor ctx p clauses body
   -- (the parser makes generators in for clauses, and in first's, which
   -- reach here)
   | .gen p _ _ _ => eerr p "a generator X : source in first is not supported yet: openverse takes generators in for clauses only"
@@ -318,27 +295,17 @@ partial def elabExprControlWith
     let lctx := { ctx with
       inLoop := true, inRepeat := true, loopDefers := ctx.defers.length,
       loopRollback := ctx.canFail || ctx.inRollback,
-      inChoice := false, forBreakSlot := none, forBreakCapture := none,
-      refineExits := { ctx.refineExits with brk := none } }
+      inChoice := false, refineExits := { ctx.refineExits with brk := none } }
     let r ← elabE lctx body none
     return ⟨.loop (← inferable r), .void⟩
   | .brk p =>
-    if ctx.inChoice then
-      eerr p "internal: a break in first-success clauses that do not forward one (#283)"
     if !ctx.inLoop then
       eerr p (if ctx.inDefer then "break is only allowed inside loop (not for), and cannot leave a defer: block"
               else "break is only allowed inside loop (not for)")
-    if let some name := ctx.forBreakCapture then
-      let some target := ctx.lookup name | eerr p "internal: missing for break slot"
-      if target.ty != .logic then eerr p "internal: invalid for break type"
-      let ds ← elabDefers (ctx.exitDefers ctx.loopRollback) ctx.defers
-      let some pack := ctx.forExitPacket | eerr p "internal: missing for break outcome"
-      let out ← elabE { ctx with defers := [] } pack (some ctx.retTy)
-      return ⟨.seq ds (.seq (.assign target.slot (.lit (.logic true))) (.ret out.e)), .never⟩
-    -- the defers of the scopes it leaves, inside its loop
+    -- the defers of the scopes it leaves, inside its loop (none of them a
+    -- failure context's clauses: `checkJumps`)
     let ds ← elabDefers (ctx.exitDefers ctx.loopRollback) (ctx.defers.take (ctx.defers.length - ctx.loopDefers))
-    let jump := ctx.forBreakSlot.map (fun flag => Expr.seq (.assign flag (.lit (.logic true))) .brk) |>.getD .brk
-    return ⟨.seq ds jump, .never⟩
+    return ⟨.seq ds .brk, .never⟩
   | .ret p e? =>
     if ctx.inParamDefault then eerr p "return is not allowed in a parameter's default"
     if ctx.inDefer then eerr p "return is not allowed in a defer: block"

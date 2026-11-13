@@ -43,11 +43,11 @@ Twice(P:pair(a, b) where a:type, b:type)<decides>:b =
     Q:pair(b, a) = dup(b){A := D.B, B := D.A, C := D.C + 1}
     E := dup[Q]
     E.A
-# a return in the branch
+# a return in the branch (in tail position, a branch of the body's last if:
+# the function is <decides>, Return.versetest:157)
 Early(P:pair(a, b), N:int where a:type, b:type)<decides>:int =
     D := dup[P]
-    if (N > 0) then return N + D.C
-    D.C
+    if (N > 0) then return N + D.C else D.C
 # in a method: Self's members in the branch
 box(t:type) := class:
     P:pair(t, int)

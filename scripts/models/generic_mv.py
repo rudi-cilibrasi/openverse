@@ -466,19 +466,33 @@ d{n}({child_tps}) := class({parent}):{extra_field}
                 # (#283: at times each return in a scope other than an if's branch, a block's or a
                 # case's arm's, with the same values; a stream of its own, so seeds keep their
                 # other programs)
+                # (the function is <decides>, so each return is in tail position:
+                # a return in a <decides> body anywhere else would leave its
+                # failure context, which the Book of Verse refuses,
+                # Return.versetest:157; the early return is a branch of the
+                # body's last if, or an arm of its last case, the rest of the
+                # body the other)
                 scoped = RETURN_SCOPES and random.Random(n + "#283scope").random() < 0.5
                 # (the last line's own indentation: in an else block, LSb's)
                 ind = lines[-1][:len(lines[-1]) - len(lines[-1].lstrip())]
                 lines[-1] = ind + "return " + lines[-1].strip()
+                # (in a block of its own, when scoped)
+                tail = lambda ls: ([ls[-1][:len(ls[-1]) - len(ls[-1].lstrip())] + "block:", "    " + ls[-1]]
+                                   if scoped else [ls[-1]])
                 if k == "LIf":
-                    first = ["    case(N):", "        0 => return Y", "        _ => {}"] if scoped else ["    if(N=0): return Y"]
-                    lines[-1:] = first + ["    NextN:=N-1", f"    return X | {n}[Y,X,NextN]"]
+                    rest = ["NextN:=N-1", f"return X | {n}[Y,X,NextN]"]
+                    if scoped:
+                        lines[-1:] = (["    case(N):", "        0 => return Y", "        _ =>"] +
+                                      ["            " + x for x in rest[:-1]] + tail(["            " + rest[-1]]))
+                    else:
+                        lines[-1:] = (["    if(N=0):", "        return Y", "    else:"] +
+                                      ["        " + x for x in rest[:-1]] + tail(["        " + rest[-1]]))
                 elif k in ("ERep", "ETree"):
-                    lines[1] = ("    if(N<=0):\n        block:\n            false?\n            return X" if scoped
-                                else "    if(N<=0):\n        false?\n        return X")
-                if scoped:
-                    last = lines[-1]
-                    lines[-1:] = [last[:len(last) - len(last.lstrip())] + "block:", "    " + last]
+                    first = (["    if(N<=0):", "        block:", "            false?", "            return X"] if scoped
+                             else ["    if(N<=0):", "        false?", "        return X"])
+                    lines[1:] = first + ["    else:"] + tail(["    " + lines[-1]])
+                else:
+                    lines[-1:] = tail(lines[-1:])
                 self.src = "\n".join(lines)
 
     def bind_helper(self, h):
@@ -1482,10 +1496,12 @@ class Gen:
             for i, line in enumerate([line for line in source.splitlines() if line.startswith("    if(N>0)then")]):
                 tail, base = line.strip()[len("if(N>0)then "):].split("else ")
                 tail = tail[1:-1].replace("N-1", "NextN")
+                # (both returns in tail position, the branches of the body's
+                # last if: the function is <decides>, Return.versetest:157)
                 source = source.replace(line,
                     f'    if(N<=0):\n        Print("mut visit {i} {{N}}")\n'
                     f'        BaseN:={2*i}\n        return {base.replace(f",{2*i})", ",BaseN)")}\n'
-                    f'    Print("mut visit {i} {{N}}")\n    NextN:=N-1\n    return {tail}', 1)
+                    f'    else:\n        Print("mut visit {i} {{N}}")\n        NextN:=N-1\n        return {tail}', 1)
             self.consumers[-1] = source
         h, option = self.fresh('MutState'), self.fresh('MutOption')
         self.main += [f'{h}:={cell}{{}}',

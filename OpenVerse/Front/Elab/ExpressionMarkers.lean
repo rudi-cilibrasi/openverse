@@ -178,11 +178,6 @@ partial def elabExprMarkersWith
     elabE { ctx with canFail := mode == "true", defers := [], forReturnSlot := some slot } body exp
   | .app _ (.ident _ "$forReturnBody") [.block _ [.set _ (.ident _ slot) none _, _], .ident _ mode, body] false =>
     elabE { ctx with canFail := mode == "true", defers := [], forReturnSlot := some slot } body exp
-  | .app _ (.ident _ "$forClauseExits") [.set _ (.ident _ slot) none _, .set _ (.ident _ breaking) none _, .ident _ mode, body] false =>
-    elabE { ctx with
-      canFail := mode == "true", defers := [], forReturnSlot := some slot,
-      forBreakCapture := some breaking, forBreakSlot := none, inLoop := true, loopDefers := 0,
-      loopRollback := mode == "true" || ctx.inRollback } body exp
   -- (#283) a family's stub, `Err()`: a program with a call of it is
   -- refused (`elabProgramCore`)
   | .app p (.ident _ "$familyStub") [] false => elabE ctx (.app p (.ident p "Err") [] false) exp

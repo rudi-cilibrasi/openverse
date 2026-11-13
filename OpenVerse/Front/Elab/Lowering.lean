@@ -360,8 +360,6 @@ def functionBodyCtx (req : Requests) (ctx : Ctx) (p : Pos) (name : String)
   let resume := req.loops.findSome? fun l => l.resumes.find? (·.name == name)
   let source := (resume.map (·.sourceContext)).getD
     ((loopLift.map (·.sourceContext)).getD ((lifted.map (·.sourceContext)).getD {}))
-  let returnExit := loopLift.bind (·.returnExit)
-  let breakExit := loopLift.bind (·.breakExit)
   let resumeStorage ← ((resume.map (·.storage)).getD []).mapM fun (n, r) => do
     let args ← r.args.mapM fun t => (resolveTy ctx.types p t).run' { env := ctx.types }
     pure (n, { frame := r.frame, name := r.name, args : SourceStorage })
@@ -385,8 +383,7 @@ def functionBodyCtx (req : Requests) (ctx : Ctx) (p : Pos) (name : String)
     inArm := source.inArm || ctx.inArm
     inBranch := source.inBranch || ctx.inBranch
     defaults := source.defaults ++ ctx.defaults
-    refineExits := if returnExit.isNone && breakExit.isNone then (lifted.map (·.exits)).getD {} else
-      { ret := returnExit.map fun r => (r.value.map (fun n => (n, r.ty)), r.packet), brk := breakExit }
+    refineExits := (lifted.map (·.exits)).getD {}
     inBlock := source.inBlock || name.endsWith ".$block"
     inCtor := source.inCtor || name.endsWith "$init"
     selfClass := scopeClass.orElse fun _ => match name.splitOn "." with

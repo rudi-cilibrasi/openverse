@@ -14,7 +14,7 @@ Break(X:car)<transacts>:int=
     var V:int=0
     loop:
         defer:Print("break cleanup {V}")
-        if(A:=(Two(X)|Two(X)),B:=(1|2),set V+=A.N+B,B=2,break)then Print("bad")
+        if(A:=(Two(X)|Two(X)),B:=(1|2),set V+=A.N+B,B=2)then break
     V
 Main()<transacts>:void=
     A:=car{}

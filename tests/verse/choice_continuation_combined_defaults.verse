@@ -8,7 +8,10 @@ impl:=class(base(int)):
 Use(W:base(t),X:t,H:cell,Stop:logic where t:type)<transacts>:int=
     var Total:int=0
     defer:Print("source {Total} {H.N}")
-    if(A:=(Two(0)|Two(2)),B:=(Two(0)|Two(2)),N:=W.Get(H,X),set Total+=1,if(Stop?)then return N else 0,After:[]t=Concatenate()):
+    if(A:=(Two(0)|Two(2)),B:=(Two(0)|Two(2)),N:=W.Get(H,X),set Total+=1,After:[]t=Concatenate()):
+        # (the return in the branch: a return cannot leave the condition, a
+        # failure context, the Book of Verse's tests, Reachability.versetest:12)
+        if(Stop?)then return N
         Print("normal {N}")
     -1
 Main():void=
