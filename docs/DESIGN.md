@@ -2345,7 +2345,14 @@ clause's values; as a local from outside the later cast's branch, it
 leaves that branch at its own type, not the refined one, so it can be cast
 again. An object that may name type arguments a cast opens (the first
 cast's, when the refusal says it opens, `Refine.CastRefusal.opens`, or a
-later cast's, which may) is not: `after` could not name its type. A `for`'s clause past the moved clauses that uses `D` is cast again in the
+later cast's, which may) is not: `after` could not name its type. It is
+read again instead when it is read by fields that are no `var`s from the
+name of a cast `after` casts again (`Refine.pathRoot?`, `L := lit[P.L]`):
+`after` casts `P` again and then `P.L`, the same object (a class and the
+fields that are no `var`s of an object do not change), whose type there is
+what that cast gives (#250). As for a computed object, only when `after`
+is refused without it; when it is still refused, the error names the casts
+whose objects are neither. A `for`'s clause past the moved clauses that uses `D` is cast again in the
 same way where it uses it, at that place: a generator's source, a range's
 bounds, a binding's value (so its name stays bound), each alternative of a
 choice (lifted out of the clause first, `lift`), or else the clause itself;

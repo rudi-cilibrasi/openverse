@@ -656,10 +656,15 @@ circle := class(shape, labelled):
   those clauses bind, casts the object again, which succeeds (an object's
   class does not change), so that it is typed under the refinement too, as
   it does each later cast among those clauses whose name it uses, from that
-  cast's object (bound to a name first, when computed there), unless the
-  object may name type arguments a cast opens (the first, when it opens,
-  or another among them): then the branch has the later cast's name, with
-  the type it has there, but not its refinement:
+  cast's object (bound to a name first, when computed there). An object
+  that may name type arguments a cast opens (the first, when it opens, or
+  another among them) is read again instead, after the cast whose name it
+  reads, when it is read by fields that are no `var`s from that cast's
+  name (#250): `if (Print("x"), P := pairE[E], L := lit[P.L], R :=
+  txt[P.R]) then (L.V, R.S)` gives a `t` that is `tuple(a', b')` with `a'
+  = int` and `b' = string` (an object's fields that are no `var`s do not
+  change, so `P.L` is the same object there). Otherwise the branch has the
+  later cast's name, with the type it has there, but not its refinement.
   `if (Print("x"), D := dup[P], Y := D.A) then option{Y}` prints `x` only
   when `P` is a `dup`, and its branch has `D` and `Y` with `b = a`. A
   `for`'s clause past that generator that uses the cast's name casts the
@@ -834,7 +839,10 @@ circle := class(shape, labelled):
     uses its name in a branch of an `if` with a choice in its branches (#243);
   - after a cast that opens type arguments, a value of its failure
     context, or a name it binds that a branch or body uses, of a type that
-    names them (#250);
+    names them (#250): no type outside it can name them (it would be an
+    existential type); and, where the cast takes the clauses after it, the
+    refinement of a later cast whose object may name them and is not read
+    by fields that are no `var`s from a cast's name (#250);
   - a branch of such a cast with a `return`, or a `break` that leaves it,
     where the `if`'s value is used at a type not known there (#243);
   - a cast from a reference to an interface that a class gives type

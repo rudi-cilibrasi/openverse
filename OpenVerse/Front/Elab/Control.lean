@@ -794,7 +794,8 @@ def withCastClauses (ctx : Ctx) (cs : List SExpr) (after : SExpr) (isGen : SExpr
       Choice.liftClause (fun n => choiceValues ctx n || bound.contains n) (choiceField ctx) c (fieldOrder := choiceOrder ctx)
     let moved (computed : Bool) := Refine.castRestClauses (cs.take k) cast refusal.opens (cs.drop (k + 1)) after
       isGen ctx.types.classes.contains (fun n => (ctx.lookup n).any (!·.mutable)) computed lift
-    let (cs', after', _) ← match moved false with
+      (fun f => !ctx.types.varFields.any (·.2 == f))
+    let (cs', after', _, _) ← match moved false with
       | .ok r => pure r
       | .error why => throw s!"{err} ({why})"
     -- (a later cast of an object computed among the moved clauses is cast
@@ -804,7 +805,12 @@ def withCastClauses (ctx : Ctx) (cs : List SExpr) (after : SExpr) (isGen : SExpr
     match ← tryCatch (Except.ok <$> rebuild cs' after') (fun err => pure (Except.error err)) with
     | .ok r => return some r
     | .error err1 =>
-      let .ok (cs'', after'', true) := moved true | throw err1
+      -- (#250: saying which later casts are not cast again, as their objects
+      -- may name type arguments a cast opens and are no fields read from it)
+      let err1 := match moved true with
+        | .ok (_, _, _, e :: es) => s!"{err1} ({if es.isEmpty then s!"the cast that binds {e} is" else s!"the casts that bind {", ".intercalate (e :: es)} are"} not repeated where the clauses' names are used, as its object may name type arguments a cast before it opens and is not read from that cast's name by fields that are no vars (#250))"
+        | _ => err1
+      let .ok (cs'', after'', true, _) := moved true | throw err1
       set st1
       return some (← tryCatch (rebuild cs'' after'') fun _ => throw err1)
 

@@ -300,6 +300,14 @@ def castObj (q : Pos) : String := s!"$castObj{q.line}_{q.col}"
 
 def isCastObj (n : String) : Bool := n.startsWith "$castObj"
 
+/-- The name `e` reads fields from, when `e` is a name or a path of fields
+    `fixedField` says are fixed (no `var`): reading it again where that name
+    is bound to the same object gives the same value (#250). -/
+partial def pathRoot? (fixedField : String → Bool) : SExpr → Option String
+  | .ident _ n => some n
+  | .member _ o f => if fixedField f then pathRoot? fixedField o else none
+  | _ => none
+
 /-- (#243) Clauses `pre, D := T[X], rest` of a failure context (an `if`'s
     condition, a `for`'s clauses, `first{…}`'s) whose cast refines, with the
     code their names reach after them, `after` (the branch, the body, the
@@ -320,14 +328,19 @@ def isCastObj (n : String) : Bool := n.startsWith "$castObj"
     clauses (`isFixed`), or else one computed among them, bound to a name
     first (`castObj`), which is one of their values, when `computed`, unless
     it may name type arguments a cast among them opens (this one, when it
-    `opens`, or a later one, which may): `after` has no name for those. The
-    new clauses and `after`, and whether such an object is bound; or why
-    not. -/
+    `opens`, or a later one, which may): `after` has no name for those, so
+    such an object is cast again only when it is read by fields that are no
+    `var`s (`fixedField`) from the name of a cast `after` casts again
+    (`pathRoot?`), read again there, after that cast, also when `computed`.
+    The new clauses and `after`, whether such an object is bound or read
+    again, and the later casts whose objects may name opened type arguments
+    and are not cast again; or why not. -/
 def castRestClauses (pre : List SExpr) (cast : Pos × String × String × SExpr) (opens : Bool)
     (rest : List SExpr) (after : SExpr) (isGen : SExpr → Bool := fun _ => false)
     (isClass : String → Bool := fun _ => true) (isFixed : String → Bool := fun _ => false)
-    (computed : Bool := true) (lift : SExpr → List SExpr := fun c => [c]) :
-    Except String (List SExpr × SExpr × Bool) := do
+    (computed : Bool := true) (lift : SExpr → List SExpr := fun c => [c])
+    (fixedField : String → Bool := fun _ => false) :
+    Except String (List SExpr × SExpr × Bool × List String) := do
   let (p, d, T, x) := cast
   let branch0 := rest.takeWhile (!isGen ·)
   let later := rest.dropWhile (!isGen ·)
@@ -369,16 +382,24 @@ def castRestClauses (pre : List SExpr) (cast : Pos × String × String × SExpr)
   let usedAfter := Choice.namesUsed after
   -- (the later casts' objects to cast again, and the names whose values may
   -- name opened type arguments: what casts bind, and what uses those)
-  let (objs, branch, _) := branch0.foldl (fun (objs, cs, tainted) c => match c with
+  -- (#250: an object that may name them, read by fixed fields from a cast's
+  -- name, `P.L`, is read again where `after` casts that name again, the same
+  -- object there, so its own type is what that cast gives; only when
+  -- `computed`, as `after` is refused without it)
+  let (objs, branch, _, paths) := branch0.foldl (fun (objs, cs, tainted, paths) c => match c with
     | .decl q e none false (.app _ (.ident _ T') [x'] true) =>
       let mayName := (Choice.namesUsed x').any tainted.contains
       let fixed := match x' with | .ident _ n => isFixed n | _ => false
-      if !isClass T' then (objs, cs ++ [c], if mayName then tainted ++ [e] else tainted)
-      else if fixed then (objs ++ [(e, T', x', none)], cs ++ [c], tainted ++ [e])
-      else if mayName || !computed then (objs, cs ++ [c], tainted ++ [e])
-      else (objs ++ [(e, T', .ident q (obj q), some (obj q))], cs ++ [.decl q (obj q) none false x', castOf q e T' (.ident q (obj q))], tainted ++ [e])
-    | .decl _ n _ _ v => (objs, cs ++ [c], if (Choice.namesUsed v).any tainted.contains then tainted ++ [n] else tainted)
-    | c => (objs, cs ++ [c], tainted)) (([] : List (String × String × SExpr × Option String)), ([] : List SExpr), if opens then [d] else [])
+      let path := computed && match pathRoot? fixedField x' with
+        | some r => r == d || objs.any (·.1 == r)
+        | none => false
+      if !isClass T' then (objs, cs ++ [c], if mayName then tainted ++ [e] else tainted, paths)
+      else if fixed then (objs ++ [(e, T', x', none)], cs ++ [c], tainted ++ [e], paths)
+      else if mayName && path then (objs ++ [(e, T', x', none)], cs ++ [c], tainted ++ [e], paths ++ [e])
+      else if mayName || !computed then (objs, cs ++ [c], tainted ++ [e], if mayName && computed then paths ++ [s!"-{e}"] else paths)
+      else (objs ++ [(e, T', .ident q (obj q), some (obj q))], cs ++ [.decl q (obj q) none false x', castOf q e T' (.ident q (obj q))], tainted ++ [e], paths)
+    | .decl _ n _ _ v => (objs, cs ++ [c], if (Choice.namesUsed v).any tainted.contains then tainted ++ [n] else tainted, paths)
+    | c => (objs, cs ++ [c], tainted, paths)) (([] : List (String × String × SExpr × Option String)), ([] : List SExpr), if opens then [d] else [], ([] : List String))
   -- (the casts `after` casts again, each when it uses its name or one bound
   -- after it, and no clause past a generator does: this one, of its object
   -- bound once, and those after it)
@@ -411,7 +432,8 @@ def castRestClauses (pre : List SExpr) (cast : Pos × String × String × SExpr)
   let q := after.pos
   let after := again.foldr (fun (e, T', y, _) acc =>
     .ite q [made (castOf q e T' y)] acc (some (.app q (.ident q "Err") [] false))) after
-  return (clauses, after, again.any (·.2.2.2.isSome))
+  return (clauses, after, again.any (fun (e, _, _, o) => o.isSome || paths.contains e),
+    paths.filterMap fun e => if e.startsWith "-" then some (e.drop 1).toString else none)
 
 /-- The branches the lifts ask for, as functions: each `if (D := …) then
     Body …` whose position and bound name are a lift's key gives `Body`,
