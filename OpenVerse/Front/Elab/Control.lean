@@ -5,9 +5,10 @@ import OpenVerse.Front.Elab.Calls
 namespace OpenVerse.Front
 open OpenVerse
 partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMember : Ctx → Pos → R → String → EM R)
-    (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (rhs0 : SExpr) : EM R := do
+    (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (rhs0 : SExpr)
+    (rootInit : Option (String × Expr) := none) : EM R := do
   if let .app _ (.ident _ "$refineCopyOut") [rhs] false := rhs0 then
-    let r ← elabSetWith elabE elabMember ctx p lhs0 op rhs
+    let r ← elabSetWith elabE elabMember ctx p lhs0 op rhs rootInit
     match r.e with
     | .assign target (.local result) =>
       modify fun st => { st with frameCopies := st.frameCopies ++ [{ target, result }] }
@@ -92,7 +93,11 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
   let general : List (Pos × Option String × Option SExpr) → Bool
     | steps@(_ :: _ :: _) => !steps.isEmpty
     | steps => steps.any (·.2.1 == some "?")
-  if let some (root, steps) := path lhs then if general steps then
+  let opaqueIndex (root : String) (steps : List (Pos × Option String × Option SExpr)) : Bool :=
+    (ctx.lookup root).any (fun binding => match binding.ty with
+      | .param .. => steps.any (fun (_, field, key) => field == some "?" || key.isSome)
+      | _ => false)
+  if let some (root, steps) := path lhs then if general steps || opaqueIndex root steps then
     -- `set X.p = e` with a path of two or more steps (Book of Verse §3.5, §9.3):
     -- the indices and keys are evaluated once, left to right; then each
     -- intermediate container is read (an index or an intermediate key that
@@ -110,7 +115,23 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     -- first the indices and keys
     let mut keys : Array (Option (Nat × Ty)) := #[]
     let mut tys : Array Ty := #[]
+    let mut rawTys : Array Ty := #[]
+    let mut views : Array (Option (Nat × R)) := #[]
     for (sp, f?, k?) in steps do
+      rawTys := rawTys.push ty
+      let mut view := none
+      if let .param .. := ty then
+        let input ← fresh ty
+        let source : R := ⟨.local input, ty⟩
+        let receiver ← match f?, k? with
+          | some "?", _ => elabContainerReceiverWith elabE ctx sp source (fun | .opt _ => true | _ => false) "query"
+          | some field, _ => elabBoundReceiverWith elabE ctx sp source field
+          | none, some _ => elabContainerReceiverWith elabE ctx sp source (fun | .arr _ | .map .. => true | _ => false) "index"
+          | _, _ => pure source
+        if receiver.ty != ty then
+          view := some (input, receiver)
+          ty := receiver.ty
+      views := views.push view
       tys := tys.push ty
       match f?, k?, ty with
       | some "?", _, .opt t => keys := keys.push none; ty := t
@@ -140,6 +161,11 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
       match tysA[k]! with
       | .struct sn _ => ctx.types.isRefClass sn
       | _ => false
+    for (view, index) in views.toList.zipIdx do
+      if let some (_, receiver) := view then
+        let container := match receiver.ty with | .arr _ | .map .. | .opt _ => true | _ => false
+        if container && !(refLevel?.any (index < ·)) then
+          eerr p s!"cannot write through a container upper bound: source storage must retain {rawTys[index]!.show}"
     if let some kr := refLevel? then
       let (sp, f?, _) := steps.toArray[kr]!
       match tysA[kr]!, f? with
@@ -163,6 +189,17 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         let tp ← fresh (.tup [kt, vt])
         pure (mapLookup c tk tp)
       | _, _, _ => eerr p "internal: set path"
+    -- A view consumes the already-read source container. Its dictionary
+    -- call belongs here in traversal, not in the index/key prelude.
+    let activate (k current : Nat) : EM (List Expr × Nat) := do
+      match views[k]! with
+      | none => return ([], current)
+      | some (input, receiver) =>
+        let output ← fresh receiver.ty
+        return ([.assign input (.local current), .assign output receiver.e], output)
+    if let some (name, value) := rootInit then
+      if name != root then eerr p "internal: bound set initializes a different path root"
+      pre := pre.push (.assign l.slot value)
     -- a value of a class with no instance cannot exist, so the set is
     -- unreachable once the path reaches one; but the steps before it (the
     -- indices and keys, then the containers read) may fail first (#104)
@@ -170,11 +207,15 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         match tysA[k]! with | .struct sn _ => ctx.types.isEmptyClass sn | _ => false then
       let stepsA := steps.toArray
       let mut c := l.slot
-      for k in [0:ke] do
-        let (_, f?, _) := stepsA[k]!
-        let c' ← fresh tysA[k + 1]!
-        pre := pre.push (.assign c' (← readStep c tysA[k]! f? keys[k]!))
-        c := c'
+      for k in [0:ke + 1] do
+        let (before, viewed) ← activate k c
+        pre := pre ++ before.toArray
+        c := viewed
+        if k < ke then
+          let (_, f?, _) := stepsA[k]!
+          let c' ← fresh rawTys[k + 1]!
+          pre := pre.push (.assign c' (← readStep c tysA[k]! f? keys[k]!))
+          c := c'
       -- (the right-hand side never runs, but is checked, and the field set
       -- at the empty class must be a var, as on any path)
       let lastCls := (List.range steps.length).reverse.find? fun k =>
@@ -208,6 +249,9 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     let mut oldLeaf : Option Nat := none
     for k in [0:stepsA.size] do
       let (sp, f?, _) := stepsA[k]!
+      let (before, viewed) ← activate k cur
+      pre := pre ++ before.toArray
+      cur := viewed
       levels := levels.push (cur, tys[k]!, sp, f?, keys[k]!)
       if k == rhsAfter then
         -- `set P op= e` reads P before e, as the direct form does (Book of
@@ -217,8 +261,12 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         if op.isSome && !preloaded then
           let mut c2 := cur
           for k2 in [k:stepsA.size] do
+            if k2 > k then
+              let (before, viewed) ← activate k2 c2
+              pre := pre ++ before.toArray
+              c2 := viewed
             let (_, f2, _) := stepsA[k2]!
-            let t2 := if k2 + 1 < stepsA.size then tys[k2 + 1]! else leafTy
+            let t2 := if k2 + 1 < stepsA.size then rawTys[k2 + 1]! else leafTy
             let c3 ← fresh t2
             pre := pre.push (.assign c3 (← readStep c2 tys[k2]! f2 keys[k2]!))
             c2 := c3
@@ -228,7 +276,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         pre := pre.push (.assign tr r.e)
         rhsVal := some ⟨.local tr, r.ty⟩
       if k + 1 < stepsA.size then
-        let c ← fresh tys[k + 1]!
+        let c ← fresh rawTys[k + 1]!
         pre := pre.push (.assign c (← readStep cur tys[k]! f? keys[k]!))
         cur := c
     let (lc, lty, _, lf, lkey) := levels[levels.size - 1]!
@@ -423,8 +471,8 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     types := { env with tvars := (env.tvars.map (fun (n, t) => (n, refine t)) ++
       opened.map (fun (n, _, c) => (n, Ty.param n c))) } }
   -- (the locals the branch uses, in order of first use)
-  let caps : List Local := (Choice.namesUsed body).filterMap fun n =>
-    if n == D then none else ctx.locals.find? (·.name == n)
+  let caps : List Local := ctx.captureEvidence ((Choice.namesUsed body).filterMap fun n =>
+    if n == D then none else ctx.locals.find? (·.name == n)) [D]
   -- (the `var`s from outside it that the branch sets, its `return`s and its
   -- `break`s that leave it, `refineExits`: copies in the branch, and its
   -- function returns what they say, which the caller does after the `if`;
@@ -607,8 +655,9 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let lift : Refine.Lift := {
       pos := p, bound := D, target := if chain then "" else T, tag, continuationScope := ctx.refineScope,
       name := liftName,
-      params := ((D, dTy) :: sig).map (fun (n, t) => { name := n, ty := t.toSTy }) ++
-        extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n },
+      params := { name := D, ty := dTy.toSTy } ::
+        (caps.zip sig).map (fun (binding, (name, ty)) => { name, ty := ty.toSTy, typeValue := binding.typeValue }) ++
+        extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n, typeValue := true },
       tparams := tps.map fun (n, c) => { pos := p, name := n, constraint := if c then "comparable" else "type" },
       specs, ret := ret.toSTy, branchTy := if retOfBranch then some τ'.toSTy else none, subst := σ, opened := if chain then [] else opened.map fun (n, v, _) => (n, v), waits := thenWaits, sourceSuspends,
       exits := Refine.Exits.substTypes ((escRet.map (·.2)).getD {}) σ,
@@ -760,6 +809,9 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
         unrefine := unrefine ++ ctx.unrefine,
         locals := dL :: ctx.locals.map fun loc => { loc with ty := loc.ty.subst μF, storage := loc.storage.map (·.subst μF) },
         types := { env with tvars := env.tvars.map fun (m, t) => (m, t.subst μF) } }
+      let argOf (sp : SParam) : SExpr :=
+        if sp.typeValue && sp.name.startsWith "$type" then .app p (.ident p "$witness") [.ident p (sp.name.drop 5).toString] false
+        else .ident p sp.name
       let rc ← elabApp ctx' p (.ident p l.name) (l.params.map argOf)
         (l.specs.contains "decides") (some (τ'.subst μF))
       -- (a suspends call carries the defers active at it, which go around
@@ -988,7 +1040,8 @@ partial def loopFlatWith (elabE : Ctx → SExpr → Option Ty → EM R)
   let own := h :: Choice.localsOf k
   let preSet := rest.findSome? fun e => if Choice.anyE (fun | .set .. => true | _ => false) e then some e.pos else none
   let j := frames.size
-  let lives := (Choice.namesUsed k).eraseDups.filterMap fun n => if own.contains n then none else fc.lookup n
+  let lives := fc.captureEvidence ((Choice.namesUsed k).eraseDups.filterMap fun n =>
+    if own.contains n then none else fc.lookup n) own
   let inTy ← match Choice.alts? c, c with
     | some cs, _ => probeHoleWith elabE ca rty cs recTy
     -- (a call of a member: its values' type, when other than the result

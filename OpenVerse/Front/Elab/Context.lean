@@ -27,6 +27,7 @@ import OpenVerse.Front.PreludeNeeds
 import OpenVerse.Front.Profile
 import OpenVerse.Front.EffectPolicy
 import OpenVerse.Front.SignalAdmission
+import OpenVerse.Front.MetadataFlow
 import OpenVerse.Front.Suspend
 import OpenVerse.Front.Rational
 import OpenVerse.Front.Modules
@@ -39,6 +40,8 @@ import OpenVerse.Front.FailCapture
 import OpenVerse.Front.CompilerWrites
 import OpenVerse.Front.Types
 import OpenVerse.Front.ChoiceTypes
+import OpenVerse.Front.UpperBounds
+import OpenVerse.Front.SubtypeEvidence
 import Std.Data.HashMap
 
 namespace OpenVerse.Front
@@ -103,6 +106,7 @@ structure Local where
   ty      : Ty
   mutable : Bool
   storage : Option SourceStorage := none
+  typeValue : Bool := false
 
 /-- The heap effects (`<transacts>` allows all of them). -/
 
@@ -137,10 +141,38 @@ structure Sig where
       defaults resolve in, when not the one its name says: a class's copy of
       an interface's default, the interface (#53, `copyScope?`). -/
   scope : Option String := none
+  /-- Required checked upcast dictionaries, preserving both sides when an
+      adapter substitutes a parameter by a compound type. -/
+  bounds : List SubtypeEvidence.Bound := []
+  /-- Evidence recovered from the receiver: constraint index and field. -/
+  selfBounds : List (Nat × Nat) := []
+  /-- Explicit parameters that carry dummy type values rather than data. -/
+  typeValues : List Nat := []
   deriving Inhabited
 
+def Sig.frame (s : Sig) : SubtypeEvidence.Frame :=
+  { explicit := s.params, params := s.tparams, selfParams := s.selfTps,
+    bounds := s.bounds, selfBounds := s.selfBounds }
+
 /-- How many hidden parameters (values of type arguments) a function takes. -/
-def Sig.ndicts (s : Sig) : Nat := s.tparams.length - s.selfTps.length
+def Sig.ndicts (s : Sig) : Nat := s.frame.arity - s.params.length
+
+def Sig.evidenceName (s : Sig) (index : Nat) : String := s!"$subtype_{s.name}_{index}"
+
+def Sig.evidenceLocals (s : Sig) : List Local :=
+  s.frame.evidence.map fun (index, bound, slot) =>
+    { name := s.evidenceName index, slot, ty := bound.ty, mutable := false }
+
+def Sig.methodBounds (s : Sig) (classParams : Nat) : List SubtypeEvidence.Bound :=
+  let own := (s.tparams.drop classParams).map (·.1)
+  s.bounds.filter fun bound => bound.derived.params.any own.contains
+
+def Sig.typeEnv (s : Sig) (env : TyEnv) : TyEnv :=
+  { env with
+    tvars := s.tparams.map fun (name, comparable) => (name, Ty.param name comparable)
+    boundFacts := s.bounds.map (fun bound => (bound.base, bound.derived)) ++
+      SubtypeEvidence.parameterFacts env (s.params.zipIdx.map fun (ty, i) =>
+        (ty, s.typeValues.contains i)) (SubtypeEvidence.helperContext s.name) }
 
 /-- The implicit receiver, distinguished from an ordinary parameter that a
     source function happens to name Self. Extracted methods use $Self. -/
@@ -210,8 +242,11 @@ def fnFits (env : TyEnv) (s : Sig) (t : Ty) : Bool :=
           (qs.zip ps).all (fun (q, p) => subAt q p) && subAt s.ret u
         else
           match ((ps ++ [s.ret]).zip (qs ++ [u])).foldlM (fun σ (a, b) => a.matchArg env σ b) [] with
-          | some σ => s.tparams.all fun (v, cmp) => match σ.lookup v with
-            | some x => !cmp || x.plainComparable
+          | some σ => match SubtypeEvidence.infer env s.bounds σ true ((s.tparams.filter (·.2)).map (·.1)) with
+            | some σ => s.tparams.all (fun (v, cmp) => match σ.lookup v with
+                | some x => !cmp || x.plainComparable
+                | none => false) && s.bounds.all (fun bound =>
+                  env.boundSubtype (bound.derived.subst σ) (bound.base.subst σ))
             | none => false
           | none => false
     | none => false
@@ -228,7 +263,9 @@ def fnValueArgs (env : TyEnv) (s : Sig) (t : Ty) (fixed : List (String × Ty) :=
     let own : FnValues.Shape := ⟨k, s.decides, s.suspends, s.fx⟩
     if !own.within (FnValues.shapeOf k es) then none else do
       let σ ← ((s.params ++ [s.ret]).zip ts).foldlM (fun σ (a, b) => a.matchArg env σ b) fixed
+      let σ ← SubtypeEvidence.infer env s.bounds σ true ((s.tparams.filter (·.2)).map (·.1))
       if !((s.params ++ [s.ret]).zip ts).all (fun (a, b) => (a.subst σ).eqv b) then none else
+      if !s.bounds.all (fun bound => env.boundSubtype (bound.derived.subst σ) (bound.base.subst σ)) then none else
       s.tparams.mapM fun (v, cmp) => do
         let t ← σ.lookup v
         if cmp && !t.comparable env then none else some t
@@ -244,7 +281,8 @@ def fnClassArgs (env : TyEnv) (cls : String) (target : Ty)
     let sig : Sig := {
       idx := 0, name := cls, params := ts.take k, ret := (ts.drop k).headD .void,
       decides := es.contains "decides", isConst := false,
-      tparams := (env.sparams.lookup cls).getD [], fx := allowedFx es, suspends := es.contains "suspends" }
+      tparams := (env.sparams.lookup cls).getD [], fx := allowedFx es, suspends := es.contains "suspends",
+      bounds := ((env.sbounds.lookup cls).getD []).map fun (base, derived) => ⟨base, derived⟩ }
     fnValueArgs env sig target fixed
 
 /-- A construction instance found with its original expected context. -/
@@ -469,6 +507,8 @@ structure Requests where
   /-- Methods wanted as values at function types their own fit only by
       variance: an adapter for each, by key. -/
   methods : List FnValues.MethodRequest := []
+  /-- Canonical checked upcast dictionaries discovered by elaboration. -/
+  subtypes : List STop := []
   /-- Branches of casts that refine type arguments (#243): a function for
       each, by key. -/
   casts : List Refine.Lift := []
@@ -498,6 +538,7 @@ def Requests.merge (a b : Requests) : Requests where
   fieldOrders := mergeByKey (·.1) a.fieldOrders b.fieldOrders
   fns := mergeByKey id a.fns b.fns
   methods := mergeByKey (·.key) a.methods b.methods
+  subtypes := SubtypeEvidence.mergeRequests a.subtypes b.subtypes
   casts := mergeByKey (·.key) a.casts b.casts
   loops := mergeByKey (·.key) a.loops b.loops
   witnesses := mergeByKey id a.witnesses b.witnesses
@@ -516,6 +557,7 @@ def Requests.without (r old : Requests) : Requests where
   fieldOrders := dropByKey (·.1) r.fieldOrders old.fieldOrders
   fns := dropByKey id r.fns old.fns
   methods := dropByKey (·.key) r.methods old.methods
+  subtypes := dropByKey SubtypeEvidence.declarationName r.subtypes old.subtypes
   casts := dropByKey (·.key) r.casts old.casts
   loops := dropByKey (·.key) r.loops old.loops
   witnesses := dropByKey id r.witnesses old.witnesses
@@ -524,7 +566,7 @@ def Requests.isEmpty (r : Requests) : Bool :=
   r.eager.isEmpty && r.lazy.isEmpty && r.families.isEmpty && r.overloads.isEmpty && r.nested.isEmpty &&
     r.fieldOrders.isEmpty &&
     r.fns.isEmpty && r.methods.isEmpty &&
-    r.casts.isEmpty && r.loops.isEmpty && r.witnesses.isEmpty
+    r.casts.isEmpty && r.loops.isEmpty && r.witnesses.isEmpty && r.subtypes.isEmpty
 
 /-- A lazily taken call where the first success is taken (#246): its
     function, where, the code it runs once for all the values of an item,
@@ -539,6 +581,10 @@ structure LoopUse where
   lift : Except String Choice.FirstLift
 
 structure ESt where
+  /-- Compiler-only dummy provenance, retained until metadata admission. -/
+  metadataSeeds : List Nat := []
+  metadataUses : List Nat := []
+  metadataWrites : List (Nat × Nat) := []
   /-- What the elaboration of the function asks for, for the program to be
       elaborated again with it (`noteNeeds`): eager groups whose changing
       instances need eager generation, the families of uses of methods
@@ -803,6 +849,9 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
       for ((v, c), t) in ps.zip ts do
         if c && !t.comparable env then eerr p (notComparable env t s!"type argument {v} of {n}")
       let t := Ty.struct n ts
+      match t.checkBoundHead env with
+      | .error message => eerr p message
+      | .ok _ => pure ()
       if t.sizeUpTo env (maxTySize + 1) > maxTySize then
         eerr p s!"the type {n}(…) is too large: its Verse Core representation has more than {maxTySize} nodes"
       return t
@@ -810,9 +859,249 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
       if (env.structs.lookup n).isSome then eerr p s!"struct {n} takes no type arguments"
       else eerr p s!"unknown parametric type '{n}' (only structs can be parametric)"
 
+def typeNames : List String :=
+  ["int", "logic", "char", "string", "void", "float", "rational", "any", "comparable", "type", "subtype"]
+
+/-- Comparable upper types whose subtype conversions preserve equality.
+    Contextual discarding to void is deliberately not such a guarantee. -/
+private partial def comparableUpper (env : TyEnv) (vars : List (String × Bool)) : STy → Bool
+  | .name name => (vars.lookup name).getD false ||
+      ["int", "float", "rational", "logic", "char", "char32", "string"].contains name ||
+      (env.enums.lookup name).isSome || (env.refines.lookup name).isSome ||
+      (env.classes.contains name && env.isUnique name)
+  | .arr ty | .opt ty => comparableUpper env vars ty
+  | .tup parts => !parts.isEmpty && parts.all (comparableUpper env vars)
+  | .map key value => comparableUpper env vars key && comparableUpper env vars value
+  | .app name _ => env.classes.contains name && env.isUnique name
+  | .fn .. => false
+
+def checkTParams (env : TyEnv) (tps : List TParam) : Except String (List (String × Bool)) := do
+  let mut out : Array (String × Bool) := #[]
+  for tp in tps do
+    if out.any (·.1 == tp.name) then
+      throw s!"{tp.pos.show}: type parameter {tp.name} is declared twice (several constraints on one type parameter are not supported)"
+    if typeNames.contains tp.name || (env.structs.lookup tp.name).isSome ||
+        (env.enums.lookup tp.name).isSome then
+      throw s!"{tp.pos.show}: type parameter {tp.name} has the name of a type"
+    if tp.upperBound.isSome then out := out.push (tp.name, false) else
+      match tp.constraint with
+      | "type" => out := out.push (tp.name, false)
+      | "comparable" => out := out.push (tp.name, true)
+      | c => throw s!"{tp.pos.show}: unknown constraint subtype({c}) (expected type, comparable, or a retained upper-bound type)"
+  if !tps.any (·.upperBound.isSome) then return out.toList
+  -- A comparable parameter can be instantiated as void, whose lower types
+  -- need not support equality. Propagate only guarantees from upper types
+  -- whose subtype conversions preserve equality, separately from explicit
+  -- comparable constraints on the parameters themselves.
+  let mut inherited := out.map fun (name, _) => (name, false)
+  for _ in [0:tps.length + 1] do
+    let next := inherited.map fun (name, comparable) =>
+      let implied := ((tps.find? (·.name == name)).bind (·.upperBound)).any
+        (comparableUpper env inherited.toList)
+      (name, comparable || implied)
+    if next == inherited then break
+    inherited := next
+  return out.toList.map fun (name, comparable) =>
+    (name, comparable || (inherited.toList.lookup name).getD false)
+
+structure ResolvedTParams where
+  params : List (String × Bool)
+  bounds : List SubtypeEvidence.Bound
+
+def ResolvedTParams.env (resolved : ResolvedTParams) (outer : TyEnv) : TyEnv :=
+  { outer with
+    tvars := resolved.params.map fun (name, comparable) => (name, Ty.param name comparable)
+    boundFacts := resolved.bounds.map fun bound => (bound.base, bound.derived) }
+
+def resolveTParams (env : TyEnv) (tps : List TParam) : Except String ResolvedTParams := do
+  let params ← checkTParams env tps
+  if !tps.any (·.upperBound.isSome) then return { params, bounds := [] }
+  let formal := { env with
+    tvars := params.map fun (name, comparable) => (name, Ty.param name comparable)
+    boundFacts := [], sbounds := [] }
+  let bounds ← tps.filterMapM fun parameter => do
+    let some upper := parameter.upperBound | pure none
+    let base ← (resolveTy formal parameter.pos upper).run' { env := formal }
+    -- Any resolved type may occur after a peer bound is specialized. In
+    -- particular a receiver's t can become int or a container in a checked
+    -- operation method. Validate its kind below instead of erasing it or
+    -- rejecting a legitimate specialized bound merely for its shape.
+    let derived := Ty.param parameter.name ((params.lookup parameter.name).getD false)
+    pure (some ({ base, derived } : SubtypeEvidence.Bound))
+  let resolved : ResolvedTParams := { params, bounds }
+  let checked := resolved.env env
+  for (parameter, bound) in (tps.filter (·.upperBound.isSome)).zip bounds do
+    match bound.base.checkBounds checked with
+    | .error message => throw s!"{parameter.pos.show}: {message} (in the upper bound of {parameter.name})"
+    | .ok _ => pure ()
+  return resolved
+
+def resolveSignatureTypes (env : TyEnv) (p : Pos) (ps : List SParam) (ret : STy)
+    (name : String := "") :
+    Except String (List Ty × Ty) := do
+  let unchecked := { env with sbounds := [] }
+  let tys ← (ps.mapM fun param => resolveTy unchecked p param.ty).run' { env := unchecked }
+  let rt ← (resolveTy unchecked p ret).run' { env := unchecked }
+  let facts := SubtypeEvidence.parameterFacts env ((ps.zip tys).map fun (param, ty) =>
+    (ty, param.typeValue)) (SubtypeEvidence.helperContext name)
+  let checked := { env with boundFacts := env.boundFacts ++ facts }
+  for ty in tys ++ [rt] do
+    match ty.checkBounds checked with
+    | .ok _ => pure ()
+    | .error message => throw s!"{p.show}: {message}"
+  return (tys, rt)
+
 def Ctx.lookup (ctx : Ctx) (n : String) : Option Local := ctx.locals.find? (·.name == n)
 def Ctx.sig? (ctx : Ctx) (n : String) : Option Sig := ctx.sigs.find? (·.name == n)
 
+def Ctx.evidenceTypes (ctx : Ctx) : List (String × Ty) :=
+  ctx.locals.map fun binding => (binding.name, if binding.typeValue then .void else binding.ty)
+
+/-- Update the source hint after a definite mutable-local assignment. MetadataFlow
+    still checks actual values across calls, branches, loops and rollback. -/
+def Ctx.withTypeValue (ctx : Ctx) (name : String) (role : Bool) : Ctx :=
+  { ctx with locals := ctx.locals.map fun binding =>
+      if binding.name == name && binding.mutable then { binding with typeValue := role }
+      else binding }
+
+partial def Ctx.isTypeValue (ctx : Ctx) : SExpr → Bool
+  | .ident _ "$witness" => true
+  | .ident _ name => (ctx.lookup name).any (·.typeValue)
+  | .app _ (.ident _ "$choiceCoercions") [_, body] false => ctx.isTypeValue body
+  | .app _ (.ident _ "$deferExits") [_, body] false => ctx.isTypeValue body
+  | .app _ (.ident _ name) args _ =>
+    if ["$typeValue", "$witness", "$stageWitness"].contains name then true
+    else if ["$refineCopyIn", "$refineCopyOut", "$forEnvCapture", "$forEnvInit"].contains name then
+      args.any ctx.isTypeValue
+    else
+      let binding := ctx.lookup name
+      let carries := match binding, ctx.sig? name with
+        | none, some signature => args.zipIdx.any fun (argument, i) =>
+          !signature.typeValues.contains i && ctx.isTypeValue argument
+        | _, _ => args.any ctx.isTypeValue
+      -- Declared metadata arguments (including generated witnesses) do
+      -- not make an independent data result metadata. MetadataFlow
+      -- checks the actual return, including a returned metadata formal.
+      binding.any (·.typeValue) || carries
+  | .member _ value field => field.startsWith "$w." || ctx.isTypeValue value
+  | .app _ value args _ => ctx.isTypeValue value || args.any ctx.isTypeValue
+  | .decl _ _ _ _ value | .query _ value | .optionLit _ value => ctx.isTypeValue value
+  | .set _ receiver op value => ctx.isTypeValue value || (op.isSome && ctx.isTypeValue receiver)
+  | .tuple _ values | .arrayLit _ values => values.any ctx.isTypeValue
+  | .mapLit _ entries => entries.any fun (key, value) => ctx.isTypeValue key || ctx.isTypeValue value
+  | .construct _ _ _ fields => fields.any fun field => match field with
+      | .decl _ name _ _ _ => !name.startsWith "$w." && ctx.isTypeValue field
+      | _ => ctx.isTypeValue field
+  | .block _ values =>
+    let (_, result) := values.foldl (fun (scope, _) value =>
+      let role := scope.isTypeValue value
+      let scope := match value with
+        | .decl _ name _ mutable body => { scope with locals :=
+            { name, slot := 0, ty := .void, mutable, typeValue := scope.isTypeValue body } :: scope.locals }
+        | .set _ (.ident _ name) _ _ => scope.withTypeValue name role
+        | _ => scope
+      (scope, role)) (ctx, false)
+    result
+  | .ite _ conditions yes no =>
+    let scope := throughClauses ctx conditions
+    scope.isTypeValue yes || no.any ctx.isTypeValue
+  | .forE _ clauses body => (throughClauses ctx clauses).isTypeValue body
+  | .caseE _ _ arms => arms.any fun (_, body) => ctx.isTypeValue body
+  | _ => false
+where
+  /-- The names returned by a clause inherit its source value's role. A
+      generator's body is analyzed in the scope of all preceding clauses,
+      independently of whether those clauses themselves carry dummy data. -/
+  throughClauses (ctx : Ctx) (clauses : List SExpr) : Ctx :=
+    clauses.foldl (fun scope condition => match condition with
+      | .decl _ name _ mutable value => { scope with locals :=
+          { name, slot := 0, ty := .void, mutable, typeValue := scope.isTypeValue value } :: scope.locals }
+      | assignment@(.set _ (.ident _ name) _ _) =>
+        scope.withTypeValue name (scope.isTypeValue assignment)
+      | .gen _ name key source =>
+        let role := scope.isTypeValue source
+        let names := name :: key.toList
+        { scope with locals := (names.map fun name =>
+          { name, slot := 0, ty := .void, mutable := false, typeValue := role }) ++ scope.locals }
+      | _ => scope) ctx
+
+/-- A metadata value may be forwarded opaquely, but cannot become an actual
+    dictionary in the callee. Inspect the declaration's own domain, before
+    substituting caller instances into otherwise unconstrained parameters. -/
+def Ctx.checkArgumentRole (ctx : Ctx) (s : Sig) (argument : SExpr) (index : Nat) : EM Unit := do
+  if s.typeValues.contains index || !ctx.isTypeValue argument then return
+  if (s.params[index]?).any (SubtypeEvidence.exposesEvidence (s.typeEnv ctx.types)) then
+    eerr argument.pos s!"dummy type value cannot provide executable evidence to {s.name}"
+
+def Ctx.evidenceEnv (ctx : Ctx) : TyEnv :=
+  let locals := ctx.evidenceTypes
+  { ctx.types with boundFacts := ctx.types.boundFacts ++
+    (SubtypeEvidence.capabilities ctx.types locals).map fun capability =>
+      let bound := capability.bound ctx.types
+      (bound.base, bound.derived) }
+
+/-- Infer a signature's structured arguments through real views of opaque
+    inputs, without replacing a directly matched precise type parameter.
+    Distinct inferred instances remain ambiguous; equal ones share flags. -/
+partial def Ctx.matchArgument (ctx : Ctx) (substitution : List (String × Ty))
+    (pattern actual : Ty) : Option (List (String × Ty)) :=
+  go [] substitution pattern actual
+where
+  go (seen : List (Ty × Ty)) (substitution : List (String × Ty)) (pattern actual : Ty) :
+      Option (List (String × Ty)) := do
+    if let some result := pattern.matchArg ctx.types substitution actual then return result
+    if seen.contains (pattern, actual) then none else do
+      let seen := (pattern, actual) :: seen
+      match pattern, actual with
+      | _, .param .. =>
+        let results := (SubtypeEvidence.valueViews ctx.types ctx.evidenceTypes actual).filterMap fun view =>
+          go seen substitution pattern view
+        let first ← results.head?
+        if !results.all (fun result => result.length == first.length && first.all (fun (name, ty) =>
+            (result.lookup name).any (· == ty))) then none else
+          some (first.map fun (name, ty) => (name,
+            results.foldl (fun common result => common.commonBounds ((result.lookup name).getD ty)) ty))
+      | .arr p, .arr a | .opt p, .opt a => go seen substitution p a
+      | .arr p, .tup values => values.foldlM (fun current value => go seen current p value) substitution
+      | .tup ps, .tup values =>
+        if ps.length != values.length then none else
+          (ps.zip values).foldlM (fun current (p, value) => go seen current p value) substitution
+      | .map pk pv, .map ak av => do go seen (← go seen substitution pk ak) pv av
+      | .struct owner ps, .struct source values =>
+        let values := if owner != source && ctx.types.classes.contains source && ctx.types.isSub source owner then
+          ctx.types.upArgs source values owner else values
+        if (owner != source && !(ctx.types.classes.contains source && ctx.types.isSub source owner)) ||
+            ps.length != values.length then none else
+          (ps.zip values).foldlM (fun current (p, value) => go seen current p value) substitution
+      | _, _ => none
+
+def Ctx.checkInlineInstance (ctx : Ctx) (p : Pos) (formal : ResolvedTParams)
+    (substitution : List (String × Ty)) (complete : Bool := true) :
+    Except String (List (String × Ty)) := do
+  let some substitution := SubtypeEvidence.infer ctx.evidenceEnv formal.bounds substitution complete
+      ((formal.params.filter (·.2)).map (·.1))
+    | throw s!"{p.show}: cannot infer a consistent upper-bound instance of this inlined call"
+  for (name, comparable) in formal.params do
+    match substitution.lookup name with
+    | some ty => if comparable && !ty.comparable ctx.types then
+        throw s!"{p.show}: type argument {ty.show} for {name} must be comparable"
+    | none => if complete then throw s!"{p.show}: cannot infer type parameter {name} of this inlined call"
+  for bound in formal.bounds do
+    if !(bound.base.params ++ bound.derived.params).all (fun n => (substitution.lookup n).isSome) then continue
+    let required := bound.subst substitution
+    let some plan := SubtypeEvidence.find? ctx.types ctx.evidenceTypes required
+      | throw s!"{p.show}: type {required.derived.show} does not satisfy subtype({required.base.show}) in this inlined call"
+    if !plan.valid ctx.types ctx.evidenceTypes then throw s!"{p.show}: internal: invalid inline subtype evidence"
+  return substitution
+
+def Ctx.captureEvidence (ctx : Ctx) (captures : List Local) (excluded : List String := []) : List Local :=
+  let names := (SubtypeEvidence.capabilities ctx.types ctx.evidenceTypes).filterMap fun
+      | .local name _ | .field name _ _ => some name
+      | _ => none
+  let added := names.eraseDups.filterMap fun name =>
+    if excluded.contains name || captures.any (·.name == name) then none else
+      (ctx.lookup name).map fun binding => { binding with mutable := false, storage := none }
+  captures ++ added
 /-- (#515) The context the `defer:`s an exit runs are elaborated in: inside
     a failure context or not (`rollback`) as the exit's target is (`false`
     for a `return`, which commits; the loop's for a `break`), not as the
@@ -837,6 +1126,120 @@ def Ctx.withDefer (ctx : Ctx) (d : SExpr) : Ctx :=
 /-- Class or interface `c` has method `m`, its own or inherited. -/
 def Ctx.hasMethod (ctx : Ctx) (c m : String) : Bool :=
   (ctx.types.supers c).any fun e => (ctx.sig? s!"{e}.{m}").isSome
+
+private def Ctx.selectValueView (ctx : Ctx) (p : Pos) (derived : Ty) (candidates : List Ty)
+    (operation : String) : Except String (Option Ty) := do
+  let locals := ctx.evidenceTypes
+  let candidates := candidates.foldl (fun result ty =>
+    if result.any (· == ty) then result.map (fun old => if old == ty then old.commonBounds ty else old)
+    else result ++ [ty]) []
+  let converts (source target : Ty) :=
+    (SubtypeEvidence.find? ctx.types locals ⟨target, source⟩).any (·.valid ctx.types locals)
+  let best := candidates.filter fun candidate => !candidates.any fun other =>
+    other != candidate && converts other candidate && !converts candidate other
+  match best with
+  | [] => return none
+  | first :: rest =>
+    if rest.all (fun other => converts first other && converts other first) then
+      return some (rest.foldl (fun selected next =>
+        if reprStr next < reprStr selected then next else selected) first)
+    throw s!"{p.show}: ambiguous bound {operation} of {derived.show} through {", ".intercalate (best.map Ty.show)}"
+
+/-- Select an operational value view using actual whole-value proofs.
+    Prefer a strict subtype; equivalent views use a stable representative. -/
+def Ctx.valueView (ctx : Ctx) (p : Pos) (derived : Ty) (accepts : Ty → Bool)
+    (operation : String) : Except String (Option Ty) := do
+  let .param .. := derived | return none
+  ctx.selectValueView p derived
+    ((SubtypeEvidence.valueViews ctx.types ctx.evidenceTypes derived).filter accepts) operation
+
+def Ctx.containerView (ctx : Ctx) (p : Pos) (derived : Ty) (accepts : Ty → Bool)
+    (operation : String) : Except String (Option Ty) :=
+  ctx.valueView p derived accepts operation
+
+/-- An array shape for a built-in operation, with every required level
+    supported by actual whole-value or component capabilities. -/
+def Ctx.arrayView (ctx : Ctx) (p : Pos) (derived : Ty) (depth : Nat)
+    (operation : String) : Except String (Option Ty) := do
+  let rec hasShape (ty : Ty) : Nat → Bool
+    | 0 => true
+    | n + 1 => match ty with | .arr element => hasShape element n | _ => false
+  if hasShape derived depth then return some derived
+  let rec candidates (ty : Ty) : Nat → List Ty
+    | 0 => [ty]
+    | n + 1 =>
+      let views := ty :: SubtypeEvidence.valueViews ctx.types ctx.evidenceTypes ty
+      views.flatMap fun
+        | .arr element => (candidates element n).map Ty.arr
+        | _ => []
+  let supported := (candidates derived depth).filter fun target =>
+    (SubtypeEvidence.find? ctx.types ctx.evidenceTypes ⟨target, derived⟩).any fun plan =>
+      plan.usesLocal && plan.valid ctx.types ctx.evidenceTypes
+  ctx.selectValueView p derived supported operation
+
+private def Ctx.memberViews (ctx : Ctx) (derived : Ty) (member : String) : List Ty :=
+  let visible (owner method : String) := ctx.hasMethod owner method ||
+    ((ctx.types.methodOverloads.lookup method).getD []).any (ctx.hasMethod owner ·)
+  (SubtypeEvidence.views ctx.types ctx.evidenceTypes derived).filter fun
+    | .struct owner args =>
+      if member.startsWith "(" then
+        match (member.drop 1).toString.splitOn ":)" with
+        | [qualified, method] => ctx.types.isSub owner qualified && visible qualified method
+        | _ => false
+      else (ctx.types.fields owner args).any (·.1 == member) || visible owner member
+    | _ => false
+
+/-- Ordinary members and concurrency intrinsics share specificity. A
+    redundant intrinsic proof cannot hide a more-specific ordinary method. -/
+def Ctx.concurrencyView (ctx : Ctx) (p : Pos) (derived : Ty) (member : String) :
+    Except String (Option Ty) := do
+  let .param .. := derived | return none
+  let intrinsic := (SubtypeEvidence.valueViews ctx.types ctx.evidenceTypes derived).filter fun
+    | .struct name args =>
+      let is (base : String) := name == ctx.types.concurrencyName base
+      match member with
+      | "Cancel" => is "task" && args.length == 1
+      | "Await" => ((is "task" || is "event" || is "subscribable_event" || is "sticky_event") &&
+          args.length == 1) || (name == "$subev0" && args.isEmpty)
+      | "Signal" => ((is "event" || is "sticky_event") && args == [.void]) ||
+          (name == "$subev0" && args.isEmpty)
+      | _ => false
+    | _ => false
+  ctx.selectValueView p derived (ctx.memberViews derived member ++ intrinsic) s!"member '{member}'"
+
+def Ctx.boundView (ctx : Ctx) (p : Pos) (derived : Ty) (member : String) : Except String (Option Ty) := do
+  let .param .. := derived | return none
+  let container ← ctx.containerView p derived (fun
+    | .arr _ => ["Length", "Slice", "Find", "RemoveFirstElement", "RemoveElement", "Remove",
+        "RemoveAllElements", "ReplaceFirstElement", "ReplaceElement", "ReplaceAllElements",
+        "ReplaceAll", "Insert", "Last"].contains member
+    | .map .. => member == "Length"
+    | _ => false) s!"member '{member}'"
+  let candidates := ctx.memberViews derived member
+  let best := candidates.filter fun candidate =>
+    !candidates.any fun other => other != candidate && ctx.types.nominalSubtype other candidate
+  match best with
+  | [] => return container
+  | [view] =>
+    if container.isNone then return some view
+    throw s!"{p.show}: ambiguous bound member '{member}' of {derived.show}"
+  | _ => throw s!"{p.show}: ambiguous bound member '{member}' of {derived.show} through {", ".intercalate (best.map Ty.show)}"
+
+/-- Select a function shape through actual lexical evidence, retaining the
+    usual effect-subtype preference and refusing unrelated callable views. -/
+def Ctx.callableView (ctx : Ctx) (p : Pos) (derived : Ty) : Except String (Option Ty) := do
+  if let .struct name _ := derived then
+    if (FnValues.parseName name).isSome then return some derived
+  let .param .. := derived | return none
+  let candidates := (SubtypeEvidence.views ctx.types ctx.evidenceTypes derived).filter fun
+    | .struct name _ => (FnValues.parseName name).isSome
+    | _ => false
+  let best := candidates.filter fun candidate =>
+    !candidates.any fun other => other != candidate && ctx.types.nominalSubtype other candidate
+  match best with
+  | [] => return none
+  | [view] => return some view
+  | _ => throw s!"{p.show}: ambiguous callable bound of {derived.show} through {", ".intercalate (best.map Ty.show)}"
 
 /-- Arguments whose instance comes from the other arguments' types. A
     local or member shadows a same-named generic top-level function. -/
@@ -906,7 +1309,7 @@ partial def argNeedsTypeWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx
     -- they must not prevent sharing the same receiver's type lookup.
     let locals := ctx.locals.filter fun l => l.name == "Self" || l.name == "$Self" ||
       Choice.anyE (fun | .ident _ n => n == l.name | _ => false) receiver
-    let key := reprStr (receiver, locals.map (fun l => (l.name, l.ty)), ctx.types.tvars,
+    let key := reprStr (receiver, locals.map (fun l => (l.name, l.ty, l.typeValue)), ctx.types.tvars,
       ctx.selfClass, ctx.selfMethod, ctx.fnFx, ctx.retTy, ctx.frameName, ctx.frameArgs, ctx.retries,
       [ctx.canFail, ctx.inTaking, ctx.suspends, ctx.inLoop, ctx.inParamDefault, ctx.inDefer,
        ctx.inBlock, ctx.inCtor, ctx.inArm, ctx.inBranch, ctx.inDefaultCheck, ctx.inRepeat,
@@ -1172,54 +1575,6 @@ def litAt (env : TyEnv) (exp : Option Ty) (r : R) : R :=
     | _, _ => r
   | _ => r
 
-/-- `v < w` on numbers of one base. -/
-def numLt : Value → Value → Bool
-  | .int x, .int y => x < y
-  | .float x, .float y => VFloat.ofBits x < VFloat.ofBits y
-  | _, _ => false
-
-def numNeg : Value → Value
-  | .int x => .int (-x)
-  | .float x => .float (VFloat.canon (-(VFloat.ofBits x)))
-  | v => v
-
-/-- A refinement's interval: its tightest lower and upper bounds, each with
-    whether it is strict (#143). -/
-def refineInterval (conds : List (String × Value)) : Option (Value × Bool) × Option (Value × Bool) :=
-  conds.foldl (fun (lo, hi) (op0, b0) =>
-    -- (an int's strict bound is the next one, not strict: `< 10` is `<= 9`)
-    let (op, b) : String × Value := match op0, b0 with
-      | "<", .int x => ("<=", .int (x - 1))
-      | ">", .int x => (">=", .int (x + 1))
-      | o, v => (o, v)
-    let strict := op == "<" || op == ">"
-    if op == ">" || op == ">=" then
-      let lo' := match lo with
-        | none => some (b, strict)
-        | some (l, ls) => if numLt l b || (l == b && strict && !ls) then some (b, strict) else some (l, ls)
-      (lo', hi)
-    else
-      let hi' := match hi with
-        | none => some (b, strict)
-        | some (h, hs) => if numLt b h || (h == b && strict && !hs) then some (b, strict) else some (h, hs)
-      (lo, hi')) (none, none)
-
-/-- Interval `a` lies within `b`. -/
-def intervalWithin (a b : Option (Value × Bool) × Option (Value × Bool)) : Bool :=
-  let lowOk := match a.1, b.1 with
-    | _, none => true
-    | none, some _ => false
-    | some (al, as), some (bl, bs) => numLt bl al || (al == bl && (as || !bs))
-  let highOk := match a.2, b.2 with
-    | _, none => true
-    | none, some _ => false
-    | some (ah, as), some (bh, bs) => numLt ah bh || (ah == bh && (as || !bs))
-  lowOk && highOk
-
-/-- The interval of `-X` for `X` in `i`. -/
-def intervalNeg (i : Option (Value × Bool) × Option (Value × Bool)) : Option (Value × Bool) × Option (Value × Bool) :=
-  (i.2.map fun (v, s) => (numNeg v, s), i.1.map fun (v, s) => (numNeg v, s))
-
 /-- A refinement's value as its base (#136): operators, comparisons and
     ToString see the base type. -/
 def widenR (env : TyEnv) (r : R) : R :=
@@ -1228,6 +1583,27 @@ def widenR (env : TyEnv) (r : R) : R :=
     | some (base, _) => ⟨r.e, base⟩
     | none => r
   | _ => r
+
+def arithmeticType (env : TyEnv) : Ty → Bool
+  | .int | .rational | .float => true
+  | .refine name => (env.refines.lookup name).any fun (base, _) =>
+      [.int, .rational, .float].contains base
+  | _ => false
+
+def printableType (env : TyEnv) : Ty → Bool
+  | .int | .float | .char | .char32 | .arr .char => true
+  | .refine name => (env.refines.lookup name).any fun (base, _) => base == .int || base == .float
+  | _ => false
+
+/-- Formatting has a finite set of domains. Search actual plans rather than
+    just written bound heads, so component proofs can establish a string view. -/
+def Ctx.formattingView (ctx : Ctx) (p : Pos) (derived : Ty) : Except String (Option Ty) := do
+  if printableType ctx.types derived then return none
+  let locals := ctx.evidenceTypes
+  let candidates := [Ty.int, .float, .char, .char32, Ty.string].filter fun target =>
+    (SubtypeEvidence.find? ctx.types locals ⟨target, derived⟩).any fun plan =>
+      plan.usesLocal && plan.valid ctx.types locals
+  ctx.selectValueView p derived candidates "formatting"
 
 /-- The conditions of `type{_X:base where c, …}` as `_X op bound`: each
     compares the variable with a literal number (Book of Verse ch. 11). -/
@@ -1360,8 +1736,8 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
   match a, b with
   -- `int` is a subtype of `rational` (#116): `X` is `X / 1`
   | .int, .rational => return some (.prim .mkTup [e, .lit (.int 1)])
-  -- every value is an `any`, evaluated (#138)
-  | _, .any => return some (.seq (← inferable ⟨e, a⟩) (.lit .void))
+  -- Every value can be erased or discarded, including within containers (#138).
+  | _, .any | _, .void => return some (.seq (← inferable ⟨e, a⟩) (.lit .void))
   -- a refinement is its base (#136); the base is the refinement only for a
   -- literal that meets its conditions (else a cast, `age[X]`)
   -- (a refinement within another's interval is one of it, #143)
@@ -1401,13 +1777,16 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
       let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push a })
       return some (.seq (.assign x e) (.ite (.assign i (.prim .query [.local x])) (.prim .mkSome [c]) (.lit .none)))
     | none => return none
-  -- a map of convertible values is a map of the converted ones (#297)
+  -- Maps are covariant in comparable keys and in values. Traverse the
+  -- existing entries, preserving order/cardinality rather than reinserting.
   | .map k a', .map k' b' =>
-    if k != k' then return none
+    if !isComparable env k || !isComparable env k' then return none
     let i ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push (.tup [k, a']) })
-    match ← convert env (.prim (.tupGet 1) [.local i]) a' b' with
-    | some c => return some (.forE i e (.lit (.logic true)) (.prim .mkTup [.prim (.tupGet 0) [.local i], c]))
-    | none => return none
+    let keyExpr := Expr.prim (.tupGet 0) [.local i]
+    let valueExpr := Expr.prim (.tupGet 1) [.local i]
+    let some key ← (if k == k' then pure (some keyExpr) else convert env keyExpr k k') | return none
+    let some c ← (if a' == b' then pure (some valueExpr) else convert env valueExpr a' b') | return none
+    return some (.forE i e (.lit (.logic true)) (.prim .mkTup [key, c]))
   -- a tuple of convertible elements is a tuple of the converted ones
   | .tup ts, .tup us =>
     if ts.length != us.length then return none
@@ -1507,9 +1886,9 @@ def roundRational (up : Bool) (e : Expr) : EM Expr := do
   let parts := [Expr.prim (.tupGet 0) [.local tr], .prim (.tupGet 1) [.local tr]]
   return .seq (.assign tr e) (Expr.orE tz (.prim op parts) (.lit (.int 0)))
 
-/-- Build a variance adapter only when the ordinary parameter/result
-    conversions succeed. Its private parameters preserve the caller's bounds
-    without retaining caller names or borrowing its witness slots. -/
+/-- Build a variance adapter when its conversions have ordinary or actual
+    lexical evidence. Private parameters and readonly proof fields preserve
+    the required relations without caller names or borrowed witness slots. -/
 def methodVarianceRequest (ctx : Ctx) (p : Pos) (owner method : String)
     (receiver own target : Ty) : EM (Option (FnValues.MethodRequest × List Ty)) := do
   let .struct on ots := own | return none
@@ -1543,24 +1922,39 @@ def methodVarianceRequest (ctx : Ctx) (p : Pos) (owner method : String)
   if n == 1 && k != 1 then
     choices := choices ++ [("tuple", ps, [.tup qs], [.tuple p xs])]
   let saved ← get
-  let fits (a b : Ty) : Bool :=
+  let ordinaryFits (a b : Ty) : Bool :=
     match (do
       let slot ← fresh a
       discard <| coerce p ⟨.local slot, a⟩ b).run { saved with env := ctx.types } with
     | .ok _ => true
     | .error _ => false
-  if !fits r u then return none
+  let conversion (a b : Ty) : Option (List SubtypeEvidence.Bound) := do
+    if ordinaryFits a b then return []
+    let bound := SubtypeEvidence.Bound.mk b a
+    let plan ← SubtypeEvidence.find? ctx.types ctx.evidenceTypes bound
+    if plan.valid ctx.types ctx.evidenceTypes then some [bound] else none
+  let some resultRelations := conversion r u | return none
   for (kind, ps, qs, args) in choices do
-    if !(qs.zip ps).all (fun (q, p) => fits q p) then continue
-    let vars := Ty.mergeParamBounds (receiver.paramsC ++ target.paramsC)
+    let some inputRelations := (qs.zip ps).mapM (fun (q, p) => conversion q p) | continue
+    let unscoped := { ctx.types with boundFacts := [] }
+    let applicationRelations := (SubtypeEvidence.applicationBounds ctx.types [receiver, own, target]).filter fun bound =>
+      !unscoped.boundSubtype bound.derived bound.base
+    let relations := (resultRelations ++ inputRelations.flatten ++ applicationRelations).eraseDups
+    if !relations.all (fun bound => (SubtypeEvidence.find? ctx.types ctx.evidenceTypes bound).any
+        (·.valid ctx.types ctx.evidenceTypes)) then continue
+    let vars := Ty.mergeParamBounds (receiver.paramsC ++ target.paramsC ++
+      relations.flatMap (fun bound => bound.base.paramsC ++ bound.derived.paramsC))
     let names := vars.zipIdx.map fun ((n, _), i) => (n, STy.name s!"$methodVariance{i}")
     let st := fun t : Ty => t.toSTy.substNames names
     let receiver := st receiver
     let params := (tts.take k).map st
     let ret := st u
     let bounds := vars.map (·.2)
+    let relations := relations.map fun bound => (st bound.base, st bound.derived)
+    let key := reprStr (owner, method, receiver, params, te, ret, bounds, kind) ++
+      (if relations.isEmpty then "" else reprStr relations)
     let req : FnValues.MethodRequest := {
-      key := reprStr (owner, method, receiver, params, te, ret, bounds, kind),
+      key, relations,
       pos := p, owner, method, receiver, params, effs := te, ret, args,
       decides := oe.contains "decides",
       tparams := vars.zipIdx.map fun ((_, cmp), i) => {
@@ -1755,7 +2149,10 @@ def setFieldAt (env : TyEnv) (p : Pos) (sn : String) (targs : List Ty) (obj : Na
   let p0 := pos.headD k
   let tyOK := env.fieldTyAgrees sn targs f
   -- (not through views: each class's setter, #351)
-  if tyOK && pos.all (· == p0) && !env.viewed.contains sn then return .heap (.set p0) [.local obj, v]
+  if tyOK && pos.all (· == p0) && !env.viewed.contains sn then
+    if f.startsWith "$w." then
+      modify fun st => { st with metadataWrites := (obj, p0) :: st.metadataWrites }
+    return .heap (.set p0) [.local obj, v]
   if let some d := ds.find? fun d => !env.sameCore d sn && (env.fieldAcc.idxOf? (d, f)).isNone then
     if !tyOK then
       eerr p s!"field '{f}' of {sn} has another type in {d}, which takes it from another interface, and {d} has type parameters that {sn} does not have: setting it through {sn} is not supported yet (#205)"
@@ -1777,6 +2174,8 @@ def setFieldAt (env : TyEnv) (p : Pos) (sn : String) (targs : List Ty) (obj : Na
       refined := true
     | none =>
       let yd ← fresh (.struct d (env.argsAt sn targs d))
+      if f.startsWith "$w." then
+        modify fun st => { st with metadataWrites := (yd, kd) :: st.metadataWrites }
       acc := .ite (.assign yd (.heap (.isTag [env.tagOf d]) [.local obj])) (.heap (.set kd) [.local yd, .local tv]) acc
   if refined then
     -- (checked against the field's type, as the refined calls need one)

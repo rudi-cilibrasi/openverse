@@ -44,7 +44,12 @@ def MethodOverloads.of (tops : List STop) : MethodOverloads := Id.run do
       ((mtps.zip (List.range mtps.length)).map fun (tp, i) => (tp.name, STy.name s!"$m{i}"))
     -- (and `string` is `[]char`)
     let ρ := ρ ++ [("string", STy.arr (.name "char"))]
-    reprStr (ps.map fun q => (q.named, if q.named then q.name else "", q.ty.substNames ρ))
+    let parameters := reprStr (ps.map fun q => (q.named, if q.named then q.name else "", q.ty.substNames ρ))
+    -- Method bounds distinguish overload lists. Receiver bounds belong to
+    -- the class and can be stronger in an override's class.
+    let bounds := mtps.zipIdx.filterMap fun (tp, i) =>
+      tp.upperBound.map fun upper => (i, upper.substNames ρ)
+    if bounds.isEmpty then parameters else parameters ++ reprStr bounds
   let classDefs : List (String × List TParam × List STy × List STop) := tops.filterMap fun
     | .classDef _ n tps _ parents _ _ _ methods => some (n, tps, parents, methods)
     | _ => none
@@ -136,7 +141,10 @@ def MethodOverloads.of (tops : List STop) : MethodOverloads := Id.run do
               -- arguments must not capture them)
               let apart : List (String × STy) := (dmtps.zip (List.range dmtps.length)).map fun (tp, i) =>
                 (tp.name, STy.name s!"$own{i}")
-              let dmtps' := (dmtps.zip (List.range dmtps.length)).map fun (tp, i) => { tp with name := s!"$own{i}" }
+              let dmtps' := (dmtps.zip (List.range dmtps.length)).map fun (tp, i) =>
+                { tp with
+                  name := s!"$own{i}"
+                  upperBound := tp.upperBound.map fun upper => (upper.substNames apart).substNames σ }
               (k, sigText ctps dmtps' (dps.map fun q => { q with ty := (q.ty.substNames apart).substNames σ }), dps.length)
         match (cands.filter (·.2.1 == mine)).map (·.1) |>.eraseDups with
         | [k] => s!"{mn}$ov{k}"

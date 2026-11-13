@@ -38,6 +38,9 @@ partial def STy.mapNamesM (f : String → Except String String) : STy → Except
   | .app n ts => return .app (← f n) (← ts.mapM (·.mapNamesM f))
   | .fn ps es r => return .fn (← ps.mapM (·.mapNamesM f)) es (← r.mapNamesM f)
 
+def TParam.mapBoundNamesM (tp : TParam) (f : String → Except String String) : Except String TParam := do
+  return { tp with upperBound := ← tp.upperBound.mapM (·.mapNamesM f) }
+
 /-- The names an expression `A.B.C` is a chain of. -/
 partial def SExpr.identPath : SExpr → Option (List String)
   | .ident _ n => some [n]
@@ -96,7 +99,12 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
     return .decl p n (← ty.mapM (goT p)) v (← go x)
   -- (a struct's field types and defaults, which `children` leaves out)
   | .structDef p tps specs fs =>
-    return .structDef p tps specs (← fs.mapM fun (n, t, d, v) => do return (n, ← goT p t, ← d.mapM go, v))
+    let own := tps.map (·.name)
+    let inner : Resolver := { r with ty := fun q n => if own.contains n then pure n else r.ty q n }
+    return .structDef p (← tps.mapM (·.mapBoundNamesM (inner.ty p))) specs
+      (← fs.mapM fun (n, t, d, v) => do
+        return (n, ← t.mapNamesM (inner.ty p), ← d.mapM (·.mapNamesM inner), v))
+  | .enumDef .. | .refineDef .. => return e
   | .construct p n ts fs => return .construct p (← r.ty p n) (← ts.mapM (goT p)) (← fs.mapM goField)
   | e => e.mapChildrenM go
 
@@ -269,6 +277,7 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
     match t with
     | .fn p n ps tps effs ret body =>
       let r := rAt (scopeOf n) (tps.map (·.name))
+      let tps ← tps.mapM (·.mapBoundNamesM (r.ty p))
       let ps ← params r p ps
       let isCtor := effs.any (·.startsWith "$constructor:")
       let effs ← effs.mapM fun e =>
@@ -288,6 +297,7 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
       return .const p n (← ty.mapM (·.mapNamesM (r.ty p))) (← body.mapNamesM r)
     | .classDef p n tps specs parents isI fields ovs methods =>
       let r := rAt (scopeOf n) (tps.map (·.name))
+      let tps ← tps.mapM (·.mapBoundNamesM (r.ty p))
       for m in membersOf n do r.bind p m
       let parents ← parents.mapM (·.mapNamesM (r.ty p))
       let fields ← fields.mapM fun (fn, ty, d, v) => do return (fn, ← ty.mapNamesM (r.ty p), ← d.mapM (·.mapNamesM r), v)
@@ -295,6 +305,7 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
         match m with
         | .fn mp mn mps mtps meffs mret mbody =>
           let rm := rAt (scopeOf n) (tps.map (·.name) ++ mtps.map (·.name))
+          let mtps ← mtps.mapM (·.mapBoundNamesM (rm.ty mp))
           let mps ← params rm mp mps
           return .fn mp (← rm.method mp mn) mps mtps meffs (← mret.mapNamesM (rm.ty mp)) (← mbody.mapNamesM rm)
         | m => pure m

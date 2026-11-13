@@ -193,6 +193,13 @@ structure TyEnv where
   methodOverloads : List (String × List String) := []
   /-- The type parameters of each parametric struct (name, declared comparable). -/
   sparams : List (String × List (String × Bool)) := []
+  /-- Declared nominal upper bounds, as (base, derived) relations over the
+      declaration's own parameters. These govern type application validity;
+      executable upcasts additionally need a typed dictionary value. -/
+  sbounds : List (String × List (Ty × Ty)) := []
+  /-- Relations assumed in this declaration's type scope. They do not name
+      runtime slots and cannot themselves supply executable evidence. -/
+  boundFacts : List (Ty × Ty) := []
   /-- Each enum: its enumerators in order. -/
   enums : List (String × List String) := []
   /-- The refinement types (#136): each one's base type (int or float) and
@@ -383,26 +390,29 @@ def TyEnv.slotImpls (env : TyEnv) (impl : String → Option String) (ups : List 
     Function types cannot separate from arrays or maps, regardless of their
     signatures; this is an admission rule, not a container/function coercion.
     Class/interface and numeric overlap rules are unchanged. -/
-partial def TyEnv.disjoint (env : TyEnv) : Ty → Ty → Bool
+private def TyEnv.disjointStep (env : TyEnv) (apart : Ty → Ty → Bool) : Ty → Ty → Bool
   | .void, _ | _, .void | .param .., _ | _, .param .. | .never, _ | _, .never => false
   -- (every value is an any, #138)
   | .any, _ | _, .any => false
   -- (a refinement overlaps what its base does, #136)
   | .refine n, b => match env.refines.lookup n with
-    | some (base, _) => env.disjoint base b
+    | some (base, _) => apart base b
     | none => false
   | a, .refine n => match env.refines.lookup n with
-    | some (base, _) => env.disjoint a base
+    | some (base, _) => apart a base
     | none => false
   -- (an int is also a rational, #116)
   | .int, .rational | .rational, .int => false
-  | .tup as, .tup bs => as.length != bs.length || (as.zip bs).any fun (a, b) => env.disjoint a b
+  | .tup as, .tup bs => as.length != bs.length || (as.zip bs).any fun (a, b) => apart a b
   | .arr _, .arr _ | .arr _, .map .. | .map .., .arr _ | .map .., .map .. | .opt _, .opt _ => false
   -- `false` is also an empty array, an empty option and a logic
   | .opt _, .logic | .logic, .opt _ | .arr _, .opt _ | .opt _, .arr _ | .arr _, .logic | .logic, .arr _ => false
-  | .tup ts, .arr t | .arr t, .tup ts => ts.any (env.disjoint · t)
-  | .tup ts, .map k _ | .map k _, .tup ts => !ts.isEmpty && env.disjoint .int k
-  | .tup ts, .opt t | .opt t, .tup ts => !ts.isEmpty && env.disjoint .int t
+  | .tup ts, .arr t => ts.any (apart · t)
+  | .arr t, .tup ts => ts.any (apart t ·)
+  | .tup ts, .map k _ => !ts.isEmpty && apart .int k
+  | .map k _, .tup ts => !ts.isEmpty && apart k .int
+  | .tup ts, .opt t => !ts.isEmpty && apart .int t
+  | .opt t, .tup ts => !ts.isEmpty && apart t .int
   | .struct n _, .arr _ | .arr _, .struct n _ |
     .struct n _, .map .. | .map .., .struct n _ => (FnValues.parseName n).isNone
   | .struct a as, .struct b bs =>
@@ -410,7 +420,7 @@ partial def TyEnv.disjoint (env : TyEnv) : Ty → Ty → Bool
     let iface (x : String) := isCls x && (env.info x).isIface
     if isCls a && isCls b then
       -- one parametric class at disjoint type arguments
-      if a == b && !iface a then as.length == bs.length && (as.zip bs).any fun (x, y) => env.disjoint x y
+      if a == b && !iface a then as.length == bs.length && (as.zip bs).any fun (x, y) => apart x y
       else if iface a || iface b then
         -- a <final> class, which nothing is below, and an interface it does
         -- not implement (#100)
@@ -418,37 +428,58 @@ partial def TyEnv.disjoint (env : TyEnv) : Ty → Ty → Bool
         (iface a && finalNot b a) || (iface b && finalNot a b)
       else !(env.isSub a b || env.isSub b a)
     else if isCls a || isCls b then true
-    else a != b || (as.length == bs.length && (as.zip bs).any fun (x, y) => env.disjoint x y)
+    else a != b || (as.length == bs.length && (as.zip bs).any fun (x, y) => apart x y)
   | .enum a, .enum b => a != b
   | .int, .int | .logic, .logic | .char, .char | .char32, .char32 | .rational, .rational | .float, .float => false
   | _, _ => true
+
+partial def TyEnv.disjoint (env : TyEnv) (a b : Ty) : Bool :=
+  env.disjointStep env.disjoint a b
+
+/-- Compare two independently quantified domains. Each side may use its own
+    upper bounds, even when the signatures spell their formals alike. Any
+    separating upper view suffices; missing views and cycles do not prove
+    separation. The ordinary nominal/interface overlap rules still apply. -/
+partial def TyEnv.disjointUnder (env : TyEnv) (aBounds bBounds : List (Ty × Ty)) (a b : Ty) : Bool :=
+  go (aBounds.length + bBounds.length + 1) a b
+where
+  go (fuel : Nat) (a b : Ty) : Bool :=
+    env.disjointStep (go fuel) a b || match fuel with
+    | 0 => false
+    | fuel + 1 =>
+      aBounds.any (fun (upper, lower) => lower == a && go fuel upper b) ||
+      bBounds.any (fun (upper, lower) => lower == b && go fuel a upper)
 
 /-- Whether two overloads (their positional parameters, then named ones:
     name, has a default, type) are distinct: their positional parameters
     are, or a call cannot give both what they need, as some named parameter
     one of them requires is missing from the other or takes disjoint types in
     the two (Book of Verse ch. 6: order and defaults do not distinguish). -/
-def TyEnv.namedDistinct (env : TyEnv) (na nb : List (String × Bool × Ty)) : Bool :=
+def TyEnv.namedDistinct (env : TyEnv) (na nb : List (String × Bool × Ty))
+    (aBounds bBounds : List (Ty × Ty) := []) : Bool :=
   let req := ((na.filter (!·.2.1)).map (·.1)) ++ ((nb.filter (!·.2.1)).map (·.1))
   !(req.all fun x => match na.find? (·.1 == x), nb.find? (·.1 == x) with
-    | some (_, _, ta), some (_, _, tb) => !env.disjoint ta tb
+    | some (_, _, ta), some (_, _, tb) => !env.disjointUnder aBounds bBounds ta tb
     | _, _ => false)
 
 /-- Two overloads' parameters: no call fits both. Compare a single explicit
     tuple with the other signature's flattened types, including their domains,
     rather than treating equal flattened arity alone as ambiguity. -/
-def TyEnv.paramsDistinct (env : TyEnv) (as bs : List Ty) : Bool :=
+def TyEnv.paramsDistinct (env : TyEnv) (as bs : List Ty)
+    (aBounds bBounds : List (Ty × Ty) := []) : Bool :=
+  let apartTy := env.disjointUnder aBounds bBounds
   let flat (xs : List Ty) : List Ty := match xs with
     | [.tup ts] => ts
     | [.void] => []
     | _ => xs
-  let apart (xs ys : List Ty) := xs.length != ys.length || (xs.zip ys).any fun (a, b) => env.disjoint a b
+  let apart (cmp : Ty → Ty → Bool) (xs ys : List Ty) :=
+    xs.length != ys.length || (xs.zip ys).any fun (a, b) => cmp a b
   -- Both the original argument and its flattened fields are admitted.
   -- Keep the direct overlap of void, arrays and opaque type parameters.
-  let packedApart (xs ys : List Ty) := match xs with
-    | [t] => if ys.length > 1 then env.disjoint t (.tup ys) else
+  let packedApart (cmp : Ty → Ty → Bool) (xs ys : List Ty) := match xs with
+    | [t] => if ys.length > 1 then cmp t (.tup ys) else
       match t with
-      | .param .. => !ys.isEmpty
+      | .param .. => !ys.isEmpty || cmp t .void
       | _ => true
     | _ => true
   -- A call can also supply one tuple containing the positional arguments.
@@ -456,16 +487,17 @@ def TyEnv.paramsDistinct (env : TyEnv) (as bs : List Ty) : Bool :=
   -- tuple(tuple(int)). Compare that actual input shape with the other
   -- formal, rather than applying the broader tuple/container admission
   -- rules to a synthetic tuple (which would conflate int with ?int).
-  let tupleInputApart (xs ys : List Ty) := match ys with
+  let tupleInputApart (cmp : Ty → Ty → Bool) (xs ys : List Ty) := match ys with
     | [t] => match t with
-      | .tup ts => apart xs ts
-      | .arr t => xs.isEmpty || xs.any (env.disjoint · t)
-      | .void | .any | .param .. => false
+      | .tup ts => apart cmp xs ts
+      | .arr t => xs.isEmpty || xs.any (cmp · t)
+      | .param .. => cmp (.tup xs) t
+      | .void | .any => false
       | _ => true
     | _ => true
   [as, flat as].all fun xs => [bs, flat bs].all fun ys =>
-    apart xs ys && packedApart xs ys && packedApart ys xs &&
-      tupleInputApart xs ys && tupleInputApart ys xs
+    apart apartTy xs ys && packedApart apartTy xs ys && packedApart (flip apartTy) ys xs &&
+      tupleInputApart apartTy xs ys && tupleInputApart (flip apartTy) ys xs
 
 /-- The type arguments of the class or interface `T` above `d(args)` (along
     the parents, #39, #53), or `[]` when `T` is not above `d`. -/
@@ -1262,5 +1294,129 @@ def ambiguousJoin (env : TyEnv) : Ty → Ty → Bool
     if common.any (fun c => !(env.info c).isIface) then false else
     (common.filter fun c => !common.any (fun d => c != d && env.isSub d c)).length > 1
   | _, _ => false
+
+/-- Nominal ancestry at exact projected arguments. This is a type relation,
+    including uninhabited interfaces, independent of their representation. -/
+def TyEnv.nominalSubtype (env : TyEnv) (derived base : Ty) : Bool :=
+  derived == base || match derived, base with
+    | .struct source args, .struct target targets =>
+      env.classes.contains source && env.classes.contains target && env.isSub source target &&
+        args.length == ((env.sparams.lookup source).getD []).length &&
+        env.upArgs source args target == targets
+    | _, _ => false
+
+/-- `v < w` on numbers of one base. -/
+def numLt : Value → Value → Bool
+  | .int x, .int y => x < y
+  | .float x, .float y => VFloat.ofBits x < VFloat.ofBits y
+  | _, _ => false
+
+def numNeg : Value → Value
+  | .int x => .int (-x)
+  | .float x => .float (VFloat.canon (-(VFloat.ofBits x)))
+  | v => v
+
+/-- A refinement's interval: its tightest lower and upper bounds, each with
+    whether it is strict (#143). -/
+def refineInterval (conds : List (String × Value)) : Option (Value × Bool) × Option (Value × Bool) :=
+  conds.foldl (fun (lo, hi) (op0, b0) =>
+    -- (an int's strict bound is the next one, not strict: `< 10` is `<= 9`)
+    let (op, b) : String × Value := match op0, b0 with
+      | "<", .int x => ("<=", .int (x - 1))
+      | ">", .int x => (">=", .int (x + 1))
+      | o, v => (o, v)
+    let strict := op == "<" || op == ">"
+    if op == ">" || op == ">=" then
+      let lo' := match lo with
+        | none => some (b, strict)
+        | some (l, ls) => if numLt l b || (l == b && strict && !ls) then some (b, strict) else some (l, ls)
+      (lo', hi)
+    else
+      let hi' := match hi with
+        | none => some (b, strict)
+        | some (h, hs) => if numLt b h || (h == b && strict && !hs) then some (b, strict) else some (h, hs)
+      (lo, hi')) (none, none)
+
+/-- Interval `a` lies within `b`. -/
+def intervalWithin (a b : Option (Value × Bool) × Option (Value × Bool)) : Bool :=
+  let lowOk := match a.1, b.1 with
+    | _, none => true
+    | none, some _ => false
+    | some (al, as), some (bl, bs) => numLt bl al || (al == bl && (as || !bs))
+  let highOk := match a.2, b.2 with
+    | _, none => true
+    | none, some _ => false
+    | some (ah, as), some (bh, bs) => numLt ah bh || (ah == bh && (as || !bs))
+  lowOk && highOk
+
+/-- The interval of `-X` for `X` in `i`. -/
+def intervalNeg (i : Option (Value × Bool) × Option (Value × Bool)) : Option (Value × Bool) × Option (Value × Bool) :=
+  (i.2.map fun (v, s) => (numNeg v, s), i.1.map fun (v, s) => (numNeg v, s))
+
+/-- A refinement may widen to its numeric base, an existing numeric upper,
+    or a containing refinement of the same base. Literal membership is not
+    a general subtype relation from the base back into a refinement. -/
+def TyEnv.refinementSubtype (env : TyEnv) (source : String) (target : Ty) : Bool :=
+  match env.refines.lookup source with
+  | some (base, conditions) =>
+    (base == .int || base == .float) &&
+      (target == base || (base == .int && target == .rational) || match target with
+        | .refine name => match env.refines.lookup name with
+          | some (other, bounds) => base == other && intervalWithin (refineInterval conditions) (refineInterval bounds)
+          | none => false
+        | _ => false)
+  | none => false
+
+/-- Direct declaration subtyping, including bottom, the ordinary checked
+    numeric embedding, and discarding to any/void. This stays separate from nominal ancestry
+    used to choose a class/interface member view. -/
+def TyEnv.directBoundSubtype (env : TyEnv) (derived base : Ty) : Bool :=
+  env.nominalSubtype derived base || derived == .never ||
+    (derived == .int && base == .rational) || base == .any || base == .void ||
+    match derived with
+    | .refine source => env.refinementSubtype source base
+    | _ => false
+
+/-- Entail a declaration constraint. Static facts permit
+    type applications; they never authorize an executable unchecked cast. -/
+partial def TyEnv.boundSubtype (env : TyEnv) (derived base : Ty) : Bool :=
+  go [] derived base
+where
+  go (seen : List (Ty × Ty)) (current target : Ty) : Bool :=
+    env.directBoundSubtype current target ||
+      (!seen.contains (current, target) && Id.run do
+        let seen := (current, target) :: seen
+        let structural := match current, target with
+          | .arr c, .arr a | .opt c, .opt a => go seen c a
+          | .map k c, .map l a => isComparable env k && isComparable env l &&
+              go seen k l && go seen c a
+          | .tup cs, .tup bases => cs.length == bases.length &&
+              (cs.zip bases).all (fun (c, a) => go seen c a)
+          | .tup cs, .arr a => !cs.isEmpty && cs.all (fun c => go seen c a)
+          | _, _ => false
+        return structural || env.boundFacts.any fun (upper, lower) =>
+          go seen current lower && go seen upper target)
+
+/-- Check this application's own bounds after its arguments are resolved. -/
+def Ty.checkBoundHead (env : TyEnv) : Ty → Except String Unit
+  | .struct name args => do
+    let σ := (((env.sparams.lookup name).getD []).map (·.1)).zip args
+    for (base, derived) in (env.sbounds.lookup name).getD [] do
+      let base := base.subst σ
+      let derived := derived.subst σ
+      unless env.boundSubtype derived base do
+        throw s!"type argument {derived.show} of {name} does not satisfy subtype({base.show})"
+  | _ => pure ()
+
+/-- Validate a previously resolved type tree, without revisiting nominal
+    field layouts. Initial type resolution checks only each head once. -/
+partial def Ty.checkBounds (env : TyEnv) : Ty → Except String Unit
+  | .arr t | .opt t => t.checkBounds env
+  | .tup ts => ts.forM (Ty.checkBounds env)
+  | .map k v => do k.checkBounds env; v.checkBounds env
+  | ty@(.struct _ args) => do
+    args.forM (Ty.checkBounds env)
+    ty.checkBoundHead env
+  | _ => pure ()
 
 end OpenVerse.Front

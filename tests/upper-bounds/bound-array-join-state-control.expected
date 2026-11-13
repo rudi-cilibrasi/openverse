@@ -1,0 +1,8 @@
+ordered 2 7 9 12
+alias a 10 b 9
+rollback 12
+cleanup
+wait 20 9
+winner
+cleanup
+cancel 20 9
