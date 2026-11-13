@@ -290,6 +290,13 @@ def fieldsFollow (stop : Nat) : PM Bool := do
   let n ← peekT 1
   return b.isSym ":" && n.bol && n.col > stop && !n.isEof
 
+/-- Whether a type is written as a value can be: a name, or a name applied
+    to such (`c`, `box(int)`), which may be a constant's or a call. -/
+partial def STy.couldBeValue : STy → Bool
+  | .name n => !keywords.contains n && !n.startsWith "$"
+  | .app n ts => !n.startsWith "$" && !n.startsWith "?" && ts.all STy.couldBeValue
+  | _ => false
+
 /-- A form openverse parses and has no meaning for, `$refused(msg, e…)`:
     `Attributes.apply` refuses it with `msg` before anything else reads the
     program (the Book's tests parse it: pointers, lambdas, a macro's
@@ -1471,6 +1478,19 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
         | _ => throw "not a construction") <|> pure none
     if let some (n, ts) := made? then return .construct t.pos n ts (← parseFields)
     set saved
+    -- `(?int)(X)`, `([]int)(X)`: `X` converted to a type written only as a
+    -- type can be (Book of Verse tests, Cast.versetest 61, 62), the head
+    -- `$type(t)` (`elabConversionWith`)
+    let conv? ← (do
+        bump
+        let ty ← parseType
+        expectSym ")"
+        let o ← peekT
+        if !o.isSym "(" || o.spaced then throw "not a conversion"
+        if ty.couldBeValue then throw "a name: a call"
+        return some ty) <|> pure none
+    if let some ty := conv? then return .construct t.pos "$type" [ty] []
+    set saved
     bump
     parseParenExpr t.pos
   | .sym "{" => bump; parseBraced t.pos
@@ -1609,6 +1629,8 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
     return .optionLit t.pos (← parseBody stop)
   | .ident "logic" =>
     bump
+    -- (`logic(X)`: `X` converted to logic, Book of Verse tests, Cast.versetest:59)
+    if (← peekT).isSym "(" && !(← peekT).spaced then return .ident t.pos "logic"
     if (← peekT).isSym "{" then bump; return .logicLit t.pos (← parseBraced t.pos)
     return .logicLit t.pos (← parseBody stop)
   | .ident x =>
@@ -1955,13 +1977,6 @@ partial def parseClassBody (p : Pos) (name : String) (nameSpecs : List String) (
   let methods := methods.filter (!isBlock ·) ++
     (if blocks.isEmpty then [] else [.fn p "$block" [] [] [] (.name "void") (.block p blocks)])
   return .classDef p name nameSpecs tps specs parents.toList isIface fields methods
-
-/-- Whether a type is written as a value can be: a name, or a name applied
-    to such (`c`, `box(int)`), which may be a constant's or a call. -/
-partial def STy.couldBeValue : STy → Bool
-  | .name n => !keywords.contains n && !n.startsWith "$"
-  | .app n ts => !n.startsWith "$" && !n.startsWith "?" && ts.all STy.couldBeValue
-  | _ => false
 
 /-- After the `:=` of a definition at the top level or in a module: the type
     of a type alias, when the definition's value is written as only a type

@@ -51,6 +51,17 @@ partial def elabExtensionCallWith
   return some ⟨.seq (.assign slot r.e) rc.e, rc.ty⟩
 
 set_option maxHeartbeats 800000 in
+/-- `t(X)` (`elabAppBaseWith`): `X` converted to the type `t`, a value of a
+    type that is a subtype of it, then of `t` (Book of Verse tests,
+    Cast.versetest 57-87: `int(0)`, `void(0)`, `(?int)(option{0})`; an
+    `int(0.0)` or a `c1(c0{})` is refused). -/
+partial def elabConversionWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p : Pos) (t : STy)
+    (args : List SExpr) : EM R := do
+  let ty ← resolveTy ctx.types p t
+  let [a] := args | eerr p s!"a conversion to {ty.show} takes one value, of a type that is a subtype of {ty.show}"
+  let r ← elabE ctx a (some ty)
+  return ⟨← coerce a.pos r ty, ty⟩
+
 partial def elabAppBaseWith
     (elabE : Ctx → SExpr → Option Ty → EM R)
     (withDeferMark : Ctx → Expr → EM Expr)
@@ -78,6 +89,9 @@ partial def elabAppBaseWith
       if view.isSome then eerr source.pos "dummy type value cannot be an executable function"
     elabIndexLike ctx p value args bracket
   match f with
+  | .construct _ "$type" [t] [] =>
+    if bracket then eerr p "a conversion is written (t)(X), of a value of a type that is a subtype of t: it cannot fail"
+    elabConversionWith elabE ctx p t args
   | .ident fp name =>
     if let some r ← elabExtensionCallWith elabE elabApp ctx p fp name args bracket exp then return r
     match ctx.lookup name with
@@ -109,6 +123,16 @@ partial def elabAppBaseWith
       let checks := conds.foldr (fun c acc => Expr.seq (test c) acc) (.local tv)
       return ⟨.seq (.assign tv r.e) checks, .refine name⟩
     else
+    -- `t(X)`: `X` converted to the type `t`, a built-in type's, a struct's
+    -- or an enum's name (Book of Verse tests, Cast.versetest 57-87: "Test
+    -- infallible casts. These should produce a compile error if the
+    -- argument type is not a subtype of the cast type"), as `T(X)` is for
+    -- a class (`elabCast`)
+    if !bracket && (ctx.sig? name).isNone && (ctx.types.overloads.lookup name).isNone &&
+        (["int", "float", "logic", "char", "char32", "string", "void", "rational"].contains name ||
+          ((ctx.types.structs.lookup name).isSome && !ctx.types.classes.contains name) ||
+          (ctx.types.enums.lookup name).isSome) then
+      return ← elabConversionWith elabE ctx p (.name name) args
     if let some ovs := ctx.types.overloads.lookup name then
       resolveOverload ctx p name ovs ctx.sig? (fun o => do
         ctx.noteOverload p name o
