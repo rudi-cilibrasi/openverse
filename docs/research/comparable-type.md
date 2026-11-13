@@ -2,10 +2,9 @@
 
 What the Book of Verse says a value of type `comparable` is, why openverse's
 representation of values cannot give the Book's answers for it as `any` is
-built, and what each way of building it would take. Nothing here is
-implemented: `comparable` stays a constraint, `t:subtype(comparable)`, and
-`comparable` as a type stays "unknown type 'comparable'"
-([LANGUAGE.md](../LANGUAGE.md#parametric-functions)).
+built, what each way of building it would take, and design A made exact
+and as built ([LANGUAGE.md](../LANGUAGE.md#comparable),
+[DESIGN.md](../DESIGN.md#comparable-boxes-in-verse-cores-dyn)).
 
 ## Sources
 

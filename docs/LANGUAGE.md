@@ -25,7 +25,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 |---|---|---|
 | Comments | `#` to the end of the line, nested `<# … #>`, `<#>` indented comments (the rest of the line and every following line indented more than it; see [Source text](#source-text)) | ch. 0 |
 | Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` an ASCII character other than a line break, a tab included, or an escape; a non-ASCII one, `'é'`, is a `char32`, Book of Verse ch. 1), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates), `float` `1.5`, `2.0e-7`, `1e3`, `12.34f64`, `1234f64` (digits, then a point and digits or an exponent or both, or the suffix `f64`, which may follow either; the nearest double, which must be finite: `2.0e308` is refused; `f32` and `f16` are read and refused as not supported); paths `/Verse.org/Random` parse (in `using{…}`, ignored; as values, refused; see [Source text](#source-text)) | §1.3–1.7 |
-| Types | `int`, `logic`, `char`, `char32`, `any` (see [any](#any)), `rational` (see [rational](#rational)), `float` (see [float](#float)), refinement types `type{_X:int where 0 <= _X, _X <= 120}` (see [Refinement types](#refinement-types)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void` (which takes any value; `tuple()` is the type of the empty value alone, see [Equality and the empty value](#equality-and-the-empty-value)), function types `type{_(:int)<decides>:int}`, with named parameters `type{_(:int, ?B:int):int}`, and `int->int` (see [Function values](#function-values)); type aliases `player_id := int`, `pair(t:type) := tuple(t, t)` (see [Type aliases](#type-aliases)); a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
+| Types | `int`, `logic`, `char`, `char32`, `any` (see [any](#any)), `comparable` (see [comparable](#comparable)), `rational` (see [rational](#rational)), `float` (see [float](#float)), refinement types `type{_X:int where 0 <= _X, _X <= 120}` (see [Refinement types](#refinement-types)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void` (which takes any value; `tuple()` is the type of the empty value alone, see [Equality and the empty value](#equality-and-the-empty-value)), function types `type{_(:int)<decides>:int}`, with named parameters `type{_(:int, ?B:int):int}`, and `int->int` (see [Function values](#function-values)); type aliases `player_id := int`, `pair(t:type) := tuple(t, t)` (see [Type aliases](#type-aliases)); a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
 | Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e` / `C := e` (`C := e` names a type when `e` is one: [Type aliases](#type-aliases)) (definitions on one line, at the top level or in a module, are separated by `;` or `,`: `X:int=0, Y:int=0`; a constant may use one defined after it, but not itself, directly or through other constants); locals `X := e`, `X:t = e`, `var X:t = e`, and a tuple destructured, `(X:int, _, Z:string) = e` (each named element a local of the block, `_` skipping one, `e` evaluated once); no shadowing; no name defined twice in a scope but [overloaded](#overloading) functions; no [reserved name](#reserved-names) | §3.1–3.4 |
 | Mutation | `set X = e`, `set X += e` (`-=`, `*=`), `set A[i] = e` (fails out of range; returns `e`), and paths `set S.F.G = e`, `set A[i][j] op= e`, `set M[k].F = e`: indices and keys evaluated once, left to right, then the new value (for `op=`, after the old one is read: `set X += e` is `set X = X + e`), then the variable rebuilt; an index out of range or a missing intermediate key fails, while the last key of a path inserts | §3.3, §3.5, §9.3 |
 | Blocks | indented (`:`), braced (`{ }`), inline (`then`/`do`), `.` and an expression on its line wherever `:` or `{…}` may start a body (`if (c). e else. f`, `for (X:Xs). e`, `spawn. F()`, `loop. break`; also `option`, `logic`, and `array` and `map`, whose `:` blocks separate their items by `,`, `;` or new lines: `array:` and the lines `1`, `2`; in braces an array's elements are separated by commas, or by `;` and new lines, not both: `array{1; 2; 3}`), `block:`, `( a; b )` sequences, also as an argument (`F(Log(); 42)` passes 42) and as a `case`'s value (`case(a; b)`); `;` separates the items of a block and may end a line or a braced block (`{1; 2;}` is `{1; 2}`) (the next item then follows the line rules, so a class's last field may end in `;`); a body after `:` may be empty wherever one may be written, as `{}` may (`class:`, `struct:`, `then:`, … whose next line is no deeper than the construct, or nothing follows); a function's or method's braced body may put its `{` on the next line, at the definition's column; a value after `=`, `:=`, `set … =` or a `case` arm's `=>` that starts a later line, deeper, is the indented block of those lines (`Value :=` and the lines `1`, `2`, `3` is `3`), as a function's body is | §2.2–2.4 |
@@ -153,7 +153,11 @@ Combine(A:t1, B:t2 where t1:type, t2:type):tuple(t1, t2) = (A, B)
 - **Checked once.** The body is type-checked once, with every type parameter
   opaque. A value of type `t` can be bound, passed, returned, stored in
   arrays, options, tuples and maps, and iterated over in a `[]t`. `=`, `<>`,
-  `Find` and map keys need `t:subtype(comparable)`. Anything else, such as
+  `Find` and map keys need `t:subtype(comparable)`; compared with a value of
+  another type, or converted to `comparable`, a `t` is boxed by its
+  instance's box, which a function that needs it takes as one more hidden
+  argument, the evidence of `t:subtype(comparable)` ([comparable](#comparable));
+  every other generic function takes none. Anything else, such as
   arithmetic, `ToString` or `.Length` on a bare `t`, is a type error, even if
   the function is never called.
 - **Inferred type arguments.** At a call, the result type is matched against
@@ -1944,18 +1948,22 @@ compiler.
 
 `any` is the top type (Book of Verse ch. 11, #138): every value is an
 `any`, and `any(X)` makes one explicitly. Where no type is expected, two
-types with nothing in common join at `any`: `if (C?) then 42 else "text"`,
-`array{15.61, "Message", 3}` (a `[]any`), and so does a name bound by the
-first success of the clauses after a choice whose values are of such
-types, after them ([Choice](#choice), #283). Classes with two common
+types with nothing in common, one of them not comparable, join at `any`:
+`if (C?) then 42 else c{}` for a class `c` that is not `<unique>`, and so
+does a name bound by the first success of the clauses after a choice whose
+values are of such types, after them ([Choice](#choice), #283). Two
+comparable types join at `comparable` instead ([comparable](#comparable)):
+`if (C?) then 42 else "text"`, `array{15.61, "Message", 3}` (a
+`[]comparable`). Classes with two common
 supertypes are still an ambiguity, and an expected type still decides
 (`X:int = if (C?) then 1 else "a"` is refused).
 
 The order of the branches doesn't matter (#366), up to three levels of
 such `if`s nested without an expected type (the depth to which a branch is
 elaborated against another's, so nesting stays linear): a later branch is
-elaborated against the first's type, and when that gives `any`, or the
-first has no type on its own, every branch is tried against a later one's
+elaborated against the first's type, and when that gives `any` or
+`comparable` by having nothing else in common, or the first has no type on
+its own, every branch is tried against a later one's
 type. So `if (C?) then false else option{4}` is a `?int`, as
 `if (C?) then option{4} else false` is, and so is the choice
 `false | option{4}`; `if (C?) then array{} else array{4}` is a `[]int`.
@@ -1967,6 +1975,70 @@ arguments types the branch under its refinement (#243, #583).
 Nothing can be done with an `any`: it has no equality (so it is no map
 key), no `ToString`, and no cast back. So in Verse Core it is `void`: a
 value becomes an `any` by being evaluated.
+
+## comparable
+
+`comparable` is the type of every value of a comparable type (Book of
+Verse ch. 11, "Comparable and Equality"): below `any`, above `int`,
+`float`, `rational`, `logic`, `char`, `char32`, `string`, enums, structs,
+`<unique>` classes, and arrays, options, tuples and maps of such. A value
+of one converts to it where a `comparable` is expected (a parameter, a
+result, a field, a `var`, an element of a `[]comparable`, a key of a
+`[comparable]v`) and by `comparable(X)`; nothing converts back, and a
+`comparable` has `=` and `<>` only (no ordering, no `ToString`, no cast; it
+is not `<persistable>`). `=` with a `comparable` on either side holds
+exactly when both values have the same type and are equal ("These boxed
+values maintain their equality semantics"):
+
+```verse
+letters := enum{A, B}
+numbers := enum{One, Two}
+Same(X:comparable, Y:comparable)<decides>:void = X = Y
+Main():void =
+    if (comparable(15) = comparable(15), comparable("Hello") = "Hello") then Print("equal")
+    if (not Same[0, 0.0], not Same[letters.A, numbers.One], not Same[0u41, 65]) then Print("types differ")
+    if (Same[(1, 2), array{1, 2}], Same[4 / 2 or 0, 2]) then Print("one value")
+    M:[comparable]string = map{0 => "int", 0.0 => "float", letters.A => "A"}
+    if (V := M[0.0]) then Print(V)
+```
+
+- **Boxes.** A value becomes a `comparable` boxed
+  (`OpenVerse/Core/Comparable.lean`, `Code.box`): an enum's value, a
+  `char32`, a struct (its fields boxed), a rational that is not an int and a
+  map that is not empty carry a code, an int per type, where Verse Core
+  holds them like another type's (an enum's value and a `char32` as an
+  `int`, a struct as the tuple of its fields); a tuple becomes the array of
+  its elements' boxes and an integral rational its int, as Verse has them
+  one value; arrays and options are boxed elementwise. An `int`, a `float`,
+  a `logic`, a `char`, a string, a `<unique>` object, and arrays and options
+  of those, are their own boxes: an `[]int` is a `[]comparable` as it is.
+  Verse Core's equality (`Value.veq`) on boxes is then Verse's: the empty
+  values of every type are one value, an enum's value is never another
+  enum's or an int, one struct at two instances compares field by field.
+  In Verse Core a `comparable` is a `dyn`, the type of every value.
+- **Joins.** Two comparable types with nothing else in common join at
+  `comparable` (ch. 1: `array{1, "two", 3.0}`'s element type is
+  `comparable`, "their common supertype"; ch. 14: the result "widens all
+  the way to `comparable`"), also inside containers (`map{0 => 1} or
+  map{1 => 2.0}` is a `[int]comparable`) and beside a `comparable`
+  (`array{1} + CA` with `CA:[]comparable`). One that is not comparable
+  makes the join `any`.
+- **Overloads.** `comparable` overlaps every comparable type and `<unique>`
+  classes and interfaces (`F(:int)` and `F(:comparable)` cannot both be
+  defined), and is distinct from the types that are not comparable.
+- **Generic code.** A type parameter declared `subtype(comparable)` whose
+  value a generic function compares with a value of another type, or passes
+  or binds as a `comparable`, takes the box of its instance as the evidence
+  of that bound ([Parametric functions](#parametric-functions)):
+  `Equal(X:t, Y:comparable where t:subtype(comparable))<decides>:t = X = Y`,
+  `Same(X:t, Y:u …) = X = Y` and a `tuple(t, t, t)` against a `string`
+  compare by value and type.
+- Not yet: a value of a type parameter as a `comparable` other than as an
+  argument, a result, a local's value or an operand of `=` and `<>` (an
+  element of an array literal, a map key, a field); the box of a struct at
+  type parameters (`p(t)` compared with another type in generic code), of a
+  type parameter of a class in its methods; `case` on a `comparable`; and
+  `concrete_subtype(comparable)`.
 
 ## Equality and the empty value
 
@@ -2007,14 +2079,16 @@ rational, one struct at another instance), never to `void`: `(1, 2) =
 array{(), ()}` fails. An empty `array{}` or `map{}` compared with a value of
 another type is that type's empty value.
 
-Refused: two type parameters, or one and a type that several types share in
-Verse Core (an instance could make them types Verse Core holds alike), a
-tuple of type parameters against a string, and two types with other values
-in common that Verse Core cannot tell apart (`[]tuple(int, []int)` and
-`[]tuple(int, []char32)`). In generic code a type parameter is compared as
-Verse Core compares its instance, so values of types it holds alike are
-equal there where the Book's differ (a `char32` and an `int`; an empty
-struct and `()`); that needs run-time types.
+Where neither is decided from the types, both operands are boxed and
+compared as `comparable`s ([comparable](#comparable)): two types with
+other values in common that Verse Core cannot tell apart
+(`[]tuple(int, []int)` and `[]tuple(int, []char32)`, an int beside a
+rational inside containers), and, in generic code, a type parameter and
+another type, two type parameters, or a tuple of type parameters and a
+string, by the box of the instance (the evidence of its
+`subtype(comparable)`). So an empty struct is not `()` in generic code
+either (`IsFalse(X:t where t:subtype(comparable))<decides>:void = X =
+false` fails at `s{}`).
 
 `void` takes any value and makes it the empty value; `tuple()` is the type
 of the empty value alone: `false`, `()` and a `void` value convert to it,
@@ -2747,7 +2821,7 @@ Main()<suspends>:void =
 | `Main` failing | (no entry point in the book) | exit code 1; output already printed stays |
 | `return` or `break` inside a failure context | unspecified | leaves the function, or the loop around the context; no rollback of what the condition did, also after a choice in it, whose alternatives that failed before were rolled back (#283) |
 | Scope of the operands of `A and B` | "Variable bindings do not escape from logical operations" (§3.4) | each operand is its own scope: names defined in `A` are not visible in `B`, and names from neither side escape the `and` |
-| Comparability | `comparable` covers the primitive types, enums, structs and containers of comparable types (§4.9) | so is every openverse type, except a type parameter not declared `subtype(comparable)` and the containers of one |
+| Comparability | `comparable` covers the primitive types, enums, structs and containers of comparable types (§4.9) | so is every openverse type, except `any`, functions, classes that are not `<unique>`, a type parameter not declared `subtype(comparable)` and the containers of those; `comparable` itself is a type ([comparable](#comparable)) |
 | Inferring type arguments | not described | first-order matching against the expected result type, then the arguments; no subtyping other than `false` (matches anything) and `void` (accepts anything) |
 | Access specifiers other than `<public>` | `<internal>` (the default), `<private>`, `<protected>`, … (ch. 16) | a module member is `<public>` or internal (visible in its module and its submodules); other specifiers, a struct field's, and a `<public>` definition whose type names an internal one (a type alias of an internal class, ch. 11), are accepted and not enforced |
 | A qualifier without a `using` | "A qualifier only says which `F` is meant among the ones already in scope" (ch. 10): `(Top.M:)F` with no `using` is unknown | the qualifier is found as any name is, then the name is looked up in exactly that scope: `(M:)F` is `M.F` (#145) |
@@ -2778,7 +2852,7 @@ Main()<suspends>:void =
 
 `ToString` of rationals (see [rational](#rational)), float functions beyond those of [float](#float), the bitwise functions `BitAnd`, `BitOr`, `BitXor`, `BitNot`, `BitShiftLeft`, `BitShiftRight` (see [the pinned rules](research/book-library-functions.md#bitwise-functions-not-implemented)),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
-`weak_map`, `comparable` as a type (only as a bound, `t:subtype(comparable)`: see [the Book's rules and a design](research/comparable-type.md)), module paths `using{/Verse.org/…}` (accepted and ignored), paths as values and path qualifiers other than `(/Verse.org/Verse:)` of a built-in type, two members of one name in a class (`(c:)M` beside an inherited `M`, Book ch. 10), the
+`weak_map`, what [comparable](#comparable) lists as not yet, module paths `using{/Verse.org/…}` (accepted and ignored), paths as values and path qualifiers other than `(/Verse.org/Verse:)` of a built-in type, two members of one name in a class (`(c:)M` beside an inherited `M`, Book ch. 10), the
 specific overload/call gaps listed under [Overloading](#overloading), nested
 functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice), concurrency beyond [Concurrency](#concurrency), and the unsupported
 effect/construction contracts listed under [Effect contracts](#effect-contracts).
