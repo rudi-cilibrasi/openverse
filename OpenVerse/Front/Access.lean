@@ -510,9 +510,18 @@ def checkConsistency (lv : Levels) (tops : List STop) : Except String Unit := do
           let r := audience (levelOf f.specs) m (some c)
           if !(audience (some w) m (some c)).inside below moduleOfName r then
             throw s!"{p.show}: var<{w}> {bareName f.name}: setting it is more visible than reading it, {r.what}; the write access is at least as restrictive as the read access (Book of Verse ch. 12)"
+      -- (a method's overloads have one access: a use reaches them by name)
+      let methodLevels := ms.filterMap fun
+        | .fn mp mn _ _ sp .. => if sp.contains "override" || mn.startsWith "$" then none else some (mp, bareName mn, levelOf sp)
+        | _ => none
+
+      for (mp, mn, l) in methodLevels do
+        if methodLevels.any fun (_, n, k) => n == mn && k != l then
+          throw s!"{mp.show}: the overloads of {shown c}.{mn} must all have one access level"
       for x in ms do
         if let .fn mp mn mps mtps mspecs mret _ := x then
           if mn.startsWith "$" then continue
+
           let lvl := levelIn c mn (levelOf mspecs) (mspecs.contains "override")
           checkExposes lv defs below mp s!"the method {bareName mn} of {shown c}" (memberEff lvl)
             (mret :: mps.map (·.ty) ++ mtps.filterMap (·.upperBound)) (cps ++ mtps.map (·.name))
