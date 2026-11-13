@@ -717,7 +717,10 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
 
 partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (bracket : Bool)
     (exp : Option Ty) : EM R :=
-  elabAppBaseWith elabE withDeferMark elabSpawn resolveOverload elabArgs elabInts elabApp elabCast elabGenericCall elabMethod elabIndexLike elabSpawnDispatch elabDefaultDispatch (@elabMember) ctx p f args bracket exp
+  elabAppBaseWith { elabE, withDeferMark, elabSpawn, resolveOverload, elabArgs, elabInts, elabApp,
+                    elabCast, elabGenericCall, elabMethod, elabIndexLike, elabSpawnDispatch,
+                    elabDefaultDispatch, elabMember := fun c q r m e => elabMember c q r m e }
+    ctx p f args bracket exp
 
 /-- `T[X]`: `X` as a value of class or interface `T`, failing unless its class
     is below `T`; `T(X)`: an upcast, which cannot fail (Book of Verse ch. 10). -/
