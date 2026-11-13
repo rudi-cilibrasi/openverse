@@ -72,6 +72,12 @@ if lake env lean -j1 --run tests/lean/ConcurrencyPrelude.lean >"$logs/prelude-co
 else
   rc=$?; cat "$logs/prelude-contracts"; exit "$rc"
 fi
+echo "== family stub contracts"
+if lake env lean -j1 --run tests/lean/FamilyStubs.lean >"$logs/stub-contracts" 2>&1; then
+  cat "$logs/stub-contracts"
+else
+  rc=$?; cat "$logs/stub-contracts"; exit "$rc"
+fi
 echo "== initializer convergence compiler API contracts"
 if lake env lean -j1 --run tests/lean/InitializerConvergence.lean >"$logs/initializer-contracts" 2>&1; then
   cat "$logs/initializer-contracts"

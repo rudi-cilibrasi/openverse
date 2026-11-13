@@ -3016,7 +3016,16 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
         ((fams.find? fun (x, f) => x == m && (anc c).contains f.root).map (·.2)).map fun f =>
           call p q m f (rw recv) (args.map rw) br
       | _, _, none =>
-        let cases := slots.flatMap fun s => (rootsAt anc (roots s) picks inC q recv).map fun r =>
+        -- (the roots each list reaches: all of one no family of which is
+        -- selected, whose cases are as written; none yet while a selected
+        -- family's pick is to be made, the use as written for that round)
+        let reach (s : String) : Option (List String) :=
+          if (roots s).length ≤ 1 || !fams.any (·.1 == s) then some (roots s) else
+          match rootsAt anc (roots s) picks inC q recv with
+          | [] => none
+          | rs => some rs
+        let reached ← slots.mapM reach
+        let cases := (slots.zip reached).flatMap fun (s, rs) => rs.map fun r =>
           (r, s, (fams.find? fun (x, f) => x == s && f.root == r).map (·.2))
         match cases with
         | [(_, s, some f)] => some (call p q s f (rw recv) (args.map rw) br)
