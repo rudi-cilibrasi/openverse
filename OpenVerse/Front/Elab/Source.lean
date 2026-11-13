@@ -15,6 +15,9 @@ structure Admitted where
   resolved : List STop
   /-- The entry expression's function, or nothing: the end of `resolved`. -/
   rawEntry : List STop
+  /-- The defaults function types write (#503, `STop.isTypeDefault`), set apart
+      from the definitions: `inferSignatures` checks them. -/
+  typeDefaults : List STop
   /-- The compiler's definitions the program needs: the rationals' (#116),
       `ReplaceAll`'s, the concurrency prelude's (#156) and subscribable
       events' (#210, #220). -/
@@ -64,6 +67,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
     | some e => [.fn e.pos "$Do" [] [] ["decides"] (.name "void") (.app e.pos (.ident e.pos "$Show") [e] false)]
     | none => []
   let resolved ← resolveModules (allTops000 ++ rawEntry)
+  let (typeDefaults, resolved) := resolved.partition (·.isTypeDefault)
   let resolved := if opts.extendedDefaults then resolved
     else resolved.map InitializerConvergence.markSource
   -- Resolve source names before deciding which soft-library definitions are
@@ -102,7 +106,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
     | .classDef _ n _ specs .. | .const _ n _ (.structDef _ _ specs _) =>
       budgets.insert n (EffectPolicy.constructionFx specs)
     | _ => budgets) ({} : Std.HashMap String (List String))
-  return { resolved, rawEntry, helpers, intrinsicCalls, concurrencyNames, usesConc, constructionFx }
+  return { resolved, rawEntry, typeDefaults, helpers, intrinsicCalls, concurrencyNames, usesConc, constructionFx }
 
 /-- A program's source as elaborated (`inlineSource`). -/
 structure Source where

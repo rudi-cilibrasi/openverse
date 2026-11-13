@@ -291,7 +291,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let overloads ← functionOverloads env methods.tops defs.methodOverloads
   let env := { env with overloads := overloads.functions, methodOverloads := overloads.methods }
   let declared ← declareSignatures env overloads.tops opts.requests
-  let sigs ← inferSignatures env declared opts.requests
+  let sigs ← inferSignatures env declared admitted.typeDefaults opts.requests
   checkSignatures env sigs classes.defs fields methods
   let defaults ← elabFieldDefaults env sigs methods.tops classes.defs
   -- (the accessors come right after the functions, #157)

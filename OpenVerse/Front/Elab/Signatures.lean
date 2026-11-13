@@ -221,13 +221,29 @@ structure Signatures where
 /-- Every signature: the functions' and constants', then the generic functions'. -/
 def Signatures.all (s : Signatures) : List Sig := s.sigs.toList ++ s.gsigs.toList
 
+/-- The defaults function types write (#503, `STop.isTypeDefault`): each
+    checked at its parameter's type with literals and top-level names only,
+    as the pinned Book says nothing of what else one may use, in a trial that
+    keeps nothing: a default is not part of its type and never runs. -/
+def checkTypeDefaults (ctx : Ctx) (defaults : List STop) : Except String Unit := do
+  for top in defaults do
+    let .const p n (some ty) d := top | continue
+    let param := ((n.splitOn typeDefaultPrefix).getLast?).getD n
+    let trial : EM Unit := do
+      let t ← resolveTy ctx.types p ty
+      let r ← elabE ctx d (some t)
+      if r.e.mayFail ctx.sigProg then eerr p "it can fail"
+      discard <| coerce p r t
+    if let .error e := trial.run { env := ctx.types } then
+      throw s!"{e} (the default of ?{param} in a function type: not part of the type, it is checked at the parameter's type, with literals and top-level names only, #503)"
+
 /-- Constant types and effects (#35), a phase of `elabProgramCore`: the type of
     each unannotated constant, inferred in rounds so that one may use one
     defined after it (the first still unknown refused); and the heap effects of
     constants, of `block:`s, of the defaults an overloaded constructor fills
     in (#99) and of bridges, inferred in rounds from none, as they use each
-    other. -/
-def inferSignatures (env : TyEnv) (declared : Declared) (requests : Requests) :
+    other; between them, the defaults function types write (`checkTypeDefaults`). -/
+def inferSignatures (env : TyEnv) (declared : Declared) (typeDefaults : List STop) (requests : Requests) :
     Except String Signatures := do
   let mut sigs := declared.sigs
   let mut gsigs := declared.gsigs
@@ -267,6 +283,7 @@ def inferSignatures (env : TyEnv) (declared : Declared) (requests : Requests) :
       let (r, _) ← (elabE ctx body none).run { env }
       if r.ty == .never then throw s!"{p.show}: cannot infer the type of '{n}'"
     | _ => pure ()
+  checkTypeDefaults { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env } typeDefaults
   -- the heap effects of a constant are those of its initialiser (#35), which
   -- runs at each use: in rounds, from none, since constants use each other
   for _ in [0:declared.tops.length + declared.generics.length + 1] do

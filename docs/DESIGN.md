@@ -1189,7 +1189,7 @@ is thrown in one place, a phase or `elabProgramCore` itself, and each point
 where an elaboration asks for something and goes no further
 (`Compiled.asking`) is a line of `elabProgramCore`.
 
-1. `admitSource` (`Elab/Source.lean`): the source and the entry expression pass the effect policy and the source profile, modules are resolved, and the helpers the program needs are added (`Admitted`).
+1. `admitSource` (`Elab/Source.lean`): the source and the entry expression pass the effect policy and the source profile, modules are resolved, the defaults function types write are set apart, and the helpers the program needs are added (`Admitted`).
 2. `inlineSource`: functions with several values are inlined at their calls, the functions earlier rounds asked for are added and admitted, and function values become interfaces and classes (`Source`, with the sites the inlining notes).
 3. `argsAndMethodOverloads`: `Args` and the entry expression's `$Do` are added, and overloaded methods are renamed by their parameter lists (`Definitions`).
 4. `classHierarchy` (`Elab/Classes.lean`): the classes and interfaces and their hierarchy, checked (`Classes`, with the lookups over it).
@@ -1202,7 +1202,7 @@ where an elaboration asks for something and goes no further
 11. `addPlaceholders`: placeholder classes and prototypes; no struct contains itself, and map keys are comparable.
 12. `functionOverloads` (`Elab/Signatures.lean`): overloaded functions renamed, and the overloads of functions and methods, which the environment records (`Overloads`).
 13. `declareSignatures`: each function's and constant's signature as declared (`Declared`).
-14. `inferSignatures`: the types of unannotated constants and the effects inferred in rounds (`Signatures`).
+14. `inferSignatures`: the types of unannotated constants, then the defaults function types write checked (#503), then the effects inferred in rounds (`Signatures`).
 15. `checkSignatures`: overloads, overrides, implementations and overriding fields agree, and no field has two interfaces' defaults.
 16. `elabFieldDefaults` (`Elab/Functions.lean`): construction effects, and each field default elaborated once (`FieldDefaults`).
 17. `elabFunctions`: each function and constant, then each generic function once (`ElaboratedFn`), the environment knowing where the accessors are.
@@ -1457,7 +1457,12 @@ flowchart LR
   elaborated again, as for #214's requests. Only the closed shapes a program
   calls or writes exist: an open shape's 2ⁿ closed ones are never all made.
   A function's own shape is open where its named parameters have defaults,
-  so `F := Log` keeps `Log`'s defaults.
+  so `F := Log` keeps `Log`'s defaults. The default a type writes is no part
+  of it: the parser keeps it after the definition that writes it, as a
+  constant `$typeDefault:N` of the parameter's type in that definition's
+  module, and the elaborator removes those after resolving modules and checks
+  each, once constants are typed, in a trial that keeps nothing
+  (`checkTypeDefaults`).
 - **Named functions get value classes where the program as written names
   them.** The function-value scan sees the program after the choice
   inliner, whose markers name the functions with several values they inline
