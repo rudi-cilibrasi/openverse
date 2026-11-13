@@ -213,9 +213,7 @@ structure Signatures where
   /-- The signatures of `generics`, over their type parameters. -/
   gsigs : Array Sig
   /-- The program calls are elaborated against (`Ctx.sigProg`), for what a call
-      can do (`Expr.mayFail`, `Expr.writesHeap`): `sigs`, then the generic
-      functions' signatures as declared, before the effects of their `block:`s
-      and bridges are inferred. -/
+      can do (`Expr.mayFail`, `Expr.writesHeap`): `sigs`, then `gsigs`. -/
   prog : Prog
 
 /-- Every signature: the functions' and constants', then the generic functions'. -/
@@ -250,7 +248,7 @@ def inferSignatures (env : TyEnv) (declared : Declared) (typeDefaults : List STo
   -- A cast discovered before a default helper must acquire the helper
   -- effects once its body is known, before checking the source caller.
   let inferredBridge (n : String) := defaultBridge n || requests.casts.any (·.name == n)
-  let mkSigProg (sigs : Array Sig) : Prog :=
+  let mkSigProg (sigs gsigs : Array Sig) : Prog :=
     { fns := (sigs ++ gsigs).toList.map fun s =>
         { name := s.name, arity := s.frame.arity, nslots := 0,
           decides := s.decides, writes := s.fx.contains "writes", body := .lit .void },
@@ -266,7 +264,7 @@ def inferSignatures (env : TyEnv) (declared : Declared) (typeDefaults : List STo
     for (top, idx) in todo do
       match top with
       | .const _ _ _ body =>
-        let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env }
+        let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs gsigs, types := env }
         match (elabE ctx body none).run { env } with
         | .ok (r, _) =>
           if r.ty == .never then left := left.push (top, idx)
@@ -279,11 +277,11 @@ def inferSignatures (env : TyEnv) (declared : Declared) (typeDefaults : List STo
   for (top, _) in todo do
     match top with
     | .const p n _ body =>
-      let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env }
+      let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs gsigs, types := env }
       let (r, _) ← (elabE ctx body none).run { env }
       if r.ty == .never then throw s!"{p.show}: cannot infer the type of '{n}'"
     | _ => pure ()
-  checkTypeDefaults { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env } typeDefaults
+  checkTypeDefaults { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs gsigs, types := env } typeDefaults
   -- the heap effects of a constant are those of its initialiser (#35), which
   -- runs at each use: in rounds, from none, since constants use each other
   for _ in [0:declared.tops.length + declared.generics.length + 1] do
@@ -291,7 +289,7 @@ def inferSignatures (env : TyEnv) (declared : Declared) (typeDefaults : List STo
     for (top, idx) in declared.tops.zip (List.range declared.tops.length) do
       match top with
       | .const _ _ _ body =>
-        let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env }
+        let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs gsigs, types := env }
         match elabBody ctx body (some sigs[idx]!.ret) { env } with
         | .ok (_, st) =>
           let fx := heapFx.filter fun k => st.fx.any (·.1 == k)
@@ -303,7 +301,7 @@ def inferSignatures (env : TyEnv) (declared : Declared) (typeDefaults : List STo
       -- does a default an overloaded constructor fills in (#99)
       | .fn p n ps _ _ _ body =>
         if (n.splitOn "$default$").length > 1 then
-          let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env }
+          let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs gsigs, types := env }
           match elabBody ctx body (some sigs[idx]!.ret) { env } with
           | .ok (_, st) =>
             let fx := heapFx.filter fun k => st.fx.any (·.1 == k)
@@ -315,7 +313,7 @@ def inferSignatures (env : TyEnv) (declared : Declared) (typeDefaults : List STo
           let s := sigs[idx]!
           let locals := (ps.zip (List.range ps.length)).zip s.params |>.map fun ((prm, i), t) =>
             ({ name := prm.name, slot := i, ty := t, mutable := false, typeValue := prm.typeValue } : Local)
-          let base : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env,
+          let base : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs gsigs, types := env,
                               locals := locals.reverse, retTy := s.ret, canFail := s.decides, suspends := s.suspends, fnFx := s.fx }
           let ctx ← functionBodyCtx requests base p n s.tparams s.scope
           match elabBody ctx body (some s.ret) { env, nslots := ps.length, slotTys := s.params.toArray, frameSlots := ctx.locals.filterMap fun l => l.storage.map (l.slot, ·) } with
@@ -344,7 +342,7 @@ def inferSignatures (env : TyEnv) (declared : Declared) (typeDefaults : List STo
             | some l => (l.opened.lookup v).bind (env.witnessField? l.target ·)
             | none => env.witnessField? ((n.splitOn ".").headD "") v
           let genv := { g.typeEnv env with dictOrder := dictTps.map (·.1), selfWitness := g.selfTps.map fun v => (v, (selfField v).getD 0) }
-          let base : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := genv,
+          let base : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs gsigs, types := genv,
                               locals := locals.reverse, retTy := g.ret, canFail := g.decides, suspends := g.suspends,
                               dictBase := g.frame.witnessBase, dictVars := dictTps.map (·.1), fnFx := g.fx }
           let ctx ← functionBodyCtx requests base p n g.tparams g.scope
@@ -359,7 +357,7 @@ def inferSignatures (env : TyEnv) (declared : Declared) (typeDefaults : List STo
           | .error _ => pure ()
       | _ => pure ()
     if !changed then break
-  return { tops := declared.tops, generics := declared.generics, sigs, gsigs, prog := mkSigProg sigs }
+  return { tops := declared.tops, generics := declared.generics, sigs, gsigs, prog := mkSigProg sigs gsigs }
 
 /-- The signature checks, a phase of `elabProgramCore`: the overloads of a
     function take parameters no call fits two of (Book of Verse ch. 6), and so
