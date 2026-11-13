@@ -35,7 +35,10 @@ context. -/
     element, its source, the code that binds the element's names and runs the
     filters after it, and the slots of the search: the source's value, the
     cursor (the element the last success went through), and the indices of a
-    probe and of the resumption. -/
+    probe and of the resumption. `probed`: the code before its elements (the
+    element code of the level above, or the clauses before the first
+    generator, and its source) can do what undoing would change, so the
+    level's first success is found inside that code's failure context. -/
 structure ForLevel where
   slot : Nat
   src : Expr
@@ -44,6 +47,7 @@ structure ForLevel where
   cur : Nat
   probeIx : Nat
   resumeIx : Nat
+  probed : Bool
 
 /-- The last index of the source `l` holds. -/
 def ForLevel.lastIx (l : ForLevel) : Expr := p2 .sub (.prim .len [.local l.arr]) (.lit (.int 1))
@@ -53,16 +57,21 @@ def ForLevel.lastIx (l : ForLevel) : Expr := p2 .sub (.prim .len [.local l.arr])
 def ForLevel.probe (l : ForLevel) (j : Expr) (below : Expr) : Expr :=
   .seq (.assign l.slot (p2 .index (.local l.arr) j)) (.seq l.filt below)
 
-/-- The first success of the levels `ls`, as a failure context does: the
-    first level's source evaluated, then its elements tried in order, each a
+/-- Entering the levels `ls`: the first level's source evaluated, then, when
+    it is `probed` or entered inside a probe (`search`), its first success
+    found as a failure context finds one: its elements tried in order, each a
     failure context of its own (`firstE` around a `forE` whose filter is the
-    probe), the cursor left at the one that succeeded. Fails when none does. -/
-def ForLevel.first : List ForLevel → Expr
+    probe, which searches the levels below), the cursor left at the one that
+    succeeded; it fails when none does. Otherwise the cursor is `-1`: no
+    element probed, each to be probed by `resume`, in a failure context of
+    its own. -/
+def ForLevel.enter (search : Bool) : List ForLevel → Expr
   | [] => .lit .void
   | l :: more =>
-    .seq (.assign l.arr l.src) (Expr.firstE (.forE l.probeIx (.prim .range [.lit (.int 0), l.lastIx])
-      (.seq (.assign l.cur (.local l.probeIx)) (.seq (l.probe (.local l.probeIx) (ForLevel.first more)) Expr.brkV))
-      (.lit .void)))
+    .seq (.assign l.arr l.src) (if !(search || l.probed) then .assign l.cur (.lit (.int (-1))) else
+      Expr.firstE (.forE l.probeIx (.prim .range [.lit (.int 0), l.lastIx])
+        (.seq (.assign l.cur (.local l.probeIx)) (.seq (l.probe (.local l.probeIx) (ForLevel.enter true more)) Expr.brkV))
+        (.lit .void)))
 
 /-- Whether `e` can do something that undoing it would change: print, set an
     object's field, call a function (which may do either), or write a slot
@@ -90,18 +99,21 @@ partial def callsManyValued (e : SExpr) : Bool :=
     ["$inline", "$each", "$loop", "$dispatch", "$point"].contains f || e.children.any callsManyValued
   | _ => e.children.any callsManyValued
 
-/-- The values of the search's levels `ls` once their first success is
-    found: each level a `forE` over the elements from its cursor on, the one
-    there already probed (its names bound, the levels below positioned), each
-    later one probed in its filter, so a failure context of its own; the
-    levels below, or the body, in its body, outside every failure context. -/
+/-- The values of the search's levels `ls` once they are entered: each level
+    a `forE` over its elements from its cursor on (from the first when the
+    cursor is `-1`), the one at the cursor already probed (its names bound,
+    the levels below entered), each other one probed in the `forE`'s filter,
+    so a failure context of its own; the levels below, or the body, in its
+    body, outside every failure context. -/
 def ForLevel.resume (p : Pos) : List ForLevel → R → EM R
   | [], body => return body
   | l :: more, body => do
-    let filt := Expr.ite (p2 .eq (.local l.resumeIx) (.local l.cur)) (.lit .void)
-      (.seq (l.probe (.local l.resumeIx) (ForLevel.first more)) (.lit .void))
+    let probe := Expr.seq (l.probe (.local l.resumeIx) (ForLevel.enter false more)) (.lit .void)
+    let lo := if l.probed then Expr.local l.cur else
+      .ite (p2 .ge (.local l.cur) (.lit (.int 0))) (.local l.cur) (.lit (.int 0))
+    let filt := Expr.ite (p2 .eq (.local l.resumeIx) (.local l.cur)) (.lit .void) probe
     let inner ← ForLevel.resume p more body
-    let loopE := Expr.forE l.resumeIx (.prim .range [.local l.cur, l.lastIx]) filt inner.e
+    let loopE := Expr.forE l.resumeIx (.prim .range [lo, l.lastIx]) filt inner.e
     match more with
     | [] => return ⟨loopE, .arr inner.ty⟩
     | _ => match inner.ty with
@@ -1008,15 +1020,22 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       let some filt := preE | return inner
       let .arr t := inner.ty | eerr p "internal: nested for"
       return ⟨← flattenValues ⟨.forE unit (.lit (.arr #[.tup []])) filt inner.e, .arr inner.ty⟩, .arr t⟩
+    -- (a level is probed when the code before its elements can do what
+    -- undoing would change: the clauses before the first generator and its
+    -- source, or the level above's element code and its own source)
     let mut ls : Array ForLevel := #[]
+    let mut before := preE.isSome
     for (slot, src, srcTy, filt) in levels do
       ls := ls.push { slot, src, filt, arr := ← fresh srcTy, cur := ← fresh .int,
-                      probeIx := ← fresh .int, resumeIx := ← fresh .int }
-    let found := ForLevel.first ls.toList
-    let found := match preE with
-      | some filt => Expr.seq filt found
-      | none => found
+                      probeIx := ← fresh .int, resumeIx := ← fresh .int, probed := before || fx src }
+      before := fx filt
+    let entered := ForLevel.enter false ls.toList
     let values ← ForLevel.resume p ls.toList r
+    if !(ls[0]?.any (·.probed)) then
+      return ⟨.seq entered values.e, values.ty⟩
+    let found := match preE with
+      | some filt => Expr.seq filt entered
+      | none => entered
     -- (in a slot of the values' type: the suspension lowering splits the `if`
     -- into statements, where an empty array alone has no type)
     let res ← fresh values.ty

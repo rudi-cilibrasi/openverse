@@ -314,30 +314,34 @@ runtime journals every write made inside one. Two designs were weighed:
 
 openverse takes the second, without the loop: each generator is a *level*
 (`ForLevel`, `Elab/For.lean`), its source's value in a slot `A`, a cursor
-`C`, and the code `bind; filters` its element runs. Two pieces of code are
-made from the levels:
+`C`, and the code `bind; filters` its element runs. A level is *probed*
+when the code before its elements (the clauses before the first generator,
+or the level above's element code, and its own source) can do something
+undoing would change. Two pieces of code are made from the levels:
 
-- `first(levels)`: evaluate the first level's source into `A`, then try its
-  elements in order, each in a `forE` filter (so a failure context of its
-  own), binding the element, running its filters and then `first` of the
-  levels below; the first that succeeds leaves `C` at it and `break`s out
+- `enter(levels)`: evaluate the first level's source into `A`; when the
+  level is probed, or inside a probe, try its elements in order, each in a
+  `forE` filter (so a failure context of its own), binding the element,
+  running its filters and then entering the levels below, each searched;
+  the first that succeeds leaves `C` at it and `break`s out
   (`Expr.firstE`, as a first-success context does). It fails when none
-  succeeds. This is one search step, the first.
-- `resume(levels)`: a `forE` over the indices from `C` to the end: the one
-  at `C` already probed (its names bound, the levels below positioned),
-  each later one probed in the `forE`'s filter (`bind; filters; first`
-  of the levels below), so each a failure context of its own; in the
-  `forE`'s body, `resume` of the levels below, or, for the last level, the
-  `for`'s body.
+  succeeds. Otherwise `C` is `-1`.
+- `resume(levels)`: a `forE` over the indices from `C` (or the first) to the
+  end: the one at `C` already probed (its names bound, the levels below
+  entered), each other one probed in the `forE`'s filter (`bind; filters;
+  enter` of the levels below), so each a failure context of its own; in
+  the `forE`'s body, `resume` of the levels below, or, for the last level,
+  the `for`'s body.
 
-The `for` is `if (clauses before the first generator; first(levels)) then
-resume(levels) else array{}`. Every later search step is an element's
+The `for` is `if (clauses before the first generator; enter(levels)) then
+resume(levels) else array{}` when its first level is probed (that
+condition is the first search step), else `enter(levels); resume(levels)`. Every later search step is an element's
 probe in a `resume` filter, and a failed one leaves nothing; the bodies are
 in `forE` bodies, outside every failure context, as before, so a body may
-wait, fail or return as it could. A generator's code is in `first` once
-and in the probe of each generator before it and its own (so `k + 1` times
-for the `k`-th; the `for`s of the Book and of the tests have two or three
-generators at most), the time is that of
+wait, fail or return as it could. A generator's code is in its own
+level's probe and in that of each probed level above it (so `k + 1` times
+for the `k`-th at most, once when no level above it is probed), the time is
+that of
 the nested `forE`s plus one range per resumed level, and nothing is
 journaled outside a probe. When nothing before the last generator's
 elements can do anything that undoing would change (no `Print`, no write of

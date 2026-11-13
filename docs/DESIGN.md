@@ -123,26 +123,38 @@ slot `A`, a cursor `C`, and its element's code (`X := A[i]`, the binding
 `altE` makes for a choice, then the filters after it).
 
 ```
-first(L :: below) = A := source; firstE(for i in 0..|A|-1
-                        (C := i; bind A[i]; filters; first(below); break) {})
-resume(L :: below) = for i in C..|A|-1
-                        (if (i = C) then {} else (bind A[i]; filters; first(below)))
-                        { resume(below) }       # the body, for the last level
-for = if (clauses before the first generator; first(levels)) then resume(levels) else array{}
+enter(s, L :: below) = A := source;
+    if (s or L probed) then firstE(for i in 0..|A|-1
+        (C := i; bind A[i]; filters; enter(true, below); break) {})
+    else C := -1
+resume(L :: below) = for i in max(C, 0)..|A|-1
+    (if (i = C) then {} else (bind A[i]; filters; enter(false, below)))
+    { resume(below) }       # the body, for the last level
+for = if (clauses before the first generator; enter(false, levels)) then resume(levels) else array{}
+      # (when the first level is not probed: enter(false, levels); resume(levels))
 ```
 
-`first` is the first search step: each element tried in a filter, so a
-failure context of its own, the first that succeeds leaving `C` at it and
-breaking out of `firstE`'s loop. `resume` continues from there: the element
-at `C` already probed, each later one probed in a filter (one later search
-step, which leaves nothing if it fails), the levels below, then the body,
-in `forE` bodies, outside every failure context. Nothing is journaled
+A level is *probed* when the code before its elements (the clauses before
+the first generator, or the element code of the level above, and its own
+source) can do something undoing would change: its first success must then
+be found inside that code's failure context, so that the failure context
+fails, and undoes it, when there is none. `enter` evaluates a level's
+source and, for a probed level or any level inside a probe, finds that first
+success: each element tried in a filter, so a failure context of its own,
+the first that succeeds leaving `C` at it and breaking out of `firstE`'s
+loop; the first search step is the `if`'s condition. `resume` continues
+from there: the element at `C` already probed, each other one probed in a
+filter (one more search step, which leaves nothing if it fails), the levels
+below, then the body, in `forE` bodies, outside every failure context. A
+level that is not probed and was not entered inside a probe has `C = -1`,
+and each of its elements is probed by `resume`. Nothing is journaled
 outside a probe, a body can wait (the suspension lowering turns a `forE`
 whose body waits into a loop, as for any `for`), fail or return, and no
 `loop` of the lowering's own is around a body, so a `break` the body's own
 code uses to leave an outcome loop (`forOutcomeSlot`) still reaches it. A
-generator's code appears in `first` and in each probe from its own level up:
-`k + 1` copies for the `k`-th. When nothing before the last generator's
+generator's code appears once in `resume`'s probe of its level, and once
+more in a probe of each probed level above it (`k + 1` copies for the
+`k`-th at most, one when no level above it is probed). When nothing before the last generator's
 elements can change what undoing would restore (`forClauseEffects`: a
 `Print`, a field's `set`, a call, a write of a variable of the code around
 or a `var` of the clauses), the nested `forE`s below are that search, and

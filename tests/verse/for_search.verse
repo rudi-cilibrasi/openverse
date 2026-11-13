@@ -44,6 +44,11 @@ Main()<transacts>:void =
     Print("choice {M}")
     # a var of the clauses is the search's too
     for (I := 1..3, var W:int = I, set W += 1, K := 4..W) { Print("w {I} {W} {K}") }
+    # an effect before the second generator only, a third with none before it
+    # (searched inside the second's probe, and also entered outside one)
+    var Q:int = 0
+    for (I := 1..3, set Q += 1, J := 2..I, K := J..3, K <> 3 or J = 3) { Print("q {I} {J} {K} {Q}") }
+    Print("q {Q}")
     # maps, strings and indices as generators
     Mp:[int]int = map{1 => 10, 2 => 20}
     var S:int = 0
