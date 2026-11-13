@@ -432,6 +432,13 @@ TEST_NAMES = {
 # translatable.
 ENGINE_NAMES = ["Persistence", "persistent_key", "FromJson", "ToJson", "IsUObject",
                 "GetUObjectPathName", "IsAutoRTFMEnabled"]
+# Free functions of the test runner whose names the Book gives to methods:
+# `Literals/Char.versetest` calls `ToChar(N)` and `ToChar32(N)` with
+# parentheses, total functions that neither the Book's chapters nor its Runtime
+# API reference declare (the API has the methods `N.ToChar[]` and
+# `N.ToChar32[]`, both `<decides>`). Only a free call counts, so the cases of
+# the methods stay translated.
+TEST_FREE_CALLS = ["ToChar", "ToChar32"]
 
 
 # Stand-ins for test runner definitions whose behaviour cannot change a verdict.
@@ -627,6 +634,10 @@ def static_nt(mtext):
     if hit:
         return "test API: %s (%s)" % (loose[hit[0]], hit[0]) if loose[hit[0]] != \
             "the test runner" else "test API: the test runner's %s" % hit[0]
+    hit = sorted(n for n in TEST_FREE_CALLS if re.search(r"(?<![.\w])%s\s*\(" % n, code)
+                 and n not in program_defs(code))
+    if hit:
+        return "test API: the test runner's free function %s" % hit[0]
     hit = sorted(n for n in ids & set(ENGINE_NAMES) if n not in program_defs(code))
     if hit:
         return "engine API: %s" % hit[0]

@@ -232,6 +232,7 @@ counterpart for, found before running anything:
 | the runner's virtual packages and modules (`vpackage`, `vmodule`) | 1264 |
 | the test runner's natives and classes | 1207 |
 | the test runner's `CoroUtils` | 552 |
+| the test runner's free functions `ToChar(N)` and `ToChar32(N)` | 145 |
 | engine API `FromJson` | 153 |
 | the test runner's `TestUtils` | 113 |
 | `<native>` definitions | 93 |
