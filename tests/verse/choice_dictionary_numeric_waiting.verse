@@ -1,3 +1,5 @@
+# set A.K += A.Change(), whose RHS waits and then sets K: the old value is read after it, when it
+# returns; a cancelled one stores nothing
 ca:=class:
     var K:int=1
     Change()<transacts><suspends>:int=
@@ -35,4 +37,4 @@ Main()<suspends>:void=
         Q2:=cb{K:=Initial}
         R2:=Use(P2,Q2)
         Print("done {R2} {P2.K} {Floor(Q2.K)}")
-        if(Q2.K=20/3)then Print("ratio ok") else Print("bad ratio")
+        if(Q2.K=103)then Print("ratio ok") else Print("bad ratio")

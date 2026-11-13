@@ -1,3 +1,5 @@
+# set A.Data[A.Key()] += A.RHS() on maps: RHS replaces the map first, then the old value is read from
+# the new one; a key it does not have fails the clause, RHS rolled back with it
 cell:=class{var N:int=0}
 ca:=class:
     H:cell
@@ -9,7 +11,7 @@ ca:=class:
     RHS()<transacts>:int=
         Print("rhs a")
         set H.N+=10
-        set Data=map{9=>900}
+        set Data=map{9=>900,7=>4}
         3
 cb:=class:
     H:cell

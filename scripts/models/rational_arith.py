@@ -90,6 +90,12 @@ elif mode==3:
     args=['left 1']+([] if op=='neg' else ['right 2'])
     lines=['before']+args if overflow else ['before','reject 0']+([] if zero else args)+(['zero','state 0'] if zero else check_lines(result)+[f'state {len(args)}'])
 elif mode==4:
+    # (`set C.R op= Rhs(C,B)`: Rhs runs first and sets C.R to 99, and the update
+    # then reads that, the Book of Verse's order, ArrayAppend.versetest 140, 183)
+    if not zero:
+        result={'+':lambda:99+b,'-':lambda:99-b,'*':lambda:99*b,'/':lambda:Fraction(99)/b}[op]()
+        overflow=not fits(result)
+        status=2 if overflow else 0
     header+='''Rhs(C:cell,X:rational):rational=
     set C.N+=1
     set C.R=99

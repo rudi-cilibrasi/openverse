@@ -4,7 +4,7 @@ head once 20
 head first 10
 receiver first 10
 field first 10
-op= old value first: 1
+op= new value first: 101
 false 1
 false 2
 array 1

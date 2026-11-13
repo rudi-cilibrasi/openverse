@@ -1,4 +1,6 @@
-# set P op= e and set P = P + e agree, also when e changes the option, map or array (#58 review)
+# set P op= e and V := e; set P = P + V agree, also when e changes the option, map or array (#58
+# review): e runs first, then P's old value is read from what e left (the Book of Verse's tests,
+# ArrayAppend.versetest 140 and 183)
 sub := struct:
     F:int = 0
     G:int = 0
@@ -33,23 +35,23 @@ Show(T:string, H:hold, Ok:logic):void =
 Main():void =
     for (D := 0..1):
         H := hold{}
-        Ok1 := logic{if (D = 0) then (set H.O? += FillO(H)) else (set H.O? = H.O? + FillO(H))}
+        Ok1 := logic{if (D = 0) then (set H.O? += FillO(H)) else (V := FillO(H); set H.O? = H.O? + V)}
         Show("fillO{D}", H, Ok1)
         H2 := hold{O := option{3}}
-        Ok2 := logic{if (D = 0) then (set H2.O? += EmptyO(H2)) else (set H2.O? = H2.O? + EmptyO(H2))}
+        Ok2 := logic{if (D = 0) then (set H2.O? += EmptyO(H2)) else (V := EmptyO(H2); set H2.O? = H2.O? + V)}
         Show("emptyO{D}", H2, Ok2)
         H3 := hold{M := map{5 => 7}}
-        Ok3 := logic{if (D = 0) then (set H3.M[5] += ClearM(H3)) else (set H3.M[5] = H3.M[5] + ClearM(H3))}
+        Ok3 := logic{if (D = 0) then (set H3.M[5] += ClearM(H3)) else (V := ClearM(H3); set H3.M[5] = H3.M[5] + V)}
         Show("clearM{D}", H3, Ok3)
         H4 := hold{}
-        Ok4 := logic{if (D = 0) then (set H4.M[5] += FillM(H4)) else (set H4.M[5] = H4.M[5] + FillM(H4))}
+        Ok4 := logic{if (D = 0) then (set H4.M[5] += FillM(H4)) else (V := FillM(H4); set H4.M[5] = H4.M[5] + V)}
         Show("fillM{D}", H4, Ok4)
         H5 := hold{}
-        Ok5 := logic{if (D = 0) then (set H5.A[4] += GrowA(H5)) else (set H5.A[4] = H5.A[4] + GrowA(H5))}
+        Ok5 := logic{if (D = 0) then (set H5.A[4] += GrowA(H5)) else (V := GrowA(H5); set H5.A[4] = H5.A[4] + V)}
         Show("growA{D}", H5, Ok5)
         H6 := hold{}
-        Ok6 := logic{if (D = 0) then (set H6.A[1] += ShrinkA(H6)) else (set H6.A[1] = H6.A[1] + ShrinkA(H6))}
+        Ok6 := logic{if (D = 0) then (set H6.A[1] += ShrinkA(H6)) else (V := ShrinkA(H6); set H6.A[1] = H6.A[1] + V)}
         Show("shrinkA{D}", H6, Ok6)
         H7 := hold{Sub := sub{F := 1, G := 2}}
-        if (D = 0) then (set H7.Sub.F += NewSub(H7)) else (set H7.Sub.F = H7.Sub.F + NewSub(H7))
+        if (D = 0) then (set H7.Sub.F += NewSub(H7)) else (V := NewSub(H7); set H7.Sub.F = H7.Sub.F + V)
         Show("newSub{D}", H7, true)

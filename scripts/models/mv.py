@@ -30,7 +30,8 @@ they are evaluated" say, without reference to how lifting is done.
 - a for / for{}: a choice is a generator; a failure rolls back to the most
   recent generator (its alternative's own clauses failed); effects of
   segments that succeeded are kept, even if later generators give nothing;
-- set L op= e: L's indices, then (op=) L's old value, then e;
+- set L op= e: L's indices, then e, then (op=) L's old value (the Book's tests,
+  ArrayAppend.versetest 140, 183);
 - comparison chains: each pair is checked as soon as both operands are
   evaluated (the choice-free order: `0 > 1 < X` never evaluates X).
 
@@ -374,8 +375,8 @@ R9 = random.Random(seed * 1000003 + 360)
 # (branchy ifs in mv and rec modes too, half the programs, so their branches can call them)
 BIF = 'bif' in flags or ((MV or REC) and R9.random() < 0.5)
 # ---- #361 (#283): a choice in a set's path, set A[Mod[J.Next() + (0 | 2), 4]] op= e: the index's
-# J.Next() runs once, before the choice; each index value is an alternative, reading its old value
-# and then running e (its effects once per index value). A generator of its own decides.
+# J.Next() runs once, before the choice; each index value is an alternative, running e and then
+# reading its old value (e's effects once per index value). A generator of its own decides.
 R10 = random.Random(seed * 1000003 + 361)
 # ---- #364 (#335 phase 2b): at times a for test starts with an exclusive choice, X := RT2(..) or
 # RT3(..) (a return with a choice after it), and then a composed choice, so the front end calls
@@ -591,7 +592,7 @@ RENT = random.Random(seed * 1000003 + 283289)
 # then Gz0[N - 1, A] else (1 | 5))`. In the block of another's else: a named argument,
 # `Wl := NA(N, ?P := Gz0(N - 1, A))`; a construction's field, in its type's order whatever the
 # written one, `Wl := PS(pt{Y := Gz0(N - 1, A), X := 2})`; `set Vl += Gz0(N - 1, A)`, its old
-# value read before the call, or `set Vl = Gz0(N - 1, A) + Vl`; an `if`'s branch. A stream of
+# value read after the call, or `set Vl = Gz0(N - 1, A) + Vl`; an `if`'s branch. A stream of
 # its own.
 RLIFT = random.Random(seed * 1000003 + 283292)
 # ---- #283, flag nested (on with seq; nonested turns it off): a call of a generator of itself in a
@@ -1387,7 +1388,7 @@ def lifted_shapes(f, i, sc, ctr, stmts):
         else:
             if not any(c[0] == 'svar' and c[1] == 'Vl' for c in stmts):
                 stmts.append(('svar', 'Vl', ('lit', RLIFT.randint(0, 3))))
-            # (`set +=` reads the old value before the call, `set =` after it, from the var each
+            # (`set +=` reads the old value after the call, as `set =` does, from the var each
             # value of it has set)
             st = (('sset', 'Vl', '+=', call) if kind == 'set' else
                   ('sset', 'Vl', '=', ('bin', '+', call, ('ref', 'Vl'))))
@@ -2747,10 +2748,9 @@ def run_body(stmts, val, st, k, mode):
             return nxt(s)
         return ev(c[2], st, kv, mode)
     if t == 'sset':
-        old = st.vars[c[1]]
-
+        # (`set X op= e`: e first, then X's old value read, as the Book's tests have it)
         def kss(x, s):
-            s.vars[c[1]] = x if c[2] == '=' else chks(old + x, s)
+            s.vars[c[1]] = x if c[2] == '=' else chks(s.vars[c[1]] + x, s)
             return nxt(s)
         return ev(c[3], st, kss, mode)
     if t == 'sfilt':
@@ -2840,9 +2840,9 @@ def run_clauses(cl, st, k, mode):
         return ev(c[1], st, kf, mode)
     if t == 'setv':
         v, op = c[1], c[2]
-        old = st.vars[v]
 
         def ks(x, s):
+            old = s.vars[v]
             s.vars[v] = x if op == '=' else chks(old + x if op == '+=' else old * x, s)
             return nxt(s)
         return ev(c[3], st, ks, mode)
@@ -2854,10 +2854,9 @@ def run_clauses(cl, st, k, mode):
         def idx(k):
             def th(s1, k2):
                 i = (base + k) % 4
-                old = s1.A[i]
 
                 def ksc(x, s):
-                    s.A[i] = x if op == '=' else chks(old + x, s)
+                    s.A[i] = x if op == '=' else chks(s.A[i] + x, s)
                     return k2(None, s)
                 return ev(c[2], s1, ksc, mode)
             return th
@@ -2866,17 +2865,14 @@ def run_clauses(cl, st, k, mode):
         op = c[1]
         i = st.vars['J.C'] % 4
         st.vars['J.C'] += 1
-        old = st.A[i]
 
         def ksi(x, s):
-            s.A[i] = x if op == '=' else chks(old + x, s)
+            s.A[i] = x if op == '=' else chks(s.A[i] + x, s)
             return nxt(s)
         return ev(c[2], st, ksi, mode)
     if t == 'setf':
-        old = st.F
-
         def ksf(x, s):
-            s.F = old * x
+            s.F = s.F * x
             return nxt(s)
         return ev(c[1], st, ksf, mode)
     if t == 'print':

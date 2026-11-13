@@ -27,7 +27,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` an ASCII character other than a line break, a tab included, or an escape; a non-ASCII one, `'é'`, is a `char32`, Book of Verse ch. 1), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates), `float` `1.5`, `2.0e-7`, `1e3`, `12.34f64`, `1234f64` (digits, then a point and digits or an exponent or both, or the suffix `f64`, which may follow either; the nearest double, which must be finite: `2.0e308` is refused; `f32` and `f16` are read and refused as not supported); paths `/Verse.org/Random` parse (in `using{…}`, ignored; as values, refused; see [Source text](#source-text)) | §1.3–1.7 |
 | Types | `int`, `logic`, `char`, `char32`, `any` (see [any](#any)), `rational` (see [rational](#rational)), `float` (see [float](#float)), refinement types `type{_X:int where 0 <= _X, _X <= 120}` (see [Refinement types](#refinement-types)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void` (which takes any value; `tuple()` is the type of the empty value alone, see [Equality and the empty value](#equality-and-the-empty-value)), function types `type{_(:int)<decides>:int}`, with named parameters `type{_(:int, ?B:int):int}`, and `int->int` (see [Function values](#function-values)); type aliases `player_id := int`, `pair(t:type) := tuple(t, t)` (see [Type aliases](#type-aliases)); a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
 | Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e` / `C := e` (`C := e` names a type when `e` is one: [Type aliases](#type-aliases)) (definitions on one line, at the top level or in a module, are separated by `;` or `,`: `X:int=0, Y:int=0`; a constant may use one defined after it, but not itself, directly or through other constants); locals `X := e`, `X:t = e`, `var X:t = e`, and a tuple destructured, `(X:int, _, Z:string) = e` (each named element a local of the block, `_` skipping one, `e` evaluated once); no shadowing; no name defined twice in a scope but [overloaded](#overloading) functions; no [reserved name](#reserved-names) | §3.1–3.4 |
-| Mutation | `set X = e`, `set X += e` (`-=`, `*=`), `set A[i] = e` (fails out of range; returns `e`), and paths `set S.F.G = e`, `set A[i][j] op= e`, `set M[k].F = e`: indices and keys evaluated once, left to right, then the new value (for `op=`, after the old one is read: `set X += e` is `set X = X + e`), then the variable rebuilt; an index out of range or a missing intermediate key fails, while the last key of a path inserts | §3.3, §3.5, §9.3 |
+| Mutation | `set X = e`, `set X += e` (`-=`, `*=`), `set A[i] = e` (fails out of range; returns `e`), and paths `set S.F.G = e`, `set A[i][j] op= e`, `set M[k].F = e`: indices and keys evaluated once, left to right, then the new value, then the variable rebuilt (for `op=`, the old value is read after the new one, from the variable as the new one left it, which is then rebuilt from that: `set X += e` is `V := e; set X = X + V`, the Book's tests, `ArrayAppend.versetest` 140, 183); an index out of range or a missing intermediate key fails, while the last key of a path inserts | §3.3, §3.5, §9.3 |
 | Blocks | indented (`:`), braced (`{ }`), inline (`then`/`do`), `.` and an expression on its line wherever `:` or `{…}` may start a body (`if (c). e else. f`, `for (X:Xs). e`, `spawn. F()`, `loop. break`; also `option`, `logic`, and `array` and `map`, whose `:` blocks separate their items by `,`, `;` or new lines: `array:` and the lines `1`, `2`; in braces an array's elements are separated by commas, or by `;` and new lines, not both: `array{1; 2; 3}`), `block:`, `( a; b )` sequences, also as an argument (`F(Log(); 42)` passes 42) and as a `case`'s value (`case(a; b)`); `;` separates the items of a block and may end a line or a braced block (`{1; 2;}` is `{1; 2}`) (the next item then follows the line rules, so a class's last field may end in `;`); a body after `:` may be empty wherever one may be written, as `{}` may (`class:`, `struct:`, `then:`, … whose next line is no deeper than the construct, or nothing follows); a function's or method's braced body may put its `{` on the next line, at the definition's column; a value after `=`, `:=`, `set … =` or a `case` arm's `=>` that starts a later line, deeper, is the indented block of those lines (`Value :=` and the lines `1`, `2`, `3` is `3`), as a function's body is | §2.2–2.4 |
 | Operators | `* + -`, unary `-`, comparisons `= <> < <= > >=` (failable, return the left operand, chains check every pair; `=` and `<>` of any two comparable types, by value: see [Equality and the empty value](#equality-and-the-empty-value)), `and` (a scope of its own, ch. 7: names its left operand defines are visible on its right, and neither side's escape; `A and B and C` is `(A and B) and C`), `or`, `not` (below the comparisons, above `and`: `not X = Y` is `not (X = Y)`), `?`, `.Length`, `A[i]`, `T(k)` | ch. 4 |
 | Failure | failure contexts (`if` conditions, `for` clauses, `option{}`, `logic{}`, `not`, left of `or`, `<decides>` bodies) with rollback of `var` writes **and output**; an `if` condition, `logic{…}` and the operand of `not` must be able to fail (the Book's tests refuse `not` of one that cannot; the left of `or` may not, as in the Book's own `(set Map[I] = I) or Err()`) | ch. 8 |
@@ -1220,8 +1220,8 @@ Main():void =
   variable or path that `set` writes, else the join of the alternatives'
   types, as for `if`'s branches.
 - **`set L = a | b`** evaluates as `set` does: the indices of `L`'s path
-  first, then for `op=` the old value, then the choice, so each alternative
-  only runs the assignment. An alternative may have several values or
+  first, then the choice, so each alternative only runs the assignment (for
+  `op=`, reading the old value as that alternative finds it). An alternative may have several values or
   clauses of its own, as a binding's may (#283): `set A[I] = (1 | 2) * 10 | 9`
   sets `A[I]` to 10, 20, then 9.
 - **Where.** A choice is taken by an `if` condition, the clauses of a
@@ -1257,8 +1257,8 @@ Main():void =
   - every other operand before a choice is bound to a name first, so it is
     read where it is written, even if an alternative changes it (a `set`,
     or a method changing a field);
-  - `set L op= R` evaluates `L`'s indices, then for `op=` its old value, then
-    `R`'s lifted code, as `set` does. A choice or a call with several values
+  - `set L op= R` evaluates `L`'s indices, then `R`'s lifted code, then for
+    `op=` its old value, as `set` does. A choice or a call with several values
     in `L`'s indices is lifted there, first (#283): `for (set A[0 | 1] = 5)`
     sets `A[0]`, then `A[1]`, each index a generator. So does such a `set`
     inside `not (…)` or on the left of `or`, which take its first success
@@ -1704,8 +1704,8 @@ Main():void =
   it runs each time that alternative is taken, before that choice
   (`T(N - 1) | Tell("x", 1) + (1 | 2)`). A call of the function where the
   lifter takes a choice is a choice point there, in the same order: in a
-  comparison's later operand (`5 > T[N - 1]`), a `set`'s value after its
-  old value (`set K += T(N - 1)`, also as one alternative of a choice
+  comparison's later operand (`5 > T[N - 1]`), a `set`'s value, before its
+  old value is read (`set K += T(N - 1)`, also as one alternative of a choice
   there, `set K += (T(N - 1) | 5)`, or of a `var`'s initial value), a named
   argument (`Tw(1, ?B := T(N - 1))`), a struct's or a class's field in its
   type's order (a class's superclass's fields first), `and`'s operands. An

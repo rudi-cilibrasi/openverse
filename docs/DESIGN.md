@@ -131,8 +131,9 @@ not an `array{a₀, …}`, which would run `aₙ₋₁` before `a₀`'s value wa
 - **A choice or a call with several values in a `set`'s path** (#283), as
   `set A[0 | 1] = X`: `liftClauseM` binds the path's indices to names
   (`setPrefix`, as for a new value that needs code before it), lifts those
-  bindings in order (`Choice.pathHas` says when), then for `op=` reads the
-  old value, then lifts the new value: the order `set` evaluates them in.
+  bindings in order (`Choice.pathHas` says when), then lifts the new value;
+  the `set` itself then reads the old value, for `op=`: the order `set`
+  evaluates them in.
   An index's choice is then an ordinary binding, a generator in a `for`.
   When the clauses after such a choice have another one, so that the copies
   would double with each (#335), they become a function of their own,
@@ -961,8 +962,9 @@ code after it, which is its frame.
   the lifter binds it as it binds a choice), then decomposed again. A
   `set`'s or a `var`'s value that is a choice with such a call as one
   alternative, which the lifter keeps as a binding of its own, is bound
-  first as `normClauses` binds one (`setClauses`: the path's prefix, for
-  `op=` the old value, then the choice), as for the elaborator's clauses. The
+  first as `normClauses` binds one (`setClauses`: the path's prefix, then
+  the choice; for `op=` the `set` reads the old value after it), as for the
+  elaborator's clauses. The
   field orders of a struct's or a class's construction are the elaborator's,
   one definition (`TyEnv.fieldOrder`, which `choiceOrder` gives the lifter
   too: a class's superclass's fields first, then its interfaces', then its

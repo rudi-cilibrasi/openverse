@@ -1,3 +1,6 @@
+# set A.Child.Data[A.Key()] += A.RHS(): the key (which moves Child), then the object Child names,
+# then RHS (which replaces that object's Data and moves Child again), then the old value read from
+# the captured object's new Data
 leaf:=class{var Data:[]int=array{0,0}}
 ca:=class:
     var Child:leaf

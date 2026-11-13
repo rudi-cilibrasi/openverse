@@ -1,6 +1,6 @@
 # choice inside expressions (#208), review cases: a call's or an index's
 # head, a receiver and a field are read before the choice; set op= reads its
-# old value first; operands before a choice keep their expected types
+# old value after its new one; operands before a choice keep their expected types
 negative_percent := type{_X:float where -1.0 <= _X, _X <= 0.0}
 Arr():[]int =
     Print("arr")
@@ -20,7 +20,7 @@ counter := class:
         1
     Run():void =
         set N = 0
-        if (set N += Bump() + (0 | 1)) then Print("op= old value first: {N}")
+        if (set N += Bump() + (0 | 1)) then Print("op= new value first: {N}")
 TakeOpt(O:?int, X:int):int = X
 TakeArr(A:[]int, X:int):int = A.Length + X
 Id(X:t where t:type):t = X

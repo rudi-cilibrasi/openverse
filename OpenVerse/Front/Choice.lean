@@ -134,18 +134,16 @@ partial def hoistPath (q : Pos) (l : SExpr) (site : String := "") : List SExpr �
   (h, l')
 
 /-- `set L op= R` whose `R` needs code before it (a choice, or lifted
-    operands): `L`'s indices, then for `op=` its old value, then that code,
-    as `set` evaluates. `$withOld(O, R)` tells the elaborator that the old
-    value is already in `O`. The result: the clauses before, the old value's
-    name, and the path. -/
-def setPrefix (q : Pos) (l : SExpr) (op : Option String) (site : String := "") :
+    operands): `L`'s indices, then that code, as `set` evaluates; for `op=`
+    the old value is read after it, by the `set` itself (the Book of Verse's
+    tests, `ArrayAppend.versetest` 140, 183: the new value first). The
+    result: the clauses before, the old value's name (none: `$withOld(O, R)`,
+    which told the elaborator that the old value was already in `O`, is no
+    longer made here), and the path. -/
+def setPrefix (q : Pos) (l : SExpr) (_op : Option String) (site : String := "") :
     List SExpr × Option String × SExpr :=
   let (h, l') := hoistPath q l site
-  match op with
-  | none => (h, none, l')
-  | some _ =>
-    let o := madeName "o" site q
-    (h ++ [.decl q o none false l'], some o, l')
+  (h, none, l')
 
 /-- The new value of a `set` whose old one is in `o?`. -/
 def withOld (q : Pos) (o? : Option String) (r : SExpr) : SExpr :=
@@ -325,8 +323,9 @@ def orIf (site : String) : SExpr → SExpr
   | e => e
 
 /-- `set L op= a | b` with the choice bound first, as `set` evaluates (Book
-    of Verse §3.5): the indices of `L`'s path, then for `op=` the old value,
-    then the choice, so each alternative only runs the assignment. For `=`,
+    of Verse §3.5): the indices of `L`'s path, then the choice, so each
+    alternative only runs the assignment (for `op=`, reading the old value
+    as it is then). For `=`,
     the alternatives take `L`'s type; when one has something to lift (#283),
     by each running the assignment itself, the `set` its block's value, as
     a composed choice's alternatives are lifted one by one. -/
@@ -1034,8 +1033,8 @@ partial def liftClauseM (isVal : String → Bool) (isField : String → String �
     | .decl p x ty v rhs => .decl p x ty v (orIf site rhs)
     | .set p l op rhs => .set p l op (orIf site rhs)
     | c => c
-  -- (a `set`'s path's indices bound, then for `op=` its old value, as `set`
-  -- evaluates them before the new value, `setPrefix`; those clauses lifted
+  -- (a `set`'s path's indices bound, as `set` evaluates them before the new
+  -- value, `setPrefix`; those clauses lifted
   -- in turn when the indices have a choice or a call with several values
   -- to lift, #283)
   let setPrefixM (q : Pos) (l : SExpr) (op : Option String) : LM (List SExpr × Option String × SExpr) := do
@@ -1054,8 +1053,8 @@ partial def liftClauseM (isVal : String → Bool) (isField : String → String �
     let n := madeName "c" site p
     return h ++ [.decl p n none false (.app p (.ident p "$branchChoiceAt") [l', i] false), .set p l' none (.ident p n)]
   -- (#283) a `set` with a choice or a call with several values in its
-  -- path's indices: each index bound, lifted, in order, then for `op=` the
-  -- old value, then the new one's code, as `set` evaluates (before the
+  -- path's indices: each index bound, lifted, in order, then the new
+  -- value's code, as `set` evaluates (before the
   -- cases below, which take the path as it is)
   if let .set p l op rhs := c then
     if pathHas hasLiftable l then
@@ -1676,7 +1675,7 @@ partial def unmarkPoints : SExpr → SExpr :=
     the lifter lifts any clause (`liftClause`): its first statement with a
     point, or the code itself as a value, each point bound to a name of its
     own first, as the code evaluates it (a comparison's later operand, a
-    `set`'s value after its old value, a call's named argument, `and`'s
+    `set`'s value, a call's named argument, `and`'s
     operands, `or`'s right, a construction's field in its type's order). None
     when nothing is lifted: the point is where the lifter does not take it
     either (a condition, a loop), which takes it as a failure context's. -/
@@ -1690,7 +1689,7 @@ def liftPoints? (ops : ShapeOps) (a : SExpr) : Option SExpr := do
     | c => c
   -- (a `set`'s or a `var`'s value that is a choice with a point in an
   -- alternative bound first, as `normClauses` binds a choice: after the
-  -- path's prefix and the old value, for `op=`)
+  -- path's prefix)
   let lift (c : SExpr) : List SExpr :=
     (normClauses (liftClause isVal (fun _ _ => false) (markPoints ops.isCall c) (fieldOrder := ops.fieldOrder))).map
       (whole ∘ unmarkPoints)

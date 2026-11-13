@@ -1,14 +1,13 @@
-rhs
-direct= 7
-rhs
-direct+= 7
-plain direct+= 7
-rhs
-path+= 7
-plain path+= 7
-swap
-swap: old 3 new 0
-idx
-rhs
-arr 7
+var 101
+array var 2 0 42
+struct field 2 0
+struct other field 9 3
+map entry 2 0
+array element 60 60
+object field 21
+object path 8 10
+index
+value
+indexed 4
+missing key 1
 exit=0

@@ -1,3 +1,5 @@
+# set A.Data?[A.Key()] += A.RHS(): the key, then RHS, which replaces the option, then the old value
+# read from the new one
 cell:=class{var N:int=0}
 ca:=class:
     H:cell
@@ -16,4 +18,4 @@ Main():void=
     Q:=cb{H:=H}
     Rows:=for(A:=(Dup(P)|Dup(Q)),V:=set A.Data?[A.Key()]+=A.RHS()):block{Print("body {V} {H.N}");V}
     Print("done {Rows.Length} {H.N}")
-    if(P.Data?[0]=15,Q.Data?[0]=24,P.Data?[1]=40,Q.Data?[1]=40)then Print("state ok") else Print("bad state")
+    if(P.Data?[0]=37,Q.Data?[0]=37,P.Data?[1]=40,Q.Data?[1]=40)then Print("state ok") else Print("bad state")

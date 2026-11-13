@@ -199,8 +199,10 @@ partial def elabExprInitialWith
       [shape, dictionary, .ident p "$choiceIndexKey", .ident p "$choiceIndexObject",
         .ident p "$choiceIndexOld", .ident p "$choiceIndexRHS"] bracket
     let result ← elabE final invocation exp
+    -- (the key and the object, then the new value, then the old one read:
+    -- `set P op= e` evaluates e before it reads P)
     return ⟨.seq (.assign keySlot keyValue) (.seq (.assign objectSlot objectValue)
-      (.seq checked.e (.seq (.assign oldSlot oldValue) (.seq (.assign rhsSlot rhsValue) result.e)))), result.ty⟩
+      (.seq (.assign rhsSlot rhsValue) (.seq checked.e (.seq (.assign oldSlot oldValue) result.e)))), result.ty⟩
   | .app p (.ident _ "$choiceOperation") (.str _ [.text shape] :: .ident _ name :: values) bracket =>
     let some dictionary := ctx.lookup name | eerr p "internal: no operation dictionary"
     let .struct family types := dictionary.ty | eerr p "internal: invalid operation dictionary"

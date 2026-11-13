@@ -1,3 +1,5 @@
+# set A.State.X += A.RHS(E), whose RHS waits and then replaces State: the old value is read after it
+# returns; a cancelled one stores nothing
 cell:=class{var N:int=0}
 sa:=struct{X:int;Tail:int}
 sb:=struct{X:rational;Tail:int}
@@ -65,4 +67,4 @@ Main()<suspends>:void=
         Print("signal 4")
         Result:=T.Await()
         Print("done {Result} {H2.N}")
-        if(P2.State.X=4,P2.State.Tail=200,Q2.State.X=15/2,Q2.State.Tail=200)then Print("state ok") else Print("bad state")
+        if(P2.State.X=102,P2.State.Tail=200,Q2.State.X=104,Q2.State.Tail=200)then Print("state ok") else Print("bad state")

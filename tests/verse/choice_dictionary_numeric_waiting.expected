@@ -4,7 +4,7 @@ leave a
 body 2
 leave b
 source 2
-done -1 7 0
+done -1 103 0
 ratio ok
 leave a
 body 1
@@ -15,6 +15,6 @@ body 3
 leave b
 body 4
 source 4
-done 4 7 6
+done 4 103 103
 ratio ok
 exit=0

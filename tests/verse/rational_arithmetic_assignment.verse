@@ -7,10 +7,11 @@ Rhs(C:cell):rational=
 Main():void=
     if(A:=1/2):
         C:=cell{R:=A}
+        # (Rhs first, then the old value it left: 100 + 1)
         set C.R+=Rhs(C)
-        Check("saved",C.R,3,2)
+        Check("after rhs",C.R,101,1)
         set C.R-=1
         set C.R*=2
-        Check("one",C.R,1,1)
-        if(set C.R/=0)then Print("bad")else Check("rollback",C.R,1,1)
-        if(set C.R/=2)then Check("half",C.R,1,2)else Print("bad")
+        Check("two hundred",C.R,200,1)
+        if(set C.R/=0)then Print("bad")else Check("rollback",C.R,200,1)
+        if(set C.R/=2)then Check("half",C.R,100,1)else Print("bad")

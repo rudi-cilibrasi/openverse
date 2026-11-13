@@ -77,6 +77,28 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     | "/", .float, .float => pure (p2 .fdiv old new.e)
     | "/", .int, _ => eerr p "set /= is not defined on int (integer division can fail)"
     | _, _, _ => eerr p s!"no operator '{o}=' for {ty.show} and {new.ty.show}"
+  -- (a literal or a variable's value: no effect, so evaluating it before or
+  -- after the old value is read is one thing)
+  let trivialRhs (r : R) : Bool := match r.e with
+    | .lit _ | .local _ => true
+    | _ => false
+  -- (code that writes nothing, calls nothing and prints nothing: before or
+  -- after a read that cannot fail, it is one thing)
+  let rec effectFree : Expr → Bool
+    | .lit _ | .local _ => true
+    | .prim .userErr _ => false
+    | .prim _ args => args.all effectFree
+    | .seq a b => effectFree a && effectFree b
+    | .ite c t e => effectFree c && effectFree t && effectFree e
+    | _ => false
+  -- (for `op=`: the new value computed first, into a slot, so that the old
+  -- one is read after it; the code that does it, and the value as read.
+  -- `readFails`: the old value's read can fail, so an effect-free value is
+  -- still computed first, as its error or failure is then the one seen)
+  let rhsFirst (r : R) (readFails : Bool := true) : EM ((Expr → Expr) × R) := do
+    if preloaded || oldIn.isSome || trivialRhs r || (!readFails && effectFree r.e) then return (id, r)
+    let tr ← fresh r.ty
+    return ((Expr.seq (.assign tr r.e) ·), ⟨.local tr, r.ty⟩)
   let mutableLocal (n : String) : EM Local := do
     match ctx.lookup n with
     | some l => if l.mutable then pure l else eerr p s!"'{n}' is not a var; declare it with var {n}:t = …"
@@ -231,9 +253,25 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
       | some o => discard <| combine (.prim .userErr []) leafTy o r
       let tu ← fresh leafTy
       return ⟨pre.toList.foldr Expr.seq (.assign tu (.prim .userErr [])), leafTy⟩
+    -- `set P op= e` evaluates e right after P's indices and keys (with an
+    -- object on P, once P has reached it, below), before P's value is read:
+    -- P's old value is read after e, and P rebuilt from what e left (the
+    -- Book of Verse's tests: `ArrayAppend.versetest` 140, 183 expect e
+    -- first; then it is `set P = P op v`, v e's value)
+    -- (a literal or a variable's value has no effect, so it is evaluated
+    -- where it was before, `early`, and the program keeps its code)
+    let mut rhsVal : Option R := none
+    let mut early : Option R := none
+    if op.isSome && !preloaded && refLevel?.isNone then
+      let r ← rhsAt leafTy
+      if trivialRhs r then early := some r else
+        let tr ← fresh r.ty
+        pre := pre.push (.assign tr r.e)
+        rhsVal := some ⟨.local tr, r.ty⟩
     -- the intermediate containers: level 0 is a copy of the variable, taken
-    -- after the indices, so that the right-hand side cannot change what is
-    -- rebuilt (as for `set A[i] = e`); the variable is written once, last
+    -- after the indices (and for `op=` the new value), so that the right-hand
+    -- side of `=` cannot change what is rebuilt (as for `set A[i] = e`); the
+    -- variable is written once, last
     let c0 ← fresh l.ty
     pre := pre.push (.assign c0 (.local l.slot))
     cur := c0
@@ -245,7 +283,6 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     let rhsAfter : Nat := match refLevel? with
       | some kr => kr
       | none => stepsA.size
-    let mut rhsVal : Option R := none
     let mut oldLeaf : Option Nat := none
     for k in [0:stepsA.size] do
       let (sp, f?, _) := stepsA[k]!
@@ -253,12 +290,13 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
       pre := pre ++ before.toArray
       cur := viewed
       levels := levels.push (cur, tys[k]!, sp, f?, keys[k]!)
-      if k == rhsAfter then
-        -- `set P op= e` reads P before e, as the direct form does (Book of
-        -- Verse: `set X += e` is `set X = X + e`; #58): the rest of the path,
-        -- read now, gives the old leaf (it fails as `P` would, and is read
-        -- again for the rebuild below)
-        if op.isSome && !preloaded then
+      if k == rhsAfter && rhsVal.isNone then
+        -- (with an object on P, e runs here, once P has reached it: the
+        -- object is the one P names before e, its values read after e; an
+        -- `op=` whose value has no effect reads the rest of the path, the
+        -- old leaf, first, as e cannot change it)
+        let r ← rhsAt leafTy
+        if op.isSome && !preloaded && trivialRhs r then
           let mut c2 := cur
           for k2 in [k:stepsA.size] do
             if k2 > k then
@@ -271,7 +309,6 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
             pre := pre.push (.assign c3 (← readStep c2 tys[k2]! f2 keys[k2]!))
             c2 := c3
           oldLeaf := some c2
-        let r ← rhsAt leafTy
         let tr ← fresh r.ty
         pre := pre.push (.assign tr r.e)
         rhsVal := some ⟨.local tr, r.ty⟩
@@ -283,9 +320,9 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     -- a last `?` step also needs the option to be set
     if lf == some "?" then pre := pre.push (.seq (.prim .query [.local lc]) (.lit .void))
     -- the new leaf value
-    let r ← match rhsVal with
-      | some r => pure r
-      | none => rhsAt leafTy
+    let r ← match rhsVal, early with
+      | some r, _ | none, some r => pure r
+      | none, none => rhsAt leafTy
     let leaf ← match op with
       | none => coerce p r leafTy
       | some o =>
@@ -335,10 +372,12 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
   | .ident _ n =>
     let l ← mutableLocal n
     let r ← rhsAt l.ty
-    let v ← match op with
-      | none => coerce p r l.ty
-      | some o => combine (.local l.slot) l.ty o r
-    return ⟨.assign l.slot v, l.ty⟩
+    match op with
+    | none => return ⟨.assign l.slot (← coerce p r l.ty), l.ty⟩
+    | some o =>
+      -- (e, then the old value read: `set X op= e` is `set X = X op v`)
+      let (first, r) ← rhsFirst r (readFails := false)
+      return ⟨first (.assign l.slot (← combine (.local l.slot) l.ty o r)), l.ty⟩
   | .app _ (.ident _ n) [k] true =>
     let l ← mutableLocal n
     match l.ty with
@@ -347,15 +386,17 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
       let tk ← fresh kt
       let tp ← fresh (.tup [kt, vt])
       let r ← rhsAt vt
+      let (first, r) ← if op.isSome then rhsFirst r else pure (id, r)
       let v ← match op with
         | none => coerce p r vt
-        -- `set M[k] op= v` fails when k is not a key (Book of Verse §9.3)
+        -- `set M[k] op= v` fails when k is not a key (Book of Verse §9.3),
+        -- read after v
         | some o => combine (mapLookup l.slot tk tp) vt o r
       let tv ← fresh vt
       let ti ← fresh .int
       let tidx ← fresh .int
-      return ⟨.seq (.assign tk (← coerce p rk kt)) (.seq (.assign tv v)
-        (.seq (mapPut l.slot tk tv ti tidx) (.local tv))), vt⟩
+      return ⟨.seq (.assign tk (← coerce p rk kt)) (first (.seq (.assign tv v)
+        (.seq (mapPut l.slot tk tv ti tidx) (.local tv)))), vt⟩
     | .arr t =>
       let i := k
       let ri := widenR ctx.types (← elabE ctx i (some .int))
@@ -363,12 +404,13 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
       let ti ← fresh .int
       let tv ← fresh t
       let r ← rhsAt t
+      let (first, r) ← if op.isSome then rhsFirst r else pure (id, r)
       let v ← match op with
         | none => coerce p r t
         | some o => combine (p2 .index (.local l.slot) (.local ti)) t o r
       -- `set A[i] = v` fails out of range and returns `v` (Book of Verse §3.3)
       return ⟨.seq (.assign ti ri.e)
-        (.seq (.assign l.slot (.prim .arrSet [.local l.slot, .local ti, .assign tv v])) (.local tv)), t⟩
+        (first (.seq (.assign l.slot (.prim .arrSet [.local l.slot, .local ti, .assign tv v])) (.local tv))), t⟩
     | ty => eerr p s!"cannot index a value of type {ty.show}"
   | .member _ (.ident _ n) f =>
     -- an object's field: written in place, through any variable (#34)
@@ -381,11 +423,12 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
           if !ctx.types.isVarField sn f then eerr p (classSetMsg sn f)
           let r ← rhsAt t
           noteFx p (if op.isSome then ["reads", "writes"] else ["writes"])
+          let (first, r) ← if op.isSome then rhsFirst r (readFails := false) else pure (id, r)
           let v ← match op with
             | none => coerce p r t
-            -- (the current value, read as a read does)
+            -- (the current value, read as a read does, after the new one)
             | some o => combine (← elabMember ctx p ⟨.local l.slot, l.ty⟩ f).e t o r
-          return ⟨← setFieldAt ctx.types p sn targs l.slot f k t v, t⟩
+          return ⟨first (← setFieldAt ctx.types p sn targs l.slot f k t v), t⟩
     if let some l := ctx.lookup n then
       if let .struct sn targs := l.ty then
         if ctx.types.isEmptyClass sn then
@@ -403,6 +446,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
       match fieldIndex fs f with
       | some (k, t) =>
         let r ← rhsAt t
+        let (first, r) ← if op.isSome then rhsFirst r (readFails := false) else pure (id, r)
         let v ← match op with
           | none => coerce p r t
           | some o => combine (.prim (.tupGet k) [.local l.slot]) t o r
@@ -410,7 +454,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         -- the struct is rebuilt with field k replaced; `set` returns the new field value
         let parts := (List.range fs.length).map fun i =>
           if i == k then Expr.assign tv v else Expr.prim (.tupGet i) [.local l.slot]
-        return ⟨.seq (.assign l.slot (.prim .mkTup parts)) (.local tv), t⟩
+        return ⟨first (.seq (.assign l.slot (.prim .mkTup parts)) (.local tv)), t⟩
       | none => eerr p s!"struct {sn} has no field '{f}'"
     | ty => eerr p s!"{ty.show} has no field '{f}'"
   | _ => eerr p "openverse supports set X = …, and set on a path of fields, indices and keys from a variable (set S.F[i].G = …); not through a tuple element or a call result"

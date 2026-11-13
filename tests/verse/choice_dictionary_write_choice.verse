@@ -1,4 +1,4 @@
-# Both RHS alternatives use the value saved before that choice.
+# Each RHS alternative runs first, then reads the old value, as the previous alternative left it.
 ca:=class{var K:int=1}
 cb:=class{var K:int=2}
 Dup(X:t where t:type)<computes>:t=X|X

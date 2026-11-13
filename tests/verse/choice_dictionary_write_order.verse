@@ -1,4 +1,4 @@
-# Compound assignment reads its old value before the RHS mutates that field.
+# Compound assignment reads its old value after the RHS, which mutates that field (the Book's order).
 base:=class:
     var K:int
     Change()<transacts>:int=block{set K=100;3}

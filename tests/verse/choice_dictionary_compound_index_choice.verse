@@ -1,3 +1,5 @@
+# set A.Data[K] += (1|2): the key once, then each alternative, which reads the old value after it,
+# as the previous alternative left it
 cell:=class{var N:int=0}
 Index(H:cell)<transacts>:int=block{Print("key");set H.N+=1;0}
 ca:=class{var Data:[]int=array{1}}
