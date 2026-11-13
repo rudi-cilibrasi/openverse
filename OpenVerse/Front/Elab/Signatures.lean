@@ -221,6 +221,129 @@ structure Signatures where
 /-- Every signature: the functions' and constants', then the generic functions'. -/
 def Signatures.all (s : Signatures) : List Sig := s.sigs.toList ++ s.gsigs.toList
 
+/-- Constant types and effects (#35), a phase of `elabProgramCore`: the type of
+    each unannotated constant, inferred in rounds so that one may use one
+    defined after it (the first still unknown refused); and the heap effects of
+    constants, of `block:`s, of the defaults an overloaded constructor fills
+    in (#99) and of bridges, inferred in rounds from none, as they use each
+    other. -/
+def inferSignatures (env : TyEnv) (declared : Declared) (requests : Requests) :
+    Except String Signatures := do
+  let mut sigs := declared.sigs
+  let mut gsigs := declared.gsigs
+  -- A cast discovered before a default helper must acquire the helper
+  -- effects once its body is known, before checking the source caller.
+  let inferredBridge (n : String) := defaultBridge n || requests.casts.any (·.name == n)
+  let mkSigProg (sigs : Array Sig) : Prog :=
+    { fns := (sigs ++ gsigs).toList.map fun s =>
+        { name := s.name, arity := s.frame.arity, nslots := 0,
+          decides := s.decides, writes := s.fx.contains "writes", body := .lit .void },
+      main := 0 }
+  -- infer the types of unannotated constants: in order, in rounds, so that a
+  -- constant may use one defined after it (until a round makes no progress)
+  let unannotated := (declared.tops.zip (List.range declared.tops.length)).filter fun
+    | (.const _ _ none _, _) => true
+    | _ => false
+  let mut todo := unannotated
+  for _ in [0:unannotated.length + 1] do
+    let mut left := #[]
+    for (top, idx) in todo do
+      match top with
+      | .const _ _ _ body =>
+        let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env }
+        match (elabE ctx body none).run { env } with
+        | .ok (r, _) =>
+          if r.ty == .never then left := left.push (top, idx)
+          else sigs := sigs.set! idx { sigs[idx]! with ret := r.ty }
+        | .error _ => left := left.push (top, idx)
+      | _ => pure ()
+    if left.size == todo.length then break
+    todo := left.toList
+  -- the first constant still unknown gives its own error
+  for (top, _) in todo do
+    match top with
+    | .const p n _ body =>
+      let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env }
+      let (r, _) ← (elabE ctx body none).run { env }
+      if r.ty == .never then throw s!"{p.show}: cannot infer the type of '{n}'"
+    | _ => pure ()
+  -- the heap effects of a constant are those of its initialiser (#35), which
+  -- runs at each use: in rounds, from none, since constants use each other
+  for _ in [0:declared.tops.length + declared.generics.length + 1] do
+    let mut changed := false
+    for (top, idx) in declared.tops.zip (List.range declared.tops.length) do
+      match top with
+      | .const _ _ _ body =>
+        let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env }
+        match elabBody ctx body (some sigs[idx]!.ret) { env } with
+        | .ok (_, st) =>
+          let fx := heapFx.filter fun k => st.fx.any (·.1 == k)
+          if fx != sigs[idx]!.fx then
+            sigs := sigs.set! idx { sigs[idx]! with fx }
+            changed := true
+        | .error _ => pure ()
+      -- a class's `block:` clauses have the effects of their code, and so
+      -- does a default an overloaded constructor fills in (#99)
+      | .fn p n ps _ _ _ body =>
+        if (n.splitOn "$default$").length > 1 then
+          let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env }
+          match elabBody ctx body (some sigs[idx]!.ret) { env } with
+          | .ok (_, st) =>
+            let fx := heapFx.filter fun k => st.fx.any (·.1 == k)
+            if fx != sigs[idx]!.fx then
+              sigs := sigs.set! idx { sigs[idx]! with fx }
+              changed := true
+          | .error _ => pure ()
+        else if n.endsWith ".$block" || inferredBridge n then
+          let s := sigs[idx]!
+          let locals := (ps.zip (List.range ps.length)).zip s.params |>.map fun ((prm, i), t) =>
+            ({ name := prm.name, slot := i, ty := t, mutable := false, typeValue := prm.typeValue } : Local)
+          let base : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env,
+                              locals := locals.reverse, retTy := s.ret, canFail := s.decides, suspends := s.suspends, fnFx := s.fx }
+          let ctx ← functionBodyCtx requests base p n s.tparams s.scope
+          match elabBody ctx body (some s.ret) { env, nslots := ps.length, slotTys := s.params.toArray, frameSlots := ctx.locals.filterMap fun l => l.storage.map (l.slot, ·) } with
+          | .ok (_, st) =>
+            let fx := heapFx.filter fun k => st.fx.any (·.1 == k) ||
+              (requests.casts.any (·.name == n) && s.fx.contains k)
+            if fx != s.fx then
+              sigs := sigs.set! idx { s with fx }
+              changed := true
+          | .error _ => pure ()
+      | _ => pure ()
+    -- and so do those of a parametric class, generic (#39)
+    for (top, gi) in declared.generics.zip (List.range declared.generics.length) do
+      match top with
+      | .fn p n ps _ _ _ body =>
+        if n.endsWith ".$block" || inferredBridge n then
+          let g := gsigs[gi]!
+          let locals := (ps.zip (List.range ps.length)).zip g.params |>.map fun ((prm, i), t) =>
+            ({ name := prm.name, slot := i, ty := t, mutable := false, typeValue := prm.typeValue } : Local)
+          let locals := locals ++ g.evidenceLocals
+          let dictTps := g.tparams.filter (fun (v, _) => !g.selfTps.contains v) ++
+            g.tparams.filter (fun (v, _) => g.selfTps.contains v)
+          let hidden := g.frame.hiddenTypes
+          let lifted := requests.casts.find? (·.name == n)
+          let selfField (v : String) := match lifted with
+            | some l => (l.opened.lookup v).bind (env.witnessField? l.target ·)
+            | none => env.witnessField? ((n.splitOn ".").headD "") v
+          let genv := { g.typeEnv env with dictOrder := dictTps.map (·.1), selfWitness := g.selfTps.map fun v => (v, (selfField v).getD 0) }
+          let base : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := genv,
+                              locals := locals.reverse, retTy := g.ret, canFail := g.decides, suspends := g.suspends,
+                              dictBase := g.frame.witnessBase, dictVars := dictTps.map (·.1), fnFx := g.fx }
+          let ctx ← functionBodyCtx requests base p n g.tparams g.scope
+          match elabBody ctx body (some g.ret)
+              { env := genv, nslots := ps.length + hidden.length, slotTys := (g.params ++ hidden).toArray, frameSlots := ctx.locals.filterMap fun l => l.storage.map (l.slot, ·) } with
+          | .ok (_, st) =>
+            let fx := heapFx.filter fun k => st.fx.any (·.1 == k) ||
+              (requests.casts.any (·.name == n) && g.fx.contains k)
+            if fx != g.fx then
+              gsigs := gsigs.set! gi { g with fx }
+              changed := true
+          | .error _ => pure ()
+      | _ => pure ()
+    if !changed then break
+  return { tops := declared.tops, generics := declared.generics, sigs, gsigs, prog := mkSigProg sigs }
+
 /-- The signature checks, a phase of `elabProgramCore`: the overloads of a
     function take parameters no call fits two of (Book of Verse ch. 6), and so
     do the overloads of a method a class sees (#106); an override has the
