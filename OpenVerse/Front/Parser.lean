@@ -194,11 +194,14 @@ partial def parseSpecs : PM (List String) := do
 def cmpOps : List String := ["=", "<>", "<", "<=", ">", ">="]
 
 /-- At a `(` (the token `off` ahead): the qualifier of `(i:)M`, `(M.i:)M`
-    (#70, #112), `(e:)v` or `(local:)X`, if one starts there, and how many
-    tokens it takes (through the `:)`). What it names is `resolveModules`'
-    to decide. -/
+    (#70, #112), `(local:)X` or a path's `(/a/b:)X`, if one starts there, and
+    how many tokens it takes (through the `:)`). What it names is
+    `resolveModules`' to decide. -/
 def peekQual (off : Nat := 0) : PM (Option (String × Nat)) := do
   if !(← peekT off).isSym "(" then return none
+  if let .path q := (← peekT (off + 1)).tok then
+    if (← peekT (off + 2)).isSym ":" && (← peekT (off + 3)).isSym ")" then return some (q, 4)
+    return none
   let some q0 := (← peekT (off + 1)).identName? | return none
   let mut q := q0
   let mut k := 2
@@ -262,6 +265,12 @@ partial def parseTypeAtom : PM STy := do
     let ty ← parseFnSig
     expectSym "}"
     return ty
+  -- `(/Verse.org/Verse:)int`: a type a path qualifies, `(/p:)c`
+  if t.isSym "(" then
+    if let .path q := (← peekT 1).tok then
+      if (← peekT 2).isSym ":" && (← peekT 3).isSym ")" && ((← peekT 4).identName?).isSome then
+        for _ in [0:4] do bump
+        return .name s!"({q}:){← expectIdent}"
   -- `(M:)c`: the type `M.c` (#147)
   if t.isSym "(" && ((← peekT 1).identName?).isSome then
     let mut q := ((← peekT 1).identName?).getD ""
@@ -1164,8 +1173,8 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
       return .member t.pos (.ident t.pos "(super:)") (← expectIdent)
     if let some (q, k) ← peekQual then
       -- `(q:)x`: `Self.(q:)x`, which `resolveModules` reads by what `q`
-      -- names: a module's member, a local, an enum's value, or a qualified
-      -- member of the current object (#70)
+      -- names: a module's member, a local, a built-in, an enum's value, or
+      -- a qualified member of the current object (#70)
       for _ in [0:k] do bump
       let m ← expectQualifiedName
       -- (`(M:)c{…}`: a construction of the module's `c`, #147)
@@ -1884,8 +1893,8 @@ def textUsesRational (src : String) : Bool :=
 def replaceAllMarker : String := "$uses:replaceAll"
 
 /-- Whether the source writes a qualifier other than `(super:)`: `(`, a
-    name, `.` and names, then `:)` (`peekQual`'s shape), also in a string's
-    interpolations. -/
+    name, `.` and names, or a path, then `:)` (`peekQual`'s shape), also in
+    a string's interpolations. -/
 partial def usesQualifiers (toks : Array Token) : Bool := Id.run do
   for i in [0:toks.size] do
     if let .str parts := toks[i]!.tok then
@@ -1896,6 +1905,7 @@ partial def usesQualifiers (toks : Array Token) : Bool := Id.run do
     if !toks[i]!.isSym "(" then continue
     let mut k := i + 1
     match (toks[k]?.map (·.tok) : Option Tok) with
+    | some (.path _) => k := k + 1
     | some (.ident x) =>
       if x == "super" || keywords.contains x then continue
       k := k + 1

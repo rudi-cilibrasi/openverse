@@ -25,9 +25,9 @@
   A qualifier `(q:)` names a scope, and every one written goes through one
   resolver (`Qual`, `Resolver.qualifier`): `q` is found as a name is (a
   module, then its submodules, or a class, interface, struct or enum),
-  `local` is the locals of the code it is written in, and `super` the
-  implementation above a method. A qualified name is looked up in exactly
-  that scope: `(M:)F`
+  `local` is the locals of the code it is written in, `super` the
+  implementation above a method, and the path `/Verse.org/Verse` openverse's
+  built-in types. A qualified name is looked up in exactly that scope: `(M:)F`
   is `M`'s `F`, `(local:)X` a local, `(e:)v` the enum's value; a class's
   `(c:)M` is left for the elaboration of classes, which knows what each
   class introduces. A qualified definition's qualifier names where it is
@@ -65,6 +65,12 @@ partial def SExpr.identPath : SExpr → Option (List String)
   | .member _ e m => (e.identPath).map (· ++ [m])
   | _ => none
 
+/-- The built-in types: the names openverse stands in for `/Verse.org/Verse`
+    with (Book of Verse ch. 16, "Automatic Qualification": `int` is
+    `(/Verse.org/Verse:)int`). -/
+def builtinTypes : List String :=
+  ["int", "logic", "char", "char32", "string", "void", "float", "rational", "any"]
+
 /-- What a qualifier `(q:)` names (docs/research/qualified-names.md). -/
 inductive Qual where
   /-- A module, by its parts: its members (`start`: how many of the parts
@@ -77,6 +83,8 @@ inductive Qual where
   | locals
   /-- `(super:)`: the implementation above a method (the elaborator's). -/
   | super
+  /-- `/Verse.org/Verse`: the built-in types. -/
+  | builtins
 
 /-- How the names of one scope resolve: values, binders (refused when they
     would shadow a member), type names, paths `A.B.F`, qualifiers, and the
@@ -193,6 +201,9 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
           | some true => return .ident p s!"(local:){f}"
           | some false => return .ident p f
           | none => throw s!"{p.show}: (local:){f}: there is no local {f} here (a parameter, or a definition before this use in the enclosing code)"
+        | .builtins =>
+          if builtinTypes.contains f then return .ident p f
+          throw s!"{p.show}: ({q}:){f}: openverse stands in for {q} with its built-in types ({", ".intercalate builtinTypes}) only"
         | .super => return .member p x m
         | .type c =>
           -- (an enum's value, `e.v`; a field of `Self` its class, or one
@@ -332,6 +343,8 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
         | some (q, m) =>
           if q == "local" then
             throw s!"{p.show}: using\{(local:){m}}: (local:) qualifies a function's locals, and a using names a module"
+          if q.startsWith "/" then
+            throw s!"{p.show}: using\{({q}:){m}}: openverse has no module at the path {q}"
           let qs := q.splitOn "."
           pure (qs.headD q, qs.drop 1 ++ m :: comps.drop 1)
         | none => pure (head, comps.drop 1)
@@ -420,13 +433,26 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
       | some qn => return qn
       | none => throw s!"{p.show}: unknown type '{n}'"
     resolve "type" sc p n
-  -- what a qualifier names from scope `sc`: `local`, `super`, else a
-  -- module (then its submodules) or a type, found as a name is
+  -- what a qualifier names from scope `sc`: `local`, `super`, the path of
+  -- the built-ins, else a module (then its submodules) or a type, found as
+  -- a name is
   let qualifier (sc excl : List String) (p : Pos) (q : String) : Except String Qual := do
     if q == "local" then return .locals
     if q == "super" then return .super
+    if q.startsWith "/" then
+      if q == "/Verse.org/Verse" then return .builtins
+      throw s!"{p.show}: ({q}:): openverse has no module at the path {q}: it stands in for /Verse.org/Verse with its built-in types, and for no other package (a module of the program is named by its name, M or A.B, not by a path)"
     if let some (path, start) ← modulePath sc p (q.splitOn ".") then return .module path start
     return .type (← tyName sc excl p q)
+  -- a type written with a path qualifier, `(/Verse.org/Verse:)int`
+  let tyNameQ (sc excl : List String) (p : Pos) (n : String) : Except String String := do
+    if let some (q, c) := splitQual? n then
+      match ← qualifier sc excl p q with
+      | .builtins =>
+        if builtinTypes.contains c then return c
+        throw s!"{p.show}: ({q}:){c}: openverse stands in for {q} with its built-in types ({", ".intercalate builtinTypes}) only"
+      | _ => throw s!"{p.show}: ({q}:){c}: a type is qualified with the module that defines it"
+    tyName sc excl p n
   let scopeOf (n : String) : List String := (qualParts n).dropLast
   -- each class's parents, its members the anti-shadowing check reads (its
   -- own, unqualified), all its members as a use names them bare, and the
@@ -434,7 +460,7 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
   let classInfo : List (String × List String × List String × List String × List String × List String) ← real.filterMapM fun
     | .classDef p n tps _ parents _ fields ovs methods => do
       let ps ← parents.mapM fun t => do
-        match ← t.mapNamesM (tyName (scopeOf n) (tps.map (·.name)) p) with
+        match ← t.mapNamesM (tyNameQ (scopeOf n) (tps.map (·.name)) p) with
         | .name q | .app q _ => pure q
         | _ => pure ""
       let own := fields.map (·.1) ++ methods.filterMap fun
@@ -479,7 +505,7 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
     | _ => none)
   let rAt (sc excl : List String) (self : Option String := none) : Resolver :=
     let members := (self.map allMembersOf).getD []
-    { val := resolve "value" sc, bind := bind sc, ty := tyName sc excl, qual := qual sc,
+    { val := resolve "value" sc, bind := bind sc, ty := tyNameQ sc excl, qual := qual sc,
       qualifier := qualifier sc excl,
       modulePath := modulePath sc, memberOf := memberOf sc,
       outer := fun p n => members.contains n || match find sc p n with
