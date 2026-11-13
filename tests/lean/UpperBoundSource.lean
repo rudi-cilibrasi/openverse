@@ -55,7 +55,7 @@ def main (args : List String) : IO Unit := do
   let containers := ["container-view-basic", "container-view-basic-control",
     "container-view-state", "container-view-state-control", "container-view-waiting", "container-view-waiting-control",
     "container-view-generic", "container-view-generic-control", "container-view-interior", "container-view-interior-control",
-    "container-view-concat", "container-view-concat-control"]
+    "container-view-concat", "container-view-concat-control", "container-view-numeric", "container-view-numeric-control"]
   let iterators := ["container-view-iteration", "container-view-iteration-control",
     "container-view-iteration-state", "container-view-iteration-state-control"]
   let operators := ["bound-array-join", "bound-array-join-control",
