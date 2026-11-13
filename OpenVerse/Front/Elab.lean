@@ -38,6 +38,76 @@ structure ElaboratedFn where
   /-- (#515) Its calls in failure contexts (`ESt.failCalls`). -/
   failCalls : Array ((Pos × String) × List Nat)
 
+/-- A program as the lowering leaves it (`lowerProgram`), before `certify`:
+    its Verse Core functions, their signatures with the class table, the
+    prototypes and the classes' pins (`Sigs`), and each function's slot types. -/
+structure LoweredProgram where
+  prog : Prog
+  sigs : Sigs
+  slotTys : Array (List VTy)
+
+/-- Certification, the last phase of `elabProgramCore`: the lowered program is
+    given out with its certificate (`Compiled`) only if no call in it names a
+    family's stub (#283), and it passes `Prog.check`, `Prog.checkControl` and
+    `Prog.checkTypes` under its signatures and slot types. A program that does
+    not is an elaborator bug, refused as an internal error that names what
+    fails (with `debug`, the function's Verse Core too, for a bug report). -/
+def certify (lowered : LoweredProgram) (stubs : List (String × Pos)) (debug : Bool) :
+    Except String Compiled := do
+  let P := lowered.prog
+  let S := lowered.sigs
+  let slotTys := lowered.slotTys
+  -- (#283) no call names a family's stub (`Choice.familyStub`), whose body
+  -- is `Err()`: each call of a method of the family was rewritten not to be
+  -- one, and a stub has no value (`FnValues`). Verse Core has no calls but
+  -- those naming their function (dispatch is a test of the class, then a
+  -- call), so whatever code made them, no stub runs
+  for fn in P.fns do
+    for (g, _) in Suspend.callsOf fn.body do
+      if let some q := (P.fns[g]?).bind fun callee => stubs.lookup callee.name then
+        throw s!"{q.show}: {Choice.shownFnName P.fns[g]!.name} has several values, but a call of it in {Choice.shownFnName fn.name} is compiled as one of a method of one value, where its receiver's class was not known: not supported yet (#283)"
+  if !P.check then
+    let bad := P.fns.filter fun fn => (!fn.decides && fn.body.mayFail P) ||
+      (!fn.writes && fn.body.writesHeap P) || !(fn.body.scoped P fn.nslots)
+    throw s!"internal error: the elaborated program does not pass Prog.check ({bad.map (·.name)})"
+  if !P.checkControl then throw "internal error: the elaborated program does not pass Prog.checkControl"
+  if !P.checkTypes S slotTys.toList then
+    -- name what fails, for a bug report
+    let bad := (List.range P.fns.length).find? fun f =>
+      match P.fns[f]?, S.fns[f]?, slotTys[f]? with
+      | some fn, some (ps, τ), some Γ => !checkFn S fn ps τ Γ
+      | _, _, _ => true
+    let which := match bad with
+      | some f =>
+        -- (the innermost statement of its body the checker rejects, in sequence)
+        let rec firstBad (fuel : Nat) (Γ : List VTy) (ρ : VTy) (e : Expr) : Expr :=
+          match fuel, e with
+          | f + 1, .seq a b =>
+            if (tc S Γ ρ a none).isNone && (tc S Γ ρ a (some VTy.void)).isNone then firstBad f Γ ρ a
+            else firstBad f Γ ρ b
+          | _, e => e
+        -- (first the slots' initial values, which `checkDefault` checks
+        -- apart from the statements, then the body after them)
+        let rec badInit (a k : Nat) (Γ : List VTy) : List VTy → Expr → Sum String Expr
+          | [], e => .inr e
+          | t :: ts, e => match e with
+            | .seq (.assign i d) rest =>
+              if i == k && checkDefault S a Γ d t then badInit a (k + 1) Γ ts rest
+              else .inl s!"\n-- initial value of slot {k} rejected (type {repr t}): {d.compact}"
+            | _ => .inl s!"\n-- no initial value for slot {k}"
+        let badStmt : String := match P.fns[f]?, S.fns[f]?, slotTys[f]? with
+          | some fn, some (_, τ), some Γ => match badInit fn.arity fn.arity Γ (Γ.drop fn.arity) fn.body with
+            | .inl msg => msg
+            | .inr b => s!"\n-- first rejected:\n{(firstBad 10000 Γ τ b).compact "   "}"
+          | _, _, _ => ""
+        let dump := if !debug then "" else
+          badStmt ++ s!"\n-- body:\n{((P.fns[f]?).map (fun (fn : Fn) => fn.body.compact "   ")).getD "?"}\n-- arity: {(P.fns[f]?).map Fn.arity}" ++
+          s!"\n-- slot types: {repr (slotTys[f]?)}\n-- signature: {repr (S.fns[f]?)}"
+        s!" (in {((P.fns[f]?).map Fn.name).getD "?"}){dump}"
+      | none => if !checkPrelude P S then " (the prototypes)" else ""
+    throw s!"internal error: the elaborated program does not pass Prog.checkTypes{which}"
+  return { prog := P, sigs := S, slotTys := slotTys.toList }
+
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
 def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except String Compiled := do
@@ -1716,60 +1786,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     fsigs := fsigs ++ [([], if mainSig.suspends then VTy.void else mainSig.ret.toVTy env)]
   if usesConc then
     fns := CompilerWrites.propagate beforeConcurrency fns
-  let P : Prog := { fns := fns.toList, main }
-  -- (#283) no call names a family's stub (`Choice.familyStub`), whose body
-  -- is `Err()`: each call of a method of the family was rewritten not to be
-  -- one, and a stub has no value (`FnValues`). Verse Core has no calls but
-  -- those naming their function (dispatch is a test of the class, then a
-  -- call), so whatever code made them, no stub runs
-  for fn in P.fns do
-    for (g, _) in Suspend.callsOf fn.body do
-      if let some q := (P.fns[g]?).bind fun callee => stubs.lookup callee.name then
-        throw s!"{q.show}: {Choice.shownFnName P.fns[g]!.name} has several values, but a call of it in {Choice.shownFnName fn.name} is compiled as one of a method of one value, where its receiver's class was not known: not supported yet (#283)"
-  if !P.check then
-    let bad := P.fns.filter fun fn => (!fn.decides && fn.body.mayFail P) ||
-      (!fn.writes && fn.body.writesHeap P) || !(fn.body.scoped P fn.nslots)
-    throw s!"internal error: the elaborated program does not pass Prog.check ({bad.map (·.name)})"
-  if !P.checkControl then throw "internal error: the elaborated program does not pass Prog.checkControl"
   -- (the frame classes' pins after the classes', #244)
   let pins := (List.range classTable.length).map (fun t => (pins[t]?).getD []) ++ framePins
-  let S : Sigs := { fns := fsigs, classes := classTable ++ frameClasses.toList, protos, pins }
-  if !P.checkTypes S slotTys.toList then
-    -- name what fails, for a bug report
-    let bad := (List.range P.fns.length).find? fun f =>
-      match P.fns[f]?, S.fns[f]?, slotTys[f]? with
-      | some fn, some (ps, τ), some Γ => !checkFn S fn ps τ Γ
-      | _, _, _ => true
-    let which := match bad with
-      | some f =>
-        -- (the innermost statement of its body the checker rejects, in sequence)
-        let rec firstBad (fuel : Nat) (Γ : List VTy) (ρ : VTy) (e : Expr) : Expr :=
-          match fuel, e with
-          | f + 1, .seq a b =>
-            if (tc S Γ ρ a none).isNone && (tc S Γ ρ a (some VTy.void)).isNone then firstBad f Γ ρ a
-            else firstBad f Γ ρ b
-          | _, e => e
-        -- (first the slots' initial values, which `checkDefault` checks
-        -- apart from the statements, then the body after them)
-        let rec badInit (a k : Nat) (Γ : List VTy) : List VTy → Expr → Sum String Expr
-          | [], e => .inr e
-          | t :: ts, e => match e with
-            | .seq (.assign i d) rest =>
-              if i == k && checkDefault S a Γ d t then badInit a (k + 1) Γ ts rest
-              else .inl s!"\n-- initial value of slot {k} rejected (type {repr t}): {d.compact}"
-            | _ => .inl s!"\n-- no initial value for slot {k}"
-        let badStmt : String := match P.fns[f]?, S.fns[f]?, slotTys[f]? with
-          | some fn, some (_, τ), some Γ => match badInit fn.arity fn.arity Γ (Γ.drop fn.arity) fn.body with
-            | .inl msg => msg
-            | .inr b => s!"\n-- first rejected:\n{(firstBad 10000 Γ τ b).compact "   "}"
-          | _, _, _ => ""
-        let dump := if !opts.debug then "" else
-          badStmt ++ s!"\n-- body:\n{((P.fns[f]?).map (fun (fn : Fn) => fn.body.compact "   ")).getD "?"}\n-- arity: {(P.fns[f]?).map Fn.arity}" ++
-          s!"\n-- slot types: {repr (slotTys[f]?)}\n-- signature: {repr (S.fns[f]?)}"
-        s!" (in {((P.fns[f]?).map Fn.name).getD "?"}){dump}"
-      | none => if !checkPrelude P S then " (the prototypes)" else ""
-    throw s!"internal error: the elaborated program does not pass Prog.checkTypes{which}"
-  return { prog := P, sigs := S, slotTys := slotTys.toList }
+  certify { prog := { fns := fns.toList, main },
+            sigs := { fns := fsigs, classes := classTable ++ frameClasses.toList, protos, pins }, slotTys }
+    stubs opts.debug
 
 /-- `F$ovN` (an overload, #74) shown as `F`: every `$ov` and the digits after it removed. -/
 def stripOv (msg0 : String) : String := Id.run do
