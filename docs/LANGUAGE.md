@@ -2390,7 +2390,7 @@ Main()<suspends>:void =
 
 `ToString` of rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
-`weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored) and paths as values, the
+`weak_map`, `comparable` as a type (only as a bound, `t:subtype(comparable)`: see [the Book's rules and a design](research/comparable-type.md)), module paths `using{/Verse.org/…}` (accepted and ignored) and paths as values, the
 specific overload/call gaps listed under [Overloading](#overloading), nested
 functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice), concurrency beyond [Concurrency](#concurrency), and the unsupported
 effect/construction contracts listed under [Effect contracts](#effect-contracts).
