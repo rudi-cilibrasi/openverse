@@ -5,9 +5,10 @@ import OpenVerse.Front.Elab.Calls
 namespace OpenVerse.Front
 open OpenVerse
 partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMember : Ctx → Pos → R → String → EM R)
-    (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (rhs0 : SExpr) : EM R := do
+    (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (rhs0 : SExpr)
+    (rootInit : Option (String × Expr) := none) : EM R := do
   if let .app _ (.ident _ "$refineCopyOut") [rhs] false := rhs0 then
-    let r ← elabSetWith elabE elabMember ctx p lhs0 op rhs
+    let r ← elabSetWith elabE elabMember ctx p lhs0 op rhs rootInit
     match r.e with
     | .assign target (.local result) =>
       modify fun st => { st with frameCopies := st.frameCopies ++ [{ target, result }] }
@@ -92,7 +93,11 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
   let general : List (Pos × Option String × Option SExpr) → Bool
     | steps@(_ :: _ :: _) => !steps.isEmpty
     | steps => steps.any (·.2.1 == some "?")
-  if let some (root, steps) := path lhs then if general steps then
+  let opaqueIndex (root : String) (steps : List (Pos × Option String × Option SExpr)) : Bool :=
+    (ctx.lookup root).any (fun binding => match binding.ty with
+      | .param .. => steps.any (fun (_, field, key) => field == some "?" || key.isSome)
+      | _ => false)
+  if let some (root, steps) := path lhs then if general steps || opaqueIndex root steps then
     -- `set X.p = e` with a path of two or more steps (Book of Verse §3.5, §9.3):
     -- the indices and keys are evaluated once, left to right; then each
     -- intermediate container is read (an index or an intermediate key that
@@ -110,7 +115,23 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     -- first the indices and keys
     let mut keys : Array (Option (Nat × Ty)) := #[]
     let mut tys : Array Ty := #[]
+    let mut rawTys : Array Ty := #[]
+    let mut views : Array (Option (Nat × R)) := #[]
     for (sp, f?, k?) in steps do
+      rawTys := rawTys.push ty
+      let mut view := none
+      if let .param .. := ty then
+        let input ← fresh ty
+        let source : R := ⟨.local input, ty⟩
+        let receiver ← match f?, k? with
+          | some "?", _ => elabContainerReceiverWith elabE ctx sp source (fun | .opt _ => true | _ => false) "query"
+          | some field, _ => elabBoundReceiverWith elabE ctx sp source field
+          | none, some _ => elabContainerReceiverWith elabE ctx sp source (fun | .arr _ | .map .. => true | _ => false) "index"
+          | _, _ => pure source
+        if receiver.ty != ty then
+          view := some (input, receiver)
+          ty := receiver.ty
+      views := views.push view
       tys := tys.push ty
       match f?, k?, ty with
       | some "?", _, .opt t => keys := keys.push none; ty := t
@@ -140,6 +161,11 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
       match tysA[k]! with
       | .struct sn _ => ctx.types.isRefClass sn
       | _ => false
+    for (view, index) in views.toList.zipIdx do
+      if let some (_, receiver) := view then
+        let container := match receiver.ty with | .arr _ | .map .. | .opt _ => true | _ => false
+        if container && !(refLevel?.any (index < ·)) then
+          eerr p s!"cannot write through a container upper bound: source storage must retain {rawTys[index]!.show}"
     if let some kr := refLevel? then
       let (sp, f?, _) := steps.toArray[kr]!
       match tysA[kr]!, f? with
@@ -163,6 +189,17 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         let tp ← fresh (.tup [kt, vt])
         pure (mapLookup c tk tp)
       | _, _, _ => eerr p "internal: set path"
+    -- A view consumes the already-read source container. Its dictionary
+    -- call belongs here in traversal, not in the index/key prelude.
+    let activate (k current : Nat) : EM (List Expr × Nat) := do
+      match views[k]! with
+      | none => return ([], current)
+      | some (input, receiver) =>
+        let output ← fresh receiver.ty
+        return ([.assign input (.local current), .assign output receiver.e], output)
+    if let some (name, value) := rootInit then
+      if name != root then eerr p "internal: bound set initializes a different path root"
+      pre := pre.push (.assign l.slot value)
     -- a value of a class with no instance cannot exist, so the set is
     -- unreachable once the path reaches one; but the steps before it (the
     -- indices and keys, then the containers read) may fail first (#104)
@@ -170,11 +207,15 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         match tysA[k]! with | .struct sn _ => ctx.types.isEmptyClass sn | _ => false then
       let stepsA := steps.toArray
       let mut c := l.slot
-      for k in [0:ke] do
-        let (_, f?, _) := stepsA[k]!
-        let c' ← fresh tysA[k + 1]!
-        pre := pre.push (.assign c' (← readStep c tysA[k]! f? keys[k]!))
-        c := c'
+      for k in [0:ke + 1] do
+        let (before, viewed) ← activate k c
+        pre := pre ++ before.toArray
+        c := viewed
+        if k < ke then
+          let (_, f?, _) := stepsA[k]!
+          let c' ← fresh rawTys[k + 1]!
+          pre := pre.push (.assign c' (← readStep c tysA[k]! f? keys[k]!))
+          c := c'
       -- (the right-hand side never runs, but is checked, and the field set
       -- at the empty class must be a var, as on any path)
       let lastCls := (List.range steps.length).reverse.find? fun k =>
@@ -208,6 +249,9 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     let mut oldLeaf : Option Nat := none
     for k in [0:stepsA.size] do
       let (sp, f?, _) := stepsA[k]!
+      let (before, viewed) ← activate k cur
+      pre := pre ++ before.toArray
+      cur := viewed
       levels := levels.push (cur, tys[k]!, sp, f?, keys[k]!)
       if k == rhsAfter then
         -- `set P op= e` reads P before e, as the direct form does (Book of
@@ -217,8 +261,12 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         if op.isSome && !preloaded then
           let mut c2 := cur
           for k2 in [k:stepsA.size] do
+            if k2 > k then
+              let (before, viewed) ← activate k2 c2
+              pre := pre ++ before.toArray
+              c2 := viewed
             let (_, f2, _) := stepsA[k2]!
-            let t2 := if k2 + 1 < stepsA.size then tys[k2 + 1]! else leafTy
+            let t2 := if k2 + 1 < stepsA.size then rawTys[k2 + 1]! else leafTy
             let c3 ← fresh t2
             pre := pre.push (.assign c3 (← readStep c2 tys[k2]! f2 keys[k2]!))
             c2 := c3
@@ -228,7 +276,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         pre := pre.push (.assign tr r.e)
         rhsVal := some ⟨.local tr, r.ty⟩
       if k + 1 < stepsA.size then
-        let c ← fresh tys[k + 1]!
+        let c ← fresh rawTys[k + 1]!
         pre := pre.push (.assign c (← readStep cur tys[k]! f? keys[k]!))
         cur := c
     let (lc, lty, _, lf, lkey) := levels[levels.size - 1]!
@@ -375,12 +423,15 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     it, one test per set of pins among the classes tested, as a refined
     method call is: `Typed.dispatch` types the call under the refinement,
     with the object (as `D`) and those locals passed at their refined
-    types. `none` when the cast does not refine: the plain path. -/
+    types. `none` when the cast does not refine: the plain path. With
+    `ifType`, only the `if`'s type with no expected type, as any `if`'s
+    (`ifBranches`), and in its code, as a `logic`, whether its branch is
+    elaborated at that type, not its own. -/
 partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr → Bool → Option Ty → EM R)
     (elabE : Ctx → SExpr → Option Ty → EM R) (withMark : Ctx → Expr → EM Expr) (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (body0 : SExpr)
     (elseE : Option SExpr) (exp : Option Ty) (made : Bool := false)
     (escRet : Option (Ty × Refine.Exits) := none)
-    (outsideWrites : List Nat := []) :
+    (outsideWrites : List Nat := []) (ifType : Bool := false) :
     EM (Option R) := do
   let ctx := ctx.choiceCoercionScope
   -- (the lift's tag is of the branch as written, before choice conversions
@@ -422,9 +473,51 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       ctx.locals.map fun l => { l with ty := refine l.ty, storage := l.storage.map (·.subst μT) },
     types := { env with tvars := (env.tvars.map (fun (n, t) => (n, refine t)) ++
       opened.map (fun (n, _, c) => (n, Ty.param n c))) } }
+  -- (the branch's type under the refinement, as code outside it names it: a
+  -- local it gives at its own type there, the most general)
+  let own (v : SExpr) (t : Ty) : Ty := match v with
+    | .ident _ n => if Refine.isCastObj n then ((ctx.lookup n).map (·.ty)).getD (refine t) else refine t
+    | _ => refine t
+  let branchTyOf (t : Ty) : Ty := match Refine.valueOf body, t with
+    | .tuple _ vs, .tup ts => if vs.length == ts.length then .tup ((vs.zip ts).map fun (v, t) => own v t) else refine t
+    | v, t => own v t
+  -- (with no expected type, the `if`'s type is any `if`'s, `ifBranches`,
+  -- its branch typed under the refinement: at a type asked for, when it is
+  -- one there, else at its own; the same in every elaboration, which may
+  -- find the branch's function made or not; nothing is kept. The branch's
+  -- own type is one under the refinement, which code outside it may name
+  -- otherwise: one that is the `else`'s there makes the `if` the `else`'s,
+  -- as their join, before any other comparison. And whether the branch
+  -- must be elaborated at that type: when it has none alone, or its own
+  -- does not join into it there, `if (C) then false else option{4}`, `if
+  -- (C) then 1 else "a"`, at `any`)
+  let ifTyAt (ee : SExpr) : EM (Ty × Bool) := do
+    let st ← get
+    let thenAt (k : Nat) (e : Option Ty) : EM R := do
+      let rb ← elabE { refined (← fresh dTy) with typeOnly := true, retries := k } (Refine.exitsAsErr body) (e.map refine)
+      let fits ← match e with
+        | some t => tryCatch (do discard <| coerce p rb (refine t); pure true) fun _ => pure false
+        | none => pure false
+      return ⟨rb.e, if fits then e.getD rb.ty else branchTyOf rb.ty⟩
+    let elseAt (k : Nat) (e : Option Ty) : EM R := elabE { ctx with typeOnly := true, retries := k } ee e
+    let own? ← tryCatch (some <$> thenAt ctx.retries none) fun _ => pure none
+    let re? ← tryCatch (some <$> elseAt ctx.retries none) fun _ => pure none
+    let fitsElse ← match re? with
+      | some re => tryCatch (do pure ((← thenAt ctx.retries (some re.ty)).ty == re.ty)) fun _ => pure false
+      | none => pure false
+    let τ ← match re?, fitsElse with
+      | some re, true => pure re.ty
+      | _, _ => ifBranches p none ctx.retries thenAt elseAt fun _ _ ty => pure ty
+    let env' := (← get).env
+    set st
+    return (τ, own?.all fun b => joinTy env' b.ty (refine τ) none != some (refine τ))
+  let ifTy (ee : SExpr) : EM Ty := return (← ifTyAt ee).1
+  if ifType then
+    let (τ, atType) ← ifTyAt (elseE.getD (Refine.noValue p))
+    return some ⟨.lit (.logic atType), τ⟩
   -- (the locals the branch uses, in order of first use)
-  let caps : List Local := (Choice.namesUsed body).filterMap fun n =>
-    if n == D then none else ctx.locals.find? (·.name == n)
+  let caps : List Local := ctx.captureEvidence ((Choice.namesUsed body).filterMap fun n =>
+    if n == D then none else ctx.locals.find? (·.name == n)) [D]
   -- (the `var`s from outside it that the branch sets, its `return`s and its
   -- `break`s that leave it, `refineExits`: copies in the branch, and its
   -- function returns what they say, which the caller does after the `if`;
@@ -450,19 +543,21 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
         if escapes && escapesAlways (Choice.stmtsOf body) then pure (some .elseAfter)
         else do
           let st ← get
-          let τ? ← tryCatch (do pure (some (← elabE { ctx with typeOnly := true } ee none).ty)) fun _ => pure none
-          -- (an `else` that gives no value tells no type: the branch's own,
-          -- under the refinement, when it ends, as the first elaboration
-          -- finds it, if code outside it can name it)
-          let own? ← if τ? != some .never then pure none else
-            tryCatch (do
-              let τ := (← elabE { refined (← fresh dTy) with typeOnly := true } (Refine.exitsAsErr body) none).ty
-              pure (if opened.any (fun (n, _, _) => τ.params.contains n) then none else some τ)) fun _ => pure none
-          let τ? := own?.orElse fun _ => τ?
+          let τe? ← tryCatch (do pure (some (← elabE { ctx with typeOnly := true } ee none).ty)) fun _ => pure none
           set st
+          -- (the `if`'s type, as any `if`'s; for an `else` that gives no
+          -- value, the branch's own, if code outside it can name it)
+          let r? ← tryCatch (some <$> ifTyAt ee) fun _ => pure none
+          let τ? := r?.map (·.1)
+          let names (τ : Ty) : Bool := !opened.any fun (n, _, _) => τ.params.contains n
+          let own? := if τe? == some .never then τ?.filter names else none
+          let τ? := if τe? == some .never then own? else τ?
           if !escapes then
             -- Discard a statement's value before building the copy-out tuple.
-            pure (some (if τ?.any (· == .void) then .none else .raw (own?.map Ty.toSTy)))
+            -- (the value at the `if`'s type, unless the new `if`, of tuples,
+            -- finds it: the `else`'s, which the branch's own joins)
+            let at? := own?.orElse fun _ => if τ? == τe? && r?.any (!·.2) then none else τ?
+            pure (some (if τ?.any (· == .void) then .none else .raw (at?.map Ty.toSTy)))
           else
             pure (τ?.bind fun τ => if τ == .never then none
               else some (if τ == .void then ExitVal.none else .opt τ.toSTy))
@@ -533,7 +628,12 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let ctxB := { ctxB with constructHints := ctxB.constructHints.map (·.map retarget) }
     let body := pruneConstructHints ctxB liftName
       (pruneConstructHints { ctxB with frameName := ctx.frameName } liftName body)
-    let rb ← elabE ctxB body (if elseE.isNone then some .void else exp.map refine)
+    -- (with no expected type, at the `if`'s, `ifTy`, as an `if`'s branches
+    -- are: `false` against an `else`'s option is its empty one)
+    let τ? : Option Ty ← match elseE, exp with
+      | some ee, none => some <$> ifTy ee
+      | _, _ => pure none
+    let rb ← elabE ctxB body (if elseE.isNone then some .void else (exp.orElse fun _ => τ?).map refine)
     let waitingThen := (← get).pendingWaitingCasts
     let thenWaits := ctx.suspends && (waitingThen != waiting0 || waits rb.e)
     let sourceSuspends := ctx.suspends && ((← get).pendingSourceSuspends != source0 || ctx.sourceWaits rb.e)
@@ -555,15 +655,13 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     -- `elabSeqIn`: the branch's type, which code outside it must be able to
     -- name)
     let retOfBranch := elseE.isSome && exp.isNone && re.ty == .never
-    -- (a local from outside the branch that it gives, at its own type there,
-    -- which refines to its type in the branch: the most general)
-    let own (v : SExpr) (t : Ty) : Ty := match v with
-      | .ident _ n => if Refine.isCastObj n then ((ctx.lookup n).map (·.ty)).getD (refine t) else refine t
-      | _ => refine t
-    let branchTy : Ty := match Refine.valueOf body, rb.ty with
-      | .tuple _ vs, .tup ts => if vs.length == ts.length then .tup ((vs.zip ts).map fun (v, t) => own v t) else refine rb.ty
-      | v, t => own v t
-    let τ' : Ty := if elseE.isNone then .void else if retOfBranch then branchTy else exp.getD re.ty
+    let branchTy := branchTyOf rb.ty
+    let τ' : Ty ← match elseE, exp with
+      | none, _ => pure .void
+      | some _, some t => pure t
+      | some ee, none => if retOfBranch then pure branchTy else match τ? with
+        | some t => pure t
+        | none => ifTy ee
     if let some (n, v, _) := opened.find? fun (n, _, _) => τ'.params.contains n then
       eerr p s!"cannot cast {withArticle rx.ty.show} to {T} here: the cast opens {T}'s type argument {v} for the code after it, outside which its value, {withArticle τ'.show}, would name what is unknown (#250)"
     let ret := refine τ'
@@ -607,8 +705,9 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let lift : Refine.Lift := {
       pos := p, bound := D, target := if chain then "" else T, tag, continuationScope := ctx.refineScope,
       name := liftName,
-      params := ((D, dTy) :: sig).map (fun (n, t) => { name := n, ty := t.toSTy }) ++
-        extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n },
+      params := { name := D, ty := dTy.toSTy } ::
+        (caps.zip sig).map (fun (binding, (name, ty)) => { name, ty := ty.toSTy, typeValue := binding.typeValue }) ++
+        extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n, typeValue := true },
       tparams := tps.map fun (n, c) => { pos := p, name := n, constraint := if c then "comparable" else "type" },
       specs, ret := ret.toSTy, branchTy := if retOfBranch then some τ'.toSTy else none, subst := σ, opened := if chain then [] else opened.map fun (n, v, _) => (n, v), waits := thenWaits, sourceSuspends,
       exits := Refine.Exits.substTypes ((escRet.map (·.2)).getD {}) σ,
@@ -677,15 +776,17 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
         pure ([Expr.assign y e], y)
     let re ← elseOf
     -- (the branch's own type, when the first elaboration took it; at
-    -- another expected type, refused as it was there)
-    let τ' : Ty ← if elseE.isNone then pure .void else match exp, l.branchTy with
-      | some t, some _ =>
+    -- another expected type, refused as it was there; with none, the
+    -- `if`'s, as the first elaboration found it)
+    let τ' : Ty ← match elseE, exp, l.branchTy with
+      | none, _, _ => pure .void
+      | some _, some t, some _ =>
         let ret ← resolveTy env p l.ret
         if ret != t.subst μT then eerr p s!"expected {t.show}, found {ret.show} (the branch of the cast to {shown})"
         pure t
-      | some t, none => pure t
-      | none, some t => resolveTy env p t
-      | none, none => pure re.ty
+      | some _, some t, none => pure t
+      | some _, none, some t => resolveTy env p t
+      | some ee, none, none => ifTy ee
     let eE ← coerce p re τ'
     let rargs := env.coreArgs S sargs
     let atR := rargs.zipIdx.map fun (r, j) => (pinArg j, r)
@@ -760,6 +861,9 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
         unrefine := unrefine ++ ctx.unrefine,
         locals := dL :: ctx.locals.map fun loc => { loc with ty := loc.ty.subst μF, storage := loc.storage.map (·.subst μF) },
         types := { env with tvars := env.tvars.map fun (m, t) => (m, t.subst μF) } }
+      let argOf (sp : SParam) : SExpr :=
+        if sp.typeValue && sp.name.startsWith "$type" then .app p (.ident p "$witness") [.ident p (sp.name.drop 5).toString] false
+        else .ident p sp.name
       let rc ← elabApp ctx' p (.ident p l.name) (l.params.map argOf)
         (l.specs.contains "decides") (some (τ'.subst μF))
       -- (a suspends call carries the defers active at it, which go around
@@ -985,7 +1089,8 @@ partial def loopFlatWith (elabE : Ctx → SExpr → Option Ty → EM R)
   let own := h :: Choice.localsOf k
   let preSet := rest.findSome? fun e => if Choice.anyE (fun | .set .. => true | _ => false) e then some e.pos else none
   let j := frames.size
-  let lives := (Choice.namesUsed k).eraseDups.filterMap fun n => if own.contains n then none else fc.lookup n
+  let lives := fc.captureEvidence ((Choice.namesUsed k).eraseDups.filterMap fun n =>
+    if own.contains n then none else fc.lookup n) own
   let inTy ← match Choice.alts? c, c with
     | some cs, _ => probeHoleWith elabE ca rty cs
     | none, .app _ (.ident _ "$rec") _ false | none, .app _ (.ident _ "$recTo") _ false => pure none

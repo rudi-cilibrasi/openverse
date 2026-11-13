@@ -13,6 +13,23 @@ partial def elabExprInitialWith
     (next : Ctx → SExpr → Option Ty → EM R)
     (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   match se with
+  | .app _ (.ident _ "$typeValue") [value] false => elabE ctx value exp
+  | .app p (.ident _ "$subtypeLift") (input :: dictionaries) false =>
+    elabSubtypeLiftWith elabE ctx p input dictionaries exp
+  | .app p (.ident _ "$subtypeWitness") [.construct _ "$subtypeEvidence" [base, derived] []] false =>
+    let base ← resolveTy ctx.types p base
+    let derived ← resolveTy ctx.types p derived
+    let locals := ctx.evidenceTypes
+    let bound : SubtypeEvidence.Bound := ⟨base, derived⟩
+    -- The formal default check validates a compiler-owned proof field's
+    -- declared relation. Its placeholder is discarded; construction must
+    -- supply a real dictionary in the caller's current lexical context.
+    if ctx.inDefaultCheck && ctx.defaults.any (fun (_, field) => field.startsWith SubtypeEvidence.fieldPrefix) &&
+        ctx.types.boundSubtype derived base then
+      return ⟨.prim .userErr [], bound.ty⟩
+    let some plan := SubtypeEvidence.find? ctx.types locals bound
+      | eerr p s!"type {derived.show} does not satisfy subtype({base.show})"
+    elabSubtypeValueWith elabE ctx p plan bound
   | .app p (.ident _ "$choiceFixedOperation") [.block _ metadata, .block _ labels, invocation] false =>
     if ctx.typeOnly then
       let .app _ (.ident _ "$choiceOperation") (_ :: _ :: _ :: values) _ := invocation
@@ -77,19 +94,42 @@ partial def elabExprInitialWith
     let some (_, effects) := FnValues.parseName shape | eerr p "internal: invalid generic operation shape"
     if effects.contains "suspends" && !ctx.suspends then eerr p "an operation dictionary suspends here"
     if effects.contains "decides" && !ctx.canFail then eerr p "an operation dictionary can fail here"
-    let methodVars ← metadata.mapM fun
-      | .tuple _ [.str _ [.text n], .int _ b] => pure (n, b == 1)
+    let methodParameters ← metadata.mapM fun
+      | .tuple _ [.str _ [.text n], .int _ b] => pure (n, b == 1, none)
+      | .tuple _ [.str _ [.text n], .int _ b, .construct _ "$upperBound" [upper] []] => pure (n, b == 1, some upper)
       | _ => eerr p "internal: invalid operation method parameter"
+    let methodVars := methodParameters.map fun (name, comparable, _) => (name, comparable)
     let methodNames := methodVars.map (·.1)
     let make (probeCtx : Ctx) : EM (Sig × List (String × Ty)) := do
       let types := { probeCtx.types with tvars := methodVars.map (fun (n, b) => (n, Ty.param n b)) ++ probeCtx.types.tvars }
-      let signature ← schema.mapM (resolveTy types p)
+      let unchecked := { types with sbounds := [] }
+      let bounds ← methodParameters.filterMapM fun (name, comparable, upper) => do
+        let some upper := upper | pure none
+        return some (SubtypeEvidence.Bound.mk (← resolveTy unchecked p upper) (.param name comparable))
+      let signature ← schema.mapM (resolveTy unchecked p)
       if signature.length != values.length + 1 then eerr p "internal: invalid operation signature"
-      let fixed := Ty.mergeParamBounds (signature.flatMap Ty.paramsC) |>.filter (!methodNames.contains ·.1)
+      let boundTypes := bounds.flatMap fun b => [b.base, b.derived]
+      let fixed := Ty.mergeParamBounds ((signature ++ boundTypes).flatMap Ty.paramsC) |>.filter (!methodNames.contains ·.1)
+      let some parameters := choiceMethodTParams p methodVars bounds
+        | eerr p "internal: unrepresentable operation method constraints"
+      let fixedParams : List TParam := fixed.map fun (name, comparable) =>
+        { pos := p, name, constraint := if comparable then "comparable" else "type" }
+      let flags ← match checkTParams types (fixedParams ++ parameters) with
+        | .ok flags => pure flags
+        | .error message => eerr p message
+      let methodVars := methodVars.map fun (name, old) => (name, old || (flags.lookup name).getD false)
+      let strengthened := methodVars.map fun (name, comparable) => (name, Ty.param name comparable)
+      let signature := signature.map (·.subst strengthened)
+      let bounds := bounds.map (fun b => SubtypeEvidence.Bound.subst b strengthened)
+      let bounded := { types with boundFacts := bounds.map (fun b => (b.base, b.derived)) ++ types.boundFacts }
+      for ty in signature ++ boundTypes do
+        match ty.checkBounds bounded with
+        | .ok _ => pure ()
+        | .error message => eerr p message
       let sig : Sig := {
         idx := 0, name := family ++ "$probe", params := signature.dropLast,
         ret := signature.getLast!, tparams := methodVars, decides := bracket, isConst := false,
-        fx := allowedFx effects, suspends := effects.contains "suspends" }
+        fx := allowedFx effects, suspends := effects.contains "suspends", bounds }
       return (sig, fixed.map fun (n, b) => (n, Ty.param n b))
     let (sig, fixed) ← make ctx
     let r ← elabGenericCallWith elabE { ctx with callInstanceProbe := some sig.name } p sig values exp (inst := fixed)
@@ -139,19 +179,22 @@ partial def elabExprInitialWith
     let objectSlot ← fresh objectTy
     let oldSlot ← fresh oldTy
     let rhsSlot ← fresh rhsTy
+    let saved (name : String) (slot : Nat) (ty : Ty) (typeValue : Bool) : Local :=
+      { name, slot, ty, mutable := false, typeValue }
     let keyValue ← coerce p (← elabE ctx index (some keyTy)) keyTy
+    let keyBinding := saved "$choiceIndexKey" keySlot keyTy (ctx.isTypeValue index)
     let keyContext := { ctx with
-      locals := { name := "$choiceIndexKey", slot := keySlot, ty := keyTy, mutable := false } :: ctx.locals }
+      locals := keyBinding :: ctx.locals }
     let objectValue ← coerce p (← elabE keyContext object (some objectTy)) objectTy
     let inner := { ctx with
-      locals := { name := "$choiceIndexKey", slot := keySlot, ty := keyTy, mutable := false } ::
-        { name := "$choiceIndexObject", slot := objectSlot, ty := objectTy, mutable := false } :: ctx.locals }
+      locals := keyBinding ::
+        saved "$choiceIndexObject" objectSlot objectTy (keyContext.isTypeValue object) :: ctx.locals }
     let checked ← elabE inner validation none
     let oldValue ← coerce p (← elabE inner old (some oldTy)) oldTy
     let rhsValue ← coerce p (← elabE ctx rhs (some rhsTy)) rhsTy
     let final := { inner with
-      locals := { name := "$choiceIndexOld", slot := oldSlot, ty := oldTy, mutable := false } ::
-        { name := "$choiceIndexRHS", slot := rhsSlot, ty := rhsTy, mutable := false } :: inner.locals }
+      locals := saved "$choiceIndexOld" oldSlot oldTy (inner.isTypeValue old) ::
+        saved "$choiceIndexRHS" rhsSlot rhsTy (ctx.isTypeValue rhs) :: inner.locals }
     let invocation := SExpr.app p (.ident p "$choiceOperation")
       [shape, dictionary, .ident p "$choiceIndexKey", .ident p "$choiceIndexObject",
         .ident p "$choiceIndexOld", .ident p "$choiceIndexRHS"] bracket
@@ -229,7 +272,7 @@ partial def elabExprInitialWith
   | .str p parts =>
     let pieces ← parts.mapM fun part => match part with
       | .text s => pure (Expr.lit (Value.ofString s))
-      | .code e => do toStringOf e.pos (← elabE ctx e none)
+      | .code e => do elabToStringWith elabE ctx e.pos (← elabE ctx e none)
     let _ := p
     match pieces with
     | [] => return ⟨.lit (Value.ofString ""), Ty.string⟩

@@ -1,0 +1,12 @@
+vehicle:=class<computes>{}
+car:=class<computes>(vehicle){}
+ca:=class<computes>:
+    K:int=0
+    Apply(X:u where u:subtype(car))<computes>:int=7
+cb:=class<computes>:
+    K:rational=0
+    Apply(X:u where u:subtype(car))<computes>:int=7
+Dup(X:t where t:type)<computes>:t=X|X
+Run(X:t where t:subtype(vehicle))<computes>:[]int=
+    for(A:=(Dup(ca{})|Dup(cb{}))):A.Apply(X)
+Main():void=Print("{Run(vehicle{}).Length}")

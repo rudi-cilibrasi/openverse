@@ -1,0 +1,1 @@
+expected type{_(:t)<computes>:vehicle}, found type{_(:vehicle)<computes>:vehicle}

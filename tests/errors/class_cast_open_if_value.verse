@@ -1,6 +1,7 @@
-# expect: the cast opens pairE's type argument a for its branch, whose value, a ?expr(a'), would name what is unknown outside it, where the if's value is a logic (#250)
+# expect: the cast opens pairE's type argument a for the code after it, outside which its value, a ?expr(a'), would name what is unknown (#250)
 # (#250) the value of an if whose cast opens type arguments, a ?expr(a'), would
-# leave the if at a type no code outside can name (an existential)
+# leave the if at a type no code outside can name (an existential): the type
+# any if takes with no expected type, its branch's, which the else's false joins
 expr(t:type) := class<abstract>:
     Tag():string
 lit := class(expr(int)):

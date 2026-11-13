@@ -72,6 +72,8 @@ if lake env lean -j1 --run tests/lean/ConcurrencyPrelude.lean >"$logs/prelude-co
 else
   rc=$?; cat "$logs/prelude-contracts"; exit "$rc"
 fi
+echo "== checked subtype evidence contracts"
+tests/scripts/test-subtype-evidence.sh
 echo "== family stub contracts"
 if lake env lean -j1 --run tests/lean/FamilyStubs.lean >"$logs/stub-contracts" 2>&1; then
   cat "$logs/stub-contracts"
@@ -204,6 +206,8 @@ check "source break model fuzzing (${FUZZ_MODEL_BREAKS:-60} programs)" \
   scripts/fuzz-model-breaks.sh "${FUZZ_MODEL_BREAKS:-60}" "$seed"
 check "choice model fuzzing (${FUZZ_MODEL_MV:-140} programs, functions with several values too)" \
   scripts/fuzz-model-mv.sh "${FUZZ_MODEL_MV:-140}" "$seed"
+check "choice model regression (an overflow in a method's set before its caller prints)" \
+  scripts/fuzz-model-mv.sh 1 4594
 check "generic functions with several values (${FUZZ_MODEL_GENERIC:-150} programs, against a model of the docs)" \
   scripts/fuzz-model-generic.sh "${FUZZ_MODEL_GENERIC:-150}" "$seed"
 check "generic choice regression (omitted named argument in a <decides> wrapper)" \

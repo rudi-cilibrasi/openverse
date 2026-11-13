@@ -29,8 +29,10 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
       if envInit then
         if let .local result := e then
           modify fun st => { st with frameCopies := st.frameCopies ++ [{ target := slot, result }] }
-      pure (⟨.assign slot e, ty⟩,
-        { ctx with locals := { name := n, slot, ty, mutable := isVar, storage } :: ctx.locals })
+      let binding : Local := {
+        name := n, slot, ty, mutable := isVar, storage
+        typeValue := ctx.isTypeValue rhs }
+      pure (⟨.assign slot e, ty⟩, { ctx with locals := binding :: ctx.locals })
     | .app _ (.ident _ "$inlineScope") [.str _ [.text name]] false =>
       pure (⟨.lit .void, .void⟩, { ctx with inlineScopes := name :: ctx.inlineScopes })
     | .app _ (.ident _ "$inlineScopeEnd") [] false =>
@@ -111,17 +113,27 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
       -- mentions are bound, else inferring them; `false`, `array{}` and
       -- `map{}` last), then named for the written types after
       let fname := match tps with | .ident _ f :: _ => f | _ => ""
-      let cons : List (String × String) := tps.drop 1 |>.filterMap fun
-        | .tuple _ [.ident _ n, .ident _ c] => some (n, c)
-        | _ => none
+      let parameters ← (tps.drop 1).mapM fun marker => do
+        match TParam.ofMarker marker with
+        | .ok tp => pure tp
+        | .error message => throw message
+      match UpperBounds.checkParams parameters with
+      | .error message => throw message
+      | .ok _ => pure ()
+      let cons := parameters.map fun tp => (tp.name, tp.constraint)
+      let formal ← resolveTParams ctx.types parameters
       let names := cons.map (·.1)
       -- (as messages show them: the type parameters' own names)
       let shown (t : Ty) : String :=
         (t.subst (names.map fun n => (n, Ty.param ((n.dropWhile (· != '_')).drop 1).toString false))).show
-      let penv : TyEnv := { ctx.types with tvars := ctx.types.tvars ++ cons.map fun (n, c) => (n, Ty.param n (c == "comparable")) }
-      let items ← decls.mapM fun
-        | .decl q x (some sty) v a => do pure (q, x, v, a, ← resolveTy penv q sty)
+      let penv := formal.env ctx.types
+      let raw ← decls.mapM fun
+        | .decl q x (some sty) v a => pure (q, x, sty, v, a)
         | d => eerr d.pos "internal: a $params clause (#235)"
+      let inputs : List SParam := raw.map fun (_, name, ty, _, a) =>
+        { name, ty, typeValue := ctx.isTypeValue a }
+      let (types, _) ← resolveSignatureTypes penv p inputs (.name "void") fname
+      let items := (raw.zip types).map fun ((q, x, _, v, a), ty) => (q, x, v, a, ty)
       let contextual := (← items.mapM (fun (_, _, _, a, _) => argNeedsTypeWith elabE ctx a)).toArray
       let mut σ : List (String × Ty) := []
       let mut done : Array (Option (Expr × Ty)) := Array.replicate items.length none
@@ -133,14 +145,18 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
           if t.params.any names.contains then
             if contextual[i]! then eerr q s!"cannot infer the type parameters of {fname} from the arguments of this call"
             let r ← elabE ctx a none
-            match t.matchArg ctx.types σ r.ty with
+            match ctx.matchArgument σ t r.ty with
             | some σ' =>
               σ := σ'.filter fun (v, _) => names.contains v
+              if !formal.bounds.isEmpty then
+                let some inferred := SubtypeEvidence.infer ctx.evidenceEnv formal.bounds σ
+                  | eerr q "cannot infer consistent nominal bound arguments"
+                σ := inferred
               let t' := t.subst σ
               if t'.params.any names.contains then
                 if pass == 0 then deferred := deferred.set! i true
                 else eerr q s!"cannot infer the type parameters of {fname} from this argument"
-              else done := done.set! i (some (← coerce q r t', t'))
+              else done := done.set! i (some (← elabArgumentCoerceWith elabE ctx q r t', t'))
             | none => eerr q s!"expected {shown t}, found {r.ty.show} (in a call of {fname})"
           else
             done := done.set! i (some (← coerce q (← elabE ctx a (some t)) t, t))
@@ -153,12 +169,14 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
               eerr p (notComparable ctx.types t s!"{fname}'s type argument for {((n.dropWhile (· != '_')).drop 1).toString}")
       let mut code : Expr := .lit .void
       let mut c := ctx
-      for ((q, x, v, _, _), d) in items.zip done.toList do
+      for ((q, x, v, a, _), d) in items.zip done.toList do
         let some (e, t) := d | eerr q s!"cannot infer the type parameters of {fname} from the arguments of this call"
         checkNewLocal c q x
         let slot ← fresh t
         code := .seq code (.assign slot e)
-        c := { c with locals := { name := x, slot, ty := t, mutable := v } :: c.locals }
+        c := { c with locals := { name := x, slot, ty := t, mutable := v, typeValue := ctx.isTypeValue a } :: c.locals }
+      if !formal.bounds.isEmpty then
+        σ ← c.checkInlineInstance p formal σ ((ctx.sig? fname).map (·.named.isEmpty) |>.getD true)
       pure (⟨.seq code (.lit .void), .void⟩, { c with types := { c.types with tvars := c.types.tvars ++ σ } })
     | .app p (.ident _ "$defaults") (.block _ decls :: tps) false => do
       -- (#283) the defaults an inlined generic call omits, after its
@@ -167,13 +185,24 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
       -- parameter nothing else determined, giving it its type argument;
       -- then every type parameter must have one
       let fname := Choice.shownFnName (match tps with | .ident _ f :: _ => f | _ => "")
-      let cons : List (String × String) := tps.drop 1 |>.filterMap fun
-        | .tuple _ [.ident _ n, .ident _ c] => some (n, c)
-        | _ => none
+      let parameters ← (tps.drop 1).mapM fun marker => do
+        match TParam.ofMarker marker with
+        | .ok tp => pure tp
+        | .error message => throw message
+      match UpperBounds.checkParams parameters with
+      | .error message => throw message
+      | .ok _ => pure ()
+      let cons := parameters.map fun tp => (tp.name, tp.constraint)
+      let formal ← resolveTParams ctx.types parameters
       let shownTp (n : String) : String := ((n.dropWhile (· != '_')).drop 1).toString
       let open_ := cons.filter fun (n, _) => (ctx.types.tvars.lookup n).isNone
       let names := open_.map (·.1)
-      let penv : TyEnv := { ctx.types with tvars := ctx.types.tvars ++ open_.map fun (n, c) => (n, Ty.param n (c == "comparable")) }
+      let known := formal.params.filterMap fun (n, _) => (ctx.types.tvars.lookup n).map (n, ·)
+      let penv : TyEnv := { ctx.types with
+        tvars := ctx.types.tvars ++ open_.map fun (n, _) => (n, Ty.param n ((formal.params.lookup n).getD false))
+        boundFacts := ctx.types.boundFacts ++ formal.bounds.map (fun bound =>
+          let bound := bound.subst known
+          (bound.base, bound.derived)) }
       let shown (t : Ty) : String := (t.subst (names.map fun n => (n, Ty.param (shownTp n) false))).show
       let fromContext : SExpr → Bool
         | .app _ (.ident _ "$paramDefault") [_, _, _, .ident _ "false"] false
@@ -192,18 +221,21 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
           if fromContext a then
             eerr p s!"cannot infer type parameter {shownTp ((t.params.filter names.contains).headD "t")} of {fname} from the arguments of this call"
           let r ← elabE c a none
-          match t.matchArg ctx.types σ r.ty with
+          match c.matchArgument σ t r.ty with
           | some σ' =>
             σ := σ'.filter fun (n, _) => names.contains n
             t' := t.subst σ
-            e ← coerce q r t'
+            e ← elabArgumentCoerceWith elabE c q r t'
           | none => eerr q s!"expected {shown t}, found {r.ty.show} (the default of a parameter of {fname})"
         else
           e ← coerce q (← elabE c a (some t)) t
         checkNewLocal c q x
         let slot ← fresh t'
         code := .seq code (.assign slot e)
-        c := { c with locals := { name := x, slot, ty := t', mutable := v } :: c.locals }
+        c := { c with locals := { name := x, slot, ty := t', mutable := v, typeValue := c.isTypeValue a } :: c.locals }
+      if !formal.bounds.isEmpty then
+        let inferred ← c.checkInlineInstance p formal (known ++ σ)
+        σ := inferred.filter fun (n, _) => names.contains n
       for (n, k) in open_ do
         match σ.lookup n with
         | none => eerr p s!"cannot infer type parameter {shownTp n} of {fname} from the arguments of this call"
@@ -211,6 +243,9 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
           if k == "comparable" && !(isComparable ctx.types t) then
             eerr p (notComparable ctx.types t s!"{fname}'s type argument for {shownTp n}")
       pure (⟨.seq code (.lit .void), .void⟩, { c with types := { c.types with tvars := c.types.tvars ++ σ } })
+    | .set _ (.ident _ name) _ _ => do
+      let r ← elabE ctx se exp
+      pure (r, ctx.withTypeValue name (ctx.isTypeValue se))
     | _ => do pure (← elabE ctx se exp, ctx)
   if !ctx.canFail && (r.e.mayFail ctx.sigProg) then
     eerr se.pos ("this expression can fail, but it is not in a failure context (an if " ++
