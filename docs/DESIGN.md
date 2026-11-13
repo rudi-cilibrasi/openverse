@@ -1498,6 +1498,9 @@ flowchart LR
 - **Over-approximation.** The pass makes a method's value class whenever
   `X.M` is written outside a call for some `X` and a class declares `M`,
   as it cannot tell a method from a field, or from an array's `Length`.
+  It makes none for a method that is never a value: an overloaded one, and
+  one that takes a name its class inherits without `<override>`, which
+  overloads that name for every receiver that sees it.
   An unused value class changes the bytecode, not the behaviour: a call
   through a function type may dispatch to it, so a value class's `$call…`
   demands no comparable type argument of the caller, as its type arguments
