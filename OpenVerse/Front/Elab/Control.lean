@@ -563,7 +563,12 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     if let some (n, v, _) := opened.find? fun (n, _, _) => τ'.params.contains n then
       eerr p s!"cannot cast {withArticle rx.ty.show} to {T} here: the cast opens {T}'s type argument {v} for the code after it, outside which its value, {withArticle τ'.show}, would name what is unknown (#250)"
     let ret := refine τ'
-    discard <| coerce p rb ret
+    -- (a branch whose value names an opened type argument where the `if`'s
+    -- type, which code outside it has, cannot: refused as such, #250)
+    discard <| tryCatch (coerce p rb ret) fun err => do
+      if let some (_, v, _) := opened.find? fun (n, _, _) => rb.ty.params.contains n then
+        eerr p s!"cannot cast {withArticle rx.ty.show} to {T} here: the cast opens {T}'s type argument {v} for its branch, whose value, {withArticle rb.ty.show}, would name what is unknown outside it, where the if's value is {withArticle τ'.show} (#250)"
+      throw err
     let decides := rb.e.mayFail ctx.sigProg
     let sig := caps.map fun l => (l.name, refine l.ty)
     let tps := Ty.mergeParamBounds ((dTy :: ret :: sig.map (·.2)).flatMap Ty.paramsC)
