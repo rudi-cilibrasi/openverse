@@ -1373,8 +1373,9 @@ messages, and an alias of it (`years := age`) is `age`.
 Since nothing after the pass sees an alias, the pass checks what would
 otherwise go unseen: that no definition, at any scope, takes a top-level
 alias's name (a module's are the modules' renaming's to check, as its other
-members), and that the names in an alias's type are types' (the rest of an
-alias's type is checked where it is used, as written there).
+members), and that the names in an alias's type are types', each with as
+many type arguments as it takes (the rest of an alias's type is checked
+where it is used, as written there).
 
 ## Destructured parameters: a desugaring in the parser
 

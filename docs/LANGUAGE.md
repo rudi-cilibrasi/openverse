@@ -1881,9 +1881,10 @@ Main():void =
   that names itself (`list(t:type) := ?tuple(t, list(t))`) is an error: a
   class can hold a value of its own type. No definition, at any scope,
   takes an alias's name, nor a built-in type's.
-- **Checks.** The names in an alias's type are checked where the alias is
-  defined; the rest (map keys that must be comparable, a parametric type's
-  type arguments) where it is used, as if the type were written there.
+- **Checks.** The names in an alias's type, and how many type arguments
+  each is given, are checked where the alias is defined; the rest (a map
+  key or a type argument that must be comparable) where it is used, as if
+  the type were written there.
 - **Not enforced.** `<protected>` or `<private>` on an alias, and a
   `<public>` alias of an internal type, which the Book refuses, are
   accepted, as access specifiers are ([Readings](#readings-openverse-takes)).

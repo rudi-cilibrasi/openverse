@@ -17,7 +17,7 @@ says how they are built.
   lines 240-245); chapter 2 on `string` (`docs/02_primitives.md` line 603).
 - The same snapshot's tests: [`Tests/TypeAlias.versetest`](https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests/TypeAlias.versetest)
   and [`Tests/ParametricTypes.versetest`](https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests/ParametricTypes.versetest)
-  (lines 18-23, 250-254, 274-276, 292-294, 303-322 and 589), cited by
+  (lines 18-23, 250-254, 273-275, 292-294, 303-322 and 589), cited by
   line.
 - Retrieved 2026-11-13. No Epic source was read and no Epic engine was run.
 
@@ -98,7 +98,7 @@ The tests add:
   interface, or of a compound of one (`?c`, `[]c`, `tuple(int, c)`,
   `int->c`, …), is an error (3593).
 - `ParametricTypes.versetest` lines 18-23: `t(u:type):=tuple(u,u)`,
-  `u->u`, `[]u`, `[int]u` valid; lines 250-254 and 274-276: recursive
+  `u->u`, `[]u`, `[int]u` valid; lines 250-254 and 273-275: recursive
   parametric aliases are errors, also when used; lines 303-322: aliases of
   aliases, `t1(u:type) := []t0(u)`; line 589: `list(t:type) := ?cons(t)`
   with `cons` a class, recursion through the class.
@@ -143,7 +143,7 @@ The tests add:
    bounded alias is in a commented-out crash test, `TypeAlias.versetest`
    line 157).
 6. **Recursion.** An alias that names itself, directly or through other
-   aliases, is an error (ch. 10, tests 41-42, 250-254, 274-276); recursion
+   aliases, is an error (ch. 10, tests 41-42, 250-254, 273-275); recursion
    through a class (`list(t:type) := ?cons(t)` with `cons` holding a
    `?cons(t)`) is fine, as the class is a type of its own.
 7. **Defined before used.** "Forward references are not allowed" (line
@@ -174,10 +174,11 @@ The tests add:
     signatures name internal types, one general rule that is an owner's
     decision ([book-test-conformance.md](book-test-conformance.md), "access
     specifiers"). The 12 Book cases are listed there.
-12. **Checks.** The names in an alias's type are checked where it is
-    defined (an unknown name is an error even when the alias is unused);
-    the rest of its type's checks (a map key that must be comparable, a
-    parametric type's arguments) where it is used, as if written there.
+12. **Checks.** The names in an alias's type, and how many type arguments
+    each is given, are checked where it is defined (an unknown name is an
+    error even when the alias is unused); the rest of its type's checks (a
+    map key or a type argument that must be comparable) where it is used,
+    as if written there.
     An unused `a := [c]int` with `c` a class that is not comparable is
     therefore accepted.
 
@@ -190,4 +191,9 @@ The tests add:
   parser does not read anywhere.
 - Qualified definitions such as `(AliasesOfClasses:)e<public> := …`
   (`TypeAlias.versetest` line 166): qualified names are a cause of their
-  own in the survey, and they keep 12 of its alias cases refused.
+  own in the survey, and the one in `AliasesOfClasses` keeps 25 of the
+  file's cases refused, the harness including that module in each.
+- A cast to a parametric class at type arguments, which openverse writes
+  `box[X]` (the cast refines its type arguments), so an alias of an
+  applied one is no value: `int_box := box(int)` makes `int_box[X]` an
+  error, while `b := box` makes `b[X]` the cast `box[X]`.
