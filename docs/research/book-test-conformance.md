@@ -16,9 +16,13 @@ the readings of [After the readings audit](#after-the-readings-audit),
 the access specifiers of [After access specifiers](#after-access-specifiers),
 `comparable` as a type of [After `comparable`](#after-comparable), the
 load-bearing readings of [After the load-bearing
-readings](#after-the-load-bearing-readings) and the attributes, types as
+readings](#after-the-load-bearing-readings), the attributes, types as
 values and syntax forms of [After attributes, types as values and the
-syntax forms](#after-attributes-types-as-values-and-the-syntax-forms),
+syntax forms](#after-attributes-types-as-values-and-the-syntax-forms), the
+Book's primitives of [After the Book's
+primitives](#after-the-books-primitives) and the fields with accessors,
+type arguments and metatypes of [After fields with accessors, type
+arguments and metatypes](#after-fields-with-accessors-type-arguments-and-metatypes),
 against the Book at
 [`beaa719ba165cbf33eff462f2b0fe078a6dd9ab0`](https://github.com/verselang/book/tree/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests),
 the revision the other research notes pin. The Book's
@@ -46,11 +50,11 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   APIs (persistence, JSON, natives; 345); compiler tooling such as bytecode
   and digests (128); VM-conditional code inside a definition (37) and one
   file that defines `Main` itself (1).
-- Of the **9,783 translatable cases**, openverse **agrees on 8,114 (83%)**,
-  refuses 1,439 valid programs, **accepts 135 refused ones**, gives a
+- Of the **9,783 translatable cases**, openverse **agrees on 8,179 (84%)**,
+  refuses 1,374 valid programs, **accepts 135 refused ones**, gives a
   **different result in 95** (82 of them `verse_vm_only` cases of unbounded
   ints) and hits **no internal error**. On test cases alone (without
-  `:decls`) it agrees on 7,954 of 9,567. (When the survey was
+  `:decls`) it agrees on 8,015 of 9,567. (When the survey was
   taken, at `0e69cfb`: 6,409 agreed, 2,817 refused, 482 accepted, 86
   differed and 4 internal errors; before the parser forms, at main
   `99ed203`: 6,417 agreed, 2,809 refused, 482 accepted, 86 differed; with
@@ -1147,6 +1151,41 @@ one-tick wait now write `Sleep(0.01)` and print what they printed,
 `scheduler_audit_sleep` shows the new rule, and 7 generated `conc-*`
 programs (zero durations) change their output, each reproduced exactly when
 their zero sleeps are made one tick.
+
+## After fields with accessors, type arguments and metatypes
+
+Three Book features that were left with designs, built on main `532f79d`
+(the Book's primitives, with the application refactor #609), one commit
+each, with two fixes of built-ins before them. Against that baseline
+(8,114 agree, 1,439 refuse, 135 accept, 95 differ), 65 cases more agree
+and none is worse: **8,179 agree, 1,374 refuse, 135 accept, 95 differ**
+(re-recorded from a fresh run; `compare` after each commit: 0 worse, and 27,
+then 50, then 65 better).
+
+| Item | Cases before (cause) | Agree now | Left |
+|---|---|---|---|
+| fields with accessors, `var X<getter(G)><setter(S)>:t = external{}` ([accessors.md](accessors.md)) | 32 refused, parsed and refused (attributes, 31; unnamed parameters, 1) | 27: `Attributes/CustomClassVarAccessors.versetest` 260, 282, 456, 488, 531, 534, 550, 586, 609, 614, 675, 693, 726, 730; `DeepMutabilityForCustomClassVarAccessors.versetest:373` (a path's setter); `InterfaceWithAccessors.versetest` 16, 36, `:decls`; `InterfaceWithFields.versetest` 439, 494; `LengthOptimizationSafety.versetest` 48, 66, 70, `:decls` (a field with storage given accessors below, read through the interface); `FORT-889314` 44, `:decls`; `CustomAttributes.versetest:76`. Their 14 refusals still agree, each by its rule (3523, 3553, 3600, 3671, 3502, 3688) | 5, other causes now: `CustomClassVarAccessors.versetest:558` (a construction in a field's default calls the setter, which has no convergence contract); `FORT-976754` 58, `:decls` (overloads of one name with different access, which openverse refuses); `InterfaceWithFields.versetest` 463 and `:decls` (two interfaces' accessors of one name in one class, #70; a field override with no default) |
+| a type given as an argument and used as a type, `FalseOption(t:type):?t` | about 6 (metatypes, syntax-other) | 23: `ParametricTypes.versetest` 605, 618, 624, 706; `TypeParam.versetest` 59, `:decls`; 16 cases of `ParametricFunctions.versetest` (158 to 696) whose module `Var` declares `F<public>(t:type, X:t)`; and `2021-04-26-DisjointTypesAllowedInComparisonAndPointerDeref:4`, a comparison of values of different types (a comparison's operand takes the other's type only as a hint, which `False(int) = False(logic)` needs) | `Bar(t)` with `t` a type parameter (`TypeParam.versetest:49`, VerseVM; its BPVM twin, :43, expects the link error openverse gives); a refinement type written as an argument (`ParametricFunctions.versetest:464`) |
+| metatypes of other types, `subtype(int)`, `subtype([]c)`, a type's name as a value; `concrete_subtype(any)`, `concrete_subtype(comparable)` | about 30 (metatypes, types-other) | 15: `Subtype.versetest` 113-119, 140-142; `TypeParam.versetest` 3, 15; `MetatypeConcreteSubtype.versetest` 12, 16, 26 | `Subtype.versetest:120` (`subtype(type{f():void})`, which the parser does not read); `TypeParam.versetest` 18-38, 54 (types written as expressions other than names: `Identity([]int)`, `Identity(class2(int))`); `castable_subtype(any)` (`Castable.versetest` 609-618) |
+
+- **Rules the new forms reached:** a type argument after a parameter whose
+  type uses it is refused (`SOL-4357-TypeType.versetest:28`, 3502), which
+  the first measure of the type arguments accepted; the tests' refusals of
+  `castable_subtype(int)` and `concrete_subtype(int)` (3509) and of a
+  construction through `concrete_subtype(comparable)` (3545) still agree.
+- **Moved the wrong way:** none. Nine refused cases changed cause, still
+  refused (`CustomClassVarAccessors.versetest:558`, `FORT-976754`,
+  `InterfaceWithFields.versetest:463`, `:decls`: from the accessors' parse
+  refusal to the rules above; `ParametricFunctions.versetest` 192, 327, 464,
+  546, 653 and `TypeParam.versetest:32`, `GenerateFunctionForParametricInterface:10`,
+  `FORT-741838:83`: past the type arguments to what is left).
+- **Programs.** Against main `532f79d`, over every suite and the corpus
+  `corpus2`, no program's bytes, output or messages changed but the new
+  tests, `field_accessors` (the refusal of the form, removed),
+  `type_value_of_int` (`subtype(int)` works: it now tests
+  `castable_subtype(int)`), and the two fixes' (`Quotient[7, 2, 1]` was an
+  internal error and is refused; `Err(Foo, 5)` was accepted unelaborated
+  and is refused).
 
 ## Ten causes to remove first
 
