@@ -926,7 +926,11 @@ circle := class(shape, labelled):
     filters and bindings succeed: `for{X := 1..4; X * X}`.
   - `first{c}` fails when `c` does, else it is `c`'s value; `first(c){b}`
     runs `b`, which sees `c`'s names, once `c` succeeds, and fails when `c`
-    does. Without a body after it, `first(…)` is a call.
+    does. Without a body after it, `first(…)` is a call. `first` reads its
+    clauses as `for` does, and takes `first(c). b`, `first(c) do b` and
+    `first:` with the clauses indented, then `do:` and a body or nothing; a
+    generator `X : Xs` in `first` parses and is refused as not supported
+    yet.
   - `assert{c}` is a runtime error (as `Err()`, with no message) unless
     `c` succeeds.
   Without a [choice](#choice), `first` is the first and only success, and

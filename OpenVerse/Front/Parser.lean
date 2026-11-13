@@ -791,6 +791,21 @@ partial def parseClause (stop : Nat := 0) : PM SExpr := do
     else parseExpr stop
   | none => parseExpr stop
 
+/-- The clauses of `for` or `first` in parentheses, after the `(`, through
+    the `)`: separated by `,`, `;` or new lines. -/
+partial def parseParenClauses : PM (List SExpr) := do
+  let mut clauses := #[]
+  if !(← peekT).isSym ")" then
+    clauses := clauses.push (← parseClause)
+    repeat
+      let s ← peekT
+      if s.isSym "," || s.isSym ";" then bump; clauses := clauses.push (← parseClause)
+      else if s.isSym ")" then break
+      else if s.bol then clauses := clauses.push (← parseClause)
+      else perr s s!"expected ',' or ')' in for clauses, found {s.tok.describe}"
+  expectSym ")"
+  return clauses.toList
+
 /-- `for`: its clauses in parentheses, then a body or `do` and a branch; or
     its clauses as `{…}`, `:` and a block, or `.` and an expression
     (`parseClauses`), then `do` and a branch, or nothing: the clause macro
@@ -802,18 +817,9 @@ partial def parseFor (stop : Nat) : PM SExpr := do
   let o ← peekT
   if o.isSym "(" then
     bump
-    let mut clauses := #[]
-    if !(← peekT).isSym ")" then
-      clauses := clauses.push (← parseClause)
-      repeat
-        let s ← peekT
-        if s.isSym "," || s.isSym ";" then bump; clauses := clauses.push (← parseClause)
-        else if s.isSym ")" then break
-        else if s.bol then clauses := clauses.push (← parseClause)
-        else perr s s!"expected ',' or ')' in for clauses, found {s.tok.describe}"
-    expectSym ")"
+    let clauses ← parseParenClauses
     let body ← if (← peekT).isKw "do" then do bump; parseBranch stop else parseBody stop
-    return .forE t.pos clauses.toList body
+    return .forE t.pos clauses body
   if !o.startsBody then perr o s!"expected '(', '\{', ':' or '.' after for, found {o.tok.describe}"
   let cs ← parseClauses "for" (fun c => parseClause c) stop
   if cs.isEmpty then perr o "'for{}' needs a generator"
@@ -1070,36 +1076,40 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
     else
       bump; return .ident t.pos "let"
   | .ident "first" =>
-    if (← peekT 1).isSym "{" then
-      -- `first{c}`: fails if `c` does, else the value of
-      -- its last clause
-      bump
-      let b ← peekT
-      bump
-      let cs ← parseBracedItems parseExpr
-      if cs.isEmpty then perr b "'first{}' needs a clause"
-      noMacroBody "first" (← peekT) "its value is its last clause's; write 'first(…) {…}' for a body"
-      let (cs, v) := clausesValue cs
-      -- (the first success of the clauses when they have a choice, which
-      -- the elaborator sees once calls of functions with several values are
-      -- inlined, #208, #235; else a block)
-      return .app t.pos (.ident t.pos "$first") [.block t.pos (cs ++ [v])] false
-    else if (← peekT 1).isSym "(" then
-      -- `first(c){b}`: `b`, with `c`'s names, once `c`
-      -- succeeds; fails if `c` does. Otherwise (no body on the same line, or
-      -- what is in the parentheses is not clauses) `first(…)` is a call.
+    -- `first` takes its clauses as `for` does, generators too (Book of
+    -- Verse tests: `first{I->X:Xs; X > 15}`, `first:` … `do:`), and gives
+    -- the value of its body, or of its last clause, at the first way they
+    -- succeed; it fails if they do not (the first success of the clauses
+    -- when they have a choice, which the elaborator sees once calls of
+    -- functions with several values are inlined, #208, #235; else a block)
+    let firstOf (cs : List SExpr) (v : SExpr) : SExpr :=
+      .app t.pos (.ident t.pos "$first") [.block t.pos (cs ++ [v])] false
+    let n1 ← peekT 1
+    if n1.isSym "(" then
+      -- `first(c){b}`, `first(c). b`, `first(c) do b`; otherwise (no body
+      -- on the same line, or no clauses in the parentheses) a call
       let saved ← get
       bump; bump
-      let cs? ← (some <$> parseParenItems) <|> pure none
+      let cs? ← (some <$> parseParenClauses) <|> pure none
       let n ← peekT
-      if let some (cs, _) := cs? then
-        if !n.bol && n.startsBody then
-          let b := SExpr.block t.pos (cs ++ [.block t.pos [← parseBody stop]])
-          return .app t.pos (.ident t.pos "$first") [b] false
+      if let some cs := cs? then
+        if !n.bol && (n.startsBody || n.isKw "do") then
+          let b ← if n.isKw "do" then do bump; parseBranch stop else parseBody stop
+          return firstOf cs (.block t.pos [b])
       set saved
       bump; return .ident t.pos "first"
-    else
-      bump; return .ident t.pos "first"
+    if n1.isSym "{" || (n1.isSym ":" && (← peekT 2).bol) then
+      -- `first{c}`, `first:` and a block, then `do` and a branch or nothing
+      bump
+      let cs ← parseClauses "first" (fun c => parseClause c) stop
+      if cs.isEmpty then perr n1 "'first{}' needs a clause"
+      if (← peekT).isKw "do" then
+        bump
+        return firstOf cs (.block t.pos [← parseBranch stop])
+      noMacroBody "first" (← peekT) "its value is its last clause's; write 'first(…) {…}' for a body"
+      let (cs, v) := clausesValue cs
+      return firstOf cs v
+    bump; return .ident t.pos "first"
   | .ident "assert" =>
     if (← peekT 1).isSym "{" then
       -- `assert{c}`: a runtime error unless `c` succeeds
