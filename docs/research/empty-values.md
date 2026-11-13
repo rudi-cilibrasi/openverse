@@ -519,6 +519,17 @@ converts an operand only losslessly (`TyEnv.lossless`: never a part to
 compared with a type that has `void` in it with no expected type (`void`
 made its parts `()`: `array{()} = array{5}` held).
 
+**Measured.** The programs of openverse's suites and the frozen corpus
+give the same output; the bytecode changes only where the front end's
+plan became Verse Core's `eq` (`tests/verse/empty_values.verse`,
+`different_types.verse`, `empty_literal_compared.verse`, which main's
+compiler emits again). The Book's tests: no verdict changes (a fresh run
+at main `7bf6dbd`, with this change, gives the baseline: 7,374 agree).
+Lean and C agree on 23,000 programs of `scripts/fuzz-diff.sh`, whose Main
+now starts with tests of values holding the empty value, and on 3,600
+programs of `scripts/fuzz-equality.sh` (33,698 comparisons), which match
+its model of the Book's equality.
+
 **What still differs from the Book:**
 
 | Program | openverse | Book |
