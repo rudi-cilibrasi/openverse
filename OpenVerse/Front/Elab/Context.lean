@@ -819,6 +819,7 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .name "rational" => pure .rational
   | .name "string" => pure Ty.string
   | .name "void" => pure .void
+  | .name "true" => pure (.tup [])
   | .name "float" => pure .float
   | .name "any" => pure .any
   | .name "$never" => pure .never
@@ -837,7 +838,9 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
     else eerr p (unknownTypeMessage n)
   | .arr t => return .arr (← resolveTy env p t)
   | .opt t => return .opt (← resolveTy env p t)
-  | .tup [] => pure .void
+  -- (`tuple()` and `true` are the type of the empty value alone; `void`
+  -- takes any value, Book of Verse ch. 2: `Ty.isUnit`)
+  | .tup [] => pure (.tup [])
   | .tup ts => return .tup (← ts.mapM (resolveTy env p))
   -- a function type: its shape's interface (#210)
   | .fn ps es r => do
@@ -1395,17 +1398,6 @@ def Ctx.implFor? (ctx : Ctx) (d r m : String) : Option String :=
 
 def p2 (op : Prim) (a b : Expr) : Expr := .prim op [a, b]
 
-/-- The empty value as Verse Core holds it at a type that has it. Verse has
-    one empty value, written `false` or `()` (Book of Verse ch. 2, "void,
-    true, tuple() and false"): it is the `logic` false, the `void` and
-    `tuple()` value, the empty option, and the empty array, string and map. -/
-def Ty.emptyValue? : Ty → Option Value
-  | .logic => some (.logic false)
-  | .void | .tup [] => some .void
-  | .opt _ => some .none
-  | .arr _ | .map _ _ => some Value.emptyArray
-  | _ => none
-
 /-- What the values of two types have in common, for `=` between them. -/
 inductive Common where
   /-- no value -/
@@ -1529,7 +1521,7 @@ partial def witness (env : TyEnv) (dictBase : Nat) (dictVars : List String) : Ty
   | .any => pure (.lit .void)
   | .logic => pure (.lit (.logic false))
   | .char => pure (.lit (.char 0))
-  | .void | .never => pure (.lit .void)
+  | .void | .never | .tup [] => pure (.lit .void)
   | .arr t => return .prim .mkArr [← witness env dictBase dictVars t]
   | .opt t => return .prim .mkSome [← witness env dictBase dictVars t]
   | .tup ts => return .prim .mkTup (← ts.mapM (witness env dictBase dictVars))
@@ -1877,6 +1869,9 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
   match a, b with
   -- `int` is a subtype of `rational` (#116): `X` is `X / 1`
   | .int, .rational => return some (.prim .mkTup [e, .lit (.int 1)])
+  -- "`true` is a subtype of `logic`, so the unit value flows into logic
+  -- positions" (Book of Verse ch. 2): the empty value, the logic false
+  | .tup [], .logic => return some (.seq e (.lit (.logic false)))
   -- Every value can be erased or discarded, including within containers (#138).
   | _, .any | _, .void => return some (← discardValue ⟨e, a⟩)
   -- a refinement is its base (#136); the base is the refinement only for a
@@ -1996,6 +1991,9 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
     let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push target })
     return .assign x (.seq r.e (.prim .userErr []))
   if r.ty == target || r.ty == .never then return r.e
+  -- (a `void` value is the empty value, as one of `tuple()` is: both are
+  -- `()` in Verse Core)
+  if r.ty.isUnit && target.isUnit then return r.e
   if target == .void then return ← discardValue r
   match ← convert (← get).env r.e r.ty target with
   | some e =>

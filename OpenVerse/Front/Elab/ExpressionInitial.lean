@@ -293,6 +293,7 @@ partial def elabExprInitialWith
       -- Book of Verse ch. 2)
       | some (.map k v) => return ⟨.lit Value.emptyArray, .map k v⟩
       | some .void => return ⟨.lit .void, .void⟩
+      | some (.tup []) => return ⟨.lit .void, .tup []⟩
       | _ => return ⟨.lit (.logic false), .logic⟩
     | _ =>
       match ctx.lookup n with
