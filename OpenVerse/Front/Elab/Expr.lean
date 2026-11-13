@@ -88,6 +88,15 @@ partial def elabReceiverEvidence (ctx : Ctx) (p : Pos)
     coerce p (← elabMember ctx p ⟨.local 0, receiver⟩ fieldName) bound.ty
 
 partial def elabERaw (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
+  -- `T{}` with `T` a type value of `concrete_subtype(A)`: `T.$make(A)()`
+  -- (`TypeValues`)
+  if let .construct p n [] fs := se then
+    if let some l := ctx.lookup n then
+      if let .struct iface [] := l.ty then
+        if let some (k, a) := TypeValues.bound? iface then
+          if k != "concrete_subtype" then eerr p s!"{n}\{…} constructs through a value of concrete_subtype(…), and {n} is a {iface}"
+          if !fs.isEmpty then eerr p s!"{n}\{…} constructs through a type value with no fields given: the class's defaults"
+          return ← elabE ctx (.app p (.member p (.ident p n) (TypeValues.makeMethod a)) [] false) exp
   if !ctx.constructProbe && ctx.constructHints.isNone &&
       Choice.anyE (fun
         | e@(.construct _ n [] _) =>

@@ -4,6 +4,7 @@ import OpenVerse.Front.Elab.Lowering
 import OpenVerse.Front.InitializerConvergence
 import OpenVerse.Front.Aliases
 import OpenVerse.Front.BuiltinValues
+import OpenVerse.Front.TypeValues
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -484,6 +485,8 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   Access.checkConsistency levels resolved
   let access := Access.Env.of levels (Access.Sites.of resolved) resolved
   Access.checkUses access resolved
+  -- (types as values, `subtype(t)` and its kin: classes and interfaces)
+  let resolved ← TypeValues.desugar resolved
 
   -- (the built-ins it names as values, as definitions of their own: after
   -- the aliases, whose names are no values' and bind nothing)

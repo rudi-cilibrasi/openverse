@@ -492,7 +492,7 @@ def elabProgram (allTops000 : List STop) (opts : Options := {}) : Except String 
           casts := [], loops := bridges ++ newDefaults }
   termination_by (eagerFuel, witnessFuel, fuel)
   (loop eagerRounds witnessRounds rounds opts.requests).mapError fun msg =>
-    FnValues.pretty ((((stripOv ((Refine.unmarked msg).replace "$init" "<constructor>")).replace "::" ".").replace "$replaceAll" "ReplaceAll").replace extensionPrefix "")
+    FnValues.pretty (((((stripOv ((Refine.unmarked msg).replace "$init" "<constructor>")).replace "::" ".").replace "$replaceAll" "ReplaceAll").replace extensionPrefix "").replace "$type:" "")
 
 /-- Parse and elaborate Verse source text. -/
 def compileChecked (src : String) (opts : Options := {}) : Except String Compiled := do

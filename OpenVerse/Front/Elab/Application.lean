@@ -1,5 +1,6 @@
 /- Elaboration application; public declarations retain OpenVerse.Front names. -/
 import OpenVerse.Front.Elab.Control
+import OpenVerse.Front.TypeValues
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -95,7 +96,15 @@ partial def elabAppBaseWith
   | .ident fp name =>
     if let some r ← elabExtensionCallWith elabE elabApp ctx p fp name args bracket exp then return r
     match ctx.lookup name with
-    | some l => indexLike f ⟨.local l.slot, l.ty⟩
+    | some l =>
+      -- `T[X]` with `T` a type value, of `subtype(A)` or its kin: `X` cast
+      -- through it, `T.$cast(A)[A[X]]` (`TypeValues`)
+      if let .struct iface [] := l.ty then
+        if let some (_, a) := TypeValues.bound? iface then
+          let [x] := args | eerr p s!"a cast through {name} takes one value"
+          if !bracket then eerr p s!"a cast through the type {name} can fail: write {name}[X]"
+          return ← elabApp ctx p (.member p f (TypeValues.castMethod a)) [.app p (.ident p a) [x] true] true exp
+      indexLike f ⟨.local l.slot, l.ty⟩
     | none =>
     -- in a method, a method of `Self`, or a field of `Self` indexed
     let selfMember? : Bool := match ctx.selfClass with
