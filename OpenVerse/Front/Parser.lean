@@ -318,7 +318,7 @@ partial def parseExpr (stop : Nat) : PM SExpr := do
     let ty ← parseType
     let a ← peekT
     if a.isSym "=" || a.isSym ":=" then bump else perr a "expected '=' after var declaration"
-    return .decl t.pos n (some ty) true (← parseExpr stop)
+    return .decl t.pos n (some ty) true (← parseValue stop)
   else if t.isKw "set" then
     bump
     let lhs ← parsePostfix stop
@@ -331,10 +331,10 @@ partial def parseExpr (stop : Nat) : PM SExpr := do
       | .sym "/=" => pure (some "/")
       | _ => perr a "expected '=' or a compound assignment in set"
     bump
-    return .set t.pos lhs op (← parseExpr stop)
+    return .set t.pos lhs op (← parseValue stop)
   else if t.identName?.isSome && t1.isSym ":=" then
     bump; bump
-    return .decl t.pos t.identName?.get! none false (← parseExpr stop)
+    return .decl t.pos t.identName?.get! none false (← parseValue stop)
   else if t.identName?.isSome && t1.isSym ":" && !(← peekT 2).bol then
     -- (a typed declaration has its type on the line of its `:`; `sync:`
     -- and the like start an indented block)
@@ -346,9 +346,21 @@ partial def parseExpr (stop : Nat) : PM SExpr := do
         if a.isSym "=" || a.isSym ":=" then bump; return some ty else return none)
       <|> pure none
     match typed with
-    | some ty => return .decl t.pos t.identName?.get! (some ty) false (← parseExpr stop)
+    | some ty => return .decl t.pos t.identName?.get! (some ty) false (← parseValue stop)
     | none => set saved; parseRange stop
   else parseRange stop
+
+/-- A value after `=`, `:=` or `=>`: an expression, or, when it starts a
+    later line deeper than `stop`, the indented block of those lines, as a
+    function's body after `=` is (Book of Verse tests: `Value :=` and an
+    indented `1`, `2`, `3` is `3`). A block of one item is that item. -/
+partial def parseValue (stop : Nat) : PM SExpr := do
+  let t ← peekT
+  if t.bol && t.col > stop && !t.isEof then
+    match ← parseIndented t.col with
+    | [e] => return e
+    | es => return .block t.pos es
+  parseExpr stop
 
 partial def parseRange (stop : Nat) : PM SExpr := do
   let a ← parseOr stop
@@ -678,7 +690,7 @@ partial def parseClause (stop : Nat := 0) : PM SExpr := do
           let a ← peekT
           if a.isSym "=" || a.isSym ":=" then bump; return some ty else return none) <|> pure none
       match typed with
-      | some ty => return .decl t.pos i (some ty) false (← parseExpr stop)
+      | some ty => return .decl t.pos i (some ty) false (← parseValue stop)
       | none =>
         set saved; bump; bump
         return .gen t.pos i none (← parseExpr stop)
@@ -724,7 +736,7 @@ partial def parseCase (stop : Nat) : PM SExpr := do
         bump; pure none
       else some <$> parseAdd 0
     expectSym "=>"
-    return (pat, ← parseExpr c)
+    return (pat, ← parseValue c)
   let o ← peekT
   let mut arms := #[]
   if o.isSym ":" then
@@ -769,7 +781,7 @@ partial def parseField (c : Nat) : PM (String × STy × Option SExpr × Bool) :=
   let a ← peekT
   if a.isSym "=" || a.isSym ":=" then
     bump
-    return (n, ty, some (← parseExpr c), isVar)
+    return (n, ty, some (← parseValue c), isVar)
   return (n, ty, none, isVar)
 
 /-- `struct` (after the keyword): optional specifiers, then `:` + fields or `{ fields }`. -/
@@ -1038,14 +1050,17 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
     perr t s!"unexpected {t.tok.describe}"
 end
 
-/-- A function body after `=`: an indented block, a braced block, or an expression. -/
+/-- A function body after `=`: an indented block, a braced block (whose `{`
+    may start the next line), or an expression. -/
 def parseFnBody : PM SExpr := do
   let t ← peekT
   let top := (← get).topCol
-  if t.bol then
+  -- (a braced body's `{` may start the next line, at the definition's
+  -- column; deeper, it starts an indented block)
+  if t.isSym "{" && (!t.bol || t.col == top) then bump; parseBraced t.pos
+  else if t.bol then
     if t.col ≤ top then perr t "expected an indented function body"
     return .block t.pos (← parseIndented t.col)
-  else if t.isSym "{" then bump; parseBraced t.pos
   else parseExpr top
 
 /-- A parameter, or a parenthesized group of them that destructures a tuple
@@ -1130,13 +1145,13 @@ def withBinds (binds : List SExpr) (body : SExpr) : SExpr :=
     | e => .block e.pos (binds ++ [e])
 
 /-- The body of a method defined at column `c`: on the following lines,
-    indented more than `c`, or inline. -/
+    indented more than `c`, braced (from the next line, at `c`), or inline. -/
 def parseFnBodyAt (c : Nat) : PM SExpr := do
   let t ← peekT
-  if t.bol then
+  if t.isSym "{" && (!t.bol || t.col == c) then bump; parseBraced t.pos
+  else if t.bol then
     if t.col ≤ c then perr t "expected an indented method body"
     return .block t.pos (← parseIndented t.col)
-  else if t.isSym "{" then bump; parseBraced t.pos
   else parseExpr c
 
 /-- An item of a constructor function's body (Book of Verse ch. 10): a field
@@ -1225,7 +1240,7 @@ partial def parseClassItem (c : Nat) :
     bump
     let ty ← parseType
     let a ← peekT
-    let d ← if a.isSym "=" || a.isSym ":=" then do bump; pure (some (← parseExpr c)) else pure none
+    let d ← if a.isSym "=" || a.isSym ":=" then do bump; pure (some (← parseValue c)) else pure none
     return .inl ((name, ty, d, isVar), pre.contains "override")
   if isVar then perr t "expected a field after var"
   expectSym "("
