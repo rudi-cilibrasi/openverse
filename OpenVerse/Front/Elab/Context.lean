@@ -519,6 +519,7 @@ def Requests.merge (a b : Requests) : Requests where
   casts := mergeByKey (·.key) a.casts b.casts
   loops := mergeByKey (·.key) a.loops b.loops
   witnesses := mergeByKey id a.witnesses b.witnesses
+  boxes := mergeByKey id a.boxes b.boxes
 
 /-- Those of `xs` whose key none of `old` has. -/
 def dropByKey [BEq κ] (key : α → κ) (xs old : List α) : List α :=
@@ -539,12 +540,13 @@ def Requests.without (r old : Requests) : Requests where
   casts := dropByKey (·.key) r.casts old.casts
   loops := dropByKey (·.key) r.loops old.loops
   witnesses := dropByKey id r.witnesses old.witnesses
+  boxes := dropByKey id r.boxes old.boxes
 
 def Requests.isEmpty (r : Requests) : Bool :=
   r.eager.isEmpty && r.lazy.isEmpty && r.families.isEmpty && r.overloads.isEmpty && r.nested.isEmpty &&
     r.fieldOrders.isEmpty && r.instanceCalls.isEmpty &&
     r.fns.isEmpty && r.methods.isEmpty &&
-    r.casts.isEmpty && r.loops.isEmpty && r.witnesses.isEmpty && r.subtypes.isEmpty
+    r.casts.isEmpty && r.loops.isEmpty && r.witnesses.isEmpty && r.subtypes.isEmpty && r.boxes.isEmpty
 
 /-- A lazily taken call where the first success is taken (#246): its
     function, where, the code it runs once for all the values of an item,
@@ -1965,15 +1967,17 @@ partial def Ty.mentionsComparable : Ty → Bool
     their codes; a rational as its int when it is one, else under code 1; a
     map that is not empty under code 2, its pairs boxed; a tuple as the array
     of its elements' boxes; arrays and options elementwise. None for a type
-    with a type parameter in it. Its value has Verse Core type `dyn`. -/
-partial def boxValue (env : TyEnv) (e : Expr) (a : Ty) : EM (Option Expr) := do
+    with a type parameter in it, but as `param` boxes a value of one (its
+    evidence's `Up`). Its value has Verse Core type `dyn`. -/
+partial def boxValue (env : TyEnv) (e : Expr) (a : Ty)
+    (param : Expr → Ty → EM (Option Expr) := fun _ _ => pure none) : EM (Option Expr) := do
   if a.boxId env then return some e
   let slot (t : Ty) : EM Nat :=
     modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push t })
   let parts (x : Nat) (ts : List Ty) : EM (Option (List Expr)) := do
     let mut out : Array Expr := #[]
     for (t, i) in ts.zipIdx do
-      let some c ← boxValue env (.prim (.tupGet i) [.local x]) t | return none
+      let some c ← boxValue env (.prim (.tupGet i) [.local x]) t param | return none
       out := out.push c
     return some out.toList
   match a with
@@ -1994,32 +1998,34 @@ partial def boxValue (env : TyEnv) (e : Expr) (a : Ty) : EM (Option Expr) := do
     return some (.seq (.assign x e) (.prim .mkTup [.lit (.int (env.boxCode n)), .prim .mkTup es]))
   | .arr t =>
     let i ← slot t
-    let some c ← boxValue env (.local i) t | return none
+    let some c ← boxValue env (.local i) t param | return none
     -- (into an array of `comparable`, so that the `for` is checked at it)
     let y ← slot (.arr .dyn)
     return some (.assign y (.forE i e (.lit (.logic true)) c))
   | .opt t =>
     let x ← slot a
     let i ← slot t
-    let some c ← boxValue env (.local i) t | return none
+    let some c ← boxValue env (.local i) t param | return none
     return some (.seq (.assign x e) (.ite (.assign i (.prim .query [.local x])) (.prim .mkSome [c]) (.lit .none)))
   | .map k v =>
     let x ← slot a
     let i ← slot (.tup [k, v])
-    let some ck ← boxValue env (.prim (.tupGet 0) [.local i]) k | return none
-    let some cv ← boxValue env (.prim (.tupGet 1) [.local i]) v | return none
+    let some ck ← boxValue env (.prim (.tupGet 0) [.local i]) k param | return none
+    let some cv ← boxValue env (.prim (.tupGet 1) [.local i]) v param | return none
     let y ← slot (.arr (.tup [.dyn, .dyn]))
     return some (.seq (.assign x e) (.ite (.prim .eq [.prim .len [.local x], .lit (.int 0)]) (.local x)
       (.prim .mkTup [.lit (.int 2), .assign y (.forE i (.local x) (.lit (.logic true)) (.prim .mkTup [ck, cv]))])))
+  | .param .. => param e a
   | _ => return none
 
 /-- `x op y` (`=` or `<>`) of values of types `ta` and `tb` by their boxes
     (Book of Verse ch. 11, "Dynamic Comparable Values": a boxed value equals
     another exactly when both have the same type and equal values); its
     value is `x`, which must be a value without effects. -/
-def boxedTest (env : TyEnv) (p : Pos) (op : Prim) (x : Expr) (ta : Ty) (y : Expr) (tb : Ty) : EM Expr := do
-  let some bx ← boxValue env x ta | eerr p s!"'=' boxes values of type {ta.show}, which is not supported yet"
-  let some by_ ← boxValue env y tb | eerr p s!"'=' boxes values of type {tb.show}, which is not supported yet"
+def boxedTest (env : TyEnv) (p : Pos) (op : Prim) (x : Expr) (ta : Ty) (y : Expr) (tb : Ty)
+    (param : Expr → Ty → EM (Option Expr) := fun _ _ => pure none) : EM Expr := do
+  let some bx ← boxValue env x ta param | eerr p s!"'=' boxes values of type {ta.show}, which is not supported yet"
+  let some by_ ← boxValue env y tb param | eerr p s!"'=' boxes values of type {tb.show}, which is not supported yet"
   let u ← fresh .dyn
   let w ← fresh .dyn
   return .seq (.assign u bx) (.seq (.assign w by_) (.seq (.prim op [.local u, .local w]) x))

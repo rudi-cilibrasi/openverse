@@ -548,7 +548,7 @@ partial def elabSeqIn (closed : Bool) (ctx : Ctx) (ss : List SExpr) (exp : Optio
 partial def elabArgs (ctx : Ctx) (p : Pos) (args : List SExpr) (tys : List Ty) : EM (List Expr) := do
   if args.length != tys.length then
     eerr p s!"expected {tys.length} argument(s), found {args.length}"
-  (args.zip tys).mapM fun (a, t) => do ctx.coerce a.pos (← elabE ctx a (some t)) t
+  (args.zip tys).mapM fun (a, t) => do coerceBoxWith elabE ctx a.pos (← elabE ctx a (some t)) t
 
 partial def elabInts (ctx : Ctx) (p : Pos) (args : List SExpr) : EM (List Expr) :=
   elabArgs ctx p args (args.map fun _ => .int)
@@ -1065,36 +1065,26 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
         if !tb.comparable ctx.types then eerr p (notComparable ctx.types tb s!"an operand of '{op}'")
         eerr p "these values cannot be compared"
       if ta == tb || ta == .never || tb == .never then return .core
-      let closed := ta.params.isEmpty && tb.params.isEmpty
-      -- (a `comparable` on either side: both boxed, Book of Verse ch. 11)
-      if ta.mentionsComparable || tb.mentionsComparable then
-        if !closed then
-          eerr p s!"'{op}' compares a comparable with a value of a type parameter, {ta.show} and {tb.show} (not supported yet)"
+      -- (a `comparable` on either side, or a type parameter and another type:
+      -- both boxed, Book of Verse ch. 11; a type parameter's value by the
+      -- evidence of its `subtype(comparable)`, at run time)
+      if ta.mentionsComparable || tb.mentionsComparable || !ta.params.isEmpty || !tb.params.isEmpty then
         return .boxed
-      -- (type parameters: at some instance two different ones, or one and a
-      -- type that several types share in Verse Core, one with an int or a
-      -- tuple, could be types whose values Verse Core finds equal)
-      let (va, vb) := (ta.toVTy ctx.types, tb.toVTy ctx.types)
-      let (pa, pb) := (!ta.params.isEmpty, !tb.params.isEmpty)
-      if (pa && pb) || (pa && vb.shared) || (pb && va.shared) then
-        eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show}"
-      -- (nor an int with a rational inside containers that do not convert,
-      -- #116: equal values that Verse Core holds differently, `1` and `(1, 1)`)
-      if ratMismatch ta tb then
-        -- (boxed, where an int is the rational it is)
-        if closed then return .boxed
-        eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show} (an int and a rational inside them: convert the ints first)"
+      -- (an int with a rational inside containers that do not convert, #116:
+      -- equal values that Verse Core holds differently, `1` and `(1, 1)`:
+      -- boxed, where an int is the rational it is)
+      if ratMismatch ta tb then return .boxed
       match ctx.types.cmpPlan ta tb with
-      | .refuse =>
-        -- (boxed: Verse Core's equality of boxes is Verse's)
-        if closed then return .boxed
-        eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show}, whose values in common Verse Core cannot compare (not supported)"
+      -- (boxed: Verse Core's equality of boxes is Verse's)
+      | .refuse => return .boxed
       | plan => return plan
     else if !((ta == .int && tb == .int) || (ta == .char && tb == .char) || (ta == .char32 && tb == .char32) ||
         (ta == .float && tb == .float)) then
       eerr p s!"'{op}' compares ints, chars, char32s or floats, found {ta.show} and {tb.show}"
     return .core
   let accepts : Ty → Bool := fun ty => arithmeticType ctx.types ty || ty == .char || ty == .char32
+  -- (the box of a type parameter's value: its evidence's `Up`)
+  let paramBox (e : Expr) (t : Ty) : EM (Option Expr) := some <$> elabBoxWith elabE ctx p e t
   let numeric (value : R) : EM R := do
     return widenR ctx.types (← elabValueViewWith elabE ctx p value accepts "comparison")
   -- (an empty `array{}` or `map{}` has no type of its own: compared with a
@@ -1178,7 +1168,7 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
     | .boxed =>
       let x ← fresh ra.ty
       let y ← fresh rb.ty
-      let test ← boxedTest ctx.types p (opOf op) (.local x) ra.ty (.local y) rb.ty
+      let test ← boxedTest ctx.types p (opOf op) (.local x) ra.ty (.local y) rb.ty paramBox
       return result (.seq (.assign x ra.e) (.seq (.assign y rb.e) test)) ra.ty
     | plan =>
       let x ← fresh ra.ty
@@ -1205,7 +1195,7 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
         steps := steps.push (.assign tb rb.e)
         steps := steps.push (← match plan with
           | .core => pure (p2 (ordOf op prevTy) prevR.e (.local tb))
-          | .boxed => boxedTest ctx.types p (opOf op) prevR.e prevR.ty (.local tb) rb.ty
+          | .boxed => boxedTest ctx.types p (opOf op) prevR.e prevR.ty (.local tb) rb.ty paramBox
           | plan => pure (plan.test (opOf op) prev tb))
       prev := tb
       prevTy := rb.ty

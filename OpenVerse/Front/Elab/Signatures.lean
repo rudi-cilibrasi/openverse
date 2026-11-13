@@ -154,6 +154,16 @@ def declareSignatures (env : TyEnv) (tops : List STop) (requests : Requests) :
             else pure resolved
           | _ => pure resolved
         | none => pure resolved
+      -- (a function that boxes a value of a type mentioning its type
+      -- parameter `t`, `Requests.boxes`: the bound `(comparable, t)`, whose
+      -- evidence is the box of a `t`)
+      let boxed := (requests.boxes.filter (·.1 == n)).filterMap fun (_, t) =>
+        match resolved.params.lookup t with
+        | some true =>
+          let bound : SubtypeEvidence.Bound := ⟨.dyn, .param t true⟩
+          if resolved.bounds.contains bound then none else some bound
+        | _ => none
+      let resolved := { resolved with bounds := resolved.bounds ++ boxed }
       let tparams := resolved.params
       let genv := resolved.env env
       let (tys, rt) ← fnTypes genv p n ps effs ret

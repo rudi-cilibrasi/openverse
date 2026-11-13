@@ -56,6 +56,21 @@ def defaultTypes (ctx : Ctx) (p : Pos) (s : Sig) (σ : List (String × Ty)) (d :
   return ({ ctx.types with tvars := aliases ++ core.map (fun (n, cmp) => (n, Ty.param n cmp)) },
     substDefaultTypes rename d)
 
+/-- A value of type `t`, which mentions type parameters of the function being
+    elaborated, is boxed (converted to `comparable`, or compared with a value
+    of another type), and the function has no evidence of `t:subtype(comparable)`
+    for them: asked for (`Requests.boxes`), as the bound `(comparable, t)` of
+    the function, and the program is elaborated again with it. -/
+def Ctx.askBoxes (ctx : Ctx) (p : Pos) (t : Ty) : EM Unit := do
+  let unsupported := s!"boxing a value of type {t.show} as a comparable here is not supported yet"
+  let some s := ctx.sig? ctx.frameName | eerr p unsupported
+  for n in t.params.eraseDups do
+    match s.tparams.lookup n with
+    | some true =>
+      if s.bounds.contains ⟨.dyn, .param n true⟩ then eerr p unsupported
+      noteNeeds { boxes := [(ctx.frameName, n)] }
+    | _ => eerr p unsupported
+
 partial def elabSubtypeValueWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
     (p : Pos) (plan : SubtypeEvidence.Plan) (bound : SubtypeEvidence.Bound) : EM R := do
   let missing := plan.nominals.filter fun (source, target) =>
@@ -66,7 +81,8 @@ partial def elabSubtypeValueWith (elabE : Ctx → SExpr → Option Ty → EM R) 
     !ctx.types.classes.contains (SubtypeEvidence.tupleArrayFamily arity)
   let refinements := plan.refinements.filter fun (source, target) =>
     !ctx.types.classes.contains (SubtypeEvidence.refinementFamily source target)
-  if !missing.isEmpty || !tuples.isEmpty || !tupleArrays.isEmpty || !refinements.isEmpty then
+  let boxes := plan.boxes.filter fun t => !ctx.types.classes.contains (SubtypeEvidence.boxFamily t)
+  if !missing.isEmpty || !tuples.isEmpty || !tupleArrays.isEmpty || !refinements.isEmpty || !boxes.isEmpty then
     let declarations ← missing.mapM fun (source, target) =>
       match SubtypeEvidence.nominal ctx.types p source target with
       | .ok declaration => pure declaration
@@ -80,6 +96,7 @@ partial def elabSubtypeValueWith (elabE : Ctx → SExpr → Option Ty → EM R) 
       match SubtypeEvidence.refinementDeclaration ctx.types p source target with
       | .ok declaration => pure (declarations ++ [declaration])
       | .error message => eerr p message) declarations
+    let declarations := declarations ++ boxes.map (SubtypeEvidence.boxDeclaration p)
     noteNeeds { subtypes := declarations }
     return ⟨.prim .userErr [], bound.ty⟩
   elabE ctx (plan.value ctx.types p) (some bound.ty)
@@ -163,6 +180,29 @@ partial def elabSubtypeUpWith (elabE : Ctx → SExpr → Option Ty → EM R)
   return ⟨.seq (.assign slot value.e) (.seq (.assign dictionarySlot dictionary.e)
     (← coerce p result target)), target⟩
 
+/-- The box of `e`, of type `t`, which mentions type parameters: by the
+    evidence of `t:subtype(comparable)` (its `Up`), asked for when the
+    function has none (`Ctx.askBoxes`; a placeholder until then). -/
+partial def elabBoxWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p : Pos) (e : Expr) (t : Ty) :
+    EM Expr := do
+  match SubtypeEvidence.find? ctx.types ctx.evidenceTypes ⟨.dyn, t⟩ with
+  | some plan =>
+    if plan.valid ctx.types ctx.evidenceTypes && plan.usesLocal then
+      return (← elabSubtypeUpWith elabE ctx p ⟨e, t⟩ .dyn plan).e
+    ctx.askBoxes p t
+    return .prim .userErr []
+  | none =>
+    ctx.askBoxes p t
+    return .prim .userErr []
+
+/-- `ctx.coerce`, but a value of a type mentioning type parameters converts
+    to `comparable` by its evidence (`elabBoxWith`). -/
+partial def coerceBoxWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p : Pos) (r : R)
+    (target : Ty) : EM Expr := do
+  if target == .dyn && !r.ty.params.isEmpty && r.ty.comparable ctx.types then
+    return ← elabBoxWith elabE ctx p r.e r.ty
+  ctx.coerce p r target
+
 /-- Convert a once-elaborated argument after view-based inference. Ordinary
     conversions keep their path; an actual dictionary handles an opaque view. -/
 partial def elabArgumentCoerceWith (elabE : Ctx → SExpr → Option Ty → EM R)
@@ -170,6 +210,10 @@ partial def elabArgumentCoerceWith (elabE : Ctx → SExpr → Option Ty → EM R
   if value.ty != target && value.ty != .never && target != .void then
     if let some plan := SubtypeEvidence.find? ctx.types ctx.evidenceTypes ⟨target, value.ty⟩ then
       if plan.usesLocal then return (← elabSubtypeUpWith elabE ctx p value target plan).e
+    -- (a value of a type parameter as a comparable: its evidence, Book of
+    -- Verse ch. 11)
+    if target == .dyn && !value.ty.params.isEmpty && value.ty.comparable ctx.types then
+      return ← elabBoxWith elabE ctx p value.e value.ty
   coerce p value target
 
 partial def elabValueViewWith (elabE : Ctx → SExpr → Option Ty → EM R)
@@ -431,9 +475,14 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
     let required := required.subst σ
     let locals := ctx.evidenceTypes
     let some plan := SubtypeEvidence.find? ctx.types locals required
-      | eerr p s!"type {required.derived.show} does not satisfy subtype({required.base.show}) in a call of {s.name}"
+      | -- (the box of a type of the caller's own type parameters, which it
+        -- has no evidence for yet: asked for, Book of Verse ch. 11)
+        if required.base == .dyn && !required.derived.params.isEmpty then
+          ctx.askBoxes p required.derived
+          return (required, none)
+        else eerr p s!"type {required.derived.show} does not satisfy subtype({required.base.show}) in a call of {s.name}"
     if !plan.valid ctx.types locals then eerr p "internal: invalid subtype evidence plan"
-    return (required, plan)
+    return (required, some plan)
   -- A lazy recursive edge needs the ordinary call's arguments/defaults,
   -- evaluated once in order, before pushing its next producer item.
   if ctx.typeOnly && ctx.callInstanceProbe == some s.name then
@@ -455,6 +504,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
       witness ctx.types ctx.dictBase ctx.dictVars t
   let evidence ← evidencePlans.mapM fun (required, plan) => do
     if let some (_, saved) := defaultEvidence.find? (·.1 == required) then return Expr.local saved.slot
+    let some plan := plan | return Expr.prim .userErr []
     coerce p (← elabSubtypeValueWith elabE ctx p plan required) required.ty
   if plain then return ⟨.call s.idx (es.toList ++ evidence ++ dicts), s.ret.subst σ⟩
   let call := Expr.call s.idx (slots.toList.map (fun o => Expr.local o.get!) ++ evidence ++ dicts)

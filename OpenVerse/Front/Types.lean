@@ -210,6 +210,12 @@ structure Requests where
       that are not a prefix of their own (#351): hidden fields for all of
       their type parameters. -/
   witnesses : List String := []
+  /-- The generic functions that box a value of a type mentioning one of
+      their type parameters (a conversion to `comparable`, a comparison
+      with a value of another type), and that parameter: the bound
+      `(comparable, t)`, whose evidence is the box of a `t`, for each
+      (`SubtypeEvidence.Plan.box`). -/
+  boxes : List (String × String) := []
   deriving Inhabited
 
 /-- The user-defined types of a program. -/

@@ -218,6 +218,8 @@ def program(seed):
              'IsEmptyString(X:t where t:subtype(comparable))<decides>:void = X = ""',
              'Same(X:t, Y:t where t:subtype(comparable))<decides>:void = X = Y',
              'SameBoxed(X:comparable, Y:comparable)<decides>:void = X = Y',
+             'SameAny(X:t, Y:u where t:subtype(comparable), u:subtype(comparable))<decides>:void = X = Y',
+             'InArrays(X:t, Y:u where t:subtype(comparable), u:subtype(comparable))<decides>:void = array{X} = array{Y}',
              'Main():void =']
     out = []
     vars_ = []
@@ -253,10 +255,12 @@ def program(seed):
             lines.append(f'    Print(Show(logic{{{c}{{{a}}} = {c}{{{b}}}}}))')
             out.append('y' if ma == mb else 'n')
         elif what < 0.5:
-            (a, ka, ma) = r.choice(vars_)
+            # (through a generic function: at a type of any shape, an empty
+            # struct is no empty value, an enum's value no int)
+            (a, ka, ma) = r.choice(vars_ + boxed)
             f, lit = r.choice([('IsFalse', None), ('IsEmptyString', None)])
             lines.append(f'    Print(Show(logic{{{f}[{a}]}}))')
-            out.append('y' if ma == E else 'n')
+            out.append('y' if norm(ma) == E else 'n')
         elif what < 0.58:
             # a map keyed by values of one kind, looked up by another value of it
             name, k = r.choice(ts)
@@ -291,9 +295,10 @@ def program(seed):
             # two values of any comparable types, boxed: equal exactly when they
             # are one value (Book of Verse ch. 11)
             (a, ka, ma), (b, kb, mb) = r.choice(boxed + vars_), r.choice(boxed + vars_)
-            form = r.choice(['fn', 'both', 'left', 'right'])
-            if form == 'fn':
-                lines.append(f'    Print(Show(logic{{SameBoxed[{a}, {b}]}}))')
+            form = r.choice(['fn', 'both', 'left', 'right', 'generic', 'arrays'])
+            if form in ('fn', 'generic', 'arrays'):
+                f = {'fn': 'SameBoxed', 'generic': 'SameAny', 'arrays': 'InArrays'}[form]
+                lines.append(f'    Print(Show(logic{{{f}[{a}, {b}]}}))')
                 eq = norm(ma) == norm(mb)
             else:
                 op = r.choice(['=', '<>'])

@@ -148,6 +148,34 @@ def refinementDeclaration (env : TyEnv) (p : Pos) (source : String) (target : Ty
     [.fn p "Up" [{ name := "$input", ty := .name source }] [] ["override", "computes"]
       target.toSTy (.ident p "$input")]
 
+/-- A name made of the letters and digits of `s`, every other character
+    written as its code. -/
+private def safeName (s : String) : String :=
+  s.foldl (fun acc c => if c.isAlphanum then acc.push c else acc ++ s!"_{c.toNat}_") ""
+
+/-- The family of the boxes of a closed comparable type `t` (Book of Verse
+    ch. 11): the evidence of `t:subtype(comparable)` at `t`, whose `Up`
+    boxes a `t` (`OpenVerse.Core.Comparable`). -/
+def boxFamily (t : Ty) : String := s!"$subtypeBox_{safeName t.show}"
+
+/-- One class per closed comparable type: `Up` converts its input to
+    `comparable`, which boxes it (the ordinary conversion of the result). -/
+def boxDeclaration (p : Pos) (t : Ty) : STop :=
+  .classDef p (boxFamily t) [] ["computes"] [.app family [.name "comparable", t.toSTy]] false [] []
+    [.fn p "Up" [{ name := "$input", ty := t.toSTy }] [] ["override", "computes"] (.name "comparable")
+      (.ident p "$input")]
+
+/-- `t` with each type parameter in an array, option, tuple or map made
+    `comparable`: the container of boxes a container of type parameters'
+    values is boxed through. None when one is elsewhere (in a struct). -/
+partial def boxShape : Ty → Option Ty
+  | .param .. => some .dyn
+  | .arr t => (boxShape t).map .arr
+  | .opt t => (boxShape t).map .opt
+  | .tup ts => (ts.mapM boxShape).map .tup
+  | .map k v => do return .map (← boxShape k) (← boxShape v)
+  | t => if t.params.isEmpty then some t else none
+
 def nominalFamily (source target : String) : String :=
   s!"$subtypeNominal{source.length}_{source}{target.length}_{target}"
 
@@ -200,6 +228,8 @@ inductive Plan where
   | tuple : List Plan → Plan
   | tupleArray : Ty → List Plan → Plan
   | refinement : String → Ty → Plan
+  /-- The box of a closed comparable type (`boxFamily`). -/
+  | box : Ty → Plan
   deriving Repr, Inhabited
 
 partial def Plan.bound (env : TyEnv) : Plan → Bound
@@ -209,6 +239,7 @@ partial def Plan.bound (env : TyEnv) : Plan → Bound
   | .discard t => ⟨.void, t⟩
   | .bottom t => ⟨t, .never⟩
   | .refinement source target => ⟨target, .refine source⟩
+  | .box t => ⟨.dyn, t⟩
   | .nominal source target args =>
     ⟨.struct target (env.upArgs source args target), .struct source args⟩
   | .local _ bound => bound
@@ -313,6 +344,7 @@ partial def Plan.valid (env : TyEnv) (locals : List (String × Ty)) : Plan → B
   | .identity _ => true
   | .rational | .erase _ | .discard _ | .bottom _ => true
   | .refinement source target => env.refinementSubtype source target
+  | .box t => t.params.isEmpty && isComparable env t
   | .nominal source target args =>
     env.isRefClass source && env.isRefClass target && env.isSub source target &&
       args.length == ((env.sparams.lookup source).getD []).length
@@ -354,6 +386,19 @@ partial def find? (env : TyEnv) (locals : List (String × Ty)) (bound : Bound) :
 where
   go (available : List Plan) (seen : List Bound) (goal : Bound) : Option Plan := do
     if let some plan := direct? env goal.base goal.derived then return plan
+    -- (to `comparable`, Book of Verse ch. 11: a closed type's box; a
+    -- container of type parameters' values, its parts boxed by their own
+    -- evidence, then the container of boxes boxed; a type parameter's, its
+    -- evidence, below)
+    if goal.base == .dyn then
+      match goal.derived with
+      | .param .. => pure ()
+      | d =>
+        if d.params.isEmpty then
+          return ← if isComparable env d then some (.box d) else none
+        let shape ← boxShape d
+        let inner ← go available (goal :: seen) ⟨shape, d⟩
+        return .compose (.box shape) inner
     if seen.contains goal then none else do
       let seen := goal :: seen
       let structural : Option Plan := match goal.base, goal.derived with
@@ -389,6 +434,7 @@ partial def Plan.value (env : TyEnv) (p : Pos) : Plan → SExpr
   | .discard t => .construct p discardFamily [t.toSTy] []
   | .bottom t => .construct p bottomFamily [t.toSTy] []
   | .refinement source target => .construct p (refinementFamily source target) [] []
+  | .box t => .construct p (boxFamily t) [] []
   | .nominal source target args => .construct p (nominalFamily source target) (args.map Ty.toSTy) []
   | .local name _ => .ident p name
   | .field receiver fieldLabel _ => .member p (.ident p receiver) fieldLabel
@@ -451,6 +497,14 @@ partial def Plan.refinements : Plan → List (String × Ty)
   | .tuple elements | .tupleArray _ elements => (elements.flatMap Plan.refinements).eraseDups
   | .array element | .option element => element.refinements
   | .map key element | .compose key element => (key.refinements ++ element.refinements).eraseDups
+  | _ => []
+
+/-- The closed types whose box families a plan needs. -/
+partial def Plan.boxes : Plan → List Ty
+  | .box t => [t]
+  | .tuple elements | .tupleArray _ elements => (elements.flatMap Plan.boxes).eraseDups
+  | .array element | .option element => element.boxes
+  | .map key element | .compose key element => (key.boxes ++ element.boxes).eraseDups
   | _ => []
 
 partial def Plan.usesLocal : Plan → Bool

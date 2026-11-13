@@ -479,11 +479,13 @@ def inlineSource (allTops0r : List STop) (requests : Requests) (admitted : Admit
     match request with
     | .classDef p name .. =>
       if !name.startsWith "$subtypeNominal" && !name.startsWith "$subtypeTuple" &&
-          !name.startsWith "$subtypeRefinement" then
+          !name.startsWith "$subtypeRefinement" && !name.startsWith "$subtypeBox" then
         throw s!"{p.show}: internal: invalid subtype dictionary request"
     | _ => throw "internal: a subtype dictionary request must be a class"
   let resolved := requests.subtypes ++ loopTops ++ resolved
   let needsSubtype := allTops0r.any UpperBounds.hasBounds || !requests.subtypes.isEmpty ||
+    -- (the box of a type parameter's value is its comparable bound's evidence)
+    !requests.boxes.isEmpty ||
     resolved.any (·.usesType SubtypeEvidence.family)
   let definesSubtype := (resolved ++ helpers).any fun
     | .classDef _ name .. => name == SubtypeEvidence.family
