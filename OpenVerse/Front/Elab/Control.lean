@@ -1123,11 +1123,14 @@ partial def probeHoleWith (elabE : Ctx → SExpr → Option Ty → EM R) (ca : C
 
 /-- (#283) An alternative of a tail's leaf flattened (`Choice.flatCount`), with
     the frames it adds to `frames`, in order: a value or a call of the group,
-    and the frames its values go through, innermost first. -/
+    and the frames its values go through, innermost first. `ownOut`: the type
+    of the values of the member whose code it is, when not the group's
+    result type (a callee's of a type of its own), which a frame with no
+    frame after it gives. -/
 partial def loopFlatWith (elabE : Ctx → SExpr → Option Ty → EM R)
     (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx)) (rty : Ty)
     (ca : Ctx) (frames : Array LoopFrame) (a : SExpr) (outer : List Nat := [])
-    (recTy : SExpr → Option Ty := fun _ => none) :
+    (recTy : SExpr → Option Ty := fun _ => none) (ownOut : Option Ty := none) :
     EM (Array LoopFrame × List (SExpr × List Nat)) := do
   let .app _ (.ident _ "$then") (c :: .ident _ h :: k :: rest) false := a | return (frames, [(a, outer)])
   let (pre, fc) ← match rest with
@@ -1140,7 +1143,7 @@ partial def loopFlatWith (elabE : Ctx → SExpr → Option Ty → EM R)
   if Choice.isSameFrame k then
     let some j := (List.range frames.size).reverse.find? (fun j => (frames[j]?.map (·.hole)) == some h)
       | eerr a.pos "internal: an if's leaf before its frame (#283)"
-    return ← loopFlatNext elabE elabSeq rty ca frames c (j :: outer) recTy
+    return ← loopFlatNext elabE elabSeq rty ca frames c (j :: outer) recTy ownOut
   let own := h :: Choice.localsOf k
   let preSet := rest.findSome? fun e => if Choice.anyE (fun | .set .. => true | _ => false) e then some e.pos else none
   let j := frames.size
@@ -1153,23 +1156,25 @@ partial def loopFlatWith (elabE : Ctx → SExpr → Option Ty → EM R)
     | none, .app _ (.ident _ "$rec") _ false | none, .app _ (.ident _ "$recTo") _ false => pure (recTy c)
     -- (a value entering a member, `Choice.enterOf`: its own type)
     | none, _ => probeHoleWith elabE ca rty [c] recTy
-  let outTy := (outer.head?.bind (frames[·]?)).bind (·.inTy)
+  let outTy := match outer.head? with
+    | some o => (frames[o]?).bind (·.inTy)
+    | none => ownOut
   let frames := frames.push { hole := h, code := k, ctx := fc, pre, preSet, lives, inTy, outTy }
-  loopFlatNext elabE elabSeq rty ca frames c (j :: outer) recTy
+  loopFlatNext elabE elabSeq rty ca frames c (j :: outer) recTy ownOut
 where
   /-- The point `c` with the frames `fs`: a choice's alternatives each, a
       point with a frame of its own (an `if`'s leaf) flattened in turn, or
       the call or value itself. -/
   loopFlatNext (elabE : Ctx → SExpr → Option Ty → EM R)
       (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx)) (rty : Ty) (ca : Ctx)
-      (frames : Array LoopFrame) (c : SExpr) (fs : List Nat) (recTy : SExpr → Option Ty) :
-      EM (Array LoopFrame × List (SExpr × List Nat)) := do
+      (frames : Array LoopFrame) (c : SExpr) (fs : List Nat) (recTy : SExpr → Option Ty)
+      (ownOut : Option Ty) : EM (Array LoopFrame × List (SExpr × List Nat)) := do
     match Choice.alts? c, c with
     | some cs, _ =>
       cs.foldlM (fun (fr, acc) y => do
-        let (fr, ys) ← loopFlatWith elabE elabSeq rty ca fr y fs recTy
+        let (fr, ys) ← loopFlatWith elabE elabSeq rty ca fr y fs recTy ownOut
         pure (fr, acc ++ ys)) (frames, [])
-    | none, .app _ (.ident _ "$then") _ false => loopFlatWith elabE elabSeq rty ca frames c fs recTy
+    | none, .app _ (.ident _ "$then") _ false => loopFlatWith elabE elabSeq rty ca frames c fs recTy ownOut
     | none, _ => return (frames, [(c, fs)])
 
 /-- The return frames of a tail's alternatives, in the order of its arms. -/
@@ -1434,7 +1439,7 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
       let mut fl : List (SExpr × List Nat) := []
       for a in as do
         let n0 := frameArr.size
-        let (fr, xs) ← loopFlatWith elabE elabSeq rty ca frameArr a (recTy := recTy)
+        let (fr, xs) ← loopFlatWith elabE elabSeq rty ca frameArr a (recTy := recTy) (ownOut := outs.getD mi none)
         frameArr := fr
         fl := fl ++ xs
         for j in [n0:frameArr.size] do
