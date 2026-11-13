@@ -1212,6 +1212,27 @@ where an elaboration asks for something and goes no further
 21. `lowerProgram`: failure capture, concurrency and the `$Main` prelude (`LoweredProgram`).
 22. `certify`: no call names a family's stub, and the program passes `Prog.check`, `Prog.checkControl` and `Prog.checkTypes` (`Compiled`).
 
+A program with several errors gets the first in this order, and within a
+phase the first in the order the phase goes through the program (its
+definitions, classes or functions as written, the functions by index). Rounds
+keep the order: a round that asks goes no further than the phase that asks,
+and the next one runs every phase again. Read off the list, a program is
+refused, first to last, for:
+
+- its effect annotations and source profile, a type with a built-in type's name, its modules, and subscribable events (1); the choices it inlines and the requests it carries (2); its overloaded methods (3);
+- its classes: their parents (unknown, a struct, wrong type arguments, an interface extending a class, two superclasses, a `<final>` one, a cycle) and construction effects (4); their fields, inherited, overriding and own, against the methods above them (5); their methods: duplicates, parameter names, qualified implementations, overrides and `<final>`, abstract methods and the implementations every concrete class needs (6);
+- the types those give: comparable type arguments to parents (7), bounds (8), one instance of an interface per class (9), the Verse Core type arguments of overrides (10), recursive structs and map keys (11);
+- its functions' names and overloads (12), their signatures and effect annotations (13), constants whose type cannot be inferred and the defaults function types write (14); then the signature checks (15): overloads a call cannot tell apart, overrides and implementations whose signature or effects differ, an overriding field's type, and, last, a field two interfaces give defaults;
+- construction effects and field defaults (16), then each function's and constant's body (17);
+- `Main` (19), the checks of the prepared functions (20), and what the lowering refuses (21); the internal errors of `certify` (22) are elaborator bugs.
+
+Two of these come later than where their cause is found: two interfaces'
+defaults for one field are found with the fields (5) but refused after every
+signature check (15), and an overriding field's type is checked only there,
+once types are resolved. So a program with such a field and, say, an override
+of the wrong signature is refused for the override.
+
+
 ## Elaboration in rounds
 
 Some of what a program needs is known only once its types are: a function
