@@ -146,6 +146,12 @@ def Token.endsEmptyBody (n : Token) (col : Nat) : Bool := n.offside col
     set Num = 42`, `for(n:nums). set curSum += n`, `spawn. F()`). -/
 def Token.startsBody (t : Token) : Bool := t.isSym ":" || t.isSym "{" || t.isSym "."
 
+/-- After a separator in an indented block at column `c`: whether `u` starts
+    the block's next item, which it does unless it starts a line that ends
+    the block, or ends the file. A `;` may end a line (Book of Verse tests:
+    `DataMemberX<final>: int = 0;` as a class's last field). -/
+def Token.continuesBlock (u : Token) (c : Nat) : Bool := !u.isEof && !(u.bol && u.col < c)
+
 def expectSym (s : String) : PM Unit := do
   let t ← peekT
   if t.isSym s then bump else perr t s!"expected '{s}', found {t.tok.describe}"
@@ -608,7 +614,9 @@ partial def parseIndentedWith (item : Nat → PM SExpr) (c : Nat) : PM (List SEx
     repeat
       let t ← peekT
       checkIndent t
-      if t.isSym ";" then bump; stmts := stmts.push (← item c)
+      if t.isSym ";" then
+        bump
+        if (← peekT).continuesBlock c then stmts := stmts.push (← item c)
       else if t.isEof then break
       else if t.bol && t.col == c && !t.isKw "else" && !t.isKw "then" && !t.isSym "}" && !t.isSym ")" then
         stmts := stmts.push (← item c)
@@ -906,7 +914,9 @@ partial def parseStructBody (p : Pos) : PM SExpr := do
         repeat
           let a ← peekT
           checkIndent a
-          if a.isSym ";" then bump; fields := fields.push (← parseField c)
+          if a.isSym ";" then
+            bump
+            if (← peekT).continuesBlock c then fields := fields.push (← parseField c)
           else if a.bol && a.col == c && !a.isEof then fields := fields.push (← parseField c)
           else break
         return fields
@@ -949,7 +959,9 @@ partial def parseEnumBody (p : Pos) : PM SExpr := do
         repeat
           let a ← peekT
           checkIndent a
-          if a.isSym "," || a.isSym ";" then bump; names := names.push (← expectIdent)
+          if a.isSym "," || a.isSym ";" then
+            bump
+            if (← peekT).continuesBlock c then names := names.push (← expectIdent)
           else if a.bol && a.col == c && !a.isEof then names := names.push (← expectIdent)
           else break
         return names
@@ -1326,7 +1338,9 @@ partial def parseCtorBody (stop : Nat) : PM (List SExpr) := do
     repeat
       let t ← peekT
       checkIndent t
-      if t.isSym ";" then bump; items := items.push (← parseCtorItem c)
+      if t.isSym ";" then
+        bump
+        if (← peekT).continuesBlock c then items := items.push (← parseCtorItem c)
       else if t.isEof then break
       else if t.bol && t.col == c then items := items.push (← parseCtorItem c)
       else if t.bol && t.col > c then perr t "unexpected indentation"
@@ -1402,7 +1416,9 @@ partial def parseClassBody (p : Pos) (name : String) (tps : List TParam) (isIfac
         repeat
           let a ← peekT
           checkIndent a
-          if a.isSym ";" then bump; items := items.push (← parseClassItem c)
+          if a.isSym ";" then
+            bump
+            if (← peekT).continuesBlock c then items := items.push (← parseClassItem c)
           else if a.bol && a.col == c && !a.isEof then items := items.push (← parseClassItem c)
           else break
         return items
