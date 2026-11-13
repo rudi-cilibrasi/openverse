@@ -239,6 +239,10 @@ structure TyEnv where
       `R` tells (`Choice.methodFns`), by place and `M`: their elaboration
       notes the root that class is below (`ESt.needs`). -/
   familySites : List (Pos × String) := []
+  /-- (#283) The methods left in their classes as a family's stub
+      (`Choice.familyStub`), as functions (`C.M`): no call names one in the
+      program given out, and none is a value. -/
+  familyStubs : List String := []
   /-- (#283) The calls of overloaded functions whose overload decides
       whether they have several values (`Choice.inlineMulti`), by place and
       name: their elaboration notes the overload each takes (`ESt.needs`). -/
