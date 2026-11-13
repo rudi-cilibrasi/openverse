@@ -319,6 +319,32 @@ partial def checkForClauses (tops : List STop) : Except String Unit := do
       for m in ms do
         if let .fn _ _ ps _ _ _ body := m then ps.forM (·.default.forM go); go body
 
+/-- The code of a `spawn` cannot leave it: no `return`, and no `break` but
+    of a loop inside it (Book of Verse tests, `SpawnAndTask.versetest` 876-892:
+    "Can't break or return from a spawn", 3551). -/
+partial def checkSpawnExits (tops : List STop) : Except String Unit := do
+  let refuse (p : Pos) (what : String) : Except String Unit :=
+    throw s!"{p.show}: a {what} inside spawn would leave it: the spawned call runs as a task of its own (Book of Verse tests, SpawnAndTask.versetest)"
+  -- (`inLoop`: inside a loop of the spawn's own code)
+  let rec inSpawn (inLoop : Bool) : SExpr → Except String Unit
+    | .ret p _ => refuse p "return"
+    | .brk p => if inLoop then pure () else refuse p "break"
+    | .loop _ b => inSpawn true b
+    | .structDef .. => pure ()
+    | e => e.children.forM (inSpawn inLoop)
+  let rec go : SExpr → Except String Unit
+    | .app _ (.ident _ "$spawn") [b] false => inSpawn false b
+    | .structDef _ _ _ fs => fs.forM fun f => f.default.forM go
+    | e => e.children.forM go
+  for t in tops do
+    match t with
+    | .fn _ _ ps _ _ _ body => ps.forM (·.default.forM go); go body
+    | .const _ _ _ _ e => go e
+    | .classDef _ _ _ _ _ _ _ fs ms =>
+      fs.forM fun f => f.default.forM go
+      for m in ms do
+        if let .fn _ _ ps _ _ _ body := m then ps.forM (·.default.forM go); go body
+
 /-- `return` leaves a function's body, so it is refused where there is none: in
     a constant's value, and in a field's default, which is evaluated where an
     object is constructed and would leave the function that constructs it. -/
@@ -425,6 +451,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   let scopePairs ← checkNoShadowing allTops0r
   checkReturns allTops0r
   checkNestedReturns allTops0r
+  checkSpawnExits allTops0r
   checkDefers allTops0r
   checkForClauses allTops0r
   let helpers ← if usesRat then ratTops else pure []
