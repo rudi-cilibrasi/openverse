@@ -2420,7 +2420,14 @@ clause's values; as a local from outside the later cast's branch, it
 leaves that branch at its own type, not the refined one, so it can be cast
 again. An object that may name type arguments a cast opens (the first
 cast's, when the refusal says it opens, `Refine.CastRefusal.opens`, or a
-later cast's, which may) is not: `after` could not name its type. A `for`'s clause past the moved clauses that uses `D` is cast again in the
+later cast's, which may) is not: `after` could not name its type. It is
+read again instead when it is read by fields that are no `var`s from the
+name of a cast `after` casts again (`Refine.pathRoot?`, `L := lit[P.L]`):
+`after` casts `P` again and then `P.L`, the same object (a class and the
+fields that are no `var`s of an object do not change), whose type there is
+what that cast gives (#250). As for a computed object, only when `after`
+is refused without it; when it is still refused, the error names the casts
+whose objects are neither. A `for`'s clause past the moved clauses that uses `D` is cast again in the
 same way where it uses it, at that place: a generator's source, a range's
 bounds, a binding's value (so its name stays bound), each alternative of a
 choice (lifted out of the clause first, `lift`), or else the clause itself;
@@ -2621,6 +2628,30 @@ first parameter, so `.heap (.get k) [.local 0]` as for a method), and
 its callers pass none. The target gets those hidden fields as a class
 with an override below does. Its tests are keyed by all of each class's
 pins and open their arguments as `$ext i`, as a method's dispatch does.
+
+An interface has no hidden fields, and the classes below it hold their
+type arguments at places of their own, so a cast to an interface that
+opens its type arguments (#53, `c2[C]` for `C:container(u)` and `c2(t) :=
+interface(container([]t))`) cannot read them from one place. Nor can a cast
+to a type beside the object's (#351, `i1[I]` for `I:i2(u)`), whose type
+arguments `refiningCast?` relates to the object's through the classes and
+interfaces above both (each class below both reaches each of them at one
+instance), fresh otherwise. Both are chains (`castChains`): the branch is
+lifted as for any cast, but its function takes the values of the opened
+type arguments as a generic function takes any (`Lift.opened` is empty,
+and `Lift.target` too, as no class is cast to), and the `if` becomes a cast
+to each class below both that is topmost in its class chain there and may
+be the object (`castTops`), each a cast of its own, `if ($castAs… :=
+d[$castChain…]) then $refine…($castAs…, Y₁, …) else …`, ending in the
+`else`: one to a class with type parameters of its own reads them from its
+hidden fields as above, and the call of the branch's function passes their
+values on, at the type arguments that class gives `T` (the object as a
+`T`, inferred by `matchArg`'s upcast). The object is in a slot first; one
+that is no local is evaluated with a test of all the classes tested, as a
+dispatch's is. The branch is so compiled once, at the refinement the
+declarations give, whatever each class gives `T`; each class's cast is a
+small function of its own when it refines or opens. No class is pinned for
+the branch's lift; each class's cast pins its own target.
 
 ## Typing the heap
 

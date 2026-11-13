@@ -656,10 +656,15 @@ circle := class(shape, labelled):
   those clauses bind, casts the object again, which succeeds (an object's
   class does not change), so that it is typed under the refinement too, as
   it does each later cast among those clauses whose name it uses, from that
-  cast's object (bound to a name first, when computed there), unless the
-  object may name type arguments a cast opens (the first, when it opens,
-  or another among them): then the branch has the later cast's name, with
-  the type it has there, but not its refinement:
+  cast's object (bound to a name first, when computed there). An object
+  that may name type arguments a cast opens (the first, when it opens, or
+  another among them) is read again instead, after the cast whose name it
+  reads, when it is read by fields that are no `var`s from that cast's
+  name (#250): `if (Print("x"), P := pairE[E], L := lit[P.L], R :=
+  txt[P.R]) then (L.V, R.S)` gives a `t` that is `tuple(a', b')` with `a'
+  = int` and `b' = string` (an object's fields that are no `var`s do not
+  change, so `P.L` is the same object there). Otherwise the branch has the
+  later cast's name, with the type it has there, but not its refinement.
   `if (Print("x"), D := dup[P], Y := D.A) then option{Y}` prints `x` only
   when `P` is a `dup`, and its branch has `D` and `Y` with `b = a`. A
   `for`'s clause past that generator that uses the cast's name casts the
@@ -675,7 +680,20 @@ circle := class(shape, labelled):
   `b'` are `pairE`'s `a` and `b`, unknown but fixed for the branch; their
   values, which the branch's own generic calls at them need, come from the
   object, which holds them in hidden fields as #209's existential classes'
-  objects do. The value of what follows such a cast in its failure
+  objects do. A cast to an interface opens its type arguments too, and so
+  does a cast to a class or interface beside the object's type, neither
+  above nor below it (#53, #351): `c2[C]`, for `C:container(u)` and `c2(t)
+  := interface(container([]t))`, types the branch with `u = []t'`, and
+  `i1[I]`, for `I:i2(u)`, with `i1`'s type arguments related to `I`'s as
+  the classes and interfaces above both say (`t' = u` when `i1(t)` and
+  `i2(t)` both extend `base(t)`), and opened otherwise (`i1(t')`,
+  whatever the classes below both give `i1`): it succeeds when the
+  object's class is below `i1`, as a cast between any class and interface
+  types does (Book of Verse ch. 10, "Castable"). An interface has
+  no hidden fields, so such a cast tests each class below both, the
+  topmost of its class chain there, as a cast to it, whose branch calls the
+  function the cast's branch is made into, with the values of `T`'s type
+  arguments that class gives. The value of what follows such a cast in its failure
   context, and the names it binds that a branch or body uses, cannot be of
   a type that names an opened one. An opened parameter is as comparable as the one it stands
   for, and also when comparability of a refined type requires that component
@@ -787,7 +805,8 @@ circle := class(shape, labelled):
   The interfaces a class lists may not reach one interface at two instances
   (`class(pi(int), pi(string))`). Inherited field defaults see their
   own class's type parameters. A cast `square[S]` takes its type arguments
-  from `S`'s, and is refused when it would need more. A method
+  from `S`'s, and one that would need more opens them, as a clause of a
+  failure context only (see above). A method
   of a parametric class is generic over the class's type parameters, then
   its own. The type arguments come from the receiver, and the body is
   checked once in Verse Core (see
@@ -834,22 +853,18 @@ circle := class(shape, labelled):
     uses its name in a branch of an `if` with a choice in its branches (#243);
   - after a cast that opens type arguments, a value of its failure
     context, or a name it binds that a branch or body uses, of a type that
-    names them (#250);
+    names them (#250): no type outside it can name them (it would be an
+    existential type); and, where the cast takes the clauses after it, the
+    refinement of a later cast whose object may name them and is not read
+    by fields that are no `var`s from a cast's name (#250);
   - a branch of such a cast with a `return`, or a `break` that leaves it,
     where the `if`'s value is used at a type not known there (#243);
-  - a cast from a reference to an interface that a class gives type
-    arguments that are not a prefix of its own, or to one above it (#351),
-    to a class or interface neither above nor below it;
   - a variable, in generic code, of a class or interface type that
     requires an instance of itself (`Next:node(t)`) at type arguments that
     every class below it fixes otherwise: its hidden placeholder object
     (#157) would have to hold itself (no program can build an object of
     such a type: each would need another first, so use `?node(t)` for a
     link that may be absent);
-  - in code generic over an interface's parent, a cast to an interface
-    that gives that parent type arguments of its own (`c2(t) :=
-    interface(container([]t))`) whose type parameters would be unknown
-    (#53).
 
 ## Mutation, macros, tooling
 

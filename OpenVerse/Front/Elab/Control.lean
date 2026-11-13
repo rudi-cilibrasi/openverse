@@ -398,6 +398,10 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   let rx ← elabE { ctx with canFail := true, inTaking := true } x none
   let some (S, sargs, targs, common, eqs, opened) := refiningCast? env T rx.ty (env.tvars.map (·.1))
     | do set st0; return none
+  -- (#53, #351: to a type beside the object's, or to an interface whose type
+  -- arguments it opens: a cast to each class below both, whose branch calls
+  -- this one's function, which takes `T`'s type arguments' values)
+  let chain := castChains env S T opened
   if !env.isRefClass S || (!opened.isEmpty && !env.isRefClass T) then set st0; return none
   -- (#250: `T` has Verse Core type arguments past the object's, or not as
   -- its own type parameters: its tests open them, as a method's dispatch does)
@@ -563,7 +567,12 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     if let some (n, v, _) := opened.find? fun (n, _, _) => τ'.params.contains n then
       eerr p s!"cannot cast {withArticle rx.ty.show} to {T} here: the cast opens {T}'s type argument {v} for the code after it, outside which its value, {withArticle τ'.show}, would name what is unknown (#250)"
     let ret := refine τ'
-    discard <| coerce p rb ret
+    -- (a branch whose value names an opened type argument where the `if`'s
+    -- type, which code outside it has, cannot: refused as such, #250)
+    discard <| tryCatch (coerce p rb ret) fun err => do
+      if let some (_, v, _) := opened.find? fun (n, _, _) => rb.ty.params.contains n then
+        eerr p s!"cannot cast {withArticle rx.ty.show} to {T} here: the cast opens {T}'s type argument {v} for its branch, whose value, {withArticle rb.ty.show}, would name what is unknown outside it, where the if's value is {withArticle τ'.show} (#250)"
+      throw err
     let decides := rb.e.mayFail ctx.sigProg
     let sig := caps.map fun l => (l.name, refine l.ty)
     let tps := Ty.mergeParamBounds ((dTy :: ret :: sig.map (·.2)).flatMap Ty.paramsC)
@@ -596,12 +605,12 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let specs := (if heap.isEmpty then ["computes"] else heap) ++ (if decides then ["decides"] else []) ++
       (if suspendsB then ["suspends"] else [])
     let lift : Refine.Lift := {
-      pos := p, bound := D, target := T, tag, continuationScope := ctx.refineScope,
+      pos := p, bound := D, target := if chain then "" else T, tag, continuationScope := ctx.refineScope,
       name := liftName,
       params := ((D, dTy) :: sig).map (fun (n, t) => { name := n, ty := t.toSTy }) ++
         extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n },
       tparams := tps.map fun (n, c) => { pos := p, name := n, constraint := if c then "comparable" else "type" },
-      specs, ret := ret.toSTy, branchTy := if retOfBranch then some τ'.toSTy else none, subst := σ, opened := opened.map fun (n, v, _) => (n, v), waits := thenWaits, sourceSuspends,
+      specs, ret := ret.toSTy, branchTy := if retOfBranch then some τ'.toSTy else none, subst := σ, opened := if chain then [] else opened.map fun (n, v, _) => (n, v), waits := thenWaits, sourceSuspends,
       exits := Refine.Exits.substTypes ((escRet.map (·.2)).getD {}) σ,
       storage := storage.map fun (n, s) => (n, { frame := s.frame, name := s.name, args := s.args.map Ty.toSTy }),
       inRepeat := ctx.inRepeat, sourceContext := sourceContextOf ctx, liftTag := some ctx.liftTag,
@@ -622,6 +631,44 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     -- the dispatch may, in the branch's function or in the `else`)
     return some ⟨if decides || re.e.mayFail ctx.sigProg then .prim .fail [] else .prim .userErr [], τ'⟩
   | some l =>
+    let argOf (sp : SParam) : SExpr :=
+      if sp.name.startsWith "$type" then .app p (.ident p "$witness") [.ident p (sp.name.drop 5).toString] false
+      else .ident p sp.name
+    if chain then
+      -- (#53, #351: then a cast of the object to each class below both, the
+      -- topmost of its class chain there, as a cast of its own (plain,
+      -- refining or opening), whose branch calls the function with the
+      -- object, which it gives `T`'s type arguments as that class has them,
+      -- with their values; the object in a slot first, evaluated where a
+      -- test of all those classes is, so that its effects roll back and its
+      -- failure takes the else when none is the object's)
+      let (pre, y) ← match rx.e with
+        | .local y => pure ([], y)
+        | e => do
+          let y ← fresh rx.ty
+          pure ([Expr.assign y e], y)
+      -- (named by the place and the bound name, which tell apart the casts
+      -- of one condition, as their lifts' keys do)
+      let obj := s!"$castChain{p.line}_{p.col}_{D}"
+      let ctxO := { ctx with locals := { name := obj, slot := y, ty := rx.ty, mutable := false } :: ctx.locals }
+      let err : SExpr := .app p (.ident p "Err") [] false
+      let tops := castTops env S sargs T (env.tvars.map (·.1))
+      let chainE := tops.foldr (fun d acc =>
+        let bound := s!"$castAs{p.line}_{p.col}_{D}_{d}"
+        some (.ite p [.decl p bound none false (.app p (.ident p d) [.ident p obj] true)]
+          (.app p (.ident p l.name) (.ident p bound :: (l.params.drop 1).map argOf) (l.specs.contains "decides")) acc))
+        (if pre.isEmpty then elseE else some err)
+      let some chainE := chainE | eerr p s!"no class is below both {rx.ty.show} and {T}, so {T}[…] would always fail"
+      let expC : Option Ty ← if elseE.isNone then pure (some .void) else match exp, l.branchTy with
+        | some t, _ => pure (some t)
+        | none, some t => some <$> resolveTy env p t
+        | none, none => pure none
+      let rc ← elabE ctxO chainE expC
+      if pre.isEmpty then return some rc
+      let re ← elseOf
+      let eE ← coerce p re rc.ty
+      let cond := pre.foldr Expr.seq (.heap (.isTag (common.map env.tagOf)) [.local y])
+      return some ⟨.ite cond rc.e eE, rc.ty⟩
     -- (then: the object in a slot, and one dispatch per set of pins)
     let (pre, y) ← match rx.e with
       | .local y => pure ([], y)
@@ -713,9 +760,6 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
         unrefine := unrefine ++ ctx.unrefine,
         locals := dL :: ctx.locals.map fun loc => { loc with ty := loc.ty.subst μF, storage := loc.storage.map (·.subst μF) },
         types := { env with tvars := env.tvars.map fun (m, t) => (m, t.subst μF) } }
-      let argOf (sp : SParam) : SExpr :=
-        if sp.name.startsWith "$type" then .app p (.ident p "$witness") [.ident p (sp.name.drop 5).toString] false
-        else .ident p sp.name
       let rc ← elabApp ctx' p (.ident p l.name) (l.params.map argOf)
         (l.specs.contains "decides") (some (τ'.subst μF))
       -- (a suspends call carries the defers active at it, which go around
@@ -794,7 +838,8 @@ def withCastClauses (ctx : Ctx) (cs : List SExpr) (after : SExpr) (isGen : SExpr
       Choice.liftClause (fun n => choiceValues ctx n || bound.contains n) (choiceField ctx) c (fieldOrder := choiceOrder ctx)
     let moved (computed : Bool) := Refine.castRestClauses (cs.take k) cast refusal.opens (cs.drop (k + 1)) after
       isGen ctx.types.classes.contains (fun n => (ctx.lookup n).any (!·.mutable)) computed lift
-    let (cs', after', _) ← match moved false with
+      (fun f => !ctx.types.varFields.any (·.2 == f))
+    let (cs', after', _, _) ← match moved false with
       | .ok r => pure r
       | .error why => throw s!"{err} ({why})"
     -- (a later cast of an object computed among the moved clauses is cast
@@ -804,7 +849,12 @@ def withCastClauses (ctx : Ctx) (cs : List SExpr) (after : SExpr) (isGen : SExpr
     match ← tryCatch (Except.ok <$> rebuild cs' after') (fun err => pure (Except.error err)) with
     | .ok r => return some r
     | .error err1 =>
-      let .ok (cs'', after'', true) := moved true | throw err1
+      -- (#250: saying which later casts are not cast again, as their objects
+      -- may name type arguments a cast opens and are no fields read from it)
+      let err1 := match moved true with
+        | .ok (_, _, _, e :: es) => s!"{err1} ({if es.isEmpty then s!"the cast that binds {e} is" else s!"the casts that bind {", ".intercalate (e :: es)} are"} not repeated where the clauses' names are used, as its object may name type arguments a cast before it opens and is not read from that cast's name by fields that are no vars (#250))"
+        | _ => err1
+      let .ok (cs'', after'', true, _) := moved true | throw err1
       set st1
       return some (← tryCatch (rebuild cs'' after'') fun _ => throw err1)
 
