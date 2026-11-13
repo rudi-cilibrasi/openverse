@@ -2518,7 +2518,18 @@ partial def elabCase (ctx : Ctx) (p : Pos) (scrut : SExpr) (arms : List (Option 
         eerr ((pat.map (·.pos)).getD v.pos) "this case arm is never reached: it comes after _, which matches everything"
       let rv ← elabE ctx v exp
       match pat with
-      | none => results := results.push (none, rv)
+      | none =>
+        -- (a `_` after arms that name every value of a closed enum is never
+        -- reached: a warning, the Book of Verse's 2302, `Enum.versetest:356`,
+        -- "closed, with default, with coverage = unreachable default warning")
+        if let .enum n := rs.ty then
+          let k := ((ctx.types.enums.lookup n).getD []).length
+          if !ctx.types.openEnums.contains n && k > 0 && (List.range k).all fun i =>
+              results.any fun (pat, _) => match pat with
+                | some (.lit (.int j)) => j == i
+                | _ => false then
+            warnAt v.start s!"this _ arm is never reached: the arms before it name every value of the closed enum {n}"
+        results := results.push (none, rv)
       | some pe =>
         let rp ← elabE ctx pe (some rs.ty)
         if rp.ty != rs.ty then eerr pe.pos s!"pattern of type {rp.ty.show} for a value of type {rs.ty.show}"

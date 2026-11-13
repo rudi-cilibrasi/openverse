@@ -20,6 +20,7 @@ import OpenVerse.Front.Elab.Environment
 import OpenVerse.Front.Elab.Functions
 import OpenVerse.Front.SignalAdmission
 import OpenVerse.Front.InitializerConvergence
+import OpenVerse.Front.Reachability
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -269,10 +270,21 @@ def certify (lowered : LoweredProgram) (stubs : List (String × Pos)) (debug : B
     throw s!"internal error: the elaborated program does not pass Prog.checkTypes{which}"
   return { prog := P, sigs := S, slotTys := slotTys.toList }
 
+/-- Warnings in the order of the source (by file, line and column), each once. -/
+def orderWarnings (ws : List (Pos × String)) : List (Pos × String) :=
+  let before (a b : Pos × String) : Bool :=
+    a.1.file < b.1.file || (a.1.file == b.1.file && (a.1.line < b.1.line ||
+      (a.1.line == b.1.line && (a.1.col < b.1.col || (a.1.col == b.1.col && a.2 < b.2)))))
+  let sorted := (ws.toArray.qsort before).toList
+  sorted.foldr (fun w acc => match acc with
+    | x :: _ => if x.1 == w.1 && x.2 == w.2 then acc else w :: acc
+    | [] => [w]) []
+
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`, by its phases, in order (`docs/DESIGN.md`, "Elaboration
     in phases"); an elaboration that finds a need goes no further, and asks for
     it (`Compiled.asking`). -/
+
 def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except String Compiled := do
   let admitted ← admitSource allTops0r opts
   let source ← inlineSource allTops0r opts.requests admitted
@@ -350,8 +362,12 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     checkInitializerConvergence lowering.fns sigs classes.defs defaults.bodies admitted.intrinsicCalls
   MetadataFlow.check lowering.fns lowering.metadata (metadataFields env) opts.debug
   let frameInfo := elaborated.map (·.frames)
-  certify (← lowerProgram env sigs mainSig lowering frameInfo admitted.usesConc opts.eventFifo) methods.stubs
+  let c ← certify (← lowerProgram env sigs mainSig lowering frameInfo admitted.usesConc opts.eventFifo) methods.stubs
     opts.debug
+  -- (the warnings: code never reached, from the source, and what the
+  -- elaboration noted, each once, in the order of the source)
+  let found := Reachability.warnings allTops0r ++ elaborated.foldl (fun acc f => acc ++ f.warnings) #[]
+  return { c with warnings := orderWarnings found.toList }
 
 /-- `F$ovN` (an overload, #74) shown as `F`: every `$ov` and the digits after it removed. -/
 def stripOv (msg0 : String) : String := Id.run do
@@ -510,6 +526,20 @@ def compileTops (tops : List STop) (args : List String) (mentionsArgs : Bool) (d
   let useArgs := !args.isEmpty || mentionsArgs
   let opts : Options := { args := if useArgs then some args else none, entry, debug, profile, eventFifo, extendedDefaults }
   return (← elabProgram tops { opts with signalNoRollback }).prog
+
+/-- `compileTops`, with the program's warnings, each `LINE:COL: warning: …`
+    (`Compiled.warnings`), in the order of the source. -/
+def compileTopsWarned (tops : List STop) (args : List String) (mentionsArgs : Bool) (doExpr : Option String)
+    (debug : Bool := false) (profile : SourceProfile := .full) (eventFifo : Bool := false)
+    (extendedDefaults : Bool := false) (signalNoRollback : Bool := false) :
+    Except String (Prog × List String) := do
+  let entry ← match doExpr with
+    | some t => some <$> parseExprText t
+    | none => pure none
+  let useArgs := !args.isEmpty || mentionsArgs
+  let opts : Options := { args := if useArgs then some args else none, entry, debug, profile, eventFifo, extendedDefaults }
+  let c ← elabProgram tops { opts with signalNoRollback }
+  return (c.prog, c.warnings.map fun (p, m) => s!"{p.show}: warning: {m}")
 
 /-- Compile with shell arguments (bound to `Args` when given or used) and an
     optional `do` expression, as `openverse run FILE ARG… do EXPR` does. -/

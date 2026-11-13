@@ -23,7 +23,7 @@ for ((s=first; s<first+n; s++)); do
   python3 -I "$root/scripts/models/$model.py" "$s" "$tmp/p.exp" > "$tmp/p.verse" 2> "$tmp/gen.err" ||
     { bad=$((bad+1)); echo "GENERATOR FAILED seed $s: $(tail -1 "$tmp/gen.err")"; continue; }
   rm -f "$tmp/p.vbc"
-  timeout 120 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?
+  timeout 120 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.err"
   want=$(head -1 "$tmp/p.exp" | sed 's/exit=//')
   if [[ $want == 4 ]]; then
     msg=$(sed -n 2p "$tmp/p.exp")

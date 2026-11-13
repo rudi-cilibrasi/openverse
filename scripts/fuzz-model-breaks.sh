@@ -14,7 +14,7 @@ for ((s=first; s<first+n; s++)); do
     if [[ $form == first-success ]]; then flag=(--first-success); name="$s-first-success"; fi
     python3 -I "$root/scripts/models/choice_break.py" "$s" "$tmp/p.expected" "${flag[@]}" >"$tmp/p.verse" || exit 1
     rm -f "$tmp/p.vbc"
-    timeout 120 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" >"$tmp/lean.out" 2>"$tmp/lean.err"; le=$?
+    timeout 120 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" >"$tmp/lean.out" 2>"$tmp/lean.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/lean.err"
     timeout 120 "$cv" "$tmp/p.vbc" >"$tmp/c.out" 2>"$tmp/c.err"; ce=$?
     if [[ $le != 0 || $ce != 0 ]] || ! cmp -s "$tmp/lean.out" <(tail -n +2 "$tmp/p.expected") ||
         ! cmp -s "$tmp/lean.out" "$tmp/c.out" || ! cmp -s "$tmp/lean.err" "$tmp/c.err"; then

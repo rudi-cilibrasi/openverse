@@ -1,0 +1,6 @@
+4:12: warning: this code is never reached: the code before it always returns or breaks
+6:8: warning: this code is never reached: the code before it always returns or breaks
+10:24: warning: this code is never reached: the code before it always returns or breaks
+16:16: warning: this code is never reached: the code before it always returns or breaks
+21:23: warning: this code is never reached: the code before it always returns or breaks
+30:9: warning: this code is never reached: the code before it always returns or breaks

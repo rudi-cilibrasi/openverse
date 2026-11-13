@@ -18,7 +18,7 @@ for ((s=first; s<first+n; s++)); do
   python3 -I "$root/scripts/models/event_fifo.py" "$s" "$tmp/p.exp" > "$tmp/p.verse" 2> "$tmp/gen.err" ||
     { bad=$((bad+1)); echo "GENERATOR FAILED seed $s: $(tail -1 "$tmp/gen.err")"; continue; }
   rm -f "$tmp/p.vbc"
-  timeout 120 "$ov" run "$tmp/p.verse" --event-fifo --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?
+  timeout 120 "$ov" run "$tmp/p.verse" --event-fifo --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.err"
   if [[ $le != 0 ]]; then
     bad=$((bad+1)); save; echo "LEAN EXIT $le seed $s (saved fuzz-model-fifo-$s.verse): $(head -c 200 "$tmp/l.err")"; continue
   fi

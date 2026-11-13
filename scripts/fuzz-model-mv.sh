@@ -28,7 +28,7 @@ for ((s=first; s<first+n; s++)); do
   # timeout below, rec mode's enumerations at times: skipped, not counted as bad)
   if [[ $(wc -l < "$tmp/p.expected") -gt 12000 ]]; then long=$((long+1)); continue; fi
   rm -f "$tmp/p.vbc"
-  timeout 60 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?
+  timeout 60 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.err"
   if [[ $le -eq 3 ]]; then fuel=$((fuel+1)); continue; fi
   # (Lean timed out: the reference interpreter is far slower than C on some long backtracking
   # programs, 78 s against 0.1 s at mv seed 20767547; run --emit wrote the bytecode before

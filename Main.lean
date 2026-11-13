@@ -66,7 +66,10 @@ structure Policies where
 
 /-- Load a program, a file or a directory with everything it imports, and
     compile it: malformed UTF-8 is a front-end error (exit 4), as is any
-    other front-end error. -/
+    other front-end error. A program that compiles may have warnings, which
+    are printed to standard error, `FILE:LINE:COL: warning: …`, before
+    anything else is done with it; they change no exit status
+    (docs/FORMAT.md, "Exit protocol"). -/
 def loadAndCompile (file : String) (args : List String) (doExpr : Option String)
     (profile : Front.SourceProfile := .full) (pol : Policies := {}) :
     IO (Except String Prog) := do
@@ -75,8 +78,12 @@ def loadAndCompile (file : String) (args : List String) (doExpr : Option String)
   | .ok (tops, mentionsArgs) =>
     -- (OPENVERSE_DEBUG=1: an internal error also prints the rejected Verse Core)
     let debug := (← IO.getEnv "OPENVERSE_DEBUG").any fun v => v != "" && v != "0"
-    return Front.compileTops tops args mentionsArgs doExpr debug profile pol.eventFifo
-      (extendedDefaults := pol.extendedDefaults) (signalNoRollback := pol.signalNoRollback)
+    match Front.compileTopsWarned tops args mentionsArgs doExpr debug profile pol.eventFifo
+        (extendedDefaults := pol.extendedDefaults) (signalNoRollback := pol.signalNoRollback) with
+    | .error e => return .error e
+    | .ok (P, warnings) =>
+      for w in warnings do IO.eprintln s!"{file}:{w}"
+      return .ok P
 
 def withProg (file : String) (profile : Front.SourceProfile) (k : Prog → IO UInt32) (pol : Policies := {}) :
     IO UInt32 := do

@@ -13,6 +13,10 @@ structure Compiled where
   sigs    : Sigs
   slotTys : List (List VTy)
   needs : Requests := {}
+  /-- The program's warnings (`Reachability`, `ESt.warnings`), each with
+      where it is, in the order of the source: what the Book of Verse's
+      compiler reports and compiles all the same. -/
+  warnings : List (Pos × String) := []
 
 /-- An elaboration that goes no further, as the program is to be elaborated
     again with `needs`. -/

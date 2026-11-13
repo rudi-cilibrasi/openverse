@@ -615,9 +615,16 @@ structure ESt where
       code once every function is. -/
   loopFirst : List LoopUse := []
   constructHints : List ConstructHint := []
+  /-- The warnings found so far (`warnAt`): what the Book of Verse's compiler
+      reports and compiles all the same, each with where it is. -/
+  warnings : Array (Pos × String) := #[]
   deriving Inhabited
 
 abbrev EM := StateT ESt (Except String)
+
+/-- Note a warning at `p` (a trial whose state is discarded discards it). -/
+def warnAt (p : Pos) (msg : String) : EM Unit :=
+  modify fun st => { st with warnings := st.warnings.push (p, msg) }
 
 /-- Ask for `r`, for the program to be elaborated again with it. -/
 def noteNeeds (r : Requests) : EM Unit :=

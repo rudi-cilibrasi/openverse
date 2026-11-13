@@ -1251,6 +1251,20 @@ refused, first to last, for:
 - construction effects and field defaults (16), then each function's and constant's body (17);
 - `Main` (19), the checks of the prepared functions (20), and what the lowering refuses (21); the internal errors of `certify` (22) are elaborator bugs.
 
+A program that passes every phase may have **warnings**
+([LANGUAGE.md](LANGUAGE.md#warnings)), which `elabProgramCore` gathers
+after `certify` into `Compiled.warnings`: code never reached, found in the
+source by one pass over its definitions (`Reachability.warnings`, from the
+source as written: an expression that always leaves by a `return` or a
+`break`, read with what a failure context around it takes), and what the
+elaboration of the functions notes where it knows it (`warnAt`, into
+`ESt.warnings`, carried by `ElaboratedFn`): a `return` of a value in a
+`void` function, where the value's type is known, and a `_` after a closed
+enum's every value, in `elabCase`. A trial whose state is discarded
+discards its warnings with it, and only the last round's are kept, each
+once, in the order of the source. They are not errors: the command line
+prints them and goes on (`compileTopsWarned`).
+
 Two of these come later than where their cause is found: two interfaces'
 defaults for one field are found with the fields (5) but refused after every
 signature check (15), and an overriding field's type is checked only there,

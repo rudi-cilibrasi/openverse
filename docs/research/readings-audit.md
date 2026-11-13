@@ -80,7 +80,7 @@ The readings outside the table that the survey names:
 | The left of `or` must be able to fail | not required | silent | `Operators/LogicalOr.versetest:143` ("the left operand is required to be fallible", 3513) | **contradicts**; with the map `set` failable the Book's own `(set Map[I] = I) or Err()` passes: **changed** |
 | Rollback of a `for` iteration | a source's or a range bound's effects kept when later clauses fail | `08_failure.md:92`: "The `for` expression creates a failure context for each iteration of the domain clause"; `:147` (provisional changes) | `FlowControl/for.versetest` 362, 371, 392; `Range.versetest` 140, 159; `SoftwareTransactionalMemory.versetest` 88 (74 and 81 moved with the range bound) | **contradicts**, deeply load-bearing: **designed, not changed** ([below](#rollback-of-a-for-iteration)) |
 | Commas and semicolons in blocks | `,` separates a block's statements like `;` | `01_expressions.md:1048`: "Commas within parentheses create *tuples*"; `:1153-1156`: `option{1, 2}?` is `(1, 2)`; `:1119-1129`: in a block "semicolons and commas are interchangeable as separators between definitions" | `SemicolonsVsCommas.versetest` 70 (`Value :=` then `1, 2, 3` is `(1,2,3)`), 95 (`{3,X}`), 100 (`option{1,2}`); `Option.versetest:44`; `for.versetest:293`; 22 parser cases (`TimSyntax.versetest:224` `"1,2"`, …) | **contradicts**: **designed and prototyped, not changed** ([below](#commas-in-blocks)) |
-| What the Book calls warnings | code after `return`/`break`, `_` after a closed enum's every value, `return 3` in a `:void` function: accepted silently | `09_structs_enums.md:297-318`, `:411` ("⚠ Warning - unreachable wildcard"), `07_control.md:423-435` ("you'll get a warning") | `assert_semantic_error(2000)` (`Reachability.versetest` 5, 11, 23 "Treat unreachable expressions after break as warning not error"), 2302 (`Enum.versetest:356`), 2002 (`Return.versetest:179`, "produces a warning"): the runner counts a warning as a diagnostic | **contradicts** (a diagnostic the Book gives and openverse does not): **designed** ([below](#warnings)) |
+| What the Book calls warnings | code after `return`/`break`, `_` after a closed enum's every value, `return 3` in a `:void` function: accepted silently | `09_structs_enums.md:297-318`, `:411` ("⚠ Warning - unreachable wildcard"), `07_control.md:423-435` ("you'll get a warning") | `assert_semantic_error(2000)` (`Reachability.versetest` 5, 11, 23 "Treat unreachable expressions after break as warning not error"), 2302 (`Enum.versetest:356`), 2002 (`Return.versetest:179`, "produces a warning"): the runner counts a warning as a diagnostic | **contradicts** (a diagnostic the Book gives and openverse did not): **changed**, with the warning channel ([below](#warnings)) |
 | `break` in a `for` body | refused ("only inside loop (not for)") | `07_control.md:764`: "The `break` statement cannot exit `for` loops early" | `SOL-4199-BreakFromIf.versetest:38-48`: "`break` in a `for` body is allowed and breaks the surrounding `loop`" | **the Book disagrees with itself** (owner list); not changed |
 
 ## The changes
@@ -289,23 +289,75 @@ its deadline. Each is a change to the proved scheduler model and to
 
 ### Warnings
 
-The Book's tests check three warnings with `assert_semantic_error`: 2000
-(code after a `return` or `break`, or after a statement every path of
-which jumps), 2302 (a `case`'s `_` after a closed enum's every value) and
-2002 (`return` of a value in a `:void` function). They are warnings, not
-errors: "Treat unreachable expressions after break as warning not error"
-(`Reachability.versetest:22`), and the program compiles and runs.
-**The smallest honest channel:** `openverse check`, `run` and `emit` print
-each warning to standard error as `FILE:LINE:COL: warning: …` and go on,
-the exit status unchanged; a program with warnings is still accepted. The
-Book harness then reads an expected 2000, 2002 or 2302 as satisfied by such
-a warning (not by a refusal). The checks are a reachability pass (a
-statement after one that cannot complete normally: `return`, `break`, an
-`if` whose branches all jump, a `loop` with no `break`, `sync` with a
-jumping arm), and two checks the elaborator has the information for
-(`case` arms against a closed enum's values; `return e` in a `:void`
-function where `e` is not `void`). 30 accepted refusals of the survey's
-"unreachable code" would agree.
+**Built** (the first of the load-bearing readings, [below](#the-load-bearing-readings-built)).
+
+**The Book's rule.** Some diagnostics are warnings: the program compiles and
+runs. The prose: `09_structs_enums.md:297`, "Adding one anyway triggers an
+unreachable code warning" (a `_` after a closed enum's every value), and
+its table at `:411`, "Closed | Full | Yes | Any | ⚠ Warning - unreachable
+wildcard"; `07_control.md:423-424`, "If you add a wildcard when all cases are
+covered, you'll get a warning that the wildcard is unreachable". The tests
+name each with a code in the 2000s, checked by `assert_semantic_error`:
+`FlowControl/Reachability.versetest:3` ("Test that a warning is produced
+for unreachable code following a return"), `:22` ("Treat unreachable
+expressions after break as warning not error"); `Return.versetest:177`
+("explicitly returning a non-void value from a function with a void return
+type produces a warning"). The codes the translatable tests name, and what
+each is:
+
+| Code | What | Cases (all warning codes) | openverse |
+|---|---|---|---|
+| 2000 | code never reached: after a `return` or `break` (`Reachability.versetest` 5, 11), after an `if` both of whose branches leave (11, 39), after a block that always leaves (57), after a `loop` that only a `return` leaves (76), the operation of an operand that leaves (91, `F(return)`), after a `sync` one of whose arms leaves (99, 100) or a `race`/`rush` all of whose arms do (107, 108); after a `case` all of whose arms leave (`Case.versetest` 272, 280) | 13, and with errors in 15 more | warns (`Front/Reachability.lean`) |
+| 2002 | a `return` of a value in a `:void` function (`Return.versetest:179`; `:182`, `return F()` of a `void` `F`, is valid) | 1 | warns (the elaborator, with the value's type) |
+| 2302 | a `case` arm never reached: `_` after a closed enum's every value (`Enum.versetest:356`, `Case.versetest:154`, `SOL-4194-…:20`), or after a union's (`Union.versetest` 175, 450, VerseVM-only) | 3 (and 2 of unions, which openverse does not parse) | warns (`elabCase`) |
+| 2003, 2004 | `(a:)F()` in an override of `F`, where `(super:)F()` is meant (`SOL-3564-…versetest` 7, 18, 32, 45, 80) | 5 | not given: 4 still accepted silently |
+| 2001 | an empty `defer:` (`defer.versetest:915`) | 1 | refused (agrees as an expected error) |
+| 2017 | a map lookup that always fails (`SOL-6529-…versetest` 23-27) | 3 | refused for another reason |
+| 2009 | a use of a `@deprecated` definition | 26 translatable | refused: attributes do not parse |
+| 2005, 2007, 2008, 2011-2016, 2018, 2019, 2304, 2306, 2307 | versions, packages and their scopes | — | not translatable (`vpackage`) |
+
+What is not reached, as the tests pin it: the code after an expression
+that never completes normally, reported once where it starts.
+`Reachability.versetest` 8-10, 18 (`for(x:=0..10){return x}; 1+2`: a
+`for` may run its body no time), 98, 104, 105 (a `race` or `rush` with one
+arm that leaves) and 113 are valid. Two things the tests leave open, which
+openverse reads conservatively: a `loop` that nothing leaves, in a
+`<suspends>` function (`Break.versetest:20`, `Coroutines/IteratedPrimitives.versetest:5`,
+both `assert_valid`, have code after one): no warning (a `loop` that a
+`return` leaves and no `break` does warns, `:76`); and an expression that
+may fail before it leaves, in a failure context (`if (not (K = 2, return
+42))`): the context's `else` is reached, so only the operation is
+reported. The Book's `@ignore_unreachable` (`Reachability.versetest:94`) is
+an attribute, which openverse does not parse.
+
+**The channel.** `openverse check`, `run` and `emit` print each warning to
+standard error as `FILE:LINE:COL: warning: …`, in the order of the source,
+before anything else, and go on, the exit status unchanged; a refused
+program prints its error alone ([FORMAT.md](../FORMAT.md), "Exit
+protocol"). `scripts/test-verse.sh` compares a test's warnings with
+`NAME.warnings` (none without one) and the rest of standard error between
+Lean and C. The Book harness takes an expected error whose codes are all
+warnings (2000-2999) as satisfied by a warning ("warned"; a refusal still
+agrees, as for every expected error, the codes not compared), and notes a
+warning where a case expects none (it does not judge it: the Book's runner
+checks a warning's code only where a case names it).
+
+## The load-bearing readings, built
+
+After the nine changes above, the four readings this note designed and left
+were built, one commit each (with work-in-progress commits inside the long
+ones), in this order. "Moved" counts the Book's cases against the baseline
+of the readings audit (7,390 agree, 2,066 refuse, 277 accept, 50 differ).
+
+1. **Warnings** ([the rule](#warnings)). Moved: 17 cases agree (accepted
+   silently before): `Reachability.versetest` 5, 11, 23, 39, 57, 76, 91, 99,
+   100, 107, 108, `Case.versetest` 154, 272, 280, `Enum.versetest:356`,
+   `SOL-4194-AssertOnMalformedCaseContainingDataDefinition.versetest:20`
+   (2000 and 2302) and `Return.versetest:179` (2002). Tests: 18 of
+   openverse's programs have code the rule finds never reached (each
+   checked by hand: code after a `return` or `break`, after a `sync` one of
+   whose arms returns, the tuple or map an operand's `return` leaves
+   unmade), and say so in `NAME.warnings`; new: `warnings.verse`.
 
 ## For the owner
 

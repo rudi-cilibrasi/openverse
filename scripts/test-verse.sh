@@ -2,7 +2,10 @@
 # Run every tests/verse/*.verse with the Lean reference interpreter and compare
 # stdout plus the exit code with NAME.expected. With --c, also compile each to
 # OVBC and run it with the C runtime (runtime/build/cverse), which must agree
-# byte for byte with the Lean result.
+# byte for byte with the Lean result. The compiler's warnings (the lines
+# `FILE:LINE:COL: warning: ...` it prints before the program runs) are compared
+# with NAME.warnings, each without `FILE:`, and a program without that file
+# must have none; the rest of standard error is the run's, which C must match.
 set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ov="$root/.lake/build/bin/openverse"
@@ -19,7 +22,17 @@ for f in "${progs[@]}"; do
   extra=(); [[ -f "$root/tests/verse/$n.args" ]] && mapfile -t extra <"$root/tests/verse/$n.args"
   # with --c, the same compilation also writes the bytecode for cverse
   emit=(); [[ $withc -eq 1 ]] && emit=(--emit "$tmp/$n.vbc")
-  { "$ov" run "$f" "${emit[@]}" "${extra[@]}" 2>"$tmp/$n.lean.err"; echo "exit=$?"; } >"$tmp/$n.lean.out"
+  { "$ov" run "$f" "${emit[@]}" "${extra[@]}" 2>"$tmp/$n.all.err"; echo "exit=$?"; } >"$tmp/$n.lean.out"
+  # (the warnings, at the start of standard error, apart from the run's)
+  awk -v p="$f:" -v w="$tmp/$n.lean.warn" -v e="$tmp/$n.lean.err" '
+    !done && index($0, p) == 1 && index($0, ": warning: ") { print substr($0, length(p) + 1) > w; next }
+    { done = 1; print > e }
+    END { printf "" > w; printf "" > e }' "$tmp/$n.all.err"
+  want_warn="$root/tests/verse/$n.warnings"; [[ -f "$want_warn" ]] || want_warn=/dev/null
+  if ! cmp -s "$tmp/$n.lean.warn" "$want_warn"; then
+    echo "FAIL $n (warnings):"; diff "$want_warn" "$tmp/$n.lean.warn" | head -10
+    fail=$((fail+1)); continue
+  fi
   if ! cmp -s "$tmp/$n.lean.out" "$root/tests/verse/$n.expected"; then
     echo "FAIL $n (lean):"; diff "$root/tests/verse/$n.expected" "$tmp/$n.lean.out" | head -20
     cat "$tmp/$n.lean.err" | head -5

@@ -3,6 +3,16 @@ import OpenVerse.Front.Elab.Control
 
 namespace OpenVerse.Front
 open OpenVerse
+
+/-- A `return` of a value other than the empty value in a function whose
+    result is `void`, which discards it: a warning, the Book of Verse's 2002
+    (`FlowControl/Return.versetest:179`, "explicitly returning a non-void
+    value from a function with a void return type produces a warning"; its
+    `return F()` of a `void` `F` gives none). -/
+def warnVoidReturn (p : Pos) (result value : Ty) : EM Unit := do
+  if result == .void && value != .void && value != .never && !value.isUnit then
+    warnAt p s!"this return gives a value of type {value.show}, which a function whose result is void discards"
+
 set_option maxHeartbeats 800000 in
 partial def elabExprControlWith
     (elabE : Ctx → SExpr → Option Ty → EM R)
@@ -349,7 +359,10 @@ partial def elabExprControlWith
       let some target := ctx.lookup name | eerr p "internal: missing for return slot"
       let .opt ty := target.ty | eerr p "internal: invalid for return type"
       let value ← match e? with
-        | some e => coerce p (← elabE ctx e (some ty)) ty
+        | some e => do
+          let r ← elabE ctx e (some ty)
+          warnVoidReturn p ty r.ty
+          coerce p r ty
         | none =>
           if ty != .void then eerr p s!"return needs a value of type {ty.show}"
           pure (.lit .void)
@@ -364,6 +377,7 @@ partial def elabExprControlWith
         if ctx.retTy != .void then eerr p s!"return needs a value of type {ctx.retTy.show}"
         return ⟨.seq (← elabDefers (ctx.exitDefers false) ctx.defers) (.ret (.lit .void)), .never⟩
     let r ← elabE ctx e (some ctx.retTy)
+    warnVoidReturn p ctx.retTy r.ty
     let v ← coerce p r ctx.retTy
     if ctx.defers.isEmpty then return ⟨.ret v, .never⟩
     -- the value first, then the defers of every scope it leaves
