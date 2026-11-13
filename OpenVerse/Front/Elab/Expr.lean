@@ -2185,9 +2185,11 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
   match r.ty, m with
   | .arr _, "Length" | .map _ _, "Length" => return ⟨.prim .len [← inferable r], .int⟩
   | .struct sn targs, f =>
+    if ctx.types.classes.contains sn then checkMemberAccess ctx.types p sn f
     match fieldIndex (ctx.types.fields sn targs) f with
     | some (k, t) =>
       if ctx.types.isRefClass sn then
+
         -- a reference: the field of its object (#34), at the same position in
         -- every class below a class (inherited fields come first), but maybe
         -- not below an interface: then one test of the object's class each

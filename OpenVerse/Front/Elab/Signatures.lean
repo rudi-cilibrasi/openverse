@@ -24,7 +24,7 @@ def functionOverloads (env : TyEnv) (allTops : List STop) (methodOverloads : Met
     Except String Overloads := do
   -- the type definitions: `name := struct …` and `name := enum …`
   let isTypeDef : STop → Bool
-    | .const _ _ none (.structDef ..) | .const _ _ none (.enumDef ..) | .const _ _ none (.refineDef ..) => true
+    | .const _ _ _ none (.structDef ..) | .const _ _ _ none (.enumDef ..) | .const _ _ _ none (.refineDef ..) => true
     | _ => false
   let tops := allTops.filter (!isTypeDef ·)
   -- overloading (#74): functions of one name, each renamed `F$ovN`; a call
@@ -126,7 +126,7 @@ def declareSignatures (env : TyEnv) (tops : List STop) (requests : Requests) :
                           named := (ps.filter (·.named)).map fun q => (q.name, q.default),
                           pnames := ps.map (·.name), scope := copyScope? effs,
                           typeValues := ps.zipIdx.filterMap fun (param, i) => if param.typeValue then some i else none }
-    | .const p n sty _ =>
+    | .const p n _ sty _ =>
       let rt ← match sty with
         | some t => do let (rt, _) ← (resolveTy env p t).run {}; pure rt
         | none => pure .never   -- inferred below
@@ -236,7 +236,7 @@ def Signatures.all (s : Signatures) : List Sig := s.sigs.toList ++ s.gsigs.toLis
     keeps nothing: a default is not part of its type and never runs. -/
 def checkTypeDefaults (ctx : Ctx) (defaults : List STop) : Except String Unit := do
   for top in defaults do
-    let .const p n (some ty) d := top | continue
+    let .const p n _ (some ty) d := top | continue
     let param := ((n.splitOn typeDefaultPrefix).getLast?).getD n
     let trial : EM Unit := do
       let t ← resolveTy ctx.types p ty
@@ -270,14 +270,14 @@ def inferSignatures (env : TyEnv) (declared : Declared) (typeDefaults : List STo
   -- infer the types of unannotated constants: in order, in rounds, so that a
   -- constant may use one defined after it (until a round makes no progress)
   let unannotated := (declared.tops.zip (List.range declared.tops.length)).filter fun
-    | (.const _ _ none _, _) => true
+    | (.const _ _ _ none _, _) => true
     | _ => false
   let mut todo := unannotated
   for _ in [0:unannotated.length + 1] do
     let mut left := #[]
     for (top, idx) in todo do
       match top with
-      | .const _ _ _ body =>
+      | .const _ _ _ _ body =>
         let ctx := ctxOf sigs gsigs env
         match (elabE ctx body none).run { env } with
         | .ok (r, _) =>
@@ -290,7 +290,7 @@ def inferSignatures (env : TyEnv) (declared : Declared) (typeDefaults : List STo
   -- the first constant still unknown gives its own error
   for (top, _) in todo do
     match top with
-    | .const p n _ body =>
+    | .const p n _ _ body =>
       let ctx := ctxOf sigs gsigs env
       let (r, _) ← (elabE ctx body none).run { env }
       if r.ty == .never then throw s!"{p.show}: cannot infer the type of '{n}'"
@@ -302,7 +302,7 @@ def inferSignatures (env : TyEnv) (declared : Declared) (typeDefaults : List STo
     let mut changed := false
     for (top, idx) in declared.tops.zip (List.range declared.tops.length) do
       match top with
-      | .const _ _ _ body =>
+      | .const _ _ _ _ body =>
         let ctx := ctxOf sigs gsigs env
         match elabBody ctx body (some sigs[idx]!.ret) { env } with
         | .ok (_, st) =>

@@ -44,7 +44,7 @@ partial def expr (types values : List String) (e : SExpr) : List String :=
   | .structDef _ tps _ fs =>
     let types := tps.map (·.name) ++ types
     tps.flatMap (fun p => p.upperBound.toList.flatMap (ty types)) ++
-      fs.flatMap fun (_, t, d, _) => ty types t ++ d.toList.flatMap (expr types [])
+      fs.flatMap fun f => ty types f.ty ++ f.default.toList.flatMap (expr types [])
   | .refineDef _ n t cs => ty types t ++ cs.flatMap (expr types (n :: values))
   | _ =>
     let here := match e with
@@ -64,19 +64,20 @@ partial def top (members : List (String × List String)) (types values : List St
     (if es.contains "suspends" then ["$suspends"] else []) ++
       tps.flatMap (fun p => p.upperBound.toList.flatMap (ty types)) ++ ty types r ++ defaults ++
       expr types (ps.map (·.name) ++ values) b
-  | .const _ _ t e => t.toList.flatMap (ty types) ++ expr types values e
-  | .classDef _ n tps _ parents _ fs _ ms =>
+  | .const _ _ _ t e => t.toList.flatMap (ty types) ++ expr types values e
+  | .classDef _ n _ tps _ parents _ fs ms =>
     let types := tps.map (·.name) ++ types
     let values := ((members.lookup n).getD []) ++ values
     tps.flatMap (fun p => p.upperBound.toList.flatMap (ty types)) ++ parents.flatMap (ty types) ++
-      fs.flatMap (fun (_, t, d, _) => ty types t ++ d.toList.flatMap (expr types [])) ++
+      fs.flatMap (fun f => ty types f.ty ++ f.default.toList.flatMap (expr types [])) ++
+
       ms.flatMap (top members types values)
 
 /-- Implicit method/field lookup includes inherited source members. Qualified
     module identities have already been resolved before this analysis. -/
 def uses (tops : List STop) : List String := Id.run do
   let classes := tops.filterMap fun
-    | .classDef _ n _ _ ps _ fs _ ms => some (n,
+    | .classDef _ n _ _ _ ps _ fs ms => some (n,
       ps.filterMap (fun | .name q | .app q _ => some q | _ => none),
       fs.map (·.1) ++ ms.filterMap (fun | .fn _ m .. => some m | _ => none))
     | _ => none

@@ -16,8 +16,9 @@ def markFunction : STop → STop
   | t => t
 
 def markSource : STop → STop
-  | .classDef p n ts specs parents iface fields overrides methods =>
-    .classDef p n ts specs parents iface fields overrides (methods.map fun
+  | .classDef p n nsp ts specs parents iface fields methods =>
+    .classDef p n nsp ts specs parents iface fields (methods.map fun
+
       | m@(.fn _ "$block" ..) => m
       | m => markFunction m)
   | t => markFunction t

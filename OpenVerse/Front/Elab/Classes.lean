@@ -68,11 +68,11 @@ def classHierarchy (tops : List STop) (constructionFx : Std.HashMap String (List
   -- parameters and then its own; an abstract method one whose body is
   -- unreachable
   let cdefs : List CDef := tops.filterMap fun
-    | .classDef p n tps specs parents isIface fields overrides methods =>
+    | .classDef p n nsp tps specs parents isIface fields methods =>
       let names := parents.map fun | .name q => q | .app q _ => q | _ => "?"
       let args := parents.map fun | .app _ as => as | _ => []
-      some { pos := p, name := n, tps, specs, parents := names, parentArgs := args, isIface, fields,
-             overrides, methods }
+      some { pos := p, name := n, nameSpecs := nsp, tps, specs, parents := names, parentArgs := args, isIface,
+             fields, methods }
     | _ => none
   -- the hierarchy
   let mut cinfo : Array (String × ClassInfo) := #[]
@@ -86,7 +86,7 @@ def classHierarchy (tops : List STop) (constructionFx : Std.HashMap String (List
     let mut ifaces : Array String := #[]
     for (q, qargs) in cd.parents.zip cd.parentArgs do
       let some qd := cdefs.find? (·.name == q)
-        | if tops.any (fun | .const _ n' none (.structDef ..) => n' == q | _ => false) then
+        | if tops.any (fun | .const _ n' _ none (.structDef ..) => n' == q | _ => false) then
             throw s!"{p.show}: {q} is a struct: only classes and interfaces can be inherited from"
           else throw s!"{p.show}: unknown class or interface '{q}'"
       if qargs.length != qd.tps.length then
@@ -212,7 +212,7 @@ def classFields (classes : Classes) (requests : Requests) : Except String Fields
             -- the interfaces that give the field a default themselves (an
             -- inherited default is its declaring interface's)
             let ownDefault (j : String) : Option SExpr :=
-              (((classes.cdef? j).map (·.fields)).getD []).findSome? fun (g, _, d, _) => if g == f then d else none
+              (((classes.cdef? j).map (·.fields)).getD []).findSome? fun g => if g.name == f then g.default else none
             let withDefault := ifacesUp.filter fun j => (ownDefault j).isSome
             let best := withDefault.filter fun j => !withDefault.any fun j' => j' != j && classes.henv.isSub j' j
             if best.length > 1 && !cd.overrides.contains f then
@@ -220,7 +220,7 @@ def classFields (classes : Classes) (requests : Requests) : Except String Fields
                 s!"{cd.pos.show}: {cd.name} inherits a default for field '{f}' from both {best[0]!} and {best[1]!}: give it one with {f}<override>:t = e"
             let d := best.head?.bind ownDefault
             fs := fs ++ [(f, sty, d, isVar)]
-      for (f, sty, d, isVar) in cd.fields do
+      for ⟨f, sty, d, isVar, _, _⟩ in cd.fields do
         if f == "Self" then throw s!"{cd.pos.show}: a field of {cd.name} cannot be called Self"
         if ((classes.henv.supers cd.name).drop 1).any (classes.declares · f) then
           throw s!"{cd.pos.show}: field '{f}' of {cd.name} has the name of an inherited method"
@@ -232,7 +232,8 @@ def classFields (classes : Classes) (requests : Requests) : Except String Fields
             throw s!"{cd.pos.show}: field '{f}' of {cd.name} has the name of an inherited field (write {f}<override>:t = … to give it a new default)"
           -- (`<final>`: no class below gives it another default)
           if let some q := ((classes.henv.supers cd.name).drop 1).find? fun q =>
-              ((classes.cdef? q).map (·.specs.contains s!"$final:{f}")).getD false then
+              ((classes.cdef? q).map (·.fields.any fun g => g.name == f && g.specs.contains "final")).getD false then
+
             throw s!"{cd.pos.show}: field '{f}' is <final> in {q}: {cd.name} cannot override it"
           let (_, sty0, _, v0) := fs[k]!
           if isVar != v0 then
@@ -391,7 +392,8 @@ def classMethods (tops : List STop) (classes : Classes) (fields : Fields) : Exce
   for cd in classes.defs do
     let n := cd.name
     let fs := fields.of n
-    expanded := expanded.push (.const cd.pos n none (.structDef cd.pos cd.tps cd.specs fs))
+    expanded := expanded.push (.const cd.pos n [] none (.structDef cd.pos cd.tps cd.specs
+      (fs.map fun (f, t, d, v) => { name := f, ty := t, default := d, isVar := v })))
     let selfTy : STy := if cd.tps.isEmpty then .name n else .app n (cd.tps.map fun tp => STy.name tp.name)
     for (m, mi) in cd.methods.zip (List.range cd.methods.length) do
       match m with

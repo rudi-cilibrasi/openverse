@@ -31,13 +31,13 @@ private partial def rewriteTop : STop → Except String STop
     let ps ← ps.mapM fun param => do
       return { param with ty := ← param.ty.mapNamesM rename, default := ← param.default.mapM rewrite }
     return .fn q name ps tps specs (← ret.mapNamesM rename) (← rewrite body)
-  | .classDef q name tps specs parents iface fields overrides methods => do
+  | .classDef q name nsp tps specs parents iface fields methods => do
     let rename (n : String) : Except String String := pure (if n == "evidence" then family else n)
-    let fields ← fields.mapM fun (name, ty, value, mutable) => do
-      return (name, ← ty.mapNamesM rename, ← value.mapM rewrite, mutable)
-    return .classDef q name tps specs (← parents.mapM (·.mapNamesM rename)) iface fields overrides
+    let fields ← fields.mapM fun f => do
+      return { f with ty := ← f.ty.mapNamesM rename, default := ← f.default.mapM rewrite }
+    return .classDef q name nsp tps specs (← parents.mapM (·.mapNamesM rename)) iface fields
       (← methods.mapM rewriteTop)
-  | .const q name ty body => return .const q name ty (← rewrite body)
+  | .const q name sp ty body => return .const q name sp ty (← rewrite body)
 
 private def compile (label source : String) (profile : SourceProfile := .full) : IO Compiled := do
   let parsed ← getOK (label ++ ": parse") (parseProgram source)

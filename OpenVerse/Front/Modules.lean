@@ -4,9 +4,10 @@
   docs/research/qualified-names.md).
 
   The parser flattens `name := module:` into definitions of qualified names
-  (`A::B::F`) and leaves markers: `$module:A::B`, `$public:A::B::F`,
-  `$open:A::|M` (a `using{M}` written in module `A`) and `$qual:A::F|q` (a
-  definition written `(q:)F`). This pass rewrites every reference to a
+  (`A::B::F`) and leaves markers: `$module:A::B` (with the module's
+  specifiers), `$open:A::|M` (a `using{M}` written in module `A`) and
+  `$qual:A::F|q` (a definition written `(q:)F`). This pass rewrites every reference to a
+
   module member to its qualified name, before elaboration, which then sees
   an ordinary flat program:
 
@@ -37,7 +38,7 @@
   rule's way out, Book ch. 16, "Local Qualifiers"); a bare use of that name
   is then ambiguous.
 -/
-import OpenVerse.Front.Syntax
+import OpenVerse.Front.Access
 import Std.Data.HashSet
 
 namespace OpenVerse.Front
@@ -283,8 +284,8 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
     let own := tps.map (·.name)
     let inner : Resolver := { r with ty := fun q n => if own.contains n then pure n else r.ty q n }
     return .structDef p (← tps.mapM (·.mapBoundNamesM (inner.ty p))) specs
-      (← fs.mapM fun (n, t, d, v) => do
-        return (n, ← t.mapNamesM (inner.ty p), ← d.mapM (·.mapNamesM inner), v))
+      (← fs.mapM fun f => do
+        return { f with ty := ← f.ty.mapNamesM (inner.ty p), default := ← f.default.mapM (·.mapNamesM inner) })
   -- (a type alias's type, its own parameters excepted)
   | .typeAlias p tps t =>
     let own := tps.map (·.name)
@@ -336,16 +337,138 @@ structure ClassNames where
   /-- Its extension methods, `$ext:M`, which its methods' calls find. -/
   exts : List String
 
+/-- The specifiers a definition writes, each with the place it is written
+    at: its name's, its type's own, its fields' and their `var`s', its
+    methods'. -/
+def STop.specPlaces : STop → List (EffectPolicy.Place × List String)
+  | .fn _ _ _ _ specs .. => [(.function, specs)]
+  | .const _ _ specs _ (.structDef _ _ sspecs fs) =>
+    [(.definition, specs), (.structType, sspecs)] ++ fs.flatMap fun f => [(.structField, f.specs), (.var, f.varSpecs)]
+  | .const _ _ specs .. => [(.definition, specs)]
+  | .classDef _ _ ns _ specs _ isI fs ms =>
+    [(.definition, ns), (if isI then .interfaceType else .classType, specs)] ++
+      fs.flatMap (fun f => [(.field, f.specs), (.var, f.varSpecs)]) ++
+      ms.filterMap fun | .fn _ _ _ _ s .. => some (.method, s) | _ => none
+
+/-- A parsed program with every access level written out (Book of Verse
+    ch. 12, "Scoped"): the modules of `<scoped{A, B.C}>` found from where it
+    is written, a name `<S>` or `<M.S>` of an access level `S := scoped{…}`
+    replaced by the level it names, both as `scoped{A::B|C}`
+    (`Access.scopedLevel`); the access levels' definitions, which are no
+    values, removed. A scope names modules of the program: a package's path
+    is refused, as is a specifier that is no keyword openverse knows and
+    names no access level (`<intrinsic>`). Each place then has at most one
+    access level where one may go (`EffectPolicy.checkPlace`). -/
+def resolveSpecifiers (tops : List STop) : Except String (List STop) := do
+  let scopeDef? : STop → Option (Pos × String × List String × List String) := fun
+    | .const p n specs none (.app _ (.ident _ "$scope") refs false) =>
+      some (p, n, specs, refs.filterMap fun | .ident _ r => some r | _ => none)
+    | _ => none
+  let scopes := tops.filterMap scopeDef?
+  let needed := !scopes.isEmpty || tops.any fun t => t.specPlaces.any fun (_, specs) =>
+    specs.any fun sp => sp.startsWith "scoped{" || !(sp.startsWith "$" || EffectPolicy.known sp)
+  if !needed then return tops
+  let scopeOf (n : String) : List String := (qualParts n).dropLast
+  let modules : Std.HashSet String := Std.HashSet.ofList (tops.filterMap fun
+    | .const _ n .. => if n.startsWith "$module:" then some (n.drop "$module:".length).toString else none
+    | _ => none)
+  -- a module `r` (`A.B`) from scope `sc`: its first name found from `sc`
+  -- outward, as a module's name is
+  let moduleAt (sc : List String) (p : Pos) (r : String) : Except String (List String) := do
+    if r.startsWith "/" then
+      throw s!"{p.show}: scoped\{{r}}: {r} is a package's path, and openverse has no packages: a scope names modules of the program (Book of Verse ch. 12)"
+    let comps := r.splitOn "."
+    for k in (List.range (sc.length + 1)).reverse do
+      let base := sc.take k ++ [comps.headD r]
+      if modules.contains (qualJoin base) then
+        let path := base ++ comps.drop 1
+        if modules.contains (qualJoin path) then return path
+        break
+    throw s!"{p.show}: scoped\{{r}}: unknown module {r}: a scope names modules of the program (Book of Verse ch. 12)"
+  let canonical (sc : List String) (p : Pos) (sp : String) : Except String String := do
+    let refs := ((((sp.drop "scoped{".length).dropEnd 1).toString).splitOn ",").filter (· != "")
+    return Access.scopedLevel (← refs.mapM (moduleAt sc p))
+  -- each access level a module defines: what it grants, and its own access
+  let mut levels : Std.HashMap String (String × Option String) := {}
+  for (p, n, specs, refs) in scopes do
+    let own ← specs.mapM fun sp => if sp.startsWith "scoped{" then canonical (scopeOf n) p sp else pure sp
+    levels := levels.insert n (Access.scopedLevel (← refs.mapM (moduleAt (scopeOf n) p)), Access.levelOf own)
+  -- the access level `r` (`S`, `M.S`) names from scope `sc`: from `sc`
+  -- outward, then among those of the modules opened there that allow `sc`
+  let opens : List (List String × String) := tops.filterMap fun
+    | .const _ n .. =>
+      if !n.startsWith "$open:" then none else
+      match ((n.drop "$open:".length).toString).splitOn "|" with
+      | [s, m] => some ((qualParts s).filter (· != ""), m)
+      | _ => none
+    | _ => none
+  let admits (n : String) (sc : List String) : Bool :=
+    ((Access.audience (levels[n]?.bind (·.2)) (scopeOf n)).admits (fun _ _ => false) { module := sc })
+  let levelAt (sc : List String) (p : Pos) (r : String) : Except String (Option String) := do
+    let comps := r.splitOn "."
+    if comps.length > 1 then
+      let path ← moduleAt sc p (".".intercalate comps.dropLast)
+      let n := qualJoin (path ++ [comps.getLastD r])
+      return if levels.contains n && admits n sc then some n else none
+    for k in (List.range (sc.length + 1)).reverse do
+      let n := qualJoin (sc.take k ++ [r])
+      if levels.contains n then return some n
+    for (osc, m) in opens do
+      if Access.isPrefix osc sc then
+        if let .ok path := moduleAt osc p (m.replace "::" ".") then
+          let n := qualJoin (path ++ [r])
+          if levels.contains n && admits n sc then return some n
+    return none
+  let resolve (sc : List String) (p : Pos) (place : EffectPolicy.Place) (specs : List String) :
+      Except String (List String) := do
+    let out ← specs.mapM fun sp => do
+      if sp.startsWith "scoped{" then return ← canonical sc p sp
+      if sp.startsWith "$" || EffectPolicy.known sp then return sp
+      match ← levelAt sc p sp with
+      | some n => return (levels[n]?.map (·.1)).getD sp
+      | none =>
+        throw s!"{p.show}: unknown or unsupported specifier <{sp}> on {place.what}: no specifier openverse knows, nor an access level scoped\{…} that the program defines (#494)"
+    EffectPolicy.checkPlace p place out
+    return out
+  let resolveFields (sc : List String) (p : Pos) (place : EffectPolicy.Place) (fs : List SField) :
+      Except String (List SField) :=
+    fs.mapM fun f => do
+      let f := { f with specs := ← resolve sc p place f.specs, varSpecs := ← resolve sc p .var f.varSpecs }
+      EffectPolicy.checkOverrideAccess p f.name f.specs f.varSpecs
+      return f
+  tops.filterMapM fun t => do
+    if (scopeDef? t).isSome then return none
+    match t with
+    | .fn p n ps tps specs ret body => return some (.fn p n ps tps (← resolve (scopeOf n) p .function specs) ret body)
+    | .const p n specs ty body =>
+      let sc := if n.startsWith "$module:" then scopeOf (n.drop "$module:".length).toString else scopeOf n
+      let body ← match body with
+        | .structDef bp tps sspecs fs => do
+          pure (SExpr.structDef bp tps (← resolve sc p .structType sspecs) (← resolveFields sc p .structField fs))
+        | b => pure b
+      return some (.const p n (← resolve sc p .definition specs) ty body)
+    | .classDef p c ns tps specs parents isI fs ms =>
+      let sc := scopeOf c
+      let ms ← ms.mapM fun
+        | .fn mp mn mps mtps mspecs mret mbody => do
+          let mspecs ← resolve sc mp .method mspecs
+          EffectPolicy.checkOverrideAccess mp mn mspecs []
+          return STop.fn mp mn mps mtps mspecs mret mbody
+        | m => pure m
+      return some (.classDef p c (← resolve sc p .definition ns) tps
+        (← resolve sc p (if isI then .interfaceType else .classType) specs) parents isI (← resolveFields sc p .field fs) ms)
+
 /-- Resolve the modules and the qualified names of a parsed program (see
     the file's header). -/
+
 def resolveModules (tops : List STop) : Except String (List STop) := do
   let markers (pre : String) : List (Pos × String) := tops.filterMap fun
-    | .const p n _ _ => if n.startsWith pre then some (p, (n.drop pre.length).toString) else none
+    | .const p n _ _ _ => if n.startsWith pre then some (p, (n.drop pre.length).toString) else none
     | _ => none
-  let isMarker (n : String) := n.startsWith "$module:" || n.startsWith "$public:" || n.startsWith "$open:" ||
+  let isMarker (n : String) := n.startsWith "$module:" || n.startsWith "$open:" ||
     n.startsWith "$qual:" || n == qualifierMarker
   let real := tops.filter fun
-    | .const _ n _ _ => !isMarker n
+    | .const _ n _ _ _ => !isMarker n
     | _ => true
   let modules := (markers "$module:").map (·.2)
   -- (extension methods, which calls `X.M(…)` find: Book of Verse ch. 6)
@@ -356,12 +479,13 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
     | _ => false
   if modules.isEmpty && (markers "$open:").isEmpty && (markers qualifierMarker).isEmpty && !hasExt then
     return real
-  let publics := (markers "$public:").map (·.2)
+  -- (the access levels written on the definitions and modules, Book of
+  -- Verse ch. 12: `Access`)
+  let levels := Access.Levels.of tops
   let defs : List String := real.map fun
     | .fn _ n .. | .const _ n .. | .classDef _ n .. => n
   let defsS : Std.HashSet String := Std.HashSet.ofList defs
   let modsS : Std.HashSet String := Std.HashSet.ofList modules
-  let pubS : Std.HashSet String := Std.HashSet.ofList publics
   let shown (n : String) : String := ".".intercalate (qualParts n)
   let shownP (ps : List String) : String := ".".intercalate ps
   let mut seenM : Std.HashSet String := {}
@@ -369,11 +493,24 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
     if defsS.contains m then throw s!"{p.show}: {shown m} is defined twice (a module and a definition)"
     if seenM.contains m then throw s!"{p.show}: module {shown m} is defined twice"
     seenM := seenM.insert m
-  -- (one name's overloads share their visibility)
-  for (p, n) in markers "$public:" do
-    if n.contains ':' && (defs.filter (· == n)).length != (publics.filter (· == n)).length && defsS.contains n then
-      throw s!"{p.show}: the overloads of {shown n} must all be <public> or all internal"
+  -- (one name's overloads share their access)
+  let fnLevels : Std.HashMap String (List (Option String)) := real.foldl (fun m t => match t with
+    | .fn _ n _ _ specs .. => m.insert n (Access.levelOf specs :: m.getD n [])
+    | _ => m) {}
+  for t in real do
+    if let .fn p n _ _ specs .. := t then
+      let ls := fnLevels.getD n []
+      if n.contains ':' && ls.any (· != Access.levelOf specs) then
+        if Access.levelOf specs == some "public" then
+          throw s!"{p.show}: the overloads of {shown n} must all be <public> or all internal"
+        if !ls.contains (some "public") then
+          throw s!"{p.show}: the overloads of {shown n} must all have one access level"
+
   let inside (sc m : List String) : Bool := m.length ≤ sc.length && sc.take m.length == m
+  -- whether code in module `sc` may name the definition or module `lvl`
+  -- (whose own module is `lvl.dropLast`): its access level admits it
+  let admitsAt (sc lvl : List String) : Bool :=
+    (Access.audience levels[qualJoin lvl]? lvl.dropLast).admits (fun _ _ => false) { module := sc }
   -- the definition or module a name gives from scope `sc`, the innermost
   -- (`true`: a module)
   let lookup (sc : List String) (n : String) : Option (Bool × List String) := Id.run do
@@ -388,8 +525,10 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
     for k in [start + 1 : path.length + 1] do
       let lvl := path.take k
       let owner := lvl.dropLast
-      if !inside sc owner && !pubS.contains (qualJoin lvl) then
-        throw s!"{p.show}: {shownP lvl} is internal to {shownP owner}: mark it <public> to use it outside"
+      if !admitsAt sc lvl then
+        match Access.audience levels[qualJoin lvl]? owner with
+        | .within _ => throw s!"{p.show}: {shownP lvl} is internal to {shownP owner}: mark it <public> to use it outside"
+        | a => throw s!"{p.show}: {a.refusal (shownP lvl)}"
   -- the modules opened, each with the scope it is open in
   let mut opens : List (List String × List String) := []
   for (p, s) in markers "$open:" do
@@ -413,7 +552,7 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
       -- opened before, in scope)
       let viaOpen : Option (List String) := opens.findSome? fun (osc, m) =>
         if inside sc osc && modsS.contains (qualJoin (m ++ [head])) &&
-            (pubS.contains (qualJoin (m ++ [head])) || inside sc m) then some (m ++ [head]) else none
+            admitsAt sc (m ++ [head]) then some (m ++ [head]) else none
       let base ← match lookup sc head, viaOpen with
         | some (true, b), _ => pure b
         | none, some b => pure b
@@ -436,7 +575,8 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
       let here : List (Bool × List String) := ((opens.filter (·.1 == pre)).filterMap fun (_, m) =>
         let c := m ++ [n]
         let q := qualJoin c
-        if !(pubS.contains q || inside sc m) then none
+        if !admitsAt sc c then none
+
         else if defsS.contains q then some (false, c)
         else if modsS.contains q then some (true, c)
         else none).eraseDups
@@ -526,7 +666,7 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
   -- aliases' pass writes out later: a qualifier may name a class through
   -- one, docs/research/type-aliases.md), for the comparisons below
   let aliasOf : List (String × String) := real.filterMap fun
-    | .const p n none body =>
+    | .const p n _ none body =>
       let named : Option String := match body with
         | .typeAlias _ [] (.name x) => some x
         | .typeAlias .. => none
@@ -546,20 +686,20 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
     return c
   -- each class's names (`ClassNames`)
   let classInfo : List (String × ClassNames) ← real.filterMapM fun
-    | .classDef p n tps _ parents _ fields ovs methods => do
+    | .classDef p n _ tps _ parents _ fields methods => do
       let ps ← parents.mapM fun t => do
         match ← t.mapNamesM (tyNameQ (scopeOf n) (tps.map (·.name)) p) with
         | .name q | .app q _ => pure q
         | _ => pure ""
-      let own := fields.map (·.1) ++ methods.filterMap fun
+      let own := fields.map (·.name) ++ methods.filterMap fun
         | .fn _ mn .. => if mn.startsWith "(" || mn.startsWith "$" then none else some mn
         | _ => none
-      let all := fields.map (bareName ·.1) ++ methods.filterMap fun
+      let all := fields.map (bareName ·.name) ++ methods.filterMap fun
         | .fn _ mn .. => if mn.startsWith "$" then none else some (bareName mn)
         | _ => none
-      let declared := (fields.map (·.1)).filter (!ovs.contains ·) |>.map bareName
+      let declared := fields.filter (!·.isOverride) |>.map (bareName ·.name)
       -- (the members written `(n:)x`, `n` the class itself)
-      let ownQualified ← (fields.map (·.1) ++ methods.filterMap fun
+      let ownQualified ← (fields.map (·.name) ++ methods.filterMap fun
           | .fn _ mn .. => some mn
           | _ => none).filterMapM fun x => do
         let some (q, y) := splitQual? x | return none
@@ -593,7 +733,7 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
   let allMembersOf := ofClasses (·.all)
   let declares (c f : String) : Bool := ((infoOf c).map (·.declared.contains f)).getD false
   let enums : Std.HashSet String := Std.HashSet.ofList (real.filterMap fun
-    | .const _ n _ (.enumDef ..) => some n
+    | .const _ n _ _ (.enumDef ..) => some n
     | _ => none)
   let rAt (sc excl : List String) (self : Option String := none) : Resolver :=
     let members := (self.map allMembersOf).getD []
@@ -669,15 +809,15 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
           pure (SExpr.block bp items)
         | _, _ => body.mapNamesM rb
       return .fn p n ps tps effs (← ret.mapNamesM (r.ty p)) body
-    | .const p n ty body =>
+    | .const p n cspecs ty body =>
       let r := rAt (scopeOf n) []
       let body ← match body with
         | .enumDef ep vs isOpen => do pure (SExpr.enumDef ep (← vs.mapM (ownName n "a value" p)) isOpen)
         | .structDef sp tps specs fs => do
-          pure (SExpr.structDef sp tps specs (← fs.mapM fun (f, ft, d, v) => do return (← ownName n "a field" sp f, ft, d, v)))
+          pure (SExpr.structDef sp tps specs (← fs.mapM fun f => do return { f with name := ← ownName n "a field" sp f.name }))
         | b => pure b
-      return .const p n (← ty.mapM (·.mapNamesM (r.ty p))) (← body.mapNamesM r)
-    | .classDef p n tps specs parents isI fields ovs methods =>
+      return .const p n cspecs (← ty.mapM (·.mapNamesM (r.ty p))) (← body.mapNamesM r)
+    | .classDef p n nsp tps specs parents isI fields methods =>
       let r := rAt (scopeOf n) (tps.map (·.name)) (some n)
       let tps ← tps.mapM (·.mapBoundNamesM (r.ty p))
       for m in membersOf n do r.bind p m
@@ -707,16 +847,10 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
         | .locals => throw s!"{mp.show}: (local:){y}: (local:) qualifies a function's locals, and {y} is a member of {shown n}"
         | .super => throw s!"{mp.show}: (super:){y}: (super:) qualifies a call of the implementation above, not a definition"
         | _ => throw s!"{mp.show}: ({q}:){y}: a member's qualifier names its class, or, for an override, the class or interface that introduces it"
-      let fieldNames ← fields.mapM fun (fn, _, _, _) => memberName p fn true
-      let renamed := (fields.map (·.1)).zip fieldNames
-      let ovs := ovs.map fun o => (renamed.lookup o).getD o
-      let specs := specs.map fun sp =>
-        if sp.startsWith "$final:" then
-          let f := (sp.drop "$final:".length).toString
-          s!"$final:{(renamed.lookup f).getD f}"
-        else sp
-      let fields ← (fields.zip fieldNames).mapM fun ((_, ty, d, v), fn) => do
-        return (fn, ← ty.mapNamesM (r.ty p), ← d.mapM (·.mapNamesM r), v)
+      let fields ← fields.mapM fun f => do
+        return { f with name := ← memberName p f.name true, ty := ← f.ty.mapNamesM (r.ty p),
+                        default := ← f.default.mapM (·.mapNamesM r) }
+
       let methods ← methods.mapM fun m => do
         match m with
         | .fn mp mn mps mtps meffs mret mbody =>
@@ -730,6 +864,6 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
           let (mps, rmb) ← params rm mp mps
           return .fn mp (← memberName mp mn false) mps mtps meffs (← mret.mapNamesM (rm.ty mp)) (← mbody.mapNamesM rmb)
         | m => pure m
-      return .classDef p n tps specs parents isI fields ovs methods
+      return .classDef p n nsp tps specs parents isI fields methods
 
 end OpenVerse.Front

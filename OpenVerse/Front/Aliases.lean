@@ -118,9 +118,13 @@ partial def Scope.expr (s : Scope) : SExpr → Except String SExpr
     return .construct p n ts (← fs.mapM s.expr)
   | .structDef p tps specs fs =>
     return .structDef p (← tps.mapM s.tparam) specs
-      (← fs.mapM fun (f, t, d, v) => do return (f, ← s.ty p t, ← d.mapM s.expr, v))
+      (← fs.mapM fun f => do return { f with ty := ← s.ty p f.ty, default := ← f.default.mapM s.expr })
   | .refineDef p v base cs => return .refineDef p v (← s.ty p base) (← cs.mapM s.expr)
   | e => e.mapChildrenM s.expr
+
+/-- A class's field with each alias written out. -/
+def Scope.field (s : Scope) (p : Pos) (f : SField) : Except String SField := do
+  return { f with ty := ← s.ty p f.ty, default := ← f.default.mapM s.expr }
 
 /-- A definition with each alias written out. -/
 partial def Scope.top (s : Scope) : STop → Except String STop
@@ -132,11 +136,11 @@ partial def Scope.top (s : Scope) : STop → Except String STop
         return s!"$constructor:{← s.typeName p (e.drop "$constructor:".length).toString}"
       else pure e
     return .fn p (← s.method p n) ps (← tps.mapM s.tparam) effs (← s.ty p ret) (← s.expr body)
-  | .const p n t e => return .const p n (← t.mapM (s.ty p)) (← s.expr e)
-  | .classDef p n tps specs parents isI fields ovs methods =>
-    return .classDef p n (← tps.mapM s.tparam) specs (← parents.mapM (s.ty p)) isI
-      (← fields.mapM fun (f, t, d, v) => do return (f, ← s.ty p t, ← d.mapM s.expr, v)) ovs
-      (← methods.mapM s.top)
+  | .const p n cspecs t e => return .const p n cspecs (← t.mapM (s.ty p)) (← s.expr e)
+  | .classDef p n nsp tps specs parents isI fields methods =>
+    return .classDef p n nsp (← tps.mapM s.tparam) specs (← parents.mapM (s.ty p)) isI
+      (← fields.mapM (s.field p)) (← methods.mapM s.top)
+
 
 /-- Whether `t`, written as a value could be (`SExpr.asType?`), is a type:
     a type's name, or a parametric type's name applied to as many types as
@@ -183,8 +187,8 @@ partial def checkNames (p : Pos) (arity : String → Option (Option Nat)) (param
 def expand (tops : List STop) : Except String (List STop) := do
   -- the types the program defines, with their numbers of type parameters
   let defined : Std.HashMap String Nat := Std.HashMap.ofList (tops.filterMap fun
-    | .classDef _ n tps .. | .const _ n none (.structDef _ tps ..) => some (n, tps.length)
-    | .const _ n none (.enumDef ..) | .const _ n none (.refineDef ..) => some (n, 0)
+    | .classDef _ n _ tps .. | .const _ n _ none (.structDef _ tps ..) => some (n, tps.length)
+    | .const _ n _ none (.enumDef ..) | .const _ n _ none (.refineDef ..) => some (n, 0)
     | _ => none)
   let typeArity (aliases : Std.HashMap String Nat) (n : String) : Option (Option Nat) :=
     if builtinTypes.contains n || n == "comparable" then some (some 0)
@@ -195,8 +199,8 @@ def expand (tops : List STop) : Except String (List STop) := do
   -- the definitions `name := e` that may be aliases: the type each writes,
   -- its number of parameters, and whether the parser knows it is one
   let written : List (String × STy × Nat × Bool) := tops.filterMap fun
-    | .const _ n none (.typeAlias _ tps t) => some (n, t, tps.length, true)
-    | .const _ n none e => e.asType?.map (n, ·, 0, false)
+    | .const _ n _ none (.typeAlias _ tps t) => some (n, t, tps.length, true)
+    | .const _ n _ none e => e.asType?.map (n, ·, 0, false)
     | _ => none
   if written.isEmpty then return tops
   -- (one whose value is a type that names aliases is one too, wherever they
@@ -222,7 +226,8 @@ def expand (tops : List STop) : Except String (List STop) := do
   -- is no type yet)
   let bodyArity (n : String) : Option (Option Nat) := if n == "comparable" then none else typeArity {} n
   for t in tops do
-    if let .const p n none e := t then
+    if let .const p n _ none e := t then
+
       if aliases.contains n then
         let (tps, ty) := match e with
           | .typeAlias _ tps ty => (tps, ty)

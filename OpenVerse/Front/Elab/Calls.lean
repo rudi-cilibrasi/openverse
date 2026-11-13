@@ -10,8 +10,8 @@ partial def defaultTypeNames (bound : List String) (e : SExpr) : List String :=
   match e with
   | .structDef _ tps _ fs =>
     let own := bound ++ tps.map (·.name)
-    fs.flatMap fun (_, t, d, _) => t.bareNames.filter (!own.contains ·) ++
-      (d.toList.flatMap (defaultTypeNames own))
+    fs.flatMap fun f => f.ty.bareNames.filter (!own.contains ·) ++
+      (f.default.toList.flatMap (defaultTypeNames own))
   | _ =>
     let own := match e with
       | .decl _ _ (some t) _ _ | .refineDef _ _ t _ => bare t
@@ -28,8 +28,9 @@ partial def substDefaultTypes (σ : List (String × STy)) (e : SExpr) : SExpr :=
     | .refineDef p n t cs => some (.refineDef p n (t.substNames σ) (cs.map (substDefaultTypes σ)))
     | .structDef p tps specs fs =>
       let σ' := σ.filter fun (n, _) => !tps.any (·.name == n)
-      some (.structDef p tps specs (fs.map fun (n, t, d, v) =>
-        (n, t.substNames σ', d.map (substDefaultTypes σ'), v)))
+      some (.structDef p tps specs (fs.map fun f =>
+        { f with ty := f.ty.substNames σ', default := f.default.map (substDefaultTypes σ') }))
+
     | .app p (.ident q "$witness") [.ident r n] false =>
       match σ.lookup n with
       | some (.name v) => some (.app p (.ident q "$witness") [.ident r v] false)

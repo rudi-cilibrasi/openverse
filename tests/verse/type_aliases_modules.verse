@@ -7,7 +7,7 @@ geometry := module:
     Twice<public>(X:coordinate):coordinate = X + X
     Origin<public>:point = (0, 0)
     shape<public> := class:
-        Sides:int = 3
+        Sides<public>:int = 3
     figure<public> := shape
 
 Main():void =

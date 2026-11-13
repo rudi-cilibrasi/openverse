@@ -37,7 +37,7 @@ def main : IO Unit := do
   report "materialized loop extra function" (elabProgramCore tops { requests := { loops := [stage] } })
   let request : Choice.FirstLift := { stage with stageOnly := false, name := "$apiFirst", ret := et, body := ec, extraFns := [] }
   report "materialized loop function" (elabProgramCore tops { requests := { loops := [request] } })
-  let framed := STop.const p "$apiPacket" none (.structDef p [] [] [("E", .opt et, some (.ident p "false"), false)])
+  let framed := STop.const p "$apiPacket" [] none (.structDef p [] [] [{ name := "E", ty := .opt et, default := some (.ident p "false") }])
   report "materialized loop data field" (elabProgramCore tops { requests := { loops := [{stage with extraFns := [framed]}] } })
   let lift : Refine.Lift := {
     pos := p, bound := "D", target := "holder", name := "$apiCast", params := [], tparams := [],

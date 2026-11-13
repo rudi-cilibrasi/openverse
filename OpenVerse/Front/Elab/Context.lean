@@ -781,6 +781,23 @@ def fresh (t : Ty) : EM Nat :=
 
 def eerr (p : Pos) (msg : String) : EM α := throw s!"{p.show}: {msg}"
 
+/-- (Book of Verse ch. 12) A use at `p` of the member `m` of a value of class
+    `c` (a field read, a method called or taken as a value; with `write`, a
+    field set): the declaration it reaches (`Access.Env.member?`) admits the
+    code at `p`, where the source has it (`Access.Sites`), for reading, and
+    for writing its `var`. A use whose position is in no source definition
+    is the compiler's. -/
+def checkMemberAccess (env : TyEnv) (p : Pos) (c m : String) (write : Bool := false) : EM Unit := do
+  let some site := env.access.sites.at p | return
+  let some mem := env.access.member? (env.supers c) m | return
+  let below (x y : String) : Bool := env.isSub x y
+  let what := s!"{bareName (Access.sourceName m)} of {Access.shown mem.cls}"
+  if let some why := mem.read.refusal below site what (Access.shown mem.cls) then eerr p why
+  if write then
+    if let some a := mem.write.denial below site then
+      eerr p (s!"{what} cannot be set here: " ++ a.refusal "its var")
+
+
 /-- A class's fields cannot be set: they are immutable until `var` fields,
     which need reference semantics, are supported. Setting one would make
     the tuple representation observable. -/

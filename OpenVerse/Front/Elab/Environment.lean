@@ -21,8 +21,8 @@ def typeEnvironment (classes : Classes) (fields : Fields) (methods : Methods) (s
     (fields.of cd.name).filterMap fun (f, _, _, isVar) => if isVar then some (cd.name, f) else none
   let uniques : List String := (classes.defs.filter (·.specs.contains "unique")).map (·.name)
   let finalFields : List (String × String) := classes.defs.flatMap fun cd =>
-    cd.specs.filterMap fun sp => if sp.startsWith "$final:" then some (cd.name, (sp.drop "$final:".length).toString) else none
-  let mut env : TyEnv := { constructionFx := source.constructionFx, concurrencyNames, finalFields, classes := classes.henv.classes, cinfo := classes.henv.cinfo, cinfoMap := classes.henv.cinfoMap,
+    cd.fields.filterMap fun f => if f.specs.contains "final" then some (cd.name, f.name) else none
+  let mut env : TyEnv := { constructionFx := source.constructionFx, access := source.access, concurrencyNames, finalFields, classes := classes.henv.classes, cinfo := classes.henv.cinfo, cinfoMap := classes.henv.cinfoMap,
                            classIx := classes.henv.classes.zipIdx.foldl (fun m (n, i) => m.insert n i) {},
                            belowReady := true,
                            supersMap := classes.henv.classes.foldl (fun m d => m.insert d (classes.henv.supers d)) {},
@@ -49,16 +49,16 @@ def typeEnvironment (classes : Classes) (fields : Fields) (methods : Methods) (s
   -- one, the class's own first, that gives the field a default itself
   let homeOf (c f : String) : String :=
     ((classes.henv.supers c).find? fun x =>
-      ((classes.cdef? x).map fun xd => xd.fields.any fun (g, _, d, _) => g == f && d.isSome).getD false).getD c
+      ((classes.cdef? x).map fun xd => xd.fields.any fun g => g.name == f && g.default.isSome).getD false).getD c
   env := { env with defaultHome := classes.defs.flatMap fun cd =>
     (fields.of cd.name).filterMap fun (f, _, d, _) => d.map fun _ => ((cd.name, f), homeOf cd.name f) }
   for t in methods.tops do
     match t with
-    | .const _ n none (.enumDef _ vals isOpen) =>
+    | .const _ n _ none (.enumDef _ vals isOpen) =>
       env := { env with enums := env.enums ++ [(n, vals)],
                         openEnums := if isOpen then env.openEnums ++ [n] else env.openEnums }
-    | .const _ n none (.structDef _ _ _ _) => env := { env with structs := env.structs ++ [(n, [])] }
-    | .const p n none (.refineDef _ v sty conds) =>
+    | .const _ n _ none (.structDef _ _ _ _) => env := { env with structs := env.structs ++ [(n, [])] }
+    | .const p n _ none (.refineDef _ v sty conds) =>
       -- a refinement type (#136)
       let (base, _) ← (resolveTy env p sty).run {}
       env := { env with refines := env.refines ++ [(n, base, ← refineConds p v base conds)] }
@@ -66,16 +66,16 @@ def typeEnvironment (classes : Classes) (fields : Fields) (methods : Methods) (s
   -- the type parameters of parametric structs
   for t in methods.tops do
     match t with
-    | .const _ n none (.structDef _ tps@(_ :: _) _ _) =>
+    | .const _ n _ none (.structDef _ tps@(_ :: _) _ _) =>
       env := { env with sparams := env.sparams ++ [(n, ← checkTParams env tps)] }
     | _ => pure ()
   let shell := env
   let mut structs := #[]
   for t in methods.tops do
     match t with
-    | .const p n none (.structDef _ _ _ fs) =>
+    | .const p n _ none (.structDef _ _ _ fs) =>
       let senv := { shell with tvars := (shell.sparams.lookup n).getD [] |>.map fun (v, c) => (v, Ty.param v c) }
-      let fields ← fs.mapM fun (f, sty, d, _) => do
+      let fields ← fs.mapM fun ⟨f, sty, d, _, _, _⟩ => do
         let (ty, _) ← (resolveTy senv p sty).run {}
         pure (f, ty, d)
       structs := structs.push (n, fields)
@@ -89,7 +89,7 @@ def typeEnvironment (classes : Classes) (fields : Fields) (methods : Methods) (s
   -- `<persistable>`. (An enum's `<persistable>` the parser takes and drops:
   -- every enum is taken to persist.)
   let persistable : List String := methods.tops.filterMap fun
-    | .const _ n none (.structDef _ _ specs _) => if specs.contains "persistable" then some n else none
+    | .const _ n _ none (.structDef _ _ specs _) => if specs.contains "persistable" then some n else none
     | _ => none
   let rec persists : Ty → Bool
     | .any | .dyn | .rational | .param .. => false
@@ -99,7 +99,7 @@ def typeEnvironment (classes : Classes) (fields : Fields) (methods : Methods) (s
     | .struct n args => !env.classes.contains n && persistable.contains n && args.attach.all fun ⟨t, _⟩ => persists t
     | _ => true
   for t in methods.tops do
-    if let .const p n none (.structDef _ tps specs _) := t then
+    if let .const p n _ none (.structDef _ tps specs _) := t then
       if specs.contains "persistable" then
         if !tps.isEmpty then throw s!"{p.show}: {n} is <persistable>, so it cannot have type parameters"
         for (f, ty, _) in (env.structs.lookup n).getD [] do
@@ -152,9 +152,10 @@ def upperBounds (env : TyEnv) (tops : List STop) : Except String TyEnv := do
   -- Resolve every constrained nominal header before validating any use of
   -- one. This makes forward declarations independent of source order.
   let constrainedTypes := tops.filterMap fun
-    | .const p name none (.structDef _ tps _ fields) =>
-      let relations := fields.filterMap fun (field, ty, _, mutable) =>
-        SubtypeEvidence.declaredRelation? name field ty mutable
+    | .const p name _ none (.structDef _ tps _ fields) =>
+      let relations := fields.filterMap fun f =>
+        SubtypeEvidence.declaredRelation? name f.name f.ty f.isVar
+
       if tps.any (·.upperBound.isSome) || !relations.isEmpty then some (p, name, tps, relations) else none
     | _ => none
   if !constrainedTypes.isEmpty then

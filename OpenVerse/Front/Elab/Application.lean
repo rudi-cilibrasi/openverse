@@ -642,6 +642,8 @@ partial def elabAppBaseWith
       -- call takes `c`'s one list
       ctx.noteOverload p m m
       if let (true, some owner) := (env.classes.contains c, ctx.methodDecl? c m) then
+        checkMemberAccess env p c m
+
         -- the slots the call covers (#70): every class below `c` must implement
         -- them alike, or the call must say which
         let roots := ctx.rootsOf c m
