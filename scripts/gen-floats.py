@@ -43,7 +43,10 @@ def lit():
     elif k < 0.45:
         t = f"0.{rng.randint(0, 10**8):08d}"
     elif k < 0.6:
-        t = f"{rng.randint(1, 9)}.{rng.randint(0, 99)}e{rng.choice('+-')}{rng.randint(0, 320)}"
+        # (a literal that rounds to infinity is refused: up to e+307 on the
+        # way up, down to subnormals and zero on the way down)
+        m, d, sign = rng.randint(1, 9), rng.randint(0, 99), rng.choice('+-')
+        t = f"{m}.{d}e{sign}{rng.randint(0, 307 if sign == '+' else 320)}"
     elif k < 0.7:
         t = f"{rng.randint(1, 10**15)}.0"
     else:

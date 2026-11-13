@@ -169,6 +169,22 @@ for every input buffer, and reads only inside the buffer.
 
 stdout is exactly the bytes the program printed.
 
+Memory is the one limit the two implementations do not share. `cverse`
+reports `limit: memory` (exit 3) when an allocation fails. The reference
+interpreter (`openverse run`, `Prog.runB` in `Core/Bounded.lean`) bounds the
+steps (fuel) and the nesting (recursion depth) of a run, not the size of its
+values, so it has no memory limit of its own: when the Lean runtime cannot
+allocate, its allocator calls `lean_internal_panic_out_of_memory`, which
+prints `INTERNAL PANIC: out of memory` and calls `exit(1)`, with no exception
+or hook a Lean program could catch. So under an address-space cap (`ulimit
+-v`, as `scripts/check.sh` sets) a program that runs out of memory ends with
+**exit 1 and `INTERNAL PANIC: out of memory`** in `openverse run`, and with
+exit 3 and `limit: memory` in `cverse`. This is a limit of the reference
+interpreter, not a result of the program: the scripts that compare the two
+(`scripts/fuzz-front.sh`, `tests/conformance/book/booktests.py`) read that
+exit and message as the resource limit, exit 3 (where the two run in
+different amounts of memory, the cap may stop one and not the other).
+
 The format does not carry `Fn.writes` (#35): it is a fact the front end
 proves about a program (`Prog.checkWriteSound`), not part of its meaning,
 and the runtime never needs it.

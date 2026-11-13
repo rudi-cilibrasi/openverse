@@ -29,6 +29,7 @@ V()<transacts>:void =
     Y := 1 | 2
     Print("y {Y}")
     defer: Print("b")
+    {}
 Main()<transacts>:void =
     for (X := F(9)) { Print("for-f {X}") }
     for (X := G(9)) { Print("for-g {X}") }

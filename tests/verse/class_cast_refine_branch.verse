@@ -16,7 +16,7 @@ Pick(H:cell, P:pair(a, b), Q:pair(c, d), N:int where a:type, b:type, c:type, d:t
 # the branch's value at the refined type; a branch that is a cast alone
 Same(P:pair(a, b), N:int where a:type, b:type)<decides>:b =
     if (N > 0) then dup[P].A else dup[P].B
-Self(P:pair(a, b), N:int where a:type, b:type)<decides>:dup(a) =
+Itself(P:pair(a, b), N:int where a:type, b:type)<decides>:dup(a) =
     if (N > 0) then dup[P] else dup[P]
 # inside a refining if's branch
 Two(P:pair(a, b), Q:pair(c, d) where a:type, b:type, c:type, d:type)<decides>:int =
@@ -34,7 +34,7 @@ Main()<transacts>:void =
     for (P : array{Y, Z}, Q : array{Y, Z}, N : array{0, 1, 2}):
         if (V := Pick[H, P, Q, N]) then Print("Pick {V} {H.N}") else Print("Pick no {H.N}")
     if (V := Same[Y, 1], W := Same[Y, 0]) then Print("Same {V} {W}")
-    if (D := Self[Y, 1]) then Print("Self {D.C}")
+    if (D := Itself[Y, 1]) then Print("Self {D.C}")
     if (V := Two[Y, Y]) then Print("Two {V}")
     if (V := Two[Y, Z]) then Print("Two {V}") else Print("Two no")
     if (V := Stmt[H, Y, 1]) then Print("Stmt {V}")

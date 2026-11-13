@@ -20,7 +20,9 @@ def typeEnvironment (classes : Classes) (fields : Fields) (methods : Methods) (s
   let varFields : List (String × String) := classes.defs.flatMap fun cd =>
     (fields.of cd.name).filterMap fun (f, _, _, isVar) => if isVar then some (cd.name, f) else none
   let uniques : List String := (classes.defs.filter (·.specs.contains "unique")).map (·.name)
-  let mut env : TyEnv := { constructionFx := source.constructionFx, concurrencyNames, classes := classes.henv.classes, cinfo := classes.henv.cinfo, cinfoMap := classes.henv.cinfoMap,
+  let finalFields : List (String × String) := classes.defs.flatMap fun cd =>
+    cd.specs.filterMap fun sp => if sp.startsWith "$final:" then some (cd.name, (sp.drop "$final:".length).toString) else none
+  let mut env : TyEnv := { constructionFx := source.constructionFx, concurrencyNames, finalFields, classes := classes.henv.classes, cinfo := classes.henv.cinfo, cinfoMap := classes.henv.cinfoMap,
                            classIx := classes.henv.classes.zipIdx.foldl (fun m (n, i) => m.insert n i) {},
                            belowReady := true,
                            supersMap := classes.henv.classes.foldl (fun m d => m.insert d (classes.henv.supers d)) {},
@@ -79,6 +81,29 @@ def typeEnvironment (classes : Classes) (fields : Fields) (methods : Methods) (s
       structs := structs.push (n, fields)
     | _ => pure ()
   env := { env with structs := structs.toList }
+  -- what `<persistable>` requires of a struct (Book of Verse ch. 17,
+  -- `EffectPolicy.specifierPlaces`): no type parameters, and fields whose
+  -- types persist, not `any`, a rational, a function, an interface or a class
+  -- (openverse has no persistable classes), nor a struct that is not
+  -- `<persistable>`. (An enum's `<persistable>` the parser takes and drops:
+  -- every enum is taken to persist.)
+  let persistable : List String := methods.tops.filterMap fun
+    | .const _ n none (.structDef _ _ specs _) => if specs.contains "persistable" then some n else none
+    | _ => none
+  let rec persists : Ty → Bool
+    | .any | .rational | .param .. => false
+    | .arr t | .opt t => persists t
+    | .tup ts => ts.attach.all fun ⟨t, _⟩ => persists t
+    | .map k v => persists k && persists v
+    | .struct n args => !env.classes.contains n && persistable.contains n && args.attach.all fun ⟨t, _⟩ => persists t
+    | _ => true
+  for t in methods.tops do
+    if let .const p n none (.structDef _ tps specs _) := t then
+      if specs.contains "persistable" then
+        if !tps.isEmpty then throw s!"{p.show}: {n} is <persistable>, so it cannot have type parameters"
+        for (f, ty, _) in (env.structs.lookup n).getD [] do
+          if !persists ty then
+            throw s!"{p.show}: {n} is <persistable>, so its field '{f}' must persist, and {ty.show} does not (Book of Verse ch. 17)"
   -- the type arguments of each class's parametric superclass (#39)
   let mut pargs : Array (String × List Ty) := #[]
   for cd in classes.defs do

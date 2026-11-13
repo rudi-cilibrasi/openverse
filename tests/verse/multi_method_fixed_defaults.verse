@@ -9,7 +9,7 @@ base(a:type,b:type) := class(root(a,b)):
     Picks<override>(N:int, ?K:int = Note("base",3))<transacts>:int = N + K + 10 | N + K + 20
 fixed(u:type) := class(base(int,u)):
     Picks<override>(N:int, ?K:int = Note("fixed",4))<transacts>:int = N + K + 30 | N + K + 40
-repeat(t:type) := class(base(t,t)):
+repeated(t:type) := class(base(t,t)):
     Picks<override>(N:int, ?K:int = Note("repeat",5))<transacts>:int = N + K + 60 | N + K + 70
 reorder(x:type,y:type) := class(base(y,x)):
     Picks<override>(N:int, ?K:int = Note("reorder",6))<transacts>:int = N + K + 80 | N + K + 90
@@ -25,7 +25,7 @@ Run(P:root(a,b) where a:type,b:type)<transacts>:void =
 Main()<transacts>:void =
     Run(base(int,string){})
     Run(fixed(string){})
-    Run(repeat(int){})
+    Run(repeated(int){})
     Run(reorder(int,string){})
     Run(added(int,string,char){X:='c'})
     Run(kid{})
