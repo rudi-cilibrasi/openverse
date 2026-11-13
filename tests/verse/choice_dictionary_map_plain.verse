@@ -28,8 +28,8 @@ Main():void=
     H:=cell{}
     P:=ca{H:=H}
     Q:=cb{H:=H}
-    Rows:=for(A:=(Dup(P)|Dup(Q))):
-        V:=set A.Data[A.Key()]=A.RHS()
+    # (a set through a map's key is in a failure context: a for's clause)
+    Rows:=for(A:=(Dup(P)|Dup(Q)),V:=set A.Data[A.Key()]=A.RHS()):
         Print("body {V} {H.N}")
         V
     Print("done {Rows.Length} {H.N}")

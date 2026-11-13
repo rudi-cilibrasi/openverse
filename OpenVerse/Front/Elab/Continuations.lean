@@ -2162,7 +2162,9 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
             | .map keyTy next =>
               keys := keys ++ [keyTy]
               leaf := next
-              indexedDecides := indexedDecides || i + 1 < indices.length
+              -- (a map's key reference is `<decides>`, also the last key's,
+              -- which inserts: the Book of Verse's API reference)
+              indexedDecides := true
             | _ => break
           if keys.length != indices.length then break
           let keyTy := if keys.length == 1 then keys.head! else Ty.tup keys

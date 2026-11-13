@@ -119,6 +119,39 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     (ctx.lookup root).any (fun binding => match binding.ty with
       | .param .. => steps.any (fun (_, field, key) => field == some "?" || key.isSome)
       | _ => false)
+  -- (a `set` through a map's key can fail: in Verse the key's reference is
+  -- `<decides>`, the Book of Verse's API reference: "operator'()'(Map:ref(
+  -- [t]u, [t]v), Key:t …)<decides>", "what makes `set M[Key] = Value`
+  -- work on a map variable"; its tests write `(set Map[I] = I) or Err()`,
+  -- whose left operand must be able to fail, `LogicalOr.versetest:143`. So
+  -- it is in a failure context, as one through an array's index, which
+  -- fails out of range, is; the last key of its path still inserts.)
+  let rec throughMap (ty : Ty) : List (Pos × Option String × Option SExpr) → Bool
+    | [] => false
+    | (_, some "?", _) :: rest => match ty with
+      | .opt t => throughMap t rest
+      | _ => false
+    | (_, some f, _) :: rest => match ty with
+      | .struct sn targs => match fieldIndex (ctx.types.fields sn targs) f with
+        | some (_, ft) => throughMap ft rest
+        | none => false
+      | _ => false
+    | (_, none, some _) :: rest => match ty with
+      | .map .. => true
+      | .arr t => throughMap t rest
+      | _ => false
+    | _ :: _ => false
+  -- (that a `set` through a map's key can fail, in its code: `true?`, which
+  -- succeeds, so that the failure contexts' checks, which ask the code
+  -- whether it can fail, see one)
+  let keyRefDecides : Expr := .seq (.prim .query [.lit (.logic true)]) (.lit .void)
+  -- (code made by the elaborator, at no position, is checked where its
+  -- source is: an operation of a choice's dictionary, #283)
+  if !ctx.canFail && p.line != 0 then
+    if let some (root, steps) := path lhs then
+      if let some l := ctx.lookup root then
+        if throughMap l.ty steps then
+          eerr p "set through a map's key can fail (the key's reference is <decides> in Verse, the Book of Verse's API reference; its last key inserts), so it must be in a failure context (an if condition, a for clause, option{…}, logic{…}, not, the left of or, or a <decides> function)"
   if let some (root, steps) := path lhs then if general steps || opaqueIndex root steps then
     -- `set X.p = e` with a path of two or more steps (Book of Verse §3.5, §9.3):
     -- the indices and keys are evaluated once, left to right; then each
@@ -364,6 +397,9 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         let tidx ← fresh .int
         pre := pre.push (.assign tvk newVal)
         pre := pre.push (mapPut c tk tvk ti tidx)
+        -- (the key's reference is `<decides>`: the `set` can fail, though
+        -- the last key inserts, `keyRefDecides`)
+        pre := pre.push keyRefDecides
       | _, _, _ => eerr p "internal: set path"
       newVal := .local c
     if !wroteObject then pre := pre.push (.assign l.slot (.local c0))
@@ -396,7 +432,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
       let ti ← fresh .int
       let tidx ← fresh .int
       return ⟨.seq (.assign tk (← coerce p rk kt)) (first (.seq (.assign tv v)
-        (.seq (mapPut l.slot tk tv ti tidx) (.local tv)))), vt⟩
+        (.seq (mapPut l.slot tk tv ti tidx) (.seq keyRefDecides (.local tv))))), vt⟩
     | .arr t =>
       let i := k
       let ri := widenR ctx.types (← elabE ctx i (some .int))

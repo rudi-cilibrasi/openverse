@@ -763,7 +763,9 @@ if kind.startswith('mapwrite-'):
     effects='<suspends>' if mode=='waiting' else '';print('Run()'+effects+':int=')
     if mode=='first':print('    if('+','.join(clauses+writes)+')then 1 else -1')
     else:
-     if mode=='waiting':body='block{'+('if('+','.join(writes)+'):{}' if op=='compound' else ';'.join(writes))+';Sleep(0.001);0}'
+     # (a set through a map's key is in a failure context, its key's reference
+     # being <decides>: compound or plain, in an if's condition)
+     if mode=='waiting':body='block{'+'if('+','.join(writes)+'):{}'+';Sleep(0.001);0}'
      else:body='0'
      print('    Rows:=for('+','.join(clauses+([] if mode=='waiting' else writes))+'):'+body+'\n    Rows.Length')
     print('Main()'+effects+':void=Print("{Run()}")')

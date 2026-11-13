@@ -33,8 +33,12 @@ Dup(X:t where t:type)<computes>:t=X|X
 Use(H:cell)<suspends>:int=
     var Total:int=0
     defer:Print("source {Total} {H.N}")
+    # (a set through a map's key is in a failure context, which cannot wait:
+    # the key and the value are waited for first)
     Rows:=for(A:=(Dup(ca{H:=H})|Dup(cb{H:=H}))):
-        V:=set A.Data[A.Key()]=A.RHS()
+        K:=A.Key()
+        R:=A.RHS()
+        V:=if(set A.Data[K]=R) then R else 0
         set Total+=1
         Print("body {V} {H.N}")
         V

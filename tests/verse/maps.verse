@@ -1,7 +1,9 @@
 # Maps (Book of Verse ch. 3 "Containers", ch. 5 "Mutability").
 Main():void =
     var Friendliness:[string]int = map{"peach" => 1000}
-    set Friendliness["pelican"] = 17
+    # (a set through a map's key is in a failure context: the key's reference
+    # is <decides>, though the last key inserts)
+    if (set Friendliness["pelican"] = 17) {}
     if (set Friendliness["peach"] += 2000) {}   # += can fail (missing key): a failure context
     if (not (set Friendliness["tomato"] += 1000)) { Print("tomato is not a key, so += fails") }
     if (P := Friendliness["peach"]) { Print("peach: {P}") }

@@ -17,7 +17,7 @@ Main():void =
     if (ConcatenateMaps(map{"p" => 1, "q" => 2}, map{"p" => 1}) = map{"q" => 2, "p" => 1}) then Print("moved")
     # (an update in place keeps a key's place; a concatenation moves it)
     var M:[string]int = map{"a" => 1, "b" => 2, "c" => 3}
-    set M["a"] = 9
+    if (set M["a"] = 9) {}
     Print(Keys(M))
     set M = ConcatenateMaps(M, map{"a" => 0, "d" => 4})
     Print(Keys(M))
