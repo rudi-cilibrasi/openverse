@@ -54,7 +54,7 @@ Verdicts:
 | `=` between different types, `false` as a map, `X?` of a logic, `true` as a type | #600's | ch. 2 and ch. 4, as the rows quote | as the rows quote | #600's (equality and the empty value), not changed here; `false` as a map is on the owner's page already |
 | Ordering of rationals | exact; an int compares with a rational | `04_operators.md:318-321` and the API declare `<` … for `int` and `float` only | none order rationals (`CompareRational.versetest` 5, 11 test `=`) | **Book silent** (the Book declares no ordering of rationals; no test refuses one): keep |
 | Order of a choice's values | spatial | no choice `\|` in the chapters; `07_control.md:711-716`: nested generators give the cartesian product, leftmost outermost | `Operators/BinaryOps.versetest:3`: `a\|b` is a syntax error (3101, the code of syntax not yet supported) | **Book silent**: choice is an openverse feature from the Verse Calculus; keep |
-| Code before a choice | runs once; alternatives rolled back in `if`/`first{}`; in a `for` only an alternative's own clauses | `08_failure.md:147`: "changes … are provisional—they only become permanent if the entire context succeeds"; `07_control.md:196-198` | none with a choice; for a `for` without one see [what a `for` undoes](#what-a-for-undoes) | **Book silent** on choice; the `for` part is the rollback reading below |
+| Code before a choice | runs once; alternatives rolled back in `if`/`first{}`; in a `for` only an alternative's own clauses | `08_failure.md:147`: "changes … are provisional—they only become permanent if the entire context succeeds"; `07_control.md:196-198` | none with a choice; for a `for` without one see [what a `for` undoes](#what-a-for-undoes) | **Book silent** on choice; the `for` part follows the rollback reading below: a choice is one more choice point of the `for`'s search, so in a `for` too an alternative none of whose values reaches the body is undone (built for choices of values; a `for` with a composed or exclusive choice or a call of a function with several values keeps the old rule for now) |
 | A choice in an operand of `and` or `or` | `A`'s clauses then `B`'s; `if (T := A) then T else B` | `08_failure.md:216-218`: `or` "tries each option in order, stopping at the first success" | none with a choice | **Book silent** |
 | The three rows on functions with several values (#283) | as the rows say | silent (`yield` is not supported, `Yield.versetest:4-7`) | none | **Book silent** |
 | Precedence of `\|` | below `+`, above comparisons | the precedence table (`04_operators.md:44-55`) has no `\|` | `BinaryOps.versetest:3` refuses `a\|b`; the commented-out `TimSyntax.versetest:280` puts `\|` below `:=` | **Book silent** |
@@ -682,7 +682,9 @@ of the readings audit (7,390 agree, 2,066 refuse, 277 accept, 50 differ).
    whose later clauses reach no body: said in each); new: `for_search`,
    `for_search_waits` (a body that waits, between the search's steps),
    `for_search_old_paths` (the boundary). The models predict it for the
-   kinds built (`OV_FOR_BOOK`, by default `plain,choice`).
+   kinds built (`OV_FOR_BOOK`, by default `plain,choice`): the five named
+   above and `tests/scripts/test-choice-defaults.py`'s (a construction's
+   prefix default in a `for`), which also kept the old rule.
 4. **Commas in blocks** ([the rule](#commas-in-blocks)). Moved: 28 cases
    agree: `SemicolonsVsCommas.versetest` 70, 91, 95, 100, 103, 106,
    `Option.versetest:44`, `FlowControl/for.versetest:293`,

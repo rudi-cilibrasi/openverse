@@ -46,11 +46,11 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   APIs (persistence, JSON, natives; 345); compiler tooling such as bytecode
   and digests (128); VM-conditional code inside a definition (37) and one
   file that defines `Main` itself (1).
-- Of the **9,783 translatable cases**, openverse **agrees on 8,114 (83%)**,
+- Of the **9,783 translatable cases**, openverse **agrees on 8,121 (83%)**,
   refuses 1,439 valid programs, **accepts 135 refused ones**, gives a
-  **different result in 95** (82 of them `verse_vm_only` cases of unbounded
+  **different result in 88** (82 of them `verse_vm_only` cases of unbounded
   ints) and hits **no internal error**. On test cases alone (without
-  `:decls`) it agrees on 7,954 of 9,567. (When the survey was
+  `:decls`) it agrees on 7,961 of 9,567. (When the survey was
   taken, at `0e69cfb`: 6,409 agreed, 2,817 refused, 482 accepted, 86
   differed and 4 internal errors; before the parser forms, at main
   `99ed203`: 6,417 agreed, 2,809 refused, 482 accepted, 86 differed; with
@@ -265,15 +265,15 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| all test cases (assertions and files without one) | 13197 | 7954 | 135 | 1383 | 95 | 3630 | 0 |
+| all test cases (assertions and files without one) | 13197 | 7961 | 135 | 1383 | 88 | 3630 | 0 |
 | shared definitions of a file (`:decls`) | 307 | 160 | 0 | 56 | 0 | 91 | 0 |
-| **total** | 13504 | 8114 | 135 | 1439 | 95 | 3721 | 0 |
+| **total** | 13504 | 8121 | 135 | 1439 | 88 | 3721 | 0 |
 
 ### By form
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `assert` | 6671 | 3419 | 0 | 1018 | 95 | 2139 | 0 |
+| `assert` | 6671 | 3426 | 0 | 1018 | 88 | 2139 | 0 |
 | `assert_semantic_error` | 3460 | 2619 | 98 | 0 | 0 | 743 | 0 |
 | `assert_valid` | 1637 | 845 | 0 | 273 | 0 | 519 | 0 |
 | `assert_valid_syntax` | 439 | 385 | 0 | 54 | 0 | 0 | 0 |
@@ -298,7 +298,7 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| no VM restriction | 12208 | 7814 | 97 | 1027 | 12 | 3258 | 0 |
+| no VM restriction | 12208 | 7821 | 97 | 1027 | 5 | 3258 | 0 |
 | `verse_vm_only` | 702 | 212 | 5 | 300 | 83 | 102 | 0 |
 | `bp_vm_only` | 366 | 80 | 33 | 1 | 0 | 252 | 0 |
 | `verse_vm_todo` (BPVM only; a known VerseVM failure) | 219 | 8 | 0 | 111 | 0 | 100 | 0 |
@@ -308,13 +308,13 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| (top level) | 5575 | 3355 | 76 | 896 | 6 | 1242 | 0 |
+| (top level) | 5575 | 3358 | 76 | 896 | 3 | 1242 | 0 |
 | Operators/ | 1203 | 1086 | 4 | 12 | 28 | 73 | 0 |
 | Bugs/ | 1185 | 743 | 36 | 157 | 0 | 249 | 0 |
 | Literals/ | 1020 | 834 | 0 | 152 | 0 | 34 | 0 |
 | Serialization/ | 991 | 0 | 0 | 0 | 0 | 991 | 0 |
 | Attributes/ | 795 | 493 | 4 | 52 | 0 | 246 | 0 |
-| FlowControl/ | 484 | 401 | 4 | 30 | 4 | 45 | 0 |
+| FlowControl/ | 484 | 405 | 4 | 30 | 0 | 45 | 0 |
 | Intrinsics/ | 437 | 305 | 0 | 106 | 1 | 25 | 0 |
 | Math/ | 321 | 260 | 0 | 1 | 56 | 4 | 0 |
 | Classes/ | 317 | 227 | 3 | 10 | 0 | 77 | 0 |
@@ -375,7 +375,7 @@ compiler refuses, or a different result. Every one is listed in
 
 ### Different output
 
-46 cases (50 before [the load-bearing readings](#after-the-load-bearing-readings), 58 before [the readings audit](#after-the-readings-audit), 85 before [the empty value](#after-the-empty-value); 85 with the parser forms too: two comments inside strings agree now, and two internal errors compare now as below) run in openverse and give another result than the assertion
+88 cases (95 before [what a `for` undoes](#after-what-a-for-undoes), 46 before [the Book's primitives](#after-the-books-primitives), 50 before [the load-bearing readings](#after-the-load-bearing-readings), 58 before [the readings audit](#after-the-readings-audit), 85 before [the empty value](#after-the-empty-value); 85 with the parser forms too: two comments inside strings agree now, and two internal errors compare now as below) run in openverse and give another result than the assertion
 expects (in every one the assertion fails or a runtime error is raised; no
 case prints differently, since the tests check values, not output).
 
@@ -383,7 +383,7 @@ case prints differently, since the tests check values, not output).
 |---|---:|---|---|---|---|---|---|
 | empty values are one value | 30 → 32 → 4 ([After the empty value](#after-the-empty-value): 28 agree) | `Tests/Operators/BoolQuery.versetest:3`: `assert{true?=false}` | `true?` is `true`, so the comparison fails | succeeds: `true?` and `(true? and true?)` are the empty value | none; the operators chapter: "`IsReady?` is equivalent to comparing against true" | yes: Readings, "`X?` of a logic" | front-end: the value of `X?` of a logic ([empty-values.md](empty-values.md), 3.1) |
 | `int` precision | 26 → 82 (the bitwise functions' 56 `verse_vm_only` cases, [After the Book's primitives](#after-the-books-primitives)) | `Tests/Operators/BinarySubInt.versetest:40`: `assert{0 - -9223372036854775808 = 9223372036854775807+1}` | `error: overflow` | succeeds | all `verse_vm_only`; their `bp_vm_only` twins expect the runtime error and agree | yes: the BPVM reading of the `int` range ([Readings](../LANGUAGE.md#readings-openverse-takes)) | Core and runtime (unbounded integers); keep as a reading |
-| rollback of a `for` iteration | 8 → 10 (`for.versetest` 317, 344, refused for `array{} = for(…)` before) → 7 (317 and `SoftwareTransactionalMemory.versetest` 74, 81 agree: a failing range bound gives no iterations, [the readings audit](#after-the-readings-audit)) | `Tests/Range.versetest:140`: `for (J:(set X = array{666}); I := GetLower()..GetUpper())` with an empty range, then `X = array{42}` | keeps what a source or a range bound did before a later clause failed (`X` stays `array{666}`; in `Tests/FlowControl/for.versetest:362` `Y.Inc()` in an inner range bound is kept for the rejected `I = 2`) | undone with the iteration | none | in part: Readings, "Code before a choice" (#208, #283) | front-end feature: one transaction per iteration, sources included |
+| rollback of a `for` iteration | 8 → 10 (`for.versetest` 317, 344, refused for `array{} = for(…)` before) → 7 (317 and `SoftwareTransactionalMemory.versetest` 74, 81 agree: a failing range bound gives no iterations, [the readings audit](#after-the-readings-audit)) → 0 ([what a `for` undoes](#after-what-a-for-undoes): all agree) | `Tests/Range.versetest:140`: `for (J:(set X = array{666}); I := GetLower()..GetUpper())` with an empty range, then `X = array{42}` | keeps what a source or a range bound did before a later clause failed (`X` stays `array{666}`; in `Tests/FlowControl/for.versetest:362` `Y.Inc()` in an inner range bound is kept for the rejected `I = 2`) | undone with the iteration | none | in part: Readings, "Code before a choice" (#208, #283) | front-end feature: one transaction per iteration, sources included |
 | `ToString` of a float | 7 → 0 ([After the Book's primitives](#after-the-books-primitives): all agree) | `Tests/Intrinsics/FloatToString.versetest:18`: `TestSignedFloatToString[1.0, "1.000000"]` | `1.0` | `1.000000`: six decimals, every digit of a large value | none; the Book's prose example is `98.5`, so prose and tests disagree | yes: Readings, `ToString` of a float | a message-sized change in both formatters; an owner decision |
 | commas and semicolons in blocks | 4 → 0 (commas in a block make a tuple, [the load-bearing readings](#after-the-load-bearing-readings)) | `Tests/Option.versetest:44`: `assert{option{1,2}?=(1,2)}` | `option{1,2}` holds `2`; `for(…){C,I}` yields `I` | commas in braces make a tuple (the Book's ch. 1, "Semicolons vs Commas": `Comma := { A, B, C }` is a tuple) | none | no | parser form, and an owner decision: today commas separate statements |
 | order of `set X op= e` | 4 → 1 (the readings audit: `e` first; `ArrayAppend.versetest:12`, VerseVM-only, writes through a reference taken before `e`) | `Tests/ArrayAppend.versetest:140`: `set S.X += if (set S.X = array{0}; 0=0) { array{42} } else { array{42} }`, then `S.X = array{0, 42}` | reads the old value first, giving `array{1, 2, 3, 42}` | evaluates `e` first | 2 `verse_vm_only` | yes: the Mutation row of [Supported](../LANGUAGE.md#supported) | front-end (evaluation order); an owner decision |
@@ -1030,8 +1030,8 @@ and `comparable_generic`).
 
 [The readings audit](readings-audit.md#the-load-bearing-readings-built)
 had designed four readings and left them, as load-bearing. Three were then
-built, one commit each; the rollback of a `for` iteration is not built yet
-([the obstacle](readings-audit.md#rollback-of-a-for-iteration)). Against
+built, one commit each; the rollback of a `for` iteration was built later
+([what a `for` undoes](#after-what-a-for-undoes)). Against
 the baseline of `comparable` (main `77bc509`: 7,670 agree, 1,893 refuse,
 170 accept, 50 differ), 62 cases more agree and none fewer: **7,732 agree,
 1,869 refuse, 136 accept, 46 differ** (re-recorded from a fresh run; the
@@ -1147,6 +1147,37 @@ one-tick wait now write `Sleep(0.01)` and print what they printed,
 `scheduler_audit_sleep` shows the new rule, and 7 generated `conc-*`
 programs (zero durations) change their output, each reproduced exactly when
 their zero sleeps are made one tick.
+
+## After what a `for` undoes
+
+The last of the load-bearing readings ([the readings
+audit](readings-audit.md#what-a-for-undoes)): a `for`'s clauses are one
+search, which commits at the body and undoes, at its end, what it did
+since its last success. Built on main `34e76e1` for the `for`s whose
+generators are over ranges, arrays, maps and strings and choices of values
+(every `for` of the Book's tests), then merged with main `84ee83c`.
+Against the baseline of the Book's primitives (`532f79d`: 8,114 agree,
+1,439 refuse, 135 accept, 95 differ), 7 cases more agree and none fewer:
+**8,121 agree, 1,439 refuse, 135 accept, 88 differ** (re-recorded from a
+fresh run; against the baseline of main `34e76e1`, the same 7 were measured
+before the merge: 7,739, 1,869, 136, 39).
+
+| Reading | Agree now |
+|---|---|
+| a `for`'s clauses are one search: what a source, a range's bounds or the clauses before a later generator did is undone when nothing after them reaches the body | 7: `FlowControl/for.versetest` 344, 362, 371, 392; `Range.versetest` 140, 159; `SoftwareTransactionalMemory.versetest:88` |
+
+**The programs whose bytes or output changed**, each checked as the
+reading's (the byte-identity oracle, extended to run each program in C,
+over the suites and the corpus `corpus2`, 5,713 programs, against main
+`34e76e1`): 566 differ, 507 in their bytes alone (a `for` whose clauses can
+do something before its last generator's elements, by the conservative
+test the lowering uses: a call, a `Print`, a write; each prints what it
+printed), and 59 in their output: 40 `choice-*` and 14 `mv-*` generated
+programs, each of which its generator's model, with the rule, predicts
+exactly; `choice_more` and `choice_construct_default_order`, whose `for`s
+expected the old rule; and the three new tests (`for_search`,
+`for_search_waits`, `for_search_old_paths`). No compiler message or exit
+code changed. Over all the programs the bytecode is 1.8% larger.
 
 ## Ten causes to remove first
 
@@ -1315,7 +1346,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 
 **Different output: `int` precision** (82; 56 the bitwise functions' `verse_vm_only` cases, [After the Book's primitives](#after-the-books-primitives)): `Intrinsics/Abs.versetest` 17(v); `Math/Bitwise.versetest` 62(v), 63(v), 64(v), 65(v), 66(v), 67(v), 73(v), 76(v), 77(v), 78(v), 79(v), 80(v), 83(v), 84(v), 85(v), 86(v), 87(v), 90(v), 91(v), 92(v), 95(v), 96(v), 97(v), 98(v), 204(v), 205(v), 206(v), 207(v), 208(v), 209(v), 210(v), 215(v), 220(v), 221(v), 222(v), 223(v), 224(v), 229(v), 230(v), 231(v), 232(v), 233(v), 234(v), 235(v), 236(v), 237(v), 238(v), 243(v), 244(v), 245(v), 246(v), 248(v), 249(v), 254(v), 255(v), 256(v); `Operators/BinaryAddInt.versetest` 35(v), 36(v), 37(v), 38(v), 65(v), 66(v), 67(v), 68(v); `Operators/BinaryDivInt.versetest` 49(v), 50(v); `Operators/BinaryMulInt.versetest` 49(v), 50(v), 52(v), 53(v); `Operators/BinarySubInt.versetest` 39(v), 40(v), 41(v), 42(v), 44(v), 45(v), 47(v), 48(v); `Operators/Negate.versetest` 14(v); `WhereConstrainedInts.versetest` 224(v), 227(v)
 
-**Different output: rollback of a `for` iteration** (7): `FlowControl/for.versetest` 344, 362, 371, 392; `Range.versetest` 140, 159; `SoftwareTransactionalMemory.versetest` 88
+**Different output: rollback of a `for` iteration** (0): all 7 agree now ([After what a `for` undoes](#after-what-a-for-undoes)): `FlowControl/for.versetest` 344, 362, 371, 392; `Range.versetest` 140, 159; `SoftwareTransactionalMemory.versetest` 88
 
 **Different output: `ToString` of a float** (0): all 7 agree now ([After the Book's primitives](#after-the-books-primitives)).
 
@@ -1706,7 +1737,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `FlowControl/Yield.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
 | `FlowControl/defer.versetest` | 51 | 13 | 0 | 1 | 0 | 37 | 0 |
 | `FlowControl/first.versetest` | 24 | 3 | 0 | 20 | 0 | 1 | 0 |
-| `FlowControl/for.versetest` | 94 | 85 | 1 | 4 | 4 | 0 | 0 |
+| `FlowControl/for.versetest` | 94 | 89 | 1 | 4 | 0 | 0 | 0 |
 | `Function.versetest` | 81 | 61 | 2 | 1 | 0 | 17 | 0 |
 | `FunctionAsType.versetest` | 36 | 17 | 0 | 18 | 0 | 1 | 0 |
 | `FunctionTypes.versetest` | 42 | 32 | 1 | 9 | 0 | 0 | 0 |
@@ -1857,7 +1888,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Pointers.versetest` | 66 | 63 | 0 | 3 | 0 | 0 | 0 |
 | `PrintScriptCallstack.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
 | `QualifiedIdentifier.versetest` | 88 | 54 | 2 | 16 | 0 | 16 | 0 |
-| `Range.versetest` | 39 | 37 | 0 | 0 | 2 | 0 | 0 |
+| `Range.versetest` | 39 | 39 | 0 | 0 | 0 | 0 | 0 |
 | `Rational.versetest` | 49 | 48 | 0 | 0 | 0 | 1 | 0 |
 | `Recursion.versetest` | 47 | 47 | 0 | 0 | 0 | 0 | 0 |
 | `ReentrantExceptions.versetest` | 3 | 0 | 0 | 1 | 0 | 2 | 0 |
@@ -1896,7 +1927,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `ShadowDefinition.versetest` | 65 | 38 | 0 | 5 | 0 | 22 | 0 |
 | `SingleParamArray.versetest` | 16 | 15 | 0 | 1 | 0 | 0 | 0 |
 | `SingleParamTuple.versetest` | 7 | 6 | 0 | 1 | 0 | 0 | 0 |
-| `SoftwareTransactionalMemory.versetest` | 31 | 30 | 0 | 0 | 1 | 0 | 0 |
+| `SoftwareTransactionalMemory.versetest` | 31 | 31 | 0 | 0 | 0 | 0 | 0 |
 | `StmCallbackErrors.versetest` | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | `StringInterpolationPlus.versetest` | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
 | `Subtype.versetest` | 106 | 87 | 0 | 18 | 0 | 1 | 0 |
