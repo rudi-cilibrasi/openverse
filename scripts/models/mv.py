@@ -2790,7 +2790,7 @@ def show_func(f):
     return L
 
 
-def gen_hetero_methods(rng):
+def gen_hetero_methods(rng, rngf):
     """(#283, #335) Hm in two or three unrelated classes, with several values or one, at times
     overridden in a class below (whose override reaches the root's with (super:)), at times with
     a second list that no call takes (so that hierarchy's lists have names of their own), the
@@ -2799,7 +2799,12 @@ def gen_hetero_methods(rng):
     least twice, so the alternatives have values of their own and the clauses after the choice
     are copied for each): in a for, with a filter at times, in a for's body, with a later clause
     that takes each alternative's own type (HmTag, overloaded by class), and, under the base
-    class (where the names the condition binds join), where the first success is taken.
+    class (where the names the condition binds join), where the first success is taken. And,
+    from rngf, a stream of its own (so seeds keep their other programs), where the first success
+    is taken of values of unrelated classes too (#283): an if, first{…}, option{…}, not and the
+    left of or, each with the clauses after the choice copied for each alternative, and what
+    the condition binds of its join after it, an any for unrelated classes (HmTake), the others
+    of their own types (X an int, T a string).
     Returns the declarations, the test and its output."""
     n = rng.randint(2, 3)
     base = rng.random() < 0.5
@@ -2829,7 +2834,7 @@ def gen_hetero_methods(rng):
     decls.append("HmDup(V:t where t:type):t = V | V")
     decls += [f'HmTag(V:{c}):string = "{c}"' for c in names]
 
-    def alts():
+    def alts(rng=rng):
         """a choice of receivers: its source, and the objects' classes (static, and the root's for HmTag)"""
         cs = [rng.choice(names) for _ in range(rng.randint(2, 3))]
         twice = [rng.random() < 0.6 for _ in cs]
@@ -2864,6 +2869,37 @@ def gen_hetero_methods(rng):
             test.append(f'    if (A := {src}, X := A.Hm({x}), X > {t}) {{ Print("f {{X}}") }} else {{ Print("f none") }}')
             first = next((v for cl, _ in objs for v in vals[cl](x) if v > t), None)
             out.append("f none" if first is None else f"f {first}")
+    # (#283) the first success of values of unrelated classes, from rngf: the first value
+    # above t, with its object's root class
+    if rngf.random() < 0.75:
+        decls.append('HmTake(V:any):void = Print("taken")')
+        for k in range(rngf.randint(1, 3)):
+            form = rngf.choice(['if', 'first', 'option', 'not', 'or', 'any'])
+            src, objs = alts(rngf)
+            x = rngf.randint(-2, 6)
+            t = rngf.randint(-2, 12)
+            hit = next(((v, c) for cl, c in objs for v in vals[cl](x) if v > t), None)
+            clauses = f"A := {src}; X := A.Hm({x}); X > {t}"
+            if form == 'if':
+                test.append(f'    if (A := {src}, X := A.Hm({x}), X > {t}) {{ Print("ui {{X}}") }} else {{ Print("ui none") }}')
+                out.append("ui none" if hit is None else f"ui {hit[0]}")
+            elif form == 'first':
+                test.append(f'    if (F := first{{{clauses}; X}}) {{ Print("uf {{F}}") }} else {{ Print("uf none") }}')
+                out.append("uf none" if hit is None else f"uf {hit[0]}")
+            elif form == 'option':
+                test.append(f'    Ho{k} := option{{{clauses}; HmTag(A)}}')
+                test.append(f'    if (V := Ho{k}?) {{ Print("uo {{V}}") }} else {{ Print("uo none") }}')
+                out.append("uo none" if hit is None else f"uo {hit[1]}")
+            elif form == 'not':
+                test.append(f'    if (not block{{{clauses}}}) {{ Print("un none") }} else {{ Print("un some") }}')
+                out.append("un none" if hit is None else "un some")
+            elif form == 'or':
+                test.append(f'    Hr{k} := block{{{clauses}; X}} or 1000')
+                test.append(f'    Print("ur {{Hr{k}}}")')
+                out.append(f"ur {1000 if hit is None else hit[0]}")
+            else:
+                test.append(f'    if (A := {src}, X := A.Hm({x}), X > {t}, T := HmTag(A)) {{ HmTake(A); Print("ua {{X}} {{T}}") }} else {{ Print("ua none") }}')
+                out += ["ua none"] if hit is None else ["taken", f"ua {hit[0]} {hit[1]}"]
     return decls, test, out
 
 
@@ -3180,7 +3216,8 @@ for ti in range(NT):
     out += [f"== {name}"] + tout
 
 if HM and not OVERFLOW[0] and not REFUSED[0]:
-    hm_decls, hm_test, hm_out = gen_hetero_methods(random.Random(seed * 1000003 + 283336))
+    hm_decls, hm_test, hm_out = gen_hetero_methods(random.Random(seed * 1000003 + 283336),
+                                                   random.Random(seed * 1000003 + 283580))
     lines += hm_decls + hm_test
     tests.append("HetMethods")
     out += ["== HetMethods"] + hm_out

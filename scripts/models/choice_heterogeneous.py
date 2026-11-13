@@ -225,6 +225,26 @@ if a.methods:
     if a.packed_methods:
         print('PackedArgument(H:cell,N:int,X:t where t:type)<transacts>:tuple(int,t)=(Argument(H,N),X)')
 clauses = []
+# (#283) where the first success is taken, at times a clause after a level's choice that takes
+# each alternative's own type, an overload picked by it (HetTag), so that the clauses after the
+# choice are copied for each alternative and what the condition binds has the join of its types
+# after it; from a stream of its own, so seeds keep their other programs
+rt = random.Random(a.seed * 1000003 + 283581)
+tagged = []
+# (not for arrays and strings, whose overloads a call could not tell apart: both may be empty)
+if mode == 'first' and not a.control and not a.nested_writes and rt.random() < 0.5 and \
+        (a.methods or shape != 'array'):
+    tagged = [i for i in range(n) if rt.random() < 0.6] or [rt.randrange(n)]
+    if a.methods:
+        generic = shape not in ('primitive', 'fields')
+        tys = ['ga(t)', 'gb(t)'] if generic else ['ma', 'mb']
+        where = ' where t:type' if generic else ''
+    else:
+        tys = {'primitive': ['int', 'string'], 'fields': ['ca', 'cb'],
+               'tuple': ['tuple(int,int)', 'tuple(string,string)'], 'box': ['box(int)', 'box(string)']}[shape]
+        where = ''
+    for j, ty in enumerate(tys):
+        print(f'HetTag(X:{ty}{where}):int={j}')
 
 def payload(s, j):
     if a.methods:
@@ -263,6 +283,8 @@ for i, d in enumerate(levels):
     if a.nested_writes and not a.control:
         score = score.replace(f'A{i}.', f'A{i}.C.')
     clauses.append(f"A{i}:=({'|'.join(producers)})")
+    if i in tagged:
+        clauses.append(f'G{i}:=HetTag(A{i})')
     if a.aliases:
         clauses.extend([f'Alias{i}:=A{i}', f'B{i}:=Alias{i}'])
         score = score.replace(f'A{i}', f'B{i}')
