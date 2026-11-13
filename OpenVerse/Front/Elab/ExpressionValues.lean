@@ -156,6 +156,12 @@ partial def elabExprValuesWith
   | .orE p a b =>
     let a := (Choice.takeFirst? a (choiceOrder ctx)).getD a
     let ra ← operand { ctx with canFail := true, inTaking := true } a exp
+    -- (the left operand of `or` must be able to fail, as `not`'s: the Book of
+    -- Verse's tests, `Operators/LogicalOr.versetest:143`, error 3513; its
+    -- `(set Map[I] = I) or Err()` has a failable left, a set through a map's
+    -- key)
+    if !(ra.e.mayFail ctx.sigProg) && (← ctx.failabilityKnown) then
+      eerr p "the left operand of or cannot fail (Verse requires a failable one: or of it never takes its right)"
     let rb ← match exp with
       | some _ => operand ctx b exp
       | none =>

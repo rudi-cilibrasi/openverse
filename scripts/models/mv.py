@@ -918,7 +918,10 @@ def gen_e(scope, vars_, d, ch):
             cl, _ = gen_clauses(list(scope), vars_, d + 1, R.randint(1, 2), allow_gen=False, inner=True, lastval=True)
             return ('optor', cl, leaf(scope, vars_))
         if k < 0.94:
-            return ('orx', gen_e(scope, vars_, d + 1, True), leaf(scope, vars_))
+            # (the left of `or` must be able to fail, the Book of Verse's tests,
+            # LogicalOr.versetest:143: a comparison that holds for every value the
+            # programs make, so that the left keeps its value)
+            return ('orx', ('cmp', gen_e(scope, vars_, d + 1, True), [('<>', ('lit', 1000003))]), leaf(scope, vars_))
         cl, sc2 = gen_clauses(list(scope), vars_, d + 1, R.randint(1, 2), allow_gen=False, inner=True)
         cl.append(failable(sc2, vars_))
         return ('ifx', cl, leaf(sc2, vars_), leaf(scope, vars_))
