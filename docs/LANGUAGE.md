@@ -1392,8 +1392,10 @@ Main():void =
   (`T(N - 1) | Tell("x", 1) + (1 | 2)`). A call of the function where the
   lifter takes a choice is a choice point there, in the same order: in a
   comparison's later operand (`5 > T[N - 1]`), a `set`'s value after its
-  old value (`set K += T(N - 1)`), a named argument (`Tw(1, ?B := T(N -
-  1))`), a struct's field in its declaration order, `and`'s operands. An
+  old value (`set K += T(N - 1)`, also as one alternative of a choice
+  there, `set K += (T(N - 1) | 5)`, or of a `var`'s initial value), a named
+  argument (`Tw(1, ?B := T(N - 1))`), a struct's field in its declaration
+  order, `and`'s operands. An
   `if` in an expression with one in a branch is one too: its conditions
   run first, then the branch's values each go to the code after the `if`
   (`X := (if (N > 1) then T(N - 1) else (1 | 5))`), as do those of `or`'s

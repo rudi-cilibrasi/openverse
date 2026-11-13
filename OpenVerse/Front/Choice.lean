@@ -1625,8 +1625,11 @@ def liftPoints? (ops : ShapeOps) (a : SExpr) : Option SExpr := do
     | .decl p x ty false (.app _ (.ident _ "$branchChoice") [i] false)
     | .decl p x ty false (.app _ (.ident _ "$branchChoiceAt") [_, i] false) => .decl p x ty false i
     | c => c
+  -- (a `set`'s or a `var`'s value that is a choice with a point in an
+  -- alternative bound first, as `normClauses` binds a choice: after the
+  -- path's prefix and the old value, for `op=`)
   let lift (c : SExpr) : List SExpr :=
-    (liftClause isVal (fun _ _ => false) (markPoints ops.isCall c) (fieldOrder := ops.fieldOrder)).map
+    (normClauses (liftClause isVal (fun _ _ => false) (markPoints ops.isCall c) (fieldOrder := ops.fieldOrder))).map
       (whole ∘ unmarkPoints)
   -- (none where the lifter keeps something, `$noLift`: a construction
   -- whose fields' order it does not know, as a class's, where the function

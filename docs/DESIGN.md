@@ -930,7 +930,11 @@ code after it, which is its frame.
   its declaration order, `and`'s operands) is reached by the rule the lifter
   uses for a choice there: the first statement with one is lifted
   (`liftPoints?`, `liftClause`, each call of the group marked `$point` so
-  the lifter binds it as it binds a choice), then decomposed again. The
+  the lifter binds it as it binds a choice), then decomposed again. A
+  `set`'s or a `var`'s value that is a choice with such a call as one
+  alternative, which the lifter keeps as a binding of its own, is bound
+  first as `normClauses` binds one (`setClauses`: the path's prefix, for
+  `op=` the old value, then the choice), as for the elaborator's clauses. The
   struct field orders come from the source (`inlineMulti`), for non-generic
   structs, as the elaborator gives the lifter.
 - An `if` in an expression whose conditions have no point and whose
