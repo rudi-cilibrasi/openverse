@@ -1440,6 +1440,32 @@ where
       set (i + 1)
       return leaf i e
 
+/-- (#283) A function's body with its own `defer:`s after each value of its
+    last expression (`deferLast`'s placing, leaf by leaf, `mapLoopLeaves`):
+    so they run as each value leaves it, and an `if` that ends it still picks
+    its branch as the function's path, as without them, its conditions the
+    call's code, not each value's. As `deferLast` when that expression has an
+    `if` with no `else` among its branches, or is not a value. -/
+def deferLastLeaves (p : Pos) (ss : List SExpr) : List SExpr :=
+  if !ss.any isDefer || ss.getLast?.any isDefer then deferLast p (madeName "dv" "" p) ss else
+  let (stmts, ds) := pendingIn [] ss
+  let run := SExpr.block p (ds ++ [.int p 0])
+  let vals := ss.filterMap fun | .decl _ x _ false _ => some x | _ => none
+  let leaf (v : SExpr) : SExpr :=
+    if pureVal vals v then .block v.pos [run, v] else
+    let dv := madeName "dv" "" v.pos
+    .block v.pos [.decl v.pos dv none false v, run, .ident v.pos dv]
+  let rec complete : SExpr → Bool
+    | .ite _ _ t (some u) => complete t && complete u
+    | .ite _ _ _ none => false
+    | _ => true
+  match stmts.getLast? with
+  | some (.decl q x t false rhs) =>
+    if complete rhs then stmts.dropLast ++ [.decl q x t false (mapLoopLeaves leaf rhs)]
+    else deferLast p (madeName "dv" "" p) ss
+  | some l => if complete l then stmts.dropLast ++ [mapLoopLeaves leaf l] else deferLast p (madeName "dv" "" p) ss
+  | none => ss
+
 /-- (#283) The frame code of an `if`'s leaves after its first, which has the
     code: the frame is that one, its hole's last (`loopFlatWith`), so the
     code after the `if` is not copied into each leaf. -/
@@ -1688,7 +1714,9 @@ partial def normAlt (ops : ShapeOps) (a : SExpr) : Option SExpr := do
   -- choice of that code after each alternative, as `lastChoiceTail`)
   if let .block _ ss@(_ :: _ :: _) := a then
     if let some ([], tail) := lastChoiceTail ops.plain ss.dropLast ss.getLast! then
-      if let some as := alts? tail then return mk a.pos (← as.mapM (normAlt ops))
+      -- (one of them with code before a choice of its own enters a member
+      -- that runs it, `enterOf`, as anywhere a choice's alternatives are)
+      if let some as := alts? tail then return mk a.pos ((← as.mapM (normAlt ops)).map enterOf)
   -- (#283) an `if` with plain conditions and a point in a branch is one too:
   -- its branch's values go to the code after it
   let ifPoint : SExpr → Bool
@@ -3682,7 +3710,8 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
   -- they run as each value leaves it where it is taken lazily or computed
   -- at the call too: with returns, `elimReturns` places them at each exit.
   let mfs ← rawMfs.mapM fun (n, f) => do
-    if !anyE (fun | .ret .. => true | _ => false) f.body then return (n, { f with body := deferLastBlock f.body })
+    if !anyE (fun | .ret .. => true | _ => false) f.body then
+      return (n, if (stmtsOf f.body).any isDefer then { f with body := .block f.pos (deferLastLeaves f.pos (stmtsOf f.body)) } else f)
     let retIfs := (stmtsOf f.body).foldl (init := 0) fun acc s => acc + countRetIfs s
     if retIfs > 16 then
       throw s!"{f.pos.show}: {shownFnName n} has several values and {retIfs} ifs with a return: more than 16, and the code of an inlined call doubles with each, until choices compose without copying the clauses after them (#283)"

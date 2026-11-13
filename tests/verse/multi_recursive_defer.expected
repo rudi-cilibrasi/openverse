@@ -97,4 +97,18 @@ v 1
 walk 5 0
 walk 5 1
 v 5
+cg2
+cg1
+cc
+cd1
+cd2
+cg1
+cc
+cs
+cd2
+cg1
+cc
+cd2
+cg1
+cc
 exit=0

@@ -216,9 +216,11 @@ leaves the block, and not for a value whose clauses fail. The same goes
 for a non-returning function's own `defer:`s, after `$r0` in its `$inline`
 template. A function whose values are taken lazily or computed at the call
 (a recursive one, or one a recursive one's code calls) has its own
-`defer:`s placed so before its body is analysed (`inlineFns`'
-`deferLastBlock`), so they are code after its value, a return frame of its
-calls in the lazy machine (`lastChoiceTail`), and a block in its code that
+`defer:`s placed so before its body is analysed, after each leaf of its last
+expression (`inlineFns`' `deferLastLeaves`, through its `if`s' branches, so
+an `if` that ends it still picks its branch as the call's code, not each
+value's), so they are code after its value, a return frame of its calls in
+the lazy machine (`lastChoiceTail`), and a block in its code that
 the normal form takes apart (`normAlt`, `frameOf?`) has its own placed so
 too: before #283's last step the function's were refused, and a block's ran
 once, as code of the path that selects it. Returning functions keep registrations until

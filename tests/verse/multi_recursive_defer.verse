@@ -41,6 +41,15 @@ Blk(N:int)<transacts>:int =
             Y + 1
         Print("after {N} {X}")
         X
+# (an if that ends the function still picks its branch as the call's code: in a for, its
+# conditions' effects stay when a later filter rejects the value, as without the defer:)
+Cond(N:int)<transacts>:int =
+    defer: Print("cd{N}")
+    Print("cg{N}")
+    if (N <= 1, Print("cc")) then 1 else (Cond(N - 1) | Tell("cs", 2) + (2 | 3))
+Tell(S:string, X:int)<transacts>:int =
+    Print(S)
+    X
 node := class:
     V:int
     Walk(N:int)<transacts>:int =
@@ -60,3 +69,4 @@ Main()<transacts>:void =
     if (V := Sum[2], V = 5) then Print("first {V}")
     for (V := Blk(2)) { Print("v {V}") }
     for (X := node{V := 5}.Walk(1)) { Print("v {X}") }
+    for (X := Cond(2) + Cond(1), X > 100) { Print("v {X}") }
