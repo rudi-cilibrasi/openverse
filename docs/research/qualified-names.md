@@ -92,7 +92,8 @@ says where the form may be written, what it means and what the tests refuse.
 |---|---|---|---|---|
 | `(M:)x`, `(A.B:)x` | use | the member `x` of the module, found as a name is | `using{(A:)B}` with no `A` (3506) | ch. 16 ex. 14, 26; ch. 10 ex. 032; `QualifiedIdentifier:78`; `ShadowDefinition:236-258` |
 | `(M:)x` | def in `M` | `x`, a member of `M` | a qualifier that is not the enclosing module: `(D:)C := class{}` (3506), `(M.f:)X` (3612) | `Modules/Module:192-209`; `ShadowDefinition:209-231`; `ParametricFunctions:537-690`; `TypeAlias:161-166` |
-| `M.(M:)x` | use | `M`'s `x`: the qualifier names the module before the dot | another module | ch. 16 lines 577-580 |
+| `M.(M:)x` | use | `M`'s `x`: the qualifier names the module before the dot | another module | ch. 16 lines 577-580; `generators.versetest:251` |
+| `X.(M:)F(…)` | use, `X` a value | `M`'s extension method `F` of `X` (ch. 6), selected among those in scope | `M` has none | ch. 16 lines 577-580 (the collision it resolves) |
 | `(c:)m` | def in class `c` | a member `m` of `c`; when no class above has an `m`, it is `m` | | ch. 10 ex. 027; `ShadowDefinition:9-17`; `FORT-951162`; `SOL-3104:5-12`; `ModuleDefinitions:59` |
 | `(c:)m` | def in `c`, inheriting an `m` | a second `m`, beside the inherited one; a bare `X.m` is then ambiguous | `(c2:)F<override>` (3523) | ch. 10 lines 978-1024; `ShadowDefinition:98-116` |
 | `(r:)M<override>` | def in a class below `r` | implements the `M` that `r` introduces (its slot) | `r` above that does not introduce `M` (3591, 3523); `r` not above (3612) | ch. 10 ex. 029-031; `ShadowDefinition:64-96`; `QualifiedMethodInheritance:162-187` |

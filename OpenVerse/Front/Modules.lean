@@ -235,7 +235,19 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
     if let some comps := x.identPath then
       if let some qn ← r.qual p (comps ++ [m]) then return .ident p qn
     return .member p (← go x) m
+  -- `X.(M:)F(…)`, `M` a module: `M`'s extension method `F`, `$ext:F(X, …)`
+  -- (a qualifier selects among the extension methods in scope as among
+  -- other names)
   | .app p (.member mp x m) args b => do
+    if let some (q, f) := splitQual? m then
+      if !(x matches .ident _ "Self") then
+        let ofModule ← match x.identPath with
+          | some comps => do pure (← r.modulePath mp comps).isSome
+          | none => pure false
+        if !ofModule then
+          if let .module path start ← r.qualifier mp q then
+            let fn ← r.memberOf mp path start (extensionName f)
+            return .app p (.ident mp fn) ((← go x) :: (← args.mapM go)) b
     -- `X.M(…)` whose name an extension method in scope has: the call
     -- `$ext:M(X, …)` of it (Book of Verse ch. 6, "Extension Methods"), which
     -- takes `X`'s own member `M` instead where `X`'s type has one (`elabApp`)

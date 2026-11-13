@@ -1353,7 +1353,8 @@ marker `$qual:A::x|q`, a class member's, an enum value's or a struct field's
 in its name, a local's or a parameter's in its name. Each site then looks up
 or checks in the scope `q` names:
 
-- a use becomes what it names: `(M:)x` the member `M::x`, `(e:)v` the value
+- a use becomes what it names: `(M:)x` the member `M::x`, `X.(M:)F(…)` the
+  call `M::$ext:F(X, …)` of `M`'s extension method, `(e:)v` the value
   `e.v`, `(c:)F` of `Self` the field `F` when `c` declares it (and no other
   class above does), `(local:)X` the local, `(/Verse.org/Verse:)int` `int`;
 - a definition's qualifier must name its own scope, and is dropped: `(M:)x`

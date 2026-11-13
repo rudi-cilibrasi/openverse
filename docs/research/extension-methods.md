@@ -275,10 +275,11 @@ not translatable.
 
 ## What is left
 
-- **Qualified extension methods**, `X.(Utils:)Shout()` and the path
-  qualifiers of `Bugs/SOL-8768-QualificationOfExtensionFields.versetest`
-  (`(InPlayer:player).(/Verse.org/VerseTests/MyModule:)DoSomething`): the
-  qualified names' work, which would let `(M:)` select `M::$ext:F`.
+- **Qualified extension methods' definitions**, `(R:t).(M:)F(…)`, and the
+  path qualifiers of `Bugs/SOL-8768-QualificationOfExtensionFields.versetest`
+  (`(InPlayer:player).(/Verse.org/VerseTests/MyModule:)DoSomething`, the test
+  runner's package). A call `X.(M:)F(…)` selects `M::$ext:F`
+  ([qualified-names.md](qualified-names.md)).
 - **`tuple()` as a type of its own**, apart from `void`: an owner decision
   (3 cases).
 - **A receiver typed by its context**: `map{}.RemoveKey[0]` with

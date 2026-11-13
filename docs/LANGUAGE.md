@@ -474,8 +474,11 @@ Main():void =
   of their receivers' types here, compiled inline as before, so a program's
   extension method of their name applies to other types, and one that takes
   the same receiver makes a call ambiguous.
-- **Not supported:** a qualified extension method, `X.(Utils:)Shout()` or
-  `(P:player).(/Verse.org/M:)F()` (qualified names); `<override>` on one,
+- **Qualified.** `X.(M:)F(…)` calls the module `M`'s extension method `F`,
+  where several are in scope ([Qualified names](#qualified-names)).
+- **Not supported:** a qualified extension method's definition,
+  `(P:player).(M:)F()`, and one a path qualifies,
+  `(P:player).(/Verse.org/M:)F()`; `<override>` on one,
   which the Book does not describe; the receiver typed from its context
   where it has no type of its own (`map{}.RemoveKey[0]` for a generic
   `(Input:[int]u where u:type)`).
@@ -2252,7 +2255,8 @@ Main():void =
   interface that inherits or overrides `M` is refused: qualify with the one
   that declares it first, as the Book's tests do). `(local:)X` is the local
   `X`, defined `(local:)` or not; `(/Verse.org/Verse:)int` is `int`.
-  `using{(A:)B}` is `using{A.B}`. A redundant qualifier is no error.
+  `X.(M:)F(…)` calls the extension method `F` of the module `M`
+  ([Extension methods](#extension-methods)). `using{(A:)B}` is `using{A.B}`. A redundant qualifier is no error.
 - **Definitions.** A definition's qualifier names where it is defined:
   `(M:)x` in module `M`; `(c:)m` or `(c:)F:t` in class `c` (a member that
   then is `m` or `F`), and `(r:)M<override>` in a class below `r`, which
