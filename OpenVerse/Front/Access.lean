@@ -365,6 +365,7 @@ partial def constructions : SExpr → List (Pos × String × List (Pos × String
     AccessLevelInheritance: 3593). -/
 def checkUses (env : Env) (tops : List STop) : Except String Unit := do
   let above := hierarchy tops
+  let interfaces : List String := tops.filterMap fun | .classDef _ c _ _ _ _ true .. => some c | _ => none
   let below (c d : String) : Bool := (above c).contains d
   let construct (site : Site) (p : Pos) (c : String) (fields : List (Pos × String)) : Except String Unit := do
     if c.startsWith "$" then return
@@ -392,6 +393,8 @@ def checkUses (env : Env) (tops : List STop) : Except String Unit := do
       for q in parents.filterMap (fun | .name q | .app q _ => some q | _ => none) do
         if let some e := env.ctors[q]? then
           if let some a := e.denial below site then
+            if interfaces.contains q then
+              throw (s!"{p.show}: {shown c} cannot implement {shown q} here: " ++ a.refusal s!"implementing {shown q} (interface<…>)")
             throw (s!"{p.show}: {shown c} cannot be below {shown q}, as subclassing constructs it: " ++ a.refusal s!"the constructor of {shown q}")
       let overrides := fields.filterMap (fun f => if f.isOverride then some (p, f.name) else none) ++
         methods.filterMap fun | .fn mp mn _ _ ms .. => if ms.contains "override" then some (mp, mn) else none
@@ -434,8 +437,12 @@ def checkExposes (lv : Levels) (defs : Std.HashSet String) (below : String → S
       if bound.contains n || !defs.contains n then continue
       let et := lv.definition n
       if !e.inside below moduleOfName et then
-        let a := (et.find? fun b => !e.any (·.inside below moduleOfName b)).getD .everyone
-        throw s!"{p.show}: {what} names {shown n}, which is less visible: {shown n} is {a.what}, and a definition exposes nothing less visible than itself (Book of Verse tests, DigestVisibility, TypeAlias)"
+        -- (the type's own level, or that of a module it is in, `m.take i`)
+        let i := (et.findIdx? fun b => !e.any (·.inside below moduleOfName b)).getD 0
+        let a := et.getD i .everyone
+        let where_ := if i == 0 then s!"{shown n} is {a.what}"
+          else s!"{shown n} is in {shownModule ((moduleOfName n).take i)}, which is {a.what}"
+        throw s!"{p.show}: {what} names {shown n}, which is less visible: {where_}, and a definition exposes nothing less visible than itself (Book of Verse tests, DigestVisibility, TypeAlias)"
 
 /-- The aliases of a resolved program, before they are written out: each
     `a<access> := t` is no more visible than what `t` names (Book of Verse
@@ -506,9 +513,11 @@ def checkConsistency (lv : Levels) (tops : List STop) : Except String Unit := do
         if f.default.isNone && !f.isOverride && !(ctor.inside below moduleOfName (memberEff lvl)) then
           let a := (memberEff lvl).headD .everyone
           throw s!"{p.show}: the field {bareName f.name} of {shown c} has no default, so a construction gives it one, but it is {a.what} where {shown c}'s constructor is wider: give it a default, or an access at least as visible as the constructor (Book of Verse tests, Classes/AccessSpecifiers)"
+        -- (judged as the others, with what the field is in: in an internal
+        -- class, var<public> X<internal> is set where it is read)
         if let some w := levelOf f.varSpecs then
           let r := audience (levelOf f.specs) m (some c)
-          if !(audience (some w) m (some c)).inside below moduleOfName r then
+          if !Eff.inside below moduleOfName (audience (some w) m (some c) :: ce) (r :: ce) then
             throw s!"{p.show}: var<{w}> {bareName f.name}: setting it is more visible than reading it, {r.what}; the write access is at least as restrictive as the read access (Book of Verse ch. 12)"
       -- (a method's overloads have one access: a use reaches them by name)
       let methodLevels := ms.filterMap fun

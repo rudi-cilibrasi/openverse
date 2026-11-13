@@ -155,7 +155,7 @@ called through a `<public>` class from another module).
 | after `class` (its constructor) | `<public>`, `<internal>`, `<protected>`, `<epic_internal>` | `<private>` (3594) | `ArchetypeAccessSpecifiers.versetest` 47-50; `Classes/AccessSpecifiers.versetest` 435-453 |
 | after `struct` or `interface` | `<public>`, `<internal>`, `<epic_internal>` | `<protected>`, `<private>` (3594) | `ArchetypeAccessSpecifiers.versetest` 43-46; `Classes/AccessSpecifiers.versetest` 455-465; `InterfaceAccessVisibility.versetest` 36-40 |
 | an override (`X<override>`, `var<…> X<override>`) | none | any (3650) | `AccessLevelInheritance.versetest` (27 cases) |
-| a local, a nested function, a parameter | none | 3661 (3641 on a local `var<…>`) | `AccessSpecifiersDisallowedOnLocalVars.versetest`; `NestedFunctions.versetest` 5-17; `VarAccessSpecifiers.versetest:180`; ch. 6 lines 1180-1182 |
+| a local, a nested function, a parameter | none (openverse refuses them as the parser does not take them, and has no nested functions) | 3661 (3641 on a local `var<…>`) | `AccessSpecifiersDisallowedOnLocalVars.versetest`; `NestedFunctions.versetest` 5-17; `VarAccessSpecifiers.versetest:180`; ch. 6 lines 1180-1182 |
 | one place, two access specifiers | | 3543 (two different), 3642 (one twice, or two `<scoped>`) | `Classes/AccessSpecifiers.versetest` 350-366; `VarAccessSpecifiers.versetest` 108-114; `scoped.versetest` 91-101; ch. 12 lines 362-379 |
 
 Enum values take no specifier in any test or chapter.
@@ -180,9 +180,14 @@ takes from what it overrides: in `:159-179` an override in `M2` of a field
 (ch. 12 lines 513-549). A `set` that reading admits and writing does not is
 refused as a `set` of what is no `var` (3509: `VarAccessSpecifiers.versetest`
 37, 116, 136, 166; `AccessLevelInheritance.versetest:315`); one that reading
-does not admit is refused for reading (3593: `VarAccessSpecifiers.versetest`
-144, 173). The write specifier is at least as restrictive as the read one
-(ch. 12 lines 546-549). A construction gives a field a value where reading
+does not admit is refused for reading (3593). The write specifier is at
+least as restrictive as the read one (ch. 12 lines 546-549), judged as the
+consistency rules are, with what the field is in (in an internal class,
+`var<public> X<internal>` is set where it is read). That rule rests on the
+prose alone: `VarAccessSpecifiers.versetest` 44, 144 and 173 declare a
+write access wider than reading and set the field from outside, and each
+expects one 3593, which the declaration (by the prose's rule) or the
+unreadable `set` gives; openverse refuses the declaration. A construction gives a field a value where reading
 admits it (ch. 12 example 15: `game_state{SessionID := "s1"}` with
 `var<private> SessionID<internal>`; `VarAccessSpecifiers.versetest:37`).
 
@@ -222,14 +227,17 @@ in an internal module or class may name an internal class). Then:
    (`DigestVisibility.versetest:27`); a `<private>` one may
    (`DigestVisibility.versetest:130`). An override is judged in its own
    class (`AccessLevelInheritance.versetest:863-873`: an `<internal>` class's
-   override of a `<public>` field may have an `<internal>` type).
+   override of a `<public>` field may have an `<internal>` type; openverse
+   refuses that test for other reasons, an overriding field must give a
+   default and may not narrow its type, so only the refusing side of the
+   rule is exercised there).
 2. **Fields with no value.** A class's or interface's field with no default
    is at least as visible as its constructor, which must give it one
    (`Classes/AccessSpecifiers.versetest` 410-433; `Interfaces/AccessSpecifiers.versetest`
    283-311; `Classes/AccessSpecifiers.versetest` 205-235; FN40.00 for
    interfaces). A default waives it (`:430-433`).
 3. **`var` write access** is at least as restrictive as read access
-   (ch. 12 lines 546-549).
+   (ch. 12 lines 546-549), with what the field is in.
 
 No test or chapter refuses a `<public>` class whose parent is internal:
 `SOL-5564-…:3` (`c<public> := class(i)` with `i<internal> := interface`)

@@ -114,7 +114,7 @@ def specifierPlaces : List (String × List Place) :=
     and its tests: 3594). -/
 def accessPlaceWhy : Place → String
   | .definition | .function =>
-    "a module's definition is <public>, <internal> or <epic_internal>; <protected> and <private> are for a class's or an interface's members (Book of Verse ch. 11, 12)"
+    "a module's definition is <public>, <internal>, <scoped{…}> or <epic_internal>; <protected> and <private> are for a class's or an interface's members (Book of Verse ch. 11, 12)"
   | .structField => "a struct's fields are public (Book of Verse ch. 9: \"All struct fields are public\")"
   | .classType => "a class's constructor is <public>, <internal>, <protected> or <epic_internal> (Book of Verse tests, Classes/AccessSpecifiers)"
   | .interfaceType | .structType =>
