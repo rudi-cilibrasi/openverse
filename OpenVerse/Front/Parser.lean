@@ -186,10 +186,33 @@ partial def parseTypeAtom : PM STy := do
     let mut ps := #[]
     if !(← peekT).isSym ")" then
       repeat
-        -- (a parameter may be named, `X:t`; the name is not part of the type)
-        if ((← peekT).identName?).isSome && (← peekT 1).isSym ":" then bump
-        expectSym ":"
-        ps := ps.push (← parseType)
+        -- (`?N:t` is a named parameter, whose name is part of the type,
+        -- and `?N:t = e` one a caller may omit: the type does not include
+        -- `e`, Book of Verse ch. 6, #503)
+        if (← peekT).isSym "?" then
+          bump
+          let n ← expectIdent
+          expectSym ":"
+          let t ← parseType
+          let optional := (← peekT).isSym "="
+          if optional then
+            bump
+            -- (the default, up to the parameter's end, is skipped)
+            let mut depth := 0
+            repeat
+              let d ← peekT
+              if d.isEof then break
+              if depth == 0 && (d.isSym "," || d.isSym ")") then break
+              if d.isSym "(" || d.isSym "[" || d.isSym "{" then depth := depth + 1
+              if d.isSym ")" || d.isSym "]" || d.isSym "}" then depth := depth - 1
+              bump
+          ps := ps.push (STy.namedParam n optional t)
+        else
+          -- (a positional parameter may be named, `X:t`; the name is not
+          -- part of the type)
+          if ((← peekT).identName?).isSome && (← peekT 1).isSym ":" then bump
+          expectSym ":"
+          ps := ps.push (← parseType)
         if (← peekT).isSym "," then bump else break
     expectSym ")"
     let mut effs := #[]

@@ -30,9 +30,28 @@ inductive STy where
   /-- `name(t₁, …)`: a parametric struct applied to type arguments. -/
   | app  : String → List STy → STy
   /-- `type{_(:t₁, …)<effects>:r}` or `t₁->r`: a function type (#210), its
-      parameter types, effect specifiers and result type. -/
+      parameter types, effect specifiers and result type. A named parameter
+      `?N:t` comes last, as `STy.namedParam` (#503). -/
   | fn   : List STy → List String → STy → STy
   deriving Repr, Inhabited, BEq
+
+/-- A function type's named parameter `?N:t`, or `?N:t = …` when a caller
+    may omit it (`optional`), is an application of `?N` (`?N=`) to `t`
+    (#503): every traversal of types sees `t`, and two function types'
+    parameters match only by name. The default written in a type is not
+    part of it (Book of Verse ch. 6). -/
+def STy.namedParam (n : String) (optional : Bool) (t : STy) : STy :=
+  .app ("?" ++ n ++ if optional then "=" else "") [t]
+
+/-- A named parameter of a function type: its name, whether a caller may
+    omit it, its type. -/
+def STy.asNamedParam? : STy → Option (String × Bool × STy)
+  | .app h [t] =>
+    if h.startsWith "?" then
+      let optional := h.endsWith "="
+      some (((h.drop 1).dropEnd (if optional then 1 else 0)).toString, optional, t)
+    else none
+  | _ => none
 
 /-- Fold over written type names in source order, including application
     heads (`box` in `box(t)`) and function parameter and result types. -/

@@ -145,6 +145,7 @@ def inlineSource (allTops0r : List STop) (requests : Requests) (admitted : Admit
   -- and the calls whose overload the arguments' types pick
   -- (#283) and the consumers in recursive groups' code whose names' types
   -- an elaboration is to note
+  let written := admitted.resolved
   let ⟨resolved, lazy, familySites, overloadSites, nestedSites, fieldSites⟩ ← Choice.inlineMulti admitted.resolved reserved
     requests.eager requests.families requests.lazy requests.overloads requests.nested
     requests.fieldOrders
@@ -218,7 +219,8 @@ def inlineSource (allTops0r : List STop) (requests : Requests) (admitted : Admit
   -- (the entry expression is scanned too)
   let allTops00 := copyIfaceDefaults (SubtypeEvidence.addFields
     (FnValues.desugar (resolved.take (resolved.length - admitted.rawEntry.length) ++ helpers)
-      (resolved.drop (resolved.length - admitted.rawEntry.length)) (requests.fns.map fun (n, t) => (n, t.toSTy)) requests.methods))
+      (resolved.drop (resolved.length - admitted.rawEntry.length)) (requests.fns.map fun (n, t) => (n, t.toSTy))
+      requests.methods written))
   let entryTop := resolved.drop (resolved.length - admitted.rawEntry.length)
   return { tops := allTops00, entry := entryTop, constructionFx, familySites, overloadSites, nestedSites,
            fieldSites }

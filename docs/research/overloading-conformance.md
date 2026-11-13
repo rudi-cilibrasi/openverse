@@ -3,10 +3,10 @@
 Issue [#493](https://github.com/rudi-cilibrasi/openverse/issues/493), initially
 measured against OpenVerse `c34adb6571f0703555922c83bba0756d98f5ebfc` (#499).
 The [original audit](https://github.com/rudi-cilibrasi/openverse/blob/458f3974d2785c95ab25f2786496c0c8dfe49f1b/docs/research/overloading-conformance.md)
-recorded 13 deviations. After #500 and #501, the [81-case matrix](../../tests/conformance/overloading/matrix.json)
-tracks 42 accepted programs, 36 conforming refusals, one intentional entry-point
-restriction and two remaining deviations. Eleven original cases now meet their
-expectations, including overloaded tuple expansion. Accepted programs have exact output/status oracles and run in both
+recorded 13 deviations. After #500, #501 and #503, the [81-case matrix](../../tests/conformance/overloading/matrix.json)
+tracks 43 accepted programs, 36 conforming refusals, one intentional entry-point
+restriction and one remaining deviation. Twelve original cases now meet their
+expectations, including overloaded tuple expansion and named function values. Accepted programs have exact output/status oracles and run in both
 the Lean interpreter and C runtime. A refusal must have exit 4, the expected
 diagnostic and no emitted bytecode.
 
@@ -51,7 +51,7 @@ Negative fixtures state their expected diagnostic on the first line.
 | Qualified implementations | [Separate interface slots](../../tests/verse/overloading_qualified.verse), [parametric interfaces](../../tests/verse/overloading_qualified_param.verse) and [mixed qualified/unqualified implementations](../../tests/verse/overloading_qualified_mixed.verse) work with OpenVerse's qualification syntax. [A qualified call with no matching slot](../../tests/errors/overloading_qualified_nomatch.verse) fails. These tests do not establish syntax equivalence with an Epic compiler. |
 | Constructors | [Dispatch/delegation](../../tests/verse/constructors_overloaded.verse), [lexical defaults](../../tests/verse/constructors_overloaded_defaults.verse), [renamed generic parameters](../../tests/verse/constructors_overloaded_generic3.verse) and [selected effects](../../tests/verse/constructors_overloaded_effects.verse) work; [overlapping signatures](../../tests/errors/ctor_overload_same.verse) fail. |
 | Empty values and class overlap | [Arrays](../../tests/errors/overload_arrays.verse), [options/logic](../../tests/errors/overload_option_logic.verse), [interfaces](../../tests/errors/overload_iface.verse) and [related classes](../../tests/errors/overload_subclass.verse) overlap. A [final non-implementing class versus interface](../../tests/verse/fuzz_3_overload_iface_vs_final.verse) and [disjoint instances of a generic class](../../tests/verse/fuzz_3b_overload_parametric.verse) are accepted. |
-| Function domains and capture | [Different callback signatures](../../tests/errors/overload_audit_function_domains.verse) remain indistinct. Capturing an [overloaded function](../../tests/errors/overload_value.verse) or [method](../../tests/errors/fn_value_method_overloaded.verse) is forbidden by the pinned Book's capture rule. An [unambiguous method captured in an interface default](../../tests/verse/overload_audit_interface_value_scope.verse) retains that scope when the implementing class adds overloads. |
+| Function domains and capture | [Different callback signatures](../../tests/errors/overload_audit_function_domains.verse) remain indistinct. Capturing an [overloaded function](../../tests/errors/overload_value.verse) or [method](../../tests/errors/fn_value_method_overloaded.verse) is forbidden by the pinned Book's capture rule, also with [named](../../tests/errors/fn_value_named_overloaded.verse) [parameters](../../tests/errors/fn_value_named_method_overloaded.verse). An [unambiguous method captured in an interface default](../../tests/verse/overload_audit_interface_value_scope.verse) retains that scope when the implementing class adds overloads. |
 
 ## Known deviations and implementation follow-ups
 
@@ -64,13 +64,13 @@ with released-UEFN availability unverified.
 | Reproducer | Pinned expectation | Current observation | Follow-up |
 | --- | --- | --- | --- |
 | [Class upper bound](../../tests/conformance/overloading/class_bound.verse) | `t:subtype(vehicle)` accepts and preserves `car`; print its `Doors` value `2`, as in the subtype-preserving Book example. | Exit 4: `unknown constraint subtype(vehicle)`. | [#502](https://github.com/rudi-cilibrasi/openverse/issues/502) |
-| [Named function value](../../tests/conformance/overloading/named_capture.verse) | An optional-named function fits a zero-argument function type; call its default and print `7`, explicit Book example. | Exit 4: `has named parameters: such a function cannot be used as a value`. | [#503](https://github.com/rudi-cilibrasi/openverse/issues/503) |
 
-The named-value case is **not** the overloaded-name capture restriction. The
-Book's [named-parameter examples](https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#named-parameters)
+The [named function value](../../tests/conformance/overloading/named_capture.verse)
+case was **not** the overloaded-name capture restriction. The Book's
+[named-parameter examples](https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#named-parameters)
 retain required names in function types and allow eliding optional defaults.
-OpenVerse currently rejects those values; the issue tracks the missing type
-and adapter support rather than claiming an upstream ban.
+#503 implements them ([pinned rules](named-function-values.md)); overloaded
+names, with or without named parameters, remain no values.
 
 Fixing these gaps must preserve receiver/argument/default evaluation order,
 single evaluation, selected effects, rollback and cancellation boundaries.
@@ -123,8 +123,9 @@ the matrix: [tuple/map](../../tests/conformance/overloading/tuple_map.verse),
 [tuple/array](../../tests/conformance/overloading/tuple_array.verse),
 [flattened distinct types](../../tests/conformance/overloading/tuple_flat_disjoint.verse),
 [function/array](../../tests/conformance/overloading/function_array.verse),
-[function/map](../../tests/conformance/overloading/function_map.verse) and
-[overloaded tuple production](../../tests/conformance/overloading/overloaded_tuple_unpack.verse).
+[function/map](../../tests/conformance/overloading/function_map.verse),
+[overloaded tuple production](../../tests/conformance/overloading/overloaded_tuple_unpack.verse) and
+[named function values](../../tests/conformance/overloading/named_capture.verse).
 Their current expectations are ordinary positive/refusal oracles, not known
 gaps. [Actual tuple/container calls](../../tests/verse/overload_shapes_tuples.verse)
 and [receiver/argument/default/rollback traces](../../tests/verse/overload_shapes_order_rollback.verse)

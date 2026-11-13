@@ -730,22 +730,19 @@
     {
       "id": "named_capture",
       "path": "tests/conformance/overloading/named_capture.verse",
-      "classification": "known-gap",
+      "classification": "supported",
       "sources": [
         "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#named-parameters"
       ],
       "basis": "explicit-book-example",
       "issue": 503,
-      "expected": {
-        "exit": 0,
-        "stdout": "7\n"
-      },
-      "observed": {
+      "expectation": "Adapt an optional-named function to a zero-argument function value, applying its default at call time.",
+      "note": "Resolved with #503; original expectation and reproducer retained. ",
+      "historical_observation": {
         "exit": 4,
         "diagnostic": "has named parameters: such a function cannot be used as a value"
       },
-      "expectation": "Adapt an optional-named function to a zero-argument function value, applying its default at call time.",
-      "note": ""
+      "resolved_with_issue": 503
     },
     {
       "id": "overload_shapes_tuples",
