@@ -115,7 +115,7 @@ def main : IO Unit := do
     let frameCtx := { dictionaryCtx with locals :=
       { name := "X", slot := 1, ty := t, mutable := false } :: dictionaryCtx.locals }
     let (frames, _) ← getOK s!"{label} recursive return-frame capture"
-      ((loopFramesWith elabSeq [(frameCtx, [frameSource])]).run
+      ((loopFramesWith elabE elabSeq .int [(frameCtx, [frameSource])]).run
         { env := frameCtx.types, nslots := 2,
           slotTys := #[(dictionaryCtx.locals.head?.map (·.ty)).getD .void, t] })
     let [frame] := frames | throw (IO.userError "expected one recursive return frame")
@@ -290,7 +290,7 @@ def main : IO Unit := do
     | .fn p "Echo" ps tps specs ret body =>
       STop.fn p "Echo" (ps.map fun param => { param with typeValue := true }) tps specs ret body
     | top => top
-  let (lowered, _) ← getOK "inline witness metadata" (Choice.inlineMulti marked [])
+  let lowered := (← getOK "inline witness metadata" (Choice.inlineMulti marked [])).tops
   need "inlining preserves a dummy value's role across renamed bindings"
     (lowered.any fun
       | .fn _ "Main" _ _ _ _ body => Choice.anyE (fun
