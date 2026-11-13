@@ -2420,7 +2420,7 @@ Main():void =
   parameter; a function's is written on its name, `F<public>(…)`.
 - **Read and write.** `var<w> X<r>:t` is read where `<r>` admits and set
   where both do (`<w>` absent restricts nothing more); `<w>` is at least as
-  restrictive as `<r>`. A construction gives a field a value where reading
+  restrictive as `<r>`, judged with what the field is in. A construction gives a field a value where reading
   admits it.
 - **Constructors.** `c<public> := class<internal>{…}` is a type all may
   use and only its module constructs or extends: from outside, a function
