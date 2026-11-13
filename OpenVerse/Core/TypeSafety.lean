@@ -107,7 +107,7 @@ mutual
     occurs where the value is `[]` or the empty option. -/
 theorem hasTy_subst (hΞ : ∀ p ∈ Ξ, VTy.closedL p.2 = true) (θ : Nat → VTy) :
     ∀ (t : VTy) (v : Value), hasTy Ξ v t = true → hasTy Ξ v (t.subst θ) = true
-  | .int, _, h | .logic, _, h | .char, _, h | .float, _, h => by simpa using h
+  | .int, _, h | .logic, _, h | .char, _, h | .float, _, h | .dyn, _, h => by simpa using h
   | .ref ts args, v, h => by
     cases v
     case ref a =>
@@ -506,7 +506,7 @@ theorem VTy.sub_refl : ∀ t : VTy, t.sub t = true
   | .arr t => by simp only [VTy.sub]; exact VTy.sub_refl t
   | .opt t => by simp only [VTy.sub]; exact VTy.sub_refl t
   | .tup ts => by simp only [VTy.sub]; exact VTy.subL_refl ts
-  | .int | .logic | .char | .float | .var _ => by simp [VTy.sub]
+  | .int | .logic | .char | .float | .dyn | .var _ => by simp [VTy.sub]
 theorem VTy.subL_refl : ∀ ts : List VTy, VTy.subL ts ts = true
   | [] => rfl
   | t :: ts => by simp [VTy.subL, VTy.sub_refl t, VTy.subL_refl ts]
@@ -533,7 +533,7 @@ theorem VTy.sub_trans : ∀ (t u w : VTy), t.sub u = true → u.sub w = true →
         refine ⟨e, he, ⟨het, fun f hf => VTy.varsBelow_mono hle (hv f hf)⟩, ?_⟩
         rw [List.map_congr_left (fun f hf => VTy.inst_prefix h1.2 (hv f hf))]
         exact hp
-      | _ => simp [VTy.sub] at h2
+      | _ => simp [VTy.sub] at h2 ⊢
     | vref es bs =>
       cases w with
       | vref fs cs =>
@@ -544,8 +544,8 @@ theorem VTy.sub_trans : ∀ (t u w : VTy), t.sub u = true → u.sub w = true →
         obtain ⟨e', he', ⟨he1, hpre⟩, hor⟩ := h2.1 e he
         exact ⟨e', he', ⟨he1.trans het, fun f hf => hv f (hpre.subset hf)⟩,
           VTy.vref_entry_prefix hpre hor h2.2 hp⟩
-      | _ => simp [VTy.sub] at h2
-    | _ => simp [VTy.sub] at h1
+      | _ => simp [VTy.sub] at h2 ⊢
+    | _ => simp_all [VTy.sub, VTy.dyn_sub_iff]
   | .vref es as, u, w, h1, h2 => by
     cases u with
     | vref fs bs =>
@@ -561,22 +561,26 @@ theorem VTy.sub_trans : ∀ (t u w : VTy), t.sub u = true → u.sub w = true →
           · exact .inl rfl
           · exact .inr (Nat.le_trans h2.2.length_le hl1)
         · exact .inr hl2
-      | _ => simp [VTy.sub] at h2
-    | _ => simp [VTy.sub] at h1
+      | _ => simp [VTy.sub] at h2 ⊢
+    | _ => simp_all [VTy.sub, VTy.dyn_sub_iff]
   | .arr t, u, w, h1, h2 => by
-    cases u <;> simp [VTy.sub] at h1
-    cases w <;> simp [VTy.sub] at h2 ⊢
-    exact VTy.sub_trans _ _ _ h1 h2
+    cases w with
+    | dyn => exact VTy.sub_dyn _
+    | _ =>
+      cases u <;> simp [VTy.sub] at h1 h2 ⊢ <;> exact VTy.sub_trans _ _ _ h1 h2
   | .opt t, u, w, h1, h2 => by
-    cases u <;> simp [VTy.sub] at h1
-    cases w <;> simp [VTy.sub] at h2 ⊢
-    exact VTy.sub_trans _ _ _ h1 h2
+    cases w with
+    | dyn => exact VTy.sub_dyn _
+    | _ =>
+      cases u <;> simp [VTy.sub] at h1 h2 ⊢ <;> exact VTy.sub_trans _ _ _ h1 h2
   | .tup ts, u, w, h1, h2 => by
-    cases u <;> simp [VTy.sub] at h1
-    cases w <;> simp [VTy.sub] at h2 ⊢
-    exact VTy.subL_trans _ _ _ h1 h2
-  | .int, u, w, h1, h2 | .logic, u, w, h1, h2 | .char, u, w, h1, h2 | .float, u, w, h1, h2 | .var _, u, w, h1, h2 => by
-    cases u <;> simp [VTy.sub] at h1 <;> subst_vars <;> exact h2
+    cases w with
+    | dyn => exact VTy.sub_dyn _
+    | _ =>
+      cases u <;> simp [VTy.sub] at h1 h2 ⊢ <;> exact VTy.subL_trans _ _ _ h1 h2
+  | .int, u, w, h1, h2 | .logic, u, w, h1, h2 | .char, u, w, h1, h2 | .float, u, w, h1, h2 | .dyn, u, w, h1, h2 | .var _, u, w, h1, h2 => by
+    cases u <;> simp [VTy.sub] at h1 <;> subst_vars <;>
+      first | exact h2 | (rw [(VTy.dyn_sub_iff _).mp h2]; exact VTy.sub_dyn _)
 theorem VTy.subL_trans : ∀ (ts us ws : List VTy), VTy.subL ts us = true → VTy.subL us ws = true →
     VTy.subL ts ws = true
   | [], [], [], _, _ => rfl
@@ -603,25 +607,22 @@ theorem VTy.sub_subst (θ : Nat → VTy) : ∀ (t u : VTy), t.sub u = true → (
       refine ⟨e, he, ⟨het, by simpa using hv⟩, ?_⟩
       rw [← VTy.map_inst_subst]
       exact hp.map _
-    | _ => simp [VTy.sub] at h
+    | _ => simp [VTy.sub] at h ⊢
   | .vref es as, u, h => by
     cases u with
     | vref fs bs =>
       rw [VTy.subst_vref, VTy.subst_vref, VTy.sub_vref_iff]
       rw [VTy.sub_vref_iff] at h
       exact ⟨fun e he => by simpa using h.1 e he, h.2.map _⟩
-    | _ => simp [VTy.sub] at h
+    | _ => simp [VTy.sub] at h ⊢
   | .arr t, u, h => by
-    cases u <;> simp [VTy.sub] at h
-    simpa [VTy.sub] using VTy.sub_subst θ _ _ h
+    cases u <;> simp [VTy.sub] at h ⊢ <;> simpa [VTy.sub] using VTy.sub_subst θ _ _ h
   | .opt t, u, h => by
-    cases u <;> simp [VTy.sub] at h
-    simpa [VTy.sub] using VTy.sub_subst θ _ _ h
+    cases u <;> simp [VTy.sub] at h ⊢ <;> simpa [VTy.sub] using VTy.sub_subst θ _ _ h
   | .tup ts, u, h => by
-    cases u <;> simp [VTy.sub] at h
-    simpa [VTy.sub] using VTy.subL_subst θ _ _ h
-  | .int, u, h | .logic, u, h | .char, u, h | .float, u, h | .var _, u, h => by
-    cases u <;> simp [VTy.sub] at h <;> subst_vars <;> exact VTy.sub_refl _
+    cases u <;> simp [VTy.sub] at h ⊢ <;> simpa [VTy.sub] using VTy.subL_subst θ _ _ h
+  | .int, u, h | .logic, u, h | .char, u, h | .float, u, h | .dyn, u, h | .var _, u, h => by
+    cases u <;> simp [VTy.sub] at h ⊢ <;> subst_vars <;> exact VTy.sub_refl _
 theorem VTy.subL_subst (θ : Nat → VTy) : ∀ (ts us : List VTy), VTy.subL ts us = true →
     VTy.subL (ts.map (VTy.subst θ)) (us.map (VTy.subst θ)) = true
   | [], [], _ => rfl
@@ -661,7 +662,7 @@ theorem hasTy_sub : ∀ (t u : VTy) (v : Value), t.sub u = true → hasTy Ξ v t
           rw [List.map_congr_left (fun f hf => VTy.inst_prefix hv.2 (hvb f hf))]
           exact hp
       | _ => simp [hasTy] at hv
-    | _ => simp [VTy.sub] at hs
+    | _ => simp [VTy.sub] at hs ⊢
   | .vref es as, u, v, hs, hv => by
     cases u with
     | vref fs bs =>
@@ -673,28 +674,40 @@ theorem hasTy_sub : ∀ (t u : VTy) (v : Value), t.sub u = true → hasTy Ξ v t
         obtain ⟨e', he', ⟨he1, hpre⟩, hor⟩ := hs.1 e he
         exact ⟨t, args', ha, e', he', he1.trans het, VTy.vref_entry_prefix hpre hor hs.2 hp⟩
       | _ => simp [hasTy] at hv
-    | _ => simp [VTy.sub] at hs
+    | _ => simp [VTy.sub] at hs ⊢
   | .arr t, u, v, hs, hv => by
-    cases u <;> simp [VTy.sub] at hs
-    cases v with
-    | arr vs =>
-      simp only [hasTy] at hv ⊢
-      rw [allTy_iff] at hv ⊢
-      exact fun w hw => hasTy_sub _ _ w hs (hv w hw)
-    | _ => simp [hasTy] at hv
+    cases u with
+    | dyn => simp
+    | arr t' =>
+      simp only [VTy.sub] at hs
+      cases v with
+      | arr vs =>
+        simp only [hasTy] at hv ⊢
+        rw [allTy_iff] at hv ⊢
+        exact fun w hw => hasTy_sub _ _ w hs (hv w hw)
+      | _ => simp [hasTy] at hv
+    | _ => simp [VTy.sub] at hs
   | .opt t, u, v, hs, hv => by
-    cases u <;> simp [VTy.sub] at hs
-    cases v with
-    | none => rfl
-    | some w => simp only [hasTy] at hv ⊢; exact hasTy_sub _ _ w hs hv
-    | _ => simp [hasTy] at hv
+    cases u with
+    | dyn => simp
+    | opt t' =>
+      simp only [VTy.sub] at hs
+      cases v with
+      | none => rfl
+      | some w => simp only [hasTy] at hv ⊢; exact hasTy_sub _ _ w hs hv
+      | _ => simp [hasTy] at hv
+    | _ => simp [VTy.sub] at hs
   | .tup ts, u, v, hs, hv => by
-    cases u <;> simp [VTy.sub] at hs
-    cases v with
-    | tup vs => simp only [hasTy] at hv ⊢; exact allTys_sub _ _ vs hs hv
-    | _ => simp [hasTy] at hv
-  | .int, u, v, hs, hv | .logic, u, v, hs, hv | .char, u, v, hs, hv | .float, u, v, hs, hv | .var _, u, v, hs, hv => by
-    cases u <;> simp [VTy.sub] at hs <;> subst_vars <;> exact hv
+    cases u with
+    | dyn => simp
+    | tup us =>
+      simp only [VTy.sub] at hs
+      cases v with
+      | tup vs => simp only [hasTy] at hv ⊢; exact allTys_sub _ _ vs hs hv
+      | _ => simp [hasTy] at hv
+    | _ => simp [VTy.sub] at hs
+  | .int, u, v, hs, hv | .logic, u, v, hs, hv | .char, u, v, hs, hv | .float, u, v, hs, hv | .dyn, u, v, hs, hv | .var _, u, v, hs, hv => by
+    cases u <;> simp [VTy.sub] at hs ⊢ <;> subst_vars <;> exact hv
 theorem allTys_sub : ∀ (ts us : List VTy) (vs : List Value), VTy.subL ts us = true →
     allTys Ξ vs ts = true → allTys Ξ vs us = true
   | [], [], [], _, _ => rfl
@@ -1189,7 +1202,7 @@ mutual
 /-- Typings survive the growth of the heap typing: objects are only added. -/
 theorem hasTy_mono {Ξ₁ Ξ₂ : HeapTy} (hx : Ξ₁ <+: Ξ₂) : ∀ (t : VTy) (v : Value),
     hasTy Ξ₁ v t = true → hasTy Ξ₂ v t = true
-  | .int, v, hv | .logic, v, hv | .char, v, hv | .float, v, hv | .var _, v, hv => by cases v <;> simp_all [hasTy]
+  | .int, v, hv | .logic, v, hv | .char, v, hv | .float, v, hv | .dyn, v, hv | .var _, v, hv => by cases v <;> simp_all [hasTy]
   | .arr t, v, hv => by
     cases v
     case arr vs =>

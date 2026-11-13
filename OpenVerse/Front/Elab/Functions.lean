@@ -158,7 +158,8 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
     frameSlots := locals.filterMap fun l => l.storage.map (l.slot, ·) }
   let (receiverInits, st0) ← (elabReceiverEvidence ctx p frame).run st0
   let ((r, _), st) ← elabBody ctx body (some ret) st0
-  let (e, st) ← (coerce p r ret).run st
+  -- (a result of a type parameter's type as a `comparable`: its box)
+  let (e, st) ← (coerceBoxWith elabE ctx p r ret).run st
   -- (a body whose result is the empty value ends with it: `void`, `tuple()`)
   let e := if ret.isUnit then Expr.seq e (.lit .void) else e
   let selfInits : List Expr := (dictTps.drop (dictTps.length - selfTps.length)).map fun (v, _) =>

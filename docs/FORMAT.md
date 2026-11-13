@@ -97,7 +97,11 @@ the function's header (whose `nnodes` is 4).
 
 `eq` (13) and `ne` (14) are Verse's equality of values (`Value.veq`):
 structural, except that the empty values `.logic false`, `.tup []`, `.none`
-and an array of no elements are all equal, at every depth.
+and an array of no elements are all equal, at every depth. Their operands
+may be of any two kinds, and an array or a tuple may hold values of several
+kinds: a `comparable` is Verse Core's `dyn`, the type of every value, and a
+`[]comparable` an array of boxes (`OpenVerse/Core/Comparable.lean`). The
+format carries no types, so `dyn` adds nothing to it.
 
 Codes 0 (`add`), 1 (`sub`), 2 (`mul`) and 7 (`quotient`) also have a
 four-int rational form (#489): arguments `(a,b,c,d)` denote `a/b` and

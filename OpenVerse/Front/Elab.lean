@@ -420,7 +420,9 @@ def Requests.tier (r : Requests) : Nat :=
 def Requests.upTo (r : Requests) (k : Nat) : Requests :=
   if k ≥ 3 then r else
   { eager := r.eager, families := r.families, overloads := r.overloads, lazy := r.lazy, nested := r.nested,
-    fieldOrders := r.fieldOrders, instanceCalls := r.instanceCalls, witnesses := if k = 2 then r.witnesses else [] }
+    fieldOrders := r.fieldOrders, instanceCalls := r.instanceCalls, witnesses := if k = 2 then r.witnesses else [],
+    -- (what a function's body boxes: kept, as the source is)
+    boxes := r.boxes }
 
 /-- Elaborate a parsed program (`elabProgramCore`), with the names of the
     functions a constructor or an overload becomes shown as written: `K$init`

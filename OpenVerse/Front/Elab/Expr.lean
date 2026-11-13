@@ -548,7 +548,7 @@ partial def elabSeqIn (closed : Bool) (ctx : Ctx) (ss : List SExpr) (exp : Optio
 partial def elabArgs (ctx : Ctx) (p : Pos) (args : List SExpr) (tys : List Ty) : EM (List Expr) := do
   if args.length != tys.length then
     eerr p s!"expected {tys.length} argument(s), found {args.length}"
-  (args.zip tys).mapM fun (a, t) => do ctx.coerce a.pos (← elabE ctx a (some t)) t
+  (args.zip tys).mapM fun (a, t) => do coerceBoxWith elabE ctx a.pos (← elabE ctx a (some t)) t
 
 partial def elabInts (ctx : Ctx) (p : Pos) (args : List SExpr) : EM (List Expr) :=
   elabArgs ctx p args (args.map fun _ => .int)
@@ -993,6 +993,17 @@ partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bra
   | .map kt vt, [k], true =>
     let tm ← fresh r.ty
     let rk ← elabE ctx k (some kt)
+    -- (a `comparable` key, of a map whose keys are of another type: each key
+    -- boxed and compared with it, Book of Verse ch. 11)
+    if rk.ty == .dyn && kt != .dyn && kt.params.isEmpty && kt.comparable ctx.types then
+      let tk ← fresh .dyn
+      let tp ← fresh (.tup [kt, vt])
+      let some bx ← boxValue ctx.types (.prim (.tupGet 0) [.local tp]) kt
+        | eerr p s!"a map with keys of type {kt.show} is not looked up by a comparable yet"
+      let u ← fresh .dyn
+      let look := Expr.prim .index [.forE tp (.local tm) (.prim .eq [.assign u bx, .local tk])
+        (.prim (.tupGet 1) [.local tp]), .lit (.int 0)]
+      return ⟨.seq (.assign tm r.e) (.seq (.assign tk rk.e) look), vt⟩
     let tk ← fresh kt
     let tp ← fresh (.tup [kt, vt])
     return ⟨.seq (.assign tm r.e) (.seq (.assign tk (← coerce p rk kt)) (mapLookup tm tk tp)), vt⟩
@@ -1054,26 +1065,26 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
         if !tb.comparable ctx.types then eerr p (notComparable ctx.types tb s!"an operand of '{op}'")
         eerr p "these values cannot be compared"
       if ta == tb || ta == .never || tb == .never then return .core
-      -- (type parameters: at some instance two different ones, or one and a
-      -- type that several types share in Verse Core, one with an int or a
-      -- tuple, could be types whose values Verse Core finds equal)
-      let (va, vb) := (ta.toVTy ctx.types, tb.toVTy ctx.types)
-      let (pa, pb) := (!ta.params.isEmpty, !tb.params.isEmpty)
-      if (pa && pb) || (pa && vb.shared) || (pb && va.shared) then
-        eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show}"
-      -- (nor an int with a rational inside containers that do not convert,
-      -- #116: equal values that Verse Core holds differently, `1` and `(1, 1)`)
-      if ratMismatch ta tb then
-        eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show} (an int and a rational inside them: convert the ints first)"
+      -- (a `comparable` on either side, or a type parameter and another type:
+      -- both boxed, Book of Verse ch. 11; a type parameter's value by the
+      -- evidence of its `subtype(comparable)`, at run time)
+      if ta.mentionsComparable || tb.mentionsComparable || !ta.params.isEmpty || !tb.params.isEmpty then
+        return .boxed
+      -- (an int with a rational inside containers that do not convert, #116:
+      -- equal values that Verse Core holds differently, `1` and `(1, 1)`:
+      -- boxed, where an int is the rational it is)
+      if ratMismatch ta tb then return .boxed
       match ctx.types.cmpPlan ta tb with
-      | .refuse =>
-        eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show}, whose values in common Verse Core cannot compare (not supported)"
+      -- (boxed: Verse Core's equality of boxes is Verse's)
+      | .refuse => return .boxed
       | plan => return plan
     else if !((ta == .int && tb == .int) || (ta == .char && tb == .char) || (ta == .char32 && tb == .char32) ||
         (ta == .float && tb == .float)) then
       eerr p s!"'{op}' compares ints, chars, char32s or floats, found {ta.show} and {tb.show}"
     return .core
   let accepts : Ty → Bool := fun ty => arithmeticType ctx.types ty || ty == .char || ty == .char32
+  -- (the box of a type parameter's value: its evidence's `Up`)
+  let paramBox (e : Expr) (t : Ty) : EM (Option Expr) := some <$> elabBoxWith elabE ctx p e t
   let numeric (value : R) : EM R := do
     return widenR ctx.types (← elabValueViewWith elabE ctx p value accepts "comparison")
   -- (an empty `array{}` or `map{}` has no type of its own: compared with a
@@ -1154,6 +1165,11 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
       -- `()`, goes through a temporary of its type, `inferable`)
       let eb ← if ra.ty.toVTy ctx.types == rb.ty.toVTy ctx.types then pure rb.e else inferable rb
       return result (p2 (ordOf op ra.ty) ra.e eb) ra.ty
+    | .boxed =>
+      let x ← fresh ra.ty
+      let y ← fresh rb.ty
+      let test ← boxedTest ctx.types p (opOf op) (.local x) ra.ty (.local y) rb.ty paramBox
+      return result (.seq (.assign x ra.e) (.seq (.assign y rb.e) test)) ra.ty
     | plan =>
       let x ← fresh ra.ty
       let y ← fresh rb.ty
@@ -1177,9 +1193,10 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
       else
         let plan ← checkTys op prevR.ty rb.ty
         steps := steps.push (.assign tb rb.e)
-        steps := steps.push (match plan with
-          | .core => p2 (ordOf op prevTy) prevR.e (.local tb)
-          | plan => plan.test (opOf op) prev tb)
+        steps := steps.push (← match plan with
+          | .core => pure (p2 (ordOf op prevTy) prevR.e (.local tb))
+          | .boxed => boxedTest ctx.types p (opOf op) prevR.e prevR.ty (.local tb) rb.ty paramBox
+          | plan => pure (plan.test (opOf op) prev tb))
       prev := tb
       prevTy := rb.ty
     return result (steps.foldr Expr.seq (.local t0)) ra.ty
@@ -1356,12 +1373,12 @@ partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) 
   if ty == .never then eerr p "cannot infer the type of this if's choices"
   -- (#366) with nothing in common, every alternative against a later
   -- one's type instead, the first that fits them all, as `elabAlts` does
-  if t?.isNone && ty == .any && ctx.retries < 3 then
+  if t?.isNone && ty.looseJoin && ctx.retries < 3 then
     let env := (← get).env
     let mut found := false
     let stAfter ← get
     for (_, _, r) in rs.toList.drop 1 do
-      if found || r.ty == .any || r.ty == .never then continue
+      if found || r.ty.looseJoin || r.ty == .never then continue
       -- (from the state before the alternatives: the first try's code and
       -- slots are not kept)
       set st0
@@ -1372,7 +1389,7 @@ partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) 
       | some rs' =>
         match rs'.toList.foldl (fun acc (_, _, r') => acc.bind fun t => joinTy env t r'.ty none) (some r.ty) with
         | some ty' =>
-          if ty' != .any then
+          if !ty'.looseJoin then
             ty := ty'; rs := rs'; found := true
           else set stAfter
         | none => set stAfter
@@ -1432,11 +1449,11 @@ partial def elabAlts (ctx : Ctx) (p : Pos) (b : Choice.Binding) : EM (Ty × List
     -- (#366) with nothing in common, every alternative against a later
     -- one's type instead, the first that fits them all: `false | option{4}`
     -- is a `?int`, as `option{4} | false` is; else `any`, as before
-    if ty == .any && ctx.retries < 3 then
+    if ty.looseJoin && ctx.retries < 3 then
       let env := (← get).env
       let stAfter ← get
       for r in rs do
-        if r.ty == .any || r.ty == .never then continue
+        if r.ty.looseJoin || r.ty == .never then continue
         -- (from the state before the alternatives: the first try's code and
         -- slots are not kept)
         set st0
@@ -1445,7 +1462,7 @@ partial def elabAlts (ctx : Ctx) (p : Pos) (b : Choice.Binding) : EM (Ty × List
         | some rs' =>
           match rs'.foldl (fun acc r' => acc.bind fun t => joinTy env t r'.ty none) (some r.ty) with
           | some ty' =>
-            if ty' != .any then
+            if !ty'.looseJoin then
               return (ty', ← ((alts.zip rs').mapM fun (a, r') => coerce a.pos r' ty'))
             set stAfter
           | none => set stAfter

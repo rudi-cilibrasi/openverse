@@ -447,7 +447,7 @@ partial def coreDefault (S : Sigs) (params : List VTy) (depth : Nat) (τ : VTy)
   | some i => some (.local i)
   | none =>
     match τ with
-    | .int | .logic | .char | .float | .arr _ | .opt _ => some (.lit τ.default)
+    | .int | .logic | .char | .float | .dyn | .arr _ | .opt _ => some (.lit τ.default)
     | .tup ts => (ts.mapM (coreDefault S params (depth + 1) (varD := varD))).map (.prim .mkTup ·)
     -- (a type variable: as the caller says, e.g. a receiver's hidden field, #251)
     | .var i => varD i

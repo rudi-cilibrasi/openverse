@@ -219,8 +219,9 @@ partial def elabExprValuesWith
             match joinTy (← get).env acc x.ty elemExp with
             | some j => pure j
             | none =>
-              if (elemExp.isNone || elemExp == some .any) && !ambiguousJoin (← get).env acc x.ty then
-                pure .any
+              let env := (← get).env
+              if elemExp.isNone && !ambiguousJoin env acc x.ty then pure (fallbackJoin env acc x.ty)
+              else if elemExp == some .any && !ambiguousJoin env acc x.ty then pure .any
               else eerr e'.pos s!"the elements of this array have different types: {acc.show} and {x.ty.show}") r.ty
         let es ← all.mapM fun (e', x) => coerce e'.pos x jt
         -- (an element that never gives a value, joined with others, without
