@@ -295,6 +295,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let methods ← classMethods defs.tops classes fields
   let env ← typeEnvironment classes fields methods source admitted.concurrencyNames opts.requests opts.signalNoRollback
   let env ← upperBounds env methods.tops
+  checkAliasBounds env admitted.aliases
   let views ← interfaceViews env classes.defs opts.requests
   if !views.witnessNeeds.isEmpty then
     return .asking { witnesses := views.witnessNeeds }

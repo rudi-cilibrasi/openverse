@@ -183,8 +183,10 @@ partial def checkNames (p : Pos) (arity : String → Option (Option Nat)) (param
 
 /-- The program's definitions, modules resolved, with every type alias
     written out where it is used and the aliases' definitions dropped (see
-    the file's header). -/
-def expand (tops : List STop) : Except String (List STop) := do
+    the file's header); and each alias's name and definition, the aliases in
+    its type written out, for the checks of what its type applies (the
+    bounds of the parametric types it names, `checkAliasBounds`). -/
+def expand (tops : List STop) : Except String (List STop × List (String × Alias)) := do
   -- the types the program defines, with their numbers of type parameters
   let defined : Std.HashMap String Nat := Std.HashMap.ofList (tops.filterMap fun
     | .classDef _ n _ tps .. | .const _ n _ none (.structDef _ tps ..) => some (n, tps.length)
@@ -202,7 +204,7 @@ def expand (tops : List STop) : Except String (List STop) := do
     | .const _ n _ none (.typeAlias _ tps t) => some (n, t, tps.length, true)
     | .const _ n _ none e => e.asType?.map (n, ·, 0, false)
     | _ => none
-  if written.isEmpty then return tops
+  if written.isEmpty then return (tops, [])
   -- (one whose value is a type that names aliases is one too, wherever they
   -- are defined: `b := a` and `a := int`, in either order)
   let mut aliases : Std.HashMap String Nat := Std.HashMap.ofList
@@ -222,6 +224,7 @@ def expand (tops : List STop) : Except String (List STop) := do
         throw s!"{p.show}: '{n}' is already defined (as a type alias); Verse does not allow shadowing"
   let mut scope : Scope := { all := Std.HashSet.ofList aliases.keys }
   let mut out : Array STop := #[]
+  let mut defined : Array (String × Alias) := #[]
   -- (in an alias's type, its aliases written out: no alias, and `comparable`
   -- is no type yet)
   let bodyArity (n : String) : Option (Option Nat) := if n == "comparable" then none else typeArity {} n
@@ -245,6 +248,7 @@ def expand (tops : List STop) : Except String (List STop) := do
         let params := tps.map (·.name)
         checkNames p bodyArity params body
         scope := { scope with known := scope.known.insert n { pos := p, params, body } }
+        defined := defined.push (n, { pos := p, params, body })
         continue
       -- (a module's data states its type, Book of Verse ch. 16, also at the
       -- top level: the parser leaves `X := c` to this pass, as `c` may be a
@@ -252,6 +256,6 @@ def expand (tops : List STop) : Except String (List STop) := do
       if !(qualParts n).any (·.startsWith "$") && e.asType?.isSome && !e.isTypeLikeForm then
         throw s!"{p.show}: a constant {if (qualParts n).length > 1 then "in a module" else "at the top level"} needs its type: write {(qualParts n).getLastD n}:t = … (Book of Verse ch. 16: \"type inference with := alone is not allowed\")"
     out := out.push (← if aliases.isEmpty then pure t else scope.top t)
-  return out.toList
+  return (out.toList, defined.toList)
 
 end OpenVerse.Front.Aliases
