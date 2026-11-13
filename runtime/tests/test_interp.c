@@ -367,29 +367,75 @@ static void prim_cases(void)
 }
 
 /* ABI and special-value cases bypass the source type checker (#490). */
+/* ToString of a float (VFloat.fixed6): six digits after the point, the exact
+   value rounded half to even, every digit before the point, the sign kept
+   (the expected strings are Python's '%.6f'). */
+static void fixed6_cases(void)
+{
+    static const struct { uint64_t bits; const char *out; } cases[] = {
+        { UINT64_C(0x0000000000000000), "0.000000\n" },
+        { UINT64_C(0x3ff0000000000000), "1.000000\n" },
+        { UINT64_C(0x3ff8000000000000), "1.500000\n" },
+        { UINT64_C(0xbff8000000000000), "-1.500000\n" },
+        { UINT64_C(0x3ff3c0ca428c59fb), "1.234568\n" },
+        { UINT64_C(0x43118b54f22aeb00), "1234567890123456.000000\n" },
+        { UINT64_C(0x54b249ad2594c37d), "10000000000000000159028911097599180468360808563945281389781327557747838772170381060813469985856815104.000000\n" },
+        { UINT64_C(0xd4b249ad2594c37d), "-10000000000000000159028911097599180468360808563945281389781327557747838772170381060813469985856815104.000000\n" },
+        { UINT64_C(0x3f80000000000000), "0.007812\n" },
+        { UINT64_C(0x3f98000000000000), "0.023438\n" },
+        { UINT64_C(0xbf80000000000000), "-0.007812\n" },
+        { UINT64_C(0x81a56e1fc2f8f359), "-0.000000\n" },
+        { UINT64_C(0x0000000000000001), "0.000000\n" },
+        { UINT64_C(0x8000000000000001), "-0.000000\n" },
+        { UINT64_C(0x3ea0c6f7a0b5ed8d), "0.000000\n" },
+        { UINT64_C(0x3eb92a737110e454), "0.000002\n" },
+        { UINT64_C(0x7fefffffffffffff), "179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368.000000\n" },
+        { UINT64_C(0xffefffffffffffff), "-179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368.000000\n" },
+        { UINT64_C(0x3fd3333333333334), "0.300000\n" },
+        { UINT64_C(0x4058a00000000000), "98.500000\n" },
+        { UINT64_C(0x4340000000000000), "9007199254740992.000000\n" },
+        { UINT64_C(0x40fe240000008638), "123456.000001\n" },
+        { UINT64_C(0x7ff8000000000000), "NaN\n" },
+        { UINT64_C(0x7ff0000000000000), "Inf\n" },
+        { UINT64_C(0xfff0000000000000), "-Inf\n" }
+    };
+    tbuf p = { 0 };
+    tfn f = { 0 };
+    size_t i;
+    for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        int64_t bits;
+        memcpy(&bits, &cases[i].bits, sizeof bits);
+        n_print(&f, n_prim(&f, VX_P_TOSTR, 0, 1, n_prim(&f, VX_P_FOFBITS, 0, 1, n_int(&f, bits))));
+        main_only(&p, &f, 0, f.count - 1);
+        OK_OUT(&p, cases[i].out);
+    }
+}
+
 static void hyperbolic_cases(void)
 {
-    static const struct { uint32_t op; uint64_t bits; const char *out; } cases[] = {
-        { VX_P_FSINH, 0, "0.0\n" },
-        { VX_P_FSINH, UINT64_C(0x8000000000000000), "0.0\n" },
-        { VX_P_FSINH, 1, "5e-324\n" },
-        { VX_P_FCOSH, 0, "1.0\n" },
-        { VX_P_FTANH, 0, "0.0\n" },
-        { VX_P_FTANH, 1, "5e-324\n" },
-        { VX_P_FASINH, 1, "5e-324\n" },
-        { VX_P_FATANH, 1, "5e-324\n" },
-        { VX_P_FACOSH, UINT64_C(0x3ff0000000000000), "0.0\n" },
-        { VX_P_FACOSH, 0, "NaN\n" },
-        { VX_P_FATANH, UINT64_C(0x3ff0000000000000), "Inf\n" },
-        { VX_P_FATANH, UINT64_C(0xbff0000000000000), "-Inf\n" },
-        { VX_P_FATANH, UINT64_C(0x4000000000000000), "NaN\n" },
-        { VX_P_FSINH, UINT64_C(0x7ff0000000000000), "Inf\n" },
-        { VX_P_FCOSH, UINT64_C(0xfff0000000000000), "Inf\n" },
-        { VX_P_FTANH, UINT64_C(0xfff0000000000000), "-1.0\n" },
-        { VX_P_FASINH, UINT64_C(0xfff0000000000000), "-Inf\n" },
-        { VX_P_FACOSH, UINT64_C(0x7ff0000000000000), "Inf\n" },
-        { VX_P_FATANH, UINT64_C(0x7ff0000000000000), "NaN\n" },
-        { VX_P_FSINH, UINT64_C(0x7ff8000000000001), "NaN\n" }
+    /* (each result is checked to be exactly the bits `want`, by `eq`, which
+       fails otherwise, then printed by ToString) */
+    static const struct { uint32_t op; uint64_t bits; uint64_t want; const char *out; } cases[] = {
+        { VX_P_FSINH, 0, 0, "0.000000\n" },
+        { VX_P_FSINH, UINT64_C(0x8000000000000000), 0, "0.000000\n" },
+        { VX_P_FSINH, 1, 1, "0.000000\n" },
+        { VX_P_FCOSH, 0, UINT64_C(0x3ff0000000000000), "1.000000\n" },
+        { VX_P_FTANH, 0, 0, "0.000000\n" },
+        { VX_P_FTANH, 1, 1, "0.000000\n" },
+        { VX_P_FASINH, 1, 1, "0.000000\n" },
+        { VX_P_FATANH, 1, 1, "0.000000\n" },
+        { VX_P_FACOSH, UINT64_C(0x3ff0000000000000), 0, "0.000000\n" },
+        { VX_P_FACOSH, 0, UINT64_C(0x7ff8000000000000), "NaN\n" },
+        { VX_P_FATANH, UINT64_C(0x3ff0000000000000), UINT64_C(0x7ff0000000000000), "Inf\n" },
+        { VX_P_FATANH, UINT64_C(0xbff0000000000000), UINT64_C(0xfff0000000000000), "-Inf\n" },
+        { VX_P_FATANH, UINT64_C(0x4000000000000000), UINT64_C(0x7ff8000000000000), "NaN\n" },
+        { VX_P_FSINH, UINT64_C(0x7ff0000000000000), UINT64_C(0x7ff0000000000000), "Inf\n" },
+        { VX_P_FCOSH, UINT64_C(0xfff0000000000000), UINT64_C(0x7ff0000000000000), "Inf\n" },
+        { VX_P_FTANH, UINT64_C(0xfff0000000000000), UINT64_C(0xbff0000000000000), "-1.000000\n" },
+        { VX_P_FASINH, UINT64_C(0xfff0000000000000), UINT64_C(0xfff0000000000000), "-Inf\n" },
+        { VX_P_FACOSH, UINT64_C(0x7ff0000000000000), UINT64_C(0x7ff0000000000000), "Inf\n" },
+        { VX_P_FATANH, UINT64_C(0x7ff0000000000000), UINT64_C(0x7ff8000000000000), "NaN\n" },
+        { VX_P_FSINH, UINT64_C(0x7ff8000000000001), UINT64_C(0x7ff8000000000000), "NaN\n" }
     };
     static const uint32_t ops[] = {
         VX_P_FSINH, VX_P_FCOSH, VX_P_FTANH,
@@ -399,11 +445,14 @@ static void hyperbolic_cases(void)
     tfn f = { 0 };
     size_t i;
     for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
-        int64_t bits;
-        uint32_t x;
+        int64_t bits, want;
+        uint32_t x, y;
         memcpy(&bits, &cases[i].bits, sizeof bits);
+        memcpy(&want, &cases[i].want, sizeof want);
         x = n_prim(&f, VX_P_FOFBITS, 0, 1, n_int(&f, bits));
-        n_print(&f, n_prim(&f, VX_P_TOSTR, 0, 1, n_prim(&f, cases[i].op, 0, 1, x)));
+        y = n_prim(&f, VX_P_FOFBITS, 0, 1, n_int(&f, want));
+        n_print(&f, n_prim(&f, VX_P_TOSTR, 0, 1,
+                           n_prim(&f, VX_P_EQ, 0, 2, n_prim(&f, cases[i].op, 0, 1, x), y)));
         main_only(&p, &f, 0, f.count - 1);
         OK_OUT(&p, cases[i].out);
     }
@@ -816,6 +865,7 @@ int main(void)
 {
     rollback_cases();
     prim_cases();
+    fixed6_cases();
     hyperbolic_cases();
     rational_cases();
     flatten_alias_cases();

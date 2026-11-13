@@ -14,7 +14,7 @@ sub := class(base):
         branch:
             Sleep(0.1)
             Print("observe {Total}")
-        Sleep(0.0)
+        Sleep(0.01)
         for(A:=Two(0)|Two(2),B:=Two(0)|Two(2)):
             set Total+=1
             Print("{A}{B}:{(super:)Limit(A)}")

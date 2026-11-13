@@ -3,5 +3,5 @@ Main()<suspends>:void=
     Print("large")
     Sleep(68.23333333333333)
     Print("max")
-    Sleep(0.0)
+    Sleep(0.01)
     Print("bad")

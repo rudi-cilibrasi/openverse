@@ -16,12 +16,12 @@ Waiter(E:event(int),X:car,Label:string)<suspends>:void=
 Racer(X:car)<suspends>:car=
     rush:
         block:
-            Sleep(0.0)
+            Sleep(0.01)
             Print("winner")
         block:
             defer:Print("cleanup loser {Read(X)}")
             F:=Make(X)
-            Sleep(0.0)
+            Sleep(0.01)
             Print("loser {F(1)}")
     Print("after rush")
     set X.N=10

@@ -113,7 +113,7 @@ Main()<suspends>:void=
     race:
         Worker(array{7},D)
         block:
-            Sleep(0.0)
+            Sleep(0.01)
             Print(\"winner\")
     Print(\"after\")
 "

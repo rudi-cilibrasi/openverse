@@ -11,7 +11,7 @@ pairE(a:type, b:type) := class(expr(tuple(a, b))):
     R:expr(b)
     Eval<override>():tuple(a, b) = (L.Eval(), R.Eval())
 RunS(E:expr(t) where t:type)<suspends>:t =
-    Sleep(0.0)
+    Sleep(0.01)
     E.Eval()
 Main()<suspends>:void =
     Print("{RunS(lit{V := 1})}")

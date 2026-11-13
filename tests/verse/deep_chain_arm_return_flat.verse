@@ -10,11 +10,11 @@ F()<suspends>:int =
     sync:
         A1()
         block:
-            Sleep(0.0)
+            Sleep(0.01)
             return 5
     0
 Main()<suspends>:void =
     X := F()
     Print("F gave {X}")
-    Sleep(0.0)
+    Sleep(0.01)
     Print("main done")

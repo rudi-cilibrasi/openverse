@@ -8,7 +8,7 @@ Run(P:pair(a, b) where a:type, b:type)<suspends>:void =
         branch:
             Sleep(1.0)
             Print("child woke")
-        Sleep(0.0)
+        Sleep(0.01)
     Sleep(2.0)
 Main()<suspends>:void =
     Run(dup(int){A := 1, B := 2})

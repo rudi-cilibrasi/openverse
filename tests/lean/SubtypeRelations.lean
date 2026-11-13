@@ -132,7 +132,7 @@ Main()<suspends>:void=
     race:
         Worker(S,IntProof())
         block:
-            Sleep(0.0)
+            Sleep(0.01)
             Print(\"winner\")
     Print(\"after\")
 "
@@ -152,7 +152,7 @@ Main()<suspends>:void=
     race:
         Worker(S)
         block:
-            Sleep(0.0)
+            Sleep(0.01)
             Print(\"winner\")
     Print(\"after\")
 "
@@ -232,7 +232,7 @@ Main()<suspends>:void=
     race:
         Worker(7,VoidProof())
         block:
-            Sleep(0.0)
+            Sleep(0.01)
             Print(\"winner\")
     Print(\"after\")
 "
@@ -253,7 +253,7 @@ Main()<suspends>:void=
     race:
         Worker(7)
         block:
-            Sleep(0.0)
+            Sleep(0.01)
             Print(\"winner\")
     Print(\"after\")
 "

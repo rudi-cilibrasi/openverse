@@ -10,6 +10,6 @@ Main()<suspends>:void=
     race:
         Worker(A)
         block:
-            Sleep(0.0)
+            Sleep(0.01)
             Print("winner")
     Print("after {A.N} {A.Name}")

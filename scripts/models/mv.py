@@ -2882,7 +2882,8 @@ def fmt_float(f):
         return "NaN"
     if f in (float('inf'), float('-inf')):
         return "Inf" if f > 0 else "-Inf"
-    return repr(f)
+    # (ToString: six digits after the point, the Book's API)
+    return '%.6f' % f
 
 
 # ---------------------------------------------------------------- programs

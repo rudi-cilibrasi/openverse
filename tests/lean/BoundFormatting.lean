@@ -57,7 +57,7 @@ def main (args : List String) : IO Unit := do
   let entries := [
     ("format-entry-char32", "Main():void={}", "0u03BB", "λ\n"),
     ("format-entry-refinement", "small:=type{_X:int where 0<=_X,_X<=10}\nValue()<computes>:small=3\nMain():void={}", "Value()", "3\n"),
-    ("format-entry-float", "small:=type{_X:float where 0.0<=_X,_X<=10.0}\nValue()<computes>:small=2.5\nMain():void={}", "Value()", "2.5\n"),
+    ("format-entry-float", "small:=type{_X:float where 0.0<=_X,_X<=10.0}\nValue()<computes>:small=2.5\nMain():void={}", "Value()", "2.500000\n"),
     ("format-entry-fallback", "Value()<transacts>:[]int=(Print(\"once\");array{7})\nMain():void={}", "Value()", "once\n")]
   for (name, source, expression, expected) in entries do
     let entry ← getOK s!"{name}: parse entry" (parseExprText expression)

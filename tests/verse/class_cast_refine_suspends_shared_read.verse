@@ -10,7 +10,7 @@ Run(P:pair(a, b) where a:type, b:type)<suspends>:void =
             Sleep(0.5)
             set Value = 7
             ()
-        Sleep(0.0)
+        Sleep(0.01)
     if (D := dup[P]):
         Sleep(1.0)
         Print("observed {Value}")

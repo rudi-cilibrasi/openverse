@@ -111,7 +111,7 @@ slit := class(ex(string)):
     V:string
     Eval<override>():string = V
     Cp<override>()<suspends>:slit =
-        Sleep(0.0)
+        Sleep(0.01)
         slit{{V := V}}
 cst(t:type) := class(ex(t)):
     V:t
@@ -123,10 +123,10 @@ pairE(a:type, b:type) := class(ex(tuple(a, b))):
     R:ex(b)
     Eval<override>():tuple(a, b) = (L.Eval(), R.Eval())
 ''' + ('''    Cp<override>()<suspends>:tagged(a, b, int) =
-        Sleep(0.0)
+        Sleep(0.01)
         tagged(a, b, int){L := L.Cp(), R := R.Cp(), Tag := 0}
 ''' if V['cpT'] else '''    Cp<override>()<suspends>:pairE(a, b) =
-        Sleep(0.0)
+        Sleep(0.01)
         pairE(a, b){L := L.Cp(), R := R.Cp()}
 ''') + f'''    Pk<override>(?Alt:?tuple(a, b) = false, ?More:[]tuple(a, b) = array{{}}, ?N:int = 0):tuple(a, b) =
         if (A := Alt?) then A else if (M := More[N]) then M else (L.Pk(), R.Pk())
@@ -154,12 +154,12 @@ pairX(a:type, b:type) := class(mx(tuple(a, b))):
     R:ex(b)
     Eval<override>():tuple(a, b) = (L.Eval(), R.Eval())
 ''' + ('''    Cp<override>()<suspends>:laterX(a, b, int) =
-        Sleep(0.0)
+        Sleep(0.01)
         laterX(a, b, int){L := L.Cp(), R := R.Cp()}
 laterX(a:type, b:type, s:type) := class(pairX(a, b)):
     K:int = 0
 ''' if V['cpX'] else '''    Cp<override>()<suspends>:pairX(a, b) =
-        Sleep(0.0)
+        Sleep(0.01)
         pairX(a, b){L := L.Cp(), R := R.Cp()}
 ''') + f'''optE(a:type) := class(ex(?a)):
     E:ex(a)

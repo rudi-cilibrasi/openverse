@@ -11,17 +11,17 @@ Main()<suspends>:void =
             Print("first loser {V}")
         block:
             spawn{Waiter(E)}
-            Sleep(0.0)
+            Sleep(0.01)
             Print("winner")
         block:
-            Sleep(0.0)
-            Sleep(0.0)
+            Sleep(0.01)
+            Sleep(0.01)
             V := E.Await()
             Print("second loser {V}")
     E.Signal(1)
     Print("signalled")
-    Sleep(0.0)
-    Sleep(0.0)
+    Sleep(0.01)
+    Sleep(0.01)
     E.Signal(2)
     Sleep(0.1)
     Print("done")

@@ -52,7 +52,7 @@ Order(P:pair(a, b) where a:type, b:type)<suspends>:void =
             block:
                 defer: Print("order rush {X}")
                 Sleep(10.0)
-            Sleep(0.0)
+            Sleep(0.01)
         branch:
             defer: Print("order last {X}")
             Sleep(10.0)
@@ -89,7 +89,7 @@ Return(P:pair(a, b) where a:type, b:type)<suspends>:int =
             defer: Print("return child {X}")
             Sleep(10.0)
         set X = 7
-        Sleep(0.0)
+        Sleep(0.01)
         return X
     -1
 Nested(P:pair(a, b), Q:pair(c, d) where a:subtype(comparable), b:subtype(comparable), c:type, d:type)<suspends>:void =
@@ -123,7 +123,7 @@ Ordinary()<suspends>:void =
     branch:
         defer: Print("ordinary child cleanup")
         Sleep(10.0)
-    Sleep(0.0)
+    Sleep(0.01)
     Print("ordinary return")
 OrdinaryCaller(P:pair(a, b) where a:type, b:type)<suspends>:void =
     if (D := dup[P]):

@@ -95,7 +95,7 @@ the test runner's `FloatConstants` module that the files `using`; the
 survey's harness now counts them not translatable, as it counts the other
 `FloatConstants` cases.
 
-## Bitwise functions (not implemented)
+## Bitwise functions
 
 **What the Book says.** Ch. 4, "Bitwise Operations" and "Bit Shift
 Operations" (`04_operators.md:133-309`): `BitAnd`, `BitOr`, `BitXor` and
@@ -153,3 +153,47 @@ most `verse_vm_only` cases would become different results, as the 26
   differential fuzzers. This is the owner's decision; the unbounded
   `verse_vm_only` behaviour would need unbounded integers in Core and the
   runtime, which no part of openverse has.
+
+**The route taken: Verse Core's existing operations.** Both routes are
+honest: each gives the Book's result inside int64 and Core's overflow error
+outside. The primitives would add opcodes 65 to 70 to `openverse.h` and
+`load.c`, which the three QuickProof theorems (`arith_exact`,
+`loader_wellscoped`, `store_rollback_model`) pin: changing them needs the
+proofs replayed (`scripts/check-quickproof.sh`, which needs Docker and the
+QuickProof image), and until then the gate's pin check fails. The other
+route changes no pinned file, no proof, no format and no C, so it is the one
+that can be completed and checked here; the cost is time, not meaning.
+`BitNot(X)` is `-1 - X`, inline; the others are five helpers written in
+Verse (`OpenVerse/Front/Bitwise.lean`), added to a program that names one:
+
+- `BitAnd`, `BitOr`, `BitXor` take the operands' bits from the lowest up by
+  halving with `Floor(X / 2)` (toward minus infinity, so a negative
+  number's bits are its two's complement) and stop as soon as both
+  operands are 0 or -1, from where every bit is the sign's: the bits seen
+  are summed, and the rest, all the operation of the two signs, weigh
+  `-2^i` together. A call takes as many rounds as the operands' highest bit
+  that is not a sign bit, at most 63, each a dozen Core steps; every number
+  it computes is in range (the weight `-2^i` reaches at most `-2^63`).
+- `BitShiftLeft[X, N]` fails for `N < 0`; else it doubles `X` `N` times or
+  until it is 0. A doubling out of range is Core's overflow error, which a
+  result out of range always reaches and an in-range one never does (the
+  magnitudes grow), so `BitShiftLeft[-1, 63]` is `-2^63` and
+  `BitShiftLeft[5, 0x7FFFFFFFFFFFFFFF]` an error after 61 doublings, as the
+  `bp_vm_only` tests say.
+- `BitShiftRight[X, N]` fails for `N < 0`; else it halves `X` `N` times or
+  until it is 0 or -1, which halving keeps (`BitShiftRight[5,
+  0x7FFFFFFFFFFFFFFF]` is 0 after three rounds).
+
+They are soft built-ins, as `Clamp` and `Sgn` are (a program may define its
+own), and functions of one signature, so a program may name one as a value
+(`BuiltinValues`). Each argument is evaluated once, in order. A float
+argument is a type error (the tests' 3509). Out of range, the error is
+openverse's `error: overflow` (exit 2), where the Blueprint VM names
+`MathIntrinsicCallFailure`; the harness counts both as the runtime error
+the `bp_vm_only` cases expect. The 62 `verse_vm_only` cases stay
+different: they assume unbounded ints, whose own operands overflow here
+(`9223372036854775807 + 1`, `Pow2_64`), as the 26 `int`-precision cases do.
+`scripts/fuzz-bitwise.sh` (`scripts/gen-bitwise.py`) checks Lean and C
+against Python's unbounded `&`, `|`, `^`, `~`, `<<` and `>>` with the
+int64 range, including programs that end with the overflow error.
+

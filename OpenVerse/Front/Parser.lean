@@ -2431,6 +2431,14 @@ def textUsesRational (src : String) : Bool :=
 /-- A marker that the source may use `ReplaceAll` (#150). -/
 def replaceAllMarker : String := "$uses:replaceAll"
 
+/-- The functions the Book calls bitwise, by their names in a program. -/
+def bitwiseFunctions : List String :=
+  ["BitAnd", "BitOr", "BitXor", "BitNot", "BitShiftLeft", "BitShiftRight"]
+
+/-- A marker that the source may call a bitwise function (`BitNot` needs no
+    helper): the elaborator then adds the helpers (`Front/Bitwise.lean`). -/
+def bitwiseMarker : String := "$uses:bitwise"
+
 /-- Whether the source writes a qualifier other than `(super:)`: `(`, a
     name, `.` and names, or a path, then `:)` (`peekQual`'s shape), also in
     a string's interpolations. -/
@@ -2455,12 +2463,25 @@ partial def usesQualifiers (toks : Array Token) : Bool := Id.run do
       return true
   return false
 
+/-- Whether the source names a bitwise function that needs a helper (all
+    but `BitNot`), also in a string's interpolations. -/
+partial def usesBitwise (toks : Array Token) : Bool :=
+  toks.any fun t => match t.tok with
+    | .ident n => n != "BitNot" && bitwiseFunctions.contains n
+    | .str parts => parts.any fun
+      | .code src l c => match lex src l c with
+        | .ok inner => usesBitwise inner
+        | .error _ => false
+      | _ => false
+    | _ => false
+
 def withRatMarker (toks : Array Token) (tops : List STop) : List STop :=
   let p : Pos := { line := 0, col := 0 }
   let tops := if usesRational toks then tops ++ [.const p ratMarker [] none (.block p [])] else tops
   let tops := if usesQualifiers toks then tops ++ [.const p qualifierMarker [] none (.block p [])] else tops
-  if toks.any (·.identName? == some "ReplaceAll") then tops ++ [.const p replaceAllMarker [] none (.block p [])]
-  else tops
+  let tops := if toks.any (·.identName? == some "ReplaceAll") then tops ++ [.const p replaceAllMarker [] none (.block p [])]
+    else tops
+  if usesBitwise toks then tops ++ [.const p bitwiseMarker [] none (.block p [])] else tops
 
 /-- The definitions of a source file, and the marker of its `case` arms
     marked `@ignore_unreachable` (`ignoredArmsMarker`), if any. -/

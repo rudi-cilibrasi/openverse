@@ -6,14 +6,14 @@ Lazy(N:int)<computes><decides>:int =
     N>=0
     N|Lazy[N-1]
 Wait(N:int)<suspends>:int =
-    Sleep(0.0)
+    Sleep(0.01)
     N
 baseRunner := class:
     Offset:int=7
     Add(N:int):int=N+Offset
     Run(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<suspends>:void =
         for(A:=if(D:=dup[P])then(D.C|D.C+1)else 0,B:=if(E:=dup[Q])then(E.C|E.C+1)else 0):
-            Sleep(0.0)
+            Sleep(0.01)
             Print("method {Offset} {Add(A+B)}")
 runner := class(baseRunner){}
 Use(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<suspends>:void = runner{}.Run(P,Q)

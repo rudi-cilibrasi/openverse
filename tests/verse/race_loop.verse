@@ -7,7 +7,7 @@ Main()<suspends>:void =
         set I += 1
         W := race:
             block:
-                Sleep(0.0)
+                Sleep(0.01)
                 1
             block:
                 Sleep(1.0)

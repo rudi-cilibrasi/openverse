@@ -5,6 +5,7 @@ The 800-digit oracle retains even the smallest binary64 arguments in
 exp/ln formulas. Host math.sinh/cosh/... are deliberately not used.
 """
 from decimal import Decimal, localcontext
+from fractions import Fraction
 from pathlib import Path
 import math
 import random
@@ -75,6 +76,35 @@ def literal(x):
     return repr(x)
 
 
+def scale_of(want):
+    """The power of two that makes the expected value an integer near 2^60
+    (2^1074 for zero), so that ToString's six digits show every bit of a
+    result within a few ulps of it: multiplying by a power of two is exact."""
+    if not math.isfinite(want):
+        return 0
+    if want == 0:
+        return 1074
+    return 60 - math.frexp(want)[1]
+
+
+def scaled(expr, s):
+    """`expr` times 2^s, as a product of float literals each a power of two
+    of a normal magnitude."""
+    out = f'({expr})'
+    while s != 0:
+        k = max(-1000, min(1000, s))
+        out += f' * {repr(2.0 ** k)}'
+        s -= k
+    return out
+
+
+def unscale(line, s):
+    """The float a printed `scaled` value stands for."""
+    if line in ('NaN', 'Inf', '-Inf'):
+        return float(line.replace('Inf', 'inf').replace('NaN', 'nan'))
+    return float(Fraction(line) / Fraction(2) ** s)
+
+
 def bits(x):
     return struct.unpack('>Q', struct.pack('>d', x))[0]
 
@@ -131,7 +161,10 @@ def main():
         # Keep source/evaluator depth independent of the nightly case count.
         for offset in range(0, len(rows), 128):
             batch = rows[offset:offset + 128]
-            source = 'Main():void=\n' + ''.join(f'    Print("{{{e}}}")\n' for e, _, _ in batch)
+            # (ToString prints six digits after the point: each value is
+            # printed times a power of two, which shows all its bits)
+            source = 'Main():void=\n' + ''.join(f'    Print("{{{scaled(e, scale_of(w))}}}")\n'
+                                                for e, w, _ in batch)
             src, bc = tmp / 'p.verse', tmp / 'p.vbc'
             src.write_text(source)
             lean = subprocess.run([ROOT / '.lake/build/bin/openverse', 'run', src, '--emit', bc],
@@ -145,10 +178,11 @@ def main():
                 reason = 'output count differs from oracle'
             else:
                 for line, (expr, want, exact) in zip(lean.stdout.splitlines(), batch):
-                    actual = float(line)
+                    actual = unscale(line, scale_of(want))
                     good = (line == 'NaN') if math.isnan(want) else (actual == want) if math.isinf(want) else (
                         math.isfinite(actual) and abs(ordered(actual) - ordered(want)) <= (0 if exact else 2))
-                    if actual == 0 and line != '0.0':
+                    # (a zero prints without a sign: there is no negative zero)
+                    if actual == 0 and line != '0.000000':
                         good = False
                     if math.isfinite(actual):
                         if expr.startswith('Cosh(') and actual < 1:

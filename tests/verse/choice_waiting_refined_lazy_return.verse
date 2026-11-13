@@ -6,7 +6,7 @@ Lazy(N:int)<computes><decides>:int =
     N>=0
     N|Lazy[N-1]
 Wait(N:int)<suspends>:int =
-    Sleep(0.0)
+    Sleep(0.01)
     N
 Use(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<suspends>:int =
     var Total:int=0
@@ -16,7 +16,7 @@ Use(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<suspends>:int =
         defer:
             set Total+=10
             Print("cleanup {Total}")
-        Sleep(0.0)
+        Sleep(0.01)
         set Total+=B
         Print("lazy body {A} {B} {Total}")
         if(A=1,B=1)then return Total else A+B

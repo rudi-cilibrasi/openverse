@@ -4,7 +4,7 @@
 # spawn is allowed (it was refused as one in a failure context)
 Two(N:int):int = N | N + 1
 Shouter(N:int)<suspends>:void =
-    Sleep(0.0)
+    Sleep(0.01)
     Print("shout {N}")
 Kick():[]int =
     for (A0 := (Two(0) | Two(2)), A1 := (Two(0) | Two(2)), A2 := (Two(0) | Two(2)), A0 = 0, A1 = 0):

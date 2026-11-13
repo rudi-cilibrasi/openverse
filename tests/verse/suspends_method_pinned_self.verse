@@ -9,7 +9,7 @@ box(t:type) := class:
         Get()
 int_box := class(box(int)):
     Get<override>()<suspends>:int =
-        Sleep(0.0)
+        Sleep(0.01)
         V + 1
     Put<override>(X:int)<suspends>:void =
         Sleep(1.0)

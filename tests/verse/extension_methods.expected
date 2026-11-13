@@ -5,7 +5,7 @@ starts with H
 no first char
 int:42
 logic:true
-float:1.5
+float:1.500000
 char:c
 pair:1,2
 array of 3

@@ -12,7 +12,7 @@ First(N:int)<transacts>:int =
 Main()<suspends>:void =
     Print("first {First(1)}")
     for (Z := F(1), W := F(-1)):
-        Sleep(0.0)
+        Sleep(0.01)
         Print("z {Z} {W}")
     E := event(int){}
     for (Z := F(1), W := F(-1)):

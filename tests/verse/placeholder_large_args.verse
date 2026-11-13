@@ -8,7 +8,7 @@ i0(p0:type, p1:type) := interface:
 c1(t0:type) := class(i0(tuple(t0, t0), t0)):
     V:tuple(t0, t0)
     Get<override>(X:t0)<suspends>:tuple(t0, t0) =
-        Sleep(0.0)
+        Sleep(0.01)
         V
     Tag<override>():string = "c1"
 c2(u0:type) := class(c1(tuple(?u0, []u0))):

@@ -15,5 +15,5 @@ Main()<suspends>:void =
     E:=event(int){}
     T:=spawn{Observe(E)}
     Print("result {Use(dup(int){A:=1,B:=2},dup(string){A:="s",B:="t"},E)}")
-    Sleep(0.0)
+    Sleep(0.01)
     T.Await()

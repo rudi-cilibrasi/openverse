@@ -10,7 +10,7 @@ Run(P:pair(a, b) where a:type, b:type)<suspends>:int =
                 Print("late arm return")
                 return 99
             block:
-                Sleep(0.0)
+                Sleep(0.01)
                 1
         Print("late cast ended")
     Sleep(0.5)

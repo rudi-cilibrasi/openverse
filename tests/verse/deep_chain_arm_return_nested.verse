@@ -17,13 +17,13 @@ F()<suspends>:int =
             race:
                 Sleep(1.0)
                 block:
-                    Sleep(0.0)
+                    Sleep(0.01)
                     return 5
             1
     0
 Main()<suspends>:void =
     Print("F gave {F()}")
-    Sleep(0.0)
+    Sleep(0.01)
     Print("main after sleep")
     Sleep(0.2)
     Print("main done")

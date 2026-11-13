@@ -4,7 +4,7 @@ box(t:type,u:type):=class:
     Same(X:t):t=X
     Nested(X:[]t):[]t=X
     Failable(X:t)<decides>:t=block{false?;X}
-    Wait(X:[]t)<suspends>:[]t=block{Sleep(0.0);X}
+    Wait(X:[]t)<suspends>:[]t=block{Sleep(0.01);X}
     Generic(X:v where v:type):v=X
     Named(?X:t=V):t=X
 Main():void=

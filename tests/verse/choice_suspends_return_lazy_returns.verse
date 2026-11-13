@@ -14,7 +14,7 @@ Lazy(H:counter,N:int)<transacts><decides>:int =
     Print("lazy {N} {H.N}")
     N | Lazy[H,N-1]
 Single(P:pair(a,b),H:counter where a:type,b:type)<suspends>:int =
-    Sleep(0.0)
+    Sleep(0.01)
     var Total:int = 0
     defer: Print("single source {Total}")
     loop:
@@ -27,7 +27,7 @@ Single(P:pair(a,b),H:counter where a:type,b:type)<suspends>:int =
         break
     -1
 Double(P:pair(a,b),H:counter where a:type,b:type)<suspends>:int =
-    Sleep(0.0)
+    Sleep(0.01)
     var Total:int = 0
     defer: Print("double source {Total}")
     loop:

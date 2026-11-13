@@ -1,6 +1,6 @@
 # a loop of suspending calls reuses one frame per call site (#156)
 Step(I:int)<suspends>:int =
-    Sleep(0.0)
+    Sleep(0.01)
     I + 1
 Main()<suspends>:void =
     var I:int = 0

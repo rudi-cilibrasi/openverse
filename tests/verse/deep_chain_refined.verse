@@ -15,10 +15,10 @@ gb(t:type, u:type) := class(base(t)):
     Run<override>(N:int)<suspends>:t =
         defer:
             Print("gb {N} done")
-        Sleep(0.0)
+        Sleep(0.01)
         if (N = 0):
             for (I := 1..3):
-                Sleep(0.0)
+                Sleep(0.01)
             X
         else:
             Call(gb(t, u){X := X, Y := Y}, N - 1)

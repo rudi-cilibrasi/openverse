@@ -38,8 +38,8 @@ the sources disagree, the table records that disagreement.
 
 | Rule | Upstream evidence | Reference scheduler and trace evidence | Classification |
 | --- | --- | --- | --- |
-| Clock and positive delays | The Book uses simulation updates. Epic permits variable update durations, independent of rendering. Neither cited timing description specifies a fixed 30 Hz rounding rule. | A virtual 30 Hz clock skips idle ticks. Supported nonnegative finite delays use `max(1, Round(30*S))` after binary64 multiplication and ties-to-even rounding. In [sleep](../../tests/verse/scheduler_audit_sleep.verse), `Sleep(0.04)` completes with the first one-tick sleeper. | Explicit reference timing policy; no engine-rate claim. The previous language-table attribution of upward rounding to the Book was unsupported and is removed. |
-| Zero delay | The pinned Book's NextTick discussion permits same-tick resumption for `Sleep(0.0)`. Epic's Sleep page specifies the next update. | Zero always yields and resumes in the next virtual tick; a peer runs before resumption in [sleep](../../tests/verse/scheduler_audit_sleep.verse). | Matches the published Sleep description; the Book snapshot differs. |
+| Clock and positive delays | The Book uses simulation updates. Epic permits variable update durations, independent of rendering. Neither cited timing description specifies a fixed 30 Hz rate. The Book's API reference (`Sleep`, line 3939): "a sleep resumes on the first update at or after its deadline and never sooner than the next one. Short sleeps therefore round up". | A virtual 30 Hz clock skips idle ticks. Supported positive finite delays use `max(1, Ceil(30*S))` after binary64 multiplication: the first tick at or after the deadline ([the Book's rules](#the-books-scheduler-rules)). In [sleep](../../tests/verse/scheduler_audit_sleep.verse), `Sleep(0.04)` (1.2 ticks) completes at the second tick, after the first one-tick sleeper. | The API's rounding up; the 30 Hz rate is the reference clock's, no engine-rate claim. |
+| Zero delay | The pinned Book's NextTick discussion permits same-tick resumption for `Sleep(0.0)`; its tested ch. 14 examples have it complete at once. Epic's Sleep page and the Book's API reference specify the next update. | Zero completes at once, without yielding, as negative and NaN durations do ([the Book's rules](#sleep00-completes-at-once)); in [sleep](../../tests/verse/scheduler_audit_sleep.verse) the zero sleeper goes on before its peer starts. | The Book's tested examples; its prose and API differ. |
 | Negative, NaN and infinite delays | Epic describes negative durations as immediate and positive infinity as indefinite. The cited API does not specify NaN. | Negative/NaN durations return immediately; positive infinity never wakes. [Sleep](../../tests/verse/scheduler_audit_sleep.verse), [cancel](../../tests/verse/scheduler_audit_cancel.verse) and [deadlock](../../tests/verse/scheduler_audit_deadlock.verse) separate these cases. | Negative/infinite cases follow the API; NaN is a reference choice. |
 | Numeric limits | The cited timing sources give no matching finite cutoff or int64 accumulation limit. | The binary64 product `30*S` must be below `2^63`. Finite inputs outside that domain terminate immediately with `error: user`; they do not become infinite waits. Current time plus the rounded ticks uses checked int64 addition and terminates with `error: overflow` beyond the clock maximum. [Bounds](../../tests/verse/scheduler_audit_clock_bounds.verse) now completes across the former cutoff; [overflow](../../tests/verse/scheduler_audit_clock_overflow.verse) retains its deliberate overflow result. | Explicit bounded reference-clock policy ([#514](https://github.com/rudi-cilibrasi/openverse/issues/514)); not measured engine limits. |
 | Structured completion and ties | The Book and Epic tutorial describe sync waiting for all, race cancelling losers, and rush allowing unfinished work to continue. | Arms run to a wait/end in source order. Same-tick race completion chooses the earlier arm; an immediate winner prevents later arms from starting. [Ties](../../tests/verse/scheduler_audit_ties.verse) records winner and cleanup. | Common completion behavior; the exact tie/start/cleanup ordering here is the tested reference policy, not a measured engine trace. |
@@ -54,7 +54,7 @@ the sources disagree, the table records that disagreement.
 
 For a nonnegative finite binary64 input `S`, the scheduler first computes the
 binary64 product `P = fl(30*S)`. It requires `P < 2^63`, then uses
-`max(1, RoundEven(P))` ticks. The guard precedes integer conversion: a finite
+`max(1, Ceil(P))` ticks (until `feat/core-book-primitives`, `RoundEven(P)`). The guard precedes integer conversion: a finite
 out-of-range `Round` is an overflow error in Core, whereas this input-domain
 policy deliberately reports fatal `Err()` (`error: user`). It is not a
 `<decides>` failure and cannot be caught as a failed condition.
@@ -79,7 +79,8 @@ checked-int/heap proofs remain the trust boundary.
 
 Positive infinity alone is the intentional indefinite input. Negative
 values (including negative infinity) and NaNs retain their immediate
-reference behavior; both signed zeros and positive subnormals yield at
+reference behavior, as both signed zeros now do (the tested examples of
+ch. 14, [below](#sleep00-completes-at-once)); positive subnormals wait at
 least one tick. Infinite terminal deadlock and unsupported finite input
 share the generic `error: user` text, but differ observably: the
 [invalid finite race](../../tests/verse/clock_domain_fatal_first_unsupported.verse)
@@ -162,3 +163,129 @@ policies and public-source comparisons, not captured engine outputs. Core's
 `Eval.det`/`Runs.det` guarantees still concern a checked Core execution. VM
 agreement and frontend/model tests do not prove equivalence to an external
 scheduler or correctness of the entire lowering; see [CLAIMS.md](../CLAIMS.md).
+
+## The Book's scheduler rules
+
+The owner's rule is to follow the pinned Book where it and openverse
+disagree. Three scheduler readings were [designed in the readings
+audit](readings-audit.md#the-scheduler-rows); this section pins each from
+the Book (chapters under `docs/`, the API reference
+`docs/api/verse_runtime_api.html` by line, tests under `Tests/`) and says
+what openverse does now.
+
+### `Sleep(S)` rounds up
+
+- **API** (`Sleep`, line 3939): "For positive finite waits, resumption is
+  driven by the world's timer manager, so this measures game time and not
+  wall-clock time, and it is quantised to ticks: a sleep resumes on the
+  first update at or after its deadline and never sooner than the next
+  one. Short sleeps therefore round up, and a chain of them accumulates
+  error".
+- **Chapters and tests:** no tick rate, no rounding rule.
+- **openverse:** the deadline, in ticks of the reference clock's 30 a
+  second, is the binary64 product `30·S`, as before; the sleep wakes at the
+  first tick at or after it, `Ceil(30·S)` ticks later, at least one. (Until
+  now `Round`, ties to even.) `Sleep(0.04)` (1.2 ticks) and
+  `Sleep(0.049999999999999996)` (1.4999999999999998) take two ticks, not
+  one; `Sleep(0.15)` (4.5) five, not four; `Sleep(0.1)`, whose product
+  rounds to exactly 3.0 in binary64, still three. The bounded clock domain
+  (#514) is unchanged: products at or above 2^52 are integers, so the
+  largest supported duration and its ticks are the same.
+
+### `Sleep(0.0)` completes at once
+
+The Book disagrees with itself.
+
+- **Prose** (ch. 14): `14_concurrency.md:1210`, "`Sleep(0.0)      # One
+  frame, the smallest possible delay`"; `:1213-1219`, "While it does not
+  add actual delay, it serves two critical purposes. It creates a
+  suspension point, which is where cancellation gets checked, and it
+  yields control to other concurrent tasks, so that no single task can
+  monopolize execution"; `:1227-1228`, "Unlike `Sleep(0.0)` which yields
+  control and may resume in the same tick if no other work is pending".
+- **API** (`Sleep`, line 3939): "0.0 resumes on the next update and,
+  crucially, does yield, which is what makes it the correct body of a
+  per-frame coroutine loop".
+- **Tested examples** (ch. 14's `<!--versetest-->` blocks, each checking a
+  task's effects right after `spawn{…}` returns, with no tick between):
+  `<!-- 03 -->` (`:138-167`, a `sync` of three arms that each
+  `Sleep(0.0)`: "`Loaded.Ids = (1, 2, 3)`"), `<!-- 05 -->` (`:246-274`,
+  `Race.Winner = 2`), `<!-- 06 -->` (`:297-333`, "The square won"),
+  `<!-- 07 -->` (`:342-370`, `Won.Id = 2`), `<!-- 08 -->` (`:378-407`:
+  "`Sleep(0.0)                   # Completes at once, and wins`", "Arm two
+  wins on the first pass through the arm list, before arm three has been
+  entered even once"), `<!-- 09 -->` (`:438-485`, `rush` and `race`,
+  `Trail.Trace = 102`, `RaceLog.Trace = 2`), `<!-- 10 -->` (`:518-548`,
+  "Arm two never got to run, the code after the sync never ran, and 5 came
+  out") and `<!-- 11 -->` (`:555-588`, `Steps.PastSync = 1`). In each, every
+  `Sleep(0.0)` on the task's path completed without suspending: the
+  spawned task ran to its end within the `spawn`.
+- **Book tests** (`Tests/`): none call `Sleep(0.0)`.
+- **openverse:** the tested examples': `Sleep(0.0)` (and `-0.0`, which is
+  `0.0`) completes at once, without suspending, as a negative or NaN
+  duration does; it is no suspension point, so neither cancellation nor
+  other tasks get a turn there. Until now it always yielded, to the next
+  tick. A positive duration, however small, waits at least one tick
+  (`Sleep(0.01)` is one tick, rounded up). The audit had proposed a
+  narrower rule ("complete without yielding when no other task is
+  runnable at that point of a `race`'s first pass"); the examples `03`,
+  `10` and `11` show the same in a `sync` and in plain code, and openverse
+  has no notion of a task that is runnable without running it, so the rule
+  is the examples' without a condition. A loop whose only wait is
+  `Sleep(0.0)` never lets another task run (the API says the same of a
+  negative duration); a loop that should give way writes a positive one.
+
+### Awaiters run inside `Signal` (not built)
+
+- **API** (`event`, line 4346): waiting tasks are "resumed first, in the
+  order they suspended"; line 4510: "Signal returns before the resumed
+  tasks have finished", that is, after each has run to its next wait.
+- **Tests:** `Event.versetest:27` (one task's `sync`: an arm awaits four
+  times while its sibling signals four times in a loop that never waits,
+  and the awaiter receives `(1, 2, 3, 4)`: it runs inside each `Signal`);
+  `Bugs/FORT-1126351-RaceArmsDoNotStartAfterResolution.versetest:33` (an
+  arm's `E1.Signal()` resumes the arm awaiting `E1`, which wins the `race`
+  inside the `Signal`; the signalling arm goes on to its next wait, and the
+  arm after it never starts); `when.versetest:179-188` and
+  `Coroutines/Concurrency.versetest:1568-1580` (another task's awaiter has
+  run when `Signal` returns); `Coroutines/SpawnAndTask.versetest:318`
+  (awaiters of one task's end resume in the order they began waiting,
+  `A2C2B3`, not the arms' order). None of these is translatable by the
+  harness (the test runner's `CoroUtils`, or a `spawn` in an assertion,
+  which is a failure context), so no case moves either way.
+- **How many awaiters one `Signal` wakes:** ch. 14 says both "Each signal
+  delivers one value to each awaiting task" (`:1451-1452`) and "each
+  `Signal()` wakes exactly one awaiter" (`:1486-1488`); no test has two
+  awaiters of one event at one `Signal`. openverse keeps waking every
+  awaiter (the API's "waiting tasks", plural).
+- **openverse:** unchanged: `Signal` marks its awaiters woken and returns;
+  they go on when the scheduler next polls them, in its order, or, with
+  `--event-fifo` (#513), in the order they suspended, once the signalling
+  task waits. Both flags stay as they were: `--event-fifo` is the API's
+  order but not its timing, and the Book fixes the timing too, so making
+  it the default alone would be half the rule; `--signal-no-rollback`
+  (#515) stays opt-in, as the Book's tests have `Signal` succeed in
+  `<decides>` functions (`Event.versetest` 83, 117), which the default
+  (allowed, rolled back) does.
+- **The obstacle.** A suspended task is resumed only from its root, down
+  its chain of frames (DESIGN, "Concurrency: suspends functions as
+  frames"); a frame's suspension point is stored when it suspends. Inside
+  a `Signal`, the signalling task's own frames are running: the points
+  they hold are the old ones, so resuming its root again would re-run
+  what ran since. The awaiters of `Event.versetest:27` and FORT-1126351 are
+  arms of that same task, and an arm has no way to be resumed on its own:
+  its resume function takes the enclosing function's slots as arguments,
+  which only that function, mid-run, has. Building the rule needs every
+  arm, as every root, a resumption entry that reads all it needs from its
+  frame; each awaiter recording the innermost such strand it waits in;
+  `Signal` resuming each woken strand, in suspension order, unless it is
+  running, and the task's order (#513's drain) moved into it; and a
+  `race` resolved inside a `Signal` stopping its unstarted arms and
+  cancelling the started ones when the signalling arm next waits. That is
+  a change to the lowering of every suspends function (`Front/Suspend.lean`,
+  `Elab/Lowering.lean`), the scheduler models (`sched_gen*.py`,
+  `event_fifo.py`) and the FIFO machinery, which this work leaves for a
+  piece of its own. Running only the other tasks' awaiters inside
+  `Signal` (the drain exists) would land half of it: the same task's arms
+  would still wait for `Signal` to return.
+

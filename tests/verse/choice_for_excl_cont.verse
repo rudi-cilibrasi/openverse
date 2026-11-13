@@ -35,5 +35,5 @@ Main()<suspends>:void =
     # (a body that suspends cannot run in a failure context, and a
     # <suspends> function's effects are not a continuation's: copied)
     for (A := F(1), B := F(10)):
-        Sleep(0.0)
+        Sleep(0.01)
         Print("d {A} {B}")

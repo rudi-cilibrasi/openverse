@@ -8,7 +8,7 @@ leaf := class(node):
     K:int
     Run<override>(N:int)<suspends>:int =
         for (I := 1..K):
-            Sleep(0.0)
+            Sleep(0.01)
         N
 step := class(node):
     V:int
@@ -21,7 +21,7 @@ gstep(t:type) := class(node):
     X:t
     Next:node
     Run<override>(N:int)<suspends>:int =
-        Sleep(0.0)
+        Sleep(0.01)
         Next.Run(N) + 100
 Build(D:int, Tail:node):node =
     if (D = 0) then Tail else Build(D - 1, step{V := D, Next := Tail})

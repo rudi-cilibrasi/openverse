@@ -42,7 +42,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Enums | `name := enum:` / `enum{A, B}`, `name.A`, equality, `case` that needs no `_` when every value is named (an enumerator is its index in Verse Core); `enum<open>` may gain values, so a `case` on one needs `_` or a failure context (`<closed>` is the default) | ch. 9 |
 | Maps | `[k]v`, `map{k => v, …}` (a key given twice keeps its last value, at its last position), `M[k]` (fails on a missing key), `set M[k] = v` (insert or update; in Verse the key's reference is `<decides>`, the Book's API reference, so such a `set`, also as a path's last step, `set S.M[k] = v`, is written in a failure context, as the Book's tests do, `if (set M0[0] = 42)`, `(set Map[I] = I) or Err()`; its last key inserts, so it succeeds; its value is `v`), `set M[k] op= v` (fails on a missing key), `.Length`, `for (V : M)`, `for (K -> V : M)` in insertion order, `ConcatenateMaps(M1, M2)` (exactly two maps, ch. 3: more by chained calls; their pairs laid down in turn, as `map{…}` lays its own: a key both maps have takes the second map's value at the second map's place, the Book's API reference and `ConcatenateMaps.versetest` 21, 33), order-sensitive equality (a map is the array of its pairs in Verse Core) | §3, §9.3 |
 | Array methods | (also of a tuple of one element type, which is an array where one is expected: `('a', 'b', 'c').Slice[1]`) `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`, `A.RemoveFirstElement[x]`, `A.Remove[i, j]` (half-open), `A.ReplaceElement[i, x]`, `A.ReplaceFirstElement[x, y]`, `A.Insert[i, B]`, `A.Last[]`, `A.Last[n]` (the element n before the last) (all failable); `A.RemoveAllElements(x)`, `A.ReplaceAllElements(x, y)`, `A.ReplaceAll(Pattern, Replacement)` (contiguous subarrays, left to right, not overlapping; an empty pattern changes nothing), `Concatenate(A, B, …)` or `Concatenate(Arrays)` (#150) (never failing) | §9.1 |
-| Built-ins | `Print(s)`, `ToString(x)` (int, float, char, string), `Floor[F]`, `Ceil[F]`, `Round[F]`, `Int[F]` (of a float, failable), `Floor(R)`, `Ceil(R)` (of a rational or an int, never failing; `Floor(X / Y)` fails when `Y = 0`, as `X / Y` does), `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Clamp(Val, A, B)` (the median of the three, of ints or of floats, NaN ordering above +Inf), `Sgn(X)` (-1, 0 or 1 of an int or a float, NaN of NaN), `F.IsFinite[]` (as `IsFinite[F]`), `Err()`; the conversions of chars and code points as methods (see [char32](#char32)): `C.ToCodeUnit()`, `C.ToAsciiChar32[]` of a char, `C.ToCodePoint()`, `C.ToAsciiString()` of a char32, `N.ToChar[]`, `N.ToChar32[]` of an int | API reference |
+| Built-ins | `Print(s)`, `ToString(x)` (int, float, char, string), `Floor[F]`, `Ceil[F]`, `Round[F]`, `Int[F]` (of a float, failable), `Floor(R)`, `Ceil(R)` (of a rational or an int, never failing; `Floor(X / Y)` fails when `Y = 0`, as `X / Y` does), `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Clamp(Val, A, B)` (the median of the three, of ints or of floats, NaN ordering above +Inf), `Sgn(X)` (-1, 0 or 1 of an int or a float, NaN of NaN), `F.IsFinite[]` (as `IsFinite[F]`), `BitAnd(X, Y)`, `BitOr`, `BitXor`, `BitNot(X)`, `BitShiftLeft[X, N]`, `BitShiftRight[X, N]` (see [Bitwise functions](#bitwise-functions)), `Err()`; the conversions of chars and code points as methods (see [char32](#char32)): `C.ToCodeUnit()`, `C.ToAsciiChar32[]` of a char, `C.ToCodePoint()`, `C.ToAsciiString()` of a char32, `N.ToChar[]`, `N.ToChar32[]` of an int | API reference |
 | Modules | `name := module:` (nested), `M.F`, `A.B.F`, the types `M.c` and values `M.c{…}`, `(M:)F`, `using{M}` at file or module scope, `<public>` members (`<internal>` is the default); see [Modules](#modules) | ch. 16 |
 | Access | `<public>`, `<internal>` (the default), `<protected>`, `<private>`, `<scoped{M, …}>` and `S := scoped{…}`, `<epic_internal>`, on modules, their definitions, a class's members and constructor, and `var<w> X<r>:t`; checked where each use is written, and no definition exposes a less visible one; see [Access](#access) | ch. 12 |
 | Attributes | `@deprecated`, `@experimental`, `@available{MinUploadedAtFNVersion := N}`, custom attributes (a class below `attribute` with its scopes `@attribscope_…`, `@c{F := e}` or a constructor's `@f(…)`) before a definition, a member, a struct's field or an enum's value; `@ignore_unreachable` on an expression or a `case` arm: checked where the Book checks them, metadata but `@available`; see [Attributes](#attributes) | ch. 12 |
@@ -2349,7 +2349,7 @@ Area(R:float):float = 3.14159 * R * R
 
 Main():void =
     Count:int = 5
-    Print("{Area(2.0)} {Count * 1.5} {0.1 + 0.2}")   # 12.56636 7.5 0.30000000000000004
+    Print("{Area(2.0)} {Count * 1.5} {0.1 + 0.2}")   # 12.566360 7.500000 0.300000
     if (N := Round[2.5], M := Int[-1.7]) then Print("{N} {M}")   # 2 -1
     Print("{1.0 / 0.0} {0.0 / 0.0}")                 # Inf NaN
 ```
@@ -2382,9 +2382,18 @@ Main():void =
   replaces the built-in for every call, whatever the argument types. A local
   or a method may not take those names; a field may, and in its class's
   methods the name still means the built-in.
-- `ToString` gives the shortest decimal that reads back as the float, laid
-  out as Python's `repr` (`98.5`, `1.0`, `1e+16`, `1.5e-07`), and `Inf`,
-  `-Inf`, `NaN`.
+- `ToString`, and string interpolation, which calls it, give fixed point
+  with exactly six digits after the point (the Book's API and
+  `FloatToString.versetest`): the float's exact value rounded to a multiple
+  of 10^-6, a tie to the even digit (`98.500000`, `1.234568` for
+  `1.2345678901234567`, `0.007812` for `0.0078125`), every digit before the
+  point (`1.0e100` prints its exact binary value, 101 digits, then
+  `.000000`), a `-` whenever the float is negative, also when every digit
+  is zero (`-0.000000` for `-1.0e-300`; `-0.0` is `0.0`, which prints
+  `0.000000`), and `Inf`, `-Inf`, `NaN`. It is lossy: to show a value's
+  bits, print it times a power of two. (Until the Book's rule was adopted,
+  openverse printed the shortest decimal that reads back, `98.5`, as ch. 2's
+  example does; [the audit](research/readings-audit.md#tostring-of-a-float).)
 
 ### Scalar Math API inventory (#490)
 
@@ -2433,6 +2442,40 @@ are outside this scalar inventory. Existing mathematical built-ins retain
 their earlier effect handling; this change enforces `<reads>` on the new
 seven without changing those existing programs. The broader effect audit
 is tracked in #494; `<predicts>` is not currently enforced.
+
+## Bitwise functions
+
+The Book's ch. 4 ("Bitwise Operations", "Bit Shift Operations") and its
+API reference: of ints, on their two's complement bit patterns, "sign-extended
+forever to the left", on openverse's 64-bit ints (the Blueprint VM's: a
+result out of range is the overflow error, exit 2; [the pinned
+rules](research/book-library-functions.md#bitwise-functions)):
+
+```verse
+Main():void =
+    Print("{BitAnd(12, 10)} {BitOr(12, 10)} {BitXor(12, 10)} {BitNot(12)}")   # 8 14 6 -13
+    if (L := BitShiftLeft[-5, 2], R := BitShiftRight[-97, 5]) then Print("{L} {R}")   # -20 -4
+    if (not BitShiftLeft[5, -1]) then Print("a negative count fails")
+```
+
+- `BitAnd(X, Y)`, `BitOr(X, Y)`, `BitXor(X, Y)` and `BitNot(X)` (which is
+  `-X - 1`) never fail and are never out of range.
+- `BitShiftLeft[X, N]` is `X · 2^N` and `BitShiftRight[X, N]` is
+  `Floor(X / 2^N)` (an arithmetic shift: toward minus infinity, so 0 or -1
+  once every bit is shifted out, `BitShiftRight[-1, 1000]` is -1); both
+  fail when `N < 0`. A left shift out of range is the overflow error
+  (`BitShiftLeft[1, 63]`; `BitShiftLeft[-1, 63]` is the least int;
+  `BitShiftLeft[0, N]` is 0 for every `N ≥ 0`).
+- Each argument is evaluated once, in order; floats are refused. They are
+  soft built-ins, as `Clamp` is (a program may define its own), and of one
+  signature, so a program may name one as a value (`F(:int, :int):int`,
+  the shifts `<decides>`).
+- On VerseVM ints are unbounded and so are these; openverse's are not
+  (see [Readings](#readings-openverse-takes), `int` range), so the Book's
+  `verse_vm_only` cases with operands beyond 64 bits differ.
+- They are written in Verse with Verse Core's existing operations
+  (`Front/Bitwise.lean`; DESIGN.md, "Bitwise functions"): no Verse Core,
+  format or runtime change.
 
 ## rational
 
@@ -2994,9 +3037,13 @@ Main()<suspends>:void =
   `Main` goes on first, then each task in the order they were spawned, then
   again while a task ended, a `Signal` woke a task, or a task was cancelled
   (so that those waiting go on in the same tick). Arms that can go on in the same tick do so in source order. `Sleep(S)`
-  uses the binary64 product `T = 30·S` and ties-to-even `Round(T)`, at least
-  one tick, for a supported nonnegative finite input. It always yields,
-  including either signed zero or a positive subnormal. The product must
+  uses the binary64 product `T = 30·S` rounded up, `Ceil(T)`, at least
+  one tick, for a supported positive finite input, also a subnormal one:
+  a sleep wakes at the first tick at or after its deadline (the Book's API
+  reference). `Sleep(0.0)` (and `-0.0`, which is `0.0`) completes at once,
+  without suspending, as the Book's tested examples have it: it gives
+  neither other tasks nor a cancellation a turn, so a loop that should
+  give way sleeps a positive time (`Sleep(0.01)` is one tick). The product must
   be below `2^63`; the largest supported binary64 duration is exactly
   `307445734561825792.0` seconds, giving `2^63 − 2048` ticks. The next
   binary64 duration, `307445734561825856.0`, is outside this domain.
@@ -3047,7 +3094,7 @@ Main()<suspends>:void =
 | Inferring type arguments | not described | first-order matching against the expected result type, then the arguments; no subtyping other than `false` (matches anything) and `void` (accepts anything) |
 | A qualifier without a `using` | "A qualifier only says which `F` is meant among the ones already in scope" (ch. 10): `(Top.M:)F` with no `using` is unknown | the qualifier is found as any name is, then the name is looked up in exactly that scope: `(M:)F` is `M.F` (#145) |
 | A module's member `(M:)x` used bare in `M` beside an outer `x` | both are candidates, told apart by their parameters, else ambiguous (`ModuleDefinitions.versetest`, `vmodule` tests) | the inner one (only a qualified member may share an outer definition's name, [Shadowing](#shadowing)); in a class's code and for `(local:)`, where the tests refuse it, ambiguous |
-| `ToString` of a float | the API and the tests: fixed point with six decimals (`FloatToString.versetest`, `1.000000`); ch. 2's example: `98.5` (the change needs Core and the runtime: [the audit](research/readings-audit.md#tostring-of-a-float)) | the shortest decimal that reads back as the float, the closest of the shortest, in Python's `repr` layout (exponent at `≥ 1e16` and `< 1e-4`); `Inf`, `-Inf`, `NaN` |
+| `ToString` of a float | the API and the tests: fixed point with six decimals (`FloatToString.versetest`, `1.000000`); ch. 2's example: `98.5` (the Book disagrees with itself: [the audit](research/readings-audit.md#tostring-of-a-float)) | the API's and the tests': six digits after the point, the exact value rounded half to even, every integer digit, the sign kept (`-0.000000`); `Inf`, `-Inf`, `NaN`; interpolation calls `ToString` (ch. 2) ([float](#float)) |
 | `NaN < X` | `not (Nan < 1.0)`, `Nan = Nan` (ch. 1, ch. 2) | fails (IEEE: NaN orders with nothing); `NaN = NaN` succeeds (the Book) |
 | `=` between different types | "Comparisons between different types still compile, but they always fail" (ch. 4); the empty value is one value of `logic`, `void`, `tuple()`, options, arrays, strings and maps (ch. 2) | the Book's (see [Equality and the empty value](#equality-and-the-empty-value)), at every depth and in generic code; refused between type parameters, a tuple of them and a string, and types whose common values Verse Core cannot tell apart; in generic code, types Verse Core holds alike (a `char32` and an `int`) compare as Verse Core holds them |
 | `false` where a map is expected | prose: accepted (ch. 2); tests: refused (`Map.versetest` 343) | refused, as the tests (it equals an empty map) |
@@ -3061,18 +3108,17 @@ Main()<suspends>:void =
 | A `defer:` in a function with several values, or in a block of its code | not stated (ch. 7: it runs when its scope exits) | it runs as each value leaves the scope, after the value is computed and before the code after the call or the block, and at a `return` after the return's value; a call or a block whose clauses fail gives no value and runs none; in a `for`, what it does is part of that value's code, undone with it when a later filter rejects the value, whether the call is inlined or taken lazily (#283) |
 | A recursive function with several values whose only calls of itself are in failure contexts of its own code | not stated (the Verse Calculus: a call is its body) | inlined, as a function recursive only through another function that consumes it is (the contexts are functions of their own): where its clauses fail in a `for`'s clauses, what those clauses did since their last generator is undone with them, as for any inlined call, not kept as at a lazily taken call, which is a generator of its own (#283) |
 | Precedence of `\|` | (not in the Book) | below `+`, above the comparisons: `X = 1 \| 2` is `X = (1 \| 2)` (#208) |
-| `Sleep(0.0)` | "may resume in the same tick" (ch. 14), "One frame" (ch. 14); the API reference: it always yields; the tested ch. 14 example: it completes at once in a `race` ([the audit](research/readings-audit.md#the-scheduler-rows)) | always yields: resumes in the next tick (#156) |
-| `Sleep(S)` rounding | no fixed 30 Hz rounding rule in the pinned chapter or cited Epic timing description | binary64 `Round(30·S)`, ties to even, at least one tick: `Sleep(0.1)` stays at 3 ticks despite binary floats (#156); bounded inputs and checked clock accumulation follow the explicit reference policy above (#514) |
+| `Sleep(0.0)` | "may resume in the same tick" (ch. 14), "One frame" (ch. 14); the API reference: it always yields; the tested ch. 14 examples (`03`, `05` to `11`): it completes at once, in a `race`, a `sync` and plain code: the Book disagrees with itself ([the rules](research/scheduler-conformance.md#sleep00-completes-at-once)) | the tested examples': completes at once, without suspending, as a negative or NaN duration does |
+| `Sleep(S)` rounding | the API: "a sleep resumes on the first update at or after its deadline and never sooner than the next one. Short sleeps therefore round up"; no tick rate | the first tick at or after the deadline: the binary64 product `30·S` rounded up, at least one tick (`Sleep(0.04)` takes 2 ticks; `Sleep(0.1)`, whose product is exactly 3.0, 3); bounded inputs and checked clock accumulation follow the explicit reference policy above (#514) |
 | End of a program with tasks | not stated | the program ends when `Main` does; a `Main` that waits with no task able to run is an error (exit 2) (#156) |
 | Order of a `subscribable_event`'s functions | not stated (ch. 14's example lists them in subscription order) | subscription order; the tasks awaiting the event are woken first and go on after `Signal` returns (#210) |
-| Event waiter resumption | Epic's event/Signal API specifies suspension order | Main/spawn/source-arm scheduler order by default; with `--event-fifo`, suspension order across tasks and arms, after `Signal` returns and the signalling task waits; the default is undecided (#513) |
+| Event waiter resumption | the Book's API: awaiting tasks "resumed first, in the order they suspended", each until it waits again, before `Signal` returns; its tests have an awaiter run inside `Signal` (`Event.versetest:27`, FORT-1126351) | Main/spawn/source-arm scheduler order by default; with `--event-fifo`, suspension order across tasks and arms, after `Signal` returns and the signalling task waits (#513); running awaiters inside `Signal` is not built, [the obstacle](research/scheduler-conformance.md#awaiters-run-inside-signal-not-built) |
 | Signal in a failure context | the published Signal API describes no_rollback, alongside rendered transacts bits; versioned compiler behavior needs separate evidence | transactional Signal and callbacks are allowed and rolled back by default; with `--signal-no-rollback`, a program that may signal an event from a failure context is refused before it runs; the default is undecided (#515) |
 | Extent of a `<#>` comment | "everything indented by four spaces on subsequent lines" (§1.1) | the rest of the `<#>` line and every following line indented more than that line, whatever the amount (blank lines included); `<#>` may also follow code on a line |
 
 ## Not supported in v1
 
-`ToString` of rationals (see [rational](#rational)), float functions beyond those of [float](#float), the bitwise functions `BitAnd`, `BitOr`, `BitXor`, `BitNot`, `BitShiftLeft`, `BitShiftRight` (see [the pinned rules](research/book-library-functions.md#bitwise-functions-not-implemented)),
-the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
+`ToString` of rationals (see [rational](#rational)), float functions beyond those of [float](#float), the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, what [comparable](#comparable) lists as not yet, module paths `using{/Verse.org/…}` (accepted and ignored), paths as values and path qualifiers other than `(/Verse.org/Verse:)` of a built-in type, two members of one name in a class (`(c:)M` beside an inherited `M`, Book ch. 10), the
 specific overload/call gaps listed under [Overloading](#overloading), nested
 functions and lambdas (a lambda, `(X:int) => X`, `a => b`, parses, as the Book's tests have it, and is refused; see [release evidence and proposed design](research/closure-design.md)),

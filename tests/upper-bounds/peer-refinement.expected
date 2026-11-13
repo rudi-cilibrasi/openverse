@@ -4,6 +4,6 @@ interval 7
 precise 7
 refined comparable 7
 refined holder 7
-refined float 2.5
+refined float 2.500000
 inferred refinement 7
 inferred interval 7

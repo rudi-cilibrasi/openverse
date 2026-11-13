@@ -8,7 +8,7 @@ Run(P:pair(a,b),Q:pair(c,d),X:a where a:type,b:type,c:type,d:type)<suspends>:a =
         Sleep(0.1)
         set Total+=100
         Print("observer {Total}")
-    Sleep(0.0)
+    Sleep(0.01)
     if(D:=dup[P]):
         for(V:=if(E:=dup[Q])then(E.C|E.C+1)else 0):
             set Value=D.B
