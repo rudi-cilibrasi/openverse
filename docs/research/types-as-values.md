@@ -139,7 +139,11 @@ object, made by the front end with no Verse Core added
   VerseVM twin (:49) accepts: openverse keeps the case it agrees with. A
   comparison's operand takes its type from the other's only as a hint, so
   `False(int) = False(logic)` compares a `?int` and a `?logic`, as any two
-  comparable values (`TypeParam.versetest:59`).
+  comparable values (`TypeParam.versetest:59`). With source upper bounds
+  (#502, #610), a parameter `t:subtype(c)` or `t:castable_subtype(c)` the
+  function uses as a type is a bounded one, `where t:subtype(c)`
+  (`FORT-1059276.versetest:6`; `ParametricTypes.versetest` 1305-1329,
+  `u:subtype(t)` of an earlier type argument).
 - **`concrete_subtype(comparable)` and `concrete_subtype(any)`**: built, by
   this design. Each is an interface below `type` that the value of a
   `<concrete>` class implements, of `concrete_subtype(comparable)` only one

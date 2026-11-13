@@ -5,9 +5,11 @@
   False(logic)`, TypeParam.versetest 57-60; the design is in
   docs/research/types-as-values.md).
 
-  A function's parameter `t:type` whose name the function uses as a type,
-  or not at all, is a type parameter whose argument the call writes. The
-  function is generic over `t` (`where t:type`), as if written so; the
+  A function's parameter `t:type` whose name the function uses as a type
+  is a type parameter whose argument the call writes, and so is one
+  `t:subtype(c)` or `t:castable_subtype(c)`, a bounded one (#502). The
+  function is generic over `t` (`where t:type`, `where t:subtype(c)`), as if
+  written so; the
   parameter, in its place, becomes `$typeArgument:t`, of type `?t`, which
   nothing reads; and a call's argument in its place, a type as written
   (`int`, `logic`, a class's or a struct's name, `c(int)`,
@@ -37,14 +39,31 @@ partial def writtenType? : SExpr → Option STy
   | .app _ (.ident _ n) as false => (as.mapM writtenType?).map (.app n)
   | _ => none
 
+/-- Whether a parameter's type makes it a type argument's: `type`, or a
+    bound a type parameter may have, `subtype(c)`, `castable_subtype(c)`
+    (#502; the Book's tests, `FORT-1059276.versetest:6`,
+    `ParametricTypes.versetest` 1305-1329). -/
+def typeArgumentKind : STy → Bool
+  | .name "type" => true
+  | .app k [_] => k == "subtype" || k == "castable_subtype"
+  | _ => false
+
+/-- The type parameter a type argument's parameter `v:k` is: `where v:type`,
+    or bounded as its type says. -/
+def typeParamOf (p : Pos) (v : String) : STy → TParam
+  | .app "subtype" [a] => TParam.withUpperBound p v a
+  | .app "castable_subtype" [a] => TParam.withMetatype p v "castable_subtype" a
+  | _ => { pos := p, name := v, constraint := "type" }
+
 /-- The positions of a function's parameters that are type arguments, with
-    their names: `t:type`, not named, that the function uses as a type (in
-    its other parameters' types, its result's, its type parameters' bounds
-    or its body's declarations) and not as a value. -/
+    their names: `t:type` (or `t:subtype(c)`, `t:castable_subtype(c)`), not
+    named, that the function uses as a type (in its other parameters' types,
+    its result's, its type parameters' bounds or its body's declarations)
+    and not as a value. -/
 def typeArgumentsOf (ps : List SParam) (tps : List TParam) (r : STy) (b : SExpr) : List (Nat × String) :=
   let types : List STy := r :: ps.map (·.ty) ++ tps.filterMap (·.upperBound) ++ TypeValues.declTys b
   ps.zipIdx.filterMap fun (q, i) =>
-    if q.ty != .name "type" || q.named || q.default.isSome then none else
+    if !typeArgumentKind q.ty || q.named || q.default.isSome then none else
     let t := q.name
     if !types.any (·.mentions t) || (TypeValues.exprValues b).contains t then none else some (i, t)
 
@@ -109,7 +128,7 @@ def desugar (tops : List STop) : Except String (List STop) := do
     match t with
     | .fn p n ps tps specs r b =>
       let places := (fns.lookup n).getD []
-      let tps' := tps ++ places.map fun (_, v) => ({ pos := p, name := v, constraint := "type" } : TParam)
+      let tps' := tps ++ places.map fun (i, v) => typeParamOf p v (ps.getD i default).ty
       let ps' := ps.zipIdx.map fun (q, i) =>
         if places.any (·.1 == i) then { q with name := paramPrefix ++ q.name, ty := .opt (.name q.name) } else q
       let names := tps'.map (·.name)

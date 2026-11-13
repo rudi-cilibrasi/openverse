@@ -2264,7 +2264,11 @@ Main():void =
   tests) is a type parameter whose argument the call writes:
   `FalseOption(int)`, `Pair(int, 1, 2)` with `Pair(t:type, X:t, Y:t)`. The
   function is generic over `t`, so checked once, and the call passes the
-  type's witness, as a generic call does. The argument is a type as written:
+  type's witness, as a generic call does. A parameter `t:subtype(c)` or
+  `t:castable_subtype(c)` used so is a bounded one (`where t:subtype(c)`,
+  [Parametric functions](#parametric-functions), "Upper bounds"): `Count(t:subtype(shape),
+  Xs:[]t)`, called `Count(square, …)`; a type outside the bound is refused,
+  as for a bounded type parameter. The argument is a type as written:
   a type's name (`int`, `logic`, a class's, a struct's) or a parametric type
   applied (`c(int)`, `tuple(int, float)`); `[]int` and `?int` are not yet
   written as arguments. Refused: a value there, a type parameter there (the

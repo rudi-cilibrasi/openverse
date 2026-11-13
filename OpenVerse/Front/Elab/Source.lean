@@ -728,7 +728,10 @@ def inlineSource (allTops0r : List STop) (requests : Requests) (admitted : Admit
         throw s!"{p.show}: internal: invalid subtype dictionary request"
     | _ => throw "internal: a subtype dictionary request must be a class"
   let resolved := requests.subtypes ++ loopTops ++ resolved
-  let needsSubtype := allTops0r.any UpperBounds.hasBounds || !requests.subtypes.isEmpty ||
+  -- (bounds as written, or a bounded type given as an argument's,
+  -- `TypeArguments`)
+  let needsSubtype := allTops0r.any UpperBounds.hasBounds || resolved.any UpperBounds.hasBounds ||
+    !requests.subtypes.isEmpty ||
     -- (the box of a type parameter's value is its comparable bound's evidence)
     !requests.boxes.isEmpty ||
     resolved.any (·.usesType SubtypeEvidence.family)
