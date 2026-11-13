@@ -1320,9 +1320,11 @@ Main():void =
   as any function is (types, effects, `<decides>`), with each choice read
   as any of its alternatives.
 
-  A recursive one (that calls itself, directly or not) is not inlined.
-  One shaped as a generator is taken lazily (#246): it calls no other
-  function with several values, its clauses have no choice, and its last
+  A recursive one (that calls itself, directly or not, other than in a
+  failure context of its code that takes the call's values, below) is not
+  inlined. One shaped as a generator is taken lazily (#246): it calls no
+  other function with several values (but in such a failure context), its
+  clauses have no choice, and its last
   expression is a choice, or an `if … else …` whose branches are choices or
   values, each alternative a value with no choice in it or a whole call of
   the function itself. A branch that is an `if` with no choice and no call
@@ -1410,7 +1412,12 @@ Main():void =
   function's own values are being taken, and the call's code takes its own
   in turn (#283). What a rejected attempt does is undone, and what the
   succeeding one does stays, as in any condition; a `for` keeps what each of
-  its iterations does, as any `for` does:
+  its iterations does, as any `for` does. The context is a function of its
+  own, called where it is, as a function that took the call's values would
+  be: so a function whose only calls of itself are in such contexts is
+  inlined, its recursion going through that function, as it does through
+  any function that consumes it (`F(N:int):int = if (T(N) > 0) then 1 else 0`
+  called by `T`):
 
   ```verse
   T(N:int)<transacts>:int =
@@ -2120,5 +2127,5 @@ Main()<suspends>:void =
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), the
 specific overload/call gaps listed under [Overloading](#overloading), nested
-functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice) (the choice points in sequence that recursive functions with several values with effects may not have yet, listed there), concurrency beyond [Concurrency](#concurrency), and the unsupported
+functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice) (the choice points that recursive functions with several values with effects may not have yet: a call of the function in a field of a class's construction, and a call of another function with several values outside a failure context of its code that takes its values; listed there), concurrency beyond [Concurrency](#concurrency), and the unsupported
 effect/construction contracts listed under [Effect contracts](#effect-contracts).

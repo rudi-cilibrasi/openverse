@@ -1016,9 +1016,12 @@ refusals in `inlineMulti`, `checkEager` with its round of `Requests.lazy`,
 and `Requests.eager`. It would also change semantics: values on demand, so an
 infinite effect-free one stops where the first success is taken, and an
 error in a value never reached no longer stops the program. It first needs
-the lazy route to cover what only `F$all` does now: the choice points in
-sequence above that are not yet taken lazily, a recursive one calling a
-function with several values outside its group, polymorphic recursion in a
+the lazy route to cover what only `F$all` does now: the choice point above
+that is not yet taken lazily (a class's construction), a recursive one
+calling a function with several values outside its group other than in a
+consumer of its code (route: that function's non-recursive body inlined into
+the group's code before its normal form, so that its choices are the
+group's points, `liftPoints?` expanding its `$inline`), polymorphic recursion in a
 mutual group (`Requests.eager`), and an `any`-valued returning group whose tail
 erases its values (`erasesRecursive`).
 
