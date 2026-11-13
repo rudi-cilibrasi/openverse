@@ -1,0 +1,4 @@
+tuple upper 1 s
+tuple callback 2 c
+tuple escaped 3 e
+tuple comparable 4 k

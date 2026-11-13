@@ -1,0 +1,7 @@
+winner
+signalled
+loser 1 11
+cleanup loser 11
+task 1 12
+cleanup task 12
+done precise 12

@@ -1,0 +1,10 @@
+arithmetic 7 12
+rollback 12
+chain 3 123
+short 0
+division rollback 0
+cleanup 12
+task 7 12
+winner
+cleanup 12
+cancel 12

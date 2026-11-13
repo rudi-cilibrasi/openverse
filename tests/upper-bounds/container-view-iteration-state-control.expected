@@ -1,0 +1,8 @@
+walk 6 2 4 1
+rollback 2 4 1
+failed source 0 1
+filter 2 2
+step 12
+winner
+cleanup 2
+cancel 12 4 2 a b
