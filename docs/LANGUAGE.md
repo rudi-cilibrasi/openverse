@@ -1121,9 +1121,10 @@ entity := class:
   one is no attribute (`@int`, `@c` of a plain class). An attribute class
   and its constructors are named in attributes only.
 - **On an expression**, only `@ignore_unreachable` is allowed
-  (`Y:int = (@ignore_unreachable return X)`): it is the expression. On a
-  `case` arm it lets the arm be one never reached
-  (`@ignore_unreachable E.A => 9` after another `E.A`), which then never
+  (`F(@ignore_unreachable return)`): it is the expression, and the code it
+  makes unreachable is no [warning](#warnings). On a `case` arm it lets the
+  arm be one never reached (`@ignore_unreachable E.A => 9` after another
+  `E.A`, or a `_` after every value of a closed enum), which then never
   runs.
 - **Meaning.** Attributes are metadata: a program cannot read them (ch. 12:
   "there is no Verse API to query attributes at runtime"), and none changes
@@ -1132,9 +1133,10 @@ entity := class:
   N}` is in them unless `N` is `4294967295` or more, which no upload
   reaches, and then it and a module's members are taken out (a use of it
   is an unknown name). `@experimental` definitions may be used, as in a
-  package that allows them. A use of a `@deprecated` definition from code
-  that is not deprecated is a warning in the Book (2009); openverse finds
-  such uses and does not report them yet (there is no warning channel).
+  package that allows them. A use of a `@deprecated` definition (or of a
+  member of a deprecated module or enum) from code that is not deprecated,
+  and an override of a deprecated member that is not, is a
+  [warning](#warnings), `X is deprecated: Message` (the Book's 2009).
 
 ## Mutation, macros, tooling
 

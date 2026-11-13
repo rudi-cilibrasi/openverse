@@ -581,14 +581,18 @@ partial def parseAttrs : PM (List (Pos × SExpr)) := do
 partial def parseExpr (stop : Nat) : PM SExpr := do
   let t ← peekT
   let t1 ← peekT 1
-  -- `@ignore_unreachable e` is `e`: openverse refuses no code it cannot
-  -- reach but a `case`'s arms (`parseCase`); other attributes on an
+  -- `@ignore_unreachable e` is `e`, whose position is recorded: no warning
+  -- of code never reached follows it (`Reachability`), and a `case` arm
+  -- may be one never reached (`parseCase`); other attributes on an
   -- expression or a local definition, `$attributes`, are refused by
   -- `Attributes.apply` (Book of Verse tests: 3604)
   if t.isSym "@" then
     let attrs ← parseAttrs
     let e ← parseExpr stop
-    if attrs.all (fun | (_, .ident _ "ignore_unreachable") => true | _ => false) then return e
+    if attrs.all (fun | (_, .ident _ "ignore_unreachable") => true | _ => false) then
+      -- (recorded for the warnings of code never reached, `Reachability`)
+      modify fun st => { st with ignoredArms := st.ignoredArms.push e.pos }
+      return e
     return .app t.pos (.ident t.pos "$attributes") (attrs.map (·.2) ++ [e]) false
   if t.isKw "var" then
     bump

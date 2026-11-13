@@ -2539,7 +2539,7 @@ partial def elabCase (ctx : Ctx) (p : Pos) (scrut : SExpr) (arms : List (Option 
         -- "closed, with default, with coverage = unreachable default warning")
         if let .enum n := rs.ty then
           let k := ((ctx.types.enums.lookup n).getD []).length
-          if !ctx.types.openEnums.contains n && k > 0 && (List.range k).all fun i =>
+          if !ignored && !ctx.types.openEnums.contains n && k > 0 && (List.range k).all fun i =>
               results.any fun (pat, _) => match pat with
                 | some (.lit (.int j)) => j == i
                 | _ => false then

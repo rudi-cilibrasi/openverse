@@ -166,10 +166,8 @@ changes which definitions a program has.
   `experimental.versetest:4`). `DiscontinuedAtFNVersion` is checked but
   never reached, as no package has an upload version.
 - **Deprecation warnings.** openverse finds the uses of deprecated
-  definitions (`Attributes.deprecations`); they are reported once the
-  compiler has a channel for warnings (the readings audit's), until then
-  they are found and not shown, and the 23 Book cases that expect 2009 are
-  counted as accepted refusals.
+  definitions (`Attributes.deprecations`) by the names the code writes, and
+  reports each as a warning (2009) through the compiler's warnings (#606).
 - **A use through overloads.** A name that is also an overload that is not
   deprecated is not judged before the elaboration picks one
   (`deprecated.versetest:413`).
@@ -181,9 +179,10 @@ changes which definitions a program has.
   and as a record after the definition, `$attr:L_C`, whose specifiers are
   the definition's place, name and position and whose value is the
   attribute as written; a member's are given out after its class. On an
-  expression, `@ignore_unreachable e` is `e`, a marked `case` arm is
-  recorded by position (`TyEnv.ignoredArms`), and any other attribute wraps
-  the expression in `$attributes`.
+  expression, `@ignore_unreachable e` is `e`, recorded by position, as is a
+  marked `case` arm (`TyEnv.ignoredArms`; `Reachability` takes what such
+  code makes unreachable as reported), and any other attribute wraps the
+  expression in `$attributes`.
 - **`Attributes.apply`**, the first step of `elabProgram`, reads the
   records and checks each attribute (the rules above), removes the records
   and the `@name` specifiers, refuses `$attributes`, takes out the
