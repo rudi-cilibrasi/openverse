@@ -190,6 +190,16 @@ def peekQual : PM (Option (String × Nat)) := do
   if (← peekT k).isSym ":" && (← peekT (k + 1)).isSym ")" then return some (q, k + 2)
   return none
 
+/-- Whether a construction's fields start here: a `{` on this line, or a
+    `:` that ends its line before an indented block (an archetype block,
+    Book of Verse tests: `X := class1:` and `Property1 := 0` indented). -/
+def fieldsFollow (stop : Nat) : PM Bool := do
+  let b ← peekT
+  if b.bol then return false
+  if b.isSym "{" then return true
+  let n ← peekT 1
+  return b.isSym ":" && n.bol && n.col > stop && !n.isEof
+
 mutual
 partial def parseType : PM STy := do
   let t ← parseTypeAtom
@@ -503,20 +513,19 @@ partial def parsePostfix (stop : Nat) : PM SExpr := do
                 ts := #[← parseType]
                 while (← peekT).isSym "," do bump; ts := ts.push (← parseType)
               expectSym ")"
-              let b ← peekT
-              if b.isSym "{" && !b.offside stop && !b.bol then bump; return some (n, ts.toList)
+              if ← fieldsFollow stop then return some (n, ts.toList)
               return none) <|> pure none
           if r.isNone then set saved
           pure r
         | _ => pure none
       match cons? with
-      | some (n, ts) => e := .construct t.pos n ts (← parseArgs "}")
+      | some (n, ts) => e := .construct t.pos n ts (← parseFields)
       | none => bump; e := .app t.pos e (← parseArgs ")") false
-    else if t.isSym "{" && e.dottedName?.isSome then
-      -- `point{X := 1, Y := 2}`: a struct value (`M.point{…}`: a module's)
-      bump
+    else if (t.isSym "{" || t.isSym ":") && e.dottedName?.isSome && (← fieldsFollow stop) then
+      -- `point{X := 1, Y := 2}` or `point:` and the fields indented: a
+      -- struct value (`M.point{…}`: a module's)
       let name := e.dottedName?.getD ""
-      e := .construct t.pos name [] (← parseArgs "}")
+      e := .construct t.pos name [] (← parseFields)
     else if t.isSym "[" then
       bump; e := .app t.pos e (← parseArgs "]") true
     else if t.isSym "." then
@@ -533,7 +542,21 @@ partial def parsePostfix (stop : Nat) : PM SExpr := do
   return e
 
 /-- Comma-separated arguments up to `close` (consumed). Newlines are whitespace. -/
-partial def parseArgs (close : String) : PM (List SExpr) := do
+partial def parseArgs (close : String) : PM (List SExpr) := parseItems close false
+
+/-- A construction's field initializers, at the `{` or `:` that
+    `fieldsFollow` found: up to the `}`, separated by commas, or by `;` and
+    new lines, not both (Book of Verse tests, error 3552); or the indented
+    block after the `:` (an archetype block). -/
+partial def parseFields : PM (List SExpr) := do
+  let b ← peekT
+  bump
+  if b.isSym "{" then parseItems "}" true else parseIndented (← peekT).col
+
+/-- Items up to `close` (consumed), separated by commas, or, with `lines`,
+    by `;` and new lines instead (a construction's fields); new lines are
+    whitespace otherwise. -/
+partial def parseItems (close : String) (lines : Bool) : PM (List SExpr) := do
   if (← peekT).isSym close then bump; return []
   -- `?Name := e` is a named argument, kept as a declaration of `?Name`
   let arg : PM SExpr := do
@@ -545,11 +568,20 @@ partial def parseArgs (close : String) : PM (List SExpr) := do
       return .decl t.pos ("?" ++ n) none false (← parseExpr 0)
     parseExpr 0
   let mut args := #[← arg]
+  let mut commas := false
+  let mut semis := false
   repeat
     let t ← peekT
-    if t.isSym "," then bump; args := args.push (← arg)
-    else if t.isSym close then bump; break
+    if t.isSym close then bump; break
+    if t.isSym "," then bump; commas := true
+    else if lines && (t.isSym ";" || (t.bol && !t.isEof)) then
+      if t.isSym ";" then bump
+      semis := true
     else perr t s!"expected ',' or '{close}', found {t.tok.describe}"
+    if commas && semis then perr t "cannot mix ',' and ';' separators"
+    -- (a `;` or new line may end the items: `}` on its own line)
+    if semis && (← peekT).isSym close then bump; break
+    args := args.push (← arg)
   return args.toList
 
 /-- Elements of `( … )` after the `(`: separated by `,` (a tuple) or by `;` /
@@ -981,10 +1013,8 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
       for _ in [0:k] do bump
       let m ← expectIdent
       -- (`(M:)c{…}`: a construction of the module's `c`, #147)
-      let b ← peekT
-      if b.isSym "{" && !b.bol then
-        bump
-        return .construct t.pos s!"{q}.{m}" [] (← parseArgs "}")
+      if ← fieldsFollow stop then
+        return .construct t.pos s!"{q}.{m}" [] (← parseFields)
       return .member t.pos (.ident t.pos "Self") s!"({q}:){m}"
     bump
     let (items, commas) ← parseParenItems
