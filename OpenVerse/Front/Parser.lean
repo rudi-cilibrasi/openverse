@@ -1365,6 +1365,44 @@ def withBinds (binds : List SExpr) (body : SExpr) : SExpr :=
     | .block p items => .block p (binds ++ items)
     | e => .block e.pos (binds ++ [e])
 
+/-- At a definition's start: `(R:t).`, the receiver of an extension method
+    `(R:t).M(…)` (Book of Verse ch. 6, "Extension Methods"), when a group in
+    parentheses followed by `.` and a name starts here, through the `.`: the
+    receiver and the type parameters a `where` in its parentheses declares
+    (`(X:[]t where t:type)`). The receiver is one parameter, which may be
+    unnamed (`(:t)`); `(A:int, B:int)` and `()` are refused (ch. 6: "You
+    cannot use destructured parameter syntax"), and so is a named one or a
+    default. -/
+def parseExtensionHead? : PM (Option (SParam × List TParam)) := do
+  let t ← peekT
+  if !t.isSym "(" then return none
+  -- (the group's closing parenthesis, then `.` and a name on its line)
+  let mut depth : Nat := 0
+  let mut k := 0
+  repeat
+    let u ← peekT k
+    if u.isEof then return none
+    if u.isSym "(" then depth := depth + 1
+    else if u.isSym ")" then
+      depth := depth - 1
+      if depth == 0 then break
+    k := k + 1
+  let dot ← peekT (k + 1)
+  if !dot.isSym "." || dot.bol || ((← peekT (k + 2)).identName?).isNone then return none
+  bump
+  let (ps, tps, binds) ← parseParamList
+  let some r := (if ps.size == 1 && binds.isEmpty then ps[0]? else none)
+    | perr t "the receiver of an extension method is one parameter, (Name:type) or (:type): a tuple's type is written tuple(…) (Book of Verse ch. 6)"
+  if r.named || r.default.isSome then
+    perr t "the receiver of an extension method is one parameter, (Name:type) or (:type), not a named one or one with a default"
+  expectSym "."
+  -- (an unnamed receiver's name, which no program can write)
+  return some ({ r with name := if r.name.startsWith "$unnamed" then "$receiver" else r.name }, tps.toList)
+
+/-- Why `(R:t).M` must be followed by its parameters. -/
+def noExtensionFields : String :=
+  "an extension method takes parameters, (R:t).M(…): there are no extension fields (Book of Verse ch. 6)"
+
 /-- The body of a method defined at column `c`: on the following lines,
     indented more than `c`, braced (from the next line, at `c`), or inline. -/
 def parseFnBodyAt (c : Nat) : PM SExpr := do
@@ -1452,11 +1490,16 @@ partial def parseClassItem (c : Nat) :
                           pure (some q)
       | none => pure none
     else pure none
-  let name ← match qual with
-    | some q => do pure s!"({q}:){← expectIdent}"
-    | none => expectIdent
+  -- `(R:t).M(…)`: an extension method in the class, its method `$ext:M`, whose
+  -- first parameter is the receiver (Book of Verse ch. 6)
+  let ext ← if isVar || qual.isSome then pure none else parseExtensionHead?
+  let name ← match qual, ext with
+    | some q, _ => do pure s!"({q}:){← expectIdent}"
+    | none, some _ => do pure (extensionName (← expectIdent))
+    | none, none => expectIdent
   let pre ← parseSpecs
   if qual.isSome && (← peekT).isSym ":" then perr (← peekT) "only a method can be qualified with (interface:)"
+  if ext.isSome && !(← peekT).isSym "(" then perr (← peekT) noExtensionFields
   if (← peekT).isSym ":" then
     -- a field, `Name<override>:t = e` giving an inherited field a new default
     bump
@@ -1468,15 +1511,18 @@ partial def parseClassItem (c : Nat) :
   if isVar then perr t "expected a field after var"
   expectSym "("
   let (ps, tps, binds) ← parseParamList
+  let ps := (ext.map (·.1)).toList ++ ps.toList
+  let tps := ((ext.map (·.2)).getD []) ++ tps.toList
   let effs ← parseSpecs
   expectSym ":"
   let ret ← parseType
   let a ← peekT
   if a.isSym "=" || a.isSym ":=" then
     bump
-    return .inr (.fn t.pos name ps.toList tps.toList (pre ++ effs) ret (withBinds binds (← parseFnBodyAt c)))
+    return .inr (.fn t.pos name ps tps (pre ++ effs) ret (withBinds binds (← parseFnBodyAt c)))
+  if ext.isSome then perr a "expected '=' before the extension method's body"
   -- no body: an abstract method
-  return .inr (.fn t.pos name ps.toList tps.toList (pre ++ effs ++ ["$abstract"]) ret (.block t.pos []))
+  return .inr (.fn t.pos name ps tps (pre ++ effs ++ ["$abstract"]) ret (.block t.pos []))
 
 /-- `class` or `interface` (after the keyword): specifiers, the parents
     `(base, interface₁, …)`, then `:` + items or `{ items }`. -/
@@ -1643,10 +1689,16 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
           continue
         bump
       continue
-    let name0 ← expectIdent
+    -- `(R:t).M(…)`: an extension method, the function `$ext:M` whose first
+    -- parameter is the receiver (Book of Verse ch. 6)
+    let ext ← parseExtensionHead?
+    let name0 ← match ext with
+      | some _ => do pure (extensionName (← expectIdent))
+      | none => expectIdent
     let name := pfx ++ name0
     let pre ← parseSpecs
     let n ← peekT
+    if ext.isSome && !n.isSym "(" then perr n noExtensionFields
     if pre.contains "public" then tops := tops.push (marker t.pos s!"$public:{name}")
     -- `name := module:` and its definitions, indented (Book of Verse ch. 16)
     if n.isSym ":=" && (← peekT 1).isKw "module" then
@@ -1675,6 +1727,12 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
     if n.isSym "(" then
       bump
       let (ps, tps, binds) ← parseParamList
+      if ext.isSome && (pre.contains "constructor" || (← peekT).isSym ":=") then
+        perr (← peekT) "an extension method is a function, (R:t).M(…)<effects>:type = body (Book of Verse ch. 6)"
+      -- (an extension method's receiver, then its parameters)
+      let (ps, tps) := match ext with
+        | some (r, rtps) => (#[r] ++ ps, rtps.toArray ++ tps)
+        | none => (ps, tps)
       if pre.contains "constructor" then
         -- `Name<constructor>(params)<effects> := cls:` and its items (#11):
         -- an `fn` with the effect `$constructor:cls`, expanded with the classes

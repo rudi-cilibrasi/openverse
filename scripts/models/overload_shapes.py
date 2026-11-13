@@ -59,7 +59,7 @@ CASES = [
     ('type{_(:int)<computes>:int}', '?int', True, 'Scalar', 'option{N}'),
     ('type{_(:int)<computes>:int}', 'tuple(int,int)', True, 'Scalar', '(N,N)'),
 ]
-CONTEXTS = ['top', 'named', 'generic', 'method', 'qualified', 'constructor']
+CONTEXTS = ['top', 'named', 'generic', 'method', 'qualified', 'constructor', 'extension']
 PERIOD = len(CASES) * len(CONTEXTS) * 2
 
 
@@ -126,6 +126,12 @@ Scalar(X:int)<computes>:int=X
         if context == 'qualified':
             calls.append(f'Print(Obj.(j:)F({va}))')
             expected.append('J')
+    elif context == 'extension':
+        # extension methods (Book of Verse ch. 6), overloaded by their
+        # receiver's type, which a type parameter's where may follow
+        for ty, label in [(ta, 'A'), (tb, 'B')]:
+            declarations.append(f'(X:{ty}{where(tp)}).F({"Hint:t" if open_t else ""}):string="{label}"')
+        calls = [f'Print(({value}).F({n if open_t else ""}))' for value in [va, vb]]
     else:
         header += 'out:=class{Label:string}\n'
         declarations = [f'Make<constructor>(X:{ty}{",Hint:t" if open_t else ""}{where(tp)}) := out:\n    Label:="{label}"'

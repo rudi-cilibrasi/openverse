@@ -14,7 +14,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 
 **Contents**
 
-- The language: [Supported](#supported) · [Source profiles](#source-profiles) · [Source text](#source-text) · [Parametric functions](#parametric-functions) · [Function values](#function-values) · [defer](#defer) · [Overloading](#overloading) · [Parametric structs](#parametric-structs) · [Classes](#classes) · [Mutation, macros, tooling](#mutation-macros-tooling) · [Choice](#choice)
+- The language: [Supported](#supported) · [Source profiles](#source-profiles) · [Source text](#source-text) · [Parametric functions](#parametric-functions) · [Function values](#function-values) · [Extension methods](#extension-methods) · [defer](#defer) · [Overloading](#overloading) · [Parametric structs](#parametric-structs) · [Classes](#classes) · [Mutation, macros, tooling](#mutation-macros-tooling) · [Choice](#choice)
 - More types: [any](#any) · [Refinement types](#refinement-types) · [Type aliases](#type-aliases) · [float](#float) · [rational](#rational) · [char32](#char32)
 - Programs: [Modules](#modules) · [Programs of several files](#programs-of-several-files) · [Concurrency](#concurrency)
 - [Readings openverse takes](#readings-openverse-takes) · [Not supported in v1](#not-supported-in-v1)
@@ -34,6 +34,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Control | `if`/`else if`/`else` (all styles: the conditions in `(…)`, followed by a body or `then`; or as `{…}`, `:` and a block, or `.` and an expression, followed by `then` and a branch, or by nothing, which is the clause macro `if{c}` (see [Mutation, macros, tooling](#mutation-macros-tooling)): `if:`…`then:`, `if:`…`else:`, `if. c then. a else. b`; `for` likewise, with `do`), `for` with `X : array`, `I -> X : array`, `X := a..b`, filters, bindings, several generators (cartesian product), and with none, failable clauses that run the body at most once (clauses of literals only, `for(X := array{1, 2})`, are refused: `X : array{1, 2}` iterates), `loop`/`break`, `return` (in a function's body: not in a constant's value or a field's default, which no function encloses), `case` with literal patterns and `_` (an arm after `_`, or with an earlier arm's pattern, is never reached and refused, ch. 9) | ch. 7 |
 | Choice | `a \| b \| …` with several values in spatial order, in a clause of an `if` condition, `first{…}`, `option{…}`, `logic{…}`, `not` or `or` (the first success) or of a `for` (all of them), also inside expressions (`(1 \| 2) + (10 \| 20)`, `X = 1 \| 2`, `X > 0 and (1 \| 2)`, `M? or (1 \| 2)`); see [Choice](#choice) (#208) | (the Verse Calculus) |
 | Functions | a parameter may be unnamed, `F(:int):void = {}`, as in function types (the body cannot name it; so may a parametric type's, `t(:type) := class{}`); a parameter may destructure a tuple, `Func(A:int, (B:int, C:int), D:int)`, to any depth: it is a parameter of the tuple type whose names the body sees (see [the rules](research/tuple-parameters.md); named parameters inside such a group are not supported); a tuple argument expands into parameters (`Describe(MyTuple)`); positional arguments pack into a single tuple parameter, including `tuple()` and singleton tuples; several arguments make a single array parameter (`Sum(1, 2, 3)`), including generic, overloaded, method and spawned calls (#134, #140, #501; nested fields retain their shape, and empty/singleton arrays use explicit array values); recursion, mutual recursion, `<decides>` (called with `F[…]`; other functions with `F(…)`), named parameters `?P:t = default` passed as `?P := e` (positional, then named as written, then defaults; a default may use the parameters before it, and a method's default the method's fields; a call dispatched to an override evaluates that override's own default for an omitted argument; a default is evaluated at the call, its effects counting as the caller's, and cannot return, break or use itself), the heap effects `<computes>`, `<reads>`, `<writes>`, `<allocates>`, `<transacts>` (checked, see [Classes](#classes)), unsupported effect contracts are diagnosed before lowering (see [Effect contracts](#effect-contracts)) | ch. 6, 13 |
+| Extension methods | `(R:t).M(…)<effects>:r = body`, at the top level, in a module or in a class, on a receiver of any type (`(:t)` unnamed; a `where` in its parentheses for a generic one), called `X.M(…)`, or `X.M[…]` when `<decides>`; overloaded by the receiver's type and the parameters', scoped like functions, never values; see [Extension methods](#extension-methods) | ch. 6 |
 | Parametric functions | `F(X:t, … where t:type, u:subtype(comparable))`: type parameters in parameter types, the result type and local declarations; type arguments inferred at each call (see [Parametric functions](#parametric-functions)) | Types: where clauses |
 | Structs | `name := struct:` with typed fields and defaults, `name{F := e, …}` (each field given at most once, evaluated in declaration order; separated by commas, or by `;` and new lines, not both; or as an indented block after `name:`, an archetype block; the type may be parenthesized, `(pair(int)){…}`), `S.F`, `set S.F = e` / `op=`, structural equality (a struct is the tuple of its fields in Verse Core) | ch. 9 |
 | Parametric structs | `pair(t:type, u:type) := struct:`, the type `pair(int, string)`, values `pair(int, string){First := 1, Second := "a"}` (or `pair{…}` where the expected type gives the type arguments); see [Parametric structs](#parametric-structs) | ch. 9 |
@@ -394,12 +395,84 @@ Main():void =
   `Max`, `Floor`, `Ceil`, `ArcTan`, `Clamp`, `Sgn`, `ToString`), generic
   (`Concatenate`, `ConcatenateMaps`) or names a program cannot define
   (`Quotient`, `Mod`, `Print`, `Err`).
+- Extension methods cannot be used as values ([Extension methods](#extension-methods)).
 - Overloaded functions and methods cannot be used as values (Book of Verse
   ch. 6, "Capture"), with or without named parameters. Local function
   declarations and lambda expressions are unsupported. The pinned Book marks nested functions unreleased and arrow
   lambdas unsupported; this is not a versioned UEFN compatibility result.
   See the [closure design and release evidence](research/closure-design.md)
   for the proposed capture/lifetime rules and implementation gates.
+
+## Extension methods
+
+An extension method adds a method to a type without changing the type
+(Book of Verse ch. 6, "Extension Methods"; the rules, quoted with the
+Book's tests, are [pinned here](research/extension-methods.md)):
+
+```verse
+(Value:int).Double()<computes>:int = Value * 2
+(Text:string).Wrap(Open:string, ?Close:string = ">"):string = "{Open}{Text}{Close}"
+(Xs:[]t where t:subtype(comparable)).Count(Y:t):int = …
+Main():void =
+    Print("{7.Double()} {"a".Wrap("<")} {array{1, 2, 1}.Count(1)}")   # 14 <a> 2
+```
+
+- **One rule.** `(R:t).M(params)<effects>:r = body` is the function
+  `$ext:M(R:t, params)<effects>:r = body`: an ordinary function whose first
+  parameter is the receiver, under a name no program can write. So `M(X)`
+  does not call it and `X.M` is no value of it ("Extension methods must be
+  called"), and everything else is a function's: overloads, told apart by
+  the receiver's type and the parameters' by the rules of
+  [Overloading](#overloading) (`(A:[]int).F()` beside `(A:[int]int).F()` is
+  refused: the empty map is an array); a `where` in the receiver's
+  parentheses or after the parameters; named parameters and defaults; a
+  tuple argument spread over the parameters after the receiver
+  (`Origin.Translate(Delta)`); effects, `<decides>` and the `[…]` it needs;
+  several values (`(I:int).Around():int = I - 1 | I | I + 1` in a `for`);
+  `<suspends>` and `spawn{X.M()}`.
+- **The receiver** is one parameter, named or not (`(:t)`), of any type: a
+  scalar, a string, a tuple (`tuple(int, int)`, `tuple()`), an array, a map,
+  an option, a class, an interface, a struct, an enum, a type parameter.
+  Two parameters, `(A:int, B:int).M()`, none, `().M()`, a named one and a
+  default are refused, and so is `(R:t).M:t`: there are no extension
+  fields. `M` cannot be a [reserved name](#reserved-names).
+- **Scope.** A call `X.M(…)` finds `$ext:M` as a function's name is found
+  ([Modules](#modules)): in the call's module and those around it, innermost
+  first, then in the modules they open with `using`, `<public>` ones from
+  outside. The call is then `$ext:M(X, …)`, `X` evaluated once, before the
+  arguments. An extension method in a class is a method of the class, a
+  closure over `Self`'s fields (`game_manager`'s `(Score:int).Scaled()`
+  reads its `Multiplier`), which the class's methods call as `X.M(…)`.
+- **The receiver's own members.** When `X`'s type has a member `M` of its
+  own (a field, a method, inherited ones included, a built-in method of an
+  array, a char, a number or a task), the call is the member's, unless only
+  the extension method fits the call; one that fits both is refused as
+  ambiguous, as two overloads would be. So a field `Q` of one class and an
+  extension method `Q()` of another meet nowhere, `box{}.Put(1)` calls the
+  method `Put(I:int)` and `box{}.Put("a")` the extension `(B:box).Put(S:string)`,
+  and an extension method on a class `c` and the method of a class below
+  `c` that a call fits both are ambiguous. An extension method on a class
+  or an interface with the parameters of one of its methods, own or
+  inherited, is refused where it is defined (the Book: "cannot have the
+  same signature as methods defined directly in classes or interfaces").
+- **In a method**, a bare call `M(…)` whose name an extension method in
+  scope has is `Self.M(…)` when only the extension method fits it with
+  `Self`; otherwise it keeps its meaning, and it is ambiguous when both fit
+  (the Book's tests: a function `DoSomething2()` and an extension method
+  `DoSomething2` of `Self`'s class).
+- **Static.** The extension method a call takes is chosen by the
+  receiver's static type, and nothing overrides it.
+- **Built-in methods.** The conversions of chars and numbers are extension
+  methods in the Book's Runtime API (`(Byte:char).ToCodeUnit()`), and the
+  array methods are "the array extension `Last`" (ch. 16). They are members
+  of their receivers' types here, compiled inline as before, so a program's
+  extension method of their name applies to other types, and one that takes
+  the same receiver makes a call ambiguous.
+- **Not supported:** a qualified extension method, `X.(Utils:)Shout()` or
+  `(P:player).(/Verse.org/M:)F()` (qualified names); `<override>` on one,
+  which the Book does not describe; the receiver typed from its context
+  where it has no type of its own (`map{}.RemoveKey[0]` for a generic
+  `(Input:[int]u where u:type)`).
 
 ## defer
 
@@ -493,6 +566,9 @@ take an overloaded function's name either.
 - **Qualified implementations** (#125). `(i:)M<override>(…)` implements
   the overload of `i`'s `M` with its parameter list (as an override takes
   its method's), and `X.(i:)M(…)` picks among `i`'s overloads.
+- **Extension methods** overload as functions do, the receiver their first
+  parameter ([Extension methods](#extension-methods)); a call takes one of
+  them or the receiver type's own member of the name, whichever it fits.
 - **Constructors.** Constructor names may overload, including generic
   constructors, defaults and delegation. The arguments select one overload.
 - **Entry point.** `Main` must have one definition under the OpenVerse CLI's
@@ -2195,6 +2271,9 @@ Main():void =
   each module of a `using{A.B}`. Members are `<internal>` by default:
   visible in their module and its submodules. A name's overloads are all
   `<public>` or all internal.
+- An extension method `(R:t).M(…)` of a module is found by calls `X.M(…)`
+  as its members' names are, `<public>` from outside
+  ([Extension methods](#extension-methods)).
 - Verse does not allow shadowing. A local, parameter or class member
   (inherited ones included) named like a visible module or module member
   (its own module's, or an open module's) is an error.

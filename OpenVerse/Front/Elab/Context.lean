@@ -193,7 +193,9 @@ def Sig.hasReceiver (s : Sig) : Bool :=
   s.pnames.head? == some "$Self" || (s.pnames.head? == some "Self" &&
     match s.params.head? with
     | some (.struct owner _) => s.name.startsWith (owner ++ ".")
-    | _ => false)
+    | _ => false) ||
+  -- (an extension method's receiver, its first parameter, Book of Verse ch. 6)
+  ((extensionMethod? s.name).isSome && !s.name.contains '.')
 
 /-- Default-dispatch helpers are private forwarding functions, with defaults
     evaluated in the selected implementation's own type context. -/
@@ -1226,12 +1228,15 @@ def Ctx.concurrencyView (ctx : Ctx) (p : Pos) (derived : Ty) (member : String) :
     | _ => false
   ctx.selectValueView p derived (ctx.memberViews derived member ++ intrinsic) s!"member '{member}'"
 
+/-- The methods of an array (Book of Verse §9.1, `elabMethod`). -/
+def arrayMethods : List String :=
+  ["Slice", "Find", "RemoveFirstElement", "RemoveElement", "Remove", "RemoveAllElements",
+   "ReplaceFirstElement", "ReplaceElement", "ReplaceAllElements", "ReplaceAll", "Insert", "Last"]
+
 def Ctx.boundView (ctx : Ctx) (p : Pos) (derived : Ty) (member : String) : Except String (Option Ty) := do
   let .param .. := derived | return none
   let container ← ctx.containerView p derived (fun
-    | .arr _ => ["Length", "Slice", "Find", "RemoveFirstElement", "RemoveElement", "Remove",
-        "RemoveAllElements", "ReplaceFirstElement", "ReplaceElement", "ReplaceAllElements",
-        "ReplaceAll", "Insert", "Last"].contains member
+    | .arr _ => member == "Length" || arrayMethods.contains member
     | .map .. => member == "Length"
     | _ => false) s!"member '{member}'"
   let candidates := ctx.memberViews derived member
@@ -2345,6 +2350,13 @@ def utf8Of (tc : Nat) : EM Expr := do
         .assign r2 (m (.local r) 4096), .assign d (q (.local r2) 64), .assign e (m (.local r2) 64)]) four
       (.prim .userErr []))))
 
+/-- Whether `m` is a method of `t`'s that `scalarMethod?` compiles, and
+    whether it can fail. -/
+def scalarMethodFails? : Ty → String → Option Bool
+  | .char, "ToCodeUnit" | .char32, "ToCodePoint" | .char32, "ToAsciiString" => some false
+  | .char, "ToAsciiChar32" | .int, "ToChar" | .int, "ToChar32" | .float, "IsFinite" => some true
+  | _, _ => none
+
 /-- The conversions of chars and code points, and `IsFinite` of a float, as
     methods of their receivers: of a char, `C.ToCodeUnit()` (0 to 255) and
     `C.ToAsciiChar32[]` (failing above 127); of a char32, `C.ToCodePoint()`
@@ -2359,11 +2371,7 @@ def utf8Of (tc : Nat) : EM Expr := do
 def scalarMethod? (p : Pos) (r0 : R) (m : String) (args : List SExpr) (bracket : Bool) :
     EM (Option R) := do
   let r := widenR (← get).env r0
-  let decides? : Option Bool := match r.ty, m with
-    | .char, "ToCodeUnit" | .char32, "ToCodePoint" | .char32, "ToAsciiString" => some false
-    | .char, "ToAsciiChar32" | .int, "ToChar" | .int, "ToChar32" | .float, "IsFinite" => some true
-    | _, _ => none
-  let some decides := decides? | return none
+  let some decides := scalarMethodFails? r.ty m | return none
   let call := if decides then s!"X.{m}[]" else s!"X.{m}()"
   if !args.isEmpty then eerr p s!"{m} takes no arguments: call it with {call}"
   if decides != bracket then
@@ -2384,6 +2392,39 @@ def scalarMethod? (p : Pos) (r0 : R) (m : String) (args : List SExpr) (bracket :
   | "ToAsciiChar32" =>
     return some ⟨.seq first (.seq (p2 .lt v (.lit (.char 128))) (← codeUnitOf tv)), .char32⟩
   | _ => return some ⟨.prim .fisFinite [r.e], .float⟩
+
+/-- Whether values of type `t` have a member `m` of their own, which a call
+    `X.M(…)` of an extension method in scope takes instead (Book of Verse
+    ch. 6): a field or a method of a class, an interface or a struct, an
+    inherited one included; `Length` of an array or a map; a method of an
+    array, or of a tuple of one element type, which is an array there
+    (`elabMethod`); a method of a char, a char32, an int or a float
+    (`scalarMethod?`); `Await`, `Signal` and `Cancel` of the concurrency
+    types; or one that a type parameter's bound gives. -/
+def Ctx.hasOwnMember (ctx : Ctx) (p : Pos) (t : Ty) (m : String) : Bool :=
+  match (widenR ctx.types ⟨.lit .void, t⟩).ty with
+  | .struct c targs =>
+    ctx.hasMethod c m || ((ctx.types.methodOverloads.lookup m).getD []).any (ctx.hasMethod c ·) ||
+      (ctx.types.fields c targs).any (·.1 == m) ||
+      (["Await", "Signal", "Cancel"].contains m && (c == "$subev0" ||
+        ["task", "event", "sticky_event", "subscribable_event"].any (ctx.types.concurrencyName · == c)))
+  | .arr _ => m == "Length" || arrayMethods.contains m
+  | .map .. => m == "Length"
+  | .tup (t0 :: ts) => ts.all (· == t0) && arrayMethods.contains m
+  | t@(.param ..) => match ctx.boundView p t m, ctx.concurrencyView p t m with
+    | .ok none, .ok none => false
+    | _, _ => true
+  | t => (scalarMethodFails? t m).isSome
+
+/-- `X.M` of an extension method `M`, not called (Book of Verse ch. 6:
+    "Extension methods must be called"). -/
+def extensionNoValue (m : String) : String :=
+  s!"{m} is an extension method, which must be called, X.{m}(…): it is no value (Book of Verse ch. 6)"
+
+/-- Whether the program has an extension method `M` (`extensionName`),
+    anywhere: `X.M` without a call is then refused as such. -/
+def Ctx.extensionNamed (ctx : Ctx) (m : String) : Bool :=
+  ctx.sigs.any fun s => extensionMethod? s.name == some m
 
 /-- A Verse Core type that several front-end types have: one with an
     `int` (also a char32 or an enum), a tuple (also a struct), or a type

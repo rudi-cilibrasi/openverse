@@ -96,6 +96,8 @@ def checkReservedNames (tops : List STop) : Except String Unit := do
   for t in tops do
     for (p, n) in t.definedNames do
       let n := (n.splitOn "::").getLast?.getD n
+      -- (an extension method's, `M` of its function `$ext:M`)
+      let n := (extensionMethod? n).getD n
       if reservedNames.contains n then throw s!"{p.show}: '{n}' is reserved: no definition can take it"
 
 mutual
