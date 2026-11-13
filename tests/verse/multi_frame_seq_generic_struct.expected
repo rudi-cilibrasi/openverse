@@ -1,0 +1,14 @@
+build 2
+count 7
+build 1
+count 7
+v s 7
+v s 7
+sum 2
+sum 1
+v 630
+v 631
+sum 2
+sum 1
+taken 630
+exit=0

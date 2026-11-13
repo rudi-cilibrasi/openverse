@@ -930,9 +930,15 @@ code after it, which is its frame.
   its declaration order, `and`'s operands) is reached by the rule the lifter
   uses for a choice there: the first statement with one is lifted
   (`liftPoints?`, `liftClause`, each call of the group marked `$point` so
-  the lifter binds it as it binds a choice), then decomposed again. The
-  struct field orders come from the source (`inlineMulti`), for non-generic
-  structs, as the elaborator gives the lifter.
+  the lifter binds it as it binds a choice), then decomposed again. A
+  `set`'s or a `var`'s value that is a choice with such a call as one
+  alternative, which the lifter keeps as a binding of its own, is bound
+  first as `normClauses` binds one (`setClauses`: the path's prefix, for
+  `op=` the old value, then the choice), as for the elaborator's clauses. The
+  struct field orders come from the source (`inlineMulti`), as the
+  elaborator gives the lifter; a generic struct's too, since its
+  construction names its type arguments (`pair(int){…}`), so the fields'
+  expected types are known where they are bound before the point.
 - An `if` in an expression whose conditions have no point and whose
   branches have one (`ifPoint`; the right of `or` as its `if`; one the
   lifter would bind as an exclusive choice, `$branchChoice`, is bound as
@@ -953,17 +959,55 @@ code after it, which is its frame.
   `void`, so it is a value with a frame as any choice's alternative is. Alone
   in its leaf, that code is the leaf's path code instead (`$returnTail`).
 
+**Consumers in a group's own code (#283).** A call of a function with
+several values, the group's or another's, in a failure context of the
+group's code (an `if`'s conditions; the operand of `not`, `option{…}`,
+`logic{…}` or `first{…}`; the left of `or`) or in a `for` of it is no choice
+point of the group: that context consumes the call, taking its first success
+(or the `for` all its values) while the group's values are being taken. The group's code is a template inlined where it is
+consumed, so such a consumer would need the template inside itself. It is a
+consumer like any other instead, in a function of its own:
+- `inlineFns` (for a group taken lazily, one not computable) makes each
+  outermost one a function, `G$nestL_C` (`Choice.nestFns`), whose body is the
+  consumer as written: its clauses under `first{…}`, giving the names they
+  bind (an operand's value bound to a name, `valueOf`), or the `for`, giving
+  its value; then the final values of the group's `var`s they set, copied in
+  as `$in` parameters as `FirstLift`'s are. It has the group's effects,
+  `<decides>` for a condition's, and for a `for`'s when the `for` can fail
+  (its body fails it), which the noting elaboration notes too
+  (`$noteFails`). The group's code calls
+  it where the consumer was, a plain call, binds those names from its result
+  and sets those `var`s again. A `for` with such a call anywhere in it moves
+  whole, so a condition in its body with one moves with it.
+- There the call is compiled as any consumer compiles one: inlined, taken by
+  the lazy loop, or by `FirstLift`'s functions where it has effects; and the
+  group's code in it calls the same function again. So a group whose only
+  recursion went through such a consumer is no longer recursive and is
+  inlined as any function with several values; one that still is keeps the
+  group machine, and its code has no consumer of itself in it. The functions
+  are analysed again with the consumers made calls (`nestDone`), and checked
+  with their bodies as written (`checking`).
+- The function takes the names its clauses use that the group's code binds
+  (`Consumer.caps`), and the group's type parameters their types mention.
+  Their types, and those of what it gives, are the elaborator's: as for the
+  families of methods' uses, an elaboration notes them (`$noteTypes`, by
+  `nestKey`, `Requests.nested`, tier 1). Until then the group's functions
+  are kept with one value (`pending`), their calls as written, their bodies
+  for checking noting the types where the consumers are (`noteConsumers`;
+  calls of overloads' functions as written, `unpickOverloads`, for the
+  elaborator to pick again), and `Ctx.failabilityKnown` is false.
+- Effect-free groups computed at the call keep `F$all`, which takes such a
+  consumer as any of its `for`s does, so that programs that compiled before
+  compile byte for byte as before.
+
 Not yet (#283), each refused with a message, and the route each would take:
-- A call of the group in a condition (an `if`'s, `not`'s, the left of
-  `or`) or a loop: there it is a consumer of the group nested in the group's
-  own code, which takes its first success or all its values while the
-  group's are being taken, not a choice point of it. The group's code is a
-  template inlined where it is consumed; a consumer inside it would need
-  the template inside itself. Route: the group as functions of its own,
-  called from its own code, as `FirstLift` makes them for one consumer.
-- A construction of a class or a generic struct with a point in a field:
-  the lifter keeps those (`$noLift`) for any choice, as their fields'
-  order is known only to the elaborator.
+- A construction of a class with a point in a field: the lifter keeps it
+  (`$noLift`), as the class's layout (its supers' fields first, an
+  interface's fields where each class places them, `<override>` defaults) is
+  known only to the elaborator (`TyEnv.fields`). Route: the field orders of
+  the classes a group's code constructs noted by an earlier elaboration, as
+  the consumers' types are (`Requests.nested`), or that layout computed
+  from the source by the elaborator's own rule, shared with it.
 
 With all of those, `F$all` would be needed by no shape and kept, if at all, only as
 an optimisation of effect-free ones. Deleting it (the owner's decision,
@@ -974,9 +1018,12 @@ refusals in `inlineMulti`, `checkEager` with its round of `Requests.lazy`,
 and `Requests.eager`. It would also change semantics: values on demand, so an
 infinite effect-free one stops where the first success is taken, and an
 error in a value never reached no longer stops the program. It first needs
-the lazy route to cover what only `F$all` does now: the choice points in
-sequence above that are not yet taken lazily, a recursive one calling a
-function with several values outside its group, polymorphic recursion in a
+the lazy route to cover what only `F$all` does now: the choice point above
+that is not yet taken lazily (a class's construction), a recursive one
+calling a function with several values outside its group other than in a
+consumer of its code (route: that function's non-recursive body inlined into
+the group's code before its normal form, so that its choices are the
+group's points, `liftPoints?` expanding its `$inline`), polymorphic recursion in a
 mutual group (`Requests.eager`), and an `any`-valued returning group whose tail
 erases its values (`erasesRecursive`).
 

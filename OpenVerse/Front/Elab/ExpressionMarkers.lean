@@ -47,6 +47,13 @@ partial def elabExprMarkersWith
     elabE (ds.foldl (fun c d => match d with
       | .app _ (.ident _ "$defer") [body] false => c.withDefer body
       | _ => c) ctx) e exp
+  | .app _ (.ident _ "$noteFails") [.str _ [.text key], e] false => do
+    -- (#283) a `for` in a recursive group's code that consumes a call, kept
+    -- for checking until its function of its own is made
+    -- (`Choice.nestFns`): whether it can fail, as its function then must
+    let r ← elabE ctx e exp
+    if r.e.mayFail ctx.sigProg then noteNeeds { nested := [(key ++ "$fails", .name "logic")] }
+    return r
   | .app p (.ident _ "$sync") arms false => elabConc ctx p true arms exp
   | .app p (.ident _ "$race") arms false => elabConc ctx p false arms exp
   | .app p (.ident _ "$rush") arms false => elabConc ctx p false arms exp true
