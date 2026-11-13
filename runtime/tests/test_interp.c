@@ -291,7 +291,9 @@ static void prim_cases(void)
     main_only(&p, &m, 0, m.count - 1);
     OK_OUT(&p, "div0\n");
 
-    /* structural equality */
+    /* Verse's equality (Value.veq): structural, but the empty value is one
+     * value however it is held: array{} = () and false = none (Book of
+     * Verse ch. 2) */
     {
         uint32_t x = n_prim(&m, VX_P_MKARR, 0, 2, n_int(&m, 1), n_prim(&m, VX_P_MKARR, 0, 1, n_int(&m, 2)));
         uint32_t y = n_prim(&m, VX_P_MKARR, 0, 2, n_int(&m, 1), n_prim(&m, VX_P_MKARR, 0, 1, n_int(&m, 2)));
@@ -311,7 +313,7 @@ static void prim_cases(void)
         uint32_t e7 = n_print(&m, n_prim(&m, VX_P_TOSTR, 0, 1, n_prim(&m, VX_P_LT, 0, 2, n_char(&m, 'a'), n_char(&m, 'b'))));
         n_seq(&m, e1, n_seq(&m, e2, n_seq(&m, e3, n_seq(&m, e4, n_seq(&m, e5, n_seq(&m, e6, e7))))));
         main_only(&p, &m, 0, m.count - 1);
-        OK_OUT(&p, "eq1\nne2\nne3\neq4\nne5\nL\na\n");
+        OK_OUT(&p, "eq1\neq2\nne3\neq4\neq5\nL\na\n");
     }
 
     /* the error type of each wrong shape */
