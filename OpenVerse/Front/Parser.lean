@@ -761,14 +761,12 @@ partial def parseField (c : Nat) : PM (String × STy × Option SExpr × Bool) :=
   let n ← expectIdent
   -- (`X<public>:int`: a field's access specifiers, accepted, not enforced)
   let specs ← parseSpecs
-  ofExcept <| EffectPolicy.checkNonFunction start.pos "field" specs
   expectSym ":"
   let ty ← parseType
   let a ← peekT
-  if a.isSym "=" || a.isSym ":=" then
-    bump
-    return (n, ty, some (← parseExpr c), isVar)
-  return (n, ty, none, isVar)
+  let d ← if a.isSym "=" || a.isSym ":=" then do bump; pure (some (← parseExpr c)) else pure none
+  ofExcept <| EffectPolicy.checkField start.pos specs d.isSome
+  return (n, ty, d, isVar)
 
 /-- `struct` (after the keyword): optional specifiers, then `:` + fields or `{ fields }`. -/
 partial def parseStructBody (p : Pos) : PM SExpr := do
@@ -1216,11 +1214,11 @@ partial def parseClassItem (c : Nat) :
   if qual.isSome && (← peekT).isSym ":" then perr (← peekT) "only a method can be qualified with (interface:)"
   if (← peekT).isSym ":" then
     -- a field, `Name<override>:t = e` giving an inherited field a new default
-    ofExcept <| EffectPolicy.checkNonFunction t.pos "field" pre
     bump
     let ty ← parseType
     let a ← peekT
     let d ← if a.isSym "=" || a.isSym ":=" then do bump; pure (some (← parseExpr c)) else pure none
+    ofExcept <| EffectPolicy.checkField t.pos pre d.isSome
     return .inl ((name, ty, d, isVar), pre.contains "override")
   if isVar then perr t "expected a field after var"
   expectSym "("
@@ -1373,7 +1371,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
       continue
     -- a constant has the effects of its initialiser (#35)
     if !n.isSym "(" then
-      ofExcept <| EffectPolicy.checkUnsupported t.pos pre
+      ofExcept <| EffectPolicy.checkName t.pos pre
       if let some e := pre.find? EffectPolicy.effectNames.contains then
         perr n s!"a constant cannot have the effect specifier <{e}>: it has the effects of its initialiser"
     if n.isSym "(" then

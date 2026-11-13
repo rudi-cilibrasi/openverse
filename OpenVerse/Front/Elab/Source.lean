@@ -123,6 +123,7 @@ def checkReturns (tops : List STop) : Except String Unit := do
     those the source names alike kept apart from them (#210). -/
 def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitted := do
   EffectPolicy.check allTops0r opts.entry
+  EffectPolicy.checkPlaces allTops0r
   SourceProfile.check opts.profile allTops0r opts.entry
   -- rationals (#116): the helpers, for a program that may use them
   let isRatMarker : STop → Bool := fun

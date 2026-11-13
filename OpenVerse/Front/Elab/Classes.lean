@@ -56,8 +56,10 @@ def Classes.supArgsSTy (classes : Classes) (c T : String) : Option (List STy) :=
     interfaces of `tops` (#14, #18), each one's parent and interfaces, which
     must exist, take the type arguments given, and inherit as classes and
     interfaces may (a class from one class, no interface from a class, none
-    from a `<final>` one, none from itself); and each class's construction
-    effects `constructionFx` allow those its parents declare. -/
+    from a `<final>` one, none from itself); none with type parameters is
+    `<castable>` or below a `<castable>` one, and a class right below a
+    `<final_super_base>` one is `<final_super>`; and each class's
+    construction effects `constructionFx` allow those its parents declare. -/
 def classHierarchy (tops : List STop) (constructionFx : Std.HashMap String (List String)) :
     Except String Classes := do
   -- classes and interfaces (#14, #18): each is a struct whose fields are
@@ -114,6 +116,19 @@ def classHierarchy (tops : List STop) (constructionFx : Std.HashMap String (List
       seen := seen ++ new
       frontier := new.flatMap directUp
     if seen.contains cd.name then throw s!"{cd.pos.show}: {cd.name} inherits from itself"
+  -- what `<castable>` and `<final_super_base>` require of the classes below
+  -- (`EffectPolicy.specifierPlaces`): a `<castable>` class or interface, and
+  -- each one below it (it is heritable), has no type parameters; a class
+  -- right below a `<final_super_base>` one is `<final_super>`
+  for cd in cdefs do
+    if !cd.tps.isEmpty then
+      let castable := (henv.supers cd.name).filter fun q =>
+        ((cdefs.find? (·.name == q)).map (·.specs.contains "castable")).getD false
+      if let some q := castable.head? then
+        throw s!"{cd.pos.show}: {cd.name} has type parameters, so it cannot be <castable>{if q == cd.name then "" else s!", as {q} above it is"}"
+    if !cd.isIface && !cd.specs.contains "final_super" then
+      if let some q := cd.parents.find? fun q => ((cdefs.find? (·.name == q)).map (·.specs.contains "final_super_base")).getD false then
+        throw s!"{cd.pos.show}: {cd.name} is below {q}, which is <final_super_base>, so it must be <final_super>"
   for cd in cdefs do
     if let some allowed := constructionFx[cd.name]? then
       for parent in cd.parents do
@@ -148,7 +163,8 @@ def Fields.of (fields : Fields) (n : String) : List (String × STy × Option SEx
     one), then its own, which do not take an inherited field's or method's
     name unless they override a field, then hidden fields that hold values of
     its type parameters where a dispatch needs them (#209, #250, #276, #351,
-    and all of them for the classes in `requests.witnesses`). -/
+    and all of them for the classes in `requests.witnesses`); each field of a
+    `<concrete>` class has a default. -/
 def classFields (classes : Classes) (requests : Requests) : Except String Fields := do
   -- the fields of each class: its superclass's, then those of the
   -- interfaces above it that are not there yet (once, along a diamond), then
@@ -305,9 +321,13 @@ def classFields (classes : Classes) (requests : Requests) : Except String Fields
     if fullMap.size == before then break
   let fields : Fields := { map := fullMap, overrides := fieldOverrides, defaultClashes }
   for cd in classes.defs do
-    for (f, _, _, _) in fields.of cd.name do
+    for (f, _, d, _) in fields.of cd.name do
       if (classes.henv.supers cd.name).any (classes.declaresBase · f) then
         throw s!"{cd.pos.show}: '{f}' is both a field and a method of {cd.name}"
+      -- (`<concrete>`: `C{}` constructs one, so every field has a default,
+      -- an inherited one's or an interface's too)
+      if cd.specs.contains "concrete" && d.isNone then
+        throw s!"{cd.pos.show}: {cd.name} is <concrete>, so its field '{f}' needs a default"
   return fields
 
 /-- The classes' methods and constructors, as functions. -/

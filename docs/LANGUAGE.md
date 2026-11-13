@@ -212,6 +212,31 @@ partial and rejected contracts, source/release evidence, regression links and
 the native/proof boundary. Admission covers every loaded definition, defaults,
 nested types and entry expressions, in both source profiles.
 
+### Where specifiers go
+
+The specifiers that say what a declaration is may be written only where it
+can be that (`specifierPlaces` in `Front/EffectPolicy.lean`, the one table
+of them; the Book's tests `Tests/Attributes/` and `Castable.versetest`):
+
+| specifier | on | requires |
+|---|---|---|
+| `<abstract>` | a class (ch. 10; not a method, a field, an interface or a struct) | |
+| `<concrete>` | a class or a struct | a default for every field, inherited ones and an interface's included (ch. 10, "Concrete") |
+| `<final>` | a class, a method or a field (not an interface, a struct, a module's function) | a method's body, a field's value |
+| `<final_super>` | a class (not supported yet, #11) | |
+| `<final_super_base>` | a class or an interface | a class right below it is `<final_super>` |
+| `<castable>` | a class or an interface | no type parameters, nor in a class or interface below it |
+| `<unique>` | a class or an interface | |
+| `<persistable>` | a class (not supported yet) or a struct | |
+| `<override>` | a method or a field | |
+
+Anywhere else, on a definition's name (`c<castable> := class{}`) or after the
+keyword of another kind (`interface<abstract>`, `struct<final>`), each is
+refused. Enums take `<open>`, `<closed>` and `<persistable>`; access
+specifiers are accepted where the parser takes them (see
+[Readings](#readings-openverse-takes)), and effects are the subject of the
+rest of this section.
+
 ## Function values
 
 A function type is written `type{_(:t₁, :t₂)<effects>:r}` or `t₁->r` (Book
