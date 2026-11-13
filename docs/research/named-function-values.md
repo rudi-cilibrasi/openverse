@@ -134,24 +134,37 @@ Function types:
 
 ## Readings OpenVerse takes
 
-- **The type's default expression** is skipped when parsing and never
-  checked. The pinned tests refuse `type{_(?A:int = 'a'):int}`; OpenVerse
-  accepts it. Checking it needs elaboration in the type's scope, and a type
-  has none. This is a known deviation.
+- **The type's default expression** is not part of the type and never runs,
+  but it is checked: at the parameter's type, with literals and top-level
+  names only, wherever the type is written (a local, a parameter, a field, a
+  module definition), and in a context that cannot fail. The pinned sources
+  show only literals (`?X:int=99`, `?A:int = 0`) and refuse a literal of
+  another type (`type{_(?A:int = 'a'):int}`, and the same in a signature
+  parameter, tests lines 529-535). They say nothing about what else a
+  type's default may name. **Open reading:** whether it may also use the
+  names in scope where the type is written: locals, earlier parameters,
+  members, a generic function's type parameters (`?A:t = …`). OpenVerse
+  refuses those with a message that names the rule. Allowing them would
+  mean checking each default at its place, with that place's scope, instead
+  of at the top level.
 - **Joining branches of different named types** at an expected function type
   is accepted (`if (true?) then F2 else F4` at `type{_():int}` gives `2`).
   Each branch is checked against the expected type, as the `verse_vm_only`
   tests expect. The `bp_vm_only` tests refuse it.
 - **A function whose named parameter has the function's own name**
-  (`F(?F:int)`) cannot be a value. Its value class calls it by name, and the
-  parameter would hide it. This is an OpenVerse restriction; the Book does not
-  address it.
-- Calls through a value with a tuple holding named arguments
-  (`Apply(F1, (2, ?C := 1))`, tests lines 539-546) are out of scope: OpenVerse
-  has no named tuple elements. The tests themselves comment those cases out
-  ("assert in the VM").
-- Function-type parameters in the Book's `F(:t):u` parameter form are not
-  supported; `F:type{_(:t):u}` is.
+  (`F(?F:int)`) cannot be a value. Its value class's method must take that
+  parameter by its name, which hides the function in the method's body, and
+  the elaborator has no name for a top-level function that a local cannot
+  shadow. Making one, a `$`-named forwarding function for each shape the
+  value class implements, would add a special case for a rare program, so
+  the refusal stays. The Book does not address it.
+- **A parameter written as a signature**, `F(:t)<effects>:u` or
+  `?F(?A:int = 0):int = G` (chapter 6's "Examples", lines 1013-1023; the
+  tests' `Apply(F(:t):u, …)`, `JoinTest`, `FuncFuncDef(?NamedFunc():string =
+  HelloFunc)`), is a parameter of that function type, parsed by the same
+  signature parser as `type{_…}`.
+- Tuple arguments with named elements are not supported; see
+  [the map below](#tuple-arguments-with-named-elements).
 
 ## Map
 
@@ -187,4 +200,61 @@ the repository.
 | Value to value | `G:type{_(?A:int = 0):int} = F6`, then `type{_():int}` and `type{_(?A:int):int}` from `G` | exit 4: parse error | `6 2 6 3` | `6 2 6 3` | [book](../../tests/verse/fn_values_named_book.verse) |
 | Through a parameter whose type omits (JoinTest) | `F2(F:type{_(?A:int = 0):int}) = F() + F(?A := 2)` with `F6` | exit 4: parse error | `8` | `8` | [book](../../tests/verse/fn_values_named_book.verse) |
 | Bound method at named types, live default | `B.Add(X, ?Extra = Base)` at two types, `set B.Base = 20` | exit 4 | `3 21` | `3 21` | [methods](../../tests/verse/fn_values_named_methods.verse) |
-| A type's default of another type (tests 529-535) | `type{_(?A:int = 'a'):int}` | exit 4: parse error | refused (the pinned tests) | **accepted**, prints `1` (see readings) | none |
+| A type's default of another type (tests 529-535) | `type{_(?A:int = 'a'):int}` | exit 4: parse error | refused (the pinned tests) | refused: expected `int`, found `char` | [type](../../tests/errors/fn_type_default_type.verse), [signature](../../tests/errors/fn_type_default_signature.verse) |
+| A parameter written as a signature (ch. 6 example 48) | `Map(Items:[]t, F(:t)<transacts>:u …)`, `Filter`, `Fold` | exit 4: parse error | `5 3 15` | `5 3 15` | [signature](../../tests/verse/fn_values_param_signature.verse) |
+
+## Tuple arguments with named elements
+
+Not implemented: this is a larger feature, mapped here for assignment.
+
+**Sources.** Chapter 6, "Tuple as Arguments" (lines 287-425), no "Unreleased"
+marker:
+
+- Lines 289-291: "Tuples can be used to provide positional arguments.
+  However, you cannot mix a pre-constructed tuple variable with additional
+  named arguments".
+- Lines 315-317: "Functions can destructure tuple parameters directly in the
+  parameter list, allowing you to extract tuple elements inline without
+  manual indexing", for example `Func(A:int, (B:int, C:int), D:int)`. Lines
+  337-346: "Tuples can be destructured to arbitrary depth".
+- Lines 371-373: "Tuple parameters can contain named/optional parameters,
+  allowing for flexible APIs that combine structural decomposition with
+  optional values". Lines 386-387: "A tuple can contain multiple named
+  parameters, and they can be specified in any order".
+- Lines 400-402 and 423-425: "When a tuple parameter contains **only** named
+  parameters (no positional parameters), you must provide an empty tuple `()`
+  even when using all defaults ... This is a known limitation in the current
+  implementation."
+- `DefaultNamed.versetest` lines 489-501: a tuple value with named elements,
+  `X := (0, ?A := 1, ?B := 2)`, is refused when indexed or passed to a
+  generic parameter (`assert_semantic_error(3640, 3640, 3509)`). Lines
+  537-546 comment out `FirstClass.Apply(FirstClass.F1, (2, ?C := 1))` as a VM
+  bug ("assert in the VM").
+
+**Where OpenVerse stands.** None of these forms is supported. The overloading
+audit lists "nested destructured/named tuple parameter syntax" as not covered,
+not as a deviation. OpenVerse accepts a tuple variable with named arguments
+(`Calculate(Args, ?C := 5)`), an extension the audit records.
+
+| Program | Today | Expected (Book) |
+| --- | --- | --- |
+| `Func(A:int, (B:int, C:int), D:int)` called as `Func(1, (2, 3), 4)`, `Func(1, X, 4)`, `Func(Y)` | exit 4: "expected an identifier, found '('" | `10 10 10` |
+| `H(A:int, (B:int, (C:int, D:int)), E:int)`, `H(1, (2, (3, 4)), 5)` | exit 4, as above | `15` |
+| `SumValues(A:int, (X:int, (Y:int, ?Z:int = 0)))`; `SumValues(1, (2, (3, ?Z := 4)))`, `SumValues((1, (2, 3)))` | exit 4, as above | `10 6` |
+| `Scale(Base:int, (Value:int, ?Factor:int = 1, ?Offset:int = 0))`; `Scale(10, 5)`, `Scale(10, (5, ?Factor := 2, ?Offset := 1))`, the names reversed | exit 4, as above | `15 21 21` |
+| `Configure(Base:int, (?Width:int = 10, ?Height:int = 20))`; `Configure(5, ())` | exit 4, as above | `35` |
+| `Configure(5)` | exit 4, as above | refused: the tuple parameter is required |
+| `X := (0, ?A := 1, ?B := 2)` | exit 4: "unexpected '?'" | unsettled: the tests refuse its uses (3640) and give no accepted use |
+| `Apply(F1, (2, ?C := 1))`, `Apply(F(:t):u, X:t)` | exit 4: "unexpected '?'" | unsettled: commented out in the tests as a VM bug |
+| `Calculate(Args, ?C := 5)` | `8` (an OpenVerse extension) | refused by the Book |
+
+**What it would take.** (1) Destructured parameters: parse a parenthesised
+parameter group as one tuple parameter, bound element by element at the
+body's start. The parameter's type is a tuple for overloads, function values
+and the choice inliner. A later default must see the destructured names. (2)
+Named and optional elements inside a tuple parameter: a tuple type with named
+elements, call-site tuple literals with named elements matched by name, and
+defaults filled within the tuple. Flattening must work both ways
+(`SumValues((1, (2, 3)))`). (3) Named tuple values as values: the Book does
+not settle them. (1) is a front-end desugaring; (2) is a new kind of type, in
+the existing tuple and call mechanisms.

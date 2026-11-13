@@ -1420,7 +1420,12 @@ flowchart LR
   elaborated again, as for #214's requests. Only the closed shapes a program
   calls or writes exist: an open shape's 2ⁿ closed ones are never all made.
   A function's own shape is open where its named parameters have defaults,
-  so `F := Log` keeps `Log`'s defaults.
+  so `F := Log` keeps `Log`'s defaults. The default a type writes is no part
+  of it: the parser keeps it after the definition that writes it, as a
+  constant `$typeDefault:N` of the parameter's type in that definition's
+  module, and the elaborator removes those after resolving modules and checks
+  each, once constants are typed, in a trial that keeps nothing
+  (`checkTypeDefaults`).
 - **Named functions get value classes where the program as written names
   them.** The function-value scan sees the program after the choice
   inliner, whose markers name the functions with several values they inline

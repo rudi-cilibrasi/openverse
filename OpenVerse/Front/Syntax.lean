@@ -272,6 +272,16 @@ inductive STop where
       (overrides : List String) → (methods : List STop) → STop
   deriving Repr, Inhabited
 
+/-- The name of the constant that holds a default a function type writes
+    (`?N:t = e`) after the definition that writes it, `$typeDefault:N`: the
+    elaborator checks it at `t` and drops it (#503). -/
+def typeDefaultPrefix : String := "$typeDefault:"
+
+/-- Whether a definition holds a default a function type writes. -/
+def STop.isTypeDefault : STop → Bool
+  | .const _ n .. => ((n.splitOn "::").getLast?.getD n).startsWith typeDefaultPrefix
+  | _ => false
+
 /-- Type aliases mentioned as bare names; applications keep declaration heads. -/
 partial def STy.bareNames : STy → List String
   | .name n => [n]

@@ -38,6 +38,22 @@ structure ElaboratedFn where
   /-- (#515) Its calls in failure contexts (`ESt.failCalls`). -/
   failCalls : Array ((Pos × String) × List Nat)
 
+/-- The defaults function types write (#503, `STop.isTypeDefault`): each
+    checked at its parameter's type with literals and top-level names only,
+    as the pinned Book says nothing of what else one may use, in a trial that
+    keeps nothing: a default is not part of its type and never runs. -/
+def checkTypeDefaults (ctx : Ctx) (defaults : List STop) : Except String Unit := do
+  for top in defaults do
+    let .const p n (some ty) d := top | continue
+    let param := ((n.splitOn typeDefaultPrefix).getLast?).getD n
+    let trial : EM Unit := do
+      let t ← resolveTy ctx.types p ty
+      let r ← elabE ctx d (some t)
+      if r.e.mayFail ctx.sigProg then eerr p "it can fail"
+      discard <| coerce p r t
+    if let .error e := trial.run { env := ctx.types } then
+      throw s!"{e} (the default of ?{param} in a function type: not part of the type, it is checked at the parameter's type, with literals and top-level names only, #503)"
+
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
 def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except String Compiled := do
@@ -68,6 +84,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     | some e => [.fn e.pos "$Do" [] [] ["decides"] (.name "void") (.app e.pos (.ident e.pos "$Show") [e] false)]
     | none => []
   let resolved ← resolveModules (allTops000 ++ rawEntry)
+  let (typeDefaults, resolved) := resolved.partition (·.isTypeDefault)
   let resolved := if opts.extendedDefaults then resolved
     else resolved.map InitializerConvergence.markSource
   -- Resolve source names before deciding which soft-library definitions are
@@ -1140,6 +1157,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let (r, _) ← (elabE ctx body none).run { env }
       if r.ty == .never then throw s!"{p.show}: cannot infer the type of '{n}'"
     | _ => pure ()
+  checkTypeDefaults { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env } typeDefaults
   -- the heap effects of a constant are those of its initialiser (#35), which
   -- runs at each use: in rounds, from none, since constants use each other
   for _ in [0:tops.length + generics.length + 1] do

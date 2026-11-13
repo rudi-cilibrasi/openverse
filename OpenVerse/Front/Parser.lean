@@ -38,6 +38,10 @@ structure PSt where
   /-- The column of the definitions being parsed: 0 at the top level, the
       body's column in a module (#112). A definition's body is indented more. -/
   topCol : Nat := 0
+  /-- The defaults function types write for parameters a caller may omit
+      (`?N:t = e`), not yet given out: where, the parameter's name and
+      type, the default (#503). -/
+  typeDefaults : Array (Pos × String × STy × SExpr) := #[]
 
 abbrev PM := StateT PSt (Except String)
 
@@ -164,6 +168,21 @@ partial def parseSpecs : PM (List String) := do
     else break
   return specs.toList
 
+def cmpOps : List String := ["=", "<>", "<", "<=", ">", ">="]
+
+/-- At a `(`: the qualifier of `(i:)M` or `(M.i:)M` (#70, #112), if one
+    starts here, and how many tokens it takes (through the `:)`). -/
+def peekQual : PM (Option (String × Nat)) := do
+  if !(← peekT).isSym "(" then return none
+  let some q0 := (← peekT 1).identName? | return none
+  let mut q := q0
+  let mut k := 2
+  while (← peekT k).isSym "." && ((← peekT (k + 1)).identName?).isSome do
+    q := q ++ "." ++ ((← peekT (k + 1)).identName?).getD ""
+    k := k + 2
+  if (← peekT k).isSym ":" && (← peekT (k + 1)).isSym ")" then return some (q, k + 2)
+  return none
+
 mutual
 partial def parseType : PM STy := do
   let t ← parseTypeAtom
@@ -182,48 +201,10 @@ partial def parseTypeAtom : PM STy := do
   -- `type{_(:t₁, …)<effects>:r}`: a function type (#210)
   if t.identName? == some "type" && (← peekT 1).isSym "{" && (← peekT 2).identName? == some "_" &&
       (← peekT 3).isSym "(" then
-    bump; bump; bump; bump
-    let mut ps := #[]
-    if !(← peekT).isSym ")" then
-      repeat
-        -- (`?N:t` is a named parameter, whose name is part of the type,
-        -- and `?N:t = e` one a caller may omit: the type does not include
-        -- `e`, Book of Verse ch. 6, #503)
-        if (← peekT).isSym "?" then
-          bump
-          let n ← expectIdent
-          expectSym ":"
-          let t ← parseType
-          let optional := (← peekT).isSym "="
-          if optional then
-            bump
-            -- (the default, up to the parameter's end, is skipped)
-            let mut depth := 0
-            repeat
-              let d ← peekT
-              if d.isEof then break
-              if depth == 0 && (d.isSym "," || d.isSym ")") then break
-              if d.isSym "(" || d.isSym "[" || d.isSym "{" then depth := depth + 1
-              if d.isSym ")" || d.isSym "]" || d.isSym "}" then depth := depth - 1
-              bump
-          ps := ps.push (STy.namedParam n optional t)
-        else
-          -- (a positional parameter may be named, `X:t`; the name is not
-          -- part of the type)
-          if ((← peekT).identName?).isSome && (← peekT 1).isSym ":" then bump
-          expectSym ":"
-          ps := ps.push (← parseType)
-        if (← peekT).isSym "," then bump else break
-    expectSym ")"
-    let mut effs := #[]
-    while (← peekT).isSym "<" do
-      bump
-      effs := effs.push (← expectIdent)
-      expectSym ">"
-    expectSym ":"
-    let r ← parseType
+    bump; bump; bump
+    let ty ← parseFnSig
     expectSym "}"
-    return .fn ps.toList effs.toList r
+    return ty
   -- `(M:)c`: the type `M.c` (#147)
   if t.isSym "(" && ((← peekT 1).identName?).isSome then
     let mut q := ((← peekT 1).identName?).getD ""
@@ -285,24 +266,45 @@ partial def parseTypeAtom : PM STy := do
         return .app n ts.toList
       return .name n
     | none => perr t s!"expected a type, found {t.tok.describe}"
-end
 
-def cmpOps : List String := ["=", "<>", "<", "<=", ">", ">="]
+/-- A function's signature as a type, from its `(`: `(:t₁, …)<effects>:r`,
+    as `type{_…}` and a parameter `F(:t₁, …):r` write it (#210). `?N:t` is a
+    named parameter, whose name is part of the type, and `?N:t = e` one a
+    caller may omit: the type does not include `e` (Book of Verse ch. 6),
+    which is kept to be checked (`PSt.typeDefaults`, #503). -/
+partial def parseFnSig : PM STy := do
+  expectSym "("
+  let mut ps := #[]
+  if !(← peekT).isSym ")" then
+    repeat
+      if (← peekT).isSym "?" then
+        bump
+        let n ← expectIdent
+        expectSym ":"
+        let t ← parseType
+        let d ← peekT
+        let optional := d.isSym "="
+        if optional then
+          bump
+          let e ← parseExpr 0
+          modify fun st => { st with typeDefaults := st.typeDefaults.push (d.pos, n, t, e) }
+        ps := ps.push (STy.namedParam n optional t)
+      else
+        -- (a positional parameter may be named, `X:t`; the name is not
+        -- part of the type)
+        if ((← peekT).identName?).isSome && (← peekT 1).isSym ":" then bump
+        expectSym ":"
+        ps := ps.push (← parseType)
+      if (← peekT).isSym "," then bump else break
+  expectSym ")"
+  let mut effs := #[]
+  while (← peekT).isSym "<" do
+    bump
+    effs := effs.push (← expectIdent)
+    expectSym ">"
+  expectSym ":"
+  return .fn ps.toList effs.toList (← parseType)
 
-/-- At a `(`: the qualifier of `(i:)M` or `(M.i:)M` (#70, #112), if one
-    starts here, and how many tokens it takes (through the `:)`). -/
-def peekQual : PM (Option (String × Nat)) := do
-  if !(← peekT).isSym "(" then return none
-  let some q0 := (← peekT 1).identName? | return none
-  let mut q := q0
-  let mut k := 2
-  while (← peekT k).isSym "." && ((← peekT (k + 1)).identName?).isSome do
-    q := q ++ "." ++ ((← peekT (k + 1)).identName?).getD ""
-    k := k + 2
-  if (← peekT k).isSym ":" && (← peekT (k + 1)).isSym ")" then return some (q, k + 2)
-  return none
-
-mutual
 /-- Lowest precedence: declarations, `set`, ranges. -/
 partial def parseExpr (stop : Nat) : PM SExpr := do
   let t ← peekT
@@ -1046,8 +1048,9 @@ partial def parseParamList : PM (Array SParam × Array TParam) := do
       let named := (← peekT).isSym "?"
       if named then bump
       let pn ← expectIdent
-      expectSym ":"
-      let pty ← parseType
+      -- (`F(:t):u`: a parameter of a function type, written as a
+      -- function's signature, Book of Verse ch. 6)
+      let pty ← if (← peekT).isSym "(" then parseFnSig else do expectSym ":"; parseType
       let dflt ← if (← peekT).isSym "=" then do bump; pure (some (← parseExpr 0)) else pure none
       ps := ps.push { name := pn, ty := pty, named, default := dflt }
       if (← peekT).isSym "," then bump else break
@@ -1242,9 +1245,17 @@ partial def parseClassBody (p : Pos) (name : String) (tps : List TParam) (isIfac
 partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM (List STop) := do
   let mut tops := #[]
   let marker (p : Pos) (m : String) : STop := .const p m none (.block p [])
+  -- (#503) after a definition, the defaults its function types write, each
+  -- a constant `$typeDefault:N` of the parameter's type in its scope, which
+  -- the elaborator checks and drops
+  let typeDefaults : PM (Array STop) := do
+    let ds := (← get).typeDefaults
+    modify fun st => { st with typeDefaults := #[] }
+    return ds.map fun (p, n, t, e) => .const p s!"{pfx}{typeDefaultPrefix}{n}" (some t) e
   let saved := (← get).topCol
   modify fun st => { st with topCol := col }
   repeat
+    tops := tops ++ (← typeDefaults)
     let t ← peekT
     if braced then
       if t.isEof then perr t "expected '}' to end the module"
@@ -1398,6 +1409,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
       if a.isSym "=" || a.isSym ":=" then bump else perr a "expected '=' in a constant definition"
       tops := tops.push (.const t.pos name (some ty) (← parseFnBody))
     else perr n s!"expected '(', ':' or ':=' after '{name}'"
+  tops := tops ++ (← typeDefaults)
   modify fun st => { st with topCol := saved }
   return tops.toList
 
