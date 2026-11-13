@@ -8,8 +8,10 @@
 # #321, and through a class between that redeclares it narrower from #337; interfaces that
 # give a parent interface other type arguments from #344, their defaults from #347, also in
 # classes giving composite arguments from #355; interfaces referred to through views, with
-# fields and defaults, from the reviews of #390, #399, #405 and #523, gadt_views; refining
-# casts as clauses of any failure context, after clauses with effects, gadt_cast_contexts),
+# fields and defaults, from the reviews of #390, #399, #405 and #523, gadt_views, with casts
+# beside the object's type and to interfaces that open type arguments, #351 and #53; refining
+# casts as clauses of any failure context, after clauses with effects, gadt_cast_contexts,
+# with later casts of an opening cast's fields from #250's follow-up),
 # each predicting the program's output, or the message of the refusal it
 # expects. Each seed uses one model in turn. Lean must match the model, and C
 # must match Lean; no program may hit an internal error.
