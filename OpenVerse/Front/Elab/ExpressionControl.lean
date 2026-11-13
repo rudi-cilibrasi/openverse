@@ -10,7 +10,8 @@ partial def elabExprControlWith
     (elabDefers : Ctx → List (SExpr × List Local) → EM Expr)
     (elabRefineExit : Ctx → Pos → List SExpr → List SExpr → EM R)
     (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx))
-    (elabRefinedIf : Ctx → Pos → Pos → String → String → SExpr → SExpr → Option SExpr → Option Ty → (made : optParam Bool false) → (ifType : optParam Bool false) → EM (Option R))
+    (elabRefinedIf : Ctx → Pos → Pos → String → String → SExpr → SExpr → Option SExpr → Option Ty → (made : optParam Bool false) → EM (Option R))
+    (refinedIfType : Ctx → Pos → String → String → SExpr → SExpr → SExpr → EM (Option (Ty × Bool)))
     (elabSet : Ctx → Pos → SExpr → Option String → SExpr → EM R)
     (elabFor : Ctx → Pos → List SExpr → SExpr → (prepared : optParam Bool false) → (firstDecides : optParam Bool false) → (failure : optParam (Option SExpr) none) → EM R)
     (elabOneClauses : Ctx → List SExpr → EM (R × Ctx))
@@ -39,19 +40,18 @@ partial def elabExprControlWith
     let ctx := { ctx with asWritten := false }
     -- (with no expected type, one with a cast that refines as clause `k` and
     -- an `else`: any `if`'s type, `ifBranches`, the branch, the clauses
-    -- after the cast and `thenE`, typed under the refinement, as
-    -- `elabRefinedIf` finds it, the clauses before it as they are; nothing
+    -- after the cast and `thenE`, typed under the refinement
+    -- (`refinedIfType`), the clauses before it as they are; nothing
     -- is kept, so that every elaboration decides the same)
     let refinedIfTy (k : Nat) (ee : SExpr) : EM (Option (Ty × Bool)) := do
       let st ← get
-      let some (dp, d, T, x) := conds[k]?.bind Refine.castClause? | return none
+      let some (_, d, T, x) := conds[k]?.bind Refine.castClause? | return none
       let τ? ← tryCatch (do
           let c ← if k == 0 then pure ctx else
             pure (← elabSeq { ctx with canFail := true, inTaking := true, typeOnly := true } (conds.take k) none).2
           let branch := Refine.castRest p (conds.drop (k + 1)) thenE (some (Refine.noValue p))
-          let r? ← elabRefinedIf { c with canFail := ctx.canFail, inTaking := ctx.inTaking, typeOnly := true }
-            p dp d T x branch (some ee) none (made := true) (ifType := true)
-          pure (r?.map fun r => (r.ty, match r.e with | .lit (.logic true) => true | _ => false))) fun _ => pure none
+          refinedIfType { c with canFail := ctx.canFail, inTaking := ctx.inTaking, typeOnly := true } p d T x branch ee)
+        fun _ => pure none
       set st
       return τ?
     let nested (k : Nat) (_ : String) : EM (Option R) := do
@@ -101,7 +101,7 @@ partial def elabExprControlWith
           let t ← fresh rty
           if isVoid then
             let eE ← elabE ctx ee none
-            return ⟨.seq (.assign t r.e) (.ite (.prim .query [.local t]) (.lit .void) (.seq (← inferable eE) (.lit .void))), .void⟩
+            return ⟨.seq (.assign t r.e) (.ite (.prim .query [.local t]) (.lit .void) (← discardValue eE)), .void⟩
           let eE ← coerce p (← elabE ctx ee (some τ)) τ
           let xv ← fresh τ
           return ⟨.seq (.assign t r.e) (.ite (.assign xv (.prim .query [.local t])) (.local xv) eE), τ⟩
@@ -165,7 +165,7 @@ partial def elabExprControlWith
             let t ← fresh rty
             if isVoid then
               let eE ← elabE ctx ee none
-              return some ⟨.seq (.assign t r.e) (.ite (.prim .query [.local t]) (.lit .void) (.seq (← inferable eE) (.lit .void))), .void⟩
+              return some ⟨.seq (.assign t r.e) (.ite (.prim .query [.local t]) (.lit .void) (← discardValue eE)), .void⟩
             let eE ← coerce p (← elabE ctx ee (some τ)) τ
             let xv ← fresh τ
             return some ⟨.seq (.assign t r.e) (.ite (.assign xv (.prim .query [.local t])) (.local xv) eE), τ⟩
@@ -185,7 +185,7 @@ partial def elabExprControlWith
               let re ← elabE ctx ee none
               set st0
               -- (in a source context, the lift's tag depends on its type)
-              let asked (τ : Ty) := ctx.types.castRequests.find? (·.key ==
+              let asked (τ : Ty) := ctx.types.requests.casts.find? (·.key ==
                 Refine.keyOf p d (refineTagOf ctx x (innerOf τ) (some (.ident p "false")) (some (rtyOf τ))))
               match (asked .void).orElse fun _ => asked re.ty with
               | some l => attempt (match l.ret with | .name "logic" => .void | _ => re.ty)

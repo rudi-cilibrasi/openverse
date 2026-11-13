@@ -311,6 +311,20 @@ partial def pathRoot? (fixedField : String → Bool) : SExpr → Option String
   | .member _ o f => if fixedField f then pathRoot? fixedField o else none
   | _ => none
 
+/-- What `castRestClauses` makes of a failure context's clauses. -/
+structure CastRest where
+  /-- The clauses, the cast taking those after it, up to the next
+      generator, as its branch. -/
+  clauses : List SExpr
+  /-- `after`, casting again. -/
+  after : SExpr
+  /-- Whether a later cast's object computed among the clauses is bound
+      first or read again, to be cast again (only when `computed`). -/
+  objectsAgain : Bool
+  /-- The later casts whose objects may name type arguments a cast opens
+      and are not cast again. -/
+  notAgain : List String
+
 /-- (#243) Clauses `pre, D := T[X], rest` of a failure context (an `if`'s
     condition, a `for`'s clauses, `first{…}`'s) whose cast refines, with the
     code their names reach after them, `after` (the branch, the body, the
@@ -335,15 +349,13 @@ partial def pathRoot? (fixedField : String → Bool) : SExpr → Option String
     such an object is cast again only when it is read by fields that are no
     `var`s (`fixedField`) from the name of a cast `after` casts again
     (`pathRoot?`), read again there, after that cast, also when `computed`.
-    The new clauses and `after`, whether such an object is bound or read
-    again, and the later casts whose objects may name opened type arguments
-    and are not cast again; or why not. -/
+    The new clauses and `after` (`CastRest`); or why not. -/
 def castRestClauses (pre : List SExpr) (cast : Pos × String × String × SExpr) (opens : Bool)
     (rest : List SExpr) (after : SExpr) (isGen : SExpr → Bool := fun _ => false)
     (isClass : String → Bool := fun _ => true) (isFixed : String → Bool := fun _ => false)
     (computed : Bool := true) (lift : SExpr → List SExpr := fun c => [c])
     (fixedField : String → Bool := fun _ => false) :
-    Except String (List SExpr × SExpr × Bool × List String) := do
+    Except String CastRest := do
   let (p, d, T, x) := cast
   let branch0 := rest.takeWhile (!isGen ·)
   let later := rest.dropWhile (!isGen ·)
@@ -435,8 +447,8 @@ def castRestClauses (pre : List SExpr) (cast : Pos × String × String × SExpr)
   let q := after.pos
   let after := again.foldr (fun (e, T', y, _) acc =>
     .ite q [made (castOf q e T' y)] acc (some (.app q (.ident q "Err") [] false))) after
-  return (clauses, after, again.any (fun (e, _, _, o) => o.isSome || paths.contains e),
-    paths.filterMap fun e => if e.startsWith "-" then some (e.drop 1).toString else none)
+  return { clauses, after, objectsAgain := again.any (fun (e, _, _, o) => o.isSome || paths.contains e),
+           notAgain := paths.filterMap fun e => if e.startsWith "-" then some (e.drop 1).toString else none }
 
 /-- The branches the lifts ask for, as functions: each `if (D := …) then
     Body …` whose position and bound name are a lift's key gives `Body`,

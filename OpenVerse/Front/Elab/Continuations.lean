@@ -324,19 +324,25 @@ def Ctx.choiceCoercionBody (ctx : Ctx) (body : SExpr) : SExpr :=
   .app p (.ident p "$choiceCoercions") [.block p (ctx.choiceCoercions.map fun (dictionary, source, target) =>
     .tuple p [.ident p dictionary.name, .construct p "$choiceConversion" [source.toSTy, target.toSTy] []]), body] false
 
-/-- (#243, #246, #335) The locals in scope that `code` uses, in order of
-    first use: what a function made from `code` captures (`firstLiftOf`,
-    `contLiftOf`, `contForLiftOf`, a `for`'s stages). A generated function
-    is keyed by what its code depends on: its place and code, and these
-    locals with what the function depends on of each (`firstKey`: type and
+/-- The locals in scope that `code` uses, in order of first use. -/
+def Ctx.usedLocals (ctx : Ctx) (code : SExpr) : List Local :=
+  (Choice.namesUsed code).filterMap ctx.lookup
+
+/-- (#243, #246, #335, #520) What a function made from `code` captures
+    (`firstLiftOf`, `contLiftOf`, `contForLiftOf`, a `for`'s stages, a
+    refining cast's branch): the locals in scope it uses, in order of first
+    use, then the subtype evidence in scope (`captureEvidence`), none named
+    in `excluded` (the function's own parameters). A generated function is
+    keyed by what its code depends on: its place and code, and these locals
+    with what the function depends on of each (`firstKey`: type and
     mutability; `contKey`: type; `refineTagOf`, in a source context: type,
     mutability and frame storage), so that each elaboration of the code
     that would make the same function finds it, and none that would make
     another does. So a name the elaborator makes for such a local says no
     more than its place (`$forReturn…`): one that counted the locals in
     scope differed between the source and each continuation's function. -/
-def Ctx.usedLocals (ctx : Ctx) (code : SExpr) : List Local :=
-  (Choice.namesUsed code).filterMap ctx.lookup
+def Ctx.capturesOf (ctx : Ctx) (code : SExpr) (excluded : List String := []) : List Local :=
+  ctx.captureEvidence ((ctx.usedLocals code).filter (!excluded.contains ·.name)) excluded
 
 /-- (#246, #338) The key of a lazily taken call's function of its own: its
     place, binding and code (`lp`, the clauses with it, `rest`, those after
@@ -347,7 +353,7 @@ def Ctx.usedLocals (ctx : Ctx) (code : SExpr) : List Local :=
 def firstKey (ctx : Ctx) (p : Pos) (lp : List SExpr) (b : String) (bty : Option STy)
     (rest : List SExpr) : String :=
   let written := SExpr.block p (lp ++ rest)
-  let captures := ctx.captureEvidence (ctx.usedLocals written)
+  let captures := ctx.capturesOf written
   let inputs := captures.map fun l => (l.name, l.ty, l.mutable)
   let roles := captures.filterMap fun l => if l.typeValue then some l.name else none
   let roleKey := if roles.isEmpty then "" else "$typeValues:" ++ reprStr roles
@@ -438,19 +444,24 @@ def refiningCast? (env : TyEnv) (T : String) (xty : Ty) (avoid : List String := 
 def castChains (env : TyEnv) (S T : String) (opened : List (String × String × Bool)) : Bool :=
   !(env.isSub S T || env.isSub T S) || ((env.info T).isIface && !opened.isEmpty)
 
+/-- (#351) Whether an `S(sargs)`, referred to through views, may be a `T`:
+    a concrete class below both gives `S` those type arguments by its view
+    and pins (`elabCast` refuses `T[…]` as never succeeding otherwise). -/
+def viewsMayBe (env : TyEnv) (S : String) (sargs : List Ty) (T : String) : Bool :=
+  ((env.concreteBelow S).filter (env.isSub · T)).any fun d =>
+    (env.viewArgs? S d (env.coreArgs S sargs) (rigid := false)).isSome
+
 /-- The classes below both `S` and `T` whose class parent is not, with a
     concrete class below them: each concrete class below both is below
     exactly one of them, along its class chain. Of those, the ones an
     `S(sargs)` may be: a cast to it refines or opens type arguments, or
-    agrees with the object's (through views, as one of its classes' view
-    gives them), as `elabCast` refuses the others as never succeeding. -/
+    agrees with the object's (through views, `viewsMayBe`), as `elabCast`
+    refuses the others as never succeeding. -/
 def castTops (env : TyEnv) (S : String) (sargs : List Ty) (T : String) (avoid : List String) : List String :=
   let both (c : String) : Bool := !(env.info c).isIface && env.isSub c S && env.isSub c T
   let may (d : String) : Bool :=
     (refiningCast? env d (.struct S sargs) avoid).isSome ||
-    if env.viewed.contains S then
-      ((env.concreteBelow S).filter (env.isSub · d)).any fun e =>
-        (env.viewArgs? S e (env.coreArgs S sargs) (rigid := false)).isSome
+    if env.viewed.contains S then viewsMayBe env S sargs d
     else env.coreArgs d (env.argsBelow S sargs d) == env.coreArgs S sargs
   env.classes.filter fun c => both c && !((env.info c).parent.any both) && !(env.concreteBelow c).isEmpty && may c
 
@@ -789,8 +800,7 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     | some l => pure l
     | none => throw s!"internal: parameter {n}"
   -- (the consumer's names the clauses after it use, in order of first use)
-  let caps : List Local := ctx.captureEvidence ((ctx.usedLocals (ctx.choiceCoercionBody (.block p rest))).filter
-    (!pnames.contains ·.name)) pnames
+  let caps : List Local := ctx.capturesOf (ctx.choiceCoercionBody (.block p rest)) pnames
   let setNames := Choice.setsIn (.block p rest)
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
   -- (its own binding too: a call in the clauses of another such call's
@@ -918,8 +928,8 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
 
 /-- (#335) The key of a continuation, the function the clauses after a
     composed choice (and a `for`'s body) are compiled in: what its code
-    depends on, as `firstKey`'s. The choice's place and binding; the locals
-    the clauses use (`Ctx.usedLocals`; in a method, once its members are
+    depends on, as `firstKey`'s. The choice's place and binding; what the
+    clauses capture (`Ctx.capturesOf`; in a method, once its members are
     `Self`'s, as in the function) with their types (#338: a `for`'s body
     copied once per alternative of a choice has the same place, with names
     of other types); the clauses' places (#349: the same choice inside an
@@ -939,7 +949,7 @@ def contKey (ctx : Ctx) (p : Pos) (b : String) (rest : List SExpr) : String :=
     | none => rest
   -- (with their types: a `for`'s body copied once per alternative of a
   -- choice has the same place, with names of other types)
-  let caps := (ctx.captureEvidence (ctx.usedLocals (.block p rest))).map fun l =>
+  let caps := (ctx.capturesOf (.block p rest)).map fun l =>
     s!"{l.name}:{reprStr l.ty}" ++ (if l.typeValue then ":typeValue" else "")
   -- A type used only by a written annotation has no captured value. Its
   -- instance still distinguishes helpers made at a shared source position.
@@ -986,7 +996,7 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
     else pure none
   let breaks := firstBreaks rest
   let rest := if breaks then rest.map Refine.liftBreaks else rest
-  let caps : List Local := ctx.captureEvidence (ctx.usedLocals (ctx.choiceCoercionBody (.block p rest)))
+  let caps : List Local := ctx.capturesOf (ctx.choiceCoercionBody (.block p rest))
   let setNames := Choice.setsIn (.block p rest)
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
   let binds := (b :: Choice.boundIn rest).eraseDups
@@ -1132,7 +1142,7 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
     | .app _ (.ident _ "$forReturnBody") [.block _ [_, .set _ (.ident _ _) none _], _, _] false => true
     | _ => false
   if !breaks && (Refine.findPart Refine.isBreak true (.block p rest)).isSome then throw "a break"
-  let caps : List Local := ctx.captureEvidence (ctx.usedLocals (ctx.choiceCoercionBody (.block p (rest ++ [body]))))
+  let caps : List Local := ctx.capturesOf (ctx.choiceCoercionBody (.block p (rest ++ [body])))
   let setNames := Choice.setsIn (.block p (rest ++ [body]))
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
   let (tps, typeParams, typeArgs) ← contTypes ctx p (bty :: caps.map (·.ty)) [vty] written
@@ -1176,8 +1186,7 @@ def forStagePlanOf (ctx : Ctx) (p : Pos) (key : String) (clauses : List SExpr)
   let clauses := clauses.map qualify
   let body := qualify body
   let written := ctx.choiceCoercionBody (.block p (clauses ++ [body] ++ required.map (SExpr.ident p ·)))
-  let used := Choice.namesUsed written
-  let caps := ctx.captureEvidence (used.eraseDups.filterMap ctx.lookup)
+  let caps := ctx.capturesOf written
   let setNames := Choice.setsIn written
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
   let inputs := (caps.flatMap fun l => l.storage.toList.flatMap (·.args)) ++ ctx.choiceCoercions.map (·.1.ty)
@@ -1252,7 +1261,7 @@ def forStagePrefixOf (ctx : Ctx) (plan : Choice.ForStagePlan) (args : List Ty) (
   let clauses := clauses.map fun e => Refine.substTypes σt (qualify e)
   let body := Refine.substTypes σt (qualify body)
   let written := ctx.choiceCoercionBody (.block p (clauses ++ [body] ++ (copyNames ++ borrowNames).map (SExpr.ident p ·)))
-  let caps := ctx.captureEvidence (ctx.usedLocals written)
+  let caps := ctx.capturesOf written
   let key := s!"prefix{flat}" ++ plan.key ++ contKey ctx p "$prepare" [written] ++ forStageCaptureKey ctx args caps
   let name := s!"{plan.base}$prepare{key.hash}"
   let (tps, more, witnesses) ← contTypes ctx p (caps.map (·.ty)) args written
@@ -1298,7 +1307,7 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
   let clauses := clauses.map qualify
   let body := qualify body
   let written := ctx.choiceCoercionBody (.block p (clauses ++ [body] ++ (ctx.forStageCopies ++ ctx.forStageBorrows).map (SExpr.ident p ·)))
-  let caps := ctx.captureEvidence (ctx.usedLocals written)
+  let caps := ctx.capturesOf written
   let key := s!"env{ctx.forStageFlat}" ++ plan.key ++ contKey ctx p "$resume" [written] ++ forStageCaptureKey ctx ctx.forStageArgs caps
   let name := s!"{plan.base}$env{key.hash}"
   let args := ctx.forStageArgs
