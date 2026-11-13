@@ -337,8 +337,130 @@ structure ClassNames where
   /-- Its extension methods, `$ext:M`, which its methods' calls find. -/
   exts : List String
 
+/-- The specifiers a definition writes, each with the place it is written
+    at: its name's, its type's own, its fields' and their `var`s', its
+    methods'. -/
+def STop.specPlaces : STop → List (EffectPolicy.Place × List String)
+  | .fn _ _ _ _ specs .. => [(.function, specs)]
+  | .const _ _ specs _ (.structDef _ _ sspecs fs) =>
+    [(.definition, specs), (.structType, sspecs)] ++ fs.flatMap fun f => [(.structField, f.specs), (.var, f.varSpecs)]
+  | .const _ _ specs .. => [(.definition, specs)]
+  | .classDef _ _ ns _ specs _ isI fs ms =>
+    [(.definition, ns), (if isI then .interfaceType else .classType, specs)] ++
+      fs.flatMap (fun f => [(.field, f.specs), (.var, f.varSpecs)]) ++
+      ms.filterMap fun | .fn _ _ _ _ s .. => some (.method, s) | _ => none
+
+/-- A parsed program with every access level written out (Book of Verse
+    ch. 12, "Scoped"): the modules of `<scoped{A, B.C}>` found from where it
+    is written, a name `<S>` or `<M.S>` of an access level `S := scoped{…}`
+    replaced by the level it names, both as `scoped{A::B|C}`
+    (`Access.scopedLevel`); the access levels' definitions, which are no
+    values, removed. A scope names modules of the program: a package's path
+    is refused, as is a specifier that is no keyword openverse knows and
+    names no access level (`<intrinsic>`). Each place then has at most one
+    access level where one may go (`EffectPolicy.checkPlace`). -/
+def resolveSpecifiers (tops : List STop) : Except String (List STop) := do
+  let scopeDef? : STop → Option (Pos × String × List String × List String) := fun
+    | .const p n specs none (.app _ (.ident _ "$scope") refs false) =>
+      some (p, n, specs, refs.filterMap fun | .ident _ r => some r | _ => none)
+    | _ => none
+  let scopes := tops.filterMap scopeDef?
+  let needed := !scopes.isEmpty || tops.any fun t => t.specPlaces.any fun (_, specs) =>
+    specs.any fun sp => sp.startsWith "scoped{" || !(sp.startsWith "$" || EffectPolicy.known sp)
+  if !needed then return tops
+  let scopeOf (n : String) : List String := (qualParts n).dropLast
+  let modules : Std.HashSet String := Std.HashSet.ofList (tops.filterMap fun
+    | .const _ n .. => if n.startsWith "$module:" then some (n.drop "$module:".length).toString else none
+    | _ => none)
+  -- a module `r` (`A.B`) from scope `sc`: its first name found from `sc`
+  -- outward, as a module's name is
+  let moduleAt (sc : List String) (p : Pos) (r : String) : Except String (List String) := do
+    if r.startsWith "/" then
+      throw s!"{p.show}: scoped\{{r}}: {r} is a package's path, and openverse has no packages: a scope names modules of the program (Book of Verse ch. 12)"
+    let comps := r.splitOn "."
+    for k in (List.range (sc.length + 1)).reverse do
+      let base := sc.take k ++ [comps.headD r]
+      if modules.contains (qualJoin base) then
+        let path := base ++ comps.drop 1
+        if modules.contains (qualJoin path) then return path
+        break
+    throw s!"{p.show}: scoped\{{r}}: unknown module {r}: a scope names modules of the program (Book of Verse ch. 12)"
+  let canonical (sc : List String) (p : Pos) (sp : String) : Except String String := do
+    let refs := ((((sp.drop "scoped{".length).dropEnd 1).toString).splitOn ",").filter (· != "")
+    return Access.scopedLevel (← refs.mapM (moduleAt sc p))
+  -- each access level a module defines: what it grants, and its own access
+  let mut levels : Std.HashMap String (String × Option String) := {}
+  for (p, n, specs, refs) in scopes do
+    let own ← specs.mapM fun sp => if sp.startsWith "scoped{" then canonical (scopeOf n) p sp else pure sp
+    levels := levels.insert n (Access.scopedLevel (← refs.mapM (moduleAt (scopeOf n) p)), Access.levelOf own)
+  -- the access level `r` (`S`, `M.S`) names from scope `sc`: from `sc`
+  -- outward, then among those of the modules opened there that admit `sc`
+  let opens : List (List String × String) := tops.filterMap fun
+    | .const _ n .. =>
+      if !n.startsWith "$open:" then none else
+      match ((n.drop "$open:".length).toString).splitOn "|" with
+      | [s, m] => some ((qualParts s).filter (· != ""), m)
+      | _ => none
+    | _ => none
+  let admits (n : String) (sc : List String) : Bool :=
+    ((Access.audience (levels[n]?.bind (·.2)) (scopeOf n)).admits (fun _ _ => false) { module := sc })
+  let levelAt (sc : List String) (p : Pos) (r : String) : Except String (Option String) := do
+    let comps := r.splitOn "."
+    if comps.length > 1 then
+      let path ← moduleAt sc p (".".intercalate comps.dropLast)
+      let n := qualJoin (path ++ [comps.getLastD r])
+      return if levels.contains n && admits n sc then some n else none
+    for k in (List.range (sc.length + 1)).reverse do
+      let n := qualJoin (sc.take k ++ [r])
+      if levels.contains n then return some n
+    for (osc, m) in opens do
+      if Access.isPrefix osc sc then
+        if let .ok path := moduleAt osc p (m.replace "::" ".") then
+          let n := qualJoin (path ++ [r])
+          if levels.contains n && admits n sc then return some n
+    return none
+  let resolve (sc : List String) (p : Pos) (place : EffectPolicy.Place) (specs : List String) :
+      Except String (List String) := do
+    let out ← specs.mapM fun sp => do
+      if sp.startsWith "scoped{" then return ← canonical sc p sp
+      if sp.startsWith "$" || EffectPolicy.known sp then return sp
+      match ← levelAt sc p sp with
+      | some n => return (levels[n]?.map (·.1)).getD sp
+      | none =>
+        throw s!"{p.show}: unknown or unsupported specifier <{sp}> on {place.what}: no specifier openverse knows, nor an access level scoped\{…} that the program defines (#494)"
+    EffectPolicy.checkPlace p place out
+    return out
+  let resolveFields (sc : List String) (p : Pos) (place : EffectPolicy.Place) (fs : List SField) :
+      Except String (List SField) :=
+    fs.mapM fun f => do
+      let f := { f with specs := ← resolve sc p place f.specs, varSpecs := ← resolve sc p .var f.varSpecs }
+      EffectPolicy.checkOverrideAccess p f.name f.specs f.varSpecs
+      return f
+  tops.filterMapM fun t => do
+    if (scopeDef? t).isSome then return none
+    match t with
+    | .fn p n ps tps specs ret body => return some (.fn p n ps tps (← resolve (scopeOf n) p .function specs) ret body)
+    | .const p n specs ty body =>
+      let sc := if n.startsWith "$module:" then scopeOf (n.drop "$module:".length).toString else scopeOf n
+      let body ← match body with
+        | .structDef bp tps sspecs fs => do
+          pure (SExpr.structDef bp tps (← resolve sc p .structType sspecs) (← resolveFields sc p .structField fs))
+        | b => pure b
+      return some (.const p n (← resolve sc p .definition specs) ty body)
+    | .classDef p c ns tps specs parents isI fs ms =>
+      let sc := scopeOf c
+      let ms ← ms.mapM fun
+        | .fn mp mn mps mtps mspecs mret mbody => do
+          let mspecs ← resolve sc mp .method mspecs
+          EffectPolicy.checkOverrideAccess mp mn mspecs []
+          return STop.fn mp mn mps mtps mspecs mret mbody
+        | m => pure m
+      return some (.classDef p c (← resolve sc p .definition ns) tps
+        (← resolve sc p (if isI then .interfaceType else .classType) specs) parents isI (← resolveFields sc p .field fs) ms)
+
 /-- Resolve the modules and the qualified names of a parsed program (see
     the file's header). -/
+
 def resolveModules (tops : List STop) : Except String (List STop) := do
   let markers (pre : String) : List (Pos × String) := tops.filterMap fun
     | .const p n _ _ _ => if n.startsWith pre then some (p, (n.drop pre.length).toString) else none
@@ -406,7 +528,7 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
       if !admitsAt sc lvl then
         match Access.audience levels[qualJoin lvl]? owner with
         | .within _ => throw s!"{p.show}: {shownP lvl} is internal to {shownP owner}: mark it <public> to use it outside"
-        | a => throw s!"{p.show}: {shownP lvl} is {a.what}, and this code is not (Book of Verse ch. 12)"
+        | a => throw s!"{p.show}: {a.refusal (shownP lvl)}"
   -- the modules opened, each with the scope it is open in
   let mut opens : List (List String × List String) := []
   for (p, s) in markers "$open:" do

@@ -176,26 +176,55 @@ def expectIdent : PM String := do
   | some n => bump; return n
   | none => perr t s!"expected an identifier, found {t.tok.describe}"
 
-/-- Read specifier lists before deciding their declaration role. -/
+/-- The modules of a scope, `scoped{A, B.C}` (after `scoped`): each a name
+    or a dotted path of names, or a package's path, which `resolveModules`
+    refuses (Book of Verse ch. 12, "Scoped"). -/
+partial def parseScopeRefs : PM (List String) := do
+  expectSym "{"
+  let mut refs := #[]
+  repeat
+    let t ← peekT
+    if t.isSym "}" then bump; break
+    if t.isSym "," then bump; continue
+    match t.tok with
+    | .path q => bump; refs := refs.push q
+    | _ =>
+      let mut r ← expectIdent
+      while (← peekT).isSym "." do bump; r := r ++ "." ++ (← expectIdent)
+      refs := refs.push r
+  return refs.toList
+
+/-- Read specifier lists before deciding their declaration role. An access
+    level is `<scoped{A, B}>`, kept as `scoped{A,B}`, or a name of one a
+    module defines, `<S>` or `<M.S>` (Book of Verse ch. 12, "Scoped"). -/
 partial def parseSpecs : PM (List String) := do
   let mut specs := #[]
   repeat
     let t ← peekT
     if t.isSym "<" then
       bump
-      let n ← match (← peekT).tok with
+      let mut n ← match (← peekT).tok with
         | .ident x => do bump; pure x
         | _ => perr (← peekT) "expected an effect or specifier name"
+      if n == "scoped" && (← peekT).isSym "{" then
+        n := s!"scoped\{{",".intercalate (← parseScopeRefs)}}"
+      else
+        while (← peekT).isSym "." do bump; n := n ++ "." ++ (← expectIdent)
       expectSym ">"
       specs := specs.push n
     else break
   return specs.toList
 
+
 /-- A function's access specifier is written on its name, `F<public>(…)`, not
-    among its effects after the parameters (Book of Verse ch. 12). -/
+    among its effects after the parameters (Book of Verse ch. 12); there, a
+    name that is no specifier openverse knows names no access level either. -/
 def accessOnName (p : Pos) (name : String) (effs : List String) : PM Unit := do
   if let some sp := effs.find? EffectPolicy.isAccess then
     throw s!"{p.show}: <{sp}> after the parameters of {name}: an access specifier is written on the name, {name}<{sp}>(…)"
+  if let some sp := effs.find? (!EffectPolicy.known ·) then
+    throw s!"{p.show}: unknown or unsupported function specifier <{sp}> on {name} (#494)"
+
 
 def cmpOps : List String := ["=", "<>", "<", "<=", ">", ">="]
 
@@ -1901,7 +1930,16 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
     else if n.isSym ":=" then
       bump
       let a ← peekT
+      -- `name := scoped{A, B}`: an access level, which specifiers may name
+      -- (Book of Verse ch. 12, "Scoped Definitions"): `$scope(A, B)`, which
+      -- `resolveSpecifiers` reads and removes
+      if a.identName? == some "scoped" && (← peekT 1).isSym "{" then
+        bump
+        let refs ← parseScopeRefs
+        tops := tops.push (.const t.pos name pre none (.app a.pos (.ident a.pos "$scope") (refs.map (.ident a.pos ·)) false))
+        continue
       -- `name := t`: a type alias, when `t` is written as only a type can be
+
       if let some ty ← typeAliasRHS? then
         tops := tops.push (.const t.pos name pre none (.typeAlias a.pos [] ty))
         continue

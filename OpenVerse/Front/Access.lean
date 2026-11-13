@@ -61,6 +61,18 @@ abbrev Eff := List Audience
 /-- The access level written in `specs`, if any. -/
 def levelOf (specs : List String) : Option String := specs.find? EffectPolicy.isAccess
 
+/-- An access level `scoped{A::B|C}` as `resolveSpecifiers` writes it: the
+    modules it grants, by their parts. -/
+def scopedGrants? (sp : String) : Option (List (List String)) :=
+  if sp.startsWith "scoped{" && sp.endsWith "}" then
+    let inner := ((sp.drop "scoped{".length).dropEnd 1).toString
+    some ((inner.splitOn "|").filter (· != "") |>.map (·.splitOn "::"))
+  else none
+
+/-- The access level `scoped{…}` that grants the modules `gs`. -/
+def scopedLevel (gs : List (List String)) : String :=
+  "scoped{" ++ "|".intercalate (gs.map ("::".intercalate ·)) ++ "}"
+
 /-- The audience of access `sp` (the default, `<internal>`, when none) on a
     definition of module `m`, and of class `c` for a class's member or
     constructor. -/
@@ -70,7 +82,11 @@ def audience (sp : Option String) (m : List String) (c : Option String := none) 
   | some "epic_internal", _ => .epic
   | some "protected", some c => .below c
   | some "private", some c => .inClass c
+  | some s, _ => match scopedGrants? s with
+    | some gs => .scoped m gs
+    | none => .within m
   | _, _ => .within m
+
 
 def isPrefix (a b : List String) : Bool := a.length ≤ b.length && b.take a.length == a
 
@@ -132,7 +148,7 @@ def Audience.what : Audience → String
   | .everyone => "<public>"
   | .epic => "<epic_internal>"
   | .within m => s!"internal to {shownModule m}"
-  | .scoped m gs => s!"scoped to {", ".intercalate ((m :: gs).map shownModule)}"
+  | .scoped m gs => s!"scoped to {", ".intercalate ((m :: gs).eraseDups.map shownModule)}"
   | .below c => s!"<protected> in {shown c}, for {shown c} and the classes below it"
   | .inClass c => s!"<private> to {shown c}"
 
@@ -279,7 +295,7 @@ def Env.member? (env : Env) (supers : List String) (m : String) : Option Member 
 /-- Why code may not use `what`, which audience `a` does not admit it to. -/
 def Audience.refusal (what : String) : Audience → String
   | .within m => s!"{what} is internal to {shownModule m}: mark it <public> to use it outside (Book of Verse ch. 12)"
-  | .scoped m gs => s!"{what} is scoped to {", ".intercalate ((m :: gs).map shownModule)}: only code there may use it (Book of Verse ch. 12)"
+  | .scoped m gs => s!"{what} is scoped to {", ".intercalate ((m :: gs).eraseDups.map shownModule)}: only code there may use it (Book of Verse ch. 12)"
   | .below c => s!"{what} is <protected>: only {shown c} and the classes below it may use it (Book of Verse ch. 12)"
   | .inClass c => s!"{what} is <private>: only {shown c}'s own code may use it (Book of Verse ch. 12)"
   | a => s!"{what} is {a.what} (Book of Verse ch. 12)"

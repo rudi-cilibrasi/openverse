@@ -358,10 +358,13 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   let rawEntry : List STop := match opts.entry with
     | some e => [.fn e.pos "$Do" [] [] ["decides"] (.name "void") (.app e.pos (.ident e.pos "$Show") [e] false)]
     | none => []
-  let resolved ← resolveModules (allTops000 ++ rawEntry)
-  -- (access, Book of Verse ch. 12: the levels written on the definitions and
-  -- modules; a type alias is no more visible than what it names)
-  let levels := Access.Levels.of allTops0r
+  -- (access, Book of Verse ch. 12: every access level written out, those
+  -- `scoped{…}` names, and the levels of the definitions and modules)
+  let specified ← resolveSpecifiers (allTops000 ++ rawEntry)
+  let levels := Access.Levels.of specified
+  let resolved ← resolveModules specified
+  -- (a type alias is no more visible than what it names)
+
   Access.checkAliases levels resolved
   -- type aliases: each written out where it is used, so that nothing after
   -- this knows aliases exist

@@ -65,7 +65,10 @@ def Place.what : Place → String
     docs/research/access-specifiers.md). -/
 def accessNames : List String := ["public", "internal", "protected", "private", "epic_internal"]
 
-def isAccess (sp : String) : Bool := accessNames.contains sp
+def isAccess (sp : String) : Bool := accessNames.contains sp || sp.startsWith "scoped{"
+
+/-- A specifier's entry in `specifierPlaces`: `scoped` for `scoped{…}`. -/
+def placeKey (sp : String) : String := if sp.startsWith "scoped{" then "scoped" else sp
 
 
 /-- The specifiers that say what a declaration is, each with the places it
@@ -103,6 +106,7 @@ def specifierPlaces : List (String × List Place) :=
    ("public", [.definition, .function, .method, .field, .structField, .var, .classType, .interfaceType, .structType]),
    ("internal", [.definition, .function, .method, .field, .var, .classType, .interfaceType, .structType]),
    ("epic_internal", [.definition, .function, .method, .field, .var, .classType, .interfaceType, .structType]),
+   ("scoped", [.definition, .function, .method, .field, .var, .classType, .interfaceType, .structType]),
    ("protected", [.method, .field, .var, .classType]),
    ("private", [.method, .field, .var])]
 
@@ -122,7 +126,7 @@ def accessPlaceWhy : Place → String
     (Book of Verse tests, Classes/AccessSpecifiers: 3543, 3642). -/
 def checkPlace (p : Pos) (place : Place) (specs : List String) : Except String Unit := do
   for sp in specs do
-    if let some places := specifierPlaces.lookup sp then
+    if let some places := specifierPlaces.lookup (placeKey sp) then
       if !places.contains place then
         if isAccess sp then reject p s!"<{sp}> is not allowed on {place.what}: {accessPlaceWhy place}"
         reject p s!"<{sp}> is not allowed on {place.what}: it is for {" or ".intercalate (places.map (·.what))}"
@@ -144,15 +148,8 @@ def checkOverrideAccess (p : Pos) (what : String) (specs varSpecs : List String)
     specifier of `specifierPlaces`, an effect (refused where none goes), or
     one `checkUnsupported` or `checkSpecs` refuses with its reason. -/
 def known (sp : String) : Bool :=
-  (specifierPlaces.lookup sp).isSome || effectNames.contains sp ||
+  (specifierPlaces.lookup (placeKey sp)).isSome || effectNames.contains sp ||
     ["predicts", "native", "native_callable", "no_rollback", "constructor"].contains sp
-
-/-- Each of `specs`, on `what`, is a specifier openverse knows (Book of Verse
-    tests, Attributes/intrinsic: `<intrinsic>` is for the Verse package's own
-    code). -/
-def checkKnown (p : Pos) (what : String) (specs : List String) : Except String Unit := do
-  for sp in specs do
-    if !known sp then reject p s!"unknown or unsupported specifier <{sp}> on {what} (#494)"
 
 /-- Used by the parser at sites where attributes are otherwise discarded: a
     field's name (`kind` "field", at `place`) or a definition's. -/
@@ -161,14 +158,12 @@ def checkNonFunction (p : Pos) (kind : String) (specs : List String)
   checkUnsupported p specs
   if let some sp := specs.find? effectNames.contains then
     reject p s!"<{sp}> on a {kind} is unsupported: effect specifiers are not supported at this declaration position (#494)"
-  checkKnown p s!"a {kind}" specs
   checkPlace p place specs
 
 /-- The specifiers of a definition's name: a constant's, class's,
     interface's, struct's, enum's or alias's. -/
 def checkName (p : Pos) (specs : List String) : Except String Unit := do
   checkUnsupported p specs
-  checkKnown p "a definition's name" specs
   checkPlace p .definition specs
 
 /-- A field's specifiers, on its name and its `var`, at `place` (a class's or
@@ -211,7 +206,9 @@ def checkSpecs (p : Pos) (subject : String) (specs : List String)
   checkUnsupported p specs
   for sp in specs do
     if supported.contains sp then continue
-    if !typeOnly && (metadata.contains sp || sp.startsWith "$") then continue
+    -- (a name that is no specifier openverse knows may name an access
+    -- level, `S := scoped{…}`: `resolveSpecifiers` decides)
+    if !typeOnly && (metadata.contains sp || sp.startsWith "$" || isAccess sp || !known sp) then continue
     reject p s!"unknown or unsupported {if typeOnly then "function-type effect" else "function specifier"} <{sp}> on {subject} (#494)"
 
 /-- Construction has the same heap family as functions, but is immediate and
