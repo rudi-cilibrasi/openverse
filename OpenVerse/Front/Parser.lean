@@ -1491,19 +1491,24 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
     return ds.map fun (p, n, t, e) => .const p s!"{pfx}{typeDefaultPrefix}{n}" (some t) e
   let saved := (← get).topCol
   modify fun st => { st with topCol := col }
+  -- (definitions on one line are separated by `;` or `,`: `X:int=0, Y:int=0`,
+  -- Book of Verse ch. 1, "Semicolons vs Commas")
+  let mut afterSep := false
   repeat
     tops := tops ++ (← typeDefaults)
     let t ← peekT
     if braced then
       if t.isEof then perr t "expected '}' to end the module"
       if t.isSym "}" then bump; break
-      if t.isSym ";" then bump; continue
+      if t.isSym ";" || t.isSym "," then bump; continue
     else
       if t.isEof then break
       if col > 0 && t.bol && t.col < col then break
-      if !t.bol || t.col != col then
+      if !t.bol && (t.isSym ";" || t.isSym ",") then bump; afterSep := true; continue
+      if (!t.bol && !afterSep) || (t.bol && t.col != col) then
         perr t (if col == 0 then "a top-level definition must start at column 0"
           else "a definition in a module must start at the module body's column")
+      afterSep := false
     if t.isKw "using" || (t.isKw "import" && (← peekT 1).isSym "{") then
       -- `using{"relative_path"}` imports a file or directory (#27); other
       -- `using { /Verse.org/… }` module paths are accepted and ignored
