@@ -138,6 +138,180 @@ structure Fields where
       `checkSignatures` gives after the signature checks. -/
   defaultClashes : Array String
 
+/-- Class `n`'s fields (`Fields.map`); none for a name that is not a class's. -/
+def Fields.of (fields : Fields) (n : String) : List (String × STy × Option SExpr × Bool) :=
+  fields.map[n]?.getD []
+
+/-- The fields of the classes, a phase of `elabProgramCore`: each class's,
+    inherited ones first (from its superclass, then from the interfaces above
+    it, once each, with the default of the most specific interface that gives
+    one), then its own, which do not take an inherited field's or method's
+    name unless they override a field, then hidden fields that hold values of
+    its type parameters where a dispatch needs them (#209, #250, #276, #351,
+    and all of them for the classes in `requests.witnesses`). -/
+def classFields (classes : Classes) (requests : Requests) : Except String Fields := do
+  -- the fields of each class: its superclass's, then those of the
+  -- interfaces above it that are not there yet (once, along a diamond), then
+  -- its own (an `<override>` field gives an inherited one a new default)
+  let mut full : Array (String × List (String × STy × Option SExpr × Bool)) := #[]
+  let mut fieldOverrides : Array (Pos × String × String × STy) := #[]
+  let mut defaultClashes : Array String := #[]
+  -- (each class's fields by name too: lookups in `full` made this cubic)
+  let mut fullMap : Std.HashMap String (List (String × STy × Option SExpr × Bool)) := {}
+  for _ in [0:classes.defs.length + 1] do
+    -- (until a pass resolves nothing more, or every class is resolved)
+    if full.size == classes.defs.length then break
+    let before := full.size
+    for cd in classes.defs do
+      if fullMap.contains cd.name then continue
+      let inherited? : Option (List (String × STy × Option SExpr × Bool)) :=
+        match (classes.henv.info cd.name).parent with
+        | none => some []
+        | some q =>
+          -- in terms of this class's type parameters (#39)
+          let qargs := ((cd.parents.zip cd.parentArgs).lookup q).getD []
+          let σ := ((((classes.cdef? q).map (·.tps)).getD []).map (·.name)).zip qargs
+          fullMap[q]?.map fun fs => fs.map fun (f, sty, d, v) => (f, sty.substNames σ, d, v)
+      let some inh := inherited? | continue
+      -- the interfaces above must be resolved first
+      let ifacesUp := ((classes.henv.supers cd.name).drop 1).filter (classes.henv.info · |>.isIface)
+      if ifacesUp.any (fun i => !fullMap.contains i) then continue
+      let mut fs : List (String × STy × Option SExpr × Bool) := inh
+      -- each interface field not inherited through the class chain, once; its
+      -- default is that of the most specific interface that gives one (as for
+      -- methods, whatever the order of the parents)
+      for i in ifacesUp do
+        -- (in terms of this class's type parameters, #53)
+        let iσ := ((((classes.cdef? i).map (·.tps)).getD []).map (·.name)).zip ((classes.supArgsSTy cd.name i).getD [])
+        for (f, sty0, _, isVar) in fullMap[i]?.getD [] do
+          let sty := sty0.substNames iσ
+          if ((classes.henv.supers cd.name).drop 1).any (classes.declares · f) then
+            throw s!"{cd.pos.show}: field '{f}' of {cd.name} has the name of an inherited method"
+          if let some (_, _, _, v0) := fs.find? (·.1 == f) then
+            -- reached again: its type must agree (checked once types are
+            -- resolved), and whether it is a var
+            if v0 != isVar then
+              throw s!"{cd.pos.show}: {cd.name} inherits field '{f}' as a var from one parent and not from another"
+            fieldOverrides := fieldOverrides.push (cd.pos, cd.name, f, sty)
+          else
+            -- the interfaces that give the field a default themselves (an
+            -- inherited default is its declaring interface's)
+            let ownDefault (j : String) : Option SExpr :=
+              (((classes.cdef? j).map (·.fields)).getD []).findSome? fun (g, _, d, _) => if g == f then d else none
+            let withDefault := ifacesUp.filter fun j => (ownDefault j).isSome
+            let best := withDefault.filter fun j => !withDefault.any fun j' => j' != j && classes.henv.isSub j' j
+            if best.length > 1 && !cd.overrides.contains f then
+              defaultClashes := defaultClashes.push
+                s!"{cd.pos.show}: {cd.name} inherits a default for field '{f}' from both {best[0]!} and {best[1]!}: give it one with {f}<override>:t = e"
+            let d := best.head?.bind ownDefault
+            fs := fs ++ [(f, sty, d, isVar)]
+      for (f, sty, d, isVar) in cd.fields do
+        if f == "Self" then throw s!"{cd.pos.show}: a field of {cd.name} cannot be called Self"
+        if ((classes.henv.supers cd.name).drop 1).any (classes.declares · f) then
+          throw s!"{cd.pos.show}: field '{f}' of {cd.name} has the name of an inherited method"
+        match fs.findIdx? (fun (g : String × STy × Option SExpr × Bool) => g.1 == f) with
+        | some k =>
+          if cd.overrides.contains f && d.isNone then
+            throw s!"{cd.pos.show}: {f}<override> must give a new default: write {f}<override>:t = e"
+          if !cd.overrides.contains f then
+            throw s!"{cd.pos.show}: field '{f}' of {cd.name} has the name of an inherited field (write {f}<override>:t = … to give it a new default)"
+          let (_, sty0, _, v0) := fs[k]!
+          if isVar != v0 then
+            throw s!"{cd.pos.show}: {f}<override> cannot change whether the field is a var"
+          fs := fs.set k (f, sty0, d, v0)
+          fieldOverrides := fieldOverrides.push (cd.pos, cd.name, f, sty)
+        | none =>
+          if cd.overrides.contains f then
+            throw s!"{cd.pos.show}: {f}<override> in {cd.name} does not override an inherited field"
+          fs := fs ++ [(f, sty, d, isVar)]
+      -- (#209) each type parameter that is not one of its parent's type
+      -- arguments as a whole: a hidden field holds a value of it, from
+      -- which a method of the class, run by a dispatch that opens it, gets
+      -- its slots of that type (`Sig.selfTps`)
+      -- (only where an override, at or below, may need it)
+      let methodsBelow := classes.defs.any fun cd' => classes.henv.isSub cd'.name cd.name &&
+        cd'.methods.any fun | .fn _ _ _ _ effs .. => effs.contains "override" | _ => false
+      -- (#250: or a cast that opens them targets the class or one below it,
+      -- whose branch's function reads them from the object, also those an
+      -- ancestor of the target adds)
+      let methodsBelow := methodsBelow || requests.witnesses.contains cd.name ||
+        requests.casts.any fun l => !l.opened.isEmpty && classes.henv.isSub l.target cd.name
+      -- (#276, #209: a root class counts them as `rootArgCount` does: the
+      -- first of its Verse Core type arguments, as many as the interface
+      -- with the fewest type parameters at or above it, or above a class
+      -- below it that leaves one of the others a type parameter; an
+      -- interface has no such fields)
+      let qargs? : Option (List STy) := if cd.isIface then none else
+        if requests.witnesses.contains cd.name then some [] else match (classes.henv.info cd.name).parent with
+        | some q => some (((cd.parents.zip cd.parentArgs).lookup q).getD [])
+        | none =>
+          -- (the interfaces above it or above a class below it, #209)
+          let below := classes.defs.filter fun c => !c.isIface && classes.henv.isSub c.name cd.name
+          let ifs := classes.defs.filter fun i => i.isIface && below.any fun c => classes.henv.isSub c.name i.name
+          if ifs.isEmpty then none else
+          -- (its Verse Core type arguments: those it gives the interface it
+          -- lists with the most, then its other type parameters, as
+          -- `coreArgs` has them; all of them when it lists no interface)
+          -- (each at that interface's Verse Core type arguments, also those
+          -- it gives its own parents, #53)
+          let longest := ((cd.parents.zip cd.parentArgs).filter fun (q, _) => (classes.henv.info q).isIface).foldl
+            (fun (b : List STy) (q, qa) =>
+              let qa := match classes.defs.find? (·.name == q) with
+                | some qd => qd.ifaceCoreS classes.defs qa
+                | none => qa
+              if b.length < qa.length then qa else b) []
+          let others := cd.tps.filter fun tp => !longest.any fun | .name v => v == tp.name | _ => false
+          let coreS := longest ++ others.map fun tp => STy.name tp.name
+          -- (#351: an interface it lists at type arguments that are not a
+          -- prefix of its own is referred to through views, a dispatch
+          -- through which may open any of them: all have hidden fields)
+          let nonPrefix := (cd.parents.zip cd.parentArgs).any fun (q, qa) =>
+            (classes.henv.info q).isIface &&
+              let ca := match classes.defs.find? (·.name == q) with
+                | some qd => qd.ifaceCoreS classes.defs qa
+                | none => qa
+              !(ca.length ≤ coreS.length && (ca.zip coreS).all fun (a, b) => Choice.styEq a b)
+          if nonPrefix then some [] else
+          -- (as a class below gives them: through its parents' arguments)
+          let rec viewIn (fuel : Nat) (c : CDef) : List STy :=
+            match fuel with
+            | 0 => coreS
+            | f + 1 =>
+              if c.name == cd.name then coreS else
+              match (classes.henv.info c.name).parent with
+              | some q => match classes.defs.find? (·.name == q) with
+                | some qd =>
+                  let σ := qd.tps.map (·.name) |>.zip (((c.parents.zip c.parentArgs).lookup q).getD [])
+                  (viewIn f qd).map (·.substNames σ)
+                | none => coreS
+              | none => coreS
+          -- (an interface above a class below it counts only when one of
+          -- its type arguments that interface does not give is still a
+          -- type parameter there, as `rootArgCount` has it, #276)
+          let fewest := below.foldl (fun m c =>
+            let view := viewIn classes.defs.length c
+            (ifs.filter fun i => classes.henv.isSub c.name i.name).foldl (fun m i =>
+              let k := i.tps.length
+              if c.name == cd.name || (view.drop k).any (STy.mentionsAny (c.tps.map (·.name))) then min m k else m) m)
+            coreS.length
+          some (coreS.take fewest)
+      if let some qargs := qargs? then
+        for tp in (if methodsBelow then cd.tps else []) do
+          -- (all of them for a class with a class parent that lists an
+          -- interface at type arguments that are not a prefix of its own,
+          -- which a dispatch through a view opens, #351)
+          if requests.witnesses.contains cd.name || !qargs.any (fun | .name v => v == tp.name | _ => false) then
+            fs := fs ++ [(s!"$w.{cd.name}.{tp.name}", .name tp.name, some (.ident cd.pos "$witness"), false)]
+      full := full.push (cd.name, fs)
+      fullMap := fullMap.insert cd.name fs
+    if full.size == before then break
+  let fields : Fields := { map := fullMap, overrides := fieldOverrides, defaultClashes }
+  for cd in classes.defs do
+    for (f, _, _, _) in fields.of cd.name do
+      if (classes.henv.supers cd.name).any (classes.declaresBase · f) then
+        throw s!"{cd.pos.show}: '{f}' is both a field and a method of {cd.name}"
+  return fields
+
 /-- The classes' methods and constructors, as functions. -/
 structure Methods where
   /-- The program's definitions with each class expanded: a struct of its
