@@ -62,7 +62,8 @@ def Place.what : Place → String
     `<final>` a member's body or value (`checkField`, `checkPlaces`);
     `<concrete>` a default for every field (a struct's in `checkPlaces`, a
     class's with its inherited fields, `classFields`); `<castable>` and
-    `<final_super_base>` of the classes below (`classHierarchy`). Enums take
+    `<final_super_base>` of the classes below (`classHierarchy`); a
+    `<persistable>` struct's fields persist (`typeEnvironment`). Enums take
     `<open>`, `<closed>` and `<persistable>` (the parser's check); access
     specifiers are accepted where the parser takes them (LANGUAGE.md,
     Readings), and effects are `checkSpecs`'. -/

@@ -227,7 +227,7 @@ of them; the Book's tests `Tests/Attributes/` and `Castable.versetest`):
 | `<final_super_base>` | a class or an interface | a class right below it is `<final_super>` |
 | `<castable>` | a class or an interface | no type parameters, nor in a class or interface below it |
 | `<unique>` | a class or an interface | |
-| `<persistable>` | a class (not supported yet) or a struct | |
+| `<persistable>` | a class (not supported yet) or a struct | a struct's: no type parameters, and fields that persist: not `any`, a rational, a function, an interface, a class or a struct that is not `<persistable>` (ch. 17; every enum is taken to persist, as openverse does not keep an enum's `<persistable>`) |
 | `<override>` | a method or a field | |
 
 Anywhere else, on a definition's name (`c<castable> := class{}`) or after the
