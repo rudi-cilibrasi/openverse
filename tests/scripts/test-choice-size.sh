@@ -1926,9 +1926,9 @@ if kind.startswith('spawn-default-'):
     print('dup(t:type) := class(pair(t,t)) { C:int=4 }')
     root = 'sink' if viewed else 'base'
     if viewed:
-        print('first(z:type) := interface { Tag():z }')
+        print('leading(z:type) := interface { Tag():z }')
         print('sink(t:type) := interface { Run(P:pair(a,b),?N:int=0 where a:type,b:type)<suspends>:int }')
-        print('impl(z:type,y:type) := class(first(z),sink(y)):\n    Marker:z\n    Seed:int=4\n    Tag<override>():z=Marker')
+        print('impl(z:type,y:type) := class(leading(z),sink(y)):\n    Marker:z\n    Seed:int=4\n    Tag<override>():z=Marker')
         instance = 'impl(string,int){Marker:="x"}'
     else:
         print('base(t:type) := class { Run(P:pair(a,b),?N:int=0 where a:type,b:type)<suspends>:int=0 }')
