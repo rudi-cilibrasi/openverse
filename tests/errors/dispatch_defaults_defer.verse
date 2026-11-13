@@ -6,4 +6,5 @@ ib := class(base(int)):
     F<override>(?T:task(int)=spawn{Work()}):int=1
 Run(P:base(a) where a:type):void=
     defer:Print("{P.F()}")
+    Print("end")
 Main():void=Run(ib{})

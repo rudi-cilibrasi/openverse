@@ -1,8 +1,10 @@
-# A reached final registration yields void; missing branches still fall through.
+# A registration reached last (then only an empty block: a defer cannot end
+# one) yields void; missing branches still fall through.
 Last(N:int)<transacts>:void =
     if(N>0):return
     X:=1|2
     defer:Print("last {X}")
+    {}
 Empty(N:int)<transacts>:any =
     defer:Print("empty")
     if(N>0):

@@ -911,14 +911,12 @@ partial def parseField (c : Nat) : PM (String × STy × Option SExpr × Bool) :=
   let n ← expectIdent
   -- (`X<public>:int`: a field's access specifiers, accepted, not enforced)
   let specs ← parseSpecs
-  ofExcept <| EffectPolicy.checkNonFunction start.pos "field" specs
   expectSym ":"
   let ty ← parseType
   let a ← peekT
-  if a.isSym "=" || a.isSym ":=" then
-    bump
-    return (n, ty, some (← parseValue c), isVar)
-  return (n, ty, none, isVar)
+  let d ← if a.isSym "=" || a.isSym ":=" then do bump; pure (some (← parseValue c)) else pure none
+  ofExcept <| EffectPolicy.checkField start.pos specs d.isSome
+  return (n, ty, d, isVar)
 
 /-- `struct` (after the keyword): optional specifiers, then `:` + fields or `{ fields }`. -/
 partial def parseStructBody (p : Pos) : PM SExpr := do
@@ -1376,7 +1374,7 @@ partial def parseCtorBody (stop : Nat) : PM (List SExpr) := do
 /-- One item of a class body at column `c`: a field `[var] Name:type [= e]`
     or a method `Name(params)<effects>:type = body`. -/
 partial def parseClassItem (c : Nat) :
-    PM (Sum ((String × STy × Option SExpr × Bool) × Bool) STop) := do
+    PM (Sum ((String × STy × Option SExpr × Bool) × List String) STop) := do
   let t ← peekT
   -- `block:` runs when an instance is constructed: the method `$block`
   if t.isKw "block" then
@@ -1398,12 +1396,12 @@ partial def parseClassItem (c : Nat) :
   if qual.isSome && (← peekT).isSym ":" then perr (← peekT) "only a method can be qualified with (interface:)"
   if (← peekT).isSym ":" then
     -- a field, `Name<override>:t = e` giving an inherited field a new default
-    ofExcept <| EffectPolicy.checkNonFunction t.pos "field" pre
     bump
     let ty ← parseType
     let a ← peekT
     let d ← if a.isSym "=" || a.isSym ":=" then do bump; pure (some (← parseValue c)) else pure none
-    return .inl ((name, ty, d, isVar), pre.contains "override")
+    ofExcept <| EffectPolicy.checkField t.pos pre d.isSome
+    return .inl ((name, ty, d, isVar), pre)
   if isVar then perr t "expected a field after var"
   expectSym "("
   let (ps, tps, binds) ← parseParamList
@@ -1457,7 +1455,12 @@ partial def parseClassBody (p : Pos) (name : String) (tps : List TParam) (isIfac
       items := items.push (← parseClassItem 0)
   else perr o s!"expected ':' or '\{' after {if isIface then "interface" else "class"}"
   let fields := items.toList.filterMap fun | .inl (f, _) => some f | .inr _ => none
-  let overrides := items.toList.filterMap fun | .inl ((n, _), true) => some n | _ => none
+  let overrides := items.toList.filterMap fun | .inl ((n, _), sp) => if sp.contains "override" then some n else none | _ => none
+  -- (a `<final>` field, which no class below may give another value, is
+  -- kept among the class's specifiers as `$final:F`)
+  let specs := specs ++ items.toList.filterMap fun
+    | .inl ((n, _), sp) => if sp.contains "final" then some s!"$final:{n}" else none
+    | _ => none
   let methods := items.toList.filterMap fun | .inr m => some m | .inl _ => none
   -- the `block:` clauses, in order, as one method
   let isBlock : STop → Bool := fun | .fn _ "$block" .. => true | _ => false
@@ -1523,6 +1526,8 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
       -- `using{"relative_path"}` imports a file or directory (#27); other
       -- `using { /Verse.org/… }` module paths are accepted and ignored
       bump
+      -- (`using` is reserved: `using:int = 42` is no definition)
+      if !(← peekT).isSym "{" then perr (← peekT) s!"expected '\{' after using, found {(← peekT).tok.describe}"
       if (← peekT).isSym "{" then
         if let .str parts := (← peekT 1).tok then
           let path := String.join (parts.filterMap fun | .text s => some s | _ => none)
@@ -1574,7 +1579,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
       continue
     -- a constant has the effects of its initialiser (#35)
     if !n.isSym "(" then
-      ofExcept <| EffectPolicy.checkUnsupported t.pos pre
+      ofExcept <| EffectPolicy.checkName t.pos pre
       if let some e := pre.find? EffectPolicy.effectNames.contains then
         perr n s!"a constant cannot have the effect specifier <{e}>: it has the effects of its initialiser"
     if n.isSym "(" then

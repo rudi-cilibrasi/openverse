@@ -289,6 +289,55 @@ def STop.isTypeDefault : STop → Bool
   | .const _ n .. => ((n.splitOn "::").getLast?.getD n).startsWith typeDefaultPrefix
   | _ => false
 
+/-- Names no definition may take, at any scope (a module's, a class's, a
+    function's parameters and locals). The Book of Verse says it of `_`
+    (ch. 1: "The single underscore `_` is reserved and cannot be used as an
+    identifier"); its tests reserve the others: the names of
+    `Tests/NamesReservedForFuture.versetest` for the future (with `first`,
+    `assert` and `let`, which openverse also reads as macros before `{` or
+    `(`, and `using`, one of the parser's `keywords`, which no name can be
+    anyway), and the built-in names `Self`, `subtype`, `castable_subtype`
+    and `local` (`Self.versetest`, `Subtype.versetest`,
+    `QualifiedIdentifier.versetest`). -/
+def reservedNames : List String :=
+  ["_", "Self", "subtype", "castable_subtype", "local",
+   "abstracts", "as", "assert", "backslash", "bag", "char8", "char16", "collection", "contravariant",
+   "covariant", "element", "embargo", "ensure", "fails", "find", "first", "float16", "float32", "float64",
+   "float128", "fold", "function", "given", "guard", "implies", "instance", "int8", "int16", "int32",
+   "int64", "interacts", "introspects", "invariant", "iterates", "known", "last", "let", "markup",
+   "permutation", "nat", "nat8", "nat16", "nat32", "nat64", "over", "provided", "random", "repeat",
+   "sequence", "string8", "string16", "string32", "subclass", "succeeds", "syntax", "throws", "trait",
+   "truth", "try", "union", "using", "verify", "when", "while"]
+
+/-- The names a definition introduces as written, each where it is written:
+    its own (the last part of a module member's `A::B::F`), its type
+    parameters and parameters, a struct's or class's fields and methods, and
+    the locals and generators of its bodies and defaults. A qualified method
+    `(c:)F`, a named argument `?X := e`, a construction's `F := e` and the
+    compiler's `$` names are not definitions. -/
+partial def SExpr.definedNames : SExpr → List (Pos × String)
+  | .decl p n _ _ x => (if n.startsWith "?" then [] else [(p, n)]) ++ x.definedNames
+  | .gen p x k s => (p, x) :: (k.toList.map (p, ·)) ++ s.definedNames
+  | .construct _ _ _ fs => fs.flatMap fun
+    | .decl _ _ _ _ x => x.definedNames
+    | f => f.definedNames
+  | .structDef p tps _ fs => tps.map (fun tp => (tp.pos, tp.name)) ++
+      fs.flatMap fun (n, _, d, _) => (p, n) :: (d.map SExpr.definedNames).getD []
+  | e => e.children.flatMap SExpr.definedNames
+
+partial def STop.definedNames : STop → List (Pos × String)
+  | .fn p n ps tps _ _ body =>
+    (if n.startsWith "(" then [] else [(p, n)]) ++ tps.map (fun tp => (tp.pos, tp.name)) ++
+      ps.flatMap (fun prm => (p, prm.name) :: (prm.default.map SExpr.definedNames).getD []) ++ body.definedNames
+  | .const p n _ body =>
+    -- (a module's marker, `$module:A::B`, defines `B`)
+    (if n.startsWith "$module:" then [(p, (n.drop "$module:".length).toString)]
+     else [(p, n)]) ++ body.definedNames
+  | .classDef p n tps _ _ _ fs _ ms =>
+    (p, n) :: tps.map (fun tp => (tp.pos, tp.name)) ++
+      fs.flatMap (fun (f, _, d, _) => (p, f) :: (d.map SExpr.definedNames).getD []) ++
+      ms.flatMap STop.definedNames
+
 /-- Type aliases mentioned as bare names; applications keep declaration heads. -/
 partial def STy.bareNames : STy → List String
   | .name n => [n]

@@ -2,9 +2,9 @@
 left(t:type) := interface:
     Get(?N:int=0):int
     Other(?N:int=0):int
-first(t:type) := interface:
+leading(t:type) := interface:
     Tag():t
-both(a:type,b:type) := class(first(a),left(b)):
+both(a:type,b:type) := class(leading(a),left(b)):
     V:a
     Tag<override>():a=V
     Get<override>(?N:int=block{ P:left(b)=Self; P.Other() }):int=N

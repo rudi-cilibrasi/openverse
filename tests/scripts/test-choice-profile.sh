@@ -44,9 +44,9 @@ Main():void =
         set N+=1
         if(N=3):break
     Print("count {N}")''',
-        'function-value': '''first(X:int):int=X+1
+        'function-value': '''Inc(X:int):int=X+1
 Apply(F:type{_(:int):int},X:int):int=F(X)
-Main():void=Print("{Apply(first,3)} | first for 1..2")''',
+Main():void=Print("{Apply(Inc,3)} | first for 1..2")''',
         'dispatch': '''base(t:type):=class:
     V:t
     Get(?X:t=V):t=X

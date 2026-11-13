@@ -40,7 +40,8 @@ for f in "$tmp"/m*.verse; do
   # one compilation: it writes the bytecode (so a mutant without one never got past the front
   # end), then the Lean interpreter runs it
   timeout 20 "$ov" run "$f" --emit "$f.vbc" --fuel 200000 >"$f.l" 2>"$f.le"; le=$?
-  # (Lean out of memory under check.sh's cap, CHECK_MEM_GB: a resource limit, as exit 3 is. An
+  # (Lean out of memory under check.sh's cap, CHECK_MEM_GB: a resource limit, as exit 3 is, which
+  # the Lean runtime reports with its own panic and exit 1 (docs/FORMAT.md, "Exit protocol"). An
   # endless search Lean runs with far more memory per unit of fuel than C does: in the nightly
   # of 2026-11-10, mutants that C stopped at its fuel limit with 30 MB took Lean 9 GB to get there)
   if [[ $le -eq 1 ]] && grep -q "INTERNAL PANIC: out of memory" "$f.le"; then le=3; fi

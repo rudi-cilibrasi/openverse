@@ -2,4 +2,5 @@
 F()<decides>:void =
     defer:
         1 = 2
+    Print("end")
 Main():void = Print("x")

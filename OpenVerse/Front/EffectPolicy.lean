@@ -31,11 +31,86 @@ def checkUnsupported (p : Pos) (specs : List String) : Except String Unit := do
     | "varies" => reject p "<varies> is an obsolete effect specifier and is unsupported (#494)"
     | _ => pure ()
 
-/-- Used by the parser at sites where attributes are otherwise discarded. -/
+/-- Where a declaration's specifiers are written (`specifierPlaces`). -/
+inductive Place where
+  /-- the name of a constant, class, interface, struct, enum or module -/
+  | definition
+  /-- a function of a module or of the top level: its name or after its parameters -/
+  | function
+  /-- a method of a class or an interface: its name or after its parameters -/
+  | method
+  /-- a field's name, in a class, an interface or a struct -/
+  | field
+  /-- after `class`, `interface` or `struct` -/
+  | classType | interfaceType | structType
+  deriving BEq, Repr
+
+def Place.what : Place → String
+  | .definition => "the name of a constant, type or module"
+  | .function => "a module's function"
+  | .method => "a method"
+  | .field => "a field"
+  | .classType => "a class"
+  | .interfaceType => "an interface"
+  | .structType => "a struct"
+
+/-- The specifiers that say what a declaration is, each with the places it
+    may be written; anywhere else it is refused (`checkPlace`), as the Book of
+    Verse's tests do (`Tests/Attributes/`, `Castable.versetest`; ch. 10: only
+    a class may be `<abstract>`, ch. 17: `<persistable>` classes and structs).
+    What each requires of what it is on is checked where that is known:
+    `<final>` a member's body or value (`checkField`, `checkPlaces`), and
+    of a field that nothing below overrides it nor a construction sets it
+    (`classFields`, `elabConstructionValue`: the parser keeps it among the
+    class's specifiers as `$final:F`); `<abstract>` and `<concrete>` not
+    together (`checkPlaces`);
+    `<concrete>` a default for every field (a struct's in `checkPlaces`, a
+    class's with its inherited fields, `classFields`); `<castable>` and
+    `<final_super_base>` of the classes below (`classHierarchy`); a
+    `<persistable>` struct's fields persist (`typeEnvironment`). Enums take
+    `<open>`, `<closed>` and `<persistable>` (the parser's check); access
+    specifiers are accepted where the parser takes them (LANGUAGE.md,
+    Readings), and effects are `checkSpecs`'. -/
+def specifierPlaces : List (String × List Place) :=
+  [("abstract", [.classType]),
+   ("concrete", [.classType, .structType]),
+   ("final", [.classType, .method, .field]),
+   ("final_super", [.classType]),
+   ("final_super_base", [.classType, .interfaceType]),
+   ("castable", [.classType, .interfaceType]),
+   ("unique", [.classType, .interfaceType]),
+   ("persistable", [.classType, .structType]),
+   ("override", [.method, .field])]
+
+/-- Each specifier of `specifierPlaces` in `specs`, written at `place`, is
+    one of its places. -/
+def checkPlace (p : Pos) (place : Place) (specs : List String) : Except String Unit := do
+  for sp in specs do
+    if let some places := specifierPlaces.lookup sp then
+      if !places.contains place then
+        reject p s!"<{sp}> is not allowed on {place.what}: it is for {" or ".intercalate (places.map (·.what))}"
+
+/-- Used by the parser at sites where attributes are otherwise discarded: a
+    field's name (`kind` "field") or a definition's. -/
 def checkNonFunction (p : Pos) (kind : String) (specs : List String) : Except String Unit := do
   checkUnsupported p specs
   if let some sp := specs.find? effectNames.contains then
     reject p s!"<{sp}> on a {kind} is unsupported: effect specifiers are not supported at this declaration position (#494)"
+  checkPlace p (if kind == "field" then .field else .definition) specs
+
+/-- The specifiers of a definition's name, which the parser then discards: a
+    constant's, class's, interface's, struct's or enum's. -/
+def checkName (p : Pos) (specs : List String) : Except String Unit := do
+  checkUnsupported p specs
+  checkPlace p .definition specs
+
+/-- A field's specifiers, the parser's to check as it discards them: a
+    `<final>` field cannot be given another value, so it needs one
+    (`hasValue`). -/
+def checkField (p : Pos) (specs : List String) (hasValue : Bool) : Except String Unit := do
+  checkNonFunction p "field" specs
+  if specs.contains "final" && !hasValue then
+    reject p "a <final> field needs a value: it cannot be given one elsewhere"
 
 /-- Declaration metadata is separate from effects; its existing access and
     override semantics remain the elaborator's responsibility. Compiler-only
@@ -49,6 +124,11 @@ def checkSpecs (p : Pos) (subject : String) (specs : List String)
     reject p s!"<computes> excludes the heap effects (<reads>, <writes>, <allocates>, <transacts>) that {subject} also has"
   if specs.contains "suspends" && specs.contains "decides" then
     reject p s!"{subject} is both <suspends> and <decides>, which exclude each other"
+  -- (Book of Verse ch. 13: "`<transacts>` implies `reads`, `writes` and
+  -- `allocates`")
+  if specs.contains "transacts" then
+    if let some sp := ["reads", "writes", "allocates"].find? specs.contains then
+      reject p s!"<{sp}> on {subject} is redundant: <transacts> implies it"
   let mut seen : List String := []
   for sp in specs do
     if effectNames.contains sp then
@@ -128,6 +208,32 @@ partial def checkTop (top : STop) (owner : String := "") : Except String Unit :=
       checkTy p ty
       value.forM (checkExpr · p.file)
     methods.forM (checkTop · (name ++ "."))
+
+/-- The places of the specifiers the source keeps (`checkPlace`): of its
+    functions, methods, classes, interfaces and structs; and what `<final>`
+    and `<concrete>` require there: a `<final>` method's body, and a default
+    for each field of a `<concrete>` struct. -/
+def checkPlaces (tops : List STop) : Except String Unit := do
+  let method (p : Pos) (specs : List String) : Except String Unit := do
+    checkPlace p .method specs
+    if specs.contains "final" && specs.contains "$abstract" then
+      reject p "a <final> method needs a body: it cannot be given one elsewhere"
+  for top in tops do
+    match top with
+    | .fn p _ _ _ specs .. => checkPlace p .function specs
+    | .classDef p n _ specs _ isI _ _ methods =>
+      checkPlace p (if isI then .interfaceType else .classType) specs
+      -- (`C{}` constructs a `<concrete>` class, and nothing an `<abstract>` one)
+      if specs.contains "abstract" && specs.contains "concrete" then
+        reject p s!"{n} cannot be both <abstract> and <concrete>: a concrete class is constructed with {n}\{}, an abstract one never"
+      for m in methods do
+        if let .fn mp _ _ _ mspecs .. := m then method mp mspecs
+    | .const p n _ (.structDef _ _ specs fields) =>
+      checkPlace p .structType specs
+      if specs.contains "concrete" then
+        if let some (f, _) := fields.find? (·.2.2.1.isNone) then
+          reject p s!"{n} is <concrete>, so its field '{f}' needs a default"
+    | .const .. => pure ()
 
 /-- Check every loaded definition, including unused imports, before a source
     annotation can be erased or normalized into generated helper signatures. -/

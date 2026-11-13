@@ -1,8 +1,9 @@
-# A source parameter named Self is an ordinary argument, not a receiver.
-Pair(Self:tuple(int,int))<computes>:int=Self(0)+Self(1)
-Single(Self:tuple(int))<computes>:int=Self(0)
-Unit(Self:tuple())<computes>:int=7
-Id(Self:t where t:type)<computes>:t=Self
+# A parameter of a function (not a method) is an ordinary argument, not a
+# receiver, whatever its name (no parameter can be named Self: it is reserved).
+Pair(This:tuple(int,int))<computes>:int=This(0)+This(1)
+Single(This:tuple(int))<computes>:int=This(0)
+Unit(This:tuple())<computes>:int=7
+Id(This:t where t:type)<computes>:t=This
 Main():void=
     Print("{Pair(1,2)} {Single(3)} {Unit()}")
     R:tuple(int,int)=Id(4,5)
