@@ -92,6 +92,12 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
        nonested  (no call of a generator of itself in a failure context of its own
                   code, which consumes it: an if's condition, or's left, option{},
                   not, logic{}, a for, #283; on with seq otherwise)
+       noother   (no call of another function with several values as a choice point in a
+                  generator's code: Oxv, Oyv, or another generator, #283; on with seq
+                  otherwise)
+       nocls     (no call of a generator of itself in a field of a class's construction,
+                  ocls{A := …, B := …}, whose superclass's field B is evaluated first,
+                  #283; on with seq otherwise)
        noovw     (no overloads Ow of one name with one value or several, OwOne calling
                   the one with one value, OwR recursive, owc/owd's overloaded method Om,
                   #283's overloads picked in rounds; on in half the programs otherwise)
@@ -581,6 +587,28 @@ RLIFT = random.Random(seed * 1000003 + 283292)
 # for with one in its body). The model is the same CPS: the context runs the call as it would
 # anywhere, each call's code taking its own in turn. A stream of its own.
 RNEST = random.Random(seed * 1000003 + 283293)
+# ---- #283, flag other (on with seq; noother turns it off): a call of another function with several
+# values as a choice point in a generator's code, alone as an alternative of its choice or after a
+# call of itself (`Gz0(N - 1, 2) + Oyv(A)`): Oxv, <decides>, whose clauses print and may fail,
+#   Oxv(OxA:int)<transacts><decides>:int =
+#       Print("ox {OxA}")
+#       OxA > 0
+#       OxA | OxA + 3
+# (in a <decides> generator), Oyv(OyA:int)<transacts>:int = Tell("oy", OyA) | OyA + 3, or an earlier
+# generator. The callee is taken with the generator, a choice point as a call of the generator is:
+# in a for, when its clauses fail it has no values and what came before the call stays, as at a
+# call of a generator (`gen_call`), not undone as at an inlined call. A stream of its own.
+ROTH = random.Random(seed * 1000003 + 283294)
+# ---- #283, flag cls (on with seq; nocls turns it off): in the block of a generator's else, a call
+# of itself in a field of a class's construction, `Wc := OC(ocls{A := …, B := …})` with
+#   obase := class:  B:int = 0
+#   ocls := class(obase):  A:int = 0
+#   OC(P:ocls)<computes>:int = P.A * 10 + P.B
+# whose fields are evaluated in its order, the superclass's B first, whatever the written one. A
+# stream of its own.
+RCLS = random.Random(seed * 1000003 + 283295)
+OTHERS = set()
+USES_CC = [False]
 SQN = [0]
 USED = set()     # (generator, in a for): the calls the tests make, for MVSEQ's statistics
 FRN = [0]
@@ -602,6 +630,8 @@ TYPED = SEQ and 'notyped' not in flags
 ENTER = SEQ and 'noenter' not in flags
 LIFTED = SEQ and 'nolifted' not in flags
 NEST = SEQ and 'nonested' not in flags
+OTHER = SEQ and 'noother' not in flags
+CLS = SEQ and 'nocls' not in flags
 REFUSED = [False]
 
 
@@ -612,7 +642,7 @@ class Return(Exception):
 
 # the kinds of node whose insides are failure contexts of their own (or an
 # inlined function's arguments), where a lifted call's clauses are not the test's
-NESTED = ('not', 'logic', 'optor', 'orx', 'ifx', 'bif', 'mcall', 'choice', 'blk', 'cons', 'na', 'nam', 'mvm', 'rt', 'rt2', 'rt3', 'ovl',
+NESTED = ('not', 'logic', 'optor', 'orx', 'ifx', 'bif', 'mcall', 'choice', 'blk', 'cons', 'ccons', 'na', 'nam', 'mvm', 'rt', 'rt2', 'rt3', 'ovl',
           'ow2')
 
 
@@ -902,6 +932,9 @@ def ub_e(e, n):
         if e[0] == 'snest':
             # (#283, flag nested: a consumer, one value whatever its call's)
             return 1
+        if e[0] == 'gx':
+            # (#283, flag other: Oxv's or Oyv's two)
+            return 2
         if e[0] == 'gblk':
             return sum(ub_e(a, n) for a in e[2]) * ub_e(e[3], n) * ub_e(e[4], n)
     if isinstance(e, (tuple, list)):
@@ -1116,6 +1149,10 @@ def gen_gfunc(i):
         lifted_shapes(f, i, sc, ctr, stmts)
     if NEST:
         nested_shapes(f, i, sc, ctr, stmts)
+    if OTHER:
+        other_shapes(f, i, sc, ctr)
+    if CLS:
+        class_shapes(f, i, sc, ctr)
     f['stmts'] = stmts
     f['lifted'] = lifted(f)
     CTX.update(ctrs=None, nofail=False, nochoice=False, noprint=False, fmax=None, take=None)
@@ -1353,6 +1390,54 @@ def nested_shapes(f, i, sc, ctr, stmts):
         else:
             v[3][0] = ('gblk', x, galts, post, last)
     f['seq'] = f.get('seq', set()) | {f'nested-{kind}'}
+
+
+def other_shapes(f, i, sc, ctr):
+    """(#283, flag other) a call of another function with several values as a choice point in
+    generator f, made already (ROTH alone): an alternative of its own choice that is that call, or a
+    call of itself followed by it."""
+    if ROTH.random() >= 0.3:
+        return
+    v = f['val']
+    alts = v[1] if v[0] == 'gchoice' else v[3]
+    # (not a branch's block, `gblk`, nor a bound choice of strings, typed_shapes')
+    if not alts or alts[0][0] == 'gblk' or (f.get('bound') or ('',))[0] == 'Ws':
+        return
+    cands = [j for j in range(i) if (f['decides'] or not GFUNCS[j]['decides']) and (ctr or not GFUNCS[j]['ctr'])]
+    a = ('ref', ROTH.choice(sc)) if ROTH.random() < 0.5 else ('lit', ROTH.randint(-1, 3))
+    if cands and ROTH.random() < 0.4:
+        j = ROTH.choice(cands)
+        callee = ('gcall', j, [('bin', '-', ('ref', 'N'), ('lit', 1)), a] + ([('ref', 'C')] if GFUNCS[j]['ctr'] else []))
+        kind = 'other-gen'
+    else:
+        x = 'x' if f['decides'] else 'y'
+        OTHERS.add(x)
+        callee = ('gx', x, a)
+        kind = 'other-fn'
+    if ROTH.random() < 0.5:
+        own = ('gself', i, [('bin', '-', ('ref', 'N'), ('lit', 1)), ('lit', ROTH.randint(0, 3))] +
+               ([('ref', 'C')] if ctr else []))
+        callee = ('bin', ROTH.choice(['+', '*']), own, callee)
+    alts.insert(ROTH.randint(0, len(alts)), callee)
+    f['seq'] = f.get('seq', set()) | {kind}
+
+
+def class_shapes(f, i, sc, ctr):
+    """(#283, flag cls) in the block of generator f's else, made already (RCLS alone), a call of
+    itself in a field of a class's construction, its fields evaluated in the class's order."""
+    v = f['val']
+    blk = not f['decides'] and v[0] == 'gbif' and v[3] and v[3][0][0] == 'gblk'
+    if not blk or RCLS.random() >= 0.6:
+        return
+    a = ('ref', RCLS.choice(sc)) if RCLS.random() < 0.5 else ('lit', RCLS.randint(0, 3))
+    call = ('gself', i, [('bin', '-', ('ref', 'N'), ('lit', 1)), a] + ([('ref', 'C')] if ctr else []))
+    other = (('lit', RCLS.randint(0, 3)) if RCLS.random() < 0.5 else
+             ('choice', [('lit', RCLS.randint(0, 3)), ('lit', RCLS.randint(4, 7))]))
+    st = ('slet', 'Wc', ('ccons', call, other) if RCLS.random() < 0.5 else ('ccons', other, call))
+    _, x, galts, post, last = v[3][0]
+    v[3][0] = ('gblk', x, galts, post + [st], ('bin', '+', ('ref', 'Wc'), last))
+    USES_CC[0] = True
+    f['seq'] = f.get('seq', set()) | {'class-cons'}
 
 
 FX_NODES = ('sprint', 'snext', 'tell', 'bprint', 'cnext', 'cadd', 'print', 'next', 'add', 'seti', 'setf')
@@ -1821,6 +1906,10 @@ def show(e):
         return f'({show(e[2])} {e[1]} {show(e[3])})'
     if t == 'tw':
         return f'Tw({show(e[1])}, {show(e[2])})'
+    if t == 'gx':
+        return f"Oxv[{show(e[2])}]" if e[1] == 'x' else f"Oyv({show(e[2])})"
+    if t == 'ccons':
+        return f'OC(ocls{{A := {show(e[1])}, B := {show(e[2])}}})'
     if t == 'cons':
         if e[3]:
             return f'PS(pt{{Y := {show(e[2])}, X := {show(e[1])}}})'
@@ -2308,6 +2397,37 @@ def ev(e, st, k, mode):
             s.binds[e[1]] = v
             return ev(e[3], s, k, mode)
         return ev(e[2], st, kblk, mode)
+    if t == 'gx':
+        # (#283: Oxv or Oyv, taken with the generator whose code calls it: in a for, when its
+        # clauses fail, no values, and what came before the call stays, as at `gen_call`)
+        def kgx(a, s):
+            def body(s1, k1):
+                if e[1] == 'x':
+                    s1.out.append(f"ox {a}")
+                    if not a > 0:
+                        raise Fail()
+                    return choice_point([(lambda s2, k2: k2(a, s2)), (lambda s2, k2: k2(chks(a + 3, s2), s2))],
+                                        s1, k1, mode, True)
+
+                def told(s2, k2):
+                    s2.out.append("oy")
+                    return k2(a, s2)
+                return choice_point([told, (lambda s2, k2: k2(chks(a + 3, s2), s2))], s1, k1, mode, True)
+            if mode == 'all':
+                s0 = s.copy()
+                try:
+                    return body(s, k)
+                except Fail:
+                    return s0
+            return body(s, k)
+        return ev(e[2], st, kgx, mode)
+    if t == 'ccons':
+        # (#283: a class's construction, the superclass's field B first, then A: A * 10 + B)
+        def kcb(vb, s1):
+            def kca(va, s2):
+                return k(chks(chks(va * 10, s2) + vb, s2), s2)
+            return ev(e[1], s1, kca, mode)
+        return ev(e[2], st, kcb, mode)
     if t in ('bin', 'tw', 'twt', 'cons'):
         # (a construction: its fields in declaration order, X then Y, as written or not)
         a, b = (e[2], e[3]) if t == 'bin' else (e[1], e[2])
@@ -3284,6 +3404,13 @@ if NA:
     PRE += 'NA(A:int, ?P:int = Tell("dp", A), ?Q:int = P + 1):int = A * 100 + P * 10 + Q\n'
 if CB:
     PRE += "pt := struct:\n    X:int = 0\n    Y:int = 0\nPS(P:pt)<computes>:int = P.X * 10 + P.Y\n"
+if 'x' in OTHERS:
+    PRE += 'Oxv(OxA:int)<transacts><decides>:int =\n    Print("ox {OxA}")\n    OxA > 0\n    OxA | OxA + 3\n'
+if 'y' in OTHERS:
+    PRE += 'Oyv(OyA:int)<transacts>:int = Tell("oy", OyA) | OyA + 3\n'
+if USES_CC[0]:
+    PRE += ("obase := class:\n    B:int = 0\nocls := class(obase):\n    A:int = 0\n"
+            "OC(P:ocls)<computes>:int = P.A * 10 + P.B\n")
 if LAZY:
     PRE = PRE.replace("Pos(X:int)<decides>", "Pos(X:int)<computes><decides>").replace(
         "Even(X:int)<decides>", "Even(X:int)<computes><decides>").replace("Tw(A:int, B:int):int", "Tw(A:int, B:int)<computes>:int")

@@ -1380,9 +1380,8 @@ Main():void =
 
   A recursive one (that calls itself, directly or not, other than in a
   failure context of its code that takes the call's values, below) is not
-  inlined. One shaped as a generator is taken lazily (#246): it calls no
-  other function with several values (but in such a failure context), its
-  clauses have no choice, and its last
+  inlined. One shaped as a generator is taken lazily (#246): its clauses
+  have no choice, and its last
   expression is a choice, or an `if … else …` whose branches are choices or
   values, each alternative a value with no choice in it or a whole call of
   the function itself. A branch that is an `if` with no choice and no call
@@ -1454,8 +1453,8 @@ Main():void =
   comparison's later operand (`5 > T[N - 1]`), a `set`'s value after its
   old value (`set K += T(N - 1)`, also as one alternative of a choice
   there, `set K += (T(N - 1) | 5)`, or of a `var`'s initial value), a named
-  argument (`Tw(1, ?B := T(N - 1))`), a struct's field in its declaration
-  order (a generic struct's too), `and`'s operands. An
+  argument (`Tw(1, ?B := T(N - 1))`), a struct's or a class's field in its
+  type's order (a class's superclass's fields first), `and`'s operands. An
   `if` in an expression with one in a branch is one too: its conditions
   run first, then the branch's values each go to the code after the `if`
   (`X := (if (N > 1) then T(N - 1) else (1 | 5))`), as do those of `or`'s
@@ -1490,6 +1489,25 @@ Main():void =
   Main()<transacts>:void =
       for (V := T(2)) { Print("v {V}") }     # t 2, t 1, v 2, v 20
       for (V := Sum(2)) { Print("v {V}") }   # v 3, v 4
+  ```
+
+  A call of another function with several values in its code, outside such
+  a context, is a choice point of it, as a call of the function itself is
+  (#283): the callee's values each go to the code after the call, the callee
+  taken with the function (its code one more of the function's, whatever its
+  own shape: recursive or not, generic, a method, its values of another
+  type), so its clauses are a failure context of their own, and when they
+  fail it has no values and, in a `for`, what came before the call stays.
+  A generic one is taken at one instance of its type parameters for a whole
+  search, as a generic group's own functions are; a call of it at another
+  is refused for now:
+
+  ```verse
+  Two(N:int)<transacts>:int = N | N + 5
+  Digits(N:int)<transacts>:int =
+      if (N <= 0) then 0 else Digits(N - 1) * 10 + Two(N)
+  Main()<transacts>:void =
+      for (V := Digits(2)) { Print("v {V}") }   # v 12, v 17, v 62, v 67
   ```
 
   A returning branch may contain plain clauses and
@@ -1589,8 +1607,7 @@ Main():void =
   `<computes>`, keeps local state, or may print or call `Err()`. Its choice
   points must be where a choice is lifted from (a comparison's later
   operand, a `set`'s value, a named argument, a struct's field, `and`'s
-  operands, an `if`'s branch, the right of `or`), so not in a class's
-  construction (#283). Also a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`
+  operands, an `if`'s branch, the right of `or`) (#283). Also a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`
   other than at the end of its body or in an `if`'s branches, a method of a class or
   interface below two others that each declare its name without `<override>`,
   `<suspends>`, one used as a function value, and, since its body is inlined where other names may be
@@ -2172,6 +2189,7 @@ Main()<suspends>:void =
 | Order of a choice's values | (not in the Book; the Verse Calculus: spatial) | spatial: the leftmost choice varies slowest, as nested generators do (#208) |
 | Code before a choice | (the Verse Calculus is pure) | runs once, also within an expression (the operands before the choice are evaluated first, as written); each alternative runs the code after the choice, from where the choice was reached; in an `if` or `first{}`, one that leads to no success, and to no `return` or `break`, is rolled back (as backtracking does); in a `for`, the choice is a generator, so only an alternative whose own clauses fail is (#208) |
 | A choice in an operand of `and` or `or` | not stated (the left of `or` is a failure context, the right is not, §6.2) | `A and B`: `A`'s clauses, then `B`'s, in the context the `and` is in, so `B`'s values for each of `A`'s; `A or B`: `if (T := A) then T else B`, so the left's first success, if it has one, is the only value (the right is not tried when what follows fails), else the right's values, taken by the context the `or` is in (all of them in a `for`), not only its first (#283) |
+| A call of another function with several values in a recursive one's code | not stated (the Verse Calculus: a call is its body) | a choice point of the recursive one, taken with it: when the callee's clauses fail it has no values, and, in a `for`, what came before the call stays, as at a call of the recursive one itself (a lazily taken call is a generator of its own), not undone as at an inlined call (#283) |
 | A recursive function with several values whose only calls of itself are in failure contexts of its own code | not stated (the Verse Calculus: a call is its body) | inlined, as a function recursive only through another function that consumes it is (the contexts are functions of their own): where its clauses fail in a `for`'s clauses, what those clauses did since their last generator is undone with them, as for any inlined call, not kept as at a lazily taken call, which is a generator of its own (#283) |
 | Precedence of `\|` | (not in the Book) | below `+`, above the comparisons: `X = 1 \| 2` is `X = (1 \| 2)` (#208) |
 | `Sleep(0.0)` | "may resume in the same tick" (ch. 14); the API reference: it always yields | always yields: resumes in the next tick (#156) |
@@ -2188,5 +2206,5 @@ Main()<suspends>:void =
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), the
 specific overload/call gaps listed under [Overloading](#overloading), nested
-functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice) (the choice points that recursive functions with several values with effects may not have yet: a call of the function in a field of a class's construction, and a call of another function with several values outside a failure context of its code that takes its values; listed there), concurrency beyond [Concurrency](#concurrency), and the unsupported
+functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice), concurrency beyond [Concurrency](#concurrency), and the unsupported
 effect/construction contracts listed under [Effect contracts](#effect-contracts).

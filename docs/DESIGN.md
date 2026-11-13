@@ -761,7 +761,10 @@ twice as long as the last one's whose body runs a step and gives that
 iteration's values: adding each value to an array would copy it each time,
 and the C runtime frees a call's cells only when it returns.
 
-A strongly connected group of such functions (#283: each one's alternatives calls of the group's functions; one result type, none generic) is taken lazily too, as one.
+A strongly connected group of such functions (#283: each one's alternatives calls of the group's functions; one result type, none generic) is taken lazily too, as one. So is, with a group taken lazily (one not computable), every function with several values its code calls, and those that one calls, and so on: its machine is closed under calls of functions with several values (`Choice.machineOf`), so that a call of one is a choice point as a call of the group is, the callee's code a member's, recursive or not. There is no rule left that a lazily taken function calls only its own group; a callee is compiled in the machine as the group's own functions are (its returns taken out first, `inlineCalls`' `memberFns`; one with a `defer:` refused, as a recursive one's is), and inlined elsewhere as before.
+- A generic member's instance is found at its calls as a group's own functions' are, at the group's result type, else, when its values go to the frame after its call at a type of their own, at its arguments' alone (`elabLoopGenGroupWith`'s probe).
+- A `return` in an `if` after a choice point (a recursive function's own, or a member's) is in code that reaches no other point: a plain frame or a value, whose `if` is a plain one again (`eraseReturnTails` in `normAlt`), its returning branch's value the alternative's. Before, its scopes' markers reached the elaborator (`unknown function '$returnTail'`), for a recursive function too.
+- A member's values may be of a type of their own, one that does not coerce to the group's result type (`LoopGen.memberTys`): they go to the frame after the member's call, whose hole is at that type (`loopFlatWith`'s and `probeHoleWith`'s `recTy`), in that type's value slot, as a choice's values of another type do; where the first success is taken, through that type's `{name}$retN` (`firstLiftOf`'s `memberTys`, `firstBody`'s `ownTy`).
 - Its calls' marker is the called one's, with the others in its last expression: `$group(tail, $member(H, params, clauses, r := tail)…)`, each member's names tagged for the site. A call of the function itself is `$rec`, of another member `$recTo(H, …)` (`Choice.markRecG`).
 - In a group, a branch or the last expression may be a single call of another member with no choice of its own (`else Evens(N + 1)`), which a function alone could not be.
 - `elabLoopGenGroupWith` (before the mutual block, #325) builds one stack: an item holds every member's parameters and names, in one tuple, `k` the alternative, numbered across the members, or `-1 - i` to start member `i`. A call pushes the item that starts its callee, with that member's parameters from its arguments.
@@ -937,10 +940,16 @@ code after it, which is its frame.
   alternative, which the lifter keeps as a binding of its own, is bound
   first as `normClauses` binds one (`setClauses`: the path's prefix, for
   `op=` the old value, then the choice), as for the elaborator's clauses. The
-  struct field orders come from the source (`inlineMulti`), as the
-  elaborator gives the lifter; a generic struct's too, since its
-  construction names its type arguments (`pair(int){…}`), so the fields'
-  expected types are known where they are bound before the point.
+  field orders of a struct's or a class's construction are the elaborator's,
+  one definition (`TyEnv.fieldOrder`, which `choiceOrder` gives the lifter
+  too: a class's superclass's fields first, then its interfaces', then its
+  own): a group whose code constructs one with a choice point or a choice in
+  a field is kept with one value until an elaboration has noted its order
+  (`Requests.fieldOrders`, tier 1), as for consumers' types. So a class's
+  construction is no longer kept (`$noLift`) for a choice in a lazily taken
+  group's code either. A generic struct's construction names its type
+  arguments (`pair(int){…}`), so the fields' expected types are known where
+  they are bound before the point.
 - An `if` in an expression whose conditions have no point and whose
   branches have one (`ifPoint`; the right of `or` as its `if`; one the
   lifter would bind as an exclusive choice, `$branchChoice`, is bound as
@@ -1002,16 +1011,7 @@ consumer like any other instead, in a function of its own:
   consumer as any of its `for`s does, so that programs that compiled before
   compile byte for byte as before.
 
-Not yet (#283), each refused with a message, and the route each would take:
-- A construction of a class with a point in a field: the lifter keeps it
-  (`$noLift`), as the class's layout (its supers' fields first, an
-  interface's fields where each class places them, `<override>` defaults) is
-  known only to the elaborator (`TyEnv.fields`). Route: the field orders of
-  the classes a group's code constructs noted by an earlier elaboration, as
-  the consumers' types are (`Requests.nested`), or that layout computed
-  from the source by the elaborator's own rule, shared with it.
-
-With all of those, `F$all` would be needed by no shape and kept, if at all, only as
+With the choice points in sequence all taken lazily, `F$all` would be needed by no shape and kept, if at all, only as
 an optimisation of effect-free ones. Deleting it (the owner's decision,
 since it changes the bytes of the 39 programs of the suite whose Core has
 an `F$all` today) would remove `allBody`, `arrOfE`, `gensOf`, `markAll`, the
@@ -1020,14 +1020,10 @@ refusals in `inlineMulti`, `checkEager` with its round of `Requests.lazy`,
 and `Requests.eager`. It would also change semantics: values on demand, so an
 infinite effect-free one stops where the first success is taken, and an
 error in a value never reached no longer stops the program. It first needs
-the lazy route to cover what only `F$all` does now: the choice point above
-that is not yet taken lazily (a class's construction), a recursive one
-calling a function with several values outside its group other than in a
-consumer of its code (route: that function's non-recursive body inlined into
-the group's code before its normal form, so that its choices are the
-group's points, `liftPoints?` expanding its `$inline`), polymorphic recursion in a
-mutual group (`Requests.eager`), and an `any`-valued returning group whose tail
-erases its values (`erasesRecursive`).
+the lazy route to cover what only `F$all` does now: polymorphic recursion in a
+mutual group (`Requests.eager`, also a callee its machine takes at two
+instances), and an `any`-valued returning group whose tail erases its values
+(`erasesRecursive`).
 
 Named arguments and defaults are bound on every recursive edge. The lazy
 stack uses `elabGenericCallWith` in argument-packing mode: it evaluates the
