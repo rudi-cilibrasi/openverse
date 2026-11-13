@@ -432,10 +432,13 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   -- (with no expected type, the `if`'s type is any `if`'s, `ifBranches`,
   -- its branch typed under the refinement: at a type asked for, when it is
   -- one there, else at its own; the same in every elaboration, which may
-  -- find the branch's function made or not; nothing is kept. And whether
-  -- the branch must be elaborated at that type: when it has none alone, or
-  -- its own does not join into it there, `if (C) then false else
-  -- option{4}`, `if (C) then 1 else "a"`, at `any`)
+  -- find the branch's function made or not; nothing is kept. The branch's
+  -- own type is one under the refinement, which code outside it may name
+  -- otherwise: one that is the `else`'s there makes the `if` the `else`'s,
+  -- as their join, before any other comparison. And whether the branch
+  -- must be elaborated at that type: when it has none alone, or its own
+  -- does not join into it there, `if (C) then false else option{4}`, `if
+  -- (C) then 1 else "a"`, at `any`)
   let ifTyAt (ee : SExpr) : EM (Ty × Bool) := do
     let st ← get
     let thenAt (k : Nat) (e : Option Ty) : EM R := do
@@ -444,9 +447,15 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
         | some t => tryCatch (do discard <| coerce p rb (refine t); pure true) fun _ => pure false
         | none => pure false
       return ⟨rb.e, if fits then e.getD rb.ty else branchTyOf rb.ty⟩
-    let τ ← ifBranches p none ctx.retries thenAt (fun k e => elabE { ctx with typeOnly := true, retries := k } ee e)
-      fun _ _ ty => pure ty
+    let elseAt (k : Nat) (e : Option Ty) : EM R := elabE { ctx with typeOnly := true, retries := k } ee e
     let own? ← tryCatch (some <$> thenAt ctx.retries none) fun _ => pure none
+    let re? ← tryCatch (some <$> elseAt ctx.retries none) fun _ => pure none
+    let fitsElse ← match re? with
+      | some re => tryCatch (do pure ((← thenAt ctx.retries (some re.ty)).ty == re.ty)) fun _ => pure false
+      | none => pure false
+    let τ ← match re?, fitsElse with
+      | some re, true => pure re.ty
+      | _, _ => ifBranches p none ctx.retries thenAt elseAt fun _ _ ty => pure ty
     let env' := (← get).env
     set st
     return (τ, own?.all fun b => joinTy env' b.ty (refine τ) none != some (refine τ))
