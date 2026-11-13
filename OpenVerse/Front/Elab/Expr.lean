@@ -1488,8 +1488,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
             -- (what follows the clauses is not the trial's)
             return (code, { c2 with trial := ctx.trial })
           | .error _ => set st0
-        let request := request.filter fun l =>
-          ctx.acceptsHelper l
+        let request := request.filter ctx.acceptsHelper
         let binds := (b.name :: Choice.boundIn rest).eraseDups
         let vars := rest.filterMap fun | .decl _ n _ true _ => some n | _ => none
         let tup := SExpr.tuple p (binds.map (SExpr.ident p ·) ++ [.ident p "true"])
@@ -1626,12 +1625,10 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
           | none => false
         if !b.alts.isEmpty then
           let req := if ctx.typeOnly then none else ctx.types.requests.loops.find? (·.key == contKey ctx p b.name (b.alts ++ rest) ++ firstReturnKey ctx rest)
-          -- (asked for where more effects are allowed than here, as in a
-          -- function of its own of a call taken lazily, #246: copied)
-          let fits (l : Choice.FirstLift) : Bool :=
-            ctx.acceptsHelper l
           if let some l := req then
-            if !fits l then return ← finish (elabOneGo ctx copied)
+            -- (asked for where more effects are allowed than here, as in a
+            -- function of its own of a call taken lazily, #246: copied)
+            if !ctx.acceptsHelper l then return ← finish (elabOneGo ctx copied)
             -- (the call a clause, whose failure goes back into the
             -- alternative's own choices, then its tuple the value)
             let kt := s!"{t}k"

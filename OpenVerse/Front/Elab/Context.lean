@@ -468,6 +468,9 @@ def Ctx.sourceWaits (ctx : Ctx) (e : Expr) : Bool :=
   Suspend.countSusp ctx.sourceSuspends (fun _ => false) false
     (fun f => ctx.sigs.any fun s => s.idx == f && (s.name == "$spawnMark" || s.name == "$branchMark")) e > 0
 
+/-- Whether a helper asked for in another elaboration, where its heap
+    effects may have been allowed, can be called here: this function infers
+    its own, or allows all of the helper's. -/
 def Ctx.acceptsHelper (ctx : Ctx) (lift : Choice.FirstLift) : Bool :=
   ctx.infersHeapFx ||
     (lift.specs.filter (["reads", "writes", "allocates"].contains ·)).all ctx.fnFx.contains

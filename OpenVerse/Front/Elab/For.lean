@@ -226,8 +226,6 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             let restCl := after ++ moreCl
             let key := (if bodyFail then "fo" else "f") ++ contKey cA b.pos b.name (i :: restCl ++ [bd])
             let req := cA.types.requests.loops.find? (·.key == key)
-            let fits (l : Choice.FirstLift) : Bool :=
-              cA.acceptsHelper l
             if req.isNone && (contForLiftOf cA b.pos b.name ty .void [i] restCl bd bodyFail).toOption.isSome then
               -- Elaborate the suffix once, in its source context. Otherwise
               -- an inner lift can retain an outer var's old name after the
@@ -248,7 +246,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                   askHelper b.pos lift
                   return (codeA, .prim .userErr [], t)
                 | .error why => eerr b.pos s!"cannot share the refining for's suffix: {why} (#417)"
-            if let some l := req.filter fits then
+            if let some l := req.filter cA.acceptsHelper then
               let kv := s!"$refineFor{b.pos.line}_{b.pos.col}{b.name}v"
               let kt := kv ++ "t"
               let elem := kv ++ "e"
@@ -461,15 +459,13 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         let contOK := stagePlan.isNone && restCl.any isCF && forBodySafe cA bd && xty.isSome
         let req := if !contOK || cA.typeOnly then none else
           cA.types.requests.loops.find? (·.key == (if bodyFail then "fo" else "f") ++ contKey cA gp x (altsS ++ restCl ++ [bd]))
-        let fits (l : Choice.FirstLift) : Bool :=
-          cA.acceptsHelper l
         let kv := s!"$xk{gp.line}_{gp.col}{x}v"
         let plan : List (List SExpr × SExpr × Bool) ← if let some (prepare, plan, _, true) := staged then
             let (callCl, resumed) := forStageInvoke gp prepare plan.borrowed bd
             pure (alts.zipIdx.map fun ((gs, r), i) => (liftP gs r i ++ callCl, resumed, true))
           else match req with
           | some l =>
-            if fits l then
+            if cA.acceptsHelper l then
               let call : SExpr := .app gp (.ident gp l.name) l.args true
               let callCl : List SExpr := if l.sets.isEmpty then [.decl gp kv none false call] else
                 let kt := s!"$xk{gp.line}_{gp.col}{x}t"
@@ -602,10 +598,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           if forBodySafe c bd then
             let req := if c.typeOnly then none else
               c.types.requests.loops.find? (·.key == (if bodyFail then "fo" else "f") ++ contKey c gp b.name (b.alts ++ restCl ++ [bd]))
-            let fits (l : Choice.FirstLift) : Bool :=
-              c.acceptsHelper l
             if let some l := req then
-              if fits l then
+              if c.acceptsHelper l then
                 let kv := s!"{site}v"
                 let mut parts : List R := []
                 for (a, i) in b.alts.zipIdx do
