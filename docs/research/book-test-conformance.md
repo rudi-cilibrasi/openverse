@@ -46,8 +46,8 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   APIs (persistence, JSON, natives; 345); compiler tooling such as bytecode
   and digests (128); VM-conditional code inside a definition (37) and one
   file that defines `Main` itself (1).
-- Of the **9,783 translatable cases**, openverse **agrees on 8,121 (83%)**,
-  refuses 1,439 valid programs, **accepts 135 refused ones**, gives a
+- Of the **9,783 translatable cases**, openverse **agrees on 8,138 (83%)**,
+  refuses 1,422 valid programs, **accepts 135 refused ones**, gives a
   **different result in 88** (82 of them `verse_vm_only` cases of unbounded
   ints) and hits **no internal error**. On test cases alone (without
   `:decls`) it agrees on 7,961 of 9,567. (When the survey was
@@ -77,7 +77,11 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   the base of [attributes, types as values and the syntax
   forms](#after-attributes-types-as-values-and-the-syntax-forms); with
   them: 8,004 agreed, 1,598 refused, 135 accepted, 46 differed, the base of
-  [the Book's primitives](#after-the-books-primitives).)
+  [the Book's primitives](#after-the-books-primitives); with them, at main
+  `84ee83c`: 8,114 agreed, 1,439 refused, 135 accepted, 95 differed, the
+  base of [source upper bounds](#after-source-upper-bounds) and of [what a
+  `for` undoes](#after-what-a-for-undoes); with each alone, 8,131 agreed,
+  1,422 refused, 135 accepted, 95 differed, and 8,121, 1,439, 135, 88.)
 - An agreement on an expected error is weak evidence: 2,940 expected errors
   agree, but only 1,233 of them are refused by a check of a language rule
   (and 17 more, whose codes are all warnings, get openverse's warning);
@@ -265,19 +269,19 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| all test cases (assertions and files without one) | 13197 | 7961 | 135 | 1383 | 88 | 3630 | 0 |
-| shared definitions of a file (`:decls`) | 307 | 160 | 0 | 56 | 0 | 91 | 0 |
-| **total** | 13504 | 8121 | 135 | 1439 | 88 | 3721 | 0 |
+| all test cases (assertions and files without one) | 13197 | 7977 | 135 | 1367 | 88 | 3630 | 0 |
+| shared definitions of a file (`:decls`) | 307 | 161 | 0 | 55 | 0 | 91 | 0 |
+| **total** | 13504 | 8138 | 135 | 1422 | 88 | 3721 | 0 |
 
 ### By form
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `assert` | 6671 | 3426 | 0 | 1018 | 88 | 2139 | 0 |
+| `assert` | 6671 | 3429 | 0 | 1015 | 88 | 2139 | 0 |
 | `assert_semantic_error` | 3460 | 2619 | 98 | 0 | 0 | 743 | 0 |
-| `assert_valid` | 1637 | 845 | 0 | 273 | 0 | 519 | 0 |
+| `assert_valid` | 1637 | 858 | 0 | 260 | 0 | 519 | 0 |
 | `assert_valid_syntax` | 439 | 385 | 0 | 54 | 0 | 0 | 0 |
-| `decls` | 307 | 160 | 0 | 56 | 0 | 91 | 0 |
+| `decls` | 307 | 161 | 0 | 55 | 0 | 91 | 0 |
 | `assert_roundtrip` | 304 | 293 | 0 | 9 | 0 | 2 | 0 |
 | `assert_syntax_error` | 303 | 300 | 3 | 0 | 0 | 0 | 0 |
 | `assert_runtime_error` | 140 | 48 | 0 | 25 | 0 | 67 | 0 |
@@ -298,7 +302,7 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| no VM restriction | 12208 | 7821 | 97 | 1027 | 5 | 3258 | 0 |
+| no VM restriction | 12208 | 7838 | 97 | 1010 | 5 | 3258 | 0 |
 | `verse_vm_only` | 702 | 212 | 5 | 300 | 83 | 102 | 0 |
 | `bp_vm_only` | 366 | 80 | 33 | 1 | 0 | 252 | 0 |
 | `verse_vm_todo` (BPVM only; a known VerseVM failure) | 219 | 8 | 0 | 111 | 0 | 100 | 0 |
@@ -308,7 +312,7 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| (top level) | 5575 | 3358 | 76 | 896 | 3 | 1242 | 0 |
+| (top level) | 5575 | 3375 | 76 | 879 | 3 | 1242 | 0 |
 | Operators/ | 1203 | 1086 | 4 | 12 | 28 | 73 | 0 |
 | Bugs/ | 1185 | 743 | 36 | 157 | 0 | 249 | 0 |
 | Literals/ | 1020 | 834 | 0 | 152 | 0 | 34 | 0 |
@@ -1148,6 +1152,45 @@ one-tick wait now write `Sleep(0.01)` and print what they printed,
 programs (zero durations) change their output, each reproduced exactly when
 their zero sleeps are made one tick.
 
+## After source upper bounds
+
+Source upper bounds admitted (#502; [the rules and what stays
+refused](upper-bound-evidence.md#rules-of-the-book-and-what-openverse-follows)):
+the guard that refused every bound but `subtype(comparable)` lifted, three
+rules a bound had hidden behind it added, and `castable_subtype(c)` taken
+as a bound. Against the baseline of main `84ee83c` (8,114 agree, 1,439
+refuse, 135 accept, 95 differ), 17 cases more agree and none fewer: **8,131
+agree, 1,422 refuse, 135 accept, 95 differ** (re-recorded from a fresh run).
+
+| Cause (cases at the base) | Agree now | Left |
+|---|---:|---|
+| metatypes (137 refused) | 17: `ParametricFunctions.versetest` 46, 51, 57, 237, 248, 589; `ParametricTypes.versetest` 1338, 1354; `Castable.versetest` 519, 527, 536, 553, 558, 634, 677, 710 and its decls | 118; 2 of the 137 (`Castable.versetest` 563, 601) get past the bound to a generic function joined as a value with no expected type (#214), now under types-other (137 → 139) |
+
+- **Agreeing for the right reason now.** Lifting the guard alone made four
+  cases that agreed through its message accepted, each a rule openverse
+  lacked, and each now refused by it: a bounded type parameter no
+  parameter determines (`ParametricFunctions.versetest` 586, 3503), a type
+  alias whose type applies a bound it breaks (`ParametricTypes.versetest`
+  639, 3509), and a public parametric type with a less visible bound
+  (`ParametricTypes.versetest` 1284, 1294, 3593). Of the 33 cases the guard
+  decided on main, the 16 that agreed through its refusal agree now with
+  messages of their own, 7 that it refused agree now, and 10 are refused
+  for another feature (`ParametricFunctions.versetest`'s declarations, which
+  give a type as an argument, `F(t:type, X:t)`).
+- **Left of the cause.** `subtype(t)` of a type parameter and a type given
+  as an argument (`ParametricTypes.versetest` 1305-1329, `TypeParam.versetest`,
+  `FORT-1059276.versetest`, `SOL-8302…`; with `ParametricFunctions.versetest`'s
+  declarations, about 45 cases), `concrete_subtype(c)` as a bound
+  (`MetatypeConcreteSubtype.versetest` 49, refused by rule), and the
+  metatypes of other types than classes.
+- **Programs.** Against main, over every suite and the corpus of 2,734
+  generated programs (`corpus2`), no program that compiled on main changed
+  its bytes, output or messages. Two messages of refused programs changed:
+  `tests/errors/generic_constraint` (an unknown bound, `subtype(printable)`,
+  is the unknown type's error now) and the overloading matrix's
+  `class_bound`, which now runs and prints 2; and the 155 upper-bound
+  fixtures the guard refused now run or give their own refusals.
+
 ## After what a `for` undoes
 
 The last of the load-bearing readings ([the readings
@@ -1155,12 +1198,16 @@ audit](readings-audit.md#what-a-for-undoes)): a `for`'s clauses are one
 search, which commits at the body and undoes, at its end, what it did
 since its last success. Built on main `34e76e1` for the `for`s whose
 generators are over ranges, arrays, maps and strings and choices of values
-(every `for` of the Book's tests), then merged with main `84ee83c`.
-Against the baseline of the Book's primitives (`532f79d`: 8,114 agree,
-1,439 refuse, 135 accept, 95 differ), 7 cases more agree and none fewer:
-**8,121 agree, 1,439 refuse, 135 accept, 88 differ** (re-recorded from a
-fresh run; against the baseline of main `34e76e1`, the same 7 were measured
-before the merge: 7,739, 1,869, 136, 39).
+(every `for` of the Book's tests), then merged with main `84ee83c` and with
+[source upper bounds](#after-source-upper-bounds). Against the baseline of
+main `84ee83c` (8,114 agree, 1,439 refuse, 135 accept, 95 differ), 7 cases
+more agree and none fewer: 8,121 agree, 1,439 refuse, 135 accept, 88
+differ; with source upper bounds, **8,138 agree, 1,422 refuse, 135 accept,
+88 differ** (re-recorded from a fresh run; against each branch's baseline
+nothing is worse, and the other branch's cases are the better ones: 17
+against this one's, 7 against source upper bounds'; against the baseline
+of main `34e76e1` the same 7 were measured before either merge: 7,739,
+1,869, 136, 39).
 
 | Reading | Agree now |
 |---|---|
@@ -1178,6 +1225,13 @@ exactly; `choice_more` and `choice_construct_default_order`, whose `for`s
 expected the old rule; and the three new tests (`for_search`,
 `for_search_waits`, `for_search_old_paths`). No compiler message or exit
 code changed. Over all the programs the bytecode is 1.8% larger.
+With source upper bounds merged, the same oracle against a compiler built
+at its head (`3cfbf1c8`, 5,787 programs) finds 568 that differ: the same
+566, and the upper-bound fixtures `container-view-iteration` and
+`container-view-iteration-state`, which compile only since source upper
+bounds, whose `for`s take their sources through a bound's view, a call the
+lowering's test counts as a possible effect: their bytes change, not their
+output.
 
 ## Ten causes to remove first
 
@@ -1672,7 +1726,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `CanCallerAccessEpicInternal/Spawn.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `CanCallerAccessEpicInternal/SpawnRoot.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `Cast.versetest` | 65 | 64 | 0 | 1 | 0 | 0 | 0 |
-| `Castable.versetest` | 101 | 64 | 0 | 19 | 0 | 18 | 0 |
+| `Castable.versetest` | 101 | 73 | 0 | 10 | 0 | 18 | 0 |
 | `Classes/AccessSpecifiers.versetest` | 61 | 48 | 0 | 0 | 0 | 13 | 0 |
 | `Classes/Class.versetest` | 42 | 42 | 0 | 0 | 0 | 0 | 0 |
 | `Classes/ClassBlockClause.versetest` | 24 | 16 | 1 | 0 | 0 | 7 | 0 |
@@ -1876,8 +1930,8 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Overloading.versetest` | 79 | 64 | 0 | 9 | 0 | 6 | 0 |
 | `PackageCycles.versetest` | 15 | 0 | 0 | 0 | 0 | 15 | 0 |
 | `ParametricCastingIsDisallowed.versetest` | 11 | 10 | 0 | 1 | 0 | 0 | 0 |
-| `ParametricFunctions.versetest` | 106 | 46 | 9 | 47 | 0 | 4 | 0 |
-| `ParametricTypes.versetest` | 274 | 154 | 4 | 93 | 0 | 23 | 0 |
+| `ParametricFunctions.versetest` | 106 | 52 | 9 | 41 | 0 | 4 | 0 |
+| `ParametricTypes.versetest` | 274 | 156 | 4 | 91 | 0 | 23 | 0 |
 | `Parentheses.versetest` | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | `Path.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `PersistentJson.versetest` | 103 | 1 | 0 | 0 | 0 | 102 | 0 |

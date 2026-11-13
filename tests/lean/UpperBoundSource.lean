@@ -4,23 +4,14 @@ import OpenVerse.Core.Encode
 
 open OpenVerse OpenVerse.Front
 
-/-- Development acceptance tests for #502 (`docs/research/upper-bound-acceptance.md`).
-    Without `--guarded` they are the evidence for admitting source bounds, run
-    where the guard (`UpperBounds.checkParams`) is relaxed, and they fail while
-    it is in place. With `--guarded`, as the gate runs them, each case in
-    `tests/upper-bounds/guarded.list` must be refused by the guard, and every
-    other case passes as it would without the flag. -/
+/-- The source acceptance suite of upper bounds (#502,
+    `docs/research/upper-bound-acceptance.md`): each positive case passes the
+    Core checks and its own output oracle, and its bytecode is written for the
+    C oracle; each refusal is refused with its own message, not a generic one. -/
 def main (args : List String) : IO Unit := do
-  let (out, guarded) ← match args with
-    | [out] => pure (out, false)
-    | [out, "--guarded"] => pure (out, true)
-    | _ => throw (IO.userError "expected a fresh output directory, then optionally --guarded")
-  let guardList := "tests/upper-bounds/guarded.list"
-  let listed ← if guarded then
-      pure (((← IO.FS.readFile guardList).splitOn "\n").map (·.trimAscii.toString) |>.filter
-        fun line => line != "" && !line.startsWith "#")
-    else pure []
-  let guard := "(checked upper-bound evidence is not implemented yet, #502)"
+  let out ← match args with
+    | [out] => pure out
+    | _ => throw (IO.userError "expected a fresh output directory")
   let positive := ["process", "holder", "value", "refined", "choice-valid", "default-valid",
     "context", "override-valid", "receiver-override", "state", "cancel", "interior-path",
     "interior-containers", "interior-nested", "interior-state", "interior-cancel", "overload",
@@ -50,7 +41,8 @@ def main (args : List String) : IO Unit := do
     "choice-class-fields", "choice-class-fields-control",
     "choice-class-waiting-value", "choice-class-waiting-value-control",
     "bound-method-families", "bound-method-families-control", "bound-refine-contexts", "bound-refine-contexts-control",
-    "bound-return-frames", "bound-return-frames-control", "bound-frame-cells-break", "bound-frame-cells-break-control"]
+    "bound-return-frames", "bound-return-frames-control", "bound-frame-cells-break", "bound-frame-cells-break-control",
+    "castable-bound", "castable-bound-control"]
   let fifo := ["fifo-bound-promotion", "fifo-bound-promotion-control",
     "fifo-bound-woken", "fifo-bound-woken-control", "fifo-bound-spawn", "fifo-bound-spawn-control",
     "fifo-bound-two-losers", "fifo-bound-two-losers-control", "fifo-bound-sleep", "fifo-bound-sleep-control"]
@@ -64,7 +56,7 @@ def main (args : List String) : IO Unit := do
   let containers := ["container-view-basic", "container-view-basic-control",
     "container-view-state", "container-view-state-control", "container-view-waiting", "container-view-waiting-control",
     "container-view-generic", "container-view-generic-control", "container-view-interior", "container-view-interior-control",
-    "container-view-concat", "container-view-concat-control"]
+    "container-view-concat", "container-view-concat-control", "container-view-numeric", "container-view-numeric-control"]
   let iterators := ["container-view-iteration", "container-view-iteration-control",
     "container-view-iteration-state", "container-view-iteration-state-control"]
   let operators := ["bound-array-join", "bound-array-join-control",
@@ -111,7 +103,9 @@ def main (args : List String) : IO Unit := do
     "bound-concatenate-unproved-refusal", "bound-concatenate-shallow-refusal", "bound-concatenate-element-refusal",
     "bound-concatenate-maps-unproved-refusal", "bound-concatenate-effects-refusal", "bound-concatenate-effects-control-refusal",
     "bound-qualified-slots-refusal", "bound-construction-defaults-unproved-refusal",
-    "bound-concurrency-unproved-refusal", "bound-concurrency-cancel-effects-refusal", "bound-concurrency-cancel-effects-control-refusal"]
+    "bound-concurrency-unproved-refusal", "bound-concurrency-cancel-effects-refusal", "bound-concurrency-cancel-effects-control-refusal",
+    "bound-undetermined-refusal", "bound-visibility-refusal", "bound-alias-refusal", "peer-void-tuple-refusal",
+    "castable-bound-refusal", "castable-bound-peer-refusal", "concrete-bound-refusal"]
   let mut failures := 0
   let cases := (positive ++ fifo ++ methodValues ++ callables ++ containers ++ iterators ++ operators ++ formatting ++ concatenate ++ construction ++ concurrency ++ negative).map (fun name => (name, fifo.contains name, name)) ++
     ["fifo-bound-sleep", "fifo-bound-sleep-control"].map (fun name => (name, false, name ++ "-default"))
@@ -119,22 +113,6 @@ def main (args : List String) : IO Unit := do
     let root := s!"tests/upper-bounds/{name}"
     let source ← IO.FS.readFile (root ++ ".verse")
     let result := parseProgram source >>= fun tops => elabProgram tops { eventFifo }
-    -- (with the guard in place: refused by it exactly when listed)
-    if guarded then
-      let byGuard := match result with
-        | .error message => (message.splitOn guard).length > 1
-        | .ok _ => false
-      if byGuard && listed.contains artifact then
-        IO.println s!"ok {artifact}: refused by the guard"
-        continue
-      if byGuard then
-        IO.eprintln s!"FAIL {artifact}: refused by the guard, but not listed in {guardList}"
-        failures := failures + 1
-        continue
-      if listed.contains artifact then
-        IO.eprintln s!"FAIL {artifact}: listed in {guardList}, but the guard does not refuse it"
-        failures := failures + 1
-        continue
     if negative.contains name then
       let fragment := (← IO.FS.readFile (root ++ ".error")).trimAscii.toString
       match result with

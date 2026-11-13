@@ -41,13 +41,18 @@ def Bound.ty (bound : Bound) : Ty := .struct family [bound.base, bound.derived]
     fields are substituted by the ordinary class-field layout pass. -/
 def addFields (tops : List STop) : List STop := tops.map fun
   | .classDef p owner nsp params specs parents iface fields methods =>
-    let proofs := params.filterMap fun parameter => do
-      let base ← parameter.upperBound
-      let name := fieldName owner parameter.name
+    let proof (parameter : TParam) (suffix : String) (base : STy) : Option SField :=
+      let name := fieldName owner (parameter.name ++ suffix)
       if fields.any (·.name == name) then none else
         let ty := STy.app family [base, .name parameter.name]
         some { name, ty, default := some (.app p (.ident p "$subtypeWitness")
           [.construct p family [base, .name parameter.name] []] false) }
+    let proofs := params.filterMap (fun parameter => do proof parameter "" (← parameter.upperBound)) ++
+      -- (a castable_subtype(c) bound's castability, `UpperBounds.markCastable`)
+      params.filterMap fun parameter =>
+        if parameter.constraint == "castable_subtype" && parameter.upperBound.isSome then
+          proof parameter "$castable" (.name castableClassMarker)
+        else none
     .classDef p owner nsp params specs parents iface (fields ++ proofs) methods
   | top => top
 

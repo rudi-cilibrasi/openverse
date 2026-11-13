@@ -295,6 +295,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let methods ← classMethods defs.tops classes fields
   let env ← typeEnvironment classes fields methods source admitted.concurrencyNames opts.requests opts.signalNoRollback
   let env ← upperBounds env methods.tops
+  checkAliasBounds env admitted.aliases
   let views ← interfaceViews env classes.defs opts.requests
   if !views.witnessNeeds.isEmpty then
     return .asking { witnesses := views.witnessNeeds }
@@ -510,6 +511,8 @@ def elabProgram (allTops000 : List STop) (opts : Options := {}) : Except String 
           casts := [], loops := bridges ++ newDefaults }
   termination_by (eagerFuel, witnessFuel, fuel)
   let c ← (loop eagerRounds witnessRounds rounds opts.requests).mapError fun msg =>
+    -- (a castable_subtype(c) bound's castability, `UpperBounds.markCastable`)
+    let msg := msg.replace s!"does not satisfy subtype({castableClassMarker})" "is not <castable> (as castable_subtype(…) requires)"
     FnValues.pretty (((((stripOv ((Refine.unmarked msg).replace "$init" "<constructor>")).replace "::" ".").replace "$replaceAll" "ReplaceAll").replace extensionPrefix "").replace "$type:" "")
   -- (and the uses of deprecated definitions, warnings, `Attributes.deprecations`)
   return { c with warnings := orderWarnings (c.warnings ++ deprecated) }

@@ -107,8 +107,9 @@ the existing typed interface/class machinery. Private generated names must
 not let the caller's type variables capture the creator's. A local generic
 function used as a value denotes one determined instance, following current
 function-value inference; this does not introduce polymorphic function
-values. Unsupported bounds remain diagnosed until their own implementation
-([#502](https://github.com/rudi-cilibrasi/openverse/issues/502)).
+values. Bounds are checked as a top-level function's are
+([#502](https://github.com/rudi-cilibrasi/openverse/issues/502),
+[upper-bound evidence](upper-bound-evidence.md)).
 
 Check the body's declared heap permissions, failure and suspension in its
 lexical context. Forming a closure does not run its body or its defaults.

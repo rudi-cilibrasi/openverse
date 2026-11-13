@@ -146,8 +146,9 @@ may take any name, a keyword's too ([Qualified names](#qualified-names)). The fu
 ## Parametric functions
 
 A function with a `where` clause is generic. The clause ends the parameter
-list and declares each type parameter as `t:type` or
-`t:subtype(comparable)`:
+list and declares each type parameter as `t:type`,
+`t:subtype(comparable)`, or with an upper bound, `t:subtype(vehicle)` (see
+"Upper bounds" below):
 
 ```verse
 Find(Items:[]t, Target:t where t:subtype(comparable))<decides>:int = ...
@@ -189,9 +190,44 @@ Combine(A:t1, B:t2 where t1:type, t2:type):tuple(t1, t2) = (A, B)
   including class joins. Grouped contextual values may take their types from
   later named arguments. A lone scalar remains a scalar for a bare type
   parameter; it is not implicitly converted to a singleton array.
+- **Upper bounds** (#502, Book of Verse ch. 6, "Type Constraints" and
+  "Member Access"). `t:subtype(c)` takes as `t` any subtype of `c`, and
+  the function sees a `t` as a `c`: `Process(X:t where
+  t:subtype(vehicle)):t` reads `X.Speed` and calls `X.Describe()` (the
+  instance's override), and `Process(car{})` is a `car`. A bound may be a
+  class or an interface, a parametric one applied (`subtype(box(int))`),
+  another type parameter of the clause (`u:subtype(t)`), `rational`, a
+  refinement type, an array, option, tuple or map type (`subtype([]rational)`
+  with a `[]int`: indexing, `.Length`, `?`, the array methods, iteration
+  and projections read through it), a function type (a `t` is then called),
+  `any` or `void`; and `t:castable_subtype(c)` asks for a `<castable>`
+  subtype of `c` (Book's tests, `Castable.versetest` 510-603). A class's,
+  interface's or struct's type parameter takes a bound too
+  (`holder(t:subtype(vehicle)) := class`). The instance is checked at every
+  call, construction and written type application, also in a type alias's
+  type and a class's parents, where it is defined; a bound's facts make a
+  call of another bounded function with `t` valid. Each bound is one more
+  hidden argument, checked evidence that the instance is below the bound
+  (an upcast, or the conversion of `int` to `rational` or of each element of
+  a container), which the function's operations on a `t` use; no evidence is
+  made from a type alone ([upper-bound evidence](research/upper-bound-evidence.md)).
+  Refused, each by a rule of its own: an instance outside the bound (the
+  Book's 3509); a bounded type parameter, or one a bound names, that no
+  parameter's type determines (`Foo(X:int where t:subtype(u), u:type):?t`,
+  3503; one without a bound may still be given by the expected result); a
+  public parametric type whose bound is less visible (3593); several bounds
+  on one type parameter (the Book: "not yet supported"); `concrete_subtype(c)`
+  as a bound; a cast of a bounded `X` (`i[X]`: the Book's
+  `FORT-1059276.versetest` refuses it, `Y:c = X; i[Y]` is the way); a write
+  through a container upper (`set X[0] = …` with `X:t`,
+  `t:subtype([]rational)`: no conversion back to `t` exists); a cast to or
+  a construction of a type parameter (`t[X]`, `t{}`); and variance of a
+  function object already made (a bound does not make
+  `type{_(:car):int}` a `type{_(:vehicle):int}`).
 - **Limits.** A generic `Main`, several constraints on one type parameter
   (also unsupported in the Book), explicit type arguments to a generic
-  function, and generic constants are not supported.
+  function (`F(t:type, X:t)`, called `F(int, 3)`), and generic constants are
+  not supported.
 
 ## Effect contracts
 
@@ -591,9 +627,11 @@ take an overloaded function's name either.
     parameter, and generic array packing is incomplete (#501). A tuple
     argument that does not fit a one-argument overload can expand into a
     different overload's positional parameters; its receiver and producer
-    are evaluated once, before named arguments and defaults;
-  - generic upper bounds other than `type` and `subtype(comparable)` are
-    unsupported (#502).
+    are evaluated once, before named arguments and defaults.
+- **Bounds** (#502). Overloads whose bounds are disjoint sibling classes
+  (`t:subtype(car)` and `t:subtype(truck)`) are distinct; an interface
+  bound overlaps every class (a class below both may come), and so do an
+  ancestor and its descendants and the empty containers.
 
 ## Parametric structs
 
@@ -2177,9 +2215,11 @@ Main():void =
   constructs the class `T` holds with its defaults; no field may be given.
 - Type values are not compared (the Book's tests: "We can't yet compare
   the subtype values"). `subtype(t)` of a type that is no class or
-  interface (`subtype(int)`), `concrete_subtype(comparable)`, a metatype as
-  a type parameter's bound and a type given as an argument (`F(t:type):?t`)
-  are not supported.
+  interface (`subtype(int)`), `subtype(t)` of a type parameter,
+  `concrete_subtype(comparable)`, `concrete_subtype(c)` as a type
+  parameter's bound and a type given as an argument (`F(t:type):?t`) are
+  not supported; `castable_subtype(c)` as a type parameter's bound is
+  ([Parametric functions](#parametric-functions), "Upper bounds").
 - **Conversions.** `t(X)`, with `t` a built-in type's, a struct's or an
   enum's name, or a type written in parentheses, `(?int)(X)`, `([]int)(X)`,
   is `X` converted to `t`: `X` must have a type that is a subtype of `t`
@@ -3106,7 +3146,7 @@ Main()<suspends>:void =
 | `Main` failing | (no entry point in the book) | exit code 1; output already printed stays |
 | `return` or `break` inside a failure context | refused by the tests (`SOL-4199-BreakFromIf.versetest`, `Reachability.versetest` 12-15, `Return.versetest` 157-163; [the audit](research/readings-audit.md#return-and-break-in-a-failure-context)) | the Book's: refused ([Control](#supported)); a `break` in a `for`'s body, which the Book's tests allow and its prose refuses, stays refused |
 | Comparability | `comparable` covers the primitive types, enums, structs, `<unique>` classes and containers of comparable types (ch. 4); not functions, `any`, nor classes and interfaces without `<unique>` (ch. 11, `CompareInstance.versetest:11`) | the Book's: the types it names, and a type parameter declared `subtype(comparable)`; `comparable` itself is a type ([comparable](#comparable)) |
-| Inferring type arguments | not described | first-order matching against the expected result type, then the arguments; no subtyping other than `false` (matches anything) and `void` (accepts anything) |
+| Inferring type arguments | not described; the tests refuse a type parameter no parameter's type determines (`ParametricFunctions.versetest` 336-374, 586, 3503) | first-order matching against the expected result type, then the arguments; no subtyping other than `false` (matches anything) and `void` (accepts anything), and a bound's (an argument below it gives its instance); a type parameter with a bound, or that a bound names, must be determined by the parameters, as the tests have it; one without may be given by the expected result (`Make():?t`), which openverse keeps |
 | A qualifier without a `using` | "A qualifier only says which `F` is meant among the ones already in scope" (ch. 10): `(Top.M:)F` with no `using` is unknown | the qualifier is found as any name is, then the name is looked up in exactly that scope: `(M:)F` is `M.F` (#145) |
 | A module's member `(M:)x` used bare in `M` beside an outer `x` | both are candidates, told apart by their parameters, else ambiguous (`ModuleDefinitions.versetest`, `vmodule` tests) | the inner one (only a qualified member may share an outer definition's name, [Shadowing](#shadowing)); in a class's code and for `(local:)`, where the tests refuse it, ambiguous |
 | `ToString` of a float | the API and the tests: fixed point with six decimals (`FloatToString.versetest`, `1.000000`); ch. 2's example: `98.5` (the Book disagrees with itself: [the audit](research/readings-audit.md#tostring-of-a-float)) | the API's and the tests': six digits after the point, the exact value rounded half to even, every integer digit, the sign kept (`-0.000000`); `Inf`, `-Inf`, `NaN`; interpolation calls `ToString` (ch. 2) ([float](#float)) |

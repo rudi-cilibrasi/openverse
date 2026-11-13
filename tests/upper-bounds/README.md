@@ -1,20 +1,17 @@
 # Upper-bound source acceptance tests
 
-Run `bash tests/scripts/test-upper-bound-source.sh` after building the compiler.
-Every accepted program must pass the Core checker and an independent output
-oracle in both Lean and C. Negative fixtures require their specific bound or
-override diagnostic; an unsupported-feature refusal does not satisfy them.
+`bash tests/scripts/test-upper-bound-source.sh` runs them, after building the
+compiler; `scripts/check.sh` runs it. Every accepted program must pass the Core
+checker and an independent output oracle in both Lean and C. Negative fixtures
+require their specific bound or override diagnostic; an unsupported-feature
+refusal does not satisfy them. The scope, input-role, operation, method-value
+and callable contracts and compiler-API runtime artifacts are
+`test-subtype-evidence.sh`'s.
 
-These are development tests for #502. They intentionally remain outside the
-ordinary gate while `UpperBounds.checkParams` guards source admission. The
-ordinary gate runs the scope, input-role, operation, method-value and callable contracts
-and compiler-API runtime artifacts through `test-subtype-evidence.sh`.
-
-Keep these acceptance tests failing until the requested source contract is
-implemented. Do not add an admission bypass to the compiler or change the
-expected results to accommodate missing behavior. Source integration can be
-investigated in a separate experimental checkout with the guard relaxed there;
-that does not establish readiness to enable bounds on the published branch.
+Do not change an expected result to accommodate missing behavior: a positive
+that fails is a defect, and a negative that a program now passes is either a
+defect or a rule that changed, which its `.error` file and the rule's
+documentation then say.
 
 The FIFO cases have paired concrete controls. They check continuing rush-arm
 ordering, captured method values and defaults, shared mutation, cleanup, and
