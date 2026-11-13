@@ -1026,7 +1026,11 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
   | .ident x =>
     if keywords.contains x then perr t s!"unexpected keyword '{x}'"
     bump; return .ident t.pos x
-  | _ => perr t s!"unexpected {t.tok.describe}"
+  | _ =>
+    -- (`?A := e` outside a call's arguments: a tuple's named element)
+    if t.isSym "?" && (← peekT 1).identName?.isSome && (← peekT 2).isSym ":=" then
+      perr t "a tuple with a named element (?Name := …) is not supported: the pinned Book of Verse does not settle such values, and named parameters inside a tuple parameter are not implemented"
+    perr t s!"unexpected {t.tok.describe}"
 end
 
 /-- A function body after `=`: an indented block, a braced block, or an expression. -/
@@ -1039,19 +1043,57 @@ def parseFnBody : PM SExpr := do
   else if t.isSym "{" then bump; parseBraced t.pos
   else parseExpr top
 
-/-- A parameter list after its `(`, through the `)`: the parameters, and the
-    type parameters of a `where` clause that ends it. -/
-partial def parseParamList : PM (Array SParam × Array TParam) := do
+/-- A parameter, or a parenthesized group of them that destructures a tuple
+    argument (Book of Verse ch. 6, "Tuple as Arguments"): its name, type and
+    whether it is named, its default, and the names a group binds, each
+    with its type and its path of element indices. A group of one parameter
+    is that parameter. -/
+partial def parseParamItem : PM (Pos × String × STy × Bool × Option SExpr × List (String × STy × List Nat)) := do
+  let t ← peekT
+  if t.isSym "(" then
+    bump
+    let mut items := #[]
+    if !(← peekT).isSym ")" then
+      repeat
+        items := items.push (← parseParamItem)
+        if (← peekT).isSym "," then bump else break
+    expectSym ")"
+    if items.isEmpty then perr t "an empty parameter group: write a tuple() parameter"
+    if let some (_, n, _) := items.find? (·.2.2.2.1) then
+      perr t s!"a named parameter inside a tuple parameter (?{n}) is not supported yet"
+    if let #[one] := items then return one
+    let binds := items.toList.zipIdx.flatMap fun ((_, n, ty, _, _, inner), i) =>
+      if inner.isEmpty then [(n, ty, [i])] else inner.map fun (m, mt, path) => (m, mt, i :: path)
+    return (t.pos, "", .tup (items.toList.map (·.2.2.1)), false, none, binds)
+  let named := t.isSym "?"
+  if named then bump
+  let pn ← expectIdent
+  -- (`F(:t):u`: a parameter of a function type, written as a function's
+  -- signature, Book of Verse ch. 6)
+  let pty ← if (← peekT).isSym "(" then parseFnSig else do expectSym ":"; parseType
+  let dflt ← if (← peekT).isSym "=" then do bump; pure (some (← parseExpr 0)) else pure none
+  return (t.pos, pn, pty, named, dflt, [])
+
+/-- A parameter list after its `(`, through the `)`: the parameters, the
+    type parameters of a `where` clause that ends it, and the declarations
+    a body starts with to bind the names its groups destructure. A group is
+    a parameter of its tuple type (`$tuple{i}`), so calls, overloads and
+    function values see a tuple parameter there. A later parameter's
+    default may use a destructured name, as an earlier parameter. -/
+partial def parseParamList : PM (Array SParam × Array TParam × List SExpr) := do
   let mut ps := #[]
+  let mut binds : List SExpr := []
+  -- (each destructured name, the element of its group's parameter it is)
+  let mut σ : List (String × SExpr) := []
   if !(← peekT).isSym ")" && !(← peekT).isKw "where" then
     repeat
-      let named := (← peekT).isSym "?"
-      if named then bump
-      let pn ← expectIdent
-      -- (`F(:t):u`: a parameter of a function type, written as a
-      -- function's signature, Book of Verse ch. 6)
-      let pty ← if (← peekT).isSym "(" then parseFnSig else do expectSym ":"; parseType
-      let dflt ← if (← peekT).isSym "=" then do bump; pure (some (← parseExpr 0)) else pure none
+      let (q, pn, pty, named, dflt, inner) ← parseParamItem
+      let dflt := dflt.map (·.substIdents σ)
+      let pn := if inner.isEmpty then pn else s!"$tuple{ps.size}"
+      for (n, ty, path) in inner do
+        let e := path.foldl (fun e (i : Nat) => SExpr.app q e [.int q (Int.ofNat i)] false) (.ident q pn)
+        σ := σ ++ [(n, e)]
+        binds := binds ++ [.decl q n (some ty) false e]
       ps := ps.push { name := pn, ty := pty, named, default := dflt }
       if (← peekT).isSym "," then bump else break
   -- `where t₁:type, t₂:subtype(comparable)` ends the parameter list
@@ -1074,7 +1116,13 @@ partial def parseParamList : PM (Array SParam × Array TParam) := do
       tps := tps.push tp
       if (← peekT).isSym "," then bump else break
   expectSym ")"
-  return (ps, tps)
+  return (ps, tps, binds)
+
+/-- A body that starts with the declarations `binds` (`parseParamList`). -/
+def withBinds (binds : List SExpr) (body : SExpr) : SExpr :=
+  if binds.isEmpty then body else match body with
+    | .block p items => .block p (binds ++ items)
+    | e => .block e.pos (binds ++ [e])
 
 /-- The body of a method defined at column `c`: on the following lines,
     indented more than `c`, or inline. -/
@@ -1176,14 +1224,14 @@ partial def parseClassItem (c : Nat) :
     return .inl ((name, ty, d, isVar), pre.contains "override")
   if isVar then perr t "expected a field after var"
   expectSym "("
-  let (ps, tps) ← parseParamList
+  let (ps, tps, binds) ← parseParamList
   let effs ← parseSpecs
   expectSym ":"
   let ret ← parseType
   let a ← peekT
   if a.isSym "=" || a.isSym ":=" then
     bump
-    return .inr (.fn t.pos name ps.toList tps.toList (pre ++ effs) ret (← parseFnBodyAt c))
+    return .inr (.fn t.pos name ps.toList tps.toList (pre ++ effs) ret (withBinds binds (← parseFnBodyAt c)))
   -- no body: an abstract method
   return .inr (.fn t.pos name ps.toList tps.toList (pre ++ effs ++ ["$abstract"]) ret (.block t.pos []))
 
@@ -1328,7 +1376,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
         perr n s!"a constant cannot have the effect specifier <{e}>: it has the effects of its initialiser"
     if n.isSym "(" then
       bump
-      let (ps, tps) ← parseParamList
+      let (ps, tps, binds) ← parseParamList
       if pre.contains "constructor" then
         -- `Name<constructor>(params)<effects> := cls:` and its items (#11):
         -- an `fn` with the effect `$constructor:cls`, expanded with the classes
@@ -1348,7 +1396,9 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
             expectSym ")"
             pure ts.toList
           else pure []
-        let items ← parseCtorBody t.col
+        -- (its destructured names, bound by a `let:` first)
+        let items := (if binds.isEmpty then [] else [SExpr.app ct.pos (.ident ct.pos "$let") [.block ct.pos binds] false]) ++
+          (← parseCtorBody t.col)
         tops := tops.push (.fn t.pos name ps.toList tps.toList
           ((pre.filter (· != "constructor")) ++ effs ++ [s!"$constructor:{cls}"])
           (if targs.isEmpty then .name cls else .app cls targs) (.block ct.pos items))
@@ -1386,7 +1436,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
       let ret ← parseType
       let a ← peekT
       if a.isSym "=" || a.isSym ":=" then bump else perr a "expected '=' before the function body"
-      tops := tops.push (.fn t.pos name ps.toList tps.toList (pre ++ effs) ret (← parseFnBody))
+      tops := tops.push (.fn t.pos name ps.toList tps.toList (pre ++ effs) ret (withBinds binds (← parseFnBody)))
     else if n.isSym ":=" && (← peekT 1).isKw "interface" then
       bump; bump
       tops := tops.push (← parseClassBody t.pos name [] true)
