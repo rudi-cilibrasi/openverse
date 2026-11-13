@@ -1498,6 +1498,7 @@ Main():void =
   own shape: recursive or not, generic, a method, its values of another
   type), so its clauses are a failure context of their own, and when they
   fail it has no values and, in a `for`, what came before the call stays.
+  Its `defer:` runs as each of its values leaves it, as where it is inlined.
   A generic one is taken at one instance of its type parameters for a whole
   search, as a generic group's own functions are; a call of it at another
   is refused for now:
@@ -1533,6 +1534,22 @@ Main():void =
   A returning `any`-valued group with recursive edges in an incomplete tail
   conditional also uses that eager route, so the conditional erases all
   yielded values to `void` while explicit returns retain their operands.
+
+  A recursive one's own `defer:`s, and those of a block in its code whose
+  values are its own, run as each value leaves their scope (#283), as where
+  the function or the block is inlined: after the value is computed and
+  before the code after the call (its return frame), last registered first,
+  and at a `return` after the return's value. A call whose clauses fail gives
+  no value and runs none. In a `for`, what a `defer:` does is part of the
+  value's code, undone with it when a filter after the call rejects it:
+
+  ```verse
+  R(N:int)<transacts>:int =
+      defer: Print("r {N}")
+      if (N <= 0) then (0 | 1) else (N | R(N - 1))
+  Main()<transacts>:void =
+      for (X := R(1)) { Print("v {X}") }   # r 1, v 1, r 0, r 1, v 0, r 0, r 1, v 1
+  ```
 
   When parameters are named, each recursive call
   evaluates positional arguments first, then named arguments as written, then
@@ -1607,7 +1624,7 @@ Main():void =
   `<computes>`, keeps local state, or may print or call `Err()`. Its choice
   points must be where a choice is lifted from (a comparison's later
   operand, a `set`'s value, a named argument, a struct's field, `and`'s
-  operands, an `if`'s branch, the right of `or`) (#283). Also a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`
+  operands, an `if`'s branch, the right of `or`) (#283). Also one with a `return`
   other than at the end of its body or in an `if`'s branches, a method of a class or
   interface below two others that each declare its name without `<override>`,
   `<suspends>`, one used as a function value, and, since its body is inlined where other names may be

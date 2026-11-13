@@ -1,0 +1,100 @@
+r 1
+v 1
+r 0
+r 1
+v 0
+r 0
+r 1
+v 1
+r 0
+r 1
+first 0
+v 1
+b0
+v 0
+b0
+v 1
+at 1 got 1
+w 1
+at 2 got 2
+w 2
+v 3
+at 2 got 2
+w 2
+v 3
+at 1 got 1
+w 1
+at 2 got 2
+w 2
+first 3
+ev 2
+v 2
+od 1
+ev 2
+v 10
+ev 0
+od 1
+ev 2
+v 0
+od 1
+ev 2
+first 10
+mid 1
+outer 1
+v 1
+base
+outer 0
+outer 1
+v 7
+base
+outer 0
+outer 1
+v 8
+mid 1
+base
+outer 0
+outer 1
+first 8
+two 1
+sum 1
+two 2
+sum 2
+v 3
+two 2
+sum 2
+v 4
+two 1
+sum 1
+two 2
+sum 2
+v 4
+two 2
+sum 2
+v 5
+two 2
+sum 2
+v 3
+two 1
+sum 1
+two 2
+sum 2
+first 5
+blk 1
+after 1 1
+blk 2
+after 2 2
+v 2
+blk 1
+after 1 11
+blk 2
+after 2 12
+v 12
+blk 2
+after 2 21
+v 21
+walk 5 1
+v 1
+walk 5 0
+walk 5 1
+v 5
+exit=0

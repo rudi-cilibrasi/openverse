@@ -95,6 +95,8 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
        noother   (no call of another function with several values as a choice point in a
                   generator's code: Oxv, Oyv, or another generator, #283; on with seq
                   otherwise)
+       nogdefer  (no defer: in a generator's code: its own, its else's block's, or Odv's, a
+                  function with several values it calls, #283; on with frames otherwise)
        nocls     (no call of a generator of itself in a field of a class's construction,
                   ocls{A := …, B := …}, whose superclass's field B is evaluated first,
                   #283; on with seq otherwise)
@@ -607,6 +609,18 @@ ROTH = random.Random(seed * 1000003 + 283294)
 # whose fields are evaluated in its order, the superclass's B first, whatever the written one. A
 # stream of its own.
 RCLS = random.Random(seed * 1000003 + 283295)
+# ---- #283, flag gdefer (on with frames; nogdefer turns it off): a defer: that prints, in a
+# generator's code: its own, at the start of its body or after its clauses; one in the block of a
+# branchy generator's else, after its bound choice; or Odv's, Oyv's twin with a defer: of its own,
+#   Odv(OdA:int)<transacts>:int =
+#       defer: Print("odd")
+#       Tell("od", OdA) | OdA + 3
+# called where the generator's code calls Oyv. Each runs as each value leaves its scope: after
+# the value is computed, before the code after the call (the caller's frame), last registered
+# first; a call whose clauses fail gives no value and runs none. The model: the rest of the scope
+# runs with a continuation that prints first (`run_body`'s `sdefer`). A stream of its own, drawn
+# once the generator is made, so seeds where it does not fire keep their programs.
+RGD = random.Random(seed * 1000003 + 283296)
 OTHERS = set()
 USES_CC = [False]
 SQN = [0]
@@ -632,6 +646,7 @@ LIFTED = SEQ and 'nolifted' not in flags
 NEST = SEQ and 'nonested' not in flags
 OTHER = SEQ and 'noother' not in flags
 CLS = SEQ and 'nocls' not in flags
+GDEFER = FRAMES and 'nogdefer' not in flags
 REFUSED = [False]
 
 
@@ -1155,8 +1170,39 @@ def gen_gfunc(i):
         class_shapes(f, i, sc, ctr)
     f['stmts'] = stmts
     f['lifted'] = lifted(f)
+    if GDEFER:
+        defer_shapes(f, i)
     CTX.update(ctrs=None, nofail=False, nochoice=False, noprint=False, fmax=None, take=None)
     return f
+
+
+def defer_shapes(f, i):
+    """(#283, flag gdefer) defer:s in generator f, made already (RGD alone): its own, one in its
+    else's block, and Odv for Oyv."""
+    kinds = set()
+    if RGD.random() < 0.25:
+        d = ('sdefer', f"gd{i}")
+        f['stmts'] = [d] + f['stmts'] if RGD.random() < 0.5 else f['stmts'] + [d]
+        kinds.add('defer-own')
+    v = f['val']
+    if not f['decides'] and v[0] == 'gbif' and v[3] and v[3][0][0] == 'gblk' and RGD.random() < 0.4:
+        _, x, galts, post, last = v[3][0]
+        v[3][0] = ('gblk', x, galts, [('sdefer', f"gb{i}")] + post, last)
+        kinds.add('defer-block')
+
+    def swap(x):
+        if isinstance(x, tuple) and x and x[0] == 'gx' and x[1] == 'y' and RGD.random() < 0.4:
+            OTHERS.add('d')
+            kinds.add('defer-other')
+            return ('gx', 'd', swap(x[2]))
+        if isinstance(x, tuple):
+            return tuple(swap(y) for y in x)
+        if isinstance(x, list):
+            return [swap(y) for y in x]
+        return x
+    if 'y' in OTHERS:
+        f['val'] = swap(f['val'])
+    f['gdefer'] = kinds
 
 
 def seq_call(i, sc, ctr):
@@ -1907,7 +1953,7 @@ def show(e):
     if t == 'tw':
         return f'Tw({show(e[1])}, {show(e[2])})'
     if t == 'gx':
-        return f"Oxv[{show(e[2])}]" if e[1] == 'x' else f"Oyv({show(e[2])})"
+        return f"Oxv[{show(e[2])}]" if e[1] == 'x' else f"O{e[1]}v({show(e[2])})"
     if t == 'ccons':
         return f'OC(ocls{{A := {show(e[1])}, B := {show(e[2])}}})'
     if t == 'cons':
@@ -2410,9 +2456,15 @@ def ev(e, st, k, mode):
                                         s1, k1, mode, True)
 
                 def told(s2, k2):
-                    s2.out.append("oy")
+                    s2.out.append("oy" if e[1] == 'y' else "od")
                     return k2(a, s2)
-                return choice_point([told, (lambda s2, k2: k2(chks(a + 3, s2), s2))], s1, k1, mode, True)
+
+                def kodd(v, s3):
+                    # (#283, flag gdefer: Odv's defer:, as each of its values leaves it)
+                    s3.out.append("odd")
+                    return k1(v, s3)
+                return choice_point([told, (lambda s2, k2: k2(chks(a + 3, s2), s2))], s1,
+                                    kodd if e[1] == 'd' else k1, mode, True)
             if mode == 'all':
                 s0 = s.copy()
                 try:
@@ -2659,6 +2711,14 @@ def run_body(stmts, val, st, k, mode):
     if t == 'snest':
         # (#283: a consumer in a generator's code, as anywhere)
         return run_body([c[2]] + stmts[1:], val, st, k, mode)
+    if t == 'sdefer':
+        # (#283: a defer:, which runs as each value leaves this scope, after it is computed and
+        # before the code after it, last registered first: the rest with a continuation that
+        # prints first)
+        def kdf(v, s):
+            s.out.append(c[1])
+            return k(v, s)
+        return run_body(stmts[1:], val, st, kdf, mode)
     if t == 'sclause':
         return run_clauses([c[1]], st, nxt, mode)
     if t == 'sfor':
@@ -2848,6 +2908,8 @@ def show_s(c):
         return f"{c[1]}.Next()"
     if t == 'snest':
         return show_s(c[2])
+    if t == 'sdefer':
+        return f'defer: Print("{c[1]}")'
     if t == 'sclause':
         return show_c(c[1])
     if t == 'sfor':
@@ -3408,6 +3470,8 @@ if 'x' in OTHERS:
     PRE += 'Oxv(OxA:int)<transacts><decides>:int =\n    Print("ox {OxA}")\n    OxA > 0\n    OxA | OxA + 3\n'
 if 'y' in OTHERS:
     PRE += 'Oyv(OyA:int)<transacts>:int = Tell("oy", OyA) | OyA + 3\n'
+if 'd' in OTHERS:
+    PRE += 'Odv(OdA:int)<transacts>:int =\n    defer: Print("odd")\n    Tell("od", OdA) | OdA + 3\n'
 if USES_CC[0]:
     PRE += ("obase := class:\n    B:int = 0\nocls := class(obase):\n    A:int = 0\n"
             "OC(P:ocls)<computes>:int = P.A * 10 + P.B\n")
@@ -3420,8 +3484,8 @@ if os.environ.get('MVSEQ'):
     # (#283: the generators with choice points in sequence; then each kind the tests call, in a
     # for or where the first success is taken, with effects run as a function of its own or not)
     used = [(k, 'for' if isfor else ('first-lifted' if GFUNCS[i]['lifted'] else 'first'))
-            for i, isfor in sorted(USED) for k in sorted(GFUNCS[i].get('seq', ()))]
-    made = sorted({k for f in GFUNCS for k in f.get('seq', ())})
+            for i, isfor in sorted(USED) for k in sorted(GFUNCS[i].get('seq', set()) | GFUNCS[i].get('gdefer', set()))]
+    made = sorted({k for f in GFUNCS for k in f.get('seq', set()) | f.get('gdefer', set())})
     print(f"seq {sum(1 for f in GFUNCS if f.get('seq'))} " + " ".join(sorted({f"{k}/{c}" for k, c in used})) +
           f" made={','.join(made)}", file=sys.stderr)
 if os.environ.get('MVSTATS'):

@@ -214,8 +214,14 @@ the names its scope declares after it renamed (`$later'N`, shown as `N`,
 lowers a `defer:` after the rest of its scope, they run as each value
 leaves the block, and not for a value whose clauses fail. The same goes
 for a non-returning function's own `defer:`s, after `$r0` in its `$inline`
-template (not in a recursive one or one reached from it, whose body is a
-function's). Returning functions keep registrations until
+template. A function whose values are taken lazily or computed at the call
+(a recursive one, or one a recursive one's code calls) has its own
+`defer:`s placed so before its body is analysed (`inlineFns`'
+`deferLastBlock`), so they are code after its value, a return frame of its
+calls in the lazy machine (`lastChoiceTail`), and a block in its code that
+the normal form takes apart (`normAlt`, `frameOf?`) has its own placed so
+too: before #283's last step the function's were refused, and a block's ran
+once, as code of the path that selects it. Returning functions keep registrations until
 `elimScopedReturns` normalizes their scopes. Each `ReturnScope` retains
 its continuation and reached registrations. Branch fallthrough executes
 that branch's cleanup before resuming the parent's continuation. A return
@@ -761,7 +767,7 @@ twice as long as the last one's whose body runs a step and gives that
 iteration's values: adding each value to an array would copy it each time,
 and the C runtime frees a call's cells only when it returns.
 
-A strongly connected group of such functions (#283: each one's alternatives calls of the group's functions; one result type, none generic) is taken lazily too, as one. So is, with a group taken lazily (one not computable), every function with several values its code calls, and those that one calls, and so on: its machine is closed under calls of functions with several values (`Choice.machineOf`), so that a call of one is a choice point as a call of the group is, the callee's code a member's, recursive or not. There is no rule left that a lazily taken function calls only its own group; a callee is compiled in the machine as the group's own functions are (its returns taken out first, `inlineCalls`' `memberFns`; one with a `defer:` refused, as a recursive one's is), and inlined elsewhere as before.
+A strongly connected group of such functions (#283: each one's alternatives calls of the group's functions; one result type, none generic) is taken lazily too, as one. So is, with a group taken lazily (one not computable), every function with several values its code calls, and those that one calls, and so on: its machine is closed under calls of functions with several values (`Choice.machineOf`), so that a call of one is a choice point as a call of the group is, the callee's code a member's, recursive or not. There is no rule left that a lazily taken function calls only its own group; a callee is compiled in the machine as the group's own functions are (its returns taken out first, `inlineCalls`' `memberFns`, and its `defer:`s after its value), and inlined elsewhere as before.
 - A generic member's instance is found at its calls as a group's own functions' are, at the group's result type, else, when its values go to the frame after its call at a type of their own, at its arguments' alone (`elabLoopGenGroupWith`'s probe).
 - A `return` in an `if` after a choice point (a recursive function's own, or a member's) is in code that reaches no other point: a plain frame or a value, whose `if` is a plain one again (`eraseReturnTails` in `normAlt`), its returning branch's value the alternative's. Before, its scopes' markers reached the elaborator (`unknown function '$returnTail'`), for a recursive function too.
 - A member's values may be of a type of their own, one that does not coerce to the group's result type (`LoopGen.memberTys`): they go to the frame after the member's call, whose hole is at that type (`loopFlatWith`'s and `probeHoleWith`'s `recTy`), in that type's value slot, as a choice's values of another type do; where the first success is taken, through that type's `{name}$retN` (`firstLiftOf`'s `memberTys`, `firstBody`'s `ownTy`).

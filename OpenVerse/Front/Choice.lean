@@ -693,6 +693,14 @@ def deferLast (p : Pos) (dv : String) (ss : List SExpr) : List SExpr :=
     | _ => rest ++ [.decl p dv none false l, run, .ident p dv]
   | none => ss
 
+/-- (#283) A block whose clauses are taken apart, with its own `defer:`s after
+    its value (`deferLast`, its value's name made from its place): what a
+    lazily taken group's code does with a block the lifter would lift, so
+    they run as each value leaves it there too. -/
+def deferLastBlock : SExpr → SExpr
+  | .block p ss => .block p (deferLast p (madeName "dv" "" p) ss)
+  | e => e
+
 mutual
 /-- An inlined call's parameters bound to its arguments, lifted, in order
     (#235): `pre` is the template's parameter bindings (with `$arg` where
@@ -1511,8 +1519,10 @@ partial def frameOf? (isPoint plain inert : SExpr → Bool) (h : String) (e : SE
       | .code _, x :: xs => (acc ++ [SPart.code x], xs)
       | part, xs => (acc ++ [part], xs)) (([] : List SPart), codes')
     return (c, .str p ps', pre)
-  -- (a block: its clauses before the one with the point run before it)
-  | .block p ss => do
+  -- (a block: its clauses before the one with the point run before it; its
+  -- own `defer:`s after its value, `deferLastBlock`)
+  | b@(.block p _) => do
+    let ss := stmtsOf (deferLastBlock b)
     let i ← ss.findIdx? (!plain ·)
     let rest := ss.drop (i + 1)
     match ss[i]! with
@@ -1671,6 +1681,9 @@ partial def normAlt (ops : ShapeOps) (a : SExpr) : Option SExpr := do
   if ops.plain a then return (match a with
     | .app _ (.ident _ "$returnTail") _ false => a
     | a => eraseReturnTails a)
+  -- (a block taken apart: its own `defer:`s after its value, as the lifter
+  -- places them, so they run as each value leaves it)
+  let a := deferLastBlock a
   -- (a block that starts with a choice bound, with plain code after it: the
   -- choice of that code after each alternative, as `lastChoiceTail`)
   if let .block _ ss@(_ :: _ :: _) := a then
@@ -3665,8 +3678,11 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
   let fieldOrder (n : String) : FieldOrder := { fields := (orders.lookup n).getD [] }
   -- Analyze recursive shapes after source returns have selected their paths.
   -- Keep original bodies for checking and nonrecursive inline boundaries.
+  -- (#283) Its own `defer:`s after its value, as an inlined body's are, so
+  -- they run as each value leaves it where it is taken lazily or computed
+  -- at the call too: with returns, `elimReturns` places them at each exit.
   let mfs ← rawMfs.mapM fun (n, f) => do
-    if !anyE (fun | .ret .. => true | _ => false) f.body then return (n, f)
+    if !anyE (fun | .ret .. => true | _ => false) f.body then return (n, { f with body := deferLastBlock f.body })
     let retIfs := (stmtsOf f.body).foldl (init := 0) fun acc s => acc + countRetIfs s
     if retIfs > 16 then
       throw s!"{f.pos.show}: {shownFnName n} has several values and {retIfs} ifs with a return: more than 16, and the code of an inlined call doubles with each, until choices compose without copying the clauses after them (#283)"
@@ -3838,13 +3854,6 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
     for g in needAll do
       for h in (callees.lookup g).getD [] do
         if !needAll.contains h then needAll := needAll ++ [h]; grew := true
-  for (n, f) in rawMfs do
-    -- Recursive cleanup still needs an invocation scope, including when
-    -- normalization would remove its registration after an early return.
-    let hasReturn := anyE (fun | .ret .. => true | _ => false) f.body
-    if ((stmtsOf f.body).any isDefer || (hasReturn && anyE isDefer f.body)) &&
-        (recs.contains n || needAll.contains n || inMachine n) then
-      throw s!"{f.pos.show}: {shownFnName n} has several values and a defer:, and is recursive or called by a recursive one (so its values are computed at the call, or taken lazily): not supported yet (#235, #283)"
   -- (effect-free: <computes> and no local state; that nothing they may
   -- run prints or calls `Err()` is checked on their Verse Core code, which
   -- shows every call, `checkEager`)
