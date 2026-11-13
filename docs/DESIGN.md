@@ -1279,6 +1279,19 @@ flattening, a local `X` and the member `m::X` have different names. The
 elaborator sees an ordinary flat program, so nothing behind it changes:
 Core, the checks, the proofs and the C runtime.
 
+## Destructured parameters: a desugaring in the parser
+
+A parameter group `(B:int, (C:int, D:int))` (Book of Verse ch. 6) is one
+parameter `$tuple{i}` of its tuple type. The parser starts the body with
+`B := $tuple1(0)`, `C := $tuple1(1)(0)`, … (a constructor gets a `let:`), and
+rewrites later defaults' uses of those names into the same projections. So
+the function's type is the one with a tuple parameter there, and calls,
+overloads, function values and the choice inliner need no second path. A
+group of one parameter is that parameter. Named parameters inside a group
+would need a tuple type with named, omittable elements, which the parser
+refuses; the design is in
+[research/tuple-parameters.md](research/tuple-parameters.md).
+
 ## Floats: canonical bits
 
 A `float` (#127) is `Value.float b`, the bits of an IEEE double. Every
