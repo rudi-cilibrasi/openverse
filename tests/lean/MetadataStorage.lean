@@ -2,6 +2,19 @@ import OpenVerse.Front.Elab
 
 open OpenVerse OpenVerse.Front
 
+private def evidenceType (ty : STy) : STy :=
+  match ty.mapNamesM (fun name => pure (if name == "evidence" then SubtypeEvidence.family else name)) with
+  | .ok renamed => renamed
+  | .error _ => ty
+
+private partial def evidenceBody (body : SExpr) : SExpr :=
+  Choice.mapE (fun
+    | .decl p name ty mutable value =>
+      some (.decl p name (ty.map evidenceType) mutable (evidenceBody value))
+    | .construct p name args fields =>
+      some (.construct p name (args.map evidenceType) (fields.map evidenceBody))
+    | _ => none) body
+
 private partial def roles (dummy : Bool) : STop → Except String STop
   | .fn p name ps tps specs ret body => do
     let rename (n : String) : Except String String :=
@@ -12,7 +25,7 @@ private partial def roles (dummy : Bool) : STop → Except String STop
         typeValue := (dummy && ((name == "Caller" && param.name == "Dummy") ||
           (name == "ForwardMeta" && param.name == "M"))) ||
           (name == "IgnoreMeta" && param.name == "M") }
-    return .fn p name ps tps specs (← ret.mapNamesM rename) body
+    return .fn p name ps tps specs (← ret.mapNamesM rename) (evidenceBody body)
   | .classDef p name tps specs parents iface fields overrides methods => do
     let rename (n : String) : Except String String :=
       pure (if n == "evidence" then SubtypeEvidence.family else n)
@@ -46,7 +59,10 @@ private def cases : List (String × String) := [
     caller "    C:=cell(u){Value:=D}\n    Store(C,Dummy)\n    P.Up(C.Value).Up(X).N"),
   ("shared frame local", "Caller(X:t,D:u,Dummy:u,P:evidence(evidence(vehicle,t),u),E:event(int) where t:type,u:type)<suspends>:int=\n    var Stored:u=D\n    E.Await()\n    set Stored=Dummy\n    P.Up(Stored).Up(X).N"),
   ("later GADT refinement", "pair(a:type,b:type):=class{A:a;B:b}\nsame(v:type):=class(pair(v,v)){}\nCaller(X:t,D:u,Dummy:u,Pair:pair(u,evidence(vehicle,t)) where t:type,u:type)<transacts>:int=\n    var Stored:u=D\n    set Stored=Dummy\n    if(S:=same[Pair])then Stored.Up(X).N else 0"),
-  ("function stored in local", "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<transacts>:int=\n    var Stored:type{_()<computes>:int}=F\n    set Stored=Dummy\n    Stored()")]
+  ("function stored in local", "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<transacts>:int=\n    var Stored:type{_()<computes>:int}=F\n    set Stored=Dummy\n    Stored()"),
+  ("metadata function without overwrite", "Caller(Dummy:type{_()<computes>:int})<transacts>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    Stored()"),
+  ("metadata copy survives real overwrite", "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<transacts>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    Saved:=Stored\n    set Stored=F\n    Saved()"),
+  ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
   ("metadata argument with real return", "IgnoreMeta(M:u,Real:evidence(vehicle,t) where u:type,t:type)<computes>:evidence(vehicle,t)=Real\nCaller(X:t,D:evidence(vehicle,t),Dummy:u where t:type,u:type)<computes>:int=IgnoreMeta(Dummy,D).Up(X).N"),
@@ -59,7 +75,13 @@ private def forwards : List (String × String) := [
   ("rolled back overwrite", caller "    var Stored:u=D\n    if(set Stored=Dummy;false?){}\n    P.Up(Stored).Up(X).N")]
   ++ [("failed helper branch", "No(V:u where u:type)<decides><transacts>:void=false?\n" ++
     caller "    var Stored:u=D\n    if(No[Dummy])then set Stored=Dummy\n    P.Up(Stored).Up(X).N"),
-  ("opaque shared local", "Caller(Dummy:u,E:event(int) where u:type)<suspends>:u=\n    var Stored:u=Dummy\n    E.Await()\n    set Stored=Dummy\n    Stored")]
+  ("opaque shared local", "Caller(Dummy:u,E:event(int) where u:type)<suspends>:u=\n    var Stored:u=Dummy\n    E.Await()\n    set Stored=Dummy\n    Stored"),
+  ("metadata function overwritten with data", "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<transacts>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    Stored()"),
+  ("nested overwrite returns data", "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<transacts>:int=\n    Saved:=block{var Stored:type{_()<computes>:int}=Dummy;set Stored=F;Stored}\n    Saved()"),
+  ("overwrite in condition clauses", "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<transacts>:int=\n    if(var Stored:type{_()<computes>:int}=Dummy,set Stored=F,Value:=Stored(),Value>=0)then Value else 0"),
+  ("opaque metadata alias in suspended stage", "Dup(N:int)<computes>:int=N|N\nCaller(Dummy:u where u:type)<suspends>:[]u=\n    var Stored:u=Dummy\n    Saved:=Stored\n    for(A:=(Dup(1)|Dup(2)),B:=(Dup(1)|Dup(2))):block{Sleep(0.0);Saved}"),
+  ("real overwrite alias in suspended stage", "Dup(N:int)<computes>:int=N|N\nCaller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:[]int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    Saved:=Stored\n    for(A:=(Dup(1)|Dup(2)),B:=(Dup(1)|Dup(2))):block{Sleep(0.0);Saved()}"),
+  ("mutable implicit evidence after real overwrite", "Caller(X:t,Dummy:evidence(vehicle,t),Real:type{_()<computes>:evidence(vehicle,t)} where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    set Stored=Real()\n    X.N")]
 
 private def compileCase (source : String) (dummy : Bool) : Except String Compiled := do
   let tops ← parseProgram ("vehicle:=class<computes>{N:int=7}\n" ++ source ++ "\nMain():void={}")
@@ -76,7 +98,10 @@ def main : IO Unit := do
           IO.println s!"FAIL {label}, dummy={dummy}: admitted={shouldReject}, Core checks"
           failures := failures + 1
       | .error message =>
-        if !shouldReject || (message.splitOn "dummy type value cannot").length ≤ 1 then
+        -- An opaque proof is also excluded from implicit member lookup.
+        let missingProof := label == "mutable implicit evidence without overwrite" &&
+          (message.splitOn "t has no member 'N'").length > 1
+        if !shouldReject || (!missingProof && (message.splitOn "dummy type value cannot").length ≤ 1) then
           IO.println s!"FAIL {label}, dummy={dummy}: {message}"
           failures := failures + 1
   if failures > 0 then throw (IO.userError s!"{failures} metadata storage contracts failed")
