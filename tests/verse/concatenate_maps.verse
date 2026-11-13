@@ -1,5 +1,6 @@
-# ConcatenateMaps (Book of Verse ch. 9): every map's entries, a later map's
-# value winning for a key, which keeps its first position
+# ConcatenateMaps (Book of Verse ch. 3): every map's entries laid down in
+# turn, a later map's pair replacing an earlier one's of its key, at the later
+# map's place (Tests/Intrinsics/ConcatenateMaps.versetest 21, 33)
 
 Show(M:[string]int):string =
     var S:string = ""
