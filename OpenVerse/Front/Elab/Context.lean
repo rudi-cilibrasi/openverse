@@ -103,6 +103,10 @@ structure Local where
   ty      : Ty
   mutable : Bool
   storage : Option SourceStorage := none
+  /-- (#283) An `any` bound by the first success of the clauses after the
+      choice bound here, which has the join of its types in the choice's
+      alternatives (`Ctx.anyWhy`). -/
+  joinedAt : Option Pos := none
 
 /-- The heap effects (`<transacts>` allows all of them). -/
 
@@ -691,6 +695,16 @@ structure R where
   e  : Expr
   ty : Ty
 
+/-- (#283) For an error at a use of an `any` as a value of a class: when it
+    is a name bound by the first success of the clauses after a choice
+    (`Local.joinedAt`), why it is an `any` there, and which choice. -/
+def Ctx.anyWhy (ctx : Ctx) (r : R) : String :=
+  match r.ty, r.e with
+  | .any, .local s => match ctx.locals.find? (·.slot == s) with
+    | some { name, joinedAt := some q, .. } =>
+      s!" ({name} is an any here: after the first success of the choice at {q.show}, what the clauses after it bind has the join of its types in its alternatives (#283); use {name} as its class in those clauses, where it has each one's own type, or take the values in a for)"
+    | _ => ""
+  | _, _ => ""
 
 /-- A new slot of the current frame, holding values of type `t`. -/
 def fresh (t : Ty) : EM Nat :=
@@ -1469,6 +1483,10 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
           eerr p s!"{withArticle base.show} is {withArticle n} only after a cast: write {n}[X], which fails when X is not one"
     eerr p s!"expected {target.show}, found {r.ty.show}"
 
+/-- `coerce`, whose error says why a name is an `any` (`Ctx.anyWhy`). -/
+def Ctx.coerce (ctx : Ctx) (p : Pos) (r : R) (target : Ty) : EM Expr :=
+  tryCatch (Front.coerce p r target) fun e => throw (e ++ ctx.anyWhy r)
+
 /-- Save rational operands in written order, then pass their int parts to
     an exact primitive. Repeated projections never repeat an operand. -/
 def rationalBinary (p : Pos) (op : Prim) (a b : R) : EM Expr := do
@@ -1635,6 +1653,14 @@ def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty := do
       if (exp.isNone || exp == some .any) && !ambiguousJoin (← get).env a b then return .any
       eerr p s!"the branches have different types: {a.show} and {b.show}"
 
+/-- (#283, #335) The first success of clauses lifted already (`$firstP`),
+    whose value is a result packet, the tuple of the names they bind: each
+    alternative of the choice that copies the clauses after a choice for
+    each of its alternatives. -/
+def isFirstPacket : SExpr → Bool
+  | .app _ (.ident _ "$firstP") [_] false => true
+  | _ => false
+
 /-- A generated result packet joins each field independently. In particular,
     an erased value must not erase the packet's remaining bindings/flags. -/
 partial def choiceResultType (env : TyEnv) (types : List Ty) : Option Ty := do
@@ -1654,6 +1680,17 @@ partial def choiceResultType (env : TyEnv) (types : List Ty) : Option Ty := do
     if a == .void || b == .void then some .void else
     (joinTy env a b none).orElse fun _ =>
       if ambiguousJoin env a b then none else some .any) first
+
+/-- (#283) For the message when these result packets of `isFirstPacket`s have
+    no join: the first name they bind whose types in them have none, and
+    those types. -/
+def packetUnjoined (env : TyEnv) (packet : SExpr) (types : List Ty) : Option (String × List Ty) := do
+  let .app _ _ [.block _ items] _ := packet | none
+  let .tuple _ es ← items.getLast? | none
+  es.zipIdx.findSome? fun (e, j) =>
+    let column := types.filterMap fun | .tup ts => ts[j]? | _ => none
+    if (choiceResultType env column).isSome then none
+    else some ((match e with | .ident _ n => n | _ => "$"), column.eraseDups)
 
 /-- A common class view suffices when the suffix only accesses fields whose
     instantiated types agree in every alternative. Bare values, methods and
