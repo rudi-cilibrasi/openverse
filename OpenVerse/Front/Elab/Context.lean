@@ -823,6 +823,7 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .name "void" => pure .void
   | .name "float" => pure .float
   | .name "any" => pure .any
+  | .name "comparable" => pure .dyn
   | .name "$never" => pure .never
   | .name n =>
     if let some t := env.tvars.lookup n then pure t
@@ -1490,6 +1491,9 @@ inductive CmpPlan where
       not tell from those that are not (`[]tuple(int, []int)` and
       `[]tuple(int, []char32)`, a tuple of type parameters and a string) -/
   | refuse
+  /-- both boxed (`boxedTest`): a `comparable` in either type, or values
+      Verse Core holds differently -/
+  | boxed
 
 /-- Verse Core's equality (`Value.veq`, which relates the empty values) of
     a value of `a` and one of `b` is Verse's: part by part, where the types
@@ -1594,6 +1598,9 @@ partial def witness (env : TyEnv) (dictBase : Nat) (dictVars : List String) : Ty
     | _ => pure (.lit (.int 0))
   | .float => pure (.lit (.float 0))
   | .any => pure (.lit .void)
+  -- (a slot of type `comparable`, which the checker infers as `dyn`: no
+  -- literal is inferred so)
+  | .dyn => return .local (← fresh .dyn)
   | .logic => pure (.lit (.logic false))
   | .char => pure (.lit (.char 0))
   | .void | .never | .tup [] => pure (.lit .void)
@@ -1908,6 +1915,115 @@ def discardValue (r : R) : EM Expr := return .seq (← inferable r) (.lit .void)
 /-- The values of `r`, an array of arrays, in one array. -/
 def flattenValues (r : R) : EM Expr := return .prim .flatten [← inferable r]
 
+/-! ### Boxes of comparable values
+
+A value of a comparable type becomes a `comparable` boxed (`Code.box`,
+`OpenVerse/Core/Comparable.lean`): a code where Verse Core holds several
+Verse types alike, and one representation of what Verse identifies, so that
+Verse Core's `eq` on boxes is Verse's `=`. -/
+
+/-- The code of enum or struct `n` in a box: 0, 1 and 2 are `char32`'s, a
+    rational's and a map's; the program's enums, then its structs, follow,
+    one each (a parametric struct's instances share one). -/
+def TyEnv.boxCode (env : TyEnv) (n : String) : Nat :=
+  match env.enums.findIdx? (·.1 == n) with
+  | some i => 3 + i
+  | none => 3 + env.enums.length + ((env.structs.findIdx? (·.1 == n)).getD env.structs.length)
+
+/-- Values of `t` are their own boxes (`Code.id`, arrays and options of
+    such): an int, a float, a logic, a char, a string, a refinement, a
+    `comparable`, `()`, a `<unique>` object. -/
+partial def Ty.boxId (env : TyEnv) : Ty → Bool
+  | .int | .float | .logic | .char | .refine _ | .dyn | .void | .never | .tup [] => true
+  | .arr t | .opt t => t.boxId env
+  -- (a class: a reference, compared by identity; one with no concrete
+  -- class below has no values)
+  | .struct n _ => env.classes.contains n
+  | _ => false
+
+/-- Converting a value of `a` to `b` is the identity on values: `b` is `a`
+    with `comparable` in places where `a` has a type whose values are their
+    own boxes (`[]int` to `[]comparable`). -/
+partial def Ty.boxIdTo (env : TyEnv) : Ty → Ty → Bool
+  | .dyn, .dyn => true
+  | a, .dyn => a.boxId env && a.comparable env
+  | .arr a, .arr b | .opt a, .opt b => a.boxIdTo env b
+  | .tup as, .tup bs => as.length == bs.length && (as.zip bs).all fun (a, b) => a.boxIdTo env b
+  | .map k v, .map k' v' => k.boxIdTo env k' && v.boxIdTo env v'
+  | a, b => a == b
+
+/-- `comparable` occurs in the type. -/
+partial def Ty.mentionsComparable : Ty → Bool
+  | .dyn => true
+  | .arr t | .opt t => t.mentionsComparable
+  | .map k v => k.mentionsComparable || v.mentionsComparable
+  | .tup ts | .struct _ ts => ts.any Ty.mentionsComparable
+  | _ => false
+
+/-- Code that boxes `e`, a value of the comparable type `a`, as `Code.box`
+    does: `char32`, an enum's value and a struct (its fields boxed) under
+    their codes; a rational as its int when it is one, else under code 1; a
+    map that is not empty under code 2, its pairs boxed; a tuple as the array
+    of its elements' boxes; arrays and options elementwise. None for a type
+    with a type parameter in it. Its value has Verse Core type `dyn`. -/
+partial def boxValue (env : TyEnv) (e : Expr) (a : Ty) : EM (Option Expr) := do
+  if a.boxId env then return some e
+  let slot (t : Ty) : EM Nat :=
+    modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push t })
+  let parts (x : Nat) (ts : List Ty) : EM (Option (List Expr)) := do
+    let mut out : Array Expr := #[]
+    for (t, i) in ts.zipIdx do
+      let some c ← boxValue env (.prim (.tupGet i) [.local x]) t | return none
+      out := out.push c
+    return some out.toList
+  match a with
+  | .char32 => return some (.prim .mkTup [.lit (.int 0), e])
+  | .enum n => return some (.prim .mkTup [.lit (.int (env.boxCode n)), e])
+  | .rational =>
+    let x ← slot a
+    return some (.seq (.assign x e) (.ite (.prim .eq [.prim (.tupGet 1) [.local x], .lit (.int 1)])
+      (.prim (.tupGet 0) [.local x]) (.prim .mkTup [.lit (.int 1), .local x])))
+  | .tup ts =>
+    let x ← slot a
+    let some es ← parts x ts | return none
+    return some (.seq (.assign x e) (.prim .mkArr es))
+  | .struct n ts =>
+    if env.classes.contains n then return none
+    let x ← slot a
+    let some es ← parts x ((env.fields n ts).map (·.2.1)) | return none
+    return some (.seq (.assign x e) (.prim .mkTup [.lit (.int (env.boxCode n)), .prim .mkTup es]))
+  | .arr t =>
+    let i ← slot t
+    let some c ← boxValue env (.local i) t | return none
+    -- (into an array of `comparable`, so that the `for` is checked at it)
+    let y ← slot (.arr .dyn)
+    return some (.assign y (.forE i e (.lit (.logic true)) c))
+  | .opt t =>
+    let x ← slot a
+    let i ← slot t
+    let some c ← boxValue env (.local i) t | return none
+    return some (.seq (.assign x e) (.ite (.assign i (.prim .query [.local x])) (.prim .mkSome [c]) (.lit .none)))
+  | .map k v =>
+    let x ← slot a
+    let i ← slot (.tup [k, v])
+    let some ck ← boxValue env (.prim (.tupGet 0) [.local i]) k | return none
+    let some cv ← boxValue env (.prim (.tupGet 1) [.local i]) v | return none
+    let y ← slot (.arr (.tup [.dyn, .dyn]))
+    return some (.seq (.assign x e) (.ite (.prim .eq [.prim .len [.local x], .lit (.int 0)]) (.local x)
+      (.prim .mkTup [.lit (.int 2), .assign y (.forE i (.local x) (.lit (.logic true)) (.prim .mkTup [ck, cv]))])))
+  | _ => return none
+
+/-- `x op y` (`=` or `<>`) of values of types `ta` and `tb` by their boxes
+    (Book of Verse ch. 11, "Dynamic Comparable Values": a boxed value equals
+    another exactly when both have the same type and equal values); its
+    value is `x`, which must be a value without effects. -/
+def boxedTest (env : TyEnv) (p : Pos) (op : Prim) (x : Expr) (ta : Ty) (y : Expr) (tb : Ty) : EM Expr := do
+  let some bx ← boxValue env x ta | eerr p s!"'=' boxes values of type {ta.show}, which is not supported yet"
+  let some by_ ← boxValue env y tb | eerr p s!"'=' boxes values of type {tb.show}, which is not supported yet"
+  let u ← fresh .dyn
+  let w ← fresh .dyn
+  return .seq (.assign u bx) (.seq (.assign w by_) (.seq (.prim op [.local u, .local w]) x))
+
 /-- Convert a value `e` of type `a` to the supertype `b`, when `a` is a class
     below the class or interface `b`, or an array or option of such (arrays
     and options are covariant): the options of the classes below `a` move to
@@ -1941,6 +2057,9 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
     if env.classes.contains S && env.classes.contains T && S != T && env.isSub S T &&
         (env.concreteBelow S).isEmpty then
       return some (.seq e (.prim .userErr []))
+  -- (to `comparable` where each value is its own box, `[]int` to
+  -- `[]comparable`: the same value)
+  if a != b && a.boxIdTo env b then return some e
   match a, b with
   -- `int` is a subtype of `rational` (#116): `X` is `X / 1`
   | .int, .rational => return some (.prim .mkTup [e, .lit (.int 1)])
@@ -1949,6 +2068,8 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
   | .tup [], .logic => return some (.seq e (.lit (.logic false)))
   -- Every value can be erased or discarded, including within containers (#138).
   | _, .any | _, .void => return some (← discardValue ⟨e, a⟩)
+  -- (a comparable value is boxed, Book of Verse ch. 11)
+  | a, .dyn => if a.comparable env && a != .any then boxValue env e a else return none
   -- a refinement is its base (#136); the base is the refinement only for a
   -- literal that meets its conditions (else a cast, `age[X]`)
   -- (a refinement within another's interval is one of it, #143)
@@ -2081,6 +2202,9 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
         if r.ty == base then
           if (litValue? r.e).isSome then eerr p s!"{showLit r.e} is not {withArticle n}: it does not meet its conditions"
           eerr p s!"{withArticle base.show} is {withArticle n} only after a cast: write {n}[X], which fails when X is not one"
+    -- (a value of a type that is not comparable is no comparable)
+    if target == .dyn && r.ty != .any && !r.ty.comparable (← get).env then
+      eerr p (notComparable (← get).env r.ty s!"expected comparable, found {r.ty.show}: a value of type comparable")
     eerr p s!"expected {target.show}, found {r.ty.show}"
 
 /-- `coerce`, whose error says why a name is an `any` (`Ctx.anyWhy`). -/
@@ -2190,10 +2314,10 @@ def methodVarianceRequest (ctx : Ctx) (p : Pos) (owner method : String)
     return some (req, vars.map fun (n, cmp) => Ty.param n cmp)
   return none
 
-/-- A type above both `a` and `b` (the expected one when it is, #32): two
-    classes join at their nearest common supertype, and arrays, options,
-    tuples and maps' values join covariantly. -/
-partial def joinTy (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Bool := false) : Option Ty :=
+mutual
+/-- `joinTy`, but for the join at `comparable` of two comparable types with
+    nothing else in common. -/
+partial def joinTyShaped (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Bool := false) : Option Ty :=
   if a == .never then some b
   else if b == .never then some a
   else if a == b then some (a.commonBounds b)
@@ -2261,6 +2385,32 @@ partial def joinTy (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Bool := f
   | .map k x, .map k' y =>
     if k == k' then (joinTy env x y (match exp with | some (.map _ e) => some e | _ => none) true).map (.map k) else none
   | _, _ => none
+/-- A type above both `a` and `b` (the expected one when it is, #32): two
+    classes join at their nearest common supertype, and arrays, options,
+    tuples and maps' values join covariantly. Two comparable types with
+    nothing else in common join at `comparable` inside a container (Book of
+    Verse ch. 11: `[int]int` and `[int]float` at `[int]comparable`) or beside
+    a `comparable`; at the top they join at `fallbackJoin`'s. -/
+partial def joinTy (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Bool := false) : Option Ty :=
+  (joinTyShaped env a b exp inner).orElse fun _ =>
+    if (inner || a == .dyn || b == .dyn) && isComparable env a && isComparable env b &&
+        a.params.isEmpty && b.params.isEmpty then some .dyn
+    else none
+end
+
+/-- What two types with nothing else in common join at (`fallbackJoin`):
+    an `if`'s branches and a choice's alternatives that join so are tried
+    against each other's types first (#366). -/
+def Ty.looseJoin (t : Ty) : Bool := t == .any || t == .dyn
+
+/-- The join of two types with nothing else in common, when nothing else is
+    expected: `comparable` when both are comparable (Book of Verse ch. 1,
+    1276: `array{1, "two", 3.0}`'s element type is `comparable`, "their
+    common supertype"; ch. 14, 1532 to 1535: widened "all the way to
+    `comparable`"), else `any` (#138). (Type parameters still join at `any`.) -/
+def fallbackJoin (env : TyEnv) (a b : Ty) : Ty :=
+  if isComparable env a && isComparable env b && a.params.isEmpty && b.params.isEmpty then .dyn
+  else .any
 
 /-- The type of a two-branch construct (`joinTy`; a void branch makes it void). -/
 def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty := do
@@ -2273,9 +2423,13 @@ def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty := do
     match joinTy (← get).env a b exp with
     | some t => return t
     | none =>
-      -- (types with nothing in common join at `any`, when nothing else is
-      -- expected, #138; classes with two common supertypes stay ambiguous)
-      if (exp.isNone || exp == some .any) && !ambiguousJoin (← get).env a b then return .any
+      -- (types with nothing in common join at `comparable` or `any`, when
+      -- nothing else is expected, #138; classes with two common supertypes
+      -- stay ambiguous)
+      let env := (← get).env
+      if exp == some .dyn && isComparable env a && isComparable env b then return .dyn
+      if exp.isNone && !ambiguousJoin env a b then return fallbackJoin env a b
+      if exp == some .any && !ambiguousJoin env a b then return .any
       eerr p s!"the branches have different types: {a.show} and {b.show}"
 
 /-- (#283, #335) The first success of clauses lifted already (`$firstP`),
@@ -2322,7 +2476,7 @@ def ifBranches (p : Pos) (exp : Option Ty) (retries : Nat) (thenAt elseAt : Nat 
   let ty ← join p rt.ty re.ty exp
   -- (with nothing in common, from the state before the branches: the
   -- first try's code and slots are not kept)
-  if ty == .any && exp.isNone && rt.ty != .any && re.ty != .any && retries < 3 then
+  if ty.looseJoin && exp.isNone && rt.ty != ty && re.ty != ty && retries < 3 then
     let stAfter ← get
     set st0
     match ← tryCatch (do
@@ -2331,7 +2485,7 @@ def ifBranches (p : Pos) (exp : Option Ty) (retries : Nat) (thenAt elseAt : Nat 
         pure (some (rt', re'))) (fun _ => pure none) with
     | some (rt', re') =>
       if let some ty' := joinTy (← get).env rt'.ty re'.ty none then
-        if ty' != .any then return ← finish rt' re' ty'
+        if !ty'.looseJoin then return ← finish rt' re' ty'
       set stAfter
     | none => set stAfter
   finish rt re ty
@@ -2354,7 +2508,7 @@ partial def choiceResultType (env : TyEnv) (types : List Ty) : Option Ty := do
   types.foldlM (fun a b =>
     if a == .void || b == .void then some .void else
     (joinTy env a b none).orElse fun _ =>
-      if ambiguousJoin env a b then none else some .any) first
+      if ambiguousJoin env a b then none else some (fallbackJoin env a b)) first
 
 /-- (#283, #335) The type of a choice of `isFirstPacket`s, of these types:
     their join field by field (`choiceResultType`), as the packets of clauses

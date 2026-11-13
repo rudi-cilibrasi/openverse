@@ -25,6 +25,11 @@ inductive Ty where
       with its values (no equality, no cast, no ToString), so in Verse Core
       it is `void`: a value becomes an `any` by being evaluated. -/
   | any
+  /-- `comparable` as a type (Book of Verse ch. 11): the type of every value
+      of a comparable type, below `any`. A value is boxed when it becomes one
+      (`boxValue`, `OpenVerse.Core.Comparable`), so that Verse Core's
+      equality on boxes is Verse's; in Verse Core it is `dyn`. -/
+  | dyn
   /-- A refinement type (Book of Verse ch. 11, #136): an int or a float that
       meets its conditions; in Verse Core, its base type. -/
   | refine : String → Ty
@@ -62,7 +67,7 @@ partial def Ty.helperUses : Ty → List String
 
 partial def Ty.eqv : Ty → Ty → Bool
   | .int, .int | .logic, .logic | .char, .char | .char32, .char32 | .rational, .rational | .float, .float | .void, .void | .never, .never => true
-  | .any, .any => true
+  | .any, .any | .dyn, .dyn => true
   | .refine a, .refine b => a == b
   | .arr a, .arr b => a.eqv b
   | .opt a, .opt b => a.eqv b
@@ -79,6 +84,7 @@ instance : BEq Ty := ⟨Ty.eqv⟩
 partial def Ty.show : Ty → String
   | .int => "int" | .logic => "logic" | .char => "char" | .char32 => "char32" | .rational => "rational" | .float => "float" | .void => "void"
   | .any => "any"
+  | .dyn => "comparable"
   | .refine n => n
   | .never => "false"
   | .arr .char => "string"
@@ -103,6 +109,7 @@ def Ty.string : Ty := .arr .char
 partial def Ty.toSTy : Ty → STy
   | .int => .name "int" | .logic => .name "logic" | .char => .name "char" | .char32 => .name "char32"
   | .rational => .name "rational" | .float => .name "float" | .void => .name "void" | .any => .name "any"
+  | .dyn => .name "comparable"
   | .refine n | .enum n | .param n _ => .name n
   | .never => .name "$never"
   | .arr .char => .name "string"
@@ -453,125 +460,6 @@ def Ty.isUnit : Ty → Bool
   | .void | .tup [] => true
   | _ => false
 
-/-- Disjoint overload domains (Book ch. 6 and `IndistinctOverloads.versetest`).
-    Types that both have the empty value (`Ty.emptyValue?`: a logic, an
-    option, an array, a string, a map, `tuple()`) overlap; `void`, which
-    takes any value, and unknown types overlap every type. A nonempty tuple
-    separates from an array if one element does, from a map if its key is
-    disjoint from int, and from an option if its element is disjoint from int.
-    Function types cannot separate from arrays or maps, regardless of their
-    signatures; this is an admission rule, not a container/function coercion.
-    Class/interface and numeric overlap rules are unchanged. -/
-private def TyEnv.disjointStep (env : TyEnv) (apart : Ty → Ty → Bool) (a b : Ty) : Bool :=
-  -- (two types that both have the empty value have that value in common:
-  -- `false` is an empty array, map, option, string, a logic and `()`)
-  if a.emptyValue?.isSome && b.emptyValue?.isSome then false else
-  match a, b with
-  | .void, _ | _, .void | .param .., _ | _, .param .. | .never, _ | _, .never => false
-  -- (every value is an any, #138)
-  | .any, _ | _, .any => false
-  -- (a refinement overlaps what its base does, #136)
-  | .refine n, b => match env.refines.lookup n with
-    | some (base, _) => apart base b
-    | none => false
-  | a, .refine n => match env.refines.lookup n with
-    | some (base, _) => apart a base
-    | none => false
-  -- (an int is also a rational, #116)
-  | .int, .rational | .rational, .int => false
-  | .tup as, .tup bs => as.length != bs.length || (as.zip bs).any fun (a, b) => apart a b
-  | .tup ts, .arr t => ts.any (apart · t)
-  | .arr t, .tup ts => ts.any (apart t ·)
-  | .tup ts, .map k _ => !ts.isEmpty && apart .int k
-  | .map k _, .tup ts => !ts.isEmpty && apart k .int
-  | .tup ts, .opt t => !ts.isEmpty && apart .int t
-  | .opt t, .tup ts => !ts.isEmpty && apart t .int
-  | .struct n _, .arr _ | .arr _, .struct n _ |
-    .struct n _, .map .. | .map .., .struct n _ => (FnValues.parseName n).isNone
-  | .struct a as, .struct b bs =>
-    let isCls (x : String) := env.classes.contains x
-    let iface (x : String) := isCls x && (env.info x).isIface
-    if isCls a && isCls b then
-      -- one parametric class at disjoint type arguments
-      if a == b && !iface a then as.length == bs.length && (as.zip bs).any fun (x, y) => apart x y
-      else if iface a || iface b then
-        -- a <final> class, which nothing is below, and an interface it does
-        -- not implement (#100)
-        let finalNot (c i : String) : Bool := !iface c && (env.info c).isFinal && !env.isSub c i
-        (iface a && finalNot b a) || (iface b && finalNot a b)
-      else !(env.isSub a b || env.isSub b a)
-    else if isCls a || isCls b then true
-    else a != b || (as.length == bs.length && (as.zip bs).any fun (x, y) => apart x y)
-  | .enum a, .enum b => a != b
-  | .int, .int | .logic, .logic | .char, .char | .char32, .char32 | .rational, .rational | .float, .float => false
-  | _, _ => true
-
-partial def TyEnv.disjoint (env : TyEnv) (a b : Ty) : Bool :=
-  env.disjointStep env.disjoint a b
-
-/-- Compare two independently quantified domains. Each side may use its own
-    upper bounds, even when the signatures spell their formals alike. Any
-    separating upper view suffices; missing views and cycles do not prove
-    separation. The ordinary nominal/interface overlap rules still apply. -/
-partial def TyEnv.disjointUnder (env : TyEnv) (aBounds bBounds : List (Ty × Ty)) (a b : Ty) : Bool :=
-  go (aBounds.length + bBounds.length + 1) a b
-where
-  go (fuel : Nat) (a b : Ty) : Bool :=
-    env.disjointStep (go fuel) a b || match fuel with
-    | 0 => false
-    | fuel + 1 =>
-      aBounds.any (fun (upper, lower) => lower == a && go fuel upper b) ||
-      bBounds.any (fun (upper, lower) => lower == b && go fuel a upper)
-
-/-- Whether two overloads (their positional parameters, then named ones:
-    name, has a default, type) are distinct: their positional parameters
-    are, or a call cannot give both what they need, as some named parameter
-    one of them requires is missing from the other or takes disjoint types in
-    the two (Book of Verse ch. 6: order and defaults do not distinguish). -/
-def TyEnv.namedDistinct (env : TyEnv) (na nb : List (String × Bool × Ty))
-    (aBounds bBounds : List (Ty × Ty) := []) : Bool :=
-  let req := ((na.filter (!·.2.1)).map (·.1)) ++ ((nb.filter (!·.2.1)).map (·.1))
-  !(req.all fun x => match na.find? (·.1 == x), nb.find? (·.1 == x) with
-    | some (_, _, ta), some (_, _, tb) => !env.disjointUnder aBounds bBounds ta tb
-    | _, _ => false)
-
-/-- Two overloads' parameters: no call fits both. Compare a single explicit
-    tuple with the other signature's flattened types, including their domains,
-    rather than treating equal flattened arity alone as ambiguity. -/
-def TyEnv.paramsDistinct (env : TyEnv) (as bs : List Ty)
-    (aBounds bBounds : List (Ty × Ty) := []) : Bool :=
-  let apartTy := env.disjointUnder aBounds bBounds
-  let flat (xs : List Ty) : List Ty := match xs with
-    | [.tup ts] => ts
-    | [.void] => []
-    | _ => xs
-  let apart (cmp : Ty → Ty → Bool) (xs ys : List Ty) :=
-    xs.length != ys.length || (xs.zip ys).any fun (a, b) => cmp a b
-  -- Both the original argument and its flattened fields are admitted.
-  -- Keep the direct overlap of void, arrays and opaque type parameters.
-  let packedApart (cmp : Ty → Ty → Bool) (xs ys : List Ty) := match xs with
-    | [t] => if ys.length > 1 then cmp t (.tup ys) else
-      match t with
-      | .param .. => !ys.isEmpty || cmp t .void
-      | _ => true
-    | _ => true
-  -- A call can also supply one tuple containing the positional arguments.
-  -- In particular, tuple(int) both unpacks to int and packs into
-  -- tuple(tuple(int)). Compare that actual input shape with the other
-  -- formal, rather than applying the broader tuple/container admission
-  -- rules to a synthetic tuple (which would conflate int with ?int).
-  let tupleInputApart (cmp : Ty → Ty → Bool) (xs ys : List Ty) := match ys with
-    | [t] => match t with
-      | .tup ts => apart cmp xs ts
-      | .arr t => xs.isEmpty || xs.any (cmp · t)
-      | .param .. => cmp (.tup xs) t
-      | .void | .any => false
-      | _ => true
-    | _ => true
-  [as, flat as].all fun xs => [bs, flat bs].all fun ys =>
-    apart apartTy xs ys && packedApart apartTy xs ys && packedApart (flip apartTy) ys xs &&
-      tupleInputApart apartTy xs ys && tupleInputApart (flip apartTy) ys xs
-
 /-- The type arguments of the class or interface `T` above `d(args)` (along
     the parents, #39, #53), or `[]` when `T` is not above `d`. -/
 partial def TyEnv.upArgs (env : TyEnv) (d : String) (args : List Ty) (T : String) : List Ty :=
@@ -842,6 +730,7 @@ def TyEnv.recursiveStruct? (env : TyEnv) : Option String :=
 partial def Ty.toVTy (env : TyEnv) : Ty → VTy
   | .int | .char32 => .int
   | .any => VTy.void
+  | .dyn => .dyn
   | .refine n => ((env.refines.lookup n).map fun (b, _) => b.toVTy env).getD .int
   | .rational => .tup [.int, .int]
   | .float => .float
@@ -1142,6 +1031,132 @@ def isComparable (env : TyEnv) : Ty → Bool
   | .never => false
   | t => t.comparable env
 
+/-- Disjoint overload domains (Book ch. 6 and `IndistinctOverloads.versetest`).
+    Types that both have the empty value (`Ty.emptyValue?`: a logic, an
+    option, an array, a string, a map, `tuple()`) overlap; `void`, which
+    takes any value, and unknown types overlap every type. A nonempty tuple
+    separates from an array if one element does, from a map if its key is
+    disjoint from int, and from an option if its element is disjoint from int.
+    Function types cannot separate from arrays or maps, regardless of their
+    signatures; this is an admission rule, not a container/function coercion.
+    Class/interface and numeric overlap rules are unchanged. -/
+private def TyEnv.disjointStep (env : TyEnv) (apart : Ty → Ty → Bool) (a b : Ty) : Bool :=
+  -- (two types that both have the empty value have that value in common:
+  -- `false` is an empty array, map, option, string, a logic and `()`)
+  if a.emptyValue?.isSome && b.emptyValue?.isSome then false else
+  match a, b with
+  | .void, _ | _, .void | .param .., _ | _, .param .. | .never, _ | _, .never => false
+  -- (every value is an any, #138)
+  | .any, _ | _, .any => false
+  -- (every comparable value is a comparable, Book of Verse ch. 11: `F(:int)`
+  -- and `F(:comparable)` are not distinct, `F(:c)` of a class that is not
+  -- `<unique>` and `F(:comparable)` are)
+  -- (`<unique>` classes and interfaces too, values or not)
+  | .dyn, b | b, .dyn => match b with
+    | .struct n _ => if env.classes.contains n then !env.isUnique n else !b.comparable env
+    | _ => !b.comparable env
+  -- (a refinement overlaps what its base does, #136)
+  | .refine n, b => match env.refines.lookup n with
+    | some (base, _) => apart base b
+    | none => false
+  | a, .refine n => match env.refines.lookup n with
+    | some (base, _) => apart a base
+    | none => false
+  -- (an int is also a rational, #116)
+  | .int, .rational | .rational, .int => false
+  | .tup as, .tup bs => as.length != bs.length || (as.zip bs).any fun (a, b) => apart a b
+  | .tup ts, .arr t => ts.any (apart · t)
+  | .arr t, .tup ts => ts.any (apart t ·)
+  | .tup ts, .map k _ => !ts.isEmpty && apart .int k
+  | .map k _, .tup ts => !ts.isEmpty && apart k .int
+  | .tup ts, .opt t => !ts.isEmpty && apart .int t
+  | .opt t, .tup ts => !ts.isEmpty && apart t .int
+  | .struct n _, .arr _ | .arr _, .struct n _ |
+    .struct n _, .map .. | .map .., .struct n _ => (FnValues.parseName n).isNone
+  | .struct a as, .struct b bs =>
+    let isCls (x : String) := env.classes.contains x
+    let iface (x : String) := isCls x && (env.info x).isIface
+    if isCls a && isCls b then
+      -- one parametric class at disjoint type arguments
+      if a == b && !iface a then as.length == bs.length && (as.zip bs).any fun (x, y) => apart x y
+      else if iface a || iface b then
+        -- a <final> class, which nothing is below, and an interface it does
+        -- not implement (#100)
+        let finalNot (c i : String) : Bool := !iface c && (env.info c).isFinal && !env.isSub c i
+        (iface a && finalNot b a) || (iface b && finalNot a b)
+      else !(env.isSub a b || env.isSub b a)
+    else if isCls a || isCls b then true
+    else a != b || (as.length == bs.length && (as.zip bs).any fun (x, y) => apart x y)
+  | .enum a, .enum b => a != b
+  | .int, .int | .logic, .logic | .char, .char | .char32, .char32 | .rational, .rational | .float, .float => false
+  | _, _ => true
+
+partial def TyEnv.disjoint (env : TyEnv) (a b : Ty) : Bool :=
+  env.disjointStep env.disjoint a b
+
+/-- Compare two independently quantified domains. Each side may use its own
+    upper bounds, even when the signatures spell their formals alike. Any
+    separating upper view suffices; missing views and cycles do not prove
+    separation. The ordinary nominal/interface overlap rules still apply. -/
+partial def TyEnv.disjointUnder (env : TyEnv) (aBounds bBounds : List (Ty × Ty)) (a b : Ty) : Bool :=
+  go (aBounds.length + bBounds.length + 1) a b
+where
+  go (fuel : Nat) (a b : Ty) : Bool :=
+    env.disjointStep (go fuel) a b || match fuel with
+    | 0 => false
+    | fuel + 1 =>
+      aBounds.any (fun (upper, lower) => lower == a && go fuel upper b) ||
+      bBounds.any (fun (upper, lower) => lower == b && go fuel a upper)
+
+/-- Whether two overloads (their positional parameters, then named ones:
+    name, has a default, type) are distinct: their positional parameters
+    are, or a call cannot give both what they need, as some named parameter
+    one of them requires is missing from the other or takes disjoint types in
+    the two (Book of Verse ch. 6: order and defaults do not distinguish). -/
+def TyEnv.namedDistinct (env : TyEnv) (na nb : List (String × Bool × Ty))
+    (aBounds bBounds : List (Ty × Ty) := []) : Bool :=
+  let req := ((na.filter (!·.2.1)).map (·.1)) ++ ((nb.filter (!·.2.1)).map (·.1))
+  !(req.all fun x => match na.find? (·.1 == x), nb.find? (·.1 == x) with
+    | some (_, _, ta), some (_, _, tb) => !env.disjointUnder aBounds bBounds ta tb
+    | _, _ => false)
+
+/-- Two overloads' parameters: no call fits both. Compare a single explicit
+    tuple with the other signature's flattened types, including their domains,
+    rather than treating equal flattened arity alone as ambiguity. -/
+def TyEnv.paramsDistinct (env : TyEnv) (as bs : List Ty)
+    (aBounds bBounds : List (Ty × Ty) := []) : Bool :=
+  let apartTy := env.disjointUnder aBounds bBounds
+  let flat (xs : List Ty) : List Ty := match xs with
+    | [.tup ts] => ts
+    | [.void] => []
+    | _ => xs
+  let apart (cmp : Ty → Ty → Bool) (xs ys : List Ty) :=
+    xs.length != ys.length || (xs.zip ys).any fun (a, b) => cmp a b
+  -- Both the original argument and its flattened fields are admitted.
+  -- Keep the direct overlap of void, arrays and opaque type parameters.
+  let packedApart (cmp : Ty → Ty → Bool) (xs ys : List Ty) := match xs with
+    | [t] => if ys.length > 1 then cmp t (.tup ys) else
+      match t with
+      | .param .. => !ys.isEmpty || cmp t .void
+      | _ => true
+    | _ => true
+  -- A call can also supply one tuple containing the positional arguments.
+  -- In particular, tuple(int) both unpacks to int and packs into
+  -- tuple(tuple(int)). Compare that actual input shape with the other
+  -- formal, rather than applying the broader tuple/container admission
+  -- rules to a synthetic tuple (which would conflate int with ?int).
+  let tupleInputApart (cmp : Ty → Ty → Bool) (xs ys : List Ty) := match ys with
+    | [t] => match t with
+      | .tup ts => apart cmp xs ts
+      | .arr t => xs.isEmpty || xs.any (cmp · t)
+      | .param .. | .dyn => cmp (.tup xs) t
+      | .void | .any => false
+      | _ => true
+    | _ => true
+  [as, flat as].all fun xs => [bs, flat bs].all fun ys =>
+    apart apartTy xs ys && packedApart apartTy xs ys && packedApart (flip apartTy) ys xs &&
+      tupleInputApart apartTy xs ys && tupleInputApart (flip apartTy) ys xs
+
 /-- A type built from the primitive comparable types (#214). -/
 partial def Ty.plainComparable : Ty → Bool
   | .int | .logic | .char | .char32 | .rational | .float => true
@@ -1198,7 +1213,7 @@ partial def protoValue (env : TyEnv) (done : List (String × Nat)) : Ty → Opti
   | .int | .char32 | .enum _ => some (.int 0)
   | .rational => some (.tup [.int 0, .int 1])
   | .float => some (.float 0)
-  | .any => some .void
+  | .any | .dyn => some .void
   | .refine n => match env.refines.lookup n with
     | some (.float, _) => some (.float 0)
     | _ => some (.int 0)
