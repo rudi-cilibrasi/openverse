@@ -40,6 +40,19 @@ how they are built.
 - `Cast.versetest:56`: "Test infallible casts. These should produce a
   compile error if the argument type is not a subtype of the cast type."
 
+## Where the prose and the tests disagree
+
+- **Casts through a type value.** The prose makes `castable_subtype` the
+  metatype to cast through: "This constraint is required when you want to
+  use types as first-class values … and then use those type values to
+  perform casts" (ch. 11, `docs/11_types.md` 1636-1641). The tests cast
+  through a value of `subtype(base)`, `base` not `<castable>`, and expect
+  the cast to work (`Cast.versetest` 90-100: "ensure that casting class and
+  interface types through type variables applies the values of the
+  variable", `t := if (true?) then class2 else classB  # t has the type
+  subtype(base)`, then `t[X]`). openverse follows the tests: a cast goes
+  through any metatype's value.
+
 ## The map, by form
 
 | form | cases when surveyed | front end alone? | built |
