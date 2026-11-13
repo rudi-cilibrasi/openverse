@@ -1488,6 +1488,41 @@ aliases are written out (so a signature naming an alias names what it
 aliases), with `Access.checkAliases` before, as an alias is a definition
 with an access of its own.
 
+## Attributes: checked and taken out first
+
+An attribute (`@a`, `@a{F := e}`, `@f(…)`; the rules are pinned in
+[research/attributes.md](research/attributes.md)) is kept by the parser in
+two places: among the specifiers of its definition's name, `@a` beside
+`<public>`, and as a record after the definition, `$attr:L_C`, a constant
+whose specifiers are the definition's place and name and whose value is the
+attribute as written (a member's records are given out after its class, as
+the defaults function types write are). `Attributes.apply` is the first
+step of `elabProgram`: it reads the records, checks each attribute against
+its definition's place and its class's scopes, removes the records and the
+`@a` specifiers, and adds for each custom attribute (and for each field
+given to the Book's) a constant `$attrCheck:N@a` of
+its type in the definition's scope, which `checkTypeDefaults` elaborates and
+drops: an attribute's value is checked where the Book checks it and never
+evaluated or compiled. `@available` that versions a definition out removes
+it, and a module's members, before anything resolves a name. No attribute
+reaches Verse Core.
+
+## Types as values: classes the front end writes
+
+A class or interface named as a value, and the metatypes `subtype(c)`,
+`castable_subtype(c)`, `concrete_subtype(c)` and `type`, are written with
+ordinary classes and interfaces by `TypeValues.desugar`, after modules and
+access are resolved ([research/types-as-values.md](research/types-as-values.md)):
+`C` is `$type:C{}`, an object of a class of its own, and each metatype of a
+class `A` an interface below the same metatype of `A`'s parents. A type value
+is the kind of witness #520's evidence is: an object whose methods do what the
+type does, `$cast(A)(X:A)<decides>:A`, given as `C[X]`, and
+`$make(A)():A`, given as `C{}`; the elaborator writes `T[X]` and `T{}` with
+`T` of a metatype as calls of them. Joins of type values, the one place
+where interfaces would say more than the Book's metatypes (a join keeps no
+concreteness, and castability only of a castable bound), are restricted in
+`joinTy`. No Verse Core is added.
+
 ## Type aliases: a substitution before elaboration
 
 A type alias (`player_id := int`, `pair(t:type) := tuple(t, t)`, Book of
