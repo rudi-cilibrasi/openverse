@@ -962,10 +962,11 @@ on](comparable-type.md), [LANGUAGE.md](../LANGUAGE.md#comparable)): a value
 of every comparable type converts to it boxed, `=` with it compares value
 and type, it keys maps and joins unrelated comparable types, and a generic
 function's type parameter is boxed by the evidence of its
-`subtype(comparable)`. Against the baseline of the readings audit (7,390
-agree, 2,066 refuse, 277 accept, 50 differ), 135 cases more agree and none
-less: **7,525 agree, 1,931 refuse, 277 accept, 50 differ** (re-recorded
-from a fresh run).
+`subtype(comparable)`. Against the baseline of access specifiers (main
+`9263665`: 7,535 agree, 2,028 refuse, 170 accept, 50 differ), 135 cases
+more agree and none less: **7,670 agree, 1,893 refuse, 170 accept, 50
+differ** (re-recorded from a fresh run; the same 135 against the readings
+audit's baseline).
 
 | Cause before | Cases | Agree now | Left |
 |---|---|---|---|

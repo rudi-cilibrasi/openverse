@@ -419,7 +419,7 @@ As made exact above, with these differences and additions:
   key or a field, nor a struct at type parameters, nor a type parameter of a
   class in its methods.
 
-Measured at the merge of main `ce5e444`: the Book's tests, 7,525 agree
+Measured at the merge of main `9263665`: the Book's tests, 7,670 agree
 (+135, none less; [the survey](book-test-conformance.md#after-comparable));
 the byte-identity oracle against the base, 109 programs change bytes, none
 output (joins at `comparable`, and generic comparisons with another type);
