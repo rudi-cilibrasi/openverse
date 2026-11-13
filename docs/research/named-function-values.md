@@ -163,8 +163,8 @@ Function types:
   tests' `Apply(F(:t):u, …)`, `JoinTest`, `FuncFuncDef(?NamedFunc():string =
   HelloFunc)`), is a parameter of that function type, parsed by the same
   signature parser as `type{_…}`.
-- Tuple arguments with named elements are not supported; see
-  [the map below](#tuple-arguments-with-named-elements).
+- Named parameters inside a tuple parameter, and tuples with named elements,
+  are not supported; see [tuple-parameters.md](tuple-parameters.md).
 
 ## Map
 
@@ -205,56 +205,7 @@ the repository.
 
 ## Tuple arguments with named elements
 
-Not implemented: this is a larger feature, mapped here for assignment.
-
-**Sources.** Chapter 6, "Tuple as Arguments" (lines 287-425), no "Unreleased"
-marker:
-
-- Lines 289-291: "Tuples can be used to provide positional arguments.
-  However, you cannot mix a pre-constructed tuple variable with additional
-  named arguments".
-- Lines 315-317: "Functions can destructure tuple parameters directly in the
-  parameter list, allowing you to extract tuple elements inline without
-  manual indexing", for example `Func(A:int, (B:int, C:int), D:int)`. Lines
-  337-346: "Tuples can be destructured to arbitrary depth".
-- Lines 371-373: "Tuple parameters can contain named/optional parameters,
-  allowing for flexible APIs that combine structural decomposition with
-  optional values". Lines 386-387: "A tuple can contain multiple named
-  parameters, and they can be specified in any order".
-- Lines 400-402 and 423-425: "When a tuple parameter contains **only** named
-  parameters (no positional parameters), you must provide an empty tuple `()`
-  even when using all defaults ... This is a known limitation in the current
-  implementation."
-- `DefaultNamed.versetest` lines 489-501: a tuple value with named elements,
-  `X := (0, ?A := 1, ?B := 2)`, is refused when indexed or passed to a
-  generic parameter (`assert_semantic_error(3640, 3640, 3509)`). Lines
-  537-546 comment out `FirstClass.Apply(FirstClass.F1, (2, ?C := 1))` as a VM
-  bug ("assert in the VM").
-
-**Where OpenVerse stands.** None of these forms is supported. The overloading
-audit lists "nested destructured/named tuple parameter syntax" as not covered,
-not as a deviation. OpenVerse accepts a tuple variable with named arguments
-(`Calculate(Args, ?C := 5)`), an extension the audit records.
-
-| Program | Today | Expected (Book) |
-| --- | --- | --- |
-| `Func(A:int, (B:int, C:int), D:int)` called as `Func(1, (2, 3), 4)`, `Func(1, X, 4)`, `Func(Y)` | exit 4: "expected an identifier, found '('" | `10 10 10` |
-| `H(A:int, (B:int, (C:int, D:int)), E:int)`, `H(1, (2, (3, 4)), 5)` | exit 4, as above | `15` |
-| `SumValues(A:int, (X:int, (Y:int, ?Z:int = 0)))`; `SumValues(1, (2, (3, ?Z := 4)))`, `SumValues((1, (2, 3)))` | exit 4, as above | `10 6` |
-| `Scale(Base:int, (Value:int, ?Factor:int = 1, ?Offset:int = 0))`; `Scale(10, 5)`, `Scale(10, (5, ?Factor := 2, ?Offset := 1))`, the names reversed | exit 4, as above | `15 21 21` |
-| `Configure(Base:int, (?Width:int = 10, ?Height:int = 20))`; `Configure(5, ())` | exit 4, as above | `35` |
-| `Configure(5)` | exit 4, as above | refused: the tuple parameter is required |
-| `X := (0, ?A := 1, ?B := 2)` | exit 4: "unexpected '?'" | unsettled: the tests refuse its uses (3640) and give no accepted use |
-| `Apply(F1, (2, ?C := 1))`, `Apply(F(:t):u, X:t)` | exit 4: "unexpected '?'" | unsettled: commented out in the tests as a VM bug |
-| `Calculate(Args, ?C := 5)` | `8` (an OpenVerse extension) | refused by the Book |
-
-**What it would take.** (1) Destructured parameters: parse a parenthesised
-parameter group as one tuple parameter, bound element by element at the
-body's start. The parameter's type is a tuple for overloads, function values
-and the choice inliner. A later default must see the destructured names. (2)
-Named and optional elements inside a tuple parameter: a tuple type with named
-elements, call-site tuple literals with named elements matched by name, and
-defaults filled within the tuple. Flattening must work both ways
-(`SumValues((1, (2, 3)))`). (3) Named tuple values as values: the Book does
-not settle them. (1) is a front-end desugaring; (2) is a new kind of type, in
-the existing tuple and call mechanisms.
+Moved to [tuple-parameters.md](tuple-parameters.md), with the pinned rules.
+Destructured tuple parameters are implemented. Named parameters inside them
+are refused, with the design question answered there; tuples with named
+elements are refused because the Book does not settle them.

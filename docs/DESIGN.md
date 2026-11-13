@@ -1316,6 +1316,19 @@ flattening, a local `X` and the member `m::X` have different names. The
 elaborator sees an ordinary flat program, so nothing behind it changes:
 Core, the checks, the proofs and the C runtime.
 
+## Destructured parameters: a desugaring in the parser
+
+A parameter group `(B:int, (C:int, D:int))` (Book of Verse ch. 6) is one
+parameter `$tuple{i}` of its tuple type. The parser starts the body with
+`B := $tuple1(0)`, `C := $tuple1(1)(0)`, … (a constructor gets a `let:`), and
+rewrites later defaults' uses of those names into the same projections. So
+the function's type is the one with a tuple parameter there, and calls,
+overloads, function values and the choice inliner need no second path. A
+group of one parameter is that parameter. Named parameters inside a group
+would need a tuple type with named, omittable elements, which the parser
+refuses; the design is in
+[research/tuple-parameters.md](research/tuple-parameters.md).
+
 ## Floats: canonical bits
 
 A `float` (#127) is `Value.float b`, the bits of an IEEE double. Every
@@ -1535,6 +1548,9 @@ flowchart LR
 - **Over-approximation.** The pass makes a method's value class whenever
   `X.M` is written outside a call for some `X` and a class declares `M`,
   as it cannot tell a method from a field, or from an array's `Length`.
+  It makes none for a method that is never a value: an overloaded one, and
+  one that takes a name its class inherits without `<override>`, which
+  overloads that name for every receiver that sees it.
   An unused value class changes the bytecode, not the behaviour: a call
   through a function type may dispatch to it, so a value class's `$call…`
   demands no comparable type argument of the caller, as its type arguments

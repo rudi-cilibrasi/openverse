@@ -238,6 +238,13 @@ def SExpr.mapChildrenM [Monad m] (f : SExpr → m SExpr) (e : SExpr) : m SExpr :
   | .int .. | .char .. | .char32 .. | .float .. | .ident .. | .brk ..
   | .structDef .. | .enumDef .. | .refineDef .. => return e
 
+/-- `e` with each identifier that `σ` names replaced by its expression
+    (Verse has no shadowing, so a name means one thing in `e`). -/
+partial def SExpr.substIdents (σ : List (String × SExpr)) (e : SExpr) : SExpr :=
+  if σ.isEmpty then e else match e with
+    | .ident _ n => (σ.lookup n).getD e
+    | e => Id.run (e.mapChildrenM fun c => pure (c.substIdents σ))
+
 /-- `e` with its children (`children`) replaced by `cs`, in order. -/
 def SExpr.withChildren (e : SExpr) (cs : List SExpr) : SExpr :=
   let next (c : SExpr) : StateM (List SExpr) SExpr := modifyGet fun

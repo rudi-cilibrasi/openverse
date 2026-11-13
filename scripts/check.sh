@@ -206,6 +206,8 @@ check "source break model fuzzing (${FUZZ_MODEL_BREAKS:-60} programs)" \
   scripts/fuzz-model-breaks.sh "${FUZZ_MODEL_BREAKS:-60}" "$seed"
 check "named-parameter function value model fuzzing (${FUZZ_MODEL_NAMED_VALUES:-120} programs)" \
   scripts/fuzz-model-named-values.sh "${FUZZ_MODEL_NAMED_VALUES:-120}" "$seed"
+check "destructured tuple parameter model fuzzing (${FUZZ_MODEL_TUPLE_PARAMS:-120} programs)" \
+  scripts/fuzz-model-named-values.sh "${FUZZ_MODEL_TUPLE_PARAMS:-120}" "$seed" --tuples
 check "choice model fuzzing (${FUZZ_MODEL_MV:-140} programs, functions with several values too)" \
   scripts/fuzz-model-mv.sh "${FUZZ_MODEL_MV:-140}" "$seed"
 check "choice model regression (an overflow in a method's set before its caller prints)" \
