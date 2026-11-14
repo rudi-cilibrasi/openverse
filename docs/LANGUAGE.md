@@ -2770,6 +2770,12 @@ the operand `X` of `+` has the other's type; the Book's tests
 (`Array.versetest:90`, `Map.versetest:236`, …; [the
 rule](research/book-forms-rules.md#an-empty-container-with-no-type-from-its-context)).
 
+A `loop` with no `break` belonging to it has type `false`: it cannot give a
+normal value, so it may be a function's last expression when its branches
+`return` that function's result. A nested loop's break leaves that nested
+loop. A loop with a break of its own gives the empty value, of type `void` ([the
+rule](research/book-forms-rules.md#false-as-a-type)).
+
 Where neither is decided from the types, both operands are boxed and
 compared as `comparable`s ([comparable](#comparable)): two types with
 other values in common that Verse Core cannot tell apart
@@ -2787,6 +2793,10 @@ Book also writes `true`, is the type of the empty value alone: `false`,
 and, as the Book's `true` does ("true is a subtype of logic"), to `logic`
 as `false`, and `X:true = 1` is refused. A `void` value converts to
 `logic` as `false` too (`X:logic = if (C?) then () else true`), and
+querying the empty value (`()?`, `V?` of `V:void` or `V:true`,
+`(not F[])?`) uses that conversion and fails, with its operand's effects
+rolled back by the surrounding failure context. A populated `O:?void`
+passes `O?`, but `O??` fails on its empty payload. Also,
 `void` and `true` interchange inside options, arrays and maps (`?void` to
 `?true`, `[]void` to `[]true`, `[int]void` to `[int]true`), as the Book
 has them one type (ch. 2: "These are interchangeable"); not yet as a

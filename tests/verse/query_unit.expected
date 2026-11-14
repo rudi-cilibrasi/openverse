@@ -1,0 +1,10 @@
+void false
+count 0
+not false
+count 0
+unit false
+literal false
+touch
+option value false
+count 1
+exit=0
