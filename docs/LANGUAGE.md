@@ -2322,7 +2322,9 @@ progress := module:
   program ends: the `var` fields of one object made by `Main`'s prelude
   (`$module_state`, [DESIGN.md](DESIGN.md#weak-maps-and-module-scoped-vars)).
 - Not yet: an initial value with entries (every module-scoped `var` of the
-  Book starts as `map{}`); `var<w>` write access on one; the engine's key
+  Book starts as `map{}`), and so a declaration with none, `var X:t` on its
+  line (valid syntax, the Book's tests, `Pointers.versetest:4`; refused, as
+  openverse has no variables defined elsewhere); `var<w>` write access on one; the engine's key
   types (`player`, `session`, `persistent_key`, `session_key`), and
   persistence itself: openverse runs one program, whose module state starts
   empty.

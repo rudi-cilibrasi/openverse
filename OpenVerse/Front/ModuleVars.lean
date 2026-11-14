@@ -132,6 +132,7 @@ def check (d : Defs) (vs : List Var) : Except String Unit := do
     -- (it starts as the empty map, the prototype's field)
     match v.init with
     | .mapLit _ [] => pure ()
+    | .app _ (.ident _ "$refused") (.str _ [.text why] :: _) false => throw s!"{v.pos.show}: {why}"
     | e => throw s!"{e.pos.show}: the module-scoped var {shown} starts as map\{} in openverse: an initial value with entries is not supported yet"
   -- (5) at most `persistentLimit` with <persistent> keys, and at the limit
   -- one of them with a class value (the tests' 3502s, 624-664)

@@ -2243,10 +2243,17 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) (par
       bump
       let ty ← parseType
       let a ← peekT
+      let specs := pre ++ moduleVarMarker :: varSpecs.map (s!"{moduleVarMarker}:" ++ ·)
+      -- (a declaration with no value, `var x:int` on its line: valid syntax,
+      -- the Book's tests, Pointers.versetest:4; openverse has no variables
+      -- defined elsewhere, refused)
+      if a.isEof || (a.bol && a.col ≤ (← get).topCol) || (!a.bol && (a.isSym ";" || a.isSym ",")) then
+        tops := tops.push (.const t.pos name specs (some ty)
+          (refusedForm t.pos s!"var {name0}:t has no value: a declaration of a variable defined elsewhere, which openverse has none of" []))
+        continue
       if !a.isSym "=" then perr a s!"expected '=' and the initial value of the module-scoped var {name0}"
       bump
-      tops := tops.push (.const t.pos name (pre ++ moduleVarMarker :: varSpecs.map (s!"{moduleVarMarker}:" ++ ·))
-        (some ty) (← parseFnBody))
+      tops := tops.push (.const t.pos name specs (some ty) (← parseFnBody))
       continue
     -- (`(q:)name`: a qualified definition, whose qualifier must name the
     -- module it is in, `$qual:A::name|q` for `resolveModules` to check)
