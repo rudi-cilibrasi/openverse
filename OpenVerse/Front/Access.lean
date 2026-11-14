@@ -382,8 +382,7 @@ def checkUses (env : Env) (tops : List STop) : Except String Unit := do
     match t with
     | .fn p n _ _ specs _ body =>
       -- (a constructor function's items give its class's fields)
-      if let some cs := specs.find? (·.startsWith "$constructor:") then
-        let c := (cs.drop "$constructor:".length).toString
+      if let some c := specs.findSome? constructorSpec? then
         let fs := match body with
           | .block _ items => items.filterMap fun | .decl fp f .. => some (fp, f) | _ => none
           | _ => []

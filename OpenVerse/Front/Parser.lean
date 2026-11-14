@@ -350,7 +350,7 @@ def macroKeywords : List String :=
 
 /-- The place a definition is at, for its attributes (`Attributes`). -/
 def STop.attrPlace : STop → String
-  | .fn _ _ _ _ specs .. => if specs.any (·.startsWith "$constructor:") then "constructor" else "function"
+  | .fn _ _ _ _ specs .. => if specs.any (constructorSpec? · |>.isSome) then "constructor" else "function"
   | .const _ n _ _ v =>
     if (moduleMarker? n).isSome then "module" else match v with
     | .structDef .. => "struct"
@@ -1922,8 +1922,8 @@ partial def parseCtorItem (c : Nat) : PM SExpr := do
     if (← peekT k).isSym "<" && (← peekT (k + 1)).isKw "constructor" && (← peekT (k + 2)).isSym ">" then
       for _ in [0:k + 3] do bump
       let a ← peekT
-      if a.isSym "(" then bump; return .app t.pos (.ident t.pos s!"$ctor:{d}") (← parseArgs ")") false
-      if a.isSym "[" then bump; return .app t.pos (.ident t.pos s!"$ctor:{d}") (← parseArgs "]") true
+      if a.isSym "(" then bump; return .app t.pos (.ident t.pos (delegationHead d)) (← parseArgs ")") false
+      if a.isSym "[" then bump; return .app t.pos (.ident t.pos (delegationHead d)) (← parseArgs "]") true
       perr a s!"expected the arguments of {d}<constructor>"
   match ← parseExpr c with
   | e@(.decl _ _ none false _) => return e
@@ -2308,7 +2308,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) (par
         let items := (if binds.isEmpty then [] else [SExpr.app ct.pos (.ident ct.pos "$let") [.block ct.pos binds] false]) ++
           (← parseCtorBody t.col)
         tops := tops.push (.fn t.pos name ps.toList tps.toList
-          ((pre.filter (· != "constructor")) ++ effs ++ [s!"$constructor:{cls}"])
+          ((pre.filter (· != "constructor")) ++ effs ++ [constructorSpec cls])
           (if targs.isEmpty then .name cls else .app cls targs) (.block ct.pos items))
         continue
       if (← peekT).isSym ":=" && ((← peekT 1).isKw "class" || (← peekT 1).isKw "interface") then

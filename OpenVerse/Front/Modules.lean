@@ -176,13 +176,12 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
   match e with
   | .ident p n => do
     -- (`D<constructor>(…)`, a delegation: `D` or `M.D`)
-    if n.startsWith "$ctor:" then
-      let d := (n.drop "$ctor:".length).toString
+    if let some d := delegationHead? n then
       if d.contains '.' then
         match ← r.qual p (d.splitOn ".") with
-        | some qd => return .ident p s!"$ctor:{qd}"
+        | some qd => return .ident p (delegationHead qd)
         | none => throw s!"{p.show}: unknown constructor {d}"
-      return .ident p s!"$ctor:{← r.val p d}"
+      return .ident p (delegationHead (← r.val p d))
     -- (a local `(local:)X`, bare: it, unless a definition outside the code
     -- is named so too, Book of Verse tests, FN41.00-FirstAdded.versetest)
     if r.locals.lookup n == some true then
@@ -790,10 +789,10 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
       let r := rAt (scopeOf n) (tps.map (·.name))
       let tps ← tps.mapM (·.mapBoundNamesM (r.ty p))
       let (ps, rb) ← params r p ps
-      let isCtor := effs.any (·.startsWith "$constructor:")
-      let effs ← effs.mapM fun e =>
-        if e.startsWith "$constructor:" then do return s!"$constructor:{← r.ty p (e.drop "$constructor:".length).toString}"
-        else pure e
+      let isCtor := effs.any (constructorSpec? · |>.isSome)
+      let effs ← effs.mapM fun e => match constructorSpec? e with
+        | some c => do return constructorSpec (← r.ty p c)
+        | none => pure e
       -- (a constructor's `F := e` items initialise fields: not binders)
       let body ← match isCtor, body with
         | true, .block bp items => do

@@ -60,6 +60,19 @@ def openMarker? (n : String) : Option (String × String) := do
   let [scope, path] := (← afterPrefix? openPrefix n).splitOn "|" | none
   return (scope, path)
 
+/-- A constructor function's specifier, `$constructor:c` for
+    `F<constructor>(…) := c{…}`, the class `c` it constructs: the classes'
+    phases make it one of `c`'s constructors (`classMethods`). -/
+def constructorPrefix : String := "$constructor:"
+def constructorSpec (c : String) : String := constructorPrefix ++ c
+def constructorSpec? (sp : String) : Option String := afterPrefix? constructorPrefix sp
+
+/-- A constructor's delegation `D<constructor>(…)` to a constructor of the
+    class `D` or one above it: the call of `$ctor:D` (`parseCtorItem`). -/
+def delegationPrefix : String := "$ctor:"
+def delegationHead (d : String) : String := delegationPrefix ++ d
+def delegationHead? (n : String) : Option String := afterPrefix? delegationPrefix n
+
 /-- Surface types. -/
 inductive STy where
   /-- `int`, `logic`, `char`, `string`, `void` -/

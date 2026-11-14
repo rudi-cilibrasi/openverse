@@ -108,8 +108,8 @@ def Scope.tparam (s : Scope) (tp : TParam) : Except String TParam := do
 partial def Scope.expr (s : Scope) : SExpr → Except String SExpr
   | .ident p n => do
     -- (`$ctor:D`, a delegation to class `D`'s constructor)
-    if n.startsWith "$ctor:" then
-      return .ident p s!"$ctor:{← s.typeName p (n.drop "$ctor:".length).toString}"
+    if let some d := delegationHead? n then
+      return .ident p (delegationHead (← s.typeName p d))
     return .ident p (← s.typeName p n)
   | .member p x m => return .member p (← s.expr x) (← s.method p m)
   | .decl p n t v x => return .decl p n (← t.mapM (s.ty p)) v (← s.expr x)
@@ -131,10 +131,9 @@ partial def Scope.top (s : Scope) : STop → Except String STop
   | .fn p n ps tps effs ret body => do
     let ps ← ps.mapM fun prm => do
       return { prm with ty := ← s.ty p prm.ty, default := ← prm.default.mapM s.expr }
-    let effs ← effs.mapM fun e =>
-      if e.startsWith "$constructor:" then do
-        return s!"$constructor:{← s.typeName p (e.drop "$constructor:".length).toString}"
-      else pure e
+    let effs ← effs.mapM fun e => match constructorSpec? e with
+      | some c => do return constructorSpec (← s.typeName p c)
+      | none => pure e
     return .fn p (← s.method p n) ps (← tps.mapM s.tparam) effs (← s.ty p ret) (← s.expr body)
   | .const p n cspecs t e => return .const p n cspecs (← t.mapM (s.ty p)) (← s.expr e)
   | .classDef p n nsp tps specs parents isI fields methods =>

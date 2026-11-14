@@ -379,8 +379,8 @@ def classMethods (tops : List STop) (classes : Classes) (fields : Fields) : Exce
       Option (Pos × String × List SParam × List TParam × List String × String × List SExpr) :=
     match t with
     | .fn p k ps tps effs _ (.block _ items) =>
-      match effs.find? (·.startsWith "$constructor:") with
-      | some e => some (p, k, ps, tps, effs.filter (· != e), (e.drop "$constructor:".length).toString, items)
+      match effs.findSome? fun e => (constructorSpec? e).map (e, ·) with
+      | some (e, c) => some (p, k, ps, tps, effs.filter (· != e), c, items)
       | none => none
     | _ => none
   let ctors := tops.filterMap ctorOf

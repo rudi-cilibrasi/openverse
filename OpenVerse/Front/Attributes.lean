@@ -381,10 +381,8 @@ def apply (tops : List STop) : Except String (List STop × List (Pos × String))
   -- (the constructor functions of attribute classes, `c<constructor>(…) := a{…}`)
   let ctors : List (String × String) := tops.filterMap fun
     | .fn _ n _ _ specs .. =>
-      match specs.find? (·.startsWith "$constructor:") with
-      | some sp =>
-        let c := (sp.drop "$constructor:".length).toString
-        if isAttrClass c then some (n, c) else none
+      match specs.findSome? constructorSpec? with
+      | some c => if isAttrClass c then some (n, c) else none
       | none => none
     | _ => none
   let ctorOf? (n : String) : Option String := (ctors.find? (lastPart ·.1 == lastPart n)).map (·.2)
