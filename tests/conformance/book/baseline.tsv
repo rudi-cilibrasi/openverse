@@ -3201,7 +3201,7 @@ Tests/Coroutines/Concurrency.versetest:803	agrees
 Tests/Coroutines/Concurrency.versetest:810	agrees
 Tests/Coroutines/Concurrency.versetest:817	agrees
 Tests/Coroutines/Concurrency.versetest:824	agrees
-Tests/Coroutines/Concurrency.versetest:832	disagrees-accepts
+Tests/Coroutines/Concurrency.versetest:832	agrees
 Tests/Coroutines/Concurrency.versetest:845	agrees
 Tests/Coroutines/Concurrency.versetest:862	not-translatable
 Tests/Coroutines/Concurrency.versetest:876	not-translatable

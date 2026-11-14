@@ -213,7 +213,15 @@ partial def elabConc (ctx : Ctx) (p : Pos) (isSync : Bool) (arms : List SExpr) (
     -- the arms' join, as an `if`'s branches (or the expected type)
     let mut rs : Array (Pos × R) := #[]
     for a in arms do
-      rs := rs.push (a.pos, ← elabE armCtx a exp)
+      let sourceBefore := (← get).pendingSourceSuspends
+      let r ← elabE armCtx a exp
+      -- (every arm can suspend, as the Book's tests have it: "Ensure all
+      -- top-level expressions in race/rush are async",
+      -- Concurrency.versetest:831; a spawn or a branch in an arm does not
+      -- make it wait)
+      if sourceBefore == (← get).pendingSourceSuspends && !ctx.sourceWaits r.e then
+        eerr a.pos s!"this arm of {kw} cannot suspend: every arm of a race or a rush must be able to (the Book's tests, Concurrency.versetest: \"Ensure all top-level expressions in race/rush are async\")"
+      rs := rs.push (a.pos, r)
     if isRush then
       noteBackgroundCaptures ctx (rs.toList.flatMap fun (_, r) => Suspend.slotsOf r.e)
     -- (as an `if`'s branches: void when one is, `any` when nothing else is
@@ -1006,6 +1014,11 @@ partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bra
           pendingSuspendingCasts := st.pendingSuspendingCasts + 1,
           pendingWaitingCasts := st.pendingWaitingCasts + 1,
           pendingSourceSuspends := st.pendingSourceSuspends + 1 }
+      -- (a call whose dispatch reaches no implementation that suspends yet,
+      -- as the classes of the value's type an earlier function asked for
+      -- are made in the elaboration that follows: its wait is the source's)
+      else if effs.contains "suspends" && !ctx.sourceWaits rc.e then
+        modify fun st => { st with pendingSourceSuspends := st.pendingSourceSuspends + 1 }
       return ⟨.seq (.assign t r.e) rc.e, rc.ty⟩
   match r.ty, args, bracket with
   | .arr t, [i], true =>

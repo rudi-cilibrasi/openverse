@@ -1,0 +1,12 @@
+begin 1 1
+begin 2 2
+end 2 1
+cleanup 1
+end 2 2
+cleanup 2
+sync value 2 2
+begin 3 3
+timeout
+cleanup 3
+finished 3
+exit=0

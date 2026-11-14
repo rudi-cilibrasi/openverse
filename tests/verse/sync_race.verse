@@ -30,8 +30,12 @@ Main()<suspends>:void =
             Sleep(1.0)
             2
     Print("{X}")
+    # (an arm that ends without waiting wins at once, and the arms after it
+    # never start; every arm can suspend, the Book's rule, so this one
+    # starts with Sleep(0.0), which completes at once)
     Y := race:
         block:
+            Sleep(0.0)
             Print("first")
             7
         block:

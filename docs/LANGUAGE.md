@@ -3106,10 +3106,18 @@ Main()<suspends>:void =
 - **`sync`.** Each statement of a `sync:` block is an arm. The arms start in
   source order, each running until it waits or ends before the next starts,
   and the `sync` ends when all have, with the tuple of their values. At
-  least two arms must be able to wait.
+  least two arms must be able to wait (ch. 14: "What the compiler does
+  insist on is that at least two of the arms be async"): an arm can wait
+  when it calls a suspending function, method or function value outside a
+  `spawn` or a `branch`.
 - **`race`.** The arms start in source order; the first to end wins, and its
-  value is the `race`'s (of the arms' common type). An arm that ends without
-  waiting wins at once, and the arms after it never start. The losers that
+  value is the `race`'s (of the arms' common type). Every arm must be able
+  to wait, as `sync`'s arms can (the Book's tests, "Ensure all top-level
+  expressions in race/rush are async", `Concurrency.versetest:831`; the
+  prose is silent): an arm that cannot is refused. An arm that ends without
+  waiting, such as one that starts with `Sleep(0.0)` (which completes at
+  once, as in ch. 14's example of a race resolved before its last arm
+  starts), wins at once, and the arms after it never start. The losers that
   started are cancelled at once, last started first: each unwinds from where
   it waits, running the `defer:` blocks active there, those of the functions
   it called first.

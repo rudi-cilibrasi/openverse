@@ -11,7 +11,11 @@ F(T:task(int))<suspends>:int =
             defer:
                 Print("loser defer")
             T.Await()
-        5
+        # (Sleep(0.0) completes at once: an arm that can suspend, as every
+        # arm of a rush must, and ends without waiting)
+        block:
+            Sleep(0.0)
+            5
     Print("F got {X}")
     Sleep(0.2)
     Print("F end")

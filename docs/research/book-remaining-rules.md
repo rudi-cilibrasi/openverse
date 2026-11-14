@@ -207,17 +207,52 @@ was spent, or a runtime error.
 rules. Programs: `tests/verse/overflow.verse`, whose loop ended at an
 overflow, gains a `break` that is never taken.
 
-## `race` arms, `(super:)` and `spawn`'s effects: left
+## Every arm of `race` and `rush` can suspend
 
-Three more rules of the accepted refusals are one check each, measured and
+**The rule.** Every arm of a `race` or a `rush` can suspend: it calls a
+suspending function, method or function value outside a `spawn` or a
+`branch`. (`sync` asks it of two arms, as before; `branch` has one body and
+no rule of the kind.)
+
+**The Book.** The tests: "Ensure all top-level expressions in race/rush are
+async" (`Coroutines/Concurrency.versetest:831`), then a `race` of
+`Coro("A")`, `Method("B")` and `Coro("C")`, where `Method` is immediate,
+refused (3538, `:832`); "Ensure at least two top-level expressions in sync
+are async" (`:844`, 3538) for `sync`. The prose is silent on `race`; on
+`sync`: "What the compiler does insist on is that at least two of the arms
+be async" (ch. 14, `14_concurrency.md:230-231`). An arm that can suspend
+may end at once: "`race` starts its arms in order. If the race resolves
+before every arm has started — which happens when one arm completes without
+ever suspending — the remaining arms never start at all" (`:374-376`), with
+an arm `Sleep(0.0)` then `2`, "Completes at once, and wins" (`:394`, example 08).
+No test of `branch` asks its body to suspend, and openverse asks nothing of
+it.
+
+**openverse before.** A `race` or `rush` arm could be immediate, and won at
+once. `sync`'s rule, and so this one, missed a call of a suspending
+function value whose classes an earlier function asks for: in the
+elaboration where they are not made yet, its dispatch reaches no
+implementation, and `sync` of two such calls was refused
+(`tests/verse/sync_race_function_value_arms.verse` was).
+
+**openverse now.** `elabConc` (`Elab/Expr.lean`) refuses an arm of `race`
+or `rush` that cannot suspend, read as `sync`'s arms are: off the arm's code
+(`Ctx.sourceWaits`) and the waits the code cannot show yet
+(`pendingSourceSuspends`), to which a call of a suspending function value
+whose dispatch shows no wait now adds one. Programs: three tests raced an
+arm that ends at once on purpose (`sync_race`,
+`task_cancel_race_loser_then_end`, `task_cancel_rush_loser`); its arm now
+starts with `Sleep(0.0)`, which completes at once, so their output is the
+same. The scheduler models (`sched_gen.py`, `sched_gen2.py`) start the arm
+they draw to end at once (one race or rush in ten) with `Sleep(0.0)`, drawn
+from no random number: 58 of the first 400 seeds of each change their text,
+none its predicted output.
+
+## `(super:)` and `spawn`'s effects: left
+
+Two more rules of the accepted refusals are one check each, measured and
 left, as each retires a reading openverse's own tests are about:
 
-- **Every arm of `race` and `rush` can suspend** ("Ensure all top-level
-  expressions in race/rush are async", `Coroutines/Concurrency.versetest:831`,
-  3538; the prose is silent): 9 tests (`task_cancel_rush_loser`,
-  `sync_race`, `fn_values_method_variance_async*`, …) race an immediate arm
-  on purpose, and an arm that calls a suspending function value is not yet
-  known to suspend where `sync`'s rule looks (1 case).
 - **`(super:)M` only in an override of `M`** (`Super.versetest` 183, 238,
   3612): 27 tests call `(super:)` for another method or in a block
   (`multi_method_cross_super_*`, `choice_super_*`,

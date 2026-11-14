@@ -2358,7 +2358,13 @@ variables live in the frame, the arms share them. A `race`'s winner cancels the 
 last first. A `return` in an arm stores the result and makes the arm give
 2. The code around the arm then cancels the other pending arms, runs the
 defers active there, and returns from the function (or, in an arm, gives
-2 in turn).
+2 in turn). Whether an arm can wait, which `sync` asks of two arms and
+`race` and `rush` of every arm (the Book's), is read off its elaborated code
+(`Ctx.sourceWaits`: a call of a suspending function outside a `spawn` or a
+`branch`) and off the waits the code cannot show yet
+(`pendingSourceSuspends`), among them a call of a suspending function value
+whose dispatch reaches no class that implements it in this round, the
+classes being made in the elaboration that follows.
 
 **Tasks.** A `spawn` gets a root: a suspends function `$spawnK(T, args…)`
 that the pass makes from the spawned call. It runs the call and fills the
