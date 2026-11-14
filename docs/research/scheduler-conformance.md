@@ -968,8 +968,10 @@ other bytecode and the same messages and exit code: the 393 that await a
 task (by main's own Verse Core: a call of the prelude's task `Await`), and
 `task_cancel_defer_order`, whose source is rewritten (below) and awaits no
 task any more. Every program that awaits a task changed, and none that
-does not: of the 524 that spawn, the 124 that never await a task kept their
-bytes (and the 40 `fifo-*` programs of the corpus are refused alike, their
+does not: of the 557 in both that spawn, 393 await a task and changed, the
+123 others whose source is unchanged kept their bytes (with
+`task_cancel_defer_order`, 124 that await none), and the 40 `fifo-*`
+programs of the corpus are refused alike before and after (their
 `--event-fifo` gone since #622). Of the 393, 355 give the same output and 38
 another: the 16 suite tests below whose outputs changed (one more was
 deleted, one rewritten keeps its output), 20 of the corpus's 60 scheduler
