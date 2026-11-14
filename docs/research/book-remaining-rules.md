@@ -253,7 +253,9 @@ is plain now, their output the same. 86 generated programs of corpus2
 ## Map keys, and a refinement's range
 
 **The rules.** A map key type has no array or map in it, through its
-options, tuples and a struct's fields, but `string`; a map literal's key
+options, tuples and a struct's fields (a parametric struct's at its type
+arguments: "The restriction travels with the array", `:762`), but
+`string`; a map literal's key
 cannot fail; and a refinement of `int` whose strict bound is an end of the
 64-bit range, `_X > 9223372036854775807`, admits no value and is refused.
 
@@ -286,4 +288,8 @@ map type is written (`resolveTy`) and where a literal's key type is found
 (`Elab/Context.lean`) refuses the strict bound. Programs: the test
 `empty_values_nested` keys its map by `?int` rather than `[]?int` (its
 output the same); 27 generated programs of corpus2 (`equality`) key maps
-by arrays and are refused.
+by arrays and are refused. (A parametric struct's fields were first taken
+as declared, so `[p([]int)]int` was accepted, as 8 of the first 400 seeds of
+`gen-equality.py` wrote it; they are taken at the type's arguments now. The
+three programs of corpus2 keyed so were refused already, by an earlier
+key.)
