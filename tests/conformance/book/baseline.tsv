@@ -3926,7 +3926,7 @@ Tests/Effects.versetest:551	disagrees-accepts
 Tests/Effects.versetest:552	disagrees-accepts
 Tests/Effects.versetest:556	agrees
 Tests/Effects.versetest:557	disagrees-accepts
-Tests/Effects.versetest:558	disagrees-accepts
+Tests/Effects.versetest:558	agrees
 Tests/Effects.versetest:559	agrees
 Tests/Effects.versetest:560	agrees
 Tests/Effects.versetest:561	agrees
@@ -3938,7 +3938,7 @@ Tests/Effects.versetest:566	agrees
 Tests/Effects.versetest:567	agrees
 Tests/Effects.versetest:571	agrees
 Tests/Effects.versetest:572	agrees
-Tests/Effects.versetest:573	disagrees-accepts
+Tests/Effects.versetest:573	agrees
 Tests/Effects.versetest:574	agrees
 Tests/Effects.versetest:575	agrees
 Tests/Effects.versetest:576	agrees

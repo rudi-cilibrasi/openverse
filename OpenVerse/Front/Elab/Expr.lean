@@ -248,6 +248,11 @@ partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   -- `spawn` is in; its arguments, evaluated now, are recorded here)
   let r ← elabSpawnIn { ctx with inRollback := false } p body
   noteFailCalls ctx p "spawn's arguments" r.e
+  -- (a spawn has <transacts>'s heap effects, besides its call's: "spawn
+  -- requires the transacts effect in addition to the effects of the
+  -- spawned async function", the Book's tests, Effects.versetest:554)
+  noteFx p ["reads", "writes", "allocates"]
+    (some "starts a task with spawn{…} (which has <transacts>'s effects: the Book's tests, Effects.versetest)")
   return r
 
 partial def elabSpawnIn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do

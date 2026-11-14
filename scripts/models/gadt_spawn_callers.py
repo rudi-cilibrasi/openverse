@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Immediate narrow-effect callers around a task start, from ordinary call semantics.
+"""Immediate callers around a task start, from ordinary call semantics.
 
-The wrappers do not wait or change user state. Starting the child reaches
-its first wait before returning the task. --direct emits the pre-change
-control without the wrappers; its trace and RNG draws are identical.
+The child has narrow effects (<computes>, <reads> or <allocates>); a spawn
+has <transacts>'s, besides its call's (the Book's tests, Effects.versetest:
+"spawn requires the transacts effect in addition to the effects of the
+spawned async function"), so the function that spawns, and every caller up
+to Main, is <transacts>. The wrappers do not wait or change user state.
+Starting the child reaches its first wait before returning the task.
+--direct emits the control without the wrappers; its trace and RNG draws
+are identical.
 """
 import json
 import random
@@ -46,38 +51,39 @@ print('    Sleep(0.1)')
 if fx == "reads":
     print('    Print("late {H.N}")')
 print('    Print("end {N}")\n    X')
+# (the callers: <transacts>, as the spawn at the bottom is)
 params = "H:cell,X:t,N:int where t:type"
 call = "H,X,N"
-start = f'Start({params})<{fx}>:task(t)=spawn{{Child({call})}}'
+start = f'Start({params})<transacts>:task(t)=spawn{{Child({call})}}'
 if "--direct" in sys.argv[3:]:
     print(start)
     entry = "Start"
 else:
     entry = "Entry"
     if style == 0:
-        print(f'''Entry({params})<{fx}>:task(t)=Middle({call})
-Middle({params})<{fx}>:task(t)=Start({call})''')
+        print(f'''Entry({params})<transacts>:task(t)=Middle({call})
+Middle({params})<transacts>:task(t)=Start({call})''')
     elif style == 1:
-        print(f'''Entry({params})<{fx}>:task(t)=B({call},{depth})
-B(H:cell,X:t,N:int,D:int where t:type)<{fx}>:task(t)=A(H,X,N,D)
-A(H:cell,X:t,N:int,D:int where t:type)<{fx}>:task(t)=
+        print(f'''Entry({params})<transacts>:task(t)=B({call},{depth})
+B(H:cell,X:t,N:int,D:int where t:type)<transacts>:task(t)=A(H,X,N,D)
+A(H:cell,X:t,N:int,D:int where t:type)<transacts>:task(t)=
     if(D<=0):return Start(H,X,N)
     B(H,X,N,D-1)''')
     elif style == 2:
         print(f'''iface(t:type):=interface<computes>:
-    Launch(H:cell,X:t,N:int)<{fx}>:task(t)
+    Launch(H:cell,X:t,N:int)<transacts>:task(t)
 carrier(t:type):=class<computes>(iface(t)):
-    Launch<override>(H:cell,X:t,N:int)<{fx}>:task(t)=Start(H,X,N)
-Entry({params})<{fx}>:task(t)=
+    Launch<override>(H:cell,X:t,N:int)<transacts>:task(t)=Start(H,X,N)
+Entry({params})<transacts>:task(t)=
     B:iface(t)=carrier(t){{}}
     B.Launch({call})''')
     elif style == 3:
-        print(f'''Entry({params})<{fx}>:task(t)=
-    F:type{{_(:cell,:t,:int)<{fx}>:task(t)}}=Start
+        print(f'''Entry({params})<transacts>:task(t)=
+    F:type{{_(:cell,:t,:int)<transacts>:task(t)}}=Start
     F({call})''')
     else:
-        print(f'''Entry({params})<{fx}>:task(t)=Named(H,X)
-Named(H:cell,X:t,?N:int={n} where t:type)<{fx}>:task(t)=Start({call})''')
+        print(f'''Entry({params})<transacts>:task(t)=Named(H,X)
+Named(H:cell,X:t,?N:int={n} where t:type)<transacts>:task(t)=Start({call})''')
     print(start)
 print(f'''Main()<suspends>:void=
     H:=cell{{N:={initial}}}

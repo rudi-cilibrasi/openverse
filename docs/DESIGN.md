@@ -2381,16 +2381,14 @@ narrowed receiver to, which start as the caller's, so the function needs
 no initial values), and the root calls that.
 
 Source heap effects are checked before concurrency lowering. Starting a
-task also writes the scheduler's implementation state, even when the
-spawned call and its immediate callers have only `<computes>`, `<reads>`
-or `<allocates>`. The final Core functions must record those writes too.
-After creating the entry wrapper, `Front/CompilerWrites.lean` compares the
-flags before and after lowering, then propagates newly introduced write
-requirements through callers to a fixed point, including recursive callers,
-generated dispatch and function-value helpers, and the entry wrapper.
-Existing source writers are not propagation seeds. This changes only
-Core's implementation flags: source permissions and the independent Core
-write-soundness check remain in force.
+task writes the scheduler's implementation state, and a `spawn` has
+`<transacts>`'s heap effects in the source (the Book's tests,
+`Effects.versetest:554`), so the function that spawns, and every caller of
+it, already has a Core function that writes: the lowering adds no write a
+caller lacks. (Before the Book's rule, a `<computes>`, `<reads>` or
+`<allocates>` function could spawn, and the writes the lowering introduced
+were propagated through its callers, `CompilerWrites`, #480; that pass is
+gone with them.)
 
 Each pass resumes `Main`'s frame, then every root whose suspension point
 is not -1 (done). It reaches a root through a test of its class

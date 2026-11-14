@@ -3173,9 +3173,19 @@ Main()<suspends>:void =
   `t` is the result type at the receiver's static declaration, including
   when an override returns a narrower class. `T.Await()` waits for the task to end and
   gives its result (at once if it has ended). A task is not tied to the
-  code that spawned it: it runs until it ends or the program does. `spawn`
-  is allowed in any function, immediate ones too, and in a field's default
-  (a task per construction that omits the field);
+  code that spawned it: it runs until it ends or the program does. A
+  `spawn` has `<transacts>`'s heap effects (`<reads>`, `<writes>` and
+  `<allocates>`), besides those of the call it starts (the Book's tests:
+  "spawn requires the transacts effect in addition to the effects of the
+  spawned async function", `Effects.versetest:554`; the prose has spawn
+  work "anywhere you can write code", ch. 14): it is allowed in any
+  function whose effects allow those, immediate ones too, not in a
+  `<computes>`, `<reads>` or `<allocates>` one; with `--extended-defaults`,
+  also in a field's default of a class whose effects allow them (a task per
+  construction that omits the field). A `spawn` written in a failure
+  context is refused (#156; a task a call in a failure context starts, as
+  a call may, is undone with the context when it fails: its first run is
+  rolled back and it never runs again);
   without a suspends `Main`, a task runs only up to its first wait.
   `T.Cancel()` (in a suspends function) cancels a task that has not ended:
   it unwinds at once, running its `defer:` blocks, or, when the task is

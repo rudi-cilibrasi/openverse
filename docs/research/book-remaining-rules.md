@@ -248,20 +248,89 @@ they draw to end at once (one race or rush in ten) with `Sleep(0.0)`, drawn
 from no random number: 58 of the first 400 seeds of each change their text,
 none its predicted output.
 
-## `(super:)` and `spawn`'s effects: left
+## `spawn` has `<transacts>`'s effects
 
-Two more rules of the accepted refusals are one check each, measured and
-left, as each retires a reading openverse's own tests are about:
+**The rule.** A `spawn` has `<transacts>`'s heap effects, `<reads>`,
+`<writes>` and `<allocates>`, besides those of the call it starts: a
+function whose effects do not allow them cannot spawn, nor a field's
+default of a class whose effects do not.
+
+**The Book.** The tests: "spawn requires the transacts effect in addition
+to the effects of the spawned async function"
+(`Effects.versetest:554`), then, on both VMs, `G()<computes>:void =
+spawn{F()}` of an `F()<computes><suspends>` refused (3512; `:558`,
+`bp_vm_only`, and `:573`, `verse_vm_only`), and of an
+`F()<transacts><suspends>` refused twice (`:566`, `:581`: the spawn's
+effects and the call's). The VerseVM accepts `G()<transacts>` (`:572`,
+`:580`); the BPVM refuses it (`:557`, `:565`) for its own `no_rollback`
+reading of `spawn`, which openverse does not take. The prose: "spawn works
+in immediate functions, class constructors, module initialization—anywhere
+you can write code" (ch. 14, `14_concurrency.md:737-738`).
+
+**Where the Book disagrees with itself.** Ch. 14 lets `spawn` work
+"anywhere you can write code"; its tests refuse it in a `<computes>`
+function. openverse follows the tests (on the wiki already).
+
+**openverse before.** A `spawn` had the effects of its call only: a
+`<computes>`, `<reads>` or `<allocates>` function could spawn (#480), and
+the writes the scheduler makes when a task starts were added to the Core
+functions of its callers after the lowering (`CompilerWrites.propagate`).
+
+**openverse now.** `elabSpawn` (`Elab/Expr.lean`) notes the three effects
+at the `spawn`, which the function's effects, or its class's for a field's
+default, must allow (`fxCheck`). `CompilerWrites` is deleted with its
+contract test: every function that spawns, and every caller of it, writes
+in the source now, so the lowering adds no write a caller lacks (the suites
+and the spawning models pass without it). Programs: of the 12 tests that
+spawned from narrower functions, 7 were about that and are deleted
+(`spawn_narrow_callers_defaults`, `_dispatch`, `_function_value`,
+`_mutual`, `_reverse`, `choice_refined_spawn_narrow`, and the error test
+`spawn_narrow_callers_user_write`, whose subject was that the propagated
+writes grant the caller none), with `spawn_defaults_effect` (a writing
+default of a `<computes>` spawning caller, under `--extended-defaults`); 3
+are error tests of the rule now (`spawn_computes_caller`,
+`spawn_reads_caller`, `spawn_allocates_caller`, from
+`spawn_narrow_callers_immediate_main*`), with `spawn_field_default_computes`;
+and `spawn_narrow_callers_rollback`, whose subject is a task a call in a
+failing context starts, is `spawn_call_in_failure_rollback`, its callers
+`<transacts>`, its output the same. The model `gadt_spawn_callers.py` makes
+the callers around the spawn `<transacts>` (the child keeps its narrow
+effects): every seed changes its text, none its predicted output. The 20
+programs of corpus2 from it are refused.
+
+**`spawn` in a failure context (#156), looked at again.** openverse refuses
+a `spawn` written in a failure context; no test of the Book's refuses one
+for that. The VerseVM's tests spawn in one: at the top of an `assert:`'s
+body (21 cases, translated as `Main()<decides>`, a context that succeeds),
+and in an `if`'s condition that then fails (`LiveVariables.versetest`
+450-545, 7 cases, `verse_vm_only`), where the task, which waits with
+`await` on a live variable, never runs on: `Y = 0` after the variable
+changes. The BPVM's refuses one in a `<decides>` function ("STM doesn't
+support spawn, don't allow in decides", `SoftwareTransactionalMemory.versetest:503-507`, 3512).
+openverse already undoes a task that a call in a failing context starts:
+its first run is rolled back with the context and it never runs again
+(`spawn_call_in_failure_rollback`), which is the VerseVM's outcome. Measured
+with the refusal kept only in a `<suspends>` function's failure contexts
+(where the lowering would count the spawn as a suspension, which a failure
+context cannot hold): 13 of the 21 cases agree, 7 give a different result
+(`FORT-1088027-*` 39, 47, 65, 92, 116, `FORT-1126351-*` 33, 46: each needs
+an awaiter to run inside `Signal`, which openverse does not, [a documented
+gap](scheduler-conformance.md#awaiters-run-inside-signal-not-built)), and
+the BPVM's `:505` is accepted. The form cannot tell the 7 from the 13 (all
+spawn at the top of a `<decides>` body), and a relaxation that makes 7
+refusals different results and accepts a refusal is not one this work may
+make, so the refusal stays; it would go with the awaiters inside `Signal`.
+The 7 `LiveVariables` cases need live variables (unreleased, ch. 15).
+
+## `(super:)`: left
+
+One more rule of the accepted refusals is one check, measured and left, as
+it retires a reading openverse's own tests are about:
 
 - **`(super:)M` only in an override of `M`** (`Super.versetest` 183, 238,
   3612): 27 tests call `(super:)` for another method or in a block
   (`multi_method_cross_super_*`, `choice_super_*`,
   `class_cast_refine_super*`, …), and 20 generated programs (2 cases).
-- **`spawn` has `<transacts>`'s heap effects** ("spawn requires the
-  transacts effect…", `Effects.versetest:554`; in a `<computes>` function,
-  3512 on both VMs, `:558`, `:573`): 12 tests spawn from narrower
-  functions (`spawn_narrow_callers_*`, `choice_refined_spawn_narrow`), and
-  20 generated programs (2 cases).
 
 ## Five forms the tests refuse
 

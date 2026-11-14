@@ -36,12 +36,6 @@ if lake env lean -j1 --run tests/lean/SourceFrameRefs.lean >"$logs/frame-contrac
 else
   rc=$?; cat "$logs/frame-contracts"; exit "$rc"
 fi
-echo "== compiler implementation-write contracts"
-if lake env lean -j1 --run tests/lean/CompilerWrites.lean >"$logs/compiler-writes" 2>&1; then
-  cat "$logs/compiler-writes"
-else
-  rc=$?; cat "$logs/compiler-writes"; exit "$rc"
-fi
 echo "== failure-capture contracts"
 if lake env lean -j1 --run tests/lean/FailCapture.lean >"$logs/failure-contracts" 2>&1; then
   cat "$logs/failure-contracts"

@@ -38,7 +38,6 @@ import OpenVerse.Front.Refine
 import OpenVerse.Front.FrameRefs
 import OpenVerse.Front.SourceFrames
 import OpenVerse.Front.FailCapture
-import OpenVerse.Front.CompilerWrites
 import OpenVerse.Front.Types
 import OpenVerse.Front.ChoiceTypes
 import OpenVerse.Front.UpperBounds
