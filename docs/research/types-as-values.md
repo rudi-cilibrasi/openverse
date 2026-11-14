@@ -111,6 +111,13 @@ object, made by the front end with no Verse Core added
   elements' join.
 - **Not compared.** The classes `$type:C` are not `<unique>`, so `=` on type
   values is refused, as the Book's tests have it.
+- **No effects.** The classes `$type:C` and the metatypes' interfaces are
+  `<computes>` (no field, no block), and so is `$cast(A)`: making a type
+  value and casting through one has no effect, as naming a class and a cast
+  `C[X]` have none. (Before, they had the default construction budget,
+  `<transacts>`, so a `<computes>` function could not name a class as a
+  value; the API reference's `<reads>` functions that return one,
+  `GetCastableFinalSuperClass`, need this.)
 
 ## What needs Verse Core, and a design
 
