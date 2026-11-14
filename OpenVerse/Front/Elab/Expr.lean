@@ -2252,17 +2252,24 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
         -- tests; the read is typed even when none can)
         let viewedSn := env.viewed.contains sn
         if viewedSn then refined := true
+        -- (a class that re-declares the field at a narrower type, or is
+        -- below one, holds it at that type: converted up to `t`)
+        let up (d : String) (e : Expr) : EM Expr := do
+          if env.narrowed.isEmpty || !env.narrowed.any fun (n, g) => g == f && (env.supers d).contains n then return e
+          let some (_, td) := fieldIndex (env.fields d (env.argsAt sn targs d)) f | return e
+          if td == t then return e
+          coerce p ⟨e, td⟩ t
         for (d, kd) in (ds.zip pos).reverse do
           if viewedSn && (env.viewArgs? sn d (env.coreArgs sn targs) (rigid := false)).isNone then continue
           match env.fieldAcc.idxOf? (d, f) with
           | some i =>
             -- (a class that fixes the type arguments: its getter, under the
             -- refinement, #157)
-            acc := .ite (.heap (.isTag [env.tagOf d]) [.local x]) (.call (env.fieldAccBase + 2 * i) [.local x]) acc
+            acc := .ite (.heap (.isTag [env.tagOf d]) [.local x]) (← up d (.call (env.fieldAccBase + 2 * i) [.local x])) acc
             refined := true
           | none =>
             let yd ← fresh (.struct d (env.argsAt sn targs d))
-            acc := .ite (.assign yd (.heap (.isTag [env.tagOf d]) [.local x])) (.heap (.get kd) [.local yd]) acc
+            acc := .ite (.assign yd (.heap (.isTag [env.tagOf d]) [.local x])) (← up d (.heap (.get kd) [.local yd])) acc
         if refined then
           -- (checked against the field's type, as the refined calls need one)
           let y ← fresh t

@@ -575,9 +575,30 @@ def checkSignatures (env : TyEnv) (sigs : Signatures) (cdefs : List CDef) (field
     let (t, _) ← (resolveTy cenv fp sty).run {}
     match fieldIndex (env.fields cname) f with
     | some (_, t0) =>
-      if !(t == t0) then
+      -- (an interface's field a class has from a class of its chain that
+      -- re-declares it narrower, `narrowings`: that type, below it)
+      let narrower ← do
+        if !env.narrowed.any (fun (n, g) => g == f && (env.supers cname).contains n) then pure false
+        else if t == .any then pure true
+        else pure ((← (convert cenv (.lit .void) t0 t).run {}).1.isSome)
+      if !(t == t0) && !narrower then
         throw s!"{fp.show}: field '{f}' of {cname} must have the type it inherits, {t0.show}, not {t.show}"
     | none => pure ()
+  -- a field that is no `var` re-declared at a type below the one it
+  -- inherits (Book of Verse ch. 10, "Overriding Members": "Field overrides
+  -- can provide different default values or specialize to subtypes. …
+  -- fields can only be overridden with subtypes"): one a value of the
+  -- class's type converts to the inherited type from (`convert`), or `any`
+  for (fp, cname, f, sty, sty0) in fields.narrowings do
+    let cenv := { env with
+      tvars := ((env.sparams.lookup cname).getD []).map fun (v, c) => (v, Ty.param v c)
+      boundFacts := (env.sbounds.lookup cname).getD [] }
+    let (t, _) ← (resolveTy cenv fp sty).run {}
+    let (t0, _) ← (resolveTy cenv fp sty0).run {}
+    if !(t == t0) && t0 != .any then
+      let (up, _) ← (convert cenv (.lit .void) t t0).run {}
+      if up.isNone then
+        throw s!"{fp.show}: field '{f}' of {cname} must have the type it inherits, {t0.show}, or a type below it, not {t.show}"
   if let some msg := fields.defaultClashes[0]? then throw msg
 
 end OpenVerse.Front

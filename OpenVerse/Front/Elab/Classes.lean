@@ -216,6 +216,13 @@ structure Fields where
       two parents), with the type it gives them: `checkSignatures` checks, once
       types are resolved, that it is the inherited one. -/
   overrides : Array (Pos × String × String × STy)
+  /-- The fields a class re-declares with `<override>` that are no `var`s,
+      with the type it gives them and the type it inherits: `checkSignatures`
+      checks that the first is the second or one below it (Book of Verse
+      ch. 10, "Overriding Members": "fields can only be overridden with
+      subtypes"), and the class's objects hold such a field at its own type
+      (`TyEnv.narrowed`). -/
+  narrowings : Array (Pos × String × String × STy × STy) := #[]
   /-- A refusal for each field that two interfaces give defaults, which
       `checkSignatures` gives after the signature checks. -/
   defaultClashes : Array String
@@ -238,6 +245,7 @@ def classFields (classes : Classes) (requests : Requests) : Except String Fields
   -- its own (an `<override>` field re-declares an inherited one, with its
   -- own default or none)
   let mut fieldOverrides : Array (Pos × String × String × STy) := #[]
+  let mut narrowings : Array (Pos × String × String × STy × STy) := #[]
   let mut defaultClashes : Array String := #[]
   -- (each class's fields by name, in a map: lookups in a list made this cubic)
   let mut fullMap : Std.HashMap String (List (String × STy × Option SExpr × Bool)) := {}
@@ -310,8 +318,17 @@ def classFields (classes : Classes) (requests : Requests) : Except String Fields
           -- initialize data member", 3600, and 29-35; ch. 10, "Concrete":
           -- "Re-declaring the member with `<override>` does not satisfy the
           -- requirement — it still needs an initializer")
-          fs := fs.set k (f, sty0, d, v0)
-          fieldOverrides := fieldOverrides.push (cd.pos, cd.name, f, sty)
+          -- (a class's field that is no `var` may be re-declared at a
+          -- subtype, which the class and those below then hold it at; a
+          -- `var` keeps its type, as a write through a class above could not
+          -- keep a narrower one; an interface's override is the owner's
+          -- open question, and keeps the type)
+          if isVar || cd.isIface then
+            fs := fs.set k (f, sty0, d, v0)
+            fieldOverrides := fieldOverrides.push (cd.pos, cd.name, f, sty)
+          else
+            fs := fs.set k (f, sty, d, v0)
+            narrowings := narrowings.push (cd.pos, cd.name, f, sty, sty0)
         | none =>
           if cd.overrides.contains f then
             throw s!"{cd.pos.show}: {f}<override> in {cd.name} does not override an inherited field"
@@ -396,7 +413,7 @@ def classFields (classes : Classes) (requests : Requests) : Except String Fields
             fs := fs ++ [(s!"$w.{cd.name}.{tp.name}", .name tp.name, some (.ident cd.pos "$witness"), false)]
       fullMap := fullMap.insert cd.name fs
     if fullMap.size == before then break
-  let fields : Fields := { map := fullMap, overrides := fieldOverrides, defaultClashes }
+  let fields : Fields := { map := fullMap, overrides := fieldOverrides, narrowings, defaultClashes }
   for cd in classes.defs do
     for (f, _, d, _) in fields.of cd.name do
       if (classes.henv.supers cd.name).any (classes.declaresBase · f) then

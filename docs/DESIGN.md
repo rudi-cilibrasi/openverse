@@ -2915,7 +2915,12 @@ position in every class below the one that declares it.
   unbound one its pin or `void` (`VTy.fillArgs`).) A class's table entry
   gives each field the type the topmost class that has it gives it, at
   that class's variable positions (`TyEnv.coreVars`), so a field has one
-  type through every reference of the hierarchy. Dispatch passes the
+  type through every reference of the hierarchy, but for a field that is
+  no `var` a class re-declares at a narrower type (`TyEnv.narrowed`): that
+  class and those below hold it at that type (`TyEnv.fieldSrc` takes the
+  nearest such class), so a read through a class or interface above tests
+  the object's class, as for a field at different places, and converts
+  the narrower value up (`coerce`). Dispatch passes the
   receiver as an instance of the implementing class at the arguments it
   has there (`upArgs`, `argsBelow`). From code generic over `cell(t)`,
   an `intcell`'s implementation needs `t = int`: the elaborator matches

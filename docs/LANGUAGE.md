@@ -759,6 +759,15 @@ circle := class(shape, labelled):
     `Name<override>:t` re-declares it with none, so that a construction
     gives it (the Book's tests, `Attributes/override.versetest` 29-47); any
     other field with an inherited name is an error;
+  - a class may re-declare a field that is no `var` at a type below the one
+    it inherits (ch. 10, "Overriding Members": "fields can only be
+    overridden with subtypes"): `Pet<override>:cat` over `Pet:animal`,
+    `Kind<override>:int` over `Kind:comparable` or `any`, a refinement over
+    its base, `tuple(int, int)` over `[]int`. Read through that class or one
+    below it, the field has the narrower type; through a class or interface
+    above, the inherited one. A `var` keeps its type (a write through a
+    class above could store a value of the wider one), and so does a
+    field an interface re-declares;
   - `M<override>(…)` overrides an inherited method with its signature, except
     that it may return a class below the declared one (covariant results).
     Overriding without `<override>`, or `<override>` that overrides nothing,

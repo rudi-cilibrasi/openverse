@@ -265,3 +265,73 @@ it would not be.
 ("F<override> must give a new default"); it now gives it no default. The
 default two interfaces give a field is settled by any override of it, with
 a value or none.
+
+## A field re-declared at a subtype
+
+**The rule.** A class may re-declare an inherited field that is no `var`
+at a type below the one it inherits, with a new default or none: read
+through the class or one below it, the field has the narrower type;
+through a class or interface above, the inherited one. A `var` field keeps
+its type; so does a field an interface re-declares.
+
+- Ch. 10, "Overriding Members" (`10_classes_interfaces.md:3172-3175`):
+  "Field overrides can provide different default values or specialize to
+  subtypes. Method overrides replace the interface's implementation
+  entirely. All overrides must maintain type compatibility—fields can only
+  be overridden with subtypes, and method signatures must match exactly."
+- The tests: `Attributes/override.versetest:116-135` ("this override
+  constrains the type to a subtype", `C<override>: c17` over `C: c16`,
+  read as a `c17`) and 3-10; `MetatypeConcreteSubtype.versetest` 116,
+  284-294 (`comparable` to `int`); `Any.versetest` 163, 164 (`any` to
+  `int`); `Bugs/BPVMOnly/RefinedMapKeyInterfaceOverride.versetest` (an
+  interface's `int` to a refinement, a `<unique>` class to one below it,
+  tuples and options of them, aliases; the result used as a map key of the
+  narrower type); `InterfaceWithFields.versetest` 358 (a class to its
+  subclass), 377 (`[]int` to `tuple(int, int)`, read through the interface
+  as an array); `AccessLevelInheritance.versetest:863`.
+
+Nothing in the Book says what a `var` field may be re-declared at; every
+test that re-declares one keeps its type. openverse keeps the type of a
+`var`, which is sound: a write through the class above could store a
+value of the wider type (`tests/errors/field_override_narrower_var.verse`).
+An interface's `<override>` of a field (`InterfaceWithFields.versetest:313`,
+"Can't override in an interface") is the owner's open question; it keeps
+its type, so that case stays refused.
+
+**In openverse.** `classFields` keeps the class's own type for such a field
+(`Fields.narrowings`); `checkSignatures` checks it is the inherited one or a
+type a value converts up from (`convert`, or `any`): "field 'Size' of big
+must have the type it inherits, int, or a type below it, not float". The
+type environment marks the fields whose type is narrower
+(`TyEnv.narrowed`); the nearest such class of a class's chain gives the
+field's type in its layout (`TyEnv.fieldSrc`), so its objects hold the
+narrower value. A read through a class or interface above finds that the
+classes below disagree on the field's type (`fieldTyAgrees`) and tests the
+object's class, as for a field at different places (#157, #205), each
+branch converting a narrower value up (`coerce`: a class to one above, an
+`int` to a `comparable`'s box, anything to `any`, a tuple to an array).
+An interface field a class has from a class of its chain that narrowed it
+may be narrower than the interface's (the check of a field reached
+twice). Programs without such a field are unchanged (the oracle: none of
+the suites' or the corpus's).
+
+```verse
+shelter := class:
+    Pet:animal = animal{}
+    Kind:comparable = 0
+cattery := class(shelter):
+    Pet<override>:cat = cat{}
+    Kind<override>:int = 7
+```
+
+`cattery{}.Pet.Purr()` and `cattery{}.Kind + 1` type; `S:shelter =
+cattery{}` reads `S.Pet` as an `animal` and `S.Kind` as a `comparable`
+(`tests/verse/field_override_narrower.verse`, Lean and C:
+`purr cat cat 8 4 seven other`).
+
+**Left.** A method re-declared at a coerced signature (a result `t` with a
+`comparable` bound over `comparable`, `SOL-3731` 22, 23; the other forms of
+`CoercedOverrides` and `FORT-642876`), and the reads in
+`MetatypeConcreteSubtype.versetest` 216-263, which construct through a
+field of a `concrete_subtype` type in a method (`ThingType{}`, types as
+values).
