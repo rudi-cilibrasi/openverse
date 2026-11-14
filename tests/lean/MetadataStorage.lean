@@ -41,7 +41,15 @@ private def caller (body : String) : String :=
 private def callables (source : String) : String :=
   "One()<computes>:int=1\nTwo()<computes>:int=2\nPick(C:logic)<computes>:type{_()<computes>:int}=if(C?)then One else Two\n" ++ source
 
+private def recursiveReaders : String :=
+  "reader:=class<computes>{N:int=7}\n" ++
+  "Maybe(R:v,M:v,N:int where v:type)<computes>:v=if(N>0)then Bridge(R,M,N-1)else R\n" ++
+  "Bridge(R:v,M:v,N:int where v:type)<computes>:v=if(N>0)then Maybe(R,M,N-1)else M\n" ++
+  "Hold(R:reader,M:reader)<suspends>:reader=\n    var Stored:reader=R\n    Sleep(0.1)\n    set Stored=M\n    Stored\n"
+
 private def cases : List (String × String) := [
+  ("live helper shared initializer", recursiveReaders ++
+    "Caller(F:reader,Dummy:reader)<suspends>:reader=Hold(F,Dummy)"),
   ("shared frame reused after real overwrite", callables "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    Values:=sync:\n        block:\n            Sleep(0.2)\n            Stored()\n        block:\n            Sleep(0.1)\n            set Stored=Dummy\n    Values(0)"),
   ("shared frame forwarded after real overwrite", callables "Keep(V:v where v:type)<computes>:v=V\nCaller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    Values:=sync:\n        block:\n            Sleep(0.2)\n            Keep(Stored)()\n        block:\n            Sleep(0.1)\n            set Stored=Dummy\n    Values(0)"),
   ("shared evidence reused after real overwrite", "Caller(X:t,D:u,Dummy:u,P:evidence(evidence(vehicle,t),u) where t:type,u:type)<suspends>:int=\n    var Stored:u=Dummy\n    set Stored=D\n    Values:=sync:\n        block:\n            Sleep(0.2)\n            P.Up(Stored).Up(X).N\n        block:\n            Sleep(0.1)\n            set Stored=Dummy\n    Values(0)"),
@@ -80,6 +88,12 @@ private def cases : List (String × String) := [
   ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
+  ("opaque recursive initializer through helper", recursiveReaders ++
+    "Caller(F:reader,Dummy:reader)<suspends>:reader=Hold(Maybe(F,Dummy,3),Dummy)"),
+  ("opaque recursive initializer through two helpers", recursiveReaders ++
+    "Keep(V:v where v:type)<computes>:v=V\nCaller(F:reader,Dummy:reader)<suspends>:reader=Hold(Keep(Maybe(F,Dummy,3)),Dummy)"),
+  ("opaque recursive initializer with reordered helper arguments", recursiveReaders ++
+    "Flip(M:reader,R:reader)<suspends>:reader=Hold(R,M)\nCaller(F:reader,Dummy:reader)<suspends>:reader=Flip(Dummy,Maybe(F,Dummy,3))"),
   ("opaque recursive shared initializer", "Maybe(R:v,M:v,N:int where v:type)<computes>:v=if(N>0)then Bridge(R,M,N-1)else R\nBridge(R:v,M:v,N:int where v:type)<computes>:v=if(N>0)then Maybe(R,M,N-1)else M\nCaller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:type{_()<computes>:int}=\n    var Stored:type{_()<computes>:int}=Maybe(F,Dummy,3)\n    Sleep(0.1)\n    set Stored=Dummy\n    Stored"),
   ("shared real overwrite", "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    Sleep(0.1)\n    Stored()"),
   ("shared rolled back real overwrite", "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:type{_()<computes>:int}=\n    var Stored:type{_()<computes>:int}=Dummy\n    if(set Stored=F;false?){}\n    Sleep(0.1)\n    set Stored=Dummy\n    Stored"),

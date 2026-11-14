@@ -71,6 +71,8 @@ private structure State where
   /-- Shared-local modes depend on complete return summaries, not an early
       real-only approximation of a recursive initializer. -/
   validateShared : Bool := false
+  live : Array Key := #[]
+  liveSeen : Std.HashMap Key Unit := {}
   debug : Bool := false
   active : Option Key := none
 
@@ -83,6 +85,9 @@ private def refuse (fn : Fn) (info : Info) (what : String) (details : String := 
   throw s!"{info.pos.show}: dummy type value cannot {what} (in {fn.name}){context}"
 
 private def request (key : Key) : M (Option Bool) := do
+  let st ← get
+  if st.validateShared && !st.liveSeen.contains key then
+    set { st with live := st.live.push key, liveSeen := st.liveSeen.insert key () }
   let st ← get
   if let some i := st.indices[key]? then return st.summaries[i]!.result
   set { st with
@@ -236,9 +241,11 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       let initialized := (List.range fn.nslots).map (fun i => i < fn.arity : Nat → Bool) |>.toArray
       let slots : Slots := { values, initialized, sharedMetadata := values }
       expr fns infos fields fn info slots (info.body.getD fn.body)
-    for i in [:fns.size] do
-      let info := infos[i]?.getD {}
-      discard <| request (i, (List.range fns[i]!.arity).map info.inputs.contains)
+    let seedRoots : M Unit := do
+      for i in [:fns.size] do
+        let info := infos[i]?.getD {}
+        discard <| request (i, (List.range fns[i]!.arity).map info.inputs.contains)
+    seedRoots
     let mut growing := true
     while growing do
       modify fun st => { st with changed := false }
@@ -252,11 +259,16 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
         if result != summary.result then
           modify fun st => { st with summaries := st.summaries.modify index (fun s => { s with result }), changed := true }
       growing := (← get).changed
-    -- A summary may grow from a real return to a metadata return. Validate
-    -- initializer modes only after that growth has settled in every context.
+    -- A summary may grow from a real return to a metadata return. Follow
+    -- calls again from the roots using the stable summaries: provisional
+    -- argument contexts can disappear and must not be validated as live.
     modify fun st => { st with validateShared := true }
-    for summary in (← get).summaries do
-      discard <| runContext summary.key
+    seedRoots
+    let mut index := 0
+    while index < (← get).live.size do
+      let key := (← get).live[index]!
+      index := index + 1
+      discard <| runContext key
   discard <| action.run { debug }
 
 end OpenVerse.Front.MetadataFlow

@@ -72,7 +72,9 @@ local originally contained metadata. A real overwrite permanently ends its
 metadata-only mode along that path; a failed condition restores the incoming
 mode. Shared-local write checks run after recursive return summaries converge,
 so an early real-only approximation cannot reject an opaque initializer that
-later acquires a metadata role. Checking the write protects every alias,
+later acquires a metadata role. The final pass follows calls from the roots
+using converged summaries, excluding provisional argument contexts that are
+no longer reachable. Checking the write protects every alias,
 including aliases obtained by indexed reads or passed to an unannotated
 helper. Compiler-owned `$w.` fields retain their
 metadata role without tainting unrelated object fields. This analysis adds no
@@ -82,8 +84,8 @@ Opaque forwarding remains allowed, and reading an unrelated ordinary field
 of an object with hidden metadata still gives executable data.
 `MetadataGetters.lean` checks these accessor boundaries with 14 Core-checked
 controls, including execution after forwarding through another function.
-`MetadataStorage.lean` retains 29 real/dummy
-rejection pairs and 29 opaque-forwarding, real-overwrite and rollback pairs,
+`MetadataStorage.lean` retains 30 real/dummy
+rejection pairs and 32 opaque-forwarding, real-overwrite and rollback pairs,
 including a later GADT refinement, fresh unit-to-array conversions, ordinary
 helpers with independent real returns, virtual and spawned receivers, and
 bound-method captures across a wait. Shared-frame controls cover metadata,
