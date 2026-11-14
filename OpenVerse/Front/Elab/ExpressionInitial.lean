@@ -413,7 +413,7 @@ partial def elabExprInitialWith
             -- the program's, `BuiltinValues`; another is not)
             if builtins.contains n || softBuiltins.contains n then
               eerr p s!"the built-in {n} cannot be used as a value: it is overloaded, generic or a name programs cannot define; define a function that calls it"
-            eerr p s!"unknown identifier '{Choice.shownName n}'"
+            eerr p s!"unknown identifier '{ctx.shownLocal n}'"
   -- a constructor's `block:` (#11): it cannot fail, as a class's cannot
   | _ => next ctx se exp
 

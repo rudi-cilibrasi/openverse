@@ -1036,6 +1036,25 @@ def resolveSignatureTypes (env : TyEnv) (p : Pos) (ps : List SParam) (ret : STy)
 def Ctx.lookup (ctx : Ctx) (n : String) : Option Local := ctx.locals.find? (·.name == n)
 def Ctx.sig? (ctx : Ctx) (n : String) : Option Sig := ctx.sigs.find? (·.name == n)
 
+/-- A local's name as a message says it: as written (`Choice.shownName`),
+    and one the inlining renamed for a call's site, `$g_N_site` (a local
+    `N` of the function `g` with several values, `Choice.inlineCalls`), `N`,
+    `g` the longest of the program's functions' names that fits. -/
+def Ctx.shownLocal (ctx : Ctx) (n : String) : String :=
+  let n := Choice.shownName n
+  let site? (pre : String) : Option String := do
+    let rest := (n.drop pre.length).toString
+    let parts := rest.splitOn "_"
+    let site ← parts.getLast?
+    if !n.startsWith pre || parts.length < 2 || site.isEmpty || !site.all Char.isDigit then none
+    else some ("_".intercalate parts.dropLast)
+  let fits := ctx.sigs.filterMap fun s =>
+    let pre := "$" ++ s.name.replace "::" "_" ++ "_"
+    (site? pre).map (pre.length, ·)
+  match fits.foldl (fun best x => if best.all (·.1 < x.1) then some x else best) none with
+  | some (_, written) => written
+  | none => n
+
 def Ctx.evidenceTypes (ctx : Ctx) : List (String × Ty) :=
   ctx.locals.map fun binding => (binding.name, if binding.typeValue then .void else binding.ty)
 
