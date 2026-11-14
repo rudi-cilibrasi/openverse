@@ -312,8 +312,11 @@ partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
 partial def elabSpawnIn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   let sourceBefore := (← get).pendingSourceSuspends
   if ctx.inDefer then eerr p "spawn in a defer is not supported (#156)"
-  if ctx.canFail && !ctx.inDefaultCheck then
-    eerr p "spawn cannot be in a failure context (a condition, a filter, or a <decides> call's arguments) (#156)"
+  -- (a failure context may spawn, the Book's tests: assertions spawn, and
+  -- `LiveVariables.versetest:450-545` spawn in `if: …; false?`; the task's
+  -- start, its link and its first run, is the context's code, undone with
+  -- it when it fails, so the task never runs again;
+  -- docs/research/scheduler-conformance.md)
   let some mark := ctx.sig? "$spawnMark"
     | eerr p "spawn{…} takes a call of a <suspends> function (#156)"
   let call := match body with

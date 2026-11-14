@@ -1,6 +1,6 @@
-# (#513) --event-fifo: a rush in a spawned task; its losing arm, a task of its
-# own, began to wait before another task and goes on first when a third
-# task signals
+# Awaiters run inside Signal (#513): a rush in a spawned task; its losing
+# arm, a task of its own, began to wait before another task and goes on
+# first, inside the third task's Signal
 Waiter(E:event(int))<suspends>:void =
     V := E.Await()
     Print("task {V}")

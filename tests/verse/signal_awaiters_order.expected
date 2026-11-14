@@ -1,0 +1,9 @@
+B waits
+A waits
+C waits
+main signals
+B got 7
+A got 7
+C got 7
+main after signal
+exit=0

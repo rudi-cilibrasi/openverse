@@ -1,6 +1,8 @@
-# (#513) --event-fifo: the winning arm signals before it ends, while the
-# other arm is still the function's: once the rush ends, that arm, a task of
-# its own, goes on first, as it began to wait first
+# Awaiters run inside Signal (the Book's ch. 14: "the first completer
+# wins"; #513): the second arm signals while the first waits; the first is
+# resumed inside that Signal and ends, then the spawned waiter has its turn;
+# the second arm goes on to its end after the Signal; the first ended first,
+# so it won the rush
 Waiter(E:event(int))<suspends>:void =
     V := E.Await()
     Print("task {V}")

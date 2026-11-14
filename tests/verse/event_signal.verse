@@ -1,4 +1,4 @@
-# event(t): Signal wakes every task waiting at that moment, with the value (they go on in the scheduler's order); a Signal with no one waiting is lost; a wait in a losing race arm is cancelled (#156)
+# event(t): Signal wakes every task waiting at that moment, with the value (each goes on inside the Signal, in the order it began to wait, until it waits again: the Book's API); a Signal with no one waiting is lost; a wait in a losing race arm is cancelled (#156)
 Listener(Name:string, E:event(int), N:int)<suspends>:void =
     var I:int = 0
     loop:

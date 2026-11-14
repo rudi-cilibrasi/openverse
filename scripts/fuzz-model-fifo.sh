@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Model-based fuzzing of FIFO event resumption (#513, `--event-fifo`):
-# random programs whose tasks (spawned ones, branches, Main, tasks spawned
-# in a task's first run, the arms of a sync or race) wait on events and
-# signal them, some in chains, from the model scripts/models/event_fifo.py,
-# which predicts the output: each Signal's waiters go on in the order they
-# began to wait. Lean must match the model, and C must match Lean; no
-# program may hit an internal error.
+# Model-based fuzzing of event resumption (#513; the Book's rule, a Signal
+# resumes its awaiters inside it): random programs whose tasks (spawned
+# ones, branches, Main, tasks spawned in a task's first run, the arms of a
+# sync or race) wait on events and signal them, some in chains, from the
+# model scripts/models/event_fifo.py, which predicts the output: each
+# Signal's waiters go on in the order they began to wait, each until it
+# waits again, inside the Signal (a chain's own inside its Signal). Lean
+# must match the model, and C must match Lean; no program may hit an
+# internal error.
 #   usage: scripts/fuzz-model-fifo.sh [COUNT [FIRST_SEED]]
 set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,7 +20,7 @@ for ((s=first; s<first+n; s++)); do
   python3 -I "$root/scripts/models/event_fifo.py" "$s" "$tmp/p.exp" > "$tmp/p.verse" 2> "$tmp/gen.err" ||
     { bad=$((bad+1)); echo "GENERATOR FAILED seed $s: $(tail -1 "$tmp/gen.err")"; continue; }
   rm -f "$tmp/p.vbc"
-  timeout 120 "$ov" run "$tmp/p.verse" --event-fifo --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.err"
+  timeout 120 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.err"
   if [[ $le != 0 ]]; then
     bad=$((bad+1)); save; echo "LEAN EXIT $le seed $s (saved fuzz-model-fifo-$s.verse): $(head -c 200 "$tmp/l.err")"; continue
   fi

@@ -1,0 +1,6 @@
+main signals
+awaiter got 1
+main after signal
+sleeper wakes
+root ends
+exit=0

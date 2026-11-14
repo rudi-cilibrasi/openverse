@@ -133,33 +133,42 @@ raceMark(A:[]void)<suspends><computes>:void = {}
 rushMark(A:[]void)<suspends><computes>:void = {}
 "
 
-/-- (#513) `concPrelude` for FIFO event resumption: the scheduler keeps the
-    root running (`CurRoot`) and a list of the waiters `Signal` woke, in
-    its order (`WokenHead`, `WokenTail`, each task's `WokenNext`); a waiter
-    records the root it waits in (`WaitRoot`). The lowering patches the two
-    root fields' types to its roots' and runs the woken ones' roots in that
-    order (`lowerConcurrency`); the prelude's code never reads them. -/
-def concPreludeFifo : String :=
+/-- `concPrelude` in event mode (a program that uses an event type): the
+    Book's rule that a `Signal` resumes its awaiters inside it, in the
+    order they suspended, each until it waits again or ends (the Book's
+    API, `event`'s `Signal`; docs/research/scheduler-conformance.md,
+    "Awaiters run inside `Signal`"). The scheduler keeps the root running
+    (`CurRoot`, which `$Run`, the `start` functions and `$wakeRoot` set
+    around a root's run), a probe flag (a `rush` loser's one poll as a root
+    of its own), the depth of the `Signal`s running (`Drain`) and `Main`'s
+    task. A waiter records the root it waits in at each poll (`WaitRoot`, a
+    statement the lowering adds), is pending from its `Signal` until its
+    turn, and an event's (`Ev`) is told from a task's. `signalAll` takes
+    the event's round, marks each awaiter in it, then resumes each, in
+    order, through `$wakeRoot`, whose body the lowering gives (a dispatch
+    on the root's class). Inside a `Signal`, only an event awaiter's turn
+    goes on: a sleep that expired and a task wait report waiting and ask
+    for another pass. The two root fields are typed `?int` here and patched
+    to the roots' type in the class table by the lowering; the prelude's
+    code never reads them. -/
+def concPreludeEvents : String :=
   let s := concPrelude
   let s := s.replace "    var CurTask:taskBase = taskBase{}\n"
-    "    var CurTask:taskBase = taskBase{}\n    var CurRoot:?int = false\n    var WokenHead:?taskBase = false\n    var WokenTail:?taskBase = false\n    var Probe:logic = false\n"
+    "    var CurTask:taskBase = taskBase{}\n    var CurRoot:?int = false\n    var Probe:logic = false\n    var Drain:int = 0\n    var MainTask:taskBase = taskBase{}\n"
   let s := s.replace "    var CancelReq:logic = false\n"
-    "    var CancelReq:logic = false\n    var WaitRoot:?int = false\n    var WokenNext:?taskBase = false\n    var Pending:logic = false\n"
-  -- (only a waiter this `Signal` wakes: a record already done, of a wait
-  -- that was cancelled, which its `defer:` marked, is no waiter)
-  let s := s.replace "            set W.Got = option{X}\n            set W.Done = true\n            if (S := W.Sch?) then set S.Progress = true\n"
-    "            WasDone := W.Done\n            set W.Got = option{X}\n            set W.Done = true\n            if (S := W.Sch?):\n                set S.Progress = true\n                if (not WasDone?):\n                    set W.Pending = true\n                    set W.WokenNext = false\n                    if (WT := S.WokenTail?) then set WT.WokenNext = option{W} else set S.WokenHead = option{W}\n                    set S.WokenTail = option{W}\n"
-  -- (a woken waiter goes on only at its turn, when the drain unmarks it: a
-  -- task resumed for another's turn, an arm's sibling, leaves it waiting)
-  let s := s.replace "    if (F.T.Done?) then return 1\n" "    if (F.T.Done?, not F.T.Pending?) then return 1\n"
-  -- (a probe, `Probe`: a poll that only records the root each waiter waits
-  -- in, and goes on nowhere, for a `rush` loser that becomes a task)
-  let s := s.replace "waitResume(F:waitf, C:sched):int =\n" "waitResume(F:waitf, C:sched):int =\n    if (C.Probe?) then return 0\n"
-  s.replace "sleepResume(F:sleep, C:sched):int =\n" "sleepResume(F:sleep, C:sched):int =\n    if (C.Probe?) then return 0\n"
+    "    var CancelReq:logic = false\n    var WaitRoot:?int = false\n    var Pending:logic = false\n    var Ev:logic = false\n"
+  let s := s.replace "waitResume(F:waitf, C:sched):int =\n    if (F.T.Cancelled?):\n        set C.CancelCur = true\n        return 0\n    if (F.T.Done?) then return 1\n    if (F.Pc = 0):\n        set F.Pc = 1\n        set F.T.Sch = option{C}\n    0\n" "waitResume(F:waitf, C:sched):int =\n    if (C.Probe?) then return 0\n    if (F.Pc = 0):\n        set F.Pc = 1\n        set F.T.Sch = option{C}\n    else if (C.Drain > 0, not F.T.Ev?):\n        if (F.T.Done? or F.T.Cancelled?) then set C.Progress = true\n        return 0\n    if (F.T.Cancelled?):\n        set C.CancelCur = true\n        return 0\n    if (F.T.Done?, not F.T.Pending?) then return 1\n    0\n"
+  let s := s.replace "signalAll(E:event(t), X:t where t:type):void =\n    var Cur:?evrec(t) = E.Head\n    set E.Head = false\n    set E.Tail = false\n    loop:\n        if (W := Cur?):\n            set W.Got = option{X}\n            set W.Done = true\n            if (S := W.Sch?) then set S.Progress = true\n            set Cur = W.Next\n        else:\n            break\n" "signalAll(E:event(t), X:t where t:type):void =\n    var Cur:?evrec(t) = E.Head\n    set E.Head = false\n    set E.Tail = false\n    First:?evrec(t) = Cur\n    loop:\n        if (W := Cur?):\n            if (not W.Done?):\n                set W.Got = option{X}\n                set W.Done = true\n                set W.Pending = true\n            set Cur = W.Next\n        else:\n            break\n    set Cur = First\n    loop:\n        if (W := Cur?):\n            if (W.Pending?):\n                set W.Pending = false\n                if (S := W.Sch?):\n                    set S.Drain += 1\n                    wakeRoot(W, S)\n                    set S.Drain -= 1\n            set Cur = W.Next\n        else:\n            break\nwakeRoot(W:taskBase, S:sched):void = {}\n"
+  let s := s.replace "    W := evrec(t){}\n" "    W := evrec(t){Ev := true}\n"
+  let s := s.replace "    defer:\n        set W.Done = true\n    WaitDone(W)\n"
+    "    defer:\n        set W.Done = true\n        set W.Pending = false\n    WaitDone(W)\n"
+  let s := s.replace "sleepResume(F:sleep, C:sched):int =\n" "sleepResume(F:sleep, C:sched):int =\n    if (C.Probe?) then return 0\n"
+  s.replace "    if (C.Now >= F.Wake):\n        return 1\n"
+    "    if (C.Now >= F.Wake):\n        if (C.Drain > 0):\n            set C.Progress = true\n            return 0\n        return 1\n"
 
-def concTops (owned : List String := []) (fifo : Bool := false) : Except String (List STop) :=
-  parsePrelude (if fifo then concPreludeFifo else concPrelude) (owned ++ (if fifo then ["CurRoot", "WokenHead",
-    "WokenTail", "WaitRoot", "WokenNext", "WT", "WasDone", "Pending", "Probe"] else []) ++ ["sched", "Now", "Next", "sleep", "Pc", "Secs", "Wake", "sleepNew",
+def concTops (owned : List String := []) (events : Bool := false) : Except String (List STop) :=
+  parsePrelude (if events then concPreludeEvents else concPrelude) (owned ++ (if events then ["CurRoot",
+    "WaitRoot", "Pending", "Probe", "Drain", "MainTask", "Ev", "First", "wakeRoot"] else []) ++ ["sched", "Now", "Next", "sleep", "Pc", "Secs", "Wake", "sleepNew",
     "sleepInit", "sleepResume", "Sleep", "Ticks", "syncMark", "raceMark", "S", "F", "C", "N", "R", "A",
     "Progress", "Roots", "taskBase", "Done", "Result", "waitf", "T", "X", "waitNew", "waitInit", "waitResume",
     "WaitDone", "Await", "spawnMark", "t", "Sch", "Dead", "evrec", "Got", "Next", "Head", "Tail", "Cur", "W", "L", "V",
