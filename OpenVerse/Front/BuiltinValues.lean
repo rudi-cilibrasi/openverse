@@ -81,4 +81,21 @@ def wrappers (tops : List STop) : List STop :=
       some (.fn p n params [] fx (.name r) call)
     | none => none
 
+/-- Primitive ToString wrappers share the built-in family's packed domain. -/
+def toStringMarker : String := "$builtinToString"
+
+/-- A program's `ToString` overloads extend the primitive ones. Materialize
+    the primitives only in scopes defining their own `ToString`, so ordinary
+    overload resolution checks their domains, arguments and effects together.
+    The hidden call keeps the primitive independent of the program's name. -/
+def toStringOverloads (tops : List STop) : List STop :=
+  let names : List (Pos × String) := (tops.filterMap fun
+    | .fn p n .. => if (n.splitOn "::").getLast? == some "ToString" then some (p, n) else none
+    | _ => none).foldl (fun names entry =>
+      if names.any (·.2 == entry.2) then names else names ++ [entry]) []
+  names.flatMap fun (p, n) =>
+    ["int", "float", "char", "char32", "string"].map fun ty =>
+      .fn p n [{ name := "$value", ty := .name ty }] [] ["computes", toStringMarker] (.name "string")
+        (.app p (.ident p "$ToString") [.ident p "$value"] false)
+
 end OpenVerse.Front.BuiltinValues

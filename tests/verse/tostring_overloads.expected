@@ -1,0 +1,8 @@
+label 7
+[label 8]
+sum 7; scaled 21
+9
+primitive 4 1.500000 x y text
+[local 11] 9
+12
+exit=0

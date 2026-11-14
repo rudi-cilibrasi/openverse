@@ -1490,9 +1490,9 @@ partial def parseInterp (parts : List StrPart) : PM (List SPart) := do
         if !rest.isEof then perr rest "unexpected tokens in interpolation"
         set saved
         let e : SExpr := match items.toList with
-          | [e@(.decl _ n _ _ _)] => if n.startsWith "?" then .app first.pos (.ident first.pos "ToString") [e] false else e
+          | [e@(.decl _ n _ _ _)] => if n.startsWith "?" then .app first.pos (.ident first.pos "$interpolationArgs") [e] false else e
           | [e] => e
-          | es => .app first.pos (.ident first.pos "ToString") es false
+          | es => .app first.pos (.ident first.pos "$interpolationArgs") es false
         out := out.push (.code e)
   return out.toList
 

@@ -6756,8 +6756,8 @@ Tests/Literals/String.versetest:229	disagrees-refuses
 Tests/Literals/String.versetest:234	agrees
 Tests/Literals/String.versetest:237	agrees
 Tests/Literals/String.versetest:238	agrees
-Tests/Literals/String.versetest:242	disagrees-refuses
-Tests/Literals/String.versetest:243	disagrees-refuses
+Tests/Literals/String.versetest:242	agrees
+Tests/Literals/String.versetest:243	agrees
 Tests/Literals/String.versetest:245	agrees
 Tests/Literals/String.versetest:246	agrees
 Tests/Literals/String.versetest:249	agrees
@@ -6795,7 +6795,7 @@ Tests/Literals/String.versetest:315	agrees
 Tests/Literals/String.versetest:318	agrees
 Tests/Literals/String.versetest:321	agrees
 Tests/Literals/String.versetest:324	agrees
-Tests/Literals/String.versetest:decls	disagrees-refuses
+Tests/Literals/String.versetest:decls	agrees
 Tests/LiveVariables.versetest:6	agrees
 Tests/LiveVariables.versetest:12	agrees
 Tests/LiveVariables.versetest:18	disagrees-refuses
@@ -11728,8 +11728,8 @@ Tests/SoftwareTransactionalMemory.versetest:505	disagrees-accepts
 Tests/SoftwareTransactionalMemory.versetest:511	agrees
 Tests/SoftwareTransactionalMemory.versetest:decls	agrees
 Tests/StmCallbackErrors.versetest:11	not-translatable
-Tests/StringInterpolationPlus.versetest:14	disagrees-refuses
-Tests/StringInterpolationPlus.versetest:decls	disagrees-refuses
+Tests/StringInterpolationPlus.versetest:14	agrees
+Tests/StringInterpolationPlus.versetest:decls	agrees
 Tests/Subtype.versetest:66	agrees
 Tests/Subtype.versetest:67	agrees
 Tests/Subtype.versetest:68	agrees

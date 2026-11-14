@@ -61,7 +61,7 @@ MEM_BYTES = 4 * 1024 ** 3
 # ---------------------------------------------------------------------------
 
 
-def mask(text):
+def mask(text, implicit=None):
     out = list(text)
     n = len(text)
     # the stack of lexical modes: ["code", 0], ["str", 0] or ["interp", brace depth]
@@ -88,7 +88,7 @@ def mask(text):
                 i += 1
             elif c == "{":
                 out[i] = " "
-                stack.append(["interp", 0])
+                stack.append(["interp", 0, i + 1])
                 i += 1
             elif c == "\n":  # an unterminated string ends with its line
                 stack.pop()
@@ -160,6 +160,9 @@ def mask(text):
                 stack[-1][1] += 1
             elif c == "}":
                 if stack[-1][1] == 0:
+                    if implicit is not None and any(
+                            not c.isspace() for c in out[stack[-1][2]:i]):
+                        implicit.add("ToString")
                     out[i] = " "
                     stack.pop()
                     i += 1
@@ -498,6 +501,13 @@ def idents(mtext):
     return set(IDENT.findall(mtext))
 
 
+def implicit_uses(text):
+    """Names called by syntax, absent from the masked identifiers."""
+    implicit = set()
+    mask(text, implicit)
+    return implicit
+
+
 def decl_names(mtext):
     """The names a top-level definition defines (from its masked text)."""
     first = mtext.lstrip()
@@ -606,9 +616,9 @@ def visible(decls, tags):
 OPERATORS = {"operator", "prefix", "postfix"}
 
 
-def closure(decls, mtext):
+def closure(decls, mtext, implicit=()):
     """The definitions a text needs, transitively, by the names it mentions."""
-    need = idents(mtext)
+    need = idents(mtext) | set(implicit)
     defined = set().union(*[d.names for d in decls]) if decls else set()
     taken = [False] * len(decls)
     changed = True
@@ -701,7 +711,7 @@ def build_cases(book, rel):
             decls.append(Decl(names, it.text, it.mtext, it.tags, set(), harness=True))
         else:
             decls.append(Decl(module_names(it.text, it.mtext), it.text, it.mtext, it.tags,
-                              idents(it.mtext)))
+                              idents(it.mtext) | implicit_uses(it.text)))
     cases = []
     seen = {}
 
@@ -716,9 +726,9 @@ def build_cases(book, rel):
         cases.append(c)
         return c
 
-    def prelude_for(mtext, tags):
+    def prelude_for(mtext, tags, text):
         """Usings and the needed shared definitions, or a reason they cannot be had."""
-        need = closure(visible(decls, tags), mtext)
+        need = closure(visible(decls, tags), mtext, implicit_uses(text))
         if any(d.harness for d in need):
             return None, "harness: vpackage/vmodule"
         names = set().union(*[d.names for d in need]) if need else set()
@@ -756,7 +766,7 @@ def build_cases(book, rel):
                 main = "Main()<decides>:void = {\n%s\n}" % indent(body)
             else:
                 main = "Main()<decides>:void =\n%s" % indent(body)
-            pre, why = prelude_for(f.mbody, it.tags)
+            pre, why = prelude_for(f.mbody, it.tags, f.body)
             if why:
                 c.nt = why
                 continue

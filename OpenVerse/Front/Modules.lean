@@ -39,6 +39,7 @@
   is then ambiguous.
 -/
 import OpenVerse.Front.Access
+import OpenVerse.Front.BuiltinValues
 import Std.Data.HashSet
 
 namespace OpenVerse.Front
@@ -165,6 +166,29 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
     | .decl p n ty v x => do return .decl p n (← ty.mapM (goT p)) v (← go x)
     | a => go a
   match e with
+  | .str p parts => do
+    -- Resolve interpolation's implicit call in its lexical scope too.
+    -- Without a program definition the elaborator keeps its primitive path.
+    if !(parts.any fun | .code _ => true | _ => false) then return e
+    let name ← r.val p "ToString"
+    let custom := name != "ToString" || r.global p "ToString" || r.locals.any (·.1 == "ToString")
+    if !custom then return ← e.mapChildrenM go
+    let pieces ← parts.mapM fun
+      | .text s => pure (.str p [.text s])
+      | .code e => do
+        -- Several interpolated arguments form one implicit ToString call
+        -- (`parseInterp`), distinct from an explicit call used as the value.
+        let call := match e with
+          | .app p (.ident _ "$interpolationArgs") args false =>
+            .app p (.ident p "ToString") args false
+          | _ => .app e.pos (.ident e.pos "ToString") [e] false
+        go call
+    -- Concatenation is an ordinary `+`: a program's ToString and `+` may
+    -- deliberately produce a value other than a string (the Book's tests,
+    -- StringInterpolationPlus). Keep their evaluation interleaved.
+    match pieces with
+    | [] => return .str p []
+    | first :: rest => return rest.foldl (fun a b => .bin p "+" a b) first
   | .ident p n => do
     -- (`D<constructor>(…)`, a delegation: `D` or `M.D`)
     if let some d := delegationHead? n then
@@ -464,7 +488,8 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
     | .fn _ n .. => isExt n
     | .classDef _ _ _ _ _ _ _ _ ms => ms.any fun | .fn _ n .. => isExt n | _ => false
     | _ => false
-  if modules.isEmpty && (markers openMarker?).isEmpty && (markers (afterPrefix? qualifierMarker)).isEmpty && !hasExt then
+  let hasToString := real.any fun top => (BuiltinValues.scanTop top).2.contains "ToString"
+  if modules.isEmpty && (markers openMarker?).isEmpty && (markers (afterPrefix? qualifierMarker)).isEmpty && !hasExt && !hasToString then
     return real
   -- (the access levels written on the definitions and modules, Book of
   -- Verse ch. 12: `Access`)
