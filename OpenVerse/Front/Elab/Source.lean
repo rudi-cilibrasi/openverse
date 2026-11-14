@@ -341,7 +341,7 @@ partial def checkSpawnExits (tops : List STop) : Except String Unit := do
     only allowed inside control-blocks", 3675). -/
 def checkProfiles (tops : List STop) : Except String Unit := do
   let profile? : SExpr → Option SExpr :=
-    Refine.findPart (fun | .decl _ n .. => n.startsWith "$profile" | _ => false) false
+    Refine.findPart (fun | .decl _ n .. => n.startsWith profilePrefix | _ => false) false
   let refuse (p : Pos) (what : String) : Except String Unit :=
     throw s!"{p.show}: profile is not allowed in {what}: an initializer; it measures code of a function's (Book of Verse tests, profile_simple.versetest)"
   for t in tops do

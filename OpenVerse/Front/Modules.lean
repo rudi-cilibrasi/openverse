@@ -356,7 +356,8 @@ def STop.specPlaces : STop → List (EffectPolicy.Place × List String)
     access level where one may go (`EffectPolicy.checkPlace`). -/
 def resolveSpecifiers (tops : List STop) : Except String (List STop) := do
   let scopeDef? : STop → Option (Pos × String × List String × List String) := fun
-    | .const p n specs none (.app _ (.ident _ "$scope") refs false) =>
+    | .const p n specs none (.app _ (.ident _ h) refs false) =>
+      if h != scopeHead then none else
       some (p, n, specs, refs.filterMap fun | .ident _ r => some r | _ => none)
     | _ => none
   let scopes := tops.filterMap scopeDef?

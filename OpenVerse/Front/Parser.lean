@@ -310,7 +310,12 @@ def profileOf (p : Pos) (tag : Option SExpr) (body : SExpr) : PM SExpr := do
   if body == .block body.pos [] then throw s!"{p.show}: profile needs a body: the code it measures"
   -- (the tag, or "", in `$profileL_C`, which marks the block: `checkProfiles`)
   let tag := tag.getD (.str p [])
-  return .block p [SExpr.decl p s!"$profile{p.line}_{p.col}" (some (.name "string")) false tag, body]
+  return .block p [SExpr.decl p s!"{profilePrefix}{p.line}_{p.col}" (some (.name "string")) false tag, body]
+
+/-- The name of a parameter written with no name, `(:t)`, `$unnamedI`: an
+    extension method's receiver so written is `$receiver`
+    (`parseExtensionHead?`). -/
+def unnamedPrefix : String := "$unnamed"
 
 /-- At a `(`: whether its parameters end with the `)` right before a `=>`,
     a lambda's (`some true`), or not (`none`). -/
@@ -345,7 +350,7 @@ def STop.attrPlace : STop → String
     | .structDef .. => "struct"
     | .enumDef .. => "enum"
     | .typeAlias .. | .refineDef .. => "alias"
-    | .app _ (.ident _ "$scope") _ _ => "scope"
+    | .app _ (.ident _ h) _ _ => if h == scopeHead then "scope" else "data"
     | _ => "data"
   | .classDef _ _ _ _ _ _ isI .. => if isI then "interface" else "class"
 
@@ -1802,7 +1807,7 @@ partial def parseParamList (close : String := ")") : PM (Array SParam × Array T
     repeat
       let (q, pn, pty, named, dflt, inner) ← parseParamItem
       let dflt := dflt.map (·.substIdents σ)
-      let pn := if !inner.isEmpty then s!"$tuple{ps.size}" else if pn.isEmpty then s!"$unnamed{ps.size}" else pn
+      let pn := if !inner.isEmpty then s!"$tuple{ps.size}" else if pn.isEmpty then s!"{unnamedPrefix}{ps.size}" else pn
       for (n, ty, path) in inner do
         let e := path.foldl (fun e (i : Nat) => SExpr.app q e [.int q (Int.ofNat i)] false) (.ident q pn)
         σ := σ ++ [(n, e)]
@@ -1869,7 +1874,7 @@ def parseExtensionHead? : PM (Option (SParam × List TParam)) := do
     perr t "the receiver of an extension method is one parameter, (Name:type) or (:type), not a named one or one with a default"
   expectSym "."
   -- (an unnamed receiver's name, which no program can write)
-  return some ({ r with name := if r.name.startsWith "$unnamed" then "$receiver" else r.name }, tps.toList)
+  return some ({ r with name := if r.name.startsWith unnamedPrefix then "$receiver" else r.name }, tps.toList)
 
 /-- Why `(R:t).M` must be followed by its parameters. -/
 def noExtensionFields : String :=
@@ -2354,7 +2359,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) (par
       if a.identName? == some "scoped" && (← peekT 1).isSym "{" then
         bump
         let refs ← parseScopeRefs
-        tops := tops.push (.const t.pos name pre none (.app a.pos (.ident a.pos "$scope") (refs.map (.ident a.pos ·)) false))
+        tops := tops.push (.const t.pos name pre none (.app a.pos (.ident a.pos scopeHead) (refs.map (.ident a.pos ·)) false))
         continue
       -- `name := t`: a type alias, when `t` is written as only a type can be
 

@@ -73,6 +73,14 @@ def delegationPrefix : String := "$ctor:"
 def delegationHead (d : String) : String := delegationPrefix ++ d
 def delegationHead? (n : String) : Option String := afterPrefix? delegationPrefix n
 
+/-- The value of an access level's definition `S := scoped{M, …}`,
+    `$scope(M, …)`: `resolveSpecifiers` reads and takes it out. -/
+def scopeHead : String := "$scope"
+
+/-- The local that marks a `profile` block, `$profileL_C`, its tag's value
+    (`profileOf`): `checkProfiles` finds it. -/
+def profilePrefix : String := "$profile"
+
 /-- Surface types. -/
 inductive STy where
   /-- `int`, `logic`, `char`, `string`, `void` -/
@@ -625,7 +633,7 @@ partial def STop.definedNames : STop → List (Pos × String)
     (if n.startsWith "(" then [] else [(p, n)]) ++ tps.map (fun tp => (tp.pos, tp.name)) ++
       ps.flatMap (fun prm => (p, bareName prm.name) :: (prm.default.map SExpr.definedNames).getD []) ++ body.definedNames
   | .const p n _ _ body =>
-    -- (a module's marker, `$module:A::B`, defines `B`)
+    -- (a module's marker, `$module:A::B`, defines `A::B`)
     [(p, (moduleMarker? n).getD n)] ++ body.definedNames
   | .classDef p n _ tps _ _ _ fs ms =>
     (p, n) :: tps.map (fun tp => (tp.pos, tp.name)) ++
