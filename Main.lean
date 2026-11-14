@@ -38,29 +38,26 @@ def runProg (P : Prog) (fuel : Nat) : IO UInt32 := do
     | .err k => IO.eprintln s!"error: {errName k}"; return 2
 
 def usage : String :=
-  "usage: openverse run FILE.verse [--no-choice] [--event-fifo] [--signal-no-rollback] [--extended-defaults] [--fuel N] [--emit FILE.vbc] [ARG…] [do EXPR]\n" ++
+  "usage: openverse run FILE.verse [--no-choice] [--signal-no-rollback] [--extended-defaults] [--fuel N] [--emit FILE.vbc] [ARG…] [do EXPR]\n" ++
   "                                               run Main() (or EXPR) with the reference interpreter;\n" ++
   "                                               the ARGs are the program's Args:[]string; --emit also\n" ++
   "                                               writes what emit would, compiling the program once\n" ++
-  "       openverse emit FILE.verse [--no-choice] [--event-fifo] [--signal-no-rollback] [--extended-defaults] -o FILE.vbc [ARG…] [do EXPR]\n" ++
+  "       openverse emit FILE.verse [--no-choice] [--signal-no-rollback] [--extended-defaults] -o FILE.vbc [ARG…] [do EXPR]\n" ++
   "                                               compile to OVBC for the C runtime (cverse)\n" ++
-  "       openverse check FILE.verse [--no-choice] [--event-fifo] [--signal-no-rollback] [--extended-defaults]\n" ++
+  "       openverse check FILE.verse [--no-choice] [--signal-no-rollback] [--extended-defaults]\n" ++
   "                                               parse, elaborate and check only\n" ++
-  "       openverse core FILE.verse [--no-choice] [--event-fifo] [--signal-no-rollback] [--extended-defaults]\n" ++
+  "       openverse core FILE.verse [--no-choice] [--signal-no-rollback] [--extended-defaults]\n" ++
   "                                               print the elaborated Verse Core\n" ++
   "       --no-choice excludes |, first, for/generators and ranges from all loaded source;\n" ++
   "       it may also precede the command or file. In run/emit, -- passes literal Args.\n" ++
-  "       --event-fifo resumes the tasks an event's Signal wakes in the order they began to wait (#513).\n" ++
   "       --signal-no-rollback refuses an event's Signal that a failure context may call (#515).\n" ++
   "       --extended-defaults retains extended field defaults without a convergence assertion (#511).\n" ++
   "       openverse example NAME [--emit FILE.vbc] | openverse examples"
 
-/-- The compiler's opt-in semantic policies: FIFO event resumption (#513,
-    `--event-fifo`), no event signal in a failure context (#515,
-    `--signal-no-rollback`), and extended field defaults kept without a
-    convergence assertion (#511, `--extended-defaults`). -/
+/-- The compiler's opt-in semantic policies: no event signal in a failure
+    context (#515, `--signal-no-rollback`), and extended field defaults kept
+    without a convergence assertion (#511, `--extended-defaults`). -/
 structure Policies where
-  eventFifo : Bool := false
   signalNoRollback : Bool := false
   extendedDefaults : Bool := false
 
@@ -78,7 +75,7 @@ def loadAndCompile (file : String) (args : List String) (doExpr : Option String)
   | .ok (tops, mentionsArgs) =>
     -- (OPENVERSE_DEBUG=1: an internal error also prints the rejected Verse Core)
     let debug := (← IO.getEnv "OPENVERSE_DEBUG").any fun v => v != "" && v != "0"
-    match Front.compileTopsWarned tops args mentionsArgs doExpr debug profile pol.eventFifo
+    match Front.compileTopsWarned tops args mentionsArgs doExpr debug profile
         (extendedDefaults := pol.extendedDefaults) (signalNoRollback := pol.signalNoRollback) with
     | .error e => return .error e
     | .ok (P, warnings) =>
@@ -114,7 +111,6 @@ def defaultFuel : Nat := 100000000
 def runCmd (file : String) (fuel : Nat) (emit : Option String)
     (profile : Front.SourceProfile) (pol : Policies := {}) : List String → IO UInt32
   | "--no-choice" :: rest => runCmd file fuel emit .choiceFree pol rest
-  | "--event-fifo" :: rest => runCmd file fuel emit profile { pol with eventFifo := true } rest
   | "--signal-no-rollback" :: rest => runCmd file fuel emit profile { pol with signalNoRollback := true } rest
   | "--extended-defaults" :: rest => runCmd file fuel emit profile { pol with extendedDefaults := true } rest
   | "--fuel" :: n :: rest => runCmd file n.toNat! emit profile pol rest
@@ -134,14 +130,12 @@ def profilePrefix (profile : Front.SourceProfile) : List String → Front.Source
 def optionsPrefix (profile : Front.SourceProfile) (pol : Policies) :
     List String → Front.SourceProfile × Policies × List String
   | "--no-choice" :: rest => optionsPrefix .choiceFree pol rest
-  | "--event-fifo" :: rest => optionsPrefix profile { pol with eventFifo := true } rest
   | "--signal-no-rollback" :: rest => optionsPrefix profile { pol with signalNoRollback := true } rest
   | "--extended-defaults" :: rest => optionsPrefix profile { pol with extendedDefaults := true } rest
   | rest => (profile, pol, rest)
 
 def emitCmd (file : String) (profile : Front.SourceProfile) (pol : Policies := {}) : List String → IO UInt32
   | "--no-choice" :: rest => emitCmd file .choiceFree pol rest
-  | "--event-fifo" :: rest => emitCmd file profile { pol with eventFifo := true } rest
   | "--signal-no-rollback" :: rest => emitCmd file profile { pol with signalNoRollback := true } rest
   | "--extended-defaults" :: rest => emitCmd file profile { pol with extendedDefaults := true } rest
   | "-o" :: out :: rest =>

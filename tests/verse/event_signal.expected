@@ -1,10 +1,10 @@
-signalled 1
 a got 1
 b got 1
-signalled 2 and 3
+signalled 1
 a got 2
-main after signal
+signalled 2 and 3
 waiter woke with go
+main after signal
 waiter said ok go
 timeout
 got 10

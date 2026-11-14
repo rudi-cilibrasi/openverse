@@ -1,5 +1,6 @@
-# (#513) --event-fifo: a rush arm that becomes a task while its Sleep is due
-# goes on at its turn, as without the option (no event: the same output)
+# (#513) a rush arm that becomes a task while its Sleep is due goes on at
+# its turn in the scheduler's pass (no event: the same output as before
+# awaiters ran inside Signal)
 Main()<suspends>:void =
     rush:
         block:

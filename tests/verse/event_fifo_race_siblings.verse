@@ -1,6 +1,7 @@
-# FIFO event resumption (#513, --event-fifo): one Signal wakes B and both arms of T's race,
-# B first (it waited first). r1, the earlier arm, wins at its turn; r2, woken but not yet
-# resumed, is cancelled with the race and does not go on. The default order runs T first.
+# Awaiters run inside Signal (#513): one Signal wakes B and both arms of T's
+# race, B first (it waited first). r1, the earlier arm, wins at its turn;
+# r2, woken but not yet resumed, is cancelled with the race and does not go
+# on; all of it before the Signal returns
 W(Tag:string, E:event(int))<suspends>:void =
     V := E.Await()
     Print("{Tag} got {V}")

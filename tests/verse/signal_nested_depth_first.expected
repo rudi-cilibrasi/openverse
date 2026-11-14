@@ -1,0 +1,6 @@
+r1 got 1, signals
+y1 got 2
+r1 after its signal
+x2 got 1
+main after signal
+exit=0

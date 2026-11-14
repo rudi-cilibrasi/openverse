@@ -1,4 +1,4 @@
-# FIFO (#513): a cancelled wait's record does not run its task
+# Awaiters run inside Signal (#513): a cancelled wait's record does not run its task
 Sleeper(Tag:string, Delay:float)<suspends>:void =
     Sleep(Delay)
     Print("{Tag} woke from sleep")

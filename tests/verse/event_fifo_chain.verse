@@ -1,6 +1,7 @@
-# FIFO event resumption (#513, --event-fifo): a chain. A (spawned first, waiting last) is woken
-# after B, and signals F, where C has waited since the start: C goes on after every task the
-# first Signal woke. The default order runs A, then C, then B.
+# Awaiters run inside Signal (the Book's API, event's Signal; #513): a
+# chain. A (spawned first, waiting last) is resumed after B and signals F,
+# where C has waited since the start: C goes on inside A's Signal, before A
+# goes on, and all of it before the first Signal returns
 W(Tag:string, E:event(int))<suspends>:void =
     V := E.Await()
     Print("{Tag} got {V}")

@@ -1,0 +1,11 @@
+send 1
+got 1
+sent 1
+send 2
+got 2
+sent 2
+send 3
+got 3
+sent 3
+both done
+exit=0

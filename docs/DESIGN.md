@@ -2380,7 +2380,10 @@ The scheduler is its class's prototype, a literal any code can name, so
 an immediate function can spawn too. The spawn site calls
 `$spawnK$start(sched, $spawnK$new(sched, T, args…))`,
 which adds the root's frame to the scheduler's `Roots` and runs it up to
-its first suspension point. A spawned method with several implementations
+its first suspension point. A `spawn` may be in a failure context (the
+Book's tests): in a suspends function, one in a condition or a filter is
+started there (`Suspend.inlineSpawns`), not at a suspension point; in a
+context that fails, the link and the first run are undone with it. A spawned method with several implementations
 is a dispatch on the receiver's class rather than one call (#173): its
 chain of tests becomes a suspends function `$dispatchK` of the slots the
 chain uses (the receiver, the arguments, and the slots each test binds the
@@ -2450,36 +2453,70 @@ started there records the task as its owner.
 An `event(t)` keeps a list of waiter records (each an `$evrec(t)`, also
 below `$taskBase`). `E.Await()` first drops the records at the head that are
 done (woken, or of waits that were cancelled, which mark their record in a
-`defer:`), then appends one and waits at `$WaitDone`. `E.Signal(X)` gives
-`X` to every record in the list, marks it done, and empties the list. A record learns the scheduler on its first poll, so
-`Signal`, which has no scheduler of its own, can make the scheduler pass
-again in the same tick.
+`defer:`), then appends one and waits at `$WaitDone`. `E.Signal(X)` takes
+the list and leaves the event an empty one; in a program without event
+types nothing else concerns events.
 
-**FIFO resumption (opt-in, `Options.eventFifo`, `--event-fifo`, #513).**
-The prelude is `concPreludeFifo`: the scheduler keeps the root running
-(`$CurRoot`, set by `$Run` around `Main`'s and each root's run, and by a
-spawn's or branch's `start` around its first run) and a list of the
-waiters `Signal` woke (`$WokenHead`/`$WokenTail`, each `$taskBase`'s
-`$WokenNext`), which `signalAll` appends to in the event's order. A waiter
-records the root it waits in (`$WaitRoot`) each time `$waitResume` polls
-it: a statement the lowering adds after its slots' initialisations, as the
-two root fields are typed `?rootAny` only in the class table (the
-prelude's code never touches them, so no temporary of their written type,
-`?int`, holds one). After `Main`'s run and after each root's in a pass,
-`$Run` drains the list: each woken waiter's root, not done, runs (`Main`
-at its turn too), and the waiters those runs wake join the same loop. A
-woken waiter is `$Pending` until its turn (`signalAll` marks it, the drain
-unmarks it), and `$waitResume` reports a pending one as still waiting: a
-task resumed for one waiter's turn goes on only there, leaving its other
-woken arms for their turns, and no poll lets a woken task go on before
-its turn. A `rush` arm that goes on after the `rush` becomes a root
-that the function no longer runs, while the waiters in it recorded the
-function's: its wrapper's `start`, which registers it, also probes it
-once as its own root (`$CurRoot` the wrapper, `$Probe` set: `waitResume`
-records the root and `waitResume` and `sleepResume` report waiting, so
-the probe goes on nowhere), and a `Signal` before its first turn gives it
-its turn in their order. The default prelude and lowering are unchanged, so a program
-compiled without the option is byte-identical to before.
+**Awaiters inside `Signal` (event mode, #513;
+docs/research/scheduler-conformance.md, "Awaiters run inside `Signal`").**
+A program whose source uses an event type (`Admitted.usesEvents`) gets
+`concPreludeEvents`, and the Book's rule: a `Signal` resumes its awaiters
+inside it, in the order they suspended, each until it waits again or ends.
+`signalAll` marks each record of the round it took that is not done (its
+value, done, `$Pending`), then, in the list's order, unmarks each one still
+pending and resumes the root it was last polled in (`$WaitRoot`, which
+`waitResume` records from the scheduler's `$CurRoot` at every poll; `$Run`,
+the `start` functions and the wake functions set `$CurRoot` around a root's
+run), through `$wakeRoot`, a prelude stub whose body the lowering writes: a
+dispatch on the root's class to a wake function per kind of root (`Main`'s
+frame, a spawned call's root, a branch's or `rush` loser's wrapper). A
+pending record reports waiting, so a task resumed for one record's turn
+goes on only there. The scheduler's `$Drain` counts the `Signal`s running,
+one inside another; inside one, `waitResume` reports a task wait that was
+polled before as waiting and `sleepResume` an expired sleep, each asking
+for another pass, so that only an event record's turn goes on and a task's
+other waits keep their turn in the pass.
+
+A root whose code runs is resumed by entering its code again. Each root
+records that its code runs: a field after the frame's last for `Main` and a
+spawned call's root (set by the trampoline and by `$Run` and the wake
+around the run), one after the wrapper's three for a branch's or `rush`
+loser's (set by its trampoline around the arm's run). The suspends
+functions from which `signalAll` is reachable (`SignalAdmission.reaching`,
+which follows a spawned call too) are *marked* (`Suspend.Env.marks`): each
+region of theirs records that it runs, in its suspension-point field, -2
+while it runs code between sites (when it starts, and after each site it
+passes) and `-(k+2)` while the code of its `sync`, `race` or `rush` at site
+`k` runs the arms (`k` again before it waits there). Entering a region at
+-2 gives 0 at once; at `-(k+2)` it runs the site's arms that started and
+are pending and gives 0 (`St.partials`, the code `region` puts at the
+entry); at `k`, where a call's callee is running, the seek reaches the
+callee, which by the same rules gives 0. So entering a running root's
+code walks down it, running the arms that wait beside the running ones,
+each to its next wait or end, and returns. The first arm of a site that
+ends or returns in such a walk is recorded in a frame field (`i`, or
+`n + i` for a return, with the value it returned when the function has
+one), which the code that runs the arms reads after each arm it ran
+(`Suspend.concAtMarked`): an end wins a `race` or `rush` (the arms after it
+never start, the started ones are cancelled or go on when the running arm
+waits), a return makes the function return. A marked `race`'s arms write
+value slots of their own, the winner's copied to the race's, so an arm that
+ends after the winner does not change the value. A root that does not run
+is resumed as a spawn's first run resumes it: the cancel request saved and
+cleared, its trampoline run, what it recorded forgotten, a request taken for
+it unless it ended, and marked done if it ended (for `Main`, its frame's
+point -1, which `$Run` reads after each root's run). A spawned root's
+trampoline saves its task's `$Running`, as a branch's does, so that running
+it while a branch of its task runs leaves that run's bookkeeping alone. A
+request to cancel a running root found in a walk is dropped and the
+scheduler asked for another pass, whose poll asks again. Stopping a branch
+or `rush` loser whose arm runs (its function ended inside a `Signal` the arm
+made) only marks the wrapper done (its `stop` gives the wrapper's record);
+the wrapper's trampoline cancels the arm when the run returns pending. A
+`rush` arm that goes on after the `rush` is probed once as its own root
+(`$Probe`: `waitResume` records the root and every wait reports waiting),
+so that its waiters record it. Programs without event types, and in event
+mode the functions that are not marked, compile as before.
 
 **Signal admission (opt-in, `Options.signalNoRollback`,
 `--signal-no-rollback`, #515).** The front end records each call,
