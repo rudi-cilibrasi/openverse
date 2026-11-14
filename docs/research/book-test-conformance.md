@@ -2620,7 +2620,10 @@ verdicts. Six repository regressions cover tail returns, nested loops,
 returns in a `for`, tuple/array and joined contexts, suspension and
 cancellation cleanup, empty-value queries and rollback, and the refusal
 of loops whose breaks can give a normal `void` result. Core semantics,
-proofs, OVBC and the C runtime are unchanged.
+proofs, OVBC and the C runtime are unchanged. Two compiler-API real/dummy
+pairs also retain rollback of mutable metadata across unit and negation
+queries (#572); their lowered failure stays explicit for the metadata
+analysis.
 
 ## Ten causes to remove first
 

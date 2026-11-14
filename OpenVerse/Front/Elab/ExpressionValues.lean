@@ -82,7 +82,10 @@ partial def elabExprValuesWith
       -- does in an argument or assignment. Run the operand before its
       -- query fails, retaining the surrounding failure context's rollback.
       if t.isUnit || t == .never then
-        return ⟨.prim .query [← coerce p r .logic], .logic⟩
+        -- Keep the known false query explicit after the operand. Besides
+        -- avoiding a temporary, this lets metadata flow see that every
+        -- write in the surrounding condition is rolled back.
+        return ⟨.seq (← discardValue r) (.prim .query [.lit (.logic false)]), .logic⟩
       eerr p s!"'?' needs an option or logic, found {t.show}"
   | .neg p e =>
     -- The expected numeric type as a hint, as in `-Id(2.5)`.
