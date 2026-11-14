@@ -311,6 +311,10 @@ partial def checkForClauses (tops : List STop) : Except String Unit := do
     | .forE p cs b => do
       if cs.all literalClause then
         throw s!"{p.show}: this for has no generator (X : A, or X := A..B) and its clauses cannot fail, so it would run its body once: write X : A to iterate over A (Book of Verse ch. 7)"
+      -- (a filter that is a literal cannot fail: "Filters must be
+      -- failable", Book of Verse ch. 7, and its tests, for.versetest:223)
+      if let some c := cs.find? SExpr.isLiteral then
+        throw s!"{c.pos.show}: this filter of a for is a literal, which cannot fail: a filter must be able to fail (Book of Verse ch. 7, \"Filters must be failable\")"
       cs.forM go; go b
     | .structDef _ _ _ fs => fs.forM fun f => f.default.forM go
     | e => e.children.forM go
