@@ -2661,7 +2661,9 @@ Main():void =
 - **A type given as an argument.** A function's parameter `t:type` that the
   function uses as a type (`FalseOption(t:type):?t = false`, the Book's
   tests) is a type parameter whose argument the call writes:
-  `FalseOption(int)`, `Pair(int, 1, 2)` with `Pair(t:type, X:t, Y:t)`. The
+  `FalseOption(int)`, `Pair(int, 1, 2)` with `Pair(t:type, X:t, Y:t)`, and
+  in brackets for a `<decides>` function, `First[string, Xs]` with
+  `First(t:type, Xs:[]t)<decides>:t`. The
   function is generic over `t`, so checked once, and the call passes the
   type's witness, as a generic call does. A parameter `t:subtype(c)` or
   `t:castable_subtype(c)` used so is a bounded one (`where t:subtype(c)`,

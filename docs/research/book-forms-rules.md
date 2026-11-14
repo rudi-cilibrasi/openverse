@@ -904,6 +904,26 @@ operands keeps its code. **Left:**
 built-in, `types-other`); `TimSyntax.versetest:230`, `operator'+'(1,2)`
 called by its name in an expression (parse-only).
 
+## A type argument in a call in brackets
+
+**The rule.** A type given as an argument of a function that uses its
+parameter as a type is that type parameter's argument in a call in
+brackets, a `<decides>` function's, as in one in parentheses:
+`First[string, Xs]` with `First(t:type, Xs:[]t)<decides>:t`.
+
+**The Book.** Ch. 11, types as values, and the tests' calls in
+parentheses (`FalseOption(int)`, `ParametricTypes.versetest` 613-624;
+`False(int) = False(logic)`, `TypeParam.versetest` 57-60); a call of a
+`<decides>` function is written in brackets (ch. 8), and nothing sets one
+apart.
+
+**openverse before.** #612 rewrote the type arguments of calls in
+parentheses only: `First[string, Xs]` was "expected ?t, found string".
+
+**openverse now.** `TypeArguments.rewriteCalls` rewrites a call in
+either brackets. No program that compiled changes (such a call was
+refused).
+
 ## A `using` of a path that names nothing
 
 **The rule.** A `using{/p…}` of a path is of a package: openverse knows

@@ -89,9 +89,10 @@ partial def rewriteCalls (fns : List (String × List (Nat × String))) (tps : Li
     Except String SExpr := do
   let e ← e.mapChildrenM (rewriteCalls fns tps)
   match e with
-  | .app p h@(.ident _ f) args false =>
+  -- (a call in brackets of a `<decides>` function too, `First[string, Xs]`)
+  | .app p h@(.ident _ f) args bracket =>
     match fns.lookup f with
-    | some places => return .app p h (← rewriteArgs f places tps args) false
+    | some places => return .app p h (← rewriteArgs f places tps args) bracket
     | none => return e
   | e => return e
 
