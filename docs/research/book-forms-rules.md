@@ -1,8 +1,9 @@
 # Rules of the forms of expressions, statements and the library
 
 The rules openverse takes from the Book of Verse for the causes of [the map
-of forms](book-test-conformance.md#forms-of-expressions-statements-and-the-library-a-map),
-each pinned with the Book's words, its prose and its tests, at the
+of forms](book-test-conformance.md#forms-of-expressions-statements-and-the-library-a-map)
+and of [the map of the forms still on the
+list](book-test-conformance.md#the-forms-still-on-the-list-a-map), each pinned with the Book's words, its prose and its tests, at the
 revision the other notes pin
 ([`beaa719`](https://github.com/verselang/book/tree/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0)):
 a chapter is `docs/NN_*.md` and a line, a test `Tests/FILE:LINE`. Each
@@ -471,6 +472,25 @@ written as before and converted where its value is taken: a binding, an
 argument, a comparison's operand, a result, an operand of `and`). Then
 only the programs that take the value change, and the four cases agree.
 
+**Tried, and left** (after [the map of the forms still on the
+list](book-test-conformance.md#the-forms-still-on-the-list-a-map)): `X?` of
+a `logic` written as the query then the empty value, of type `true`, with
+`?` of a `true` failing, makes the four cases agree, and changes no
+program's output, messages or exit (722 programs of the oracle, every one
+of the corpus's concurrency, rational, float, scheduler and equality
+programs among them, all their bytes only). Taking the value off afterwards
+where the code drops it (one pass over each function's code: a
+sequence's first part, a condition, a filter, a loop's body) does not
+give the bytes back, because the elaborator's own forms take the value
+before any context drops it: an `or` binds its left operand's value to a
+temporary inside the condition it is in (`if ($6 := query(A) then $6 else
+query(B))`, the concurrency prelude's), and a `<decides>:void` function
+whose body ends in `Less?` converts that value to `void`, a `logic`'s with
+`()` after it, a `true`'s with nothing (the rational helpers'). So it needs
+the flag of the design, set by every context that drops a value, `or` and
+the conversions to `void` among them, which elaborates the query as
+before; the attempt is in the branch's history of this note only.
+
 ## A map literal's values with nothing in common
 
 **The rule.** With no value type expected, a map literal whose values
@@ -550,3 +570,406 @@ name of its own first (`$setRoot…`, a block `{R := root; set R.… = v}`),
 and writes a path's key of several values as their tuple. No program that
 compiled changes. **Left:** `set live` (VerseVM's live variables).
 
+
+## A `<persistable>` struct's enum
+
+**The rule.** An enum persists only when it is `<persistable>`: a
+`<persistable>` struct's field, and the value of a module-scoped `weak_map`
+keyed by a `<persistent>` class, may be of an enum only when the enum is
+`<persistable>`.
+
+**The Book.** Ch. 17 (`17_persistable.md:190`), among what cannot persist:
+"Non-persistable enums - Enums without `<persistable>` specifier cannot be
+used". The tests: `enum1 := enum: A` as a field `G:enum1` of a
+`struct<persistable>` is refused (`Tests/persistable.versetest:59`, 3662),
+as are the struct's other fields that do not persist (`:51`, `:55`, `:65`).
+
+**openverse before.** The parser took an enum's `<persistable>` and dropped
+it, and every enum was taken to persist.
+
+**openverse now.** An enum keeps its specifiers (`SExpr.enumDef`'s list:
+`<open>`, `<closed>`, `<persistable>`), and the two places that ask what
+persists, a `<persistable>` struct's fields (`typeEnvironment`) and a
+module-scoped variable's value (`ModuleVars.Defs.persists`), take an enum
+when it is `<persistable>`. No program that compiled changes: none of
+openverse's tests, generators or the corpus has an enum where a value must
+persist.
+
+## `void` given as a type argument
+
+**The rule.** `void` given as a type argument of a program's parametric
+class, interface or struct, written as a type or as a parent, is `true`:
+the type parameter bound to it takes the empty value alone. Inside the
+argument, `void` in an array, an option, a map's value or a tuple is
+`true` too (`box([]void)` is `box([]true)`); a function type's `void` stays
+(the shapes of `int->void` and `int->true` are two, [`true` as a
+type](#true-as-a-type)). A parameter or a local written `:void`, `:[]void`,
+still takes any value.
+
+**The Book.** Ch. 2, "Write the value, not the type name"
+(`02_primitives.md:1311-1316`): "`void` names a type; the unit value is
+`false` (or `()`). A parameter declared literally `:void` accepts any
+value, so passing the type name happens to work there. It does not work
+when `void` reaches the parameter through a type parameter, so write the
+value", with the tested example `holder909(void)` refusing
+`C.Method(void)` and taking `C.Method(false)`, and the warning
+(`:1354-1359`) that the error "reads *"expects a value of type `true`…"*".
+"Conversion is one-way" (`:1371-1374`): "Any value converts to `void`, and
+that extends through containers in ordinary parameter positions —
+`[]int` satisfies `[]void`. A *type parameter* bound to `[]void` is
+invariant, though, so only `[]void` (or `[]true`) fits there", tested with
+`box([]void){}.Put(Y)` refused for `Y:[]int`. The tests,
+`Tests/Void.versetest` 227-279: `class1(void){}.Foo(false)`, `.Foo()` and
+`.Foo(X)` with `X:void` valid, with `X:int` refused (`:246`, 3509);
+`class1([]void){}.Foo(X)` valid with `X:[]true`, refused with `X:[]int`
+(`:260`) and `X:?int` (`:274`); `class1(?void){}.Foo(X)` valid with
+`X:?true`. Prose and tests agree.
+
+**openverse before.** A type argument `void` took any value, as `void`
+written in place does.
+
+**openverse now.** `TyEnv.typeArgs` (`Elab/Context.lean`) gives a
+program's parametric type, where `resolveTy` resolves its application, its
+arguments with `Ty.voidArg`, and `classHierarchy` gives a parent's
+arguments `STy.voidArg` (so an inherited field or method is at `true`
+too). The library's types, the concurrency prelude's `task` and events
+(`PreludeNeeds.names`), keep `void`: `task(void)` is a spawn's of a `void`
+function. Messages say `tuple()`, openverse's name of the type.
+
+## `(q:)M(…)` in an override of `M`: warnings 2003 and 2004
+
+**The rule.** In a method that overrides `M`, a call `(q:)M(…)` of `Self`
+whose overload is the slot the method implements is a warning: it
+dispatches on `Self`'s class, so it calls the override itself again. The
+warning is 2003 ("should use super") when `q` is what `(super:)M` reaches,
+the implementation above, or the slot's interface when nothing above
+implements it, and 2004 when `q` is further up, which `(super:)` cannot
+reach. The program compiles.
+
+**The Book.** The tests alone,
+`Tests/Bugs/SOL-3564-CallingSuperClassMethodFromOverriddenMethod.versetest`:
+`F<override>():void= (a:)F() # 2003 - should use super` (`:7-12`); with
+`b` overriding between, `(a:)F() # 2004 - you can't reach a: as super:`
+(`:18-26`), likewise through an interface (`:32-40`, "ia: is not the
+immediate base override"); over an abstract class that does not implement
+it, `(ia:)F() # 2003 - should use super:` (`:45-52`); a qualified new
+method `(b:)F` calling `(a:)F()` is valid, "ok because we're not in a
+vcall scenario" (`:57-76`), and so are a call of another overload
+(`:139-146`) and a method's own qualifier in one that overrides nothing,
+"intentional recurrsion" (`:167-170`). The prose is silent.
+
+**openverse before.** Accepted, with no warning; such a call recursed
+until the fuel ran out.
+
+**openverse now.** `warnQualifiedSelfCall` (`Elab/Application.lean`),
+where `elabMemberApp` takes a method call through a value: a call written
+`(q:)M` of `Self`, in a method `M` of `Self`'s class whose slot is
+introduced above it (an override), whose slot the call's is, warns with
+`warnAt`; which of the two by `superImpl`, as `(super:)M` resolves. The
+cases `:57`, `:66` and `:80` reach openverse's refusal of a second method
+of one name first (`(b:)F` beside the inherited `F`, [After classes and
+subtyping](book-test-conformance.md#after-classes-and-subtyping)). No
+program that compiled changes but those that write such a call, which now
+warn.
+
+## An enum's value named after a reserved word
+
+**The rule.** An enum's value takes a reserved name (`reservedNames`: the
+names the Book's tests reserve, the built-in names and the effects') or an
+access specifier's name (`public`, `internal`, `protected`, `private`,
+`epic_internal`) only qualified with its enum, `(A:)public`; unqualified it
+is refused.
+
+**The Book.** Ch. 9 (`09_structs_enums.md:530-553`): "Qualification also
+allows you to use reserved words and keywords as enum values, which would
+otherwise cause errors", with the tested example `bad_enum19 := enum:
+public` (3532) and `(keyword_enum:)public  # OK: reserved word
+qualified`, "without qualification each of those three is an error". The
+tests, `Tests/QualifiedIdentifier.versetest`: `A := enum{ (A:)public }`
+valid, "even if they alias a reserved word" (`:313-314`), and `A := enum{
+public }` refused (`:315-316`, 3532), as `enum{ for }` is (`:320`, 3514).
+The test calls `public` "a reserved word with a built-in symbol" and `for`
+one "with no built-in symbol" (`:314`, `:319`): the access specifiers are
+the built-in symbols the chapters name; openverse takes them and its
+reserved names.
+
+**openverse before.** An enum's values were not among the names
+`checkReservedNames` reads, so `enum{ public }` and `enum{ decides }` were
+accepted.
+
+**openverse now.** `checkReservedNames` (`SourceRules.lean`) reads each
+enum's unqualified values. No program that compiled changes: none of
+openverse's tests, generators or the corpus names an enum's value so.
+
+## A type named at two numbers of type parameters
+
+**The rule.** A type alias may take the name of a parametric class,
+interface or struct of the same scope with another number of type
+parameters, defined before or after it: `class1() := class1(int)` beside
+`class1(t:type) := class…`. A use applied to the alias's number of type
+arguments is the alias (`class1()`, and a bare `class1` when the alias
+has none), and any other is the type's (`class1(string)`), in types,
+constructions, parents and values. One type and one alias share a name;
+two classes of one name, or an alias at the type's own number, are a name
+defined twice.
+
+**The Book.** The prose is silent; the tests write it, always as an
+alias of no parameters beside a parametric definition:
+`Tests/ParametricTypes.versetest:754-768` (`class1<public>() :=
+class1(int)` in a module beside `class1<public>(t:type) := class`, used as
+`class1()` in signatures and `class1():` as a construction), `:857-867`
+(an interface and a class, each with its `()` alias, `X:…interface1() =
+…class1(){}`); `Tests/Bugs/SOL-7503-ProblemWithQualification.versetest`
+(`struct_same_name() := struct_same_name(void)`, likewise of a class and
+an interface, with `struct_same_name(int){}` beside
+`struct_same_name(){}`); `Tests/Bugs/SOL-7849-…versetest` (`i() :=
+i(void)`, `c := class(i()) {}`, `c_int := class(i(int)) {}`);
+`Tests/QualifiedIdentifier.versetest:494-526` (in either order). Its
+refusals, `:537-570` (two interfaces of one name at one and two
+parameters, and "the cursed example"), are of their qualifiers (3612),
+and the BPVM's "limitations in the backend" (`:536`): openverse keeps two
+classes of one name refused, since its classes are keyed by name.
+
+**openverse before.** "'class1' is defined twice (only functions can be
+overloaded)"; every `archetype-blocks` case of
+`ParametricTypes.versetest` stopped there, as each includes the module
+`default_param`.
+
+**openverse now.** `checkDefinedOnce` (`SourceRules.lean`) takes one
+type and one alias of a name at two numbers of type parameters;
+`Aliases.expand` keeps, for each alias beside a type, the type's number
+(`Scope.typeArity`): `Scope.ty` writes a use out as the alias only at the
+alias's number, and leaves `class1(string)` to the type; a value or a
+construction naming the shared name names the type; the alias names the
+type at its own number without naming itself. Nothing after the aliases'
+pass knows the alias existed. No program that compiled changes.
+
+## A type as a value is no object
+
+**The rule.** A type as a value, of `type` or of a metatype below it
+(`subtype(c)`, `castable_subtype(c)`, `concrete_subtype(c)`), and an object
+of one of the program's classes or interfaces are disjoint: two overloads
+`F(:subtype(c))` and `F(:d)` are distinct, and a module's function may
+take the name of one around it with such parameters (functions overload
+across scopes, `checkNoShadowing`).
+
+**The Book.** Ch. 11 ("Type values"): a value of `subtype(c)` is a type,
+never an instance; ch. 10, "Shadowing and Qualification", and the tests'
+overloading across scopes (`Overloading.versetest` 41-43). The tests:
+`Tests/ParametricTypes.versetest` defines `F1(C:c0(int)):int` at the top
+level (`:45`) and `F1(:subtype(class1)):void` in the module
+`subtype_params` (`:717-719`), and every case of the file that names
+`F1` includes both; 29 of the file's cases agree once these are distinct.
+
+**openverse before.** A class and an interface overlapped unless the
+class was `<final>` and did not implement it, and `subtype(class1)` is an
+interface (`TypeValues`): "subtype_params.F1 has the name of the function
+F1, and a call could fit both".
+
+**openverse now.** `TyEnv.disjointStep` (`Types.lean`): a class or
+interface below `type` and one that is not are disjoint (no class of the
+program is below a metatype: their values' classes are the front end's,
+`$type:C`). The rule only admits overloads; no program that compiled
+changes.
+
+## A construction's `let:` and `block` clauses
+
+**The rule.** A construction `c{…}`, or an archetype block `c:`, may hold
+`let:` clauses, whose definitions (and only definitions) the field values
+after them see, and `block` clauses, which run where they are written and
+can neither fail nor `return`. The clauses and the field values run in
+the order written; the construction then takes the fields, its defaults
+and its class's own `block` clauses as before.
+
+**The Book.** Ch. 10, "Let Clauses in Archetypes"
+(`10_classes_interfaces.md:227-260`): "Archetype expressions (used to
+construct class and struct instances) can include `let` clauses that
+introduce local bindings", with the tested example `Square := rect: let:
+S:int = 4 …`, and "The `let` clause introduces bindings visible to
+subsequent field initializers. Unlike `block`, `let` permits only
+declarations"; "Order of Execution" (`:823-826`): "Field initializers
+execute in the order they are written in the archetype". The tests:
+`Classes/Constructor.versetest` 5 (`block:` then a field), 38 (`let: Y :=
+1` then `Property1 := Y`); `Bugs/FORT-687100-…versetest` 51, 66 (`X :=
+abc{ block { set Y = 5 } A := 10 …}`, then `Y = 5`);
+`Attributes/CustomClassVarAccessors.versetest:300` (`let:` before an
+accessor field). openverse's constructor functions took both already
+(their items, `Lowering`).
+
+**openverse before.** "a struct field is given as Name := value".
+
+**openverse now.** `constructionClauses?` (`Elab/Expr.lean`), where
+`elabConstruct` takes a construction: one with a clause is the block of
+its clauses in order, a `let:`'s definitions as they are, a `block`'s
+code as a statement that cannot fail (`$nofail`, as a constructor's), each
+field value written before a clause bound to a name of its own there,
+`$clauseL_C`, and last the construction of the fields. No program that
+compiled changes (a construction with a clause was refused).
+
+## A cast that cannot succeed
+
+**The rule.** A cast `T[X]` to a class or interface `T` that no class of
+`X`'s type is below compiles: it evaluates `X` and fails. openverse warns
+of it. A cast to a parametric class or interface whose type arguments no
+class below both can give, and a conversion `T(X)` to a type that is not
+above `X`'s, stay refused.
+
+**The Book.** Ch. 11, "Class and Interface Casting"
+(`11_types.md:299-301`): "Fallible casts use square bracket syntax
+`TargetType[value]` to perform runtime type checks. These casts succeed
+and return the casted value (`TargetType`), failing if the value is not
+of" the target type; only a cast from or to a type that is no class or
+interface is refused (`:356-390`). The tests accept the casts that cannot
+succeed: `Tests/Interface.versetest:150` (`assert_valid`, `T1[t0]` of a
+`T0` with no class below both), `:128`, `:140`, `:147`, `:182` (`assert{not
+T0[C1{}]}` and the like); `Tests/Cast.versetest:18`,
+`Bugs/ArrayOrFailureResult.versetest:11`, `Bugs/FORT-1059276.versetest:3`
+(their files have a class below both, which the harness's case does not
+include; the cast fails either way).
+
+**openverse before.** Refused: "no class is below both C1 and T0, so
+T0[…] would always fail".
+
+**openverse now.** `elabCast` (`Elab/Expr.lean`): a bracket cast to a
+class or interface with no type parameters, where no class below `X`'s
+type is below `T`, is `X` evaluated, then a failure, of type `T`, with
+`warnAt`'s "T[…] always fails here". The error test
+`inherit_cast_never.verse` is a valid program now, moved to `tests/verse`
+with its warning and output; the other three error tests of a cast that
+cannot succeed (`iface_views_never`, `choice_immediate_suspends_source_impossible_cast`,
+`class_param_cast_never`) are of parametric types and stay refused. **Left:**
+`MyParametricInterface(int)` and `class2(int)` written as values
+(`GenerateFunctionForParametricInterface.versetest:10`,
+`TypeParam.versetest:32`): a parametric type applied as a value, read as
+a conversion of `int` (metatypes).
+
+## A module in several parts
+
+**The rule.** A module may be defined more than once in one scope, `M :=
+module:` written again (qualified or not, `(A:)B := module:` beside `B :=
+module:` in `A`): the parts are one module and one scope, whose members
+are all the parts', so a member defined in two parts is defined twice. The
+parts have one access level, and give the same `@available` or none.
+
+**The Book.** Ch. 16 (`16_modules.md:15-27`): "All `.verse` files within
+the same folder are considered part of that module and share the same
+namespace … to split large modules across multiple files". The tests,
+`Tests/Modules/PartialModuleDefinitions.versetest`: "Test the matching of
+attibutes of partial module definitions" (`:156`): `A<public>` twice and
+`A<internal>` twice valid, `A<internal>` beside `A<public>` refused
+(`:157-165`, 3623); "Test the matching of qualifiers" (`:167-178`), valid
+with or without `(A:)`, "We previously prohibited this, but there isn't any
+reason why as long as there's separate verification that the correct
+qualifier is used" (`:176`); `(C:)B` in `A` refused for its qualifier
+(`:180`). `Tests/Attributes/available.versetest`: parts with no
+`@available` or the same one valid (`:317`, `:326`), "some but not all
+modules have available" and "different parts have different versions"
+refused (`:337-368`, 3552). Also `AccessLevelInheritance.versetest:669` and
+`Bugs/FORT-722788-LookupBindingDataOfFunctionInModulePart.versetest`.
+
+**openverse before.** "module M is defined twice".
+
+**openverse now.** The parser flattens a module into its members'
+qualified names and a marker per part (`$module:M`), so the parts are one
+module already: `resolveModules` (`Modules.lean`) takes a module's second
+marker when the parts' access levels agree, and `Attributes.apply` checks
+that each part gives the module the same `@available` (an attribute is on
+the first part written after it). `checkDefinedOnce` sees the members of
+all parts in one scope. No program that compiled changes; the four
+`available.versetest` refusals that agreed through "defined twice" agree
+by the rule now.
+
+## Operator overloads
+
+**The rule.** A program may define overloads of the operators `+`, `-`,
+`*` and `/`, `operator'+'(L:t, R:u):r = …`, and of prefix `-`,
+`prefix'-'(X:t):r = …`, at the top level; they are functions of those
+names, overloaded as any. A binary operator, or a negation, of an operand
+the built-in operator does not take (one that is no int, float, rational,
+refinement, `false`, nor for `+` an array) is a call of the program's
+overload its operands fit; a `<decides>` one is called with brackets, so
+the operation fails where the call does. Other operators are not
+overloadable.
+
+**The Book.** The prose names `operator'+'` in an error message only (ch.
+4, `04_operators.md:646`: "no operator'+' overload takes (int, float)"),
+and ch. 11 (`11_types.md:939-940`) declares `operator'='(X:t, Y:t where
+t:subtype(comparable))<decides>:t`. The tests,
+`Tests/Overloading.versetest` 196-212: "Test overloading the arithmetic
+operators (+ - * /)", `prefix'-'(V:vec2i)`, `operator'*'(L:vec2i, R:int)`
+beside `operator'*'(L:int, R:vec2i)`, `operator'/'(…)<transacts><decides>`
+with `assert{not (vec2i{X:=15,Y:=16} / 0)}`; "overloading the indexing
+operator" refused (`:214-219`, 3514), and "The mutation and comparison
+operators aren't overloadable yet" (`:221-232`);
+`Tests/Bugs/2023-01-17-CharLiteralAsOperand.versetest` (`prefix'-'` and
+`operator'-'` of chars, `-'a'-'b'`).
+
+**openverse before.** A parse error, "expected '(', ':' or ':=' after
+'prefix'".
+
+**openverse now.** The parser reads `operator` or `prefix` followed with
+no space by a character literal of one of those operators as a
+function's name, `operator'+'` (another character is refused);
+`elabExprValuesWith` (`Elab/ExpressionValues.lean`), when the program
+defines the operator's function and an operand's type is not one the
+built-in operator takes, elaborates the operation as the call of it
+(`elabApp`, through the overloads). Nothing reaches Verse Core but
+calls. No program that compiled changes: an operator of the built-in's
+operands keeps its code. **Left:**
+`Tests/StringInterpolationPlus.versetest` (2), whose interpolation
+`"Foo{Box}"` goes through a program's `ToString(Box:box)` and
+`operator'+'(L:string, R:box)`: openverse's interpolation takes
+`ToString` of the built-in types only (a program's `ToString` beside the
+built-in, `types-other`); `TimSyntax.versetest:230`, `operator'+'(1,2)`
+called by its name in an expression (parse-only).
+
+## A type argument in a call in brackets
+
+**The rule.** A type given as an argument of a function that uses its
+parameter as a type is that type parameter's argument in a call in
+brackets, a `<decides>` function's, as in one in parentheses:
+`First[string, Xs]` with `First(t:type, Xs:[]t)<decides>:t`.
+
+**The Book.** Ch. 11, types as values, and the tests' calls in
+parentheses (`FalseOption(int)`, `ParametricTypes.versetest` 613-624;
+`False(int) = False(logic)`, `TypeParam.versetest` 57-60); a call of a
+`<decides>` function is written in brackets (ch. 8), and nothing sets one
+apart.
+
+**openverse before.** #612 rewrote the type arguments of calls in
+parentheses only: `First[string, Xs]` was "expected ?t, found string".
+
+**openverse now.** `TypeArguments.rewriteCalls` rewrites a call in
+either brackets. No program that compiled changes (such a call was
+refused).
+
+## A `using` of a path that names nothing
+
+**The rule.** A `using{/p…}` of a path is of a package: openverse knows
+the Verse library's, `/Verse.org/…` (whose modules it stands in for with
+its built-ins), and the engine's, `/Fortnite.com/…` and
+`/UnrealEngine.com/…`, which it ignores; a path in any other package names
+nothing and is refused.
+
+**The Book.** Ch. 16 (`16_modules.md:349`): "all imports must be
+resolvable when your code is compiled". The tests,
+`Tests/Modules/Using2.versetest:92-95`: "Explicitly using something in a
+path that just begins with "/localhost" should not produce a 3544 glitch",
+`using{/localhostkinda}` refused (3587, a path that names nothing).
+`QualifiedIdentifier.versetest:152` (`using {/Verse.org/VerseTests/A/C}`,
+a class's path, 3587) and `Attributes/deprecated.versetest:435` (`using{/Verse.org/VerseTests/TestModule}`,
+2009) use the test runner's package path, which the harness now counts as
+not translatable, as it did that path written as a qualifier.
+
+**openverse before.** Any path but `/localhost…` was accepted and ignored.
+
+**openverse now.** The parser writes a `using` of a path whose first
+segment is none of `Verse.org`, `Fortnite.com`, `UnrealEngine.com` as a
+refused form (`Refused.unknownUsing`), which `Attributes.apply` refuses
+first. Programs: `tests/verse/path_literals.verse`, a test of a path's
+lexing, wrote `using { /user@example.com/… }`; it writes the same path in
+`/Verse.org/` now, its output the same. **Left:** a path inside those
+packages that names nothing (`/Verse.org/Nonexistent`): openverse has no
+registry of the engine's modules, and the tests use many of the Verse
+library's that the API reference does not list (`/Verse.org/Diagnostics`,
+`/Verse.org/Restricted`, …).
