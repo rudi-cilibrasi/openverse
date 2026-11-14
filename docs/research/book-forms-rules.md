@@ -681,3 +681,47 @@ accepted.
 **openverse now.** `checkReservedNames` (`Elab/Source.lean`) reads each
 enum's unqualified values. No program that compiled changes: none of
 openverse's tests, generators or the corpus names an enum's value so.
+
+## A type named at two numbers of type parameters
+
+**The rule.** A type alias may take the name of a parametric class,
+interface or struct of the same scope with another number of type
+parameters, defined before or after it: `class1() := class1(int)` beside
+`class1(t:type) := class…`. A use applied to the alias's number of type
+arguments is the alias (`class1()`, and a bare `class1` when the alias
+has none), and any other is the type's (`class1(string)`), in types,
+constructions, parents and values. One type and one alias share a name;
+two classes of one name, or an alias at the type's own number, are a name
+defined twice.
+
+**The Book.** The prose is silent; the tests write it, always as an
+alias of no parameters beside a parametric definition:
+`Tests/ParametricTypes.versetest:754-768` (`class1<public>() :=
+class1(int)` in a module beside `class1<public>(t:type) := class`, used as
+`class1()` in signatures and `class1():` as a construction), `:857-867`
+(an interface and a class, each with its `()` alias, `X:…interface1() =
+…class1(){}`); `Tests/Bugs/SOL-7503-ProblemWithQualification.versetest`
+(`struct_same_name() := struct_same_name(void)`, likewise of a class and
+an interface, with `struct_same_name(int){}` beside
+`struct_same_name(){}`); `Tests/Bugs/SOL-7849-…versetest` (`i() :=
+i(void)`, `c := class(i()) {}`, `c_int := class(i(int)) {}`);
+`Tests/QualifiedIdentifier.versetest:494-526` (in either order). Its
+refusals, `:537-570` (two interfaces of one name at one and two
+parameters, and "the cursed example"), are of their qualifiers (3612),
+and the BPVM's "limitations in the backend" (`:536`): openverse keeps two
+classes of one name refused, since its classes are keyed by name.
+
+**openverse before.** "'class1' is defined twice (only functions can be
+overloaded)"; every `archetype-blocks` case of
+`ParametricTypes.versetest` stopped there, as each includes the module
+`default_param`.
+
+**openverse now.** `checkDefinedOnce` (`Elab/Source.lean`) takes one
+type and one alias of a name at two numbers of type parameters;
+`Aliases.expand` keeps, for each alias beside a type, the type's number
+(`Scope.typeArity`): `Scope.ty` writes a use out as the alias only at the
+alias's number, and leaves `class1(string)` to the type; a value or a
+construction naming the shared name names the type; the alias names the
+type at its own number without naming itself. Nothing after the aliases'
+pass knows the alias existed. No program that compiled changes.
+

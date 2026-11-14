@@ -26,6 +26,14 @@
   An alias is used only after its definition, in the order the program's
   definitions are loaded (an imported file's first), and names no alias
   defined after it, nor itself: writing it out always ends.
+
+  An alias may take the name of a parametric class, interface or struct of
+  another number of type parameters, `t() := t(int)` beside `t(u:type) :=
+  class…` (the Book of Verse's tests: `ParametricTypes.versetest:754-768`,
+  `Bugs/SOL-7503-ProblemWithQualification.versetest`, in either order in
+  `QualifiedIdentifier.versetest:494-526`): a use is the alias where it
+  gives the alias's number of type arguments, `t()`, and the type
+  otherwise, `t(int)`.
 -/
 import OpenVerse.Front.Modules
 import OpenVerse.Front.PreludeNeeds
@@ -47,6 +55,14 @@ def shown (n : String) : String := ".".intercalate (n.splitOn "::")
 structure Scope where
   known : Std.HashMap String Alias := {}
   all : Std.HashSet String := {}
+  /-- The aliases that take the name of a type of another number of type
+      parameters, each with that number. -/
+  typeArity : Std.HashMap String Nat := {}
+
+/-- `n` applied to `k` type arguments names the type of `n`'s name beside
+    an alias, not the alias. -/
+def Scope.namesType (s : Scope) (n : String) (k : Nat) : Bool :=
+  s.typeArity[n]? == some k
 
 /-- `n` is not an alias defined after the definition being written out. -/
 def Scope.notLater (s : Scope) (p : Pos) (n : String) : Except String Unit := do
@@ -56,6 +72,7 @@ def Scope.notLater (s : Scope) (p : Pos) (n : String) : Except String Unit := do
 /-- `t` with each alias written out, its type arguments for its parameters. -/
 partial def Scope.ty (s : Scope) (p : Pos) : STy → Except String STy
   | .name n => do
+    if s.namesType n 0 then return .name n
     s.notLater p n
     match s.known[n]? with
     | some a =>
@@ -64,6 +81,7 @@ partial def Scope.ty (s : Scope) (p : Pos) : STy → Except String STy
     | none => pure (.name n)
   | .app n ts => do
     let ts ← ts.mapM (s.ty p)
+    if s.namesType n ts.length then return .app n ts
     s.notLater p n
     match s.known[n]? with
     | some a =>
@@ -76,6 +94,7 @@ partial def Scope.ty (s : Scope) (p : Pos) : STy → Except String STy
 /-- Where a value, a qualifier or a constructor names a type `n`: the type
     an alias names, when it is a name (`c` for `a := c`). -/
 def Scope.typeName (s : Scope) (p : Pos) (n : String) : Except String String := do
+  if s.typeArity.contains n then return n
   s.notLater p n
   match s.known[n]? with
   | some { params := [], body := .name c, .. } => pure c
@@ -137,6 +156,12 @@ partial def Scope.top (s : Scope) : STop → Except String STop
       (← fields.mapM (s.field p)) (← methods.mapM s.top)
 
 
+/-- The numbers of type arguments `n` is given in `t`, where it occurs. -/
+partial def arities (n : String) : STy → List Nat
+  | .name m => if m == n then [0] else []
+  | .app m ts => (if m == n then [ts.length] else []) ++ ts.flatMap (arities n)
+  | t => t.children.flatMap (arities n)
+
 /-- Whether `t`, written as a value could be (`SExpr.asType?`), is a type:
     a type's name, or a parametric type's name applied to as many types as
     it has parameters. `arity n` is `none` when `n` is no type's name, and
@@ -194,6 +219,7 @@ def expand (tops : List STop) : Except String (List STop × List (String × Alia
   -- its number of parameters, and whether the parser knows it is one
   let written : List (String × STy × Nat × Bool) := tops.filterMap fun
     | .const _ n _ none (.typeAlias _ tps t) => some (n, t, tps.length, true)
+    | .const _ _ _ none (.structDef ..) | .const _ _ _ none (.enumDef ..) | .const _ _ _ none (.refineDef ..) => none
     | .const _ n _ none e => e.asType?.map (n, ·, 0, false)
     | _ => none
   if written.isEmpty then return (tops, [])
@@ -214,7 +240,10 @@ def expand (tops : List STop) : Except String (List STop × List (String × Alia
     for (p, n) in t.definedNames do
       if n != own && global.contains n then
         throw s!"{p.show}: '{n}' is already defined (as a type alias); Verse does not allow shadowing"
-  let mut scope : Scope := { all := Std.HashSet.ofList aliases.keys }
+  -- (an alias beside a type of its name, at another number of type
+  -- parameters, `checkDefinedOnce`: the type's number)
+  let besideType := Std.HashMap.ofList (aliases.keys.filterMap fun n => defined[n]?.map (n, ·))
+  let mut scope : Scope := { all := Std.HashSet.ofList aliases.keys, typeArity := besideType }
   let mut out : Array STop := #[]
   let mut defined : Array (String × Alias) := #[]
   -- (in an alias's type, its aliases written out: no alias, and `comparable`
@@ -222,8 +251,8 @@ def expand (tops : List STop) : Except String (List STop × List (String × Alia
   let bodyArity (n : String) : Option (Option Nat) := if n == "comparable" then none else typeArity {} n
   for t in tops do
     if let .const p n _ none e := t then
-
-      if aliases.contains n then
+      let isType := match e with | .structDef .. | .enumDef .. | .refineDef .. => true | _ => false
+      if aliases.contains n && !isType then
         let (tps, ty) := match e with
           | .typeAlias _ tps ty => (tps, ty)
           | e => ([], e.asType?.getD (.tup []))
@@ -232,7 +261,12 @@ def expand (tops : List STop) : Except String (List STop × List (String × Alia
           throw s!"{p.show}: {last} is a built-in type"
         if let some tp := tps.find? (·.constraint != "type") then
           throw s!"{tp.pos.show}: a parameter of a type alias is written {tp.name}:type (a bound on one is not supported)"
-        if ty.allNames.contains n then
+        -- (beside a type of its name, the alias names that type, at its own
+        -- number of type arguments)
+        let namesItself := if let some k := besideType[n]? then
+            (arities n ty).any (· != k)
+          else ty.allNames.contains n
+        if namesItself then
           throw s!"{p.show}: the type alias {shown n} names itself, so writing it out would never end (Book of Verse ch. 10, \"Disallowed: Direct Type Alias Recursion\"); a class can hold a value of its own type"
         let body ← scope.ty p ty
         -- (an alias's type is checked where it is used, as written there;

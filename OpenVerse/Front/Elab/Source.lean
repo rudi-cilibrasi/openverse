@@ -54,23 +54,46 @@ structure Admitted where
   aliases : List (String × Aliases.Alias) := []
 
 /-- Each name is defined once in its scope, the top level or a module: only
-    functions of one scope share a name, as its overloads. A class, an
-    interface, a struct, an enum, a constant and a function of one name are
-    two definitions of it (two modules of one name, and a module and a
-    definition, are `resolveModules`' to refuse). -/
+    functions of one scope share a name, as its overloads, and a type alias
+    a parametric type's, at another number of type parameters, `t() :=
+    t(int)` beside `t(u:type) := class…` (a use names the one of its
+    arity, `Aliases.expand`; the Book of Verse's tests,
+    `ParametricTypes.versetest:754-768`, `Bugs/SOL-7503…`, `SOL-7849…`). A
+    class, an interface, a struct, an enum, a constant and a function of one
+    name are two definitions of it (two modules of one name, and a module
+    and a definition, are `resolveModules`' to refuse). -/
 def checkDefinedOnce (tops : List STop) : Except String Unit := do
-  -- (each qualified name seen, and whether only functions have it so far)
-  let mut seen : Std.HashMap String Bool := {}
+  -- (each qualified name seen: whether only functions have it so far, and
+  -- each type or type alias of it, its number of type parameters and
+  -- whether it is an alias, when it has no other definition)
+  let mut seen : Std.HashMap String (Bool × List (Nat × Bool)) := {}
   for t in tops do
     let (p, n, isFn) := match t with
       | .fn p n .. => (p, n, true)
       | .const p n .. | .classDef p n .. => (p, n, false)
+    let arity? : Option (Nat × Bool) := match t with
+      | .classDef _ _ _ tps .. | .const _ _ _ none (.structDef _ tps ..) => some (tps.length, false)
+      | .const _ _ _ none (.typeAlias _ tps _) => some (tps.length, true)
+      | _ => none
     -- (not the parser's markers, `$module:…`, nor the compiler's names)
     if (qualParts n).any (·.startsWith "$") then continue
-    if let some onlyFns := seen[n]? then
-      if !(isFn && onlyFns) then
-        throw s!"{p.show}: '{".".intercalate (qualParts n)}' is defined twice (only functions can be overloaded)"
-    seen := seen.insert n isFn
+    if let some (onlyFns, types) := seen[n]? then
+      -- (one type and one alias of it, at two numbers of type parameters)
+      let atArity := match arity?, types with
+        | some (k, alias), [(k', alias')] => k != k' && alias != alias'
+        | _, _ => false
+      if !(isFn && onlyFns) && !atArity then
+        -- (two types at two numbers of type parameters: the rule takes only
+        -- an alias beside a type)
+        let alias := match arity?, types with
+          | some (k, _), [(k', _)] => if k != k' then ", and a type alias beside a type of its name at another number of type parameters" else ""
+          | _, _ => ""
+        throw s!"{p.show}: '{".".intercalate (qualParts n)}' is defined twice (only functions can be overloaded{alias})"
+    seen := seen.insert n (isFn && ((seen[n]?).map (·.1)).getD true,
+      match arity?, seen[n]? with
+      | some a, none => [a]
+      | some a, some (_, types) => types ++ [a]
+      | none, _ => [])
 
 /-- No definition takes the name of a definition of a scope around it
     (Book of Verse ch. 10, "Shadowing and Qualification": "you cannot

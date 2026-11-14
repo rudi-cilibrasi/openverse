@@ -2834,7 +2834,14 @@ Main():void =
   error; an alias may name a class or struct defined after it. An alias
   that names itself (`list(t:type) := ?tuple(t, list(t))`) is an error: a
   class can hold a value of its own type. No definition, at any scope,
-  takes an alias's name, nor a built-in type's.
+  takes an alias's name, nor a built-in type's, but a parametric class,
+  interface or struct of another number of type parameters, in the same
+  scope and in either order: `class1() := class1(int)` beside
+  `class1(t:type) := class…`, where `class1()` is the alias and
+  `class1(string)` the class (the Book's tests,
+  `ParametricTypes.versetest:754-768`, `Bugs/SOL-7503…`, `Bugs/SOL-7849…`).
+  Two classes of one name, or an alias at the type's own number, are still
+  defined twice.
 - **Checks.** The names in an alias's type, and how many type arguments
   each is given, are checked where the alias is defined; the rest (a map
   key or a type argument that must be comparable) where it is used, as if
