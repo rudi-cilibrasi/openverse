@@ -41,6 +41,16 @@ private def joinOpt (a b : Option Slots) : Option Slots :=
   | some a, none | none, some a => some a
   | none, none => none
 
+/-- Forget iteration-local shared-cell modes on back edges. Values and
+    nonshared scratch slots retain their usual fixed-point joins. -/
+private def freshLocals (shared : List Nat) (entry head : Slots) : Slots :=
+  if shared.isEmpty then head else { head with
+    initialized := head.initialized.mapIdx fun i ready =>
+      ready && (entry.initialized[i]?.getD false || !shared.contains i)
+    sharedMetadata := head.sharedMetadata.mapIdx fun i role =>
+      if entry.initialized[i]?.getD false || !shared.contains i then role
+      else entry.sharedMetadata[i]?.getD false }
+
 private def joinRole (a b : Option Bool) : Option Bool :=
   match a, b with
   | some a, some b => some (a || b)
@@ -68,6 +78,11 @@ private structure State where
   summaries : Array Summary := #[]
   indices : Std.HashMap Key Nat := {}
   changed : Bool := false
+  /-- Shared-local modes depend on complete return summaries, not an early
+      real-only approximation of a recursive initializer. -/
+  validateShared : Bool := false
+  live : Array Key := #[]
+  liveSeen : Std.HashMap Key Unit := {}
   debug : Bool := false
   active : Option Key := none
 
@@ -80,6 +95,9 @@ private def refuse (fn : Fn) (info : Info) (what : String) (details : String := 
   throw s!"{info.pos.show}: dummy type value cannot {what} (in {fn.name}){context}"
 
 private def request (key : Key) : M (Option Bool) := do
+  let st ← get
+  if st.validateShared && !st.liveSeen.contains key then
+    set { st with live := st.live.push key, liveSeen := st.liveSeen.insert key () }
   let st ← get
   if let some i := st.indices[key]? then return st.summaries[i]!.result
   set { st with
@@ -100,14 +118,18 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
       refuse fn info "be an executable function or method receiver" s!"receiver slot {i}, value {reprStr e}"
     if info.shared.contains i && out.slots.initialized[i]?.getD false && role &&
         !(out.slots.sharedMetadata[i]?.getD false) then
-      refuse fn info "enter a shared local containing executable data" s!"shared slot {i}, value {reprStr e}"
+      if (← get).validateShared then
+        refuse fn info "enter a shared local containing executable data" s!"shared slot {i}, value {reprStr e}"
     let first := !(out.slots.initialized[i]?.getD false)
     return { out with
       value := some role
       slots := {
         values := out.slots.values.set! i role
         initialized := out.slots.initialized.set! i true
-        sharedMetadata := if first then out.slots.sharedMetadata.set! i role else out.slots.sharedMetadata } }
+        -- Once real data enters a shared cell, waiting aliases can execute it.
+        -- A later metadata write must not reuse its original metadata mode.
+        sharedMetadata := out.slots.sharedMetadata.set! i
+          (role && (first || out.slots.sharedMetadata[i]?.getD false)) } }
   | .seq a b => do
     let a ← expr fns infos fields fn info slots a
     if a.value.isNone then return a
@@ -176,7 +198,7 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
         else pure { slots := entry, value := none }
       exits := withExits filt (withExits body exits)
       result := result || body.value.getD false
-      let next := if body.value.isSome then joinSlots head body.slots else head
+      let next := if body.value.isSome then freshLocals info.shared source.slots (joinSlots head body.slots) else head
       growing := next != head
       head := next
     return { exits with slots := head, value := some result }
@@ -189,7 +211,7 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
       let out ← expr fns infos fields fn info head body
       returned := joinRole returned out.returned
       broken := joinOpt broken out.broken
-      let next := if out.value.isSome then joinSlots head out.slots else head
+      let next := if out.value.isSome then freshLocals info.shared slots (joinSlots head out.slots) else head
       growing := next != head
       head := next
     return { slots := broken.getD head, value := broken.map (fun _ => false), returned }
@@ -219,28 +241,44 @@ end
 def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
     (debug : Bool := false) : Except String Unit := do
   let action : M Unit := do
-    for i in [:fns.size] do
+    let runContext (key : Key) : M Flow := do
+      let (i, args) := key
+      let some fn := fns[i]? | throw "internal: metadata call has no body"
       let info := infos[i]?.getD {}
-      discard <| request (i, (List.range fns[i]!.arity).map info.inputs.contains)
+      modify fun st => { st with active := some key }
+      let values := (List.range fn.nslots).map (fun i =>
+        info.inputs.contains i || args[i]?.getD false) |>.toArray
+      let initialized := (List.range fn.nslots).map (fun i => i < fn.arity : Nat → Bool) |>.toArray
+      let slots : Slots := { values, initialized, sharedMetadata := values }
+      expr fns infos fields fn info slots (info.body.getD fn.body)
+    let seedRoots : M Unit := do
+      for i in [:fns.size] do
+        let info := infos[i]?.getD {}
+        discard <| request (i, (List.range fns[i]!.arity).map info.inputs.contains)
+    seedRoots
     let mut growing := true
     while growing do
       modify fun st => { st with changed := false }
       let summaries := (← get).summaries
       for (summary, index) in summaries.zipIdx do
-        let (i, args) := summary.key
-        let some fn := fns[i]? | throw "internal: metadata call has no body"
+        let i := summary.key.1
         let info := infos[i]?.getD {}
-        modify fun st => { st with active := some summary.key }
-        let values := (List.range fn.nslots).map (fun i =>
-          info.inputs.contains i || args[i]?.getD false) |>.toArray
-        let initialized := (List.range fn.nslots).map (fun i => i < fn.arity : Nat → Bool) |>.toArray
-        let slots : Slots := { values, initialized, sharedMetadata := values }
-        let out ← expr fns infos fields fn info slots (info.body.getD fn.body)
+        let out ← runContext summary.key
         let returned := (joinRole out.value out.returned).map (· || info.metadataResult)
         let result := joinRole summary.result returned
         if result != summary.result then
           modify fun st => { st with summaries := st.summaries.modify index (fun s => { s with result }), changed := true }
       growing := (← get).changed
+    -- A summary may grow from a real return to a metadata return. Follow
+    -- calls again from the roots using the stable summaries: provisional
+    -- argument contexts can disappear and must not be validated as live.
+    modify fun st => { st with validateShared := true }
+    seedRoots
+    let mut index := 0
+    while index < (← get).live.size do
+      let key := (← get).live[index]!
+      index := index + 1
+      discard <| runContext key
   discard <| action.run { debug }
 
 end OpenVerse.Front.MetadataFlow
