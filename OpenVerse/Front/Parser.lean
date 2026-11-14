@@ -2405,16 +2405,29 @@ def parseExprText (src : String) : Except String SExpr := do
     return e : PM SExpr).run' { toks }
 
 /-- A marker that the source may use rationals (`/` or the type
-    `rational`): the elaborator then adds the rational helpers (#116). -/
+    `rational`, also in a string's interpolations): the elaborator then adds
+    the rational helpers (#116). -/
 def ratMarker : String := "$uses:rational"
 
-def usesRational (toks : Array Token) : Bool := Id.run do
+/-- Whether `f` holds of the code of one of the interpolations of `t`, a
+    string: what a marker looks for in the source, it looks for there too. -/
+def inInterpolations (f : Array Token → Bool) (t : Token) : Bool :=
+  match t.tok with
+  | .str parts => parts.any fun
+    | .code src l c => match lex src l c with
+      | .ok inner => f inner
+      | .error _ => false
+    | _ => false
+  | _ => false
+
+partial def usesRational (toks : Array Token) : Bool := Id.run do
   -- (not the `/` of a module path, `using { /Verse.org/… }`)
   let mut inUsing := false
   for t in toks do
     if t.isKw "using" then inUsing := true
     else if inUsing && t.isSym "}" then inUsing := false
-    else if !inUsing && (t.isSym "/" || t.identName? == some "rational") then return true
+    else if !inUsing && (t.isSym "/" || t.identName? == some "rational" || inInterpolations usesRational t) then
+      return true
   return false
 
 /-- Whether a source text may use rationals (for an expression read from a
@@ -2424,8 +2437,12 @@ def textUsesRational (src : String) : Bool :=
   | .ok toks => usesRational toks
   | .error _ => false
 
-/-- A marker that the source may use `ReplaceAll` (#150). -/
+/-- A marker that the source may use `ReplaceAll` (#150), also in a
+    string's interpolations. -/
 def replaceAllMarker : String := "$uses:replaceAll"
+
+partial def usesReplaceAll (toks : Array Token) : Bool :=
+  toks.any fun t => t.identName? == some "ReplaceAll" || inInterpolations usesReplaceAll t
 
 /-- The functions the Book calls bitwise, by their names in a program. -/
 def bitwiseFunctions : List String :=
@@ -2464,19 +2481,13 @@ partial def usesQualifiers (toks : Array Token) : Bool := Id.run do
 partial def usesBitwise (toks : Array Token) : Bool :=
   toks.any fun t => match t.tok with
     | .ident n => n != "BitNot" && bitwiseFunctions.contains n
-    | .str parts => parts.any fun
-      | .code src l c => match lex src l c with
-        | .ok inner => usesBitwise inner
-        | .error _ => false
-      | _ => false
-    | _ => false
+    | _ => inInterpolations usesBitwise t
 
 def withRatMarker (toks : Array Token) (tops : List STop) : List STop :=
   let p : Pos := { line := 0, col := 0 }
   let tops := if usesRational toks then tops ++ [.const p ratMarker [] none (.block p [])] else tops
   let tops := if usesQualifiers toks then tops ++ [.const p qualifierMarker [] none (.block p [])] else tops
-  let tops := if toks.any (·.identName? == some "ReplaceAll") then tops ++ [.const p replaceAllMarker [] none (.block p [])]
-    else tops
+  let tops := if usesReplaceAll toks then tops ++ [.const p replaceAllMarker [] none (.block p [])] else tops
   if usesBitwise toks then tops ++ [.const p bitwiseMarker [] none (.block p [])] else tops
 
 /-- The definitions of a source file, and the marker of its `case` arms
