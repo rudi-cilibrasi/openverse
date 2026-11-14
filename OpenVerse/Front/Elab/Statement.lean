@@ -243,7 +243,8 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
     | _ => do pure (← elabE ctx se exp, ctx)
   if !ctx.canFail && (r.e.mayFail ctx.sigProg) then
     eerr se.pos ("this expression can fail, but it is not in a failure context (an if " ++
-      "condition, a for clause, option{…}, logic{…}, not, the left of or, or a <decides> function)")
+      "condition, a for clause, option{…}, logic{…}, not, the left of or, or a <decides> function)" ++
+      (if ctx.inLoop then "; a loop's body is none, also in a <decides> function (Book of Verse tests, SOL-4199-BreakFromIf.versetest)" else ""))
   return (r, ctx')
 
 end OpenVerse.Front

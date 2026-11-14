@@ -4,7 +4,9 @@
 The model evaluates supplied names in written order, then absent defaults
 in declaration order. Defaults may depend on prior arguments and receiver
 state; rejected first-success candidates restore that state and their output.
-Other cases open hidden value types through a viewed interface.
+Other cases open hidden value types through a viewed interface. A method
+whose defaults write is <transacts>: a default's effects are its
+function's (Book of Verse tests, DefaultNamed.versetest 850-878).
 """
 import random
 import sys
@@ -21,11 +23,11 @@ if mode == 0:
     args = ''.join(f',?{n}:=Note("given-{n}",{v})' for n, v in supplied)
     print(f'''Note(S:string,N:int)<transacts>:int=block{{Print("{{S}} {{N}}");N}}
 base(t:type) := class:
-    F(X:t,?A:int=0,?B:int=0)<computes>:int=A+B
+    F(X:t,?A:int=0,?B:int=0)<transacts>:int=A+B
 ib := class(base(int)):
     var Calls:int=0
     Seed:int={k}
-    F<override>(X:int,?A:int=block{{set Calls+=1;Note("a",X+Seed)}},?B:int=Note("b",A+{delta}))<computes>:int=
+    F<override>(X:int,?A:int=block{{set Calls+=1;Note("a",X+Seed)}},?B:int=Note("b",A+{delta}))<transacts>:int=
         Print("body {{X}} {{A}} {{B}}")
         A+B
 Run(P:base(a),X:a where a:type)<transacts>:int=P.F(X{args})
@@ -76,10 +78,10 @@ Main():void=Print("result {{Run(both(int,{ty}){{V:=1}})}}")''')
 else:
     cutoff = rng.randrange(-1, 6)
     print(f'''base(t:type) := class:
-    Pick(X:t,?D:int=0)<computes>:int=D
+    Pick(X:t,?D:int=0)<transacts>:int=D
 ib := class(base(int)):
     var Calls:int=0
-    Pick<override>(X:int,?D:int=block{{set Calls+=1;Print("default {{X}}");X+{k}}})<computes>:int=D
+    Pick<override>(X:int,?D:int=block{{set Calls+=1;Print("default {{X}}");X+{k}}})<transacts>:int=D
 Two():int=0|1|2|3
 Run(P:base(a),X:a where a:type)<transacts>:void=
     if(I:=Two(),V:=P.Pick(X),I>{cutoff}):Print("win {{I}} {{V}}")

@@ -50,6 +50,12 @@ for ((s=first; s<first+n; s++)); do
   if [[ $g == gadt_contexts ]] && (( s % 9 == 1 && (s / 9) % 4 >= 2 )); then
     compat+=(--extended-defaults)
   fi
+  # These two models are of openverse's own reading of a named parameter's
+  # default, which the Book refuses (DefaultNamed.versetest 805-878): a
+  # <computes> method's default that writes, its effects the caller's
+  # (gadt_spawn_defaults, #468), and a default that waits (gadt_waiting_contexts,
+  # #283).
+  case $g in gadt_spawn_defaults|gadt_waiting_contexts) compat+=(--extended-defaults) ;; esac
   timeout 120 "$ov" run "$tmp/p.verse" "${compat[@]}" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.err"
   want=$(head -1 "$tmp/p.exp" | sed 's/exit=//')
   if [[ $want == 4 ]]; then

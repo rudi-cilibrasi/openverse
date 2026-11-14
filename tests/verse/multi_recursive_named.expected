@@ -35,14 +35,4 @@ odd 0 2
 even default 1 19
 even 2 1
 group first 2
-maybe 10
-maybe 20
-maybe first 20
-eager 2
-eager 2
-eager 1
-eager 2
-eager 1
-eager 20
-eager 0
 exit=0

@@ -586,6 +586,10 @@ for kind in "${kinds[@]}"; do
   case $kind in
     construct-first|construct-for|construct-failure|context-field-default-lazy-first|context-refining-field-first|context-refining-field-for)
       compat+=(--extended-defaults) ;;
+    # (and these a named parameter's default that suspends, #283's waiting
+    # defaults, which the Book refuses: DefaultNamed.versetest:844)
+    named-waitingdefault-waiting|waiting-default-*)
+      compat+=(--extended-defaults) ;;
   esac
   sizes=()
   for count in 4 8; do
@@ -1500,7 +1504,9 @@ if kind.startswith('waiting-default-'):
     expr = f'block{{H:=cell{{}};R:=for({clauses}):block{{Sleep(0.01);E:[]a0=Concatenate();set H.N+=1;E.Length}};R.Length+H.N}}'
     header = f'Run({params},?N:int={expr} where {types})<suspends>:int=N'
     if shape == 'method':
-        print('box(t:type):=class:\n    X:t\n    ' + header)
+        # (box is <computes>: the constant B constructs one, and a module's
+        # constant has no side effect, the Book's tests, DefaultValueAssignment)
+        print('box(t:type):=class<computes>:\n    X:t\n    ' + header)
         # (a constant at the top level states its type, Book of Verse ch. 16)
         print('B:box(string)=box(string){X:="tag"}')
     else: print(header)

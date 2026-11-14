@@ -42,7 +42,8 @@ structure FieldDefaults where
     `tops` (classes' included) is elaborated once, with its struct's type
     parameters opaque, and must have only the effects its construction
     allows. -/
-def elabFieldDefaults (env : TyEnv) (sigs : Signatures) (tops : List STop) (cdefs : List CDef) :
+def elabFieldDefaults (env : TyEnv) (sigs : Signatures) (tops : List STop) (cdefs : List CDef)
+    (extendedDefaults : Bool := false) :
     Except String FieldDefaults := do
   let allSigs := sigs.all
   -- A mutable or unique instance needs allocation even when no source
@@ -75,12 +76,73 @@ def elabFieldDefaults (env : TyEnv) (sigs : Signatures) (tops : List STop) (cdef
           let ctx := { ctx with defaults := [(n, f)], types := { senv with tvars := hσ } }
           match (do coerce d.pos (← elabE ctx d (some ft)) ft : EM Expr).run { env } with
           | .ok (body, st) =>
+            -- (a class declares no <decides>, and "Class member initializers
+            -- and block clauses are implicitly restricted to have no more
+            -- effects than what the class declares", Book of Verse ch. 13;
+            -- Effects.versetest:537, 3512)
+            if !extendedDefaults && body.mayFail sigs.prog then
+              throw s!"{d.pos.show}: the default of field '{f}' of {n} can fail: a field's default is no failure context (Book of Verse ch. 13 and its tests, Effects.versetest)"
             fxCheck s!"default of field '{f}' of {n}" allowed st
             initializerBodies := initializerBodies ++ [(n, f, d.pos, body)]
             fieldNeeds := fieldNeeds.merge { methods := st.needs.methods, loops := st.needs.loops, subtypes := st.needs.subtypes }
           | .error msg => throw s!"{msg} (in the default of field '{f}' of {n})"
     | _ => pure ()
   return { needs := fieldNeeds, bodies := initializerBodies }
+
+/-- Whether a written type has type values in it: `type`, or a metatype
+    the front end writes as an interface, `subtype(c)` and its kin
+    (`TypeValues`). -/
+partial def STy.mentionsMetatype : STy → Bool
+  | .name q => q == "type" || ["subtype(", "castable_subtype(", "concrete_subtype(",
+      "castable_concrete_subtype(", "classifiable_subset("].any (q.startsWith ·)
+  | .app q ts => STy.mentionsMetatype (.name q) || ts.any STy.mentionsMetatype
+  | .arr t | .opt t => t.mentionsMetatype
+  | .tup ts => ts.any STy.mentionsMetatype
+  | .map k v => k.mentionsMetatype || v.mentionsMetatype
+  | _ => false
+
+/-- The defaults of a function's named parameters, each elaborated once at
+    the definition, in the function's scope (the parameters before it, and
+    `Self` in a method), in a trial whose code is dropped: a default is
+    evaluated at each call that omits it, but it is the function's. So it
+    neither fails nor suspends, even in a `<decides>` or `<suspends>`
+    function, and has only the heap effects the function's own effects
+    `allowed` allow (Book of Verse tests, `DefaultNamed.versetest` 805-878:
+    3512). `ctx` is the context of the function's body, `st0` the state its
+    elaboration starts from. -/
+def checkParamDefaults (ctx : Ctx) (st0 : ESt) (name : String) (ps : List SParam) (ptys : List Ty)
+    (allowed : List String) : Except String Unit := do
+  for ((prm, t), i) in (ps.zip ptys).zipIdx do
+    let some d := prm.default | continue
+    let what := s!"the default of ?{prm.name} of {name}"
+    -- (the parameters from this one on are not in its scope)
+    let dctx := { ctx with
+      locals := ctx.locals.filter fun l => !(i ≤ l.slot && l.slot < ps.length)
+      canFail := false, suspends := false, inParamDefault := true, inLoop := false
+      defaults := [(name, s!"?{prm.name}")] }
+    let trial (exp : Option Ty) : EM Bool := do
+      let r ← elabE dctx d exp
+      return r.e.mayFail ctx.sigProg
+    -- (at the parameter's type, or with none expected, where the default
+    -- gives a type parameter nothing else determines its type, as at a
+    -- call; a default that needs the type arguments of a call to be
+    -- elaborated, or that is refused there, is left to its calls, which
+    -- elaborate it as before)
+    let suspends (msg : String) : Bool :=
+      (msg.splitOn "suspends: it can only be").length > 1
+    let outcome : Except String (Bool × ESt) := match (trial (some t)).run st0 with
+      | .error msg => match (trial none).run st0 with
+        | .error msg' => .error (if suspends msg then msg else msg')
+        | ok => ok
+      | ok => ok
+    match outcome with
+    | .ok (fails, st) =>
+      if fails then
+        throw s!"{d.pos.show}: {what} can fail: a default is no failure context, also of a <decides> function (Book of Verse tests, DefaultNamed.versetest)"
+      fxCheck what allowed st
+    | .error msg =>
+      if suspends msg then
+        throw s!"{msg}: {what} cannot suspend, also of a <suspends> function (Book of Verse tests, DefaultNamed.versetest)"
 
 /-- A function or a constant of the program, elaborated (`elabFunctions`):
     its Verse Core code and the types of its slots, where it first calls
@@ -111,7 +173,7 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
     (decides : Bool) (allowed : List String) (tps : List (String × Bool)) (body : SExpr)
     (suspends : Bool := false) (selfTps : List String := [])
     (selfFieldOf : Option (String → Option Nat) := none) (scopeClass : Option String := none)
-    (evidenceSignature : Option Sig := none) :
+    (evidenceSignature : Option Sig := none) (bookDefaults : Bool := true) :
     Except String ElaboratedFn := do
   -- (#209) the values of `selfTps` come from the receiver's hidden
   -- fields, in slots after the hidden parameters: a method's own class's
@@ -172,6 +234,7 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
     | .ok ds => pure (selfInits ++ ds)
     | .error msg => throw s!"{p.show}: in {name}: {msg}"
   fxCheck name allowed st
+  if bookDefaults then checkParamDefaults ctx st0 name ps ptys allowed
   if name.endsWith ".$block" then
     if let some budget := env.constructionFx[(name.dropEnd ".$block".length).toString]? then
       fxCheck s!"construction block of {(name.dropEnd ".$block".length).toString}" budget st
@@ -196,7 +259,8 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
     constant of `sigs`, by index (a constant may not hold a mutable object, as
     it is computed at each use), then each generic function, once, with its
     type parameters opaque (`elabFn`). -/
-def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests) :
+def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
+    (extendedDefaults : Bool := false) :
     Except String (Array ElaboratedFn) := do
   let allSigs := sigs.all
   let genvOf (g : Sig) : TyEnv := g.typeEnv env
@@ -207,8 +271,8 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests) :
     match top with
     | .fn p n ps _ _ _ body =>
       elaborated := elaborated.push (← elabFn allSigs sigs.prog requests env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
-        (evidenceSignature := some sig))
-    | .const p n _ _ body =>
+        (evidenceSignature := some sig) (bookDefaults := !extendedDefaults))
+    | .const p n _ sty body =>
       -- a constant is computed at each use, so it would be a new object each
       -- time (until Verse Core has global state)
       if sig.ret.holdsMutable env then
@@ -216,6 +280,22 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests) :
       let ctx : Ctx := { sigs := allSigs, sigProg := sigs.prog, types := env }
       let (r, st) ← elabBody ctx body (some sig.ret) { env }
       let (e, st) ← (coerce p r.1 sig.ret).run st
+      -- a module's constant has no side effect: its initializer writes
+      -- nothing, also through what it calls or constructs ("all non-local
+      -- variables initializers (module, instance) can't have side
+      -- effects", the Book's tests, DefaultValueAssignment.versetest:199,
+      -- ModuleDefinitions.versetest:278, ParametricTypes.versetest:465)
+      -- (a type value is no construction: `Value:castable_subtype(c) = c`)
+      -- (the front end writes metatypes as interfaces, `subtype(c)`, and a
+      -- type value as the construction of a class of its own, `$type:c`:
+      -- a constant of a type that has type values in it constructs none)
+      let metatype := sty.any STy.mentionsMetatype
+      if !n.startsWith "$" && !metatype then
+        if let some (_, kp, via) := st.fx.find? (·.1 == "writes") then
+          let what := match via with
+            | some f => s!"{f}, which has the effect <writes>"
+            | none => "sets a var field"
+          throw s!"{kp.show}: the value of the constant {n} {what}: a module's constant has no side effect (Book of Verse tests, DefaultValueAssignment.versetest); make it a function, or call one that does not write"
       -- slots start like a function's (a class-typed one as a placeholder)
       let inits ← match st.slotTys.toList.mapM (slotDefault env 0 [] []) with
         | .ok ds => pure ds
@@ -242,7 +322,7 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests) :
       let scope := copyScope? effs
       elaborated := elaborated.push (← elabFn allSigs sigs.prog requests (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body
         g.suspends g.selfTps ((requests.casts.find? (·.name == n)).map fun l => fun v =>
-          (l.opened.lookup v).bind (env.witnessField? l.target ·)) scope (some g))
+          (l.opened.lookup v).bind (env.witnessField? l.target ·)) scope (some g) (!extendedDefaults))
     | _ => pure ()
   return elaborated
 

@@ -1,5 +1,5 @@
 # modules (#112): lexical lookup, constructors, qualified methods, braced and empty modules
-settings := struct:
+settings := struct<computes>:
     Speed:int = 5
 Config := module:
     Speed<public>:int = 99

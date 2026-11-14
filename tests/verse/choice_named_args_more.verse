@@ -20,7 +20,7 @@ Main()<transacts>:void =
         Print("{X}")
     # in a comparison chain (this hung on main: the call was refused, then
     # lifted again and again)
-    for (B := (Add(?X := 1, 2 | 3) < 5)):
+    for (B := (Add(2 | 3, ?X := 1) < 5)):
         Print("ok")
-    if (Add(?X := 1, 2 | 3) > 3):
+    if (Add(2 | 3, ?X := 1) > 3):
         Print("gt")

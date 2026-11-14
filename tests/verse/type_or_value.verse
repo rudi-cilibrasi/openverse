@@ -2,9 +2,9 @@
 # constant states its type, `X:t = e` (Book of Verse ch. 16: "type inference
 # with := alone is not allowed"): a cast, a conversion to any, a function's
 # value or another constant's
-shape := class:
+shape := class<computes>:
     Sides:int = 3
-square := class(shape):
+square := class<computes>(shape):
     Side:int = 2
 figure := shape                   # a type: shape
 S:square = square{}

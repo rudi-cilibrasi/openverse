@@ -1278,6 +1278,10 @@ class Gen:
     def recursive_named(self):
         # Model named/default arguments at every recursive edge, independently
         # of the compiler's argument binder. Some seeds use a mutual group.
+        # (A default cannot fail, the Book of Verse's tests, DefaultNamed.versetest:820:
+        # the check that ends the recursion is the callee's first clause, after
+        # its arguments and default are evaluated, so its failure rolls back
+        # the edge as a failing default's did.)
         rng = random.Random(self.seed * 1000003 + 28307)
         tuple_rng = random.Random(self.seed * 1000003 + 246140)
         def positional(*args):
@@ -1295,17 +1299,16 @@ class Gen:
     set H.N += 1
     Print("named {{Label}} {{Value}} {{H.N}}")
     Value
-{default}(H:{meter}, N:int, Offset:int)<transacts><decides>:int =
-    Value := {trace}(H,"default",N+Offset)
-    N <= {default_limit}
-    Value''')
+{default}(H:{meter}, N:int, Offset:int)<transacts>:int =
+    {trace}(H,"default",N+Offset)''')
         for i, name in enumerate([even, odd] if mutual else [even]):
             target = [odd, even][i] if mutual else even
             edge = positional('H', f'{trace}(H,"pos",N+{step})')
-            self.consumers.append(f'''{name}(H:{meter}, N:int, ?A:int={default}[H,N,{offsets[i]}], ?B:int=A+{extra})<transacts><decides>:int =
+            self.consumers.append(f'''{name}(H:{meter}, N:int, ?A:int={default}(H,N,{offsets[i]}), ?B:int=A+{extra})<transacts><decides>:int =
+    N <= {default_limit}
     N <= {limit}
     Print("named visit {{N}} {{A}} {{B}} {{H.N}}")
-    A | {target}[?B:={trace}(H,"arg",N+{extra}),{edge}]''')
+    A | {target}[{edge},?B:={trace}(H,"arg",N+{extra})]''')
         if RECURSIVE_RETURNS and random.Random(self.seed * 1000033 + 467).random() < 0.5:
             for i in range(1 if not mutual else 2):
                 at = -1 - i
@@ -1335,18 +1338,17 @@ class Gen:
     if(V:={repeat}[X,Z,N,?Y:=Y],V=X)then option{{V}}else false''')
         h = self.fresh('NamedHeap')
         self.main.append(f'{h} := {meter}{{}}')
-        visits = 1 if start <= default_limit else 0
+        # Each call evaluates its arguments and default, then the callee's first
+        # clauses, which may fail: in a for, what a lazily taken call of the
+        # recursive group did stays when its clauses fail (LANGUAGE.md, #283).
+        visits = 1
         a, b = start + offsets[0], start + offsets[0] + extra
-        if visits:
-            self.m.out.append(f'named default {a} {visits}')
+        self.m.out.append(f'named default {a} {visits}')
         n, role = start, 0
         while n <= limit and n <= default_limit:
             self.m.out.append(f'named visit {n} {a} {b} {visits}')
             self.m.out.append(f'named all {a}')
             next_n, b = n + step, n + extra
-            # Failure of any argument/default rolls back that entire edge,
-            # including the supplied arguments evaluated before the default.
-            if next_n > default_limit: break
             role = 1 - role if mutual else 0
             a = next_n + offsets[role]
             for label, value in [('pos', next_n), ('arg', b), ('default', a)]:
@@ -1375,6 +1377,8 @@ class Gen:
                     self.m.out.append(f'named value {value}')
                     succeeded = True
                     break
+                # (an edge whose callee fails ends the search: the if rolls it
+                # back with the rest of the search when no value succeeded)
                 next_n, b = n + step, n + extra
                 if next_n > default_limit:
                     break

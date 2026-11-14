@@ -9,8 +9,8 @@ pair(a:type, b:type) := class:
     B:b
 dup(t:type) := class(pair(t, t)):
     C:int = 4
-root := class{}
-extra(t:type) := class(root):
+root := class<computes>{}
+extra(t:type) := class<computes>(root):
     X:t
     C:int = 4
 Global:root = extra(string){X := "g"}

@@ -1,2 +1,2 @@
-c:=class<computes>{Value:int=array{7}[0]}
-Main():void=if(C:=c{})then Print("{C.Value}") else Print("bad")
+c:=class<computes>{Value:int=if(V:=array{7}[0])then V else 0}
+Main():void=Print("{c{}.Value}")

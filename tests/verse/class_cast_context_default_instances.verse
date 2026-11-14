@@ -1,5 +1,5 @@
-root:=class{}
-extra(t:type):=class(root){X:t}
+root:=class<computes>{}
+extra(t:type):=class<computes>(root){X:t}
 pair(a:type,b:type):=class{A:a;B:b}
 dup(t:type):=class(pair(t,t)){}
 Global:root=extra(string){X:="global"}
