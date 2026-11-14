@@ -217,7 +217,11 @@ def desugar (tops : List STop) : Except String (List STop) := do
   -- (not `true` and `false`, which as values are the logic values)
   let typeValues : List String := (tops.flatMap valueNames).filter (fun n =>
     typeNames.contains n && !isClass n && n != "true" && n != "false") |>.eraseDups
-  if targets.isEmpty && !usesType && values.isEmpty && typeValues.isEmpty then return tops
+  -- (`any` and `comparable` as values: types, of `type`, with no metatype
+  -- of their own, as `subtype(any)` is not written; the Book's tests pass
+  -- them where a type is, `GetCastableFinalSuperClass.versetest` 302, 304)
+  let topValues : List String := (tops.flatMap valueNames).filter (["any", "comparable"].contains ·) |>.eraseDups
+  if targets.isEmpty && !usesType && values.isEmpty && typeValues.isEmpty && topValues.isEmpty then return tops
   -- (each metatype's argument: a class or an interface, Book of Verse
   -- tests, Subtype.versetest 104-126, 3509; `subtype(t)` also of another
   -- type, written of types, `subtype(int)`, `subtype([]c)`, Subtype.versetest
@@ -238,28 +242,28 @@ def desugar (tops : List STop) : Except String (List STop) := do
   let closure0 : List String := ((targets.map (·.2)).filter isClass ++ values).flatMap supers |>.eraseDups
   let closure : List String := (closure0.toArray.qsort fun a b => (supers a).length < (supers b).length).toList
   let p0 : Pos := { line := 0, col := 0 }
-  let root : STop := .classDef p0 "type" [] [] [] [] true [] []
+  let root : STop := .classDef p0 "type" [] [] ["computes"] [] true [] []
   let subIfaces : List STop := closure.map fun a =>
-    .classDef p0 (ifaceName "subtype" a) [] [] []
+    .classDef p0 (ifaceName "subtype" a) [] [] ["computes"]
       (if (parentsOf a).isEmpty then [.name "type"] else (parentsOf a).map (.name <| ifaceName "subtype" ·))
-      true [] [.fn p0 (castMethod a) [{ name := "X", ty := .name a }] [] ["decides", "$abstract"] (.name a) (.block p0 [])]
+      true [] [.fn p0 (castMethod a) [{ name := "X", ty := .name a }] [] ["decides", "computes", "$abstract"] (.name a) (.block p0 [])]
   -- (castable_subtype(A) of any A, whose values are the <castable> classes
   -- below it: Castable.versetest 91-135, "class1 is not castable, so cannot
   -- be assigned. The arg to castable_subtype is ok")
   -- (with the mark `$castable` when `A` itself is: a join of two values
   -- keeps castable_subtype(A) only then, Castable.versetest 145-168)
   let castIfaces : List STop := closure.map fun a =>
-    .classDef p0 (ifaceName "castable_subtype" a) [] [] []
+    .classDef p0 (ifaceName "castable_subtype" a) [] [] ["computes"]
       (.name (ifaceName "subtype" a) :: (parentsOf a).map (.name <| ifaceName "castable_subtype" ·) ++
         (if castable a then [.name castableMark] else [])) true [] []
   let concreteIfaces : List STop := closure.map fun a =>
-    .classDef p0 (ifaceName "concrete_subtype" a) [] [] []
+    .classDef p0 (ifaceName "concrete_subtype" a) [] [] ["computes"]
       (.name (ifaceName "subtype" a) :: (parentsOf a).map (.name <| ifaceName "concrete_subtype" ·)) true []
       [.fn p0 (makeMethod a) [] [] ["$abstract"] (.name a) (.block p0 [])]
   -- (the metatypes of other types: below `type`, with no method: nothing
   -- reads such a value but a conversion to `type`)
   let otherIfaces : List STop := otherSubtypes.map fun a =>
-    .classDef p0 (ifaceName "subtype" a) [] [] [] [.name "type"] true [] []
+    .classDef p0 (ifaceName "subtype" a) [] [] ["computes"] [.name "type"] true [] []
   -- (`concrete_subtype(any)`, `concrete_subtype(comparable)`: the values of
   -- the `<concrete>` classes, and of those that are `<unique>`, so
   -- comparable; with no construction, "comparable cannot be instanced here
@@ -270,9 +274,12 @@ def desugar (tops : List STop) : Except String (List STop) := do
     | some (_, _, specs, _, _, _) => specs.contains "unique"
     | none => false
   let concreteOthers : List STop := concreteTops.map fun a =>
-    .classDef p0 (ifaceName "concrete_subtype" a) [] [] [] [.name "type"] true [] []
+    .classDef p0 (ifaceName "concrete_subtype" a) [] [] ["computes"] [.name "type"] true [] []
   -- the classes of the values: each gives the casts of the classes above it,
-  -- and, when `C{}` constructs it, their constructions
+  -- and, when `C{}` constructs it, their constructions; a value is made
+  -- with no effect (`<computes>`: it has no field), and a cast through it
+  -- has none (`$cast(A)`, `<computes>`), as a cast `C[X]` has none, so that
+  -- a function of any effects may name a type and cast through it
   let valueClasses : List STop := values.map fun c =>
     let ups := supers c
     let parents : List STy := [.name (ifaceName "subtype" c)] ++ (if castable c then [.name (ifaceName "castable_subtype" c)] else []) ++
@@ -286,15 +293,16 @@ def desugar (tops : List STop) : Except String (List STop) := do
     let fails (a : String) : SExpr :=
       .block p0 [.decl p0 "$none" (some (.opt (.name a))) false (.ident p0 "false"), .query p0 (.ident p0 "$none")]
     let casts : List STop := ups.map fun a =>
-      .fn p0 (castMethod a) [{ name := "X", ty := .name a }] [] ["override", "decides"] (.name a)
+      .fn p0 (castMethod a) [{ name := "X", ty := .name a }] [] ["override", "decides", "computes"] (.name a)
         (if inhabited then .app p0 (.ident p0 c) [x] true else fails a)
     let makes : List STop := if concrete c == true then (ups.map fun a =>
       .fn p0 (makeMethod a) [] [] ["override"] (.name a) (.construct p0 c [] [])) else []
-    .classDef p0 (valueClass c) [] [] [] parents false [] (casts ++ makes)
+    .classDef p0 (valueClass c) [] [] ["computes"] parents false [] (casts ++ makes)
   -- (the values of other types: classes of their own, below their
   -- metatypes)
-  let otherValueClasses : List STop := typeValues.map fun n =>
-    .classDef p0 (valueClass n) [] [] [] [.name (ifaceName "subtype" n)] false [] []
+  let otherValueClasses : List STop := typeValues.map (fun n =>
+    .classDef p0 (valueClass n) [] [] ["computes"] [.name (ifaceName "subtype" n)] false [] []) ++
+    topValues.map fun n => .classDef p0 (valueClass n) [] [] ["computes"] [.name "type"] false [] []
   -- the program with its metatypes written as the interfaces, and its
   -- values as the objects of their classes
   let g : STy → STy := STy.mapTy fun
@@ -302,11 +310,11 @@ def desugar (tops : List STop) : Except String (List STop) := do
     | t => t
   let f : SExpr → SExpr := fun
     | e@(.ident p n) =>
-      if values.contains n || typeValues.contains n then .construct p (valueClass n) [] [] else e
+      if values.contains n || typeValues.contains n || topValues.contains n then .construct p (valueClass n) [] [] else e
     | e => e
   -- (a call's or cast's head and a member's object are no values)
   let tops := tops.map fun t => (STop.mapAll g (protectHeads f) t)
-  return root :: .classDef p0 castableMark [] [] [] [] true [] [] :: subIfaces ++ castIfaces ++ concreteIfaces ++
+  return root :: .classDef p0 castableMark [] [] ["computes"] [] true [] [] :: subIfaces ++ castIfaces ++ concreteIfaces ++
     otherIfaces ++ concreteOthers ++ valueClasses ++ otherValueClasses ++ tops
 
 end TypeValues

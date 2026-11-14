@@ -52,11 +52,57 @@ def Classes.supArgsSTy (classes : Classes) (c T : String) : Option (List STy) :=
       | none => []
   return none
 
+/-- The applications of the types `ns` in a type, each with the type
+    arguments it gives (`c(?t)` in `?c(?t)`), outermost first. -/
+partial def STy.applicationsOf (ns : List String) (t : STy) : List (String × List STy) :=
+  (match t with
+   | .app n args => if ns.contains n then [(n, args)] else []
+   | _ => []) ++ t.children.flatMap (STy.applicationsOf ns)
+
+/-- No parametric class or interface names itself in a field's type at
+    type arguments other than its own type parameters in order
+    (polymorphic recursion), and none names another one that names it back,
+    directly or through others (mutual recursion): Book of Verse ch. 10,
+    "Disallowed: Polymorphic Recursion" ("a parametric type references
+    itself with a **different type argument**") and "Disallowed: Mutual
+    Recursion" ("Mutual recursion between multiple parametric types is not
+    supported either"), and its tests, `ParametricTypes.versetest` 262-271
+    (3509). The types the front end writes (named with `$`) are not
+    looked at. -/
+def checkParametricRecursion (cdefs : List CDef) : Except String Unit := do
+  let parametric := cdefs.filter fun cd => !cd.tps.isEmpty && !cd.name.contains '$'
+  let names := parametric.map (·.name)
+  let uses (cd : CDef) : List (String × SField × List STy) :=
+    (cd.fields ++ cd.accessors.map (·.1)).flatMap fun f =>
+      (f.ty.applicationsOf names).map fun (n, args) => (n, f, args)
+  for cd in parametric do
+    let own : List STy := cd.tps.map (STy.name ·.name)
+    if let some (_, f, args) := (uses cd).find? fun (n, _, args) => n == cd.name && args != own then
+      throw s!"{cd.pos.show}: field '{f.name}' of {cd.name} names {TypeValues.writtenTy (.app cd.name args)}, {cd.name} at other type arguments than its own: a parametric type refers to itself only as {TypeValues.writtenTy (.app cd.name own)} (Book of Verse ch. 10, \"Disallowed: Polymorphic Recursion\")"
+  -- (each one's fields name these others)
+  let next (n : String) : List String :=
+    match parametric.find? (·.name == n) with
+    | some cd => ((uses cd).map (·.1)).eraseDups.filter (· != n)
+    | none => []
+  let reaches (a b : String) : Bool := Id.run do
+    let mut seen : List String := []
+    let mut frontier := [a]
+    for _ in [0:parametric.length + 1] do
+      let new := frontier.filter (!seen.contains ·)
+      seen := seen ++ new
+      frontier := new.flatMap next
+    return seen.contains b
+  for cd in parametric do
+    if let some d := (next cd.name).find? (reaches · cd.name) then
+      throw s!"{cd.pos.show}: the fields of {cd.name} name {d}, and those of {d} name {cd.name}{if (next d).contains cd.name then "" else " through others"}: parametric types cannot be mutually recursive (Book of Verse ch. 10, \"Disallowed: Mutual Recursion\")"
+
 /-- The class hierarchy, a phase of `elabProgramCore`: the classes and
     interfaces of `tops` (#14, #18), each one's parent and interfaces, which
     must exist, take the type arguments given, and inherit as classes and
     interfaces may (a class from one class, no interface from a class, none
-    from a `<final>` one, none from itself); none with type parameters is
+    from a `<final>` one, none from itself); no parametric one names itself
+    at other type arguments or names another that names it back in its
+    fields (`checkParametricRecursion`); none with type parameters is
     `<castable>` or below a `<castable>` one, and a class right below a
     `<final_super_base>` one is `<final_super>`; and each class's
     construction effects `constructionFx` allow those its parents declare. -/
@@ -88,8 +134,14 @@ def classHierarchy (tops : List STop) (constructionFx : Std.HashMap String (List
     let p := cd.pos
     for sp in cd.specs do
       match sp with
-      | "persistable" | "final_super" => throw s!"{p.show}: <{sp}> classes are not supported yet (#11)"
+      | "persistable" => throw s!"{p.show}: <{sp}> classes are not supported yet (#11)"
       | _ => pure ()
+    -- (a `<final_super>` class is the one right below the class or
+    -- interface it is the final super class of, Book of Verse ch. 10,
+    -- "Final"; its tests: "final_super types must have some sort of base
+    -- type", FinalSuperAttribute.versetest:50, 3679)
+    if cd.specs.contains "final_super" && cd.parents.isEmpty then
+      throw s!"{p.show}: {cd.name} is <final_super>, so it needs a parent: it is the final super class of the class or interface right above it (Book of Verse ch. 10, \"Final\")"
     let mut parent : Option String := none
     let mut ifaces : Array String := #[]
     -- (an interface named twice among the parents: "It's ok to inherit the
@@ -130,6 +182,7 @@ def classHierarchy (tops : List STop) (constructionFx : Std.HashMap String (List
       seen := seen ++ new
       frontier := new.flatMap directUp
     if seen.contains cd.name then throw s!"{cd.pos.show}: {cd.name} inherits from itself"
+  checkParametricRecursion cdefs
   -- what `<castable>` and `<final_super_base>` require of the classes below
   -- (`EffectPolicy.specifierPlaces`): a `<castable>` class or interface, and
   -- each one below it (it is heritable), has no type parameters; a class
@@ -163,6 +216,13 @@ structure Fields where
       two parents), with the type it gives them: `checkSignatures` checks, once
       types are resolved, that it is the inherited one. -/
   overrides : Array (Pos × String × String × STy)
+  /-- The fields a class re-declares with `<override>` that are no `var`s,
+      with the type it gives them and the type it inherits: `checkSignatures`
+      checks that the first is the second or one below it (Book of Verse
+      ch. 10, "Overriding Members": "fields can only be overridden with
+      subtypes"), and the class's objects hold such a field at its own type
+      (`TyEnv.narrowed`). -/
+  narrowings : Array (Pos × String × String × STy × STy) := #[]
   /-- A refusal for each field that two interfaces give defaults, which
       `checkSignatures` gives after the signature checks. -/
   defaultClashes : Array String
@@ -182,8 +242,10 @@ def Fields.of (fields : Fields) (n : String) : List (String × STy × Option SEx
 def classFields (classes : Classes) (requests : Requests) : Except String Fields := do
   -- the fields of each class: its superclass's, then those of the
   -- interfaces above it that are not there yet (once, along a diamond), then
-  -- its own (an `<override>` field gives an inherited one a new default)
+  -- its own (an `<override>` field re-declares an inherited one, with its
+  -- own default or none)
   let mut fieldOverrides : Array (Pos × String × String × STy) := #[]
+  let mut narrowings : Array (Pos × String × String × STy × STy) := #[]
   let mut defaultClashes : Array String := #[]
   -- (each class's fields by name, in a map: lookups in a list made this cubic)
   let mut fullMap : Std.HashMap String (List (String × STy × Option SExpr × Bool)) := {}
@@ -240,8 +302,6 @@ def classFields (classes : Classes) (requests : Requests) : Except String Fields
           throw s!"{cd.pos.show}: field '{f}' of {cd.name} has the name of an inherited method"
         match fs.findIdx? (fun (g : String × STy × Option SExpr × Bool) => g.1 == f) with
         | some k =>
-          if cd.overrides.contains f && d.isNone then
-            throw s!"{cd.pos.show}: {f}<override> must give a new default: write {f}<override>:t = e"
           if !cd.overrides.contains f then
             throw s!"{cd.pos.show}: field '{f}' of {cd.name} has the name of an inherited field (write {f}<override>:t = … to give it a new default)"
           -- (`<final>`: no class below gives it another default)
@@ -252,8 +312,23 @@ def classFields (classes : Classes) (requests : Requests) : Except String Fields
           let (_, sty0, _, v0) := fs[k]!
           if isVar != v0 then
             throw s!"{cd.pos.show}: {f}<override> cannot change whether the field is a var"
-          fs := fs.set k (f, sty0, d, v0)
-          fieldOverrides := fieldOverrides.push (cd.pos, cd.name, f, sty)
+          -- (an override without a value re-declares the field with no
+          -- default, so a construction gives it: Book of Verse tests,
+          -- Attributes/override.versetest 37-47, "Object archetype must
+          -- initialize data member", 3600, and 29-35; ch. 10, "Concrete":
+          -- "Re-declaring the member with `<override>` does not satisfy the
+          -- requirement — it still needs an initializer")
+          -- (a class's field that is no `var` may be re-declared at a
+          -- subtype, which the class and those below then hold it at; a
+          -- `var` keeps its type, as a write through a class above could not
+          -- keep a narrower one; an interface's override is the owner's
+          -- open question, and keeps the type)
+          if isVar || cd.isIface then
+            fs := fs.set k (f, sty0, d, v0)
+            fieldOverrides := fieldOverrides.push (cd.pos, cd.name, f, sty)
+          else
+            fs := fs.set k (f, sty, d, v0)
+            narrowings := narrowings.push (cd.pos, cd.name, f, sty, sty0)
         | none =>
           if cd.overrides.contains f then
             throw s!"{cd.pos.show}: {f}<override> in {cd.name} does not override an inherited field"
@@ -338,7 +413,7 @@ def classFields (classes : Classes) (requests : Requests) : Except String Fields
             fs := fs ++ [(s!"$w.{cd.name}.{tp.name}", .name tp.name, some (.ident cd.pos "$witness"), false)]
       fullMap := fullMap.insert cd.name fs
     if fullMap.size == before then break
-  let fields : Fields := { map := fullMap, overrides := fieldOverrides, defaultClashes }
+  let fields : Fields := { map := fullMap, overrides := fieldOverrides, narrowings, defaultClashes }
   for cd in classes.defs do
     for (f, _, d, _) in fields.of cd.name do
       if (classes.henv.supers cd.name).any (classes.declaresBase · f) then

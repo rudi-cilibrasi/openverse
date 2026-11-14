@@ -206,10 +206,14 @@ def checkField (p : Pos) (place : Place) (name : String) (specs varSpecs : List 
 def checkSpecs (p : Pos) (subject : String) (specs : List String)
     (typeOnly : Bool := false) : Except String Unit := do
   -- Retain the established exclusive-effect diagnostic for declarations.
+  -- (Book of Verse ch. 13, `13_effects.md:99-105`: "*exclusive*
+  -- specifiers (`<converges>`, `<computes>`, `<transacts>`) and *additive*
+  -- specifiers (`<suspends>`, `<decides>`, `<reads>`, `<writes>`,
+  -- `<allocates>`). A function may have at most one exclusive specifier but
+  -- can combine multiple additive ones": `<computes><allocates>` allows
+  -- `allocates`, `heapAllowed`)
   if (["converges", "computes", "transacts"].filter specs.contains).length > 1 then
     reject p s!"{subject} has more than one of <converges>, <computes> and <transacts> (they exclude each other)"
-  if specs.contains "computes" && ["transacts", "reads", "writes", "allocates"].any specs.contains then
-    reject p s!"<computes> excludes the heap effects (<reads>, <writes>, <allocates>, <transacts>) that {subject} also has"
   if specs.contains "suspends" && specs.contains "decides" then
     reject p s!"{subject} is both <suspends> and <decides>, which exclude each other"
   -- (Book of Verse ch. 13: "`<transacts>` implies `reads`, `writes` and
@@ -239,12 +243,17 @@ def checkData (p : Pos) (kind : String) (specs : List String) : Except String Un
     if specs.contains sp then reject p s!"<{sp}> is not allowed on a {kind}: construction effects are heap effects"
 
 /-- No heap specifier means transacts, also for data types (pinned
-    Tests/Effects.versetest). Metadata does not change that default. -/
+    Tests/Effects.versetest). Metadata does not change that default.
+    `<computes>` alone means none, and with additive heap specifiers
+    (`<computes><allocates>`) those (Book of Verse ch. 13, "*exclusive*
+    specifiers … and *additive* specifiers"; `Attributes/allocates.versetest`
+    4-5: "Combines with <varies> and <computes>"). -/
 def constructionFx (specs : List String) : List String :=
   let heap := ["reads", "writes", "allocates"]
-  if specs.contains "computes" then []
-  else if specs.contains "transacts" || !(heap.any specs.contains) then heap
-  else heap.filter specs.contains
+  if specs.contains "transacts" then heap
+  else if heap.any specs.contains then heap.filter specs.contains
+  else if specs.contains "computes" then []
+  else heap
 
 partial def checkTy (p : Pos) : STy → Except String Unit
   | .name _ => pure ()

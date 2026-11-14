@@ -94,10 +94,15 @@ partial def elabERaw (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   if !ctx.types.accessors.isEmpty then
     if let some r ← elabAccessorRead? elabE elabApp (fun c q r m => elabMember c q r m) ctx se exp then return r
   -- `T{}` with `T` a type value of `concrete_subtype(A)`: `T.$make(A)()`
-  -- (`TypeValues`)
+  -- (`TypeValues`), `T` a local or, in a method, a field of `Self` (Book of
+  -- Verse ch. 11, "concrete_subtype": "The type value has to be held in a
+  -- class *field*")
   if let .construct p n [] fs := se then
-    if let some l := ctx.lookup n then
-      if let .struct iface [] := l.ty then
+    let held : Option Ty := match ctx.lookup n with
+      | some l => some l.ty
+      | none => ctx.selfClass.bind fun c => ((ctx.types.fields c).find? (·.1 == n)).map (·.2.1)
+    if let some ty := held then
+      if let .struct iface [] := ty then
         if let some (k, a) := TypeValues.bound? iface then
           if k != "concrete_subtype" then eerr p s!"{n}\{…} constructs through a value of concrete_subtype(…), and {n} is a {iface}"
           -- (Book of Verse tests, MetatypeConcreteSubtype.versetest:35, 3545:
@@ -106,7 +111,16 @@ partial def elabERaw (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
           if a == "comparable" || a == "any" then
             eerr p s!"{n}\{…} constructs through a value of {iface}, which need not be a class's: it cannot be constructed"
           if !fs.isEmpty then eerr p s!"{n}\{…} constructs through a type value with no fields given: the class's defaults"
-          return ← elabE ctx (.app p (.member p (.ident p n) (TypeValues.makeMethod a)) [] false) exp
+          let r ← elabE ctx (.app p (.member p (.ident p n) (TypeValues.makeMethod a)) [] false) exp
+          -- (it may construct any `<concrete>` class at or below `A`: their
+          -- construction budgets, whichever classes the program names as
+          -- values; Book of Verse tests, SOL-8627-concrete_subtype-effects:
+          -- "Could invoke d's constructor", 3512)
+          for d in ctx.types.concreteMarked do
+            if ctx.types.isSub d a then
+              if let some fx := ctx.types.constructionFx[d]? then
+                noteFx p fx (some s!"constructs through {n}, a concrete_subtype({a}), which may construct {d} (declared construction budget)")
+          return r
   if !ctx.constructProbe && ctx.constructHints.isNone &&
       Choice.anyE (fun
         | e@(.construct _ n [] _) =>
@@ -2252,17 +2266,24 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
         -- tests; the read is typed even when none can)
         let viewedSn := env.viewed.contains sn
         if viewedSn then refined := true
+        -- (a class that re-declares the field at a narrower type, or is
+        -- below one, holds it at that type: converted up to `t`)
+        let up (d : String) (e : Expr) : EM Expr := do
+          if env.narrowed.isEmpty || !env.narrowed.any fun (n, g) => g == f && (env.supers d).contains n then return e
+          let some (_, td) := fieldIndex (env.fields d (env.argsAt sn targs d)) f | return e
+          if td == t then return e
+          coerce p ⟨e, td⟩ t
         for (d, kd) in (ds.zip pos).reverse do
           if viewedSn && (env.viewArgs? sn d (env.coreArgs sn targs) (rigid := false)).isNone then continue
           match env.fieldAcc.idxOf? (d, f) with
           | some i =>
             -- (a class that fixes the type arguments: its getter, under the
             -- refinement, #157)
-            acc := .ite (.heap (.isTag [env.tagOf d]) [.local x]) (.call (env.fieldAccBase + 2 * i) [.local x]) acc
+            acc := .ite (.heap (.isTag [env.tagOf d]) [.local x]) (← up d (.call (env.fieldAccBase + 2 * i) [.local x])) acc
             refined := true
           | none =>
             let yd ← fresh (.struct d (env.argsAt sn targs d))
-            acc := .ite (.assign yd (.heap (.isTag [env.tagOf d]) [.local x])) (.heap (.get kd) [.local yd]) acc
+            acc := .ite (.assign yd (.heap (.isTag [env.tagOf d]) [.local x])) (← up d (.heap (.get kd) [.local yd])) acc
         if refined then
           -- (checked against the field's type, as the refined calls need one)
           let y ← fresh t

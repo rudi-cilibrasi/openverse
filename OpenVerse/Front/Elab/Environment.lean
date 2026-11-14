@@ -82,6 +82,16 @@ def typeEnvironment (classes : Classes) (fields : Fields) (methods : Methods) (s
       structs := structs.push (n, fields)
     | _ => pure ()
   env := { env with structs := structs.toList }
+  -- the fields a class re-declares at a type below the one it inherits
+  -- (`Fields.narrowings`, checked in `checkSignatures`): held at it
+  let mut narrowed : Array (String × String) := #[]
+  for (p, c, f, sty, sty0) in fields.narrowings do
+    let cenv := { env with tvars := ((env.sparams.lookup c).getD []).map fun (v, k) => (v, Ty.param v k) }
+    let (t, _) ← (resolveTy cenv p sty).run {}
+    let (t0, _) ← (resolveTy cenv p sty0).run {}
+    if !(t == t0) then narrowed := narrowed.push (c, f)
+  env := { env with narrowed := narrowed.toList,
+                    concreteMarked := (classes.defs.filter (·.specs.contains "concrete")).map (·.name) }
   -- the fields with accessors, their types resolved (`Accessors`)
   let mut accessors : Array AccessorField := #[]
   for cd in classes.defs do
