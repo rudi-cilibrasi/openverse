@@ -23,7 +23,7 @@ def typeEnvironment (classes : Classes) (fields : Fields) (methods : Methods) (s
   let finalFields : List (String × String) := classes.defs.flatMap fun cd =>
     cd.fields.filterMap fun f => if f.specs.contains "final" then some (cd.name, f.name) else none
   let mut env : TyEnv := { constructionFx := source.constructionFx, access := source.access,
-                           ignoredArms := source.ignoredArms, concurrencyNames, finalFields, classes := classes.henv.classes, cinfo := classes.henv.cinfo, cinfoMap := classes.henv.cinfoMap,
+                           ignoredArms := source.ignoredArms, forFilters := source.forFilters, concurrencyNames, finalFields, classes := classes.henv.classes, cinfo := classes.henv.cinfo, cinfoMap := classes.henv.cinfoMap,
                            classIx := classes.henv.classes.zipIdx.foldl (fun m (n, i) => m.insert n i) {},
                            belowReady := true,
                            supersMap := classes.henv.classes.foldl (fun m d => m.insert d (classes.henv.supers d)) {},

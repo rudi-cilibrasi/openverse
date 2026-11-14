@@ -387,7 +387,11 @@ if mode == 'first':
     print('    if(' + ','.join(clauses) + ',Out:=block{' + body + '})then Out(2) else -1')
 else:
     body = 'defer:Print("body {H.N} {Total}");' + ('Sleep(0.1);' if mode == 'waiting' else '') + f'set H.N+={boost}+{score};set Total+={score};{packet}'
-    print('    Rows:=for(' + ','.join(clauses) + '):block{' + body + '}')
+    # (a `for`'s filter can fail, Book of Verse ch. 7: a print or a `set` among
+    # its clauses goes with a check that cannot fail, `(E; true?)`, as the
+    # Book's tests write; it does the same)
+    for_clauses = [f'({c}; true?)' if c.startswith(('Print(', 'set ')) else c for c in clauses]
+    print('    Rows:=for(' + ','.join(for_clauses) + '):block{' + body + '}')
     print('    var Sum:int=0')
     if packed:
         print('    for(Row:Rows):set Sum+=Row(2)')

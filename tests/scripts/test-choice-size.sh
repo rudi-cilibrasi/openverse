@@ -1536,7 +1536,9 @@ Wait(N:int)<suspends>:int =
     clauses = []
     for i, value in enumerate(values):
         clauses.append(f'A{i}:={value}')
-        if generic: clauses.append(f'set Total+=A{i}')
+        # (a for's filter can fail, Book of Verse ch. 7: the set goes with a
+        # check that cannot fail, as the Book's tests write)
+        if generic: clauses.append(f'(set Total+=A{i}; true?)')
     print(f'Run({"Value:t where t:type" if generic else ""})<suspends>:void =')
     if generic: print('    var Total:int=0')
     if kind == 'waiting-nested-value': print('    F:type{_(:int)<suspends>:int}=Wait')
@@ -1729,7 +1731,9 @@ if kind.startswith('waiting-refined'):
     clauses = []
     for i, value in enumerate(values):
         clauses.append(f'A{i}:={value}')
-        if state: clauses.append(f'set Total+=A{i}')
+        # (a for's filter can fail, Book of Verse ch. 7: the set goes with a
+        # check that cannot fail, as the Book's tests write)
+        if state: clauses.append(f'(set Total+=A{i}; true?)')
     total = '+'.join(f'A{i}' for i in range(count))
     print(f'Run({params} where {tparams})<suspends>:{"int" if returning else "void"} =')
     if state: print('    var Total:int=0')
@@ -2160,7 +2164,7 @@ if kind in ('refined-nested-body', 'refined-nested-failure'):
 elif kind in ('refined-state', 'refined-failure', 'refined-lazy-failure', 'refined-return', 'refined-lazy-return'):
     params = ', '.join(f'P{i}:pair(a{i}, b{i})' for i in range(count))
     tparams = ', '.join(f'a{i}:type, b{i}:type' for i in range(count))
-    clauses = ', '.join(f'A{i} := if (D := dup[P{i}]) then (D.C | D.C + 1) else 0, A{i} = 4, set Total += A{i}' for i in range(count))
+    clauses = ', '.join(f'A{i} := if (D := dup[P{i}]) then (D.C | D.C + 1) else 0, A{i} = 4, (set Total += A{i}; true?)' for i in range(count))
     effects = '<decides>' if kind in ('refined-failure', 'refined-lazy-failure') else ''
     test = ('\n        if (Total > 0):\n            return Total' if kind in ('refined-return', 'refined-lazy-return') else '\n        Total > 0' if effects else '')
     init = '\n    C := counter{}' if kind in ('refined-lazy-failure', 'refined-lazy-return') else ''

@@ -18,8 +18,8 @@ Refined(P:pair(a, b), Q:pair(c, d) where a:type, b:type, c:type, d:type)<suspend
     Sleep(0.01)
     C := counter{}
     var Total:int = 0
-    R := for (A := if (D := dup[P]) then (D.C | D.C + 1) else 0, set Total += A,
-        B := if (E := dup[Q]) then (E.C | E.C + 1) else 0, set Total += B,
+    R := for (A := if (D := dup[P]) then (D.C | D.C + 1) else 0, (set Total += A; true?),
+        B := if (E := dup[Q]) then (E.C | E.C + 1) else 0, (set Total += B; true?),
         L := Lazy[C, 1], L = 0):
         Print("refined {A} {B} {Total} {C.N}")
         Total
@@ -28,7 +28,7 @@ Main()<suspends>:void =
     Sleep(0.01)
     C := counter{}
     var Total:int = 0
-    R := for (A := Early(0), set Total += A, B := Early(0), set Total += B,
+    R := for (A := Early(0), (set Total += A; true?), B := Early(0), (set Total += B; true?),
         L := Lazy[C, 1], L = 0):
         Print("exclusive {A} {B} {Total} {C.N}")
         Total

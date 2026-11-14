@@ -11,7 +11,7 @@ dup(t:type) := class(pair(t, t)):
 Each(P:pair(a, b) where a:type, b:type):[]b =
     for (D := dup[P], Y : D.Items) { Y }
 Each2(Ps:[]pair(a, b) where a:type, b:type):[]b =
-    for (P : Ps, Print("p"), D := dup[P], N := D.Items.Length, Y : D.Items, Z : array{1, 2}):
+    for (P : Ps, (Print("p"); true?), D := dup[P], N := D.Items.Length, Y : D.Items, Z : array{1, 2}):
         Print("{N} {Z}")
         D.A
 Main():void =

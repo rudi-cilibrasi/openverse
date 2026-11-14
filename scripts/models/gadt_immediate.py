@@ -95,11 +95,11 @@ condition = ','.join(f'{n}={v}' for n, v in zip(['A', 'V', 'W', 'Z'], stop)) if 
 return_clause = f'        if({condition}):return Total\n' if returning else ''
 heap_stamp = '        Stamp(H,Total)\n' if scoped else ''
 consumer = f'''    Zs:[]int={z_source}
-    R:=for(A:=0|1,set Total+=A,Print("outer {{A}} {{Total}}"),
+    R:=for(A:=0|1,(set Total+=A; true?),(Print("outer {{A}} {{Total}}"); true?),
         V:=if(D:=dup[P])then(D.C|D.C+1)else(0|1),
-        set Total+=V,Print("v {{A}} {{V}} {{Total}}"),V>={cut_v},
+        (set Total+=V; true?),(Print("v {{A}} {{V}} {{Total}}"); true?),V>={cut_v},
         W:=if(E:=dup[Q])then(E.C|E.C+1)else(0|1),
-        set Total+=W,Print("w {{A}} {{V}} {{W}} {{Total}}"),W>={cut_w},Z:Zs):
+        (set Total+=W; true?),(Print("w {{A}} {{V}} {{W}} {{Total}}"); true?),W>={cut_w},Z:Zs):
 {body_defer}        Empty:[]t=Concatenate()
         var Local:int=A
         if(F:=dup[P]):

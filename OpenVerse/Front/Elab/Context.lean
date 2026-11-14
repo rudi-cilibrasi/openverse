@@ -428,6 +428,12 @@ structure Ctx where
       elaborated again at each construction that omits the field, in that
       construction's context (#156). -/
   inDefaultCheck : Bool := false
+  /-- The clauses of a `for` after Choice.prepare, as `elabSeqIn` goes
+      through them (`elabFilters`): each that is neither a generator nor a
+      definition is a filter, which must be able to fail (Book of Verse
+      ch. 7, "Each filter must be failable"). Only the sequence itself reads
+      it, not the code inside a clause. -/
+  forFilters : Bool := false
   /-- In the body of a `loop` or `for`, also through arms (#156): a
       `branch` there would start again before the last one ended. -/
   inRepeat : Bool := false

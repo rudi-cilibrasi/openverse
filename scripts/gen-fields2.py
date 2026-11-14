@@ -128,7 +128,7 @@ class G:
             return [pad + 'if (%s(%s) > %d, %s[%s]) {}' % (f[0], self.call_args(), r.randrange(6),
                                                           g[0], self.call_args())]
         if k == 12:
-            return [pad + 'for (X : %s.A, set %s.A = %s.A + array{X}, X > %d) {}' % (p, q, q, r.randrange(6))]
+            return [pad + 'for (X : %s.A, (set %s.A = %s.A + array{X}; true?), X > %d) {}' % (p, q, q, r.randrange(6))]
         if k == 13 and ds:
             g = r.choice(ds)
             return [pad + 'for (X : %s.A, %s[%s, %s, X]) {}' % (p, g[0], self.obj(), self.obj())]

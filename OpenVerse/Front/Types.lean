@@ -322,6 +322,9 @@ structure TyEnv where
       reports an arm never reached: such an arm is kept, and never runs
       when it is never reached (Book of Verse tests, `Enum.versetest`). -/
   ignoredArms : List Pos := []
+  /-- The places of the filters of every `for` as written, each of which
+      can fail (`forFilterPositions`, `Ctx.forFilters`). -/
+  forFilters : List Pos := []
   /-- The `var` fields of each class, inherited ones included (#34). -/
   varFields : List (String × String) := []
   /-- The `<unique>` classes: compared by identity (#34). -/

@@ -9,6 +9,6 @@ Nat(N:int)<transacts><decides>:int =
 Main():void =
     if (X := Tell("t", 1) | A(), Print("after {X}"), X > 1) then Print("if {X}")
     Print("--")
-    for (X := A() | Tell("u", 7), Print("f {X}"), X <> 2) { Print("body {X}") }
+    for (X := A() | Tell("u", 7), (Print("f {X}"); true?), X <> 2) { Print("body {X}") }
     Print("--")
     if (X := A() | 10, Y := Nat[0], X + Y > 11) then Print("nat {X} {Y}")

@@ -46,6 +46,8 @@ structure Admitted where
   access : Access.Env := {}
   /-- The `case` arms marked `@ignore_unreachable` (`ignoredArmsMarker`). -/
   ignoredArms : List Pos := []
+  /-- The places of the filters of every `for` as written (`forFilterPositions`). -/
+  forFilters : List Pos := []
   /-- The type aliases, each by its name, written out (`Aliases.expand`). -/
   aliases : List (String × Aliases.Alias) := []
 
@@ -322,6 +324,27 @@ partial def checkForClauses (tops : List STop) : Except String Unit := do
     | .structDef _ _ _ fs => fs.forM fun f => f.default.forM go
     | e => e.children.forM go
   tops.forM (·.code.forM go)
+
+/-- The places of the filters of every `for` as written: each clause that
+    is neither a generator (`X : A`, `X := A..B`) nor a definition (`X := e`,
+    `X:t = e`, `var X:t = e`), and has no choice in it and calls no function
+    with several values, which make it a generator over their values (#208,
+    #283). The elaboration checks that each can fail (`Ctx.forFilters`,
+    Book of Verse ch. 7: "Each filter must be failable"); a clause that
+    inlining or a choice's preparation adds, as the statements of a function
+    with several values that a `for` takes, is none of them. -/
+partial def forFilterPositions (tops : List STop) : List Pos :=
+  let mv := Choice.multiValued (Choice.multiCandidates tops)
+  let callsMulti (c : SExpr) : Bool :=
+    Choice.anyE (fun | .app _ (.ident _ f) _ _ => mv.contains f | _ => false) c
+  let rec go : SExpr → List Pos
+    | .forE _ cs b =>
+      (cs.filterMap fun c => match c with
+        | .gen .. | .decl .. => none
+        | c => if Choice.hasChoice [c] || callsMulti c then none else some c.pos) ++
+      cs.flatMap go ++ go b
+    | e => e.children.flatMap go
+  tops.flatMap fun t => t.code.flatMap go
 
 /-- The code of a `spawn` cannot leave it: no `return`, and no `break` but
     of a loop inside it (Book of Verse tests, `SpawnAndTask.versetest` 876-892:
@@ -676,7 +699,8 @@ def concurrencyHelpers (resolved : List STop) (requests : Requests) (eventFifo :
        an empty `option{}`), `profile` only in a function's code
        (`checkProfiles`), `defer:` only as a statement (`checkDefers`), no
        `for` of literal clauses only, nor a literal filter
-       (`checkForClauses`);
+       (`checkForClauses`), and the places of every `for`'s filters
+       (`forFilterPositions`), whose code the elaboration checks can fail;
     3. the helpers the parser's `$uses:` markers and the entry expression ask
        for, and the markers taken out;
     4. the access levels written out (`resolveSpecifiers`), then the modules
@@ -795,7 +819,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
       budgets.insert n (EffectPolicy.constructionFx specs)
     | _ => budgets) ({} : Std.HashMap String (List String))
   return { resolved, rawEntry, typeDefaults, helpers := helpers ++ prelude, intrinsicCalls, concurrencyNames, usesConc,
-           constructionFx, access, scopePairs, ignoredArms, aliases }
+           constructionFx, access, scopePairs, ignoredArms, aliases, forFilters := forFilterPositions allTops0r }
 
 /-- A program's source as elaborated (`inlineSource`). -/
 structure Source where
@@ -812,6 +836,8 @@ structure Source where
   access : Access.Env := {}
   /-- `Admitted.ignoredArms`. -/
   ignoredArms : List Pos := []
+  /-- `Admitted.forFilters`. -/
+  forFilters : List Pos := []
 
   /-- The uses of methods whose family the receiver's class picks (#283). -/
   familySites : List (Pos × String)
@@ -926,7 +952,7 @@ def inlineSource (requests : Requests) (admitted : Admitted) :
       requests.methods written))
   let entryTop := resolved.drop (resolved.length - admitted.rawEntry.length)
   return { tops := allTops00, entry := entryTop, constructionFx, access := admitted.access,
-           ignoredArms := admitted.ignoredArms, familySites,
+           ignoredArms := admitted.ignoredArms, forFilters := admitted.forFilters, familySites,
            overloadSites, nestedSites, fieldSites }
 
 

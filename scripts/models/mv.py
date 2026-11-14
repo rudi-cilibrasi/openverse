@@ -2329,6 +2329,19 @@ def show_cl(cl, sep):
     return sep.join(show_c(c) for c in cl)
 
 
+def show_for_cl(cl, sep):
+    """A `for`'s clauses: a filter that cannot fail, a print or a `set` with no
+    choice at its top, goes with a check that cannot fail, `(E; true?)`, as each
+    filter of a `for` must be able to fail (Book of Verse ch. 7, and its
+    tests, for.versetest: `(set Temp = Element; true?)`); it does the same."""
+    def one(c):
+        s = show_c(c)
+        if c[0] in ('setv', 'seti', 'setf', 'print') and not top_choice_c(c):
+            return f'({s}; true?)'
+        return s
+    return sep.join(one(c) for c in cl)
+
+
 # ---------------------------------------------------------------- the model
 STATS = {'cp': 0, 'gfirst': 0, 'gback': 0, 'gfor': 0, 'lfirst': 0, 'lback': 0, 'lmeth': 0}
 LASTG = [False]
@@ -3022,7 +3035,7 @@ def show_s(c):
     if t == 'sfor':
         body = (f"set {c[2][1]} += {c[1][-1][1]}" + (f'; Print("{c[3]}")' if c[3] else "") +
                 (f"; {c[1][-1][1]} < {c[4]}" if c[4] is not None else ""))
-        return f"for ({show_cl(c[1], ', ')}) {{ {body} }}"
+        return f"for ({show_for_cl(c[1], ', ')}) {{ {body} }}"
     raise AssertionError(c)
 
 
@@ -3433,7 +3446,7 @@ for ti in range(NT):
             res = first_inner(lambda s, kk: run_clauses(cl, s, lambda s2: kk(None, s2), 'first'), st)
             st.out.append("not fail" if res is not None else "not ok")
         elif kind == 'for':
-            L.append(f"    for ({show_cl(cl, ', ')}):")
+            L.append(f"    for ({show_for_cl(cl, ', ')}):")
             L.append(f'        Print("body {vals_str}")')
 
             def fbody(s):
@@ -3446,7 +3459,9 @@ for ti in range(NT):
                 pass
         else:  # formacro
             last = cl[-1]
-            L.append(f"    Vs := for{{{show_cl(cl, '; ')}}}")
+            # (its clauses but the last, the value, are the for's: its filters
+            # that cannot fail go with a check that can, `show_for_cl`)
+            L.append(f"    Vs := for{{{'; '.join(([show_for_cl(cl[:-1], '; ')] if cl[:-1] else []) + [show_c(cl[-1])])}}}")
             L.append('    for (V : Vs) { Print("e {V}") }')
             vs = []
 

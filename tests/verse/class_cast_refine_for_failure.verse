@@ -12,7 +12,7 @@ Fail(H:counter)<transacts><decides>:int =
     0
 Use(P:pair(a,b), H:counter where a:type,b:type)<transacts><decides>:void =
     var Total:int = 0
-    R := for (A := 1 | 2, set Total += A,
+    R := for (A := 1 | 2, (set Total += A; true?),
         V := if (D := dup[P]) then (D.C | D.C + 1) else 0):
         set Total += V
         set H.N = Total

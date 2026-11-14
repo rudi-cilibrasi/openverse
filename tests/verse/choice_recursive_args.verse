@@ -56,6 +56,6 @@ Main():void =
     for (X := Apply[Double, 3]) { Print("apply {X}") }
     # (an argument that fails is a clause: the clauses before it roll back)
     var N:int = 0
-    for (set N = 2, X := Count[array{1}[5]]) { Print("never") }
+    for ((set N = 2; true?), X := Count[array{1}[5]]) { Print("never") }
     Print("n {N}")
     if (set N = 3, X := Count[array{1}[5]]) then Print("never") else Print("n {N}")

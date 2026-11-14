@@ -30,30 +30,30 @@ Main()<transacts>:void =
     # the first generator's source and the clauses before it (Range.versetest:140)
     var A:int = 1
     var N:int = 0
-    for (set N += 1, J : array{(set A = 5)}, K := J..2) { Print("never") }
+    for ((set N += 1; true?), J : array{(set A = 5)}, K := J..2) { Print("never") }
     Print("before {A} {N}")
     # an outer generator's filters, undone for an element with no value below
     var T:int = 0
-    for (I := 1..3, set T += 10 * I, Print("i {I}"), J := 2..I) { Print("body {I} {J} {T}") }
+    for (I := 1..3, (set T += 10 * I; true?), (Print("i {I}"); true?), J := 2..I) { Print("body {I} {J} {T}") }
     Print("filters {T}")
     # a choice of values is one more generator (#208), its alternative's own code
     # undone with it; a parenthesized choice is spliced in; a choice in an expression
     var M:int = 0
-    for (Y := (Print("a"); 1) | ((set M += 5; 2) | 3), set M += 1, Z := 2..Y) { Print("ch {Y} {Z} {M}") }
-    for (Y := 10 + (0 | 1), set M += 100, Z := 11..Y) { Print("ex {Y} {Z} {M}") }
+    for (Y := (Print("a"); 1) | ((set M += 5; 2) | 3), (set M += 1; true?), Z := 2..Y) { Print("ch {Y} {Z} {M}") }
+    for (Y := 10 + (0 | 1), (set M += 100; true?), Z := 11..Y) { Print("ex {Y} {Z} {M}") }
     Print("choice {M}")
     # a var of the clauses is the search's too
-    for (I := 1..3, var W:int = I, set W += 1, K := 4..W) { Print("w {I} {W} {K}") }
+    for (I := 1..3, var W:int = I, (set W += 1; true?), K := 4..W) { Print("w {I} {W} {K}") }
     # an effect before the second generator only, a third with none before it
     # (searched inside the second's probe, and also entered outside one)
     var Q:int = 0
-    for (I := 1..3, set Q += 1, J := 2..I, K := J..3, K <> 3 or J = 3) { Print("q {I} {J} {K} {Q}") }
+    for (I := 1..3, (set Q += 1; true?), J := 2..I, K := J..3, K <> 3 or J = 3) { Print("q {I} {J} {K} {Q}") }
     Print("q {Q}")
     # maps, strings and indices as generators
     Mp:[int]int = map{1 => 10, 2 => 20}
     var S:int = 0
-    for (Key -> Val : Mp, set S += Val, Ch : "ab", Key = 2) { Print("m {Key} {Ch} {S}") }
-    for (Ix -> C2 : "xyz", set S += 1, Ix > 1) { Print("s {Ix} {C2} {S}") }
+    for (Key -> Val : Mp, (set S += Val; true?), Ch : "ab", Key = 2) { Print("m {Key} {Ch} {S}") }
+    for (Ix -> C2 : "xyz", (set S += 1; true?), Ix > 1) { Print("s {Ix} {C2} {S}") }
     Print("map {S}")
     # a body that fails fails the for, and the if around it undoes it all
     X4 := c{V := 0}

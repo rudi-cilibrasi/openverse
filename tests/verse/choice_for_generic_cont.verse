@@ -44,7 +44,7 @@ Step(H:counter, Label:string, N:int)<transacts>:int =
 Effects(X:t, Y:t, Required:int where t:subtype(comparable))<transacts>:void =
     H := counter{}
     var Current:t = X
-    R := for (A := (Step(H, "a", 0) | Step(H, "a", 2)), set Current = Y, A = Required,
+    R := for (A := (Step(H, "a", 0) | Step(H, "a", 2)), (set Current = Y; true?), A = Required,
         B := (Step(H, "b", 10) | Step(H, "b", 20)), B = 10):
         set H.N += 100
         Current
@@ -57,7 +57,7 @@ EmptyInts():[]int = array{}
 LateEmpty(X:t, Y:t where t:subtype(comparable))<transacts>:void =
     H := counter{}
     var Current:t = X
-    R := for (A := (Step(H, "a", 0) | Step(H, "a", 2)), A = 0, set Current = Y,
+    R := for (A := (Step(H, "a", 0) | Step(H, "a", 2)), A = 0, (set Current = Y; true?),
         B : EmptyInts(), C := (Two(10) | Two(20))) { Current }
     if (Current = Y) then Print("kept {R.Length} {H.N}") else Print("lost")
 Fails(X:t where t:type)<transacts><decides>:[]t =
@@ -70,7 +70,7 @@ box(t:type) := class:
     Y:t
     Values():[]t =
         var Current:t = X
-        for (A := (Two(0) | Two(2)), A = 0, set Current = Y,
+        for (A := (Two(0) | Two(2)), A = 0, (set Current = Y; true?),
             B := (Two(10) | Two(20)), B = 10) { Current }
 Main()<transacts>:void =
     A := Composed(7)

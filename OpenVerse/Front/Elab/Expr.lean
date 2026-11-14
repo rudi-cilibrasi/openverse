@@ -568,6 +568,9 @@ partial def elabSeqIn (closed : Bool) (ctx : Ctx) (ss : List SExpr) (exp : Optio
       let t ← fresh ty
       return (⟨.seq (.assign t r2.e) (.seq d (.local t)), ty⟩, ctx2)
   | s :: rest =>
+    -- (a `for`'s filter: `forFilters`, for this sequence's own statements)
+    let filters := ctx.forFilters
+    let ctx := { ctx with forFilters := false }
     if closed && ctx.canFail then
       if let some (p, d, T, x) := Refine.castClause? s then
         let branch := if rest.isEmpty then .ident p d else .block p rest
@@ -583,12 +586,26 @@ partial def elabSeqIn (closed : Bool) (ctx : Ctx) (ss : List SExpr) (exp : Optio
       | .error err =>
         match Refine.castRefusal? err with
         | some r =>
-          if inner.contains r.pos then return ← elabSeqIn closed ctx (liftCastClause ctx [] r.pos s ++ rest) exp
+          if inner.contains r.pos then return ← elabSeqIn closed { ctx with forFilters := filters } (liftCastClause ctx [] r.pos s ++ rest) exp
           throw err
         | none => throw err
+    -- (a `for`'s filter, a clause that is neither a generator nor a
+    -- definition, can fail: "Each filter must be failable, and if any
+    -- fails, that iteration is skipped", Book of Verse ch. 7, and its
+    -- tests, for.versetest:223, "Filter can not fail"; the code the
+    -- elaboration adds, `$…`, is none)
+    if filters then
+      let isFilter := match s with
+        | .decl .. => false
+        -- (a lifted cast's copy-out of a source variable, `$refineCopyOut`)
+        | .set _ _ _ (.app _ (.ident _ "$refineCopyOut") _ _) => false
+        | .app _ (.ident _ n) _ _ | .set _ (.ident _ n) .. => !n.startsWith "$"
+        | _ => true
+      if isFilter && ctx.types.forFilters.contains s.pos && !(r.e.mayFail ctx.sigProg) && (← ctx.failabilityKnown) then
+        eerr s.pos "this filter of a for cannot fail: each filter must be able to fail (Book of Verse ch. 7: \"Each filter must be failable, and if any fails, that iteration is skipped\"; its tests, for.versetest: \"Filter can not fail\"); an effect among the clauses goes in one that can, as the Book's tests write (set X = E; true?), or in the body"
     if rest.isEmpty then return (r, ctx')
     let e ← inferable r
-    let (r2, ctx'') ← elabSeqIn closed ctx' rest exp
+    let (r2, ctx'') ← elabSeqIn closed { ctx' with forFilters := filters } rest exp
     return (⟨.seq e r2.e, r2.ty⟩, ctx'')
 
 partial def elabArgs (ctx : Ctx) (p : Pos) (args : List SExpr) (tys : List Ty) : EM (List Expr) := do

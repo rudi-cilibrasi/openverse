@@ -188,25 +188,79 @@ each default is checked once (`elabFieldDefaults`, `Elab/Functions.lean`);
 `--extended-defaults` keeps openverse's failing defaults, as it keeps its
 other computed field defaults (#511).
 
-## A filter that is a literal
+## Every filter of a `for` can fail
 
-**The rule.** Each filter of a `for`, a clause that is no binding, must be
-able to fail.
+**The rule.** Each filter of a `for`, a clause that is neither a generator
+(`X : A`, `X := A..B`) nor a definition (`X := e`, `X:t = e`, `var X:t =
+e`), can fail: a print, a `set`, a call of a function that cannot fail, or a
+block, an `if` or anything else whose code cannot fail, is refused as a
+filter. Where an effect goes among the clauses instead: in a filter that
+pairs it with a check that can fail, `(set T = E; true?)`, as the Book's
+tests write; in a definition's value, `Y := (set S += X; X * 10)`; in a
+generator's source, `X := 1..(set N += 2; N)`; or in a call that can fail,
+`C.Bump[X]`. All of these stay among the clauses, so what a failure undoes
+there is the search's (#611), as before. A clause with a choice in it, or a
+call of a function with several values, is a generator over their values,
+not a filter (openverse's reading: the Book has no choice), and the
+statements a `for` takes from a function with several values it inlines
+are that function's, not the `for`'s clauses.
 
 **The Book.** Ch. 7: "Each filter must be failable, and if any fails, that
 iteration is skipped" (`07_control.md:657`); "Filters must be failable:
 Filter conditions must contain at least one expression that can fail."
-(`:836-837`); the tests: `NoFailure:[]int= for(X:=1 .. 4; 1) { X }`
-refused, "Filter can not fail" (`FlowControl/for.versetest:223`, 3513).
+(`:836-837`). The tests: `NoFailure:[]int= for(X:=1 .. 4; 1) { X }` refused,
+"Filter can not fail" (`FlowControl/for.versetest:223`, 3513); and accepted,
+"Write mutable variable" (`:229-232`): `for(X:=1 .. 2; Element:=Array[X];
+(set Temp = Element; true?)) { X }`, an effect paired with a check; a block
+filter whose tail can fail (`:164-175`); definitions that fail
+(`Thing := GetThing[]`, `:148-162`) or have effects; generators whose
+bounds have effects (`I:=1..X.Inc()`) and failable calls with effects
+(`S.QInc[]`, `:308-392`). A definition of `_` is refused (ch. 1,
+`01_expressions.md:340`: "The single underscore `_` is reserved and cannot
+be used as an identifier", 3514), so `_ := Print(…)` is no way to write an
+effect among the clauses.
 
-**openverse now.** A filter that is a literal is refused with the source
-rules (`checkForClauses`, `Elab/Source.lean`), beside the `for` of literal
-clauses only. **Left:** the whole rule. Checked on every filter's
-elaborated code, it refuses 153 of openverse's tests and 826 generated
-programs (the `choice`, `context`, `fields`, `heterogeneous`, `mv-*` and
-`gadt_*` families), which write `Print(…)`, `set X += 1` or a choice that
-cannot fail as clauses of a `for`: an owner decision whether to refuse them
-all now.
+**openverse before.** A filter could be anything; one that cannot fail
+never skipped an iteration. Only a literal filter was refused (with the
+source rules, `checkForClauses`).
+
+**openverse now.** The places of the filters of every `for` as written are
+found with the source rules (`forFilterPositions`, `Elab/Source.lean`: the
+clauses that are neither generators nor definitions, with no choice and no
+call of a function with several values) and kept in the type environment
+(`TyEnv.forFilters`); the elaboration of a `for`'s clauses (`elabFilters`,
+`Elab/For.lean`) marks the sequence (`Ctx.forFilters`), and `elabSeqIn`
+refuses a statement at one of those places whose code cannot fail
+(`Expr.mayFail`), once what it calls is known (`failabilityKnown`), as an
+`if`'s condition is checked. The literal case keeps its message.
+Programs: 40 tests wrote a print or a `set` as a filter (39 of the suite,
+most of them the `for` search's tests of #611, and one error test whose
+subject is a cast); each such clause `E` is `(E; true?)` now, the Book's
+form, which does the same, so their output is the same and they still
+exercise effects among the clauses and their undoing (83 clauses: 66
+`set`s, 17 prints). New: `for_filter_book_forms` (the four places, with
+what the search undoes), and the error tests `for_filter_print`,
+`for_filter_set`, `for_filter_call`, `for_filter_block` and
+`for_filter_if`. The generators write `(E; true?)` for such a filter of a
+`for` (and nothing else in their `if` conditions, where no rule applies):
+`gen-choice.py`, `gen-fields.py`, `gen-fields2.py`, `choice_context.py`,
+`choice_heterogeneous.py`, `choice_break.py`, `mv.py` (`show_for_cl`, also
+in `for{…}`'s clauses but its value), `generic_mv.py`, and the GADT models
+`gadt_event_body`, `gadt_spawn_body`, `gadt_contexts`,
+`gadt_cast_contexts`, `gadt_immediate`, `gadt_refine` and `gadt_views`,
+none drawing a number more, none changing a prediction. Of the first 400
+seeds, the text changes in `gen-choice` 107, `gen-fields` 266,
+`gen-fields2` 253, `choice_context` 200 (its `for` half; `--control` 200),
+`choice_heterogeneous` 267 (`--methods` 267), `choice_break` 400 (the
+`for` form; `--first-success` 0), `mv` 93, 75, 81 and 91 (plain, `bif`,
+`mv`, `rec`), `generic_mv` 400, `gadt_event_body`, `gadt_spawn_body`,
+`gadt_immediate` and `gadt_refine` 400 each, `gadt_contexts` 99,
+`gadt_cast_contexts` 84 and `gadt_views` 47; 1,000 seeds of each pass in
+Lean and C. 589 programs of corpus2 are refused (`heterogeneous` 227 over
+its modes, `choice` 92, `context` 80, `fields` 55, `mv` 53,
+`gadt_event_body`, `gadt_refine` and `gadt_spawn_body` 20 each,
+`gadt_immediate` 16, `gadt_cast_contexts` 4, `gadt_views` 2), and one more
+(`gadt_contexts`) refused already gets this rule's message first.
 
 **Also in ch. 7.** "Cannot define mutable variables: Using `var` to declare
 variables in the for clause is not allowed" (`07_control.md:842-843`),

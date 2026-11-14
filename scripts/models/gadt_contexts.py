@@ -80,7 +80,10 @@ else:
             clauses += f',set H.N+={value}-V+1'
     clauses += f',set H.N+=1,Mod[V,{modulus}]={remainder}'
     if mode == 'for':
-        tail = f'R:=for({clauses}):block{{set H.N+={boost};V}};100*H.N+Sum(R)'
+        # (a `for`'s filter can fail, Book of Verse ch. 7: its `set`s go with a
+        # check that cannot fail, `(E; true?)`, as the Book's tests write)
+        for_clauses = ','.join(f'({c}; true?)' if c.startswith('set ') else c for c in clauses.split(','))
+        tail = f'R:=for({for_clauses}):block{{set H.N+={boost};V}};100*H.N+Sum(R)'
     else:
         tail = f'R:=if({clauses})then V else -1;100*H.N+R'
 expr = f'block{{H:=cell{{}};W:[]a=Concatenate();{tail}}}'

@@ -56,6 +56,10 @@ def producer(n):
         return f'Early({n})'
     return f'(Two({n})|Two({n+2}))'
 clauses = f'A:={producer(a)},set H.N+={da},Mod[A,{ma}]={ra},B:={producer(b)},set H.N+={db},Mod[A+B,{mb}]={rb}'
+# (a `for`'s filter can fail, Book of Verse ch. 7: its `set`s go with a
+# check that cannot fail, `(E; true?)`, as the Book's tests write; it does
+# the same)
+for_clauses = f'A:={producer(a)},(set H.N+={da}; true?),Mod[A,{ma}]={ra},B:={producer(b)},(set H.N+={db}; true?),Mod[A+B,{mb}]={rb}'
 body = 'H:=cell{}\nvar Total:int=0\nvar Count:int=0\n'
 if first:
     body += f'''if({clauses},E:[]t=Concatenate()):
@@ -64,7 +68,7 @@ if first:
     Print("row {{A}} {{B}} {{Total}} {{H.N}}")
 '''
 else:
-    body += f'''R:=for({clauses}):
+    body += f'''R:=for({for_clauses}):
     E:[]t=Concatenate()
     set Total+=A+B+E.Length
     Print("row {{A}} {{B}} {{Total}} {{H.N}}")

@@ -1492,7 +1492,7 @@ class Gen:
         self.consumers.append(f'''{pair}(N:int)<computes>:int = N | N + 1
 {name}(X:t, Limit:int where t:type)<transacts>:[]tuple(t, int) =
     var Total:int = 0
-    Values := for (A := {pair}(1) | {pair}(3), set Total += A,
+    Values := for (A := {pair}(1) | {pair}(3), (set Total += A; true?),
                    B := if (A > {cut}) then (10 | 11) else 0, B > Limit,
                    C := {pair}(1) | {pair}(3), C <= {bound}):
         set Total += B + C
@@ -1622,7 +1622,9 @@ class Gen:
             self.consumers[-1] = source
         h, option = self.fresh('MutState'), self.fresh('MutOption')
         self.main += [f'{h}:={cell}{{}}',
-            f'for(V:={call(entry, x, y, depth, h)},set {h}.N+=V(2),V(2)>={cut}): Print("mut got {{V(0)}} {{V(1)}} {{V(2)}}")',
+            # (a `for`'s filter can fail, Book of Verse ch. 7: the `set` goes with
+            # a check that cannot fail, `(E; true?)`, as the Book's tests write)
+            f'for(V:={call(entry, x, y, depth, h)},(set {h}.N+=V(2); true?),V(2)>={cut}): Print("mut got {{V(0)}} {{V(1)}} {{V(2)}}")',
             f'Print("mut total {{{h}.N}}")', f'{option}:={run}({x},{y},option{{7}})',
             f'if(V:={option}?)then Print("mut first {{V(0)}} {{V(1)}} {{V(2)}}")else Print("mut none")']
         out, total = self.m.out, 0
