@@ -1,0 +1,6 @@
+if 0
+for 3 0
+not 0
+or 0 0
+and 0
+exit=0
