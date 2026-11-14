@@ -2,24 +2,24 @@
 # parametric struct is a family of tuple types in Verse Core: its fields are
 # those of the definition with the type arguments substituted.
 
-pair(t:type, u:type) := struct:
+pair(t:type, u:type) := struct<computes>:
     First:t
     Second:u
 
-box(t:type) := struct:
+box(t:type) := struct<computes>:
     Items:[]t = array{}
     Count:int = 0
 
 # a struct whose type argument must be comparable
-keyed(k:subtype(comparable), v:type) := struct:
+keyed(k:subtype(comparable), v:type) := struct<computes>:
     Entries:[k]v = map{}
 
-point := struct:
+point := struct<computes>:
     X:int = 0
     Y:int = 0
 
 # a non-parametric struct holding instances
-labelled := struct:
+labelled := struct<computes>:
     Name:string
     At:pair(int, int)
 
@@ -40,7 +40,7 @@ Put(K:keyed(k, v), Key:k, Value:v where k:subtype(comparable), v:type):keyed(k, 
 FirstsOf(Ps:[]pair(t, u) where t:type, u:type):[]t = for (P : Ps) { P.First }
 
 # polymorphic recursion through a parametric struct: d(t), d(d(t)), …
-d(t:type) := struct:
+d(t:type) := struct<computes>:
     A:t
     B:t
 

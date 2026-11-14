@@ -33,7 +33,9 @@ they are evaluated" say, without reference to how lifting is done.
 - set L op= e: L's indices, then e, then (op=) L's old value (the Book's tests,
   ArrayAppend.versetest 140, 183);
 - comparison chains: each pair is checked as soon as both operands are
-  evaluated (the choice-free order: `0 > 1 < X` never evaluates X).
+  evaluated (the choice-free order: `0 > 1 < X` never evaluates X); a `<>`
+  after the first operator compares the leftmost operand with its right one
+  (`<>` is left-associative, Operators/Associativity.versetest).
 
 PR #237 (phase 3a) adds, under the flag `bif`, an `if ... else if ... else`
 whose branches are choices or plain values, anywhere a choice may be. The
@@ -2650,8 +2652,14 @@ def ev(e, st, k, mode):
                 return k(first, s)
             op, x = e[2][i]
 
+            # (`<>` is left-associative: past the first operator, its left
+            # operand is the comparisons before it, whose value is the
+            # leftmost operand; the others chain with the operand before
+            # them, Book of Verse tests, Operators/Associativity.versetest)
+            lhs = first if op == '<>' and i >= 1 else prev
+
             def kc(v, s2):
-                if not cmpf(prev, op, v):
+                if not cmpf(lhs, op, v):
                     raise Fail()
                 return go(i + 1, v, first, s2)
             return ev(x, s, kc, mode)

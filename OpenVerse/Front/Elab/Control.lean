@@ -158,6 +158,40 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
   let stateTy : Ty := .struct ModuleVars.stateClass []
   let rootTy? (root : String) : Option Ty :=
     if root == ModuleVars.stateName then some stateTy else (ctx.lookup root).map (·.ty)
+  -- (a field of a struct is set only when the struct is `<computes>`: the
+  -- Book of Verse, ch. 5: "Only structs marked `<computes>` (pure structs)
+  -- allow field mutation through a variable"; its tests refuse it of a
+  -- plain struct, `Mutability.versetest:426`, and take a path that reaches
+  -- an object through plain structs and writes the object's field, `:441`:
+  -- what is before the last object on the path is only read. The field
+  -- steps of the path, each with whether it is an object's (`none`) or a
+  -- struct's, and then whether that struct is a source struct that is not
+  -- `<computes>`.)
+  let rec fieldSteps (ty : Ty) : List (Pos × Option String × Option SExpr) → List (Pos × String × String × Option Bool)
+    | [] => []
+    | (_, some "?", _) :: rest => match ty with
+      | .opt t => fieldSteps t rest
+      | _ => []
+    | (sp, some f, _) :: rest => match ty with
+      | .struct sn targs =>
+        match fieldIndex (ctx.types.fields sn targs) f with
+        | some (_, ft) =>
+          let kind := if ctx.types.classes.contains sn then none
+            else some (ctx.types.constructionFx[sn]?.any (!·.isEmpty))
+          (sp, (Ty.struct sn targs).show, f, kind) :: fieldSteps ft rest
+        | none => []
+      | _ => []
+    | (_, none, some _) :: rest => match ty with
+      | .arr t | .map _ t | .weakMap _ t => fieldSteps t rest
+      | _ => []
+    | _ :: _ => []
+  if p.line != 0 then
+    if let some (root, steps) := path lhs then
+      if let some rty := rootTy? root then
+        let fs := fieldSteps rty steps
+        let written := (fs.reverse.takeWhile (·.2.2.2 != none)).reverse
+        if let some (sp, sn, f, _) := written.find? (·.2.2.2 == some true) then
+          eerr sp s!"set of field '{f}' of {sn}: only a <computes> struct's fields are set (Book of Verse ch. 5, \"Only structs marked <computes> (pure structs) allow field mutation through a variable\"); declare the struct <computes>, as struct<computes>\{…}"
   if !ctx.canFail && p.line != 0 then
     if let some (root, steps) := path lhs then
       if let some rty := rootTy? root then
