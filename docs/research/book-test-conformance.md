@@ -49,17 +49,19 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
 - **13,504 cases** from the 629 test files that hold one (of 636; seven are
   entirely commented out): 13,197 test cases and 307 cases for the shared
   definitions of a file.
-- **3,914 are not translatable** (29%; 3,721 before [After the remaining causes](#after-the-remaining-causes), which found 193 more of the test runner's names): virtual packages and modules
+- **3,916 are not translatable** (29%; 3,721 on main `7f12181`: [After the remaining causes](#after-the-remaining-causes) found 193 more of the test runner's names, [After weak maps and module-scoped vars](#after-weak-maps-and-module-scoped-vars) 2 more of the runner's and the engine's): virtual packages and modules
   (1,264); the compiler's test runner, its natives and classes (1,207), its
   coroutine controls `CoroUtils` (552) and its other modules (187); engine
   APIs (persistence, JSON, natives; 345); compiler tooling such as bytecode
   and digests (128); VM-conditional code inside a definition (37) and one
   file that defines `Main` itself (1).
-- Of the **9,590 translatable cases**, openverse **agrees on 8,267 (86%)**,
-  refuses 1,148 valid programs, **accepts 87 refused ones**, gives a
+- Of the **9,588 translatable cases**, openverse **agrees on 8,289 (86%)**,
+  refuses 1,124 valid programs, **accepts 87 refused ones**, gives a
   **different result in 88** (82 of them `verse_vm_only` cases of unbounded
   ints) and hits **no internal error** ([After the remaining
-  causes](#after-the-remaining-causes); before it, on main `7f12181`, of
+  causes](#after-the-remaining-causes) with [After weak maps and
+  module-scoped vars](#after-weak-maps-and-module-scoped-vars); each alone:
+  8,267 and 8,236 agreed; before them, on main `7f12181`, of
   9,783: 8,214 agreed, 1,346 refused, 135 accepted, 88 differed). (When the survey was
   taken, at `0e69cfb`: 6,409 agreed, 2,817 refused, 482 accepted, 86
   differed and 4 internal errors; before the parser forms, at main
@@ -1418,7 +1420,16 @@ cause or form per commit, each rule pinned in
 accept, 88 differ, 3,721 not translatable), measured with each branch's
 own harness from fresh runs: **8,267 agree, 1,148 refuse, 87 accept, 88
 differ, 3,914 not translatable**; no case that agreed agrees no longer, and
-none became an accepted refusal or a different result.
+none became an accepted refusal or a different result. Merged with
+[weak maps and module-scoped vars](#after-weak-maps-and-module-scoped-vars)
+(#614) and measured from a fresh run: **8,289 agree, 1,124 refuse, 87
+accept, 88 differ, 3,916 not translatable**. Against this work's baseline
+before the merge: 0 worse, 22 better (the weak maps'), 2 not translatable
+(`weak_map.versetest` 183, 684); against #614's: 0 worse, 53 better (this
+work's), 176 not translatable (the test runner's names this work found). A
+weak map's key follows a map key's rule ([the
+rules](book-remaining-rules.md#map-keys-and-a-refinements-range)), which no
+case of the Book reaches.
 
 | Cause (main → now) | Done | Left, and what it needs |
 |---|---|---|
@@ -1684,25 +1695,25 @@ Grouped by the causes of the tables above. Lines are given per file, with
 
 **Accepted: access specifiers** (0): all 107 agree now ([After access specifiers](#after-access-specifiers)).
 
-**Accepted: failure where it is not allowed** (29): `Bugs/SOL-1987-IfDoesNotDetectNestedConditional.versetest` 22; `Bugs/SOL-4199-BreakFromIf.versetest` 80; `DefaultNamed.versetest` 820, 824, 844, 852, 853, 854, 859, 861, 862, 867, 868, 870, 875, 876, 877, 878; `Effects.versetest` 490, 537, 551, 552, 557(b), 558(b), 565(b), 573(v); `FlowControl/Case.versetest` 291; `FlowControl/for.versetest` 223; `ParametricTypes.versetest` 465
+**Accepted: failure where it is not allowed** (7): `Effects.versetest` 490, 551, 552, 557(b), 558(b), 565(b), 573(v)
 
 **Accepted: unreachable code** (0): all 30 agree now ([After the load-bearing readings](#after-the-load-bearing-readings)).
 
-**Accepted: other type rules** (24): `Bugs/2023-01-18-FunctionParameterWithoutDomain.versetest` 12; `Bugs/FORT-744399-DefaultTupleFieldsCrashComplier.versetest` 62; `Bugs/SOL-5838-JoinOfClassesWithCommonBaseClassWithInterfaceInheritance.versetest` 13, 22; `Classes/Constructor.versetest` 528; `Classes/Struct.versetest` 31; `DefaultNamed.versetest` 122; `Enum.versetest` 171(b); `FunctionTypes.versetest` 191; `Modules/Using2.versetest` 94; `Mutability.versetest` 426; `Option.versetest` 94; `ParametricFunctions.versetest` 348, 356, 361, 374, 431, 438; `ParametricTypes.versetest` 263, 265, 269; `QualifiedIdentifier.versetest` 152; `Void.versetest` 246, 260
+**Accepted: other type rules** (20): `Attributes/deprecated.versetest` 435; `Bugs/FORT-744399-DefaultTupleFieldsCrashComplier.versetest` 62; `Bugs/SOL-5838-JoinOfClassesWithCommonBaseClassWithInterfaceInheritance.versetest` 13, 22; `Enum.versetest` 171(b); `FunctionTypes.versetest` 191; `Modules/Using2.versetest` 94; `Mutability.versetest` 426; `ParametricFunctions.versetest` 348, 356, 361, 374, 431, 438; `ParametricTypes.versetest` 263, 265, 269; `QualifiedIdentifier.versetest` 152; `Void.versetest` 246, 260
 
-**Accepted: limits of Epic's compiler** (23): `Bugs/FORT-592189-MaybeCoerceToTypeCrash.versetest` 4(b); `Bugs/SOL-5477-CrashInGenClassDefinition.versetest` 5(b); `DefaultNamed.versetest` 629(b), 640(b), 741(b), 751(b); `Function.versetest` 238(b), 271(b); `Map.versetest` 45, 46, 223, 224, 249; `Operators/CompareMap.versetest` 58, 59, 71, 72; `ParametricFunctions.versetest` 276(b), 366, 496; `Tuple.versetest` 456(b); `WhereConstrainedInts.versetest` 97, 100
+**Accepted: limits of Epic's compiler** (12): `Bugs/FORT-592189-MaybeCoerceToTypeCrash.versetest` 4(b); `Bugs/SOL-5477-CrashInGenClassDefinition.versetest` 5(b); `DefaultNamed.versetest` 629(b), 640(b), 741(b), 751(b); `Function.versetest` 238(b), 271(b); `ParametricFunctions.versetest` 276(b), 366, 496; `Tuple.versetest` 456(b)
 
 **Accepted: name limits of the BPVM** (19): `Bugs/FORT-555217-VeryLongIdentifier.versetest` 25(b), 31(b), 37(b); `Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest` 5(b), 11(b), 67(b), 73(b), 79(b), 85(b), 92(b), 98(b), 154(b), 160(b), 166(b), 172(b), 187(b), 193(b), 199(b), 205(b)
 
 **Accepted: duplicate definitions** (1): `QualifiedIdentifier.versetest` 315
 
-**Accepted: effects of initializers** (8): `Features/DefaultValueAssignment.versetest` 200, 215, 225; `GlobalVariables.versetest` 86(v), 90(v), 97(v), 105(v); `Modules/ModuleDefinitions.versetest` 279
+**Accepted: effects of initializers** (4): `GlobalVariables.versetest` 86(v), 90(v), 97(v), 105(v)
 
 **Accepted: `<concrete>` classes** (7): `Attributes/concrete.versetest` 38, 76; `Bugs/SOL-3366-MakeClassesConcreteByDefault.versetest` 8, 15, 24; `Bugs/SOL-7781-ConcreteClassDoesntEnforceDefaultValuesForInterfaceFields.versetest` 28, 54
 
-**Accepted: control forms** (7): `Coroutines/Concurrency.versetest` 832; `FlowControl/Break.versetest` 118, 161; `FlowControl/Return.versetest` 114, 117; `Modules/Using2.versetest` 86, 90
+**Accepted: control forms** (3): `Coroutines/Concurrency.versetest` 832; `Modules/Using2.versetest` 86, 90
 
-**Accepted: interface inheritance** (7): `Interface.versetest` 33, 40, 92, 194, 199; `InterfaceDiamond.versetest` 74, 89
+**Accepted: interface inheritance** (3): `Interface.versetest` 194, 199; `InterfaceDiamond.versetest` 89
 
 **Accepted: qualifiers** (6): `Bugs/SOL-3564-CallingSuperClassMethodFromOverriddenMethod.versetest` 7, 18, 32, 45; `Super.versetest` 183, 238
 
@@ -1741,9 +1752,9 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Attributes/AccessLevelInheritance.versetest` | 66 | 63 | 0 | 3 | 0 | 0 | 0 |
 | `Attributes/AccessSpecifiersDisallowedOnLocalVars.versetest` | 9 | 9 | 0 | 0 | 0 | 0 | 0 |
 | `Attributes/Attributes.versetest` | 34 | 30 | 0 | 2 | 0 | 2 | 0 |
-| `Attributes/CustomAttributes.versetest` | 47 | 46 | 0 | 1 | 0 | 0 | 0 |
-| `Attributes/CustomClassVarAccessors.versetest` | 61 | 15 | 0 | 17 | 0 | 29 | 0 |
-| `Attributes/DeepMutabilityForCustomClassVarAccessors.versetest` | 19 | 0 | 0 | 1 | 0 | 18 | 0 |
+| `Attributes/CustomAttributes.versetest` | 47 | 47 | 0 | 0 | 0 | 0 | 0 |
+| `Attributes/CustomClassVarAccessors.versetest` | 61 | 29 | 0 | 3 | 0 | 29 | 0 |
+| `Attributes/DeepMutabilityForCustomClassVarAccessors.versetest` | 19 | 1 | 0 | 0 | 0 | 18 | 0 |
 | `Attributes/FinalSuperAttribute.versetest` | 25 | 18 | 0 | 7 | 0 | 0 | 0 |
 | `Attributes/Internal.versetest` | 9 | 0 | 0 | 0 | 0 | 9 | 0 |
 | `Attributes/InvalidAttributeLocations.versetest` | 43 | 43 | 0 | 0 | 0 | 0 | 0 |
@@ -1788,7 +1799,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/2020-10-26-DefineLocalWithMutatingAssignment.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/2021-03-23-CoroutineOverrideParameterNameMismatch.versetest` | 2 | 1 | 0 | 1 | 0 | 0 | 0 |
 | `Bugs/2021-03-23-InterfaceDefaultCoroutineImplementation.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
-| `Bugs/2021-04-26-DisjointTypesAllowedInComparisonAndPointerDeref.versetest` | 3 | 2 | 0 | 1 | 0 | 0 | 0 |
+| `Bugs/2021-04-26-DisjointTypesAllowedInComparisonAndPointerDeref.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/2021-08-18-DisjointResultInNestedIf.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/2021-08-23-struct_in_struct_sol-1986.versetest` | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/2021-08-26-UsingFunctionAsTypeInItsOwnDefinition.versetest` | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
@@ -1814,7 +1825,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/2023-01-18-ClosedWorldFunctionBodyReferencesItself.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/2023-01-18-DeeplyNestedPrefixColon.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/2023-01-18-DefinitionAsMacroName.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
-| `Bugs/2023-01-18-FunctionParameterWithoutDomain.versetest` | 4 | 3 | 1 | 0 | 0 | 0 | 0 |
+| `Bugs/2023-01-18-FunctionParameterWithoutDomain.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/2023-01-18-VarTypeReferencesItself.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/2023-01-19-AmbiguousCallToOverloadedFunctionInReturnType.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/2023-01-19-ControlKeywordAsPrefixOrPostfixOperand.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
@@ -1897,7 +1908,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/FORT-779858-CrashDeltaSerializingAgainstUninitializedDynamicallyTypedValue.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
 | `Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest` | 47 | 14 | 16 | 0 | 0 | 17 | 0 |
 | `Bugs/FORT-861412-ImprovedErrorMessage.versetest` | 8 | 2 | 0 | 0 | 0 | 6 | 0 |
-| `Bugs/FORT-889314-InterfaceFieldOverriddenWithGetterSetterBroken.versetest` | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
+| `Bugs/FORT-889314-InterfaceFieldOverriddenWithGetterSetterBroken.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-951162-CantQualifyPropertiesOfParametricClasses.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-976754-GetterSetter.versetest` | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
 | `Bugs/FORT-987013-MissingUploadedAtFNVersion.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
@@ -1913,7 +1924,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/SOL-1924-RaceDeferSynchronization.versetest` | 10 | 0 | 0 | 0 | 0 | 10 | 0 |
 | `Bugs/SOL-1928-CallMethodOnResultOfCallToUndefinedFunction.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-1957-InterfaceMethodReturningStructAssert.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
-| `Bugs/SOL-1987-IfDoesNotDetectNestedConditional.versetest` | 3 | 2 | 1 | 0 | 0 | 0 | 0 |
+| `Bugs/SOL-1987-IfDoesNotDetectNestedConditional.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-2270-ExtensionalFloats.versetest` | 73 | 73 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-2336-LoopReturn.versetest` | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
 | `Bugs/SOL-2577-ConstructorOverloadAmbiguity.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
@@ -1950,7 +1961,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/SOL-4171-CallStackOverflow.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-4194-AssertOnMalformedCaseContainingDataDefinition.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-4196-ErrCauseEnsureFailure.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
-| `Bugs/SOL-4199-BreakFromIf.versetest` | 10 | 8 | 1 | 1 | 0 | 0 | 0 |
+| `Bugs/SOL-4199-BreakFromIf.versetest` | 10 | 9 | 0 | 1 | 0 | 0 | 0 |
 | `Bugs/SOL-4204-MapPartialWrite.versetest` | 7 | 7 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-4208-OverrideWithVar.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-4209-SuspendingSubexpressionsOfSpawnedInvocation.versetest` | 6 | 3 | 0 | 3 | 0 | 0 | 0 |
@@ -2001,7 +2012,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/SOL-7898-DisambiguateSuperTypesByAccess.versetest` | 18 | 18 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-8109-ParserStackOverflow.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-8137-AttributeLocalizesIsNotAllowedOnLocalVariables.versetest` | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
-| `Bugs/SOL-8267-InterfaceDefaultsAreNotReinstantiated.versetest` | 6 | 2 | 0 | 3 | 0 | 1 | 0 |
+| `Bugs/SOL-8267-InterfaceDefaultsAreNotReinstantiated.versetest` | 6 | 2 | 0 | 0 | 0 | 4 | 0 |
 | `Bugs/SOL-8302-CastableSubtypeFailsWithInterfaces.versetest` | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | `Bugs/SOL-8380-InterfaceAccessorsNativeFailed.versetest` | 5 | 0 | 0 | 0 | 0 | 5 | 0 |
 | `Bugs/SOL-8527-DefaultInitializerGlobalObject.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
@@ -2046,14 +2057,14 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Classes/AccessSpecifiers.versetest` | 61 | 48 | 0 | 0 | 0 | 13 | 0 |
 | `Classes/Class.versetest` | 42 | 42 | 0 | 0 | 0 | 0 | 0 |
 | `Classes/ClassBlockClause.versetest` | 24 | 16 | 1 | 0 | 0 | 7 | 0 |
-| `Classes/Constructor.versetest` | 61 | 15 | 1 | 6 | 0 | 39 | 0 |
+| `Classes/Constructor.versetest` | 61 | 16 | 0 | 6 | 0 | 39 | 0 |
 | `Classes/DataInheritence.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | `Classes/IdentifierSuper.versetest` | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | `Classes/Inheritance.versetest` | 11 | 10 | 0 | 1 | 0 | 0 | 0 |
 | `Classes/MethodInheritance.versetest` | 9 | 1 | 0 | 0 | 0 | 8 | 0 |
 | `Classes/QualifiedMethodInheritance.versetest` | 23 | 21 | 0 | 2 | 0 | 0 | 0 |
 | `Classes/SelfInheritance.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
-| `Classes/Struct.versetest` | 77 | 66 | 1 | 0 | 0 | 10 | 0 |
+| `Classes/Struct.versetest` | 77 | 67 | 0 | 0 | 0 | 10 | 0 |
 | `Classes/VarPointingToClass.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `ClassifiableSubset.versetest` | 36 | 9 | 0 | 27 | 0 | 0 | 0 |
 | `CoercedOverrides.versetest` | 10 | 3 | 0 | 4 | 0 | 3 | 0 |
@@ -2075,13 +2086,13 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `DebugStackTrace/Recursion.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
 | `DebugStackTrace/Spawn.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
 | `DebugStackTrace/When.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
-| `DefaultNamed.versetest` | 142 | 110 | 21 | 1 | 0 | 10 | 0 |
+| `DefaultNamed.versetest` | 142 | 127 | 4 | 1 | 0 | 10 | 0 |
 | `Definitions.versetest` | 16 | 15 | 0 | 1 | 0 | 0 | 0 |
 | `DigestGeneration.versetest` | 43 | 1 | 0 | 0 | 0 | 42 | 0 |
 | `DigestVisibility.versetest` | 47 | 31 | 0 | 0 | 0 | 16 | 0 |
 | `Duplication.versetest` | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
 | `DynamicallyTypedSubobjectInstantiation.versetest` | 16 | 16 | 0 | 0 | 0 | 0 | 0 |
-| `Effects.versetest` | 336 | 256 | 8 | 5 | 0 | 67 | 0 |
+| `Effects.versetest` | 336 | 257 | 7 | 5 | 0 | 67 | 0 |
 | `Enum.versetest` | 71 | 66 | 1 | 0 | 0 | 4 | 0 |
 | `EnumCompare.versetest` | 12 | 12 | 0 | 0 | 0 | 0 | 0 |
 | `Escape.versetest` | 5 | 5 | 0 | 0 | 0 | 0 | 0 |
@@ -2095,9 +2106,9 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Exercises/TwoSum.versetest` | 3 | 0 | 0 | 3 | 0 | 0 | 0 |
 | `ExtensionFields.versetest` | 39 | 37 | 0 | 0 | 0 | 2 | 0 |
 | `Failure.versetest` | 34 | 31 | 0 | 0 | 0 | 3 | 0 |
-| `Features/DefaultValueAssignment.versetest` | 67 | 18 | 3 | 1 | 0 | 45 | 0 |
-| `FlowControl/Break.versetest` | 17 | 15 | 2 | 0 | 0 | 0 | 0 |
-| `FlowControl/Case.versetest` | 71 | 69 | 1 | 0 | 0 | 1 | 0 |
+| `Features/DefaultValueAssignment.versetest` | 67 | 21 | 0 | 1 | 0 | 45 | 0 |
+| `FlowControl/Break.versetest` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
+| `FlowControl/Case.versetest` | 71 | 70 | 0 | 0 | 0 | 1 | 0 |
 | `FlowControl/Concurrency/branch.versetest` | 10 | 4 | 0 | 1 | 0 | 5 | 0 |
 | `FlowControl/Continue.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
 | `FlowControl/If.versetest` | 94 | 94 | 0 | 0 | 0 | 0 | 0 |
@@ -2107,9 +2118,9 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `FlowControl/Yield.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
 | `FlowControl/defer.versetest` | 51 | 13 | 0 | 1 | 0 | 37 | 0 |
 | `FlowControl/first.versetest` | 24 | 3 | 0 | 20 | 0 | 1 | 0 |
-| `FlowControl/for.versetest` | 94 | 89 | 1 | 4 | 0 | 0 | 0 |
+| `FlowControl/for.versetest` | 94 | 90 | 0 | 4 | 0 | 0 | 0 |
 | `Function.versetest` | 81 | 61 | 2 | 1 | 0 | 17 | 0 |
-| `FunctionAsType.versetest` | 36 | 17 | 0 | 18 | 0 | 1 | 0 |
+| `FunctionAsType.versetest` | 36 | 17 | 0 | 15 | 0 | 4 | 0 |
 | `FunctionTypes.versetest` | 42 | 32 | 1 | 9 | 0 | 0 | 0 |
 | `GenerateFunctionForParametricClass.versetest` | 2 | 1 | 0 | 0 | 0 | 1 | 0 |
 | `GenerateFunctionForParametricInterface.versetest` | 2 | 1 | 0 | 1 | 0 | 0 | 0 |
@@ -2126,11 +2137,11 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Incremental/10_statistics_replayed.versetest` | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
 | `IndistinctOverloads.versetest` | 20 | 20 | 0 | 0 | 0 | 0 | 0 |
 | `IntAsRational.versetest` | 14 | 14 | 0 | 0 | 0 | 0 | 0 |
-| `Interface.versetest` | 109 | 96 | 5 | 5 | 0 | 3 | 0 |
+| `Interface.versetest` | 109 | 99 | 2 | 5 | 0 | 3 | 0 |
 | `InterfaceAccessVisibility.versetest` | 19 | 12 | 0 | 0 | 0 | 7 | 0 |
-| `InterfaceDiamond.versetest` | 18 | 16 | 2 | 0 | 0 | 0 | 0 |
-| `InterfaceWithAccessors.versetest` | 6 | 3 | 0 | 3 | 0 | 0 | 0 |
-| `InterfaceWithFields.versetest` | 37 | 25 | 0 | 11 | 0 | 1 | 0 |
+| `InterfaceDiamond.versetest` | 18 | 17 | 1 | 0 | 0 | 0 | 0 |
+| `InterfaceWithAccessors.versetest` | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
+| `InterfaceWithFields.versetest` | 37 | 27 | 0 | 9 | 0 | 1 | 0 |
 | `Interfaces/AccessSpecifiers.versetest` | 41 | 34 | 0 | 0 | 0 | 7 | 0 |
 | `Intrinsics/Abs.versetest` | 19 | 16 | 0 | 0 | 1 | 2 | 0 |
 | `Intrinsics/ArrayFind.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
@@ -2156,9 +2167,9 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Intrinsics/StringLength.versetest` | 16 | 16 | 0 | 0 | 0 | 0 | 0 |
 | `Intrinsics/StringToString.versetest` | 7 | 7 | 0 | 0 | 0 | 0 | 0 |
 | `Intrinsics/ToDiagnostic.versetest` | 114 | 0 | 0 | 93 | 0 | 21 | 0 |
-| `LengthOptimizationSafety.versetest` | 8 | 1 | 0 | 4 | 0 | 3 | 0 |
+| `LengthOptimizationSafety.versetest` | 8 | 5 | 0 | 0 | 0 | 3 | 0 |
 | `LenientClassConstruction.versetest` | 8 | 4 | 0 | 0 | 0 | 4 | 0 |
-| `Literals/Char.versetest` | 184 | 39 | 0 | 145 | 0 | 0 | 0 |
+| `Literals/Char.versetest` | 184 | 39 | 0 | 0 | 0 | 145 | 0 |
 | `Literals/Float.versetest` | 176 | 142 | 0 | 0 | 0 | 34 | 0 |
 | `Literals/Function.versetest` | 22 | 22 | 0 | 0 | 0 | 0 | 0 |
 | `Literals/Int.versetest` | 166 | 166 | 0 | 0 | 0 | 0 | 0 |
@@ -2170,7 +2181,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `LocalizationJoin.versetest` | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
 | `MacroForms.versetest` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
 | `ManyEmergentTypes.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
-| `Map.versetest` | 104 | 89 | 5 | 10 | 0 | 0 | 0 |
+| `Map.versetest` | 104 | 94 | 0 | 10 | 0 | 0 | 0 |
 | `MapOrder.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | `Math/Bitwise.versetest` | 174 | 114 | 0 | 0 | 56 | 4 | 0 |
 | `Math/Math.versetest` | 77 | 76 | 0 | 1 | 0 | 0 | 0 |
@@ -2178,12 +2189,12 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Math/MaxInt.versetest` | 13 | 13 | 0 | 0 | 0 | 0 | 0 |
 | `Math/MinFloat.versetest` | 22 | 22 | 0 | 0 | 0 | 0 | 0 |
 | `Math/MinInt.versetest` | 13 | 13 | 0 | 0 | 0 | 0 | 0 |
-| `MetatypeConcreteSubtype.versetest` | 38 | 18 | 0 | 20 | 0 | 0 | 0 |
+| `MetatypeConcreteSubtype.versetest` | 38 | 21 | 0 | 17 | 0 | 0 | 0 |
 | `Modules/AccessSpecifiers.versetest` | 34 | 0 | 0 | 0 | 0 | 34 | 0 |
 | `Modules/AssetAccessibility.versetest` | 4 | 0 | 0 | 0 | 0 | 4 | 0 |
 | `Modules/Import.versetest` | 7 | 0 | 0 | 0 | 0 | 7 | 0 |
 | `Modules/Module.versetest` | 58 | 40 | 0 | 2 | 0 | 16 | 0 |
-| `Modules/ModuleDefinitions.versetest` | 62 | 24 | 1 | 1 | 0 | 36 | 0 |
+| `Modules/ModuleDefinitions.versetest` | 62 | 25 | 0 | 1 | 0 | 36 | 0 |
 | `Modules/ModuleScopedInstances.versetest` | 9 | 0 | 0 | 0 | 0 | 9 | 0 |
 | `Modules/PartialModuleDefinitions.versetest` | 14 | 2 | 0 | 5 | 0 | 7 | 0 |
 | `Modules/Using.versetest` | 22 | 1 | 0 | 0 | 0 | 21 | 0 |
@@ -2194,19 +2205,19 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `NamesReservedForFuture.versetest` | 69 | 69 | 0 | 0 | 0 | 0 | 0 |
 | `NativeDeepMutability.versetest` | 19 | 0 | 0 | 0 | 0 | 19 | 0 |
 | `NativePropertyRequiresNativeClass.versetest` | 6 | 0 | 0 | 0 | 0 | 6 | 0 |
-| `NativePropertyRollback.versetest` | 15 | 1 | 0 | 13 | 0 | 1 | 0 |
+| `NativePropertyRollback.versetest` | 15 | 1 | 0 | 0 | 0 | 14 | 0 |
 | `NativePropertyWriteHook.versetest` | 10 | 0 | 0 | 0 | 0 | 10 | 0 |
 | `NestedArrays.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `NestedFunctions.versetest` | 32 | 13 | 0 | 17 | 0 | 2 | 0 |
 | `NestedNamedTupleParameters.versetest` | 24 | 9 | 0 | 7 | 0 | 8 | 0 |
 | `NestedObjects.versetest` | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
-| `NestedTupleParameters.versetest` | 16 | 7 | 0 | 6 | 0 | 3 | 0 |
+| `NestedTupleParameters.versetest` | 16 | 7 | 0 | 0 | 0 | 9 | 0 |
 | `ObjectToJson.versetest` | 4 | 0 | 0 | 0 | 0 | 4 | 0 |
 | `Operators/Associativity.versetest` | 16 | 15 | 0 | 0 | 1 | 0 | 0 |
 | `Operators/At.versetest` | 15 | 15 | 0 | 0 | 0 | 0 | 0 |
 | `Operators/BinaryAddArray.versetest` | 14 | 14 | 0 | 0 | 0 | 0 | 0 |
 | `Operators/BinaryAddFloat.versetest` | 36 | 22 | 0 | 0 | 0 | 14 | 0 |
-| `Operators/BinaryAddInt.versetest` | 43 | 32 | 0 | 1 | 8 | 2 | 0 |
+| `Operators/BinaryAddInt.versetest` | 43 | 33 | 0 | 0 | 8 | 2 | 0 |
 | `Operators/BinaryAddString.versetest` | 16 | 14 | 0 | 2 | 0 | 0 | 0 |
 | `Operators/BinaryArrow.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Operators/BinaryDivFloat.versetest` | 88 | 70 | 0 | 0 | 0 | 18 | 0 |
@@ -2222,7 +2233,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Operators/CompareFloat.versetest` | 52 | 50 | 0 | 0 | 0 | 2 | 0 |
 | `Operators/CompareInstance.versetest` | 18 | 18 | 0 | 0 | 0 | 0 | 0 |
 | `Operators/CompareInt.versetest` | 36 | 36 | 0 | 0 | 0 | 0 | 0 |
-| `Operators/CompareMap.versetest` | 97 | 84 | 4 | 9 | 0 | 0 | 0 |
+| `Operators/CompareMap.versetest` | 97 | 88 | 0 | 9 | 0 | 0 | 0 |
 | `Operators/CompareOption.versetest` | 18 | 18 | 0 | 0 | 0 | 0 | 0 |
 | `Operators/CompareRational.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
 | `Operators/CompareString.versetest` | 148 | 148 | 0 | 0 | 0 | 0 | 0 |
@@ -2241,13 +2252,13 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Operators/PostfixCallString.versetest` | 22 | 22 | 0 | 0 | 0 | 0 | 0 |
 | `Operators/Precedence.versetest` | 68 | 67 | 0 | 0 | 1 | 0 | 0 |
 | `Operators/PrefixStar.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
-| `Option.versetest` | 63 | 62 | 1 | 0 | 0 | 0 | 0 |
+| `Option.versetest` | 63 | 63 | 0 | 0 | 0 | 0 | 0 |
 | `OutOfScopeOverloads.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
 | `Overloading.versetest` | 79 | 64 | 0 | 9 | 0 | 6 | 0 |
 | `PackageCycles.versetest` | 15 | 0 | 0 | 0 | 0 | 15 | 0 |
 | `ParametricCastingIsDisallowed.versetest` | 11 | 10 | 0 | 1 | 0 | 0 | 0 |
-| `ParametricFunctions.versetest` | 106 | 52 | 9 | 41 | 0 | 4 | 0 |
-| `ParametricTypes.versetest` | 274 | 156 | 4 | 91 | 0 | 23 | 0 |
+| `ParametricFunctions.versetest` | 106 | 77 | 9 | 16 | 0 | 4 | 0 |
+| `ParametricTypes.versetest` | 274 | 163 | 3 | 81 | 0 | 27 | 0 |
 | `Parentheses.versetest` | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | `Path.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `PersistentJson.versetest` | 103 | 1 | 0 | 0 | 0 | 102 | 0 |
@@ -2261,7 +2272,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Range.versetest` | 39 | 39 | 0 | 0 | 0 | 0 | 0 |
 | `Rational.versetest` | 49 | 48 | 0 | 0 | 0 | 1 | 0 |
 | `Recursion.versetest` | 47 | 47 | 0 | 0 | 0 | 0 | 0 |
-| `ReentrantExceptions.versetest` | 3 | 0 | 0 | 1 | 0 | 2 | 0 |
+| `ReentrantExceptions.versetest` | 3 | 1 | 0 | 0 | 0 | 2 | 0 |
 | `Reference.versetest` | 4 | 1 | 0 | 0 | 0 | 3 | 0 |
 | `ReserveDotSpace.versetest` | 14 | 12 | 2 | 0 | 0 | 0 | 0 |
 | `ResolvingIdentifiers.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
@@ -2277,7 +2288,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Roundtrip/Newlines.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Roundtrip/Operators.versetest` | 43 | 43 | 0 | 0 | 0 | 0 | 0 |
 | `RuntimeErrorCallstack.versetest` | 3 | 2 | 0 | 0 | 0 | 1 | 0 |
-| `RuntimeErrors.versetest` | 13 | 2 | 0 | 3 | 0 | 8 | 0 |
+| `RuntimeErrors.versetest` | 13 | 5 | 0 | 0 | 0 | 8 | 0 |
 | `RuntimeErrorsAutoRTFMCascadingAbort.versetest` | 15 | 0 | 0 | 0 | 0 | 15 | 0 |
 | `RuntimeErrorsAutoRTFMLanguageAbort.versetest` | 11 | 0 | 0 | 0 | 0 | 11 | 0 |
 | `RuntimeErrorsAutoRTFMRuntimeAbort.versetest` | 8 | 0 | 0 | 0 | 0 | 8 | 0 |
@@ -2296,11 +2307,11 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Serialization/Tuple.versetest` | 56 | 0 | 0 | 0 | 0 | 56 | 0 |
 | `ShadowDefinition.versetest` | 65 | 38 | 0 | 5 | 0 | 22 | 0 |
 | `SingleParamArray.versetest` | 16 | 15 | 0 | 1 | 0 | 0 | 0 |
-| `SingleParamTuple.versetest` | 7 | 6 | 0 | 1 | 0 | 0 | 0 |
+| `SingleParamTuple.versetest` | 7 | 6 | 0 | 0 | 0 | 1 | 0 |
 | `SoftwareTransactionalMemory.versetest` | 31 | 31 | 0 | 0 | 0 | 0 | 0 |
-| `StmCallbackErrors.versetest` | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
+| `StmCallbackErrors.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `StringInterpolationPlus.versetest` | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
-| `Subtype.versetest` | 106 | 87 | 0 | 18 | 0 | 1 | 0 |
+| `Subtype.versetest` | 106 | 97 | 0 | 8 | 0 | 1 | 0 |
 | `Super.versetest` | 32 | 24 | 2 | 1 | 0 | 5 | 0 |
 | `TestSubobjectRenaming.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
 | `TimSyntax.versetest` | 282 | 238 | 0 | 44 | 0 | 0 | 0 |
@@ -2309,7 +2320,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Type.versetest` | 37 | 34 | 0 | 3 | 0 | 0 | 0 |
 | `TypeAlias.versetest` | 79 | 63 | 0 | 2 | 0 | 14 | 0 |
 | `TypeChecking.versetest` | 53 | 53 | 0 | 0 | 0 | 0 | 0 |
-| `TypeParam.versetest` | 15 | 2 | 0 | 13 | 0 | 0 | 0 |
+| `TypeParam.versetest` | 15 | 6 | 0 | 9 | 0 | 0 | 0 |
 | `TypeSpec.versetest` | 5 | 4 | 0 | 1 | 0 | 0 | 0 |
 | `TypeValue.versetest` | 12 | 2 | 0 | 0 | 0 | 10 | 0 |
 | `Union.versetest` | 252 | 107 | 0 | 138 | 0 | 7 | 0 |
@@ -2348,7 +2359,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `WebDataSyncService.versetest` | 5 | 1 | 0 | 2 | 0 | 2 | 0 |
 | `Where.versetest` | 6 | 5 | 0 | 1 | 0 | 0 | 0 |
 | `WhereConstrainedFloats.versetest` | 27 | 24 | 0 | 3 | 0 | 0 | 0 |
-| `WhereConstrainedInts.versetest` | 53 | 40 | 2 | 9 | 2 | 0 | 0 |
+| `WhereConstrainedInts.versetest` | 53 | 42 | 0 | 9 | 2 | 0 | 0 |
 | `await-regalloc-transactional-unification-variables.versetest` | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | `await.versetest` | 41 | 7 | 0 | 1 | 0 | 33 | 0 |
 | `closed.versetest` | 5 | 4 | 0 | 1 | 0 | 0 | 0 |
