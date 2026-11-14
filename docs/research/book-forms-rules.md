@@ -526,3 +526,26 @@ constant" (the command line's `Args` and the local in one program).
 unless the program defines it or binds it (a local, a generator, a
 parameter). No program that compiled changes.
 
+## `set` through a call's result or a construction
+
+**The rule.** A `set` path may start at a call's result or a
+construction: the root is evaluated first, then the path's keys, then the
+value. A key of several values is a tuple's: `set M[1, 2] = 1` is `set
+M[(1, 2)] = 1`.
+
+**The Book.** The tests, `Tests/AssignmentSequencing.versetest`: `set
+EffectfulIdentity(Y, X).Contents = Y.Contents; X.Contents = 1` (`:17`,
+the root's effect before the value), `Z := set … = …; Z = 1` (`:23`), and
+with a map's key whose computation has effects (`:38`, `:44`: root, key,
+value); `set c0{}.X += "def"` (`Bugs/FORT-779650-…versetest` 27);
+`set ObjectMap[1,2] = 1` with `ObjectMap:[tuple(comparable,
+comparable)]int` (`Map.versetest:472`). Ch. 5 is silent on the order.
+
+**openverse before.** "openverse supports set X = …, and set on a path of
+fields, indices and keys from a variable".
+
+**openverse now.** `elabSet` (`Elab/Expr.lean`) binds such a root to a
+name of its own first (`$setRoot…`, a block `{R := root; set R.… = v}`),
+and writes a path's key of several values as their tuple. No program that
+compiled changes. **Left:** `set live` (VerseVM's live variables).
+

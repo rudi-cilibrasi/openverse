@@ -1286,6 +1286,30 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
 
 /-- `elabSetWith`, given this block's functions (#325). -/
 partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (rhs0 : SExpr) : EM R := do
+  -- (a path whose root is a call's result or a construction, `set
+  -- F(Y, X).Contents = …`, `set c0{}.X += …`: the root first, bound to a
+  -- name of its own, then the keys and the value, as the Book's tests have
+  -- the order, `AssignmentSequencing.versetest` 17-48; and a key of several
+  -- values a tuple's, `set M[1,2] = 1`, `Map.versetest:472`)
+  let rec rooted : SExpr → SExpr × (SExpr → SExpr) × Bool
+    | .member q e f => let (r, k, m) := rooted e; (r, fun x => .member q (k x) f, m)
+    | .app q e args true =>
+      let (r, k, m) := rooted e
+      -- (a key of several values, on a path from a name: not a call
+      -- `F[A, B]`, whose path is no name's)
+      let several := args.length > 1 && (match r with | .ident .. => true | _ => false) && !(match e with
+        | .ident _ n => (ctx.lookup n).isNone | _ => false)
+      let args := if several then [SExpr.tuple q args] else args
+      (r, fun x => .app q (k x) args true, m || several)
+    | e => (e, id, false)
+  let (root, rebuild, multiKey) := rooted lhs0
+  match root, lhs0 with
+  | .app _ _ _ false, .member .. | .app _ _ _ false, .app _ _ _ true
+  | .construct .., .member .. | .construct .., .app _ _ _ true =>
+    let v := s!"$setRoot{p.line}_{p.col}"
+    return ← elabE ctx (.block p [.decl p v none false root, .set p (rebuild (.ident p v)) op rhs0]) none
+  | _, _ =>
+    if multiKey then return ← elabSet ctx p (rebuild root) op rhs0
   -- a place through a field with accessors: its setter's call
   -- (`Elab/Accessors.lean`)
   if !ctx.types.accessors.isEmpty then

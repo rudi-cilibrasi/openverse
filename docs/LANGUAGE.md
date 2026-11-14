@@ -761,7 +761,11 @@ circle := class(shape, labelled):
     it has reached the object, and then reads the values inside it, so that
     a write the right-hand side makes through the object is kept
     (`set O.P.X = O.SetY()`). A path without an object reads every
-    container first, as `set A[i] = e` does.
+    container first, as `set A[i] = e` does. A path may start at a call's
+    result or a construction, `set F(Y, X).Contents = Y.Contents`, `set
+    c0{}.X += "def"`: the root is evaluated first, then the keys, then the
+    value (the Book's tests, `AssignmentSequencing.versetest` 17-48); a key
+    of several values is a tuple's, `set M[1, 2] = 1` (`Map.versetest:472`).
   - A class or interface with no concrete class below it has no instance,
     so code that uses a value of its type is unreachable, and accepted.
 - **Methods.** A method `M` of class `c` is a function `c.M` whose first
