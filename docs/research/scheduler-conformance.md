@@ -521,7 +521,19 @@ no more.
 event mode each wrapper records that its arm is running; stopping it then
 marks the wrapper done without cancelling the arm, and the wrapper's
 trampoline, finding it stopped when the arm's run returns pending,
-cancels the arm then.
+cancels the arm then. Other pending awaiters in the stopped branch do not
+resume, even when their turn in the same Signal round comes before the
+active arm returns. [Pending branch waiter](../../tests/verse/signal_branch_pending_waiter.verse)
+checks this alongside a live-owner control and a stopped branch whose other
+arm already ended: the active step can finish the sync and continue.
+
+The independent scheduler models previously missed this boundary at seed
+`630059`: their reentrant wake walked a branch with a pending cancellation,
+resuming its suspended sibling and then its sync continuation. Both models
+now suppress that wake while retaining the active run. The runtime already
+follows this rule; the seed's parent and current bytecode and Lean/C traces
+were identical. The full gate runs that regression seed in addition to the
+ordinary random scheduler stream.
 
 **Rollback.** A drain is ordinary Verse Core run inside the `Signal`'s
 caller: in a failure context that fails, Core's rollback undoes what the
