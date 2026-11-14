@@ -1405,21 +1405,20 @@ partial def parseStructBody (p : Pos) : PM SExpr := do
 
 /-- `enum` (after the keyword): `:` + values or `{ values }`. -/
 partial def parseEnumBody (p : Pos) : PM SExpr := do
-  let mut isOpen := false
   let mut seen : List String := []
   while (← peekT).isSym "<" do
     bump
     let st ← peekT
     let sp ← expectIdent
     expectSym ">"
-    -- (`<persistable>` has no meaning in openverse: accepted and ignored)
+    -- (kept: `<open>` lets the enum gain values, `<persistable>` lets a
+    -- persistable struct's field be of it, Book of Verse ch. 9, 17)
     if !["open", "closed", "persistable"].contains sp then
       perr st s!"an enum's specifier is <open>, <closed> or <persistable>, not <{sp}>"
     if (sp == "open" && seen.contains "closed") || (sp == "closed" && seen.contains "open") then
       perr st "an enum is <open> or <closed>, not both"
     if seen.contains sp then perr st s!"<{sp}> is given twice"
     seen := seen ++ [sp]
-    if sp == "open" then isOpen := true
   let o ← peekT
   let mut names := #[]
   -- (a value `(e:)v`, qualified with its enum, may take a reserved word's or
@@ -1458,7 +1457,7 @@ partial def parseEnumBody (p : Pos) : PM SExpr := do
       if a.isSym "," || a.isSym ";" then bump; continue
       names := names.push (← value)
   else perr o "expected ':' or '{' after enum"
-  return .enumDef p names.toList isOpen
+  return .enumDef p names.toList seen
 
 partial def parseInterp (parts : List StrPart) : PM (List SPart) := do
   let mut out := #[]
@@ -2253,6 +2252,12 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) (par
           -- `Modules/Using2.versetest` 84-90)
           if path == "/localhost" || path.startsWith "/localhost/" then
             tops := tops.push (.const t.pos s!"{pfx}$using" [] none (refusedForm t.pos (.localhostUsing path) []))
+          -- (a path in no package openverse knows names nothing, Book of
+          -- Verse ch. 16: "all imports must be resolvable when your code is
+          -- compiled"; the tests, `using{/localhostkinda}`, 3587,
+          -- `Modules/Using2.versetest:94`)
+          else if !["Verse.org", "Fortnite.com", "UnrealEngine.com"].contains (((path.drop 1).toString.splitOn "/").headD "") then
+            tops := tops.push (.const t.pos s!"{pfx}$using" [] none (refusedForm t.pos (.unknownUsing path) []))
         if let .str parts := (← peekT 1).tok then
           let path := String.join (parts.filterMap fun | .text s => some s | _ => none)
           modify fun st => { st with imports := st.imports.push (t.pos, path) }
@@ -2326,9 +2331,30 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) (par
     -- `(R:t).M(…)`: an extension method, the function `$ext:M` whose first
     -- parameter is the receiver (Book of Verse ch. 6)
     let ext ← if qual?.isSome then pure none else parseExtensionHead?
+    let nameTok ← peekT
     let name0 ← match ext with
       | some _ => do pure (extensionName (← expectIdent))
       | none => expectIdent
+    -- `operator'+'(L:t, R:u)`, `prefix'-'(X:t)`: an overload of an
+    -- operator, written with the operator as a character right after
+    -- (the Book of Verse's tests, `Overloading.versetest` 196-212: `+`, `-`,
+    -- `*`, `/` and `prefix'-'`; `operator'()'` refused, 3514): a function
+    -- of that name, which an operator of operands the built-in one does
+    -- not take calls
+    let name0 ← do
+      let c ← peekT
+      match c.tok with
+      | .char code =>
+        if ext.isNone && (name0 == "operator" || name0 == "prefix") && c.line == nameTok.line &&
+            c.col == nameTok.col + name0.length then
+          let op := Char.ofNat code
+          let ops := if name0 == "operator" then ['+', '-', '*', '/'] else ['-']
+          if !ops.contains op then
+            perr c s!"{name0}'{op}': openverse takes overloads of the operators +, -, * and / and of prefix -, as the Book of Verse's tests write them"
+          bump
+          pure s!"{name0}'{op}'"
+        else pure name0
+      | _ => pure name0
     let name := pfx ++ name0
     owner := name
     if let some q := qual? then tops := tops.push (marker t.pos (qualMarker name q))

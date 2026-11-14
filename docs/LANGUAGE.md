@@ -24,7 +24,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Area | Supported | Book |
 |---|---|---|
 | Comments | `#` to the end of the line, nested `<# … #>`, `<#>` indented comments (the rest of the line and every following line indented more than it; see [Source text](#source-text)) | ch. 0 |
-| Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` an ASCII character other than a line break, a tab included, or an escape; a non-ASCII one, `'é'`, is a `char32`, Book of Verse ch. 1), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates), `float` `1.5`, `2.0e-7`, `1e3`, `12.34f64`, `1234f64` (digits, then a point and digits or an exponent or both, or the suffix `f64`, which may follow either; the nearest double, which must be finite: `2.0e308` is refused; `f32` and `f16` are read and refused as not supported); paths `/Verse.org/Random` parse (in `using{…}`, ignored; as values, refused; see [Source text](#source-text)) | §1.3–1.7 |
+| Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` an ASCII character other than a line break, a tab included, or an escape; a non-ASCII one, `'é'`, is a `char32`, Book of Verse ch. 1), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates), `float` `1.5`, `2.0e-7`, `1e3`, `12.34f64`, `1234f64` (digits, then a point and digits or an exponent or both, or the suffix `f64`, which may follow either; the nearest double, which must be finite: `2.0e308` is refused; `f32` and `f16` are read and refused as not supported); paths `/Verse.org/Random` parse (in `using{…}`, ignored when in a package openverse knows, `/Verse.org/…`, `/Fortnite.com/…`, `/UnrealEngine.com/…`, and refused otherwise, as naming nothing, ch. 16, `Using2.versetest:94`; as values, refused; see [Source text](#source-text)) | §1.3–1.7 |
 | Types | `int`, `logic`, `char`, `char32`, `any` (see [any](#any)), `comparable` (see [comparable](#comparable)), `rational` (see [rational](#rational)), `float` (see [float](#float)), refinement types `type{_X:int where 0 <= _X, _X <= 120}` (see [Refinement types](#refinement-types)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void` (which takes any value; `tuple()` is the type of the empty value alone, see [Equality and the empty value](#equality-and-the-empty-value)), `message` (a localized message, `X<localizes>:message = "…"`, `F<localizes>(N:int):message = "… {N}"`, rendered by `Localize` and joined by `Join`; openverse has no culture, so a message is its default text, an int written with comma separators: ch. 12, [the rule](research/book-forms-rules.md#localized-messages)), `false` (the type with no value, below every type: a function whose result is `false` never returns, ch. 2, [the rule](research/book-forms-rules.md#false-as-a-type); `true`, the type of the empty value alone, as `tuple()` is, below `logic`, [the rule](research/book-forms-rules.md#true-as-a-type)), function types `type{_(:int)<decides>:int}`, with named parameters `type{_(:int, ?B:int):int}`, and `int->int` (see [Function values](#function-values)); type aliases `player_id := int`, `pair(t:type) := tuple(t, t)` (see [Type aliases](#type-aliases)); types as values of classes and interfaces, `subtype(c)`, `castable_subtype(c)`, `concrete_subtype(c)` and `type` (see [Types as values](#types-as-values)); a conversion written as a call, `int(0)`, `void(0)`, `(?int)(option{0})`, `s(s{})`, of a value of a type that is a subtype of the one named; a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
 | Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e`, which state their type there as in a module (ch. 16: "type inference with `:=` alone is not allowed"; `C := e` names a type, when `e` is one: [Type aliases](#type-aliases)) (definitions on one line, at the top level, in a module or in a block, are separated by `;` or `,`: `X:int=0, Y:int=0`; a constant may use one defined before it in its own scope, a module's or the top level's, and one of another module or of an enclosing scope wherever it is defined, as the Book's tests have it (`DefaultValueAssignment.versetest` 102, 128); not itself, directly or through other constants; and its value has no side effect, writing nothing, also through what it calls or constructs, as the Book's tests have it, `DefaultValueAssignment.versetest:199`, `ModuleDefinitions.versetest:278`, `ParametricTypes.versetest:465`: a function with no heap specifier, or a class or struct with none, has `<transacts>`, and so writes, [the rule](research/book-remaining-rules.md#a-module-constant-has-no-side-effect)); module-scoped `var X:weak_map(k, v) = map{}` (see [Module-scoped variables](#module-scoped-variables)); locals `X := e`, `X:t = e`, `var X:t = e`, and a tuple destructured, `(X:int, _, Z:string) = e` (each named element a local of the block, `_` skipping one, `e` evaluated once); no shadowing; no name defined twice in a scope but [overloaded](#overloading) functions; no [reserved name](#reserved-names) | §3.1–3.4 |
 | Mutation | `set X = e`, `set X += e` (`-=`, `*=`), `set A[i] = e` (fails out of range; returns `e`), and paths `set S.F.G = e`, `set A[i][j] op= e`, `set M[k].F = e`: indices and keys evaluated once, left to right, then the new value, then the variable rebuilt (for `op=`, the old value is read after the new one, from the variable as the new one left it, which is then rebuilt from that: `set X += e` is `V := e; set X = X + V`, the Book's tests, `ArrayAppend.versetest` 140, 183); an index out of range or a missing intermediate key fails, while the last key of a path inserts | §3.3, §3.5, §9.3 |
@@ -36,7 +36,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Functions | a parameter may be unnamed, `F(:int):void = {}`, as in function types (the body cannot name it; so may a parametric type's, `t(:type) := class{}`); a parameter may destructure a tuple, `Func(A:int, (B:int, C:int), D:int)`, to any depth: it is a parameter of the tuple type whose names the body sees (see [the rules](research/tuple-parameters.md); named parameters inside such a group are not supported); a tuple argument expands into parameters (`Describe(MyTuple)`); positional arguments pack into a single tuple parameter, including `tuple()` and singleton tuples; several arguments make a single array parameter (`Sum(1, 2, 3)`), including generic, overloaded, method and spawned calls (#134, #140, #501; nested fields retain their shape, and empty/singleton arrays use explicit array values); recursion, mutual recursion, `<decides>` (called with `F[…]`; other functions with `F(…)`; also `F of X` for `F(X)` and `F at X` for `F[X]`, the argument in braces `F of {42}`, a body after `:` or `.`, or an operand `F of array: …`, and a function defined `F of {I:int}:int = …`, the Book's tests, `Operators/Of.versetest`; `F at {…}` defines nothing), named parameters `?P:t = default` passed as `?P := e`, after the positional arguments (only a named parameter has a default, and a positional argument after a named one is refused, ch. 6, [the rules](research/book-remaining-rules.md#five-forms-the-tests-refuse)) (positional, then named as written, then defaults; a default may use the parameters before it, and a method's default the method's fields; a call dispatched to an override evaluates that override's own default for an omitted argument; a default is evaluated at the call and cannot return, break or use itself; it is its function's: it has only the heap effects the function allows and neither fails nor suspends, also of a `<decides>` or `<suspends>` function, checked once at the definition where the default can be elaborated in the function's scope, the Book's tests, `DefaultNamed.versetest` 805-878; `--extended-defaults` keeps openverse's reading, the default's effects the caller's, see [the rule](research/book-remaining-rules.md#a-named-parameters-default)), the heap effects `<computes>`, `<reads>`, `<writes>`, `<allocates>`, `<transacts>` (checked, see [Classes](#classes)), unsupported effect contracts are diagnosed before lowering (see [Effect contracts](#effect-contracts)) | ch. 6, 13 |
 | Extension methods | `(R:t).M(…)<effects>:r = body`, at the top level, in a module or in a class, on a receiver of any type (`(:t)` unnamed; a `where` in its parentheses for a generic one), called `X.M(…)`, or `X.M[…]` when `<decides>`; overloaded by the receiver's type and the parameters', scoped like functions, never values; see [Extension methods](#extension-methods) | ch. 6 |
 | Parametric functions | `F(X:t, … where t:type, u:subtype(comparable))`: type parameters in parameter types, the result type and local declarations; type arguments inferred at each call (see [Parametric functions](#parametric-functions)) | Types: where clauses |
-| Structs | `name := struct:` with typed fields and defaults, `name{F := e, …}` (each field given at most once, evaluated in declaration order; separated by commas, or by `;` and new lines, not both; or as an indented block after `name:`, an archetype block; the type may be parenthesized, `(pair(int)){…}`), `S.F`, `set S.F = e` / `op=` of a `struct<computes>` (ch. 5: "Only structs marked `<computes>` (pure structs) allow field mutation through a variable"; a path that reaches an object reads the structs before it, [the rule](research/book-forms-rules.md#a-structs-field-set)), structural equality (a struct is the tuple of its fields in Verse Core) | ch. 9 |
+| Structs | `name := struct:` with typed fields and defaults, `name{F := e, …}` (each field given at most once, evaluated in declaration order; separated by commas, or by `;` and new lines, not both; or as an indented block after `name:`, an archetype block; the type may be parenthesized, `(pair(int)){…}`; with `let:` clauses, whose definitions the field values after them see, and `block` clauses, which run where they are written and can neither fail nor `return`, the clauses and the field values run in the order written, ch. 10, "Let Clauses in Archetypes", [the rule](research/book-forms-rules.md#a-constructions-let-and-block-clauses)), `S.F`, `set S.F = e` / `op=` of a `struct<computes>` (ch. 5: "Only structs marked `<computes>` (pure structs) allow field mutation through a variable"; a path that reaches an object reads the structs before it, [the rule](research/book-forms-rules.md#a-structs-field-set)), structural equality (a struct is the tuple of its fields in Verse Core) | ch. 9 |
 | Parametric structs | `pair(t:type, u:type) := struct:`, the type `pair(int, string)`, values `pair(int, string){First := 1, Second := "a"}` (or `pair{…}` where the expected type gives the type arguments); see [Parametric structs](#parametric-structs) | ch. 9 |
 | Classes | `name := class:` and `name(t:type) := class:` with fields and methods; `class(parent, interface, …)` (`class()` has none, as `class`; a type `t()` or value `t(){…}` with no type arguments is `t`, `t{…}`), `interface`, `<abstract>`, `<override>`, `<final>`, `(super:)`, virtual dispatch, casts `T[X]` and `T(X)`, `var` fields; members in braces on one line separated by `,` or `;` (`class{X:int block{}}` is refused, as the Book's tests have it, `ClassBlockClause.versetest:19`); see [Classes](#classes) | ch. 10 |
 | Enums | `name := enum:` / `enum{A, B}`, `name.A`, equality, `case` that needs no `_` when every value is named (an enumerator is its index in Verse Core); `enum<open>` may gain values, so a `case` on one needs `_` or a failure context (`<closed>` is the default) | ch. 9 |
@@ -145,7 +145,12 @@ X`), and which a test calls "The 'at' reserved word"
 (`SemicolonsVsCommas.versetest:52`). openverse reads `first`, `assert` and `let` as macros
 before `{` or `(`, and `using` is a keyword. A qualifier does not lift the
 rule (`(m:)local` is refused), but an enum's value qualified with its enum
-may take any name, a keyword's too ([Qualified names](#qualified-names)). The function type
+may take any name, a keyword's too ([Qualified names](#qualified-names)),
+and only qualified may it take one of these or an access specifier's name
+(`public`, `internal`, `protected`, `private`, `epic_internal`): `enum{
+public }` is refused, `enum{ (A:)public }` is not (ch. 9: "Qualification
+also allows you to use reserved words and keywords as enum values, which
+would otherwise cause errors"; `QualifiedIdentifier.versetest` 313-316). The function type
 `type{_(:int):int}` writes `_` as no definition's name, and stays allowed.
 
 No definition takes a built-in type's name either (`typeNames` in
@@ -353,7 +358,7 @@ of them; the Book's tests `Tests/Attributes/` and `Castable.versetest`):
 | `<final_super_base>` | a class or an interface | a class right below it is `<final_super>` |
 | `<castable>` | a class or an interface | no type parameters, nor in a class or interface below it |
 | `<unique>` | a class or an interface | |
-| `<persistable>` | a class (not supported yet) or a struct | a struct's: no type parameters, and fields that persist: not `any`, a rational, a function, an interface, a class or a struct that is not `<persistable>` (ch. 17; every enum is taken to persist, as openverse does not keep an enum's `<persistable>`) |
+| `<persistable>` | a class (not supported yet), a struct or an enum | a struct's: no type parameters, and fields that persist: not `any`, a rational, a function, an interface, a class, or a struct or an enum that is not `<persistable>` (ch. 17: "Enums without `<persistable>` specifier cannot be used") |
 | `<override>` | a method or a field | |
 
 Anywhere else, on a definition's name (`c<castable> := class{}`) or after the
@@ -625,6 +630,16 @@ classes, interfaces, structs, enums or constants of one name, or one of them
 and a function (`c := class{}` with `c(I:int):c`, which the Book's tests
 refuse as "overloading a class"), are a name defined twice. A local cannot
 take an overloaded function's name either.
+- **Operators.** A program may overload the operators `+`, `-`, `*`, `/`
+  and prefix `-` at the top level, as functions written
+  `operator'+'(L:vec2i, R:vec2i):vec2i = …` and `prefix'-'(V:vec2i):vec2i =
+  …` (overloads of one another as any functions are). An operator whose
+  operand the built-in one does not take (no int, float, rational,
+  refinement or, for `+`, array) calls the overload the operands fit, with
+  brackets when it is `<decides>` (`operator'/'(L:vec2i, R:int)<decides>`
+  makes `V / 0` fail); `-3 + 1` stays the built-in's. Other operators
+  (`operator'()'`, the comparisons, `+=`) are not overloadable (the Book's
+  tests, `Overloading.versetest` 196-232).
 - **Distinct overloads.** Overloads take different numbers of parameters, or
   disjoint types at some position. A single tuple parameter and the same
   flattened positional types are compared element by element: the same
@@ -639,7 +654,9 @@ take an overloaded function's name either.
   another (`false` is each), and a
   class or interface with an interface or a class above or below it (but a
   `<final>` class and an interface it does not implement are disjoint, and
-  so are one parametric class's instances at disjoint type arguments). Function
+  so are one parametric class's instances at disjoint type arguments, and a
+  type as a value, of `type` or a metatype, `subtype(c)`, and an object of
+  a class: `F(:subtype(c))` and `F(:d)` are two overloads). Function
   types overlap regardless of their signatures or effects. A pair that overlaps is refused where the later
   one is defined.
 - **Tuples and containers** (#500). A tuple and an array are distinct if
@@ -960,7 +977,13 @@ circle := class(shape, labelled):
     accessors; a path into such a field's value through a type above a
     class that gives a field with storage accessors.
 - **Casts.** `T[X]` is `X` as a `T`, failing unless `X`'s class is below
-  `T`. `T(X)` converts to a supertype and cannot fail.
+  `T`. `T(X)` converts to a supertype and cannot fail. A cast to a class or
+  interface that no class of `X`'s is below compiles and always fails, with
+  a [warning](#warnings) (ch. 11: "These casts succeed and return the
+  casted value, failing if the value is not of" the type; the Book's tests
+  accept them, `Interface.versetest:150`); one to a parametric class or
+  interface whose type arguments no class below both can give is refused
+  ("would always fail").
 - **Final super classes** (Book of Verse ch. 10, "Final"; ch. 11,
   "final_super and Type Queries"; the API reference; the rules are in
   [research/classes-and-subtyping.md](research/classes-and-subtyping.md#final-super-classes)).
@@ -1463,7 +1486,7 @@ The Book of Verse's compiler gives some diagnostics as warnings: the
 program compiles and runs all the same (`FlowControl/Reachability.versetest:22`,
 "Treat unreachable expressions after break as warning not error"; its tests
 name them with codes 2000–2999 in `assert_semantic_error`). openverse gives
-four of them, each from where the fact is known, on standard error as
+five of them, and one of its own, each from where the fact is known, on standard error as
 `FILE:LINE:COL: warning: …`, with the exit status unchanged
 ([FORMAT.md](FORMAT.md), "Exit protocol"):
 
@@ -1497,6 +1520,18 @@ four of them, each from where the fact is known, on standard error as
   deprecated itself, and an override of a deprecated member that is not
   ([Attributes](#attributes), `Attributes.deprecations`): `X is
   deprecated: Message`.
+- **`(q:)M(…)` of `Self` in an override of `M`, where `(super:)M(…)` is
+  meant** (2003 and 2004, `Bugs/SOL-3564-CallingSuperClassMethodFromOverriddenMethod.versetest`):
+  the call is of the slot the override implements, so it dispatches on
+  `Self`'s class and calls the override again. 2003 when `q` is what
+  `(super:)M` reaches (the implementation above, or the slot's interface
+  when nothing above implements it), 2004 when `q` is further up. A call
+  of another overload of `M`, one from a method that overrides nothing,
+  and one through another receiver give none (`warnQualifiedSelfCall`,
+  where a method call is elaborated).
+- **A cast that always fails**, `T[X]` where no class of `X`'s type is
+  below `T` (openverse's own: the Book's tests accept such casts with no
+  code, `Interface.versetest` 140, 150; [Classes](#classes), "Casts").
 
 ## Source profiles
 
@@ -2566,8 +2601,8 @@ progress := module:
   types (like `var X:int = 0`) are not allowed at module scope"); its key
   type a class with `<module_scoped_var_weak_map_key>`; when that class is
   `<persistent>`, its value type persists (ch. 17, as a `<persistable>`
-  struct's fields must: not `rational`, `any`, `comparable`, a class or a
-  weak map); `X[k]`, `set X[k] = v` and paths through `X[k]` are its uses,
+  struct's fields must: not `rational`, `any`, `comparable`, a class, a
+  weak map, or a struct or an enum that is not `<persistable>`); `X[k]`, `set X[k] = v` and paths through `X[k]` are its uses,
   and any other use of `X`, reading or replacing the whole map, is refused
   ("The complete map can neither be read nor replaced"); at most four with
   `<persistent>` keys, and at that limit one of them with a class value
@@ -2651,7 +2686,9 @@ Main():void =
 - **A type given as an argument.** A function's parameter `t:type` that the
   function uses as a type (`FalseOption(t:type):?t = false`, the Book's
   tests) is a type parameter whose argument the call writes:
-  `FalseOption(int)`, `Pair(int, 1, 2)` with `Pair(t:type, X:t, Y:t)`. The
+  `FalseOption(int)`, `Pair(int, 1, 2)` with `Pair(t:type, X:t, Y:t)`, and
+  in brackets for a `<decides>` function, `First[string, Xs]` with
+  `First(t:type, Xs:[]t)<decides>:t`. The
   function is generic over `t`, so checked once, and the call passes the
   type's witness, as a generic call does. A parameter `t:subtype(c)` or
   `t:castable_subtype(c)` used so is a bounded one (`where t:subtype(c)`,
@@ -2662,9 +2699,8 @@ Main():void =
   applied (`c(int)`, `tuple(int, float)`); `[]int` and `?int` are not yet
   written as arguments. Refused: a value there, a type parameter there (the
   BPVM's link error; VerseVM accepts it), such a parameter after a parameter
-  whose type uses it (`F(X:t, t:type)`, the Book's tests, 3502), such a
-  parameter of a method, and, not yet supported, a type given in a call in
-  brackets (`First[string, Xs]` of a `<decides>` `First(t:type, Xs:[]t)`).
+  whose type uses it (`F(X:t, t:type)`, the Book's tests, 3502), and such a
+  parameter of a method.
   A parameter `t:type` used as a value is a type value's (above).
 - **Conversions.** `t(X)`, with `t` a built-in type's, a struct's or an
   enum's name, or a type written in parentheses, `(?int)(X)`, `([]int)(X)`,
@@ -2740,7 +2776,14 @@ as `false`, and `X:true = 1` is refused. A `void` value converts to
 `void` and `true` interchange inside options, arrays and maps (`?void` to
 `?true`, `[]void` to `[]true`, `[int]void` to `[int]true`), as the Book
 has them one type (ch. 2: "These are interchangeable"); not yet as a
-function type's result or parameter (`int->true` is not `int->void`). A `branch:`'s value is an
+function type's result or parameter (`int->true` is not `int->void`).
+`void` given as a type argument of a program's parametric class,
+interface or struct, as a type or a parent (`box(void)`, `box([]void)`,
+`class(holder(void))`), is `true`: a type parameter bound to it takes the
+empty value alone, so `box(void){}.Put(1)` and `box([]void){}.Put(Y)`
+with `Y:[]int` are refused, where `Sink(:[]void)` takes `Y` (ch. 2, "Write
+the value, not the type name" and "Conversion is one-way"; the library's
+`task(void)` and events keep `void`). A `branch:`'s value is an
 `any`, which `void` takes and `true` does not (the Book's tests refuse
 `Result:true = branch: …`). `false` converts to an empty option or array but not to a map
 (the Book's tests refuse it, `Tests/Map.versetest` 343, though its prose
@@ -2844,7 +2887,14 @@ Main():void =
   error; an alias may name a class or struct defined after it. An alias
   that names itself (`list(t:type) := ?tuple(t, list(t))`) is an error: a
   class can hold a value of its own type. No definition, at any scope,
-  takes an alias's name, nor a built-in type's.
+  takes an alias's name, nor a built-in type's, but a parametric class,
+  interface or struct of another number of type parameters, in the same
+  scope and in either order: `class1() := class1(int)` beside
+  `class1(t:type) := class…`, where `class1()` is the alias and
+  `class1(string)` the class (the Book's tests,
+  `ParametricTypes.versetest:754-768`, `Bugs/SOL-7503…`, `Bugs/SOL-7849…`).
+  Two classes of one name, or an alias at the type's own number, are still
+  defined twice.
 - **Checks.** The names in an alias's type, and how many type arguments
   each is given, are checked where the alias is defined; the rest (a map
   key or a type argument that must be comparable) where it is used, as if
@@ -3098,7 +3148,12 @@ Main():void =
   classes, interfaces, [type aliases](#type-aliases) and other modules. A
   constant in a module, as at the top level, states its type (`X:int = 1`, not `X := 1`); an
   alias is no constant (`point<public> := tuple(int, int)`). A module is
-  not a value.
+  not a value. A module may be defined in parts, `M := module:` written
+  again in the same scope: the parts are one module, one scope, whose
+  members are all the parts'; the parts have one access level and give
+  the same `@available`, or none (the Book's tests,
+  `PartialModuleDefinitions.versetest` 157-176, `available.versetest`
+  317-368; ch. 16: a module's files share its namespace).
 - A name is looked up from its definition's module outward, one scope at a
   time, up to the top level. At each scope, the scope's own definitions
   come first, then the members of the modules it opens with `using{M}`.

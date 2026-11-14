@@ -105,6 +105,17 @@ inductive STy where
   | fn   : List STy → List String → STy → STy
   deriving Repr, Inhabited, BEq
 
+/-- A type given as a program's parametric type's argument, as its type
+    parameter takes it: its `void`s, outside function types and other
+    types' arguments, are `true` (`Ty.voidArg`, Book of Verse ch. 2). -/
+partial def STy.voidArg : STy → STy
+  | .name "void" => .name "true"
+  | .arr t => .arr t.voidArg
+  | .opt t => .opt t.voidArg
+  | .map k v => .map k v.voidArg
+  | .tup ts => .tup (ts.map STy.voidArg)
+  | t => t
+
 /-- A function type's named parameter `?N:t`, or `?N:t = …` when a caller
     may omit it (`optional`), is an application of `?N` (`?N=`) to `t`
     (#503): every traversal of types sees `t`, and two function types'
@@ -254,8 +265,9 @@ inductive SExpr where
   /-- `struct<specs>: fields`, and the type parameters of a parametric
       struct `name(t:type) := struct: …`. -/
   | structDef : Pos → List TParam → List String → List SField → SExpr
-  /-- `enum:` (closed) or `enum<open>:`, which may gain values (Book of Verse ch. 9). -/
-  | enumDef  : Pos → List String → (isOpen : Bool) → SExpr
+  /-- `enum<specs>:` and its values: `<open>`, which may gain values (Book of
+      Verse ch. 9; closed without it), `<closed>`, `<persistable>` (ch. 17). -/
+  | enumDef  : Pos → List String → (specs : List String) → SExpr
   /-- `type{_X:t where c₁, c₂, …}`: a refinement type (Book of Verse ch. 11):
       the variable, the base type and the conditions. -/
   | refineDef : Pos → String → STy → List SExpr → SExpr
@@ -554,6 +566,9 @@ inductive Refused where
   | moduleVarAccess (sp name : String)
   /-- `using{/localhost…}` (`parseTopsIn`). -/
   | localhostUsing (path : String)
+  /-- `using{/p…}` of a path in no package openverse stands in for
+      (`parseTopsIn`, `usingDomains`). -/
+  | unknownUsing (path : String)
 
 def Refused.message : Refused → String
   | .lambda => "a lambda (…) => … is a nested function, which openverse does not have (#492; the Book's ch. 6 marks nested functions as an unreleased feature; docs/research/closure-design.md)"
@@ -565,6 +580,7 @@ def Refused.message : Refused → String
   | .declaredData n => s!"{n}:t has no value: a declaration of data defined elsewhere, which openverse has none of"
   | .declaredVariable n => s!"var {n}:t has no value: a declaration of a variable defined elsewhere, which openverse has none of"
   | .moduleVarAccess sp n => s!"var<{sp}> on the module-scoped var {n} is not supported yet: its write access is its name's"
+  | .unknownUsing path => s!"using\{{path}}: the path names no package: openverse has the Verse library's, /Verse.org/…, and ignores the engine's, /Fortnite.com/… and /UnrealEngine.com/… (Book of Verse ch. 16: \"all imports must be resolvable when your code is compiled\"; its tests, Modules/Using2.versetest:94)"
   | .localhostUsing path => s!"using\{{path}}: /localhost is the package the program is in, which a using does not name (Book of Verse tests, Modules/Using2.versetest: \"Explicitly using a \"/localhost\" package is not allowed\")"
 
 /-- A form openverse parses and refuses, `$refused(msg, e…)`: the refusal's

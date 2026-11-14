@@ -454,6 +454,32 @@ partial def qualifiedReceiver (ctx : Ctx) (p : Pos) (r0 : R) (m0 : String) : EM 
     pure (⟨← coerce p r0 qt, qt⟩, mq)
   | _, _, _ => pure (r0, m0)
 
+/-- `(q:)M(…)` of `Self` in an override of `M`, a call of the same slot:
+    the warnings of the Book of Verse's tests, `SOL-3564…versetest`, as the
+    call dispatches on `Self`'s class and so calls this override again.
+    2003 ("should use super", `:7-12`, `:45-52`, `:80-86`) when `q` is what
+    `(super:)M` reaches, the implementation above, or the slot's interface
+    when nothing above implements it; 2004 ("you can't reach a: as super:",
+    `:18-26`, `:32-40`) when it is further up. A call of another overload
+    (`:139-146`), from a method that overrides nothing (`:57-76`,
+    `:167-170`), or through another receiver warns of nothing. -/
+def warnQualifiedSelfCall (ctx : Ctx) (p : Pos) (obj : SExpr) (m0 m : String) : EM Unit := do
+  let .ident _ "Self" := obj | return
+  let (some cur, some sm) := (ctx.selfClass, ctx.selfMethod) | return
+  let [q, _] := (m0.drop 1).toString.splitOn ":)" | return
+  if !m0.startsWith "(" || sm != m then return
+  let mine := ctx.rootsOf cur m
+  if mine.isEmpty || mine == [cur] || !(ctx.rootsOf q m).any mine.contains then return
+  let super? ← tryCatch (some <$> superImpl ctx p cur m) (fun _ => pure none)
+  let reached := (super?.map fun f => (f.splitOn ".").head!).getD (mine.headD q)
+  let call := s!"({q}:){m}(…) calls {m} of Self, which this override implements, so it calls itself again"
+  if reached != q then
+    warnAt p s!"{call}; (super:){m}(…) calls {reached}'s implementation, and {q}'s is not reachable from here (Book of Verse tests, 2004)"
+  else if super?.isSome then
+    warnAt p s!"{call}: write (super:){m}(…) to call {q}'s implementation (Book of Verse tests, 2003)"
+  else
+    warnAt p s!"{call}, and nothing above {cur} implements {m} (Book of Verse tests, 2003)"
+
 /-- `X.M(…)` of a method `M` overloaded (#106) at the class `c` of `X`: the
     overload visible at `c` the call fits, then a call of that method (a
     qualified call stays qualified, `X.(q:)M$ovK(…)`, #125). `none` when `M`
@@ -1028,6 +1054,7 @@ partial def elabMemberApp (cb : AppElab) (ctx : Ctx) (p : Pos) (f : SExpr) (mp :
     -- call takes `c`'s one list
     ctx.noteOverload p m m
     if let (true, some owner) := (ctx.types.classes.contains c, ctx.methodDecl? c m) then
+      warnQualifiedSelfCall ctx p obj m0 m
       return ← elabMethodCall cb ctx p mp obj r c targs owner m spawning args bracket exp
     -- `S.F[i]`, `S.F(k)`: a field, indexed
     if (ctx.types.fields c targs).any (·.1 == m) then

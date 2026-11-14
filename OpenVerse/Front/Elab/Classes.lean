@@ -116,7 +116,11 @@ def classHierarchy (tops : List STop) (constructionFx : Std.HashMap String (List
   let cdefs : List CDef := tops.filterMap fun
     | .classDef p n _ tps specs parents isIface fields methods =>
       let names := parents.map fun | .name q => q | .app q _ => q | _ => "?"
-      let args := parents.map fun | .app _ as => as | _ => []
+      -- (`void` given as a parent's type argument is `true`, as anywhere a
+      -- program's type is given one, `TyEnv.typeArgs`)
+      let args := parents.map fun
+        | .app q as => if q.startsWith "$" || PreludeNeeds.names.contains q then as else as.map STy.voidArg
+        | _ => []
       -- (the fields with accessors set apart: they have no storage; each
       -- with the stored fields around it)
       let stored := fields.filter (!Accessors.isAccessorField ·)

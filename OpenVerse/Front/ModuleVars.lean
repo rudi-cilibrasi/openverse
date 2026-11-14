@@ -55,32 +55,30 @@ def showSTy (t : STy) : String := (TypeValues.writtenTy t).replace "::" "."
 def shown (n : String) : String := showSTy (.name n)
 
 /-- What the program defines that the rules ask about: each class's
-    specifiers, the `<persistable>` structs, and the enums. -/
+    specifiers, and the `<persistable>` structs and enums. -/
 structure Defs where
   classSpecs : List (String × List String)
   persistable : List String
-  enums : List String
 
 def Defs.of (tops : List STop) : Defs where
   classSpecs := tops.filterMap fun
     | .classDef _ n _ _ specs _ _ _ _ => some (n, specs)
     | _ => none
   persistable := tops.filterMap fun
-    | .const _ n _ none (.structDef _ [] specs _) => if specs.contains "persistable" then some n else none
-    | _ => none
-  enums := tops.filterMap fun
-    | .const _ n _ none (.enumDef ..) => some n
+    | .const _ n _ none (.structDef _ [] specs _) | .const _ n _ none (.enumDef _ _ specs) =>
+      if specs.contains "persistable" then some n else none
     | _ => none
 
 /-- Whether values of a type persist (Book of Verse ch. 17, "Built-in
     Persistable Types" and "Custom Persistable Types"), as openverse reads
     it for a `<persistable>` struct's fields (`typeEnvironment`): the
-    primitive types but `rational`, containers of persisting types, the
-    `<persistable>` structs and the enums. openverse has no `<persistable>`
-    classes (#11), and a `weak_map` does not persist. -/
+    primitive types but `rational`, containers of persisting types, and the
+    `<persistable>` structs and enums (ch. 17: "Enums without
+    `<persistable>` specifier cannot be used"). openverse has no
+    `<persistable>` classes (#11), and a `weak_map` does not persist. -/
 partial def Defs.persists (d : Defs) : STy → Bool
   | .name n => ["int", "float", "logic", "string", "char", "char32"].contains n ||
-      d.persistable.contains n || d.enums.contains n
+      d.persistable.contains n
   | .app .. | .fn .. => false
   -- (a container persists when its parts do)
   | t => t.children.all d.persists

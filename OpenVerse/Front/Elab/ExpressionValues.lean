@@ -21,6 +21,28 @@ partial def elabExprValuesWith
     if (Refine.castClause? e).isSome || (c.canFail && !(Refine.castsIn c.types.classes.contains e).isEmpty) then
       return (← elabBlock c [e] exp).1
     elabE c e exp
+  -- (an operator the program overloads, `operator'+'(L:t, R:u)` or
+  -- `prefix'-'(X:t)`, of operands of which the built-in operator takes no
+  -- number, array or empty value: a call of the program's overloads, Book
+  -- of Verse tests, `Overloading.versetest` 196-212; `Operators.overloaded?`)
+  let userOp? : Option (String × List SExpr) := match se with
+    | .bin _ op a b => some (s!"operator'{op}'", [a, b])
+    | .neg _ e => some ("prefix'-'", [e])
+    | _ => none
+  if let some (f, operands) := userOp? then
+    if (ctx.sig? f).isSome || (ctx.types.overloads.lookup f).isSome then
+      let st ← get
+      let builtinOperand (e : SExpr) : Bool :=
+        match (elabE { ctx with typeOnly := true } e none).run st with
+        | .ok (r, _) => match r.ty with
+          | .int | .float | .rational | .refine _ | .never => true
+          | .arr _ => f == "operator'+'"
+          | _ => false
+        | .error _ => true
+      if !operands.all builtinOperand then
+        let p := se.pos
+        return ← tryCatch (elabApp ctx p (.ident p f) operands false exp) fun e =>
+          tryCatch (elabApp ctx p (.ident p f) operands true exp) fun _ => throw e
   match se with
   | .app p f args bracket => do
     let r ← elabApp ctx p f args bracket exp

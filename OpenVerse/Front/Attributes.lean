@@ -307,6 +307,28 @@ def apply (tops : List STop) : Except String (List STop × List (Pos × String))
       let defIdx := ((List.range i).reverse.find? fun j => !tops0[j]!.isBesideMarker).getD 0
       some { pos := p, pfx := (n.dropEnd last.length).toString, place, target, expr := e, defIdx }
     | _ => none
+  -- (a module defined in parts gives each part the same `@available`, or
+  -- none: the Book of Verse's tests, `Attributes/available.versetest`
+  -- 317-368, "some but not all modules have available", "different parts
+  -- have different versions", 3552)
+  let parts : List (Pos × String) := tops.filterMap fun
+    | .const p n .. => (moduleMarker? n).map (p, ·)
+    | _ => none
+  let before (a b : Pos) : Bool := a.file == b.file && (a.line < b.line || (a.line == b.line && a.col ≤ b.col))
+  -- (a module's attribute is on the first of its parts written after it)
+  let availableOf (p : Pos) (m : String) : List (Option Int) := uses.filterMap fun u =>
+    if u.place != "module" || u.head != "available" || u.target != m then none else
+    let on := ((parts.filter fun (q, m') => m' == m && before u.pos q).map (·.1)).head?
+    let version : Option Int := match u.expr with
+      | .construct _ _ _ fs => fs.findSome? fun
+        | .decl _ "MinUploadedAtFNVersion" none false (.int _ v) => some v
+        | _ => none
+      | _ => none
+    if on == some p then some version else none
+  for (p, m) in parts do
+    if let some (q, _) := parts.find? (·.2 == m) then
+      if availableOf p m != availableOf q m then
+        err p s!"the parts of module {".".intercalate (m.splitOn "::")} give it different @available attributes: every part of a module gives the same, or none (Book of Verse tests, available.versetest)"
   -- `@available` versions a definition out (`versionedOut`): it and, for a
   -- module, its members are taken out of the program
   let gone : List Use := uses.filter fun u =>

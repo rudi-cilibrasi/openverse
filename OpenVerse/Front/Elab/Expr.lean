@@ -848,6 +848,14 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
   -- same hierarchy
   let parametric := (env.sparams.lookup T).isSome || !(env.coreArgs T []).isEmpty
   if (env.concreteBelow S).all (fun d => !env.isSub d T) then
+    -- (a cast to a class or interface no class of the value's is below
+    -- compiles, and fails, Book of Verse ch. 11, `11_types.md:299-301`:
+    -- "These casts succeed … failing if the value is not of" the type; the
+    -- tests, `Interface.versetest:150` (`assert_valid`), `:140`, `:147`: a
+    -- warning, the value evaluated first)
+    if bracket && !parametric then
+      warnAt p s!"{T}[…] always fails here: no class is below both {r.ty.show} and {T}"
+      return ⟨.seq r.e (.prim .fail []), .struct T []⟩
     eerr p s!"no class is below both {r.ty.show} and {T}, so {T}[…] would always fail"
   -- (#351, #53: to a type beside it, whose type arguments the classes and
   -- interfaces above both relate to the object's, and open otherwise: as a
@@ -2613,12 +2621,49 @@ partial def elabFieldDefault (ctx : Ctx) (p : Pos) (name : String) (tas : List T
       return ← fxAt p (do coerce p (← elabSubtypeValueWith elabE ctx p plan bound) t)
   fxAt p (do coerce p (← elabE { dctx with defaults := (name, f) :: dctx.defaults } d (some t)) t)
 
+/-- A construction's `let:` and `block` clauses (Book of Verse ch. 10, "Let
+    Clauses in Archetypes": "The `let` clause introduces bindings visible
+    to subsequent field initializers. Unlike `block`, `let` permits only
+    declarations"; "Field initializers execute in the order they are written
+    in the archetype"; the tests, `Classes/Constructor.versetest` 5, 38,
+    `Bugs/FORT-687100…` 51, 66, `Attributes/CustomClassVarAccessors.versetest:300`),
+    as a block that runs them in order, the field values written before a
+    clause bound to names of their own there, and whose value is the
+    construction of the fields: `c{let{X := 1}; block{S}; F := X}` is
+    `{X := 1; S; c{F := X}}`. `none` for a construction with neither. -/
+partial def constructionClauses? (p : Pos) (name : String) (targs : List STy) (args : List SExpr) :
+    Except String (Option SExpr) := do
+  let isClause : SExpr → Bool := fun | .construct _ "let" [] _ | .block .. => true | _ => false
+  let some last := (args.zipIdx.filter (isClause ·.1)).getLast?.map (·.2) | return none
+  let mut pre : Array SExpr := #[]
+  let mut fields : Array SExpr := #[]
+  for (a, i) in args.zipIdx do
+    match a with
+    | .construct lp "let" [] ds =>
+      if let some d := ds.find? fun | .decl .. => false | _ => true then
+        throw s!"{d.pos.show}: a let: clause of a construction has only definitions, X := e (Book of Verse ch. 10: \"Unlike block, let permits only declarations\")"
+      if ds.isEmpty then throw s!"{lp.show}: a let: clause defines something"
+      pre := pre ++ ds.toArray
+    | .block bp es => pre := pre.push (.app bp (.ident bp "$nofail") [.block bp (es ++ [.block bp []])] false)
+    | .decl dp f none false e =>
+      if i < last then
+        let tmp := s!"$clause{dp.line}_{dp.col}"
+        pre := pre.push (.decl dp tmp none false e)
+        fields := fields.push (.decl dp f none false (.ident dp tmp))
+      else fields := fields.push a
+    | a => fields := fields.push a
+  return some (.block p (pre.toList ++ [.construct p name targs fields.toList]))
+
 /-- `name{F := e, …}` or `name(t₁, …){F := e, …}`: the struct's fields in
     declaration order; omitted fields take their default values. The type
     arguments of a parametric struct are written, or are those of the
     expected type. -/
 partial def elabConstruct (ctx : Ctx) (p : Pos) (name : String) (targs : List STy) (args : List SExpr)
     (exp : Option Ty) : EM R := do
+  match constructionClauses? p name targs args with
+  | .error message => throw message
+  | .ok (some e) => return ← elabE ctx e exp
+  | .ok none => pure ()
   let result ← elabConstructionValue ctx p name targs args exp
   if let some fx := ctx.types.constructionFx[name]? then
     noteFx p fx (some s!"constructs {name} (declared construction budget)")

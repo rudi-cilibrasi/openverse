@@ -591,6 +591,22 @@ partial def Ty.unitUp : Ty → Ty → Bool
   | .tup as, .tup bs => as.length == bs.length && (as.zip bs).all fun (a, b) => a.unitUp b
   | a, b => a == b
 
+/-- A type given as a program's parametric type's argument: its `void`s,
+    outside function types, are `true` (`tuple()`), the empty value's type
+    alone. Book of Verse ch. 2, "Write the value, not the type name"
+    (`02_primitives.md:1311-1316`): "A parameter declared literally `:void`
+    accepts any value … It does not work when `void` reaches the parameter
+    through a type parameter", and "Conversion is one-way" (`:1371-1374`):
+    "A *type parameter* bound to `[]void` is invariant, though, so only
+    `[]void` (or `[]true`) fits there"; the tests, `Void.versetest` 227-279. -/
+partial def Ty.voidArg : Ty → Ty
+  | .void => .tup []
+  | .arr t => .arr t.voidArg
+  | .opt t => .opt t.voidArg
+  | .map k v => .map k v.voidArg
+  | .tup ts => .tup (ts.map Ty.voidArg)
+  | t => t
+
 /-- The types of the empty value alone: `tuple()`, and `void`, which takes any value and makes it that one (Book of Verse
     ch. 2: "Any value converts to `void`"). -/
 def Ty.isUnit : Ty → Bool
@@ -1242,7 +1258,13 @@ private def TyEnv.disjointStep (env : TyEnv) (apart : Ty → Ty → Bool) (a b :
   | .struct a as, .struct b bs =>
     let isCls (x : String) := env.classes.contains x
     let iface (x : String) := isCls x && (env.info x).isIface
-    if isCls a && isCls b then
+    -- (a type as a value, of `type` or a metatype below it, `TypeValues`,
+    -- is no object of the program's classes: `F(:subtype(c))` and
+    -- `F(:d)`, Book of Verse's tests, `ParametricTypes.versetest:719`
+    -- beside `:45`)
+    let typeValue (x : String) := env.classes.contains "type" && env.isSub x "type"
+    if isCls a && isCls b && typeValue a != typeValue b then true
+    else if isCls a && isCls b then
       -- one parametric class at disjoint type arguments
       if a == b && !iface a then as.length == bs.length && (as.zip bs).any fun (x, y) => apart x y
       else if iface a || iface b then

@@ -852,6 +852,15 @@ def softBuiltins : List String :=
    "IsFinite", "Concatenate", "Sinh", "Cosh", "Tanh", "ArSinh", "ArCosh", "ArTanh", "Lerp", "Clamp", "Sgn",
    "BitAnd", "BitOr", "BitXor", "BitNot", "BitShiftLeft", "BitShiftRight"]
 
+/-- The type arguments `ts` of the parametric type `n` as its type
+    parameters take them: `void` given as a program's type's argument is
+    `true`, a type parameter bound to it taking the empty value alone (Book
+    of Verse ch. 2, `Ty.voidArg`); the library's types, `task(void)` and the
+    events, keep it. -/
+def TyEnv.typeArgs (env : TyEnv) (n : String) (ts : List Ty) : List Ty :=
+  let library := n.startsWith "$" || (PreludeNeeds.names.contains n && (env.concurrencyNames.lookup n).isNone)
+  if library then ts else ts.map Ty.voidArg
+
 partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .name "int" => pure .int
   | .name "logic" => pure .logic
@@ -919,6 +928,7 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
     match env.sparams.lookup n with
     | some ps =>
       if ps.length != ts.length then eerr p s!"{n} takes {ps.length} type argument(s), found {ts.length}"
+      let ts := env.typeArgs n ts
       for ((v, c), t) in ps.zip ts do
         if c && !t.comparable env then eerr p (notComparable env t s!"type argument {v} of {n}")
       let t := Ty.struct n ts
