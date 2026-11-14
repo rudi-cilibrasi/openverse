@@ -20,6 +20,7 @@
 -/
 import OpenVerse.Core.Syntax
 import Std.Data.HashMap
+import Std.Data.HashSet
 
 namespace OpenVerse.Front.SignalAdmission
 open OpenVerse
@@ -82,6 +83,26 @@ def maySignal (fns : Array Fn) : Std.HashMap Nat (Option Nat) := Id.run do
       if !ms.contains i then
         if let some f := callees[i]!.find? ms.contains then
           ms := ms.insert i (some f)
+          grew := true
+  return ms
+
+/-- (event mode, docs/research/scheduler-conformance.md, "Awaiters run
+    inside `Signal`") The functions from which `signalAll` is reachable
+    through calls, a spawned call's included (a `spawn` runs it to its first
+    wait at once): the suspends functions among them are the ones whose code
+    may be running while a `Signal` runs, which the lowering marks. -/
+def reaching (fns : Array Fn) : Std.HashSet Nat := Id.run do
+  let callees := fns.map fun fn => (calls none fn.body).eraseDups
+  let mut ms : Std.HashSet Nat := {}
+  for i in [0:fns.size] do
+    if fns[i]!.name == "$signalAll" then ms := ms.insert i
+  let mut grew := true
+  while grew do
+    grew := false
+    for i in [0:fns.size] do
+      if !ms.contains i then
+        if callees[i]!.any ms.contains then
+          ms := ms.insert i
           grew := true
   return ms
 

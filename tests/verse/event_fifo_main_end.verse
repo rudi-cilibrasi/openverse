@@ -1,4 +1,5 @@
-# FIFO (#513): Main goes on first and ends, which ends the program
+# Awaiters run inside Signal (#513): Main's own arm is resumed inside its
+# other arm's Signal, then the spawned waiter; Main ends after both
 Waiter(E:event(int), Tag:string)<suspends>:void =
     V := E.Await()
     Print("got {Tag} {V}")

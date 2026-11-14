@@ -1,5 +1,6 @@
-# (#513) --event-fifo: two arms that go on after the rush, one waiting when it
-# ends, the other later: each takes its turn in the order its wait began
+# Awaiters run inside Signal (#513): two arms that go on after the rush, one
+# waiting when it ends, the other later: each goes on inside the Signal that
+# reaches it, in the order its wait began
 Waiter(E:event(int))<suspends>:void =
     V := E.Await()
     Print("task {V}")

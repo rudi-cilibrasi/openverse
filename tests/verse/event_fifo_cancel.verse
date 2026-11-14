@@ -1,6 +1,7 @@
-# FIFO event resumption (#513, --event-fifo): a waiter cancelled after the
-# Signal woke it is not resumed; one that waits again joins the end; two
-# signals before a waiter runs give it the first, as broadcast does
+# Awaiters run inside Signal (the Book's API, event's Signal; #513): a
+# waiter whose task an earlier waiter of the same round cancels is not
+# resumed at its turn; one that waits again inside the Signal joins the next
+# round, so the second Signal reaches it and the third finds no one
 Waiter(E:event(int), Tag:string, Delay:float, Times:int)<suspends>:void =
     Sleep(Delay)
     var I:int = 0

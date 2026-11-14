@@ -1,7 +1,7 @@
 wait B
 wait A
 signal
-returned
-got A 7
 got B 7
+got A 7
+returned
 exit=0

@@ -1,4 +1,4 @@
-# FIFO (#513): Main, woken by a task's Signal, ends once
+# Awaiters run inside Signal (#513): Main, woken by a task's Signal, ends once
 Sig(E:event(int))<suspends>:void =
     Sleep(0.01)
     E.Signal(7)

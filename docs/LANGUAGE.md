@@ -3419,11 +3419,15 @@ Main()<suspends>:void =
   function whose effects allow those, immediate ones too, not in a
   `<computes>`, `<reads>` or `<allocates>` one; with `--extended-defaults`,
   also in a field's default of a class whose effects allow them (a task per
-  construction that omits the field). A `spawn` written in a failure
-  context is refused (#156; a task a call in a failure context starts, as
-  a call may, is undone with the context when it fails: its first run is
-  rolled back and it never runs again);
-  without a suspends `Main`, a task runs only up to its first wait.
+  construction that omits the field). A `spawn` may be in a failure
+  context, as the Book's tests have it (assertions spawn;
+  `LiveVariables.versetest:450-545` spawn in `if: …; false?`): its start,
+  the task's first run included, is the context's code, so a context that
+  fails undoes it, and the task never runs again; in a suspends function a
+  `spawn` in a condition or a filter starts the task there (it is not a
+  suspension point). A `spawn` in a `defer:` is refused (#156).
+  Without a suspends `Main`, a task runs up to its first wait, and on only
+  inside a `Signal` that resumes it (below).
   `T.Cancel()` (in a suspends function) cancels a task that has not ended:
   it unwinds at once, running its `defer:` blocks, or, when the task is
   running (its own code or one of its branches or `rush` losers runs: it
@@ -3460,23 +3464,38 @@ Main()<suspends>:void =
 - **`event`.** An `event(t){}` has `E.Await()`, which waits for the next
   `E.Signal(X)` and gives `X`, and `E.Signal(X)`, which wakes every task
   waiting at that moment, each with `X` (the API's reading; the Book's text
-  says both "each awaiter" and "exactly one"). The woken tasks go on in the
-  scheduler's order (`Main`, then tasks in the order they were started,
-  arms in source order), not in the order they began waiting. With
-  `--event-fifo` (`openverse run` and `emit`, opt-in until a default is
-  chosen, #513) they go on in the order they began waiting, the published
-  API's: once the task that signalled waits or ends (`Signal` returns
-  first), each woken task's turn comes in that order, before the
-  scheduler's own order goes on; tasks they wake take their turns after
-  them. A task is a spawned task, `Main` or a `branch`, and waiters in the
-  arms of one task's `sync`, `race` or `rush` each take their own turn too
-  (resuming the task for one arm's turn leaves its other woken arms
-  waiting for theirs), also a `rush` arm that goes on after the `rush`
-  (a task of its own then), signalled before its first turn as one. A
-  waiter cancelled before its turn does not go on, and a wait
-  cancelled before the `Signal` (a `race` it lost) is no waiter; once
-  `Main` ends, so does the program, also in the middle of the turns. A `Signal` with no one waiting is lost, and `Signal`
-  itself never waits. `event()` is an event without a value (`event(void)`),
+  says both "each awaiter" and "exactly one"). The woken tasks go on
+  inside the `Signal`, as the Book's API has it ("resumed first, in the
+  order they suspended ... Each resumed task runs until it blocks again
+  before the next one is given a turn"; its tests, `Event.versetest:21-32`
+  and the FORT-1088027 and FORT-1126351 cases): in the order they began
+  waiting, each until it waits again or ends, all before `Signal` returns
+  ([the rule](research/scheduler-conformance.md#awaiters-run-inside-signal)).
+  A waiter is a spawned task, `Main`, a `branch`, an arm of a `sync`,
+  `race` or `rush` (also one of the signalling task's own: an arm awaiting
+  while its sibling signals is resumed inside that sibling's `Signal`), or
+  a `rush` arm that goes on after its `rush`. An await made during a
+  `Signal`, by a resumed task or another, waits for the next one (for a
+  `sticky_event`, it gives the value at once). A `Signal` made by a resumed
+  task runs its own round to the end before that task goes on (depth
+  first), also on the same event, where it reaches the awaits made since
+  the outer `Signal` began. An arm resumed inside a sibling's `Signal`
+  that ends there wins its `race` or `rush` if it is the first to end: the
+  signalling arm goes on to its next wait and is then cancelled (or, in a
+  `rush`, goes on), and the arms after it never start (ch. 14,
+  "Resolution Stops Unstarted Arms"); the race's value is the first
+  completer's. Inside a `Signal`, only the woken waiters go on: a sleep
+  that has expired and a wait for a task's end are taken at their task's
+  turn in the scheduler's pass, as before (`Main`, then the tasks in the
+  order they were started, arms in source order); the tasks awaiting one
+  task's end go on in that order too (the Book's API resumes them in the
+  order they registered, inside the end: not built). A `Signal` from
+  immediate code resumes its waiters the same way. A waiter cancelled
+  before its turn (by an earlier waiter of the same `Signal`) does not go
+  on, and a wait cancelled before the `Signal` (a `race` it lost) is no
+  waiter; once `Main` ends, so does the program, after the task whose
+  `Signal` ended it waits. A `Signal` with no one waiting is lost, and
+  `Signal` itself never waits. `event()` is an event without a value (`event(void)`),
   with `E.Signal()` and `E.Await()`. A `sticky_event(t)` (or
   `sticky_event()`) is an event that keeps its last signal: an `Await`
   after a `Signal` gives that value at once. A `subscribable_event(t)` is an
@@ -3484,19 +3503,24 @@ Main()<suspends>:void =
   `E.Subscribe(F)` (with `F` a function or method value of type
   `type{_(:t):void}`) gives a `cancelable`, whose `Cancel()` unsubscribes
   `F`, and `E.Signal(X)` calls each subscribed function in the order they
-  subscribed (see [Readings](#readings-openverse-takes)), after waking the
-  tasks awaiting `E`, which go on once `Signal` has returned (#210). A
+  subscribed (see [Readings](#readings-openverse-takes)), after the tasks
+  awaiting `E` went on (the Book's API: "Subscribers ... are invoked only
+  after every waiting task has been resumed"; #210). A
   function subscribed during a `Signal` is first called at the next one; a
   function cancelled during a `Signal`, by one called before it, is not
   called by it. As in the Book (ch. 14, "Transactional Behavior"), a
   `Subscribe` or a `Cancel` in a failure context that fails is undone. A
-  `Signal` may be called in a failure context too, which Verse refuses
-  (the API reference makes its `Signal` `<no_rollback>`): what the
-  functions it calls do is rolled back with the context, as `Print` is.
-  With `--signal-no-rollback` (`openverse run`, `emit`, `check` and `core`,
-  opt-in until a default is chosen, #515), a program that may call an
-  event's `Signal` from a failure context is refused before it runs or is
-  emitted. A failure context is an `if`'s condition, a `for`'s clause, a
+  `Signal` may be called in a failure context too, as the Book's tests do
+  (`Event.versetest` signals in `<decides>` functions, and every
+  assertion's body is one): what the waiters it resumes and the functions
+  it calls do is rolled back with the context when it fails, as `Print`
+  is, and the waiters wait again where they waited
+  (`Coroutines/Concurrency.versetest:1562-1580`). With
+  `--signal-no-rollback` (`openverse run`, `emit`, `check` and `core`,
+  opt-in, #515: the reading of Epic's published `event` pages, which make
+  `Signal` `<no_rollback>`; the Book's API gives `event`'s `Signal` no such
+  effect), a program that may call an event's `Signal` from a failure
+  context is refused before it runs or is emitted. A failure context is an `if`'s condition, a `for`'s clause, a
   `<decides>` function's body, `option{…}`, `logic{…}`, `not`, the left of
   `or`, a `first{…}` or a `do` expression, with everything that runs
   inside it: a `block`, a named argument's default, a `defer:`. What it
@@ -3622,9 +3646,9 @@ Main()<suspends>:void =
 | `Sleep(0.0)` | "may resume in the same tick" (ch. 14), "One frame" (ch. 14); the API reference: it always yields; the tested ch. 14 examples (`03`, `05` to `11`): it completes at once, in a `race`, a `sync` and plain code: the Book disagrees with itself ([the rules](research/scheduler-conformance.md#sleep00-completes-at-once)) | the tested examples': completes at once, without suspending, as a negative or NaN duration does |
 | `Sleep(S)` rounding | the API: "a sleep resumes on the first update at or after its deadline and never sooner than the next one. Short sleeps therefore round up"; no tick rate | the first tick at or after the deadline: the binary64 product `30·S` rounded up, at least one tick (`Sleep(0.04)` takes 2 ticks; `Sleep(0.1)`, whose product is exactly 3.0, 3); bounded inputs and checked clock accumulation follow the explicit reference policy above (#514) |
 | End of a program with tasks | not stated | the program ends when `Main` does; a `Main` that waits with no task able to run is an error (exit 2) (#156) |
-| Order of a `subscribable_event`'s functions | not stated (ch. 14's example lists them in subscription order) | subscription order; the tasks awaiting the event are woken first and go on after `Signal` returns (#210) |
-| Event waiter resumption | the Book's API: awaiting tasks "resumed first, in the order they suspended", each until it waits again, before `Signal` returns; its tests have an awaiter run inside `Signal` (`Event.versetest:27`, FORT-1126351) | Main/spawn/source-arm scheduler order by default; with `--event-fifo`, suspension order across tasks and arms, after `Signal` returns and the signalling task waits (#513); running awaiters inside `Signal` is not built, [the obstacle](research/scheduler-conformance.md#awaiters-run-inside-signal-not-built) |
-| Signal in a failure context | the published Signal API describes no_rollback, alongside rendered transacts bits; versioned compiler behavior needs separate evidence | transactional Signal and callbacks are allowed and rolled back by default; with `--signal-no-rollback`, a program that may signal an event from a failure context is refused before it runs; the default is undecided (#515) |
+| Order of a `subscribable_event`'s functions | the API: "invoked in a randomised order on every signal", "only after every waiting task has been resumed"; ch. 14's example lists them in subscription order | subscription order, after the tasks awaiting the event went on inside `Signal` (#210) |
+| Event waiter resumption | the Book's API: awaiting tasks "resumed first, in the order they suspended", each until it blocks before the next, and `Signal` "returns before the resumed tasks have finished"; its tests have awaiters run inside `Signal` (`Event.versetest:21-32`, FORT-1088027, FORT-1126351) | the Book's: inside `Signal`, in the order they suspended, each until it waits again or ends, the same task's arms included; an await made meanwhile joins the next `Signal`; nested `Signal`s depth first (#513, [the rule](research/scheduler-conformance.md#awaiters-run-inside-signal)); the awaiters of a task's end keep the scheduler's order (the API's registration order is designed, not built) |
+| Signal in a failure context | the Book's tests signal in `<decides>` functions and assertions and expect success (`Event.versetest` 64-119); a failed context undoes the resumption (`Coroutines/Concurrency.versetest:1562-1580`); the Book's API gives `event`'s `Signal` no `<no_rollback>` (Epic's published pages do) | the tests': allowed, and what it and the awaiters it resumed did is rolled back with a failing context; `--signal-no-rollback` refuses it, as Epic's pages read (#515) |
 | Extent of a `<#>` comment | "everything indented by four spaces on subsequent lines" (§1.1) | the rest of the `<#>` line and every following line indented more than that line, whatever the amount (blank lines included); `<#>` may also follow code on a line |
 
 ## Not supported in v1

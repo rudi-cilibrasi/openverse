@@ -1,9 +1,9 @@
 winner
-signalled
 first loser 1 11
 cleanup first loser 11
 task 1 12
 cleanup task 12
+signalled
 second loser 2 14
 cleanup second 14
 done precise 14

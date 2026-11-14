@@ -107,7 +107,7 @@ models in `scripts/models/`. `scripts/check.sh` runs each from a fixed seed (`FU
 | `scripts/fuzz-model-gadt.sh` | classes that fix, repeat or hide type arguments, and casts on them; interfaces seen through views (fields, defaults, generic calls) |
 | `scripts/fuzz-model-named-values.sh` | function values of functions with named parameters: which types they fit, written order, defaults at the call, bound receivers, rollback, refusals; with `--tuples`, destructured tuple parameters |
 | `scripts/fuzz-model-sched.sh` | the scheduler: `spawn`, `branch`, events, `sync`/`race`/`rush`, cancellation and `Sleep` |
-| `scripts/fuzz-model-fifo.sh` | FIFO event resumption (`--event-fifo`): waiters in tasks, `Main`, branches and arms, signal chains |
+| `scripts/fuzz-model-fifo.sh` | event resumption, awaiters inside `Signal` in the order they waited: waiters in tasks, `Main`, branches and arms, signal chains |
 
 ## Using it
 
@@ -136,11 +136,12 @@ concurrency remain available. See [source profiles](docs/LANGUAGE.md#source-prof
 Normal compilation retains ordered choices and generators; their alternatives
 run at runtime. Both modes use the same deterministic Core semantics.
 
-`--event-fifo` and `--signal-no-rollback` are opt-in event policies whose
-defaults are undecided: the first resumes the tasks a `Signal` wakes in the
-order they began to wait (#513); the second refuses, before the program
-runs, an event's `Signal` that a failure context may call, as the published
-API's `<no_rollback>` `Signal` would be (#515). See
+A `Signal` resumes the tasks awaiting it inside it, in the order they began
+to wait, each until it waits again, as the Book's API and tests have it
+(#513). `--signal-no-rollback` is an opt-in event policy: it refuses, before
+the program runs, an event's `Signal` that a failure context may call, as
+Epic's published `<no_rollback>` `Signal` would be (#515); by default, as the
+Book's tests, it is allowed and undone with a failing context. See
 [events](docs/LANGUAGE.md#concurrency).
 
 ```verse
