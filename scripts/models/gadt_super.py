@@ -6,6 +6,9 @@ restores that counter and its output; successful filters and bodies commit.
 Only a lazy producer's path to a first success survives. The actual receiver
 is a grandchild with conflicting overrides, so virtual lookup would disagree
 with the source method's super call. Generic fields exercise Self capture.
+The method that calls (super:)Act is an overload of Act, Act(Probe:run_probe),
+that overrides the base's: (super:)Act is only in an override of Act (the
+Book's tests, Super.versetest: "super on another method").
 """
 import itertools
 import random
@@ -43,6 +46,7 @@ Nat(N:int,Hi:int)<transacts><decides>:int =
     Print("visit {{N}}")
     N | Nat[N+1,Hi]
 Two(N:int):int=N|N+1
+run_probe := struct{{}}
 base(t:type) := class:
     V:t
     Bias:int
@@ -55,9 +59,10 @@ base(t:type) := class:
         set Calls+=1
         Print("str {{S}} {{Calls}}")
         Bias
+    Act(Probe:run_probe)<transacts>:void = {{}}
 mid(u:type) := class(base(u)):
     Act<override>(N:int,?Add:int=Note(99))<transacts>:int = 999
-    Run()<transacts>:void =''')
+    Act<override>(Probe:run_probe)<transacts>:void =''')
 
 if mode == 0:
     print(f'''        var Seen:int=0
@@ -105,7 +110,7 @@ print(f'''leaf(v:type) := class(mid(v)):
     Act<override>(S:string)<transacts>:int=888
 Main()<transacts>:void =
     L:=leaf({leaf_type}){{V:={value},Bias:={bias}}}
-    L.Run()
+    L.Act(run_probe{{}})
     Print("calls {{L.Calls}}")''')
 lines.append(f'calls {count}')
 Path(sys.argv[2]).write_text('exit=0\n' + '\n'.join(lines) + '\n')

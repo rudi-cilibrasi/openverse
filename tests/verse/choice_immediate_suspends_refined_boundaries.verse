@@ -15,7 +15,7 @@ Trace(Label:string, Value:int)<transacts>:int =
 State(P:pair(a, b) where a:type, b:type)<suspends>:void =
     Sleep(0.01)
     var Total:int = 0
-    R := for (A := 1 | 2, set Total += A, Print("prefix {A}"),
+    R := for (A := 1 | 2, (set Total += A; true?), (Print("prefix {A}"); true?),
         V := if (D := dup[P]):
             Print("selected")
             set Total += 10
@@ -32,9 +32,9 @@ LaterEmpty(P:pair(a, b) where a:type, b:type)<suspends>:void =
     Sleep(0.01)
     var Total:int = 0
     Empty:[]int = array{}
-    R := for (A := 1 | 2, set Total += A,
+    R := for (A := 1 | 2, (set Total += A; true?),
         V := if (D := dup[P]) then (D.C | D.C + 1) else 0,
-        set Total += V, W : Empty):
+        (set Total += V; true?), W : Empty):
         Print("unexpected {W}")
         V
     Print("empty {Total} {R.Length}")
@@ -51,7 +51,7 @@ ScalarNoFallback(P:pair(a, b) where a:type, b:type)<suspends>:void =
     H := counter{}
     One := array{1}
     var Total:int = 0
-    R := for (A := 1 | 2, set Total += A,
+    R := for (A := 1 | 2, (set Total += A; true?),
         V := if (D := dup[Read(P, H)]) then One[D.C] else (99 | 100)):
         V
     Print("scalar {Total} {H.N} {R.Length}")
@@ -74,7 +74,7 @@ Typed(P:pair(a, b) where a:type, b:type)<suspends>:[]b =
 Independent(P:pair(a, b), Q:pair(c, d) where a:type, b:type, c:type, d:type)<suspends>:void =
     Sleep(0.01)
     var Total:int = 0
-    R := for (V := if (D := dup[P]) then (D.C | D.C + 1) else 0, set Total += V,
+    R := for (V := if (D := dup[P]) then (D.C | D.C + 1) else 0, (set Total += V; true?),
         W := if (E := dup[Q]) then (E.C | E.C + 1) else 0):
         set Total += W
         V + W

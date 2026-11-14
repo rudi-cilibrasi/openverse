@@ -34,9 +34,10 @@ Since #344, an interface family where ci(t) gives its parent cont([]t): a class 
 ci(t) and a direct implementer of cont([]int), read through code generic over cont(u) and ci(t);
 a two-parameter pin kvI(k, v) over cont(tuple(k, v)), a three-level chain c3(c) over ci(?c), a
 parametric class below intI, an interface without parameters over cont(int), and refining casts.
-Since #347, a pinned interface cd(c) over cont([]c) with a default Gt using its own On(), reached
+Since #347, a pinned cd(c) over cont([]c) with an implementation Gt using its own On(), reached
 from code generic over cont(u): in a class, a subclass, one with its own override, a chain
-cd3(c) over cd(?c) with its own default (which wins), and through cd4(c) over cd(c). Since #355,
+cd3(c) over cd(?c) with its own (which wins), and through cd4(c) over cd(c); cd, cd3 and cd4
+are abstract classes, as an interface overrides nothing (the Book's tests). Since #355,
 classes giving cd composite type arguments (dtb(a, b) over cd(tuple(a, b)), dar(a) over cd([]a)),
 the default's body with a typed local (Y:c).
 argv: seed expfile [--cmp]
@@ -204,7 +205,7 @@ obx(c:type) := class(c3(c)):
     Gt<override>():[]?c = array{O, O, O}
     Sz<override>():int = 1
     Hs<override>():logic = if (O?) then true else false
-cd(c:type) := interface(cont([]c)):
+cd(c:type) := class<abstract>(cont([]c)):
     On():c
     Gt<override>():[]c =
         Y:c = On()
@@ -225,12 +226,12 @@ dtb(a:type, b:type) := class(cd(tuple(a, b))):
 dar(a:type) := class(cd([]a)):
     Xs:[]a
     On<override>():[]a = Xs
-cd3(c:type) := interface(cd(?c)):
+cd3(c:type) := class<abstract>(cd(?c)):
     Gt<override>():[]?c = array{On()}
 d3x(c:type) := class(cd3(c)):
     O:?c
     On<override>():?c = O
-cd4(c:type) := interface(cd(c)):
+cd4(c:type) := class<abstract>(cd(c)):
     Nm():string
 d4x(c:type) := class(cd4(c)):
     V:c

@@ -26,10 +26,10 @@ Main()<transacts>:void =
         Print("b {X} {Y}")
     # (the clauses after X fail before any generator: X's own prints undone
     # back to its generator, as in one filter)
-    for (X := (P("p", 1) | P("q", 2)), Print("after {X}"), Y := F(-1), Z := F(-2), Y + Z > 5):
+    for (X := (P("p", 1) | P("q", 2)), (Print("after {X}"); true?), Y := F(-1), Z := F(-2), Y + Z > 5):
         Print("never")
     # (a later generator gives nothing: what came before it stays)
-    for (X := (P("r", 1) | P("s", 2)), Print("then {X}"), Y := (Two(5) | Two(6)), Z := F(-1), X + Y + Z > 99):
+    for (X := (P("r", 1) | P("s", 2)), (Print("then {X}"); true?), Y := (Two(5) | Two(6)), Z := F(-1), X + Y + Z > 99):
         Print("never")
     Print("end")
     Print("g {GF(7)} {GF("s")} {GI(7)} {GI("s")}")

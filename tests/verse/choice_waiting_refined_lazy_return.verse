@@ -11,7 +11,7 @@ Wait(N:int)<suspends>:int =
 Use(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<suspends>:int =
     var Total:int=0
     defer:Print("source {Total}")
-    for(A:=if(D:=dup[P])then Lazy[D.C-2]else 0,set Total+=A,
+    for(A:=if(D:=dup[P])then Lazy[D.C-2]else 0,(set Total+=A; true?),
         B:=if(E:=dup[Q])then Lazy[E.C-2]else 0):
         defer:
             set Total+=10

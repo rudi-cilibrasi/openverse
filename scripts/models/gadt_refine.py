@@ -527,13 +527,13 @@ for o in objs:
 R417F = random.Random(seed * 1000003 + 41701)
 loops.append(f'''ForCast(P:pair(a, b), Threshold:int, Limit:int where a:type, b:type)<transacts>:int =
     var Total:int = 0
-    Values := for (A := 1 | 2, set Total += A,
+    Values := for (A := 1 | 2, (set Total += A; true?),
         V := if (D := {choice_target}[ChoiceReceiver(P)]):
             set P.N += {prefix_step}
             ChoiceValue(P, {left_step}, D.C) | ChoiceValue(P, {right_step}, D.C + {choice_offset})
         else:
             ChoiceValue(P, {else_step}, -{choice_offset})
-        , V > Threshold, set Total += V, W := 1 | 2, W <= Limit):
+        , V > Threshold, (set Total += V; true?), W := 1 | 2, W <= Limit):
         set P.N += W
         set Total += W
         Print("for body {{A}} {{V}} {{W}} {{Total}} {{P.N}}")
@@ -576,7 +576,7 @@ pair_offset = R417F.randint(1, 5)
 loops.append(f'''ForPair(P:pair(a, b), Q:pair(c, d), Start:int where a:type, b:type, c:type, d:type):int =
     var Total:int = Start
     Values := for (V := if (D := {choice_target}[P]) then (D.C | D.C + {choice_offset}) else 0,
-        set Total += V, W := if (E := {pair_target}[Q]) then (E.C | E.C + {pair_offset}) else 0):
+        (set Total += V; true?), W := if (E := {pair_target}[Q]) then (E.C | E.C + {pair_offset}) else 0):
         set Total += W
         Print("for pair {{V}} {{W}} {{Total}}")
         V + W
@@ -606,9 +606,9 @@ loops.append(f'''ForReturn(P:pair(a, b), Q:pair(c, d), Stop:int where a:type, b:
         set Total += {source_cleanup}
         set P.N += {source_cleanup}
         Print("ret source {{Total}} {{P.N}}")
-    Values := for (A := 1 | 2, set Total += A, Print("ret prefix {{A}}"),
+    Values := for (A := 1 | 2, (set Total += A; true?), (Print("ret prefix {{A}}"); true?),
         V := if (D := {choice_target}[P]) then (D.C | D.C + {choice_offset}) else 0,
-        V > {return_cut}, set Total += V,
+        V > {return_cut}, (set Total += V; true?),
         W := if (E := {pair_target}[Q]) then (E.C | E.C + {pair_offset}) else 0):
         defer:
             set Total += {body_cleanup}
@@ -703,8 +703,8 @@ ForNested(P:pair(a, b), Q:pair(c, d), Stop:int where a:type, b:type, c:type, d:t
             set Total += {nested_cleanup}
             set H.N += {nested_cleanup}
             Print("nested cleanup {{Total}} {{H.N}}")
-        A := for (Z := {nested_call}[H, {nested_depth}], set Total += Z,
-            Print("nested filter {{Z}} {{Total}}"), Z >= {nested_min}):
+        A := for (Z := {nested_call}[H, {nested_depth}], (set Total += Z; true?),
+            (Print("nested filter {{Z}} {{Total}}"); true?), Z >= {nested_min}):
             set Total += V + W
             set H.N += W
             Print("nested body {{V}} {{W}} {{Z}} {{Total}} {{H.N}}")
@@ -830,10 +830,10 @@ OutcomeCall(P:pair(a, b), Value:int, Stop:int where a:type, b:type)<transacts><d
 ForOutcome(P:pair(a, b), Q:pair(c, d), Stop:int where a:type, b:type, c:type, d:type)<transacts><decides>:void =
     H := outcome_meter{{}}
     var Total:int = 0
-    Values := for (A := 1 | 2, set Total += A, Print("out prefix {{A}}"),
+    Values := for (A := 1 | 2, (set Total += A; true?), (Print("out prefix {{A}}"); true?),
         V := if (D := {choice_target}[P]) then (D.C | D.C + {choice_offset}) else 0,
-        V > {threshold}, set Total += V, X := 1..2,
-        Z := {lazy_source}, set Total += Z, Z >= {lazy_min},
+        V > {threshold}, (set Total += V; true?), X := 1..2,
+        Z := {lazy_source}, (set Total += Z; true?), Z >= {lazy_min},
         W := if (E := {pair_target}[Q]) then (E.C | E.C + {pair_offset}) else 0,
         W <= {limit}):
         set Total += W

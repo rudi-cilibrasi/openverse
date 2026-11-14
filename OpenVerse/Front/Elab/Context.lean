@@ -38,7 +38,6 @@ import OpenVerse.Front.Refine
 import OpenVerse.Front.FrameRefs
 import OpenVerse.Front.SourceFrames
 import OpenVerse.Front.FailCapture
-import OpenVerse.Front.CompilerWrites
 import OpenVerse.Front.Types
 import OpenVerse.Front.Variance
 import OpenVerse.Front.ChoiceTypes
@@ -144,10 +143,6 @@ structure Sig where
       reads from its receiver's hidden fields (`$w.…`), not from hidden
       parameters, as a dispatch that opens them has none to pass. -/
   selfTps : List String := []
-  /-- The class or interface whose scope its body and its named parameters'
-      defaults resolve in, when not the one its name says: a class's copy of
-      an interface's default, the interface (#53, `copyScope?`). -/
-  scope : Option String := none
   /-- Required checked upcast dictionaries, preserving both sides when an
       adapter substitutes a parameter by a compound type. -/
   bounds : List SubtypeEvidence.Bound := []

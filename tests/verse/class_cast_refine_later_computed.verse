@@ -21,7 +21,7 @@ ByCall(P:pair(a, b), Q:pair(c, d) where a:type, b:type, c:type, d:type)<transact
 ByField(H:holder(c, d) where c:type, d:type)<transacts>:?d =
     if (Print("y"), G := hdup[H], E := dup[G.Inner]) then option{E.A} else false
 InFor(Hs:[]holder(c, d) where c:type, d:type)<transacts>:[]d =
-    for (H : Hs, Print("z"), G := hdup[H], E := dup[G.Inner]):
+    for (H : Hs, (Print("z"); true?), G := hdup[H], E := dup[G.Inner]):
         E.A
 expr(t:type) := class<abstract>:
     Tag():string

@@ -18,14 +18,14 @@ Odd(C:counter, N:int)<transacts><decides>:int =
 Main():void =
     C := counter{}
     var Total:int = 0
-    R := for (A := (Lazy[C, 1] | Two(0)), set Total += A,
-        B := (Lazy[C, 1] | Two(0)), set Total += B, B = 0):
+    R := for (A := (Lazy[C, 1] | Two(0)), (set Total += A; true?),
+        B := (Lazy[C, 1] | Two(0)), (set Total += B; true?), B = 0):
         set Total += 10
         Print("body {A} {B} {Total} {C.N}")
         Total
     Print("end {R.Length} {Total} {C.N}")
-    S := for (A := (Two(0) | Two(2)), set Total += A,
-        B := (Two(0) | Two(2)), set Total += B, L := Even[C, 1], L = 0):
+    S := for (A := (Two(0) | Two(2)), (set Total += A; true?),
+        B := (Two(0) | Two(2)), (set Total += B; true?), L := Even[C, 1], L = 0):
         set Total += L
         Total
     Print("mutual {S.Length} {Total} {C.N}")

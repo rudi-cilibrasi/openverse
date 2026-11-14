@@ -18,13 +18,13 @@ G(X:int)<transacts>:int =
 ctr := class:
     var Cn : int = 0
     Run()<transacts>:void =
-        for (A := F(Cn), set Cn += 1, B := F(A * 10)):
+        for (A := F(Cn), (set Cn += 1; true?), B := F(A * 10)):
             Print("m {A} {B} {Cn}")
 T()<transacts>:void =
     for (A := F(1), B := F(10), C := F(100), D := F(1000)):
         Print("a {A + B + C + D}")
     var N : int = 0
-    for (A := G(1), A > 1, B := G(10), set N += 1, C := (if (P("i", B) > 10) then (B | 100) else B), A + B + C > 30):
+    for (A := G(1), A > 1, B := G(10), (set N += 1; true?), C := (if (P("i", B) > 10) then (B | 100) else B), A + B + C > 30):
         Print("b {A} {B} {C} {N}")
     Print("n {N}")
     for (A := (if (P("j", 1) > 0) then (1 | 2) else 0), B := (if (A > 1) then 5 else (6 | 7)), C := F(A)):

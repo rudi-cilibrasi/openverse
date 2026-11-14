@@ -12,5 +12,5 @@ pairE(a:type, b:type) := class(expr(tuple(a, b))):
     R:expr(b)
     Tag<override>():string = "pair"
 Tags(Es:[]expr(t) where t:type):[]string =
-    for (E : Es, Print("e"), P := pairE[E], L := P.L) { L.Tag() }
+    for (E : Es, (Print("e"); true?), P := pairE[E], L := P.L) { L.Tag() }
 Main():void = Print("{Tags(array{lit{V := 1}}).Length}")

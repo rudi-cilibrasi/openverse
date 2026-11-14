@@ -5,8 +5,8 @@ usage: gen.py SEED   (deterministic per seed; prints one program)
 
 A program combines
   - a class hierarchy: 1-2 trees of 2-3 levels, <abstract>, <unique> and <final>
-    classes, interfaces with fields and default methods (some extending others and
-    overriding their methods and field defaults), <override> of methods and field
+    classes, interfaces with fields and default methods (some extending others,
+    overriding nothing, as the Book has it), <override> of methods and field
     defaults, (super:), <final> methods, var fields and set, fields holding objects,
     options, arrays and maps of objects, block: clauses, <decides> methods, method
     parameters of class and interface types, named parameters with defaults,
@@ -855,21 +855,24 @@ class Gen:
                 self.shared.add(r.name)
 
     def decide_iface(self, i):
-        """An interface's overrides of its parents' methods and field defaults (before the classes)."""
+        """An interface's overrides of its parents' methods and field defaults
+        (before the classes): none, as an interface overrides nothing (the Book's
+        tests, Interface.versetest: "Interfaces can not override anything"). The
+        draws an override took are taken still, and their results dropped, so the
+        random stream is the one it was."""
         i.pending = []
         i.fover = {}
         for p in i.parents:
             for r in roots_of_type(p):
                 if r.name in self.shared or not chance(0.25):
                     continue
-                above = iface_default(p.closure(), r)
-                eff = narrow(meet([im.eff for j in p.closure() for x, im in j.impls.items() if x is r], r.eff))
-                i.impls[r] = Impl(i, False, eff=eff)
-                i.pending.append((r, good(above) and above.eff <= eff, eff))
+                narrow(meet([im.eff for j in p.closure() for x, im in j.impls.items() if x is r], r.eff))
             for f in fields_of_type(p):
                 if scalar(f) and f.name not in self.fovered and chance(0.2):
                     self.fovered.add(f.name)
-                    i.fover[f.name] = (f, self.field_default(f.ty))
+                    extended = self.extended_defaults
+                    self.field_default(f.ty)
+                    self.extended_defaults = extended
 
     def emit_iface(self, i):
         """An interface's text (after the classes, so that its bodies may cast Self to them)."""

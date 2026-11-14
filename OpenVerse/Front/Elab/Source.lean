@@ -47,6 +47,9 @@ structure Admitted where
   access : Access.Env := {}
   /-- The `case` arms marked `@ignore_unreachable` (`ignoredArmsMarker`). -/
   ignoredArms : List Pos := []
+  /-- The places of the filters of every `for` and `first` with a generator
+      as written, with their kinds (`forFilterPositions`). -/
+  forFilters : List (Pos × String) := []
   /-- The type aliases, each by its name, written out (`Aliases.expand`). -/
   aliases : List (String × Aliases.Alias) := []
 
@@ -324,25 +327,33 @@ partial def checkForClauses (tops : List STop) : Except String Unit := do
     | e => e.children.forM go
   tops.forM (·.code.forM go)
 
-/-- A filter of a `first` with a generator, a clause that binds nothing,
-    must be able to fail, as a `for`'s: "Only allow expressions that can fail
-    (same as `for`)", the Book of Verse's tests (`FlowControl/first.versetest`
-    28-31, 3513); a literal or a name, whose evaluation cannot fail, is
-    refused. (Its generators are the parser's `$each` bindings, `firstOf`.) -/
-partial def checkFirstFilters (tops : List STop) : Except String Unit := do
-  let isGen : SExpr → Bool
+/-- The places of the filters of every `for`, and of every `first` with a
+    generator, as written: each clause that is neither a generator (`X : A`,
+    `X := A..B`; a `first`'s are the parser's `$each` bindings) nor a
+    definition (`X := e`, `X:t = e`, `var X:t = e`), and has no choice in it
+    and calls no function with several values, which make it a generator
+    over their values (#208, #283). The elaboration checks that each can
+    fail (`elabSeqIn`; Book of Verse ch. 7: "Each filter must be failable";
+    its tests, `first.versetest:28`: "Only allow expressions that can fail
+    (same as `for`)"); a clause that inlining or a choice's preparation
+    adds, as the statements of a function with several values that a `for`
+    takes, is none of them. -/
+partial def forFilterPositions (tops : List STop) : List (Pos × String) :=
+  let mv := Choice.multiValued (Choice.multiCandidates tops)
+  let callsMulti (c : SExpr) : Bool :=
+    Choice.anyE (fun | .app _ (.ident _ f) _ _ => mv.contains f | _ => false) c
+  let filters (cs : List SExpr) : List (Pos × String) := cs.filterMap fun c => match c with
+    | .gen .. | .decl .. => none
+    | c => if Choice.hasChoice [c] || callsMulti c then none else some (c.pos, SExpr.filterKind c)
+  let isEach : SExpr → Bool
     | .decl _ _ _ false (.app _ (.ident _ "$each") _ false) => true
     | _ => false
-  let rec go : SExpr → Except String Unit
-    | .app _ (.ident _ "$first") [.block _ items] false => do
-      let cs := items.dropLast
-      if cs.any isGen then
-        if let some c := cs.find? fun c => c.isLiteral || (match c with | .ident .. => true | _ => false) then
-          throw s!"{c.pos.show}: this filter of first is a literal or a name, which cannot fail: a filter must be able to fail, as a for's (Book of Verse ch. 7, \"Filters must be failable\"; its tests, first.versetest:28)"
-      items.forM go
-    | .structDef _ _ _ fs => fs.forM fun f => f.default.forM go
-    | e => e.children.forM go
-  tops.forM (·.code.forM go)
+  let rec go : SExpr → List (Pos × String)
+    | .forE _ cs b => filters cs ++ cs.flatMap go ++ go b
+    | e@(.app _ (.ident _ "$first") [.block _ items] false) =>
+      (if items.dropLast.any isEach then filters items.dropLast else []) ++ e.children.flatMap go
+    | e => e.children.flatMap go
+  tops.flatMap fun t => t.code.flatMap go
 
 /-- The code of a `spawn` cannot leave it: no `return`, and no `break` but
     of a loop inside it (Book of Verse tests, `SpawnAndTask.versetest` 876-892:
@@ -390,6 +401,39 @@ partial def checkLoopExits (tops : List STop) : Except String Unit := do
     | .classDef _ _ _ _ _ _ _ _ ms => ms.flatMap unsuspending
     | _ => []
   tops.forM fun t => (unsuspending t).forM go
+
+/-- `(super:)M` calls the implementation above of the method it is in: it
+    is written only in the code of an `<override>` method named `M` (its
+    body, a block or a `spawn` in it, its parameters' defaults), not in
+    another method, a class's `block:`, a field's default or a function
+    (the Book's tests, `Super.versetest`: "super on another method", `:192`,
+    "Calling `(super:)` from blocks is not allowed", `:237`, a function's,
+    `:204`, 3612; ch. 6: "The `(super:)` syntax for calling parent class
+    methods **cannot** be used in nested functions"; a `spawn` in the
+    override may, `SOL-9691-CaptureSuper.versetest`). An overload of `M`
+    above is any of them (`Super.versetest:54`). -/
+partial def checkSuperCalls (tops : List STop) : Except String Unit := do
+  -- (`inM`: the method whose override the code is in, its name without a
+  -- qualifier)
+  let rec go (inM : Option String) : SExpr → Except String Unit
+    | .member p (.ident _ "(super:)") m =>
+      if inM == some m then pure () else
+        throw s!"{p.show}: (super:){m} is not in an override of {m}: (super:) calls the implementation above of the method it is in, from that method's own code (Book of Verse tests, Super.versetest: \"super on another method\", \"Calling `(super:)` from blocks is not allowed\")"
+    | .structDef _ _ _ fs => fs.forM fun f => f.default.forM (go none)
+    | e => e.children.forM (go inM)
+  let unqualified (n : String) : String :=
+    if n.startsWith "(" then ((n.splitOn ":)").drop 1).headD n else n
+  for t in tops do
+    match t with
+    | .classDef _ _ _ _ _ _ _ fs ms =>
+      fs.forM fun f => f.default.forM (go none)
+      for m in ms do
+        match m with
+        | .fn _ n _ _ specs _ _ =>
+          let inM := if n != "$block" && specs.contains "override" then some (unqualified n) else none
+          m.code.forM (go inM)
+        | m => m.code.forM (go none)
+    | t => t.code.forM (go none)
 
 /-- Five forms the Book's tests refuse, each where the source shows it
     (`type-checks-other` of the [map](../../docs/research/book-test-conformance.md)):
@@ -659,14 +703,16 @@ def concurrencyHelpers (resolved : List STop) (requests : Requests) (eventFifo :
        context (`checkJumps`), none inside a value returned
        (`checkNestedReturns`) or leaving a `spawn` (`checkSpawnExits`), a
        way out of each loop of code that cannot suspend (`checkLoopExits`),
+       `(super:)M` only in an override of `M` (`checkSuperCalls`),
        the five forms the Book's tests refuse (`checkBookForms`: a default
        on a positional parameter, a named argument before a positional one,
        a struct's `var` field, a jump out of a construction's field value,
        an empty `option{}`), `profile` only in a function's code
        (`checkProfiles`), `defer:` only as a statement (`checkDefers`), no
        `for` of literal clauses only, nor a literal filter
-       (`checkForClauses`), nor a filter of a `first` with a generator that
-       is a literal or a name (`checkFirstFilters`);
+       (`checkForClauses`), and the places of the filters of every `for`
+       and every `first` with a generator (`forFilterPositions`), whose code
+       the elaboration checks can fail;
     3. the helpers the parser's `$uses:` markers and the entry expression ask
        for, and the markers taken out;
     4. the access levels written out (`resolveSpecifiers`), then the modules
@@ -709,11 +755,11 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   checkNestedReturns allTops0r
   checkSpawnExits allTops0r
   checkLoopExits allTops0r
+  checkSuperCalls allTops0r
   checkBookForms allTops0r
   checkProfiles allTops0r
   checkDefers allTops0r
   checkForClauses allTops0r
-  checkFirstFilters allTops0r
   -- 3. the helpers the markers and the entry expression ask for: the
   --    rationals' (#116), ReplaceAll's, the bitwise
   --    functions'. They expand finite intrinsic operations
@@ -790,7 +836,7 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
       budgets.insert n (EffectPolicy.constructionFx specs)
     | _ => budgets) ({} : Std.HashMap String (List String))
   return { resolved, rawEntry, typeDefaults, helpers := helpers ++ prelude, intrinsicCalls, concurrencyNames, usesConc,
-           constructionFx, access, scopePairs, ignoredArms, aliases }
+           constructionFx, access, scopePairs, ignoredArms, aliases, forFilters := forFilterPositions allTops0r }
 
 /-- A program's source as elaborated (`inlineSource`). -/
 structure Source where
@@ -807,6 +853,8 @@ structure Source where
   access : Access.Env := {}
   /-- `Admitted.ignoredArms`. -/
   ignoredArms : List Pos := []
+  /-- `Admitted.forFilters`. -/
+  forFilters : List (Pos × String) := []
 
   /-- The uses of methods whose family the receiver's class picks (#283). -/
   familySites : List (Pos × String)
@@ -915,13 +963,13 @@ def inlineSource (requests : Requests) (admitted : Admitted) :
   -- function values (#210): the function types' interfaces, and a class
   -- for each function used as a value
   -- (the entry expression is scanned too)
-  let allTops00 := copyIfaceDefaults (SubtypeEvidence.addFields
+  let allTops00 := (SubtypeEvidence.addFields
     (FnValues.desugar (resolved.take (resolved.length - admitted.rawEntry.length) ++ helpers)
       (resolved.drop (resolved.length - admitted.rawEntry.length)) (requests.fns.map fun (n, t) => (n, t.toSTy))
       requests.methods written))
   let entryTop := resolved.drop (resolved.length - admitted.rawEntry.length)
   return { tops := allTops00, entry := entryTop, constructionFx, access := admitted.access,
-           ignoredArms := admitted.ignoredArms, familySites,
+           ignoredArms := admitted.ignoredArms, forFilters := admitted.forFilters, familySites,
            overloadSites, nestedSites, fieldSites }
 
 
