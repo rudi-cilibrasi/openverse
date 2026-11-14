@@ -127,3 +127,23 @@ where payload:type, context:type):(payload->void)`, whose `payload` only a
 function type's parameter names
 (`Bugs/FORT-592189-MaybeCoerceToTypeCrash.versetest:44`, `verse_vm_only`),
 where the BPVM's twin is an IR error (`:4`).
+
+## `using{/localhost}`
+
+**The rule.** A `using` does not name `/localhost` or a path below it.
+
+**The Book.** The tests, `Tests/Modules/Using2.versetest`: "Explicitly
+using a "/localhost" package is not allowed." (`:84-86`, `using{/localhost}`,
+3544 and 3587), "Explicitly using something in a "/localhost" package is
+not allowed." (`:88-90`, `using{/localhost/something}`), and
+`using{/localhostkinda}` refused for naming nothing (`:92-94`, 3587 only).
+Ch. 16 (`16_modules.md:349`): "all imports must be resolvable when your
+code is compiled".
+
+**openverse before.** A `using` of a path was accepted and ignored.
+
+**openverse now.** The parser writes `using{/localhost…}` as a refused
+form (`Refused.localhostUsing`), which `Attributes.apply` refuses first.
+**Left:** a `using` of any other path that names nothing
+(`using{/localhostkinda}`, 1 case): openverse has no registry of the paths
+it stands in for.

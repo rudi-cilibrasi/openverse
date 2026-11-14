@@ -2192,6 +2192,13 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) (par
       -- (`using` is reserved: `using:int = 42` is no definition)
       if !(← peekT).isSym "{" then perr (← peekT) s!"expected '\{' after using, found {(← peekT).tok.describe}"
       if (← peekT).isSym "{" then
+        if let .path path := (← peekT 1).tok then
+          -- (`/localhost` is the package a program's own code is in, which
+          -- no `using` names: the Book of Verse's tests, "Explicitly using
+          -- a "/localhost" package is not allowed",
+          -- `Modules/Using2.versetest` 84-90)
+          if path == "/localhost" || path.startsWith "/localhost/" then
+            tops := tops.push (.const t.pos s!"{pfx}$using" [] none (refusedForm t.pos (.localhostUsing path) []))
         if let .str parts := (← peekT 1).tok then
           let path := String.join (parts.filterMap fun | .text s => some s | _ => none)
           modify fun st => { st with imports := st.imports.push (t.pos, path) }
