@@ -199,9 +199,13 @@ partial def elabExprValuesWith
       | some (.arr t) => some t
       | _ => none
     match es with
-    | [] => match elemExp with
-      | some t => return ⟨.lit Value.emptyArray, .arr t⟩
-      | none => eerr p "the type of an empty array{} must be given (e.g. X:[]int = array{})"
+    | [] => match elemExp, exp with
+      | some t, _ => return ⟨.lit Value.emptyArray, .arr t⟩
+      -- (a `comparable`: the empty value, its own box whatever its element
+      -- type, equal to every empty value; Book of Verse tests,
+      -- Array.versetest:88, `array{} = array{}`)
+      | none, some .dyn => return ⟨.lit Value.emptyArray, .dyn⟩
+      | none, _ => eerr p "the type of an empty array{} must be given (e.g. X:[]int = array{})"
     | e :: rest =>
       let r ← elabE ctx e elemExp
       let t := elemExp.getD r.ty

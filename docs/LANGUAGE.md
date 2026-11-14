@@ -2208,7 +2208,11 @@ Main():void =
   Verse Core's equality (`Value.veq`) on boxes is then Verse's: the empty
   values of every type are one value, an enum's value is never another
   enum's or an int, one struct at two instances compares field by field.
-  In Verse Core a `comparable` is a `dyn`, the type of every value.
+  In Verse Core a `comparable` is a `dyn`, the type of every value. An
+  empty `array{}` or `map{}` where a `comparable` is expected, which says
+  nothing of its elements, is the empty value, its own box (`X:comparable
+  = array{}`; two of them are equal, as `array{} = array{}` is, Book of
+  Verse tests, `Array.versetest:88`).
 - **Joins.** Two comparable types with nothing else in common join at
   `comparable` (ch. 1: `array{1, "two", 3.0}`'s element type is
   `comparable`, "their common supertype"; ch. 14: the result "widens all
