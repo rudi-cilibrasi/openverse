@@ -52,11 +52,57 @@ def Classes.supArgsSTy (classes : Classes) (c T : String) : Option (List STy) :=
       | none => []
   return none
 
+/-- The applications of the types `ns` in a type, each with the type
+    arguments it gives (`c(?t)` in `?c(?t)`), outermost first. -/
+partial def STy.applicationsOf (ns : List String) (t : STy) : List (String × List STy) :=
+  (match t with
+   | .app n args => if ns.contains n then [(n, args)] else []
+   | _ => []) ++ t.children.flatMap (STy.applicationsOf ns)
+
+/-- No parametric class or interface names itself in a field's type at
+    type arguments other than its own type parameters in order
+    (polymorphic recursion), and none names another one that names it back,
+    directly or through others (mutual recursion): Book of Verse ch. 10,
+    "Disallowed: Polymorphic Recursion" ("a parametric type references
+    itself with a **different type argument**") and "Disallowed: Mutual
+    Recursion" ("Mutual recursion between multiple parametric types is not
+    supported either"), and its tests, `ParametricTypes.versetest` 262-271
+    (3509). The types the front end writes (named with `$`) are not
+    looked at. -/
+def checkParametricRecursion (cdefs : List CDef) : Except String Unit := do
+  let parametric := cdefs.filter fun cd => !cd.tps.isEmpty && !cd.name.contains '$'
+  let names := parametric.map (·.name)
+  let uses (cd : CDef) : List (String × SField × List STy) :=
+    (cd.fields ++ cd.accessors.map (·.1)).flatMap fun f =>
+      (f.ty.applicationsOf names).map fun (n, args) => (n, f, args)
+  for cd in parametric do
+    let own : List STy := cd.tps.map (STy.name ·.name)
+    if let some (_, f, args) := (uses cd).find? fun (n, _, args) => n == cd.name && args != own then
+      throw s!"{cd.pos.show}: field '{f.name}' of {cd.name} names {TypeValues.writtenTy (.app cd.name args)}, {cd.name} at other type arguments than its own: a parametric type refers to itself only as {TypeValues.writtenTy (.app cd.name own)} (Book of Verse ch. 10, \"Disallowed: Polymorphic Recursion\")"
+  -- (each one's fields name these others)
+  let next (n : String) : List String :=
+    match parametric.find? (·.name == n) with
+    | some cd => ((uses cd).map (·.1)).eraseDups.filter (· != n)
+    | none => []
+  let reaches (a b : String) : Bool := Id.run do
+    let mut seen : List String := []
+    let mut frontier := [a]
+    for _ in [0:parametric.length + 1] do
+      let new := frontier.filter (!seen.contains ·)
+      seen := seen ++ new
+      frontier := new.flatMap next
+    return seen.contains b
+  for cd in parametric do
+    if let some d := (next cd.name).find? (reaches · cd.name) then
+      throw s!"{cd.pos.show}: the fields of {cd.name} name {d}, and those of {d} name {cd.name}{if (next d).contains cd.name then "" else " through others"}: parametric types cannot be mutually recursive (Book of Verse ch. 10, \"Disallowed: Mutual Recursion\")"
+
 /-- The class hierarchy, a phase of `elabProgramCore`: the classes and
     interfaces of `tops` (#14, #18), each one's parent and interfaces, which
     must exist, take the type arguments given, and inherit as classes and
     interfaces may (a class from one class, no interface from a class, none
-    from a `<final>` one, none from itself); none with type parameters is
+    from a `<final>` one, none from itself); no parametric one names itself
+    at other type arguments or names another that names it back in its
+    fields (`checkParametricRecursion`); none with type parameters is
     `<castable>` or below a `<castable>` one, and a class right below a
     `<final_super_base>` one is `<final_super>`; and each class's
     construction effects `constructionFx` allow those its parents declare. -/
@@ -124,6 +170,7 @@ def classHierarchy (tops : List STop) (constructionFx : Std.HashMap String (List
       seen := seen ++ new
       frontier := new.flatMap directUp
     if seen.contains cd.name then throw s!"{cd.pos.show}: {cd.name} inherits from itself"
+  checkParametricRecursion cdefs
   -- what `<castable>` and `<final_super_base>` require of the classes below
   -- (`EffectPolicy.specifierPlaces`): a `<castable>` class or interface, and
   -- each one below it (it is heritable), has no type parameters; a class

@@ -867,7 +867,13 @@ circle := class(shape, labelled):
   `T`. `T(X)` converts to a supertype and cannot fail.
 - **Parametric classes.** A parametric class is a reference like any other
   (#39): `stack(t)` can have `var` fields, be `<unique>`, and refer to
-  itself (`node(t) := class: Value:t; var Next:?node(t) = false`). It can be
+  itself (`node(t) := class: Value:t; var Next:?node(t) = false`), in its
+  fields only at its own type parameters, in order: `Next:?node(?t)` or,
+  for `bi(t, u)`, `Next:?bi(u, t)` is refused, and so are two parametric
+  classes or interfaces whose fields name each other, directly or through
+  others (Book of Verse ch. 10, "Disallowed: Polymorphic Recursion",
+  "Disallowed: Mutual Recursion"; classes without type parameters may name
+  each other). It can be
   in a hierarchy: a subclass gives its parent type arguments, from its own
   type parameters (`square(t) := class(shape(t))`, in any order:
   `swap(a, b) := class(pair(b, a))`), fixed ones
