@@ -75,8 +75,11 @@ def ifaceName (k a : String) : String := s!"{k}({a})"
 /-- The mark of the `castable_subtype(A)` of a `<castable>` `A`. -/
 def castableMark : String := "$castable"
 
-/-- The class of the value `C`. -/
-def valueClass (c : String) : String := s!"$type:{c}"
+/-- The class of the value `C`, `$type:C`. -/
+def valuePrefix : String := "$type:"
+def valueClass (c : String) : String := valuePrefix ++ c
+/-- The class `C` whose value's class is `n`. -/
+def valueClass? (n : String) : Option String := afterPrefix? valuePrefix n
 
 /-- The kind and bound of a metatype's interface, `("subtype", "A")` of
     `subtype(A)`. -/
@@ -135,9 +138,9 @@ partial def valueNames : STop → List String
 def protectHeads (f : SExpr → SExpr) (e : SExpr) : SExpr :=
   match e with
   | .app p (.construct _ h [] []) as b =>
-    if h.startsWith "$type:" then .app p (.ident p (h.drop "$type:".length).toString) as b else f e
+    if let some c := valueClass? h then .app p (.ident p c) as b else f e
   | .member p (.construct _ h [] []) m =>
-    if h.startsWith "$type:" then .member p (.ident p (h.drop "$type:".length).toString) m else f e
+    if let some c := valueClass? h then .member p (.ident p c) m else f e
   | e => f e
 
 
