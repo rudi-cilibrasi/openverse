@@ -472,6 +472,25 @@ written as before and converted where its value is taken: a binding, an
 argument, a comparison's operand, a result, an operand of `and`). Then
 only the programs that take the value change, and the four cases agree.
 
+**Tried, and left** (after [the map of the forms still on the
+list](book-test-conformance.md#the-forms-still-on-the-list-a-map)): `X?` of
+a `logic` written as the query then the empty value, of type `true`, with
+`?` of a `true` failing, makes the four cases agree, and changes no
+program's output, messages or exit (722 programs of the oracle, every one
+of the corpus's concurrency, rational, float, scheduler and equality
+programs among them, all their bytes only). Taking the value off afterwards
+where the code drops it (one pass over each function's code: a
+sequence's first part, a condition, a filter, a loop's body) does not
+give the bytes back, because the elaborator's own forms take the value
+before any context drops it: an `or` binds its left operand's value to a
+temporary inside the condition it is in (`if ($6 := query(A) then $6 else
+query(B))`, the concurrency prelude's), and a `<decides>:void` function
+whose body ends in `Less?` converts that value to `void`, a `logic`'s with
+`()` after it, a `true`'s with nothing (the rational helpers'). So it needs
+the flag of the design, set by every context that drops a value, `or` and
+the conversions to `void` among them, which elaborates the query as
+before; the attempt is in the branch's history of this note only.
+
 ## A map literal's values with nothing in common
 
 **The rule.** With no value type expected, a map literal whose values

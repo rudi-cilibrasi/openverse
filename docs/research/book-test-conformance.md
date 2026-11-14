@@ -35,7 +35,8 @@ library](#after-the-forms-of-expressions-statements-and-the-library) and the
 variance of [After variance](#after-variance), the held rules of [After the
 held rules](#after-the-held-rules), and `ToDiagnostic`, `true` and the
 rest of [After `ToDiagnostic`, `true` and the full type-parameter
-rule](#after-todiagnostic-true-and-the-full-type-parameter-rule),
+rule](#after-todiagnostic-true-and-the-full-type-parameter-rule), and the
+forms of [After the forms still on the list](#after-the-forms-still-on-the-list),
 against the Book at
 [`beaa719ba165cbf33eff462f2b0fe078a6dd9ab0`](https://github.com/verselang/book/tree/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests),
 the revision the other research notes pin. The Book's
@@ -54,50 +55,43 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
 
 ## Where things stand
 
-On main `0a8d539`: **8,692 agree, 703 refuse, 65 accept, 92 differ, 3,952 not translatable** of 13,504 cases (a fresh `scripts/book-conformance.sh run --causes`). This is the one table of what is left; the sections below are the history, each written when its work landed, and the three maps ([the first map](#the-remaining-causes-a-map), [classes](#classes-and-subtyping-the-map), [forms](#forms-of-expressions-statements-and-the-library-a-map)) hold the case-by-case reading each row points to.
+On main `33bcf38` with [the forms still on the list](#after-the-forms-still-on-the-list): **8,784 agree, 617 refuse, 55 accept, 92 differ, 3,956 not translatable** of 13,504 cases (a fresh `scripts/book-conformance.sh run --causes` on the final commit; main `33bcf38` alone: 8,711, 683, 66, 92, 3,952). This is the one table of what is left; the sections below are the history, each written when its work landed, and the four maps ([the first map](#the-remaining-causes-a-map), [classes](#classes-and-subtyping-the-map), [forms](#forms-of-expressions-statements-and-the-library-a-map), [the forms still on the list](#the-forms-still-on-the-list-a-map)) hold the case-by-case reading each row points to.
 
-**Accepted where the tests refuse (65)**
+**Accepted where the tests refuse (55)**
 
 | Cause | Cases | What it is, and what it needs | Who decided what |
 |---|---:|---|---|
 | name-limits | 19 | names equal but for case, names too long for the engine (`FORT-793952`, `FORT-555217`, BPVM link errors); no rule of the language to check | left: an engine's limit, [the first map](#the-remaining-causes-a-map) |
-| type-checks-other | 12 | Epic's compiler limits (`ParametricFunctions` 431, 438, `FORT-744399`, an enum of 256 values), `void` as a type argument (`Void.versetest` 246, 260), a join of two classes at a type both are below (`SOL-5838`), `using` paths and the runner's path, an unannotated function as a `<transacts><decides>` value; one form each | left, [the first map](#the-remaining-causes-a-map) and [forms](#forms-of-expressions-statements-and-the-library-a-map); `SOL-5838` is the owner's reading, [classes](#classes-and-subtyping-the-map) |
 | epic-limits | 11 | the BPVM's code generation and Epic's limits (`DefaultNamed`, `ParametricFunctions`, `Function`, …); no rule to check | left, [the first map](#the-remaining-causes-a-map) |
 | concrete-classes | 7 | a class below a `<concrete>` one: is it concrete? | the owner's question ([the wiki](https://github.com/rudi-cilibrasi/openverse/wiki/Concrete-classes-and-their-subclasses)) |
-| effect-checks | 5 | `no_rollback` as a function's default effect (3), the BPVM's `spawn` in a `<transacts>` function (2): a rule over every call | left: the Book disagrees with itself, and its tests with each other, [the held rules](#after-the-held-rules) |
-| initializer-effects | 4 | a module constant whose construction allocates mutable memory (VerseVM's link-time check, `GlobalVariables.versetest`) | left: VerseVM's, [the first map](#the-remaining-causes-a-map) |
-| qualified-names | 4 | the warnings 2003 and 2004 for `(a:)F()` in an override (`SOL-3564`): a warning whose rule the tests do not state | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
-| duplicate-definitions | 1 | `enum{ public }` (`QualifiedIdentifier.versetest:315`): which names are the language's is not stated | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
-| final-members | 1 | a `<final>` method that does not implement an interface's method of its name (`final.versetest:125`) | left: a class rule, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
-| persistable | 1 | an enum that is not `<persistable>` in a `<persistable>` struct: keep the enum's specifier, one check | "do" in [forms](#forms-of-expressions-statements-and-the-library-a-map), not done yet |
+| type-checks-other | 7 | Epic's compiler limits (`ParametricFunctions` 431, 438, `FORT-744399`, an enum of 256 values), a join of two classes at a type both are below (`SOL-5838`, 2), a function without `<decides>` as a `<transacts><decides>` value (`FunctionTypes.versetest:191`) | left, [the forms still on the list](#the-forms-still-on-the-list-a-map): `FunctionTypes:191` is where the Book disagrees with itself (ch. 13 against the test's comment), `SOL-5838` the owner's reading |
+| effect-checks | 6 | `no_rollback` as a function's default effect (3), the BPVM's `spawn` in a `<transacts>` function (2, their VerseVM twins agree) and in a `<transacts><decides>` one (`SoftwareTransactionalMemory.versetest:505`) | left: the Book disagrees with itself, and its tests split by VM, [the held rules](#after-the-held-rules), [the forms still on the list](#the-forms-still-on-the-list-a-map) |
+| initializer-effects | 4 | a module constant whose construction runs a `block` that allocates a `var` (VerseVM's link error 9003, `GlobalVariables.versetest` 86-105); the BPVM's twins are valid, and `:143` is valid where the `var` is not reached: a check of what the initializer does when it runs | left: a VM split and a check at run time, [the forms still on the list](#the-forms-still-on-the-list-a-map) |
+| final-members | 1 | a `<final>` method that does not implement an interface's method of its name (`final.versetest:125`): members keyed by qualifier | left with the two members of one name, [the forms still on the list](#the-forms-still-on-the-list-a-map) |
 
 **Different output (92)**
 
 | Cause | Cases | What it is, and what it needs | Who decided what |
 |---|---:|---|---|
 | int-precision | 87 | VerseVM's unbounded `int` against openverse's 64 bits (`Bitwise`, the arithmetic operators, 5 `ToDiagnostic` operands): bignums in the C runtime | openverse's reading, the BPVM's, [Readings](../LANGUAGE.md#readings-openverse-takes) |
-| empty-values-equal | 4 | the value of `X?` on a `logic`, `true?` (the empty value in the tests) | the Book disagrees with itself; designed, [the rule](book-forms-rules.md#the-value-of-true), left, [`ToDiagnostic`, `true`](#after-todiagnostic-true-and-the-full-type-parameter-rule) |
+| empty-values-equal | 4 | the value of `X?` on a `logic`, `true?` (the empty value in the tests) | the Book disagrees with itself; built and measured: right for the 4 and no output changed, but 722 programs' bytes, which the elaborator's own `or` and `void` conversions take; needs a flag every value-dropping context sets ([the rule](book-forms-rules.md#the-value-of-true)), [After the forms still on the list](#after-the-forms-still-on-the-list) |
 | compound-set-order | 1 | `set X[0] +=` whose value sets `X` (`ArrayAppend.versetest:12`, VerseVM's) | left: a VM split; the untagged tests agree, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 
-**Refused where the tests accept (703)**
+**Refused where the tests accept (617)**
 
 | Cause | Cases | What it is, and what it needs | Who decided what |
 |---|---:|---|---|
-| types-other | 138 | many forms, one check or one feature each: `true` in a function type (`Void.versetest`, 5), a type named at two arities (the archetype blocks of `ParametricTypes.versetest`), inference from an expected type, the runner's natives, F-bounded classes, refinement overloads, … | left, listed in [forms](#forms-of-expressions-statements-and-the-library-a-map) and [classes](#classes-and-subtyping-the-map) |
 | union-types | 136 | `union{…}` (VerseVM only, in no chapter) | left, [the first map](#the-remaining-causes-a-map) |
-| syntax-other | 68 | parser forms, most of them `TimSyntax.versetest`'s | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
-| metatypes | 63 | metatypes beyond those built: `classifiable_subset`, `castable_concrete_subtype`, `castable_subtype(any)`, a cast to a built-in type, `int[X]`, … | left: other work, [the first map](#the-remaining-causes-a-map) |
-| live-variables | 50 | `live`, `when`, `upon`, `await`, `batch` (ch. 15, unreleased; VerseVM only) | left, [the first map](#the-remaining-causes-a-map) |
+| types-other | 106 | sorted in [the forms still on the list](#the-forms-still-on-the-list-a-map) (T1-T24): `true` in a function type (5), function values joined through `any` (8, v), F-bounded classes (6), refinement overloads (6), two interfaces' methods (3), `spawn` forms (7), inference from an expected type (3), a generic function as a value (4), library (12), cyclic defaults (4), bottom typing (4), a program's `ToString` beside the built-in (5, with `StringInterpolationPlus`), a parametric class as a value (2), others one each | left, listed there |
+| syntax-other | 68 | sorted in [the forms still on the list](#the-forms-still-on-the-list-a-map) (S1-S11): `TimSyntax.versetest`'s grammar (35: specifiers after an expression, `:` and `where` as expressions, keywords as names, `try`/`catch`, `&x`, units), a type written as an argument (6), constructor delegation outside a constructor (4), roundtrip and function-type syntax (11), VerseVM's (4), one each (8) | left: no prose for the `TimSyntax` grammar; a type written as an argument with the metatypes |
+| metatypes | 64 | metatypes beyond those built: `classifiable_subset`, `castable_concrete_subtype`, `castable_subtype(any)`, a cast to a built-in type, `int[X]`, a parametric type applied as a value, … | left: other work, [the first map](#the-remaining-causes-a-map) |
+| live-variables | 57 | `live`, `when`, `upon`, `await`, `batch` (ch. 15, unreleased; VerseVM only) | left, [the first map](#the-remaining-causes-a-map) |
 | nested-functions | 30 | nested functions (ch. 6, unreleased; #492) | left, [the first map](#the-remaining-causes-a-map) |
 | set-forms | 28 | `set live` (VerseVM's live variables) | left with the live variables, [`ToDiagnostic`, `true`](#after-todiagnostic-true-and-the-full-type-parameter-rule) |
-| spawn-in-failure-context | 28 | `spawn` in a failure context, which openverse refuses (#156) | kept: relaxing it gives 7 different results (awaiters inside `Signal`), [the held rules](#after-the-held-rules) |
-| qualified-names | 20 | two members of one name in a class, `(c:)M` beside an inherited `M` (members keyed by qualifier); others | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| qualified-names | 20 | two members of one name in a class, `(c:)M` beside an inherited `M` (members keyed by qualifier, 10), the runner's `snippet` (2), others | left, [the forms still on the list](#the-forms-still-on-the-list-a-map) |
 | library-diagnostic | 14 | `ToDiagnostic` of a float: the shortest decimal that reads back, a printer Verse Core does not have | left by [`ToDiagnostic`, `true`](#after-todiagnostic-true-and-the-full-type-parameter-rule) (#621, which built the rest) |
-| operator-definitions | 14 | `operator'+'`, `prefix'-'` defined by a program: a parser form and overloads | "do if time" in [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 | override-defaults | 13 | method overrides at coerced signatures (`CoercedOverrides`, `FORT-642876`, `SOL-3731`): an adapter per override | left, [classes](#classes-and-subtyping-the-map) |
-| impossible-casts | 11 | casts that cannot succeed, which openverse refuses and the tests accept (4 need a class the harness drops) | left: a warning would follow the Book, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 | named-tuple-elements | 11 | named parameters in a tuple parameter, named tuple values ([tuple-parameters.md](tuple-parameters.md)) | the owner's decision, [the first map](#the-remaining-causes-a-map) |
-| partial-modules | 11 | one module in several parts: the parts merged, with two checks | "do if time" in [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 | joins | 10 | function values joined by their types' subtyping (6), parametric classes and interfaces joined by variance (`SOL-6739`, 4) | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 | closed-functions | 7 | `<closed>` (#494) | the owner's (#494), [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 | library-other | 7 | `signalable(t)` (2), `GetSecondsSinceEpoch` (2, a clock), `FitsInPlayerMap` (3, persistence): library and runtime | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
@@ -108,11 +102,13 @@ On main `0a8d539`: **8,692 agree, 703 refuse, 65 accept, 92 differ, 3,952 not tr
 | comparable-classes | 4 | `<unique>` interfaces with no class below them, compared (`ComparableInterface.versetest`) | left: a class rule, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 | nested-tuple-parameters | 4 | parser forms (`TimSyntax`, `Roundtrip`) | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 | archetype-separators | 3 | parser forms | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
-| block-forms | 3 | `block` in a construction, `spawn{}` of several expressions, `branch` in a loop | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 | class-specifiers | 3 | `<converges>` on an abstract method, `<native_callable>`, a `<persistable>` class | the owner's (#494), [classes](#classes-and-subtyping-the-map) |
+| block-forms | 2 | `spawn{}` of several expressions, `branch` in a loop (VerseVM's) | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 | char-literals | 2 | `'ab'` (`TimSyntax`) | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| impossible-casts | 2 | a parametric type written as a value, `MyParametricInterface(int)`, `class2(int)`, read as a conversion of `int` | left with the metatypes, [the forms still on the list](#the-forms-still-on-the-list-a-map) |
 | first-forms | 1 | `first{X:=1..5, 3*X>10}`, a generator in a tuple (`first.versetest:206`) | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 | generators | 1 | `generator(t)` | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| operator-definitions | 1 | `operator'+'(1,2)` called by its name in an expression (`TimSyntax.versetest:230`, parse-only) | left, [After the forms still on the list](#after-the-forms-still-on-the-list) |
 | path-literals | 1 | `Alias := import(/Verse.org)`, a module alias | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 | type-aliases | 1 | `type{F()<converges>:void}` | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 
@@ -121,16 +117,18 @@ On main `0a8d539`: **8,692 agree, 703 refuse, 65 accept, 92 differ, 3,952 not tr
 - **13,504 cases** from the 629 test files that hold one (of 636; seven are
   entirely commented out): 13,197 test cases and 307 cases for the shared
   definitions of a file.
-- **3,952 are not translatable** (29%; 3,940 on main `dca5ad1`, before [After `ToDiagnostic`, `true` and the full type-parameter rule](#after-todiagnostic-true-and-the-full-type-parameter-rule), whose expected strings name the test runner's package; 3,721 on main `7f12181`: [After the remaining causes](#after-the-remaining-causes) found 193 more of the test runner's names, [After weak maps and module-scoped vars](#after-weak-maps-and-module-scoped-vars) 2 more of the runner's and the engine's, [After the forms of expressions, statements and the library](#after-the-forms-of-expressions-statements-and-the-library) 24 more, the runner's modules and package path): virtual packages and modules
+- **3,956 are not translatable** (29%; 3,952 on main `33bcf38`, before [After the forms still on the list](#after-the-forms-still-on-the-list), which counts a `using` of the test runner's package path as its; 3,940 on main `dca5ad1`, before [After `ToDiagnostic`, `true` and the full type-parameter rule](#after-todiagnostic-true-and-the-full-type-parameter-rule), whose expected strings name the test runner's package; 3,721 on main `7f12181`: [After the remaining causes](#after-the-remaining-causes) found 193 more of the test runner's names, [After weak maps and module-scoped vars](#after-weak-maps-and-module-scoped-vars) 2 more of the runner's and the engine's, [After the forms of expressions, statements and the library](#after-the-forms-of-expressions-statements-and-the-library) 24 more, the runner's modules and package path): virtual packages and modules
   (1,264); the compiler's test runner, its natives and classes (1,207), its
   coroutine controls `CoroUtils` (552) and its other modules (187); engine
   APIs (persistence, JSON, natives; 345); compiler tooling such as bytecode
   and digests (128); VM-conditional code inside a definition (37) and one
   file that defines `Main` itself (1).
-- Of the **9,552 translatable cases**, openverse **agrees on 8,711 (91%)**,
-  refuses 683 valid programs, **accepts 66 refused ones**, gives a
+- Of the **9,548 translatable cases**, openverse **agrees on 8,784 (92%)**,
+  refuses 617 valid programs, **accepts 55 refused ones**, gives a
   **different result in 92** (87 of them `verse_vm_only` cases of unbounded
-  ints) and hits **no internal error** ([After awaiters inside
+  ints) and hits **no internal error** ([After the forms still on the
+  list](#after-the-forms-still-on-the-list); on main `33bcf38`, before it:
+  8,711 agreed, 683 refused, 66 accepted, 92 differed, after [After awaiters inside
   `Signal`](#after-awaiters-inside-signal), merged with [After `ToDiagnostic`,
   `true` and the full type-parameter
   rule](#after-todiagnostic-true-and-the-full-type-parameter-rule), which
@@ -376,19 +374,19 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| all test cases (assertions and files without one) | 13197 | 8531 | 66 | 653 | 92 | 3855 | 0 |
-| shared definitions of a file (`:decls`) | 307 | 180 | 0 | 30 | 0 | 97 | 0 |
-| **total** | 13504 | 8711 | 66 | 683 | 92 | 3952 | 0 |
+| all test cases (assertions and files without one) | 13197 | 8599 | 55 | 592 | 92 | 3859 | 0 |
+| shared definitions of a file (`:decls`) | 307 | 185 | 0 | 25 | 0 | 97 | 0 |
+| **total** | 13504 | 8784 | 55 | 617 | 92 | 3956 | 0 |
 
 ### By form
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `assert` | 6671 | 3809 | 0 | 424 | 92 | 2346 | 0 |
-| `assert_semantic_error` | 3460 | 2685 | 32 | 0 | 0 | 743 | 0 |
-| `assert_valid` | 1637 | 958 | 0 | 160 | 0 | 519 | 0 |
+| `assert` | 6671 | 3859 | 0 | 374 | 92 | 2346 | 0 |
+| `assert_semantic_error` | 3460 | 2693 | 21 | 0 | 0 | 746 | 0 |
+| `assert_valid` | 1637 | 968 | 0 | 149 | 0 | 520 | 0 |
 | `assert_valid_syntax` | 439 | 386 | 0 | 53 | 0 | 0 | 0 |
-| `decls` | 307 | 180 | 0 | 30 | 0 | 97 | 0 |
+| `decls` | 307 | 185 | 0 | 25 | 0 | 97 | 0 |
 | `assert_roundtrip` | 304 | 293 | 0 | 9 | 0 | 2 | 0 |
 | `assert_syntax_error` | 303 | 303 | 0 | 0 | 0 | 0 | 0 |
 | `assert_runtime_error` | 140 | 51 | 0 | 4 | 0 | 85 | 0 |
@@ -409,7 +407,7 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| no VM restriction | 12208 | 8319 | 29 | 390 | 4 | 3466 | 0 |
+| no VM restriction | 12208 | 8392 | 18 | 324 | 4 | 3470 | 0 |
 | `verse_vm_only` | 702 | 216 | 4 | 288 | 88 | 106 | 0 |
 | `bp_vm_only` | 366 | 80 | 33 | 0 | 0 | 253 | 0 |
 | `verse_vm_todo` (BPVM only; a known VerseVM failure) | 219 | 96 | 0 | 5 | 0 | 118 | 0 |
@@ -419,20 +417,20 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| (top level) | 5575 | 3718 | 28 | 538 | 3 | 1288 | 0 |
+| (top level) | 5575 | 3762 | 23 | 497 | 3 | 1290 | 0 |
 | Operators/ | 1203 | 1103 | 0 | 0 | 27 | 73 | 0 |
-| Bugs/ | 1185 | 799 | 33 | 78 | 0 | 275 | 0 |
+| Bugs/ | 1185 | 816 | 29 | 65 | 0 | 275 | 0 |
 | Literals/ | 1020 | 835 | 0 | 6 | 0 | 179 | 0 |
 | Serialization/ | 991 | 0 | 0 | 0 | 0 | 991 | 0 |
-| Attributes/ | 795 | 535 | 4 | 10 | 0 | 246 | 0 |
+| Attributes/ | 795 | 540 | 3 | 5 | 0 | 247 | 0 |
 | FlowControl/ | 484 | 432 | 0 | 7 | 0 | 45 | 0 |
 | Intrinsics/ | 437 | 377 | 0 | 17 | 6 | 37 | 0 |
 | Math/ | 321 | 261 | 0 | 0 | 56 | 4 | 0 |
-| Classes/ | 317 | 230 | 0 | 8 | 0 | 79 | 0 |
+| Classes/ | 317 | 232 | 0 | 6 | 0 | 79 | 0 |
 | Versions/ | 289 | 6 | 0 | 0 | 0 | 283 | 0 |
 | Roundtrip/ | 255 | 245 | 0 | 8 | 0 | 2 | 0 |
 | Coroutines/ | 229 | 23 | 0 | 2 | 0 | 204 | 0 |
-| Modules/ | 219 | 73 | 1 | 8 | 0 | 137 | 0 |
+| Modules/ | 219 | 78 | 0 | 3 | 0 | 138 | 0 |
 | Features/ | 67 | 21 | 0 | 1 | 0 | 45 | 0 |
 | Interfaces/ | 41 | 34 | 0 | 0 | 0 | 7 | 0 |
 | Bytecode/ | 27 | 2 | 0 | 0 | 0 | 25 | 0 |
@@ -442,14 +440,14 @@ cases are refusals.
 | CanCallerAccessEpicInternal/ | 7 | 0 | 0 | 0 | 0 | 7 | 0 |
 | AssetUsage/ | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 
-Of the 3,010 expected errors openverse agrees with, 39 are warnings
+Of the 3,018 expected errors openverse agrees with, 43 are warnings
 openverse gives (their codes are all warnings, [After the load-bearing
 readings](#after-the-load-bearing-readings)); for the others the refusal came from
-the parser in 1,060 (most semantic-error snippets among them use a form
+the parser in 1,059 (most semantic-error snippets among them use a form
 openverse does not parse, such as `@attribute`; the lexer's and parser's
 own checks, of comments, float literals, specifiers and an extension
 method's receiver, count here), from a diagnostic that says openverse
-lacks a feature or a name in 342, and from a rule check in 1,569. Only these 1,569 show
+lacks a feature or a name in 341, and from a rule check in 1,575. Only these 1,575 show
 openverse checking the rule the test is about, and even they are not
 compared by code. Of the 300 agreeing syntax errors, 8 parse once wrapped
 in a function body, so openverse refuses
@@ -2426,6 +2424,84 @@ Cases per unit of risk, the accepted refusals first: M1 (1), M2 (2), M11
 (4), M15 (1), M3 (measured); then T1 (33) and what its cases need next, T2
 (5), N1 (11), N2 (11), N3 (14), S7 (6), D1 (4), as time allows.
 
+## After the forms still on the list
+
+[The map of the forms still on the list](#the-forms-still-on-the-list-a-map)
+worked down from its order, one form per commit, each rule pinned in
+[book-forms-rules.md](book-forms-rules.md) and described in
+[LANGUAGE.md](../LANGUAGE.md). Built on main `0a8d539`, merged with
+`ad1b440` (#622) and `33bcf38` (#623). Against main `33bcf38`'s fresh run
+(8,711 agree, 683 refuse, 66 accept, 92 differ, 3,952 not translatable), from a fresh run on the final commit, whose verdicts are the
+baseline now: **8,784 agree, 617 refuse, 55 accept, 92 differ, 3,956 not translatable**: 75 cases more agree (11 of them accepted refusals), 4 are the test runner's now (not translatable), and no case became an accepted refusal or a different result.
+
+| Form | Rule (where) | Agree now | Left |
+|---|---|---|---|
+| an enum persists only when `<persistable>` | ch. 17 `17_persistable.md:190`; `SExpr.enumDef` keeps the enum's specifiers, `typeEnvironment` and `ModuleVars.Defs.persists` ask for them | `persistable.versetest:59` (accepted before) | |
+| `void` given as a type argument is `true` | ch. 2 `02_primitives.md:1311-1316`, `:1371-1374`; `TyEnv.typeArgs` (`resolveTy`) and `STy.voidArg` (parents, `classHierarchy`) | `Void.versetest` 246, 260 (accepted before) | |
+| warnings 2003 and 2004, `(q:)M(…)` of `Self` in an override of `M` | the tests (`SOL-3564`); `warnQualifiedSelfCall` | `SOL-3564…` 7, 18, 32, 45 (accepted before) | `:57`, `:66`, `:80` reach the refusal of two members of one name first |
+| an enum's value takes a reserved word only qualified | ch. 9 `09_structs_enums.md:530`; `checkReservedNames` (`SourceRules.lean`) | `QualifiedIdentifier.versetest:315` (accepted before) | |
+| a type alias beside a type of its name at another arity | the tests (`ParametricTypes.versetest:754-768`, `SOL-7503`, `SOL-7849`); `checkDefinedOnce`, `Aliases.expand` (`Scope.typeArity`) | `SOL-7849…` 10, `:decls` | two classes of one name (the tests' refusals are of qualifiers) |
+| a type as a value is no object, as overloads | ch. 11; `TyEnv.disjointStep` | 29: `ParametricTypes.versetest` 51, 180, 194, 195, 764-1200 (the archetype-blocks cases, which include the modules `default_param` and `subtype_params`) | `:876`, `:882` (a parametric class as a value, metatypes), `:decls` (the runner's type) |
+| a construction's `let:` and `block` clauses | ch. 10 "Let Clauses in Archetypes"; `constructionClauses?` (`elabConstruct`) | 5: `Classes/Constructor.versetest` 5, 38, `FORT-687100…` 51, 66, `CustomClassVarAccessors.versetest:300` | |
+| a cast that cannot succeed compiles, fails and warns | ch. 11 `11_types.md:299-301`; `elabCast` | 9: `Interface.versetest` 128, 140, 147, 150, 182, `Cast.versetest:18`, `ArrayOrFailureResult…` 11, `:decls`, `FORT-1059276…:3` | a parametric type written as a value (`GenerateFunctionForParametricInterface…:10`, `TypeParam.versetest:32`, metatypes) |
+| a module in several parts | ch. 16 `16_modules.md:15-27`; the tests; `resolveModules`, `Attributes.apply` | 11: `PartialModuleDefinitions.versetest` 157-176 (5), `available.versetest` 317, 326, `AccessLevelInheritance.versetest:669`, `:decls`, `FORT-722788…` 13, `:decls` | |
+| operator overloads, `operator'+'(L, R)`, `prefix'-'(X)` | the tests (`Overloading.versetest` 196-232); the parser, `elabExprValuesWith` | 11: `Overloading.versetest` 206-212, `2023-01-17-CharLiteralAsOperand…` 6, 7, 8, `:decls` | `StringInterpolationPlus.versetest` 14, `:decls` (interpolation through a program's `ToString`); `TimSyntax.versetest:230` (parse-only) |
+| a `using` of a path in no package openverse knows | ch. 16 `16_modules.md:349`; `Refused.unknownUsing` (the parser) | `Modules/Using2.versetest:94` (accepted before) | a path inside `/Verse.org/` that names nothing |
+| a type argument in a call in brackets | `TypeArguments.rewriteCalls` | (none of the Book's cases; `First[string, Xs]`) | |
+| the harness: a `using` of the test runner's package path | `static_nt` | not translatable: `QualifiedIdentifier.versetest:152`, `Attributes/deprecated.versetest:435` (accepted before), `QualifiedIdentifier.versetest:58`, `Modules/Using2.versetest:19` (agreed before, by ignoring the path or through another refusal) | |
+
+- **Per cause, on main `33bcf38` and now:** accepted: type-checks-other 12
+  → 7 (`Void` 246, 260 and `Using2:94` agree; the runner's 2 are not
+  translatable), qualified-names 4 → 0, duplicate-definitions 1 → 0,
+  persistable 1 → 0; refused: types-other 139 → 106 (31 of a type at two
+  arities and the type values' overloads, 4 construction clauses agree;
+  `ParametricTypes.versetest:decls` goes on to the runner's type, under
+  metatypes; `StringInterpolationPlus.versetest` 14 and `:decls` come from
+  operator-definitions, stopping at a program's `ToString`),
+  partial-modules 11 → 0, operator-definitions 14 → 1, impossible-casts 11
+  → 2, block-forms 3 → 2 (`Classes/Constructor.versetest:5`), metatypes 63
+  → 64. The rest unchanged.
+- **Moved the wrong way:** none of the language's. Two cases that agreed
+  are not translatable now, by the harness's rule for the test runner's
+  package path in a `using`: `Modules/Using2.versetest:19` (it agreed
+  through an unrelated refusal of the runner's `vmodule` type) and
+  `QualifiedIdentifier.versetest:58` (it agreed by ignoring
+  `using{/Verse.org/VerseTests/A}`, which names the snippet's own module
+  through the runner's package). No case became an accepted refusal or a
+  different result. (`Bugs/SOL-4284-InfiniteLoopTriggersUObjectLimit.versetest:18`,
+  an infinite loop of a spawned task, takes about 43 s in Lean against the
+  harness's 60 s, on main as here, and timed out in two runs on a loaded
+  machine: it agrees in the final run.)
+- **Where the Book disagrees with itself:** a function without `<decides>`
+  where a `<decides>` function type is expected: ch. 13
+  (`13_effects.md:571`, "Functions without `<decides>` are subtypes of
+  functions with `<decides>`", and the table at `:711`) against
+  `FunctionTypes.versetest:186-191` ("no subtyping relationship between
+  functions with different async/failing effects"); left, as its function
+  is also unannotated, which the tests make `no_rollback`. The value of
+  `true?` (on the wiki) was built and measured, and left
+  ([the rule](book-forms-rules.md#the-value-of-true)): the four cases agree
+  and no program's output changes, but 722 programs' bytes do.
+- **Left, with what each needs** (the map's verdicts, measured): the
+  `final.versetest:125` member and the 10 two-members-of-one-name cases
+  (members keyed by qualifier); initializer-effects (VerseVM's check of
+  what an initializer does when it runs, no compile-time rule: `:143` is
+  valid); `no_rollback` (the Book's disagreement); `true?` (a flag set by
+  every value-dropping context); a type written as an argument, `[]int`,
+  `?int` (a parser form and type values of non-class types, with the
+  metatypes); a parametric type applied as a value (`class2(int)`); a path
+  inside `/Verse.org/` that names nothing (a registry the engine's modules
+  would need); interpolation through a program's `ToString`.
+- **Programs.** Against main `33bcf38`'s compiler (byte-identical to
+  `ad1b440`'s, #623), over every suite and the corpus `corpus3` (6,808
+  programs in both): 6,805 the same; the 3 that differ are corpus3's
+  `equality-11`, `equality-18`, `equality-19`, whose `p(void)` is `p(true)`
+  now (their bytes, their output the same). Tests rewritten:
+  `tests/verse/path_literals.verse` (its `using` path in `/Verse.org/`);
+  moved: `tests/errors/inherit_cast_never.verse` to `tests/verse`, a valid
+  program with a warning now. No generator writes what a rule refuses, so
+  none changed.
+
 ## Ten causes to remove first
 
 Ranked by cases moved per unit of risk. A count is the upper bound above;
@@ -2561,23 +2637,17 @@ Grouped by the causes of the tables above. Lines are given per file, with
 
 **Accepted: name-limits** (19): `Bugs/FORT-555217-VeryLongIdentifier.versetest` 25(b), 31(b), 37(b); `Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest` 5(b), 11(b), 67(b), 73(b), 79(b), 85(b), 92(b), 98(b), 154(b), 160(b), 166(b), 172(b), 187(b), 193(b), 199(b), 205(b)
 
-**Accepted: type-checks-other** (12): `Attributes/deprecated.versetest` 435; `Bugs/FORT-744399-DefaultTupleFieldsCrashComplier.versetest` 62; `Bugs/SOL-5838-JoinOfClassesWithCommonBaseClassWithInterfaceInheritance.versetest` 13, 22; `Enum.versetest` 171(b); `FunctionTypes.versetest` 191; `Modules/Using2.versetest` 94; `ParametricFunctions.versetest` 431, 438; `QualifiedIdentifier.versetest` 152; `Void.versetest` 246, 260
-
 **Accepted: epic-limits** (11): `Bugs/FORT-592189-MaybeCoerceToTypeCrash.versetest` 4(b); `Bugs/SOL-5477-CrashInGenClassDefinition.versetest` 5(b); `DefaultNamed.versetest` 629(b), 640(b), 741(b), 751(b); `Function.versetest` 238(b), 271(b); `ParametricFunctions.versetest` 276(b), 496; `Tuple.versetest` 456(b)
 
 **Accepted: concrete-classes** (7): `Attributes/concrete.versetest` 38, 76; `Bugs/SOL-3366-MakeClassesConcreteByDefault.versetest` 8, 15, 24; `Bugs/SOL-7781-ConcreteClassDoesntEnforceDefaultValuesForInterfaceFields.versetest` 28, 54
 
-**Accepted: effect-checks** (6): `Effects.versetest` 490, 551, 552, 557(b), 565(b); `SoftwareTransactionalMemory.versetest` 505(b) ([After awaiters inside `Signal`](#after-awaiters-inside-signal): the BPVM's refusal of `spawn` in a `<decides>` function, which the VerseVM's tests contradict)
+**Accepted: type-checks-other** (7): `Bugs/FORT-744399-DefaultTupleFieldsCrashComplier.versetest` 62; `Bugs/SOL-5838-JoinOfClassesWithCommonBaseClassWithInterfaceInheritance.versetest` 13, 22; `Enum.versetest` 171(b); `FunctionTypes.versetest` 191; `ParametricFunctions.versetest` 431, 438
+
+**Accepted: effect-checks** (6): `Effects.versetest` 490, 551, 552, 557(b), 565(b); `SoftwareTransactionalMemory.versetest` 505(b)
 
 **Accepted: initializer-effects** (4): `GlobalVariables.versetest` 86(v), 90(v), 97(v), 105(v)
 
-**Accepted: qualified-names** (4): `Bugs/SOL-3564-CallingSuperClassMethodFromOverriddenMethod.versetest` 7, 18, 32, 45
-
-**Accepted: duplicate-definitions** (1): `QualifiedIdentifier.versetest` 315
-
 **Accepted: final-members** (1): `Attributes/final.versetest` 125
-
-**Accepted: persistable** (1): `persistable.versetest` 59
 
 **Different output: int-precision** (87): `Intrinsics/Abs.versetest` 17(v); `Intrinsics/ToDiagnostic.versetest` 36(v), 37(v), 38(v), 39(v), 40(v); `Math/Bitwise.versetest` 62(v), 63(v), 64(v), 65(v), 66(v), 67(v), 73(v), 76(v), 77(v), 78(v), 79(v), 80(v), 83(v), 84(v), 85(v), 86(v), 87(v), 90(v), 91(v), 92(v), 95(v), 96(v), 97(v), 98(v), 204(v), 205(v), 206(v), 207(v), 208(v), 209(v), 210(v), 215(v), 220(v), 221(v), 222(v), 223(v), 224(v), 229(v), 230(v), 231(v), 232(v), 233(v), 234(v), 235(v), 236(v), 237(v), 238(v), 243(v), 244(v), 245(v), 246(v), 248(v), 249(v), 254(v), 255(v), 256(v); `Operators/BinaryAddInt.versetest` 35(v), 36(v), 37(v), 38(v), 65(v), 66(v), 67(v), 68(v); `Operators/BinaryDivInt.versetest` 49(v), 50(v); `Operators/BinaryMulInt.versetest` 49(v), 50(v), 52(v), 53(v); `Operators/BinarySubInt.versetest` 39(v), 40(v), 41(v), 42(v), 44(v), 45(v), 47(v), 48(v); `Operators/Negate.versetest` 14(v); `WhereConstrainedInts.versetest` 224(v), 227(v)
 
@@ -2596,20 +2666,20 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `ArrayAppend.versetest` | 27 | 11 | 0 | 10 | 1 | 5 | 0 |
 | `AssetUsage/IncrementalAssetUsage.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `AssignmentSequencing.versetest` | 7 | 7 | 0 | 0 | 0 | 0 | 0 |
-| `Attributes/AccessLevelInheritance.versetest` | 66 | 64 | 0 | 2 | 0 | 0 | 0 |
+| `Attributes/AccessLevelInheritance.versetest` | 66 | 66 | 0 | 0 | 0 | 0 | 0 |
 | `Attributes/AccessSpecifiersDisallowedOnLocalVars.versetest` | 9 | 9 | 0 | 0 | 0 | 0 | 0 |
 | `Attributes/Attributes.versetest` | 34 | 30 | 0 | 2 | 0 | 2 | 0 |
 | `Attributes/CustomAttributes.versetest` | 47 | 47 | 0 | 0 | 0 | 0 | 0 |
-| `Attributes/CustomClassVarAccessors.versetest` | 61 | 29 | 0 | 3 | 0 | 29 | 0 |
+| `Attributes/CustomClassVarAccessors.versetest` | 61 | 30 | 0 | 2 | 0 | 29 | 0 |
 | `Attributes/DeepMutabilityForCustomClassVarAccessors.versetest` | 19 | 1 | 0 | 0 | 0 | 18 | 0 |
 | `Attributes/FinalSuperAttribute.versetest` | 25 | 25 | 0 | 0 | 0 | 0 | 0 |
 | `Attributes/Internal.versetest` | 9 | 0 | 0 | 0 | 0 | 9 | 0 |
 | `Attributes/InvalidAttributeLocations.versetest` | 43 | 43 | 0 | 0 | 0 | 0 | 0 |
 | `Attributes/abstract.versetest` | 19 | 19 | 0 | 0 | 0 | 0 | 0 |
 | `Attributes/allocates.versetest` | 33 | 32 | 0 | 0 | 0 | 1 | 0 |
-| `Attributes/available.versetest` | 77 | 18 | 0 | 2 | 0 | 57 | 0 |
+| `Attributes/available.versetest` | 77 | 20 | 0 | 0 | 0 | 57 | 0 |
 | `Attributes/concrete.versetest` | 44 | 41 | 2 | 1 | 0 | 0 | 0 |
-| `Attributes/deprecated.versetest` | 111 | 73 | 1 | 0 | 0 | 37 | 0 |
+| `Attributes/deprecated.versetest` | 111 | 73 | 0 | 0 | 0 | 38 | 0 |
 | `Attributes/experimental.versetest` | 47 | 1 | 0 | 0 | 0 | 46 | 0 |
 | `Attributes/export_metadata.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `Attributes/final.versetest` | 22 | 21 | 1 | 0 | 0 | 0 | 0 |
@@ -2663,7 +2733,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/2022-11-16-CommentSigIndent.versetest` | 11 | 11 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/2022-11-30-ParserFuzzingBugs.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/2022-12-08-LocalParametricFunction.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
-| `Bugs/2023-01-17-CharLiteralAsOperand.versetest` | 4 | 0 | 0 | 4 | 0 | 0 | 0 |
+| `Bugs/2023-01-17-CharLiteralAsOperand.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/2023-01-17-ClassWithAttributeOnRhsOfInvalidDefinition.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/2023-01-17-ForAsType.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/2023-01-17-FunctionReturnTypeReferencesSelf.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
@@ -2692,7 +2762,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/2024-12-02-VerseVMPropertyGeneratorGetOrCreateTupleTypeCrash.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/2026-01-26-FindFirstAsyncSubExprMissingOverrides.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/ArrayClassOf.versetest` | 2 | 1 | 0 | 0 | 0 | 1 | 0 |
-| `Bugs/ArrayOrFailureResult.versetest` | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
+| `Bugs/ArrayOrFailureResult.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/AssignmentToWhile.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/AttributeOnSameLineAsDefinition.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/BPVMOnly/AsyncContextCancellation.versetest` | 8 | 0 | 0 | 0 | 0 | 8 | 0 |
@@ -2709,7 +2779,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/FORT-1033995-ReinstancingCrashInForEachSubobject.versetest` | 15 | 0 | 0 | 0 | 0 | 15 | 0 |
 | `Bugs/FORT-1042316-GetInstancedSubobjectOverwritesASubobjectWithItself.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-1054384-Void-Any-Meet.versetest` | 3 | 2 | 0 | 0 | 0 | 1 | 0 |
-| `Bugs/FORT-1059276.versetest` | 2 | 1 | 0 | 1 | 0 | 0 | 0 |
+| `Bugs/FORT-1059276.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-1088027-MultipleArmsCompleteDuringSpawn.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-1088027-OldGenerationWakeDuringSpawn.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-1088027-UseOfNullInitializedDynamicallyTypedValue.versetest` | 5 | 3 | 0 | 0 | 0 | 2 | 0 |
@@ -2738,12 +2808,12 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/FORT-623803-STMRollbackAfterReturn.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-635190-AssertIndexingContainerAfterRuntimeError.versetest` | 16 | 0 | 0 | 0 | 0 | 16 | 0 |
 | `Bugs/FORT-642876-CollidingCoercedOverrideNames.versetest` | 11 | 0 | 0 | 11 | 0 | 0 | 0 |
-| `Bugs/FORT-687100-Mix-comma-and-semicolon-in-archetype-instantiation.versetest` | 9 | 7 | 0 | 2 | 0 | 0 | 0 |
+| `Bugs/FORT-687100-Mix-comma-and-semicolon-in-archetype-instantiation.versetest` | 9 | 9 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-713493-CaseTypeError.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-713847-RaceCoerce.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-720968-DetectInaccessibleTypesAcrossPackagesWithDifferentUploadedAtVersions.versetest` | 4 | 0 | 0 | 0 | 0 | 4 | 0 |
 | `Bugs/FORT-721882-CallingFunctionWithNullObject.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
-| `Bugs/FORT-722788-LookupBindingDataOfFunctionInModulePart.versetest` | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
+| `Bugs/FORT-722788-LookupBindingDataOfFunctionInModulePart.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-734038-CrashAfterReportingAnErrorRelatedToNamedParameters.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-741838-SuccessFailureParametricTypes.versetest` | 5 | 0 | 0 | 5 | 0 | 0 | 0 |
 | `Bugs/FORT-743839-SetMapWithIfExpr.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
@@ -2788,7 +2858,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/SOL-3422-CyclicInterfacesAndClasses.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-3515-CallingExtensionMethodWithoutSelf.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-3563-DontStackOverflowOnCyclicInterfaces.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
-| `Bugs/SOL-3564-CallingSuperClassMethodFromOverriddenMethod.versetest` | 16 | 8 | 4 | 4 | 0 | 0 | 0 |
+| `Bugs/SOL-3564-CallingSuperClassMethodFromOverriddenMethod.versetest` | 16 | 12 | 0 | 4 | 0 | 0 | 0 |
 | `Bugs/SOL-3628-SuspendsMethodSuperCall.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-3629-SuspendsMethodEffectSubtype.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-3662-LineCommentEndsIndentedBlock.versetest` | 7 | 6 | 0 | 1 | 0 | 0 | 0 |
@@ -2855,7 +2925,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/SOL-7579-LocalQualifierIsAllowedForMethodsInParametricClass.versetest` | 3 | 1 | 0 | 0 | 0 | 2 | 0 |
 | `Bugs/SOL-7778_EnumeratorsAliasingReservedWords.versetest` | 24 | 5 | 0 | 0 | 0 | 19 | 0 |
 | `Bugs/SOL-7781-ConcreteClassDoesntEnforceDefaultValuesForInterfaceFields.versetest` | 7 | 4 | 2 | 0 | 0 | 1 | 0 |
-| `Bugs/SOL-7849-CannotAccessDataFieldsInParametricInterfaces.versetest` | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
+| `Bugs/SOL-7849-CannotAccessDataFieldsInParametricInterfaces.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-7898-DisambiguateSuperTypesByAccess.versetest` | 18 | 18 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-8109-ParserStackOverflow.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-8137-AttributeLocalizesIsNotAllowedOnLocalVariables.versetest` | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
@@ -2899,12 +2969,12 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `CanCallerAccessEpicInternal/NativeCallback.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `CanCallerAccessEpicInternal/Spawn.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `CanCallerAccessEpicInternal/SpawnRoot.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
-| `Cast.versetest` | 65 | 64 | 0 | 1 | 0 | 0 | 0 |
+| `Cast.versetest` | 65 | 65 | 0 | 0 | 0 | 0 | 0 |
 | `Castable.versetest` | 101 | 74 | 0 | 9 | 0 | 18 | 0 |
 | `Classes/AccessSpecifiers.versetest` | 61 | 48 | 0 | 0 | 0 | 13 | 0 |
 | `Classes/Class.versetest` | 42 | 42 | 0 | 0 | 0 | 0 | 0 |
 | `Classes/ClassBlockClause.versetest` | 24 | 17 | 0 | 0 | 0 | 7 | 0 |
-| `Classes/Constructor.versetest` | 61 | 16 | 0 | 6 | 0 | 39 | 0 |
+| `Classes/Constructor.versetest` | 61 | 18 | 0 | 4 | 0 | 39 | 0 |
 | `Classes/DataInheritence.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | `Classes/IdentifierSuper.versetest` | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | `Classes/Inheritance.versetest` | 11 | 10 | 0 | 1 | 0 | 0 | 0 |
@@ -2984,7 +3054,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Incremental/10_statistics_replayed.versetest` | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
 | `IndistinctOverloads.versetest` | 20 | 20 | 0 | 0 | 0 | 0 | 0 |
 | `IntAsRational.versetest` | 14 | 14 | 0 | 0 | 0 | 0 | 0 |
-| `Interface.versetest` | 109 | 101 | 0 | 5 | 0 | 3 | 0 |
+| `Interface.versetest` | 109 | 106 | 0 | 0 | 0 | 3 | 0 |
 | `InterfaceAccessVisibility.versetest` | 19 | 12 | 0 | 0 | 0 | 7 | 0 |
 | `InterfaceDiamond.versetest` | 18 | 18 | 0 | 0 | 0 | 0 | 0 |
 | `InterfaceWithAccessors.versetest` | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
@@ -3043,9 +3113,9 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Modules/Module.versetest` | 58 | 40 | 0 | 2 | 0 | 16 | 0 |
 | `Modules/ModuleDefinitions.versetest` | 62 | 25 | 0 | 1 | 0 | 36 | 0 |
 | `Modules/ModuleScopedInstances.versetest` | 9 | 0 | 0 | 0 | 0 | 9 | 0 |
-| `Modules/PartialModuleDefinitions.versetest` | 14 | 2 | 0 | 5 | 0 | 7 | 0 |
+| `Modules/PartialModuleDefinitions.versetest` | 14 | 7 | 0 | 0 | 0 | 7 | 0 |
 | `Modules/Using.versetest` | 22 | 1 | 0 | 0 | 0 | 21 | 0 |
-| `Modules/Using2.versetest` | 9 | 5 | 1 | 0 | 0 | 3 | 0 |
+| `Modules/Using2.versetest` | 9 | 5 | 0 | 0 | 0 | 4 | 0 |
 | `Mutability.versetest` | 55 | 54 | 0 | 1 | 0 | 0 | 0 |
 | `NamedParameterOverloads.versetest` | 36 | 36 | 0 | 0 | 0 | 0 | 0 |
 | `NamedParamsFromNative.versetest` | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
@@ -3101,11 +3171,11 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Operators/PrefixStar.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `Option.versetest` | 63 | 63 | 0 | 0 | 0 | 0 | 0 |
 | `OutOfScopeOverloads.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
-| `Overloading.versetest` | 79 | 64 | 0 | 9 | 0 | 6 | 0 |
+| `Overloading.versetest` | 79 | 71 | 0 | 2 | 0 | 6 | 0 |
 | `PackageCycles.versetest` | 15 | 0 | 0 | 0 | 0 | 15 | 0 |
 | `ParametricCastingIsDisallowed.versetest` | 11 | 10 | 0 | 1 | 0 | 0 | 0 |
 | `ParametricFunctions.versetest` | 106 | 82 | 4 | 16 | 0 | 4 | 0 |
-| `ParametricTypes.versetest` | 274 | 207 | 0 | 40 | 0 | 27 | 0 |
+| `ParametricTypes.versetest` | 274 | 235 | 0 | 12 | 0 | 27 | 0 |
 | `Parentheses.versetest` | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | `Path.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `PersistentJson.versetest` | 103 | 1 | 0 | 0 | 0 | 102 | 0 |
@@ -3115,7 +3185,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Placeholder.versetest` | 9 | 9 | 0 | 0 | 0 | 0 | 0 |
 | `Pointers.versetest` | 66 | 64 | 0 | 2 | 0 | 0 | 0 |
 | `PrintScriptCallstack.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
-| `QualifiedIdentifier.versetest` | 88 | 54 | 2 | 0 | 0 | 32 | 0 |
+| `QualifiedIdentifier.versetest` | 88 | 54 | 0 | 0 | 0 | 34 | 0 |
 | `Range.versetest` | 39 | 39 | 0 | 0 | 0 | 0 | 0 |
 | `Rational.versetest` | 49 | 48 | 0 | 0 | 0 | 1 | 0 |
 | `Recursion.versetest` | 47 | 47 | 0 | 0 | 0 | 0 | 0 |
@@ -3202,7 +3272,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Versions/v1/v1-UniqueAttributeRequiresAllocatesEffect.versetest` | 4 | 0 | 0 | 0 | 0 | 4 | 0 |
 | `Versions/v2/v2-CommentsAreIncludedInStringContents.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `Versions/v2/v2-NoOctalLiterals.versetest` | 70 | 1 | 0 | 0 | 0 | 69 | 0 |
-| `Void.versetest` | 60 | 47 | 2 | 11 | 0 | 0 | 0 |
+| `Void.versetest` | 60 | 49 | 0 | 11 | 0 | 0 | 0 |
 | `WebDataSyncService.versetest` | 5 | 1 | 0 | 2 | 0 | 2 | 0 |
 | `Where.versetest` | 6 | 5 | 0 | 1 | 0 | 0 | 0 |
 | `WhereConstrainedFloats.versetest` | 27 | 24 | 0 | 3 | 0 | 0 | 0 |
@@ -3211,7 +3281,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `await.versetest` | 41 | 7 | 0 | 1 | 0 | 33 | 0 |
 | `closed.versetest` | 5 | 4 | 0 | 1 | 0 | 0 | 0 |
 | `generators.versetest` | 67 | 11 | 0 | 2 | 0 | 54 | 0 |
-| `persistable.versetest` | 23 | 18 | 1 | 1 | 0 | 3 | 0 |
+| `persistable.versetest` | 23 | 19 | 0 | 1 | 0 | 3 | 0 |
 | `profile_simple.versetest` | 36 | 21 | 0 | 0 | 0 | 15 | 0 |
 | `return-should-be-trailed.versetest` | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | `upon.versetest` | 13 | 5 | 0 | 8 | 0 | 0 | 0 |
