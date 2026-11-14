@@ -752,3 +752,37 @@ interface below `type` and one that is not are disjoint (no class of the
 program is below a metatype: their values' classes are the front end's,
 `$type:C`). The rule only admits overloads; no program that compiled
 changes.
+
+## A construction's `let:` and `block` clauses
+
+**The rule.** A construction `c{…}`, or an archetype block `c:`, may hold
+`let:` clauses, whose definitions (and only definitions) the field values
+after them see, and `block` clauses, which run where they are written and
+can neither fail nor `return`. The clauses and the field values run in
+the order written; the construction then takes the fields, its defaults
+and its class's own `block` clauses as before.
+
+**The Book.** Ch. 10, "Let Clauses in Archetypes"
+(`10_classes_interfaces.md:227-260`): "Archetype expressions (used to
+construct class and struct instances) can include `let` clauses that
+introduce local bindings", with the tested example `Square := rect: let:
+S:int = 4 …`, and "The `let` clause introduces bindings visible to
+subsequent field initializers. Unlike `block`, `let` permits only
+declarations"; "Order of Execution" (`:823-826`): "Field initializers
+execute in the order they are written in the archetype". The tests:
+`Classes/Constructor.versetest` 5 (`block:` then a field), 38 (`let: Y :=
+1` then `Property1 := Y`); `Bugs/FORT-687100-…versetest` 51, 66 (`X :=
+abc{ block { set Y = 5 } A := 10 …}`, then `Y = 5`);
+`Attributes/CustomClassVarAccessors.versetest:300` (`let:` before an
+accessor field). openverse's constructor functions took both already
+(their items, `Lowering`).
+
+**openverse before.** "a struct field is given as Name := value".
+
+**openverse now.** `constructionClauses?` (`Elab/Expr.lean`), where
+`elabConstruct` takes a construction: one with a clause is the block of
+its clauses in order, a `let:`'s definitions as they are, a `block`'s
+code as a statement that cannot fail (`$nofail`, as a constructor's), each
+field value written before a clause bound to a name of its own there,
+`$clauseL_C`, and last the construction of the fields. No program that
+compiled changes (a construction with a clause was refused).
