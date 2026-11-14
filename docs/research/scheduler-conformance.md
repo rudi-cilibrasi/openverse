@@ -548,3 +548,74 @@ lowering: a `Signal` resumes each awaiter in order, a running task by
 walking its running code (`partial`), any other by a poll; arms that end
 there are honoured by the code that runs the arms; sleeps and task waits
 are held inside a drain.
+
+#### Awaiters inside `Signal`: as built
+
+As designed above; the pieces and where they are:
+
+- **Event mode** (`Admitted.usesEvents`, `concurrencyHelpers`): a program
+  that uses `event`, `sticky_event` or `subscribable_event` gets
+  `concPreludeEvents` (`Front/ConcurrencyPrelude.lean`): the scheduler's
+  `CurRoot`, `Probe`, `Drain` and `MainTask`; a task's `WaitRoot`,
+  `Pending` and `Ev`; `signalAll`'s mark-then-resume round; `$wakeRoot`'s
+  stub; `waitResume` and `sleepResume` holding a task wait and an expired
+  sleep inside a `Signal`.
+- **Marked functions** (`SignalAdmission.reaching`, `Suspend.Env.marks`):
+  the region markers (`runningPc`, `armsPc`, `passed`, the entry code in
+  `region`), `concAtMarked` (the out-of-turn field, the partial code, a
+  race's per-arm value slots).
+- **Wake functions** (`lowerConcurrency`, event mode): `$Main$wake`,
+  `$spawnK$wake`, `$branchK$wake`, and `$wakeRoot`'s body; the roots' and
+  wrappers' run records; the reentrant spawn trampoline; a stopped running
+  arm cancelled by its wrapper's trampoline; `$Run` reading `Main`'s end
+  after each root.
+- **`spawn` in a failure context** (`Elab/Expr.lean`, `Suspend.inlineSpawns`).
+- **`--event-fifo`** removed (`Main.lean`, `Options`), with
+  `concPreludeFifo` and `$Run`'s FIFO drain.
+
+Verse Core, OVBC, `runtime/include/openverse.h`, `runtime/src/load.c` and
+the C interpreter are unchanged (`git diff origin/main -- OpenVerse/Core
+runtime docs/FORMAT.md` is empty).
+
+**What changed for programs** (every suite and the corpus `corpus2`, 5,951
+programs, against main `dca5ad1`): 5,792 the same in bytecode, output,
+messages and exit code; 158 programs' bytecode changed, every one of them a
+program that uses an event type (two only in their `do` expression), 120 of
+them with the same output; 38 with another output: the 22 tests whose
+expected output changed (each re-derived by hand under the rule), the 8
+FIFO upper-bound fixtures (likewise), and 8 corpus programs; one program
+that was refused is accepted (a `spawn` in a failure context). No program
+without an event type changed.
+
+**Code size.** In the 144 changed programs compiled in the default mode,
+bytecode grew by 13% at the median (7.5% to 41%; 14.16 MB to 16.19 MB in
+all): the prelude's larger `signalAll`, `waitResume` and `sleepResume`, one
+wake function per kind of root, the running markers in marked functions
+(one write per site passed, three per `sync`, `race` or `rush` and the code
+that runs its arms partially) and a race's per-arm value slots. The
+largest growth is in small programs with many roots (the FIFO upper-bound
+fixtures). The gate's size checks (`test-choice-size.sh`,
+`test-frontend-c-size.sh`) pass unchanged.
+
+**Models.** `sched_gen.py` and `sched_gen2.py` predict the Book's order:
+over seeds 1-2,000, the new predictions differ from main's on 535 seeds;
+the compiler matches the new predictions on all 2,000 (Lean, and C equal to
+Lean), and main's predictions fail on exactly those 535. `event_fifo.py`
+keeps its programs and predicts each round inside its `Signal` (every one
+of its programs differs from the FIFO prediction, as each ends with
+signals that wake every actor).
+
+**What is left.**
+- Rule 13: the tasks awaiting one task's end go on in the scheduler's
+  order, not in the order they registered inside the end (designed above:
+  the same round over records in the task; no translatable Book case
+  needs it).
+- Two arms that both `return` inside one walk: the first's value is kept;
+  an in-turn `return` after an out-of-turn end of a `race` returns, as an
+  arm's `return` leaves the function (no test of the Book has either).
+- `SoftwareTransactionalMemory.versetest:503-508`, inside `bp_vm_only`,
+  refuses a `spawn` in a `<transacts><decides>` function; the VerseVM's
+  tests (`LiveVariables.versetest:450-545`, `verse_vm_only`) and the
+  untagged assertions spawn in failure contexts, so openverse accepts it:
+  the tests split by virtual machine, and openverse follows the VerseVM's
+  and the untagged ones.
