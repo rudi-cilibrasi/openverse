@@ -2469,6 +2469,15 @@ rational, one struct at another instance), never to `void`: `(1, 2) =
 array{(), ()}` fails. An empty `array{}` or `map{}` compared with a value of
 another type is that type's empty value.
 
+An empty `array{}` or `map{}` with no type from its context (`A := array{}`,
+`array{}.Remove[0, 0]`, `Map := map{}`), and `Concatenate()`, are of
+`false`, the type with no values: `[]false`, `[false]false`, which convert
+to every array or map type, so `A + array{1}` is a `[]int`, `array{} = ""`
+compares at `string`, and in `for (X : array{}, Y : array{1}) { X + Y }`
+the operand `X` of `+` has the other's type; the Book's tests
+(`Array.versetest:90`, `Map.versetest:236`, …; [the
+rule](research/book-forms-rules.md#an-empty-container-with-no-type-from-its-context)).
+
 Where neither is decided from the types, both operands are boxed and
 compared as `comparable`s ([comparable](#comparable)): two types with
 other values in common that Verse Core cannot tell apart

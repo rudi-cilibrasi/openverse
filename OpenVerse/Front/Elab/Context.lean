@@ -1380,7 +1380,11 @@ partial def argNeedsTypeWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx
     -- type. Keep compounds that already infer naturally in the first pass.
     let saved ← get
     match (elabE { ctx with typeOnly := true, callInstanceProbe := none } a none).run saved with
-    | .ok (_, probed) =>
+    -- (one with an empty `array{}` or `map{}` in it, whose type from no
+    -- context is of `false`, says nothing of that element: it takes its
+    -- type from the other arguments)
+    | .ok (r, probed) =>
+      if r.ty.hasNever then return true
       modify fun st => { st with natTys := probed.natTys, methodReceivers := probed.methodReceivers }
       return false
     | .error _ => return true
@@ -2267,6 +2271,13 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
     let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push target })
     return .assign x (.seq r.e (.prim .userErr []))
   if r.ty == target || r.ty == .never then return r.e
+  -- (an empty `array{}` or `map{}` with no type from its context, of
+  -- `false`: the literal is the empty array of every array and map type, as
+  -- one with an expected type is written)
+  if r.ty.hasNever then
+    if let .lit (.arr xs) := r.e then
+      if xs.isEmpty && (match target with | .arr _ | .map .. | .weakMap .. => true | _ => false) then
+        return r.e
   -- (a `void` value is the empty value, as one of `tuple()` is: both are
   -- `()` in Verse Core)
   if r.ty.isUnit && target.isUnit then return r.e

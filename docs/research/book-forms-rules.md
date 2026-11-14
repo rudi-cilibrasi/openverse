@@ -183,3 +183,49 @@ generated programs of corpus2 (the `mv` model: `mv-plain` 23, `mv-rec` 9,
 `mv-bif` 7, `mv-mv` 7) write a `<>` after another comparison, and compile
 to other code; the model (`scripts/models/mv.py`) now compares the
 leftmost operand at such a `<>`, its random stream the same.
+
+## An empty container with no type from its context
+
+**The rule.** `array{}` with no element type from its context is an array
+of `false`, the type with no values, below every type (Book of Verse ch.
+2): `[]false`, which converts to every array type; `map{}` likewise is a
+`[false]false`, and `Concatenate()` a `[]false`. An operand of `false` type
+of an arithmetic operator has the other operand's type (`X + Y` with `X`
+an element of an empty array).
+
+**The Book.** The tests: `A1:=array{}; A2:=A1+array{1}; A2=array{1}`
+(`Tests/Array.versetest:90`), `not array{}.Last[]` (`:154`),
+`array{}.Remove[0, 0]=array{}` (`Intrinsics/ArrayRemove.versetest:7`),
+`array{}.ReplaceAll(array{20}, array{50})=array{}`
+(`ArrayReplaceAll.versetest:10`), `Concatenate()=array{}`,
+`Concatenate(array{})=array{}` (`Concatenate.versetest:4-8`),
+`X := array{}; X = ""` (`Literals/String.versetest:181`), `array{}+""=""`
+(`Operators/BinaryAddString.versetest:23`), `Array:=for(X:array{},
+Y:array{1}) { X+Y }; Array=array{}` (`FlowControl/for.versetest:114`),
+`Map:=map{}; Map=map{}` (`Map.versetest:236`). Ch. 1 writes `Empty :=
+array{}` (`01_expressions.md:1274`, a tested example).
+
+**Where the Book disagrees with itself.** Ch. 3: "Without a type
+annotation, the compiler cannot determine what type of array you want, so
+you must either provide the type explicitly or include at least one element
+that establishes the type." (`03_containers.md:273`); ch. 1 and the tests
+above take `array{}` with no type. openverse follows the tests.
+
+**openverse before.** "the type of an empty array{} must be given", and
+of a `map{}`; `Concatenate()` needed an expected type.
+
+**openverse now.** The literal's type is `Ty.never` inside an array or a
+map (`elabE`'s `arrayLit`, `elabMapLit`), which `coerce` takes to any
+array or map type (its elements' conversion never runs); `Concatenate`
+takes and gives one (`elabConcatenate`), and an arithmetic operator's
+operand of type `never` takes the other's type.
+
+Programs: three of openverse's error tests refused an empty literal with
+no type from its context, and are valid programs now: they are tests of
+`tests/verse` with their output (`empty_literal_int`, `array{} = 0`, which
+fails, a comparison of two types; `if_clause_both_untyped` and
+`if_clause_refining_untyped`, an `if` of two empty arrays, or of one and an
+int, as a statement). Every program that compiled before keeps its code:
+where an expected type is found by trying again with another's
+(`argNeedsType`'s probe, `ConcatenateMaps`, `Concatenate`), a type of
+`false` says nothing, and an empty literal of it converts as its literal.
