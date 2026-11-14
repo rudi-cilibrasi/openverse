@@ -65,6 +65,9 @@ private def extras : List (String × String × Bool) := [
     s!"    var Stored:{functionTy}=Dummy\n    Values:=sync:\n        block:\n            Sleep(0.1)\n            set Stored=F\n            0\n        block:\n            Sleep(0.2)\n            0\n    Stored()", true)]
 
 private def backgroundRefusals : List (String × String × Bool) := [
+  ("branch: nonreturning background child does not hide owner return",
+    "Finish()<suspends>:void=\n    branch:\n        loop:\n            Sleep(1.0)\n" ++ header ++
+    "    spawn{Finish()}\n    Dummy()", true),
   ("race: cleanup alias survives real cell overwrite", header ++
     s!"    var Stored:{functionTy}=Dummy\n    Saved:=Stored\n    race:\n        block:\n            defer:\n                Value:=Saved()\n            set Stored=F\n            loop:\n                Sleep(1.0)\n        block:\n            Sleep(0.1)\n            0", true),
   ("race: cancellation defer executes metadata", header ++
