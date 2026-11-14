@@ -229,3 +229,54 @@ int, as a statement). Every program that compiled before keeps its code:
 where an expected type is found by trying again with another's
 (`argNeedsType`'s probe, `ConcatenateMaps`, `Concatenate`), a type of
 `false` says nothing, and an empty literal of it converts as its literal.
+
+## Generators in `first`, and a range's typed binding
+
+**The rules.** `first` takes generators among its clauses as `for` does,
+`X : Xs`, `I -> X : Xs` and `X := a..b`: the first iteration whose clauses
+succeed gives the body's value, and what the failed iterations' clauses did
+is undone. A range's binding may state its type, `int`, in `for` and
+`first`: `X:int := a..b`, `X:int = a..b`.
+
+**The Book.** Ch. 7, "First Expressions" (`07_control.md:923-1010`): "The
+`first` expression is similar to `for`, but instead of evaluating its body
+for every successful iteration, it evaluates the body only for the
+**first** iteration of the domain clause that succeeds" (`:923-925`), "If
+no iteration reaches the body, `first` fails" (`:927`), "The `first`
+expression uses
+the same binding syntax as `for`" (`:972`), `first(I -> V : Arr, V =
+Target). I` (`:982`). The tests, `Tests/FlowControl/first.versetest`:
+`first(I->Y:Xs; X = Y){I}` (`:14-31`), the dot and `do` forms (`:54-65`),
+`1 = first(FirstPassesFilter[], I:=1..3) { I }` (`:36-51`), a failed
+iteration's effects undone, `FirstPos2(20, array{10,20,30,20}) = (1, 1)`
+(`:107-120`), nested generators with counters (`:122-143`),
+`first{X:Xs; X>0}` (`:191-203`). A typed range binding:
+`List:[]int= for(X:int=2 .. 3) { X }` (`FlowControl/for.versetest:17`),
+`for (i:int := 0..Nums.Length)` (`Exercises/TwoSum.versetest:20`).
+
+**openverse before.** "a generator X : source in first is not supported
+yet", "a range a..b can only be the source of a for clause" (in `first`,
+and typed in `for`).
+
+**openverse now.** The parser writes each generator among `first`'s clauses
+as the choice of its source's elements (`firstOf`, `Front/Parser.lean`):
+`X : Xs` is `X := $each(Xs)`, which the elaboration of a choice's binding
+takes one element at a time, the clauses after it in the filter
+(`elabOneGo`, as for a recursive function's values, #235); `I -> X : Xs`
+binds the source once, then `I` to the choice of its indices and `X` to
+the element; `X := a..b` is the choice of the range's ints. A `for`'s range
+binding takes a stated type `int` (`elabSource`, `Elab/For.lean`).
+**Left:** `first{X:=1..5, 3*X>10}`, whose clause is a tuple of a range's
+binding and a value (`first.versetest:206`), and a generator over a map in
+`first`.
+
+With a generator, a filter that is a literal or a name, which cannot fail,
+is refused: "Only allow expressions that can fail (same as `for`)"
+(`first.versetest:28-31`, `first(I->Y:Xs; X = Y; I){I}`, 3513;
+`checkFirstFilters`, `Elab/Source.lean`). In `first{…}` a comma joins the
+clauses around it into a tuple: "Comma is not the same as semicolon",
+`(4,12) = first{X:=1..5, 3*X>10}` (`:204-208`), where openverse's clauses
+keep commas as separators; with a generator among them the parser refuses
+the comma ("a generator inside a tuple is not supported yet"), so that the
+case is refused, not given another value. Programs: the error test
+`first_generator` is a valid program now, in `tests/verse` with its output.

@@ -322,6 +322,26 @@ partial def checkForClauses (tops : List STop) : Except String Unit := do
     | e => e.children.forM go
   tops.forM (·.code.forM go)
 
+/-- A filter of a `first` with a generator, a clause that binds nothing,
+    must be able to fail, as a `for`'s: "Only allow expressions that can fail
+    (same as `for`)", the Book of Verse's tests (`FlowControl/first.versetest`
+    28-31, 3513); a literal or a name, whose evaluation cannot fail, is
+    refused. (Its generators are the parser's `$each` bindings, `firstOf`.) -/
+partial def checkFirstFilters (tops : List STop) : Except String Unit := do
+  let isGen : SExpr → Bool
+    | .decl _ _ _ false (.app _ (.ident _ "$each") _ false) => true
+    | _ => false
+  let rec go : SExpr → Except String Unit
+    | .app _ (.ident _ "$first") [.block _ items] false => do
+      let cs := items.dropLast
+      if cs.any isGen then
+        if let some c := cs.find? fun c => c.isLiteral || (match c with | .ident .. => true | _ => false) then
+          throw s!"{c.pos.show}: this filter of first is a literal or a name, which cannot fail: a filter must be able to fail, as a for's (Book of Verse ch. 7, \"Filters must be failable\"; its tests, first.versetest:28)"
+      items.forM go
+    | .structDef _ _ _ fs => fs.forM fun f => f.default.forM go
+    | e => e.children.forM go
+  tops.forM (·.code.forM go)
+
 /-- The code of a `spawn` cannot leave it: no `return`, and no `break` but
     of a loop inside it (Book of Verse tests, `SpawnAndTask.versetest` 876-892:
     "Can't break or return from a spawn", 3551). -/
@@ -641,7 +661,8 @@ def concurrencyHelpers (resolved : List STop) (requests : Requests) (eventFifo :
        an empty `option{}`), `profile` only in a function's code
        (`checkProfiles`), `defer:` only as a statement (`checkDefers`), no
        `for` of literal clauses only, nor a literal filter
-       (`checkForClauses`);
+       (`checkForClauses`), nor a filter of a `first` with a generator that
+       is a literal or a name (`checkFirstFilters`);
     3. the helpers the parser's `$uses:` markers and the entry expression ask
        for, and the markers taken out;
     4. the access levels written out (`resolveSpecifiers`), then the modules
@@ -683,6 +704,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   checkProfiles allTops0r
   checkDefers allTops0r
   checkForClauses allTops0r
+  checkFirstFilters allTops0r
   -- 3. the helpers the markers and the entry expression ask for: the
   --    rationals' (#116), ReplaceAll's, the bitwise
   --    functions'. They expand finite intrinsic operations
