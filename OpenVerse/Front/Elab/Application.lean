@@ -33,13 +33,10 @@ structure AppElab where
 /-- `V[…]`, `V(…)` of a value `V` (`source`, as written): an array or a map
     indexed, a tuple's element, a function value called (`elabIndexLike`).
     A type value is not a function. -/
-partial def elabValueApp (cb : AppElab) (ctx : Ctx) (p : Pos) (source : SExpr) (value : R)
+partial def elabValueApp (cb : AppElab) (ctx : Ctx) (p : Pos) (_source : SExpr) (value : R)
     (args : List SExpr) (bracket : Bool) : EM R := do
-  if !ctx.typeOnly && ctx.isTypeValue source then
-    let view ← match ctx.callableView source.pos value.ty with
-      | .ok view => pure view
-      | .error message => throw message
-    if view.isSome then eerr source.pos "dummy type value cannot be an executable function"
+  -- Callable receivers get a checked slot in elabIndexLike. Inspect the
+  -- emitted value there rather than a conservative source-expression hint.
   cb.elabIndexLike ctx p value args bracket
 
 /-- `t(X)`: `X` converted to the type `t`, a value of a type that is a
@@ -1035,8 +1032,8 @@ partial def elabMethodCall (cb : AppElab) (ctx : Ctx) (p mp : Pos) (obj : SExpr)
     built-in method (`elabMethod`). -/
 partial def elabMemberApp (cb : AppElab) (ctx : Ctx) (p : Pos) (f : SExpr) (mp : Pos) (obj : SExpr)
     (m0 : String) (args : List SExpr) (bracket : Bool) (exp : Option Ty) : EM R := do
-  if !ctx.typeOnly && ctx.isTypeValue obj then
-    eerr mp "dummy type value cannot be an executable method receiver"
+  -- Ordinary calls record their receiver slot; intrinsic concurrency
+  -- helpers require a real first argument. Both use emitted provenance.
   let spawning := m0.startsWith "$spawnMethod:"
   let m0 := if spawning then (m0.drop 13).toString else m0
   if let some r ← elabParamConcurrencyCall? cb ctx p mp obj m0 spawning args bracket exp then return r
@@ -1061,7 +1058,10 @@ partial def elabMemberApp (cb : AppElab) (ctx : Ctx) (p : Pos) (f : SExpr) (mp :
       return ← elabValueApp cb ctx p f (← cb.elabMember ctx p r m none) args bracket
     if ctx.types.classes.contains c then eerr p s!"class {c} has no method '{m}'"
     eerr p s!"struct {c} has no field '{m}' (structs have no methods)"
-  | _ => cb.elabMethod ctx p r m args bracket
+  | _ =>
+    if !ctx.typeOnly && ctx.isTypeValue obj then
+      eerr mp "dummy type value cannot be an executable method receiver"
+    cb.elabMethod ctx p r m args bracket
 
 /-! ## The kinds of application, in order -/
 

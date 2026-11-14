@@ -367,8 +367,6 @@ partial def elabSpawnIn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
       if let some rx := rx? then
         if let .struct shape _ := rx.ty then
           if (FnValues.parseName shape).isSome then
-            if !ctx.typeOnly && ctx.isTypeValue f then
-              eerr f.pos "dummy type value cannot be an executable function"
             let isS (f : Nat) := ctx.sigs.any fun s => s.idx == f && s.suspends
             if Suspend.countSusp isS (fun _ => false) false (· == mark.idx) rx.e > 0 then
               eerr p "the arguments of a spawned call cannot suspend (#156)"
