@@ -140,7 +140,8 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
           if (pass == 0) == deferred[i]! then continue
           let t := t0.subst σ
           if t.params.any names.contains then
-            if contextual[i]! then eerr q s!"cannot infer the type parameters of {fname} from the arguments of this call"
+            let cannot := s!"cannot infer the type parameters of {fname} from the arguments of this call"
+            if contextual[i]! && !a.typedAlone then eerr q cannot
             let r ← elabE ctx a none
             match ctx.matchArgument σ t r.ty with
             | some σ' =>
@@ -154,7 +155,7 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
                 if pass == 0 then deferred := deferred.set! i true
                 else eerr q s!"cannot infer the type parameters of {fname} from this argument"
               else done := done.set! i (some (← elabArgumentCoerceWith elabE ctx q r t', t'))
-            | none => eerr q s!"expected {shown t}, found {r.ty.show} (in a call of {fname})"
+            | none => eerr q (if contextual[i]! then cannot else s!"expected {shown t}, found {r.ty.show} (in a call of {fname})")
           else
             done := done.set! i (some (← coerce q (← elabE ctx a (some t)) t, t))
       -- (a comparable type parameter's type argument must be comparable,
@@ -203,6 +204,10 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
         | .app _ (.ident _ "$paramDefault") [_, _, _, .arrayLit _ []] false
         | .app _ (.ident _ "$paramDefault") [_, _, _, .mapLit _ []] false => true
         | _ => false
+      -- (a `false` nothing else gave a type is a `logic`, `SExpr.typedAlone`)
+      let typedAlone : SExpr → Bool
+        | .app _ (.ident _ "$paramDefault") [_, _, _, d] false => d.typedAlone
+        | _ => false
       let mut σ : List (String × Ty) := []
       let mut code : Expr := .lit .void
       let mut c := ctx
@@ -212,15 +217,17 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
         let mut e : Expr := .lit .void
         let mut t' := t
         if t.params.any names.contains then
-          if fromContext a then
-            eerr p s!"cannot infer type parameter {shownTp ((t.params.filter names.contains).headD "t")} of {fname} from the arguments of this call"
+          let cannot := s!"cannot infer type parameter {shownTp ((t.params.filter names.contains).headD "t")} of {fname} from the arguments of this call"
+          if fromContext a && !typedAlone a then eerr p cannot
           let r ← elabE c a none
           match c.matchArgument σ t r.ty with
           | some σ' =>
             σ := σ'.filter fun (n, _) => names.contains n
             t' := t.subst σ
             e ← elabArgumentCoerceWith elabE c q r t'
-          | none => eerr q s!"expected {shown t}, found {r.ty.show} (the default of a parameter of {fname})"
+          | none =>
+            if fromContext a then eerr p cannot
+            eerr q s!"expected {shown t}, found {r.ty.show} (the default of a parameter of {fname})"
         else
           e ← coerce q (← elabE c a (some t)) t
         checkNewLocal c q x

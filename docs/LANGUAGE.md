@@ -169,8 +169,10 @@ Combine(A:t1, B:t2 where t1:type, t2:type):tuple(t1, t2) = (A, B)
   the expected type (unless that is `void`), then each parameter type against
   its argument's type. Arguments are matched left to right, except that
   `false`, `array{}` and `map{}` are matched last, because they take their type
-  from context. A type parameter that is still unknown is an error. Arguments
-  are still evaluated left to right.
+  from context; a `false` (an argument's or a default's) whose type nothing
+  else gives is a `logic`, as `X := false` is (`Id(false)`, as the Book's
+  `Identity(true)`, is at `logic`). A type parameter that is still unknown
+  is an error. Arguments are still evaluated left to right.
 - **Compiled once.** A generic function is one Verse Core function, whose
   types mention type variables, checked once by `Prog.checkTypes` for every
   instantiation (the substitution lemma `Typed.subst`). It takes one hidden
