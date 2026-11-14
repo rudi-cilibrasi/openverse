@@ -84,7 +84,8 @@ def elabFieldDefaults (env : TyEnv) (sigs : Signatures) (tops : List STop) (cdef
               throw s!"{d.pos.show}: the default of field '{f}' of {n} can fail: a field's default is no failure context (Book of Verse ch. 13 and its tests, Effects.versetest)"
             fxCheck s!"default of field '{f}' of {n}" allowed st
             initializerBodies := initializerBodies ++ [(n, f, d.pos, body)]
-            fieldNeeds := fieldNeeds.merge { methods := st.needs.methods, loops := st.needs.loops, subtypes := st.needs.subtypes }
+            fieldNeeds := fieldNeeds.merge
+              { methods := st.needs.methods, loops := st.needs.loops, subtypes := st.needs.subtypes, anys := st.needs.anys }
           | .error msg => throw s!"{msg} (in the default of field '{f}' of {n})"
     | _ => pure ()
   return { needs := fieldNeeds, bodies := initializerBodies }

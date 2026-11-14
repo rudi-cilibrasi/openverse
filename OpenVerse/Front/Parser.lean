@@ -2579,11 +2579,22 @@ partial def usesBitwise (toks : Array Token) : Bool :=
     | .ident n => n != "BitNot" && bitwiseFunctions.contains n
     | _ => inInterpolations usesBitwise t
 
+/-- A marker that the source may call `ToDiagnostic`: the elaborator then
+    adds its helpers, and an `any` keeps what it needs to print itself
+    (`Front/Diagnostic.lean`). -/
+def diagnosticMarker : String := "$uses:diagnostic"
+
+/-- Whether the source names `ToDiagnostic`, also in a string's
+    interpolations. -/
+partial def usesDiagnostic (toks : Array Token) : Bool :=
+  toks.any fun t => t.identName? == some "ToDiagnostic" || inInterpolations usesDiagnostic t
+
 def withRatMarker (toks : Array Token) (tops : List STop) : List STop :=
   let p : Pos := { line := 0, col := 0 }
   let tops := if usesRational toks then tops ++ [.const p ratMarker [] none (.block p [])] else tops
   let tops := if usesQualifiers toks then tops ++ [.const p qualifierMarker [] none (.block p [])] else tops
   let tops := if usesReplaceAll toks then tops ++ [.const p replaceAllMarker [] none (.block p [])] else tops
+  let tops := if usesDiagnostic toks then tops ++ [.const p diagnosticMarker [] none (.block p [])] else tops
   if usesBitwise toks then tops ++ [.const p bitwiseMarker [] none (.block p [])] else tops
 
 /-- The definitions of a source file, and the marker of its `case` arms

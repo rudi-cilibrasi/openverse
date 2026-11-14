@@ -1672,6 +1672,8 @@ beside the pass that makes it:
 | `$open:A::\|M` (`openMarker`) | a `using{M}` in module `A` | parser | `resolveSpecifiers`, `resolveModules` (out) |
 | `$uses:qualifiers` (`qualifierMarker`) | a source that writes a qualifier | parser | `resolveModules` (out) |
 | `$uses:rational`, `$uses:replaceAll`, `$uses:bitwise`, `$uses:ignoredArms` | what helpers a program needs; the arms marked `@ignore_unreachable` | parser | `admitSource` (out), `Reachability` |
+| `$uses:diagnostic` (`diagnosticMarker`) | a source that names `ToDiagnostic`: its helpers are added, and an `any` keeps what it needs to print itself | parser | `admitSource` (out) |
+| `$anything` (`anyInterfaceName`), `$any_t` (`Diagnostic.wrapperName`), `$diag_t` (`Diagnostic.printerName`) | the interface of an `any` that prints itself; the class of a value of type `t` converted to `any`; the printer of a `t` | `Diagnostic` (the helpers; `wrapAny`'s requests) | `TyEnv.anyWraps`, `convert` |
 | `$constructor:c` (`constructorSpec`) | a constructor function of class `c`, among its specifiers | parser | `Aliases`, `resolveModules`, `Access`, `Attributes`, `classMethods` |
 | `$ctor:D` (`delegationHead`) | a constructor's delegation `D<constructor>(…)` | parser | `Aliases`, `resolveModules`, the constructors' lowering |
 | `$scope(M, …)` (`scopeHead`) | an access level's definition `S := scoped{M, …}` | parser | `resolveSpecifiers` (out) |
@@ -2051,6 +2053,42 @@ soundness, type-safety, scoping and control proofs build as before. The C
 wide implementation is tested against independent exact-fraction oracles;
 it is outside QuickProof's existing two-int arithmetic law. See
 [the rational seam](SEAMS.md#4-rational-arithmetic).
+
+## ToDiagnostic: an `any` that prints itself
+
+`ToDiagnostic(Value:any)` prints any value
+([LANGUAGE.md](LANGUAGE.md#todiagnostic), research note
+[to-diagnostic.md](research/to-diagnostic.md)), so in a program that calls
+it a value whose static type is gone must still print. Verse Core, its
+proofs, OVBC and the runtime are unchanged. A program whose source names
+`ToDiagnostic` (the parser's `$uses:diagnostic`) and defines none of the
+Book's `ToDiagnostic`, `diagnostic`, `diagnosable` gets the helpers of
+`Front/Diagnostic.lean`, Verse source as the rationals' are: the interface
+`$anything` with the method `$Diagnose()<reads>:string`, the class
+`$anyEmpty` below it (the empty value, and what a slot of type `any` starts
+as), `diagnosable`, `diagnostic` and `ToDiagnostic` itself
+(`diagnostic{String := $asAnything(Value).$Diagnose()}`), and the printers
+of strings, chars and rationals. The helpers' presence is the switch
+(`TyEnv.anyWraps`): `any` is then the interface's reference in Verse Core
+(`Ty.toVTy`, `protoValue`, `witness`, `slotDefault`), and `convert`'s case
+`_, any` is `wrapAny`: a value of type `t` becomes an object of the class
+`$any_t`, below `$anything`, whose one field holds it and whose
+`$Diagnose` calls `$diag_t`. Those classes and printers are written for the
+types a program converts (`Diagnostic.wrapperDecls`, the closure of the
+types the printers print: a class's fields' and its subclasses' too) and
+asked for, as subtype dictionaries are (`Requests.anys`, tier 3): the round
+that finds the conversion has `Err()` in its place and the next has the
+class. A printer is ordinary Verse: an object's by casts from its most
+derived class down (a `diagnosable` one by its `GetDiagnostic`), a struct's
+field by field, an array's by a `for`, an enum's by a `case`; the printers
+of a type that holds itself call each other. Their positions are no
+source's, so no access rule applies to the fields they read. A type with no
+printer yet (a float, a `comparable`, a type parameter's value) refuses the
+conversion, the message placed by `coerce`. Two internal built-ins,
+`$asAnything` (an `any` as the interface) and `$rationalParts` (a
+rational's Verse Core pair), are no program's. Nothing changes in a program
+without the helpers: `anyWraps` is false, and every case above is the old
+one.
 
 ## Bitwise functions: helpers written in Verse
 

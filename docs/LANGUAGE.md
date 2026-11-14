@@ -2247,7 +2247,59 @@ arguments types the branch under its refinement (#243, #583).
 
 Nothing can be done with an `any`: it has no equality (so it is no map
 key), no `ToString`, and no cast back. So in Verse Core it is `void`: a
-value becomes an `any` by being evaluated.
+value becomes an `any` by being evaluated. In a program that calls
+[`ToDiagnostic`](#todiagnostic), which prints any value, an `any` keeps
+what it needs to print itself instead: everything above holds of it as
+written, with the exceptions listed there.
+
+### ToDiagnostic
+
+`ToDiagnostic(Value:any)<reads>:diagnostic` (the Book of Verse's API
+reference: "Accepts any value at all"; ch. 2, "ToDiagnostic()") gives a
+`diagnostic`, a class whose `String` is the value's text (the Book makes
+the field `<epic_internal>`; its tests read it, and so may a program). An
+object of a class that implements `diagnosable`
+(`GetDiagnostic()<reads>:diagnostic`) gives its own; a `diagnostic`
+implements it by giving itself. The format is the Book's tests'
+(`Tests/Intrinsics/ToDiagnostic.versetest`; ch. 2: "The exact format it
+produces may vary between VM implementations"):
+
+| Value | Text |
+|---|---|
+| `false`, `true` | `false`, `true` |
+| an int | decimal, `-1000` |
+| a rational | reduced, `1/2`, `-1/5`; an integral one as its int, `2` |
+| a char | printable ASCII in quotes, `'a'`; a tab, a new line, a carriage return and `" # & ' < > \ { } ~` escaped, `'\t'`, `'\#'`; any other as `0oXX`, `0o7f` |
+| a char32 | `0uX` in lowercase hex, `0u1f600` |
+| a string | in double quotes, escaped as a char is; a valid UTF-8 sequence of more than one byte `{0uX}`, a byte of none, or another control character, `{0oXX}`: `"Smiley: {0u1f600}"`, `"{0o08}\t"` |
+| an option | `option{X}`, an empty one `false` |
+| an array | of one element `array{X}`, of any other number `(X, Y, Z)` (none: `()`) |
+| a tuple | `(X, Y)` |
+| a map | `map{K => V, …}` in its order |
+| an enum's value | `e.A` |
+| a struct or an object | its type's name (without type arguments) and its fields in declaration order, `my_class{X := 10}`, the object's own class, not its static type's |
+| a function | its name and parameter types, `Scale(:int, :float)`; a method's `(c:)M(:int)`; the language's own `(/Verse.org/Verse:)ToDiagnostic(:any)` |
+| `()`, a `void` | `false` |
+
+A definition in a module is qualified by it, `(M:)c{…}`; one at the top
+level has no qualifier, as openverse's top level has no path (the Book's
+tests print the test runner's, `(/Verse.org/VerseTests:)my_class{X :=
+10}`). Not pinned by the Book: an empty array, a `void`, a module's
+qualifier, a method's.
+
+In such a program, a value of type `t` converted to `any` (as an argument,
+a result, a joined branch, an element of a `[]any`, any of the conversions
+above) becomes an object of a class the front end writes for `t`, which
+prints it when `ToDiagnostic` runs (so an object's `var` fields are
+printed as they are then). What a program can do with an `any` is
+unchanged; what differs: such a conversion allocates an object, and the
+conversion of a value that cannot be printed yet is refused there: a float
+(the shortest decimal that reads back, the Book's `1.5`, `1e+100`, needs a
+primitive Verse Core does not have yet), a value holding one, a
+`comparable` (its box's type is read by no Verse code), a value of a type
+parameter (in generic code), a weak map, a type as a value. A program that
+never calls `ToDiagnostic`, or that defines `ToDiagnostic`, `diagnostic` or
+`diagnosable` itself, is compiled as before.
 
 ## comparable
 

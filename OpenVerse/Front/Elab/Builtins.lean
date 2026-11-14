@@ -451,6 +451,25 @@ def elabShow (c : BuiltinCall) : EM R := do
     | _ => return ⟨← discardValue r, .void⟩
   | _ => eerr c.p "internal: $Show"
 
+/-- `$asAnything(X)`, of `ToDiagnostic`'s helper (`Front/Diagnostic.lean`):
+    `X`, an `any`, as the object below `$anything` it is in a program that
+    calls `ToDiagnostic`, whose `$Diagnose` prints it. No program can write
+    the name. -/
+def elabAsAnything (c : BuiltinCall) : EM R := do
+  let [a] := c.args | eerr c.p "internal: $asAnything"
+  if !c.ctx.types.anyWraps then eerr c.p "internal: $asAnything outside a program that calls ToDiagnostic"
+  let r ← c.elabE c.ctx a (some .any)
+  return ⟨← coerce a.pos r .any, .struct anyInterfaceName []⟩
+
+/-- `$rationalParts(X)`, of `ToDiagnostic`'s printers: the numerator and
+    the denominator of the rational `X`, in lowest terms with a positive
+    denominator, the tuple Verse Core holds it as (`Front/Rational.lean`).
+    No program can write the name. -/
+def elabRationalParts (c : BuiltinCall) : EM R := do
+  let [a] := c.args | eerr c.p "internal: $rationalParts"
+  let r ← c.elabE c.ctx a (some .rational)
+  return ⟨← coerce a.pos r .rational, .tup [.int, .int]⟩
+
 /-- The built-in functions: each one's name, what it takes, and how a call
     of it is elaborated. A call of one is the row of its name
     (`builtinCalled` says which name a call means), tried after the
@@ -462,8 +481,9 @@ def elabShow (c : BuiltinCall) : EM R := do
     `wrongArity`), and its name in `builtins` (no program may define a
     function of the name) or `softBuiltins` (a program's own definition is
     the one a call means), `Elab/Context.lean`. Every row's name is in one
-    of them but `any` and `comparable`, which name types, and the entry
-    `$Show`. -/
+    of them but `any` and `comparable`, which name types, the entry
+    `$Show`, and `ToDiagnostic`'s helpers' `$asAnything` and
+    `$rationalParts`. -/
 def builtinFunctions : List Builtin := [
   ⟨"Concatenate", .any, elabConcatenate⟩,
   ⟨"any", .exactly 1, elabAnyValue⟩,
@@ -508,7 +528,9 @@ def builtinFunctions : List Builtin := [
   ⟨"BitShiftLeft", .exactly 2, elabBitwise true⟩,
   ⟨"BitShiftRight", .exactly 2, elabBitwise true⟩,
   ⟨"Err", .upToOne, elabErr⟩,
-  ⟨"$Show", .exactly 1, elabShow⟩]
+  ⟨"$Show", .exactly 1, elabShow⟩,
+  ⟨"$asAnything", .exactly 1, elabAsAnything⟩,
+  ⟨"$rationalParts", .exactly 1, elabRationalParts⟩]
 
 /-- The built-in a call of `name` means, as a name of `builtinFunctions`
     (or none of them), and the name the call goes on with: `$F` is the

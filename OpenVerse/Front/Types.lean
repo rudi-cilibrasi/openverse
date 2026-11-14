@@ -227,6 +227,10 @@ structure Requests where
       `(comparable, t)`, whose evidence is the box of a `t`, for each
       (`SubtypeEvidence.Plan.box`). -/
   boxes : List (String × String) := []
+  /-- In a program that calls `ToDiagnostic`, the classes of the values
+      converted to `any` and their printers (`Diagnostic.wrapperDecls`),
+      by name. -/
+  anys : List STop := []
   deriving Inhabited
 
 /-- A field with accessors (Book of Verse ch. 10, "Fields with Accessors";
@@ -787,11 +791,22 @@ def TyEnv.recursiveStruct? (env : TyEnv) : Option String :=
     return seen
   (env.structs.map (·.1)).find? fun n => (reach n).contains n
 
+/-- The interface every value converted to `any` is an object below, in a
+    program that calls `ToDiagnostic` (`Front/Diagnostic.lean`). -/
+def anyInterfaceName : String := "$anything"
+
+/-- Whether an `any` keeps what it needs to print itself: in a program
+    that calls `ToDiagnostic`, whose helpers define `$anything`, a value
+    converted to `any` is an object below it (`Diagnostic`, `convert`), and
+    an `any` is that interface's reference in Verse Core; elsewhere it is
+    `void`, a value becoming one by being evaluated. -/
+def TyEnv.anyWraps (env : TyEnv) : Bool := env.classes.contains anyInterfaceName
+
 /-- The Verse Core type of a front-end type (`false`, the bottom type, has
     no values; slots and signatures never have it). -/
 partial def Ty.toVTy (env : TyEnv) : Ty → VTy
   | .int | .char32 => .int
-  | .any => VTy.void
+  | .any => if env.anyWraps then Ty.toVTy env (.struct anyInterfaceName []) else VTy.void
   | .dyn => .dyn
   | .refine n => ((env.refines.lookup n).map fun (b, _) => b.toVTy env).getD .int
   | .rational => .tup [.int, .int]
@@ -1302,7 +1317,8 @@ partial def protoValue (env : TyEnv) (done : List (String × Nat)) : Ty → Opti
   | .int | .char32 | .enum _ => some (.int 0)
   | .rational => some (.tup [.int 0, .int 1])
   | .float => some (.float 0)
-  | .any | .dyn => some .void
+  | .dyn => some .void
+  | .any => if env.anyWraps then protoValue env done (.struct anyInterfaceName []) else some .void
   | .refine n => match env.refines.lookup n with
     | some (.float, _) => some (.float 0)
     | _ => some (.int 0)
