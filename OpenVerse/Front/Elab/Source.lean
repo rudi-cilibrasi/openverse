@@ -689,20 +689,20 @@ structure Source where
     function values become interfaces and classes (#210). -/
 def inlineSource (requests : Requests) (admitted : Admitted) :
     Except String Source := do
-  -- functions with several values (#235): inlined at their calls
-  -- (#283) the members of built-in types and of the prelude: a method with
-  -- several values may not be named like one, as `R.M` could be it
+  -- functions with several values (#235, #283), inlined at their calls; a
+  -- method with several values may not take the name of a member of a
+  -- built-in type or of the prelude, as `R.M` could be it
   let reserved : List String := ["Length", "Slice", "Find", "Insert", "Remove", "RemoveElement",
     "RemoveFirstElement", "RemoveAllElements", "ReplaceElement", "ReplaceAllElements", "ReplaceAll", "Last",
     "Signal", "Await", "Cancel"] ++ admitted.helpers.flatMap fun
       | .classDef _ _ _ _ _ _ _ fs ms => fs.map (·.1) ++ ms.filterMap fun | .fn _ m .. => some m | _ => none
       | _ => []
-  -- (#283) and the uses of methods whose family the receiver's class picks,
-  -- and the calls whose overload the arguments' types pick
-  -- (#283) and the consumers in recursive groups' code whose names' types
-  -- an elaboration is to note
+  -- (with the sites an elaboration is to note, #283: the uses of methods
+  -- whose family the receiver's class picks, the calls whose overload the
+  -- arguments' types pick, the consumers in recursive groups' code whose
+  -- names' types it notes, the types whose field orders it notes)
   let written := admitted.resolved
-  let ⟨resolved, lazy, familySites, overloadSites, nestedSites, fieldSites⟩ ← Choice.inlineMulti admitted.resolved reserved
+  let ⟨resolved, lazy, familySites, overloadSites, nestedSites, fieldSites⟩ ← Choice.inlineMulti written reserved
     requests.eager requests.families requests.lazy requests.overloads requests.nested
     requests.fieldOrders requests.instanceCalls
   -- (#246) the class of the stack cells of lazily taken ones
