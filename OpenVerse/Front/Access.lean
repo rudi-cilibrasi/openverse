@@ -329,22 +329,14 @@ def hierarchy (tops : List STop) : String → List String :=
       todo := next
     return seen
 
-/-- Every expression of a definition, its own code with its parameters'
-    defaults and its fields' defaults, each with the site it is in. -/
-def codeOf : STop → List (Site × SExpr)
-  | .fn _ n ps _ _ _ body =>
-    let s : Site := { module := moduleOfName n }
-    (body :: ps.filterMap (·.default)).map (s, ·)
-  | .const _ n _ _ body =>
-    let s : Site := { module := moduleOfName n }
-    match body with
-    | .structDef _ _ _ fs => fs.filterMap fun f => f.default.map (s, ·)
-    | b => [(s, b)]
-  | .classDef _ c _ _ _ _ _ fs ms =>
-    let s : Site := { module := moduleOfName c, cls := some c }
-    fs.filterMap (fun f => f.default.map (s, ·)) ++ ms.flatMap fun
-      | .fn _ _ ps _ _ _ body => (body :: ps.filterMap (·.default)).map (s, ·)
-      | _ => []
+/-- Every expression of a definition, in the order of the source
+    (`STop.code`: its parameters' defaults, then its own code, and its
+    fields' defaults), each with the site it is in. -/
+def codeOf (t : STop) : List (Site × SExpr) :=
+  let s : Site := match t with
+    | .classDef _ c .. => { module := moduleOfName c, cls := some c }
+    | .fn _ n .. | .const _ n .. => { module := moduleOfName n }
+  t.code.map (s, ·)
 
 /-- The constructions `c{F := e, …}` in an expression: where, the type, the
     fields given. -/

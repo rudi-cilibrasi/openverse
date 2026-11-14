@@ -2563,7 +2563,10 @@ partial def elabMapLit (ctx : Ctx) (p : Pos) (entries : List (SExpr × SExpr)) (
   | [] =>
     match kt?, vt? with
     | some k, some v => return ⟨.lit Value.emptyArray, .map k v⟩
-    | _, _ => eerr p "the type of an empty map{} must be given (e.g. M:[string]int = map{})"
+    -- (a `comparable`: the empty value, as an empty `array{}`'s)
+    | _, _ =>
+      if exp == some .dyn then return ⟨.lit Value.emptyArray, .dyn⟩
+      eerr p "the type of an empty map{} must be given (e.g. M:[string]int = map{})"
   | (k0, v0) :: _ =>
     let rk0 ← elabE ctx k0 kt?
     let rv0 ← elabE ctx v0 vt?
