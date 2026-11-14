@@ -1719,8 +1719,8 @@ Tests/Bugs/SOL-2270-ExtensionalFloats.versetest:121	agrees
 Tests/Bugs/SOL-2270-ExtensionalFloats.versetest:125	agrees
 Tests/Bugs/SOL-2270-ExtensionalFloats.versetest:130	agrees
 Tests/Bugs/SOL-2270-ExtensionalFloats.versetest:decls	agrees
-Tests/Bugs/SOL-2336-LoopReturn.versetest:10	disagrees-refuses
-Tests/Bugs/SOL-2336-LoopReturn.versetest:decls	disagrees-refuses
+Tests/Bugs/SOL-2336-LoopReturn.versetest:10	agrees
+Tests/Bugs/SOL-2336-LoopReturn.versetest:decls	agrees
 Tests/Bugs/SOL-2577-ConstructorOverloadAmbiguity.versetest:3	agrees
 Tests/Bugs/SOL-2584-AbstractFunctionInModule.versetest:3	agrees
 Tests/Bugs/SOL-2620-AssignmentWithoutElement.versetest:3	agrees
@@ -6358,8 +6358,8 @@ Tests/Literals/Logic.versetest:45	agrees
 Tests/Literals/Logic.versetest:46	agrees
 Tests/Literals/Logic.versetest:52	agrees
 Tests/Literals/Logic.versetest:58	agrees
-Tests/Literals/Logic.versetest:72	disagrees-refuses
-Tests/Literals/Logic.versetest:decls	disagrees-refuses
+Tests/Literals/Logic.versetest:72	agrees
+Tests/Literals/Logic.versetest:decls	agrees
 Tests/Literals/Path.versetest:5	agrees
 Tests/Literals/Path.versetest:6	agrees
 Tests/Literals/Path.versetest:7	agrees
