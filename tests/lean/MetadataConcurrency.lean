@@ -33,12 +33,36 @@ private def forwards (kind : String) : List (String × String × Bool) := [
     s!"    Values:={kind}:\n        block:\n            var A:{functionTy}=Dummy\n            set A=F\n            Sleep(0.1)\n            A()\n        block:\n            var B:{functionTy}=Dummy\n            set B=F\n            Sleep(0.2)\n            B()\n        block:\n            var C:{functionTy}=Dummy\n            set C=F\n            Sleep(0.3)\n            C()\n    {result kind}", true)]
 
 private def extras : List (String × String × Bool) := [
+  ("branch: opaque metadata-only forwarding", header functionTy ++
+      s!"    var Stored:{functionTy}=Dummy\n    branch:\n        Sleep(0.1)\n        set Stored=Dummy\n    Sleep(0.2)\n    Stored", true),
+    ("branch: immediate metadata writer completes before real overwrite", header ++
+      s!"    var Stored:{functionTy}=Dummy\n    branch:\n        set Stored=Dummy\n    set Stored=F\n    Stored()", true),
+    ("branch: real overwrite before its first wait", header ++
+      s!"    var Stored:{functionTy}=Dummy\n    branch:\n        set Stored=F\n        Sleep(0.1)\n    Sleep(0.2)\n    Stored()", true),
+    ("branch: mutually exclusive real overwrite", ((header functionTy).replace "Caller(" "Caller(C:logic,") ++
+      s!"    var Stored:{functionTy}=Dummy\n    if(C?)then:\n        branch:\n            Sleep(0.1)\n            set Stored=Dummy\n    else:\n        set Stored=F\n    Sleep(0.2)\n    Stored", true),
+    ("branch: parent real overwrite rolls back", header functionTy ++
+      s!"    var Stored:{functionTy}=Dummy\n    branch:\n        Sleep(0.1)\n        set Stored=Dummy\n    if(set Stored=F;false?)\{}\n    Sleep(0.2)\n    Stored", true),
+    ("branch: pending metadata write canceled before it resumes", header ++
+      s!"    var Stored:{functionTy}=Dummy\n    branch:\n        Sleep(0.1)\n        set Stored=Dummy\n    set Stored=F\n    Stored()", true),
+    ("rush: loser canceled before it resumes", header ++
+      s!"    var Stored:{functionTy}=Dummy\n    Value:=rush:\n        block:\n            Sleep(0.1)\n            set Stored=Dummy\n            Sleep(1.0)\n            0\n        block:\n            Sleep(0.05)\n            0\n    set Stored=F\n    Stored()", true),
   ("sync: same-arm metadata write precedes its real overwrite", header ++
     s!"    var Stored:{functionTy}=Dummy\n    Values:=sync:\n        block:\n            set Stored=Dummy\n            set Stored=F\n            Sleep(0.1)\n            0\n        block:\n            Sleep(0.2)\n            0\n    Stored()", true),
   ("sync: rolled-back sibling write has no effect", header ++
     s!"    var Stored:{functionTy}=Dummy\n    Values:=sync:\n        block:\n            set Stored=Dummy\n            set Stored=F\n            Sleep(0.1)\n            0\n        block:\n            if(set Stored=F;false?)\{}\n            Sleep(0.2)\n            0\n    Stored()", true),
   ("sync: one definite real overwrite before continuation", header ++
     s!"    var Stored:{functionTy}=Dummy\n    Values:=sync:\n        block:\n            Sleep(0.1)\n            set Stored=F\n            0\n        block:\n            Sleep(0.2)\n            0\n    Stored()", true)]
+
+private def backgroundRefusals : List (String × String × Bool) := [
+  ("race: cancellation defer executes metadata", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    race:\n        block:\n            defer:\n                Value:=Stored()\n            loop:\n                Sleep(1.0)\n        block:\n            Sleep(0.1)\n            0", true),
+  ("branch: later caller real overwrite", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    branch:\n        Sleep(0.1)\n        set Stored=Dummy\n    set Stored=F\n    Sleep(0.2)\n    Stored()", true),
+  ("rush: loser writes after caller real overwrite", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    Value:=rush:\n        block:\n            Sleep(0.1)\n            set Stored=Dummy\n            Sleep(1.0)\n            0\n        block:\n            Sleep(0.05)\n            0\n    set Stored=F\n    Sleep(0.2)\n    Stored()", true),
+  ("branch: caller reads before background real overwrite", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    branch:\n        Sleep(0.2)\n        set Stored=F\n    Sleep(0.1)\n    Stored()", true)]
 
 private def compileCase (source : String) (dummy live : Bool) : Except String Compiled := do
   let implementations := if live then
@@ -52,7 +76,7 @@ private def compileCase (source : String) (dummy live : Bool) : Except String Co
 
 def main : IO Unit := do
   let kinds := ["sync", "race", "rush"]
-  let cases := kinds.flatMap refusals
+  let cases := kinds.flatMap refusals ++ backgroundRefusals
   let controls := kinds.flatMap forwards ++ extras
   let mut failures := 0
   for (label, source, live) in cases ++ controls do
