@@ -228,3 +228,40 @@ must be effect-free: `<computes>` with no additive heap specifier
 `tests/errors/fx_generic_computes.verse` expected the old refusal of
 `<computes><reads>`; they now test that such a function may not write
 ("F sets a var field, which its effects (<reads>) do not allow").
+
+## A field re-declared with `<override>` and no value
+
+**The rule.** `F<override>:t` with no value re-declares an inherited field
+`F` (at the same type; at a subtype, below) with no default: a construction
+of the class, or of one below it that gives no default, gives `F`. It
+needs no new default.
+
+- Ch. 10, "Overriding Members" (`10_classes_interfaces.md:3172-3175`):
+  "Field overrides can provide different default values or specialize to
+  subtypes": a new default is one thing an override can do, not what it is
+  for.
+- Ch. 10, "Concrete" (`:2112-2114`): "Re-declaring the member with
+  `<override>` does not satisfy the requirement — it still needs an
+  initializer", with `thing := class<concrete>(has_field) { Field<override>:int }`
+  an error (3519).
+- The tests: `Attributes/override.versetest:29-35` (`A<override>: int`
+  with no value, constructed `c1{ A:= 4 }`), `:37-47` ("overriding data
+  member with base specifying an initializer": `c3{}` is refused, 3600,
+  "Object archetype must initialize data member": the inherited default
+  is not kept), `concrete.versetest` 59, 110, 230, `SOL-3366:53`,
+  `SOL-9745` (each concrete class that re-declares with no value is
+  refused, 3519).
+
+The prose and the tests agree. That the inherited default is dropped is
+the tests' (`override.versetest:37-47`); the prose says nothing of it.
+`concrete.versetest:110-114` re-declares a field of a `<concrete>` class
+with no value in a subclass that is not marked, and is accepted ("is this
+actually valid?"): with the tests' reading of `<concrete>` as inherited
+(the owner's open question, [Concrete classes and their
+subclasses](https://github.com/rudi-cilibrasi/openverse/wiki/Concrete-classes-and-their-subclasses)),
+it would not be.
+
+**In openverse.** `classFields` (`Elab/Classes.lean`) refused such a field
+("F<override> must give a new default"); it now gives it no default. The
+default two interfaces give a field is settled by any override of it, with
+a value or none.

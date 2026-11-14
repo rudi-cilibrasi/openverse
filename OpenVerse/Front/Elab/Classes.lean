@@ -235,7 +235,8 @@ def Fields.of (fields : Fields) (n : String) : List (String × STy × Option SEx
 def classFields (classes : Classes) (requests : Requests) : Except String Fields := do
   -- the fields of each class: its superclass's, then those of the
   -- interfaces above it that are not there yet (once, along a diamond), then
-  -- its own (an `<override>` field gives an inherited one a new default)
+  -- its own (an `<override>` field re-declares an inherited one, with its
+  -- own default or none)
   let mut fieldOverrides : Array (Pos × String × String × STy) := #[]
   let mut defaultClashes : Array String := #[]
   -- (each class's fields by name, in a map: lookups in a list made this cubic)
@@ -293,8 +294,6 @@ def classFields (classes : Classes) (requests : Requests) : Except String Fields
           throw s!"{cd.pos.show}: field '{f}' of {cd.name} has the name of an inherited method"
         match fs.findIdx? (fun (g : String × STy × Option SExpr × Bool) => g.1 == f) with
         | some k =>
-          if cd.overrides.contains f && d.isNone then
-            throw s!"{cd.pos.show}: {f}<override> must give a new default: write {f}<override>:t = e"
           if !cd.overrides.contains f then
             throw s!"{cd.pos.show}: field '{f}' of {cd.name} has the name of an inherited field (write {f}<override>:t = … to give it a new default)"
           -- (`<final>`: no class below gives it another default)
@@ -305,6 +304,12 @@ def classFields (classes : Classes) (requests : Requests) : Except String Fields
           let (_, sty0, _, v0) := fs[k]!
           if isVar != v0 then
             throw s!"{cd.pos.show}: {f}<override> cannot change whether the field is a var"
+          -- (an override without a value re-declares the field with no
+          -- default, so a construction gives it: Book of Verse tests,
+          -- Attributes/override.versetest 37-47, "Object archetype must
+          -- initialize data member", 3600, and 29-35; ch. 10, "Concrete":
+          -- "Re-declaring the member with `<override>` does not satisfy the
+          -- requirement — it still needs an initializer")
           fs := fs.set k (f, sty0, d, v0)
           fieldOverrides := fieldOverrides.push (cd.pos, cd.name, f, sty)
         | none =>

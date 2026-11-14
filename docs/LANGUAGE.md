@@ -755,7 +755,9 @@ circle := class(shape, labelled):
   class inherits its parent's fields, then those of the interfaces above it
   that are not there yet (once, along a diamond), then its own, and its
   methods:
-  - `Name<override>:t = e` gives an inherited field a new default; any
+  - `Name<override>:t = e` gives an inherited field a new default, and
+    `Name<override>:t` re-declares it with none, so that a construction
+    gives it (the Book's tests, `Attributes/override.versetest` 29-47); any
     other field with an inherited name is an error;
   - `M<override>(…)` overrides an inherited method with its signature, except
     that it may return a class below the declared one (covariant results).
