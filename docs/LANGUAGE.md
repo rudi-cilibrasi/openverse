@@ -1179,6 +1179,49 @@ circle := class(shape, labelled):
   its own. The type arguments come from the receiver, and the body is
   checked once in Verse Core (see
   [Parametric functions](#parametric-functions)).
+- **Variance** (Book of Verse ch. 10, "Instantiation and Identity";
+  [research/variance.md](research/variance.md)). A parametric class's or
+  interface's instances convert to one another by the use of each type
+  parameter in its members, inherited ones included: only where values come
+  out (a field that is no `var`, a method's result) it is *covariant*, and
+  `producer(player)` is a `producer(entity)`; only where they go in (a
+  method's parameter) *contravariant*, and `consumer(entity)` is a
+  `consumer(player)`; in both, or in a `var` field, *invariant*; nowhere,
+  *bivariant*, and any instance is any other. A type argument of another
+  class counts by that class's variance there, a function type's
+  parameter contravariantly (so `Each(F:type{_(:t):void})` is covariant in
+  `t`), arrays, options, tuples and maps covariantly; a use only at a
+  bivariant position of the class itself is none. The conversion keeps the
+  value (a class is a reference), so a type argument must be one of the
+  other as it is: a class below, a refinement of it, `comparable` for a
+  value that is its own box; not `int` to `rational`, nor anything to `any`,
+  which holds no value in openverse. Joins go by variance too: two
+  instances of a covariant class join at the instance at their type
+  arguments' join, of a bivariant one at either.
+
+  ```verse
+  producer(t:type) := class:
+      Value:t
+      Get():t = Value
+  EntityProducer:producer(entity) = producer(player){Value := player{}}
+  ```
+
+  openverse needs more than the Book in one respect: Verse Core types a
+  reference by its object's *own* class (a method runs at the reference's
+  type arguments), so every concrete class below the converted type must
+  allow the conversion too, by its fields alone (methods are free there:
+  Verse Core has no contravariance, and a class whose fields do not use a
+  parameter is bivariant in it). So a conversion is refused, with a
+  message that names the class, where a class below the type (or the type
+  itself) holds the parameter in a field and the conversion is
+  contravariant or bivariant (an implementation `store(t)` of a
+  contravariant `sink(t)` with a field `Last:t`: no `store(entity)` is a
+  `sink(player)`), writes a field of it (`var`, also one a subclass adds:
+  no `rw(player)` is a `ro(entity)` when `rw` adds `var W:t`), fixes it
+  and overrides one of the type's methods or is the target of a refining
+  cast (`pp := class(producer(player))` with `Get<override>`), or sees it
+  through an interface referred to through views (#351). Function types
+  convert as before (#214).
 - **Heap effects** (#35). A
   function's specifiers allow a set of heap effects: all of them when it has
   none or `<transacts>`, none with `<computes>` alone, and those named by
@@ -1233,12 +1276,13 @@ circle := class(shape, labelled):
     (#157) would have to hold itself (no program can build an object of
     such a type: each would need another first, so use `?node(t)` for a
     link that may be absent);
-  - variance: a parametric class or interface is invariant in its type
-    parameters, so a `producer(player)` is no `producer(entity)`, where the
-    Book infers covariance, contravariance or bivariance from the uses of
-    the parameter in the members (ch. 10, "Instantiation and Identity");
-    Verse Core relates references' type arguments by equality, so it needs
-    Verse Core ([research/variance.md](research/variance.md));
+  - variance where a class below the converted type holds or writes the
+    type parameter in a field, fixes it and overrides or is cast to, or
+    sees it through a view (see [Variance](#classes) above): Verse Core
+    types a reference by its object's own class
+    ([research/variance.md](research/variance.md)); and a type argument
+    inferred through a variant position (`F(C:c(t), X:t)` takes `t` from
+    its first argument, as without variance);
   - a method override at a signature that needs a conversion (a result
     `tuple(t, t)` for `[]t`, parameters `(X:int, Y:int)` taken as `(X:[]int)`,
     `<decides>` or `<suspends>` dropped; the Book's tests

@@ -155,6 +155,46 @@ partial def Ty.alpha (m : List (String × String)) : Ty → Ty → Option (List 
   | .map k v, .map k' v' | .weakMap k v, .weakMap k' v' => do Ty.alpha (← Ty.alpha m k k') v v'
   | a, b => if a.eqv b then some m else none
 
+/-- The variance of a class's or interface's type parameter, as the Book of
+    Verse has it (ch. 10, "Instantiation and Identity"): how the parameter is
+    used in the type's member signatures, inherited ones included. `co`: only
+    where values come out (a field that is no `var`, a method's result), so
+    `c(player)` is a `c(entity)`; `contra`: only where they go in (a method's
+    parameter), so `c(entity)` is a `c(player)`; `inv`: both (or a `var`
+    field), no conversion; `bi`: not used, any instance is any other.
+    Verse Core has its own, over the classes' field tables
+    (`Sigs.inferVariances`); a conversion needs both (`refUp`). -/
+inductive SVar where
+  | bi | co | contra | inv
+  deriving BEq, Repr, Inhabited
+
+/-- The more restrictive of two variances: uses in two places. -/
+def SVar.join : SVar → SVar → SVar
+  | .bi, v | v, .bi => v
+  | .co, .co => .co
+  | .contra, .contra => .contra
+  | _, _ => .inv
+
+/-- A use as a value that goes in where it comes out, and the converse. -/
+def SVar.flip : SVar → SVar
+  | .co => .contra
+  | .contra => .co
+  | v => v
+
+/-- A use `inner` inside a type argument of variance `outer`. -/
+def SVar.compose (outer inner : SVar) : SVar :=
+  match outer with
+  | .bi => .bi
+  | .co => inner
+  | .contra => inner.flip
+  | .inv => if inner == .bi then .bi else .inv
+
+def SVar.show : SVar → String
+  | .bi => "bivariant"
+  | .co => "covariant"
+  | .contra => "contravariant"
+  | .inv => "invariant"
+
 /-- Where a class or interface sits in the hierarchy (#18). -/
 structure ClassInfo where
   /-- The superclass of a class (single inheritance). -/
@@ -346,6 +386,19 @@ structure TyEnv where
   /-- (#515, `--signal-no-rollback`) Record the calls failure contexts make
       (`ESt.failCalls`). -/
   signalNoRollback : Bool := false
+  /-- The variances of the classes in Verse Core, by tag and Verse Core type
+      argument position (docs/research/variance.md): what the certificate
+      gives (`Sigs.variances`), so that a conversion the front end makes by
+      variance passes the checker's subtyping. Every class invariant until
+      the classes are known (`Variance.coreVariances`). -/
+  coreVariances : List (List Variance) := []
+  /-- The Book's variance of each class's and interface's type parameters
+      (`SVar`), by name; a type missing here is invariant in each. -/
+  variances : List (String × List SVar) := []
+  /-- The methods each class and interface declares, each with its parameter
+      types (the receiver left out) and its result type, over the type's
+      parameters: what its variances were found from, for the messages. -/
+  memberSigs : List (String × List (String × List Ty × Ty)) := []
   /-- The hidden placeholder classes (#157): one below each generic class or
       interface whose concrete classes all fix its type arguments, so that a
       variable of its type at other type arguments has an initial value. The
@@ -707,6 +760,10 @@ def TyEnv.isRefClass (env : TyEnv) (n : String) : Bool :=
     -- with no concrete class below, `n` has no instance: it stays the (empty)
     -- value of #18, so a variable of its type needs no placeholder
     env.classes.any fun d => let i := env.info d; !i.isIface && !i.isAbstract && (env.supers d).contains n
+
+/-- The variances of the classes in Verse Core (`Sigs.var` of the
+    certificate the front end gives). -/
+def TyEnv.coreVar (env : TyEnv) : Variances := ({ fns := [], variances := env.coreVariances } : Sigs).var
 
 /-- The class tag of class `d` in Verse Core: its index in definition order. -/
 def TyEnv.tagOf (env : TyEnv) (d : String) : Nat :=
@@ -1462,8 +1519,45 @@ def fnTyFits (env : TyEnv) (own t : Ty) : Bool :=
 def classRepTy (env : TyEnv) (d : String) (args : List Ty := []) : Ty :=
   .tup ((env.fields d args).map (·.2.1))
 
+/-- Values of `t` are their own boxes (`Code.id`, arrays and options of
+    such): an int, a float, a logic, a char, a string, a refinement, a
+    `comparable`, `()`, a `<unique>` object. -/
+partial def Ty.boxId (env : TyEnv) : Ty → Bool
+  | .int | .float | .logic | .char | .refine _ | .dyn | .void | .never | .tup [] => true
+  | .arr t | .opt t => t.boxId env
+  -- (a class: a reference, compared by identity; one with no concrete
+  -- class below has no values)
+  | .struct n _ => env.classes.contains n
+  | _ => false
+
+/-- Converting a value of `a` to `b` is the identity on values: `b` is `a`
+    with `comparable` in places where `a` has a type whose values are their
+    own boxes (`[]int` to `[]comparable`). -/
+partial def Ty.boxIdTo (env : TyEnv) : Ty → Ty → Bool
+  | .dyn, .dyn => true
+  | a, .dyn => a.boxId env && a.comparable env
+  | .arr a, .arr b | .opt a, .opt b => a.boxIdTo env b
+  | .tup as, .tup bs => as.length == bs.length && (as.zip bs).all fun (a, b) => a.boxIdTo env b
+  | .map k v, .map k' v' => k.boxIdTo env k' && v.boxIdTo env v'
+  | a, b => a == b
+
+/-- The Book's variance of class or interface `n` at each of its type
+    parameters (`SVar`); invariant where none is known. -/
+def TyEnv.varianceOf (env : TyEnv) (n : String) : List SVar :=
+  -- (a function type's shape is invariant here: a function value converts
+  -- to another function type by an adapter made for it, #214, as its class
+  -- fixes the shape's type arguments)
+  if (FnValues.parse n).isSome then ((env.sparams.lookup n).getD []).map fun _ => .inv else
+  match env.variances.lookup n with
+  | some vs => vs
+  | none => ((env.sparams.lookup n).getD []).map fun _ => .inv
+
+mutual
 /-- `a` is a reference class below the class or interface `b`, or an array
-    or option of such. -/
+    or option of such: the same value has both types. A class's type
+    arguments fit the other's by the Book's variance of the class above
+    (`TyEnv.argsFit`), and Verse Core's subtyping (by its classes'
+    variances, `TyEnv.coreVar`) must agree, as the value is not converted. -/
 partial def refUp (env : TyEnv) (a b : Ty) (nested : Bool := false) : Bool :=
   match a, b with
   -- `false` (no value) is below every type; inside a container, where
@@ -1471,7 +1565,10 @@ partial def refUp (env : TyEnv) (a b : Ty) (nested : Bool := false) : Bool :=
   -- has as `void` too (#290)
   | .never, b => !nested || b == .void || b == .any
   | .struct S as, .struct T bs =>
-    env.isRefClass S && env.isRefClass T && env.isSub S T && env.upArgs S as T == bs
+    env.isRefClass S && env.isRefClass T && env.isSub S T &&
+      (let us := env.upArgs S as T
+       us == bs || (env.argsFit T us bs &&
+         VTy.sub env.coreVar ((Ty.struct S as).toVTy env) ((Ty.struct T bs).toVTy env)))
   | .arr a, .arr b | .opt a, .opt b => refUp env a b true
   -- tuples pointwise, maps in their values (Core subtyping is covariant there)
   | .tup as, .tup bs => as.length == bs.length && (as.zip bs).all fun (a, b) => a == b || refUp env a b true
@@ -1479,6 +1576,33 @@ partial def refUp (env : TyEnv) (a b : Ty) (nested : Bool := false) : Bool :=
   -- (a map is a weak map, held alike, Book of Verse ch. 3)
   | .map k a, .weakMap k' b | .weakMap k a, .weakMap k' b => k == k' && (a == b || refUp env a b true)
   | _, _ => false
+/-- A value of type argument `a` is one of `b` as it is (a class's type
+    argument changes no value: `refUp`, a value that is its own box to
+    `comparable`, a refinement to its base). -/
+partial def TyEnv.argFits (env : TyEnv) (a b : Ty) : Bool :=
+  a == b || refUp env a b true || a.boxIdTo env b ||
+    match a, b with
+    | .refine n, _ => (env.refines.lookup n).any (·.1 == b)
+    -- (a class or interface with no object below it, below another: no value
+    -- to hold either way; Verse Core's subtyping of the classes whose type
+    -- arguments these are decides when they hold objects, `refUp`)
+    | .struct S as, .struct T bs =>
+      env.classes.contains S && env.classes.contains T && env.isSub S T && (env.concreteBelow S).isEmpty &&
+        env.argsFit T (env.upArgs S as T) bs
+    | _, _ => false
+/-- Type arguments `us` of class or interface `T` fit `bs` by its variances:
+    equal where it is invariant, below where covariant, above where
+    contravariant, any where bivariant. -/
+partial def TyEnv.argsFit (env : TyEnv) (T : String) (us bs : List Ty) : Bool :=
+  us.length == bs.length &&
+    ((env.varianceOf T).zip (us.zip bs)).all (fun (v, u, b) => match v with
+      | .inv => u == b
+      | .co => env.argFits u b
+      | .contra => env.argFits b u
+      | .bi => true) &&
+    -- (past the parameters the variances know, equal)
+    ((us.zip bs).drop (env.varianceOf T).length).all fun (u, b) => u == b
+end
 
 /-- A failed join is ambiguous only when two incomparable instantiated
     interfaces remain. A common name at incompatible arguments is not a

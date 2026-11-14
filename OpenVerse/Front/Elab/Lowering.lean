@@ -466,7 +466,7 @@ def declaredLevels (env : TyEnv) (allS : List Sig) (s : Sig) : VTy × List VTy :
   let primary : VTy :=
     if opening.any fun r => (sigAt r).bind (atC r) == some own then own else
     match decls with
-    | some d :: rest => if rest.all (· == some d) && own.sub d then d else own
+    | some d :: rest => if rest.all (· == some d) && own.sub env.coreVar d then d else own
     | _ => own
   -- (the other results a caller may expect, from a class it dispatches
   -- from or a first declaration, that a cell of the primary type cannot
@@ -477,7 +477,7 @@ def declaredLevels (env : TyEnv) (allS : List Sig) (s : Sig) : VTy × List VTy :
     | _, _ => d == p
   let cands := (opening.filterMap fun r => (sigAt r).bind (atC r)) ++ decls.filterMap id
   let extras := cands.foldl (fun acc d =>
-    if d != primary && own.sub d && !narrowable d primary && !acc.contains d then acc ++ [d] else acc) []
+    if d != primary && own.sub env.coreVar d && !narrowable d primary && !acc.contains d then acc ++ [d] else acc) []
   (primary, extras)
 
 /-- The type an opened override's (primary) result cell holds: `declaredLevels`'
@@ -616,7 +616,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let schedTag := env.tagOf "$sched"
   let schedTy : VTy := .ref [schedTag] []
   let fieldIdx (c f : String) : Nat := ((env.fields c).findIdx? (·.1 == f)).getD 0
-  let Sorig : Sigs := { fns := fsigs0, classes := classTable, protos, pins }
+  let Sorig : Sigs := { fns := fsigs0, classes := classTable, protos, pins, variances := env.coreVariances }
   -- each `spawn` (#156) gets a root: a function `$spawnK(T, args…)` that
   -- runs the spawned call and fills the task `T`
   let mut roots : Array (Nat × String × Nat) := #[]
@@ -761,7 +761,8 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let sourceClasses := lows.zipIdx.map fun ((gi, _, _), j) =>
     let (_, _, sites, arms) := parts[j]!
     List.replicate (Suspend.slotBaseOf sites arms) VTy.void ++ slotTys[gi]!
-  let Ssource : Sigs := { fns := fsigs0, classes := classTable ++ sourceClasses, protos, pins }
+  let Ssource : Sigs :=
+    { fns := fsigs0, classes := classTable ++ sourceClasses, protos, pins, variances := env.coreVariances }
   for gi in List.range fns.size do
     if lows.any (·.1 == gi) then continue
     let shared ← SourceFrames.aliases sourceFrames gi sourceBase
@@ -1000,7 +1001,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   if leafy then classTable := classTable.set schedTag (classTable[schedTag]! ++ [parTy, .int])
   if taskClockF.isSome then classTable := classTable.set schedTag (classTable[schedTag]! ++ [.int])
   let Sinf : Sigs := { fns := fsigs0 ++ extraSigs.toList ++ selfSigs.toList ++ rootSigs.toList, classes := classTable ++ sourceClasses,
-                       protos, pins }
+                       protos, pins, variances := env.coreVariances }
   let mut newFns : Array Fn := #[]
   let mut newTys : Array (List VTy) := #[]
   let mut taskFns : Array Fn := #[]

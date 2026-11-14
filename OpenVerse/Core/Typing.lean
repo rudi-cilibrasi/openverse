@@ -219,6 +219,38 @@ end
     field types whose variables are below `args.length`, `FieldTy`). -/
 def inst (args : List VTy) (t : VTy) : VTy := t.subst fun j => args.getD j void
 
+end VTy
+
+/-- The variance of a class at one of its type arguments (Book of Verse
+    ch. 10, "Instantiation and Identity"; docs/research/variance.md): `co`,
+    an object made at `X` is also one at every `Y` above `X` there; `inv`,
+    only at `X`; `bi`, at any `Y`. Verse Core's types have no contravariant
+    position (they are first order: arrays, options, tuples and references
+    are covariant), so a class's fields use a type argument positively,
+    invariantly or not at all, and its variance there is one of these
+    three. -/
+inductive Variance where
+  | inv | co | bi
+  deriving DecidableEq, Repr, Inhabited
+
+/-- The variances of the classes, by class tag and type argument position. -/
+abbrev Variances := Nat → Nat → Variance
+
+/-- Every class invariant at every type argument: Verse Core's subtyping and
+    typing before variance (#39), which `VTy.sub_inv_ref` and `hasTy_inv_ref`
+    state. -/
+def Variances.allInv : Variances := fun _ _ => .inv
+
+/-- Whether a class of variance `w` at a position relates two type arguments
+    there, given whether they are equal (`eq`) and whether the first is
+    below the second (`le`). -/
+def Variance.fits : Variance → Bool → Bool → Bool
+  | .inv, eq, _ => eq
+  | .co, _, le => le
+  | .bi, _, _ => true
+
+namespace VTy
+
 mutual
 /-- `t` mentions only the type variables below `n`. -/
 def varsBelow (n : Nat) : VTy → Bool
@@ -233,39 +265,62 @@ def varsBelowL (n : Nat) : List VTy → Bool
 end
 
 mutual
-/-- Subtyping, `t ≤ u` (#32): every value of `t` is a value of `u`. A
-    reference type with fewer classes is below one with more, and with more
-    type arguments below one with a prefix of them (#39: a `sub(t, u)` is a
-    `base(t)`); arrays, options and tuples are covariant (they are immutable
-    values); otherwise the types are equal. -/
-def sub : VTy → VTy → Bool
+/-- `t` mentions only type variables at which `W` is invariant. -/
+def invIn (W : Nat → Variance) : VTy → Bool
+  | .var j => W j == .inv
+  | .arr t | .opt t => invIn W t
+  | .tup ts => invInL W ts
+  | .ref _ args | .vref _ args => invInL W args
+  | _ => true
+def invInL (W : Nat → Variance) : List VTy → Bool
+  | [] => true
+  | t :: ts => invIn W t && invInL W ts
+end
+
+mutual
+/-- Subtyping, `t ≤ u` (#32): every value of `t` is a value of `u`, under the
+    classes' variances `V`. A reference type with fewer classes is below one
+    with more, and with more type arguments below one with fewer (#39: a
+    `sub(t, u)` is a `base(t)`), each argument related to the other's by the
+    variance of each class there (`subArgs`); arrays, options and tuples are
+    covariant (they are immutable values); otherwise the types are equal. -/
+def sub (V : Variances) : VTy → VTy → Bool
   -- (every value is a `dyn`)
   | _, .dyn => true
-  | .ref ts as, .ref us bs => ts.all us.contains && bs.isPrefixOf as
+  | .ref ts as, .ref us bs => ts.all us.contains && subArgs V ts 0 as bs
   -- (#351) a class's reference fits a view of it whose arguments are among
-  -- the reference's; a reference through views fits one with, for each
-  -- entry, the same one or one with a prefix of its view that the target's
-  -- arguments fit in (an interface's parent sees the classes through a
-  -- prefix of what it does)
+  -- the reference's, at positions where the class is invariant; a reference
+  -- through views fits one with, for each entry, the same one or one with a
+  -- prefix of its view that the target's arguments fit in (an interface's
+  -- parent sees the classes through a prefix of what it does)
   | .ref ts as, .vref es bs => ts.all fun t => es.any fun e =>
-      e.1 == t && e.2.all (fun v => varsBelow as.length v) && bs.isPrefixOf (e.2.map (inst as))
+      e.1 == t && e.2.all (fun v => varsBelow as.length v && invIn (V t) v) && bs.isPrefixOf (e.2.map (inst as))
   | .vref es as, .vref fs bs => es.all (fun e => fs.any fun e' =>
       e'.1 == e.1 && e'.2.isPrefixOf e.2 && (e' == e || decide (bs.length ≤ e'.2.length))) && bs.isPrefixOf as
-  | .arr t, .arr u => sub t u
-  | .opt t, .opt u => sub t u
-  | .tup ts, .tup us => subL ts us
+  | .arr t, .arr u => sub V t u
+  | .opt t, .opt u => sub V t u
+  | .tup ts, .tup us => subL V ts us
   | t, u => decide (t = u)
-def subL : List VTy → List VTy → Bool
+def subL (V : Variances) : List VTy → List VTy → Bool
   | [], [] => true
-  | t :: ts, u :: us => sub t u && subL ts us
+  | t :: ts, u :: us => sub V t u && subL V ts us
   | _, _ => false
+/-- The type arguments `as`, from position `i` on, fit `bs` for every class
+    of `ts`: there are at least as many (more arguments below fewer), and at
+    each of `bs`'s positions every class relates the two by its variance
+    there (`Variance.fits`): equal, the first below the second, or any. -/
+def subArgs (V : Variances) (ts : List Nat) : Nat → List VTy → List VTy → Bool
+  | _, _, [] => true
+  | i, a :: as, b :: bs =>
+    (let le := sub V a b; ts.all fun t => (V t i).fits (decide (a = b)) le) && subArgs V ts (i + 1) as bs
+  | _, [], _ :: _ => false
 end
 
 /-- Every type is below `dyn`. -/
-@[simp] theorem sub_dyn (t : VTy) : t.sub .dyn = true := by cases t <;> rfl
+@[simp] theorem sub_dyn (V : Variances) (t : VTy) : t.sub V .dyn = true := by cases t <;> rfl
 
 /-- Only `dyn` is above `dyn`. -/
-theorem dyn_sub_iff (w : VTy) : VTy.dyn.sub w = true ↔ w = .dyn := by cases w <;> simp [sub]
+theorem dyn_sub_iff (V : Variances) (w : VTy) : VTy.dyn.sub V w = true ↔ w = .dyn := by cases w <;> simp [sub]
 
 end VTy
 
@@ -275,38 +330,41 @@ abbrev HeapTy := List (Nat × List VTy)
 
 mutual
 /-- `v` has type `t`, in a heap whose objects have the classes and type
-    arguments `Ξ`. -/
-def hasTy (Ξ : HeapTy) : Value → VTy → Bool
+    arguments `Ξ`, under the classes' variances `V`: an object made at type
+    arguments `X` has the types `ref ts args` whose classes include its own
+    and whose arguments `X` fit by its class's variances (`VTy.subArgs`),
+    `VTy.ref [t] X ≤ VTy.ref ts args`. -/
+def hasTy (V : Variances) (Ξ : HeapTy) : Value → VTy → Bool
   | _, .dyn => true
   | .int _, .int => true
   | .logic _, .logic => true
   | .char c, .char => decide (c < 256)
   | .float _, .float => true
-  | .arr vs, .arr t => allTy Ξ vs.toList t
-  | .tup vs, .tup ts => allTys Ξ vs ts
+  | .arr vs, .arr t => allTy V Ξ vs.toList t
+  | .tup vs, .tup ts => allTys V Ξ vs ts
   | .none, .opt _ => true
-  | .some v, .opt t => hasTy Ξ v t
+  | .some v, .opt t => hasTy V Ξ v t
   | .ref a, .ref ts args => match Ξ[a]? with
-    | some (t, args') => ts.contains t && args.isPrefixOf args'
+    | some (t, args') => ts.contains t && VTy.subArgs V [t] 0 args' args
     | none => false
   | .ref a, .vref es args => match Ξ[a]? with
     | some (t, args') => es.any fun e => e.1 == t && args.isPrefixOf (e.2.map (VTy.inst args'))
     | none => false
   | _, _ => false
 /-- Every element of `vs` has type `t`. -/
-def allTy (Ξ : HeapTy) : List Value → VTy → Bool
+def allTy (V : Variances) (Ξ : HeapTy) : List Value → VTy → Bool
   | [], _ => true
-  | v :: vs, t => hasTy Ξ v t && allTy Ξ vs t
+  | v :: vs, t => hasTy V Ξ v t && allTy V Ξ vs t
 /-- The elements of `vs` have the types `ts`, pointwise. -/
-def allTys (Ξ : HeapTy) : List Value → List VTy → Bool
+def allTys (V : Variances) (Ξ : HeapTy) : List Value → List VTy → Bool
   | [], [] => true
-  | v :: vs, t :: ts => hasTy Ξ v t && allTys Ξ vs ts
+  | v :: vs, t :: ts => hasTy V Ξ v t && allTys V Ξ vs ts
   | [], _ :: _ => false
   | _ :: _, [] => false
 end
 
 /-- Every value is a `dyn`. -/
-@[simp] theorem hasTy_dyn (Ξ : HeapTy) (v : Value) : hasTy Ξ v .dyn = true := by cases v <;> rfl
+@[simp] theorem hasTy_dyn (V : Variances) (Ξ : HeapTy) (v : Value) : hasTy V Ξ v .dyn = true := by cases v <;> rfl
 
 /-- The certificate of a program's types: each function's parameter types and
     result type, by function index, each class's field types, by tag, and the
@@ -326,9 +384,55 @@ structure Sigs where
       `[some int]`) or relates it to others (`dup(t) := class(pair(t, t))`
       has `[none, some (var 0)]`). -/
   pins : List (List (Option VTy)) := []
+  /-- Each class's variance at each of its Verse Core type arguments (Book of
+      Verse ch. 10; docs/research/variance.md), `inv` past the list: none
+      gives the subtyping and typing of references before variance. The
+      checker checks them against the class table and the pins
+      (`Sigs.VarOK`), and each write against them (`FieldSet`). -/
+  variances : List (List Variance) := []
 
 /-- The pins of class `t`. -/
 def Sigs.pinsOf (S : Sigs) (t : Nat) : List (Option VTy) := (S.pins[t]?).getD []
+
+/-- The variances of the classes, `inv` where the certificate gives none. -/
+def Sigs.var (S : Sigs) : Variances := fun t i => (((S.variances[t]?).getD [])[i]?).getD .inv
+
+mutual
+/-- The class table's field type `t` uses the type arguments of its class as
+    the class's variances `W` say (`V` gives those of the classes it
+    mentions): only where `W` is `co` or `inv` (a variable), and in a
+    reference's argument covariantly where its classes are covariant,
+    invariantly (`VTy.invIn`) where any is invariant. A field read through
+    a reference at other arguments than the object's then gives a value of
+    the reference's field type (`VTy.posIn_sub`). -/
+def VTy.posIn (V : Variances) (W : Nat → Variance) : VTy → Bool
+  | .var j => W j != .bi
+  | .arr t | .opt t => VTy.posIn V W t
+  | .tup ts => VTy.posInL V W ts
+  | .ref us args => VTy.posArgs V W us 0 args
+  | .vref _ args => VTy.invInL W args
+  | _ => true
+def VTy.posInL (V : Variances) (W : Nat → Variance) : List VTy → Bool
+  | [] => true
+  | t :: ts => VTy.posIn V W t && VTy.posInL V W ts
+def VTy.posArgs (V : Variances) (W : Nat → Variance) (us : List Nat) : Nat → List VTy → Bool
+  | _, [] => true
+  | i, a :: as =>
+    (let p := VTy.posIn V W a; us.all fun u => match V u i with
+      | .inv => VTy.invIn W a
+      | .co => p
+      | .bi => true) && VTy.posArgs V W us (i + 1) as
+end
+
+/-- The certificate's variances agree with the class table and the pins: each
+    class's fields use its type arguments as its variances say (`VTy.posIn`),
+    and its pins (#142) mention only its invariant ones, a pinned argument
+    being invariant too (a refinement by pins is an equation, which a
+    reference at other arguments than the object's would make false). -/
+def Sigs.VarOK (S : Sigs) : Prop :=
+  ∀ t fs, S.classes[t]? = some fs →
+    (∀ f ∈ fs, VTy.posIn S.var (S.var t) f = true) ∧
+    ∀ i c, (S.pinsOf t)[i]? = some (some c) → S.var t i = .inv ∧ VTy.invIn (S.var t) c = true
 
 mutual
 /-- Whether type variable `j` occurs in a type. -/
@@ -342,6 +446,66 @@ def VTy.hasVarL (j : Nat) : List VTy → Bool
   | [] => false
   | t :: ts => VTy.hasVar j t || VTy.hasVarL j ts
 end
+
+/-- The more restrictive of two variances (`bi` below `co` below `inv`). -/
+def Variance.join : Variance → Variance → Variance
+  | .bi, w | w, .bi => w
+  | .co, .co => .co
+  | _, _ => .inv
+
+mutual
+/-- How a field type uses type variable `i`, under the classes' variances `V`:
+    not at all (or only at bivariant positions) `bi`, positively `co`, at an
+    invariant position or in a view `inv`: the least variance at `i` that
+    `VTy.posIn` accepts it at. -/
+def VTy.useOf (V : Variances) (i : Nat) : VTy → Variance
+  | .var j => if j == i then .co else .bi
+  | .arr t | .opt t => VTy.useOf V i t
+  | .tup ts => VTy.useOfL V i ts
+  | .ref us args => VTy.useArgs V i us 0 args
+  | .vref _ args => if VTy.hasVarL i args then .inv else .bi
+  | _ => .bi
+def VTy.useOfL (V : Variances) (i : Nat) : List VTy → Variance
+  | [] => .bi
+  | t :: ts => (VTy.useOf V i t).join (VTy.useOfL V i ts)
+def VTy.useArgs (V : Variances) (i : Nat) (us : List Nat) : Nat → List VTy → Variance
+  | _, [] => .bi
+  | p, a :: as =>
+    (let u := VTy.useOf V i a; let h := VTy.hasVar i a
+     us.foldl (fun (acc : Variance) c => acc.join (match V c p with
+       | .inv => if h then .inv else .bi
+       | .co => u
+       | .bi => .bi)) Variance.bi).join (VTy.useArgs V i us (p + 1) as)
+end
+
+/-- The variances the front end gives the classes (Book of Verse ch. 10;
+    docs/research/variance.md): for each class, by tag, the most permissive
+    at each of its `arity` type arguments that its fields (`VTy.useOf`), its
+    pins and `fixed` allow (`fixed t i`: argument `i` of class `t` is
+    invariant, as a field written through a reference or a view mentions
+    it). Found by iterating from all `bi` up to a fixpoint (each step only
+    raises a variance, so at most twice as many steps as arguments, and it
+    stops at the first that changes nothing); `Sigs.checkVarOK` checks what
+    it gives, whatever it is. -/
+def Sigs.inferVariances (S : Sigs) (arity : Nat → Nat) (fixed : Nat → Nat → Bool) : List (List Variance) :=
+  let n := S.classes.length
+  let total := (List.range n).foldl (fun acc t => acc + arity t) 0
+  let pinned (t i : Nat) : Bool :=
+    (S.pinsOf t).zipIdx.any fun (o, j) => match o with
+      | some c => j == i || VTy.hasVar i c
+      | none => false
+  let step (cur : List (List Variance)) : List (List Variance) :=
+    let V : Variances := ({ fns := [], variances := cur } : Sigs).var
+    (List.range n).map fun t =>
+      let fs := (S.classes[t]?).getD []
+      (List.range (arity t)).map fun i =>
+        if fixed t i || pinned t i then .inv
+        else fs.foldl (fun acc f => acc.join (VTy.useOf V i f)) .bi
+  let start := (List.range n).map fun t => List.replicate (arity t) Variance.bi
+  let rec go : Nat → List (List Variance) → List (List Variance)
+    | 0, cur => cur
+    | fuel + 1, cur => let nxt := step cur; if nxt == cur then cur else go fuel nxt
+  go (2 * total + 2) start
 
 /-- The type arguments among `args` that a class's pins `ps` fix (#142),
     each with its pin (over the arguments: see `VTy.pinsOK`). -/
@@ -435,16 +599,22 @@ def FieldTy (S : Sigs) (ts : List Nat) (args : List VTy) (k : Nat) (τ : VTy) : 
   ∀ t ∈ ts, ∃ fs f, S.classes[t]? = some fs ∧ fs[k]? = some f ∧ f.varsBelow args.length = true ∧
     f.inst args = τ
 
+/-- Field `k` of every class of `ts` mentions only type arguments at which its
+    class is invariant: a write through a reference whose arguments the
+    object's fit by variance writes at the object's own field type. -/
+def FieldSet (S : Sigs) (ts : List Nat) (k : Nat) : Prop :=
+  ∀ t ∈ ts, ∃ fs f, S.classes[t]? = some fs ∧ fs[k]? = some f ∧ VTy.invIn (S.var t) f = true
+
 mutual
 /-- `Typed S Γ ρ e τ`: in a function whose slots have types `Γ` and whose
     result type is `ρ`, `e` has type `τ`. `break`, `return`, `false?` and
     `Err()` have every type. -/
 inductive Typed (S : Sigs) (Γ : List VTy) (ρ : VTy) : Expr → VTy → Prop
   /-- A literal may refer only to the prototypes, which every heap starts with. -/
-  | lit {v τ} : hasTy S.protos v τ = true → Typed S Γ ρ (.lit v) τ
+  | lit {v τ} : hasTy S.var S.protos v τ = true → Typed S Γ ρ (.lit v) τ
   | local {i τ} : Γ[i]? = some τ → Typed S Γ ρ (.local i) τ
   /-- Subsumption: an expression of a type has every type above it (#32). -/
-  | sub {e t u} : Typed S Γ ρ e t → t.sub u = true → Typed S Γ ρ e u
+  | sub {e t u} : Typed S Γ ρ e t → t.sub S.var u = true → Typed S Γ ρ e u
   | assign {i e τ} : Γ[i]? = some τ → Typed S Γ ρ e τ → Typed S Γ ρ (.assign i e) τ
   | seq {a b σ τ} : Typed S Γ ρ a σ → Typed S Γ ρ b τ → Typed S Γ ρ (.seq a b) τ
   | prim {op es ts τ} : TypedL S Γ ρ es ts → PrimTy op ts τ → Typed S Γ ρ (.prim op es) τ
@@ -466,7 +636,7 @@ inductive Typed (S : Sigs) (Γ : List VTy) (ρ : VTy) : Expr → VTy → Prop
   | heap_get {k e ts args τ} : Typed S Γ ρ e (.ref ts args) → FieldTy S ts args k τ →
       Typed S Γ ρ (.heap (.get k) [e]) τ
   | heap_set {k e v ts args τ} : Typed S Γ ρ e (.ref ts args) → FieldTy S ts args k τ →
-      Typed S Γ ρ v τ → Typed S Γ ρ (.heap (.set k) [e, v]) τ
+      FieldSet S ts k → Typed S Γ ρ v τ → Typed S Γ ρ (.heap (.set k) [e, v]) τ
   | heap_tag {e ts args} : Typed S Γ ρ e (.ref ts args) → Typed S Γ ρ (.heap .tag [e]) .int
   /-- A cast: it fails unless the object's class is one of `us`. -/
   | heap_isTag {e ts args us} : Typed S Γ ρ e (.ref ts args) →
@@ -490,8 +660,8 @@ inductive Typed (S : Sigs) (Γ : List VTy) (ρ : VTy) : Expr → VTy → Prop
       VTy.varsBelowL N a = true → VTy.varsBelowL N σs = true → τ'.varsBelow N = true →
       ViewRefines P φ a (VTy.ext N k) μ →
       S.fns[f]? = some (ps, τ) → TypedL S Γ ρ es σs →
-      VTy.subL ((VTy.ref us (VTy.ext N k) :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) = true →
-      (τ.subst θ).sub (τ'.subst μ) = true → Typed S Γ ρ e τ' →
+      VTy.subL S.var ((VTy.ref us (VTy.ext N k) :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) = true →
+      (τ.subst θ).sub S.var (τ'.subst μ) = true → Typed S Γ ρ e τ' →
       Typed S Γ ρ (.ite (.heap (.isTag us) [.local y]) (.call f (.local y :: es)) e) τ'
   /-- When no substitution makes the `k` fresh arguments agree with the
       pins and `a` a prefix of the view at them, the call through the view
@@ -522,8 +692,8 @@ inductive Typed (S : Sigs) (Γ : List VTy) (ρ : VTy) : Expr → VTy → Prop
       VTy.varsBelowL N a = true → VTy.varsBelowL N σs = true → τ'.varsBelow N = true →
       PinRefines P (a ++ VTy.ext N k) μ →
       S.fns[f]? = some (ps, τ) → TypedL S Γ ρ es σs →
-      VTy.subL ((VTy.ref us (a ++ VTy.ext N k) :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) = true →
-      (τ.subst θ).sub (τ'.subst μ) = true → Typed S Γ ρ e τ' →
+      VTy.subL S.var ((VTy.ref us (a ++ VTy.ext N k) :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) = true →
+      (τ.subst θ).sub S.var (τ'.subst μ) = true → Typed S Γ ρ e τ' →
       Typed S Γ ρ (.ite (.heap (.isTag us) [.local y]) (.call f (.local y :: es)) e) τ'
   /-- When no substitution makes `a ++ ext` agree with the pins, the call
       cannot run: no object of a class of `us` has type arguments starting
@@ -557,7 +727,7 @@ mutual
     type `t.subst θ` whenever the parameters hold values of their types
     under `θ`. -/
 inductive DefaultE (S : Sigs) (a : Nat) (Γ : List VTy) : Expr → VTy → Prop
-  | lit {v t} : hasTy S.protos v t = true → DefaultE S a Γ (.lit v) t
+  | lit {v t} : hasTy S.var S.protos v t = true → DefaultE S a Γ (.lit v) t
   | param {i t} : i < a → Γ[i]? = some t → DefaultE S a Γ (.local i) t
   | tup {ds ts} : DefaultEL S a Γ ds ts → DefaultE S a Γ (.prim .mkTup ds) (.tup ts)
   | new {t ds fs ts args} : S.classes[t]? = some fs → t ∈ ts → VTy.pinsOK (S.pinsOf t) args = true →
@@ -568,7 +738,7 @@ inductive DefaultE (S : Sigs) (a : Nat) (Γ : List VTy) : Expr → VTy → Prop
   | field {i k ts args τ} : i < a → Γ[i]? = some (.ref ts args) → FieldTy S ts args k τ →
       DefaultE S a Γ (.heap (.get k) [.local i]) τ
   /-- A default is also one of every type above its own. -/
-  | sub {d t u} : DefaultE S a Γ d t → t.sub u = true → DefaultE S a Γ d u
+  | sub {d t u} : DefaultE S a Γ d t → t.sub S.var u = true → DefaultE S a Γ d u
 inductive DefaultEL (S : Sigs) (a : Nat) (Γ : List VTy) : List Expr → List VTy → Prop
   | nil : DefaultEL S a Γ [] []
   | cons {d ds t ts} : DefaultE S a Γ d t → DefaultEL S a Γ ds ts →
@@ -587,9 +757,11 @@ structure FnTyped (S : Sigs) (fn : Fn) (ps : List VTy) (ρ : VTy) (Γ : List VTy
     at every instance, `Typed.subst`). -/
 def Sigs.ClosedProtos (S : Sigs) : Prop := ∀ p ∈ S.protos, VTy.closedL p.2 = true
 
-/-- What `Typed.subst` needs of the certificate. (A `new` agrees with its
-    class's pins at every instance, whatever they are: `VTy.pinsOK_subst`.) -/
-def Sigs.Closed (S : Sigs) : Prop := S.ClosedProtos
+/-- What the proofs need of the certificate: closed prototypes, for
+    `Typed.subst` (a `new` agrees with its class's pins at every instance,
+    whatever they are: `VTy.pinsOK_subst`), and variances that agree with
+    the class table and the pins (`Sigs.VarOK`), for reads and dispatch. -/
+def Sigs.Closed (S : Sigs) : Prop := S.ClosedProtos ∧ S.VarOK
 
 /-- The heap typing `Ξ` is the heap's: one entry per object, its class and
     type arguments, and every object has its class's field types at them. -/
@@ -597,7 +769,7 @@ def HeapOK (S : Sigs) (Ξ : HeapTy) (h : Array Obj) : Prop :=
   Ξ.length = h.size ∧
   (∀ (a : Nat) (o : Obj), h.toList[a]? = some o →
     ∃ args fs, Ξ[a]? = some (o.tag, args) ∧ S.classes[o.tag]? = some fs ∧
-      allTys Ξ o.fields (fs.map (VTy.inst args)) = true ∧ VTy.pinsOK (S.pinsOf o.tag) args = true) ∧
+      allTys S.var Ξ o.fields (fs.map (VTy.inst args)) = true ∧ VTy.pinsOK (S.pinsOf o.tag) args = true) ∧
   -- the heap starts with the prototypes (#37)
   S.protos <+: Ξ
 
@@ -630,20 +802,20 @@ def ProgTyped (P : Prog) (S : Sigs) : Prop :=
 
 
 /-- A frame agrees with slot types `Γ`. -/
-def FrameOK (Ξ : HeapTy) (Γ : List VTy) (fr : List Value) : Prop := allTys Ξ fr Γ = true
+def FrameOK (V : Variances) (Ξ : HeapTy) (Γ : List VTy) (fr : List Value) : Prop := allTys V Ξ fr Γ = true
 
 /-- What a typed expression's outcome can be: a value of its type, a
     `return` of a value of the result type, anything else but a type error. -/
-def ResOK (Ξ : HeapTy) (τ ρ : VTy) : Res → Prop
-  | .ok v => hasTy Ξ v τ = true
-  | .ret v => hasTy Ξ v ρ = true
+def ResOK (V : Variances) (Ξ : HeapTy) (τ ρ : VTy) : Res → Prop
+  | .ok v => hasTy V Ξ v τ = true
+  | .ret v => hasTy V Ξ v ρ = true
   | .err k => k ≠ .type
   | .fail => True
   | .brk => True
 
-def LResOK (Ξ : HeapTy) (ts : List VTy) (ρ : VTy) : LRes → Prop
-  | .ok vs => allTys Ξ vs ts = true
-  | .stop r => ResOK Ξ VTy.void ρ r ∧ r.isOk = false
+def LResOK (V : Variances) (Ξ : HeapTy) (ts : List VTy) (ρ : VTy) : LRes → Prop
+  | .ok vs => allTys V Ξ vs ts = true
+  | .stop r => ResOK V Ξ VTy.void ρ r ∧ r.isOk = false
 
 /-! ### `veq` on values of one type -/
 
@@ -664,8 +836,8 @@ end
 open Value in
 /-- Two values of one type without `dyn` have one constructor, but for an
     empty option and a full one. -/
-theorem hasTy_kind (Ξ : HeapTy) (a b : Value) (τ : VTy) (hτ : τ.dynFree = true)
-    (ha : hasTy Ξ a τ = true) (hb : hasTy Ξ b τ = true) :
+theorem hasTy_kind (V : Variances) (Ξ : HeapTy) (a b : Value) (τ : VTy) (hτ : τ.dynFree = true)
+    (ha : hasTy V Ξ a τ = true) (hb : hasTy V Ξ b τ = true) :
     kind a = kind b ∨ (kind a = 6 ∧ kind b = 7) ∨ (kind a = 7 ∧ kind b = 6) := by
   cases τ <;> simp [VTy.dynFree] at hτ <;> cases a <;> simp_all [hasTy, Value.kind] <;> cases b <;>
     simp_all [hasTy]
@@ -676,14 +848,14 @@ mutual
     the empty value one way, so only a comparison of values of different
     types (in generic code, across types, or boxed as `dyn`s) can tell `veq`
     from `=`. -/
-theorem veq_iff_eq_of_hasTy (Ξ : HeapTy) : ∀ (a b : Value) (τ : VTy), τ.dynFree = true →
-    hasTy Ξ a τ = true → hasTy Ξ b τ = true → (veq a b = true ↔ a = b)
+theorem veq_iff_eq_of_hasTy (V : Variances) (Ξ : HeapTy) : ∀ (a b : Value) (τ : VTy), τ.dynFree = true →
+    hasTy V Ξ a τ = true → hasTy V Ξ b τ = true → (veq a b = true ↔ a = b)
   | .int x, .int y, _, _, _, _ => by simp [veq]
   | .logic x, .logic y, _, _, _, _ => by cases x <;> cases y <;> simp [veq]
   | .char x, .char y, _, _, _, _ => by simp [veq]
   | .float x, .float y, _, _, _, _ => by simp [veq]
   | .arr a, .arr b, .arr t, hτ, ha, hb => by
-    have ih := veqList_iff_eq_of_allTy Ξ a.toList b.toList t (by simpa [VTy.dynFree] using hτ)
+    have ih := veqList_iff_eq_of_allTy V Ξ a.toList b.toList t (by simpa [VTy.dynFree] using hτ)
       (by simpa [hasTy] using ha) (by simpa [hasTy] using hb)
     simp only [veq, Bool.and_eq_true, beq_iff_eq, Value.arr.injEq]
     rw [ih]
@@ -691,14 +863,14 @@ theorem veq_iff_eq_of_hasTy (Ξ : HeapTy) : ∀ (a b : Value) (τ : VTy), τ.dyn
     · rintro ⟨-, h⟩; exact Array.toList_inj.mp h
     · rintro rfl; exact ⟨rfl, rfl⟩
   | .tup xs, .tup ys, .tup ts, hτ, ha, hb => by
-    have ih := veqList_iff_eq_of_allTys Ξ xs ys ts (by simpa [VTy.dynFree] using hτ)
+    have ih := veqList_iff_eq_of_allTys V Ξ xs ys ts (by simpa [VTy.dynFree] using hτ)
       (by simpa [hasTy] using ha) (by simpa [hasTy] using hb)
     simp only [veq, Value.tup.injEq]; exact ih
   | .none, .none, _, _, _, _ => by simp [veq]
   | .none, .some _, _, _, _, _ => by simp [veq, isEmpty]
   | .some _, .none, _, _, _, _ => by simp [veq, isEmpty]
   | .some x, .some y, .opt t, hτ, ha, hb => by
-    have ih := veq_iff_eq_of_hasTy Ξ x y t (by simpa [VTy.dynFree] using hτ)
+    have ih := veq_iff_eq_of_hasTy V Ξ x y t (by simpa [VTy.dynFree] using hτ)
       (by simpa [hasTy] using ha) (by simpa [hasTy] using hb)
     simp only [veq, Value.some.injEq]; exact ih
   | .ref x, .ref y, _, _, _, _ => by simp [veq]
@@ -739,19 +911,19 @@ theorem veq_iff_eq_of_hasTy (Ξ : HeapTy) : ∀ (a b : Value) (τ : VTy), τ.dyn
   | .ref _, .char _, τ, hτ, ha, hb | .ref _, .float _, τ, hτ, ha, hb | .ref _, .arr _, τ, hτ, ha, hb
   | .ref _, .tup _, τ, hτ, ha, hb
   | .ref _, .none, τ, hτ, ha, hb | .ref _, .some _, τ, hτ, ha, hb =>
-    absurd (hasTy_kind Ξ _ _ τ hτ ha hb) (by simp [kind])
-theorem veqList_iff_eq_of_allTy (Ξ : HeapTy) : ∀ (xs ys : List Value) (t : VTy), t.dynFree = true →
-    allTy Ξ xs t = true → allTy Ξ ys t = true → (veqList xs ys = true ↔ xs = ys)
+    absurd (hasTy_kind V Ξ _ _ τ hτ ha hb) (by simp [kind])
+theorem veqList_iff_eq_of_allTy (V : Variances) (Ξ : HeapTy) : ∀ (xs ys : List Value) (t : VTy), t.dynFree = true →
+    allTy V Ξ xs t = true → allTy V Ξ ys t = true → (veqList xs ys = true ↔ xs = ys)
   | [], [], _, _, _, _ => by simp [veqList]
   | [], _ :: _, _, _, _, _ => by simp [veqList]
   | _ :: _, [], _, _, _, _ => by simp [veqList]
   | x :: xs, y :: ys, t, hτ, ha, hb => by
     simp only [allTy, Bool.and_eq_true] at ha hb
     simp only [veqList, Bool.and_eq_true, List.cons.injEq]
-    rw [veq_iff_eq_of_hasTy Ξ x y t hτ ha.1 hb.1, veqList_iff_eq_of_allTy Ξ xs ys t hτ ha.2 hb.2]
-theorem veqList_iff_eq_of_allTys (Ξ : HeapTy) : ∀ (xs ys : List Value) (ts : List VTy),
+    rw [veq_iff_eq_of_hasTy V Ξ x y t hτ ha.1 hb.1, veqList_iff_eq_of_allTy V Ξ xs ys t hτ ha.2 hb.2]
+theorem veqList_iff_eq_of_allTys (V : Variances) (Ξ : HeapTy) : ∀ (xs ys : List Value) (ts : List VTy),
     VTy.dynFreeL ts = true →
-    allTys Ξ xs ts = true → allTys Ξ ys ts = true → (veqList xs ys = true ↔ xs = ys)
+    allTys V Ξ xs ts = true → allTys V Ξ ys ts = true → (veqList xs ys = true ↔ xs = ys)
   | [], [], _, _, _, _ => by simp [veqList]
   | [], _ :: _, _, _, _, hb => by cases ‹List VTy› <;> simp_all [allTys]
   | _ :: _, [], _, _, ha, _ => by cases ‹List VTy› <;> simp_all [allTys]
@@ -759,7 +931,7 @@ theorem veqList_iff_eq_of_allTys (Ξ : HeapTy) : ∀ (xs ys : List Value) (ts : 
     simp only [allTys, Bool.and_eq_true] at ha hb
     simp only [VTy.dynFreeL, Bool.and_eq_true] at hτ
     simp only [veqList, Bool.and_eq_true, List.cons.injEq]
-    rw [veq_iff_eq_of_hasTy Ξ x y t hτ.1 ha.1 hb.1, veqList_iff_eq_of_allTys Ξ xs ys ts hτ.2 ha.2 hb.2]
+    rw [veq_iff_eq_of_hasTy V Ξ x y t hτ.1 ha.1 hb.1, veqList_iff_eq_of_allTys V Ξ xs ys ts hτ.2 ha.2 hb.2]
   | _ :: _, _ :: _, [], _, ha, _ => by simp [allTys] at ha
 end
 

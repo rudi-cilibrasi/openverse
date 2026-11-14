@@ -114,7 +114,7 @@ open Value
 
 /-! ### Every box is a `dyn` -/
 
-theorem box_dyn (Ξ : HeapTy) (c : Code) (v : Value) : hasTy Ξ (c.box v) .dyn = true := hasTy_dyn Ξ _
+theorem box_dyn (V : Variances) (Ξ : HeapTy) (c : Code) (v : Value) : hasTy V Ξ (c.box v) .dyn = true := hasTy_dyn V Ξ _
 
 /-! ### Boxing preserves and reflects `veq` on one code -/
 
@@ -130,8 +130,8 @@ theorem Code.veqList_map_of {f : Value → Value} {P : Value → Prop}
     rw [hf x y (hx x (by simp)) (hy y (by simp)),
       Code.veqList_map_of hf xs ys (fun x' h => hx x' (by simp [h])) (fun y' h => hy y' (by simp [h]))]
 
-theorem Code.allTy_mem {Ξ : HeapTy} {xs : List Value} {t : VTy} (h : allTy Ξ xs t = true) :
-    ∀ x ∈ xs, hasTy Ξ x t = true := by
+theorem Code.allTy_mem {V : Variances} {Ξ : HeapTy} {xs : List Value} {t : VTy} (h : allTy V Ξ xs t = true) :
+    ∀ x ∈ xs, hasTy V Ξ x t = true := by
   induction xs with
   | nil => simp
   | cons y ys ih =>
@@ -141,7 +141,7 @@ theorem Code.allTy_mem {Ξ : HeapTy} {xs : List Value} {t : VTy} (h : allTy Ξ x
     · exact h.1
     · exact ih h.2 x hx
 
-theorem Code.allTys_length {Ξ : HeapTy} : ∀ {xs : List Value} {ts : List VTy}, allTys Ξ xs ts = true →
+theorem Code.allTys_length {V : Variances} {Ξ : HeapTy} : ∀ {xs : List Value} {ts : List VTy}, allTys V Ξ xs ts = true →
     xs.length = ts.length
   | [], [], _ => rfl
   | _ :: _, _ :: _, h => by
@@ -163,24 +163,24 @@ mutual
 /-- **Boxing preserves and reflects Verse's equality on one code**: two
     values of a comparable type have equal boxes exactly when they are
     equal. -/
-theorem veq_box (Ξ : HeapTy) : ∀ (c : Code) (a b : Value), hasTy Ξ a c.vty = true →
-    hasTy Ξ b c.vty = true → veq (c.box a) (c.box b) = veq a b
+theorem veq_box (V : Variances) (Ξ : HeapTy) : ∀ (c : Code) (a b : Value), hasTy V Ξ a c.vty = true →
+    hasTy V Ξ b c.vty = true → veq (c.box a) (c.box b) = veq a b
   | .id _, _, _, _, _ => rfl
   | .tagged k c, a, b, ha, hb => by
     simp only [Code.box, veq, veqList, beq_self_eq_true, Bool.true_and, Bool.and_true]
-    exact veq_box Ξ c a b ha hb
+    exact veq_box V Ξ c a b ha hb
   | .fields cs, a, b, ha, hb => by
     cases a <;> simp [Code.vty, hasTy] at ha
     cases b <;> simp [Code.vty, hasTy] at hb
     rename_i xs ys
     simp only [Code.box, veq]
-    exact veq_boxL Ξ cs xs ys ha hb
+    exact veq_boxL V Ξ cs xs ys ha hb
   | .tuple cs, a, b, ha, hb => by
     cases a <;> simp [Code.vty, hasTy] at ha
     cases b <;> simp [Code.vty, hasTy] at hb
     rename_i xs ys
     simp only [Code.box, veq, List.size_toArray]
-    rw [veq_boxL Ξ cs xs ys ha hb,
+    rw [veq_boxL V Ξ cs xs ys ha hb,
       Code.boxL_length cs xs (by rw [Code.allTys_length ha, Code.vtyL_length]),
       Code.boxL_length cs ys (by rw [Code.allTys_length hb, Code.vtyL_length])]
     simp
@@ -189,17 +189,17 @@ theorem veq_box (Ξ : HeapTy) : ∀ (c : Code) (a b : Value), hasTy Ξ a c.vty =
     cases b <;> simp [Code.vty, hasTy] at hb
     rename_i xs ys
     simp only [Code.box, veq, Array.size, List.length_map]
-    rw [Code.veqList_map_of (P := fun v => hasTy Ξ v c.vty = true) (fun a b ha hb => veq_box Ξ c a b ha hb)
+    rw [Code.veqList_map_of (P := fun v => hasTy V Ξ v c.vty = true) (fun a b ha hb => veq_box V Ξ c a b ha hb)
       xs.toList ys.toList (Code.allTy_mem ha) (Code.allTy_mem hb)]
   | .option c, a, b, ha, hb => by
     cases a <;> simp [Code.vty, hasTy] at ha <;> cases b <;> simp [Code.vty, hasTy] at hb <;>
       simp [Code.box, veq, isEmpty]
-    exact veq_box Ξ c _ _ ha hb
+    exact veq_box V Ξ c _ _ ha hb
   | .map k w, a, b, ha, hb => by
     cases a <;> simp [Code.vty, hasTy] at ha
     cases b <;> simp [Code.vty, hasTy] at hb
     rename_i xs ys
-    have hpair : ∀ p q, hasTy Ξ p (.tup [k.vty, w.vty]) = true → hasTy Ξ q (.tup [k.vty, w.vty]) = true →
+    have hpair : ∀ p q, hasTy V Ξ p (.tup [k.vty, w.vty]) = true → hasTy V Ξ q (.tup [k.vty, w.vty]) = true →
         veq (Code.boxPair (Code.box k) (Code.box w) p) (Code.boxPair (Code.box k) (Code.box w) q) = veq p q := by
       intro p q hp hq
       cases p <;> simp [hasTy] at hp
@@ -208,8 +208,8 @@ theorem veq_box (Ξ : HeapTy) : ∀ (c : Code) (a b : Value), hasTy Ξ a c.vty =
       rcases ps with _ | ⟨p1, _ | ⟨p2, _ | ⟨p3, ps⟩⟩⟩ <;> simp [allTys] at hp
       rcases qs with _ | ⟨q1, _ | ⟨q2, _ | ⟨q3, qs⟩⟩⟩ <;> simp [allTys] at hq
       simp only [Code.boxPair, veq, veqList]
-      rw [veq_box Ξ k p1 q1 hp.1 hq.1, veq_box Ξ w p2 q2 hp.2 hq.2]
-    have hl := Code.veqList_map_of (P := fun v => hasTy Ξ v (.tup [k.vty, w.vty]) = true) hpair
+      rw [veq_box V Ξ k p1 q1 hp.1 hq.1, veq_box V Ξ w p2 q2 hp.2 hq.2]
+    have hl := Code.veqList_map_of (P := fun v => hasTy V Ξ v (.tup [k.vty, w.vty]) = true) hpair
       xs.toList ys.toList (Code.allTy_mem ha) (Code.allTy_mem hb)
     rcases xs with ⟨_ | ⟨x, xs⟩⟩ <;> rcases ys with ⟨_ | ⟨y, ys⟩⟩ <;>
       simp_all [Code.box, veq, isEmpty, veqList]
@@ -219,7 +219,7 @@ theorem veq_box (Ξ : HeapTy) : ∀ (c : Code) (a b : Value), hasTy Ξ a c.vty =
     rename_i xs ys
     rcases xs with _ | ⟨x1, _ | ⟨x2, _ | ⟨x3, xs⟩⟩⟩ <;> simp [allTys] at ha
     rcases ys with _ | ⟨y1, _ | ⟨y2, _ | ⟨y3, ys⟩⟩⟩ <;> simp [allTys] at hb
-    have hint : ∀ v : Value, hasTy Ξ v .int = true → ∃ n, v = .int n := by
+    have hint : ∀ v : Value, hasTy V Ξ v .int = true → ∃ n, v = .int n := by
       intro v hv; cases v <;> simp_all [hasTy]
     obtain ⟨n, rfl⟩ := hint x1 ha.1
     obtain ⟨d, rfl⟩ := hint x2 ha.2
@@ -227,14 +227,14 @@ theorem veq_box (Ξ : HeapTy) : ∀ (c : Code) (a b : Value), hasTy Ξ a c.vty =
     obtain ⟨e, rfl⟩ := hint y2 hb.2
     by_cases hd : d = 1 <;> by_cases he : e = 1 <;> simp [Code.box, veq, veqList, hd, he, isEmpty]
     all_goals omega
-theorem veq_boxL (Ξ : HeapTy) : ∀ (cs : List Code) (xs ys : List Value),
-    allTys Ξ xs (Code.vtyL cs) = true → allTys Ξ ys (Code.vtyL cs) = true →
+theorem veq_boxL (V : Variances) (Ξ : HeapTy) : ∀ (cs : List Code) (xs ys : List Value),
+    allTys V Ξ xs (Code.vtyL cs) = true → allTys V Ξ ys (Code.vtyL cs) = true →
     veqList (Code.boxL cs xs) (Code.boxL cs ys) = veqList xs ys
   | [], [], [], _, _ => rfl
   | c :: cs, x :: xs, y :: ys, hx, hy => by
     simp only [Code.vtyL, allTys, Bool.and_eq_true] at hx hy
     simp only [Code.boxL, veqList]
-    rw [veq_box Ξ c x y hx.1 hy.1, veq_boxL Ξ cs xs ys hx.2 hy.2]
+    rw [veq_box V Ξ c x y hx.1 hy.1, veq_boxL V Ξ cs xs ys hx.2 hy.2]
   | [], _ :: _, _, hx, _ | [], _, _ :: _, _, hy => by simp [Code.vtyL, allTys] at *
   | _ :: _, [], _, hx, _ | _ :: _, _, [], _, hy => by simp [Code.vtyL, allTys] at *
 end
@@ -242,10 +242,10 @@ end
 /-- Boxes of two values of one comparable type are equal exactly when the
     values are (when the type has no `comparable` inside, whose values may
     hold the empty value several ways). -/
-theorem box_veq_iff_eq (Ξ : HeapTy) (c : Code) (a b : Value) (hc : c.vty.dynFree = true)
-    (ha : hasTy Ξ a c.vty = true) (hb : hasTy Ξ b c.vty = true) :
+theorem box_veq_iff_eq (V : Variances) (Ξ : HeapTy) (c : Code) (a b : Value) (hc : c.vty.dynFree = true)
+    (ha : hasTy V Ξ a c.vty = true) (hb : hasTy V Ξ b c.vty = true) :
     veq (c.box a) (c.box b) = true ↔ a = b := by
-  rw [veq_box Ξ c a b ha hb]; exact veq_iff_eq_of_hasTy Ξ a b c.vty hc ha hb
+  rw [veq_box V Ξ c a b ha hb]; exact veq_iff_eq_of_hasTy V Ξ a b c.vty hc ha hb
 
 /-! ### Different codes: never equal -/
 
@@ -259,8 +259,8 @@ theorem box_tag_ne {k l : Nat} (hkl : k ≠ l) (c d : Code) (a b : Value) :
     (an `int`, a `float`, a `logic`, a `char`, an array, an option, a tuple,
     `tuple()`, a `<unique>` object): an enum's value is no int, a struct no
     tuple. -/
-theorem box_plain_tagged (Ξ : HeapTy) (c : Code) (hc : c.plain = true) (a : Value)
-    (ha : hasTy Ξ a c.vty = true) (k : Nat) (d : Code) (b : Value) :
+theorem box_plain_tagged (V : Variances) (Ξ : HeapTy) (c : Code) (hc : c.plain = true) (a : Value)
+    (ha : hasTy V Ξ a c.vty = true) (k : Nat) (d : Code) (b : Value) :
     veq (c.box a) ((Code.tagged k d).box b) = false := by
   cases c with
   | id t =>
@@ -279,7 +279,7 @@ theorem box_plain_tagged (Ξ : HeapTy) (c : Code) (hc : c.plain = true) (a : Val
   | _ => simp [Code.plain] at hc
 
 /-- A map's box equals a tagged box only under the map's code, 2. -/
-theorem box_map_tagged (Ξ : HeapTy) (ck cv : Code) (a : Value) (ha : hasTy Ξ a (Code.map ck cv).vty = true)
+theorem box_map_tagged (V : Variances) (Ξ : HeapTy) (ck cv : Code) (a : Value) (ha : hasTy V Ξ a (Code.map ck cv).vty = true)
     (k : Nat) (d : Code) (b : Value)
     (h : veq ((Code.map ck cv).box a) ((Code.tagged k d).box b) = true) : k = 2 := by
   cases a <;> simp [Code.vty, hasTy] at ha
@@ -291,13 +291,13 @@ theorem box_map_tagged (Ξ : HeapTy) (ck cv : Code) (a : Value) (ha : hasTy Ξ a
 
 /-- A rational's box equals a tagged box only under the code of rationals,
     1 (an integral one is its int, which no tagged box is). -/
-theorem box_rational_tagged (Ξ : HeapTy) (a : Value) (ha : hasTy Ξ a Code.rational.vty = true)
+theorem box_rational_tagged (V : Variances) (Ξ : HeapTy) (a : Value) (ha : hasTy V Ξ a Code.rational.vty = true)
     (k : Nat) (d : Code) (b : Value)
     (h : veq (Code.rational.box a) ((Code.tagged k d).box b) = true) : k = 1 := by
   cases a <;> simp [Code.vty, hasTy] at ha
   rename_i xs
   rcases xs with _ | ⟨x1, _ | ⟨x2, _ | ⟨x3, xs⟩⟩⟩ <;> simp [allTys] at ha
-  have hint : ∀ v : Value, hasTy Ξ v .int = true → ∃ n, v = .int n := by
+  have hint : ∀ v : Value, hasTy V Ξ v .int = true → ∃ n, v = .int n := by
     intro v hv; cases v <;> simp_all [hasTy]
   obtain ⟨n, rfl⟩ := hint x1 ha.1
   obtain ⟨e, rfl⟩ := hint x2 ha.2

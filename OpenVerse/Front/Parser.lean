@@ -832,13 +832,19 @@ partial def parsePostfix (stop : Nat) : PM SExpr := do
                 ts := #[← parseType]
                 while (← peekT).isSym "," do bump; ts := ts.push (← parseType)
               expectSym ")"
-              if ← fieldsFollow stop then return some (n, ts.toList)
+              if ← fieldsFollow stop then return some (n, ts.toList, false)
+              -- (an archetype block with no fields: `C(args):` and nothing
+              -- indented below, `C(args){}`; Book of Verse tests,
+              -- ParametricTypes.versetest's `X:sup_f(sub) := sub_f(sup):`)
+              if (← peekT).isSym ":" && !(← peekT).bol && (← peekT 1).offside stop then
+                return some (n, ts.toList, true)
               return none) <|> pure none
           if r.isNone then set saved
           pure r
         | _ => pure none
       match cons? with
-      | some (n, ts) => e := .construct t.pos n ts (← parseFields)
+      | some (n, ts, false) => e := .construct t.pos n ts (← parseFields)
+      | some (n, ts, true) => bump; e := .construct t.pos n ts []
       | none => bump; e := .app t.pos e (← parseArgs ")") false
     else if (t.isSym "{" || t.isSym ":") && e.dottedName?.isSome && (← fieldsFollow stop) then
       -- `point{X := 1, Y := 2}` or `point:` and the fields indented: a

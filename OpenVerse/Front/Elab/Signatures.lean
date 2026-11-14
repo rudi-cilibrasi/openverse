@@ -555,7 +555,7 @@ def checkSignatures (env : TyEnv) (sigs : Signatures) (cdefs : List CDef) (field
       | some a, some b =>
         let ca := atCore e a
         let cb := atCore q b
-        ca.1 == cb.1.map (VTy.subst viewσ) && VTy.sub ca.2 (cb.2.subst viewσ)
+        ca.1 == cb.1.map (VTy.subst viewσ) && VTy.sub env.coreVar ca.2 (cb.2.subst viewσ)
       | _, _ => true
     match allSigs.find? (·.name == impl), allSigs.find? (·.name == decl) with
     | some a, some b =>

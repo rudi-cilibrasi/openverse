@@ -6,6 +6,10 @@ QuickProof proves the C runtime's components. Each seam is a property stated
 on both sides, so that the theorems meet. Following LeanOS (ADR 0030), every
 seam is a scalar contract with the same formula on both sides. The one step
 that no tool checks is reading that the two formulas below are the same.
+Types are no seam: the format carries none, and a cast tests a class tag
+only, so Verse Core's subtyping of references, by the classes' variances
+included ([research/variance.md](research/variance.md)), asks nothing of
+the C side.
 
 ```mermaid
 flowchart LR
