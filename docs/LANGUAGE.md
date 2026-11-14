@@ -1404,7 +1404,9 @@ entity := class:
 - **The command line**:
   - `openverse run FILE [ARG…] [do EXPR]`, and likewise `emit`. The
     arguments are the program's `Args:[]string`, unless it defines `Args`
-    itself.
+    itself, or binds the name anywhere, a local or a parameter (`Args` is
+    openverse's, not the Book's: its tests bind it, `Args:tuple(int, int) =
+    (1, 2)`, `DefaultNamed.versetest:274`).
   - With `do EXPR`, `EXPR` runs instead of `Main`, in the context of the
     file's definitions, and its value is printed when it is an `int`, `char`
     or `string`. The expression may fail, which gives exit code 1.
@@ -2289,7 +2291,13 @@ does a name bound by the first success of the clauses after a choice whose
 values are of such types, after them ([Choice](#choice), #283). Two
 comparable types join at `comparable` instead ([comparable](#comparable)):
 `if (C?) then 42 else "text"`, `array{15.61, "Message", 3}` (a
-`[]comparable`). Classes with two common
+`[]comparable`); a map literal's values alike, with no value type
+expected (`map{0 => "0", 1 => 1.0}` is an `[int]comparable`, `map{0 =>
+c{}, 1 => 1}` an `[int]any`: the Book's tests, `Any.versetest` 131-134).
+A `for` whose values are not of the element type expected has its body at
+that type, as a typed binding has (`X:[]?int = for (I := 0..2) { false }`
+holds three empty options; the Book's tests,
+`SOL-4137-MemoryLeakCreatingA3dArray.versetest`). Classes with two common
 supertypes are still an ambiguity, and an expected type still decides
 (`X:int = if (C?) then 1 else "a"` is refused).
 

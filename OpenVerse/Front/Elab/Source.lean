@@ -956,10 +956,19 @@ def argsAndMethodOverloads (tops entry : List STop) (args : Option (List String)
   -- the command line: `Args`, and an entry expression
   let defines (n : String) := tops.any fun
     | .fn _ m .. | .const _ m .. | .classDef _ m .. => m == n
+  -- (`Args` is openverse's, the command line's, not the Book's: a program
+  -- that binds the name itself, a local's or a parameter's too, has its
+  -- own, `Args:tuple(int, int) = (1, 2)`, the Book's tests,
+  -- `DefaultNamed.versetest:274`, `Math/Math.versetest:84`)
+  let binds (n : String) := tops.any fun t =>
+    (match t with
+      | .fn _ _ ps .. => ps.any (·.name == n)
+      | _ => false) ||
+    t.code.any (Choice.anyE fun | .decl _ m _ _ _ => m == n | .gen _ m i _ => m == n || i == some n | _ => false)
   let argsTop : List STop :=
     match args with
     | some as =>
-      if defines "Args" then []
+      if defines "Args" || binds "Args" then []
       else [.const { line := 0, col := 0 } "Args" [] (some (.arr (.name "string")))
               (.arrayLit { line := 0, col := 0 } (as.map fun a => .str { line := 0, col := 0 } [.text a]))]
     | none => []

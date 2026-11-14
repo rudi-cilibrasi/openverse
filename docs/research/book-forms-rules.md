@@ -470,3 +470,59 @@ written as before and converted where its value is taken: a binding, an
 argument, a comparison's operand, a result, an operand of `and`). Then
 only the programs that take the value change, and the four cases agree.
 
+## A map literal's values with nothing in common
+
+**The rule.** With no value type expected, a map literal whose values
+have nothing in common joins them as an array literal's elements: at
+`comparable` when every one is comparable, else at `any`.
+
+**The Book.** The tests: "Test that the result of a map literal with
+values of disjoint types is coerced to [key_type]any." (`Any.versetest:131`),
+`map{0=>"0", 1=>1.0}.Length=2` (`:133`), `map{0=>"0", 1=>1.0,
+2=>array{0,1,2}}.Length=3` (`:134`); "Disjoint value types are allowed."
+(`Map.versetest:160-164`, `M:=map{"0"=>0, "0.0"=>0.0}` returned as a
+`[string]any`). Ch. 1 joins an array literal's disjoint elements at
+`comparable` ("their common supertype"), which openverse keeps for both.
+
+**openverse before.** "the values of this map have different types".
+
+**openverse now.** `elabMapLit` (`Elab/Expr.lean`) joins them at
+`fallbackJoin`'s type when none is expected and the join is not ambiguous.
+No program that compiled changes.
+
+## A `for` body at the element type expected
+
+**The rule.** A `for` whose values are not of the element type expected
+has its body elaborated at that type, as a typed binding is: `false`
+there is an empty option.
+
+**The Book.** The tests, `Bugs/SOL-4137-MemoryLeakCreatingA3dArray.versetest`:
+`var Data:[][][]?int = for (x := 0..1): for (y := 0..2): for (z := 0..2):
+false` (`:4-9`, a field's default) and a function of result
+`[][][]?int` whose body is the same (`:15-21`).
+
+**openverse before.** The body was elaborated with no expected type:
+`false` a `logic`, the `for` a `[][][]logic`, refused.
+
+**openverse now.** `elabECore` (`Elab/Expr.lean`): when a `for`'s value
+does not convert to the array type expected, the `for` is elaborated
+again with its body at the element type (a typed binding of it); when that
+is refused too, the first stands, refused as before. No program that
+compiled changes.
+
+## `Args` bound by a program
+
+**The rule.** `Args`, openverse's command-line arguments (not the Book's),
+is added only when the program neither defines nor binds the name itself.
+
+**The Book.** The tests bind it as a local: `Args : tuple(int, int) = (1,
+2);` (`DefaultNamed.versetest:274`), `Args:[]float = (-Inf, 0.0, Inf)`
+(`Math/Math.versetest:84`).
+
+**openverse before.** "'Args' is already the name of a function or
+constant" (the command line's `Args` and the local in one program).
+
+**openverse now.** `argsAndMethodOverloads` (`Elab/Source.lean`) adds it
+unless the program defines it or binds it (a local, a generator, a
+parameter). No program that compiled changes.
+
