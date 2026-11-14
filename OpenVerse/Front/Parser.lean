@@ -4,7 +4,8 @@
   Recursive descent over the token array, with the precedence of the Book of
   Verse (ch. 4 "Operators"): `or` < `and` < comparisons < `+ -` < `* /` <
   unary `- not` < postfix `() [] . ?`. Comparisons form chains
-  (`0 <= X <= 9` checks both and returns `0`).
+  (`0 <= X <= 9` checks both and returns `0`), but `<>` is left-associative
+  (`1 <> 2 <> 1` is `(1 <> 2) <> 1`).
 
   Layout: Verse mixes indented blocks (`if (c):` + indented lines), braces
   and inline forms (`then`). The parser uses an offside rule on columns. A
@@ -722,14 +723,23 @@ partial def parseNot (stop : Nat) : PM SExpr := do
   parseCmp stop
 
 partial def parseCmp (stop : Nat) : PM SExpr := do
-  let a ← parseChoice stop
+  let mut a ← parseChoice stop
   let mut rest := #[]
   repeat
     let t ← peekT
     match t.tok with
     | .sym op =>
       if cmpOps.contains op && !t.offside stop then
-        bump; rest := rest.push (op, ← parseChoice stop)
+        bump
+        -- (`<>` is left-associative: its left operand is the comparisons
+        -- before it, whose value is their leftmost operand, so
+        -- `1 <> 2 <> 1` is `(1 <> 2) <> 1`, which fails; the others chain,
+        -- `0 <= X <= 9` checks `0 <= X` and `X <= 9`: the Book of Verse's
+        -- tests, `Operators/Associativity.versetest` 6-33)
+        if op == "<>" && !rest.isEmpty then
+          a := .cmp a.pos a rest.toList
+          rest := #[]
+        rest := rest.push (op, ← parseChoice stop)
       else break
     | _ => break
   if rest.isEmpty then return a else return .cmp a.pos a rest.toList
@@ -1639,8 +1649,28 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
     -- succeed; it fails if they do not (the first success of the clauses
     -- when they have a choice, which the elaborator sees once calls of
     -- functions with several values are inlined, #208, #235; else a block)
+    -- (a generator among the clauses, which `first` takes as `for` does,
+    -- Book of Verse ch. 7, "first": "The `first` expression uses the same
+    -- binding syntax as `for`": the choice of its source's elements,
+    -- `X := $each(Xs)`, whose alternatives the clauses after it take one at
+    -- a time, the first success stopping the search; `I -> X : Xs` the
+    -- choice of the source's indices, the source evaluated once before
+    -- them; `X := a..b` the choice of the range's ints)
+    let eachOf (q : Pos) (arr : SExpr) : SExpr := .app q (.ident q "$each") [arr] false
+    let ints (q : Pos) (lo hi : SExpr) : SExpr :=
+      let j := s!"$firstRange{q.line}_{q.col}"
+      .forE q [.decl q j none false (.range q lo hi)] (.ident q j)
+    let genClause : SExpr → List SExpr
+      | .gen q x none src => [.decl q x none false (eachOf q src)]
+      | .gen q x (some i) src =>
+        let a := s!"$firstSource{q.line}_{q.col}"
+        [.decl q a none false src,
+         .decl q i none false (eachOf q (ints q (.int q 0) (.bin q "-" (.member q (.ident q a) "Length") (.int q 1)))),
+         .decl q x none false (.app q (.ident q a) [.ident q i] true)]
+      | .decl q x ty false (.range r lo hi) => [.decl q x ty false (eachOf q (ints r lo hi))]
+      | c => [c]
     let firstOf (cs : List SExpr) (v : SExpr) : SExpr :=
-      .app t.pos (.ident t.pos "$first") [.block t.pos (cs ++ [v])] false
+      .app t.pos (.ident t.pos "$first") [.block t.pos (cs.flatMap genClause ++ [v])] false
     let n1 ← peekT 1
     if n1.isSym "(" then
       -- `first(c){b}`, `first(c). b`, `first(c) do b`; otherwise (no body
@@ -1658,7 +1688,24 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
     if n1.isSym "{" || (n1.isSym ":" && (← peekT 2).bol) then
       -- `first{c}`, `first:` and a block, then `do` and a branch or nothing
       bump
+      let from_ := (← get).pos
       let cs ← parseClauses "first" (fun c => parseClause c) stop
+      -- (in braces, commas join a tuple, "Comma is not the same as
+      -- semicolon": `(4,12) = first{X:=1..5, 3*X>10}`, the Book of Verse's
+      -- tests, `FlowControl/first.versetest:206`; with a generator among
+      -- them, a generator inside a tuple, which openverse does not take
+      -- yet; without, the clauses as before)
+      if n1.isSym "{" then
+        let toks := (← get).toks.extract from_ (← get).pos
+        let mut depth : Int := 0
+        let mut comma : Option Token := none
+        for k in toks do
+          if k.isSym "{" || k.isSym "(" || k.isSym "[" then depth := depth + 1
+          else if k.isSym "}" || k.isSym ")" || k.isSym "]" then depth := depth - 1
+          else if depth == 1 && k.isSym "," && comma.isNone then comma := some k
+        let gen := cs.any fun | .gen .. | .decl _ _ _ false (.range ..) => true | _ => false
+        if let some k := comma then
+          if gen then perr k "in first{…}, a comma joins its clauses into a tuple, and a generator inside a tuple is not supported yet: separate the clauses with ';'"
       if cs.isEmpty then perr n1 "'first{}' needs a clause"
       if (← peekT).isKw "do" then
         bump
@@ -2052,11 +2099,18 @@ partial def parseClassBody (p : Pos) (name : String) (nameSpecs : List String) (
         return items
   else if o.isSym "{" then
     bump
+    -- (two items on one line are separated by `,` or `;`: the Book of
+    -- Verse's tests refuse `class{x:int block{}}`,
+    -- `Classes/ClassBlockClause.versetest:19`)
+    let mut separated := true
     repeat
       let a ← peekT
       if a.isSym "}" then bump; break
-      if a.isSym "," || a.isSym ";" then bump; continue
+      if a.isSym "," || a.isSym ";" then bump; separated := true; continue
+      if !separated && !a.bol then
+        perr a s!"expected ',', ';', a new line or '}' after a member, found {a.tok.describe}"
       items := items.push (← parseClassItem 0)
+      separated := false
   else perr o s!"expected ':' or '\{' after {if isIface then "interface" else "class"}"
   let fields := items.toList.filterMap fun | .inl f => some f | .inr _ => none
   let methods := items.toList.filterMap fun | .inr m => some m | .inl _ => none
@@ -2185,6 +2239,13 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) (par
       -- (`using` is reserved: `using:int = 42` is no definition)
       if !(← peekT).isSym "{" then perr (← peekT) s!"expected '\{' after using, found {(← peekT).tok.describe}"
       if (← peekT).isSym "{" then
+        if let .path path := (← peekT 1).tok then
+          -- (`/localhost` is the package a program's own code is in, which
+          -- no `using` names: the Book of Verse's tests, "Explicitly using
+          -- a "/localhost" package is not allowed",
+          -- `Modules/Using2.versetest` 84-90)
+          if path == "/localhost" || path.startsWith "/localhost/" then
+            tops := tops.push (.const t.pos s!"{pfx}$using" [] none (refusedForm t.pos (.localhostUsing path) []))
         if let .str parts := (← peekT 1).tok then
           let path := String.join (parts.filterMap fun | .text s => some s | _ => none)
           modify fun st => { st with imports := st.imports.push (t.pos, path) }

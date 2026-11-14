@@ -87,7 +87,9 @@ partial def elabConcatenate (c : BuiltinCall) : EM R := do
   match args with
   | [] => match exp with
     | some (.arr t) => return ⟨.lit Value.emptyArray, .arr t⟩
-    | _ => eerr p "Concatenate() needs an expected array type"
+    -- (with none, an empty array of `false`, as an empty `array{}`'s: the
+    -- Book of Verse's tests, `Concatenate()=array{}`, `Concatenate.versetest:4`)
+    | _ => return ⟨.lit Value.emptyArray, .arr .never⟩
   | [a] =>
     let r ← elabE ctx a (match exp with | some t => some (.arr t) | none => none)
     let r ← elabArrayArgumentWith elabE ctx a.pos r 2 "Concatenate"
@@ -96,8 +98,28 @@ partial def elabConcatenate (c : BuiltinCall) : EM R := do
       -- (through a typed temporary: an empty literal has no type of its own)
       let tv ← fresh r.ty
       return ⟨.seq (.assign tv r.e) (.prim .flatten [.local tv]), .arr t⟩
+    -- (an empty array of `false`: of arrays too, with no elements)
+    | .arr .never =>
+      let tv ← fresh r.ty
+      return ⟨.seq (.assign tv r.e) (.lit Value.emptyArray), .arr .never⟩
     | t => eerr p s!"Concatenate takes arrays, or an array of arrays, found {t.show}"
   | a :: rest =>
+    -- (the arrays' type: the expected one, else the first argument's that
+    -- says it, an empty `array{}` with no type from its context, a
+    -- `[]false`, saying nothing)
+    let exp ← match exp with
+      | some _ => pure exp
+      | none =>
+        let st ← get
+        let mut found : Option Ty := none
+        for b in args do
+          if found.isNone then
+            found ← tryCatch (do
+              let r ← elabE ctx b none
+              pure (match r.ty with | t@(.arr _) => if t.hasNever then none else some t | _ => none))
+              (fun _ => pure none)
+        set st
+        pure found
     let r0 ← elabE ctx a exp
     let r0 ← elabArrayArgumentWith elabE ctx a.pos r0 1 "Concatenate"
     let .arr t := r0.ty | eerr a.pos s!"Concatenate takes arrays, found {r0.ty.show}"
@@ -152,7 +174,9 @@ partial def elabConcatenateMaps (c : BuiltinCall) : EM R := do
           found ← tryCatch (do
             let r ← elabE ctx a none
             let r ← elabContainerReceiverWith elabE ctx a.pos r (fun | .map .. => true | _ => false) "ConcatenateMaps"
-            pure (match r.ty with | t@(.map ..) => some t | _ => none))
+            -- (an empty `map{}` with no type from its context, `[false]false`,
+            -- says nothing of the others)
+            pure (match r.ty with | t@(.map ..) => if t.hasNever then none else some t | _ => none))
             (fun _ => pure none)
       set st
       pure found

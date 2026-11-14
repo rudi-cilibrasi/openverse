@@ -2574,7 +2574,10 @@ partial def elabMapLit (ctx : Ctx) (p : Pos) (entries : List (SExpr × SExpr)) (
     -- (a `comparable`: the empty value, as an empty `array{}`'s)
     | _, _ =>
       if exp == some .dyn then return ⟨.lit Value.emptyArray, .dyn⟩
-      eerr p "the type of an empty map{} must be given (e.g. M:[string]int = map{})"
+      -- (with no type from its context, a map of `false` keys and values,
+      -- as an empty `array{}`'s: `Map:=map{}; Map=map{}`, the Book of
+      -- Verse's tests, `Map.versetest:236`)
+      return ⟨.lit Value.emptyArray, .map .never .never⟩
   | (k0, v0) :: _ =>
     let rk0 ← elabE ctx k0 kt?
     let rv0 ← elabE ctx v0 vt?

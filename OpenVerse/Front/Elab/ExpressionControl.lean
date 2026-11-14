@@ -214,7 +214,7 @@ partial def elabExprControlWith
     if !asWritten then
       -- (a choice, all of whose values a `for` takes, is a generator)
       let isGen : SExpr → Bool
-        | .gen .. | .decl _ _ none false (.range ..) => true
+        | .gen .. | .decl _ _ _ false (.range ..) => true
         | c => Choice.hasChoice [c] (choiceOrder ctx)
       -- (the body, which casts again, at the element type expected, when
       -- one is: the type the refinement must give its value)
