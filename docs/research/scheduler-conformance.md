@@ -646,7 +646,7 @@ Programs that await a task would be compiled in event mode too.
 awaiters resumed so), 40 of seeds 1-400 predict another output; 162 of the
 suite's programs spawn and await a task (all of them would change bytecode,
 by the measure, a tenth or more their output, each to be derived again by
-hand), and 16 more models generate task awaits. And it needs a reading the
+hand), and 13 other models generate task awaits (`call_packing.py`, twelve `gadt_*`). And it needs a reading the
 Book contradicts openverse on: the API says "a *cancelled* task never
 resumes its awaiters, so the call does not fail, does not error, and simply
 stays suspended for ever", where openverse cancels the task that awaits a
