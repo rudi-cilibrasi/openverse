@@ -583,11 +583,12 @@ partial def parseExpr (stop : Nat) : PM SExpr := do
   if t.isSym "@" then
     let attrs ← parseAttrs
     let e ← parseExpr stop
-    if attrs.all (fun | (_, .ident _ "ignore_unreachable") => true | _ => false) then
-      -- (recorded for the warnings of code never reached, `Reachability`)
-      modify fun st => { st with ignoredArms := st.ignoredArms.push e.pos }
-      return e
-    return refusedForm t.pos (.exprAttribute ((attrs.head?.map (·.2.attrHead)).getD "")) (attrs.map (·.2) ++ [e])
+    -- (the refusal names the first attribute that is not `@ignore_unreachable`, where it is)
+    let some (p, a) := attrs.find? (fun | (_, .ident _ "ignore_unreachable") => false | _ => true)
+      | -- (recorded for the warnings of code never reached, `Reachability`)
+        modify fun st => { st with ignoredArms := st.ignoredArms.push e.pos }
+        return e
+    return refusedForm p (.exprAttribute a.attrHead) (attrs.map (·.2) ++ [e])
   if t.isKw "var" then
     bump
     let n ← expectBinder
