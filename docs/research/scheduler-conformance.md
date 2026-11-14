@@ -849,3 +849,89 @@ and `task_cancel_branch_defer_recancel`, which uses it to cancel a branch
 before testing #261. Each is rewritten to the Book's behaviour or deleted
 ([as built](#a-tasks-end-as-built) lists which).
 
+
+#### Design
+
+A task's end is a `Signal`, of an event of its own: the machinery that
+runs a `Signal`'s awaiters inside it ([above](#awaiters-inside-signal-as-built))
+runs a task's awaiters inside its end, unchanged. Verse Core, OVBC,
+`runtime/include/openverse.h`, `runtime/src/load.c` and the C interpreter
+do not move.
+
+- **The end event.** In *await mode* (below) `taskBase` has a field
+  `Ends:?event(void)`, empty until the task's first awaiter makes the
+  event. `T.Await()` (the prelude's `Await`) gives `T`'s result at once if
+  it has one (5); else it awaits `T`'s end event (`EvAwait`, as
+  `E.Await()` does: a record appended to the event's list, so the list is
+  in registration order, 1), and then gives the result. A spawned call's
+  root, after it sets its task's result and done flag, calls `taskEnd(T)`,
+  which signals the end event if there is one (`signalAll(E, ())`): each
+  record of the round marked, then each one's root woken in order through
+  `$wakeRoot`, inside the root's last step (2), the scheduler's `Drain`
+  raised. The records carry no value: an awaiter reads the task's result
+  when its turn comes (4), the same for each. The field is on `taskBase`,
+  not `task(t)`, so that `taskEnd` is not generic: the root calls it from
+  Verse Core that the lowering writes, which has no witness of the
+  result's type to pass (the records, `evrec`, below `taskBase` too, keep
+  it empty).
+- **Reentrancy** is the `Signal`'s: a task that ends inside a round (its
+  awaiter's turn, or another end's) runs its own round there, depth first,
+  and returns to the round it is in (10); an awaiter that signals an event
+  runs that round inside its turn. The roots now reach `signalAll`
+  (through `taskEnd`), so they are *marked*, as every function from which
+  it is reachable is: code that may be running when a task ends is under a
+  `Signal` or an end, and so marked already (a spawner is not, for a
+  task's end in its first run, inside the `spawn`, has no awaiter: no one
+  holds the task yet). Inside a round only the woken awaiters go on, as
+  inside a `Signal`: a sleep that expired is held for its turn in the pass.
+- **Rollback** is Core's, as for a `Signal` (9): the end, its round and
+  what the awaiters did are undone with a failure context that fails; a
+  task's first run in a failing `spawn` has no awaiters.
+- **The cancelled task.** `T.Cancel()` marks the task cancelled and done
+  and unwinds it, as before; it never sets a result and never calls
+  `taskEnd`, so its end event is never signalled, and its awaiters stay on
+  their records for ever (8). An awaiter that is cancelled (a race it
+  loses, its function's exit, its task's `Cancel`) marks its record done
+  in `EvAwait`'s `defer`, as an event's awaiter does: it deregisters, and
+  the end skips it. Nothing reaches an awaiter from the cancel any more:
+  `waitResume` no longer sees a cancelled task (the only thing a task
+  awaits now is its end event's record), so the scheduler's request to
+  cancel the root that ran (`CancelCur`) is never made. Its handling in
+  the lowering and `waitResume` stays, unreached, so that the programs that
+  never await a task keep their bytes (a later tidy can take it out, and
+  change every concurrent program's bytes).
+- **Await mode.** A program that awaits a task (calls the prelude's
+  `$Await`) is compiled in event mode with the end event: the event
+  prelude, `concPreludeAwaits` on top of it (`Ends`, `Await` through the
+  end event, `taskEnds`, `taskEnd`), and the roots' call of `taskEnd`. Only
+  types say whether an `X.Await()` is a task's (an event's is the same
+  call), so it is found as the elaboration's other needs are: an
+  elaboration in which a call of `$Await` remains, without await mode, asks
+  for it (`Requests.awaits`, of the classes' layout, tier 2), and the
+  program is elaborated again with the await prelude ([Elaboration in
+  rounds](../DESIGN.md#elaboration-in-rounds)): one more round for such a
+  program. A program that never awaits a task is compiled byte for byte as
+  before, also one that uses events and spawns tasks.
+- **What changes bytes**: every program that awaits a task (162 of the
+  suite's programs spawn and await one, by the earlier measure, and the
+  corpus's scheduler and GADT programs that do); its output changes where
+  two awaiters of one task, or one awaiter and another task, go on in the
+  tick the task ends in an order other than the scheduler's, and where
+  something awaits a cancelled task. **What does not**: every program
+  without a call of a task's `Await`.
+- **Code size**: an awaiting program without events grows by the event
+  mode's prelude and wake functions and the markers of its marked
+  functions (the roots, and what reaches a `Signal`), plus `taskEnds` and
+  `taskEnd`; measured below, and against the gate's size checks
+  (`test-choice-size.sh` compiles no task await; `test-frontend-c-size.sh`
+  measures the front end's own C, which grows by the few lines of the
+  rounds' request and the root's call).
+- **Models first.** `sched_gen.py` and `sched_gen2.py` predict the rule: a
+  task's awaiters register on its end, which resumes them in order inside
+  the root's last step (the `Signal`'s round, the model's `m_signal`); an
+  await of a cancelled task waits for ever; the cancel request of an
+  awaiter goes. The other models that generate task awaits (`call_packing.py`
+  and twelve `gadt_*`: one awaiter, `Main`, of each task) predict the same
+  outputs and are run against the compiler; the differential generators
+  (`gen-conc.py`, `gen-conc-poly.py`) are checked to still make programs
+  that end.
