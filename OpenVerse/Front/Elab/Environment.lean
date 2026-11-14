@@ -90,7 +90,8 @@ def typeEnvironment (classes : Classes) (fields : Fields) (methods : Methods) (s
     let (t, _) ← (resolveTy cenv p sty).run {}
     let (t0, _) ← (resolveTy cenv p sty0).run {}
     if !(t == t0) then narrowed := narrowed.push (c, f)
-  env := { env with narrowed := narrowed.toList }
+  env := { env with narrowed := narrowed.toList,
+                    concreteMarked := (classes.defs.filter (·.specs.contains "concrete")).map (·.name) }
   -- the fields with accessors, their types resolved (`Accessors`)
   let mut accessors : Array AccessorField := #[]
   for cd in classes.defs do

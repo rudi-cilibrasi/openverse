@@ -358,6 +358,9 @@ structure TyEnv where
       it, hold the field at that type (`TyEnv.fieldSrc`), and a read
       through a class or interface above it converts it up. -/
   narrowed : List (String × String) := []
+  /-- The classes marked `<concrete>`: the values of a `concrete_subtype`
+      (`TypeValues`), whose constructions `T{}` may run. -/
+  concreteMarked : List String := []
   fieldAccBase : Nat := 0
   /-- (#283) The uses `R.M` whose family of methods `M` only the class of
       `R` tells (`Choice.methodFns`), by place and `M`: their elaboration

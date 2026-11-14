@@ -111,6 +111,14 @@ object, made by the front end with no Verse Core added
   elements' join.
 - **Not compared.** The classes `$type:C` are not `<unique>`, so `=` on type
   values is refused, as the Book's tests have it.
+- **Constructing through one.** `T{}` with `T` a local or, in a method, a
+  field of the class of a `concrete_subtype(A)` (ch. 11: "The type value has
+  to be held in a class *field*") is `T.$make(A)()`, and has the
+  construction budgets of every `<concrete>` class at or below `A`, as it
+  may construct any of them, whichever the program names as values
+  (`SOL-8627-concrete_subtype-effects.versetest`: "Could invoke d's
+  constructor", 3512; before, only the classes named as values had a
+  `$make`, so the call counted theirs).
 - **No effects.** The classes `$type:C` and the metatypes' interfaces are
   `<computes>` (no field, no block), and so is `$cast(A)`: making a type
   value and casting through one has no effect, as naming a class and a cast

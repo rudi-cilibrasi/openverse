@@ -2423,11 +2423,14 @@ Main():void =
   circle`) is at the nearest metatype above both, never a
   `concrete_subtype` and a `castable_subtype` only of a `<castable>` class.
 - **`T[X]`** with `T` a type value is `X` cast to the class `T` holds, failing
-  unless `X`'s class is below it. **`T{}`** with `T:concrete_subtype(c)`
-  constructs the class `T` holds with its defaults; no field may be given.
+  unless `X`'s class is below it. **`T{}`** with `T:concrete_subtype(c)`, a
+  local or, in a method, a field of the class (ch. 11: "The type value has
+  to be held in a class *field*"), constructs the class `T` holds with its
+  defaults; no field may be given.
   Naming a type as a value, and casting through one, has no effect, so a
   `<computes>` function may do both; `T{}` has the construction effects of
-  the class.
+  every `<concrete>` class at or below `c`, any of which it may construct
+  (the Book's tests, `SOL-8627-concrete_subtype-effects`).
 - **Other types.** `subtype(t)` is also of a type that is no class or
   interface: a built-in type (`subtype(int)`), a struct, an enum, or an
   array, option, map or tuple of them (`subtype([]c)`); its values are the
