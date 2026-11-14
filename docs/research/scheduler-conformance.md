@@ -607,9 +607,8 @@ signals that wake every actor).
 
 **What is left.**
 - Rule 13: the tasks awaiting one task's end go on in the scheduler's
-  order, not in the order they registered inside the end (designed above:
-  the same round over records in the task; no translatable Book case
-  needs it).
+  order, not in the order they registered inside the end. Designed, and
+  left: see [rule 13, pinned and designed](#rule-13-a-tasks-end-pinned-and-designed).
 - Two arms that both `return` inside one walk: the first's value is kept;
   an in-turn `return` after an out-of-turn end of a `race` returns, as an
   arm's `return` leaves the function (no test of the Book has either).
@@ -619,3 +618,41 @@ signals that wake every actor).
   untagged assertions spawn in failure contexts, so openverse accepts it:
   the tests split by virtual machine, and openverse follows the VerseVM's
   and the untagged ones.
+
+#### Rule 13, a task's end: pinned and designed
+
+**When.** Inside the ending task's last step, before anything else runs:
+the API (`task`'s `Await`, line 1362) fixes the order, "Multiple awaiters
+are allowed and are resumed in the order they registered", and the Book's
+tests name the mechanism: `Bugs/FORT-1088027-UseOfNullInitializedDynamicallyTypedValue.versetest:6-9`,
+"a bytecode-issued Signal during `task::Update` synchronously re-enters
+Update for the same task via `event::Signal → task::Complete → ResumeAt →
+task::Update`": a task that completes resumes what awaits it at once,
+synchronously, as a `Signal` does. `Coroutines/SpawnAndTask.versetest:293-321`
+(`TestAwait3`, "ZA2C2B3": the awaiters' lines follow the task's last in
+the same tick, in registration order) agrees with this and cannot tell it
+from a resumption at the scheduler's pass; no test has another task run
+between a task's end and its awaiters.
+
+**Design, on the machinery above.** Each task keeps a round of awaiter
+records, as an event does; `T.Await()` on a task not done appends one and
+waits on it (a task done gives its result at once, as now); a spawned
+call's root, after it sets the task's result and done, runs the round
+inside its last step, as `signalAll` does: each record marked, then each
+one's root woken in order (`$wakeRoot`), the scheduler's `Drain` raised.
+Programs that await a task would be compiled in event mode too.
+
+**Why it is left.** Measured on the scheduler model (a copy with task
+awaiters resumed so), 40 of seeds 1-400 predict another output; 162 of the
+suite's programs spawn and await a task (all of them would change bytecode,
+by the measure, a tenth or more their output, each to be derived again by
+hand), and 16 more models generate task awaits. And it needs a reading the
+Book contradicts openverse on: the API says "a *cancelled* task never
+resumes its awaiters, so the call does not fail, does not error, and simply
+stays suspended for ever", where openverse cancels the task that awaits a
+cancelled one (an extension, `Task.Cancel` being unreleased in the pinned
+Book): with records, a cancellation must reach the awaiters through them,
+and when it does (at the cancel, inside it, or at the awaiter's next poll)
+is a decision for the owner before the rule can be built as carefully as
+the event rule was.
+
