@@ -113,6 +113,8 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
       -- mentions are bound, else inferring them; `false`, `array{}` and
       -- `map{}` last), then named for the written types after
       let fname := match tps with | .ident _ f :: _ => f | _ => ""
+      -- (as a message says it: a method family's `c$M` as `c.M`)
+      let shownF := Choice.shownFnName fname
       let parameters ← (tps.drop 1).mapM fun marker => do
         match TParam.ofMarker marker with
         | .ok tp => pure tp
@@ -140,7 +142,7 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
           if (pass == 0) == deferred[i]! then continue
           let t := t0.subst σ
           if t.params.any names.contains then
-            let cannot := s!"cannot infer the type parameters of {fname} from the arguments of this call"
+            let cannot := s!"cannot infer the type parameters of {shownF} from the arguments of this call"
             if contextual[i]! && !a.typedAlone then eerr q cannot
             let r ← elabE ctx a none
             match ctx.matchArgument σ t r.ty with
@@ -153,9 +155,9 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
               let t' := t.subst σ
               if t'.params.any names.contains then
                 if pass == 0 then deferred := deferred.set! i true
-                else eerr q s!"cannot infer the type parameters of {fname} from this argument"
+                else eerr q s!"cannot infer the type parameters of {shownF} from this argument"
               else done := done.set! i (some (← elabArgumentCoerceWith elabE ctx q r t', t'))
-            | none => eerr q (if contextual[i]! then cannot else s!"expected {shown t}, found {r.ty.show} (in a call of {fname})")
+            | none => eerr q (if contextual[i]! then cannot else s!"expected {shown t}, found {r.ty.show} (in a call of {shownF})")
           else
             done := done.set! i (some (← coerce q (← elabE ctx a (some t)) t, t))
       -- (a comparable type parameter's type argument must be comparable,
@@ -164,11 +166,11 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
         if c == "comparable" then
           if let some t := σ.lookup n then
             if !(isComparable ctx.types t) then
-              eerr p (notComparable ctx.types t s!"{fname}'s type argument for {((n.dropWhile (· != '_')).drop 1).toString}")
+              eerr p (notComparable ctx.types t s!"{shownF}'s type argument for {((n.dropWhile (· != '_')).drop 1).toString}")
       let mut code : Expr := .lit .void
       let mut c := ctx
       for ((q, x, v, a, _), d) in items.zip done.toList do
-        let some (e, t) := d | eerr q s!"cannot infer the type parameters of {fname} from the arguments of this call"
+        let some (e, t) := d | eerr q s!"cannot infer the type parameters of {shownF} from the arguments of this call"
         checkNewLocal c q x
         let slot ← fresh t
         code := .seq code (.assign slot e)

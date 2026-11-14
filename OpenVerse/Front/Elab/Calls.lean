@@ -52,7 +52,7 @@ def defaultTypes (ctx : Ctx) (p : Pos) (s : Sig) (σ : List (String × Ty)) (d :
   let rename := s.tparams.map fun (n, _) => (n, STy.name (alias n))
   for (n, _) in s.tparams do
     if names.contains n && (σ.lookup n).isNone then
-      eerr p s!"cannot infer type parameter {n} of {s.name} from the arguments of this call"
+      eerr p s!"cannot infer type parameter {shownTParam n} of {s.name} from the arguments of this call"
   let aliases := σ.map fun (n, t) => (alias n, t)
   return ({ ctx.types with tvars := aliases ++ core.map (fun (n, cmp) => (n, Ty.param n cmp)) },
     substDefaultTypes rename d)
@@ -366,11 +366,11 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
       if bound σ pt then
         let t := pt.subst σ
         let r ← elabE ctx a (some t)
-        let e ← tryCatch (coerce a.pos r t) fun msg => throw s!"{msg} (in a call of {s.name})"
+        let e ← tryCatch (coerce a.pos r t) fun msg => throw s!"{msg} (in a call of {Choice.shownFnName s.name})"
         es := es.set! i e
       else
         let v := (pt.params.filter fun v => (σ.lookup v).isNone).headD "t"
-        let cannot := s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
+        let cannot := s!"cannot infer type parameter {shownTParam v} of {s.name} from the arguments of this call"
         if contextual[i]! && !a.typedAlone then eerr a.pos cannot
         let r ← elabE ctx a none
         match ctx.matchArgument σ pt r.ty with
@@ -385,7 +385,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
           else
             es := es.set! i (← elabArgumentCoerceWith elabE ctx a.pos r (pt.subst σ))
         | none => eerr a.pos (if contextual[i]! then cannot else
-            s!"expected {(pt.subst σ).show}, found {r.ty.show} (in a call of {s.name})")
+            s!"expected {(pt.subst σ).show}, found {r.ty.show} (in a call of {Choice.shownFnName s.name})")
   -- the arguments, in their temporaries, then the defaults
   let inferred ← match SubtypeEvidence.infer (if s.bounds.isEmpty then ctx.types else ctx.evidenceEnv) s.bounds σ with
     | some inferred => pure inferred
@@ -449,7 +449,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
         let σ0 := σ
         dctx.checkArgumentRole s d k
         let v := (pt.params.filter fun v => (σ0.lookup v).isNone).headD "t"
-        let cannot := s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
+        let cannot := s!"cannot infer type parameter {shownTParam v} of {s.name} from the arguments of this call"
         let contextual := !bound σ0 pt && (← argNeedsTypeWith elabE dctx d)
         if contextual && !d.typedAlone then eerr p cannot
         let (rd, σ1) ← fxAt p (do
@@ -475,7 +475,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
   let mut targs : Array Ty := #[]
   for (v, cmp) in s.tparams do
     let some t := σ.lookup v
-      | eerr p s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
+      | eerr p s!"cannot infer type parameter {shownTParam v} of {s.name} from the arguments of this call"
     -- (not of a value class's `$call…`, #218: the class's type arguments
     -- are its receiver's, fixed, and checked, when the value was made; a
     -- call through a function type only dispatches to it)

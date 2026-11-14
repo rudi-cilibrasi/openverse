@@ -2765,6 +2765,10 @@ def concurrencyMethods : List String := ["Await", "Signal", "Cancel"]
 def builtinMemberNames : List String :=
   "Length" :: arrayMethods ++ scalarMethods.map (·.2.1) ++ concurrencyMethods
 
+/-- A type parameter's name as a message says it: a helper's, which its
+    prelude renamed `$t` so that no program's name meets it, `t`. -/
+def shownTParam (n : String) : String := if n.startsWith "$" then (n.drop 1).toString else n
+
 /-- The parameters of each overload of the built-in method `m` of a value
     of type `t`: an array's (a string's, a tuple's of one element type) or
     a scalar's; none for another (`checkSignatures` refuses an extension
