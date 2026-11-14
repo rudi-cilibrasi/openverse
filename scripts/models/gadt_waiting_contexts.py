@@ -35,10 +35,13 @@ else:
 lines += [f'source {state}', f'background {state}',
           f'result {-1 if interrupted else len(values)} state {state}']
 args.expected.write_text('exit=0\n' + '\n'.join(lines) + '\n')
+# (root and extra, holder, box and Make are <computes>: the constants Global
+# and B construct one, and a module's constant has no side effect, Book of Verse
+# tests, DefaultValueAssignment.versetest:199)
 print('''pair(a:type,b:type):=class{}
 dup(t:type):=class(pair(t,t)){C:int=4}
-root:=class{}
-extra(t:type):=class(root){X:t;C:int=4}
+root:=class<computes>{}
+extra(t:type):=class<computes>(root){X:t;C:int=4}
 cell:=class{var N:int=0}
 Id(X:t where t:type)<computes>:t=X
 Values(P:pair(a,b) where a:type,b:type):[]int=for(V:=if(D:=dup[P])then(D.C|D.C+1)else 0):V
@@ -62,10 +65,10 @@ if shape == 'top':
     call = 'Run(P,H)'
 else:
     if shape == 'view':
-        print('holder:=interface{Run(P:pair(a,b),H:cell,?N:int=0 where a:type,b:type)<suspends>:int}')
-    print('box(t:type):=class' + ('(holder)' if shape == 'view' else '') + ':\n    X:t')
+        print('holder:=interface<computes>{Run(P:pair(a,b),H:cell,?N:int=0 where a:type,b:type)<suspends>:int}')
+    print('box(t:type):=class<computes>' + ('(holder)' if shape == 'view' else '') + ':\n    X:t')
     print('    ' + header.replace('Run(', 'Run<override>(' if shape == 'view' else 'Run('))
-    print('Make():box(string)=box(string){X:="tag"}')
+    print('Make()<computes>:box(string)=box(string){X:="tag"}')
     # (a constant at the top level states its type, Book of Verse ch. 16)
     print('B:holder=Make()' if shape == 'view' else 'B:box(string)=Make()')
     call = 'B.Run(P,H)'

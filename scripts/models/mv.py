@@ -421,7 +421,9 @@ CB = LAZY and 'nocb' not in flags and 'cf' not in flags
 # ---- #305, flag na (on with lazy; nona turns it off): a test's expression may call
 # NA(A:int, ?P:int = Tell("dp", A), ?Q:int = P + 1):int = A * 100 + P * 10 + Q
 # with some of its named arguments, in either order, the positional one written
-# before or after them. A call evaluates its positional arguments, then its named
+# before them (the Book of Verse, ch. 6: "Invalid: named arg before positional"; the
+# place drawn for it, once before or after them, is drawn still, so that the stream
+# stays the same, and not used). A call evaluates its positional arguments, then its named
 # ones as written, then the defaults of those omitted, in order (LANGUAGE.md); a
 # default may use the parameters before it, and its effects are the caller's.
 NA = LAZY and 'nona' not in flags and 'cf' not in flags
@@ -2103,8 +2105,8 @@ def show(e):
     if t == 'owr':
         return f'OwR[{e[1]}]'
     if t in ('na', 'nam'):
-        items = [f'?{n} := {show(x)}' for n, x in e[2]]
-        items.insert(e[3], show(e[1]))
+        # (the positional argument first, whatever place e[3] drew for it: the named ones come last)
+        items = [show(e[1])] + [f'?{n} := {show(x)}' for n, x in e[2]]
         return f'{"NA" if t == "na" else "NAM"}({", ".join(items)})'
     if t == 'twt':
         return f'Tw(({show(e[1])}, {show(e[2])}))'

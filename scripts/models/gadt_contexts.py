@@ -40,10 +40,13 @@ else:
         state = 1 + (value - selected + 1 if good and mode == 'lazy' else 0)
 checksum = 100 * state + result
 args.expected.write_text('exit=0\n' + ('body\n' if context == 'defer' else '') + str(checksum) + '\n')
+# (root and extra are <computes>: the constant Global constructs one, and a
+# module's constant has no side effect, Book of Verse tests,
+# DefaultValueAssignment.versetest:199)
 print('''pair(a:type,b:type):=class{}
 dup(t:type):=class(pair(t,t)){C:int=4}
-root:=class{}
-extra(t:type):=class(root){X:t;C:int=4}
+root:=class<computes>{}
+extra(t:type):=class<computes>(root){X:t;C:int=4}
 cell:=class{var N:int=0}
 Id(X:t where t:type)<computes>:t=X
 NoneValue()<computes><decides>:int=block{false?;0}
