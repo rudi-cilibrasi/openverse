@@ -139,9 +139,9 @@ of refining casts, `$refine…`; adapters, stages, helpers), are no program's
 and keep the reading: their calls are the compiler's, which writes the
 expected type there.
 
-**Programs.** 44 tests of `tests/verse` and 3 of `tests/errors` declared
-such a function; rewritten keeping their subjects, their output the same
-(the list is the commit's): 27 refining-cast context tests
+**Programs.** 45 tests of `tests/verse` and 3 of `tests/errors` declared
+such a function; 43 rewritten keeping their subjects, their output the
+same (the list is the commit's): 27 refining-cast context tests
 (`class_cast_context_*`) declared an unused constructor helper
 `Pair(N:int where a:type, b:type):pair(a, b)`, dropped, the three of a
 field's default constructing `pair(a, b){}` instead (and the generator of
