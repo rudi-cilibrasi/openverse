@@ -292,4 +292,9 @@ by arrays and are refused. (A parametric struct's fields were first taken
 as declared, so `[p([]int)]int` was accepted, as 8 of the first 400 seeds of
 `gen-equality.py` wrote it; they are taken at the type's arguments now. The
 three programs of corpus2 keyed so were refused already, by an earlier
-key.)
+key.) A weak map's key follows the rule too (`weak_map([]int, int)` is
+refused): the Book has no test of one keyed by an array, and its chapter
+makes a weak map's keys a map's: "A `weak_map` is a map that does not keep
+its keys alive" (`03_containers.md:3`), a supertype of `[k]v` whose entries
+"work the same way as regular maps" (`:1094`), so its entries are written
+with keys a map refuses.

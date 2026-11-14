@@ -2264,7 +2264,7 @@ Main()<decides>:void =
     B[K] = 3
 ```
 
-- **The type.** `k` must be comparable. A `[k]v` converts to a
+- **The type.** `k` must be comparable, and holds no array or map but `string`, as a map's key (a weak map is "a map that does not keep its keys alive", ch. 3: [the rule](research/book-remaining-rules.md#map-keys-and-a-refinements-range)). A `[k]v` converts to a
   `weak_map(k', v')` and a `weak_map(k, v)` to a `weak_map(k', v')` when `k`
   is below `k'` and `v` below `v'` (ch. 3, "Covariance"); nothing converts a
   weak map to a map or to `comparable`, and a weak map has no `=`. A weak map

@@ -924,6 +924,9 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
       else if n == "weak_map" then
         let [kt, vt] := ts | eerr p s!"weak_map takes 2 type arguments, a key type and a value type, found {ts.length}"
         if !kt.comparable env then eerr p (notComparable env kt "a weak_map key")
+        -- (its key is a map's: a weak map is a map that does not keep its
+        -- keys alive, a supertype of [k]v, ch. 3)
+        if let some c := kt.keyContainer? env then eerr p (keyContainerWhy kt c)
         return .weakMap kt vt
       else eerr p s!"unknown parametric type '{n}' (only structs can be parametric)"
 
