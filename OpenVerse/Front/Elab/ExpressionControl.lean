@@ -292,9 +292,12 @@ partial def elabExprControlWith
   -- reach here)
   | .gen p _ _ _ => eerr p "a generator X : source in first is not supported yet: openverse takes generators in for clauses only"
   | .loop _ body =>
+    -- (a loop's body is no failure context, also in a <decides> function:
+    -- "`decides` is not allowed in `loop`", the Book's tests,
+    -- SOL-4199-BreakFromIf.versetest:79, 3512)
     let lctx := { ctx with
       inLoop := true, inRepeat := true, loopDefers := ctx.defers.length,
-      loopRollback := ctx.canFail || ctx.inRollback,
+      loopRollback := ctx.canFail || ctx.inRollback, canFail := false,
       inChoice := false, refineExits := { ctx.refineExits with brk := none } }
     let r ← elabE lctx body none
     return ⟨.loop (← inferable r), .void⟩

@@ -8,7 +8,7 @@ pair(t:type, u:type) := struct:
 
 box(t:type) := struct:
     Items:[]t = array{}
-    var Count:int = 0
+    Count:int = 0
 
 # a struct whose type argument must be comparable
 keyed(k:subtype(comparable), v:type) := struct:

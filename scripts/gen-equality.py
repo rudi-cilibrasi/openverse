@@ -31,7 +31,9 @@ def types():
         ('[]int', ('arr', 'int')), ('[]logic', ('arr', 'logic')), ('[]?int', ('arr', ('opt', 'int'))),
         ('[][]int', ('arr', ('arr', 'int'))), ('string', ('arr', 'char')),
         ('[int]int', ('map', 'int', 'int')), ('[logic]int', ('map', 'logic', 'int')),
-        ('[[]int]logic', ('map', ('arr', 'int'), 'logic')),
+        # (a map keyed by an array: string, the one array a key may be, Book of Verse
+        # ch. 3; this place held [[]int]logic, which the Book refuses)
+        ('[string]logic', ('map', ('arr', 'char'), 'logic')),
         ('tuple(logic, int)', ('tup', ['logic', 'int'])), ('tuple(void, int)', ('tup', ['unit', 'int'])),
         ('tuple(?int, []int)', ('tup', [('opt', 'int'), ('arr', 'int')])),
         ('p(logic)', ('p', 'logic')), ('p(void)', ('p', 'unit')), ('p(?int)', ('p', ('opt', 'int'))),
@@ -196,6 +198,25 @@ def head(k):
     return k if isinstance(k, str) else k[0]
 
 
+def holds_container(k):
+    """Whether kind k is or holds an array or a map, through its options,
+    tuples and a struct's field, but string: no map key may (Book of Verse
+    ch. 3: arrays and maps "neither may serve as a map key ... The one
+    exception is string"; "The restriction travels with the array")."""
+    if isinstance(k, str):
+        return False
+    tag = k[0]
+    if tag == 'arr':
+        return k[1] != 'char'
+    if tag == 'map':
+        return True
+    if tag == 'tup':
+        return any(holds_container(x) for x in k[1])
+    if tag in ('opt', 'p', 'q'):
+        return holds_container(k[1])
+    return False
+
+
 def comparable_pair(a, b):
     """Not a tuple against an array or a map: a tuple is the array of its
     elements, which openverse compares only where it converts."""
@@ -278,6 +299,10 @@ def program(seed):
                 model.append((km, j))
                 entries.append(f'{ke} => {j}')
             qe, qm = g.value(k)
+            if holds_container(k):
+                # (a key that is or holds an array or a map: drawn, so that the
+                # rest of the program is the seed's, and not written)
+                continue
             lines.append(f'    M{len(out)}:[{name}]int = map{{{", ".join(entries)}}}')
             lines.append(f'    if (W := M{len(out)}[{qe}]) then Print("{{W}}") else Print("missing")')
             hit = [v for a, v in model if a == qm]

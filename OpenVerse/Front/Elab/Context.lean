@@ -812,6 +812,13 @@ def checkMemberAccess (env : TyEnv) (p : Pos) (c m : String) (write : Bool := fa
 def classSetMsg (c f : String) : String :=
   s!"field '{f}' of class {c} is not a var: declare it with var {f}:t = …"
 
+/-- Why a map key type `kt` with the array or map `c` inside it is refused
+    (`Ty.keyContainer?`; the Book's tests, `Map.versetest` 45, 223,
+    `CompareMap.versetest` 58: 3502). -/
+def keyContainerWhy (kt c : Ty) : String :=
+  let what := if kt == c then s!"{kt.show} is one" else s!"{kt.show} holds {c.show}"
+  s!"a map key cannot be or hold an array or a map: {what} (Book of Verse ch. 3: arrays and maps are comparable, \"yet neither may serve as a map key\"; string may)"
+
 /-- Why values of type `t` cannot be used where equality is needed. -/
 def notComparable (env : TyEnv) (t : Ty) (what : String) : String :=
   match t with
@@ -888,6 +895,7 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .map k v => do
     let kt ← resolveTy env p k
     if !kt.comparable env then eerr p (notComparable env kt "a map key")
+    if let some c := kt.keyContainer? env then eerr p (keyContainerWhy kt c)
     return .map kt (← resolveTy env p v)
   | .app "$methodResult" [.name receiver] => do
     let some t := env.tvars.lookup receiver | eerr p "internal: missing static method result"
@@ -916,6 +924,9 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
       else if n == "weak_map" then
         let [kt, vt] := ts | eerr p s!"weak_map takes 2 type arguments, a key type and a value type, found {ts.length}"
         if !kt.comparable env then eerr p (notComparable env kt "a weak_map key")
+        -- (its key is a map's: a weak map is a map that does not keep its
+        -- keys alive, a supertype of [k]v, ch. 3)
+        if let some c := kt.keyContainer? env then eerr p (keyContainerWhy kt c)
         return .weakMap kt vt
       else eerr p s!"unknown parametric type '{n}' (only structs can be parametric)"
 
@@ -1883,7 +1894,7 @@ def refineConds (p : Pos) (v : String) (base : Ty) (conds : List SExpr) :
     | .ident _ "NaN" => throw s!"{p.show}: NaN cannot bound a refinement"
     | _ => throw s!"{p.show}: a refinement's bound is a literal number, not a variable or an expression"
   let flip : String → String := fun | "<" => ">" | "<=" => ">=" | ">" => "<" | _ => "<="
-  conds.mapM fun c => do
+  let cs ← conds.mapM fun c => do
     match c with
     | .cmp _ a [(op, b)] =>
       if !["<", "<=", ">", ">="].contains op then
@@ -1898,6 +1909,16 @@ def refineConds (p : Pos) (v : String) (base : Ty) (conds : List SExpr) :
           throw s!"{p.show}: a refinement's condition compares {v} with a literal number"
       | _, _ => throw s!"{p.show}: a refinement's condition compares {v} with a literal number"
     | _ => throw s!"{p.show}: a refinement's condition is a comparison of {v} with a literal number"
+  -- (a strict bound at an end of the 64-bit range admits no int: the Book's
+  -- tests, WhereConstrainedInts.versetest 97, 100, 3502)
+  for (op, b) in cs do
+    match op, b with
+    | ">", .int n => if n == 9223372036854775807 then
+        throw s!"{p.show}: {v} > {n} admits no int: the bound is past the 64-bit range (Book of Verse tests, WhereConstrainedInts.versetest)"
+    | "<", .int n => if n == -9223372036854775808 then
+        throw s!"{p.show}: {v} < {n} admits no int: the bound is past the 64-bit range (Book of Verse tests, WhereConstrainedInts.versetest)"
+    | _, _ => pure ()
+  return cs
 
 /-- (#351) For a reference of type `a` converted to `b`, an interface
     referred to through views: the classes of `a`'s reference that can be a

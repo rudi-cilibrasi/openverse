@@ -144,6 +144,12 @@ def classHierarchy (tops : List STop) (constructionFx : Std.HashMap String (List
       throw s!"{p.show}: {cd.name} is <final_super>, so it needs a parent: it is the final super class of the class or interface right above it (Book of Verse ch. 10, \"Final\")"
     let mut parent : Option String := none
     let mut ifaces : Array String := #[]
+    -- (an interface named twice among the parents: "It's ok to inherit the
+    -- same interface more than once, but not directly", the Book's tests,
+    -- Interface.versetest:31, 3592)
+    for ((q, qargs), k) in (cd.parents.zip cd.parentArgs).zipIdx do
+      if (cd.parents.zip cd.parentArgs).take k |>.contains (q, qargs) then
+        throw s!"{p.show}: {cd.name} names {q} twice among its parents: a parent is named once (an interface may be inherited again through another parent, not twice directly; Book of Verse tests, Interface.versetest)"
     for (q, qargs) in cd.parents.zip cd.parentArgs do
       let some qd := cdefs.find? (·.name == q)
         | if tops.any (fun | .const _ n' _ none (.structDef ..) => n' == q | _ => false) then

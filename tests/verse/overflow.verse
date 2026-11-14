@@ -4,3 +4,6 @@ Main():void =
     loop:
         set I = I * 3
         if (I > 1000000000000000000) { Print("{I}") }
+        # (never taken: the loop ends at the overflow; a loop needs a way
+        # out, Book of Verse tests, Break.versetest)
+        if (I = 0) { break }

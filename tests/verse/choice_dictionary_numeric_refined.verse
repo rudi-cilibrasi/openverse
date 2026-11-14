@@ -1,7 +1,7 @@
 pair(a:type,b:type):=class{A:a;B:b}
 dup(t:type):=class(pair(t,t)){C:int=3}
 ca:=class{var K:int=1}
-cb:=class{var K:rational=1/1}
+cb:=class{var K:rational=1}
 Dup(X:t where t:type)<computes>:t=X|X
 Echo(X:t where t:type)<computes>:t=X
 Use(P:pair(a,b) where a:type,b:type)<transacts>:int=
