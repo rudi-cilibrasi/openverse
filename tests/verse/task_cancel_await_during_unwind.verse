@@ -1,8 +1,9 @@
-# #261: a task is marked cancelled and done before it unwinds. A defer of
-# the task being cancelled starts (through an immediate function) a task
-# whose first run awaits it: that one now sees a cancelled task at once,
-# and is cancelled in its first run, in the middle of the unwinding; before
-# #261 it waited, and was cancelled at the scheduler's next pass.
+# An await of a task while it is being cancelled: a defer of the task being
+# cancelled starts (through an immediate function) a task whose first run
+# awaits it. A task cancelling, as one cancelled, never resumes its
+# awaiters (the Book's API, task, Await: "Every other phase suspends"): the
+# awaiter waits for ever, and the unwinding goes on (#261: before, the
+# awaiter was cancelled in its first run).
 Waiter(T:task(int))<suspends>:void =
     defer:
         Print("waiter defer")

@@ -2,7 +2,6 @@ w 1
 w 2
 w unwound
 cancelled w
-waiter unwound
 quick still gives 5
 still running until it waits
 end

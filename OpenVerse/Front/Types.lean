@@ -261,6 +261,11 @@ structure Requests where
       that are not a prefix of their own (#351): hidden fields for all of
       their type parameters. -/
   witnesses : List String := []
+  /-- The program awaits a task: its prelude is the await mode's, whose
+      task's end resumes the awaiters inside it (`concPreludeAwaits`; the
+      Book's API, `task`'s `Await`). Only types tell a task's `Await` from
+      an event's, so an elaboration with a call of the task's left asks. -/
+  awaits : Bool := false
   /-- The generic functions that box a value of a type mentioning one of
       their type parameters (a conversion to `comparable`, a comparison
       with a value of another type), and that parameter: the bound

@@ -1,6 +1,6 @@
 # A race arm awaits a cancelled task (and so waits), the next arm wins at
-# once; F then ends in its first run. Does F end normally, or is it
-# cancelled after it ended (its task marked cancelled)?
+# once, and the arm that awaits is cancelled as any loser; F then ends in
+# its first run, normally, and Main gets its result
 W()<suspends>:int =
     Sleep(9.0)
     1

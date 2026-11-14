@@ -1,6 +1,6 @@
 # The same in a spawned task's first run: F's sync arm 1 awaits a cancelled
-# task, arm 2 spawns C. Expected: F is cancelled when its first run ends
-# ("F defer"), C goes on: F defer / C end / C defer / main end
+# task, arm 2 spawns C. Expected: F's sync never ends, and F waits for
+# ever; arm 2 and C go on: arm 2 goes on / C end / C defer / main end
 W()<suspends>:int =
     Sleep(9.0)
     1

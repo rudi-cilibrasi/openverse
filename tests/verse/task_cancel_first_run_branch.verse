@@ -1,5 +1,6 @@
-# a branch that awaits a cancelled task in its first run is cancelled, and
-# its function goes on (#253)
+# a branch that awaits a cancelled task in its first run waits there (the
+# Book's API, task, Await) until its function exits, which stops it, after
+# the function's own defer (#253: before, it was cancelled at once)
 W()<suspends>:int =
     Sleep(9.0)
     1

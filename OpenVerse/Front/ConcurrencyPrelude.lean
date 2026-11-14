@@ -166,9 +166,32 @@ def concPreludeEvents : String :=
   s.replace "    if (C.Now >= F.Wake):\n        return 1\n"
     "    if (C.Now >= F.Wake):\n        if (C.Drain > 0):\n            set C.Progress = true\n            return 0\n        return 1\n"
 
-def concTops (owned : List String := []) (events : Bool := false) : Except String (List STop) :=
-  parsePrelude (if events then concPreludeEvents else concPrelude) (owned ++ (if events then ["CurRoot",
-    "WaitRoot", "Pending", "Probe", "Drain", "MainTask", "Ev", "First", "wakeRoot"] else []) ++ ["sched", "Now", "Next", "sleep", "Pc", "Secs", "Wake", "sleepNew",
+/-- `concPreludeEvents` in await mode (a program that awaits a task): the
+    Book's rule that a task's end resumes its awaiters inside it, in the
+    order they registered, each until it waits again or ends (the Book's
+    API, `task`'s `Await`; docs/research/scheduler-conformance.md, "A
+    task's end resumes its awaiters"). A task's end is a `Signal` of an
+    event of its own, `Ends`, which its first awaiter makes: `Await` gives
+    the result of a task that has one at once, and otherwise awaits the end
+    event, then gives the result; `taskEnd`, which a spawned call's root
+    calls once it has set its task's result, signals it. A cancelled task
+    never sets a result nor signals its end, so its awaiters wait for ever.
+    The field is `taskBase`'s, so that `taskEnd`, which the lowering's code
+    calls, is not generic. -/
+def concPreludeAwaits : String :=
+  let s := concPreludeEvents
+  let s := s.replace "    var Ev:logic = false\n" "    var Ev:logic = false\n    var Ends:?event(void) = false\n"
+  s.replace "Await(T:task(t) where t:type)<suspends>:t =\n    WaitDone(T)\n    if (R := T.Result?) then R else Err()\n"
+    "Await(T:task(t) where t:type)<suspends>:t =\n    if (R := T.Result?) then R else:\n        EvAwait(taskEnds(T))\n        if (V := T.Result?) then V else Err()\ntaskEnds(T:taskBase):event(void) =\n    if (E := T.Ends?) then E else:\n        F := event(void){}\n        set T.Ends = option{F}\n        F\ntaskEnd(T:taskBase):void =\n    if (E := T.Ends?) then signalAll(E, ())\n"
+
+/-- The concurrency prelude's definitions: plain, in event mode (`events`),
+    or in await mode (`awaits`, which is event mode too). -/
+def concTops (owned : List String := []) (events : Bool := false) (awaits : Bool := false) :
+    Except String (List STop) :=
+  parsePrelude (if awaits then concPreludeAwaits else if events then concPreludeEvents else concPrelude)
+    (owned ++ (if events || awaits then ["CurRoot",
+    "WaitRoot", "Pending", "Probe", "Drain", "MainTask", "Ev", "First", "wakeRoot"] else []) ++
+    (if awaits then ["Ends", "taskEnds", "taskEnd"] else []) ++ ["sched", "Now", "Next", "sleep", "Pc", "Secs", "Wake", "sleepNew",
     "sleepInit", "sleepResume", "Sleep", "Ticks", "syncMark", "raceMark", "S", "F", "C", "N", "R", "A",
     "Progress", "Roots", "taskBase", "Done", "Result", "waitf", "T", "X", "waitNew", "waitInit", "waitResume",
     "WaitDone", "Await", "spawnMark", "t", "Sch", "Dead", "evrec", "Got", "Next", "Head", "Tail", "Cur", "W", "L", "V",

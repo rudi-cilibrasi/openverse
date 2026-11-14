@@ -1,6 +1,7 @@
 # branches in a generic function (at two types) that await a cancelled task
-# in their first runs: each branch is cancelled, its function goes on.
-# Expected: b1 defer int / b2 defer / G end / G defer / 7 / b1 defer ... 
+# in their first runs: each waits until its function exits, which stops it.
+# Expected: b2 end int / b2 defer int / G end int / G defer int / b1 defer int
+# / 7 / the same for string / s ...
 W()<suspends>:int =
     Sleep(9.0)
     1

@@ -1,29 +1,27 @@
-# Defers of a task cancelled at its first wait, inside calls and blocks:
-# innermost first. Expected: H inner / H defer / G defer / F defer /
-# main goes on / Main defer
-W()<suspends>:int =
-    Sleep(9.0)
-    1
-H(T:task(int))<suspends>:int =
+# Defers of a cancelled task, inside calls and blocks: innermost first.
+# (Until the Book's rule that a cancelled task never resumes its awaiters,
+# F was cancelled by awaiting a cancelled task; now Main cancels it.)
+# Expected: H inner / H defer / G defer / F defer / main goes on / Main defer
+H()<suspends>:int =
     defer:
         Print("H defer")
     block:
         defer:
             Print("H inner")
-        T.Await()
-G(T:task(int))<suspends>:int =
+        Sleep(9.0)
+        1
+G()<suspends>:int =
     defer:
         Print("G defer")
-    H(T) + 1
+    H() + 1
 F()<suspends>:int =
     defer:
         Print("F defer")
-    T := spawn{W()}
-    T.Cancel()
-    G(T)
+    G()
 Main()<suspends>:void =
     defer:
         Print("Main defer")
-    spawn{F()}
+    T := spawn{F()}
     Sleep(0.1)
+    T.Cancel()
     Print("main goes on")
