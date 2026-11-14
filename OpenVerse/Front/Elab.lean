@@ -22,6 +22,7 @@ import OpenVerse.Front.SignalAdmission
 import OpenVerse.Front.InitializerConvergence
 import OpenVerse.Front.Attributes
 import OpenVerse.Front.Reachability
+import OpenVerse.Front.Variance
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -108,7 +109,7 @@ def prepareLowering (env : TyEnv) (sigs : Signatures) (elaborated : Array Elabor
   -- (a refined test, #142, of classes whose pins the receiver's closed type
   -- arguments rule out can never pass, and the checker types such a test
   -- only when the pins can agree: it goes, #186)
-  let S00 : Sigs := { fns := fsigs0, classes := classTable, protos, pins }
+  let S00 : Sigs := { fns := fsigs0, classes := classTable, protos, pins, variances := env.coreVariances }
   for gi in List.range fns.size do
     let fn := fns[gi]!
     fns := fns.set! gi { fn with body := Suspend.pruneDead S00 ((slotTys[gi]?).getD []) fn.body }
@@ -207,7 +208,8 @@ def lowerProgram (env : TyEnv) (sigs : Signatures) (mainSig : Sig) (lowering : L
   -- (the frame classes' pins after the classes', #244)
   let pins := (List.range classTable.length).map (fun t => (pins[t]?).getD []) ++ framePins
   return { prog := { fns := fns.toList, main },
-           sigs := { fns := fsigs, classes := classTable ++ frameClasses.toList, protos, pins }, slotTys }
+           sigs := { fns := fsigs, classes := classTable ++ frameClasses.toList, protos, pins,
+                     variances := env.coreVariances }, slotTys }
 
 /-- Certification, the last phase of `elabProgramCore`: the lowered program is
     given out with its certificate (`Compiled`) only if no call in it names a
@@ -265,7 +267,8 @@ def certify (lowered : LoweredProgram) (stubs : List (String × Pos)) (debug : B
           | _, _, _ => ""
         let dump := if !debug then "" else
           badStmt ++ s!"\n-- body:\n{((P.fns[f]?).map (fun (fn : Fn) => fn.body.compact "   ")).getD "?"}\n-- arity: {(P.fns[f]?).map Fn.arity}" ++
-          s!"\n-- slot types: {repr (slotTys[f]?)}\n-- signature: {repr (S.fns[f]?)}"
+          s!"\n-- slot types: {repr (slotTys[f]?)}\n-- signature: {repr (S.fns[f]?)}" ++
+          s!"\n-- variances: {repr S.variances}\n-- variances check: {S.checkVarOK}"
         s!" (in {((P.fns[f]?).map Fn.name).getD "?"}){dump}"
       | none => if !checkPrelude P S then " (the prototypes)" else ""
     throw s!"internal error: the elaborated program does not pass Prog.checkTypes{which}"
@@ -280,6 +283,21 @@ def orderWarnings (ws : List (Pos × String)) : List (Pos × String) :=
   sorted.foldr (fun w acc => match acc with
     | x :: _ => if x.1 == w.1 && x.2 == w.2 then acc else w :: acc
     | [] => [w]) []
+
+/-- Each class's and interface's methods as the Book's variance takes them
+    (`TyEnv.bookVariances`): their parameter types, the receiver left out,
+    and result types, over the type's parameters (each overload's, #106; a
+    constructor's `$block` is no member). -/
+def classMemberSigs (env : TyEnv) (classes : Classes) (declared : Declared) :
+    List (String × List (String × List Ty × Ty)) :=
+  let all := declared.sigs.toList ++ declared.gsigs.toList
+  classes.defs.map fun cd =>
+    let names := cd.methods.filterMap fun
+      | .fn _ mn .. => if mn.startsWith "$" then none else some mn
+      | _ => none
+    let names := names.flatMap fun mn => mn :: ((env.methodOverloads.lookup mn).getD [])
+    (cd.name, names.eraseDups.filterMap fun mn =>
+      (all.find? (·.name == s!"{cd.name}.{mn}")).map fun sg => (mn, sg.params.drop 1, sg.ret))
 
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`, by its phases, in order (`docs/DESIGN.md`, "Elaboration
@@ -301,9 +319,16 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     return .asking { witnesses := views.witnessNeeds }
   let env ← pinsAndAccessors { env with viewed := views.viewed } methods opts.requests
   let env ← addPlaceholders env
+  -- (Verse Core's variances, once the class table, the pins and the views
+  -- are known: what the certificate gives, docs/research/variance.md)
+  let env := { env with coreVariances := env.coreVariancesOf }
   let overloads ← functionOverloads env methods.tops defs.methodOverloads
   let env := { env with overloads := overloads.functions, methodOverloads := overloads.methods }
   let declared ← declareSignatures env overloads.tops opts.requests
+  -- (the Book's variances, over the members' declared types: the methods'
+  -- signatures, each overload's too, #106)
+  let members := classMemberSigs env classes declared
+  let env := { env with variances := env.bookVariances members, memberSigs := members }
   -- (the accessors come right after the functions, #157: known now, so that
   -- every elaboration from here on, field defaults' too, reads and sets a
   -- field through one at its place)

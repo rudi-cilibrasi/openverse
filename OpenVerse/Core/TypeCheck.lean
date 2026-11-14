@@ -23,28 +23,28 @@ namespace OpenVerse
 
 mutual
 /-- The type of a literal, when it determines one. -/
-def litTy : Value → Option VTy
+def litTy (V : Variances) : Value → Option VTy
   | .int _ => some .int
   | .logic _ => some .logic
   | .char c => if c < 256 then some .char else none
   | .float _ => some .float
   | .arr ⟨[]⟩ => none
-  | .arr ⟨v :: vs⟩ => match litTy v with
-    | some t => if allTy [] vs t then some (.arr t) else none
+  | .arr ⟨v :: vs⟩ => match litTy V v with
+    | some t => if allTy V [] vs t then some (.arr t) else none
     | none => none
-  | .tup vs => (litTys vs).map .tup
+  | .tup vs => (litTys V vs).map .tup
   | .none => none
-  | .some v => (litTy v).map .opt
+  | .some v => (litTy V v).map .opt
   | .ref _ => none
-def litTys : List Value → Option (List VTy)
+def litTys (V : Variances) : List Value → Option (List VTy)
   | [] => some []
-  | v :: vs => match litTy v, litTys vs with
+  | v :: vs => match litTy V v, litTys V vs with
     | some t, some ts => some (t :: ts)
     | _, _ => none
 end
 
 mutual
-theorem litTy_sound : ∀ {v : Value} {t : VTy}, litTy v = some t → hasTy [] v t = true
+theorem litTy_sound {V : Variances} : ∀ {v : Value} {t : VTy}, litTy V v = some t → hasTy V [] v t = true
   | .ref _, _, h => by simp [litTy] at h
   | .int _, t, h => by simp [litTy] at h; subst h; rfl
   | .logic _, t, h => by simp [litTy] at h; subst h; rfl
@@ -64,18 +64,18 @@ theorem litTy_sound : ∀ {v : Value} {t : VTy}, litTy v = some t → hasTy [] v
     · simp at h
   | .tup vs, t, h => by
     simp only [litTy] at h
-    rcases hl : litTys vs with _ | ts
+    rcases hl : litTys V vs with _ | ts
     · simp [hl] at h
     · simp only [hl, Option.map_some, Option.some.injEq] at h; subst h
       simp [hasTy, litTys_sound hl]
   | .none, _, h => by simp [litTy] at h
   | .some v, t, h => by
     simp only [litTy] at h
-    rcases hl : litTy v with _ | t'
+    rcases hl : litTy V v with _ | t'
     · simp [hl] at h
     · simp only [hl, Option.map_some, Option.some.injEq] at h; subst h
       simp [hasTy, litTy_sound hl]
-theorem litTys_sound : ∀ {vs : List Value} {ts : List VTy}, litTys vs = some ts → allTys [] vs ts = true
+theorem litTys_sound {V : Variances} : ∀ {vs : List Value} {ts : List VTy}, litTys V vs = some ts → allTys V [] vs ts = true
   | [], ts, h => by simp [litTys] at h; subst h; rfl
   | v :: vs, ts, h => by
     simp only [litTys] at h
@@ -87,12 +87,12 @@ end
 
 /-- In check mode, the type must be below the expected one (#32), and the
     result is the expected type. -/
-def expect : Option VTy → VTy → Option VTy
+def expect (V : Variances) : Option VTy → VTy → Option VTy
   | none, t => some t
-  | some τ, t => if t.sub τ then some τ else none
+  | some τ, t => if t.sub V τ then some τ else none
 
-theorem expect_sound {m : Option VTy} {t τ : VTy} (h : expect m t = some τ) :
-    t.sub τ = true ∧ ∀ τ', m = some τ' → τ = τ' := by
+theorem expect_sound {V : Variances} {m : Option VTy} {t τ : VTy} (h : expect V m t = some τ) :
+    t.sub V τ = true ∧ ∀ τ', m = some τ' → τ = τ' := by
   cases m with
   | none => simp [expect] at h; subst h; simp [VTy.sub_refl]
   | some τ' =>
@@ -119,76 +119,123 @@ theorem commonPrefix_prefix : ∀ (as bs : List VTy), commonPrefix as bs <+: as 
 
 mutual
 /-- A type above both `t` and `u`, when the two have the same shape (the
-    union of the classes of references, at the common prefix of their type
-    arguments; `if` branches and the operands of `+` in infer mode, #32). -/
-def VTy.join : VTy → VTy → Option VTy
-  | .ref ts as, .ref us bs => some (.ref (ts ++ us.filter (fun x => !ts.contains x)) (commonPrefix as bs))
-  | .arr t, .arr u => (VTy.join t u).map .arr
-  | .opt t, .opt u => (VTy.join t u).map .opt
-  | .tup ts, .tup us => (VTy.joinL ts us).map .tup
+    union of the classes of references, at type arguments that both fit by
+    the variances of all of them, `VTy.joinArgs`; `if` branches and the
+    operands of `+` in infer mode, #32). -/
+def VTy.join (V : Variances) : VTy → VTy → Option VTy
+  | .ref ts as, .ref us bs =>
+    let cs := ts ++ us.filter (fun x => !ts.contains x)
+    some (.ref cs (VTy.joinArgs V cs 0 as bs))
+  | .arr t, .arr u => (VTy.join V t u).map .arr
+  | .opt t, .opt u => (VTy.join V t u).map .opt
+  | .tup ts, .tup us => (VTy.joinL V ts us).map .tup
   | t, u => if t = u then some t else none
-def VTy.joinL : List VTy → List VTy → Option (List VTy)
+def VTy.joinL (V : Variances) : List VTy → List VTy → Option (List VTy)
   | [], [] => some []
-  | t :: ts, u :: us => match VTy.join t u, VTy.joinL ts us with
+  | t :: ts, u :: us => match VTy.join V t u, VTy.joinL V ts us with
     | some j, some js => some (j :: js)
     | _, _ => none
   | _, _ => none
+/-- Type arguments above `as` and `bs` for every class of `cs`, as many as
+    can be: equal ones, else at a position where every class is bivariant
+    the first, where every one is covariant or bivariant their join (Verse
+    Core has no contravariant position, so no meet), else none further. -/
+def VTy.joinArgs (V : Variances) (cs : List Nat) : Nat → List VTy → List VTy → List VTy
+  | i, a :: as, b :: bs =>
+    if a = b then a :: VTy.joinArgs V cs (i + 1) as bs
+    else if cs.all (fun c => V c i == .bi) then a :: VTy.joinArgs V cs (i + 1) as bs
+    else if cs.all (fun c => V c i != .inv) then
+      match VTy.join V a b with
+      | some j => j :: VTy.joinArgs V cs (i + 1) as bs
+      | none => []
+    else []
+  | _, _, _ => []
 end
 
 mutual
-theorem VTy.join_sub : ∀ (t u j : VTy), VTy.join t u = some j → t.sub j = true ∧ u.sub j = true
+theorem VTy.join_sub (V : Variances) :
+    ∀ (t u j : VTy), VTy.join V t u = some j → t.sub V j = true ∧ u.sub V j = true
   | .ref ts as, u, j, h => by
     cases u <;> simp [VTy.join] at h
     rename_i us bs
     subst h
-    obtain ⟨hp1, hp2⟩ := commonPrefix_prefix as bs
-    constructor
-    · simp only [VTy.sub, Bool.and_eq_true, List.all_eq_true, List.contains_iff_mem, List.mem_append,
-        List.isPrefixOf_iff_prefix]
-      exact ⟨fun x hx => .inl hx, hp1⟩
-    · simp only [VTy.sub, Bool.and_eq_true, List.all_eq_true, List.contains_iff_mem, List.mem_append,
-        List.mem_filter, List.isPrefixOf_iff_prefix]
-      refine ⟨fun x hx => ?_, hp2⟩
+    have hts : ∀ x ∈ ts, x ∈ ts ++ us.filter (fun x => !ts.contains x) := fun x hx => List.mem_append_left _ hx
+    have hus : ∀ x ∈ us, x ∈ ts ++ us.filter (fun x => !ts.contains x) := fun x hx => by
       by_cases hxt : x ∈ ts
-      · exact .inl hxt
-      · exact .inr ⟨hx, by simpa using hxt⟩
+      · exact List.mem_append_left _ hxt
+      · exact List.mem_append_right _ (List.mem_filter.mpr ⟨hx, by simpa using hxt⟩)
+    obtain ⟨h1, h2⟩ := VTy.joinArgs_sub V (ts ++ us.filter (fun x => !ts.contains x)) 0 as bs
+    rw [VTy.sub_ref_iff, VTy.sub_ref_iff]
+    exact ⟨⟨hts, VTy.subArgs_mono hts h1⟩, ⟨hus, VTy.subArgs_mono hus h2⟩⟩
   | .arr t, u, j, h => by
     cases u <;> simp [VTy.join] at h
     obtain ⟨j', hj, rfl⟩ := h
-    simpa [VTy.sub] using VTy.join_sub _ _ _ hj
+    simpa [VTy.sub] using VTy.join_sub V _ _ _ hj
   | .opt t, u, j, h => by
     cases u <;> simp [VTy.join] at h
     obtain ⟨j', hj, rfl⟩ := h
-    simpa [VTy.sub] using VTy.join_sub _ _ _ hj
+    simpa [VTy.sub] using VTy.join_sub V _ _ _ hj
   | .tup ts, u, j, h => by
     cases u <;> simp [VTy.join] at h
     obtain ⟨js, hj, rfl⟩ := h
-    simpa [VTy.sub] using VTy.joinL_sub _ _ _ hj
+    simpa [VTy.sub] using VTy.joinL_sub V _ _ _ hj
   | .int, u, j, h | .logic, u, j, h | .char, u, j, h | .float, u, j, h | .dyn, u, j, h | .var _, u, j, h => by
     cases u <;> simp [VTy.join] at h <;> (try obtain ⟨rfl, rfl⟩ := h) <;> (try subst h) <;>
-      exact ⟨VTy.sub_refl _, VTy.sub_refl _⟩
+      exact ⟨VTy.sub_refl V _, VTy.sub_refl V _⟩
   | .vref es as, u, j, h => by
     cases u <;> simp [VTy.join] at h
     obtain ⟨⟨rfl, rfl⟩, rfl⟩ := h
-    exact ⟨VTy.sub_refl _, VTy.sub_refl _⟩
-theorem VTy.joinL_sub : ∀ (ts us js : List VTy), VTy.joinL ts us = some js →
-    VTy.subL ts js = true ∧ VTy.subL us js = true
+    exact ⟨VTy.sub_refl V _, VTy.sub_refl V _⟩
+theorem VTy.joinL_sub (V : Variances) : ∀ (ts us js : List VTy), VTy.joinL V ts us = some js →
+    VTy.subL V ts js = true ∧ VTy.subL V us js = true
   | [], [], js, h => by simp [VTy.joinL] at h; subst h; exact ⟨rfl, rfl⟩
   | t :: ts, u :: us, js, h => by
     simp only [VTy.joinL] at h
     split at h
     · next j js' hj hjs =>
       simp only [Option.some.injEq] at h; subst h
-      obtain ⟨h1, h2⟩ := VTy.join_sub _ _ _ hj
-      obtain ⟨h3, h4⟩ := VTy.joinL_sub _ _ _ hjs
+      obtain ⟨h1, h2⟩ := VTy.join_sub V _ _ _ hj
+      obtain ⟨h3, h4⟩ := VTy.joinL_sub V _ _ _ hjs
       simp [VTy.subL, h1, h2, h3, h4]
     · simp at h
   | [], _ :: _, _, h | _ :: _, [], _, h => by simp [VTy.joinL] at h
+theorem VTy.joinArgs_sub (V : Variances) (cs : List Nat) : ∀ (i : Nat) (as bs : List VTy),
+    VTy.subArgs V cs i as (VTy.joinArgs V cs i as bs) = true ∧
+      VTy.subArgs V cs i bs (VTy.joinArgs V cs i as bs) = true
+  | i, a :: as, b :: bs => by
+    obtain ⟨r1, r2⟩ := VTy.joinArgs_sub V cs (i + 1) as bs
+    unfold VTy.joinArgs
+    split
+    · next hab =>
+      subst hab
+      simp only [VTy.subArgs, Bool.and_eq_true, List.all_eq_true, decide_true]
+      exact ⟨⟨fun c _ => by cases V c i <;> simp [Variance.fits, VTy.sub_refl], r1⟩,
+        ⟨fun c _ => by cases V c i <;> simp [Variance.fits, VTy.sub_refl], r2⟩⟩
+    · next hab =>
+      split
+      · next hbi =>
+        simp only [List.all_eq_true, beq_iff_eq] at hbi
+        simp only [VTy.subArgs, Bool.and_eq_true, List.all_eq_true]
+        exact ⟨⟨fun c _ => by cases hv : V c i <;> simp [Variance.fits, VTy.sub_refl], r1⟩,
+          ⟨fun c hc => by simp [hbi c hc, Variance.fits], r2⟩⟩
+      · split
+        · next hco =>
+          simp only [List.all_eq_true, bne_iff_ne, ne_eq] at hco
+          split
+          · next j hj =>
+            obtain ⟨hj1, hj2⟩ := VTy.join_sub V a b j hj
+            simp only [VTy.subArgs, Bool.and_eq_true, List.all_eq_true]
+            refine ⟨⟨fun c hc => ?_, r1⟩, ⟨fun c hc => ?_, r2⟩⟩ <;>
+              cases hv : V c i <;> simp_all [Variance.fits]
+          · simp [VTy.subArgs]
+        · simp [VTy.subArgs]
+  | _, [], _ => by simp [VTy.joinArgs, VTy.subArgs]
+  | _, _ :: _, [] => by simp [VTy.joinArgs, VTy.subArgs]
 end
 
 /-- What `expect` promises, for an expression of type `t`. -/
 theorem expect_typed {S : Sigs} {Γ : List VTy} {ρ : VTy} {e : Expr} {m : Option VTy} {t τ : VTy}
-    (h : expect m t = some τ) (ht : Typed S Γ ρ e t) :
+    (h : expect S.var m t = some τ) (ht : Typed S Γ ρ e t) :
     Typed S Γ ρ e τ ∧ ∀ τ', m = some τ' → τ = τ' :=
   let ⟨hs, hm⟩ := expect_sound h
   ⟨.sub ht hs, hm⟩
@@ -266,6 +313,26 @@ theorem fieldTy_sound {S : Sigs} {ts : List Nat} {args : List VTy} {k : Nat} {τ
         exact fun u hu => classField_sound (hc u hu)
       · simp at h
     · simp at h
+
+/-- Whether field `k` of each class of `ts` mentions only type arguments at
+    which its class is invariant, so that a write may go through a
+    reference at other arguments than the object's (`FieldSet`). -/
+def fieldSet (S : Sigs) (ts : List Nat) (k : Nat) : Bool :=
+  ts.all fun t => match S.classes[t]? with
+    | some fs => match fs[k]? with
+      | some f => f.invIn (S.var t)
+      | none => false
+    | none => false
+
+theorem fieldSet_sound {S : Sigs} {ts : List Nat} {k : Nat} (h : fieldSet S ts k = true) : FieldSet S ts k := by
+  intro t ht
+  have := List.all_eq_true.mp h t ht
+  split at this
+  · next fs hfs =>
+    split at this
+    · next f hf => exact ⟨fs, f, hfs, hf, this⟩
+    · simp at this
+  · simp at this
 
 /-- The first of two proposals that passes `ok` (else the second). -/
 def firstOk (ok : List VTy → Bool) (a b : List VTy) : List VTy := if ok a then a else b
@@ -378,8 +445,8 @@ def tcDispatch (S : Sigs) (Γ : List VTy) (us : List Nat) (y y' f : Nat) (m : Op
           (some (τ'.subst μ))
         if us.all (fun u => decide ((S.pinsOf u).take (a.length + k) = P)) &&
             VTy.pinsBelow P (a.length + k) && VTy.extOK P a.length k &&
-            VTy.subL ((VTy.ref us (a ++ VTy.ext N k) :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) &&
-            (τ.subst θ).sub (τ'.subst μ) && eOK then some τ'
+            VTy.subL S.var ((VTy.ref us (a ++ VTy.ext N k) :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) &&
+            (τ.subst θ).sub S.var (τ'.subst μ) && eOK then some τ'
         else none
       | none => none
     | _, _, _, _ => none
@@ -392,8 +459,8 @@ theorem tcDispatch_sound {S : Sigs} {Γ : List VTy} {us : List Nat} {y y' f : Na
       VTy.pinsBelow P (a.length + k) = true ∧ VTy.extOK P a.length k = true ∧
       VTy.varsBelowL N a = true ∧ VTy.varsBelowL N σs = true ∧ τ.varsBelow N = true ∧
       PinRefines P (a ++ VTy.ext N k) μ ∧
-      VTy.subL ((VTy.ref us (a ++ VTy.ext N k) :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) = true ∧
-      (τ0.subst θ).sub (τ.subst μ) = true := by
+      VTy.subL S.var ((VTy.ref us (a ++ VTy.ext N k) :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) = true ∧
+      (τ0.subst θ).sub S.var (τ.subst μ) = true := by
   simp only [tcDispatch] at h
   split at h
   · next hyy =>
@@ -452,8 +519,8 @@ def tcDispatchView (S : Sigs) (Γ : List VTy) (us : List Nat) (y y' f : Nat) (m 
           if ents.all (fun e => !us.contains e.1 || decide (e.2 = φ)) && φ.all (fun v => v.varsBelow k) &&
               us.all (fun u => decide ((S.pinsOf u).take k = P)) &&
               VTy.pinsBelow P k && VTy.extOK P 0 k && decide (a.length ≤ φ.length) &&
-              VTy.subL ((VTy.ref us (VTy.ext N k) :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) &&
-              (τ.subst θ).sub (τ'.subst μ) && eOK then some τ'
+              VTy.subL S.var ((VTy.ref us (VTy.ext N k) :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) &&
+              (τ.subst θ).sub S.var (τ'.subst μ) && eOK then some τ'
           else none
         | none => none
       | none => none
@@ -468,8 +535,8 @@ theorem tcDispatchView_sound {S : Sigs} {Γ : List VTy} {us : List Nat} {y y' f 
       VTy.pinsBelow P k = true ∧ VTy.extOK P 0 k = true ∧
       VTy.varsBelowL N a = true ∧ VTy.varsBelowL N σs = true ∧ τ.varsBelow N = true ∧
       ViewRefines P φ a (VTy.ext N k) μ ∧
-      VTy.subL ((VTy.ref us (VTy.ext N k) :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) = true ∧
-      (τ0.subst θ).sub (τ.subst μ) = true := by
+      VTy.subL S.var ((VTy.ref us (VTy.ext N k) :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) = true ∧
+      (τ0.subst θ).sub S.var (τ.subst μ) = true := by
   simp only [tcDispatchView] at h
   split at h
   · next hyy =>
@@ -537,15 +604,15 @@ mutual
 /-- `tc e none` infers a type of `e`; `tc e (some τ)` checks `e` against `τ`,
     up to subtyping. -/
 def tc : Expr → Option VTy → Option VTy
-  | .lit v, some τ => if hasTy S.protos v τ then some τ else none
+  | .lit v, some τ => if hasTy S.var S.protos v τ then some τ else none
   -- a reference literal: to a prototype (#37)
   | .lit (.ref a), none => S.protos[a]?.map fun (t, args) => .ref [t] args
-  | .lit v, none => litTy v
+  | .lit v, none => litTy S.var v
   | .local i, m => match Γ[i]? with
-    | some t => expect m t
+    | some t => expect S.var m t
     | none => none
   | .assign i e, m => match Γ[i]? with
-    | some t => if (tc e (some t)).isSome then expect m t else none
+    | some t => if (tc e (some t)).isSome then expect S.var m t else none
     | none => none
   | .seq a b, m => if (tc a none).isSome || (tc a (some VTy.void)).isSome then tc b m else none
   | .call f es, m => match S.fns[f]? with
@@ -553,7 +620,7 @@ def tc : Expr → Option VTy → Option VTy
       -- propose an instantiation (from the arguments, then the expected type),
       -- then check against it: only the check needs a proof
       let θ := callInst (bindArgs ps es []) t m
-      if tcL es (ps.map (VTy.subst θ)) then expect m (t.subst θ) else none
+      if tcL es (ps.map (VTy.subst θ)) then expect S.var m (t.subst θ) else none
     | none => none
   | .ite c t e, m =>
     match
@@ -564,7 +631,7 @@ def tc : Expr → Option VTy → Option VTy
           | some τ =>
             if (tc e (some τ)).isSome then some τ
             else match tc e none with
-              | some τ' => VTy.join τ τ'
+              | some τ' => VTy.join S.var τ τ'
               | none => none
           | none => match tc e none with
             | some τ => if (tc t (some τ)).isSome then some τ else none
@@ -597,12 +664,12 @@ def tc : Expr → Option VTy → Option VTy
       else none
     | none => none
   | .loop b, m =>
-    if (tc b none).isSome || (tc b (some VTy.void)).isSome then expect m VTy.void else none
+    if (tc b none).isSome || (tc b (some VTy.void)).isSome then expect S.var m VTy.void else none
   | .brk, some τ => some τ
   | .brk, none => none
   | .ret e, some τ => if (tc e (some ρ)).isSome then some τ else none
   | .ret _, none => none
-  | .print e, m => if (tc e (some VTy.str)).isSome then expect m VTy.void else none
+  | .print e, m => if (tc e (some VTy.str)).isSome then expect S.var m VTy.void else none
   | .heap (.new t) es, m => match S.classes[t]? with
     | some fs =>
       -- propose type arguments (#39), then check the fields against them; the
@@ -619,26 +686,26 @@ def tc : Expr → Option VTy → Option VTy
       let args := firstOk (fun a => tcL es (fs.map (VTy.inst a)) && VTy.pinsOK (S.pinsOf t) a)
         (newProposal t (S.pinsOf t) (fun _ => bindArgs fs es []) fs m)
         (((S.protos.find? (·.1 == t)).map (·.2)).getD [])
-      if tcL es (fs.map (VTy.inst args)) && VTy.pinsOK (S.pinsOf t) args then expect m (.ref [t] args)
+      if tcL es (fs.map (VTy.inst args)) && VTy.pinsOK (S.pinsOf t) args then expect S.var m (.ref [t] args)
       else none
     | none => none
   | .heap (.get k) [e], m => match tc e none with
     | some (.ref ts args) => match fieldTy S ts args k with
-      | some τ => expect m τ
+      | some τ => expect S.var m τ
       | none => none
     | _ => none
   | .heap (.set k) [e, v], m => match tc e none with
     | some (.ref ts args) => match fieldTy S ts args k with
-      | some τ => if (tc v (some τ)).isSome then expect m τ else none
+      | some τ => if (tc v (some τ)).isSome && fieldSet S ts k then expect S.var m τ else none
       | none => none
     | _ => none
   | .heap .tag [e], m => match tc e none with
-    | some (.ref _ _) => expect m .int
+    | some (.ref _ _) => expect S.var m .int
     | _ => none
   | .heap (.isTag us) [e], m => match tc e none with
-    | some (.ref _ args) => expect m (.ref us args)
+    | some (.ref _ args) => expect S.var m (.ref us args)
     -- (a cast of a reference through views, #351)
-    | some (.vref _ _) => expect m (.ref us [])
+    | some (.vref _ _) => expect S.var m (.ref us [])
     | _ => none
   | .heap _ _, _ => none
   -- (every value is a `dyn`: a constructor checks its parts at `dyn`, so
@@ -655,14 +722,14 @@ def tcPrim : Prim → List Expr → Option VTy → Option VTy
   | .mul, [a, b, c, d], m | .quotient, [a, b, c, d], m =>
     if (tc a (some .int)).isSome && (tc b (some .int)).isSome &&
         (tc c (some .int)).isSome && (tc d (some .int)).isSome then
-      expect m (.tup [.int, .int]) else none
+      expect S.var m (.tup [.int, .int]) else none
   | .add, [a, b], m | .sub, [a, b], m | .mul, [a, b], m | .floorDiv, [a, b], m
   | .ceilDiv, [a, b], m | .quotient, [a, b], m | .modulo, [a, b], m =>
-    if (tc a (some .int)).isSome && (tc b (some .int)).isSome then expect m .int else none
-  | .neg, [a], m | .abs, [a], m => if (tc a (some .int)).isSome then expect m .int else none
+    if (tc a (some .int)).isSome && (tc b (some .int)).isSome then expect S.var m .int else none
+  | .neg, [a], m | .abs, [a], m => if (tc a (some .int)).isSome then expect S.var m .int else none
   | .lt, [a, b], m | .le, [a, b], m | .gt, [a, b], m | .ge, [a, b], m => match tc a none with
-    | some .int => if (tc b (some .int)).isSome then expect m .int else none
-    | some .char => if (tc b (some .char)).isSome then expect m .char else none
+    | some .int => if (tc b (some .int)).isSome then expect S.var m .int else none
+    | some .char => if (tc b (some .char)).isSome then expect S.var m .char else none
     | _ => none
   -- the right operand is checked against the left's type first, so that
   -- `O = false` and `E = array{}` type-check (`PrimTy.eq` allows any types)
@@ -693,16 +760,16 @@ def tcPrim : Prim → List Expr → Option VTy → Option VTy
     | some (.arr t) =>
       if (tc b (some (.arr t))).isSome then some (.arr t)
       else match tc b none with
-        | some (.arr u) => (VTy.join t u).map .arr
+        | some (.arr u) => (VTy.join S.var t u).map .arr
         | _ => none
     | _ => match tc b none with
       | some (.arr t) => if (tc a (some (.arr t))).isSome then some (.arr t) else none
       | _ => none
   | .index, [a, i], m => match tc a none with
-    | some (.arr t) => if (tc i (some .int)).isSome then expect m t else none
+    | some (.arr t) => if (tc i (some .int)).isSome then expect S.var m t else none
     | _ => none
   | .len, [a], m => match tc a none with
-    | some (.arr _) => expect m .int
+    | some (.arr _) => expect S.var m .int
     | _ => none
   -- with an expected array type, the operands are checked against it (so a
   -- narrower array can be updated with a wider element)
@@ -712,38 +779,38 @@ def tcPrim : Prim → List Expr → Option VTy → Option VTy
     else none
   | .arrSet, [a, i, v], m => match tc a none with
     | some (.arr t) =>
-      if (tc i (some .int)).isSome && (tc v (some t)).isSome then expect m (.arr t) else none
+      if (tc i (some .int)).isSome && (tc v (some t)).isSome then expect S.var m (.arr t) else none
     | _ => none
   | .flatten, [a], m => match tc a none with
-    | some (.arr (.arr t)) => expect m (.arr t)
+    | some (.arr (.arr t)) => expect S.var m (.arr t)
     | _ => none
   | .range, [a, b], m =>
-    if (tc a (some .int)).isSome && (tc b (some .int)).isSome then expect m (.arr .int) else none
+    if (tc a (some .int)).isSome && (tc b (some .int)).isSome then expect S.var m (.arr .int) else none
   | .tupGet k, [a], m => match tc a none with
     | some (.tup ts) => match ts[k]? with
-      | some t => expect m t
+      | some t => expect S.var m t
       | none => none
     | _ => none
   | .toStr, [a], m => match tc a none with
-    | some .int => expect m VTy.str
-    | some .char => expect m VTy.str
-    | some .float => expect m VTy.str
-    | some (.arr .char) => expect m VTy.str
+    | some .int => expect S.var m VTy.str
+    | some .char => expect S.var m VTy.str
+    | some .float => expect S.var m VTy.str
+    | some (.arr .char) => expect S.var m VTy.str
     | _ => none
   -- floats (#127)
   | .fadd, [a, b], m | .fsub, [a, b], m | .fmul, [a, b], m | .fdiv, [a, b], m
   | .fmin, [a, b], m | .fmax, [a, b], m | .fpow, [a, b], m | .fatan2, [a, b], m =>
-    if (tc a (some .float)).isSome && (tc b (some .float)).isSome then expect m .float else none
+    if (tc a (some .float)).isSome && (tc b (some .float)).isSome then expect S.var m .float else none
   | .flt, [a, b], m | .fle, [a, b], m | .fgt, [a, b], m | .fge, [a, b], m =>
-    if (tc a (some .float)).isSome && (tc b (some .float)).isSome then expect m .float else none
+    if (tc a (some .float)).isSome && (tc b (some .float)).isSome then expect S.var m .float else none
   | .fneg, [a], m | .fabs, [a], m | .fsqrt, [a], m | .fexp, [a], m | .fln, [a], m | .fsin, [a], m
   | .fcos, [a], m | .ftan, [a], m | .fasin, [a], m | .facos, [a], m | .fatan, [a], m
   | .fisFinite, [a], m | .fsinh, [a], m | .fcosh, [a], m | .ftanh, [a], m
   | .fasinh, [a], m | .facosh, [a], m | .fatanh, [a], m =>
-    if (tc a (some .float)).isSome then expect m .float else none
-  | .fofInt, [a], m | .fofBits, [a], m => if (tc a (some .int)).isSome then expect m .float else none
+    if (tc a (some .float)).isSome then expect S.var m .float else none
+  | .fofInt, [a], m | .fofBits, [a], m => if (tc a (some .int)).isSome then expect S.var m .float else none
   | .ffloor, [a], m | .fceil, [a], m | .fround, [a], m | .ftrunc, [a], m =>
-    if (tc a (some .float)).isSome then expect m .int else none
+    if (tc a (some .float)).isSome then expect S.var m .int else none
   | .fail, [], some τ => some τ
   | .userErr, [], some τ => some τ
   | _, _, _ => none
@@ -849,8 +916,8 @@ theorem tcPrim_sound_of {op : Prim} {es : List Expr} {m τ} (ih : ∀ e ∈ es, 
       ∃ σ, Typed S Γ ρ e σ := fun he h => typed_of_wt (ih _ he) h
   -- the two-int-argument operations
   have arith2 : ∀ {a b}, es = [a, b] →
-      (if (tc S Γ ρ a (some .int)).isSome && (tc S Γ ρ b (some .int)).isSome then expect m .int else none)
-        = some τ → TypedL S Γ ρ es [.int, .int] ∧ VTy.int.sub τ = true ∧ ∀ τ', m = some τ' → τ = τ' := by
+      (if (tc S Γ ρ a (some .int)).isSome && (tc S Γ ρ b (some .int)).isSome then expect S.var m .int else none)
+        = some τ → TypedL S Γ ρ es [.int, .int] ∧ VTy.int.sub S.var τ = true ∧ ∀ τ', m = some τ' → τ = τ' := by
     intro a b hes hh
     subst hes
     split at hh
@@ -1020,7 +1087,7 @@ theorem tcPrim_sound_of {op : Prim} {es : List Expr} {m τ} (ih : ∀ e ∈ es, 
         · split at h
           · next u hb =>
             obtain ⟨j, hj, rfl⟩ := Option.map_eq_some_iff.mp h
-            obtain ⟨h1, h2⟩ := VTy.join_sub _ _ _ hj
+            obtain ⟨h1, h2⟩ := VTy.join_sub S.var _ _ _ hj
             exact ⟨.prim (.cons (.sub (inf (by simp) ha) (by simpa [VTy.sub] using h1))
               (.cons (.sub (inf (by simp) hb) (by simpa [VTy.sub] using h2)) .nil)) .concat, by simp⟩
           · simp at h
@@ -1074,7 +1141,7 @@ theorem tcPrim_sound_of {op : Prim} {es : List Expr} {m τ} (ih : ∀ e ∈ es, 
       · simp at hh
     have viaInfer : (match tc S Γ ρ a none with
         | some (.arr t) =>
-          if (tc S Γ ρ b (some .int)).isSome && (tc S Γ ρ c (some t)).isSome then expect m (.arr t) else none
+          if (tc S Γ ρ b (some .int)).isSome && (tc S Γ ρ c (some t)).isSome then expect S.var m (.arr t) else none
         | _ => none) = some τ →
         Typed S Γ ρ (.prim .arrSet [a, b, c]) τ ∧ ∀ τ', m = some τ' → τ = τ' := by
       intro hh
@@ -1209,8 +1276,9 @@ theorem tcHeap_sound_of {op : HeapOp} {es : List Expr} {m τ} (ih : ∀ e ∈ es
       · next τ' hf =>
         split at h
         · next hv =>
-          exact expect_typed h (.heap_set (inf (by simp) he) (fieldTy_sound hf)
-            (typed_of_check (ih v (by simp)) hv))
+          simp only [Bool.and_eq_true] at hv
+          exact expect_typed h (.heap_set (inf (by simp) he) (fieldTy_sound hf) (fieldSet_sound hv.2)
+            (typed_of_check (ih v (by simp)) hv.1))
         · simp at h
       · simp at h
     · simp at h
@@ -1263,7 +1331,7 @@ theorem tc_sound_aux : ∀ (n : Nat) (e : Expr), sizeOf e < n → TcOK S Γ ρ e
         | ref a =>
           simp only [tc] at h
           obtain ⟨t, ht, rfl⟩ := Option.map_eq_some_iff.mp h
-          exact ⟨.lit (by simp [hasTy, ht]), by simp⟩
+          exact ⟨.lit (by simp [hasTy, ht, VTy.subArgs_refl]), by simp⟩
         | _ => simp only [tc] at h; exact ⟨.lit (hasTy_mono List.nil_prefix _ _ (litTy_sound h)), by simp⟩
       | some τ' =>
         simp only [tc] at h; split at h
@@ -1370,7 +1438,7 @@ theorem tc_sound_aux : ∀ (n : Nat) (e : Expr), sizeOf e < n → TcOK S Γ ρ e
               · split at hreg
                 · next τ2 he2 =>
                   -- the branches infer different types: their join
-                  obtain ⟨h1, h2⟩ := VTy.join_sub _ _ _ hreg
+                  obtain ⟨h1, h2⟩ := VTy.join_sub S.var _ _ _ hreg
                   exact ⟨.ite hσ (.sub (It _ _ ht1).1 h1) (.sub (Ie _ _ he2).1 h2), by simp⟩
                 · simp at hreg
             · split at hreg
@@ -1472,9 +1540,9 @@ theorem tc_sound_aux : ∀ (n : Nat) (e : Expr), sizeOf e < n → TcOK S Γ ρ e
         split at h
         · next τ'' hp =>
           simp only [Option.some.injEq] at h; subst h
-          exact ⟨.sub (tcPrim_sound_of ihs hp).1 (VTy.sub_dyn _), by simp⟩
+          exact ⟨.sub (tcPrim_sound_of ihs hp).1 (VTy.sub_dyn S.var _), by simp⟩
         · obtain ⟨τ'', hp, rfl⟩ := Option.map_eq_some_iff.mp h
-          exact ⟨.sub (tcPrim_sound_of ihs hp).1 (VTy.sub_dyn _), by simp⟩
+          exact ⟨.sub (tcPrim_sound_of ihs hp).1 (VTy.sub_dyn S.var _), by simp⟩
       · have hm : tc S Γ ρ (.prim op es) m = tcPrim S Γ ρ op es m := by
           cases m with
           | none => simp [tc]
@@ -1493,9 +1561,9 @@ end
 mutual
 /-- `d` is a default expression of type `t` (`DefaultE S a Γ d t`). -/
 def checkDefault (S : Sigs) (a : Nat) (Γ : List VTy) : Expr → VTy → Bool
-  | .lit v, t => hasTy S.protos v t
+  | .lit v, t => hasTy S.var S.protos v t
   | .local i, t => decide (i < a) && match Γ[i]? with
-    | some t' => t'.sub t
+    | some t' => t'.sub S.var t
     | none => false
   | .prim .mkTup ds, .tup ts => checkDefaultL S a Γ ds ts
   -- (an object of the class at the slot's type arguments, or, with more
@@ -1505,7 +1573,7 @@ def checkDefault (S : Sigs) (a : Nat) (Γ : List VTy) : Expr → VTy → Bool
     | some fs =>
       let args' := VTy.fillArgs (S.pinsOf c) args.length fun j => args[j]?
       VTy.pinsOK (S.pinsOf c) args' && checkDefaultL S a Γ ds (fs.map (VTy.inst args')) &&
-        (VTy.ref [c] args').sub (.ref ts args)
+        (VTy.ref [c] args').sub S.var (.ref ts args)
     | none => false
   -- (#351) a slot of a reference type through views: an object of a class
   -- of an entry, at type arguments its view relates to the slot's
@@ -1513,11 +1581,11 @@ def checkDefault (S : Sigs) (a : Nat) (Γ : List VTy) : Expr → VTy → Bool
     | some (_, φ), some fs =>
       let args := VTy.viewSlotArgs (S.pinsOf c) fs φ bs
       VTy.pinsOK (S.pinsOf c) args && checkDefaultL S a Γ ds (fs.map (VTy.inst args)) &&
-        (VTy.ref [c] args).sub (.vref es bs)
+        (VTy.ref [c] args).sub S.var (.vref es bs)
     | _, _ => false
   | .heap (.get k) [.local i], t => decide (i < a) && match Γ[i]? with
     | some (.ref ts args) => match fieldTy S ts args k with
-      | some τ => τ.sub t
+      | some τ => τ.sub S.var t
       | none => false
     | _ => false
   | _, _ => false
@@ -1699,7 +1767,7 @@ def checkHeapOK (S : Sigs) (Ξ : HeapTy) (h : Array Obj) : Bool :=
   decide (Ξ.length = h.size) &&
   (List.range h.size).all (fun a => match h.toList[a]?, Ξ[a]? with
     | some o, some (t, args) => decide (t = o.tag) && match S.classes[o.tag]? with
-      | some fs => allTys Ξ o.fields (fs.map (VTy.inst args)) && VTy.pinsOK (S.pinsOf o.tag) args
+      | some fs => allTys S.var Ξ o.fields (fs.map (VTy.inst args)) && VTy.pinsOK (S.pinsOf o.tag) args
       | none => false
     | _, _ => false) && S.protos.isPrefixOf Ξ
 
@@ -1749,10 +1817,33 @@ theorem checkPrelude_sound {P : Prog} {S : Sigs} (h : checkPrelude P S = true) :
       · simp at h
     · simp at h
 
+/-- The certificate's variances agree with the class table and the pins
+    (`Sigs.VarOK`): each class's fields use its type arguments as its
+    variances say, and each pin of it pins and mentions only invariant ones. -/
+def Sigs.checkVarOK (S : Sigs) : Bool :=
+  (List.range S.classes.length).all fun t => match S.classes[t]? with
+    | some fs => fs.all (fun f => VTy.posIn S.var (S.var t) f) &&
+        (List.range (S.pinsOf t).length).all fun i => match (S.pinsOf t)[i]? with
+          | some (some c) => S.var t i == .inv && VTy.invIn (S.var t) c
+          | _ => true
+    | none => true
+
+theorem Sigs.checkVarOK_sound {S : Sigs} (h : S.checkVarOK = true) : S.VarOK := by
+  intro t fs hfs
+  have ht : t < S.classes.length := lt_of_getElem?_some hfs
+  have := List.all_eq_true.mp h t (List.mem_range.mpr ht)
+  rw [hfs] at this
+  simp only [Bool.and_eq_true, List.all_eq_true, List.mem_range] at this
+  refine ⟨this.1, fun i c hi => ?_⟩
+  have hl : i < (S.pinsOf t).length := lt_of_getElem?_some hi
+  have := this.2 i hl
+  rw [hi] at this
+  simpa using this
+
 /-- Check a whole program against signatures `S` and slot types `Γs`. -/
 def Prog.checkTypes (P : Prog) (S : Sigs) (Γs : List (List VTy)) : Bool :=
   checkPrelude P S &&
-  S.protos.all (VTy.closedL ·.2) &&
+  S.protos.all (VTy.closedL ·.2) && S.checkVarOK &&
   decide (P.fns.length = S.fns.length) &&
   (List.range P.fns.length).all fun f =>
     match P.fns[f]?, S.fns[f]?, Γs[f]? with
@@ -1765,8 +1856,8 @@ theorem Prog.checkTypes_sound {P : Prog} {S : Sigs} {Γs} (h : P.checkTypes S Γ
     ProgTyped P S := by
   unfold Prog.checkTypes at h
   simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true, List.mem_range] at h
-  obtain ⟨⟨⟨hpre, hcl⟩, hlen⟩, h⟩ := h
-  refine ⟨hcl, hlen,
+  obtain ⟨⟨⟨⟨hpre, hcl⟩, hvar⟩, hlen⟩, h⟩ := h
+  refine ⟨⟨hcl, Sigs.checkVarOK_sound hvar⟩, hlen,
     fun f fn ps τ hf hs => ?_, checkPrelude_sound hpre⟩
   have hlt := lt_of_getElem?_some hf
   have := h f hlt
@@ -1778,5 +1869,64 @@ theorem Prog.checkTypes_sound {P : Prog} {S : Sigs} {Γs} (h : P.checkTypes S Γ
     subst heq1
     exact ⟨Γ, checkFn_sound this⟩
   · simp at this
+
+/-! ### Before variance
+
+A certificate without variances (`Sigs.variances = []`) makes every class
+invariant: its variances check (`Sigs.checkVarOK`), and every write a field
+type allows is allowed (`fieldSet`), so the checker asks of such a program
+what it asked before variance. -/
+
+theorem Sigs.var_nil {S : Sigs} (h : S.variances = []) : S.var = Variances.allInv := by
+  funext t i; simp [Sigs.var, h, Variances.allInv]
+
+theorem VTy.invIn_allInv (t : VTy) : t.invIn (fun _ => .inv) = true :=
+  (VTy.invIn_iff t).mpr fun _ _ => rfl
+
+mutual
+theorem VTy.posIn_allInv : ∀ t : VTy, t.posIn Variances.allInv (fun _ => .inv) = true
+  | .int | .logic | .char | .float | .dyn => rfl
+  | .var _ => rfl
+  | .arr t => by simp only [VTy.posIn]; exact VTy.posIn_allInv t
+  | .opt t => by simp only [VTy.posIn]; exact VTy.posIn_allInv t
+  | .tup ts => by simp only [VTy.posIn]; exact VTy.posInL_allInv ts
+  | .ref us args => by simp only [VTy.posIn]; exact VTy.posArgs_allInv us 0 args
+  | .vref _ args => by simp only [VTy.posIn]; exact (VTy.invInL_iff args).mpr fun _ _ => rfl
+theorem VTy.posInL_allInv : ∀ ts : List VTy, VTy.posInL Variances.allInv (fun _ => .inv) ts = true
+  | [] => rfl
+  | t :: ts => by simp [VTy.posInL, VTy.posIn_allInv t, VTy.posInL_allInv ts]
+theorem VTy.posArgs_allInv (us : List Nat) : ∀ (i : Nat) (args : List VTy),
+    VTy.posArgs Variances.allInv (fun _ => .inv) us i args = true
+  | _, [] => rfl
+  | i, a :: as => by
+    simp only [VTy.posArgs, Bool.and_eq_true, List.all_eq_true]
+    exact ⟨fun _ _ => by simp [Variances.allInv, VTy.invIn_allInv], VTy.posArgs_allInv us (i + 1) as⟩
+end
+
+/-- Without variances, the variances check. -/
+theorem Sigs.checkVarOK_nil {S : Sigs} (h : S.variances = []) : S.checkVarOK = true := by
+  unfold Sigs.checkVarOK
+  rw [Sigs.var_nil h]
+  simp only [List.all_eq_true, List.mem_range]
+  intro t _
+  split
+  · simp only [Bool.and_eq_true, List.all_eq_true, List.mem_range]
+    refine ⟨fun f _ => VTy.posIn_allInv f, fun i _ => ?_⟩
+    split
+    · simp only [Variances.allInv, beq_self_eq_true, Bool.true_and]; exact VTy.invIn_allInv _
+    · rfl
+  · rfl
+
+/-- Without variances, every field a read through the classes allows may be
+    written through them. -/
+theorem fieldSet_nil {S : Sigs} (h : S.variances = []) {ts : List Nat} {args : List VTy} {k : Nat} {τ : VTy}
+    (hf : fieldTy S ts args k = some τ) : fieldSet S ts k = true := by
+  have hft := fieldTy_sound hf
+  unfold fieldSet
+  rw [Sigs.var_nil h]
+  simp only [List.all_eq_true]
+  intro t ht
+  obtain ⟨fs, f, hc, hk, -, -⟩ := hft t ht
+  simp only [hc, hk]; exact VTy.invIn_allInv f
 
 end OpenVerse

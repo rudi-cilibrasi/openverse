@@ -68,7 +68,13 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
           match ← tryCatch (some <$> coerce p new (.arr t)) (fun _ => pure none) with
           | some e => pure (p2 .concat old e)
           | none => eerr p s!"cannot concatenate {ty.show} and {new.ty.show}"
-        else eerr p s!"cannot concatenate {ty.show} and {new.ty.show}"
+        else
+          -- (elements of a class at other type arguments: why its variance
+          -- does not allow it)
+          let why := match (← get).env.varianceWhy u t with
+            | some w => s!": {w}"
+            | none => ""
+          eerr p s!"cannot concatenate {ty.show} and {new.ty.show}{why}"
     -- floats (#127)
     | "+", .float, .float => pure (p2 .fadd old new.e)
     | "-", .float, .float => pure (p2 .fsub old new.e)
