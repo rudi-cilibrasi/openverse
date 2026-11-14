@@ -4,8 +4,8 @@
 # an overload with several values has several; methods too (`Get` stays a method, of one value, so a
 # local may be named like it). And such calls work wherever code is: in constants, class fields'
 # defaults, a class block, parameters' defaults
-Two(N:int):int = N * 2
-Two(S:string):int = S.Length | 100
+Two(N:int)<computes>:int = N * 2
+Two(S:string)<computes>:int = S.Length | 100
 Twice(N:int):int = Two(N) + 1
 Both(S:string):int = Two(S) + 1
 Vals:[]int = for (X := Two("abc")) { X }

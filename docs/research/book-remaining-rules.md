@@ -152,3 +152,38 @@ variables in the for clause is not allowed" (`07_control.md:842-843`),
 where the tests accept `for(X:=1 .. 2, var Temp:rational = 10/X) { X }`
 (`FlowControl/for.versetest:235-236`, `assert_valid`): openverse follows
 the tests and accepts it.
+
+## A module constant has no side effect
+
+**The rule.** The value of a module's constant writes nothing: its
+initializer, and what it calls or constructs, has no `<writes>` effect. A
+function with no heap specifier is `<transacts>`, and so is a class or a
+struct with none, so a constant cannot call such a function or construct
+such a class; `<computes>`, `<reads>` and `<allocates>` ones it can.
+
+**The Book.** The tests: "Test that all non-local variables initializers
+(module, instance) can't have side effects."
+(`Tests/Features/DefaultValueAssignment.versetest:199`), then a constant
+whose value calls a function that sets a field, directly (`:200`) or
+through another (`:215`, `:225`, in a module), refused (3582); "Test that
+calling methods (which may have side-effects) produces an error"
+(`Modules/ModuleDefinitions.versetest:278-279`: `j:int=hasSideEffect()`,
+3582); "Ensure constructor effects of prototype is copied to each
+instance" (`ParametricTypes.versetest:459-468`): a `class<computes>`
+constructed by a module constant is valid, a `class<transacts>` one refused
+(3512). The prose: "Instances of `<unique>` classes with `<allocates>` can
+be created at module scope, as long as their construction does not actually
+allocate mutable memory" (ch. 16, `16_modules.md:617`); every module-scope
+instance of the tests is of a `<computes>` class
+(`Modules/ModuleScopedInstances.versetest:12-35`). Whether a construction
+"actually" allocates mutable memory is the VerseVM's link-time check (9003,
+`GlobalVariables.versetest` 86-105, `verse_vm_only`), which openverse does
+not make.
+
+**openverse before.** A constant's heap effects were inferred from its
+initializer and allowed, whatever they were (a constant is computed at each
+use, so it could not hold a mutable object, but it could write).
+
+**openverse now.** `elabFunctions` (`Elab/Functions.lean`) refuses a
+constant whose initializer has the effect `<writes>`, saying what has it.
+`<reads>` is left allowed, as the tests pin only writes.

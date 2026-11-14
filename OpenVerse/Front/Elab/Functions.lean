@@ -89,6 +89,18 @@ def elabFieldDefaults (env : TyEnv) (sigs : Signatures) (tops : List STop) (cdef
     | _ => pure ()
   return { needs := fieldNeeds, bodies := initializerBodies }
 
+/-- Whether a written type has type values in it: `type`, or a metatype
+    the front end writes as an interface, `subtype(c)` and its kin
+    (`TypeValues`). -/
+partial def STy.mentionsMetatype : STy → Bool
+  | .name q => q == "type" || ["subtype(", "castable_subtype(", "concrete_subtype(",
+      "castable_concrete_subtype(", "classifiable_subset("].any (q.startsWith ·)
+  | .app q ts => STy.mentionsMetatype (.name q) || ts.any STy.mentionsMetatype
+  | .arr t | .opt t => t.mentionsMetatype
+  | .tup ts => ts.any STy.mentionsMetatype
+  | .map k v => k.mentionsMetatype || v.mentionsMetatype
+  | _ => false
+
 /-- The defaults of a function's named parameters, each elaborated once at
     the definition, in the function's scope (the parameters before it, and
     `Self` in a method), in a trial whose code is dropped: a default is
@@ -260,7 +272,7 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
     | .fn p n ps _ _ _ body =>
       elaborated := elaborated.push (← elabFn allSigs sigs.prog requests env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
         (evidenceSignature := some sig) (bookDefaults := !extendedDefaults))
-    | .const p n _ _ body =>
+    | .const p n _ sty body =>
       -- a constant is computed at each use, so it would be a new object each
       -- time (until Verse Core has global state)
       if sig.ret.holdsMutable env then
@@ -268,6 +280,22 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
       let ctx : Ctx := { sigs := allSigs, sigProg := sigs.prog, types := env }
       let (r, st) ← elabBody ctx body (some sig.ret) { env }
       let (e, st) ← (coerce p r.1 sig.ret).run st
+      -- a module's constant has no side effect: its initializer writes
+      -- nothing, also through what it calls or constructs ("all non-local
+      -- variables initializers (module, instance) can't have side
+      -- effects", the Book's tests, DefaultValueAssignment.versetest:199,
+      -- ModuleDefinitions.versetest:278, ParametricTypes.versetest:465)
+      -- (a type value is no construction: `Value:castable_subtype(c) = c`)
+      -- (the front end writes metatypes as interfaces, `subtype(c)`, and a
+      -- type value as the construction of a class of its own, `$type:c`:
+      -- a constant of a type that has type values in it constructs none)
+      let metatype := sty.any STy.mentionsMetatype
+      if !n.startsWith "$" && !metatype then
+        if let some (_, kp, via) := st.fx.find? (·.1 == "writes") then
+          let what := match via with
+            | some f => s!"{f}, which has the effect <writes>"
+            | none => "sets a var field"
+          throw s!"{kp.show}: the value of the constant {n} {what}: a module's constant has no side effect (Book of Verse tests, DefaultValueAssignment.versetest); make it a function, or call one that does not write"
       -- slots start like a function's (a class-typed one as a placeholder)
       let inits ← match st.slotTys.toList.mapM (slotDefault env 0 [] []) with
         | .ok ds => pure ds

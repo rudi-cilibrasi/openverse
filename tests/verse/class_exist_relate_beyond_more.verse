@@ -1,7 +1,7 @@
 # more dispatches to classes whose pins relate the receiver's type arguments
 # to ones the implementing class does not have (#209): generic methods, an
 # untyped named default, a composite pin (fstT2), the hidden parameter b
-expr(t:type) := class<abstract>:
+expr(t:type) := class<abstract><computes>:
     Eval():t
     Name():string = "expr"
     Both(X:u where u:type):tuple(t, u)
@@ -38,7 +38,7 @@ Main():void =
     Print("{Run(F)} {F.Name()} {RunB(F, "x")(1)} {RunP(F)} {RunP2(F, 9)} {F.Snd()(1)}")
     G := fstT2(int, int, string){P := pairE(tuple(int, int), string){L := pairE(int, int){L := One, R := lit{V := 2}}, R := strE{}}}
     Print("{Run(G)(1)} {G.Name()} {RunB(G, 3)(1)} {RunP(G)(0)}")
-strE := class(expr(string)):
+strE := class<computes>(expr(string)):
     Eval<override>():string = "s"
     Both<override>(X:u where u:type):tuple(string, u) = ("s", X)
     Pick<override>(?Alt:?string = false):string = "s"

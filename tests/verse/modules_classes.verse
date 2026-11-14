@@ -5,7 +5,7 @@ shapes := module:
     Twice<public>(X:t where t:type):tuple(t, t) = (X, X)
     Show<public>(X:int):string = "int {X}"
     Show<public>(X:string):string = "string {X}"
-    point<public> := struct:
+    point<public> := struct<computes>:
         X<public>:int = 0
         Y<public>:int = 0
 
