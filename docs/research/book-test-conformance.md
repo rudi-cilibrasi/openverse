@@ -1705,8 +1705,8 @@ of the Book's `docs/`, test lines of its `Tests/`.
   cannot help: the value is a reference, so a copy would lose its identity
   (`var` fields, `<unique>`), and representing a covariant parameter
   otherwise (boxed in `dyn`) would change every parametric class's layout.
-  So variance needs Core: to be designed in a research note of its own
-  (`variance.md`) and left for the owner.
+  So variance needs Core: designed in [variance.md](variance.md) and left
+  for the owner.
 - *Size.* 38 + 34 + 8.
 
 **singleton-types (19)** (`Void.versetest` 13, `FindFirstAsync…` 3,
