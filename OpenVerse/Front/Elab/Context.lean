@@ -40,6 +40,7 @@ import OpenVerse.Front.SourceFrames
 import OpenVerse.Front.FailCapture
 import OpenVerse.Front.CompilerWrites
 import OpenVerse.Front.Types
+import OpenVerse.Front.Variance
 import OpenVerse.Front.ChoiceTypes
 import OpenVerse.Front.UpperBounds
 import OpenVerse.Front.SubtypeEvidence
@@ -1727,7 +1728,7 @@ partial def slotDefault (env : TyEnv) (dictBase : Nat) (params : List Ty) (visit
   if !vt.mentionsVar && !vt.hasRef then return .lit vt.default
   -- a parameter of a subtype: no allocation
   if vt.hasRef then
-    if let some i := params.findIdx? (fun pt => (pt.toVTy env).sub vt) then return .local i
+    if let some i := params.findIdx? (fun pt => (pt.toVTy env).sub env.coreVar vt) then return .local i
   match t with
   | .param n _ =>
     if let some k := env.selfWitness.lookup n then return .heap (.get k) [.local 0]
@@ -1952,7 +1953,7 @@ def TyEnv.viewFits (env : TyEnv) (a b : Ty) : Option (List Nat × Bool) :=
           ((φ.map (VTy.inst as)).zip bs).any fun (u, w) => !u.mentionsVar && !w.mentionsVar && decide (u ≠ w)
       | none => false
     let fits := ts.filter (!closedOff ·)
-    some (fits, (VTy.ref fits as).sub (.vref es bs))
+    some (fits, (VTy.ref fits as).sub env.coreVar (.vref es bs))
   | _, _ => none
 
 /-- `e` gives no value: it breaks, returns, fails or is `Err()` (after
@@ -1972,7 +1973,7 @@ partial def _root_.OpenVerse.Expr.noValue : Expr → Bool
     when they have none. -/
 partial def _root_.OpenVerse.Expr.untyped : Expr → Bool
   | .lit (.ref _) => false
-  | .lit v => (litTy v).isNone
+  | .lit v => (litTy Variances.allInv v).isNone
   | .seq _ b => b.untyped
   | .ite _ t e => t.untyped && e.untyped
   -- (a body that gives no value is checked at `void`)
@@ -2013,28 +2014,6 @@ def TyEnv.boxCode (env : TyEnv) (n : String) : Nat :=
   match env.enums.findIdx? (·.1 == n) with
   | some i => 3 + i
   | none => 3 + env.enums.length + ((env.structs.findIdx? (·.1 == n)).getD env.structs.length)
-
-/-- Values of `t` are their own boxes (`Code.id`, arrays and options of
-    such): an int, a float, a logic, a char, a string, a refinement, a
-    `comparable`, `()`, a `<unique>` object. -/
-partial def Ty.boxId (env : TyEnv) : Ty → Bool
-  | .int | .float | .logic | .char | .refine _ | .dyn | .void | .never | .tup [] => true
-  | .arr t | .opt t => t.boxId env
-  -- (a class: a reference, compared by identity; one with no concrete
-  -- class below has no values)
-  | .struct n _ => env.classes.contains n
-  | _ => false
-
-/-- Converting a value of `a` to `b` is the identity on values: `b` is `a`
-    with `comparable` in places where `a` has a type whose values are their
-    own boxes (`[]int` to `[]comparable`). -/
-partial def Ty.boxIdTo (env : TyEnv) : Ty → Ty → Bool
-  | .dyn, .dyn => true
-  | a, .dyn => a.boxId env && a.comparable env
-  | .arr a, .arr b | .opt a, .opt b => a.boxIdTo env b
-  | .tup as, .tup bs => as.length == bs.length && (as.zip bs).all fun (a, b) => a.boxIdTo env b
-  | .map k v, .map k' v' => k.boxIdTo env k' && v.boxIdTo env v'
-  | a, b => a == b
 
 /-- `comparable` occurs in the type. -/
 partial def Ty.mentionsComparable : Ty → Bool
@@ -2132,7 +2111,7 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
     -- of the others, its object always one of them)
     match a.toVTy env, b.toVTy env, env.viewFits a b with
     | .ref ts as, .vref es bs, some (fits, ok) =>
-      if (VTy.ref ts as).sub (.vref es bs) then return some e
+      if (VTy.ref ts as).sub env.coreVar (.vref es bs) then return some e
       if fits.length == ts.length || !ok then return some e
       let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push a })
       let y ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push b })
@@ -2141,10 +2120,15 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
   -- no value has a class type with no concrete class below it (an interface
   -- nothing implements, an abstract class with no subclass): the conversion
   -- to a type above it is unreachable (#98)
-  if let (.struct S _, .struct T _) := (a, b) then
+  if let (.struct S as, .struct T bs) := (a, b) then
     if env.classes.contains S && env.classes.contains T && S != T && env.isSub S T &&
         (env.concreteBelow S).isEmpty then
       return some (.seq e (.prim .userErr []))
+    -- (one at other type arguments that fit by the Book's variance: the
+    -- same value, of no class, the empty tuple in Verse Core at both)
+    if env.classes.contains S && S == T && !env.isRefClass S && (env.concreteBelow S).isEmpty &&
+        env.argsFit T as bs then
+      return some e
   -- (to `comparable` where each value is its own box, `[]int` to
   -- `[]comparable`: the same value)
   if a != b && a.boxIdTo env b then return some e
@@ -2315,6 +2299,9 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
     -- (a weak map is above the maps, not below: Book of Verse ch. 3)
     if let (.weakMap .., .map ..) := (r.ty, target) then
       eerr p s!"expected {target.show}, found {r.ty.show}: a weak_map is no map (Book of Verse ch. 3: \"Because `weak_map` is a supertype of `map`, you can assign regular maps to weak_map variables … but you lose the ability to count or iterate\")"
+    -- (a class at other type arguments: why its variance does not allow it)
+    if let some why := (← get).env.varianceWhy r.ty target then
+      eerr p s!"expected {target.show}, found {r.ty.show}: {why}"
     eerr p s!"expected {target.show}, found {r.ty.show}"
 
 /-- `coerce`, whose error says why a name is an `any` (`Ctx.anyWhy`). -/
@@ -2459,17 +2446,47 @@ partial def joinTyShaped (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Boo
       -- the expected type, when both are below it, else the nearest common
       -- class above both, else the one interface above both that no other
       -- common one is below (at the same type arguments, #39)
+      -- (a class's instance fits one of a class above at type arguments
+      -- that fit by the Book's variance, as `refUp`: the same value)
+      let fitsAt (C : String) (cs : List Ty) (U : String) (us : List Ty) : Bool :=
+        env.upArgs C cs U == us ||
+          (env.isRefClass C && env.isRefClass U && refUp env (.struct C cs) (.struct U us)) ||
+          (C == U && !env.isRefClass C && (env.concreteBelow C).isEmpty && env.argsFit U cs us)
       let up (U : String) (us : List Ty) : Bool :=
-        env.isSub S U && env.isSub T U && env.upArgs S as U == us && env.upArgs T bs U == us
+        env.isSub S U && env.isSub T U && fitsAt S as U us && fitsAt T bs U us
+      -- (the type arguments of `U` above both: equal ones, else at each
+      -- position by `U`'s variance, the first where bivariant, the one above
+      -- (or their join) where covariant, the one below where contravariant)
+      let joinArgsAt (U : String) : Option (List Ty) := do
+        if !(env.isSub S U && env.isSub T U) then none
+        let xs := env.upArgs S as U
+        let ys := env.upArgs T bs U
+        if xs == ys then return xs
+        if xs.length != ys.length then none
+        let vs := env.varianceOf U
+        let js ← (xs.zip ys).zipIdx.mapM fun ((x, y), j) => match vs[j]?.getD .inv with
+          | .inv => if x == y then some x else none
+          | .bi => some x
+          | .co =>
+            if env.argFits x y then some y else if env.argFits y x then some x else
+            match joinTy env x y none true with
+            | some z => if env.argFits x z && env.argFits y z then some z else none
+            | none => none
+          | .contra => if env.argFits x y then some x else if env.argFits y x then some y else none
+        if up U js then some js else none
       let atU (U : String) : Ty :=
-        (Ty.struct U (env.upArgs S as U)).commonBounds (.struct U (env.upArgs T bs U))
+        let old := (Ty.struct U (env.upArgs S as U)).commonBounds (.struct U (env.upArgs T bs U))
+        if env.upArgs S as U == env.upArgs T bs U then old else
+        match joinArgsAt U with
+        | some js => Ty.struct U js
+        | none => old
       -- (two type values join at a metatype that constructs neither, as
       -- a class value's type is its own class, and a join of two keeps only
       -- the bound above both: Book of Verse tests, Archetypes.versetest:110,
       -- "Ensure a particular class (rather than a bound)"; `TypeValues`)
       let typeValues := (TypeValues.valueClass? S).isSome && (TypeValues.valueClass? T).isSome
       let kind (U : String) : Option String := (TypeValues.bound? U).map (·.1)
-      let cands := (env.supers S).filter fun U => up U (env.upArgs S as U) &&
+      let cands := (env.supers S).filter fun U => (up U (env.upArgs S as U) || (joinArgsAt U).isSome) &&
         !(typeValues && (kind U == some "concrete_subtype" || U == TypeValues.castableMark ||
           (kind U == some "castable_subtype" && !env.isSub U TypeValues.castableMark)))
       let common : Option Ty :=
@@ -2580,7 +2597,14 @@ def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty := do
       if exp == some .dyn && isComparable env a && isComparable env b then return .dyn
       if exp.isNone && !ambiguousJoin env a b then return fallbackJoin env a b
       if exp == some .any && !ambiguousJoin env a b then return .any
-      eerr p s!"the branches have different types: {a.show} and {b.show}"
+      -- (a branch of a class at other type arguments than the expected
+      -- type's: why its variance does not allow it)
+      let why := match exp with
+        | some e => match env.varianceWhy a e, env.varianceWhy b e with
+          | some w, _ | none, some w => s!": {w}"
+          | none, none => ""
+        | none => ""
+      eerr p s!"the branches have different types: {a.show} and {b.show}{why}"
 
 /-- (#283, #335) The first success of clauses lifted already (`$firstP`),
     whose value is a result packet, the tuple of the names they bind: an

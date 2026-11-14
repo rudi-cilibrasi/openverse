@@ -3474,8 +3474,8 @@ Phase 3 (#20) adds a heap of objects, each with a class tag and fields
 
 - **Reference types are tag sets, with type arguments.** `VTy.ref ts args`
   is a reference to an object whose tag is in `ts` and whose type
-  arguments start with `args` (#39; `[]` for classes without type
-  parameters). The front end uses the concrete classes below a static
+  arguments fit `args` by its class's variances (#39; `[]` for classes
+  without type parameters; below). The front end uses the concrete classes below a static
   class. A subclass's type parameters come after its parent's: a
   `pair(t, u) := class(base(t))` object has the arguments `[t, u]`, and is
   a `base(t)`; an `intbox := class(base(int))` object has `[int]`. A cast
@@ -3486,9 +3486,10 @@ Phase 3 (#20) adds a heap of objects, each with a class tag and fields
   order: definition order.
 - **Subtyping** (#32) is structural (`VTy.sub`): a reference type with
   fewer classes is below one with more, and one with more type arguments
-  below one with a prefix of them; the arguments themselves are invariant
-  (an object's fields can be written as well as read). Arrays, options and
-  tuples are covariant, which is sound because they are immutable values. One rule,
+  below one with fewer, each argument related to the other's by the
+  variance of each class of the source there (`VTy.subArgs`, next item).
+  Arrays, options and tuples are covariant, which is sound because they are
+  immutable values. One rule,
   `Typed.sub`, gives an expression every type above its own, so widening is
   free and needs no node. Preservation peels subsumption off a derivation by
   recursion (`stepE_d`) and handles the last real rule (`TypedR`). The
@@ -3500,8 +3501,43 @@ Phase 3 (#20) adds a heap of objects, each with a class tag and fields
   instantiation comes from its last arguments (where the front end passes
   its type arguments), and a `new`'s type arguments come from the expected
   type, else from matching its fields' types against its arguments' (with
-  `void` for a parameter they do not determine). References join at the
-  common prefix of their type arguments.
+  `void` for a parameter they do not determine). References join at type
+  arguments both fit (`VTy.joinArgs`: equal ones, a covariant position's
+  join, a bivariant position's first).
+- **Variance** (Book of Verse ch. 10; [research/variance.md](research/variance.md)).
+  The certificate gives each class's variance at each of its Verse Core
+  type arguments (`Sigs.variances`, `Variance`): `co`, `inv` or `bi`
+  (Verse Core's types are first order, arrays, options, tuples and
+  references covariant, so a field type uses a type argument positively,
+  invariantly or not at all: there is no contravariance in Verse Core).
+  An object made at `X` has the reference types `ref ts args` whose classes
+  include its own and whose arguments `X` fit by its own class's variances
+  (`hasTy`, as `VTy.ref [t] X ≤ VTy.ref ts args`). That is what keeps a
+  method sound: it is a generic function called at the reference's type
+  arguments, its body reading the receiver's fields there. The checker
+  checks the variances against the class table (`Sigs.VarOK`,
+  `Sigs.checkVarOK`): each field type uses its class's arguments as its
+  variances say (`VTy.posIn`), so a read at the reference's arguments gives
+  a value of the field's type there (the polarity lemma, `VTy.posIn_sub`);
+  each pin pins and mentions invariant arguments only, so a dispatch's
+  refinement by pins, an equation, stays true (`ref_open` takes the
+  reference's arguments followed by the object's others, which agree with
+  the pins where the object's do); and `Typed.heap_set` asks the written
+  field to mention invariant arguments only (`FieldSet`, checked by
+  `fieldSet`), so a write is at the object's own field type, for a `var`
+  field, an accessor's `set` (#157) or any other. A class reference fits a
+  view (#351) only where the view mentions invariant arguments, as views
+  relate arguments by equations. With no variances every class is
+  invariant everywhere, and subtyping and typing are those before variance
+  (`hasTy_allInv_ref`, `VTy.sub_ref_of_prefix`, `Sigs.checkVarOK_nil`).
+  The front end gives each class the most permissive variances its fields,
+  pins, writes and views allow (`Sigs.inferVariances`, from all `bi` up to a
+  fixpoint), and converts a class's instance to another by the Book's
+  variance of the class above (over its members, methods too:
+  `TyEnv.bookVariances`) only when Verse Core's subtyping of the two
+  references holds too (`refUp`): no value changes, so the two must be one
+  type in Verse Core. The C runtime sees no type arguments (a cast tests the
+  tag), so nothing in it or the format changes.
 - **Value typing sees a heap typing.** `hasTy Ξ v t` takes `Ξ : HeapTy`,
   the class and type arguments of each heap object. Objects do not record
   their type arguments, so `Ξ` is a ghost: no function of the heap gives it,
@@ -3542,9 +3578,10 @@ Phase 3 (#20) adds a heap of objects, each with a class tag and fields
   for such overrides, by a substitution `μ` that makes
   `Y`'s type arguments agree with the pins of the classes `us`, applied to
   both sides of the call: the arguments against the parameters, and the
-  result against the expected type. When the call runs, the object's
-  arguments agree with its pins and start with `Y`'s, so `μ` is the
-  identity and preservation is the call's. The substitution lemma holds
+  result against the expected type. When the call runs, `Y`'s arguments
+  followed by the object's others agree with its pins (a pinned argument,
+  and every argument a pin mentions, is invariant, so there the object's
+  are `Y`'s), so `μ` is the identity and preservation is the call's. The substitution lemma holds
   because every substitution that makes the arguments agree with the pins
   factors through `μ` (`PinRefines.factor`), and at each instance of the
   arguments `unify` finds a refinement when one exists; when none does,

@@ -159,6 +159,8 @@ check "GADT models through type aliases (${FUZZ_MODEL_GADT_ALIASES:-150} program
   scripts/fuzz-model-gadt.sh "${FUZZ_MODEL_GADT_ALIASES:-150}" "$seed" --aliases
 check "FIFO event model fuzzing (${FUZZ_MODEL_FIFO:-60} programs, --event-fifo)" \
   scripts/fuzz-model-fifo.sh "${FUZZ_MODEL_FIFO:-60}" "$seed"
+check "variance model fuzzing (${FUZZ_MODEL_VARIANCE:-150} programs, against a model of the Book and Verse Core)" \
+  scripts/fuzz-model-variance.sh "${FUZZ_MODEL_VARIANCE:-150}" "$seed"
 check "heterogeneous choice model fuzzing (${FUZZ_MODEL_HETEROGENEOUS:-120} programs)" \
   scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_HETEROGENEOUS:-120}" "$seed"
 check "choice operation dictionary model fuzzing (${FUZZ_MODEL_DICTIONARY:-120} programs)" \

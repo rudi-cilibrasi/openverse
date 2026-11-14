@@ -1,0 +1,7 @@
+covariant 1 1 1
+override 2 3
+subclass 4 m
+contravariant 1 1
+contravariant override 2
+bivariant 3 3 3
+exit=0
