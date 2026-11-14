@@ -8,9 +8,10 @@ against it. This page records the decisions behind the shape of the code.
 
 **Contents**
 
-- Semantics: [Two languages, one semantics](#two-languages-one-semantics) · [Failure and rollback](#failure-and-rollback) · [Choice](#choice-iteration-over-alternatives) · [Fuel](#fuel)
-- Front end: [Translation validation](#translation-validation-instead-of-a-verified-front-end) · [Modules](#modules-a-renaming-before-elaboration) · [Type aliases](#type-aliases-a-substitution-before-elaboration) · [Floats](#floats-canonical-bits) · [Rationals](#rationals-helpers-written-in-verse) · [Generic functions](#generic-functions-polymorphic-verse-core) · [Function values](#function-values-hidden-interfaces-and-classes) · [Concurrency](#concurrency-suspends-functions-as-frames)
-- Classes and the heap: [Classes as references](#classes-as-references) · [Typing the heap](#typing-the-heap) · [Typed defaults](#why-every-slot-starts-with-a-typed-default)
+- Semantics: [Two languages, one semantics](#two-languages-one-semantics) · [Failure and rollback](#failure-and-rollback) · [What a `for` undoes](#what-a-for-undoes-one-search) · [Choice](#choice-iteration-over-alternatives) · [Fuel](#fuel)
+- Elaboration: [The elaborator's mutual block](#the-elaborators-mutual-block-325) · [Elaboration in phases](#elaboration-in-phases) · [Applications, in order](#applications-in-order) · [Elaboration in rounds](#elaboration-in-rounds) · [Translation validation](#translation-validation-instead-of-a-verified-front-end)
+- Front end: [Modules](#modules-a-renaming-before-elaboration) · [Qualified names](#qualified-names-one-resolver-for-every-qualifier) · [Access](#access-one-order-checked-where-names-are-resolved) · [Attributes](#attributes-checked-and-taken-out-first) · [Markers](#markers-what-the-passes-before-elaboration-write-for-one-another) · [Types as values](#types-as-values-classes-the-front-end-writes) · [Fields with accessors](#fields-with-accessors-calls-of-their-classs-methods) · [Type aliases](#type-aliases-a-substitution-before-elaboration) · [Commas in blocks](#commas-in-blocks-tuples-in-the-parser) · [Destructured parameters](#destructured-parameters-a-desugaring-in-the-parser) · [Extension methods](#extension-methods-functions-that-method-calls-find) · [Floats](#floats-canonical-bits) · [Equality](#equality-verse-cores-veq-and-the-front-end-across-types) · [comparable](#comparable-boxes-in-verse-cores-dyn) · [Weak maps and module-scoped vars](#weak-maps-and-module-scoped-vars) · [Rationals](#rationals-helpers-written-in-verse) · [Bitwise functions](#bitwise-functions-helpers-written-in-verse) · [Generic functions](#generic-functions-polymorphic-verse-core) · [Function values](#function-values-hidden-interfaces-and-classes) · [Concurrency](#concurrency-suspends-functions-as-frames)
+- Classes and the heap: [Classes as references](#classes-as-references) · [Unification](#unification) · [Typing the heap](#typing-the-heap) · [Typed defaults](#why-every-slot-starts-with-a-typed-default)
 - C runtime: [The binary format and the loader](#the-binary-format-and-the-loader) · [Two semantics, one seam](#two-semantics-one-seam) · [Objects in the C runtime](#objects-in-the-c-runtime)
 - [Readings of the Book](#readings-of-the-book)
 
@@ -444,8 +445,9 @@ prefix and condition. First-success helpers wrap each generated scope in
 an internal taking boundary, so branch-block renaming cannot rename the
 prepared consumer suffix and multiply helper identities. Eager array
 lowering erases the markers to ordinary blocks. Original source bodies
-still check return types/effects; recursive invocation cleanup remains
-refused, including cleanup inside a returning branch.
+still check return types/effects. A `defer:` in such a body, a returning
+branch's included, runs as each value leaves its scope (#283,
+`multi_recursive_return_nested_defer.verse`; LANGUAGE.md, "Readings").
 
 When a branch, or the rest copied into it, has a choice of its own, the
 `if` becomes an *exclusive choice* instead (#314):
