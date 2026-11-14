@@ -422,3 +422,128 @@ what ran since. The awaiters of `Event.versetest:27` and FORT-1126351 are
 arms of that same task, whose code (the `race`'s or `sync`'s) is running
 the signaller.
 
+#### Design
+
+Concurrency lives in the front end: Verse Core has no suspension, and the
+front end lowers `<suspends>` code to frames and resume functions over a
+scheduler written in Verse (`Front/Suspend.lean`, `Elab/Lowering.lean`'s
+`lowerConcurrency`, the prelude in `Front/ConcurrencyPrelude.lean`). Tasks,
+events, `Signal` and `Await` are prelude code and lowering output, not Core
+primitives. So the rule is built in the lowering and the prelude; Verse
+Core, OVBC, `runtime/include/openverse.h`, `runtime/src/load.c` and the
+C interpreter do not move.
+
+**Which programs change.** A program whose source uses an event type
+(`event`, `sticky_event`, `subscribable_event`) is compiled in *event
+mode*: its prelude has the drain below. Other programs compile byte for
+byte as before. In event mode, the suspends functions from which the
+prelude's `signalAll` is reachable through calls (an arm's or `branch`'s
+code and a spawned call's first run included, a method's dispatch and a
+function value's call conservatively, as for `--signal-no-rollback`) are
+*marked*: their regions keep the running markers below. Only a marked
+function's regions can be running while a `Signal` runs, as the code
+under the `Signal` is theirs. The other functions compile as before.
+
+**Running markers.** A region (a function's body, or an arm) keeps its
+suspension point in a frame field: 0 not started, `k ≥ 1` at site `k`
+(waiting there, or running the callee of a call there), -1 done. A marked
+region also writes -2 while it runs code between sites (when it starts,
+and after each site it passes) and `-(k+2)` while the code of its `sync`,
+`race` or `rush` at site `k` runs the arms; back to `k` when it waits
+there. Entering a marked region whose point is -2 gives 0 at once (it is
+the code running the `Signal`, or above it); one at `-(k+2)` runs its
+arms *partially* (below) and gives 0; one at `k` seeks it as before. A
+call whose region runs at site `k` has a running callee, which by the
+same rule gives 0. So resuming a task's root while its code runs walks
+down the running code and returns, touching only what waits beside it.
+
+**Partial arms.** At a running `sync`, `race` or `rush`, each arm that
+started and is pending is resumed in order: a running one gives 0 at
+once; a waiting one runs to its next wait or its end, as rule 2 wants. An
+arm that ends there is marked done; the first such end or `return` of
+the site is recorded in a field of the frame (`2i` an end, `2i+1` a
+`return`; for a `sync`, only returns). The code that runs the arms, after
+each arm's run, honours it: a `return` there makes the function return
+(the pending arms that started are cancelled, last first, the defers
+run); an end there wins a `race` or `rush`, so the later arms never start
+and the started ones are cancelled (or go on, for a `rush`) when the
+signalling arm next waits (rule 7). A race's value is the first
+completer's: in a marked function each arm writes a value slot of its
+own, and the winner's is the race's.
+
+**The drain.** `signalAll(E, X)` takes the event's list (the current
+round) and leaves the event an empty one, which awaits made from now on
+join (rule 4). It marks each record of the round not already done (a
+wait cancelled before marks its own): its value, done, *pending*. Then,
+in the list's order, each record still pending is unmarked and its task
+resumed: the scheduler's `Drain` depth goes up by one, `$wakeRoot`
+resumes the root the record was last polled in (#513's `WaitRoot`,
+recorded by `waitResume` from the scheduler's `CurRoot`; a `rush` loser
+that goes on as a task of its own is probed once, as #513 did, so its
+waiters record it), and the depth goes down. A pending record is reported
+as waiting, so a task resumed for one record goes on only there. A
+`Signal` made inside runs its own round first (rules 5 and 6); `Signal`
+returns when its round is done.
+
+**Waking a root.** `$wakeRoot` dispatches on the root's class (`Main`'s
+frame, a spawned call's root, a branch's or `rush` loser's wrapper). A
+root that is done is left. A root whose code is running (its own flag:
+a field of each root's frame and wrapper in event mode, and the
+scheduler's for `Main`) has its root region resumed directly, which the
+markers make a walk down the running code (the waiting arms beside it
+run); its recorded waiting frame (#362) is forgotten; a request to cancel
+it found in that walk (it awaits a cancelled task) is dropped and the
+scheduler asked for another pass, whose poll asks again. Any other root
+runs as a spawn's first run does: the scheduler's cancel request saved
+and cleared, `CurRoot` set, its trampoline run, what it recorded
+forgotten, a request taken for it unless it ended, and marked done (and,
+for `Main`, its frame's point set to -1, which `$Run` reads after each
+root's run) if it ended. A trampoline saves its task's `Running` and
+takes a cancel request of its task only if it was not running before
+(as a branch's already did), so that running it inside another run of
+the same task leaves that run's bookkeeping alone.
+
+**Held waits.** Inside a drain, only an event record's turn goes on:
+`sleepResume` reports a sleep that expired as waiting, and `waitResume`
+a task wait that was already polled (a fresh one on a done task still
+completes at once), asking for another pass; each goes on at its root's
+turn in the scheduler's pass, as before (rules 13 and 14: task awaiters
+keep the pass order). A rule-13 drain is the same machinery with a list
+of records in each task; it is designed here and left (no translatable
+case needs it).
+
+**Branches stopped while they run.** A function resumed inside a
+`Signal` that its own `branch` made can end and stop that branch. In
+event mode each wrapper records that its arm is running; stopping it then
+marks the wrapper done without cancelling the arm, and the wrapper's
+trampoline, finding it stopped when the arm's run returns pending,
+cancels the arm then.
+
+**Rollback.** A drain is ordinary Verse Core run inside the `Signal`'s
+caller: in a failure context that fails, Core's rollback undoes what the
+awaiters did with everything else (rule 11): the records go back to
+waiting, the tasks to where they waited. No primitive changes.
+
+**`spawn` in a failure context** is allowed: a `spawn` is a call of its
+root's `start`, which links the root and runs it to its first wait; in a
+context that fails, the link and the run are undone with it, so the task
+never runs again (`LiveVariables.versetest:450-545`). In a suspends
+function, a `spawn` in a condition or filter is started in place (it is
+not a suspension point). A `spawn` in a `defer:` stays refused (a
+separate rule), as do a spawned call whose arguments suspend and the
+`bp_vm_only` refusal of `SoftwareTransactionalMemory.versetest:503-508`
+(the older VM's).
+
+**Flags.** `--event-fifo` (#513) goes: the Book's order and timing are
+the default, and FIFO order without the timing is no reading of the
+Book. Its tests become tests of the default. `--signal-no-rollback`
+(#515) stays an opt-in for the reading of Epic's published `event` pages;
+the default, allowed and undone with its context, is the Book's tests'
+(rule 11).
+
+**Models first.** The scheduler models (`scripts/models/sched_gen.py`,
+`sched_gen2.py`, `event_fifo.py`) are changed to the rule before the
+lowering: a `Signal` resumes each awaiter in order, a running task by
+walking its running code (`partial`), any other by a poll; arms that end
+there are honoured by the code that runs the arms; sleeps and task waits
+are held inside a drain.
