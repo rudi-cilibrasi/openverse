@@ -3842,7 +3842,8 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
   -- elaboration that found it did)
   let computable (g : String) : Bool := (groupOf g).all fun h => !lazy.contains h &&
     match rawMfs.lookup h with
-    | some f => f.fx.contains "computes" && !anyE (fun | .set .. | .decl _ _ _ true _ => true | _ => false) f.body
+    | some f => f.fx.contains "computes" && !["reads", "writes", "allocates"].any f.fx.contains &&
+        !anyE (fun | .set .. | .decl _ _ _ true _ => true | _ => false) f.body
     | none => false
   -- (#283) the functions one machine takes lazily: a group's strongly
   -- connected functions, and, for one taken lazily (not computable), every
@@ -3956,7 +3957,7 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
     let some f := rawMfs.lookup g | continue
     let why (w : String) : String :=
       s!"{f.pos.show}: {shownFnName g} has several values and is recursive, or called by a recursive one, {w}: {eagerWhy}"
-    if !f.fx.contains "computes" then throw (why "and it is not <computes>")
+    if !f.fx.contains "computes" || ["reads", "writes", "allocates"].any f.fx.contains then throw (why "and it is not <computes>")
     if anyE (fun | .set .. | .decl _ _ _ true _ => true | _ => false) f.body then
       throw (why "and it has a var or a set")
   for (n, f) in rawMfs do

@@ -104,12 +104,12 @@ def declareSignatures (env : TyEnv) (tops : List STop) (requests : Requests) :
     if !namedLast ps then throw s!"{p.show}: in {n}, every parameter after a named one must be named"
     return (tys, rt)
   -- a function's effects that exclude each other: at most one of <converges>,
-  -- <computes> and <transacts>, and <computes> with no heap effect
+  -- <computes> and <transacts> (`<computes>` combines with the additive
+  -- heap effects, `<computes><allocates>`, Book of Verse ch. 13, as
+  -- `allowedFx` reads them)
   let checkExclusive (p : Pos) (n : String) (effs : List String) : Except String Unit := do
     if (["converges", "computes", "transacts"].filter effs.contains).length > 1 then
       throw s!"{p.show}: {n} has more than one of <converges>, <computes> and <transacts> (they exclude each other)"
-    if effs.contains "computes" && ("transacts" :: heapFx).any effs.contains then
-      throw s!"{p.show}: <computes> excludes the heap effects (<reads>, <writes>, <allocates>, <transacts>) that {n} also has"
   -- signatures: functions from their annotations, constants from theirs or by inference
   let mut sigs : Array Sig := #[]
   for (top, idx) in tops.zip (List.range tops.length) do

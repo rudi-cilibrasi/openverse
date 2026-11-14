@@ -43,8 +43,10 @@ namespace OpenVerse.Front
 def heapFx : List String := ["allocates", "reads", "writes"]
 
 /-- The heap effects a function's specifiers allow: all of them by default
-    and with `<transacts>`, none with `<computes>`, those named by
-    `<allocates>`, `<reads>`, `<writes>`. -/
+    and with `<transacts>`, those named by `<allocates>`, `<reads>`,
+    `<writes>`, also with `<computes>` (`<computes><allocates>`, Book of
+    Verse ch. 13: `<computes>` is exclusive, the others additive), and none
+    with `<computes>` alone. -/
 def allowedFx (effs : List String) : List String :=
   if effs.contains "transacts" then heapFx
   else

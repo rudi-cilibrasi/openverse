@@ -179,3 +179,52 @@ rigid := class(physics){}
 `<final_super>`); `GetCastableFinalSuperClassFromType[component, rigid]`
 gives `physics`. `tests/verse/final_super.verse` runs the cases, in Lean
 and C; the refusals are `tests/errors/final_super_*.verse`.
+
+## `<computes>` with the additive heap effects
+
+**The rule.** Of the heap specifiers, `<computes>` and `<transacts>` are
+exclusive (with `<converges>`, at most one of them), and `<reads>`,
+`<writes>` and `<allocates>` additive: `<computes>` with additive ones
+allows those (`<computes><allocates>` allows allocating), on a function, a
+function type, a class, an interface or a struct; `<computes>` alone allows
+none; no heap specifier, or `<transacts>`, all three.
+
+- Ch. 13 (`13_effects.md:99-105`): "Effect specifiers can be further
+  divided into *exclusive* specifiers (`<converges>`, `<computes>`,
+  `<transacts>`) and *additive* specifiers (`<suspends>`, `<decides>`,
+  `<reads>`, `<writes>`, `<allocates>`). A function may have at most one
+  exclusive specifier but can combine multiple additive ones. For example,
+  `<computes><decides>` is valid (pure computation that may fail), but
+  `<computes><transacts>` is an error (cannot have two exclusive
+  effects)." The table (`:111-116`): `<reads>` `{reads}`, `<writes>`
+  `{writes}`, `<allocates>` `{allocates}`, `<transacts>` `{reads, writes,
+  allocates}`, `<computes>` `{}`.
+- The tests: `Attributes/allocates.versetest:4-5`, "<allocates> only works
+  with classes, interfaces, structs, & functions. Combines with <varies> and
+  <computes>, but redundant with <transacts>", and its cases 6-32 (valid
+  with `<computes>` on a class, an interface, a struct and a method), 57
+  (a `var` field in a `<computes><allocates>` class), 59 (3512, the same in
+  a `<computes>` class); `Attributes/unique.versetest:86-137`, "Allocating
+  a <unique> class requires <allocates>. So <unique> classes can be created
+  in <transacts> without further annotation, but <varies> and <computes>
+  require an explicit <allocates>"; the key classes of `Map.versetest`,
+  `Operators/CompareMap.versetest` and `weak_map.versetest`
+  (`class<unique><allocates><computes>`).
+
+The prose and the tests agree.
+
+**In openverse.** It refused `<computes>` with any heap specifier ("<computes>
+excludes the heap effects … that F also has"), in `EffectPolicy.checkSpecs`
+(classes, interfaces, structs, function types) and `checkExclusive`
+(`Elab/Signatures.lean`, functions). Those refusals are gone; the
+exclusive rule stays ("has more than one of <converges>, <computes> and
+<transacts>"). A function's allowed effects (`allowedFx`) already read the
+named ones first; a data type's construction budget (`EffectPolicy.constructionFx`)
+does too now. A function with several values computed at its calls (#283)
+must be effect-free: `<computes>` with no additive heap specifier
+(`Choice.lean`).
+
+**What changed.** `tests/errors/fx_computes_and_reads.verse` and
+`tests/errors/fx_generic_computes.verse` expected the old refusal of
+`<computes><reads>`; they now test that such a function may not write
+("F sets a var field, which its effects (<reads>) do not allow").

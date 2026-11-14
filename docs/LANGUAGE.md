@@ -239,6 +239,11 @@ reject duplicate or contradictory effects, and reject unknown execution
 specifiers before lowering can erase them (#494). They also reject a redundant
 one, as classes, interfaces and structs do: `<transacts>` implies `<reads>`,
 `<writes>` and `<allocates>` (ch. 13), so `<transacts><allocates>` is refused.
+`<converges>`, `<computes>` and `<transacts>` exclude each other; `<reads>`,
+`<writes>` and `<allocates>` are additive, also with `<computes>`:
+`<computes><allocates>` allows allocating and nothing else of the heap
+(ch. 13: "A function may have at most one exclusive specifier but can
+combine multiple additive ones"; `Attributes/allocates.versetest` 4-32).
 
 `predicts` and `converges` are explicitly unsupported, including on abstract
 signatures and function types. The pinned Book calls prediction unreleased
@@ -254,8 +259,9 @@ Explicit internal/implicit effect spellings (`no_rollback`, `dictates`,
 Transactional output/events retain their documented OpenVerse policy (#495).
 
 Class/interface/struct heap construction budgets are enforced on definitions
-and callers (#508). No heap annotation means `transacts`; `computes` permits
-none; `reads`, `writes` and `allocates` permit those named. A subtype must
+and callers (#508). No heap annotation means `transacts`; `computes` alone
+permits none; `reads`, `writes` and `allocates` permit those named, also
+with `computes` (`class<computes><allocates>`). A subtype must
 include its parent types' construction budgets. Data types cannot declare
 `decides` or `suspends`. Effects on fields are refused; declaration/access
 metadata remains separate. Field defaults also have an independent convergence
@@ -1139,8 +1145,8 @@ circle := class(shape, labelled):
   [Parametric functions](#parametric-functions)).
 - **Heap effects** (#35). A
   function's specifiers allow a set of heap effects: all of them when it has
-  none or `<transacts>`, none with `<computes>`, and those named by
-  `<reads>`, `<writes>` and `<allocates>`. Reading a `var` field *reads*,
+  none or `<transacts>`, none with `<computes>` alone, and those named by
+  `<reads>`, `<writes>` and `<allocates>` (with `<computes>` or not). Reading a `var` field *reads*,
   setting one *writes* (`set C.F op= e`, and a path that goes on past a
   `var` field, such as `set O.Arr[0] = e`, also *read* it), and
   constructing an object of a class with a `var` field or a `<unique>` one

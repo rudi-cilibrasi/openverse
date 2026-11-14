@@ -107,10 +107,18 @@ with tempfile.TemporaryDirectory(prefix='openverse-construction-effects-') as di
 
     for kind in ('class', 'interface', 'struct'):
         for spelling, needle in [('<computes><computes>', 'duplicate effect specifier'),
-                                 ('<computes><reads>', '<computes> excludes'),
                                  ('<computes><transacts>', 'they exclude each other')]:
             case(f'{kind} conflicting budget {spelling}', f'data:={kind}{spelling}{{}}\n' + main,
                  False, needle)
+
+    # <computes> is exclusive and <reads>, <writes>, <allocates> additive
+    # (Book of Verse ch. 13): <computes> with some of them is the budget of
+    # those, as without it
+    for kind, required, caller in itertools.product(('class', 'struct'), BUDGETS[1:], BUDGETS):
+        text = (f'data:={kind}<computes>{tags(required)}{{}}\n'
+                f'Use(){tags(caller)}:int={{Value:=data{{}};1}}\n' + main)
+        case(f'{kind} call <computes>{tags(required)}/{caller}', text, required <= caller,
+             'declared construction budget', profile=True)
 
     case('diamond union refused', 'left:=interface<reads>{}\nright:=interface<writes>{}\n'
          'child:=class<reads>(left,right){}\n' + main,
