@@ -460,7 +460,7 @@ marked with `<decides>` create a failure context for their entire body").
   `F(X:int):int=X+(return 0)`): openverse accepts those still (with a
   warning, code never reached).
 
-**What openverse does.** `checkJumps` (`Front/Elab/Source.lean`), a check of
+**What openverse does.** `checkJumps` (`Front/SourceRules.lean`), a check of
 the source before elaboration: a `return` with a failure context between it
 and its function's body, or in a `<decides>` function anywhere but in tail
 position, and a `break` with one between it and its loop, are refused.

@@ -932,9 +932,6 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
         return .weakMap kt vt
       else eerr p s!"unknown parametric type '{n}' (only structs can be parametric)"
 
-def typeNames : List String :=
-  ["int", "logic", "char", "string", "void", "float", "rational", "any", "comparable", "type", "subtype"]
-
 /-- Comparable upper types whose subtype conversions preserve equality.
     Contextual discarding to void is deliberately not such a guarantee. -/
 private partial def comparableUpper (env : TyEnv) (vars : List (String × Bool)) : STy → Bool

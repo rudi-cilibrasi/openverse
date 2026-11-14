@@ -605,6 +605,12 @@ def reservedNames : List String :=
    "sequence", "string8", "string16", "string32", "subclass", "succeeds", "syntax", "throws", "trait",
    "truth", "try", "union", "using", "verify", "when", "while", "of", "at"]
 
+/-- The built-in types' names, which no type of the program's takes
+    (`checkTypeNames`, with `char32`) and no type parameter does
+    (`checkTParams`). -/
+def typeNames : List String :=
+  ["int", "logic", "char", "string", "void", "float", "rational", "any", "comparable", "type", "subtype"]
+
 /-- The prefix of an extension method's function's name (`extensionName`). -/
 def extensionPrefix : String := "$ext:"
 
