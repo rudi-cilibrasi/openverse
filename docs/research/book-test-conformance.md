@@ -1447,8 +1447,31 @@ none became an accepted refusal or a different result.
   `choice_suspends_return_lazy_returns`, the function dropped),
   `overflow` (a `break` never taken), `empty_values_nested` (a map keyed by
   an option), `initializer_convergence_hidden_first` (its `first{}` in
-  `option{}`); 54 tests of openverse's own default reading select
-  `--extended-defaults`, their bytes the same.
+  `option{}`); and 11 whose failing default was not their subject: six
+  `choice_dictionary_numeric_*` write their rational field's default `1`
+  rather than `1/1`, which can fail, three `initializer_convergence_*`
+  (`choice_function`, `choice_literal`, `failable`) catch the failure in
+  the default's own `if`, and `multi_named_params` and
+  `multi_recursive_named` lose their failing defaults to
+  `multi_named_params_failing_default` and
+  `multi_recursive_named_failing_default`. 44 tests of openverse's own
+  default reading (waiting, dispatched and spawned defaults, a default's
+  effects at its caller's, a failing default; #283, #459, #468) and those
+  two new ones select `--extended-defaults`, their bytes the same.
+- **The gate's generators** write what the rules accept: `mv.py` and
+  `generic_mv.py` a named argument last (the place drawn for it is drawn
+  still); `generic_mv.py`'s recursive named group ends its recursion in the
+  callee's first clause, not in a failing default; `gen-equality.py` keys
+  no map by a type with an array or map in it (`[string]logic` where it
+  had `[[]int]logic`; a map case keyed so is drawn and not written);
+  `gadt_contexts.py`, `gadt_waiting_contexts.py` and `test-choice-size.sh`
+  construct their module constants' classes `<computes>`;
+  `gadt_defaults.py`'s methods whose defaults write are `<transacts>`. The
+  option is passed only where a model's subject is the extension:
+  `gadt_spawn_defaults` (a `<computes>` method's writing defaults, #468),
+  `gadt_waiting_contexts` and the size check's waiting-default cases
+  (defaults that wait, #283), and the initializer model run under it
+  before.
 - **Where the Book disagrees with itself** (openverse follows the tests):
   a `<decides>` body's loop (ch. 8 line 122 against
   `SOL-4199-BreakFromIf.versetest:79`); maps as map keys (ch. 3 line 1025
