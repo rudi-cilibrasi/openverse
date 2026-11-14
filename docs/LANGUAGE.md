@@ -2376,6 +2376,27 @@ The tests above check them, and `scripts/fuzz-choice.sh` runs both
 implementations against a model of these rules written apart from the
 compiler.
 
+## Tuple and array concatenation
+
+Tuples work as operands of array concatenation (`+` and `+=`):
+
+```verse
+A := (1, 2) + (3, 4)          # []int, array{1, 2, 3, 4}
+B := (0, 1) + array{2, 3}     # []int
+var C:[]int = array{0}
+set C += (1, 2)
+```
+
+An array context supplies the tuple's element type; otherwise its elements
+join as an array literal's do, including a common superclass or interface.
+Each operand is evaluated once, from left to right. A tuple's immediate
+elements become array entries: `((1, 2), (3, 4)) + array{(5, 6)}` gives
+an array of three tuples. The ordinary container conversions apply when
+another element type is expected. A `void` or `true` value used beside an
+array gives the empty array. A matching program `operator'+'` for tuple or
+unit operands keeps its behavior and declared effects; built-in
+concatenation is used when no source overload fits ([the rule](research/book-forms-rules.md#tuples-in-array-concatenation)).
+
 ## any
 
 `any` is the top type (Book of Verse ch. 11, #138): every value is an

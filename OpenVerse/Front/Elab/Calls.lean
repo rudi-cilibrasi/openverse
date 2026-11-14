@@ -250,6 +250,29 @@ partial def elabArithmeticOperandWith (elabE : Ctx → SExpr → Option Ty → E
     | .arr _ => arrays
     | ty => arithmeticType ctx.types ty) operation
 
+/-- A tuple used in concatenation is an array of its elements. Infer its
+    element type as for an array literal, then convert the saved value once. -/
+partial def elabConcatOperandWith (elabE : Ctx → SExpr → Option Ty → EM R)
+    (ctx : Ctx) (p : Pos) (value : R) (exp : Option Ty) : EM R := do
+  let value ← elabArithmeticOperandWith elabE ctx p value "operator '+'" true
+  let .tup ts := value.ty | return value
+  let elemExp := match exp with | some (.arr t) => some t | _ => none
+  ofExcept <| checkTypeValueJoin ctx.types p elemExp ts
+  if let some t := elemExp then
+    let before ← get
+    if let some e ← tryCatch (some <$> elabArgumentCoerceWith elabE ctx p value (.arr t)) (fun _ => pure none) then
+      return ⟨e, .arr t⟩
+    set before
+  let t ← match ts with
+    | [] => pure Ty.never
+    | t :: rest => rest.foldlM (fun a b => do
+      if let some joined := joinTy ctx.types a b elemExp then return joined
+      if let some joined := SubtypeEvidence.joinView? ctx.types ctx.evidenceTypes [a, b] elemExp then
+        return joined
+      if !ambiguousJoin ctx.types a b then return fallbackJoin ctx.types a b
+      eerr p s!"the elements of this tuple have ambiguous array types: {a.show} and {b.show}") t
+  return ⟨← elabArgumentCoerceWith elabE ctx p value (.arr t), .arr t⟩
+
 partial def elabPrintableValueWith (elabE : Ctx → SExpr → Option Ty → EM R)
     (ctx : Ctx) (p : Pos) (value : R) : EM R := do
   let view ← match ctx.formattingView p value.ty with
