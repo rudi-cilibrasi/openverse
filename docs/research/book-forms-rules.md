@@ -652,3 +652,32 @@ of one name first (`(b:)F` beside the inherited `F`, [After classes and
 subtyping](book-test-conformance.md#after-classes-and-subtyping)). No
 program that compiled changes but those that write such a call, which now
 warn.
+
+## An enum's value named after a reserved word
+
+**The rule.** An enum's value takes a reserved name (`reservedNames`: the
+names the Book's tests reserve, the built-in names and the effects') or an
+access specifier's name (`public`, `internal`, `protected`, `private`,
+`epic_internal`) only qualified with its enum, `(A:)public`; unqualified it
+is refused.
+
+**The Book.** Ch. 9 (`09_structs_enums.md:530-553`): "Qualification also
+allows you to use reserved words and keywords as enum values, which would
+otherwise cause errors", with the tested example `bad_enum19 := enum:
+public` (3532) and `(keyword_enum:)public  # OK: reserved word
+qualified`, "without qualification each of those three is an error". The
+tests, `Tests/QualifiedIdentifier.versetest`: `A := enum{ (A:)public }`
+valid, "even if they alias a reserved word" (`:313-314`), and `A := enum{
+public }` refused (`:315-316`, 3532), as `enum{ for }` is (`:320`, 3514).
+The test calls `public` "a reserved word with a built-in symbol" and `for`
+one "with no built-in symbol" (`:314`, `:319`): the access specifiers are
+the built-in symbols the chapters name; openverse takes them and its
+reserved names.
+
+**openverse before.** An enum's values were not among the names
+`checkReservedNames` reads, so `enum{ public }` and `enum{ decides }` were
+accepted.
+
+**openverse now.** `checkReservedNames` (`Elab/Source.lean`) reads each
+enum's unqualified values. No program that compiled changes: none of
+openverse's tests, generators or the corpus names an enum's value so.

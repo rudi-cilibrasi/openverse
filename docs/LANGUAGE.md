@@ -145,7 +145,12 @@ X`), and which a test calls "The 'at' reserved word"
 (`SemicolonsVsCommas.versetest:52`). openverse reads `first`, `assert` and `let` as macros
 before `{` or `(`, and `using` is a keyword. A qualifier does not lift the
 rule (`(m:)local` is refused), but an enum's value qualified with its enum
-may take any name, a keyword's too ([Qualified names](#qualified-names)). The function type
+may take any name, a keyword's too ([Qualified names](#qualified-names)),
+and only qualified may it take one of these or an access specifier's name
+(`public`, `internal`, `protected`, `private`, `epic_internal`): `enum{
+public }` is refused, `enum{ (A:)public }` is not (ch. 9: "Qualification
+also allows you to use reserved words and keywords as enum values, which
+would otherwise cause errors"; `QualifiedIdentifier.versetest` 313-316). The function type
 `type{_(:int):int}` writes `_` as no definition's name, and stays allowed.
 
 ## Parametric functions

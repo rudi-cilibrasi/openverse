@@ -257,7 +257,13 @@ def checkTypeNames (tops : List STop) : Except String Unit := do
       if ("char32" :: typeNames).contains n then throw s!"{p.show}: {n} is a built-in type"
     | _ => pure ()
 
-/-- No definition takes a reserved name (`reservedNames`), at any scope. -/
+/-- No definition takes a reserved name (`reservedNames`), at any scope;
+    an enum's value takes one, or an access specifier's name, only
+    qualified with its enum (Book of Verse ch. 9, `09_structs_enums.md:530`:
+    "Qualification also allows you to use reserved words and keywords as
+    enum values, which would otherwise cause errors"; `enum{ public }`
+    refused, `enum{ (A:)public }` valid, `QualifiedIdentifier.versetest`
+    313-316). -/
 def checkReservedNames (tops : List STop) : Except String Unit := do
   for t in tops do
     for (p, n) in t.definedNames do
@@ -265,6 +271,10 @@ def checkReservedNames (tops : List STop) : Except String Unit := do
       -- (an extension method's, `M` of its function `$ext:M`)
       let n := (extensionMethod? n).getD n
       if reservedNames.contains n then throw s!"{p.show}: '{n}' is reserved: no definition can take it"
+    if let .const p e _ _ (.enumDef _ vs _) := t then
+      if let some v := vs.find? fun v => (reservedNames ++ EffectPolicy.accessNames).contains v then
+        let e := (e.splitOn "::").getLast?.getD e
+        throw s!"{p.show}: '{v}' is a reserved word: a value of the enum {e} takes it only qualified, ({e}:){v} (Book of Verse ch. 9)"
 
 mutual
 /-- `checkDefers` in an expression. -/
