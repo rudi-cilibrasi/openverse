@@ -9372,11 +9372,11 @@ Tests/ParametricFunctions.versetest:653	disagrees-refuses
 Tests/ParametricFunctions.versetest:675	agrees
 Tests/ParametricFunctions.versetest:696	agrees
 Tests/ParametricFunctions.versetest:709	agrees
-Tests/ParametricFunctions.versetest:719	disagrees-refuses
+Tests/ParametricFunctions.versetest:719	agrees
 Tests/ParametricFunctions.versetest:727	agrees
-Tests/ParametricFunctions.versetest:732	disagrees-refuses
-Tests/ParametricFunctions.versetest:752	disagrees-refuses
-Tests/ParametricFunctions.versetest:decls	disagrees-refuses
+Tests/ParametricFunctions.versetest:732	agrees
+Tests/ParametricFunctions.versetest:752	agrees
+Tests/ParametricFunctions.versetest:decls	agrees
 Tests/ParametricTypes.versetest:7	agrees
 Tests/ParametricTypes.versetest:8	agrees
 Tests/ParametricTypes.versetest:9	agrees

@@ -419,7 +419,12 @@ converts to it, and it converts to `logic` (as `false`), to `void` and to
 an empty array. `void` and `true` are one type inside options, arrays and
 maps: `?void` converts to `?true`, `[]void` to `[]true`, `[int]void` to
 `[int]true`; a `void` value converts to `logic` as `false`, as `true`'s
-does. A `branch:`'s value is an `any`: `void` and `any` take it, `true`
+does. It also converts to an empty array of any element type, evaluating
+the operand once before producing the array. This admits a generic
+class's `Contents:[]t = ()` default (`ParametricFunctions.versetest:717`,
+used by 719, 732 and 752) and applies within covariant containers;
+`[]void` to `[][]int` retains one empty array per source element.
+A `branch:`'s value is an `any`: `void` and `any` take it, `true`
 does not. `X:true = 1` is refused, as `X:tuple() = 1` is.
 
 Querying an empty value uses its conversion to `logic` as `false` and
@@ -456,7 +461,8 @@ converts to `true`, so a `branch:`'s value is no `void`.
 **openverse now.** `resolveTy` names `true` `tuple()`; `convert` takes a
 type to the same type with `tuple()` for some of its `void`s inside
 options, arrays, maps and tuples (`Ty.unitUp`; one Verse Core type, so no
-code), and `void` to `logic` (`false`); `joinTyShaped` joins two such types
+code), and `void` to `logic` (`false`) or an empty array (after discarding the
+operand); `joinTyShaped` joins two such types
 at the one with `tuple()`, and `join` an `if` with a `void` branch where a
 `logic` is expected at `logic`; `elabBranch` types a `branch:`'s value
 `any` (its code the same; in a program where an `any` prints itself,

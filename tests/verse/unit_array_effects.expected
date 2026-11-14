@@ -1,0 +1,17 @@
+left 1
+right 2
+pair 0
+bind 3
+array 0
+units 0 0
+nested 2 0 0
+tuple 4
+tuple 0 7
+option 5
+option 0
+map 6
+map 0
+string 7
+string 0
+kept 7
+exit=0
