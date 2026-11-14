@@ -1640,9 +1640,6 @@ def litValue? : Expr → Option Value
   | _ => none
 
 /-- `a x` or `an x`. -/
-def withArticle (x : String) : String :=
-  if ["a", "e", "i", "o", "u"].any (x.startsWith ·) then s!"an {x}" else s!"a {x}"
-
 def showLit (e : Expr) : String :=
   match litValue? e with
   | some v => v.render

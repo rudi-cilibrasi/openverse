@@ -15,6 +15,10 @@ structure Pos where
 def Pos.show (p : Pos) : String :=
   if p.file.isEmpty then s!"{p.line}:{p.col}" else s!"{p.file}:{p.line}:{p.col}"
 
+/-- `x` with its indefinite article, for a message: `an int`, `a string`. -/
+def withArticle (x : String) : String :=
+  if ["a", "e", "i", "o", "u"].any (x.startsWith ·) then s!"an {x}" else s!"a {x}"
+
 /-- A qualified name `(q:)x` as written: its qualifier and its name (`q` may
     be a path whose segments are qualified themselves, `/a/(/b:)c`: the name
     is what follows the last `:)`). -/
