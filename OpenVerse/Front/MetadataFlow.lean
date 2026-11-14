@@ -140,17 +140,19 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
     return withExits a (← expr fns infos fields fn info a.slots b)
   | .call g es => do
     let name := (fns[g]?.map (·.name)).getD ""
+    if name == "$spawnMark" then
+      if let [.prim .mkArr [.seq target _, .seq (.local _) _]] := es then
+        let (result, out) ← spawned fns infos fields fn info slots target
+        -- Lowering stores the call's result in task.Result. It is an
+        -- ordinary mutable field, subject to the same rule as heap.set.
+        if result.getD false then
+          refuse fn info "enter a spawned task's result field containing executable data"
+        return out
     if ["$syncMark", "$raceMark", "$rushMark"].contains name then
       if let [.prim .mkArr arms] := es then
         return ← concurrent fns infos fields fn info slots (name == "$syncMark") arms
-    let (args, out) ← arguments fns infos fields fn info slots es
-    if out.value.isNone then return out
-    let gi := infos[g]?.getD {}
-    let roles := args.zipIdx.map fun (role, i) => role || gi.inputs.contains i
-    if gi.required.any (fun i => roles[i]?.getD false) then
-      refuse fn info s!"provide executable evidence or a receiver to {(fns[g]?.map (·.name)).getD "a call"}"
-    let result ← request (g, roles)
-    return { out with value := result }
+    let (out, result) ← invoke fns infos fields fn info slots g es
+    return { out with value := if out.value.isSome then result else none }
   | .prim op es => do
     let (args, out) ← arguments fns infos fields fn info slots es
     if out.value.isNone then return out
@@ -230,6 +232,50 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
   | .print e => do
     let out ← expr fns infos fields fn info slots e
     return { out with value := out.value.map (fun _ => false) }
+
+/-- A spawn evaluates the selected call's arguments now. Its result belongs
+    to the task; a callee without a normal return does not make its caller
+    unreachable. Dispatch conditions and argument exits still run normally. -/
+private partial def spawned (fns : Array Fn) (infos : Array Info)
+    (fields : Array (List Nat)) (fn : Fn) (info : Info) (slots : Slots) :
+    Expr → M (Option Bool × Flow)
+  | .call g es => do
+    let (out, result) ← invoke fns infos fields fn info slots g es
+    return (result, out)
+  | .seq a b => do
+    let a ← expr fns infos fields fn info slots a
+    if a.value.isNone then return (none, a)
+    let (result, b) ← spawned fns infos fields fn info a.slots b
+    return (result, withExits a b)
+  | .ite c t e => do
+    let c ← expr fns infos fields fn info slots c
+    let (tr, t) ← if c.value.isSome then spawned fns infos fields fn info c.slots t
+      else pure (none, { slots := c.slots, value := none })
+    let (er, e) ← spawned fns infos fields fn info slots e
+    let merged := match t.value, e.value with
+      | some _, some _ => joinSlots t.slots e.slots
+      | some _, none => t.slots
+      | _, _ => e.slots
+    return (joinRole tr er, withExits c {
+      slots := merged, value := joinRole t.value e.value
+      returned := joinRole t.returned e.returned, broken := joinOpt t.broken e.broken })
+  | .assign i e => do
+    let (result, out) ← spawned fns infos fields fn info slots e
+    return (result.map (· || info.seeds.contains i), out)
+  | e => do
+    let out ← expr fns infos fields fn info slots e
+    return (out.value, { out with value := out.value.map (fun _ => false) })
+
+private partial def invoke (fns : Array Fn) (infos : Array Info)
+    (fields : Array (List Nat)) (fn : Fn) (info : Info) (slots : Slots)
+    (g : Nat) (es : List Expr) : M (Flow × Option Bool) := do
+  let (args, out) ← arguments fns infos fields fn info slots es
+  if out.value.isNone then return (out, none)
+  let gi := infos[g]?.getD {}
+  let roles := args.zipIdx.map fun (role, i) => role || gi.inputs.contains i
+  if gi.required.any (fun i => roles[i]?.getD false) then
+    refuse fn info s!"provide executable evidence or a receiver to {(fns[g]?.map (·.name)).getD "a call"}"
+  return (out, ← request (g, roles))
 
 private partial def concurrent (fns : Array Fn) (infos : Array Info)
     (fields : Array (List Nat)) (fn : Fn) (info : Info) (slots : Slots)

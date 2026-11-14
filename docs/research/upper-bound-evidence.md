@@ -121,6 +121,17 @@ witness/capture/frame storage roles. A `branch`, or a surviving `rush` loser,
 can still write metadata after the caller subsequently overwrites the cell
 with real data; sibling-arm convergence alone does not model that overlap.
 
+A spawned call has a separate result boundary: lowering writes its return
+value to the task's ordinary mutable `Result` field. The provenance check
+inspects that return before the marker discards it, applying the ordinary
+shared-field rule even if the task is never awaited. Passing metadata into a
+task that returns independent real data remains allowed, as does opaque
+forwarding within the task. A nonreturning task does not hide its caller's
+continuation from validation; argument evaluation and its exits still belong
+to the caller. `MetadataTasks.lean` checks these boundaries with real/dummy
+pairs for generic returns, helpers, aggregates, immediate results and discarded
+tasks, plus independent real returns and argument-evaluation controls.
+
 The checked families currently cover:
 
 | Relation | Executable evidence |
