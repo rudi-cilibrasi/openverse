@@ -687,7 +687,7 @@ structure Source where
     `requests` says which are eager, lazy, of which family or overload; the
     functions requested are added and admitted by the effect policy; and
     function values become interfaces and classes (#210). -/
-def inlineSource (allTops0r : List STop) (requests : Requests) (admitted : Admitted) :
+def inlineSource (requests : Requests) (admitted : Admitted) :
     Except String Source := do
   -- functions with several values (#235): inlined at their calls
   -- (#283) the members of built-in types and of the prelude: a method with
@@ -740,8 +740,8 @@ def inlineSource (allTops0r : List STop) (requests : Requests) (admitted : Admit
     | _ => throw "internal: a subtype dictionary request must be a class"
   let resolved := requests.subtypes ++ loopTops ++ resolved
   -- (bounds as written, or a bounded type given as an argument's,
-  -- `TypeArguments`)
-  let needsSubtype := allTops0r.any UpperBounds.hasBounds || resolved.any UpperBounds.hasBounds ||
+  -- `TypeArguments`: the source's before its choices are inlined, and after)
+  let needsSubtype := written.any UpperBounds.hasBounds || resolved.any UpperBounds.hasBounds ||
     !requests.subtypes.isEmpty ||
     -- (the box of a type parameter's value is its comparable bound's evidence)
     !requests.boxes.isEmpty ||

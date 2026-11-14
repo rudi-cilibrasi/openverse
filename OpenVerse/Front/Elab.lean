@@ -288,7 +288,7 @@ def orderWarnings (ws : List (Pos × String)) : List (Pos × String) :=
 
 def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except String Compiled := do
   let admitted ← admitSource allTops0r opts
-  let source ← inlineSource allTops0r opts.requests admitted
+  let source ← inlineSource opts.requests admitted
   let defs ← argsAndMethodOverloads source.tops source.entry opts.args
   let classes ← classHierarchy defs.tops source.constructionFx
   let fields ← classFields classes opts.requests
