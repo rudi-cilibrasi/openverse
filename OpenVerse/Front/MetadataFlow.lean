@@ -129,7 +129,7 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
       slots := {
         values := out.slots.values.set! i role
         initialized := out.slots.initialized.set! i true
-        written := out.slots.written.set! i true
+        written := if info.shared.contains i then out.slots.written.set! i true else out.slots.written
         -- Once real data enters a shared cell, waiting aliases can execute it.
         -- A later metadata write must not reuse its original metadata mode.
         sharedMetadata := out.slots.sharedMetadata.set! i
@@ -262,9 +262,18 @@ private partial def concurrent (fns : Array Fn) (infos : Array Info)
   let validate := (← get).validateShared
   modify fun st => { st with validateShared := false }
   let mut outs : Array Flow := arms.toArray.map fun _ => { slots }
+  -- Seed from actual effects, so a definite real overwrite does not retain
+  -- the entry's metadata value. Later rounds join monotonically: modes of
+  -- mutually writing arms must not alternate before diagnostics can run.
+  outs ← runArms outs
   let mut growing := true
   while growing do
-    let next ← runArms outs
+    let raw ← runArms outs
+    let next := outs.zipWith (fun old out => { out with
+      slots := joinSlots old.slots out.slots
+      value := joinRole old.value out.value
+      returned := joinRole old.returned out.returned
+      broken := joinOpt old.broken out.broken }) raw
     growing := next.map (·.slots) != outs.map (·.slots)
     outs := next
   modify fun st => { st with validateShared := validate }

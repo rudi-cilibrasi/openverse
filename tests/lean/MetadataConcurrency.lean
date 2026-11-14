@@ -7,7 +7,12 @@ private def header (ret : String := "int") : String :=
   s!"Caller(F:{functionTy},Dummy:{functionTy})<suspends>:{ret}=\n"
 private def result (kind : String) := if kind == "sync" then "Values(2)" else "Values"
 
+private def readerCaller (body : String) : String :=
+  "reader:=class<computes>{N:int=7}\nCaller(F:reader,Dummy:reader)<suspends>:reader=\n" ++ body
+
 private def refusals (kind : String) : List (String × String × Bool) := [
+  (s!"{kind}: cyclic shared modes reject invalid metadata writes", readerCaller
+    s!"    var X:reader=Dummy\n    var Y:reader=F\n    V:={kind}:\n        block:\n            Sleep(0.1)\n            set X=Y\n            0\n        block:\n            Sleep(0.1)\n            set Y=Dummy\n            set X=Dummy\n            0\n    X", false),
   (s!"{kind}: metadata writer before sibling real writer", header ++
     s!"    var Stored:{functionTy}=Dummy\n    Values:={kind}:\n        block:\n            Sleep(0.1)\n            set Stored=Dummy\n            Sleep(0.5)\n            0\n        block:\n            set Stored=F\n            Sleep(0.5)\n            0\n        block:\n            Sleep(0.2)\n            Stored()\n    {result kind}", true),
   (s!"{kind}: reader before sibling real overwrite", header ++
@@ -18,6 +23,8 @@ private def refusals (kind : String) : List (String × String × Bool) := [
     s!"    var Stored:{functionTy}=Dummy\n    set Stored=F\n    Values:={kind}:\n        block:\n            Sleep(0.2)\n            Stored()\n        block:\n            Sleep(0.1)\n            set Stored=Dummy\n            0\n        block:\n            Sleep(0.3)\n            0\n    {result kind}", false)]
 
 private def forwards (kind : String) : List (String × String × Bool) := [
+  (s!"{kind}: cyclic metadata-only forwarding converges", readerCaller
+    s!"    var X:reader=Dummy\n    var Y:reader=Dummy\n    V:={kind}:\n        block:\n            Sleep(0.1)\n            set X=Y\n            0\n        block:\n            Sleep(0.1)\n            set Y=X\n            0\n    X", false),
   (s!"{kind}: metadata-only shared forwarding", header functionTy ++
     s!"    var Stored:{functionTy}=Dummy\n    Values:={kind}:\n        block:\n            Sleep(0.1)\n            set Stored=Dummy\n        block:\n            Sleep(0.2)\n            set Stored=Dummy\n        block:\n            Sleep(0.3)\n            Stored\n    Stored", true),
   (s!"{kind}: all arms overwrite with real data", header ++
