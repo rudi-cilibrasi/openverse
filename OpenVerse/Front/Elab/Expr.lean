@@ -2535,10 +2535,16 @@ partial def elabMapLit (ctx : Ctx) (p : Pos) (entries : List (SExpr × SExpr)) (
     let rv0 ← elabE ctx v0 vt?
     let kt := kt?.getD rk0.ty
     if !kt.comparable ctx.types then eerr p (notComparable ctx.types kt "a map key")
+    if let some c := kt.keyContainer? ctx.types then eerr p (keyContainerWhy kt c)
     let vt0 := vt?.getD rv0.ty
     let mut rs : Array (SExpr × R × SExpr × R) := #[]
     for (k, v) in entries do
-      rs := rs.push (k, ← elabE ctx k (some kt), v, ← elabE ctx v (some vt0))
+      let rk ← elabE ctx k (some kt)
+      -- (a key that can fail: "failure in map literal keys is not
+      -- implemented", Book of Verse ch. 3, and its tests, Map.versetest:249)
+      if rk.e.mayFail ctx.sigProg then
+        eerr k.pos "a map literal's key cannot fail: bind it first, in a failure context (Book of Verse ch. 3: \"failure in map literal keys is not implemented\")"
+      rs := rs.push (k, rk, v, ← elabE ctx v (some vt0))
     ofExcept <| checkTypeValueJoin ctx.types p vt? (rs.toList.map (·.2.2.2.ty))
     -- the values' type: the expected one (or the first's) when every value
     -- converts to it, else their join, as for an array literal (#67)

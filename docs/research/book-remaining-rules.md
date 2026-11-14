@@ -249,3 +249,41 @@ same; `structs` and `generic_structs` declared a struct's field `var` and
 set it through a `var` of the struct, which needs no `var` field: the field
 is plain now, their output the same. 86 generated programs of corpus2
 (`generic-mv`) write a named argument first and are refused.
+
+## Map keys, and a refinement's range
+
+**The rules.** A map key type has no array or map in it, through its
+options, tuples and a struct's fields, but `string`; a map literal's key
+cannot fail; and a refinement of `int` whose strict bound is an end of the
+64-bit range, `_X > 9223372036854775807`, admits no value and is refused.
+
+**The Book.** Ch. 3: "Comparability is necessary but not sufficient.
+Arrays and maps are both comparable — two arrays can be compared for
+equality, and so can two maps — yet neither may serve as a map key. The
+compiler rejects them with "Use of `[]int` as a map key is not yet
+implemented", the wording promising an eventual lifting of the
+restriction. The one exception is `string`, which is an array of `char` and
+is accepted as a key everywhere." (`03_containers.md:760`); "`?[]int` and
+`tuple(int, []int)` are rejected for the array buried inside them"
+(`:762`); and "a rational cannot be written directly as a map literal key:
+failure in map literal keys is not implemented" (`:830-831`). The tests:
+`Map.versetest` 45-46 ("These tests are dependent on SOL-2126"), 223-224,
+249 ("Failure in a key of a map literal is currently unimplemented", `:245`),
+`Operators/CompareMap.versetest` 58, 59, 71, 72 (3502);
+`WhereConstrainedInts.versetest` 97, 100 (3502).
+
+**Where the Book disagrees with itself.** Ch. 3 also says "Maps can be used
+as keys of other maps if all values and keys from it are comparable"
+(`03_containers.md:1025`), where line 760 and the tests refuse it. openverse
+follows the tests.
+
+**openverse before.** Arrays and maps were keys, failing keys failed the
+literal, and the empty refinement was accepted.
+
+**openverse now.** `Ty.keyContainer?` (`Front/Types.lean`), checked where a
+map type is written (`resolveTy`) and where a literal's key type is found
+(`elabMapLit`), which also refuses a key that can fail; `refineConds`
+(`Elab/Context.lean`) refuses the strict bound. Programs: the test
+`empty_values_nested` keys its map by `?int` rather than `[]?int` (its
+output the same); 27 generated programs of corpus2 (`equality`) key maps
+by arrays and are refused.

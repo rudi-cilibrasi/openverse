@@ -1202,6 +1202,23 @@ partial def Ty.plainComparable : Ty → Bool
   | .map k v => k.plainComparable && v.plainComparable
   | _ => false
 
+/-- The array or map inside a map key type, through its options, tuples and
+    a struct's fields, if any: comparable as they are, neither may be a map
+    key, but `string` may (Book of Verse ch. 3: "neither may serve as a map
+    key … The one exception is `string`"; `?[]int` and `tuple(int, []int)`
+    "are rejected for the array buried inside them"). A class's fields are
+    not its key: a `<unique>` object is compared by identity. -/
+partial def Ty.keyContainer? (env : TyEnv) (seen : List String := []) : Ty → Option Ty
+  | .arr .char => none
+  | t@(.arr _) => some t
+  | t@(.map ..) => some t
+  | .opt t => t.keyContainer? env seen
+  | .tup ts => ts.findSome? (·.keyContainer? env seen)
+  | .struct n _ =>
+    if env.classes.contains n || seen.contains n then none
+    else ((env.structs.lookup n).getD []).findSome? fun (_, ft, _) => ft.keyContainer? env (n :: seen)
+  | _ => none
+
 /-- Whether every map key type inside `t` is comparable. -/
 partial def Ty.mapKeysOK (env : TyEnv) : Ty → Bool
   | .map k v => k.comparable env && k.mapKeysOK env && v.mapKeysOK env
