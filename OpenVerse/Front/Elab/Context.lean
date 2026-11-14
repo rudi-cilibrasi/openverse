@@ -44,6 +44,7 @@ import OpenVerse.Front.ChoiceTypes
 import OpenVerse.Front.UpperBounds
 import OpenVerse.Front.SubtypeEvidence
 import OpenVerse.Front.ModuleVars
+import OpenVerse.Front.Diagnostic
 import Std.Data.HashMap
 
 namespace OpenVerse.Front
@@ -517,6 +518,7 @@ def Requests.merge (a b : Requests) : Requests where
   loops := mergeByKey (·.key) a.loops b.loops
   witnesses := mergeByKey id a.witnesses b.witnesses
   boxes := mergeByKey id a.boxes b.boxes
+  anys := SubtypeEvidence.mergeRequests a.anys b.anys
 
 /-- Those of `xs` whose key none of `old` has. -/
 def dropByKey [BEq κ] (key : α → κ) (xs old : List α) : List α :=
@@ -538,12 +540,14 @@ def Requests.without (r old : Requests) : Requests where
   loops := dropByKey (·.key) r.loops old.loops
   witnesses := dropByKey id r.witnesses old.witnesses
   boxes := dropByKey id r.boxes old.boxes
+  anys := dropByKey SubtypeEvidence.declarationName r.anys old.anys
 
 def Requests.isEmpty (r : Requests) : Bool :=
   r.eager.isEmpty && r.lazy.isEmpty && r.families.isEmpty && r.overloads.isEmpty && r.nested.isEmpty &&
     r.fieldOrders.isEmpty && r.instanceCalls.isEmpty &&
     r.fns.isEmpty && r.methods.isEmpty &&
-    r.casts.isEmpty && r.loops.isEmpty && r.witnesses.isEmpty && r.subtypes.isEmpty && r.boxes.isEmpty
+    r.casts.isEmpty && r.loops.isEmpty && r.witnesses.isEmpty && r.subtypes.isEmpty && r.boxes.isEmpty &&
+    r.anys.isEmpty
 
 /-- A lazily taken call where the first success is taken (#246): its
     function, where, the code it runs once for all the values of an item,
@@ -861,6 +865,9 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   -- (`false` as a type, Book of Verse ch. 2: the type with no value, below
   -- every type, of a call that never returns, `Suspend()<suspends>:false`)
   | .name "false" => pure .never
+  -- (`true` as a type, Book of Verse ch. 2: the type of the empty value
+  -- alone, as `tuple()` is, below `logic`: `Flag:true = false`)
+  | .name "true" => pure (.tup [])
   | .name n =>
     if let some t := env.tvars.lookup n then pure t
     else if (env.structs.lookup n).isSome then
@@ -1666,7 +1673,9 @@ partial def witness (env : TyEnv) (dictBase : Nat) (dictVars : List String) : Ty
     | some (.float, _) => pure (.lit (.float 0))
     | _ => pure (.lit (.int 0))
   | .float => pure (.lit (.float 0))
-  | .any => pure (.lit .void)
+  -- (an object below `$anything` where an `any` keeps its value: a slot of
+  -- that type starts as one)
+  | .any => if env.anyWraps then return .local (← fresh .any) else pure (.lit .void)
   -- (a slot of type `comparable`, which the checker infers as `dyn`: no
   -- literal is inferred so)
   | .dyn => return .local (← fresh .dyn)
@@ -1806,6 +1815,10 @@ partial def slotDefault (env : TyEnv) (dictBase : Nat) (params : List Ty) (visit
     -- a parametric class starts with no option set, which has every such type
     if env.classes.contains n then return .lit vt.default
     return .prim .mkTup (← (env.fields n ts).mapM fun (_, t, _) => slotDefault env dictBase params visiting t)
+  -- (an `any` that keeps its value: an object below `$anything`)
+  | .any =>
+    if env.anyWraps then slotDefault env dictBase params visiting (.struct anyInterfaceName [])
+    else return .lit vt.default
   -- `[]`, the empty option and an empty map have every such type
   | _ => return .lit vt.default
 
@@ -2086,6 +2099,30 @@ def boxedTest (env : TyEnv) (p : Pos) (op : Prim) (x : Expr) (ta : Ty) (y : Expr
   let w ← fresh .dyn
   return .seq (.assign u bx) (.seq (.assign w by_) (.seq (.prim op [.local u, .local w]) x))
 
+/-- A value `e` of type `a` as an `any`, in a program that calls
+    `ToDiagnostic`: an object of the class the front end writes for `a`
+    (`Diagnostic.wrapperName`), below `$anything`, whose method prints the
+    value at `a`. A class not written yet is asked for, with its printers
+    (`Requests.anys`), and the program elaborated again; `Err()` stands for
+    the object meanwhile. An `any` is one already; the empty value of
+    `void` and `tuple()` an object of `$anyEmpty`. A type whose values no
+    printer can print yet (a float, a comparable, a type parameter's) is
+    refused (its message starts with `ToDiagnostic`, which `coerce` places). -/
+def wrapAny (env : TyEnv) (e : Expr) (a : Ty) : EM (Option Expr) := do
+  match a with
+  | .any => return some e
+  | .never => return some (.seq (← discardValue ⟨e, a⟩) (.prim .userErr []))
+  | .void | .tup [] =>
+    return some (.seq (← discardValue ⟨e, a⟩) (.heap (.new (env.tagOf Diagnostic.anyEmpty)) []))
+  | _ =>
+    let name := Diagnostic.wrapperName a
+    if env.classes.contains name then return some (.heap (.new (env.tagOf name)) [e])
+    match Diagnostic.wrapperDecls env { line := 0, col := 0 } a with
+    | .ok decls =>
+      noteNeeds { anys := decls }
+      return some (.seq (← discardValue ⟨e, a⟩) (.prim .userErr []))
+    | .error msg => throw msg
+
 /-- Convert a value `e` of type `a` to the supertype `b`, when `a` is a class
     below the class or interface `b`, or an array or option of such (arrays
     and options are covariant): the options of the classes below `a` move to
@@ -2098,6 +2135,10 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
     match e with
     | .local _ | .prim (.tupGet _) _ => return some (.prim .userErr [])
     | _ => pure ()
+  -- (`void` and `true` interchange inside containers, tuples and type
+  -- arguments, `?void` to `?true`, `int->void` to `int->true`, Book of
+  -- Verse ch. 2: one type, and one in Verse Core)
+  if a != b && !a.isUnit && a.unitUp b then return some e
   -- references: the same value has both types (Verse Core subtyping, #32)
   if refUp env a b then
     -- (#351: to an interface referred to through views, from a reference
@@ -2133,8 +2174,14 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
   -- "`true` is a subtype of `logic`, so the unit value flows into logic
   -- positions" (Book of Verse ch. 2): the empty value, the logic false
   | .tup [], .logic => return some (.seq e (.lit (.logic false)))
+  -- (and so does a `void`'s, as `void` and `true` are one type, ch. 2;
+  -- `X:logic = if (C?) then () else true`, `Void.versetest` 215-221)
+  | .void, .logic => return some (.seq (← discardValue ⟨e, a⟩) (.lit (.logic false)))
+  -- (in a program that calls `ToDiagnostic`, a value becomes an `any` as
+  -- an object that prints it, `wrapAny`)
+  | _, .any => if env.anyWraps then wrapAny env e a else return some (← discardValue ⟨e, a⟩)
   -- Every value can be erased or discarded, including within containers (#138).
-  | _, .any | _, .void => return some (← discardValue ⟨e, a⟩)
+  | _, .void => return some (← discardValue ⟨e, a⟩)
   -- (a comparable value is boxed, Book of Verse ch. 11)
   | a, .dyn => if a.comparable env && a != .any then boxValue env e a else return none
   -- a refinement is its base (#136); the base is the refinement only for a
@@ -2273,7 +2320,11 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
   -- `()` in Verse Core)
   if r.ty.isUnit && target.isUnit then return r.e
   if target == .void then return ← discardValue r
-  match ← convert (← get).env r.e r.ty target with
+  -- (a conversion to `any` that `ToDiagnostic` could not print is refused
+  -- here, where it is, `wrapAny`)
+  let converted ← tryCatch (convert (← get).env r.e r.ty target) fun msg =>
+    if msg.startsWith "ToDiagnostic" then eerr p msg else throw msg
+  match converted with
   | some e =>
     -- a typed temporary: the checker cannot infer the type of an empty option
     let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push target })
@@ -2413,6 +2464,10 @@ partial def joinTyShaped (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Boo
   if a == .never then some b
   else if b == .never then some a
   else if a == b then some (a.commonBounds b)
+  -- (types that differ only in `void` and `true` inside, one type: at the
+  -- one with `true`, Book of Verse ch. 2, `Void.versetest` 161-175)
+  else if !a.isUnit && a.unitUp b then some b
+  else if !b.isUnit && b.unitUp a then some a
   else match a, b with
   | .int, .rational | .rational, .int => if inner then none else some .rational
   -- (refinements join at an expected refinement holding both, or at the
@@ -2576,9 +2631,14 @@ def checkTypeValueJoin (env : TyEnv) (p : Pos) (exp : Option Ty) (tys : List Ty)
 
 /-- The type of a two-branch construct (`joinTy`; a void branch makes it void). -/
 def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty := do
+  let logicLike (t : Ty) : Bool := t.isUnit || t == .logic || t == .never
   match exp with
   | some .void => return .void
   | _ =>
+    -- (a `void` branch where a `logic` is expected is its false, as
+    -- `true`'s is, Book of Verse ch. 2: `X:logic = if (C?) then () else
+    -- true`, `Void.versetest` 215-221)
+    if exp == some .logic && logicLike a && logicLike b && (a == .void || b == .void) then return .logic
     -- void accepts any value (Book of Verse), so a void branch makes the
     -- construct void: `if{X := e} else {Print("none")}`
     if a != .never && b != .never && !(a == b) && (a == .void || b == .void) then return .void

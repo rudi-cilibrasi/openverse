@@ -84,49 +84,83 @@ fields they set `<computes>` (their output the same); the error test
 `set_path_not_var` too, so that its subject, a path from a constant, is
 what it refuses.
 
-## A type parameter named nowhere
+## A type parameter the parameters determine
 
-**The rule.** Every type parameter of a function is named in its
-signature: in a parameter's type or in its result's. (A bounded one, or
-one a bound names, must be determined by a parameter, as before.)
+**The rule.** Every type parameter of a function, or of a method beyond its
+class's, is given by the parameters: it occurs, by the Book's variance
+(ch. 10, "Instantiation and Identity"), where values go *in*: in a
+parameter's type at a covariant place (a parameter's own type, an array's,
+an option's, a map's or a tuple's element, a covariant or invariant class
+argument), or in the result's at a contravariant place (a function type's
+parameter: `G(N:int where t:type):(t->void)`), or it is named in the bound
+of one that is (`Up(X:t where t:subtype(u), u:type)`). Not determining: the
+result's covariant places (`Make(N:int where t:type):?t`); a function type's
+parameter inside a parameter (`Apply(F:t->void where t:type)`); a type
+argument of a class or interface that only takes it in, a contravariant one
+(`Use(S:sink(t))`, `sink(t) := class{Take(X:t):void}`); and, transitively,
+a parameter named only in such places. A class or interface that does not
+use its type parameter (bivariant) gives it: the Book is silent, and an
+object holds its type arguments, which openverse's casts refine (#243).
 
-**The Book.** The tests (3503): `F(:u where t:type, u:type):void = {}`
-refused (`Tests/ParametricFunctions.versetest:374`), beside `F(() where
-t:type):?t` (`:338`) and `F(() where t:type):[]t` (`:341`), refused too,
-and `G(() where t:type):(t->void) = F` valid (`:376-378`). The prose is
-silent.
+**The Book.** The tests (3503), `Tests/ParametricFunctions.versetest`:
+refused, `F(() where t:type):?t` (`:338`), `:[]t` (`:341`), `:[t]u` and
+`tuple(?t, ?u)` (`:344`, `:347`, two errors each), `F(G(:t):void where
+t:type):void` (`:350`), `F(() where t:type):?class1(t)` with `class1`
+holding a `Property:t` (`:353`), `F(:class1(t) where t:type)` with `class1`
+taking `t` in its `Method(:t)` only (`:356`, `:361`, `:366`), `F(() where
+t:type):void` (`:371`), `F(:u where t:type, u:type)` (`:374`),
+`Foo(X:int where t:subtype(u), u:type):?t` (`:586`, two); valid, `G(()
+where t:type):(t->void) = F` (`:376-378`), `F(X:[t]u where …):[t]u`
+(`:380`), `Foo(:castable_subtype(t) where t:type)` (`:583`), `Foo(X:t
+where t:subtype(u), u:type):t` (`:589`). The prose is silent; ch. 2 gives a
+type no parameter determines as an argument, `MaybeValueExplicit(t:type,
+Value:t, Valid:logic):?t` (`02_primitives.md:1040-1069`).
 
-**openverse before.** A type parameter without a bound was not checked:
-openverse's reading is that a call's expected result may give it
-(`Make():?t`, LANGUAGE.md, "Readings"), and one its signature names
-nowhere, which nothing can give, was accepted.
+What looked like a split by VM is not one: `MakeClosure(Callback:
+tuple(payload, context)->void, Context: context where payload: type,
+context: type):(payload->void)` (`Bugs/FORT-592189-MaybeCoerceToTypeCrash.versetest:44`,
+`verse_vm_only`, valid) names `payload` in its result's function type's
+parameter, which determines it as `:376` has it; its `bp_vm_only` twin
+(`:4`) is an IR error (3502), not this rule's.
 
-**openverse now.** `UpperBounds.checkDetermined` refuses a type parameter
-without a bound that its signature names nowhere: "the type parameter t of
-F is named nowhere in its signature, so nothing can give it one". Programs:
-the error tests `fn_value_open_phantom`, `fn_method_instance_phantom`,
-`fn_method_tuple_phantom` and `fn_context_method_phantom`, whose functions
-had such a type parameter for another refusal, are refused for it now
-(their expected message rewritten); `alias_type_parameter` names its type
-parameter (`Id(X:t where t:type):t`), so that what it refuses is still a
-type parameter that takes a type alias's name; the test
-`fn_values_method_instance_unused` names its method's (`D:?u`), its output
-the same.
+**openverse before.** A type parameter without a bound was not checked but
+for one its signature names nowhere (#618): openverse's reading was that a
+call's expected result may give it (`Make():?t`).
 
-**Left:** the rest of the tests' rule, that a parameter, not the expected
-result, gives every type parameter (`:338`, `:341`, which openverse's parser
-refuses for their empty parameter group, and `F(G(:t):void where t:type)`,
-`:348`, named only in a function type's parameters). Measured, it refuses
-54 of openverse's tests of its reading (`class_cast_context_*`,
-`fn_values_open_*`, `generics`, …), 33 functions the compiler writes (the
-branches of a refining cast, `$refine…`), and 4 generated programs of two
-models (`gadt_function_values`, `gadt_method_instances`): an owner's
-decision to retire the reading. And the tests split by VM there: VerseVM
-takes `MakeClosure(Callback:tuple(payload, context)->void, Context:context
-where payload:type, context:type):(payload->void)`, whose `payload` only a
-function type's parameter names
-(`Bugs/FORT-592189-MaybeCoerceToTypeCrash.versetest:44`, `verse_vm_only`),
-where the BPVM's twin is an IR error (`:4`).
+**openverse now.** `checkDeterminedTypeParams` (`Elab/Signatures.lean`),
+after the signatures are declared and the Book's variances computed
+(`elabProgramCore`, between `declareSignatures` and `inferSignatures`),
+refuses a source function (or method) with a type parameter so given by
+nothing: "no parameter of F determines its type parameter t, so no call can
+give it one …" (the source check of #618, `UpperBounds.checkDetermined`,
+keeps refusing earlier one named nowhere, and a bounded one no parameter
+names). The compiler's own functions, whose names have `$` (the branches
+of refining casts, `$refine…`; adapters, stages, helpers), are no program's
+and keep the reading: their calls are the compiler's, which writes the
+expected type there.
+
+**Programs.** 45 tests of `tests/verse` and 3 of `tests/errors` declared
+such a function; 43 rewritten keeping their subjects, their output the
+same (the list is the commit's): 27 refining-cast context tests
+(`class_cast_context_*`) declared an unused constructor helper
+`Pair(N:int where a:type, b:type):pair(a, b)`, dropped, the three of a
+field's default constructing `pair(a, b){}` instead (and the generator of
+the size test, `tests/scripts/test-choice-size.sh`, the same); a function
+of a contravariant class's type parameter takes it as a type argument
+(`Show2(t:type, S:shower(t))`, `Run(t:type, P:base(t))`, `Read(t:type,
+X:i1(t))`) or names the type (`GQ(X:j0(?string))`); a result-only
+`Empty(N:int where t:type):[]t` takes its type from a parameter
+(`Empty(N:t)`, `Empty(Like:[]t)`); `Nothing(t:type):?t` and a `Fail` of
+result `false`. Deleted, as their subject was the retired reading:
+`fn_values_open_tuple_empty` (generic function values with no parameters,
+their type parameter from the function type expected) and
+`multi_generic_mutual_result_type` ("The other member's type comes only
+from its result"). Two error tests that refused such a function at its call
+(`generic_uninferable`, `multi_generic_tp_unbound`) refuse it where it is
+declared. The models `gadt_function_values` and `gadt_method_instances`
+wrote `Empty(N:int where …):[]a`; they write `Empty(N:a)` now (their random
+stream the same; 1,000 seeds each agree in Lean, C and the model), so the
+4 generated programs of `corpus2` that had it are refused now.
 
 ## `using{/localhost}`
 
@@ -300,13 +334,7 @@ the tests: `Suspend()<suspends>:false = Suspend()`
 **openverse now.** `resolveTy` names it; a call of a function whose result
 is `false` converts to any type as the other values of that type do
 (`coerce`, a `void` in Verse Core followed by `Err()`, never reached). No
-program's code changes. **Left:** `true` as a type (10 cases:
-`Void.versetest` 50-177, 253, 267, `FORT-1054384…`): the type of the empty
-value alone, as `tuple()`, which `void` must not convert to (the tests
-refuse `Result:true = branch: …`, `FORT-582630-BranchResult.versetest:3`,
-3509), while `()` and `false` must (`Flag:true = false`, ch. 2,
-`02_primitives.md:1240`): openverse types `()` as `void`, so `true` needs
-the empty tuple's literal typed `tuple()` first.
+program's code changes. `true` as a type: [below](#true-as-a-type).
 
 ## Localized messages
 
@@ -362,3 +390,163 @@ is expected (`Array.versetest:108`: `false`, a `logic`, is no operand of
 `+`), and `array{}.ReplaceAll(array{}, array{})` (`ArrayReplaceAll.versetest:12`:
 the helper's type parameter, which only arrays of `false` meet, is not
 inferred).
+
+## `true` as a type
+
+**The rule.** `true` written as a type is the type of the empty value
+alone, as `tuple()` is: `false` and `()` are its values, a `void` value
+converts to it, and it converts to `logic` (as `false`), to `void` and to
+an empty array. `void` and `true` are one type inside options, arrays and
+maps: `?void` converts to `?true`, `[]void` to `[]true`, `[int]void` to
+`[int]true`; a `void` value converts to `logic` as `false`, as `true`'s
+does. A `branch:`'s value is an `any`: `void` and `any` take it, `true`
+does not. `X:true = 1` is refused, as `X:tuple() = 1` is.
+
+**The Book.** Ch. 2, "void, true, tuple() and false"
+(`02_primitives.md:1232-1310`): "Verse has a single "there is nothing
+interesting here" value. It can be written `false` or `()`, and the types
+`void`, `true` and `tuple()` all describe it. These are interchangeable"
+(`:1234-1236`), `Flag:true = false` (`:1253`), "`true` is a subtype of
+`logic`, so the unit value flows into logic positions" (`:1261`), "and
+`void`/`true` interchange through optionals, arrays and maps"
+(`:1294`, `MaybeTrue:?true = MaybeVoid`). The tests,
+`Tests/Void.versetest`: `?void` to `?true` (`:50`, `:56`), `[]void` to
+`[]true` (`:68`), `[int]void` to `[int]true` (`:80`), `F:int->true =
+VoidOutput` (`:100`), the joins of `int->true` and `int->void` values
+(`:161`, `:165`) and of `(:true)->int` and `(:void)->int` ones (`:169`,
+`:173`), `X:true = false` (`:177`), `X:logic = if (false?) then () else
+true` (`:215`, `:219`), `[]true` and `?true` where a type parameter is
+`[]void`, `?void` (`:253`, `:267`); `F1(X:void)<computes>:true = X` and
+`set X = I()` with `I():void` into `var X:true`
+(`Bugs/FORT-1054384-Void-Any-Meet.versetest` 17-25); and
+`Result:true = branch: …` refused (3509) where `Result:any = branch: …`
+is valid (`Bugs/FORT-582630-BranchResult.versetest` 3-14): a `void`
+converts to `true`, so a `branch:`'s value is no `void`.
+
+**openverse before.** "unknown type 'true'"; `tuple()` was the type (with
+`void` converting to it at the top only), `void` did not convert to
+`logic`, and a `branch:` gave `void`.
+
+**openverse now.** `resolveTy` names `true` `tuple()`; `convert` takes a
+type to the same type with `tuple()` for some of its `void`s inside
+options, arrays, maps and tuples (`Ty.unitUp`; one Verse Core type, so no
+code), and `void` to `logic` (`false`); `joinTyShaped` joins two such types
+at the one with `tuple()`, and `join` an `if` with a `void` branch where a
+`logic` is expected at `logic`; `elabBranch` types a `branch:`'s value
+`any` (its code the same; in a program where an `any` prints itself,
+`ToDiagnostic`'s, the empty value's object). Programs: those listed in the
+commit whose code changes.
+
+**Left.** `true` and `void` in a function type (`Void.versetest` 100,
+161, 165, 169, 173: `F:int->true = VoidOutput`, `if (…) { TrueOutput }
+else { VoidOutput }`): `int->true` is `int->tuple()`, another instance of
+the function shape than `int->void`, and the classes a call of a function
+value dispatches to are those at its type's arguments exactly. Making a
+shape's `tuple()` its `void` breaks openverse's empty-tuple parameter, a
+function of no parameters taken as one of a `tuple()` parameter
+(`fn_values_open_tuple_small`, #231), so it needs the dispatch to relate
+shape instances whose arguments differ in `void` and `tuple()` alone (one
+Verse Core type). `true?`'s value, below.
+
+## The value of `true?`
+
+**The Book disagrees with itself** (already on [the
+wiki](https://github.com/rudi-cilibrasi/openverse/wiki/Where-the-Book-disagrees-with-itself),
+"The value of `X?` on a `logic`"): ch. 8 (`08_failure.md:57`) "succeeds
+with that value", and ch. 4 "equivalent to comparing against true";
+the tests make it the empty value: `assert{true?=false}`, `assert{not
+true??}` (`Tests/Operators/BoolQuery.versetest` 3, 4), `(true? and true?) =
+false` (`Operators/LogicalAnd.versetest:29`), `x := true? or true; x =
+false` (`Operators/Precedence.versetest:121`), as ch. 2's `true` type has
+it. openverse follows the tests, in design: **left.**
+
+**The design.** `X?` of a `logic` is of type `true` (`tuple()`), its code
+`(query X; ())`. Every program that writes `X?` would then change its
+code, the elaborator's own `true?` clauses too (`ExpressionControl`'s
+`tq`): in a condition, a filter, a statement, `not`, `logic{…}`, the left
+of `or` and a `<decides>` body's clauses, whose value is dropped, the
+`()` must not be written, so those contexts must elaborate the query as
+before (a flag on `Ctx` that a value-dropping context sets, or the query
+written as before and converted where its value is taken: a binding, an
+argument, a comparison's operand, a result, an operand of `and`). Then
+only the programs that take the value change, and the four cases agree.
+
+## A map literal's values with nothing in common
+
+**The rule.** With no value type expected, a map literal whose values
+have nothing in common joins them as an array literal's elements: at
+`comparable` when every one is comparable, else at `any`.
+
+**The Book.** The tests: "Test that the result of a map literal with
+values of disjoint types is coerced to [key_type]any." (`Any.versetest:131`),
+`map{0=>"0", 1=>1.0}.Length=2` (`:133`), `map{0=>"0", 1=>1.0,
+2=>array{0,1,2}}.Length=3` (`:134`); "Disjoint value types are allowed."
+(`Map.versetest:160-164`, `M:=map{"0"=>0, "0.0"=>0.0}` returned as a
+`[string]any`). Ch. 1 joins an array literal's disjoint elements at
+`comparable` ("their common supertype"), which openverse keeps for both.
+
+**openverse before.** "the values of this map have different types".
+
+**openverse now.** `elabMapLit` (`Elab/Expr.lean`) joins them at
+`fallbackJoin`'s type when none is expected and the join is not ambiguous.
+No program that compiled changes.
+
+## A `for` body at the element type expected
+
+**The rule.** A `for` whose values are not of the element type expected
+has its body elaborated at that type, as a typed binding is: `false`
+there is an empty option.
+
+**The Book.** The tests, `Bugs/SOL-4137-MemoryLeakCreatingA3dArray.versetest`:
+`var Data:[][][]?int = for (x := 0..1): for (y := 0..2): for (z := 0..2):
+false` (`:4-9`, a field's default) and a function of result
+`[][][]?int` whose body is the same (`:15-21`).
+
+**openverse before.** The body was elaborated with no expected type:
+`false` a `logic`, the `for` a `[][][]logic`, refused.
+
+**openverse now.** `elabECore` (`Elab/Expr.lean`): when a `for`'s value
+does not convert to the array type expected, the `for` is elaborated
+again with its body at the element type (a typed binding of it); when that
+is refused too, the first stands, refused as before. No program that
+compiled changes.
+
+## `Args` bound by a program
+
+**The rule.** `Args`, openverse's command-line arguments (not the Book's),
+is added only when the program neither defines nor binds the name itself.
+
+**The Book.** The tests bind it as a local: `Args : tuple(int, int) = (1,
+2);` (`DefaultNamed.versetest:274`), `Args:[]float = (-Inf, 0.0, Inf)`
+(`Math/Math.versetest:84`).
+
+**openverse before.** "'Args' is already the name of a function or
+constant" (the command line's `Args` and the local in one program).
+
+**openverse now.** `argsAndMethodOverloads` (`Elab/Source.lean`) adds it
+unless the program defines it or binds it (a local, a generator, a
+parameter). No program that compiled changes.
+
+## `set` through a call's result or a construction
+
+**The rule.** A `set` path may start at a call's result or a
+construction: the root is evaluated first, then the path's keys, then the
+value. A key of several values is a tuple's: `set M[1, 2] = 1` is `set
+M[(1, 2)] = 1`.
+
+**The Book.** The tests, `Tests/AssignmentSequencing.versetest`: `set
+EffectfulIdentity(Y, X).Contents = Y.Contents; X.Contents = 1` (`:17`,
+the root's effect before the value), `Z := set … = …; Z = 1` (`:23`), and
+with a map's key whose computation has effects (`:38`, `:44`: root, key,
+value); `set c0{}.X += "def"` (`Bugs/FORT-779650-…versetest` 27);
+`set ObjectMap[1,2] = 1` with `ObjectMap:[tuple(comparable,
+comparable)]int` (`Map.versetest:472`). Ch. 5 is silent on the order.
+
+**openverse before.** "openverse supports set X = …, and set on a path of
+fields, indices and keys from a variable".
+
+**openverse now.** `elabSet` (`Elab/Expr.lean`) binds such a root to a
+name of its own first (`$setRoot…`, a block `{R := root; set R.… = v}`),
+and writes a path's key of several values as their tuple. No program that
+compiled changes. **Left:** `set live` (VerseVM's live variables).
+

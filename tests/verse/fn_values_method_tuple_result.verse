@@ -1,9 +1,9 @@
 box(t:type):=class:
     V:t
-    Empty(N:int where u:type):[]u=array{}
+    Empty(N:u where u:type):[]u=array{}
     Id(X:u where u:type)<computes>:u=X
-Bind(B:box(t) where t:type):type{_(:tuple(int)):[]t}=B.Empty
+Bind(B:box(t) where t:type):type{_(:tuple(t)):[]tuple(t)}=B.Empty
 Main():void=
     F:=Bind(box(string){V:="s"})
-    I:type{_(:int)<computes>:tuple(int)}=box(string){V:="s"}.Id
-    Print("{F(I(7)).Length}")
+    I:type{_(:string)<computes>:tuple(string)}=box(string){V:="s"}.Id
+    Print("{F(I("x")).Length}")

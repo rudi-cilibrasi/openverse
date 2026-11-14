@@ -1,6 +1,5 @@
 pair(a:type,b:type):=class{}
 dup(t:type):=class(pair(t,t)){C:int=4}
-Pair(N:int where a:type,b:type):pair(a,b)=pair(a,b){}
 box(a:type,b:type):=class:
     P:pair(a,b)
     var N:int=0

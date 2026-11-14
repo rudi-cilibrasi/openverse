@@ -779,15 +779,25 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   let usesRat := marked ratMarker || opts.entry.isSome
   let usesReplaceAll := marked replaceAllMarker || opts.entry.isSome
   let usesBitwise := marked bitwiseMarker || (opts.entry.map mentionsBitwise).getD false
+  -- (`ToDiagnostic`'s, unless the program defines one of the Book's names
+  -- they give itself: then its own are the ones it calls)
+  let definesDiagnostic := allTops0r.any fun
+    | .fn _ n .. | .const _ n .. | .classDef _ n .. => Diagnostic.bookNames.contains n
+  let usesDiagnostic := (marked diagnosticMarker ||
+    (opts.entry.map (Choice.anyE fun | .ident _ n => n == "ToDiagnostic" | _ => false)).getD false) &&
+    !definesDiagnostic
   let helpers := (← if usesRat then ratTops else pure []) ++ (← if usesReplaceAll then replaceAllTops else pure []) ++
     (← if usesBitwise then bitwiseTops else pure []) ++
     (← if usesLocalization then Localization.tops else pure [])
   let intrinsicCalls := helpers.filterMap fun | .fn _ n .. => some n | _ => none
+  -- (not `ToDiagnostic`'s: it calls a `diagnosable` object's own method,
+  -- which may not converge)
+  let helpers := helpers ++ (← if usesDiagnostic then Diagnostic.tops else pure [])
   let ignoredArms := allTops0r.flatMap fun
     | .const _ n _ _ (.block _ es) => if n == ignoredArmsMarker then es.map (·.pos) else []
     | _ => []
   let unmarked := allTops0r.filter fun
-    | .const _ n _ _ _ => ![ratMarker, replaceAllMarker, ignoredArmsMarker, bitwiseMarker].contains n
+    | .const _ n _ _ _ => ![ratMarker, replaceAllMarker, ignoredArmsMarker, bitwiseMarker, diagnosticMarker].contains n
     | _ => true
   -- 4. access levels written out (Book of Verse ch. 12), and the levels of
   --    the definitions and modules; modules (#112): every reference to a
@@ -930,7 +940,9 @@ def inlineSource (requests : Requests) (admitted : Admitted) :
           !name.startsWith "$subtypeRefinement" && !name.startsWith "$subtypeBox" then
         throw s!"{p.show}: internal: invalid subtype dictionary request"
     | _ => throw "internal: a subtype dictionary request must be a class"
-  let resolved := requests.subtypes ++ loopTops ++ resolved
+  -- (in a program that calls `ToDiagnostic`, the classes of the values
+  -- converted to `any` and their printers)
+  let resolved := requests.subtypes ++ requests.anys ++ loopTops ++ resolved
   -- (bounds as written, or a bounded type given as an argument's,
   -- `TypeArguments`: the source's before its choices are inlined, and after)
   let needsSubtype := written.any UpperBounds.hasBounds || resolved.any UpperBounds.hasBounds ||
@@ -999,10 +1011,19 @@ def argsAndMethodOverloads (tops entry : List STop) (args : Option (List String)
   -- the command line: `Args`, and an entry expression
   let defines (n : String) := tops.any fun
     | .fn _ m .. | .const _ m .. | .classDef _ m .. => m == n
+  -- (`Args` is openverse's, the command line's, not the Book's: a program
+  -- that binds the name itself, a local's or a parameter's too, has its
+  -- own, `Args:tuple(int, int) = (1, 2)`, the Book's tests,
+  -- `DefaultNamed.versetest:274`, `Math/Math.versetest:84`)
+  let binds (n : String) := tops.any fun t =>
+    (match t with
+      | .fn _ _ ps .. => ps.any (·.name == n)
+      | _ => false) ||
+    t.code.any (Choice.anyE fun | .decl _ m _ _ _ => m == n | .gen _ m i _ => m == n || i == some n | _ => false)
   let argsTop : List STop :=
     match args with
     | some as =>
-      if defines "Args" then []
+      if defines "Args" || binds "Args" then []
       else [.const { line := 0, col := 0 } "Args" [] (some (.arr (.name "string")))
               (.arrayLit { line := 0, col := 0 } (as.map fun a => .str { line := 0, col := 0 } [.text a]))]
     | none => []

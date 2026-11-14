@@ -68,14 +68,15 @@ Main():void=Run(box(string){{V:="tag",C:=cell{{}}}},{v},{w})''')
     lines = ['miss 0', 'reject 0', 'try 1', 'hit 1']
 elif mode == 2:
     bind = '' if control else '''F:type{_(:b):tuple(u,b)}=P.Pair
-    G:type{_(:int):[]b}=P.Empty
+    G:type{_(:b):[]b}=P.Empty
     '''
     pair = 'P.Pair(X)' if control else 'F(X)'
-    empty = 'P.Empty(0)' if control else 'G(0)'
+    # (a parameter gives Empty's type parameter: the Book's rule, error 3503)
+    empty = 'P.Empty(X)' if control else 'G(X)'
     print(f'''source(t:type):=interface:
     Get():t
     Pair(X:u where u:type):tuple(t,u)=(Get(),X)
-    Empty(N:int where u:type):[]u=array{{}}
+    Empty(N:u where u:type):[]u=array{{}}
 mixed(a:type,b:type):=class(source([]b)):
     Extra:a
     V:b
