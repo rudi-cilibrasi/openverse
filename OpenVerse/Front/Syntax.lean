@@ -101,6 +101,17 @@ inductive STy where
   | fn   : List STy → List String → STy → STy
   deriving Repr, Inhabited, BEq
 
+/-- A type given as a program's parametric type's argument, as its type
+    parameter takes it: its `void`s, outside function types and other
+    types' arguments, are `true` (`Ty.voidArg`, Book of Verse ch. 2). -/
+partial def STy.voidArg : STy → STy
+  | .name "void" => .name "true"
+  | .arr t => .arr t.voidArg
+  | .opt t => .opt t.voidArg
+  | .map k v => .map k v.voidArg
+  | .tup ts => .tup (ts.map STy.voidArg)
+  | t => t
+
 /-- A function type's named parameter `?N:t`, or `?N:t = …` when a caller
     may omit it (`optional`), is an application of `?N` (`?N=`) to `t`
     (#503): every traversal of types sees `t`, and two function types'

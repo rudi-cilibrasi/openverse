@@ -2709,7 +2709,14 @@ as `false`, and `X:true = 1` is refused. A `void` value converts to
 `void` and `true` interchange inside options, arrays and maps (`?void` to
 `?true`, `[]void` to `[]true`, `[int]void` to `[int]true`), as the Book
 has them one type (ch. 2: "These are interchangeable"); not yet as a
-function type's result or parameter (`int->true` is not `int->void`). A `branch:`'s value is an
+function type's result or parameter (`int->true` is not `int->void`).
+`void` given as a type argument of a program's parametric class,
+interface or struct, as a type or a parent (`box(void)`, `box([]void)`,
+`class(holder(void))`), is `true`: a type parameter bound to it takes the
+empty value alone, so `box(void){}.Put(1)` and `box([]void){}.Put(Y)`
+with `Y:[]int` are refused, where `Sink(:[]void)` takes `Y` (ch. 2, "Write
+the value, not the type name" and "Conversion is one-way"; the library's
+`task(void)` and events keep `void`). A `branch:`'s value is an
 `any`, which `void` takes and `true` does not (the Book's tests refuse
 `Result:true = branch: …`). `false` converts to an empty option or array but not to a map
 (the Book's tests refuse it, `Tests/Map.versetest` 343, though its prose

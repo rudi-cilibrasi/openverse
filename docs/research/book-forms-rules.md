@@ -575,3 +575,44 @@ module-scoped variable's value (`ModuleVars.Defs.persists`), take an enum
 when it is `<persistable>`. No program that compiled changes: none of
 openverse's tests, generators or the corpus has an enum where a value must
 persist.
+
+## `void` given as a type argument
+
+**The rule.** `void` given as a type argument of a program's parametric
+class, interface or struct, written as a type or as a parent, is `true`:
+the type parameter bound to it takes the empty value alone. Inside the
+argument, `void` in an array, an option, a map's value or a tuple is
+`true` too (`box([]void)` is `box([]true)`); a function type's `void` stays
+(the shapes of `int->void` and `int->true` are two, [`true` as a
+type](#true-as-a-type)). A parameter or a local written `:void`, `:[]void`,
+still takes any value.
+
+**The Book.** Ch. 2, "Write the value, not the type name"
+(`02_primitives.md:1311-1316`): "`void` names a type; the unit value is
+`false` (or `()`). A parameter declared literally `:void` accepts any
+value, so passing the type name happens to work there. It does not work
+when `void` reaches the parameter through a type parameter, so write the
+value", with the tested example `holder909(void)` refusing
+`C.Method(void)` and taking `C.Method(false)`, and the warning
+(`:1354-1359`) that the error "reads *"expects a value of type `true`…"*".
+"Conversion is one-way" (`:1371-1374`): "Any value converts to `void`, and
+that extends through containers in ordinary parameter positions —
+`[]int` satisfies `[]void`. A *type parameter* bound to `[]void` is
+invariant, though, so only `[]void` (or `[]true`) fits there", tested with
+`box([]void){}.Put(Y)` refused for `Y:[]int`. The tests,
+`Tests/Void.versetest` 227-279: `class1(void){}.Foo(false)`, `.Foo()` and
+`.Foo(X)` with `X:void` valid, with `X:int` refused (`:246`, 3509);
+`class1([]void){}.Foo(X)` valid with `X:[]true`, refused with `X:[]int`
+(`:260`) and `X:?int` (`:274`); `class1(?void){}.Foo(X)` valid with
+`X:?true`. Prose and tests agree.
+
+**openverse before.** A type argument `void` took any value, as `void`
+written in place does.
+
+**openverse now.** `TyEnv.typeArgs` (`Elab/Context.lean`) gives a
+program's parametric type, where `resolveTy` resolves its application, its
+arguments with `Ty.voidArg`, and `classHierarchy` gives a parent's
+arguments `STy.voidArg` (so an inherited field or method is at `true`
+too). The library's types, the concurrency prelude's `task` and events
+(`PreludeNeeds.names`), keep `void`: `task(void)` is a spawn's of a `void`
+function. Messages say `tuple()`, openverse's name of the type.
