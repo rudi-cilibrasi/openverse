@@ -618,8 +618,8 @@ partial def dispatchArgs (cb : AppElab) (ctx : Ctx) (p : Pos) (mc : MethodCall) 
       if (pass == 0) == deferred[i]! then continue
       let t := (declTy t0).subst σu
       if t.params.any ownNames.contains then
-        if contextual[i]! then
-          eerr a.pos s!"cannot infer the type parameters of {m} from the arguments of this call"
+        let cannot := s!"cannot infer the type parameters of {m} from the arguments of this call"
+        if contextual[i]! && !a.typedAlone then eerr a.pos cannot
         let r ← cb.elabE ctx a none
         match ctx.matchArgument σu t r.ty with
         | some σ' =>
@@ -629,7 +629,7 @@ partial def dispatchArgs (cb : AppElab) (ctx : Ctx) (p : Pos) (mc : MethodCall) 
             if pass == 0 then deferred := deferred.set! i true
             else eerr a.pos s!"cannot infer the type parameters of {m} from this argument"
           else done := done.set! i (some (← elabArgumentCoerceWith cb.elabE ctx a.pos r t', t'))
-        | none => eerr a.pos s!"expected {showT t}, found {r.ty.show} (in a call of {m})"
+        | none => eerr a.pos (if contextual[i]! then cannot else s!"expected {showT t}, found {r.ty.show} (in a call of {m})")
       else
         done := done.set! i (some (← coerce a.pos (← cb.elabE ctx a (some t)) t, t))
   let mut namedSlots : List (String × Nat) := []

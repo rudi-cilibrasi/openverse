@@ -555,12 +555,14 @@ def STop.isTypeDefault : STop → Bool
     (`openMarker`), a default its function types write
     (`typeDefaultPrefix`), the record of an attribute (`attrPrefix`) and the
     check of its value (`attrCheckPrefix`). An attribute is on the first
-    definition after its markers (`attachAttrs`, `Attributes.apply`). (It
-    reads the last part of the name, after `::`.) -/
+    definition after its markers (`attachAttrs`, `Attributes.apply`). (The
+    markers of a qualifier and a `using` start with their prefix and name the
+    scope after it, `$qual:A::F|q`; the others are in their scope, after the
+    last `::`, `A::$attr:L_C`.) -/
 def STop.isBesideMarker : STop → Bool
   | .const _ n .. =>
     let last := (n.splitOn "::").getLast?.getD n
-    last.startsWith qualPrefix || last.startsWith openPrefix || last.startsWith typeDefaultPrefix ||
+    n.startsWith qualPrefix || n.startsWith openPrefix || last.startsWith typeDefaultPrefix ||
       last.startsWith attrPrefix || last.startsWith attrCheckPrefix
   | _ => false
 

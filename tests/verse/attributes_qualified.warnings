@@ -1,0 +1,5 @@
+29:13: warning: F is deprecated
+29:21: warning: X is deprecated: use Y
+29:29: warning: c is deprecated
+29:39: warning: s is deprecated
+29:49: warning: G is deprecated

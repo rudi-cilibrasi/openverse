@@ -1333,6 +1333,15 @@ def Ctx.argNeedsType (ctx : Ctx) : SExpr → Bool
       ctx.types.classes.contains s!"{n}$fn"
   | _ => false
 
+/-- Whether an argument that takes its type from the other arguments
+    (`argNeedsType`) has one of its own when they give it none: `false`, a
+    `logic`, as `X := false` is (`Identity(true)` is at `logic`, Book of
+    Verse ch. 2, "Type Parameters"). An empty `array{}` or `map{}` and a
+    generic function's name have none. -/
+def SExpr.typedAlone : SExpr → Bool
+  | .ident _ "false" => true
+  | _ => false
+
 /-- Where the method `m` of `c` is declared, for the signature of a call: the
     most specific of the declarations at or above `c` and, among several,
     one whose result is below the others' (overrides may narrow it). -/

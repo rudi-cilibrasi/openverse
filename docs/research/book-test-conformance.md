@@ -25,9 +25,10 @@ primitives](#after-the-books-primitives), the source upper bounds of
 undoes of [After what a `for` undoes](#after-what-a-for-undoes), the
 fields with accessors, type arguments and metatypes of [After fields with
 accessors, type arguments and
-metatypes](#after-fields-with-accessors-type-arguments-and-metatypes) and
+metatypes](#after-fields-with-accessors-type-arguments-and-metatypes),
 the weak maps and module-scoped `var`s of [After weak maps and
-module-scoped vars](#after-weak-maps-and-module-scoped-vars),
+module-scoped vars](#after-weak-maps-and-module-scoped-vars) and the
+fixes of [After the found bugs](#after-the-found-bugs),
 against the Book at
 [`beaa719ba165cbf33eff462f2b0fe078a6dd9ab0`](https://github.com/verselang/book/tree/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests),
 the revision the other research notes pin. The Book's
@@ -55,12 +56,13 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   APIs (persistence, JSON, natives; 345); compiler tooling such as bytecode
   and digests (128); VM-conditional code inside a definition (37) and one
   file that defines `Main` itself (1).
-- Of the **9,588 translatable cases**, openverse **agrees on 8,289 (86%)**,
-  refuses 1,124 valid programs, **accepts 87 refused ones**, gives a
+- Of the **9,588 translatable cases**, openverse **agrees on 8,290 (86%)**,
+  refuses 1,123 valid programs, **accepts 87 refused ones**, gives a
   **different result in 88** (82 of them `verse_vm_only` cases of unbounded
   ints) and hits **no internal error** ([After the remaining
   causes](#after-the-remaining-causes) with [After weak maps and
-  module-scoped vars](#after-weak-maps-and-module-scoped-vars); each alone:
+  module-scoped vars](#after-weak-maps-and-module-scoped-vars) and [After
+  the found bugs](#after-the-found-bugs); the first two alone:
   8,267 and 8,236 agreed; before them, on main `7f12181`, of
   9,783: 8,214 agreed, 1,346 refused, 135 accepted, 88 differed). (When the survey was
   taken, at `0e69cfb`: 6,409 agreed, 2,817 refused, 482 accepted, 86
@@ -283,22 +285,22 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| all test cases (assertions and files without one) | 13197 | 7977 | 135 | 1367 | 88 | 3630 | 0 |
-| shared definitions of a file (`:decls`) | 307 | 161 | 0 | 55 | 0 | 91 | 0 |
-| **total** | 13504 | 8138 | 135 | 1422 | 88 | 3721 | 0 |
+| all test cases (assertions and files without one) | 13197 | 8124 | 87 | 1075 | 88 | 3823 | 0 |
+| shared definitions of a file (`:decls`) | 307 | 166 | 0 | 48 | 0 | 93 | 0 |
+| **total** | 13504 | 8290 | 87 | 1123 | 88 | 3916 | 0 |
 
 ### By form
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `assert` | 6671 | 3429 | 0 | 1015 | 88 | 2139 | 0 |
-| `assert_semantic_error` | 3460 | 2619 | 98 | 0 | 0 | 743 | 0 |
-| `assert_valid` | 1637 | 858 | 0 | 260 | 0 | 519 | 0 |
-| `assert_valid_syntax` | 439 | 385 | 0 | 54 | 0 | 0 | 0 |
-| `decls` | 307 | 161 | 0 | 55 | 0 | 91 | 0 |
+| `assert` | 6671 | 3508 | 0 | 761 | 88 | 2314 | 0 |
+| `assert_semantic_error` | 3460 | 2667 | 50 | 0 | 0 | 743 | 0 |
+| `assert_valid` | 1637 | 875 | 0 | 243 | 0 | 519 | 0 |
+| `assert_valid_syntax` | 439 | 386 | 0 | 53 | 0 | 0 | 0 |
+| `decls` | 307 | 166 | 0 | 48 | 0 | 93 | 0 |
 | `assert_roundtrip` | 304 | 293 | 0 | 9 | 0 | 2 | 0 |
 | `assert_syntax_error` | 303 | 300 | 3 | 0 | 0 | 0 | 0 |
-| `assert_runtime_error` | 140 | 48 | 0 | 25 | 0 | 67 | 0 |
+| `assert_runtime_error` | 140 | 50 | 0 | 5 | 0 | 85 | 0 |
 | `assert_link_error` | 55 | 10 | 24 | 0 | 0 | 21 | 0 |
 | `assert_digest_generated` | 53 | 0 | 0 | 0 | 0 | 53 | 0 |
 | `assert_auto_qualification` | 29 | 0 | 0 | 0 | 0 | 29 | 0 |
@@ -316,31 +318,31 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| no VM restriction | 12208 | 7838 | 97 | 1010 | 5 | 3258 | 0 |
-| `verse_vm_only` | 702 | 212 | 5 | 300 | 83 | 102 | 0 |
+| no VM restriction | 12208 | 7988 | 49 | 734 | 5 | 3432 | 0 |
+| `verse_vm_only` | 702 | 213 | 5 | 296 | 83 | 105 | 0 |
 | `bp_vm_only` | 366 | 80 | 33 | 1 | 0 | 252 | 0 |
-| `verse_vm_todo` (BPVM only; a known VerseVM failure) | 219 | 8 | 0 | 111 | 0 | 100 | 0 |
+| `verse_vm_todo` (BPVM only; a known VerseVM failure) | 219 | 9 | 0 | 92 | 0 | 118 | 0 |
 | `auto_qualify_todo` | 9 | 0 | 0 | 0 | 0 | 9 | 0 |
 
 ### By directory
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| (top level) | 5575 | 3375 | 76 | 879 | 3 | 1242 | 0 |
-| Operators/ | 1203 | 1086 | 4 | 12 | 28 | 73 | 0 |
-| Bugs/ | 1185 | 743 | 36 | 157 | 0 | 249 | 0 |
-| Literals/ | 1020 | 834 | 0 | 152 | 0 | 34 | 0 |
+| (top level) | 5575 | 3488 | 45 | 767 | 3 | 1272 | 0 |
+| Operators/ | 1203 | 1091 | 0 | 11 | 28 | 73 | 0 |
+| Bugs/ | 1185 | 751 | 33 | 132 | 0 | 269 | 0 |
+| Literals/ | 1020 | 834 | 0 | 7 | 0 | 179 | 0 |
 | Serialization/ | 991 | 0 | 0 | 0 | 0 | 991 | 0 |
-| Attributes/ | 795 | 493 | 4 | 52 | 0 | 246 | 0 |
-| FlowControl/ | 484 | 405 | 4 | 30 | 0 | 45 | 0 |
+| Attributes/ | 795 | 509 | 4 | 36 | 0 | 246 | 0 |
+| FlowControl/ | 484 | 409 | 0 | 30 | 0 | 45 | 0 |
 | Intrinsics/ | 437 | 305 | 0 | 106 | 1 | 25 | 0 |
 | Math/ | 321 | 260 | 0 | 1 | 56 | 4 | 0 |
-| Classes/ | 317 | 227 | 3 | 10 | 0 | 77 | 0 |
+| Classes/ | 317 | 229 | 1 | 10 | 0 | 77 | 0 |
 | Versions/ | 289 | 6 | 0 | 0 | 0 | 283 | 0 |
 | Roundtrip/ | 255 | 245 | 0 | 8 | 0 | 2 | 0 |
 | Coroutines/ | 229 | 21 | 1 | 3 | 0 | 204 | 0 |
-| Modules/ | 219 | 70 | 4 | 8 | 0 | 137 | 0 |
-| Features/ | 67 | 18 | 3 | 1 | 0 | 45 | 0 |
+| Modules/ | 219 | 71 | 3 | 8 | 0 | 137 | 0 |
+| Features/ | 67 | 21 | 0 | 1 | 0 | 45 | 0 |
 | Interfaces/ | 41 | 34 | 0 | 0 | 0 | 7 | 0 |
 | Bytecode/ | 27 | 2 | 0 | 0 | 0 | 25 | 0 |
 | Exercises/ | 17 | 14 | 0 | 3 | 0 | 0 | 0 |
@@ -349,14 +351,14 @@ cases are refusals.
 | CanCallerAccessEpicInternal/ | 7 | 0 | 0 | 0 | 0 | 7 | 0 |
 | AssetUsage/ | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 
-Of the 2,940 expected errors openverse agrees with, 17 are warnings
+Of the 2,989 expected errors openverse agrees with, 39 are warnings
 openverse gives (their codes are all warnings, [After the load-bearing
 readings](#after-the-load-bearing-readings)); for the others the refusal came from
-the parser in 1,236 (most semantic-error snippets among them use a form
+the parser in 1,063 (most semantic-error snippets among them use a form
 openverse does not parse, such as `@attribute`; the lexer's and parser's
 own checks, of comments, float literals, specifiers and an extension
 method's receiver, count here), from a diagnostic that says openverse
-lacks a feature or a name in 454, and from a rule check in 1,233. Only these 1,233 show
+lacks a feature or a name in 355, and from a rule check in 1,532. Only these 1,532 show
 openverse checking the rule the test is about, and even they are not
 compared by code. Of the 300 agreeing syntax errors, 8 parse once wrapped
 in a function body, so openverse refuses
@@ -1754,6 +1756,27 @@ reading for the owner, left.
 5. Method overrides at coerced signatures (10): adapters; after 4.
 6. Variance (80 with the cases it unblocks): Verse Core, designed only.
 
+## After the found bugs
+
+Bugs found while doing other work, fixed one per commit on main `fb5e514`
+and merged with main `e451452` (#614): an attribute on a
+qualified definition of a module, the attribute an expression's refusal
+names, the rational helpers of programs that use none, dead code in the
+warnings of code never reached, the order of access errors, a `false` that
+infers a type parameter, the markers of helpers used only in an
+interpolation, and an empty `array{}` or `map{}` where a `comparable` is
+expected. Against main's baseline, one case more agrees and none is worse:
+8,237 agree, 1,304 refuse, 135 accept, 88 differ, 3,740 not translatable.
+The one is `ParametricTypes.versetest:333`,
+`assert{F7(false).Method(true)=true}`: `F7(false)` infers `t` as `logic`.
+Merged with [the remaining causes](#after-the-remaining-causes) (#615,
+`5103064`), a fresh run gives **8,290 agree, 1,123 refuse, 87 accept, 88
+differ, 3,916 not translatable**: against #615's baseline the same one case
+is better and nothing else changed; against this branch's before the merge
+nothing is worse (53 more agree, 176 are the test runner's names, not
+translatable now). The baseline and the tables of this note are from that
+run.
+
 ## Ten causes to remove first
 
 Ranked by cases moved per unit of risk. A count is the upper bound above;
@@ -2452,7 +2475,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `PackageCycles.versetest` | 15 | 0 | 0 | 0 | 0 | 15 | 0 |
 | `ParametricCastingIsDisallowed.versetest` | 11 | 10 | 0 | 1 | 0 | 0 | 0 |
 | `ParametricFunctions.versetest` | 106 | 77 | 9 | 16 | 0 | 4 | 0 |
-| `ParametricTypes.versetest` | 274 | 163 | 3 | 81 | 0 | 27 | 0 |
+| `ParametricTypes.versetest` | 274 | 164 | 3 | 80 | 0 | 27 | 0 |
 | `Parentheses.versetest` | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | `Path.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `PersistentJson.versetest` | 103 | 1 | 0 | 0 | 0 | 102 | 0 |
