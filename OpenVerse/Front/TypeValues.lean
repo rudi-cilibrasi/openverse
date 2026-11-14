@@ -32,14 +32,8 @@ import OpenVerse.Front.Syntax
 namespace OpenVerse.Front
 
 /-- The types a definition writes, each mapped by `f`. -/
-partial def STy.mapTy (f : STy → STy) : STy → STy
-  | .arr t => f (.arr (t.mapTy f))
-  | .opt t => f (.opt (t.mapTy f))
-  | .tup ts => f (.tup (ts.map (·.mapTy f)))
-  | .map k v => f (.map (k.mapTy f) (v.mapTy f))
-  | .app n ts => f (.app n (ts.map (·.mapTy f)))
-  | .fn ps es r => f (.fn (ps.map (·.mapTy f)) es (r.mapTy f))
-  | t => f t
+partial def STy.mapTy (f : STy → STy) (t : STy) : STy :=
+  f (Id.run (t.mapChildrenM fun c => pure (c.mapTy f)))
 
 /-- `e` with every type it writes (its declarations', constructions'
     arguments) mapped by `g`, and every expression by `f`, from the leaves up. -/
@@ -109,11 +103,7 @@ partial def writtenTy : STy → String
 partial def metatypes (t : STy) : List (String × STy) :=
   match t with
   | .app k [a] => if kinds.contains k then [(k, a)] else metatypes a
-  | .app _ ts | .tup ts => ts.flatMap metatypes
-  | .arr u | .opt u => metatypes u
-  | .map k v => metatypes k ++ metatypes v
-  | .fn ps _ r => ps.flatMap metatypes ++ metatypes r
-  | .name _ => []
+  | t => t.children.flatMap metatypes
 /-- The types of the declarations of an expression. -/
 partial def declTys (e : SExpr) : List STy :=
   match e with

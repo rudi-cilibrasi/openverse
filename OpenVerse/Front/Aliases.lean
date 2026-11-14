@@ -71,11 +71,7 @@ partial def Scope.ty (s : Scope) (p : Pos) : STy → Except String STy
         throw s!"{p.show}: {shown n} takes {a.params.length} type argument(s), found {ts.length}"
       pure (a.body.substNames (a.params.zip ts))
     | none => pure (.app n ts)
-  | .arr t => return .arr (← s.ty p t)
-  | .opt t => return .opt (← s.ty p t)
-  | .tup ts => return .tup (← ts.mapM (s.ty p))
-  | .map k v => return .map (← s.ty p k) (← s.ty p v)
-  | .fn ps es r => return .fn (← ps.mapM (s.ty p)) es (← s.ty p r)
+  | t => t.mapChildrenM (s.ty p)
 
 /-- Where a value, a qualifier or a constructor names a type `n`: the type
     an alias names, when it is a name (`c` for `a := c`). -/
@@ -175,10 +171,7 @@ partial def checkNames (p : Pos) (arity : String → Option (Option Nat)) (param
         if k != ts.length then throw s!"{p.show}: {shown n} takes {k} type argument(s), found {ts.length}"
       | some none => pure ()
     ts.forM (checkNames p arity params)
-  | .arr t | .opt t => checkNames p arity params t
-  | .tup ts => ts.forM (checkNames p arity params)
-  | .map k v => do checkNames p arity params k; checkNames p arity params v
-  | .fn ps _ r => do ps.forM (checkNames p arity params); checkNames p arity params r
+  | t => t.children.forM (checkNames p arity params)
 
 /-- The program's definitions, modules resolved, with every type alias
     written out where it is used and the aliases' definitions dropped (see

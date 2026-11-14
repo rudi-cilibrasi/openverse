@@ -111,15 +111,34 @@ def STy.asNamedParam? : STy → Option (String × Bool × STy)
     else none
   | _ => none
 
+/-- A type's immediate parts, in the order written: an array's or an
+    option's element, a tuple's elements, a map's key then value, an
+    application's arguments (not its head), a function type's parameters
+    then result. -/
+def STy.children : STy → List STy
+  | .name _ => []
+  | .arr t | .opt t => [t]
+  | .tup ts | .app _ ts => ts
+  | .map k v => [k, v]
+  | .fn ps _ r => ps ++ [r]
+
+/-- `t` with `f` applied to each of its immediate parts, the ones
+    `children` lists, in that order; everything else is kept. -/
+def STy.mapChildrenM [Monad m] (f : STy → m STy) : STy → m STy
+  | .name n => pure (.name n)
+  | .arr t => return .arr (← f t)
+  | .opt t => return .opt (← f t)
+  | .tup ts => return .tup (← ts.mapM f)
+  | .map k v => return .map (← f k) (← f v)
+  | .app n ts => return .app n (← ts.mapM f)
+  | .fn ps es r => return .fn (← ps.mapM f) es (← f r)
+
 /-- Fold over written type names in source order, including application
     heads (`box` in `box(t)`) and function parameter and result types. -/
 partial def STy.foldNames (f : α → String → α) (init : α) : STy → α
   | .name n => f init n
-  | .arr t | .opt t => t.foldNames f init
-  | .tup ts => ts.foldl (STy.foldNames f) init
   | .app n ts => ts.foldl (STy.foldNames f) (f init n)
-  | .map k v => v.foldNames f (k.foldNames f init)
-  | .fn ps _ r => r.foldNames f (ps.foldl (STy.foldNames f) init)
+  | t => t.children.foldl (STy.foldNames f) init
 
 /-- All written type names, in source order, retaining repetitions. -/
 def STy.allNames (t : STy) : List String :=
@@ -137,19 +156,13 @@ def STy.names (t : STy) : List String :=
     function types. Application heads are excluded: `box(t)` mentions `t`. -/
 partial def STy.mentions (t : STy) (n : String) : Bool := match t with
   | .name m => m == n
-  | .arr u | .opt u => u.mentions n
-  | .tup ts | .app _ ts => ts.any (·.mentions n)
-  | .map a b => a.mentions n || b.mentions n
-  | .fn ps _ r => ps.any (·.mentions n) || r.mentions n
+  | t => t.children.any (·.mentions n)
 
 /-- Whether a type mentions any of `vs` as plain type names, with the same
     treatment of application heads as `mentions`. -/
 partial def STy.mentionsAny (vs : List String) : STy → Bool
   | .name n => vs.contains n
-  | .arr t | .opt t => STy.mentionsAny vs t
-  | .tup ts | .app _ ts => ts.any (STy.mentionsAny vs)
-  | .map k v => STy.mentionsAny vs k || STy.mentionsAny vs v
-  | .fn ps _ r => ps.any (STy.mentionsAny vs) || STy.mentionsAny vs r
+  | t => t.children.any (STy.mentionsAny vs)
 
 /-- A type parameter from a `where` clause (`t:type` or
     `t:subtype(comparable)`), or of a parametric struct `name(t:type) := struct`. -/
@@ -622,10 +635,7 @@ partial def STop.definedNames : STop → List (Pos × String)
 /-- Type aliases mentioned as bare names; applications keep declaration heads. -/
 partial def STy.bareNames : STy → List String
   | .name n => [n]
-  | .arr t | .opt t => t.bareNames
-  | .tup ts | .app _ ts => ts.flatMap STy.bareNames
-  | .map k v => k.bareNames ++ v.bareNames
-  | .fn ps _ r => ps.flatMap STy.bareNames ++ r.bareNames
+  | t => t.children.flatMap STy.bareNames
 
 /-- Substitute type names: a parent's type parameters by the type arguments
     a subclass gives it (#39). -/
@@ -635,12 +645,7 @@ partial def STy.substNames (σ : List (String × STy)) : STy → STy
   -- Materialize it when a lifted body's type substitution carries that alias.
   | .app "$methodResult" [.name receiver] =>
     (σ.lookup receiver).getD (.app "$methodResult" [.name receiver])
-  | .arr t => .arr (t.substNames σ)
-  | .opt t => .opt (t.substNames σ)
-  | .tup ts => .tup (ts.map (STy.substNames σ))
-  | .map k v => .map (k.substNames σ) (v.substNames σ)
-  | .app n ts => .app n (ts.map (STy.substNames σ))
-  | .fn ps es r => .fn (ps.map (STy.substNames σ)) es (r.substNames σ)
+  | t => Id.run (t.mapChildrenM fun c => pure (c.substNames σ))
 
 /-- Rename binders and every peer-parameter reference in their upper bounds
     together. Renaming just the binder changes a dependent constraint. -/
