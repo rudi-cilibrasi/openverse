@@ -149,8 +149,10 @@ Methods"). The models: `gadt_open.py`'s pinned `cd`, `cd3` and
 prediction); `generic_mv.py`'s `interface` shape overrides from an
 abstract class (59 of the first 400 seeds change their text, none its
 prediction); `gen-classes.py` writes no interface override, the draws it
-took kept (54 of the first 400 seeds change their text). 45 programs of
-corpus2 are refused (`gadt_open` 20, `generic-mv` 21, `classes` 4).
+took kept (54 of the first 400 seeds change their text). 24 programs of
+corpus2 are refused (`gadt_open` 20, `classes` 4), and 21 of `generic-mv`,
+refused already (a named argument before a positional one), get this rule's
+message first.
 
 ## A loop's body and a field's default are no failure contexts
 
@@ -261,7 +263,10 @@ what the search undoes), and the error tests `for_filter_print`,
 in `for{…}`'s clauses but its value), `generic_mv.py`, and the GADT models
 `gadt_event_body`, `gadt_spawn_body`, `gadt_contexts`,
 `gadt_cast_contexts`, `gadt_immediate`, `gadt_refine` and `gadt_views`,
-none drawing a number more, none changing a prediction. Of the first 400
+none drawing a number more, none changing a prediction; so do the code
+size check's `refined-*`, `waiting-generic-state` and
+`waiting-refined-state` kinds and a subtype evidence contract's program
+(`tests/lean/SubtypeEvidence.lean`). Of the first 400
 seeds, the text changes in `gen-choice` 107, `gen-fields` 266,
 `gen-fields2` 253, `choice_context` 200 (its `for` half; `--control` 200),
 `choice_heterogeneous` 267 (`--methods` 267), `choice_break` 400 (the
@@ -532,8 +537,10 @@ change their text, none its prediction); the code size check's
 `(super:)Values`, its lazily taken `Walk` calling `Scalar` plainly, its
 `super-*` kinds' `Run` is the overload `Limit(Run:logic)` overriding the
 base's, and `return-defer-method-first` defers `Tick()`, not
-`(super:)Tick()`, which only an override of `Tick` may write. 37
-programs of corpus2 are refused (`gadt_super` 20, `generic-mv` 17).
+`(super:)Tick()`, which only an override of `Tick` may write. 20
+programs of corpus2 are refused (`gadt_super`), and 16 of `generic-mv`,
+refused already (a named argument before a positional one), get this
+rule's message first.
 
 ## Five forms the tests refuse
 

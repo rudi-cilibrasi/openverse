@@ -59,12 +59,14 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   APIs (persistence, JSON, natives; 345); compiler tooling such as bytecode
   and digests (128); VM-conditional code inside a definition (37) and one
   file that defines `Main` itself (1).
-- Of the **9,564 translatable cases**, openverse **agrees on 8,544 (89%)**,
-  refuses 856 valid programs, **accepts 77 refused ones**, gives a
+- Of the **9,564 translatable cases**, openverse **agrees on 8,552 (89%)**,
+  refuses 856 valid programs, **accepts 69 refused ones**, gives a
   **different result in 87** (82 of them `verse_vm_only` cases of unbounded
-  ints) and hits **no internal error** ([After the forms of expressions,
-  statements and the library](#after-the-forms-of-expressions-statements-and-the-library);
-  on main `215af57`, before it: 8,452 agreed, 964 refused, 84 accepted, 88
+  ints) and hits **no internal error** ([After the held
+  rules](#after-the-held-rules); on main `84285c1`, before it: 8,544
+  agreed, 856 refused, 77 accepted, 87 differed, with [After the forms of
+  expressions, statements and the library](#after-the-forms-of-expressions-statements-and-the-library);
+  on main `215af57`, before that: 8,452 agreed, 964 refused, 84 accepted, 88
   differed, with [After classes and
   subtyping](#after-classes-and-subtyping); on main `fdb1127`, before that:
   8,290 agreed, 1,123 refused, 87 accepted, 88 differed, with [After the
@@ -296,16 +298,16 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| all test cases (assertions and files without one) | 13197 | 8368 | 77 | 822 | 87 | 3843 | 0 |
+| all test cases (assertions and files without one) | 13197 | 8376 | 69 | 822 | 87 | 3843 | 0 |
 | shared definitions of a file (`:decls`) | 307 | 176 | 0 | 34 | 0 | 97 | 0 |
-| **total** | 13504 | 8544 | 77 | 856 | 87 | 3940 | 0 |
+| **total** | 13504 | 8552 | 69 | 856 | 87 | 3940 | 0 |
 
 ### By form
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | `assert` | 6671 | 3694 | 0 | 556 | 87 | 2334 | 0 |
-| `assert_semantic_error` | 3460 | 2674 | 43 | 0 | 0 | 743 | 0 |
+| `assert_semantic_error` | 3460 | 2682 | 35 | 0 | 0 | 743 | 0 |
 | `assert_valid` | 1637 | 922 | 0 | 196 | 0 | 519 | 0 |
 | `assert_valid_syntax` | 439 | 386 | 0 | 53 | 0 | 0 | 0 |
 | `decls` | 307 | 176 | 0 | 34 | 0 | 97 | 0 |
@@ -329,9 +331,9 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| no VM restriction | 12208 | 8156 | 39 | 553 | 4 | 3456 | 0 |
-| `verse_vm_only` | 702 | 213 | 5 | 296 | 83 | 105 | 0 |
-| `bp_vm_only` | 366 | 80 | 33 | 1 | 0 | 252 | 0 |
+| no VM restriction | 12208 | 8162 | 33 | 553 | 4 | 3456 | 0 |
+| `verse_vm_only` | 702 | 214 | 4 | 296 | 83 | 105 | 0 |
+| `bp_vm_only` | 366 | 81 | 32 | 1 | 0 | 252 | 0 |
 | `verse_vm_todo` (BPVM only; a known VerseVM failure) | 219 | 95 | 0 | 6 | 0 | 118 | 0 |
 | `auto_qualify_todo` | 9 | 0 | 0 | 0 | 0 | 9 | 0 |
 
@@ -339,7 +341,7 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| (top level) | 5575 | 3649 | 38 | 597 | 3 | 1288 | 0 |
+| (top level) | 5575 | 3656 | 31 | 597 | 3 | 1288 | 0 |
 | Operators/ | 1203 | 1103 | 0 | 0 | 27 | 73 | 0 |
 | Bugs/ | 1185 | 766 | 33 | 111 | 0 | 275 | 0 |
 | Literals/ | 1020 | 835 | 0 | 6 | 0 | 179 | 0 |
@@ -351,7 +353,7 @@ cases are refusals.
 | Classes/ | 317 | 230 | 0 | 8 | 0 | 79 | 0 |
 | Versions/ | 289 | 6 | 0 | 0 | 0 | 283 | 0 |
 | Roundtrip/ | 255 | 245 | 0 | 8 | 0 | 2 | 0 |
-| Coroutines/ | 229 | 21 | 1 | 3 | 0 | 204 | 0 |
+| Coroutines/ | 229 | 22 | 0 | 3 | 0 | 204 | 0 |
 | Modules/ | 219 | 73 | 1 | 8 | 0 | 137 | 0 |
 | Features/ | 67 | 21 | 0 | 1 | 0 | 45 | 0 |
 | Interfaces/ | 41 | 34 | 0 | 0 | 0 | 7 | 0 |
@@ -1520,7 +1522,9 @@ that keeps its value, a printer and a shortest float formatter; variance,
 `GetRandomInt` and a clock); the owner's decisions (`no_rollback`,
 `<override>` in an interface, `(super:)`'s reach, `spawn`'s effects and
 `spawn` in a failure context, 13 more agreeing at the cost of 7 different
-results through awaiters run inside `Signal`; `true` and `false` as
+results through awaiters run inside `Signal`; the first three, the
+`race` arms' and the whole filter rule done since, and `spawn` in a failure
+context looked at again and kept, [After the held rules](#after-the-held-rules); `true` and `false` as
 types, 19; `<concrete>` subclasses); and front-end features, each of its
 own: `<computes><allocates>` classes (20, with `Choice.inlineFns`'s test
 of what is effect-free), localization (34), operator definitions (14),
@@ -2017,6 +2021,60 @@ translatable). The baseline is from the run on the final commit.
   ch. 2 `02_primitives.md:1233-1250` and `BoolQuery.versetest` 3, 4, on the
   wiki).
 
+## After the held rules
+
+The five rules of the accepted refusals that [After the remaining
+causes](#after-the-remaining-causes) measured and left for the owner, built
+by the owner's rule ("for everything we go by the book for now"), one rule
+per commit, each pinned in [book-remaining-rules.md](book-remaining-rules.md)
+with what it retires; merged with main `fdb1127` (#616), `215af57` (#617)
+and `84285c1` (#618). `compare` after each, against the baseline of the
+commit before (totals: agree, refuse, accept, differ, not translatable):
+
+| Rule | Totals after it | Better |
+|---|---|---|
+| main `b70272c` | 8,289, 1,124, 87, 88, 3,916 | |
+| every arm of `race` and `rush` can suspend | 8,290, 1,124, 86, 88, 3,916 | `Coroutines/Concurrency.versetest:832` |
+| merged with `fdb1127` (main: 8,290, 1,123, 87) | 8,291, 1,123, 86, 88, 3,916 | |
+| `spawn` has `<transacts>`'s effects | 8,293, 1,123, 84, 88, 3,916 | `Effects.versetest` 558, 573 |
+| `(super:)M` only in an override of `M` | 8,295, 1,123, 82, 88, 3,916 | `Super.versetest` 183, 238 |
+| merged with `215af57` (main: 8,452, 964, 84) | 8,457, 964, 79, 88, 3,916 | |
+| an interface overrides nothing | 8,460, 964, 76, 88, 3,916 | `Interface.versetest` 194, 199, `InterfaceDiamond.versetest:89` |
+| every filter of a `for` can fail | 8,460, 964, 76, 88, 3,916 | none: `FlowControl/for.versetest:223` agreed already, through the literal filter's rule |
+| merged with `84285c1` (main: 8,544, 856, 77, 87, 3,940) | 8,552, 856, 69, 87, 3,940 | |
+| every filter of a `first` with a generator can fail | 8,552, 856, 69, 87, 3,940 | none: `FlowControl/first.versetest:30` agreed already (main's literal-or-name check), and agrees by this rule |
+
+Against main `84285c1`'s baseline (8,544 agree, 856 refuse, 77 accept, 87
+differ, 3,940 not translatable), 8 accepted refusals agree and nothing is
+worse: **8,552 agree, 856 refuse, 69 accept, 87 differ, 3,940 not
+translatable** (re-recorded from a fresh run on the final compiler, with
+the tables above and the appendices).
+
+- **Per cause, on main `84285c1` and now:** control-forms 1 → 0;
+  effect-checks 7 → 5 (left: `no_rollback` as a function's default effect,
+  3, and the BPVM's `spawn` in a `<transacts>` function, 2, its
+  `no_rollback` reading of `spawn`); qualified-names 6 → 4 (left: the
+  warnings 2003 and 2004); interface-rules 3 → 0.
+- **Moved the wrong way:** none; no case became an accepted refusal or a
+  different result.
+- **`spawn` in a failure context** (#156, 29 refusals): looked at again
+  ([the rule](book-remaining-rules.md#spawn-has-transactss-effects)) and
+  kept: relaxed outside `<suspends>` functions, 13 cases agree, 7 give a
+  different result (awaiters run inside `Signal`) and the BPVM's
+  `SoftwareTransactionalMemory.versetest:505` is accepted, and the form
+  cannot tell them apart.
+- **Programs.** Against main `84285c1`, over every suite and the corpus
+  `corpus2` (5,906 programs in both, 38 in main's only, 32 in this
+  branch's only): 5,140 the same; of the 766 that differ, 653 are programs
+  of corpus2 a rule refuses now (`spawn` 20, `(super:)` 20, an interface's
+  override 24, a filter 589) and 38 more whose refusal on main gives way to
+  a rule's message first (`generic-mv` 16 and 21, `gadt_contexts` 1); 69
+  are tests rewritten to the Book's forms, their output the same (their
+  code changed); 5 are error tests rewritten to keep their subject in the
+  Book's forms, and 1 (`first_filter_name`) has the general rule's message.
+  The 38 programs only main has are the tests deleted and renamed, the 32
+  only this branch has the new tests and the renamed ones.
+
 ## Ten causes to remove first
 
 Ranked by cases moved per unit of risk. A count is the upper bound above;
@@ -2158,15 +2216,15 @@ Grouped by the causes of the tables above. Lines are given per file, with
 
 **Accepted: concrete-classes** (7): `Attributes/concrete.versetest` 38, 76; `Bugs/SOL-3366-MakeClassesConcreteByDefault.versetest` 8, 15, 24; `Bugs/SOL-7781-ConcreteClassDoesntEnforceDefaultValuesForInterfaceFields.versetest` 28, 54
 
-**Accepted: effect-checks** (7): `Effects.versetest` 490, 551, 552, 557(b), 558(b), 565(b), 573(v)
+**Accepted: effect-checks** (5): `Effects.versetest` 490, 551, 552, 557(b), 565(b)
 
-**Accepted: qualified-names** (6): `Bugs/SOL-3564-CallingSuperClassMethodFromOverriddenMethod.versetest` 7, 18, 32, 45; `Super.versetest` 183, 238
+**Accepted: qualified-names** (4): `Bugs/SOL-3564-CallingSuperClassMethodFromOverriddenMethod.versetest` 7, 18, 32, 45
 
 **Accepted: initializer-effects** (4): `GlobalVariables.versetest` 86(v), 90(v), 97(v), 105(v)
 
-**Accepted: interface-rules** (3): `Interface.versetest` 194, 199; `InterfaceDiamond.versetest` 89
+**Accepted: interface-rules** (0): none now ([After the held rules](#after-the-held-rules)).
 
-**Accepted: control-forms** (1): `Coroutines/Concurrency.versetest` 832
+**Accepted: control-forms** (0): none now ([After the held rules](#after-the-held-rules)).
 
 **Accepted: duplicate-definitions** (1): `QualifiedIdentifier.versetest` 315
 
@@ -2514,7 +2572,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `ComparableInterface.versetest` | 17 | 13 | 0 | 4 | 0 | 0 | 0 |
 | `CompatibilityConstraints.versetest` | 320 | 0 | 0 | 0 | 0 | 320 | 0 |
 | `ComputationLimit.versetest` | 3 | 2 | 0 | 0 | 0 | 1 | 0 |
-| `Coroutines/Concurrency.versetest` | 86 | 11 | 1 | 1 | 0 | 73 | 0 |
+| `Coroutines/Concurrency.versetest` | 86 | 12 | 0 | 1 | 0 | 73 | 0 |
 | `Coroutines/ConcurrencyEscape.versetest` | 49 | 0 | 0 | 0 | 0 | 49 | 0 |
 | `Coroutines/Flow.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
 | `Coroutines/IteratedPrimitives.versetest` | 6 | 4 | 0 | 0 | 0 | 2 | 0 |
@@ -2534,7 +2592,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `DigestVisibility.versetest` | 47 | 31 | 0 | 0 | 0 | 16 | 0 |
 | `Duplication.versetest` | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
 | `DynamicallyTypedSubobjectInstantiation.versetest` | 16 | 16 | 0 | 0 | 0 | 0 | 0 |
-| `Effects.versetest` | 336 | 260 | 7 | 2 | 0 | 67 | 0 |
+| `Effects.versetest` | 336 | 262 | 5 | 2 | 0 | 67 | 0 |
 | `Enum.versetest` | 71 | 66 | 1 | 0 | 0 | 4 | 0 |
 | `EnumCompare.versetest` | 12 | 12 | 0 | 0 | 0 | 0 | 0 |
 | `Escape.versetest` | 5 | 5 | 0 | 0 | 0 | 0 | 0 |
@@ -2579,9 +2637,9 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Incremental/10_statistics_replayed.versetest` | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
 | `IndistinctOverloads.versetest` | 20 | 20 | 0 | 0 | 0 | 0 | 0 |
 | `IntAsRational.versetest` | 14 | 14 | 0 | 0 | 0 | 0 | 0 |
-| `Interface.versetest` | 109 | 99 | 2 | 5 | 0 | 3 | 0 |
+| `Interface.versetest` | 109 | 101 | 0 | 5 | 0 | 3 | 0 |
 | `InterfaceAccessVisibility.versetest` | 19 | 12 | 0 | 0 | 0 | 7 | 0 |
-| `InterfaceDiamond.versetest` | 18 | 17 | 1 | 0 | 0 | 0 | 0 |
+| `InterfaceDiamond.versetest` | 18 | 18 | 0 | 0 | 0 | 0 | 0 |
 | `InterfaceWithAccessors.versetest` | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
 | `InterfaceWithFields.versetest` | 37 | 29 | 0 | 7 | 0 | 1 | 0 |
 | `Interfaces/AccessSpecifiers.versetest` | 41 | 34 | 0 | 0 | 0 | 7 | 0 |
@@ -2754,7 +2812,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `StmCallbackErrors.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `StringInterpolationPlus.versetest` | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
 | `Subtype.versetest` | 106 | 97 | 0 | 8 | 0 | 1 | 0 |
-| `Super.versetest` | 32 | 24 | 2 | 1 | 0 | 5 | 0 |
+| `Super.versetest` | 32 | 26 | 0 | 1 | 0 | 5 | 0 |
 | `TestSubobjectRenaming.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
 | `TimSyntax.versetest` | 282 | 238 | 0 | 44 | 0 | 0 | 0 |
 | `TransactionalTaskScope.versetest` | 7 | 0 | 0 | 7 | 0 | 0 | 0 |
