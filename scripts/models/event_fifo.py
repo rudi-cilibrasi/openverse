@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""FIFO event resumption (#513, --event-fifo): random programs with a model
-of the expected output (from the reviews of #533 and #539).
+"""Event resumption (#513; the Book's rule since awaiters run inside
+Signal): random programs with a model of the expected output (from the
+reviews of #533 and #539).
 
 usage: event_fifo.py SEED OUT.exp > PROGRAM.verse
 
@@ -9,8 +10,13 @@ by a task in its first run, branches inside a spawned task, and the arms of
 a sync or race in a task of their own, each with its own turn. At each tick
 exactly one free actor acts: it starts awaiting an event, or signals one.
 A woken actor prints, may at once signal another event (a chain), then
-sleeps to its next step. Expected: each Signal's waiters go on in the order
-they began waiting, after the signaller's run; those a chain wakes after.
+sleeps to its next step. Expected (the Book's API, event's Signal): each
+Signal's waiters go on in the order they began waiting, each until it waits
+again, inside the Signal: a chain's own waiters inside the chain's Signal,
+before the next waiter of the outer one (depth first), and the signaller
+goes on after them. The programs are generated as for the earlier rule
+(FIFO after the signaller's run, breadth first), whose woken sets are the
+same; only the order of the output differs.
 """
 import random, sys
 
@@ -44,6 +50,7 @@ def wake(e, t, queue):
         steps[a][-1].append(t)
         queue.append((a, e))
     waitq[e] = []
+actions = []                        # (tick, actor, kind, event), in order
 for t in range(1, N + 1):
     cands = [a for a in range(len(kinds)) if waiting[a] is None and free_at[a] < t]
     if not cands:
@@ -51,11 +58,13 @@ for t in range(1, N + 1):
     a = rng.choice(cands)
     e = rng.randrange(NEV)
     if rng.random() < 0.55:
+        actions.append((t, a, "await", e))
         steps[a].append([t, "await", e, None])
         waiting[a] = e
         waitq[e].append(a)
         expected.append(f"w {names[a]} {e}")
     else:
+        actions.append((t, a, "signal", e))
         steps[a].append([t, "signal", e, None])
         free_at[a] = t
         expected.append(f"s {names[a]} {e} {t}")
@@ -86,6 +95,38 @@ for k, e in enumerate(range(NEV)):
     for b, eb in queue:
         expected.append(f"got {names[b]} {eb} {t}")
 END = N + NEV + 4
+expected.append("end")
+# the expected output: the actions replayed with each Signal's round run
+# inside it, depth first (the chains the generation above chose)
+expected = []
+waitq2 = {e: [] for e in range(NEV)}
+step_at = [0] * len(kinds)
+pending_step = {}
+def run_round(e, t):
+    rnd = waitq2[e]
+    waitq2[e] = []
+    for b in rnd:
+        k = pending_step.pop(b)
+        expected.append(f"got {names[b]} {e} {t}")
+        ce = steps[b][k][3]
+        if ce is not None:
+            expected.append(f"cs {names[b]} {ce}")
+            run_round(ce, t)
+            expected.append(f"cr {names[b]} {ce}")
+for (t, a, kind, e) in actions:
+    k = step_at[a]; step_at[a] += 1
+    if kind == "await":
+        expected.append(f"w {names[a]} {e}")
+        waitq2[e].append(a)
+        pending_step[a] = k
+    else:
+        expected.append(f"s {names[a]} {e} {t}")
+        run_round(e, t)
+        expected.append(f"r {names[a]} {e}")
+for (t, e) in fin_ticks:
+    expected.append(f"s Fin {e} {t}")
+    run_round(e, t)
+    expected.append(f"r Fin {e}")
 expected.append("end")
 
 L = []
