@@ -106,8 +106,10 @@ def concurrencyHelpers (resolved : List STop) (requests : Requests) :
     1. the effect policy, with where each specifier may go, and the source
        profile (`EffectPolicy`, `SourceProfile`);
     2. the rules of the source as written (`SourceRules.lean`, in this
-       order): no built-in type's name taken (`checkTypeNames`), no
-       reserved name (`checkReservedNames`), each name defined once in its
+       order): no built-in type's name taken by a type
+       (`checkTypeNames`), no reserved name (`checkReservedNames`), no
+       built-in type's name by any other definition
+       (`checkBuiltinTypeNames`), each name defined once in its
        scope (`checkDefinedOnce`) and none of a scope around it
        (`checkNoShadowing`), `return` only in a function
        (`checkReturns`), no `return` or `break` that leaves a failure
@@ -160,6 +162,7 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   --    (`SourceRules`)
   checkTypeNames allTops0r
   checkReservedNames allTops0r
+  checkBuiltinTypeNames allTops0r
   checkDefinedOnce allTops0r
   let scopePairs ← checkNoShadowing allTops0r
   checkReturns allTops0r

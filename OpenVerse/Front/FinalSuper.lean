@@ -44,10 +44,9 @@ def helperName (f b : String) : String := s!"${f}:{b}"
     argument may be (its call then always fails): the built-in types and the
     program's structs and enums. -/
 def otherTypeNames (tops : List STop) : List String :=
-  ["int", "float", "logic", "char", "char32", "string", "rational", "void", "any", "comparable"] ++
-    tops.filterMap fun
-      | .const _ n _ none (.structDef ..) | .const _ n _ none (.enumDef ..) => some n
-      | _ => none
+  builtinTypeNames ++ tops.filterMap fun
+    | .const _ n _ none (.structDef ..) | .const _ n _ none (.enumDef ..) => some n
+    | _ => none
 
 /-- The calls of the functions `fns` in `e`: where, which, and the first
     argument. -/

@@ -148,6 +148,25 @@ rule (`(m:)local` is refused), but an enum's value qualified with its enum
 may take any name, a keyword's too ([Qualified names](#qualified-names)). The function type
 `type{_(:int):int}` writes `_` as no definition's name, and stays allowed.
 
+No definition takes a built-in type's name either (`typeNames` in
+`Front/Syntax.lean`): `int`, `logic`, `char`, `char32`, `string`, `void`,
+`float`, `rational`, `any`, `comparable`, and the metatypes' `type`,
+`subtype` and `concrete_subtype`. A type (`int := class{}` or a type
+alias: "int is a built-in type"), a constant, a module, a type parameter, a
+parameter, a local and a field are refused alike: the built-in types are
+definitions every scope sees (ch. 16, "Automatic Qualification": `int` is
+`(/Verse.org/Verse:)int`), no definition takes the name of one around it
+(ch. 10), and a use of the name would read the type. A function or a method
+may take one, as the program's own, which its calls reach (`any(X)` calls a
+function `any` the program defines), and so may an enum's value, used
+qualified. The Book's tests reserve `subtype` and
+`castable_subtype` in every place (`Subtype.versetest` 229-242), `true`
+(`Enum.versetest:59`) and a local `array` (`Array.versetest:96`, a keyword
+in openverse), and define nothing named like another built-in type. The
+names of the library's types that a program may define itself, `event`,
+`task` (a local `task`, `Super.versetest:35`), `weak_map`, `message`, are
+the program's where it does.
+
 ## Parametric functions
 
 A function with a `where` clause is generic. The clause ends the parameter

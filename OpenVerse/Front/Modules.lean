@@ -62,11 +62,6 @@ partial def SExpr.identPath : SExpr → Option (List String)
   | .member _ e m => (e.identPath).map (· ++ [m])
   | _ => none
 
-/-- The built-in types: the names openverse stands in for `/Verse.org/Verse`
-    with (Book of Verse ch. 16, "Automatic Qualification": `int` is
-    `(/Verse.org/Verse:)int`). -/
-def builtinTypes : List String :=
-  ["int", "logic", "char", "char32", "string", "void", "float", "rational", "any", "comparable"]
 
 /-- What a qualifier `(q:)` names (docs/research/qualified-names.md). -/
 inductive Qual where
@@ -204,8 +199,8 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
           | some false => return .ident p f
           | none => throw s!"{p.show}: (local:){f}: there is no local {f} here (a parameter, or a definition before this use in the enclosing code)"
         | .builtins =>
-          if builtinTypes.contains f then return .ident p f
-          throw s!"{p.show}: ({q}:){f}: openverse stands in for {q} with its built-in types ({", ".intercalate builtinTypes}) only"
+          if builtinTypeNames.contains f then return .ident p f
+          throw s!"{p.show}: ({q}:){f}: openverse stands in for {q} with its built-in types ({", ".intercalate builtinTypeNames}) only"
         | .super => return .member p x m
         | .type c =>
           -- (an enum's value, `e.v`; a field of `Self` its class, or one
@@ -641,8 +636,8 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
     if let some (q, c) := splitQual? n then
       match ← qualifier sc excl p q with
       | .builtins =>
-        if builtinTypes.contains c then return c
-        throw s!"{p.show}: ({q}:){c}: openverse stands in for {q} with its built-in types ({", ".intercalate builtinTypes}) only"
+        if builtinTypeNames.contains c then return c
+        throw s!"{p.show}: ({q}:){c}: openverse stands in for {q} with its built-in types ({", ".intercalate builtinTypeNames}) only"
       | _ => throw s!"{p.show}: ({q}:){c}: a type is qualified with the module that defines it"
     tyName sc excl p n
   let scopeOf (n : String) : List String := (qualParts n).dropLast

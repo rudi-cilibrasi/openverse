@@ -17,12 +17,16 @@ import OpenVerse.Front.Refine
 namespace OpenVerse.Front
 open OpenVerse
 
-/-- A type of the program's own does not take a built-in type's name. -/
+/-- A type of the program's own does not take a built-in type's name
+    (`typeNames`): a class, an interface, a struct, an enum or a type alias
+    the parser knows (`name := []int`), at the top level or in a module. -/
 def checkTypeNames (tops : List STop) : Except String Unit := do
   for t in tops do
     match t with
-    | .const p n _ _ (.structDef ..) | .const p n _ _ (.enumDef ..) | .classDef p n .. =>
-      if ("char32" :: typeNames).contains n then throw s!"{p.show}: {n} is a built-in type"
+    | .const p n _ _ (.structDef ..) | .const p n _ _ (.enumDef ..) | .const p n _ _ (.typeAlias ..)
+    | .classDef p n .. =>
+      let n := (qualParts n).getLastD n
+      if typeNames.contains n then throw s!"{p.show}: {n} is a built-in type"
     | _ => pure ()
 
 /-- No definition takes a reserved name (`reservedNames`), at any scope. -/
@@ -33,6 +37,32 @@ def checkReservedNames (tops : List STop) : Except String Unit := do
       -- (an extension method's, `M` of its function `$ext:M`)
       let n := (extensionMethod? n).getD n
       if reservedNames.contains n then throw s!"{p.show}: '{n}' is reserved: no definition can take it"
+
+/-- The names a definition introduces (`STop.definedNames`) but its
+    functions' and methods' own: a function of a built-in type's name is
+    the program's, which its calls reach (`any(X)`, #139). -/
+partial def STop.namesButFunctions : STop → List (Pos × String)
+  | t@(.fn _ n ..) => if n.startsWith "(" then t.definedNames else t.definedNames.drop 1
+  | t@(.const ..) => t.definedNames
+  | .classDef p _ _ tps _ _ _ fs ms =>
+    tps.map (fun tp => (tp.pos, tp.name)) ++
+      fs.flatMap (fun f => (p, bareName f.name) :: (f.default.map SExpr.definedNames).getD []) ++
+      ms.flatMap STop.namesButFunctions
+
+/-- Nor does another definition, at any scope: a constant, a module, a type
+    parameter, a parameter, a local or a field. The built-in types are
+    definitions every scope sees (Book of Verse ch. 16, "Automatic
+    Qualification": `int` is `(/Verse.org/Verse:)int`), and no definition
+    takes the name of one around it (ch. 10, "Shadowing and
+    Qualification"); a use of one so named would read the type. A function
+    or a method may (`STop.namesButFunctions`), and so may an enum's value,
+    used qualified. -/
+def checkBuiltinTypeNames (tops : List STop) : Except String Unit := do
+  for t in tops do
+    for (p, n) in t.namesButFunctions do
+      let n := (qualParts n).getLastD n
+      if typeNames.contains n then
+        throw s!"{p.show}: '{n}' is the name of a built-in type, which every scope sees (Book of Verse ch. 16: int is (/Verse.org/Verse:)int), and Verse does not allow shadowing (ch. 10): no definition can take it"
 
 /-- Each name is defined once in its scope, the top level or a module: only
     functions of one scope share a name, as its overloads. A class, an
