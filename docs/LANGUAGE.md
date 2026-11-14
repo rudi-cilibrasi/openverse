@@ -163,8 +163,10 @@ definitions every scope sees (ch. 16, "Automatic Qualification": `int` is
 `(/Verse.org/Verse:)int`), no definition takes the name of one around it
 (ch. 10), and a use of the name would read the type. A function or a method
 may take one, as the program's own, which its calls reach (`any(X)` calls a
-function `any` the program defines), and so may an enum's value, used
-qualified. The Book's tests reserve `subtype` and
+function `any` the program defines), and so may an enum's value written
+qualified with its enum, `(kind:)int`, as a reserved word may (ch. 9:
+"Enumerators can collide with identifiers in parent scopes"). The Book's
+tests reserve `subtype` and
 `castable_subtype` in every place (`Subtype.versetest` 229-242), `true`
 (`Enum.versetest:59`) and a local `array` (`Array.versetest:96`, a keyword
 in openverse), and define nothing named like another built-in type. The

@@ -65,14 +65,20 @@ partial def STop.namesButFunctions : STop → List (Pos × String)
     Qualification": `int` is `(/Verse.org/Verse:)int`), and no definition
     takes the name of one around it (ch. 10, "Shadowing and
     Qualification"); a use of one so named would read the type. A function
-    or a method may (`STop.namesButFunctions`), and so may an enum's value,
-    used qualified. -/
+    or a method may (`STop.namesButFunctions`), and an enum's value may
+    when it is written qualified, `(kind:)int`, as with a reserved word
+    (`checkReservedNames`; ch. 9, "Explicit Qualification": "Enumerators
+    can collide with identifiers in parent scopes"). -/
 def checkBuiltinTypeNames (tops : List STop) : Except String Unit := do
   for t in tops do
     for (p, n) in t.namesButFunctions do
       let n := (qualParts n).getLastD n
       if typeNames.contains n then
         throw s!"{p.show}: '{n}' is the name of a built-in type, which every scope sees (Book of Verse ch. 16: int is (/Verse.org/Verse:)int), and Verse does not allow shadowing (ch. 10): no definition can take it"
+    if let .const p e _ _ (.enumDef _ vs _) := t then
+      if let some v := vs.find? typeNames.contains then
+        let e := (e.splitOn "::").getLast?.getD e
+        throw s!"{p.show}: '{v}' is the name of a built-in type: a value of the enum {e} takes it only qualified, ({e}:){v} (Book of Verse ch. 9: \"Enumerators can collide with identifiers in parent scopes\")"
 
 /-- Each name is defined once in its scope, the top level or a module: only
     functions of one scope share a name, as its overloads, and a type alias
