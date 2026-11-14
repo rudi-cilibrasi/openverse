@@ -2197,6 +2197,108 @@ result (below).
   `choice_dictionary_write_call_target`, a valid program now; every program
   that never calls `ToDiagnostic` keeps its bytes under it.
 
+## The forms still on the list: a map
+
+A map at main `0a8d539` (8,692 agree, 703 refuse, 65 accept, 92 differ,
+3,952 not translatable; a fresh run, with causes), made before the work of
+[After the forms still on the list](#after-the-forms-still-on-the-list):
+every accepted refusal left, the two buckets nobody had sorted
+(`types-other` 138, `syntax-other` 68) sorted case by case into forms, and
+the named forms after them. Left as before, and not mapped again:
+`union-types` (136), `live-variables` (50) and the 28 `set live` cases,
+`nested-functions` (30), VerseVM-only or unreleased; `name-limits` and
+`epic-limits` (the Blueprint VM's limits), `concrete-classes` (the
+owner's), `int-precision` (the BPVM's integers). "ch. N" is the Book's
+chapter at the pinned revision, `docs/NN_*.md` and line; a test is
+`FILE:LINE` under `Tests/`; (v) is `verse_vm_only`, (b) `bp_vm_only`.
+
+### Accepted where the tests refuse (29 of these causes)
+
+| Cause | Form (cases) | The Book | openverse | Mechanism; size | Verdict |
+|---|---|---|---|---|---|
+| persistable (1) | M1. an enum that is not `<persistable>` as a field of a `<persistable>` struct (`persistable.versetest:59`) | ch. 17 `17_persistable.md:190`: "Non-persistable enums - Enums without `<persistable>` specifier cannot be used"; the tests (3662) | the parser drops an enum's `<persistable>`, and every enum persists | keep the specifier (`EffectPolicy.specifierPlaces` has it); the persistable types' check; small | do |
+| type-checks-other (12) | M2. `void` given as a type argument is the type `true`: `class1(void){}.Foo(X)` with `X:int`, `class1([]void){}.Foo(X)` with `X:[]int` (`Void.versetest` 246, 260) | ch. 2 `02_primitives.md:1311-1316`: "A parameter declared literally `:void` accepts any value … It does not work when `void` reaches the parameter through a type parameter", and `:1371-1374`: "A *type parameter* bound to `[]void` is invariant, though, so only `[]void` (or `[]true`) fits there"; the tests (3509; `:227-279`, valid with `false`, `()`, a `void` value, `[]true`, `?true`) | a type argument `void` takes any value | where a program's parametric type's arguments are resolved (`resolveTy`): its `void`s outside function types are `true`; small | do |
+| | M3. a `using` of a path that names nothing, `using{/localhostkinda}` (`Modules/Using2.versetest:94`), of a class (`QualifiedIdentifier.versetest:152`), and of a deprecated module through the runner's path (`Attributes/deprecated.versetest:435`, 2009) | ch. 16 `16_modules.md:349`: "all imports must be resolvable when your code is compiled"; the tests (3587) | a `using` of a path is ignored | a registry of the paths openverse provides, which the runner's (`/Verse.org/VerseTests/…`, 26 of the tests' `using` paths) and the engine's would need; measured | measure, then do or leave |
+| | M4. a tuple parameter beside a named one given two arguments (`FORT-744399…:62`) | the tests' comment: "Doesn't work in ShipVerse, but generate a somewhat ok error message" | accepted | a limit of Epic's compiler | left |
+| | M5. a join of two classes with two common supertypes (`SOL-5838…` 13, 22) | the tests | joined at the class | a rule of joins: the owner's reading | left |
+| | M6. a public parametric class with a `var` field of its parameter at an inferred type parameter (`ParametricFunctions.versetest` 431, 438, 3552) | the tests (3552, "unsupported") | supported | an Epic limit (ch. 6 `06_functions.md:1495` has the class) | left |
+| | M7. a non-failing function where a `<decides>` function type is expected (`FunctionTypes.versetest:191`) | the tests' comment (`:186`): "no subtyping relationship between functions with different async/failing effects"; ch. 13 `13_effects.md:571`: "Functions without `<decides>` are subtypes of functions with `<decides>`", and `:711` | a subtype, as ch. 13 has it | the shapes' hierarchy (`FnValues`); its function is unannotated too, which the tests make `no_rollback` (M9) | left: the Book disagrees with itself, and the case cannot tell its two readings apart |
+| | M8. an enum of 256 values (`Enum.versetest:171`, b) | the BPVM's limit (`:170`) | | | left |
+| effect-checks (5) | M9. `no_rollback` as a function's default (`Effects.versetest` 490, 551, 552) | ch. 13 `13_effects.md:302`: "The `<transacts>` is the default for functions"; the tests (3512) | `<transacts>` | | left: on the wiki ("The default effects of a function") |
+| | M10. `spawn` in a `<transacts>` function (`Effects.versetest` 557, 565, b) | the BPVM's `no_rollback` reading of `spawn`; their VerseVM twins (`:572`, `:580`) are valid, and agree | accepted | | left: a VM split |
+| qualified-names (4) | M11. `(a:)F()` in an override of `F` where `(super:)F()` is meant: warnings 2003 (the qualifier names what `(super:)` reaches) and 2004 (an ancestor further up) (`SOL-3564…` 7, 18, 32, 45) | the tests and their comments ("2003 - should use super", "2004 - you can't reach a: as super:", `:12`, `:26`); `:57-76`, `:139-146`, `:167-170` valid (no override, another overload, the class's own qualifier) | accepted, no warning; the call dispatches on `Self` and calls the override again | a warning where a qualified method call of `Self` is elaborated (`warnAt`); small | do |
+| initializer-effects (4) | M12. a module constant whose construction runs a `block` that allocates a `var` (`GlobalVariables.versetest` 86, 90, 97, 105, v; link error 9003) | ch. 16 `16_modules.md:617`; the BPVM's twins (`:114-141`) are valid ("BPVM doesn't run blocks on global instances of classes"), and `:143` is valid where the `var` is not reached (`F(false)`) | accepted | VerseVM's check is of what the initializer does when it runs: no compile-time rule covers `:143` and `:105` both | left: a VM split, and a check at run time |
+| final-members (1) | M13. a `<final>` method beside an interface's method of its name does not implement it (`Attributes/final.versetest:125`) | the tests' comment (`:123-124`): "A <final> class method and a same-named interface method are qualified separately"; ch. 10 "Methods with Same Name" | a method implements an interface's of its name | members keyed by qualifier (M14's two members of one name) | left with the qualified-names refusals (10) |
+| duplicate-definitions (1) | M15. an enum value named `public`, unqualified (`QualifiedIdentifier.versetest:315`) | ch. 9 `09_structs_enums.md:530`: "Qualification also allows you to use reserved words and keywords as enum values, which would otherwise cause errors", and its tested example `bad_enum19 := enum: public` (3532); `:313` `enum{ (A:)public }` valid | accepted | an enum value may not take an access specifier's name unqualified; one check beside the reserved names | do |
+
+### `types-other` (138), sorted
+
+| Form | Cases | The Book; openverse; mechanism | Verdict |
+|---|---:|---|---|
+| T1. a type named at two arities: `class1(t:type) := class…` beside `class1() := class1(int)` | 33: `ParametricTypes.versetest` 51, 180, 194, 195, 764-1200 (26) and `:decls` (every case includes the module `default_param`, `:754`); `SOL-7849…` 10, `:decls` | the tests: `SOL-7503…` (`struct_same_name()`, `class_same_name()`, `interface_same_name()` beside their parametric definitions), `QualifiedIdentifier.versetest:494-526` (in either order; the refusals `:537-570` are of qualifiers, 3612); prose silent. openverse: "'class1' is defined twice". A parametric alias beside a type of its name at another arity: `checkDefinedOnce`, `Aliases.expand` (a use is the definition of its arity) | do |
+| T2. a construction's `let:` and `block` clauses | 4 (and `Classes/Constructor.versetest:5` under block-forms): `CustomClassVarAccessors.versetest:300`, `FORT-687100…` 51, 66, `Classes/Constructor.versetest:38` | ch. 10, archetype instantiation; the tests. openverse: "a struct field is given as Name := value"; the construction's clauses: `let:` bindings before the fields, `block` run first, in order | do |
+| T3. `true` in a function type | 5: `Void.versetest` 100, 161, 165, 169, 173 | ch. 2; the dispatch relating shapes that differ in `void` and `tuple()` only ([book-forms-rules.md](book-forms-rules.md#true-as-a-type)) | left |
+| T4. a function type converted: an `int` result to `void`, a `void` parameter to `int` | 2: `Void.versetest` 92, 104 | the tests; adapters between shapes | left |
+| T5. function values joined through `any` and called (v) | 8: `SOL-6945…` 53, 61; `FunctionTypes.versetest` 220, 227; `Void.versetest` 140-152 | VerseVM's; an `any` that keeps a callable value | left |
+| T6. F-bounded classes, `class1(t:type) := class(base(class1(t)))` | 6: `FORT-642876…` 23-46, `:decls` | the tests; Verse Core types a class by its own arguments (#63) | left (Core) |
+| T7. refinement types: overloads on disjoint refinements, a refinement given its base's value | 6: `WhereConstrainedFloats.versetest` 59, 114, `:decls`; `WhereConstrainedInts.versetest` 179, 203, `:decls` | the tests: `positive` and `negative` overloads are distinct by their ranges, a constant converts where its value lies in the range; openverse: overloads must take disjoint types, a cast for every conversion | left (a rule of refinements' disjointness) |
+| T8. two interfaces' methods of one name | 3: `InterfaceWithFields.versetest` 86, 238, 463 | ch. 10, "Methods with Same Name"; members keyed by qualifier | left (with M13) |
+| T9. `spawn` forms (#156) | 7: `FORT-571286…` 26, 34, 42 (v); `SOL-4209…` 30, 39, 48 (v); `defer.versetest:1094` | ch. 14; the scheduler's work | left (other work) |
+| T10. inference from an expected type | 3: `MapMemoryLeak…:11`, `SOL-5452…:6`, `ArrayReplaceAll.versetest:12` | #214 | left |
+| T11. a generic function as a value | 4: `Castable.versetest` 563, 601 (v); `ParametricFunctions.versetest` 192, 327 | #214, #209 | left |
+| T12. library: `GetRandomInt`, `classifiable_subset_var`, `subscribable_event_intrnl` | 12 | the API reference; a random primitive (runtime), #11 | left |
+| T13. cyclic and lazy field defaults | 4: `DefaultValueAssignment.versetest:289` (v), `Pointers.versetest` 124, 125, `CustomClassVarAccessors.versetest:558` | #511 | left |
+| T14. bottom typing: a `loop` only `return` leaves as a value; `?` on a `not` | 4: `SOL-2336…` 10, `:decls`; `Literals/Logic.versetest` 72, `:decls` | ch. 7; a loop's type `never` | left |
+| T15. a type parameter passed on as a type argument | 3: `FORT-741838…` 72, 83, `:decls` | the BPVM's reading, on the wiki | left |
+| T16. map keys of sibling classes (v) | 2: `Map.versetest` 363, 401 | VerseVM's | left |
+| T17. tuples concatenated with `+` | 2: `ParametricFunctions.versetest` 416, 426 | the tests (`(1, 2) + (3, 4) = array{1, 2, 3, 4}`) | left |
+| T18. a program's `ToString` beside the built-in | 3: `Literals/String.versetest` 242, 243, `:decls` | the tests; overloads of a built-in | left |
+| T19. a parametric class's `[]t` field default `array{}` | 4: `ParametricFunctions.versetest` 719, 732, 752, `:decls` | an empty array at a type parameter's array | left |
+| T20. definitions inside expressions | 2: `Definitions.versetest:37`, `CustomClassVarAccessors.versetest:642` | | left |
+| T21. overloads of different access | 2: `FORT-976754…` 58, `:decls` | ch. 12 | left |
+| T22. metatype forms: fields given through a type value, a class's alias as a value, a type argument written as `t` | 5: `MetatypeConcreteSubtype.versetest` 153, 162; `TypeAlias.versetest` 64, 65; `ParametricFunctions.versetest:464` | ch. 11; `TypeValues` | left (with the metatypes) |
+| T23. overloads: an override's overload; `F(:a)` beside `F(:[]a)` of an empty struct | 2: `Overloading.versetest` 128, 260 | | left |
+| T24. one each | 12: `Array.versetest:108` (`false + array{}`), `SOL-4199…:39` (`break` in a `for` in a `loop`), `SOL-6109…:decls` (an overloaded function as a value), `Classes/IdentifierSuper.versetest:4` (`super` as a name), `Classes/Inheritance.versetest:3` (`attribute`), `FlowControl/for.versetest:445` (a `for` body that is a tuple), `Function.versetest:83` (`logic{g[]}` of a parameter), `ParametricCastingIsDisallowed.versetest:129` (`EmptyParametric[X]`), `ParametricFunctions.versetest` 546 (`comparable` at `int`), 653 (a method's arity), `ParametricTypes.versetest:222` (v, a tuple parameter's shape), `weak_map.versetest:639` (a value type that does not persist) | each its own | left |
+
+### `syntax-other` (68), sorted
+
+| Form | Cases | The Book | Verdict |
+|---|---:|---|---|
+| S1. specifiers after an expression, `a<b>`, also with `->` (`a<b>->c<d>`) | 15: `TimSyntax.versetest` 91, 92, 140, 157-168 (9), 274, 299 | `TimSyntax.versetest` is "converted from Tim's parser test suite", parse-only; no chapter; openverse refuses an attribute on an expression (`Refused`) | left: no prose, and the refusal is the Book's for a specifier on a value |
+| S2. `:` as an expression (`x>3:int`, `1:t`, `"\{x:int\}"`) | 4: `TimSyntax.versetest` 134, 153, 154, 239 | as S1 | left |
+| S3. keywords as names (`if:=2`, `block:=…`, `do:=3`, `try:=3`), `try`/`catch` | 6: `TimSyntax.versetest` 241, 248, 256, 267, 296, 374 | as S1; ch. 1 reserves the keywords | left |
+| S4. `&x`, `capture{…}`, `code{…}` | 2: `TimSyntax.versetest` 271, 284 | as S1 | left |
+| S5. `where` and `is` as expressions | 3: `TimSyntax.versetest` 286, 338, 366 | as S1 | left |
+| S6. one each: `0x1A{0o08}`, `f(1){2}`, a tab after spaces, units `123{m/s}`, `for(…)<par>` | 5: `TimSyntax.versetest` 67, 258, 262, 285, 291 | as S1 | left |
+| S7. a type written as an argument: `[]int`, `[int]int`, `?int`, `int->int`, `Var.F([]int, …)` | 6: `TypeParam.versetest` 18, 21, 24, 38; `ParametricFunctions.versetest` 469, 490 | ch. 11, types as values; `TypeArguments` takes a type's name only | do if time (a parser form: a type in an argument) |
+| S8. constructor delegation outside a constructor's body | 4: `Classes/Constructor.versetest` 122, 280, 648, 655 | ch. 10 `10_classes_interfaces.md:272-275` | left |
+| S9. roundtrip and function-type syntax: `f(x:int):int` as a type, `f?(…)`, `a->b` as a top-level item, `^` fields, `if (a; b, c)` | 11: `FunctionTypes.versetest` 4, 17, 19, 27, 262; `Roundtrip/Comments.versetest` 19, 152, 163; `Roundtrip/KnownBugs.versetest` 20, 21, 34 | parse-only; `KnownBugs` is the roundtrip's own | left |
+| S10. VerseVM-only forms: nested functions, `union`, `when` | 4 (v) | | left (as their causes) |
+| S11. one each: `X:int=4<doc()>`, a `rush` value set in a class method (`2020-06-18…:decls`), a block comment that ends a class's members (`SOL-3662…:49`), a block comment as an interpolant (`Literals/String.versetest:229`), a map iterated while set (`Mutability.versetest:479`), `t(u:type)<converges> := class{}` (`ParametricTypes.versetest:375`), a function type's member `type{f():void}` (`Type.versetest:20`), `?generator(type{X:int where …})` (`generators.versetest:29`) | 8 | each its own | left |
+
+### Named forms and the rest
+
+| Form | Cases | The Book | openverse; mechanism | Verdict |
+|---|---:|---|---|---|
+| N1. casts that cannot succeed, `T0[C1{}]` with no class below both | 11 (`impossible-casts`): `Interface.versetest` 128, 140, 147, 150, 182; `Cast.versetest:18`; `ArrayOrFailureResult…:11`, `:decls`; `FORT-1059276…:3`; `GenerateFunctionForParametricInterface…:10`, `TypeParam.versetest:32` (these two a parametric class's type written as an argument, S7) | ch. 11 `11_types.md:299-301`: "These casts succeed and return the casted value, failing if the value is not of" the type; only casts from or to what is no class or interface are refused (`:356`); the tests accept them (`Interface.versetest:150`, `assert_valid`) | refused ("would always fail"), openverse's own rule | the cast compiles as one that fails, with a warning; 4 error tests | do |
+| N2. a module in several parts | 11 (`partial-modules`): `PartialModuleDefinitions.versetest` 157-176 (5), `available.versetest` 317, 326, `AccessLevelInheritance.versetest:669`, `:decls`, `FORT-722788…` 13, `:decls` | ch. 16 `16_modules.md:15-27` (a module's files share its namespace); the tests (one module, its parts' access agreeing, 3623) | "module X is defined twice"; the parser flattens modules, so a module's parts are its markers | do if time |
+| N3. operator definitions, `operator'+'(L:t, R:t)`, `prefix'-'(X)` | 14: `Overloading.versetest` 206-212, `2023-01-17-CharLiteralAsOperand…` (4), `StringInterpolationPlus.versetest` 14, `:decls` (interpolation through `+`), `TimSyntax.versetest:230` | ch. 4 `04_operators.md:646` names `operator'+'` in an error; ch. 11 `11_types.md:939` declares `operator'='`; the tests: `+ - * /` and `prefix'-'` overloadable, `operator'()'` not (`:217`, 3514) | parse error | do if time |
+| N4. named tuple elements, nested and unnamed tuple parameters | 11 + 4 + 7 | ch. 6 `06_functions.md:371-425`; [tuple-parameters.md](tuple-parameters.md) | refused | left (designed there) |
+| N5. two members of one name through qualifiers | 10 of `qualified-names` 20 | ch. 10 `10_classes_interfaces.md:978-1025` | one member per name | left (with M13, T8: members keyed by qualifier) |
+| N6. `<closed>` functions (functions as types: `X:IntString = 1`) | 7: `FunctionAsType.versetest` (6, v), `closed.versetest:16` | no chapter (ch. 9's `<closed>` is of enums) | #494 | left |
+| N7. overrides at signatures that need a conversion | 13 (`override-defaults`) | ch. 10 `:3175` against the tests (the wiki) | an adapter per override | left |
+| N8. module constants of `<unique>` classes | 5 (`module-objects`) | ch. 16 `16_modules.md:617` | the module state ([weak-map.md](weak-map.md)) | left |
+| N9. joins of function types by variance | 5 of `joins` 10 (`ParametricTypes.versetest` 1321, 1329, `WhereConstrainedInts.versetest` 237, 241, `SingleParamArray.versetest:94` (v)) | ch. 10; ch. 6 "Polarity and Variance" | the shapes' instances joined at their parameters' meet | left |
+| N10. metatypes (63) | `classifiable_subset` (22: library), `castable_concrete_subtype` (7), `castable_subtype` of a parametric class, `any` or a type parameter (6), a `concrete_subtype` bound (3), `subtype(t)` and `tuple(…)` as arguments (`TypeParam.versetest` 27, 35), live variables (3, v), the runner's names (2), `int(…)` (4, v), others | ch. 11 | `TypeValues`, `TypeArguments` | left but S7 |
+| D1. the value of `true?` | 4 (`empty-values-equal`): `Operators/BoolQuery.versetest` 3, 4; `LogicalAnd.versetest:29`; `Precedence.versetest:121` | the wiki, "The value of `X?` on a `logic`": ch. 8 `08_failure.md:57` against the tests | `true?` is `true`; designed byte-preserving in [book-forms-rules.md](book-forms-rules.md#the-value-of-true) | do if its bytes allow |
+| D2. a compound `set` whose index sets its variable | 1 (`compound-set-order`, v): `ArrayAppend.versetest:12` | a VerseVM split: its native twin (`:23-27`) "doesn't produce the same result" (SOL-9022); the untagged `:140`, `:183` take openverse's order | | left: a VM split |
+
+### The order
+
+Cases per unit of risk, the accepted refusals first: M1 (1), M2 (2), M11
+(4), M15 (1), M3 (measured); then T1 (33) and what its cases need next, T2
+(5), N1 (11), N2 (11), N3 (14), S7 (6), D1 (4), as time allows.
+
 ## Ten causes to remove first
 
 Ranked by cases moved per unit of risk. A count is the upper bound above;
