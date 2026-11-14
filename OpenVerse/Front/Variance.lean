@@ -136,11 +136,6 @@ end OpenVerse.Front
 
 namespace OpenVerse.Front
 
-/-- `x` with its indefinite article. -/
-def withAn (x : String) : String :=
-  if x.startsWith "a" || x.startsWith "e" || x.startsWith "i" || x.startsWith "o" || x.startsWith "u" then s!"an {x}"
-  else s!"a {x}"
-
 /-- The members of class or interface `n` (its own fields and methods, then
     its parents) that use its type parameter `p`, each with how. -/
 def TyEnv.varianceUses (env : TyEnv) (n p : String) : List (String × SVar) :=
@@ -190,15 +185,15 @@ def TyEnv.varianceWhy (env : TyEnv) (a b : Ty) : Option String := do
         some s!"a value of {x.show} becomes one of {y.show} only converted"
       else none
     let notAsIs (x y : Ty) (c : String) : String :=
-      s!"{withAn x.show} is {withAn y.show}, but not as it is: {c}, which {withAn T} holding it cannot be, so {a.show} is no {b.show} in openverse"
+      s!"{withArticle x.show} is {withArticle y.show}, but not as it is: {c}, which {withArticle T} holding it cannot be, so {a.show} is no {b.show} in openverse"
     match v with
     | .inv => some s!"{T} is invariant in {p}{usedIn}, so {a.show} is no {b.show} (Book of Verse ch. 10, \"Invariant\")"
     | .co => match conv u w with
       | some c => some s!"{T} is covariant in {p}{usedIn}; {notAsIs u w c} (Book of Verse ch. 10, \"Covariant\")"
-      | none => some s!"{T} is covariant in {p}{usedIn}, so {T}({u.show}) is {withAn s!"{T}({w.show})"} only when {u.show} is {withAn w.show} (Book of Verse ch. 10, \"Covariant\")"
+      | none => some s!"{T} is covariant in {p}{usedIn}, so {T}({u.show}) is {withArticle s!"{T}({w.show})"} only when {u.show} is {withArticle w.show} (Book of Verse ch. 10, \"Covariant\")"
     | .contra => match conv w u with
       | some c => some s!"{T} is contravariant in {p}{usedIn}; {notAsIs w u c} (Book of Verse ch. 10, \"Contravariant\")"
-      | none => some s!"{T} is contravariant in {p}{usedIn}, so {T}({u.show}) is {withAn s!"{T}({w.show})"} only when {w.show} is {withAn u.show} (Book of Verse ch. 10, \"Contravariant\")"
+      | none => some s!"{T} is contravariant in {p}{usedIn}, so {T}({u.show}) is {withArticle s!"{T}({w.show})"} only when {w.show} is {withArticle u.show} (Book of Verse ch. 10, \"Contravariant\")"
     | .bi => none
   match book with
   | some m => some m
@@ -235,10 +230,10 @@ def TyEnv.varianceWhy (env : TyEnv) (a b : Ty) : Option String := do
         some (d, reason)
       match why with
       | some (d, reason) =>
-        some s!"{a.show} is {withAn b.show} by {T}'s variance (Book of Verse ch. 10), but not in openverse yet: {d}, a class below {T}, {reason}, and Verse Core types a reference by its object's own class (docs/research/variance.md)"
+        some s!"{a.show} is {withArticle b.show} by {T}'s variance (Book of Verse ch. 10), but not in openverse yet: {d}, a class below {T}, {reason}, and Verse Core types a reference by its object's own class (docs/research/variance.md)"
       | none => none
     | _, .vref .. =>
-      some s!"{a.show} is {withAn b.show} by {T}'s variance (Book of Verse ch. 10), but not in openverse yet: {T} is referred to through views (#351), which relate type arguments exactly"
+      some s!"{a.show} is {withArticle b.show} by {T}'s variance (Book of Verse ch. 10), but not in openverse yet: {T} is referred to through views (#351), which relate type arguments exactly"
     | _, _ => none
 
 end OpenVerse.Front

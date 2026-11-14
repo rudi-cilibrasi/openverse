@@ -15,6 +15,10 @@ structure Pos where
 def Pos.show (p : Pos) : String :=
   if p.file.isEmpty then s!"{p.line}:{p.col}" else s!"{p.file}:{p.line}:{p.col}"
 
+/-- `x` with its indefinite article, for a message: `an int`, `a string`. -/
+def withArticle (x : String) : String :=
+  if ["a", "e", "i", "o", "u"].any (x.startsWith ·) then s!"an {x}" else s!"a {x}"
+
 /-- A qualified name `(q:)x` as written: its qualifier and its name (`q` may
     be a path whose segments are qualified themselves, `/a/(/b:)c`: the name
     is what follows the last `:)`). -/
@@ -453,6 +457,33 @@ partial def STop.code : STop → List SExpr
   | .const _ _ _ _ e => [e]
   | .classDef _ _ _ _ _ _ _ fs ms => fs.filterMap (·.default) ++ ms.flatMap STop.code
 
+/-- The types a definition writes, each mapped by `f`. -/
+partial def STy.mapTy (f : STy → STy) (t : STy) : STy :=
+  f (Id.run (t.mapChildrenM fun c => pure (c.mapTy f)))
+
+/-- `e` with every type it writes (its declarations', constructions'
+    arguments) mapped by `g`, and every expression by `f`, from the leaves up. -/
+partial def SExpr.mapAll (g : STy → STy) (f : SExpr → SExpr) (e : SExpr) : SExpr :=
+  let e : SExpr := match e with
+    | .decl p n (some t) v x => .decl p n (some (g t)) v x
+    | .construct p n ts es => .construct p n (ts.map g) es
+    | e => e
+  let e : SExpr := match e with
+    | .structDef p tps specs fs =>
+      .structDef p tps specs (fs.map fun fl => { fl with ty := g fl.ty, default := fl.default.map (SExpr.mapAll g f) })
+    | e => Id.run (e.mapChildrenM fun c => pure (c.mapAll g f))
+  f e
+
+/-- A definition with its types mapped by `g` and its expressions by `f`. -/
+partial def STop.mapAll (g : STy → STy) (f : SExpr → SExpr) : STop → STop
+  | .fn p n ps tps specs r b =>
+    .fn p n (ps.map fun q => { q with ty := g q.ty, default := q.default.map (SExpr.mapAll g f) }) tps specs (g r)
+      (b.mapAll g f)
+  | .const p n specs t v => .const p n specs (t.map g) (v.mapAll g f)
+  | .classDef p n ns tps specs ps isI fs ms =>
+    .classDef p n ns tps specs ps isI (fs.map fun fl => { fl with ty := g fl.ty, default := fl.default.map (SExpr.mapAll g f) })
+      (ms.map (STop.mapAll g f))
+
 /-- A module-scoped variable's specifier, `$var` among a constant's
     specifiers, for `var X:t = e` at the top level or in a module (Book of
     Verse ch. 3, 16, 18): `ModuleVars.desugar` takes the constant out of the
@@ -544,6 +575,13 @@ def pointerTypeHead : String := "$pointer"
     whose value is a block of one name at each arm's place (`TyEnv.ignoredArms`). -/
 def ignoredArmsMarker : String := "$uses:ignoredArms"
 
+/-- The places the parser's `ignoredArmsMarker` lists among the definitions
+    `tops`: the code marked `@ignore_unreachable` (none without it). -/
+def ignoredArmsOf (tops : List STop) : List Pos :=
+  tops.flatMap fun
+    | .const _ n _ _ (.block _ es) => if n == ignoredArmsMarker then es.map (·.pos) else []
+    | _ => []
+
 /-- The name of the record of an attribute (Book of Verse ch. 12,
     "Annotations and Metadata"), after the definition it is on: `$attr:L_C`,
     whose specifiers are where it is and what, and whose value is the
@@ -604,6 +642,12 @@ def reservedNames : List String :=
    "permutation", "nat", "nat8", "nat16", "nat32", "nat64", "over", "provided", "random", "repeat",
    "sequence", "string8", "string16", "string32", "subclass", "succeeds", "syntax", "throws", "trait",
    "truth", "try", "union", "using", "verify", "when", "while", "of", "at"]
+
+/-- The built-in types' names, which no type of the program's takes
+    (`checkTypeNames`, with `char32`) and no type parameter does
+    (`checkTParams`). -/
+def typeNames : List String :=
+  ["int", "logic", "char", "string", "void", "float", "rational", "any", "comparable", "type", "subtype"]
 
 /-- The prefix of an extension method's function's name (`extensionName`). -/
 def extensionPrefix : String := "$ext:"

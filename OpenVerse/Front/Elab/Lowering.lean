@@ -29,8 +29,20 @@ def Compiled.asking (needs : Requests) : Compiled :=
     asked for (`requests`, which `elabProgram` gives). -/
 structure Options where
   profile : SourceProfile := .full
-  /-- Explicit compatibility mode for OpenVerse's extended field defaults.
-      It retains heap/failure checks, without asserting initializer convergence. -/
+  /-- `--extended-defaults`: openverse's reading of defaults from before
+      the Book's tests pinned theirs, kept on request, the one predicate
+      every place that reads defaults' rules consults. It keeps exactly
+      three things: a field's default may compute anything, calls of the
+      program's own functions included, and nothing asserts that it
+      converges (#511: no `InitializerConvergence.markSource` in
+      `admitSource`, no `checkInitializerConvergence`); a field's default
+      may fail, and so the construction that omits it
+      (`elabFieldDefaults`); and a named parameter's default has the
+      effects of the call that omits it, not its function's, so it may
+      fail in a failure context or wait in a `<suspends>` caller (no
+      `checkParamDefaults`, `elabFn`). Every other rule still holds: heap
+      effects, failure contexts, suspension, the source profile and Verse
+      Core's checks. -/
   extendedDefaults : Bool := false
   args : Option (List String) := none
   entry : Option SExpr := none
