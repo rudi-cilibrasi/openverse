@@ -41,6 +41,15 @@ private def joinOpt (a b : Option Slots) : Option Slots :=
   | some a, none | none, some a => some a
   | none, none => none
 
+/-- Bindings created inside a repeated body start fresh each iteration.
+    Cells already initialized on entry retain their accumulated roles/modes. -/
+private def freshLocals (entry head : Slots) : Slots := { head with
+  values := head.values.mapIdx fun i role =>
+    if entry.initialized[i]?.getD false then role else entry.values[i]?.getD false
+  initialized := head.initialized.zipWith (· && ·) entry.initialized
+  sharedMetadata := head.sharedMetadata.mapIdx fun i role =>
+    if entry.initialized[i]?.getD false then role else entry.sharedMetadata[i]?.getD false }
+
 private def joinRole (a b : Option Bool) : Option Bool :=
   match a, b with
   | some a, some b => some (a || b)
@@ -182,7 +191,8 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
     let mut exits := source
     let mut growing := true
     while growing do
-      let entry := { head with values := head.values.set! i item }
+      let fresh := freshLocals source.slots head
+      let entry := { fresh with values := fresh.values.set! i item }
       let filt ← expr fns infos fields fn info entry filt
       let body ← if filt.value.isSome then expr fns infos fields fn info filt.slots body
         else pure { slots := entry, value := none }
@@ -198,7 +208,7 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
     let mut broken := none
     let mut growing := true
     while growing do
-      let out ← expr fns infos fields fn info head body
+      let out ← expr fns infos fields fn info (freshLocals slots head) body
       returned := joinRole returned out.returned
       broken := joinOpt broken out.broken
       let next := if out.value.isSome then joinSlots head out.slots else head

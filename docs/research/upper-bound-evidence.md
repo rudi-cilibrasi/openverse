@@ -61,7 +61,9 @@ Mutable storage also receives a compiler-only provenance check before failure
 capture, shared-cell and concurrency lowering (#572). It follows local writes,
 container updates, return values and opaque helper arguments to a fixed point
 across branches, loops and recursive calls. A failed condition restores the
-incoming roles. A later real overwrite can clear an ordinary local's role;
+incoming roles. Locals declared inside a loop or for body start fresh each
+iteration; cells already in scope retain their accumulated roles and storage
+modes. A later real overwrite can clear an ordinary local's role;
 metadata-only locals may still forward opaque values, including across a wait.
 Evaluating a function or method receiver requires executable data even when
 dispatch has no concrete implementation and lowers to an error expression.
@@ -84,8 +86,8 @@ Opaque forwarding remains allowed, and reading an unrelated ordinary field
 of an object with hidden metadata still gives executable data.
 `MetadataGetters.lean` checks these accessor boundaries with 14 Core-checked
 controls, including execution after forwarding through another function.
-`MetadataStorage.lean` retains 30 real/dummy
-rejection pairs and 32 opaque-forwarding, real-overwrite and rollback pairs,
+`MetadataStorage.lean` retains 33 real/dummy
+rejection pairs and 34 opaque-forwarding, real-overwrite and rollback pairs,
 including a later GADT refinement, fresh unit-to-array conversions, ordinary
 helpers with independent real returns, virtual and spawned receivers, and
 bound-method captures across a wait. Shared-frame controls cover metadata,
