@@ -265,6 +265,31 @@ where an expected type is found by trying again with another's
 (`argNeedsType`'s probe, `ConcatenateMaps`, `Concatenate`), a type of
 `false` says nothing, and an empty literal of it converts as its literal.
 
+## Tuples in array concatenation
+
+**The rule.** A tuple used by `+` or `+=` converts to an array of its
+immediate elements. An expected array type supplies the element type;
+otherwise the elements join as an array literal's do. Both operands run
+once, left to right. The compound update converts the tuple at the target
+array's type, retaining the update's evaluation and rollback behavior.
+
+**The Book.** Ch. 3 (`03_containers.md:138`, `:180-197`) explicitly gives
+`Values + (4, 5, 6)` and `set Values += (7, 8, 9)`. Its conversion section
+(`:304-429`) admits compatible elements and common supertypes, including
+nested containers. `Tests/ParametricFunctions.versetest` 416 and 426
+require `(1, 2) + (3, 4) = array{1, 2, 3, 4}`.
+
+**openverse before.** Ordinary tuple-to-array assignments and argument
+conversion worked, but concatenation required two array operands and
+refused `tuple(int, int) + tuple(int, int)`.
+
+**openverse now.** `elabConcatOperandWith` infers the tuple's array view
+and uses the shared value converter, including actual subtype evidence
+for component conversions. The existing array join and concatenation
+then apply. Compound array updates convert a tuple RHS at the target
+type. The empty `void` value beside an array uses its empty-array
+conversion. Core semantics and the runtime are unchanged.
+
 ## Generators in `first`, and a range's typed binding
 
 **The rules.** `first` takes generators among its clauses as `for` does,

@@ -51,6 +51,10 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     -- (a refinement's value is its base; a refined variable is set only
     -- through a cast, #136)
     let new := widenR (← get).env new0
+    let new ← match o, ty, new.ty with
+      | "+", .arr _, .tup _ | "+", .arr _, .void =>
+        pure ⟨← elabArgumentCoerceWith elabE ctx p new ty, ty⟩
+      | _, _, _ => pure new
     if let .refine n := ty then
       eerr p s!"set {o}= on {withArticle n} needs a cast: write set X = {n}[X {o} …], which fails when the result is not one"
     match o, ty, new.ty with

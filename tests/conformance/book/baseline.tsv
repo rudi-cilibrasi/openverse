@@ -9339,9 +9339,9 @@ Tests/ParametricFunctions.versetest:377	disagrees-refuses
 Tests/ParametricFunctions.versetest:381	agrees
 Tests/ParametricFunctions.versetest:394	agrees
 Tests/ParametricFunctions.versetest:411	agrees
-Tests/ParametricFunctions.versetest:416	disagrees-refuses
+Tests/ParametricFunctions.versetest:416	agrees
 Tests/ParametricFunctions.versetest:421	agrees
-Tests/ParametricFunctions.versetest:426	disagrees-refuses
+Tests/ParametricFunctions.versetest:426	agrees
 Tests/ParametricFunctions.versetest:431	disagrees-accepts
 Tests/ParametricFunctions.versetest:438	disagrees-accepts
 Tests/ParametricFunctions.versetest:454	agrees
