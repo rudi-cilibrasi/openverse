@@ -453,6 +453,33 @@ partial def STop.code : STop → List SExpr
   | .const _ _ _ _ e => [e]
   | .classDef _ _ _ _ _ _ _ fs ms => fs.filterMap (·.default) ++ ms.flatMap STop.code
 
+/-- The types a definition writes, each mapped by `f`. -/
+partial def STy.mapTy (f : STy → STy) (t : STy) : STy :=
+  f (Id.run (t.mapChildrenM fun c => pure (c.mapTy f)))
+
+/-- `e` with every type it writes (its declarations', constructions'
+    arguments) mapped by `g`, and every expression by `f`, from the leaves up. -/
+partial def SExpr.mapAll (g : STy → STy) (f : SExpr → SExpr) (e : SExpr) : SExpr :=
+  let e : SExpr := match e with
+    | .decl p n (some t) v x => .decl p n (some (g t)) v x
+    | .construct p n ts es => .construct p n (ts.map g) es
+    | e => e
+  let e : SExpr := match e with
+    | .structDef p tps specs fs =>
+      .structDef p tps specs (fs.map fun fl => { fl with ty := g fl.ty, default := fl.default.map (SExpr.mapAll g f) })
+    | e => Id.run (e.mapChildrenM fun c => pure (c.mapAll g f))
+  f e
+
+/-- A definition with its types mapped by `g` and its expressions by `f`. -/
+partial def STop.mapAll (g : STy → STy) (f : SExpr → SExpr) : STop → STop
+  | .fn p n ps tps specs r b =>
+    .fn p n (ps.map fun q => { q with ty := g q.ty, default := q.default.map (SExpr.mapAll g f) }) tps specs (g r)
+      (b.mapAll g f)
+  | .const p n specs t v => .const p n specs (t.map g) (v.mapAll g f)
+  | .classDef p n ns tps specs ps isI fs ms =>
+    .classDef p n ns tps specs ps isI (fs.map fun fl => { fl with ty := g fl.ty, default := fl.default.map (SExpr.mapAll g f) })
+      (ms.map (STop.mapAll g f))
+
 /-- A module-scoped variable's specifier, `$var` among a constant's
     specifiers, for `var X:t = e` at the top level or in a module (Book of
     Verse ch. 3, 16, 18): `ModuleVars.desugar` takes the constant out of the
