@@ -432,7 +432,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
         -- (a method's: its receiver's fields too, through `Self`; a copy's
         -- in its interface's scope, as its body, #53)
         let selfC : Option String :=
-          if s.pnames.head? == some "Self" then s.scope.orElse fun _ => (s.name.splitOn ".").head? else none
+          if s.pnames.head? == some "Self" then (s.name.splitOn ".").head? else none
         -- Written types belong to the callee, with the arguments inferred
         -- so far. A caller's type aliases are outside this default's scope.
         let (types, d) ← defaultTypes ctx p s σ d

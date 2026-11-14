@@ -62,7 +62,11 @@ if args.control:
     clauses = ['A:=' + '|'.join(map(str, values_a)),
                'B:=' + '|'.join(map(str, values_b))]
 clauses += [f'set H.N+={increment}', f'Mod[A+B,{modulus}]={remainder}']
-print(f'''    for({','.join(clauses)}):
+# (a `for`'s filter can fail, Book of Verse ch. 7: a print or a `set` among its
+# clauses goes with a check that cannot fail, `(E; true?)`, as the Book's tests
+# write; it does the same)
+for_clauses = [f'({c}; true?)' if c.startswith(('set ', 'Print(')) else c for c in clauses]
+print(f'''    for({','.join(for_clauses)}):
         defer:
             set Total+={cleanup}
             Print("body {{Total}}")

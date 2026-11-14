@@ -4,7 +4,7 @@ Early(N:int)<computes>:int=
     N|N+1
 Run(Next:int)<suspends>:[][]int=
     var Total:int=0
-    R:=for(A:=Early(-1),set Total+=A,B:=Early(-2),set Total+=B,C:=Early(Next)):
+    R:=for(A:=Early(-1),(set Total+=A; true?),B:=Early(-2),(set Total+=B; true?),C:=Early(Next)):
         Sleep(0.01)
         set Total+=C
         Print("body {A} {B} {C} {Total}")

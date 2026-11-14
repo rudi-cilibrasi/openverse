@@ -477,7 +477,9 @@ XWrap(X:t where t:type):[]t = array{{X}}'''.split('\n')
         defs += [f'    {t}' for t in pre_t()] + ['    J := ja[I]', '    J.Id()']
     else:
         defs += [f'XF1(Is:[]jc(u), H:xcell where u:type)<transacts>:[]u =',
-                 f'    for (I : Is, {cl}) {{ J.Id() }}']
+                 # (a `for`'s filter can fail, Book of Verse ch. 7: a print or a
+                 # `set` among its clauses goes with a check that cannot fail)
+                 f'    for (I : Is, {", ".join([f"({t}; true?)" for t in pre_t()] + ["J := ja[I]"])}) {{ J.Id() }}']
     defs += ['XF2(C:ja(u) where u:type):int =',
              '    if (X := jx[C]) then X.X() * 10 + X.Id().Length + X.A() * 100 else -1',
              'XF3(I:jc(int)):int =',

@@ -60,7 +60,7 @@ Main():void =
     Print("{D.Bump()} {C.Count}")
     # a failure context undoes the writes it made
     if (set C.Count = 99, C.Count > 100) then Print("big") else Print("{C.Count}")
-    for (X : array{1, 2, 3}, set C.Count = X * 100, X > 2) { Print("kept {C.Count}") }
+    for (X : array{1, 2, 3}, (set C.Count = X * 100; true?), X > 2) { Print("kept {C.Count}") }
     Print("{C.Count}")
     # through a struct and an array: the object is written, not the container
     H := holder{C := C}

@@ -9,6 +9,26 @@ import OpenVerse.Front.Elab.ExpressionInitial
 
 namespace OpenVerse.Front
 open OpenVerse
+/-- A filter of a `for`, or of a `first` with a generator, at one of the
+    places `forFilterPositions` found, can fail: "Each filter must be
+    failable, and if any fails, that iteration is skipped" (Book of Verse
+    ch. 7, and its tests, `for.versetest:223`, "Filter can not fail";
+    `first.versetest:28`, "same as `for`"). The code the elaboration adds
+    at such a place (a refining cast's value, a lifted cast's copy-out,
+    `$…`) is none, told apart by its kind (`SExpr.filterKind`); and a call
+    or a cast with brackets, `F[…]`, `T[X]`, can fail as written (its code
+    where a cast is known to succeed, in the branch a refining cast lifts,
+    need not). `r` is the statement's elaboration. -/
+def checkFilterCanFail (ctx : Ctx) (s : SExpr) (r : R) : EM Unit := do
+  if ctx.types.forFilters.contains (s.pos, SExpr.filterKind s) then
+    let isFilter := match s with
+      | .decl .. | .app _ _ _ true => false
+      | .set _ _ _ (.app _ (.ident _ "$refineCopyOut") _ _) => false
+      | .app _ (.ident _ n) _ _ | .set _ (.ident _ n) .. => !n.startsWith "$"
+      | _ => true
+    if isFilter && !(r.e.mayFail ctx.sigProg) && (← ctx.failabilityKnown) then
+      eerr s.pos "this filter cannot fail: each filter of a for, or of a first with a generator, must be able to fail (Book of Verse ch. 7: \"Each filter must be failable, and if any fails, that iteration is skipped\"; its tests, for.versetest: \"Filter can not fail\", first.versetest: \"same as `for`\"); an effect among the clauses goes in one that can, as the Book's tests write (set X = E; true?), or in the body"
+
 set_option maxHeartbeats 800000 in
 mutual
 partial def choiceCoerceResult (ctx : Ctx) (p : Pos) (r : R) (exp : Option Ty) : EM R := do
@@ -227,7 +247,15 @@ partial def elabConc (ctx : Ctx) (p : Pos) (isSync : Bool) (arms : List SExpr) (
     -- the arms' join, as an `if`'s branches (or the expected type)
     let mut rs : Array (Pos × R) := #[]
     for a in arms do
-      rs := rs.push (a.pos, ← elabE armCtx a exp)
+      let sourceBefore := (← get).pendingSourceSuspends
+      let r ← elabE armCtx a exp
+      -- (every arm can suspend, as the Book's tests have it: "Ensure all
+      -- top-level expressions in race/rush are async",
+      -- Concurrency.versetest:831; a spawn or a branch in an arm does not
+      -- make it wait)
+      if sourceBefore == (← get).pendingSourceSuspends && !ctx.sourceWaits r.e then
+        eerr a.pos s!"this arm of {kw} cannot suspend: every arm of a race or a rush must be able to (the Book's tests, Concurrency.versetest: \"Ensure all top-level expressions in race/rush are async\")"
+      rs := rs.push (a.pos, r)
     if isRush then
       noteBackgroundCaptures ctx (rs.toList.flatMap fun (_, r) => Suspend.slotsOf r.e)
     -- (as an `if`'s branches: void when one is, `any` when nothing else is
@@ -254,6 +282,11 @@ partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   -- `spawn` is in; its arguments, evaluated now, are recorded here)
   let r ← elabSpawnIn { ctx with inRollback := false } p body
   noteFailCalls ctx p "spawn's arguments" r.e
+  -- (a spawn has <transacts>'s heap effects, besides its call's: "spawn
+  -- requires the transacts effect in addition to the effects of the
+  -- spawned async function", the Book's tests, Effects.versetest:554)
+  noteFx p ["reads", "writes", "allocates"]
+    (some "starts a task with spawn{…} (which has <transacts>'s effects: the Book's tests, Effects.versetest)")
   return r
 
 partial def elabSpawnIn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
@@ -573,6 +606,7 @@ partial def elabSeqIn (closed : Bool) (ctx : Ctx) (ss : List SExpr) (exp : Optio
           if inner.contains r.pos then return ← elabSeqIn closed ctx (liftCastClause ctx [] r.pos s ++ rest) exp
           throw err
         | none => throw err
+    checkFilterCanFail ctx s r
     if rest.isEmpty then return (r, ctx')
     let e ← inferable r
     let (r2, ctx'') ← elabSeqIn closed ctx' rest exp
@@ -1020,6 +1054,11 @@ partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bra
           pendingSuspendingCasts := st.pendingSuspendingCasts + 1,
           pendingWaitingCasts := st.pendingWaitingCasts + 1,
           pendingSourceSuspends := st.pendingSourceSuspends + 1 }
+      -- (a call whose dispatch reaches no implementation that suspends yet,
+      -- as the classes of the value's type an earlier function asked for
+      -- are made in the elaboration that follows: its wait is the source's)
+      else if effs.contains "suspends" && !ctx.sourceWaits rc.e then
+        modify fun st => { st with pendingSourceSuspends := st.pendingSourceSuspends + 1 }
       return ⟨.seq (.assign t r.e) rc.e, rc.ty⟩
   match r.ty, args, bracket with
   | .arr t, [i], true =>
@@ -1848,6 +1887,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       elabOneChoice ctx b rest
     | none =>
       let (r, c1) ← elabStmt ctx cl none
+      checkFilterCanFail ctx cl r
       let e ← inferable r
       let (inner, c2) ← elabOneGo c1 rest
       return (.seq e inner, c2)

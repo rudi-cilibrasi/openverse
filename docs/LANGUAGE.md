@@ -31,7 +31,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Blocks | indented (`:`), braced (`{ }`), inline (`then`/`do`), `.` and an expression on its line wherever `:` or `{…}` may start a body (`if (c). e else. f`, `for (X:Xs). e`, `spawn. F()`, `loop. break`; also `option`, `logic`, and `array` and `map`, whose `:` blocks separate their items by `,`, `;` or new lines: `array:` and the lines `1`, `2`; in braces an array's elements are separated by commas, or by `;` and new lines, not both: `array{1; 2; 3}`), `block:`, `( a; b )` sequences, also as an argument (`F(Log(); 42)` passes 42) and as a `case`'s value (`case(a; b)`); `;` and new lines separate the items of a block, and `;` may end a line or a braced block (`{1; 2;}` is `{1; 2}`) (the next item then follows the line rules, so a class's last field may end in `;`); in a block, statements that commas join on a line are a tuple (ch. 1, "Semicolons vs Commas", and its tests, `SemicolonsVsCommas.versetest` 70, 95, 100: `{1.0, 2}` is a `tuple(float, int)`, `option{1, 2}` holds `(1, 2)`, `for (X := 1..2) {3, X}` is an array of pairs), definitions joined so are the block's definitions in turn (`X:int = 0, Y:int = 0`), and a group of definitions and values is each in order, a definition visible to what follows it, then the tuple of their values (`option{V := 3, V > 0, V}` holds `(3, 3, 3)`, a `var`'s value taken where it is defined); the clauses of `if`, `for`, `first` and the clause macros, the arms of `sync`, `race` and `rush`, a construction's fields and an array's or map's items keep commas as separators; a comma that starts a line is not the block's but the list's around it; a body after `:` may be empty wherever one may be written, as `{}` may (`class:`, `struct:`, `then:`, … whose next line is no deeper than the construct, or nothing follows); a function's or method's braced body may put its `{` on the next line, at the definition's column; a value after `=`, `:=`, `set … =` or a `case` arm's `=>` that starts a later line, deeper, is the indented block of those lines (`Value :=` and the lines `1`, `2`, `3` is `3`; and the line `1, 2, 3`, `(1, 2, 3)`), as a function's body is | §2.2–2.4 |
 | Operators | `* + -`, unary `-`, comparisons `= <> < <= > >=` (failable, return the left operand, chains check every pair, but `<>` is left-associative: `1 <> 2 <> 1` is `(1 <> 2) <> 1`, which fails, as the Book's tests have it, `Associativity.versetest:6-9`, [the rule](research/book-forms-rules.md#-is-left-associative); `=` and `<>` of any two comparable types, by value: see [Equality and the empty value](#equality-and-the-empty-value)), `and` (a scope of its own, ch. 7: names its left operand defines are visible on its right, and neither side's escape; `A and B and C` is `(A and B) and C`), `or`, `not` (below the comparisons, above `and`: `not X = Y` is `not (X = Y)`), `?`, `.Length`, `A[i]`, `T(k)` | ch. 4 |
 | Failure | failure contexts (`if` conditions, `for` clauses, `option{}`, `logic{}`, `not`, left of `or`, `<decides>` bodies) with rollback of `var` writes **and output** (a `loop`'s body is none, also in a `<decides>` function, nor is a field's default: "`decides` is not allowed in `loop`", the Book's tests, `SOL-4199-BreakFromIf.versetest:79`, and ch. 13, [the rules](research/book-remaining-rules.md#a-loops-body-and-a-fields-default-are-no-failure-contexts); `--extended-defaults` keeps failing field defaults, which make a construction fail); an `if` condition, `logic{…}`, the operand of `not` and the left of `or` must be able to fail (the Book's tests refuse `not` of one that cannot, and an `or` whose left cannot, `LogicalOr.versetest:143`; its own `(set Map[I] = I) or Err()` has a failable left, a set through a map's key) | ch. 8 |
-| Control | `if`/`else if`/`else` (all styles: the conditions in `(…)`, followed by a body or `then`; or as `{…}`, `:` and a block, or `.` and an expression, followed by `then` and a branch, or by nothing, which is the clause macro `if{c}` (see [Mutation, macros, tooling](#mutation-macros-tooling)): `if:`…`then:`, `if:`…`else:`, `if. c then. a else. b`; `for` likewise, with `do`), `for` with `X : array`, `I -> X : array`, `X := a..b` (`X:int := a..b` too), filters, bindings, several generators (cartesian product), and with none, failable clauses that run the body at most once (clauses of literals only, `for(X := array{1, 2})`, are refused: `X : array{1, 2}` iterates; a literal filter, `for(X := 1..4; 1)`, is refused, as "Filters must be failable", ch. 7, [the rule](research/book-remaining-rules.md#a-filter-that-is-a-literal); a filter that cannot fail otherwise is not refused yet); a `for`'s clauses are one search, as the Book's tests have it (`FlowControl/for.versetest` 317-392): reaching the body keeps what they did since the last value, a failure undoes back to the element or alternative being tried, and what they did since the last value is undone when no more reaches the body, a source's or a range's bounds' included (which `for`s keep an older rule for now: [Readings](#readings-openverse-takes), "What a `for` undoes"), `loop`/`break` (a loop that nothing leaves, no `break` of its own and no `return`, is refused outside a `<suspends>` function, as the Book's tests have it, `Break.versetest` 117, 160, [the rule](research/book-remaining-rules.md#a-loop-that-nothing-leaves)), `return` (in a function's body: not in a constant's value or a field's default, which no function encloses; in a function whose result is not `void`, not a part of the value it returns: a `return` is the body's value, a branch of it or of a `case`, a `return`'s operand, or in code whose value is not returned, a block's other items, an `if`'s conditions or an `if` with no `else`, a `loop`, as the Book's tests have it, `Return.versetest` 114-162; `array{0, return A}` and `X + (return 0)` are refused), `profile(Tag): body`, `profile: body` and `profile{body}` (the tag a string, the value the body's; openverse measures nothing; not in an initializer, ch. 7, "Profiling"), `case` with literal patterns and `_` (an arm after `_`, or with an earlier arm's pattern, is never reached and refused, ch. 9; a `_` after every value of a closed enum is a [warning](#warnings)); code after a `return` or `break` that is never reached is a [warning](#warnings); no `return` or `break` leaves a failure context, as the Book's tests have it (`Reachability.versetest:12`, "Explicit return out of a failure context is not allowed"; `SOL-4199-BreakFromIf.versetest`): a `return` is refused in an `if`'s conditions, a `for`'s clauses (its body may return), `first`'s clauses, `option{…}`, `logic{…}`, `not`'s operand and the left of `or`, and, in a `<decides>` function, whose body is a failure context, anywhere but in tail position (`Return.versetest:157`: the body's last expression, the branches of an `if` with an `else` and the arms of a `case` in tail position, a block's last expression in tail position, a `return`'s value); a `break`, in those contexts between it and its loop | ch. 7 |
+| Control | `if`/`else if`/`else` (all styles: the conditions in `(…)`, followed by a body or `then`; or as `{…}`, `:` and a block, or `.` and an expression, followed by `then` and a branch, or by nothing, which is the clause macro `if{c}` (see [Mutation, macros, tooling](#mutation-macros-tooling)): `if:`…`then:`, `if:`…`else:`, `if. c then. a else. b`; `for` likewise, with `do`), `for` with `X : array`, `I -> X : array`, `X := a..b` (`X:int := a..b` too), filters, bindings, several generators (cartesian product), and with none, failable clauses that run the body at most once (clauses of literals only, `for(X := array{1, 2})`, are refused: `X : array{1, 2}` iterates); each filter, a clause that is neither a generator nor a definition (`X := e`, `X:t = e`, `var X:t = e`), must be able to fail, as "Each filter must be failable" (ch. 7, `for.versetest:223`, [the rule](research/book-remaining-rules.md#every-filter-of-a-for-can-fail)): a print, a `set` or a call that cannot fail is refused as a filter, and goes with a check that can, as the Book's tests write it, `(set Temp = Element; true?)` (`for.versetest:233`), or in a definition's value or a generator's source, where effects stay among the clauses, or in the body; a clause with a choice in it, or a call of a function with several values, is a generator over their values (the Book has no choice: openverse's reading); a `for`'s clauses are one search, as the Book's tests have it (`FlowControl/for.versetest` 317-392): reaching the body keeps what they did since the last value, a failure undoes back to the element or alternative being tried, and what they did since the last value is undone when no more reaches the body, a source's or a range's bounds' included (which `for`s keep an older rule for now: [Readings](#readings-openverse-takes), "What a `for` undoes"), `loop`/`break` (a loop that nothing leaves, no `break` of its own and no `return`, is refused outside a `<suspends>` function, as the Book's tests have it, `Break.versetest` 117, 160, [the rule](research/book-remaining-rules.md#a-loop-that-nothing-leaves)), `return` (in a function's body: not in a constant's value or a field's default, which no function encloses; in a function whose result is not `void`, not a part of the value it returns: a `return` is the body's value, a branch of it or of a `case`, a `return`'s operand, or in code whose value is not returned, a block's other items, an `if`'s conditions or an `if` with no `else`, a `loop`, as the Book's tests have it, `Return.versetest` 114-162; `array{0, return A}` and `X + (return 0)` are refused), `profile(Tag): body`, `profile: body` and `profile{body}` (the tag a string, the value the body's; openverse measures nothing; not in an initializer, ch. 7, "Profiling"), `case` with literal patterns and `_` (an arm after `_`, or with an earlier arm's pattern, is never reached and refused, ch. 9; a `_` after every value of a closed enum is a [warning](#warnings)); code after a `return` or `break` that is never reached is a [warning](#warnings); no `return` or `break` leaves a failure context, as the Book's tests have it (`Reachability.versetest:12`, "Explicit return out of a failure context is not allowed"; `SOL-4199-BreakFromIf.versetest`): a `return` is refused in an `if`'s conditions, a `for`'s clauses (its body may return), `first`'s clauses, `option{…}`, `logic{…}`, `not`'s operand and the left of `or`, and, in a `<decides>` function, whose body is a failure context, anywhere but in tail position (`Return.versetest:157`: the body's last expression, the branches of an `if` with an `else` and the arms of a `case` in tail position, a block's last expression in tail position, a `return`'s value); a `break`, in those contexts between it and its loop | ch. 7 |
 | Choice | `a \| b \| …` with several values in spatial order, in a clause of an `if` condition, `first{…}`, `option{…}`, `logic{…}`, `not` or `or` (the first success) or of a `for` (all of them), also inside expressions (`(1 \| 2) + (10 \| 20)`, `X = 1 \| 2`, `X > 0 and (1 \| 2)`, `M? or (1 \| 2)`); see [Choice](#choice) (#208) | (the Verse Calculus) |
 | Functions | a parameter may be unnamed, `F(:int):void = {}`, as in function types (the body cannot name it; so may a parametric type's, `t(:type) := class{}`); a parameter may destructure a tuple, `Func(A:int, (B:int, C:int), D:int)`, to any depth: it is a parameter of the tuple type whose names the body sees (see [the rules](research/tuple-parameters.md); named parameters inside such a group are not supported); a tuple argument expands into parameters (`Describe(MyTuple)`); positional arguments pack into a single tuple parameter, including `tuple()` and singleton tuples; several arguments make a single array parameter (`Sum(1, 2, 3)`), including generic, overloaded, method and spawned calls (#134, #140, #501; nested fields retain their shape, and empty/singleton arrays use explicit array values); recursion, mutual recursion, `<decides>` (called with `F[…]`; other functions with `F(…)`; also `F of X` for `F(X)` and `F at X` for `F[X]`, the argument in braces `F of {42}`, a body after `:` or `.`, or an operand `F of array: …`, and a function defined `F of {I:int}:int = …`, the Book's tests, `Operators/Of.versetest`; `F at {…}` defines nothing), named parameters `?P:t = default` passed as `?P := e`, after the positional arguments (only a named parameter has a default, and a positional argument after a named one is refused, ch. 6, [the rules](research/book-remaining-rules.md#five-forms-the-tests-refuse)) (positional, then named as written, then defaults; a default may use the parameters before it, and a method's default the method's fields; a call dispatched to an override evaluates that override's own default for an omitted argument; a default is evaluated at the call and cannot return, break or use itself; it is its function's: it has only the heap effects the function allows and neither fails nor suspends, also of a `<decides>` or `<suspends>` function, checked once at the definition where the default can be elaborated in the function's scope, the Book's tests, `DefaultNamed.versetest` 805-878; `--extended-defaults` keeps openverse's reading, the default's effects the caller's, see [the rule](research/book-remaining-rules.md#a-named-parameters-default)), the heap effects `<computes>`, `<reads>`, `<writes>`, `<allocates>`, `<transacts>` (checked, see [Classes](#classes)), unsupported effect contracts are diagnosed before lowering (see [Effect contracts](#effect-contracts)) | ch. 6, 13 |
 | Extension methods | `(R:t).M(…)<effects>:r = body`, at the top level, in a module or in a class, on a receiver of any type (`(:t)` unnamed; a `where` in its parentheses for a generic one), called `X.M(…)`, or `X.M[…]` when `<decides>`; overloaded by the receiver's type and the parameters', scoped like functions, never values; see [Extension methods](#extension-methods) | ch. 6 |
@@ -758,7 +758,15 @@ circle := class(shape, labelled):
   through another parent is inherited once, but `class(i, i)` and
   `interface(i, i)` are refused, the Book's tests, `Interface.versetest:31`,
   [the rule](research/book-remaining-rules.md#an-interface-named-twice)).
-  Interfaces may declare fields, with or without defaults. A
+  Interfaces may declare fields, with or without defaults, and methods,
+  with or without a body (a default). An interface below another inherits
+  its members and may add its own, but overrides none: `<override>` in an
+  interface is refused, and so is a member it inherits declared again, with
+  a new body, value or type or without (the Book's tests,
+  `Interface.versetest:193`, "Interfaces can not override anything";
+  `InterfaceWithFields.versetest:312`, "Can't override in an interface";
+  `InterfaceDiamond.versetest:89`, 3523, 3532). A class below gives an
+  inherited member its implementation or a new default. A
   class inherits its parent's fields, then those of the interfaces above it
   that are not there yet (once, along a diamond), then its own, and its
   methods:
@@ -773,15 +781,20 @@ circle := class(shape, labelled):
     its base, `tuple(int, int)` over `[]int`. Read through that class or one
     below it, the field has the narrower type; through a class or interface
     above, the inherited one. A `var` keeps its type (a write through a
-    class above could store a value of the wider one), and so does a
-    field an interface re-declares;
+    class above could store a value of the wider one);
   - `M<override>(…)` overrides an inherited method with its signature, except
     that it may return a class below the declared one (covariant results).
     Overriding without `<override>`, or `<override>` that overrides nothing,
     is an error;
   - `<final>` methods cannot be overridden, and `<final>` classes cannot be
     inherited from;
-  - `(super:)M(…)` calls the implementation inherited from above.
+  - `(super:)M(…)` calls the implementation inherited from above, of `M`
+    or of another overload of `M`, and is written only in the code of an
+    `<override>` of `M` (its body, a block or a `spawn` in it, its
+    parameters' defaults): not in another method, a class's `block:`, a
+    field's default or a function (the Book's tests, `Super.versetest`:
+    "super on another method", "Calling `(super:)` from blocks is not
+    allowed", 3612).
 - **Abstract.** An `<abstract>` class, or an interface, may declare methods
   without a body and cannot be constructed. A concrete class must implement
   every method it has, and must override a method that two unrelated
@@ -792,9 +805,10 @@ circle := class(shape, labelled):
   - Two `if` branches of different classes take the expected type when both
     are below it, else their nearest common supertype.
   - A method call runs the most specific implementation for the value's own
-    class: the nearest in its class chain, else the most specific interface
-    default, whatever order the parents are listed in. This is virtual
-    dispatch, also inside a method; `(super:)` uses the same rule.
+    class: the nearest in its class chain, else the default of the
+    interface that declares the method, whatever order the parents are
+    listed in. This is virtual dispatch, also inside a method; `(super:)`
+    uses the same rule.
   - An implementation must have the signature of every declaration it
     satisfies.
 - **Constructor functions** (Book of Verse ch. 10). A constructor is written
@@ -1132,12 +1146,8 @@ circle := class(shape, labelled):
   implements `x` (#205). An interface that extends a parametric interface
   may give it any type arguments, as a class may its parent: a class below
   `c2(t) := interface(container([]t))` is a `container([]t)`, and code
-  generic over `container(u)` reaches it with `u` as `[]t` (#53), also
-  through a default `c2` gives one of `container`'s methods, which means
-  in every class what it means in `c2`: its names, its parameters and
-  their defaults, and `(super:)` resolve as in `c2`, whatever members the
-  class adds. An unambiguous method captured as a value in `c2` retains
-  that scope even when the class adds overloads. An interface without type
+  generic over `container(u)` reaches it with `u` as `[]t` (#53). An
+  interface without type
   parameters may also extend an instantiated interface
   (`intI := interface(container(int))`). A
   class may give the interfaces it lists any type arguments
@@ -1370,8 +1380,10 @@ entity := class:
     first iteration whose clauses succeed gives the body's value, what the
     failed ones did is undone, and none fails `first` (ch. 7, "first"; the
     Book's tests, `first.versetest`; [the rules](research/book-forms-rules.md#generators-in-first-and-a-ranges-typed-binding));
-    with a generator, a filter that is a literal or a name, which cannot
-    fail, is refused (`first.versetest:28`), and so are commas between the
+    with a generator, each filter must be able to fail, as a `for`'s
+    (`first.versetest:28`, "same as `for`"; [the
+    rule](research/book-remaining-rules.md#every-filter-of-a-for-can-fail)),
+    and commas are refused between the
     clauses of `first{…}`, which join a tuple there, a generator inside it
     not supported yet (`first.versetest:206`); a generator over a map is
     not supported yet.
@@ -3243,10 +3255,18 @@ Main()<suspends>:void =
 - **`sync`.** Each statement of a `sync:` block is an arm. The arms start in
   source order, each running until it waits or ends before the next starts,
   and the `sync` ends when all have, with the tuple of their values. At
-  least two arms must be able to wait.
+  least two arms must be able to wait (ch. 14: "What the compiler does
+  insist on is that at least two of the arms be async"): an arm can wait
+  when it calls a suspending function, method or function value outside a
+  `spawn` or a `branch`.
 - **`race`.** The arms start in source order; the first to end wins, and its
-  value is the `race`'s (of the arms' common type). An arm that ends without
-  waiting wins at once, and the arms after it never start. The losers that
+  value is the `race`'s (of the arms' common type). Every arm must be able
+  to wait, as `sync`'s arms can (the Book's tests, "Ensure all top-level
+  expressions in race/rush are async", `Concurrency.versetest:831`; the
+  prose is silent): an arm that cannot is refused. An arm that ends without
+  waiting, such as one that starts with `Sleep(0.0)` (which completes at
+  once, as in ch. 14's example of a race resolved before its last arm
+  starts), wins at once, and the arms after it never start. The losers that
   started are cancelled at once, last started first: each unwinds from where
   it waits, running the `defer:` blocks active there, those of the functions
   it called first.
@@ -3296,9 +3316,19 @@ Main()<suspends>:void =
   `t` is the result type at the receiver's static declaration, including
   when an override returns a narrower class. `T.Await()` waits for the task to end and
   gives its result (at once if it has ended). A task is not tied to the
-  code that spawned it: it runs until it ends or the program does. `spawn`
-  is allowed in any function, immediate ones too, and in a field's default
-  (a task per construction that omits the field);
+  code that spawned it: it runs until it ends or the program does. A
+  `spawn` has `<transacts>`'s heap effects (`<reads>`, `<writes>` and
+  `<allocates>`), besides those of the call it starts (the Book's tests:
+  "spawn requires the transacts effect in addition to the effects of the
+  spawned async function", `Effects.versetest:554`; the prose has spawn
+  work "anywhere you can write code", ch. 14): it is allowed in any
+  function whose effects allow those, immediate ones too, not in a
+  `<computes>`, `<reads>` or `<allocates>` one; with `--extended-defaults`,
+  also in a field's default of a class whose effects allow them (a task per
+  construction that omits the field). A `spawn` written in a failure
+  context is refused (#156; a task a call in a failure context starts, as
+  a call may, is undone with the context when it fails: its first run is
+  rolled back and it never runs again);
   without a suspends `Main`, a task runs only up to its first wait.
   `T.Cancel()` (in a suspends function) cancels a task that has not ended:
   it unwinds at once, running its `defer:` blocks, or, when the task is
@@ -3493,6 +3523,7 @@ Main()<suspends>:void =
 | A call of another function with several values in a recursive one's code | not stated (the Verse Calculus: a call is its body) | a choice point of the recursive one, taken with it: when the callee's clauses fail it has no values (#283); in a `for`, which keeps the old rule for now when it takes such a call, what came before the call stays, as at a call of the recursive one itself, not undone as at an inlined call: **the Book is silent** |
 | A `defer:` in a function with several values, or in a block of its code | not stated (ch. 7: it runs when its scope exits) | it runs as each value leaves the scope, after the value is computed and before the code after the call or the block, and at a `return` after the return's value; a call or a block whose clauses fail gives no value and runs none; in a `for`, what it does is part of that value's code, undone with it when a later filter rejects the value, whether the call is inlined or taken lazily (#283): **the Book is silent** |
 | A recursive function with several values whose only calls of itself are in failure contexts of its own code | not stated (the Verse Calculus: a call is its body) | inlined, as a function recursive only through another function that consumes it is (the contexts are functions of their own): where its clauses fail in a `for`'s clauses (which keeps the old rule for now, as any `for` taking a call of a function with several values), what those clauses did since their last generator is undone with them, as for any inlined call, not kept as at a lazily taken call, which is a generator of its own (#283): **the Book is silent** |
+| A clause of a `for` with a choice in it | (the Book has no choice; ch. 7: "Each filter must be failable") | a generator over its values, as a clause that calls a function with several values is: not a filter, so it need not fail (`for (X := 1..2, set N = (1 \| 2))` runs the body for each value); the statements of a function with several values that a `for` takes are the function's, not the `for`'s filters |
 | Precedence of `\|` | (not in the Book) | below `+`, above the comparisons: `X = 1 \| 2` is `X = (1 \| 2)` (#208) |
 | `Sleep(0.0)` | "may resume in the same tick" (ch. 14), "One frame" (ch. 14); the API reference: it always yields; the tested ch. 14 examples (`03`, `05` to `11`): it completes at once, in a `race`, a `sync` and plain code: the Book disagrees with itself ([the rules](research/scheduler-conformance.md#sleep00-completes-at-once)) | the tested examples': completes at once, without suspending, as a negative or NaN duration does |
 | `Sleep(S)` rounding | the API: "a sleep resumes on the first update at or after its deadline and never sooner than the next one. Short sleeps therefore round up"; no tick rate | the first tick at or after the deadline: the binary64 product `30·S` rounded up, at least one tick (`Sleep(0.04)` takes 2 ticks; `Sleep(0.1)`, whose product is exactly 3.0, 3); bounded inputs and checked clock accumulation follow the explicit reference policy above (#514) |

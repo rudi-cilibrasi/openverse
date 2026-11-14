@@ -12,10 +12,11 @@ b := class(i1):
 c := class(b):
     (i1:)M<override>():int = 2
 
-# a qualified implementation below an interface's default override
+# a qualified implementation below a class's (an interface overrides
+# nothing, the Book's tests)
 i := interface:
     N():int
-j := interface(i):
+j := class<abstract>(i):
     N<override>():int = 5
 k := class(j):
     (i:)N<override>():int = 1

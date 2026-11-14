@@ -5,5 +5,5 @@ Nat(N:int)<transacts><decides>:int=
 base := class:
     Limit():int=1
 sub := class(base):
-    Run():int=if(X:=Nat[0],F:type{_():int}=(super:)Limit) then X else -1
-Main():void=Print("{sub{}.Run()}")
+    Limit<override>():int=if(X:=Nat[0],F:type{_():int}=(super:)Limit) then X else -1
+Main():void=Print("{sub{}.Limit()}")

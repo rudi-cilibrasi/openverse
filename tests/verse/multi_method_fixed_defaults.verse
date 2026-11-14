@@ -3,8 +3,6 @@ Note(S:string,N:int)<transacts>:int =
     N
 root(a:type,b:type) := interface:
     Picks(N:int, ?K:int = Note("root",1))<transacts>:int = N + K | N + K + 1
-deep := interface(root(int,int)):
-    Picks<override>(N:int, ?K:int = Note("deep",2))<transacts>:int = N + K + 50 | N + K + 51
 base(a:type,b:type) := class(root(a,b)):
     Picks<override>(N:int, ?K:int = Note("base",3))<transacts>:int = N + K + 10 | N + K + 20
 fixed(u:type) := class(base(int,u)):
@@ -18,8 +16,7 @@ added(a:type,b:type,w:type) := class(base(a,b)):
     Picks<override>(N:int, ?K:int = Note("added",7))<transacts>:int =
         E:[]w = Concatenate()
         N + K + E.Length + 100 | N + K + 110
-kid := class(base(int,int),deep) {}
-plain := class(deep) {}
+plain := class(root(int,int)) {}
 Run(P:root(a,b) where a:type,b:type)<transacts>:void =
     for (V := P.Picks(1)) { Print("v {V}") }
 Main()<transacts>:void =
@@ -28,6 +25,5 @@ Main()<transacts>:void =
     Run(repeated(int){})
     Run(reorder(int,string){})
     Run(added(int,string,char){X:='c'})
-    Run(kid{})
     Run(plain{})
     for (V := fixed(string){}.Picks(1,?K:=9)) { Print("named {V}") }

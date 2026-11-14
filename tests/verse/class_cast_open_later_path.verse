@@ -24,7 +24,7 @@ Deep(H:holder(t) where t:type):?t =
     if (Print("deep "), P := pairE[H.E], Q := pairE[P.L], L := lit[Q.L]) then option{((L.V * 10, Q.R.Eval()), P.R.Eval())} else false
 # in a for, the same: each element's clauses, then the body
 Sums(Es:[]expr(t) where t:type):[]t =
-    for (E : Es, Print("e "), P := pairE[E], L := lit[P.L], R := lit[P.R]) { (L.V + R.V, R.V) }
+    for (E : Es, (Print("e "); true?), P := pairE[E], L := lit[P.L], R := lit[P.R]) { (L.V + R.V, R.V) }
 Main():void =
     if (V := Lits(pairE(int, string){L := lit{V := 4}, R := txt{S := "s"}})?) then Print("{V(0)} {V(1)}")
     if (V := Lits(pairE(int, int){L := lit{V := 4}, R := lit{V := 5}})?) then Print("no") else Print("not lits")

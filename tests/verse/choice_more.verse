@@ -5,7 +5,7 @@
 # nested 30 deep in conditions (checked once each)
 Main():void =
     var N:int = 0
-    Xs := for (X := 1 | 2, set N += 1, Print("p{X}"), Y := 3 | 4, Y > 10) { Y }
+    Xs := for (X := 1 | 2, (set N += 1; true?), (Print("p{X}"); true?), Y := 3 | 4, Y > 10) { Y }
     Print("for: {Xs.Length} values, N={N}")
     var M:int = 0
     if (X := 1 | 2, set M += 1, Print("q{X}"), Y := 3 | 4, Y > 10) then Print("yes") else Print("if: M={M}")

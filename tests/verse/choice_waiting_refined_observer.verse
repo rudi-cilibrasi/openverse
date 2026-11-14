@@ -14,7 +14,7 @@ Use(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<suspends>:void =
         Sleep(0.1)
         set Total+=100
         Print("observer {Total}")
-    R:=for(A:=if(D:=dup[P])then(D.C|D.C+1)else 0,set Total+=A,
+    R:=for(A:=if(D:=dup[P])then(D.C|D.C+1)else 0,(set Total+=A; true?),
         B:=if(E:=dup[Q])then(E.C|E.C+1)else 0):
         set Total+=B
         Print("before {A} {B} {Total}")

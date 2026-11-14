@@ -12,7 +12,7 @@ Wait(N:int)<suspends>:int =
     N
 Sum(Ps:[]pair(a, b) where a:type, b:type)<suspends>:int =
     var S:int = 0
-    for (P : Ps, Print("s"), D := dup[P]):
+    for (P : Ps, (Print("s"); true?), D := dup[P]):
         set S += Wait(D.C)
     S
 One(P:pair(a, b) where a:type, b:type)<suspends>:int =

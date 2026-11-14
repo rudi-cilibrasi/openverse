@@ -28,7 +28,7 @@ kennel := class(factory):
         dog(u){Data:=X,Code:=1}|dog(u){Data:=X,Code:=2}
 iroot(a:type) := interface:
     Implied(?X:t=DefaultInt() where t:type)<transacts>:t = X|X
-iextra(b:type,c:type) := interface(iroot(b)):
+iextra(b:type,c:type) := class(iroot(b)):
     Implied<override>(?X:u=DefaultString() where u:type)<transacts>:u = X|X
 holder(x:type,y:type) := class(iextra(x,y)) {}
 All(C:leaf(z) where z:type):[]tuple(z,string,int) = for(V:=C.Pick()): V

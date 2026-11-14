@@ -10,8 +10,11 @@ base := class(i):
     Pass(P:t where t:type):t=P
 sub := class(base):
     Seed<override>:int=20
-    Pair<override>(P:tuple(int,string),?N:int=Seed):string="sub {P(0)} {P(1)} {N}"
-    Parent():string=(super:)Pair(1,"super")
+    # ((super:)Pair only in an override of Pair, the Book's: Parent reaches
+    # it through Pair)
+    Pair<override>(P:tuple(int,string),?N:int=Seed):string=
+        if(P(1)="super") then (super:)Pair(1,"super") else "sub {P(0)} {P(1)} {N}"
+    Parent():string=Pair(0,"super")
 Run(X:base):void=
     Print(X.Pair(2,"dynamic"))
     Print("{X.Unit()} {X.One(3)} {X.Count(4,5)}")

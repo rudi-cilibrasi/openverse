@@ -9,7 +9,11 @@ F(T:task(int))<suspends>:int =
         Print("F defer")
     X := race:
         T.Await()
-        5
+        # (Sleep(0.0) completes at once: an arm that can suspend, as every
+        # arm of a race must, and ends without waiting)
+        block:
+            Sleep(0.0)
+            5
     Print("F got {X}")
     X
 Main()<suspends>:void =

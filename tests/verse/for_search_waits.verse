@@ -4,7 +4,7 @@
 # for an element whose later generator gives nothing is undone.
 Main()<suspends>:void =
     var T:int = 0
-    for (I := 1..3, set T += 10 * I, Print("i {I}"), J := 3..I):
+    for (I := 1..3, (set T += 10 * I; true?), (Print("i {I}"); true?), J := 3..I):
         Sleep(0.01)
         set T += 1
         Print("body {I} {J} {T}")

@@ -124,7 +124,7 @@ def declareSignatures (env : TyEnv) (tops : List STop) (requests : Requests) :
                           fx := if n.endsWith ".$block" || defaultBridge n || (n.splitOn "$default$").length > 1 then [] else allowedFx effs,
                           isConst := false,
                           named := (ps.filter (·.named)).map fun q => (q.name, q.default),
-                          pnames := ps.map (·.name), scope := copyScope? effs,
+                          pnames := ps.map (·.name),
                           typeValues := ps.zipIdx.filterMap fun (param, i) => if param.typeValue then some i else none }
     | .const p n _ sty _ =>
       let rt ← match sty with
@@ -206,7 +206,7 @@ def declareSignatures (env : TyEnv) (tops : List STop) (requests : Requests) :
                             fx := if n.endsWith ".$block" || defaultBridge n then [] else allowedFx effs,
                             tparams, bounds := resolved.bounds, selfBounds,
                             named := (ps.filter (·.named)).map fun q => (q.name, q.default),
-                            pnames := ps.map (·.name), scope := copyScope? effs,
+                            pnames := ps.map (·.name),
                             typeValues := ps.zipIdx.filterMap fun (param, i) => if param.typeValue then some i else none }
     | _ => pure ()
   return { tops, generics, sigs, gsigs }
@@ -333,7 +333,7 @@ def inferSignatures (env : TyEnv) (declared : Declared) (typeDefaults : List STo
             ({ name := prm.name, slot := i, ty := t, mutable := false, typeValue := prm.typeValue } : Local)
           let base : Ctx := { ctxOf sigs gsigs env with
                               locals := locals.reverse, retTy := s.ret, canFail := s.decides, suspends := s.suspends, fnFx := s.fx }
-          let ctx ← functionBodyCtx requests base p n s.tparams s.scope
+          let ctx ← functionBodyCtx requests base p n s.tparams
           match elabBody ctx body (some s.ret) { env, nslots := ps.length, slotTys := s.params.toArray, frameSlots := ctx.locals.filterMap fun l => l.storage.map (l.slot, ·) } with
           | .ok (_, st) =>
             let fx := heapFx.filter fun k => st.fx.any (·.1 == k) ||
@@ -363,7 +363,7 @@ def inferSignatures (env : TyEnv) (declared : Declared) (typeDefaults : List STo
           let base : Ctx := { ctxOf sigs gsigs genv with
                               locals := locals.reverse, retTy := g.ret, canFail := g.decides, suspends := g.suspends,
                               dictBase := g.frame.witnessBase, dictVars := dictTps.map (·.1), fnFx := g.fx }
-          let ctx ← functionBodyCtx requests base p n g.tparams g.scope
+          let ctx ← functionBodyCtx requests base p n g.tparams
           match elabBody ctx body (some g.ret)
               { env := genv, nslots := ps.length + hidden.length, slotTys := (g.params ++ hidden).toArray, frameSlots := ctx.locals.filterMap fun l => l.storage.map (l.slot, ·) } with
           | .ok (_, st) =>

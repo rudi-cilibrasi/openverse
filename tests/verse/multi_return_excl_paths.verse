@@ -39,7 +39,7 @@ Main()<transacts>:void =
     for (Z := F(5), Y := 1..2, Z + Y > 7):
         Print("zy {Z} {Y}")
     # two in one group, after effects
-    for (A := 1..2, Print("b{A}"), Z := G(-A), W := G(A - 2), Z + W > 0):
+    for (A := 1..2, (Print("b{A}"); true?), Z := G(-A), W := G(A - 2), Z + W > 0):
         Print("zw {Z} {W}")
     # after a choice whose alternative has several values
     for (Z := (1 | F(2)), W := G(-1), Z + W > 1):
@@ -52,7 +52,7 @@ Main()<transacts>:void =
         Print("a{A} {L.Length}")
     # a set before it is undone with the rejected value
     var V : int = 0
-    for (A := 1..2, set V += 1, Z := G(-A), Z > 0):
+    for (A := 1..2, (set V += 1; true?), Z := G(-A), Z > 0):
         Print("never")
     Print("v {V}")
     # a condition that prints: rolled back when it fails

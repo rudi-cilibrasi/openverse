@@ -3201,7 +3201,7 @@ Tests/Coroutines/Concurrency.versetest:803	agrees
 Tests/Coroutines/Concurrency.versetest:810	agrees
 Tests/Coroutines/Concurrency.versetest:817	agrees
 Tests/Coroutines/Concurrency.versetest:824	agrees
-Tests/Coroutines/Concurrency.versetest:832	disagrees-accepts
+Tests/Coroutines/Concurrency.versetest:832	agrees
 Tests/Coroutines/Concurrency.versetest:845	agrees
 Tests/Coroutines/Concurrency.versetest:862	not-translatable
 Tests/Coroutines/Concurrency.versetest:876	not-translatable
@@ -3926,7 +3926,7 @@ Tests/Effects.versetest:551	disagrees-accepts
 Tests/Effects.versetest:552	disagrees-accepts
 Tests/Effects.versetest:556	agrees
 Tests/Effects.versetest:557	disagrees-accepts
-Tests/Effects.versetest:558	disagrees-accepts
+Tests/Effects.versetest:558	agrees
 Tests/Effects.versetest:559	agrees
 Tests/Effects.versetest:560	agrees
 Tests/Effects.versetest:561	agrees
@@ -3938,7 +3938,7 @@ Tests/Effects.versetest:566	agrees
 Tests/Effects.versetest:567	agrees
 Tests/Effects.versetest:571	agrees
 Tests/Effects.versetest:572	agrees
-Tests/Effects.versetest:573	disagrees-accepts
+Tests/Effects.versetest:573	agrees
 Tests/Effects.versetest:574	agrees
 Tests/Effects.versetest:575	agrees
 Tests/Effects.versetest:576	agrees
@@ -5172,8 +5172,8 @@ Tests/Interface.versetest:182	disagrees-refuses
 Tests/Interface.versetest:186	agrees
 Tests/Interface.versetest:187	agrees
 Tests/Interface.versetest:190	agrees
-Tests/Interface.versetest:194	disagrees-accepts
-Tests/Interface.versetest:199	disagrees-accepts
+Tests/Interface.versetest:194	agrees
+Tests/Interface.versetest:199	agrees
 Tests/Interface.versetest:204	agrees
 Tests/Interface.versetest:208	agrees
 Tests/Interface.versetest:214	agrees
@@ -5230,7 +5230,7 @@ Tests/InterfaceDiamond.versetest:68	agrees
 Tests/InterfaceDiamond.versetest:74	agrees
 Tests/InterfaceDiamond.versetest:79	agrees
 Tests/InterfaceDiamond.versetest:85	agrees
-Tests/InterfaceDiamond.versetest:89	disagrees-accepts
+Tests/InterfaceDiamond.versetest:89	agrees
 Tests/InterfaceDiamond.versetest:95	agrees
 Tests/InterfaceDiamond.versetest:102	agrees
 Tests/InterfaceDiamond.versetest:106	agrees
@@ -11850,7 +11850,7 @@ Tests/Super.versetest:149	agrees
 Tests/Super.versetest:160	agrees
 Tests/Super.versetest:167	agrees
 Tests/Super.versetest:176	agrees
-Tests/Super.versetest:183	disagrees-accepts
+Tests/Super.versetest:183	agrees
 Tests/Super.versetest:194	agrees
 Tests/Super.versetest:203	agrees
 Tests/Super.versetest:206	agrees
@@ -11860,7 +11860,7 @@ Tests/Super.versetest:223	agrees
 Tests/Super.versetest:227	agrees
 Tests/Super.versetest:230	agrees
 Tests/Super.versetest:233	agrees
-Tests/Super.versetest:238	disagrees-accepts
+Tests/Super.versetest:238	agrees
 Tests/Super.versetest:271	agrees
 Tests/Super.versetest:276	agrees
 Tests/Super.versetest:284	not-translatable

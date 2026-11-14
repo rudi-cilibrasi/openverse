@@ -11,7 +11,7 @@ Wait(N:int)<suspends>:int =
 Use(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<suspends>:void =
     var Total:int=0
     H:=cell{}
-    R:=for(I:=1|2,set Total+=I,set H.N+=I,Print("pre {I} {Total} {H.N}"),
+    R:=for(I:=1|2,(set Total+=I; true?),(set H.N+=I; true?),(Print("pre {I} {Total} {H.N}"); true?),
         A:=if(D:=dup[P])then(D.C|D.C+1)else 0,A>4,
         B:=if(E:=dup[Q])then(E.C|E.C+1)else 0,B>4):
         Sleep(0.01)

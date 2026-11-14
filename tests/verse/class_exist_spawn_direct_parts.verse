@@ -15,11 +15,11 @@ mid(a:type, b:type) := class(job(tuple(a, b))):
         Sleep(0.1)
         (A, B)
 child(u:type, v:type) := class(mid(tuple(u, v), int)):
-    Kick():task(tuple(tuple(u, v), int)) = spawn{(super:)Run()}
+    Kick():task(tuple(tuple(u, v), int)) = spawn{Run()}
 child3(u:type) := class(mid(holder(u), int)):
-    Kick():task(tuple(holder(u), int)) = spawn{(super:)Run()}
+    Kick():task(tuple(holder(u), int)) = spawn{Run()}
 child4(u:type, v:type) := class(mid(tuple(tuple(u, int), v), u)):
-    Kick():task(tuple(tuple(tuple(u, int), v), u)) = spawn{(super:)Run()}
+    Kick():task(tuple(tuple(tuple(u, int), v), u)) = spawn{Run()}
 Main()<suspends>:void =
     P := child(int, string){A := (7, "q"), B := 9}
     R := P.Kick().Await()
