@@ -187,3 +187,43 @@ use, so it could not hold a mutable object, but it could write).
 **openverse now.** `elabFunctions` (`Elab/Functions.lean`) refuses a
 constant whose initializer has the effect `<writes>`, saying what has it.
 `<reads>` is left allowed, as the tests pin only writes.
+
+## A loop that nothing leaves
+
+**The rule.** A `loop` of a function that cannot suspend has a way out: a
+`break` of its own, or a `return`.
+
+**The Book.** The tests: "Ensure loop is not empty" (`loop {}`) and "Ensure
+loop has matching break and don't confuse with non-matching nested break"
+(`Tests/FlowControl/Break.versetest` 117-120, 160-171, 3579); a `<suspends>`
+function's loop with no `break` is valid ("Allow loop with at least one
+async expression", `:17-29`). The prose: the loop "continues until
+explicitly broken" (ch. 7, `07_control.md:463`).
+
+**openverse before.** Accepted; such a loop ran until the program's fuel
+was spent, or a runtime error.
+
+**openverse now.** `checkLoopExits` (`Elab/Source.lean`), with the source
+rules. Programs: `tests/verse/overflow.verse`, whose loop ended at an
+overflow, gains a `break` that is never taken.
+
+## `race` arms, `(super:)` and `spawn`'s effects: left
+
+Three more rules of the accepted refusals are one check each, measured and
+left, as each retires a reading openverse's own tests are about:
+
+- **Every arm of `race` and `rush` can suspend** ("Ensure all top-level
+  expressions in race/rush are async", `Coroutines/Concurrency.versetest:831`,
+  3538; the prose is silent): 9 tests (`task_cancel_rush_loser`,
+  `sync_race`, `fn_values_method_variance_async*`, …) race an immediate arm
+  on purpose, and an arm that calls a suspending function value is not yet
+  known to suspend where `sync`'s rule looks (1 case).
+- **`(super:)M` only in an override of `M`** (`Super.versetest` 183, 238,
+  3612): 27 tests call `(super:)` for another method or in a block
+  (`multi_method_cross_super_*`, `choice_super_*`,
+  `class_cast_refine_super*`, …), and 20 generated programs (2 cases).
+- **`spawn` has `<transacts>`'s heap effects** ("spawn requires the
+  transacts effect…", `Effects.versetest:554`; in a `<computes>` function,
+  3512 on both VMs, `:558`, `:573`): 12 tests spawn from narrower
+  functions (`spawn_narrow_callers_*`, `choice_refined_spawn_narrow`), and
+  20 generated programs (2 cases).

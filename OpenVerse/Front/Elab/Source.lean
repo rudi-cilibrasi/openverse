@@ -354,6 +354,36 @@ partial def checkSpawnExits (tops : List STop) : Except String Unit := do
       for m in ms do
         if let .fn _ _ ps _ _ _ body := m then ps.forM (·.default.forM go); go body
 
+/-- A `loop` that nothing leaves, no `break` of its own and no `return`, in
+    a function that cannot suspend, would run until the program's fuel is
+    spent: refused, as the Book's tests do ("Ensure loop is not empty",
+    "Ensure loop has matching break", `FlowControl/Break.versetest` 117,
+    160, 3579). A `<suspends>` function's loop may wait forever, as a game's
+    loop does (`Break.versetest:17-29`). -/
+partial def checkLoopExits (tops : List STop) : Except String Unit := do
+  -- (`own`: a `break` here leaves the loop being checked)
+  let rec exits (own : Bool) : SExpr → Bool
+    | .ret .. => true
+    | .brk _ => own
+    | .loop _ b => exits false b
+    | .structDef .. => false
+    | e => e.children.any (exits own)
+  let rec go : SExpr → Except String Unit
+    | .loop p b => do
+      if !exits true b then
+        throw s!"{p.show}: nothing leaves this loop, no break of its own and no return, so it would run forever: a loop of a function that cannot suspend needs a way out (Book of Verse tests, Break.versetest)"
+      go b
+    | .structDef _ _ _ fs => fs.forM fun f => f.default.forM go
+    | e => e.children.forM go
+  for t in tops do
+    match t with
+    | .fn _ _ _ _ effs _ body => if !effs.contains "suspends" then go body
+    | .classDef _ _ _ _ _ _ _ _ ms =>
+      for m in ms do
+        if let .fn _ _ _ _ effs _ body := m then
+          if !effs.contains "suspends" then go body
+    | _ => pure ()
+
 /-- A `profile` block is code of a function's, not of an initializer: none
     in a constant's value or a field's default (Book of Verse tests,
     profile_simple.versetest:144, "Cannot use profiles inside initializers -
@@ -556,6 +586,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   checkJumps allTops0r
   checkNestedReturns allTops0r
   checkSpawnExits allTops0r
+  checkLoopExits allTops0r
   checkProfiles allTops0r
   checkDefers allTops0r
   checkForClauses allTops0r
