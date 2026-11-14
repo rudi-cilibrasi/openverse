@@ -1,5 +1,6 @@
-# awaiting a cancelled task during a spawned task's first run cancels the
-# spawned task, not the one being resumed (#253)
+# a spawned task's first run awaits a cancelled task, and waits there for
+# ever (the Book's API, task, Await): no task is cancelled, the one that
+# spawned it goes on (#253: before, the awaiting task was cancelled)
 W()<suspends>:int =
     Sleep(9.0)
     1

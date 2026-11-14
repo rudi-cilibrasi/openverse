@@ -158,7 +158,7 @@ structure LoweredProgram where
     a suspends `Main`, a prelude `$Main` that allocates them and calls it
     (#37). -/
 def lowerProgram (env : TyEnv) (sigs : Signatures) (mainSig : Sig) (lowering : Lowering)
-    (frameInfo : Array FrameRefs.Info) (usesConc usesEvents : Bool) : Except String LoweredProgram := do
+    (frameInfo : Array FrameRefs.Info) (usesConc usesEvents awaits : Bool) : Except String LoweredProgram := do
   -- with prototypes, the program starts with a prelude that allocates them
   -- and then calls `Main` (#37)
   let mut protoList := env.protos.map fun (_, t, vs) => (t, vs)
@@ -183,7 +183,7 @@ def lowerProgram (env : TyEnv) (sigs : Signatures) (mainSig : Sig) (lowering : L
   if usesConc then
     let lowered ← lowerOpening fun forced =>
       lowerConcurrency env sigs.sigs sigs.gsigs mainSig fsigs0 protos pins inFn fns slotTys fsigs classTable forced frameInfo
-        usesEvents
+        usesEvents awaits
     if !lowered.schedMore.isEmpty then
       let schedTag := env.tagOf "$sched"
       protoList := protoList.map fun (t, vs) => if t == schedTag then (t, vs ++ lowered.schedMore) else (t, vs)
@@ -356,6 +356,17 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     return .asking { eager := needs.eager, families := needs.families, overloads := needs.overloads,
                      nested := needs.nested, fieldOrders := source.fieldSites.map fun n => (n, env.fieldOrder n),
                      instanceCalls := needs.instanceCalls }
+  -- (a program that awaits a task is compiled in await mode, its tasks'
+  -- ends resuming their awaiters inside them: only types tell a task's
+  -- `Await` from an event's, so an elaboration with a call of the task's
+  -- one, the prelude's `$Await`, without that mode asks for it, of the
+  -- classes' layout, and the program is elaborated again with it;
+  -- docs/research/scheduler-conformance.md, "A task's end resumes its
+  -- awaiters")
+  if !admitted.awaitsTasks then
+    if let some aw := sigs.all.find? (·.name == "$Await") then
+      if elaborated.any (fun f => (Suspend.callsOf f.fn.body).any (·.1 == aw.idx)) then
+        return .asking { awaits := true }
   -- (#214) and functions wanted as values at types no class of theirs
   -- gives, adapters for methods wanted as values, (#243) branches of casts
   -- that refine type arguments, lifted into functions, and helpers that
@@ -389,7 +400,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     checkInitializerConvergence lowering.fns sigs classes.defs defaults.bodies admitted.intrinsicCalls
   MetadataFlow.check lowering.fns lowering.metadata (metadataFields env) opts.debug
   let frameInfo := elaborated.map (·.frames)
-  let c ← certify (← lowerProgram env sigs mainSig lowering frameInfo admitted.usesConc admitted.usesEvents) methods.stubs
+  let c ← certify (← lowerProgram env sigs mainSig lowering frameInfo admitted.usesConc admitted.usesEvents
+    admitted.awaitsTasks) methods.stubs
     opts.debug
   -- (the warnings: code never reached, from the source, and what the
   -- elaboration noted, each once, in the order of the source)
@@ -446,14 +458,15 @@ partial def topDefaultCount : STop → Nat
        field orders of what that code constructs, and the calls a group's
        machine takes at another instance of a generic callee;
     2. the classes' layout (#351): hidden fields for all of a class's type
-       parameters;
+       parameters, and the await mode's prelude for a program that awaits a
+       task (`Requests.awaits`);
     3. the functions added: functions as values (#214), method adapters, the
        branches of refining casts (#243), and the functions of lazily taken
        calls and the helpers of consumers of choices (#246, #335). -/
 def Requests.tier (r : Requests) : Nat :=
   if !r.eager.isEmpty || !r.families.isEmpty || !r.overloads.isEmpty || !r.lazy.isEmpty || !r.nested.isEmpty ||
       !r.fieldOrders.isEmpty || !r.instanceCalls.isEmpty then 1
-  else if !r.witnesses.isEmpty then 2
+  else if !r.witnesses.isEmpty || r.awaits then 2
   else 3
 
 /-- The requests of tier `k` and of the tiers above it (`Requests.tier`). -/
@@ -461,6 +474,7 @@ def Requests.upTo (r : Requests) (k : Nat) : Requests :=
   if k ≥ 3 then r else
   { eager := r.eager, families := r.families, overloads := r.overloads, lazy := r.lazy, nested := r.nested,
     fieldOrders := r.fieldOrders, instanceCalls := r.instanceCalls, witnesses := if k = 2 then r.witnesses else [],
+    awaits := k == 2 && r.awaits,
     -- (what a function's body boxes: kept, as the source is)
     boxes := r.boxes }
 

@@ -3435,7 +3435,19 @@ Main()<suspends>:void =
   task runs at once up to its first wait. The value is a `task(t)`, where
   `t` is the result type at the receiver's static declaration, including
   when an override returns a narrower class. `T.Await()` waits for the task to end and
-  gives its result (at once if it has ended). A task is not tied to the
+  gives its result (at once if it has ended, without waiting). A task's end
+  resumes the tasks awaiting it inside its last step, before anything else
+  runs, as a `Signal` resumes its waiters (below): in the order they began
+  awaiting, each until it waits again or ends, each with the result (the
+  Book's API, `task`'s `Await`: "Multiple awaiters are allowed and are
+  resumed in the order they registered"; [the rule](research/scheduler-conformance.md#a-tasks-end-resumes-its-awaiters)).
+  An awaiter is a spawned task, `Main`, a `branch` or an arm (several arms
+  of one task each await on their own); one that is cancelled meanwhile (a
+  `race` it lost) is not resumed. A task that ends inside a `Signal`, or
+  inside another task's end, resumes its awaiters there, depth first; in a
+  failure context that fails, its end and what its awaiters did are undone
+  with the rest. A task awaiting itself, or two awaiting each other, wait
+  for ever. A task is not tied to the
   code that spawned it: it runs until it ends or the program does. A
   `spawn` has `<transacts>`'s heap effects (`<reads>`, `<writes>` and
   `<allocates>`), besides those of the call it starts (the Book's tests:
@@ -3459,11 +3471,17 @@ Main()<suspends>:void =
   running (its own code or one of its branches or `rush` losers runs: it
   cancels itself, or a task or branch started while it runs, at any depth,
   cancels it in its first run), when the code that runs waits next, or
-  ends; cancelling a task while it unwinds, or awaiting it then, finds it
-  cancelled already. Awaiting a cancelled task cancels the task that
-  awaits, also in a task's or a branch's first run (and a `Main` that
-  awaits one is cancelled, which ends the program). A task asked to be
-  cancelled at its next wait that ends before it waits again ends as
+  ends; cancelling a task while it unwinds finds it cancelled already. A
+  cancelled task never resumes its awaiters: an await of it, made before
+  the cancel or after it (or while it unwinds), waits for ever, without
+  failing or cancelling anything (the Book's API, `task`'s `Await`: "a
+  cancelled task never resumes its awaiters, so the call does not fail,
+  does not error, and simply stays suspended for ever"; ch. 14 says it
+  "propagates cancellation", which was openverse's reading until now). The
+  awaiter can itself be cancelled (a `race` arm that loses, a branch whose
+  function exits); a `Main` that awaits a cancelled task ends the program
+  as a stalled `Main` does (below) once no task can run. A task asked to
+  be cancelled at its next wait that ends before it waits again ends as
   usual; cancelling a task that has ended changes nothing.
 
   ```verse
@@ -3510,12 +3528,10 @@ Main()<suspends>:void =
   signalling arm goes on to its next wait and is then cancelled (or, in a
   `rush`, goes on), and the arms after it never start (ch. 14,
   "Resolution Stops Unstarted Arms"); the race's value is the first
-  completer's. Inside a `Signal`, only the woken waiters go on: a sleep
-  that has expired and a wait for a task's end are taken at their task's
-  turn in the scheduler's pass, as before (`Main`, then the tasks in the
-  order they were started, arms in source order); the tasks awaiting one
-  task's end go on in that order too (the Book's API resumes them in the
-  order they registered, inside the end: not built). A `Signal` from
+  completer's. Inside a `Signal`, and inside a task's end, only the woken
+  waiters go on: a sleep that has expired is taken at its task's turn in
+  the scheduler's pass (`Main`, then the tasks in the order they were
+  started, arms in source order). A `Signal` from
   immediate code resumes its waiters the same way. A waiter cancelled
   before its turn (by an earlier waiter of the same `Signal`) does not go
   on, and a wait cancelled before the `Signal` (a `race` it lost) is no
@@ -3594,8 +3610,10 @@ Main()<suspends>:void =
 - **Time.** The schedule is deterministic: a virtual clock counts ticks, 30
   per second, and ticks in which nothing can run are skipped. In each tick,
   `Main` goes on first, then each task in the order they were spawned, then
-  again while a task ended, a `Signal` woke a task, or a task was cancelled
-  (so that those waiting go on in the same tick). Arms that can go on in the same tick do so in source order. `Sleep(S)`
+  again while a task ended or was cancelled, or a sleep expired inside a
+  `Signal` or a task's end (so that what waits on them goes on in the same
+  tick); the tasks awaiting a task's end, and an event's, go on inside it
+  (above). Arms that can go on in the same tick do so in source order. `Sleep(S)`
   uses the binary64 product `T = 30·S` rounded up, `Ceil(T)`, at least
   one tick, for a supported positive finite input, also a subnormal one:
   a sleep wakes at the first tick at or after its deadline (the Book's API
@@ -3620,7 +3638,8 @@ Main()<suspends>:void =
   unstructured tasks are not cancelled, so their pending defers do not run.
   If `Main` waits
   and no task can run again (for example after `Sleep(Inf)`, or awaiting a
-  task that never ends), it ends as `Err()` does: exit 2.
+  task that never ends or was cancelled), it ends as `Err()` does: exit 2,
+  its defers not run.
 - **Lowering.** The front end compiles each suspends function into Verse Core:
   a frame object holds its variables, and a resume function runs it from
   one suspension point to the next (see DESIGN.md). Nothing changes in
@@ -3673,7 +3692,8 @@ Main()<suspends>:void =
 | `Sleep(S)` rounding | the API: "a sleep resumes on the first update at or after its deadline and never sooner than the next one. Short sleeps therefore round up"; no tick rate | the first tick at or after the deadline: the binary64 product `30·S` rounded up, at least one tick (`Sleep(0.04)` takes 2 ticks; `Sleep(0.1)`, whose product is exactly 3.0, 3); bounded inputs and checked clock accumulation follow the explicit reference policy above (#514) |
 | End of a program with tasks | not stated | the program ends when `Main` does; a `Main` that waits with no task able to run is an error (exit 2) (#156) |
 | Order of a `subscribable_event`'s functions | the API: "invoked in a randomised order on every signal", "only after every waiting task has been resumed"; ch. 14's example lists them in subscription order | subscription order, after the tasks awaiting the event went on inside `Signal` (#210) |
-| Event waiter resumption | the Book's API: awaiting tasks "resumed first, in the order they suspended", each until it blocks before the next, and `Signal` "returns before the resumed tasks have finished"; its tests have awaiters run inside `Signal` (`Event.versetest:21-32`, FORT-1088027, FORT-1126351) | the Book's: inside `Signal`, in the order they suspended, each until it waits again or ends, the same task's arms included; an await made meanwhile joins the next `Signal`; nested `Signal`s depth first (#513, [the rule](research/scheduler-conformance.md#awaiters-run-inside-signal)); the awaiters of a task's end keep the scheduler's order (the API's registration order is designed, not built) |
+| Event waiter resumption | the Book's API: awaiting tasks "resumed first, in the order they suspended", each until it blocks before the next, and `Signal` "returns before the resumed tasks have finished"; its tests have awaiters run inside `Signal` (`Event.versetest:21-32`, FORT-1088027, FORT-1126351) | the Book's: inside `Signal`, in the order they suspended, each until it waits again or ends, the same task's arms included; an await made meanwhile joins the next `Signal`; nested `Signal`s depth first (#513, [the rule](research/scheduler-conformance.md#awaiters-run-inside-signal)); a task's end resumes its awaiters inside it the same way, in the order they registered (the API's `task`, `Await`; [the rule](research/scheduler-conformance.md#a-tasks-end-resumes-its-awaiters)) |
+| Awaiting a cancelled task | the API (`task`, `Await`): "a cancelled task never resumes its awaiters, so the call does not fail, does not error, and simply stays suspended for ever"; ch. 14: "it propagates cancellation: if the awaited task was canceled, `Await()` passes that cancellation on to the caller"; the tests decide neither (`SpawnAndTask.versetest:342-355`); `Cancel` itself is unreleased (ch. 14) and `<epic_internal>` (the API): the Book disagrees with itself | the API's: the await waits for ever; the awaiter can be cancelled itself (a `race` it loses); a `Main` stalled on one ends the program with exit 2 ([the cancelled task](research/scheduler-conformance.md#the-cancelled-task)) |
 | Signal in a failure context | the Book's tests signal in `<decides>` functions and assertions and expect success (`Event.versetest` 64-119); a failed context undoes the resumption (`Coroutines/Concurrency.versetest:1562-1580`); the Book's API gives `event`'s `Signal` no `<no_rollback>` (Epic's published pages do) | the tests': allowed, and what it and the awaiters it resumed did is rolled back with a failing context; `--signal-no-rollback` refuses it, as Epic's pages read (#515) |
 | Extent of a `<#>` comment | "everything indented by four spaces on subsequent lines" (§1.1) | the rest of the `<#>` line and every following line indented more than that line, whatever the amount (blank lines included); `<#>` may also follow code on a line |
 

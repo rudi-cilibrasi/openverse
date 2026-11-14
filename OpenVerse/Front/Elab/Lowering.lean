@@ -539,7 +539,8 @@ structure LoweredConcurrency where
 def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsigs0 : List (List VTy × VTy))
     (protos : HeapTy) (pins : List (List (Option VTy))) (inFn : String → String → String)
     (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (fsigsIn : List (List VTy × VTy)) (classTable0 : List (List VTy))
-    (forced : List Nat := []) (frameInfo : Array FrameRefs.Info := #[]) (events : Bool := false) :
+    (forced : List Nat := []) (frameInfo : Array FrameRefs.Info := #[]) (events : Bool := false)
+    (awaits : Bool := false) :
     Except String LoweredConcurrency := do
   let mut fns := fns0
   let mut slotTys := slotTys0
@@ -694,9 +695,13 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
           atys := atys.push pt
       let k := roots.size
       let n := hs.length
+      -- (await mode: then its end, `taskEnd`, which resumes its awaiters
+      -- inside this last step, docs/research/scheduler-conformance.md, "A
+      -- task's end resumes its awaiters")
+      let ended : Expr := if awaits then .seq (.call (idxOf "$taskEnd") [.local 0]) (.lit .void) else .lit .void
       let body : Expr := .seq
         (.heap (.set (fieldIdx (env.concurrencyName "task") "$Result")) [.local 0, .prim .mkSome [.call h ((List.range n).map (fun i => Expr.local (i + 1)))]])
-        (.seq (.heap (.set (fieldIdx (env.concurrencyName "task") "$Done")) [.local 0, .lit (.logic true)]) (.lit .void))
+        (.seq (.heap (.set (fieldIdx (env.concurrencyName "task") "$Done")) [.local 0, .lit (.logic true)]) ended)
       let Γk := ttyT :: atys.toList
       fns := fns.push { name := s!"$spawn{k}", arity := n + 1, nslots := n + 1, decides := false,
                         writes := true, body }

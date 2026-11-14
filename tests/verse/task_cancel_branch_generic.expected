@@ -1,14 +1,14 @@
-b1 defer int
 b2 end int
 b2 defer int
 G end int
 G defer int
+b1 defer int
 7
-b1 defer string
 b2 end string
 b2 defer string
 G end string
 G defer string
+b1 defer string
 s
 main end
 Main defer

@@ -130,7 +130,8 @@ On main `0a8d539`: **8,692 agree, 703 refuse, 65 accept, 92 differ, 3,952 not tr
 - Of the **9,552 translatable cases**, openverse **agrees on 8,711 (91%)**,
   refuses 683 valid programs, **accepts 66 refused ones**, gives a
   **different result in 92** (87 of them `verse_vm_only` cases of unbounded
-  ints) and hits **no internal error** ([After awaiters inside
+  ints) and hits **no internal error** (the same after [After a task's end
+  resumes its awaiters](#after-a-tasks-end-resumes-its-awaiters); [After awaiters inside
   `Signal`](#after-awaiters-inside-signal), merged with [After `ToDiagnostic`,
   `true` and the full type-parameter
   rule](#after-todiagnostic-true-and-the-full-type-parameter-rule), which
@@ -2323,6 +2324,53 @@ the merge 93 better (#621's), none worse, and 17 changed as on #621 (its
   expected output changed, each re-derived by hand, and 8 corpus programs);
   one error test is accepted now (`choice_refined_spawn_body_failure`, a
   test of the refusal, moved to `tests/verse`).
+
+## After a task's end resumes its awaiters
+
+The Book's rules for a task's awaiters (its API's `task`, `Await`: "resumed
+in the order they registered", inside the ending task's last step, as the
+FORT-1088027 comment's `event::Signal → task::Complete → ResumeAt →
+task::Update` has it; and "a cancelled task never resumes its awaiters ...
+simply stays suspended for ever", where openverse cancelled the awaiter),
+built in the lowering and the concurrency prelude as a `Signal` of an event
+of each task's own ([the rules, the design and what was
+built](scheduler-conformance.md#a-tasks-end-resumes-its-awaiters)). On main
+`33bcf38` (#623). Against main's baseline (8,711 agree, 683 refuse, 66
+accept, 92 differ, 3,952 not translatable): nothing moved, every case's
+verdict, cause and detail the same: **8,711 agree, 683 refuse, 66 accept, 92
+differ, 3,952 not translatable** (re-recorded from a fresh run). Every test
+of the Book with a task's awaiters needs `CoroUtils` (`Coroutines/SpawnAndTask.versetest`
+269-356, 688-737, 895-913; `Coroutines/Concurrency.versetest:1528-1540`), so
+none is translatable; the rules are pinned from them and the API by hand,
+and tested in openverse's own suite.
+
+- **The concurrency files** (agree/refuse/accept/differ/not translatable),
+  before and after: `Coroutines/SpawnAndTask.versetest` 6/1/0/0/70,
+  `Event.versetest` 1/3/0/0/2, `Coroutines/Concurrency.versetest`
+  12/1/0/0/73, `Coroutines/ConcurrencyEscape.versetest` 0/0/0/0/49,
+  `FlowControl/Concurrency/branch.versetest` 4/1/0/0/5, `when.versetest`
+  7/15/0/0/0, `LiveVariables.versetest` 12/44/0/0/0,
+  `SoftwareTransactionalMemory.versetest` 30/0/1/0/0, the `FORT-1088027` and
+  `FORT-1126351` files as after awaiters inside `Signal`: all unchanged.
+- **Moved the wrong way:** nothing; no case newly accepted, newly refused or
+  newly different.
+- **The Book disagrees with itself** on a cancelled task's awaiters: the
+  API (`task`, line 1362: `Await`, "a cancelled task never resumes its
+  awaiters, so the call does not fail, does not error, and simply stays
+  suspended for ever"; `Cancel`, "If this task has a caller or calls to
+  Await(), they will not be notified (or canceled) and will appear to take
+  forever") against ch. 14 (`14_concurrency.md:927-929`: "it propagates
+  cancellation: if the awaited task was canceled, `Await()` passes that
+  cancellation on to the caller"); `SpawnAndTask.versetest:342-355` fits
+  both. openverse follows the API, as the owner decided; `Cancel` itself is
+  unreleased in ch. 14 and `<epic_internal>` in the API.
+- **Programs.** Against main `33bcf38`, over every suite and the corpus
+  `corpus3` (6,808 programs): 6,414 the same; 394 programs' bytecode
+  changed, the 393 that await a task and one test rewritten not to, with the
+  same messages; 355 of the 393 with the same output and 38 with another
+  (16 tests, each re-derived by hand; 20 corpus scheduler programs, each as
+  the new model says; 2 `conc-poly` programs, their lines reordered). No
+  program that does not await a task changed.
 
 ## Ten causes to remove first
 

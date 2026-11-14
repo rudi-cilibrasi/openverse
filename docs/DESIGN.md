@@ -1304,7 +1304,7 @@ where an elaboration asks for something and goes no further
 15. `checkSignatures`: overloads, overrides, implementations and overriding fields agree, and no field has two interfaces' defaults.
 16. `elabFieldDefaults` (`Elab/Functions.lean`): construction effects, and each field default elaborated once (`FieldDefaults`).
 17. `elabFunctions`: each function and constant, then each generic function once (`ElaboratedFn`), the environment knowing where the accessors are.
-18. `roundNeeds` (`Elab.lean`): what the round asks for; an elaboration that asks how choices are inlined (tier 1), or for functions (tier 3), goes no further.
+18. `roundNeeds` (`Elab.lean`): what the round asks for; an elaboration that asks how choices are inlined (tier 1), for the await mode's prelude (tier 2: it calls a task's `Await`, `$Await`, without it), or for functions (tier 3), goes no further.
 19. `mainSignature` and `prepareLowering`: the function the program runs; the accessors, the class table, prototypes and pins, and the refined tests that cannot pass removed (`Lowering`).
 20. The checks of the prepared functions, in order: functions with several values computed at their calls (`checkEager`, which may ask for lazy ones), event signals in failure contexts (with `--signal-no-rollback`), lazily taken calls that need functions of their own (`checkLoopFirst`, which may ask for them), the convergence of field defaults (`checkInitializerConvergence`) and the flow of type metadata (`MetadataFlow.check`).
 21. `lowerProgram`: failure capture, concurrency and the `$Main` prelude (`LoweredProgram`).
@@ -1431,7 +1431,8 @@ and an elaboration asks for one tier at a time: 1. how the source's
 choices are inlined (eager groups, lazily taken functions, families,
 overloads, the copies of generic callees a machine takes at another
 instance),
-2. the classes' layout (hidden fields), 3. the functions added (functions
+2. the classes' layout (hidden fields, and the await mode's prelude for a
+program that awaits a task), 3. the functions added (functions
 and methods as values, cast branches, the functions of lazily taken calls,
 continuations and default helpers). A round that asks for more of one tier
 is followed by one with the requests of that tier and the tiers above it
@@ -2448,8 +2449,11 @@ is not -1 (done). It reaches a root through a test of its class
 (`Typed.dispatch` again, at a type that covers every root frame) and a
 trampoline that passes the root's parameters from its frame. A root that
 ends makes the scheduler pass again in the same tick. `T.Await()` is a
-helper written in Verse: it waits at the leaf `$WaitDone` (whose frame
-tests the done flag, non-generically), then takes the result.
+helper written in Verse: a task that has a result gives it at once; any
+other is awaited through the end event of await mode (below), whose wait
+is the leaf `$WaitDone` (whose frame tests the done flag of a waiter
+record, non-generically). A program with no `T.Await()` keeps the older
+helper, which no code calls.
 
 A `branch` is an arm over the enclosing frame, run as a root through a
 wrapper `[pc, frame, owner]`, its owner the task whose code started it
@@ -2485,11 +2489,16 @@ task whose code is running is marked running: by its trampoline while its
 root runs, and by a branch's trampoline, for the branch's owner, while the
 branch runs (#260); cancelling a running task only records a request in
 it (`$CancelReq`), which the trampoline that marked it running takes
-after the run returns, unless the task ended in that run (#253). The
-scheduler's request is how cancellation spreads: the leaf `$WaitDone`,
-seeing a cancelled task, asks the scheduler to cancel the root that awaits
-it; a root's first run, inline in its parent's, takes the request for its
-own root, around which its start function saves and clears the parent's.
+after the run returns, unless the task ended in that run (#253). Until
+the Book's rule for a cancelled task (a cancelled task never resumes its
+awaiters), the scheduler's request (`$CancelCur`) spread cancellation: the
+leaf `$WaitDone`, seeing a cancelled task, asked the scheduler to cancel the
+root that awaited it, and a root's first run, inline in its parent's, took
+the request for its own root, around which its start function saves and
+clears the parent's. No wait sees a cancelled task now (a task is awaited
+through its end event's records), so the request is never made; its
+handling stays, unreached, so that the programs that do not await a task
+keep their bytes.
 A task's trampoline sets `$CurTask` while its root runs, so that a branch
 started there records the task as its owner.
 
@@ -2560,6 +2569,35 @@ the wrapper's trampoline cancels the arm when the run returns pending. A
 (`$Probe`: `waitResume` records the root and every wait reports waiting),
 so that its waiters record it. Programs without event types, and in event
 mode the functions that are not marked, compile as before.
+
+**A task's end resumes its awaiters (await mode;
+docs/research/scheduler-conformance.md, "A task's end resumes its
+awaiters").** The Book's API: a task's awaiters are resumed in the order
+they registered, and a cancelled task never resumes them. A task's end is a
+`Signal` of an event of its own: in await mode `$taskBase` has a field
+`$Ends:?event(void)`, which the task's first awaiter makes (`$taskEnds`);
+`$Await` gives a task's result at once if it has one, and otherwise awaits
+the end event (`$EvAwait`: a record appended, so in registration order),
+then gives the result; a spawned call's root, after it sets its task's
+result and done flag, calls `$taskEnd(T)`, which signals the end event if
+there is one (`$signalAll(E, ())`). So the event mode's machinery above
+runs the awaiters inside the root's last step: each in order through
+`$wakeRoot`, the `Drain` raised, a task that ends inside a round running its
+own there, depth first, the roots marked (they reach `$signalAll` through
+`$taskEnd`), and a failing context undoing it all. The field is
+`$taskBase`'s so that `$taskEnd` is not generic: the root's call of it is
+Verse Core the lowering writes, which has no witness of the result's type
+to pass. A cancelled task never sets a result or calls `$taskEnd`, so its
+awaiters' records are never marked: they wait for ever, unless cancelled
+themselves (their `defer:` marks the record done, which the end then
+skips). Only types tell a task's `Await` from an event's, so await mode is
+found as the elaboration's other needs are ("Elaboration in rounds"): an
+elaboration in which a call of `$Await` remains without it asks for it
+(`Requests.awaits`, tier 2: the prelude's layout), and the program is
+elaborated again with `concPreludeAwaits` (event mode's prelude, with the
+field, `$taskEnds`, `$taskEnd` and the `$Await` above) and the roots' call of
+`$taskEnd`. Programs that do not await a task compile byte for byte as
+before, also those that use events and spawn tasks.
 
 **Signal admission (opt-in, `Options.signalNoRollback`,
 `--signal-no-rollback`, #515).** The front end records each call,

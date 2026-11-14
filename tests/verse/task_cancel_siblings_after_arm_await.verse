@@ -1,7 +1,7 @@
 # A's first run: a sync whose arm 1 awaits a cancelled task, whose arm 2
-# spawns two siblings, the second of which spawns a grandchild. A is
-# cancelled at the end of its first run; none of the three is.
-# Expected: A defer / B end x / B defer x / B end y / B defer y / G end /
+# spawns two siblings, the second of which spawns a grandchild. Arm 1 waits
+# for ever, so A's sync never ends; none of the four is cancelled.
+# Expected: B end x / B defer x / B end y / B defer y / G end / arm 2 ends /
 # main end
 W()<suspends>:int =
     Sleep(9.0)
@@ -28,7 +28,7 @@ A()<suspends>:int =
             spawn{B("x", false)}
             spawn{B("y", true)}
             Sleep(0.5)
-            Print("never")
+            Print("arm 2 ends")
             0
     Print("never")
     0
