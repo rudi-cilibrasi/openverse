@@ -1405,21 +1405,20 @@ partial def parseStructBody (p : Pos) : PM SExpr := do
 
 /-- `enum` (after the keyword): `:` + values or `{ values }`. -/
 partial def parseEnumBody (p : Pos) : PM SExpr := do
-  let mut isOpen := false
   let mut seen : List String := []
   while (← peekT).isSym "<" do
     bump
     let st ← peekT
     let sp ← expectIdent
     expectSym ">"
-    -- (`<persistable>` has no meaning in openverse: accepted and ignored)
+    -- (kept: `<open>` lets the enum gain values, `<persistable>` lets a
+    -- persistable struct's field be of it, Book of Verse ch. 9, 17)
     if !["open", "closed", "persistable"].contains sp then
       perr st s!"an enum's specifier is <open>, <closed> or <persistable>, not <{sp}>"
     if (sp == "open" && seen.contains "closed") || (sp == "closed" && seen.contains "open") then
       perr st "an enum is <open> or <closed>, not both"
     if seen.contains sp then perr st s!"<{sp}> is given twice"
     seen := seen ++ [sp]
-    if sp == "open" then isOpen := true
   let o ← peekT
   let mut names := #[]
   -- (a value `(e:)v`, qualified with its enum, may take a reserved word's or
@@ -1458,7 +1457,7 @@ partial def parseEnumBody (p : Pos) : PM SExpr := do
       if a.isSym "," || a.isSym ";" then bump; continue
       names := names.push (← value)
   else perr o "expected ':' or '{' after enum"
-  return .enumDef p names.toList isOpen
+  return .enumDef p names.toList seen
 
 partial def parseInterp (parts : List StrPart) : PM (List SPart) := do
   let mut out := #[]

@@ -250,8 +250,9 @@ inductive SExpr where
   /-- `struct<specs>: fields`, and the type parameters of a parametric
       struct `name(t:type) := struct: …`. -/
   | structDef : Pos → List TParam → List String → List SField → SExpr
-  /-- `enum:` (closed) or `enum<open>:`, which may gain values (Book of Verse ch. 9). -/
-  | enumDef  : Pos → List String → (isOpen : Bool) → SExpr
+  /-- `enum<specs>:` and its values: `<open>`, which may gain values (Book of
+      Verse ch. 9; closed without it), `<closed>`, `<persistable>` (ch. 17). -/
+  | enumDef  : Pos → List String → (specs : List String) → SExpr
   /-- `type{_X:t where c₁, c₂, …}`: a refinement type (Book of Verse ch. 11):
       the variable, the base type and the conditions. -/
   | refineDef : Pos → String → STy → List SExpr → SExpr

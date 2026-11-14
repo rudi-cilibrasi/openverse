@@ -55,9 +55,9 @@ def typeEnvironment (classes : Classes) (fields : Fields) (methods : Methods) (s
     (fields.of cd.name).filterMap fun (f, _, d, _) => d.map fun _ => ((cd.name, f), homeOf cd.name f) }
   for t in methods.tops do
     match t with
-    | .const _ n _ none (.enumDef _ vals isOpen) =>
+    | .const _ n _ none (.enumDef _ vals specs) =>
       env := { env with enums := env.enums ++ [(n, vals)],
-                        openEnums := if isOpen then env.openEnums ++ [n] else env.openEnums }
+                        openEnums := if specs.contains "open" then env.openEnums ++ [n] else env.openEnums }
     | .const _ n _ none (.structDef _ _ _ _) => env := { env with structs := env.structs ++ [(n, [])] }
     | .const p n _ none (.refineDef _ v sty conds) =>
       -- a refinement type (#136)
@@ -107,11 +107,12 @@ def typeEnvironment (classes : Classes) (fields : Fields) (methods : Methods) (s
   -- `EffectPolicy.specifierPlaces`): no type parameters, and fields whose
   -- types persist, not `any`, `comparable` (ch. 17, 178: "Abstract interface
   -- type"), a rational, a function, an interface or a class
-  -- (openverse has no persistable classes), nor a struct that is not
-  -- `<persistable>`. (An enum's `<persistable>` the parser takes and drops:
-  -- every enum is taken to persist.)
+  -- (openverse has no persistable classes), nor a struct or an enum that is
+  -- not `<persistable>` (ch. 17: "Enums without `<persistable>` specifier
+  -- cannot be used").
   let persistable : List String := methods.tops.filterMap fun
-    | .const _ n _ none (.structDef _ _ specs _) => if specs.contains "persistable" then some n else none
+    | .const _ n _ none (.structDef _ _ specs _) | .const _ n _ none (.enumDef _ _ specs) =>
+      if specs.contains "persistable" then some n else none
     | _ => none
   let rec persists : Ty → Bool
     | .any | .dyn | .rational | .param .. => false
@@ -121,6 +122,7 @@ def typeEnvironment (classes : Classes) (fields : Fields) (methods : Methods) (s
     -- (Book of Verse ch. 17: "`weak_map` - Weak references are not persistable")
     | .weakMap .. => false
     | .struct n args => !env.classes.contains n && persistable.contains n && args.attach.all fun ⟨t, _⟩ => persists t
+    | .enum n => persistable.contains n
     | _ => true
   for t in methods.tops do
     if let .const p n _ none (.structDef _ tps specs _) := t then

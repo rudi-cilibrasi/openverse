@@ -802,7 +802,7 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
     | .const p n cspecs ty body =>
       let r := rAt (scopeOf n) []
       let body ← match body with
-        | .enumDef ep vs isOpen => do pure (SExpr.enumDef ep (← vs.mapM (ownName n "a value" p)) isOpen)
+        | .enumDef ep vs specs => do pure (SExpr.enumDef ep (← vs.mapM (ownName n "a value" p)) specs)
         | .structDef sp tps specs fs => do
           pure (SExpr.structDef sp tps specs (← fs.mapM fun f => do return { f with name := ← ownName n "a field" sp f.name }))
         | b => pure b

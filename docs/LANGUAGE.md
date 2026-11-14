@@ -329,7 +329,7 @@ of them; the Book's tests `Tests/Attributes/` and `Castable.versetest`):
 | `<final_super_base>` | a class or an interface | a class right below it is `<final_super>` |
 | `<castable>` | a class or an interface | no type parameters, nor in a class or interface below it |
 | `<unique>` | a class or an interface | |
-| `<persistable>` | a class (not supported yet) or a struct | a struct's: no type parameters, and fields that persist: not `any`, a rational, a function, an interface, a class or a struct that is not `<persistable>` (ch. 17; every enum is taken to persist, as openverse does not keep an enum's `<persistable>`) |
+| `<persistable>` | a class (not supported yet), a struct or an enum | a struct's: no type parameters, and fields that persist: not `any`, a rational, a function, an interface, a class, or a struct or an enum that is not `<persistable>` (ch. 17: "Enums without `<persistable>` specifier cannot be used") |
 | `<override>` | a method or a field | |
 
 Anywhere else, on a definition's name (`c<castable> := class{}`) or after the
@@ -2536,8 +2536,8 @@ progress := module:
   types (like `var X:int = 0`) are not allowed at module scope"); its key
   type a class with `<module_scoped_var_weak_map_key>`; when that class is
   `<persistent>`, its value type persists (ch. 17, as a `<persistable>`
-  struct's fields must: not `rational`, `any`, `comparable`, a class or a
-  weak map); `X[k]`, `set X[k] = v` and paths through `X[k]` are its uses,
+  struct's fields must: not `rational`, `any`, `comparable`, a class, a
+  weak map, or a struct or an enum that is not `<persistable>`); `X[k]`, `set X[k] = v` and paths through `X[k]` are its uses,
   and any other use of `X`, reading or replacing the whole map, is refused
   ("The complete map can neither be read nor replaced"); at most four with
   `<persistent>` keys, and at that limit one of them with a class value

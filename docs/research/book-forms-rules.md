@@ -1,8 +1,9 @@
 # Rules of the forms of expressions, statements and the library
 
 The rules openverse takes from the Book of Verse for the causes of [the map
-of forms](book-test-conformance.md#forms-of-expressions-statements-and-the-library-a-map),
-each pinned with the Book's words, its prose and its tests, at the
+of forms](book-test-conformance.md#forms-of-expressions-statements-and-the-library-a-map)
+and of [the map of the forms still on the
+list](book-test-conformance.md#the-forms-still-on-the-list-a-map), each pinned with the Book's words, its prose and its tests, at the
 revision the other notes pin
 ([`beaa719`](https://github.com/verselang/book/tree/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0)):
 a chapter is `docs/NN_*.md` and a line, a test `Tests/FILE:LINE`. Each
@@ -550,3 +551,27 @@ name of its own first (`$setRoot…`, a block `{R := root; set R.… = v}`),
 and writes a path's key of several values as their tuple. No program that
 compiled changes. **Left:** `set live` (VerseVM's live variables).
 
+
+## A `<persistable>` struct's enum
+
+**The rule.** An enum persists only when it is `<persistable>`: a
+`<persistable>` struct's field, and the value of a module-scoped `weak_map`
+keyed by a `<persistent>` class, may be of an enum only when the enum is
+`<persistable>`.
+
+**The Book.** Ch. 17 (`17_persistable.md:190`), among what cannot persist:
+"Non-persistable enums - Enums without `<persistable>` specifier cannot be
+used". The tests: `enum1 := enum: A` as a field `G:enum1` of a
+`struct<persistable>` is refused (`Tests/persistable.versetest:59`, 3662),
+as are the struct's other fields that do not persist (`:51`, `:55`, `:65`).
+
+**openverse before.** The parser took an enum's `<persistable>` and dropped
+it, and every enum was taken to persist.
+
+**openverse now.** An enum keeps its specifiers (`SExpr.enumDef`'s list:
+`<open>`, `<closed>`, `<persistable>`), and the two places that ask what
+persists, a `<persistable>` struct's fields (`typeEnvironment`) and a
+module-scoped variable's value (`ModuleVars.Defs.persists`), take an enum
+when it is `<persistable>`. No program that compiled changes: none of
+openverse's tests, generators or the corpus has an enum where a value must
+persist.
