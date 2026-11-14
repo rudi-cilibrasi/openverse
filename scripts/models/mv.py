@@ -218,7 +218,8 @@ FOR_RULE = ['old']    # (the rule of the innermost for being run)
 # or `case` that picks a branch with a choice, an `or` with one on its right),
 # call (a call of a function or method with several values, anywhere in the
 # clauses, nested failure contexts included).
-MANY_VALUED = {'mcall', 'rcall', 'gcall', 'gself', 'rt', 'rt2', 'rt3', 'nam', 'mvm', 'mvm2',
+# mvm2 is the ordinary two-argument overload; only its arguments can choose.
+MANY_VALUED = {'mcall', 'rcall', 'gcall', 'gself', 'rt', 'rt2', 'rt3', 'nam', 'mvm',
                'ovl', 'ows', 'ow2', 'om', 'owr', 'gx', 'gchoice', 'gbif', 'gblk'}
 
 

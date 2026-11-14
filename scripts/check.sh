@@ -8,7 +8,7 @@
 # runs them one after another. CHECK_JOBS must be a positive integer.
 #
 # Each fuzz range starts at seed FUZZ_SEED (default 1), and its count comes from its own variable
-# (FUZZ_MODEL_MV=1400, …): the nightly workflow (.github/workflows/fuzz-nightly.yml) runs ten times
+# (FUZZ_MODEL_MV=140, …): the nightly workflow (.github/workflows/fuzz-nightly.yml) runs ten times
 # the counts from a seed that changes each day, and `FUZZ_SEED=N scripts/check.sh` reproduces it.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -217,6 +217,8 @@ check "choice model fuzzing (${FUZZ_MODEL_MV:-140} programs, functions with seve
   scripts/fuzz-model-mv.sh "${FUZZ_MODEL_MV:-140}" "$seed"
 check "choice model regression (an overflow in a method's set before its caller prints)" \
   scripts/fuzz-model-mv.sh 1 4594
+check "choice model regression (single-value method overload, seed 632113)" \
+  scripts/fuzz-model-mv.sh 1 632113
 check "generic functions with several values (${FUZZ_MODEL_GENERIC:-150} programs, against a model of the docs)" \
   scripts/fuzz-model-generic.sh "${FUZZ_MODEL_GENERIC:-150}" "$seed"
 check "generic choice regression (omitted named argument in a <decides> wrapper)" \
