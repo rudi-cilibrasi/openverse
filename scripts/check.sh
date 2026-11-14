@@ -226,6 +226,8 @@ check "concurrency fuzzing (${FUZZ_CONC:-160} programs)" scripts/fuzz-conc.sh "$
 check "polymorphic-recursion concurrency fuzzing (${FUZZ_CONC_POLY:-60} programs, #244)" \
   scripts/fuzz-conc-poly.sh "${FUZZ_CONC_POLY:-60}" "$seed"
 check "heap-reclamation fuzzing (${FUZZ_FIELDS:-60} programs with array fields)" scripts/fuzz-fields.sh "${FUZZ_FIELDS:-60}" "$seed"
+check "weak map model fuzzing (${FUZZ_WEAKMAP:-200} programs, against a model of the maps)" \
+  scripts/fuzz-weakmap.sh "${FUZZ_WEAKMAP:-200}" "$seed"
 
 failed=()
 for i in "${!titles[@]}"; do

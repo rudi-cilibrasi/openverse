@@ -26,7 +26,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Comments | `#` to the end of the line, nested `<# … #>`, `<#>` indented comments (the rest of the line and every following line indented more than it; see [Source text](#source-text)) | ch. 0 |
 | Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` an ASCII character other than a line break, a tab included, or an escape; a non-ASCII one, `'é'`, is a `char32`, Book of Verse ch. 1), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates), `float` `1.5`, `2.0e-7`, `1e3`, `12.34f64`, `1234f64` (digits, then a point and digits or an exponent or both, or the suffix `f64`, which may follow either; the nearest double, which must be finite: `2.0e308` is refused; `f32` and `f16` are read and refused as not supported); paths `/Verse.org/Random` parse (in `using{…}`, ignored; as values, refused; see [Source text](#source-text)) | §1.3–1.7 |
 | Types | `int`, `logic`, `char`, `char32`, `any` (see [any](#any)), `comparable` (see [comparable](#comparable)), `rational` (see [rational](#rational)), `float` (see [float](#float)), refinement types `type{_X:int where 0 <= _X, _X <= 120}` (see [Refinement types](#refinement-types)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void` (which takes any value; `tuple()` is the type of the empty value alone, see [Equality and the empty value](#equality-and-the-empty-value)), function types `type{_(:int)<decides>:int}`, with named parameters `type{_(:int, ?B:int):int}`, and `int->int` (see [Function values](#function-values)); type aliases `player_id := int`, `pair(t:type) := tuple(t, t)` (see [Type aliases](#type-aliases)); types as values of classes and interfaces, `subtype(c)`, `castable_subtype(c)`, `concrete_subtype(c)` and `type` (see [Types as values](#types-as-values)); a conversion written as a call, `int(0)`, `void(0)`, `(?int)(option{0})`, `s(s{})`, of a value of a type that is a subtype of the one named; a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
-| Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e`, which state their type there as in a module (ch. 16: "type inference with `:=` alone is not allowed"; `C := e` names a type, when `e` is one: [Type aliases](#type-aliases)) (definitions on one line, at the top level, in a module or in a block, are separated by `;` or `,`: `X:int=0, Y:int=0`; a constant may use one defined before it in its own scope, a module's or the top level's, and one of another module or of an enclosing scope wherever it is defined, as the Book's tests have it (`DefaultValueAssignment.versetest` 102, 128); not itself, directly or through other constants); locals `X := e`, `X:t = e`, `var X:t = e`, and a tuple destructured, `(X:int, _, Z:string) = e` (each named element a local of the block, `_` skipping one, `e` evaluated once); no shadowing; no name defined twice in a scope but [overloaded](#overloading) functions; no [reserved name](#reserved-names) | §3.1–3.4 |
+| Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e`, which state their type there as in a module (ch. 16: "type inference with `:=` alone is not allowed"; `C := e` names a type, when `e` is one: [Type aliases](#type-aliases)) (definitions on one line, at the top level, in a module or in a block, are separated by `;` or `,`: `X:int=0, Y:int=0`; a constant may use one defined before it in its own scope, a module's or the top level's, and one of another module or of an enclosing scope wherever it is defined, as the Book's tests have it (`DefaultValueAssignment.versetest` 102, 128); not itself, directly or through other constants); module-scoped `var X:weak_map(k, v) = map{}` (see [Module-scoped variables](#module-scoped-variables)); locals `X := e`, `X:t = e`, `var X:t = e`, and a tuple destructured, `(X:int, _, Z:string) = e` (each named element a local of the block, `_` skipping one, `e` evaluated once); no shadowing; no name defined twice in a scope but [overloaded](#overloading) functions; no [reserved name](#reserved-names) | §3.1–3.4 |
 | Mutation | `set X = e`, `set X += e` (`-=`, `*=`), `set A[i] = e` (fails out of range; returns `e`), and paths `set S.F.G = e`, `set A[i][j] op= e`, `set M[k].F = e`: indices and keys evaluated once, left to right, then the new value, then the variable rebuilt (for `op=`, the old value is read after the new one, from the variable as the new one left it, which is then rebuilt from that: `set X += e` is `V := e; set X = X + V`, the Book's tests, `ArrayAppend.versetest` 140, 183); an index out of range or a missing intermediate key fails, while the last key of a path inserts | §3.3, §3.5, §9.3 |
 | Blocks | indented (`:`), braced (`{ }`), inline (`then`/`do`), `.` and an expression on its line wherever `:` or `{…}` may start a body (`if (c). e else. f`, `for (X:Xs). e`, `spawn. F()`, `loop. break`; also `option`, `logic`, and `array` and `map`, whose `:` blocks separate their items by `,`, `;` or new lines: `array:` and the lines `1`, `2`; in braces an array's elements are separated by commas, or by `;` and new lines, not both: `array{1; 2; 3}`), `block:`, `( a; b )` sequences, also as an argument (`F(Log(); 42)` passes 42) and as a `case`'s value (`case(a; b)`); `;` and new lines separate the items of a block, and `;` may end a line or a braced block (`{1; 2;}` is `{1; 2}`) (the next item then follows the line rules, so a class's last field may end in `;`); in a block, statements that commas join on a line are a tuple (ch. 1, "Semicolons vs Commas", and its tests, `SemicolonsVsCommas.versetest` 70, 95, 100: `{1.0, 2}` is a `tuple(float, int)`, `option{1, 2}` holds `(1, 2)`, `for (X := 1..2) {3, X}` is an array of pairs), definitions joined so are the block's definitions in turn (`X:int = 0, Y:int = 0`), and a group of definitions and values is each in order, a definition visible to what follows it, then the tuple of their values (`option{V := 3, V > 0, V}` holds `(3, 3, 3)`, a `var`'s value taken where it is defined); the clauses of `if`, `for`, `first` and the clause macros, the arms of `sync`, `race` and `rush`, a construction's fields and an array's or map's items keep commas as separators; a comma that starts a line is not the block's but the list's around it; a body after `:` may be empty wherever one may be written, as `{}` may (`class:`, `struct:`, `then:`, … whose next line is no deeper than the construct, or nothing follows); a function's or method's braced body may put its `{` on the next line, at the definition's column; a value after `=`, `:=`, `set … =` or a `case` arm's `=>` that starts a later line, deeper, is the indented block of those lines (`Value :=` and the lines `1`, `2`, `3` is `3`; and the line `1, 2, 3`, `(1, 2, 3)`), as a function's body is | §2.2–2.4 |
 | Operators | `* + -`, unary `-`, comparisons `= <> < <= > >=` (failable, return the left operand, chains check every pair; `=` and `<>` of any two comparable types, by value: see [Equality and the empty value](#equality-and-the-empty-value)), `and` (a scope of its own, ch. 7: names its left operand defines are visible on its right, and neither side's escape; `A and B and C` is `(A and B) and C`), `or`, `not` (below the comparisons, above `and`: `not X = Y` is `not (X = Y)`), `?`, `.Length`, `A[i]`, `T(k)` | ch. 4 |
@@ -40,7 +40,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Parametric structs | `pair(t:type, u:type) := struct:`, the type `pair(int, string)`, values `pair(int, string){First := 1, Second := "a"}` (or `pair{…}` where the expected type gives the type arguments); see [Parametric structs](#parametric-structs) | ch. 9 |
 | Classes | `name := class:` and `name(t:type) := class:` with fields and methods; `class(parent, interface, …)` (`class()` has none, as `class`; a type `t()` or value `t(){…}` with no type arguments is `t`, `t{…}`), `interface`, `<abstract>`, `<override>`, `<final>`, `(super:)`, virtual dispatch, casts `T[X]` and `T(X)`, `var` fields; see [Classes](#classes) | ch. 10 |
 | Enums | `name := enum:` / `enum{A, B}`, `name.A`, equality, `case` that needs no `_` when every value is named (an enumerator is its index in Verse Core); `enum<open>` may gain values, so a `case` on one needs `_` or a failure context (`<closed>` is the default) | ch. 9 |
-| Maps | `[k]v`, `map{k => v, …}` (a key given twice keeps its last value, at its last position), `M[k]` (fails on a missing key), `set M[k] = v` (insert or update; in Verse the key's reference is `<decides>`, the Book's API reference, so such a `set`, also as a path's last step, `set S.M[k] = v`, is written in a failure context, as the Book's tests do, `if (set M0[0] = 42)`, `(set Map[I] = I) or Err()`; its last key inserts, so it succeeds; its value is `v`), `set M[k] op= v` (fails on a missing key), `.Length`, `for (V : M)`, `for (K -> V : M)` in insertion order, `ConcatenateMaps(M1, M2)` (exactly two maps, ch. 3: more by chained calls; their pairs laid down in turn, as `map{…}` lays its own: a key both maps have takes the second map's value at the second map's place, the Book's API reference and `ConcatenateMaps.versetest` 21, 33), order-sensitive equality (a map is the array of its pairs in Verse Core) | §3, §9.3 |
+| Maps | `[k]v`, `map{k => v, …}` (a key given twice keeps its last value, at its last position), `M[k]` (fails on a missing key), `set M[k] = v` (insert or update; in Verse the key's reference is `<decides>`, the Book's API reference, so such a `set`, also as a path's last step, `set S.M[k] = v`, is written in a failure context, as the Book's tests do, `if (set M0[0] = 42)`, `(set Map[I] = I) or Err()`; its last key inserts, so it succeeds; its value is `v`), `set M[k] op= v` (fails on a missing key), `.Length`, `for (V : M)`, `for (K -> V : M)` in insertion order, `ConcatenateMaps(M1, M2)` (exactly two maps, ch. 3: more by chained calls; their pairs laid down in turn, as `map{…}` lays its own: a key both maps have takes the second map's value at the second map's place, the Book's API reference and `ConcatenateMaps.versetest` 21, 33), order-sensitive equality (a map is the array of its pairs in Verse Core); a key of a class above or beside the map's key class reads, looked up at the class above both; `weak_map(k, v)`, a supertype of `[k]v` with entry access only (see [Weak maps](#weak-maps)) | §3, §9.3 |
 | Array methods | (also of a tuple of one element type, which is an array where one is expected: `('a', 'b', 'c').Slice[1]`) `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`, `A.RemoveFirstElement[x]`, `A.Remove[i, j]` (half-open), `A.ReplaceElement[i, x]`, `A.ReplaceFirstElement[x, y]`, `A.Insert[i, B]`, `A.Last[]`, `A.Last[n]` (the element n before the last) (all failable); `A.RemoveAllElements(x)`, `A.ReplaceAllElements(x, y)`, `A.ReplaceAll(Pattern, Replacement)` (contiguous subarrays, left to right, not overlapping; an empty pattern changes nothing), `Concatenate(A, B, …)` or `Concatenate(Arrays)` (#150) (never failing) | §9.1 |
 | Built-ins | `Print(s)`, `ToString(x)` (int, float, char, string), `Floor[F]`, `Ceil[F]`, `Round[F]`, `Int[F]` (of a float, failable), `Floor(R)`, `Ceil(R)` (of a rational or an int, never failing; `Floor(X / Y)` fails when `Y = 0`, as `X / Y` does), `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Clamp(Val, A, B)` (the median of the three, of ints or of floats, NaN ordering above +Inf), `Sgn(X)` (-1, 0 or 1 of an int or a float, NaN of NaN), `F.IsFinite[]` (as `IsFinite[F]`), `BitAnd(X, Y)`, `BitOr`, `BitXor`, `BitNot(X)`, `BitShiftLeft[X, N]`, `BitShiftRight[X, N]` (see [Bitwise functions](#bitwise-functions)), `Err()` and `Err(Message)` (stops the program; ch. 8: "a runtime error with an optional message", the API reference `Err(Message:string)`: no argument or one string, which is evaluated first); a built-in given another number of arguments than it takes is refused (`Quotient takes two ints, found 3 argument(s)`); the conversions of chars and code points as methods (see [char32](#char32)): `C.ToCodeUnit()`, `C.ToAsciiChar32[]` of a char, `C.ToCodePoint()`, `C.ToAsciiString()` of a char32, `N.ToChar[]`, `N.ToChar32[]` of an int | API reference |
 | Modules | `name := module:` (nested), `M.F`, `A.B.F`, the types `M.c` and values `M.c{…}`, `(M:)F`, `using{M}` at file or module scope, `<public>` members (`<internal>` is the default); see [Modules](#modules) | ch. 16 |
@@ -2232,6 +2232,112 @@ Main():void =
   parameters converted to `comparable` (`X:comparable = P`, `P:p(t)`); and
   `case` on a `comparable`.
 
+## Weak maps
+
+`weak_map(k, v)` (Book of Verse ch. 3, "Weak Maps"; the rules, the tests and
+the design are in [research/weak-map.md](research/weak-map.md)) is a
+supertype of `[k]v` that keeps only entry access: "It behaves similarly to
+ordinary maps for individual entry access, but deliberately restricts bulk
+operations."
+
+```verse
+base_class := class<unique> {}
+derived_class := class(base_class) {}
+Main()<decides>:void =
+    var W:weak_map(int, int) = map{}
+    set W[0] = 1                        # insert or update, in a failure context
+    W[0] = 1                            # fails when the key is absent
+    set W = map{0 => 2}                 # a local is replaced whole
+    if (set W[5] = 5, false?) {}        # undone with the failure context
+    not W[5]
+    K := derived_class{}
+    M:[derived_class]int = map{K => 3}
+    B:weak_map(base_class, int) = M     # a map is one, and keys are covariant
+    B[K] = 3
+```
+
+- **The type.** `k` must be comparable. A `[k]v` converts to a
+  `weak_map(k', v')` and a `weak_map(k, v)` to a `weak_map(k', v')` when `k`
+  is below `k'` and `v` below `v'` (ch. 3, "Covariance"); nothing converts a
+  weak map to a map or to `comparable`, and a weak map has no `=`. A weak map
+  and a map join at a weak map (`if (c) then W else map{…}`), and a function
+  of a `[int]int` and one of a `weak_map(int, int)` join at a function of a
+  `[int]int`. It may be a local, a parameter, a result, a field of a class
+  or a struct (not a `<persistable>` one's: it does not persist, ch. 17), an
+  element of a container and a type argument.
+- **Entries** are a map's: `W[k]`, `set W[k] = v` (in a failure context, as
+  a map's), `set W[k] op= v`, and paths through an entry, `set W[k].F = v`,
+  `set W[k][i] = v`, with their rollback. A key of a class above or beside
+  the map's key class reads (`W[K]` with `K` of a class above the keys': it
+  is looked up at the class above both, as the API's
+  `operator'()'(Map:weak_map(t, u), Key:t)` takes it; a map's too); a write
+  needs a key of the map's key type.
+- **Refused**: `W.Length`, `for (X : W)`, `ConcatenateMaps` of one, `=` and
+  `<>`, `comparable(W)`, a weak map where a map is expected, and a weak map
+  as a map's key; each with the Book's words ("There is no `Length`
+  property, no iteration, no coercion to `comparable`"). There is no
+  removal: a map's entries are removed by iterating it, which a weak map
+  cannot be.
+- **Weak keys.** No program can tell whether an entry whose key is no
+  longer referenced is still there: a weak map is read only by `W[K]`, with
+  a key equal to the entry's, and a key that holds an object is equal only
+  to one holding the same object, which a program that holds it keeps
+  alive. openverse never reclaims objects, and holds a weak map as a map,
+  the array of its pairs in Verse Core; the argument is
+  [research/weak-map.md](research/weak-map.md), "Is weakness observable?".
+- Not yet: `weak_map(…)` as a value (`t := weak_map(int, int)` in a body),
+  as types as values are classes' and interfaces' only.
+
+## Module-scoped variables
+
+A `var` at the top level or in a module is a variable of the program (Book
+of Verse ch. 3, "Module-Scoped weak_map Variables"; ch. 16, "Module-Scoped
+Variables"; ch. 18, "Persistent Variables";
+[research/weak-map.md](research/weak-map.md)), and it is only ever a
+`weak_map`, read and written one entry at a time:
+
+```verse
+key := class<unique><persistent><module_scoped_var_weak_map_key>:
+    Id:int
+saved := struct<persistable>:
+    Level:int = 1
+progress := module:
+    var Levels<public>:weak_map(key, saved) = map{}
+    GetLevel<public>(K:key)<transacts>:int =
+        if (S := Levels[K]) then S.Level else 1
+    SetLevel<public>(K:key, L:int)<transacts><decides>:void =
+        set Levels[K] = saved{Level := L}
+```
+
+- **The rules**, each refused otherwise, as the Book's tests refuse them
+  (3502): its type is a `weak_map` ("Direct `var` declarations of simple
+  types (like `var X:int = 0`) are not allowed at module scope"); its key
+  type a class with `<module_scoped_var_weak_map_key>`; when that class is
+  `<persistent>`, its value type persists (ch. 17, as a `<persistable>`
+  struct's fields must: not `rational`, `any`, `comparable`, a class or a
+  weak map); `X[k]`, `set X[k] = v` and paths through `X[k]` are its uses,
+  and any other use of `X`, reading or replacing the whole map, is refused
+  ("The complete map can neither be read nor replaced"); at most four with
+  `<persistent>` keys, and at that limit one of them with a class value
+  (the tests' "Set to 4 for VerseTestScriptCmd", `weak_map.versetest`
+  623-664). `<persistent>` and `<module_scoped_var_weak_map_key>` are class
+  specifiers.
+- **Uses.** An entry is read with `<reads>` and written with `<writes>`
+  (`<transacts>` has both), from any function, method, `<suspends>`
+  function or task, and a failure context undoes the writes in it. A local,
+  parameter or member named like one is refused, as for a constant. Its
+  name's access is the module's (`<public>` to be used outside it).
+- **Its value** starts as `map{}` before `Main` runs and lives until the
+  program ends: the `var` fields of one object made by `Main`'s prelude
+  (`$module_state`, [DESIGN.md](DESIGN.md#weak-maps-and-module-scoped-vars)).
+- Not yet: an initial value with entries (every module-scoped `var` of the
+  Book starts as `map{}`), and so a declaration with none, `var X:t` on its
+  line (valid syntax, the Book's tests, `Pointers.versetest:4`; refused, as
+  openverse has no variables defined elsewhere); `var<w>` write access on one; the engine's key
+  types (`player`, `session`, `persistent_key`, `session_key`), and
+  persistence itself: openverse runs one program, whose module state starts
+  empty.
+
 ## Types as values
 
 A class or an interface is a value of a *metatype* (Book of Verse ch. 11,
@@ -3254,7 +3360,7 @@ Main()<suspends>:void =
 ## Not supported in v1
 
 `ToString` of rationals (see [rational](#rational)), float functions beyond those of [float](#float), the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
-`weak_map`, what [comparable](#comparable) lists as not yet, module paths `using{/Verse.org/…}` (accepted and ignored), paths as values and path qualifiers other than `(/Verse.org/Verse:)` of a built-in type, two members of one name in a class (`(c:)M` beside an inherited `M`, Book ch. 10), the
+what [Weak maps](#weak-maps) and [comparable](#comparable) list as not yet, module paths `using{/Verse.org/…}` (accepted and ignored), paths as values and path qualifiers other than `(/Verse.org/Verse:)` of a built-in type, two members of one name in a class (`(c:)M` beside an inherited `M`, Book ch. 10), the
 specific overload/call gaps listed under [Overloading](#overloading), nested
 functions and lambdas (a lambda, `(X:int) => X`, `a => b`, parses, as the Book's tests have it, and is refused; see [release evidence and proposed design](research/closure-design.md)),
 pointers (`e^` and `^t` parse, as the Book's tests have them, and are refused: the Book's chapters define none), specifiers on a macro's name (`for<par>(…)`, parsed and refused, 3604), declarations with no body (`F():void`, `X:int` on their line: parsed and refused, as openverse has no definitions made elsewhere), choice beyond [Choice](#choice), concurrency beyond [Concurrency](#concurrency), and the unsupported

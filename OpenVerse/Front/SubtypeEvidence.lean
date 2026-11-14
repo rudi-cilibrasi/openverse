@@ -21,7 +21,7 @@ where
   go (seen : List String) : Ty → List Bound
     | .arr ty | .opt ty => go seen ty
     | .tup tys => tys.flatMap (go seen)
-    | .map key value => go seen key ++ go seen value
+    | .map key value | .weakMap key value => go seen key ++ go seen value
     | .struct owner args =>
       let nested := args.flatMap (go seen)
       if seen.contains owner then nested else
@@ -307,7 +307,7 @@ where
   go (owners : List String) (parameters : List String) : Ty → Bool
     | .arr t | .opt t => go owners parameters t
     | .tup ts => ts.any (go owners parameters)
-    | .map k v => go owners parameters k || go owners parameters v
+    | .map k v | .weakMap k v => go owners parameters k || go owners parameters v
     | .param name _ => !parameters.contains name && env.boundFacts.any fun (upper, lower) =>
         lower == .param name false && go owners (name :: parameters) upper
     | .struct name args =>

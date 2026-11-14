@@ -278,6 +278,10 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       let rs ← elabContainerReceiverWith elabE c gp rs (fun
         | .arr _ | .map .. => true
         | _ => false) "iteration"
+      -- (a weak map has none, Book of Verse ch. 3: "you cannot iterate over
+      -- its entries", `weak_map.versetest:130`, 3524)
+      if let .weakMap .. := rs.ty then
+        eerr gp s!"a weak_map cannot be iterated (Book of Verse ch. 3: \"There is no `Length` property, no iteration, no coercion to `comparable`\"): {rs.ty.show} keeps only its entries' W[Key] and set W[Key] = …"
       match rs.ty with
       | .map kt vt =>
         -- `for (V : M)` and `for (K -> V : M)`: over the (key, value) pairs
