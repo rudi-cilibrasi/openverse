@@ -28,8 +28,9 @@ accessors, type arguments and
 metatypes](#after-fields-with-accessors-type-arguments-and-metatypes),
 the weak maps and module-scoped `var`s of [After weak maps and
 module-scoped vars](#after-weak-maps-and-module-scoped-vars), the
-fixes of [After the found bugs](#after-the-found-bugs) and the classes
-and subtyping of [After classes and subtyping](#after-classes-and-subtyping),
+fixes of [After the found bugs](#after-the-found-bugs), the classes
+and subtyping of [After classes and subtyping](#after-classes-and-subtyping)
+and the variance of [After variance](#after-variance),
 against the Book at
 [`beaa719ba165cbf33eff462f2b0fe078a6dd9ab0`](https://github.com/verselang/book/tree/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests),
 the revision the other research notes pin. The Book's
@@ -57,11 +58,13 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   APIs (persistence, JSON, natives; 345); compiler tooling such as bytecode
   and digests (128); VM-conditional code inside a definition (37) and one
   file that defines `Main` itself (1).
-- Of the **9,588 translatable cases**, openverse **agrees on 8,452 (88%)**,
-  refuses 964 valid programs, **accepts 84 refused ones**, gives a
+- Of the **9,588 translatable cases**, openverse **agrees on 8,499 (89%)**,
+  refuses 917 valid programs, **accepts 84 refused ones**, gives a
   **different result in 88** (82 of them `verse_vm_only` cases of unbounded
-  ints) and hits **no internal error** ([After classes and
-  subtyping](#after-classes-and-subtyping); on main `fdb1127`, before it:
+  ints) and hits **no internal error** ([After variance](#after-variance);
+  on main `215af57`, before it: 8,452 agreed, 964 refused, 84 accepted, 88
+  differed, with [After classes and
+  subtyping](#after-classes-and-subtyping); on main `fdb1127`, before that:
   8,290 agreed, 1,123 refused, 87 accepted, 88 differed, with [After the
   remaining causes](#after-the-remaining-causes), [After weak maps and
   module-scoped vars](#after-weak-maps-and-module-scoped-vars) and [After
@@ -100,11 +103,11 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   `for` undoes](#after-what-a-for-undoes); with each alone, 8,131 agreed,
   1,422 refused, 135 accepted, 95 differed, and 8,121, 1,439, 135, 88.)
 - An agreement on an expected error is weak evidence: 2,992 expected errors
-  agree, but only 1,533 of them are refused by a check of a language rule
+  agree, but only 1,539 of them are refused by a check of a language rule
   (and 39 more, whose codes are all warnings, get openverse's warning);
-  1,063 are refused by the parser (the lexer's and parser's own checks
+  1,057 are refused by the parser (the lexer's and parser's own checks
   included) and 357 for a missing feature (counts of the run of [After
-  classes and subtyping](#after-classes-and-subtyping)).
+  variance](#after-variance)).
 - **Internal errors**: none ([Internal errors](#internal-errors)). The three
   programs that failed `Prog.checkTypes` (`X:int = return`, `() = ""`, a
   `void` parameter compared with `""`) are refused or compile, and Lean's
@@ -289,17 +292,17 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| all test cases (assertions and files without one) | 13197 | 8282 | 84 | 920 | 88 | 3823 | 0 |
+| all test cases (assertions and files without one) | 13197 | 8329 | 84 | 873 | 88 | 3823 | 0 |
 | shared definitions of a file (`:decls`) | 307 | 170 | 0 | 44 | 0 | 93 | 0 |
-| **total** | 13504 | 8452 | 84 | 964 | 88 | 3916 | 0 |
+| **total** | 13504 | 8499 | 84 | 917 | 88 | 3916 | 0 |
 
 ### By form
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `assert` | 6671 | 3626 | 0 | 643 | 88 | 2314 | 0 |
+| `assert` | 6671 | 3639 | 0 | 630 | 88 | 2314 | 0 |
 | `assert_semantic_error` | 3460 | 2670 | 47 | 0 | 0 | 743 | 0 |
-| `assert_valid` | 1637 | 912 | 0 | 206 | 0 | 519 | 0 |
+| `assert_valid` | 1637 | 946 | 0 | 172 | 0 | 519 | 0 |
 | `assert_valid_syntax` | 439 | 386 | 0 | 53 | 0 | 0 | 0 |
 | `decls` | 307 | 170 | 0 | 44 | 0 | 93 | 0 |
 | `assert_roundtrip` | 304 | 293 | 0 | 9 | 0 | 2 | 0 |
@@ -322,7 +325,7 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| no VM restriction | 12208 | 8064 | 46 | 661 | 5 | 3432 | 0 |
+| no VM restriction | 12208 | 8111 | 46 | 614 | 5 | 3432 | 0 |
 | `verse_vm_only` | 702 | 213 | 5 | 296 | 83 | 105 | 0 |
 | `bp_vm_only` | 366 | 80 | 33 | 1 | 0 | 252 | 0 |
 | `verse_vm_todo` (BPVM only; a known VerseVM failure) | 219 | 95 | 0 | 6 | 0 | 118 | 0 |
@@ -332,9 +335,9 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| (top level) | 5575 | 3607 | 42 | 651 | 3 | 1272 | 0 |
+| (top level) | 5575 | 3645 | 42 | 613 | 3 | 1272 | 0 |
 | Operators/ | 1203 | 1100 | 0 | 2 | 28 | 73 | 0 |
-| Bugs/ | 1185 | 759 | 33 | 124 | 0 | 269 | 0 |
+| Bugs/ | 1185 | 768 | 33 | 115 | 0 | 269 | 0 |
 | Literals/ | 1020 | 834 | 0 | 7 | 0 | 179 | 0 |
 | Serialization/ | 991 | 0 | 0 | 0 | 0 | 991 | 0 |
 | Attributes/ | 795 | 535 | 4 | 10 | 0 | 246 | 0 |
@@ -1855,6 +1858,50 @@ merged compiler; `compare` after each commit: 0 worse).
   (`tests/scripts/test-construction-effects.py`) checks `<computes>` with
   each heap subset instead of its refusal.
 
+## After variance
+
+The variance of parametric classes and interfaces (ch. 10, "Instantiation
+and Identity"), built in Verse Core with its proofs and in the front end
+([variance.md](variance.md)), on main `215af57`. Against main's baseline
+(8,452 agree, 964 refuse, 84 accept, 88 differ, 3,916 not translatable),
+47 cases more agree and none is worse: **8,499 agree, 917 refuse, 84
+accept, 88 differ, 3,916 not translatable** (re-recorded from a fresh run;
+`compare`: 0 worse, 47 better).
+
+| Form | Rule (where) | Agree now | Left |
+|---|---|---|---|
+| a class's or interface's instances by variance | each type parameter covariant, contravariant, invariant or bivariant by its uses in the members, inherited ones included, function types' parameters contravariant (ch. 10; `TyEnv.bookVariances`); a conversion also needs Verse Core's subtyping of the two references, by each concrete class's variances (`Sigs.inferVariances`, `refUp`) | 38: `ParametricTypes.versetest` 59-156 (32: each kind for classes and interfaces, directly, through a class or interface below, with methods and with function-typed fields), 174-177 (4: instances of the file's shared classes), 506, 537 | |
+| joins and conversions by variance | at an expected type, both at it; without one, a class above both at its arguments' join by variance (`joinTyShaped`) | 9: `SOL-6739-ParametricTypeMeetAndJoin.versetest` 6, 11, 16, 25, 99, 104, 109, 122, 216 | 6: 38, 138 (to an instance at `any`, which holds no value in openverse); 58, 74, 161, 177 (a contravariant interface or class whose implementation holds the parameter in a field, `Data:t`: Verse Core types a reference by its object's own class) |
+| an archetype block with no fields | `X := c(args):` with nothing indented below is `c(args){}` (the Book's tests; `Parser`) | (needed by the archetype-blocks cases) | the 31 archetype-blocks cases now stop at `default_param.class1` defined twice: a type named at two arities, `class1(t)` and `class1()` (`i()` beside `i(t)`), in a module that each case includes (harness over-inclusion) |
+
+- **Per cause, at `215af57` and now:** variance 38 → 0 (38 agree);
+  archetype-blocks 31 → 0 (they parse and reach `types-other`: the type
+  named at two arities); subtyping-to-any 11 → 5 (6 `SOL-6739` agree);
+  joins 16 → 13 (3 `SOL-6739` agree); types-other 118 → 149 (the 31).
+- **Moved the wrong way:** none.
+- **Where the Book disagrees with itself:** the tests comment out the
+  variance of a class with a `var` field, "# TODO: classes containing
+  pointer members aren't allowed." (`ParametricTypes.versetest:163`,
+  `:182`), where ch. 6, "Polarity and Variance", has one as an invariant
+  class: "`c(t:type) := class{var X:t}  # Mutable field makes c invariant
+  in t`" (`06_functions.md:1495`). openverse follows ch. 6: a `var` field of
+  `t` makes its class invariant in `t`.
+- **Left, with what each needs:** the 6 `SOL-6739` cases (`any` holding a
+  value; an override typed at its object's own type arguments and called
+  through the declared signature, in Verse Core: [variance.md](variance.md),
+  "What is left"); the 31 archetype-blocks cases: a type named at two
+  arities.
+- **Programs.** Against main `215af57`, over every suite and the corpus
+  `corpus2` (5,925 programs in both), no program's output, messages or exit
+  code changed; 35 programs' bytes changed (32 of the corpus' `heterogeneous`
+  programs, `tests/verse/choice_heterogeneous_contracts.verse`,
+  `fn_values_method_variance_contexts.verse` and
+  `multi_method_tuple_ordinary_other_receiver_inside_class.verse`): their
+  choices' alternatives are instances of a covariant class at different
+  type arguments (`box(int)` and `box(string)`), which join at the class
+  now (`box(comparable)`), as the Book's subtyping has them, where they were
+  kept apart before; each runs as before, in Lean and in C.
+
 ## Ten causes to remove first
 
 Ranked by cases moved per unit of risk. A count is the upper bound above;
@@ -2286,7 +2333,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/SOL-6137-ConcurrencyMacrosNotIntroducingScope.versetest` | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-6177-SubtypingIgnoresInheritedMembers.versetest` | 7 | 7 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-6529-WarnAboutAlwaysFailingContainerLookups.versetest` | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
-| `Bugs/SOL-6739-ParametricTypeMeetAndJoin.versetest` | 25 | 10 | 0 | 15 | 0 | 0 | 0 |
+| `Bugs/SOL-6739-ParametricTypeMeetAndJoin.versetest` | 25 | 19 | 0 | 6 | 0 | 0 | 0 |
 | `Bugs/SOL-6934-OptionTypeIgnoresHashabilityOfValue.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
 | `Bugs/SOL-6945-JoinOfTupleOfNamedElementsAndArray.versetest` | 8 | 6 | 0 | 2 | 0 | 0 | 0 |
 | `Bugs/SOL-7017-AvailableAttributeOnlyUsesDefinitionPackageVersion.versetest` | 4 | 0 | 0 | 0 | 0 | 4 | 0 |
@@ -2553,7 +2600,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `PackageCycles.versetest` | 15 | 0 | 0 | 0 | 0 | 15 | 0 |
 | `ParametricCastingIsDisallowed.versetest` | 11 | 10 | 0 | 1 | 0 | 0 | 0 |
 | `ParametricFunctions.versetest` | 106 | 77 | 9 | 16 | 0 | 4 | 0 |
-| `ParametricTypes.versetest` | 274 | 167 | 0 | 80 | 0 | 27 | 0 |
+| `ParametricTypes.versetest` | 274 | 205 | 0 | 42 | 0 | 27 | 0 |
 | `Parentheses.versetest` | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | `Path.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `PersistentJson.versetest` | 103 | 1 | 0 | 0 | 0 | 102 | 0 |

@@ -484,8 +484,9 @@ end
     pins and `fixed` allow (`fixed t i`: argument `i` of class `t` is
     invariant, as a field written through a reference or a view mentions
     it). Found by iterating from all `bi` up to a fixpoint (each step only
-    raises a variance, so at most twice as many steps as arguments);
-    `Sigs.checkVarOK` checks what it gives, whatever it is. -/
+    raises a variance, so at most twice as many steps as arguments, and it
+    stops at the first that changes nothing); `Sigs.checkVarOK` checks what
+    it gives, whatever it is. -/
 def Sigs.inferVariances (S : Sigs) (arity : Nat → Nat) (fixed : Nat → Nat → Bool) : List (List Variance) :=
   let n := S.classes.length
   let total := (List.range n).foldl (fun acc t => acc + arity t) 0
@@ -501,7 +502,10 @@ def Sigs.inferVariances (S : Sigs) (arity : Nat → Nat) (fixed : Nat → Nat �
         if fixed t i || pinned t i then .inv
         else fs.foldl (fun acc f => acc.join (VTy.useOf V i f)) .bi
   let start := (List.range n).map fun t => List.replicate (arity t) Variance.bi
-  (List.range (2 * total + 2)).foldl (fun cur _ => step cur) start
+  let rec go : Nat → List (List Variance) → List (List Variance)
+    | 0, cur => cur
+    | fuel + 1, cur => let nxt := step cur; if nxt == cur then cur else go fuel nxt
+  go (2 * total + 2) start
 
 /-- The type arguments among `args` that a class's pins `ps` fix (#142),
     each with its pin (over the arguments: see `VTy.pinsOK`). -/

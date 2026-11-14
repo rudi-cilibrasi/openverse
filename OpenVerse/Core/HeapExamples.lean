@@ -496,7 +496,7 @@ def tcBox (e : Expr) (m : Option VTy) : Option VTy :=
 example : tcBox (.heap (.get 0) [.local 0]) none = some .int := by native_decide
 example : tcBox (.heap (.get 0) [.local 1]) none = some VTy.str := by native_decide
 example : tcBox (.heap (.set 0) [.local 0, str "six"]) none = none := by native_decide
--- type arguments are not covariant: a box(int) is not a box(string)
+-- with no variances, every class is invariant: a box(int) is not a box(string)
 example : tcBox (.local 0) (some (.ref [0] [VTy.str])) = none := by native_decide
 example : tcBox (.assign 1 (.local 0)) none = none := by native_decide
 -- `new` takes its type arguments from the expected type, else from the fields
@@ -511,6 +511,28 @@ example : tcBox (.heap (.get 0) [.ite (.lit (.logic true)) (.local 0) (.local 1)
   native_decide
 -- a generic call instantiates its type parameter from the reference's arguments
 example : tcBox (.call 0 [.local 1]) none = some VTy.str := by native_decide
+end
+
+/-! Variance (Book of Verse ch. 10; docs/research/variance.md): `box`'s one
+    field only read, `box` may be covariant in its argument. Then a
+    box(int) is a box(comparable) (`dyn`), its field read through that at
+    `dyn`; it is still no box(int) the other way; and a write needs the field
+    invariant (`FieldSet`), so `boxDemo`, which writes it, no longer checks.
+    Variances that the class table does not allow do not check. -/
+
+section
+def boxCoSigs : Sigs := { boxSigs with variances := [[.co]] }
+def tcBoxCo (e : Expr) (m : Option VTy) : Option VTy :=
+  tc boxCoSigs [.ref [0] [.int], .ref [0] [.dyn]] .void e m
+
+example : boxCoSigs.checkVarOK = true := by native_decide
+example : tcBoxCo (.local 0) (some (.ref [0] [.dyn])) = some (.ref [0] [.dyn]) := by native_decide
+example : tcBoxCo (.assign 1 (.local 0)) none = some (.ref [0] [.dyn]) := by native_decide
+example : tcBoxCo (.heap (.get 0) [.local 1]) none = some .dyn := by native_decide
+example : tcBoxCo (.local 1) (some (.ref [0] [.int])) = none := by native_decide
+example : tcBoxCo (.heap (.set 0) [.local 0, int 6]) none = none := by native_decide
+example : boxDemo.checkTypes boxCoSigs boxSlots = false := by native_decide
+example : ({ boxSigs with variances := [[.bi]] } : Sigs).checkVarOK = false := by native_decide
 end
 
 /-- A parametric hierarchy: `base(t)` (tag 0, `Value:t`), `pair(t, u) :=
