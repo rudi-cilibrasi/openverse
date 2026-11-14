@@ -279,16 +279,8 @@ end
     (Book of Verse ch. 7: it "cannot be used in positions where a value is
     expected"): not a block's last, whose value is the block's, nor an operand
     (`A and defer{…}`), a branch or a body of its own. -/
-partial def checkDefers (tops : List STop) : Except String Unit := do
-  let goField (fs : List SField) : Except String Unit :=
-    fs.forM fun f => f.default.forM checkDefersIn
-
-  let rec goTop : STop → Except String Unit
-    | .fn _ _ ps _ _ _ body => do ps.forM (·.default.forM checkDefersIn); checkDefersIn body
-    | .const _ _ _ _ (.structDef _ _ _ fs) => goField fs
-    | .const _ _ _ _ e => checkDefersIn e
-    | .classDef _ _ _ _ _ _ _ fs ms => do goField fs; ms.forM goTop
-  tops.forM goTop
+def checkDefers (tops : List STop) : Except String Unit :=
+  tops.forM (·.code.forM checkDefersIn)
 
 /-- A literal value, which neither fails nor has several values. -/
 partial def SExpr.isLiteral : SExpr → Bool
@@ -315,14 +307,7 @@ partial def checkForClauses (tops : List STop) : Except String Unit := do
       cs.forM go; go b
     | .structDef _ _ _ fs => fs.forM fun f => f.default.forM go
     | e => e.children.forM go
-  for t in tops do
-    match t with
-    | .fn _ _ ps _ _ _ body => ps.forM (·.default.forM go); go body
-    | .const _ _ _ _ e => go e
-    | .classDef _ _ _ _ _ _ _ fs ms =>
-      fs.forM fun f => f.default.forM go
-      for m in ms do
-        if let .fn _ _ ps _ _ _ body := m then ps.forM (·.default.forM go); go body
+  tops.forM (·.code.forM go)
 
 /-- The code of a `spawn` cannot leave it: no `return`, and no `break` but
     of a loop inside it (Book of Verse tests, `SpawnAndTask.versetest` 876-892:
@@ -341,14 +326,7 @@ partial def checkSpawnExits (tops : List STop) : Except String Unit := do
     | .app _ (.ident _ "$spawn") [b] false => inSpawn false b
     | .structDef _ _ _ fs => fs.forM fun f => f.default.forM go
     | e => e.children.forM go
-  for t in tops do
-    match t with
-    | .fn _ _ ps _ _ _ body => ps.forM (·.default.forM go); go body
-    | .const _ _ _ _ e => go e
-    | .classDef _ _ _ _ _ _ _ fs ms =>
-      fs.forM fun f => f.default.forM go
-      for m in ms do
-        if let .fn _ _ ps _ _ _ body := m then ps.forM (·.default.forM go); go body
+  tops.forM (·.code.forM go)
 
 /-- A `profile` block is code of a function's, not of an initializer: none
     in a constant's value or a field's default (Book of Verse tests,

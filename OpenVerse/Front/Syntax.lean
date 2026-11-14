@@ -412,6 +412,16 @@ inductive STop where
       (parents : List STy) → (isInterface : Bool) → (fields : List SField) → (methods : List STop) → STop
   deriving Repr, Inhabited
 
+/-- The code of a definition, in the order it is written: a function's
+    parameters' defaults, then its body; a constant's value, or a struct's
+    fields' defaults; a class's or an interface's fields' defaults, then its
+    methods' code. -/
+partial def STop.code : STop → List SExpr
+  | .fn _ _ ps _ _ _ body => ps.filterMap (·.default) ++ [body]
+  | .const _ _ _ _ (.structDef _ _ _ fs) => fs.filterMap (·.default)
+  | .const _ _ _ _ e => [e]
+  | .classDef _ _ _ _ _ _ _ fs ms => fs.filterMap (·.default) ++ ms.flatMap STop.code
+
 /-- The name of the constant that holds a default a function type writes
     (`?N:t = e`) after the definition that writes it, `$typeDefault:N`: the
     elaborator checks it at `t` and drops it (#503). -/

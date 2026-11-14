@@ -69,10 +69,7 @@ partial def SExpr.refusal? : SExpr → Option (Pos × String)
   | .refineDef _ _ _ cs => cs.findSome? SExpr.refusal?
   | e => e.refused? <|> e.children.findSome? SExpr.refusal?
 
-partial def STop.refusal? : STop → Option (Pos × String)
-  | .fn _ _ ps _ _ _ body => (ps.findSome? fun p => p.default.bind SExpr.refusal?) <|> body.refusal?
-  | .const _ _ _ _ v => v.refusal?
-  | .classDef _ _ _ _ _ _ _ fs ms => (fs.findSome? fun f => f.default.bind SExpr.refusal?) <|> ms.findSome? STop.refusal?
+def STop.refusal? (t : STop) : Option (Pos × String) := t.code.findSome? SExpr.refusal?
 
 /-- A definition without the attributes among its specifiers (`@a`). -/
 def STop.withoutAttrSpecs : STop → STop
