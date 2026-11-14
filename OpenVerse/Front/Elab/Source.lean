@@ -257,6 +257,9 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   checkConstantOrder resolved
   let resolved := if opts.extendedDefaults then resolved
     else resolved.map InitializerConvergence.markSource
+  -- Primitive overloads keep their intrinsic convergence contract; the
+  -- program's overloads above retain their ordinary source-call contract.
+  let resolved := resolved ++ BuiltinValues.toStringOverloads resolved
   -- 9. the concurrency prelude; and the source's construction effects,
   --    collected while every definition still has its source identity:
   --    function-value classes, continuation frames and constructor field

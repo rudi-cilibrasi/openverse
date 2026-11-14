@@ -274,6 +274,8 @@ partial def elabExprInitialWith
   | .str p parts =>
     let pieces ← parts.mapM fun part => match part with
       | .text s => pure (Expr.lit (Value.ofString s))
+      | .code (.app p (.ident _ "$interpolationArgs") args false) => do
+        elabToStringWith elabE ctx p (← elabE ctx (.app p (.ident p "ToString") args false) none)
       | .code e => do elabToStringWith elabE ctx e.pos (← elabE ctx e none)
     let _ := p
     match pieces with

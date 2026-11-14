@@ -1,6 +1,7 @@
 /- Elaboration of a program's signatures (phases 10–12 of `elabProgramCore`); public
    declarations retain OpenVerse.Front names. -/
 import OpenVerse.Front.Elab.Classes
+import OpenVerse.Front.BuiltinValues
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -38,7 +39,7 @@ def functionOverloads (env : TyEnv) (allTops : List STop) (methodOverloads : Met
     | .fn p n ps tps effs ret body =>
       if ovNames.contains n then
         if n == "Main" then throw s!"{p.show}: Main cannot be overloaded"
-        if builtins.contains n then throw s!"{p.show}: '{n}' is a built-in function"
+        if builtins.contains n && n != "ToString" then throw s!"{p.show}: '{n}' is a built-in function"
         if tops.any (fun | .const _ m .. | .classDef _ m .. => m == n | _ => false) ||
             env.classes.contains n || (env.structs.lookup n).isSome || (env.enums.lookup n).isSome then
           throw s!"{p.show}: '{n}' is defined twice (only functions can be overloaded)"
@@ -445,6 +446,9 @@ def inferSignatures (env : TyEnv) (declared : Declared) (typeDefaults : List STo
 def checkSignatures (env : TyEnv) (sigs : Signatures) (cdefs : List CDef) (fields : Fields)
     (methods : Methods) (scopePairs : List ScopePair := []) : Except String Unit := do
   let allSigs := sigs.all
+  let primitiveString (name : String) := sigs.tops.any fun
+    | .fn _ n _ _ specs .. => n == name && specs.contains BuiltinValues.toStringMarker
+    | _ => false
   -- overloads take parameters no call fits both of (Book of Verse ch. 6)
   let sigNamed (s : Sig) : List (String × Bool × Ty) :=
     let npos := s.params.length - s.named.length
@@ -460,7 +464,10 @@ def checkSignatures (env : TyEnv) (sigs : Signatures) (cdefs : List CDef) (field
       for b in ms.take i do
         match allSigs.find? (·.name == a), allSigs.find? (·.name == b) with
         | some sa, some sb =>
-          if !sigsDistinct sa sb then
+          -- Primitive ToString chooses char/string by the operand's type.
+          -- Their singleton-tuple call domains overlap under packing; retain
+          -- that existing family, checking every source overload against it.
+          if !(primitiveString a && primitiveString b) && !sigsDistinct sa sb then
             let pos := ((sigs.tops ++ sigs.generics).findSome? fun | .fn q m .. => if m == a then some q else none | _ => none).getD { line := 0, col := 0 }
             let sh (s : Sig) := ", ".intercalate ((s.params.zip (List.range s.params.length)).map fun (t, i) =>
               let npos := s.params.length - s.named.length
@@ -475,7 +482,8 @@ def checkSignatures (env : TyEnv) (sigs : Signatures) (cdefs : List CDef) (field
   -- "Shadowing and Qualification"; tests, `Overloading.versetest`:
   -- functions overload across scopes; `checkNoShadowing`)
   let overloadsOf (n : String) : List Sig := allSigs.filter fun sg =>
-    sg.name == n || (sg.name.startsWith (n ++ "$ov") && (sg.name.drop (n.length + 3)).toString.all Char.isDigit)
+    !primitiveString sg.name &&
+      (sg.name == n || (sg.name.startsWith (n ++ "$ov") && (sg.name.drop (n.length + 3)).toString.all Char.isDigit))
   for pr in scopePairs do
     -- (a method's signature, `c.M`, has `Self` first)
     let method := ((qualParts pr.inner).getLastD "").contains '.'

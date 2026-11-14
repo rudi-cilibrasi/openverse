@@ -632,6 +632,18 @@ classes, interfaces, structs, enums or constants of one name, or one of them
 and a function (`c := class{}` with `c(I:int):c`, which the Book's tests
 refuse as "overloading a class"), are a name defined twice. A local cannot
 take an overloaded function's name either.
+- **`ToString`.** A program may add overloads beside the primitive ones
+  (`int`, `float`, `char`, `char32`, `string`), including several arguments
+  and named parameters. `ToString(L:label):string = "label {L.Code}"`
+  handles `"{L}"`; `ToString(A:int, B:int, ?Scale:int=1):string = …`
+  handles `"{2, 3, ?Scale:=4}"`. Explicit calls and interpolation use the
+  same lexical scope, argument order, defaults and effects. Interpolation
+  calls `ToString`, then combines the pieces with `+`, so a program's
+  overloads of both may produce another type (the Book's tests,
+  `StringInterpolationPlus.versetest`). An explicit call inside an
+  interpolant is its value: `"{ToString(X)}"` also converts that result.
+  Primitive overloads remain available in the scope of a program's
+  `ToString`; a source overload overlapping one is refused.
 - **Operators.** A program may overload the operators `+`, `-`, `*`, `/`
   and prefix `-` at the top level, as functions written
   `operator'+'(L:vec2i, R:vec2i):vec2i = …` and `prefix'-'(V:vec2i):vec2i =
