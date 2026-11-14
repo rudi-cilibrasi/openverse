@@ -443,7 +443,7 @@ partial def coreDefault (S : Sigs) (params : List VTy) (depth : Nat) (τ : VTy)
     (varD : Nat → Option Expr := fun _ => none) : Option Expr :=
   -- (as deep as the elaborator's `slotDefault` goes)
   if depth > 16 then none else
-  match params.findIdx? (fun p => p.sub τ) with
+  match params.findIdx? (fun p => p.sub S.var τ) with
   | some i => some (.local i)
   | none =>
     match τ with
@@ -465,7 +465,7 @@ partial def coreDefault (S : Sigs) (params : List VTy) (depth : Nat) (τ : VTy)
     | .vref es bs => es.findSome? fun (t, φ) => do
         let fs ← S.classes[t]?
         let args := VTy.viewSlotArgs (S.pinsOf t) fs φ bs
-        if !VTy.pinsOK (S.pinsOf t) args || !(VTy.ref [t] args).sub (.vref es bs) then none
+        if !VTy.pinsOK (S.pinsOf t) args || !(VTy.ref [t] args).sub S.var (.vref es bs) then none
         match S.protos.zipIdx.find? fun ((t', a), _) => t' == t && decide (a = args) with
         | some (_, addr) => some (.lit (.ref addr))
         | none =>

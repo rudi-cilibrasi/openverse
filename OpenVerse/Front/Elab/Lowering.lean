@@ -581,7 +581,7 @@ def declaredLevels (env : TyEnv) (allS : List Sig) (s : Sig) : VTy × List VTy :
   let primary : VTy :=
     if opening.any fun r => (sigAt r).bind (atC r) == some own then own else
     match decls with
-    | some d :: rest => if rest.all (· == some d) && own.sub d then d else own
+    | some d :: rest => if rest.all (· == some d) && own.sub env.coreVar d then d else own
     | _ => own
   -- (the other results a caller may expect, from a class it dispatches
   -- from or a first declaration, that a cell of the primary type cannot
@@ -592,7 +592,7 @@ def declaredLevels (env : TyEnv) (allS : List Sig) (s : Sig) : VTy × List VTy :
     | _, _ => d == p
   let cands := (opening.filterMap fun r => (sigAt r).bind (atC r)) ++ decls.filterMap id
   let extras := cands.foldl (fun acc d =>
-    if d != primary && own.sub d && !narrowable d primary && !acc.contains d then acc ++ [d] else acc) []
+    if d != primary && own.sub env.coreVar d && !narrowable d primary && !acc.contains d then acc ++ [d] else acc) []
   (primary, extras)
 
 /-- The type an opened override's (primary) result cell holds: `declaredLevels`'

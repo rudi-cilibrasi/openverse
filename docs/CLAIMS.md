@@ -238,8 +238,8 @@ Value.veq_iff : ∀ (a b : Value), a.veq b = true ↔ a.norm = b.norm
 `OpenVerse/Core/Typing.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
-veq_iff_eq_of_hasTy : ∀ (Ξ : HeapTy) (a b : Value) (τ : VTy),
-  τ.dynFree = true → hasTy Ξ a τ = true → hasTy Ξ b τ = true → (a.veq b = true ↔ a = b)
+veq_iff_eq_of_hasTy : ∀ (V : Variances) (Ξ : HeapTy) (a b : Value) (τ : VTy),
+  τ.dynFree = true → hasTy V Ξ a τ = true → hasTy V Ξ b τ = true → (a.veq b = true ↔ a = b)
 ```
 
 ## `veq_box`: boxing a comparable value preserves and reflects Verse's equality on one type
@@ -247,8 +247,8 @@ veq_iff_eq_of_hasTy : ∀ (Ξ : HeapTy) (a b : Value) (τ : VTy),
 `OpenVerse/Core/Comparable.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
-veq_box : ∀ (Ξ : HeapTy) (c : Code) (a b : Value),
-  hasTy Ξ a c.vty = true → hasTy Ξ b c.vty = true → (c.box a).veq (c.box b) = a.veq b
+veq_box : ∀ (V : Variances) (Ξ : HeapTy) (c : Code) (a b : Value),
+  hasTy V Ξ a c.vty = true → hasTy V Ξ b c.vty = true → (c.box a).veq (c.box b) = a.veq b
 ```
 
 ## `box_veq_iff_eq`: the boxes of two values of one comparable type are equal exactly when the values are
@@ -256,8 +256,8 @@ veq_box : ∀ (Ξ : HeapTy) (c : Code) (a b : Value),
 `OpenVerse/Core/Comparable.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
-box_veq_iff_eq : ∀ (Ξ : HeapTy) (c : Code) (a b : Value),
-  c.vty.dynFree = true → hasTy Ξ a c.vty = true → hasTy Ξ b c.vty = true → ((c.box a).veq (c.box b) = true ↔ a = b)
+box_veq_iff_eq : ∀ (V : Variances) (Ξ : HeapTy) (c : Code) (a b : Value),
+  c.vty.dynFree = true → hasTy V Ξ a c.vty = true → hasTy V Ξ b c.vty = true → ((c.box a).veq (c.box b) = true ↔ a = b)
 ```
 
 ## `box_tag_ne`: boxes under two different codes (enums, structs, char32) are never equal
@@ -274,10 +274,10 @@ box_veq_iff_eq : ∀ (Ξ : HeapTy) (c : Code) (a b : Value),
 `OpenVerse/Core/Comparable.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
-box_plain_tagged : ∀ (Ξ : HeapTy) (c : Code),
+box_plain_tagged : ∀ (V : Variances) (Ξ : HeapTy) (c : Code),
   c.plain = true →
     ∀ (a : Value),
-      hasTy Ξ a c.vty = true → ∀ (k : Nat) (d : Code) (b : Value), (c.box a).veq ((Code.tagged k d).box b) = false
+      hasTy V Ξ a c.vty = true → ∀ (k : Nat) (d : Code) (b : Value), (c.box a).veq ((Code.tagged k d).box b) = false
 ```
 
 ## `Eval.typed`: preservation
@@ -290,8 +290,9 @@ box_plain_tagged : ∀ (Ξ : HeapTy) (c : Code),
     ∀ {s : St} {e : Expr} {r : Res} {s' : St} {Γ : List VTy} {ρ τ : VTy} {Ξ : HeapTy},
       Eval P s e r s' →
         Typed S Γ ρ e τ →
-          FrameOK Ξ Γ s.fr →
-            HeapOK S Ξ s.g.heap → ∃ Ξ', FrameOK Ξ' Γ s'.fr ∧ ResOK Ξ' τ ρ r ∧ HeapOK S Ξ' s'.g.heap ∧ Ξ <+: Ξ'
+          FrameOK S.var Ξ Γ s.fr →
+            HeapOK S Ξ s.g.heap →
+              ∃ Ξ', FrameOK S.var Ξ' Γ s'.fr ∧ ResOK S.var Ξ' τ ρ r ∧ HeapOK S Ξ' s'.g.heap ∧ Ξ <+: Ξ'
 ```
 
 ## `Runs.typed`: type safety of programs
@@ -307,7 +308,7 @@ box_plain_tagged : ∀ (Ξ : HeapTy) (c : Code),
           r ≠ Res.err ErrKind.type ∧
             ∃ fr heap,
               Eval P Prog.initSt (Expr.call P.main []) r { fr := fr, g := { out := out, heap := heap } } ∧
-                ∃ Ξ, HeapOK S Ξ heap ∧ ∀ (v : Value), r = Res.ok v → hasTy Ξ v τ = true
+                ∃ Ξ, HeapOK S Ξ heap ∧ ∀ (v : Value), r = Res.ok v → hasTy S.var Ξ v τ = true
 ```
 
 ## `Typed.subst`: the substitution lemma: a typing with type variables holds at every instance
@@ -326,7 +327,36 @@ box_plain_tagged : ∀ (Ξ : HeapTy) (c : Code),
 `OpenVerse/Core/TypeSafety.lean`; axioms: [propext, Quot.sound]
 
 ```lean
-@hasTy_sub : ∀ {Ξ : HeapTy} (t u : VTy) (v : Value), t.sub u = true → hasTy Ξ v t = true → hasTy Ξ v u = true
+@hasTy_sub : ∀ {V : Variances} {Ξ : HeapTy} (t u : VTy) (v : Value),
+  VTy.sub V t u = true → hasTy V Ξ v t = true → hasTy V Ξ v u = true
+```
+
+## `VTy.posIn_sub`: instantiation is monotone by variance: a field type that uses its class's type arguments as its variances say is below itself at arguments above them
+
+`OpenVerse/Core/TypeSafety.lean`; axioms: [propext, Quot.sound]
+
+```lean
+@VTy.posIn_sub : ∀ {V : Variances} {W : Nat → Variance} {σ σ' : Nat → VTy} {n : Nat},
+  (∀ (j : Nat), j < n → Variance.Rel V (W j) (σ j) (σ' j)) →
+    ∀ (f : VTy), VTy.posIn V W f = true → VTy.varsBelow n f = true → VTy.sub V (VTy.subst σ f) (VTy.subst σ' f) = true
+```
+
+## `VTy.sub_ref_of_prefix`: every subtyping between references before variance holds at every variances
+
+`OpenVerse/Core/TypeSafety.lean`; axioms: [propext, Quot.sound]
+
+```lean
+VTy.sub_ref_of_prefix : ∀ (V : Variances) {ts us : List Nat} {as bs : List VTy},
+  (∀ (t : Nat), t ∈ ts → t ∈ us) → bs <+: as → VTy.sub V (VTy.ref ts as) (VTy.ref us bs) = true
+```
+
+## `hasTy_allInv_ref`: with every class invariant, references are typed as before variance
+
+`OpenVerse/Core/TypeSafety.lean`; axioms: [propext, Quot.sound]
+
+```lean
+@hasTy_allInv_ref : ∀ {Ξ : HeapTy} {a : Nat} {ts : List Nat} {args : List VTy},
+  hasTy Variances.allInv Ξ (Value.ref a) (VTy.ref ts args) = true ↔ ∃ t X, Ξ[a]? = some (t, X) ∧ t ∈ ts ∧ args <+: X
 ```
 
 ## `tc_sound`: the type checker is sound
@@ -344,6 +374,14 @@ box_plain_tagged : ∀ (Ξ : HeapTy) (c : Code),
 
 ```lean
 @Prog.checkTypes_sound : ∀ {P : Prog} {S : Sigs} {Γs : List (List VTy)}, P.checkTypes S Γs = true → ProgTyped P S
+```
+
+## `Sigs.checkVarOK_nil`: a certificate without variances passes the variance check
+
+`OpenVerse/Core/TypeCheck.lean`; axioms: [propext, Quot.sound]
+
+```lean
+@Sigs.checkVarOK_nil : ∀ {S : Sigs}, S.variances = [] → S.checkVarOK = true
 ```
 
 ## `unify_sound`: first-order unification of Verse Core types gives a unifier
@@ -418,7 +456,7 @@ box_plain_tagged : ∀ (Ξ : HeapTy) (c : Code),
                   r ≠ Res.err ErrKind.control ∧
                     (∃ fr heap,
                         Eval P Prog.initSt (Expr.call P.main []) r { fr := fr, g := { out := out, heap := heap } } ∧
-                          ∃ Ξ, HeapOK S Ξ heap ∧ ∀ (v : Value), r = Res.ok v → hasTy Ξ v τ = true) ∧
+                          ∃ Ξ, HeapOK S Ξ heap ∧ ∀ (v : Value), r = Res.ok v → hasTy S.var Ξ v τ = true) ∧
                       (∀ (fn : Fn), P.fns[P.main]? = some fn → fn.decides = false → r ≠ Res.fail) ∧
                         ∀ (r' : Res) (out' : List Nat), Runs P r' out' → r' = r ∧ out' = out
 ```

@@ -1717,7 +1717,7 @@ partial def slotDefault (env : TyEnv) (dictBase : Nat) (params : List Ty) (visit
   if !vt.mentionsVar && !vt.hasRef then return .lit vt.default
   -- a parameter of a subtype: no allocation
   if vt.hasRef then
-    if let some i := params.findIdx? (fun pt => (pt.toVTy env).sub vt) then return .local i
+    if let some i := params.findIdx? (fun pt => (pt.toVTy env).sub env.coreVar vt) then return .local i
   match t with
   | .param n _ =>
     if let some k := env.selfWitness.lookup n then return .heap (.get k) [.local 0]
@@ -1942,7 +1942,7 @@ def TyEnv.viewFits (env : TyEnv) (a b : Ty) : Option (List Nat × Bool) :=
           ((φ.map (VTy.inst as)).zip bs).any fun (u, w) => !u.mentionsVar && !w.mentionsVar && decide (u ≠ w)
       | none => false
     let fits := ts.filter (!closedOff ·)
-    some (fits, (VTy.ref fits as).sub (.vref es bs))
+    some (fits, (VTy.ref fits as).sub env.coreVar (.vref es bs))
   | _, _ => none
 
 /-- `e` gives no value: it breaks, returns, fails or is `Err()` (after
@@ -1962,7 +1962,7 @@ partial def _root_.OpenVerse.Expr.noValue : Expr → Bool
     when they have none. -/
 partial def _root_.OpenVerse.Expr.untyped : Expr → Bool
   | .lit (.ref _) => false
-  | .lit v => (litTy v).isNone
+  | .lit v => (litTy Variances.allInv v).isNone
   | .seq _ b => b.untyped
   | .ite _ t e => t.untyped && e.untyped
   -- (a body that gives no value is checked at `void`)
@@ -2122,7 +2122,7 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
     -- of the others, its object always one of them)
     match a.toVTy env, b.toVTy env, env.viewFits a b with
     | .ref ts as, .vref es bs, some (fits, ok) =>
-      if (VTy.ref ts as).sub (.vref es bs) then return some e
+      if (VTy.ref ts as).sub env.coreVar (.vref es bs) then return some e
       if fits.length == ts.length || !ok then return some e
       let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push a })
       let y ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push b })

@@ -379,8 +379,8 @@ example : tc idSigs [.ref [1] [], .ref [0, 1] []] .void (.call 0 [.local 0, .loc
 example : tc idSigs [.ref [1] [], .ref [0, 1] []] .void (.call 0 [.local 1, .local 0]) none = none := by
   native_decide
 -- tuples widen pointwise, with the same length
-example : (VTy.tup [.ref [1] [], .int]).sub (.tup [.ref [0, 1] [], .int]) = true := by native_decide
-example : (VTy.tup [.ref [1] []]).sub (.tup [.ref [0, 1] [], .int]) = false := by native_decide
+example : (VTy.tup [.ref [1] [], .int]).sub Variances.allInv (.tup [.ref [0, 1] [], .int]) = true := by native_decide
+example : (VTy.tup [.ref [1] []]).sub Variances.allInv (.tup [.ref [0, 1] [], .int]) = false := by native_decide
 end
 
 /-! ### Functions that do not write (#35) -/

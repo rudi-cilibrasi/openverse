@@ -342,6 +342,12 @@ structure TyEnv where
   /-- (#515, `--signal-no-rollback`) Record the calls failure contexts make
       (`ESt.failCalls`). -/
   signalNoRollback : Bool := false
+  /-- The variances of the classes in Verse Core, by tag and Verse Core type
+      argument position (docs/research/variance.md): what the certificate
+      gives (`Sigs.variances`), so that a conversion the front end makes by
+      variance passes the checker's subtyping. Every class invariant until
+      the classes are known (`Variance.coreVariances`). -/
+  coreVariances : List (List Variance) := []
   /-- The hidden placeholder classes (#157): one below each generic class or
       interface whose concrete classes all fix its type arguments, so that a
       variable of its type at other type arguments has an initial value. The
@@ -703,6 +709,10 @@ def TyEnv.isRefClass (env : TyEnv) (n : String) : Bool :=
     -- with no concrete class below, `n` has no instance: it stays the (empty)
     -- value of #18, so a variable of its type needs no placeholder
     env.classes.any fun d => let i := env.info d; !i.isIface && !i.isAbstract && (env.supers d).contains n
+
+/-- The variances of the classes in Verse Core (`Sigs.var` of the
+    certificate the front end gives). -/
+def TyEnv.coreVar (env : TyEnv) : Variances := ({ fns := [], variances := env.coreVariances } : Sigs).var
 
 /-- The class tag of class `d` in Verse Core: its index in definition order. -/
 def TyEnv.tagOf (env : TyEnv) (d : String) : Nat :=
