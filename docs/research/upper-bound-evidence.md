@@ -97,11 +97,29 @@ or proof, plus recursive opaque initializers and rolled-back real overwrites.
 both runtimes. These are
 compiler-API contracts; source programs reach the same analysis.
 
-The remaining #572 concurrency audit must account for sibling writes regardless
-of their source order and whether another arm has a normal return. The current
-traversal can miss a metadata writer listed before a real writer, followed by
-a waiting reader: the metadata write may run last even though it appears first.
-The source-ordered transition controls above do not close that gap.
+For `sync`, `race` and `rush`, the provenance analysis evaluates every arm
+independently, including siblings of an arm with no normal return. Arms exchange
+possible roles and storage modes for cells already in scope until those roles
+stabilize. Only writes performed by an arm participate in this exchange; an
+unchanged or rolled-back cell cannot feed a sibling's role back as a new write.
+Arm-local declarations start fresh. Per-arm effects join monotonically after
+the first evaluation, so mutually writing cells cannot alternate their modes
+indefinitely. Shared-mode diagnostics then use the stable
+arm entries, preserving ordered metadata-to-real writes within one arm.
+
+A successful `sync` completes every arm. Since metadata reentry is checked,
+a cell definitely left real by one completed arm is real in the continuation.
+`race` and `rush` retain possible roles from their arms because other arms may
+still be waiting when a winner returns. `MetadataConcurrency.lean` checks 15
+real/dummy rejection pairs and 15 forwarding/overwrite pairs, with Core checks
+for every admitted case; `shared_function_sibling_writes.verse` executes the
+ordinary real controls. These controls cover sibling order, nonreturning arms,
+unimplemented dispatch, metadata-only forwarding, independent arm locals,
+rollback and definite real overwrites. The remaining #572 audit includes
+background work that survives its launch expression and generated
+witness/capture/frame storage roles. A `branch`, or a surviving `rush` loser,
+can still write metadata after the caller subsequently overwrites the cell
+with real data; sibling-arm convergence alone does not model that overlap.
 
 The checked families currently cover:
 

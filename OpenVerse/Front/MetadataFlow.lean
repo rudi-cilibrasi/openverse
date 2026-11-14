@@ -25,11 +25,14 @@ private structure Slots where
   values : Array Bool := #[]
   initialized : Array Bool := #[]
   sharedMetadata : Array Bool := #[]
+  /-- Writes performed by this arm, excluding roles received from siblings. -/
+  written : Array Bool := #[]
   deriving BEq, Inhabited
 
 private def joinSlots (a b : Slots) : Slots := {
   values := a.values.zipWith (· || ·) b.values
   initialized := a.initialized.zipWith (· || ·) b.initialized
+  written := a.written.zipWith (· || ·) b.written
   sharedMetadata := a.sharedMetadata.mapIdx fun i role =>
     if !(a.initialized[i]?.getD false) then b.sharedMetadata[i]?.getD false
     else if !(b.initialized[i]?.getD false) then role
@@ -126,6 +129,7 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
       slots := {
         values := out.slots.values.set! i role
         initialized := out.slots.initialized.set! i true
+        written := if info.shared.contains i then out.slots.written.set! i true else out.slots.written
         -- Once real data enters a shared cell, waiting aliases can execute it.
         -- A later metadata write must not reuse its original metadata mode.
         sharedMetadata := out.slots.sharedMetadata.set! i
@@ -135,6 +139,10 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
     if a.value.isNone then return a
     return withExits a (← expr fns infos fields fn info a.slots b)
   | .call g es => do
+    let name := (fns[g]?.map (·.name)).getD ""
+    if ["$syncMark", "$raceMark", "$rushMark"].contains name then
+      if let [.prim .mkArr arms] := es then
+        return ← concurrent fns infos fields fn info slots (name == "$syncMark") arms
     let (args, out) ← arguments fns infos fields fn info slots es
     if out.value.isNone then return out
     let gi := infos[g]?.getD {}
@@ -223,6 +231,72 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
     let out ← expr fns infos fields fn info slots e
     return { out with value := out.value.map (fun _ => false) }
 
+private partial def concurrent (fns : Array Fn) (infos : Array Info)
+    (fields : Array (List Nat)) (fn : Fn) (info : Info) (slots : Slots)
+    (sync : Bool) (arms : List Expr) : M Flow := do
+  -- Only cells already in scope can be shared by sibling arms. A local
+  -- declared inside an arm starts fresh on each analysis of that arm.
+  let shared := info.shared.filter fun i => slots.initialized[i]?.getD false
+  let entry (outs : Array Flow) (own : Nat) : Slots := Id.run do
+    let mut joined := slots
+    for (out, i) in outs.zipIdx do
+      if i != own then
+        let incoming := { out.slots with
+          values := out.slots.values.mapIdx fun k role =>
+            if out.slots.written[k]?.getD false then role else slots.values[k]?.getD false
+          sharedMetadata := out.slots.sharedMetadata.mapIdx fun k role =>
+            if out.slots.written[k]?.getD false then role else slots.sharedMetadata[k]?.getD false }
+        joined := joinSlots joined incoming
+    return {
+      values := slots.values.mapIdx fun i role =>
+        if shared.contains i then joined.values[i]?.getD false else role
+      initialized := slots.initialized
+      written := Array.replicate slots.values.size false
+      sharedMetadata := slots.sharedMetadata.mapIdx fun i role =>
+        if shared.contains i then joined.sharedMetadata[i]?.getD false else role }
+  let runArms (outs : Array Flow) : M (Array Flow) :=
+    arms.toArray.zipIdx.mapM fun (arm, i) =>
+      expr fns infos fields fn info (entry outs i) arm
+  -- Every arm starts independently, including when a sibling has no
+  -- normal return. Exchange their shared-cell roles until they stabilize.
+  let validate := (← get).validateShared
+  modify fun st => { st with validateShared := false }
+  let mut outs : Array Flow := arms.toArray.map fun _ => { slots }
+  -- Seed from actual effects, so a definite real overwrite does not retain
+  -- the entry's metadata value. Later rounds join monotonically: modes of
+  -- mutually writing arms must not alternate before diagnostics can run.
+  outs ← runArms outs
+  let mut growing := true
+  while growing do
+    let raw ← runArms outs
+    let next := outs.zipWith (fun old out => { out with
+      slots := joinSlots old.slots out.slots
+      value := joinRole old.value out.value
+      returned := joinRole old.returned out.returned
+      broken := joinOpt old.broken out.broken }) raw
+    growing := next.map (·.slots) != outs.map (·.slots)
+    outs := next
+  modify fun st => { st with validateShared := validate }
+  if validate then outs ← runArms outs
+  let mut joined : Option Slots := none
+  let mut returned := none
+  let mut broken := none
+  for out in outs do
+    joined := joinOpt joined (some out.slots)
+    returned := joinRole returned out.returned
+    broken := joinOpt broken out.broken
+  let merged := joined.getD slots
+  let merged := { merged with written := slots.written.zipWith (· || ·) merged.written }
+  -- A successful sync completes every arm. With metadata reentry barred,
+  -- any arm that definitely leaves real data makes that shared cell real.
+  -- Race/rush can finish with another arm still pending, so retain may roles.
+  let finalSlots := if sync then { merged with
+    values := merged.values.mapIdx fun i role =>
+      if shared.contains i then outs.all (fun out => out.slots.values[i]?.getD false) else role }
+    else merged
+  let normal := if sync then outs.all (·.value.isSome) else outs.any (·.value.isSome)
+  return { slots := finalSlots, value := if normal then some false else none, returned, broken }
+
 private partial def arguments (fns : Array Fn) (infos : Array Info)
     (fields : Array (List Nat)) (fn : Fn) (info : Info) (slots : Slots)
     (es : List Expr) : M (List Bool × Flow) := do
@@ -249,7 +323,9 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       let values := (List.range fn.nslots).map (fun i =>
         info.inputs.contains i || args[i]?.getD false) |>.toArray
       let initialized := (List.range fn.nslots).map (fun i => i < fn.arity : Nat → Bool) |>.toArray
-      let slots : Slots := { values, initialized, sharedMetadata := values }
+      let slots : Slots := {
+        values, initialized, sharedMetadata := values
+        written := Array.replicate fn.nslots false }
       expr fns infos fields fn info slots (info.body.getD fn.body)
     let seedRoots : M Unit := do
       for i in [:fns.size] do
