@@ -1,6 +1,7 @@
 # Methods with several values (#283), from the review of #310: a field in a
 # bare call's argument is the field, not a top-level name; (super:) calls
-# it; one tuple argument is spread over the parameters, as at a method's call
+# it (in an override of it, the Book's rule); one tuple argument is spread
+# over the parameters, as at a method's call
 K : int = 100
 c := class:
     (c:)K : int
@@ -9,9 +10,10 @@ c := class:
     Pair(A : int, B : int)<transacts>:int = A + (c:)K | B + (c:)K
     Other()<transacts>:int = 0
 sub := class(c):
+    Vals<override>()<transacts>:int = (super:)Vals()
     Other<override>()<transacts>:int =
         var S : int = 0
-        for (X := (super:)Vals()):
+        for (X := Vals()):
             set S += X
         S
 Main()<transacts>:void =

@@ -322,15 +322,90 @@ refusals different results and accepts a refusal is not one this work may
 make, so the refusal stays; it would go with the awaiters inside `Signal`.
 The 7 `LiveVariables` cases need live variables (unreleased, ch. 15).
 
-## `(super:)`: left
+## `(super:)M` only in an override of `M`
 
-One more rule of the accepted refusals is one check, measured and left, as
-it retires a reading openverse's own tests are about:
+**The rule.** `(super:)M(…)` calls the implementation above of the method
+it is in: it is written only in the code of an `<override>` method named
+`M` (its body, a `block` or a `spawn` in it, its parameters' defaults), and
+may call any overload of `M` above. It is refused in another method, a
+class's `block:`, a field's default and a function.
 
-- **`(super:)M` only in an override of `M`** (`Super.versetest` 183, 238,
-  3612): 27 tests call `(super:)` for another method or in a block
-  (`multi_method_cross_super_*`, `choice_super_*`,
-  `class_cast_refine_super*`, …), and 20 generated programs (2 cases).
+**The Book.** The tests (`Super.versetest`): "super on method not in super
+class" (`:176-181`, `Method2` calling `(super:)Method2`, 3612); "super on
+another method" (`:183-192`, `Method2<override>` calling `(super:)Method()`,
+3612); "check that same name doesn't fool check" (`:194-201`); "super on
+function" (`:203-204`); "Calling `(super:)` from blocks is not allowed in
+ShipVerse yet" (`:237-246`, a class's `block:`, 3612). Allowed: in a
+`block` of the override (`c8`, `c9`, `:119-127`), of another overload of
+the method's name (`child_class2.Method<override>(Base)` calling
+`(super:)Method(sub_class2{})`, `:54`), in a `spawn` in it ("The body of
+this spawn is a closure, which must capture super",
+`Bugs/SOL-9691-CaptureSuper.versetest:8-9`); "Only possible to use
+(super:) on the same function as being defined"
+(`NestedFunctions.versetest:225`), and ch. 6: "The `(super:)` syntax for
+calling parent class methods **cannot** be used in nested functions"
+(`06_functions.md:1225`, 3612). The prose of ch. 10: "`(super:)` is a
+qualifier on a call: it invokes the superclass's implementation of a method
+on the object you are already in" (`10_classes_interfaces.md:379-381`) and
+"It reaches the parent's version of the very method being overridden"
+(`:386`); line 1050: "`(super:)F(X)` within the qualified method calls the
+parent class's implementation of that same qualified method".
+
+**Where the Book disagrees with itself.** Ch. 10 line 379 reads as any
+method of the object; line 386, line 1050 and the tests, the method being
+overridden. openverse follows the tests (on the wiki already).
+
+**openverse before.** `(super:)M` called the implementation above of any
+method `M` from any method of a class, and from its `block:` and field
+defaults: the cross-method super calls of #454 and #464.
+
+**openverse now.** `checkSuperCalls` (`Elab/Source.lean`), with the source
+rules, refuses `(super:)M` anywhere but in the code of an override of `M`.
+Programs: 9 tests were about calling `(super:)` of another method and are
+deleted: `multi_method_cross_super_eager`, `_generic`, `_interface`,
+`_lazy`, `_multi`, `_overload` and `multi_method_overrides_other_super`
+(#464), with `iface_default_scope_defaults` (#53) and
+`spawn_defaults_scope` (#468), whose `(super:)` was in the default of an
+interface's override of another method, which the next rule retires too. 15
+are rewritten, their output the same: where a method `N` called
+`(super:)M`, `N` is now an overload of `M` that overrides one the class
+above declares (a probe parameter, `first_probe`, or the arguments `N` took,
+telling it apart), so its lifted choice, cast, `for` and `spawn` code still
+calls `(super:)M` (`choice_super_continuations`, `_defaults_failure`,
+`_generic`, `_suspending_consumer`, `_suspends`, `choice_waiting_refined_super`,
+`choice_refined_spawn_super`, `class_cast_refine_super`, `_overloaded`,
+`_supers`, `multi_lazy_firstfx_super`); `multi_methods_more` overrides
+`Vals` with `(super:)Vals()` and sums `Vals()`; `call_argument_methods`'s
+`Pair` override calls `(super:)Pair(1,"super")` when its string is
+`"super"`; `choice_context_self`'s class `block:` and
+`class_exist_spawn_direct_parts`'s `Kick` call the one implementation
+directly, `Echo(Data)`, `spawn{Run()}`. The unused cross-method forwarders
+of `choice_super_generic` (`Bridge`, `LabelBridge`, `StrLabelBridge`) are
+dropped, and its `Pick` probe is the override of `Pick` given `?Y:=X`
+(a generic overload of `Pick` cannot be told apart from `Pick(X:t,?Y:t)`).
+Of the error tests, `choice_super_value`, `fn_value_super`, `fx_super`
+and `multi_method_tuple_super_no_ancestor` write their `(super:)` in an
+override of its method (the last through an interface that declares `Pick`
+with no body), and the three cross ones that test something else are
+`super_ambiguous_slots`, `multi_method_super_brackets` and
+`multi_method_super_effect`, their `(super:)` in the override;
+`multi_method_cross_super_missing` is `super_another_method`, a test of the
+rule, with the new `super_in_class_block`, `super_in_field_default` and
+`super_override_other_name`; `super_override_forms` runs the forms the Book
+allows. The models: `gadt_super.py`'s method that calls `(super:)Act` is
+the overload `Act(Probe:run_probe)` overriding the base's (every seed
+changes its text, none its prediction); `generic_mv.py`'s `cross-` method
+shapes write the `own-` shapes' `W|(super:)M((V,W))`, the draw of their
+target's values kept (133 of the first 400 seeds change their text, none
+its prediction); `call_packing.py`'s `super` context calls `(super:)F` from
+`sub`'s override of `F`, reached as `Get().F` (42 of the first 400 seeds
+change their text, none its prediction); the code size check's
+`cross-super-*` kinds are `override-super-*`, `Values`'s override calling
+`(super:)Values`, its lazily taken `Walk` calling `Scalar` plainly, its
+`super-*` kinds' `Run` is the overload `Limit(Run:logic)` overriding the
+base's, and `return-defer-method-first` defers `Tick()`, not
+`(super:)Tick()`, which only an override of `Tick` may write. 37
+programs of corpus2 are refused (`gadt_super` 20, `generic-mv` 17).
 
 ## Five forms the tests refuse
 

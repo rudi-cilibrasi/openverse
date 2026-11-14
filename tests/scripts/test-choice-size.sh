@@ -364,10 +364,10 @@ kinds=(
   covariant-failure
   covariant-first
   covariant-for
-  cross-super-failure
-  cross-super-first
-  cross-super-for
-  cross-super-lazy-first
+  override-super-failure
+  override-super-first
+  override-super-for
+  override-super-lazy-first
   dispatch-default-failure
   dispatch-default-first
   dispatch-default-for
@@ -1751,11 +1751,11 @@ if kind.startswith('return-defer-'):
     Tick()<transacts>:void = set Count+=1
 child(b:type) := class(base(b)):
     Pick(X:c,Y:c,Mode:int where c:type)<transacts>:tuple(b,c) =
-        defer:(super:)Tick()
+        defer:Tick()
         if(Mode>=0):
-            defer:(super:)Tick()
+            defer:Tick()
             if(Mode=0):return (Anchor,X)|(Anchor,Y)
-        defer:(super:)Tick()
+        defer:Tick()
         (Anchor,X)|(Anchor,Y)''')
         params = ','.join(f'P{i}:child(a{i}),X{i}:b{i},Y{i}:b{i}' for i in range(count))
         tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
@@ -1787,18 +1787,21 @@ Produce(H:cell,X:t,Y:t,Mode:int where t:type)<transacts>:t =
     br = ('[',']') if fx else ('(',')')
     print(f'Main(){fx}:void = Print("{{Run{br[0]}{args}{br[1]}}}")')
     sys.exit(0)
-if kind.startswith('cross-super-'):
+if kind.startswith('override-super-'):
+    # ((super:)M in an override of M, the Book's rule: Values's override calls
+    # the implementation above, which calls Scalar; Walk calls Scalar)
     print('''base(t:type) := class:
     Data:t
     Scalar(X:u,?E:[]t=Concatenate() where u:type)<transacts>:tuple(t,u,int) =
         Print("scalar")
         (Data,X,E.Length)
+    Values(X:w,?E:[]t=Concatenate() where w:type)<transacts>:tuple(t,w,int) = Scalar(X,?E:=E)
 child(v:type) := class(base(v)):
-    Values(X:w where w:type)<transacts>:tuple(v,w,int) =
-        (super:)Scalar(X)|(super:)Scalar(X,?E:=array{Data})
+    Values<override>(X:w,?E:[]v=Concatenate() where w:type)<transacts>:tuple(v,w,int) =
+        (super:)Values(X)|(super:)Values(X,?E:=array{Data})
     Walk(X:w,N:int where w:type)<transacts><decides>:tuple(v,w,int) =
         N>=0
-        (super:)Scalar(X)|Self.Walk[X,N-1]''')
+        Scalar(X)|Self.Walk[X,N-1]''')
     params = ','.join(f'P{i}:child(a{i}),X{i}:b{i}' for i in range(count))
     tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
     lazy = kind.endswith('lazy-first')
@@ -1940,19 +1943,21 @@ if kind.startswith('immediate-suspends-'):
     print(f'Main()<suspends>:void = Print("{{Run({args})}}")')
     sys.exit(0)
 if kind.startswith('super-'):
+    # ((super:)Limit only in an override of Limit, the Book's rule: the method
+    # that calls it is the overload Limit(Run:logic), overriding the base's)
+    specs = '<decides>' if kind == 'super-failure' else ''
     print('base := class:\n    Limit()<computes>:int = 1')
+    print(f'    Limit(Run:logic)<transacts>{specs}:int = 0')
     print('child := class(base):\n    Limit<override>()<computes>:int = 100')
     clauses = ', '.join(f'A{i}:=(Two(0)|Two(2))' for i in range(count))
     if kind == 'super-first':
-        print(f'    Run()<transacts>:int = if({clauses}, (super:)Limit()=1) then A0 else -1')
+        print(f'    Limit<override>(Run:logic)<transacts>:int = if({clauses}, (super:)Limit()=1) then A0 else -1')
     else:
-        specs = '<decides>' if kind == 'super-failure' else ''
         suffix = '' if kind == 'super-body' else ', (super:)Limit()=1'
         check = '\n            1=1' if specs else ''
         body = 'A0+(super:)Limit()' if kind == 'super-body' else 'A0'
-        print(f'    Run()<transacts>{specs}:int =\n        R:=for({clauses}{suffix}):{check}\n            {body}\n        R.Length')
-    specs = '<decides>' if kind == 'super-failure' else ''
-    call = 'child{}.Run[]' if specs else 'child{}.Run()'
+        print(f'    Limit<override>(Run:logic)<transacts>{specs}:int =\n        R:=for({clauses}{suffix}):{check}\n            {body}\n        R.Length')
+    call = 'child{}.Limit[true]' if specs else 'child{}.Limit(true)'
     print(f'Main()<transacts>{specs}:void = Print("{{{call}}}")')
     sys.exit(0)
 if kind.startswith('mutual-generic-'):

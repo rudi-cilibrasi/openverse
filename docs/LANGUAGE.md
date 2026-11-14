@@ -759,7 +759,13 @@ circle := class(shape, labelled):
     is an error;
   - `<final>` methods cannot be overridden, and `<final>` classes cannot be
     inherited from;
-  - `(super:)M(…)` calls the implementation inherited from above.
+  - `(super:)M(…)` calls the implementation inherited from above, of `M`
+    or of another overload of `M`, and is written only in the code of an
+    `<override>` of `M` (its body, a block or a `spawn` in it, its
+    parameters' defaults): not in another method, a class's `block:`, a
+    field's default or a function (the Book's tests, `Super.versetest`:
+    "super on another method", "Calling `(super:)` from blocks is not
+    allowed", 3612).
 - **Abstract.** An `<abstract>` class, or an interface, may declare methods
   without a body and cannot be constructed. A concrete class must implement
   every method it has, and must override a method that two unrelated

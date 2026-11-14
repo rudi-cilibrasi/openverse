@@ -76,9 +76,9 @@ Single(P:tuple(u) where u:type):tuple(u)=P
                 header += 'sub:=class(base):\n' + f'    F<override>({params}):int=\n'
                 header += ''.join('    '+line+'\n' for line in body.splitlines())
             elif context == 'super':
+                # ((super:)F in an override of F, the Book's rule)
                 forward = 'P' + (',?A:=A,?B:=B,?D:=D' if named else '')
-                header += 'sub:=class(base):\n' + f'    Parent({params}):int=(super:)F({forward})\n'
-                target = 'Get().Parent'
+                header += 'sub:=class(base):\n' + f'    F<override>({params}):int=(super:)F({forward})\n'
         if target == 'F':
             target = 'Get().F'
         actual = 'sub' if context in ('dispatch', 'super') else 'base'

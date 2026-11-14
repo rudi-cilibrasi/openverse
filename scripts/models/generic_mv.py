@@ -53,8 +53,6 @@ The model:
     explicit conditional tails, ending only their current invocation;
   * methods may infer their own type parameters independently of receiver
     arguments, including through overrides, super tuples and interface defaults;
-  * a super call of another method keeps its lexical ancestor, whether the
-    target has one value or several, rather than dispatching to an override;
   * methods of one name declared apart in unrelated classes and interfaces are
     each the root of a family of their own: a call through a receiver of a
     class below one of them has that family's values, and one of a class
@@ -265,16 +263,11 @@ class Producer:
                     root_method = f'    M{n}(V:r,W:r,?E:[]r=Concatenate() where r:type)<transacts>:r = V|W'
                     child_method = f'    M{n}<override>(V:v,W:v,?E:[]v=Concatenate() where v:type)<transacts>:v = W|(super:)M{n}((V,W))'
                     if cross:
+                        # (a super call of another method, (super:)Parent{n}
+                        # in M{n}, is refused, the Book's rule: (super:)M is
+                        # only in an override of M; the shape is the own one,
+                        # its draw kept for the random stream)
                         self.cross_multi = RMethod.choice([False, True])
-                        parent_body = 'V|W' if self.cross_multi else 'V'
-                        child_body = 'W|V' if self.cross_multi else 'W'
-                        # Both targets preserve the same independent Y,X,Y
-                        # oracle. The child's target override must not run.
-                        super_call = f'(super:)Parent{n}(V,W)'
-                        body = 'W|' + super_call + ('' if self.cross_multi else '|W')
-                        child_method = child_method.split(' = ', 1)[0] + ' = ' + body
-                        root_method += f'\n    Parent{n}(V:r,W:r,?E:[]r=Concatenate() where r:type)<transacts>:r = {parent_body}'
-                        child_method += f'\n    Parent{n}<override>(V:v,W:v,?E:[]v=Concatenate() where v:type)<transacts>:v = {child_body}'
                     if shape == 'interface':
                         declarations = f'''c{n}(t:type) := interface:
 {root_method}

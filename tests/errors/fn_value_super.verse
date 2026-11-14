@@ -2,6 +2,7 @@
 p := class:
     Name():string = "p"
 q := class(p):
-    Name<override>():string = "q"
-    Parent():type{_():string} = (super:)Name
+    Name<override>():string =
+        Parent:type{_():string} = (super:)Name
+        "q"
 Main():void = Print("x")

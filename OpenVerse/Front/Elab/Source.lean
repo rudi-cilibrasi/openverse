@@ -369,6 +369,39 @@ partial def checkLoopExits (tops : List STop) : Except String Unit := do
     | _ => []
   tops.forM fun t => (unsuspending t).forM go
 
+/-- `(super:)M` calls the implementation above of the method it is in: it
+    is written only in the code of an `<override>` method named `M` (its
+    body, a block or a `spawn` in it, its parameters' defaults), not in
+    another method, a class's `block:`, a field's default or a function
+    (the Book's tests, `Super.versetest`: "super on another method", `:192`,
+    "Calling `(super:)` from blocks is not allowed", `:237`, a function's,
+    `:204`, 3612; ch. 6: "The `(super:)` syntax for calling parent class
+    methods **cannot** be used in nested functions"; a `spawn` in the
+    override may, `SOL-9691-CaptureSuper.versetest`). An overload of `M`
+    above is any of them (`Super.versetest:54`). -/
+partial def checkSuperCalls (tops : List STop) : Except String Unit := do
+  -- (`inM`: the method whose override the code is in, its name without a
+  -- qualifier)
+  let rec go (inM : Option String) : SExpr → Except String Unit
+    | .member p (.ident _ "(super:)") m =>
+      if inM == some m then pure () else
+        throw s!"{p.show}: (super:){m} is not in an override of {m}: (super:) calls the implementation above of the method it is in, from that method's own code (Book of Verse tests, Super.versetest: \"super on another method\", \"Calling `(super:)` from blocks is not allowed\")"
+    | .structDef _ _ _ fs => fs.forM fun f => f.default.forM (go none)
+    | e => e.children.forM (go inM)
+  let unqualified (n : String) : String :=
+    if n.startsWith "(" then ((n.splitOn ":)").drop 1).headD n else n
+  for t in tops do
+    match t with
+    | .classDef _ _ _ _ _ _ _ fs ms =>
+      fs.forM fun f => f.default.forM (go none)
+      for m in ms do
+        match m with
+        | .fn _ n _ _ specs _ _ =>
+          let inM := if n != "$block" && specs.contains "override" then some (unqualified n) else none
+          m.code.forM (go inM)
+        | m => m.code.forM (go none)
+    | t => t.code.forM (go none)
+
 /-- Five forms the Book's tests refuse, each where the source shows it
     (`type-checks-other` of the [map](../../docs/research/book-test-conformance.md)):
     a default on a positional parameter, `F(X:int=0)` ("Named parameters with
@@ -635,6 +668,7 @@ def concurrencyHelpers (resolved : List STop) (requests : Requests) (eventFifo :
        context (`checkJumps`), none inside a value returned
        (`checkNestedReturns`) or leaving a `spawn` (`checkSpawnExits`), a
        way out of each loop of code that cannot suspend (`checkLoopExits`),
+       `(super:)M` only in an override of `M` (`checkSuperCalls`),
        the five forms the Book's tests refuse (`checkBookForms`: a default
        on a positional parameter, a named argument before a positional one,
        a struct's `var` field, a jump out of a construction's field value,
@@ -679,6 +713,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   checkNestedReturns allTops0r
   checkSpawnExits allTops0r
   checkLoopExits allTops0r
+  checkSuperCalls allTops0r
   checkBookForms allTops0r
   checkProfiles allTops0r
   checkDefers allTops0r

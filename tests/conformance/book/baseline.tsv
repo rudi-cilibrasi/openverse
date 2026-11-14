@@ -11850,7 +11850,7 @@ Tests/Super.versetest:149	agrees
 Tests/Super.versetest:160	agrees
 Tests/Super.versetest:167	agrees
 Tests/Super.versetest:176	agrees
-Tests/Super.versetest:183	disagrees-accepts
+Tests/Super.versetest:183	agrees
 Tests/Super.versetest:194	agrees
 Tests/Super.versetest:203	agrees
 Tests/Super.versetest:206	agrees
@@ -11860,7 +11860,7 @@ Tests/Super.versetest:223	agrees
 Tests/Super.versetest:227	agrees
 Tests/Super.versetest:230	agrees
 Tests/Super.versetest:233	agrees
-Tests/Super.versetest:238	disagrees-accepts
+Tests/Super.versetest:238	agrees
 Tests/Super.versetest:271	agrees
 Tests/Super.versetest:276	agrees
 Tests/Super.versetest:284	not-translatable
