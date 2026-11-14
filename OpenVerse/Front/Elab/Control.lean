@@ -137,7 +137,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         | none => false
       | _ => false
     | (_, none, some _) :: rest => match ty with
-      | .map .. => true
+      | .map .. | .weakMap .. => true
       | .arr t => throughMap t rest
       | _ => false
     | _ :: _ => false
@@ -181,7 +181,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         let receiver ← match f?, k? with
           | some "?", _ => elabContainerReceiverWith elabE ctx sp source (fun | .opt _ => true | _ => false) "query"
           | some field, _ => elabBoundReceiverWith elabE ctx sp source field
-          | none, some _ => elabContainerReceiverWith elabE ctx sp source (fun | .arr _ | .map .. => true | _ => false) "index"
+          | none, some _ => elabContainerReceiverWith elabE ctx sp source (fun | .arr _ | .map .. | .weakMap .. => true | _ => false) "index"
           | _, _ => pure source
         if receiver.ty != ty then
           view := some (input, receiver)
@@ -202,7 +202,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         let ti ← fresh .int
         pre := pre.push (.assign ti ri.e)
         keys := keys.push (some (ti, .int)); ty := t
-      | none, some k, .map kt vt =>
+      | none, some k, .map kt vt | none, some k, .weakMap kt vt =>
         let rk ← elabE ctx k (some kt)
         let tk ← fresh kt
         pre := pre.push (.assign tk (← coerce sp rk kt))
@@ -218,7 +218,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
       | _ => false
     for (view, index) in views.toList.zipIdx do
       if let some (_, receiver) := view then
-        let container := match receiver.ty with | .arr _ | .map .. | .opt _ => true | _ => false
+        let container := match receiver.ty with | .arr _ | .map .. | .weakMap .. | .opt _ => true | _ => false
         if container && !(refLevel?.any (index < ·)) then
           eerr p s!"cannot write through a container upper bound: source storage must retain {rawTys[index]!.show}"
     if let some kr := refLevel? then
@@ -242,7 +242,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         let (j, _) := (fieldIndex (ctx.types.fields sn targs) f).get!
         pure (.prim (.tupGet j) [.local c])
       | none, some (ti, _), .arr _ => pure (p2 .index (.local c) (.local ti))
-      | none, some (tk, kt), .map _ vt =>
+      | none, some (tk, kt), .map _ vt | none, some (tk, kt), .weakMap _ vt =>
         let tp ← fresh (.tup [kt, vt])
         pure (mapLookup c tk tp)
       | _, _, _ => eerr p "internal: set path"
@@ -392,7 +392,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
           pre := pre.push (.assign c (.prim .mkTup parts))
       | none, some (ti, _), .arr _ =>
         pre := pre.push (.assign c (.prim .arrSet [.local c, .local ti, newVal]))
-      | none, some (tk, _), .map _ vt =>
+      | none, some (tk, _), .map _ vt | none, some (tk, _), .weakMap _ vt =>
         -- the last key inserts or updates; an intermediate one was read above, so it exists
         let tvk ← fresh vt
         let ti ← fresh .int
@@ -419,7 +419,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
   | .app _ (.ident _ n) [k] true =>
     let l ← mutableLocal n
     match l.ty with
-    | .map kt vt =>
+    | .map kt vt | .weakMap kt vt =>
       let rk ← elabE ctx k (some kt)
       let tk ← fresh kt
       let tp ← fresh (.tup [kt, vt])

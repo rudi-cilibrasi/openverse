@@ -40,7 +40,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Parametric structs | `pair(t:type, u:type) := struct:`, the type `pair(int, string)`, values `pair(int, string){First := 1, Second := "a"}` (or `pair{…}` where the expected type gives the type arguments); see [Parametric structs](#parametric-structs) | ch. 9 |
 | Classes | `name := class:` and `name(t:type) := class:` with fields and methods; `class(parent, interface, …)` (`class()` has none, as `class`; a type `t()` or value `t(){…}` with no type arguments is `t`, `t{…}`), `interface`, `<abstract>`, `<override>`, `<final>`, `(super:)`, virtual dispatch, casts `T[X]` and `T(X)`; no `var` fields; see [Classes](#classes) | ch. 10 |
 | Enums | `name := enum:` / `enum{A, B}`, `name.A`, equality, `case` that needs no `_` when every value is named (an enumerator is its index in Verse Core); `enum<open>` may gain values, so a `case` on one needs `_` or a failure context (`<closed>` is the default) | ch. 9 |
-| Maps | `[k]v`, `map{k => v, …}` (a key given twice keeps its last value, at its last position), `M[k]` (fails on a missing key), `set M[k] = v` (insert or update; in Verse the key's reference is `<decides>`, the Book's API reference, so such a `set`, also as a path's last step, `set S.M[k] = v`, is written in a failure context, as the Book's tests do, `if (set M0[0] = 42)`, `(set Map[I] = I) or Err()`; its last key inserts, so it succeeds; its value is `v`), `set M[k] op= v` (fails on a missing key), `.Length`, `for (V : M)`, `for (K -> V : M)` in insertion order, `ConcatenateMaps(M1, M2)` (exactly two maps, ch. 3: more by chained calls; their pairs laid down in turn, as `map{…}` lays its own: a key both maps have takes the second map's value at the second map's place, the Book's API reference and `ConcatenateMaps.versetest` 21, 33), order-sensitive equality (a map is the array of its pairs in Verse Core) | §3, §9.3 |
+| Maps | `[k]v`, `map{k => v, …}` (a key given twice keeps its last value, at its last position), `M[k]` (fails on a missing key), `set M[k] = v` (insert or update; in Verse the key's reference is `<decides>`, the Book's API reference, so such a `set`, also as a path's last step, `set S.M[k] = v`, is written in a failure context, as the Book's tests do, `if (set M0[0] = 42)`, `(set Map[I] = I) or Err()`; its last key inserts, so it succeeds; its value is `v`), `set M[k] op= v` (fails on a missing key), `.Length`, `for (V : M)`, `for (K -> V : M)` in insertion order, `ConcatenateMaps(M1, M2)` (exactly two maps, ch. 3: more by chained calls; their pairs laid down in turn, as `map{…}` lays its own: a key both maps have takes the second map's value at the second map's place, the Book's API reference and `ConcatenateMaps.versetest` 21, 33), order-sensitive equality (a map is the array of its pairs in Verse Core); a key of a class above or beside the map's key class reads, looked up at the class above both; `weak_map(k, v)`, a supertype of `[k]v` with entry access only (see [Weak maps](#weak-maps)) | §3, §9.3 |
 | Array methods | (also of a tuple of one element type, which is an array where one is expected: `('a', 'b', 'c').Slice[1]`) `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`, `A.RemoveFirstElement[x]`, `A.Remove[i, j]` (half-open), `A.ReplaceElement[i, x]`, `A.ReplaceFirstElement[x, y]`, `A.Insert[i, B]`, `A.Last[]`, `A.Last[n]` (the element n before the last) (all failable); `A.RemoveAllElements(x)`, `A.ReplaceAllElements(x, y)`, `A.ReplaceAll(Pattern, Replacement)` (contiguous subarrays, left to right, not overlapping; an empty pattern changes nothing), `Concatenate(A, B, …)` or `Concatenate(Arrays)` (#150) (never failing) | §9.1 |
 | Built-ins | `Print(s)`, `ToString(x)` (int, float, char, string), `Floor[F]`, `Ceil[F]`, `Round[F]`, `Int[F]` (of a float, failable), `Floor(R)`, `Ceil(R)` (of a rational or an int, never failing; `Floor(X / Y)` fails when `Y = 0`, as `X / Y` does), `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Clamp(Val, A, B)` (the median of the three, of ints or of floats, NaN ordering above +Inf), `Sgn(X)` (-1, 0 or 1 of an int or a float, NaN of NaN), `F.IsFinite[]` (as `IsFinite[F]`), `BitAnd(X, Y)`, `BitOr`, `BitXor`, `BitNot(X)`, `BitShiftLeft[X, N]`, `BitShiftRight[X, N]` (see [Bitwise functions](#bitwise-functions)), `Err()`; the conversions of chars and code points as methods (see [char32](#char32)): `C.ToCodeUnit()`, `C.ToAsciiChar32[]` of a char, `C.ToCodePoint()`, `C.ToAsciiString()` of a char32, `N.ToChar[]`, `N.ToChar32[]` of an int | API reference |
 | Modules | `name := module:` (nested), `M.F`, `A.B.F`, the types `M.c` and values `M.c{…}`, `(M:)F`, `using{M}` at file or module scope, `<public>` members (`<internal>` is the default); see [Modules](#modules) | ch. 16 |
@@ -2181,6 +2181,62 @@ Main():void =
   type parameter of a class in its methods; `case` on a `comparable`; and
   `concrete_subtype(comparable)`.
 
+## Weak maps
+
+`weak_map(k, v)` (Book of Verse ch. 3, "Weak Maps"; the rules, the tests and
+the design are in [research/weak-map.md](research/weak-map.md)) is a
+supertype of `[k]v` that keeps only entry access: "It behaves similarly to
+ordinary maps for individual entry access, but deliberately restricts bulk
+operations."
+
+```verse
+base_class := class<unique> {}
+derived_class := class(base_class) {}
+Main()<decides>:void =
+    var W:weak_map(int, int) = map{}
+    set W[0] = 1                        # insert or update, in a failure context
+    W[0] = 1                            # fails when the key is absent
+    set W = map{0 => 2}                 # a local is replaced whole
+    if (set W[5] = 5, false?) {}        # undone with the failure context
+    not W[5]
+    K := derived_class{}
+    M:[derived_class]int = map{K => 3}
+    B:weak_map(base_class, int) = M     # a map is one, and keys are covariant
+    B[K] = 3
+```
+
+- **The type.** `k` must be comparable. A `[k]v` converts to a
+  `weak_map(k', v')` and a `weak_map(k, v)` to a `weak_map(k', v')` when `k`
+  is below `k'` and `v` below `v'` (ch. 3, "Covariance"); nothing converts a
+  weak map to a map or to `comparable`, and a weak map has no `=`. A weak map
+  and a map join at a weak map (`if (c) then W else map{…}`), and a function
+  of a `[int]int` and one of a `weak_map(int, int)` join at a function of a
+  `[int]int`. It may be a local, a parameter, a result, a field of a class
+  or a struct (not a `<persistable>` one's: it does not persist, ch. 17), an
+  element of a container and a type argument.
+- **Entries** are a map's: `W[k]`, `set W[k] = v` (in a failure context, as
+  a map's), `set W[k] op= v`, and paths through an entry, `set W[k].F = v`,
+  `set W[k][i] = v`, with their rollback. A key of a class above or beside
+  the map's key class reads (`W[K]` with `K` of a class above the keys': it
+  is looked up at the class above both, as the API's
+  `operator'()'(Map:weak_map(t, u), Key:t)` takes it; a map's too); a write
+  needs a key of the map's key type.
+- **Refused**: `W.Length`, `for (X : W)`, `ConcatenateMaps` of one, `=` and
+  `<>`, `comparable(W)`, a weak map where a map is expected, and a weak map
+  as a map's key; each with the Book's words ("There is no `Length`
+  property, no iteration, no coercion to `comparable`"). There is no
+  removal: a map's entries are removed by iterating it, which a weak map
+  cannot be.
+- **Weak keys.** No program can tell whether an entry whose key is no
+  longer referenced is still there: a weak map is read only by `W[K]`, with
+  a key equal to the entry's, and a key that holds an object is equal only
+  to one holding the same object, which a program that holds it keeps
+  alive. openverse never reclaims objects, and holds a weak map as a map,
+  the array of its pairs in Verse Core; the argument is
+  [research/weak-map.md](research/weak-map.md), "Is weakness observable?".
+- Not yet: `weak_map(…)` as a value (`t := weak_map(int, int)` in a body),
+  as types as values are classes' and interfaces' only.
+
 ## Types as values
 
 A class or an interface is a value of a *metatype* (Book of Verse ch. 11,
@@ -3174,7 +3230,7 @@ Main()<suspends>:void =
 ## Not supported in v1
 
 `ToString` of rationals (see [rational](#rational)), float functions beyond those of [float](#float), the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
-`weak_map`, what [comparable](#comparable) lists as not yet, module paths `using{/Verse.org/…}` (accepted and ignored), paths as values and path qualifiers other than `(/Verse.org/Verse:)` of a built-in type, two members of one name in a class (`(c:)M` beside an inherited `M`, Book ch. 10), the
+what [Weak maps](#weak-maps) and [comparable](#comparable) list as not yet, module paths `using{/Verse.org/…}` (accepted and ignored), paths as values and path qualifiers other than `(/Verse.org/Verse:)` of a built-in type, two members of one name in a class (`(c:)M` beside an inherited `M`, Book ch. 10), the
 specific overload/call gaps listed under [Overloading](#overloading), nested
 functions and lambdas (a lambda, `(X:int) => X`, `a => b`, parses, as the Book's tests have it, and is refused; see [release evidence and proposed design](research/closure-design.md)),
 pointers (`e^` and `^t` parse, as the Book's tests have them, and are refused: the Book's chapters define none), specifiers on a macro's name (`for<par>(…)`, parsed and refused, 3604), declarations with no body (`F():void`, `X:int` on their line: parsed and refused, as openverse has no definitions made elsewhere), fields with accessors (`var X<getter(F)><setter(G)>:t = external{}`, ch. 10, "Fields with Accessors": parsed and refused), choice beyond [Choice](#choice), concurrency beyond [Concurrency](#concurrency), and the unsupported

@@ -340,6 +340,8 @@ def subAt (anc : String → List String) (a0 b0 : STy) : Bool :=
   reprStr a == reprStr b || match a, b with
     | .name "int", .name "rational" => true
     | .name x, .name y => (anc x).contains y
+    -- (a map is a weak map of its key and value types: `TyEnv.convertsAt`)
+    | .map k v, .app "weak_map" [k', v'] => reprStr k == reprStr k' && reprStr v == reprStr v'
     | .fn ps es r, .fn qs fs u =>
       let (s, ts, r) := fnTyShape ps es r
       let (t, us, u) := fnTyShape qs fs u

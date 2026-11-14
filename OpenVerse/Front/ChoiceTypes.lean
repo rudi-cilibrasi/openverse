@@ -24,6 +24,9 @@ private partial def abstract (env : TyEnv) (stem : String) (types : List Ty) :
   if let some children := types.mapM (fun | .map k v => some (k, v) | _ => none) then
     return .map (← abstract env stem (children.map (·.1)))
       (← abstract env stem (children.map (·.2)))
+  if let some children := types.mapM (fun | .weakMap k v => some (k, v) | _ => none) then
+    return .weakMap (← abstract env stem (children.map (·.1)))
+      (← abstract env stem (children.map (·.2)))
   let args? : Option (List (List Ty)) := match first with
     | .tup ts => types.mapM fun
       | .tup us => if us.length == ts.length then some us else none

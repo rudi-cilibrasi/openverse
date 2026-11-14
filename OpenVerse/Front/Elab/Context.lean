@@ -816,6 +816,8 @@ def notComparable (env : TyEnv) (t : Ty) (what : String) : String :=
     else if env.classes.contains n then
       s!"{what} must be comparable, and {t.show} is a class (only <unique> classes are comparable, by identity)"
     else notComparable.params t what
+  | .weakMap .. =>
+    s!"{what} must be comparable, and {t.show} is a weak_map, which is not (Book of Verse ch. 3: \"no coercion to `comparable`\")"
   | _ => notComparable.params t what
 where
   params (t : Ty) (what : String) : String :=
@@ -904,6 +906,12 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
       return t
     | none =>
       if (env.structs.lookup n).isSome then eerr p s!"struct {n} takes no type arguments"
+      -- `weak_map(k, v)` (Book of Verse ch. 3, "Weak Maps"), unless the
+      -- program defines a type of that name
+      else if n == "weak_map" then
+        let [kt, vt] := ts | eerr p s!"weak_map takes 2 type arguments, a key type and a value type, found {ts.length}"
+        if !kt.comparable env then eerr p (notComparable env kt "a weak_map key")
+        return .weakMap kt vt
       else eerr p s!"unknown parametric type '{n}' (only structs can be parametric)"
 
 def typeNames : List String :=
@@ -1118,7 +1126,8 @@ where
       | .tup ps, .tup values =>
         if ps.length != values.length then none else
           (ps.zip values).foldlM (fun current (p, value) => go seen current p value) substitution
-      | .map pk pv, .map ak av => do go seen (← go seen substitution pk ak) pv av
+      | .map pk pv, .map ak av | .weakMap pk pv, .map ak av | .weakMap pk pv, .weakMap ak av => do
+        go seen (← go seen substitution pk ak) pv av
       | .struct owner ps, .struct source values =>
         let values := if owner != source && ctx.types.classes.contains source && ctx.types.isSub source owner then
           ctx.types.upArgs source values owner else values
@@ -1433,7 +1442,7 @@ def p2 (op : Prim) (a b : Expr) : Expr := .prim op [a, b]
 partial def Ty.mentionsVoid : Ty → Bool
   | .void => true
   | .arr t | .opt t => t.mentionsVoid
-  | .map k v => k.mentionsVoid || v.mentionsVoid
+  | .map k v | .weakMap k v => k.mentionsVoid || v.mentionsVoid
   | .tup ts | .struct _ ts => ts.any Ty.mentionsVoid
   | _ => false
 
@@ -1444,6 +1453,7 @@ partial def Ty.voidToUnit : Ty → Ty
   | .arr t => .arr t.voidToUnit
   | .opt t => .opt t.voidToUnit
   | .map k v => .map k.voidToUnit v.voidToUnit
+  | .weakMap k v => .weakMap k.voidToUnit v.voidToUnit
   | .tup ts => .tup (ts.map Ty.voidToUnit)
   | .struct n ts => .struct n (ts.map Ty.voidToUnit)
   | t => t
@@ -1635,7 +1645,8 @@ partial def witness (env : TyEnv) (dictBase : Nat) (dictVars : List String) : Ty
   | .arr t => return .prim .mkArr [← witness env dictBase dictVars t]
   | .opt t => return .prim .mkSome [← witness env dictBase dictVars t]
   | .tup ts => return .prim .mkTup (← ts.mapM (witness env dictBase dictVars))
-  | .map k v => return .prim .mkArr [.prim .mkTup [← witness env dictBase dictVars k, ← witness env dictBase dictVars v]]
+  | .map k v | .weakMap k v =>
+    return .prim .mkArr [.prim .mkTup [← witness env dictBase dictVars k, ← witness env dictBase dictVars v]]
   | .struct n ts => do
     if env.isRefClass n then return .local (← fresh (.struct n ts))
     if env.classes.contains n then
@@ -1984,7 +1995,7 @@ partial def Ty.boxIdTo (env : TyEnv) : Ty → Ty → Bool
 partial def Ty.mentionsComparable : Ty → Bool
   | .dyn => true
   | .arr t | .opt t => t.mentionsComparable
-  | .map k v => k.mentionsComparable || v.mentionsComparable
+  | .map k v | .weakMap k v => k.mentionsComparable || v.mentionsComparable
   | .tup ts | .struct _ ts => ts.any Ty.mentionsComparable
   | _ => false
 
@@ -2143,7 +2154,9 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
     | none => return none
   -- Maps are covariant in comparable keys and in values. Traverse the
   -- existing entries, preserving order/cardinality rather than reinserting.
-  | .map k a', .map k' b' =>
+  -- (A map is a weak map, and weak maps are covariant alike, Book of Verse
+  -- ch. 3, "Covariance": the same pairs.)
+  | .map k a', .map k' b' | .map k a', .weakMap k' b' | .weakMap k a', .weakMap k' b' =>
     if !isComparable env k || !isComparable env k' then return none
     let i ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push (.tup [k, a']) })
     let keyExpr := Expr.prim (.tupGet 0) [.local i]
@@ -2241,6 +2254,9 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
     -- (a value of a type that is not comparable is no comparable)
     if target == .dyn && r.ty != .any && !r.ty.comparable (← get).env then
       eerr p (notComparable (← get).env r.ty s!"expected comparable, found {r.ty.show}: a value of type comparable")
+    -- (a weak map is above the maps, not below: Book of Verse ch. 3)
+    if let (.weakMap .., .map ..) := (r.ty, target) then
+      eerr p s!"expected {target.show}, found {r.ty.show}: a weak_map is no map (Book of Verse ch. 3: \"Because `weak_map` is a supertype of `map`, you can assign regular maps to weak_map variables … but you lose the ability to count or iterate\")"
     eerr p s!"expected {target.show}, found {r.ty.show}"
 
 /-- `coerce`, whose error says why a name is an `any` (`Ctx.anyWhy`). -/
@@ -2430,6 +2446,13 @@ partial def joinTyShaped (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Boo
       ((xs.zip ys).zip es).mapM (fun ((x, y), e) => joinTy env x y e true) |>.map .tup
   | .map k x, .map k' y =>
     if k == k' then (joinTy env x y (match exp with | some (.map _ e) => some e | _ => none) true).map (.map k) else none
+  -- (a weak map and a map, or two weak maps, join at a weak map, Book of
+  -- Verse ch. 3: "no way to join one with a regular map to produce a
+  -- regular map", `weak_map.versetest` 98, 104)
+  | .weakMap k x, .weakMap k' y | .weakMap k x, .map k' y | .map k x, .weakMap k' y =>
+    if k == k' then
+      (joinTy env x y (match exp with | some (.weakMap _ e) | some (.map _ e) => some e | _ => none) true).map (.weakMap k)
+    else none
   | _, _ => none
 /-- A type above both `a` and `b` (the expected one when it is, #32): two
     classes join at their nearest common supertype, and arrays, options,

@@ -1882,6 +1882,24 @@ the Book's equality ([research/comparable-type.md](research/comparable-type.md),
   families and boxed. Other generic functions take no dictionary and keep
   their bytes.
 
+## Weak maps and module-scoped vars
+
+A `weak_map(k, v)` is a front-end type (`Ty.weakMap`) above `[k]v` whose
+Verse Core type is the map's, the array of its pairs
+([research/weak-map.md](research/weak-map.md)). Verse Core, OVBC and the C
+runtime do not know it. The front end treats it as a map wherever an entry
+is read or written (`elabIndexLike`, the `set` paths, the choice
+dictionaries' indexed writes) and nowhere else: its conversions are the
+map's (`convert`, `refUp`: free when the key and value types are the same,
+else entry by entry), joins with a map at a weak map (`joinTy`), meets with
+one at the map where a function value's parameter is (`TyEnv.convertsAt`),
+and `.Length`, `for`, `ConcatenateMaps`, `comparable` and `=` refuse it by
+name. The Book's "weak key references" are a statement about storage that
+no program can observe (a weak map is read only by a key equal to the
+entry's, which the reader holds), and openverse never reclaims objects, so
+holding a weak map as a map is exact; the argument, and what a collector
+that reclaimed objects could drop, are in the research note.
+
 ## Rationals: helpers written in Verse
 
 A `rational` (#116) is a front-end type whose Verse Core form is the tuple

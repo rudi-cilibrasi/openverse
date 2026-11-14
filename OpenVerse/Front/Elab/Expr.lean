@@ -945,7 +945,7 @@ partial def elabMethod (ctx : Ctx) (p : Pos) (r : R) (m : String) (args : List S
 /-- `A[i]` on an array (failable) or `T(k)` on a tuple. -/
 partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bracket : Bool) : EM R := do
   let containers : Ty → Bool := fun
-    | .arr _ | .map .. => bracket
+    | .arr _ | .map .. | .weakMap .. => bracket
     | .tup _ => !bracket
     | _ => false
   let container ← match ctx.containerView p r.ty containers "index" with
@@ -1002,9 +1002,25 @@ partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bra
     let ri := widenR ctx.types (← elabE ctx i (some .int))
     if ri.ty != .int then eerr p s!"an array index must be an int, found {ri.ty.show}"
     return ⟨p2 .index (← inferable r) ri.e, t⟩
-  | .map kt vt, [k], true =>
+  -- (a weak map's entry is a map's, Book of Verse ch. 3: "Updating and
+  -- accessing individual entries works the same way as regular maps")
+  | .map kt vt, [k], true | .weakMap kt vt, [k], true =>
     let tm ← fresh r.ty
     let rk ← elabE ctx k (some kt)
+    -- (a key of another class than the map's keys: the lookup's key type is
+    -- the class above both, as the API's `operator'()'(Map:[t]u, Key:t)`
+    -- takes `t` above both, `Map.versetest` 385, 388, 394; the map is one at
+    -- that key type, as Verse Core holds it, and a key that is not of the
+    -- map's key type is in none of its entries)
+    if let (.struct kn _, .struct mn _) := (rk.ty, kt) then
+      if rk.ty != kt && ctx.types.isRefClass kn && ctx.types.isRefClass mn && !refUp ctx.types rk.ty kt then
+        if let some jt@(.struct jn _) := joinTy ctx.types kt rk.ty none then
+          if ctx.types.isRefClass jn && jt.comparable ctx.types && refUp ctx.types kt jt &&
+              (rk.ty == jt || refUp ctx.types rk.ty jt) then
+            let tm' ← fresh (.map jt vt)
+            let tk ← fresh jt
+            let tp ← fresh (.tup [jt, vt])
+            return ⟨.seq (.assign tm' r.e) (.seq (.assign tk rk.e) (mapLookup tm' tk tp)), vt⟩
     -- (a `comparable` key, of a map whose keys are of another type: each key
     -- boxed and compared with it, Book of Verse ch. 11)
     if rk.ty == .dyn && kt != .dyn && kt.params.isEmpty && kt.comparable ctx.types then
@@ -1031,7 +1047,7 @@ partial def ratMismatch : Ty → Ty → Bool
   | .arr a, .arr b | .opt a, .opt b => ratMismatch a b
   | .tup as, .tup bs => as.length == bs.length && (as.zip bs).any fun (a, b) => ratMismatch a b
   | .tup as, .arr b | .arr b, .tup as => as.any (ratMismatch · b)
-  | .map k v, .map k' v' => ratMismatch k k' || ratMismatch v v'
+  | .map k v, .map k' v' | .weakMap k v, .weakMap k' v' | .map k v, .weakMap k' v' => ratMismatch k k' || ratMismatch v v'
   | .struct a as, .struct b bs => a == b && as.length == bs.length && (as.zip bs).any fun (x, y) => ratMismatch x y
   | _, _ => false
 
@@ -2180,6 +2196,8 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
   ctx.noteFamily p r.ty m
   match r.ty, m with
   | .arr _, "Length" | .map _ _, "Length" => return ⟨.prim .len [← inferable r], .int⟩
+  | .weakMap .., "Length" =>
+    eerr p s!"a weak_map has no Length (Book of Verse ch. 3: \"There is no `Length` property, no iteration, no coercion to `comparable`\"): {r.ty.show} keeps only its entries' W[Key] and set W[Key] = …"
   | .struct sn targs, f =>
     if ctx.types.classes.contains sn then checkMemberAccess ctx.types p sn f
     match fieldIndex (ctx.types.fields sn targs) f with
@@ -2475,8 +2493,10 @@ partial def elabConstructionValue (ctx : Ctx) (p : Pos) (name : String) (targs :
     keeps its last value, at the position of its last occurrence (Book of
     Verse §9.3). -/
 partial def elabMapLit (ctx : Ctx) (p : Pos) (entries : List (SExpr × SExpr)) (exp : Option Ty) : EM R := do
+  -- (where a weak map is expected, a map, which is one: Book of Verse ch. 3,
+  -- "can be initialized from an ordinary `map{}`")
   let (kt?, vt?) := match exp with
-    | some (.map k v) => (some k, some v)
+    | some (.map k v) | some (.weakMap k v) => (some k, some v)
     | _ => (none, none)
   match entries with
   | [] =>

@@ -97,6 +97,8 @@ def typeEnvironment (classes : Classes) (fields : Fields) (methods : Methods) (s
     | .arr t | .opt t => persists t
     | .tup ts => ts.attach.all fun ⟨t, _⟩ => persists t
     | .map k v => persists k && persists v
+    -- (Book of Verse ch. 17: "`weak_map` - Weak references are not persistable")
+    | .weakMap .. => false
     | .struct n args => !env.classes.contains n && persistable.contains n && args.attach.all fun ⟨t, _⟩ => persists t
     | _ => true
   for t in methods.tops do

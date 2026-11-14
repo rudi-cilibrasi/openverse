@@ -425,7 +425,10 @@ TEST_NAMES = {
         "external_persistable_struct1", "external_persistable_enum1",
         # extension methods of the test runner ("The method is defined in
         # /Verse.org/Tests/VerseTestScriptCmd", ExtensionFields.versetest:157)
-        "TakeExtension", "PlusTwo", "TestParametricExtensionMethod"],
+        "TakeExtension", "PlusTwo", "TestParametricExtensionMethod",
+        # the digest generator's round trip of a weak map
+        # (weak_map.versetest:183, "Test the digest generator")
+        "TestWeakMap"],
 }
 # Engine APIs the Book's Runtime API reference places outside the language:
 # persistence, JSON, Unreal objects and AutoRTFM. A case using one is not
