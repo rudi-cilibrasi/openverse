@@ -1660,7 +1660,8 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
     -- `X := $each(Xs)`, whose alternatives the clauses after it take one at
     -- a time, the first success stopping the search; `I -> X : Xs` the
     -- choice of the source's indices, the source evaluated once before
-    -- them; `X := a..b` the choice of the range's ints)
+    -- them (`firstSourceName`: over a map, its keys, which the elaboration
+    -- takes with the values); `X := a..b` the choice of the range's ints)
     let eachOf (q : Pos) (arr : SExpr) : SExpr := .app q (.ident q "$each") [arr] false
     let ints (q : Pos) (lo hi : SExpr) : SExpr :=
       let j := s!"$firstRange{q.line}_{q.col}"
@@ -1668,7 +1669,7 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
     let genClause : SExpr → List SExpr
       | .gen q x none src => [.decl q x none false (eachOf q src)]
       | .gen q x (some i) src =>
-        let a := s!"$firstSource{q.line}_{q.col}"
+        let a := firstSourceName q
         [.decl q a none false src,
          .decl q i none false (eachOf q (ints q (.int q 0) (.bin q "-" (.member q (.ident q a) "Length") (.int q 1)))),
          .decl q x none false (.app q (.ident q a) [.ident q i] true)]

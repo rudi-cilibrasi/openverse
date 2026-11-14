@@ -115,8 +115,10 @@ def concurrencyHelpers (resolved : List STop) (requests : Requests) :
     1. the effect policy, with where each specifier may go, and the source
        profile (`EffectPolicy`, `SourceProfile`);
     2. the rules of the source as written (`SourceRules.lean`, in this
-       order): no built-in type's name taken (`checkTypeNames`), no
-       reserved name (`checkReservedNames`), each name defined once in its
+       order): no built-in type's name taken by a type
+       (`checkTypeNames`), no reserved name (`checkReservedNames`), no
+       built-in type's name by any other definition
+       (`checkBuiltinTypeNames`), each name defined once in its
        scope (`checkDefinedOnce`) and none of a scope around it
        (`checkNoShadowing`), `return` only in a function
        (`checkReturns`), no `return` or `break` that leaves a failure
@@ -169,6 +171,7 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   --    (`SourceRules`)
   checkTypeNames allTops0r
   checkReservedNames allTops0r
+  checkBuiltinTypeNames allTops0r
   checkDefinedOnce allTops0r
   let scopePairs ← checkNoShadowing allTops0r
   checkReturns allTops0r
@@ -306,9 +309,7 @@ def inlineSource (requests : Requests) (admitted : Admitted) :
   -- functions with several values (#235, #283), inlined at their calls; a
   -- method with several values may not take the name of a member of a
   -- built-in type or of the prelude, as `R.M` could be it
-  let reserved : List String := ["Length", "Slice", "Find", "Insert", "Remove", "RemoveElement",
-    "RemoveFirstElement", "RemoveAllElements", "ReplaceElement", "ReplaceAllElements", "ReplaceAll", "Last",
-    "Signal", "Await", "Cancel"] ++ admitted.helpers.flatMap fun
+  let reserved : List String := builtinMemberNames ++ admitted.helpers.flatMap fun
       | .classDef _ _ _ _ _ _ _ fs ms => fs.map (·.1) ++ ms.filterMap fun | .fn _ m .. => some m | _ => none
       | _ => []
   -- (with the sites an elaboration is to note, #283: the uses of methods
@@ -323,12 +324,7 @@ def inlineSource (requests : Requests) (admitted : Admitted) :
   let helpers := admitted.helpers ++ (← if lazy then lazyTops else pure [])
   -- (#283) and of the cells of the vars their frames set
   let cells (e : SExpr) : Bool := Choice.anyE (fun | .construct _ "$varcell" .. => true | _ => false) e
-  let cellsIn (ps : List SParam) (b : SExpr) : Bool := cells b || ps.any (·.default.any cells)
-  let usesCells := lazy && resolved.any fun
-    | .fn _ _ ps _ _ _ b => cellsIn ps b
-    | .const _ _ _ _ e => cells e
-    | .classDef _ _ _ _ _ _ _ fs ms => fs.any (·.default.any cells) ||
-        ms.any fun | .fn _ _ ps _ _ _ b => cellsIn ps b | _ => false
+  let usesCells := lazy && resolved.any (·.code.any cells)
   let helpers := helpers ++ (← if usesCells then varcellTops else pure [])
   -- the branches of casts that refine type arguments, as functions (#243)
   -- (in front, as the entry expression is the end)

@@ -459,6 +459,16 @@ def SExpr.filterKind : SExpr → String
   | .block .. => "block"
   | _ => "other"
 
+/-- The local a `first`'s generator `I -> X : src` binds its source to,
+    `$firstSource{L}_{C}` at the generator's place, in the first of the
+    parser's three clauses for it; the next two bind `I` to the choice of
+    the source's indices and `X` to the element at `I`. Over a map, the
+    elaboration of the clauses (`elabOneGo`) binds `I` and `X` to each
+    entry's key and value instead, as a `for` does. -/
+def firstSourcePrefix : String := "$firstSource"
+def firstSourceName (p : Pos) : String := s!"{firstSourcePrefix}{p.line}_{p.col}"
+def isFirstSource (n : String) : Bool := n.startsWith firstSourcePrefix
+
 /-- The code of a definition, in the order it is written: a function's
     parameters' defaults, then its body; a constant's value, or a struct's
     fields' defaults; a class's or an interface's fields' defaults, then its
@@ -659,11 +669,20 @@ def reservedNames : List String :=
    "sequence", "string8", "string16", "string32", "subclass", "succeeds", "syntax", "throws", "trait",
    "truth", "try", "union", "using", "verify", "when", "while", "of", "at"]
 
-/-- The built-in types' names, which no type of the program's takes
-    (`checkTypeNames`, with `char32`) and no type parameter does
-    (`checkTParams`). -/
-def typeNames : List String :=
-  ["int", "logic", "char", "string", "void", "float", "rational", "any", "comparable", "type", "subtype"]
+/-- The built-in types' names, which the elaboration reads as those types
+    before any definition of the program's (`resolveTy`), and which
+    `(/Verse.org/Verse:)t` names (`Resolver.qualifier`). -/
+def builtinTypeNames : List String :=
+  ["int", "logic", "char", "char32", "string", "void", "float", "rational", "any", "comparable"]
+
+/-- The names a use reads as a built-in type whatever the program defines:
+    the built-in types' (`builtinTypeNames`) and the metatypes' (`type`,
+    `subtype`, `concrete_subtype`; `castable_subtype` is reserved,
+    `reservedNames`). No type of the program's takes one
+    (`checkTypeNames`), nor a type parameter (`checkTParams`) or any other
+    definition (`checkBuiltinTypeNames`): they are definitions every scope
+    sees, which none may shadow. -/
+def typeNames : List String := builtinTypeNames ++ ["type", "subtype", "concrete_subtype"]
 
 /-- The prefix of an extension method's function's name (`extensionName`). -/
 def extensionPrefix : String := "$ext:"

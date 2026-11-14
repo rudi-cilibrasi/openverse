@@ -40,14 +40,18 @@ def fromTypeName : String := "GetCastableFinalSuperClassFromType"
 /-- The helper a call of `f` with first argument `b` becomes. -/
 def helperName (f b : String) : String := s!"${f}:{b}"
 
+/-- The function whose call a helper `helperName f b` is, `f`, which a
+    message names instead of the helper. -/
+def calledBy? (n : String) : Option String :=
+  [instanceName, fromTypeName].find? fun f => n.startsWith s!"${f}:"
+
 /-- The type names that are no class or interface, which the first
     argument may be (its call then always fails): the built-in types and the
     program's structs and enums. -/
 def otherTypeNames (tops : List STop) : List String :=
-  ["int", "float", "logic", "char", "char32", "string", "rational", "void", "any", "comparable"] ++
-    tops.filterMap fun
-      | .const _ n _ none (.structDef ..) | .const _ n _ none (.enumDef ..) => some n
-      | _ => none
+  builtinTypeNames ++ tops.filterMap fun
+    | .const _ n _ none (.structDef ..) | .const _ n _ none (.enumDef ..) => some n
+    | _ => none
 
 /-- The calls of the functions `fns` in `e`: where, which, and the first
     argument. -/

@@ -1048,6 +1048,25 @@ def resolveSignatureTypes (env : TyEnv) (p : Pos) (ps : List SParam) (ret : STy)
 def Ctx.lookup (ctx : Ctx) (n : String) : Option Local := ctx.locals.find? (·.name == n)
 def Ctx.sig? (ctx : Ctx) (n : String) : Option Sig := ctx.sigs.find? (·.name == n)
 
+/-- A local's name as a message says it: as written (`Choice.shownName`),
+    and one the inlining renamed for a call's site, `$g_N_site` (a local
+    `N` of the function `g` with several values, `Choice.inlineCalls`), `N`,
+    `g` the longest of the program's functions' names that fits. -/
+def Ctx.shownLocal (ctx : Ctx) (n : String) : String :=
+  let n := Choice.shownName n
+  let site? (pre : String) : Option String := do
+    let rest := (n.drop pre.length).toString
+    let parts := rest.splitOn "_"
+    let site ← parts.getLast?
+    if !n.startsWith pre || parts.length < 2 || site.isEmpty || !site.all Char.isDigit then none
+    else some ("_".intercalate parts.dropLast)
+  let fits := ctx.sigs.filterMap fun s =>
+    let pre := "$" ++ s.name.replace "::" "_" ++ "_"
+    (site? pre).map (pre.length, ·)
+  match fits.foldl (fun best x => if best.all (·.1 < x.1) then some x else best) none with
+  | some (_, written) => written
+  | none => n
+
 def Ctx.evidenceTypes (ctx : Ctx) : List (String × Ty) :=
   ctx.locals.map fun binding => (binding.name, if binding.typeValue then .void else binding.ty)
 
@@ -1252,6 +1271,12 @@ def Ctx.containerView (ctx : Ctx) (p : Pos) (derived : Ty) (accepts : Ty → Boo
     (operation : String) : Except String (Option Ty) :=
   ctx.valueView p derived accepts operation
 
+/-- Why a weak map of type `t` is no generator's source, in a `for` or a
+    `first` (Book of Verse ch. 3: "you cannot iterate over its entries",
+    `weak_map.versetest:130`, 3524). -/
+def weakMapNotIterated (t : Ty) : String :=
+  s!"a weak_map cannot be iterated (Book of Verse ch. 3: \"There is no `Length` property, no iteration, no coercion to `comparable`\"): {t.show} keeps only its entries' W[Key] and set W[Key] = …"
+
 /-- An array shape for a built-in operation, with every required level
     supported by actual whole-value or component capabilities. -/
 def Ctx.arrayView (ctx : Ctx) (p : Pos) (derived : Ty) (depth : Nat)
@@ -1302,10 +1327,16 @@ def Ctx.concurrencyView (ctx : Ctx) (p : Pos) (derived : Ty) (member : String) :
     | _ => false
   ctx.selectValueView p derived (ctx.memberViews derived member ++ intrinsic) s!"member '{member}'"
 
-/-- The methods of an array (Book of Verse §9.1, `elabMethod`). -/
-def arrayMethods : List String :=
-  ["Slice", "Find", "RemoveFirstElement", "RemoveElement", "Remove", "RemoveAllElements",
-   "ReplaceFirstElement", "ReplaceElement", "ReplaceAllElements", "ReplaceAll", "Insert", "Last"]
+/-- The methods of an array (Book of Verse §9.1, `elabMethod`), each with
+    its overloads' parameters, of an array whose elements are `t`. -/
+def arrayMethodParams (t : Ty) : List (String × List (List Ty)) :=
+  [("Slice", [[.int], [.int, .int]]), ("Find", [[t]]), ("RemoveFirstElement", [[t]]),
+   ("RemoveElement", [[.int]]), ("Remove", [[.int, .int]]), ("RemoveAllElements", [[t]]),
+   ("ReplaceFirstElement", [[t, t]]), ("ReplaceElement", [[.int, t]]), ("ReplaceAllElements", [[t, t]]),
+   ("ReplaceAll", [[.arr t, .arr t]]), ("Insert", [[.int, .arr t]]), ("Last", [[], [.int]])]
+
+/-- The methods of an array (`arrayMethodParams`). -/
+def arrayMethods : List String := (arrayMethodParams .int).map (·.1)
 
 def Ctx.boundView (ctx : Ctx) (p : Pos) (derived : Ty) (member : String) : Except String (Option Ty) := do
   let .param .. := derived | return none
@@ -2743,12 +2774,42 @@ def utf8Of (tc : Nat) : EM Expr := do
         .assign r2 (m (.local r) 4096), .assign d (q (.local r2) 64), .assign e (m (.local r2) 64)]) four
       (.prim .userErr []))))
 
-/-- Whether `m` is a method of `t`'s that `scalarMethod?` compiles, and
-    whether it can fail. -/
-def scalarMethodFails? : Ty → String → Option Bool
-  | .char, "ToCodeUnit" | .char32, "ToCodePoint" | .char32, "ToAsciiString" => some false
-  | .char, "ToAsciiChar32" | .int, "ToChar" | .int, "ToChar32" | .float, "IsFinite" => some true
-  | _, _ => none
+/-- The methods of chars, code points, ints and floats (`scalarMethod?`):
+    the receiver's type, the name, and whether a call can fail. -/
+def scalarMethods : List (Ty × String × Bool) :=
+  [(.char, "ToCodeUnit", false), (.char32, "ToCodePoint", false), (.char32, "ToAsciiString", false),
+   (.char, "ToAsciiChar32", true), (.int, "ToChar", true), (.int, "ToChar32", true), (.float, "IsFinite", true)]
+
+/-- Whether `m` is a method of `t`'s that `scalarMethod?` compiles
+    (`scalarMethods`), and whether it can fail. -/
+def scalarMethodFails? (t : Ty) (m : String) : Option Bool :=
+  (scalarMethods.find? fun (u, n, _) => u == t && n == m).map (·.2.2)
+
+/-- The methods of the concurrency types, `Await`, `Signal` and `Cancel`
+    (`Ctx.hasOwnMember`). -/
+def concurrencyMethods : List String := ["Await", "Signal", "Cancel"]
+
+/-- The names of the built-in types' members (`Ctx.hasOwnMember`): `Length`
+    of an array and of a map, an array's methods (a string's), a scalar's,
+    and a concurrency type's. A method with several values takes none of
+    them (`inlineSource`), as `R.M` could be one. -/
+def builtinMemberNames : List String :=
+  "Length" :: arrayMethods ++ scalarMethods.map (·.2.1) ++ concurrencyMethods
+
+/-- A type parameter's name as a message says it: a helper's, which its
+    prelude renamed `$t` so that no program's name meets it, `t`. -/
+def shownTParam (n : String) : String := if n.startsWith "$" then (n.drop 1).toString else n
+
+/-- The parameters of each overload of the built-in method `m` of a value
+    of type `t`: an array's (a string's, a tuple's of one element type) or
+    a scalar's; none for another (`checkSignatures` refuses an extension
+    method that repeats one). -/
+def builtinMethodParams (t : Ty) (m : String) : List (List Ty) :=
+  let array (e : Ty) : List (List Ty) := ((arrayMethodParams e).lookup m).getD []
+  match t with
+  | .arr e => array e
+  | .tup (t0 :: ts) => if ts.all (· == t0) then array t0 else []
+  | t => if (scalarMethodFails? t m).isSome then [[]] else []
 
 /-- The conversions of chars and code points, and `IsFinite` of a float, as
     methods of their receivers: of a char, `C.ToCodeUnit()` (0 to 255) and
@@ -2799,7 +2860,7 @@ def Ctx.hasOwnMember (ctx : Ctx) (p : Pos) (t : Ty) (m : String) : Bool :=
   | .struct c targs =>
     ctx.hasMethod c m || ((ctx.types.methodOverloads.lookup m).getD []).any (ctx.hasMethod c ·) ||
       (ctx.types.fields c targs).any (·.1 == m) ||
-      (["Await", "Signal", "Cancel"].contains m && (c == "$subev0" ||
+      (concurrencyMethods.contains m && (c == "$subev0" ||
         ["task", "event", "sticky_event", "subscribable_event"].any (ctx.types.concurrencyName · == c)))
   | .arr _ => m == "Length" || arrayMethods.contains m
   | .map .. => m == "Length"

@@ -1,5 +1,6 @@
 /- Initializer admission, separate from heap permissions and execution fuel. -/
 import OpenVerse.Front.Syntax
+import OpenVerse.Front.FinalSuper
 import OpenVerse.Core.Semantics
 import Std.Data.HashSet
 
@@ -89,7 +90,7 @@ partial def checkExpr (fns : Array Fn) (ordinary construction : List String)
     args.forM recur
     let some fn := fns[idx]? | throw "an initializer calls an unavailable helper"
     if ordinary.contains fn.name then
-      throw s!"ordinary function '{fn.name}' has no checked convergence contract"
+      throw s!"ordinary function '{(FinalSuper.calledBy? fn.name).getD fn.name}' has no checked convergence contract"
     if construction.contains fn.name then return
     if visiting.contains idx then
       throw s!"recursive helper '{fn.name}' has no checked convergence contract"

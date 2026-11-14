@@ -181,7 +181,7 @@ def pruneMethodBinding (ctx : Ctx) : SExpr → SExpr
 /-- A local named `n` may be declared here: Verse has no shadowing. -/
 def checkNewLocal (ctx : Ctx) (p : Pos) (n : String) : EM Unit := do
   if ctx.lookup n |>.isSome then
-    let n := Choice.shownName n
+    let n := ctx.shownLocal n
     eerr p s!"'{n}' is already defined; Verse does not allow shadowing (use set {n} = … for a var)"
   -- (nor a soft built-in's: a local cannot hide one, #132; nor an
   -- overloaded function's, whose overloads have names of their own, #74)

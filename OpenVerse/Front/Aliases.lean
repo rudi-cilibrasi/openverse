@@ -210,7 +210,7 @@ def expand (tops : List STop) : Except String (List STop × List (String × Alia
     | .const _ n _ none (.enumDef ..) | .const _ n _ none (.refineDef ..) => some (n, 0)
     | _ => none)
   let typeArity (aliases : Std.HashMap String Nat) (n : String) : Option (Option Nat) :=
-    if builtinTypes.contains n || n == "comparable" then some (some 0)
+    if builtinTypeNames.contains n then some (some 0)
     else if let some k := defined[n]? then some (some k)
     else if let some k := aliases[n]? then some (some k)
     else if PreludeNeeds.names.contains n then some none
@@ -257,7 +257,7 @@ def expand (tops : List STop) : Except String (List STop × List (String × Alia
           | .typeAlias _ tps ty => (tps, ty)
           | e => ([], e.asType?.getD (.tup []))
         let last := (qualParts n).getLastD n
-        if (builtinTypes ++ ["comparable", "type"]).contains last then
+        if typeNames.contains last then
           throw s!"{p.show}: {last} is a built-in type"
         if let some tp := tps.find? (·.constraint != "type") then
           throw s!"{tp.pos.show}: a parameter of a type alias is written {tp.name}:type (a bound on one is not supported)"

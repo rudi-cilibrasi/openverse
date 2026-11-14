@@ -125,6 +125,11 @@ def desugar (tops : List STop) : Except String (List STop) := do
   if fns.isEmpty then return tops
   -- each call of one, in code whose type parameters are `tps`
   let rewrite := rewriteCalls fns
+  -- (in a parameter's default and a field's, as in a body)
+  let params (names : List String) (ps : List SParam) : Except String (List SParam) :=
+    ps.mapM fun q => do return { q with default := ← q.default.mapM (rewrite names) }
+  let fields (names : List String) (fs : List SField) : Except String (List SField) :=
+    fs.mapM fun f => do return { f with default := ← f.default.mapM (rewrite names) }
   let fn (t : STop) : Except String STop := do
     match t with
     | .fn p n ps tps specs r b =>
@@ -133,21 +138,19 @@ def desugar (tops : List STop) : Except String (List STop) := do
       let ps' := ps.zipIdx.map fun (q, i) =>
         if places.any (·.1 == i) then { q with name := paramPrefix ++ q.name, ty := .opt (.name q.name) } else q
       let names := tps'.map (·.name)
-      let ps' ← ps'.mapM fun q => do
-        match q.default with
-        | some d => return { q with default := some (← rewrite names d) }
-        | none => return q
-      return .fn p n ps' tps' specs r (← rewrite names b)
+      return .fn p n (← params names ps') tps' specs r (← rewrite names b)
+    -- (a struct's fields' defaults, which `rewriteCalls` does not enter, with
+    -- its type parameters)
+    | .const p n specs ty (.structDef q tps sspecs fs) =>
+      return .const p n specs ty (.structDef q tps sspecs (← fields (tps.map (·.name)) fs))
     | .const p n specs ty v => return .const p n specs ty (← rewrite [] v)
     | .classDef p n nsp tps specs parents isI fs ms =>
       let cvs := tps.map (·.name)
-      let fs ← fs.mapM fun f => do
-        match f.default with
-        | some d => return { f with default := some (← rewrite cvs d) }
-        | none => return f
+      let fs ← fields cvs fs
       let ms ← ms.mapM fun
         | .fn mp mn ps mtps specs r b => do
-          return .fn mp mn ps mtps specs r (← rewrite (cvs ++ mtps.map (·.name)) b)
+          let names := cvs ++ mtps.map (·.name)
+          return .fn mp mn (← params names ps) mtps specs r (← rewrite names b)
         | m => pure m
       return .classDef p n nsp tps specs parents isI fs ms
   tops.mapM fn

@@ -299,11 +299,15 @@ as the choice of its source's elements (`firstOf`, `Front/Parser.lean`):
 takes one element at a time, the clauses after it in the filter
 (`elabOneGo`, as for a recursive function's values, #235); `I -> X : Xs`
 binds the source once, then `I` to the choice of its indices and `X` to
-the element; `X := a..b` is the choice of the range's ints. A `for`'s range
+the element; `X := a..b` is the choice of the range's ints. Over a map,
+as a `for` takes one (ch. 7, "Iterating Over Maps"), `V : M` is the choice
+of its values and `K -> V : M` of its entries, `K` and `V` each one's key
+and value: the elaboration sees the source's type, so it takes the entries
+in place of the parser's indices (`elabFirstEntries`, `Elab/Expr.lean`,
+after the source's clause, `firstSourceName`). A `for`'s range
 binding takes a stated type `int` (`elabSource`, `Elab/For.lean`).
 **Left:** `first{X:=1..5, 3*X>10}`, whose clause is a tuple of a range's
-binding and a value (`first.versetest:206`), and a generator over a map in
-`first`.
+binding and a value (`first.versetest:206`).
 
 With a generator, a filter that cannot fail is refused: "Only allow
 expressions that can fail (same as `for`)" (`first.versetest:28-31`,
@@ -316,6 +320,8 @@ keep commas as separators; with a generator among them the parser refuses
 the comma ("a generator inside a tuple is not supported yet"), so that the
 case is refused, not given another value. Programs: the error test
 `first_generator` is a valid program now, in `tests/verse` with its output.
+`first_map_generators` takes a map's values and entries, a string's and a
+range's, a failed entry's effects undone.
 
 ## `false` as a type
 

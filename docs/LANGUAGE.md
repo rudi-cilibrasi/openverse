@@ -153,6 +153,27 @@ also allows you to use reserved words and keywords as enum values, which
 would otherwise cause errors"; `QualifiedIdentifier.versetest` 313-316). The function type
 `type{_(:int):int}` writes `_` as no definition's name, and stays allowed.
 
+No definition takes a built-in type's name either (`typeNames` in
+`Front/Syntax.lean`): `int`, `logic`, `char`, `char32`, `string`, `void`,
+`float`, `rational`, `any`, `comparable`, and the metatypes' `type`,
+`subtype` and `concrete_subtype`. A type (`int := class{}` or a type
+alias: "int is a built-in type"), a constant, a module, a type parameter, a
+parameter, a local and a field are refused alike: the built-in types are
+definitions every scope sees (ch. 16, "Automatic Qualification": `int` is
+`(/Verse.org/Verse:)int`), no definition takes the name of one around it
+(ch. 10), and a use of the name would read the type. A function or a method
+may take one, as the program's own, which its calls reach (`any(X)` calls a
+function `any` the program defines), and so may an enum's value written
+qualified with its enum, `(kind:)int`, as a reserved word may (ch. 9:
+"Enumerators can collide with identifiers in parent scopes"). The Book's
+tests reserve `subtype` and
+`castable_subtype` in every place (`Subtype.versetest` 229-242), `true`
+(`Enum.versetest:59`) and a local `array` (`Array.versetest:96`, a keyword
+in openverse), and define nothing named like another built-in type. The
+names of the library's types that a program may define itself, `event`,
+`task` (a local `task`, `Super.versetest:35`), `weak_map`, `message`, are
+the program's where it does.
+
 ## Parametric functions
 
 A function with a `where` clause is generic. The clause ends the parameter
@@ -555,7 +576,11 @@ Main():void =
   `c` that a call fits both are ambiguous. An extension method on a class
   or an interface with the parameters of one of its methods, own or
   inherited, is refused where it is defined (the Book: "cannot have the
-  same signature as methods defined directly in classes or interfaces").
+  same signature as methods defined directly in classes or interfaces"),
+  and so is one on an array, a string, a char, a char32, an int or a
+  float with the parameters of that type's own method of its name
+  (`(A:[]int).Find(X:int)`, `(N:int).ToChar()`), whatever its effects; one
+  with other parameters (`(A:[]int).Find(X:string)`) is an overload.
 - **In a method**, a bare call `M(…)` whose name an extension method in
   scope has is `Self.M(…)` when only the extension method fits it with
   `Self`; otherwise it keeps its meaning, and it is ambiguous when both fit
@@ -1426,7 +1451,9 @@ entity := class:
     program can define (`first` is a [reserved name](#reserved-names)). `first` reads its
     clauses as `for` does, and takes `first(c). b`, `first(c) do b` and
     `first:` with the clauses indented, then `do:` and a body or nothing;
-    generators, `X : Xs`, `I -> X : Xs` and `X := a..b`, as `for`'s: the
+    generators, `X : Xs`, `I -> X : Xs` and `X := a..b`, as `for`'s, over
+    an array, a string or a map (`V : M` its values, `K -> V : M` its keys
+    and values, in the map's order) and a range: the
     first iteration whose clauses succeed gives the body's value, what the
     failed ones did is undone, and none fails `first` (ch. 7, "first"; the
     Book's tests, `first.versetest`; [the rules](research/book-forms-rules.md#generators-in-first-and-a-ranges-typed-binding));
@@ -1435,8 +1462,7 @@ entity := class:
     rule](research/book-remaining-rules.md#every-filter-of-a-for-can-fail)),
     and commas are refused between the
     clauses of `first{…}`, which join a tuple there, a generator inside it
-    not supported yet (`first.versetest:206`); a generator over a map is
-    not supported yet.
+    not supported yet (`first.versetest:206`).
   - `assert{c}` is a runtime error (as `Err()`, with no message) unless
     `c` succeeds.
   Without a [choice](#choice), `first` is the first and only success, and
@@ -1920,8 +1946,9 @@ Main():void =
   listing two interfaces that both declare it) is refused when one of the
   families has several values. Such a
   method's name must be no field, no struct field, enumerator or member of
-  a built-in type (`Length`, `Find`, `Signal`, …), no top-level name and no
-  parameter or local. An
+  a built-in type (`Length`, an array's methods, `ReplaceFirstElement` too,
+  a scalar's, `ToChar`, `IsFinite`, …, and `Await`, `Signal`, `Cancel`:
+  `builtinMemberNames`), no top-level name and no parameter or local. An
   interface's method is such a family's root too (#283): a call through
   the interface dispatches on the receiver's class, as for an overridden
   method; an interface's default implementation is the alternative for
