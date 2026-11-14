@@ -1,7 +1,7 @@
 pair(a:type,b:type):=class{}
 dup(t:type):=class(pair(t,t)){C:int=4}
-root:=class{}
-extra(t:type):=class(root){X:t;C:int=4}
+root:=class<computes>{}
+extra(t:type):=class<computes>(root){X:t;C:int=4}
 cell:=class{var N:int=0}
 Id(X:t where t:type)<computes>:t=X
 Values(P:pair(a,b) where a:type,b:type):[]int=for(V:=if(D:=dup[P])then(D.C|D.C+1)else 0):V

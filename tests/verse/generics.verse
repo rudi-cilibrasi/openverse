@@ -2,7 +2,7 @@
 # function is checked once with its type parameters opaque, and compiled to
 # one Verse Core function with type variables.
 
-Identity(X:t where t:type):t = X
+Identity(X:t where t:type)<computes>:t = X
 
 Swap(P:tuple(t, u) where t:type, u:type):tuple(u, t) = (P(1), P(0))
 
@@ -30,7 +30,7 @@ Reverse(Items:[]t where t:type):[]t =
     Out
 
 # recursion at the same type
-Repeat(X:t, N:int where t:type):[]t =
+Repeat(X:t, N:int where t:type)<computes>:[]t =
     if (N <= 0) then array{} else array{X} + Repeat(X, N - 1)
 
 # polymorphic recursion: each call is at a larger type

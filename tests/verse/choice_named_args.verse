@@ -16,7 +16,7 @@ Main()<transacts>:void =
     for (X := F(G("a", 1), ?C := G("c", 3), ?B := G("b", 2) | 5)):
         Print("{X}")
     # a positional written after a named one is evaluated first
-    for (X := F(?C := G("c", 3), 1 | 2)):
+    for (X := F(1 | 2, ?C := G("c", 3))):
         Print("{X}")
     # an omitted default runs after the arguments, so after the choice
     for (X := H(1 | 2)):

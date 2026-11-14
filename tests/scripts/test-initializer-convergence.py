@@ -2,6 +2,7 @@
 """Initializer admission plus independent extended-default/control oracles."""
 from pathlib import Path
 import random
+import re
 import subprocess
 import sys
 import tempfile
@@ -136,7 +137,18 @@ with tempfile.TemporaryDirectory(prefix='openverse-initializer-') as directory:
         control, control_want = model(seed, True)
         require(want == control_want, f'model {seed} oracle identity')
         for profile in [[], ['--no-choice']]:
+            # Value's default can fail, which the Book refuses (ch. 13 and its
+            # tests, Effects.versetest:537) before convergence is asked.
             source.write_text(text)
+            result = invoke([OV, 'check', source, *profile])
+            require(result.returncode == 4 and not result.stdout and
+                    "default of field 'Value'" in result.stderr and 'can fail' in result.stderr,
+                    f'model {seed} failing default', result.stderr)
+            # With its failure caught in the default, the defaults' calls are
+            # past the convergence boundary.
+            caught = re.sub(r'Value:int=Get\[(-?[0-9]+)\]', r'Value:int=if(V:=Get[\1])then V else 0', text)
+            require(caught != text, f'model {seed} caught default')
+            source.write_text(caught)
             result = invoke([OV, 'check', source, *profile])
             require(result.returncode == 4 and not result.stdout and
                     'requires convergence' in result.stderr, f'model {seed} boundary', result.stderr)

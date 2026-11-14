@@ -51,9 +51,9 @@ Haunt(G:ghost):string =
     "{G.N} {G.Boo()}"
 
 # a constant whose initialiser uses an object (in a temporary)
-point := class:
+point := class<computes>:
     X:int
-    Twice():int = 2 * X
+    Twice()<computes>:int = 2 * X
 Six:int = point{X := 3}.Twice()
 
 Main():void =

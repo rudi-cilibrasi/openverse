@@ -26,9 +26,10 @@ Main():void =
     B:[]int = array{1}
     Print("{Show(logic{IsFalse[A]})} {Show(logic{IsFalse[O]})} {Show(logic{IsFalse[S]})} {Show(logic{IsFalse[L]})} {Show(logic{IsFalse[B]})} {Show(logic{IsFalse[0]})} {Show(logic{IsFalse[()]})}")
     Print("{Show(logic{IsEmptyString[A]})} {Show(logic{IsEmptyString[O]})} {Show(logic{IsEmptyString[L]})} {Show(logic{IsEmptyString[B]})}")
-    # map keys and searched values holding the empty value
-    M:[[]?int]int = map{array{false} => 1, array{option{0}} => 2}
-    if (V := M[array{false}]) then Print("{V}")
+    # map keys and searched values holding the empty value (an array is no
+    # map key, Book of Verse ch. 3: an option is)
+    M:[?int]int = map{false => 1, option{0} => 2}
+    if (V := M[false]) then Print("{V}")
     Xs:[][]logic = array{array{false}, array{true}, array{false}}
     Print("{for (Z : Xs, Same[Z, array{false}]) {Z}.Length}")
     Ys:[]tuple(?int, string) = array{(false, ""), (option{1}, ""), (false, "a")}

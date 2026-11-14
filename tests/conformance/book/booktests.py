@@ -429,9 +429,16 @@ TEST_NAMES = {
         # the digest generator's round trip of a weak map
         # (weak_map.versetest:183, "Test the digest generator")
         "TestWeakMap",
-        # a null object of a class, which Verse has none of (the
-        # Bugs/FORT-635190, FORT-721882, FORT-1033995 and SOL-7388 tests)
-        "MakeNull"],
+        # (the survey's map of the remaining causes: names no Book chapter or
+        # API declares and no test file defines; `MakeNull(t)` gives a null
+        # object of a class, which Verse has none of: the Bugs/FORT-635190,
+        # FORT-721882, FORT-1033995 and SOL-7388 tests)
+        "MakeNull", "native_property_rollback_test", "interface_with_accessors",
+        "interface_with_default_value", "NativeNestedTupleParameters",
+        "ExternalNestedTupleParameters", "test_function_as_type_iface", "StmCallbackErrors",
+        "NativeTwoParams", "test_function_as_type", "test_native_function_as_type",
+        "test_external_parametric_type5", "test_native_parametric_type_inheritance1",
+        "test_native_parametric_type_inheritance2", "test_awaitable"],
 }
 # Engine APIs the Book's Runtime API reference places outside the language:
 # persistence, JSON, Unreal objects and AutoRTFM. A case using one is not
@@ -442,6 +449,13 @@ ENGINE_NAMES = ["Persistence", "persistent_key", "FromJson", "ToJson", "IsUObjec
                 # key types": "Transient keys that do not persist across
                 # sessions") and their module (weak_map.versetest 673-688)
                 "session_key", "Session"]
+# Free functions of the test runner whose names the Book gives to methods:
+# `Literals/Char.versetest` calls `ToChar(N)` and `ToChar32(N)` with
+# parentheses, total functions that neither the Book's chapters nor its Runtime
+# API reference declare (the API has the methods `N.ToChar[]` and
+# `N.ToChar32[]`, both `<decides>`). Only a free call counts, so the cases of
+# the methods stay translated.
+TEST_FREE_CALLS = ["ToChar", "ToChar32"]
 
 
 # Stand-ins for test runner definitions whose behaviour cannot change a verdict.
@@ -637,6 +651,10 @@ def static_nt(mtext):
     if hit:
         return "test API: %s (%s)" % (loose[hit[0]], hit[0]) if loose[hit[0]] != \
             "the test runner" else "test API: the test runner's %s" % hit[0]
+    hit = sorted(n for n in TEST_FREE_CALLS if re.search(r"(?<![.\w])%s\s*\(" % n, code)
+                 and n not in program_defs(code))
+    if hit:
+        return "test API: the test runner's free function %s" % hit[0]
     hit = sorted(n for n in ids & set(ENGINE_NAMES) if n not in program_defs(code))
     if hit:
         return "engine API: %s" % hit[0]
@@ -714,7 +732,11 @@ def build_cases(book, rel):
         if form in RUNTIME_FORMS:
             c = new_case(it.line, form, RUNTIME_FORMS[form], it, f)
             body = f.body
-            if f.braced and "\n" not in body:
+            if not f.mbody.strip():
+                # (an `assert:` with only comments in it: an empty body, which
+                # the test runner takes as valid; `RuntimeErrors.versetest:52`)
+                main = "Main()<decides>:void = {}"
+            elif f.braced and "\n" not in body:
                 main = "Main()<decides>:void = {%s}" % body
             elif f.braced:
                 main = "Main()<decides>:void = {\n%s\n}" % indent(body)

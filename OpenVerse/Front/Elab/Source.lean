@@ -302,7 +302,9 @@ partial def SExpr.isLiteral : SExpr → Bool
     succeed (Book of Verse ch. 7, "For Without a Generator"): clauses that
     cannot fail, no clause at all, or literals and bindings of literals
     (`for(X := array{1, 2})` for `for(X : array{1, 2})`, `for(1)`), are
-    refused, as the Book's tests do ("Not an iterable"). -/
+    refused, as the Book's tests do ("Not an iterable"); and so is a filter
+    that is a literal, which cannot fail ("Filters must be failable", ch. 7;
+    `for.versetest:223`). -/
 partial def checkForClauses (tops : List STop) : Except String Unit := do
   let literalClause : SExpr → Bool
     | .decl _ _ _ false v => v.isLiteral
@@ -311,6 +313,10 @@ partial def checkForClauses (tops : List STop) : Except String Unit := do
     | .forE p cs b => do
       if cs.all literalClause then
         throw s!"{p.show}: this for has no generator (X : A, or X := A..B) and its clauses cannot fail, so it would run its body once: write X : A to iterate over A (Book of Verse ch. 7)"
+      -- (a filter that is a literal cannot fail: "Filters must be
+      -- failable", Book of Verse ch. 7, and its tests, for.versetest:223)
+      if let some c := cs.find? SExpr.isLiteral then
+        throw s!"{c.pos.show}: this filter of a for is a literal, which cannot fail: a filter must be able to fail (Book of Verse ch. 7, \"Filters must be failable\")"
       cs.forM go; go b
     | .structDef _ _ _ fs => fs.forM fun f => f.default.forM go
     | e => e.children.forM go
@@ -334,6 +340,92 @@ partial def checkSpawnExits (tops : List STop) : Except String Unit := do
     | .structDef _ _ _ fs => fs.forM fun f => f.default.forM go
     | e => e.children.forM go
   tops.forM (·.code.forM go)
+
+/-- A `loop` that nothing leaves, no `break` of its own and no `return`, in
+    a function that cannot suspend, would run until the program's fuel is
+    spent: refused, as the Book's tests do ("Ensure loop is not empty",
+    "Ensure loop has matching break", `FlowControl/Break.versetest` 117,
+    160, 3579). A `<suspends>` function's loop may wait forever, as a game's
+    loop does (`Break.versetest:17-29`). -/
+partial def checkLoopExits (tops : List STop) : Except String Unit := do
+  -- (`own`: a `break` here leaves the loop being checked)
+  let rec exits (own : Bool) : SExpr → Bool
+    | .ret .. => true
+    | .brk _ => own
+    | .loop _ b => exits false b
+    | .structDef .. => false
+    | e => e.children.any (exits own)
+  let rec go : SExpr → Except String Unit
+    | .loop p b => do
+      if !exits true b then
+        throw s!"{p.show}: nothing leaves this loop, no break of its own and no return, so it would run forever: a loop of a function that cannot suspend needs a way out (Book of Verse tests, Break.versetest)"
+      go b
+    | .structDef _ _ _ fs => fs.forM fun f => f.default.forM go
+    | e => e.children.forM go
+  -- (the code of each function and method that cannot suspend)
+  let rec unsuspending : STop → List SExpr
+    | t@(.fn _ _ _ _ effs _ _) => if effs.contains "suspends" then [] else t.code
+    | .classDef _ _ _ _ _ _ _ _ ms => ms.flatMap unsuspending
+    | _ => []
+  tops.forM fun t => (unsuspending t).forM go
+
+/-- Five forms the Book's tests refuse, each where the source shows it
+    (`type-checks-other` of the [map](../../docs/research/book-test-conformance.md)):
+    a default on a positional parameter, `F(X:int=0)` ("Named parameters with
+    default values are truly optional", ch. 6;
+    `2023-01-18-FunctionParameterWithoutDomain.versetest:12`, 3625); a named
+    argument before a positional one (ch. 6: "Invalid: named arg before
+    positional"; `DefaultNamed.versetest:122`, 3629); a `var` field in a
+    struct ("Structs cannot contain pointers", `Classes/Struct.versetest:31`,
+    3607); a `return` or `break` that leaves a construction's field value
+    (`Classes/Constructor.versetest:528`, 3626); and `option{}` with nothing
+    in it (`Option.versetest:94`, 3622). -/
+partial def checkBookForms (tops : List STop) : Except String Unit := do
+  -- (a jump out of a construction's field value: `inLoop`, inside a loop
+  -- of the value's own code)
+  let rec jumps (inLoop : Bool) : SExpr → Except String Unit
+    | .ret p _ => throw s!"{p.show}: a return cannot leave a construction's field value (Book of Verse tests, Classes/Constructor.versetest)"
+    | .brk p => if inLoop then pure () else
+        throw s!"{p.show}: a break cannot leave a construction's field value (Book of Verse tests, Classes/Constructor.versetest)"
+    | .loop _ b => jumps true b
+    | .structDef .. => pure ()
+    | e => e.children.forM (jumps inLoop)
+  let isNamed : SExpr → Bool := fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false
+  let rec go : SExpr → Except String Unit
+    | .optionLit p (.block _ []) =>
+      throw s!"{p.show}: option\{} has no value: write option\{e}, or false for an empty option (Book of Verse tests, Option.versetest)"
+    | .construct p n ts fs => do
+      for f in fs do
+        match f with
+        | .decl _ _ _ _ v => jumps false v
+        | _ => pure ()
+      (SExpr.construct p n ts fs).children.forM go
+    | .structDef p _ _ fs => do
+      if let some f := fs.find? (·.isVar) then
+        throw s!"{p.show}: a struct's field is no var: '{f.name}' (a struct is a value; Book of Verse tests, Classes/Struct.versetest)"
+      fs.forM fun f => f.default.forM go
+    | e@(.app _ f args _) => do
+      let isMarker := match f with | .ident _ n => n.startsWith "$" | _ => false
+      if !isMarker then
+        if let some k := args.findIdx? isNamed then
+          if let some a := (args.drop (k + 1)).find? (!isNamed ·) then
+            throw s!"{a.pos.show}: a positional argument after a named one: the named arguments come last (Book of Verse ch. 6, \"Invalid: named arg before positional\")"
+      e.children.forM go
+    | e => e.children.forM go
+  -- (a parameter with a default is named: of each function and method)
+  let rec params : STop → Except String Unit
+    | .fn p n ps .. => do
+      unless n.startsWith "$" do
+        if let some q := ps.find? (fun q => !q.named && q.default.isSome) then
+          throw s!"{p.show}: {q.name} has a default but is not named: only a named parameter has one, ?{q.name}:t = e (Book of Verse ch. 6, and its tests, 2023-01-18-FunctionParameterWithoutDomain.versetest)"
+    | .classDef _ _ _ _ _ _ _ _ ms => ms.forM params
+    | _ => pure ()
+  for t in tops do
+    params t
+    match t with
+    -- (a struct defined at the top is its own node, for its fields' var)
+    | .const _ _ _ _ s@(.structDef ..) => go s
+    | t => t.code.forM go
 
 /-- A `profile` block is code of a function's, not of an initializer: none
     in a constant's value or a field's default (Book of Verse tests,
@@ -541,9 +633,14 @@ def concurrencyHelpers (resolved : List STop) (requests : Requests) (eventFifo :
        around it (`checkNoShadowing`), `return` only in a function
        (`checkReturns`), no `return` or `break` that leaves a failure
        context (`checkJumps`), none inside a value returned
-       (`checkNestedReturns`) or leaving a `spawn` (`checkSpawnExits`),
-       `profile` only in a function's code (`checkProfiles`), `defer:` only
-       as a statement (`checkDefers`), no `for` of literal clauses only
+       (`checkNestedReturns`) or leaving a `spawn` (`checkSpawnExits`), a
+       way out of each loop of code that cannot suspend (`checkLoopExits`),
+       the five forms the Book's tests refuse (`checkBookForms`: a default
+       on a positional parameter, a named argument before a positional one,
+       a struct's `var` field, a jump out of a construction's field value,
+       an empty `option{}`), `profile` only in a function's code
+       (`checkProfiles`), `defer:` only as a statement (`checkDefers`), no
+       `for` of literal clauses only, nor a literal filter
        (`checkForClauses`);
     3. the helpers the parser's `$uses:` markers and the entry expression ask
        for, and the markers taken out;
@@ -581,6 +678,8 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   checkJumps allTops0r
   checkNestedReturns allTops0r
   checkSpawnExits allTops0r
+  checkLoopExits allTops0r
+  checkBookForms allTops0r
   checkProfiles allTops0r
   checkDefers allTops0r
   checkForClauses allTops0r
