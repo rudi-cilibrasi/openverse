@@ -36,7 +36,15 @@ private partial def roles (dummy : Bool) : STop → Except String STop
 private def caller (body : String) : String :=
   "Caller(X:t,D:u,Dummy:u,P:evidence(evidence(vehicle,t),u) where t:type,u:type)<transacts>:int=\n" ++ body
 
+-- Keep these callable paths live even when Main does not invoke Caller.
+-- With no implementations, function-value dispatch lowers to a user error.
+private def callables (source : String) : String :=
+  "One()<computes>:int=1\nTwo()<computes>:int=2\nPick(C:logic)<computes>:type{_()<computes>:int}=if(C?)then One else Two\n" ++ source
+
 private def cases : List (String × String) := [
+  ("shared frame reused after real overwrite", callables "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    Values:=sync:\n        block:\n            Sleep(0.2)\n            Stored()\n        block:\n            Sleep(0.1)\n            set Stored=Dummy\n    Values(0)"),
+  ("shared frame forwarded after real overwrite", callables "Keep(V:v where v:type)<computes>:v=V\nCaller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    Values:=sync:\n        block:\n            Sleep(0.2)\n            Keep(Stored)()\n        block:\n            Sleep(0.1)\n            set Stored=Dummy\n    Values(0)"),
+  ("shared evidence reused after real overwrite", "Caller(X:t,D:u,Dummy:u,P:evidence(evidence(vehicle,t),u) where t:type,u:type)<suspends>:int=\n    var Stored:u=Dummy\n    set Stored=D\n    Values:=sync:\n        block:\n            Sleep(0.2)\n            P.Up(Stored).Up(X).N\n        block:\n            Sleep(0.1)\n            set Stored=Dummy\n    Values(0)"),
   ("saved bound receiver across wait", "reader:=class<computes>{Read()<suspends>:int=7}\nCaller(Dummy:reader)<suspends>:int=\n    Saved:=Dummy.Read\n    Sleep(0.01)\n    Saved()"),
   ("ignored method receiver", "reader:=class<computes>{Read()<computes>:int=7}\nCaller(Dummy:reader)<computes>:int=Dummy.Read()"),
   ("constructed metadata receiver", "reader:=class<computes>{Value:int;Read()<computes>:int=7}\nCaller(Dummy:int)<computes>:int=reader{Value:=Dummy}.Read()"),
@@ -72,6 +80,10 @@ private def cases : List (String × String) := [
   ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
+  ("opaque recursive shared initializer", "Maybe(R:v,M:v,N:int where v:type)<computes>:v=if(N>0)then Bridge(R,M,N-1)else R\nBridge(R:v,M:v,N:int where v:type)<computes>:v=if(N>0)then Maybe(R,M,N-1)else M\nCaller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:type{_()<computes>:int}=\n    var Stored:type{_()<computes>:int}=Maybe(F,Dummy,3)\n    Sleep(0.1)\n    set Stored=Dummy\n    Stored"),
+  ("shared real overwrite", "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    Sleep(0.1)\n    Stored()"),
+  ("shared rolled back real overwrite", "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:type{_()<computes>:int}=\n    var Stored:type{_()<computes>:int}=Dummy\n    if(set Stored=F;false?){}\n    Sleep(0.1)\n    set Stored=Dummy\n    Stored"),
+  ("opaque nonshared real transition", "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<transacts>:type{_()<computes>:int}=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    set Stored=Dummy\n    Stored"),
   ("independent bound receiver across wait", "reader:=class<computes>{Read()<suspends>:int=7}\nFresh(V:u where u:type)<computes>:reader=reader{}\nCaller(Dummy:u where u:type)<suspends>:int=\n    Saved:=Fresh(Dummy).Read\n    Sleep(0.01)\n    Saved()"),
   ("void to real array carrier", "carrier:=class<computes>{Values:[]int;Count()<computes>:int=Values.Length}\nCaller(Dummy:void)<computes>:int=\n    Items:[]int=Dummy\n    Box:=carrier{Values:=Items}\n    Box.Count()"),
   ("true to real array carrier", "carrier:=class<computes>{Values:[]int;Count()<computes>:int=Values.Length}\nCaller(Dummy:true)<computes>:int=carrier{Values:=Dummy}.Count()"),

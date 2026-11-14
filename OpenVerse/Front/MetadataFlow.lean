@@ -68,6 +68,9 @@ private structure State where
   summaries : Array Summary := #[]
   indices : Std.HashMap Key Nat := {}
   changed : Bool := false
+  /-- Shared-local modes depend on complete return summaries, not an early
+      real-only approximation of a recursive initializer. -/
+  validateShared : Bool := false
   debug : Bool := false
   active : Option Key := none
 
@@ -100,14 +103,18 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
       refuse fn info "be an executable function or method receiver" s!"receiver slot {i}, value {reprStr e}"
     if info.shared.contains i && out.slots.initialized[i]?.getD false && role &&
         !(out.slots.sharedMetadata[i]?.getD false) then
-      refuse fn info "enter a shared local containing executable data" s!"shared slot {i}, value {reprStr e}"
+      if (← get).validateShared then
+        refuse fn info "enter a shared local containing executable data" s!"shared slot {i}, value {reprStr e}"
     let first := !(out.slots.initialized[i]?.getD false)
     return { out with
       value := some role
       slots := {
         values := out.slots.values.set! i role
         initialized := out.slots.initialized.set! i true
-        sharedMetadata := if first then out.slots.sharedMetadata.set! i role else out.slots.sharedMetadata } }
+        -- Once real data enters a shared cell, waiting aliases can execute it.
+        -- A later metadata write must not reuse its original metadata mode.
+        sharedMetadata := out.slots.sharedMetadata.set! i
+          (role && (first || out.slots.sharedMetadata[i]?.getD false)) } }
   | .seq a b => do
     let a ← expr fns infos fields fn info slots a
     if a.value.isNone then return a
@@ -219,6 +226,16 @@ end
 def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
     (debug : Bool := false) : Except String Unit := do
   let action : M Unit := do
+    let runContext (key : Key) : M Flow := do
+      let (i, args) := key
+      let some fn := fns[i]? | throw "internal: metadata call has no body"
+      let info := infos[i]?.getD {}
+      modify fun st => { st with active := some key }
+      let values := (List.range fn.nslots).map (fun i =>
+        info.inputs.contains i || args[i]?.getD false) |>.toArray
+      let initialized := (List.range fn.nslots).map (fun i => i < fn.arity : Nat → Bool) |>.toArray
+      let slots : Slots := { values, initialized, sharedMetadata := values }
+      expr fns infos fields fn info slots (info.body.getD fn.body)
     for i in [:fns.size] do
       let info := infos[i]?.getD {}
       discard <| request (i, (List.range fns[i]!.arity).map info.inputs.contains)
@@ -227,20 +244,19 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       modify fun st => { st with changed := false }
       let summaries := (← get).summaries
       for (summary, index) in summaries.zipIdx do
-        let (i, args) := summary.key
-        let some fn := fns[i]? | throw "internal: metadata call has no body"
+        let i := summary.key.1
         let info := infos[i]?.getD {}
-        modify fun st => { st with active := some summary.key }
-        let values := (List.range fn.nslots).map (fun i =>
-          info.inputs.contains i || args[i]?.getD false) |>.toArray
-        let initialized := (List.range fn.nslots).map (fun i => i < fn.arity : Nat → Bool) |>.toArray
-        let slots : Slots := { values, initialized, sharedMetadata := values }
-        let out ← expr fns infos fields fn info slots (info.body.getD fn.body)
+        let out ← runContext summary.key
         let returned := (joinRole out.value out.returned).map (· || info.metadataResult)
         let result := joinRole summary.result returned
         if result != summary.result then
           modify fun st => { st with summaries := st.summaries.modify index (fun s => { s with result }), changed := true }
       growing := (← get).changed
+    -- A summary may grow from a real return to a metadata return. Validate
+    -- initializer modes only after that growth has settled in every context.
+    modify fun st => { st with validateShared := true }
+    for summary in (← get).summaries do
+      discard <| runContext summary.key
   discard <| action.run { debug }
 
 end OpenVerse.Front.MetadataFlow

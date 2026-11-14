@@ -67,9 +67,14 @@ Evaluating a function or method receiver requires executable data even when
 dispatch has no concrete implementation and lowers to an error expression.
 
 Shared storage has a stricter boundary: metadata cannot enter an ordinary
-object field or a shared local initialized with executable data. Checking the
-write protects every alias, including aliases obtained by indexed reads or
-passed to an unannotated helper. Compiler-owned `$w.` fields retain their
+object field or a shared local that has held executable data, even if that
+local originally contained metadata. A real overwrite permanently ends its
+metadata-only mode along that path; a failed condition restores the incoming
+mode. Shared-local write checks run after recursive return summaries converge,
+so an early real-only approximation cannot reject an opaque initializer that
+later acquires a metadata role. Checking the write protects every alias,
+including aliases obtained by indexed reads or passed to an unannotated
+helper. Compiler-owned `$w.` fields retain their
 metadata role without tainting unrelated object fields. This analysis adds no
 Core opcode or runtime tag. Generated getters of hidden fields also mark
 their normal return as metadata, independently of the source member wrapper.
@@ -77,12 +82,22 @@ Opaque forwarding remains allowed, and reading an unrelated ordinary field
 of an object with hidden metadata still gives executable data.
 `MetadataGetters.lean` checks these accessor boundaries with 14 Core-checked
 controls, including execution after forwarding through another function.
-`MetadataStorage.lean` retains 26 real/dummy
-rejection pairs and 25 opaque-forwarding, real-overwrite and rollback pairs,
+`MetadataStorage.lean` retains 29 real/dummy
+rejection pairs and 29 opaque-forwarding, real-overwrite and rollback pairs,
 including a later GADT refinement, fresh unit-to-array conversions, ordinary
 helpers with independent real returns, virtual and spawned receivers, and
-bound-method captures across a wait. These are
+bound-method captures across a wait. Shared-frame controls cover metadata,
+real data, then metadata writes while another arm waits to execute a function
+or proof, plus recursive opaque initializers and rolled-back real overwrites.
+`shared_function_overwrite.verse` executes ordinary real shared mutation in
+both runtimes. These are
 compiler-API contracts; source programs reach the same analysis.
+
+The remaining #572 concurrency audit must account for sibling writes regardless
+of their source order and whether another arm has a normal return. The current
+traversal can miss a metadata writer listed before a real writer, followed by
+a waiting reader: the metadata write may run last even though it appears first.
+The source-ordered transition controls above do not close that gap.
 
 The checked families currently cover:
 
