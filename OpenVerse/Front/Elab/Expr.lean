@@ -842,6 +842,14 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
   -- same hierarchy
   let parametric := (env.sparams.lookup T).isSome || !(env.coreArgs T []).isEmpty
   if (env.concreteBelow S).all (fun d => !env.isSub d T) then
+    -- (a cast to a class or interface no class of the value's is below
+    -- compiles, and fails, Book of Verse ch. 11, `11_types.md:299-301`:
+    -- "These casts succeed … failing if the value is not of" the type; the
+    -- tests, `Interface.versetest:150` (`assert_valid`), `:140`, `:147`: a
+    -- warning, the value evaluated first)
+    if bracket && !parametric then
+      warnAt p s!"{T}[…] always fails here: no class is below both {r.ty.show} and {T}"
+      return ⟨.seq r.e (.prim .fail []), .struct T []⟩
     eerr p s!"no class is below both {r.ty.show} and {T}, so {T}[…] would always fail"
   -- (#351, #53: to a type beside it, whose type arguments the classes and
   -- interfaces above both relate to the object's, and open otherwise: as a

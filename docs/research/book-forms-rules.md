@@ -786,3 +786,40 @@ code as a statement that cannot fail (`$nofail`, as a constructor's), each
 field value written before a clause bound to a name of its own there,
 `$clauseL_C`, and last the construction of the fields. No program that
 compiled changes (a construction with a clause was refused).
+
+## A cast that cannot succeed
+
+**The rule.** A cast `T[X]` to a class or interface `T` that no class of
+`X`'s type is below compiles: it evaluates `X` and fails. openverse warns
+of it. A cast to a parametric class or interface whose type arguments no
+class below both can give, and a conversion `T(X)` to a type that is not
+above `X`'s, stay refused.
+
+**The Book.** Ch. 11, "Class and Interface Casting"
+(`11_types.md:299-301`): "Fallible casts use square bracket syntax
+`TargetType[value]` to perform runtime type checks. These casts succeed
+and return the casted value (`TargetType`), failing if the value is not
+of" the target type; only a cast from or to a type that is no class or
+interface is refused (`:356-390`). The tests accept the casts that cannot
+succeed: `Tests/Interface.versetest:150` (`assert_valid`, `T1[t0]` of a
+`T0` with no class below both), `:128`, `:140`, `:147`, `:182` (`assert{not
+T0[C1{}]}` and the like); `Tests/Cast.versetest:18`,
+`Bugs/ArrayOrFailureResult.versetest:11`, `Bugs/FORT-1059276.versetest:3`
+(their files have a class below both, which the harness's case does not
+include; the cast fails either way).
+
+**openverse before.** Refused: "no class is below both C1 and T0, so
+T0[…] would always fail".
+
+**openverse now.** `elabCast` (`Elab/Expr.lean`): a bracket cast to a
+class or interface with no type parameters, where no class below `X`'s
+type is below `T`, is `X` evaluated, then a failure, of type `T`, with
+`warnAt`'s "T[…] always fails here". The error test
+`inherit_cast_never.verse` is a valid program now, moved to `tests/verse`
+with its warning and output; the other three error tests of a cast that
+cannot succeed (`iface_views_never`, `choice_immediate_suspends_source_impossible_cast`,
+`class_param_cast_never`) are of parametric types and stay refused. **Left:**
+`MyParametricInterface(int)` and `class2(int)` written as values
+(`GenerateFunctionForParametricInterface.versetest:10`,
+`TypeParam.versetest:32`): a parametric type applied as a value, read as
+a conversion of `int` (metatypes).

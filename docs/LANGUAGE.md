@@ -939,7 +939,13 @@ circle := class(shape, labelled):
     accessors; a path into such a field's value through a type above a
     class that gives a field with storage accessors.
 - **Casts.** `T[X]` is `X` as a `T`, failing unless `X`'s class is below
-  `T`. `T(X)` converts to a supertype and cannot fail.
+  `T`. `T(X)` converts to a supertype and cannot fail. A cast to a class or
+  interface that no class of `X`'s is below compiles and always fails, with
+  a [warning](#warnings) (ch. 11: "These casts succeed and return the
+  casted value, failing if the value is not of" the type; the Book's tests
+  accept them, `Interface.versetest:150`); one to a parametric class or
+  interface whose type arguments no class below both can give is refused
+  ("would always fail").
 - **Final super classes** (Book of Verse ch. 10, "Final"; ch. 11,
   "final_super and Type Queries"; the API reference; the rules are in
   [research/classes-and-subtyping.md](research/classes-and-subtyping.md#final-super-classes)).
@@ -1441,7 +1447,7 @@ The Book of Verse's compiler gives some diagnostics as warnings: the
 program compiles and runs all the same (`FlowControl/Reachability.versetest:22`,
 "Treat unreachable expressions after break as warning not error"; its tests
 name them with codes 2000–2999 in `assert_semantic_error`). openverse gives
-five of them, each from where the fact is known, on standard error as
+five of them, and one of its own, each from where the fact is known, on standard error as
 `FILE:LINE:COL: warning: …`, with the exit status unchanged
 ([FORMAT.md](FORMAT.md), "Exit protocol"):
 
@@ -1484,6 +1490,9 @@ five of them, each from where the fact is known, on standard error as
   of another overload of `M`, one from a method that overrides nothing,
   and one through another receiver give none (`warnQualifiedSelfCall`,
   where a method call is elaborated).
+- **A cast that always fails**, `T[X]` where no class of `X`'s type is
+  below `T` (openverse's own: the Book's tests accept such casts with no
+  code, `Interface.versetest` 140, 150; [Classes](#classes), "Casts").
 
 ## Source profiles
 
