@@ -148,6 +148,10 @@ partial def elabLocalApp (cb : AppElab) (ctx : Ctx) (p : Pos) (f : SExpr) (name 
     if let some (_, a) := TypeValues.bound? iface then
       let [x] := args | eerr p s!"a cast through {name} takes one value"
       if !bracket then eerr p s!"a cast through the type {name} can fail: write {name}[X]"
+      -- (`subtype(int)`'s values are types other than classes, whose
+      -- interface has no cast, `TypeValues`)
+      if !ctx.hasMethod iface (TypeValues.castMethod a) then
+        eerr p s!"a cast through {name}, of type {iface}, would cast to {a}, which is no class or interface: a cast is to a class or an interface (Book of Verse ch. 11)"
       return ← cb.elabApp ctx p (.member p f (TypeValues.castMethod a)) [.app p (.ident p a) [x] true] true exp
   elabValueApp cb ctx p f ⟨.local l.slot, l.ty⟩ args bracket
 
