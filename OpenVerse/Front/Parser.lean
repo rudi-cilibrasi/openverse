@@ -4,7 +4,8 @@
   Recursive descent over the token array, with the precedence of the Book of
   Verse (ch. 4 "Operators"): `or` < `and` < comparisons < `+ -` < `* /` <
   unary `- not` < postfix `() [] . ?`. Comparisons form chains
-  (`0 <= X <= 9` checks both and returns `0`).
+  (`0 <= X <= 9` checks both and returns `0`), but `<>` is left-associative
+  (`1 <> 2 <> 1` is `(1 <> 2) <> 1`).
 
   Layout: Verse mixes indented blocks (`if (c):` + indented lines), braces
   and inline forms (`then`). The parser uses an offside rule on columns. A
@@ -729,7 +730,16 @@ partial def parseCmp (stop : Nat) : PM SExpr := do
     match t.tok with
     | .sym op =>
       if cmpOps.contains op && !t.offside stop then
-        bump; rest := rest.push (op, ← parseChoice stop)
+        bump
+        -- (`<>` is left-associative: its left operand is the comparisons
+        -- before it, whose value is their leftmost operand, so
+        -- `1 <> 2 <> 1` is `(1 <> 2) <> 1`, which fails; the others chain,
+        -- `0 <= X <= 9` checks `0 <= X` and `X <= 9`: the Book of Verse's
+        -- tests, `Operators/Associativity.versetest` 6-33)
+        if op == "<>" && !rest.isEmpty then
+          a := .cmp a.pos a rest.toList
+          rest := #[]
+        rest := rest.push (op, ← parseChoice stop)
       else break
     | _ => break
   if rest.isEmpty then return a else return .cmp a.pos a rest.toList

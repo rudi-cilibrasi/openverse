@@ -147,3 +147,39 @@ form (`Refused.localhostUsing`), which `Attributes.apply` refuses first.
 **Left:** a `using` of any other path that names nothing
 (`using{/localhostkinda}`, 1 case): openverse has no registry of the paths
 it stands in for.
+
+## `<>` is left-associative
+
+**The rule.** `<>` is left-associative: its left operand is the
+comparisons before it, whose value is their leftmost operand, so `1 <> 2
+<> 1` is `(1 <> 2) <> 1`, which fails. The other comparisons chain: each
+checks the operand before it, `0 <= X <= 9` checks `0 <= X` and `X <= 9`.
+
+**The Book.** The tests, `Tests/Operators/Associativity.versetest`: "Test
+that <> is left associative." (`:6`), `assert{1 <> (2 <> 1)}`,
+`assert{not (1 <> 2) <> 1}`, `assert{not 1 <> 2 <> 1}` (`:7-9`); and for
+`<`, `<=`, `>`, `>=`, "left~~right~~ associative" (`:11-33`), `assert{not
+1 < 3 < 2}`, which a left-associative `<` would pass and a chain fails.
+The prose: "comparison operators return their left operand when the
+comparison succeeds, and comparison chains have special syntax that checks
+all adjacent pairs" (ch. 1, `01_expressions.md:890-891`), "Verse does
+**not** evaluate the comparison chain `A <= B <= C` as `(A <= B) <= C`"
+(`:905-907`); the precedence table makes them right-associative
+(`04_operators.md:50`).
+
+**Where the Book disagrees with itself.** For `<>` (already on [the
+wiki](https://github.com/rudi-cilibrasi/openverse/wiki/Where-the-Book-disagrees-with-itself),
+"Comparison chains with `<>`"): the prose chains every comparison, its
+tests make `<>` left-associative. openverse follows the tests. (For `=`,
+a chain and left association agree: `1 = 1 = 1`, `:4`.)
+
+**openverse before.** A chain for every comparison: `1 <> 2 <> 1` checked
+`1 <> 2` and `2 <> 1`, and succeeded.
+
+**openverse now.** `parseCmp` (`Front/Parser.lean`) makes a `<>` that
+follows a comparison the outer comparison of what precedes it: `A < B <>
+C` is `(A < B) <> C`, which checks `A < B`, then `A <> C`. Programs: 46
+generated programs of corpus2 (the `mv` model: `mv-plain` 23, `mv-rec` 9,
+`mv-bif` 7, `mv-mv` 7) write a `<>` after another comparison, and compile
+to other code; the model (`scripts/models/mv.py`) now compares the
+leftmost operand at such a `<>`, its random stream the same.
