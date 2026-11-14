@@ -1,0 +1,7 @@
+branch signals
+owner got 1, ends
+branch goes on
+branch unwinds
+main after first signal
+main ends
+exit=0

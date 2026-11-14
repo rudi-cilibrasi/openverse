@@ -1,7 +1,7 @@
 # subscribable_event() (#220): an event without a value, whose subscribed
 # functions take none: a field with its default, a method subscribed that
-# cancels itself, a task awaiting it (woken before the functions are called,
-# going on after Signal), a Subscribe undone by a failing condition
+# cancels itself, a task awaiting it (resumed inside Signal, before the
+# functions are called), a Subscribe undone by a failing condition
 button := class:
     Pressed:subscribable_event() = subscribable_event(){}
     Press():void = Pressed.Signal()

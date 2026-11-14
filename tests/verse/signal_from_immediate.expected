@@ -1,0 +1,6 @@
+listener got 1
+fired 1
+listener got 2
+fired 2
+main ends
+exit=0

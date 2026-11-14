@@ -158,7 +158,7 @@ structure LoweredProgram where
     a suspends `Main`, a prelude `$Main` that allocates them and calls it
     (#37). -/
 def lowerProgram (env : TyEnv) (sigs : Signatures) (mainSig : Sig) (lowering : Lowering)
-    (frameInfo : Array FrameRefs.Info) (usesConc eventFifo : Bool) : Except String LoweredProgram := do
+    (frameInfo : Array FrameRefs.Info) (usesConc usesEvents : Bool) : Except String LoweredProgram := do
   -- with prototypes, the program starts with a prelude that allocates them
   -- and then calls `Main` (#37)
   let mut protoList := env.protos.map fun (_, t, vs) => (t, vs)
@@ -183,7 +183,7 @@ def lowerProgram (env : TyEnv) (sigs : Signatures) (mainSig : Sig) (lowering : L
   if usesConc then
     let lowered ← lowerOpening fun forced =>
       lowerConcurrency env sigs.sigs sigs.gsigs mainSig fsigs0 protos pins inFn fns slotTys fsigs classTable forced frameInfo
-        eventFifo
+        usesEvents
     if !lowered.schedMore.isEmpty then
       let schedTag := env.tagOf "$sched"
       protoList := protoList.map fun (t, vs) => if t == schedTag then (t, vs ++ lowered.schedMore) else (t, vs)
@@ -389,7 +389,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     checkInitializerConvergence lowering.fns sigs classes.defs defaults.bodies admitted.intrinsicCalls
   MetadataFlow.check lowering.fns lowering.metadata (metadataFields env) opts.debug
   let frameInfo := elaborated.map (·.frames)
-  let c ← certify (← lowerProgram env sigs mainSig lowering frameInfo admitted.usesConc opts.eventFifo) methods.stubs
+  let c ← certify (← lowerProgram env sigs mainSig lowering frameInfo admitted.usesConc admitted.usesEvents) methods.stubs
     opts.debug
   -- (the warnings: code never reached, from the source, and what the
   -- elaboration noted, each once, in the order of the source)
@@ -553,26 +553,26 @@ def compile (src : String) (opts : Options := {}) : Except String Prog := do
 /-- Compile loaded definitions (`Front.loadProgram`) with shell arguments,
     bound to `Args` when given or mentioned, and an optional `do` expression. -/
 def compileTops (tops : List STop) (args : List String) (mentionsArgs : Bool) (doExpr : Option String)
-    (debug : Bool := false) (profile : SourceProfile := .full) (eventFifo : Bool := false)
+    (debug : Bool := false) (profile : SourceProfile := .full)
     (extendedDefaults : Bool := false) (signalNoRollback : Bool := false) : Except String Prog := do
   let entry ← match doExpr with
     | some t => some <$> parseExprText t
     | none => pure none
   let useArgs := !args.isEmpty || mentionsArgs
-  let opts : Options := { args := if useArgs then some args else none, entry, debug, profile, eventFifo, extendedDefaults }
+  let opts : Options := { args := if useArgs then some args else none, entry, debug, profile, extendedDefaults }
   return (← elabProgram tops { opts with signalNoRollback }).prog
 
 /-- `compileTops`, with the program's warnings, each `LINE:COL: warning: …`
     (`Compiled.warnings`), in the order of the source. -/
 def compileTopsWarned (tops : List STop) (args : List String) (mentionsArgs : Bool) (doExpr : Option String)
-    (debug : Bool := false) (profile : SourceProfile := .full) (eventFifo : Bool := false)
+    (debug : Bool := false) (profile : SourceProfile := .full)
     (extendedDefaults : Bool := false) (signalNoRollback : Bool := false) :
     Except String (Prog × List String) := do
   let entry ← match doExpr with
     | some t => some <$> parseExprText t
     | none => pure none
   let useArgs := !args.isEmpty || mentionsArgs
-  let opts : Options := { args := if useArgs then some args else none, entry, debug, profile, eventFifo, extendedDefaults }
+  let opts : Options := { args := if useArgs then some args else none, entry, debug, profile, extendedDefaults }
   let c ← elabProgram tops { opts with signalNoRollback }
   return (c.prog, c.warnings.map fun (p, m) => s!"{p.show}: warning: {m}")
 

@@ -1,7 +1,7 @@
-signalled
 B got 1
 A got 1
-A relayed
 C got 11
+A relayed
+signalled
 end
 exit=0

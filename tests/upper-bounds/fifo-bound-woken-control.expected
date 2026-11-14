@@ -1,7 +1,7 @@
+loser 2 2
+cleanup loser 2
+task 2 4
+cleanup task 4
 winner
 after rush
-loser 2 12
-cleanup loser 12
-task 2 14
-cleanup task 14
-done precise 14
+done precise 10

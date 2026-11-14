@@ -1,6 +1,7 @@
-# FIFO event resumption (#513, --event-fifo): the tasks a Signal wakes go on
-# in the order they began to wait, not the scheduler's (Main, then spawn
-# order): spawned tasks, Main itself and a branch
+# Awaiters run inside Signal (the Book's API, event's Signal; #513): the
+# tasks a Signal wakes go on in the order they began to wait, not the
+# scheduler's (Main, then spawn order), each until it waits again, before
+# the Signal returns: spawned tasks, Main itself and a branch
 Waiter(E:event(int), Tag:string, Delay:float)<suspends>:void =
     Sleep(Delay)
     Print("wait {Tag}")

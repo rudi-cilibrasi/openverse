@@ -1,6 +1,6 @@
 rollback 0
-handler 2 2
 await 2
+handler 2 2
 handler 3 5
 handler 4 9
 final 9

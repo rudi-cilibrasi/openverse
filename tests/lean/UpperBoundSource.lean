@@ -107,12 +107,11 @@ def main (args : List String) : IO Unit := do
     "bound-undetermined-refusal", "bound-visibility-refusal", "bound-alias-refusal", "peer-void-tuple-refusal",
     "castable-bound-refusal", "castable-bound-peer-refusal", "concrete-bound-refusal"]
   let mut failures := 0
-  let cases := (positive ++ fifo ++ methodValues ++ callables ++ containers ++ iterators ++ operators ++ formatting ++ concatenate ++ construction ++ concurrency ++ negative).map (fun name => (name, fifo.contains name, name)) ++
-    ["fifo-bound-sleep", "fifo-bound-sleep-control"].map (fun name => (name, false, name ++ "-default"))
-  for (name, eventFifo, artifact) in cases do
+  let cases := (positive ++ fifo ++ methodValues ++ callables ++ containers ++ iterators ++ operators ++ formatting ++ concatenate ++ construction ++ concurrency ++ negative).map (fun name => (name, name))
+  for (name, artifact) in cases do
     let root := s!"tests/upper-bounds/{name}"
     let source ← IO.FS.readFile (root ++ ".verse")
-    let result := parseProgram source >>= fun tops => elabProgram tops { eventFifo }
+    let result := parseProgram source >>= fun tops => elabProgram tops {}
     if negative.contains name then
       let fragment := (← IO.FS.readFile (root ++ ".error")).trimAscii.toString
       match result with
@@ -141,7 +140,7 @@ def main (args : List String) : IO Unit := do
         else
           if signalAdmitted.contains name || signalRefused.contains name then
             for profile in [SourceProfile.full, .choiceFree] do
-              let flagged := parseProgram source >>= fun tops => elabProgram tops { eventFifo, profile, signalNoRollback := true }
+              let flagged := parseProgram source >>= fun tops => elabProgram tops { profile, signalNoRollback := true }
               if signalRefused.contains name then
                 match flagged with
                 | .error message =>
@@ -158,14 +157,14 @@ def main (args : List String) : IO Unit := do
             IO.println s!"ok {artifact}: signal policy {if signalRefused.contains name then "refused" else "checked"} in both profiles"
           if iterators.contains name then
             match parseProgram source >>= fun tops =>
-                elabProgram tops { eventFifo, profile := .choiceFree } with
+                elabProgram tops { profile := .choiceFree } with
             | .error message =>
               unless (message.splitOn "--no-choice excludes for").length > 1 do
                 throw (IO.userError s!"{artifact}: wrong choice-free refusal: {message}")
             | .ok _ => throw (IO.userError s!"{artifact}: --no-choice admitted collection iteration")
           if profiled.contains name then
             let strict ← match parseProgram source >>= fun tops =>
-                elabProgram tops { eventFifo, profile := .choiceFree } with
+                elabProgram tops { profile := .choiceFree } with
               | .ok strict => pure strict
               | .error message => throw (IO.userError s!"{artifact}: --no-choice refused: {message}")
             unless strict.prog.encode == compiled.prog.encode do

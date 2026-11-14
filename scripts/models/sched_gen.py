@@ -44,6 +44,11 @@ class Root:
         self.kind = kind; self.gen = gen; self.task = task
         self.owner = owner if owner is not None else (task if task is not None else MAIN_TASK)
         self.done = False; self.cancel_req = False
+        # (it awaited a cancelled task: cancelled after its run, unless the
+        # request comes from a walk down its running code, which drops it)
+        self.await_req = False
+        # (the sync, race or rush its own code runs at its top, if any)
+        self.top = None
 
 
 class Event:
@@ -52,14 +57,22 @@ class Event:
 
 
 class Rec:
+    """An awaiter of an event: woken by a Signal (done, its value) and
+    pending until its turn in that Signal's round; the root it was last
+    polled in, which the Signal resumes."""
     def __init__(self):
-        self.done = False; self.val = None
+        self.done = False; self.val = None; self.pending = False; self.root = None
 
 
 class Sched:
     def __init__(self):
         self.clock = 0; self.roots = []; self.out = []; self.progress = False
         self.sleepers = Counter(); self.running = []; self.main = None
+        # (the Signals running, one inside another; a probe of a rush loser)
+        self.drain = 0; self.probe = False
+        # (the code running: a root, or an arm of a running sync, race or
+        # rush, innermost last)
+        self.ctx = []
 
     def p(self, s):
         self.out.append(s)
@@ -78,7 +91,7 @@ class Sched:
         if root.done:
             return
         was = self.task_running(root.owner)
-        self.running.append(root)
+        self.running.append(root); self.ctx.append((root, None))
         try:
             next(root.gen)
         except StopIteration as s:
@@ -86,7 +99,7 @@ class Sched:
             if root.task:
                 root.task.done = True; root.task.result = s.value
         finally:
-            self.running.pop()
+            self.running.pop(); self.ctx.pop()
         # the run that marked its owner running takes a cancel of the owner
         # asked meanwhile: a task's own run unless it ended in it (#253), a
         # branch's or loser's run its owner's (#260)
@@ -100,6 +113,9 @@ class Sched:
                 self.cancel_root(t.root)
         if root.cancel_req and not root.done:
             root.cancel_req = False
+            self.cancel_root(root)
+        if root.await_req and not root.done:
+            root.await_req = False
             self.cancel_root(root)
 
     def cancel_root(self, root):
@@ -127,6 +143,9 @@ class Sched:
                     r = self.roots[i]
                     if not r.done:
                         self.poll(r)
+                    # (Main may end inside a Signal a root made)
+                    if self.main.done:
+                        return 0
                     i += 1
                 if not self.progress:
                     break
@@ -150,7 +169,13 @@ def m_sleep(d):
     wake = S.clock + max(1, ticks)
     S.sleepers[wake] += 1
     try:
-        while S.clock < wake:
+        yield
+        # (inside a Signal, a sleep that expired is held for its root's
+        # turn in the scheduler's pass: the timer resumes it, not the
+        # Signal; the Book's API, Sleep)
+        while S.clock < wake or S.drain > 0 or S.probe:
+            if S.clock >= wake and S.drain > 0 and not S.probe:
+                S.progress = True
             yield
     finally:
         S.sleepers[wake] -= 1
@@ -159,14 +184,20 @@ def m_sleep(d):
 def m_await_task(task):
     if task.done and not task.cancelled:
         return task.result
+    if task.cancelled:
+        S.cur().await_req = True
     while True:
+        yield
+        # (inside a Signal, held for its root's turn in the pass)
+        if S.drain > 0 or S.probe:
+            if S.drain > 0 and not S.probe and (task.done or task.cancelled):
+                S.progress = True
+            continue
         if task.cancelled:
-            S.cur().cancel_req = True
-            yield
+            S.cur().await_req = True
             continue
         if task.done:
             return task.result
-        yield
 
 
 def m_await_event(ev):
@@ -174,22 +205,128 @@ def m_await_event(ev):
         return ev.val
     rec = Rec(); ev.waiters.append(rec)
     try:
-        while not rec.done:
+        while True:
+            # (it goes on at its turn in the Signal that woke it)
+            if rec.done and not rec.pending and not S.probe:
+                return rec.val
+            rec.root = S.running[-1]
             yield
-        return rec.val
     finally:
+        rec.pending = False
         if rec in ev.waiters:
             ev.waiters.remove(rec)
 
 
 def m_signal(ev, v):
+    """The Book's API (event, Signal): the awaiters of this round, each in
+    the order it suspended, resumed inside the Signal until it waits again
+    or ends; an await made meanwhile joins the next round."""
     if ev.sticky:
         ev.has = True; ev.val = v
-    if ev.waiters:
-        S.progress = True
-    for r in ev.waiters:
-        r.done = True; r.val = v
+    rnd = ev.waiters
     ev.waiters = []
+    for r in rnd:
+        if not r.done:
+            r.done = True; r.val = v; r.pending = True
+    for r in rnd:
+        if r.pending:
+            r.pending = False
+            S.drain += 1
+            try:
+                wake(r.root)
+            finally:
+                S.drain -= 1
+
+
+def wake(root):
+    """Resume the root an awaiter waits in: a root whose code runs, by a
+    walk down that code (`partial_site`); any other as the pass polls it."""
+    if root is None or root.done:
+        return
+    if root in S.running:
+        if root.top is None:
+            return
+        saved = root.await_req
+        S.running.append(root)
+        try:
+            partial_site(root.top)
+        finally:
+            S.running.pop()
+        # (a request to cancel it from the walk is dropped: the pass, which
+        # polls it again, asks again)
+        if root.await_req and not saved:
+            S.progress = True
+        root.await_req = saved
+    else:
+        S.poll(root)
+
+
+class ConcSite:
+    """A sync, race or rush whose code runs its arms: each arm's
+    generator (None until it starts), which ended (and their values),
+    which run now (`active`), the running site inside each, and the first
+    arm that ended while others ran (`oot`)."""
+    def __init__(self, kind, n):
+        self.kind = kind; self.gens = [None] * n; self.done = [False] * n
+        self.results = [None] * n; self.active = set(); self.inner = [None] * n
+        self.oot = None; self.parent = None
+
+
+def enter(site):
+    p = S.ctx[-1]
+    site.parent = p
+    if p[1] is None:
+        p[0].top = site
+    else:
+        p[0].inner[p[1]] = site
+
+
+def leave(site):
+    p, i = site.parent
+    if i is None:
+        p.top = None
+    else:
+        p.inner[i] = None
+
+
+def step_arm(site, i):
+    """Run arm i to its next wait or its end: True when it ended."""
+    site.active.add(i); S.ctx.append((site, i))
+    try:
+        next(site.gens[i])
+        return False
+    except StopIteration as e:
+        site.done[i] = True; site.results[i] = e.value
+        return True
+    finally:
+        site.active.discard(i); S.ctx.pop()
+
+
+def partial_site(site):
+    """A walk down a running site: each arm that started and is pending,
+    in order: a running one walked down in turn, a waiting one run to its
+    next wait or its end; the first that ends wins a race or rush."""
+    for i in range(len(site.gens)):
+        if site.gens[i] is None or site.done[i]:
+            continue
+        if i in site.active:
+            if site.inner[i] is not None:
+                partial_site(site.inner[i])
+            continue
+        if step_arm(site, i) and site.kind != "sync" and site.oot is None:
+            site.oot = i
+
+
+def probe(r):
+    """A rush loser that goes on as a root of its own: one poll that goes
+    on nowhere, so that its awaiters record it."""
+    S.probe = True; S.running.append(r); S.ctx.append((r, None))
+    try:
+        next(r.gen)
+    except StopIteration:
+        raise RuntimeError("model: a probe ended an arm")
+    finally:
+        S.running.pop(); S.ctx.pop(); S.probe = False
 
 
 class Frame:
@@ -352,73 +489,91 @@ def run_arm(stmts, val, fr, owner=None):
 
 def exec_conc(s, fr, owner=None):
     kind = s.kind
-    pend = []   # (idx, startno, gen)
-    results = [None] * len(s.arms)
+    n = len(s.arms)
+    site = ConcSite(kind, n)
+    sns = [None] * n
+    started = []
     winner = None
     finished = False
     refs = {}
-    for i, (stmts, val) in enumerate(s.arms):
-        sn = fr.counter; fr.counter += 1
-        # (a rush arm owns what its code starts, #254; a sync or race arm's
-        # is its enclosing owner's)
-        ref = ArmRef(None) if kind == "rush" and not IMPL_ORDER else None
-        g = run_arm(stmts, val, fr, ref if ref is not None else owner)
-        if ref is not None:
-            ref.gen = g; refs[i] = ref; fr.starts.append((sn, ref, owner))
-        try:
-            next(g)
-            pend.append((i, sn, g))
-            if kind == "rush" and IMPL_ORDER:
+    enter(site)
+    try:
+        for i, (stmts, val) in enumerate(s.arms):
+            sn = fr.counter; fr.counter += 1
+            # (a rush arm owns what its code starts, #254; a sync or race arm's
+            # is its enclosing owner's)
+            ref = ArmRef(None) if kind == "rush" and not IMPL_ORDER else None
+            g = run_arm(stmts, val, fr, ref if ref is not None else owner)
+            if ref is not None:
+                ref.gen = g; refs[i] = ref; fr.starts.append((sn, ref, owner))
+            site.gens[i] = g; sns[i] = sn; started.append(i)
+            ended = step_arm(site, i)
+            if not ended and kind == "rush" and IMPL_ORDER:
                 refs[i] = ArmRef(g); fr.starts.append((sn, refs[i], owner))
-        except StopIteration as e:
-            results[i] = e.value
             if kind != "sync":
-                winner = e.value
-                break
+                # (an arm that ended inside a Signal this one made came first;
+                # the arms after never start, the Book's ch. 14)
+                if site.oot is not None:
+                    winner = site.oot
+                    break
+                if ended:
+                    winner = i
+                    break
+    finally:
+        leave(site)
     try:
         if kind == "sync":
-            while pend:
+            while not all(site.done[i] for i in started):
                 yield
-                for item in list(pend):
-                    try:
-                        next(item[2])
-                    except StopIteration as e:
-                        results[item[0]] = e.value
-                        pend.remove(item)
+                enter(site)
+                try:
+                    for i in started:
+                        if not site.done[i]:
+                            step_arm(site, i)
+                finally:
+                    leave(site)
             finished = True
-            return tuple(results)
-        if winner is None:
-            while winner is None:
-                yield
-                for item in list(pend):
-                    try:
-                        next(item[2])
-                    except StopIteration as e:
-                        winner = e.value
-                        pend.remove(item)
+            return tuple(site.results)
+        while winner is None:
+            yield
+            enter(site)
+            try:
+                for i in started:
+                    if site.done[i]:
+                        continue
+                    ended = step_arm(site, i)
+                    if site.oot is not None:
+                        winner = site.oot
                         break
+                    if ended:
+                        winner = i
+                        break
+            finally:
+                leave(site)
         finished = True
         for ref in refs.values():
             ref.done = True
+        pend = [i for i in started if not site.done[i]]
         if kind == "race":
-            for item in reversed(pend):
-                item[2].close()
+            for i in reversed(pend):
+                site.gens[i].close()
         else:  # rush: losers become roots
-            for (i, sn, g) in pend:
+            for i in pend:
+                g = site.gens[i]
                 r = Root("rushloser", g, owner=S.cur_task())
                 if IMPL_ORDER:
-                    fr.starts.append((sn, r, owner))
+                    fr.starts.append((sns[i], r, owner))
                 else:
                     refs[i].root = r   # (its arm's entry stands for it)
                 S.roots.append(r)
-        pend = []
-        return winner
+                probe(r)
+        return site.results[winner]
     finally:
         if not finished:
             for ref in refs.values():
                 ref.done = True
-            for item in reversed(pend):
-                item[2].close()
+            for i in reversed([i for i in started if not site.done[i]]):
+                site.gens[i].close()
 
 
 def exec_stmt(s, fr, owner=None):

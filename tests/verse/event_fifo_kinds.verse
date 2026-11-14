@@ -1,8 +1,8 @@
-# FIFO event resumption (#513, --event-fifo) for the other kinds of event:
-# a sticky_event's waiters, and a subscribable_event's, whose subscribed
-# functions run first, inside Signal; and waiters in the arms of one task's
-# sync, each at its own turn (arm2, F, arm1): resuming the task for one
-# arm's turn leaves its woken siblings waiting for theirs
+# Awaiters run inside Signal (the Book's API; #513) for the other kinds of
+# event: a sticky_event's waiters, and a subscribable_event's, whose
+# subscribed functions run after every waiter ("Subscribers ... are invoked
+# only after every waiting task has been resumed"); and waiters in the arms
+# of one task's sync, each at its own turn (arm2, F, arm1)
 Waiter(E:event(int), Tag:string, Delay:float)<suspends>:void =
     Sleep(Delay)
     V := E.Await()

@@ -1,4 +1,4 @@
-# The later-started task waits first; the reference scheduler resumes A first.
+# The later-started task waits first, and is resumed first, inside the Signal (the Book's API: in the order they suspended).
 Waiter(E:event(int),Tag:string,Delay:float)<suspends>:void=
     Sleep(Delay)
     Print("wait {Tag}")
