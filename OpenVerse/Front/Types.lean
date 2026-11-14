@@ -353,6 +353,14 @@ structure TyEnv where
       an accessor pair `get`, `set` at functions `fieldAccBase + 2i`, `+ 1`,
       dispatched under the refinement the class's pins give, as a method. -/
   fieldAcc : List (String × String) := []
+  /-- The fields a class re-declares at a type below the one it inherits
+      (`Fields.narrowings`): its objects, and those of the classes below
+      it, hold the field at that type (`TyEnv.fieldSrc`), and a read
+      through a class or interface above it converts it up. -/
+  narrowed : List (String × String) := []
+  /-- The classes marked `<concrete>`: the values of a `concrete_subtype`
+      (`TypeValues`), whose constructions `T{}` may run. -/
+  concreteMarked : List String := []
   fieldAccBase : Nat := 0
   /-- (#283) The uses `R.M` whose family of methods `M` only the class of
       `R` tells (`Choice.methodFns`), by place and `M`: their elaboration
@@ -640,10 +648,16 @@ def TyEnv.argsAt (env : TyEnv) (T : String) (targs : List Ty) (D : String) : Lis
   if env.isSub T D then env.upArgs T targs D else env.argsBelow T targs D
 
 /-- The class or interface whose declaration of field `f` gives its type in
-    class `d`'s Verse Core layout: the topmost interface above `d` that
-    declares it (#53), else the topmost class in `d`'s chain that has it.
-    Two unrelated interfaces may both declare it: the first `d` lists. -/
+    class `d`'s Verse Core layout: the nearest class of `d`'s chain that
+    re-declares it at a narrower type (`narrowed`), else the topmost
+    interface above `d` that declares it (#53), else the topmost class in
+    `d`'s chain that has it. Two unrelated interfaces may both declare it:
+    the first `d` lists. -/
 def TyEnv.fieldSrc (env : TyEnv) (d f : String) : Option String :=
+  -- (the nearest class of `d`'s chain that re-declares it at a narrower
+  -- type, `narrowed`, holds it at that type, as the classes below it do)
+  let chain0 := (env.supers d).filter fun x => !(env.info x).isIface
+  if let some n := (if env.narrowed.isEmpty then none else chain0.find? (fun x => env.narrowed.contains (x, f))) then some n else
   let has := (env.supers d).filter fun x => (env.info x).isIface && (env.fields x).any (·.1 == f)
   let chain := ((env.supers d).filter fun x => !(env.info x).isIface).reverse
   (has.find? fun x => !has.any fun y => y != x && env.isSub x y).orElse fun _ =>
