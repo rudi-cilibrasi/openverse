@@ -12,6 +12,8 @@ structure Info where
   pos : Pos := { line := 0, col := 0 }
   inputs : List Nat := []
   required : List Nat := []
+  /-- Every normal result of this generated helper is type metadata. -/
+  metadataResult : Bool := false
   seeds : List Nat := []
   uses : List Nat := []
   shared : List Nat := []
@@ -234,7 +236,8 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
         let initialized := (List.range fn.nslots).map (fun i => i < fn.arity : Nat → Bool) |>.toArray
         let slots : Slots := { values, initialized, sharedMetadata := values }
         let out ← expr fns infos fields fn info slots (info.body.getD fn.body)
-        let result := joinRole summary.result (joinRole out.value out.returned)
+        let returned := (joinRole out.value out.returned).map (· || info.metadataResult)
+        let result := joinRole summary.result returned
         if result != summary.result then
           modify fun st => { st with summaries := st.summaries.modify index (fun s => { s with result }), changed := true }
       growing := (← get).changed
