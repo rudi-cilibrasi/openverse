@@ -1333,10 +1333,9 @@ if kind.startswith('context-refining-'):
         print(f'Run({params},?N:int={expr} where {types}):int=N')
         print(f'Use({params} where {types}):int=Run({names})')
     elif context == 'field':
-        print('Pair(N:int where a:type,b:type):pair(a,b)=pair(a,b){}')
         fields = ';'.join(f'Data{i}:pair(a{i},b{i})' for i in range(count))
         assignments = ','.join(f'Data{i}:=P{i}' for i in range(count))
-        locals = ';'.join(f'P{i}:pair(a{i},b{i})=Pair(0)' for i in range(count))
+        locals = ';'.join(f'P{i}:pair(a{i},b{i})=pair(a{i},b{i}){{}}' for i in range(count))
         expr = f'block{{{locals};{expr}}}'
         print(f'box({types}):=class{{{fields};N:int={expr}}}')
         print(f'Use({params} where {types}):int=box({targs}){{{assignments}}}.N')
@@ -1910,14 +1909,17 @@ if kind.startswith('dispatch-default-'):
     print('box(t:type) := class:\n    Get(?X:[]t=Concatenate())<computes>:int=X.Length')
     print('fixed := class(box(int)):\n    A:int=1\n    Get<override>(?X:[]int=block{Print("default");array{A}})<computes>:int=X.Length')
     clauses = ','.join(f'A{i}:=(Two(0)|Two(2)),N{i}:=P.Get()' for i in range(count))
+    # (box only takes t in, a contravariant parameter, so a box(t) gives no
+    # t, the Book's rule, ParametricFunctions.versetest 356: a parameter of
+    # type t gives it)
     if kind == 'dispatch-default-first':
-        print(f'Run(P:box(t) where t:type)<transacts>:int=if({clauses})then N0 else -1')
+        print(f'Run(P:box(t),Like:t where t:type)<transacts>:int=if({clauses})then N0 else -1')
     else:
         specs = '<decides>' if kind == 'dispatch-default-failure' else ''
         check = '\n        1=1' if specs else ''
-        print(f'Run(P:box(t) where t:type)<transacts>{specs}:int=\n    R:=for({clauses}):{check}\n        N0\n    R.Length')
+        print(f'Run(P:box(t),Like:t where t:type)<transacts>{specs}:int=\n    R:=for({clauses}):{check}\n        N0\n    R.Length')
     specs = '<decides>' if kind == 'dispatch-default-failure' else ''
-    call = 'Run[fixed{}]' if specs else 'Run(fixed{})'
+    call = 'Run[fixed{},0]' if specs else 'Run(fixed{},0)'
     print(f'Main()<transacts>{specs}:void=Print("{{{call}}}")')
     sys.exit(0)
 if kind == 'refined-retry-first':

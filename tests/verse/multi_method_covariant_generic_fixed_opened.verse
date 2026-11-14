@@ -12,7 +12,9 @@ extra(a:subtype(comparable),b:subtype(comparable),w:subtype(comparable)) := clas
     Get<override>(X:a,Y:[]b,?K:int=0)<transacts>:dog(a) = if(E=E) then (dog(a){V:=X,Bark:=30+K} | dog(a){V:=X,Bark:=31+K}) else dog(a){V:=X}
 reorder(x:type,y:type) := class(maker(y,x)):
     Get<override>(X:y,Y:[]x,?K:int=0)<transacts>:dog(y) = dog(y){V:=X,Bark:=40+K} | dog(y){V:=X,Bark:=41+K}
-Base(P:maker(a,b),V:a where a:type,b:type)<transacts>:[]animal(a) = for(R:=P.Get(V,array{})){R}
+# (maker only takes b in, so a maker(a, b) gives no b, the Book's rule,
+# ParametricFunctions.versetest 356: it is written)
+Base(P:maker(a,string),V:a where a:type)<transacts>:[]animal(a) = for(R:=P.Get(V,array{})){R}
 Main()<transacts>:void =
     for(D:=fixed(string){}.Get((7,array{}))){Print("f {D.Bark}")}
     for(D:=repeated(int){}.Get((3,array{}))){Print("r {D.Bark}")}

@@ -1,0 +1,53 @@
+false
+true
+0
+-1000
+9223372036854775807
+1/2
+1/2
+2
+-1/1645333507
+'a'
+'\t'
+'\#'
+0o00
+0o7f
+0u9
+0u1f600
+""
+"abc{0o00}def"
+"\t\n\r\"\#\&\'\<\>\\\{\}\~"
+"{0o08}\t\n{0o0b}"
+"Smiley face: {0u1f600}, rocket: {0u1f680}"
+"{0u7ff}{0odf}{0o00}"
+"{0u10ffff}{0off}"
+option{1}
+option{"abc"}
+false
+array{1}
+(1, 2, 3)
+((1, 2), (3, 4))
+()
+(1, 2, 3)
+((1, 2), (3, 4))
+map{(0, 0) => 0, (1, 1) => 1}
+map{"a" => true}
+my_class{X := 10}
+my_parametric_class{X := 0}
+letters.B
+pair{X := 1, Y := "one"}
+Object1
+"test"
+derived{A := 1, B := true}
+base{A := 2}
+node{Value := 1, Next := option{node{Value := 2, Next := false}}}
+1
+"two"
+option{'3'}
+(1, "two", option{'3'})
+false
+Scale(:int, :float)
+(/Verse.org/Verse:)ToDiagnostic(:any)
+(counter:)Count(:int)
+(M:)point{X := 3}
+exit=0

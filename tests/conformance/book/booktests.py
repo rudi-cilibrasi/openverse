@@ -438,7 +438,10 @@ TEST_NAMES = {
         "ExternalNestedTupleParameters", "test_function_as_type_iface", "StmCallbackErrors",
         "NativeTwoParams", "test_function_as_type", "test_native_function_as_type",
         "test_external_parametric_type5", "test_native_parametric_type_inheritance1",
-        "test_native_parametric_type_inheritance2", "test_awaitable"],
+        "test_native_parametric_type_inheritance2", "test_awaitable",
+        # the test runner's struct (`ToDiagnostic.versetest:190` expects it
+        # printed as `(/Verse.org/Tests/VerseTestScriptCmd:)tuple_struct{…}`)
+        "tuple_struct"],
 }
 # Engine APIs the Book's Runtime API reference places outside the language:
 # persistence, JSON, Unreal objects and AutoRTFM. A case using one is not
@@ -798,6 +801,12 @@ def build_cases(book, rel):
             c.nt = "harness: unknown form %s" % form
             continue
         why = static_nt(mask(c.programs[0][1])) if c.programs else ""
+        # (a string the assertion expects that names the test runner's
+        # package, `"(/Verse.org/VerseTests:)my_class\{X := 10\}"`, the
+        # name `ToDiagnostic` gives a definition of the test file: openverse's
+        # top level has no path, `ToDiagnostic.versetest` 159-202)
+        if not why and form in RUNTIME_FORMS and re.search(r'"[^"\n]*/Verse\.org/VerseTests', f.body or ""):
+            why = "harness: the test runner's package path /Verse.org/VerseTests, in a string the case expects"
         if why:
             c.nt = why
     plain = [d for d in decls if vm_of(d.tags) is None]

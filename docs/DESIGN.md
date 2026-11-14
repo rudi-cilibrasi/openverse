@@ -1299,7 +1299,7 @@ where an elaboration asks for something and goes no further
 10. `pinsAndAccessors`: the pins of the classes dispatched to under a refinement, and the fields read through accessors.
 11. `addPlaceholders`: placeholder classes and prototypes; no struct contains itself, and map keys are comparable.
 12. `functionOverloads` (`Elab/Signatures.lean`): overloaded functions renamed, and the overloads of functions and methods, which the environment records (`Overloads`).
-13. `declareSignatures`: each function's and constant's signature as declared (`Declared`).
+13. `declareSignatures`: each function's and constant's signature as declared (`Declared`); then the Book's variances of the classes and interfaces, and every type parameter of a source function given by its parameters, by them (`checkDeterminedTypeParams`, the Book's 3503).
 14. `inferSignatures`: the types of unannotated constants, then the defaults function types write checked (#503), then the effects inferred in rounds (`Signatures`).
 15. `checkSignatures`: overloads, overrides, implementations and overriding fields agree, and no field has two interfaces' defaults.
 16. `elabFieldDefaults` (`Elab/Functions.lean`): construction effects, and each field default elaborated once (`FieldDefaults`).
@@ -1321,7 +1321,7 @@ refused, first to last, for:
 - a localized message's form (`Localization`: its type stated, `message`, its value a string literal, its interpolants parameters' names or code points); its effect annotations, specifiers out of place (access specifiers included: where, how many, none on an override), a type parameter's `concrete_subtype` bound or one no parameter determines, and its source profile; a type with a built-in type's name, a reserved name defined, a name defined twice, a name an enclosing scope defines (but a function a call can tell apart from it, checked with the signatures, 15), a `return` outside a function's body, a `return` or `break` that leaves a failure context (a `return` in a `<decides>` body anywhere but in tail position), a `return` inside a value a function returns, a `return` or `break` that leaves a `spawn`, a loop that nothing leaves, a `(super:)M` outside an override of `M`, one of the five forms of `checkBookForms`, a `profile` in an initializer, a `defer:` where a value is taken, a `for` of literal clauses only or with a literal filter; its access levels (a scope of no module or of a package, a specifier that names no access level), its modules and qualifiers (a qualifier that names nothing or not where its definition is, an ambiguous bare name beside a qualified definition, a module member its use may not see), a type alias more visible than what it names, its type aliases (one that names itself or an alias defined after it, or is used before its definition, or whose name a definition takes), a definition that exposes a less visible one, a construction, a parent or an override its code may not use, a module-scoped `var` that breaks the Book's rules or is used other than one entry at a time (`ModuleVars`), a type given as an argument, a final super class query, a type as a value or a field with accessors openverse does not write (`TypeArguments`, `FinalSuper`, `TypeValues`, `Accessors`), a constant that depends on itself or names one defined after it in its scope, and subscribable events (1); the choices it inlines and the requests it carries (2); its overloaded methods (3);
 - its classes: their parents (unknown, a struct, wrong type arguments, an interface extending a class, two superclasses, a `<final>` one, a cycle), a parametric one whose fields name it at other type arguments or name another that names it back, `<castable>` ones with type parameters and those below `<final_super_base>` ones, and construction effects (4); their fields, inherited, overriding and own, against the methods above them, and a `<concrete>` class's defaults (5); their methods: duplicates, parameter names, qualified implementations, overrides and `<final>`, abstract methods and the implementations every concrete class needs (6);
 - the types those give: comparable type arguments to parents and a `<persistable>` struct's fields (7), bounds (8), one instance of an interface per class (9), the Verse Core type arguments of overrides (10), recursive structs and map keys (11);
-- its functions' names and overloads (12), their signatures and effect annotations (13), constants whose type cannot be inferred and the defaults function types write (14); then the signature checks (15): overloads a call cannot tell apart, an extension method that repeats a method of its receiver's class, overrides and implementations whose signature or effects differ, an overriding field's type, and, last, a field two interfaces give defaults;
+- its functions' names and overloads (12), their signatures and effect annotations, and a type parameter no parameter gives (13), constants whose type cannot be inferred and the defaults function types write (14); then the signature checks (15): overloads a call cannot tell apart, an extension method that repeats a method of its receiver's class, overrides and implementations whose signature or effects differ, an overriding field's type, and, last, a field two interfaces give defaults;
 - construction effects and field defaults (16), then each function's and constant's body (17), where a member reached through a value that its code may not use, or set where its `var` does not admit, is refused, and a filter of a `for`, or of a `first` with a generator, that cannot fail;
 - `Main` (19), the checks of the prepared functions (20), and what the lowering refuses (21); the internal errors of `certify` (22) are elaborator bugs.
 
@@ -1673,6 +1673,8 @@ beside the pass that makes it:
 | `$open:A::\|M` (`openMarker`) | a `using{M}` in module `A` | parser | `resolveSpecifiers`, `resolveModules` (out) |
 | `$uses:qualifiers` (`qualifierMarker`) | a source that writes a qualifier | parser | `resolveModules` (out) |
 | `$uses:rational`, `$uses:replaceAll`, `$uses:bitwise`, `$uses:ignoredArms` | what helpers a program needs; the arms marked `@ignore_unreachable` (`ignoredArmsOf`) | parser | `admitSource` (out), `Reachability` |
+| `$uses:diagnostic` (`diagnosticMarker`) | a source that names `ToDiagnostic`: its helpers are added, and an `any` keeps what it needs to print itself | parser | `admitSource` (out) |
+| `$anything` (`anyInterfaceName`), `$any_t` (`Diagnostic.wrapperName`), `$diag_t` (`Diagnostic.printerName`) | the interface of an `any` that prints itself; the class of a value of type `t` converted to `any`; the printer of a `t` | `Diagnostic` (the helpers; `wrapAny`'s requests) | `TyEnv.anyWraps`, `convert` |
 | `$constructor:c` (`constructorSpec`) | a constructor function of class `c`, among its specifiers | parser | `Aliases`, `resolveModules`, `Access`, `Attributes`, `classMethods` |
 | `$ctor:D` (`delegationHead`) | a constructor's delegation `D<constructor>(…)` | parser | `Aliases`, `resolveModules`, the constructors' lowering |
 | `$scope(M, …)` (`scopeHead`) | an access level's definition `S := scoped{M, …}` | parser | `resolveSpecifiers` (out) |
@@ -2054,6 +2056,42 @@ soundness, type-safety, scoping and control proofs build as before. The C
 wide implementation is tested against independent exact-fraction oracles;
 it is outside QuickProof's existing two-int arithmetic law. See
 [the rational seam](SEAMS.md#4-rational-arithmetic).
+
+## ToDiagnostic: an `any` that prints itself
+
+`ToDiagnostic(Value:any)` prints any value
+([LANGUAGE.md](LANGUAGE.md#todiagnostic), research note
+[to-diagnostic.md](research/to-diagnostic.md)), so in a program that calls
+it a value whose static type is gone must still print. Verse Core, its
+proofs, OVBC and the runtime are unchanged. A program whose source names
+`ToDiagnostic` (the parser's `$uses:diagnostic`) and defines none of the
+Book's `ToDiagnostic`, `diagnostic`, `diagnosable` gets the helpers of
+`Front/Diagnostic.lean`, Verse source as the rationals' are: the interface
+`$anything` with the method `$Diagnose()<reads>:string`, the class
+`$anyEmpty` below it (the empty value, and what a slot of type `any` starts
+as), `diagnosable`, `diagnostic` and `ToDiagnostic` itself
+(`diagnostic{String := $asAnything(Value).$Diagnose()}`), and the printers
+of strings, chars and rationals. The helpers' presence is the switch
+(`TyEnv.anyWraps`): `any` is then the interface's reference in Verse Core
+(`Ty.toVTy`, `protoValue`, `witness`, `slotDefault`), and `convert`'s case
+`_, any` is `wrapAny`: a value of type `t` becomes an object of the class
+`$any_t`, below `$anything`, whose one field holds it and whose
+`$Diagnose` calls `$diag_t`. Those classes and printers are written for the
+types a program converts (`Diagnostic.wrapperDecls`, the closure of the
+types the printers print: a class's fields' and its subclasses' too) and
+asked for, as subtype dictionaries are (`Requests.anys`, tier 3): the round
+that finds the conversion has `Err()` in its place and the next has the
+class. A printer is ordinary Verse: an object's by casts from its most
+derived class down (a `diagnosable` one by its `GetDiagnostic`), a struct's
+field by field, an array's by a `for`, an enum's by a `case`; the printers
+of a type that holds itself call each other. Their positions are no
+source's, so no access rule applies to the fields they read. A type with no
+printer yet (a float, a `comparable`, a type parameter's value) refuses the
+conversion, the message placed by `coerce`. Two internal built-ins,
+`$asAnything` (an `any` as the interface) and `$rationalParts` (a
+rational's Verse Core pair), are no program's. Nothing changes in a program
+without the helpers: `anyWraps` is false, and every case above is the old
+one.
 
 ## Bitwise functions: helpers written in Verse
 

@@ -71,7 +71,27 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   return ⟨.assign slot result.e, result.ty⟩
 
 partial def elabECore (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
+  let st0 ← get
   let result ← elabERaw ctx se exp
+  -- (a `for` whose values are not of the element type expected: its body
+  -- at that type, as a typed binding is, so that `false` there is an empty
+  -- option, `X:[][]?int = for (…) { for (…) { false } }`, the Book's tests,
+  -- `SOL-4137-MemoryLeakCreatingA3dArray.versetest`; when that is refused
+  -- too, the first, which its context refuses as before)
+  let result ← match se, exp with
+    | .forE p clauses body, some et@(.arr t) =>
+      if ctx.typeOnly then pure result else
+      let st1 ← get
+      let fits ← tryCatch (do discard <| coerce p result et; pure true) (fun _ => pure false)
+      set st1
+      if fits then pure result else
+        set st0
+        let v := s!"$forBody{p.line}_{p.col}"
+        let typed : SExpr := .block body.pos [.decl body.pos v (some t.toSTy) false body, .ident body.pos v]
+        match ← tryCatch (some <$> elabERaw ctx (.forE p clauses typed) exp) (fun _ => pure none) with
+        | some r => pure r
+        | none => do set st1; pure result
+    | _, _ => pure result
   if let some target := exp then
     if target != .void && result.ty != target && result.ty != .never &&
         (!result.ty.params.isEmpty || !target.params.isEmpty) then
@@ -419,7 +439,14 @@ partial def elabBranch (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   let r ← elabE armCtx body none
   modify fun st => { st with pendingSourceSuspends := sourceBefore }
   noteBackgroundCaptures ctx (Suspend.slotsOf r.e)
-  return ⟨.call mark.idx [.prim .mkArr [← discardValue r]], .void⟩
+  let call : Expr := .call mark.idx [.prim .mkArr [← discardValue r]]
+  -- (its value is no value of the program's: an `any`, which `void` takes
+  -- and `true` does not, the Book's tests, `Result:any = branch: …` valid
+  -- and `Result:true = branch: …` refused, `FORT-582630-BranchResult.versetest`
+  -- 3-14; Verse Core's `void`, or, where an `any` prints itself, the empty
+  -- value's object)
+  if ctx.types.anyWraps then return ⟨← coerce p ⟨call, .void⟩ .any, .any⟩
+  return ⟨call, .any⟩
 
 partial def elabDefersCore (ctx : Ctx) (ds : List (SExpr × List Local)) : EM Expr := do
   let mut acc : Expr := .lit .void
@@ -1299,6 +1326,30 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
 
 /-- `elabSetWith`, given this block's functions (#325). -/
 partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (rhs0 : SExpr) : EM R := do
+  -- (a path whose root is a call's result or a construction, `set
+  -- F(Y, X).Contents = …`, `set c0{}.X += …`: the root first, bound to a
+  -- name of its own, then the keys and the value, as the Book's tests have
+  -- the order, `AssignmentSequencing.versetest` 17-48; and a key of several
+  -- values a tuple's, `set M[1,2] = 1`, `Map.versetest:472`)
+  let rec rooted : SExpr → SExpr × (SExpr → SExpr) × Bool
+    | .member q e f => let (r, k, m) := rooted e; (r, fun x => .member q (k x) f, m)
+    | .app q e args true =>
+      let (r, k, m) := rooted e
+      -- (a key of several values, on a path from a name: not a call
+      -- `F[A, B]`, whose path is no name's)
+      let several := args.length > 1 && (match r with | .ident .. => true | _ => false) && !(match e with
+        | .ident _ n => (ctx.lookup n).isNone | _ => false)
+      let args := if several then [SExpr.tuple q args] else args
+      (r, fun x => .app q (k x) args true, m || several)
+    | e => (e, id, false)
+  let (root, rebuild, multiKey) := rooted lhs0
+  match root, lhs0 with
+  | .app _ _ _ false, .member .. | .app _ _ _ false, .app _ _ _ true
+  | .construct .., .member .. | .construct .., .app _ _ _ true =>
+    let v := s!"$setRoot{p.line}_{p.col}"
+    return ← elabE ctx (.block p [.decl p v none false root, .set p (rebuild (.ident p v)) op rhs0]) none
+  | _, _ =>
+    if multiKey then return ← elabSet ctx p (rebuild root) op rhs0
   -- a place through a field with accessors: its setter's call
   -- (`Elab/Accessors.lean`)
   if !ctx.types.accessors.isEmpty then
@@ -2636,13 +2687,20 @@ partial def elabMapLit (ctx : Ctx) (p : Pos) (entries : List (SExpr × SExpr)) (
       rs := rs.push (k, rk, v, ← elabE ctx v (some vt0))
     ofExcept <| checkTypeValueJoin ctx.types p vt? (rs.toList.map (·.2.2.2.ty))
     -- the values' type: the expected one (or the first's) when every value
-    -- converts to it, else their join, as for an array literal (#67)
+    -- converts to it, else their join, as for an array literal (#67); with
+    -- none expected, two with nothing in common join at `comparable` or
+    -- `any`, as an array literal's elements do (the Book's tests: "the
+    -- result of a map literal with values of disjoint types is coerced to
+    -- [key_type]any", `Any.versetest` 131-134, `Map.versetest:164`)
     let vt ← match ← tryCatch (some <$> rs.toList.mapM fun (_, _, v, rv) => coerce v.pos rv vt0) (fun _ => pure none) with
       | some _ => pure vt0
       | none => rs.toList.foldlM (fun acc (_, _, v, rv) => do
-          match joinTy (← get).env acc rv.ty vt? with
+          let env := (← get).env
+          match joinTy env acc rv.ty vt? with
           | some j => pure j
-          | none => eerr v.pos s!"the values of this map have different types: {acc.show} and {rv.ty.show}") rv0.ty
+          | none =>
+            if vt?.isNone && !ambiguousJoin env acc rv.ty then pure (fallbackJoin env acc rv.ty)
+            else eerr v.pos s!"the values of this map have different types: {acc.show} and {rv.ty.show}") rv0.ty
     let mut steps : Array Expr := #[]
     let mut slots : Array (Nat × Nat) := #[]
     for (k, rk, v, rv) in rs do

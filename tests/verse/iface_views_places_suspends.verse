@@ -22,7 +22,9 @@ c3 := class(c0(?char, ?string, char), i4(int, int)):
     Mi0<override>(X:?char):string = "c3.Mi0"
     Mi4<override>(X:int):string = "c3.Mi4"
     M2<override>():int = 2
-GSF_Qi0_0(X:i0(p0, p1) where p0:type, p1:type)<suspends>:char =
+# (i0 only takes p1 in, so an i0(p0, p1) would give no p1, the Book's
+# rule, ParametricFunctions.versetest 356: the type is written)
+GSF_Qi0_0(X:i0(p0, ?char) where p0:type)<suspends>:char =
         X.D0()
 Sh_char(X:char):string = "{X}"
 Main()<suspends>:void =

@@ -25,7 +25,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 |---|---|---|
 | Comments | `#` to the end of the line, nested `<# … #>`, `<#>` indented comments (the rest of the line and every following line indented more than it; see [Source text](#source-text)) | ch. 0 |
 | Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` an ASCII character other than a line break, a tab included, or an escape; a non-ASCII one, `'é'`, is a `char32`, Book of Verse ch. 1), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates), `float` `1.5`, `2.0e-7`, `1e3`, `12.34f64`, `1234f64` (digits, then a point and digits or an exponent or both, or the suffix `f64`, which may follow either; the nearest double, which must be finite: `2.0e308` is refused; `f32` and `f16` are read and refused as not supported); paths `/Verse.org/Random` parse (in `using{…}`, ignored; as values, refused; see [Source text](#source-text)) | §1.3–1.7 |
-| Types | `int`, `logic`, `char`, `char32`, `any` (see [any](#any)), `comparable` (see [comparable](#comparable)), `rational` (see [rational](#rational)), `float` (see [float](#float)), refinement types `type{_X:int where 0 <= _X, _X <= 120}` (see [Refinement types](#refinement-types)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void` (which takes any value; `tuple()` is the type of the empty value alone, see [Equality and the empty value](#equality-and-the-empty-value)), `message` (a localized message, `X<localizes>:message = "…"`, `F<localizes>(N:int):message = "… {N}"`, rendered by `Localize` and joined by `Join`; openverse has no culture, so a message is its default text, an int written with comma separators: ch. 12, [the rule](research/book-forms-rules.md#localized-messages)), `false` (the type with no value, below every type: a function whose result is `false` never returns, ch. 2, [the rule](research/book-forms-rules.md#false-as-a-type); `true` as a type is not supported yet), function types `type{_(:int)<decides>:int}`, with named parameters `type{_(:int, ?B:int):int}`, and `int->int` (see [Function values](#function-values)); type aliases `player_id := int`, `pair(t:type) := tuple(t, t)` (see [Type aliases](#type-aliases)); types as values of classes and interfaces, `subtype(c)`, `castable_subtype(c)`, `concrete_subtype(c)` and `type` (see [Types as values](#types-as-values)); a conversion written as a call, `int(0)`, `void(0)`, `(?int)(option{0})`, `s(s{})`, of a value of a type that is a subtype of the one named; a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
+| Types | `int`, `logic`, `char`, `char32`, `any` (see [any](#any)), `comparable` (see [comparable](#comparable)), `rational` (see [rational](#rational)), `float` (see [float](#float)), refinement types `type{_X:int where 0 <= _X, _X <= 120}` (see [Refinement types](#refinement-types)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void` (which takes any value; `tuple()` is the type of the empty value alone, see [Equality and the empty value](#equality-and-the-empty-value)), `message` (a localized message, `X<localizes>:message = "…"`, `F<localizes>(N:int):message = "… {N}"`, rendered by `Localize` and joined by `Join`; openverse has no culture, so a message is its default text, an int written with comma separators: ch. 12, [the rule](research/book-forms-rules.md#localized-messages)), `false` (the type with no value, below every type: a function whose result is `false` never returns, ch. 2, [the rule](research/book-forms-rules.md#false-as-a-type); `true`, the type of the empty value alone, as `tuple()` is, below `logic`, [the rule](research/book-forms-rules.md#true-as-a-type)), function types `type{_(:int)<decides>:int}`, with named parameters `type{_(:int, ?B:int):int}`, and `int->int` (see [Function values](#function-values)); type aliases `player_id := int`, `pair(t:type) := tuple(t, t)` (see [Type aliases](#type-aliases)); types as values of classes and interfaces, `subtype(c)`, `castable_subtype(c)`, `concrete_subtype(c)` and `type` (see [Types as values](#types-as-values)); a conversion written as a call, `int(0)`, `void(0)`, `(?int)(option{0})`, `s(s{})`, of a value of a type that is a subtype of the one named; a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
 | Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e`, which state their type there as in a module (ch. 16: "type inference with `:=` alone is not allowed"; `C := e` names a type, when `e` is one: [Type aliases](#type-aliases)) (definitions on one line, at the top level, in a module or in a block, are separated by `;` or `,`: `X:int=0, Y:int=0`; a constant may use one defined before it in its own scope, a module's or the top level's, and one of another module or of an enclosing scope wherever it is defined, as the Book's tests have it (`DefaultValueAssignment.versetest` 102, 128); not itself, directly or through other constants; and its value has no side effect, writing nothing, also through what it calls or constructs, as the Book's tests have it, `DefaultValueAssignment.versetest:199`, `ModuleDefinitions.versetest:278`, `ParametricTypes.versetest:465`: a function with no heap specifier, or a class or struct with none, has `<transacts>`, and so writes, [the rule](research/book-remaining-rules.md#a-module-constant-has-no-side-effect)); module-scoped `var X:weak_map(k, v) = map{}` (see [Module-scoped variables](#module-scoped-variables)); locals `X := e`, `X:t = e`, `var X:t = e`, and a tuple destructured, `(X:int, _, Z:string) = e` (each named element a local of the block, `_` skipping one, `e` evaluated once); no shadowing; no name defined twice in a scope but [overloaded](#overloading) functions; no [reserved name](#reserved-names) | §3.1–3.4 |
 | Mutation | `set X = e`, `set X += e` (`-=`, `*=`), `set A[i] = e` (fails out of range; returns `e`), and paths `set S.F.G = e`, `set A[i][j] op= e`, `set M[k].F = e`: indices and keys evaluated once, left to right, then the new value, then the variable rebuilt (for `op=`, the old value is read after the new one, from the variable as the new one left it, which is then rebuilt from that: `set X += e` is `V := e; set X = X + V`, the Book's tests, `ArrayAppend.versetest` 140, 183); an index out of range or a missing intermediate key fails, while the last key of a path inserts | §3.3, §3.5, §9.3 |
 | Blocks | indented (`:`), braced (`{ }`), inline (`then`/`do`), `.` and an expression on its line wherever `:` or `{…}` may start a body (`if (c). e else. f`, `for (X:Xs). e`, `spawn. F()`, `loop. break`; also `option`, `logic`, and `array` and `map`, whose `:` blocks separate their items by `,`, `;` or new lines: `array:` and the lines `1`, `2`; in braces an array's elements are separated by commas, or by `;` and new lines, not both: `array{1; 2; 3}`), `block:`, `( a; b )` sequences, also as an argument (`F(Log(); 42)` passes 42) and as a `case`'s value (`case(a; b)`); `;` and new lines separate the items of a block, and `;` may end a line or a braced block (`{1; 2;}` is `{1; 2}`) (the next item then follows the line rules, so a class's last field may end in `;`); in a block, statements that commas join on a line are a tuple (ch. 1, "Semicolons vs Commas", and its tests, `SemicolonsVsCommas.versetest` 70, 95, 100: `{1.0, 2}` is a `tuple(float, int)`, `option{1, 2}` holds `(1, 2)`, `for (X := 1..2) {3, X}` is an array of pairs), definitions joined so are the block's definitions in turn (`X:int = 0, Y:int = 0`), and a group of definitions and values is each in order, a definition visible to what follows it, then the tuple of their values (`option{V := 3, V > 0, V}` holds `(3, 3, 3)`, a `var`'s value taken where it is defined); the clauses of `if`, `for`, `first` and the clause macros, the arms of `sync`, `race` and `rush`, a construction's fields and an array's or map's items keep commas as separators; a comma that starts a line is not the block's but the list's around it; a body after `:` may be empty wherever one may be written, as `{}` may (`class:`, `struct:`, `then:`, … whose next line is no deeper than the construct, or nothing follows); a function's or method's braced body may put its `{` on the next line, at the definition's column; a value after `=`, `:=`, `set … =` or a `case` arm's `=>` that starts a later line, deeper, is the indented block of those lines (`Value :=` and the lines `1`, `2`, `3` is `3`; and the line `1, 2, 3`, `(1, 2, 3)`), as a function's body is | §2.2–2.4 |
@@ -170,6 +170,24 @@ Combine(A:t1, B:t2 where t1:type, t2:type):tuple(t1, t2) = (A, B)
   every other generic function takes none. Anything else, such as
   arithmetic, `ToString` or `.Length` on a bare `t`, is a type error, even if
   the function is never called.
+- **Every type parameter is given by the parameters** (the Book's tests,
+  `ParametricFunctions.versetest` 336-378 and 586, error 3503): it is named
+  in a parameter's type where values go in, or in the result's at a place
+  values go in (a function type's parameter, `G(N:int where t:type):(t->void)`),
+  or in the bound of one that is (`Up(X:t where t:subtype(u), u:type)`). A
+  function type's parameter is no such place (`Apply(F:t->void where
+  t:type)` is refused: a value of type `t->void` takes any `t` below one in),
+  nor is a class's or interface's type argument where it only takes values
+  in, a contravariant one (`Use(S:sink(t))` with `sink(t) := class{Take(X:t):void}`:
+  any `sink(u)` below it is one); a class that does not use its type
+  parameter gives it (the Book is silent; an object holds its type
+  arguments). The result alone gives none: `Make(N:int where t:type):?t` is
+  refused, where it is declared, and a program writes the type as an
+  argument instead, `Make(t:type):?t` called `Make(int)` (the Book's
+  `MaybeValueExplicit(t:type, Value:t, Valid:logic):?t`, ch. 2), or a
+  result `false` for a function that never returns. The compiler's own
+  functions (whose names have `$`) keep the old reading, their calls being
+  the compiler's.
 - **Inferred type arguments.** At a call, the result type is matched against
   the expected type (unless that is `void`), then each parameter type against
   its argument's type. Arguments are matched left to right, except that
@@ -221,7 +239,7 @@ Combine(A:t1, B:t2 where t1:type, t2:type):tuple(t1, t2) = (A, B)
   Refused, each by a rule of its own: an instance outside the bound (the
   Book's 3509); a bounded type parameter, or one a bound names, that no
   parameter's type determines (`Foo(X:int where t:subtype(u), u:type):?t`,
-  3503; one without a bound may still be given by the expected result); a
+  3503; one without a bound too, above); a
   public parametric type whose bound is less visible (3593); several bounds
   on one type parameter (the Book: "not yet supported"); `concrete_subtype(c)`
   as a bound; a cast of a bounded `X` (`i[X]`: the Book's
@@ -748,7 +766,11 @@ circle := class(shape, labelled):
     it has reached the object, and then reads the values inside it, so that
     a write the right-hand side makes through the object is kept
     (`set O.P.X = O.SetY()`). A path without an object reads every
-    container first, as `set A[i] = e` does.
+    container first, as `set A[i] = e` does. A path may start at a call's
+    result or a construction, `set F(Y, X).Contents = Y.Contents`, `set
+    c0{}.X += "def"`: the root is evaluated first, then the keys, then the
+    value (the Book's tests, `AssignmentSequencing.versetest` 17-48); a key
+    of several values is a tuple's, `set M[1, 2] = 1` (`Map.versetest:472`).
   - A class or interface with no concrete class below it has no instance,
     so code that uses a value of its type is unreachable, and accepted.
 - **Methods.** A method `M` of class `c` is a function `c.M` whose first
@@ -1403,7 +1425,9 @@ entity := class:
 - **The command line**:
   - `openverse run FILE [ARG…] [do EXPR]`, and likewise `emit`. The
     arguments are the program's `Args:[]string`, unless it defines `Args`
-    itself.
+    itself, or binds the name anywhere, a local or a parameter (`Args` is
+    openverse's, not the Book's: its tests bind it, `Args:tuple(int, int) =
+    (1, 2)`, `DefaultNamed.versetest:274`).
   - With `do EXPR`, `EXPR` runs instead of `Main`, in the context of the
     file's definitions, and its value is printed when it is an `int`, `char`
     or `string`. The expression may fail, which gives exit code 1.
@@ -2288,7 +2312,13 @@ does a name bound by the first success of the clauses after a choice whose
 values are of such types, after them ([Choice](#choice), #283). Two
 comparable types join at `comparable` instead ([comparable](#comparable)):
 `if (C?) then 42 else "text"`, `array{15.61, "Message", 3}` (a
-`[]comparable`). Classes with two common
+`[]comparable`); a map literal's values alike, with no value type
+expected (`map{0 => "0", 1 => 1.0}` is an `[int]comparable`, `map{0 =>
+c{}, 1 => 1}` an `[int]any`: the Book's tests, `Any.versetest` 131-134).
+A `for` whose values are not of the element type expected has its body at
+that type, as a typed binding has (`X:[]?int = for (I := 0..2) { false }`
+holds three empty options; the Book's tests,
+`SOL-4137-MemoryLeakCreatingA3dArray.versetest`). Classes with two common
 supertypes are still an ambiguity, and an expected type still decides
 (`X:int = if (C?) then 1 else "a"` is refused).
 
@@ -2308,7 +2338,59 @@ arguments types the branch under its refinement (#243, #583).
 
 Nothing can be done with an `any`: it has no equality (so it is no map
 key), no `ToString`, and no cast back. So in Verse Core it is `void`: a
-value becomes an `any` by being evaluated.
+value becomes an `any` by being evaluated. In a program that calls
+[`ToDiagnostic`](#todiagnostic), which prints any value, an `any` keeps
+what it needs to print itself instead: everything above holds of it as
+written, with the exceptions listed there.
+
+### ToDiagnostic
+
+`ToDiagnostic(Value:any)<reads>:diagnostic` (the Book of Verse's API
+reference: "Accepts any value at all"; ch. 2, "ToDiagnostic()") gives a
+`diagnostic`, a class whose `String` is the value's text (the Book makes
+the field `<epic_internal>`; its tests read it, and so may a program). An
+object of a class that implements `diagnosable`
+(`GetDiagnostic()<reads>:diagnostic`) gives its own; a `diagnostic`
+implements it by giving itself. The format is the Book's tests'
+(`Tests/Intrinsics/ToDiagnostic.versetest`; ch. 2: "The exact format it
+produces may vary between VM implementations"):
+
+| Value | Text |
+|---|---|
+| `false`, `true` | `false`, `true` |
+| an int | decimal, `-1000` |
+| a rational | reduced, `1/2`, `-1/5`; an integral one as its int, `2` |
+| a char | printable ASCII in quotes, `'a'`; a tab, a new line, a carriage return and `" # & ' < > \ { } ~` escaped, `'\t'`, `'\#'`; any other as `0oXX`, `0o7f` |
+| a char32 | `0uX` in lowercase hex, `0u1f600` |
+| a string | in double quotes, escaped as a char is; a valid UTF-8 sequence of more than one byte `{0uX}`, a byte of none, or another control character, `{0oXX}`: `"Smiley: {0u1f600}"`, `"{0o08}\t"` |
+| an option | `option{X}`, an empty one `false` |
+| an array | of one element `array{X}`, of any other number `(X, Y, Z)` (none: `()`) |
+| a tuple | `(X, Y)` |
+| a map | `map{K => V, …}` in its order |
+| an enum's value | `e.A` |
+| a struct or an object | its type's name (without type arguments) and its fields in declaration order, `my_class{X := 10}`, the object's own class, not its static type's |
+| a function | its name and parameter types, `Scale(:int, :float)`; a method's `(c:)M(:int)`; the language's own `(/Verse.org/Verse:)ToDiagnostic(:any)` |
+| `()`, a `void` | `false` |
+
+A definition in a module is qualified by it, `(M:)c{…}`; one at the top
+level has no qualifier, as openverse's top level has no path (the Book's
+tests print the test runner's, `(/Verse.org/VerseTests:)my_class{X :=
+10}`). Not pinned by the Book: an empty array, a `void`, a module's
+qualifier, a method's.
+
+In such a program, a value of type `t` converted to `any` (as an argument,
+a result, a joined branch, an element of a `[]any`, any of the conversions
+above) becomes an object of a class the front end writes for `t`, which
+prints it when `ToDiagnostic` runs (so an object's `var` fields are
+printed as they are then). What a program can do with an `any` is
+unchanged; what differs: such a conversion allocates an object, and the
+conversion of a value that cannot be printed yet is refused there: a float
+(the shortest decimal that reads back, the Book's `1.5`, `1e+100`, needs a
+primitive Verse Core does not have yet), a value holding one, a
+`comparable` (its box's type is read by no Verse code), a value of a type
+parameter (in generic code), a weak map, a type as a value. A program that
+never calls `ToDiagnostic`, or that defines `ToDiagnostic`, `diagnostic` or
+`diagnosable` itself, is compiled as before.
 
 ## comparable
 
@@ -2623,11 +2705,18 @@ string, by the box of the instance (the evidence of its
 either (`IsFalse(X:t where t:subtype(comparable))<decides>:void = X =
 false` fails at `s{}`).
 
-`void` takes any value and makes it the empty value; `tuple()` is the type
-of the empty value alone: `false`, `()` and a `void` value convert to it,
-it converts to `void`, to an array and, as the Book's `true` does ("true is
-a subtype of logic"), to `logic` as `false`, and `X:tuple() = 1` is
-refused. `false` converts to an empty option or array but not to a map
+`void` takes any value and makes it the empty value; `tuple()`, which the
+Book also writes `true`, is the type of the empty value alone: `false`,
+`()` and a `void` value convert to it, it converts to `void`, to an array
+and, as the Book's `true` does ("true is a subtype of logic"), to `logic`
+as `false`, and `X:true = 1` is refused. A `void` value converts to
+`logic` as `false` too (`X:logic = if (C?) then () else true`), and
+`void` and `true` interchange inside options, arrays and maps (`?void` to
+`?true`, `[]void` to `[]true`, `[int]void` to `[int]true`), as the Book
+has them one type (ch. 2: "These are interchangeable"); not yet as a
+function type's result or parameter (`int->true` is not `int->void`). A `branch:`'s value is an
+`any`, which `void` takes and `true` does not (the Book's tests refuse
+`Result:true = branch: …`). `false` converts to an empty option or array but not to a map
 (the Book's tests refuse it, `Tests/Map.versetest` 343, though its prose
 allows it). As overloads, two types that both hold the empty value are not
 distinct (`logic`, options, arrays, strings, maps, `tuple()`); `void` is
@@ -3512,7 +3601,7 @@ Main()<suspends>:void =
 | `Main` failing | (no entry point in the book) | exit code 1; output already printed stays |
 | `return` or `break` inside a failure context | refused by the tests (`SOL-4199-BreakFromIf.versetest`, `Reachability.versetest` 12-15, `Return.versetest` 157-163; [the audit](research/readings-audit.md#return-and-break-in-a-failure-context)) | the Book's: refused ([Control](#supported)); a `break` in a `for`'s body, which the Book's tests allow and its prose refuses, stays refused |
 | Comparability | `comparable` covers the primitive types, enums, structs, `<unique>` classes and containers of comparable types (ch. 4); not functions, `any`, nor classes and interfaces without `<unique>` (ch. 11, `CompareInstance.versetest:11`) | the Book's: the types it names, and a type parameter declared `subtype(comparable)`; `comparable` itself is a type ([comparable](#comparable)) |
-| Inferring type arguments | not described; the tests refuse a type parameter no parameter's type determines (`ParametricFunctions.versetest` 336-374, 586, 3503) | first-order matching against the expected result type, then the arguments; no subtyping other than `false` (matches anything) and `void` (accepts anything), and a bound's (an argument below it gives its instance); a type parameter with a bound, or that a bound names, must be determined by the parameters, as the tests have it; one without may be given by the expected result (`Make():?t`), which openverse keeps, but not one its signature names nowhere (`F(:u where t:type, u:type)`, `:374`, [the rule](research/book-forms-rules.md#a-type-parameter-named-nowhere)) |
+| Inferring type arguments | not described; the tests refuse a type parameter no parameter's type determines (`ParametricFunctions.versetest` 336-374, 586, 3503), take one named in the result's function type's parameter (`:376`), and refuse one a contravariant class's parameter names (`:356`) | first-order matching against the expected result type, then the arguments; no subtyping other than `false` (matches anything) and `void` (accepts anything), and a bound's (an argument below it gives its instance); every type parameter of a source function must be given by its parameters, by the Book's variance: the expected result gives none any more ([Parametric functions](#parametric-functions), [the rule](research/book-forms-rules.md#a-type-parameter-the-parameters-determine)); a class that does not use its type parameter gives it (the Book is silent) |
 | A qualifier without a `using` | "A qualifier only says which `F` is meant among the ones already in scope" (ch. 10): `(Top.M:)F` with no `using` is unknown | the qualifier is found as any name is, then the name is looked up in exactly that scope: `(M:)F` is `M.F` (#145) |
 | A module's member `(M:)x` used bare in `M` beside an outer `x` | both are candidates, told apart by their parameters, else ambiguous (`ModuleDefinitions.versetest`, `vmodule` tests) | the inner one (only a qualified member may share an outer definition's name, [Shadowing](#shadowing)); in a class's code and for `(local:)`, where the tests refuse it, ambiguous |
 | `ToString` of a float | the API and the tests: fixed point with six decimals (`FloatToString.versetest`, `1.000000`); ch. 2's example: `98.5` (the Book disagrees with itself: [the audit](research/readings-audit.md#tostring-of-a-float)) | the API's and the tests': six digits after the point, the exact value rounded half to even, every integer digit, the sign kept (`-0.000000`); `Inf`, `-Inf`, `NaN`; interpolation calls `ToString` (ch. 2) ([float](#float)) |
@@ -3520,7 +3609,7 @@ Main()<suspends>:void =
 | `=` between different types | "Comparisons between different types still compile, but they always fail" (ch. 4); the empty value is one value of `logic`, `void`, `tuple()`, options, arrays, strings and maps (ch. 2) | the Book's (see [Equality and the empty value](#equality-and-the-empty-value)), at every depth and in generic code; where Verse Core cannot tell the two types' values apart (two type parameters, one and another type, a tuple of them and a string, `[]tuple(int, []int)` and `[]tuple(int, []char32)`), both operands are boxed and compared as `comparable`s ([comparable](#comparable)), so a `char32` and an `int` differ there too |
 | `false` where a map is expected | prose: accepted (ch. 2); tests: refused (`Map.versetest` 343) | refused, as the tests (it equals an empty map) |
 | `X?` of a logic | "equivalent to comparing against true" (ch. 4); the tests: `true?` is the empty value (`BoolQuery.versetest` 3, 4) | `true?` is `true`, not yet the tests' empty value ([empty-values.md](research/empty-values.md), 3.1) |
-| `true` as a type | the type of the empty value, as `tuple()` (ch. 2) | not a type name yet: openverse's `branch:` gives `void`, which `true` would take (`FORT-582630-BranchResult.versetest` refuses it) |
+| `true` as a type | the type of the empty value, as `tuple()` (ch. 2); `void` and `true` interchange (`Void.versetest`); `Result:true = branch: …` refused, `Result:any = branch: …` valid (`FORT-582630-BranchResult.versetest`) | the Book's: `tuple()`; `void` and it interchange inside options, arrays and maps; a `branch:`'s value is an `any` ([the rule](research/book-forms-rules.md#true-as-a-type)); not yet in a function type (`int->true` and `int->void` are two types) |
 | Ordering of rationals | not stated (§2 lists `<` … for `int` and `float`) | exact (by continued fractions, so it cannot overflow), and an int compares with a rational |
 | Order of a choice's values | (not in the Book; the Verse Calculus: spatial) | spatial: the leftmost choice varies slowest, as nested generators do (#208) |
 | Code before a choice | (the Verse Calculus is pure) | runs once, also within an expression (the operands before the choice are evaluated first, as written); each alternative runs the code after the choice, from where the choice was reached; in an `if` or `first{}`, one that leads to no success is rolled back (as backtracking does); in a `for` too, one none of whose values reaches the body (the Book's rule for a `for`, above, a choice being one more choice point); a `for` that keeps the old rule for now rolls back only an alternative whose own clauses fail (#208): **the Book is silent** on choice |
