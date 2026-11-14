@@ -292,6 +292,68 @@ values of entries so dropped, never one whose key is a value.
   store are those of any object's `var` field. No Core change, no new
   primitive, no format change.
 
+## As built
+
+As designed ([LANGUAGE.md](../LANGUAGE.md#weak-maps),
+[Module-scoped variables](../LANGUAGE.md#module-scoped-variables),
+[DESIGN.md](../DESIGN.md#weak-maps-and-module-scoped-vars)): `Ty.weakMap`
+in the front end's types, and `OpenVerse/Front/ModuleVars.lean`. Verse
+Core, OVBC, the loader, the C runtime and every pinned file are unchanged,
+and no theorem was touched. Two things came with it: a map, weak or not, is
+read with a key of a class above or beside its key class at the class above
+both (the API's `operator'()'(Map:[t]u, Key:t)` takes `t` above both;
+`Map.versetest` 354, 388, 394), and a module-scoped `var` declared with no
+value (`var x:int`, valid syntax in `Pointers.versetest:4`) parses and is
+refused.
+
+- **Tests.** `tests/verse/weak_map.verse` (covariance, lookups with keys of
+  other classes, a generic function's value, struct values and paths, a
+  class's fields, `comparable` keys, nested weak maps, options, rollback of
+  a whole replacement and of entries), `weak_map_book.verse` (the Book's
+  blocks 69, 70, 74, 76, a join and two meets), `module_var.verse` (the
+  Book's ch. 17 example and block 75, rollback across two keys),
+  `module_var_uses.verse` (two modules' vars of one name, `<suspends>`
+  functions under `sync` and in a task, a refining cast's branches, a
+  choice, a generic function, a `for` whose iterations fail, a class's
+  methods); and 35 refusals, `tests/errors/weak_map_*` and `module_var_*`.
+  Each expected output was derived by hand; Lean and C agree on each.
+- **Fuzzing.** `scripts/fuzz-weakmap.sh` (`scripts/gen-weakmap.py`) gives
+  a local, a module-scoped and a class field's weak map, each beside an
+  ordinary map, one random stream of entry sets, `+=`, whole replacements,
+  calls and failure contexts, nested and in `for`s, and prints every lookup
+  of both after each statement; the Lean interpreter, `cverse` and the
+  generator's model of the maps must print the same. 200 programs in the
+  gate, 4,200 seeds checked; a model that does not undo failure contexts
+  disagrees on 20 of 30.
+- **The Book's tests** ([the survey's
+  section](book-test-conformance.md#after-weak-maps-and-module-scoped-vars)):
+  of `weak_map.versetest`'s 96 cases, 31 agree (18 on main), 12 are refused
+  and 53 are not translatable; the `weak_map` cause of the survey is gone
+  (23 cases: 18 agree, 1 not translatable, 4 under other causes).
+- **Left.** `weak_map.versetest` 6, 624, 639, 667-669, the module-scoped
+  `var`s whose key classes are `<allocates><computes>`, which openverse
+  refuses as a class's effects (another cause, effects-of-classes); taken
+  out, each agrees but 639, which needs a `<persistable>` class (#11). 41
+  and 48 define `Main` with parameters; 32 writes a type alias in a body (a
+  type as a value); `Map.versetest:401` sets through a key of a sibling
+  class (VerseVM: a run-time failure; refused here, as the map's twin
+  `:363`); 605, 611, 615 call `FitsInPlayerMap`, the persistence limit
+  check. Module constants of `<unique>` classes (`GlobalVariables.versetest`
+  72-74, `:decls`) need their initializers run once before `Main`: the
+  module state can hold them, as `var` fields written by a function that
+  `Main`'s prelude calls before `Main` (`PreludeOK` takes any function of
+  `Main`'s signature), not built.
+- **Not translatable** (53 cases): the engine's and the test runner's
+  persistence (`Persistence.GetOrCreateKey`, `SetValid`, `Joined`,
+  `Dropped`, `RecordUpdates`, `TakeRecordedUpdates`, `Session.Reset`,
+  `persistent_key`, `session_key`, `TestWeakMap`, the runtime error
+  `WeakMapInvalidKey`). A stand-in `persistent_key := class<unique><persistent><module_scoped_var_weak_map_key>{}`
+  with a `GetOrCreateKey` would let them compile, not agree: each reads or
+  writes under a key whose validity an earlier assertion set, or checks the
+  update journal another assertion recorded, in the runner's one program,
+  which the harness runs as separate programs. 261 and 267 alone would run,
+  and they test only that `SetValid` and the writes succeed.
+
 ## Where the Book disagrees with itself
 
 In the form of [the wiki
