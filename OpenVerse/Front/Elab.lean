@@ -425,13 +425,10 @@ def stripOv (msg0 : String) : String := Id.run do
 partial def liftDepth (e : SExpr) : Nat :=
   1 + e.children.foldl (fun n child => max n (liftDepth child)) 0
 
-partial def topLiftDepth : STop → Nat
-  | .fn _ _ ps _ _ _ body =>
-    (ps.filterMap (·.default)).foldl (fun n e => max n (liftDepth e)) (liftDepth body)
-  | .const _ _ _ _ e => liftDepth e
-  | .classDef _ _ _ _ _ _ _ fields methods =>
-    methods.foldl (fun n t => max n (topLiftDepth t))
-      (fields.foldl (fun n f => max n (f.default.map liftDepth |>.getD 0)) 0)
+/-- The deepest nesting of a definition's code (`STop.code`: its defaults, a
+    struct's fields' too, and its bodies). -/
+def topLiftDepth (t : STop) : Nat :=
+  t.code.foldl (fun n e => max n (liftDepth e)) 0
 
 /-- Named defaults can discover forwarding helpers along a dependency
     chain. Interface copies may instantiate each source method per class. -/

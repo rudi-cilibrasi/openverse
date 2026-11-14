@@ -40,6 +40,9 @@ def signatures : List (String × List String × List String × String) :=
 partial def scan : SExpr → List (Pos × String) × List String
   | .ident p n => ([(p, n)], [])
   | .app _ (.ident _ _) as _ => scanAll as
+  -- (a struct's fields' defaults, which `children` leaves out; its fields
+  -- are named only through a value, so they bind nothing)
+  | .structDef _ _ _ fs => scanAll (fs.filterMap (·.default))
   | e =>
     let (uses, binds) := scanAll e.children
     match e with

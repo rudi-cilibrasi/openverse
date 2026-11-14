@@ -314,12 +314,7 @@ def inlineSource (requests : Requests) (admitted : Admitted) :
   let helpers := admitted.helpers ++ (← if lazy then lazyTops else pure [])
   -- (#283) and of the cells of the vars their frames set
   let cells (e : SExpr) : Bool := Choice.anyE (fun | .construct _ "$varcell" .. => true | _ => false) e
-  let cellsIn (ps : List SParam) (b : SExpr) : Bool := cells b || ps.any (·.default.any cells)
-  let usesCells := lazy && resolved.any fun
-    | .fn _ _ ps _ _ _ b => cellsIn ps b
-    | .const _ _ _ _ e => cells e
-    | .classDef _ _ _ _ _ _ _ fs ms => fs.any (·.default.any cells) ||
-        ms.any fun | .fn _ _ ps _ _ _ b => cellsIn ps b | _ => false
+  let usesCells := lazy && resolved.any (·.code.any cells)
   let helpers := helpers ++ (← if usesCells then varcellTops else pure [])
   -- the branches of casts that refine type arguments, as functions (#243)
   -- (in front, as the entry expression is the end)

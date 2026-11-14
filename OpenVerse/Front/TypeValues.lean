@@ -77,12 +77,17 @@ partial def metatypes (t : STy) : List (String × STy) :=
   match t with
   | .app k [a] => if kinds.contains k then [(k, a)] else metatypes a
   | t => t.children.flatMap metatypes
-/-- The types of the declarations of an expression. -/
+/-- The types of the declarations of an expression: of its definitions,
+    the types its constructions are given, and a struct's fields' (which
+    `children` leaves out) with their defaults'. -/
 partial def declTys (e : SExpr) : List STy :=
   match e with
   | .decl _ _ (some t) _ x => t :: declTys x
   | .construct _ _ ts es => ts ++ es.flatMap declTys
+  | .structDef _ _ _ fs => fs.flatMap fun f => f.ty :: (f.default.map declTys).getD []
   | e => e.children.flatMap declTys
+/-- The names an expression uses as values: its identifiers but a call's,
+    a cast's or a member's head. -/
 partial def exprValues (e : SExpr) : List String :=
   match e with
   | .ident _ n => [n]
@@ -90,13 +95,9 @@ partial def exprValues (e : SExpr) : List String :=
   | .member _ (.ident _ _) _ => []
   | e => e.children.flatMap exprValues
 
-/-- The names an expression uses as values: its identifiers but a call's,
-    a cast's or a member's head. -/
-partial def valueNames : STop → List String
-  | .fn _ _ ps _ _ _ b => ps.flatMap (fun q => (q.default.map exprValues).getD []) ++ exprValues b
-  | .const _ _ _ _ v => exprValues v
-  | .classDef _ _ _ _ _ _ _ fs ms => fs.flatMap (fun f => (f.default.map exprValues).getD []) ++
-      ms.flatMap valueNames
+/-- The names a definition's code uses as values (`STop.code`: its
+    defaults, a struct's fields' too, and its bodies). -/
+def valueNames (t : STop) : List String := t.code.flatMap exprValues
 /-- `f` but at a call's, a cast's or a member's head. -/
 def protectHeads (f : SExpr → SExpr) (e : SExpr) : SExpr :=
   match e with

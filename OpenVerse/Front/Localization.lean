@@ -94,12 +94,13 @@ def bodyParts : SExpr → Option (List SExpr × Pos × List SPart)
     | _ => none
   | _ => none
 
-partial def rewriteCalls (lz jn : Bool) (e : SExpr) : SExpr :=
-  let e' : SExpr := match e with
-    | .app p (.ident q "Localize") args br => if lz then .app p (.ident q "$localize") args br else e
-    | .app p (.ident q "Join") args br => if jn then .app p (.ident q "$localizeJoin") args br else e
-    | e => e
-  Id.run (e'.mapChildrenM (fun c => pure (rewriteCalls lz jn c)))
+/-- A call of `Localize` (when `lz`) or `Join` (when `jn`) as a call of its
+    helper; any other expression as it is. -/
+def rewriteCall (lz jn : Bool) (e : SExpr) : SExpr :=
+  match e with
+  | .app p (.ident q "Localize") args br => if lz then .app p (.ident q "$localize") args br else e
+  | .app p (.ident q "Join") args br => if jn then .app p (.ident q "$localizeJoin") args br else e
+  | e => e
 
 partial def mentions (n : String) : SExpr → Bool
   | .ident _ m => m == n
@@ -150,17 +151,8 @@ partial def desugar (tops : List STop) : Except String (List STop × Bool) := do
   let jn := !defines tops "Join"
   let calls := fun (e : SExpr) => (lz && mentions "Localize" e) || (jn && mentions "Join" e)
   if out.any (fun t => t.code.any calls) then used := true
-  let rewrite (t : STop) : STop := match t with
-    | .fn p n ps tps specs ret body =>
-      .fn p n (ps.map fun q => { q with default := q.default.map (rewriteCalls lz jn) }) tps specs ret (rewriteCalls lz jn body)
-    | .const p n specs ty v => .const p n specs ty (rewriteCalls lz jn v)
-    | .classDef p n nsp tps specs parents isI fs ms =>
-      .classDef p n nsp tps specs parents isI (fs.map fun f => { f with default := f.default.map (rewriteCalls lz jn) })
-        (ms.map fun
-          | .fn mp mn mps mtps msp mret mb =>
-            .fn mp mn (mps.map fun q => { q with default := q.default.map (rewriteCalls lz jn) }) mtps msp mret (rewriteCalls lz jn mb)
-          | m => m)
-  return (if used then out.toList.map rewrite else tops, used)
+  -- (the calls in all of a definition's code, a struct's fields' defaults too)
+  return (if used then out.toList.map (STop.mapAll id (rewriteCall lz jn)) else tops, used)
 
 def tops : Except String (List STop) := parsePrelude prelude names
 
