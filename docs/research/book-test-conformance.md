@@ -49,6 +49,71 @@ The harness is [`tests/conformance/book/booktests.py`](../../tests/conformance/b
 its causes are [`causes.py`](../../tests/conformance/book/causes.py), and the
 per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv).
 
+## Where things stand
+
+On main `dca5ad1`: **8,599 agree, 809 refuse, 69 accept, 87 differ, 3,940 not translatable** of 13,504 cases (a fresh `scripts/book-conformance.sh run --causes`). This is the one table of what is left; the sections below are the history, each written when its work landed, and the three maps ([the first map](#the-remaining-causes-a-map), [classes](#classes-and-subtyping-the-map), [forms](#forms-of-expressions-statements-and-the-library-a-map)) hold the case-by-case reading each row points to.
+
+**Accepted where the tests refuse (69)**
+
+| Cause | Cases | What it is, and what it needs | Who decided what |
+|---|---:|---|---|
+| name-limits | 19 | names equal but for case, names too long for the engine (`FORT-793952`, `FORT-555217`, BPVM link errors); no rule of the language to check | left: an engine's limit, [the first map](#the-remaining-causes-a-map) |
+| type-checks-other | 15 | Epic's compiler limits (`ParametricFunctions`, `FORT-744399`, an enum of 256 values), `void` as a type argument (`Void.versetest` 246, 260), a join of two classes at a type both are below (`SOL-5838`), `using` paths and the runner's path, an unannotated function as a `<transacts><decides>` value; one form each | left, [the first map](#the-remaining-causes-a-map) and [forms](#forms-of-expressions-statements-and-the-library-a-map); `SOL-5838` is the owner's reading, [classes](#classes-and-subtyping-the-map) |
+| epic-limits | 12 | the BPVM's code generation and Epic's limits (`DefaultNamed`, `ParametricFunctions`, `Function`, …); no rule to check | left, [the first map](#the-remaining-causes-a-map) |
+| concrete-classes | 7 | a class below a `<concrete>` one: is it concrete? | the owner's question ([the wiki](https://github.com/rudi-cilibrasi/openverse/wiki/Concrete-classes-and-their-subclasses)) |
+| effect-checks | 5 | `no_rollback` as a function's default effect (3), the BPVM's `spawn` in a `<transacts>` function (2): a rule over every call | left: the Book disagrees with itself, and its tests with each other, [the held rules](#after-the-held-rules) |
+| initializer-effects | 4 | a module constant whose construction allocates mutable memory (VerseVM's link-time check, `GlobalVariables.versetest`) | left: VerseVM's, [the first map](#the-remaining-causes-a-map) |
+| qualified-names | 4 | the warnings 2003 and 2004 for `(a:)F()` in an override (`SOL-3564`): a warning whose rule the tests do not state | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| duplicate-definitions | 1 | `enum{ public }` (`QualifiedIdentifier.versetest:315`): which names are the language's is not stated | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| final-members | 1 | a `<final>` method that does not implement an interface's method of its name (`final.versetest:125`) | left: a class rule, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| persistable | 1 | an enum that is not `<persistable>` in a `<persistable>` struct: keep the enum's specifier, one check | "do" in [forms](#forms-of-expressions-statements-and-the-library-a-map), not done yet |
+
+**Different output (87)**
+
+| Cause | Cases | What it is, and what it needs | Who decided what |
+|---|---:|---|---|
+| int-precision | 82 | VerseVM's unbounded `int` against openverse's 64 bits: bignums in the C runtime | openverse's reading, the BPVM's, [Readings](../LANGUAGE.md#readings-openverse-takes) |
+| empty-values-equal | 4 | the value of `X?` on a `logic`, `true?` (the empty value in the tests) | the Book disagrees with itself; the tests' if the bytes allow, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| compound-set-order | 1 | `set X[0] +=` whose value sets `X` (`ArrayAppend.versetest:12`, VerseVM's) | left: a VM split; the untagged tests agree, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+
+**Refused where the tests accept (809)**
+
+| Cause | Cases | What it is, and what it needs | Who decided what |
+|---|---:|---|---|
+| types-other | 140 | many forms, one check or one feature each: a type named at two arities (the archetype blocks of `ParametricTypes.versetest`), inference from an expected type, the runner's natives, F-bounded classes, refinement overloads, … | left, listed in [forms](#forms-of-expressions-statements-and-the-library-a-map) and [classes](#classes-and-subtyping-the-map) |
+| union-types | 136 | `union{…}` (VerseVM only, in no chapter) | left, [the first map](#the-remaining-causes-a-map) |
+| library-diagnostic | 93 | `ToDiagnostic` of every kind of value, through `any` | left in [the first map](#the-remaining-causes-a-map); `feat/to-diagnostic` (#621, open) builds it |
+| syntax-other | 68 | parser forms, most of them `TimSyntax.versetest`'s | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| metatypes | 63 | metatypes beyond those built: `classifiable_subset`, `castable_concrete_subtype`, `castable_subtype(any)`, a cast to a built-in type, `int[X]`, … | left: other work, [the first map](#the-remaining-causes-a-map) |
+| live-variables | 50 | `live`, `when`, `upon`, `await`, `batch` (ch. 15, unreleased; VerseVM only) | left, [the first map](#the-remaining-causes-a-map) |
+| set-forms | 35 | `set live` (28, VerseVM only); `set` through a call's result or a construction (6); `set M[1,2]` (1) | the 7: "do" in [forms](#forms-of-expressions-statements-and-the-library-a-map); `feat/to-diagnostic` (#621, open) builds them; `set live` left |
+| nested-functions | 30 | nested functions (ch. 6, unreleased; #492) | left, [the first map](#the-remaining-causes-a-map) |
+| spawn-in-failure-context | 28 | `spawn` in a failure context, which openverse refuses (#156) | kept: relaxing it gives 7 different results (awaiters inside `Signal`), [the held rules](#after-the-held-rules) |
+| qualified-names | 20 | two members of one name in a class, `(c:)M` beside an inherited `M` (members keyed by qualifier); others | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| singleton-types | 15 | `true` as a type (`Void.versetest`) | `feat/to-diagnostic` (#621, open) builds it |
+| operator-definitions | 14 | `operator'+'`, `prefix'-'` defined by a program: a parser form and overloads | "do if time" in [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| joins | 13 | a map literal's values (`Any.versetest`), function values joined by their types' subtyping, variance's `SOL-6739` | the map literal's: `feat/to-diagnostic` (#621, open) builds it; the rest left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| override-defaults | 13 | method overrides at coerced signatures (`CoercedOverrides`, `FORT-642876`, `SOL-3731`): an adapter per override | left, [classes](#classes-and-subtyping-the-map) |
+| impossible-casts | 11 | casts that cannot succeed, which openverse refuses and the tests accept (4 need a class the harness drops) | left: a warning would follow the Book, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| named-tuple-elements | 11 | named parameters in a tuple parameter, named tuple values ([tuple-parameters.md](tuple-parameters.md)) | the owner's decision, [the first map](#the-remaining-causes-a-map) |
+| partial-modules | 11 | one module in several parts: the parts merged, with two checks | "do if time" in [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| closed-functions | 7 | `<closed>` (#494) | the owner's (#494), [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| library-other | 7 | `signalable(t)` (2), `GetSecondsSinceEpoch` (2, a clock), `FitsInPlayerMap` (3, persistence): library and runtime | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| unnamed-parameters | 7 | parser forms (`TimSyntax`, `Roundtrip`) | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| module-objects | 5 | module constants of `<unique>` classes, made once before `Main`: the module state of [weak-map.md](weak-map.md) | left (designed there), [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| subtyping-to-any | 5 | conversions to a type with `any` inside | left, [classes](#classes-and-subtyping-the-map) |
+| attributes | 4 | an attribute of the engine's (`@expose_to_web_data_sync_service_reads`, 2) and two parser forms | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| comparable-classes | 4 | `<unique>` interfaces with no class below them, compared (`ComparableInterface.versetest`) | left: a class rule, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| nested-tuple-parameters | 4 | parser forms (`TimSyntax`, `Roundtrip`) | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| archetype-separators | 3 | parser forms | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| block-forms | 3 | `block` in a construction, `spawn{}` of several expressions, `branch` in a loop | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| class-specifiers | 3 | `<converges>` on an abstract method, `<native_callable>`, a `<persistable>` class | the owner's (#494), [classes](#classes-and-subtyping-the-map) |
+| char-literals | 2 | `'ab'` (`TimSyntax`) | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| first-forms | 1 | `first{X:=1..5, 3*X>10}`, a generator in a tuple (`first.versetest:206`) | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| generators | 1 | `generator(t)` | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| path-literals | 1 | `Alias := import(/Verse.org)`, a module alias | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| type-aliases | 1 | `type{F()<converges>:void}` | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+
 ## Summary
 
 - **13,504 cases** from the 629 test files that hold one (of 636; seven are
