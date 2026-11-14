@@ -1142,6 +1142,9 @@ where
     dictionary in the callee. Inspect the declaration's own domain, before
     substituting caller instances into otherwise unconstrained parameters. -/
 def Ctx.checkArgumentRole (ctx : Ctx) (s : Sig) (argument : SExpr) (index : Nat) : EM Unit := do
+  -- Receiver slots are checked on their emitted values by MetadataFlow;
+  -- a source hint can outlive a conversion that constructs fresh data.
+  if s.hasReceiver && !s.name.endsWith ".$block" && index == 0 then return
   if s.typeValues.contains index || !ctx.isTypeValue argument then return
   if (s.params[index]?).any (SubtypeEvidence.exposesEvidence (s.typeEnv ctx.types)) then
     eerr argument.pos s!"dummy type value cannot provide executable evidence to {s.name}"

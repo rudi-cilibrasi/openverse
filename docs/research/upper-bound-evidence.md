@@ -49,8 +49,13 @@ Argument binding also refuses dummy inputs to executable proof and function
 formals, including proof data exposed through containers or object fields.
 This check uses the callee's declared domain. An unconstrained parametric
 forwarder may still return metadata, retaining its role. Saved method receivers
-and arguments keep their roles across dispatch; dummy receivers cannot execute
-methods or function calls. Hidden `$w.` fields remain metadata.
+and arguments keep their roles across dispatch. Callable receivers are checked
+on their emitted values, including a saved receiver with no concrete dispatch
+implementation. A source hint may still describe a discarded input when a
+conversion or a helper produces independent real data; that hint alone does
+not reject the resulting real receiver. Dummy receivers cannot execute methods
+or function calls. Intrinsic task/event helpers require an executable receiver
+too. Hidden `$w.` fields remain metadata.
 
 Mutable storage also receives a compiler-only provenance check before failure
 capture, shared-cell and concurrency lowering (#572). It follows local writes,
@@ -66,9 +71,11 @@ object field or a shared local initialized with executable data. Checking the
 write protects every alias, including aliases obtained by indexed reads or
 passed to an unannotated helper. Compiler-owned `$w.` fields retain their
 metadata role without tainting unrelated object fields. This analysis adds no
-Core opcode or runtime tag. `MetadataStorage.lean` retains 18 real/dummy
-rejection pairs and 16 opaque-forwarding, real-overwrite and rollback pairs,
-including a later GADT refinement and suspension-frame storage. These are
+Core opcode or runtime tag. `MetadataStorage.lean` retains 26 real/dummy
+rejection pairs and 25 opaque-forwarding, real-overwrite and rollback pairs,
+including a later GADT refinement, fresh unit-to-array conversions, ordinary
+helpers with independent real returns, virtual and spawned receivers, and
+bound-method captures across a wait. These are
 compiler-API contracts; source programs reach the same analysis.
 
 The checked families currently cover:

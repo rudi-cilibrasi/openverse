@@ -37,6 +37,14 @@ private def caller (body : String) : String :=
   "Caller(X:t,D:u,Dummy:u,P:evidence(evidence(vehicle,t),u) where t:type,u:type)<transacts>:int=\n" ++ body
 
 private def cases : List (String × String) := [
+  ("saved bound receiver across wait", "reader:=class<computes>{Read()<suspends>:int=7}\nCaller(Dummy:reader)<suspends>:int=\n    Saved:=Dummy.Read\n    Sleep(0.01)\n    Saved()"),
+  ("ignored method receiver", "reader:=class<computes>{Read()<computes>:int=7}\nCaller(Dummy:reader)<computes>:int=Dummy.Read()"),
+  ("constructed metadata receiver", "reader:=class<computes>{Value:int;Read()<computes>:int=7}\nCaller(Dummy:int)<computes>:int=reader{Value:=Dummy}.Read()"),
+  ("task cancel receiver", "Caller(Dummy:task(int))<suspends>:void=Dummy.Cancel()"),
+  ("task await receiver", "Caller(Dummy:task(int))<suspends>:int=Dummy.Await()"),
+  ("event await receiver", "Caller(Dummy:event(int))<suspends>:int=Dummy.Await()"),
+  ("event signal receiver", "Caller(Dummy:event(int)):void=Dummy.Signal(1)"),
+  ("unit event signal receiver", "Caller(Dummy:event()):void=Dummy.Signal()"),
   ("mutable local", caller "    var Stored:u=D\n    set Stored=Dummy\n    P.Up(Stored).Up(X).N"),
   ("helper return", "Keep(V:v where v:type)<computes>:v=V\n" ++
     caller "    var Stored:u=D\n    set Stored=Keep(Dummy)\n    P.Up(Stored).Up(X).N"),
@@ -64,6 +72,13 @@ private def cases : List (String × String) := [
   ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
+  ("independent bound receiver across wait", "reader:=class<computes>{Read()<suspends>:int=7}\nFresh(V:u where u:type)<computes>:reader=reader{}\nCaller(Dummy:u where u:type)<suspends>:int=\n    Saved:=Fresh(Dummy).Read\n    Sleep(0.01)\n    Saved()"),
+  ("void to real array carrier", "carrier:=class<computes>{Values:[]int;Count()<computes>:int=Values.Length}\nCaller(Dummy:void)<computes>:int=\n    Items:[]int=Dummy\n    Box:=carrier{Values:=Items}\n    Box.Count()"),
+  ("true to real array carrier", "carrier:=class<computes>{Values:[]int;Count()<computes>:int=Values.Length}\nCaller(Dummy:true)<computes>:int=carrier{Values:=Dummy}.Count()"),
+  ("independent method receiver", "reader:=class<computes>{Read()<computes>:int=7}\nFresh(V:u where u:type)<computes>:reader=reader{}\nCaller(Dummy:u where u:type)<computes>:int=Fresh(Dummy).Read()"),
+  ("independent virtual receiver", "reader:=interface<computes>{Read()<computes>:int}\nleft:=class<computes>(reader){Read<override>()<computes>:int=7}\nright:=class<computes>(reader){Read<override>()<computes>:int=8}\nFresh(V:u,C:logic where u:type)<computes>:reader=if(C?)then left{}else right{}\nCaller(Dummy:u,C:logic where u:type)<computes>:int=Fresh(Dummy,C).Read()"),
+  ("independent function receiver", "One()<computes>:int=7\nFresh(V:u where u:type)<computes>:type{_()<computes>:int}=One\nCaller(Dummy:u where u:type)<computes>:int=Fresh(Dummy)()"),
+  ("independent spawned receiver", "Work()<suspends>:int=7\nFresh(V:u where u:type)<computes>:type{_()<suspends>:int}=Work\nCaller(Dummy:u where u:type)<suspends>:int=\n    T:=spawn{Fresh(Dummy)()}\n    T.Await()"),
   ("metadata argument with real return", "IgnoreMeta(M:u,Real:evidence(vehicle,t) where u:type,t:type)<computes>:evidence(vehicle,t)=Real\nCaller(X:t,D:evidence(vehicle,t),Dummy:u where t:type,u:type)<computes>:int=IgnoreMeta(Dummy,D).Up(X).N"),
   ("metadata argument with real failable return", "IgnoreMeta(M:u,Real:evidence(vehicle,t) where u:type,t:type)<decides><computes>:evidence(vehicle,t)=block{true?;Real}\nCaller(X:t,D:evidence(vehicle,t),Dummy:u where t:type,u:type)<computes>:int=if(Proof:=IgnoreMeta[Dummy,D])then Proof.Up(X).N else 0"),
   ("opaque mutable local", "Caller(Dummy:u where u:type)<transacts>:u=\n    var Stored:u=Dummy\n    set Stored=Dummy\n    Stored"),
