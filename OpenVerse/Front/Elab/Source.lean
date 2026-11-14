@@ -555,9 +555,11 @@ def concurrencyHelpers (resolved : List STop) (requests : Requests) (eventFifo :
     6. no definition exposing a less visible one (`Access.checkConsistency`),
        and constructions, parents and overrides used where they may be
        (`Access.checkUses`, with `Access.Env`, which the elaboration reads);
-    7. the desugarings: types given as arguments (`TypeArguments`), types as
-       values (`TypeValues`), fields with accessors (`Accessors`), castable
-       bounds (`UpperBounds.markCastable`), built-ins named as values
+    7. the desugarings: module-scoped `var`s, checked and made the `var`
+       fields of the module state's object (`ModuleVars`), types given as
+       arguments (`TypeArguments`), types as values (`TypeValues`), fields
+       with accessors (`Accessors`), castable bounds
+       (`UpperBounds.markCastable`), built-ins named as values
        (`BuiltinValues`);
     8. the defaults function types write set apart, no constant that depends
        on itself (`checkConstantCycles`) or names one after it in its scope
@@ -623,12 +625,16 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   Access.checkConsistency levels resolved
   let access := Access.Env.of levels (Access.Sites.of resolved) resolved
   Access.checkUses access resolved
-  -- 7. types given as arguments and used as types: type parameters; types
+  -- 7. module-scoped `var`s: checked, and held as the `var` fields of the
+  --    module state's object, each use one through it
+  --    (docs/research/weak-map.md); types given as arguments and used as
+  --    types: type parameters; types
   --    as values, `subtype(t)` and its kin: classes and interfaces; fields
   --    with accessors: checked, and their accessors' type written; a
   --    castable_subtype(c) bound's castability: a subtype relation; the
   --    built-ins the program names as values: definitions of their own
   --    (after the aliases, whose names are no values' and bind nothing)
+  let resolved ← ModuleVars.desugar resolved
   let resolved ← TypeArguments.desugar resolved
   let resolved ← TypeValues.desugar resolved
   let resolved ← Accessors.desugar resolved

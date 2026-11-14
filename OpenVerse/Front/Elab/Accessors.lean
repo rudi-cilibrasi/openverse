@@ -39,7 +39,7 @@ def TyEnv.accessorOf? (env : TyEnv) (c : String) (targs : List Ty) (f : String) 
 def accessorStepTy? (env : TyEnv) (t : Ty) (step : Sum String SExpr) : Option Ty :=
   match t, step with
   | .arr e, .inr _ => some e
-  | .map _ v, .inr _ => some v
+  | .map _ v, .inr _ | .weakMap _ v, .inr _ => some v
   | .struct n targs, .inl f =>
     if env.classes.contains n then none else ((env.fields n targs).find? (·.1 == f)).map (·.2.1)
   | _, _ => none

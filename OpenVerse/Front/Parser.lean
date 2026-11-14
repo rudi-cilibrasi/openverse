@@ -2214,6 +2214,41 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) (par
           continue
         bump
       continue
+    -- `var X<specs>:t = e`: a module-scoped variable (Book of Verse ch. 3,
+    -- 16, 18), a constant whose specifiers include `moduleVarSpec`, which
+    -- `ModuleVars.desugar` checks and takes
+    if t.isKw "var" then
+      bump
+      let varSpecs ← parseSpecs
+      let name0 ← expectIdent
+      let name := pfx ++ name0
+      owner := name
+      let pre ← parseSpecs
+      let n ← peekT
+      if n.isSym "(" then
+        perr n s!"var {name0}(…): a module-scoped var is a variable, not a function (Book of Verse tests, Function.versetest 147: 3502)"
+      ofExcept <| EffectPolicy.checkName t.pos pre
+      if !n.isSym ":" then perr n s!"expected ':' and the type of the module-scoped var {name0}"
+      bump
+      let ty ← parseType
+      let a ← peekT
+      let specs := pre ++ [moduleVarSpec]
+      -- (a declaration with no value, `var x:int` on its line: valid syntax,
+      -- the Book's tests, Pointers.versetest:4; openverse has no variables
+      -- defined elsewhere, refused)
+      if a.isEof || (a.bol && a.col ≤ (← get).topCol) || (!a.bol && (a.isSym ";" || a.isSym ",")) then
+        tops := tops.push (.const t.pos name specs (some ty) (refusedForm t.pos (.declaredVariable name0) []))
+        continue
+      if !a.isSym "=" then perr a s!"expected '=' and the initial value of the module-scoped var {name0}"
+      bump
+      let value ← parseFnBody
+      -- (`var<w> X`, write access on a module-scoped variable: parsed and
+      -- refused)
+      let value := match varSpecs.head? with
+        | some sp => refusedForm t.pos (.moduleVarAccess sp name0) [value]
+        | none => value
+      tops := tops.push (.const t.pos name specs (some ty) value)
+      continue
     -- (`(q:)name`: a qualified definition, whose qualifier must name the
     -- module it is in, `$qual:A::name|q` for `resolveModules` to check)
     let qual? ← match ← peekQual with

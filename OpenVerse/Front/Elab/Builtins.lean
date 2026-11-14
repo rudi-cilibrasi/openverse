@@ -161,6 +161,8 @@ partial def elabConcatenateMaps (c : BuiltinCall) : EM R := do
   for a in args do
     let r ← elabE ctx a mapExp
     let r ← elabContainerReceiverWith elabE ctx a.pos r (fun | .map .. => true | _ => false) "ConcatenateMaps"
+    if let .weakMap .. := r.ty then
+      eerr a.pos s!"ConcatenateMaps takes maps, and a weak_map is not one (Book of Verse ch. 3: \"you cannot use `ConcatenateMaps`\"): {r.ty.show}"
     let .map _ _ := r.ty | eerr a.pos s!"ConcatenateMaps takes maps, not {r.ty.show}"
     match jt? with
     | none => jt? := some r.ty

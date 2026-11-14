@@ -443,6 +443,19 @@ partial def STop.code : STop → List SExpr
   | .const _ _ _ _ e => [e]
   | .classDef _ _ _ _ _ _ _ fs ms => fs.filterMap (·.default) ++ ms.flatMap STop.code
 
+/-- A module-scoped variable's specifier, `$var` among a constant's
+    specifiers, for `var X:t = e` at the top level or in a module (Book of
+    Verse ch. 3, 16, 18): `ModuleVars.desugar` takes the constant out of the
+    program and makes it a `var` field of the module state's object. -/
+def moduleVarSpec : String := "$var"
+
+/-- A module-scoped variable (`moduleVarSpec`): where, its name, its other
+    specifiers, its type and its initial value. -/
+def STop.moduleVar? : STop → Option (Pos × String × List String × STy × SExpr)
+  | .const p n specs (some t) e =>
+    if specs.contains moduleVarSpec then some (p, n, specs.filter (· != moduleVarSpec), t, e) else none
+  | _ => none
+
 /-- The name of the constant that holds a default a function type writes
     (`?N:t = e`) after the definition that writes it, `$typeDefault:N`: the
     elaborator checks it at `t` and drops it (#503). -/
@@ -483,6 +496,11 @@ inductive Refused where
   | declaredFunction (name : String)
   /-- `X:t` with no value (`parseTopsIn`). -/
   | declaredData (name : String)
+  /-- `var X:t` with no value, a module-scoped variable (`parseTopsIn`). -/
+  | declaredVariable (name : String)
+  /-- `var<w> X:t = e`, a module-scoped variable's write access
+      (`parseTopsIn`). -/
+  | moduleVarAccess (sp name : String)
 
 def Refused.message : Refused → String
   | .lambda => "a lambda (…) => … is a nested function, which openverse does not have (#492; the Book's ch. 6 marks nested functions as an unreleased feature; docs/research/closure-design.md)"
@@ -492,6 +510,8 @@ def Refused.message : Refused → String
   | .macroSpecifier sp kw => s!"<{sp}> on {kw}: a macro takes no specifier (class and struct take their construction's effects) (Book of Verse tests, InvalidAttributeLocations.versetest: 3604)"
   | .declaredFunction n => s!"{n}(…) has no body: a declaration of a function defined elsewhere, which openverse has none of (native functions are not supported, #494)"
   | .declaredData n => s!"{n}:t has no value: a declaration of data defined elsewhere, which openverse has none of"
+  | .declaredVariable n => s!"var {n}:t has no value: a declaration of a variable defined elsewhere, which openverse has none of"
+  | .moduleVarAccess sp n => s!"var<{sp}> on the module-scoped var {n} is not supported yet: its write access is its name's"
 
 /-- A form openverse parses and refuses, `$refused(msg, e…)`: the refusal's
     message, then the parts the form was written with. -/
