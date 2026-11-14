@@ -859,3 +859,47 @@ the first part written after it). `checkDefinedOnce` sees the members of
 all parts in one scope. No program that compiled changes; the four
 `available.versetest` refusals that agreed through "defined twice" agree
 by the rule now.
+
+## Operator overloads
+
+**The rule.** A program may define overloads of the operators `+`, `-`,
+`*` and `/`, `operator'+'(L:t, R:u):r = …`, and of prefix `-`,
+`prefix'-'(X:t):r = …`, at the top level; they are functions of those
+names, overloaded as any. A binary operator, or a negation, of an operand
+the built-in operator does not take (one that is no int, float, rational,
+refinement, `false`, nor for `+` an array) is a call of the program's
+overload its operands fit; a `<decides>` one is called with brackets, so
+the operation fails where the call does. Other operators are not
+overloadable.
+
+**The Book.** The prose names `operator'+'` in an error message only (ch.
+4, `04_operators.md:646`: "no operator'+' overload takes (int, float)"),
+and ch. 11 (`11_types.md:939-940`) declares `operator'='(X:t, Y:t where
+t:subtype(comparable))<decides>:t`. The tests,
+`Tests/Overloading.versetest` 196-212: "Test overloading the arithmetic
+operators (+ - * /)", `prefix'-'(V:vec2i)`, `operator'*'(L:vec2i, R:int)`
+beside `operator'*'(L:int, R:vec2i)`, `operator'/'(…)<transacts><decides>`
+with `assert{not (vec2i{X:=15,Y:=16} / 0)}`; "overloading the indexing
+operator" refused (`:214-219`, 3514), and "The mutation and comparison
+operators aren't overloadable yet" (`:221-232`);
+`Tests/Bugs/2023-01-17-CharLiteralAsOperand.versetest` (`prefix'-'` and
+`operator'-'` of chars, `-'a'-'b'`).
+
+**openverse before.** A parse error, "expected '(', ':' or ':=' after
+'prefix'".
+
+**openverse now.** The parser reads `operator` or `prefix` followed with
+no space by a character literal of one of those operators as a
+function's name, `operator'+'` (another character is refused);
+`elabExprValuesWith` (`Elab/ExpressionValues.lean`), when the program
+defines the operator's function and an operand's type is not one the
+built-in operator takes, elaborates the operation as the call of it
+(`elabApp`, through the overloads). Nothing reaches Verse Core but
+calls. No program that compiled changes: an operator of the built-in's
+operands keeps its code. **Left:**
+`Tests/StringInterpolationPlus.versetest` (2), whose interpolation
+`"Foo{Box}"` goes through a program's `ToString(Box:box)` and
+`operator'+'(L:string, R:box)`: openverse's interpolation takes
+`ToString` of the built-in types only (a program's `ToString` beside the
+built-in, `types-other`); `TimSyntax.versetest:230`, `operator'+'(1,2)`
+called by its name in an expression (parse-only).

@@ -607,6 +607,16 @@ classes, interfaces, structs, enums or constants of one name, or one of them
 and a function (`c := class{}` with `c(I:int):c`, which the Book's tests
 refuse as "overloading a class"), are a name defined twice. A local cannot
 take an overloaded function's name either.
+- **Operators.** A program may overload the operators `+`, `-`, `*`, `/`
+  and prefix `-` at the top level, as functions written
+  `operator'+'(L:vec2i, R:vec2i):vec2i = …` and `prefix'-'(V:vec2i):vec2i =
+  …` (overloads of one another as any functions are). An operator whose
+  operand the built-in one does not take (no int, float, rational,
+  refinement or, for `+`, array) calls the overload the operands fit, with
+  brackets when it is `<decides>` (`operator'/'(L:vec2i, R:int)<decides>`
+  makes `V / 0` fail); `-3 + 1` stays the built-in's. Other operators
+  (`operator'()'`, the comparisons, `+=`) are not overloadable (the Book's
+  tests, `Overloading.versetest` 196-232).
 - **Distinct overloads.** Overloads take different numbers of parameters, or
   disjoint types at some position. A single tuple parameter and the same
   flattened positional types are compared element by element: the same

@@ -2324,9 +2324,30 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) (par
     -- `(R:t).M(…)`: an extension method, the function `$ext:M` whose first
     -- parameter is the receiver (Book of Verse ch. 6)
     let ext ← if qual?.isSome then pure none else parseExtensionHead?
+    let nameTok ← peekT
     let name0 ← match ext with
       | some _ => do pure (extensionName (← expectIdent))
       | none => expectIdent
+    -- `operator'+'(L:t, R:u)`, `prefix'-'(X:t)`: an overload of an
+    -- operator, written with the operator as a character right after
+    -- (the Book of Verse's tests, `Overloading.versetest` 196-212: `+`, `-`,
+    -- `*`, `/` and `prefix'-'`; `operator'()'` refused, 3514): a function
+    -- of that name, which an operator of operands the built-in one does
+    -- not take calls
+    let name0 ← do
+      let c ← peekT
+      match c.tok with
+      | .char code =>
+        if ext.isNone && (name0 == "operator" || name0 == "prefix") && c.line == nameTok.line &&
+            c.col == nameTok.col + name0.length then
+          let op := Char.ofNat code
+          let ops := if name0 == "operator" then ['+', '-', '*', '/'] else ['-']
+          if !ops.contains op then
+            perr c s!"{name0}'{op}': openverse takes overloads of the operators +, -, * and / and of prefix -, as the Book of Verse's tests write them"
+          bump
+          pure s!"{name0}'{op}'"
+        else pure name0
+      | _ => pure name0
     let name := pfx ++ name0
     owner := name
     if let some q := qual? then tops := tops.push (marker t.pos (qualMarker name q))
