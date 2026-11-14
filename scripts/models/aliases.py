@@ -106,6 +106,11 @@ def main():
                     continue
                 if rng.random() < 0.5:
                     continue
+                # (a constructor's class, `K<constructor>(…) := c(…):`, names
+                # the class it constructs, which no alias does: kept, its draw
+                # still taken, so that the rest of the program is as before)
+                if '<constructor>' in ln and re.fullmatch(r'.*<constructor>.*:=\s*', before + ' '):
+                    continue
                 pieces.append(ln[last:w.start()])
                 pieces.append(rng.choice(names[t]))
                 last = w.end()

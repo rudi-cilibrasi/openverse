@@ -71,8 +71,16 @@ def classHierarchy (tops : List STop) (constructionFx : Std.HashMap String (List
     | .classDef p n nsp tps specs parents isIface fields methods =>
       let names := parents.map fun | .name q => q | .app q _ => q | _ => "?"
       let args := parents.map fun | .app _ as => as | _ => []
+      -- (the fields with accessors set apart: they have no storage; each
+      -- with the stored fields around it)
+      let stored := fields.filter (!Accessors.isAccessorField ·)
+      let accessors := fields.zipIdx.filterMap fun (f, i) =>
+        if !Accessors.isAccessorField f then none else
+        some (f, ((fields.take i).filter (!Accessors.isAccessorField ·)).getLast?.map (·.name),
+          ((fields.drop (i + 1)).find? (!Accessors.isAccessorField ·)).map (·.name))
+      let fields := stored
       some { pos := p, name := n, nameSpecs := nsp, tps, specs, parents := names, parentArgs := args, isIface,
-             fields, methods }
+             fields, methods, accessors }
     | _ => none
   -- the hierarchy
   let mut cinfo : Array (String × ClassInfo) := #[]

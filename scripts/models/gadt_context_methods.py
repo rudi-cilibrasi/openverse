@@ -145,19 +145,19 @@ UseGlobal():int=block{F:type{_(:int)<computes>:int}=Id;F(1)}
 Show(X:int)<computes>:string="show {X}"
 Map(F:type{_(:int)<computes>:u},X:int where u:type)<computes>:u=F(X)
 reader:=class:
-    Id:type{_(:int)<computes>:string}=Show
-    Read():string=Map(Id,6)
+    ShowId:type{_(:int)<computes>:string}=Show
+    Read():string=Map(ShowId,6)
 base:=class:
-    Id(X:int)<computes>:string="method {X}"
+    MethodId(X:int)<computes>:string="method {X}"
 child:=class(base):
-    Id(X:string)<computes>:int=X.Length
+    MethodId(X:string)<computes>:int=X.Length
 Main():void=
     B:=reader{}
-    R:=Map(B.Id,3)
+    R:=Map(B.ShowId,3)
     Print(R)
     Print(B.Read())
     A:=base{}
-    S:=Map(A.Id,7)
+    S:=Map(A.MethodId,7)
     Print(S)''')
     lines = ['show 3', 'show 6', 'method 7']
 
