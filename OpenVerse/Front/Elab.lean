@@ -310,7 +310,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let env := { env with fieldAccBase := declared.tops.length + declared.gsigs.size }
   let sigs ← inferSignatures env declared admitted.typeDefaults opts.requests
   checkSignatures env sigs classes.defs fields methods admitted.scopePairs
-  let defaults ← elabFieldDefaults env sigs methods.tops classes.defs
+  let defaults ← elabFieldDefaults env sigs methods.tops classes.defs opts.extendedDefaults
   let elaborated ← elabFunctions env sigs opts.requests opts.extendedDefaults
   let needs := roundNeeds elaborated defaults.needs source
   -- (#283) the eager groups, the families of the uses of methods whose

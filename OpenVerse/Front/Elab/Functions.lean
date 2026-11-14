@@ -42,7 +42,8 @@ structure FieldDefaults where
     `tops` (classes' included) is elaborated once, with its struct's type
     parameters opaque, and must have only the effects its construction
     allows. -/
-def elabFieldDefaults (env : TyEnv) (sigs : Signatures) (tops : List STop) (cdefs : List CDef) :
+def elabFieldDefaults (env : TyEnv) (sigs : Signatures) (tops : List STop) (cdefs : List CDef)
+    (extendedDefaults : Bool := false) :
     Except String FieldDefaults := do
   let allSigs := sigs.all
   -- A mutable or unique instance needs allocation even when no source
@@ -75,6 +76,12 @@ def elabFieldDefaults (env : TyEnv) (sigs : Signatures) (tops : List STop) (cdef
           let ctx := { ctx with defaults := [(n, f)], types := { senv with tvars := hσ } }
           match (do coerce d.pos (← elabE ctx d (some ft)) ft : EM Expr).run { env } with
           | .ok (body, st) =>
+            -- (a class declares no <decides>, and "Class member initializers
+            -- and block clauses are implicitly restricted to have no more
+            -- effects than what the class declares", Book of Verse ch. 13;
+            -- Effects.versetest:537, 3512)
+            if !extendedDefaults && body.mayFail sigs.prog then
+              throw s!"{d.pos.show}: the default of field '{f}' of {n} can fail: a field's default is no failure context (Book of Verse ch. 13 and its tests, Effects.versetest)"
             fxCheck s!"default of field '{f}' of {n}" allowed st
             initializerBodies := initializerBodies ++ [(n, f, d.pos, body)]
             fieldNeeds := fieldNeeds.merge { methods := st.needs.methods, loops := st.needs.loops, subtypes := st.needs.subtypes }
