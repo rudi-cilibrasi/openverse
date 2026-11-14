@@ -2052,11 +2052,18 @@ partial def parseClassBody (p : Pos) (name : String) (nameSpecs : List String) (
         return items
   else if o.isSym "{" then
     bump
+    -- (two items on one line are separated by `,` or `;`: the Book of
+    -- Verse's tests refuse `class{x:int block{}}`,
+    -- `Classes/ClassBlockClause.versetest:19`)
+    let mut separated := true
     repeat
       let a ← peekT
       if a.isSym "}" then bump; break
-      if a.isSym "," || a.isSym ";" then bump; continue
+      if a.isSym "," || a.isSym ";" then bump; separated := true; continue
+      if !separated && !a.bol then
+        perr a s!"expected ',', ';', a new line or '}' after a member, found {a.tok.describe}"
       items := items.push (← parseClassItem 0)
+      separated := false
   else perr o s!"expected ':' or '\{' after {if isIface then "interface" else "class"}"
   let fields := items.toList.filterMap fun | .inl f => some f | .inr _ => none
   let methods := items.toList.filterMap fun | .inr m => some m | .inl _ => none

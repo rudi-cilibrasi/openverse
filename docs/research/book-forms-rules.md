@@ -33,3 +33,22 @@ tabs, by a line break, a comment or the end of the text (`lexAll`,
 `Front/Lexer.lean`): "what follows a '.' must be on its line, with no
 comment between". Programs: the error test `dot_body_next_line` (a dot
 form's body on the next line) gets this message, at the `.`.
+
+## Members in braces
+
+**The rule.** Two members of a class or an interface written in braces on
+one line are separated by `,` or `;`.
+
+**The Book.** The tests: `c:=class{x:int block{}}` is refused (3100,
+`Tests/Classes/ClassBlockClause.versetest:19`), and so is its indented form,
+`c:=class:` and the line `x:int block{}` (`:20`); the members separated
+(`class{block{…}}`, `:23`, and the indented ones) are valid. The prose
+separates a class's members by new lines or `;` (ch. 1, "Semicolons vs
+Commas").
+
+**openverse before.** In braces, a member could follow another with no
+separator; the indented form was refused already.
+
+**openverse now.** `parseClassBody` (`Front/Parser.lean`) refuses a member
+that follows another on its line with no `,` or `;`: "expected ',', ';', a
+new line or '}' after a member".
