@@ -5,7 +5,7 @@ root(t:type) := interface:
     Both(X:u,?Y:u=X,?E:[]u=Concatenate() where u:type)<transacts>:tuple(t,u,int) =
         Print("default {Tag()}")
         (Read(),X,Tag())|(Read(),Y,Tag()+1)
-extra(a:type,b:type) := interface(root(a)):
+extra(a:type,b:type) := class<abstract>(root(a)):
     Both<override>(X:v,?Y:v=X,?E:[]v=Concatenate() where v:type)<transacts>:tuple(a,v,int) =
         (Read(),Y,99)|(super:)Both(X,?Y:=Y)
 holder(a:type,b:type) := class(extra(a,b)):

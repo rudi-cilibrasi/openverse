@@ -264,7 +264,7 @@ partial def elabNamedArgsCall (cb : AppElab) (ctx : Ctx) (p : Pos) (name : Strin
       -- (a method's: its receiver's fields too, through `Self`; a
       -- copy's in its interface's scope, as its body, #53)
       let selfC : Option String :=
-        if s.pnames.head? == some "Self" then s.scope.orElse fun _ => (s.name.splitOn ".").head? else none
+        if s.pnames.head? == some "Self" then (s.name.splitOn ".").head? else none
       -- (its own context: no return or break into the caller, failure
       -- only for a <decides> callee, and not its own default again)
       let key := (s.name, s!"?{n}")

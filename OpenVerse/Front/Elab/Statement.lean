@@ -55,7 +55,7 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
         -- Interface defaults may have been copied onto a concrete class
         -- after method extraction. Their generated function belongs to the
         -- original interface, whose parameters its receiver still supplies.
-        let cls := member.scope.getD (fname.splitOn ".").head!
+        let cls := (fname.splitOn ".").head!
         if !ctx.types.isSub c cls then
           eerr p s!"cannot infer the type parameters of {method} from the arguments of this call"
         -- The member's checking stub has erased defaults. The generated

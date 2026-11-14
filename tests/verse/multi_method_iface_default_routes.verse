@@ -1,11 +1,11 @@
 # Interface defaults of methods with several values when a class has two
 # routes (#375's review): its parent class's own implementation wins over a
 # default of an interface it lists, in either declaration order; and
-# (super:) reaches the nearest default, the derived interface's
+# (super:) reaches the nearest default (an interface overrides nothing, the
+# Book's tests: deep inherits shape's)
 shape := interface:
     Sides()<transacts>:int = 1 | 2
-deep := interface(shape):
-    Sides<override>()<transacts>:int = 50 | 51
+deep := interface(shape) {}
 tri := class(shape):
     Sides<override>()<transacts>:int = 3 | 4
 kid := class(tri, deep):

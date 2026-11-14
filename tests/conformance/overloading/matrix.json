@@ -158,13 +158,13 @@
       "note": "Second method overload declaration order permutation."
     },
     {
-      "id": "iface_default_copies_overloads",
-      "path": "tests/verse/iface_default_copies_overloads.verse",
+      "id": "iface_overloaded_defaults",
+      "path": "tests/verse/iface_overloaded_defaults.verse",
       "classification": "supported",
       "sources": [
         "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#interfaces-with-overloaded-methods"
       ],
-      "note": "Both overloads of a transformed generic interface default reach the correct class implementation."
+      "note": "An interface's overloaded defaults: one overridden by a class, the other kept, also from generic code."
     },
     {
       "id": "overload_audit_interface_value_scope",

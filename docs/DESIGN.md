@@ -667,8 +667,7 @@ an interface (#283) the dispatch's root is the interface, its receiver
 typed at it and cast to each implementing class, and its default
 implementation, if any, is one more implementation, `I$M`, whose guard
 (`I[$r]`, which always holds) comes after those of the classes below it
-that have their own. `inlineMulti` runs before #53's `copyIfaceDefaults`,
-so it sees the interface's default as written.
+that have their own.
 Each implementation becomes its own function `D$M`. A generic family's
 receiver and arguments are bound at the declaring class's parameter types
 using `$params` and `MFam.rootTps`. Return types are compared through each
@@ -3111,31 +3110,12 @@ parent's, and a class below it has those first (`CDef.ifaceCoreS` in
 source types, `TyEnv.coreArgs` in Verse Core). So a `box(t) :=
 class(c2(t))` is a `container([]t)` by Core's prefix subtyping, has a pin
 `[]$1` on `container`'s argument and holds `t` in a hidden field, and a
-dispatch from `container(u)` refines `u` to `[]t`. A default body `c2`
-gives one of `container`'s methods (`Get<override>():[]t`) is copied into
-a class that reaches `c2` with type arguments that mention its own type
-parameters (`copyIfaceDefaults`, before elaboration, substituting them:
-`tb(a, b) := class(c2(tuple(a, b)))`'s copy has `t` as `tuple(a, b)`, also in
-the body's typed locals, `Refine.substTypes`): such a
-dispatch opens `t`, which the class's copy reads from its hidden field,
-where `c2`'s own, shared by its classes, would need it as a hidden
-argument that `Typed.dispatch` cannot pass (its other arguments are typed
-without the refinement). The copy is elaborated in `c2`'s scope (its effect
-`$copyOf:c2`, `copyScope?`, sets `Ctx.selfClass` to `c2` and the
-parameter check's members to `c2`'s, and `Sig.scope` the scope its named
-parameters' defaults are evaluated in at a call): a name it uses free is
-the global `c2`'s own body sees, not a member the class adds, its
-parameters and locals shadow none of the class's members, and
-`(super:)` is what is above `c2`; only the receiver, its hidden fields and
-the dispatch of its members are the class's (a member of `c2` is reached
-as `Self`'s, so one the class overloads cannot be taken as a value). A
-refining cast in it lifts its branch per copy (#243): the copies and
-`c2`'s own default share the source's places, so the lift's key and
-function carry `Ctx.liftTag`, `$in` and the class. It is made only where it means what the default
-does: no class of the chain declares the method (the chain wins over
-defaults), and no other interface above the class gives it a body (one
-that overrides `c2`'s is copied instead); a `<final>` default stays
-final, its copy exempt from overriding it (`$copy`). A class that reaches
+dispatch from `container(u)` refines `u` to `[]t`. An interface overrides
+nothing (the Book's tests, `EffectPolicy.checkPlaces`), so `c2` gives none
+of `container`'s methods a body: a class below it implements them. (Before
+the Book's rule, such a default was copied into each class below `c2`,
+elaborated in `c2`'s scope, `copyIfaceDefaults`, #53; the copies, their
+scope and their `<final>` exemption are gone with it.) A class that reaches
 one interface at two instances through the interfaces it lists (also
 `class(pi(int), pi(string))`) is refused. A subclass may so implement an interface that gives it fewer
 type arguments than its parent's (`sbox(t) := class(box(t), shower)`

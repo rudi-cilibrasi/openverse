@@ -5172,8 +5172,8 @@ Tests/Interface.versetest:182	disagrees-refuses
 Tests/Interface.versetest:186	agrees
 Tests/Interface.versetest:187	agrees
 Tests/Interface.versetest:190	agrees
-Tests/Interface.versetest:194	disagrees-accepts
-Tests/Interface.versetest:199	disagrees-accepts
+Tests/Interface.versetest:194	agrees
+Tests/Interface.versetest:199	agrees
 Tests/Interface.versetest:204	agrees
 Tests/Interface.versetest:208	agrees
 Tests/Interface.versetest:214	agrees
@@ -5230,7 +5230,7 @@ Tests/InterfaceDiamond.versetest:68	agrees
 Tests/InterfaceDiamond.versetest:74	agrees
 Tests/InterfaceDiamond.versetest:79	agrees
 Tests/InterfaceDiamond.versetest:85	agrees
-Tests/InterfaceDiamond.versetest:89	disagrees-accepts
+Tests/InterfaceDiamond.versetest:89	agrees
 Tests/InterfaceDiamond.versetest:95	agrees
 Tests/InterfaceDiamond.versetest:102	agrees
 Tests/InterfaceDiamond.versetest:106	agrees

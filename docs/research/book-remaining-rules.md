@@ -76,20 +76,81 @@ verse code."
 **openverse now.** `classHierarchy` (`Elab/Classes.lean`) refuses a parent
 named twice with the same type arguments.
 
-## `<override>` in an interface: left
+## An interface overrides nothing
 
-The tests refuse it: "Interfaces can not override anything"
-(`Tests/Interface.versetest:193`, a method `f<override>` and a field
-`var v<override>` of an interface below another, 3523), "Can't override in
-an interface" (`InterfaceWithFields.versetest:312`), and
-`InterfaceDiamond.versetest:89`; the prose is silent. openverse gives an
-interface's default a new body or value in an interface below it (#53's
-interface defaults). The rule is one check (`EffectPolicy.checkPlaces`),
-but measured it refuses 32 of openverse's tests of that feature
-(`iface_default_copies*`, `multi_method_*interface*`, `inheritance`,
-`qualified_slots`, …) and 45 generated programs (`classes` 4, `gadt_open`
-20, `generic-mv` 21): an owner decision whether to retire the feature for
-the Book's 3 cases, so it is left.
+**The rule.** An interface below another inherits its members and may add
+its own, but overrides none: `<override>` on a method or a field of an
+interface is refused, and so is an inherited member declared again without
+it (with a new body, value or type, or with none). A class below gives an
+inherited member its implementation or a new default, as before; what a
+class below two interfaces, one below the other, sees of a method is the
+default of the interface that declares it.
+
+**The Book.** The tests: "Interfaces can not override anything"
+(`Interface.versetest:193`), then `TT := interface(T) { f<override>():int =
+{return(24)} }` refused (3523, 3523, 3532: the `<override>`, and the method
+declared again) and `var v<override>:int= 24` in `TT` refused (`:199`, 3523,
+3532); "Can't override in an interface" (`InterfaceWithFields.versetest:312`,
+`V<override>:C1=C1{}` over `V:C0=C0{}`, a narrower type, 3523, 3532); without
+`<override>` "the redeclaration is an error -- both across an
+interface->interface edge and when a class implements an interface"
+(`:319-331`, 3532); "Default implementation was allowed before, but isn't
+now. Had to be sacrificed for diamond inheritence. Allowed again, but with
+restrictions" (`InterfaceDiamond.versetest:82-93`): an interface's own
+default is valid, an interface below it overriding it refused (3523, 3523,
+3532), a class overriding it valid (`:95-99`). The prose is silent.
+
+**openverse before.** An interface below another could give an inherited
+method a new body and an inherited field a new default (#53's interface
+defaults): such a default of a pinned interface (`c2(t) :=
+interface(container([]t))`) was copied into each class below it, elaborated
+in the interface's scope (`copyIfaceDefaults`), and a dispatch took the
+most specific interface default.
+
+**openverse now.** `EffectPolicy.checkPlaces` refuses `<override>` on an
+interface's method or field, with the effect policy; a member declared
+again in an interface says why (`classFields`, `classMethods`). What #53
+keeps: parametric interfaces, an interface that gives a parent other type
+arguments (`c2(t) := interface(container([]t))`, a class below it a
+`container([]t)`), an interface's own defaults, of methods and fields, and
+a class's overrides of them. What it retires: an interface's default for a
+member of an interface above it, and so its copies; `copyIfaceDefaults`,
+`copyScope?`, `Sig.scope` (the scope a copy's defaults were evaluated in),
+the copies' `<final>` exemption and the interface case of a field's
+narrowing are deleted. Programs: of the 26 tests whose interfaces overrode
+(three more went with the rule above), 12 were about it and are deleted
+(`iface_default_copies` and its `_cast`, `_cast_fixed`, `_chain`,
+`_composite`, `_final`, `_locals`, `_overloads`, `iface_default_global_fn`,
+`iface_default_parent_impl`, `iface_default_scope`, `fuzz_1c_iface_super`),
+with the error test `iface_default_final_sub`; 14 are rewritten: where the
+interface below was a route of the test's, it is an abstract class
+(`dispatch_defaults_interface_scope`, `suspends_inherited_compound_default`,
+`multi_method_fixed_unreachable`, `multi_method_interface_open_default`,
+`multi_method_own_default_inference`, `multi_method_own_interface`,
+`multi_method_tuple_super_interface_default`, `qualified_slots`'s `j`),
+`inheritance`'s two sections a class (`polite`, `advanced`: the most
+specific implementation is a class's), `choice_immediate_suspends_iface_copy`'s
+default its interface's own; their output the same; and three lose the
+interface's override as a route, their output derived again by hand:
+`multi_method_covariant_interface_defaults` (no `own`; `child` below
+`parent` only), `multi_method_fixed_defaults` (`plain` below `root`, whose
+default gives `root`, 2, 3) and `multi_method_iface_default_routes` (`deep`
+inherits `shape`'s default: `bare`'s `(super:)` reaches it, 1001, 1002, and
+`lone` gives 1, 2), with `multi_method_tuple_super_class_before_interface`,
+whose `deep` gives nothing now, its output the same. The error tests
+`qualified_not_root` and `qualified_through_iface` override from an
+abstract class; new: `iface_override_method`, `iface_override_field`,
+`iface_redeclare_field`, `iface_redeclare_method` and
+`iface_below_inherits`, and `iface_overloaded_defaults` takes
+`iface_default_copies_overloads`'s place in the overloading matrix (an
+interface's own overloaded defaults, ch. 6, "Interfaces with Overloaded
+Methods"). The models: `gadt_open.py`'s pinned `cd`, `cd3` and
+`cd4` are abstract classes (every seed changes its text, none its
+prediction); `generic_mv.py`'s `interface` shape overrides from an
+abstract class (59 of the first 400 seeds change their text, none its
+prediction); `gen-classes.py` writes no interface override, the draws it
+took kept (54 of the first 400 seeds change their text). 45 programs of
+corpus2 are refused (`gadt_open` 20, `generic-mv` 21, `classes` 4).
 
 ## A loop's body and a field's default are no failure contexts
 

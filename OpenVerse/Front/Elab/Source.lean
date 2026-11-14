@@ -920,7 +920,7 @@ def inlineSource (requests : Requests) (admitted : Admitted) :
   -- function values (#210): the function types' interfaces, and a class
   -- for each function used as a value
   -- (the entry expression is scanned too)
-  let allTops00 := copyIfaceDefaults (SubtypeEvidence.addFields
+  let allTops00 := (SubtypeEvidence.addFields
     (FnValues.desugar (resolved.take (resolved.length - admitted.rawEntry.length) ++ helpers)
       (resolved.drop (resolved.length - admitted.rawEntry.length)) (requests.fns.map fun (n, t) => (n, t.toSTy))
       requests.methods written))

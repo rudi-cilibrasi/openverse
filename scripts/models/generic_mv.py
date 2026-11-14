@@ -268,10 +268,13 @@ class Producer:
                         # only in an override of M; the shape is the own one,
                         # its draw kept for the random stream)
                         self.cross_multi = RMethod.choice([False, True])
+                    # (the interface shape: d{n} overrides c{n}'s default from
+                    # an abstract class, as an interface overrides nothing,
+                    # the Book's tests)
                     if shape == 'interface':
                         declarations = f'''c{n}(t:type) := interface:
 {root_method}
-d{n}(t:type,u:type) := interface(c{n}(t)):
+d{n}(t:type,u:type) := class<abstract>(c{n}(t)):
 {child_method}
 e{n}(t:type,u:type) := class(d{n}(t,u)):
     Anchor:t
@@ -293,7 +296,7 @@ d{n}({child_tps}) := class({parent}):{extra_field}
     HX{n}()<transacts>:t
     HY{n}()<transacts>:t
     M{n}()<transacts>:t = HX{n}() | HY{n}()
-d{n}(t:type,u:type) := interface(c{n}(t)):
+d{n}(t:type,u:type) := class<abstract>(c{n}(t)):
     M{n}<override>()<transacts>:t = HY{n}() | (super:)M{n}()
 e{n}(t:type,u:type) := class(d{n}(t,u)):
     X:t

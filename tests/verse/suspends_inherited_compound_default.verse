@@ -1,10 +1,11 @@
-# An interface's own <suspends> default, which no class gets a copy of (a
-# qualified (top:)Get), reached by a dispatch to a class that fixes its
+# An abstract class's qualified <suspends> implementation of an interface's
+# method ((top:)Get), reached by a dispatch to a class that fixes its
 # class's type argument to a compound of its own: its frame is opened too,
-# found by the lowering (#394)
+# found by the lowering (#394; an interface overrides nothing, the Book's
+# tests, so job is a class)
 top(a:type, b:type) := interface:
     Get(X:b)<suspends>:a
-job(t:type) := interface(top(t, int)):
+job(t:type) := class<abstract>(top(t, int)):
     Make():t
     (top:)Get<override>(X:int)<suspends>:t =
         Sleep(0.01)

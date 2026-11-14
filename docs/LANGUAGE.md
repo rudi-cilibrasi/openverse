@@ -753,7 +753,15 @@ circle := class(shape, labelled):
   through another parent is inherited once, but `class(i, i)` and
   `interface(i, i)` are refused, the Book's tests, `Interface.versetest:31`,
   [the rule](research/book-remaining-rules.md#an-interface-named-twice)).
-  Interfaces may declare fields, with or without defaults. A
+  Interfaces may declare fields, with or without defaults, and methods,
+  with or without a body (a default). An interface below another inherits
+  its members and may add its own, but overrides none: `<override>` in an
+  interface is refused, and so is a member it inherits declared again, with
+  a new body, value or type or without (the Book's tests,
+  `Interface.versetest:193`, "Interfaces can not override anything";
+  `InterfaceWithFields.versetest:312`, "Can't override in an interface";
+  `InterfaceDiamond.versetest:89`, 3523, 3532). A class below gives an
+  inherited member its implementation or a new default. A
   class inherits its parent's fields, then those of the interfaces above it
   that are not there yet (once, along a diamond), then its own, and its
   methods:
@@ -768,8 +776,7 @@ circle := class(shape, labelled):
     its base, `tuple(int, int)` over `[]int`. Read through that class or one
     below it, the field has the narrower type; through a class or interface
     above, the inherited one. A `var` keeps its type (a write through a
-    class above could store a value of the wider one), and so does a
-    field an interface re-declares;
+    class above could store a value of the wider one);
   - `M<override>(…)` overrides an inherited method with its signature, except
     that it may return a class below the declared one (covariant results).
     Overriding without `<override>`, or `<override>` that overrides nothing,
@@ -793,9 +800,10 @@ circle := class(shape, labelled):
   - Two `if` branches of different classes take the expected type when both
     are below it, else their nearest common supertype.
   - A method call runs the most specific implementation for the value's own
-    class: the nearest in its class chain, else the most specific interface
-    default, whatever order the parents are listed in. This is virtual
-    dispatch, also inside a method; `(super:)` uses the same rule.
+    class: the nearest in its class chain, else the default of the
+    interface that declares the method, whatever order the parents are
+    listed in. This is virtual dispatch, also inside a method; `(super:)`
+    uses the same rule.
   - An implementation must have the signature of every declaration it
     satisfies.
 - **Constructor functions** (Book of Verse ch. 10). A constructor is written
@@ -1133,12 +1141,8 @@ circle := class(shape, labelled):
   implements `x` (#205). An interface that extends a parametric interface
   may give it any type arguments, as a class may its parent: a class below
   `c2(t) := interface(container([]t))` is a `container([]t)`, and code
-  generic over `container(u)` reaches it with `u` as `[]t` (#53), also
-  through a default `c2` gives one of `container`'s methods, which means
-  in every class what it means in `c2`: its names, its parameters and
-  their defaults, and `(super:)` resolve as in `c2`, whatever members the
-  class adds. An unambiguous method captured as a value in `c2` retains
-  that scope even when the class adds overloads. An interface without type
+  generic over `container(u)` reaches it with `u` as `[]t` (#53). An
+  interface without type
   parameters may also extend an instantiated interface
   (`intI := interface(container(int))`). A
   class may give the interfaces it lists any type arguments

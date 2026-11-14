@@ -1,6 +1,6 @@
 root(t:type) := interface:
     Picks():int = 1 | 2
-wide(t:type,u:type) := interface(root(t)):
+wide(t:type,u:type) := class(root(t)):
     Picks<override>():int =
         E:[]u = Concatenate()
         E.Length + 10 | E.Length + 20

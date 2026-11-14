@@ -3,7 +3,7 @@ i1 := interface:
     M():int
 i2 := interface:
     M():int
-j := interface(i1, i2):
+j := class<abstract>(i1, i2):
     M<override>():int = 7
 c := class(j):
     (i1:)M<override>():int = 1

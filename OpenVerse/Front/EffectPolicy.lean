@@ -325,8 +325,21 @@ def checkPlaces (tops : List STop) : Except String Unit := do
   for top in tops do
     match top with
     | .fn p _ _ _ specs .. => checkPlace p .function specs
-    | .classDef p n _ _ specs _ isI _ methods =>
+    | .classDef p n _ _ specs _ isI fields methods =>
       checkPlace p (if isI then .interfaceType else .classType) specs
+      -- (an interface overrides nothing: "Interfaces can not override
+      -- anything", the Book's tests, Interface.versetest:193, and "Can't
+      -- override in an interface", InterfaceWithFields.versetest:312, 3523;
+      -- a class below it gives an inherited member its implementation or
+      -- value)
+      if isI then
+        let refuse (q : Pos) (m : String) : Except String Unit :=
+          reject q s!"<override> on {m} of interface {n}: an interface overrides nothing, so an interface below another neither gives an inherited member a new body or value nor declares it again; a class below them gives it (Book of Verse tests, Interface.versetest: \"Interfaces can not override anything\")"
+        for m in methods do
+          if let .fn mp mn _ _ mspecs .. := m then
+            if mspecs.contains "override" then refuse mp mn
+        for f in fields do
+          if f.specs.contains "override" then refuse p f.name
       -- (`C{}` constructs a `<concrete>` class, and nothing an `<abstract>` one)
       if specs.contains "abstract" && specs.contains "concrete" then
         reject p s!"{n} cannot be both <abstract> and <concrete>: a concrete class is constructed with {n}\{}, an abstract one never"
