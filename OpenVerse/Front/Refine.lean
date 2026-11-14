@@ -105,12 +105,6 @@ def keyOf (p : Pos) (bound : String) (tag : String := "") : String := s!"{p.file
 
 def Lift.key (l : Lift) : String := keyOf l.pos l.bound l.tag
 
-/-- Whether `pr` holds of `e` or a part of it outside the `loop`s in it. -/
-partial def anyOutsideLoops (pr : SExpr → Bool) (e : SExpr) : Bool :=
-  pr e || match e with
-    | .loop .. => false
-    | e => e.children.any (anyOutsideLoops pr)
-
 /-- The first part of `e` (outside its `loop`s, if `outside`) for which
     `pr` holds. -/
 partial def findPart (pr : SExpr → Bool) (outside : Bool) (e : SExpr) : Option SExpr :=

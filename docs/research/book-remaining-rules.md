@@ -236,7 +236,7 @@ is no loop and has no such rule, as an `if`'s conditions have none.
 
 **openverse now.** The places of the filters of every `for`, and every
 `first` with a generator, as written are found with the source rules
-(`forFilterPositions`, `Elab/Source.lean`: the clauses that are neither
+(`forFilterPositions`, `SourceRules.lean`: the clauses that are neither
 generators nor definitions, with no choice and no call of a function with
 several values), with their kinds (`SExpr.filterKind`), and kept in the
 type environment (`TyEnv.forFilters`); wherever a statement at one of those
@@ -336,7 +336,7 @@ explicitly broken" (ch. 7, `07_control.md:463`).
 **openverse before.** Accepted; such a loop ran until the program's fuel
 was spent, or a runtime error.
 
-**openverse now.** `checkLoopExits` (`Elab/Source.lean`), with the source
+**openverse now.** `checkLoopExits` (`SourceRules.lean`), with the source
 rules. Programs: `tests/verse/overflow.verse`, whose loop ended at an
 overflow, gains a `break` that is never taken.
 
@@ -492,7 +492,7 @@ overridden. openverse follows the tests (on the wiki already).
 method `M` from any method of a class, and from its `block:` and field
 defaults: the cross-method super calls of #454 and #464.
 
-**openverse now.** `checkSuperCalls` (`Elab/Source.lean`), with the source
+**openverse now.** `checkSuperCalls` (`SourceRules.lean`), with the source
 rules, refuses `(super:)M` anywhere but in the code of an override of `M`.
 Programs: 9 tests were about calling `(super:)` of another method and are
 deleted: `multi_method_cross_super_eager`, `_generic`, `_interface`,
@@ -545,7 +545,7 @@ rule's message first.
 ## Five forms the tests refuse
 
 Each is refused where the source shows it (`checkBookForms`,
-`Elab/Source.lean`), with the source rules.
+`SourceRules.lean`), with the source rules.
 
 | Form | The Book | openverse before |
 |---|---|---|

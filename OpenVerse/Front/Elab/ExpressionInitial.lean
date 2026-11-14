@@ -284,14 +284,15 @@ partial def elabExprInitialWith
     match exp with
     | some t => return ⟨← witness ctx.types ctx.dictBase ctx.dictVars t, t⟩
     | none => eerr p "internal error: a witness without a type"
-  -- the program's module state, whose `var` fields are its module-scoped
-  -- variables: the prototype of its class, which `Main`'s prelude makes
-  -- before `Main` runs (`ModuleVars`)
-  | .ident p "$moduleState" =>
-    match ModuleVars.stateRef? ctx.types with
-    | some a => return ⟨.lit (.ref a), .struct ModuleVars.stateClass []⟩
-    | none => eerr p "internal error: no module state"
+  -- a name; the program's module state (`ModuleVars.stateName`), whose
+  -- `var` fields are its module-scoped variables, is the prototype of its
+  -- class, which `Main`'s prelude makes before `Main` runs
   | .ident p n =>
+    if n == ModuleVars.stateName then
+      match ModuleVars.stateRef? ctx.types with
+      | some a => return ⟨.lit (.ref a), .struct ModuleVars.stateClass []⟩
+      | none => eerr p "internal error: no module state"
+    else
     match n with
     | "true" => return ⟨.lit (.logic true), .logic⟩
     | "false" =>

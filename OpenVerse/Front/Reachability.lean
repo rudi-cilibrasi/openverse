@@ -165,10 +165,7 @@ def ofTop (t : STop) : WM Unit :=
 /-- Every place where code is never reached, in the program's definitions,
     but after code marked `@ignore_unreachable` (`ignoredArmsMarker`). -/
 def warnings (tops : List STop) : Array (Pos × String) :=
-  let ignored := tops.flatMap fun
-    | .const _ n _ _ (.block _ es) => if n == ignoredArmsMarker then es.map (·.pos) else []
-    | _ => []
-  (((tops.forM ofTop).run ignored).run #[]).2
+  (((tops.forM ofTop).run (ignoredArmsOf tops)).run #[]).2
 
 end Reachability
 end OpenVerse.Front
