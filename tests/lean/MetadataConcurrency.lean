@@ -33,6 +33,16 @@ private def forwards (kind : String) : List (String × String × Bool) := [
     s!"    Values:={kind}:\n        block:\n            var A:{functionTy}=Dummy\n            set A=F\n            Sleep(0.1)\n            A()\n        block:\n            var B:{functionTy}=Dummy\n            set B=F\n            Sleep(0.2)\n            B()\n        block:\n            var C:{functionTy}=Dummy\n            set C=F\n            Sleep(0.3)\n            C()\n    {result kind}", true)]
 
 private def extras : List (String × String × Bool) := [
+  ("race: cleanup sees argument effects before the wait", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    race:\n        block:\n            defer:\n                Value:=Stored()\n            loop:\n                Sleep(block\{set Stored=F;1.0})\n        block:\n            Sleep(0.1)\n            0", true),
+  ("race: real cleanup alias is independent of metadata cell", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    Saved:=F\n    race:\n        block:\n            defer:\n                Value:=Saved()\n            loop:\n                Sleep(1.0)\n        block:\n            Sleep(0.1)\n            0", true),
+  ("race: cleanup forwards metadata opaquely", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    race:\n        block:\n            defer:\n                Saved:=Stored\n            loop:\n                Sleep(1.0)\n        block:\n            Sleep(0.1)\n            0", true),
+  ("race: nonwaiting call cannot run cancellation cleanup", "NoWait()<suspends>:void={}\n" ++ header ++
+    s!"    var Stored:{functionTy}=Dummy\n    race:\n        block:\n            defer:\n                Value:=Stored()\n            loop:\n                NoWait()\n        block:\n            Sleep(0.1)\n            0", true),
+  ("race: zero sleep cannot run cancellation cleanup", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    race:\n        block:\n            defer:\n                Value:=Stored()\n            loop:\n                Sleep(0.0)\n        block:\n            Sleep(0.1)\n            0", true),
   ("branch: opaque metadata-only forwarding", header functionTy ++
       s!"    var Stored:{functionTy}=Dummy\n    branch:\n        Sleep(0.1)\n        set Stored=Dummy\n    Sleep(0.2)\n    Stored", true),
     ("branch: immediate metadata writer completes before real overwrite", header ++
@@ -55,6 +65,8 @@ private def extras : List (String × String × Bool) := [
     s!"    var Stored:{functionTy}=Dummy\n    Values:=sync:\n        block:\n            Sleep(0.1)\n            set Stored=F\n            0\n        block:\n            Sleep(0.2)\n            0\n    Stored()", true)]
 
 private def backgroundRefusals : List (String × String × Bool) := [
+  ("race: cleanup alias survives real cell overwrite", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    Saved:=Stored\n    race:\n        block:\n            defer:\n                Value:=Saved()\n            set Stored=F\n            loop:\n                Sleep(1.0)\n        block:\n            Sleep(0.1)\n            0", true),
   ("race: cancellation defer executes metadata", header ++
     s!"    var Stored:{functionTy}=Dummy\n    race:\n        block:\n            defer:\n                Value:=Stored()\n            loop:\n                Sleep(1.0)\n        block:\n            Sleep(0.1)\n            0", true),
   ("branch: later caller real overwrite", header ++
