@@ -49,11 +49,11 @@ Nest(X:t, N:int where t:type):int =
 
 # a field default that calls a generic function, constructed in generic code
 # with type parameter names different from the struct's
-Empty(N:int where e:type):[]e = array{}
+Empty(Like:[]e where e:type):[]e = array{}
 
 listing(a:type, b:type) := struct:
-    Firsts:[]a = Empty(0)
-    Seconds:[]b = Empty(0)
+    Firsts:[]a = Empty(array{})
+    Seconds:[]b = Empty(array{})
 
 MakeListing(X:b, Y:a where a:type, b:type):listing(b, a) =
     L := listing(b, a){Firsts := array{X}}

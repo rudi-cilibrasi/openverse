@@ -22,15 +22,16 @@ lines = []
 if mode == 0:
     binds = '' if control else '''F:type{_(:t)<computes>:t}=Id
     G:type{_(:t,:u)<computes>:tuple(u,t)}=Swap
-    H:type{_(:int)<computes>:[]t}=Empty
+    H:type{_(:t)<computes>:[]t}=Empty
     '''
     a = 'Id(X)' if control else 'F(X)'
     pair = f'Swap({a},Y)' if control else f'G({a},Y)'
-    empty = 'Empty(0)' if control else 'H(0)'
-    # Give a result-only parameter its ordinary direct-call context too.
+    # (a parameter gives Empty's type parameter: the Book's rule, error
+    # 3503, no longer the expected result)
+    empty = 'Empty(X)' if control else 'H(X)'
     print(f'''Id(X:a where a:type)<computes>:a=X
 Swap(X:a,Y:b where a:type,b:type)<computes>:tuple(b,a)=(Y,X)
-Empty(N:int where a:type)<computes>:[]a=array{{}}
+Empty(N:a where a:type)<computes>:[]a=array{{}}
 Run(X:t,Y:u where t:type,u:type)<computes>:tuple(u,t,int)=
     {binds}P:={pair}
     E:[]t={empty}

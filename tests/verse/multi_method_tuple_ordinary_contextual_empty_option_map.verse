@@ -4,7 +4,9 @@ box(t:type) := class:
 hidden(u:type) := class<abstract>(box(u)):
     Count<override>(X:[]u,O:?u,M:[int]u)<transacts>:int
 fixed := class(box(int)) {}
-Run(P:box(u) where u:type)<transacts>:void = for(V:=P.Count((array{},false,map{}))){Print("{V}")}
+# (box only takes u in, so a box(u) gives no u, the Book's rule,
+# ParametricFunctions.versetest 356: the type is given as an argument)
+Run(u:type, P:box(u))<transacts>:void = for(V:=P.Count((array{},false,map{}))){Print("{V}")}
 Main()<transacts>:void =
-    Run(fixed{})
-    Run(box(string){})
+    Run(int, fixed{})
+    Run(string, box(string){})

@@ -47,8 +47,10 @@ Twice(X:t where t:type):tuple(t, t) = Combine(Identity(X), X)
 Pairs(Items:[]t where t:type):[]tuple(t, t) =
     for (X : Items) { Twice(X) }
 
-# t appears only in the result: it is inferred from the expected type
-Nothing(N:int where t:type):?t = false
+# t appears only in the result: a type given as an argument gives it (the
+# Book's MaybeValueExplicit(t:type, ...), ch. 2; no parameter determining
+# it, the expected result no longer does, ParametricFunctions.versetest 336)
+Nothing(t:type):?t = false
 
 Unwrap(O:?t, Default:t where t:type):t =
     if (V := O?) then V else Default
@@ -63,8 +65,10 @@ Dedup(Items:[]t where t:subtype(comparable)):[]t =
             set Out += array{X}
     Out
 
-# a helper of any type, used by generic code instantiated at void
-Fail(Msg:string where t:type):t =
+# a helper of any type, used by generic code instantiated at void: its
+# result false, the type with no value, below every type (Book of Verse
+# ch. 2; a type parameter only the result names is given by no call)
+Fail(Msg:string):false =
     Print(Msg)
     Err()
 
@@ -113,7 +117,7 @@ Main():void =
     E:[]string = Reverse(array{})
     Print("empty: {E.Length}")
     Print("{Unwrap(option{3}, 0)} {Unwrap(false, "default")}")
-    O:?string = Nothing(1)
+    O:?string = Nothing(string)
     Print(Unwrap(O, "nothing"))
     M := map{"a" => 1, "b" => 2}
     Print("{Lookup(M, "b", 0)} {Lookup(M, "z", -1)}")
