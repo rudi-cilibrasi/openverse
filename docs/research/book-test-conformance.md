@@ -2432,7 +2432,7 @@ worked down from its order, one form per commit, each rule pinned in
 [LANGUAGE.md](../LANGUAGE.md). Built on main `0a8d539`, merged with
 `ad1b440` (#622) and `33bcf38` (#623). Against main `33bcf38`'s fresh run
 (8,711 agree, 683 refuse, 66 accept, 92 differ, 3,952 not translatable), from a fresh run on the final commit, whose verdicts are the
-baseline now: **8,784 agree, 617 refuse, 55 accept, 92 differ, 3,956 not translatable**: 75 cases more agree (11 of them accepted refusals), 4 are the test runner's now (not translatable), and no case became an accepted refusal or a different result.
+baseline now: **8,784 agree, 617 refuse, 55 accept, 92 differ, 3,956 not translatable**: 75 cases more agree (9 of them accepted refusals), 4 are the test runner's now (not translatable: 2 accepted refusals and 2 that agreed), and no case became an accepted refusal or a different result.
 
 | Form | Rule (where) | Agree now | Left |
 |---|---|---|---|
