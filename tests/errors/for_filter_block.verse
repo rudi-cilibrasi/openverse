@@ -1,4 +1,4 @@
-# expect: this filter of a for cannot fail
+# expect: this filter cannot fail
 # A block whose statements cannot fail, nor its value, is a filter that
 # cannot fail
 Main():void =

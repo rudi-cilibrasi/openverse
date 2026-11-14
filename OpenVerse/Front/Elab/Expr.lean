@@ -9,6 +9,26 @@ import OpenVerse.Front.Elab.ExpressionInitial
 
 namespace OpenVerse.Front
 open OpenVerse
+/-- A filter of a `for`, or of a `first` with a generator, at one of the
+    places `forFilterPositions` found, can fail: "Each filter must be
+    failable, and if any fails, that iteration is skipped" (Book of Verse
+    ch. 7, and its tests, `for.versetest:223`, "Filter can not fail";
+    `first.versetest:28`, "same as `for`"). The code the elaboration adds
+    at such a place (a refining cast's value, a lifted cast's copy-out,
+    `$…`) is none, told apart by its kind (`SExpr.filterKind`); and a call
+    or a cast with brackets, `F[…]`, `T[X]`, can fail as written (its code
+    where a cast is known to succeed, in the branch a refining cast lifts,
+    need not). `r` is the statement's elaboration. -/
+def checkFilterCanFail (ctx : Ctx) (s : SExpr) (r : R) : EM Unit := do
+  if ctx.types.forFilters.contains (s.pos, SExpr.filterKind s) then
+    let isFilter := match s with
+      | .decl .. | .app _ _ _ true => false
+      | .set _ _ _ (.app _ (.ident _ "$refineCopyOut") _ _) => false
+      | .app _ (.ident _ n) _ _ | .set _ (.ident _ n) .. => !n.startsWith "$"
+      | _ => true
+    if isFilter && !(r.e.mayFail ctx.sigProg) && (← ctx.failabilityKnown) then
+      eerr s.pos "this filter cannot fail: each filter of a for, or of a first with a generator, must be able to fail (Book of Verse ch. 7: \"Each filter must be failable, and if any fails, that iteration is skipped\"; its tests, for.versetest: \"Filter can not fail\", first.versetest: \"same as `for`\"); an effect among the clauses goes in one that can, as the Book's tests write (set X = E; true?), or in the body"
+
 set_option maxHeartbeats 800000 in
 mutual
 partial def choiceCoerceResult (ctx : Ctx) (p : Pos) (r : R) (exp : Option Ty) : EM R := do
@@ -568,9 +588,6 @@ partial def elabSeqIn (closed : Bool) (ctx : Ctx) (ss : List SExpr) (exp : Optio
       let t ← fresh ty
       return (⟨.seq (.assign t r2.e) (.seq d (.local t)), ty⟩, ctx2)
   | s :: rest =>
-    -- (a `for`'s filter: `forFilters`, for this sequence's own statements)
-    let filters := ctx.forFilters
-    let ctx := { ctx with forFilters := false }
     if closed && ctx.canFail then
       if let some (p, d, T, x) := Refine.castClause? s then
         let branch := if rest.isEmpty then .ident p d else .block p rest
@@ -586,26 +603,13 @@ partial def elabSeqIn (closed : Bool) (ctx : Ctx) (ss : List SExpr) (exp : Optio
       | .error err =>
         match Refine.castRefusal? err with
         | some r =>
-          if inner.contains r.pos then return ← elabSeqIn closed { ctx with forFilters := filters } (liftCastClause ctx [] r.pos s ++ rest) exp
+          if inner.contains r.pos then return ← elabSeqIn closed ctx (liftCastClause ctx [] r.pos s ++ rest) exp
           throw err
         | none => throw err
-    -- (a `for`'s filter, a clause that is neither a generator nor a
-    -- definition, can fail: "Each filter must be failable, and if any
-    -- fails, that iteration is skipped", Book of Verse ch. 7, and its
-    -- tests, for.versetest:223, "Filter can not fail"; the code the
-    -- elaboration adds, `$…`, is none)
-    if filters then
-      let isFilter := match s with
-        | .decl .. => false
-        -- (a lifted cast's copy-out of a source variable, `$refineCopyOut`)
-        | .set _ _ _ (.app _ (.ident _ "$refineCopyOut") _ _) => false
-        | .app _ (.ident _ n) _ _ | .set _ (.ident _ n) .. => !n.startsWith "$"
-        | _ => true
-      if isFilter && ctx.types.forFilters.contains s.pos && !(r.e.mayFail ctx.sigProg) && (← ctx.failabilityKnown) then
-        eerr s.pos "this filter of a for cannot fail: each filter must be able to fail (Book of Verse ch. 7: \"Each filter must be failable, and if any fails, that iteration is skipped\"; its tests, for.versetest: \"Filter can not fail\"); an effect among the clauses goes in one that can, as the Book's tests write (set X = E; true?), or in the body"
+    checkFilterCanFail ctx s r
     if rest.isEmpty then return (r, ctx')
     let e ← inferable r
-    let (r2, ctx'') ← elabSeqIn closed { ctx' with forFilters := filters } rest exp
+    let (r2, ctx'') ← elabSeqIn closed ctx' rest exp
     return (⟨.seq e r2.e, r2.ty⟩, ctx'')
 
 partial def elabArgs (ctx : Ctx) (p : Pos) (args : List SExpr) (tys : List Ty) : EM (List Expr) := do
@@ -1883,6 +1887,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       elabOneChoice ctx b rest
     | none =>
       let (r, c1) ← elabStmt ctx cl none
+      checkFilterCanFail ctx cl r
       let e ← inferable r
       let (inner, c2) ← elabOneGo c1 rest
       return (.seq e inner, c2)

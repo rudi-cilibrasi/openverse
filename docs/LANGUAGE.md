@@ -1336,8 +1336,10 @@ entity := class:
     first iteration whose clauses succeed gives the body's value, what the
     failed ones did is undone, and none fails `first` (ch. 7, "first"; the
     Book's tests, `first.versetest`; [the rules](research/book-forms-rules.md#generators-in-first-and-a-ranges-typed-binding));
-    with a generator, a filter that is a literal or a name, which cannot
-    fail, is refused (`first.versetest:28`), and so are commas between the
+    with a generator, each filter must be able to fail, as a `for`'s
+    (`first.versetest:28`, "same as `for`"; [the
+    rule](research/book-remaining-rules.md#every-filter-of-a-for-can-fail)),
+    and commas are refused between the
     clauses of `first{…}`, which join a tuple there, a generator inside it
     not supported yet (`first.versetest:206`); a generator over a map is
     not supported yet.

@@ -1,4 +1,4 @@
-# expect: this filter of a for cannot fail
+# expect: this filter cannot fail
 # A call of a function that cannot fail, its value unused, is a filter that
 # cannot fail
 Double(X:int):int = X * 2

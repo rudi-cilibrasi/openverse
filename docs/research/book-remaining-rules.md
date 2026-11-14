@@ -224,15 +224,28 @@ effect among the clauses.
 never skipped an iteration. Only a literal filter was refused (with the
 source rules, `checkForClauses`).
 
-**openverse now.** The places of the filters of every `for` as written are
-found with the source rules (`forFilterPositions`, `Elab/Source.lean`: the
-clauses that are neither generators nor definitions, with no choice and no
-call of a function with several values) and kept in the type environment
-(`TyEnv.forFilters`); the elaboration of a `for`'s clauses (`elabFilters`,
-`Elab/For.lean`) marks the sequence (`Ctx.forFilters`), and `elabSeqIn`
-refuses a statement at one of those places whose code cannot fail
-(`Expr.mayFail`), once what it calls is known (`failabilityKnown`), as an
-`if`'s condition is checked. The literal case keeps its message.
+**`first`.** The Book's tests make a `first` with a generator's filters
+the same: "Only allow expressions that can fail (same as `for`)"
+(`FlowControl/first.versetest:28-31`, `first(I->Y:Xs; X = Y; I){I}`, 3513).
+Main's check of it (`checkFirstFilters`, #618: a literal or a name) is
+replaced by this rule, one definition of a filter and of "can fail" for
+both; a `first` with no generator, openverse's first success of choices,
+is no loop and has no such rule, as an `if`'s conditions have none.
+
+**openverse now.** The places of the filters of every `for`, and every
+`first` with a generator, as written are found with the source rules
+(`forFilterPositions`, `Elab/Source.lean`: the clauses that are neither
+generators nor definitions, with no choice and no call of a function with
+several values), with their kinds (`SExpr.filterKind`), and kept in the
+type environment (`TyEnv.forFilters`); wherever a statement at one of those
+places, of that kind, is elaborated (`elabSeqIn` for a `for`'s clauses,
+`elabOneGo` for a `first`'s), `checkFilterCanFail` refuses it if its code
+cannot fail (`Expr.mayFail`), once what it calls is known
+(`failabilityKnown`), as an `if`'s condition is checked. The code the
+elaboration writes at a filter's place is told apart by its kind (a
+refining cast's value, an identifier) or its marker (`$…`, a lifted
+cast's copy-out), and a call or a cast with brackets can fail as written.
+The literal case of a `for` keeps its message.
 Programs: 40 tests wrote a print or a `set` as a filter (39 of the suite,
 most of them the `for` search's tests of #611, and one error test whose
 subject is a cast); each such clause `E` is `(E; true?)` now, the Book's

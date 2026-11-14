@@ -1,4 +1,4 @@
-# expect: this filter of a for cannot fail
+# expect: this filter cannot fail
 # A set among a for's clauses is a filter that cannot fail
 Main():void =
     var T:int = 0

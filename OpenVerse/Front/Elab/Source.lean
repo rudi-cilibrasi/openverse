@@ -47,8 +47,9 @@ structure Admitted where
   access : Access.Env := {}
   /-- The `case` arms marked `@ignore_unreachable` (`ignoredArmsMarker`). -/
   ignoredArms : List Pos := []
-  /-- The places of the filters of every `for` as written (`forFilterPositions`). -/
-  forFilters : List Pos := []
+  /-- The places of the filters of every `for` and `first` with a generator
+      as written, with their kinds (`forFilterPositions`). -/
+  forFilters : List (Pos × String) := []
   /-- The type aliases, each by its name, written out (`Aliases.expand`). -/
   aliases : List (String × Aliases.Alias) := []
 
@@ -326,46 +327,33 @@ partial def checkForClauses (tops : List STop) : Except String Unit := do
     | e => e.children.forM go
   tops.forM (·.code.forM go)
 
-/-- The places of the filters of every `for` as written: each clause that
-    is neither a generator (`X : A`, `X := A..B`) nor a definition (`X := e`,
-    `X:t = e`, `var X:t = e`), and has no choice in it and calls no function
-    with several values, which make it a generator over their values (#208,
-    #283). The elaboration checks that each can fail (`Ctx.forFilters`,
-    Book of Verse ch. 7: "Each filter must be failable"); a clause that
-    inlining or a choice's preparation adds, as the statements of a function
-    with several values that a `for` takes, is none of them. -/
-partial def forFilterPositions (tops : List STop) : List Pos :=
+/-- The places of the filters of every `for`, and of every `first` with a
+    generator, as written: each clause that is neither a generator (`X : A`,
+    `X := A..B`; a `first`'s are the parser's `$each` bindings) nor a
+    definition (`X := e`, `X:t = e`, `var X:t = e`), and has no choice in it
+    and calls no function with several values, which make it a generator
+    over their values (#208, #283). The elaboration checks that each can
+    fail (`elabSeqIn`; Book of Verse ch. 7: "Each filter must be failable";
+    its tests, `first.versetest:28`: "Only allow expressions that can fail
+    (same as `for`)"); a clause that inlining or a choice's preparation
+    adds, as the statements of a function with several values that a `for`
+    takes, is none of them. -/
+partial def forFilterPositions (tops : List STop) : List (Pos × String) :=
   let mv := Choice.multiValued (Choice.multiCandidates tops)
   let callsMulti (c : SExpr) : Bool :=
     Choice.anyE (fun | .app _ (.ident _ f) _ _ => mv.contains f | _ => false) c
-  let rec go : SExpr → List Pos
-    | .forE _ cs b =>
-      (cs.filterMap fun c => match c with
-        | .gen .. | .decl .. => none
-        | c => if Choice.hasChoice [c] || callsMulti c then none else some c.pos) ++
-      cs.flatMap go ++ go b
-    | e => e.children.flatMap go
-  tops.flatMap fun t => t.code.flatMap go
-
-/-- A filter of a `first` with a generator, a clause that binds nothing,
-    must be able to fail, as a `for`'s: "Only allow expressions that can fail
-    (same as `for`)", the Book of Verse's tests (`FlowControl/first.versetest`
-    28-31, 3513); a literal or a name, whose evaluation cannot fail, is
-    refused. (Its generators are the parser's `$each` bindings, `firstOf`.) -/
-partial def checkFirstFilters (tops : List STop) : Except String Unit := do
-  let isGen : SExpr → Bool
+  let filters (cs : List SExpr) : List (Pos × String) := cs.filterMap fun c => match c with
+    | .gen .. | .decl .. => none
+    | c => if Choice.hasChoice [c] || callsMulti c then none else some (c.pos, SExpr.filterKind c)
+  let isEach : SExpr → Bool
     | .decl _ _ _ false (.app _ (.ident _ "$each") _ false) => true
     | _ => false
-  let rec go : SExpr → Except String Unit
-    | .app _ (.ident _ "$first") [.block _ items] false => do
-      let cs := items.dropLast
-      if cs.any isGen then
-        if let some c := cs.find? fun c => c.isLiteral || (match c with | .ident .. => true | _ => false) then
-          throw s!"{c.pos.show}: this filter of first is a literal or a name, which cannot fail: a filter must be able to fail, as a for's (Book of Verse ch. 7, \"Filters must be failable\"; its tests, first.versetest:28)"
-      items.forM go
-    | .structDef _ _ _ fs => fs.forM fun f => f.default.forM go
-    | e => e.children.forM go
-  tops.forM (·.code.forM go)
+  let rec go : SExpr → List (Pos × String)
+    | .forE _ cs b => filters cs ++ cs.flatMap go ++ go b
+    | e@(.app _ (.ident _ "$first") [.block _ items] false) =>
+      (if items.dropLast.any isEach then filters items.dropLast else []) ++ e.children.flatMap go
+    | e => e.children.flatMap go
+  tops.flatMap fun t => t.code.flatMap go
 
 /-- The code of a `spawn` cannot leave it: no `return`, and no `break` but
     of a loop inside it (Book of Verse tests, `SpawnAndTask.versetest` 876-892:
@@ -722,10 +710,9 @@ def concurrencyHelpers (resolved : List STop) (requests : Requests) (eventFifo :
        an empty `option{}`), `profile` only in a function's code
        (`checkProfiles`), `defer:` only as a statement (`checkDefers`), no
        `for` of literal clauses only, nor a literal filter
-       (`checkForClauses`), nor a filter of a `first` with a generator that
-       is a literal or a name (`checkFirstFilters`), and the places of every
-       `for`'s filters (`forFilterPositions`), whose code the elaboration
-       checks can fail;
+       (`checkForClauses`), and the places of the filters of every `for`
+       and every `first` with a generator (`forFilterPositions`), whose code
+       the elaboration checks can fail;
     3. the helpers the parser's `$uses:` markers and the entry expression ask
        for, and the markers taken out;
     4. the access levels written out (`resolveSpecifiers`), then the modules
@@ -773,7 +760,6 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   checkProfiles allTops0r
   checkDefers allTops0r
   checkForClauses allTops0r
-  checkFirstFilters allTops0r
   -- 3. the helpers the markers and the entry expression ask for: the
   --    rationals' (#116), ReplaceAll's, the bitwise
   --    functions'. They expand finite intrinsic operations
@@ -868,7 +854,7 @@ structure Source where
   /-- `Admitted.ignoredArms`. -/
   ignoredArms : List Pos := []
   /-- `Admitted.forFilters`. -/
-  forFilters : List Pos := []
+  forFilters : List (Pos × String) := []
 
   /-- The uses of methods whose family the receiver's class picks (#283). -/
   familySites : List (Pos × String)
