@@ -240,6 +240,7 @@ counterpart for, found before running anything:
 | the test runner's natives and classes | 1207 |
 | the test runner's `CoroUtils` | 552 |
 | the test runner's free functions `ToChar(N)` and `ToChar32(N)` | 145 |
+| the test runner's names found with the map of the remaining causes (`MakeNull`, `native_property_rollback_test`, …) | 48 |
 | engine API `FromJson` | 153 |
 | the test runner's `TestUtils` | 113 |
 | `<native>` definitions | 93 |

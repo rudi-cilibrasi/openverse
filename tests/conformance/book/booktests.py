@@ -425,7 +425,16 @@ TEST_NAMES = {
         "external_persistable_struct1", "external_persistable_enum1",
         # extension methods of the test runner ("The method is defined in
         # /Verse.org/Tests/VerseTestScriptCmd", ExtensionFields.versetest:157)
-        "TakeExtension", "PlusTwo", "TestParametricExtensionMethod"],
+        "TakeExtension", "PlusTwo", "TestParametricExtensionMethod",
+        # (the survey's map of the remaining causes: names no Book chapter or
+        # API declares and no test file defines; `MakeNull(t)` gives an
+        # object of no value, FORT-721882, FORT-635190, SOL-7388)
+        "MakeNull", "native_property_rollback_test", "interface_with_accessors",
+        "interface_with_default_value", "NativeNestedTupleParameters",
+        "ExternalNestedTupleParameters", "test_function_as_type_iface", "StmCallbackErrors",
+        "NativeTwoParams", "test_function_as_type", "test_native_function_as_type",
+        "test_external_parametric_type5", "test_native_parametric_type_inheritance1",
+        "test_native_parametric_type_inheritance2", "test_awaitable"],
 }
 # Engine APIs the Book's Runtime API reference places outside the language:
 # persistence, JSON, Unreal objects and AutoRTFM. A case using one is not
@@ -715,7 +724,11 @@ def build_cases(book, rel):
         if form in RUNTIME_FORMS:
             c = new_case(it.line, form, RUNTIME_FORMS[form], it, f)
             body = f.body
-            if f.braced and "\n" not in body:
+            if not f.mbody.strip():
+                # (an `assert:` with only comments in it: an empty body, which
+                # the test runner takes as valid; `RuntimeErrors.versetest:52`)
+                main = "Main()<decides>:void = {}"
+            elif f.braced and "\n" not in body:
                 main = "Main()<decides>:void = {%s}" % body
             elif f.braced:
                 main = "Main()<decides>:void = {\n%s\n}" % indent(body)
