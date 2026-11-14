@@ -2662,11 +2662,15 @@ concurrent with the full gate timed out on
 identical before and after the change and whose isolated rerun also
 agrees with the normal limits. The baseline records the two improvements.
 
-Three Lean/C execution fixtures cover tuple/array operands, inferred
+Eight Lean/C execution fixtures cover tuple/array operands, inferred
 common element types, nested tuples, empty operands, single evaluation,
-compound updates, rollback, suspension and cancellation cleanup. Two
-refusals retain scalar operand and incompatible update checks. The full
-default gate passes all 3,053 fixtures and model fuzzers. Core semantics,
+compound updates, rollback, suspension and cancellation cleanup. They also
+retain matching custom operators and declared effects, built-in fallback
+beside disjoint overloads, and longer concatenation chains. Six refusals
+retain scalar/update type checks and matching operators' suspension,
+failure-context, result-type and effect restrictions. A real/dummy API
+pair retains a whole-tuple proof's custom conversion. The full default
+gate includes these fixtures and the model fuzzers. Core semantics,
 proofs, OVBC and the C runtime are unchanged.
 
 ## Ten causes to remove first

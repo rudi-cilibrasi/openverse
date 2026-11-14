@@ -32,17 +32,73 @@ partial def elabExprValuesWith
   if let some (f, operands) := userOp? then
     if (ctx.sig? f).isSome || (ctx.types.overloads.lookup f).isSome then
       let st ← get
-      let builtinOperand (e : SExpr) : Bool :=
-        match (elabE { ctx with typeOnly := true } e none).run st with
-        | .ok (r, _) => match r.ty with
-          | .int | .float | .rational | .refine _ | .never => true
-          | .arr _ => f == "operator'+'"
-          | _ => false
-        | .error _ => true
-      if !operands.all builtinOperand then
-        let p := se.pos
-        return ← tryCatch (elabApp ctx p (.ident p f) operands false exp) fun e =>
+      let p := se.pos
+      let callSource : EM R :=
+        tryCatch (elabApp ctx p (.ident p f) operands false exp) fun e =>
           tryCatch (elabApp ctx p (.ident p f) operands true exp) fun _ => throw e
+      let arrayOperand : Ty → Bool
+        | .arr _ | .tup _ => true
+        | t => match ctx.arrayView p t 1 "operator '+'" with
+          | .ok (some _) => true
+          | _ => false
+      let mut builtinOnly := true
+      let mut concatOnly := f == "operator'+'"
+      let mut hasArray := false
+      let mut naturalTypes : List (Option Ty) := []
+      for e in operands do
+        let ty := match (elabE { ctx with typeOnly := true } e none).run st with
+          | .ok (r, _) => some r.ty
+          | .error _ => none
+        naturalTypes := naturalTypes ++ [ty]
+        let builtin := match ty with
+          | some (.int) | some (.float) | some (.rational) | some (.refine _) | some (.never) => true
+          | some (.arr _) => f == "operator'+'"
+          | none => true
+          | _ => false
+        builtinOnly := builtinOnly && builtin
+        let array := ty.any arrayOperand
+        hasArray := hasArray || array
+        let concat := ty.isNone || array || ty.any (fun t => t.isUnit || t == .never)
+        concatOnly := concatOnly && concat
+        -- Preserve the ordinary custom-operator path, including its lazy
+        -- operand probes, when no tuple/array concatenation is possible.
+        if !builtin && !concatOnly then return ← callSource
+      if !builtinOnly then
+        if !concatOnly || !hasArray then return ← callSource
+        -- A collection cannot become an unrelated user-defined nominal
+        -- value. Eliminate that domain without re-elaborating nested sums;
+        -- actual evidence and contextual operation conversions stay eligible.
+        let impossible (actual : Option Ty) (expected : Ty) : Bool := Id.run do
+          let some actual := actual | return false
+          let collection := match actual with | .arr _ | .tup _ | .void => true | _ => false
+          let .struct name _ := expected | return false
+          if !collection || name.contains '$' || !ctx.choiceCoercions.isEmpty ||
+              !(SubtypeEvidence.valueViews ctx.types ctx.evidenceTypes actual).isEmpty then return false
+          match (do
+            let slot ← fresh actual
+            discard <| coerce p ⟨.local slot, actual⟩ expected).run { st with env := ctx.types } with
+          | .ok _ => return false
+          | .error _ => return true
+        let candidates := ((ctx.types.overloads.lookup f).getD [f]).filter fun name =>
+          match ctx.sig? name with
+          | some sig => sig.isConst || !sig.named.isEmpty || sig.params.length != operands.length ||
+              !((naturalTypes.zip sig.params).any fun (a, t) => impossible a t)
+          | none => true
+        if !candidates.isEmpty then
+          let outcome : Except String R ← tryCatch (Except.ok <$> callSource)
+            (fun error => pure (Except.error error))
+          match outcome with
+          | .ok result => return result
+          | .error original =>
+            -- A matching custom operator retains its effect/syntax errors.
+            let relaxed := { ctx with typeOnly := true, suspends := true, inDefer := false }
+            let sourceFits := candidates.any fun name =>
+              [(false, false), (true, false), (true, true)].any fun (canFail, bracket) =>
+                match (elabApp { relaxed with canFail } p (.ident p name) operands bracket exp).run st with
+                | .ok _ => true
+                | .error _ => false
+            if sourceFits then throw original
+            set st
   match se with
   | .app p f args bracket => do
     let r ← elabApp ctx p f args bracket exp

@@ -2393,7 +2393,9 @@ Each operand is evaluated once, from left to right. A tuple's immediate
 elements become array entries: `((1, 2), (3, 4)) + array{(5, 6)}` gives
 an array of three tuples. The ordinary container conversions apply when
 another element type is expected. A `void` or `true` value used beside an
-array gives the empty array ([the rule](research/book-forms-rules.md#tuples-in-array-concatenation)).
+array gives the empty array. A matching program `operator'+'` for tuple or
+unit operands keeps its behavior and declared effects; built-in
+concatenation is used when no source overload fits ([the rule](research/book-forms-rules.md#tuples-in-array-concatenation)).
 
 ## any
 

@@ -288,7 +288,14 @@ and uses the shared value converter, including actual subtype evidence
 for component conversions. The existing array join and concatenation
 then apply. Compound array updates convert a tuple RHS at the target
 type. The empty `void` value beside an array uses its empty-array
-conversion. Core semantics and the runtime are unchanged.
+conversion. A matching source operator keeps its result and effects;
+disjoint overloads allow the built-in path. Applicability trials use
+isolated state and retain errors from a matching operator's execution
+mode. Failed source calls leave no slots, effects or helper requests in
+the built-in path. A natural-type filter excludes unrelated nominal
+parameters without repeatedly elaborating nested sums, preserving actual
+whole-value evidence and contextual operation conversions. Core semantics
+and the runtime are unchanged.
 
 ## Generators in `first`, and a range's typed binding
 

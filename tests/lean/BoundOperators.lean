@@ -27,7 +27,32 @@ private def context (locals : List Local) : Ctx := {
 private def joins (ctx : Ctx) (inputs : List Ty) (expected : Option Ty := none) : Option Ty :=
   joinView? ctx.types ctx.evidenceTypes inputs expected
 
+private def overloadedTupleConversion : IO Unit := do
+  let source := "vec:=class<computes>{N:int}\n" ++
+    "operator'+'(A:vec,B:vec)<computes>:vec=vec{N:=A.N+B.N}\n" ++
+    "Caller(A:tuple(t,t),P:evidence(vec,tuple(t,t)) where t:type)<computes>:vec=A+A\nMain():void={}"
+  for dummy in [false, true] do
+    let result : Except String Compiled := do
+      let tops ← parseProgram source
+      let tops ← tops.mapM fun top => do
+        match top with
+        | .fn p name ps tps specs ret body =>
+          let ps ← ps.mapM fun param => do
+            let ty ← param.ty.mapNamesM fun n => pure (if n == "evidence" then family else n)
+            return { param with ty, typeValue := dummy && name == "Caller" && param.name == "P" }
+          return .fn p name ps tps specs ret body
+        | _ => pure top
+      elabProgram tops
+    match result with
+    | .ok c =>
+      need "a real whole-tuple proof keeps the custom operator applicable"
+        (!dummy && c.prog.check && c.prog.checkControl && c.prog.checkTypes c.sigs c.slotTys)
+    | .error message =>
+      need s!"dummy tuple proof cannot authorize the nominal operator: {message}"
+        (dummy && (message.splitOn "expected vec").length > 1)
+
 def main : IO Unit := do
+  overloadedTupleConversion
   let actual := [proof "A" vehicle a, proof "B" vehicle b]
   for locals in [actual, actual.reverse] do
     let ctx := context locals
