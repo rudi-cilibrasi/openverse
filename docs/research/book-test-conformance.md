@@ -55,7 +55,7 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
 
 ## Where things stand
 
-On main `33bcf38` with [the forms still on the list](#after-the-forms-still-on-the-list): **8,784 agree, 617 refuse, 55 accept, 92 differ, 3,956 not translatable** of 13,504 cases (a fresh `scripts/book-conformance.sh run --causes` on the final commit; main `33bcf38` alone: 8,711, 683, 66, 92, 3,952). This is the one table of what is left; the sections below are the history, each written when its work landed, and the four maps ([the first map](#the-remaining-causes-a-map), [classes](#classes-and-subtyping-the-map), [forms](#forms-of-expressions-statements-and-the-library-a-map), [the forms still on the list](#the-forms-still-on-the-list-a-map)) hold the case-by-case reading each row points to.
+On main `33bcf38` with [the forms still on the list](#after-the-forms-still-on-the-list), [a task's end resuming its awaiters](#after-a-tasks-end-resumes-its-awaiters) and [the second batch of found bugs](#after-the-found-bugs-a-second-batch): **8,784 agree, 617 refuse, 55 accept, 92 differ, 3,956 not translatable** of 13,504 cases (a fresh `scripts/book-conformance.sh run --causes` on the merged commit; main `33bcf38` alone: 8,711, 683, 66, 92, 3,952). This is the one table of what is left; the sections below are the history, each written when its work landed, and the four maps ([the first map](#the-remaining-causes-a-map), [classes](#classes-and-subtyping-the-map), [forms](#forms-of-expressions-statements-and-the-library-a-map), [the forms still on the list](#the-forms-still-on-the-list-a-map)) hold the case-by-case reading each row points to.
 
 **Accepted where the tests refuse (55)**
 
@@ -2550,6 +2550,32 @@ baseline now: **8,784 agree, 617 refuse, 55 accept, 92 differ, 3,956 not transla
   moved: `tests/errors/inherit_cast_never.verse` to `tests/verse`, a valid
   program with a warning now. No generator writes what a rule refuses, so
   none changed.
+
+## After the found bugs, a second batch
+
+Nine bugs a tidy pass found, fixed on main `33bcf38`, then merged with [After a
+task's end resumes its awaiters](#after-a-tasks-end-resumes-its-awaiters) and
+[After the forms still on the list](#after-the-forms-still-on-the-list): a
+struct's fields' defaults that some passes did not reach (`Localize`, a type
+argument, a type or a built-in named as a value there); a map's generators
+in `first`, `V : M` and `K -> V : M`, as `for`'s; one list of the built-in
+types' names, which no definition but a function, a method and a qualified
+enum value takes (LANGUAGE.md, "Reserved names"); one table of the
+built-in types' methods, which no method with several values takes and no
+extension method repeats; and messages that named what openverse writes
+(`$localizeValue`, `$GetCastableFinalSuperClass:B`, `$cast(int)`, a
+prelude's `$t`, `c$M`, an inlined local's `$g_N_site`) in the source's
+terms. A fresh run on the merged compiler, with causes: **8,784 agree, 617
+refuse, 55 accept, 92 differ, 3,956 not translatable**, no internal error;
+every case's verdict as the forms' baseline has it, and every cause's count
+as the tables above have it. Against the awaiters' baseline (main's
+verdicts), the forms' work: 75 cases agree now, and its reading of a
+`using` of the test runner's package made four not translatable
+(`Modules/Using2.versetest:19`, `QualifiedIdentifier.versetest` 58 and 152,
+`Attributes/deprecated.versetest:435`); nothing else moved. Before the merge, on `33bcf38`, these
+fixes moved no case either (8,711, 683, 66, 92, 3,952). The Book's cases
+that said an internal name now say the source's: `Localization.versetest`
+113 and 209, `ArrayReplaceAll.versetest:12`, `SOL-7475…:11`.
 
 ## Ten causes to remove first
 
