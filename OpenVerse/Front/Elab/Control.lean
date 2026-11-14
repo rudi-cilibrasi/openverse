@@ -137,7 +137,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         | none => false
       | _ => false
     | (_, none, some _) :: rest => match ty with
-      | .map .. => true
+      | .map .. | .weakMap .. => true
       | .arr t => throughMap t rest
       | _ => false
     | _ :: _ => false
@@ -147,10 +147,15 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
   let keyRefDecides : Expr := .seq (.prim .query [.lit (.logic true)]) (.lit .void)
   -- (code made by the elaborator, at no position, is checked where its
   -- source is: an operation of a choice's dictionary, #283)
+  -- (the module state, whose fields are the module-scoped variables, is a
+  -- root of its own: the prototype of its class, `ModuleVars`)
+  let stateTy : Ty := .struct ModuleVars.stateClass []
+  let rootTy? (root : String) : Option Ty :=
+    if root == ModuleVars.stateName then some stateTy else (ctx.lookup root).map (·.ty)
   if !ctx.canFail && p.line != 0 then
     if let some (root, steps) := path lhs then
-      if let some l := ctx.lookup root then
-        if throughMap l.ty steps then
+      if let some rty := rootTy? root then
+        if throughMap rty steps then
           eerr p "set through a map's key can fail (the key's reference is <decides> in Verse, the Book of Verse's API reference; its last key inserts), so it must be in a failure context (an if condition, a for clause, option{…}, logic{…}, not, the left of or, or a <decides> function)"
   if let some (root, steps) := path lhs then if general steps || opaqueIndex root steps then
     -- `set X.p = e` with a path of two or more steps (Book of Verse §3.5, §9.3):
@@ -159,10 +164,16 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     -- is missing makes the set fail); then the new leaf; then the
     -- containers are rebuilt from the leaf up, ending with the variable
     -- the variable must be a var unless the path writes an object (below)
+    let mut pre : Array Expr := #[]
     let l ← match ctx.lookup root with
       | some l => pure l
-      | none => eerr p s!"unknown variable '{root}'"
-    let mut pre : Array Expr := #[]
+      | none =>
+        if root == ModuleVars.stateName then
+          let some a := ModuleVars.stateRef? ctx.types | eerr p "internal error: no module state"
+          let g ← fresh stateTy
+          pre := pre.push (.assign g (.lit (.ref a)))
+          pure { name := root, slot := g, ty := stateTy, mutable := false }
+        else eerr p s!"unknown variable '{root}'"
     -- per step: the container's slot and type, and the step
     let mut levels : Array (Nat × Ty × Pos × Option String × Option (Nat × Ty)) := #[]
     let mut cur := l.slot
@@ -181,7 +192,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         let receiver ← match f?, k? with
           | some "?", _ => elabContainerReceiverWith elabE ctx sp source (fun | .opt _ => true | _ => false) "query"
           | some field, _ => elabBoundReceiverWith elabE ctx sp source field
-          | none, some _ => elabContainerReceiverWith elabE ctx sp source (fun | .arr _ | .map .. => true | _ => false) "index"
+          | none, some _ => elabContainerReceiverWith elabE ctx sp source (fun | .arr _ | .map .. | .weakMap .. => true | _ => false) "index"
           | _, _ => pure source
         if receiver.ty != ty then
           view := some (input, receiver)
@@ -202,7 +213,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         let ti ← fresh .int
         pre := pre.push (.assign ti ri.e)
         keys := keys.push (some (ti, .int)); ty := t
-      | none, some k, .map kt vt =>
+      | none, some k, .map kt vt | none, some k, .weakMap kt vt =>
         let rk ← elabE ctx k (some kt)
         let tk ← fresh kt
         pre := pre.push (.assign tk (← coerce sp rk kt))
@@ -218,7 +229,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
       | _ => false
     for (view, index) in views.toList.zipIdx do
       if let some (_, receiver) := view then
-        let container := match receiver.ty with | .arr _ | .map .. | .opt _ => true | _ => false
+        let container := match receiver.ty with | .arr _ | .map .. | .weakMap .. | .opt _ => true | _ => false
         if container && !(refLevel?.any (index < ·)) then
           eerr p s!"cannot write through a container upper bound: source storage must retain {rawTys[index]!.show}"
     if let some kr := refLevel? then
@@ -242,7 +253,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         let (j, _) := (fieldIndex (ctx.types.fields sn targs) f).get!
         pure (.prim (.tupGet j) [.local c])
       | none, some (ti, _), .arr _ => pure (p2 .index (.local c) (.local ti))
-      | none, some (tk, kt), .map _ vt =>
+      | none, some (tk, kt), .map _ vt | none, some (tk, kt), .weakMap _ vt =>
         let tp ← fresh (.tup [kt, vt])
         pure (mapLookup c tk tp)
       | _, _, _ => eerr p "internal: set path"
@@ -382,7 +393,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         if ctx.types.isRefClass sn then
           let (j, ft) := (fieldIndex (ctx.types.fields sn targs) f).get!
           pre := pre.push (← setFieldAt ctx.types p sn targs c f j ft newVal)
-          noteFx p ["writes"]
+          noteFx p ["writes"] (if sn == ModuleVars.stateClass then some s!"sets the module-scoped var {ModuleVars.shown f}" else none)
           wroteObject := true
         else
           let fs := ctx.types.fields sn targs
@@ -392,7 +403,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
           pre := pre.push (.assign c (.prim .mkTup parts))
       | none, some (ti, _), .arr _ =>
         pre := pre.push (.assign c (.prim .arrSet [.local c, .local ti, newVal]))
-      | none, some (tk, _), .map _ vt =>
+      | none, some (tk, _), .map _ vt | none, some (tk, _), .weakMap _ vt =>
         -- the last key inserts or updates; an intermediate one was read above, so it exists
         let tvk ← fresh vt
         let ti ← fresh .int
@@ -419,7 +430,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
   | .app _ (.ident _ n) [k] true =>
     let l ← mutableLocal n
     match l.ty with
-    | .map kt vt =>
+    | .map kt vt | .weakMap kt vt =>
       let rk ← elabE ctx k (some kt)
       let tk ← fresh kt
       let tp ← fresh (.tup [kt, vt])

@@ -2096,7 +2096,7 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
               keys := keys ++ [.int]
               leaf := next
               indexedDecides := true
-            | .map keyTy next =>
+            | .map keyTy next | .weakMap keyTy next =>
               keys := keys ++ [keyTy]
               leaf := next
               -- (a map's key reference is `<decides>`, also the last key's,

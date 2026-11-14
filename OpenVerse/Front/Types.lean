@@ -50,6 +50,13 @@ inductive Ty where
   | enum : String → Ty
   /-- `[k]v`: in Verse Core, the array of its (key, value) pairs in insertion order. -/
   | map : Ty → Ty → Ty
+  /-- `weak_map(k, v)` (Book of Verse ch. 3, "Weak Maps"): a supertype of
+      `[k]v` that keeps only entry access, `W[k]` and `set W[k] = v`; no
+      length, iteration, equality or conversion back to a map. In Verse
+      Core it is a map, the array of its pairs: no program can tell an
+      entry whose key is unreachable, so none is dropped
+      (docs/research/weak-map.md). -/
+  | weakMap : Ty → Ty → Ty
   /-- A type parameter of the generic function (or parametric struct) being
       elaborated, opaque there (`comparable` when declared
       `t:subtype(comparable)`). In Verse Core it is a type variable `VTy.var`. -/
@@ -61,7 +68,7 @@ inductive Ty where
 partial def Ty.helperUses : Ty → List String
   | .arr t | .opt t => t.helperUses
   | .tup ts => ts.flatMap Ty.helperUses
-  | .map k v => k.helperUses ++ v.helperUses
+  | .map k v | .weakMap k v => k.helperUses ++ v.helperUses
   | .struct n ts => n :: (if (FnValues.parseName n).any (fun (_, es) => es.contains "suspends")
       then ["$suspends"] else []) ++ ts.flatMap Ty.helperUses
   | _ => []
@@ -76,7 +83,7 @@ partial def Ty.eqv : Ty → Ty → Bool
   | .struct a as, .struct b bs =>
     a == b && as.length == bs.length && (as.zip bs).all fun (x, y) => x.eqv y
   | .enum a, .enum b => a == b
-  | .map a b, .map c d => a.eqv c && b.eqv d
+  | .map a b, .map c d | .weakMap a b, .weakMap c d => a.eqv c && b.eqv d
   | .param a _, .param b _ => a == b
   | _, _ => false
 
@@ -101,6 +108,7 @@ partial def Ty.show : Ty → String
     | none => n ++ "(" ++ ", ".intercalate (ts.map Ty.show) ++ ")"
   | .enum n => n
   | .map k v => "[" ++ k.show ++ "]" ++ v.show
+  | .weakMap k v => "weak_map(" ++ k.show ++ ", " ++ v.show ++ ")"
   | .param n _ => n
 
 def Ty.string : Ty := .arr .char
@@ -118,6 +126,7 @@ partial def Ty.toSTy : Ty → STy
   | .opt t => .opt t.toSTy
   | .tup ts => .tup (ts.map Ty.toSTy)
   | .map k v => .map k.toSTy v.toSTy
+  | .weakMap k v => .app "weak_map" [k.toSTy, v.toSTy]
   | .struct n [] => .name n
   | .struct n ts => match FnValues.parseWritten n with
     | some (s, effs) => s.toSTy ((ts.take s.arity).map Ty.toSTy) ((ts.drop s.arity).headD .void).toSTy effs
@@ -130,6 +139,7 @@ partial def Ty.subst (σ : List (String × Ty)) : Ty → Ty
   | .opt t => .opt (t.subst σ)
   | .tup ts => .tup (ts.map (Ty.subst σ))
   | .map k v => .map (k.subst σ) (v.subst σ)
+  | .weakMap k v => .weakMap (k.subst σ) (v.subst σ)
   | .struct n ts => .struct n (ts.map (Ty.subst σ))
   | t => t
 
@@ -142,7 +152,7 @@ partial def Ty.alpha (m : List (String × String)) : Ty → Ty → Option (List 
   | .arr a, .arr b | .opt a, .opt b => Ty.alpha m a b
   | .tup as, .tup bs | .struct _ as, .struct _ bs =>
     if as.length != bs.length then none else (as.zip bs).foldlM (fun m (a, b) => Ty.alpha m a b) m
-  | .map k v, .map k' v' => do Ty.alpha (← Ty.alpha m k k') v v'
+  | .map k v, .map k' v' | .weakMap k v, .weakMap k' v' => do Ty.alpha (← Ty.alpha m k k') v v'
   | a, b => if a.eqv b then some m else none
 
 /-- Where a class or interface sits in the hierarchy (#18). -/
@@ -488,7 +498,7 @@ def Ty.emptyValue? : Ty → Option Value
   | .logic => some (.logic false)
   | .void | .tup [] => some .void
   | .opt _ => some .none
-  | .arr _ | .map _ _ => some Value.emptyArray
+  | .arr _ | .map _ _ | .weakMap _ _ => some Value.emptyArray
   | _ => none
 
 /-- The types of the empty value alone: `tuple()`, and `void`, which takes any value and makes it that one (Book of Verse
@@ -589,7 +599,7 @@ partial def TyEnv.viewOf (env : TyEnv) (n d : String) (X : List Ty) : List Ty :=
     | .param .. => true
     | .arr u | .opt u => hasParam u
     | .tup us | .struct _ us => us.any hasParam
-    | .map k v => hasParam k || hasParam v
+    | .map k v | .weakMap k v => hasParam k || hasParam v
     | _ => false
   let places := ((env.coreArgs r rargs).zipIdx.filter fun (t, _) =>
     (match t with | .param .. => false | _ => true) && hasParam t).map fun (t, j) => (t, X.getD j Ty.void)
@@ -601,6 +611,7 @@ partial def TyEnv.viewOf (env : TyEnv) (n d : String) (X : List Ty) : List Ty :=
       | .tup us => .tup (us.map back)
       | .struct m us => .struct m (us.map back)
       | .map k v => .map (back k) (back v)
+      | .weakMap k v => .weakMap (back k) (back v)
       | u => u
   (env.coreArgs n (env.upArgs r rargs n)).map back
 
@@ -706,7 +717,7 @@ partial def Ty.holdsMutable (env : TyEnv) (t : Ty) (seen : List String := []) : 
   match t with
   | .arr t | .opt t => t.holdsMutable env seen
   | .tup ts => ts.any (·.holdsMutable env seen)
-  | .map k v => k.holdsMutable env seen || v.holdsMutable env seen
+  | .map k v | .weakMap k v => k.holdsMutable env seen || v.holdsMutable env seen
   | .struct n ts =>
     if env.classes.contains n then
       -- an object below `n`, or one its fields reach (by instantiation, #39;
@@ -738,7 +749,7 @@ partial def Ty.structNames : Ty → List String
   | .struct n ts => n :: ts.flatMap Ty.structNames
   | .arr t | .opt t => t.structNames
   | .tup ts => ts.flatMap Ty.structNames
-  | .map k v => k.structNames ++ v.structNames
+  | .map k v | .weakMap k v => k.structNames ++ v.structNames
   | _ => []
 
 /-- A struct that contains itself, through any chain of fields (Verse Core
@@ -793,7 +804,8 @@ partial def Ty.toVTy (env : TyEnv) : Ty → VTy
         .opt (.tup ((env.fields d (if d == n then ts else [])).map fun (_, t, _) => t.toVTy env)))
     else .tup ((env.fields n ts).map fun (_, t, _) => t.toVTy env)
   | .enum _ => .int
-  | .map k v => .arr (.tup [k.toVTy env, v.toVTy env])
+  -- (a weak map is held as a map, docs/research/weak-map.md)
+  | .map k v | .weakMap k v => .arr (.tup [k.toVTy env, v.toVTy env])
   -- the j-th type parameter of the generic function being elaborated
   | .param n _ => match env.tvars.findIdx? (·.1 == n) with
     | some j => .var j
@@ -831,7 +843,7 @@ partial def Ty.params : Ty → List String
   | .param n _ => [n]
   | .arr t | .opt t => t.params
   | .tup ts | .struct _ ts => ts.flatMap Ty.params
-  | .map k v => k.params ++ v.params
+  | .map k v | .weakMap k v => k.params ++ v.params
   | _ => []
 
 /-- The interfaces `i(args)` reaches through the parent interfaces it lists,
@@ -963,7 +975,7 @@ partial def Ty.hasNever : Ty → Bool
   | .never => true
   | .arr t | .opt t => t.hasNever
   | .tup ts => ts.any Ty.hasNever
-  | .map k v => k.hasNever || v.hasNever
+  | .map k v | .weakMap k v => k.hasNever || v.hasNever
   | _ => false
 
 /-- First-order matching of a generic signature's type `pat` against the type
@@ -983,6 +995,9 @@ partial def Ty.matchArg (env : TyEnv) (σ : List (String × Ty)) : Ty → Ty →
     if ps.length != as.length then none
     else (ps.zip as).foldlM (fun σ (p, a) => Ty.matchArg env σ p a) σ
   | .map pk pv, .map ak av => do Ty.matchArg env (← Ty.matchArg env σ pk ak) pv av
+  -- (a map is a weak map, Book of Verse ch. 3)
+  | .weakMap pk pv, .map ak av | .weakMap pk pv, .weakMap ak av => do
+    Ty.matchArg env (← Ty.matchArg env σ pk ak) pv av
   | .struct n ps, .struct m as =>
     -- an instance of a class below `n` is one of `n`, at its type arguments there (#39)
     let as := if n != m && env.classes.contains m && env.isSub m n then env.upArgs m as n else as
@@ -1015,7 +1030,7 @@ partial def Ty.unifyEqs (fieldsOf : String → List Ty → Option (List Ty)) (σ
     | t, .param v _ => bind v t
     | .arr x, .arr y | .opt x, .opt y => Ty.unifyEqs fieldsOf σ ((x, y) :: rest)
     | .tup xs, .tup ys => if xs.length == ys.length then Ty.unifyEqs fieldsOf σ (xs.zip ys ++ rest) else none
-    | .map k v, .map k' v' => Ty.unifyEqs fieldsOf σ ((k, k') :: (v, v') :: rest)
+    | .map k v, .map k' v' | .weakMap k v, .weakMap k' v' => Ty.unifyEqs fieldsOf σ ((k, k') :: (v, v') :: rest)
     | .struct n xs, .struct m ys =>
       if n != m || xs.length != ys.length then none
       else match fieldsOf n xs, fieldsOf n ys with
@@ -1036,7 +1051,7 @@ where
         -- a struct is the tuple of its fields in Verse Core, a class the
         -- options of the classes below it
         | .struct n us => env.repFieldTys n us
-        | .map k v => [k, v]
+        | .map k v | .weakMap k v => [k, v]
         | _ => []
       1 + go b (kids ++ rest)
 
@@ -1055,6 +1070,8 @@ partial def Ty.comparable (env : TyEnv) : Ty → Bool
   | .arr t | .opt t => t.comparable env
   | .tup ts => ts.all (Ty.comparable env)
   | .map k v => k.comparable env && v.comparable env
+  -- (a weak map is not, Book of Verse ch. 3: "no coercion to `comparable`")
+  | .weakMap .. => false
   -- a class is not comparable unless it is `<unique>` (compared by
   -- identity), nor a struct with a field that is not (one holding such a
   -- class, or a type argument)
@@ -1104,12 +1121,13 @@ private def TyEnv.disjointStep (env : TyEnv) (apart : Ty → Ty → Bool) (a b :
   | .tup as, .tup bs => as.length != bs.length || (as.zip bs).any fun (a, b) => apart a b
   | .tup ts, .arr t => ts.any (apart · t)
   | .arr t, .tup ts => ts.any (apart t ·)
-  | .tup ts, .map k _ => !ts.isEmpty && apart .int k
-  | .map k _, .tup ts => !ts.isEmpty && apart k .int
+  | .tup ts, .map k _ | .tup ts, .weakMap k _ => !ts.isEmpty && apart .int k
+  | .map k _, .tup ts | .weakMap k _, .tup ts => !ts.isEmpty && apart k .int
   | .tup ts, .opt t => !ts.isEmpty && apart .int t
   | .opt t, .tup ts => !ts.isEmpty && apart t .int
   | .struct n _, .arr _ | .arr _, .struct n _ |
-    .struct n _, .map .. | .map .., .struct n _ => (FnValues.parseName n).isNone
+    .struct n _, .map .. | .map .., .struct n _ |
+    .struct n _, .weakMap .. | .weakMap .., .struct n _ => (FnValues.parseName n).isNone
   | .struct a as, .struct b bs =>
     let isCls (x : String) := env.classes.contains x
     let iface (x : String) := isCls x && (env.info x).isIface
@@ -1223,7 +1241,7 @@ partial def Ty.keyContainer? (env : TyEnv) (seen : List String := []) : Ty → O
 
 /-- Whether every map key type inside `t` is comparable. -/
 partial def Ty.mapKeysOK (env : TyEnv) : Ty → Bool
-  | .map k v => k.comparable env && k.mapKeysOK env && v.mapKeysOK env
+  | .map k v | .weakMap k v => k.comparable env && k.mapKeysOK env && v.mapKeysOK env
   | .arr t | .opt t => t.mapKeysOK env
   | .tup ts | .struct _ ts => ts.all (Ty.mapKeysOK env)
   | _ => true
@@ -1239,6 +1257,7 @@ partial def Ty.unrefine (ps : List (Ty × Ty)) (t : Ty) : Ty :=
     | .tup ts => .tup (ts.map (Ty.unrefine ps))
     | .struct n ts => .struct n (ts.map (Ty.unrefine ps))
     | .map k v => .map (k.unrefine ps) (v.unrefine ps)
+    | .weakMap k v => .weakMap (k.unrefine ps) (v.unrefine ps)
     | u => u
 
 /-- (#351) The type arguments of class `d` (as its type parameters) for one
@@ -1276,7 +1295,7 @@ partial def protoValue (env : TyEnv) (done : List (String × Nat)) : Ty → Opti
   | .logic => some (.logic false)
   | .char => some (.char 0)
   | .void | .never => some .void
-  | .arr _ | .map _ _ => some (.arr #[])
+  | .arr _ | .map _ _ | .weakMap _ _ => some (.arr #[])
   | .opt _ => some .none
   | .tup ts => (ts.mapM (protoValue env done)).map .tup
   | t@(.struct n ts) =>
@@ -1319,7 +1338,7 @@ partial def Ty.paramsC : Ty → List (String × Bool)
   | .param n c => [(n, c)]
   | .arr t | .opt t => t.paramsC
   | .tup ts | .struct _ ts => ts.flatMap Ty.paramsC
-  | .map k v => k.paramsC ++ v.paramsC
+  | .map k v | .weakMap k v => k.paramsC ++ v.paramsC
   | _ => []
 
 /-- The unknown parameter bounds needed to make this type comparable.
@@ -1331,6 +1350,7 @@ partial def Ty.comparableNeeds? (env : TyEnv) : Ty → Option (List String)
   | .arr t | .opt t => t.comparableNeeds? env
   | .tup ts => ts.foldlM (fun ns t => do return (ns ++ (← t.comparableNeeds? env)).eraseDups) []
   | .map k v => do return ((← k.comparableNeeds? env) ++ (← v.comparableNeeds? env)).eraseDups
+  | .weakMap .. => none
   | .struct n ts =>
     if env.isRefClass n then if env.isUnique n then some [] else none
     else if env.classes.contains n then none else
@@ -1365,6 +1385,7 @@ partial def Ty.commonBounds : Ty → Ty → Ty
   | .opt a, .opt b => .opt (a.commonBounds b)
   | .tup as, .tup bs => .tup ((as.zip bs).map fun (a, b) => a.commonBounds b)
   | .map a b, .map c d => .map (a.commonBounds c) (b.commonBounds d)
+  | .weakMap a b, .weakMap c d => .weakMap (a.commonBounds c) (b.commonBounds d)
   | .struct n as, .struct _ bs => .struct n ((as.zip bs).map fun (a, b) => a.commonBounds b)
   | a, _ => a
 
@@ -1376,6 +1397,7 @@ partial def Ty.withParamBounds (bounds : List (String × Bool)) : Ty → Ty
   | .opt t => .opt (t.withParamBounds bounds)
   | .tup ts => .tup (ts.map (Ty.withParamBounds bounds))
   | .map k v => .map (k.withParamBounds bounds) (v.withParamBounds bounds)
+  | .weakMap k v => .weakMap (k.withParamBounds bounds) (v.withParamBounds bounds)
   | .struct n ts => .struct n (ts.map (Ty.withParamBounds bounds))
   | t => t
 
@@ -1392,6 +1414,9 @@ def Ty.mergeParamBounds (xs : List (String × Bool)) : List (String × Bool) :=
 def TyEnv.convertsAt (env : TyEnv) (a b : Ty) : Bool :=
   a == b || (a == .int && b == .rational) || match a, b with
     | .struct x [], .struct y [] => x != y && env.isSub x y
+    -- (a map is a weak map of its key and value types, the same value,
+    -- Book of Verse ch. 3)
+    | .map k v, .weakMap k' v' => k == k' && v == v'
     | .struct x xs, .struct y ys =>
       match FnValues.parse x, FnValues.parse y with
       | some s, some t => s.within t && s.select t xs == ys
@@ -1433,6 +1458,8 @@ partial def refUp (env : TyEnv) (a b : Ty) (nested : Bool := false) : Bool :=
   -- tuples pointwise, maps in their values (Core subtyping is covariant there)
   | .tup as, .tup bs => as.length == bs.length && (as.zip bs).all fun (a, b) => a == b || refUp env a b true
   | .map k a, .map k' b => k == k' && (a == b || refUp env a b true)
+  -- (a map is a weak map, held alike, Book of Verse ch. 3)
+  | .map k a, .weakMap k' b | .weakMap k a, .weakMap k' b => k == k' && (a == b || refUp env a b true)
   | _, _ => false
 
 /-- A failed join is ambiguous only when two incomparable instantiated
@@ -1540,8 +1567,8 @@ where
         let seen := (current, target) :: seen
         let structural := match current, target with
           | .arr c, .arr a | .opt c, .opt a => go seen c a
-          | .map k c, .map l a => isComparable env k && isComparable env l &&
-              go seen k l && go seen c a
+          | .map k c, .map l a | .map k c, .weakMap l a | .weakMap k c, .weakMap l a =>
+              isComparable env k && isComparable env l && go seen k l && go seen c a
           | .tup cs, .tup bases => cs.length == bases.length &&
               (cs.zip bases).all (fun (c, a) => go seen c a)
           | .tup cs, .arr a => !cs.isEmpty && cs.all (fun c => go seen c a)
@@ -1565,7 +1592,7 @@ def Ty.checkBoundHead (env : TyEnv) : Ty → Except String Unit
 partial def Ty.checkBounds (env : TyEnv) : Ty → Except String Unit
   | .arr t | .opt t => t.checkBounds env
   | .tup ts => ts.forM (Ty.checkBounds env)
-  | .map k v => do k.checkBounds env; v.checkBounds env
+  | .map k v | .weakMap k v => do k.checkBounds env; v.checkBounds env
   | ty@(.struct _ args) => do
     args.forM (Ty.checkBounds env)
     ty.checkBoundHead env

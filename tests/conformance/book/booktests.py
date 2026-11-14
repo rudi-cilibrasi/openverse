@@ -426,9 +426,13 @@ TEST_NAMES = {
         # extension methods of the test runner ("The method is defined in
         # /Verse.org/Tests/VerseTestScriptCmd", ExtensionFields.versetest:157)
         "TakeExtension", "PlusTwo", "TestParametricExtensionMethod",
+        # the digest generator's round trip of a weak map
+        # (weak_map.versetest:183, "Test the digest generator")
+        "TestWeakMap",
         # (the survey's map of the remaining causes: names no Book chapter or
-        # API declares and no test file defines; `MakeNull(t)` gives an
-        # object of no value, FORT-721882, FORT-635190, SOL-7388)
+        # API declares and no test file defines; `MakeNull(t)` gives a null
+        # object of a class, which Verse has none of: the Bugs/FORT-635190,
+        # FORT-721882, FORT-1033995 and SOL-7388 tests)
         "MakeNull", "native_property_rollback_test", "interface_with_accessors",
         "interface_with_default_value", "NativeNestedTupleParameters",
         "ExternalNestedTupleParameters", "test_function_as_type_iface", "StmCallbackErrors",
@@ -440,7 +444,11 @@ TEST_NAMES = {
 # persistence, JSON, Unreal objects and AutoRTFM. A case using one is not
 # translatable.
 ENGINE_NAMES = ["Persistence", "persistent_key", "FromJson", "ToJson", "IsUObject",
-                "GetUObjectPathName", "IsAutoRTFMEnabled"]
+                "GetUObjectPathName", "IsAutoRTFMEnabled",
+                # the session keys of the persistence system (ch. 3, "Common
+                # key types": "Transient keys that do not persist across
+                # sessions") and their module (weak_map.versetest 673-688)
+                "session_key", "Session"]
 # Free functions of the test runner whose names the Book gives to methods:
 # `Literals/Char.versetest` calls `ToChar(N)` and `ToChar32(N)` with
 # parentheses, total functions that neither the Book's chapters nor its Runtime

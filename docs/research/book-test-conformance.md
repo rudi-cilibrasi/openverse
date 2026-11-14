@@ -22,10 +22,12 @@ syntax forms](#after-attributes-types-as-values-and-the-syntax-forms), the
 Book's primitives of [After the Book's
 primitives](#after-the-books-primitives), the source upper bounds of
 [After source upper bounds](#after-source-upper-bounds), what a `for`
-undoes of [After what a `for` undoes](#after-what-a-for-undoes) and the
+undoes of [After what a `for` undoes](#after-what-a-for-undoes), the
 fields with accessors, type arguments and metatypes of [After fields with
 accessors, type arguments and
-metatypes](#after-fields-with-accessors-type-arguments-and-metatypes),
+metatypes](#after-fields-with-accessors-type-arguments-and-metatypes) and
+the weak maps and module-scoped `var`s of [After weak maps and
+module-scoped vars](#after-weak-maps-and-module-scoped-vars),
 against the Book at
 [`beaa719ba165cbf33eff462f2b0fe078a6dd9ab0`](https://github.com/verselang/book/tree/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests),
 the revision the other research notes pin. The Book's
@@ -494,10 +496,10 @@ cases it would turn into agreements.
 | overrides of fields | 33 | `Tests/Attributes/override.versetest:33` | `A<override> must give a new default`; a field narrowed by an override (`Data<override>:int` over `any`) | none | no | front-end |
 | `spawn` in a failure context | 29 | `Tests/Bugs/FORT-582630-BranchResult.versetest:16` | `spawn cannot be in a failure context` (#156) | 1 `verse_vm_todo` | yes (#156) | exposed by the harness's `<decides>` wrapping; front-end |
 | empty containers | 28 → 20 (an empty `array{}` or `map{}` compared is the other operand's empty value) | `Tests/Operators/CompareString.versetest:29`: `assert{array{}=""}` | `the type of an empty array{} must be given` | none | yes: call packing needs "an inferable element type" | front-end: an element type from context, or a bottom element |
-| class effect specifiers | 23 | `Tests/Attributes/allocates.versetest:6`: `c := class<computes><allocates> { Value:int = 0 }` | `<computes> excludes the heap effects … that class/interface also has` | none | yes: construction effects (#508) | a message |
+| class effect specifiers | 23 → 28 (5 module-scoped `var` cases of `weak_map.versetest`, which the parser refused, reach their key classes' `<allocates><computes>` now: [After weak maps and module-scoped vars](#after-weak-maps-and-module-scoped-vars)) | `Tests/Attributes/allocates.versetest:6`: `c := class<computes><allocates> { Value:int = 0 }` | `<computes> excludes the heap effects … that class/interface also has` | none | yes: construction effects (#508) | a message |
 | other library functions | 23 | `Tests/GetCastableFinalSuperClass.versetest:60` | `unknown function 'GetCastableFinalSuperClass'` (15), `FitsInPlayerMap` (3, persistence), `signalable(t)` and `awaitable(t)` (3), `GetSecondsSinceEpoch` (2, a clock) | none | [the library note](book-library-functions.md) | features: #11, persistence, the concurrency interfaces, a time source |
-| `weak_map` | 22 | `Tests/weak_map.versetest:32` | `unknown function 'weak_map'` | 1 `verse_vm_only` | yes: [Not supported in v1](../LANGUAGE.md#not-supported-in-v1), #491 | front-end and Core |
-| module constants of mutable classes | 21 | `Tests/Bugs/FORT-721882-CallingFunctionWithNullObject.versetest:14` | `the constant NullTestObject would hold an object with var fields …: make it a function` | 17 `verse_vm_todo` | yes, in the message | front-end and Core (module state) |
+| `weak_map` | 22 → 0 ([After weak maps and module-scoped vars](#after-weak-maps-and-module-scoped-vars): 18 agree, 1 not translatable, 4 under other causes) | `Tests/weak_map.versetest:32` | `unknown function 'weak_map'` | 1 `verse_vm_only` | yes: [Weak maps](../LANGUAGE.md#weak-maps), [Module-scoped variables](../LANGUAGE.md#module-scoped-variables), #491 | done: front-end only ([weak-map.md](weak-map.md)) |
+| module constants of mutable classes | 21 → 4 (17 call the test runner's `MakeNull`, not translatable now) | `Tests/Bugs/FORT-721882-CallingFunctionWithNullObject.versetest:14` | `the constant NullTestObject would hold an object with var fields …: make it a function` | 17 `verse_vm_todo` | yes, in the message | front-end and Core (module state) |
 | joins | 28 | `Tests/Bugs/2021-04-26-DisjointTypesAllowedInComparisonAndPointerDeref.versetest:4`: `0=(false? or 0)` | `the branches have different types: logic and int` (also `?int` and `?float`) | none | in part: unrelated types join at `any` ([any](../LANGUAGE.md#any)), not inside options or `or` | front-end |
 | `true` and `false` as types | 20 | `Tests/Subtype.versetest:113`: `m0:subtype(true)` | `unknown type 'true'` | none | no; the Book's ch. 2 | front-end |
 | block forms | 17 | `Tests/Operators/At.versetest:40`: `F at array:` and an indented block | `at` and `of` calls with a block (12), `profile:` (`unknown struct 'profile'`, 2), … | none | yes: [Supported](../LANGUAGE.md#supported), Blocks | parser forms (`of`, `at`) and features |
@@ -1502,6 +1504,51 @@ generators in `first` (18), partial modules (11), two members of one name
 (12), empty containers typed `[]false` (23), `set` through a call's
 result (6), and the parser forms of `TimSyntax.versetest`.
 
+## After weak maps and module-scoped vars
+
+`weak_map(k, v)` and module-scoped `var`s ([weak-map.md](weak-map.md):
+the Book's rules, whether weakness is observable, the design), built on
+main `669ba92` in two commits (`compare` after each: 0 worse, 21 better),
+merged with main `7f12181` (#612), and a declaration `var x:int` with no
+value parsed. Against main's baseline (8,214 agree, 1,346 refuse, 135
+accept, 88 differ, 3,721 not translatable), 22 cases more agree and none
+is worse: **8,236 agree, 1,305 refuse, 135 accept, 88 differ, 3,740 not
+translatable** (re-recorded from a fresh run on the merged compiler).
+
+| Cause (cases on main) | Agree now | Not translatable now | Left |
+|---|---|---|---|
+| `weak_map` (23) | 18: `weak_map.versetest` 36, 73, 81, 89, 98, 113, 138, 145, 161, 194, 206, 213, 221; `Map.versetest` 381, 388, 464; `SOL-7231-NamedParameterMeet` 21, `:decls` | 1: `weak_map.versetest:183` (`TestWeakMap`, the test runner's digest round trip) | 4, other causes now: `weak_map.versetest` 41, 48 (an `assert_valid` that defines `Main` with parameters, which openverse's `Main` cannot have); `:32` (`t := weak_map(int, int)` in a body, a type as a value: metatypes); `Map.versetest:401` (VerseVM: a `set` through a key of a sibling class in a failure context, which fails at run time there and is refused here, as the map's twin `:363`) |
+| module constants of mutable classes (21) | none | 17: `FORT-635190` (16), `FORT-721882` (1) call `MakeNull`, the test runner's null object | 4: `GlobalVariables.versetest` 72-74, `:decls`, module constants of a `<unique>` class, which need their initializers run once before `Main` (below) |
+| a module-level `var` (27 cases stopped at the parser's `var`: 9 refused, under syntax-other and attributes, and 18 refusals that agreed so) | 1: `Pointers.versetest:4` (`var x:int`, valid syntax) | 1: `weak_map.versetest:684` (`Session`, `session_key`: the engine's session keys, and what the assertion at 675 wrote) | 7: `weak_map.versetest` 6, 624, 639, 668, 669 reach their key classes' `<allocates><computes>` now (effects-of-classes; with `<computes>` taken out of those classes, 6, 624, 668, 669 and 667, refused there before, are accepted, checked by hand, and 639 needs a `<persistable>` class, #11); `WebDataSyncService.versetest` 5, `:decls` reach the engine's attribute `@expose_to_web_data_sync_service_reads` |
+| other type rules: a map read with a key of a class above or beside its keys (3) | 3: `Map.versetest` 354, 394; `Array.versetest:117` | | |
+
+- **Agreeing for the right reason now.** The weak map's refusals were
+  agreements through `unknown parametric type 'weak_map'` and are now each
+  its rule's (`weak_map.versetest` 55, 62, 104, 117, 125, 130, 156;
+  `Map.versetest:410`; `persistable.versetest:83`). Of the module-scoped
+  `var`s' refusals that agreed through the parser's refusal of `var`,
+  `weak_map.versetest:16` and `GlobalVariables.versetest` 5, 39 agree by
+  the rule of their type now; `Function.versetest` 147, 157 and
+  `Overloading.versetest` 152-158 by the refusal of a `var` function; and
+  `weak_map.versetest` 20, 26, 168, 174, 631, 648, 657 reach their key
+  classes' `<allocates><computes>` first, and with it taken out each is
+  refused by its own rule (the value's persistence, the key's specifier,
+  the whole map read or replaced, the limit of four; checked by hand).
+- **Not translatable, and why.** The 51 cases of `weak_map.versetest` the
+  survey already counted (`Persistence`, `persistent_key`) and the two
+  above need the engine's persistence: keys made valid and invalid
+  (`SetValid`, `Joined`, `Dropped`, the runtime error `WeakMapInvalidKey`),
+  the update journal (`RecordUpdates`, `TakeRecordedUpdates`), sessions
+  (`Session.Reset`), and module state that one assertion leaves for the
+  next in the runner's one program. A stand-in class for `persistent_key`
+  would make the cases translate but not agree: every one of them reads or
+  writes under a key whose validity an earlier assertion set, or checks the
+  journal. Only `FitsInPlayerMap` (605, 611, 615; the API reference's
+  persistence limit check) is translatable and refused, under
+  library-other.
+- **Programs.** Against main, over every suite and the corpus `corpus2`
+  (5,825 programs), no program's bytes, output or messages changed.
+
 ## Ten causes to remove first
 
 Ranked by cases moved per unit of risk. A count is the upper bound above;
@@ -1687,7 +1734,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Any.versetest` | 83 | 74 | 0 | 6 | 0 | 3 | 0 |
 | `ArchetypeAccessSpecifiers.versetest` | 11 | 11 | 0 | 0 | 0 | 0 | 0 |
 | `Archetypes.versetest` | 41 | 34 | 0 | 0 | 0 | 7 | 0 |
-| `Array.versetest` | 22 | 17 | 0 | 5 | 0 | 0 | 0 |
+| `Array.versetest` | 22 | 18 | 0 | 4 | 0 | 0 | 0 |
 | `ArrayAppend.versetest` | 27 | 11 | 0 | 10 | 1 | 5 | 0 |
 | `AssetUsage/IncrementalAssetUsage.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `AssignmentSequencing.versetest` | 7 | 3 | 0 | 4 | 0 | 0 | 0 |
@@ -1831,13 +1878,13 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/FORT-590869-NamedWithDefaultCoercion.versetest` | 3 | 0 | 0 | 3 | 0 | 0 | 0 |
 | `Bugs/FORT-592189-MaybeCoerceToTypeCrash.versetest` | 2 | 1 | 1 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-623803-STMRollbackAfterReturn.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
-| `Bugs/FORT-635190-AssertIndexingContainerAfterRuntimeError.versetest` | 16 | 0 | 0 | 16 | 0 | 0 | 0 |
+| `Bugs/FORT-635190-AssertIndexingContainerAfterRuntimeError.versetest` | 16 | 0 | 0 | 0 | 0 | 16 | 0 |
 | `Bugs/FORT-642876-CollidingCoercedOverrideNames.versetest` | 11 | 0 | 0 | 11 | 0 | 0 | 0 |
 | `Bugs/FORT-687100-Mix-comma-and-semicolon-in-archetype-instantiation.versetest` | 9 | 7 | 0 | 2 | 0 | 0 | 0 |
 | `Bugs/FORT-713493-CaseTypeError.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-713847-RaceCoerce.versetest` | 2 | 1 | 0 | 1 | 0 | 0 | 0 |
 | `Bugs/FORT-720968-DetectInaccessibleTypesAcrossPackagesWithDifferentUploadedAtVersions.versetest` | 4 | 0 | 0 | 0 | 0 | 4 | 0 |
-| `Bugs/FORT-721882-CallingFunctionWithNullObject.versetest` | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
+| `Bugs/FORT-721882-CallingFunctionWithNullObject.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `Bugs/FORT-722788-LookupBindingDataOfFunctionInModulePart.versetest` | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
 | `Bugs/FORT-734038-CrashAfterReportingAnErrorRelatedToNamedParameters.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-741838-SuccessFailureParametricTypes.versetest` | 5 | 0 | 0 | 5 | 0 | 0 | 0 |
@@ -1939,7 +1986,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/SOL-7017-AvailableAttributeOnlyUsesDefinitionPackageVersion.versetest` | 4 | 0 | 0 | 0 | 0 | 4 | 0 |
 | `Bugs/SOL-7079-IllegalQualifiedName.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-7157-CoercingRationalToAny.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
-| `Bugs/SOL-7231-NamedParameterMeet.versetest` | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
+| `Bugs/SOL-7231-NamedParameterMeet.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-7388-TaskGroupCorruption.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `Bugs/SOL-7459-OverridingAnInterfaceVariableWithANativeVariableIsNotSupported.versetest` | 7 | 0 | 0 | 0 | 0 | 7 | 0 |
 | `Bugs/SOL-7475-dynamic-casting-through-CTypeVariable.versetest` | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
@@ -2123,7 +2170,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `LocalizationJoin.versetest` | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
 | `MacroForms.versetest` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
 | `ManyEmergentTypes.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
-| `Map.versetest` | 104 | 84 | 5 | 15 | 0 | 0 | 0 |
+| `Map.versetest` | 104 | 89 | 5 | 10 | 0 | 0 | 0 |
 | `MapOrder.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | `Math/Bitwise.versetest` | 174 | 114 | 0 | 0 | 56 | 4 | 0 |
 | `Math/Math.versetest` | 77 | 76 | 0 | 1 | 0 | 0 | 0 |
@@ -2208,7 +2255,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `PersistentJsonSnapshotMacro.versetest` | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
 | `PersonaJson.versetest` | 102 | 0 | 0 | 0 | 0 | 102 | 0 |
 | `Placeholder.versetest` | 9 | 9 | 0 | 0 | 0 | 0 | 0 |
-| `Pointers.versetest` | 66 | 63 | 0 | 3 | 0 | 0 | 0 |
+| `Pointers.versetest` | 66 | 64 | 0 | 2 | 0 | 0 | 0 |
 | `PrintScriptCallstack.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
 | `QualifiedIdentifier.versetest` | 88 | 54 | 2 | 16 | 0 | 16 | 0 |
 | `Range.versetest` | 39 | 39 | 0 | 0 | 0 | 0 | 0 |
@@ -2311,5 +2358,5 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `return-should-be-trailed.versetest` | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | `upon.versetest` | 13 | 5 | 0 | 8 | 0 | 0 | 0 |
 | `using-local_scope.versetest` | 21 | 12 | 0 | 0 | 0 | 9 | 0 |
-| `weak_map.versetest` | 96 | 18 | 0 | 27 | 0 | 51 | 0 |
+| `weak_map.versetest` | 96 | 31 | 0 | 12 | 0 | 53 | 0 |
 | `when.versetest` | 22 | 7 | 0 | 15 | 0 | 0 | 0 |

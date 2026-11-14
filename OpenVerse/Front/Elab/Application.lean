@@ -326,6 +326,10 @@ partial def elabFunctionCall (cb : AppElab) (ctx : Ctx) (p : Pos) (f : SExpr) (n
   | none =>
     if (ctx.sig? s!"{name}$init").isSome || (ctx.types.overloads.lookup s!"{name}$init").isSome then
       eerr p s!"{name} constructs an abstract class: it can only be delegated to, as {name}<constructor>(…) in a constructor of a class below it"
+    -- (`weak_map(k, v)` is a type, the API reference's "It appears where a
+    -- type is expected rather than where a value is")
+    if name == "weak_map" then
+      eerr p "weak_map(…) is a type, not a function: a type as a value is supported for classes and interfaces (Types as values), and a type alias is a definition of its own, t := weak_map(k, v)"
     eerr p s!"unknown function '{name}'"
 
 /-! ## Applications of a member -/

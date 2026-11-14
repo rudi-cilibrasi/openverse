@@ -1,0 +1,18 @@
+A 1
+no O
+B 7
+WD[BK] 1
+M[BK] 1
+no M[O]
+Y[B] 2
+p 10 2
+p 10 7
+H 3 99
+H no B
+CK 1 2
+CK no 1
+N 3 5
+opt 1
+R[1] 1
+R rolled back
+exit=0
