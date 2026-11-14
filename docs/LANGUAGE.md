@@ -281,13 +281,18 @@ compiler-helper call graphs are refused. This checks admission, not a general
 termination theorem for construction blocks or native primitives.
 
 `--extended-defaults` on `run`, `emit`, `check` or `core` explicitly retains
-OpenVerse's extended computed defaults, including ordinary helper/callback and
-spawn defaults, and named parameters' defaults that have the caller's
-effects rather than their function's (failing in a failure context, waiting
-in a `<suspends>` caller; the Book's tests refuse them, [the
-rule](research/book-remaining-rules.md#a-named-parameters-default)). It makes
-no convergence assertion; heap, failure, suspension, source-profile and Core
-checks still apply at each call. Compiler clients use
+OpenVerse's reading of defaults from before the Book's tests pinned theirs,
+and exactly three things of it (`Options.extendedDefaults`): field defaults
+that compute anything, ordinary helper/callback and spawn defaults included,
+with no convergence assertion; field defaults that can fail, which make the
+construction that omits them fail ([the
+rule](research/book-remaining-rules.md#a-loops-body-and-a-fields-default-are-no-failure-contexts));
+and named parameters' defaults that have the caller's effects rather than
+their function's (failing in a failure context, waiting in a `<suspends>`
+caller; the Book's tests refuse them, [the
+rule](research/book-remaining-rules.md#a-named-parameters-default)). Heap,
+failure, suspension, source-profile and Core checks still apply at each
+call. Compiler clients use
 `Options.extendedDefaults := true` (or the final compatibility argument of
 `compileWith`/`compileTops`). Existing extension fixtures select this option
 explicitly. The

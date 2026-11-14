@@ -41,7 +41,7 @@ structure FieldDefaults where
     construction effects must allow; and each field default of the structs
     `tops` (classes' included) is elaborated once, with its struct's type
     parameters opaque, and must have only the effects its construction
-    allows. -/
+    allows, and not fail (unless `Options.extendedDefaults`). -/
 def elabFieldDefaults (env : TyEnv) (sigs : Signatures) (tops : List STop) (cdefs : List CDef)
     (extendedDefaults : Bool := false) :
     Except String FieldDefaults := do
@@ -173,7 +173,7 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
     (decides : Bool) (allowed : List String) (tps : List (String × Bool)) (body : SExpr)
     (suspends : Bool := false) (selfTps : List String := [])
     (selfFieldOf : Option (String → Option Nat) := none)
-    (evidenceSignature : Option Sig := none) (bookDefaults : Bool := true) :
+    (evidenceSignature : Option Sig := none) (extendedDefaults : Bool := false) :
     Except String ElaboratedFn := do
   -- (#209) the values of `selfTps` come from the receiver's hidden
   -- fields, in slots after the hidden parameters: a method's own class's
@@ -234,7 +234,7 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
     | .ok ds => pure (selfInits ++ ds)
     | .error msg => throw s!"{p.show}: in {name}: {msg}"
   fxCheck name allowed st
-  if bookDefaults then checkParamDefaults ctx st0 name ps ptys allowed
+  if !extendedDefaults then checkParamDefaults ctx st0 name ps ptys allowed
   if name.endsWith ".$block" then
     if let some budget := env.constructionFx[(name.dropEnd ".$block".length).toString]? then
       fxCheck s!"construction block of {(name.dropEnd ".$block".length).toString}" budget st
@@ -258,7 +258,8 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
 /-- Function elaboration, a phase of `elabProgramCore`: each function and
     constant of `sigs`, by index (a constant may not hold a mutable object, as
     it is computed at each use), then each generic function, once, with its
-    type parameters opaque (`elabFn`). -/
+    type parameters opaque (`elabFn`; the defaults of their named parameters
+    checked, `checkParamDefaults`, unless `Options.extendedDefaults`). -/
 def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
     (extendedDefaults : Bool := false) :
     Except String (Array ElaboratedFn) := do
@@ -271,7 +272,7 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
     match top with
     | .fn p n ps _ _ _ body =>
       elaborated := elaborated.push (← elabFn allSigs sigs.prog requests env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
-        (evidenceSignature := some sig) (bookDefaults := !extendedDefaults))
+        (evidenceSignature := some sig) (extendedDefaults := extendedDefaults))
     | .const p n _ sty body =>
       -- a constant is computed at each use, so it would be a new object each
       -- time (until Verse Core has global state)
@@ -319,7 +320,7 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
     | .fn p n ps _ _ _ body =>
       elaborated := elaborated.push (← elabFn allSigs sigs.prog requests (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body
         g.suspends g.selfTps ((requests.casts.find? (·.name == n)).map fun l => fun v =>
-          (l.opened.lookup v).bind (env.witnessField? l.target ·)) (some g) (!extendedDefaults))
+          (l.opened.lookup v).bind (env.witnessField? l.target ·)) (some g) extendedDefaults)
     | _ => pure ()
   return elaborated
 
