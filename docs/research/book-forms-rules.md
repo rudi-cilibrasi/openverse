@@ -83,3 +83,47 @@ field steps, and refuses the first field of a source struct that is not
 fields they set `<computes>` (their output the same); the error test
 `set_path_not_var` too, so that its subject, a path from a constant, is
 what it refuses.
+
+## A type parameter named nowhere
+
+**The rule.** Every type parameter of a function is named in its
+signature: in a parameter's type or in its result's. (A bounded one, or
+one a bound names, must be determined by a parameter, as before.)
+
+**The Book.** The tests (3503): `F(:u where t:type, u:type):void = {}`
+refused (`Tests/ParametricFunctions.versetest:374`), beside `F(() where
+t:type):?t` (`:338`) and `F(() where t:type):[]t` (`:341`), refused too,
+and `G(() where t:type):(t->void) = F` valid (`:376-378`). The prose is
+silent.
+
+**openverse before.** A type parameter without a bound was not checked:
+openverse's reading is that a call's expected result may give it
+(`Make():?t`, LANGUAGE.md, "Readings"), and one its signature names
+nowhere, which nothing can give, was accepted.
+
+**openverse now.** `UpperBounds.checkDetermined` refuses a type parameter
+without a bound that its signature names nowhere: "the type parameter t of
+F is named nowhere in its signature, so nothing can give it one". Programs:
+the error tests `fn_value_open_phantom`, `fn_method_instance_phantom`,
+`fn_method_tuple_phantom` and `fn_context_method_phantom`, whose functions
+had such a type parameter for another refusal, are refused for it now
+(their expected message rewritten); `alias_type_parameter` names its type
+parameter (`Id(X:t where t:type):t`), so that what it refuses is still a
+type parameter that takes a type alias's name; the test
+`fn_values_method_instance_unused` names its method's (`D:?u`), its output
+the same.
+
+**Left:** the rest of the tests' rule, that a parameter, not the expected
+result, gives every type parameter (`:338`, `:341`, which openverse's parser
+refuses for their empty parameter group, and `F(G(:t):void where t:type)`,
+`:348`, named only in a function type's parameters). Measured, it refuses
+54 of openverse's tests of its reading (`class_cast_context_*`,
+`fn_values_open_*`, `generics`, …), 33 functions the compiler writes (the
+branches of a refining cast, `$refine…`), and 4 generated programs of two
+models (`gadt_function_values`, `gadt_method_instances`): an owner's
+decision to retire the reading. And the tests split by VM there: VerseVM
+takes `MakeClosure(Callback:tuple(payload, context)->void, Context:context
+where payload:type, context:type):(payload->void)`, whose `payload` only a
+function type's parameter names
+(`Bugs/FORT-592189-MaybeCoerceToTypeCrash.versetest:44`, `verse_vm_only`),
+where the BPVM's twin is an IR error (`:4`).
