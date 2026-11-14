@@ -6,10 +6,11 @@
   a definition among the specifiers of its name, as `@a`, and as a record
   after the definition, `$attr:L_C` (`attrTop`), whose specifiers are the
   definition's place, name and position and whose value is the attribute as
-  written; an attribute on an expression is `$attributes` around it, but
-  `@ignore_unreachable`, which is nothing there, and is kept for a `case`'s
-  arms (`TyEnv.ignoredArms`). `apply` checks every attribute and takes them
-  out, before anything else reads the program:
+  written; an attribute on an expression is a form refused
+  (`Refused.exprAttribute`), but `@ignore_unreachable`, which is nothing
+  there, and is kept for a `case`'s arms (`TyEnv.ignoredArms`). `apply`
+  refuses the forms the parser marked refused (`Refused`), checks every
+  attribute and takes them out, before anything else reads the program:
 
   - the attribute exists: one of the Book's (`@deprecated`, `@experimental`,
     `@available`, `@attribscope_…`), or a class below `attribute` (a custom
@@ -61,22 +62,17 @@ partial def STop.namesWritten : STop → List String
     parents.flatMap STy.allNames ++ fs.flatMap (fun f => f.ty.allNames ++ (f.default.map SExpr.namesWritten).getD []) ++
       ms.flatMap STop.namesWritten
 
-/-- The first form in `e` that openverse parses and refuses: an attribute
-    written on an expression (`$attributes`), with the message that refuses
-    it, or a form the parser marked (`$refused`, `refusedForm`). -/
-partial def SExpr.exprAttr? : SExpr → Option (Pos × String)
-  | .app p (.ident _ "$attributes") as _ =>
-    let h := (as.head?.map SExpr.attrHead).getD ""
-    some (p, s!"@{h} is on an expression or a local definition: attributes go on the definitions of a module, a class, an interface, a struct or an enum, and on an expression only @ignore_unreachable (Book of Verse ch. 12)")
-  | .app p (.ident _ "$refused") (.str _ [.text msg] :: _) _ => some (p, msg)
-  | .structDef _ _ _ fs => fs.findSome? fun f => f.default.bind SExpr.exprAttr?
-  | .refineDef _ _ _ cs => cs.findSome? SExpr.exprAttr?
-  | e => e.children.findSome? SExpr.exprAttr?
+/-- The first form in `e` that openverse parses and refuses (`Refused`,
+    `refusedForm`), with the message that refuses it. -/
+partial def SExpr.refusal? : SExpr → Option (Pos × String)
+  | .structDef _ _ _ fs => fs.findSome? fun f => f.default.bind SExpr.refusal?
+  | .refineDef _ _ _ cs => cs.findSome? SExpr.refusal?
+  | e => e.refused? <|> e.children.findSome? SExpr.refusal?
 
-partial def STop.exprAttr? : STop → Option (Pos × String)
-  | .fn _ _ ps _ _ _ body => (ps.findSome? fun p => p.default.bind SExpr.exprAttr?) <|> body.exprAttr?
-  | .const _ _ _ _ v => v.exprAttr?
-  | .classDef _ _ _ _ _ _ _ fs ms => (fs.findSome? fun f => f.default.bind SExpr.exprAttr?) <|> ms.findSome? STop.exprAttr?
+partial def STop.refusal? : STop → Option (Pos × String)
+  | .fn _ _ ps _ _ _ body => (ps.findSome? fun p => p.default.bind SExpr.refusal?) <|> body.refusal?
+  | .const _ _ _ _ v => v.refusal?
+  | .classDef _ _ _ _ _ _ _ fs ms => (fs.findSome? fun f => f.default.bind SExpr.refusal?) <|> ms.findSome? STop.refusal?
 
 /-- A definition without the attributes among its specifiers (`@a`). -/
 def STop.withoutAttrSpecs : STop → STop
@@ -303,7 +299,7 @@ def apply (tops : List STop) : Except String (List STop × List (Pos × String))
   let isRecord : STop → Bool := fun
     | .const _ n .. => ((n.splitOn "::").getLast?.getD n).startsWith attrPrefix
     | _ => false
-  if !tops.any isRecord && !tops.any (·.exprAttr?.isSome) && !tops.any (·.namesWritten.contains "$pointer") then
+  if !tops.any isRecord && !tops.any (·.refusal?.isSome) && !tops.any (·.namesWritten.contains pointerTypeHead) then
     return (tops, [])
   -- (the parser's markers and the constants it writes after a definition)
   let isMarker : STop → Bool := fun
@@ -356,11 +352,11 @@ def apply (tops : List STop) : Except String (List STop × List (Pos × String))
   let tops := (tops.filter (!isRecord ·)).map STop.withoutAttrSpecs
   -- (an attribute on an expression or a local definition: Book of Verse
   -- tests, deprecated.versetest:83, experimental.versetest:35, 3604, 3553)
-  if let some (p, msg) := tops.findSome? STop.exprAttr? then err p msg
-  -- (a pointer type, `^t`, `$pointer`: Book of Verse tests, Pointers.versetest)
-  if let some t := tops.find? (·.namesWritten.contains "$pointer") then
+  if let some (p, msg) := tops.findSome? STop.refusal? then err p msg
+  -- (a pointer type, `^t`)
+  if let some t := tops.find? (·.namesWritten.contains pointerTypeHead) then
     let p := match t with | .fn p .. | .const p .. | .classDef p .. => p
-    err p "a pointer type ^t: the Book's chapters define no pointers, and openverse has none (Book of Verse tests, Pointers.versetest)"
+    err p Refused.pointerType.message
   -- the attribute classes: the classes below `attribute`, by name
   let classes : List (String × List STy) := tops.filterMap fun
     | .classDef _ n _ _ _ ps false .. => some (n, ps)

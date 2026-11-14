@@ -427,6 +427,51 @@ partial def SExpr.attrHead : SExpr → String
   | .construct _ n _ _ => n
   | _ => ""
 
+/-- The forms openverse parses and has no meaning for, each with why it
+    refuses it. The parser writes each where it is: an expression as
+    `refusedForm`, a pointer type `^t` as the type `$pointer(t)`
+    (`pointerType`); `Attributes.apply` refuses the first, before anything
+    else reads the program, so that a program the Book's tests only parse
+    parses. -/
+inductive Refused where
+  /-- `(X) => e` (`parseRange`). -/
+  | lambda
+  /-- `e^` (`parsePostfix`). -/
+  | pointerDeref
+  /-- `^t`, refused where the definition that writes it is. -/
+  | pointerType
+  /-- `@h …` on an expression or a local definition (`parseExpr`). -/
+  | exprAttribute (h : String)
+  /-- `kw<sp>`, a specifier on a macro (`parsePrimary`). -/
+  | macroSpecifier (sp kw : String)
+  /-- `F(…):t` with no body (`parseTopsIn`). -/
+  | declaredFunction (name : String)
+  /-- `X:t` with no value (`parseTopsIn`). -/
+  | declaredData (name : String)
+
+def Refused.message : Refused → String
+  | .lambda => "a lambda (…) => … is a nested function, which openverse does not have (#492; the Book's ch. 6 marks nested functions as an unreleased feature; docs/research/closure-design.md)"
+  | .pointerDeref => "a pointer's dereference e^: the Book's chapters define no pointers, and openverse has none (Book of Verse tests, Pointers.versetest)"
+  | .pointerType => "a pointer type ^t: the Book's chapters define no pointers, and openverse has none (Book of Verse tests, Pointers.versetest)"
+  | .exprAttribute h => s!"@{h} is on an expression or a local definition: attributes go on the definitions of a module, a class, an interface, a struct or an enum, and on an expression only @ignore_unreachable (Book of Verse ch. 12)"
+  | .macroSpecifier sp kw => s!"<{sp}> on {kw}: a macro takes no specifier (class and struct take their construction's effects) (Book of Verse tests, InvalidAttributeLocations.versetest: 3604)"
+  | .declaredFunction n => s!"{n}(…) has no body: a declaration of a function defined elsewhere, which openverse has none of (native functions are not supported, #494)"
+  | .declaredData n => s!"{n}:t has no value: a declaration of data defined elsewhere, which openverse has none of"
+
+/-- A form openverse parses and refuses, `$refused(msg, e…)`: the refusal's
+    message, then the parts the form was written with. -/
+def refusedHead : String := "$refused"
+def refusedForm (p : Pos) (r : Refused) (es : List SExpr) : SExpr :=
+  .app p (.ident p refusedHead) (.str p [.text r.message] :: es) false
+
+/-- The refusal `refusedForm` wrote, and where. -/
+def SExpr.refused? : SExpr → Option (Pos × String)
+  | .app p (.ident _ h) (.str _ [.text msg] :: _) _ => if h == refusedHead then some (p, msg) else none
+  | _ => none
+
+/-- The type `^t` (`Refused.pointerType`), `$pointer(t)`. -/
+def pointerTypeHead : String := "$pointer"
+
 /-- A marker of the `case` arms marked `@ignore_unreachable`: a constant
     whose value is a block of one name at each arm's place (`TyEnv.ignoredArms`). -/
 def ignoredArmsMarker : String := "$uses:ignoredArms"

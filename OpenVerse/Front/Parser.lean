@@ -312,17 +312,6 @@ def profileOf (p : Pos) (tag : Option SExpr) (body : SExpr) : PM SExpr := do
   let tag := tag.getD (.str p [])
   return .block p [SExpr.decl p s!"$profile{p.line}_{p.col}" (some (.name "string")) false tag, body]
 
-/-- A form openverse parses and has no meaning for, `$refused(msg, e…)`:
-    `Attributes.apply` refuses it with `msg` before anything else reads the
-    program (the Book's tests parse it: pointers, lambdas, a macro's
-    specifiers). -/
-def refusedForm (p : Pos) (msg : String) (es : List SExpr) : SExpr :=
-  .app p (.ident p "$refused") (.str p [.text msg] :: es) false
-
-/-- The refusal of a lambda (`parseRange`). -/
-def lambdaMessage : String :=
-  "a lambda (…) => … is a nested function, which openverse does not have (#492; the Book's ch. 6 marks nested functions as an unreleased feature; docs/research/closure-design.md)"
-
 /-- At a `(`: whether its parameters end with the `)` right before a `=>`,
     a lambda's (`some true`), or not (`none`). -/
 def lambdaAhead? : PM (Option Bool) := do
@@ -417,7 +406,7 @@ partial def parseTypeAtom : PM STy := do
   -- (`Attributes.apply`)
   if t.isSym "^" then
     bump
-    return .app "$pointer" [← parseTypeAtom]
+    return .app pointerTypeHead [← parseTypeAtom]
   -- `type{_(:t₁, …)<effects>:r}`: a function type (#210)
   if t.identName? == some "type" && (← peekT 1).isSym "{" && (← peekT 2).identName? == some "_" &&
       (← peekT 3).isSym "(" then
@@ -590,8 +579,8 @@ partial def parseExpr (stop : Nat) : PM SExpr := do
   -- `@ignore_unreachable e` is `e`, whose position is recorded: no warning
   -- of code never reached follows it (`Reachability`), and a `case` arm
   -- may be one never reached (`parseCase`); other attributes on an
-  -- expression or a local definition, `$attributes`, are refused by
-  -- `Attributes.apply` (Book of Verse tests: 3604)
+  -- expression or a local definition are refused (`Refused.exprAttribute`,
+  -- Book of Verse tests: 3604)
   if t.isSym "@" then
     let attrs ← parseAttrs
     let e ← parseExpr stop
@@ -599,7 +588,7 @@ partial def parseExpr (stop : Nat) : PM SExpr := do
       -- (recorded for the warnings of code never reached, `Reachability`)
       modify fun st => { st with ignoredArms := st.ignoredArms.push e.pos }
       return e
-    return .app t.pos (.ident t.pos "$attributes") (attrs.map (·.2) ++ [e]) false
+    return refusedForm t.pos (.exprAttribute ((attrs.head?.map (·.2.attrHead)).getD "")) (attrs.map (·.2) ++ [e])
   if t.isKw "var" then
     bump
     let n ← expectBinder
@@ -691,7 +680,7 @@ partial def parseRange (stop : Nat) : PM SExpr := do
         bump
         let n ← peekT
         let body ← if n.offside stop || n.isSym ")" || n.isSym "," then pure (SExpr.block a.pos []) else parseValue stop
-        return refusedForm t.pos lambdaMessage [body]
+        return refusedForm t.pos .lambda [body]
   let a ← parseOr stop
   if (← peekT).isSym "=>" && !(← peekT).offside stop && !(← get).inMapKey &&
       (match a with | .ident .. | .tuple .. => true | _ => false) then
@@ -699,7 +688,7 @@ partial def parseRange (stop : Nat) : PM SExpr := do
     bump
     let n ← peekT
     let body ← if n.offside stop || n.isSym ")" || n.isSym "," then pure (SExpr.block q.pos []) else parseValue stop
-    return refusedForm t.pos lambdaMessage [a, body]
+    return refusedForm t.pos .lambda [a, body]
   let t ← peekT
   if t.isSym ".." && !t.offside stop then
     bump
@@ -862,7 +851,7 @@ partial def parsePostfix (stop : Nat) : PM SExpr := do
       -- `e^`, a pointer's dereference (Book of Verse tests, Roundtrip/
       -- Operators.versetest), which the Book's chapters do not define
       bump
-      e := refusedForm t.pos "a pointer's dereference e^: the Book's chapters define no pointers, and openverse has none (Book of Verse tests, Pointers.versetest)" [e]
+      e := refusedForm t.pos .pointerDeref [e]
     else if t.isKw "of" || t.isKw "at" then
       -- `F of X` is `F(X)` and `F at X` is `F[X]` (Book of Verse tests,
       -- `Operators/Of.versetest`, `Operators/At.versetest`): the argument
@@ -1503,7 +1492,7 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
       let sp := match (← peekT 2).tok with | .ident x => x | _ => ""
       modify fun st => { st with toks := st.toks.extract 0 (st.pos + 1) ++ st.toks.extract (st.pos + 4) st.toks.size }
       let e ← parsePrimary stop
-      return refusedForm t.pos s!"<{sp}> on {kw}: a macro takes no specifier (class and struct take their construction's effects) (Book of Verse tests, InvalidAttributeLocations.versetest: 3604)" [e]
+      return refusedForm t.pos (.macroSpecifier sp kw) [e]
   -- `type{_X:t where c, …}`: a refinement type (Book of Verse ch. 11)
   if t.identName? == some "type" && (← peekT 1).isSym "{" then
     bump; bump
@@ -2351,7 +2340,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) (par
       -- defined elsewhere, refused)
       if a.isEof || (a.bol && a.col ≤ (← get).topCol) || (!a.bol && (a.isSym ";" || a.isSym ",")) then
         tops := tops.push (.fn t.pos name ps.toList tps.toList (pre ++ effs) ret
-          (refusedForm t.pos s!"{name0}(…) has no body: a declaration of a function defined elsewhere, which openverse has none of (native functions are not supported, #494)" []))
+          (refusedForm t.pos (.declaredFunction name0) []))
         continue
       if a.isSym "=" || a.isSym ":=" then bump else perr a "expected '=' before the function body"
 
@@ -2394,7 +2383,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) (par
       let a ← peekT
       if a.isEof || (a.bol && a.col ≤ (← get).topCol) || (!a.bol && (a.isSym ";" || a.isSym ",")) then
         tops := tops.push (.const t.pos name pre (some ty)
-          (refusedForm t.pos s!"{name0}:t has no value: a declaration of data defined elsewhere, which openverse has none of" []))
+          (refusedForm t.pos (.declaredData name0) []))
         continue
       if a.isSym "=" || a.isSym ":=" then bump else perr a "expected '=' in a constant definition"
       tops := tops.push (.const t.pos name pre (some ty) (← parseFnBody))
