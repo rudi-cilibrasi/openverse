@@ -1218,6 +1218,17 @@ circle := class(shape, labelled):
     (#157) would have to hold itself (no program can build an object of
     such a type: each would need another first, so use `?node(t)` for a
     link that may be absent);
+  - variance: a parametric class or interface is invariant in its type
+    parameters, so a `producer(player)` is no `producer(entity)`, where the
+    Book infers covariance, contravariance or bivariance from the uses of
+    the parameter in the members (ch. 10, "Instantiation and Identity");
+    Verse Core relates references' type arguments by equality, so it needs
+    Verse Core ([research/variance.md](research/variance.md));
+  - a method override at a signature that needs a conversion (a result
+    `tuple(t, t)` for `[]t`, parameters `(X:int, Y:int)` taken as `(X:[]int)`,
+    `<decides>` or `<suspends>` dropped; the Book's tests
+    `CoercedOverrides.versetest`): an override has the signature of what it
+    overrides, but for a result of a class below the declared one.
 
 ## Attributes
 
