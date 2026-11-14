@@ -47,17 +47,18 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
 - **13,504 cases** from the 629 test files that hold one (of 636; seven are
   entirely commented out): 13,197 test cases and 307 cases for the shared
   definitions of a file.
-- **3,721 are not translatable** (28%): virtual packages and modules
+- **3,914 are not translatable** (29%; 3,721 before [After the remaining causes](#after-the-remaining-causes), which found 193 more of the test runner's names): virtual packages and modules
   (1,264); the compiler's test runner, its natives and classes (1,207), its
   coroutine controls `CoroUtils` (552) and its other modules (187); engine
   APIs (persistence, JSON, natives; 345); compiler tooling such as bytecode
   and digests (128); VM-conditional code inside a definition (37) and one
   file that defines `Main` itself (1).
-- Of the **9,783 translatable cases**, openverse **agrees on 8,214 (84%)**,
-  refuses 1,346 valid programs, **accepts 135 refused ones**, gives a
+- Of the **9,590 translatable cases**, openverse **agrees on 8,267 (86%)**,
+  refuses 1,148 valid programs, **accepts 87 refused ones**, gives a
   **different result in 88** (82 of them `verse_vm_only` cases of unbounded
-  ints) and hits **no internal error**. On test cases alone (without
-  `:decls`) it agrees on 8,049 of 9,567. (When the survey was
+  ints) and hits **no internal error** ([After the remaining
+  causes](#after-the-remaining-causes); before it, on main `7f12181`, of
+  9,783: 8,214 agreed, 1,346 refused, 135 accepted, 88 differed). (When the survey was
   taken, at `0e69cfb`: 6,409 agreed, 2,817 refused, 482 accepted, 86
   differed and 4 internal errors; before the parser forms, at main
   `99ed203`: 6,417 agreed, 2,809 refused, 482 accepted, 86 differed; with
@@ -1404,6 +1405,79 @@ rule openverse lacks: E1 (16); the harness's test runner names, free
 E4 (2); I1 with E7 (5); Q1 (2); C1, C2 (3); T1-T6 (6); L2, L3, L4 (11); S1,
 S2 (3); then the refusals: `spawn` in a failure context (13), `<computes>`
 with heap effects (20), the empty `assert:` bodies (5).
+
+## After the remaining causes
+
+The [map](#the-remaining-causes-a-map) worked down from its order, one
+cause or form per commit, each rule pinned in
+[book-remaining-rules.md](book-remaining-rules.md) and described in
+[LANGUAGE.md](../LANGUAGE.md); merged with main `669ba92` (#611) and
+`7f12181` (#612). Against main `7f12181` (8,214 agree, 1,346 refuse, 135
+accept, 88 differ, 3,721 not translatable), measured with each branch's
+own harness from fresh runs: **8,267 agree, 1,148 refuse, 87 accept, 88
+differ, 3,914 not translatable**; no case that agreed agrees no longer, and
+none became an accepted refusal or a different result.
+
+| Cause (main → now) | Done | Left, and what it needs |
+|---|---|---|
+| effect-checks (29 → 7) | 22: a named parameter's default is its function's (`DefaultNamed.versetest` 820-878, 16); a loop's body is no failure context (`SOL-1987…:22`, `SOL-4199…:80`, `Case.versetest:291`); a field's default cannot fail (`Effects.versetest:537`); a literal `for` filter (`for.versetest:223`); a module constant constructing a `<transacts>` class (`ParametricTypes.versetest:465`) | `no_rollback` as the default of a function (3, an owner decision: the Book disagrees with itself); `spawn`'s `<transacts>` effects (2, and 2 of the BPVM's: 12 tests spawn from narrower functions); the whole filter rule (153 tests, 826 generated programs) |
+| type-checks-other (25 → 20) | 5: a positional parameter's default, a named argument first, a struct's `var` field, a `return` out of a construction's field value, `option{}` | contravariant type parameters (3, variance: Core); `void` as a type argument (2); joins with two common supertypes (2); limits of Epic's compiler (6: polymorphic recursion, ShipVerse's tuple parameter, 3552); `using` paths (2) and the runner's path (1); an enum of 256 values (1, BPVM); `no_rollback` (1); a type parameter no parameter names (1) |
+| epic-limits (23 → 12) | 11: arrays and maps as map keys (8), a failing map literal key, a refinement's strict bound past the range (2) | the BPVM's code generation (10); a parametric interface's `var` field (1); variance (1) |
+| initializer-effects (8 → 4) | 4: a module constant has no side effect | link-time allocation at module scope (4, VerseVM's link check) |
+| interface-rules (7 → 3) | 4: an interface named twice among the parents | `<override>` in an interface (3: openverse's interface defaults, #53, 32 tests and 45 generated programs; an owner decision) |
+| control-forms (5 → 3) | 2: a loop that nothing leaves outside `<suspends>` | an immediate arm of `race` (1: 9 tests race one; an arm calling a suspending function value is not yet known to suspend); `using{/localhost…}` (2: openverse ignores the paths it has not) |
+| qualified-names (6 → 6) | | `(super:)` of another method or in a block (2: 27 tests, 20 generated programs); the warnings 2003 and 2004 (4) |
+| name-limits (19), concrete-classes (7), syntax-other (3), and one each of duplicate-definitions, final-members, persistable | | the BPVM's name limits; the owner's question; parser checks of `.`+space and a field's separator; `enum{public}`; a final method and an interface's; an enum's `<persistable>` |
+| library-chars (145 → 0) | not translatable: the test runner's free `ToChar(N)`, `ToChar32(N)` | |
+| module-objects (21 → 4), types-other (147 → 122), archetype-blocks (36 → 31), library-other and spawn (1 each) | not translatable: 48 cases of the runner's names (`MakeNull`, `native_property_rollback_test`, …) | module constants of `<unique>` objects (Core module state) |
+| empty-bodies (5 → 0) | 5: an `assert:` of comments only is an empty body (the harness) | |
+
+- **Programs.** Over every suite and the corpus `corpus2`, against main
+  `7f12181`: no program changed its bytes, output or messages but the new
+  tests and those the commits list. Refused by a rule now: 116 + 27 + 86
+  generated programs of `corpus2` (`gadt_defaults` 9, `gadt_spawn_defaults`
+  14, `gadt_waiting_contexts` 20, `generic-mv` 53 and 86 more,
+  `gadt_contexts` 20, `equality` 27), and the error tests whose message the
+  rules change (`default_fails`, `multi_named_default_fails`,
+  `suspends_default`, `signal_no_rollback_constant`). Tests rewritten for
+  a rule, output the same: 23 that built a module constant through an
+  unannotated helper or class (`<computes>` added), 5 that wrote a named
+  argument first, 2 that declared a struct's field `var`, 2 whose function
+  failed out of a loop (`class_cast_refine_for_return_lazy`,
+  `choice_suspends_return_lazy_returns`, the function dropped),
+  `overflow` (a `break` never taken), `empty_values_nested` (a map keyed by
+  an option), `initializer_convergence_hidden_first` (its `first{}` in
+  `option{}`); 54 tests of openverse's own default reading select
+  `--extended-defaults`, their bytes the same.
+- **Where the Book disagrees with itself** (openverse follows the tests):
+  a `<decides>` body's loop (ch. 8 line 122 against
+  `SOL-4199-BreakFromIf.versetest:79`); maps as map keys (ch. 3 line 1025
+  against line 760 and `Map.versetest` 223-224); `var` in a `for` clause
+  (ch. 7 lines 842-843 against `for.versetest:235-236`); and, left, the
+  default effects of a function (ch. 13 line 302 against
+  `Effects.versetest:490`), `(super:)` (ch. 10 line 379 against
+  `Super.versetest:192`), `spawn` "anywhere" (ch. 14 line 737 against
+  `Effects.versetest:558`), and a loop of `break` alone (ch. 7 line 532
+  against `Break.versetest:4`).
+
+### What is left
+
+Of the map, the causes whose subjects are other work (metatypes, about
+76; the attributes' 4) or unreleased in the Book (union types 136, live
+variables 50, nested functions 29, all VerseVM-only or marked "Unreleased
+Feature"), and: the Core and runtime items (`ToDiagnostic`, 93: an `any`
+that keeps its value, a printer and a shortest float formatter; variance,
+38 and 15 more; weak maps, 23; module state, 4; F-bounded classes, 6;
+`GetRandomInt` and a clock); the owner's decisions (`no_rollback`,
+`<override>` in an interface, `(super:)`'s reach, `spawn`'s effects and
+`spawn` in a failure context, 13 more agreeing at the cost of 7 different
+results through awaiters run inside `Signal`; `true` and `false` as
+types, 19; `<concrete>` subclasses); and front-end features, each of its
+own: `<computes><allocates>` classes (20, with `Choice.inlineFns`'s test
+of what is effect-free), localization (34), operator definitions (14),
+generators in `first` (18), partial modules (11), two members of one name
+(12), empty containers typed `[]false` (23), `set` through a call's
+result (6), and the parser forms of `TimSyntax.versetest`.
 
 ## Ten causes to remove first
 
