@@ -93,6 +93,13 @@ partial def rewriteCalls (fns : List (String × List (Nat × String))) (tps : Li
     match fns.lookup f with
     | some places => return .app p h (← rewriteArgs f places tps args) false
     | none => return e
+  -- (a bracket call, `F[int, X]`, which gives none: said, not read as a
+  -- value of the parameter)
+  | .app _ (.ident _ f) args true =>
+    match (fns.lookup f).bind fun places => places.find? fun (i, _) => (args[i]?.bind writtenType?).isSome with
+    | some (i, t) =>
+      throw s!"{(args.getD i default).pos.show}: {f}[…] gives its type argument {t} in brackets, which openverse does not support yet: a type is given as an argument in a call with parentheses only"
+    | none => return e
   | e => return e
 
 /-- The program with its functions' type arguments written as type

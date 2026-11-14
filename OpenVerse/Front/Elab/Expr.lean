@@ -7,6 +7,7 @@ import OpenVerse.Front.Elab.ExpressionValues
 import OpenVerse.Front.Elab.ExpressionMarkers
 import OpenVerse.Front.Elab.ExpressionInitial
 import OpenVerse.Front.Elab.Comparisons
+import OpenVerse.Front.Localization
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -583,6 +584,10 @@ partial def resolveOverload (ctx : Ctx) (p : Pos) (name : String) (ovs : List St
     let ntys ← namedArgs.mapM fun (n, a) => do return s!"?{n}:{(← elabE ctx a none).ty.show}"
     let tys := tys ++ ntys
     set st
+    -- (a localized message's parameter, rendered by the helper: said in the
+    -- source's terms)
+    if let (true, [.ident _ x], [ty]) := (name == Localization.valueHelper, posArgs, tys) then
+      eerr p (Localization.notRendered x ty)
     eerr p s!"no overload of {name} takes ({", ".intercalate tys})"
   | _ :: _ :: _, _ =>
     let shown := ok.map fun o => s!"({", ".intercalate (((sigOf o).map (·.params)).getD [] |>.map Ty.show)})"

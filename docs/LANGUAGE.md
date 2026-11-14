@@ -2662,8 +2662,9 @@ Main():void =
   applied (`c(int)`, `tuple(int, float)`); `[]int` and `?int` are not yet
   written as arguments. Refused: a value there, a type parameter there (the
   BPVM's link error; VerseVM accepts it), such a parameter after a parameter
-  whose type uses it (`F(X:t, t:type)`, the Book's tests, 3502), and such a
-  parameter of a method.
+  whose type uses it (`F(X:t, t:type)`, the Book's tests, 3502), such a
+  parameter of a method, and, not yet supported, a type given in a call in
+  brackets (`First[string, Xs]` of a `<decides>` `First(t:type, Xs:[]t)`).
   A parameter `t:type` used as a value is a type value's (above).
 - **Conversions.** `t(X)`, with `t` a built-in type's, a struct's or an
   enum's name, or a type written in parentheses, `(?int)(X)`, `([]int)(X)`,

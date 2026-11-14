@@ -37,6 +37,15 @@ def spec : String := "localizes"
 def names : List String :=
   ["localize", "localizeValue", "localizeGrouped", "localizeJoin", "X", "N", "Q", "R", "Ms", "Sep", "I", "M"]
 
+/-- The helper that renders a message's parameter's value, overloaded on
+    the types a message renders (`prelude`). -/
+def valueHelper : String := "$localizeValue"
+
+/-- Why a message's parameter `x` of type `ty` is refused: no overload of
+    `valueHelper` takes it, as the tests refuse it. -/
+def notRendered (x ty : String) : String :=
+  s!"the parameter {x} of a <localizes> message is a {ty}, which a message does not render: its parameters are ints, floats, strings and messages (Book of Verse tests, Localization.versetest: \"No overload of the function `MakeLocalizableValue` matches\")"
+
 def prelude : String := "
 localize(X:string)<computes>:string = X
 localize(X:int)<computes>:string = ToString(X)
@@ -138,7 +147,7 @@ partial def desugar (tops : List STop) : Except String (List STop × Bool) := do
           pre.filterMap fun | .decl _ x _ _ _ => some x | _ => none
         let vals := bound.map fun x => (x, s!"$localized{x}")
         let renders := vals.map fun (x, v) =>
-          SExpr.decl q v none false (.app q (.ident q "$localizeValue") [.ident q x] false)
+          SExpr.decl q v none false (.app q (.ident q valueHelper) [.ident q x] false)
         used := true
         out := out.push (.fn p n ps tps (specs.filter (· != spec)) ret
           (.block q (pre ++ renders ++ [.str q (← text q parts vals)])))
