@@ -1,0 +1,7 @@
+ender got 1
+watcher got 2
+listener got 20
+watcher signalled
+late got 1
+signal returned
+exit=0

@@ -1,6 +1,6 @@
 # a rush loser (registered, not run at once) that awaits a cancelled task
-# later, when the scheduler resumes it: it alone is cancelled. Expected:
-# F got 5 / loser defer / F end / F defer / main end
+# later, when the scheduler resumes it: it waits there until F's exit stops
+# it. Expected: F got 5 / F end / F defer / loser defer / main end
 W()<suspends>:int =
     Sleep(9.0)
     1

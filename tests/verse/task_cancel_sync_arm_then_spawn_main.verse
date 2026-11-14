@@ -1,7 +1,8 @@
 # Main's sync: arm 1 awaits a cancelled task, arm 2 spawns C before waiting.
-# Expected: Main awaited a cancelled task, so Main is cancelled at its wait
-# and the program ends: "Main defer" only (C's defer does not run: the
-# program ends with Main).
+# Expected: arm 1 waits for ever (the Book's API, task, Await), so the sync
+# never ends; arm 2 and C go on to their ends, and then no task can run:
+# the program ends as a Main that waits with no task able to run does
+# (exit 2), Main's defer not run: arm 2 goes on / C end / C defer.
 W()<suspends>:int =
     Sleep(9.0)
     1

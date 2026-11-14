@@ -10,7 +10,9 @@ The model follows docs/LANGUAGE.md "Concurrency": polling scheduler, 30 ticks/s,
 Main first then roots in start order, repass while something ended/was
 cancelled/was signalled, arms in source order, race losers cancelled last
 started first, rush losers become roots (stopped at function exit with the
-branches, last started first, after the function's defers)."""
+branches, last started first, after the function's defers). A Signal and a
+task's end resume their awaiters inside them, in the order they suspended or
+registered; a cancelled task's awaiters wait for ever (the Book's API)."""
 import random, sys, os
 from collections import Counter
 
@@ -26,6 +28,9 @@ class Deadlock(Exception):
 class Task:
     def __init__(self):
         self.done = False; self.cancelled = False; self.result = None; self.root = None
+        # (its end: an event of its own, made by its first awaiter, which the
+        # task's end signals; a cancelled task's never is)
+        self.ends = None
         # (a cancel of it while it runs, taken after that run, #253, #260)
         self.req = False
 
@@ -38,15 +43,12 @@ class Root:
     """A root of the scheduler: Main, a spawned task's call, a branch or a
     rush loser. Its owner is the task whose code it runs: a spawned task's
     own, or for a branch or loser the task running when it was made (#260).
-    `cancel_req`: the root asked to be cancelled after its run (it awaited a
-    cancelled task)."""
+    `cancel_req`: the root asked to be cancelled after its run (stopped
+    while it ran)."""
     def __init__(self, kind, gen, task=None, owner=None):
         self.kind = kind; self.gen = gen; self.task = task
         self.owner = owner if owner is not None else (task if task is not None else MAIN_TASK)
         self.done = False; self.cancel_req = False
-        # (it awaited a cancelled task: cancelled after its run, unless the
-        # request comes from a walk down its running code, which drops it)
-        self.await_req = False
         # (the sync, race or rush its own code runs at its top, if any)
         self.top = None
 
@@ -114,9 +116,6 @@ class Sched:
         if root.cancel_req and not root.done:
             root.cancel_req = False
             self.cancel_root(root)
-        if root.await_req and not root.done:
-            root.await_req = False
-            self.cancel_root(root)
 
     def cancel_root(self, root):
         if root.done:
@@ -182,22 +181,17 @@ def m_sleep(d):
 
 
 def m_await_task(task):
+    """The Book's API (task, Await): a completed task's result at once;
+    else an await of the task's end, which resumes its awaiters in the order
+    they registered, inside the task's last step (`m_spawn`). A cancelled
+    task's end never comes: its awaiters wait for ever (unless cancelled
+    themselves, which deregisters them)."""
     if task.done and not task.cancelled:
         return task.result
-    if task.cancelled:
-        S.cur().await_req = True
-    while True:
-        yield
-        # (inside a Signal, held for its root's turn in the pass)
-        if S.drain > 0 or S.probe:
-            if S.drain > 0 and not S.probe and (task.done or task.cancelled):
-                S.progress = True
-            continue
-        if task.cancelled:
-            S.cur().await_req = True
-            continue
-        if task.done:
-            return task.result
+    if task.ends is None:
+        task.ends = Event(False)
+    yield from m_await_event(task.ends)
+    return task.result
 
 
 def m_await_event(ev):
@@ -246,17 +240,11 @@ def wake(root):
     if root in S.running:
         if root.top is None:
             return
-        saved = root.await_req
         S.running.append(root)
         try:
             partial_site(root.top)
         finally:
             S.running.pop()
-        # (a request to cancel it from the walk is dropped: the pass, which
-        # polls it again, asks again)
-        if root.await_req and not saved:
-            S.progress = True
-        root.await_req = saved
     else:
         S.poll(root)
 
@@ -413,6 +401,11 @@ def m_spawn(gen):
 
     def wrap():
         v = yield from gen
+        # (its end: the result set, then its awaiters resumed, inside this
+        # last step, as a Signal's round)
+        task.done = True; task.result = v
+        if task.ends is not None:
+            m_signal(task.ends, None)
         return v
     root = Root("spawn", wrap(), task)
     task.root = root

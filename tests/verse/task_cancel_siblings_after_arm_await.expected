@@ -1,8 +1,8 @@
-A defer
 B end x
 B defer x
 B end y
 B defer y
 G end
+arm 2 ends
 main end
 exit=0

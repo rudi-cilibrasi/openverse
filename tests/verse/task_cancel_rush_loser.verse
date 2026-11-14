@@ -1,5 +1,7 @@
 # F's first run: a rush whose arm 1 awaits a cancelled task (and waits),
-# while arm 2 ends at once and wins; arm 1 goes on as a loser task.
+# while arm 2 ends at once and wins; arm 1 goes on as a loser task, still
+# waiting, until F's exit stops it. Expected: F got 5 / F end / F defer /
+# loser defer / main end
 W()<suspends>:int =
     Sleep(9.0)
     1

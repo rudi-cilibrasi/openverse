@@ -1,4 +1,7 @@
-# T.Cancel() unwinds a task (its defers run); awaiting a cancelled task cancels the awaiting task; a task cancelling itself stops at its next wait; a done task is not changed (#156)
+# T.Cancel() unwinds a task (its defers run); a task awaiting a cancelled task
+# waits for ever, the Book's API (task, Await: "a cancelled task never resumes
+# its awaiters"): its defer never runs, as the program ends with Main; a task
+# cancelling itself stops at its next wait; a done task is not changed (#156)
 Worker(Name:string)<suspends>:int =
     defer:
         Print("{Name} unwound")
