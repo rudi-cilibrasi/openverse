@@ -1338,6 +1338,200 @@ translatable** (re-recorded from a fresh run on the merged compiler).
 - **Programs.** Against main, over every suite and the corpus `corpus2`
   (5,825 programs), no program's bytes, output or messages changed.
 
+## Classes and subtyping: the map
+
+The causes about classes and subtyping, the largest front-end group left,
+measured on main `e451452` (8,236 agree, 1,305 refuse, 135 accept, 88
+differ). For each: its forms (cases looked at with `show`), the Book's
+rule, the VM tags, what openverse does, the mechanism a change extends,
+the size, and then an order by cases per unit of risk. Chapter lines are
+of the Book's `docs/`, test lines of its `Tests/`.
+
+**class-specifiers (84) and library-other (15 of them).**
+- *Forms.* `<final_super>` on a class (72 cases of
+  `GetCastableFinalSuperClass.versetest`, 7 of
+  `Attributes/FinalSuperAttribute.versetest`, `Castable.versetest:659`,
+  `MetatypeConcreteSubtype.versetest:58`), refused as "not supported yet
+  (#11)"; and the two functions of the API reference,
+  `GetCastableFinalSuperClass[B, X]` and
+  `GetCastableFinalSuperClassFromType[B, T]`, "unknown function" (15 cases
+  of the same file, under library-other, whose slice has no `<final_super>`
+  class). The other three are not classes: `<converges>`
+  (`Effects.versetest:304`), `<native_callable>`
+  (`ModuleDefinitions.versetest:164`), `<persistable>` (#11).
+- *Rule.* Ch. 10, "Final" (`10_classes_interfaces.md:2904-2950`):
+  `<final_super>` "guarantees that all subclasses of this class will always
+  directly inherit from it"; `<final_super_base>` "marks the root of a
+  restricted inheritance tree" and works with `GetCastableFinalSuperClass`,
+  "which finds the `<final_super>` class in the hierarchy for a given
+  instance". Ch. 11, "final_super and Type Queries"
+  (`11_types.md:1673-1840`): both functions return "the least specific
+  `<final_super>` class that: 1. Directly inherits from the specified base
+  type 2. Is in the inheritance chain of the instance/type", and fail
+  otherwise. The API reference: `GetCastableFinalSuperClass(base_type:type,
+  Instance:base_type)<reads><decides>:castable_subtype(base_type)`,
+  "Return an immediate subclass of base_type that is <castable> and
+  <final_super> and is also shared with Instance. Otherwise failure", and
+  `GetCastableFinalSuperClassFromType(base_type:type,
+  sub_type:subtype(base_type))`, the same "shared with sub_type". The
+  tests add: a `<final_super>` class needs a parent (3679,
+  `FinalSuperAttribute.versetest:51`), a class right below a
+  `<final_super_base>` class or interface is `<final_super>` (3680; built
+  already), an interface below one need not be (:28); the instance must be
+  of the base type (3509, `GetCastableFinalSuperClass.versetest` 102-125);
+  the result is a `castable_subtype` of the first argument (127-145,
+  182-202); the class found must be castable (332, 337); and a type that
+  is not a class (`int`, `float`, `any`, 297-304) makes the call fail.
+- *VM.* `verse_vm_todo` ("not defined in the new VM because of gaps in VNI
+  support for types", `GetCastableFinalSuperClass.versetest:29`): the
+  BPVM's expectations, with no VerseVM twin; the survey counts them.
+- *openverse.* Refuses `<final_super>` (`classHierarchy`) and knows neither
+  function. The specifier's places (`EffectPolicy.specifierPlaces`) and the
+  3680 rule are built.
+- *Mechanism.* `resolveSpecifiers`/`CDef` for the specifier;
+  types as values (`TypeValues.desugar`, [types-as-values.md](types-as-values.md))
+  for the result: `C` as a value is an object of `$type:C`, below
+  `castable_subtype(B)` for each `B` above a castable `C`. A call becomes a
+  call of a helper the front end writes, a chain of casts `C[X]` over the
+  candidate classes, topmost first. No Verse Core.
+- *Size.* Up to 96 cases (81 + 15), and the 7 refusals of the file keep
+  agreeing, each by its rule.
+
+**effects-of-classes (28).**
+- *Forms.* `<computes>` with `<allocates>` (or `<reads>`, `<writes>`) on a
+  class or an interface (`Attributes/allocates.versetest` 6, 13, 57;
+  `Attributes/unique.versetest` 90-137; the key classes of `Map.versetest`,
+  `Operators/CompareMap.versetest` and `weak_map.versetest` 6, 624, 639,
+  667-669). The same form on a struct (`allocates.versetest:20`,
+  syntax-other) and a function (`:27`, types-other) is refused for the
+  same reason.
+- *Rule.* Ch. 13 (`13_effects.md:99-105`): "Effect specifiers can be
+  further divided into *exclusive* specifiers (`<converges>`, `<computes>`,
+  `<transacts>`) and *additive* specifiers (`<suspends>`, `<decides>`,
+  `<reads>`, `<writes>`, `<allocates>`). A function may have at most one
+  exclusive specifier but can combine multiple additive ones"; the table
+  (`:115-116`): `<computes>` implies `{}` of the heap. The tests:
+  `allocates.versetest:4-5`, "Combines with <varies> and <computes>, but
+  redundant with <transacts>", and `unique.versetest:87-89`, "<varies> and
+  <computes> require an explicit <allocates>".
+- *VM.* None.
+- *openverse.* Refuses `<computes>` with any heap effect, for classes and
+  functions (`EffectPolicy.checkSpecs`, `Signatures.checkExclusive`).
+- *Mechanism.* The effect sets: `<computes>` with additive heap specifiers
+  is the set of those specifiers (`constructionFx`, `allowedFx`).
+- *Size.* 28, and the struct's and function's 2.
+
+**override-defaults (47).** Three forms.
+- *(a) A field `<override>` without a value* (`Attributes/override.versetest`
+  3, 33, 133, `:decls`; `Attributes/concrete.versetest` 59, 110, 230;
+  `SOL-3366:53`; `SOL-3731` 22, 23, `:decls`; `InterfaceWithFields` 377,
+  `:decls`; `AccessLevelInheritance:863`), refused: "must give a new
+  default". Ch. 10, "Overriding Members" (`10_classes_interfaces.md:3172-3175`):
+  "Field overrides can provide different default values or specialize to
+  subtypes"; the tests construct the class with the field given
+  (`override.versetest:33`), and `concrete.versetest:110-114` re-declare a
+  defaulted field with no value ("is this actually valid?").
+- *(b) A field overridden at a subtype* (`MetatypeConcreteSubtype` 13:
+  `comparable` to `int`, `float`, `logic`; `Any.versetest` 163, 164: `any`
+  to `int`; `Bugs/BPVMOnly/RefinedMapKeyInterfaceOverride` 7: `int` to a
+  refinement, a class to a `<unique>` one, tuples and options of them;
+  `InterfaceWithFields:358`: a class to its subclass; and with (a):
+  `override.versetest` 3, 133, `SOL-3731`, `AccessLevelInheritance:863`,
+  `InterfaceWithFields:377` (`[]int` to `tuple(int, int)`)), refused:
+  "must have the type it inherits". The same quotation: "fields can only
+  be overridden with subtypes". The BPVM-only file has no VerseVM twin.
+- *(c) A method overridden at a coerced signature*
+  (`CoercedOverrides.versetest` 99-111: parameters `(X:int, Y:int)` by
+  `(X:[]int)`, then by `(X:any)`, `<decides>` dropped;
+  `FORT-642876-CollidingCoercedOverrideNames` 86-193: results `[]t` by
+  `tuple(t, t)`, `<suspends>` dropped; `ParametricTypes.versetest:578`:
+  `F(:tuple())` by `F()`), refused: "must have the signature of". Ch. 10
+  says "method signatures must match exactly" (`:3175`), but allows a
+  narrower result (`:539-567`).
+- *openverse.* A class's table gives a field the type of the topmost class
+  that has it (`TyEnv.coreFieldTy`); an override gives only a new default.
+- *Mechanism.* (a): `classFields`, a field with no default; (b): a field a
+  class types otherwise than one above it, read through accessors
+  (`TyEnv.fieldAcc`, #205), the class table at the narrower type; (c): the
+  dispatch adapters of #351 that coerce a result.
+- *Size.* (a) 7 alone, (b) 25 more with (a), (c) 10.
+
+**variance (38) and archetype-blocks (36).**
+- *Forms.* `c(sub)` where `c(super)` is expected and the reverse, for
+  classes and interfaces covariant, contravariant or bivariant in their
+  parameter (`ParametricTypes.versetest` 59-177, 506, 537). The 34
+  archetype-blocks cases of the same file stop at the parser first:
+  `X:sup_f(sub) := sub_f(sup):`, a construction of a parametric class by a
+  block archetype with no fields, in the file's shared modules
+  (`ClassContravariantSubtyping` and the like), and those modules convert
+  across variance, so every case of the file that takes the shared
+  definitions needs variance as well. (`FunctionAsType` 183, 198 are
+  VerseVM-only natives.) `SOL-6739-ParametricTypeMeetAndJoin` (8, under
+  subtyping-to-any) joins such types.
+- *Rule.* Ch. 10, "Instantiation and Identity" (`:1312-1490`): "The
+  variance of a parametric type depends on how the type parameter is used
+  within the class definition": covariant in return positions, contravariant
+  in parameter positions, invariant in both, bivariant in none, and
+  "Variance is computed over a type's full member set, including members
+  inherited from a parametric base".
+- *openverse.* Parametric classes are invariant. Verse Core's subtyping of
+  references (`VTy.sub`, `Core/Typing.lean`) requires the target's type
+  arguments to be a prefix of the source's, equal position by position, and
+  the typing of a reference (`hasTy`) requires the object's recorded type
+  arguments (`HeapTy`) to have the type's as a prefix, exactly. A view
+  (#351) relates arguments by equalities only. A front-end conversion
+  cannot help: the value is a reference, so a copy would lose its identity
+  (`var` fields, `<unique>`), and representing a covariant parameter
+  otherwise (boxed in `dyn`) would change every parametric class's layout.
+  So variance needs Core: to be designed in a research note of its own
+  (`variance.md`) and left for the owner.
+- *Size.* 38 + 34 + 8.
+
+**singleton-types (19)** (`Void.versetest` 13, `FindFirstAsync…` 3,
+`FORT-1054384` 2, `ParametricTypes:711`): `true` and `false` written as
+types (`X:true = false`, `Y:?true = X` with `X:?void`). Not classes: the
+type `true` holds the empty value alone and `false` none, which is the
+empty-value work's (#600) to define; left.
+
+**subtyping-to-any (11).** 8 are variance (`SOL-6739`); 3 convert a value
+to one with `any` inside, `[int]string` to `[t]any` (`Any.versetest:60`)
+and `type{_(:int):int}` to `type{_(:int):any}` (`Any.versetest:152`,
+`SOL-3799:16`), a rebuilt map and a wrapped function value: not classes;
+left.
+
+**interface-rules (7 accepted that the tests refuse)** and the class cases
+among type-checks-other and effect-checks: `Interface.versetest` 33, 40, 92
+and `InterfaceDiamond:74` (an interface named twice among the parents) are
+`feat/book-remaining-causes`'s; `Interface.versetest` 194, 199 and
+`InterfaceDiamond:89` (`<override>` in an interface) the owner's; and
+`ParametricTypes.versetest:465` (a module constant that constructs a
+`<transacts>` class) is that branch's "a module constant has no side
+effect". Two are classes and one check each:
+`ParametricTypes.versetest` 263, 265 (a parametric class whose field names
+itself at other type arguments) and 269 (two parametric classes whose
+fields name each other). Ch. 10, "Disallowed: Polymorphic Recursion" and
+"Disallowed: Mutual Recursion" (`:1578-1630`): "Polymorphic recursion
+occurs when a parametric type references itself with a **different type
+argument**", "Mutual recursion between multiple parametric types is not
+supported either". `SOL-5838` 13, 22 refuse an array of two classes whose
+nearest common supertypes are two (a class and an interface) even at an
+expected element type both are below; openverse takes the expected type
+there by design (LANGUAGE.md, "Subtyping and dispatch"), so it is a
+reading for the owner, left.
+
+**Order** (cases per unit of risk; dangerous first when cheap):
+1. Polymorphic and mutual recursion of parametric types: 3 accepted
+   refusals, one check in `classHierarchy`; risk: programs of openverse's
+   own that have such fields.
+2. `<final_super>` and the two functions: up to 96 cases, new forms only
+   (no program that compiles today changes).
+3. `<computes>` with additive heap effects: 30 cases, one rule in two
+   places; programs that test the old refusal change.
+4. Field overrides without a value, then at a subtype: 32 cases; the
+   second changes the class table's field types and reads.
+5. Method overrides at coerced signatures (10): adapters; after 4.
+6. Variance (80 with the cases it unblocks): Verse Core, designed only.
+
 ## Ten causes to remove first
 
 Ranked by cases moved per unit of risk. A count is the upper bound above;
