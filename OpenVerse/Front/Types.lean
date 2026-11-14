@@ -513,6 +513,22 @@ def Ty.emptyValue? : Ty → Option Value
   | .arr _ | .map _ _ | .weakMap _ _ => some Value.emptyArray
   | _ => none
 
+/-- `b` is `a` with `tuple()` (the Book's `true`) for some of its `void`s,
+    inside a container or a tuple too: one type, as the Book has it (ch. 2,
+    "void, true, tuple() and false": "the types `void`, `true` and
+    `tuple()` all describe it … These are interchangeable", "?void and
+    ?true interchange"; the tests, `Void.versetest` 50-80, `[]void` to
+    `[]true`), and one in Verse Core, where `void` is `tuple()`. Not a
+    class's or an interface's type arguments, a function type's: the
+    classes a call dispatches to are those at its type's arguments
+    exactly. -/
+partial def Ty.unitUp : Ty → Ty → Bool
+  | .void, .tup [] => true
+  | .arr a, .arr b | .opt a, .opt b => a.unitUp b
+  | .map k v, .map k' v' | .weakMap k v, .weakMap k' v' => k == k' && v.unitUp v'
+  | .tup as, .tup bs => as.length == bs.length && (as.zip bs).all fun (a, b) => a.unitUp b
+  | a, b => a == b
+
 /-- The types of the empty value alone: `tuple()`, and `void`, which takes any value and makes it that one (Book of Verse
     ch. 2: "Any value converts to `void`"). -/
 def Ty.isUnit : Ty → Bool

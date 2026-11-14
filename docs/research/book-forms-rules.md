@@ -299,13 +299,7 @@ the tests: `Suspend()<suspends>:false = Suspend()`
 **openverse now.** `resolveTy` names it; a call of a function whose result
 is `false` converts to any type as the other values of that type do
 (`coerce`, a `void` in Verse Core followed by `Err()`, never reached). No
-program's code changes. **Left:** `true` as a type (10 cases:
-`Void.versetest` 50-177, 253, 267, `FORT-1054384…`): the type of the empty
-value alone, as `tuple()`, which `void` must not convert to (the tests
-refuse `Result:true = branch: …`, `FORT-582630-BranchResult.versetest:3`,
-3509), while `()` and `false` must (`Flag:true = false`, ch. 2,
-`02_primitives.md:1240`): openverse types `()` as `void`, so `true` needs
-the empty tuple's literal typed `tuple()` first.
+program's code changes. `true` as a type: [below](#true-as-a-type).
 
 ## Localized messages
 
@@ -361,3 +355,84 @@ is expected (`Array.versetest:108`: `false`, a `logic`, is no operand of
 `+`), and `array{}.ReplaceAll(array{}, array{})` (`ArrayReplaceAll.versetest:12`:
 the helper's type parameter, which only arrays of `false` meet, is not
 inferred).
+
+## `true` as a type
+
+**The rule.** `true` written as a type is the type of the empty value
+alone, as `tuple()` is: `false` and `()` are its values, a `void` value
+converts to it, and it converts to `logic` (as `false`), to `void` and to
+an empty array. `void` and `true` are one type inside options, arrays and
+maps: `?void` converts to `?true`, `[]void` to `[]true`, `[int]void` to
+`[int]true`; a `void` value converts to `logic` as `false`, as `true`'s
+does. A `branch:`'s value is an `any`: `void` and `any` take it, `true`
+does not. `X:true = 1` is refused, as `X:tuple() = 1` is.
+
+**The Book.** Ch. 2, "void, true, tuple() and false"
+(`02_primitives.md:1232-1310`): "Verse has a single "there is nothing
+interesting here" value. It can be written `false` or `()`, and the types
+`void`, `true` and `tuple()` all describe it. These are interchangeable"
+(`:1234-1236`), `Flag:true = false` (`:1253`), "`true` is a subtype of
+`logic`, so the unit value flows into logic positions" (`:1261`), "and
+`void`/`true` interchange through optionals, arrays and maps"
+(`:1294`, `MaybeTrue:?true = MaybeVoid`). The tests,
+`Tests/Void.versetest`: `?void` to `?true` (`:50`, `:56`), `[]void` to
+`[]true` (`:68`), `[int]void` to `[int]true` (`:80`), `F:int->true =
+VoidOutput` (`:100`), the joins of `int->true` and `int->void` values
+(`:161`, `:165`) and of `(:true)->int` and `(:void)->int` ones (`:169`,
+`:173`), `X:true = false` (`:177`), `X:logic = if (false?) then () else
+true` (`:215`, `:219`), `[]true` and `?true` where a type parameter is
+`[]void`, `?void` (`:253`, `:267`); `F1(X:void)<computes>:true = X` and
+`set X = I()` with `I():void` into `var X:true`
+(`Bugs/FORT-1054384-Void-Any-Meet.versetest` 17-25); and
+`Result:true = branch: …` refused (3509) where `Result:any = branch: …`
+is valid (`Bugs/FORT-582630-BranchResult.versetest` 3-14): a `void`
+converts to `true`, so a `branch:`'s value is no `void`.
+
+**openverse before.** "unknown type 'true'"; `tuple()` was the type (with
+`void` converting to it at the top only), `void` did not convert to
+`logic`, and a `branch:` gave `void`.
+
+**openverse now.** `resolveTy` names `true` `tuple()`; `convert` takes a
+type to the same type with `tuple()` for some of its `void`s inside
+options, arrays, maps and tuples (`Ty.unitUp`; one Verse Core type, so no
+code), and `void` to `logic` (`false`); `joinTyShaped` joins two such types
+at the one with `tuple()`, and `join` an `if` with a `void` branch where a
+`logic` is expected at `logic`; `elabBranch` types a `branch:`'s value
+`any` (its code the same; in a program where an `any` prints itself,
+`ToDiagnostic`'s, the empty value's object). Programs: those listed in the
+commit whose code changes.
+
+**Left.** `true` and `void` in a function type (`Void.versetest` 100,
+161, 165, 169, 173: `F:int->true = VoidOutput`, `if (…) { TrueOutput }
+else { VoidOutput }`): `int->true` is `int->tuple()`, another instance of
+the function shape than `int->void`, and the classes a call of a function
+value dispatches to are those at its type's arguments exactly. Making a
+shape's `tuple()` its `void` breaks openverse's empty-tuple parameter, a
+function of no parameters taken as one of a `tuple()` parameter
+(`fn_values_open_tuple_small`, #231), so it needs the dispatch to relate
+shape instances whose arguments differ in `void` and `tuple()` alone (one
+Verse Core type). `true?`'s value, below.
+
+## The value of `true?`
+
+**The Book disagrees with itself** (already on [the
+wiki](https://github.com/rudi-cilibrasi/openverse/wiki/Where-the-Book-disagrees-with-itself),
+"The value of `X?` on a `logic`"): ch. 8 (`08_failure.md:57`) "succeeds
+with that value", and ch. 4 "equivalent to comparing against true";
+the tests make it the empty value: `assert{true?=false}`, `assert{not
+true??}` (`Tests/Operators/BoolQuery.versetest` 3, 4), `(true? and true?) =
+false` (`Operators/LogicalAnd.versetest:29`), `x := true? or true; x =
+false` (`Operators/Precedence.versetest:121`), as ch. 2's `true` type has
+it. openverse follows the tests, in design: **left.**
+
+**The design.** `X?` of a `logic` is of type `true` (`tuple()`), its code
+`(query X; ())`. Every program that writes `X?` would then change its
+code, the elaborator's own `true?` clauses too (`ExpressionControl`'s
+`tq`): in a condition, a filter, a statement, `not`, `logic{…}`, the left
+of `or` and a `<decides>` body's clauses, whose value is dropped, the
+`()` must not be written, so those contexts must elaborate the query as
+before (a flag on `Ctx` that a value-dropping context sets, or the query
+written as before and converted where its value is taken: a binding, an
+argument, a comparison's operand, a result, an operand of `and`). Then
+only the programs that take the value change, and the four cases agree.
+

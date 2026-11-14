@@ -869,6 +869,9 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   -- (`false` as a type, Book of Verse ch. 2: the type with no value, below
   -- every type, of a call that never returns, `Suspend()<suspends>:false`)
   | .name "false" => pure .never
+  -- (`true` as a type, Book of Verse ch. 2: the type of the empty value
+  -- alone, as `tuple()` is, below `logic`: `Flag:true = false`)
+  | .name "true" => pure (.tup [])
   | .name n =>
     if let some t := env.tvars.lookup n then pure t
     else if (env.structs.lookup n).isSome then
@@ -2158,6 +2161,10 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
     match e with
     | .local _ | .prim (.tupGet _) _ => return some (.prim .userErr [])
     | _ => pure ()
+  -- (`void` and `true` interchange inside containers, tuples and type
+  -- arguments, `?void` to `?true`, `int->void` to `int->true`, Book of
+  -- Verse ch. 2: one type, and one in Verse Core)
+  if a != b && !a.isUnit && a.unitUp b then return some e
   -- references: the same value has both types (Verse Core subtyping, #32)
   if refUp env a b then
     -- (#351: to an interface referred to through views, from a reference
@@ -2188,6 +2195,9 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
   -- "`true` is a subtype of `logic`, so the unit value flows into logic
   -- positions" (Book of Verse ch. 2): the empty value, the logic false
   | .tup [], .logic => return some (.seq e (.lit (.logic false)))
+  -- (and so does a `void`'s, as `void` and `true` are one type, ch. 2;
+  -- `X:logic = if (C?) then () else true`, `Void.versetest` 215-221)
+  | .void, .logic => return some (.seq (← discardValue ⟨e, a⟩) (.lit (.logic false)))
   -- (in a program that calls `ToDiagnostic`, a value becomes an `any` as
   -- an object that prints it, `wrapAny`)
   | _, .any => if env.anyWraps then wrapAny env e a else return some (← discardValue ⟨e, a⟩)
@@ -2472,6 +2482,10 @@ partial def joinTyShaped (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Boo
   if a == .never then some b
   else if b == .never then some a
   else if a == b then some (a.commonBounds b)
+  -- (types that differ only in `void` and `true` inside, one type: at the
+  -- one with `true`, Book of Verse ch. 2, `Void.versetest` 161-175)
+  else if !a.isUnit && a.unitUp b then some b
+  else if !b.isUnit && b.unitUp a then some a
   else match a, b with
   | .int, .rational | .rational, .int => if inner then none else some .rational
   -- (refinements join at an expected refinement holding both, or at the
@@ -2605,9 +2619,14 @@ def checkTypeValueJoin (env : TyEnv) (p : Pos) (exp : Option Ty) (tys : List Ty)
 
 /-- The type of a two-branch construct (`joinTy`; a void branch makes it void). -/
 def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty := do
+  let logicLike (t : Ty) : Bool := t.isUnit || t == .logic || t == .never
   match exp with
   | some .void => return .void
   | _ =>
+    -- (a `void` branch where a `logic` is expected is its false, as
+    -- `true`'s is, Book of Verse ch. 2: `X:logic = if (C?) then () else
+    -- true`, `Void.versetest` 215-221)
+    if exp == some .logic && logicLike a && logicLike b && (a == .void || b == .void) then return .logic
     -- void accepts any value (Book of Verse), so a void branch makes the
     -- construct void: `if{X := e} else {Print("none")}`
     if a != .never && b != .never && !(a == b) && (a == .void || b == .void) then return .void

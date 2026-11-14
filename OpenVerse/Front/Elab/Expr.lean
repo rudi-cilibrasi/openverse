@@ -385,7 +385,14 @@ partial def elabBranch (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   let r ← elabE armCtx body none
   modify fun st => { st with pendingSourceSuspends := sourceBefore }
   noteBackgroundCaptures ctx (Suspend.slotsOf r.e)
-  return ⟨.call mark.idx [.prim .mkArr [← discardValue r]], .void⟩
+  let call : Expr := .call mark.idx [.prim .mkArr [← discardValue r]]
+  -- (its value is no value of the program's: an `any`, which `void` takes
+  -- and `true` does not, the Book's tests, `Result:any = branch: …` valid
+  -- and `Result:true = branch: …` refused, `FORT-582630-BranchResult.versetest`
+  -- 3-14; Verse Core's `void`, or, where an `any` prints itself, the empty
+  -- value's object)
+  if ctx.types.anyWraps then return ⟨← coerce p ⟨call, .void⟩ .any, .any⟩
+  return ⟨call, .any⟩
 
 partial def elabDefersCore (ctx : Ctx) (ds : List (SExpr × List Local)) : EM Expr := do
   let mut acc : Expr := .lit .void
