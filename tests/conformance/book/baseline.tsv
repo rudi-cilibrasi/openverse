@@ -9513,7 +9513,7 @@ Tests/ParametricTypes.versetest:315	agrees
 Tests/ParametricTypes.versetest:316	agrees
 Tests/ParametricTypes.versetest:324	agrees
 Tests/ParametricTypes.versetest:332	agrees
-Tests/ParametricTypes.versetest:333	disagrees-refuses
+Tests/ParametricTypes.versetest:333	agrees
 Tests/ParametricTypes.versetest:338	not-translatable
 Tests/ParametricTypes.versetest:342	not-translatable
 Tests/ParametricTypes.versetest:346	not-translatable

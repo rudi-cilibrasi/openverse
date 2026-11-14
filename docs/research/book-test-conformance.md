@@ -25,9 +25,10 @@ primitives](#after-the-books-primitives), the source upper bounds of
 undoes of [After what a `for` undoes](#after-what-a-for-undoes), the
 fields with accessors, type arguments and metatypes of [After fields with
 accessors, type arguments and
-metatypes](#after-fields-with-accessors-type-arguments-and-metatypes) and
+metatypes](#after-fields-with-accessors-type-arguments-and-metatypes),
 the weak maps and module-scoped `var`s of [After weak maps and
-module-scoped vars](#after-weak-maps-and-module-scoped-vars),
+module-scoped vars](#after-weak-maps-and-module-scoped-vars) and the
+fixes of [After the found bugs](#after-the-found-bugs),
 against the Book at
 [`beaa719ba165cbf33eff462f2b0fe078a6dd9ab0`](https://github.com/verselang/book/tree/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests),
 the revision the other research notes pin. The Book's
@@ -1338,6 +1339,20 @@ translatable** (re-recorded from a fresh run on the merged compiler).
 - **Programs.** Against main, over every suite and the corpus `corpus2`
   (5,825 programs), no program's bytes, output or messages changed.
 
+## After the found bugs
+
+Bugs found while doing other work, fixed one per commit on main `fb5e514`
+and merged with main `e451452` (#614): an attribute on a
+qualified definition of a module, the attribute an expression's refusal
+names, the rational helpers of programs that use none, dead code in the
+warnings of code never reached, the order of access errors, a `false` that
+infers a type parameter, the markers of helpers used only in an
+interpolation, and an empty `array{}` or `map{}` where a `comparable` is
+expected. Against main's baseline, one case more agrees and none is worse:
+**8,237 agree, 1,304 refuse, 135 accept, 88 differ, 3,740 not
+translatable**. The one is `ParametricTypes.versetest:333`,
+`assert{F7(false).Method(true)=true}`: `F7(false)` infers `t` as `logic`.
+
 ## Ten causes to remove first
 
 Ranked by cases moved per unit of risk. A count is the upper bound above;
@@ -2036,7 +2051,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `PackageCycles.versetest` | 15 | 0 | 0 | 0 | 0 | 15 | 0 |
 | `ParametricCastingIsDisallowed.versetest` | 11 | 10 | 0 | 1 | 0 | 0 | 0 |
 | `ParametricFunctions.versetest` | 106 | 52 | 9 | 41 | 0 | 4 | 0 |
-| `ParametricTypes.versetest` | 274 | 156 | 4 | 91 | 0 | 23 | 0 |
+| `ParametricTypes.versetest` | 274 | 157 | 4 | 90 | 0 | 23 | 0 |
 | `Parentheses.versetest` | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | `Path.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `PersistentJson.versetest` | 103 | 1 | 0 | 0 | 0 | 102 | 0 |
