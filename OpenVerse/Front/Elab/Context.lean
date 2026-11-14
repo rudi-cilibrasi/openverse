@@ -862,6 +862,9 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .name "any" => pure .any
   | .name "comparable" => pure .dyn
   | .name "$never" => pure .never
+  -- (`false` as a type, Book of Verse ch. 2: the type with no value, below
+  -- every type, of a call that never returns, `Suspend()<suspends>:false`)
+  | .name "false" => pure .never
   | .name n =>
     if let some t := env.tvars.lookup n then pure t
     else if (env.structs.lookup n).isSome then
@@ -2263,8 +2266,10 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
   -- fail, and `Err()` follows, never reached, into a temporary of the target
   -- type, so that its type can be inferred anywhere, #297)
   -- (also after statements that compute its operands: a map's lookup)
+  -- (and a call of a function whose result is `false`, which Verse Core
+  -- gives `void`, `Suspend()<suspends>:false`)
   let rec projection : Expr → Bool
-    | .local _ | .prim (.tupGet _) _ | .prim .index _ | .prim .query _ | .heap (.get _) _ => true
+    | .local _ | .prim (.tupGet _) _ | .prim .index _ | .prim .query _ | .heap (.get _) _ | .call .. => true
     | .seq _ b => projection b
     | _ => false
   if r.ty == .never && target != .never && target != .void && projection r.e then

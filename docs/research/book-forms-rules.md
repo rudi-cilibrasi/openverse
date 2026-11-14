@@ -280,3 +280,29 @@ keep commas as separators; with a generator among them the parser refuses
 the comma ("a generator inside a tuple is not supported yet"), so that the
 case is refused, not given another value. Programs: the error test
 `first_generator` is a valid program now, in `tests/verse` with its output.
+
+## `false` as a type
+
+**The rule.** `false` written as a type is the type with no value, below
+every type: a function whose result is `false` never returns, and an array
+of it has no elements and converts to every array type.
+
+**The Book.** Ch. 2, "void, true, tuple() and false"
+(`02_primitives.md:1233-1300`) and the API (`Err(…)<computes><predicts>:false`);
+the tests: `Suspend()<suspends>:false = Suspend()`
+(`Bugs/2026-01-26-FindFirstAsyncSubExprMissingOverrides.versetest` 5, 21,
+28), `ParametricTypes.versetest:711`.
+
+**openverse before.** "unknown type 'false'"; the type existed inside
+(`Ty.never`, of `return`, `break`, `Err()`), with no name.
+
+**openverse now.** `resolveTy` names it; a call of a function whose result
+is `false` converts to any type as the other values of that type do
+(`coerce`, a `void` in Verse Core followed by `Err()`, never reached). No
+program's code changes. **Left:** `true` as a type (10 cases:
+`Void.versetest` 50-177, 253, 267, `FORT-1054384…`): the type of the empty
+value alone, as `tuple()`, which `void` must not convert to (the tests
+refuse `Result:true = branch: …`, `FORT-582630-BranchResult.versetest:3`,
+3509), while `()` and `false` must (`Flag:true = false`, ch. 2,
+`02_primitives.md:1240`): openverse types `()` as `void`, so `true` needs
+the empty tuple's literal typed `tuple()` first.
