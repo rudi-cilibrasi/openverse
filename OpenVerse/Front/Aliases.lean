@@ -71,11 +71,7 @@ partial def Scope.ty (s : Scope) (p : Pos) : STy → Except String STy
         throw s!"{p.show}: {shown n} takes {a.params.length} type argument(s), found {ts.length}"
       pure (a.body.substNames (a.params.zip ts))
     | none => pure (.app n ts)
-  | .arr t => return .arr (← s.ty p t)
-  | .opt t => return .opt (← s.ty p t)
-  | .tup ts => return .tup (← ts.mapM (s.ty p))
-  | .map k v => return .map (← s.ty p k) (← s.ty p v)
-  | .fn ps es r => return .fn (← ps.mapM (s.ty p)) es (← s.ty p r)
+  | t => t.mapChildrenM (s.ty p)
 
 /-- Where a value, a qualifier or a constructor names a type `n`: the type
     an alias names, when it is a name (`c` for `a := c`). -/
@@ -108,8 +104,8 @@ def Scope.tparam (s : Scope) (tp : TParam) : Except String TParam := do
 partial def Scope.expr (s : Scope) : SExpr → Except String SExpr
   | .ident p n => do
     -- (`$ctor:D`, a delegation to class `D`'s constructor)
-    if n.startsWith "$ctor:" then
-      return .ident p s!"$ctor:{← s.typeName p (n.drop "$ctor:".length).toString}"
+    if let some d := delegationHead? n then
+      return .ident p (delegationHead (← s.typeName p d))
     return .ident p (← s.typeName p n)
   | .member p x m => return .member p (← s.expr x) (← s.method p m)
   | .decl p n t v x => return .decl p n (← t.mapM (s.ty p)) v (← s.expr x)
@@ -131,10 +127,9 @@ partial def Scope.top (s : Scope) : STop → Except String STop
   | .fn p n ps tps effs ret body => do
     let ps ← ps.mapM fun prm => do
       return { prm with ty := ← s.ty p prm.ty, default := ← prm.default.mapM s.expr }
-    let effs ← effs.mapM fun e =>
-      if e.startsWith "$constructor:" then do
-        return s!"$constructor:{← s.typeName p (e.drop "$constructor:".length).toString}"
-      else pure e
+    let effs ← effs.mapM fun e => match constructorSpec? e with
+      | some c => do return constructorSpec (← s.typeName p c)
+      | none => pure e
     return .fn p (← s.method p n) ps (← tps.mapM s.tparam) effs (← s.ty p ret) (← s.expr body)
   | .const p n cspecs t e => return .const p n cspecs (← t.mapM (s.ty p)) (← s.expr e)
   | .classDef p n nsp tps specs parents isI fields methods =>
@@ -176,10 +171,7 @@ partial def checkNames (p : Pos) (arity : String → Option (Option Nat)) (param
         if k != ts.length then throw s!"{p.show}: {shown n} takes {k} type argument(s), found {ts.length}"
       | some none => pure ()
     ts.forM (checkNames p arity params)
-  | .arr t | .opt t => checkNames p arity params t
-  | .tup ts => ts.forM (checkNames p arity params)
-  | .map k v => do checkNames p arity params k; checkNames p arity params v
-  | .fn ps _ r => do ps.forM (checkNames p arity params); checkNames p arity params r
+  | t => t.children.forM (checkNames p arity params)
 
 /-- The program's definitions, modules resolved, with every type alias
     written out where it is used and the aliases' definitions dropped (see

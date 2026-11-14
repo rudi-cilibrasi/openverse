@@ -18,7 +18,7 @@ against it. This page records the decisions behind the shape of the code.
 
 Surface Verse is large and changing (the Book of Verse tracks a development
 branch). Verse Core (`OpenVerse/Core/Syntax.lean`) is small: literals, slot
-reads and writes, sequencing, 59 primitives, calls, `if`, single-generator
+reads and writes, sequencing, 65 primitives, calls, `if`, single-generator
 `for`, `loop`, `break`, `return`, `Print`, and five heap operations (`new`,
 field `get` and `set`, `tag`, `isTag`). Every surface construct is a
 *derived form*:
@@ -37,7 +37,7 @@ field `get` and `set`, `tag`, `isTag`). Every surface construct is a
 - a generic function is one Core function with type variables, and a
   hidden argument per type parameter.
 
-Keeping Core small keeps the proofs and the C runtime small. All 59
+Keeping Core small keeps the proofs and the C runtime small. All 65
 primitives are one Lean function (`Prim.apply`) and one C file
 (`runtime/src/prims.c`).
 
@@ -291,9 +291,9 @@ where it ends, last registered first, with the elaborator's checks of a
 `defer:`, then the value again. The value is bound to a name of its own
 first, unless it reads nothing the block could change (`pureVal`:
 literals, the block's constants, and tuples, arrays, maps and options of
-those), so `(Y, false)` keeps the type its place gives it. A block ending
-in a `defer:` has the block of them as its value, as it would have the
-`defer:` (`void`, or the elaborator's "no value"). Each moved `defer:` has
+those), so `(Y, false)` keeps the type its place gives it. No block ends
+in a `defer:`: it is a statement, refused there by `admitSource`
+(`checkDefers`). Each moved `defer:` has
 the names its scope declares after it renamed (`$later'N`, shown as `N`,
 `deferBodies`), so it cannot use them, as where it was. As LANGUAGE.md
 lowers a `defer:` after the rest of its scope, they run as each value
@@ -406,8 +406,9 @@ block with the value `v`. The rest is left out after a branch that always
 returns, and the condition binds its names for its branch natively. A
 branch's own names, and its condition's, are renamed for it (`$k…'N`), so
 the rest copied into it may declare the same ones. No choice is added,
-and that is the point. In a `for`, every choice is a generator, and what
-came before a generator is kept when a later filter fails. Any encoding
+and that is the point. In a `for` that keeps the old rule ([What a `for`
+undoes](#what-a-for-undoes-one-search)), every choice is a generator, and
+what came before a generator is kept when a later filter fails. Any encoding
 with a choice (guarded alternatives, an option per branch then a choice
 of "returned or not") makes the `if` such a boundary, where the program
 had none. tim-e1's model found it twice in #312's review: prints in the
@@ -987,7 +988,8 @@ code after it, which is its frame.
   It leaves the item that resumes there (the leaf's first alternative, or
   the callee's start) in `stash`, sets `bnd` and breaks, out of the
   consumer's failure context, which keeps what the value did up to there,
-  as a `for` keeps the code before a choice. Each consumer catches that
+  as a `for` that keeps the old rule keeps the code before a choice. Each
+  consumer catches that
   break around the value (`elabOneGo`'s loop, `elabFor`'s round), and its
   `after` pushes the stashed item above the next alternative's, so values
   keep spatial order; any other break (a success, a source `break`) goes on.
@@ -1024,7 +1026,7 @@ code after it, which is its frame.
   the result type its name, `$Vfin`.
 
 - A point where `frameOf?` does not look (a comparison's later operand, a
-  `set`'s value after its old value, a named argument, a struct's field in
+  `set`'s value, before its old value is read, a named argument, a struct's field in
   its declaration order, `and`'s operands) is reached by the rule the lifter
   uses for a choice there: the first statement with one is lifted
   (`liftPoints?`, `liftClause`, each call of the group marked `$point` so
@@ -1169,9 +1171,10 @@ inputs, written type instances and interface-copy context (`firstKey`), as a
 call in a function inlined at several sites is at one place. Being
 recursive, it reaches the recursion limit in a deep search: about 400,000
 levels in Lean, a few million in C.
-The other consumers keep the loop, which needs no recursion. In a `for`,
-nothing is to be undone: a `for` keeps the effects of the clauses before a choice whose
-values its filter all rejects. The C runtime journals the writes made
+The other consumers keep the loop, which needs no recursion. In a `for`
+that keeps the old rule ([What a `for` undoes](#what-a-for-undoes-one-search)),
+nothing is to be undone: it keeps the effects of the clauses before a choice
+whose values its filter all rejects. The C runtime journals the writes made
 inside a failure context until it ends (a call's are dropped when it
 returns), so a first-success search, a loop inside one, costs about 1 KB
 per value tried: 100,000 take 0.3 s and 144 MB, where `F$all` did not
@@ -1283,7 +1286,7 @@ is thrown in one place, a phase or `elabProgramCore` itself, and each point
 where an elaboration asks for something and goes no further
 (`Compiled.asking`) is a line of `elabProgramCore`.
 
-1. `admitSource` (`Elab/Source.lean`): the source and the entry expression pass the effect policy (with where each specifier may go, `EffectPolicy.specifierPlaces`) and the source profile; the rules of the source as written hold (no reserved name defined, each name defined once in its scope, no `return` in a constant's value or a field's default, no `return` or `break` that leaves a failure context, `checkJumps`, a `defer:` only as a statement, no `for` of literal clauses only); no definition takes the name of one around it (`checkNoShadowing`); every access level is written out (`resolveSpecifiers`: `<scoped{…}>` and the names of access levels); modules are resolved, with every qualifier (`Resolver.qualifier`) and each module member's access, and calls of extension methods made calls of their functions; no type alias is more visible than what it names, type aliases are written out where they are used (`Aliases.expand`), no definition exposes a less visible one (`Access.checkConsistency`), and constructions, parents and overrides are checked for access (`Access.checkUses`), which also gives the elaboration what it needs to judge the members it reaches through values (`Access.Env`); no constant depends on itself, the defaults function types write are set apart, and the helpers the program needs are added (`Admitted`).
+1. `admitSource` (`Elab/Source.lean`, whose doc comment lists its passes in order): the source and the entry expression pass the effect policy (with where each specifier may go, `EffectPolicy.specifierPlaces`) and the source profile; the rules of the source as written hold, in this order: no type of the program's takes a built-in type's name (`checkTypeNames`), no reserved name is defined (`checkReservedNames`), each name is defined once in its scope (`checkDefinedOnce`), no definition takes the name of one around it (`checkNoShadowing`), no `return` in a constant's value or a field's default (`checkReturns`), no `return` or `break` that leaves a failure context (`checkJumps`), no `return` inside a value a function returns (`checkNestedReturns`), none and no `break` that leaves a `spawn` (`checkSpawnExits`), a way out of each loop of code that cannot suspend (`checkLoopExits`), none of the five forms the Book's tests refuse (`checkBookForms`: a default on a positional parameter, a named argument before a positional one, a struct's `var` field, a `return` or `break` out of a construction's field value, an empty `option{}`), no `profile` in an initializer (`checkProfiles`), a `defer:` only as a statement (`checkDefers`), no `for` of literal clauses only and no literal filter (`checkForClauses`); the helpers the parser's `$uses:` markers ask for are added and the markers taken out; every access level is written out (`resolveSpecifiers`: `<scoped{…}>` and the names of access levels); modules are resolved, with every qualifier (`Resolver.qualifier`) and each module member's access, and calls of extension methods made calls of their functions; no type alias is more visible than what it names, type aliases are written out where they are used (`Aliases.expand`), no definition exposes a less visible one (`Access.checkConsistency`), and constructions, parents and overrides are checked for access (`Access.checkUses`), which also gives the elaboration what it needs to judge the members it reaches through values (`Access.Env`); types given as arguments and used as types become type parameters (`TypeArguments`), types as values classes (`TypeValues`), fields with accessors are checked and their accessors' type written (`Accessors`), a `castable_subtype` bound becomes a subtype relation (`UpperBounds.markCastable`), and the built-ins named as values definitions of their own (`BuiltinValues`); the defaults function types write are set apart; no constant depends on itself (`checkConstantCycles`) or names one defined after it in its scope (`checkConstantOrder`); and the concurrency prelude the program needs is added (`concurrencyHelpers`, `Admitted`).
 2. `inlineSource`: functions with several values are inlined at their calls, the functions earlier rounds asked for are added and admitted, and function values become interfaces and classes (`Source`, with the sites the inlining notes).
 3. `argsAndMethodOverloads`: `Args` and the entry expression's `$Do` are added, and overloaded methods are renamed by their parameter lists (`Definitions`).
 4. `classHierarchy` (`Elab/Classes.lean`): the classes and interfaces and their hierarchy, checked (`Classes`, with the lookups over it).
@@ -1313,7 +1316,8 @@ keep the order: a round that asks goes no further than the phase that asks,
 and the next one runs every phase again. Read off the list, a program is
 refused, first to last, for:
 
-- its effect annotations, specifiers out of place (access specifiers included: where, how many, none on an override) and source profile, a type with a built-in type's name, a reserved name defined, a name defined twice, a name an enclosing scope defines (but a function a call can tell apart from it, checked with the signatures, 15), a `return` outside a function's body, a `return` or `break` that leaves a failure context (a `return` in a `<decides>` body anywhere but in tail position), a `defer:` where a value is taken, a `for` of literal clauses only, its access levels (a scope of no module or of a package, a specifier that names no access level), its modules and qualifiers (a qualifier that names nothing or not where its definition is, an ambiguous bare name beside a qualified definition, a module member its use may not see), a type alias more visible than what it names, its type aliases (one that names itself or an alias defined after it, or is used before its definition, or whose name a definition takes), a definition that exposes a less visible one, a construction, a parent or an override its code may not use, a constant that depends on itself or names one defined after it in its scope, and subscribable events (1); the choices it inlines and the requests it carries (2); its overloaded methods (3);
+- before the phases, as `elabProgram` takes the attributes out (`Attributes.apply`): a form openverse parses and refuses (`Refused`: a lambda, a pointer type or dereference, an attribute on an expression, a specifier on a macro, a function or data declared with no body or value), and its attributes (one that names nothing, is where it may not be, or is given the wrong fields, and an attribute class named outside attributes);
+- its effect annotations, specifiers out of place (access specifiers included: where, how many, none on an override) and source profile, a type with a built-in type's name, a reserved name defined, a name defined twice, a name an enclosing scope defines (but a function a call can tell apart from it, checked with the signatures, 15), a `return` outside a function's body, a `return` or `break` that leaves a failure context (a `return` in a `<decides>` body anywhere but in tail position), a `return` inside a value a function returns, a `return` or `break` that leaves a `spawn`, a `profile` in an initializer, a `defer:` where a value is taken, a `for` of literal clauses only, its access levels (a scope of no module or of a package, a specifier that names no access level), its modules and qualifiers (a qualifier that names nothing or not where its definition is, an ambiguous bare name beside a qualified definition, a module member its use may not see), a type alias more visible than what it names, its type aliases (one that names itself or an alias defined after it, or is used before its definition, or whose name a definition takes), a definition that exposes a less visible one, a construction, a parent or an override its code may not use, a type as a value or a field with accessors openverse does not write (`TypeValues`, `Accessors`), a constant that depends on itself or names one defined after it in its scope, and subscribable events (1); the choices it inlines and the requests it carries (2); its overloaded methods (3);
 - its classes: their parents (unknown, a struct, wrong type arguments, an interface extending a class, two superclasses, a `<final>` one, a cycle), `<castable>` ones with type parameters and those below `<final_super_base>` ones, and construction effects (4); their fields, inherited, overriding and own, against the methods above them, and a `<concrete>` class's defaults (5); their methods: duplicates, parameter names, qualified implementations, overrides and `<final>`, abstract methods and the implementations every concrete class needs (6);
 - the types those give: comparable type arguments to parents and a `<persistable>` struct's fields (7), bounds (8), one instance of an interface per class (9), the Verse Core type arguments of overrides (10), recursive structs and map keys (11);
 - its functions' names and overloads (12), their signatures and effect annotations (13), constants whose type cannot be inferred and the defaults function types write (14); then the signature checks (15): overloads a call cannot tell apart, an extension method that repeats a method of its receiver's class, overrides and implementations whose signature or effects differ, an overriding field's type, and, last, a field two interfaces give defaults;
@@ -1329,9 +1333,11 @@ source as written: an expression that always leaves by a `return` or a
 elaboration of the functions notes where it knows it (`warnAt`, into
 `ESt.warnings`, carried by `ElaboratedFn`): a `return` of a value in a
 `void` function, where the value's type is known, and a `_` after a closed
-enum's every value, in `elabCase`. A trial whose state is discarded
-discards its warnings with it, and only the last round's are kept, each
-once, in the order of the source. They are not errors: the command line
+enum's every value, in `elabCase`; and the uses of deprecated
+definitions, which `Attributes.apply` finds before any round and
+`elabProgram` adds after the last (`Attributes.deprecations`). A trial whose
+state is discarded discards its warnings with it, and only the last round's
+are kept, each once, in the order of the source. They are not errors: the command line
 prints them and goes on (`compileTopsWarned`).
 
 Two of these come later than where their cause is found: two interfaces'
@@ -1651,6 +1657,44 @@ evaluated or compiled. `@available` that versions a definition out removes
 it, and a module's members, before anything resolves a name. No attribute
 reaches Verse Core.
 
+## Markers: what the passes before elaboration write for one another
+
+The parser and the passes before elaboration talk through names in the
+tree no program can write: they start with `$`. Each is defined once, a
+prefix or a head with a function that makes it and one that reads it, in
+`Front/Syntax.lean` when the parser makes it (every pass imports it), else
+beside the pass that makes it:
+
+| Marker | What it marks | Made by | Read (and taken out) by |
+|---|---|---|---|
+| `$module:A::B` (`moduleMarker`) | where module `A::B` is defined, with its specifiers | parser | `resolveSpecifiers`, `resolveModules` (out), `Access.Levels`, `checkNoShadowing`, attributes' places |
+| `$qual:A::F\|q` (`qualMarker`) | a definition written `(q:)F` | parser | `resolveModules` (out), `checkNoShadowing` |
+| `$open:A::\|M` (`openMarker`) | a `using{M}` in module `A` | parser | `resolveSpecifiers`, `resolveModules` (out) |
+| `$uses:qualifiers` (`qualifierMarker`) | a source that writes a qualifier | parser | `resolveModules` (out) |
+| `$uses:rational`, `$uses:replaceAll`, `$uses:bitwise`, `$uses:ignoredArms` | what helpers a program needs; the arms marked `@ignore_unreachable` | parser | `admitSource` (out), `Reachability` |
+| `$constructor:c` (`constructorSpec`) | a constructor function of class `c`, among its specifiers | parser | `Aliases`, `resolveModules`, `Access`, `Attributes`, `classMethods` |
+| `$ctor:D` (`delegationHead`) | a constructor's delegation `D<constructor>(…)` | parser | `Aliases`, `resolveModules`, the constructors' lowering |
+| `$scope(M, …)` (`scopeHead`) | an access level's definition `S := scoped{M, …}` | parser | `resolveSpecifiers` (out) |
+| `$profileL_C` (`profilePrefix`) | a `profile` block | parser | `checkProfiles` |
+| `$typeDefault:N` (`typeDefaultPrefix`) | a default a function type writes | parser | `admitSource` (set apart), `inferSignatures` (out) |
+| `$attr:L_C` (`attrPrefix`) | an attribute's record, after its definition | parser | `Attributes.apply` (out) |
+| `$attrCall` (`attrCallHead`) | an attribute both called and given fields | parser | `Attributes.apply` (refused) |
+| `$attrCheck:N@a` (`attrCheckPrefix`) | an attribute's value, to check at its type | `Attributes.apply` | `inferSignatures` (out) |
+| `$refused(msg, …)` (`refusedForm`), `$pointer(t)` (`pointerTypeHead`) | a form openverse parses and refuses (`Refused`) | parser | `Attributes.apply` (refused) |
+| `$ext:M` (`extensionName`) | an extension method's function | parser | `resolveModules`, `elabExtensionCallWith` |
+| `$implicitSelf:F` (`implicitSelfPrefix`) | a bare call in a method that may be an extension method's with `Self` | `resolveModules` | `elabExtensionCallWith` |
+| `$typeArgument:t` (`TypeArguments.paramPrefix`) | a type given as an argument, as a parameter | `TypeArguments` | `TypeArguments` |
+| `$type:C` (`TypeValues.valueClass`), `$castable` (`TypeValues.castableMark`) | the class of the value `C`; a `<castable>` class's metatype | `TypeValues` | the join of type values, messages |
+| `$castableClass` (`castableClassMarker`) | the interface every `<castable>` class is below | `UpperBounds.markCastable` | the bounds' evidence (`Context`, `SubtypeEvidence`), messages |
+
+The constants the parser writes beside a definition (a qualifier's, a
+`using`'s, a function type's defaults, an attribute's record and its check)
+are one predicate, `STop.isBesideMarker`: an attribute is on the first
+definition after them. The heads of the language's macros (`$defer`,
+`$spawn`, `$first`, `$branch`, …) are the parser's spelling of the source,
+not markers, and the elaborator's own names (`$noLift`, `$typeValue`, …) are
+its own.
+
 ## Types as values: classes the front end writes
 
 A class or interface named as a value, and the metatypes `subtype(c)`,
@@ -1730,7 +1774,8 @@ struct, enum, refinement type, or an alias, wherever defined), or a
 parametric type's name applied to as many types as it has parameters
 (`writesType`). One rule decides "a type or a value", and no program that
 compiled before changes meaning: a type's name was no value, so `X := c`
-was refused, and `X := c(Y)`, a cast of a constant, stays a constant.
+was refused, and `X := c(Y)`, a cast of a constant, is a constant without
+its type, which the top level and a module refuse.
 
 The pass then goes through the definitions in order, with the aliases
 defined so far. An alias's type is written out with those, so it names none

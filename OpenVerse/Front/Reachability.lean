@@ -228,22 +228,11 @@ partial def goRaw (e : SExpr) : WM Ends := do
   | _ => operands e e.children
 end
 
-/-- The code of a program's definitions that is never reached: the bodies of
-    its functions and methods, the defaults of their parameters, its
-    constants' values and its fields' defaults. -/
-partial def ofTop : STop → WM Unit
-  | .fn _ _ ps _ _ _ body => do
-    for prm in ps do
-      if let some d := prm.default then let _ ← go d
-    let _ ← go body
-  | .const _ _ _ _ (.structDef _ _ _ fs) => do
-    for f in fs do
-      if let some d := f.default then let _ ← go d
-  | .const _ _ _ _ e => do let _ ← go e
-  | .classDef _ _ _ _ _ _ _ fs ms => do
-    for f in fs do
-      if let some d := f.default then let _ ← go d
-    for m in ms do ofTop m
+/-- The code of a definition that is never reached (`STop.code`: the
+    bodies of its functions and methods, the defaults of their parameters,
+    its constants' values and its fields' defaults). -/
+def ofTop (t : STop) : WM Unit :=
+  t.code.forM fun e => do let _ ← go e
 
 /-- Every place where code is never reached, in the program's definitions,
     but after code marked `@ignore_unreachable` (`ignoredArmsMarker`). -/

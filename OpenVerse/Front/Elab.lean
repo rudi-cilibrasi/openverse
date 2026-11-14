@@ -288,7 +288,7 @@ def orderWarnings (ws : List (Pos × String)) : List (Pos × String) :=
 
 def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except String Compiled := do
   let admitted ← admitSource allTops0r opts
-  let source ← inlineSource allTops0r opts.requests admitted
+  let source ← inlineSource opts.requests admitted
   let defs ← argsAndMethodOverloads source.tops source.entry opts.args
   let classes ← classHierarchy defs.tops source.constructionFx
   let fields ← classFields classes opts.requests
@@ -513,7 +513,7 @@ def elabProgram (allTops000 : List STop) (opts : Options := {}) : Except String 
   let c ← (loop eagerRounds witnessRounds rounds opts.requests).mapError fun msg =>
     -- (a castable_subtype(c) bound's castability, `UpperBounds.markCastable`)
     let msg := msg.replace s!"does not satisfy subtype({castableClassMarker})" "is not <castable> (as castable_subtype(…) requires)"
-    FnValues.pretty (((((stripOv ((Refine.unmarked msg).replace "$init" "<constructor>")).replace "::" ".").replace "$replaceAll" "ReplaceAll").replace extensionPrefix "").replace "$type:" "")
+    FnValues.pretty (((((stripOv ((Refine.unmarked msg).replace "$init" "<constructor>")).replace "::" ".").replace "$replaceAll" "ReplaceAll").replace extensionPrefix "").replace TypeValues.valuePrefix "")
   -- (and the uses of deprecated definitions, warnings, `Attributes.deprecations`)
   return { c with warnings := orderWarnings (c.warnings ++ deprecated) }
 

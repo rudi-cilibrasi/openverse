@@ -38,7 +38,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Parametric functions | `F(X:t, … where t:type, u:subtype(comparable))`: type parameters in parameter types, the result type and local declarations; type arguments inferred at each call (see [Parametric functions](#parametric-functions)) | Types: where clauses |
 | Structs | `name := struct:` with typed fields and defaults, `name{F := e, …}` (each field given at most once, evaluated in declaration order; separated by commas, or by `;` and new lines, not both; or as an indented block after `name:`, an archetype block; the type may be parenthesized, `(pair(int)){…}`), `S.F`, `set S.F = e` / `op=`, structural equality (a struct is the tuple of its fields in Verse Core) | ch. 9 |
 | Parametric structs | `pair(t:type, u:type) := struct:`, the type `pair(int, string)`, values `pair(int, string){First := 1, Second := "a"}` (or `pair{…}` where the expected type gives the type arguments); see [Parametric structs](#parametric-structs) | ch. 9 |
-| Classes | `name := class:` and `name(t:type) := class:` with fields and methods; `class(parent, interface, …)` (`class()` has none, as `class`; a type `t()` or value `t(){…}` with no type arguments is `t`, `t{…}`), `interface`, `<abstract>`, `<override>`, `<final>`, `(super:)`, virtual dispatch, casts `T[X]` and `T(X)`; no `var` fields; see [Classes](#classes) | ch. 10 |
+| Classes | `name := class:` and `name(t:type) := class:` with fields and methods; `class(parent, interface, …)` (`class()` has none, as `class`; a type `t()` or value `t(){…}` with no type arguments is `t`, `t{…}`), `interface`, `<abstract>`, `<override>`, `<final>`, `(super:)`, virtual dispatch, casts `T[X]` and `T(X)`, `var` fields; see [Classes](#classes) | ch. 10 |
 | Enums | `name := enum:` / `enum{A, B}`, `name.A`, equality, `case` that needs no `_` when every value is named (an enumerator is its index in Verse Core); `enum<open>` may gain values, so a `case` on one needs `_` or a failure context (`<closed>` is the default) | ch. 9 |
 | Maps | `[k]v` (a comparable key with no array or map in it, through its options, tuples and a struct's fields, but `string`: "neither may serve as a map key", ch. 3), `map{k => v, …}` (a key given twice keeps its last value, at its last position; a key cannot fail, ch. 3: "failure in map literal keys is not implemented"; [the rules](research/book-remaining-rules.md#map-keys-and-a-refinements-range)), `M[k]` (fails on a missing key), `set M[k] = v` (insert or update; in Verse the key's reference is `<decides>`, the Book's API reference, so such a `set`, also as a path's last step, `set S.M[k] = v`, is written in a failure context, as the Book's tests do, `if (set M0[0] = 42)`, `(set Map[I] = I) or Err()`; its last key inserts, so it succeeds; its value is `v`), `set M[k] op= v` (fails on a missing key), `.Length`, `for (V : M)`, `for (K -> V : M)` in insertion order, `ConcatenateMaps(M1, M2)` (exactly two maps, ch. 3: more by chained calls; their pairs laid down in turn, as `map{…}` lays its own: a key both maps have takes the second map's value at the second map's place, the Book's API reference and `ConcatenateMaps.versetest` 21, 33), order-sensitive equality (a map is the array of its pairs in Verse Core) | §3, §9.3 |
 | Array methods | (also of a tuple of one element type, which is an array where one is expected: `('a', 'b', 'c').Slice[1]`) `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`, `A.RemoveFirstElement[x]`, `A.Remove[i, j]` (half-open), `A.ReplaceElement[i, x]`, `A.ReplaceFirstElement[x, y]`, `A.Insert[i, B]`, `A.Last[]`, `A.Last[n]` (the element n before the last) (all failable); `A.RemoveAllElements(x)`, `A.ReplaceAllElements(x, y)`, `A.ReplaceAll(Pattern, Replacement)` (contiguous subarrays, left to right, not overlapping; an empty pattern changes nothing), `Concatenate(A, B, …)` or `Concatenate(Arrays)` (#150) (never failing) | §9.1 |
@@ -226,7 +226,8 @@ Combine(A:t1, B:t2 where t1:type, t2:type):tuple(t1, t2) = (A, B)
   `type{_(:car):int}` a `type{_(:vehicle):int}`).
 - **Limits.** A generic `Main`, several constraints on one type parameter
   (also unsupported in the Book), type arguments written at a call other
-  than for a parameter `t:type` the function uses as a type (`F(t:type,
+  than for a parameter `t:type`, `t:subtype(c)` or `t:castable_subtype(c)`
+  the function uses as a type (`F(t:type,
   X:t)`, called `F(int, 3)`: [Types as values](#types-as-values), "A type
   given as an argument"), and generic constants are not supported.
 
@@ -371,9 +372,9 @@ Main():void =
   Other arguments can determine it first (`Apply(Identity, X)` when `Apply`
   takes `type{_(:t):t}` and `t`), including inlined choice calls, recursive
   producer calls and generic methods. Arguments still run in written order;
-  named arguments run as written before omitted defaults. A local, field or
-  visible method keeps its meaning when a generic top-level function has
-  the same name.
+  named arguments run as written before omitted defaults. A qualified local
+  or field (`(local:)F`, `(c:)F`), or a method a call can tell apart from
+  it, keeps its meaning when a generic top-level function has the same name.
 - A bound method's class parameters may repeat, occur inside compound
   parameter/result types, or be absent from its function signature (#209).
   The captured receiver retains their types and hidden witnesses. This
@@ -436,16 +437,19 @@ Main():void =
   function values. A parameter may also be written as a signature, as the
   Book's examples do: `Map(Items:[]t, F(:t)<transacts>:u where t:type,
   u:type)`, `?Say():string = Hello`, also among a function type's own
-  parameters: `A(F(:int):int, X:int):int`. Not supported: a function whose named
-  parameter has its own name (`F(?F:int)`) as a value; named parameters
-  inside a tuple parameter, and tuples with named elements. See the
+  parameters: `A(F(:int):int, X:int):int`. Not supported: named parameters
+  inside a tuple parameter, and tuples with named elements (a named
+  parameter with its function's name, `F(?F:int)`, is refused as a
+  shadowing). See the
   [pinned rules](research/named-function-values.md).
 - A built-in function of one signature is a function like any other: named
   as a value (`CheckSpecials[Sin, NaN, NaN]`, as the Book's tests write), it
   is a value of its type and effects: `Sqrt`, `Exp`, `Ln`, `Sin`, `Cos`,
   `Tan`, `ArcSin`, `ArcCos`, `Pow`, `Log` (`<computes>`), `Sinh`, `Cosh`,
   `Tanh`, `ArSinh`, `ArCosh`, `ArTanh`, `Lerp` (`<reads>`), `IsFinite`,
-  `Round`, `Int` (`<computes><decides>`). The program gets an ordinary
+  `Round`, `Int` (`<computes><decides>`), and the bitwise functions
+  `BitAnd`, `BitOr`, `BitXor`, `BitNot` (`<computes>`), `BitShiftLeft`,
+  `BitShiftRight` (`<computes><decides>`). The program gets an ordinary
   definition of the built-in, which calls it, unless it defines or binds
   that name itself. The others are no values: overloaded (`Abs`, `Min`,
   `Max`, `Floor`, `Ceil`, `ArcTan`, `Clamp`, `Sgn`, `ToString`), generic
@@ -651,7 +655,9 @@ Swap(P:pair(t, u) where t:type, u:type):pair(u, t) =
     pair(u, t){First := P.Second, Second := P.First}
 ```
 
-- A parameter is `t:type` or `t:subtype(comparable)`. The field types and
+- A parameter is `t:type`, `t:subtype(comparable)` or an upper bound,
+  `t:subtype(c)` ([Parametric functions](#parametric-functions), "Upper
+  bounds"). The field types and
   field defaults may use it.
 - `pair(int, string)` is a type. A parametric struct used without type
   arguments, or with the wrong number of them, is an error, and so is a
@@ -1276,7 +1282,7 @@ The Book of Verse's compiler gives some diagnostics as warnings: the
 program compiles and runs all the same (`FlowControl/Reachability.versetest:22`,
 "Treat unreachable expressions after break as warning not error"; its tests
 name them with codes 2000–2999 in `assert_semantic_error`). openverse gives
-three of them, each from where the fact is known, on standard error as
+four of them, each from where the fact is known, on standard error as
 `FILE:LINE:COL: warning: …`, with the exit status unchanged
 ([FORMAT.md](FORMAT.md), "Exit protocol"):
 
@@ -1286,16 +1292,16 @@ three of them, each from where the fact is known, on standard error as
   one of whose statements never completes; an operation (a call, an
   operator, a tuple, array, map or option, a definition, a `set`, a
   `return` of a value) one of whose operands never completes; an `if`
-  whose first condition clause never completes, or with an `else` whose
-  branches both never complete; a `case` whose arms never complete; a
+  with an `else` whose branches both never complete; a `case` whose arms
+  never complete; a
   `loop` that a `return` leaves and no `break` does; a `sync` one of
   whose arms never completes, a `race` or `rush` all of whose arms never
   complete (`Reachability.versetest` 98-108). The code that comes after
   such an expression, the next statement or the operation that would take
   its value, is never reached, and is reported where it starts, once for
-  the code it begins. A failure context ends that: when its clauses may
-  fail before they leave (`if (not (K = 2, return 42))`), the `else` or
-  the code after it is reached. A `for` whose body returns, a `race` with one
+  the code it begins. No `return` or `break` is in a failure context (an
+  `if`'s conditions, a `for`'s clauses, …: [Supported](#supported)), so
+  such conditions always complete or fail. A `for` whose body returns, a `race` with one
   arm that does, and a `loop` that nothing leaves (in a `<suspends>`
   function, until its task is canceled: `Break.versetest:20` takes the
   code after one with no warning) make no warning.
@@ -1306,6 +1312,10 @@ three of them, each from where the fact is known, on standard error as
 - **A `_` arm after arms that name every value of a closed enum** (2302,
   `Enum.versetest:356`, `Case.versetest:154`): it is never reached. An arm
   after `_`, or with an earlier arm's pattern, stays an error (3616).
+- **A use of a `@deprecated` definition** (2009) from code that is not
+  deprecated itself, and an override of a deprecated member that is not
+  ([Attributes](#attributes), `Attributes.deprecations`): `X is
+  deprecated: Message`.
 
 ## Source profiles
 
@@ -1325,8 +1335,8 @@ both forms of `for`, generator clauses, and ranges. This includes ordinary
 array/map/string iteration through `for`, and a trivial `first{3}` or
 single-element `for`. Array/map literals, indexing, ordinary `if`/`if{…}`,
 `option{…}`, `logic{…}`, `not`, `and` and `or` remain available, with their
-usual failure, binding and rollback behavior. A user-defined function named
-`first` is an ordinary function when called without a macro body.
+usual failure, binding and rollback behavior. `first` is a reserved name, so
+no program defines a function of it.
 
 All loaded source is checked, including unused imported definitions,
 file-backed `.value` expressions, methods, constructors, field and parameter
@@ -2226,10 +2236,9 @@ Main():void =
   compare by value and type.
 - Not yet: a value of a type parameter as a `comparable` other than as an
   argument, a result, a local's value or an operand of `=` and `<>` (an
-  element of an array literal, a map key, a field); the box of a struct at
-  type parameters (`p(t)` compared with another type in generic code), of a
-  type parameter of a class in its methods; `case` on a `comparable`; and
-  `concrete_subtype(comparable)`.
+  element of an array literal, a map key, a field); a struct at type
+  parameters converted to `comparable` (`X:comparable = P`, `P:p(t)`); and
+  `case` on a `comparable`.
 
 ## Types as values
 
@@ -2636,8 +2645,8 @@ Main():void =
   Either binary operand may be an int. `/` on rational/rational or mixed
   int/rational operands is `<computes><decides>` and fails on a zero
   divisor. `+=`, `-=`, `*=` and the failable `/=` work on rational mutable
-  values and paths, with the usual read-before-right-operand order and
-  rollback rules. Int/int and float arithmetic keep their existing behavior.
+  values and paths, in `set`'s order (the right operand, then the old
+  value) and with its rollback rules. Int/int and float arithmetic keep their existing behavior.
 
 The [Book's pinned rational section](https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/02_primitives.md#rationals)
 documents quotient construction, conversions and normalization. Its
@@ -2665,8 +2674,9 @@ interpolation encode it as UTF-8, its one to four bytes, by code that the
 elaborator generates (Core has no conversion from int to char). A `char32`
 and an `int`, which Verse Core holds alike, are never equal, as values of
 different types ([Equality and the empty value](#equality-and-the-empty-value));
-`=` and `<>` between two type parameters, or between one and a type with an
-`int` or a tuple, which an instance could make the same, are refused. A
+`=` and `<>` between two type parameters, or between one and another type,
+compare the instances' boxes ([comparable](#comparable)), so `0u41` and `65`
+differ in generic code too. A
 non-ASCII character in quotes is a `char32` literal (`'😀'` is `0u1F600`,
 Book of Verse ch. 1, "Character Literals"); an ASCII one is a `char`.
 
@@ -3229,7 +3239,7 @@ Main()<suspends>:void =
 | A module's member `(M:)x` used bare in `M` beside an outer `x` | both are candidates, told apart by their parameters, else ambiguous (`ModuleDefinitions.versetest`, `vmodule` tests) | the inner one (only a qualified member may share an outer definition's name, [Shadowing](#shadowing)); in a class's code and for `(local:)`, where the tests refuse it, ambiguous |
 | `ToString` of a float | the API and the tests: fixed point with six decimals (`FloatToString.versetest`, `1.000000`); ch. 2's example: `98.5` (the Book disagrees with itself: [the audit](research/readings-audit.md#tostring-of-a-float)) | the API's and the tests': six digits after the point, the exact value rounded half to even, every integer digit, the sign kept (`-0.000000`); `Inf`, `-Inf`, `NaN`; interpolation calls `ToString` (ch. 2) ([float](#float)) |
 | `NaN < X` | `not (Nan < 1.0)`, `Nan = Nan` (ch. 1, ch. 2) | fails (IEEE: NaN orders with nothing); `NaN = NaN` succeeds (the Book) |
-| `=` between different types | "Comparisons between different types still compile, but they always fail" (ch. 4); the empty value is one value of `logic`, `void`, `tuple()`, options, arrays, strings and maps (ch. 2) | the Book's (see [Equality and the empty value](#equality-and-the-empty-value)), at every depth and in generic code; refused between type parameters, a tuple of them and a string, and types whose common values Verse Core cannot tell apart; in generic code, types Verse Core holds alike (a `char32` and an `int`) compare as Verse Core holds them |
+| `=` between different types | "Comparisons between different types still compile, but they always fail" (ch. 4); the empty value is one value of `logic`, `void`, `tuple()`, options, arrays, strings and maps (ch. 2) | the Book's (see [Equality and the empty value](#equality-and-the-empty-value)), at every depth and in generic code; where Verse Core cannot tell the two types' values apart (two type parameters, one and another type, a tuple of them and a string, `[]tuple(int, []int)` and `[]tuple(int, []char32)`), both operands are boxed and compared as `comparable`s ([comparable](#comparable)), so a `char32` and an `int` differ there too |
 | `false` where a map is expected | prose: accepted (ch. 2); tests: refused (`Map.versetest` 343) | refused, as the tests (it equals an empty map) |
 | `X?` of a logic | "equivalent to comparing against true" (ch. 4); the tests: `true?` is the empty value (`BoolQuery.versetest` 3, 4) | `true?` is `true`, not yet the tests' empty value ([empty-values.md](research/empty-values.md), 3.1) |
 | `true` as a type | the type of the empty value, as `tuple()` (ch. 2) | not a type name yet: openverse's `branch:` gives `void`, which `true` would take (`FORT-582630-BranchResult.versetest` refuses it) |
