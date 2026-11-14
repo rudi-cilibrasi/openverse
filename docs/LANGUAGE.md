@@ -569,7 +569,11 @@ Main():void =
   `c` that a call fits both are ambiguous. An extension method on a class
   or an interface with the parameters of one of its methods, own or
   inherited, is refused where it is defined (the Book: "cannot have the
-  same signature as methods defined directly in classes or interfaces").
+  same signature as methods defined directly in classes or interfaces"),
+  and so is one on an array, a string, a char, a char32, an int or a
+  float with the parameters of that type's own method of its name
+  (`(A:[]int).Find(X:int)`, `(N:int).ToChar()`), whatever its effects; one
+  with other parameters (`(A:[]int).Find(X:string)`) is an overload.
 - **In a method**, a bare call `M(…)` whose name an extension method in
   scope has is `Self.M(…)` when only the extension method fits it with
   `Self`; otherwise it keeps its meaning, and it is ambiguous when both fit
@@ -1905,8 +1909,9 @@ Main():void =
   listing two interfaces that both declare it) is refused when one of the
   families has several values. Such a
   method's name must be no field, no struct field, enumerator or member of
-  a built-in type (`Length`, `Find`, `Signal`, …), no top-level name and no
-  parameter or local. An
+  a built-in type (`Length`, an array's methods, `ReplaceFirstElement` too,
+  a scalar's, `ToChar`, `IsFinite`, …, and `Await`, `Signal`, `Cancel`:
+  `builtinMemberNames`), no top-level name and no parameter or local. An
   interface's method is such a family's root too (#283): a call through
   the interface dispatches on the receiver's class, as for an overridden
   method; an interface's default implementation is the alternative for

@@ -300,9 +300,7 @@ def inlineSource (requests : Requests) (admitted : Admitted) :
   -- functions with several values (#235, #283), inlined at their calls; a
   -- method with several values may not take the name of a member of a
   -- built-in type or of the prelude, as `R.M` could be it
-  let reserved : List String := ["Length", "Slice", "Find", "Insert", "Remove", "RemoveElement",
-    "RemoveFirstElement", "RemoveAllElements", "ReplaceElement", "ReplaceAllElements", "ReplaceAll", "Last",
-    "Signal", "Await", "Cancel"] ++ admitted.helpers.flatMap fun
+  let reserved : List String := builtinMemberNames ++ admitted.helpers.flatMap fun
       | .classDef _ _ _ _ _ _ _ fs ms => fs.map (·.1) ++ ms.filterMap fun | .fn _ m .. => some m | _ => none
       | _ => []
   -- (with the sites an elaboration is to note, #283: the uses of methods

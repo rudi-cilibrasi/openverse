@@ -535,6 +535,16 @@ def checkSignatures (env : TyEnv) (sigs : Signatures) (cdefs : List CDef) (field
         let pos := ((sigs.tops ++ sigs.generics).findSome? fun | .fn q n .. => if n == se.name then some q else none | _ => none).getD { line := 0, col := 0 }
         let whose := if e == c then s!"{c}'s method {m}" else s!"the method {m} {c} inherits from {e}"
         throw s!"{pos.show}: the extension method {m} on {c} has the parameters of {whose}, ({", ".intercalate (own.params.map Ty.show)}): a call could not tell them apart (Book of Verse ch. 6)"
+  -- nor a method of a built-in type, an array's (a string's) or a scalar's
+  -- (`builtinMethodParams`), which its values have as a class's have its
+  for se in allSigs do
+    let some m := extensionMethod? se.name | continue
+    if se.name.contains '.' then continue
+    let some recv := se.params.head? | continue
+    for ps in builtinMethodParams recv m do
+      if !sigsDistinct { se with params := ps, named := [], bounds := [] } { se with params := se.params.drop 1, bounds := [] } then
+        let pos := ((sigs.tops ++ sigs.generics).findSome? fun | .fn q n .. => if n == se.name then some q else none | _ => none).getD { line := 0, col := 0 }
+        throw s!"{pos.show}: the extension method {m} on {recv.show} has the parameters of {recv.show}'s own method {m}, ({", ".intercalate (ps.map Ty.show)}): a call could not tell them apart (Book of Verse ch. 6: \"Extension methods cannot have the same signature as methods defined directly in classes or interfaces\")"
   -- an override has the signature of the method it overrides, and an
   -- overriding field the inherited field's type (Book of Verse ch. 10)
   -- an override may return a class below the declared one (covariant results)
