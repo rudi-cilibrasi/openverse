@@ -126,11 +126,17 @@ value to the task's ordinary mutable `Result` field. The provenance check
 inspects that return before the marker discards it, applying the ordinary
 shared-field rule even if the task is never awaited. Passing metadata into a
 task that returns independent real data remains allowed, as does opaque
-forwarding within the task. A nonreturning task does not hide its caller's
-continuation from validation; argument evaluation and its exits still belong
-to the caller. `MetadataTasks.lean` checks these boundaries with real/dummy
+forwarding within the task. A nonreturning task that may yield does not hide
+its caller's continuation from validation. Return summaries also carry a
+may-yield flag through reachable calls, branches and loops. Literal zero or
+negative sleeps and nonwaiting helpers do not yield; starting a branch or
+another task does not yield its owner. A race needs waiting paths in every
+arm to yield, while a sync can wait for one arm after starting the others.
+A task that neither returns nor yields holds its caller. Argument evaluation
+and its exits still belong to the caller. `MetadataTasks.lean` checks these
+boundaries with 9 real/dummy refusal pairs and 13 positive pairs, including
 pairs for generic returns, helpers, aggregates, immediate results and discarded
-tasks, plus independent real returns and argument-evaluation controls.
+tasks, plus independent real returns, argument effects and nonwaiting paths.
 
 The checked families currently cover:
 

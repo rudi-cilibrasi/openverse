@@ -26,6 +26,8 @@ private def refusals : List (String × String) := [
   ("spawned generic method result", "worker:=class<computes>:\n    Keep(V:v where v:type)<suspends>:v=block{Sleep(0.1);V}\n" ++ header ++
     "    W:=worker{}\n    T:=spawn{W.Keep(Dummy)}\n    T.Await()()"),
   ("nonreturning task does not hide its caller", "Forever()<suspends>:void=loop{Sleep(0.1)}\n" ++ header ++
+    "    spawn{Forever()}\n    Dummy()"),
+  ("sync with a waiting arm lets its caller continue", "NoWait()<suspends>:void={}\nForever()<suspends>:void=\n    loop:\n        sync:\n            Sleep(0.1)\n            NoWait()\n" ++ header ++
     "    spawn{Forever()}\n    Dummy()")]
 
 private def controls : List (String × String) := [
@@ -37,6 +39,20 @@ private def controls : List (String × String) := [
     "    T:=spawn{Ignore(Dummy,F)}\n    T.Await()()"),
   ("nonreturning task with real continuation", "Forever()<suspends>:void=loop{Sleep(0.1)}\n" ++ header ++
     "    spawn{Forever()}\n    F()"),
+  ("nonwaiting task cannot reach its caller", "NoWait()<suspends>:void={}\nForever()<suspends>:void=loop{NoWait()}\n" ++ header ++
+    "    spawn{Forever()}\n    Dummy()"),
+  ("zero sleep cannot reach a nonreturning task's caller", "Forever()<suspends>:void=loop{Sleep(0.0)}\n" ++ header ++
+    "    spawn{Forever()}\n    Dummy()"),
+  ("negative sleep cannot reach a nonreturning task's caller", "Forever()<suspends>:void=loop{Sleep(-0.1)}\n" ++ header ++
+    "    spawn{Forever()}\n    Dummy()"),
+  ("error before wait cannot reach its caller", "Never()<suspends>:void=block{Err();Sleep(0.1)}\n" ++ header ++
+    "    spawn{Never()}\n    Dummy()"),
+  ("nested spawn does not yield its owner", "Pause()<suspends>:void=Sleep(0.1)\nNoWait()<suspends>:void={}\nForever()<suspends>:void=\n    spawn{Pause()}\n    loop{NoWait()}\n" ++ header ++
+    "    spawn{Forever()}\n    Dummy()"),
+  ("branch does not yield its owner", "NoWait()<suspends>:void={}\nForever()<suspends>:void=\n    branch{Sleep(0.1)}\n    loop{NoWait()}\n" ++ header ++
+    "    spawn{Forever()}\n    Dummy()"),
+  ("immediate race winner cannot yield its owner", "NoWait()<suspends>:void={}\nForever()<suspends>:void=\n    loop:\n        race:\n            Sleep(0.1)\n            NoWait()\n" ++ header ++
+    "    spawn{Forever()}\n    Dummy()"),
   ("unreachable metadata argument", keep ++ header ++
     "    T:=spawn{Keep(if(false?)then Dummy else F)}\n    T.Await()()"),
   ("spawn arguments overwrite before caller continuation", "Ignore(V:v where v:type)<suspends>:void=block{Sleep(0.1);()}\n" ++ header ++
