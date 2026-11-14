@@ -90,10 +90,22 @@ def castMethod (a : String) : String := s!"$cast({a})"
 /-- The method of a construction through a value of `concrete_subtype(A)`. -/
 def makeMethod (a : String) : String := s!"$make({a})"
 
-/-- The metatypes a type writes: `(subtype, A)` of `subtype(A)`. -/
-partial def metatypes (t : STy) : List (String × String) :=
+/-- A type as written: `[]int`, `c(int)`, `tuple(int, float)`; the names of
+    the interfaces of metatypes of types other than classes. -/
+partial def writtenTy : STy → String
+  | .name n => n
+  | .arr t => "[]" ++ writtenTy t
+  | .opt t => "?" ++ writtenTy t
+  | .tup ts => s!"tuple({", ".intercalate (ts.map writtenTy)})"
+  | .map k v => s!"[{writtenTy k}]{writtenTy v}"
+  | .app n ts => s!"{n}({", ".intercalate (ts.map writtenTy)})"
+  | .fn ps _ r => s!"type\{_({", ".intercalate (ps.map fun p => ":" ++ writtenTy p)}):{writtenTy r}}"
+
+/-- The metatypes a type writes: `(subtype, A)` of `subtype(A)`, with the
+    type of its argument, as written. -/
+partial def metatypes (t : STy) : List (String × STy) :=
   match t with
-  | .app k [.name a] => if kinds.contains k then [(k, a)] else []
+  | .app k [a] => if kinds.contains k then [(k, a)] else metatypes a
   | .app _ ts | .tup ts => ts.flatMap metatypes
   | .arr u | .opt u => metatypes u
   | .map k v => metatypes k ++ metatypes v
@@ -175,6 +187,7 @@ def desugar (tops : List STop) : Except String (List STop) := do
     | none => false
   -- the metatypes the program writes, and the classes it names as values
   let mut targets : List (String × String) := []
+  let mut argTys : List (String × STy) := []
   let mut usesType := false
   let collect (acc : List (String × String) × Bool) (t : STy) : List (String × String) × Bool :=
     t.foldNames (fun acc _ => acc) acc
@@ -186,21 +199,53 @@ def desugar (tops : List STop) : Except String (List STop) := do
         ms.flatMap fun | .fn mp _ ps _ _ r b => (r :: ps.map (·.ty) ++ declTys b).map (mp, ·) | _ => []
   let mut wherePos : List ((String × String) × Pos) := []
   for (p, t) in allTys do
-    for (k, a) in metatypes t do
-      if !targets.contains (k, a) then targets := targets ++ [(k, a)]; wherePos := wherePos ++ [((k, a), p)]
+    for (k, argTy) in metatypes t do
+      let a := writtenTy argTy
+      if !targets.contains (k, a) then
+        targets := targets ++ [(k, a)]; wherePos := wherePos ++ [((k, a), p)]; argTys := argTys ++ [(a, argTy)]
     if t.mentions "type" then usesType := true
   let values : List String := (tops.flatMap valueNames).filter isClass |>.eraseDups
-  if targets.isEmpty && !usesType && values.isEmpty then return tops
+  -- (the types other than classes and interfaces that a type value may be:
+  -- the built-in ones, `true` and `false` as the Book's tests write them,
+  -- the program's structs and enums, and arrays, options, maps and tuples
+  -- of them)
+  let typeNames : List String := ["int", "float", "logic", "char", "char32", "string", "rational", "void",
+      "true", "false"] ++ tops.filterMap fun
+    | .const _ n _ none (.structDef ..) | .const _ n _ none (.enumDef ..) => some n
+    | _ => none
+  let rec plainType (fuel : Nat) (t : STy) : Bool :=
+    match fuel with
+    | 0 => false
+    | fuel + 1 =>
+      match t with
+      | .name n => typeNames.contains n || isClass n
+      | .arr u | .opt u => plainType fuel u
+      | .map k v => plainType fuel k && plainType fuel v
+      | .tup ts => ts.all (plainType fuel)
+      | _ => false
+  -- (the type names a program uses as values: their own classes' values)
+  -- (not `true` and `false`, which as values are the logic values)
+  let typeValues : List String := (tops.flatMap valueNames).filter (fun n =>
+    typeNames.contains n && !isClass n && n != "true" && n != "false") |>.eraseDups
+  if targets.isEmpty && !usesType && values.isEmpty && typeValues.isEmpty then return tops
   -- (each metatype's argument: a class or an interface, Book of Verse
-  -- tests, Subtype.versetest 104-126, 3509; openverse writes subtype(t) of
-  -- no other type)
-  for (k, a) in targets do
+  -- tests, Subtype.versetest 104-126, 3509; `subtype(t)` also of another
+  -- type, written of types, `subtype(int)`, `subtype([]c)`, Subtype.versetest
+  -- 113-119, 140-142; `concrete_subtype(any)` and
+  -- `concrete_subtype(comparable)`, MetatypeConcreteSubtype.versetest 12-35)
+  let tops0 := (targets.filter fun (k, a) => !isClass a && (k != "concrete_subtype" || (a != "any" && a != "comparable")))
+  for (k, a) in tops0 do
     let p := ((wherePos.lookup (k, a)).map (·.show ++ ": ")).getD ""
-    if !isClass a then
+    let argTy := (argTys.lookup a).getD (.name a)
+    if k == "subtype" && !plainType 8 argTy then
+      throw s!"{p}subtype({a}): openverse writes subtype of a class, an interface, a built-in type, a struct, an enum, or an array, option, map or tuple of them, not of {a} (types as values: docs/research/types-as-values.md)"
+    if k != "subtype" then
       throw s!"{p}{k}({a}): openverse writes {k} of a class or an interface only, not of {a} (types as values: docs/research/types-as-values.md)"
+  let otherSubtypes : List String := ((tops0.map (·.2)) ++ typeValues).eraseDups
+  let concreteTops : List String := ["any", "comparable"].filter fun a => targets.contains ("concrete_subtype", a)
   -- the interfaces: of each class above a target or a value, upwards closed
   -- (each after the classes above it, as a class is defined after its parents)
-  let closure0 : List String := (targets.map (·.2) ++ values).flatMap supers |>.eraseDups
+  let closure0 : List String := ((targets.map (·.2)).filter isClass ++ values).flatMap supers |>.eraseDups
   let closure : List String := (closure0.toArray.qsort fun a b => (supers a).length < (supers b).length).toList
   let p0 : Pos := { line := 0, col := 0 }
   let root : STop := .classDef p0 "type" [] [] [] [] true [] []
@@ -221,12 +266,29 @@ def desugar (tops : List STop) : Except String (List STop) := do
     .classDef p0 (ifaceName "concrete_subtype" a) [] [] []
       (.name (ifaceName "subtype" a) :: (parentsOf a).map (.name <| ifaceName "concrete_subtype" ·)) true []
       [.fn p0 (makeMethod a) [] [] ["$abstract"] (.name a) (.block p0 [])]
+  -- (the metatypes of other types: below `type`, with no method: nothing
+  -- reads such a value but a conversion to `type`)
+  let otherIfaces : List STop := otherSubtypes.map fun a =>
+    .classDef p0 (ifaceName "subtype" a) [] [] [] [.name "type"] true [] []
+  -- (`concrete_subtype(any)`, `concrete_subtype(comparable)`: the values of
+  -- the `<concrete>` classes, and of those that are `<unique>`, so
+  -- comparable; with no construction, "comparable cannot be instanced here
+  -- because we don't know if it's a class type", MetatypeConcreteSubtype
+  -- .versetest:35, 3545)
+  let unique (n : String) : Bool := (supers n).any fun s =>
+    match classes.find? (·.1 == s) with
+    | some (_, _, specs, _, _, _) => specs.contains "unique"
+    | none => false
+  let concreteOthers : List STop := concreteTops.map fun a =>
+    .classDef p0 (ifaceName "concrete_subtype" a) [] [] [] [.name "type"] true [] []
   -- the classes of the values: each gives the casts of the classes above it,
   -- and, when `C{}` constructs it, their constructions
   let valueClasses : List STop := values.map fun c =>
     let ups := supers c
     let parents : List STy := [.name (ifaceName "subtype" c)] ++ (if castable c then [.name (ifaceName "castable_subtype" c)] else []) ++
-      (if concrete c == true then [.name (ifaceName "concrete_subtype" c)] else [])
+      (if concrete c == true then [.name (ifaceName "concrete_subtype" c)] else []) ++
+      (if concrete c && concreteTops.contains "any" then [.name (ifaceName "concrete_subtype" "any")] else []) ++
+      (if concrete c && unique c && concreteTops.contains "comparable" then [.name (ifaceName "concrete_subtype" "comparable")] else [])
     let x : SExpr := .ident p0 "X"
     -- (a cast to an interface or class no class is below always fails, as
     -- openverse's `C[X]` would refuse to write)
@@ -239,18 +301,23 @@ def desugar (tops : List STop) : Except String (List STop) := do
     let makes : List STop := if concrete c == true then (ups.map fun a =>
       .fn p0 (makeMethod a) [] [] ["override"] (.name a) (.construct p0 c [] [])) else []
     .classDef p0 (valueClass c) [] [] [] parents false [] (casts ++ makes)
+  -- (the values of other types: classes of their own, below their
+  -- metatypes)
+  let otherValueClasses : List STop := typeValues.map fun n =>
+    .classDef p0 (valueClass n) [] [] [] [.name (ifaceName "subtype" n)] false [] []
   -- the program with its metatypes written as the interfaces, and its
   -- values as the objects of their classes
   let g : STy → STy := STy.mapTy fun
-    | .app k [.name a] => if kinds.contains k then .name (ifaceName k a) else .app k [.name a]
+    | .app k [a] => if kinds.contains k then .name (ifaceName k (writtenTy a)) else .app k [a]
     | t => t
   let f : SExpr → SExpr := fun
-    | e@(.ident p n) => if values.contains n then .construct p (valueClass n) [] [] else e
+    | e@(.ident p n) =>
+      if values.contains n || typeValues.contains n then .construct p (valueClass n) [] [] else e
     | e => e
   -- (a call's or cast's head and a member's object are no values)
   let tops := tops.map fun t => (STop.mapAll g (protectHeads f) t)
   return root :: .classDef p0 castableMark [] [] [] [] true [] [] :: subIfaces ++ castIfaces ++ concreteIfaces ++
-    valueClasses ++ tops
+    otherIfaces ++ concreteOthers ++ valueClasses ++ otherValueClasses ++ tops
 
 end TypeValues
 end OpenVerse.Front

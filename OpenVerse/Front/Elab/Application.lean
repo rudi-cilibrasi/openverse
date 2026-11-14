@@ -958,7 +958,10 @@ partial def elabMethodCall (cb : AppElab) (ctx : Ctx) (p mp : Pos) (obj : SExpr)
     (c : String) (targs : List Ty) (owner m : String) (spawning : Bool) (args : List SExpr)
     (bracket : Bool) (exp : Option Ty) : EM R := do
   let env := ctx.types
-  checkMemberAccess env p c m
+  -- (a field's accessor called for a use of the field: the field's access
+  -- was judged there; the rest of the call is ordinary code)
+  if !ctx.accessorCall then checkMemberAccess env p c m
+  let ctx := { ctx with accessorCall := false }
   let roots := ctx.rootsOf c m
   let root := roots.headD owner
   for d in env.concreteBelow c do

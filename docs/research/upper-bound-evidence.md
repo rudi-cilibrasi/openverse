@@ -528,7 +528,7 @@ Each by its own rule and message, not by a blanket guard:
 | a cast to or construction of a type parameter, `t[X]`, `t{}` | no type value of `t` is passed (the prose's `dynamic_handler` in ch. 10 casts with `t[Item]`) | valid in the prose |
 | a write through a container upper, `set X[0] = …` with `X:t` | no conversion back to `t` exists | not tested |
 | variance of an existing function object | a bound adapts a method expression, not a function value already made (`method-value-stored-refusal`) | not tested |
-| `subtype(t)` of a type parameter, a type given as an argument (`F(t:type, X:t)`) | types as values hold classes and interfaces only (`types-as-values.md`) | valid (`ParametricTypes.versetest` 1305-1329, `TypeParam.versetest`) |
+| `subtype(t)` of a type parameter, as a value's type | types as values hold classes, interfaces and types written of types, not a type parameter (`types-as-values.md`); a type given as an argument, `F(t:type, X:t)`, and a bounded one, `F(t:subtype(c), X:t)`, are a type parameter whose argument the call writes since (`TypeArguments`) | valid (`ParametricTypes.versetest` 1305-1329) |
 
 The castability of `castable_subtype(c)` is a subtype relation: a program that
 writes such a bound has a hidden interface `$castableClass` above every

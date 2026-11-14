@@ -10,6 +10,8 @@ inductive Arity where
   | exactly (n : Nat)
   /-- one or two -/
   | oneOrTwo
+  /-- none or one -/
+  | upToOne
   /-- any number -/
   | any
 
@@ -17,6 +19,7 @@ inductive Arity where
 def Arity.admits (n : Nat) : Arity → Bool
   | .exactly k => n == k
   | .oneOrTwo => n == 1 || n == 2
+  | .upToOne => n ≤ 1
   | .any => true
 
 /-- `Arity.show "float"`: "one float", "two floats", "one or two floats". -/
@@ -26,6 +29,7 @@ def Arity.show (noun : String) : Arity → String
       | 0 => "no" | 1 => "one" | 2 => "two" | 3 => "three" | n => toString n
     s!"{word} {noun}{if n == 1 then "" else "s"}"
   | .oneOrTwo => s!"one or two {noun}s"
+  | .upToOne => s!"at most one {noun}"
   | .any => s!"any number of {noun}s"
 
 /-- A call of a built-in function, as its elaboration takes it: the
@@ -57,6 +61,13 @@ namespace BuiltinCall
     `Abs takes one argument`, `Pow takes two floats`. -/
 def wrongArity (c : BuiltinCall) (noun : String) : EM α :=
   eerr c.p s!"{c.name} takes {c.arity.show noun}"
+
+/-- A call with the number of arguments the built-in takes, as its arity
+    says, of the kind `noun`: else `BitAnd takes two ints, found 1
+    argument(s)`. -/
+def checkArity (c : BuiltinCall) (noun : String) : EM Unit := do
+  if !c.arity.admits c.args.length then
+    eerr c.p s!"{c.name} takes {c.arity.show noun}, found {c.args.length} argument(s)"
 
 /-- A built-in that can fail is called `F[…]` (Book of Verse §8.1). -/
 def needBracket (c : BuiltinCall) : EM Unit := do
@@ -300,11 +311,11 @@ def elabFloorCeil (up : Bool) (c : BuiltinCall) : EM R := do
     | t => eerr p s!"{name} takes a rational or an int, found {t.show}"
   | _ => c.wrongArity "argument"
 
-/-- `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean): a primitive of ints that can
-    fail (when `Y` is 0). The number of arguments is not checked here:
-    `elabInts` takes as many as are written. -/
+/-- `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean): a primitive of two ints that
+    can fail (when `Y` is 0). -/
 def failableInts (op : Prim) (c : BuiltinCall) : EM R := do
   c.needBracket
+  c.checkArity "int"
   return ⟨.prim op (← c.elabInts c.ctx c.p c.args), .int⟩
 
 /-- `Min(X, Y)`, `Max(X, Y)` (`isMin`): of two ints, or of two floats
@@ -379,20 +390,29 @@ def elabClampOrSgn (c : BuiltinCall) : EM R := do
     order. -/
 def elabBitwise (shift : Bool) (c : BuiltinCall) : EM R := do
   if shift then c.needBracket else c.noBracket
-  if !c.arity.admits c.args.length then
-    eerr c.p s!"{c.name} takes {c.arity.show "int"}, found {c.args.length} argument(s)"
+  c.checkArity "int"
   let es ← c.elabInts c.ctx c.p c.args
   if c.name == "BitNot" then return ⟨.prim .sub [.lit (.int (-1)), es[0]!], .int⟩
   let helper := "$bit" ++ (c.name.drop 3).toString
   let some s := c.ctx.sig? helper | eerr c.p s!"internal error: the bitwise helper {helper} is missing"
   return ⟨.call s.idx es, .int⟩
 
-/-- `Err()`: the program stops with an error; its value is of every type.
-    The first place it is called is noted (`errAt`). Its arguments, if any
-    are written, are not looked at. -/
+/-- `Err()`, `Err(Message)`: the program stops with an error; its value is
+    of every type. The first place it is called is noted (`errAt`). Its one
+    argument, if written, is a string, evaluated before it stops (Book of
+    Verse ch. 8: "a runtime error with an optional message"; the API
+    reference: `Err(Message:string)`): a literal's evaluation does nothing,
+    so it is not kept. -/
 def elabErr (c : BuiltinCall) : EM R := do
+  c.checkArity "string"
   modify fun st => if st.errAt.isNone then { st with errAt := some c.p } else st
-  return ⟨.prim .userErr [], .never⟩
+  let stop : Expr := .prim .userErr []
+  let es ← c.elabArgs c.ctx c.p c.args (c.args.map fun _ => Ty.string)
+  let code ← es.foldrM (fun e acc => do
+    match e with
+    | .lit _ => pure acc
+    | e => return .seq (← discardValue ⟨e, Ty.string⟩) acc) stop
+  return ⟨code, .never⟩
 
 /-- `$Show(X)`, the entry of `openverse run FILE do EXPR`: the value printed
     when it has a `ToString`, else just evaluated. -/
@@ -461,7 +481,7 @@ def builtinFunctions : List Builtin := [
   ⟨"BitNot", .exactly 1, elabBitwise false⟩,
   ⟨"BitShiftLeft", .exactly 2, elabBitwise true⟩,
   ⟨"BitShiftRight", .exactly 2, elabBitwise true⟩,
-  ⟨"Err", .any, elabErr⟩,
+  ⟨"Err", .upToOne, elabErr⟩,
   ⟨"$Show", .exactly 1, elabShow⟩]
 
 /-- The built-in a call of `name` means, as a name of `builtinFunctions`

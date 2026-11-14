@@ -42,7 +42,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Enums | `name := enum:` / `enum{A, B}`, `name.A`, equality, `case` that needs no `_` when every value is named (an enumerator is its index in Verse Core); `enum<open>` may gain values, so a `case` on one needs `_` or a failure context (`<closed>` is the default) | ch. 9 |
 | Maps | `[k]v`, `map{k => v, …}` (a key given twice keeps its last value, at its last position), `M[k]` (fails on a missing key), `set M[k] = v` (insert or update; in Verse the key's reference is `<decides>`, the Book's API reference, so such a `set`, also as a path's last step, `set S.M[k] = v`, is written in a failure context, as the Book's tests do, `if (set M0[0] = 42)`, `(set Map[I] = I) or Err()`; its last key inserts, so it succeeds; its value is `v`), `set M[k] op= v` (fails on a missing key), `.Length`, `for (V : M)`, `for (K -> V : M)` in insertion order, `ConcatenateMaps(M1, M2)` (exactly two maps, ch. 3: more by chained calls; their pairs laid down in turn, as `map{…}` lays its own: a key both maps have takes the second map's value at the second map's place, the Book's API reference and `ConcatenateMaps.versetest` 21, 33), order-sensitive equality (a map is the array of its pairs in Verse Core) | §3, §9.3 |
 | Array methods | (also of a tuple of one element type, which is an array where one is expected: `('a', 'b', 'c').Slice[1]`) `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`, `A.RemoveFirstElement[x]`, `A.Remove[i, j]` (half-open), `A.ReplaceElement[i, x]`, `A.ReplaceFirstElement[x, y]`, `A.Insert[i, B]`, `A.Last[]`, `A.Last[n]` (the element n before the last) (all failable); `A.RemoveAllElements(x)`, `A.ReplaceAllElements(x, y)`, `A.ReplaceAll(Pattern, Replacement)` (contiguous subarrays, left to right, not overlapping; an empty pattern changes nothing), `Concatenate(A, B, …)` or `Concatenate(Arrays)` (#150) (never failing) | §9.1 |
-| Built-ins | `Print(s)`, `ToString(x)` (int, float, char, string), `Floor[F]`, `Ceil[F]`, `Round[F]`, `Int[F]` (of a float, failable), `Floor(R)`, `Ceil(R)` (of a rational or an int, never failing; `Floor(X / Y)` fails when `Y = 0`, as `X / Y` does), `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Clamp(Val, A, B)` (the median of the three, of ints or of floats, NaN ordering above +Inf), `Sgn(X)` (-1, 0 or 1 of an int or a float, NaN of NaN), `F.IsFinite[]` (as `IsFinite[F]`), `BitAnd(X, Y)`, `BitOr`, `BitXor`, `BitNot(X)`, `BitShiftLeft[X, N]`, `BitShiftRight[X, N]` (see [Bitwise functions](#bitwise-functions)), `Err()`; the conversions of chars and code points as methods (see [char32](#char32)): `C.ToCodeUnit()`, `C.ToAsciiChar32[]` of a char, `C.ToCodePoint()`, `C.ToAsciiString()` of a char32, `N.ToChar[]`, `N.ToChar32[]` of an int | API reference |
+| Built-ins | `Print(s)`, `ToString(x)` (int, float, char, string), `Floor[F]`, `Ceil[F]`, `Round[F]`, `Int[F]` (of a float, failable), `Floor(R)`, `Ceil(R)` (of a rational or an int, never failing; `Floor(X / Y)` fails when `Y = 0`, as `X / Y` does), `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Clamp(Val, A, B)` (the median of the three, of ints or of floats, NaN ordering above +Inf), `Sgn(X)` (-1, 0 or 1 of an int or a float, NaN of NaN), `F.IsFinite[]` (as `IsFinite[F]`), `BitAnd(X, Y)`, `BitOr`, `BitXor`, `BitNot(X)`, `BitShiftLeft[X, N]`, `BitShiftRight[X, N]` (see [Bitwise functions](#bitwise-functions)), `Err()` and `Err(Message)` (stops the program; ch. 8: "a runtime error with an optional message", the API reference `Err(Message:string)`: no argument or one string, which is evaluated first); a built-in given another number of arguments than it takes is refused (`Quotient takes two ints, found 3 argument(s)`); the conversions of chars and code points as methods (see [char32](#char32)): `C.ToCodeUnit()`, `C.ToAsciiChar32[]` of a char, `C.ToCodePoint()`, `C.ToAsciiString()` of a char32, `N.ToChar[]`, `N.ToChar32[]` of an int | API reference |
 | Modules | `name := module:` (nested), `M.F`, `A.B.F`, the types `M.c` and values `M.c{…}`, `(M:)F`, `using{M}` at file or module scope, `<public>` members (`<internal>` is the default); see [Modules](#modules) | ch. 16 |
 | Access | `<public>`, `<internal>` (the default), `<protected>`, `<private>`, `<scoped{M, …}>` and `S := scoped{…}`, `<epic_internal>`, on modules, their definitions, a class's members and constructor, and `var<w> X<r>:t`; checked where each use is written, and no definition exposes a less visible one; see [Access](#access) | ch. 12 |
 | Attributes | `@deprecated`, `@experimental`, `@available{MinUploadedAtFNVersion := N}`, custom attributes (a class below `attribute` with its scopes `@attribscope_…`, `@c{F := e}` or a constructor's `@f(…)`) before a definition, a member, a struct's field or an enum's value; `@ignore_unreachable` on an expression or a `case` arm: checked where the Book checks them, metadata but `@available`; see [Attributes](#attributes) | ch. 12 |
@@ -225,9 +225,10 @@ Combine(A:t1, B:t2 where t1:type, t2:type):tuple(t1, t2) = (A, B)
   function object already made (a bound does not make
   `type{_(:car):int}` a `type{_(:vehicle):int}`).
 - **Limits.** A generic `Main`, several constraints on one type parameter
-  (also unsupported in the Book), explicit type arguments to a generic
-  function (`F(t:type, X:t)`, called `F(int, 3)`), and generic constants are
-  not supported.
+  (also unsupported in the Book), type arguments written at a call other
+  than for a parameter `t:type` the function uses as a type (`F(t:type,
+  X:t)`, called `F(int, 3)`: [Types as values](#types-as-values), "A type
+  given as an argument"), and generic constants are not supported.
 
 ## Effect contracts
 
@@ -815,6 +816,47 @@ circle := class(shape, labelled):
     plain `M<override>` in a subclass implements all its slots. `(c:)M` in
     class `c` itself is `M`, unless a class above has an `M`: that would be
     a second method `M`, which openverse refuses.
+- **Fields with accessors** (Book of Verse ch. 10, "Fields with
+  Accessors"; ch. 12, "Getter and Setter Accessors"; the rules and their
+  sources are pinned in [research/accessors.md](research/accessors.md)).
+  `var X<getter(G)><setter(S)>:t = external{}` in a class or an interface
+  is a field with no storage: a read of `O.X` (or of `X` in a method) is
+  `O.G(…)`, a `set O.X = v` is `O.S(…, v)`, whose value is `v`.
+  - **Declaring.** One `<getter(…)>` and one `<setter(…)>`, on a `var` of a
+    class or an interface (not a struct); the default `external{}` or none,
+    and then every construction gives the field. `G` and `S` are methods of
+    the class or of one above it (a method of an interface is one), each
+    taking first an unnamed parameter of the type `accessor`:
+    `G(:accessor):t` and `S(:accessor, V:t):void`, at the field's type
+    exactly; their other overloads read and set paths (below). Not of a
+    tuple type (the Book's tests).
+  - **Overriding.** A field with accessors is not overridden, and its
+    accessors are not overridden below the class or interface that declares
+    it. A class may give a field with storage of a class or interface above
+    it accessors, `var X<override><getter(G)><setter(S)>:t = external{}`:
+    its objects then read and set `X` through them, also through the type
+    above, where the object's class decides (a test of it, as for a field at
+    different places).
+  - **Paths.** `O.X[I]`, `O.X.F[J]`: a path into the field's value, up to
+    the first object in it, is one call of the overload of `G` (or of `S`,
+    for a `set`) that takes, after the accessor, the path's indices and the
+    names of the struct fields it goes through, as strings, then for `S` the
+    value: `GetX(:accessor, I:int)<decides>:int`. Such an overload must
+    exist; one that can fail is used in a failure context. A path that goes
+    on into an object reads the field with `G`, then goes on in the object;
+    `O.X.Length` reads `O.X`.
+  - **Order.** `O`, then the indices, then `v`; for `set O.X op= v`, then the
+    old value through `G`, then `S`. A construction evaluates its fields'
+    values in the order they are declared, those with accessors among them,
+    makes the object, calls the setters of the fields with accessors it
+    gives, in that order, then runs the `block:` clauses.
+  - **Access.** A use of the field is judged by the field's access (and its
+    `var`'s for a `set`), not by its accessors': a `<public>` field may have
+    `<private>` accessors. The accessors cannot be called otherwise, since
+    no program can make the value of their first parameter.
+  - **Not supported:** a constructor function that gives a field with
+    accessors; a path into such a field's value through a type above a
+    class that gives a field with storage accessors.
 - **Casts.** `T[X]` is `X` as a `T`, failing unless `X`'s class is below
   `T`. `T(X)` converts to a supertype and cannot fail.
 - **Parametric classes.** A parametric class is a reference like any other
@@ -2213,13 +2255,41 @@ Main():void =
 - **`T[X]`** with `T` a type value is `X` cast to the class `T` holds, failing
   unless `X`'s class is below it. **`T{}`** with `T:concrete_subtype(c)`
   constructs the class `T` holds with its defaults; no field may be given.
+- **Other types.** `subtype(t)` is also of a type that is no class or
+  interface: a built-in type (`subtype(int)`), a struct, an enum, or an
+  array, option, map or tuple of them (`subtype([]c)`); its values are the
+  types `t` (`X:type = int`, `Identity(point)`), each an object of a class
+  of its own, which nothing reads but a conversion to `type`, and a value
+  of `subtype(t)` holds `t` alone. `castable_subtype` and `concrete_subtype`
+  of such a type are refused, as the Book's tests have them.
+- **`concrete_subtype(any)`** holds the `<concrete>` classes, and
+  **`concrete_subtype(comparable)`** those that are also `<unique>`, so
+  comparable (`concrete_subtype(comparable)` of `float` is refused); nothing
+  is constructed through them (the Book's tests: "comparable cannot be
+  instanced here because we don't know if it's a class type").
 - Type values are not compared (the Book's tests: "We can't yet compare
-  the subtype values"). `subtype(t)` of a type that is no class or
-  interface (`subtype(int)`), `subtype(t)` of a type parameter,
-  `concrete_subtype(comparable)`, `concrete_subtype(c)` as a type
-  parameter's bound and a type given as an argument (`F(t:type):?t`) are
-  not supported; `castable_subtype(c)` as a type parameter's bound is
+  the subtype values"). `subtype(any)`, `subtype(comparable)`,
+  `castable_subtype(any)`, `subtype(t)` of a type parameter and
+  `concrete_subtype(c)` as a type parameter's bound are not supported;
+  `subtype(c)` and `castable_subtype(c)` as a type parameter's bound are
   ([Parametric functions](#parametric-functions), "Upper bounds").
+- **A type given as an argument.** A function's parameter `t:type` that the
+  function uses as a type (`FalseOption(t:type):?t = false`, the Book's
+  tests) is a type parameter whose argument the call writes:
+  `FalseOption(int)`, `Pair(int, 1, 2)` with `Pair(t:type, X:t, Y:t)`. The
+  function is generic over `t`, so checked once, and the call passes the
+  type's witness, as a generic call does. A parameter `t:subtype(c)` or
+  `t:castable_subtype(c)` used so is a bounded one (`where t:subtype(c)`,
+  [Parametric functions](#parametric-functions), "Upper bounds"): `Count(t:subtype(shape),
+  Xs:[]t)`, called `Count(square, …)`; a type outside the bound is refused,
+  as for a bounded type parameter. The argument is a type as written:
+  a type's name (`int`, `logic`, a class's, a struct's) or a parametric type
+  applied (`c(int)`, `tuple(int, float)`); `[]int` and `?int` are not yet
+  written as arguments. Refused: a value there, a type parameter there (the
+  BPVM's link error; VerseVM accepts it), such a parameter after a parameter
+  whose type uses it (`F(X:t, t:type)`, the Book's tests, 3502), and such a
+  parameter of a method.
+  A parameter `t:type` used as a value is a type value's (above).
 - **Conversions.** `t(X)`, with `t` a built-in type's, a struct's or an
   enum's name, or a type written in parentheses, `(?int)(X)`, `([]int)(X)`,
   is `X` converted to `t`: `X` must have a type that is a subtype of `t`
@@ -3177,5 +3247,5 @@ Main()<suspends>:void =
 `weak_map`, what [comparable](#comparable) lists as not yet, module paths `using{/Verse.org/…}` (accepted and ignored), paths as values and path qualifiers other than `(/Verse.org/Verse:)` of a built-in type, two members of one name in a class (`(c:)M` beside an inherited `M`, Book ch. 10), the
 specific overload/call gaps listed under [Overloading](#overloading), nested
 functions and lambdas (a lambda, `(X:int) => X`, `a => b`, parses, as the Book's tests have it, and is refused; see [release evidence and proposed design](research/closure-design.md)),
-pointers (`e^` and `^t` parse, as the Book's tests have them, and are refused: the Book's chapters define none), specifiers on a macro's name (`for<par>(…)`, parsed and refused, 3604), declarations with no body (`F():void`, `X:int` on their line: parsed and refused, as openverse has no definitions made elsewhere), fields with accessors (`var X<getter(F)><setter(G)>:t = external{}`, ch. 10, "Fields with Accessors": parsed and refused), choice beyond [Choice](#choice), concurrency beyond [Concurrency](#concurrency), and the unsupported
+pointers (`e^` and `^t` parse, as the Book's tests have them, and are refused: the Book's chapters define none), specifiers on a macro's name (`for<par>(…)`, parsed and refused, 3604), declarations with no body (`F():void`, `X:int` on their line: parsed and refused, as openverse has no definitions made elsewhere), choice beyond [Choice](#choice), concurrency beyond [Concurrency](#concurrency), and the unsupported
 effect/construction contracts listed under [Effect contracts](#effect-contracts).
