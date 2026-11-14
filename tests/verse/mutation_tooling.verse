@@ -2,7 +2,7 @@
 # Small items of mutation syntax, macros and tooling (#25).
 # The first line is a shebang, which is a `#` comment.
 
-score := struct:
+score := struct<computes>:
     Best:?int = false
     Tags:[string]?int = map{}
 

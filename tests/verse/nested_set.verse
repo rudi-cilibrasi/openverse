@@ -2,11 +2,11 @@
 # variable's value. An index out of range, or an intermediate map key that is
 # missing, makes the set fail, and the failure is rolled back.
 
-vector2 := struct:
+vector2 := struct<computes>:
     X:int = 0
     Y:int = 0
 
-player := struct:
+player := struct<computes>:
     Name:string
     Pos:vector2 = vector2{}
     Scores:[]int = array{}

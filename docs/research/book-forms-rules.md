@@ -52,3 +52,34 @@ separator; the indented form was refused already.
 **openverse now.** `parseClassBody` (`Front/Parser.lean`) refuses a member
 that follows another on its line with no `,` or `;`: "expected ',', ';', a
 new line or '}' after a member".
+
+## A struct's field set
+
+**The rule.** `set` writes a field of a struct only when the struct is
+`<computes>`; a path that reaches an object and writes one of the
+object's fields reads the structs before the object, and writes none of
+theirs.
+
+**The Book.** Ch. 5, "Only <computes> Structs Allow Field Mutation"
+(`05_mutability.md:733-735`): "Only structs marked `<computes>` (pure
+structs) allow field mutation through a variable". The tests:
+`s := struct{M:int=0}` and `var S:s=s{}; set S.M = 1` refused (3509), the
+same with `struct<computes>` valid ("Only members of pure structs can be
+mutated through a pointer", `Tests/Mutability.versetest` 424-426); `set
+S3[0].S2.C0.CM.S0.A = 77` valid, where `struct3` and `struct2`, the structs
+before the object `C0`, are not `<computes>` and `struct1`, `struct0`, those
+after its `var` field `CM`, are (`:441-447`, with the definitions at
+`:95-115`).
+
+**openverse before.** Any struct's field was set through a `var`.
+
+**openverse now.** `elabSetWith` (`Elab/Control.lean`) walks the path's
+field steps, and refuses the first field of a source struct that is not
+`<computes>` after the path's last object: "set of field 'M' of s: only a
+<computes> struct's fields are set". Programs: the tests `structs`,
+`generic_structs`, `nested_set`, `set_op_order`, `set_op_order_paths`,
+`choice_set_path_more`, `weak_map`, `class_refs_paths`,
+`iface_field_set_paths` and `mutation_tooling` declare the structs whose
+fields they set `<computes>` (their output the same); the error test
+`set_path_not_var` too, so that its subject, a path from a constant, is
+what it refuses.

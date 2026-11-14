@@ -1,7 +1,7 @@
 # set P op= e and V := e; set P = P + V agree, also when e changes the option, map or array (#58
 # review): e runs first, then P's old value is read from what e left (the Book of Verse's tests,
 # ArrayAppend.versetest 140 and 183)
-sub := struct:
+sub := struct<computes>:
     F:int = 0
     G:int = 0
 hold := class:

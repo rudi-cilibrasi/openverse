@@ -1,7 +1,7 @@
 # expect: 'P' is not a var
-vector2 := struct:
+vector2 := struct<computes>:
     X:int = 0
-holder := struct:
+holder := struct<computes>:
     V:vector2 = vector2{}
 Main():void =
     P:holder = holder{}
