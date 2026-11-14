@@ -97,7 +97,7 @@ def prepareLowering (env : TyEnv) (sigs : Signatures) (elaborated : Array Elabor
     fns := fns.push { name := s!"{d}.$get.{f}", arity := 1, nslots := 1, decides := false, writes := false,
                       body := .heap (.get kd) [.local 0] }
     slotTys := slotTys.push [selfTy]
-    metadataInfo := metadataInfo.push {}
+    metadataInfo := metadataInfo.push { metadataResult := f.startsWith "$w." }
     accSigs := accSigs.push ([selfTy], fTy)
     fns := fns.push { name := s!"{d}.$set.{f}", arity := 2, nslots := 2, decides := false, writes := true,
                       body := .heap (.set kd) [.local 0, .local 1] }

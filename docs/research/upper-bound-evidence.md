@@ -71,7 +71,13 @@ object field or a shared local initialized with executable data. Checking the
 write protects every alias, including aliases obtained by indexed reads or
 passed to an unannotated helper. Compiler-owned `$w.` fields retain their
 metadata role without tainting unrelated object fields. This analysis adds no
-Core opcode or runtime tag. `MetadataStorage.lean` retains 26 real/dummy
+Core opcode or runtime tag. Generated getters of hidden fields also mark
+their normal return as metadata, independently of the source member wrapper.
+Opaque forwarding remains allowed, and reading an unrelated ordinary field
+of an object with hidden metadata still gives executable data.
+`MetadataGetters.lean` checks these accessor boundaries with 14 Core-checked
+controls, including execution after forwarding through another function.
+`MetadataStorage.lean` retains 26 real/dummy
 rejection pairs and 25 opaque-forwarding, real-overwrite and rollback pairs,
 including a later GADT refinement, fresh unit-to-array conversions, ordinary
 helpers with independent real returns, virtual and spawned receivers, and
