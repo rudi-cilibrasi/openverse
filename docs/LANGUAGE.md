@@ -98,6 +98,11 @@ openverse follows Verse's lexical grammar for the characters of a file:
   path `/a/b` minus `c`. A path parses wherever an expression may start
   and in `using{…}`, which accepts and ignores it; as a value it is
   refused ("not supported": openverse has no module values).
+- A `.` and what follows it, a member (`O.F`) or a dot form's body
+  (`if (C). E`), are on one line with no comment between them: `O. F` and
+  `O<#c#>.F` are `O.F`, and `O.` at the end of a line or before a comment
+  is an error, as the Book's tests have it (`ReserveDotSpace.versetest`
+  3-7, [the rule](research/book-forms-rules.md#a--and-what-follows-it)).
 
 **Indentation.** The indentation of a line is its leading string of tabs and
 spaces. The offside rule compares columns, and a tab is one column, so to
