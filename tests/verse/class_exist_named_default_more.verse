@@ -27,7 +27,9 @@ box(t:type) := class(shower(t)):
 pairB(a:type, b:type) := class(shower(tuple(a, b))):
     A:a
     Show<override>(?Pre:[]tuple(a, b) = array{}):string = "pair {Pre.Length}"
-Show2(S:shower(t) where t:type):string = S.Show()
+# (shower only takes t in, so a shower(t) gives no t, the Book's rule,
+# ParametricFunctions.versetest 356: the type is given as an argument)
+Show2(t:type, S:shower(t)):string = S.Show()
 
 Main()<suspends>:void =
     P := pairE(int, string){A := 1, B := "b"}
@@ -35,5 +37,5 @@ Main()<suspends>:void =
     T := spawn{Run0(P)}
     Print("{T.Await()(0)}")
     Print("{Go(pairE(int, int){A := 1, B := 2})}")
-    Print(Show2(box(int){V := 1}))
-    Print(Show2(pairB(int, string){A := 2}))
+    Print(Show2(int, box(int){V := 1}))
+    Print(Show2(tuple(int, string), pairB(int, string){A := 2}))

@@ -84,49 +84,83 @@ fields they set `<computes>` (their output the same); the error test
 `set_path_not_var` too, so that its subject, a path from a constant, is
 what it refuses.
 
-## A type parameter named nowhere
+## A type parameter the parameters determine
 
-**The rule.** Every type parameter of a function is named in its
-signature: in a parameter's type or in its result's. (A bounded one, or
-one a bound names, must be determined by a parameter, as before.)
+**The rule.** Every type parameter of a function, or of a method beyond its
+class's, is given by the parameters: it occurs, by the Book's variance
+(ch. 10, "Instantiation and Identity"), where values go *in*: in a
+parameter's type at a covariant place (a parameter's own type, an array's,
+an option's, a map's or a tuple's element, a covariant or invariant class
+argument), or in the result's at a contravariant place (a function type's
+parameter: `G(N:int where t:type):(t->void)`), or it is named in the bound
+of one that is (`Up(X:t where t:subtype(u), u:type)`). Not determining: the
+result's covariant places (`Make(N:int where t:type):?t`); a function type's
+parameter inside a parameter (`Apply(F:t->void where t:type)`); a type
+argument of a class or interface that only takes it in, a contravariant one
+(`Use(S:sink(t))`, `sink(t) := class{Take(X:t):void}`); and, transitively,
+a parameter named only in such places. A class or interface that does not
+use its type parameter (bivariant) gives it: the Book is silent, and an
+object holds its type arguments, which openverse's casts refine (#243).
 
-**The Book.** The tests (3503): `F(:u where t:type, u:type):void = {}`
-refused (`Tests/ParametricFunctions.versetest:374`), beside `F(() where
-t:type):?t` (`:338`) and `F(() where t:type):[]t` (`:341`), refused too,
-and `G(() where t:type):(t->void) = F` valid (`:376-378`). The prose is
-silent.
+**The Book.** The tests (3503), `Tests/ParametricFunctions.versetest`:
+refused, `F(() where t:type):?t` (`:338`), `:[]t` (`:341`), `:[t]u` and
+`tuple(?t, ?u)` (`:344`, `:347`, two errors each), `F(G(:t):void where
+t:type):void` (`:350`), `F(() where t:type):?class1(t)` with `class1`
+holding a `Property:t` (`:353`), `F(:class1(t) where t:type)` with `class1`
+taking `t` in its `Method(:t)` only (`:356`, `:361`, `:366`), `F(() where
+t:type):void` (`:371`), `F(:u where t:type, u:type)` (`:374`),
+`Foo(X:int where t:subtype(u), u:type):?t` (`:586`, two); valid, `G(()
+where t:type):(t->void) = F` (`:376-378`), `F(X:[t]u where …):[t]u`
+(`:380`), `Foo(:castable_subtype(t) where t:type)` (`:583`), `Foo(X:t
+where t:subtype(u), u:type):t` (`:589`). The prose is silent; ch. 2 gives a
+type no parameter determines as an argument, `MaybeValueExplicit(t:type,
+Value:t, Valid:logic):?t` (`02_primitives.md:1040-1069`).
 
-**openverse before.** A type parameter without a bound was not checked:
-openverse's reading is that a call's expected result may give it
-(`Make():?t`, LANGUAGE.md, "Readings"), and one its signature names
-nowhere, which nothing can give, was accepted.
+What looked like a split by VM is not one: `MakeClosure(Callback:
+tuple(payload, context)->void, Context: context where payload: type,
+context: type):(payload->void)` (`Bugs/FORT-592189-MaybeCoerceToTypeCrash.versetest:44`,
+`verse_vm_only`, valid) names `payload` in its result's function type's
+parameter, which determines it as `:376` has it; its `bp_vm_only` twin
+(`:4`) is an IR error (3502), not this rule's.
 
-**openverse now.** `UpperBounds.checkDetermined` refuses a type parameter
-without a bound that its signature names nowhere: "the type parameter t of
-F is named nowhere in its signature, so nothing can give it one". Programs:
-the error tests `fn_value_open_phantom`, `fn_method_instance_phantom`,
-`fn_method_tuple_phantom` and `fn_context_method_phantom`, whose functions
-had such a type parameter for another refusal, are refused for it now
-(their expected message rewritten); `alias_type_parameter` names its type
-parameter (`Id(X:t where t:type):t`), so that what it refuses is still a
-type parameter that takes a type alias's name; the test
-`fn_values_method_instance_unused` names its method's (`D:?u`), its output
-the same.
+**openverse before.** A type parameter without a bound was not checked but
+for one its signature names nowhere (#618): openverse's reading was that a
+call's expected result may give it (`Make():?t`).
 
-**Left:** the rest of the tests' rule, that a parameter, not the expected
-result, gives every type parameter (`:338`, `:341`, which openverse's parser
-refuses for their empty parameter group, and `F(G(:t):void where t:type)`,
-`:348`, named only in a function type's parameters). Measured, it refuses
-54 of openverse's tests of its reading (`class_cast_context_*`,
-`fn_values_open_*`, `generics`, …), 33 functions the compiler writes (the
-branches of a refining cast, `$refine…`), and 4 generated programs of two
-models (`gadt_function_values`, `gadt_method_instances`): an owner's
-decision to retire the reading. And the tests split by VM there: VerseVM
-takes `MakeClosure(Callback:tuple(payload, context)->void, Context:context
-where payload:type, context:type):(payload->void)`, whose `payload` only a
-function type's parameter names
-(`Bugs/FORT-592189-MaybeCoerceToTypeCrash.versetest:44`, `verse_vm_only`),
-where the BPVM's twin is an IR error (`:4`).
+**openverse now.** `checkDeterminedTypeParams` (`Elab/Signatures.lean`),
+after the signatures are declared and the Book's variances computed
+(`elabProgramCore`, between `declareSignatures` and `inferSignatures`),
+refuses a source function (or method) with a type parameter so given by
+nothing: "no parameter of F determines its type parameter t, so no call can
+give it one …" (the source check of #618, `UpperBounds.checkDetermined`,
+keeps refusing earlier one named nowhere, and a bounded one no parameter
+names). The compiler's own functions, whose names have `$` (the branches
+of refining casts, `$refine…`; adapters, stages, helpers), are no program's
+and keep the reading: their calls are the compiler's, which writes the
+expected type there.
+
+**Programs.** 44 tests of `tests/verse` and 3 of `tests/errors` declared
+such a function; rewritten keeping their subjects, their output the same
+(the list is the commit's): 27 refining-cast context tests
+(`class_cast_context_*`) declared an unused constructor helper
+`Pair(N:int where a:type, b:type):pair(a, b)`, dropped, the three of a
+field's default constructing `pair(a, b){}` instead (and the generator of
+the size test, `tests/scripts/test-choice-size.sh`, the same); a function
+of a contravariant class's type parameter takes it as a type argument
+(`Show2(t:type, S:shower(t))`, `Run(t:type, P:base(t))`, `Read(t:type,
+X:i1(t))`) or names the type (`GQ(X:j0(?string))`); a result-only
+`Empty(N:int where t:type):[]t` takes its type from a parameter
+(`Empty(N:t)`, `Empty(Like:[]t)`); `Nothing(t:type):?t` and a `Fail` of
+result `false`. Deleted, as their subject was the retired reading:
+`fn_values_open_tuple_empty` (generic function values with no parameters,
+their type parameter from the function type expected) and
+`multi_generic_mutual_result_type` ("The other member's type comes only
+from its result"). Two error tests that refused such a function at its call
+(`generic_uninferable`, `multi_generic_tp_unbound`) refuse it where it is
+declared. The models `gadt_function_values` and `gadt_method_instances`
+wrote `Empty(N:int where …):[]a`; they write `Empty(N:a)` now (their random
+stream the same; 1,000 seeds each agree in Lean, C and the model), so the
+4 generated programs of `corpus2` that had it are refused now.
 
 ## `using{/localhost}`
 

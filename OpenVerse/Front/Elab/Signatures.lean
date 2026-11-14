@@ -250,6 +250,62 @@ def checkTypeDefaults (ctx : Ctx) (defaults : List STop) : Except String Unit :=
         throw s!"{e} (the attribute @{((n.splitOn "@").getLast?).getD ""}: its value, or a field's, is checked at its type, in the scope around the definition it is on, and never runs; Book of Verse ch. 12)"
       throw s!"{e} (the default of ?{param} in a function type: not part of the type, it is checked at the parameter's type, with literals and top-level names only, #503)"
 
+/-- Every type parameter of a function, or of a method beyond its class's,
+    is determined by its parameters: it occurs where a call's argument gives
+    it, a parameter's type at a place values go in (Book of Verse ch. 10's
+    variance: not inside a function type's parameters, nor at a parameter of
+    a class or interface that only takes it in, a contravariant one; one that
+    does not use it gives it, below), or the result's at a place
+    values go out of it (a function type's parameter, `G():(t->void)`), or
+    it is named in the bound of one that is (`Foo(X:t where t:subtype(u),
+    u:type)`). The result's type alone gives none: openverse's reading that a
+    call's expected result may give a type parameter (`Make():?t`) is
+    retired. The Book's tests, `ParametricFunctions.versetest` 336-378, 586
+    (error 3503): `F(() where t:type):?t`, `F(G(:t):void where t:type)`,
+    `F(:class1(t) where t:type)` with `class1` contravariant in `t`, refused;
+    `G(() where t:type):(t->void) = F` valid. The compiler's own functions
+    (their names have `$`) are no program's, and keep the reading: their
+    calls are the compiler's. -/
+def checkDeterminedTypeParams (env : TyEnv) (declared : Declared) : Except String Unit := do
+  -- (a class's or interface's type parameter that nothing in it uses, a
+  -- bivariant one, gives a call its argument's: the Book's tests are silent,
+  -- and an object holds its type arguments, which openverse's casts refine,
+  -- #243; a contravariant one does not, `ParametricFunctions.versetest` 356)
+  -- (the Book's variances of the members a program writes: not a bound's
+  -- evidence, a hidden field the front end adds, which takes its type
+  -- parameter in)
+  let evidence : Ty → Bool := fun
+    | .struct n _ => n == SubtypeEvidence.family
+    | _ => false
+  let shown : TyEnv := { env with structs := env.structs.map fun (n, fs) =>
+    (n, fs.filter fun (f : String × Ty × Option SExpr) => !(f.1.startsWith "$" && evidence f.2.1)) }
+  let variances := shown.bookVariances env.memberSigs
+  let V : String → List SVar := fun n =>
+    ((variances.lookup n).getD []).map fun (v : SVar) => if v == SVar.bi then SVar.co else v
+  for (s, top) in declared.gsigs.toList.zip declared.generics do
+    if s.name.contains '$' then continue
+    let some (fpos, fname, tps) := (match top with
+      | .fn fp n _ tps .. => some (fp, n, tps)
+      | _ => none) | continue
+    -- (a method's class's type parameters are its receiver's)
+    let cls := (s.name.splitOn ".").headD ""
+    let own := if s.name.contains '.' && env.classes.contains cls then
+        s.tparams.drop ((env.sparams.lookup cls).getD []).length else s.tparams
+    let params := if s.name.contains '.' && env.classes.contains cls then s.params.drop 1 else s.params
+    let given (p : String) : Bool :=
+      let pol := params.foldl (fun acc t => acc.join (t.polOf env V p).flip) (s.ret.polOf env V p)
+      pol == .contra || pol == .inv
+    let mut known : List String := (s.tparams.map (·.1)).filter fun p => !own.any (·.1 == p) || given p
+    for _ in s.tparams do
+      for b in s.bounds do
+        if b.derived.params.all known.contains then
+          known := known ++ b.base.params.filter (!known.contains ·)
+    for (p, _) in own do
+      unless known.contains p do
+        let pos := ((tps.find? (·.name == p)).map (·.pos)).getD fpos
+        let shown := (fname.splitOn "::").getLastD fname
+        throw s!"{pos.show}: no parameter of {shown} determines its type parameter {p}, so no call can give it one: a call's arguments give a type parameter, a parameter's type naming it where values go in (not inside a function type's parameters, nor as an argument of a class that only takes it in), or the result's function type's parameters; its expected result does not (the Book's tests, ParametricFunctions.versetest 336-378, error 3503)"
+
 /-- Constant types and effects (#35), a phase of `elabProgramCore`: the type of
     each unannotated constant, inferred in rounds so that one may use one
     defined after it (the first still unknown refused); and the heap effects of

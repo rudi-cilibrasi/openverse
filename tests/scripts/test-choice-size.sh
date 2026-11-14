@@ -1333,10 +1333,9 @@ if kind.startswith('context-refining-'):
         print(f'Run({params},?N:int={expr} where {types}):int=N')
         print(f'Use({params} where {types}):int=Run({names})')
     elif context == 'field':
-        print('Pair(N:int where a:type,b:type):pair(a,b)=pair(a,b){}')
         fields = ';'.join(f'Data{i}:pair(a{i},b{i})' for i in range(count))
         assignments = ','.join(f'Data{i}:=P{i}' for i in range(count))
-        locals = ';'.join(f'P{i}:pair(a{i},b{i})=Pair(0)' for i in range(count))
+        locals = ';'.join(f'P{i}:pair(a{i},b{i})=pair(a{i},b{i}){{}}' for i in range(count))
         expr = f'block{{{locals};{expr}}}'
         print(f'box({types}):=class{{{fields};N:int={expr}}}')
         print(f'Use({params} where {types}):int=box({targs}){{{assignments}}}.N')

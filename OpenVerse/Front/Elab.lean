@@ -329,6 +329,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- signatures, each overload's too, #106)
   let members := classMemberSigs env classes declared
   let env := { env with variances := env.bookVariances members, memberSigs := members }
+  -- (every type parameter of a function determined by its parameters, by
+  -- the Book's variances)
+  checkDeterminedTypeParams env declared
   -- (the accessors come right after the functions, #157: known now, so that
   -- every elaboration from here on, field defaults' too, reads and sets a
   -- field through one at its place)

@@ -170,6 +170,24 @@ Combine(A:t1, B:t2 where t1:type, t2:type):tuple(t1, t2) = (A, B)
   every other generic function takes none. Anything else, such as
   arithmetic, `ToString` or `.Length` on a bare `t`, is a type error, even if
   the function is never called.
+- **Every type parameter is given by the parameters** (the Book's tests,
+  `ParametricFunctions.versetest` 336-378 and 586, error 3503): it is named
+  in a parameter's type where values go in, or in the result's at a place
+  values go in (a function type's parameter, `G(N:int where t:type):(t->void)`),
+  or in the bound of one that is (`Up(X:t where t:subtype(u), u:type)`). A
+  function type's parameter is no such place (`Apply(F:t->void where
+  t:type)` is refused: a value of type `t->void` takes any `t` below one in),
+  nor is a class's or interface's type argument where it only takes values
+  in, a contravariant one (`Use(S:sink(t))` with `sink(t) := class{Take(X:t):void}`:
+  any `sink(u)` below it is one); a class that does not use its type
+  parameter gives it (the Book is silent; an object holds its type
+  arguments). The result alone gives none: `Make(N:int where t:type):?t` is
+  refused, where it is declared, and a program writes the type as an
+  argument instead, `Make(t:type):?t` called `Make(int)` (the Book's
+  `MaybeValueExplicit(t:type, Value:t, Valid:logic):?t`, ch. 2), or a
+  result `false` for a function that never returns. The compiler's own
+  functions (whose names have `$`) keep the old reading, their calls being
+  the compiler's.
 - **Inferred type arguments.** At a call, the result type is matched against
   the expected type (unless that is `void`), then each parameter type against
   its argument's type. Arguments are matched left to right, except that
@@ -221,7 +239,7 @@ Combine(A:t1, B:t2 where t1:type, t2:type):tuple(t1, t2) = (A, B)
   Refused, each by a rule of its own: an instance outside the bound (the
   Book's 3509); a bounded type parameter, or one a bound names, that no
   parameter's type determines (`Foo(X:int where t:subtype(u), u:type):?t`,
-  3503; one without a bound may still be given by the expected result); a
+  3503; one without a bound too, above); a
   public parametric type whose bound is less visible (3593); several bounds
   on one type parameter (the Book: "not yet supported"); `concrete_subtype(c)`
   as a bound; a cast of a bounded `X` (`i[X]`: the Book's
@@ -3536,7 +3554,7 @@ Main()<suspends>:void =
 | `Main` failing | (no entry point in the book) | exit code 1; output already printed stays |
 | `return` or `break` inside a failure context | refused by the tests (`SOL-4199-BreakFromIf.versetest`, `Reachability.versetest` 12-15, `Return.versetest` 157-163; [the audit](research/readings-audit.md#return-and-break-in-a-failure-context)) | the Book's: refused ([Control](#supported)); a `break` in a `for`'s body, which the Book's tests allow and its prose refuses, stays refused |
 | Comparability | `comparable` covers the primitive types, enums, structs, `<unique>` classes and containers of comparable types (ch. 4); not functions, `any`, nor classes and interfaces without `<unique>` (ch. 11, `CompareInstance.versetest:11`) | the Book's: the types it names, and a type parameter declared `subtype(comparable)`; `comparable` itself is a type ([comparable](#comparable)) |
-| Inferring type arguments | not described; the tests refuse a type parameter no parameter's type determines (`ParametricFunctions.versetest` 336-374, 586, 3503) | first-order matching against the expected result type, then the arguments; no subtyping other than `false` (matches anything) and `void` (accepts anything), and a bound's (an argument below it gives its instance); a type parameter with a bound, or that a bound names, must be determined by the parameters, as the tests have it; one without may be given by the expected result (`Make():?t`), which openverse keeps, but not one its signature names nowhere (`F(:u where t:type, u:type)`, `:374`, [the rule](research/book-forms-rules.md#a-type-parameter-named-nowhere)) |
+| Inferring type arguments | not described; the tests refuse a type parameter no parameter's type determines (`ParametricFunctions.versetest` 336-374, 586, 3503), take one named in the result's function type's parameter (`:376`), and refuse one a contravariant class's parameter names (`:356`) | first-order matching against the expected result type, then the arguments; no subtyping other than `false` (matches anything) and `void` (accepts anything), and a bound's (an argument below it gives its instance); every type parameter of a source function must be given by its parameters, by the Book's variance: the expected result gives none any more ([Parametric functions](#parametric-functions), [the rule](research/book-forms-rules.md#a-type-parameter-the-parameters-determine)); a class that does not use its type parameter gives it (the Book is silent) |
 | A qualifier without a `using` | "A qualifier only says which `F` is meant among the ones already in scope" (ch. 10): `(Top.M:)F` with no `using` is unknown | the qualifier is found as any name is, then the name is looked up in exactly that scope: `(M:)F` is `M.F` (#145) |
 | A module's member `(M:)x` used bare in `M` beside an outer `x` | both are candidates, told apart by their parameters, else ambiguous (`ModuleDefinitions.versetest`, `vmodule` tests) | the inner one (only a qualified member may share an outer definition's name, [Shadowing](#shadowing)); in a class's code and for `(local:)`, where the tests refuse it, ambiguous |
 | `ToString` of a float | the API and the tests: fixed point with six decimals (`FloatToString.versetest`, `1.000000`); ch. 2's example: `98.5` (the Book disagrees with itself: [the audit](research/readings-audit.md#tostring-of-a-float)) | the API's and the tests': six digits after the point, the exact value rounded half to even, every integer digit, the sign kept (`-0.000000`); `Inf`, `-Inf`, `NaN`; interpolation calls `ToString` (ch. 2) ([float](#float)) |
