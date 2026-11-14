@@ -340,8 +340,21 @@ the tests: `Suspend()<suspends>:false = Suspend()`
 
 **openverse now.** `resolveTy` names it; a call of a function whose result
 is `false` converts to any type as the other values of that type do
-(`coerce`, a `void` in Verse Core followed by `Err()`, never reached). No
-program's code changes. `true` as a type: [below](#true-as-a-type).
+(`coerce`, a `void` in Verse Core followed by `Err()`, never reached).
+Naming `false` changed no program's code. `true` as a type:
+[below](#true-as-a-type).
+
+A `loop` with no `break` belonging to it also has this type: it can return
+from its function, stop with an error, or keep running, but cannot give a
+normal value. This lets a function end in a loop whose branches return
+its result (`Bugs/SOL-2336-LoopReturn.versetest:3-11`). A nested loop's
+`break` belongs to the nested loop. The elaborator checks the emitted body's
+`Expr.brkSafe false`, already used by `Eval.no_control`, and follows the
+loop with an unreachable `Err()` so that Verse Core, which types `loop`
+as `void`, can check the result at any expected type. A loop with a break
+of its own keeps type `void`. Generated `for` code forwards an outer
+break only when one exists; its private outcome aborts stay in its own
+loop, so a dead break guard does not conceal the enclosing loop's type.
 
 ## Localized messages
 
@@ -408,6 +421,12 @@ maps: `?void` converts to `?true`, `[]void` to `[]true`, `[int]void` to
 `[int]true`; a `void` value converts to `logic` as `false`, as `true`'s
 does. A `branch:`'s value is an `any`: `void` and `any` take it, `true`
 does not. `X:true = 1` is refused, as `X:tuple() = 1` is.
+
+Querying an empty value uses its conversion to `logic` as `false` and
+fails. The operand runs first, so a call's writes and output are undone
+with the failing query's context. In particular `(not F[])?` is admitted
+and fails (`Literals/Logic.versetest:72`); `O:?void` can pass `O?` when it
+is populated, while `O??` fails on its empty payload.
 
 **The Book.** Ch. 2, "void, true, tuple() and false"
 (`02_primitives.md:1232-1310`): "Verse has a single "there is nothing

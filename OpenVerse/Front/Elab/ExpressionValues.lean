@@ -73,11 +73,20 @@ partial def elabExprValuesWith
     let r ← elabE ctx e none
     let r ← elabContainerReceiverWith elabE ctx p r (fun
       | .opt _ | .logic => true
-      | _ => false) "query"
+      | t => t.isUnit || t == .never) "query"
     match r.ty with
     | .opt t => return ⟨.prim .query [r.e], t⟩
     | .logic => return ⟨.prim .query [r.e], .logic⟩
-    | t => eerr p s!"'?' needs an option or logic, found {t.show}"
+    | t =>
+      -- The empty value of void/true converts to logic's false, as it
+      -- does in an argument or assignment. Run the operand before its
+      -- query fails, retaining the surrounding failure context's rollback.
+      if t.isUnit || t == .never then
+        -- Keep the known false query explicit after the operand. Besides
+        -- avoiding a temporary, this lets metadata flow see that every
+        -- write in the surrounding condition is rolled back.
+        return ⟨.seq (← discardValue r) (.prim .query [.lit (.logic false)]), .logic⟩
+      eerr p s!"'?' needs an option or logic, found {t.show}"
   | .neg p e =>
     -- The expected numeric type as a hint, as in `-Id(2.5)`.
     let hint : Option Ty := match exp with

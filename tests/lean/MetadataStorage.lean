@@ -71,6 +71,9 @@ private def forwards : List (String × String) := [
   ("opaque updated array", "Caller(D:u,Dummy:u where u:type)<transacts>:[]u=\n    var Stored:[]u=array{D}\n    if(set Stored[0]=Dummy){}\n    Stored"),
   ("opaque helper", "Keep(V:u where u:type)<transacts>:u=\n    var Stored:u=V\n    set Stored=V\n    Stored\nCaller(Dummy:u where u:type)<transacts>:u=Keep(Dummy)"),
   ("real overwrite", caller "    var Stored:u=D\n    set Stored=Dummy\n    set Stored=D\n    P.Up(Stored).Up(X).N"),
+  ("rolled back unit query", caller "    var Stored:u=D\n    if(set Stored=Dummy;()?){}\n    P.Up(Stored).Up(X).N"),
+  ("rolled back negation query", "No(V:u where u:type)<decides><computes>:void=false?\n" ++
+    caller "    var Stored:u=D\n    if(set Stored=Dummy;(not No[Dummy])?){}\n    P.Up(Stored).Up(X).N"),
   ("rolled back overwrite", caller "    var Stored:u=D\n    if(set Stored=Dummy;false?){}\n    P.Up(Stored).Up(X).N")]
   ++ [("failed helper branch", "No(V:u where u:type)<decides><transacts>:void=false?\n" ++
     caller "    var Stored:u=D\n    if(No[Dummy])then set Stored=Dummy\n    P.Up(Stored).Up(X).N"),

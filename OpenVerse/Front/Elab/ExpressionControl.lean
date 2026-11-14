@@ -267,10 +267,16 @@ partial def elabExprControlWith
       let failed := if ctx.canFail then Expr.prim .fail [] else .prim .userErr []
       let normal := Expr.ite (.assign value (.prim .query [.local result])) (.local value) failed
       let leaving := Expr.seq ret.e normal
-      let (run, after) ← if ctx.inLoop then do
+      let (run, after) ← if ctx.inLoop && !r.e.brkSafe false then do
           let escaped ← fresh .logic
-          pure (Expr.seq (.assign escaped (.lit (.logic false))) (forwardForBreaks flag escaped r.e),
-            Expr.ite (.prim .query [.local escaped]) .brk (.lit .void))
+          let forwarded := forwardForBreaks flag escaped r.e
+          -- Private outcome aborts leave the producer's own loop. Only an
+          -- actual forwarded source break needs an exit of the outer loop;
+          -- a dead guard here would hide that outer loop's bottom type.
+          if (Suspend.assignsIn forwarded).contains escaped then
+            pure (Expr.seq (.assign escaped (.lit (.logic false))) forwarded,
+              Expr.ite (.prim .query [.local escaped]) .brk (.lit .void))
+          else pure (r.e, Expr.lit .void)
         else pure (r.e, Expr.lit .void)
       let code := Expr.seq (.assign slot (.lit .none))
         (.seq (.assign flag (.lit (.logic true)))
@@ -300,7 +306,15 @@ partial def elabExprControlWith
       loopRollback := ctx.canFail || ctx.inRollback, canFail := false,
       inChoice := false, refineExits := { ctx.refineExits with brk := none } }
     let r ← elabE lctx body none
-    return ⟨.loop (← inferable r), .void⟩
+    let body ← inferable r
+    let code := Expr.loop body
+    -- Only a break belonging to this loop can give it a normal value.
+    -- `brkSafe false` excludes one, allowing breaks in nested loops;
+    -- `Eval.no_control` also excludes breaks escaping a called function.
+    -- Core types a loop as void, so an unreachable Err gives its bottom
+    -- type a representation that Core can check at every expected type.
+    if body.brkSafe false then return ⟨.seq code (.prim .userErr []), .never⟩
+    return ⟨code, .void⟩
   | .brk p =>
     if !ctx.inLoop then
       eerr p (if ctx.inDefer then "break is only allowed inside loop (not for), and cannot leave a defer: block"

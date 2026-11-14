@@ -55,7 +55,7 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
 
 ## Where things stand
 
-With [program-defined `ToString`](#after-program-defined-tostring) on main `7768cc58`: **8,789 agree, 612 refuse, 55 accept, 92 differ, 3,956 not translatable** of 13,504 cases (a fresh full comparison with causes; before this change, 8,784 agreed and 617 were refused). This is the one table of what is left; the sections below are the history, each written when its work landed, and the four maps ([the first map](#the-remaining-causes-a-map), [classes](#classes-and-subtyping-the-map), [forms](#forms-of-expressions-statements-and-the-library-a-map), [the forms still on the list](#the-forms-still-on-the-list-a-map)) hold the case-by-case reading each row points to.
+With [breakless loops and unit queries](#after-breakless-loops-and-unit-queries) on main `fe74d587`: **8,793 agree, 608 refuse, 55 accept, 92 differ, 3,956 not translatable** of 13,504 cases (a fresh full comparison with causes; before this change, 8,789 agreed and 612 were refused). This is the one table of what is left; the sections below are the history, each written when its work landed, and the four maps ([the first map](#the-remaining-causes-a-map), [classes](#classes-and-subtyping-the-map), [forms](#forms-of-expressions-statements-and-the-library-a-map), [the forms still on the list](#the-forms-still-on-the-list-a-map)) hold the case-by-case reading each row points to.
 
 **Accepted where the tests refuse (55)**
 
@@ -77,12 +77,12 @@ With [program-defined `ToString`](#after-program-defined-tostring) on main `7768
 | empty-values-equal | 4 | the value of `X?` on a `logic`, `true?` (the empty value in the tests) | the Book disagrees with itself; built and measured: right for the 4 and no output changed, but 722 programs' bytes, which the elaborator's own `or` and `void` conversions take; needs a flag every value-dropping context sets ([the rule](book-forms-rules.md#the-value-of-true)), [After the forms still on the list](#after-the-forms-still-on-the-list) |
 | compound-set-order | 1 | `set X[0] +=` whose value sets `X` (`ArrayAppend.versetest:12`, VerseVM's) | left: a VM split; the untagged tests agree, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 
-**Refused where the tests accept (612)**
+**Refused where the tests accept (608)**
 
 | Cause | Cases | What it is, and what it needs | Who decided what |
 |---|---:|---|---|
 | union-types | 136 | `union{…}` (VerseVM only, in no chapter) | left, [the first map](#the-remaining-causes-a-map) |
-| types-other | 101 | sorted in [the forms still on the list](#the-forms-still-on-the-list-a-map) (T1-T24): `true` in a function type (5), function values joined through `any` (8, v), F-bounded classes (6), refinement overloads (6), two interfaces' methods (3), `spawn` forms (7), inference from an expected type (3), a generic function as a value (4), library (12), cyclic defaults (4), bottom typing (4), a parametric class as a value (2), others one each | left, listed there |
+| types-other | 97 | sorted in [the forms still on the list](#the-forms-still-on-the-list-a-map) (T1-T24): `true` in a function type (5), function values joined through `any` (8, v), F-bounded classes (6), refinement overloads (6), two interfaces' methods (3), `spawn` forms (7), inference from an expected type (3), a generic function as a value (4), library (12), cyclic defaults (4), a parametric class as a value (2), others one each | left, listed there |
 | syntax-other | 68 | sorted in [the forms still on the list](#the-forms-still-on-the-list-a-map) (S1-S11): `TimSyntax.versetest`'s grammar (35: specifiers after an expression, `:` and `where` as expressions, keywords as names, `try`/`catch`, `&x`, units), a type written as an argument (6), constructor delegation outside a constructor (4), roundtrip and function-type syntax (11), VerseVM's (4), one each (8) | left: no prose for the `TimSyntax` grammar; a type written as an argument with the metatypes |
 | metatypes | 64 | metatypes beyond those built: `classifiable_subset`, `castable_concrete_subtype`, `castable_subtype(any)`, a cast to a built-in type, `int[X]`, a parametric type applied as a value, … | left: other work, [the first map](#the-remaining-causes-a-map) |
 | live-variables | 57 | `live`, `when`, `upon`, `await`, `batch` (ch. 15, unreleased; VerseVM only) | left, [the first map](#the-remaining-causes-a-map) |
@@ -2421,7 +2421,7 @@ chapter at the pinned revision, `docs/NN_*.md` and line; a test is
 | T11. a generic function as a value | 4: `Castable.versetest` 563, 601 (v); `ParametricFunctions.versetest` 192, 327 | #214, #209 | left |
 | T12. library: `GetRandomInt`, `classifiable_subset_var`, `subscribable_event_intrnl` | 12 | the API reference; a random primitive (runtime), #11 | left |
 | T13. cyclic and lazy field defaults | 4: `DefaultValueAssignment.versetest:289` (v), `Pointers.versetest` 124, 125, `CustomClassVarAccessors.versetest:558` | #511 | left |
-| T14. bottom typing: a `loop` only `return` leaves as a value; `?` on a `not` | 4: `SOL-2336…` 10, `:decls`; `Literals/Logic.versetest` 72, `:decls` | ch. 7; a loop's type `never` | left |
+| T14. bottom typing: a `loop` only `return` leaves as a value; `?` on a `not` | 4: `SOL-2336…` 10, `:decls`; `Literals/Logic.versetest` 72, `:decls` | ch. 7; a loop's type `never` | done: [breakless loops and unit queries](#after-breakless-loops-and-unit-queries) |
 | T15. a type parameter passed on as a type argument | 3: `FORT-741838…` 72, 83, `:decls` | the BPVM's reading, on the wiki | left |
 | T16. map keys of sibling classes (v) | 2: `Map.versetest` 363, 401 | VerseVM's | left |
 | T17. tuples concatenated with `+` | 2: `ParametricFunctions.versetest` 416, 426 | the tests (`(1, 2) + (3, 4) = array{1, 2, 3, 4}`) | left |
@@ -2596,6 +2596,34 @@ cover primitive and program overloads, named arguments, modules and local
 callbacks, choice, mutation and rollback, explicit conversion, custom `+`,
 and refusals of overlapping signatures, forbidden effects, non-string
 `Print` arguments and a constant named `ToString`.
+
+## After breakless loops and unit queries
+
+A loop whose emitted body has no break of its own has type `false`
+(`never`), allowing a function to end in a loop whose branches return
+its result. Nested loops keep their own breaks. The generated protocol
+for a `for` with returns forwards an outer break only when one exists,
+so a dead guard does not hide the enclosing loop's bottom type. Core's
+loop remains `void`; an unreachable `Err()` gives it a representation
+that the existing Core checker can check at every expected type.
+
+Querying the empty value of `void` or `true` uses the existing conversion
+to `logic` as `false` and fails, after evaluating the operand. Writes and
+output roll back with the failure context. This admits `(not F[])?`
+without changing the value of an ordinary `logic` query (the four
+`empty-values-equal` cases remain).
+
+On top of main `fe74d587` (#627), four cases newly agree and none is
+worse: `Bugs/SOL-2336-LoopReturn.versetest:10` and `:decls`, and
+`Literals/Logic.versetest:72` and `:decls`. The baseline records these
+verdicts. Six repository regressions cover tail returns, nested loops,
+returns in a `for`, tuple/array and joined contexts, suspension and
+cancellation cleanup, empty-value queries and rollback, and the refusal
+of loops whose breaks can give a normal `void` result. Core semantics,
+proofs, OVBC and the C runtime are unchanged. Two compiler-API real/dummy
+pairs also retain rollback of mutable metadata across unit and negation
+queries (#572); their lowered failure stays explicit for the metadata
+analysis.
 
 ## Ten causes to remove first
 
