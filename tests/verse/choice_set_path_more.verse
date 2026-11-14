@@ -6,7 +6,7 @@ Down(N : int):int = if (N > 0) then (N | Down(N - 1)) else 0
 Pv(S : string, V : int)<transacts>:int =
     Print(S)
     V
-st := struct:
+st := struct<computes>:
     Items : []int = array{0, 0}
 Main()<transacts>:void =
     var B : []int = array{0, 0, 0}

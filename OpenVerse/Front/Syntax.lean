@@ -501,6 +501,8 @@ inductive Refused where
   /-- `var<w> X:t = e`, a module-scoped variable's write access
       (`parseTopsIn`). -/
   | moduleVarAccess (sp name : String)
+  /-- `using{/localhost…}` (`parseTopsIn`). -/
+  | localhostUsing (path : String)
 
 def Refused.message : Refused → String
   | .lambda => "a lambda (…) => … is a nested function, which openverse does not have (#492; the Book's ch. 6 marks nested functions as an unreleased feature; docs/research/closure-design.md)"
@@ -512,6 +514,7 @@ def Refused.message : Refused → String
   | .declaredData n => s!"{n}:t has no value: a declaration of data defined elsewhere, which openverse has none of"
   | .declaredVariable n => s!"var {n}:t has no value: a declaration of a variable defined elsewhere, which openverse has none of"
   | .moduleVarAccess sp n => s!"var<{sp}> on the module-scoped var {n} is not supported yet: its write access is its name's"
+  | .localhostUsing path => s!"using\{{path}}: /localhost is the package the program is in, which a using does not name (Book of Verse tests, Modules/Using2.versetest: \"Explicitly using a \"/localhost\" package is not allowed\")"
 
 /-- A form openverse parses and refuses, `$refused(msg, e…)`: the refusal's
     message, then the parts the form was written with. -/

@@ -11,7 +11,7 @@ base := class<unique>:
 derived := class(base):
     Extra:int = 0
 other := class(base) {}
-point := struct:
+point := struct<computes>:
     X:int
     Y:int
 holder := class:

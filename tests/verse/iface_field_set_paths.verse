@@ -1,5 +1,5 @@
 # from the review of #57 (p2): interface field sets at different positions
-sub := struct:
+sub := struct<computes>:
     F:int = 0
     G:int = 0
 named := interface:

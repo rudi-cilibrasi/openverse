@@ -140,7 +140,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
   let isBranch (c : SExpr) : Bool := (Choice.binding? c).any (·.branchy.isSome)
   let isGen : SExpr → Bool
     | .gen .. => true
-    | .decl _ _ none false (.range ..) => true
+    | .decl _ _ _ false (.range ..) => true
     | c => !isBranch c && (Choice.binding? c).isSome
   -- (an exclusive choice's binding, #314: no generator, but paths)
   let isExcl : SExpr → Bool
@@ -261,7 +261,13 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
   -- so a failing one is skipped).
   let elabSource (c : Ctx) (g : SExpr) : EM (Nat × Expr × Ty × Ctx × Expr) := do
     match g with
-    | .decl gp n none false (.range _ lo hi) => do
+    | .decl gp n ty false (.range _ lo hi) => do
+      -- (a typed binding, `X:int := a..b`, Book of Verse tests,
+      -- `FlowControl/for.versetest:17`, `Exercises/TwoSum.versetest:20`: its
+      -- type is the range's, `int`)
+      if let some t := ty then
+        let rt ← resolveTy c.types gp t
+        if rt != .int then eerr gp s!"a range's values are ints: {n}:{rt.show} := a..b is not one; write {n}:int := a..b"
       let es ← elabInts { c with canFail := true, inTaking := true } gp [lo, hi]
       let (slot, c1) ← declareAt g.pos c n .int
       -- (a bound that fails gives no iterations, its effects and the
@@ -965,7 +971,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
   -- keep what a generator's clauses did: docs/DESIGN.md says which.)
   let plainGen (g : SExpr) : Bool := match g with
     | .gen .. => true
-    | .decl _ _ none false (.range ..) => true
+    | .decl _ _ _ false (.range ..) => true
     | c => match Choice.binding? c with
       | some b => !b.composed && b.branchy.isNone && b.each.isNone
       | none => false

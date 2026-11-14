@@ -664,6 +664,15 @@ def static_nt(mtext):
         return "harness: vpackage/vmodule"
     if ids & {"bp_vm_only", "verse_vm_only"}:
         return "harness: VM-conditional code inside a case"
+    # (the test runner's package: a module imported from its script module,
+    # `X := import(/Verse.org/Tests/VerseTestScriptCmd/…)`, and the path or
+    # name of the package a test file is compiled in, `/Verse.org/VerseTests`,
+    # written as a qualifier, `(/Verse.org/VerseTests/c:)F`, `(VerseTests:)F`;
+    # openverse's top level has no path)
+    if re.search(r"\bimport\s*\(\s*/Verse\.org/Tests/VerseTestScriptCmd\b", code):
+        return "test API: the test runner's modules (import of /Verse.org/Tests/VerseTestScriptCmd/...)"
+    if re.search(r"\(\s*(/Verse\.org/VerseTests\b[^():]*|VerseTests)\s*:\s*\)", code):
+        return "harness: the test runner's package path /Verse.org/VerseTests"
     return ""
 
 
@@ -775,6 +784,13 @@ def build_cases(book, rel):
             else:
                 # definitions: `;`-separated ones on lines of their own, and a Main
                 top = split_top(src)
+                # (a snippet's own function `Main(Data:…)`, which the test
+                # runner compiles as any function, would be openverse's entry
+                # point, which takes no parameters: it is renamed, and the
+                # snippet gets a Main, `weak_map.versetest` 41-66,
+                # `ParametricTypes.versetest:286`; none calls it)
+                if re.search(r"(?m)^Main\s*(<[^>]*>\s*)*\(\s*[^)\s]", mask(top)):
+                    top = re.sub(r"(?m)^Main(?=\s*[<(])", "BookMain", top)
                 prog = top if defines_main(mask(top)) else top + "\n\n" + STUB_MAIN
                 c.programs = [("top", with_standins(prog) + "\n")]
         else:

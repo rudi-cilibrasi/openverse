@@ -863,6 +863,9 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .name "any" => pure .any
   | .name "comparable" => pure .dyn
   | .name "$never" => pure .never
+  -- (`false` as a type, Book of Verse ch. 2: the type with no value, below
+  -- every type, of a call that never returns, `Suspend()<suspends>:false`)
+  | .name "false" => pure .never
   | .name n =>
     if let some t := env.tvars.lookup n then pure t
     else if (env.structs.lookup n).isSome then
@@ -871,6 +874,9 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
       | none => pure (.struct n [])
     else if (env.enums.lookup n).isSome then pure (.enum n)
     else if (env.refines.lookup n).isSome then pure (.refine n)
+    -- (a localized message, Book of Verse ch. 12: its default text, as
+    -- openverse has no culture to render it in, `Localization`)
+    else if n == "message" then pure Ty.string
     -- (an inlined generic call's type parameter, `$tp…_t`, that no
     -- argument determined, #283: said with its own name)
     else if n.startsWith "$tp" then
@@ -1381,7 +1387,11 @@ partial def argNeedsTypeWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx
     -- type. Keep compounds that already infer naturally in the first pass.
     let saved ← get
     match (elabE { ctx with typeOnly := true, callInstanceProbe := none } a none).run saved with
-    | .ok (_, probed) =>
+    -- (one with an empty `array{}` or `map{}` in it, whose type from no
+    -- context is of `false`, says nothing of that element: it takes its
+    -- type from the other arguments)
+    | .ok (r, probed) =>
+      if r.ty.hasNever then return true
       modify fun st => { st with natTys := probed.natTys, methodReceivers := probed.methodReceivers }
       return false
     | .error _ => return true
@@ -2192,6 +2202,10 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
   -- existing entries, preserving order/cardinality rather than reinserting.
   -- (A map is a weak map, and weak maps are covariant alike, Book of Verse
   -- ch. 3, "Covariance": the same pairs.)
+  -- (a map of `false` keys and values, an empty `map{}` with no type from
+  -- its context, has no pairs: the empty map of the other type)
+  | .map .never .never, .map .. | .map .never .never, .weakMap .. =>
+    return some (.seq (← discardValue ⟨e, a⟩) (.lit Value.emptyArray))
   | .map k a', .map k' b' | .map k a', .weakMap k' b' | .weakMap k a', .weakMap k' b' =>
     if !isComparable env k || !isComparable env k' then return none
     let i ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push (.tup [k, a']) })
@@ -2260,14 +2274,23 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
   -- fail, and `Err()` follows, never reached, into a temporary of the target
   -- type, so that its type can be inferred anywhere, #297)
   -- (also after statements that compute its operands: a map's lookup)
+  -- (and a call of a function whose result is `false`, which Verse Core
+  -- gives `void`, `Suspend()<suspends>:false`)
   let rec projection : Expr → Bool
-    | .local _ | .prim (.tupGet _) _ | .prim .index _ | .prim .query _ | .heap (.get _) _ => true
+    | .local _ | .prim (.tupGet _) _ | .prim .index _ | .prim .query _ | .heap (.get _) _ | .call .. => true
     | .seq _ b => projection b
     | _ => false
   if r.ty == .never && target != .never && target != .void && projection r.e then
     let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push target })
     return .assign x (.seq r.e (.prim .userErr []))
   if r.ty == target || r.ty == .never then return r.e
+  -- (an empty `array{}` or `map{}` with no type from its context, of
+  -- `false`: the literal is the empty array of every array and map type, as
+  -- one with an expected type is written)
+  if r.ty.hasNever then
+    if let .lit (.arr xs) := r.e then
+      if xs.isEmpty && (match target with | .arr _ | .map .. | .weakMap .. => true | _ => false) then
+        return r.e
   -- (a `void` value is the empty value, as one of `tuple()` is: both are
   -- `()` in Verse Core)
   if r.ty.isUnit && target.isUnit then return r.e
@@ -2466,6 +2489,9 @@ partial def joinTyShaped (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Boo
     else none
   | .arr x, .arr y => (joinTy env x y (match exp with | some (.arr e) => some e | _ => none) true).map .arr
   | .opt x, .opt y => (joinTy env x y (match exp with | some (.opt e) => some e | _ => none) true).map .opt
+  -- (an empty `map{}` with no type from its context, of `false`, joins
+  -- another map at that map's type)
+  | .map .never .never, m@(.map ..) | m@(.map ..), .map .never .never => some m
   -- (a tuple and an array join as an array, as do tuples of different
   -- lengths where an array is expected: a tuple converts to one)
   | .tup xs, .arr y | .arr y, .tup xs =>

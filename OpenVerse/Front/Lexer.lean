@@ -491,6 +491,16 @@ partial def lexAll (acc : Array Token) : LexM (Array Token) := do
     else match matchSym s.cs s.pos with
       | some sym =>
         for _ in [0:sym.length] do advance
+        -- (a `.` and what follows it are on one line, with no comment
+        -- between: the Book of Verse's tests refuse `O.⏎f` and `O.<#c#>f`
+        -- and take `O. f`, `Tests/ReserveDotSpace.versetest` 3-7)
+        if sym == "." then
+          let rest ← get
+          let mut k := rest.pos
+          while rest.cs[k]? == some ' ' || rest.cs[k]? == some '\t' do k := k + 1
+          if breakLen rest.cs k > 0 || rest.cs[k]? == some '#' || rest.cs[k]? == none ||
+              (rest.cs[k]? == some '<' && rest.cs[k + 1]? == some '#') then
+            lexErr "what follows a '.' must be on its line, with no comment between: write O.F or O. F"
         lexAll (← emit (.sym sym))
       | none =>
         let code := if c.toNat < 0x7F then "" else s!" ({uPlus c.toNat})"

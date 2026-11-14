@@ -15,7 +15,7 @@ base := class:
 b := class(base, hasc):
     Y:int = 0
 
-pt := struct:
+pt := struct<computes>:
     X:int = 0
     Y:int = 0
 obj := class:

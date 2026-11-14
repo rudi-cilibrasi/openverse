@@ -1,7 +1,7 @@
 # `set P op= e` evaluates P's indices and keys, then e, then reads P's old
 # value and writes P (the Book of Verse's tests, ArrayAppend.versetest 140 and
 # 183: what e does to P is seen): it is `set P = P op v`, v e's value
-pair := struct:
+pair := struct<computes>:
     Xs:[]int = array{}
     K:int = 0
 cell := class:

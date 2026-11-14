@@ -119,6 +119,15 @@ partial def elabExprValuesWith
           tryCatch (elabE c2 b (some ra.ty)) fun _ => elabE c2 b none
       | _, _ => elabE ctx b (some ra.ty)
     let rb := widenR ctx.types (← elabArithmeticOperandWith elabE ctx p rb operation (op == "+"))
+    -- (an operand of type `false`, which gives no value, `return`, `Err()`,
+    -- an element of an empty `array{}`: it has the other operand's type, as
+    -- `false` is below every type, Book of Verse ch. 2; the Book's tests,
+    -- `for(X:array{}, Y:array{1}) { X+Y }`, `for.versetest:114`)
+    let (ra, rb) ← match ra.ty, rb.ty with
+      | .never, .never => pure (ra, rb)
+      | .never, t => pure (⟨← coerce a.pos ra t, t⟩, rb)
+      | t, .never => pure (ra, ⟨← coerce b.pos rb t, t⟩)
+      | _, _ => pure (ra, rb)
     if ra.ty == .rational || rb.ty == .rational then
       let prim ← match op with
         | "+" => pure Prim.add | "-" => pure Prim.sub | "*" => pure Prim.mul
@@ -205,7 +214,13 @@ partial def elabExprValuesWith
       -- type, equal to every empty value; Book of Verse tests,
       -- Array.versetest:88, `array{} = array{}`)
       | none, some .dyn => return ⟨.lit Value.emptyArray, .dyn⟩
-      | none, _ => eerr p "the type of an empty array{} must be given (e.g. X:[]int = array{})"
+      -- (with no type from its context, an array of `false`, which has no
+      -- values and is below every type, so the array converts to every
+      -- array type: the Book of Verse's tests, `A1:=array{}; A2:=A1+array{1}`,
+      -- `array{}.Remove[0, 0]`, `X := array{}; X = ""`, `Array.versetest:90`,
+      -- `ArrayRemove.versetest:7`, `String.versetest:181`; ch. 1 writes
+      -- `Empty := array{}`)
+      | none, _ => return ⟨.lit Value.emptyArray, .arr .never⟩
     | e :: rest =>
       let r ← elabE ctx e elemExp
       let t := elemExp.getD r.ty
