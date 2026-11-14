@@ -18,7 +18,7 @@ against it. This page records the decisions behind the shape of the code.
 
 Surface Verse is large and changing (the Book of Verse tracks a development
 branch). Verse Core (`OpenVerse/Core/Syntax.lean`) is small: literals, slot
-reads and writes, sequencing, 59 primitives, calls, `if`, single-generator
+reads and writes, sequencing, 65 primitives, calls, `if`, single-generator
 `for`, `loop`, `break`, `return`, `Print`, and five heap operations (`new`,
 field `get` and `set`, `tag`, `isTag`). Every surface construct is a
 *derived form*:
@@ -37,7 +37,7 @@ field `get` and `set`, `tag`, `isTag`). Every surface construct is a
 - a generic function is one Core function with type variables, and a
   hidden argument per type parameter.
 
-Keeping Core small keeps the proofs and the C runtime small. All 59
+Keeping Core small keeps the proofs and the C runtime small. All 65
 primitives are one Lean function (`Prim.apply`) and one C file
 (`runtime/src/prims.c`).
 
@@ -291,9 +291,9 @@ where it ends, last registered first, with the elaborator's checks of a
 `defer:`, then the value again. The value is bound to a name of its own
 first, unless it reads nothing the block could change (`pureVal`:
 literals, the block's constants, and tuples, arrays, maps and options of
-those), so `(Y, false)` keeps the type its place gives it. A block ending
-in a `defer:` has the block of them as its value, as it would have the
-`defer:` (`void`, or the elaborator's "no value"). Each moved `defer:` has
+those), so `(Y, false)` keeps the type its place gives it. No block ends
+in a `defer:`: it is a statement, refused there by `admitSource`
+(`checkDefers`). Each moved `defer:` has
 the names its scope declares after it renamed (`$later'N`, shown as `N`,
 `deferBodies`), so it cannot use them, as where it was. As LANGUAGE.md
 lowers a `defer:` after the rest of its scope, they run as each value
@@ -406,8 +406,9 @@ block with the value `v`. The rest is left out after a branch that always
 returns, and the condition binds its names for its branch natively. A
 branch's own names, and its condition's, are renamed for it (`$k…'N`), so
 the rest copied into it may declare the same ones. No choice is added,
-and that is the point. In a `for`, every choice is a generator, and what
-came before a generator is kept when a later filter fails. Any encoding
+and that is the point. In a `for` that keeps the old rule ([What a `for`
+undoes](#what-a-for-undoes-one-search)), every choice is a generator, and
+what came before a generator is kept when a later filter fails. Any encoding
 with a choice (guarded alternatives, an option per branch then a choice
 of "returned or not") makes the `if` such a boundary, where the program
 had none. tim-e1's model found it twice in #312's review: prints in the
@@ -987,7 +988,8 @@ code after it, which is its frame.
   It leaves the item that resumes there (the leaf's first alternative, or
   the callee's start) in `stash`, sets `bnd` and breaks, out of the
   consumer's failure context, which keeps what the value did up to there,
-  as a `for` keeps the code before a choice. Each consumer catches that
+  as a `for` that keeps the old rule keeps the code before a choice. Each
+  consumer catches that
   break around the value (`elabOneGo`'s loop, `elabFor`'s round), and its
   `after` pushes the stashed item above the next alternative's, so values
   keep spatial order; any other break (a success, a source `break`) goes on.
@@ -1024,7 +1026,7 @@ code after it, which is its frame.
   the result type its name, `$Vfin`.
 
 - A point where `frameOf?` does not look (a comparison's later operand, a
-  `set`'s value after its old value, a named argument, a struct's field in
+  `set`'s value, before its old value is read, a named argument, a struct's field in
   its declaration order, `and`'s operands) is reached by the rule the lifter
   uses for a choice there: the first statement with one is lifted
   (`liftPoints?`, `liftClause`, each call of the group marked `$point` so
@@ -1169,9 +1171,10 @@ inputs, written type instances and interface-copy context (`firstKey`), as a
 call in a function inlined at several sites is at one place. Being
 recursive, it reaches the recursion limit in a deep search: about 400,000
 levels in Lean, a few million in C.
-The other consumers keep the loop, which needs no recursion. In a `for`,
-nothing is to be undone: a `for` keeps the effects of the clauses before a choice whose
-values its filter all rejects. The C runtime journals the writes made
+The other consumers keep the loop, which needs no recursion. In a `for`
+that keeps the old rule ([What a `for` undoes](#what-a-for-undoes-one-search)),
+nothing is to be undone: it keeps the effects of the clauses before a choice
+whose values its filter all rejects. The C runtime journals the writes made
 inside a failure context until it ends (a call's are dropped when it
 returns), so a first-success search, a loop inside one, costs about 1 KB
 per value tried: 100,000 take 0.3 s and 144 MB, where `F$all` did not
@@ -1330,9 +1333,11 @@ source as written: an expression that always leaves by a `return` or a
 elaboration of the functions notes where it knows it (`warnAt`, into
 `ESt.warnings`, carried by `ElaboratedFn`): a `return` of a value in a
 `void` function, where the value's type is known, and a `_` after a closed
-enum's every value, in `elabCase`. A trial whose state is discarded
-discards its warnings with it, and only the last round's are kept, each
-once, in the order of the source. They are not errors: the command line
+enum's every value, in `elabCase`; and the uses of deprecated
+definitions, which `Attributes.apply` finds before any round and
+`elabProgram` adds after the last (`Attributes.deprecations`). A trial whose
+state is discarded discards its warnings with it, and only the last round's
+are kept, each once, in the order of the source. They are not errors: the command line
 prints them and goes on (`compileTopsWarned`).
 
 Two of these come later than where their cause is found: two interfaces'
@@ -1769,7 +1774,8 @@ struct, enum, refinement type, or an alias, wherever defined), or a
 parametric type's name applied to as many types as it has parameters
 (`writesType`). One rule decides "a type or a value", and no program that
 compiled before changes meaning: a type's name was no value, so `X := c`
-was refused, and `X := c(Y)`, a cast of a constant, stays a constant.
+was refused, and `X := c(Y)`, a cast of a constant, is a constant without
+its type, which the top level and a module refuse.
 
 The pass then goes through the definitions in order, with the aliases
 defined so far. An alias's type is written out with those, so it names none
