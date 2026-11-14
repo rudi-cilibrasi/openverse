@@ -1,4 +1,5 @@
 arm b defer
+F got 2
 F defer
 main goes on
 exit=0

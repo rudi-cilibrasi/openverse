@@ -1,4 +1,4 @@
-# the same, in a task started by a task (#253)
+# the same, in a task started by a task, which goes on to its end (#253)
 W()<suspends>:int =
     Sleep(9.0)
     1

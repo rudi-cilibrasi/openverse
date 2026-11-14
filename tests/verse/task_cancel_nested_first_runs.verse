@@ -1,6 +1,6 @@
 # Main spawns A; A's first run spawns B, whose first run awaits a cancelled
-# task. Expected: B is cancelled (B defer), A goes on: B defer / A goes on /
-# A end / A defer / main end
+# task and waits there for ever. Expected: A goes on: A goes on / A end /
+# A defer / main end (B's defer never runs)
 W()<suspends>:int =
     Sleep(9.0)
     1

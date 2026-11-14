@@ -1,5 +1,7 @@
-# A race arm awaits a cancelled task in a first run; the other arm sleeps.
-# Expected: F is cancelled at its wait: arm b defer / F defer / main goes on
+# A race arm awaits a cancelled task in a first run, and so waits (the Book's
+# API, task, Await); the other arm sleeps, then ends and wins, and the arm
+# that awaits is cancelled as any loser. Expected: arm b defer / F got 2 /
+# F defer / main goes on
 W()<suspends>:int =
     Sleep(9.0)
     1
@@ -15,7 +17,7 @@ F()<suspends>:int =
                 Print("arm b defer")
             Sleep(0.3)
             2
-    Print("never {X}")
+    Print("F got {X}")
     X
 Main()<suspends>:void =
     spawn{F()}

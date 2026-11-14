@@ -39,8 +39,12 @@ structure Admitted where
   usesConc : Bool
   /-- Whether it uses an event type, so is lowered in event mode: a
       `Signal` resumes its awaiters inside it (the Book's API, `event`'s
-      `Signal`; `concPreludeEvents`). -/
+      `Signal`; `concPreludeEvents`), or awaits a task (`awaitsTasks`). -/
   usesEvents : Bool := false
+  /-- Whether it awaits a task, so is lowered in await mode: a task's end
+      resumes its awaiters inside it (the Book's API, `task`'s `Await`;
+      `concPreludeAwaits`). An elaboration finds it (`Requests.awaits`). -/
+  awaitsTasks : Bool := false
   /-- The functions defined in a module or a class with the name of a
       function around them, which no call may fit both of
       (`checkNoShadowing`, `checkSignatures`). -/
@@ -61,11 +65,13 @@ structure Admitted where
 /-- The concurrency prelude a program needs (#156), with subscribable
     events' (#210, #220): the prelude's names the program defines itself,
     each with the name the prelude's own definition takes, whether the
-    program uses concurrency, and the prelude's definitions. It reads the
-    program's names resolved (a module's own `event`, a type parameter named
-    `task`, are not the prelude's), and the functions the requests add. -/
+    program uses concurrency, events, and awaits of tasks (which an earlier
+    elaboration asked for, `Requests.awaits`), and the prelude's
+    definitions. It reads the program's names resolved (a module's own
+    `event`, a type parameter named `task`, are not the prelude's), and the
+    functions the requests add. -/
 def concurrencyHelpers (resolved : List STop) (requests : Requests) :
-    Except String (List (String × String) × Bool × Bool × List STop) := do
+    Except String (List (String × String) × Bool × Bool × Bool × List STop) := do
   let defines0 (n : String) : Option Pos := resolved.findSome? fun
     | .classDef p m .. | .fn p m .. | .const p m .. => if m == n then some p else none
   let owned := PreludeNeeds.names.filter (defines0 · |>.isSome)
@@ -92,10 +98,13 @@ def concurrencyHelpers (resolved : List STop) (requests : Requests) :
   -- defines one)
   -- (event mode: a program that uses an event type, whose `Signal` resumes
   -- the awaiters inside it, `concPreludeEvents`)
-  let usesEvents := usesConc && (usesSub || needs "event" || needs "sticky_event")
-  let helpers := (← if usesConc then concTops privateNames usesEvents else pure []) ++
+  -- (await mode: a program that awaits a task, whose end resumes the
+  -- awaiters inside it, `concPreludeAwaits`; event mode too)
+  let awaits := usesConc && requests.awaits
+  let usesEvents := usesConc && (usesSub || needs "event" || needs "sticky_event" || awaits)
+  let helpers := (← if usesConc then concTops privateNames usesEvents awaits else pure []) ++
     (← if usesSub then subTops privateNames else pure []) ++ (← if usesSubVoid then subVoidTops privateNames else pure [])
-  return (concurrencyNames, usesConc, usesEvents, helpers)
+  return (concurrencyNames, usesConc, usesEvents, awaits, helpers)
 
 /-- Source admission, the first phase of `elabProgramCore`: the program as
     parsed (its attributes taken out, `Attributes.apply`), checked, resolved
@@ -250,13 +259,13 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   --    function-value classes, continuation frames and constructor field
   --    packets implement source expressions, and acquire no contract
   --    merely because their implementation uses a data type
-  let (concurrencyNames, usesConc, usesEvents, prelude) ← concurrencyHelpers resolved opts.requests
+  let (concurrencyNames, usesConc, usesEvents, awaitsTasks, prelude) ← concurrencyHelpers resolved opts.requests
   let constructionFx := resolved.foldl (fun budgets top => match top with
     | .classDef _ n _ _ specs .. | .const _ n _ _ (.structDef _ _ specs _) =>
       budgets.insert n (EffectPolicy.constructionFx specs)
     | _ => budgets) ({} : Std.HashMap String (List String))
   return { resolved, rawEntry, typeDefaults, helpers := helpers ++ prelude, intrinsicCalls, concurrencyNames, usesConc, usesEvents,
-           constructionFx, access, scopePairs, ignoredArms, aliases, forFilters := forFilterPositions allTops0r }
+           awaitsTasks, constructionFx, access, scopePairs, ignoredArms, aliases, forFilters := forFilterPositions allTops0r }
 
 /-- A program's source as elaborated (`inlineSource`). -/
 structure Source where

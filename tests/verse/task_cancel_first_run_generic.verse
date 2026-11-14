@@ -1,4 +1,4 @@
-# the same in generic functions, twice (#253)
+# the same in generic functions, twice: both wait for ever (#253)
 W(X:t where t:type)<suspends>:t =
     Sleep(9.0)
     X

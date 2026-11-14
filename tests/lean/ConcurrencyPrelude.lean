@@ -69,4 +69,16 @@ def main : IO Unit := do
     stageOnly := false, name := "$privateTask", ret := .app "$task" [.name "int"],
     body := .construct p "$task" [.name "int"] [], extraFns := [] }
   report "selected builtin identity in request" (elabProgramCore ownTask { requests := { loops := [internalTask] } })
-  IO.println "concurrency-prelude compiler API contracts passed (17 checks)"
+  -- Await mode (a task's end resumes its awaiters): the prelude's text
+  -- replacements all took, and a program that awaits a task asks for the
+  -- mode in its first elaboration and compiles with it.
+  unless (concPreludeAwaits.splitOn "taskEnd(T:taskBase):void").length == 2 &&
+      (concPreludeAwaits.splitOn "var Ends:?event(void)").length == 2 &&
+      (concPreludeAwaits.splitOn "    WaitDone(T)\n    if (R := T.Result?)").length == 1 do
+    throw (IO.userError "await prelude: a replacement did not apply")
+  let awaiting ← need "awaiting parse" (parseProgram
+    "F()<suspends>:int = 1\nMain()<suspends>:void =\n    T := spawn{F()}\n    Print(\"{T.Await()}\")\n")
+  let first ← need "awaiting first round" (elabProgramCore awaiting)
+  unless first.needs.awaits do throw (IO.userError "a task's Await did not ask for await mode")
+  report "awaiting program" (elabProgram awaiting)
+  IO.println "concurrency-prelude compiler API contracts passed (20 checks)"
