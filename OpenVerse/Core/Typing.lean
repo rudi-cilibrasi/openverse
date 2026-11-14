@@ -447,6 +447,62 @@ def VTy.hasVarL (j : Nat) : List VTy → Bool
   | t :: ts => VTy.hasVar j t || VTy.hasVarL j ts
 end
 
+/-- The more restrictive of two variances (`bi` below `co` below `inv`). -/
+def Variance.join : Variance → Variance → Variance
+  | .bi, w | w, .bi => w
+  | .co, .co => .co
+  | _, _ => .inv
+
+mutual
+/-- How a field type uses type variable `i`, under the classes' variances `V`:
+    not at all (or only at bivariant positions) `bi`, positively `co`, at an
+    invariant position or in a view `inv`: the least variance at `i` that
+    `VTy.posIn` accepts it at. -/
+def VTy.useOf (V : Variances) (i : Nat) : VTy → Variance
+  | .var j => if j == i then .co else .bi
+  | .arr t | .opt t => VTy.useOf V i t
+  | .tup ts => VTy.useOfL V i ts
+  | .ref us args => VTy.useArgs V i us 0 args
+  | .vref _ args => if VTy.hasVarL i args then .inv else .bi
+  | _ => .bi
+def VTy.useOfL (V : Variances) (i : Nat) : List VTy → Variance
+  | [] => .bi
+  | t :: ts => (VTy.useOf V i t).join (VTy.useOfL V i ts)
+def VTy.useArgs (V : Variances) (i : Nat) (us : List Nat) : Nat → List VTy → Variance
+  | _, [] => .bi
+  | p, a :: as =>
+    (let u := VTy.useOf V i a; let h := VTy.hasVar i a
+     us.foldl (fun (acc : Variance) c => acc.join (match V c p with
+       | .inv => if h then .inv else .bi
+       | .co => u
+       | .bi => .bi)) Variance.bi).join (VTy.useArgs V i us (p + 1) as)
+end
+
+/-- The variances the front end gives the classes (Book of Verse ch. 10;
+    docs/research/variance.md): for each class, by tag, the most permissive
+    at each of its `arity` type arguments that its fields (`VTy.useOf`), its
+    pins and `fixed` allow (`fixed t i`: argument `i` of class `t` is
+    invariant, as a field written through a reference or a view mentions
+    it). Found by iterating from all `bi` up to a fixpoint (each step only
+    raises a variance, so at most twice as many steps as arguments);
+    `Sigs.checkVarOK` checks what it gives, whatever it is. -/
+def Sigs.inferVariances (S : Sigs) (arity : Nat → Nat) (fixed : Nat → Nat → Bool) : List (List Variance) :=
+  let n := S.classes.length
+  let total := (List.range n).foldl (fun acc t => acc + arity t) 0
+  let pinned (t i : Nat) : Bool :=
+    (S.pinsOf t).zipIdx.any fun (o, j) => match o with
+      | some c => j == i || VTy.hasVar i c
+      | none => false
+  let step (cur : List (List Variance)) : List (List Variance) :=
+    let V : Variances := ({ fns := [], variances := cur } : Sigs).var
+    (List.range n).map fun t =>
+      let fs := (S.classes[t]?).getD []
+      (List.range (arity t)).map fun i =>
+        if fixed t i || pinned t i then .inv
+        else fs.foldl (fun acc f => acc.join (VTy.useOf V i f)) .bi
+  let start := (List.range n).map fun t => List.replicate (arity t) Variance.bi
+  (List.range (2 * total + 2)).foldl (fun cur _ => step cur) start
+
 /-- The type arguments among `args` that a class's pins `ps` fix (#142),
     each with its pin (over the arguments: see `VTy.pinsOK`). -/
 def VTy.pinPairs : List (Option VTy) → List VTy → List (VTy × VTy)

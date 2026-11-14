@@ -731,7 +731,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let schedTag := env.tagOf "$sched"
   let schedTy : VTy := .ref [schedTag] []
   let fieldIdx (c f : String) : Nat := ((env.fields c).findIdx? (·.1 == f)).getD 0
-  let Sorig : Sigs := { fns := fsigs0, classes := classTable, protos, pins }
+  let Sorig : Sigs := { fns := fsigs0, classes := classTable, protos, pins, variances := env.coreVariances }
   -- each `spawn` (#156) gets a root: a function `$spawnK(T, args…)` that
   -- runs the spawned call and fills the task `T`
   let mut roots : Array (Nat × String × Nat) := #[]
@@ -876,7 +876,8 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let sourceClasses := lows.zipIdx.map fun ((gi, _, _), j) =>
     let (_, _, sites, arms) := parts[j]!
     List.replicate (Suspend.slotBaseOf sites arms) VTy.void ++ slotTys[gi]!
-  let Ssource : Sigs := { fns := fsigs0, classes := classTable ++ sourceClasses, protos, pins }
+  let Ssource : Sigs :=
+    { fns := fsigs0, classes := classTable ++ sourceClasses, protos, pins, variances := env.coreVariances }
   for gi in List.range fns.size do
     if lows.any (·.1 == gi) then continue
     let shared ← SourceFrames.aliases sourceFrames gi sourceBase
@@ -1115,7 +1116,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   if leafy then classTable := classTable.set schedTag (classTable[schedTag]! ++ [parTy, .int])
   if taskClockF.isSome then classTable := classTable.set schedTag (classTable[schedTag]! ++ [.int])
   let Sinf : Sigs := { fns := fsigs0 ++ extraSigs.toList ++ selfSigs.toList ++ rootSigs.toList, classes := classTable ++ sourceClasses,
-                       protos, pins }
+                       protos, pins, variances := env.coreVariances }
   let mut newFns : Array Fn := #[]
   let mut newTys : Array (List VTy) := #[]
   let mut taskFns : Array Fn := #[]
