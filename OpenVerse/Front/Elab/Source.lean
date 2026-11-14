@@ -4,6 +4,7 @@ import OpenVerse.Front.Elab.Lowering
 import OpenVerse.Front.InitializerConvergence
 import OpenVerse.Front.Aliases
 import OpenVerse.Front.BuiltinValues
+import OpenVerse.Front.FinalSuper
 import OpenVerse.Front.Bitwise
 import OpenVerse.Front.TypeValues
 import OpenVerse.Front.TypeArguments
@@ -688,7 +689,8 @@ def concurrencyHelpers (resolved : List STop) (requests : Requests) (eventFifo :
        (`Access.checkUses`, with `Access.Env`, which the elaboration reads);
     7. the desugarings: module-scoped `var`s, checked and made the `var`
        fields of the module state's object (`ModuleVars`), types given as
-       arguments (`TypeArguments`), types as values (`TypeValues`), fields
+       arguments (`TypeArguments`), the calls of the final super class
+       queries (`FinalSuper`), types as values (`TypeValues`), fields
        with accessors (`Accessors`), castable bounds
        (`UpperBounds.markCastable`), built-ins named as values
        (`BuiltinValues`);
@@ -770,6 +772,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   --    (after the aliases, whose names are no values' and bind nothing)
   let resolved ← ModuleVars.desugar resolved
   let resolved ← TypeArguments.desugar resolved
+  let resolved ← FinalSuper.desugar resolved
   let resolved ← TypeValues.desugar resolved
   let resolved ← Accessors.desugar resolved
   let resolved := UpperBounds.markCastable resolved

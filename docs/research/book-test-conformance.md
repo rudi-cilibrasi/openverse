@@ -27,8 +27,9 @@ fields with accessors, type arguments and metatypes of [After fields with
 accessors, type arguments and
 metatypes](#after-fields-with-accessors-type-arguments-and-metatypes),
 the weak maps and module-scoped `var`s of [After weak maps and
-module-scoped vars](#after-weak-maps-and-module-scoped-vars) and the
-fixes of [After the found bugs](#after-the-found-bugs),
+module-scoped vars](#after-weak-maps-and-module-scoped-vars), the
+fixes of [After the found bugs](#after-the-found-bugs) and the classes
+and subtyping of [After classes and subtyping](#after-classes-and-subtyping),
 against the Book at
 [`beaa719ba165cbf33eff462f2b0fe078a6dd9ab0`](https://github.com/verselang/book/tree/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests),
 the revision the other research notes pin. The Book's
@@ -56,11 +57,13 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   APIs (persistence, JSON, natives; 345); compiler tooling such as bytecode
   and digests (128); VM-conditional code inside a definition (37) and one
   file that defines `Main` itself (1).
-- Of the **9,588 translatable cases**, openverse **agrees on 8,290 (86%)**,
-  refuses 1,123 valid programs, **accepts 87 refused ones**, gives a
+- Of the **9,588 translatable cases**, openverse **agrees on 8,452 (88%)**,
+  refuses 964 valid programs, **accepts 84 refused ones**, gives a
   **different result in 88** (82 of them `verse_vm_only` cases of unbounded
-  ints) and hits **no internal error** ([After the remaining
-  causes](#after-the-remaining-causes) with [After weak maps and
+  ints) and hits **no internal error** ([After classes and
+  subtyping](#after-classes-and-subtyping); on main `fdb1127`, before it:
+  8,290 agreed, 1,123 refused, 87 accepted, 88 differed, with [After the
+  remaining causes](#after-the-remaining-causes), [After weak maps and
   module-scoped vars](#after-weak-maps-and-module-scoped-vars) and [After
   the found bugs](#after-the-found-bugs); the first two alone:
   8,267 and 8,236 agreed; before them, on main `7f12181`, of
@@ -96,11 +99,12 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   base of [source upper bounds](#after-source-upper-bounds) and of [what a
   `for` undoes](#after-what-a-for-undoes); with each alone, 8,131 agreed,
   1,422 refused, 135 accepted, 95 differed, and 8,121, 1,439, 135, 88.)
-- An agreement on an expected error is weak evidence: 2,940 expected errors
-  agree, but only 1,233 of them are refused by a check of a language rule
-  (and 17 more, whose codes are all warnings, get openverse's warning);
-  1,236 are refused by the parser (the lexer's and parser's own checks
-  included) and 454 for a missing feature.
+- An agreement on an expected error is weak evidence: 2,992 expected errors
+  agree, but only 1,533 of them are refused by a check of a language rule
+  (and 39 more, whose codes are all warnings, get openverse's warning);
+  1,063 are refused by the parser (the lexer's and parser's own checks
+  included) and 357 for a missing feature (counts of the run of [After
+  classes and subtyping](#after-classes-and-subtyping)).
 - **Internal errors**: none ([Internal errors](#internal-errors)). The three
   programs that failed `Prog.checkTypes` (`X:int = return`, `() = ""`, a
   `void` parameter compared with `""`) are refused or compile, and Lean's
@@ -285,19 +289,19 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| all test cases (assertions and files without one) | 13197 | 8124 | 87 | 1075 | 88 | 3823 | 0 |
-| shared definitions of a file (`:decls`) | 307 | 166 | 0 | 48 | 0 | 93 | 0 |
-| **total** | 13504 | 8290 | 87 | 1123 | 88 | 3916 | 0 |
+| all test cases (assertions and files without one) | 13197 | 8282 | 84 | 920 | 88 | 3823 | 0 |
+| shared definitions of a file (`:decls`) | 307 | 170 | 0 | 44 | 0 | 93 | 0 |
+| **total** | 13504 | 8452 | 84 | 964 | 88 | 3916 | 0 |
 
 ### By form
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `assert` | 6671 | 3508 | 0 | 761 | 88 | 2314 | 0 |
-| `assert_semantic_error` | 3460 | 2667 | 50 | 0 | 0 | 743 | 0 |
-| `assert_valid` | 1637 | 875 | 0 | 243 | 0 | 519 | 0 |
+| `assert` | 6671 | 3626 | 0 | 643 | 88 | 2314 | 0 |
+| `assert_semantic_error` | 3460 | 2670 | 47 | 0 | 0 | 743 | 0 |
+| `assert_valid` | 1637 | 912 | 0 | 206 | 0 | 519 | 0 |
 | `assert_valid_syntax` | 439 | 386 | 0 | 53 | 0 | 0 | 0 |
-| `decls` | 307 | 166 | 0 | 48 | 0 | 93 | 0 |
+| `decls` | 307 | 170 | 0 | 44 | 0 | 93 | 0 |
 | `assert_roundtrip` | 304 | 293 | 0 | 9 | 0 | 2 | 0 |
 | `assert_syntax_error` | 303 | 300 | 3 | 0 | 0 | 0 | 0 |
 | `assert_runtime_error` | 140 | 50 | 0 | 5 | 0 | 85 | 0 |
@@ -318,22 +322,22 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| no VM restriction | 12208 | 7988 | 49 | 734 | 5 | 3432 | 0 |
+| no VM restriction | 12208 | 8064 | 46 | 661 | 5 | 3432 | 0 |
 | `verse_vm_only` | 702 | 213 | 5 | 296 | 83 | 105 | 0 |
 | `bp_vm_only` | 366 | 80 | 33 | 1 | 0 | 252 | 0 |
-| `verse_vm_todo` (BPVM only; a known VerseVM failure) | 219 | 9 | 0 | 92 | 0 | 118 | 0 |
+| `verse_vm_todo` (BPVM only; a known VerseVM failure) | 219 | 95 | 0 | 6 | 0 | 118 | 0 |
 | `auto_qualify_todo` | 9 | 0 | 0 | 0 | 0 | 9 | 0 |
 
 ### By directory
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| (top level) | 5575 | 3488 | 45 | 767 | 3 | 1272 | 0 |
-| Operators/ | 1203 | 1091 | 0 | 11 | 28 | 73 | 0 |
-| Bugs/ | 1185 | 751 | 33 | 132 | 0 | 269 | 0 |
+| (top level) | 5575 | 3607 | 42 | 651 | 3 | 1272 | 0 |
+| Operators/ | 1203 | 1100 | 0 | 2 | 28 | 73 | 0 |
+| Bugs/ | 1185 | 759 | 33 | 124 | 0 | 269 | 0 |
 | Literals/ | 1020 | 834 | 0 | 7 | 0 | 179 | 0 |
 | Serialization/ | 991 | 0 | 0 | 0 | 0 | 991 | 0 |
-| Attributes/ | 795 | 509 | 4 | 36 | 0 | 246 | 0 |
+| Attributes/ | 795 | 535 | 4 | 10 | 0 | 246 | 0 |
 | FlowControl/ | 484 | 409 | 0 | 30 | 0 | 45 | 0 |
 | Intrinsics/ | 437 | 305 | 0 | 106 | 1 | 25 | 0 |
 | Math/ | 321 | 260 | 0 | 1 | 56 | 4 | 0 |
@@ -1346,7 +1350,7 @@ Each of these is a rule openverse lacks; they come first.
 | | T8. `void` as a type argument is no top type | 2: `Void.versetest` 246, 260 | the tests | accepted | the conversion to `void` at a type parameter | left (subtle, 2 cases) |
 | | T9. a tuple parameter beside a named one does not take two arguments | 1: `FORT-744399…:62` | the tests ("Doesn't work in ShipVerse") | accepted | | left (a limit of Epic's compiler) |
 | | T10. a join of two classes with two common supertypes | 2: `SOL-5838…` 13, 22 | the tests | joined at the class | | left (a rule of joins) |
-| | T11. polymorphic and mutual recursion of parametric classes | 3: `ParametricTypes.versetest` 263, 265, 269 | the tests: "Polymorphic recursion is not yet supported", "Mutual recursion is not yet supported" (`:262`, `:268`) | supported | none | left (Epic's limit; openverse is more general) |
+| | T11. polymorphic and mutual recursion of parametric classes | 3: `ParametricTypes.versetest` 263, 265, 269 | the tests: "Polymorphic recursion is not yet supported", "Mutual recursion is not yet supported" (`:262`, `:268`) | supported | none | left (Epic's limit; openverse is more general); **done since**: ch. 10's prose disallows both too ("Disallowed: Polymorphic Recursion", "Disallowed: Mutual Recursion"), so they are refused, as the Book is followed ([After classes and subtyping](#after-classes-and-subtyping)) |
 | | T12. a public parametric class with a `var` field of its parameter (3552) | 2: `ParametricFunctions.versetest` 431, 438 | the tests (3552, not implemented) | supported | none | left (Epic's limit) |
 | | T13. a `using` of a path that names no module, or names a class (3587) | 2: `Modules/Using2.versetest:94`, `QualifiedIdentifier.versetest:152` | as C3 | ignored | as C3 | left |
 | | T14. an enum of more than 256 values (3552) | 1: `Enum.versetest:171`, bp | the BPVM's | accepted | none | left |
@@ -1562,6 +1566,200 @@ translatable** (re-recorded from a fresh run on the merged compiler).
 - **Programs.** Against main, over every suite and the corpus `corpus2`
   (5,825 programs), no program's bytes, output or messages changed.
 
+## Classes and subtyping: the map
+
+The causes about classes and subtyping, the largest front-end group left,
+measured on main `e451452` (8,236 agree, 1,305 refuse, 135 accept, 88
+differ). For each: its forms (cases looked at with `show`), the Book's
+rule, the VM tags, what openverse does, the mechanism a change extends,
+the size, and then an order by cases per unit of risk. Chapter lines are
+of the Book's `docs/`, test lines of its `Tests/`.
+
+**class-specifiers (84) and library-other (15 of them).**
+- *Forms.* `<final_super>` on a class (72 cases of
+  `GetCastableFinalSuperClass.versetest`, 7 of
+  `Attributes/FinalSuperAttribute.versetest`, `Castable.versetest:659`,
+  `MetatypeConcreteSubtype.versetest:58`), refused as "not supported yet
+  (#11)"; and the two functions of the API reference,
+  `GetCastableFinalSuperClass[B, X]` and
+  `GetCastableFinalSuperClassFromType[B, T]`, "unknown function" (15 cases
+  of the same file, under library-other, whose slice has no `<final_super>`
+  class). The other three are not classes: `<converges>`
+  (`Effects.versetest:304`), `<native_callable>`
+  (`ModuleDefinitions.versetest:164`), `<persistable>` (#11).
+- *Rule.* Ch. 10, "Final" (`10_classes_interfaces.md:2904-2950`):
+  `<final_super>` "guarantees that all subclasses of this class will always
+  directly inherit from it"; `<final_super_base>` "marks the root of a
+  restricted inheritance tree" and works with `GetCastableFinalSuperClass`,
+  "which finds the `<final_super>` class in the hierarchy for a given
+  instance". Ch. 11, "final_super and Type Queries"
+  (`11_types.md:1673-1840`): both functions return "the least specific
+  `<final_super>` class that: 1. Directly inherits from the specified base
+  type 2. Is in the inheritance chain of the instance/type", and fail
+  otherwise. The API reference: `GetCastableFinalSuperClass(base_type:type,
+  Instance:base_type)<reads><decides>:castable_subtype(base_type)`,
+  "Return an immediate subclass of base_type that is <castable> and
+  <final_super> and is also shared with Instance. Otherwise failure", and
+  `GetCastableFinalSuperClassFromType(base_type:type,
+  sub_type:subtype(base_type))`, the same "shared with sub_type". The
+  tests add: a `<final_super>` class needs a parent (3679,
+  `FinalSuperAttribute.versetest:51`), a class right below a
+  `<final_super_base>` class or interface is `<final_super>` (3680; built
+  already), an interface below one need not be (:28); the instance must be
+  of the base type (3509, `GetCastableFinalSuperClass.versetest` 102-125);
+  the result is a `castable_subtype` of the first argument (127-145,
+  182-202); the class found must be castable (332, 337); and a type that
+  is not a class (`int`, `float`, `any`, 297-304) makes the call fail.
+- *VM.* `verse_vm_todo` ("not defined in the new VM because of gaps in VNI
+  support for types", `GetCastableFinalSuperClass.versetest:29`): the
+  BPVM's expectations, with no VerseVM twin; the survey counts them.
+- *openverse.* Refuses `<final_super>` (`classHierarchy`) and knows neither
+  function. The specifier's places (`EffectPolicy.specifierPlaces`) and the
+  3680 rule are built.
+- *Mechanism.* `resolveSpecifiers`/`CDef` for the specifier;
+  types as values (`TypeValues.desugar`, [types-as-values.md](types-as-values.md))
+  for the result: `C` as a value is an object of `$type:C`, below
+  `castable_subtype(B)` for each `B` above a castable `C`. A call becomes a
+  call of a helper the front end writes, a chain of casts `C[X]` over the
+  candidate classes, topmost first. No Verse Core.
+- *Size.* Up to 96 cases (81 + 15), and the 7 refusals of the file keep
+  agreeing, each by its rule.
+
+**effects-of-classes (28).**
+- *Forms.* `<computes>` with `<allocates>` (or `<reads>`, `<writes>`) on a
+  class or an interface (`Attributes/allocates.versetest` 6, 13, 57;
+  `Attributes/unique.versetest` 90-137; the key classes of `Map.versetest`,
+  `Operators/CompareMap.versetest` and `weak_map.versetest` 6, 624, 639,
+  667-669). The same form on a struct (`allocates.versetest:20`,
+  syntax-other) and a function (`:27`, types-other) is refused for the
+  same reason.
+- *Rule.* Ch. 13 (`13_effects.md:99-105`): "Effect specifiers can be
+  further divided into *exclusive* specifiers (`<converges>`, `<computes>`,
+  `<transacts>`) and *additive* specifiers (`<suspends>`, `<decides>`,
+  `<reads>`, `<writes>`, `<allocates>`). A function may have at most one
+  exclusive specifier but can combine multiple additive ones"; the table
+  (`:115-116`): `<computes>` implies `{}` of the heap. The tests:
+  `allocates.versetest:4-5`, "Combines with <varies> and <computes>, but
+  redundant with <transacts>", and `unique.versetest:87-89`, "<varies> and
+  <computes> require an explicit <allocates>".
+- *VM.* None.
+- *openverse.* Refuses `<computes>` with any heap effect, for classes and
+  functions (`EffectPolicy.checkSpecs`, `Signatures.checkExclusive`).
+- *Mechanism.* The effect sets: `<computes>` with additive heap specifiers
+  is the set of those specifiers (`constructionFx`, `allowedFx`).
+- *Size.* 28, and the struct's and function's 2.
+
+**override-defaults (47).** Three forms.
+- *(a) A field `<override>` without a value* (`Attributes/override.versetest`
+  3, 33, 133, `:decls`; `Attributes/concrete.versetest` 59, 110, 230;
+  `SOL-3366:53`; `SOL-3731` 22, 23, `:decls`; `InterfaceWithFields` 377,
+  `:decls`; `AccessLevelInheritance:863`), refused: "must give a new
+  default". Ch. 10, "Overriding Members" (`10_classes_interfaces.md:3172-3175`):
+  "Field overrides can provide different default values or specialize to
+  subtypes"; the tests construct the class with the field given
+  (`override.versetest:33`), and `concrete.versetest:110-114` re-declare a
+  defaulted field with no value ("is this actually valid?").
+- *(b) A field overridden at a subtype* (`MetatypeConcreteSubtype` 13:
+  `comparable` to `int`, `float`, `logic`; `Any.versetest` 163, 164: `any`
+  to `int`; `Bugs/BPVMOnly/RefinedMapKeyInterfaceOverride` 7: `int` to a
+  refinement, a class to a `<unique>` one, tuples and options of them;
+  `InterfaceWithFields:358`: a class to its subclass; and with (a):
+  `override.versetest` 3, 133, `SOL-3731`, `AccessLevelInheritance:863`,
+  `InterfaceWithFields:377` (`[]int` to `tuple(int, int)`)), refused:
+  "must have the type it inherits". The same quotation: "fields can only
+  be overridden with subtypes". The BPVM-only file has no VerseVM twin.
+- *(c) A method overridden at a coerced signature*
+  (`CoercedOverrides.versetest` 99-111: parameters `(X:int, Y:int)` by
+  `(X:[]int)`, then by `(X:any)`, `<decides>` dropped;
+  `FORT-642876-CollidingCoercedOverrideNames` 86-193: results `[]t` by
+  `tuple(t, t)`, `<suspends>` dropped; `ParametricTypes.versetest:578`:
+  `F(:tuple())` by `F()`), refused: "must have the signature of". Ch. 10
+  says "method signatures must match exactly" (`:3175`), but allows a
+  narrower result (`:539-567`).
+- *openverse.* A class's table gives a field the type of the topmost class
+  that has it (`TyEnv.coreFieldTy`); an override gives only a new default.
+- *Mechanism.* (a): `classFields`, a field with no default; (b): a field a
+  class types otherwise than one above it, read through accessors
+  (`TyEnv.fieldAcc`, #205), the class table at the narrower type; (c): the
+  dispatch adapters of #351 that coerce a result.
+- *Size.* (a) 7 alone, (b) 25 more with (a), (c) 10.
+
+**variance (38) and archetype-blocks (36).**
+- *Forms.* `c(sub)` where `c(super)` is expected and the reverse, for
+  classes and interfaces covariant, contravariant or bivariant in their
+  parameter (`ParametricTypes.versetest` 59-177, 506, 537). The 34
+  archetype-blocks cases of the same file stop at the parser first:
+  `X:sup_f(sub) := sub_f(sup):`, a construction of a parametric class by a
+  block archetype with no fields, in the file's shared modules
+  (`ClassContravariantSubtyping` and the like), and those modules convert
+  across variance, so every case of the file that takes the shared
+  definitions needs variance as well. (`FunctionAsType` 183, 198 are
+  VerseVM-only natives.) `SOL-6739-ParametricTypeMeetAndJoin` (8, under
+  subtyping-to-any) joins such types.
+- *Rule.* Ch. 10, "Instantiation and Identity" (`:1312-1490`): "The
+  variance of a parametric type depends on how the type parameter is used
+  within the class definition": covariant in return positions, contravariant
+  in parameter positions, invariant in both, bivariant in none, and
+  "Variance is computed over a type's full member set, including members
+  inherited from a parametric base".
+- *openverse.* Parametric classes are invariant. Verse Core's subtyping of
+  references (`VTy.sub`, `Core/Typing.lean`) requires the target's type
+  arguments to be a prefix of the source's, equal position by position, and
+  the typing of a reference (`hasTy`) requires the object's recorded type
+  arguments (`HeapTy`) to have the type's as a prefix, exactly. A view
+  (#351) relates arguments by equalities only. A front-end conversion
+  cannot help: the value is a reference, so a copy would lose its identity
+  (`var` fields, `<unique>`), and representing a covariant parameter
+  otherwise (boxed in `dyn`) would change every parametric class's layout.
+  So variance needs Core: designed in [variance.md](variance.md) and left
+  for the owner.
+- *Size.* 38 + 34 + 8.
+
+**singleton-types (19)** (`Void.versetest` 13, `FindFirstAsync…` 3,
+`FORT-1054384` 2, `ParametricTypes:711`): `true` and `false` written as
+types (`X:true = false`, `Y:?true = X` with `X:?void`). Not classes: the
+type `true` holds the empty value alone and `false` none, which is the
+empty-value work's (#600) to define; left.
+
+**subtyping-to-any (11).** 8 are variance (`SOL-6739`); 3 convert a value
+to one with `any` inside, `[int]string` to `[t]any` (`Any.versetest:60`)
+and `type{_(:int):int}` to `type{_(:int):any}` (`Any.versetest:152`,
+`SOL-3799:16`), a rebuilt map and a wrapped function value: not classes;
+left.
+
+**interface-rules (7 accepted that the tests refuse)** and the class cases
+among type-checks-other and effect-checks: `Interface.versetest` 33, 40, 92
+and `InterfaceDiamond:74` (an interface named twice among the parents) are
+`feat/book-remaining-causes`'s; `Interface.versetest` 194, 199 and
+`InterfaceDiamond:89` (`<override>` in an interface) the owner's; and
+`ParametricTypes.versetest:465` (a module constant that constructs a
+`<transacts>` class) is that branch's "a module constant has no side
+effect". Two are classes and one check each:
+`ParametricTypes.versetest` 263, 265 (a parametric class whose field names
+itself at other type arguments) and 269 (two parametric classes whose
+fields name each other). Ch. 10, "Disallowed: Polymorphic Recursion" and
+"Disallowed: Mutual Recursion" (`:1578-1630`): "Polymorphic recursion
+occurs when a parametric type references itself with a **different type
+argument**", "Mutual recursion between multiple parametric types is not
+supported either". `SOL-5838` 13, 22 refuse an array of two classes whose
+nearest common supertypes are two (a class and an interface) even at an
+expected element type both are below; openverse takes the expected type
+there by design (LANGUAGE.md, "Subtyping and dispatch"), so it is a
+reading for the owner, left.
+
+**Order** (cases per unit of risk; dangerous first when cheap):
+1. Polymorphic and mutual recursion of parametric types: 3 accepted
+   refusals, one check in `classHierarchy`; risk: programs of openverse's
+   own that have such fields.
+2. `<final_super>` and the two functions: up to 96 cases, new forms only
+   (no program that compiles today changes).
+3. `<computes>` with additive heap effects: 30 cases, one rule in two
+   places; programs that test the old refusal change.
+4. Field overrides without a value, then at a subtype: 32 cases; the
+   second changes the class table's field types and reads.
+5. Method overrides at coerced signatures (10): adapters; after 4.
+6. Variance (80 with the cases it unblocks): Verse Core, designed only.
+
 ## After the found bugs
 
 Bugs found while doing other work, fixed one per commit on main `fb5e514`
@@ -1582,6 +1780,80 @@ is better and nothing else changed; against this branch's before the merge
 nothing is worse (53 more agree, 176 are the test runner's names, not
 translatable now). The baseline and the tables of this note are from that
 run.
+
+## After classes and subtyping
+
+The causes about classes and subtyping ([the map](#classes-and-subtyping-the-map)),
+built on main `e451452` in eight commits, one form each, with the rules
+pinned in [classes-and-subtyping.md](classes-and-subtyping.md) and the
+Verse Core design for variance in [variance.md](variance.md); merged with
+main `b70272c` (#615) and `fdb1127` (#616). Against main's baseline (8,290
+agree, 1,123 refuse, 87 accept, 88 differ, 3,916 not translatable), 162
+cases more agree and none is worse: **8,452 agree, 964 refuse, 84 accept,
+88 differ, 3,916 not translatable** (re-recorded from a fresh run on the
+merged compiler; `compare` after each commit: 0 worse).
+
+| Form | Rule (where) | Agree now | Left |
+|---|---|---|---|
+| polymorphic and mutual recursion of parametric types | refused: a parametric class or interface names itself in its fields only at its own type parameters, and none names another that names it back (ch. 10, `checkParametricRecursion`) | 3 accepted refusals: `ParametricTypes.versetest` 263, 265, 269 | |
+| type values have no effect | making a type value and casting through one is `<computes>` (`TypeValues`) | (needed by the next) | |
+| `<final_super>`, `GetCastableFinalSuperClass[FromType]` | a `<final_super>` class has a parent; the queries give the castable `<final_super>` class right below `B` on the instance's (or type's) chain, topmost first, and fail otherwise (ch. 10, 11, the API; `FinalSuper.desugar`); `any`, `comparable` are values of `type` | 95: `GetCastableFinalSuperClass.versetest` 87, `Attributes/FinalSuperAttribute.versetest` 7, `Castable.versetest:659`; its 7 refusals agree by their rules | `MetatypeConcreteSubtype.versetest:58` agrees through the last row |
+| `<computes>` with additive heap effects | `<computes><allocates>` allows those (ch. 13: one exclusive specifier, any additive ones; `constructionFx`, `checkSpecs`, `checkExclusive`) | 30: `Attributes/allocates.versetest` 6, 13, 20, 27, 57; `Attributes/unique.versetest` 90-137 (6); `Operators/CompareMap.versetest` 8 and `:decls`; `Map.versetest` 151, 174; `weak_map.versetest` 6, 624, 667, 668, 669; `Effects.versetest` 174, 202, 253 | 3, other causes now: `Map.versetest:143` (a map literal of two sibling classes), `Map.versetest:decls` (`false` as a type), `weak_map.versetest:639` (a value type that does not persist, its rule) |
+| a field `<override>` without a value | it re-declares the field with no default (the tests: `Attributes/override.versetest` 29-47; `classFields`) | 5: `Attributes/override.versetest:33`, `Attributes/concrete.versetest` 59, 110, 230, `SOL-3366:53` | |
+| a class's field re-declared at a subtype | a field that is no `var` may be narrowed; the class and those below hold it at the narrower type, reads through those above convert it up (ch. 10, "Overriding Members"; `TyEnv.narrowed`, `fieldSrc`) | 19: `Attributes/override.versetest` 3, 133, `:decls`; `Any.versetest` 163, 164; `RefinedMapKeyInterfaceOverride.versetest` 7; `InterfaceWithFields.versetest` 358, 377; `MetatypeConcreteSubtype.versetest` 116, 284, 289, 294; `AccessLevelInheritance.versetest:863` | |
+| `T{}` through a field of a `concrete_subtype` | in a method, as for a local, with the construction budgets of every `<concrete>` class it may construct (ch. 11; `SOL-8627`) | 10: `MetatypeConcreteSubtype.versetest` 58, 216-263 (8), `:decls` | `MetatypeConcreteSubtype.versetest` 153, 162 (`Type := c; Type{Value := 42}`, fields given through a type value whose type is its class's) |
+| variance | Verse Core relates references' type arguments by equality ([variance.md](variance.md)) | | 38 + 31 (archetype-blocks) + 8 (`SOL-6739`): designed, for the owner |
+
+- **Per cause, at `e451452` and now** (the merged branches' changes
+  included): class-specifiers 84 → 3 (81 agree; left `<converges>`,
+  `<native_callable>`, `<persistable>`, none about classes);
+  library-other 23 → 7 (the 15 query cases agree); override-defaults 47 →
+  13 (33 agree, 1 is qualified-names now: `InterfaceWithFields.versetest:decls`
+  reaches `(Class112:)Value`, a second method of a name); effects-of-classes 28 → 0 (25 agree, 3
+  other causes, above); variance 38 → 38; archetype-blocks 36 → 31 (5 not
+  translatable since #615); singleton-types 19 → 20 (`Map.versetest:decls`
+  reaches `false` as a type now); subtyping-to-any 11 → 11; interface-rules
+  7 → 3 (#615's 4; the 3 left are `<override>` in an interface, the
+  owner's).
+- **Moved the wrong way:** none. Cases that changed cause and stay
+  refused: the three above; `SOL-8627-concrete_subtype-effects.versetest:3`
+  agrees by its rule now (it agreed through "unknown struct" before);
+  `Attributes/override.versetest:38` and the `SOL-9745` refusals agree by
+  the construction and `<concrete>` rules (they agreed through "must give
+  a new default").
+- **Where the Book disagrees with itself:** the API reference types
+  `GetCastableFinalSuperClassFromType`'s second parameter
+  `sub_type:subtype(base_type)`, and its tests pass types outside it and
+  expect a failure at run time (`GetCastableFinalSuperClass.versetest` 109,
+  303, 304, 330, 331); openverse follows the tests
+  ([classes-and-subtyping.md](classes-and-subtyping.md#final-super-classes)).
+  Ch. 10 says "method signatures must match exactly" (`:3175`), the tests
+  override at coerced signatures (`CoercedOverrides.versetest` 86-113,
+  `FORT-642876`); left, below.
+- **Left, with what each needs:** method overrides at coerced signatures
+  (`CoercedOverrides` 4, `FORT-642876` 5, `SOL-3731` 3 with a result `t`
+  over `comparable`, `ParametricTypes.versetest:578`): an adapter per
+  override that converts its arguments (a tuple of parameters to an array,
+  `any`) and result (a tuple to an array, a type parameter to its bound's
+  box) and drops `<decides>` or `<suspends>`, as the spawned dispatch's
+  adapters convert a result; variance: Verse Core ([variance.md](variance.md));
+  singleton types `true` and `false` (20) and the three conversions to a
+  type with `any` inside: not classes, the empty value's and the
+  conversions' work; `SOL-5838` 13, 22 (a join refused at an expected type
+  both classes are below): the owner's reading.
+- **Programs.** Against main `fdb1127`, over every suite and the corpus
+  `corpus2` (5,890 programs in both), no program's bytes, output or
+  messages changed but three tests that pinned what the Book's rules
+  change: `tests/errors/class_param_const_mutable.verse` (its class named
+  itself at other type arguments; it reaches the `var` field through
+  another class now, same message), `tests/errors/fx_computes_and_reads.verse`
+  and `tests/errors/fx_generic_computes.verse` (they pinned the refusal of
+  `<computes><reads>`; they pin now that such a function may not write);
+  `tests/errors/iface_placeholder_grows.verse` is
+  `parametric_recursion_interface.verse`, refused where its type is
+  defined; and the construction-effects oracle
+  (`tests/scripts/test-construction-effects.py`) checks `<computes>` with
+  each heap subset instead of its refusal.
 
 ## Ten causes to remove first
 
@@ -1722,7 +1994,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 
 **Accepted: unreachable code** (0): all 30 agree now ([After the load-bearing readings](#after-the-load-bearing-readings)).
 
-**Accepted: other type rules** (20): `Attributes/deprecated.versetest` 435; `Bugs/FORT-744399-DefaultTupleFieldsCrashComplier.versetest` 62; `Bugs/SOL-5838-JoinOfClassesWithCommonBaseClassWithInterfaceInheritance.versetest` 13, 22; `Enum.versetest` 171(b); `FunctionTypes.versetest` 191; `Modules/Using2.versetest` 94; `Mutability.versetest` 426; `ParametricFunctions.versetest` 348, 356, 361, 374, 431, 438; `ParametricTypes.versetest` 263, 265, 269; `QualifiedIdentifier.versetest` 152; `Void.versetest` 246, 260
+**Accepted: other type rules** (17): `Attributes/deprecated.versetest` 435; `Bugs/FORT-744399-DefaultTupleFieldsCrashComplier.versetest` 62; `Bugs/SOL-5838-JoinOfClassesWithCommonBaseClassWithInterfaceInheritance.versetest` 13, 22; `Enum.versetest` 171(b); `FunctionTypes.versetest` 191; `Modules/Using2.versetest` 94; `Mutability.versetest` 426; `ParametricFunctions.versetest` 348, 356, 361, 374, 431, 438; `QualifiedIdentifier.versetest` 152; `Void.versetest` 246, 260
 
 **Accepted: limits of Epic's compiler** (12): `Bugs/FORT-592189-MaybeCoerceToTypeCrash.versetest` 4(b); `Bugs/SOL-5477-CrashInGenClassDefinition.versetest` 5(b); `DefaultNamed.versetest` 629(b), 640(b), 741(b), 751(b); `Function.versetest` 238(b), 271(b); `ParametricFunctions.versetest` 276(b), 366, 496; `Tuple.versetest` 456(b)
 
@@ -1765,35 +2037,35 @@ Grouped by the causes of the tables above. Lines are given per file, with
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `Any.versetest` | 83 | 74 | 0 | 6 | 0 | 3 | 0 |
+| `Any.versetest` | 83 | 76 | 0 | 4 | 0 | 3 | 0 |
 | `ArchetypeAccessSpecifiers.versetest` | 11 | 11 | 0 | 0 | 0 | 0 | 0 |
 | `Archetypes.versetest` | 41 | 34 | 0 | 0 | 0 | 7 | 0 |
 | `Array.versetest` | 22 | 18 | 0 | 4 | 0 | 0 | 0 |
 | `ArrayAppend.versetest` | 27 | 11 | 0 | 10 | 1 | 5 | 0 |
 | `AssetUsage/IncrementalAssetUsage.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `AssignmentSequencing.versetest` | 7 | 3 | 0 | 4 | 0 | 0 | 0 |
-| `Attributes/AccessLevelInheritance.versetest` | 66 | 63 | 0 | 3 | 0 | 0 | 0 |
+| `Attributes/AccessLevelInheritance.versetest` | 66 | 64 | 0 | 2 | 0 | 0 | 0 |
 | `Attributes/AccessSpecifiersDisallowedOnLocalVars.versetest` | 9 | 9 | 0 | 0 | 0 | 0 | 0 |
 | `Attributes/Attributes.versetest` | 34 | 30 | 0 | 2 | 0 | 2 | 0 |
 | `Attributes/CustomAttributes.versetest` | 47 | 47 | 0 | 0 | 0 | 0 | 0 |
 | `Attributes/CustomClassVarAccessors.versetest` | 61 | 29 | 0 | 3 | 0 | 29 | 0 |
 | `Attributes/DeepMutabilityForCustomClassVarAccessors.versetest` | 19 | 1 | 0 | 0 | 0 | 18 | 0 |
-| `Attributes/FinalSuperAttribute.versetest` | 25 | 18 | 0 | 7 | 0 | 0 | 0 |
+| `Attributes/FinalSuperAttribute.versetest` | 25 | 25 | 0 | 0 | 0 | 0 | 0 |
 | `Attributes/Internal.versetest` | 9 | 0 | 0 | 0 | 0 | 9 | 0 |
 | `Attributes/InvalidAttributeLocations.versetest` | 43 | 43 | 0 | 0 | 0 | 0 | 0 |
 | `Attributes/abstract.versetest` | 19 | 19 | 0 | 0 | 0 | 0 | 0 |
-| `Attributes/allocates.versetest` | 33 | 27 | 0 | 5 | 0 | 1 | 0 |
+| `Attributes/allocates.versetest` | 33 | 32 | 0 | 0 | 0 | 1 | 0 |
 | `Attributes/available.versetest` | 77 | 18 | 0 | 2 | 0 | 57 | 0 |
-| `Attributes/concrete.versetest` | 44 | 38 | 2 | 4 | 0 | 0 | 0 |
+| `Attributes/concrete.versetest` | 44 | 41 | 2 | 1 | 0 | 0 | 0 |
 | `Attributes/deprecated.versetest` | 111 | 73 | 1 | 0 | 0 | 37 | 0 |
 | `Attributes/experimental.versetest` | 47 | 1 | 0 | 0 | 0 | 46 | 0 |
 | `Attributes/export_metadata.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `Attributes/final.versetest` | 22 | 21 | 1 | 0 | 0 | 0 | 0 |
 | `Attributes/intrinsic.versetest` | 7 | 7 | 0 | 0 | 0 | 0 | 0 |
 | `Attributes/native.versetest` | 20 | 1 | 0 | 0 | 0 | 19 | 0 |
-| `Attributes/override.versetest` | 16 | 12 | 0 | 4 | 0 | 0 | 0 |
+| `Attributes/override.versetest` | 16 | 16 | 0 | 0 | 0 | 0 | 0 |
 | `Attributes/scoped.versetest` | 51 | 33 | 0 | 0 | 0 | 18 | 0 |
-| `Attributes/unique.versetest` | 34 | 19 | 0 | 6 | 0 | 9 | 0 |
+| `Attributes/unique.versetest` | 34 | 25 | 0 | 0 | 0 | 9 | 0 |
 | `AutoQualification.versetest` | 29 | 0 | 0 | 0 | 0 | 29 | 0 |
 | `BigArray.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/2020-04-16-ForLoopIteratorVarScoping.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
@@ -1876,7 +2148,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/BPVMOnly/LeftoverArmDeferTiming.versetest` | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
 | `Bugs/BPVMOnly/NestedUpdateStateCorruption.versetest` | 6 | 0 | 0 | 0 | 0 | 6 | 0 |
 | `Bugs/BPVMOnly/RaceCompletionTiming.versetest` | 6 | 0 | 0 | 0 | 0 | 6 | 0 |
-| `Bugs/BPVMOnly/RefinedMapKeyInterfaceOverride.versetest` | 10 | 0 | 0 | 10 | 0 | 0 | 0 |
+| `Bugs/BPVMOnly/RefinedMapKeyInterfaceOverride.versetest` | 10 | 7 | 0 | 3 | 0 | 0 | 0 |
 | `Bugs/BlockWithAssignmentShouldNotCrash.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/Braces.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/DigestInheritedCallbackParametricSubscribe.versetest` | 5 | 0 | 0 | 0 | 0 | 5 | 0 |
@@ -1960,7 +2232,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/SOL-3250-AssertionFailureWhenOverridingTheSameFunctionTwice.versetest` | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-3293-ConstructingAnInstanceWhileInitializingItsDefaults.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-3300-IncorrectCloningOfUniqueObject.versetest` | 7 | 7 | 0 | 0 | 0 | 0 | 0 |
-| `Bugs/SOL-3366-MakeClassesConcreteByDefault.versetest` | 7 | 3 | 3 | 1 | 0 | 0 | 0 |
+| `Bugs/SOL-3366-MakeClassesConcreteByDefault.versetest` | 7 | 4 | 3 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-3422-CyclicInterfacesAndClasses.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-3515-CallingExtensionMethodWithoutSelf.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-3563-DontStackOverflowOnCyclicInterfaces.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
@@ -2076,7 +2348,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `CanCallerAccessEpicInternal/Spawn.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `CanCallerAccessEpicInternal/SpawnRoot.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `Cast.versetest` | 65 | 64 | 0 | 1 | 0 | 0 | 0 |
-| `Castable.versetest` | 101 | 73 | 0 | 10 | 0 | 18 | 0 |
+| `Castable.versetest` | 101 | 74 | 0 | 9 | 0 | 18 | 0 |
 | `Classes/AccessSpecifiers.versetest` | 61 | 48 | 0 | 0 | 0 | 13 | 0 |
 | `Classes/Class.versetest` | 42 | 42 | 0 | 0 | 0 | 0 | 0 |
 | `Classes/ClassBlockClause.versetest` | 24 | 16 | 1 | 0 | 0 | 7 | 0 |
@@ -2115,7 +2387,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `DigestVisibility.versetest` | 47 | 31 | 0 | 0 | 0 | 16 | 0 |
 | `Duplication.versetest` | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
 | `DynamicallyTypedSubobjectInstantiation.versetest` | 16 | 16 | 0 | 0 | 0 | 0 | 0 |
-| `Effects.versetest` | 336 | 257 | 7 | 5 | 0 | 67 | 0 |
+| `Effects.versetest` | 336 | 260 | 7 | 2 | 0 | 67 | 0 |
 | `Enum.versetest` | 71 | 66 | 1 | 0 | 0 | 4 | 0 |
 | `EnumCompare.versetest` | 12 | 12 | 0 | 0 | 0 | 0 | 0 |
 | `Escape.versetest` | 5 | 5 | 0 | 0 | 0 | 0 | 0 |
@@ -2147,7 +2419,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `FunctionTypes.versetest` | 42 | 32 | 1 | 9 | 0 | 0 | 0 |
 | `GenerateFunctionForParametricClass.versetest` | 2 | 1 | 0 | 0 | 0 | 1 | 0 |
 | `GenerateFunctionForParametricInterface.versetest` | 2 | 1 | 0 | 1 | 0 | 0 | 0 |
-| `GetCastableFinalSuperClass.versetest` | 94 | 7 | 0 | 87 | 0 | 0 | 0 |
+| `GetCastableFinalSuperClass.versetest` | 94 | 94 | 0 | 0 | 0 | 0 | 0 |
 | `GetSecondsSinceEpoch.versetest` | 3 | 0 | 0 | 3 | 0 | 0 | 0 |
 | `GlobalVariables.versetest` | 26 | 17 | 4 | 4 | 0 | 1 | 0 |
 | `Incremental/01_null_compile.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
@@ -2164,7 +2436,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `InterfaceAccessVisibility.versetest` | 19 | 12 | 0 | 0 | 0 | 7 | 0 |
 | `InterfaceDiamond.versetest` | 18 | 17 | 1 | 0 | 0 | 0 | 0 |
 | `InterfaceWithAccessors.versetest` | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
-| `InterfaceWithFields.versetest` | 37 | 27 | 0 | 9 | 0 | 1 | 0 |
+| `InterfaceWithFields.versetest` | 37 | 29 | 0 | 7 | 0 | 1 | 0 |
 | `Interfaces/AccessSpecifiers.versetest` | 41 | 34 | 0 | 0 | 0 | 7 | 0 |
 | `Intrinsics/Abs.versetest` | 19 | 16 | 0 | 0 | 1 | 2 | 0 |
 | `Intrinsics/ArrayFind.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
@@ -2204,7 +2476,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `LocalizationJoin.versetest` | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
 | `MacroForms.versetest` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
 | `ManyEmergentTypes.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
-| `Map.versetest` | 104 | 94 | 0 | 10 | 0 | 0 | 0 |
+| `Map.versetest` | 104 | 96 | 0 | 8 | 0 | 0 | 0 |
 | `MapOrder.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | `Math/Bitwise.versetest` | 174 | 114 | 0 | 0 | 56 | 4 | 0 |
 | `Math/Math.versetest` | 77 | 76 | 0 | 1 | 0 | 0 | 0 |
@@ -2212,7 +2484,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Math/MaxInt.versetest` | 13 | 13 | 0 | 0 | 0 | 0 | 0 |
 | `Math/MinFloat.versetest` | 22 | 22 | 0 | 0 | 0 | 0 | 0 |
 | `Math/MinInt.versetest` | 13 | 13 | 0 | 0 | 0 | 0 | 0 |
-| `MetatypeConcreteSubtype.versetest` | 38 | 21 | 0 | 17 | 0 | 0 | 0 |
+| `MetatypeConcreteSubtype.versetest` | 38 | 35 | 0 | 3 | 0 | 0 | 0 |
 | `Modules/AccessSpecifiers.versetest` | 34 | 0 | 0 | 0 | 0 | 34 | 0 |
 | `Modules/AssetAccessibility.versetest` | 4 | 0 | 0 | 0 | 0 | 4 | 0 |
 | `Modules/Import.versetest` | 7 | 0 | 0 | 0 | 0 | 7 | 0 |
@@ -2256,7 +2528,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Operators/CompareFloat.versetest` | 52 | 50 | 0 | 0 | 0 | 2 | 0 |
 | `Operators/CompareInstance.versetest` | 18 | 18 | 0 | 0 | 0 | 0 | 0 |
 | `Operators/CompareInt.versetest` | 36 | 36 | 0 | 0 | 0 | 0 | 0 |
-| `Operators/CompareMap.versetest` | 97 | 88 | 0 | 9 | 0 | 0 | 0 |
+| `Operators/CompareMap.versetest` | 97 | 97 | 0 | 0 | 0 | 0 | 0 |
 | `Operators/CompareOption.versetest` | 18 | 18 | 0 | 0 | 0 | 0 | 0 |
 | `Operators/CompareRational.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
 | `Operators/CompareString.versetest` | 148 | 148 | 0 | 0 | 0 | 0 | 0 |
@@ -2281,7 +2553,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `PackageCycles.versetest` | 15 | 0 | 0 | 0 | 0 | 15 | 0 |
 | `ParametricCastingIsDisallowed.versetest` | 11 | 10 | 0 | 1 | 0 | 0 | 0 |
 | `ParametricFunctions.versetest` | 106 | 77 | 9 | 16 | 0 | 4 | 0 |
-| `ParametricTypes.versetest` | 274 | 164 | 3 | 80 | 0 | 27 | 0 |
+| `ParametricTypes.versetest` | 274 | 167 | 0 | 80 | 0 | 27 | 0 |
 | `Parentheses.versetest` | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | `Path.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `PersistentJson.versetest` | 103 | 1 | 0 | 0 | 0 | 102 | 0 |
@@ -2392,5 +2664,5 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `return-should-be-trailed.versetest` | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | `upon.versetest` | 13 | 5 | 0 | 8 | 0 | 0 | 0 |
 | `using-local_scope.versetest` | 21 | 12 | 0 | 0 | 0 | 9 | 0 |
-| `weak_map.versetest` | 96 | 31 | 0 | 12 | 0 | 53 | 0 |
+| `weak_map.versetest` | 96 | 36 | 0 | 7 | 0 | 53 | 0 |
 | `when.versetest` | 22 | 7 | 0 | 15 | 0 | 0 | 0 |

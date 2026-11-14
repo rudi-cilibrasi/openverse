@@ -241,6 +241,11 @@ reject duplicate or contradictory effects, and reject unknown execution
 specifiers before lowering can erase them (#494). They also reject a redundant
 one, as classes, interfaces and structs do: `<transacts>` implies `<reads>`,
 `<writes>` and `<allocates>` (ch. 13), so `<transacts><allocates>` is refused.
+`<converges>`, `<computes>` and `<transacts>` exclude each other; `<reads>`,
+`<writes>` and `<allocates>` are additive, also with `<computes>`:
+`<computes><allocates>` allows allocating and nothing else of the heap
+(ch. 13: "A function may have at most one exclusive specifier but can
+combine multiple additive ones"; `Attributes/allocates.versetest` 4-32).
 
 `predicts` and `converges` are explicitly unsupported, including on abstract
 signatures and function types. The pinned Book calls prediction unreleased
@@ -256,8 +261,9 @@ Explicit internal/implicit effect spellings (`no_rollback`, `dictates`,
 Transactional output/events retain their documented OpenVerse policy (#495).
 
 Class/interface/struct heap construction budgets are enforced on definitions
-and callers (#508). No heap annotation means `transacts`; `computes` permits
-none; `reads`, `writes` and `allocates` permit those named. A subtype must
+and callers (#508). No heap annotation means `transacts`; `computes` alone
+permits none; `reads`, `writes` and `allocates` permit those named, also
+with `computes` (`class<computes><allocates>`). A subtype must
 include its parent types' construction budgets. Data types cannot declare
 `decides` or `suspends`. Effects on fields are refused; declaration/access
 metadata remains separate. Field defaults also have an independent convergence
@@ -296,7 +302,7 @@ of them; the Book's tests `Tests/Attributes/` and `Castable.versetest`):
 | `<abstract>` | a class (ch. 10; not a method, a field, an interface or a struct) | not `<concrete>` too |
 | `<concrete>` | a class or a struct | a default for every field, inherited ones and an interface's included (ch. 10, "Concrete") |
 | `<final>` | a class, a method or a field, a struct's included (not an interface, a struct, a module's function) | a method's body, a field's value; no class below overrides a `<final>` field and no construction gives it a value |
-| `<final_super>` | a class (not supported yet, #11) | |
+| `<final_super>` | a class | a parent, a class or an interface (ch. 10, "Final"; the tests' 3679) |
 | `<final_super_base>` | a class or an interface | a class right below it is `<final_super>` |
 | `<castable>` | a class or an interface | no type parameters, nor in a class or interface below it |
 | `<unique>` | a class or an interface | |
@@ -751,8 +757,19 @@ circle := class(shape, labelled):
   class inherits its parent's fields, then those of the interfaces above it
   that are not there yet (once, along a diamond), then its own, and its
   methods:
-  - `Name<override>:t = e` gives an inherited field a new default; any
+  - `Name<override>:t = e` gives an inherited field a new default, and
+    `Name<override>:t` re-declares it with none, so that a construction
+    gives it (the Book's tests, `Attributes/override.versetest` 29-47); any
     other field with an inherited name is an error;
+  - a class may re-declare a field that is no `var` at a type below the one
+    it inherits (ch. 10, "Overriding Members": "fields can only be
+    overridden with subtypes"): `Pet<override>:cat` over `Pet:animal`,
+    `Kind<override>:int` over `Kind:comparable` or `any`, a refinement over
+    its base, `tuple(int, int)` over `[]int`. Read through that class or one
+    below it, the field has the narrower type; through a class or interface
+    above, the inherited one. A `var` keeps its type (a write through a
+    class above could store a value of the wider one), and so does a
+    field an interface re-declares;
   - `M<override>(…)` overrides an inherited method with its signature, except
     that it may return a class below the declared one (covariant results).
     Overriding without `<override>`, or `<override>` that overrides nothing,
@@ -881,9 +898,39 @@ circle := class(shape, labelled):
     class that gives a field with storage accessors.
 - **Casts.** `T[X]` is `X` as a `T`, failing unless `X`'s class is below
   `T`. `T(X)` converts to a supertype and cannot fail.
+- **Final super classes** (Book of Verse ch. 10, "Final"; ch. 11,
+  "final_super and Type Queries"; the API reference; the rules are in
+  [research/classes-and-subtyping.md](research/classes-and-subtyping.md#final-super-classes)).
+  A `<final_super>` class has a parent, a class or an interface; a class
+  right below a `<final_super_base>` class or interface is `<final_super>`.
+  `GetCastableFinalSuperClass[B, X]` gives, as a `castable_subtype(B)`, the
+  class that is `<final_super>`, castable (`<castable>` or below a
+  `<castable>` class or interface), right below `B` (a parent of its), and
+  `X`'s class or above it, and fails when there is none; of the classes
+  that list an interface `B`, the topmost. `X` is of the type `B`.
+  `GetCastableFinalSuperClassFromType[B, T]` does the same for the class
+  the type value `T` holds (any type: one that is not below `B` makes it
+  fail). `B` is a type written at the call; one that is no class or
+  interface (`int`, `any`) makes the call fail, and its result is then a
+  `type`. Both are `<reads><decides>`; a program may define functions of
+  these names, which its calls then call.
+
+  ```verse
+  component := class<castable>{}
+  physics := class<final_super>(component){}
+  rigid := class(physics){}
+  if (T := GetCastableFinalSuperClass[component, rigid{}]) then
+      Print(if (T[physics{}]) then "physics" else "?")      # physics
+  ```
 - **Parametric classes.** A parametric class is a reference like any other
   (#39): `stack(t)` can have `var` fields, be `<unique>`, and refer to
-  itself (`node(t) := class: Value:t; var Next:?node(t) = false`). It can be
+  itself (`node(t) := class: Value:t; var Next:?node(t) = false`), in its
+  fields only at its own type parameters, in order: `Next:?node(?t)` or,
+  for `bi(t, u)`, `Next:?bi(u, t)` is refused, and so are two parametric
+  classes or interfaces whose fields name each other, directly or through
+  others (Book of Verse ch. 10, "Disallowed: Polymorphic Recursion",
+  "Disallowed: Mutual Recursion"; classes without type parameters may name
+  each other). It can be
   in a hierarchy: a subclass gives its parent type arguments, from its own
   type parameters (`square(t) := class(shape(t))`, in any order:
   `swap(a, b) := class(pair(b, a))`), fixed ones
@@ -1125,8 +1172,8 @@ circle := class(shape, labelled):
   [Parametric functions](#parametric-functions)).
 - **Heap effects** (#35). A
   function's specifiers allow a set of heap effects: all of them when it has
-  none or `<transacts>`, none with `<computes>`, and those named by
-  `<reads>`, `<writes>` and `<allocates>`. Reading a `var` field *reads*,
+  none or `<transacts>`, none with `<computes>` alone, and those named by
+  `<reads>`, `<writes>` and `<allocates>` (with `<computes>` or not). Reading a `var` field *reads*,
   setting one *writes* (`set C.F op= e`, and a path that goes on past a
   `var` field, such as `set O.Arr[0] = e`, also *read* it), and
   constructing an object of a class with a `var` field or a `<unique>` one
@@ -1177,6 +1224,17 @@ circle := class(shape, labelled):
     (#157) would have to hold itself (no program can build an object of
     such a type: each would need another first, so use `?node(t)` for a
     link that may be absent);
+  - variance: a parametric class or interface is invariant in its type
+    parameters, so a `producer(player)` is no `producer(entity)`, where the
+    Book infers covariance, contravariance or bivariance from the uses of
+    the parameter in the members (ch. 10, "Instantiation and Identity");
+    Verse Core relates references' type arguments by equality, so it needs
+    Verse Core ([research/variance.md](research/variance.md));
+  - a method override at a signature that needs a conversion (a result
+    `tuple(t, t)` for `[]t`, parameters `(X:int, Y:int)` taken as `(X:[]int)`,
+    `<decides>` or `<suspends>` dropped; the Book's tests
+    `CoercedOverrides.versetest`): an override has the signature of what it
+    overrides, but for a result of a class below the declared one.
 
 ## Attributes
 
@@ -2388,15 +2446,23 @@ Main():void =
   circle`) is at the nearest metatype above both, never a
   `concrete_subtype` and a `castable_subtype` only of a `<castable>` class.
 - **`T[X]`** with `T` a type value is `X` cast to the class `T` holds, failing
-  unless `X`'s class is below it. **`T{}`** with `T:concrete_subtype(c)`
-  constructs the class `T` holds with its defaults; no field may be given.
+  unless `X`'s class is below it. **`T{}`** with `T:concrete_subtype(c)`, a
+  local or, in a method, a field of the class (ch. 11: "The type value has
+  to be held in a class *field*"), constructs the class `T` holds with its
+  defaults; no field may be given.
+  Naming a type as a value, and casting through one, has no effect, so a
+  `<computes>` function may do both; `T{}` has the construction effects of
+  every `<concrete>` class at or below `c`, any of which it may construct
+  (the Book's tests, `SOL-8627-concrete_subtype-effects`).
 - **Other types.** `subtype(t)` is also of a type that is no class or
   interface: a built-in type (`subtype(int)`), a struct, an enum, or an
   array, option, map or tuple of them (`subtype([]c)`); its values are the
   types `t` (`X:type = int`, `Identity(point)`), each an object of a class
   of its own, which nothing reads but a conversion to `type`, and a value
   of `subtype(t)` holds `t` alone. `castable_subtype` and `concrete_subtype`
-  of such a type are refused, as the Book's tests have them.
+  of such a type are refused, as the Book's tests have them. `any` and
+  `comparable` are values of `type` too (`X:type = any`), with no
+  `subtype(any)` or `subtype(comparable)`.
 - **`concrete_subtype(any)`** holds the `<concrete>` classes, and
   **`concrete_subtype(comparable)`** those that are also `<unique>`, so
   comparable (`concrete_subtype(comparable)` of `float` is refused); nothing
