@@ -204,6 +204,16 @@ def clause_src(c):
     raise ValueError(c)
 
 
+def for_clause_src(c):
+    """A clause of a `for`: a filter that cannot fail, a print or a `set`, goes
+    with one that can, `(E; true?)`, as each filter of a `for` must be able
+    to fail (Book of Verse ch. 7, "Each filter must be failable", and its
+    tests, for.versetest: `(set Temp = Element; true?)`); it does the same."""
+    if c[0] in ('setN', 'print'):
+        return f'({clause_src(c)}; true?)'
+    return clause_src(c)
+
+
 def apply(c, st):
     """A clause that is no generator: whether it succeeds (mutating st)."""
     k = c[0]
@@ -617,7 +627,7 @@ def program(seed):
         if form == 'for':
             cls, names = g.clauses(pfx, True)
             bump = rng.randint(0, 2)
-            lines.append(f'    for ({", ".join(clause_src(c) for c in cls)}):')
+            lines.append(f'    for ({", ".join(for_clause_src(c) for c in cls)}):')
             if bump:
                 lines.append(f'        set N += {bump}')
             lines.append(f'        Print("b{k} {interp(names)} {{N}}")')

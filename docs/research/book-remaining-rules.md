@@ -76,20 +76,83 @@ verse code."
 **openverse now.** `classHierarchy` (`Elab/Classes.lean`) refuses a parent
 named twice with the same type arguments.
 
-## `<override>` in an interface: left
+## An interface overrides nothing
 
-The tests refuse it: "Interfaces can not override anything"
-(`Tests/Interface.versetest:193`, a method `f<override>` and a field
-`var v<override>` of an interface below another, 3523), "Can't override in
-an interface" (`InterfaceWithFields.versetest:312`), and
-`InterfaceDiamond.versetest:89`; the prose is silent. openverse gives an
-interface's default a new body or value in an interface below it (#53's
-interface defaults). The rule is one check (`EffectPolicy.checkPlaces`),
-but measured it refuses 32 of openverse's tests of that feature
-(`iface_default_copies*`, `multi_method_*interface*`, `inheritance`,
-`qualified_slots`, …) and 45 generated programs (`classes` 4, `gadt_open`
-20, `generic-mv` 21): an owner decision whether to retire the feature for
-the Book's 3 cases, so it is left.
+**The rule.** An interface below another inherits its members and may add
+its own, but overrides none: `<override>` on a method or a field of an
+interface is refused, and so is an inherited member declared again without
+it (with a new body, value or type, or with none). A class below gives an
+inherited member its implementation or a new default, as before; what a
+class below two interfaces, one below the other, sees of a method is the
+default of the interface that declares it.
+
+**The Book.** The tests: "Interfaces can not override anything"
+(`Interface.versetest:193`), then `TT := interface(T) { f<override>():int =
+{return(24)} }` refused (3523, 3523, 3532: the `<override>`, and the method
+declared again) and `var v<override>:int= 24` in `TT` refused (`:199`, 3523,
+3532); "Can't override in an interface" (`InterfaceWithFields.versetest:312`,
+`V<override>:C1=C1{}` over `V:C0=C0{}`, a narrower type, 3523, 3532); without
+`<override>` "the redeclaration is an error -- both across an
+interface->interface edge and when a class implements an interface"
+(`:319-331`, 3532); "Default implementation was allowed before, but isn't
+now. Had to be sacrificed for diamond inheritence. Allowed again, but with
+restrictions" (`InterfaceDiamond.versetest:82-93`): an interface's own
+default is valid, an interface below it overriding it refused (3523, 3523,
+3532), a class overriding it valid (`:95-99`). The prose is silent.
+
+**openverse before.** An interface below another could give an inherited
+method a new body and an inherited field a new default (#53's interface
+defaults): such a default of a pinned interface (`c2(t) :=
+interface(container([]t))`) was copied into each class below it, elaborated
+in the interface's scope (`copyIfaceDefaults`), and a dispatch took the
+most specific interface default.
+
+**openverse now.** `EffectPolicy.checkPlaces` refuses `<override>` on an
+interface's method or field, with the effect policy; a member declared
+again in an interface says why (`classFields`, `classMethods`). What #53
+keeps: parametric interfaces, an interface that gives a parent other type
+arguments (`c2(t) := interface(container([]t))`, a class below it a
+`container([]t)`), an interface's own defaults, of methods and fields, and
+a class's overrides of them. What it retires: an interface's default for a
+member of an interface above it, and so its copies; `copyIfaceDefaults`,
+`copyScope?`, `Sig.scope` (the scope a copy's defaults were evaluated in),
+the copies' `<final>` exemption and the interface case of a field's
+narrowing are deleted. Programs: of the 26 tests whose interfaces overrode
+(three more went with the rule above), 12 were about it and are deleted
+(`iface_default_copies` and its `_cast`, `_cast_fixed`, `_chain`,
+`_composite`, `_final`, `_locals`, `_overloads`, `iface_default_global_fn`,
+`iface_default_parent_impl`, `iface_default_scope`, `fuzz_1c_iface_super`),
+with the error test `iface_default_final_sub`; 14 are rewritten: where the
+interface below was a route of the test's, it is an abstract class
+(`dispatch_defaults_interface_scope`, `suspends_inherited_compound_default`,
+`multi_method_fixed_unreachable`, `multi_method_interface_open_default`,
+`multi_method_own_default_inference`, `multi_method_own_interface`,
+`multi_method_tuple_super_interface_default`, `qualified_slots`'s `j`),
+`inheritance`'s two sections a class (`polite`, `advanced`: the most
+specific implementation is a class's), `choice_immediate_suspends_iface_copy`'s
+default its interface's own; their output the same; and three lose the
+interface's override as a route, their output derived again by hand:
+`multi_method_covariant_interface_defaults` (no `own`; `child` below
+`parent` only), `multi_method_fixed_defaults` (`plain` below `root`, whose
+default gives `root`, 2, 3) and `multi_method_iface_default_routes` (`deep`
+inherits `shape`'s default: `bare`'s `(super:)` reaches it, 1001, 1002, and
+`lone` gives 1, 2), with `multi_method_tuple_super_class_before_interface`,
+whose `deep` gives nothing now, its output the same. The error tests
+`qualified_not_root` and `qualified_through_iface` override from an
+abstract class; new: `iface_override_method`, `iface_override_field`,
+`iface_redeclare_field`, `iface_redeclare_method` and
+`iface_below_inherits`, and `iface_overloaded_defaults` takes
+`iface_default_copies_overloads`'s place in the overloading matrix (an
+interface's own overloaded defaults, ch. 6, "Interfaces with Overloaded
+Methods"). The models: `gadt_open.py`'s pinned `cd`, `cd3` and
+`cd4` are abstract classes (every seed changes its text, none its
+prediction); `generic_mv.py`'s `interface` shape overrides from an
+abstract class (59 of the first 400 seeds change their text, none its
+prediction); `gen-classes.py` writes no interface override, the draws it
+took kept (54 of the first 400 seeds change their text). 24 programs of
+corpus2 are refused (`gadt_open` 20, `classes` 4), and 21 of `generic-mv`,
+refused already (a named argument before a positional one), get this rule's
+message first.
 
 ## A loop's body and a field's default are no failure contexts
 
@@ -127,25 +190,95 @@ each default is checked once (`elabFieldDefaults`, `Elab/Functions.lean`);
 `--extended-defaults` keeps openverse's failing defaults, as it keeps its
 other computed field defaults (#511).
 
-## A filter that is a literal
+## Every filter of a `for` can fail
 
-**The rule.** Each filter of a `for`, a clause that is no binding, must be
-able to fail.
+**The rule.** Each filter of a `for`, a clause that is neither a generator
+(`X : A`, `X := A..B`) nor a definition (`X := e`, `X:t = e`, `var X:t =
+e`), can fail: a print, a `set`, a call of a function that cannot fail, or a
+block, an `if` or anything else whose code cannot fail, is refused as a
+filter. Where an effect goes among the clauses instead: in a filter that
+pairs it with a check that can fail, `(set T = E; true?)`, as the Book's
+tests write; in a definition's value, `Y := (set S += X; X * 10)`; in a
+generator's source, `X := 1..(set N += 2; N)`; or in a call that can fail,
+`C.Bump[X]`. All of these stay among the clauses, so what a failure undoes
+there is the search's (#611), as before. A clause with a choice in it, or a
+call of a function with several values, is a generator over their values,
+not a filter (openverse's reading: the Book has no choice), and the
+statements a `for` takes from a function with several values it inlines
+are that function's, not the `for`'s clauses.
 
 **The Book.** Ch. 7: "Each filter must be failable, and if any fails, that
 iteration is skipped" (`07_control.md:657`); "Filters must be failable:
 Filter conditions must contain at least one expression that can fail."
-(`:836-837`); the tests: `NoFailure:[]int= for(X:=1 .. 4; 1) { X }`
-refused, "Filter can not fail" (`FlowControl/for.versetest:223`, 3513).
+(`:836-837`). The tests: `NoFailure:[]int= for(X:=1 .. 4; 1) { X }` refused,
+"Filter can not fail" (`FlowControl/for.versetest:223`, 3513); and accepted,
+"Write mutable variable" (`:229-232`): `for(X:=1 .. 2; Element:=Array[X];
+(set Temp = Element; true?)) { X }`, an effect paired with a check; a block
+filter whose tail can fail (`:164-175`); definitions that fail
+(`Thing := GetThing[]`, `:148-162`) or have effects; generators whose
+bounds have effects (`I:=1..X.Inc()`) and failable calls with effects
+(`S.QInc[]`, `:308-392`). A definition of `_` is refused (ch. 1,
+`01_expressions.md:340`: "The single underscore `_` is reserved and cannot
+be used as an identifier", 3514), so `_ := Print(…)` is no way to write an
+effect among the clauses.
 
-**openverse now.** A filter that is a literal is refused with the source
-rules (`checkForClauses`, `Elab/Source.lean`), beside the `for` of literal
-clauses only. **Left:** the whole rule. Checked on every filter's
-elaborated code, it refuses 153 of openverse's tests and 826 generated
-programs (the `choice`, `context`, `fields`, `heterogeneous`, `mv-*` and
-`gadt_*` families), which write `Print(…)`, `set X += 1` or a choice that
-cannot fail as clauses of a `for`: an owner decision whether to refuse them
-all now.
+**openverse before.** A filter could be anything; one that cannot fail
+never skipped an iteration. Only a literal filter was refused (with the
+source rules, `checkForClauses`).
+
+**`first`.** The Book's tests make a `first` with a generator's filters
+the same: "Only allow expressions that can fail (same as `for`)"
+(`FlowControl/first.versetest:28-31`, `first(I->Y:Xs; X = Y; I){I}`, 3513).
+Main's check of it (`checkFirstFilters`, #618: a literal or a name) is
+replaced by this rule, one definition of a filter and of "can fail" for
+both; a `first` with no generator, openverse's first success of choices,
+is no loop and has no such rule, as an `if`'s conditions have none.
+
+**openverse now.** The places of the filters of every `for`, and every
+`first` with a generator, as written are found with the source rules
+(`forFilterPositions`, `Elab/Source.lean`: the clauses that are neither
+generators nor definitions, with no choice and no call of a function with
+several values), with their kinds (`SExpr.filterKind`), and kept in the
+type environment (`TyEnv.forFilters`); wherever a statement at one of those
+places, of that kind, is elaborated (`elabSeqIn` for a `for`'s clauses,
+`elabOneGo` for a `first`'s), `checkFilterCanFail` refuses it if its code
+cannot fail (`Expr.mayFail`), once what it calls is known
+(`failabilityKnown`), as an `if`'s condition is checked. The code the
+elaboration writes at a filter's place is told apart by its kind (a
+refining cast's value, an identifier) or its marker (`$…`, a lifted
+cast's copy-out), and a call or a cast with brackets can fail as written.
+The literal case of a `for` keeps its message.
+Programs: 40 tests wrote a print or a `set` as a filter (39 of the suite,
+most of them the `for` search's tests of #611, and one error test whose
+subject is a cast); each such clause `E` is `(E; true?)` now, the Book's
+form, which does the same, so their output is the same and they still
+exercise effects among the clauses and their undoing (83 clauses: 66
+`set`s, 17 prints). New: `for_filter_book_forms` (the four places, with
+what the search undoes), and the error tests `for_filter_print`,
+`for_filter_set`, `for_filter_call`, `for_filter_block` and
+`for_filter_if`. The generators write `(E; true?)` for such a filter of a
+`for` (and nothing else in their `if` conditions, where no rule applies):
+`gen-choice.py`, `gen-fields.py`, `gen-fields2.py`, `choice_context.py`,
+`choice_heterogeneous.py`, `choice_break.py`, `mv.py` (`show_for_cl`, also
+in `for{…}`'s clauses but its value), `generic_mv.py`, and the GADT models
+`gadt_event_body`, `gadt_spawn_body`, `gadt_contexts`,
+`gadt_cast_contexts`, `gadt_immediate`, `gadt_refine` and `gadt_views`,
+none drawing a number more, none changing a prediction; so do the code
+size check's `refined-*`, `waiting-generic-state` and
+`waiting-refined-state` kinds and a subtype evidence contract's program
+(`tests/lean/SubtypeEvidence.lean`). Of the first 400
+seeds, the text changes in `gen-choice` 107, `gen-fields` 266,
+`gen-fields2` 253, `choice_context` 200 (its `for` half; `--control` 200),
+`choice_heterogeneous` 267 (`--methods` 267), `choice_break` 400 (the
+`for` form; `--first-success` 0), `mv` 93, 75, 81 and 91 (plain, `bif`,
+`mv`, `rec`), `generic_mv` 400, `gadt_event_body`, `gadt_spawn_body`,
+`gadt_immediate` and `gadt_refine` 400 each, `gadt_contexts` 99,
+`gadt_cast_contexts` 84 and `gadt_views` 47; 1,000 seeds of each pass in
+Lean and C. 589 programs of corpus2 are refused (`heterogeneous` 227 over
+its modes, `choice` 92, `context` 80, `fields` 55, `mv` 53,
+`gadt_event_body`, `gadt_refine` and `gadt_spawn_body` 20 each,
+`gadt_immediate` 16, `gadt_cast_contexts` 4, `gadt_views` 2), and one more
+(`gadt_contexts`) refused already gets this rule's message first.
 
 **Also in ch. 7.** "Cannot define mutable variables: Using `var` to declare
 variables in the for clause is not allowed" (`07_control.md:842-843`),
@@ -207,26 +340,207 @@ was spent, or a runtime error.
 rules. Programs: `tests/verse/overflow.verse`, whose loop ended at an
 overflow, gains a `break` that is never taken.
 
-## `race` arms, `(super:)` and `spawn`'s effects: left
+## Every arm of `race` and `rush` can suspend
 
-Three more rules of the accepted refusals are one check each, measured and
-left, as each retires a reading openverse's own tests are about:
+**The rule.** Every arm of a `race` or a `rush` can suspend: it calls a
+suspending function, method or function value outside a `spawn` or a
+`branch`. (`sync` asks it of two arms, as before; `branch` has one body and
+no rule of the kind.)
 
-- **Every arm of `race` and `rush` can suspend** ("Ensure all top-level
-  expressions in race/rush are async", `Coroutines/Concurrency.versetest:831`,
-  3538; the prose is silent): 9 tests (`task_cancel_rush_loser`,
-  `sync_race`, `fn_values_method_variance_async*`, …) race an immediate arm
-  on purpose, and an arm that calls a suspending function value is not yet
-  known to suspend where `sync`'s rule looks (1 case).
-- **`(super:)M` only in an override of `M`** (`Super.versetest` 183, 238,
-  3612): 27 tests call `(super:)` for another method or in a block
-  (`multi_method_cross_super_*`, `choice_super_*`,
-  `class_cast_refine_super*`, …), and 20 generated programs (2 cases).
-- **`spawn` has `<transacts>`'s heap effects** ("spawn requires the
-  transacts effect…", `Effects.versetest:554`; in a `<computes>` function,
-  3512 on both VMs, `:558`, `:573`): 12 tests spawn from narrower
-  functions (`spawn_narrow_callers_*`, `choice_refined_spawn_narrow`), and
-  20 generated programs (2 cases).
+**The Book.** The tests: "Ensure all top-level expressions in race/rush are
+async" (`Coroutines/Concurrency.versetest:831`), then a `race` of
+`Coro("A")`, `Method("B")` and `Coro("C")`, where `Method` is immediate,
+refused (3538, `:832`); "Ensure at least two top-level expressions in sync
+are async" (`:844`, 3538) for `sync`. The prose is silent on `race`; on
+`sync`: "What the compiler does insist on is that at least two of the arms
+be async" (ch. 14, `14_concurrency.md:230-231`). An arm that can suspend
+may end at once: "`race` starts its arms in order. If the race resolves
+before every arm has started — which happens when one arm completes without
+ever suspending — the remaining arms never start at all" (`:374-376`), with
+an arm `Sleep(0.0)` then `2`, "Completes at once, and wins" (`:394`, example 08).
+No test of `branch` asks its body to suspend, and openverse asks nothing of
+it.
+
+**openverse before.** A `race` or `rush` arm could be immediate, and won at
+once. `sync`'s rule, and so this one, missed a call of a suspending
+function value whose classes an earlier function asks for: in the
+elaboration where they are not made yet, its dispatch reaches no
+implementation, and `sync` of two such calls was refused
+(`tests/verse/sync_race_function_value_arms.verse` was).
+
+**openverse now.** `elabConc` (`Elab/Expr.lean`) refuses an arm of `race`
+or `rush` that cannot suspend, read as `sync`'s arms are: off the arm's code
+(`Ctx.sourceWaits`) and the waits the code cannot show yet
+(`pendingSourceSuspends`), to which a call of a suspending function value
+whose dispatch shows no wait now adds one. Programs: three tests raced an
+arm that ends at once on purpose (`sync_race`,
+`task_cancel_race_loser_then_end`, `task_cancel_rush_loser`); its arm now
+starts with `Sleep(0.0)`, which completes at once, so their output is the
+same. The scheduler models (`sched_gen.py`, `sched_gen2.py`) start the arm
+they draw to end at once (one race or rush in ten) with `Sleep(0.0)`, drawn
+from no random number: 58 of the first 400 seeds of each change their text,
+none its predicted output.
+
+## `spawn` has `<transacts>`'s effects
+
+**The rule.** A `spawn` has `<transacts>`'s heap effects, `<reads>`,
+`<writes>` and `<allocates>`, besides those of the call it starts: a
+function whose effects do not allow them cannot spawn, nor a field's
+default of a class whose effects do not.
+
+**The Book.** The tests: "spawn requires the transacts effect in addition
+to the effects of the spawned async function"
+(`Effects.versetest:554`), then, on both VMs, `G()<computes>:void =
+spawn{F()}` of an `F()<computes><suspends>` refused (3512; `:558`,
+`bp_vm_only`, and `:573`, `verse_vm_only`), and of an
+`F()<transacts><suspends>` refused twice (`:566`, `:581`: the spawn's
+effects and the call's). The VerseVM accepts `G()<transacts>` (`:572`,
+`:580`); the BPVM refuses it (`:557`, `:565`) for its own `no_rollback`
+reading of `spawn`, which openverse does not take. The prose: "spawn works
+in immediate functions, class constructors, module initialization—anywhere
+you can write code" (ch. 14, `14_concurrency.md:737-738`).
+
+**Where the Book disagrees with itself.** Ch. 14 lets `spawn` work
+"anywhere you can write code"; its tests refuse it in a `<computes>`
+function. openverse follows the tests (on the wiki already).
+
+**openverse before.** A `spawn` had the effects of its call only: a
+`<computes>`, `<reads>` or `<allocates>` function could spawn (#480), and
+the writes the scheduler makes when a task starts were added to the Core
+functions of its callers after the lowering (`CompilerWrites.propagate`).
+
+**openverse now.** `elabSpawn` (`Elab/Expr.lean`) notes the three effects
+at the `spawn`, which the function's effects, or its class's for a field's
+default, must allow (`fxCheck`). `CompilerWrites` is deleted with its
+contract test: every function that spawns, and every caller of it, writes
+in the source now, so the lowering adds no write a caller lacks (the suites
+and the spawning models pass without it). Programs: of the 12 tests that
+spawned from narrower functions, 7 were about that and are deleted
+(`spawn_narrow_callers_defaults`, `_dispatch`, `_function_value`,
+`_mutual`, `_reverse`, `choice_refined_spawn_narrow`, and the error test
+`spawn_narrow_callers_user_write`, whose subject was that the propagated
+writes grant the caller none), with `spawn_defaults_effect` (a writing
+default of a `<computes>` spawning caller, under `--extended-defaults`); 3
+are error tests of the rule now (`spawn_computes_caller`,
+`spawn_reads_caller`, `spawn_allocates_caller`, from
+`spawn_narrow_callers_immediate_main*`), with `spawn_field_default_computes`;
+and `spawn_narrow_callers_rollback`, whose subject is a task a call in a
+failing context starts, is `spawn_call_in_failure_rollback`, its callers
+`<transacts>`, its output the same. The model `gadt_spawn_callers.py` makes
+the callers around the spawn `<transacts>` (the child keeps its narrow
+effects): every seed changes its text, none its predicted output. The 20
+programs of corpus2 from it are refused.
+
+**`spawn` in a failure context (#156), looked at again.** openverse refuses
+a `spawn` written in a failure context; no test of the Book's refuses one
+for that. The VerseVM's tests spawn in one: at the top of an `assert:`'s
+body (21 cases, translated as `Main()<decides>`, a context that succeeds),
+and in an `if`'s condition that then fails (`LiveVariables.versetest`
+450-545, 7 cases, `verse_vm_only`), where the task, which waits with
+`await` on a live variable, never runs on: `Y = 0` after the variable
+changes. The BPVM's refuses one in a `<decides>` function ("STM doesn't
+support spawn, don't allow in decides", `SoftwareTransactionalMemory.versetest:503-507`, 3512).
+openverse already undoes a task that a call in a failing context starts:
+its first run is rolled back with the context and it never runs again
+(`spawn_call_in_failure_rollback`), which is the VerseVM's outcome. Measured
+with the refusal kept only in a `<suspends>` function's failure contexts
+(where the lowering would count the spawn as a suspension, which a failure
+context cannot hold): 13 of the 21 cases agree, 7 give a different result
+(`FORT-1088027-*` 39, 47, 65, 92, 116, `FORT-1126351-*` 33, 46: each needs
+an awaiter to run inside `Signal`, which openverse does not, [a documented
+gap](scheduler-conformance.md#awaiters-run-inside-signal-not-built)), and
+the BPVM's `:505` is accepted. The form cannot tell the 7 from the 13 (all
+spawn at the top of a `<decides>` body), and a relaxation that makes 7
+refusals different results and accepts a refusal is not one this work may
+make, so the refusal stays; it would go with the awaiters inside `Signal`.
+The 7 `LiveVariables` cases need live variables (unreleased, ch. 15).
+
+## `(super:)M` only in an override of `M`
+
+**The rule.** `(super:)M(…)` calls the implementation above of the method
+it is in: it is written only in the code of an `<override>` method named
+`M` (its body, a `block` or a `spawn` in it, its parameters' defaults), and
+may call any overload of `M` above. It is refused in another method, a
+class's `block:`, a field's default and a function.
+
+**The Book.** The tests (`Super.versetest`): "super on method not in super
+class" (`:176-181`, `Method2` calling `(super:)Method2`, 3612); "super on
+another method" (`:183-192`, `Method2<override>` calling `(super:)Method()`,
+3612); "check that same name doesn't fool check" (`:194-201`); "super on
+function" (`:203-204`); "Calling `(super:)` from blocks is not allowed in
+ShipVerse yet" (`:237-246`, a class's `block:`, 3612). Allowed: in a
+`block` of the override (`c8`, `c9`, `:119-127`), of another overload of
+the method's name (`child_class2.Method<override>(Base)` calling
+`(super:)Method(sub_class2{})`, `:54`), in a `spawn` in it ("The body of
+this spawn is a closure, which must capture super",
+`Bugs/SOL-9691-CaptureSuper.versetest:8-9`); "Only possible to use
+(super:) on the same function as being defined"
+(`NestedFunctions.versetest:225`), and ch. 6: "The `(super:)` syntax for
+calling parent class methods **cannot** be used in nested functions"
+(`06_functions.md:1225`, 3612). The prose of ch. 10: "`(super:)` is a
+qualifier on a call: it invokes the superclass's implementation of a method
+on the object you are already in" (`10_classes_interfaces.md:379-381`) and
+"It reaches the parent's version of the very method being overridden"
+(`:386`); line 1050: "`(super:)F(X)` within the qualified method calls the
+parent class's implementation of that same qualified method".
+
+**Where the Book disagrees with itself.** Ch. 10 line 379 reads as any
+method of the object; line 386, line 1050 and the tests, the method being
+overridden. openverse follows the tests (on the wiki already).
+
+**openverse before.** `(super:)M` called the implementation above of any
+method `M` from any method of a class, and from its `block:` and field
+defaults: the cross-method super calls of #454 and #464.
+
+**openverse now.** `checkSuperCalls` (`Elab/Source.lean`), with the source
+rules, refuses `(super:)M` anywhere but in the code of an override of `M`.
+Programs: 9 tests were about calling `(super:)` of another method and are
+deleted: `multi_method_cross_super_eager`, `_generic`, `_interface`,
+`_lazy`, `_multi`, `_overload` and `multi_method_overrides_other_super`
+(#464), with `iface_default_scope_defaults` (#53) and
+`spawn_defaults_scope` (#468), whose `(super:)` was in the default of an
+interface's override of another method, which the next rule retires too. 15
+are rewritten, their output the same: where a method `N` called
+`(super:)M`, `N` is now an overload of `M` that overrides one the class
+above declares (a probe parameter, `first_probe`, or the arguments `N` took,
+telling it apart), so its lifted choice, cast, `for` and `spawn` code still
+calls `(super:)M` (`choice_super_continuations`, `_defaults_failure`,
+`_generic`, `_suspending_consumer`, `_suspends`, `choice_waiting_refined_super`,
+`choice_refined_spawn_super`, `class_cast_refine_super`, `_overloaded`,
+`_supers`, `multi_lazy_firstfx_super`); `multi_methods_more` overrides
+`Vals` with `(super:)Vals()` and sums `Vals()`; `call_argument_methods`'s
+`Pair` override calls `(super:)Pair(1,"super")` when its string is
+`"super"`; `choice_context_self`'s class `block:` and
+`class_exist_spawn_direct_parts`'s `Kick` call the one implementation
+directly, `Echo(Data)`, `spawn{Run()}`. The unused cross-method forwarders
+of `choice_super_generic` (`Bridge`, `LabelBridge`, `StrLabelBridge`) are
+dropped, and its `Pick` probe is the override of `Pick` given `?Y:=X`
+(a generic overload of `Pick` cannot be told apart from `Pick(X:t,?Y:t)`).
+Of the error tests, `choice_super_value`, `fn_value_super`, `fx_super`
+and `multi_method_tuple_super_no_ancestor` write their `(super:)` in an
+override of its method (the last through an interface that declares `Pick`
+with no body), and the three cross ones that test something else are
+`super_ambiguous_slots`, `multi_method_super_brackets` and
+`multi_method_super_effect`, their `(super:)` in the override;
+`multi_method_cross_super_missing` is `super_another_method`, a test of the
+rule, with the new `super_in_class_block`, `super_in_field_default` and
+`super_override_other_name`; `super_override_forms` runs the forms the Book
+allows. The models: `gadt_super.py`'s method that calls `(super:)Act` is
+the overload `Act(Probe:run_probe)` overriding the base's (every seed
+changes its text, none its prediction); `generic_mv.py`'s `cross-` method
+shapes write the `own-` shapes' `W|(super:)M((V,W))`, the draw of their
+target's values kept (133 of the first 400 seeds change their text, none
+its prediction); `call_packing.py`'s `super` context calls `(super:)F` from
+`sub`'s override of `F`, reached as `Get().F` (42 of the first 400 seeds
+change their text, none its prediction); the code size check's
+`cross-super-*` kinds are `override-super-*`, `Values`'s override calling
+`(super:)Values`, its lazily taken `Walk` calling `Scalar` plainly, its
+`super-*` kinds' `Run` is the overload `Limit(Run:logic)` overriding the
+base's, and `return-defer-method-first` defers `Tick()`, not
+`(super:)Tick()`, which only an override of `Tick` may write. 20
+programs of corpus2 are refused (`gadt_super`), and 16 of `generic-mv`,
+refused already (a named argument before a positional one), get this
+rule's message first.
 
 ## Five forms the tests refuse
 

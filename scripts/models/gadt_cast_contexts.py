@@ -219,7 +219,10 @@ elif context == 'for':
     clauses = ["P : Ps"] + body + (['Y2 : array{D.C, D.C + 1}'] if gen2 else []) + \
         {'none': [], 'filter': ['Y2 > D.C'], 'bind': ['W2 := Y2 + D.C']}[post]
     body2 = ('        Print("y{Y2}")\n' if gen2 else '') + ('        Print("w{W2}")\n' if post == 'bind' else '')
-    fn = (f'F({G2})<transacts>:int =\n    R := for ({", ".join(clauses)}):\n'
+    # (a `for`'s filter can fail, Book of Verse ch. 7: a print or a `set`
+    # among its clauses goes with a check that cannot fail, `(E; true?)`)
+    for_clauses = [f'({c}; true?)' if c.startswith(('set ', 'Print(')) else c for c in clauses]
+    fn = (f'F({G2})<transacts>:int =\n    R := for ({", ".join(for_clauses)}):\n'
           f'{body2}        {body_t}\n        H.N\n    R.Length\n')
     def model_all(os):
         count = 0
@@ -454,7 +457,7 @@ xt2 := class(ex(tuple(tuple(int, string), int))):
     objs2 = [obj2() for _ in range(R2.randint(2, 4))]
     if ofor:
         fn += (f'\nG(Es:[]ex(t), H:cell where t:type)<transacts>:[]t =\n'
-               f'    for (E : Es, {", ".join(clauses)}) {{ {val} }}')
+               f'    for (E : Es, {", ".join(f"({c}; true?)" if c.startswith(("set ", "Print(")) else c for c in clauses)}) {{ {val} }}')
         main.append('    H2 := cell{}')
         main.append(f'    Es2:[]ex({T2}) = array{{{", ".join(text2(o, T2) for o in objs2)}}}')
         main.append(f'    for (V : G(Es2, H2)) {{ Print("G {show}") }}')

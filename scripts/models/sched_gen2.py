@@ -627,6 +627,11 @@ class Gen:
             for ai in range(na):
                 imm = (c != "sync" and ai == na - 1 and r.random() < 0.1)
                 body, sc = self.block(scope, depth + 1, in_branch, r.randint(0, 2), need_wait=not imm)
+                # (an arm that may end without waiting starts with Sleep(0.0),
+                # which completes at once: every arm of a race or a rush can
+                # suspend, the Book's tests, Concurrency.versetest:831)
+                if imm:
+                    body.insert(0, St("sleep", d="0.0"))
                 if r.random() < 0.5:
                     body.insert(0, St("defer", label=self.fresh("ad")))
                 body.append(St("print", label=self.fresh("ap")))

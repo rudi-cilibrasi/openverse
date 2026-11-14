@@ -17,7 +17,7 @@ Keep(P:pair(a, b) where a:type, b:type):[]a =
     for (D := dup[P], X : D.Items, D.C > 0) { X }
 # a binding past the generator, its name in the body; a range's bound; a set
 Sum(H:cell, Ps:[]pair(a, b) where a:type, b:type)<transacts>:[]b =
-    for (P : Ps, Print("p"), D := dup[P], X : D.Items, W := D.A, I := 0..D.C, set H.N += D.C, I < 2):
+    for (P : Ps, (Print("p"); true?), D := dup[P], X : D.Items, W := D.A, I := 0..D.C, (set H.N += D.C; true?), I < 2):
         Print("{I}")
         W
 # a choice past the generator, of the cast's, and one inside an expression

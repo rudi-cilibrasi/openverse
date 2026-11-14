@@ -304,10 +304,11 @@ binding takes a stated type `int` (`elabSource`, `Elab/For.lean`).
 binding and a value (`first.versetest:206`), and a generator over a map in
 `first`.
 
-With a generator, a filter that is a literal or a name, which cannot fail,
-is refused: "Only allow expressions that can fail (same as `for`)"
-(`first.versetest:28-31`, `first(I->Y:Xs; X = Y; I){I}`, 3513;
-`checkFirstFilters`, `Elab/Source.lean`). In `first{…}` a comma joins the
+With a generator, a filter that cannot fail is refused: "Only allow
+expressions that can fail (same as `for`)" (`first.versetest:28-31`,
+`first(I->Y:Xs; X = Y; I){I}`, 3513), by the rule of a `for`'s filters
+([every filter of a `for` can fail](book-remaining-rules.md#every-filter-of-a-for-can-fail);
+a literal or a name, `checkFirstFilters`, before it). In `first{…}` a comma joins the
 clauses around it into a tuple: "Comma is not the same as semicolon",
 `(4,12) = first{X:=1..5, 3*X>10}` (`:204-208`), where openverse's clauses
 keep commas as separators; with a generator among them the parser refuses

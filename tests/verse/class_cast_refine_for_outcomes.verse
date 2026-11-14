@@ -12,9 +12,9 @@ Recur(H:counter, N:int)<transacts><decides>:int =
     if (N > 0) then Recur[H, N - 1] else 7
 Collect(P:pair(a,b), Q:pair(c,d), H:counter where a:type,b:type,c:type,d:type)<transacts><decides>:[]int =
     var Total:int = 0
-    for (A := 1 | 2, set Total += A,
+    for (A := 1 | 2, (set Total += A; true?),
         V := if (D := dup[P]) then (D.C | D.C + 1) else 0,
-        V > 0, set Total += V,
+        V > 0, (set Total += V; true?),
         W := if (E := dup[Q]) then (E.C | E.C + 1) else 0):
         set Total += W
         Print("body {A} {V} {W} {Total}")

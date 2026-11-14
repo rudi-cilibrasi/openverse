@@ -180,7 +180,6 @@ def lowerProgram (env : TyEnv) (sigs : Signatures) (mainSig : Sig) (lowering : L
   -- concurrency (#156): each <suspends> function `g` becomes a frame class
   -- and the functions `g$new`, `g$reset` and `g$resume` (`Suspend.lean`);
   -- `g`'s own index is `g$resume`'s, as only suspends code calls it
-  let beforeConcurrency := fns
   if usesConc then
     let lowered ← lowerOpening fun forced =>
       lowerConcurrency env sigs.sigs sigs.gsigs mainSig fsigs0 protos pins inFn fns slotTys fsigs classTable forced frameInfo
@@ -203,8 +202,6 @@ def lowerProgram (env : TyEnv) (sigs : Signatures) (mainSig : Sig) (lowering : L
                       body := protoPrelude protoList mainCall }
     slotTys := slotTys.push []
     fsigs := fsigs ++ [([], if mainSig.suspends then VTy.void else mainSig.ret.toVTy env)]
-  if usesConc then
-    fns := CompilerWrites.propagate beforeConcurrency fns
   -- (the frame classes' pins after the classes', #244)
   let pins := (List.range classTable.length).map (fun t => (pins[t]?).getD []) ++ framePins
   return { prog := { fns := fns.toList, main },

@@ -26,7 +26,7 @@ Run(O:?int)<transacts>:void =
     # (in a for, an or whose left succeeds adds no generator: a value the
     # filters after it reject undoes what came before it, as an if's does)
     var P:int = 0
-    for (X := 1 | 2, set P += 1, Y := (O? or (5 | 6)), Y > 5) { Print("j {X} {Y} {P}") }
+    for (X := 1 | 2, (set P += 1; true?), Y := (O? or (5 | 6)), Y > 5) { Print("j {X} {Y} {P}") }
     Print("j end {P}")
     # (a chain, nesting, and not)
     if (X := (O? or block{false?; 0} or (3 | 4)), X > 3) { Print("k {X}") }

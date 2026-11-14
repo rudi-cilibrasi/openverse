@@ -44,10 +44,12 @@ dog := class(animal):
     Legs<override>():int = 4
     Fetch():string = "fetching"
 
-# the most specific implementation wins, whatever the order of the parents
+# the most specific implementation wins, whatever the order of the parents:
+# a class's over an interface's default (an interface overrides nothing, the
+# Book's tests)
 greeter := interface:
     Greet():string = "hello"
-polite := interface(greeter):
+polite := class(greeter):
     Greet<override>():string = "good day"
 host := class(greeter, polite):
     Name:string = "host"
@@ -81,12 +83,13 @@ trophy := class(titled):
 
 Hello(T:titled):string = "{T.Greeting}, {T.Title2}"
 
-# the most specific default of an interface field wins, whatever the order
-# of the parents; an interface may narrow a method's result
+# the most specific default of a field wins, whatever the order of the
+# parents: a class's over an interface's; and a class may narrow a method's
+# result (an interface overrides nothing, the Book's tests)
 basic := interface:
     Level:int = 0
     Reward():pet = pet{}
-advanced := interface(basic):
+advanced := class(basic):
     Level<override>:int = 1
     Reward<override>():cat = cat{Age := 2}
 course1 := class(basic, advanced):

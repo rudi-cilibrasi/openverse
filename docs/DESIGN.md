@@ -667,8 +667,7 @@ an interface (#283) the dispatch's root is the interface, its receiver
 typed at it and cast to each implementing class, and its default
 implementation, if any, is one more implementation, `I$M`, whose guard
 (`I[$r]`, which always holds) comes after those of the classes below it
-that have their own. `inlineMulti` runs before #53's `copyIfaceDefaults`,
-so it sees the interface's default as written.
+that have their own.
 Each implementation becomes its own function `D$M`. A generic family's
 receiver and arguments are bound at the declaring class's parameter types
 using `$params` and `MFam.rootTps`. Return types are compared through each
@@ -1286,7 +1285,7 @@ is thrown in one place, a phase or `elabProgramCore` itself, and each point
 where an elaboration asks for something and goes no further
 (`Compiled.asking`) is a line of `elabProgramCore`.
 
-1. `admitSource` (`Elab/Source.lean`, whose doc comment lists its passes in order): localized messages are written out as the strings of their default text, and `Localize` and `Join` as calls of their helpers (`Localization.desugar`); the source and the entry expression pass the effect policy (with where each specifier may go, `EffectPolicy.specifierPlaces`) and the source profile; the rules of the source as written hold, in this order: no type of the program's takes a built-in type's name (`checkTypeNames`), no reserved name is defined (`checkReservedNames`), each name is defined once in its scope (`checkDefinedOnce`), no definition takes the name of one around it (`checkNoShadowing`), no `return` in a constant's value or a field's default (`checkReturns`), no `return` or `break` that leaves a failure context (`checkJumps`), no `return` inside a value a function returns (`checkNestedReturns`), none and no `break` that leaves a `spawn` (`checkSpawnExits`), a way out of each loop of code that cannot suspend (`checkLoopExits`), none of the five forms the Book's tests refuse (`checkBookForms`: a default on a positional parameter, a named argument before a positional one, a struct's `var` field, a `return` or `break` out of a construction's field value, an empty `option{}`), no `profile` in an initializer (`checkProfiles`), a `defer:` only as a statement (`checkDefers`), no `for` of literal clauses only and no literal filter (`checkForClauses`), no filter of a `first` with a generator that is a literal or a name (`checkFirstFilters`); the helpers the parser's `$uses:` markers ask for are added and the markers taken out; every access level is written out (`resolveSpecifiers`: `<scoped{…}>` and the names of access levels); modules are resolved, with every qualifier (`Resolver.qualifier`) and each module member's access, and calls of extension methods made calls of their functions; no type alias is more visible than what it names, type aliases are written out where they are used (`Aliases.expand`), no definition exposes a less visible one (`Access.checkConsistency`), and constructions, parents and overrides are checked for access (`Access.checkUses`), which also gives the elaboration what it needs to judge the members it reaches through values (`Access.Env`); module-scoped `var`s are checked and made the `var` fields of the module state's object, each use one through it (`ModuleVars`); types given as arguments and used as types become type parameters (`TypeArguments`), the calls of `GetCastableFinalSuperClass` and `GetCastableFinalSuperClassFromType` calls of helpers that test the candidate classes (`FinalSuper`), types as values classes (`TypeValues`), fields with accessors are checked and their accessors' type written (`Accessors`), a `castable_subtype` bound becomes a subtype relation (`UpperBounds.markCastable`), and the built-ins named as values definitions of their own (`BuiltinValues`); the defaults function types write are set apart; no constant depends on itself (`checkConstantCycles`) or names one defined after it in its scope (`checkConstantOrder`); and the concurrency prelude the program needs is added (`concurrencyHelpers`, `Admitted`).
+1. `admitSource` (`Elab/Source.lean`, whose doc comment lists its passes in order): localized messages are written out as the strings of their default text, and `Localize` and `Join` as calls of their helpers (`Localization.desugar`); the source and the entry expression pass the effect policy (with where each specifier may go, `EffectPolicy.specifierPlaces`) and the source profile; the rules of the source as written hold, in this order: no type of the program's takes a built-in type's name (`checkTypeNames`), no reserved name is defined (`checkReservedNames`), each name is defined once in its scope (`checkDefinedOnce`), no definition takes the name of one around it (`checkNoShadowing`), no `return` in a constant's value or a field's default (`checkReturns`), no `return` or `break` that leaves a failure context (`checkJumps`), no `return` inside a value a function returns (`checkNestedReturns`), none and no `break` that leaves a `spawn` (`checkSpawnExits`), a way out of each loop of code that cannot suspend (`checkLoopExits`), `(super:)M` only in an override of `M` (`checkSuperCalls`), none of the five forms the Book's tests refuse (`checkBookForms`: a default on a positional parameter, a named argument before a positional one, a struct's `var` field, a `return` or `break` out of a construction's field value, an empty `option{}`), no `profile` in an initializer (`checkProfiles`), a `defer:` only as a statement (`checkDefers`), no `for` of literal clauses only and no literal filter (`checkForClauses`), and the places of the filters of every `for`, and every `first` with a generator, noted with their kinds (`forFilterPositions`, `TyEnv.forFilters`), whose code step 17 checks can fail (`checkFilterCanFail`); the helpers the parser's `$uses:` markers ask for are added and the markers taken out; every access level is written out (`resolveSpecifiers`: `<scoped{…}>` and the names of access levels); modules are resolved, with every qualifier (`Resolver.qualifier`) and each module member's access, and calls of extension methods made calls of their functions; no type alias is more visible than what it names, type aliases are written out where they are used (`Aliases.expand`), no definition exposes a less visible one (`Access.checkConsistency`), and constructions, parents and overrides are checked for access (`Access.checkUses`), which also gives the elaboration what it needs to judge the members it reaches through values (`Access.Env`); module-scoped `var`s are checked and made the `var` fields of the module state's object, each use one through it (`ModuleVars`); types given as arguments and used as types become type parameters (`TypeArguments`), the calls of `GetCastableFinalSuperClass` and `GetCastableFinalSuperClassFromType` calls of helpers that test the candidate classes (`FinalSuper`), types as values classes (`TypeValues`), fields with accessors are checked and their accessors' type written (`Accessors`), a `castable_subtype` bound becomes a subtype relation (`UpperBounds.markCastable`), and the built-ins named as values definitions of their own (`BuiltinValues`); the defaults function types write are set apart; no constant depends on itself (`checkConstantCycles`) or names one defined after it in its scope (`checkConstantOrder`); and the concurrency prelude the program needs is added (`concurrencyHelpers`, `Admitted`).
 2. `inlineSource`: functions with several values are inlined at their calls, the functions earlier rounds asked for are added and admitted, and function values become interfaces and classes (`Source`, with the sites the inlining notes).
 3. `argsAndMethodOverloads`: `Args` and the entry expression's `$Do` are added, and overloaded methods are renamed by their parameter lists (`Definitions`).
 4. `classHierarchy` (`Elab/Classes.lean`): the classes and interfaces and their hierarchy, checked (`Classes`, with the lookups over it).
@@ -1317,11 +1316,11 @@ and the next one runs every phase again. Read off the list, a program is
 refused, first to last, for:
 
 - before the phases, as `elabProgram` takes the attributes out (`Attributes.apply`): a form openverse parses and refuses (`Refused`: a lambda, a pointer type or dereference, an attribute on an expression, a specifier on a macro, a function, data or a module-scoped variable declared with no body or value, a module-scoped variable's `var<w>`, a `using{/localhost…}`), and its attributes (one that names nothing, is where it may not be, or is given the wrong fields, and an attribute class named outside attributes);
-- its effect annotations, specifiers out of place (access specifiers included: where, how many, none on an override) and source profile, a type with a built-in type's name, a reserved name defined, a name defined twice, a name an enclosing scope defines (but a function a call can tell apart from it, checked with the signatures, 15), a `return` outside a function's body, a `return` or `break` that leaves a failure context (a `return` in a `<decides>` body anywhere but in tail position), a `return` inside a value a function returns, a `return` or `break` that leaves a `spawn`, a `profile` in an initializer, a `defer:` where a value is taken, a `for` of literal clauses only, its access levels (a scope of no module or of a package, a specifier that names no access level), its modules and qualifiers (a qualifier that names nothing or not where its definition is, an ambiguous bare name beside a qualified definition, a module member its use may not see), a type alias more visible than what it names, its type aliases (one that names itself or an alias defined after it, or is used before its definition, or whose name a definition takes), a definition that exposes a less visible one, a construction, a parent or an override its code may not use, a module-scoped `var` that breaks the Book's rules or is used other than one entry at a time (`ModuleVars`), a type as a value or a field with accessors openverse does not write (`TypeValues`, `Accessors`), a constant that depends on itself or names one defined after it in its scope, and subscribable events (1); the choices it inlines and the requests it carries (2); its overloaded methods (3);
+- its effect annotations, specifiers out of place (access specifiers included: where, how many, none on an override) and source profile, a type with a built-in type's name, a reserved name defined, a name defined twice, a name an enclosing scope defines (but a function a call can tell apart from it, checked with the signatures, 15), a `return` outside a function's body, a `return` or `break` that leaves a failure context (a `return` in a `<decides>` body anywhere but in tail position), a `return` inside a value a function returns, a `return` or `break` that leaves a `spawn`, a loop that nothing leaves, a `(super:)M` outside an override of `M`, a `profile` in an initializer, a `defer:` where a value is taken, a `for` of literal clauses only, its access levels (a scope of no module or of a package, a specifier that names no access level), its modules and qualifiers (a qualifier that names nothing or not where its definition is, an ambiguous bare name beside a qualified definition, a module member its use may not see), a type alias more visible than what it names, its type aliases (one that names itself or an alias defined after it, or is used before its definition, or whose name a definition takes), a definition that exposes a less visible one, a construction, a parent or an override its code may not use, a module-scoped `var` that breaks the Book's rules or is used other than one entry at a time (`ModuleVars`), a type as a value or a field with accessors openverse does not write (`TypeValues`, `Accessors`), a constant that depends on itself or names one defined after it in its scope, and subscribable events (1); the choices it inlines and the requests it carries (2); its overloaded methods (3);
 - its classes: their parents (unknown, a struct, wrong type arguments, an interface extending a class, two superclasses, a `<final>` one, a cycle), a parametric one whose fields name it at other type arguments or name another that names it back, `<castable>` ones with type parameters and those below `<final_super_base>` ones, and construction effects (4); their fields, inherited, overriding and own, against the methods above them, and a `<concrete>` class's defaults (5); their methods: duplicates, parameter names, qualified implementations, overrides and `<final>`, abstract methods and the implementations every concrete class needs (6);
 - the types those give: comparable type arguments to parents and a `<persistable>` struct's fields (7), bounds (8), one instance of an interface per class (9), the Verse Core type arguments of overrides (10), recursive structs and map keys (11);
 - its functions' names and overloads (12), their signatures and effect annotations, and a type parameter no parameter gives (13), constants whose type cannot be inferred and the defaults function types write (14); then the signature checks (15): overloads a call cannot tell apart, an extension method that repeats a method of its receiver's class, overrides and implementations whose signature or effects differ, an overriding field's type, and, last, a field two interfaces give defaults;
-- construction effects and field defaults (16), then each function's and constant's body (17), where a member reached through a value that its code may not use, or set where its `var` does not admit, is refused;
+- construction effects and field defaults (16), then each function's and constant's body (17), where a member reached through a value that its code may not use, or set where its `var` does not admit, is refused, and a filter of a `for`, or of a `first` with a generator, that cannot fail;
 - `Main` (19), the checks of the prepared functions (20), and what the lowering refuses (21); the internal errors of `certify` (22) are elaborator bugs.
 
 A program that passes every phase may have **warnings**
@@ -2404,7 +2403,13 @@ variables live in the frame, the arms share them. A `race`'s winner cancels the 
 last first. A `return` in an arm stores the result and makes the arm give
 2. The code around the arm then cancels the other pending arms, runs the
 defers active there, and returns from the function (or, in an arm, gives
-2 in turn).
+2 in turn). Whether an arm can wait, which `sync` asks of two arms and
+`race` and `rush` of every arm (the Book's), is read off its elaborated code
+(`Ctx.sourceWaits`: a call of a suspending function outside a `spawn` or a
+`branch`) and off the waits the code cannot show yet
+(`pendingSourceSuspends`), among them a call of a suspending function value
+whose dispatch reaches no class that implements it in this round, the
+classes being made in the elaboration that follows.
 
 **Tasks.** A `spawn` gets a root: a suspends function `$spawnK(T, args…)`
 that the pass makes from the spawned call. It runs the call and fills the
@@ -2421,16 +2426,14 @@ narrowed receiver to, which start as the caller's, so the function needs
 no initial values), and the root calls that.
 
 Source heap effects are checked before concurrency lowering. Starting a
-task also writes the scheduler's implementation state, even when the
-spawned call and its immediate callers have only `<computes>`, `<reads>`
-or `<allocates>`. The final Core functions must record those writes too.
-After creating the entry wrapper, `Front/CompilerWrites.lean` compares the
-flags before and after lowering, then propagates newly introduced write
-requirements through callers to a fixed point, including recursive callers,
-generated dispatch and function-value helpers, and the entry wrapper.
-Existing source writers are not propagation seeds. This changes only
-Core's implementation flags: source permissions and the independent Core
-write-soundness check remain in force.
+task writes the scheduler's implementation state, and a `spawn` has
+`<transacts>`'s heap effects in the source (the Book's tests,
+`Effects.versetest:554`), so the function that spawns, and every caller of
+it, already has a Core function that writes: the lowering adds no write a
+caller lacks. (Before the Book's rule, a `<computes>`, `<reads>` or
+`<allocates>` function could spawn, and the writes the lowering introduced
+were propagated through its callers, `CompilerWrites`, #480; that pass is
+gone with them.)
 
 Each pass resumes `Main`'s frame, then every root whose suspension point
 is not -1 (done). It reaches a root through a test of its class
@@ -3145,31 +3148,12 @@ parent's, and a class below it has those first (`CDef.ifaceCoreS` in
 source types, `TyEnv.coreArgs` in Verse Core). So a `box(t) :=
 class(c2(t))` is a `container([]t)` by Core's prefix subtyping, has a pin
 `[]$1` on `container`'s argument and holds `t` in a hidden field, and a
-dispatch from `container(u)` refines `u` to `[]t`. A default body `c2`
-gives one of `container`'s methods (`Get<override>():[]t`) is copied into
-a class that reaches `c2` with type arguments that mention its own type
-parameters (`copyIfaceDefaults`, before elaboration, substituting them:
-`tb(a, b) := class(c2(tuple(a, b)))`'s copy has `t` as `tuple(a, b)`, also in
-the body's typed locals, `Refine.substTypes`): such a
-dispatch opens `t`, which the class's copy reads from its hidden field,
-where `c2`'s own, shared by its classes, would need it as a hidden
-argument that `Typed.dispatch` cannot pass (its other arguments are typed
-without the refinement). The copy is elaborated in `c2`'s scope (its effect
-`$copyOf:c2`, `copyScope?`, sets `Ctx.selfClass` to `c2` and the
-parameter check's members to `c2`'s, and `Sig.scope` the scope its named
-parameters' defaults are evaluated in at a call): a name it uses free is
-the global `c2`'s own body sees, not a member the class adds, its
-parameters and locals shadow none of the class's members, and
-`(super:)` is what is above `c2`; only the receiver, its hidden fields and
-the dispatch of its members are the class's (a member of `c2` is reached
-as `Self`'s, so one the class overloads cannot be taken as a value). A
-refining cast in it lifts its branch per copy (#243): the copies and
-`c2`'s own default share the source's places, so the lift's key and
-function carry `Ctx.liftTag`, `$in` and the class. It is made only where it means what the default
-does: no class of the chain declares the method (the chain wins over
-defaults), and no other interface above the class gives it a body (one
-that overrides `c2`'s is copied instead); a `<final>` default stays
-final, its copy exempt from overriding it (`$copy`). A class that reaches
+dispatch from `container(u)` refines `u` to `[]t`. An interface overrides
+nothing (the Book's tests, `EffectPolicy.checkPlaces`), so `c2` gives none
+of `container`'s methods a body: a class below it implements them. (Before
+the Book's rule, such a default was copied into each class below `c2`,
+elaborated in `c2`'s scope, `copyIfaceDefaults`, #53; the copies, their
+scope and their `<final>` exemption are gone with it.) A class that reaches
 one interface at two instances through the interfaces it lists (also
 `class(pi(int), pi(string))`) is refused. A subclass may so implement an interface that gives it fewer
 type arguments than its parent's (`sbox(t) := class(box(t), shower)`

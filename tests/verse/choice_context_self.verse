@@ -6,7 +6,7 @@ child(u:type):=class(base(u)):
     var Copy:?u=false
     block:
         R:=for(A:=(Two(0)|Two(2)),B:=(Two(0)|Two(2))):
-            (super:)Echo(Data)
+            Echo(Data)
         if(V:=R[0]):set Copy=option{V}
 box(t:type):=class{Data:t;Copy:t}
 Make<constructor>(X:t where t:type):=box(t):

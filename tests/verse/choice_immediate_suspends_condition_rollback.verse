@@ -6,7 +6,7 @@ Use(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<suspends>:void =
     branch:
         Sleep(0.25)
         Print("observe {Total}")
-    R:=for(A:=if(D:=dup[P]) then(D.C|D.C+1) else 0,B:=if(E:=dup[Q]) then(E.C|E.C+1) else 0,set Total+=A,B=5):
+    R:=for(A:=if(D:=dup[P]) then(D.C|D.C+1) else 0,B:=if(E:=dup[Q]) then(E.C|E.C+1) else 0,(set Total+=A; true?),B=5):
         Print("body {A} {B} {Total}")
         Total
     Print("source {Total} {R.Length}")

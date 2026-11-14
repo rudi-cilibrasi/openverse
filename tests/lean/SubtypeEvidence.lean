@@ -530,7 +530,7 @@ private def refinedCancelControlSource := refinedCancelSource
   |>.replace "A:=Q.A" "A:=D.Up(Q.A)"
 
 private def composedHelperSource : String :=
-  let clauses := (List.range 14).map fun i => s!"A{i}:=(Steps(H,0)|Steps(H,2)),A{i}=0,set H.N+=1"
+  let clauses := (List.range 14).map fun i => s!"A{i}:=(Steps(H,0)|Steps(H,2)),A{i}=0,(set H.N+=1; true?)"
   "vehicle:=class<computes>{Speed:int=9}\ncar:=class<computes>(vehicle){}\n" ++
   "counter:=class<allocates>{var N:int=0}\nSteps(H:counter,N:int)<computes>:int=N|N+1\n" ++
   "F(X:t,D:evidence(vehicle,t),H:counter where t:type)<transacts>:[]int=\n    for(" ++

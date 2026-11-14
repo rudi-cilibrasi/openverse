@@ -18,7 +18,7 @@ Bs(Ps:[]pair(a, b) where a:type, b:type):[]b =
         D.A
 # clauses with effects before and after it, names after it in the body
 Fx(H:cell, Ps:[]pair(a, b) where a:type, b:type)<transacts>:[]int =
-    for (P : Ps, Print("p"), set H.N += 1, F := fixl[P], Y := F.D + F.A, F.A > 0, var Z:int = Y):
+    for (P : Ps, (Print("p"); true?), (set H.N += 1; true?), F := fixl[P], Y := F.D + F.A, F.A > 0, var Z:int = Y):
         set Z += 1
         set H.N += 100
         Z + F.A

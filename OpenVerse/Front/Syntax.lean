@@ -433,6 +433,16 @@ inductive STop where
       (parents : List STy) → (isInterface : Bool) → (fields : List SField) → (methods : List STop) → STop
   deriving Repr, Inhabited
 
+/-- The kind of a clause, which tells a `for`'s or a `first`'s filter as
+    written from the code the elaboration writes at its place
+    (`forFilterPositions`, `checkFilterCanFail`). -/
+def SExpr.filterKind : SExpr → String
+  | .ident .. => "ident"
+  | .app .. => "app"
+  | .set .. => "set"
+  | .block .. => "block"
+  | _ => "other"
+
 /-- The code of a definition, in the order it is written: a function's
     parameters' defaults, then its body; a constant's value, or a struct's
     fields' defaults; a class's or an interface's fields' defaults, then its

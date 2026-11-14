@@ -5,7 +5,7 @@ Early(N:int)<computes>:int=
 Run()<suspends>:[]int=
     var Total:int=0
     defer:Print("source {Total}")
-    for(A:=(Two(1)|Two(3)),set Total+=A,B:=Early(10)):
+    for(A:=(Two(1)|Two(3)),(set Total+=A; true?),B:=Early(10)):
         defer:
             set Total+=100
             Print("body cleanup {Total}")

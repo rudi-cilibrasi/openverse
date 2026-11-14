@@ -439,7 +439,11 @@ if waits:
     body += '            Sleep(0.01)\n'
 body += '            Print("body {A} {B} {Total} {H.N}")\n            (A, B)'
 mode = '<suspends>' if suspends else '<transacts>'
-loop = ("R := " if used else "") + f"for ({', '.join(clauses)}):\n            {body}"
+# (a `for`'s filter can fail, Book of Verse ch. 7: a print or a `set` among its
+# clauses goes with a check that cannot fail, `(E; true?)`, as the Book's tests
+# write; it does the same)
+for_clauses = [f'({c}; true?)' if c.startswith(('set ', 'Print(')) else c for c in clauses]
+loop = ("R := " if used else "") + f"for ({', '.join(for_clauses)}):\n            {body}"
 finish = 'R.Length' if used else 'H.N'
 params = ',P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type' if refined else ''
 args = f',dup(int){{C:={na}}},dup(string){{C:={nb}}}' if refined else ''

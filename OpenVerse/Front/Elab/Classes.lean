@@ -303,6 +303,8 @@ def classFields (classes : Classes) (requests : Requests) : Except String Fields
         match fs.findIdx? (fun (g : String × STy × Option SExpr × Bool) => g.1 == f) with
         | some k =>
           if !cd.overrides.contains f then
+            if cd.isIface then
+              throw s!"{cd.pos.show}: field '{f}' of interface {cd.name} is a field of an interface above it: an interface declares no inherited member again (Book of Verse tests, InterfaceWithFields.versetest); a class below gives it a new default"
             throw s!"{cd.pos.show}: field '{f}' of {cd.name} has the name of an inherited field (write {f}<override>:t = … to give it a new default)"
           -- (`<final>`: no class below gives it another default)
           if let some q := ((classes.henv.supers cd.name).drop 1).find? fun q =>
@@ -321,9 +323,9 @@ def classFields (classes : Classes) (requests : Requests) : Except String Fields
           -- (a class's field that is no `var` may be re-declared at a
           -- subtype, which the class and those below then hold it at; a
           -- `var` keeps its type, as a write through a class above could not
-          -- keep a narrower one; an interface's override is the owner's
-          -- open question, and keeps the type)
-          if isVar || cd.isIface then
+          -- keep a narrower one; an interface overrides nothing,
+          -- `EffectPolicy.checkPlaces`)
+          if isVar then
             fs := fs.set k (f, sty0, d, v0)
             fieldOverrides := fieldOverrides.push (cd.pos, cd.name, f, sty)
           else
@@ -492,11 +494,9 @@ def classMethods (tops : List STop) (classes : Classes) (fields : Fields) : Exce
           throw s!"{mp.show}: {n} defines {mn} twice with the same parameters"
         if ps.any (·.name == "Self") then throw s!"{mp.show}: a method parameter cannot be called Self"
         if builtins.contains (methodBase mn) || softBuiltins.contains (methodBase mn) then throw s!"{mp.show}: a method cannot be called {methodBase mn}, the name of a built-in function"
-        -- (a copy of an interface's default: as in the interface, #53)
-        let scope := (copyScope? effs).getD n
         for prm in ps do
-          if (fields.of scope).any (·.1 == prm.name) || (classes.henv.supers scope).any (classes.declaresBase · prm.name) then
-            throw s!"{mp.show}: parameter '{prm.name}' of {mn} is already a field or method of {scope}; Verse does not allow shadowing"
+          if (fields.of n).any (·.1 == prm.name) || (classes.henv.supers n).any (classes.declaresBase · prm.name) then
+            throw s!"{mp.show}: parameter '{prm.name}' of {mn} is already a field or method of {n}; Verse does not allow shadowing"
         -- a class's `block:` clauses: run at construction, after those of the
         -- classes above it, so never overridden
         -- overriding (Book of Verse ch. 10: `M<override>`, the same signature)
@@ -547,13 +547,14 @@ def classMethods (tops : List STop) (classes : Classes) (fields : Fields) : Exce
               throw s!"{mp.show}: {mn}<override> has the parameters of no overload of {mn} above {n}"
             throw s!"{mp.show}: {mn}<override> does not override an inherited method"
         | qs@((q, _) :: _) =>
-          if !isOverride then throw s!"{mp.show}: {mn} is inherited from {q}: mark it {mn}<override> to override it"
+          if !isOverride then
+            if cd.isIface then
+              throw s!"{mp.show}: {mn} of interface {n} is inherited from {q}: an interface declares no inherited member again, nor overrides one (Book of Verse tests, Interface.versetest: \"Interfaces can not override anything\"); a class below gives it its implementation"
+            throw s!"{mp.show}: {mn} is inherited from {q}: mark it {mn}<override> to override it"
           for (q, x) in qs do
             match (classes.cdef? q).bind (CDef.methodNamed · x) with
             | some (.fn _ _ _ qtps qeffs _ _) =>
-              -- (a copy is exempt, and a copy's `<final>` is its interface's,
-              -- which the message names)
-              if qeffs.contains "final" && !qeffs.contains "$copy" && !effs.contains "$copy" then
+              if qeffs.contains "final" then
                 throw s!"{mp.show}: {q}.{x} is <final>: it cannot be overridden"
               -- (a method with its own type parameters overrides one with as
               -- many, compared up to their names below)

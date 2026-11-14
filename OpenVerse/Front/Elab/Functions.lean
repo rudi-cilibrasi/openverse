@@ -173,7 +173,7 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
     (env : TyEnv) (p : Pos) (name : String) (ps : List SParam) (ptys : List Ty) (ret : Ty)
     (decides : Bool) (allowed : List String) (tps : List (String × Bool)) (body : SExpr)
     (suspends : Bool := false) (selfTps : List String := [])
-    (selfFieldOf : Option (String → Option Nat) := none) (scopeClass : Option String := none)
+    (selfFieldOf : Option (String → Option Nat) := none)
     (evidenceSignature : Option Sig := none) (bookDefaults : Bool := true) :
     Except String ElaboratedFn := do
   -- (#209) the values of `selfTps` come from the receiver's hidden
@@ -214,7 +214,7 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
     dictBase := frame.witnessBase
     suspends := suspends
     dictVars := dictTps.map (·.1) }
-  let ctx ← functionBodyCtx requests base p name tps scopeClass
+  let ctx ← functionBodyCtx requests base p name tps
   let locals := ctx.locals.reverse
   let hidden := frame.hiddenTypes
   let arity := frame.arity
@@ -317,13 +317,10 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
   -- instantiation (`Typed.subst`)
   for (top, g) in sigs.generics.zip sigs.gsigs.toList do
     match top with
-    | .fn p n ps _ effs _ body =>
-      -- (a class's copy of an interface's default, #53, elaborated in the
-      -- interface's scope)
-      let scope := copyScope? effs
+    | .fn p n ps _ _ _ body =>
       elaborated := elaborated.push (← elabFn allSigs sigs.prog requests (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body
         g.suspends g.selfTps ((requests.casts.find? (·.name == n)).map fun l => fun v =>
-          (l.opened.lookup v).bind (env.witnessField? l.target ·)) scope (some g) (!extendedDefaults))
+          (l.opened.lookup v).bind (env.witnessField? l.target ·)) (some g) (!extendedDefaults))
     | _ => pure ()
   return elaborated
 

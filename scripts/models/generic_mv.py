@@ -53,8 +53,6 @@ The model:
     explicit conditional tails, ending only their current invocation;
   * methods may infer their own type parameters independently of receiver
     arguments, including through overrides, super tuples and interface defaults;
-  * a super call of another method keeps its lexical ancestor, whether the
-    target has one value or several, rather than dispatching to an override;
   * methods of one name declared apart in unrelated classes and interfaces are
     each the root of a family of their own: a call through a receiver of a
     class below one of them has that family's values, and one of a class
@@ -265,20 +263,18 @@ class Producer:
                     root_method = f'    M{n}(V:r,W:r,?E:[]r=Concatenate() where r:type)<transacts>:r = V|W'
                     child_method = f'    M{n}<override>(V:v,W:v,?E:[]v=Concatenate() where v:type)<transacts>:v = W|(super:)M{n}((V,W))'
                     if cross:
+                        # (a super call of another method, (super:)Parent{n}
+                        # in M{n}, is refused, the Book's rule: (super:)M is
+                        # only in an override of M; the shape is the own one,
+                        # its draw kept for the random stream)
                         self.cross_multi = RMethod.choice([False, True])
-                        parent_body = 'V|W' if self.cross_multi else 'V'
-                        child_body = 'W|V' if self.cross_multi else 'W'
-                        # Both targets preserve the same independent Y,X,Y
-                        # oracle. The child's target override must not run.
-                        super_call = f'(super:)Parent{n}(V,W)'
-                        body = 'W|' + super_call + ('' if self.cross_multi else '|W')
-                        child_method = child_method.split(' = ', 1)[0] + ' = ' + body
-                        root_method += f'\n    Parent{n}(V:r,W:r,?E:[]r=Concatenate() where r:type)<transacts>:r = {parent_body}'
-                        child_method += f'\n    Parent{n}<override>(V:v,W:v,?E:[]v=Concatenate() where v:type)<transacts>:v = {child_body}'
+                    # (the interface shape: d{n} overrides c{n}'s default from
+                    # an abstract class, as an interface overrides nothing,
+                    # the Book's tests)
                     if shape == 'interface':
                         declarations = f'''c{n}(t:type) := interface:
 {root_method}
-d{n}(t:type,u:type) := interface(c{n}(t)):
+d{n}(t:type,u:type) := class<abstract>(c{n}(t)):
 {child_method}
 e{n}(t:type,u:type) := class(d{n}(t,u)):
     Anchor:t
@@ -300,7 +296,7 @@ d{n}({child_tps}) := class({parent}):{extra_field}
     HX{n}()<transacts>:t
     HY{n}()<transacts>:t
     M{n}()<transacts>:t = HX{n}() | HY{n}()
-d{n}(t:type,u:type) := interface(c{n}(t)):
+d{n}(t:type,u:type) := class<abstract>(c{n}(t)):
     M{n}<override>()<transacts>:t = HY{n}() | (super:)M{n}()
 e{n}(t:type,u:type) := class(d{n}(t,u)):
     X:t
@@ -1496,7 +1492,7 @@ class Gen:
         self.consumers.append(f'''{pair}(N:int)<computes>:int = N | N + 1
 {name}(X:t, Limit:int where t:type)<transacts>:[]tuple(t, int) =
     var Total:int = 0
-    Values := for (A := {pair}(1) | {pair}(3), set Total += A,
+    Values := for (A := {pair}(1) | {pair}(3), (set Total += A; true?),
                    B := if (A > {cut}) then (10 | 11) else 0, B > Limit,
                    C := {pair}(1) | {pair}(3), C <= {bound}):
         set Total += B + C
@@ -1626,7 +1622,9 @@ class Gen:
             self.consumers[-1] = source
         h, option = self.fresh('MutState'), self.fresh('MutOption')
         self.main += [f'{h}:={cell}{{}}',
-            f'for(V:={call(entry, x, y, depth, h)},set {h}.N+=V(2),V(2)>={cut}): Print("mut got {{V(0)}} {{V(1)}} {{V(2)}}")',
+            # (a `for`'s filter can fail, Book of Verse ch. 7: the `set` goes with
+            # a check that cannot fail, `(E; true?)`, as the Book's tests write)
+            f'for(V:={call(entry, x, y, depth, h)},(set {h}.N+=V(2); true?),V(2)>={cut}): Print("mut got {{V(0)}} {{V(1)}} {{V(2)}}")',
             f'Print("mut total {{{h}.N}}")', f'{option}:={run}({x},{y},option{{7}})',
             f'if(V:={option}?)then Print("mut first {{V(0)}} {{V(1)}} {{V(2)}}")else Print("mut none")']
         out, total = self.m.out, 0
