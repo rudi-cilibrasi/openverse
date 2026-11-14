@@ -243,7 +243,9 @@ def m_signal(ev, v):
 def wake(root):
     """Resume the root an awaiter waits in: a root whose code runs, by a
     walk down that code (`partial_site`); any other as the pass polls it."""
-    if root is None or root.done:
+    # A running branch can be stopped by its owner's return inside Signal.
+    # Its active code runs on, but its other awaiters must not resume.
+    if root is None or root.done or root.cancel_req:
         return
     if root in S.running:
         if root.top is None:

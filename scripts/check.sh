@@ -147,6 +147,8 @@ check "rational arithmetic fuzzing (${FUZZ_RATIONAL:-120} programs, against exac
 check "choice fuzzing (${FUZZ_CHOICE:-200} programs, against a backtracking model)" scripts/fuzz-choice.sh "${FUZZ_CHOICE:-200}" "$seed"
 check "scheduler model fuzzing (${FUZZ_MODEL_SCHED:-50} programs, against a model of the docs)" \
   scripts/fuzz-model-sched.sh "${FUZZ_MODEL_SCHED:-50}" "$seed"
+check "scheduler model regression (running branch stopped inside Signal, seed 630059)" \
+  scripts/fuzz-model-sched.sh 1 630059
 check "GADT model fuzzing (${FUZZ_MODEL_GADT:-150} programs, against twenty-nine models of the docs)" \
   scripts/fuzz-model-gadt.sh "${FUZZ_MODEL_GADT:-150}" "$seed"
 check "GADT models through type aliases (${FUZZ_MODEL_GADT_ALIASES:-150} programs, their types' names written through aliases)" \
