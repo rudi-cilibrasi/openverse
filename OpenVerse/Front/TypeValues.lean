@@ -217,7 +217,11 @@ def desugar (tops : List STop) : Except String (List STop) := do
   -- (not `true` and `false`, which as values are the logic values)
   let typeValues : List String := (tops.flatMap valueNames).filter (fun n =>
     typeNames.contains n && !isClass n && n != "true" && n != "false") |>.eraseDups
-  if targets.isEmpty && !usesType && values.isEmpty && typeValues.isEmpty then return tops
+  -- (`any` and `comparable` as values: types, of `type`, with no metatype
+  -- of their own, as `subtype(any)` is not written; the Book's tests pass
+  -- them where a type is, `GetCastableFinalSuperClass.versetest` 302, 304)
+  let topValues : List String := (tops.flatMap valueNames).filter (["any", "comparable"].contains ·) |>.eraseDups
+  if targets.isEmpty && !usesType && values.isEmpty && typeValues.isEmpty && topValues.isEmpty then return tops
   -- (each metatype's argument: a class or an interface, Book of Verse
   -- tests, Subtype.versetest 104-126, 3509; `subtype(t)` also of another
   -- type, written of types, `subtype(int)`, `subtype([]c)`, Subtype.versetest
@@ -296,8 +300,9 @@ def desugar (tops : List STop) : Except String (List STop) := do
     .classDef p0 (valueClass c) [] [] ["computes"] parents false [] (casts ++ makes)
   -- (the values of other types: classes of their own, below their
   -- metatypes)
-  let otherValueClasses : List STop := typeValues.map fun n =>
-    .classDef p0 (valueClass n) [] [] ["computes"] [.name (ifaceName "subtype" n)] false [] []
+  let otherValueClasses : List STop := typeValues.map (fun n =>
+    .classDef p0 (valueClass n) [] [] ["computes"] [.name (ifaceName "subtype" n)] false [] []) ++
+    topValues.map fun n => .classDef p0 (valueClass n) [] [] ["computes"] [.name "type"] false [] []
   -- the program with its metatypes written as the interfaces, and its
   -- values as the objects of their classes
   let g : STy → STy := STy.mapTy fun
@@ -305,7 +310,7 @@ def desugar (tops : List STop) : Except String (List STop) := do
     | t => t
   let f : SExpr → SExpr := fun
     | e@(.ident p n) =>
-      if values.contains n || typeValues.contains n then .construct p (valueClass n) [] [] else e
+      if values.contains n || typeValues.contains n || topValues.contains n then .construct p (valueClass n) [] [] else e
     | e => e
   -- (a call's or cast's head and a member's object are no values)
   let tops := tops.map fun t => (STop.mapAll g (protectHeads f) t)

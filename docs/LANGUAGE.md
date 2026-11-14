@@ -290,7 +290,7 @@ of them; the Book's tests `Tests/Attributes/` and `Castable.versetest`):
 | `<abstract>` | a class (ch. 10; not a method, a field, an interface or a struct) | not `<concrete>` too |
 | `<concrete>` | a class or a struct | a default for every field, inherited ones and an interface's included (ch. 10, "Concrete") |
 | `<final>` | a class, a method or a field, a struct's included (not an interface, a struct, a module's function) | a method's body, a field's value; no class below overrides a `<final>` field and no construction gives it a value |
-| `<final_super>` | a class (not supported yet, #11) | |
+| `<final_super>` | a class | a parent, a class or an interface (ch. 10, "Final"; the tests' 3679) |
 | `<final_super_base>` | a class or an interface | a class right below it is `<final_super>` |
 | `<castable>` | a class or an interface | no type parameters, nor in a class or interface below it |
 | `<unique>` | a class or an interface | |
@@ -865,6 +865,30 @@ circle := class(shape, labelled):
     class that gives a field with storage accessors.
 - **Casts.** `T[X]` is `X` as a `T`, failing unless `X`'s class is below
   `T`. `T(X)` converts to a supertype and cannot fail.
+- **Final super classes** (Book of Verse ch. 10, "Final"; ch. 11,
+  "final_super and Type Queries"; the API reference; the rules are in
+  [research/classes-and-subtyping.md](research/classes-and-subtyping.md#final-super-classes)).
+  A `<final_super>` class has a parent, a class or an interface; a class
+  right below a `<final_super_base>` class or interface is `<final_super>`.
+  `GetCastableFinalSuperClass[B, X]` gives, as a `castable_subtype(B)`, the
+  class that is `<final_super>`, castable (`<castable>` or below a
+  `<castable>` class or interface), right below `B` (a parent of its), and
+  `X`'s class or above it, and fails when there is none; of the classes
+  that list an interface `B`, the topmost. `X` is of the type `B`.
+  `GetCastableFinalSuperClassFromType[B, T]` does the same for the class
+  the type value `T` holds (any type: one that is not below `B` makes it
+  fail). `B` is a type written at the call; one that is no class or
+  interface (`int`, `any`) makes the call fail, and its result is then a
+  `type`. Both are `<reads><decides>`; a program may define functions of
+  these names, which its calls then call.
+
+  ```verse
+  component := class<castable>{}
+  physics := class<final_super>(component){}
+  rigid := class(physics){}
+  if (T := GetCastableFinalSuperClass[component, rigid{}]) then
+      Print(if (T[physics{}]) then "physics" else "?")      # physics
+  ```
 - **Parametric classes.** A parametric class is a reference like any other
   (#39): `stack(t)` can have `var` fields, be `<unique>`, and refer to
   itself (`node(t) := class: Value:t; var Next:?node(t) = false`), in its
@@ -2385,7 +2409,9 @@ Main():void =
   types `t` (`X:type = int`, `Identity(point)`), each an object of a class
   of its own, which nothing reads but a conversion to `type`, and a value
   of `subtype(t)` holds `t` alone. `castable_subtype` and `concrete_subtype`
-  of such a type are refused, as the Book's tests have them.
+  of such a type are refused, as the Book's tests have them. `any` and
+  `comparable` are values of `type` too (`X:type = any`), with no
+  `subtype(any)` or `subtype(comparable)`.
 - **`concrete_subtype(any)`** holds the `<concrete>` classes, and
   **`concrete_subtype(comparable)`** those that are also `<unique>`, so
   comparable (`concrete_subtype(comparable)` of `float` is refused); nothing

@@ -134,8 +134,14 @@ def classHierarchy (tops : List STop) (constructionFx : Std.HashMap String (List
     let p := cd.pos
     for sp in cd.specs do
       match sp with
-      | "persistable" | "final_super" => throw s!"{p.show}: <{sp}> classes are not supported yet (#11)"
+      | "persistable" => throw s!"{p.show}: <{sp}> classes are not supported yet (#11)"
       | _ => pure ()
+    -- (a `<final_super>` class is the one right below the class or
+    -- interface it is the final super class of, Book of Verse ch. 10,
+    -- "Final"; its tests: "final_super types must have some sort of base
+    -- type", FinalSuperAttribute.versetest:50, 3679)
+    if cd.specs.contains "final_super" && cd.parents.isEmpty then
+      throw s!"{p.show}: {cd.name} is <final_super>, so it needs a parent: it is the final super class of the class or interface right above it (Book of Verse ch. 10, \"Final\")"
     let mut parent : Option String := none
     let mut ifaces : Array String := #[]
     for (q, qargs) in cd.parents.zip cd.parentArgs do
