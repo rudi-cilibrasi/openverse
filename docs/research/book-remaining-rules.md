@@ -90,3 +90,65 @@ but measured it refuses 32 of openverse's tests of that feature
 `qualified_slots`, …) and 45 generated programs (`classes` 4, `gadt_open`
 20, `generic-mv` 21): an owner decision whether to retire the feature for
 the Book's 3 cases, so it is left.
+
+## A loop's body and a field's default are no failure contexts
+
+**The rules.** A `loop`'s body is no failure context, also in a
+`<decides>` function: an expression in it that can fail must be inside a
+failure context of its own (an `if`'s condition, `option{…}`, …). A
+field's default is no failure context either.
+
+**The Book.** The tests: "`decides` is not allowed in `loop`."
+(`Tests/Bugs/SOL-4199-BreakFromIf.versetest:79`, `Main()<decides>:void =`
+then `loop: true?; break`, 3512); "Failable inside loop is disallowed."
+(`SOL-1987-IfDoesNotDetectNestedConditional.versetest:22`, a loop in an
+`if`'s condition); `FlowControl/Case.versetest:291` (a `case` with no `_`
+in a loop of a `<transacts><decides>` function, 3512). For fields:
+"Test that effects aren't allowed in class member default initializers or
+do clauses unless declared on the class." (`Effects.versetest:536`), then
+`c:=class{X:int=option{0}?}` refused (3512, `:537`); the prose: "Class
+member initializers and block clauses are implicitly restricted to have no
+more effects than what the class declares" (ch. 13, `13_effects.md:830`),
+and a class declares no `<decides>` (openverse refuses one, #508).
+
+**Where the Book disagrees with itself.** Ch. 8 says "Functions marked with
+`<decides>` create a failure context for their entire body"
+(`08_failure.md:122`); its tests take a loop's body out of it. openverse
+follows the tests.
+
+**openverse before.** A loop's body inherited the failure context around
+it, so a failure in a `<decides>` function's loop failed the function; a
+field's default could fail, and a construction that took it failed.
+
+**openverse now.** The loop's body is elaborated with no failure context
+(`.loop`, `Elab/ExpressionControl.lean`; the refusal says why,
+`Elab/Statement.lean`). A field's default that can fail is refused where
+each default is checked once (`elabFieldDefaults`, `Elab/Functions.lean`);
+`--extended-defaults` keeps openverse's failing defaults, as it keeps its
+other computed field defaults (#511).
+
+## A filter that is a literal
+
+**The rule.** Each filter of a `for`, a clause that is no binding, must be
+able to fail.
+
+**The Book.** Ch. 7: "Each filter must be failable, and if any fails, that
+iteration is skipped" (`07_control.md:657`); "Filters must be failable:
+Filter conditions must contain at least one expression that can fail."
+(`:836-837`); the tests: `NoFailure:[]int= for(X:=1 .. 4; 1) { X }`
+refused, "Filter can not fail" (`FlowControl/for.versetest:223`, 3513).
+
+**openverse now.** A filter that is a literal is refused with the source
+rules (`checkForClauses`, `Elab/Source.lean`), beside the `for` of literal
+clauses only. **Left:** the whole rule. Checked on every filter's
+elaborated code, it refuses 153 of openverse's tests and 826 generated
+programs (the `choice`, `context`, `fields`, `heterogeneous`, `mv-*` and
+`gadt_*` families), which write `Print(…)`, `set X += 1` or a choice that
+cannot fail as clauses of a `for`: an owner decision whether to refuse them
+all now.
+
+**Also in ch. 7.** "Cannot define mutable variables: Using `var` to declare
+variables in the for clause is not allowed" (`07_control.md:842-843`),
+where the tests accept `for(X:=1 .. 2, var Temp:rational = 10/X) { X }`
+(`FlowControl/for.versetest:235-236`, `assert_valid`): openverse follows
+the tests and accepts it.
