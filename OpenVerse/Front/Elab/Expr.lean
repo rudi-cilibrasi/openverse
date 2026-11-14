@@ -2602,13 +2602,20 @@ partial def elabMapLit (ctx : Ctx) (p : Pos) (entries : List (SExpr × SExpr)) (
       rs := rs.push (k, rk, v, ← elabE ctx v (some vt0))
     ofExcept <| checkTypeValueJoin ctx.types p vt? (rs.toList.map (·.2.2.2.ty))
     -- the values' type: the expected one (or the first's) when every value
-    -- converts to it, else their join, as for an array literal (#67)
+    -- converts to it, else their join, as for an array literal (#67); with
+    -- none expected, two with nothing in common join at `comparable` or
+    -- `any`, as an array literal's elements do (the Book's tests: "the
+    -- result of a map literal with values of disjoint types is coerced to
+    -- [key_type]any", `Any.versetest` 131-134, `Map.versetest:164`)
     let vt ← match ← tryCatch (some <$> rs.toList.mapM fun (_, _, v, rv) => coerce v.pos rv vt0) (fun _ => pure none) with
       | some _ => pure vt0
       | none => rs.toList.foldlM (fun acc (_, _, v, rv) => do
-          match joinTy (← get).env acc rv.ty vt? with
+          let env := (← get).env
+          match joinTy env acc rv.ty vt? with
           | some j => pure j
-          | none => eerr v.pos s!"the values of this map have different types: {acc.show} and {rv.ty.show}") rv0.ty
+          | none =>
+            if vt?.isNone && !ambiguousJoin env acc rv.ty then pure (fallbackJoin env acc rv.ty)
+            else eerr v.pos s!"the values of this map have different types: {acc.show} and {rv.ty.show}") rv0.ty
     let mut steps : Array Expr := #[]
     let mut slots : Array (Nat × Nat) := #[]
     for (k, rk, v, rv) in rs do
