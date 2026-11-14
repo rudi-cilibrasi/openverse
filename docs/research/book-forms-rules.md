@@ -616,3 +616,39 @@ arguments `STy.voidArg` (so an inherited field or method is at `true`
 too). The library's types, the concurrency prelude's `task` and events
 (`PreludeNeeds.names`), keep `void`: `task(void)` is a spawn's of a `void`
 function. Messages say `tuple()`, openverse's name of the type.
+
+## `(q:)M(…)` in an override of `M`: warnings 2003 and 2004
+
+**The rule.** In a method that overrides `M`, a call `(q:)M(…)` of `Self`
+whose overload is the slot the method implements is a warning: it
+dispatches on `Self`'s class, so it calls the override itself again. The
+warning is 2003 ("should use super") when `q` is what `(super:)M` reaches,
+the implementation above, or the slot's interface when nothing above
+implements it, and 2004 when `q` is further up, which `(super:)` cannot
+reach. The program compiles.
+
+**The Book.** The tests alone,
+`Tests/Bugs/SOL-3564-CallingSuperClassMethodFromOverriddenMethod.versetest`:
+`F<override>():void= (a:)F() # 2003 - should use super` (`:7-12`); with
+`b` overriding between, `(a:)F() # 2004 - you can't reach a: as super:`
+(`:18-26`), likewise through an interface (`:32-40`, "ia: is not the
+immediate base override"); over an abstract class that does not implement
+it, `(ia:)F() # 2003 - should use super:` (`:45-52`); a qualified new
+method `(b:)F` calling `(a:)F()` is valid, "ok because we're not in a
+vcall scenario" (`:57-76`), and so are a call of another overload
+(`:139-146`) and a method's own qualifier in one that overrides nothing,
+"intentional recurrsion" (`:167-170`). The prose is silent.
+
+**openverse before.** Accepted, with no warning; such a call recursed
+until the fuel ran out.
+
+**openverse now.** `warnQualifiedSelfCall` (`Elab/Application.lean`),
+where `elabMemberApp` takes a method call through a value: a call written
+`(q:)M` of `Self`, in a method `M` of `Self`'s class whose slot is
+introduced above it (an override), whose slot the call's is, warns with
+`warnAt`; which of the two by `superImpl`, as `(super:)M` resolves. The
+cases `:57`, `:66` and `:80` reach openverse's refusal of a second method
+of one name first (`(b:)F` beside the inherited `F`, [After classes and
+subtyping](book-test-conformance.md#after-classes-and-subtyping)). No
+program that compiled changes but those that write such a call, which now
+warn.

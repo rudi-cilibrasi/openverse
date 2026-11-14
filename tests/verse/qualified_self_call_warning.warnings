@@ -1,0 +1,3 @@
+11:52: warning: (a:)F(…) calls F of Self, which this override implements, so it calls itself again: write (super:)F(…) to call a's implementation (Book of Verse tests, 2003)
+14:52: warning: (a:)F(…) calls F of Self, which this override implements, so it calls itself again; (super:)F(…) calls b's implementation, and a's is not reachable from here (Book of Verse tests, 2004)
+19:49: warning: (i:)H(…) calls H of Self, which this override implements, so it calls itself again, and nothing above e implements H (Book of Verse tests, 2003)

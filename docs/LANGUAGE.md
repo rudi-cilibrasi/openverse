@@ -1434,7 +1434,7 @@ The Book of Verse's compiler gives some diagnostics as warnings: the
 program compiles and runs all the same (`FlowControl/Reachability.versetest:22`,
 "Treat unreachable expressions after break as warning not error"; its tests
 name them with codes 2000–2999 in `assert_semantic_error`). openverse gives
-four of them, each from where the fact is known, on standard error as
+five of them, each from where the fact is known, on standard error as
 `FILE:LINE:COL: warning: …`, with the exit status unchanged
 ([FORMAT.md](FORMAT.md), "Exit protocol"):
 
@@ -1468,6 +1468,15 @@ four of them, each from where the fact is known, on standard error as
   deprecated itself, and an override of a deprecated member that is not
   ([Attributes](#attributes), `Attributes.deprecations`): `X is
   deprecated: Message`.
+- **`(q:)M(…)` of `Self` in an override of `M`, where `(super:)M(…)` is
+  meant** (2003 and 2004, `Bugs/SOL-3564-CallingSuperClassMethodFromOverriddenMethod.versetest`):
+  the call is of the slot the override implements, so it dispatches on
+  `Self`'s class and calls the override again. 2003 when `q` is what
+  `(super:)M` reaches (the implementation above, or the slot's interface
+  when nothing above implements it), 2004 when `q` is further up. A call
+  of another overload of `M`, one from a method that overrides nothing,
+  and one through another receiver give none (`warnQualifiedSelfCall`,
+  where a method call is elaborated).
 
 ## Source profiles
 
