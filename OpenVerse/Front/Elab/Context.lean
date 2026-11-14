@@ -2201,6 +2201,10 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
   -- existing entries, preserving order/cardinality rather than reinserting.
   -- (A map is a weak map, and weak maps are covariant alike, Book of Verse
   -- ch. 3, "Covariance": the same pairs.)
+  -- (a map of `false` keys and values, an empty `map{}` with no type from
+  -- its context, has no pairs: the empty map of the other type)
+  | .map .never .never, .map .. | .map .never .never, .weakMap .. =>
+    return some (.seq (← discardValue ⟨e, a⟩) (.lit Value.emptyArray))
   | .map k a', .map k' b' | .map k a', .weakMap k' b' | .weakMap k a', .weakMap k' b' =>
     if !isComparable env k || !isComparable env k' then return none
     let i ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push (.tup [k, a']) })
@@ -2484,6 +2488,9 @@ partial def joinTyShaped (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Boo
     else none
   | .arr x, .arr y => (joinTy env x y (match exp with | some (.arr e) => some e | _ => none) true).map .arr
   | .opt x, .opt y => (joinTy env x y (match exp with | some (.opt e) => some e | _ => none) true).map .opt
+  -- (an empty `map{}` with no type from its context, of `false`, joins
+  -- another map at that map's type)
+  | .map .never .never, m@(.map ..) | m@(.map ..), .map .never .never => some m
   -- (a tuple and an array join as an array, as do tuples of different
   -- lengths where an array is expected: a tuple converts to one)
   | .tup xs, .arr y | .arr y, .tup xs =>

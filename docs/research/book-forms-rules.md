@@ -352,3 +352,12 @@ program defines none, are calls of the helpers `$localize` and
 `$localizeJoin`. **Not pinned:** a float's format in a message (no test:
 `ToString`'s six decimals here); a message is a `string`, so a string is
 accepted where a message is expected, which Verse refuses (no test).
+
+An empty `map{}` with no type from its context, a `[false]false`, joins
+another map at that map's type (`joinTy`) and converts to it as the empty
+map (`convert`): `M1 := map{}; ConcatenateMaps(M1, map{0=>"0"})`
+(`Map.versetest:240`). **Left** (2 cases): `false + array{}` where a `[]int`
+is expected (`Array.versetest:108`: `false`, a `logic`, is no operand of
+`+`), and `array{}.ReplaceAll(array{}, array{})` (`ArrayReplaceAll.versetest:12`:
+the helper's type parameter, which only arrays of `false` meet, is not
+inferred).

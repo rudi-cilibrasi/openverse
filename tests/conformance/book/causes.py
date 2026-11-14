@@ -118,7 +118,7 @@ rule("singleton-types", REF, diag=r"unknown type '(true|false)'")
 rule("impossible-casts", REF, diag=r"so \S+\[…\] would always fail")
 rule("subtyping-to-any", REF, diag=r"expected [^,]*\bany\b[^,]*, found|cannot concatenate|"
      r"an operand of '=' must be comparable, and any")
-rule("first-forms", REF, diag=r"a generator X : source in first")
+rule("first-forms", REF, diag=r"a generator X : source in first|in first\{…\}, a comma joins")
 rule("path-literals", REF, diag=r"the path \S+ as a value is not supported")
 rule("named-tuple-elements", REF, diag=r"a named parameter inside a tuple parameter")
 # (`tuple()` is `void` in openverse, and `void` overlaps every type)
