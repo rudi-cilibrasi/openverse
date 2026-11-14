@@ -63,12 +63,16 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   APIs (persistence, JSON, natives; 345); compiler tooling such as bytecode
   and digests (128); VM-conditional code inside a definition (37) and one
   file that defines `Main` itself (1).
-- Of the **9,552 translatable cases**, openverse **agrees on 8,692 (91%)**,
-  refuses 703 valid programs, **accepts 65 refused ones**, gives a
+- Of the **9,552 translatable cases**, openverse **agrees on 8,711 (91%)**,
+  refuses 683 valid programs, **accepts 66 refused ones**, gives a
   **different result in 92** (87 of them `verse_vm_only` cases of unbounded
-  ints) and hits **no internal error** ([After `ToDiagnostic`, `true` and
-  the full type-parameter rule](#after-todiagnostic-true-and-the-full-type-parameter-rule);
-  on main `dca5ad1`, before it: 8,599 agreed, 809 refused, 69 accepted, 87
+  ints) and hits **no internal error** ([After awaiters inside
+  `Signal`](#after-awaiters-inside-signal), merged with [After `ToDiagnostic`,
+  `true` and the full type-parameter
+  rule](#after-todiagnostic-true-and-the-full-type-parameter-rule), which
+  alone gave 8,692 agreed, 703 refused, 65 accepted, 92 differed, and the
+  awaiters alone, on `dca5ad1`, 8,618, 789, 70, 87;
+  on main `dca5ad1`, before them: 8,599 agreed, 809 refused, 69 accepted, 87
   differed, after [After the held rules](#after-the-held-rules), merged with
   [After variance](#after-variance);
   on main `84285c1`, before them: 8,544 agreed, 856 refused, 77 accepted, 87
@@ -308,16 +312,16 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| all test cases (assertions and files without one) | 13197 | 8512 | 65 | 673 | 92 | 3855 | 0 |
+| all test cases (assertions and files without one) | 13197 | 8531 | 66 | 653 | 92 | 3855 | 0 |
 | shared definitions of a file (`:decls`) | 307 | 180 | 0 | 30 | 0 | 97 | 0 |
-| **total** | 13504 | 8692 | 65 | 703 | 92 | 3952 | 0 |
+| **total** | 13504 | 8711 | 66 | 683 | 92 | 3952 | 0 |
 
 ### By form
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `assert` | 6671 | 3790 | 0 | 443 | 92 | 2346 | 0 |
-| `assert_semantic_error` | 3460 | 2686 | 31 | 0 | 0 | 743 | 0 |
+| `assert` | 6671 | 3809 | 0 | 424 | 92 | 2346 | 0 |
+| `assert_semantic_error` | 3460 | 2685 | 32 | 0 | 0 | 743 | 0 |
 | `assert_valid` | 1637 | 958 | 0 | 160 | 0 | 519 | 0 |
 | `assert_valid_syntax` | 439 | 386 | 0 | 53 | 0 | 0 | 0 |
 | `decls` | 307 | 180 | 0 | 30 | 0 | 97 | 0 |
@@ -341,19 +345,19 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| no VM restriction | 12208 | 8301 | 29 | 408 | 4 | 3466 | 0 |
-| `verse_vm_only` | 702 | 215 | 4 | 289 | 88 | 106 | 0 |
-| `bp_vm_only` | 366 | 81 | 32 | 0 | 0 | 253 | 0 |
-| `verse_vm_todo` (BPVM only; a known VerseVM failure) | 219 | 95 | 0 | 6 | 0 | 118 | 0 |
+| no VM restriction | 12208 | 8319 | 29 | 390 | 4 | 3466 | 0 |
+| `verse_vm_only` | 702 | 216 | 4 | 288 | 88 | 106 | 0 |
+| `bp_vm_only` | 366 | 80 | 33 | 0 | 0 | 253 | 0 |
+| `verse_vm_todo` (BPVM only; a known VerseVM failure) | 219 | 96 | 0 | 5 | 0 | 118 | 0 |
 | `auto_qualify_todo` | 9 | 0 | 0 | 0 | 0 | 9 | 0 |
 
 ### By directory
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| (top level) | 5575 | 3717 | 27 | 540 | 3 | 1288 | 0 |
+| (top level) | 5575 | 3718 | 28 | 538 | 3 | 1288 | 0 |
 | Operators/ | 1203 | 1103 | 0 | 0 | 27 | 73 | 0 |
-| Bugs/ | 1185 | 782 | 33 | 95 | 0 | 275 | 0 |
+| Bugs/ | 1185 | 799 | 33 | 78 | 0 | 275 | 0 |
 | Literals/ | 1020 | 835 | 0 | 6 | 0 | 179 | 0 |
 | Serialization/ | 991 | 0 | 0 | 0 | 0 | 991 | 0 |
 | Attributes/ | 795 | 535 | 4 | 10 | 0 | 246 | 0 |
@@ -374,14 +378,14 @@ cases are refusals.
 | CanCallerAccessEpicInternal/ | 7 | 0 | 0 | 0 | 0 | 7 | 0 |
 | AssetUsage/ | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 
-Of the 3,006 expected errors openverse agrees with, 39 are warnings
+Of the 3,010 expected errors openverse agrees with, 39 are warnings
 openverse gives (their codes are all warnings, [After the load-bearing
 readings](#after-the-load-bearing-readings)); for the others the refusal came from
 the parser in 1,060 (most semantic-error snippets among them use a form
 openverse does not parse, such as `@attribute`; the lexer's and parser's
 own checks, of comments, float literals, specifiers and an extension
 method's receiver, count here), from a diagnostic that says openverse
-lacks a feature or a name in 345, and from a rule check in 1,562. Only these 1,562 show
+lacks a feature or a name in 342, and from a rule check in 1,569. Only these 1,569 show
 openverse checking the rule the test is about, and even they are not
 compared by code. Of the 300 agreeing syntax errors, 8 parse once wrapped
 in a function body, so openverse refuses
@@ -2211,7 +2215,16 @@ it, and `--event-fifo` is gone. On main `dca5ad1` (#620). Against main's
 baseline (8,599 agree, 809 refuse, 69 accept, 87 differ, 3,940 not
 translatable), 20 refused cases agree and one Blueprint-only refusal is
 accepted: **8,618 agree, 789 refuse, 70 accept, 87 differ, 3,940 not
-translatable** (re-recorded from a fresh run).
+translatable** (re-recorded from a fresh run). Merged with [`ToDiagnostic`,
+`true` and the full type-parameter
+rule](#after-todiagnostic-true-and-the-full-type-parameter-rule) (#621,
+`20a9cae4`), and re-recorded from a fresh run on the merged compiler, with
+the tables above and the appendices: **8,711 agree, 683 refuse, 66
+accept, 92 differ, 3,952 not translatable**; against #621's baseline 20
+better (this work's) and one worse, the same
+`SoftwareTransactionalMemory.versetest:505`; against this branch's before
+the merge 93 better (#621's), none worse, and 17 changed as on #621 (its
+`ToDiagnostic` cases).
 
 | Cases | Why they agree now |
 |---|---|
