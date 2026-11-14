@@ -60,10 +60,12 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   APIs (persistence, JSON, natives; 345); compiler tooling such as bytecode
   and digests (128); VM-conditional code inside a definition (37) and one
   file that defines `Main` itself (1).
-- Of the **9,564 translatable cases**, openverse **agrees on 8,599 (90%)**,
-  refuses 809 valid programs, **accepts 69 refused ones**, gives a
+- Of the **9,564 translatable cases**, openverse **agrees on 8,618 (90%)**,
+  refuses 789 valid programs, **accepts 70 refused ones**, gives a
   **different result in 87** (82 of them `verse_vm_only` cases of unbounded
-  ints) and hits **no internal error** ([After the held
+  ints) and hits **no internal error** ([After awaiters inside
+  `Signal`](#after-awaiters-inside-signal); on main `dca5ad1`, before it:
+  8,599 agreed, 809 refused, 69 accepted, 87 differed, with [After the held
   rules](#after-the-held-rules), merged with [After variance](#after-variance);
   on main `84285c1`, before them: 8,544 agreed, 856 refused, 77 accepted, 87
   differed, with [After the forms of expressions,
@@ -229,8 +231,10 @@ The choices behind this, and what each one could distort:
 - **An assertion body is a `<decides>` `Main`.** The body must be a failure
   context (`assert{F1(false)=false}`), so `Main()<decides>` is the direct
   translation and a failed assertion is exit 1. It also makes the body a
-  failure context for `spawn`, which openverse refuses there: the 17 cases
-  of *spawn in a failure context* below are exposed by this wrapping.
+  failure context for `spawn` and `Signal`, which the Book's tests allow
+  and openverse accepts (since [After awaiters inside
+  `Signal`](#after-awaiters-inside-signal); before, openverse refused
+  `spawn` there, 28 cases).
 - **VM tags.** A case sees the untagged definitions and those of its own VM
   (`verse_vm_todo` counts as BPVM). openverse is one implementation: its
   verdict is compared with the case's own expectation, and the tag is
@@ -300,22 +304,22 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| all test cases (assertions and files without one) | 13197 | 8423 | 69 | 775 | 87 | 3843 | 0 |
+| all test cases (assertions and files without one) | 13197 | 8442 | 70 | 755 | 87 | 3843 | 0 |
 | shared definitions of a file (`:decls`) | 307 | 176 | 0 | 34 | 0 | 97 | 0 |
-| **total** | 13504 | 8599 | 69 | 809 | 87 | 3940 | 0 |
+| **total** | 13504 | 8618 | 70 | 789 | 87 | 3940 | 0 |
 
 ### By form
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `assert` | 6671 | 3707 | 0 | 543 | 87 | 2334 | 0 |
-| `assert_semantic_error` | 3460 | 2682 | 35 | 0 | 0 | 743 | 0 |
+| `assert` | 6671 | 3726 | 0 | 524 | 87 | 2334 | 0 |
+| `assert_semantic_error` | 3460 | 2681 | 36 | 0 | 0 | 743 | 0 |
 | `assert_valid` | 1637 | 956 | 0 | 162 | 0 | 519 | 0 |
 | `assert_valid_syntax` | 439 | 386 | 0 | 53 | 0 | 0 | 0 |
 | `decls` | 307 | 176 | 0 | 34 | 0 | 97 | 0 |
 | `assert_roundtrip` | 304 | 293 | 0 | 9 | 0 | 2 | 0 |
 | `assert_syntax_error` | 303 | 303 | 0 | 0 | 0 | 0 | 0 |
-| `assert_runtime_error` | 140 | 50 | 0 | 5 | 0 | 85 | 0 |
+| `assert_runtime_error` | 140 | 51 | 0 | 4 | 0 | 85 | 0 |
 | `assert_link_error` | 55 | 10 | 24 | 0 | 0 | 21 | 0 |
 | `assert_digest_generated` | 53 | 0 | 0 | 0 | 0 | 53 | 0 |
 | `assert_auto_qualification` | 29 | 0 | 0 | 0 | 0 | 29 | 0 |
@@ -333,19 +337,19 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| no VM restriction | 12208 | 8209 | 33 | 506 | 4 | 3456 | 0 |
-| `verse_vm_only` | 702 | 214 | 4 | 296 | 83 | 105 | 0 |
-| `bp_vm_only` | 366 | 81 | 32 | 1 | 0 | 252 | 0 |
-| `verse_vm_todo` (BPVM only; a known VerseVM failure) | 219 | 95 | 0 | 6 | 0 | 118 | 0 |
+| no VM restriction | 12208 | 8227 | 33 | 488 | 4 | 3456 | 0 |
+| `verse_vm_only` | 702 | 215 | 4 | 295 | 83 | 105 | 0 |
+| `bp_vm_only` | 366 | 80 | 33 | 1 | 0 | 252 | 0 |
+| `verse_vm_todo` (BPVM only; a known VerseVM failure) | 219 | 96 | 0 | 5 | 0 | 118 | 0 |
 | `auto_qualify_todo` | 9 | 0 | 0 | 0 | 0 | 9 | 0 |
 
 ### By directory
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| (top level) | 5575 | 3694 | 31 | 559 | 3 | 1288 | 0 |
+| (top level) | 5575 | 3695 | 32 | 557 | 3 | 1288 | 0 |
 | Operators/ | 1203 | 1103 | 0 | 0 | 27 | 73 | 0 |
-| Bugs/ | 1185 | 775 | 33 | 102 | 0 | 275 | 0 |
+| Bugs/ | 1185 | 792 | 33 | 85 | 0 | 275 | 0 |
 | Literals/ | 1020 | 835 | 0 | 6 | 0 | 179 | 0 |
 | Serialization/ | 991 | 0 | 0 | 0 | 0 | 991 | 0 |
 | Attributes/ | 795 | 535 | 4 | 10 | 0 | 246 | 0 |
@@ -355,7 +359,7 @@ cases are refusals.
 | Classes/ | 317 | 230 | 0 | 8 | 0 | 79 | 0 |
 | Versions/ | 289 | 6 | 0 | 0 | 0 | 283 | 0 |
 | Roundtrip/ | 255 | 245 | 0 | 8 | 0 | 2 | 0 |
-| Coroutines/ | 229 | 22 | 0 | 3 | 0 | 204 | 0 |
+| Coroutines/ | 229 | 23 | 0 | 2 | 0 | 204 | 0 |
 | Modules/ | 219 | 73 | 1 | 8 | 0 | 137 | 0 |
 | Features/ | 67 | 21 | 0 | 1 | 0 | 45 | 0 |
 | Interfaces/ | 41 | 34 | 0 | 0 | 0 | 7 | 0 |
@@ -366,14 +370,14 @@ cases are refusals.
 | CanCallerAccessEpicInternal/ | 7 | 0 | 0 | 0 | 0 | 7 | 0 |
 | AssetUsage/ | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 
-Of the 2,989 expected errors openverse agrees with, 39 are warnings
+Of the 3,006 expected errors openverse agrees with, 39 are warnings
 openverse gives (their codes are all warnings, [After the load-bearing
 readings](#after-the-load-bearing-readings)); for the others the refusal came from
-the parser in 1,063 (most semantic-error snippets among them use a form
+the parser in 1,060 (most semantic-error snippets among them use a form
 openverse does not parse, such as `@attribute`; the lexer's and parser's
 own checks, of comments, float literals, specifiers and an extension
 method's receiver, count here), from a diagnostic that says openverse
-lacks a feature or a name in 355, and from a rule check in 1,532. Only these 1,532 show
+lacks a feature or a name in 345, and from a rule check in 1,562. Only these 1,562 show
 openverse checking the rule the test is about, and even they are not
 compared by code. Of the 300 agreeing syntax errors, 8 parse once wrapped
 in a function body, so openverse refuses
@@ -2131,6 +2135,54 @@ none worse, against this branch's 47 better (variance's) and none worse.
   The 38 programs only main has are the tests deleted and renamed, the 32
   only this branch has the new tests and the renamed ones.
 
+## After awaiters inside `Signal`
+
+The Book's rule that a `Signal` resumes its awaiters inside it, in the
+order they suspended, each until it waits again or ends, before it returns
+(the API's `event`, `Signal`; its tests `Event.versetest:21-32`, the
+`FORT-1088027` and `FORT-1126351` cases), built in the lowering and the
+concurrency prelude ([the rule, the design and what was built](scheduler-conformance.md#awaiters-run-inside-signal));
+with it, `spawn` in a failure context (#156) is allowed, as the tests have
+it, and `--event-fifo` is gone. On main `dca5ad1` (#620). Against main's
+baseline (8,599 agree, 809 refuse, 69 accept, 87 differ, 3,940 not
+translatable), 20 refused cases agree and one Blueprint-only refusal is
+accepted: **8,618 agree, 789 refuse, 70 accept, 87 differ, 3,940 not
+translatable** (re-recorded from a fresh run).
+
+| Cases | Why they agree now |
+|---|---|
+| `Bugs/FORT-1088027-MultipleArmsCompleteDuringSpawn.versetest:39`, `FORT-1088027-OldGenerationWakeDuringSpawn.versetest:47`, `FORT-1088027-UseOfNullInitializedDynamicallyTypedValue.versetest` 65, 92, 116, `FORT-1126351-RaceArmSuspendedAfterResolution.versetest:46`, `FORT-1126351-RaceArmsDoNotStartAfterResolution.versetest:33` (7) | awaiters run inside `Signal`, a race resolved there stops its unstarted arms; and `spawn` in an assertion |
+| `Event.versetest:54`, `Coroutines/SpawnAndTask.versetest:1027`, and `Bugs/` `2021-03-23-CoroutineOverrideParameterNameMismatch:5`, `FORT-571286-…:51`, `FORT-582630-BranchResult:16`, `FORT-713847-RaceCoerce:12`, `FORT-760026-…:22`, `SOL-3628-SuspendsMethodSuperCall:13`, `SOL-3629-SuspendsMethodEffectSubtype:12`, `SOL-3911-SuspendsArgumentAsForIterable:11`, `SOL-4284-InfiniteLoopTriggersUObjectLimit:18`, `SOL-9691-CaptureSuper:11`, `SamplingProfiler.versetest:25` (13) | `spawn` in an assertion's body (a failure context) |
+
+- **Per cause, on main `dca5ad1` and now:** spawn-in-failure-context 28 →
+  0: 20 agree; the 7 `LiveVariables.versetest` cases (450-545) are refused
+  now for `await` of a live variable (live-variables, unreleased), and
+  `Coroutines/Concurrency.versetest:1537` for `NextTick` (types-other,
+  unreleased).
+- **The concurrency files** (agree/refuse/accept, before → after):
+  `Event.versetest` 0/4/0 → 1/3/0; `Coroutines/SpawnAndTask.versetest`
+  5/2/0 → 6/1/0; the five `FORT-1088027`/`FORT-1126351` files above 4/7/0
+  → 11/0/0 (their other cases need `CoroUtils`); the generic
+  `signalable` ones stay refused (the `signalable` interface); `Coroutines/Concurrency.versetest` 12/1/0,
+  `FlowControl/Concurrency/branch.versetest` 4/1/0, `when.versetest`
+  7/15/0, `LiveVariables.versetest` 12/44/0 unchanged;
+  `SoftwareTransactionalMemory.versetest` 31/0/0 → 30/0/1.
+- **Moved the wrong way:** `SoftwareTransactionalMemory.versetest:505`,
+  inside `bp_vm_only{…}` ("STM doesn't support spawn, don't allow in
+  decides"), refuses a `spawn` in a `<transacts><decides>` function, which
+  openverse now accepts. The tests split by virtual machine: the VerseVM's
+  (`LiveVariables.versetest:450-545`, `verse_vm_only`) spawn in `if: …;
+  false?` and expect success, as every untagged assertion that spawns
+  does; openverse follows those. Nothing else is worse, and no case
+  changed to a different result.
+- **Programs.** Against main `dca5ad1`, over every suite and the corpus
+  `corpus2` (5,951 programs): 5,792 the same; 158 programs' bytecode
+  changed, each one that uses an event type, 120 of them with the same
+  output and 38 with another (the 22 tests and 8 upper-bound fixtures whose
+  expected output changed, each re-derived by hand, and 8 corpus programs);
+  one error test is accepted now (`choice_refined_spawn_body_failure`, a
+  test of the refusal, moved to `tests/verse`).
+
 ## Ten causes to remove first
 
 Ranked by cases moved per unit of risk. A count is the upper bound above;
@@ -2272,7 +2324,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 
 **Accepted: concrete-classes** (7): `Attributes/concrete.versetest` 38, 76; `Bugs/SOL-3366-MakeClassesConcreteByDefault.versetest` 8, 15, 24; `Bugs/SOL-7781-ConcreteClassDoesntEnforceDefaultValuesForInterfaceFields.versetest` 28, 54
 
-**Accepted: effect-checks** (5): `Effects.versetest` 490, 551, 552, 557(b), 565(b)
+**Accepted: effect-checks** (6): `Effects.versetest` 490, 551, 552, 557(b), 565(b); `SoftwareTransactionalMemory.versetest` 505(b) ([After awaiters inside `Signal`](#after-awaiters-inside-signal): the BPVM's refusal of `spawn` in a `<decides>` function, which the VerseVM's tests contradict)
 
 **Accepted: qualified-names** (4): `Bugs/SOL-3564-CallingSuperClassMethodFromOverriddenMethod.versetest` 7, 18, 32, 45
 
@@ -2353,7 +2405,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/2020-08-11-TypeSpecVsComparePrecedence.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/2020-09-01-EmitReturnAssert.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/2020-10-26-DefineLocalWithMutatingAssignment.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
-| `Bugs/2021-03-23-CoroutineOverrideParameterNameMismatch.versetest` | 2 | 1 | 0 | 1 | 0 | 0 | 0 |
+| `Bugs/2021-03-23-CoroutineOverrideParameterNameMismatch.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/2021-03-23-InterfaceDefaultCoroutineImplementation.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
 | `Bugs/2021-04-26-DisjointTypesAllowedInComparisonAndPointerDeref.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/2021-08-18-DisjointResultInNestedIf.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
@@ -2419,13 +2471,13 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/FORT-1042316-GetInstancedSubobjectOverwritesASubobjectWithItself.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-1054384-Void-Any-Meet.versetest` | 3 | 0 | 0 | 2 | 0 | 1 | 0 |
 | `Bugs/FORT-1059276.versetest` | 2 | 1 | 0 | 1 | 0 | 0 | 0 |
-| `Bugs/FORT-1088027-MultipleArmsCompleteDuringSpawn.versetest` | 2 | 1 | 0 | 1 | 0 | 0 | 0 |
-| `Bugs/FORT-1088027-OldGenerationWakeDuringSpawn.versetest` | 2 | 1 | 0 | 1 | 0 | 0 | 0 |
-| `Bugs/FORT-1088027-UseOfNullInitializedDynamicallyTypedValue.versetest` | 5 | 0 | 0 | 3 | 0 | 2 | 0 |
+| `Bugs/FORT-1088027-MultipleArmsCompleteDuringSpawn.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
+| `Bugs/FORT-1088027-OldGenerationWakeDuringSpawn.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
+| `Bugs/FORT-1088027-UseOfNullInitializedDynamicallyTypedValue.versetest` | 5 | 3 | 0 | 0 | 0 | 2 | 0 |
 | `Bugs/FORT-1126351-GenericSignalableDeferredSignalConvertCrash.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
 | `Bugs/FORT-1126351-GenericSignalableReentrantConvertCrash.versetest` | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
-| `Bugs/FORT-1126351-RaceArmSuspendedAfterResolution.versetest` | 2 | 1 | 0 | 1 | 0 | 0 | 0 |
-| `Bugs/FORT-1126351-RaceArmsDoNotStartAfterResolution.versetest` | 2 | 1 | 0 | 1 | 0 | 0 | 0 |
+| `Bugs/FORT-1126351-RaceArmSuspendedAfterResolution.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
+| `Bugs/FORT-1126351-RaceArmsDoNotStartAfterResolution.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-1126351_cross_event_reentrancy_probe.versetest` | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
 | `Bugs/FORT-1126351_object_payload_reentrancy_probe.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
 | `Bugs/FORT-1126351_reentrant_signal_probe.versetest` | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
@@ -2433,12 +2485,12 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/FORT-555213-DontSignedInt32OverflowInArrayBytes.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-555217-VeryLongIdentifier.versetest` | 6 | 3 | 3 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-559416-AddExtensionMethodsToForgotUsingMessage.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
-| `Bugs/FORT-571286-CrashMisinterpretingUObjectPointerAsDynamicallyTypedValue.versetest` | 8 | 4 | 0 | 4 | 0 | 0 | 0 |
+| `Bugs/FORT-571286-CrashMisinterpretingUObjectPointerAsDynamicallyTypedValue.versetest` | 8 | 5 | 0 | 3 | 0 | 0 | 0 |
 | `Bugs/FORT-574089-SucceedsConstructorFallibleArgument.versetest` | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-581999-ErrorNodeInIrGenerator.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-582128-PathLiteralAsValue.versetest` | 12 | 11 | 0 | 1 | 0 | 0 | 0 |
 | `Bugs/FORT-582129-VariableTypeReferencesVariableName.versetest` | 21 | 21 | 0 | 0 | 0 | 0 | 0 |
-| `Bugs/FORT-582630-BranchResult.versetest` | 3 | 2 | 0 | 1 | 0 | 0 | 0 |
+| `Bugs/FORT-582630-BranchResult.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-583815-SelfCancellation.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
 | `Bugs/FORT-585106-WriteLogicCauseCompilerToAssert.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-586526-PrematureRuntimeTypePurge.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
@@ -2449,7 +2501,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/FORT-642876-CollidingCoercedOverrideNames.versetest` | 11 | 0 | 0 | 11 | 0 | 0 | 0 |
 | `Bugs/FORT-687100-Mix-comma-and-semicolon-in-archetype-instantiation.versetest` | 9 | 7 | 0 | 2 | 0 | 0 | 0 |
 | `Bugs/FORT-713493-CaseTypeError.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
-| `Bugs/FORT-713847-RaceCoerce.versetest` | 2 | 1 | 0 | 1 | 0 | 0 | 0 |
+| `Bugs/FORT-713847-RaceCoerce.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-720968-DetectInaccessibleTypesAcrossPackagesWithDifferentUploadedAtVersions.versetest` | 4 | 0 | 0 | 0 | 0 | 4 | 0 |
 | `Bugs/FORT-721882-CallingFunctionWithNullObject.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `Bugs/FORT-722788-LookupBindingDataOfFunctionInModulePart.versetest` | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
@@ -2458,7 +2510,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/FORT-743839-SetMapWithIfExpr.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-744399-DefaultTupleFieldsCrashComplier.versetest` | 11 | 10 | 1 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-746888-CodegenGeneratesDuplicateLocalPropertyNames.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
-| `Bugs/FORT-760026-NonUniquePropertyNamesInSuspendsFunction.versetest` | 2 | 1 | 0 | 1 | 0 | 0 | 0 |
+| `Bugs/FORT-760026-NonUniquePropertyNamesInSuspendsFunction.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-763813-CrashIfClassInheritFromStruct.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/FORT-779650-LocalVarCompoundAssignmentRollbackMemoryCorruption.versetest` | 6 | 4 | 0 | 2 | 0 | 0 | 0 |
 | `Bugs/FORT-779858-CrashDeltaSerializingAgainstUninitializedDynamicallyTypedValue.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
@@ -2498,8 +2550,8 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/SOL-3515-CallingExtensionMethodWithoutSelf.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-3563-DontStackOverflowOnCyclicInterfaces.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-3564-CallingSuperClassMethodFromOverriddenMethod.versetest` | 16 | 8 | 4 | 4 | 0 | 0 | 0 |
-| `Bugs/SOL-3628-SuspendsMethodSuperCall.versetest` | 2 | 1 | 0 | 1 | 0 | 0 | 0 |
-| `Bugs/SOL-3629-SuspendsMethodEffectSubtype.versetest` | 2 | 1 | 0 | 1 | 0 | 0 | 0 |
+| `Bugs/SOL-3628-SuspendsMethodSuperCall.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
+| `Bugs/SOL-3629-SuspendsMethodEffectSubtype.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-3662-LineCommentEndsIndentedBlock.versetest` | 7 | 6 | 0 | 1 | 0 | 0 | 0 |
 | `Bugs/SOL-3729-UnidentifiedIdentInCaseCondition.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-3731-CoercionOfParametricFieldOverrides.versetest` | 5 | 2 | 0 | 3 | 0 | 0 | 0 |
@@ -2510,7 +2562,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/SOL-3819-DefinitionsInTypeSpecifiers.versetest` | 5 | 5 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-3825-IsComparableShouldHandleCycles.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-3887-MessageArray.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
-| `Bugs/SOL-3911-SuspendsArgumentAsForIterable.versetest` | 2 | 1 | 0 | 1 | 0 | 0 | 0 |
+| `Bugs/SOL-3911-SuspendsArgumentAsForIterable.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-4107-StmWritesPoppedLocalVar.versetest` | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-4137-MemoryLeakCreatingA3dArray.versetest` | 3 | 0 | 0 | 3 | 0 | 0 | 0 |
 | `Bugs/SOL-4170-DefinitionAstNodeUseAfterFree.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
@@ -2522,7 +2574,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/SOL-4208-OverrideWithVar.versetest` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-4209-SuspendingSubexpressionsOfSpawnedInvocation.versetest` | 6 | 3 | 0 | 3 | 0 | 0 | 0 |
 | `Bugs/SOL-4266-RaceContinuationExecution.versetest` | 5 | 0 | 0 | 0 | 0 | 5 | 0 |
-| `Bugs/SOL-4284-InfiniteLoopTriggersUObjectLimit.versetest` | 3 | 0 | 0 | 1 | 0 | 2 | 0 |
+| `Bugs/SOL-4284-InfiniteLoopTriggersUObjectLimit.versetest` | 3 | 1 | 0 | 0 | 0 | 2 | 0 |
 | `Bugs/SOL-4289-SyncUninitializedLocalArray.versetest` | 4 | 0 | 0 | 0 | 0 | 4 | 0 |
 | `Bugs/SOL-4332-BranchRace.versetest` | 10 | 0 | 0 | 0 | 0 | 10 | 0 |
 | `Bugs/SOL-4339-CallingConstructorsForUStructs.versetest` | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
@@ -2584,7 +2636,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/SOL-9061-DocCommentsOnQualifiedIdentifiers.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `Bugs/SOL-9192-DigestSourceOrder.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `Bugs/SOL-9661-ForLoopWithNonGeneratorDomain.versetest` | 9 | 9 | 0 | 0 | 0 | 0 | 0 |
-| `Bugs/SOL-9691-CaptureSuper.versetest` | 2 | 1 | 0 | 1 | 0 | 0 | 0 |
+| `Bugs/SOL-9691-CaptureSuper.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-9694-ReturnFromLoopInBranch.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-9745-ConcreteClassOverridingInterfaceDataMember.versetest` | 15 | 15 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-9799-CaptureLocalUsing.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
@@ -2635,7 +2687,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Coroutines/Loop.versetest` | 3 | 1 | 0 | 0 | 0 | 2 | 0 |
 | `Coroutines/ParamAlignment.versetest` | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
 | `Coroutines/SelfCancel.versetest` | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
-| `Coroutines/SpawnAndTask.versetest` | 77 | 5 | 0 | 2 | 0 | 70 | 0 |
+| `Coroutines/SpawnAndTask.versetest` | 77 | 6 | 0 | 1 | 0 | 70 | 0 |
 | `CyclicReferences.versetest` | 13 | 13 | 0 | 0 | 0 | 0 | 0 |
 | `DataMemberValidation.versetest` | 9 | 0 | 0 | 0 | 0 | 9 | 0 |
 | `DebugStackTrace/FrameOrder.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
@@ -2653,7 +2705,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `EnumCompare.versetest` | 12 | 12 | 0 | 0 | 0 | 0 | 0 |
 | `Escape.versetest` | 5 | 5 | 0 | 0 | 0 | 0 | 0 |
 | `EvaluationOrder.versetest` | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
-| `Event.versetest` | 6 | 0 | 0 | 4 | 0 | 2 | 0 |
+| `Event.versetest` | 6 | 1 | 0 | 3 | 0 | 2 | 0 |
 | `EventShouldBeCallable.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `Exercises/BalancedBinaryTree.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
 | `Exercises/BinaryTreeInorderTraversalRecursive.versetest` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
@@ -2849,7 +2901,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `RuntimeErrorsAutoRTFMLanguageAbort.versetest` | 11 | 0 | 0 | 0 | 0 | 11 | 0 |
 | `RuntimeErrorsAutoRTFMRuntimeAbort.versetest` | 8 | 0 | 0 | 0 | 0 | 8 | 0 |
 | `RuntimeWarningCallstack.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
-| `SamplingProfiler.versetest` | 2 | 0 | 0 | 1 | 0 | 1 | 0 |
+| `SamplingProfiler.versetest` | 2 | 1 | 0 | 0 | 0 | 1 | 0 |
 | `Self.versetest` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
 | `SelfClass.versetest` | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | `SemicolonsVsCommas.versetest` | 56 | 53 | 0 | 1 | 0 | 2 | 0 |
@@ -2864,7 +2916,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `ShadowDefinition.versetest` | 65 | 38 | 0 | 5 | 0 | 22 | 0 |
 | `SingleParamArray.versetest` | 16 | 15 | 0 | 1 | 0 | 0 | 0 |
 | `SingleParamTuple.versetest` | 7 | 6 | 0 | 0 | 0 | 1 | 0 |
-| `SoftwareTransactionalMemory.versetest` | 31 | 31 | 0 | 0 | 0 | 0 | 0 |
+| `SoftwareTransactionalMemory.versetest` | 31 | 30 | 1 | 0 | 0 | 0 | 0 |
 | `StmCallbackErrors.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `StringInterpolationPlus.versetest` | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
 | `Subtype.versetest` | 106 | 97 | 0 | 8 | 0 | 1 | 0 |
