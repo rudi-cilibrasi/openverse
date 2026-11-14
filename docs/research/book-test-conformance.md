@@ -55,7 +55,7 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
 
 ## Where things stand
 
-On main `33bcf38` with [the forms still on the list](#after-the-forms-still-on-the-list), [a task's end resuming its awaiters](#after-a-tasks-end-resumes-its-awaiters) and [the second batch of found bugs](#after-the-found-bugs-a-second-batch): **8,784 agree, 617 refuse, 55 accept, 92 differ, 3,956 not translatable** of 13,504 cases (a fresh `scripts/book-conformance.sh run --causes` on the merged commit; main `33bcf38` alone: 8,711, 683, 66, 92, 3,952). This is the one table of what is left; the sections below are the history, each written when its work landed, and the four maps ([the first map](#the-remaining-causes-a-map), [classes](#classes-and-subtyping-the-map), [forms](#forms-of-expressions-statements-and-the-library-a-map), [the forms still on the list](#the-forms-still-on-the-list-a-map)) hold the case-by-case reading each row points to.
+On main `b910287` (with [a task's end resuming its awaiters](#after-a-tasks-end-resumes-its-awaiters)), with [the forms still on the list](#after-the-forms-still-on-the-list) and [the second batch of found bugs](#after-the-found-bugs-a-second-batch): **8,784 agree, 617 refuse, 55 accept, 92 differ, 3,956 not translatable** of 13,504 cases (a fresh `scripts/book-conformance.sh run --causes` on the merged commit; main `b910287` alone, as `33bcf38`: 8,711, 683, 66, 92, 3,952). This is the one table of what is left; the sections below are the history, each written when its work landed, and the four maps ([the first map](#the-remaining-causes-a-map), [classes](#classes-and-subtyping-the-map), [forms](#forms-of-expressions-statements-and-the-library-a-map), [the forms still on the list](#the-forms-still-on-the-list-a-map)) hold the case-by-case reading each row points to.
 
 **Accepted where the tests refuse (55)**
 
@@ -127,10 +127,9 @@ On main `33bcf38` with [the forms still on the list](#after-the-forms-still-on-t
   refuses 617 valid programs, **accepts 55 refused ones**, gives a
   **different result in 92** (87 of them `verse_vm_only` cases of unbounded
   ints) and hits **no internal error** ([After the forms still on the
-  list](#after-the-forms-still-on-the-list), merged with [After a task's end
-  resumes its awaiters](#after-a-tasks-end-resumes-its-awaiters), which moved
-  nothing; on main `33bcf38`, before them:
-  8,711 agreed, 683 refused, 66 accepted, 92 differed, after [After awaiters inside
+  list](#after-the-forms-still-on-the-list); on main `b910287`, before it:
+  8,711 agreed, 683 refused, 66 accepted, 92 differed, the same after [After a task's end
+  resumes its awaiters](#after-a-tasks-end-resumes-its-awaiters) and [After awaiters inside
   `Signal`](#after-awaiters-inside-signal), merged with [After `ToDiagnostic`,
   `true` and the full type-parameter
   rule](#after-todiagnostic-true-and-the-full-type-parameter-rule), which
