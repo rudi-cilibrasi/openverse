@@ -417,12 +417,16 @@ inductive STop where
     elaborator checks it at `t` and drops it (#503). -/
 def typeDefaultPrefix : String := "$typeDefault:"
 
+/-- The head of an attribute both called and given fields, `@a(…){…}`:
+    `$attrCall(a(…), a{…})`, which `Attributes.apply` refuses. -/
+def attrCallHead : String := "$attrCall"
+
 /-- The name an attribute's expression starts with: `deprecated` of
     `deprecated{…}`, `a.bb` of `@a.bb`. -/
 partial def SExpr.attrHead : SExpr → String
   | .ident _ n => n
   | .member _ x m => x.attrHead ++ "." ++ m
-  | .app _ (.ident _ "$attrCall") (c :: _) _ => c.attrHead
+  | .app _ (.ident _ h) (c :: _) _ => if h == attrCallHead then c.attrHead else h
   | .app _ h _ _ => h.attrHead
   | .construct _ n _ _ => n
   | _ => ""
@@ -493,6 +497,20 @@ def STop.isTypeDefault : STop → Bool
   | .const _ n .. =>
     let last := (n.splitOn "::").getLast?.getD n
     last.startsWith typeDefaultPrefix || last.startsWith attrCheckPrefix
+  | _ => false
+
+/-- Whether a definition is a marker the parser writes beside a definition,
+    not one: the marker of its qualifier (`qualMarker`) or of a `using`
+    (`openMarker`), a default its function types write
+    (`typeDefaultPrefix`), the record of an attribute (`attrPrefix`) and the
+    check of its value (`attrCheckPrefix`). An attribute is on the first
+    definition after its markers (`attachAttrs`, `Attributes.apply`). (It
+    reads the last part of the name, after `::`.) -/
+def STop.isBesideMarker : STop → Bool
+  | .const _ n .. =>
+    let last := (n.splitOn "::").getLast?.getD n
+    last.startsWith qualPrefix || last.startsWith openPrefix || last.startsWith typeDefaultPrefix ||
+      last.startsWith attrPrefix || last.startsWith attrCheckPrefix
   | _ => false
 
 /-- Names no definition may take, at any scope (a module's, a class's, a

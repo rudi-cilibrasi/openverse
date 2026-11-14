@@ -301,19 +301,13 @@ def apply (tops : List STop) : Except String (List STop × List (Pos × String))
     | _ => false
   if !tops.any isRecord && !tops.any (·.refusal?.isSome) && !tops.any (·.namesWritten.contains pointerTypeHead) then
     return (tops, [])
-  -- (the parser's markers and the constants it writes after a definition)
-  let isMarker : STop → Bool := fun
-    | t@(.const _ n ..) =>
-      let last := (n.splitOn "::").getLast?.getD n
-      isRecord t || t.isTypeDefault || last.startsWith qualPrefix || last.startsWith openPrefix
-    | _ => false
   let tops0 := tops.toArray
   -- the records, in order, each with the definition before it
   let uses : List Use := tops.zipIdx.filterMap fun
     | (.const p n (place :: target :: _) none e, i) =>
       let last := (n.splitOn "::").getLast?.getD n
       if !last.startsWith attrPrefix then none else
-      let defIdx := ((List.range i).reverse.find? fun j => !isMarker tops0[j]!).getD 0
+      let defIdx := ((List.range i).reverse.find? fun j => !tops0[j]!.isBesideMarker).getD 0
       some { pos := p, pfx := (n.dropEnd last.length).toString, place, target, expr := e, defIdx }
     | _ => none
   -- `@available` versions a definition out (`versionedOut`): it and, for a
@@ -438,9 +432,10 @@ def apply (tops : List STop) : Except String (List STop × List (Pos × String))
           | some _ => err u.pos "openverse reads @available's MinUploadedAtFNVersion as an integer literal"
       continue
     -- a custom attribute: a class below `attribute`, or a constructor of one
-    let (cls, value) ← match u.expr with
-      | .app _ (.ident _ "$attrCall") _ _ =>
+    if let .app _ (.ident _ c) _ _ := u.expr then
+      if c == attrCallHead then
         err u.pos s!"@{h}(…)\{…}: an attribute is a class's value, constructed with \{…}, or a constructor's call (…), not both"
+    let (cls, value) ← match u.expr with
       | .app p f args false =>
         match ctorOf? h with
         | some c => pure (c, SExpr.app p f args false)

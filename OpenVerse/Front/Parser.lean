@@ -372,13 +372,7 @@ def attrTop (pfx : String) (p : Pos) (place target : String) (e : SExpr) : STop 
     the records (`attrTop`) after it. -/
 def attachAttrs (tops : Array STop) (start : Nat) (attrs : List (Pos × SExpr)) (pfx : String) :
     Except String (Array STop) := do
-  let isMarker : STop → Bool := fun
-    | .const _ n .. =>
-      let last := (n.splitOn "::").getLast?.getD n
-      last.startsWith qualPrefix || last.startsWith openPrefix || last.startsWith typeDefaultPrefix ||
-        last.startsWith attrPrefix
-    | _ => false
-  let some i := (List.range (tops.size - start)).map (· + start) |>.find? (fun i => !isMarker tops[i]!)
+  let some i := (List.range (tops.size - start)).map (· + start) |>.find? (fun i => !tops[i]!.isBesideMarker)
     | let p := (attrs.head?.map (·.1)).getD {line := 0, col := 0}
       throw s!"{p.show}: an attribute is followed by the definition it is on"
   let d := tops[i]!
@@ -557,7 +551,7 @@ partial def parseAttr : PM SExpr := do
     bump
     let fs ← parseItems "}" true
     e := match e with
-      | .app .. => .app p (.ident p "$attrCall") [e, .construct p name [] fs] false
+      | .app .. => .app p (.ident p attrCallHead) [e, .construct p name [] fs] false
       | _ => .construct p name [] fs
   let n ← peekT
   if !(n.isSym "@" || n.spaced) then
