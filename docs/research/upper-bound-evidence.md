@@ -114,7 +114,10 @@ for every admitted case; `shared_function_sibling_writes.verse` executes the
 ordinary real controls. These controls cover sibling order, nonreturning arms,
 unimplemented dispatch, metadata-only forwarding, independent arm locals,
 rollback and definite real overwrites. The remaining #572 audit includes
-escaping background work and generated witness/capture/frame storage roles.
+background work that survives its launch expression and generated
+witness/capture/frame storage roles. A `branch`, or a surviving `rush` loser,
+can still write metadata after the caller subsequently overwrites the cell
+with real data; sibling-arm convergence alone does not model that overlap.
 
 The checked families currently cover:
 
