@@ -15,11 +15,9 @@ private def nominal (bound : List String) (n : String) : List String :=
 partial def ty (bound : List String) : STy → List String
   | .name n => nominal bound n
   | .app n ts => nominal bound n ++ ts.flatMap (ty bound)
-  | .arr t | .opt t => ty bound t
-  | .tup ts => ts.flatMap (ty bound)
-  | .map k v => ty bound k ++ ty bound v
   | .fn ps es r => (if es.contains "suspends" then ["$suspends"] else []) ++
       ps.flatMap (ty bound) ++ ty bound r
+  | t => t.children.flatMap (ty bound)
 
 private def binds : SExpr → List String
   | .decl _ n _ _ _ => if n.startsWith "?" then [] else [n]

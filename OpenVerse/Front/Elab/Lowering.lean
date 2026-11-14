@@ -54,8 +54,6 @@ structure Options where
 structure CDef where
   pos : Pos
   name : String
-  /-- The specifiers of its name: its access. -/
-  nameSpecs : List String := []
   tps : List TParam
   /-- The specifiers after `class` or `interface`. -/
   specs : List String
@@ -106,7 +104,7 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
     | .decl p f none false _ => some (p, f)
     | _ => none
   let delegsOf (items : List SExpr) : List (Pos × String) := items.filterMap fun
-    | .app p (.ident _ d) _ _ => if d.startsWith "$ctor:" then some (p, (d.drop "$ctor:".length).toString) else none
+    | .app p (.ident _ d) _ _ => (delegationHead? d).map (p, ·)
     | _ => none
   -- the checks of each constructor on its own
   -- overloaded constructors (Book of Verse ch. 10, #74): one class, and the
@@ -151,7 +149,7 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
       if dc == c && !direct.isEmpty then
         throw s!"{dp.show}: {k} delegates to {d}, which constructs {c} itself and so sets its fields: {k} cannot set fields too"
       -- (the Book: a subclass's fields first, then the parent's constructor)
-      let dIdx := items.findIdx? fun | .app _ (.ident _ x) _ _ => x.startsWith "$ctor:" | _ => false
+      let dIdx := items.findIdx? fun | .app _ (.ident _ x) _ _ => (delegationHead? x).isSome | _ => false
       let late := items.zip (List.range items.length) |>.filterMap fun
         | (.decl fp f none false _, j) => if dIdx.any (· < j) then some (fp, f) else none
         | _ => none
@@ -238,7 +236,7 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
           | .decl .. => body := body.push d
           | _ => throw s!"{ip.show}: a let: in a constructor has only declarations"
       | .app ip (.ident _ d0) args br =>
-        let d := (d0.drop "$ctor:".length).toString
+        let d := (d0.drop delegationPrefix.length).toString
         let call := SExpr.app ip (.ident ip s!"{d}$init") args br
         match (setBy.lookup d).getD [] with
         | [] => body := body.push call

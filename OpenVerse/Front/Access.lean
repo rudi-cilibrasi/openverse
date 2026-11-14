@@ -164,7 +164,7 @@ abbrev Levels := Std.HashMap String String
 def Levels.of (tops : List STop) : Levels := tops.foldl (fun m t =>
   let (n, specs) : String × List String := match t with
     | .fn _ n _ _ specs .. | .const _ n specs .. | .classDef _ n specs .. => (n, specs)
-  let n := if n.startsWith "$module:" then (n.drop "$module:".length).toString else n
+  let n := (moduleMarker? n).getD n
   match levelOf specs with
   | some l => m.insert n l
   | none => m) {}
@@ -382,8 +382,7 @@ def checkUses (env : Env) (tops : List STop) : Except String Unit := do
     match t with
     | .fn p n _ _ specs _ body =>
       -- (a constructor function's items give its class's fields)
-      if let some cs := specs.find? (·.startsWith "$constructor:") then
-        let c := (cs.drop "$constructor:".length).toString
+      if let some c := specs.findSome? constructorSpec? then
         let fs := match body with
           | .block _ items => items.filterMap fun | .decl fp f .. => some (fp, f) | _ => none
           | _ => []

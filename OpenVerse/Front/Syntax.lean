@@ -32,6 +32,55 @@ def bareName (n : String) : String := ((splitQual? n).map (·.2)).getD n
     those of a program with modules. -/
 def qualifierMarker : String := "$uses:qualifiers"
 
+/-- `n` after `pre`, when it starts with it: what a marker `pre…` marks. -/
+def afterPrefix? (pre n : String) : Option String :=
+  if n.startsWith pre then some (n.drop pre.length).toString else none
+
+/-- A module's marker, `$module:A::B`: a constant the parser writes where
+    the module `A::B` is defined, with the module's specifiers, and
+    `resolveModules` reads and takes out. -/
+def modulePrefix : String := "$module:"
+def moduleMarker (path : String) : String := modulePrefix ++ path
+def moduleMarker? (n : String) : Option String := afterPrefix? modulePrefix n
+
+/-- A qualified definition's marker, `$qual:A::F|q` for `(q:)F` in module
+    `A`, written before it: `resolveModules` checks that `q` names where
+    `F` is, and takes it out. -/
+def qualPrefix : String := "$qual:"
+def qualMarker (name q : String) : String := s!"{qualPrefix}{name}|{q}"
+def qualMarker? (n : String) : Option (String × String) := do
+  let [name, q] := (← afterPrefix? qualPrefix n).splitOn "|" | none
+  return (name, q)
+
+/-- A `using{M}`'s marker, `$open:A::|M` for one written in module `A`:
+    `resolveModules` opens `M` there, and takes it out. -/
+def openPrefix : String := "$open:"
+def openMarker (scope path : String) : String := s!"{openPrefix}{scope}|{path}"
+def openMarker? (n : String) : Option (String × String) := do
+  let [scope, path] := (← afterPrefix? openPrefix n).splitOn "|" | none
+  return (scope, path)
+
+/-- A constructor function's specifier, `$constructor:c` for
+    `F<constructor>(…) := c{…}`, the class `c` it constructs: the classes'
+    phases make it one of `c`'s constructors (`classMethods`). -/
+def constructorPrefix : String := "$constructor:"
+def constructorSpec (c : String) : String := constructorPrefix ++ c
+def constructorSpec? (sp : String) : Option String := afterPrefix? constructorPrefix sp
+
+/-- A constructor's delegation `D<constructor>(…)` to a constructor of the
+    class `D` or one above it: the call of `$ctor:D` (`parseCtorItem`). -/
+def delegationPrefix : String := "$ctor:"
+def delegationHead (d : String) : String := delegationPrefix ++ d
+def delegationHead? (n : String) : Option String := afterPrefix? delegationPrefix n
+
+/-- The value of an access level's definition `S := scoped{M, …}`,
+    `$scope(M, …)`: `resolveSpecifiers` reads and takes it out. -/
+def scopeHead : String := "$scope"
+
+/-- The local that marks a `profile` block, `$profileL_C`, its tag's value
+    (`profileOf`): `checkProfiles` finds it. -/
+def profilePrefix : String := "$profile"
+
 /-- Surface types. -/
 inductive STy where
   /-- `int`, `logic`, `char`, `string`, `void` -/
@@ -70,15 +119,34 @@ def STy.asNamedParam? : STy → Option (String × Bool × STy)
     else none
   | _ => none
 
+/-- A type's immediate parts, in the order written: an array's or an
+    option's element, a tuple's elements, a map's key then value, an
+    application's arguments (not its head), a function type's parameters
+    then result. -/
+def STy.children : STy → List STy
+  | .name _ => []
+  | .arr t | .opt t => [t]
+  | .tup ts | .app _ ts => ts
+  | .map k v => [k, v]
+  | .fn ps _ r => ps ++ [r]
+
+/-- `t` with `f` applied to each of its immediate parts, the ones
+    `children` lists, in that order; everything else is kept. -/
+def STy.mapChildrenM [Monad m] (f : STy → m STy) : STy → m STy
+  | .name n => pure (.name n)
+  | .arr t => return .arr (← f t)
+  | .opt t => return .opt (← f t)
+  | .tup ts => return .tup (← ts.mapM f)
+  | .map k v => return .map (← f k) (← f v)
+  | .app n ts => return .app n (← ts.mapM f)
+  | .fn ps es r => return .fn (← ps.mapM f) es (← f r)
+
 /-- Fold over written type names in source order, including application
     heads (`box` in `box(t)`) and function parameter and result types. -/
 partial def STy.foldNames (f : α → String → α) (init : α) : STy → α
   | .name n => f init n
-  | .arr t | .opt t => t.foldNames f init
-  | .tup ts => ts.foldl (STy.foldNames f) init
   | .app n ts => ts.foldl (STy.foldNames f) (f init n)
-  | .map k v => v.foldNames f (k.foldNames f init)
-  | .fn ps _ r => r.foldNames f (ps.foldl (STy.foldNames f) init)
+  | t => t.children.foldl (STy.foldNames f) init
 
 /-- All written type names, in source order, retaining repetitions. -/
 def STy.allNames (t : STy) : List String :=
@@ -96,19 +164,13 @@ def STy.names (t : STy) : List String :=
     function types. Application heads are excluded: `box(t)` mentions `t`. -/
 partial def STy.mentions (t : STy) (n : String) : Bool := match t with
   | .name m => m == n
-  | .arr u | .opt u => u.mentions n
-  | .tup ts | .app _ ts => ts.any (·.mentions n)
-  | .map a b => a.mentions n || b.mentions n
-  | .fn ps _ r => ps.any (·.mentions n) || r.mentions n
+  | t => t.children.any (·.mentions n)
 
 /-- Whether a type mentions any of `vs` as plain type names, with the same
     treatment of application heads as `mentions`. -/
 partial def STy.mentionsAny (vs : List String) : STy → Bool
   | .name n => vs.contains n
-  | .arr t | .opt t => STy.mentionsAny vs t
-  | .tup ts | .app _ ts => ts.any (STy.mentionsAny vs)
-  | .map k v => STy.mentionsAny vs k || STy.mentionsAny vs v
-  | .fn ps _ r => ps.any (STy.mentionsAny vs) || STy.mentionsAny vs r
+  | t => t.children.any (STy.mentionsAny vs)
 
 /-- A type parameter from a `where` clause (`t:type` or
     `t:subtype(comparable)`), or of a parametric struct `name(t:type) := struct`. -/
@@ -371,20 +433,79 @@ inductive STop where
       (parents : List STy) → (isInterface : Bool) → (fields : List SField) → (methods : List STop) → STop
   deriving Repr, Inhabited
 
+/-- The code of a definition, in the order it is written: a function's
+    parameters' defaults, then its body; a constant's value, or a struct's
+    fields' defaults; a class's or an interface's fields' defaults, then its
+    methods' code. -/
+partial def STop.code : STop → List SExpr
+  | .fn _ _ ps _ _ _ body => ps.filterMap (·.default) ++ [body]
+  | .const _ _ _ _ (.structDef _ _ _ fs) => fs.filterMap (·.default)
+  | .const _ _ _ _ e => [e]
+  | .classDef _ _ _ _ _ _ _ fs ms => fs.filterMap (·.default) ++ ms.flatMap STop.code
+
 /-- The name of the constant that holds a default a function type writes
     (`?N:t = e`) after the definition that writes it, `$typeDefault:N`: the
     elaborator checks it at `t` and drops it (#503). -/
 def typeDefaultPrefix : String := "$typeDefault:"
+
+/-- The head of an attribute both called and given fields, `@a(…){…}`:
+    `$attrCall(a(…), a{…})`, which `Attributes.apply` refuses. -/
+def attrCallHead : String := "$attrCall"
 
 /-- The name an attribute's expression starts with: `deprecated` of
     `deprecated{…}`, `a.bb` of `@a.bb`. -/
 partial def SExpr.attrHead : SExpr → String
   | .ident _ n => n
   | .member _ x m => x.attrHead ++ "." ++ m
-  | .app _ (.ident _ "$attrCall") (c :: _) _ => c.attrHead
+  | .app _ (.ident _ h) (c :: _) _ => if h == attrCallHead then c.attrHead else h
   | .app _ h _ _ => h.attrHead
   | .construct _ n _ _ => n
   | _ => ""
+
+/-- The forms openverse parses and has no meaning for, each with why it
+    refuses it. The parser writes each where it is: an expression as
+    `refusedForm`, a pointer type `^t` as the type `$pointer(t)`
+    (`pointerType`); `Attributes.apply` refuses the first, before anything
+    else reads the program, so that a program the Book's tests only parse
+    parses. -/
+inductive Refused where
+  /-- `(X) => e` (`parseRange`). -/
+  | lambda
+  /-- `e^` (`parsePostfix`). -/
+  | pointerDeref
+  /-- `^t`, refused where the definition that writes it is. -/
+  | pointerType
+  /-- `@h …` on an expression or a local definition (`parseExpr`). -/
+  | exprAttribute (h : String)
+  /-- `kw<sp>`, a specifier on a macro (`parsePrimary`). -/
+  | macroSpecifier (sp kw : String)
+  /-- `F(…):t` with no body (`parseTopsIn`). -/
+  | declaredFunction (name : String)
+  /-- `X:t` with no value (`parseTopsIn`). -/
+  | declaredData (name : String)
+
+def Refused.message : Refused → String
+  | .lambda => "a lambda (…) => … is a nested function, which openverse does not have (#492; the Book's ch. 6 marks nested functions as an unreleased feature; docs/research/closure-design.md)"
+  | .pointerDeref => "a pointer's dereference e^: the Book's chapters define no pointers, and openverse has none (Book of Verse tests, Pointers.versetest)"
+  | .pointerType => "a pointer type ^t: the Book's chapters define no pointers, and openverse has none (Book of Verse tests, Pointers.versetest)"
+  | .exprAttribute h => s!"@{h} is on an expression or a local definition: attributes go on the definitions of a module, a class, an interface, a struct or an enum, and on an expression only @ignore_unreachable (Book of Verse ch. 12)"
+  | .macroSpecifier sp kw => s!"<{sp}> on {kw}: a macro takes no specifier (class and struct take their construction's effects) (Book of Verse tests, InvalidAttributeLocations.versetest: 3604)"
+  | .declaredFunction n => s!"{n}(…) has no body: a declaration of a function defined elsewhere, which openverse has none of (native functions are not supported, #494)"
+  | .declaredData n => s!"{n}:t has no value: a declaration of data defined elsewhere, which openverse has none of"
+
+/-- A form openverse parses and refuses, `$refused(msg, e…)`: the refusal's
+    message, then the parts the form was written with. -/
+def refusedHead : String := "$refused"
+def refusedForm (p : Pos) (r : Refused) (es : List SExpr) : SExpr :=
+  .app p (.ident p refusedHead) (.str p [.text r.message] :: es) false
+
+/-- The refusal `refusedForm` wrote, and where. -/
+def SExpr.refused? : SExpr → Option (Pos × String)
+  | .app p (.ident _ h) (.str _ [.text msg] :: _) _ => if h == refusedHead then some (p, msg) else none
+  | _ => none
+
+/-- The type `^t` (`Refused.pointerType`), `$pointer(t)`. -/
+def pointerTypeHead : String := "$pointer"
 
 /-- A marker of the `case` arms marked `@ignore_unreachable`: a constant
     whose value is a block of one name at each arm's place (`TyEnv.ignoredArms`). -/
@@ -407,6 +528,20 @@ def STop.isTypeDefault : STop → Bool
   | .const _ n .. =>
     let last := (n.splitOn "::").getLast?.getD n
     last.startsWith typeDefaultPrefix || last.startsWith attrCheckPrefix
+  | _ => false
+
+/-- Whether a definition is a marker the parser writes beside a definition,
+    not one: the marker of its qualifier (`qualMarker`) or of a `using`
+    (`openMarker`), a default its function types write
+    (`typeDefaultPrefix`), the record of an attribute (`attrPrefix`) and the
+    check of its value (`attrCheckPrefix`). An attribute is on the first
+    definition after its markers (`attachAttrs`, `Attributes.apply`). (It
+    reads the last part of the name, after `::`.) -/
+def STop.isBesideMarker : STop → Bool
+  | .const _ n .. =>
+    let last := (n.splitOn "::").getLast?.getD n
+    last.startsWith qualPrefix || last.startsWith openPrefix || last.startsWith typeDefaultPrefix ||
+      last.startsWith attrPrefix || last.startsWith attrCheckPrefix
   | _ => false
 
 /-- Names no definition may take, at any scope (a module's, a class's, a
@@ -498,9 +633,8 @@ partial def STop.definedNames : STop → List (Pos × String)
     (if n.startsWith "(" then [] else [(p, n)]) ++ tps.map (fun tp => (tp.pos, tp.name)) ++
       ps.flatMap (fun prm => (p, bareName prm.name) :: (prm.default.map SExpr.definedNames).getD []) ++ body.definedNames
   | .const p n _ _ body =>
-    -- (a module's marker, `$module:A::B`, defines `B`)
-    (if n.startsWith "$module:" then [(p, (n.drop "$module:".length).toString)]
-     else [(p, n)]) ++ body.definedNames
+    -- (a module's marker, `$module:A::B`, defines `A::B`)
+    [(p, (moduleMarker? n).getD n)] ++ body.definedNames
   | .classDef p n _ tps _ _ _ fs ms =>
     (p, n) :: tps.map (fun tp => (tp.pos, tp.name)) ++
       fs.flatMap (fun f => (p, bareName f.name) :: (f.default.map SExpr.definedNames).getD []) ++
@@ -509,10 +643,7 @@ partial def STop.definedNames : STop → List (Pos × String)
 /-- Type aliases mentioned as bare names; applications keep declaration heads. -/
 partial def STy.bareNames : STy → List String
   | .name n => [n]
-  | .arr t | .opt t => t.bareNames
-  | .tup ts | .app _ ts => ts.flatMap STy.bareNames
-  | .map k v => k.bareNames ++ v.bareNames
-  | .fn ps _ r => ps.flatMap STy.bareNames ++ r.bareNames
+  | t => t.children.flatMap STy.bareNames
 
 /-- Substitute type names: a parent's type parameters by the type arguments
     a subclass gives it (#39). -/
@@ -522,12 +653,7 @@ partial def STy.substNames (σ : List (String × STy)) : STy → STy
   -- Materialize it when a lifted body's type substitution carries that alias.
   | .app "$methodResult" [.name receiver] =>
     (σ.lookup receiver).getD (.app "$methodResult" [.name receiver])
-  | .arr t => .arr (t.substNames σ)
-  | .opt t => .opt (t.substNames σ)
-  | .tup ts => .tup (ts.map (STy.substNames σ))
-  | .map k v => .map (k.substNames σ) (v.substNames σ)
-  | .app n ts => .app n (ts.map (STy.substNames σ))
-  | .fn ps es r => .fn (ps.map (STy.substNames σ)) es (r.substNames σ)
+  | t => Id.run (t.mapChildrenM fun c => pure (c.substNames σ))
 
 /-- Rename binders and every peer-parameter reference in their upper bounds
     together. Renaming just the binder changes a dependent constraint. -/

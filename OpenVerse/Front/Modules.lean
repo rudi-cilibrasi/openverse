@@ -50,12 +50,8 @@ def qualJoin (ps : List String) : String := "::".intercalate ps
 
 partial def STy.mapNamesM (f : String → Except String String) : STy → Except String STy
   | .name n => return .name (← f n)
-  | .arr t => return .arr (← t.mapNamesM f)
-  | .opt t => return .opt (← t.mapNamesM f)
-  | .tup ts => return .tup (← ts.mapM (·.mapNamesM f))
-  | .map a b => return .map (← a.mapNamesM f) (← b.mapNamesM f)
   | .app n ts => return .app (← f n) (← ts.mapM (·.mapNamesM f))
-  | .fn ps es r => return .fn (← ps.mapM (·.mapNamesM f)) es (← r.mapNamesM f)
+  | t => t.mapChildrenM (·.mapNamesM f)
 
 def TParam.mapBoundNamesM (tp : TParam) (f : String → Except String String) : Except String TParam := do
   return { tp with upperBound := ← tp.upperBound.mapM (·.mapNamesM f) }
@@ -176,13 +172,12 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
   match e with
   | .ident p n => do
     -- (`D<constructor>(…)`, a delegation: `D` or `M.D`)
-    if n.startsWith "$ctor:" then
-      let d := (n.drop "$ctor:".length).toString
+    if let some d := delegationHead? n then
       if d.contains '.' then
         match ← r.qual p (d.splitOn ".") with
-        | some qd => return .ident p s!"$ctor:{qd}"
+        | some qd => return .ident p (delegationHead qd)
         | none => throw s!"{p.show}: unknown constructor {d}"
-      return .ident p s!"$ctor:{← r.val p d}"
+      return .ident p (delegationHead (← r.val p d))
     -- (a local `(local:)X`, bare: it, unless a definition outside the code
     -- is named so too, Book of Verse tests, FN41.00-FirstAdded.versetest)
     if r.locals.lookup n == some true then
@@ -361,7 +356,8 @@ def STop.specPlaces : STop → List (EffectPolicy.Place × List String)
     access level where one may go (`EffectPolicy.checkPlace`). -/
 def resolveSpecifiers (tops : List STop) : Except String (List STop) := do
   let scopeDef? : STop → Option (Pos × String × List String × List String) := fun
-    | .const p n specs none (.app _ (.ident _ "$scope") refs false) =>
+    | .const p n specs none (.app _ (.ident _ h) refs false) =>
+      if h != scopeHead then none else
       some (p, n, specs, refs.filterMap fun | .ident _ r => some r | _ => none)
     | _ => none
   let scopes := tops.filterMap scopeDef?
@@ -370,7 +366,7 @@ def resolveSpecifiers (tops : List STop) : Except String (List STop) := do
   if !needed then return tops
   let scopeOf (n : String) : List String := (qualParts n).dropLast
   let modules : Std.HashSet String := Std.HashSet.ofList (tops.filterMap fun
-    | .const _ n .. => if n.startsWith "$module:" then some (n.drop "$module:".length).toString else none
+    | .const _ n .. => moduleMarker? n
     | _ => none)
   -- a module `r` (`A.B`) from scope `sc`: its first name found from `sc`
   -- outward, as a module's name is
@@ -396,11 +392,7 @@ def resolveSpecifiers (tops : List STop) : Except String (List STop) := do
   -- the access level `r` (`S`, `M.S`) names from scope `sc`: from `sc`
   -- outward, then among those of the modules opened there that allow `sc`
   let opens : List (List String × String) := tops.filterMap fun
-    | .const _ n .. =>
-      if !n.startsWith "$open:" then none else
-      match ((n.drop "$open:".length).toString).splitOn "|" with
-      | [s, m] => some ((qualParts s).filter (· != ""), m)
-      | _ => none
+    | .const _ n .. => (openMarker? n).map fun (s, m) => ((qualParts s).filter (· != ""), m)
     | _ => none
   let admits (n : String) (sc : List String) : Bool :=
     ((Access.audience (levels[n]?.bind (·.2)) (scopeOf n)).admits (fun _ _ => false) { module := sc })
@@ -441,7 +433,7 @@ def resolveSpecifiers (tops : List STop) : Except String (List STop) := do
     match t with
     | .fn p n ps tps specs ret body => return some (.fn p n ps tps (← resolve (scopeOf n) p .function specs) ret body)
     | .const p n specs ty body =>
-      let sc := if n.startsWith "$module:" then scopeOf (n.drop "$module:".length).toString else scopeOf n
+      let sc := scopeOf ((moduleMarker? n).getD n)
       let body ← match body with
         | .structDef bp tps sspecs fs => do
           pure (SExpr.structDef bp tps (← resolve sc p .structType sspecs) (← resolveFields sc p .structField fs))
@@ -462,22 +454,22 @@ def resolveSpecifiers (tops : List STop) : Except String (List STop) := do
     the file's header). -/
 
 def resolveModules (tops : List STop) : Except String (List STop) := do
-  let markers (pre : String) : List (Pos × String) := tops.filterMap fun
-    | .const p n _ _ _ => if n.startsWith pre then some (p, (n.drop pre.length).toString) else none
+  let markers {α : Type} (marked? : String → Option α) : List (Pos × α) := tops.filterMap fun
+    | .const p n _ _ _ => (marked? n).map (p, ·)
     | _ => none
-  let isMarker (n : String) := n.startsWith "$module:" || n.startsWith "$open:" ||
-    n.startsWith "$qual:" || n == qualifierMarker
+  let isMarker (n : String) := n.startsWith modulePrefix || n.startsWith openPrefix ||
+    n.startsWith qualPrefix || n == qualifierMarker
   let real := tops.filter fun
     | .const _ n _ _ _ => !isMarker n
     | _ => true
-  let modules := (markers "$module:").map (·.2)
+  let modules := (markers moduleMarker?).map (·.2)
   -- (extension methods, which calls `X.M(…)` find: Book of Verse ch. 6)
   let isExt (n : String) : Bool := (extensionMethod? n).isSome
   let hasExt := real.any fun
     | .fn _ n .. => isExt n
     | .classDef _ _ _ _ _ _ _ _ ms => ms.any fun | .fn _ n .. => isExt n | _ => false
     | _ => false
-  if modules.isEmpty && (markers "$open:").isEmpty && (markers qualifierMarker).isEmpty && !hasExt then
+  if modules.isEmpty && (markers openMarker?).isEmpty && (markers (afterPrefix? qualifierMarker)).isEmpty && !hasExt then
     return real
   -- (the access levels written on the definitions and modules, Book of
   -- Verse ch. 12: `Access`)
@@ -489,7 +481,7 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
   let shown (n : String) : String := ".".intercalate (qualParts n)
   let shownP (ps : List String) : String := ".".intercalate ps
   let mut seenM : Std.HashSet String := {}
-  for (p, m) in markers "$module:" do
+  for (p, m) in markers moduleMarker? do
     if defsS.contains m then throw s!"{p.show}: {shown m} is defined twice (a module and a definition)"
     if seenM.contains m then throw s!"{p.show}: module {shown m} is defined twice"
     seenM := seenM.insert m
@@ -531,38 +523,37 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
         | a => throw s!"{p.show}: {a.refusal (shownP lvl)}"
   -- the modules opened, each with the scope it is open in
   let mut opens : List (List String × List String) := []
-  for (p, s) in markers "$open:" do
-    if let [sc0, path] := s.splitOn "|" then
-      let sc := (qualParts sc0).filter (· != "")
-      let comps := qualParts path
-      let head := comps.headD ""
-      -- (`using{(A:)B}`: the module `B` of the module `A`, as `using{A.B}`;
-      -- a module's using is a module's, Book of Verse tests,
-      -- QualifiedIdentifier.versetest)
-      let (head, comps) ← match splitQual? head with
-        | some (q, m) =>
-          if q == "local" then
-            throw s!"{p.show}: using\{(local:){m}}: (local:) qualifies a function's locals, and a using names a module"
-          if q.startsWith "/" then
-            throw s!"{p.show}: using\{({q}:){m}}: openverse has no module at the path {q}"
-          let qs := q.splitOn "."
-          pure (qs.headD q, qs.drop 1 ++ m :: comps.drop 1)
-        | none => pure (head, comps.drop 1)
-      -- (the head: a module in scope, or a public submodule of a module
-      -- opened before, in scope)
-      let viaOpen : Option (List String) := opens.findSome? fun (osc, m) =>
-        if inside sc osc && modsS.contains (qualJoin (m ++ [head])) &&
-            admitsAt sc (m ++ [head]) then some (m ++ [head]) else none
-      let base ← match lookup sc head, viaOpen with
-        | some (true, b), _ => pure b
-        | none, some b => pure b
-        | _, _ => throw s!"{p.show}: unknown module {shownP (head :: comps)}"
-      let mut cur := base
-      for c in comps do
-        if !modsS.contains (qualJoin (cur ++ [c])) then throw s!"{p.show}: unknown module {shownP (head :: comps)}"
-        cur := cur ++ [c]
-      checkVis sc p cur base.length
-      opens := opens ++ [(sc, cur)]
+  for (p, sc0, path) in markers openMarker? do
+    let sc := (qualParts sc0).filter (· != "")
+    let comps := qualParts path
+    let head := comps.headD ""
+    -- (`using{(A:)B}`: the module `B` of the module `A`, as `using{A.B}`;
+    -- a module's using is a module's, Book of Verse tests,
+    -- QualifiedIdentifier.versetest)
+    let (head, comps) ← match splitQual? head with
+      | some (q, m) =>
+        if q == "local" then
+          throw s!"{p.show}: using\{(local:){m}}: (local:) qualifies a function's locals, and a using names a module"
+        if q.startsWith "/" then
+          throw s!"{p.show}: using\{({q}:){m}}: openverse has no module at the path {q}"
+        let qs := q.splitOn "."
+        pure (qs.headD q, qs.drop 1 ++ m :: comps.drop 1)
+      | none => pure (head, comps.drop 1)
+    -- (the head: a module in scope, or a public submodule of a module
+    -- opened before, in scope)
+    let viaOpen : Option (List String) := opens.findSome? fun (osc, m) =>
+      if inside sc osc && modsS.contains (qualJoin (m ++ [head])) &&
+          admitsAt sc (m ++ [head]) then some (m ++ [head]) else none
+    let base ← match lookup sc head, viaOpen with
+      | some (true, b), _ => pure b
+      | none, some b => pure b
+      | _, _ => throw s!"{p.show}: unknown module {shownP (head :: comps)}"
+    let mut cur := base
+    for c in comps do
+      if !modsS.contains (qualJoin (cur ++ [c])) then throw s!"{p.show}: unknown module {shownP (head :: comps)}"
+      cur := cur ++ [c]
+    checkVis sc p cur base.length
+    opens := opens ++ [(sc, cur)]
   -- the definition or module a name gives from scope `sc`: at each level,
   -- innermost first, the level's own definitions, then the members of the
   -- modules opened there (two of them giving it: ambiguous) (`true`: a module)
@@ -768,18 +759,17 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
     return (ps, r')
   -- a qualified definition's qualifier names where it is: its module
   -- (Book of Verse ch. 10, "Nested Module Qualification"; ch. 16)
-  for (p, s) in markers "$qual:" do
-    if let [n, q] := s.splitOn "|" then
-      let sc := scopeOf n
-      let x := (qualParts n).getLastD n
-      if sc.isEmpty then
-        throw s!"{p.show}: ({q}:){x}: {x} is defined at the top level, which has no name or path in openverse; a definition's qualifier names where it is defined: write {x}"
-      match ← qualifier sc [] p q with
-      | .module path _ =>
-        if path != sc then
-          throw s!"{p.show}: ({q}:){x}: {x} is defined in the module {shownP sc}, not in {shownP path}: a definition's qualifier names where it is defined"
-      | .locals => throw s!"{p.show}: (local:){x}: (local:) qualifies a function's locals, and {x} is a member of the module {shownP sc}"
-      | _ => throw s!"{p.show}: ({q}:){x}: {x} is defined in the module {shownP sc}, and {q} is no module: a definition's qualifier names where it is defined"
+  for (p, n, q) in markers qualMarker? do
+    let sc := scopeOf n
+    let x := (qualParts n).getLastD n
+    if sc.isEmpty then
+      throw s!"{p.show}: ({q}:){x}: {x} is defined at the top level, which has no name or path in openverse; a definition's qualifier names where it is defined: write {x}"
+    match ← qualifier sc [] p q with
+    | .module path _ =>
+      if path != sc then
+        throw s!"{p.show}: ({q}:){x}: {x} is defined in the module {shownP sc}, not in {shownP path}: a definition's qualifier names where it is defined"
+    | .locals => throw s!"{p.show}: (local:){x}: (local:) qualifies a function's locals, and {x} is a member of the module {shownP sc}"
+    | _ => throw s!"{p.show}: ({q}:){x}: {x} is defined in the module {shownP sc}, and {q} is no module: a definition's qualifier names where it is defined"
   -- a member's name as written in type `n`: `(q:)x`'s qualifier names `n`
   -- (its enum's value, its struct's field) (Book of Verse ch. 9, "Explicit
   -- Qualification")
@@ -796,10 +786,10 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
       let r := rAt (scopeOf n) (tps.map (·.name))
       let tps ← tps.mapM (·.mapBoundNamesM (r.ty p))
       let (ps, rb) ← params r p ps
-      let isCtor := effs.any (·.startsWith "$constructor:")
-      let effs ← effs.mapM fun e =>
-        if e.startsWith "$constructor:" then do return s!"$constructor:{← r.ty p (e.drop "$constructor:".length).toString}"
-        else pure e
+      let isCtor := effs.any (constructorSpec? · |>.isSome)
+      let effs ← effs.mapM fun e => match constructorSpec? e with
+        | some c => do return constructorSpec (← r.ty p c)
+        | none => pure e
       -- (a constructor's `F := e` items initialise fields: not binders)
       let body ← match isCtor, body with
         | true, .block bp items => do
