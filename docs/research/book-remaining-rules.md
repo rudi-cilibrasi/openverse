@@ -227,3 +227,25 @@ left, as each retires a reading openverse's own tests are about:
   3512 on both VMs, `:558`, `:573`): 12 tests spawn from narrower
   functions (`spawn_narrow_callers_*`, `choice_refined_spawn_narrow`), and
   20 generated programs (2 cases).
+
+## Five forms the tests refuse
+
+Each is refused where the source shows it (`checkBookForms`,
+`Elab/Source.lean`), with the source rules.
+
+| Form | The Book | openverse before |
+|---|---|---|
+| a default on a positional parameter, `F(X:int=0)` | ch. 6, `06_functions.md:51`: "Named parameters with default values are truly optional"; `Bugs/2023-01-18-FunctionParameterWithoutDomain.versetest:12` (3625) | accepted, the default ignored (`F()` refused) |
+| a named argument before a positional one | ch. 6, `06_functions.md:101`: "# Invalid: named arg before positional"; `DefaultNamed.versetest:122` (3629) | accepted, the positional ones taken first |
+| a `var` field in a struct | `Classes/Struct.versetest:31`: "Structs cannot contain pointers" (3607); ch. 9 line 29: "All struct fields are public and immutable by default" | accepted, settable as any field of a struct in a `var` |
+| a `return` or `break` that leaves a construction's field value | `Classes/Constructor.versetest:528` (3626, twice) | accepted |
+| `option{}` with nothing in it | `Option.versetest:94-95` (3622) | accepted, an option of `void` |
+
+Programs: five tests wrote a named argument first, to show that positional
+arguments are evaluated first (`choice_named_args`, `choice_named_args_more`,
+`multi_named_params`, `multi_recursive_named`,
+`multi_lazy_tuple_named_explicit`): they write it last now, their output the
+same; `structs` and `generic_structs` declared a struct's field `var` and
+set it through a `var` of the struct, which needs no `var` field: the field
+is plain now, their output the same. 86 generated programs of corpus2
+(`generic-mv`) write a named argument first and are refused.

@@ -6,7 +6,7 @@ vector2 := struct:
 player := struct:
     Name:string
     Pos:vector2 = vector2{}
-    var Score:int = 0
+    Score:int = 0
 
 suit := enum:
     Hearts

@@ -8,7 +8,7 @@ Tell(H:counter,Label:string,N:int)<transacts>:int =
 Order(H:counter,N:int,?A:int=Tell(H,"default A",N*10),?B:int=Tell(H,"default B",A+1))<transacts><decides>:int =
     N <= 1
     Print("visit {N} {A} {B} {H.N}")
-    A | Order[?B:=Tell(H,"named B",N+20),H,Tell(H,"pos",N+1)]
+    A | Order[H,Tell(H,"pos",N+1),?B:=Tell(H,"named B",N+20)]
 Even(H:counter,N:int,?S:int=Tell(H,"even default",1))<transacts><decides>:int =
     N <= 3
     Print("even {N} {S}")

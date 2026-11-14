@@ -15,7 +15,7 @@ Main()<transacts>:void =
     for (X := F(G("a", 2), ?C := G("c", 0), ?B := G("b", 5))):
         Print("{X}")
     # (the positional choice first: the omitted default once per alternative)
-    for (X := F(?B := 3, 1 | 2)):
+    for (X := F(1 | 2, ?B := 3)):
         Print("{X}")
     if (X := F(1, ?C := 0), X > 5):
         Print("if {X}")

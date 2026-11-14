@@ -384,6 +384,64 @@ partial def checkLoopExits (tops : List STop) : Except String Unit := do
           if !effs.contains "suspends" then go body
     | _ => pure ()
 
+/-- Five forms the Book's tests refuse, each where the source shows it
+    (`type-checks-other` of the [map](../../docs/research/book-test-conformance.md)):
+    a default on a positional parameter, `F(X:int=0)` ("Named parameters with
+    default values are truly optional", ch. 6;
+    `2023-01-18-FunctionParameterWithoutDomain.versetest:12`, 3625); a named
+    argument before a positional one (ch. 6: "Invalid: named arg before
+    positional"; `DefaultNamed.versetest:122`, 3629); a `var` field in a
+    struct ("Structs cannot contain pointers", `Classes/Struct.versetest:31`,
+    3607); a `return` or `break` that leaves a construction's field value
+    (`Classes/Constructor.versetest:528`, 3626); and `option{}` with nothing
+    in it (`Option.versetest:94`, 3622). -/
+partial def checkBookForms (tops : List STop) : Except String Unit := do
+  -- (a jump out of a construction's field value: `inLoop`, inside a loop
+  -- of the value's own code)
+  let rec jumps (inLoop : Bool) : SExpr → Except String Unit
+    | .ret p _ => throw s!"{p.show}: a return cannot leave a construction's field value (Book of Verse tests, Classes/Constructor.versetest)"
+    | .brk p => if inLoop then pure () else
+        throw s!"{p.show}: a break cannot leave a construction's field value (Book of Verse tests, Classes/Constructor.versetest)"
+    | .loop _ b => jumps true b
+    | .structDef .. => pure ()
+    | e => e.children.forM (jumps inLoop)
+  let isNamed : SExpr → Bool := fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false
+  let rec go : SExpr → Except String Unit
+    | .optionLit p (.block _ []) =>
+      throw s!"{p.show}: option\{} has no value: write option\{e}, or false for an empty option (Book of Verse tests, Option.versetest)"
+    | .construct p n ts fs => do
+      for f in fs do
+        match f with
+        | .decl _ _ _ _ v => jumps false v
+        | _ => pure ()
+      (SExpr.construct p n ts fs).children.forM go
+    | .structDef p _ _ fs => do
+      if let some f := fs.find? (·.isVar) then
+        throw s!"{p.show}: a struct's field is no var: '{f.name}' (a struct is a value; Book of Verse tests, Classes/Struct.versetest)"
+      fs.forM fun f => f.default.forM go
+    | e@(.app _ f args _) => do
+      let isMarker := match f with | .ident _ n => n.startsWith "$" | _ => false
+      if !isMarker then
+        if let some k := args.findIdx? isNamed then
+          if let some a := (args.drop (k + 1)).find? (!isNamed ·) then
+            throw s!"{a.pos.show}: a positional argument after a named one: the named arguments come last (Book of Verse ch. 6, \"Invalid: named arg before positional\")"
+      e.children.forM go
+    | e => e.children.forM go
+  let param (p : Pos) (ps : List SParam) : Except String Unit := do
+    if let some q := ps.find? (fun q => !q.named && q.default.isSome) then
+      throw s!"{p.show}: {q.name} has a default but is not named: only a named parameter has one, ?{q.name}:t = e (Book of Verse ch. 6, and its tests, 2023-01-18-FunctionParameterWithoutDomain.versetest)"
+    ps.forM (·.default.forM go)
+  for t in tops do
+    match t with
+    | .fn p n ps _ _ _ body => if !n.startsWith "$" then param p ps; go body
+    | .const _ _ _ _ e => go e
+    | .classDef _ _ _ _ _ _ _ fs ms =>
+      fs.forM fun f => f.default.forM go
+      for m in ms do
+        if let .fn mp mn ps _ _ _ body := m then
+          if !mn.startsWith "$" then param mp ps
+          go body
+
 /-- A `profile` block is code of a function's, not of an initializer: none
     in a constant's value or a field's default (Book of Verse tests,
     profile_simple.versetest:144, "Cannot use profiles inside initializers -
@@ -587,6 +645,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   checkNestedReturns allTops0r
   checkSpawnExits allTops0r
   checkLoopExits allTops0r
+  checkBookForms allTops0r
   checkProfiles allTops0r
   checkDefers allTops0r
   checkForClauses allTops0r
