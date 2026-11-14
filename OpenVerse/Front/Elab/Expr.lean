@@ -6,6 +6,7 @@ import OpenVerse.Front.Elab.ExpressionControl
 import OpenVerse.Front.Elab.ExpressionValues
 import OpenVerse.Front.Elab.ExpressionMarkers
 import OpenVerse.Front.Elab.ExpressionInitial
+import OpenVerse.Front.Elab.Comparisons
 
 namespace OpenVerse.Front
 open OpenVerse

@@ -678,7 +678,7 @@ reserved names.
 `checkReservedNames` reads, so `enum{ public }` and `enum{ decides }` were
 accepted.
 
-**openverse now.** `checkReservedNames` (`Elab/Source.lean`) reads each
+**openverse now.** `checkReservedNames` (`SourceRules.lean`) reads each
 enum's unqualified values. No program that compiled changes: none of
 openverse's tests, generators or the corpus names an enum's value so.
 
@@ -716,7 +716,7 @@ overloaded)"; every `archetype-blocks` case of
 `ParametricTypes.versetest` stopped there, as each includes the module
 `default_param`.
 
-**openverse now.** `checkDefinedOnce` (`Elab/Source.lean`) takes one
+**openverse now.** `checkDefinedOnce` (`SourceRules.lean`) takes one
 type and one alias of a name at two numbers of type parameters;
 `Aliases.expand` keeps, for each alias beside a type, the type's number
 (`Scope.typeArity`): `Scope.ty` writes a use out as the alias only at the

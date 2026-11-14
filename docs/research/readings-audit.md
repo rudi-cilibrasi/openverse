@@ -460,7 +460,7 @@ marked with `<decides>` create a failure context for their entire body").
   `F(X:int):int=X+(return 0)`): openverse accepts those still (with a
   warning, code never reached).
 
-**What openverse does.** `checkJumps` (`Front/Elab/Source.lean`), a check of
+**What openverse does.** `checkJumps` (`Front/SourceRules.lean`), a check of
 the source before elaboration: a `return` with a failure context between it
 and its function's body, or in a `<decides>` function anywhere but in tail
 position, and a `break` with one between it and its loop, are refused.
@@ -730,7 +730,7 @@ page](https://github.com/rudi-cilibrasi/openverse/wiki/Where-the-Book-disagrees-
 
 - **Prose** (ch. 1, `01_expressions.md:890-891`): "comparison operators return their left operand when the comparison succeeds, and comparison chains have special syntax that checks all adjacent pairs"; `:905-907`: "Verse does **not** evaluate the comparison chain `A <= B <= C` as `(A <= B) <= C`. Instead, it is special syntax that checks both `A <= B` **and** `B <= C`". The precedence table (`04_operators.md:50`) says the relational operators are right-associative, and `:40` that operators of one precedence "evaluate left to right".
 - **Tests:** `Operators/Associativity.versetest:6-9`: "Test that `<>` is left associative", `assert{not 1 <> 2 <> 1}`, which a chain (`1 <> 2` and `2 <> 1`) fails. For `<`, `<=`, `>` and `>=` (`:11-33`) the tests and the chain agree.
-- **openverse today:** a chain for every comparison, so `Associativity.versetest:9` differs. A reading that satisfies both: chains for `<`, `<=`, `>`, `>=` ("range checking", `01_expressions.md:868-869`), `<>` and `=` left-associative.
+- **openverse now:** the tests', since #618: `<>` is left-associative, so `1 <> 2 <> 1` fails, and the other comparisons chain (LANGUAGE.md, "Operators"); until then a chain for every comparison, so `Associativity.versetest:9` differed.
 
 ### `ToString` of a float
 
