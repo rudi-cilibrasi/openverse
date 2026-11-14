@@ -1253,7 +1253,13 @@ private def TyEnv.disjointStep (env : TyEnv) (apart : Ty → Ty → Bool) (a b :
   | .struct a as, .struct b bs =>
     let isCls (x : String) := env.classes.contains x
     let iface (x : String) := isCls x && (env.info x).isIface
-    if isCls a && isCls b then
+    -- (a type as a value, of `type` or a metatype below it, `TypeValues`,
+    -- is no object of the program's classes: `F(:subtype(c))` and
+    -- `F(:d)`, Book of Verse's tests, `ParametricTypes.versetest:719`
+    -- beside `:45`)
+    let typeValue (x : String) := env.classes.contains "type" && env.isSub x "type"
+    if isCls a && isCls b && typeValue a != typeValue b then true
+    else if isCls a && isCls b then
       -- one parametric class at disjoint type arguments
       if a == b && !iface a then as.length == bs.length && (as.zip bs).any fun (x, y) => apart x y
       else if iface a || iface b then

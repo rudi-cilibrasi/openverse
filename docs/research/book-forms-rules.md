@@ -725,3 +725,30 @@ construction naming the shared name names the type; the alias names the
 type at its own number without naming itself. Nothing after the aliases'
 pass knows the alias existed. No program that compiled changes.
 
+## A type as a value is no object
+
+**The rule.** A type as a value, of `type` or of a metatype below it
+(`subtype(c)`, `castable_subtype(c)`, `concrete_subtype(c)`), and an object
+of one of the program's classes or interfaces are disjoint: two overloads
+`F(:subtype(c))` and `F(:d)` are distinct, and a module's function may
+take the name of one around it with such parameters (functions overload
+across scopes, `checkNoShadowing`).
+
+**The Book.** Ch. 11 ("Type values"): a value of `subtype(c)` is a type,
+never an instance; ch. 10, "Shadowing and Qualification", and the tests'
+overloading across scopes (`Overloading.versetest` 41-43). The tests:
+`Tests/ParametricTypes.versetest` defines `F1(C:c0(int)):int` at the top
+level (`:45`) and `F1(:subtype(class1)):void` in the module
+`subtype_params` (`:717-719`), and every case of the file that names
+`F1` includes both; 29 of the file's cases agree once these are distinct.
+
+**openverse before.** A class and an interface overlapped unless the
+class was `<final>` and did not implement it, and `subtype(class1)` is an
+interface (`TypeValues`): "subtype_params.F1 has the name of the function
+F1, and a call could fit both".
+
+**openverse now.** `TyEnv.disjointStep` (`Types.lean`): a class or
+interface below `type` and one that is not are disjoint (no class of the
+program is below a metatype: their values' classes are the front end's,
+`$type:C`). The rule only admits overloads; no program that compiled
+changes.

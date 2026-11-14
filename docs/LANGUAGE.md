@@ -616,7 +616,9 @@ take an overloaded function's name either.
   another (`false` is each), and a
   class or interface with an interface or a class above or below it (but a
   `<final>` class and an interface it does not implement are disjoint, and
-  so are one parametric class's instances at disjoint type arguments). Function
+  so are one parametric class's instances at disjoint type arguments, and a
+  type as a value, of `type` or a metatype, `subtype(c)`, and an object of
+  a class: `F(:subtype(c))` and `F(:d)` are two overloads). Function
   types overlap regardless of their signatures or effects. A pair that overlaps is refused where the later
   one is defined.
 - **Tuples and containers** (#500). A tuple and an array are distinct if
