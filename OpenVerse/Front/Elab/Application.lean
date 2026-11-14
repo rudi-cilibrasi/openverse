@@ -3,6 +3,7 @@
    are tried. Public declarations retain OpenVerse.Front names. -/
 import OpenVerse.Front.Elab.Builtins
 import OpenVerse.Front.TypeValues
+import OpenVerse.Front.FinalSuper
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -303,7 +304,9 @@ partial def elabFunctionCall (cb : AppElab) (ctx : Ctx) (p : Pos) (f : SExpr) (n
   match ctx.sig? name with
   | some s =>
     -- a call has its callee's effects
-    noteFx p s.fx (some (if s.isConst then s!"uses the constant {name}" else s!"calls {name}"))
+    -- (a built-in's call that the front end wrote as its helper's names
+    -- the built-in, `FinalSuper.calledBy?`)
+    noteFx p s.fx (some (if s.isConst then s!"uses the constant {name}" else s!"calls {(FinalSuper.calledBy? name).getD name}"))
     if s.isConst then
       elabValueApp cb ctx p f ⟨.call s.idx [], s.ret⟩ args bracket
     else
