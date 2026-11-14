@@ -50,7 +50,27 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   return ⟨.assign slot result.e, result.ty⟩
 
 partial def elabECore (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
+  let st0 ← get
   let result ← elabERaw ctx se exp
+  -- (a `for` whose values are not of the element type expected: its body
+  -- at that type, as a typed binding is, so that `false` there is an empty
+  -- option, `X:[][]?int = for (…) { for (…) { false } }`, the Book's tests,
+  -- `SOL-4137-MemoryLeakCreatingA3dArray.versetest`; when that is refused
+  -- too, the first, which its context refuses as before)
+  let result ← match se, exp with
+    | .forE p clauses body, some et@(.arr t) =>
+      if ctx.typeOnly then pure result else
+      let st1 ← get
+      let fits ← tryCatch (do discard <| coerce p result et; pure true) (fun _ => pure false)
+      set st1
+      if fits then pure result else
+        set st0
+        let v := s!"$forBody{p.line}_{p.col}"
+        let typed : SExpr := .block body.pos [.decl body.pos v (some t.toSTy) false body, .ident body.pos v]
+        match ← tryCatch (some <$> elabERaw ctx (.forE p clauses typed) exp) (fun _ => pure none) with
+        | some r => pure r
+        | none => do set st1; pure result
+    | _, _ => pure result
   if let some target := exp then
     if target != .void && result.ty != target && result.ty != .never &&
         (!result.ty.params.isEmpty || !target.params.isEmpty) then
