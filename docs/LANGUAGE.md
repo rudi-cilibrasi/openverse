@@ -26,7 +26,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Comments | `#` to the end of the line, nested `<# … #>`, `<#>` indented comments (the rest of the line and every following line indented more than it; see [Source text](#source-text)) | ch. 0 |
 | Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` an ASCII character other than a line break, a tab included, or an escape; a non-ASCII one, `'é'`, is a `char32`, Book of Verse ch. 1), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates), `float` `1.5`, `2.0e-7`, `1e3`, `12.34f64`, `1234f64` (digits, then a point and digits or an exponent or both, or the suffix `f64`, which may follow either; the nearest double, which must be finite: `2.0e308` is refused; `f32` and `f16` are read and refused as not supported); paths `/Verse.org/Random` parse (in `using{…}`, ignored; as values, refused; see [Source text](#source-text)) | §1.3–1.7 |
 | Types | `int`, `logic`, `char`, `char32`, `any` (see [any](#any)), `comparable` (see [comparable](#comparable)), `rational` (see [rational](#rational)), `float` (see [float](#float)), refinement types `type{_X:int where 0 <= _X, _X <= 120}` (see [Refinement types](#refinement-types)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void` (which takes any value; `tuple()` is the type of the empty value alone, see [Equality and the empty value](#equality-and-the-empty-value)), function types `type{_(:int)<decides>:int}`, with named parameters `type{_(:int, ?B:int):int}`, and `int->int` (see [Function values](#function-values)); type aliases `player_id := int`, `pair(t:type) := tuple(t, t)` (see [Type aliases](#type-aliases)); types as values of classes and interfaces, `subtype(c)`, `castable_subtype(c)`, `concrete_subtype(c)` and `type` (see [Types as values](#types-as-values)); a conversion written as a call, `int(0)`, `void(0)`, `(?int)(option{0})`, `s(s{})`, of a value of a type that is a subtype of the one named; a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
-| Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e`, which state their type there as in a module (ch. 16: "type inference with `:=` alone is not allowed"; `C := e` names a type, when `e` is one: [Type aliases](#type-aliases)) (definitions on one line, at the top level, in a module or in a block, are separated by `;` or `,`: `X:int=0, Y:int=0`; a constant may use one defined before it in its own scope, a module's or the top level's, and one of another module or of an enclosing scope wherever it is defined, as the Book's tests have it (`DefaultValueAssignment.versetest` 102, 128); not itself, directly or through other constants); locals `X := e`, `X:t = e`, `var X:t = e`, and a tuple destructured, `(X:int, _, Z:string) = e` (each named element a local of the block, `_` skipping one, `e` evaluated once); no shadowing; no name defined twice in a scope but [overloaded](#overloading) functions; no [reserved name](#reserved-names) | §3.1–3.4 |
+| Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e`, which state their type there as in a module (ch. 16: "type inference with `:=` alone is not allowed"; `C := e` names a type, when `e` is one: [Type aliases](#type-aliases)) (definitions on one line, at the top level, in a module or in a block, are separated by `;` or `,`: `X:int=0, Y:int=0`; a constant may use one defined before it in its own scope, a module's or the top level's, and one of another module or of an enclosing scope wherever it is defined, as the Book's tests have it (`DefaultValueAssignment.versetest` 102, 128); not itself, directly or through other constants); module-scoped `var X:weak_map(k, v) = map{}` (see [Module-scoped variables](#module-scoped-variables)); locals `X := e`, `X:t = e`, `var X:t = e`, and a tuple destructured, `(X:int, _, Z:string) = e` (each named element a local of the block, `_` skipping one, `e` evaluated once); no shadowing; no name defined twice in a scope but [overloaded](#overloading) functions; no [reserved name](#reserved-names) | §3.1–3.4 |
 | Mutation | `set X = e`, `set X += e` (`-=`, `*=`), `set A[i] = e` (fails out of range; returns `e`), and paths `set S.F.G = e`, `set A[i][j] op= e`, `set M[k].F = e`: indices and keys evaluated once, left to right, then the new value, then the variable rebuilt (for `op=`, the old value is read after the new one, from the variable as the new one left it, which is then rebuilt from that: `set X += e` is `V := e; set X = X + V`, the Book's tests, `ArrayAppend.versetest` 140, 183); an index out of range or a missing intermediate key fails, while the last key of a path inserts | §3.3, §3.5, §9.3 |
 | Blocks | indented (`:`), braced (`{ }`), inline (`then`/`do`), `.` and an expression on its line wherever `:` or `{…}` may start a body (`if (c). e else. f`, `for (X:Xs). e`, `spawn. F()`, `loop. break`; also `option`, `logic`, and `array` and `map`, whose `:` blocks separate their items by `,`, `;` or new lines: `array:` and the lines `1`, `2`; in braces an array's elements are separated by commas, or by `;` and new lines, not both: `array{1; 2; 3}`), `block:`, `( a; b )` sequences, also as an argument (`F(Log(); 42)` passes 42) and as a `case`'s value (`case(a; b)`); `;` and new lines separate the items of a block, and `;` may end a line or a braced block (`{1; 2;}` is `{1; 2}`) (the next item then follows the line rules, so a class's last field may end in `;`); in a block, statements that commas join on a line are a tuple (ch. 1, "Semicolons vs Commas", and its tests, `SemicolonsVsCommas.versetest` 70, 95, 100: `{1.0, 2}` is a `tuple(float, int)`, `option{1, 2}` holds `(1, 2)`, `for (X := 1..2) {3, X}` is an array of pairs), definitions joined so are the block's definitions in turn (`X:int = 0, Y:int = 0`), and a group of definitions and values is each in order, a definition visible to what follows it, then the tuple of their values (`option{V := 3, V > 0, V}` holds `(3, 3, 3)`, a `var`'s value taken where it is defined); the clauses of `if`, `for`, `first` and the clause macros, the arms of `sync`, `race` and `rush`, a construction's fields and an array's or map's items keep commas as separators; a comma that starts a line is not the block's but the list's around it; a body after `:` may be empty wherever one may be written, as `{}` may (`class:`, `struct:`, `then:`, … whose next line is no deeper than the construct, or nothing follows); a function's or method's braced body may put its `{` on the next line, at the definition's column; a value after `=`, `:=`, `set … =` or a `case` arm's `=>` that starts a later line, deeper, is the indented block of those lines (`Value :=` and the lines `1`, `2`, `3` is `3`; and the line `1, 2, 3`, `(1, 2, 3)`), as a function's body is | §2.2–2.4 |
 | Operators | `* + -`, unary `-`, comparisons `= <> < <= > >=` (failable, return the left operand, chains check every pair; `=` and `<>` of any two comparable types, by value: see [Equality and the empty value](#equality-and-the-empty-value)), `and` (a scope of its own, ch. 7: names its left operand defines are visible on its right, and neither side's escape; `A and B and C` is `(A and B) and C`), `or`, `not` (below the comparisons, above `and`: `not X = Y` is `not (X = Y)`), `?`, `.Length`, `A[i]`, `T(k)` | ch. 4 |
@@ -2236,6 +2236,54 @@ Main()<decides>:void =
   [research/weak-map.md](research/weak-map.md), "Is weakness observable?".
 - Not yet: `weak_map(…)` as a value (`t := weak_map(int, int)` in a body),
   as types as values are classes' and interfaces' only.
+
+## Module-scoped variables
+
+A `var` at the top level or in a module is a variable of the program (Book
+of Verse ch. 3, "Module-Scoped weak_map Variables"; ch. 16, "Module-Scoped
+Variables"; ch. 18, "Persistent Variables";
+[research/weak-map.md](research/weak-map.md)), and it is only ever a
+`weak_map`, read and written one entry at a time:
+
+```verse
+key := class<unique><persistent><module_scoped_var_weak_map_key>:
+    Id:int
+saved := struct<persistable>:
+    Level:int = 1
+progress := module:
+    var Levels<public>:weak_map(key, saved) = map{}
+    GetLevel<public>(K:key)<transacts>:int =
+        if (S := Levels[K]) then S.Level else 1
+    SetLevel<public>(K:key, L:int)<transacts><decides>:void =
+        set Levels[K] = saved{Level := L}
+```
+
+- **The rules**, each refused otherwise, as the Book's tests refuse them
+  (3502): its type is a `weak_map` ("Direct `var` declarations of simple
+  types (like `var X:int = 0`) are not allowed at module scope"); its key
+  type a class with `<module_scoped_var_weak_map_key>`; when that class is
+  `<persistent>`, its value type persists (ch. 17, as a `<persistable>`
+  struct's fields must: not `rational`, `any`, `comparable`, a class or a
+  weak map); `X[k]`, `set X[k] = v` and paths through `X[k]` are its uses,
+  and any other use of `X`, reading or replacing the whole map, is refused
+  ("The complete map can neither be read nor replaced"); at most four with
+  `<persistent>` keys, and at that limit one of them with a class value
+  (the tests' "Set to 4 for VerseTestScriptCmd", `weak_map.versetest`
+  623-664). `<persistent>` and `<module_scoped_var_weak_map_key>` are class
+  specifiers.
+- **Uses.** An entry is read with `<reads>` and written with `<writes>`
+  (`<transacts>` has both), from any function, method, `<suspends>`
+  function or task, and a failure context undoes the writes in it. A local,
+  parameter or member named like one is refused, as for a constant. Its
+  name's access is the module's (`<public>` to be used outside it).
+- **Its value** starts as `map{}` before `Main` runs and lives until the
+  program ends: the `var` fields of one object made by `Main`'s prelude
+  (`$module_state`, [DESIGN.md](DESIGN.md#weak-maps-and-module-scoped-vars)).
+- Not yet: an initial value with entries (every module-scoped `var` of the
+  Book starts as `map{}`); `var<w>` write access on one; the engine's key
+  types (`player`, `session`, `persistent_key`, `session_key`), and
+  persistence itself: openverse runs one program, whose module state starts
+  empty.
 
 ## Types as values
 

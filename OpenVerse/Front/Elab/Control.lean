@@ -147,10 +147,15 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
   let keyRefDecides : Expr := .seq (.prim .query [.lit (.logic true)]) (.lit .void)
   -- (code made by the elaborator, at no position, is checked where its
   -- source is: an operation of a choice's dictionary, #283)
+  -- (the module state, whose fields are the module-scoped variables, is a
+  -- root of its own: the prototype of its class, `ModuleVars`)
+  let stateTy : Ty := .struct ModuleVars.stateClass []
+  let rootTy? (root : String) : Option Ty :=
+    if root == ModuleVars.stateName then some stateTy else (ctx.lookup root).map (·.ty)
   if !ctx.canFail && p.line != 0 then
     if let some (root, steps) := path lhs then
-      if let some l := ctx.lookup root then
-        if throughMap l.ty steps then
+      if let some rty := rootTy? root then
+        if throughMap rty steps then
           eerr p "set through a map's key can fail (the key's reference is <decides> in Verse, the Book of Verse's API reference; its last key inserts), so it must be in a failure context (an if condition, a for clause, option{…}, logic{…}, not, the left of or, or a <decides> function)"
   if let some (root, steps) := path lhs then if general steps || opaqueIndex root steps then
     -- `set X.p = e` with a path of two or more steps (Book of Verse §3.5, §9.3):
@@ -159,10 +164,16 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     -- is missing makes the set fail); then the new leaf; then the
     -- containers are rebuilt from the leaf up, ending with the variable
     -- the variable must be a var unless the path writes an object (below)
+    let mut pre : Array Expr := #[]
     let l ← match ctx.lookup root with
       | some l => pure l
-      | none => eerr p s!"unknown variable '{root}'"
-    let mut pre : Array Expr := #[]
+      | none =>
+        if root == ModuleVars.stateName then
+          let some a := ModuleVars.stateRef? ctx.types | eerr p "internal error: no module state"
+          let g ← fresh stateTy
+          pre := pre.push (.assign g (.lit (.ref a)))
+          pure { name := root, slot := g, ty := stateTy, mutable := false }
+        else eerr p s!"unknown variable '{root}'"
     -- per step: the container's slot and type, and the step
     let mut levels : Array (Nat × Ty × Pos × Option String × Option (Nat × Ty)) := #[]
     let mut cur := l.slot
@@ -382,7 +393,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         if ctx.types.isRefClass sn then
           let (j, ft) := (fieldIndex (ctx.types.fields sn targs) f).get!
           pre := pre.push (← setFieldAt ctx.types p sn targs c f j ft newVal)
-          noteFx p ["writes"]
+          noteFx p ["writes"] (if sn == ModuleVars.stateClass then some s!"sets the module-scoped var {ModuleVars.shown f}" else none)
           wroteObject := true
         else
           let fs := ctx.types.fields sn targs

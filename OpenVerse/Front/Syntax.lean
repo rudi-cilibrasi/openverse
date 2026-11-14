@@ -376,6 +376,12 @@ inductive STop where
     elaborator checks it at `t` and drops it (#503). -/
 def typeDefaultPrefix : String := "$typeDefault:"
 
+/-- The specifier that marks a constant as a module-scoped `var` (`var X:t =
+    e` at the top level or in a module, Book of Verse ch. 3, 16, 18): the
+    parser writes it so, with `$var:w` for each specifier `w` on its `var`,
+    and `ModuleVars.desugar` takes it out of the program. -/
+def moduleVarMarker : String := "$var"
+
 /-- The name an attribute's expression starts with: `deprecated` of
     `deprecated{…}`, `a.bb` of `@a.bb`. -/
 partial def SExpr.attrHead : SExpr → String

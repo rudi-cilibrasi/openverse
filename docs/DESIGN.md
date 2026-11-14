@@ -1900,6 +1900,24 @@ entry's, which the reader holds), and openverse never reclaims objects, so
 holding a weak map as a map is exact; the argument, and what a collector
 that reclaimed objects could drop, are in the research note.
 
+A module-scoped `var` is a `var` field of one object, the program's module
+state (`ModuleVars`). After the modules are resolved and the aliases
+written out, `ModuleVars.desugar` checks the Book's rules on each
+(`var X:t = e`, a constant the parser marks `$var`), adds a hidden class
+`$module_state` whose `var` fields they are (last, so no class's tag
+moves), and writes each use `X[k]` as `$moduleState.X[k]`, refusing any
+other use. Every class without type parameters has a prototype that
+`Main`'s prelude makes before `Main` runs (#37), at an address Verse Core
+types a reference literal to anywhere (`tc`'s `.lit (.ref a)` against
+`Sigs.protos`, `HeapOK`, `PreludeOK`); `$moduleState` elaborates to that
+literal (`ModuleVars.stateRef?`), and a `set` path rooted at it reads it
+into a slot first. So a read is a field read (`<reads>`), a `set` writes
+the object in place (`<writes>`), the failure contexts undo it as any
+field's write, and the C runtime's object store holds the module state as
+it holds any object. The prototype's fields are their types' defaults, the
+empty map, which is the initial value the rules allow. Verse Core, OVBC and
+the C runtime are unchanged.
+
 ## Rationals: helpers written in Verse
 
 A `rational` (#116) is a front-end type whose Verse Core form is the tuple

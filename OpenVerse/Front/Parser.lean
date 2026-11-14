@@ -2223,6 +2223,29 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) (par
           continue
         bump
       continue
+    -- `var X<specs>:t = e`: a module-scoped variable (Book of Verse ch. 3,
+    -- 16, 18), a constant marked `moduleVarMarker`, with `$var:w` for each
+    -- specifier on its `var`, which `ModuleVars.desugar` checks and takes
+    if t.isKw "var" then
+      bump
+      let varSpecs ← parseSpecs
+      let name0 ← expectIdent
+      let name := pfx ++ name0
+      owner := name
+      let pre ← parseSpecs
+      let n ← peekT
+      if n.isSym "(" then
+        perr n s!"var {name0}(…): a module-scoped var is a variable, not a function (Book of Verse tests, Function.versetest 147: 3502)"
+      ofExcept <| EffectPolicy.checkName t.pos pre
+      if !n.isSym ":" then perr n s!"expected ':' and the type of the module-scoped var {name0}"
+      bump
+      let ty ← parseType
+      let a ← peekT
+      if !a.isSym "=" then perr a s!"expected '=' and the initial value of the module-scoped var {name0}"
+      bump
+      tops := tops.push (.const t.pos name (pre ++ moduleVarMarker :: varSpecs.map (s!"{moduleVarMarker}:" ++ ·))
+        (some ty) (← parseFnBody))
+      continue
     -- (`(q:)name`: a qualified definition, whose qualifier must name the
     -- module it is in, `$qual:A::name|q` for `resolveModules` to check)
     let qual? ← match ← peekQual with

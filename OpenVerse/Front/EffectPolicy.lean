@@ -102,6 +102,10 @@ def specifierPlaces : List (String × List Place) :=
    ("castable", [.classType, .interfaceType]),
    ("unique", [.classType, .interfaceType]),
    ("persistable", [.classType, .structType]),
+   -- (a class whose objects key module-scoped `var weak_map`s, and one whose
+   -- entries persist: `player`, `session`, Book of Verse ch. 3)
+   ("persistent", [.classType]),
+   ("module_scoped_var_weak_map_key", [.classType]),
    ("override", [.method, .field, .structField]),
    ("public", [.definition, .function, .method, .field, .structField, .var, .classType, .interfaceType, .structType]),
    ("internal", [.definition, .function, .method, .field, .var, .classType, .interfaceType, .structType]),

@@ -43,6 +43,7 @@ import OpenVerse.Front.Types
 import OpenVerse.Front.ChoiceTypes
 import OpenVerse.Front.UpperBounds
 import OpenVerse.Front.SubtypeEvidence
+import OpenVerse.Front.ModuleVars
 import Std.Data.HashMap
 
 namespace OpenVerse.Front

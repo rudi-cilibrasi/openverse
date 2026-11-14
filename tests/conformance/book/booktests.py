@@ -428,13 +428,20 @@ TEST_NAMES = {
         "TakeExtension", "PlusTwo", "TestParametricExtensionMethod",
         # the digest generator's round trip of a weak map
         # (weak_map.versetest:183, "Test the digest generator")
-        "TestWeakMap"],
+        "TestWeakMap",
+        # a null object of a class, which Verse has none of (the
+        # Bugs/FORT-635190, FORT-721882, FORT-1033995 and SOL-7388 tests)
+        "MakeNull"],
 }
 # Engine APIs the Book's Runtime API reference places outside the language:
 # persistence, JSON, Unreal objects and AutoRTFM. A case using one is not
 # translatable.
 ENGINE_NAMES = ["Persistence", "persistent_key", "FromJson", "ToJson", "IsUObject",
-                "GetUObjectPathName", "IsAutoRTFMEnabled"]
+                "GetUObjectPathName", "IsAutoRTFMEnabled",
+                # the session keys of the persistence system (ch. 3, "Common
+                # key types": "Transient keys that do not persist across
+                # sessions") and their module (weak_map.versetest 673-688)
+                "session_key", "Session"]
 
 
 # Stand-ins for test runner definitions whose behaviour cannot change a verdict.

@@ -587,6 +587,9 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   Access.checkConsistency levels resolved
   let access := Access.Env.of levels (Access.Sites.of resolved) resolved
   Access.checkUses access resolved
+  -- (module-scoped `var`s: checked, held as the `var` fields of the module
+  -- state's object, each use one through it, docs/research/weak-map.md)
+  let resolved ← ModuleVars.desugar resolved
   -- (types as values, `subtype(t)` and its kin: classes and interfaces)
   let resolved ← TypeValues.desugar resolved
   -- (a castable_subtype(c) bound's castability, a subtype relation)
