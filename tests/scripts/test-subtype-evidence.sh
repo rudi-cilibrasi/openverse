@@ -8,6 +8,7 @@ make -s -C runtime build/cverse
 lake env lean --run tests/lean/SubtypeEvidenceScopes.lean
 lake env lean --run tests/lean/SubtypeEvidenceInputs.lean
 lake env lean --run tests/lean/MetadataStorage.lean
+lake env lean --run tests/lean/MetadataConcurrency.lean
 lake env lean --run tests/lean/MetadataGetters.lean
 lake env lean --run tests/lean/ChoiceBoundMethods.lean
 lake env lean --run tests/lean/BoundMethodValues.lean
