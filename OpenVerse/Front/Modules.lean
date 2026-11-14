@@ -480,11 +480,20 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
   let modsS : Std.HashSet String := Std.HashSet.ofList modules
   let shown (n : String) : String := ".".intercalate (qualParts n)
   let shownP (ps : List String) : String := ".".intercalate ps
-  let mut seenM : Std.HashSet String := {}
-  for (p, m) in markers moduleMarker? do
+  -- (a module may be defined in parts, which are one module; their access
+  -- levels agree: the Book of Verse's tests, `Modules/PartialModuleDefinitions.versetest`
+  -- 157-176, 3623)
+  let mut seenM : Std.HashMap String (Option String) := {}
+  for t in tops do
+    let .const p n specs _ _ := t | continue
+    let some m := moduleMarker? n | continue
     if defsS.contains m then throw s!"{p.show}: {shown m} is defined twice (a module and a definition)"
-    if seenM.contains m then throw s!"{p.show}: module {shown m} is defined twice"
-    seenM := seenM.insert m
+    let level := Access.levelOf specs
+    if let some first := seenM[m]? then
+      if first != level then
+        let say (l : Option String) : String := match l with | some l => s!"<{l}>" | none => "internal"
+        throw s!"{p.show}: the parts of module {shown m} have different access levels, {say first} and {say level}: every part of a module has the same (Book of Verse tests, PartialModuleDefinitions.versetest)"
+    seenM := seenM.insert m level
   -- (one name's overloads share their access)
   let fnLevels : Std.HashMap String (List (Option String)) := real.foldl (fun m t => match t with
     | .fn _ n _ _ specs .. => m.insert n (Access.levelOf specs :: m.getD n [])

@@ -3111,7 +3111,12 @@ Main():void =
   classes, interfaces, [type aliases](#type-aliases) and other modules. A
   constant in a module, as at the top level, states its type (`X:int = 1`, not `X := 1`); an
   alias is no constant (`point<public> := tuple(int, int)`). A module is
-  not a value.
+  not a value. A module may be defined in parts, `M := module:` written
+  again in the same scope: the parts are one module, one scope, whose
+  members are all the parts'; the parts have one access level and give
+  the same `@available`, or none (the Book's tests,
+  `PartialModuleDefinitions.versetest` 157-176, `available.versetest`
+  317-368; ch. 16: a module's files share its namespace).
 - A name is looked up from its definition's module outward, one scope at a
   time, up to the top level. At each scope, the scope's own definitions
   come first, then the members of the modules it opens with `using{M}`.

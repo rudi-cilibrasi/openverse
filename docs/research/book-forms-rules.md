@@ -823,3 +823,39 @@ cannot succeed (`iface_views_never`, `choice_immediate_suspends_source_impossibl
 (`GenerateFunctionForParametricInterface.versetest:10`,
 `TypeParam.versetest:32`): a parametric type applied as a value, read as
 a conversion of `int` (metatypes).
+
+## A module in several parts
+
+**The rule.** A module may be defined more than once in one scope, `M :=
+module:` written again (qualified or not, `(A:)B := module:` beside `B :=
+module:` in `A`): the parts are one module and one scope, whose members
+are all the parts', so a member defined in two parts is defined twice. The
+parts have one access level, and give the same `@available` or none.
+
+**The Book.** Ch. 16 (`16_modules.md:15-27`): "All `.verse` files within
+the same folder are considered part of that module and share the same
+namespace … to split large modules across multiple files". The tests,
+`Tests/Modules/PartialModuleDefinitions.versetest`: "Test the matching of
+attibutes of partial module definitions" (`:156`): `A<public>` twice and
+`A<internal>` twice valid, `A<internal>` beside `A<public>` refused
+(`:157-165`, 3623); "Test the matching of qualifiers" (`:167-178`), valid
+with or without `(A:)`, "We previously prohibited this, but there isn't any
+reason why as long as there's separate verification that the correct
+qualifier is used" (`:176`); `(C:)B` in `A` refused for its qualifier
+(`:180`). `Tests/Attributes/available.versetest`: parts with no
+`@available` or the same one valid (`:317`, `:326`), "some but not all
+modules have available" and "different parts have different versions"
+refused (`:337-368`, 3552). Also `AccessLevelInheritance.versetest:669` and
+`Bugs/FORT-722788-LookupBindingDataOfFunctionInModulePart.versetest`.
+
+**openverse before.** "module M is defined twice".
+
+**openverse now.** The parser flattens a module into its members'
+qualified names and a marker per part (`$module:M`), so the parts are one
+module already: `resolveModules` (`Modules.lean`) takes a module's second
+marker when the parts' access levels agree, and `Attributes.apply` checks
+that each part gives the module the same `@available` (an attribute is on
+the first part written after it). `checkDefinedOnce` sees the members of
+all parts in one scope. No program that compiled changes; the four
+`available.versetest` refusals that agreed through "defined twice" agree
+by the rule now.
