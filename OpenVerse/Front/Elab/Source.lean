@@ -11,9 +11,8 @@ import OpenVerse.Front.TypeArguments
 namespace OpenVerse.Front
 open OpenVerse
 
-/-- A program's source admitted (`admitSource`): checked against the effect
-    policy and the source profile, modules resolved, and the compiler's own
-    definitions it needs. -/
+/-- A program's source admitted (`admitSource`): checked, its names resolved
+    and its desugarings done, with the compiler's own definitions it needs. -/
 structure Admitted where
   /-- The program's definitions, modules resolved (#112), then the entry
       expression's function `$Do`, if any. -/
@@ -91,7 +90,7 @@ def checkNoShadowing (tops : List STop) : Except String (List ScopePair) := do
   let shown (ps : List String) : String := ".".intercalate ps
   -- (definitions written `(M:)x` in their module)
   let qualified : List String := tops.filterMap fun
-    | .const _ n _ _ _ => if n.startsWith "$qual:" then ((n.drop "$qual:".length).toString.splitOn "|").head? else none
+    | .const _ n _ _ _ => (qualMarker? n).map (·.1)
     | _ => none
   -- the definitions of the top level and the modules: each one's scope, name,
   -- what it is and where
@@ -105,8 +104,8 @@ def checkNoShadowing (tops : List STop) : Except String (List ScopePair) := do
   let defs : List (List String × String × String × Pos) := tops.filterMap fun t =>
     let (p, n) := match t with
       | .fn p n .. | .const p n .. | .classDef p n .. => (p, n)
-    if n.startsWith "$module:" then
-      let ps := qualParts (n.drop "$module:".length).toString
+    if let some m := moduleMarker? n then
+      let ps := qualParts m
       some (ps.dropLast, ps.getLastD "", "module", p)
     else
       let ps := qualParts n
@@ -156,8 +155,8 @@ def checkNoShadowing (tops : List STop) : Except String (List ScopePair) := do
       params parts.dropLast p (shown parts) ps
     | .const p n _ _ body =>
       let parts := qualParts n
-      if n.startsWith "$module:" then
-        let mp := qualParts (n.drop "$module:".length).toString
+      if let some m := moduleMarker? n then
+        let mp := qualParts m
         if !qualified.contains (qualJoin mp) then
           refuse p "the module" (mp.getLastD "") "" (shown mp.dropLast) (outers mp.dropLast false (mp.getLastD ""))
         continue
@@ -245,6 +244,14 @@ def checkConstantOrder (tops : List STop) : Except String Unit := do
         if j > i && scope u == scope n && q.file == p.file then
           throw s!"{p.show}: the value of the constant {shown n} names {shown u}, which is defined after it in the same scope ({q.show}): a constant may only use one defined before it (Book of Verse's tests, DefaultValueAssignment.versetest)"
 
+/-- A type of the program's own does not take a built-in type's name. -/
+def checkTypeNames (tops : List STop) : Except String Unit := do
+  for t in tops do
+    match t with
+    | .const p n _ _ (.structDef ..) | .const p n _ _ (.enumDef ..) | .classDef p n .. =>
+      if ("char32" :: typeNames).contains n then throw s!"{p.show}: {n} is a built-in type"
+    | _ => pure ()
+
 /-- No definition takes a reserved name (`reservedNames`), at any scope. -/
 def checkReservedNames (tops : List STop) : Except String Unit := do
   for t in tops do
@@ -279,16 +286,8 @@ end
     (Book of Verse ch. 7: it "cannot be used in positions where a value is
     expected"): not a block's last, whose value is the block's, nor an operand
     (`A and defer{…}`), a branch or a body of its own. -/
-partial def checkDefers (tops : List STop) : Except String Unit := do
-  let goField (fs : List SField) : Except String Unit :=
-    fs.forM fun f => f.default.forM checkDefersIn
-
-  let rec goTop : STop → Except String Unit
-    | .fn _ _ ps _ _ _ body => do ps.forM (·.default.forM checkDefersIn); checkDefersIn body
-    | .const _ _ _ _ (.structDef _ _ _ fs) => goField fs
-    | .const _ _ _ _ e => checkDefersIn e
-    | .classDef _ _ _ _ _ _ _ fs ms => do goField fs; ms.forM goTop
-  tops.forM goTop
+def checkDefers (tops : List STop) : Except String Unit :=
+  tops.forM (·.code.forM checkDefersIn)
 
 /-- A literal value, which neither fails nor has several values. -/
 partial def SExpr.isLiteral : SExpr → Bool
@@ -315,14 +314,7 @@ partial def checkForClauses (tops : List STop) : Except String Unit := do
       cs.forM go; go b
     | .structDef _ _ _ fs => fs.forM fun f => f.default.forM go
     | e => e.children.forM go
-  for t in tops do
-    match t with
-    | .fn _ _ ps _ _ _ body => ps.forM (·.default.forM go); go body
-    | .const _ _ _ _ e => go e
-    | .classDef _ _ _ _ _ _ _ fs ms =>
-      fs.forM fun f => f.default.forM go
-      for m in ms do
-        if let .fn _ _ ps _ _ _ body := m then ps.forM (·.default.forM go); go body
+  tops.forM (·.code.forM go)
 
 /-- The code of a `spawn` cannot leave it: no `return`, and no `break` but
     of a loop inside it (Book of Verse tests, `SpawnAndTask.versetest` 876-892:
@@ -341,14 +333,7 @@ partial def checkSpawnExits (tops : List STop) : Except String Unit := do
     | .app _ (.ident _ "$spawn") [b] false => inSpawn false b
     | .structDef _ _ _ fs => fs.forM fun f => f.default.forM go
     | e => e.children.forM go
-  for t in tops do
-    match t with
-    | .fn _ _ ps _ _ _ body => ps.forM (·.default.forM go); go body
-    | .const _ _ _ _ e => go e
-    | .classDef _ _ _ _ _ _ _ fs ms =>
-      fs.forM fun f => f.default.forM go
-      for m in ms do
-        if let .fn _ _ ps _ _ _ body := m then ps.forM (·.default.forM go); go body
+  tops.forM (·.code.forM go)
 
 /-- A `profile` block is code of a function's, not of an initializer: none
     in a constant's value or a field's default (Book of Verse tests,
@@ -356,7 +341,7 @@ partial def checkSpawnExits (tops : List STop) : Except String Unit := do
     only allowed inside control-blocks", 3675). -/
 def checkProfiles (tops : List STop) : Except String Unit := do
   let profile? : SExpr → Option SExpr :=
-    Refine.findPart (fun | .decl _ n .. => n.startsWith "$profile" | _ => false) false
+    Refine.findPart (fun | .decl _ n .. => n.startsWith profilePrefix | _ => false) false
   let refuse (p : Pos) (what : String) : Except String Unit :=
     throw s!"{p.show}: profile is not allowed in {what}: an initializer; it measures code of a function's (Book of Verse tests, profile_simple.versetest)"
   for t in tops do
@@ -508,119 +493,24 @@ partial def checkJumps (tops : List STop) : Except String Unit := do
       ms.forM goTop
   tops.forM goTop
 
-/-- Source admission and the prelude, the first phase of `elabProgramCore`:
-    the source and the entry expression are admitted by the effect policy and
-    the source profile; the program's own types do not take built-in names,
-    no definition takes a reserved one (`checkReservedNames`), each name is
-    defined once in its scope (`checkDefinedOnce`), and its
-    constants and field defaults have no `return` (`checkReturns`), and no
-    `return` or `break` leaves a failure context (`checkJumps`);
-    modules are resolved (#112), and no constant depends on itself
-    (`checkConstantCycles`); and the helpers the program needs are added,
-    those the source names alike kept apart from them (#210). -/
-def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitted := do
-  EffectPolicy.check allTops0r opts.entry
-  EffectPolicy.checkPlaces allTops0r
-  SourceProfile.check opts.profile allTops0r opts.entry
-  -- rationals (#116): the helpers, for a program that may use them
-  let isRatMarker : STop → Bool := fun
-    | .const _ n _ _ _ => n == ratMarker || n == replaceAllMarker || n == ignoredArmsMarker || n == bitwiseMarker
-    | _ => false
-  let ignoredArms := allTops0r.flatMap fun
-    | .const _ n _ _ (.block _ es) => if n == ignoredArmsMarker then es.map (·.pos) else []
-    | _ => []
-  let usesReplaceAll := allTops0r.any (fun | .const _ n _ _ _ => n == replaceAllMarker | _ => false) || opts.entry.isSome
-  -- (the markers but the bitwise functions', as before them)
-  let isHelperMarker : STop → Bool := fun
-    | .const _ n _ _ _ => n == ratMarker || n == replaceAllMarker || n == ignoredArmsMarker
-    | _ => false
-  let usesRat := allTops0r.any isHelperMarker || opts.entry.isSome
-  -- the bitwise functions' helpers, for a program that names one (also in
-  -- its entry expression)
-  let usesBitwise := allTops0r.any (fun | .const _ n _ _ _ => n == bitwiseMarker | _ => false) ||
-    (opts.entry.map mentionsBitwise).getD false
-  -- (a type of the program's own cannot take a built-in type's name)
-  for t in allTops0r do
-    match t with
-    | .const p n _ _ (.structDef ..) | .const p n _ _ (.enumDef ..) | .classDef p n .. =>
-      if ("char32" :: typeNames).contains n then throw s!"{p.show}: {n} is a built-in type"
-    | _ => pure ()
-  checkReservedNames allTops0r
-  checkDefinedOnce allTops0r
-  let scopePairs ← checkNoShadowing allTops0r
-  checkReturns allTops0r
-  checkJumps allTops0r
-  checkNestedReturns allTops0r
-  checkSpawnExits allTops0r
-  checkProfiles allTops0r
-  checkDefers allTops0r
-  checkForClauses allTops0r
-  let helpers ← if usesRat then ratTops else pure []
-  let helpers := helpers ++ (← if usesReplaceAll then replaceAllTops else pure [])
-  let helpers := helpers ++ (← if usesBitwise then bitwiseTops else pure [])
-  -- These compiler-owned implementations expand finite intrinsic operations:
-  -- Euclid/continued fractions decrease absolute remainders; ReplaceAll
-  -- advances through a finite input; the bitwise helpers halve or double an
-  -- int64 at most 64 times (a left shift ends at the overflow error by then).
-  -- Ordinary source names cannot supply them.
-  let intrinsicCalls := helpers.filterMap fun | .fn _ n .. => some n | _ => none
-  let allTops000 := allTops0r.filter (!isRatMarker ·)
-  -- modules (#112): every reference to a member, qualified (the entry
-  -- expression's too)
-  let rawEntry : List STop := match opts.entry with
-    | some e => [.fn e.pos "$Do" [] [] ["decides"] (.name "void") (.app e.pos (.ident e.pos "$Show") [e] false)]
-    | none => []
-  -- (access, Book of Verse ch. 12: every access level written out, those
-  -- `scoped{…}` names, and the levels of the definitions and modules)
-  let specified ← resolveSpecifiers (allTops000 ++ rawEntry)
-  let levels := Access.Levels.of specified
-  let resolved ← resolveModules specified
-  -- (a type alias is no more visible than what it names)
-
-  Access.checkAliases levels resolved
-  -- type aliases: each written out where it is used, so that nothing after
-  -- this knows aliases exist
-  let (resolved, aliases) ← Aliases.expand resolved
-  -- access: each definition exposes nothing less visible than itself; the
-  -- constructions, parents and overrides of the program as written; and
-  -- what the elaboration needs to judge the members it reaches through
-  -- values (`Access`)
-  Access.checkConsistency levels resolved
-  let access := Access.Env.of levels (Access.Sites.of resolved) resolved
-  Access.checkUses access resolved
-  -- (module-scoped `var`s: checked, held as the `var` fields of the module
-  -- state's object, each use one through it, docs/research/weak-map.md)
-  let resolved ← ModuleVars.desugar resolved
-  -- (types given as arguments and used as types: type parameters)
-  let resolved ← TypeArguments.desugar resolved
-  -- (types as values, `subtype(t)` and its kin: classes and interfaces)
-  let resolved ← TypeValues.desugar resolved
-  -- (fields with accessors: checked, and their accessors' type written)
-  let resolved ← Accessors.desugar resolved
-  -- (a castable_subtype(c) bound's castability, a subtype relation)
-  let resolved := UpperBounds.markCastable resolved
-
-  -- (the built-ins it names as values, as definitions of their own: after
-  -- the aliases, whose names are no values' and bind nothing)
-  let resolved := BuiltinValues.wrappers resolved ++ resolved
-  let (typeDefaults, resolved) := resolved.partition (·.isTypeDefault)
-  checkConstantCycles resolved
-  checkConstantOrder resolved
-  let resolved := if opts.extendedDefaults then resolved
-    else resolved.map InitializerConvergence.markSource
-  -- Resolve source names before deciding which soft-library definitions are
-  -- needed. A module's own event and a type parameter named task are distinct
-  -- from the global helper types. Include public API/generated entry paths.
+/-- The concurrency prelude a program needs (#156), with subscribable
+    events' (#210, #220): the prelude's names the program defines itself,
+    each with the name the prelude's own definition takes, whether the
+    program uses concurrency, and the prelude's definitions. It reads the
+    program's names resolved (a module's own `event`, a type parameter named
+    `task`, are not the prelude's), and the functions the requests add. -/
+def concurrencyHelpers (resolved : List STop) (requests : Requests) (eventFifo : Bool) :
+    Except String (List (String × String) × Bool × List STop) := do
   let defines0 (n : String) : Option Pos := resolved.findSome? fun
     | .classDef p m .. | .fn p m .. | .const p m .. => if m == n then some p else none
   let owned := PreludeNeeds.names.filter (defines0 · |>.isSome)
-  let requestTops := opts.requests.subtypes ++ Refine.functions opts.requests.casts resolved ++
-    opts.requests.loops.flatMap (fun l =>
+  let requestTops := requests.subtypes ++ Refine.functions requests.casts resolved ++
+    requests.loops.flatMap (fun l =>
       STop.fn l.pos l.name l.params l.tparams l.specs l.ret l.body :: l.extraFns) ++
-    opts.requests.methods.map (fun r => STop.fn r.pos "$methodRequest"
+    requests.methods.map (fun r => STop.fn r.pos "$methodRequest"
       ((r.receiver :: r.params).map fun t => { name := "$arg", ty := t }) r.tparams r.effs r.ret (.block r.pos r.args))
   let uses := PreludeNeeds.uses (resolved ++ requestTops) ++
-    opts.requests.fns.flatMap (fun (_, t) => t.helperUses)
+    requests.fns.flatMap (fun (_, t) => t.helperUses)
   let privateNames := PreludeNeeds.privateNames owned uses
   let concurrencyNames := privateNames.map fun n => (n, "$" ++ n)
   let needs (n : String) := uses.contains ((concurrencyNames.lookup n).getD n)
@@ -632,20 +522,144 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
     if let some p := defines0 "cancelable" then
       throw s!"{p.show}: cancelable is the type subscribable_event's Subscribe gives: a program that uses subscribable_event cannot define its own (#210)"
   let usesConc := usesSub || uses.contains "$suspends" || PreludeNeeds.names.any needs
-  -- Keep source overrides, but isolate helper dependencies from them: builtin
-  -- sticky_event still extends the builtin event when source owns event.
-  let helpers := helpers ++ (← if usesConc then concTops privateNames opts.eventFifo else pure []) ++
+  -- (the program's own definitions of the prelude's names kept apart from
+  -- the prelude's: its sticky_event extends its own event when the program
+  -- defines one)
+  let helpers := (← if usesConc then concTops privateNames eventFifo else pure []) ++
     (← if usesSub then subTops privateNames else pure []) ++ (← if usesSubVoid then subVoidTops privateNames else pure [])
-  -- Collect source contracts while every declaration still has its source
-  -- identity. Function-value classes, continuation frames and constructor
-  -- field packets implement source expressions; they acquire no extra source
-  -- contract merely because their implementation uses a data type.
+  return (concurrencyNames, usesConc, helpers)
+
+/-- Source admission, the first phase of `elabProgramCore`: the program as
+    parsed (its attributes taken out, `Attributes.apply`), checked, resolved
+    and desugared by these passes, in this order, which is the order of their
+    refusals:
+    1. the effect policy, with where each specifier may go, and the source
+       profile (`EffectPolicy`, `SourceProfile`);
+    2. the rules of the source as written: no built-in type's name taken
+       (`checkTypeNames`), no reserved name (`checkReservedNames`), each name
+       defined once in its scope (`checkDefinedOnce`) and none of a scope
+       around it (`checkNoShadowing`), `return` only in a function
+       (`checkReturns`), no `return` or `break` that leaves a failure
+       context (`checkJumps`), none inside a value returned
+       (`checkNestedReturns`) or leaving a `spawn` (`checkSpawnExits`),
+       `profile` only in a function's code (`checkProfiles`), `defer:` only
+       as a statement (`checkDefers`), no `for` of literal clauses only
+       (`checkForClauses`);
+    3. the helpers the parser's `$uses:` markers and the entry expression ask
+       for, and the markers taken out;
+    4. the access levels written out (`resolveSpecifiers`), then the modules
+       and qualifiers resolved, the entry expression's too (`resolveModules`);
+    5. type aliases no more visible than what they name
+       (`Access.checkAliases`), then written out where they are used
+       (`Aliases.expand`);
+    6. no definition exposing a less visible one (`Access.checkConsistency`),
+       and constructions, parents and overrides used where they may be
+       (`Access.checkUses`, with `Access.Env`, which the elaboration reads);
+    7. the desugarings: module-scoped `var`s, checked and made the `var`
+       fields of the module state's object (`ModuleVars`), types given as
+       arguments (`TypeArguments`), types as values (`TypeValues`), fields
+       with accessors (`Accessors`), castable bounds
+       (`UpperBounds.markCastable`), built-ins named as values
+       (`BuiltinValues`);
+    8. the defaults function types write set apart, no constant that depends
+       on itself (`checkConstantCycles`) or names one after it in its scope
+       (`checkConstantOrder`), and the calls of initializers marked
+       (`InitializerConvergence.markSource`);
+    9. the concurrency prelude the program needs (`concurrencyHelpers`), and
+       the construction effects the source declares. -/
+def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitted := do
+  -- 1. effects and specifiers, and the source profile
+  EffectPolicy.check allTops0r opts.entry
+  EffectPolicy.checkPlaces allTops0r
+  SourceProfile.check opts.profile allTops0r opts.entry
+  -- 2. the rules of the source as written, on the definitions as parsed
+  checkTypeNames allTops0r
+  checkReservedNames allTops0r
+  checkDefinedOnce allTops0r
+  let scopePairs ← checkNoShadowing allTops0r
+  checkReturns allTops0r
+  checkJumps allTops0r
+  checkNestedReturns allTops0r
+  checkSpawnExits allTops0r
+  checkProfiles allTops0r
+  checkDefers allTops0r
+  checkForClauses allTops0r
+  -- 3. the helpers the markers and the entry expression ask for: the
+  --    rationals' (#116; also for ReplaceAll and @ignore_unreachable, as
+  --    before the bitwise functions had a marker), ReplaceAll's, the bitwise
+  --    functions'. They expand finite intrinsic operations
+  --    (`intrinsicCalls`): Euclid/continued fractions decrease absolute
+  --    remainders; ReplaceAll advances through a finite input; the bitwise
+  --    helpers halve or double an int64 at most 64 times (a left shift ends
+  --    at the overflow error by then). Ordinary source names cannot supply
+  --    them.
+  let marked (m : String) : Bool := allTops0r.any fun | .const _ n _ _ _ => n == m | _ => false
+  let usesRat := marked ratMarker || marked replaceAllMarker || marked ignoredArmsMarker || opts.entry.isSome
+  let usesReplaceAll := marked replaceAllMarker || opts.entry.isSome
+  let usesBitwise := marked bitwiseMarker || (opts.entry.map mentionsBitwise).getD false
+  let helpers := (← if usesRat then ratTops else pure []) ++ (← if usesReplaceAll then replaceAllTops else pure []) ++
+    (← if usesBitwise then bitwiseTops else pure [])
+  let intrinsicCalls := helpers.filterMap fun | .fn _ n .. => some n | _ => none
+  let ignoredArms := allTops0r.flatMap fun
+    | .const _ n _ _ (.block _ es) => if n == ignoredArmsMarker then es.map (·.pos) else []
+    | _ => []
+  let unmarked := allTops0r.filter fun
+    | .const _ n _ _ _ => ![ratMarker, replaceAllMarker, ignoredArmsMarker, bitwiseMarker].contains n
+    | _ => true
+  -- 4. access levels written out (Book of Verse ch. 12), and the levels of
+  --    the definitions and modules; modules (#112): every reference to a
+  --    member qualified, the entry expression's function `$Do`'s too
+  let rawEntry : List STop := match opts.entry with
+    | some e => [.fn e.pos "$Do" [] [] ["decides"] (.name "void") (.app e.pos (.ident e.pos "$Show") [e] false)]
+    | none => []
+  let specified ← resolveSpecifiers (unmarked ++ rawEntry)
+  let levels := Access.Levels.of specified
+  let resolved ← resolveModules specified
+  -- 5. type aliases: no more visible than what they name; each written out
+  --    where it is used, so that nothing after this knows aliases exist
+  Access.checkAliases levels resolved
+  let (resolved, aliases) ← Aliases.expand resolved
+  -- 6. access: each definition exposes nothing less visible than itself;
+  --    the constructions, parents and overrides of the program as written;
+  --    and what the elaboration needs to judge the members it reaches
+  --    through values
+  Access.checkConsistency levels resolved
+  let access := Access.Env.of levels (Access.Sites.of resolved) resolved
+  Access.checkUses access resolved
+  -- 7. module-scoped `var`s: checked, and held as the `var` fields of the
+  --    module state's object, each use one through it
+  --    (docs/research/weak-map.md); types given as arguments and used as
+  --    types: type parameters; types
+  --    as values, `subtype(t)` and its kin: classes and interfaces; fields
+  --    with accessors: checked, and their accessors' type written; a
+  --    castable_subtype(c) bound's castability: a subtype relation; the
+  --    built-ins the program names as values: definitions of their own
+  --    (after the aliases, whose names are no values' and bind nothing)
+  let resolved ← ModuleVars.desugar resolved
+  let resolved ← TypeArguments.desugar resolved
+  let resolved ← TypeValues.desugar resolved
+  let resolved ← Accessors.desugar resolved
+  let resolved := UpperBounds.markCastable resolved
+  let resolved := BuiltinValues.wrappers resolved ++ resolved
+  -- 8. the defaults function types write, for `inferSignatures`; the
+  --    constants' dependencies; initializers' calls marked
+  let (typeDefaults, resolved) := resolved.partition (·.isTypeDefault)
+  checkConstantCycles resolved
+  checkConstantOrder resolved
+  let resolved := if opts.extendedDefaults then resolved
+    else resolved.map InitializerConvergence.markSource
+  -- 9. the concurrency prelude; and the source's construction effects,
+  --    collected while every definition still has its source identity:
+  --    function-value classes, continuation frames and constructor field
+  --    packets implement source expressions, and acquire no contract
+  --    merely because their implementation uses a data type
+  let (concurrencyNames, usesConc, prelude) ← concurrencyHelpers resolved opts.requests opts.eventFifo
   let constructionFx := resolved.foldl (fun budgets top => match top with
     | .classDef _ n _ _ specs .. | .const _ n _ _ (.structDef _ _ specs _) =>
       budgets.insert n (EffectPolicy.constructionFx specs)
     | _ => budgets) ({} : Std.HashMap String (List String))
-  return { resolved, rawEntry, typeDefaults, helpers, intrinsicCalls, concurrencyNames, usesConc, constructionFx, access,
-           scopePairs, ignoredArms, aliases }
+  return { resolved, rawEntry, typeDefaults, helpers := helpers ++ prelude, intrinsicCalls, concurrencyNames, usesConc,
+           constructionFx, access, scopePairs, ignoredArms, aliases }
 
 /-- A program's source as elaborated (`inlineSource`). -/
 structure Source where
@@ -679,22 +693,22 @@ structure Source where
     `requests` says which are eager, lazy, of which family or overload; the
     functions requested are added and admitted by the effect policy; and
     function values become interfaces and classes (#210). -/
-def inlineSource (allTops0r : List STop) (requests : Requests) (admitted : Admitted) :
+def inlineSource (requests : Requests) (admitted : Admitted) :
     Except String Source := do
-  -- functions with several values (#235): inlined at their calls
-  -- (#283) the members of built-in types and of the prelude: a method with
-  -- several values may not be named like one, as `R.M` could be it
+  -- functions with several values (#235, #283), inlined at their calls; a
+  -- method with several values may not take the name of a member of a
+  -- built-in type or of the prelude, as `R.M` could be it
   let reserved : List String := ["Length", "Slice", "Find", "Insert", "Remove", "RemoveElement",
     "RemoveFirstElement", "RemoveAllElements", "ReplaceElement", "ReplaceAllElements", "ReplaceAll", "Last",
     "Signal", "Await", "Cancel"] ++ admitted.helpers.flatMap fun
       | .classDef _ _ _ _ _ _ _ fs ms => fs.map (·.1) ++ ms.filterMap fun | .fn _ m .. => some m | _ => none
       | _ => []
-  -- (#283) and the uses of methods whose family the receiver's class picks,
-  -- and the calls whose overload the arguments' types pick
-  -- (#283) and the consumers in recursive groups' code whose names' types
-  -- an elaboration is to note
+  -- (with the sites an elaboration is to note, #283: the uses of methods
+  -- whose family the receiver's class picks, the calls whose overload the
+  -- arguments' types pick, the consumers in recursive groups' code whose
+  -- names' types it notes, the types whose field orders it notes)
   let written := admitted.resolved
-  let ⟨resolved, lazy, familySites, overloadSites, nestedSites, fieldSites⟩ ← Choice.inlineMulti admitted.resolved reserved
+  let ⟨resolved, lazy, familySites, overloadSites, nestedSites, fieldSites⟩ ← Choice.inlineMulti written reserved
     requests.eager requests.families requests.lazy requests.overloads requests.nested
     requests.fieldOrders requests.instanceCalls
   -- (#246) the class of the stack cells of lazily taken ones
@@ -732,8 +746,8 @@ def inlineSource (allTops0r : List STop) (requests : Requests) (admitted : Admit
     | _ => throw "internal: a subtype dictionary request must be a class"
   let resolved := requests.subtypes ++ loopTops ++ resolved
   -- (bounds as written, or a bounded type given as an argument's,
-  -- `TypeArguments`)
-  let needsSubtype := allTops0r.any UpperBounds.hasBounds || resolved.any UpperBounds.hasBounds ||
+  -- `TypeArguments`: the source's before its choices are inlined, and after)
+  let needsSubtype := written.any UpperBounds.hasBounds || resolved.any UpperBounds.hasBounds ||
     !requests.subtypes.isEmpty ||
     -- (the box of a type parameter's value is its comparable bound's evidence)
     !requests.boxes.isEmpty ||

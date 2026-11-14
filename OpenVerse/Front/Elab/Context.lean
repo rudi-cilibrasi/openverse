@@ -2414,10 +2414,11 @@ partial def joinTyShaped (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Boo
       -- a class value's type is its own class, and a join of two keeps only
       -- the bound above both: Book of Verse tests, Archetypes.versetest:110,
       -- "Ensure a particular class (rather than a bound)"; `TypeValues`)
-      let typeValues := S.startsWith "$type:" && T.startsWith "$type:"
+      let typeValues := (TypeValues.valueClass? S).isSome && (TypeValues.valueClass? T).isSome
+      let kind (U : String) : Option String := (TypeValues.bound? U).map (·.1)
       let cands := (env.supers S).filter fun U => up U (env.upArgs S as U) &&
-        !(typeValues && (U.startsWith "concrete_subtype(" || U == "$castable" ||
-          (U.startsWith "castable_subtype(" && !env.isSub U "$castable")))
+        !(typeValues && (kind U == some "concrete_subtype" || U == TypeValues.castableMark ||
+          (kind U == some "castable_subtype" && !env.isSub U TypeValues.castableMark)))
       let common : Option Ty :=
         match cands.find? fun U => !(env.info U).isIface with
         | some U => some (atU U)

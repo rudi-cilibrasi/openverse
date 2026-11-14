@@ -1,4 +1,5 @@
 import OpenVerse.Front.Types
+import OpenVerse.Front.TypeValues
 
 /-!
 # Module-scoped `var`s: one object's `var` fields
@@ -21,9 +22,11 @@ fields start as their types' defaults, the empty map, so a module-scoped
 `var` starts as `map{}`, as the Book's do. No change to Verse Core, the
 binary format or the C runtime.
 
-`desugar` takes the parser's module-scoped `var`s (constants marked
-`moduleVarMarker`, after the modules are resolved and the aliases written
-out), checks the Book's rules, adds the class and rewrites the uses.
+`desugar` takes the parser's module-scoped `var`s (constants whose
+specifiers include `moduleVarSpec`, `STop.moduleVar?`), after the modules
+are resolved and the aliases written out, checks the Book's rules, adds the
+class and rewrites the uses. Its two names, `stateClass` and `stateName`,
+are markers no program can write (they start with `$`).
 -/
 
 namespace OpenVerse.Front.ModuleVars
@@ -44,16 +47,9 @@ def stateRef? (env : TyEnv) : Option Nat :=
     623-664). -/
 def persistentLimit : Nat := 4
 
-/-- A type as written, for a message. -/
-partial def showSTy : STy → String
-  | .name "$never" => "false"
-  | .name n => ".".intercalate (n.splitOn "::")
-  | .arr t => "[]" ++ showSTy t
-  | .opt t => "?" ++ showSTy t
-  | .tup ts => "tuple(" ++ ", ".intercalate (ts.map showSTy) ++ ")"
-  | .map k v => "[" ++ showSTy k ++ "]" ++ showSTy v
-  | .app n ts => showSTy (.name n) ++ "(" ++ ", ".intercalate (ts.map showSTy) ++ ")"
-  | .fn .. => "a function type"
+/-- A type as written, for a message, a module's member `M.c`. -/
+def showSTy (t : STy) : String := (TypeValues.writtenTy t).replace "::" "."
+
 
 /-- A definition's name as written, `M.X` for `M::X`. -/
 def shown (n : String) : String := showSTy (.name n)
@@ -85,16 +81,14 @@ def Defs.of (tops : List STop) : Defs where
 partial def Defs.persists (d : Defs) : STy → Bool
   | .name n => ["int", "float", "logic", "string", "char", "char32"].contains n ||
       d.persistable.contains n || d.enums.contains n
-  | .arr t | .opt t => d.persists t
-  | .tup ts => ts.all d.persists
-  | .map k v => d.persists k && d.persists v
   | .app .. | .fn .. => false
+  -- (a container persists when its parts do)
+  | t => t.children.all d.persists
 
 /-- A module-scoped variable: where and what it is. -/
 structure Var where
   pos : Pos
   name : String
-  specs : List String
   ty : STy
   init : SExpr
   deriving Inhabited
@@ -109,8 +103,6 @@ def check (d : Defs) (vs : List Var) : Except String Unit := do
   let mut persistent : List (Var × Bool) := []
   for v in vs do
     let shown := showSTy (.name v.name)
-    if let some sp := v.specs.find? (·.startsWith (moduleVarMarker ++ ":")) then
-      throw s!"{v.pos.show}: var<{(sp.drop (moduleVarMarker.length + 1)).toString}> on the module-scoped var {shown} is not supported yet: its write access is its name's"
     -- (1) a weak_map (ch. 16: "Direct `var` declarations of simple types
     -- (like `var X:int = 0`) are not allowed at module scope"; ch. 18: "A
     -- module-scoped `var` of any other type is rejected outright")
@@ -129,10 +121,10 @@ def check (d : Defs) (vs : List Var) : Except String Unit := do
       persistent := persistent ++ [(v, match val with
         | .name c => (d.classSpecs.lookup c).isSome
         | _ => false)]
-    -- (it starts as the empty map, the prototype's field)
+    -- (it starts as the empty map, the prototype's field; one declared with
+    -- no value, `Refused.declaredVariable`, `Attributes.apply` refused)
     match v.init with
     | .mapLit _ [] => pure ()
-    | .app _ (.ident _ "$refused") (.str _ [.text why] :: _) false => throw s!"{v.pos.show}: {why}"
     | e => throw s!"{e.pos.show}: the module-scoped var {shown} starts as map\{} in openverse: an initial value with entries is not supported yet"
   -- (5) at most `persistentLimit` with <persistent> keys, and at the limit
   -- one of them with a class value (the tests' 3502s, 624-664)
@@ -187,12 +179,8 @@ def rewriteTop (names : List String) : STop → Except String STop
     changes), and every use rewritten. A program without any is returned as
     it is. -/
 def desugar (tops : List STop) : Except String (List STop) := do
-  let vs : List Var := tops.filterMap fun
-    | .const p n specs (some t) e =>
-      if specs.contains moduleVarMarker then
-        some { pos := p, name := n, specs := specs.filter (· != moduleVarMarker), ty := t, init := e }
-      else none
-    | _ => none
+  let vs : List Var := tops.filterMap fun top =>
+    top.moduleVar?.map fun (pos, name, _, ty, init) => { pos, name, ty, init }
   if vs.isEmpty then return tops
   check (Defs.of tops) vs
   let names := vs.map (·.name)

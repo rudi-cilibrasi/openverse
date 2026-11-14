@@ -77,7 +77,7 @@ private def frameContracts : IO Unit := do
 private def env : Suspend.Env := {
   S := { fns := [], classes := [[.int]], protos := [(0, [])] }, ρ := .void,
   callee := fun _ => none, syncMark := 0, raceMark := 0, rushMark := 0,
-  arity := 0, sites := 0, armsTotal := 0, fnBase := 0, schedTag := 0,
+  arity := 0, sites := 0, fnBase := 0, schedTag := 0,
   nilTag := 0, resCellTag := 0, spawnMark := 0, spawns := #[],
   branchMark := 0, branches := #[], pcFld := 0, rS := 0, regionTotal := 0 }
 

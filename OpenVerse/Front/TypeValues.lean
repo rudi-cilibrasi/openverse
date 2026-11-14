@@ -32,14 +32,8 @@ import OpenVerse.Front.Syntax
 namespace OpenVerse.Front
 
 /-- The types a definition writes, each mapped by `f`. -/
-partial def STy.mapTy (f : STy → STy) : STy → STy
-  | .arr t => f (.arr (t.mapTy f))
-  | .opt t => f (.opt (t.mapTy f))
-  | .tup ts => f (.tup (ts.map (·.mapTy f)))
-  | .map k v => f (.map (k.mapTy f) (v.mapTy f))
-  | .app n ts => f (.app n (ts.map (·.mapTy f)))
-  | .fn ps es r => f (.fn (ps.map (·.mapTy f)) es (r.mapTy f))
-  | t => f t
+partial def STy.mapTy (f : STy → STy) (t : STy) : STy :=
+  f (Id.run (t.mapChildrenM fun c => pure (c.mapTy f)))
 
 /-- `e` with every type it writes (its declarations', constructions'
     arguments) mapped by `g`, and every expression by `f`, from the leaves up. -/
@@ -75,8 +69,11 @@ def ifaceName (k a : String) : String := s!"{k}({a})"
 /-- The mark of the `castable_subtype(A)` of a `<castable>` `A`. -/
 def castableMark : String := "$castable"
 
-/-- The class of the value `C`. -/
-def valueClass (c : String) : String := s!"$type:{c}"
+/-- The class of the value `C`, `$type:C`. -/
+def valuePrefix : String := "$type:"
+def valueClass (c : String) : String := valuePrefix ++ c
+/-- The class `C` whose value's class is `n`. -/
+def valueClass? (n : String) : Option String := afterPrefix? valuePrefix n
 
 /-- The kind and bound of a metatype's interface, `("subtype", "A")` of
     `subtype(A)`. -/
@@ -106,11 +103,7 @@ partial def writtenTy : STy → String
 partial def metatypes (t : STy) : List (String × STy) :=
   match t with
   | .app k [a] => if kinds.contains k then [(k, a)] else metatypes a
-  | .app _ ts | .tup ts => ts.flatMap metatypes
-  | .arr u | .opt u => metatypes u
-  | .map k v => metatypes k ++ metatypes v
-  | .fn ps _ r => ps.flatMap metatypes ++ metatypes r
-  | .name _ => []
+  | t => t.children.flatMap metatypes
 /-- The types of the declarations of an expression. -/
 partial def declTys (e : SExpr) : List STy :=
   match e with
@@ -135,9 +128,9 @@ partial def valueNames : STop → List String
 def protectHeads (f : SExpr → SExpr) (e : SExpr) : SExpr :=
   match e with
   | .app p (.construct _ h [] []) as b =>
-    if h.startsWith "$type:" then .app p (.ident p (h.drop "$type:".length).toString) as b else f e
+    if let some c := valueClass? h then .app p (.ident p c) as b else f e
   | .member p (.construct _ h [] []) m =>
-    if h.startsWith "$type:" then .member p (.ident p (h.drop "$type:".length).toString) m else f e
+    if let some c := valueClass? h then .member p (.ident p c) m else f e
   | e => f e
 
 
@@ -189,9 +182,6 @@ def desugar (tops : List STop) : Except String (List STop) := do
   let mut targets : List (String × String) := []
   let mut argTys : List (String × STy) := []
   let mut usesType := false
-  let collect (acc : List (String × String) × Bool) (t : STy) : List (String × String) × Bool :=
-    t.foldNames (fun acc _ => acc) acc
-  let _ := collect
   let allTys : List (Pos × STy) := tops.flatMap fun
     | .fn p _ ps _ _ r b => (r :: ps.map (·.ty) ++ declTys b).map (p, ·)
     | .const p _ _ t v => (t.toList ++ declTys v).map (p, ·)

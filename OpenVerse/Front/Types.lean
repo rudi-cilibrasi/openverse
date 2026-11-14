@@ -1443,11 +1443,6 @@ partial def refUp (env : TyEnv) (a b : Ty) (nested : Bool := false) : Bool :=
   | .map k a, .weakMap k' b | .weakMap k a, .weakMap k' b => k == k' && (a == b || refUp env a b true)
   | _, _ => false
 
-/-- A class or interface type. -/
-def isClassTy (env : TyEnv) : Ty → Bool
-  | .struct n _ => env.classes.contains n
-  | _ => false
-
 /-- A failed join is ambiguous only when two incomparable instantiated
     interfaces remain. A common name at incompatible arguments is not a
     common supertype: `box(int)` and `box(string)` can still join at `any`. -/

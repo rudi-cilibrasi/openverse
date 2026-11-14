@@ -209,16 +209,13 @@ def Shape.toSTy (s : Shape) (ts : List STy) (r : STy) (effs : List String := s.e
     STy.namedParam n (s.optional.contains n) t) effs r
 
 partial def _root_.OpenVerse.Front.STy.fnShapes : STy → List Shape
-  | .name _ => []
-  | .arr t | .opt t => t.fnShapes
-  | .tup ts | .app _ ts => ts.flatMap STy.fnShapes
-  | .map a b => a.fnShapes ++ b.fnShapes
   | .fn ps es r =>
     -- (a type both <decides> and <suspends>, or naming a parameter twice,
     -- has none: `resolveTy` refuses it)
     let s := (fnTyShape ps es r).1
     (if s.decides && s.suspends || s.named.eraseDups.length != s.named.length then [] else [s]) ++
       ps.flatMap STy.fnShapes ++ r.fnShapes
+  | t => t.children.flatMap STy.fnShapes
 
 /-- The type names an expression mentions: in its types and constructions. -/
 partial def _root_.OpenVerse.Front.SExpr.tyNames : SExpr → List String
@@ -321,13 +318,7 @@ partial def plainComparable : STy → Bool
     compare equal (#231). -/
 partial def normS : STy → STy
   | .name "string" => .arr (.name "char")
-  | .arr t => .arr (normS t)
-  | .opt t => .opt (normS t)
-  | .tup ts => .tup (ts.map normS)
-  | .map a b => .map (normS a) (normS b)
-  | .app n ts => .app n (ts.map normS)
-  | .fn ps es r => .fn (ps.map normS) es (normS r)
-  | t => t
+  | t => Id.run (t.mapChildrenM fun c => pure (normS c))
 
 /-- `a` is `b` or a subtype the elaborator converts at a parameter or a
     result (#214): `int` to `rational`, a class to one above it, a function
@@ -434,9 +425,6 @@ def MethodRequest.shape (r : MethodRequest) : Shape :=
 
 def MethodRequest.className (r : MethodRequest) (i : Nat) : String :=
   s!"{r.owner}${r.method}$fnVariance{i}"
-
-def mergeMethodRequests (old new : List MethodRequest) : List MethodRequest :=
-  new.foldl (fun acc r => if acc.any (·.key == r.key) then acc else acc ++ [r]) old
 
 /-- A class/interface upper bound excludes tuple instances, also through a
     peer chain. An unanchored peer cycle does not establish that exclusion. -/

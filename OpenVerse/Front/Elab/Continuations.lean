@@ -1334,7 +1334,6 @@ def forOutcomeValues (ctx : Ctx) (p : Pos) (r : R) : EM R := do
     generated adapters are instantiated before calling the shared suffix. -/
 structure ChoiceOperations where
   plan : ChoiceTypes.Plan
-  bindingName : String := ""
   params : List (String × Ty) := []
   replacements : List (SExpr × SExpr) := []
   knownTypes : List (SExpr × Ty) := []
@@ -1987,7 +1986,7 @@ def choiceFixedOperationCase (elabE : Ctx → SExpr → Option Ty → EM R) (ctx
 def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
     (stem binding : String) (plan : ChoiceTypes.Plan) (suffix : List SExpr)
     (forBody : Option SExpr := none) : EM ChoiceOperations := do
-  let mut ops : ChoiceOperations := { plan, bindingName := binding, casePrelude := plan.instances.map fun _ => [] }
+  let mut ops : ChoiceOperations := { plan, casePrelude := plan.instances.map fun _ => [] }
   if !(match plan.binding with | .param .. => true | _ => false) then return ops
   let source : List SExpr := match forBody with
     | some value => suffix.dropLast ++ [.forE value.pos [] value]

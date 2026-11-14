@@ -18,10 +18,8 @@ partial def hasBounds : STop → Bool
     does not determine (`F(G(:t):void where t:type)`, the Book's tests). -/
 partial def determines : STy → List String
   | .name n => [n]
-  | .arr t | .opt t => determines t
-  | .tup ts | .app _ ts => ts.flatMap determines
-  | .map k v => determines k ++ determines v
   | .fn _ _ r => determines r
+  | t => t.children.flatMap determines
 
 /-- Each bounded type parameter of a function, and each that a bound names,
     is determined by a call's arguments: named in the type of one of its
