@@ -1403,7 +1403,9 @@ entity := class:
     program can define (`first` is a [reserved name](#reserved-names)). `first` reads its
     clauses as `for` does, and takes `first(c). b`, `first(c) do b` and
     `first:` with the clauses indented, then `do:` and a body or nothing;
-    generators, `X : Xs`, `I -> X : Xs` and `X := a..b`, as `for`'s: the
+    generators, `X : Xs`, `I -> X : Xs` and `X := a..b`, as `for`'s, over
+    an array, a string or a map (`V : M` its values, `K -> V : M` its keys
+    and values, in the map's order) and a range: the
     first iteration whose clauses succeed gives the body's value, what the
     failed ones did is undone, and none fails `first` (ch. 7, "first"; the
     Book's tests, `first.versetest`; [the rules](research/book-forms-rules.md#generators-in-first-and-a-ranges-typed-binding));
@@ -1412,8 +1414,7 @@ entity := class:
     rule](research/book-remaining-rules.md#every-filter-of-a-for-can-fail)),
     and commas are refused between the
     clauses of `first{…}`, which join a tuple there, a generator inside it
-    not supported yet (`first.versetest:206`); a generator over a map is
-    not supported yet.
+    not supported yet (`first.versetest:206`).
   - `assert{c}` is a runtime error (as `Err()`, with no message) unless
     `c` succeeds.
   Without a [choice](#choice), `first` is the first and only success, and

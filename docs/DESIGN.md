@@ -1686,6 +1686,7 @@ beside the pass that makes it:
 | `$refused(msg, …)` (`refusedForm`), `$pointer(t)` (`pointerTypeHead`) | a form openverse parses and refuses (`Refused`) | parser | `Attributes.apply` (refused) |
 | `$var` (`moduleVarSpec`, `STop.moduleVar?`) | a module-scoped variable `var X:t = e`, among a constant's specifiers | parser | `ModuleVars.desugar` (out) |
 | `$module_state` (`ModuleVars.stateClass`), `$moduleState` (`ModuleVars.stateName`) | the class whose `var` fields are the module-scoped variables; its prototype, the module state, which each use reads through | `ModuleVars.desugar` | the elaboration of names and `set` paths (`stateRef?`), messages |
+| `$firstSource{L}_{C}` (`firstSourceName`) | the source of a `first`'s generator `I -> X : src`, before the clauses that bind `I` and `X` | parser | `elabOneGo`, which binds a map's keys and values there (`elabFirstEntries`) |
 | `$ext:M` (`extensionName`) | an extension method's function | parser | `resolveModules`, `elabExtensionCallWith` |
 | `$implicitSelf:F` (`implicitSelfPrefix`) | a bare call in a method that may be an extension method's with `Self` | `resolveModules` | `elabExtensionCallWith` |
 | `$typeArgument:t` (`TypeArguments.paramPrefix`) | a type given as an argument, as a parameter | `TypeArguments` | `TypeArguments` |

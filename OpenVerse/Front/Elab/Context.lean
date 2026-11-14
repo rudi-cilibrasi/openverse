@@ -1240,6 +1240,12 @@ def Ctx.containerView (ctx : Ctx) (p : Pos) (derived : Ty) (accepts : Ty → Boo
     (operation : String) : Except String (Option Ty) :=
   ctx.valueView p derived accepts operation
 
+/-- Why a weak map of type `t` is no generator's source, in a `for` or a
+    `first` (Book of Verse ch. 3: "you cannot iterate over its entries",
+    `weak_map.versetest:130`, 3524). -/
+def weakMapNotIterated (t : Ty) : String :=
+  s!"a weak_map cannot be iterated (Book of Verse ch. 3: \"There is no `Length` property, no iteration, no coercion to `comparable`\"): {t.show} keeps only its entries' W[Key] and set W[Key] = …"
+
 /-- An array shape for a built-in operation, with every required level
     supported by actual whole-value or component capabilities. -/
 def Ctx.arrayView (ctx : Ctx) (p : Pos) (derived : Ty) (depth : Nat)

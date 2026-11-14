@@ -1787,23 +1787,29 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       return (.seq lg.init (.seq (.assign done (.lit (.logic false))) (.seq (.loop body)
         (.ite (p2 .eq (.local done) (.lit (.logic false))) Expr.brkV vd))), c2)
     | some b@{ each := some arr, .. } =>
-      -- (a call of a recursive function with several values, #235: each
-      -- element of the array of its values in turn, the clauses after it
-      -- in the filter, as `chooseFirst` does with alternatives)
+      -- (a generator `X : Xs` of a `first`, and a call of a recursive
+      -- function with several values, #235: each element of the array (a
+      -- string's characters, a map's values, as a `for` takes them) in
+      -- turn, the clauses after it in the filter, as `chooseFirst` does
+      -- with alternatives)
       let p := b.pos
       let ra ← elabE ctx arr none
-      let ety ← match ra.ty with
-        | .arr t => pure t
-        | t => eerr p s!"internal: the values of a call are {t.show}"
+      let ra ← elabContainerReceiverWith elabE ctx p ra (fun | .arr _ | .map .. => true | _ => false) "iteration"
+      -- (a map's elements are its entries, (key, value) pairs)
+      let (ety, vty, valueOf) ← match ra.ty with
+        | .arr t => pure (t, t, fun (e : Expr) => e)
+        | .map kt vt => pure (Ty.tup [kt, vt], vt, fun (e : Expr) => Expr.prim (.tupGet 1) [e])
+        | t@(.weakMap ..) => eerr p (weakMapNotIterated t)
+        | t => eerr p s!"a first generator needs an array, string or map, found {t.show}"
       let ty ← match ← b.ty.mapM (resolveTy ctx.types p) with
         | some t => pure t
-        | none => pure ety
+        | none => pure vty
       checkNewLocal ctx p b.name
       let e ← fresh ety
       let x ← fresh ty
       let c1 := { ctx with locals := { name := b.name, slot := x, ty, mutable := false } :: ctx.locals }
       let (inner, c2) ← elabOneGo c1 rest
-      let bindX ← coerce p ⟨.local e, ety⟩ ty
+      let bindX ← coerce p ⟨valueOf (.local e), vty⟩ ty
       return (.forE e ra.e (.seq (.assign x bindX) (.seq inner Expr.failV)) (.lit .void), c2)
     | some b@{ place := none, branchy := none, each := none, .. } =>
       if b.alts.any Choice.hasLiftable then
@@ -1944,8 +1950,63 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       let (r, c1) ← elabStmt ctx cl none
       checkFilterCanFail ctx cl r
       let e ← inferable r
+      -- (the source of a generator `K -> V : M`, over a map: its entries)
+      if let .decl q a none false _ := cl then
+        if isFirstSource a then
+          if let some l := c1.lookup a then
+            let mapView : Ty → Bool := fun | .map .. => true | _ => false
+            let viewed : Ty := match l.ty with
+              | .param .. => match c1.valueView q l.ty mapView "iteration" with
+                | .ok (some t) => t
+                | _ => l.ty
+              | t => t
+            match viewed with
+            | .map kt vt =>
+              let src ← elabContainerReceiverWith elabE c1 q ⟨.local l.slot, l.ty⟩ mapView "iteration"
+              let (inner, c2) ← elabFirstEntries c1 a src.e kt vt rest
+              return (.seq e inner, c2)
+            | t@(.weakMap ..) => eerr q (weakMapNotIterated t)
+            | _ => pure ()
       let (inner, c2) ← elabOneGo c1 rest
       return (.seq e inner, c2)
+
+/-- A `first`'s generator `K -> V : M` over a map, after its source's clause
+    (`firstSourceName`; `src`, a map of `kt` to `vt`): the parser's two
+    clauses after it, which bind `K` to the choice of the source's indices
+    and `V` to the element there, bind `K` and `V` to each entry's key and
+    value in turn instead, as a `for` does (Book of Verse ch. 7: "The
+    `first` expression uses the same binding syntax as `for`"), the clauses
+    after them in the filter, as `chooseFirst` does with alternatives: a
+    failed entry's effects are undone, and the first success ends the
+    search. The choice of the indices is as the parser wrote it,
+    `K := $each(…)`, or as `Choice.prepare` lifts it, `$c := $each(…)` and
+    `K := $c`. -/
+partial def elabFirstEntries (ctx : Ctx) (a : String) (src : Expr) (kt vt : Ty) (cs : List SExpr) :
+    EM (Expr × Ctx) := do
+  let isEach : SExpr → Bool := fun | .app _ (.ident _ "$each") _ false => true | _ => false
+  -- (the element's clause, `V := a[K]`)
+  let isElement (k : String) : SExpr → Bool := fun
+    | .app _ (.ident _ a') [.ident _ k'] true => a' == a && k' == k
+    | _ => false
+  let (k, kp, v, vp, rest) ← match cs with
+    | .decl _ c none false e :: .decl kp k none false (.ident _ c') :: .decl vp v none false x :: rest =>
+      if isEach e && c' == c && isElement k x then pure (k, kp, v, vp, rest)
+      else eerr kp "internal: the clauses of a first's generator over a map"
+    | .decl kp k none false e :: .decl vp v none false x :: rest =>
+      if isEach e && isElement k x then pure (k, kp, v, vp, rest)
+      else eerr kp "internal: the clauses of a first's generator over a map"
+    | cs => eerr ((cs.head?.map (·.pos)).getD default) "internal: the clauses of a first's generator over a map"
+  checkNewLocal ctx kp k
+  let ks ← fresh kt
+  let c1 := { ctx with locals := { name := k, slot := ks, ty := kt, mutable := false } :: ctx.locals }
+  checkNewLocal c1 vp v
+  let vs ← fresh vt
+  let c2 := { c1 with locals := { name := v, slot := vs, ty := vt, mutable := false } :: c1.locals }
+  let entry ← fresh (.tup [kt, vt])
+  let (inner, c3) ← elabOneGo c2 rest
+  let bind : Expr := .seq (.assign ks (.prim (.tupGet 0) [.local entry]))
+    (.assign vs (.prim (.tupGet 1) [.local entry]))
+  return (.forE entry src (.seq bind (.seq inner Expr.failV)) (.lit .void), c3)
 
 partial def elabOneChoice (ctx : Ctx) (b : Choice.Binding) (rest : List SExpr) : EM (Expr × Ctx) := do
   let p := b.pos
