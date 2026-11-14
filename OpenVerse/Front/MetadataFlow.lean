@@ -41,14 +41,15 @@ private def joinOpt (a b : Option Slots) : Option Slots :=
   | some a, none | none, some a => some a
   | none, none => none
 
-/-- Bindings created inside a repeated body start fresh each iteration.
-    Cells already initialized on entry retain their accumulated roles/modes. -/
-private def freshLocals (entry head : Slots) : Slots := { head with
-  values := head.values.mapIdx fun i role =>
-    if entry.initialized[i]?.getD false then role else entry.values[i]?.getD false
-  initialized := head.initialized.zipWith (· && ·) entry.initialized
-  sharedMetadata := head.sharedMetadata.mapIdx fun i role =>
-    if entry.initialized[i]?.getD false then role else entry.sharedMetadata[i]?.getD false }
+/-- Forget iteration-local shared-cell modes on back edges. Values and
+    nonshared scratch slots retain their usual fixed-point joins. -/
+private def freshLocals (shared : List Nat) (entry head : Slots) : Slots :=
+  if shared.isEmpty then head else { head with
+    initialized := head.initialized.mapIdx fun i ready =>
+      ready && (entry.initialized[i]?.getD false || !shared.contains i)
+    sharedMetadata := head.sharedMetadata.mapIdx fun i role =>
+      if entry.initialized[i]?.getD false || !shared.contains i then role
+      else entry.sharedMetadata[i]?.getD false }
 
 private def joinRole (a b : Option Bool) : Option Bool :=
   match a, b with
@@ -191,14 +192,13 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
     let mut exits := source
     let mut growing := true
     while growing do
-      let fresh := freshLocals source.slots head
-      let entry := { fresh with values := fresh.values.set! i item }
+      let entry := { head with values := head.values.set! i item }
       let filt ← expr fns infos fields fn info entry filt
       let body ← if filt.value.isSome then expr fns infos fields fn info filt.slots body
         else pure { slots := entry, value := none }
       exits := withExits filt (withExits body exits)
       result := result || body.value.getD false
-      let next := if body.value.isSome then joinSlots head body.slots else head
+      let next := if body.value.isSome then freshLocals info.shared source.slots (joinSlots head body.slots) else head
       growing := next != head
       head := next
     return { exits with slots := head, value := some result }
@@ -208,10 +208,10 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
     let mut broken := none
     let mut growing := true
     while growing do
-      let out ← expr fns infos fields fn info (freshLocals slots head) body
+      let out ← expr fns infos fields fn info head body
       returned := joinRole returned out.returned
       broken := joinOpt broken out.broken
-      let next := if out.value.isSome then joinSlots head out.slots else head
+      let next := if out.value.isSome then freshLocals info.shared slots (joinSlots head out.slots) else head
       growing := next != head
       head := next
     return { slots := broken.getD head, value := broken.map (fun _ => false), returned }
