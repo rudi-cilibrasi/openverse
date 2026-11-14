@@ -1,0 +1,8 @@
+start 0 0 0
+lengths 2 1 1 1
+take 3
+after 1 1
+text ok
+nested 9
+pure 0
+exit=0

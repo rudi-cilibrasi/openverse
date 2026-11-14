@@ -55,7 +55,7 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
 
 ## Where things stand
 
-With [breakless loops and unit queries](#after-breakless-loops-and-unit-queries) on main `fe74d587`: **8,793 agree, 608 refuse, 55 accept, 92 differ, 3,956 not translatable** of 13,504 cases (a fresh full comparison with causes; before this change, 8,789 agreed and 612 were refused). This is the one table of what is left; the sections below are the history, each written when its work landed, and the four maps ([the first map](#the-remaining-causes-a-map), [classes](#classes-and-subtyping-the-map), [forms](#forms-of-expressions-statements-and-the-library-a-map), [the forms still on the list](#the-forms-still-on-the-list-a-map)) hold the case-by-case reading each row points to.
+With [unit values as arrays](#after-unit-values-as-arrays) on main `7548e590`: **8,797 agree, 604 refuse, 55 accept, 92 differ, 3,956 not translatable** of 13,504 cases (a fresh full comparison with causes; before this change, 8,793 agreed and 608 were refused). This is the one table of what is left; the sections below are the history, each written when its work landed, and the four maps ([the first map](#the-remaining-causes-a-map), [classes](#classes-and-subtyping-the-map), [forms](#forms-of-expressions-statements-and-the-library-a-map), [the forms still on the list](#the-forms-still-on-the-list-a-map)) hold the case-by-case reading each row points to.
 
 **Accepted where the tests refuse (55)**
 
@@ -77,12 +77,12 @@ With [breakless loops and unit queries](#after-breakless-loops-and-unit-queries)
 | empty-values-equal | 4 | the value of `X?` on a `logic`, `true?` (the empty value in the tests) | the Book disagrees with itself; built and measured: right for the 4 and no output changed, but 722 programs' bytes, which the elaborator's own `or` and `void` conversions take; needs a flag every value-dropping context sets ([the rule](book-forms-rules.md#the-value-of-true)), [After the forms still on the list](#after-the-forms-still-on-the-list) |
 | compound-set-order | 1 | `set X[0] +=` whose value sets `X` (`ArrayAppend.versetest:12`, VerseVM's) | left: a VM split; the untagged tests agree, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 
-**Refused where the tests accept (608)**
+**Refused where the tests accept (604)**
 
 | Cause | Cases | What it is, and what it needs | Who decided what |
 |---|---:|---|---|
 | union-types | 136 | `union{…}` (VerseVM only, in no chapter) | left, [the first map](#the-remaining-causes-a-map) |
-| types-other | 97 | sorted in [the forms still on the list](#the-forms-still-on-the-list-a-map) (T1-T24): `true` in a function type (5), function values joined through `any` (8, v), F-bounded classes (6), refinement overloads (6), two interfaces' methods (3), `spawn` forms (7), inference from an expected type (3), a generic function as a value (4), library (12), cyclic defaults (4), a parametric class as a value (2), others one each | left, listed there |
+| types-other | 93 | sorted in [the forms still on the list](#the-forms-still-on-the-list-a-map) (T1-T24): `true` in a function type (5), function values joined through `any` (8, v), F-bounded classes (6), refinement overloads (6), two interfaces' methods (3), `spawn` forms (7), inference from an expected type (3), a generic function as a value (4), library (12), cyclic defaults (4), a parametric class as a value (2), others one each | left, listed there |
 | syntax-other | 68 | sorted in [the forms still on the list](#the-forms-still-on-the-list-a-map) (S1-S11): `TimSyntax.versetest`'s grammar (35: specifiers after an expression, `:` and `where` as expressions, keywords as names, `try`/`catch`, `&x`, units), a type written as an argument (6), constructor delegation outside a constructor (4), roundtrip and function-type syntax (11), VerseVM's (4), one each (8) | left: no prose for the `TimSyntax` grammar; a type written as an argument with the metatypes |
 | metatypes | 64 | metatypes beyond those built: `classifiable_subset`, `castable_concrete_subtype`, `castable_subtype(any)`, a cast to a built-in type, `int[X]`, a parametric type applied as a value, … | left: other work, [the first map](#the-remaining-causes-a-map) |
 | live-variables | 57 | `live`, `when`, `upon`, `await`, `batch` (ch. 15, unreleased; VerseVM only) | left, [the first map](#the-remaining-causes-a-map) |
@@ -2426,7 +2426,7 @@ chapter at the pinned revision, `docs/NN_*.md` and line; a test is
 | T16. map keys of sibling classes (v) | 2: `Map.versetest` 363, 401 | VerseVM's | left |
 | T17. tuples concatenated with `+` | 2: `ParametricFunctions.versetest` 416, 426 | the tests (`(1, 2) + (3, 4) = array{1, 2, 3, 4}`) | left |
 | T18. a program's `ToString` beside the built-in | 3: `Literals/String.versetest` 242, 243, `:decls` | the tests; overloads of a built-in | done: [program-defined `ToString`](#after-program-defined-tostring), with `StringInterpolationPlus`'s two cases |
-| T19. a parametric class's `[]t` field default `array{}` | 4: `ParametricFunctions.versetest` 719, 732, 752, `:decls` | an empty array at a type parameter's array | left |
+| T19. a parametric class's `[]t` field default `()` | 4: `ParametricFunctions.versetest` 719, 732, 752, `:decls` | the empty value as an array at an opaque element type | done: [unit values as arrays](#after-unit-values-as-arrays) |
 | T20. definitions inside expressions | 2: `Definitions.versetest:37`, `CustomClassVarAccessors.versetest:642` | | left |
 | T21. overloads of different access | 2: `FORT-976754…` 58, `:decls` | ch. 12 | left |
 | T22. metatype forms: fields given through a type value, a class's alias as a value, a type argument written as `t` | 5: `MetatypeConcreteSubtype.versetest` 153, 162; `TypeAlias.versetest` 64, 65; `ParametricFunctions.versetest:464` | ch. 11; `TypeValues` | left (with the metatypes) |
@@ -2624,6 +2624,26 @@ proofs, OVBC and the C runtime are unchanged. Two compiler-API real/dummy
 pairs also retain rollback of mutable metadata across unit and negation
 queries (#572); their lowered failure stays explicit for the metadata
 analysis.
+
+## After unit values as arrays
+
+A `void` value converts to an empty array of any element type, including
+an opaque type parameter. The shared value converter evaluates and
+discards the operand once, then gives the empty array. This admits the
+Book's `array_ref(t)` and queue field defaults `Contents:[]t = ()`
+(`ParametricFunctions.versetest:717`), as the existing empty-tuple
+conversion already does for `true`. It also applies to ordinary
+bindings, arguments and nested covariant containers. Static bound
+subtyping is unchanged.
+
+On top of main `7548e590` (#628), four cases newly agree and none is
+worse: `ParametricFunctions.versetest` 719, 732, 752 and `:decls`.
+The baseline records these verdicts. Three execution regressions cover
+generic and inherited defaults, independent mutable instances, operand
+order and effects, nested arrays/options/maps/tuples, rollback,
+suspension and cancellation cleanup in Lean and C. A refusal and its
+`--extended-defaults` control retain convergence checking for field
+initializers. Core semantics, proofs, OVBC and the C runtime are unchanged.
 
 ## Ten causes to remove first
 

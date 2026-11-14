@@ -2791,8 +2791,11 @@ false` fails at `s{}`).
 Book also writes `true`, is the type of the empty value alone: `false`,
 `()` and a `void` value convert to it, it converts to `void`, to an array
 and, as the Book's `true` does ("true is a subtype of logic"), to `logic`
-as `false`, and `X:true = 1` is refused. A `void` value converts to
-`logic` as `false` too (`X:logic = if (C?) then () else true`), and
+as `false`, and `X:true = 1` is refused. A `void` value also converts
+to an empty array of any element type (`Items:[]t = ()` in a generic
+class), after evaluating its operand once; this works inside covariant
+containers too (`[]void` to `[][]int` preserves the outer array's length).
+It converts to `logic` as `false` too (`X:logic = if (C?) then () else true`), and
 querying the empty value (`()?`, `V?` of `V:void` or `V:true`,
 `(not F[])?`) uses that conversion and fails, with its operand's effects
 rolled back by the surrounding failure context. A populated `O:?void`

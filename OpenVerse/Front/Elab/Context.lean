@@ -2034,6 +2034,9 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
   -- (and so does a `void`'s, as `void` and `true` are one type, ch. 2;
   -- `X:logic = if (C?) then () else true`, `Void.versetest` 215-221)
   | .void, .logic => return some (.seq (← discardValue ⟨e, a⟩) (.lit (.logic false)))
+  -- A void value is the empty value, as true/tuple() is: the empty array
+  -- at any element type, including a class's opaque type parameter.
+  | .void, .arr _ => return some (.seq (← discardValue ⟨e, a⟩) (.lit Value.emptyArray))
   -- (in a program that calls `ToDiagnostic`, a value becomes an `any` as
   -- an object that prints it, `wrapAny`)
   | _, .any => if env.anyWraps then wrapAny env e a else return some (← discardValue ⟨e, a⟩)
