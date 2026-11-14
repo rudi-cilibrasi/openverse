@@ -6,6 +6,7 @@ import OpenVerse.Front.Aliases
 import OpenVerse.Front.BuiltinValues
 import OpenVerse.Front.FinalSuper
 import OpenVerse.Front.Bitwise
+import OpenVerse.Front.Localization
 import OpenVerse.Front.TypeValues
 import OpenVerse.Front.TypeArguments
 
@@ -646,6 +647,8 @@ def concurrencyHelpers (resolved : List STop) (requests : Requests) (eventFifo :
     parsed (its attributes taken out, `Attributes.apply`), checked, resolved
     and desugared by these passes, in this order, which is the order of their
     refusals:
+    0. localized messages written out (`Localization.desugar`), their
+       helpers added at 3;
     1. the effect policy, with where each specifier may go, and the source
        profile (`EffectPolicy`, `SourceProfile`);
     2. the rules of the source as written: no built-in type's name taken
@@ -687,7 +690,11 @@ def concurrencyHelpers (resolved : List STop) (requests : Requests) (eventFifo :
        (`InitializerConvergence.markSource`);
     9. the concurrency prelude the program needs (`concurrencyHelpers`), and
        the construction effects the source declares. -/
-def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitted := do
+def admitSource (written : List STop) (opts : Options) : Except String Admitted := do
+  -- 0. localized messages written out (`Localization`): `<localizes>`
+  --    definitions as the strings of their default text, `Localize` and
+  --    `Join` as calls of their helpers
+  let (allTops0r, usesLocalization) ← Localization.desugar written
   -- 1. effects and specifiers, and the source profile
   EffectPolicy.check allTops0r opts.entry
   EffectPolicy.checkPlaces allTops0r
@@ -720,7 +727,8 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   let usesReplaceAll := marked replaceAllMarker || opts.entry.isSome
   let usesBitwise := marked bitwiseMarker || (opts.entry.map mentionsBitwise).getD false
   let helpers := (← if usesRat then ratTops else pure []) ++ (← if usesReplaceAll then replaceAllTops else pure []) ++
-    (← if usesBitwise then bitwiseTops else pure [])
+    (← if usesBitwise then bitwiseTops else pure []) ++
+    (← if usesLocalization then Localization.tops else pure [])
   let intrinsicCalls := helpers.filterMap fun | .fn _ n .. => some n | _ => none
   let ignoredArms := allTops0r.flatMap fun
     | .const _ n _ _ (.block _ es) => if n == ignoredArmsMarker then es.map (·.pos) else []

@@ -873,6 +873,9 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
       | none => pure (.struct n [])
     else if (env.enums.lookup n).isSome then pure (.enum n)
     else if (env.refines.lookup n).isSome then pure (.refine n)
+    -- (a localized message, Book of Verse ch. 12: its default text, as
+    -- openverse has no culture to render it in, `Localization`)
+    else if n == "message" then pure Ty.string
     -- (an inlined generic call's type parameter, `$tp…_t`, that no
     -- argument determined, #283: said with its own name)
     else if n.startsWith "$tp" then

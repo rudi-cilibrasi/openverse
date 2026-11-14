@@ -306,3 +306,49 @@ refuse `Result:true = branch: …`, `FORT-582630-BranchResult.versetest:3`,
 3509), while `()` and `false` must (`Flag:true = false`, ch. 2,
 `02_primitives.md:1240`): openverse types `()` as `void`, so `true` needs
 the empty tuple's literal typed `tuple()` first.
+
+## Localized messages
+
+**The rule.** A definition marked `<localizes>` is a message: a constant
+`X<localizes>:message = "text"`, a function
+`F<localizes>(Name:string, Number:int):message = "Hello {Name}"`, or a
+field of a class or an interface; `Localize(M)` renders one into a string,
+`Join(Messages, Separator)` makes one of several. Its type is written, and
+is `message`; its value is a string literal; an interpolant in it is a
+parameter's name or a code point; every parameter is an `int`, a `float`, a
+`string` or a `message`.
+
+**The Book.** Ch. 12, "Localization" (`12_access.md:885-1100`): "Three
+parameter types are supported: `string`, `int` (formatted with comma
+separators), `float`" (`:917-920`), "Use `{ParameterName}` to insert
+parameter values … Only parameter names and Unicode code points allowed in
+braces" (`:922-925`), `Localize(HighScore(190091)) = "New record: 190,091
+points!"` (`:968`), named parameters with defaults (`:984-990`), tuple
+parameters (`:1009-1014`), "Localized messages **must be defined at module
+or snippet scope**" (`:1070`), and overrides in classes (`:1095-1110`).
+The API: `Localize<public><native>(Message:message)<reads>:string`,
+`Join<native><public>(Messages:[]message, Separator:message)<transacts>:message`,
+`message := class<epic_internal>` with a key, its default text and its
+substitutions. The tests, `Tests/Localization.versetest` (forms 2, 4 and 6
+valid, 1, 3 and 5 refused, 3639; a value that is no string literal 3638; a
+parameter of a class or an option 3509; a message in a function 3651;
+`{"print"}` 3652; `{Abc}`, a name that is no parameter, rendered as
+written, `:162-166`), `LocalizationJoin.versetest`, `Bugs/SOL-3887…`,
+`Bugs/SOL-3734…`.
+
+**openverse before.** "unknown or unsupported specifier <localizes>".
+
+**openverse now.** `Localization.desugar` (`Front/Localization.lean`),
+step 0 of `admitSource`: a message is its default text rendered, as
+openverse has no culture to render it in, so a `message` is a `string`
+(`resolveTy`, when the program defines no type of that name); a
+`<localizes>` definition loses the specifier, its text's interpolants the
+parameters' rendered values, computed once for every parameter by the
+helper `$localizeValue` (an `int` with comma separators, a `float` by
+`ToString`, a `string` as it is; a parameter of another type has none, as
+the tests' "No overload of the function `MakeLocalizableValue`"), a name
+that is no parameter its text in braces; `Localize` and `Join`, when the
+program defines none, are calls of the helpers `$localize` and
+`$localizeJoin`. **Not pinned:** a float's format in a message (no test:
+`ToString`'s six decimals here); a message is a `string`, so a string is
+accepted where a message is expected, which Verse refuses (no test).
