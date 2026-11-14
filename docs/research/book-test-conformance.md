@@ -60,12 +60,14 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   APIs (persistence, JSON, natives; 345); compiler tooling such as bytecode
   and digests (128); VM-conditional code inside a definition (37) and one
   file that defines `Main` itself (1).
-- Of the **9,564 translatable cases**, openverse **agrees on 8,544 (89%)**,
-  refuses 856 valid programs, **accepts 77 refused ones**, gives a
+- Of the **9,564 translatable cases**, openverse **agrees on 8,591 (90%)**,
+  refuses 809 valid programs, **accepts 77 refused ones**, gives a
   **different result in 87** (82 of them `verse_vm_only` cases of unbounded
-  ints) and hits **no internal error** ([After the forms of expressions,
+  ints) and hits **no internal error** ([After variance](#after-variance);
+  on main `84285c1`, before it: 8,544 agreed, 856 refused, 77 accepted, 87
+  differed, with [After the forms of expressions,
   statements and the library](#after-the-forms-of-expressions-statements-and-the-library);
-  on main `215af57`, before it: 8,452 agreed, 964 refused, 84 accepted, 88
+  on main `215af57`, before that: 8,452 agreed, 964 refused, 84 accepted, 88
   differed, with [After classes and
   subtyping](#after-classes-and-subtyping); on main `fdb1127`, before that:
   8,290 agreed, 1,123 refused, 87 accepted, 88 differed, with [After the
@@ -105,12 +107,12 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
   base of [source upper bounds](#after-source-upper-bounds) and of [what a
   `for` undoes](#after-what-a-for-undoes); with each alone, 8,131 agreed,
   1,422 refused, 135 accepted, 95 differed, and 8,121, 1,439, 135, 88.)
-- An agreement on an expected error is weak evidence: 2,992 expected errors
-  agree, but only 1,533 of them are refused by a check of a language rule
+- An agreement on an expected error is weak evidence: 2,999 expected errors
+  agree, but only 1,552 of them are refused by a check of a language rule
   (and 39 more, whose codes are all warnings, get openverse's warning);
-  1,063 are refused by the parser (the lexer's and parser's own checks
-  included) and 357 for a missing feature (counts of the run of [After
-  classes and subtyping](#after-classes-and-subtyping)).
+  1,060 are refused by the parser (the lexer's and parser's own checks
+  included) and 348 for a missing feature (counts of the run of [After
+  variance](#after-variance)).
 - **Internal errors**: none ([Internal errors](#internal-errors)). The three
   programs that failed `Prog.checkTypes` (`X:int = return`, `() = ""`, a
   `void` parameter compared with `""`) are refused or compile, and Lean's
@@ -297,17 +299,17 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| all test cases (assertions and files without one) | 13197 | 8368 | 77 | 822 | 87 | 3843 | 0 |
+| all test cases (assertions and files without one) | 13197 | 8415 | 77 | 775 | 87 | 3843 | 0 |
 | shared definitions of a file (`:decls`) | 307 | 176 | 0 | 34 | 0 | 97 | 0 |
-| **total** | 13504 | 8544 | 77 | 856 | 87 | 3940 | 0 |
+| **total** | 13504 | 8591 | 77 | 809 | 87 | 3940 | 0 |
 
 ### By form
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `assert` | 6671 | 3694 | 0 | 556 | 87 | 2334 | 0 |
+| `assert` | 6671 | 3707 | 0 | 543 | 87 | 2334 | 0 |
 | `assert_semantic_error` | 3460 | 2674 | 43 | 0 | 0 | 743 | 0 |
-| `assert_valid` | 1637 | 922 | 0 | 196 | 0 | 519 | 0 |
+| `assert_valid` | 1637 | 956 | 0 | 162 | 0 | 519 | 0 |
 | `assert_valid_syntax` | 439 | 386 | 0 | 53 | 0 | 0 | 0 |
 | `decls` | 307 | 176 | 0 | 34 | 0 | 97 | 0 |
 | `assert_roundtrip` | 304 | 293 | 0 | 9 | 0 | 2 | 0 |
@@ -330,7 +332,7 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| no VM restriction | 12208 | 8156 | 39 | 553 | 4 | 3456 | 0 |
+| no VM restriction | 12208 | 8203 | 39 | 506 | 4 | 3456 | 0 |
 | `verse_vm_only` | 702 | 213 | 5 | 296 | 83 | 105 | 0 |
 | `bp_vm_only` | 366 | 80 | 33 | 1 | 0 | 252 | 0 |
 | `verse_vm_todo` (BPVM only; a known VerseVM failure) | 219 | 95 | 0 | 6 | 0 | 118 | 0 |
@@ -340,9 +342,9 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| (top level) | 5575 | 3649 | 38 | 597 | 3 | 1288 | 0 |
+| (top level) | 5575 | 3687 | 38 | 559 | 3 | 1288 | 0 |
 | Operators/ | 1203 | 1103 | 0 | 0 | 27 | 73 | 0 |
-| Bugs/ | 1185 | 766 | 33 | 111 | 0 | 275 | 0 |
+| Bugs/ | 1185 | 775 | 33 | 102 | 0 | 275 | 0 |
 | Literals/ | 1020 | 835 | 0 | 6 | 0 | 179 | 0 |
 | Serialization/ | 991 | 0 | 0 | 0 | 0 | 991 | 0 |
 | Attributes/ | 795 | 535 | 4 | 10 | 0 | 246 | 0 |
@@ -2022,11 +2024,13 @@ translatable). The baseline is from the run on the final commit.
 
 The variance of parametric classes and interfaces (ch. 10, "Instantiation
 and Identity"), built in Verse Core with its proofs and in the front end
-([variance.md](variance.md)), on main `215af57`. Against main's baseline
-(8,452 agree, 964 refuse, 84 accept, 88 differ, 3,916 not translatable),
-47 cases more agree and none is worse: **8,499 agree, 917 refuse, 84
-accept, 88 differ, 3,916 not translatable** (re-recorded from a fresh run;
-`compare`: 0 worse, 47 better).
+([variance.md](variance.md)), on main `215af57` and merged with main
+`84285c1` (#618). Against main's baseline (8,544 agree, 856 refuse, 77
+accept, 87 differ, 3,940 not translatable), 47 cases more agree and none is
+worse or changed otherwise: **8,591 agree, 809 refuse, 77 accept, 87
+differ, 3,940 not translatable** (re-recorded from a fresh run on the
+merged compiler; before the merge, against `215af57`'s 8,452: 8,499, the
+same 47).
 
 | Form | Rule (where) | Agree now | Left |
 |---|---|---|---|
@@ -2034,10 +2038,11 @@ accept, 88 differ, 3,916 not translatable** (re-recorded from a fresh run;
 | joins and conversions by variance | at an expected type, both at it; without one, a class above both at its arguments' join by variance (`joinTyShaped`) | 9: `SOL-6739-ParametricTypeMeetAndJoin.versetest` 6, 11, 16, 25, 99, 104, 109, 122, 216 | 6: 38, 138 (to an instance at `any`, which holds no value in openverse); 58, 74, 161, 177 (a contravariant interface or class whose implementation holds the parameter in a field, `Data:t`: Verse Core types a reference by its object's own class) |
 | an archetype block with no fields | `X := c(args):` with nothing indented below is `c(args){}` (the Book's tests; `Parser`) | (needed by the archetype-blocks cases) | the 31 archetype-blocks cases now stop at `default_param.class1` defined twice: a type named at two arities, `class1(t)` and `class1()` (`i()` beside `i(t)`), in a module that each case includes (harness over-inclusion) |
 
-- **Per cause, at `215af57` and now:** variance 38 → 0 (38 agree);
-  archetype-blocks 31 → 0 (they parse and reach `types-other`: the type
-  named at two arities); subtyping-to-any 11 → 5 (6 `SOL-6739` agree);
-  joins 16 → 13 (3 `SOL-6739` agree); types-other 118 → 149 (the 31).
+- **Per cause, at `84285c1` and now** (the same at `215af57`, where
+  types-other was 118 → 149): variance 38 → 0 (38 agree); archetype-blocks
+  31 → 0 (they parse and reach `types-other`: the type named at two
+  arities); subtyping-to-any 11 → 5 (6 `SOL-6739` agree); joins 16 → 13 (3
+  `SOL-6739` agree); types-other 109 → 140 (the 31).
 - **Moved the wrong way:** none.
 - **Where the Book disagrees with itself:** the tests comment out the
   variance of a class with a `var` field, "# TODO: classes containing
@@ -2051,9 +2056,10 @@ accept, 88 differ, 3,916 not translatable** (re-recorded from a fresh run;
   through the declared signature, in Verse Core: [variance.md](variance.md),
   "What is left"); the 31 archetype-blocks cases: a type named at two
   arities.
-- **Programs.** Against main `215af57`, over every suite and the corpus
-  `corpus2` (5,925 programs in both), no program's output, messages or exit
-  code changed; 35 programs' bytes changed (32 of the corpus' `heterogeneous`
+- **Programs.** Against main `84285c1`, over every suite and the corpus
+  `corpus2` (5,957 programs in both: 5,909 the same), no program's output,
+  messages or exit code changed but this work's 13 new tests (`variance_*`,
+  which main refuses or refuses otherwise); 35 programs' bytes changed (32 of the corpus' `heterogeneous`
   programs, `tests/verse/choice_heterogeneous_contracts.verse`,
   `fn_values_method_variance_contexts.verse` and
   `multi_method_tuple_ordinary_other_receiver_inside_class.verse`): their
@@ -2478,7 +2484,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Bugs/SOL-6137-ConcurrencyMacrosNotIntroducingScope.versetest` | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-6177-SubtypingIgnoresInheritedMembers.versetest` | 7 | 7 | 0 | 0 | 0 | 0 | 0 |
 | `Bugs/SOL-6529-WarnAboutAlwaysFailingContainerLookups.versetest` | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
-| `Bugs/SOL-6739-ParametricTypeMeetAndJoin.versetest` | 25 | 10 | 0 | 15 | 0 | 0 | 0 |
+| `Bugs/SOL-6739-ParametricTypeMeetAndJoin.versetest` | 25 | 19 | 0 | 6 | 0 | 0 | 0 |
 | `Bugs/SOL-6934-OptionTypeIgnoresHashabilityOfValue.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
 | `Bugs/SOL-6945-JoinOfTupleOfNamedElementsAndArray.versetest` | 8 | 6 | 0 | 2 | 0 | 0 | 0 |
 | `Bugs/SOL-7017-AvailableAttributeOnlyUsesDefinitionPackageVersion.versetest` | 4 | 0 | 0 | 0 | 0 | 4 | 0 |
@@ -2745,7 +2751,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `PackageCycles.versetest` | 15 | 0 | 0 | 0 | 0 | 15 | 0 |
 | `ParametricCastingIsDisallowed.versetest` | 11 | 10 | 0 | 1 | 0 | 0 | 0 |
 | `ParametricFunctions.versetest` | 106 | 78 | 8 | 16 | 0 | 4 | 0 |
-| `ParametricTypes.versetest` | 274 | 169 | 0 | 78 | 0 | 27 | 0 |
+| `ParametricTypes.versetest` | 274 | 207 | 0 | 40 | 0 | 27 | 0 |
 | `Parentheses.versetest` | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | `Path.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `PersistentJson.versetest` | 103 | 1 | 0 | 0 | 0 | 102 | 0 |
