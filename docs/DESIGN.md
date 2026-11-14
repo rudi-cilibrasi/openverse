@@ -1670,7 +1670,7 @@ beside the pass that makes it:
 | `$qual:A::F\|q` (`qualMarker`) | a definition written `(q:)F` | parser | `resolveModules` (out), `checkNoShadowing` |
 | `$open:A::\|M` (`openMarker`) | a `using{M}` in module `A` | parser | `resolveSpecifiers`, `resolveModules` (out) |
 | `$uses:qualifiers` (`qualifierMarker`) | a source that writes a qualifier | parser | `resolveModules` (out) |
-| `$uses:rational`, `$uses:replaceAll`, `$uses:bitwise`, `$uses:ignoredArms` | what helpers a program needs; the arms marked `@ignore_unreachable` | parser | `admitSource` (out), `Reachability` |
+| `$uses:rational`, `$uses:replaceAll`, `$uses:bitwise`, `$uses:ignoredArms` | what helpers a program needs; the arms marked `@ignore_unreachable` (`ignoredArmsOf`) | parser | `admitSource` (out), `Reachability` |
 | `$constructor:c` (`constructorSpec`) | a constructor function of class `c`, among its specifiers | parser | `Aliases`, `resolveModules`, `Access`, `Attributes`, `classMethods` |
 | `$ctor:D` (`delegationHead`) | a constructor's delegation `D<constructor>(…)` | parser | `Aliases`, `resolveModules`, the constructors' lowering |
 | `$scope(M, …)` (`scopeHead`) | an access level's definition `S := scoped{M, …}` | parser | `resolveSpecifiers` (out) |
@@ -1686,6 +1686,8 @@ beside the pass that makes it:
 | `$implicitSelf:F` (`implicitSelfPrefix`) | a bare call in a method that may be an extension method's with `Self` | `resolveModules` | `elabExtensionCallWith` |
 | `$typeArgument:t` (`TypeArguments.paramPrefix`) | a type given as an argument, as a parameter | `TypeArguments` | `TypeArguments` |
 | `$type:C` (`TypeValues.valueClass`), `$castable` (`TypeValues.castableMark`) | the class of the value `C`; a `<castable>` class's metatype | `TypeValues` | the join of type values, messages |
+| `$accessor` (`Accessors.accessorStruct`) | the struct of an accessor's first parameter, `(:accessor)`, which no program can name, so that only a field's reads and writes call the accessors | `Accessors` | the elaboration of a field's reads and writes (`accessorArg`) |
+| `$initializerOrdinaryCall` (`InitializerConvergence.sourceCallMarker`) | a source function, among its specifiers: a field's default may not call it | `admitSource` (`InitializerConvergence.markSource`, but with `--extended-defaults`) | `checkInitializerConvergence` |
 | `$castableClass` (`castableClassMarker`) | the interface every `<castable>` class is below | `UpperBounds.markCastable` | the bounds' evidence (`Context`, `SubtypeEvidence`), messages |
 
 The constants the parser writes beside a definition (a qualifier's, a

@@ -544,6 +544,13 @@ def pointerTypeHead : String := "$pointer"
     whose value is a block of one name at each arm's place (`TyEnv.ignoredArms`). -/
 def ignoredArmsMarker : String := "$uses:ignoredArms"
 
+/-- The places the parser's `ignoredArmsMarker` lists among the definitions
+    `tops`: the code marked `@ignore_unreachable` (none without it). -/
+def ignoredArmsOf (tops : List STop) : List Pos :=
+  tops.flatMap fun
+    | .const _ n _ _ (.block _ es) => if n == ignoredArmsMarker then es.map (·.pos) else []
+    | _ => []
+
 /-- The name of the record of an attribute (Book of Verse ch. 12,
     "Annotations and Metadata"), after the definition it is on: `$attr:L_C`,
     whose specifiers are where it is and what, and whose value is the

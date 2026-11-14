@@ -181,9 +181,7 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
     (← if usesBitwise then bitwiseTops else pure []) ++
     (← if usesLocalization then Localization.tops else pure [])
   let intrinsicCalls := helpers.filterMap fun | .fn _ n .. => some n | _ => none
-  let ignoredArms := allTops0r.flatMap fun
-    | .const _ n _ _ (.block _ es) => if n == ignoredArmsMarker then es.map (·.pos) else []
-    | _ => []
+  let ignoredArms := ignoredArmsOf allTops0r
   let unmarked := allTops0r.filter fun
     | .const _ n _ _ _ => ![ratMarker, replaceAllMarker, ignoredArmsMarker, bitwiseMarker].contains n
     | _ => true
