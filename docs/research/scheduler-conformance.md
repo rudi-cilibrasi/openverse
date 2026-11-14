@@ -45,6 +45,7 @@ the sources disagree, the table records that disagreement.
 | Structured completion and ties | The Book and Epic tutorial describe sync waiting for all, race cancelling losers, and rush allowing unfinished work to continue. | Arms run to a wait/end in source order. Same-tick race completion chooses the earlier arm; an immediate winner prevents later arms from starting. [Ties](../../tests/verse/scheduler_audit_ties.verse) records winner and cleanup. | Common completion behavior; the exact tie/start/cleanup ordering here is the tested reference policy, not a measured engine trace. |
 | Event fanout | The Book's prose conflicts between broadcast and one recipient. Epic's event/Signal descriptions resume all current awaiters. | One signal delivers the value to every current waiter. [Event order](../../tests/verse/scheduler_audit_event_order.verse) deliberately registers B before A and observes both receive 7. | Selects the published API's broadcast reading. |
 | Event wake order | The Book's API and Epic specify suspension order. | Waiters resume in the order they began waiting: B waits first and resumes first in [event order](../../tests/verse/scheduler_audit_event_order.verse). | The Book's ([awaiters inside `Signal`](#awaiters-run-inside-signal), #513). |
+| Task end and its awaiters | The Book's API (`task`, `Await`): "Multiple awaiters are allowed and are resumed in the order they registered"; "a cancelled task never resumes its awaiters ... simply stays suspended for ever"; ch. 14 has `Await` pass a cancellation on. | A task's end resumes its awaiters inside its last step, in registration order, each to its next wait ([order](../../tests/verse/task_end_order.verse), [before others](../../tests/verse/task_end_before_others.verse)); an await of a cancelled task waits for ever ([Main](../../tests/verse/task_cancel_main.verse)). | The Book's API ([a task's end](#a-tasks-end-resumes-its-awaiters)). |
 | Signal boundary and re-await | The Book drops signals with no waiter; its API resumes the waiters inside `Signal`, each until it waits again, and an await made meanwhile waits for the next signal. | Each waiter runs inside the `Signal`, to its next wait. Consecutive signals 1 and 2 deliver 1 and then, to the waits made inside the first, 2; signal 3 finds no one. [Re-await](../../tests/verse/scheduler_audit_event_reawait.verse). | The Book's ([awaiters inside `Signal`](#awaiters-run-inside-signal), #513). |
 | Subscriptions and event transactions | The Book describes transactional Subscribe/Cancel; its tests signal in `<decides>` functions; its API invokes subscribers after every waiting task resumed. Epic's Signal pages render no_rollback. | Waiters run inside the Signal, then callbacks in subscription order. A failed Signal restores what the waiters and callbacks did, output included, and the waiters wait again. Failed Subscribe/Cancel restores the subscriber list. [Transactions](../../tests/verse/scheduler_audit_transactions.verse) counts exactly `2+3+4=9`; the waiter receives 2, never rolled-back 1. | The Book's tests (default); `--signal-no-rollback` for Epic's pages ([#515](https://github.com/rudi-cilibrasi/openverse/issues/515)). |
 | Cancellation and source return | The Book requires immediate, non-suspending cleanup; return in a concurrent arm leaves the enclosing function. | Nested defers run once; repeated Cancel is harmless. An arm return unwinds that arm, cancels its race siblings, runs surrounding defers, then stops the function's registered branches. [Cancel](../../tests/verse/scheduler_audit_cancel.verse), [source return](../../tests/verse/scheduler_audit_source_return.verse). | Lifetime/cleanup checks; the complete ordering is an OpenVerse policy, including function defers before registered branches. |
@@ -510,8 +511,10 @@ a task wait that was already polled (a fresh one on a done task still
 completes at once), asking for another pass; each goes on at its root's
 turn in the scheduler's pass, as before (rules 13 and 14: task awaiters
 keep the pass order). A rule-13 drain is the same machinery with a list
-of records in each task; it is designed here and left (no translatable
-case needs it).
+of records in each task; it was designed here and left, and is now built
+([a task's end](#a-tasks-end-resumes-its-awaiters)): a task is awaited
+through records of its end event, so the hold of a task wait is reached
+no more.
 
 **Branches stopped while they run.** A function resumed inside a
 `Signal` that its own `branch` made can end and stop that branch. In
@@ -606,9 +609,10 @@ of its programs differs from the FIFO prediction, as each ends with
 signals that wake every actor).
 
 **What is left.**
-- Rule 13: the tasks awaiting one task's end go on in the scheduler's
+- Rule 13: the tasks awaiting one task's end went on in the scheduler's
   order, not in the order they registered inside the end. Designed, and
-  left: see [rule 13, pinned and designed](#rule-13-a-tasks-end-pinned-and-designed).
+  left: see [rule 13, pinned and designed](#rule-13-a-tasks-end-pinned-and-designed);
+  since built: [a task's end resumes its awaiters](#a-tasks-end-resumes-its-awaiters).
 - Two arms that both `return` inside one walk: the first's value is kept;
   an in-turn `return` after an out-of-turn end of a `race` returns, as an
   arm's `return` leaves the function (no test of the Book has either).
@@ -642,7 +646,8 @@ inside its last step, as `signalAll` does: each record marked, then each
 one's root woken in order (`$wakeRoot`), the scheduler's `Drain` raised.
 Programs that await a task would be compiled in event mode too.
 
-**Why it is left.** Measured on the scheduler model (a copy with task
+**Why it is left** (it was, until [the section after this](#a-tasks-end-resumes-its-awaiters),
+which builds it and follows the API on the cancelled task). Measured on the scheduler model (a copy with task
 awaiters resumed so), 40 of seeds 1-400 predict another output; 162 of the
 suite's programs spawn and await a task (all of them would change bytecode,
 by the measure, a tenth or more their output, each to be derived again by
@@ -935,3 +940,122 @@ do not move.
   outputs and are run against the compiler; the differential generators
   (`gen-conc.py`, `gen-conc-poly.py`) are checked to still make programs
   that end.
+
+#### A task's end: as built
+
+As designed above; the pieces and where they are:
+
+- **The await prelude** (`concPreludeAwaits`, `Front/ConcurrencyPrelude.lean`):
+  `taskBase`'s `Ends:?event(void)`; `Await` (a result at once, else
+  `EvAwait(taskEnds(T))`, then the result); `taskEnds`, `taskEnd`. Chosen in
+  `concurrencyHelpers` (`Elab/Source.lean`, `Admitted.awaitsTasks`), with
+  the event prelude under it.
+- **The request** (`Requests.awaits`, `Types.lean`; its merge, difference
+  and emptiness in `Elab/Context.lean`, its tier, 2, and `upTo` in
+  `Elab.lean`): `elabProgramCore` asks for it when an elaborated function
+  calls `$Await` and the round has no await mode.
+- **The root's end** (`lowerConcurrency`, `awaits`): a spawned call's
+  root, after its task's result and done flag, calls `$taskEnd(T)`.
+
+Verse Core, OVBC, `runtime/include/openverse.h`, `runtime/src/load.c` and
+the C interpreter are unchanged (`git diff origin/main -- OpenVerse/Core
+runtime docs/FORMAT.md` is empty).
+
+**What changed for programs** (every suite and the corpus `corpus3`: 6,808
+programs in both, 5,581 compiled and 1,227 checked, against main
+`33bcf38`): 6,414 the same in bytecode, messages and exit code; 394 with
+other bytecode and the same messages and exit code: the 393 that await a
+task (by main's own Verse Core: a call of the prelude's task `Await`), and
+`task_cancel_defer_order`, whose source is rewritten (below) and awaits no
+task any more. Every program that awaits a task changed, and none that
+does not: of the 524 that spawn, the 124 that never await a task kept their
+bytes (and the 40 `fifo-*` programs of the corpus are refused alike, their
+`--event-fifo` gone since #622). Of the 393, 355 give the same output and 38
+another: the 16 suite tests below whose outputs changed (one more was
+deleted, one rewritten keeps its output), 20 of the corpus's 60 scheduler
+programs, exactly the seeds of 1-60 whose prediction the rule changes, each
+as the new model says, and 2 `conc-poly` programs, whose lines are the same,
+reordered (an awaiter goes on inside the task's end, before the tasks after
+it in the pass). Lean and C agree on all 394.
+
+**The suite's tests.** 18 tests' outputs change under the rule, every one
+of them a test of the retired extension; each new output was derived by
+hand from the rule, before the compiler's was looked at, and all 18 agree:
+
+| Test | Main's output | Now | Why |
+|---|---|---|---|
+| `task_cancel` | … `cancelled w` / `waiter unwound` / `quick still gives 5` … | `waiter unwound` gone | the waiter of the cancelled `w` waits for ever; the program ends with `Main`, its defer not run |
+| `task_cancel_main` | `main unwound`, exit 0 | nothing, exit 2 (`error: user`) | `Main` waits for ever; when no task can run, a stalled `Main` |
+| `task_cancel_imm_main` | `F defer` / `main end` | `main end` | `F` waits in its first run; the program ends with `Main` |
+| `task_cancel_first_run` | `F defer` / `main goes on` / `Main defer` | `main goes on` / `Main defer` | as above, `F` never unwinds |
+| `task_cancel_first_run_chain` | `F defer` / `spawner goes on` / … | `spawner goes on` / `Spawner defer` / `main goes on` | the same |
+| `task_cancel_first_run_generic` | `F defer` twice / … | `main goes on` / `Main defer` | the same, twice |
+| `task_cancel_nested_first_runs` | `B defer` / `A goes on` / … | `A goes on` / `A end` / `A defer` / `main end` | the same |
+| `task_cancel_first_run_branch` | `branch defer` / `G end` / `G defer` / … | `G end` / `G defer` / `branch defer` / … | the branch waits until `G` exits, which stops it after `G`'s own defer |
+| `task_cancel_branch_generic` | `b1 defer int` first | `b1 defer int` after `G defer int` (and for `string`) | the same, at two types |
+| `task_cancel_race_arm` | `arm b defer` / `F defer` / `main goes on` | `arm b defer` / `F got 2` / `F defer` / `main goes on` | the awaiting arm waits; the other wins; the awaiting arm is cancelled as a loser |
+| `task_cancel_rush_loser` | `F got 5` / `F defer` / `loser defer` / … | `F got 5` / `F end` / `F defer` / `loser defer` / … | the loser waits for ever; `F` goes on to its end, whose exit stops the loser |
+| `task_cancel_rush_loser_later` | `F got 5` / `loser defer` / `F end` / … | `F got 5` / `F end` / `F defer` / `loser defer` / … | the same, for a loser that awaits later |
+| `task_cancel_sync_arm_then_spawn_main` | `Main defer`, exit 0 | `arm 2 goes on` / `C end` / `C defer`, exit 2 | arm 1 waits for ever, the `sync` never ends; then a stalled `Main` |
+| `task_cancel_sync_arm_then_spawn_task` | `F defer` / `C end` / `C defer` / `main end` | `arm 2 goes on` / `C end` / `C defer` / `main end` | the same in a task, which waits for ever |
+| `task_cancel_siblings_after_arm_await` | `A defer` / … / `main end` | … / `G end` / `arm 2 ends` / `main end` | `A`'s `sync` never ends; its arm 2 goes on to its end |
+| `task_cancel_await_during_unwind` | … / `waiter defer` / … | `waiter defer` gone | an await of a task being cancelled waits for ever |
+| `task_cancel_defer_order` | `H inner` / … / `Main defer` | `main goes on` / `Main defer` | `F` waits for ever, unwound by nothing |
+| `task_cancel_branch_defer_recancel` | `branch defer` / `A defer` / `killer done` / `end` | `never` / `A defer` / `branch defer` / `killer done` / `end` | the branch is cancelled only by `A`'s exit, so the killer cancels nothing |
+
+Rewritten to the Book's behaviour (their comments, and in
+`task_cancel_race_arm` and `task_cancel_siblings_after_arm_await` a line's
+text, `never` being reached now): the first 16, and
+`task_cancel_race_loser_then_end` (its comment only: the question it asked,
+whether the awaiting arm cancels its task, is gone; its output stands).
+`task_cancel_defer_order` is rewritten to cancel its task with `Cancel`, so
+that its subject, the order of a cancelled task's defers, stands with its
+old output. Deleted: `task_cancel_branch_defer_recancel`, whose subject, a
+branch cancelled alone while its function waits, no longer arises.
+
+New tests, one or more for each rule pinned above: `task_end_order` (1, 6:
+the Book's `TestAwait3`; main: `A2 B3 C2`), `task_end_before_others` (2:
+the awaiters before a task ready at the same tick; main: that task between
+them), `task_end_held_sleep` (10: an arm whose sleep expired keeps its turn
+in the pass), `task_end_in_signal` (2, 3, 10: a task ending inside a
+`Signal`, its awaiter signalling inside the end, the signaller seeing it;
+main: the awaiter never ran, as `Main` ended first), `task_end_value` (4, 5),
+`task_end_self_and_cycle` (7), `task_end_loser_deregisters` (8),
+`task_end_rollback` (9: main: the awaiter never ran), and the rewritten
+`task_cancel_main` and `task_cancel_race_arm` for the cancelled task.
+
+**Models.** `sched_gen.py` and `sched_gen2.py` predict the rule (a task's
+end is a round of its own event, run in the root's last step; the cancel
+request of an awaiter is gone): over seeds 1-2,000 their predictions differ
+from main's on 435 (123 the same lines reordered; 180 from exit 0 to 2, a
+`Main` stalled on a cancelled task; 132 with lines gone or added, an awaiter
+of a cancelled task no longer unwound). Lean matches the new predictions on
+all 2,000, C matches Lean, and main's predictions fail on exactly those 435.
+The 13 other models with task awaits (`call_packing.py` in its `spawn`
+context and twelve `gadt_*`) predict the same outputs as before (one
+awaiter, `Main`, of each task): 1,000 seeds of each run as the model says in
+Lean and C. The differential generators: `gen-conc.py` 400 programs,
+`gen-conc-poly.py` 200, Lean and C alike, none stalled.
+
+**Code size and time.** Bytecode of the 393 programs that await a task:
+13.9% larger at the median (0.6% to 52.7%; 66.47 MB to 70.68 MB in all):
+the 127 already in event mode 1.4% (the end event, `taskEnds`, `taskEnd`,
+the roots' markers), the 266 that were not 19.0% (the event mode's prelude,
+wake functions and markers, besides). Compiling the suite's 146 such
+programs takes 17% longer (one more elaboration round each). The gate's
+size checks pass (`test-frontend-c-size.sh`: `lowerConcurrency`'s C,
+381,642 to 381,684 bytes; `test-choice-size.sh` compiles no task await). A
+chain of tasks each awaiting the next, the deepest ending after a sleep,
+now resumes level after level inside the ends, linear in the depth: depth
+1,000 in 0.48 s in Lean and 0.08 s in C (main, one scheduler pass a level:
+30 s and 4.1 s); depth 30,000 in 16 s and 2.8 s, no stack exhausted.
+
+**What is left.**
+- The scheduler's cancel request (`$CancelCur`) and its handling, and
+  `waitResume`'s branches for a task wait (held in a drain, or of a
+  cancelled task), are reached by no program now (a task is awaited through
+  its end event's records); they stay so that the programs that never await
+  a task keep their bytes. Taking them out is a tidy that changes every
+  concurrent program's bytes, not its output.
+- The wiki's *Where the Book disagrees with itself* has no entry for ch. 14
+  `:927-929` against the API's `Await` and `Cancel` (line 1362); one to add.
