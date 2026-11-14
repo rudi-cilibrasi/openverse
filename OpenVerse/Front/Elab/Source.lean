@@ -91,7 +91,7 @@ def checkNoShadowing (tops : List STop) : Except String (List ScopePair) := do
   let shown (ps : List String) : String := ".".intercalate ps
   -- (definitions written `(M:)x` in their module)
   let qualified : List String := tops.filterMap fun
-    | .const _ n _ _ _ => if n.startsWith "$qual:" then ((n.drop "$qual:".length).toString.splitOn "|").head? else none
+    | .const _ n _ _ _ => (qualMarker? n).map (·.1)
     | _ => none
   -- the definitions of the top level and the modules: each one's scope, name,
   -- what it is and where
@@ -105,8 +105,8 @@ def checkNoShadowing (tops : List STop) : Except String (List ScopePair) := do
   let defs : List (List String × String × String × Pos) := tops.filterMap fun t =>
     let (p, n) := match t with
       | .fn p n .. | .const p n .. | .classDef p n .. => (p, n)
-    if n.startsWith "$module:" then
-      let ps := qualParts (n.drop "$module:".length).toString
+    if let some m := moduleMarker? n then
+      let ps := qualParts m
       some (ps.dropLast, ps.getLastD "", "module", p)
     else
       let ps := qualParts n
@@ -156,8 +156,8 @@ def checkNoShadowing (tops : List STop) : Except String (List ScopePair) := do
       params parts.dropLast p (shown parts) ps
     | .const p n _ _ body =>
       let parts := qualParts n
-      if n.startsWith "$module:" then
-        let mp := qualParts (n.drop "$module:".length).toString
+      if let some m := moduleMarker? n then
+        let mp := qualParts m
         if !qualified.contains (qualJoin mp) then
           refuse p "the module" (mp.getLastD "") "" (shown mp.dropLast) (outers mp.dropLast false (mp.getLastD ""))
         continue

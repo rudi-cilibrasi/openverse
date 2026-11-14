@@ -352,7 +352,7 @@ def macroKeywords : List String :=
 def STop.attrPlace : STop → String
   | .fn _ _ _ _ specs .. => if specs.any (·.startsWith "$constructor:") then "constructor" else "function"
   | .const _ n _ _ v =>
-    if n.startsWith "$module:" then "module" else match v with
+    if (moduleMarker? n).isSome then "module" else match v with
     | .structDef .. => "struct"
     | .enumDef .. => "enum"
     | .typeAlias .. | .refineDef .. => "alias"
@@ -363,7 +363,7 @@ def STop.attrPlace : STop → String
 /-- The name an attribute record gives a definition (`attrPlace`). -/
 def STop.attrName : STop → String
   | .fn _ n .. | .classDef _ n .. => n
-  | .const _ n .. => if n.startsWith "$module:" then (n.drop "$module:".length).toString else n
+  | .const _ n .. => (moduleMarker? n).getD n
 
 /-- A definition with the specifier `sp` added to those of its name. -/
 def STop.addSpec (sp : String) : STop → STop
@@ -386,7 +386,7 @@ def attachAttrs (tops : Array STop) (start : Nat) (attrs : List (Pos × SExpr)) 
   let isMarker : STop → Bool := fun
     | .const _ n .. =>
       let last := (n.splitOn "::").getLast?.getD n
-      last.startsWith "$qual:" || last.startsWith "$open:" || last.startsWith typeDefaultPrefix ||
+      last.startsWith qualPrefix || last.startsWith openPrefix || last.startsWith typeDefaultPrefix ||
         last.startsWith attrPrefix
     | _ => false
   let some i := (List.range (tops.size - start)).map (· + start) |>.find? (fun i => !isMarker tops[i]!)
@@ -2210,7 +2210,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) (par
             expectIdent)
           while (← peekT).isSym "." do bump; path := path ++ "::" ++ (← expectIdent)
           expectSym "}"
-          tops := tops.push (marker t.pos s!"$open:{pfx}|{path}")
+          tops := tops.push (marker t.pos (openMarker pfx path))
       -- (the rest of the `using{…}`, through its own `}`)
       let mut depth : Nat := 0
       repeat
@@ -2239,7 +2239,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) (par
       | none => expectIdent
     let name := pfx ++ name0
     owner := name
-    if let some q := qual? then tops := tops.push (marker t.pos s!"$qual:{name}|{q}")
+    if let some q := qual? then tops := tops.push (marker t.pos (qualMarker name q))
     let pre ← parseSpecs
     let n ← peekT
     if ext.isSome && !n.isSym "(" then perr n noExtensionFields
@@ -2259,7 +2259,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) (par
           let b ← peekT
           parseTopsIn (if b.bol then b.col else col) (name ++ "::") (braced := true)
         else perr o "expected ':' or '{' after module"
-      tops := tops.push (marker t.pos s!"$module:{name}" pre)
+      tops := tops.push (marker t.pos (moduleMarker name) pre)
       tops := tops ++ inner.toArray
       continue
     -- `F of {X:int}:t = …`: a function, its parameters in braces after

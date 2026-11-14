@@ -164,7 +164,7 @@ abbrev Levels := Std.HashMap String String
 def Levels.of (tops : List STop) : Levels := tops.foldl (fun m t =>
   let (n, specs) : String × List String := match t with
     | .fn _ n _ _ specs .. | .const _ n specs .. | .classDef _ n specs .. => (n, specs)
-  let n := if n.startsWith "$module:" then (n.drop "$module:".length).toString else n
+  let n := (moduleMarker? n).getD n
   match levelOf specs with
   | some l => m.insert n l
   | none => m) {}

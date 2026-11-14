@@ -309,7 +309,7 @@ def apply (tops : List STop) : Except String (List STop × List (Pos × String))
   let isMarker : STop → Bool := fun
     | t@(.const _ n ..) =>
       let last := (n.splitOn "::").getLast?.getD n
-      isRecord t || t.isTypeDefault || last.startsWith "$qual:" || last.startsWith "$open:"
+      isRecord t || t.isTypeDefault || last.startsWith qualPrefix || last.startsWith openPrefix
     | _ => false
   let tops0 := tops.toArray
   -- the records, in order, each with the definition before it
@@ -332,8 +332,8 @@ def apply (tops : List STop) : Except String (List STop × List (Pos × String))
   let goneIdx : List Nat := (gone.filter (!memberPlaces.contains ·.base)).map (·.defIdx)
   let goneModules : List String := (gone.filter (·.place == "module")).map (·.target)
   let inGoneModule (n : String) : Bool := goneModules.any fun m =>
-    let n := if n.startsWith "$module:" then (n.drop "$module:".length).toString else n
-    let n := if n.startsWith "$qual:" || n.startsWith "$open:" then (n.drop 6).toString else n
+    let n := (moduleMarker? n).getD n
+    let n := (afterPrefix? qualPrefix n <|> afterPrefix? openPrefix n).getD n
     n.startsWith (m ++ "::")
   -- (a member: by its name, a method the first of its name after the attribute)
   let posLe (a b : Pos) : Bool := a.line < b.line || (a.line == b.line && a.col ≤ b.col)

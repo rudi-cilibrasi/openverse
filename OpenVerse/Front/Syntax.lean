@@ -32,6 +32,34 @@ def bareName (n : String) : String := ((splitQual? n).map (·.2)).getD n
     those of a program with modules. -/
 def qualifierMarker : String := "$uses:qualifiers"
 
+/-- `n` after `pre`, when it starts with it: what a marker `pre…` marks. -/
+def afterPrefix? (pre n : String) : Option String :=
+  if n.startsWith pre then some (n.drop pre.length).toString else none
+
+/-- A module's marker, `$module:A::B`: a constant the parser writes where
+    the module `A::B` is defined, with the module's specifiers, and
+    `resolveModules` reads and takes out. -/
+def modulePrefix : String := "$module:"
+def moduleMarker (path : String) : String := modulePrefix ++ path
+def moduleMarker? (n : String) : Option String := afterPrefix? modulePrefix n
+
+/-- A qualified definition's marker, `$qual:A::F|q` for `(q:)F` in module
+    `A`, written before it: `resolveModules` checks that `q` names where
+    `F` is, and takes it out. -/
+def qualPrefix : String := "$qual:"
+def qualMarker (name q : String) : String := s!"{qualPrefix}{name}|{q}"
+def qualMarker? (n : String) : Option (String × String) := do
+  let [name, q] := (← afterPrefix? qualPrefix n).splitOn "|" | none
+  return (name, q)
+
+/-- A `using{M}`'s marker, `$open:A::|M` for one written in module `A`:
+    `resolveModules` opens `M` there, and takes it out. -/
+def openPrefix : String := "$open:"
+def openMarker (scope path : String) : String := s!"{openPrefix}{scope}|{path}"
+def openMarker? (n : String) : Option (String × String) := do
+  let [scope, path] := (← afterPrefix? openPrefix n).splitOn "|" | none
+  return (scope, path)
+
 /-- Surface types. -/
 inductive STy where
   /-- `int`, `logic`, `char`, `string`, `void` -/
@@ -499,8 +527,7 @@ partial def STop.definedNames : STop → List (Pos × String)
       ps.flatMap (fun prm => (p, bareName prm.name) :: (prm.default.map SExpr.definedNames).getD []) ++ body.definedNames
   | .const p n _ _ body =>
     -- (a module's marker, `$module:A::B`, defines `B`)
-    (if n.startsWith "$module:" then [(p, (n.drop "$module:".length).toString)]
-     else [(p, n)]) ++ body.definedNames
+    [(p, (moduleMarker? n).getD n)] ++ body.definedNames
   | .classDef p n _ tps _ _ _ fs ms =>
     (p, n) :: tps.map (fun tp => (tp.pos, tp.name)) ++
       fs.flatMap (fun f => (p, bareName f.name) :: (f.default.map SExpr.definedNames).getD []) ++
