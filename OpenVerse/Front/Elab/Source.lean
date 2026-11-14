@@ -684,8 +684,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   checkDefers allTops0r
   checkForClauses allTops0r
   -- 3. the helpers the markers and the entry expression ask for: the
-  --    rationals' (#116; also for ReplaceAll and @ignore_unreachable, as
-  --    before the bitwise functions had a marker), ReplaceAll's, the bitwise
+  --    rationals' (#116), ReplaceAll's, the bitwise
   --    functions'. They expand finite intrinsic operations
   --    (`intrinsicCalls`): Euclid/continued fractions decrease absolute
   --    remainders; ReplaceAll advances through a finite input; the bitwise
@@ -693,7 +692,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   --    at the overflow error by then). Ordinary source names cannot supply
   --    them.
   let marked (m : String) : Bool := allTops0r.any fun | .const _ n _ _ _ => n == m | _ => false
-  let usesRat := marked ratMarker || marked replaceAllMarker || marked ignoredArmsMarker || opts.entry.isSome
+  let usesRat := marked ratMarker || opts.entry.isSome
   let usesReplaceAll := marked replaceAllMarker || opts.entry.isSome
   let usesBitwise := marked bitwiseMarker || (opts.entry.map mentionsBitwise).getD false
   let helpers := (← if usesRat then ratTops else pure []) ++ (← if usesReplaceAll then replaceAllTops else pure []) ++

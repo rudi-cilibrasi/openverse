@@ -169,8 +169,10 @@ Combine(A:t1, B:t2 where t1:type, t2:type):tuple(t1, t2) = (A, B)
   the expected type (unless that is `void`), then each parameter type against
   its argument's type. Arguments are matched left to right, except that
   `false`, `array{}` and `map{}` are matched last, because they take their type
-  from context. A type parameter that is still unknown is an error. Arguments
-  are still evaluated left to right.
+  from context; a `false` (an argument's or a default's) whose type nothing
+  else gives is a `logic`, as `X := false` is (`Id(false)`, as the Book's
+  `Identity(true)`, is at `logic`). A type parameter that is still unknown
+  is an error. Arguments are still evaluated left to right.
 - **Compiled once.** A generic function is one Verse Core function, whose
   types mention type variables, checked once by `Prog.checkTypes` for every
   instantiation (the substitution lemma `Typed.subst`). It takes one hidden
@@ -2216,7 +2218,11 @@ Main():void =
   Verse Core's equality (`Value.veq`) on boxes is then Verse's: the empty
   values of every type are one value, an enum's value is never another
   enum's or an int, one struct at two instances compares field by field.
-  In Verse Core a `comparable` is a `dyn`, the type of every value.
+  In Verse Core a `comparable` is a `dyn`, the type of every value. An
+  empty `array{}` or `map{}` where a `comparable` is expected, which says
+  nothing of its elements, is the empty value, its own box (`X:comparable
+  = array{}`; two of them are equal, as `array{} = array{}` is, Book of
+  Verse tests, `Array.versetest:88`).
 - **Joins.** Two comparable types with nothing else in common join at
   `comparable` (ch. 1: `array{1, "two", 3.0}`'s element type is
   `comparable`, "their common supertype"; ch. 14: the result "widens all

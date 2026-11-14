@@ -126,6 +126,7 @@ check "call packing (${FUZZ_CALL_PACKING:-60} programs, across ten contexts)" \
 check "choice-free source profile" bash tests/scripts/test-choice-profile.sh
 check "small integer value sharing" bash tests/scripts/test-small-int-cache.sh
 check "empty collection value sharing" bash tests/scripts/test-empty-value-cache.sh
+check "helpers each program asks for" bash tests/scripts/test-helper-needs.sh
 check "front-end mutation fuzzing (${FUZZ_FRONT:-500} mutants)" scripts/fuzz-front.sh "${FUZZ_FRONT:-500}" "$seed"
 check "QuickProof pins" scripts/check-quickproof-pins.sh
 check "fuzz runner checks" bash tests/scripts/test-fuzz-runners.sh

@@ -369,9 +369,9 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
         let e ← tryCatch (coerce a.pos r t) fun msg => throw s!"{msg} (in a call of {s.name})"
         es := es.set! i e
       else
-        if contextual[i]! then
-          let v := (pt.params.filter fun v => (σ.lookup v).isNone).headD "t"
-          eerr a.pos s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
+        let v := (pt.params.filter fun v => (σ.lookup v).isNone).headD "t"
+        let cannot := s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
+        if contextual[i]! && !a.typedAlone then eerr a.pos cannot
         let r ← elabE ctx a none
         match ctx.matchArgument σ pt r.ty with
         | some σ' =>
@@ -384,7 +384,8 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
             deferred := deferred.set! i true
           else
             es := es.set! i (← elabArgumentCoerceWith elabE ctx a.pos r (pt.subst σ))
-        | none => eerr a.pos s!"expected {(pt.subst σ).show}, found {r.ty.show} (in a call of {s.name})"
+        | none => eerr a.pos (if contextual[i]! then cannot else
+            s!"expected {(pt.subst σ).show}, found {r.ty.show} (in a call of {s.name})")
   -- the arguments, in their temporaries, then the defaults
   let inferred ← match SubtypeEvidence.infer (if s.bounds.isEmpty then ctx.types else ctx.evidenceEnv) s.bounds σ with
     | some inferred => pure inferred
@@ -447,15 +448,17 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
         -- parameter nothing else determined)
         let σ0 := σ
         dctx.checkArgumentRole s d k
-        if !bound σ0 pt && (← argNeedsTypeWith elabE dctx d) then
-          let v := (pt.params.filter fun v => (σ0.lookup v).isNone).headD "t"
-          eerr p s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
+        let v := (pt.params.filter fun v => (σ0.lookup v).isNone).headD "t"
+        let cannot := s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
+        let contextual := !bound σ0 pt && (← argNeedsTypeWith elabE dctx d)
+        if contextual && !d.typedAlone then eerr p cannot
         let (rd, σ1) ← fxAt p (do
           let r ← elabE dctx d (if bound σ0 pt then some (pt.subst σ0) else none)
           let σ1 ← if bound σ0 pt then pure σ0 else
             match dctx.matchArgument σ0 pt r.ty with
             | some σ' => pure σ'
-            | none => eerr p s!"the default of ?{n} of {s.name} is a {r.ty.show}, not a {(pt.subst σ0).show}"
+            | none => eerr p (if contextual then cannot else
+                s!"the default of ?{n} of {s.name} is a {r.ty.show}, not a {(pt.subst σ0).show}")
           return (← elabArgumentCoerceWith elabE dctx p r (pt.subst σ1), σ1))
         σ := σ1
         if !s.decides && rd.mayFail ctx.sigProg then
