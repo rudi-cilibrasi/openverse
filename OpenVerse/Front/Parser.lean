@@ -2251,6 +2251,12 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) (par
           -- `Modules/Using2.versetest` 84-90)
           if path == "/localhost" || path.startsWith "/localhost/" then
             tops := tops.push (.const t.pos s!"{pfx}$using" [] none (refusedForm t.pos (.localhostUsing path) []))
+          -- (a path in no package openverse knows names nothing, Book of
+          -- Verse ch. 16: "all imports must be resolvable when your code is
+          -- compiled"; the tests, `using{/localhostkinda}`, 3587,
+          -- `Modules/Using2.versetest:94`)
+          else if !["Verse.org", "Fortnite.com", "UnrealEngine.com"].contains (((path.drop 1).toString.splitOn "/").headD "") then
+            tops := tops.push (.const t.pos s!"{pfx}$using" [] none (refusedForm t.pos (.unknownUsing path) []))
         if let .str parts := (← peekT 1).tok then
           let path := String.join (parts.filterMap fun | .text s => some s | _ => none)
           modify fun st => { st with imports := st.imports.push (t.pos, path) }

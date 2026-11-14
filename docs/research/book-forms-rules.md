@@ -903,3 +903,34 @@ operands keeps its code. **Left:**
 `ToString` of the built-in types only (a program's `ToString` beside the
 built-in, `types-other`); `TimSyntax.versetest:230`, `operator'+'(1,2)`
 called by its name in an expression (parse-only).
+
+## A `using` of a path that names nothing
+
+**The rule.** A `using{/p…}` of a path is of a package: openverse knows
+the Verse library's, `/Verse.org/…` (whose modules it stands in for with
+its built-ins), and the engine's, `/Fortnite.com/…` and
+`/UnrealEngine.com/…`, which it ignores; a path in any other package names
+nothing and is refused.
+
+**The Book.** Ch. 16 (`16_modules.md:349`): "all imports must be
+resolvable when your code is compiled". The tests,
+`Tests/Modules/Using2.versetest:92-95`: "Explicitly using something in a
+path that just begins with "/localhost" should not produce a 3544 glitch",
+`using{/localhostkinda}` refused (3587, a path that names nothing).
+`QualifiedIdentifier.versetest:152` (`using {/Verse.org/VerseTests/A/C}`,
+a class's path, 3587) and `Attributes/deprecated.versetest:435` (`using{/Verse.org/VerseTests/TestModule}`,
+2009) use the test runner's package path, which the harness now counts as
+not translatable, as it did that path written as a qualifier.
+
+**openverse before.** Any path but `/localhost…` was accepted and ignored.
+
+**openverse now.** The parser writes a `using` of a path whose first
+segment is none of `Verse.org`, `Fortnite.com`, `UnrealEngine.com` as a
+refused form (`Refused.unknownUsing`), which `Attributes.apply` refuses
+first. Programs: `tests/verse/path_literals.verse`, a test of a path's
+lexing, wrote `using { /user@example.com/… }`; it writes the same path in
+`/Verse.org/` now, its output the same. **Left:** a path inside those
+packages that names nothing (`/Verse.org/Nonexistent`): openverse has no
+registry of the engine's modules, and the tests use many of the Verse
+library's that the API reference does not list (`/Verse.org/Diagnostics`,
+`/Verse.org/Restricted`, …).

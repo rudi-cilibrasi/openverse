@@ -670,11 +670,13 @@ def static_nt(mtext):
     # (the test runner's package: a module imported from its script module,
     # `X := import(/Verse.org/Tests/VerseTestScriptCmd/…)`, and the path or
     # name of the package a test file is compiled in, `/Verse.org/VerseTests`,
-    # written as a qualifier, `(/Verse.org/VerseTests/c:)F`, `(VerseTests:)F`;
-    # openverse's top level has no path)
+    # written as a qualifier, `(/Verse.org/VerseTests/c:)F`, `(VerseTests:)F`,
+    # or used, `using{/Verse.org/VerseTests/M}`; openverse's top level has no
+    # path)
     if re.search(r"\bimport\s*\(\s*/Verse\.org/Tests/VerseTestScriptCmd\b", code):
         return "test API: the test runner's modules (import of /Verse.org/Tests/VerseTestScriptCmd/...)"
-    if re.search(r"\(\s*(/Verse\.org/VerseTests\b[^():]*|VerseTests)\s*:\s*\)", code):
+    if re.search(r"\(\s*(/Verse\.org/VerseTests\b[^():]*|VerseTests)\s*:\s*\)", code) or \
+            re.search(r"\busing\s*\{\s*/Verse\.org/VerseTests\b", mtext):
         return "harness: the test runner's package path /Verse.org/VerseTests"
     return ""
 
