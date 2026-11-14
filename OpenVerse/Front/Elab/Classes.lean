@@ -68,7 +68,7 @@ def classHierarchy (tops : List STop) (constructionFx : Std.HashMap String (List
   -- parameters and then its own; an abstract method one whose body is
   -- unreachable
   let cdefs : List CDef := tops.filterMap fun
-    | .classDef p n nsp tps specs parents isIface fields methods =>
+    | .classDef p n _ tps specs parents isIface fields methods =>
       let names := parents.map fun | .name q => q | .app q _ => q | _ => "?"
       let args := parents.map fun | .app _ as => as | _ => []
       -- (the fields with accessors set apart: they have no storage; each
@@ -79,7 +79,7 @@ def classHierarchy (tops : List STop) (constructionFx : Std.HashMap String (List
         some (f, ((fields.take i).filter (!Accessors.isAccessorField ·)).getLast?.map (·.name),
           ((fields.drop (i + 1)).find? (!Accessors.isAccessorField ·)).map (·.name))
       let fields := stored
-      some { pos := p, name := n, nameSpecs := nsp, tps, specs, parents := names, parentArgs := args, isIface,
+      some { pos := p, name := n, tps, specs, parents := names, parentArgs := args, isIface,
              fields, methods, accessors }
     | _ => none
   -- the hierarchy

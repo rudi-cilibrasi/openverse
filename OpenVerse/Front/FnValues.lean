@@ -433,9 +433,6 @@ def MethodRequest.shape (r : MethodRequest) : Shape :=
 def MethodRequest.className (r : MethodRequest) (i : Nat) : String :=
   s!"{r.owner}${r.method}$fnVariance{i}"
 
-def mergeMethodRequests (old new : List MethodRequest) : List MethodRequest :=
-  new.foldl (fun acc r => if acc.any (·.key == r.key) then acc else acc ++ [r]) old
-
 /-- A class/interface upper bound excludes tuple instances, also through a
     peer chain. An unanchored peer cycle does not establish that exclusion. -/
 private def tupleInstancePossible (tps : List TParam) (name : String) : Bool :=

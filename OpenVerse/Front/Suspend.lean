@@ -520,7 +520,6 @@ structure Env where
   arity : Nat
   /-- Suspension points and arms in the whole function. -/
   sites : Nat
-  armsTotal : Nat
   /-- The index of the function's first arm function. -/
   fnBase : Nat
   /-- The scheduler's class. -/
@@ -562,12 +561,10 @@ structure Env where
       their waiting frames directly (#362): else nothing is recorded, and
       frames are not marked done. -/
   leafy : Bool := false
-  /-- With `leafy`: `$resumeAny` (a mark, its index known later), the least
-      depth at which a waiting frame found from an arm is kept, and the type
-      of an arm's field recording it (#362). -/
+  /-- With `leafy`: `$resumeAny` (a mark, its index known later), and the
+      least depth at which a waiting frame found from an arm is kept (#362). -/
   resumeAnyFn : Nat := 0
   leafMin : Nat := 0
-  armTopTy : VTy := .opt .void
   /-- Shared start clock when refining helpers borrow source task scopes. -/
   taskClockF : Option Nat := none
 
@@ -1751,9 +1748,9 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
   let b := rewritten.body
   let Γ0 := rewritten.slots
   let trans0 := #[true, true] ++ (List.replicate (Γ0.size - 2) false).toArray
-  let env : Env := { S, ρ, callee, syncMark, raceMark, rushMark, arity, sites, armsTotal, fnBase, schedTag, nilTag, resCellTag, spawnMark, spawns,
+  let env : Env := { S, ρ, callee, syncMark, raceMark, rushMark, arity, sites, fnBase, schedTag, nilTag, resCellTag, spawnMark, spawns,
                      branchMark, branches, viaBase := fnBase + 2 * armsTotal, expTy := some ρ,
-                     pcFld := pcF, rS := 0, regionTotal := 0, leafF, leafDepthF, isRoot, leafy, resumeAnyFn, leafMin, armTopTy, taskClockF }
+                     pcFld := pcF, rS := 0, regionTotal := 0, leafF, leafDepthF, isRoot, leafy, resumeAnyFn, leafMin, taskClockF }
   let done : Expr → Expr := fun v => .seq (fset resF v) (doneRet (if leafy then some leafDepthF else none))
   let ((res, can), st) ← ((region pcF (some done) b).run env).run { Γ := Γ0, trans := trans0 }
   if st.next != sites || st.armsNext != armsTotal then

@@ -54,8 +54,6 @@ structure Options where
 structure CDef where
   pos : Pos
   name : String
-  /-- The specifiers of its name: its access. -/
-  nameSpecs : List String := []
   tps : List TParam
   /-- The specifiers after `class` or `interface`. -/
   specs : List String

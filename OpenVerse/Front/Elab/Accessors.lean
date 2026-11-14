@@ -200,8 +200,7 @@ def accessorOn (elabApp : Ctx → Pos → SExpr → List SExpr → Bool → Opti
 /-- A read of a field `place.cls` has with storage, which classes below give
     accessors: a test of the object's class, the getter of each such class,
     the field read (`elabMember`) for any other. -/
-def elabOverriddenRead (elabE : Ctx → SExpr → Option Ty → EM R)
-    (elabApp : Ctx → Pos → SExpr → List SExpr → Bool → Option Ty → EM R)
+def elabOverriddenRead (elabApp : Ctx → Pos → SExpr → List SExpr → Bool → Option Ty → EM R)
     (elabMember : Ctx → Pos → R → String → EM R)
     (ctx : Ctx) (p : Pos) (place : AccessorPlace) (o : R) (x : Nat) : EM Expr := do
   let env := ctx.types
@@ -235,7 +234,7 @@ def elabAccessorRead? (elabE : Ctx → SExpr → Option Ty → EM R)
     checkMemberAccess ctx.types place.pos place.cls place.written
     let o ← elabE ctx place.recv none
     let x ← fresh o.ty
-    let e ← elabOverriddenRead elabE elabApp elabMember ctx se.pos place o x
+    let e ← elabOverriddenRead elabApp elabMember ctx se.pos place o x
     let y ← fresh place.ty
     return some ⟨.seq (.assign x o.e) (.assign y e), place.ty⟩
   return some (← elabAccessorRead elabE elabApp ctx se.pos place exp)
@@ -277,7 +276,7 @@ def elabAccessorSet? (elabE : Ctx → SExpr → Option Ty → EM R)
       | some opn =>
         let vs ← fresh rv.ty
         code := code.push (.assign vs rv.e)
-        let old ← elabOverriddenRead elabE elabApp elabMember ctx1 p place o x
+        let old ← elabOverriddenRead elabApp elabMember ctx1 p place o x
         let olds ← fresh place.ty
         code := code.push (.assign olds old)
         let ctx2 := { ctx1 with locals := { name := s!"$accessorOld{olds}", slot := olds, ty := place.ty, mutable := false } ::
