@@ -1,4 +1,4 @@
-# expect: subtype(int): openverse writes subtype of a class or an interface only
+# expect: castable_subtype(int): openverse writes castable_subtype of a class or an interface only
 F():void =
-    X:subtype(int) = int
+    X:castable_subtype(int) = int
 Main():void = {}

@@ -1665,7 +1665,55 @@ type does, `$cast(A)(X:A)<decides>:A`, given as `C[X]`, and
 `T` of a metatype as calls of them. Joins of type values, the one place
 where interfaces would say more than the Book's metatypes (a join keeps no
 concreteness, and castability only of a castable bound), are restricted in
-`joinTy`. No Verse Core is added.
+`joinTy`. No Verse Core is added. A metatype of another type,
+`subtype(int)`, `subtype([]c)`, is an interface below `type` named by the
+type as written, with no method, and a type's name used as a value an
+object of a class of its own below it; `concrete_subtype(any)` and
+`concrete_subtype(comparable)` are interfaces below `type` that the values
+of the `<concrete>` classes, and of the `<unique>` ones among them,
+implement, with no construction.
+
+A type given as an argument and used as a type (`FalseOption(t:type):?t`)
+is a type parameter whose argument the call writes: `TypeArguments.desugar`,
+before `TypeValues.desugar`, makes such a function generic over `t`, its
+parameter `$typeArgument:t:?t`, and a call's argument there, a type as
+written, the value `(?int)(false)` of that parameter, from which the call's
+type argument and witness come as any generic call's do.
+
+## Fields with accessors: calls of their class's methods
+
+A field `var X<getter(G)><setter(S)>:t = external{}` has no storage
+([research/accessors.md](research/accessors.md)). The parser keeps
+`getter(G)`, `setter(S)` among the field's specifiers and checks one of each
+on a class's or interface's `var` (`EffectPolicy.checkField`);
+`Accessors.desugar`, after `TypeValues.desugar`, checks the rest as written
+(the default, the accessors' signatures, no override of the field or of its
+accessors below where it is declared), makes `external{}` the specifier
+`external`, and writes the accessors' first parameter's type, `accessor`, as
+the struct `$accessor`, which no program can name, so that nothing but the
+field calls them. The classes' phase sets such fields apart from the stored
+ones (`CDef.accessors`, with the stored fields around each), and the type
+environment records them, their types resolved (`TyEnv.accessors`).
+
+The elaborator then writes each use as calls (`Elab/Accessors.lean`), from
+three places: `elabERaw` for a read, `elabSet` for a `set`, before
+`elabSetWith`, and `elabConstructionValue` for a construction. Each finds
+the places of a path that reach a field with accessors by the names the
+path writes and its receivers' types (an elaboration that keeps nothing);
+a path into the field's value, up to an object, is one call of the overload
+of the getter or setter that takes the path's indices and field names, and
+one through an object reads the field, then goes on. Each call is written
+at the place of the use it stands for (the field, or for a construction the
+field's value), so a refusal inside it points there, and is marked
+(`Ctx.accessorCall`) so that the accessor's own access does not judge it:
+the field's does, where it is used (`elabMethodCall` clears the mark for
+the rest of the call). A field with storage
+that a class below gives accessors is read and set through the type above
+with a test of the object's class, as a field at different places is.
+A construction that gives such fields evaluates every value into a slot in
+the order the fields are declared, makes the object, calls the setters and
+runs the `block:` clauses. A program with no field with accessors takes
+none of these paths, so its code is unchanged. No Verse Core is added.
 
 ## Type aliases: a substitution before elaboration
 

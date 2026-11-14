@@ -63,9 +63,9 @@ how they are built.
 | `concrete_subtype(c)`, construction through it, `T{}` (ch. 11's `spawner`; `MetatypeConcreteSubtype.versetest` 300-329) | about 12 | yes: the construction is a method of the value | yes, `T{}` with no field given; a value's own class with fields (`Type := concrete_class; Type{Value := 42}`, :153) not |
 | `castable_subtype(c)` (`Castable.versetest` 91-170) | about 20 | yes: an interface of the castable classes' values | yes; and as a type parameter's bound (`where t:castable_subtype(c)`, 519-563, #502: `subtype(c)` and castability, [upper-bound-evidence.md](upper-bound-evidence.md#what-stays-refused)) |
 | `type`, the type of every type value (`f(c:subtype(C)):type = c`, `Subtype.versetest` 99-103) | 4 | yes, for class values | yes; of other types' values not |
-| `subtype(int)`, `subtype([]C)`, a value `int` of `type` (`Subtype.versetest` 114-119, `TypeParam.versetest`, `TypeValue.versetest`) | about 20 | in part: values of other types than classes carry nothing the program can use but `type` itself, so they need no witness; each needs a class of its own in this design | no: refused ("openverse writes subtype of a class or an interface only") |
-| a type given as an argument and used as a type, `False(t:type):?t = false`, `Bar(t:type)` (`TypeParam.versetest` 41-61) | 3 | no | no: a dependent parameter; Core's generic functions take a type parameter's witness, not a type the code reads (below) |
-| `concrete_subtype(comparable)`, `concrete_subtype(any)` (`MetatypeConcreteSubtype.versetest` 13-41) | 10 | no | no: needs a value's type at run time (the `comparable` agent's `dyn` boxes carry one; constructing through it needs the class of a box) |
+| `subtype(int)`, `subtype([]C)`, a value `int` of `type` (`Subtype.versetest` 113-119, 140-142, `TypeParam.versetest` 3-16, `TypeValue.versetest`) | about 20 | in part: values of other types than classes carry nothing the program can use but `type` itself, so they need no witness; each needs a class of its own in this design | yes, of a built-in type, a struct, an enum, and arrays, options, maps and tuples of them; a type written as an expression other than a name (`Identity([]int)`, `Identity(c(int))`, `Identity(subtype(c))`) not: the parser reads no such expression |
+| a type given as an argument and used as a type, `False(t:type):?t = false`, `FalseOption(t:type)`, `EmptyArray(t:type)` (`TypeParam.versetest` 57-60, `ParametricTypes.versetest` 613-624) | 6 | yes: a generic call with the type given | yes (`TypeArguments`); `Bar(t)` of a type parameter `t` not, as the BPVM's link error (`TypeParam.versetest` 41-52) |
+| `concrete_subtype(comparable)`, `concrete_subtype(any)` (`MetatypeConcreteSubtype.versetest` 13-41) | 10 | yes: interfaces the `<unique>` and the `<concrete>` classes' values implement | yes; construction through them refused (3545, as the tests have it); `castable_subtype(any)` (`Castable.versetest` 609-618) not |
 | `classifiable_subset(t)` (`ClassifiableSubset.versetest`) | 21 | no | no: a set of types, which the Book's chapters do not describe |
 | a metatype as a type parameter's bound, `where t:subtype(class1)` (`ParametricFunctions.versetest` 46-57, 237-248) | 8 | front end, #502's checked upper-bound evidence | yes (#502); `concrete_subtype(c)` as a bound not |
 | comparison of type values (`TestUtils.AreClassesEqual`) | — | — | not translatable (the test runner's); the Book: "We can't yet compare the subtype values" |
@@ -114,26 +114,46 @@ object, made by the front end with no Verse Core added
 
 ## What needs Verse Core, and a design
 
-- **Type values of other types** (`int`, `[]C`, enums, function types) and
-  `type` as their type: in this design each is a class of its own with no
-  method (nothing reads them but conversions to `type`), so the front end
-  could add them as it adds classes' (`$type:int`); left, as a value of
-  `subtype(int)` has no operation the Book's tests use (they store it).
+- **Type values of other types** (`int`, `[]C`, enums, structs) and `type`
+  as their type: built, by this design. `subtype(t)` of a built-in type, a
+  struct, an enum, or an array, option, map or tuple of them, is an
+  interface below `type`, named by the type as written (`subtype([]c)`),
+  with no method; a type's name used as a value is `$type:t{}`, an object
+  of a class of its own below `subtype(t)`, which nothing reads but a
+  conversion to `type`. `castable_subtype` and `concrete_subtype` of such a
+  type stay refused, as the tests have them (3509). Function types
+  (`subtype(type{f():void})`) and types written as expressions other than
+  names (`Identity([]int)`) are not: the parser reads neither there.
 - **A type given as an argument and used as a type** (`False(t:type):?t`):
-  Verse Core's generic functions are checked once for every instance and
-  take a witness value per type parameter (`LANGUAGE.md`, Parametric
-  functions); a parameter `t:type` the code uses as a type is such a type
-  parameter whose argument the caller writes, `False(int)`: the front end
-  can read a call `F(int)` of a function whose parameter `t:type` names a
-  type in its signature as the generic call `F` with `t := int` and the
-  witness of `int`, which needs no Core change; a `t` passed on as a value
-  (`Bar(t)`) is the witness itself. Not built.
-- **`concrete_subtype(comparable)` and `concrete_subtype(any)`**: the bound
-  is no class, so no `$type:C` is below it in this design; the values are
-  classes' (`c:concrete_subtype(comparable) = c` with `c` `<unique>`), so
-  `concrete_subtype(comparable)` is an interface the classes' values below
-  `comparable` (the `<unique>` ones) implement, and `concrete_subtype(any)`
-  one every class's value implements: front end only, once `comparable` is
-  a type (#605). Not built.
+  built, by the design that was left here. Verse Core's generic functions
+  are checked once for every instance and take a witness value per type
+  parameter (`LANGUAGE.md`, Parametric functions); a parameter `t:type` the
+  code uses as a type is such a type parameter whose argument the caller
+  writes. `TypeArguments.desugar`, before `TypeValues.desugar`, makes the
+  function generic over `t` and the parameter, in its place,
+  `$typeArgument:t:?t`, which nothing reads; a call's argument there, a type
+  as written, becomes that parameter's value `(?int)(false)`, from which the
+  call's type argument is inferred, with `int`'s witness: no Core change. A
+  type parameter given there (`Foo(:t where t:type):void = Bar(t)`) is
+  refused, the BPVM's link error 9001 (`TypeParam.versetest:43`), which the
+  VerseVM twin (:49) accepts: openverse keeps the case it agrees with. A
+  comparison's operand takes its type from the other's only as a hint, so
+  `False(int) = False(logic)` compares a `?int` and a `?logic`, as any two
+  comparable values (`TypeParam.versetest:59`). With source upper bounds
+  (#502, #610), a parameter `t:subtype(c)` or `t:castable_subtype(c)` the
+  function uses as a type is a bounded one, `where t:subtype(c)`
+  (`FORT-1059276.versetest:6`; `ParametricTypes.versetest` 1305-1329,
+  `u:subtype(t)` of an earlier type argument).
+- **`concrete_subtype(comparable)` and `concrete_subtype(any)`**: built, by
+  this design. Each is an interface below `type` that the value of a
+  `<concrete>` class implements, of `concrete_subtype(comparable)` only one
+  that is also `<unique>` (comparable, by identity), so
+  `c1:concrete_subtype(comparable) = c` holds and `= float` is refused. They
+  declare no construction: `c1{}` is refused ("comparable cannot be
+  instanced here because we don't know if it's a class type",
+  `MetatypeConcreteSubtype.versetest:35`, 3545). `subtype(any)`,
+  `subtype(comparable)` and `castable_subtype(any)` are not built: their
+  values would be those of every type, or every comparable one, which this
+  design would have to give every type value.
 - **`classifiable_subset`**: not designed; the Book's chapters do not
   describe it.

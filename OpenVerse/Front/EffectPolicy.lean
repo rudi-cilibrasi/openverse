@@ -149,7 +149,9 @@ def checkOverrideAccess (p : Pos) (what : String) (specs varSpecs : List String)
     one `checkUnsupported` or `checkSpecs` refuses with its reason. -/
 def known (sp : String) : Bool :=
   (specifierPlaces.lookup (placeKey sp)).isSome || effectNames.contains sp ||
-    ["predicts", "native", "native_callable", "no_rollback", "constructor"].contains sp
+    ["predicts", "native", "native_callable", "no_rollback", "constructor"].contains sp ||
+    -- (a field's accessors, `checkField`)
+    sp.startsWith "getter(" || sp.startsWith "setter("
 
 /-- Used by the parser at sites where attributes are otherwise discarded: a
     field's name (`kind` "field", at `place`) or a definition's. -/
@@ -170,13 +172,20 @@ def checkName (p : Pos) (specs : List String) : Except String Unit := do
     an interface's field, or a struct's): `var` takes an access specifier,
     an override none, and a `<final>` field cannot be given another value,
     so it needs one (`hasValue`). -/
-def checkField (p : Pos) (place : Place) (name : String) (specs varSpecs : List String) (hasValue : Bool) :
-    Except String Unit := do
+def checkField (p : Pos) (place : Place) (name : String) (specs varSpecs : List String) (hasValue : Bool)
+    (isVar : Bool := true) : Except String Unit := do
   -- (a field with accessors, `var X<getter(GetX)><setter(SetX)>:t =
-  -- external{}`, Book of Verse ch. 10, "Fields with Accessors", an
-  -- internal feature, ch. 12: not supported)
-  if let some sp := specs.find? (fun sp => sp.startsWith "getter(" || sp.startsWith "setter(") then
-    reject p s!"<{sp}>: {name} is a field with accessors, which read and set it through methods (Book of Verse ch. 10, \"Fields with Accessors\"), which openverse does not support"
+  -- external{}`, Book of Verse ch. 10, "Fields with Accessors": one getter
+  -- and one setter, on a `var` of a class or an interface, ch. 12; the rest
+  -- `Accessors.desugar` checks)
+  let accessors := specs.filter fun sp => sp.startsWith "getter(" || sp.startsWith "setter("
+  if let some sp := accessors.head? then
+    if let .structField := place then
+      reject p s!"<{sp}>: a struct's field cannot have accessors, only a class's or an interface's (Book of Verse ch. 12)"
+    if (accessors.filter (·.startsWith "getter(")).length != 1 || (accessors.filter (·.startsWith "setter(")).length != 1 then
+      reject p s!"{name} is a field with accessors: it has one <getter(…)> and one <setter(…)> (Book of Verse ch. 12: \"Must include both\")"
+    if !isVar then
+      reject p s!"{name} is a field with accessors, so it is a var: write var {name}<getter(…)><setter(…)>:t (Book of Verse ch. 12)"
   checkNonFunction p "field" specs place
   if let some sp := varSpecs.find? (fun sp => !isAccess sp && known sp) then
 

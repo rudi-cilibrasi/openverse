@@ -6,6 +6,7 @@ import OpenVerse.Front.Aliases
 import OpenVerse.Front.BuiltinValues
 import OpenVerse.Front.Bitwise
 import OpenVerse.Front.TypeValues
+import OpenVerse.Front.TypeArguments
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -591,8 +592,12 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   Access.checkConsistency levels resolved
   let access := Access.Env.of levels (Access.Sites.of resolved) resolved
   Access.checkUses access resolved
+  -- (types given as arguments and used as types: type parameters)
+  let resolved ← TypeArguments.desugar resolved
   -- (types as values, `subtype(t)` and its kin: classes and interfaces)
   let resolved ← TypeValues.desugar resolved
+  -- (fields with accessors: checked, and their accessors' type written)
+  let resolved ← Accessors.desugar resolved
   -- (a castable_subtype(c) bound's castability, a subtype relation)
   let resolved := UpperBounds.markCastable resolved
 
@@ -727,7 +732,10 @@ def inlineSource (allTops0r : List STop) (requests : Requests) (admitted : Admit
         throw s!"{p.show}: internal: invalid subtype dictionary request"
     | _ => throw "internal: a subtype dictionary request must be a class"
   let resolved := requests.subtypes ++ loopTops ++ resolved
-  let needsSubtype := allTops0r.any UpperBounds.hasBounds || !requests.subtypes.isEmpty ||
+  -- (bounds as written, or a bounded type given as an argument's,
+  -- `TypeArguments`)
+  let needsSubtype := allTops0r.any UpperBounds.hasBounds || resolved.any UpperBounds.hasBounds ||
+    !requests.subtypes.isEmpty ||
     -- (the box of a type parameter's value is its comparable bound's evidence)
     !requests.boxes.isEmpty ||
     resolved.any (·.usesType SubtypeEvidence.family)
