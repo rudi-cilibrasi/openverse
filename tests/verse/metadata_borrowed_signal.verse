@@ -33,8 +33,30 @@ ScopedRead(P:pair(a,b),E:event(int),Initial:type{_()<computes>:int},Replacement:
     set Stored=Replacement
     E.Signal(0)
 
+LiftedWrite(P:pair(a,b),E:event(int) where a:type,b:type)<suspends>:int=
+    var Stored:type{_()<computes>:int}=Two
+    if(D:=dup[P]):
+        branch:
+            E.Await()
+            set Stored=Two
+    set Stored=One
+    E.Signal(0)
+    Stored()
+
+LiftedCleanup(P:pair(a,b),E:event(int) where a:type,b:type)<suspends>:void=
+    var Stored:type{_()<computes>:int}=Two
+    defer:
+        set Stored=One
+    if(D:=dup[P]):
+        branch:
+            defer:
+                Print("lifted cleanup {Stored()}")
+            E.Await()
+
 Main()<suspends>:void=
     Read(event(int){})
     Print("recursive write {Write(event(int){})}")
     ScopedRead(dup(int){},event(int){},Two,One,"first")
     ScopedRead(dup(int){},event(int){},One,Two,"second")
+    Print("lifted write {LiftedWrite(dup(int){},event(int){})}")
+    LiftedCleanup(dup(int){},event(int){})
