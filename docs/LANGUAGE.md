@@ -1976,7 +1976,20 @@ Main():void =
   `option{…}`, `not`, the left of `or`), the same, and what the condition
   binds has, after it, the join of its types in the alternatives, an `any`
   for unrelated classes (#283, see the alternatives with values of their own
-  above). An overloaded `M` (#106) is a method
+  above).
+
+  Method families can share producer operations through nested heterogeneous
+  choices, including recursive calls and waiting `for` bodies. Each yielded
+  value runs its suffix before the producer advances, preserving argument and
+  default order, capture updates, rejected-value rollback and cleanup. A
+  first-success or option consumer stops before the next producer alternative.
+  A `for` body runs after its prefix commits; its failure and source return
+  keep their own outcomes. Method-owned type parameters use the ordinary
+  argument/default binder to establish the adapter's instance; where discovery
+  cannot establish that instance, the existing copied lowering remains.
+  Methods marked `<suspends>` still cannot have several values (#283).
+
+  An overloaded `M` (#106) is a method
   for each of its parameter lists, each its own family: a call takes the
   list its arguments fit, as any call does, found as an overloaded
   function's call's overload is (the program elaborated once to find it,
@@ -1984,8 +1997,7 @@ Main():void =
   `(super:)` too. So one list may have several values and another one.
   Lists are a class hierarchy's, so a call compiled for receivers of
   unrelated classes takes each one's list; one compiled for alternatives
-  whose arguments' types pick two lists of one class is refused, as a
-  call of an overloaded function with several values is there.
+  whose arguments' types pick two method lists of one class is still refused.
   A class below two roots of `M` (one
   listing two interfaces that both declare it) is refused when one of the
   families has several values. Such a

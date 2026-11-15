@@ -56,6 +56,10 @@ partial def elabExprMarkersWith
     match checked with
     | .ok _ => return result
     | .error err => throw err
+  | .app _ (.ident _ "$producerAnchorStart") [_] false
+    | .app _ (.ident _ "$producerAnchorEnd") [_] false
+    | .app _ (.ident _ "$producerFrameStart") [] false
+    | .app _ (.ident _ "$producerFrameEnd") [] false => return ⟨.lit .void, .void⟩
   | .app _ (.ident _ "$nofail") [e] false =>
     elabE { ctx with canFail := false, inRollback := ctx.inRollback || ctx.canFail, inBlock := true } e exp
   | .app p (.ident _ "$defer") _ _ => eerr p "defer: is a statement: it has no value"

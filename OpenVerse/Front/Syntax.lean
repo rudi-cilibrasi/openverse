@@ -326,6 +326,11 @@ def SExpr.start : SExpr → Pos
     different order. -/
 def SExpr.children : SExpr → List SExpr
   | .str _ ps => ps.filterMap fun | .code c => some c | _ => none
+  -- Producer anchors retain an original call for typed operation discovery;
+  -- it is not executed and contributes no captures, writes or source exits.
+  | .app _ (.ident _ "$producerAnchor") [_, lowered] false => [lowered]
+  | .app _ (.ident _ "$producerAnchorStart") [_] false
+    | .app _ (.ident _ "$producerAnchorEnd") [_] false => []
   | .app _ g as _ => g :: as
   | .member _ x _ | .query _ x | .neg _ x | .notE _ x | .optionLit _ x | .logicLit _ x | .loop _ x
   | .gen _ _ _ x | .decl _ _ _ _ x => [x]
@@ -341,7 +346,9 @@ def SExpr.children : SExpr → List SExpr
   | .structDef .. | .enumDef .. | .refineDef .. | .typeAlias .. => []
 
 /-- `e` with `f` applied to each of its immediate children, the ones
-    `children` lists, in that order; everything else is kept. -/
+    `children` lists, in that order; everything else is kept. Producer source
+    metadata is also transformed so hygienic renaming retains its lexical
+    references, although execution analyses do not visit that metadata. -/
 def SExpr.mapChildrenM [Monad m] (f : SExpr → m SExpr) (e : SExpr) : m SExpr :=
   match e with
   | .str p ps => return .str p (← ps.mapM fun | .code c => do return .code (← f c) | t => pure t)
@@ -426,6 +433,10 @@ structure SParam where
   /-- Compiler-only type-value argument. Its dummy value can initialize
       slots, but cannot establish an executable subtype relation. -/
   typeValue : Bool := false
+  /-- Compiler-generated transparent transport. Preserve the caller's actual
+      provenance and check executable uses in the body; do not seed metadata
+      merely because this parameter forwards opaque captured storage. -/
+  metadataForward : Bool := false
   deriving Repr, Inhabited
 
 /-- A top-level definition, each with the specifiers written on it. A

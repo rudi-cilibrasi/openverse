@@ -34,6 +34,8 @@ structure Info where
   explicit : Nat := 0
   slots : List (Nat × Origin) := []
   copies : List CopyOut := []
+  /-- Explicitly typed transport of an owner through a generated bridge. -/
+  forwarded : List Origin := []
   deriving Inhabited
 
 /-- Private pre-lowering placeholder: a source call passes its own frame,

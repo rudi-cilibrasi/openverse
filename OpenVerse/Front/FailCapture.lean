@@ -15,6 +15,29 @@ def marked (typeSlot : Nat) (body failed : Expr) : Expr :=
   .ite (.prim (.tupGet marker) [.local typeSlot, body, failed])
     (.prim .query [.local typeSlot]) (.prim .userErr [])
 
+/-- Admission sees the failure that can escape an intermediate capture.
+    The marker's query remains in emitted code until lowering, so generated
+    temporaries retain their conservative effect. Its body's uncaught failure
+    is redirected to `failed`; it cannot escape as an ordinary source failure.
+    A failing fallback and failures outside the marker remain visible. -/
+partial def admissionBody : Expr → Expr
+  | .ite (.prim (.tupGet k) [.local hint, body, failed])
+      (.prim .query [.local result]) (.prim .userErr []) =>
+    if k == marker && hint == result then admissionBody failed else
+      .ite (.prim (.tupGet k) [.local hint, admissionBody body, admissionBody failed])
+        (.prim .query [.local result]) (.prim .userErr [])
+  | .assign i e => .assign i (admissionBody e)
+  | .seq a b => .seq (admissionBody a) (admissionBody b)
+  | .prim p es => .prim p (es.map admissionBody)
+  | .heap p es => .heap p (es.map admissionBody)
+  | .call f es => .call f (es.map admissionBody)
+  | .ite c t e => .ite (admissionBody c) (admissionBody t) (admissionBody e)
+  | .forE i it f b => .forE i (admissionBody it) (admissionBody f) (admissionBody b)
+  | .loop b => .loop (admissionBody b)
+  | .ret e => .ret (admissionBody e)
+  | .print e => .print (admissionBody e)
+  | e => e
+
 structure World where
   fns : Array Fn
   slots : Array (List VTy)
@@ -37,6 +60,38 @@ def fresh (ty : VTy) (initial : Expr) : M Nat := do
 
 def freshOption (ty : VTy) : M Nat := fresh (.opt ty) (.lit .none)
 
+/-- A captured payload needs a normal typed scratch slot, so its successful
+    branch can read a local rather than perform another failable query.
+    Reuse the front end's checked defaults (including generic witnesses),
+    or a literal/prototype the existing checker accepts at this type. -/
+partial def payloadDefault (ty : VTy) : M Expr := do
+  let w ← get
+  let checks (e : Expr) := (tc w.sigs w.locals.toList w.rawRet e (some ty)).isSome
+  let literal := Expr.lit ty.default
+  if checks literal then return literal
+  for (candidateTy, i) in w.locals.toList.zipIdx do
+    if candidateTy.sub w.sigs.var ty then
+      if let some value := w.defaults[i]? then
+        if checks value then return value
+  -- A generic dispatch may obtain its type witness from its receiver's
+  -- fields rather than a separate parameter. Reuse only a projection the
+  -- ordinary Core checker validates at the payload type.
+  let fields := w.sigs.classes.foldl (fun n fs => max n fs.length) 0
+  for value in w.defaults.toList do
+    for field in List.range fields do
+      let candidate := Expr.heap (.get field) [value]
+      if checks candidate then return candidate
+  match ty with
+  | .tup types => return .prim .mkTup (← types.mapM payloadDefault)
+  | _ =>
+    for i in List.range w.sigs.protos.length do
+      let value := Expr.lit (.ref i)
+      if checks value then return value
+    throw s!"failure capture has no checked payload default for {reprStr ty}"
+
+def freshPayload (ty : VTy) : M Nat := do
+  fresh ty (← payloadDefault ty)
+
 def infer (e : Expr) (hint : VTy := .void) : M VTy := do
   let w ← get
   if (tc w.sigs w.locals.toList w.rawRet e (some hint)).isSome then return hint
@@ -50,7 +105,7 @@ def tryOf (f : Nat) : M Nat := do
   let some fn := w.fns[f]? | throw s!"failure capture has no function {f}"
   let some (ps, ret) := w.sigs.fns[f]? | throw s!"failure capture has no signature {f}"
   let g := w.fns.size
-  let wrapper : Fn := { name := s!"$outcome{f}_{fn.name}", arity := fn.arity, nslots := fn.nslots, decides := fn.decides, writes := fn.writes, body := .prim .userErr [] }
+  let wrapper : Fn := { name := s!"$outcome{f}_{fn.name}", arity := fn.arity, nslots := fn.nslots, decides := false, writes := fn.writes, body := .prim .userErr [] }
   modify fun w => { w with
     fns := w.fns.push wrapper, slots := w.slots.push (w.slots[f]!),
     sigs := { w.sigs with fns := w.sigs.fns ++ [(ps, .opt ret)] },
@@ -76,14 +131,18 @@ partial def tagReturns : Expr → Expr
     effects: effectful arguments have already been evaluated, and outcome
     callees return failure as a normal `none` value. -/
 def bindValue (e : Expr) (ty : VTy) (k : Expr → M Expr) (failed : Expr) : M Expr := do
-  let s ← freshOption ty
-  let tail ← k (.prim .query [.local s])
-  return .ite (.assign s (.prim .mkSome [e])) tail failed
+  let s ← freshPayload ty
+  let tail ← k (.local s)
+  let program : Prog := { fns := (← get).fns.toList, main := 0 }
+  return if e.mayFail program then .ite (.assign s e) tail failed else .seq (.assign s e) tail
 
 def bindOutcome (e : Expr) (ty : VTy) (k : Expr → M Expr) (failed : Expr) : M Expr := do
   let s ← freshOption ty
-  let tail ← k (.prim .query [.local s])
-  return .ite (.assign s e) (.ite (.prim .query [.local s]) tail failed) failed
+  let value ← freshPayload ty
+  let tail ← k (.local value)
+  -- The outcome call executes before its query: failure-as-data must keep
+  -- the body's effects. Only the pure extraction belongs in the condition.
+  return .seq (.assign s e) (.ite (.assign value (.prim .query [.local s])) tail failed)
 
 def callParams (f : Nat) (args : List Expr) (ret : VTy) : M (List VTy) := do
   let w ← get
@@ -164,8 +223,8 @@ partial def capture (e : Expr) (expected : VTy) (k : Expr → M Expr) (failed : 
       bindOutcome (.call g vs) ty k failed) failed liftReturn
   | .ite c t other =>
     -- Bind the join once so continuations are not copied into both arms.
-    let out ← freshOption ty
-    let store (v : Expr) : M Expr := pure (.assign out (.prim .mkSome [v]))
+    let out ← freshPayload ty
+    let store (v : Expr) : M Expr := pure (.assign out v)
     let yes ← match c, t with
       | .heap (.isTag tags) [.local y], .call f (.local y' :: es) => do
         let w ← get
@@ -186,7 +245,7 @@ partial def capture (e : Expr) (expected : VTy) (k : Expr → M Expr) (failed : 
         else capture t ty store failed liftReturn
       | _, _ => capture t ty store failed liftReturn
     let no ← capture other ty store failed liftReturn
-    let tail ← k (.prim .query [.local out])
+    let tail ← k (.local out)
     return .seq (.ite (raw c) yes no) tail
   | .forE i it filt body =>
     let elem := w.locals[i]?.getD .void
@@ -269,7 +328,7 @@ def lower (fns : Array Fn) (slots : Array (List VTy)) (sigs : Sigs) :
       let (source, target) := (← get).todo[n]!
       let w ← get
       let fn := w.fns[source]!
-      let result ← if fn.body.mayFail { fns := w.fns.toList, main := 0 } then do
+      let result ← if fn.decides || fn.body.mayFail { fns := w.fns.toList, main := 0 } then do
           let (_, _, body) ← startFn source
           capture body (← get).rawRet (fun v => pure (.prim .mkSome [v])) (.ret (.lit .none)) true
         else do
@@ -278,7 +337,7 @@ def lower (fns : Array Fn) (slots : Array (List VTy)) (sigs : Sigs) :
             locals := ps.toArray,
             defaults := ((List.range fn.arity).map Expr.local).toArray, rawRet := ret, arity := fn.arity }
           pure (.prim .mkSome [.call source ((List.range fn.arity).map Expr.local)])
-      let wrapper := { (← get).fns[target]! with decides := fn.decides }
+      let wrapper := { (← get).fns[target]! with decides := false }
       finishFn target wrapper result
       n := n + 1
   let (_, w) ← run.run { fns, slots, sigs }

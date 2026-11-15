@@ -1,5 +1,6 @@
 /- Executable contracts for the shared storage used by refining lifts. -/
-import OpenVerse.Front.FrameRefs
+import OpenVerse.Front.SourceFrames
+import OpenVerse.Core.Check
 import OpenVerse.Core.Interp
 
 open OpenVerse OpenVerse.Front
@@ -29,6 +30,53 @@ private def checkRun (name : String) (body : Expr) (value field : Int)
 
 private def slots : Array VTy := #[.ref [0] [], .int, .tup [.int], .int]
 private def aliases : List FrameRefs.Slot := [{ localSlot := 1, frame := 0, field := 0 }]
+
+private def make (name : String) (body : Expr) : Fn :=
+  { name, arity := 0, nslots := 1, decides := false, body }
+private def origin (owner : String) (args : List VTy := []) : FrameRefs.Origin :=
+  { frame := owner, name := "Value", args }
+private def ownerTag (n : String) : Option Nat := if n == "Owner" then some 0 else none
+private def prepared (cycle : Bool) : Except String SourceFrames.Prepared :=
+  let branch := if cycle then Expr.ite (.lit (.logic false)) (.call 1 []) (.call 3 []) else .call 3 []
+  let fns := #[make "Owner" (.call 1 []), make "BridgeA" (.call 2 []),
+    make "BridgeB" branch, make "Leaf" (.local 0)]
+  let info : Array FrameRefs.Info := #[{ slots := [(0, origin "Owner")] }, {}, {},
+    { slots := [(0, origin "Owner")] }]
+  SourceFrames.prepare ownerTag fns #[[.int], [.int], [.int], [.int]]
+    (List.replicate 4 ([], .int)) info
+
+private def checkForwarding : IO Unit := do
+  for cycle in [false, true] do
+    let p ← match prepared cycle with | .ok p => pure p | .error e => throw (IO.userError e)
+    unless p.refs[0]! == [] && (List.range 3).all (fun i =>
+        (p.refs[i+1]!.lookup "Owner").isSome && p.fns[i+1]!.arity == 1) do
+      throw (IO.userError s!"missing multi-hop/cyclic frame forwarding: {cycle}")
+  let bad : Array Fn := #[make "Owner" (.lit .void), make "Bridge" (.seq (.call 2 []) (.call 3 [])),
+    make "Left" (.local 0), make "Right" (.local 0)]
+  let info : Array FrameRefs.Info := #[{}, {}, { slots := [(0, origin "Owner" [.int])] },
+    { slots := [(0, origin "Owner" [.logic])] }]
+  match SourceFrames.prepare ownerTag bad (Array.replicate 4 [.int]) (List.replicate 4 ([], .int)) info with
+  | .ok _ => throw (IO.userError "inconsistent owner frame arguments admitted")
+  | .error e => unless (e.splitOn "inconsistent forwarded arguments").length > 1 do
+      throw (IO.userError s!"wrong owner mismatch refusal: {e}")
+  let escape : Array Fn := #[make "Entry" (.call 2 []), make "Owner" (.lit .void), make "Leaf" (.local 0)]
+  let info : Array FrameRefs.Info := #[{}, {}, { slots := [(0, origin "Owner")] }]
+  let p ← match SourceFrames.prepare ownerTag escape (Array.replicate 3 [.int]) (List.replicate 3 ([], .int)) info with
+    | .ok p => pure p | .error e => throw (IO.userError e)
+  unless !(Prog.checkMain { fns := p.fns.toList, main := 0 }) &&
+      (p.refs[0]!.lookup "Owner").isSome do
+    throw (IO.userError "a distinct entry fabricated an unavailable owner's frame")
+  -- Explicit transport may use a different local generic coordinate; it
+  -- cannot turn an int owner into the logic owner a callee requires.
+  let wrong : Array Fn := #[make "Entry" (.call 2 []), make "Owner" (.lit .void), make "Leaf" (.local 0)]
+  let wrongInfo : Array FrameRefs.Info := #[{ forwarded := [origin "Owner" [.int]] }, {},
+    { slots := [(0, origin "Owner" [.logic])] }]
+  let q ← match SourceFrames.prepare ownerTag wrong (Array.replicate 3 [.int]) (List.replicate 3 ([], .int)) wrongInfo with
+    | .ok q => pure q | .error e => throw (IO.userError e)
+  let signatures : Sigs := { fns := q.sigs }
+  unless (tc signatures q.slots[0]! .int q.fns[0]!.body (some .int)).isNone do
+    throw (IO.userError "typed forwarding admitted a mismatched owner argument")
+  IO.println "source-frame forwarding: multi-hop, cycle, owner consistency and unavailable-root refusal passed"
 
 def main : IO Unit := do
   let r ← rewritten slots aliases [] (.assign 1 (int 7))
@@ -88,4 +136,5 @@ def main : IO Unit := do
   let e := Expr.forE 1 (.prim .mkArr [int 1]) (.lit .void) (.local 1)
   demand "a generator cannot rebind borrowed storage"
     (match FrameRefs.rewrite slots aliases [] e with | .error _ => true | .ok _ => false)
+  checkForwarding
   IO.println "source-frame rewrite contracts passed"

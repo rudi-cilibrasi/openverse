@@ -18,9 +18,9 @@ structure Prepared where
     suspension ANF. The extra parameters precede hidden type witnesses. -/
 def prepare (tagOf : String → Option Nat) (fns : Array Fn) (slots : Array (List VTy))
     (sigs : List (List VTy × VTy)) (info : Array FrameRefs.Info) : Except String Prepared := do
-  let frames : Array (List FrameRefs.Origin) ← fns.mapIdxM fun f fn => do
+  let mut frames : Array (List FrameRefs.Origin) ← fns.mapIdxM fun f fn => do
     let mut acc : List FrameRefs.Origin := []
-    for (_, s) in (info[f]?.getD {}).slots do
+    for s in ((info[f]?.getD {}).slots.map (·.2)) ++ (info[f]?.getD {}).forwarded do
       if s.frame == fn.name then continue
       if (tagOf s.frame).isNone then
         -- Discovery uses the enclosing suspending context before it knows
@@ -32,6 +32,28 @@ def prepare (tagOf : String → Option Nat) (fns : Array Fn) (slots : Array (Lis
         if old.args != s.args then throw s!"inconsistent arguments of borrowed frame {s.frame} in {fn.name}"
       else acc := acc ++ [s]
     return acc
+  -- A generated visitor can forward a borrowed frame without reading one of
+  -- its fields itself. Thread the existing requirements through call chains;
+  -- a call back into the frame's owner uses that owner's current frame.
+  -- Keep one consistent typed reference per origin, as for direct aliases.
+  let declared := frames
+  for _ in List.range fns.size do
+    let before := frames
+    let mut changed := false
+    for f in List.range fns.size do
+      let fn := fns[f]!
+      let mut needed := frames[f]!
+      for (callee, _) in Suspend.callsOf fn.body do
+        for origin in before[callee]?.getD [] do
+          if origin.frame == fn.name then continue
+          if let some existing := needed.find? (·.frame == origin.frame) then
+            if !(declared[f]!.any (·.frame == origin.frame)) && existing.args != origin.args then
+              throw s!"inconsistent forwarded arguments of borrowed frame {origin.frame} in {fn.name}"
+          else
+            needed := needed ++ [origin]
+            changed := true
+      frames := frames.set! f needed
+    if !changed then break
   let argBase (f : Nat) := (info[f]?).map (·.explicit) |>.getD fns[f]!.arity
   let ren (f i : Nat) := if i < argBase f then i else i + (frames[f]?.getD []).length
   let refs := frames.mapIdx fun f ss => ss.zipIdx.map fun (s, i) => (s.frame, argBase f + i)

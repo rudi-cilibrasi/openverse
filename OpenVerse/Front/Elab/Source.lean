@@ -77,7 +77,7 @@ def concurrencyHelpers (resolved : List STop) (requests : Requests) :
   let owned := PreludeNeeds.names.filter (defines0 · |>.isSome)
   let requestTops := requests.subtypes ++ Refine.functions requests.casts resolved ++
     requests.loops.flatMap (fun l =>
-      STop.fn l.pos l.name l.params l.tparams l.specs l.ret l.body :: l.extraFns) ++
+      STop.fn l.pos l.name l.params l.tparams l.specs l.ret l.body :: l.extraFns ++ l.sourceFns) ++
     requests.methods.map (fun r => STop.fn r.pos "$methodRequest"
       ((r.receiver :: r.params).map fun t => { name := "$arg", ty := t }) r.tparams r.effs r.ret (.block r.pos r.args))
   let uses := PreludeNeeds.uses (resolved ++ requestTops) ++
@@ -321,10 +321,21 @@ def inlineSource (requests : Requests) (admitted : Admitted) :
   -- whose family the receiver's class picks, the calls whose overload the
   -- arguments' types pick, the consumers in recursive groups' code whose
   -- names' types it notes, the types whose field orders it notes)
-  let written := admitted.resolved
+  let mut producerNames : List String := []
+  let mut producerTops : List STop := []
+  for top in requests.loops.flatMap (·.sourceFns) do
+    let name := match top with | .fn _ n .. | .classDef _ n .. => n | _ => ""
+    if producerNames.contains name then continue
+    producerNames := name :: producerNames
+    producerTops := producerTops ++ [top]
+  -- These are public compiler-request payloads, so validate their source
+  -- contracts before inlining can replace a declaration by a checking stub.
+  EffectPolicy.check producerTops
+  let written := producerTops ++ admitted.resolved
   let ⟨resolved, lazy, familySites, overloadSites, nestedSites, fieldSites, copiedOverloadNames, copiedOverloadClashes⟩ ← Choice.inlineMulti written reserved
     requests.eager requests.families requests.lazy requests.overloads requests.nested
     requests.fieldOrders requests.instanceCalls
+  let resolved := resolved.map (STop.mapAll id Choice.restoreProducerDefaultContexts)
   -- (#246) the class of the stack cells of lazily taken ones
   let helpers := admitted.helpers ++ (← if lazy then lazyTops else pure [])
   -- (#283) and of the cells of the vars their frames set

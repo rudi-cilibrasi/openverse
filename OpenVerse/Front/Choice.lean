@@ -54,6 +54,7 @@ def binding? : SExpr → Option Binding
   | .decl p x ty false (.app _ (.ident _ "$branchChoiceAt") [l, i] false) => some ⟨p, x, ty, [], some l, some i, none⟩
   | .decl p x ty false (.app _ (.ident _ "$each") [a] false) => some ⟨p, x, ty, [], none, none, some a⟩
   | .decl p x ty false e@(.app _ (.ident _ "$loop") _ false) => some ⟨p, x, ty, [], none, none, some e⟩
+  | .decl p x ty false e@(.app _ (.ident _ "$choiceProducer") _ false) => some ⟨p, x, ty, [], none, none, some e⟩
   | _ => none
 
 /-- An `if … else …` with a choice in a branch (the branches of an `else if`
@@ -185,15 +186,26 @@ partial def setsIn (e : SExpr) : List String :=
 
 /-- The names a clause list binds (so values, for `stable` and the heads
     of calls). -/
-def boundIn (cs : List SExpr) : List String :=
-  cs.flatMap fun
-    | .decl _ x _ _ _ => [x]
-    | .gen _ x i _ => x :: i.toList
-    -- (an inlined generic call's omitted defaults, bound together, #283)
-    | .app _ (.ident _ "$defaults") (.block _ ds :: _) false => ds.filterMap fun
-        | .decl _ x _ _ _ => some x
-        | _ => none
-    | _ => []
+def boundIn (cs : List SExpr) : List String := Id.run do
+  let mut depth := 0
+  let mut names := []
+  for clause in cs do
+    match clause with
+    | .app _ (.ident _ "$producerAnchorStart") [_] false
+      | .app _ (.ident _ "$producerFrameStart") [] false => depth := depth + 1
+    | .app _ (.ident _ "$producerAnchorEnd") [_] false
+      | .app _ (.ident _ "$producerFrameEnd") [] false => depth := depth - 1
+    | _ =>
+      if depth != 0 then continue
+      names := names ++ match clause with
+        | .decl _ x _ _ _ => [x]
+        | .gen _ x i _ => x :: i.toList
+        -- An inlined generic call's omitted defaults are bound together.
+        | .app _ (.ident _ "$defaults") (.block _ ds :: _) false => ds.filterMap fun
+            | .decl _ x _ _ _ => some x
+            | _ => none
+        | _ => []
+  return names
 
 /-- The receiver of a method or field. -/
 def recvOf : SExpr → SExpr
@@ -274,6 +286,7 @@ partial def hasLiftable : SExpr → Bool
   | .app _ (.ident _ "$dispatch") _ false => true
   | .app _ (.ident _ "$each") _ false => true
   | .app _ (.ident _ "$loop") _ false => true
+  | .app _ (.ident _ "$choiceProducer") _ false => true
   -- (#283) a call of a lazily taken group, in its own code (`markPoints`)
   | .app _ (.ident _ "$point") _ false => true
   -- (a scope's `defer:`s pending for the exits in `e`, `deferExits`, #283)
@@ -443,6 +456,22 @@ partial def mapE (f : SExpr → Option SExpr) (e : SExpr) : SExpr :=
   match f e with
   | some e' => e'
   | none => Id.run (descendM (m := Id) (mapE f) e)
+
+/-- A raw producer adapter is inlined before its original call defaults are
+    prepared. Restore caller flags on those parameter-default nodes only;
+    wrapping the entire expanded producer would move its scope markers. -/
+partial def restoreProducerDefaultContexts (expression : SExpr) : SExpr :=
+  mapE (fun
+    | .app p (.ident _ "$producerDefaultContext")
+        [.str _ [.text function], stack, flags, value] false =>
+      let value := restoreProducerDefaultContexts value
+      some (mapE (fun
+        | node@(.app q (.ident _ "$paramDefault") (.ident _ owner :: _) false) =>
+          if owner == function || owner == function ++ "$fam" then
+            some (.app q (.ident p "$defaultContext") [stack, flags, node] false)
+          else none
+        | _ => none) value)
+    | _ => none) expression
 
 /-- An exclusive choice (#314): at most one alternative's `guards` hold,
     and that alternative's value is its `rest`'s (a block). A `for`
@@ -783,6 +812,15 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
       let bounds ← liftOps isVal isField [lo, hi]
       return ← LM.bind e.pos "c" (rebuild bounds[0]! bounds[1]!)
   match e with
+  | .app p (.ident _ "$producerAnchor") [original, lowered] false => do
+    let name ← LM.fresh p "producer"
+    let metadata := SExpr.decl p name none false original
+    LM.push (.app p (.ident p "$producerAnchorStart") [metadata] false)
+    let value ← liftE isVal isField lowered
+    LM.push (.decl p name none false value)
+    LM.push (.app p (.ident p "$producerAnchorEnd") [metadata] false)
+    return .ident p name
+  | .app p (.ident _ "$choiceProducer") _ false => LM.bind p "c" e
   | .app p (.ident _ "$choice") _ false => LM.bind p "c" e
   | .app p (.ident _ "$liftCast") [c] false => LM.bind p "k" c
   | .set p .. =>
@@ -2566,6 +2604,8 @@ structure SourceContext where
 structure ForResume where
   name : String
   storage : List (String × ResumeStorage) := []
+  /-- Typed borrowed owners forwarded without reading an aliased field. -/
+  forwarded : List ResumeStorage := []
   inlineScopes : List String := []
   liftTag : String := ""
   inRepeat : Bool := true
@@ -2632,6 +2672,9 @@ structure FirstLift where
       other functions of the group, one function of its own each, which the
       function and they call for one another. -/
   extraFns : List STop := []
+  /-- New raw producer adapters must pass ordinary method-family inlining.
+      Existing prepared continuations remain in their later source phase. -/
+  sourceFns : List STop := []
   deriving Inhabited
 
 /-- (#246) A value of a lazily taken call, in its function of its own: at the
@@ -3208,7 +3251,14 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
           (r, s, (fams.find? fun (x, f) => x == s && f.root == r).map (·.2))
         match cases with
         | [(_, s, some f)] => some (call p q s f (rw recv) (args.map rw) br)
-        | _ => if cases.all (·.2.2.isNone) then none else some (across p q cases (rw recv) (args.map rw) br)
+        | _ =>
+          if cases.all (·.2.2.isNone) then none else
+          let receiver := rw recv
+          let arguments := args.map rw
+          let lowered := across p q cases receiver arguments br
+          if trial then some lowered else
+            some (.app p (.ident p "$producerAnchor")
+              [.app p (.member q receiver m0) arguments br, lowered] false)
     | .app p (.ident q m) args br => do
       let d ← inC
       let m ← (slotsAt p m).head?
