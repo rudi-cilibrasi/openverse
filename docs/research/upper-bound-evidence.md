@@ -86,8 +86,8 @@ Opaque forwarding remains allowed, and reading an unrelated ordinary field
 of an object with hidden metadata still gives executable data.
 `MetadataGetters.lean` checks these accessor boundaries with 14 Core-checked
 controls, including execution after forwarding through another function.
-`MetadataStorage.lean` retains 44 real/dummy
-rejection pairs and 41 opaque-forwarding, real-overwrite and rollback pairs,
+`MetadataStorage.lean` retains 47 real/dummy
+rejection pairs and 44 opaque-forwarding, real-overwrite and rollback pairs,
 including a later GADT refinement, fresh unit-to-array conversions, ordinary
 helpers with independent real returns, virtual and spawned receivers, and
 bound-method captures across a wait. Shared-frame controls cover metadata,
@@ -195,7 +195,10 @@ Readonly borrowers without escaping work retain the ordinary transfer when
 their capture roles agree with the current owner. Borrowed writes select the
 control graph when a shared cell or result can carry metadata; unrelated type
 witnesses do not force ordinary data paths into schedule exploration. Stale
-metadata captures also select the graph. Lifted branches and surviving
+metadata captures also select the graph. Lifted background tasks first
+undergo an executable-use probe; opaque witnesses alone do not select a
+schedule. The probe records return-summary dependencies for invalidation.
+Lifted branches and surviving
 rush arms keep their source owner's task scope after a refining or default
 helper returns; active structured groups retain their helper's lexical scope.
 The owner cancels the background work, after its own cleanup. This distinguishes

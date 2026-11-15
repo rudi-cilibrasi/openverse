@@ -57,9 +57,9 @@ private def frameOwners (first second : String) : String := callables
    s!"    FrameOwner(P,E,F,{first})\n    Other:=event(int)\{}\n    FrameOwner(P,Other,F,{second})\n    0")
 
 private def liftedTask (body tail : String) (setup : String := "")
-    (prologue : String := "") : String := callables
+    (prologue : String := "") (initial : String := "Dummy") : String := callables
   ("pair(a:type,b:type):=class{}\ndup(t:type):=class(pair(t,t)){}\n" ++
-   "Caller(P:pair(a,b),E:event(int),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type)<suspends>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n" ++ setup ++
+   "Caller(P:pair(a,b),E:event(int),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type)<suspends>:int=\n    var Stored:type{_()<computes>:int}=" ++ initial ++ "\n" ++ setup ++
    "    if(D:=dup[P]):\n        branch:\n" ++ prologue ++ "            E.Await()\n" ++ body ++ tail)
 
 private def ordinaryBorrowedReader (overwrite : Bool) : String := callables
@@ -68,6 +68,12 @@ private def ordinaryBorrowedReader (overwrite : Bool) : String := callables
     "    for(A:=(Dup(1)|Dup(2)),B:=(Dup(1)|Dup(2))):\n        Sleep(0.01)\n        Stored()")
 
 private def cases : List (String × String) := [
+  ("lifted writer cannot put metadata into an initially real cell",
+    liftedTask "            set Stored=Dummy\n" "    E.Signal(0)\n    Stored()" (initial := "F")),
+  ("lifted real-cell write is checked without a later read",
+    liftedTask "            set Stored=Dummy\n" "    E.Signal(0)\n    0" (initial := "F")),
+  ("lifted task can execute metadata without a metadata cell",
+    liftedTask "            Value:=Dummy()\n" "    E.Signal(0)\n    0" (initial := "F")),
   ("lifted branch cleanup sees the actual owner's data mode",
     liftedTask "" "    0" "    defer:\n        set Stored=F\n"
       "            defer:\n                set Stored=Dummy\n"),
@@ -131,6 +137,12 @@ private def cases : List (String × String) := [
   ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
+  ("canceled lifted writer leaves an initially real cell alone",
+    liftedTask "            set Stored=Dummy\n" "    0" (initial := "F")),
+  ("canceled lifted task does not execute its metadata receiver",
+    liftedTask "            Value:=Dummy()\n" "    0" (initial := "F")),
+  ("lifted task reads an initially real cell",
+    liftedTask "            Value:=Stored()\n" "    E.Signal(0)\n    0" (initial := "F")),
   ("actual owner cleanup precedes its lifted branch cleanup",
     liftedTask "" "    0" "    defer:\n        set Stored=F\n"
       "            defer:\n                Value:=Stored()\n"),

@@ -1374,12 +1374,24 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
         | .ok discovered =>
           modify fun st => { st with
             summaries := discovered.summaries
-            indices := discovered.indices, changed := discovered.changed }
+            indices := discovered.indices, changed := discovered.changed
+            dependencies := discovered.dependencies }
         if (MetadataPlan.assigns d).any (fun i =>
             info.shared.contains i && seen[i]?.getD false) then
           metadataCleanup := true
-      let needsSchedule := captureMismatch || metadataCleanup ||
-        ((← get).borrowedTasks[i]?.getD false) || (background &&
+      -- A lifted task needs the caller's schedule only when it can observe
+      -- metadata at an executable boundary. Hidden type witnesses alone do
+      -- not make an ordinary default argument relevant to this analysis.
+      let mut metadataTask := false
+      if (← get).borrowedTasks[i]?.getD false then
+        match probeCleanup fns infos fields fn info cleanupSlots body (← get) with
+        | .error _ => metadataTask := true
+        | .ok discovered =>
+          modify fun st => { st with
+            summaries := discovered.summaries
+            indices := discovered.indices, changed := discovered.changed
+            dependencies := discovered.dependencies }
+      let needsSchedule := captureMismatch || metadataCleanup || metadataTask || (background &&
         (info.shared.any (fun i => seen[i]?.getD false) ||
           out.value.getD false || out.returned.getD false))
       if needsSchedule then
