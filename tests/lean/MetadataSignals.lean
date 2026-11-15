@@ -40,7 +40,31 @@ private def comparedSignal (op : String) (swap : Bool) : String :=
     (if op == "=" then "A" else "B") ++ ")then Alias.E.Signal(0)\n") ++
   header ++ setup ++ "    Other:=event(int){}\n    H:=holder{E:=Other}\n    K:=holder{E:=E}\n    Send(H,K,1)\n    Stored()"
 
+private def returnedField (helpers : String)
+    (action : String := "N:=Change(H,E,true)") (receiver : String := "H") : String :=
+  "holder:=class{var E:event(int)}\n" ++ helpers ++ header ++ setup ++
+  "    Other:=event(int){}\n    H:=holder{E:=Other}\n    " ++ action ++
+  "\n    " ++ receiver ++ ".E.Signal(0)\n    Stored()"
+
+private def earlyChange : String :=
+  "Change(H:holder,E:event(int),C:logic)<transacts>:int=\n    if(C?):\n        set H.E=E\n        return 0\n    0\n"
+
 private def refusals : List (String × String) := [
+  ("An early helper return preserves its heap write", returnedField earlyChange),
+  ("A return from a loop preserves its heap write", returnedField
+    "Change(H:holder,E:event(int),C:logic)<transacts>:int=\n    loop:\n        if(C?):\n            set H.E=E\n            return 0\n        else:\n            break\n    0\n"),
+  ("A return from a for preserves its heap write", returnedField
+    "Change(H:holder,E:event(int),C:logic)<transacts>:int=\n    for(I:=0..0):\n        set H.E=E\n        return 0\n    0\n"),
+  ("A returned receiver retains writes made before returning", returnedField
+    "Change(H:holder,E:event(int),C:logic)<transacts>:holder=\n    if(C?):\n        set H.E=E\n        return H\n    H\n"
+    (receiver := "N")),
+  ("An outer helper preserves an inner return's heap write", returnedField
+    (earlyChange.replace "Change(" "Inner(" ++
+      "Change(H:holder,E:event(int),C:logic)<transacts>:int=Inner(H,E,C)\n")),
+  ("Returning branches join both heap states", returnedField
+    "Change(H:holder,E:event(int),C:logic)<transacts>:int=\n    if(C?):\n        set H.E=E\n        return 0\n    else:\n        return 0\n"),
+  ("A condition's heap write survives a successful early return", returnedField
+    "Change(H:holder,E:event(int),C:logic)<transacts>:int=\n    if(set H.E=E;C?):\n        return 0\n    0\n"),
   ("Field writes through an equality result retain their receiver",
     comparisonWrite "Alias:=H=H"),
   ("Field writes through an inequality result retain their receiver",
@@ -122,6 +146,13 @@ private def refusals : List (String × String) := [
     "    Other.Signal(0)\n    Stored()")]
 
 private def controls : List (String × String) := [
+  ("An early return can write an unrelated event", returnedField earlyChange
+    "N:=Change(H,Other,true)"),
+  ("Rollback restores a returning helper's heap write", returnedField earlyChange
+    "if(N:=Change(H,E,true);false?){}"),
+  ("Objects allocated on returning paths retain their fields", returnedField
+    "Make(C:logic)<transacts>:holder=\n    if(C?):\n        return holder{E:=event(int){}}\n    holder{E:=event(int){}}\n"
+    "N:=Make(true)" "N"),
   ("An equality result preserves an unrelated event field",
     comparisonWrite "Alias:=H=H" "Alias.E.Signal(0)"),
   ("An inequality returns only its left receiver",
