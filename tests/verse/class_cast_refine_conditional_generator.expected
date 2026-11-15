@@ -1,0 +1,18 @@
+condition 4 4
+value 7
+value 8
+value 7
+value 8
+else 7
+else 7
+other 7
+other 8
+other 7
+other 8
+local 4 2
+field 2
+field 10
+field 2
+field 10
+counter 10
+exit=0
