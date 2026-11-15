@@ -340,6 +340,9 @@ structure Ctx where
   retries : Nat := 0
   constructProbe : Bool := false
   inlineScopes : List String := []
+  copiedOverloadScope : String := ""
+  /-- Calls physically owned by this copy, excluding external signature defaults. -/
+  copiedOverloadSites : List (Pos × String) := []
   constructOrigin : Option String := none
   constructHints : Option (List ConstructHint) := none
   sigs    : List Sig
@@ -507,7 +510,12 @@ def Requests.merge (a b : Requests) : Requests where
   eager := mergeByKey id a.eager b.eager
   lazy := mergeByKey id a.lazy b.lazy
   families := mergeByKey id a.families b.families
-  overloads := mergeByKey id a.overloads b.overloads
+  overloads :=
+    let picks := mergeByKey id a.overloads b.overloads
+    -- An empty pick means previously unreached, not another overload.
+    -- A later real discovery replaces that sentinel; real conflicts remain.
+    picks.filter fun (p, o) => o != "" || !picks.any (fun (q, n) => q == p && n != "")
+  copiedOverloads := mergeByKey id a.copiedOverloads b.copiedOverloads
   nested := mergeByKey (·.1) a.nested b.nested
   fieldOrders := mergeByKey (·.1) a.fieldOrders b.fieldOrders
   instanceCalls := mergeByKey id a.instanceCalls b.instanceCalls
@@ -531,6 +539,7 @@ def Requests.without (r old : Requests) : Requests where
   lazy := dropByKey id r.lazy old.lazy
   families := dropByKey id r.families old.families
   overloads := dropByKey id r.overloads old.overloads
+  copiedOverloads := dropByKey id r.copiedOverloads old.copiedOverloads
   nested := dropByKey (·.1) r.nested old.nested
   fieldOrders := dropByKey (·.1) r.fieldOrders old.fieldOrders
   instanceCalls := dropByKey id r.instanceCalls old.instanceCalls
@@ -545,7 +554,7 @@ def Requests.without (r old : Requests) : Requests where
   anys := dropByKey SubtypeEvidence.declarationName r.anys old.anys
 
 def Requests.isEmpty (r : Requests) : Bool :=
-  r.eager.isEmpty && r.lazy.isEmpty && r.families.isEmpty && r.overloads.isEmpty && r.nested.isEmpty &&
+  r.eager.isEmpty && r.lazy.isEmpty && r.families.isEmpty && r.overloads.isEmpty && r.copiedOverloads.isEmpty && r.nested.isEmpty &&
     r.fieldOrders.isEmpty && r.instanceCalls.isEmpty &&
     r.fns.isEmpty && r.methods.isEmpty &&
     r.casts.isEmpty && r.loops.isEmpty && r.witnesses.isEmpty && !r.awaits && r.subtypes.isEmpty && r.boxes.isEmpty &&
@@ -1480,7 +1489,7 @@ def Ctx.rootsOf (ctx : Ctx) (c m : String) : List String :=
     which may make a call fail or have several values. -/
 def Ctx.failabilityKnown (ctx : Ctx) : EM Bool := do
   let st ← get
-  return st.needs.fns.isEmpty && st.needs.methods.isEmpty && ctx.types.familySites.isEmpty &&
+  return st.needs.fns.isEmpty && st.needs.methods.isEmpty && st.needs.copiedOverloads.isEmpty && ctx.types.familySites.isEmpty &&
     ctx.types.overloadSites.isEmpty && ctx.types.nestedSites.isEmpty && ctx.types.fieldSites.isEmpty &&
     !ctx.typeOnly
 
@@ -1499,6 +1508,43 @@ def Ctx.noteFamily (ctx : Ctx) (p : Pos) (recv : Ty) (m : String) : EM Unit := d
     overload `o` it takes noted. -/
 def Ctx.noteOverload (ctx : Ctx) (p : Pos) (f o : String) : EM Unit := do
   if ctx.types.overloadSites.contains (p, f) then noteNeeds { overloads := [(p, o)] }
+
+/-- Only top-level calls participate in copied-suffix specialization; method
+    overloads retain their existing discovery and refusal boundary. -/
+def Ctx.noteFunctionOverload (ctx : Ctx) (p : Pos) (f o : String) : EM Unit := do
+  let eligible := ctx.types.copiedOverloadFns.any fun (n, _) => n.startsWith (f ++ "$mv")
+  if !ctx.copiedOverloadScope.isEmpty && eligible && ctx.copiedOverloadSites.contains (p, f) then
+    if !ctx.types.requests.copiedOverloads.contains (ctx.copiedOverloadScope, p, o) then
+      noteNeeds { copiedOverloads := [(ctx.copiedOverloadScope, p, o)] }
+  else if ctx.types.overloadSites.contains (p, f) ||
+      (ctx.trial == some .continuation && eligible && !ctx.types.requests.overloads.contains (p, o)) then
+    noteNeeds { overloads := [(p, o)] }
+
+/-- Whether a copied suffix contains a nonrecursive multivalue overload call. -/
+def Ctx.hasCopiedOverloads (ctx : Ctx) (code : List SExpr) : Bool :=
+  (code.flatMap Choice.callUses).any fun (_, f) =>
+    ctx.types.copiedOverloadFns.any fun (n, _) => n.startsWith (f ++ "$mv")
+
+/-- Distinguish nested copies and enclosing source functions without changing diagnostics. -/
+def Ctx.copiedOverloadKey (ctx : Ctx) (p : Pos) (name : String) (alt : Nat) : String :=
+  s!"{ctx.frameName}|{ctx.copiedOverloadScope}|{p.show}:{name}:{alt}"
+
+/-- Specialize a copied suffix only with the overload selected in that copy.
+    Its body has already crossed source effects, function values and witnesses;
+    ordinary inlining still handles argument/default order and lexical markers. -/
+def Ctx.specializeCopiedOverloads (ctx : Ctx) (scope : String) (code : List SExpr) : Except String (List SExpr) := do
+  let picks := ctx.types.requests.copiedOverloads.filterMap fun (key, p, o) =>
+    if key == scope then some (p, o) else none
+  if picks.isEmpty then return code
+  for (p, o) in picks do
+    if picks.any (fun (q, other) => q == p && other != o) then
+      throw s!"{p.show}: one copied choice suffix selects different overloads: not supported yet (#283)"
+  let fns := ctx.types.copiedOverloadFns
+  let names := (fns.map fun (n, _) => (n.splitOn "$mv").headD n).eraseDups
+  let selected := code.map (Choice.pickOverloads names picks (fun n => (fns.lookup n).isSome))
+  let (expanded, _) ← (selected.mapM fun e =>
+    Choice.inlineCalls fns e (clash := ctx.types.copiedOverloadClashes) (sitePrefix := s!"copy{scope.hash}_")).run 0
+  return expanded
 
 /-- The function that implements slot `r` of method `m` for an instance of
     class `d` (#70). -/

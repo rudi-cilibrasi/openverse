@@ -1,0 +1,26 @@
+default int 1
+pick int
+body 2 1
+body 12 1
+default int 2
+pick int
+body 3 2
+body 13 2
+default string 3
+pick string x
+body 103 3
+body 113 3
+default string 4
+pick string x
+body 104 4
+body 114 4
+after for 4
+default string 1
+pick string x
+first 111 1
+after first 1
+default string 1
+pick string x
+option 111 1
+after option 1
+exit=0

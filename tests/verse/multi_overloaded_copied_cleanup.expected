@@ -1,0 +1,17 @@
+defer int
+body 1
+defer int
+body 2
+defer int
+body 1
+defer int
+body 2
+defer string
+body 20
+defer string
+body 21
+defer string
+body 20
+defer string
+body 21
+exit=0
