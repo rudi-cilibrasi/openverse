@@ -1,5 +1,6 @@
 One()<computes>:int=1
 Two()<computes>:int=2
+holder:=class{E:event(int)}
 
 Direct()<suspends>:int=
     E:=event(int){}
@@ -21,6 +22,10 @@ Unrelated()<suspends>:int=
     set Stored=One
     Alias:=Other
     Alias.Signal(0)
+    Box:=holder{E:=Other}
+    Box.E.Signal(0)
+    Aliases:=array{Other}
+    if(Target:=Aliases[0])then Target.Signal(0)
     Stored()
 
 Timer()<suspends>:int=

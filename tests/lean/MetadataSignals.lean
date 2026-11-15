@@ -13,6 +13,11 @@ private def refusals : List (String × String) := [
     "    E.Signal(0)\n    Stored()"),
   ("Signal through an immutable event alias", header ++ setup ++
     "    Alias:=E\n    Alias.Signal(0)\n    Stored()"),
+  ("Signal through an event stored in an object field",
+    "holder:=class{E:event(int)}\n" ++ header ++ setup ++
+    "    Alias:=holder{E:=E}\n    Alias.E.Signal(0)\n    Stored()"),
+  ("Signal through an event stored in an array", header ++ setup ++
+    "    Aliases:=array{E}\n    if(Alias:=Aliases[0])then Alias.Signal(0)\n    Stored()"),
   ("Signal through a generic event alias helper",
     "Identity(X:t where t:type):t=X\n" ++ header ++ setup ++
     "    Identity(E).Signal(0)\n    Stored()"),
@@ -42,6 +47,11 @@ private def controls : List (String × String) := [
   ("Fresh events remain distinct through aliases", header ++
     "    Other:=event(int){}\n    Alias:=Other\n" ++ setup ++
     "    Alias.Signal(0)\n    Stored()"),
+  ("A fresh unrelated event stays distinct through an object field",
+    "holder:=class{E:event(int)}\n" ++ header ++ setup ++
+    "    Other:=event(int){}\n    Alias:=holder{E:=Other}\n    Alias.E.Signal(0)\n    Stored()"),
+  ("A fresh unrelated event stays distinct through an array", header ++ setup ++
+    "    Other:=event(int){}\n    Aliases:=array{Other}\n    if(Alias:=Aliases[0])then Alias.Signal(0)\n    Stored()"),
   ("A failed condition rolls back callback writes", header ++ setup ++
     "    if(E.Signal(0);false?){}\n    Stored()"),
   ("Signal cannot skip a helper's initial timer",
