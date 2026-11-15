@@ -255,14 +255,29 @@ partial def castsIn (isClass : String → Bool) (c : SExpr) : List Pos :=
     -- A case evaluates its scrutinee before selecting an arm. Its arms
     -- and patterns retain their own scopes (`elabCase`).
     | .caseE _ x _ => go x
+    | .app _ (.ident _ "$each") _ false =>
+      match Choice.firstRangeBounds? e with
+      | some (lo, hi, _) => go lo ++ go hi
+      | none => []
+    -- Field bindings name constructor arguments; their values are ordered
+    -- operands, not declaration scopes of their own.
+    | .construct _ _ _ fields => fields.flatMap fun
+      | .decl _ _ _ _ value => go value
+      | value => go value
+    -- Named call arguments wrap their ordered operand in a declaration.
+    -- Other declarations remain scopes of their own.
+    | .decl _ n _ _ value => if n.startsWith "?" then go value else []
+    | .set q path _ value =>
+      let (indices, _) := Choice.hoistPath q path
+      (indices.flatMap fun | .decl _ _ _ _ index => go index | _ => []) ++ go value
     | .app _ (.ident _ n) _ _ => if n.startsWith "$" then [] else e.children.flatMap go ++ here e
-    | .app .. | .member .. | .bin .. | .cmp .. | .query .. | .neg .. | .tuple .. | .arrayLit ..
-    | .str .. | .mapLit .. | .construct .. => e.children.flatMap go ++ here e
+    | .app .. | .member .. | .bin .. | .range .. | .cmp .. | .query .. | .neg .. | .tuple .. | .arrayLit ..
+    | .str .. | .mapLit .. => e.children.flatMap go ++ here e
     | _ => []
   let inner : SExpr → List Pos := fun x => x.children.flatMap go
   match c with
   | .decl _ _ _ _ v => if (castClause? c).isSome then inner v else go v
-  | .set _ _ _ v | .gen _ _ _ v => go v
+  | .gen _ _ _ v => go v
   | .app .. => if (castClause? c).isSome then inner c else go c
   | e => go e
 

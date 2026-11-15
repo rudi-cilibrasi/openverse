@@ -863,7 +863,26 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               else set st0
           let mut parts : List R := []
           for (a, i) in b.alts.zipIdx do
-            parts := parts ++ [← forW (liftA a i ++ fs ++ moreClauses) bd]
+            if !c.hasCopiedOverloads (fs ++ moreClauses) then
+              parts := parts ++ [← forW (liftA a i ++ fs ++ moreClauses) bd]
+              continue
+            let scope := c.copiedOverloadKey gp b.name i
+            -- The copy's discovery scope covers its producer and body too.
+            -- Specialize all of them; otherwise an overload first discovered
+            -- there could remain a single-value checking stub forever.
+            let original := liftA a i ++ fs ++ moreClauses ++ [bd]
+            let expanded ← match c.specializeCopiedOverloads scope original with
+              | .ok code => pure code
+              | .error why => eerr gp why
+            let bound := Choice.boundIn expanded.dropLast
+            let clauses := (original.dropLast.zip expanded.dropLast).zipIdx.flatMap fun ((before, after), j) =>
+              if before == after then [after] else
+                Choice.prepare [after] (fun n => choiceValues c n || bound.contains n) (choiceField c)
+                  (fieldOrder := choiceOrder c) (site := s!"{site}copy{i}_{j}")
+                  (keepExcl := true) (keepBranches := choiceHasCast c)
+            let body := expanded.getLastD bd
+            let sites := (clauses ++ [body]).flatMap Choice.callUses
+            parts := parts ++ [← forWIn { bctx with copiedOverloadScope := scope, copiedOverloadSites := sites } clauses body]
           let some r0 := parts.head? | eerr gp "internal: a choice without alternatives"
           if let some r := parts.find? (·.ty != r0.ty) then
             eerr gp s!"the for's values have the type {r0.ty.show} for one alternative of this choice and {r.ty.show} for another"

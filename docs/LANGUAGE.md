@@ -1084,11 +1084,26 @@ circle := class(shape, labelled):
   clause of an `if`'s condition or of a `for`. Inside such a clause, in an
   operand it evaluates in order (`dup[P].C > 3`, `F(dup[P])`), it is lifted
   out to be a clause of its own first, as a choice there is: the operands
-  evaluated before it are bound first, so they still run before it. A
-  branch of an `if` in a failure context is in it too: one written as an
+  evaluated before it are bound first, so they still run before it.
+  Supplied field values of `name{Field := …}` constructions are operands
+  too, including generic classes, structs, inherited and nested values.
+  Their fields keep declaration order, including omitted defaults, and
+  class blocks run after the fields. Defaults retain their own effects
+  and convergence contracts. Mutable-path indices in `set` are ordered
+  operands too: a cast there keeps index evaluation, path reads and the
+  RHS in their ordinary order, with its refinement available to the RHS
+  and following clauses. Assignment expressions retain their result when
+  used as a binding, argument or field value. Named call arguments can
+  contain refining casts too; positional arguments run first, named values
+  in their written order, then omitted defaults. A branch of an `if` in a failure context is in it too: one written as an
   expression with such a cast in it (`if (N > 0) then dup[P].C else 0`) is
   the block of it, where the cast is a clause, so it runs only when that
-  branch does. A `case` scrutinee is an ordered operand too: a cast there
+  branch does. Both bounds of a `for` or `first` range can contain such
+  casts, including inside computed bounds. Bounds run from left to right,
+  once before the range is iterated, and their refinements reach the
+  following clauses and body. An explicitly nested `for` remains a
+  separate failure context whose refinement does not escape its producer.
+  A `case` scrutinee is an ordered operand too: a cast there
   refines the arms and the following clauses. A cast in an arm stays in
   that arm, which must already be in a failure context. Computed patterns
   are separate failure conditions: a cast there stays inside its pattern,
@@ -1358,9 +1373,8 @@ circle := class(shape, labelled):
     view (#243, #250, #351) outside any failure context (a case's
     scrutinee and arms need an enclosing one; its computed patterns are
     failure conditions), or inside an expression where choice lifting
-    does not reach it, including an inline range bound (#243). In a
-    nested failure context of its own, such as an `option{…}` inside the
-    clause, it is that context's;
+    does not reach it (#243). In a nested failure context of its own,
+    such as an `option{…}` inside the clause, it is that context's;
   - after a cast that opens type arguments, a value of its failure
     context, or a name it binds that a branch or body uses, of a type that
     names them (#250): no type outside it can name them (it would be an
@@ -1926,7 +1940,11 @@ Main():void =
   itself, recursive (below); and a recursive one may call an overloaded
   one, as it may call any function with several values. A call in
   the clauses after a choice whose alternatives' values are of different
-  types, which are copied for each (#335), must take one overload in every
+  types, which are copied for each (#335), may take a different nonrecursive
+  top-level overload in each copy. Each copy selects its overload before
+  inlining, retaining argument/default order and its failure boundaries;
+  this applies to `for`, first-success and `option` consumers. Recursive
+  overloads and overloaded methods must still take one overload in every
   copy.
 
   A method with several values works the same way (#283): a call
@@ -2346,11 +2364,10 @@ Main():void =
   the function whose code calls it or with another, or is overloaded. A
   failure context in a recursive one's code that takes a call's values and
   gives a value of one of its type parameters that none of the names it
-  uses has is refused. A call in the clauses copied for each alternative of
-  a choice whose values are of different types that would take one overload
-  (or one list of an overloaded method) with several values in one copy and
-  another in another is refused, saying to write those clauses apart for
-  the alternatives or to give the overloads names of their own.
+  uses has is refused. In the clauses copied for alternatives of different
+  types, selecting different recursive overloads, or different lists of an
+  overloaded method with several values, remains refused. Nonrecursive
+  top-level overloads may differ between the copies, as described above.
   `Main` never has several values, nor does a `<suspends>` function: a call
   of one with several would have to be in a failure context, and a failure
   context cannot suspend (#156); a choice in its body outside a failure

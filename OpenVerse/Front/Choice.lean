@@ -232,6 +232,16 @@ def noLift (p : Pos) (why : String) (e : SExpr) : SExpr :=
 def shownName (n : String) : String :=
   if n.startsWith "$" && n.contains '\'' then ((n.splitOn "'").getLast?.getD n) else n
 
+/-- The parser's `first` range producer, with a way to replace its bounds.
+    An explicitly written `for` remains a scope of its own. -/
+def firstRangeBounds? : SExpr → Option (SExpr × SExpr × (SExpr → SExpr → SExpr))
+  | .app p f@(.ident _ "$each")
+      [.forE q [.decl r n none false (.range b lo hi)] v@(.ident _ result)] false =>
+    if n == result && (shownName n).startsWith "$firstRange" then
+      some (lo, hi, fun lo hi => .app p f [.forE q [.decl r n none false (.range b lo hi)] v] false)
+    else none
+  | _ => none
+
 /-- The names `ns` renamed for a place, `tag'N` (`tag` a made name, so
     `shownName` gives `N` back), so they stay its own there. -/
 def renamedFor (tag : String) (ns : List String) : List (String × String) :=
@@ -284,6 +294,7 @@ partial def hasLiftable : SExpr → Bool
   | .orE _ _ b => liftsHere b
   -- (a construction's field values and a block's clauses, #283)
   | .construct _ _ _ fs => fs.any fun | .decl _ _ _ _ x => hasLiftable x | x => hasLiftable x
+  | .set _ path _ value => pathHas hasLiftable path || hasLiftable value
   | .block _ ss => ss.any liftsHere
   -- (#283) a `case`'s scrutinee and arms, as the `if` chain that selects its
   -- arm is lifted (`caseIf`)
@@ -761,9 +772,24 @@ partial def bindParams (isVal : String → Bool) (isField : String → String �
 /-- `e` with its liftable choices lifted (into the state's clauses). -/
 partial def liftE (isVal : String → Bool) (isField : String → String → Bool) (e : SExpr) : LM SExpr := do
   if !hasLiftable e then return e
+  -- A source `first{I := lo..hi; ...}` has a synthesized array producer.
+  -- A marked bound cast belongs before that producer, so its refinement
+  -- reaches the first's remaining clauses. Keep ordinary ranges on their
+  -- existing path, and bind both bounds in their written evaluation order.
+  if let some (lo, hi, rebuild) := firstRangeBounds? e then
+    let marked := fun x => anyE (fun | .app _ (.ident _ "$liftCast") _ false => true | _ => false) x
+    if marked lo || marked hi then
+      let bounds ← liftOps isVal isField [lo, hi]
+      return ← LM.bind e.pos "c" (rebuild bounds[0]! bounds[1]!)
   match e with
   | .app p (.ident _ "$choice") _ false => LM.bind p "c" e
   | .app p (.ident _ "$liftCast") [c] false => LM.bind p "k" c
+  | .set p .. =>
+    -- A set used as an operand keeps its result while its existing path
+    -- lifter orders indices, RHS, and the write, as for a set clause.
+    let result ← LM.fresh p "s"
+    liftInto isVal isField (.decl p result none false e)
+    return .ident p result
   | .ite p .. =>
     if isBranchy.complete e then
       LM.bind p "c" (.app p (.ident p "$branchChoice") [e] false)
@@ -2158,12 +2184,13 @@ def copyHoles (h : String) (e : SExpr) : SExpr :=
 partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List String := [])
     (loops : List String := []) (clash : List (String × List String) := [])
     (inDflt : List (String × String) := []) (groups : List (String × List String) := [])
-    (fieldOrder : String → FieldOrder := fun _ => {}) (memberFns : List (String × MFn) := []) :
+    (fieldOrder : String → FieldOrder := fun _ => {}) (memberFns : List (String × MFn) := [])
+    (sitePrefix : String := "") :
     StateT Nat (Except String) SExpr := do
   -- (`inDflt`: the defaults being inlined, function and parameter, #283;
   -- `memberFns`: the functions a group's machine takes that are inlined
   -- elsewhere, with their returns taken out as the group's are, #283)
-  let go := fun x => inlineCalls mv x recs loops clash inDflt groups fieldOrder memberFns
+  let go := fun x => inlineCalls mv x recs loops clash inDflt groups fieldOrder memberFns sitePrefix
   match e with
   | .app p (.ident _ "$dispatch") (.ident q g :: .block tp tmpl :: as) false =>
     -- (an overridden method's dispatch, #283: an inlined call whose
@@ -2172,14 +2199,14 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
     let site ← modifyGet fun n => (n, n + 1)
     if site ≥ 2000 then
       throw s!"{p.show}: more than 2000 calls of functions with several values to inline: nested calls multiply them (#235)"
-    let ren := (localsOf (.block tp tmpl)).map fun n => (n, s!"${g.replace "::" "_"}_{n}_{site}")
+    let ren := (localsOf (.block tp tmpl)).map fun n => (n, s!"${g.replace "::" "_"}_{n}_{sitePrefix}{site}")
     -- (a generic family's type parameters, named for the call, for this
     -- site too, #283: a body inlined twice has its dispatch twice)
     let tpNames : List String := tmpl.flatMap fun
       | .app _ (.ident _ "$tparams") (_ :: tps) false => tps.filterMap fun
           marker => (TParam.ofMarker marker).toOption.map (·.name)
       | _ => []
-    let ρt := tpNames.map fun n => (n, s!"{n}s{site}")
+    let ρt := tpNames.map fun n => (n, s!"{n}s{sitePrefix}{site}")
     let renTps : SExpr → SExpr
       | .app q (.ident q2 "$tparams") (fnm :: tps) false =>
         .app q (.ident q2 "$tparams") (fnm :: tps.map fun
@@ -2271,13 +2298,13 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       let site ← modifyGet fun n => (n, n + 1)
       if site ≥ 2000 then
         throw s!"{p.show}: more than 2000 calls of functions with several values to inline: nested calls multiply them (#235)"
-      let tag (n : String) : String := s!"${g.replace "::" "_"}_{n}_{site}"
+      let tag (n : String) : String := s!"${g.replace "::" "_"}_{n}_{sitePrefix}{site}"
       let ren := (f.params.map (·.name) ++ localsOf f.body).eraseDups.map fun n => (n, tag n)
       -- (a generic one's type parameters renamed for this site, #235: its
       -- parameters are bound together, the type arguments inferred from
       -- the arguments as at a call, `$params`, which then names them for
       -- the written types after)
-      let ρ : List (String × String) := f.tparams.map fun tp => (tp.name, s!"$tp{site}_{tp.name}")
+      let ρ : List (String × String) := f.tparams.map fun tp => (tp.name, s!"$tp{sitePrefix}{site}_{tp.name}")
       let tyOf (t : STy) : Option STy := some (styRename ρ t)
       let tmark : List SExpr := (if ρ.isEmpty then [] else
         [.app q (.ident q "$tparams") (.ident q g :: (ρ.zip f.tparams).map fun ((_, n), tp) =>
@@ -2300,7 +2327,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
             -- (one that calls `g` again omitting it: as at a call)
             if inDflt.contains (g, sp.name) then
               throw s!"{p.show}: the default of ?{sp.name} of {shownFnName g} uses itself (a call of {shownFnName g} that omits ?{sp.name})"
-            let d' ← inlineCalls mv (renameTypes ρ d) recs loops clash ((g, sp.name) :: inDflt) groups fieldOrder memberFns
+            let d' ← inlineCalls mv (renameTypes ρ d) recs loops clash ((g, sp.name) :: inDflt) groups fieldOrder memberFns sitePrefix
             let earlier := (f.params.take k).map fun e => SExpr.tuple q [.ident q e.name, .ident q (tag e.name)]
             return some (.decl q (tag sp.name) (tyOf sp.ty) false
               (markValue sp (.app q (.ident q "$paramDefault") [.ident q g, .ident q sp.name, .block q earlier, d'] false)))
@@ -2360,7 +2387,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
           for h in grp.filter (· != g) do
             let some fh := (memberFns.lookup h).orElse fun _ => mv.lookup h
               | throw s!"{p.show}: internal: the group of {g} (#283)"
-            let tagH (n : String) : String := s!"${h.replace "::" "_"}_{n}_{site}"
+            let tagH (n : String) : String := s!"${h.replace "::" "_"}_{n}_{sitePrefix}{site}"
             let renH := (fh.params.map (·.name) ++ localsOf fh.body).eraseDups.map fun n => (n, tagH n)
             let ρH := fh.tparams.map fun tp => (tp.name, memberTypeName h tp.name)
             let some (clsH, tailH) := loopShape? h (mv.map (·.1)) (renameTypes ρH (renameE renH fh.body)) grp (frames := true)
@@ -3717,6 +3744,9 @@ structure Inlined where
   overloadSites : List (Pos × String) := []
   nestedSites : List String := []
   fieldSites : List String := []
+  /-- Nonrecursive overload bodies retained through source desugaring for copied suffixes. -/
+  copiedOverloadNames : List String := []
+  copiedOverloadClashes : List (String × List String) := []
 
 /-- The functions of the program that have several values, inlined at their
     calls (see above); the program unchanged when there are none. Also
@@ -4039,14 +4069,37 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
       (.arr f.ret) (allBody (if namedCalls then [] else needAll) f.ret body))).run nextSite
   -- (#283) each overload of an overloaded one kept as `F$mvK` too, for
   -- its signature where its calls are inlined (effects, defaults)
+  let reachesRecursive (g : String) : Bool := Id.run do
+    let mut todo := [g]
+    let mut seen : List String := []
+    while !todo.isEmpty do
+      let h := todo.head!
+      todo := todo.tail!
+      if recs.contains h then return true
+      if !seen.contains h then
+        seen := h :: seen
+        todo := (callees.lookup h).getD [] ++ todo
+    return false
+  let copiedOverloadNames := ovMv.flatMap fun f =>
+    let overloads := ovOf f
+    if overloads.any (fun (k, _, _) => reachesRecursive k) then []
+    else overloads.filterMap fun (k, _, _) => if mv.contains k then some k else none
   let ovKept : List STop := ovMv.flatMap fun f => (ovOf f).filterMap fun (k, p, m) =>
     if mv.contains k then some (.fn p k m.params m.tparams m.fx m.ret (checkBody ((checking.lookup p).getD m.body))) else none
+  -- Carry templates through the source transforms in private declarations,
+  -- extracted before signature/elaboration. Checking stubs stay unchanged.
+  let (copyTemplates, _) ← (ovMv.flatMap ovOf |>.filterMapM (m := StateT Nat (Except String)) fun (k, p, m) => do
+    if !copiedOverloadNames.contains k then return none
+    let params ← goPs m.params
+    let body ← go (((mfs.lookup k).getD m).body)
+    return some (STop.fn p ("$copiedOverload:" ++ k) params m.tparams m.fx m.ret body)).run nextSite
   -- (#283) the calls of those with an overload that has several values whose
   -- overload is not picked yet: the elaboration notes it, for the next one
   -- (`Requests.overloads`)
   let ovSites := (bodies.flatMap callUses).filter fun (q, f) => ovMv.contains f && (overloadPicks.lookup q).isNone
-  return { tops := tops' ++ ovKept ++ alls, lazy := !loops.isEmpty, familySites := sites,
-           overloadSites := (ovSites ++ methodOvSites).eraseDups }
+  return { tops := tops' ++ copyTemplates ++ ovKept ++ alls, lazy := !loops.isEmpty, familySites := sites,
+           overloadSites := (ovSites ++ methodOvSites).eraseDups, copiedOverloadNames,
+           copiedOverloadClashes := clash.filter fun (n, _) => copiedOverloadNames.contains n }
 
 /-- (#283) The calls of `h` in `e` that `here` sees made calls of `h'`. -/
 partial def renameCalls (h h' : String) (here : SExpr → Bool) : SExpr → SExpr :=

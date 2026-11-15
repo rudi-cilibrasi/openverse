@@ -225,6 +225,8 @@ structure Requests where
       has several values, by its place: the overload it takes (`F$ovK`),
       whose own function it calls (`Choice.inlineMulti`). -/
   overloads : List (Pos × String) := []
+  /-- Overload picks in one copied choice suffix, before source boundaries disappear. -/
+  copiedOverloads : List (String × Pos × String) := []
   /-- (#283) For each consumer in a recursive group's code of a call of a
       function with several values, the types of the names it takes from
       that code and gives it (`Choice.nestKey`), which its function of its
@@ -440,6 +442,9 @@ structure TyEnv where
       whether they have several values (`Choice.inlineMulti`), by place and
       name: their elaboration notes the overload each takes (`ESt.needs`). -/
   overloadSites : List (Pos × String) := []
+  /-- Nonrecursive top-level overload templates, after ordinary source desugaring. -/
+  copiedOverloadFns : List (String × Choice.MFn) := []
+  copiedOverloadClashes : List (String × List String) := []
   /-- (#283) The consumers in recursive groups' code whose names' types this
       elaboration notes (`$noteTypes`), by `Choice.nestKey`: their groups are
       kept with one value until then (`Choice.inlineFns`). -/

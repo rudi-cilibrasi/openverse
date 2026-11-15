@@ -1,0 +1,12 @@
+option 4
+option missing
+condition 4 -1
+for 4
+for 4
+first 4
+first missing
+case 4 0
+case missing
+constructor 4 4
+constructor missing
+exit=0

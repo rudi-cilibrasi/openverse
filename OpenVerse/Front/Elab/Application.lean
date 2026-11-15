@@ -167,7 +167,7 @@ def callsSelfMember (ctx : Ctx) (name : String) : Bool :=
 partial def elabOverloadedCall (cb : AppElab) (ctx : Ctx) (p : Pos) (name : String) (ovs : List String)
     (args : List SExpr) (bracket : Bool) (exp : Option Ty) : EM R :=
   cb.resolveOverload ctx p name ovs ctx.sig? (fun o => do
-    ctx.noteOverload p name o
+    ctx.noteFunctionOverload p name o
     cb.elabApp ctx p (.ident p o) args bracket exp) args
 
 /-- A call's own code marks where it suspends: a call of a `<suspends>`
