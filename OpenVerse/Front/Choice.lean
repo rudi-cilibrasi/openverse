@@ -294,6 +294,7 @@ partial def hasLiftable : SExpr → Bool
   | .orE _ _ b => liftsHere b
   -- (a construction's field values and a block's clauses, #283)
   | .construct _ _ _ fs => fs.any fun | .decl _ _ _ _ x => hasLiftable x | x => hasLiftable x
+  | .set _ path _ value => pathHas hasLiftable path || hasLiftable value
   | .block _ ss => ss.any liftsHere
   -- (#283) a `case`'s scrutinee and arms, as the `if` chain that selects its
   -- arm is lifted (`caseIf`)
@@ -783,6 +784,12 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
   match e with
   | .app p (.ident _ "$choice") _ false => LM.bind p "c" e
   | .app p (.ident _ "$liftCast") [c] false => LM.bind p "k" c
+  | .set p .. =>
+    -- A set used as an operand keeps its result while its existing path
+    -- lifter orders indices, RHS, and the write, as for a set clause.
+    let result ← LM.fresh p "s"
+    liftInto isVal isField (.decl p result none false e)
+    return .ident p result
   | .ite p .. =>
     if isBranchy.complete e then
       LM.bind p "c" (.app p (.ident p "$branchChoice") [e] false)

@@ -1089,7 +1089,11 @@ circle := class(shape, labelled):
   too, including generic classes, structs, inherited and nested values.
   Their fields keep declaration order, including omitted defaults, and
   class blocks run after the fields. Defaults retain their own effects
-  and convergence contracts. A branch of an `if` in a failure context is in it too: one written as an
+  and convergence contracts. Mutable-path indices in `set` are ordered
+  operands too: a cast there keeps index evaluation, path reads and the
+  RHS in their ordinary order, with its refinement available to the RHS
+  and following clauses. Assignment expressions retain their result when
+  used as a binding, argument or field value. A branch of an `if` in a failure context is in it too: one written as an
   expression with such a cast in it (`if (N > 0) then dup[P].C else 0`) is
   the block of it, where the cast is a clause, so it runs only when that
   branch does. Both bounds of a `for` or `first` range can contain such
