@@ -3550,7 +3550,10 @@ Main()<suspends>:void =
   first, the same way, then its own `defer:` blocks run (#254). A branch or
   `rush` arm that has ended still owns what it started: those are stopped
   in its place in that order, not by their own start among the function's. A `branch` cannot be in a `loop` or `for` body (the Book's
-  rule), even through an arm.
+  rule), even through an arm. If cancellation is requested while an arm
+  runs inside `Signal`, children it starts before the run ends share that
+  cancellation. Their reached cleanup runs whether the active arm waits
+  again or finishes; nested children retain the same ownership order.
 - **`spawn`.** No `return` and no `break` but of a loop inside it is in a
   `spawn`'s code (the Book's tests, `SpawnAndTask.versetest` 876-892,
   "Can't break or return from a spawn"). `spawn{F(…)}` starts a task running the call, which must be
