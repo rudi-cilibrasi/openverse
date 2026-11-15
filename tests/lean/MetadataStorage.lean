@@ -84,7 +84,29 @@ private def activeRushCleanup (action overwrite : String) : String := callables
   ("Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    E:=event(int){}\n    branch:\n        R:=rush:\n            block:\n                defer:\n                    " ++ action ++
    "\n                Sleep(0.1)\n                E.Signal(1)\n                Sleep(1.0)\n                1\n            block:\n                Sleep(1.0)\n                1\n" ++ overwrite ++ "    E.Await()\n    0")
 
+private def activeRushContinuation (body tail overwrite : String) : String := callables
+  ("Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    E:=event(int){}\n    branch:\n        R:=rush:\n            block:\n                Sleep(0.1)\n                E.Signal(1)\n" ++ body ++
+   "                1\n            block:\n                Sleep(1.0)\n                1\n" ++ tail ++ overwrite ++ "    E.Await()\n    0")
+
 private def cases : List (String × String) := [
+  ("active cancellation late-MetadataRead", activeRushContinuation
+    "                defer:\n                    Value:=Stored()\n                Sleep(1.0)\n"
+    "" ""),
+  ("active cancellation late-MetadataWrite", activeRushContinuation
+    "                defer:\n                    set Stored=Dummy\n                Sleep(1.0)\n"
+    "" "    set Stored=F\n"),
+  ("active cancellation direct-MetadataRead", activeRushContinuation
+    "                Value:=Stored()\n                Sleep(1.0)\n"
+    "" ""),
+  ("active cancellation direct-MetadataWrite", activeRushContinuation
+    "                set Stored=Dummy\n                Sleep(1.0)\n"
+    "" "    set Stored=F\n"),
+  ("active cancellation afterrush-MetadataRead", activeRushContinuation
+    ""
+    "        defer:\n            Value:=Stored()\n        Sleep(1.0)\n" ""),
+  ("active cancellation afterrush-MetadataWrite", activeRushContinuation
+    ""
+    "        defer:\n            set Stored=Dummy\n        Sleep(1.0)\n" "    set Stored=F\n"),
   ("running rush cleanup cannot execute metadata",
     activeRushCleanup "Value:=Stored()" ""),
   ("running rush cleanup cannot restore metadata to a real cell",
@@ -200,6 +222,36 @@ private def cases : List (String × String) := [
   ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
+  ("active cancellation late-RealRead", activeRushContinuation
+    "                defer:\n                    Value:=Stored()\n                Sleep(1.0)\n"
+    "" "    set Stored=F\n"),
+  ("active cancellation late-RealWrite", activeRushContinuation
+    "                defer:\n                    set Stored=F\n                Sleep(1.0)\n"
+    "" "    set Stored=F\n"),
+  ("active cancellation direct-RealRead", activeRushContinuation
+    "                Value:=Stored()\n                Sleep(1.0)\n"
+    "" "    set Stored=F\n"),
+  ("active cancellation direct-RealWrite", activeRushContinuation
+    "                set Stored=F\n                Sleep(1.0)\n"
+    "" "    set Stored=F\n"),
+  ("active cancellation afterwait-MetadataRead", activeRushContinuation
+    "                Sleep(1.0)\n                defer:\n                    Value:=Stored()\n                Sleep(1.0)\n"
+    "" ""),
+  ("active cancellation afterwait-RealRead", activeRushContinuation
+    "                Sleep(1.0)\n                defer:\n                    Value:=Stored()\n                Sleep(1.0)\n"
+    "" "    set Stored=F\n"),
+  ("active cancellation afterwait-MetadataWrite", activeRushContinuation
+    "                Sleep(1.0)\n                defer:\n                    set Stored=Dummy\n                Sleep(1.0)\n"
+    "" "    set Stored=F\n"),
+  ("active cancellation afterwait-RealWrite", activeRushContinuation
+    "                Sleep(1.0)\n                defer:\n                    set Stored=F\n                Sleep(1.0)\n"
+    "" "    set Stored=F\n"),
+  ("active cancellation afterrush-RealRead", activeRushContinuation
+    ""
+    "        defer:\n            Value:=Stored()\n        Sleep(1.0)\n" "    set Stored=F\n"),
+  ("active cancellation afterrush-RealWrite", activeRushContinuation
+    ""
+    "        defer:\n            set Stored=F\n        Sleep(1.0)\n" "    set Stored=F\n"),
   ("running rush cleanup reads a real overwrite",
     activeRushCleanup "Value:=Stored()" "    set Stored=F\n"),
   ("running rush cleanup writes ordinary data",

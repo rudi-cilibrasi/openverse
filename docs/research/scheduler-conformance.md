@@ -535,6 +535,12 @@ that arm dead and lost its defer. `signal_rush_owner_return.verse` checks the
 saved cleanup; `signal_rush_owner_return_finishes.verse` retains completion of
 the active step when it ends without another wait.
 
+The provenance analysis retains that active continuation after the owner has
+returned, including direct reads and writes and cleanup installed after the
+Signal or a completed rush. It validates the latest cleanup at the first
+suspension and stops there; a defer reached only after that wait is not
+installed. `signal_rush_late_cleanup.verse` retains these runtime boundaries.
+
 The independent models also record stopped pending arms, defer closing a
 Python generator while it executes, and keep those arms out of the surviving
 rush roots. A stopped root's polling pass does not resume its other suspended

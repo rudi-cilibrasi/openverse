@@ -1,0 +1,8 @@
+LateRead owner returned 0
+late read 2
+LateWrite owner returned 0
+late write before 1
+late write after 2
+AfterWait owner returned 0
+main done
+exit=0

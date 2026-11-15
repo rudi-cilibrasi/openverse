@@ -130,6 +130,8 @@ private structure Actor where
   frames : List CallFrame := []
   event : Option MetadataReferences.Refs := none
   canceling : Bool := false
+  /-- Stop after an active continuation next suspends. -/
+  cancelRequested : Bool := false
   task : Option MetadataReferences.Refs := none
   taskWait : Bool := false
   waitDst : Option Nat := none
@@ -214,7 +216,8 @@ private def actorsKey (actors : Array Actor) : List Nat :=
       | .idle => (0, 0) | .running => (1, 0) | .ready => (5, 0)
       | .waiting ready => (2, if ready then 1 else 0)
       | .joining g => (3, g) | .done => (4, 0)
-    [a.pc, tag, data, if a.canceling then 1 else 0, if a.taskWait then 1 else 0, a.cleanups.length] ++ a.cleanups ++ [a.waitDst.map (· + 1) |>.getD 0,
+    [a.pc, tag, data, if a.canceling then 1 else 0, if a.cancelRequested then 1 else 0,
+      if a.taskWait then 1 else 0, a.cleanups.length] ++ a.cleanups ++ [a.waitDst.map (· + 1) |>.getD 0,
       if a.canComplete then 1 else 0, if a.canSignal then 1 else 0, a.signalReturns.length] ++
       a.signalReturns.map (fun pc => pc.map (· + 1) |>.getD 0) ++
       loopsKey a.loops ++ contextKey a.context ++ [a.frames.length] ++
@@ -375,7 +378,7 @@ private def wake (c : Configuration) (event : MetadataReferences.Refs)
   let mut states := [(c, [])]
   for listener in c.events do
     let a := c.actors[listener]!
-    if a.canceling || a.status != .waiting true || a.taskWait != task then continue
+    if a.canceling || a.cancelRequested || a.status != .waiting true || a.taskWait != task then continue
     let some waiting := a.event | continue
     if !MetadataReferences.aliases event waiting then continue
     let certain := MetadataReferences.definitelyAliases c.refs event waiting
@@ -852,19 +855,54 @@ private partial def cancelChildren (env : ScheduleEnv) (c : Configuration) (acto
 private partial def queue (c : Configuration) (steps : List Pending) : Configuration :=
   { c with current := none, pending := steps ++ c.pending }
 
+/-- Spawned tasks survive their creator; other descendants belong to its
+    cancellation tree. -/
+private partial def cancellationTree (plan : MetadataPlan.Plan) (actor : Nat) : List Nat := Id.run do
+  let mut found := [actor]
+  repeat
+    let next := plan.groups.foldl (fun found g =>
+      if g.kind != .spawn && found.contains g.owner then
+        (found ++ g.children.toList.map (·.1)).eraseDups else found) found
+    if next == found then return found
+    found := next
+
 private partial def cancelSteps (env : ScheduleEnv) (c : Configuration) (actor : Nat) : Configuration :=
   let a := c.actors[actor]!
   if a.canceling then c else
-    let cleanups := if a.status == .done || a.status == .idle then [] else
-      (a.cleanups.head?.toList.map fun d =>
-        Pending.cleanup actor a.context env.plan.cleanupEntries[d]!) ++
-      a.frames.flatMap (fun f => f.cleanups.head?.toList.map fun d =>
-        Pending.cleanup actor f.context env.plan.cleanupEntries[d]!)
-    let c := { c with
-      events := c.events.filter (· != actor)
-      actors := c.actors.modify actor fun a => { a with canceling := true, event := none } }
-    queue c (cancelChildren env c actor false ++ cleanups ++ [.stop actor] ++
-      cancelChildren env c actor true)
+    let tree := cancellationTree env.plan actor
+    let active := c.signals ++ c.pending.filterMap (fun
+      | .resume i _ => if c.actors[i]!.status == .running then some i else none
+      | _ => none)
+    if active.any tree.contains then
+      let c := { c with
+        events := c.events.filter (· != actor)
+        actors := c.actors.modify actor fun a => { a with cancelRequested := true, event := none } }
+      queue c (cancelChildren env c actor false ++ cancelChildren env c actor true)
+    else
+      let cleanups := if a.status == .done || a.status == .idle then [] else
+        (a.cleanups.head?.toList.map fun d =>
+          Pending.cleanup actor a.context env.plan.cleanupEntries[d]!) ++
+        a.frames.flatMap (fun f => f.cleanups.head?.toList.map fun d =>
+          Pending.cleanup actor f.context env.plan.cleanupEntries[d]!)
+      let c := { c with
+        events := c.events.filter (· != actor)
+        actors := c.actors.modify actor fun a => { a with canceling := true, event := none } }
+      queue c (cancelChildren env c actor false ++ cleanups ++ [.stop actor] ++
+        cancelChildren env c actor true)
+
+/-- An active cancellation waits for the complete current step, including
+    enclosing group continuations and fresh startup prefixes. Pending
+    actions run first; a queued group resume can still finish that step. -/
+private partial def readyCancellations (plan : MetadataPlan.Plan) (c : Configuration) : List Pending :=
+  if !c.pending.isEmpty then [] else
+    let requested := c.actors.toList.zipIdx.filterMap fun (a, i) =>
+      if a.cancelRequested && !a.canceling then some i else none
+    let roots := requested.filter fun i =>
+      !requested.any (fun j => i != j && (cancellationTree plan j).contains i)
+    roots.filterMap fun root =>
+      let tree := cancellationTree plan root
+      if tree.any (fun i => c.actors[i]!.status == .running || c.actors[i]!.status == .ready) then none
+      else some (.cancel root)
 
 private partial def finishGroup (env : ScheduleEnv) (c : Configuration)
     (group : Nat) : M Configuration := do
@@ -928,6 +966,12 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
       | some old => joinConfiguration old incoming
     if (known[key]?).any (· == c) then continue
     known := known.insert key c
+    let stops := readyCancellations env.plan c
+    if !stops.isEmpty then
+      work := work.push (queue c stops)
+      continue
+    if c.pending.isEmpty && c.actors[0]!.status == .done &&
+        !(c.actors.any fun a => a.cancelRequested && !a.canceling) then continue
     let some actor := c.current | do
       if let step :: rest := c.pending then
         let c := { c with pending := rest }
@@ -966,9 +1010,15 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
                 loops := frame.loops, frames := rest } }
             work := work.push (advanceActor c a pc)
         | .result role =>
+          -- The result is already saved, but an active cancelled arm can
+          -- still install and execute cleanup before its next suspension.
           result := joinRole result (some role)
           finalSlots := joinOpt finalSlots (some c.slots)
-        | .discard => pure ()
+          if c.actors.any (fun a => a.cancelRequested && !a.canceling) then
+            work := work.push c
+        | .discard =>
+          if c.actors.any (fun a => a.cancelRequested && !a.canceling) then
+            work := work.push c
         continue
       if !c.startup.isEmpty then
         work := work.push (nextActor c)
@@ -985,7 +1035,7 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
           let a := c.actors[i]!
           let resumableTask := !a.taskWait || a.event.any (fun task =>
             (taskOptions c task).any (fun state => state == 1 || state == 2))
-          if a.status == .waiting true && !a.canceling && resumableTask then
+          if a.status == .waiting true && !a.canceling && !a.cancelRequested && resumableTask then
             work := work.push (advanceActor c i c.actors[i]!.pc)
       continue
     let a := c.actors[actor]!

@@ -34,6 +34,11 @@ cat >"$fixture/bin/make" <<'SH'
 #!/usr/bin/env bash
 touch "$CHECK_TEST_EVENTS/make"
 SH
+cat >"$fixture/bin/python3" <<'SH'
+#!/usr/bin/env bash
+[[ ${1:-} == -I ]] && shift
+exec bash "$@"
+SH
 cat >"$tmp/check-step" <<'SH'
 #!/usr/bin/env bash
 name=${0##*/}
@@ -43,13 +48,14 @@ if [[ $name == "$CHECK_TEST_FAIL_STEP" ]]; then
   exit 3
 fi
 SH
-chmod +x "$fixture/bin/lake" "$fixture/bin/make" "$tmp/check-step"
+chmod +x "$fixture/bin/lake" "$fixture/bin/make" "$fixture/bin/python3" "$tmp/check-step"
 for script in "$root"/scripts/fuzz-*.sh "$root/scripts/test-verse.sh" \
     "$root/scripts/check-quickproof-pins.sh" "$root/scripts/gen-claims.sh"; do
   cp "$tmp/check-step" "$fixture/scripts/${script##*/}"
 done
 # Stubbing these also prevents the runner's own unit check from recursing.
 for script in "$root"/tests/scripts/*.sh; do cp "$tmp/check-step" "$fixture/tests/scripts/${script##*/}"; done
+for script in "$root"/tests/scripts/*.py; do cp "$tmp/check-step" "$fixture/tests/scripts/${script##*/}"; done
 
 die() { echo "test-check: $*" >&2; cat "$tmp/log" >&2; exit 1; }
 run_check() {
@@ -80,6 +86,10 @@ run_check 2 success 1 fuzz-classes.sh
 grep -q 'fixture check failure detail' "$tmp/log" || die 'check diagnostic was hidden'
 grep -qF 'check.sh: FAILED: class-feature fuzzing' "$tmp/log" || die 'failed check was not reported'
 [[ -f "$CHECK_TEST_EVENTS/fuzz-fields.sh" ]] || die 'a failed check stopped the remaining checks'
+run_check 2 success 1 test-scheduler-model.py
+grep -q 'fixture check failure detail' "$tmp/log" || die 'Python check diagnostic was hidden'
+grep -qF 'check.sh: FAILED: scheduler model cancellation contracts' "$tmp/log" || die 'failed Python check was not reported'
+[[ -f "$CHECK_TEST_EVENTS/fuzz-fields.sh" ]] || die 'a failed Python check stopped the remaining checks'
 for jobs in 0 -1 invalid 9223372036854775808 18446744073709551617; do
   run_check "$jobs" success 1
   grep -q 'CHECK_JOBS must be a positive integer' "$tmp/log" || die 'missing concurrency diagnostic'
