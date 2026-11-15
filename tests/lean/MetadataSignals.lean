@@ -28,6 +28,8 @@ private def refusals : List (String × String) := [
     "    if(E.Signal(0);false?){}\n    E.Signal(0)\n    Stored()"),
   ("Signal in cancellation cleanup", header ++ setup ++
     "    V:=race:\n        block:\n            defer:\n                E.Signal(0)\n            loop{Sleep(1.0)}\n        block:\n            Sleep(0.1)\n            0\n    Stored()"),
+  ("Owner return cleanup signals a living branch", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    branch:\n        E.Await()\n        Value:=Stored()\n    branch:\n        defer:\n            E.Signal(0)\n        loop\{Sleep(1.0)}\n    0"),
   ("Distinct event parameters may alias",
     (header.replace "Caller(" "Caller(Other:event(int),") ++ setup ++
     "    Other.Signal(0)\n    Stored()")]
@@ -47,6 +49,8 @@ private def controls : List (String × String) := [
     "    E.Signal(0)\n    Stored()"),
   ("Completed callbacks cannot run again", header ++
     s!"    var Stored:{functionTy}=Dummy\n    branch:\n        E.Await()\n        set Stored=Dummy\n    E.Signal(0)\n    set Stored=F\n    E.Signal(0)\n    Stored()"),
+  ("Canceled listeners cannot be woken by later cleanup", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    branch:\n        defer:\n            E.Signal(0)\n        loop\{Sleep(1.0)}\n    branch:\n        E.Await()\n        Value:=Stored()\n    0"),
   ("Awaiter registration order makes the later read real", header ++
     s!"    var Stored:{functionTy}=Dummy\n    branch:\n        E.Await()\n        set Stored=F\n    branch:\n        E.Await()\n        Value:=Stored()\n    E.Signal(0)\n    0")]
 

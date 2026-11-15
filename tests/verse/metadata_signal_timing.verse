@@ -81,6 +81,26 @@ Ordered()<suspends>:int=
     E.Signal(0)
     Stored()
 
+OwnerCleanup(ListenerFirst:logic)<suspends>:void=
+    E:=event(int){}
+    var Stored:type{_()<computes>:int}=Two
+    if(ListenerFirst?)then:
+        branch:
+            E.Await()
+            Print("owner cleanup {Stored()}")
+        branch:
+            defer:
+                E.Signal(0)
+            loop{Sleep(1.0)}
+    else:
+        branch:
+            defer:
+                E.Signal(0)
+            loop{Sleep(1.0)}
+        branch:
+            E.Await()
+            Print("unexpected canceled listener")
+
 Main()<suspends>:void=
     Print("direct {Direct()}")
     Print("unrelated {Unrelated()}")
@@ -90,3 +110,5 @@ Main()<suspends>:void=
     Print("helper timer {HelperTimer()}")
     Print("completed {Completed()}")
     Print("ordered {Ordered()}")
+    OwnerCleanup(true)
+    OwnerCleanup(false)
