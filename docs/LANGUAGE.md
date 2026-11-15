@@ -1101,7 +1101,9 @@ circle := class(shape, labelled):
   expression with such a cast in it (`if (N > 0) then dup[P].C else 0`) is
   the block of it, where the cast is a clause, so it runs only when that
   branch does. Both bounds of a `for` or `first` range can contain such
-  casts, including inside computed bounds. Bounds run from left to right,
+  casts, including multiple independent casts inside one computed bound.
+  Each equality reaches uses of the original objects as well as the
+  iteration value. Bounds run from left to right,
   once before the range is iterated, and their refinements reach the
   following clauses and body. An explicitly nested `for` remains a
   separate failure context whose refinement does not escape its producer.
