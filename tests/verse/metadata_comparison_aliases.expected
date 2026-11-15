@@ -1,0 +1,13 @@
+EqWrite 2
+NeWrite 2
+ArrayWrite 2
+TupleWrite 2
+GenericWrite 2
+ReadUnrelated 1
+LeftOnly 1
+OtherObject 1
+Rollback 1
+RecursiveEq 2
+RecursiveNe 2
+RecursiveLeft 1
+exit=0

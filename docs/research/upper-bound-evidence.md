@@ -163,6 +163,17 @@ resumed metadata writer. The paired controls retain both matching and
 fresh unrelated events through flattening, nested flattening and generic
 helpers, plus event and task awaits. The ordinary fixture
 `metadata_flattened_aliases.verse` preserves eight Lean/C trace results.
+Successful equality and inequality comparisons retain the left operand's
+object references through containers and generic helpers. Recursive Signal
+summaries retain the same left-operand dependency, including argument
+permutations; the four dependency contracts inspect checked Core programs.
+The paired API controls cover mutations through returned receivers,
+unrelated fields and rollback. `metadata_comparison_aliases.verse` preserves twelve
+ordinary runtime results. Its no-swap recursive inequality control is also
+retained in the dependency checks. Metadata admission for that control
+remains a precision limit: the writable-recursion heap summary broadens
+unrelated fields after conservative dispatch to sticky-event handlers.
+The left-only dependency contract does not establish precise heap effects.
 Helpers that can wait or signal use distinct local slots in the control graph,
 with their own metadata permissions, return targets and cleanup scopes.
 A return in a surviving rush arm stops that arm after its group has ended;
@@ -188,7 +199,7 @@ and frame aliases remain in the #572 audit, including resource use for recursive
 choice producers. A private recursive-producer reader still reaches the 4 GB
 cap on the #640 baseline and a bounded timeout with the frame-alias changes;
 its real control passes. This remains an unresolved analysis case.
-`MetadataSignals.lean` retains 27 real/dummy refusal pairs and 26 positive pairs
+`MetadataSignals.lean` retains 34 real/dummy refusal pairs and 30 positive pairs
 for direct and indirect signals, recursive helpers, rollback, task completion,
 cleanup, helper returns and unrelated events. `metadata_signal_timing.verse`
 executes the corresponding ordinary data paths in both runtimes and profiles.

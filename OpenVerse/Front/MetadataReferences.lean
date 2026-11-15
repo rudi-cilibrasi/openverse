@@ -129,7 +129,7 @@ private partial def expr (fns : Array Fn) (stack : List Nat) (site : Nat)
     if out.value.isNone then return out
     let (value, memory) := match op with
       | .mkArr | .mkTup => make out.memory site args
-      | .mkSome | .query => (args.headD [], out.memory)
+      | .mkSome | .query | .eq | .ne => (args.headD [], out.memory)
       | .tupGet k => (load out.memory (args.headD [0]) k, out.memory)
       | .index =>
         let value := match (es[1]? : Option Expr) with
@@ -294,6 +294,8 @@ private partial def dependency (signatures : Array Signature)
     | .heap (.set _) _ => return { out with value := values[1]?.getD [] }
     | .heap _ _ => return { out with value := all }
     | .prim op _ =>
+      if op == .eq || op == .ne then
+        return { out with value := values.headD [] }
       return { out with value := if [.mkArr, .mkTup, .mkSome, .query, .index, .arrSet,
         .concat, .flatten].contains op then all else
         match op with | .tupGet _ => all | _ => [] }
