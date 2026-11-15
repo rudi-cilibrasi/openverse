@@ -89,6 +89,21 @@ private def activeRushContinuation (body tail overwrite : String) : String := ca
    "                1\n            block:\n                Sleep(1.0)\n                1\n" ++ tail ++ overwrite ++ "    E.Await()\n    0")
 
 private def cases : List (String × String) := [
+  ("post-return child pending metadata cleanup", activeRushContinuation
+    "                branch:\n                    defer:\n                        Value:=Stored()\n                    loop:\n                        Sleep(1.0)\n                Sleep(1.0)\n"
+    "" ""),
+  ("post-return child delayed metadata read", activeRushContinuation
+    "                branch:\n                    Sleep(0.1)\n                    Value:=Stored()\n                Sleep(1.0)\n"
+    "" ""),
+  ("post-return child delayed metadata write", activeRushContinuation
+    "                branch:\n                    Sleep(0.1)\n                    set Stored=Dummy\n                Sleep(1.0)\n"
+    "" "    set Stored=F\n"),
+  ("post-return child delayed metadata cleanup", activeRushContinuation
+    "                branch:\n                    defer:\n                        Value:=Stored()\n                    Sleep(0.1)\n                Sleep(1.0)\n"
+    "" ""),
+  ("post-return grandchild metadata read", activeRushContinuation
+    "                branch:\n                    Sleep(0.1)\n                    branch:\n                        Sleep(0.1)\n                        Value:=Stored()\n                Sleep(1.0)\n"
+    "" ""),
   ("primitive payload eq-direct-Dummy", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nCaller(Real:reader,Dummy:reader)<computes>:int=\n    if(Alias:=Dummy=Real)then Alias.Read()else 0\n"),
   ("primitive payload eq-array-Dummy", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nCaller(Real:reader,Dummy:reader)<computes>:int=\n    if(Values:=array{Dummy}=array{Real},Alias:=Values[0])then Alias.Read()else 0\n"),
   ("primitive payload eq-helper-Dummy", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nChoose(A:reader,B:reader)<computes><decides>:reader=A=B\nCaller(Real:reader,Dummy:reader)<computes>:int=\n    if(Alias:=Choose[Dummy,Real])then Alias.Read()else 0\n"),
@@ -234,6 +249,27 @@ private def cases : List (String × String) := [
   ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
+  ("post-return child pending real cleanup", activeRushContinuation
+    "                branch:\n                    defer:\n                        Value:=Stored()\n                    loop:\n                        Sleep(1.0)\n                Sleep(1.0)\n"
+    "" "    set Stored=F\n"),
+  ("post-return child delayed real read", activeRushContinuation
+    "                branch:\n                    Sleep(0.1)\n                    Value:=Stored()\n                Sleep(1.0)\n"
+    "" "    set Stored=F\n"),
+  ("post-return child delayed real write", activeRushContinuation
+    "                branch:\n                    Sleep(0.1)\n                    set Stored=F\n                Sleep(1.0)\n"
+    "" "    set Stored=F\n"),
+  ("post-return child delayed real cleanup", activeRushContinuation
+    "                branch:\n                    defer:\n                        Value:=Stored()\n                    Sleep(0.1)\n                Sleep(1.0)\n"
+    "" "    set Stored=F\n"),
+  ("post-return grandchild real read", activeRushContinuation
+    "                branch:\n                    Sleep(0.1)\n                    branch:\n                        Sleep(0.1)\n                        Value:=Stored()\n                Sleep(1.0)\n"
+    "" "    set Stored=F\n"),
+  ("unreached post-return child metadata read", activeRushContinuation
+    "                Sleep(1.0)\n                branch:\n                    Sleep(0.1)\n                    Value:=Stored()\n                Sleep(1.0)\n"
+    "" ""),
+  ("unreached post-return child real read", activeRushContinuation
+    "                Sleep(1.0)\n                branch:\n                    Sleep(0.1)\n                    Value:=Stored()\n                Sleep(1.0)\n"
+    "" "    set Stored=F\n"),
   ("primitive payload eq-direct-Real", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nCaller(Real:reader,Dummy:reader)<computes>:int=\n    if(Alias:=Real=Dummy)then Alias.Read()else 0\n"),
   ("primitive payload eq-array-Real", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nCaller(Real:reader,Dummy:reader)<computes>:int=\n    if(Values:=array{Real}=array{Dummy},Alias:=Values[0])then Alias.Read()else 0\n"),
   ("primitive payload eq-helper-Real", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nChoose(A:reader,B:reader)<computes><decides>:reader=A=B\nCaller(Real:reader,Dummy:reader)<computes>:int=\n    if(Alias:=Choose[Real,Dummy])then Alias.Read()else 0\n"),
