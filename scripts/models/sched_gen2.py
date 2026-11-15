@@ -342,15 +342,19 @@ class ArmRef:
     (the documented order, #254) the arm all along, which owns what its code
     starts, and once its rush ended without it, its loser's root."""
     def __init__(self, gen):
-        self.gen = gen; self.done = False; self.root = None
+        self.gen = gen; self.done = False; self.root = None; self.cancelled = False
 
 
 def stop_one(root):
     if isinstance(root, ArmRef):
         if root.root is None:
             if not root.done:
-                root.done = True
-                root.gen.close()
+                root.done = True; root.cancelled = True
+                # An owner can return inside a Signal made by this arm.
+                # Its running root takes cancellation after the current poll;
+                # closing the active arm here would reenter its generator.
+                if not root.gen.gi_running:
+                    root.gen.close()
             return
         root = root.root
     if not root.done:
@@ -385,8 +389,9 @@ def stop_all(fr):
     for sn, root, _ in sorted(fr.starts, key=lambda x: -x[0]):
         if isinstance(root, ArmRef):
             if not root.done:
-                root.done = True
-                root.gen.close()
+                root.done = True; root.cancelled = True
+                if not root.gen.gi_running:
+                    root.gen.close()
             continue
         if not root.done:
             if root in S.running:
@@ -531,6 +536,8 @@ def exec_conc(s, fr, owner=None):
                 enter(site)
                 try:
                     for i in started:
+                        if S.cur().cancel_req:
+                            break
                         if not site.done[i]:
                             step_arm(site, i)
                 finally:
@@ -542,6 +549,8 @@ def exec_conc(s, fr, owner=None):
             enter(site)
             try:
                 for i in started:
+                    if S.cur().cancel_req:
+                        break
                     if site.done[i]:
                         continue
                     ended = step_arm(site, i)
@@ -556,7 +565,8 @@ def exec_conc(s, fr, owner=None):
         finished = True
         for ref in refs.values():
             ref.done = True
-        pend = [i for i in started if not site.done[i]]
+        pend = [i for i in started if not site.done[i] and
+                not (i in refs and refs[i].cancelled)]
         if kind == "race":
             for i in reversed(pend):
                 site.gens[i].close()

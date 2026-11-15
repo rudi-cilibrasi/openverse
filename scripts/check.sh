@@ -111,6 +111,7 @@ check "construction effects and executable controls" bash tests/scripts/test-con
 check "initializer convergence and extended-default models" \
   bash tests/scripts/test-initializer-convergence.sh "${FUZZ_MODEL_INITIALIZERS:-96}" "$seed"
 check "scheduler conformance traces and controls" bash tests/scripts/test-scheduler-conformance.sh
+check "scheduler model cancellation contracts" python3 -I tests/scripts/test-scheduler-model.py
 check "bounded clock domain (${FUZZ_CLOCK_DOMAIN:-100} programs and boundary traces)" \
   bash tests/scripts/test-clock-domain.sh "${FUZZ_CLOCK_DOMAIN:-100}" "$seed"
 check "overload domains (${FUZZ_OVERLOAD_SHAPES:-546} programs, across seven contexts)" \
@@ -149,6 +150,8 @@ check "scheduler model fuzzing (${FUZZ_MODEL_SCHED:-50} programs, against a mode
   scripts/fuzz-model-sched.sh "${FUZZ_MODEL_SCHED:-50}" "$seed"
 check "scheduler model regression (running branch stopped inside Signal, seed 630059)" \
   scripts/fuzz-model-sched.sh 1 630059
+check "scheduler running rush arm cancellation (seed 646094)" \
+  scripts/fuzz-model-sched.sh 1 646094
 check "GADT model fuzzing (${FUZZ_MODEL_GADT:-150} programs, against twenty-nine models of the docs)" \
   scripts/fuzz-model-gadt.sh "${FUZZ_MODEL_GADT:-150}" "$seed"
 check "GADT models through type aliases (${FUZZ_MODEL_GADT_ALIASES:-150} programs, their types' names written through aliases)" \
