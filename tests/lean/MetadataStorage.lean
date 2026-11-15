@@ -48,6 +48,12 @@ private def recursiveReaders : String :=
   "Hold(R:reader,M:reader)<suspends>:reader=\n    var Stored:reader=R\n    Sleep(0.1)\n    set Stored=M\n    Stored\n"
 
 private def cases : List (String × String) := [
+  ("borrowed frame metadata write after real overwrite", callables
+    "Dup(N:int)<computes>:int=N|N\nCaller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    Values:=for(A:=(Dup(1)|Dup(2)),B:=(Dup(1)|Dup(2))):\n        Sleep(0.01)\n        set Stored=Dummy\n        0\n    Stored()"),
+  ("borrowed frame immutable alias survives real overwrite", callables
+    "Dup(N:int)<computes>:int=N|N\nCaller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:[]int=\n    var Stored:type{_()<computes>:int}=Dummy\n    Saved:=Stored\n    set Stored=F\n    for(A:=(Dup(1)|Dup(2)),B:=(Dup(1)|Dup(2))):block{Sleep(0.01);Saved()}"),
+  ("borrowed frame metadata read in cancellation", callables
+    "Dup(N:int)<computes>:int=N|N\nCaller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:[]int=\n    var Stored:type{_()<computes>:int}=Dummy\n    for(A:=(Dup(1)|Dup(2)),B:=(Dup(1)|Dup(2))):\n        defer:\n            Value:=Stored()\n        loop{Sleep(1.0)}\n        0"),
   ("outer metadata-only local loses mode across loop iterations", callables "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    var N:int=0\n    loop:\n        if(N>0)then set Stored=Dummy\n        set Stored=F\n        Sleep(0.01)\n        set N+=1\n        if(N>=2)then break\n    0"),
   ("outer shared local retains data mode across loop iterations", callables "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var Stored:type{_()<computes>:int}=F\n    loop:\n        set Stored=Dummy\n        Sleep(0.01)\n        break\n    Stored()"),
   ("fresh loop local still rejects metadata execution", callables "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    loop:\n        var Stored:type{_()<computes>:int}=Dummy\n        Sleep(0.01)\n        Value:=Stored()\n        break\n    0"),
@@ -91,6 +97,8 @@ private def cases : List (String × String) := [
   ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
+  ("opaque borrowed mutable frame", callables
+    "Dup(N:int)<computes>:int=N|N\nCaller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:[]type{_()<computes>:int}=\n    var Stored:type{_()<computes>:int}=Dummy\n    for(A:=(Dup(1)|Dup(2)),B:=(Dup(1)|Dup(2))):block{Sleep(0.01);Stored}"),
   ("fresh shared local on each loop iteration", callables "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var N:int=0\n    loop:\n        var Stored:type{_()<computes>:int}=Dummy\n        set Stored=F\n        Sleep(0.01)\n        Value:=Stored()\n        set N+=1\n        if(N>=2)then break\n    N"),
   ("fresh shared local on each for iteration", callables "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:[]int=\n    for(N:=0..1):\n        var Stored:type{_()<computes>:int}=Dummy\n        set Stored=F\n        Sleep(0.01)\n        Stored()"),
   ("opaque recursive initializer through helper", recursiveReaders ++
