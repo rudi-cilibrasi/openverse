@@ -1103,7 +1103,9 @@ circle := class(shape, labelled):
   branch does. Both bounds of a `for` or `first` range can contain such
   casts, including multiple independent casts inside one computed bound.
   Each equality reaches uses of the original objects as well as the
-  iteration value. Bounds run from left to right,
+  iteration value. A generic map key keeps the literal's contextual key
+  type when a cast in a later value lifts its operands; the key still runs
+  first and cannot fail. Bounds run from left to right,
   once before the range is iterated, and their refinements reach the
   following clauses and body. An explicitly nested `for` remains a
   separate failure context whose refinement does not escape its producer.

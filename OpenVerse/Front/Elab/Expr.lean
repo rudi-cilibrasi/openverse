@@ -2807,6 +2807,7 @@ partial def elabConstructionValue (ctx : Ctx) (p : Pos) (name : String) (targs :
     keeps its last value, at the position of its last occurrence (Book of
     Verse §9.3). -/
 partial def elabMapLit (ctx : Ctx) (p : Pos) (entries : List (SExpr × SExpr)) (exp : Option Ty) : EM R := do
+  let saved ← get
   -- (where a weak map is expected, a map, which is one: Book of Verse ch. 3,
   -- "can be initialized from an ordinary `map{}`")
   let (kt?, vt?) := match exp with
@@ -2825,50 +2826,61 @@ partial def elabMapLit (ctx : Ctx) (p : Pos) (entries : List (SExpr × SExpr)) (
       return ⟨.lit Value.emptyArray, .map .never .never⟩
   | (k0, v0) :: _ =>
     let rk0 ← elabE ctx k0 kt?
-    let rv0 ← elabE ctx v0 vt?
     let kt := kt?.getD rk0.ty
-    if !kt.comparable ctx.types then eerr p (notComparable ctx.types kt "a map key")
-    if let some c := kt.keyContainer? ctx.types then eerr p (keyContainerWhy kt c)
-    let vt0 := vt?.getD rv0.ty
-    let mut rs : Array (SExpr × R × SExpr × R) := #[]
-    for (k, v) in entries do
-      let rk ← elabE ctx k (some kt)
-      -- (a key that can fail: "failure in map literal keys is not
-      -- implemented", Book of Verse ch. 3, and its tests, Map.versetest:249)
-      checkMapKeyCanFail ctx k.pos rk.e
-      rs := rs.push (k, rk, v, ← elabE ctx v (some vt0))
-    ofExcept <| checkTypeValueJoin ctx.types p vt? (rs.toList.map (·.2.2.2.ty))
-    -- the values' type: the expected one (or the first's) when every value
-    -- converts to it, else their join, as for an array literal (#67); with
-    -- none expected, two with nothing in common join at `comparable` or
-    -- `any`, as an array literal's elements do (the Book's tests: "the
-    -- result of a map literal with values of disjoint types is coerced to
-    -- [key_type]any", `Any.versetest` 131-134, `Map.versetest:164`)
-    let vt ← match ← tryCatch (some <$> rs.toList.mapM fun (_, _, v, rv) => coerce v.pos rv vt0) (fun _ => pure none) with
-      | some _ => pure vt0
-      | none => rs.toList.foldlM (fun acc (_, _, v, rv) => do
-          let env := (← get).env
-          match joinTy env acc rv.ty vt? with
-          | some j => pure j
-          | none =>
-            if vt?.isNone && !ambiguousJoin env acc rv.ty then pure (fallbackJoin env acc rv.ty)
-            else eerr v.pos s!"the values of this map have different types: {acc.show} and {rv.ty.show}") rv0.ty
-    let mut steps : Array Expr := #[]
-    let mut slots : Array (Nat × Nat) := #[]
-    for (k, rk, v, rv) in rs do
-      let tk ← fresh kt
-      let tv ← fresh vt
-      steps := steps.push (.assign tk (← coerce k.pos rk kt))
-      steps := steps.push (.assign tv (← coerce v.pos rv vt))
-      slots := slots.push (tk, tv)
-    let n := slots.size
-    let items := (List.range n).map fun i =>
-      let (tk, tv) := slots[i]!
-      let later := ((List.range n).filter (· > i)).map fun j => Expr.prim .ne [.local tk, .local slots[j]!.1]
-      let cond := later.foldr Expr.seq (.lit (.logic true))
-      Expr.ite cond (.prim .mkArr [.prim .mkTup [.local tk, .local tv]]) (.lit Value.emptyArray)
-    let built := Expr.prim .flatten [.prim .mkArr items]
-    return ⟨steps.toList.foldr Expr.seq built, .map kt vt⟩
+    tryCatch (do
+      let rv0 ← elabE ctx v0 vt?
+      if !kt.comparable ctx.types then eerr p (notComparable ctx.types kt "a map key")
+      if let some c := kt.keyContainer? ctx.types then eerr p (keyContainerWhy kt c)
+      let vt0 := vt?.getD rv0.ty
+      let mut rs : Array (SExpr × R × SExpr × R) := #[]
+      for (k, v) in entries do
+        let rk ← elabE ctx k (some kt)
+        -- (a key that can fail: "failure in map literal keys is not
+        -- implemented", Book of Verse ch. 3, and its tests, Map.versetest:249)
+        checkMapKeyCanFail ctx k.pos rk.e
+        rs := rs.push (k, rk, v, ← elabE ctx v (some vt0))
+      ofExcept <| checkTypeValueJoin ctx.types p vt? (rs.toList.map (·.2.2.2.ty))
+      -- the values' type: the expected one (or the first's) when every value
+      -- converts to it, else their join, as for an array literal (#67); with
+      -- none expected, two with nothing in common join at `comparable` or
+      -- `any`, as an array literal's elements do (the Book's tests: "the
+      -- result of a map literal with values of disjoint types is coerced to
+      -- [key_type]any", `Any.versetest` 131-134, `Map.versetest:164`)
+      let vt ← match ← tryCatch (some <$> rs.toList.mapM fun (_, _, v, rv) => coerce v.pos rv vt0) (fun _ => pure none) with
+        | some _ => pure vt0
+        | none => rs.toList.foldlM (fun acc (_, _, v, rv) => do
+            let env := (← get).env
+            match joinTy env acc rv.ty vt? with
+            | some j => pure j
+            | none =>
+              if vt?.isNone && !ambiguousJoin env acc rv.ty then pure (fallbackJoin env acc rv.ty)
+              else eerr v.pos s!"the values of this map have different types: {acc.show} and {rv.ty.show}") rv0.ty
+      let mut steps : Array Expr := #[]
+      let mut slots : Array (Nat × Nat) := #[]
+      for (k, rk, v, rv) in rs do
+        let tk ← fresh kt
+        let tv ← fresh vt
+        steps := steps.push (.assign tk (← coerce k.pos rk kt))
+        steps := steps.push (.assign tv (← coerce v.pos rv vt))
+        slots := slots.push (tk, tv)
+      let n := slots.size
+      let items := (List.range n).map fun i =>
+        let (tk, tv) := slots[i]!
+        let later := ((List.range n).filter (· > i)).map fun j => Expr.prim .ne [.local tk, .local slots[j]!.1]
+        let cond := later.foldr Expr.seq (.lit (.logic true))
+        Expr.ite cond (.prim .mkArr [.prim .mkTup [.local tk, .local tv]]) (.lit Value.emptyArray)
+      let built := Expr.prim .flatten [.prim .mkArr items]
+      return ⟨steps.toList.foldr Expr.seq built, .map kt vt⟩
+    ) fun err => do
+      -- Only the actual refining refusal of a value requests this retry.
+      -- Keep the contextual key type, discard every trial slot/effect,
+      -- and let ordinary block lifting order the real keys and values.
+      let casts := Refine.castsIn ctx.types.classes.contains (.mapLit p entries)
+      if !ctx.canFail || !(entries.any fun (key, _) => mapKeyNeedsContext ctx key) ||
+          !(Refine.castRefusal? err).any (fun refusal => casts.contains refusal.pos) then throw err
+      set saved
+      let typed := .mapLit p (entries.map fun (key, value) => (withMapKeyContext ctx kt key, value))
+      elabE ctx (.block p [typed]) exp
 
 partial def elabCase (ctx : Ctx) (p : Pos) (scrut : SExpr) (arms : List (Option SExpr × SExpr))
     (exp : Option Ty) : EM R := do
