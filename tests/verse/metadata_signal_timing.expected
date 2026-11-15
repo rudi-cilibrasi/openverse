@@ -1,0 +1,10 @@
+direct 2
+unrelated 1
+timer 1
+rollback 1
+resignal 2
+helper timer 1
+completed 1
+ordered read 1
+ordered 1
+exit=0
