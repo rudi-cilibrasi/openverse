@@ -9,3 +9,4 @@ nested cleanup 1
 parent cleanup 2
 branch cleanup
 signal 2
+exit=0

@@ -710,13 +710,27 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       modify fun st => { st with
         discovery := saved.discovery
         validateUses := saved.validateUses, validateShared := saved.validateShared }
-      let summaries := (← get).summaries
-      let metadataCleanup := cleanups.any fun d =>
-        (MetadataPlan.reads d).any (fun i => seen[i]?.getD false) ||
-        (MetadataPlan.assigns d).any info.seeds.contains ||
-        (MetadataPlan.calls d).any (fun g =>
-          (infos[g]?.getD {}).metadataResult ||
-          summaries.any (fun s => s.key.1 == g && s.result.getD false))
+      -- Opaque witness forwarding in cleanup needs no schedule exploration.
+      -- Probe every potentially observed role against executable boundaries;
+      -- shared writes also matter because another continuation can read them.
+      let cleanupSlots := { slots with
+        values := seen
+        initialized := Array.replicate fn.nslots true
+        sharedMetadata := Array.replicate fn.nslots false }
+      let mut metadataCleanup := false
+      for d in cleanups do
+        let probe := { (← get) with
+          discovery := true
+          validateUses := true, validateShared := true }
+        match (expr fns infos fields fn info cleanupSlots d).run probe with
+        | .error _ => metadataCleanup := true
+        | .ok (_, discovered) =>
+          modify fun st => { st with
+            summaries := discovered.summaries
+            indices := discovered.indices, changed := discovered.changed }
+        if (MetadataPlan.assigns d).any (fun i =>
+            info.shared.contains i && seen[i]?.getD false) then
+          metadataCleanup := true
       let needsSchedule := metadataCleanup || (background &&
         (info.shared.any (fun i => seen[i]?.getD false) ||
           out.value.getD false || out.returned.getD false))

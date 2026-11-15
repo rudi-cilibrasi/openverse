@@ -138,7 +138,11 @@ shared-cell modes and restore cleanup scope. Results from this analysis feed
 the recursive return summaries, so forwarding an early background read through
 a helper cannot erase its role. The final replay follows only live call
 contexts. Functions without relevant scheduling sites keep the ordinary
-dataflow path. No Core opcode, runtime tag or scheduling behavior changes.
+dataflow path. Cleanup is relevant when its possible roles reach an executable
+boundary or it writes shared metadata storage. Forwarding hidden witnesses
+alone does not require exploring schedules; scheduler model seed 18 retains
+that distinction under the gate's unchanged 4 GB memory limit. No Core opcode,
+runtime tag or scheduling behavior changes.
 
 The scheduler exploration is conservative about the order of waits; it does
 not prove timer deadlines. `metadata_background_timing.verse` retains ordinary
