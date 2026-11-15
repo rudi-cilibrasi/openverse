@@ -19,6 +19,14 @@ private def loopTasks (signal : String) : String :=
   s!"    A:=event(int)\{}\n    B:=event(int)\{}\n    Other:=event(int)\{}\n    var Selected:event(int)=A\n    Tasks:=for(N:=0..1):\n        T:=spawn\{Work(Selected)}\n        set Selected=B\n        T\n    var Stored:{functionTy}=Dummy\n    if(T:=Tasks[0]):\n        branch:\n            T.Await()\n            set Stored=Dummy\n        set Stored=F\n        {signal}.Signal(0)\n        Stored()\n    else:\n        0"
 
 private def refusals : List (String × String) := [
+  ("Writable recursive helpers can change a stored event alias",
+    "holder:=class{var E:event(int)}\nChange(H:holder,E:event(int),N:int)<transacts>:int=if(N>0)then Change(H,E,N-1)else block{set H.E=E;0}\n" ++
+    header ++ setup ++
+    "    Other:=event(int){}\n    Alias:=holder{E:=Other}\n    N:=Change(Alias,E,1)\n    Alias.E.Signal(N)\n    Stored()"),
+  ("Readonly recursive returns can still alias the waiting event",
+    "holder:=class{E:event(int)}\nSelect(A:event(int),B:event(int),N:int)<computes>:event(int)=if(N>0)then Select(B,A,N-1)else A\n" ++
+    header ++ setup ++
+    "    Other:=event(int){}\n    Alias:=holder{E:=Select(Other,E,1)}\n    Alias.E.Signal(0)\n    Stored()"),
   ("An inlined helper arm can return metadata to its caller",
     returningHelper "V" ++ scheduledCaller "    Saved:=Later(Shadow,F)\n    Saved()"),
   ("Returns from every helper arm keep the caller reachable",
@@ -67,6 +75,10 @@ private def refusals : List (String × String) := [
     "    Other.Signal(0)\n    Stored()")]
 
 private def controls : List (String × String) := [
+  ("Readonly recursive helpers preserve unrelated stored events",
+    "holder:=class{E:event(int)}\nCount(N:int)<computes>:int=if(N>0)then Count(N-1)else 0\n" ++
+    header ++ setup ++
+    "    Other:=event(int){}\n    Alias:=holder{E:=Other}\n    N:=Count(1)\n    Alias.E.Signal(N)\n    Stored()"),
   ("A nested arm return stops at an already completed rush",
     "Later(V:v,R:v where v:type)<suspends>:v=\n    Release:=event(int){}\n    Never:=event(int){}\n    Value:=rush:\n        block:\n            Inner:=race:\n                block:\n                    Release.Await()\n                    return V\n                block:\n                    Never.Await()\n                    R\n            R\n        block:\n            Sleep(0.0)\n            R\n    Release.Signal(0)\n    R\n" ++
     scheduledCaller "    Saved:=Later(Shadow,F)\n    Saved()"),

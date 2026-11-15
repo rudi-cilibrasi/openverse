@@ -213,8 +213,10 @@ private partial def invoke (fns : Array Fn) (stack : List Nat) (site : Nat)
   if ["$EvAwait", "$StickyAwait", "$Await"].contains fn.name then return ([0], memory)
   if stack.contains g then
     -- A recursive call can return an alias and mutate reachable fields.
-    -- Widen those identities rather than impose an analysis fuel limit.
-    return ([0], widenFields memory)
+    -- Readonly calls cannot replace fields of existing objects. Keep those
+    -- identities precise; a returned allocation is still an unknown alias.
+    -- Widen writable calls rather than impose an analysis fuel limit.
+    return ([0], if fn.writes then widenFields memory else memory)
   let slots := Array.ofFn (n := fn.nslots) fun i => args[i.val]?.getD []
   let out := expr fns (g :: stack) site { memory with slots } fn.body
   return ((joinValue out.value out.returned).getD [0], { memory with fields := out.memory.fields, uncertain := out.memory.uncertain })
