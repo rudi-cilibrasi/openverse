@@ -416,7 +416,8 @@ partial def elabExprMarkersWith
       | .error why => eerr p why
     let prepared := Choice.prepare code (choiceValues ctx) (choiceField ctx)
       (site := s!"copy{scope.hash}") (fieldOrder := choiceOrder ctx) (keepBranches := choiceHasCast ctx)
-    elabE { ctx with copiedOverloadScope := scope } (.app q (.ident q "$firstP") [.block bp prepared] false) exp
+    elabE { ctx with copiedOverloadScope := scope, copiedOverloadSites := prepared.flatMap Choice.callUses }
+      (.app q (.ident q "$firstP") [.block bp prepared] false) exp
   | .app p (.ident _ "$firstP") [.block _ items] false =>
     -- (#246) `first{…}` of clauses that are lifted already (a consumer's,
     -- taken into a lazily taken call's function of its own): not again,

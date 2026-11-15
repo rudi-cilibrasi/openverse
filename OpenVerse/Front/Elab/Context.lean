@@ -341,6 +341,8 @@ structure Ctx where
   constructProbe : Bool := false
   inlineScopes : List String := []
   copiedOverloadScope : String := ""
+  /-- Calls physically owned by this copy, excluding external signature defaults. -/
+  copiedOverloadSites : List (Pos × String) := []
   constructOrigin : Option String := none
   constructHints : Option (List ConstructHint) := none
   sigs    : List Sig
@@ -1507,7 +1509,7 @@ def Ctx.noteOverload (ctx : Ctx) (p : Pos) (f o : String) : EM Unit := do
     overloads retain their existing discovery and refusal boundary. -/
 def Ctx.noteFunctionOverload (ctx : Ctx) (p : Pos) (f o : String) : EM Unit := do
   let eligible := ctx.types.copiedOverloadFns.any fun (n, _) => n.startsWith (f ++ "$mv")
-  if !ctx.copiedOverloadScope.isEmpty && eligible then
+  if !ctx.copiedOverloadScope.isEmpty && eligible && ctx.copiedOverloadSites.contains (p, f) then
     if !ctx.types.requests.copiedOverloads.contains (ctx.copiedOverloadScope, p, o) then
       noteNeeds { copiedOverloads := [(ctx.copiedOverloadScope, p, o)] }
   else if ctx.types.overloadSites.contains (p, f) then noteNeeds { overloads := [(p, o)] }

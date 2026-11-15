@@ -876,7 +876,9 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             let clauses := Choice.prepare expanded.dropLast (choiceValues c) (choiceField c)
               (fieldOrder := choiceOrder c) (site := s!"{site}copy{i}")
               (keepExcl := true) (keepBranches := choiceHasCast c)
-            parts := parts ++ [← forWIn { bctx with copiedOverloadScope := scope } clauses (expanded.getLastD bd)]
+            let body := expanded.getLastD bd
+            let sites := (clauses ++ [body]).flatMap Choice.callUses
+            parts := parts ++ [← forWIn { bctx with copiedOverloadScope := scope, copiedOverloadSites := sites } clauses body]
           let some r0 := parts.head? | eerr gp "internal: a choice without alternatives"
           if let some r := parts.find? (·.ty != r0.ty) then
             eerr gp s!"the for's values have the type {r0.ty.show} for one alternative of this choice and {r.ty.show} for another"
