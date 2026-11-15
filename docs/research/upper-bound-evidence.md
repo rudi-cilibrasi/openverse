@@ -88,8 +88,8 @@ Opaque forwarding remains allowed, and reading an unrelated ordinary field
 of an object with hidden metadata still gives executable data.
 `MetadataGetters.lean` checks these accessor boundaries with 14 Core-checked
 controls, including execution after forwarding through another function.
-`MetadataStorage.lean` retains 64 real/dummy
-rejection pairs and 58 opaque-forwarding, real-overwrite and rollback pairs,
+`MetadataStorage.lean` retains 66 real/dummy
+rejection pairs and 60 opaque-forwarding, real-overwrite and rollback pairs,
 including a later GADT refinement, fresh unit-to-array conversions, ordinary
 helpers with independent real returns, virtual and spawned receivers, and
 bound-method captures across a wait. Shared-frame controls cover metadata,
@@ -102,7 +102,9 @@ both metadata refusals and independent real results. Module weak-map controls
 cover direct, helper, nested, option and object payload writes; metadata cannot
 enter ordinary shared fields, including unused, overwritten or rolled-back
 writes. Real payloads produced by helpers with opaque metadata arguments
-remain valid. `metadata_module_functions.verse` and
+remain valid. Four pairs also check reads and writes from a running rush
+arm's cleanup when a Signal resumes and ends its owner, including real
+overwrites. `metadata_module_functions.verse` and
 `metadata_returned_arguments.verse` retain 25 ordinary runtime results in both
 source profiles. These are
 compiler-API contracts; source programs reach the same analysis.

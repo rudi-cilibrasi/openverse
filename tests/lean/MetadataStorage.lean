@@ -80,7 +80,15 @@ private def returnedProof (helper body : String) : String :=
   "UseProof(X:t,Proof:evidence(vehicle,t) where t:type)<computes>:int=Proof.Up(X).N\n" ++
   helper ++ "Caller(X:t,F:evidence(vehicle,t),Dummy:evidence(vehicle,t) where t:type)<computes>:int=\n" ++ body
 
+private def activeRushCleanup (action overwrite : String) : String := callables
+  ("Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    E:=event(int){}\n    branch:\n        R:=rush:\n            block:\n                defer:\n                    " ++ action ++
+   "\n                Sleep(0.1)\n                E.Signal(1)\n                Sleep(1.0)\n                1\n            block:\n                Sleep(1.0)\n                1\n" ++ overwrite ++ "    E.Await()\n    0")
+
 private def cases : List (String × String) := [
+  ("running rush cleanup cannot execute metadata",
+    activeRushCleanup "Value:=Stored()" ""),
+  ("running rush cleanup cannot restore metadata to a real cell",
+    activeRushCleanup "set Stored=Dummy" "    set Stored=F\n"),
   ("metadata returned proof argument Direct", returnedProof
     "Pass(M:v,R:v where v:type)<computes>:v=M\n"
     "    UseProof(X,Pass(Dummy,F))"),
@@ -192,6 +200,10 @@ private def cases : List (String × String) := [
   ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
+  ("running rush cleanup reads a real overwrite",
+    activeRushCleanup "Value:=Stored()" "    set Stored=F\n"),
+  ("running rush cleanup writes ordinary data",
+    activeRushCleanup "set Stored=F" "    set Stored=F\n"),
   ("real returned proof argument Direct", returnedProof
     "Pass(M:v,R:v where v:type)<computes>:v=R\n"
     "    UseProof(X,Pass(Dummy,F))"),
