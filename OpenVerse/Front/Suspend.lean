@@ -2121,7 +2121,9 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
       let r ← prep res
       let c ← prep can
       let as ← st.arms.toList.zipIdx.mapM fun ((r, c), a) => do
-        let c := match killArmChildren a with | none => c | some kids => .seq kids c
+        let c := if !events then c else match killArmChildren a with
+          | none => c
+          | some kids => .seq (.ite (.prim .eq [fget (armDoneF sites a), int 3]) kids vd) c
         return (← prep r, ← prep c)
       let stop ← if shareTasks then
           let stop := if taskClockF.isSome then killLatest else kill

@@ -1,0 +1,14 @@
+F defer
+B defer
+A.1 defer
+A defer
+cancelled F
+r2 defer
+r1 defer
+G defer
+r1.b defer
+A.1 defer
+A defer
+H defer
+cancelled H
+exit=0
