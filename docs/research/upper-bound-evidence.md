@@ -86,8 +86,8 @@ Opaque forwarding remains allowed, and reading an unrelated ordinary field
 of an object with hidden metadata still gives executable data.
 `MetadataGetters.lean` checks these accessor boundaries with 14 Core-checked
 controls, including execution after forwarding through another function.
-`MetadataStorage.lean` retains 36 real/dummy
-rejection pairs and 35 opaque-forwarding, real-overwrite and rollback pairs,
+`MetadataStorage.lean` retains 39 real/dummy
+rejection pairs and 37 opaque-forwarding, real-overwrite and rollback pairs,
 including a later GADT refinement, fresh unit-to-array conversions, ordinary
 helpers with independent real returns, virtual and spawned receivers, and
 bound-method captures across a wait. Shared-frame controls cover metadata,
@@ -169,16 +169,38 @@ Repeated starts at a spawn site retain a conservative summary of older workers.
 After those workers can progress, heap aliases widen and their possible signals
 and task completions join the schedule; the caller's local storage is preserved.
 This can admit extra schedules and reject safe programs. The exploration does
-not establish complete alias or timing precision. In particular, a lifted
-choice continuation can still retain a captured metadata role after its source
-shared cell is overwritten with real data, causing a false rejection. Generated
-witness, capture and frame aliases remain in the #572 audit.
+not establish complete alias or timing precision. Generated witness, capture
+and frame aliases remain in the #572 audit, including resource use for recursive
+choice producers. A private recursive-producer reader still reaches the 4 GB
+cap on the #640 baseline and a bounded timeout with the frame-alias changes; its real control
+passes. This remains an unresolved analysis case.
 `MetadataSignals.lean` retains 19 real/dummy refusal pairs and 21 positive pairs
 for direct and indirect signals, recursive helpers, rollback, task completion,
 cleanup, helper returns and unrelated events. `metadata_signal_timing.verse`
 executes the corresponding ordinary data paths in both runtimes and profiles.
 `metadata_signal_loop_timing.verse` covers repeated spawns in the ordinary
 profile, which admits `for`.
+
+Borrowed mutable locals now retain their source-frame origins and recorded
+synthetic copy-outs in provenance analysis. Inlining resolves each origin
+against the active owner call, with distinct slots for separate calls of that
+owner. Reads and writes use that cell's current role and storage mode. Synthetic
+capture initialization does not overwrite the live cell; an ordinary immutable
+copy keeps its saved value. This follows `SourceFrames` and `FrameRefs` without
+changing emitted code. Generated borrowers are checked through their actual
+callers rather than as independent source entries with stale capture arguments.
+Provisional borrowed summaries defer executable checks; the inlined graph or a
+live noninlined call performs them. Cleanup scopes retain the same aliases.
+`metadata_borrowed_signal.verse` retains ordinary Lean/C traces for a lifted
+reader after a real overwrite, a recursive producer's write, and two separate
+owner calls.
+
+Return-summary solving records the summaries each context reads. A context
+without cleanup is reused while those dependencies stay unchanged; the final
+live replay still validates every reached context. Cleanup relevance probes
+keep their existing private queues and bypass this cache. Scheduler exploration
+also releases processed queue entries, retaining their joined configurations
+in the fixed point rather than keeping every superseded copy.
 
 A spawned call has a separate result boundary: lowering writes its return
 value to the task's ordinary mutable `Result` field. The provenance check

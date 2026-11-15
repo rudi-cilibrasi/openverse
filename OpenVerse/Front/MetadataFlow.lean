@@ -20,6 +20,7 @@ structure Info where
   uses : List Nat := []
   shared : List Nat := []
   metadataWrites : List (Nat × Nat) := []
+  source : FrameRefs.Info := {}
   body : Option Expr := none
   deriving Inhabited
 
@@ -81,6 +82,8 @@ private structure Summary where
   key : Key
   result : Option Bool := none
   yielded : Bool := false
+  dependencies : Array (Nat × Option Bool × Bool) := #[]
+  cached : Bool := false
   deriving Inhabited
 
 private inductive ActorStatus where
@@ -476,6 +479,7 @@ private structure State where
   debug : Bool := false
   active : Option Key := none
   signalArguments : Option (Array (List Nat)) := none
+  dependencies : Option (Std.HashMap Nat (Option Bool × Bool)) := none
 
 private abbrev M := StateT State (Except String)
 
@@ -491,10 +495,16 @@ private def request (key : Key) : M (Option Bool × Bool) := do
     set { st with live := st.live.push key, liveSeen := st.liveSeen.insert key () }
   let st ← get
   if let some i := st.indices[key]? then
-    return (st.summaries[i]!.result, st.summaries[i]!.yielded)
+    let value := (st.summaries[i]!.result, st.summaries[i]!.yielded)
+    if let some dependencies := st.dependencies then
+      if !dependencies.contains i then
+        modify fun st => { st with dependencies := some (dependencies.insert i value) }
+    return value
+  let i := st.summaries.size
+  let dependencies := st.dependencies.map (·.insert i (none, false))
   set { st with
-    indices := st.indices.insert key st.summaries.size
-    summaries := st.summaries.push { key }, changed := true }
+    indices := st.indices.insert key i
+    summaries := st.summaries.push { key }, changed := true, dependencies }
   return (none, false)
 
 mutual
@@ -670,13 +680,14 @@ private partial def spawned (fns : Array Fn) (infos : Array Info)
 
 private partial def invoke (fns : Array Fn) (infos : Array Info)
     (fields : Array (List Nat)) (fn : Fn) (info : Info) (slots : Slots)
-    (g : Nat) (es : List Expr) : M (Flow × Option Bool × Bool) := do
+    (g : Nat) (es : List Expr) (summarize : Bool := true) : M (Flow × Option Bool × Bool) := do
   let (args, out) ← arguments fns infos fields fn info slots es
   if out.value.isNone then return (out, none, false)
   let gi := infos[g]?.getD {}
   let roles := args.zipIdx.map fun (role, i) => role || gi.inputs.contains i
   if (← get).validateUses && gi.required.any (fun i => roles[i]?.getD false) then
     refuse fn info s!"provide executable evidence or a receiver to {(fns[g]?.map (·.name)).getD "a call"}"
+  if !summarize then return (out, none, false)
   let (result, yielded) ← request (g, roles)
   let name := (fns[g]?.map (·.name)).getD ""
   let yielded : Bool := if name == "$Sleep" then
@@ -782,11 +793,12 @@ private partial def actorEnvironment (env : ScheduleEnv) (a : Actor) : Fn × Inf
   | none => (env.fn, env.info)
   | some (g, offset) =>
     let info := env.infos[g]?.getD {}
+    let alias (i : Nat) := (env.plan.aliases.lookup (i + offset)).getD (i + offset)
     (env.fns[g]!, { info with
-      inputs := info.inputs.map (· + offset)
-      seeds := info.seeds.map (· + offset)
+      inputs := info.inputs.filterMap fun i => if (env.plan.aliases.lookup (i + offset)).isSome then none else some (i + offset)
+      seeds := info.seeds.filterMap fun i => if (env.plan.aliases.lookup (i + offset)).isSome then none else some (i + offset)
       uses := info.uses.map (· + offset)
-      shared := info.shared.map (· + offset)
+      shared := info.shared.map alias
       metadataWrites := info.metadataWrites.map fun (i, k) => (i + offset, k) })
 
 private partial def cancelChildren (env : ScheduleEnv) (c : Configuration) (actor : Nat) (branch : Bool)
@@ -867,6 +879,9 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
     if (← get).debug && cursor % 10000 == 0 then
       dbg_trace s!"metadata schedule {env.fn.name}: visited={cursor}, queued={work.size}, states={known.size}"
     let incoming := work[cursor]!
+    -- Processed configurations remain in `known`; release their queued
+    -- copies while exploring long lifted consumers.
+    work := work.set! cursor default
     cursor := cursor + 1
     let key := configurationKey incoming
     let c := match known[key]? with
@@ -981,7 +996,7 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
     | .passTest next =>
       work := work.push (advanceActor { c with tests := c.tests.tail } actor next)
     | .enterCall g offset args next =>
-      let (out, _, _) ← invoke env.fns env.infos env.fields fn info c.slots g (args.map Expr.local)
+      let (out, _, _) ← invoke env.fns env.infos env.fields fn info c.slots g (args.map Expr.local) false
       if out.value.isNone then continue
       let callee := env.fns[g]!
       let ci := env.infos[g]?.getD {}
@@ -1332,7 +1347,7 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
           | none => do
             let bodies := fns.mapIdx fun j f => { f with body := (infos[j]?.getD {}).body.getD f.body }
             let plan := MetadataPlan.build bodies info.metadataWrites fn.nslots body (some i)
-              (infos.map (·.metadataWrites))
+              (infos.map (·.metadataWrites)) (infos.map (·.source))
             modify fun st => { st with plans := st.plans.set! i (some plan) }
             pure plan
         if debug then dbg_trace s!"metadata selected {fn.name}: slots={plan.slots}, actors={plan.actors}"
@@ -1343,6 +1358,7 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
     let seedRoots : M Unit := do
       for i in [:fns.size] do
         let info := infos[i]?.getD {}
+        if info.source.slots.any (fun (_, s) => s.frame != fns[i]!.name) then continue
         discard <| request (i, (List.range fns[i]!.arity).map info.inputs.contains)
     seedRoots
     let mut growing := true
@@ -1352,7 +1368,29 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       for (summary, index) in summaries.zipIdx do
         let i := summary.key.1
         let info := infos[i]?.getD {}
+        -- Only summary solving is cached. The final replay still checks
+        -- every live context with stable shared-storage modes. Cleanup
+        -- relevance probes have private call queues, so keep those frames
+        -- out of this dependency cache.
+        let cacheable := ((← get).sites[i]?.getD (false, [])).2.isEmpty
+        let current := (← get).summaries
+        if cacheable && summary.cached && summary.dependencies.all (fun (j, result, yielded) =>
+            let s := current[j]!
+            s.result == result && s.yielded == yielded) then continue
+        modify fun st => { st with dependencies := if cacheable then some {} else none }
+        let validate := (← get).validateUses
+        -- Borrowed locals are validated against their actual owner by the
+        -- inlined graph. Discovery can also request a provisional summary
+        -- using old capture arguments; that summary is not a live frame.
+        if info.source.slots.any (fun (_, s) => s.frame != fns[i]!.name) then
+          modify fun st => { st with validateUses := false }
         let out ← runContext summary.key
+        modify fun st => { st with validateUses := validate }
+        let dependencies := ((← get).dependencies.getD {}).toList.toArray.map fun (j, result, yielded) =>
+          (j, result, yielded)
+        modify fun st => { st with
+          dependencies := none
+          summaries := st.summaries.modify index fun s => { s with dependencies, cached := cacheable } }
         let returned := (joinRole out.value out.returned).map (· || info.metadataResult)
         let result := joinRole summary.result returned
         let yielded := summary.yielded || out.yielded
@@ -1369,8 +1407,10 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       let key := (← get).live[index]!
       index := index + 1
       discard <| runContext key
+  let borrowed := MetadataPlan.borrows fns (infos.map (·.source))
   let sites := fns.mapIdx fun i fn =>
-    MetadataPlan.sites fns ((infos[i]?.getD {}).body.getD fn.body)
+    let (background, cleanups) := MetadataPlan.sites fns ((infos[i]?.getD {}).body.getD fn.body)
+    (background || borrowed[i]!, cleanups)
   discard <| action.run { debug, plans := Array.replicate fns.size none, sites }
 
 end OpenVerse.Front.MetadataFlow

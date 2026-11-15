@@ -24,7 +24,8 @@ private partial def roles (dummy : Bool) : STop → Except String STop
         ty := ← param.ty.mapNamesM rename
         typeValue := (dummy && ((name == "Caller" && param.name == "Dummy") ||
           (name == "ForwardMeta" && param.name == "M"))) ||
-          (name == "IgnoreMeta" && param.name == "M") }
+          (name == "IgnoreMeta" && param.name == "M") ||
+          (name == "FrameOwner" && param.name == "Initial") }
     return .fn p name ps tps specs (← ret.mapNamesM rename) (evidenceBody body)
   | .classDef p name nsp tps specs parents iface fields methods => do
     let rename (n : String) : Except String String :=
@@ -47,7 +48,19 @@ private def recursiveReaders : String :=
   "Bridge(R:v,M:v,N:int where v:type)<computes>:v=if(N>0)then Maybe(R,M,N-1)else M\n" ++
   "Hold(R:reader,M:reader)<suspends>:reader=\n    var Stored:reader=R\n    Sleep(0.1)\n    set Stored=M\n    Stored\n"
 
+-- The initializer is declared metadata in both controls. A real replacement
+-- clears each owner's cell independently before its borrowed reader resumes.
+private def frameOwners (first second : String) : String := callables
+  ("pair(a:type,b:type):=class{}\ndup(t:type):=class(pair(t,t)){}\n" ++
+   "FrameOwner(P:pair(a,b),E:event(int),Initial:type{_()<computes>:int},Replacement:type{_()<computes>:int} where a:type,b:type)<suspends>:int=\n    var Stored:type{_()<computes>:int}=Initial\n    branch:\n        if(D:=dup[P]):\n            E.Await()\n            Value:=Stored()\n    set Stored=Replacement\n    E.Signal(0)\n    0\n" ++
+   "Caller(P:pair(a,b),E:event(int),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type)<suspends>:int=\n    var Shadow:type{_()<computes>:int}=Dummy\n    branch:\n        Sleep(1.0)\n        set Shadow=Dummy\n" ++
+   s!"    FrameOwner(P,E,F,{first})\n    Other:=event(int)\{}\n    FrameOwner(P,Other,F,{second})\n    0")
+
 private def cases : List (String × String) := [
+  ("recursive producer cannot hide a borrowed metadata write", callables
+    "Digit(N:int)<computes>:int=if(N>0)then (Digit(N-1)|N)else 0\nCaller(E:event(int),F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    branch:\n        Values:=for(A:=(Digit(1)|Digit(1)),B:=(Digit(1)|Digit(1))):\n            E.Await()\n            set Stored=Dummy\n            0\n    set Stored=F\n    E.Signal(0)\n    Stored()"),
+  ("first borrowed owner cannot borrow the second owner's overwrite", frameOwners "Dummy" "F"),
+  ("second borrowed owner cannot borrow the first owner's overwrite", frameOwners "F" "Dummy"),
   ("borrowed frame metadata write after real overwrite", callables
     "Dup(N:int)<computes>:int=N|N\nCaller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    Values:=for(A:=(Dup(1)|Dup(2)),B:=(Dup(1)|Dup(2))):\n        Sleep(0.01)\n        set Stored=Dummy\n        0\n    Stored()"),
   ("borrowed frame immutable alias survives real overwrite", callables
@@ -97,6 +110,7 @@ private def cases : List (String × String) := [
   ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
+  ("borrowed owners retain separate real overwrites", frameOwners "F" "F"),
   ("borrowed frame reader sees a real overwrite before Signal", callables
     "Dup(N:int)<computes>:int=N|N\nCaller(E:event(int),F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    branch:\n        Values:=for(A:=(Dup(1)|Dup(2)),B:=(Dup(1)|Dup(2))):\n            E.Await()\n            Stored()\n    set Stored=F\n    E.Signal(0)\n    0"),
   ("opaque borrowed mutable frame", callables

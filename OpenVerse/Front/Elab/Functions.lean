@@ -245,15 +245,18 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
     if !signature.typeValues.contains i && (SubtypeEvidence.exposesEvidence env ty ||
         (i == 0 && ((signature.hasReceiver && !name.endsWith ".$block") ||
           ["$Await", "$EvAwait", "$StickyAwait", "$cancelMark"].contains name))) then some i else none
+  let frames : FrameRefs.Info := {
+    explicit := ps.length, copies := st.frameCopies, slots := st.frameSlots.map fun (i, s) =>
+      (i, { frame := s.frame, name := s.name, args := s.args.map (Ty.toVTy env) }) }
   let metadata : MetadataFlow.Info := {
     pos := p, inputs, required, seeds := inputs ++ st.metadataSeeds, uses := st.metadataUses
     shared := st.frameSlots.map (·.1), metadataWrites := st.metadataWrites
+    source := frames
     body := some (initPrefixE arity selfInits e) }
   return { fn := { name, arity, nslots := st.nslots, decides, writes := allowed.contains "writes",
                    body := initPrefixE arity inits e },
            slotTys := spawnParamTypes env name (st.slotTys.toList.map (Ty.toVTy env)), errAt := st.errAt,
-           frames := { explicit := ps.length, copies := st.frameCopies, slots := st.frameSlots.map fun (i, s) =>
-             (i, { frame := s.frame, name := s.name, args := s.args.map (Ty.toVTy env) }) },
+           frames,
            needs := st.needs, loopFirst := st.loopFirst, failCalls := st.failCalls, warnings := st.warnings, metadata }
 
 /-- Function elaboration, a phase of `elabProgramCore`: each function and
