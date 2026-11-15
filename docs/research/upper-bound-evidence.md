@@ -88,8 +88,8 @@ Opaque forwarding remains allowed, and reading an unrelated ordinary field
 of an object with hidden metadata still gives executable data.
 `MetadataGetters.lean` checks these accessor boundaries with 14 Core-checked
 controls, including execution after forwarding through another function.
-`MetadataStorage.lean` retains 89 real/dummy
-rejection pairs and 85 opaque-forwarding, real-overwrite and rollback pairs,
+`MetadataStorage.lean` retains 98 real/dummy
+rejection pairs and 94 opaque-forwarding, real-overwrite and rollback pairs,
 including a later GADT refinement, fresh unit-to-array conversions, ordinary
 helpers with independent real returns, virtual and spawned receivers, and
 bound-method captures across a wait. Shared-frame controls cover metadata,
