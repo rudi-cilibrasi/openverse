@@ -1153,7 +1153,10 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
         (if leafy then [.ite (.prim .eq [.local 2, Suspend.int 0]) Suspend.vd
           (.seq (.heap (.set armTopIdx) [fr, .local 1]) Suspend.vd)] else [])
       let tramp : Expr := .seq (.ite (.prim .eq [.heap (.get doneA) [fr], Suspend.int 0])
-          (.seq (Suspend.seqVoid (resumeArm ++ [
+          (.seq (Suspend.seqVoid (resumeArm ++
+            (if events then [.ite (.prim .eq [.heap (.get doneA) [fr], Suspend.int 3])
+              (.seq (Suspend.seqVoid [.call (armRes + 1) (fr :: .local 1 :: pass),
+                .heap (.set doneA) [fr, Suspend.int 2]]) Suspend.vd) Suspend.vd] else []) ++ [
             .ite (.prim .eq [.local 2, Suspend.int 1]) (.seq (.heap (.set doneA) [fr, Suspend.int 1]) Suspend.vd) Suspend.vd,
             .ite (.prim .eq [.local 2, Suspend.int 2])
               (.seq (Suspend.seqVoid [.heap (.set doneA) [fr, Suspend.int 2], .assign 2 (Suspend.int 1)]) Suspend.vd)

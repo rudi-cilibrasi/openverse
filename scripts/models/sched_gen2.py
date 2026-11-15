@@ -356,6 +356,7 @@ def stop_one(root):
                 if not root.gen.gi_running:
                     root.gen.close()
             return
+        root.cancelled = True
         root = root.root
     if not root.done:
         if root in S.running:
@@ -490,8 +491,38 @@ def exec_block(stmts, fr, owner=None):
     return None
 
 
-def run_arm(stmts, val, fr, owner=None):
-    yield from exec_block(stmts, fr, owner)
+def stop_owned(fr, owner):
+    """Drain the current children, including starts after an earlier drain."""
+    kids = {}
+    for sn, child, parent in fr.starts:
+        kids.setdefault(id(parent), []).append((sn, child))
+    for sn, child in sorted(kids.get(id(owner), []), key=lambda item: -item[0]):
+        stop_tree(child, kids)
+
+
+def owned_block(stmts, fr, owner):
+    body = exec_block(stmts, fr, owner)
+    try:
+        while True:
+            try:
+                step = next(body)
+            except StopIteration:
+                return
+            yield step
+    finally:
+        # A running owner may finish its current step after the source
+        # function stopped it. New children still share that lifetime.
+        if (getattr(owner, 'cancelled', False) or
+                getattr(owner, 'cancel_req', False)):
+            stop_owned(fr, owner)
+        body.close()
+
+
+def run_arm(stmts, val, fr, owner=None, owns=False):
+    if owns:
+        yield from owned_block(stmts, fr, owner)
+    else:
+        yield from exec_block(stmts, fr, owner)
     return fr.env[val] if val else None
 
 
@@ -511,7 +542,7 @@ def exec_conc(s, fr, owner=None):
             # (a rush arm owns what its code starts, #254; a sync or race arm's
             # is its enclosing owner's)
             ref = ArmRef(None) if kind == "rush" and not IMPL_ORDER else None
-            g = run_arm(stmts, val, fr, ref if ref is not None else owner)
+            g = run_arm(stmts, val, fr, ref if ref is not None else owner, owns=ref is not None)
             if ref is not None:
                 ref.gen = g; refs[i] = ref; fr.starts.append((sn, ref, owner))
             site.gens[i] = g; sns[i] = sn; started.append(i)
@@ -599,7 +630,7 @@ def exec_stmt(s, fr, owner=None):
     elif k == "branch":
         sn = fr.counter; fr.counter += 1
         r = Root("branch", None, owner=S.cur_task())
-        r.gen = exec_block(s.body, fr, r)
+        r.gen = owned_block(s.body, fr, r)
         fr.starts.append((sn, r, owner))
         S.roots.append(r)
         S.poll(r)
