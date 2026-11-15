@@ -1354,6 +1354,8 @@ circle := class(shape, labelled):
     view (#243, #250, #351) outside any failure context (a case's
     scrutinee and arms need an enclosing one; its computed patterns are
     failure conditions);
+  - such a cast embedded in a range bound rather than named as a clause
+    before the range (#243);
   - in a `for`'s clauses, a clause past a generator after such a cast that
     uses its name in a branch of an `if` with a choice in its branches (#243);
   - after a cast that opens type arguments, a value of its failure
