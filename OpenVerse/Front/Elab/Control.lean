@@ -1102,17 +1102,18 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     clauses before it bind, which are values too. -/
 def liftCastClause (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
     (bound : List String) (q : Pos) (c : SExpr) (probeCtx : Option Ctx := none) : EM (List SExpr) := do
-  -- A range is a producer boundary: staging both bounds at once can
-  -- replace the lower expression by a scalar temporary and erase the
-  -- dependency used to replay its refinement in the loop body. Keep the
-  -- established sequential bound path, including each bound's recast.
-  if (match c with | .decl _ _ _ _ (.range ..) | .gen _ _ _ (.range ..) => true | _ => false) then
-    return Choice.liftClause (fun n => choiceValues ctx n || bound.contains n) (choiceField ctx)
-      (Refine.markCast q c) (fieldOrder := choiceOrder ctx)
+  -- A range's bounds are separate producer stages: lifting both at once
+  -- can hide the lower bound's dependency behind a scalar temporary.
+  -- Within the refused bound, retain all required casts together, as in
+  -- an ordinary call; its operands may establish independent equalities.
+  let reachable := match c with
+    | .decl _ _ _ _ (.range _ lo hi) | .gen _ _ _ (.range _ lo hi) =>
+      let lower := Refine.castsIn ctx.types.classes.contains lo
+      if lower.contains q then lower else Refine.castsIn ctx.types.classes.contains hi
+    | _ => Refine.castsIn ctx.types.classes.contains c
   -- Group casts that need refinement (or depend on an earlier one), not
   -- ordinary successful casts in unrelated operands. Hoisting those can
   -- discard their surrounding contextual types.
-  let reachable := Refine.castsIn ctx.types.classes.contains c
   let mut inspect := probeCtx.getD ctx
   let saved ← get
   let mut probeState := saved
@@ -1214,9 +1215,9 @@ def withCastClauses (elabE : Ctx → SExpr → Option Ty → EM R)
     let bound := Choice.boundIn cs
     let lift (c : SExpr) : List SExpr :=
       Choice.liftClause (fun n => choiceValues ctx n || bound.contains n) (choiceField ctx) c (fieldOrder := choiceOrder ctx)
-    let moved (computed : Bool) := Refine.castRestClauses (cs.take k) cast refusal.opens (cs.drop (k + 1)) after
+    let moved (computed : Bool) (replayAll : Bool := false) := Refine.castRestClauses (cs.take k) cast refusal.opens (cs.drop (k + 1)) after
       isGen ctx.types.classes.contains (fun n => (ctx.lookup n).any (!·.mutable)) computed lift
-      (fun f => !ctx.types.varFields.any (·.2 == f))
+      (fun f => !ctx.types.varFields.any (·.2 == f)) replayAll
     let first ← match moved false with
       | .ok r => pure r
       | .error why => throw s!"{err} ({why})"
@@ -1232,7 +1233,7 @@ def withCastClauses (elabE : Ctx → SExpr → Option Ty → EM R)
       let err1 := match moved true with
         | .ok { notAgain := e :: es, .. } => s!"{err1} ({if es.isEmpty then s!"the cast that binds {e} is" else s!"the casts that bind {", ".intercalate (e :: es)} are"} not repeated where the clauses' names are used, as its object may name type arguments a cast before it opens and is not read from that cast's name by fields that are no vars (#250))"
         | _ => err1
-      let .ok again@{ objectsAgain := true, .. } := moved true | throw err1
+      let .ok again@{ objectsAgain := true, .. } := moved true true | throw err1
       set st1
       return some (← tryCatch (rebuild again.clauses again.after) fun _ => throw err1)
 

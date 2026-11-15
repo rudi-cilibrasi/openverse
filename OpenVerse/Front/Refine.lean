@@ -392,7 +392,7 @@ def castRestClauses (pre : List SExpr) (cast : Pos × String × String × SExpr)
     (rest : List SExpr) (after : SExpr) (isGen : SExpr → Bool := fun _ => false)
     (isClass : String → Bool := fun _ => true) (isFixed : String → Bool := fun _ => false)
     (computed : Bool := true) (lift : SExpr → List SExpr := fun c => [c])
-    (fixedField : String → Bool := fun _ => false) :
+    (fixedField : String → Bool := fun _ => false) (replayAll : Bool := false) :
     Except String CastRest := do
   let (p, d, T, x) := cast
   let branch0 := rest.takeWhile (!isGen ·)
@@ -431,7 +431,7 @@ def castRestClauses (pre : List SExpr) (cast : Pos × String × String × SExpr)
     | .gen _ y i src => if uses src then y :: i.toList else []
     | .decl _ n _ _ e => if uses e then [n] else []
     | _ => []
-  let later := later.map fun
+  let later := if replayAll then later else later.map fun
     | .gen q y i src => .gen q y i (again q src)
     | .decl q n t v (.range q' a b) => .decl q n t v (.range q' (wrap a.pos a) (wrap b.pos b))
     | .decl q n t v e => .decl q n t v (again q e)
@@ -459,6 +459,20 @@ def castRestClauses (pre : List SExpr) (cast : Pos × String × String × SExpr)
       else (objs ++ [(e, T', .ident q (obj q), some (obj q))], cs ++ [.decl q (obj q) none false x', castOf q e T' (.ident q (obj q))], tainted ++ [e], paths)
     | .decl _ n _ _ v => (objs, cs ++ [c], if (Choice.namesUsed v).any tainted.contains then tainted ++ [n] else tainted, paths)
     | c => (objs, cs ++ [c], tainted, paths)) (([] : List (String × String × SExpr × Option String)), ([] : List SExpr), if opens then [d] else [], ([] : List String))
+  -- Retrying a failed continuation may need an equality even when it
+  -- names neither the cast binder nor a producer result: another local
+  -- can share the refined type parameters. Restore all eligible proofs
+  -- at the producer, from the same already-selected objects.
+  let later := if !replayAll then later else later.map fun c =>
+    ((d, T, .ident p (obj p), none) :: objs).foldr (fun (name, target, object, _) c =>
+      let wrap (value : SExpr) : SExpr :=
+        .ite value.pos [made (castOf value.pos name target object)] value
+          (some (.app value.pos (.ident value.pos "Err") [] false))
+      match c with
+      | .gen q y index src => .gen q y index (wrap src)
+      | .decl q y t v (.range rp lo hi) => .decl q y t v (.range rp (wrap lo) (wrap hi))
+      | .decl q y t v value => .decl q y t v (wrap value)
+      | value => wrap value) c
   -- (the casts `after` casts again, each when it uses its name or one bound
   -- after it, and no clause past a generator does: this one, of its object
   -- bound once, and those after it)
@@ -468,8 +482,8 @@ def castRestClauses (pre : List SExpr) (cast : Pos × String × String × SExpr)
     | c@(.decl _ n _ _ _) :: cs => if n == e then c :: cs else fromCast e cs
     | _ :: cs => fromCast e cs
   let again := ((d, T, .ident p (obj p), none) :: objs).filter fun (e, _) =>
-    !usedLater.contains e &&
-      (e :: (if e == d then names branch ++ laterNames else names (fromCast e branch))).any usedAfter.contains
+    replayAll || (!usedLater.contains e &&
+      (e :: (if e == d then names branch ++ laterNames else names (fromCast e branch))).any usedAfter.contains)
   let kept : List (String × Bool) := branch.filterMap fun
     | .decl _ n _ v _ =>
       if again.any (·.1 == n) then none
@@ -491,7 +505,7 @@ def castRestClauses (pre : List SExpr) (cast : Pos × String × String × SExpr)
   let q := after.pos
   let after := again.foldr (fun (e, T', y, _) acc =>
     .ite q [made (castOf q e T' y)] acc (some (.app q (.ident q "Err") [] false))) after
-  return { clauses, after, objectsAgain := again.any (fun (e, _, _, o) => o.isSome || paths.contains e),
+  return { clauses, after, objectsAgain := replayAll || again.any (fun (e, _, _, o) => o.isSome || paths.contains e),
            notAgain := paths.filterMap fun e => if e.startsWith "-" then some (e.drop 1).toString else none }
 
 /-- The branches the lifts ask for, as functions: each `if (D := …) then

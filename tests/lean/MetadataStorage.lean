@@ -106,7 +106,13 @@ private def namedCapture (body : String) : String :=
 private def expectedCallCapture (body : String) : String :=
   "pair(a:type,b:type):=class{A:a;B:b}\ndup(t:type):=class(pair(t,t)){}\nEcho(X:t,?Other:t=X where t:type)<computes>:t=Other\nKeep(X:t,N:int where t:type)<computes>:t=X\nbox(t:type):=struct{Value:t}\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type)" ++ body
 
+private def sameBoundCapture (body : String) : String :=
+  "pair(a:type,b:type):=class{A:a;B:b}\ndup(t:type):=class(pair(t,t)){Lo:int=1;Hi:int=2}\nAdd(X:int,Y:int)<computes>:int=X+Y\nCaller(P:pair(a,b),Q:pair(c,d),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type,c:type,d:type)" ++ body
+
 private def cases : List (String × String) := [
+  ("same-bound lower metadata capture", sameBoundCapture "<transacts>:[]tuple(b,d,int)=for(I:=Add(dup[P].Lo,dup[Q].Lo)..2){(P.A,Q.A,I+Dummy())}"),
+  ("same-bound upper metadata capture", sameBoundCapture "<transacts>:[]tuple(b,d,int)=for(I:=2..Add(dup[P].Hi,dup[Q].Hi)){(P.A,Q.A,I+Dummy())}"),
+  ("same-bound first metadata capture", sameBoundCapture "<transacts><decides>:tuple(b,d,int)=first{I:=Add(dup[P].Lo,dup[Q].Lo)..4;(P.A,Q.A,I+Dummy())}"),
   ("expected call map metadata capture", expectedCallCapture "<transacts><decides>:[int]b=\n    map{0=>Echo(P.A,?Other:=Keep(dup[P].B,Dummy()))}"),
   ("expected call result metadata capture", expectedCallCapture "<transacts><decides>:b=\n    Echo(P.A,?Other:=Keep(dup[P].B,Dummy()))"),
   ("expected call binding metadata capture", expectedCallCapture "<transacts><decides>:b=\n    V:b=Echo(P.A,?Other:=Keep(dup[P].B,Dummy()))\n    V"),
@@ -289,6 +295,9 @@ private def cases : List (String × String) := [
   ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
+  ("same-bound lower real overwrite", sameBoundCapture "<transacts>:[]tuple(b,d,int)=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    for(I:=Add(dup[P].Lo,dup[Q].Lo)..2){(P.A,Q.A,I+Stored())}"),
+  ("same-bound upper real overwrite", sameBoundCapture "<transacts>:[]tuple(b,d,int)=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    for(I:=2..Add(dup[P].Hi,dup[Q].Hi)){(P.A,Q.A,I+Stored())}"),
+  ("same-bound first real overwrite", sameBoundCapture "<transacts><decides>:tuple(b,d,int)=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    first{I:=Add(dup[P].Lo,dup[Q].Lo)..4;(P.A,Q.A,I+Stored())}"),
   ("expected call map real overwrite", expectedCallCapture "<transacts><decides>:[int]b=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    map{0=>Echo(P.A,?Other:=Keep(dup[P].B,Stored()))}"),
   ("expected call result real overwrite", expectedCallCapture "<transacts><decides>:b=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    Echo(P.A,?Other:=Keep(dup[P].B,Stored()))"),
   ("expected call binding real overwrite", expectedCallCapture "<transacts><decides>:b=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    V:b=Echo(P.A,?Other:=Keep(dup[P].B,Stored()))\n    V"),

@@ -1038,7 +1038,13 @@ partial def liftOps (isVal : String → Bool) (isField : String → String → B
     for (e, i) in es.zipIdx do
       if i < j then
         let e' ← liftE isVal isField e
-        out := out.push (← if stable isVal e' then pure e' else LM.bind e.pos "t" e')
+        -- Names just introduced by this lift are values too. In
+        -- particular, a cast's field may be mutable; snapshot its read
+        -- before a later operand mutates the object.
+        let bound := (← get).pre.toList.flatMap fun
+          | .decl _ n _ _ _ => [n]
+          | _ => []
+        out := out.push (← if stable (fun n => isVal n || bound.contains n) e' then pure e' else LM.bind e.pos "t" e')
       else if i == j then out := out.push (← liftE isVal isField e)
       else out := out.push e
     return out.toList

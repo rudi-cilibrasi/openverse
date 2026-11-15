@@ -1,0 +1,15 @@
+lower 2 7 left
+values 7 left
+named 2 7 left
+upper 2 7 left
+upper 3 7 left
+upper 4 7 left
+both 2 7 left
+both 3 7 left
+both 4 7 left
+first 3 7 left
+shared 11 shared
+triple 7 left 13
+missing 0 0 0 0
+first missing
+exit=0

@@ -1,0 +1,7 @@
+2 7 left
+LCR 5
+bare 2 7 left
+bare state C 5
+failed 0  1
+outer rollback  1
+exit=0
