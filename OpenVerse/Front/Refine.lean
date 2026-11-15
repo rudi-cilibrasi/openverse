@@ -91,6 +91,9 @@ structure Lift where
   waits : Bool := false
   /-- Source suspension capability, distinct from frame-only lowering. -/
   sourceSuspends : Bool := false
+  /-- The source branch executes inside a rollback context, even when the
+      generated helper's own result cannot fail (#515). -/
+  rollback : Bool := false
   storage : List (String × Storage) := []
   /-- Source repetition context, preserved when the lift becomes a function. -/
   inRepeat : Bool := false

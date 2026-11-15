@@ -3698,8 +3698,9 @@ Main()<suspends>:void =
   context is refused before it runs or is emitted. A failure context is an `if`'s condition, a `for`'s clause, a
   `<decides>` function's body, `option{…}`, `logic{…}`, `not`, the left of
   `or`, a `first{…}` or a `do` expression, with everything that runs
-  inside it: a `block`, a named argument's default, a `defer:`. What it
-  runs counts: the functions it calls, the `block:`s of the classes it
+  inside it: a `block`, a named argument's default, a `defer:`. A refining
+  cast retains that surrounding context, even when its selected branch
+  cannot itself fail. What it runs counts: the functions it calls, the `block:`s of the classes it
   constructs, the initialisers of the constants it uses, every
   implementation a method call may pick, and every function of a function
   value's type that is given as a value (conservatively), any of which may
