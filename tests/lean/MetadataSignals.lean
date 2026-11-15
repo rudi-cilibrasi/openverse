@@ -28,7 +28,32 @@ private def flattenedTask (signal : String) : String :=
   "    Other:=event(int){}\n    T:=spawn{Work(E)}\n    Tasks:=Concatenate(array{array{T}})\n" ++
   s!"    var Stored:{functionTy}=Dummy\n    if(Alias:=Tasks[0]):\n        branch:\n            Alias.Await()\n            set Stored=Dummy\n        set Stored=F\n        {signal}.Signal(0)\n        Stored()\n    else:\n        0"
 
+private def comparisonWrite (binding : String) (action : String := "set Alias.E=E")
+    (helpers : String := "") : String :=
+  "holder:=class<unique>{var E:event(int)}\n" ++ helpers ++ header ++ setup ++
+  "    Other:=event(int){}\n    H:=holder{E:=Other}\n    K:=holder{E:=E}\n    if(" ++
+  binding ++ ")then " ++ action ++ "\n    H.E.Signal(0)\n    Stored()"
+
+private def comparedSignal (op : String) (swap : Bool) : String :=
+  ("holder:=class<unique>{E:event(int)}\nSend(A:holder,B:holder,N:int):void=\n    if(N>0)then Send(" ++
+    (if swap then "B,A" else "A,B") ++ ",N-1)else:\n        if(Alias:=A" ++ op ++
+    (if op == "=" then "A" else "B") ++ ")then Alias.E.Signal(0)\n") ++
+  header ++ setup ++ "    Other:=event(int){}\n    H:=holder{E:=Other}\n    K:=holder{E:=E}\n    Send(H,K,1)\n    Stored()"
+
 private def refusals : List (String × String) := [
+  ("Field writes through an equality result retain their receiver",
+    comparisonWrite "Alias:=H=H"),
+  ("Field writes through an inequality result retain their receiver",
+    comparisonWrite "Alias:=H<>K"),
+  ("Equality returns the array containing the field-write receiver",
+    comparisonWrite "Aliases:=array{H}=array{H},Alias:=Aliases[0]"),
+  ("Equality returns the tuple containing the field-write receiver",
+    comparisonWrite "Pair:=(H,0)=(H,0),Alias:=Pair(0)"),
+  ("A generic equality helper preserves the field-write receiver",
+    comparisonWrite "Alias:=Same[H]" (helpers :=
+      "Same(X:t where t:subtype(comparable))<transacts><decides>:t=X=X\n")),
+  ("Recursive equality signals retain argument permutations", comparedSignal "=" true),
+  ("Recursive inequality signals retain argument permutations", comparedSignal "<>" true),
   ("Signal follows a flattened event array",
     flattenedSignal "Concatenate(array{array{E}})"),
   ("Signal follows two flattened event layers",
@@ -97,6 +122,14 @@ private def refusals : List (String × String) := [
     "    Other.Signal(0)\n    Stored()")]
 
 private def controls : List (String × String) := [
+  ("An equality result preserves an unrelated event field",
+    comparisonWrite "Alias:=H=H" "Alias.E.Signal(0)"),
+  ("An inequality returns only its left receiver",
+    comparisonWrite "Alias:=H<>K" "set Alias.E=Other"),
+  ("A comparison result mutates only its own fresh object",
+    comparisonWrite "Alias:=K=K"),
+  ("Rollback restores a field written through a comparison result",
+    comparisonWrite "Alias:=H=H;set Alias.E=E;false?" "{}"),
   ("Flattening preserves a fresh unrelated event",
     flattenedSignal "Concatenate(array{array{Other}})"),
   ("Two flattened layers preserve a fresh unrelated event",
@@ -175,6 +208,20 @@ private def compileCase (source : String) (dummy : Bool) : Except String Compile
   elabProgram tops
 
 def main : IO Unit := do
+  -- Inspect the dependencies on a typed program independently of the
+  -- scheduler's conservative writable-recursion heap summary.
+  for op in ["=", "<>"] do
+    for swap in [false, true] do
+      let .ok c := compileCase (comparedSignal op swap) false
+        | throw (IO.userError "comparison dependency control failed to compile")
+      unless c.prog.check && c.prog.checkControl && c.prog.checkTypes c.sigs c.slotTys do
+        throw (IO.userError "comparison dependency control failed Core checks")
+      let fns := c.prog.fns.toArray
+      let some index := fns.findIdx? (·.name == "Send")
+        | throw (IO.userError "comparison dependency control lost Send")
+      let expected := if swap then [0, 1] else [0]
+      unless (MetadataReferences.signalArguments fns)[index]! == expected do
+        throw (IO.userError s!"comparison {op}, swap={swap}: wrong Signal dependencies")
   let mut failures := 0
   for (label, source) in refusals ++ controls do
     for dummy in [false, true] do
