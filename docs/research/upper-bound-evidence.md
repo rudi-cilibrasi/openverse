@@ -192,15 +192,17 @@ callers rather than as independent source entries with stale capture arguments.
 Provisional borrowed summaries defer executable checks; the inlined graph or a
 live noninlined call performs them. Cleanup scopes retain the same aliases.
 Readonly borrowers without escaping work retain the ordinary transfer when
-their capture roles agree with the current owner. Actual borrowed writes and
-stale metadata captures select the control graph. Lifted branches and surviving
+their capture roles agree with the current owner. Borrowed writes select the
+control graph when a shared cell or result can carry metadata; unrelated type
+witnesses do not force ordinary data paths into schedule exploration. Stale
+metadata captures also select the graph. Lifted branches and surviving
 rush arms keep their source owner's task scope after a refining or default
 helper returns; active structured groups retain their helper's lexical scope.
 The owner cancels the background work, after its own cleanup. This distinguishes
 an owner overwrite visible to a callback from a saved immutable copy.
 `metadata_borrowed_signal.verse` retains ordinary Lean/C traces for a lifted
-reader after a real overwrite, a recursive producer's write, and two separate
-owner calls.
+reader after a real overwrite, a recursive producer's write, two separate
+owner calls, a surviving lifted writer, and owner-before-branch cleanup.
 
 Return-summary solving records the summaries each context reads. A context
 without cleanup is reused while those dependencies stay unchanged; the final
