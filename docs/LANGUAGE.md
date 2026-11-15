@@ -1349,15 +1349,18 @@ circle := class(shape, labelled):
   fields differ, and an alias equals its original.
 - **Comparability.** Other classes and interfaces are not comparable (Book §4.9), nor
   is a struct or container that holds one.
+- **Refined conditional choices.** A `for` may use the name bound by a refining
+  or opening class cast in an `if` with choices in its branches, including
+  after intervening generators. Each condition runs once for its element;
+  selected values keep their normal order, mutable effects and cleanup.
 - **Not yet supported** (each rejected with a message):
   - a cast that refines type arguments, opens them, or goes through a
     view (#243, #250, #351) outside any failure context (a case's
     scrutinee and arms need an enclosing one; its computed patterns are
-    failure conditions);
-  - such a cast embedded in a range bound rather than named as a clause
-    before the range (#243);
-  - in a `for`'s clauses, a clause past a generator after such a cast that
-    uses its name in a branch of an `if` with a choice in its branches (#243);
+    failure conditions), or inside an expression where choice lifting
+    does not reach it, including an inline range bound (#243). In a
+    nested failure context of its own, such as an `option{…}` inside the
+    clause, it is that context's;
   - after a cast that opens type arguments, a value of its failure
     context, or a name it binds that a branch or body uses, of a type that
     names them (#250): no type outside it can name them (it would be an
