@@ -602,7 +602,10 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
       let mayYield := if name == "$Sleep" then
           duration.map (fun n => decide (n > 0.0)) |>.getD true
         else mayYield
-      let mustYield := name == "$Sleep" && duration.any (fun n => decide (n > 0.0))
+      -- An ordinary event has no buffered value: each Await registers a
+      -- new listener before waiting. StickyAwait may still return at once.
+      let mustYield := name == "$EvAwait" ||
+        (name == "$Sleep" && duration.any (fun n => decide (n > 0.0)))
       let slots := match role with
         | some role => putRole out.slots dst role
         | none => out.slots
