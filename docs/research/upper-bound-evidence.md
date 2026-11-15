@@ -162,6 +162,13 @@ A return in a surviving rush arm stops that arm after its group has ended;
 returns from active groups still propagate to the owning function.
 Recursive signaling helpers use a finite argument-dependency summary. Failed
 conditions restore listener registrations, task states and caller storage.
+Recursive calls that exclude heap writes preserve the identities already
+stored in object fields. Their returned references remain unknown, and
+writable recursive calls still widen fields. This keeps a pure recursive
+calculation from turning a known unrelated event into a possible wakeup;
+it does not infer a precise recursive return. The paired API controls and
+`metadata_readonly_recursive_alias.verse` cover readonly calls, writable
+calls and returned event aliases.
 Task completion can wake a task awaiter during an event callback; cancellation
 does not deliver a successful task result.
 
@@ -174,7 +181,7 @@ and frame aliases remain in the #572 audit, including resource use for recursive
 choice producers. A private recursive-producer reader still reaches the 4 GB
 cap on the #640 baseline and a bounded timeout with the frame-alias changes;
 its real control passes. This remains an unresolved analysis case.
-`MetadataSignals.lean` retains 19 real/dummy refusal pairs and 21 positive pairs
+`MetadataSignals.lean` retains 21 real/dummy refusal pairs and 22 positive pairs
 for direct and indirect signals, recursive helpers, rollback, task completion,
 cleanup, helper returns and unrelated events. `metadata_signal_timing.verse`
 executes the corresponding ordinary data paths in both runtimes and profiles.
