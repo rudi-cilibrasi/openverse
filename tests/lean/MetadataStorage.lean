@@ -109,7 +109,13 @@ private def expectedCallCapture (body : String) : String :=
 private def sameBoundCapture (body : String) : String :=
   "pair(a:type,b:type):=class{A:a;B:b}\ndup(t:type):=class(pair(t,t)){Lo:int=1;Hi:int=2}\nAdd(X:int,Y:int)<computes>:int=X+Y\nCaller(P:pair(a,b),Q:pair(c,d),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type,c:type,d:type)" ++ body
 
+private def mapContextCapture (body : String) : String :=
+  "pair(a:type,b:type):=class{A:a;B:b}\ndup(t:type):=class(pair(t,t)){}\nEcho(X:t,?Other:t=X where t:type)<computes>:t=Other\nEmpty(?Count:int=0,?Default:?t=false where t:type)<computes>:?t=Default\nKeep(X:t,N:int where t:type)<computes>:t=X\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type)" ++ body
+
 private def cases : List (String × String) := [
+  ("contextual map key metadata capture", mapContextCapture "<transacts><decides>:[?int]b=map{Empty(?Count:=Dummy())=>Echo(P.A,?Other:=dup[P].B)}"),
+  ("contextual map value metadata capture", mapContextCapture "<transacts><decides>:[?int]b=map{Empty()=>Echo(P.A,?Other:=Keep(dup[P].B,Dummy()))}"),
+  ("contextual map nested metadata capture", mapContextCapture "<transacts><decides>:[?int][?string]b=map{Empty()=>map{Empty()=>Echo(P.A,?Other:=Keep(dup[P].B,Dummy()))}}"),
   ("same-bound lower metadata capture", sameBoundCapture "<transacts>:[]tuple(b,d,int)=for(I:=Add(dup[P].Lo,dup[Q].Lo)..2){(P.A,Q.A,I+Dummy())}"),
   ("same-bound upper metadata capture", sameBoundCapture "<transacts>:[]tuple(b,d,int)=for(I:=2..Add(dup[P].Hi,dup[Q].Hi)){(P.A,Q.A,I+Dummy())}"),
   ("same-bound first metadata capture", sameBoundCapture "<transacts><decides>:tuple(b,d,int)=first{I:=Add(dup[P].Lo,dup[Q].Lo)..4;(P.A,Q.A,I+Dummy())}"),
@@ -295,6 +301,9 @@ private def cases : List (String × String) := [
   ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
+  ("contextual map key real overwrite", mapContextCapture "<transacts><decides>:[?int]b=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    map{Empty(?Count:=Stored())=>Echo(P.A,?Other:=dup[P].B)}"),
+  ("contextual map value real overwrite", mapContextCapture "<transacts><decides>:[?int]b=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    map{Empty()=>Echo(P.A,?Other:=Keep(dup[P].B,Stored()))}"),
+  ("contextual map nested real overwrite", mapContextCapture "<transacts><decides>:[?int][?string]b=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    map{Empty()=>map{Empty()=>Echo(P.A,?Other:=Keep(dup[P].B,Stored()))}}"),
   ("same-bound lower real overwrite", sameBoundCapture "<transacts>:[]tuple(b,d,int)=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    for(I:=Add(dup[P].Lo,dup[Q].Lo)..2){(P.A,Q.A,I+Stored())}"),
   ("same-bound upper real overwrite", sameBoundCapture "<transacts>:[]tuple(b,d,int)=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    for(I:=2..Add(dup[P].Hi,dup[Q].Hi)){(P.A,Q.A,I+Stored())}"),
   ("same-bound first real overwrite", sameBoundCapture "<transacts><decides>:tuple(b,d,int)=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    first{I:=Add(dup[P].Lo,dup[Q].Lo)..4;(P.A,Q.A,I+Stored())}"),
