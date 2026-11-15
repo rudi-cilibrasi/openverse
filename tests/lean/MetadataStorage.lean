@@ -97,6 +97,8 @@ private def cases : List (String × String) := [
   ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
+  ("borrowed frame reader sees a real overwrite before Signal", callables
+    "Dup(N:int)<computes>:int=N|N\nCaller(E:event(int),F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    branch:\n        Values:=for(A:=(Dup(1)|Dup(2)),B:=(Dup(1)|Dup(2))):\n            E.Await()\n            Stored()\n    set Stored=F\n    E.Signal(0)\n    0"),
   ("opaque borrowed mutable frame", callables
     "Dup(N:int)<computes>:int=N|N\nCaller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:[]type{_()<computes>:int}=\n    var Stored:type{_()<computes>:int}=Dummy\n    for(A:=(Dup(1)|Dup(2)),B:=(Dup(1)|Dup(2))):block{Sleep(0.01);Stored}"),
   ("fresh shared local on each loop iteration", callables "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var N:int=0\n    loop:\n        var Stored:type{_()<computes>:int}=Dummy\n        set Stored=F\n        Sleep(0.01)\n        Value:=Stored()\n        set N+=1\n        if(N>=2)then break\n    N"),
