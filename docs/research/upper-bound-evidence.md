@@ -139,8 +139,10 @@ the recursive return summaries, so forwarding an early background read through
 a helper cannot erase its role. The final replay follows only live call
 contexts. Functions without relevant scheduling sites keep the ordinary
 dataflow path. Cleanup is relevant when its possible roles reach an executable
-boundary or it writes shared metadata storage. Forwarding hidden witnesses
-alone does not require exploring schedules; scheduler model seed 18 retains
+boundary, including effects in reachable helper contexts and their cleanup,
+or it writes shared metadata storage. The relevance probe keeps those call
+contexts private until the actual schedule makes them live. Forwarding hidden
+witnesses alone does not require exploring schedules; scheduler model seed 18 retains
 that distinction under the gate's unchanged 4 GB memory limit. No Core opcode,
 runtime tag or scheduling behavior changes.
 

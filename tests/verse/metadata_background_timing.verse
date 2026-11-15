@@ -1,5 +1,17 @@
 One()<computes>:int=1
 Two()<computes>:int=2
+reader:=class<computes>{Read()<computes>:int=7}
+Use(V:reader)<computes>:int=V.Read()
+
+HelperCleanup(R:reader)<suspends>:void=
+    Value:=race:
+        block:
+            defer:
+                Print("helper cleanup {Use(R)}")
+            loop{Sleep(1.0)}
+        block:
+            Sleep(0.1)
+            0
 
 BranchLate(F:type{_()<computes>:int},G:type{_()<computes>:int})<suspends>:int=
     var Stored:type{_()<computes>:int}=G
@@ -121,6 +133,7 @@ Main()<suspends>:void=
     Print("rush canceled {RushCanceled(One,Two)}")
     Cleanup(Two)
     AliasCleanup(One,Two)
+    HelperCleanup(reader{})
     T:=spawn{NestedCleanup(One,Two)}
     Sleep(0.1)
     T.Cancel()

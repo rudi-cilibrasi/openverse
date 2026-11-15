@@ -5,6 +5,7 @@ branch canceled 1
 rush canceled 1
 cleanup 2
 alias 2
+helper cleanup 7
 nested cleanup 1
 parent cleanup 2
 branch cleanup

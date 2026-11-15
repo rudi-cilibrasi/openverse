@@ -677,6 +677,40 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
   return { slots := finalSlots.getD slots, value := result, yielded }
 end
 
+/-- Check executable effects throughout the cleanup's call contexts without
+    publishing those contexts as live. The caller's schedule determines
+    whether cleanup and its calls can actually run. -/
+private def probeCleanup (fns : Array Fn) (infos : Array Info)
+    (fields : Array (List Nat)) (fn : Fn) (info : Info) (slots : Slots)
+    (cleanup : Expr) (state : State) : Except String State := do
+  let action : M Unit := do
+    discard <| expr fns infos fields fn info slots cleanup
+    let mut index := 0
+    while index < (← get).live.size do
+      let (i, args) := (← get).live[index]!
+      index := index + 1
+      let some callee := fns[i]? | throw "internal: cleanup call has no body"
+      let ci := infos[i]?.getD {}
+      let values := (List.range callee.nslots).map (fun j =>
+        ci.inputs.contains j || args[j]?.getD false) |>.toArray
+      let entry : Slots := {
+        values, sharedMetadata := values
+        initialized := (List.range callee.nslots).map
+          (fun j => j < callee.arity : Nat → Bool) |>.toArray
+        written := Array.replicate callee.nslots false }
+      modify fun st => { st with seen := values }
+      discard <| expr fns infos fields callee ci entry (ci.body.getD callee.body)
+      let observed := (← get).seen
+      let possible := { entry with
+        values := observed, initialized := Array.replicate callee.nslots true
+        sharedMetadata := Array.replicate callee.nslots false }
+      for d in ((← get).sites[i]?.getD (false, [])).2 do
+        discard <| expr fns infos fields callee ci possible d
+  let (_, result) ← action.run { state with
+    discovery := false, validateUses := true, validateShared := true
+    live := #[], liveSeen := {} }
+  return result
+
 /-- Solve recursive call contexts and loop back edges to a fixed point.
     Hidden witnesses do not taint an unrelated result: return roles come
     from the body, rather than the union of physical call arguments. -/
@@ -719,12 +753,9 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
         sharedMetadata := Array.replicate fn.nslots false }
       let mut metadataCleanup := false
       for d in cleanups do
-        let probe := { (← get) with
-          discovery := true
-          validateUses := true, validateShared := true }
-        match (expr fns infos fields fn info cleanupSlots d).run probe with
+        match probeCleanup fns infos fields fn info cleanupSlots d (← get) with
         | .error _ => metadataCleanup := true
-        | .ok (_, discovered) =>
+        | .ok discovered =>
           modify fun st => { st with
             summaries := discovered.summaries
             indices := discovered.indices, changed := discovered.changed }
