@@ -18,7 +18,29 @@ private def loopTasks (signal : String) : String :=
   "Work(E:event(int))<suspends>:int=E.Await()\n" ++ header ++
   s!"    A:=event(int)\{}\n    B:=event(int)\{}\n    Other:=event(int)\{}\n    var Selected:event(int)=A\n    Tasks:=for(N:=0..1):\n        T:=spawn\{Work(Selected)}\n        set Selected=B\n        T\n    var Stored:{functionTy}=Dummy\n    if(T:=Tasks[0]):\n        branch:\n            T.Await()\n            set Stored=Dummy\n        set Stored=F\n        {signal}.Signal(0)\n        Stored()\n    else:\n        0"
 
+private def flattenedSignal (arrayExpr : String) (prelude : String := "") : String :=
+  prelude ++ header ++ setup ++
+  "    Other:=event(int){}\n    Flat:[]event(int)=" ++ arrayExpr ++
+  "\n    if(Alias:=Flat[0])then Alias.Signal(0)\n    Stored()"
+
+private def flattenedTask (signal : String) : String :=
+  "Work(E:event(int))<suspends>:int=E.Await()\n" ++ header ++
+  "    Other:=event(int){}\n    T:=spawn{Work(E)}\n    Tasks:=Concatenate(array{array{T}})\n" ++
+  s!"    var Stored:{functionTy}=Dummy\n    if(Alias:=Tasks[0]):\n        branch:\n            Alias.Await()\n            set Stored=Dummy\n        set Stored=F\n        {signal}.Signal(0)\n        Stored()\n    else:\n        0"
+
 private def refusals : List (String × String) := [
+  ("Signal follows a flattened event array",
+    flattenedSignal "Concatenate(array{array{E}})"),
+  ("Signal follows two flattened event layers",
+    flattenedSignal "Concatenate(Concatenate(array{array{array{E}}}))"),
+  ("Signal follows a generic flattening helper",
+    flattenedSignal "FlatEvents(array{array{E}})"
+      "FlatEvents(X:[][]t where t:type):[]t=Concatenate(X)\n"),
+  ("Event await follows a flattened event array", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    branch:\n        Flat:=Concatenate(array\{array\{E}})\n        if(Alias:=Flat[0]):\n            Alias.Await()\n            set Stored=Dummy\n    set Stored=F\n    E.Signal(0)\n    Stored()"),
+  ("Task await follows a flattened task array", flattenedTask "E"),
+  ("Ordinary concatenation retains event elements",
+    flattenedSignal "Concatenate(array{E},array{Other})"),
   ("Writable recursive helpers can change a stored event alias",
     "holder:=class{var E:event(int)}\nChange(H:holder,E:event(int),N:int)<transacts>:int=if(N>0)then Change(H,E,N-1)else block{set H.E=E;0}\n" ++
     header ++ setup ++
@@ -75,6 +97,14 @@ private def refusals : List (String × String) := [
     "    Other.Signal(0)\n    Stored()")]
 
 private def controls : List (String × String) := [
+  ("Flattening preserves a fresh unrelated event",
+    flattenedSignal "Concatenate(array{array{Other}})"),
+  ("Two flattened layers preserve a fresh unrelated event",
+    flattenedSignal "Concatenate(Concatenate(array{array{array{Other}}}))"),
+  ("A generic flattening helper preserves an unrelated event",
+    flattenedSignal "FlatEvents(array{array{Other}})"
+      "FlatEvents(X:[][]t where t:type):[]t=Concatenate(X)\n"),
+  ("An unrelated Signal cannot finish a flattened task", flattenedTask "Other"),
   ("Readonly recursive helpers preserve unrelated stored events",
     "holder:=class{E:event(int)}\nCount(N:int)<computes>:int=if(N>0)then Count(N-1)else 0\n" ++
     header ++ setup ++
