@@ -97,8 +97,12 @@ or proof, plus recursive opaque initializers and rolled-back real overwrites.
 both runtimes. These are
 compiler-API contracts; source programs reach the same analysis.
 
-For `sync`, `race` and `rush`, the provenance analysis evaluates every arm
-independently, including siblings of an arm with no normal return. Arms exchange
+For `sync`, `race` and `rush`, the provenance analysis follows source startup
+order to determine which arms can start. An arm that neither returns nor
+yields holds startup; an immediate race/rush winner also stops it. Unstarted
+arms contribute no return roles or shared-cell effects. A waiting arm with
+no normal return still lets later arms start. Started arms are evaluated
+independently and exchange
 possible roles and storage modes for cells already in scope until those roles
 stabilize. Only writes performed by an arm participate in this exchange; an
 unchanged or rolled-back cell cannot feed a sibling's role back as a new write.
@@ -137,7 +141,7 @@ holds its owner. A race needs waiting paths in every
 arm to yield, while a sync can wait for one arm after starting the others.
 A task that neither returns nor yields holds its caller. Argument evaluation
 and its exits still belong to the caller. `MetadataTasks.lean` checks these
-boundaries with 14 real/dummy refusal pairs and 16 positive pairs, including
+boundaries with 17 real/dummy refusal pairs and 20 positive pairs, including
 pairs for generic returns, helpers, aggregates, immediate results and discarded
 tasks, plus independent real returns, argument effects and nonwaiting paths.
 

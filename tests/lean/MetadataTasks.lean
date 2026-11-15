@@ -74,6 +74,22 @@ private def controls : List (String × String) := [
   ("spawn arguments overwrite before caller continuation", "Ignore(V:v where v:type)<suspends>:void=block{Sleep(0.1);()}\n" ++ header ++
     s!"    var Stored:{functionTy}=Dummy\n    spawn\{Ignore(block\{set Stored=F;Dummy})}\n    Stored()")]
 
+private def startupRefusals : List (String × String) :=
+  ["sync", "race", "rush"].map fun kind =>
+    (s!"{kind}: waiting arm retains a later metadata return",
+      s!"Keep(V:v,R:v where v:type)<suspends>:v=\n    Winner:={kind}:\n        block:\n            Sleep(1.0)\n            R\n        block:\n            Sleep(0.1)\n            return V\n    R\n" ++ header ++
+      "    T:=spawn{Keep(Dummy,F)}\n    T.Await()()")
+
+private def startupControls : List (String × String) :=
+  (["race", "rush"].map fun kind =>
+    (s!"{kind}: immediate winner skips metadata return",
+      s!"Immediate(R:v where v:type)<suspends>:v=R\nKeep(V:v,R:v where v:type)<suspends>:v=\n    Winner:={kind}:\n        Immediate(R)\n        block:\n            Sleep(0.1)\n            return V\n    Winner\n" ++ header ++
+      "    T:=spawn{Keep(Dummy,F)}\n    T.Await()()")) ++
+  (["sync", "race"].map fun kind =>
+    (s!"{kind}: nonwaiting arm blocks later metadata return",
+      s!"NoWait()<suspends>:void=\{}\nKeep(V:v,R:v where v:type)<suspends>:v=\n    Winner:void={kind}:\n        block:\n            loop\{NoWait()}\n        block:\n            Sleep(0.1)\n            return V\n    R\n" ++ header ++
+      "    T:=spawn{Keep(Dummy,F)}\n    Dummy()"))
+
 private def compileCase (source : String) (dummy : Bool) : Except String Compiled := do
   let implementations :=
     s!"One()<computes>:int=1\nTwo()<computes>:int=2\nPick(C:logic)<computes>:{functionTy}=if(C?)then One else Two\n"
@@ -85,6 +101,8 @@ private def compileCase (source : String) (dummy : Bool) : Except String Compile
   elabProgram tops
 
 def main : IO Unit := do
+  let refusals := refusals ++ startupRefusals
+  let controls := controls ++ startupControls
   let mut failures := 0
   for (label, source) in refusals ++ controls do
     for dummy in [false, true] do
