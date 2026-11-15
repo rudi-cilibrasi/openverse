@@ -10,6 +10,7 @@ lake env lean --run tests/lean/SubtypeEvidenceInputs.lean
 lake env lean --run tests/lean/MetadataStorage.lean
 lake env lean --run tests/lean/MetadataConcurrency.lean
 lake env lean --run tests/lean/MetadataGetters.lean
+lake env lean --run tests/lean/MetadataTasks.lean
 lake env lean --run tests/lean/ChoiceBoundMethods.lean
 lake env lean --run tests/lean/BoundMethodValues.lean
 lake env lean --run tests/lean/CallableBounds.lean

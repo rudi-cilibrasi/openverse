@@ -65,16 +65,20 @@ private structure Flow where
   value : Option Bool := some false
   returned : Option Bool := none
   broken : Option Slots := none
+  /-- May yield before normal completion or a nonreturning path. -/
+  yielded : Bool := false
 
 private def withExits (a b : Flow) : Flow := { b with
   returned := joinRole a.returned b.returned
-  broken := joinOpt a.broken b.broken }
+  broken := joinOpt a.broken b.broken
+  yielded := a.yielded || b.yielded }
 
 private abbrev Key := Nat × List Bool
 
 private structure Summary where
   key : Key
   result : Option Bool := none
+  yielded : Bool := false
   deriving Inhabited
 
 private structure State where
@@ -97,16 +101,17 @@ private def refuse (fn : Fn) (info : Info) (what : String) (details : String := 
     s!"\nmetadata context: {reprStr st.active}\ninputs: {info.inputs}; seeds: {info.seeds}\n{details}\n{reprStr (info.body.getD fn.body)}" else ""
   throw s!"{info.pos.show}: dummy type value cannot {what} (in {fn.name}){context}"
 
-private def request (key : Key) : M (Option Bool) := do
+private def request (key : Key) : M (Option Bool × Bool) := do
   let st ← get
   if st.validateShared && !st.liveSeen.contains key then
     set { st with live := st.live.push key, liveSeen := st.liveSeen.insert key () }
   let st ← get
-  if let some i := st.indices[key]? then return st.summaries[i]!.result
+  if let some i := st.indices[key]? then
+    return (st.summaries[i]!.result, st.summaries[i]!.yielded)
   set { st with
     indices := st.indices.insert key st.summaries.size
     summaries := st.summaries.push { key }, changed := true }
-  return none
+  return (none, false)
 
 mutual
 private partial def expr (fns : Array Fn) (infos : Array Info)
@@ -140,17 +145,25 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
     return withExits a (← expr fns infos fields fn info a.slots b)
   | .call g es => do
     let name := (fns[g]?.map (·.name)).getD ""
+    if name == "$spawnMark" then
+      if let [.prim .mkArr [.seq target _, .seq (.local _) _]] := es then
+        let (result, out) ← spawned fns infos fields fn info slots target
+        -- Lowering stores the call's result in task.Result. It is an
+        -- ordinary mutable field, subject to the same rule as heap.set.
+        if result.getD false then
+          refuse fn info "enter a spawned task's result field containing executable data"
+        return out
     if ["$syncMark", "$raceMark", "$rushMark"].contains name then
       if let [.prim .mkArr arms] := es then
         return ← concurrent fns infos fields fn info slots (name == "$syncMark") arms
-    let (args, out) ← arguments fns infos fields fn info slots es
-    if out.value.isNone then return out
-    let gi := infos[g]?.getD {}
-    let roles := args.zipIdx.map fun (role, i) => role || gi.inputs.contains i
-    if gi.required.any (fun i => roles[i]?.getD false) then
-      refuse fn info s!"provide executable evidence or a receiver to {(fns[g]?.map (·.name)).getD "a call"}"
-    let result ← request (g, roles)
-    return { out with value := result }
+    let (out, result, yielded) ← invoke fns infos fields fn info slots g es
+    return { out with
+      value := if name == "$branchMark" then
+          -- The child releases its owner when it completes or first waits.
+          if out.value.isSome || out.yielded then some false else none
+        else if out.value.isSome then result else none
+      -- A branch starts its body to its first wait without yielding its owner.
+      yielded := if name == "$branchMark" then false else out.yielded || yielded }
   | .prim op es => do
     let (args, out) ← arguments fns infos fields fn info slots es
     if out.value.isNone then return out
@@ -191,7 +204,8 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
       | _, _ => e.slots
     return withExits c {
       slots := merged, value := joinRole t.value e.value
-      returned := joinRole t.returned e.returned, broken := joinOpt t.broken e.broken }
+      returned := joinRole t.returned e.returned, broken := joinOpt t.broken e.broken
+      yielded := t.yielded || e.yielded }
   | .forE i source filt body => do
     let source ← expr fns infos fields fn info slots source
     let some item := source.value | return source
@@ -214,15 +228,17 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
     let mut head := slots
     let mut returned := none
     let mut broken := none
+    let mut yielded := false
     let mut growing := true
     while growing do
       let out ← expr fns infos fields fn info head body
       returned := joinRole returned out.returned
       broken := joinOpt broken out.broken
+      yielded := yielded || out.yielded
       let next := if out.value.isSome then freshLocals info.shared slots (joinSlots head out.slots) else head
       growing := next != head
       head := next
-    return { slots := broken.getD head, value := broken.map (fun _ => false), returned }
+    return { slots := broken.getD head, value := broken.map (fun _ => false), returned, yielded }
   | .brk => pure { slots, value := none, broken := some slots }
   | .ret e => do
     let out ← expr fns infos fields fn info slots e
@@ -230,6 +246,60 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
   | .print e => do
     let out ← expr fns infos fields fn info slots e
     return { out with value := out.value.map (fun _ => false) }
+
+/-- A spawn evaluates the selected call's arguments now. Its result belongs
+    to the task; returning or yielding lets its caller continue. A task that
+    does neither holds the caller. Dispatch and argument exits run normally. -/
+private partial def spawned (fns : Array Fn) (infos : Array Info)
+    (fields : Array (List Nat)) (fn : Fn) (info : Info) (slots : Slots) :
+    Expr → M (Option Bool × Flow)
+  | .call g es => do
+    let (out, result, yielded) ← invoke fns infos fields fn info slots g es
+    return (result, { out with value :=
+      if out.value.isSome && (result.isSome || yielded) then some false else none })
+  | .seq a b => do
+    let a ← expr fns infos fields fn info slots a
+    if a.value.isNone then return (none, a)
+    let (result, b) ← spawned fns infos fields fn info a.slots b
+    return (result, withExits a b)
+  | .ite c t e => do
+    let c ← expr fns infos fields fn info slots c
+    let (tr, t) ← if c.value.isSome then spawned fns infos fields fn info c.slots t
+      else pure (none, { slots := c.slots, value := none })
+    let (er, e) ← spawned fns infos fields fn info slots e
+    let merged := match t.value, e.value with
+      | some _, some _ => joinSlots t.slots e.slots
+      | some _, none => t.slots
+      | _, _ => e.slots
+    return (joinRole tr er, withExits c {
+      slots := merged, value := joinRole t.value e.value
+      returned := joinRole t.returned e.returned, broken := joinOpt t.broken e.broken
+      yielded := t.yielded || e.yielded })
+  | .assign i e => do
+    let (result, out) ← spawned fns infos fields fn info slots e
+    return (result.map (· || info.seeds.contains i), out)
+  | e => do
+    let out ← expr fns infos fields fn info slots e
+    return (out.value, { out with value := out.value.map (fun _ => false) })
+
+private partial def invoke (fns : Array Fn) (infos : Array Info)
+    (fields : Array (List Nat)) (fn : Fn) (info : Info) (slots : Slots)
+    (g : Nat) (es : List Expr) : M (Flow × Option Bool × Bool) := do
+  let (args, out) ← arguments fns infos fields fn info slots es
+  if out.value.isNone then return (out, none, false)
+  let gi := infos[g]?.getD {}
+  let roles := args.zipIdx.map fun (role, i) => role || gi.inputs.contains i
+  if gi.required.any (fun i => roles[i]?.getD false) then
+    refuse fn info s!"provide executable evidence or a receiver to {(fns[g]?.map (·.name)).getD "a call"}"
+  let (result, yielded) ← request (g, roles)
+  let name := (fns[g]?.map (·.name)).getD ""
+  let yielded : Bool := if name == "$Sleep" then
+    match es with
+    | [.lit (.float bits)] => decide (VFloat.ofBits bits > 0.0)
+    | [.prim .fneg [.lit (.float bits)]] => decide (-(VFloat.ofBits bits) > 0.0)
+    | _ => true
+    else name == "$WaitDone" || yielded
+  return (out, result, yielded)
 
 private partial def concurrent (fns : Array Fn) (infos : Array Info)
     (fields : Array (List Nat)) (fn : Fn) (info : Info) (slots : Slots)
@@ -273,7 +343,8 @@ private partial def concurrent (fns : Array Fn) (infos : Array Info)
       slots := joinSlots old.slots out.slots
       value := joinRole old.value out.value
       returned := joinRole old.returned out.returned
-      broken := joinOpt old.broken out.broken }) raw
+      broken := joinOpt old.broken out.broken
+      yielded := old.yielded || out.yielded }) raw
     growing := next.map (·.slots) != outs.map (·.slots)
     outs := next
   modify fun st => { st with validateShared := validate }
@@ -295,7 +366,10 @@ private partial def concurrent (fns : Array Fn) (infos : Array Info)
       if shared.contains i then outs.all (fun out => out.slots.values[i]?.getD false) else role }
     else merged
   let normal := if sync then outs.all (·.value.isSome) else outs.any (·.value.isSome)
-  return { slots := finalSlots, value := if normal then some false else none, returned, broken }
+  let yielded := if sync then
+      outs.all (fun out => out.value.isSome || out.yielded) && outs.any (·.yielded)
+    else outs.all (·.yielded)
+  return { slots := finalSlots, value := if normal then some false else none, returned, broken, yielded }
 
 private partial def arguments (fns : Array Fn) (infos : Array Info)
     (fields : Array (List Nat)) (fn : Fn) (info : Info) (slots : Slots)
@@ -342,8 +416,9 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
         let out ← runContext summary.key
         let returned := (joinRole out.value out.returned).map (· || info.metadataResult)
         let result := joinRole summary.result returned
-        if result != summary.result then
-          modify fun st => { st with summaries := st.summaries.modify index (fun s => { s with result }), changed := true }
+        let yielded := summary.yielded || out.yielded
+        if result != summary.result || yielded != summary.yielded then
+          modify fun st => { st with summaries := st.summaries.modify index (fun s => { s with result, yielded }), changed := true }
       growing := (← get).changed
     -- A summary may grow from a real return to a metadata return. Follow
     -- calls again from the roots using the stable summaries: provisional

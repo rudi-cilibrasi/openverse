@@ -121,6 +121,26 @@ witness/capture/frame storage roles. A `branch`, or a surviving `rush` loser,
 can still write metadata after the caller subsequently overwrites the cell
 with real data; sibling-arm convergence alone does not model that overlap.
 
+A spawned call has a separate result boundary: lowering writes its return
+value to the task's ordinary mutable `Result` field. The provenance check
+inspects that return before the marker discards it, applying the ordinary
+shared-field rule even if the task is never awaited. Passing metadata into a
+task that returns independent real data remains allowed, as does opaque
+forwarding within the task. A nonreturning task that may yield does not hide
+its caller's continuation from validation. Return summaries also carry a
+may-yield flag through reachable calls, branches and loops. Literal zero or
+negative sleeps and nonwaiting helpers do not yield; starting a branch or
+another task does not yield its owner. A branch releases its owner when its
+child completes or first waits; an infinite waiting child cannot hide the
+owner's later return or metadata use. A child that never returns or waits still
+holds its owner. A race needs waiting paths in every
+arm to yield, while a sync can wait for one arm after starting the others.
+A task that neither returns nor yields holds its caller. Argument evaluation
+and its exits still belong to the caller. `MetadataTasks.lean` checks these
+boundaries with 14 real/dummy refusal pairs and 16 positive pairs, including
+pairs for generic returns, helpers, aggregates, immediate results and discarded
+tasks, plus independent real returns, argument effects and nonwaiting paths.
+
 The checked families currently cover:
 
 | Relation | Executable evidence |
