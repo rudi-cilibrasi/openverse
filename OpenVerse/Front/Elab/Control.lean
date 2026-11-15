@@ -1104,7 +1104,12 @@ def liftCastClause (ctx : Ctx) (bound : List String) (q : Pos) (c : SExpr) : Lis
   let inConstructor := (Refine.findPart (fun
     | e@(.construct ..) => (Refine.castsIn ctx.types.classes.contains e).contains q
     | _ => false) false c).isSome
-  let casts := if inConstructor || (Choice.firstRangeBounds? value).isSome then
+  -- Named values share the call's positional/named/default sequence.
+  -- Keep its casts together rather than lifting the same prefix twice.
+  let inNamed := (Refine.findPart (fun
+    | .decl _ n _ _ v => n.startsWith "?" && (Refine.castsIn ctx.types.classes.contains v).contains q
+    | _ => false) false c).isSome
+  let casts := if inConstructor || inNamed || (Choice.firstRangeBounds? value).isSome then
       Refine.castsIn ctx.types.classes.contains c else [q]
   let marked := casts.foldl (fun e position => Refine.markCast position e) c
   Choice.liftClause (fun n => choiceValues ctx n || bound.contains n) (choiceField ctx) marked

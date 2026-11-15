@@ -100,7 +100,13 @@ private def constructorCapture (body : String) : String :=
 private def setIndexCapture (body : String) : String :=
   "pair(a:type,b:type):=class{}\ndup(t:type):=class(pair(t,t)){Index:int=0}\ncell:=class{var Value:int=0}\nholder:=class{Items:[]cell}\nId(N:int)<computes>:int=N\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type)" ++ body
 
+private def namedCapture (body : String) : String :=
+  "pair(a:type,b:type):=class{}\ndup(t:type):=class(pair(t,t)){Index:int=0}\nSelect(?Index:int=0)<computes>:int=Index\nreader:=class<computes>{Pick(?Index:int=0)<computes>:int=Index}\nbox:=struct{Value:int}\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type)" ++ body
+
 private def cases : List (String × String) := [
+  ("named call metadata capture", namedCapture "<transacts><decides>:int=\n    Select(?Index:=dup[P].Index+Dummy())"),
+  ("named method metadata capture", namedCapture "<transacts><decides>:int=\n    reader{}.Pick(?Index:=dup[P].Index+Dummy())"),
+  ("named field metadata capture", namedCapture "<transacts><decides>:int=\n    box{Value:=Select(?Index:=dup[P].Index+Dummy())}.Value"),
   ("set index array metadata capture", setIndexCapture "<transacts><decides>:int=\n    var A:[]int=array{0}\n    set A[dup[P].Index+Dummy()]=7\n    0"),
   ("set index object path metadata capture", setIndexCapture "<transacts><decides>:int=\n    H:=holder{Items:=array{cell{}}}\n    set H.Items[dup[P].Index+Dummy()].Value=7\n    0"),
   ("set index expression metadata capture", setIndexCapture "<transacts><decides>:int=\n    var A:[]int=array{0}\n    Id(set A[dup[P].Index+Dummy()]=7)"),
@@ -276,6 +282,9 @@ private def cases : List (String × String) := [
   ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
+  ("named call real overwrite", namedCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    Select(?Index:=dup[P].Index+Stored())"),
+  ("named method real overwrite", namedCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    reader{}.Pick(?Index:=dup[P].Index+Stored())"),
+  ("named field real overwrite", namedCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    box{Value:=Select(?Index:=dup[P].Index+Stored())}.Value"),
   ("set index array real overwrite", setIndexCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    var A:[]int=array{0}\n    set A[dup[P].Index+Stored()]=7\n    0"),
   ("set index object path real overwrite", setIndexCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    H:=holder{Items:=array{cell{}}}\n    set H.Items[dup[P].Index+Stored()].Value=7\n    0"),
   ("set index expression real overwrite", setIndexCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    var A:[]int=array{0}\n    Id(set A[dup[P].Index+Stored()]=7)"),

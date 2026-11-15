@@ -1093,7 +1093,9 @@ circle := class(shape, labelled):
   operands too: a cast there keeps index evaluation, path reads and the
   RHS in their ordinary order, with its refinement available to the RHS
   and following clauses. Assignment expressions retain their result when
-  used as a binding, argument or field value. A branch of an `if` in a failure context is in it too: one written as an
+  used as a binding, argument or field value. Named call arguments can
+  contain refining casts too; positional arguments run first, named values
+  in their written order, then omitted defaults. A branch of an `if` in a failure context is in it too: one written as an
   expression with such a cast in it (`if (N > 0) then dup[P].C else 0`) is
   the block of it, where the cast is a clause, so it runs only when that
   branch does. Both bounds of a `for` or `first` range can contain such
