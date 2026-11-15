@@ -443,6 +443,33 @@ partial def elabExprMarkersWith
     let ctx := { ctx with asWritten := false }
     let value := items.getLastD (.tuple p [])
     if !asWritten then
+      -- The parser's range producer can compile a bound cast locally,
+      -- hiding its refinement before the first's following clauses are
+      -- typed. Probe those bounds in the context of the preceding clauses;
+      -- only a cast that actually needs refinement takes the outer path.
+      let clauses := items.dropLast
+      let saved ← get
+      for (clause, k) in clauses.zipIdx do
+        let source := match clause with | .decl _ _ _ _ v => v | e => e
+        if let some (lo, hi, _) := Choice.firstRangeBounds? source then
+          let casts := Refine.castsIn ctx.types.classes.contains clause
+          if !casts.isEmpty then
+            let prefix? ← tryCatch (do
+              let (_, before) ← elabOneClauses { ctx with canFail := true, typeOnly := true } (clauses.take k)
+              pure (some (before, ← get))) (fun _ => pure none)
+            set saved
+            if let some (before, prefixState) := prefix? then
+              for bound in [lo, hi] do
+                set prefixState
+                let refusal? ← tryCatch (do
+                  discard <| elabE { before with canFail := true, inTaking := true, typeOnly := true } bound none
+                  pure none) (fun err => pure (Refine.castRefusal? err))
+                set saved
+                if let some refusal := refusal? then
+                  if casts.contains refusal.pos then
+                    let lifted := liftCastClause before (Choice.boundIn (clauses.take k)) refusal.pos clause
+                    return ← elabE ctx (.app p (.ident p "$first")
+                      [.block bp (clauses.take k ++ lifted ++ clauses.drop (k + 1) ++ [value])] false) exp
       if let some r ← withCastClauses ctx items.dropLast value (fun _ => false) (elabE { ctx with asWritten := true } se exp)
           (fun cs v => elabE ctx (.app p (.ident p "$first") [.block bp (cs ++ [v])] false) exp) then
         return r

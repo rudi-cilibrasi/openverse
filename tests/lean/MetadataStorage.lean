@@ -91,7 +91,31 @@ private def activeRushContinuation (body tail overwrite : String) : String := ca
 private def caseCapture (body : String) : String :=
   "pair(a:type,b:type):=class{}\ndup(t:type):=class(pair(t,t)){C:int=4}\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type)" ++ body
 
+private def rangeCapture (body : String) : String :=
+  "pair(a:type,b:type):=class{}\ndup(t:type):=class(pair(t,t)){Lo:int=1;Hi:int=2}\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type)" ++ body
+
+private def constructorCapture (body : String) : String :=
+  "pair(a:type,b:type):=class{}\ndup(t:type):=class(pair(t,t)){C:int=4}\nrefbox:=class{Before:int=0;Value:int}\nvalbox:=struct{Before:int=0;Value:int}\nouter:=struct{Inner:refbox}\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type)" ++ body
+
+private def setIndexCapture (body : String) : String :=
+  "pair(a:type,b:type):=class{}\ndup(t:type):=class(pair(t,t)){Index:int=0}\ncell:=class{var Value:int=0}\nholder:=class{Items:[]cell}\nId(N:int)<computes>:int=N\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type)" ++ body
+
+private def namedCapture (body : String) : String :=
+  "pair(a:type,b:type):=class{}\ndup(t:type):=class(pair(t,t)){Index:int=0}\nSelect(?Index:int=0)<computes>:int=Index\nreader:=class<computes>{Pick(?Index:int=0)<computes>:int=Index}\nbox:=struct{Value:int}\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type)" ++ body
+
 private def cases : List (String × String) := [
+  ("named call metadata capture", namedCapture "<transacts><decides>:int=\n    Select(?Index:=dup[P].Index+Dummy())"),
+  ("named method metadata capture", namedCapture "<transacts><decides>:int=\n    reader{}.Pick(?Index:=dup[P].Index+Dummy())"),
+  ("named field metadata capture", namedCapture "<transacts><decides>:int=\n    box{Value:=Select(?Index:=dup[P].Index+Dummy())}.Value"),
+  ("set index array metadata capture", setIndexCapture "<transacts><decides>:int=\n    var A:[]int=array{0}\n    set A[dup[P].Index+Dummy()]=7\n    0"),
+  ("set index object path metadata capture", setIndexCapture "<transacts><decides>:int=\n    H:=holder{Items:=array{cell{}}}\n    set H.Items[dup[P].Index+Dummy()].Value=7\n    0"),
+  ("set index expression metadata capture", setIndexCapture "<transacts><decides>:int=\n    var A:[]int=array{0}\n    Id(set A[dup[P].Index+Dummy()]=7)"),
+  ("constructor class metadata capture", constructorCapture "<transacts><decides>:int=refbox{Value:=dup[P].C+Dummy()}.Value"),
+  ("constructor struct metadata capture", constructorCapture "<transacts><decides>:int=valbox{Value:=dup[P].C+Dummy()}.Value"),
+  ("constructor nested metadata capture", constructorCapture "<transacts><decides>:int=outer{Inner:=refbox{Value:=dup[P].C+Dummy()}}.Inner.Value"),
+  ("range lower metadata capture", rangeCapture "<transacts>:[]int=for(I:=dup[P].Lo+Dummy()..3){I}"),
+  ("range upper metadata capture", rangeCapture "<transacts>:[]int=for(I:=0..dup[P].Hi+Dummy()){I}"),
+  ("range first prefix metadata capture", rangeCapture "<transacts><decides>:int=first{Offset:=(0|1);I:=Offset+dup[P].Lo..Offset+dup[P].Hi+Dummy();I>1;I}"),
   ("conditional refined generator metadata object method", "pair(a:type,b:type):=class{A:a;B:b}\ndup(t:type):=class(pair(t,t)):\n    Items:[]int=array{1,2}\n    C:int=2\n    Read()<computes>:int=C\nCaller(Dummy:pair(a,b),Real:pair(a,b),N:int where a:type,b:type)<transacts>:[]int=\n    var P:pair(a,b)=Dummy\n    for(D:=dup[P],X:D.Items,Y:=(if(N>0)then(D.Read()|D.C)else 0)){Y}\n"),
   ("conditional refined generator read-False", "One()<computes>:int=1\nTwo()<computes>:int=2\nPick(C:logic)<computes>:type{_()<computes>:int}=if(C?)then One else Two\npair(a:type, b:type) := class:\n    A:a\n    B:b\ndup(t:type) := class(pair(t, t)):\n    Items:[]t = array{}\n    C:int = 1\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int},N:int where a:type,b:type)<transacts>:[]int=\n    var Stored:type{_()<computes>:int}=Dummy\n    for(D:=dup[P],X:D.Items,Y:=(if(N>0)then(Stored()|D.C)else 0)){Y}\n"),
   ("conditional refined generator write-False", "One()<computes>:int=1\nTwo()<computes>:int=2\nPick(C:logic)<computes>:type{_()<computes>:int}=if(C?)then One else Two\npair(a:type, b:type) := class:\n    A:a\n    B:b\ndup(t:type) := class(pair(t, t)):\n    Items:[]t = array{}\n    C:int = 1\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int},N:int where a:type,b:type)<transacts>:[]int=\n    var Stored:type{_()<computes>:int}=F\n    Values:=for(D:=dup[P],X:D.Items,Y:=(if(N>0)then block{set Stored=Dummy;(D.C|10)}else 0)){Y}\n    Value:=Stored()\n    Values\n"),
@@ -258,6 +282,18 @@ private def cases : List (String × String) := [
   ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
+  ("named call real overwrite", namedCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    Select(?Index:=dup[P].Index+Stored())"),
+  ("named method real overwrite", namedCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    reader{}.Pick(?Index:=dup[P].Index+Stored())"),
+  ("named field real overwrite", namedCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    box{Value:=Select(?Index:=dup[P].Index+Stored())}.Value"),
+  ("set index array real overwrite", setIndexCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    var A:[]int=array{0}\n    set A[dup[P].Index+Stored()]=7\n    0"),
+  ("set index object path real overwrite", setIndexCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    H:=holder{Items:=array{cell{}}}\n    set H.Items[dup[P].Index+Stored()].Value=7\n    0"),
+  ("set index expression real overwrite", setIndexCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    var A:[]int=array{0}\n    Id(set A[dup[P].Index+Stored()]=7)"),
+  ("constructor class real overwrite", constructorCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    refbox{Value:=dup[P].C+Stored()}.Value"),
+  ("constructor struct real overwrite", constructorCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    valbox{Value:=dup[P].C+Stored()}.Value"),
+  ("constructor nested real overwrite", constructorCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    outer{Inner:=refbox{Value:=dup[P].C+Stored()}}.Inner.Value"),
+  ("range lower real overwrite", rangeCapture "<transacts>:[]int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    for(I:=dup[P].Lo+Stored()..3){I}"),
+  ("range upper real overwrite", rangeCapture "<transacts>:[]int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    for(I:=0..dup[P].Hi+Stored()){I}"),
+  ("range first prefix real overwrite", rangeCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    first{Offset:=(0|1);I:=Offset+dup[P].Lo..Offset+dup[P].Hi+Stored();I>1;I}"),
   ("conditional refined generator real overwritten object method", "pair(a:type,b:type):=class{A:a;B:b}\ndup(t:type):=class(pair(t,t)):\n    Items:[]int=array{1,2}\n    C:int=2\n    Read()<computes>:int=C\nCaller(Dummy:pair(a,b),Real:pair(a,b),N:int where a:type,b:type)<transacts>:[]int=\n    var P:pair(a,b)=Dummy\n    set P=Real\n    for(D:=dup[P],X:D.Items,Y:=(if(N>0)then(D.Read()|D.C)else 0)){Y}\n"),
   ("conditional refined generator read-True", "One()<computes>:int=1\nTwo()<computes>:int=2\nPick(C:logic)<computes>:type{_()<computes>:int}=if(C?)then One else Two\npair(a:type, b:type) := class:\n    A:a\n    B:b\ndup(t:type) := class(pair(t, t)):\n    Items:[]t = array{}\n    C:int = 1\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int},N:int where a:type,b:type)<transacts>:[]int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    for(D:=dup[P],X:D.Items,Y:=(if(N>0)then(Stored()|D.C)else 0)){Y}\n"),
   ("conditional refined generator write-True", "One()<computes>:int=1\nTwo()<computes>:int=2\nPick(C:logic)<computes>:type{_()<computes>:int}=if(C?)then One else Two\npair(a:type, b:type) := class:\n    A:a\n    B:b\ndup(t:type) := class(pair(t, t)):\n    Items:[]t = array{}\n    C:int = 1\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int},N:int where a:type,b:type)<transacts>:[]int=\n    var Stored:type{_()<computes>:int}=F\n    Values:=for(D:=dup[P],X:D.Items,Y:=(if(N>0)then block{set Stored=F;(D.C|10)}else 0)){Y}\n    Value:=Stored()\n    Values\n"),

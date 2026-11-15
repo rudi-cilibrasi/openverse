@@ -1,0 +1,19 @@
+A
+B
+C
+D
+T
+K
+direct 1 4 3 4 9 3 BDK
+A
+B
+C
+D
+T
+K
+named 1 4 3 4 9 3 BDK
+lower 3 BDK
+lower named 3 BDK
+upper 3 BDK
+upper named 3 BDK
+exit=0
