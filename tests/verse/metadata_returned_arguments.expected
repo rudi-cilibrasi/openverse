@@ -1,0 +1,11 @@
+DirectMetadata 2
+DirectReal 1
+FailableMetadata 2
+FailableReal 1
+RecursiveMetadata 2
+RecursiveReal 1
+FieldMetadata 2
+FieldReal 1
+NamedMetadata 2
+NamedReal 1
+exit=0

@@ -1,0 +1,16 @@
+Direct 2
+Unused 0
+Helper 2
+Generic 2
+Optional 2
+Boxed 2
+Nested 2
+Rollback 0
+Overwrite 1
+Real 1
+IgnoreMetadata 1
+RealHelper 1
+RealRollback 1
+RealOptional 1
+RealBoxed 1
+exit=0

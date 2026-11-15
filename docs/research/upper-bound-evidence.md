@@ -39,21 +39,23 @@ returns `base`. A lexical name alone, a declaration fact, or a dummy type-value
 witness cannot supply that value. Plans retain symbolic names, resolve current
 slots at the use site, and only search visible bindings and compiler-owned
 readonly proof fields. They do not walk arbitrary user object graphs.
-A call result conservatively retains the dummy role when its callee or an
-ordinary value argument carries that role, including generic forwarding
-calls. Declared metadata inputs, including compiler witnesses, do not taint an
+The source hint for a call conservatively retains the dummy role when its
+callee or an ordinary value argument carries that role, including generic
+forwarding calls. Declared metadata inputs, including compiler witnesses, do not taint an
 independent real result. The flow analysis checks the actual return when a
 callee returns a metadata formal. The source heuristic does not infer arbitrary
 function return dependencies.
-Argument binding also refuses dummy inputs to executable proof and function
-formals, including proof data exposed through containers or object fields.
-This check uses the callee's declared domain. An unconstrained parametric
+The flow analysis checks emitted arguments against executable proof and
+function formals, including proof data exposed through containers or object
+fields. The required inputs come from the callee's declared domain, before
+substituting caller instances. Source argument hints no longer refuse a call
+before the actual helper return is analyzed. An unconstrained parametric
 forwarder may still return metadata, retaining its role. Saved method receivers
 and arguments keep their roles across dispatch. Callable receivers are checked
 on their emitted values, including a saved receiver with no concrete dispatch
 implementation. A source hint may still describe a discarded input when a
 conversion or a helper produces independent real data; that hint alone does
-not reject the resulting real receiver. Dummy receivers cannot execute methods
+not reject the resulting real receiver or argument. Dummy receivers cannot execute methods
 or function calls. Intrinsic task/event helpers require an executable receiver
 too. Hidden `$w.` fields remain metadata.
 
@@ -86,15 +88,23 @@ Opaque forwarding remains allowed, and reading an unrelated ordinary field
 of an object with hidden metadata still gives executable data.
 `MetadataGetters.lean` checks these accessor boundaries with 14 Core-checked
 controls, including execution after forwarding through another function.
-`MetadataStorage.lean` retains 47 real/dummy
-rejection pairs and 44 opaque-forwarding, real-overwrite and rollback pairs,
+`MetadataStorage.lean` retains 64 real/dummy
+rejection pairs and 58 opaque-forwarding, real-overwrite and rollback pairs,
 including a later GADT refinement, fresh unit-to-array conversions, ordinary
 helpers with independent real returns, virtual and spawned receivers, and
 bound-method captures across a wait. Shared-frame controls cover metadata,
 real data, then metadata writes while another arm waits to execute a function
 or proof, plus recursive opaque initializers and rolled-back real overwrites.
 `shared_function_overwrite.verse` executes ordinary real shared mutation in
-both runtimes. These are
+both runtimes. Additional pairs cover direct, failable, recursive, named and
+fresh-object returns passed to executable function or proof formals, retaining
+both metadata refusals and independent real results. Module weak-map controls
+cover direct, helper, nested, option and object payload writes; metadata cannot
+enter ordinary shared fields, including unused, overwritten or rolled-back
+writes. Real payloads produced by helpers with opaque metadata arguments
+remain valid. `metadata_module_functions.verse` and
+`metadata_returned_arguments.verse` retain 25 ordinary runtime results in both
+source profiles. These are
 compiler-API contracts; source programs reach the same analysis.
 
 For `sync`, `race` and `rush`, the provenance analysis follows source startup

@@ -187,11 +187,6 @@ def isNamedArgument : SExpr → Bool
     to an array), and otherwise each argument is its parameter's. -/
 partial def elabPositionalCall (cb : AppElab) (ctx : Ctx) (p : Pos) (name : String) (s : Sig)
     (args : List SExpr) : EM R := do
-  if args.length == 1 && s.params.length > 1 then
-    for k in List.range s.params.length do ctx.checkArgumentRole s args[0]! k
-  else
-    for (argument, index) in args.zipIdx do
-      ctx.checkArgumentRole s argument (if s.params.length == 1 then 0 else index)
   if let [a] := args then
     if s.params.length > 1 then
       let r ← cb.elabE ctx a (some (.tup s.params))
@@ -242,14 +237,12 @@ partial def elabNamedArgsCall (cb : AppElab) (ctx : Ctx) (p : Pos) (name : Strin
   let mut steps : Array Expr := #[]
   let mut slots : Array (Option Nat) := Array.replicate s.params.length none
   for (a, k) in pos.zip (List.range npos) do
-    ctx.checkArgumentRole s a k
     let t := ptys[k]!
     let ta ← fresh t
     steps := steps.push (.assign ta (← coerce a.pos (← cb.elabE ctx a (some t)) t))
     slots := slots.set! k (some ta)
   for (ap, n, rhs) in named do
     let k := npos + (s.named.findIdx? (·.1 == n)).get!
-    ctx.checkArgumentRole s rhs k
     let t := ptys[k]!
     let ta ← fresh t
     steps := steps.push (.assign ta (← coerce ap (← cb.elabE ctx rhs (some t)) t))
@@ -279,7 +272,6 @@ partial def elabNamedArgsCall (cb : AppElab) (ctx : Ctx) (p : Pos) (name : Strin
                              inRollback := ctx.inRollback || ctx.canFail,
                              suspends := ctx.suspends && s.suspends,
                              defaults := key :: ctx.defaults }
-      dctx.checkArgumentRole s d k
       let rd ← fxAt p (do coerce p (← cb.elabE dctx d (some t)) t)
       if !s.decides && rd.mayFail ctx.sigProg then
         eerr p s!"the default of ?{n} of {name} can fail, but {name} is not <decides>"
