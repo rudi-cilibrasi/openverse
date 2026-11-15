@@ -158,6 +158,8 @@ pending. The analysis tracks event identities through local aliases, fields,
 arrays and helper returns; uncertain aliases retain both possible schedules.
 Helpers that can wait or signal use distinct local slots in the control graph,
 with their own metadata permissions, return targets and cleanup scopes.
+A return in a surviving rush arm stops that arm after its group has ended;
+returns from active groups still propagate to the owning function.
 Recursive signaling helpers use a finite argument-dependency summary. Failed
 conditions restore listener registrations, task states and caller storage.
 Task completion can wake a task awaiter during an event callback; cancellation
@@ -171,10 +173,12 @@ not establish complete alias or timing precision. In particular, a lifted
 choice continuation can still retain a captured metadata role after its source
 shared cell is overwritten with real data, causing a false rejection. Generated
 witness, capture and frame aliases remain in the #572 audit.
-`MetadataSignals.lean` retains 19 real/dummy refusal pairs and 18 positive pairs
+`MetadataSignals.lean` retains 19 real/dummy refusal pairs and 21 positive pairs
 for direct and indirect signals, recursive helpers, rollback, task completion,
 cleanup, helper returns and unrelated events. `metadata_signal_timing.verse`
 executes the corresponding ordinary data paths in both runtimes and profiles.
+`metadata_signal_loop_timing.verse` covers repeated spawns in the ordinary
+profile, which admits `for`.
 
 A spawned call has a separate result boundary: lowering writes its return
 value to the task's ordinary mutable `Result` field. The provenance check

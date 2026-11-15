@@ -315,6 +315,20 @@ private def groupReady (p : MetadataPlan.Plan) (c : Configuration) (i : Nat) : B
       g.children.all (fun (a, _) => c.actors[a]!.status == .done)
   else state.winner.isSome
 
+/-- A return propagates through active concurrent groups. Once a rush has
+    ended, its surviving arm is background work: a later return stops that
+    arm instead of returning from the enclosing function. -/
+private def lateReturnActor (plan : MetadataPlan.Plan) (c : Configuration)
+    (actor owner : Nat) : Option Nat := Id.run do
+  let mut current := actor
+  while current != owner do
+    let some group := plan.groups.findIdx? (fun g => g.children.any (·.1 == current))
+      | return none
+    let g := plan.groups[group]!
+    if g.kind == .rush && !c.groups[group]!.active then return some current
+    current := g.owner
+  return none
+
 private def restoreTest (c : Configuration) (actor : Nat) : Option Configuration := do
   let t ← c.tests.head?
   if t.owner != actor then none else
@@ -1175,6 +1189,9 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
       else
         work := work.push (← completeScheduled env c actor)
     | .functionReturn owner value dst next target offset =>
+      if let some late := lateReturnActor env.plan c actor owner then
+        work := work.push (queue c [.cancel late])
+        continue
       let caller := c.actors[owner]!
       let targetContext := some (target, offset)
       let mut context := caller.context
@@ -1210,6 +1227,9 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
             { a with status := .done, cleanups := [], loops := [], frames := [], signalReturns := [] } }
       work := work.push (queue c (steps ++ [.returnScope owner target offset dropFrames next]))
     | .ret value =>
+      if let some late := lateReturnActor env.plan c actor 0 then
+        work := work.push (queue c [.cancel late])
+        continue
       let role := c.slots.values[value]!
       let c := { c with actors := c.actors.modify actor fun a =>
         { a with status := .done, cleanups := [] } }

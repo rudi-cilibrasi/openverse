@@ -151,6 +151,20 @@ ArmReturn(V:v,R:v where v:type)<suspends>:v=
             R
     R
 
+LateArmReturn(V:v,R:v where v:type)<suspends>:v=
+    Release:=event(int){}
+    Value:=rush:
+        block:
+            defer:
+                Print("late arm cleanup")
+            Release.Await()
+            return V
+        block:
+            Sleep(0.0)
+            R
+    Release.Signal(0)
+    R
+
 Main()<suspends>:void=
     Print("direct {Direct()}")
     Print("unrelated {Unrelated()}")
@@ -166,3 +180,5 @@ Main()<suspends>:void=
     Print("canceled worker {CanceledWorker()}")
     Saved:=ArmReturn(Two,One)
     Print("helper return {Saved()}")
+    Later:=LateArmReturn(Two,One)
+    Print("late helper return {Later()}")

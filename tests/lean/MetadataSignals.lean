@@ -67,6 +67,16 @@ private def refusals : List (String × String) := [
     "    Other.Signal(0)\n    Stored()")]
 
 private def controls : List (String × String) := [
+  ("A nested arm return stops at an already completed rush",
+    "Later(V:v,R:v where v:type)<suspends>:v=\n    Release:=event(int){}\n    Never:=event(int){}\n    Value:=rush:\n        block:\n            Inner:=race:\n                block:\n                    Release.Await()\n                    return V\n                block:\n                    Never.Await()\n                    R\n            R\n        block:\n            Sleep(0.0)\n            R\n    Release.Signal(0)\n    R\n" ++
+    scheduledCaller "    Saved:=Later(Shadow,F)\n    Saved()"),
+  ("A helper's late rush return only stops its background arm",
+    "Later(V:v,R:v where v:type)<suspends>:v=\n    Release:=event(int){}\n    Value:=rush:\n        block:\n            Release.Await()\n            return V\n        block:\n            Sleep(0.0)\n            R\n    Release.Signal(0)\n    R\n" ++
+    scheduledCaller "    Saved:=Later(Shadow,F)\n    Saved()"),
+  ("A source late rush return only stops its background arm",
+    (header.replace "<suspends>:int=" s!"<suspends>:{functionTy}=") ++
+    "    Value:=rush:\n        block:\n            E.Await()\n            return Dummy\n        block:\n            Sleep(0.0)\n            F\n    E.Signal(0)\n    F\n" ++
+    s!"Use(E:event(int),F:{functionTy},D:{functionTy})<suspends>:int=\n    Saved:=Caller(E,F,D)\n    Saved()"),
   ("An inlined helper arm can return real data to its caller",
     returningHelper "R" ++ scheduledCaller "    Saved:=Later(Shadow,F)\n    Saved()"),
   ("A user's Signal method preserves a fresh unrelated event",
