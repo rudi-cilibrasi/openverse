@@ -12,12 +12,16 @@ export CHECK_TEST_EVENTS="$tmp/events"
 cat >"$fixture/bin/lake" <<'SH'
 #!/usr/bin/env bash
 if [[ $1 == env ]]; then
-  touch "$CHECK_TEST_EVENTS/source-frame-contracts"
-  if [[ $CHECK_TEST_FAIL_STEP == source-frame-contracts ]]; then
-    echo 'fixture source-frame failure detail'
-    exit 3
+  if [[ ${*: -1} == tests/lean/SourceFrameRefs.lean ]]; then
+    touch "$CHECK_TEST_EVENTS/source-frame-contracts"
+    if [[ $CHECK_TEST_FAIL_STEP == source-frame-contracts ]]; then
+      echo 'fixture source-frame failure detail'
+      exit 3
+    fi
+    echo 'source-frame rewrite contracts passed'
+  else
+    echo 'compiler API contracts passed'
   fi
-  echo 'source-frame rewrite contracts passed'
   exit 0
 fi
 [[ $1 == build ]] || exit 88
@@ -82,6 +86,9 @@ done
 run_check 2 success 3 source-frame-contracts
 grep -q 'fixture source-frame failure detail' "$tmp/log" || die 'source-frame diagnostic was hidden'
 [[ ! -f "$CHECK_TEST_EVENTS/make" ]] || die 'continued after failed source-frame contracts'
+run_check 2 success 3 test-metadata-reader.sh
+grep -q 'fixture check failure detail' "$tmp/log" || die 'metadata resource diagnostic was hidden'
+[[ ! -f "$CHECK_TEST_EVENTS/make" ]] || die 'continued after failed metadata resource contracts'
 run_check 2 success 1 fuzz-classes.sh
 grep -q 'fixture check failure detail' "$tmp/log" || die 'check diagnostic was hidden'
 grep -qF 'check.sh: FAILED: class-feature fuzzing' "$tmp/log" || die 'failed check was not reported'
