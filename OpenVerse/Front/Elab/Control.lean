@@ -1102,6 +1102,13 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     clauses before it bind, which are values too. -/
 def liftCastClause (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
     (bound : List String) (q : Pos) (c : SExpr) (probeCtx : Option Ctx := none) : EM (List SExpr) := do
+  -- A range is a producer boundary: staging both bounds at once can
+  -- replace the lower expression by a scalar temporary and erase the
+  -- dependency used to replay its refinement in the loop body. Keep the
+  -- established sequential bound path, including each bound's recast.
+  if (match c with | .decl _ _ _ _ (.range ..) | .gen _ _ _ (.range ..) => true | _ => false) then
+    return Choice.liftClause (fun n => choiceValues ctx n || bound.contains n) (choiceField ctx)
+      (Refine.markCast q c) (fieldOrder := choiceOrder ctx)
   -- Group casts that need refinement (or depend on an earlier one), not
   -- ordinary successful casts in unrelated operands. Hoisting those can
   -- discard their surrounding contextual types.
@@ -1134,6 +1141,11 @@ def liftCastClause (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
               env := refinedTypes
               slotTys := state.slotTys.map (·.subst refinement.μT) }
             probeState ← get
+    else
+      -- Prepared producers deliberately hide their internals from
+      -- findPart. Retain a reachable cast we cannot inspect, rather than
+      -- losing the equality its bound must export to the consumer.
+      casts := casts ++ [position]
   set saved
   if !casts.contains q then casts := casts ++ [q]
   let marked := casts.foldl (fun e position => Refine.markCast position e) c

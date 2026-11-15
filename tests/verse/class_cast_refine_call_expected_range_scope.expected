@@ -1,0 +1,17 @@
+math 1 7 left
+math 2 7 left
+bare 1 7 left
+bare 2 7 left
+copied 1 7 left 1
+copied 1 7 left 2
+copied 1 7 left 1
+copied 1 7 left 2
+copied 1 7 left 7
+copied 1 7 left 7
+copied 2 7 left 1
+copied 2 7 left 2
+copied 2 7 left 1
+copied 2 7 left 2
+copied 2 7 left 7
+copied 2 7 left 7
+exit=0
