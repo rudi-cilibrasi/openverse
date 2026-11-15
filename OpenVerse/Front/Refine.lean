@@ -261,6 +261,9 @@ partial def castsIn (isClass : String → Bool) (c : SExpr) : List Pos :=
     | .construct _ _ _ fields => fields.flatMap fun
       | .decl _ _ _ _ value => go value
       | value => go value
+    -- Named call arguments wrap their ordered operand in a declaration.
+    -- Other declarations remain scopes of their own.
+    | .decl _ n _ _ value => if n.startsWith "?" then go value else []
     | .set q path _ value =>
       let (indices, _) := Choice.hoistPath q path
       (indices.flatMap fun | .decl _ _ _ _ index => go index | _ => []) ++ go value
