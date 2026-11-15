@@ -920,6 +920,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       storage := storage.map fun (n, s) => (n, { frame := s.frame, name := s.name, args := s.args.map Ty.toSTy }),
       inRepeat := ctx.inRepeat, sourceContext := sourceContextOf ctx, liftTag := some ctx.liftTag,
       inlineScopes := ctx.inlineScopes,
+      rollback := ctx.types.signalNoRollback && (ctx.canFail || ctx.inRollback),
       -- (made: a branch the elaborator made, for a cast with clauses
       -- after it, #286, which the source does not have as such)
       -- (and a tagged one, which the source's places do not find, #53)

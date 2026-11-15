@@ -410,6 +410,19 @@ partial def elabExprMarkersWith
       (if typedLeaf then some fun slotOf => .assign (slotOf (some vl.ty)) (.local vl.slot) else none)
       (if typedLeaf then [vl.ty] else [])
     return ⟨.seq (.assign done (.lit (.logic false))) code, pty⟩
+  | .app p (.ident _ "$copiedOverloads") [.str _ [.text scope], .app q (.ident _ "$firstP") [.block bp items] false] false =>
+    let code ← match ctx.specializeCopiedOverloads scope items with
+      | .ok code => pure code
+      | .error why => eerr p why
+    -- These clauses have already been prepared. Re-lifting an untouched
+    -- returning callee can change its argument/backtracking order (#653).
+    let bound := Choice.boundIn code
+    let prepared := (items.zip code).zipIdx.flatMap fun ((before, after), i) =>
+      if before == after then [after] else
+        Choice.prepare [after] (fun n => choiceValues ctx n || bound.contains n) (choiceField ctx)
+          (site := s!"copy{scope.hash}_{i}") (fieldOrder := choiceOrder ctx) (keepBranches := choiceHasCast ctx)
+    elabE { ctx with copiedOverloadScope := scope, copiedOverloadSites := prepared.flatMap Choice.callUses }
+      (.app q (.ident q "$firstP") [.block bp prepared] false) exp
   | .app p (.ident _ "$firstP") [.block _ items] false =>
     -- (#246) `first{…}` of clauses that are lifted already (a consumer's,
     -- taken into a lazily taken call's function of its own): not again,

@@ -351,9 +351,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- (and the calls of generic functions with several values that a lazily
   -- taken group's machine takes at another instance than its first, each to
   -- call a copy of its own)
-  if !needs.eager.isEmpty || !needs.families.isEmpty || !needs.overloads.isEmpty || !source.nestedSites.isEmpty ||
+  if !needs.eager.isEmpty || !needs.families.isEmpty || !needs.overloads.isEmpty || !needs.copiedOverloads.isEmpty || !source.nestedSites.isEmpty ||
       !source.fieldSites.isEmpty || !needs.instanceCalls.isEmpty then
-    return .asking { eager := needs.eager, families := needs.families, overloads := needs.overloads,
+    return .asking { eager := needs.eager, families := needs.families, overloads := needs.overloads, copiedOverloads := needs.copiedOverloads,
                      nested := needs.nested, fieldOrders := source.fieldSites.map fun n => (n, env.fieldOrder n),
                      instanceCalls := needs.instanceCalls }
   -- (a program that awaits a task is compiled in await mode, its tasks'
@@ -464,7 +464,7 @@ partial def topDefaultCount : STop → Nat
        branches of refining casts (#243), and the functions of lazily taken
        calls and the helpers of consumers of choices (#246, #335). -/
 def Requests.tier (r : Requests) : Nat :=
-  if !r.eager.isEmpty || !r.families.isEmpty || !r.overloads.isEmpty || !r.lazy.isEmpty || !r.nested.isEmpty ||
+  if !r.eager.isEmpty || !r.families.isEmpty || !r.overloads.isEmpty || !r.copiedOverloads.isEmpty || !r.lazy.isEmpty || !r.nested.isEmpty ||
       !r.fieldOrders.isEmpty || !r.instanceCalls.isEmpty then 1
   else if !r.witnesses.isEmpty || r.awaits then 2
   else 3
@@ -472,7 +472,7 @@ def Requests.tier (r : Requests) : Nat :=
 /-- The requests of tier `k` and of the tiers above it (`Requests.tier`). -/
 def Requests.upTo (r : Requests) (k : Nat) : Requests :=
   if k ≥ 3 then r else
-  { eager := r.eager, families := r.families, overloads := r.overloads, lazy := r.lazy, nested := r.nested,
+  { eager := r.eager, families := r.families, overloads := r.overloads, copiedOverloads := r.copiedOverloads, lazy := r.lazy, nested := r.nested,
     fieldOrders := r.fieldOrders, instanceCalls := r.instanceCalls, witnesses := if k = 2 then r.witnesses else [],
     awaits := k == 2 && r.awaits,
     -- (what a function's body boxes: kept, as the source is)

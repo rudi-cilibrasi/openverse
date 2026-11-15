@@ -1,0 +1,2 @@
+do
+for (A := Dup(1) | Dup("x"), B := Pick(A)) { B }.Length
