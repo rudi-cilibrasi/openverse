@@ -13,19 +13,30 @@ def load(name):
     return model
 
 
-def returning_owner(model, finish):
+def returning_owner(model, finish, late_child=False, wrapped=False):
     st = model.St
     active = [st('defer', label='active cleanup'), st('sleep', d='0.1'),
               st('signal', evar='E', val='X'), st('print', label='after signal')]
+    if late_child:
+        child = [st('defer', label='late cleanup')]
+        if late_child == 2:
+            child += [st('branch', body=[st('defer', label='grandchild cleanup'),
+                                        st('sleep', d='1.0'), st('print', label='wrong grandchild')])]
+        child += [st('sleep', d='1.0'), st('print', label='wrong child')]
+        active += [st('branch', body=child)]
+        if late_child == 2:
+            active += [st('branch', body=[st('defer', label='sibling cleanup'),
+                                         st('sleep', d='1.0'), st('print', label='wrong sibling')])]
     if not finish:
         active += [st('sleep', d='1.0'), st('print', label='wrong active')]
     other = [st('defer', label='other cleanup'), st('sleep', d='1.0'),
              st('print', label='wrong other')]
-    body = [st('defer', label='owner cleanup'), st('event', evar='E', sticky=False),
-            st('branch', body=[st('conc', kind='rush', var='R', pick=0,
-                                  arms=[(active, 'X'), (other, 'X')]),
-                               st('print', label='after rush')]),
-            st('evawait', evar='E', var='V'), st('print', label='owner done')]
+    if wrapped:
+        other = [st('defer', label='other cleanup'), st('sleep', d='0.0')]
+    rush = st('conc', kind='rush', var='R', pick=0, arms=[(active, 'X'), (other, 'X')])
+    start = [rush] if wrapped else [st('branch', body=[rush, st('print', label='after rush')])]
+    body = [st('defer', label='owner cleanup'), st('event', evar='E', sticky=False)] + start + [
+        st('evawait', evar='E', var='V'), st('print', label='owner done')]
     fn = model.Fn('Owner', body, 'X')
     model.S = model.Sched()
 
@@ -36,19 +47,74 @@ def returning_owner(model, finish):
         model.S.p('main done')
 
     code = model.S.run(main())
-    expected = ['probe owner done 0', 'probe owner cleanup 0',
-                'probe other cleanup 0', 'main continued', 'probe after signal 0',
-                'probe active cleanup 0']
-    if finish:
+    expected = (['probe other cleanup 0', 'probe owner done 0', 'probe owner cleanup 0'] if wrapped else
+                ['probe owner done 0', 'probe owner cleanup 0', 'probe other cleanup 0'])
+    expected += ['main continued', 'probe after signal 0']
+    late_cleanup = (['probe sibling cleanup 0', 'probe grandchild cleanup 0'] if late_child == 2 else []) + ['probe late cleanup 0']
+    if late_child and not finish:
+        expected += late_cleanup
+    expected += ['probe active cleanup 0']
+    if late_child and finish:
+        expected += late_cleanup
+    if finish and not wrapped:
         expected += ['probe after rush 0']
     expected += ['main done']
     assert code == 0, (code, model.S.out)
     assert model.S.out == expected, (finish, model.S.out, expected)
-    assert len(model.S.roots) == 1 and model.S.roots[0].done, 'cancelled arms became roots'
+    assert len(model.S.roots) == (4 if late_child == 2 else 2 if late_child else 1) and all(r.done for r in model.S.roots), 'cancelled arms or children became live roots'
+    assert all(n == 0 for n in model.S.sleepers.values()), 'cancelled timer remained registered'
+
+
+def outside_cancel_order(model):
+    """The ordinary #254 cancellation phases must not become a late drain."""
+    st = model.St
+
+    def branch_a():
+        return st('branch', body=[st('defer', label='A defer'), st('sleep', d='0.1'),
+            st('branch', body=[st('defer', label='A.1 defer'), st('sleep', d=150)]),
+            st('sleep', d=150)])
+
+    f = model.Fn('F', [st('defer', label='F defer'), branch_a(),
+        st('branch', body=[st('defer', label='B defer'), st('sleep', d=150)]),
+        st('sleep', d=150)], 'X')
+    g = model.Fn('G', [st('defer', label='G defer'), branch_a(),
+        st('conc', kind='rush', var='R', pick=0, arms=[
+            ([st('defer', label='r1 defer'),
+              st('branch', body=[st('defer', label='r1.b defer'), st('sleep', d=150)]),
+              st('sleep', d=150)], 'X'),
+            ([st('defer', label='r2 defer'), st('sleep', d=150)], 'X')])], 'X')
+    args = {'X': 1, 'Y': 1, 'Tag': '', 'N': 0}
+    model.S = model.Sched()
+
+    def h():
+        try:
+            yield from model.m_call(g, args)
+        finally:
+            model.S.p('H defer')
+
+    def main():
+        task = model.m_spawn(model.m_call(f, args))
+        yield from model.m_sleep('1.0')
+        model.m_cancel(task)
+        model.S.p('cancelled F')
+        task = model.m_spawn(h())
+        yield from model.m_sleep('1.0')
+        model.m_cancel(task)
+        model.S.p('cancelled H')
+
+    assert model.S.run(main()) == 0
+    actual = [line.removesuffix(' 0').strip() for line in model.S.out]
+    expected = ['F defer', 'B defer', 'A.1 defer', 'A defer', 'cancelled F',
+                'r2 defer', 'r1 defer', 'G defer', 'r1.b defer',
+                'A.1 defer', 'A defer', 'H defer', 'cancelled H']
+    assert actual == expected, (actual, expected)
     assert all(n == 0 for n in model.S.sleepers.values()), 'cancelled timer remained registered'
 
 
 for name in ['sched_gen', 'sched_gen2']:
     for finish in [False, True]:
-        returning_owner(load(name), finish)
-print('scheduler-model: both models preserve active-arm cleanup and completion (4 traces)')
+        for late_child in [0, 1, 2]:
+            for wrapped in [False, True]:
+                returning_owner(load(name), finish, late_child, wrapped)
+    outside_cancel_order(load(name))
+print('scheduler-model: both models preserve active arms and late children (26 traces)')
