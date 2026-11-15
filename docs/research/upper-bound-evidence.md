@@ -72,7 +72,7 @@ Shared storage has a stricter boundary: metadata cannot enter an ordinary
 object field or a shared local that has held executable data, even if that
 local originally contained metadata. A real overwrite permanently ends its
 metadata-only mode along that path; a failed condition restores the incoming
-mode. Executable-use and storage checks run after recursive return summaries converge,
+mode. Shared-storage mode checks run after recursive return summaries converge,
 so an early real-only approximation cannot reject an opaque initializer that
 later acquires a metadata role. The final pass follows calls from the roots
 using converged summaries, excluding provisional argument contexts that are
@@ -86,8 +86,8 @@ Opaque forwarding remains allowed, and reading an unrelated ordinary field
 of an object with hidden metadata still gives executable data.
 `MetadataGetters.lean` checks these accessor boundaries with 14 Core-checked
 controls, including execution after forwarding through another function.
-`MetadataStorage.lean` retains 33 real/dummy
-rejection pairs and 34 opaque-forwarding, real-overwrite and rollback pairs,
+`MetadataStorage.lean` retains 36 real/dummy
+rejection pairs and 35 opaque-forwarding, real-overwrite and rollback pairs,
 including a later GADT refinement, fresh unit-to-array conversions, ordinary
 helpers with independent real returns, virtual and spawned receivers, and
 bound-method captures across a wait. Shared-frame controls cover metadata,
@@ -114,8 +114,8 @@ arm entries, preserving ordered metadata-to-real writes within one arm.
 A successful `sync` completes every arm. Since metadata reentry is checked,
 a cell definitely left real by one completed arm is real in the continuation.
 `race` and `rush` retain possible roles from their arms because other arms may
-still be waiting when a winner returns. `MetadataConcurrency.lean` checks 24
-real/dummy rejection pairs and 31 forwarding/overwrite pairs, with Core checks
+still be waiting when a winner returns. `MetadataConcurrency.lean` checks 28
+real/dummy rejection pairs and 34 forwarding/overwrite pairs, with Core checks
 for every admitted case; `shared_function_sibling_writes.verse` executes the
 ordinary real controls. These controls cover sibling order, nonreturning arms,
 unimplemented dispatch, metadata-only forwarding, independent arm locals,
@@ -149,10 +149,36 @@ runtime tag or scheduling behavior changes.
 The scheduler exploration is conservative about the order of waits; it does
 not prove timer deadlines. `metadata_background_timing.verse` retains ordinary
 Lean/C traces for writes, cancellation, saved aliases and cleanup order in
-both source profiles. Reentrant event callbacks remain in the #572 audit:
-`Signal` can resume an awaiting branch without a global wait in its owner,
-and that wakeup is not yet represented here. Generated witness, capture and
-frame aliases also remain subject to the full audit.
+both source profiles.
+
+`Signal` also creates a scheduling boundary: matching event listeners are
+detached in registration order and run to their next wait or completion before
+the signaling caller continues. Timer waits and unrelated fresh events remain
+pending. The analysis tracks event identities through local aliases, fields,
+arrays and helper returns; uncertain aliases retain both possible schedules.
+Helpers that can wait or signal use distinct local slots in the control graph,
+with their own metadata permissions, return targets and cleanup scopes.
+A return in a surviving rush arm stops that arm after its group has ended;
+returns from active groups still propagate to the owning function.
+Recursive signaling helpers use a finite argument-dependency summary. Failed
+conditions restore listener registrations, task states and caller storage.
+Task completion can wake a task awaiter during an event callback; cancellation
+does not deliver a successful task result.
+
+Repeated starts at a spawn site retain a conservative summary of older workers.
+After those workers can progress, heap aliases widen and their possible signals
+and task completions join the schedule; the caller's local storage is preserved.
+This can admit extra schedules and reject safe programs. The exploration does
+not establish complete alias or timing precision. In particular, a lifted
+choice continuation can still retain a captured metadata role after its source
+shared cell is overwritten with real data, causing a false rejection. Generated
+witness, capture and frame aliases remain in the #572 audit.
+`MetadataSignals.lean` retains 19 real/dummy refusal pairs and 21 positive pairs
+for direct and indirect signals, recursive helpers, rollback, task completion,
+cleanup, helper returns and unrelated events. `metadata_signal_timing.verse`
+executes the corresponding ordinary data paths in both runtimes and profiles.
+`metadata_signal_loop_timing.verse` covers repeated spawns in the ordinary
+profile, which admits `for`.
 
 A spawned call has a separate result boundary: lowering writes its return
 value to the task's ordinary mutable `Result` field. The provenance check

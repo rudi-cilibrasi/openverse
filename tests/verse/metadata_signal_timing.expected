@@ -1,0 +1,19 @@
+direct 2
+unrelated 1
+timer 1
+rollback 1
+resignal 2
+helper timer 1
+completed 1
+ordered read 1
+ordered 1
+owner cleanup 2
+task completion 2
+canceled worker 1
+helper arm cleanup
+helper loser cleanup
+helper owner cleanup
+helper return 2
+late arm cleanup
+late helper return 1
+exit=0
