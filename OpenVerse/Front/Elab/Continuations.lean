@@ -660,8 +660,9 @@ partial def selfQualify (ctx : Ctx) (c : String) (e : SExpr) : SExpr :=
     the trial's code is compiled in, so a lift is asked for from a trial only
     where it does not (`Ctx.keepsLifts`). -/
 def refineTagOf (ctx : Ctx) (x body : SExpr) (els : Option SExpr) (exp : Option Ty) : String :=
+  let rollback := if ctx.types.signalNoRollback && (ctx.canFail || ctx.inRollback) then "$rollback" else ""
   let source := sourceContextKey ctx
-  if source.isEmpty then ctx.refineScope ++ ctx.liftTag else
+  if source.isEmpty then ctx.refineScope ++ ctx.liftTag ++ rollback else
   let ctx := ctx.choiceCoercionScope
   let cast := SExpr.block x.pos (x :: body :: els.toList)
   let cast := match ctx.selfClass with
@@ -675,7 +676,7 @@ def refineTagOf (ctx : Ctx) (x body : SExpr) (els : Option SExpr) (exp : Option 
   let available := if ctx.suspends then Ty.mergeParamBounds ((ctx.types.tvars.map (·.2)).flatMap Ty.paramsC) else []
   let uses := reprStr (inputs, vars, written, exp.map (·.subst ctx.types.tvars), available, ctx.inlineScopes) ++
     firstReturnKey ctx [body]
-  ctx.refineScope ++ ctx.liftTag ++ s!"$source{(source ++ uses).hash}"
+  ctx.refineScope ++ ctx.liftTag ++ s!"$source{(source ++ uses).hash}" ++ rollback
 
 /-- `ctx` for a trial of `t`. Code in a continuation's trial moves with the
     continuation, whatever trial inside it elaborates it. -/

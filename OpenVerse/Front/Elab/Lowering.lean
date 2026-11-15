@@ -392,7 +392,7 @@ def functionBodyCtx (req : Requests) (ctx : Ctx) (p : Pos) (name : String)
     inChoice := source.inChoice || (resume.map (·.inChoice)).getD ctx.inChoice
     inParamDefault := source.inParamDefault || ctx.inParamDefault
     inDefer := source.inDefer || ctx.inDefer
-    inRollback := loopLift.any (·.rollback) || ctx.inRollback
+    inRollback := loopLift.any (·.rollback) || lifted.any (·.rollback) || ctx.inRollback
     inDefaultCheck := source.inDefaultCheck || ctx.inDefaultCheck
     inArm := source.inArm || ctx.inArm
     inBranch := source.inBranch || ctx.inBranch
