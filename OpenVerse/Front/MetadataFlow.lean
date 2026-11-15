@@ -141,6 +141,9 @@ private structure Actor where
   deriving BEq, Inhabited
 
 private structure GroupStatus where
+  /-- A branch launched after its cancellation tree was stopped can still
+      run in the current runtime; retain its effects after that stop. -/
+  late : Bool := false
   active : Bool := false
   started : Nat := 0
   winner : Option Nat := none
@@ -226,7 +229,7 @@ private def actorsKey (actors : Array Actor) : List Nat :=
 
 private def groupsKey (groups : Array GroupStatus) : List Nat :=
   groups.toList.flatMap fun g =>
-    [if g.active then 1 else 0, g.started, g.winner.map (· + 1) |>.getD 0]
+    [if g.late then 1 else 0, if g.active then 1 else 0, g.started, g.winner.map (· + 1) |>.getD 0]
 
 private def pendingKey (pending : List Pending) : List Nat :=
   pending.length :: pending.flatMap fun
@@ -851,7 +854,7 @@ private partial def cancelChildren (env : ScheduleEnv) (c : Configuration) (acto
     let g := env.plan.groups[i]!
     let scope := if g.kind == .branch || (g.kind == .rush && !c.groups[i]!.active) then
       g.taskContext else g.context
-    if g.owner == actor && g.kind != .spawn && (g.kind == .branch) == branch &&
+    if g.owner == actor && g.kind != .spawn && !c.groups[i]!.late && (g.kind == .branch) == branch &&
         (context.isNone || context == some scope) then
       g.children.toList.reverse.map (fun (child, _) => .cancel child)
     else []
@@ -859,13 +862,13 @@ private partial def cancelChildren (env : ScheduleEnv) (c : Configuration) (acto
 private partial def queue (c : Configuration) (steps : List Pending) : Configuration :=
   { c with current := none, pending := steps ++ c.pending }
 
-/-- Spawned tasks survive their creator; other descendants belong to its
-    cancellation tree. -/
-private partial def cancellationTree (plan : MetadataPlan.Plan) (actor : Nat) : List Nat := Id.run do
+/-- Spawned tasks and branches launched after an earlier stop survive that
+    cancellation; other descendants belong to its cancellation tree. -/
+private partial def cancellationTree (plan : MetadataPlan.Plan) (c : Configuration) (actor : Nat) : List Nat := Id.run do
   let mut found := [actor]
   repeat
-    let next := plan.groups.foldl (fun found g =>
-      if g.kind != .spawn && found.contains g.owner then
+    let next := plan.groups.toList.zipIdx.foldl (fun found (g, i) =>
+      if g.kind != .spawn && !c.groups[i]!.late && found.contains g.owner then
         (found ++ g.children.toList.map (·.1)).eraseDups else found) found
     if next == found then return found
     found := next
@@ -873,7 +876,7 @@ private partial def cancellationTree (plan : MetadataPlan.Plan) (actor : Nat) : 
 private partial def cancelSteps (env : ScheduleEnv) (c : Configuration) (actor : Nat) : Configuration :=
   let a := c.actors[actor]!
   if a.canceling then c else
-    let tree := cancellationTree env.plan actor
+    let tree := cancellationTree env.plan c actor
     let active := c.signals ++ c.pending.filterMap (fun
       | .resume i _ => if c.actors[i]!.status == .running then some i else none
       | _ => none)
@@ -902,9 +905,9 @@ private partial def readyCancellations (plan : MetadataPlan.Plan) (c : Configura
     let requested := c.actors.toList.zipIdx.filterMap fun (a, i) =>
       if a.cancelRequested && !a.canceling then some i else none
     let roots := requested.filter fun i =>
-      !requested.any (fun j => i != j && (cancellationTree plan j).contains i)
+      !requested.any (fun j => i != j && (cancellationTree plan c j).contains i)
     roots.filterMap fun root =>
-      let tree := cancellationTree plan root
+      let tree := cancellationTree plan c root
       if tree.any (fun i => c.actors[i]!.status == .running || c.actors[i]!.status == .ready) then none
       else some (.cancel root)
 
@@ -935,6 +938,14 @@ private partial def completeScheduled (env : ScheduleEnv) (c : Configuration)
     if c.actors[owner]!.status == .joining i && groupReady env.plan c i then
       return ← finishGroup env c i
   return c
+
+/-- Branches launched after a stop are not reached by that earlier drain.
+    Analyze their live descendants even after the owning result was saved. -/
+private partial def liveLateBranches (plan : MetadataPlan.Plan) (c : Configuration) : Bool :=
+  plan.groups.toList.zipIdx.any fun (g, i) =>
+    c.groups[i]!.late && g.children.any (fun (child, _) =>
+      (cancellationTree plan c child).any fun actor =>
+        c.actors[actor]!.status != .done && c.actors[actor]!.status != .idle)
 
 private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
   let extra := env.plan.slots - entry.values.size
@@ -975,7 +986,8 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
       work := work.push (queue c stops)
       continue
     if c.pending.isEmpty && c.actors[0]!.status == .done &&
-        !(c.actors.any fun a => a.cancelRequested && !a.canceling) then continue
+        !(c.actors.any fun a => a.cancelRequested && !a.canceling) &&
+        !liveLateBranches env.plan c then continue
     let some actor := c.current | do
       if let step :: rest := c.pending then
         let c := { c with pending := rest }
@@ -1018,10 +1030,12 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
           -- still install and execute cleanup before its next suspension.
           result := joinRole result (some role)
           finalSlots := joinOpt finalSlots (some c.slots)
-          if c.actors.any (fun a => a.cancelRequested && !a.canceling) then
+          if (c.actors.any fun a => a.cancelRequested && !a.canceling) ||
+              liveLateBranches env.plan c then
             work := work.push c
         | .discard =>
-          if c.actors.any (fun a => a.cancelRequested && !a.canceling) then
+          if (c.actors.any fun a => a.cancelRequested && !a.canceling) ||
+              liveLateBranches env.plan c then
             work := work.push c
         continue
       if !c.startup.isEmpty then
@@ -1035,6 +1049,12 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
           | .waiting _ | .joining _ => true | _ => false) then
         yielded := true
         work := work.push (queue c [.cancel 0, .discard])
+        -- A surviving branch can later be stopped by its still-live task.
+        -- The creator's completed drain no longer reaches that cleanup.
+        for (g, i) in env.plan.groups.toList.zipIdx do
+          if c.groups[i]!.late then
+            for (child, _) in g.children do
+              work := work.push (queue c [.cancel child, .discard])
         for i in [:c.actors.size] do
           let a := c.actors[i]!
           let resumableTask := !a.taskWait || a.event.any (fun task =>
@@ -1258,7 +1278,10 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
           pc, context := a.context, canComplete, canSignal
           task := g.task.map fun slot => c.refs.slots[slot]! }
       let started := { c with
-        actors, groups := c.groups.set! group { active := true }
+        actors, groups := c.groups.set! group {
+          active := true
+          late := g.kind == .branch && c.actors.toList.zipIdx.any (fun (owner, i) =>
+            owner.cancelRequested && !owner.canceling && (cancellationTree env.plan c i).contains actor) }
         launches := c.launches.filter (· != group) ++ [group] }
       let started := g.task.map (fun slot => setTask started (started.refs.slots[slot]!) 1) |>.getD started
       work := work.push (advanceActor started actor g.advance)

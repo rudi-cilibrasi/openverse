@@ -88,8 +88,8 @@ Opaque forwarding remains allowed, and reading an unrelated ordinary field
 of an object with hidden metadata still gives executable data.
 `MetadataGetters.lean` checks these accessor boundaries with 14 Core-checked
 controls, including execution after forwarding through another function.
-`MetadataStorage.lean` retains 84 real/dummy
-rejection pairs and 78 opaque-forwarding, real-overwrite and rollback pairs,
+`MetadataStorage.lean` retains 89 real/dummy
+rejection pairs and 85 opaque-forwarding, real-overwrite and rollback pairs,
 including a later GADT refinement, fresh unit-to-array conversions, ordinary
 helpers with independent real returns, virtual and spawned receivers, and
 bound-method captures across a wait. Shared-frame controls cover metadata,
@@ -108,6 +108,15 @@ overwrites. Further controls retain the active continuation after an owner
 return, including direct effects and cleanup installed after the Signal or
 a completed rush. At its first suspension, cancellation validates the latest
 cleanup; code only reached after that suspension stays unreachable.
+Branches launched by that active step after the earlier cancellation drain
+can currently survive in the runtime. The analysis records those launches
+separately and retains their later effects after the owner's result is saved,
+including delayed reads, writes, cleanup and descendant branches, and possible
+later cancellation of a still-pending child. Their
+metadata receivers and writes into real cells must still be refused; real
+data remains valid. A child whose launch is only reached after the cancelled
+arm's first wait stays unreachable. This follows the current runtime lifetime;
+it does not change or establish that lifetime as an upstream requirement.
 `metadata_module_functions.verse` and
 `metadata_returned_arguments.verse` retain 25 ordinary runtime results in both
 source profiles. These are
