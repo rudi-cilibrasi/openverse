@@ -1,0 +1,9 @@
+direct 0 0 count 1
+named 0 0 count 1
+direct 1 4 count 2
+named 1 4 count 2
+direct 0 0 count 3
+named 0 0 count 3
+direct fail count 3
+named fail count 3
+exit=0
