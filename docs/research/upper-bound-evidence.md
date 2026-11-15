@@ -182,6 +182,16 @@ fresh objects allocated on returning paths. Paired controls cover nested
 helpers, returned receivers, condition effects, both returning branches,
 unrelated events and rollback. `metadata_returned_heap_aliases.verse`
 and `metadata_for_returned_heap_alias.verse` retain the ordinary runtime results.
+Literal prototype references retain stable identities distinct from local
+allocation sites. This includes the hidden module-state object holding
+module-scoped weak maps. Its field reads include writes through possible
+caller aliases; pre-existing contents remain possible caller objects rather
+than arbitrary fresh allocations. Paired controls cover retrieved and saved
+receivers, helper reads and writes, nested modules, unrelated events and
+rollback. `metadata_module_aliases.verse` retains ten ordinary Lean/C traces
+in both source profiles. Existing map contents and possible caller/prototype
+aliases remain conservative: the API can still refuse a safe write through a
+different holder while the ordinary executable trace remains valid.
 Helpers that can wait or signal use distinct local slots in the control graph,
 with their own metadata permissions, return targets and cleanup scopes.
 A return in a surviving rush arm stops that arm after its group has ended;
