@@ -1,0 +1,7 @@
+direct 7 count 111
+named 7 count 111
+direct fail count 111
+named fail count 111
+direct left count 222
+named left count 222
+exit=0

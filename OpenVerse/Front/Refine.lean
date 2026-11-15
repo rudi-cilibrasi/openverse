@@ -249,6 +249,9 @@ partial def castsIn (isClass : String → Bool) (c : SExpr) : List Pos :=
     | .app q (.ident _ T) [_] true => if isClass T then [q] else []
     | _ => []
   let rec go (e : SExpr) : List Pos := match e with
+    -- A case evaluates its scrutinee before selecting an arm. Its arms
+    -- and patterns retain their own scopes (`elabCase`).
+    | .caseE _ x _ => go x
     | .app _ (.ident _ n) _ _ => if n.startsWith "$" then [] else e.children.flatMap go ++ here e
     | .app .. | .member .. | .bin .. | .cmp .. | .query .. | .neg .. | .tuple .. | .arrayLit ..
     | .str .. | .mapLit .. | .construct .. => e.children.flatMap go ++ here e
