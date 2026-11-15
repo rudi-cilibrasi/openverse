@@ -832,12 +832,13 @@ def armArgs : M (List Expr) := do
 def armKill (wf tag stopFn y pcA doneA can order : Nat) : M Kill := do
   let args ← armArgs
   if (← read).events then
-    -- (event mode: `stop` gives whether the arm runs; a running one is left
-    -- to its trampoline, which cancels it when the run returns)
+    -- A pending rush arm has no wrapper yet. Its negative marked PC still
+    -- records an active run; leave it to its parent's trampoline to cancel
+    -- after suspension, when its current cleanup state has been saved.
     let r ← freshT .int
     return { order, stop := [.assign y (fget wf),
       .assign r (.ite (.heap (.isTag [tag]) [.local y]) (.call stopFn [.local y, .local schS]) (int 0)),
-      .ite (allOf [.prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0], .prim .eq [.local r, int 0]])
+      .ite (allOf [.prim .gt [fget pcA, int 0], .prim .eq [fget doneA, int 0], .prim .eq [.local r, int 0]])
         (.seq (seqVoid [.call can args, fset doneA (int 2)]) vd) vd] }
   return { order, stop := [.assign y (fget wf),
     .ite (.heap (.isTag [tag]) [.local y]) (.call stopFn [.local y, .local schS]) vd,

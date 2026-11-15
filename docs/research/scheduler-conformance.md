@@ -527,6 +527,28 @@ active arm returns. [Pending branch waiter](../../tests/verse/signal_branch_pend
 checks this alongside a live-owner control and a stopped branch whose other
 arm already ended: the active step can finish the sync and continue.
 
+Pending rush arms follow the same boundary before they become wrapped roots.
+An owner's return during an arm's Signal leaves its negative running PC alone;
+the parent trampoline cancels it after its next suspension has saved the
+current cleanup state. Cancelling against the running PC prematurely marked
+that arm dead and lost its defer. `signal_rush_owner_return.verse` checks the
+saved cleanup; `signal_rush_owner_return_finishes.verse` retains completion of
+the active step when it ends without another wait.
+
+The provenance analysis retains that active continuation after the owner has
+returned, including direct reads and writes and cleanup installed after the
+Signal or a completed rush. It validates the latest cleanup at the first
+suspension and stops there; a defer reached only after that wait is not
+installed. `signal_rush_late_cleanup.verse` retains these runtime boundaries.
+
+The independent models also record stopped pending arms, defer closing a
+Python generator while it executes, and keep those arms out of the surviving
+rush roots. A stopped root's polling pass does not resume its other suspended
+arms. Both models retain reduced waiting/completing traces, and the full gate
+runs seed `646094`, which previously raised `ValueError: generator already
+executing` before producing an oracle. The corrected model and Lean/C agree
+for that seed, including its terminal deadlock.
+
 The independent scheduler models previously missed this boundary at seed
 `630059`: their reentrant wake walked a branch with a pending cancellation,
 resuming its suspended sibling and then its sync continuation. Both models
