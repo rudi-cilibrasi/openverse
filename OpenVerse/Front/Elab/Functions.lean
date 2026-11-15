@@ -182,7 +182,8 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
   -- target's, of the object, its first parameter too)
   let signature := evidenceSignature.getD {
     idx := 0, name, params := ptys, ret, decides, isConst := false, tparams := tps, selfTps,
-    typeValues := ps.zipIdx.filterMap fun (param, i) => if param.typeValue then some i else none }
+    typeValues := ps.zipIdx.filterMap fun (param, i) => if param.typeValue then some i else none,
+    metadataForwards := ps.zipIdx.filterMap fun (param, i) => if param.metadataForward then some i else none }
   let env := signature.typeEnv env
   let frame := signature.frame
   if !frame.valid then throw s!"{p.show}: internal: invalid generic evidence frame for {name}"
@@ -245,11 +246,18 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
   -- source hint can taint an independent real return from an opaque helper.
   -- Keep the declaration's own domain, before substituting caller instances.
   let required := signature.params.zipIdx.filterMap fun (ty, i) =>
-    if !signature.typeValues.contains i && (SubtypeEvidence.exposesEvidence env ty ||
+    if !signature.typeValues.contains i &&
+        ((!signature.metadataForwards.contains i && SubtypeEvidence.exposesEvidence env ty) ||
         (i == 0 && ((signature.hasReceiver && !name.endsWith ".$block") ||
           ["$Await", "$EvAwait", "$StickyAwait", "$cancelMark"].contains name))) then some i else none
+  let resume := requests.loops.findSome? fun l => l.resumes.find? (·.name == name)
+  let forwarded ← (resume.toList.flatMap (·.forwarded)).mapM fun owner => do
+    let args ← owner.args.mapM fun sty => do
+      let (ty, _) ← (resolveTy env p sty).run {}
+      pure (ty.toVTy env)
+    pure ({ frame := owner.frame, name := owner.name, args } : FrameRefs.Origin)
   let frames : FrameRefs.Info := {
-    explicit := ps.length, copies := st.frameCopies, slots := st.frameSlots.map fun (i, s) =>
+    explicit := ps.length, copies := st.frameCopies, forwarded, slots := st.frameSlots.map fun (i, s) =>
       (i, { frame := s.frame, name := s.name, args := s.args.map (Ty.toVTy env) }) }
   let metadata : MetadataFlow.Info := {
     pos := p, inputs, required, seeds := inputs ++ st.metadataSeeds, uses := st.metadataUses

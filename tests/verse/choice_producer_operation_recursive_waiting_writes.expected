@@ -1,0 +1,382 @@
+a enter 1
+a yield 1
+a cleanup 1
+a enter 1
+a yield 1
+a cleanup 1
+body 14
+body cleanup
+a enter 0
+a yield 0
+a cleanup 0
+a cleanup 1
+body 17
+body cleanup
+a enter 1
+a yield 1
+a cleanup 1
+body 21
+body cleanup
+a enter 0
+a yield 0
+a cleanup 0
+a cleanup 1
+body 24
+body cleanup
+b enter 1
+b yield 1
+b cleanup 1
+body 29
+body cleanup
+b enter 0
+b yield 0
+b cleanup 0
+b cleanup 1
+body 33
+body cleanup
+b enter 1
+b yield 1
+b cleanup 1
+body 38
+body cleanup
+b enter 0
+b yield 0
+b cleanup 0
+b cleanup 1
+body 42
+body cleanup
+a enter 0
+a yield 0
+a cleanup 0
+a cleanup 1
+a enter 1
+a yield 1
+a cleanup 1
+body 45
+body cleanup
+a enter 0
+a yield 0
+a cleanup 0
+a cleanup 1
+body 47
+body cleanup
+a enter 1
+a yield 1
+a cleanup 1
+body 50
+body cleanup
+a enter 0
+a yield 0
+a cleanup 0
+a cleanup 1
+body 52
+body cleanup
+b enter 1
+b yield 1
+b cleanup 1
+body 56
+body cleanup
+b enter 0
+b yield 0
+b cleanup 0
+b cleanup 1
+body 59
+body cleanup
+b enter 1
+b yield 1
+b cleanup 1
+body 63
+body cleanup
+b enter 0
+b yield 0
+b cleanup 0
+b cleanup 1
+body 66
+body cleanup
+a enter 1
+a yield 1
+a cleanup 1
+a enter 1
+a yield 1
+a cleanup 1
+body 70
+body cleanup
+a enter 0
+a yield 0
+a cleanup 0
+a cleanup 1
+body 73
+body cleanup
+a enter 1
+a yield 1
+a cleanup 1
+body 77
+body cleanup
+a enter 0
+a yield 0
+a cleanup 0
+a cleanup 1
+body 80
+body cleanup
+b enter 1
+b yield 1
+b cleanup 1
+body 85
+body cleanup
+b enter 0
+b yield 0
+b cleanup 0
+b cleanup 1
+body 89
+body cleanup
+b enter 1
+b yield 1
+b cleanup 1
+body 94
+body cleanup
+b enter 0
+b yield 0
+b cleanup 0
+b cleanup 1
+body 98
+body cleanup
+a enter 0
+a yield 0
+a cleanup 0
+a cleanup 1
+a enter 1
+a yield 1
+a cleanup 1
+body 101
+body cleanup
+a enter 0
+a yield 0
+a cleanup 0
+a cleanup 1
+body 103
+body cleanup
+a enter 1
+a yield 1
+a cleanup 1
+body 106
+body cleanup
+a enter 0
+a yield 0
+a cleanup 0
+a cleanup 1
+body 108
+body cleanup
+b enter 1
+b yield 1
+b cleanup 1
+body 112
+body cleanup
+b enter 0
+b yield 0
+b cleanup 0
+b cleanup 1
+body 115
+body cleanup
+b enter 1
+b yield 1
+b cleanup 1
+body 119
+body cleanup
+b enter 0
+b yield 0
+b cleanup 0
+b cleanup 1
+body 122
+body cleanup
+b enter 1
+b yield 1
+b cleanup 1
+a enter 1
+a yield 1
+a cleanup 1
+body 127
+body cleanup
+a enter 0
+a yield 0
+a cleanup 0
+a cleanup 1
+body 131
+body cleanup
+a enter 1
+a yield 1
+a cleanup 1
+body 136
+body cleanup
+a enter 0
+a yield 0
+a cleanup 0
+a cleanup 1
+body 140
+body cleanup
+b enter 1
+b yield 1
+b cleanup 1
+body 146
+body cleanup
+b enter 0
+b yield 0
+b cleanup 0
+b cleanup 1
+body 151
+body cleanup
+b enter 1
+b yield 1
+b cleanup 1
+body 157
+body cleanup
+b enter 0
+b yield 0
+b cleanup 0
+b cleanup 1
+body 162
+body cleanup
+b enter 0
+b yield 0
+b cleanup 0
+b cleanup 1
+a enter 1
+a yield 1
+a cleanup 1
+body 166
+body cleanup
+a enter 0
+a yield 0
+a cleanup 0
+a cleanup 1
+body 169
+body cleanup
+a enter 1
+a yield 1
+a cleanup 1
+body 173
+body cleanup
+a enter 0
+a yield 0
+a cleanup 0
+a cleanup 1
+body 176
+body cleanup
+b enter 1
+b yield 1
+b cleanup 1
+body 181
+body cleanup
+b enter 0
+b yield 0
+b cleanup 0
+b cleanup 1
+body 185
+body cleanup
+b enter 1
+b yield 1
+b cleanup 1
+body 190
+body cleanup
+b enter 0
+b yield 0
+b cleanup 0
+b cleanup 1
+body 194
+body cleanup
+b enter 1
+b yield 1
+b cleanup 1
+a enter 1
+a yield 1
+a cleanup 1
+body 199
+body cleanup
+a enter 0
+a yield 0
+a cleanup 0
+a cleanup 1
+body 203
+body cleanup
+a enter 1
+a yield 1
+a cleanup 1
+body 208
+body cleanup
+a enter 0
+a yield 0
+a cleanup 0
+a cleanup 1
+body 212
+body cleanup
+b enter 1
+b yield 1
+b cleanup 1
+body 218
+body cleanup
+b enter 0
+b yield 0
+b cleanup 0
+b cleanup 1
+body 223
+body cleanup
+b enter 1
+b yield 1
+b cleanup 1
+body 229
+body cleanup
+b enter 0
+b yield 0
+b cleanup 0
+b cleanup 1
+body 234
+body cleanup
+b enter 0
+b yield 0
+b cleanup 0
+b cleanup 1
+a enter 1
+a yield 1
+a cleanup 1
+body 238
+body cleanup
+a enter 0
+a yield 0
+a cleanup 0
+a cleanup 1
+body 241
+body cleanup
+a enter 1
+a yield 1
+a cleanup 1
+body 245
+body cleanup
+a enter 0
+a yield 0
+a cleanup 0
+a cleanup 1
+body 248
+body cleanup
+b enter 1
+b yield 1
+b cleanup 1
+body 253
+body cleanup
+b enter 0
+b yield 0
+b cleanup 0
+b cleanup 1
+body 257
+body cleanup
+b enter 1
+b yield 1
+b cleanup 1
+body 262
+body cleanup
+b enter 0
+b yield 0
+b cleanup 0
+b cleanup 1
+body 266
+body cleanup
+rows 64 state 266
+exit=0

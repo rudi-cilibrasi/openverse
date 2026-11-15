@@ -1,0 +1,214 @@
+state 11
+default 1
+a start 11 4
+a cleanup
+default 1
+a start 16 4
+a cleanup
+body state 11
+a cleanup
+body state 48
+default 1
+a start 16 4
+a cleanup
+body state 95
+a cleanup
+body state 132
+default 2
+b start 16 5
+b cleanup
+body state 179
+b cleanup
+body state 218
+default 2
+b start 16 5
+b cleanup
+body state 267
+b cleanup
+body state 306
+a cleanup
+default 1
+a start 26 4
+a cleanup
+body state 355
+a cleanup
+body state 412
+default 1
+a start 26 4
+a cleanup
+body state 479
+a cleanup
+body state 536
+default 2
+b start 26 5
+b cleanup
+body state 603
+b cleanup
+body state 662
+default 2
+b start 26 5
+b cleanup
+body state 731
+b cleanup
+body state 790
+state 860
+default 1
+a start 860 4
+a cleanup
+default 1
+a start 865 4
+a cleanup
+body state 860
+a cleanup
+body state 2595
+default 1
+a start 865 4
+a cleanup
+body state 4340
+a cleanup
+body state 6075
+default 2
+b start 865 5
+b cleanup
+body state 7820
+b cleanup
+body state 9557
+default 2
+b start 865 5
+b cleanup
+body state 11304
+b cleanup
+body state 13041
+a cleanup
+default 1
+a start 875 4
+a cleanup
+body state 14788
+a cleanup
+body state 16543
+default 1
+a start 875 4
+a cleanup
+body state 18308
+a cleanup
+body state 20063
+default 2
+b start 875 5
+b cleanup
+body state 21828
+b cleanup
+body state 23585
+default 2
+b start 875 5
+b cleanup
+body state 25352
+b cleanup
+body state 27109
+state 28877
+default 2
+b start 28877 5
+b cleanup
+default 1
+a start 28884 4
+a cleanup
+body state 28877
+a cleanup
+body state 86650
+default 1
+a start 28884 4
+a cleanup
+body state 144433
+a cleanup
+body state 202206
+default 2
+b start 28884 5
+b cleanup
+body state 259989
+b cleanup
+body state 317764
+default 2
+b start 28884 5
+b cleanup
+body state 375549
+b cleanup
+body state 433324
+b cleanup
+default 1
+a start 28894 4
+a cleanup
+body state 491109
+a cleanup
+body state 548902
+default 1
+a start 28894 4
+a cleanup
+body state 606705
+a cleanup
+body state 664498
+default 2
+b start 28894 5
+b cleanup
+body state 722301
+b cleanup
+body state 780096
+default 2
+b start 28894 5
+b cleanup
+body state 837901
+b cleanup
+body state 895696
+state 953502
+default 2
+b start 953502 5
+b cleanup
+default 1
+a start 953509 4
+a cleanup
+body state 953502
+a cleanup
+body state 2860525
+default 1
+a start 953509 4
+a cleanup
+body state 4767558
+a cleanup
+body state 6674581
+default 2
+b start 953509 5
+b cleanup
+body state 8581614
+b cleanup
+body state 10488639
+default 2
+b start 953509 5
+b cleanup
+body state 12395674
+b cleanup
+body state 14302699
+b cleanup
+default 1
+a start 953519 4
+a cleanup
+body state 16209734
+a cleanup
+body state 18116777
+default 1
+a start 953519 4
+a cleanup
+body state 20023830
+a cleanup
+body state 21930873
+default 2
+b start 953519 5
+b cleanup
+body state 23837926
+b cleanup
+body state 25744971
+default 2
+b start 953519 5
+b cleanup
+body state 27652026
+b cleanup
+body state 29559071
+rows 64 state 31466126
+exit=0

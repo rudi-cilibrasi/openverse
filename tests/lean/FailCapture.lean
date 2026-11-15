@@ -96,6 +96,19 @@ private def check (name : String) (body : Expr) (ty : VTy) (value : Value)
   | other => throw (IO.userError s!"{name}: {repr other}")
 
 def main : IO Unit := do
+  let empty : Prog := { fns := [], main := 0 }
+  let capture := FailCapture.marked 0 fail (.ret (int 7))
+  demand "a captured body failure does not escape admission"
+    (!(FailCapture.admissionBody capture).mayFail empty)
+  demand "a failure outside a capture remains visible"
+    ((FailCapture.admissionBody (.seq capture fail)).mayFail empty)
+  demand "a failing capture fallback remains visible"
+    ((FailCapture.admissionBody (FailCapture.marked 0 (int 7) fail)).mayFail empty)
+  let malformed := Expr.ite (.prim (.tupGet FailCapture.marker) [.local 0, fail, .ret (int 7)])
+    fail (.prim .userErr [])
+  demand "only the complete compiler capture form is recognized"
+    ((FailCapture.admissionBody malformed).mayFail empty)
+
   let no (n : Int) : Value := .tup [.none, .int n]
   let yes (v : Value) (n : Int) : Value := .tup [.some v, .int n]
   let effect (n : Int) (s : String) (e : Expr) := Expr.seq (write n) (.seq (say s) e)

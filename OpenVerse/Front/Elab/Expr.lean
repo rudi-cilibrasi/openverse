@@ -1779,6 +1779,12 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
           | none => unpack ++ writes
         let (code, c) ← elabOneGo ctx ([.decl p t none false (.query p selected)] ++ unpack)
         return (code, { c with inlineScopes := Choice.inlineScopesAfter ctx.inlineScopes rest })
+    if let some producer := Choice.binding? cl then
+      if let some (.app _ (.ident _ "$choiceProducer")
+          (.construct _ "$choiceProducerValue" [yieldSty] [] :: dictionary :: receiver :: arguments) false) := producer.each then
+        let yieldTy ← resolveTy ctx.types producer.pos (producer.ty.getD yieldSty)
+        return ← elabProducerFirstWith elabE elabOneGo ctx producer.pos producer.name yieldTy
+          dictionary receiver arguments rest
     match Choice.binding? cl with
     | some b@{ each := some (.app _ (.ident _ "$loop") lp false), .. } =>
       -- (one taken lazily, #246: a loop over its values, each followed by
@@ -1966,9 +1972,9 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
                   let bound := { poly with
                     typeOnly := true,
                     locals := { name := b.name, slot, ty := plan.binding, mutable := false } :: poly.locals }
-                  let (_, c2) ← elabOneGo bound (rest.map operations.rewrite)
+                  let (_, c2) ← elabOneGo bound (operations.rewriteSeq rest)
                   let effects := (← get).fx
-                  let lift ← match contLiftOf poly c2 p b.name b.alts (rest.map operations.rewrite) effects with
+                  let lift ← match contLiftOf poly c2 p b.name b.alts (operations.rewriteSeq rest) effects with
                     | .ok lift =>
                       let key := contKey ctx p b.name (b.alts ++ rest) ++ firstReturnKey ctx rest
                       joinedChoiceResult poly plan (operations.lift key lift)

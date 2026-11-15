@@ -1,5 +1,5 @@
 /- Elaboration for; public declarations retain OpenVerse.Front names. -/
-import OpenVerse.Front.Elab.Continuations
+import OpenVerse.Front.Elab.ProducerOperations
 import OpenVerse.Front.Elab.Calls
 
 namespace OpenVerse.Front
@@ -133,6 +133,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
   let normGens (cs : List SExpr) : List SExpr := cs.flatMap fun c => match Choice.binding? c with
     -- (one taken lazily, #246: the binding stays, a generator of its own)
     | some { each := some (.app _ (.ident _ "$loop") _ false), .. } => [c]
+    | some { each := some (.app _ (.ident _ "$choiceProducer") _ false), .. } => [c]
     | some { pos := q, name := n, ty, each := some arr, .. } => Choice.genOver "" q n ty arr
     | _ => [c]
   let clauses := normGens clauses
@@ -176,13 +177,14 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
   -- type-only probes recurse through these same shared suffixes.
   let stagedSuffix (c : Ctx) (q : Pos) (name : String) (bty : Ty)
       (alts rest : List SExpr) (bd : SExpr) (flat : Option Bool := none)
-      (extraTops : List STop := []) :
+      (extraTops : List STop := []) (extraSources : List STop := []) (extraResumes : List Choice.ForResume := [])
+      (immediate : Bool := false) :
       EM (Option (Choice.FirstLift × Choice.ForStagePlan × Ty × Bool)) := do
     let sourceFail := match bd with
       | .app _ (.ident _ f) [_, .ident _ mode, _] false =>
         if f == "$forReturns" || f == "$forReturnBody" then mode == "true" else bodyFail
       | _ => bodyFail
-    if (stagePlan.isNone && (!c.suspends || sourceFail)) ||
+    if (stagePlan.isNone && ((!c.suspends && !immediate) || sourceFail)) ||
         c.inCtor || c.inBlock || c.inDefer then return none
     checkNewLocal c q name
     let before ← get
@@ -208,7 +210,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           before.pendingSourceSuspends != after.pendingSourceSuspends || c.sourceWaits r.e))) (fun _ => pure none)
     set before
     let some (value, waits, effects, sourceSuspends) := value? | return none
-    if stagePlan.isNone && !waits && forBodySafe c bd then return none
+    if stagePlan.isNone && !waits && !immediate && forBodySafe c bd then return none
     -- Refining lifts can infer their effects. Their initially empty fnFx
     -- is not an explicit computes restriction; retain the suffix's typed
     -- effects, as immediate continuations do, and expose them to a parent
@@ -216,17 +218,21 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     let allowed := heapFx.filter fun fx => c.fnFx.contains fx || effects.any (·.1 == fx) ||
       (stagePlan.orElse fun _ => known).any (·.specs.contains fx)
     let bound := { bound with fnFx := allowed }
-    let request ← match forStagePlanOf bound q key rest bd value ((stagePlan.map (·.outcome)).getD bodyFail) required sourceSuspends with
+    let request ← match forStagePlanOf bound q key rest bd value ((stagePlan.map (·.outcome)).getD bodyFail) required sourceSuspends
+        (suspends := ((stagePlan.orElse fun _ => known).map (·.specs.contains "suspends")).getD c.suspends) with
       | .ok request => pure request
       | .error _ => return none
     let some plan := request.stagePlan | return none
     let args := plan.tparams.map fun tp =>
       (c.types.tvars.lookup tp.name).getD (.param tp.name (tp.constraint == "comparable"))
     let flatten := stagePlan.isSome && flat.getD stageFlat
-    let prepare ← match forStagePrefixOf bound plan args q rest bd flatten with
+    let prepare ← match forStagePrefixOf bound plan args q rest bd flatten (readyOnly := immediate) with
       | .ok prepare => pure prepare
       | .error _ => return none
-    let prepare := { prepare with extraFns := prepare.extraFns ++ extraTops }
+    let prepare := { prepare with
+      extraFns := prepare.extraFns ++ extraTops,
+      sourceFns := prepare.sourceFns ++ extraSources,
+      resumes := prepare.resumes ++ extraResumes }
     let hasPlan := c.types.requests.loops.any (·.key == request.key)
     let hasPrefix := c.types.requests.loops.any (·.key == prepare.key)
     modify fun st => { st with
@@ -701,9 +707,10 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       -- never completes has Core's void type without changing its exit.
       let r := if r.ty == .never then { r with e := .seq r.e (.lit .void) } else r
       if let some failed := failure then
-        -- Waiting source bodies cannot fail. Their explicit source exits
-        -- already return packets, so no failure-capture rewrite is needed.
-        if c.suspends && !r.e.mayFail ctx.sigProg then return r
+        -- A body with no failure already returns explicit source-exit
+        -- packets. Adding a conservative capture marker would invent a
+        -- failure in a nonfailable resume method, even before lowering.
+        if !r.e.mayFail ctx.sigProg then return r
         let packet ← elabE { c with canFail := false } failed (some c.retTy)
         let hint ← fresh (.opt r.ty)
         return ⟨FailCapture.marked hint r.e (.ret packet.e), r.ty⟩
@@ -736,7 +743,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           -- those clauses and the body a function of their own, which each
           -- alternative's for calls, instead of a copy in each)
           let restCl := fs ++ moreClauses
-          if c.suspends then
+          do
             let saved ← get
             let mut types : List Ty := []
             for (a, i) in b.alts.zipIdx do
@@ -754,7 +761,9 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                   let typing := operations.plan
                   let poly ← operations.context (← if polymorphic then choiceTypeContext c typing else pure c)
                   let staged ← stagedSuffix poly gp b.name typing.binding b.alts
-                    (restCl.map operations.rewrite) (operations.rewrite bd) (extraTops := operations.extraFns)
+                    (operations.rewriteSeq restCl) (operations.rewrite bd)
+                    (extraTops := operations.extraFns) (extraSources := operations.sourceFns)
+                    (extraResumes := operations.resumes) (immediate := !operations.sourceFns.isEmpty)
                   let after ← get
                   set { after with nslots := before.nslots, slotTys := before.slotTys }
                   if let some (prepare, plan, value, ready) := staged then
@@ -762,6 +771,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                     if let some value := joined then
                       if !ready then return ⟨.prim .userErr [], .arr value⟩
                       let (callCl, resumed) := forStageInvoke gp prepare plan.borrowed bd
+                        (copies := some (plan.copies.map (·.1)))
                       let mut parts : List R := []
                       for (a, i) in b.alts.zipIdx do
                         let r ← forW (liftA a i ++ (operations.casePrelude[i]?.getD []) ++ callCl) resumed
@@ -837,7 +847,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                     typeOnly := true,
                     locals := { name := b.name, slot, ty := plan.binding, mutable := false } :: poly.locals }
                   let r ← elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq
-                    bound p (restCl.map operations.rewrite) (operations.rewrite bd) (prepared := true) (failure := failure)
+                    bound p (operations.rewriteSeq restCl) (operations.rewrite bd) (prepared := true) (failure := failure)
                   -- With no remaining clauses, ordinary elabFor returns
                   -- the body itself; the generated $forFirst wraps it in
                   -- one array, even when the body is another for.
@@ -848,7 +858,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                   let effects := (← get).fx
                   let allowed := heapFx.filter fun k => c.fnFx.contains k || effects.any (·.1 == k)
                   let lift ← match contForLiftOf { poly with fnFx := allowed } gp b.name plan.binding value b.alts
-                    (restCl.map operations.rewrite) (operations.rewrite bd) bodyFail with
+                    (operations.rewriteSeq restCl) (operations.rewrite bd) bodyFail with
                     | .ok lift =>
                       let key := (if bodyFail then "fo" else "f") ++ contKey c gp b.name (b.alts ++ restCl ++ [bd])
                       joinedChoiceResult poly plan (operations.lift key lift)
@@ -887,6 +897,17 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           if let some r := parts.find? (·.ty != r0.ty) then
             eerr gp s!"the for's values have the type {r0.ty.show} for one alternative of this choice and {r.ty.show} for another"
           return ⟨parts.tail.foldl (fun acc r => p2 .concat acc r.e) r0.e, r0.ty⟩
+      if let some producer := Choice.binding? g then
+        if let some (.app _ (.ident _ "$choiceProducer")
+            (.construct _ "$choiceProducerValue" [yieldSty] [] :: dictionary :: receiver :: arguments) false) := producer.each then
+          let yieldTy ← resolveTy c.types producer.pos (producer.ty.getD yieldSty)
+          let rest := fs ++ more.flatMap (fun (next, filters) => next :: filters)
+          return ← elabProducerForWith elabE
+            (fun c p clauses body prepared firstDecides failure =>
+              elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq
+                c p clauses body prepared firstDecides failure)
+            { c with canFail := ctx.canFail && !firstDecides }
+            producer.pos producer.name yieldTy dictionary receiver arguments rest bd bodyFail
       -- (a call of a recursive function with several values taken lazily,
       -- #246: a loop over its values, each one iteration, over a one-element
       -- array, whose filter binds it and runs the generator's filters, and

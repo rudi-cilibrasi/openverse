@@ -8,6 +8,15 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 limit="${CHOICE_SIZE_TIMEOUT:-120}"
 # Keep modes sorted on separate lines so independent additions merge cleanly.
 kinds=(
+  producer-method-failure
+  producer-method-first
+  producer-method-for
+  producer-method-generic
+  producer-method-generic-local
+  producer-method-mixed
+  producer-method-option
+  producer-method-recursive
+  producer-method-waiting
   methodinstance-family-first
   methodinstance-family-for
   methodinstance-family-waiting
@@ -593,9 +602,15 @@ for kind in "${kinds[@]}"; do
   esac
   sizes=()
   for count in 4 8; do
-    python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
+    python3 - "$kind" "$count" "$root" >"$tmp/p.verse" <<'PY'
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
+if kind.startswith('producer-method-'):
+    import subprocess
+    from pathlib import Path
+    subprocess.run([sys.executable, str(Path(sys.argv[3])/'tests/scripts/producer-choice-model.py'),
+                    'source', kind.removeprefix('producer-method-'), str(count)], check=True)
+    sys.exit(0)
 if kind.startswith('methodinstance-'):
     _, shape, mode = kind.split('-')
     waiting = mode == 'waiting'
@@ -2304,6 +2319,13 @@ PY
       esac
       printf '%s\n' "$expected" >"$tmp/expected"
       timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" "${compat[@]}" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    fi
+    if [[ $kind == producer-method-* && $count == 4 ]]; then
+      python3 "$root/tests/scripts/producer-choice-model.py" oracle "${kind#producer-method-}" "$count" >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
       timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
       diff -u "$tmp/expected" "$tmp/lean.out"
       diff -u "$tmp/expected" "$tmp/c.out"

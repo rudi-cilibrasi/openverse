@@ -1,0 +1,32 @@
+a enter 1
+a yield 1
+a cleanup 1
+a enter 1
+a yield 1
+a cleanup 1
+body 2 2
+body cleanup
+a enter 0
+a yield 0
+a cleanup 0
+a cleanup 1
+body 2 1
+body cleanup
+a enter 1
+a yield 1
+a cleanup 1
+body 2 2
+body cleanup
+a enter 0
+a yield 0
+a cleanup 0
+a cleanup 1
+body 2 1
+body cleanup
+b enter 1
+b yield 1
+b cleanup 1
+body 2 3
+body cleanup
+return 5
+exit=0

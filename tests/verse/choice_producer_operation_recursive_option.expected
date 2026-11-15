@@ -1,0 +1,8 @@
+a enter 1
+a yield 1
+a cleanup 1
+b enter 1
+b yield 1
+b cleanup 1
+option 8
+exit=0

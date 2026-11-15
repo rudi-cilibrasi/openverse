@@ -126,7 +126,8 @@ def declareSignatures (env : TyEnv) (tops : List STop) (requests : Requests) :
                           isConst := false,
                           named := (ps.filter (·.named)).map fun q => (q.name, q.default),
                           pnames := ps.map (·.name),
-                          typeValues := ps.zipIdx.filterMap fun (param, i) => if param.typeValue then some i else none }
+                          typeValues := ps.zipIdx.filterMap fun (param, i) => if param.typeValue then some i else none,
+                          metadataForwards := ps.zipIdx.filterMap fun (param, i) => if param.metadataForward then some i else none }
     | .const p n _ sty _ =>
       let rt ← match sty with
         | some t => do let (rt, _) ← (resolveTy env p t).run {}; pure rt
@@ -208,7 +209,8 @@ def declareSignatures (env : TyEnv) (tops : List STop) (requests : Requests) :
                             tparams, bounds := resolved.bounds, selfBounds,
                             named := (ps.filter (·.named)).map fun q => (q.name, q.default),
                             pnames := ps.map (·.name),
-                            typeValues := ps.zipIdx.filterMap fun (param, i) => if param.typeValue then some i else none }
+                            typeValues := ps.zipIdx.filterMap fun (param, i) => if param.typeValue then some i else none,
+                            metadataForwards := ps.zipIdx.filterMap fun (param, i) => if param.metadataForward then some i else none }
     | _ => pure ()
   return { tops, generics, sigs, gsigs }
 
@@ -585,7 +587,7 @@ def checkSignatures (env : TyEnv) (sigs : Signatures) (cdefs : List CDef) (field
       ({ base := inB bound.base, derived := inB bound.derived } : SubtypeEvidence.Bound)
     oa.length == ob.length && (oa.map (·.2)) == (ob.map (·.2)) &&
     boundsA.length == boundsB.length && boundsA.all boundsB.contains && boundsB.all boundsA.contains &&
-    a.typeValues == b.typeValues &&
+    a.typeValues == b.typeValues && a.metadataForwards == b.metadataForwards &&
     ((a.params.drop 1).map inA) == ((b.params.drop 1).map inB) &&
       retBelow (inA a.ret) (inB b.ret) && a.decides == b.decides &&
       a.named.map (·.1) == b.named.map (·.1)

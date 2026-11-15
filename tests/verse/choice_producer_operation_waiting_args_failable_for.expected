@@ -1,0 +1,124 @@
+gate 1
+default 2
+b start 1 5
+b cleanup
+arg 8
+default 1
+a start 8 4
+a cleanup
+body 8 13
+a cleanup
+body 8 23
+arg 8
+default 1
+a start 8 4
+a cleanup
+body 8 13
+a cleanup
+body 8 23
+arg 8
+default 2
+b start 8 5
+b cleanup
+body 8 15
+b cleanup
+body 8 25
+arg 8
+default 2
+b start 8 5
+b cleanup
+body 8 15
+b cleanup
+body 8 25
+b cleanup
+arg 18
+default 1
+a start 18 4
+a cleanup
+body 18 23
+a cleanup
+body 18 33
+arg 18
+default 1
+a start 18 4
+a cleanup
+body 18 23
+a cleanup
+body 18 33
+arg 18
+default 2
+b start 18 5
+b cleanup
+body 18 25
+b cleanup
+body 18 35
+arg 18
+default 2
+b start 18 5
+b cleanup
+body 18 25
+b cleanup
+body 18 35
+gate 1
+default 2
+b start 1 5
+b cleanup
+arg 8
+default 1
+a start 8 4
+a cleanup
+body 8 13
+a cleanup
+body 8 23
+arg 8
+default 1
+a start 8 4
+a cleanup
+body 8 13
+a cleanup
+body 8 23
+arg 8
+default 2
+b start 8 5
+b cleanup
+body 8 15
+b cleanup
+body 8 25
+arg 8
+default 2
+b start 8 5
+b cleanup
+body 8 15
+b cleanup
+body 8 25
+b cleanup
+arg 18
+default 1
+a start 18 4
+a cleanup
+body 18 23
+a cleanup
+body 18 33
+arg 18
+default 1
+a start 18 4
+a cleanup
+body 18 23
+a cleanup
+body 18 33
+arg 18
+default 2
+b start 18 5
+b cleanup
+body 18 25
+b cleanup
+body 18 35
+arg 18
+default 2
+b start 18 5
+b cleanup
+body 18 25
+b cleanup
+body 18 35
+rows 32
+exit=0

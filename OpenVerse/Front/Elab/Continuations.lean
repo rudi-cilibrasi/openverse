@@ -1118,7 +1118,7 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
     alone can erase equations needed by borrowed frame-reference arguments. -/
 def forStagePlanOf (ctx : Ctx) (p : Pos) (key : String) (clauses : List SExpr)
     (body : SExpr) (vty : Ty) (outcome : Bool) (required : List String := [])
-    (sourceSuspends : Bool := false) : Except String Choice.FirstLift := do
+    (sourceSuspends : Bool := false) (suspends : Bool := true) : Except String Choice.FirstLift := do
   let ctx := ctx.choiceCoercionScope
   let qualify := match ctx.selfClass with | some c => selfQualify ctx c | none => id
   let clauses := clauses.map qualify
@@ -1131,7 +1131,8 @@ def forStagePlanOf (ctx : Ctx) (p : Pos) (key : String) (clauses : List SExpr)
   let (tps, _, _) ← contTypes ctx p inputs (vty :: sets.map (·.ty)) (.tuple p [])
   let base := s!"$forStage{p.line}_{p.col}_{key.hash}"
   let method := base ++ "$resume"
-  let specs := (if ctx.fnFx.isEmpty then ["computes"] else ctx.fnFx) ++ ["suspends"]
+  let specs := (if ctx.fnFx.isEmpty then ["computes"] else ctx.fnFx) ++
+    (if suspends then ["suspends"] else [])
   let copies := sets.map fun l => (l.name, l.ty.toSTy)
   let borrowed := caps.filterMap fun l => if l.storage.isSome then some l.name else none
   let plan : Choice.ForStagePlan := {
@@ -1169,7 +1170,8 @@ def forStageCopyNames (ids : List SExpr) : List String :=
 /-- A shared prefix still runs in the alternative's current filter. Its
     singleton environment is resumed only from that alternative's body. -/
 def forStageInvoke (p : Pos) (prepare : Choice.FirstLift) (borrowed : List String)
-    (body : SExpr) : List SExpr × SExpr :=
+    (body : SExpr) (copies : Option (List String) := none) : List SExpr × SExpr :=
+  let copyNames := copies.getD prepare.sets
   let payload := prepare.name ++ "$ready"
   let packet := payload ++ "$packet"
   let call := SExpr.app p (.ident p prepare.name) prepare.args true
@@ -1180,7 +1182,7 @@ def forStageInvoke (p : Pos) (prepare : Choice.FirstLift) (borrowed : List Strin
         (.app p (.ident p "$refineCopyOut") [get (j + 1)] false)) ++
       [.decl p payload none false (get 0)]
   let resume := SExpr.app p (.ident p "$forResumeValues")
-    [.ident p payload, forStageCopyMetadata p prepare.sets,
+    [.ident p payload, forStageCopyMetadata p copyNames,
       .block p (borrowed.map (SExpr.ident p ·))] false
   (clauses, forStageBodyAs body resume)
 
@@ -1190,7 +1192,7 @@ def forStageInvoke (p : Pos) (prepare : Choice.FirstLift) (borrowed : List Strin
 def forStagePrefixOf (ctx : Ctx) (plan : Choice.ForStagePlan) (args : List Ty) (p : Pos)
     (clauses : List SExpr) (body : SExpr) (flat : Bool := false)
     (copyNames : List String := plan.copies.map (·.1))
-    (borrowNames : List String := plan.borrowed) : Except String Choice.FirstLift := do
+    (borrowNames : List String := plan.borrowed) (readyOnly : Bool := false) : Except String Choice.FirstLift := do
   let ctx := ctx.choiceCoercionScope
   let qualify := match ctx.selfClass with | some c => selfQualify ctx c | none => id
   -- Default annotations use private lexical aliases. Resolve them before
@@ -1200,7 +1202,7 @@ def forStagePrefixOf (ctx : Ctx) (plan : Choice.ForStagePlan) (args : List Ty) (
   let body := Refine.substTypes σt (qualify body)
   let written := ctx.choiceCoercionBody (.block p (clauses ++ [body] ++ (copyNames ++ borrowNames).map (SExpr.ident p ·)))
   let caps := ctx.capturesOf written
-  let key := s!"prefix{flat}" ++ plan.key ++ contKey ctx p "$prepare" [written] ++ forStageCaptureKey ctx args caps
+  let key := s!"prefix{flat}" ++ (if readyOnly then "$ready" else "") ++ plan.key ++ contKey ctx p "$prepare" [written] ++ forStageCaptureKey ctx args caps
   let name := s!"{plan.base}$prepare{key.hash}"
   let (tps, more, witnesses) ← contTypes ctx p (caps.map (·.ty)) args written
   let params := caps.map fun l => ({ name := if l.mutable then l.name ++ "$in" else l.name, ty := l.ty.toSTy, typeValue := l.typeValue } : SParam)
@@ -1213,12 +1215,15 @@ def forStagePrefixOf (ctx : Ctx) (plan : Choice.ForStagePlan) (args : List Ty) (
       forStageCopyMetadata p copyNames, .block p (borrowNames.map (SExpr.ident p ·)),
       .ident p "true", .ident p (if flat then "true" else "false"), .block p clauses, body] false
   let stage := forClauseExitScope body stage
+  -- Source clauses cannot return or break. Their successful stage is one
+  -- fresh environment; the body outcome is produced only when it resumes.
+  let stage := if readyOnly && plan.outcome then SExpr.query p stage else stage
   let value := s!"{name}$value"
-  let code := if plan.copies.isEmpty then stage else SExpr.block p
+  let code := if readyOnly || plan.copies.isEmpty then stage else SExpr.block p
     [.decl p value none false stage, .tuple p (.ident p value :: copyNames.map (SExpr.ident p ·))]
-  let valueTy := if plan.outcome then STy.opt (.arr view) else .arr view
+  let valueTy := if plan.outcome && !readyOnly then STy.opt (.arr view) else .arr view
   let σ := (plan.tparams.map (·.name)).zip (args.map Ty.toSTy)
-  let ret := if plan.copies.isEmpty then valueTy else .tup (valueTy :: plan.copies.map (fun (_, t) => t.substNames σ))
+  let ret := if readyOnly || plan.copies.isEmpty then valueTy else .tup (valueTy :: plan.copies.map (fun (_, t) => t.substNames σ))
   let storage := caps.filterMap fun l => l.storage.map fun s =>
     (if l.mutable then l.name ++ "$in" else l.name,
       ({ frame := s.frame, name := s.name, args := s.args.map Ty.toSTy } : Choice.ResumeStorage))
@@ -1229,7 +1234,7 @@ def forStagePrefixOf (ctx : Ctx) (plan : Choice.ForStagePlan) (args : List Ty) (
     key, pos := p, name, params := params ++ more, tparams := tps,
     specs := plan.specs.filter (· != "suspends") ++ ["decides"], ret,
     body := ctx.choiceCoercionBody (pruneConstructHints ctx name (.block p (init ++ [code]))),
-    binds := [], sets := copyNames,
+    binds := [], sets := if readyOnly then [] else copyNames,
     args := caps.map (fun l => .ident p l.name) ++ witnesses.map (fun
       | .app q (.ident _ "$witness") [.ident _ n] false =>
         .app q (.ident q "$stageWitness") [.decl q n (some (.name n)) false (.tuple q [])] false
@@ -1317,13 +1322,12 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
     producer, stop its private loop instead of failing the filter. -/
 def forOutcomeValues (ctx : Ctx) (p : Pos) (r : R) : EM R := do
   let .opt (.arr t) := r.ty | eerr p "internal: expected a for outcome"
-  -- A waiting method returns before its outcome can be queried. Only the
-  -- saved option belongs in a condition; the call stays outside it.
-  let (before, input) ← if ctx.suspends && Suspend.hasSusp
-      (fun f => ctx.sigs.any fun s => s.idx == f && s.suspends) r.e then do
-      let slot ← fresh r.ty
-      pure ([Expr.assign slot r.e], Expr.local slot)
-    else pure ([], r.e)
+  -- Execute the producer/body and save its copy-outs before querying the
+  -- outcome. A failed query must not roll back a committed source return,
+  -- cleanup or Signal merely because its resume did not actually wait.
+  let slot ← fresh r.ty
+  let before := [Expr.assign slot r.e]
+  let input := Expr.local slot
   let value := Expr.prim .query [input]
   if let some flag := ctx.forOutcomeSlot then
     let slot ← fresh (.arr t)
@@ -1341,18 +1345,59 @@ structure ChoiceOperations where
   coercions : List (String × Ty × Ty) := []
   casePrelude : List (List SExpr) := []
   extraFns : List STop := []
+  sourceFns : List STop := []
+  resumes : List Choice.ForResume := []
+  prepareArguments : String → List SExpr → List SExpr := fun _ => id
 
+mutual
 partial def ChoiceOperations.rewrite (ops : ChoiceOperations) (body : SExpr) : SExpr :=
   if ops.replacements.isEmpty then body else
   Choice.mapE (fun
-    -- Getters are values, not assignment targets. Retain the source path
-    -- for the complete lvalue; discovery falls back if it needs its layout.
+    | marker@(.app _ (.ident _ n) [_] false) =>
+      if n == "$producerAnchorStart" || n == "$producerAnchorEnd" then some marker else none
+    | marker@(.app _ (.ident _ "$producerAnchor") [_, _] false) => some marker
+    | .block p statements => some (.block p (ops.rewriteSeq statements))
+    | .forE p clauses value => some (.forE p (ops.rewriteSeq clauses) (ops.rewrite value))
+    | .ite p clauses yes no => some (.ite p (ops.rewriteSeq clauses) (ops.rewrite yes) (no.map ops.rewrite))
+    -- Getters are values, not assignment targets.
     | call@(.set p target op value) =>
       some <| ((ops.replacements.find? (·.1 == call)).map (·.2)).getD
         (.set p target op (ops.rewrite value))
     | call@(.app _ (.member ..) _ _) | call@(.member ..) =>
-      (ops.replacements.find? (·.1 == call)).map (·.2)
+      (ops.replacements.find? (·.1 == call)).bind fun (_, value) =>
+        match value with
+        | .app _ (.ident _ "$choiceProducer") _ false => none
+        | _ => some value
     | _ => none) body
+
+/-- Replace an entire prepared producer expansion, including its argument
+    bindings, by one visitor call. The untouched expansion remains the exact
+    fallback when no producer dictionary can describe the source operation. -/
+partial def ChoiceOperations.rewriteSeq (ops : ChoiceOperations) : List SExpr → List SExpr
+  | [] => []
+  | statement :: rest =>
+    match statement with
+    | .app _ (.ident _ "$producerAnchorStart") [.decl p name ty false original] false =>
+      let replacement := (ops.replacements.find? (·.1 == original)).map (·.2)
+      let producer := replacement.any fun | .app _ (.ident _ "$choiceProducer") _ false => true | _ => false
+      let after := rest.dropWhile fun
+        | .app _ (.ident _ "$producerAnchorEnd") [.decl _ n _ false _] false => n != name
+        | _ => true
+      if producer && !after.isEmpty then
+        match replacement.get! with
+        | .app q callee (value :: .construct _ "$choiceProducerInputs" inputTypes [] :: dictionary :: inputs) false =>
+          let names := inputs.zipIdx.map fun (_, i) => s!"{name}$input{i}"
+          let arguments := (names.zip (inputTypes.zip inputs)).map fun (n, (t, e)) =>
+            SExpr.decl q n (some t) false e
+          let prepared := ops.rewriteSeq (ops.prepareArguments name arguments)
+          let call := SExpr.app q callee (value :: dictionary :: names.map (SExpr.ident q ·)) false
+          .app p (.ident p "$producerFrameStart") [] false :: prepared ++
+            [.decl p name ty false call, .app p (.ident p "$producerFrameEnd") [] false] ++
+            ops.rewriteSeq after.tail
+        | _ => ops.rewrite statement :: ops.rewriteSeq rest
+      else ops.rewrite statement :: ops.rewriteSeq rest
+    | _ => ops.rewrite statement :: ops.rewriteSeq rest
+end
 
 def ChoiceOperations.context (ops : ChoiceOperations) (ctx : Ctx) : EM Ctx := do
   let mut ctx := ctx
@@ -1362,7 +1407,10 @@ def ChoiceOperations.context (ops : ChoiceOperations) (ctx : Ctx) : EM Ctx := do
   return ctx
 
 def ChoiceOperations.lift (ops : ChoiceOperations) (key : String) (lift : Choice.FirstLift) : Choice.FirstLift :=
-  { lift with key, casePrelude := ops.casePrelude, extraFns := lift.extraFns ++ ops.extraFns }
+  { lift with
+    key, casePrelude := ops.casePrelude, extraFns := lift.extraFns ++ ops.extraFns,
+    sourceFns := lift.sourceFns ++ ops.sourceFns,
+    resumes := lift.resumes ++ ops.resumes }
 
 /-- Checked conversion evidence for a numeric choice column. The source
     is still elaborated with that column as its expected type. -/
@@ -1410,15 +1458,21 @@ def ChoiceOperations.coercionContext (ops : ChoiceOperations) (body : SExpr) : S
     [.ident p name, .construct p "$choiceConversion" [source.toSTy, target.toSTy] []]
   .app p (.ident p "$choiceCoercions") [.block p metadata, body] false
 
-/-- The selected binding and immutable aliases, in reverse lexical order.
-    An alias retains its initializer so its checked result can be recovered
-    after the initializer's operations have been discovered. -/
-abbrev ChoiceAliases := List (String × Option SExpr)
+/-- The selected binding and preceding immutable clause bindings, in reverse
+    lexical order. Keep each initializer and written annotation so instance
+    discovery can recover its ordinary checked type at the selected receiver. -/
+structure ChoiceAlias where
+  name : String
+  source : Option SExpr := none
+  annotation : Option STy := none
+  receiverAlias : Bool := false
+
+abbrev ChoiceAliases := List ChoiceAlias
 
 def ChoiceOperations.aliasTypes (ops : ChoiceOperations) (bindings : ChoiceAliases) : List (String × Ty) := Id.run do
   let mut types : List (String × Ty) := []
-  for (name, source) in bindings.reverse do
-    let ty := match source with
+  for ⟨name, source, annotation, _⟩ in bindings.reverse do
+    let ty := if annotation.isSome then none else match source with
       | none => some ops.plan.binding
       | some (.ident _ original) => types.lookup original
       | some value => (ops.knownTypes.find? (·.1 == value)).map (·.2)
@@ -1510,7 +1564,7 @@ def choicePathRow (env : TyEnv) (rootTy : Ty) (steps : List ChoiceWriteStep)
     dictionary discovery needs their types, not a substitution of their values. -/
 mutual
 partial def choiceMemberOperations (bindings : ChoiceAliases) (body : SExpr) : List (SExpr × ChoiceAliases) :=
-  let names := bindings.map (·.1)
+  let names := (bindings.filter (·.receiverAlias)).map (·.name)
   let depends (receiver : SExpr) := (Choice.namesUsed receiver).any names.contains
   match body with
   | e@(.app _ member@(.member _ receiver _) arguments _) =>
@@ -1548,6 +1602,11 @@ partial def choiceMemberOperations (bindings : ChoiceAliases) (body : SExpr) : L
             (if names.contains root then [(e, bindings)] else [])
         | none => choiceMemberOperations bindings value
   | .structDef .. | .enumDef .. | .refineDef .. => []
+  | .app _ (.ident _ "$producerAnchor") [original, _] false =>
+    choiceMemberOperations bindings original
+  | .app _ (.ident _ "$producerAnchorStart") [.decl _ _ _ false original] false =>
+    choiceMemberOperations bindings original
+  | .app _ (.ident _ "$producerAnchorEnd") [_] false => []
   | .app _ (.ident _ "$constructHints") _ _ => []
   | e => e.children.flatMap (choiceMemberOperations bindings)
 
@@ -1557,12 +1616,17 @@ partial def choiceMemberOperationSeq (bindings : ChoiceAliases) (statements : Li
   let mut operations := []
   for statement in statements do
     operations := operations ++ choiceMemberOperations visible statement
-    if let .decl _ name none false value := statement then
+    if let .app _ (.ident _ "$producerAnchorEnd") [.decl _ name annotation false value] false := statement then
+      visible := { name, source := some value, annotation, receiverAlias := true } :: visible
+    if let .decl _ name annotation false value := statement then
+      -- Keep every initializer for argument typing, but preserve the existing
+      -- receiver discovery domain. An ordinary local is not a new choice root.
       let candidate := match value with
         | .ident .. | .member .. | .app _ (.member ..) _ _ => true
         | _ => false
-      if candidate && (Choice.namesUsed value).any (fun n => visible.any (·.1 == n)) then
-        visible := (name, some value) :: visible
+      let names := (visible.filter (·.receiverAlias)).map (·.name)
+      let dependent := annotation.isNone && candidate && (Choice.namesUsed value).any names.contains
+      visible := { name, source := some value, annotation, receiverAlias := dependent } :: visible
   return (operations, visible)
 end
 
@@ -1578,6 +1642,7 @@ structure ChoiceOperationCase where
   instanceDefaults : Bool := false
   fixedInstance : Option (String × List Ty) := none
   indexedDecides : Bool := true
+  producer : Bool := false
 
 /-- A shared operation must declare the method constraints it quantifies.
     Source-path lowering remains available when a relation cannot be stated
@@ -1943,8 +2008,9 @@ def choiceInstanceArguments (elabE : Ctx → SExpr → Option Ty → EM R) (ctx 
     binder. Missing later-generator locals leave the generic fallback intact.
     The emitted marker rechecks result-directed inference at the real call. -/
 def choiceFixedOperationCase (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
-    (ops : ChoiceOperations) (aliases : List (String × Ty)) (instanceTypes : List (String × Ty))
-    (p : Pos) (method : String) (arguments : List SExpr) (row : ChoiceOperationCase) : EM (Option ChoiceOperationCase) := do
+    (ops : ChoiceOperations) (bindings : ChoiceAliases) (aliases : List (String × Ty))
+    (instanceTypes : List (String × Ty)) (p : Pos) (method : String)
+    (arguments : List SExpr) (row : ChoiceOperationCase) : EM (Option ChoiceOperationCase) := do
   let saved ← get
   let result ← tryCatch (do
     let .struct cls _ := row.receiver | pure none
@@ -1962,6 +2028,26 @@ def choiceFixedOperationCase (elabE : Ctx → SExpr → Option Ty → EM R) (ctx
     for (name, ty) in aliases do
       let ty := ty.subst instanceTypes
       c := { c with locals := { name, ty, slot := ← fresh ty, mutable := false } :: c.locals }
+    -- Later immutable clause bindings need their ordinary checked types too.
+    -- Probe their prepared prefix in lexical order, at this receiver instance;
+    -- a direct-alias-only table misses e.g. Z := A.N+1 before A.M(Z).
+    -- This is type discovery only: the real prefix is neither moved nor run.
+    let mut needed := arguments.flatMap Choice.namesUsed
+    for _ in List.range bindings.length do
+      for ⟨name, source, _, _⟩ in bindings do
+        if needed.contains name then
+          if let some value := source then needed := (needed ++ Choice.namesUsed value).eraseDups
+    for ⟨name, source, annotation, _⟩ in bindings.reverse do
+      if !needed.contains name || (c.lookup name).isSome then continue
+      let some source := source | continue
+      let value := ops.rewrite source
+      let prepared := ops.prepareArguments (s!"$choiceInstance{p.line}_{p.col}_{name}")
+        [.decl source.pos name annotation false value]
+      let result ← elabE c (.app source.pos (.ident source.pos "$forFirst")
+        [.block source.pos prepared, .ident source.pos name] false) none
+      let .arr ty := result.ty | eerr p "internal: operation prefix type"
+      let inferredLocal : Local := { name, ty, slot := ← fresh ty, mutable := false, typeValue := c.isTypeValue source }
+      c := { c with locals := inferredLocal :: c.locals }
     let name := "$choiceOperationReceiver"
     c := { c with locals := { name, ty := row.receiver, slot := ← fresh row.receiver, mutable := false } :: c.locals }
     let (packedContext, arguments) ← choiceInstanceArguments elabE c p sig (.ident p name :: arguments.map ops.rewrite)
@@ -1981,20 +2067,237 @@ def choiceFixedOperationCase (elabE : Ctx → SExpr → Option Ty → EM R) (ctx
   set saved
   return result
 
+/-- A producer dictionary invokes a consumer while the yielded value is live.
+    Mutable capture values are threaded explicitly through the consumer state;
+    no mutable heap cell is introduced into an otherwise computes producer. -/
+structure ChoiceProducerProtocol where
+  family : String
+  consumer : String
+  definitions : List STop
+  frameTypes : List Ty := []
+  resumes : List Choice.ForResume := []
+  deriving Inhabited
+
+/-- Build the synchronous, non-suspending visitor protocol. The result of one
+    consumer invocation is `(stop, value, nextState)`. The visitor retains the
+    values in order and stops before evaluating another producer alternative.
+    A stopped outcome needs only its final packet: earlier packets are either
+    rejected first-success candidates or results discarded by body failure.
+    Receiver-specific adapters expand their real method family through normal
+    choice lowering, rather than invoking its single-value checking stub. -/
+def choiceProducerProtocol (ctx : Ctx) (p methodPos : Pos) (method : String)
+    (arguments : List SExpr) (cases : List ChoiceOperationCase)
+    (canonical : List (List Ty × Ty)) (contracts : List (List TParam))
+    (specs : List String) : ChoiceProducerProtocol := Id.run do
+  let owners := ctx.locals.filterMap (·.storage)
+  let frameVars := Ty.mergeParamBounds ((owners.flatMap (·.args)).flatMap Ty.paramsC)
+  let frameTypes := frameVars.map fun (name, bound) => Ty.param name bound
+  let frameParams := frameVars.zipIdx.map fun ((_, bound), i) =>
+    ({ pos := p, name := s!"$producerFrameType{i}", constraint := if bound then "comparable" else "type" } : TParam)
+  let frameColumns := frameParams.map fun tp => STy.name tp.name
+  let frameRename := frameVars.zip frameParams |>.map fun ((name, bound), tp) => (name, Ty.param tp.name bound)
+  let forwarded := owners.map fun owner =>
+    ({ frame := owner.frame, name := owner.name, args := owner.args.map fun ty => (ty.subst frameRename).toSTy } : Choice.ResumeStorage)
+  let labels := arguments.map fun | .decl _ n .. => n | _ => ""
+  let context := if cases.any (·.omittedDefaults) then reprStr (choiceDefaultContext ctx (.tuple p [])) else ""
+  let key := reprStr (method, specs, canonical, labels, context, ctx.frameName, frameTypes)
+  let family := s!"$choiceOperationDictionaryProducer{key.hash}{if cases.any (·.omittedDefaults) then "$choiceDefault" else ""}"
+  let consumer := family ++ "$consumer"
+  let names := "$producerReceiver" ::
+    (List.range arguments.length).map (s!"$producerArgument{·}") ++ ["$producerValue"]
+  let variables := names.map STy.name
+  let typeParam (n : String) : TParam := { pos := p, name := n, constraint := "type" }
+  let tparams := names.map typeParam ++ frameParams
+  let result := STy.name "$consumerResult"
+  let state := STy.name "$consumerState"
+  let metadata := STy.name "$consumerMetadata"
+  let consumerParams := [typeParam "$consumerValue", typeParam "$consumerResult", typeParam "$consumerState", typeParam "$consumerMetadata"] ++ frameParams
+  let packet := STy.tup [.name "logic", result, state, metadata]
+  let visitRet := STy.tup [.name "logic", .arr result, state, metadata]
+  let firstRet := STy.tup [result, state, metadata]
+  let callbackTy (value : STy) := STy.app consumer ([value, result, state, metadata] ++ frameColumns)
+  let params (types : List STy) : List SParam := types.zipIdx.map fun (ty, i) =>
+    { name := s!"$producerInput{i}", ty }
+  let visitParams (types : List STy) (value : STy) := params types ++
+    [{ name := "$consumer", ty := callbackTy value }, { name := "$initialState", ty := state },
+      { name := "$initialMetadata", ty := metadata, metadataForward := true }]
+  let iface := STop.classDef p family [] tparams [] [] true []
+    [.fn p "$visit" (visitParams variables.dropLast variables.getLast!)
+      [typeParam "$consumerResult", typeParam "$consumerState", typeParam "$consumerMetadata"]
+      ("$abstract" :: specs) visitRet (.tuple p []),
+     .fn p "$first" (visitParams variables.dropLast variables.getLast!)
+      [typeParam "$consumerResult", typeParam "$consumerState", typeParam "$consumerMetadata"]
+      ("$abstract" :: "decides" :: specs) firstRet (.tuple p [])]
+  let consumerIface := STop.classDef p consumer [] consumerParams [] [] true []
+    [.fn p "$take" [{ name := "$value", ty := .name "$consumerValue" },
+      { name := "$state", ty := state },
+      { name := "$metadata", ty := metadata, metadataForward := true }] [] ("$abstract" :: "decides" :: specs) packet (.tuple p [])]
+  let mut definitions := [consumerIface, iface]
+  let mut resumes : List Choice.ForResume := []
+  for ((row, (inputs, value)), i) in (cases.zip canonical).zipIdx do
+    let impl := s!"{family}$case{i}"
+    let parent := STy.app family ((inputs ++ [value]).map Ty.toSTy ++ frameColumns)
+    let sourceValues := (List.range inputs.length).map fun j => SExpr.ident p s!"$producerInput{j}"
+    let call := SExpr.app p (.member methodPos sourceValues.head! method)
+      (choiceForwardArguments arguments sourceValues.tail) (row.specs.contains "decides")
+    let call := if row.omittedDefaults then
+      let owner := match row.receiver with
+        | .struct cls _ => (ctx.methodDecl? cls method).getD cls
+        | _ => ""
+      match choiceDefaultContext ctx call with
+      | .app _ _ [stack, flags, value] false =>
+        SExpr.app p (.ident p "$producerDefaultContext")
+          [.str p [.text (Choice.methodFnName owner method)], stack, flags, value] false
+      | _ => call
+    else call
+    let ident := SExpr.ident p
+    let get (j : Nat) := SExpr.app p (ident "$packet") [.int p (Int.ofNat j)] false
+    let body := SExpr.block p [
+      .decl p "$state" (some state) true (ident "$initialState"),
+      .decl p "$metadata" (some metadata) true (ident "$initialMetadata"),
+      .decl p "$values" (some (.arr result)) false
+        (.forE p [.gen p "$producerUnit" none (.arrayLit p [.tuple p []]),
+          .decl p "$yielded" (some value.toSTy) false call,
+          .decl p "$packet" none false (.app p (.member p (ident "$consumer") "$take")
+            [ident "$yielded", ident "$state", ident "$metadata"] true)]
+          (.block p [
+            .set p (ident "$state") none (get 2),
+            .set p (ident "$metadata") none (get 3),
+            .ite p [.query p (get 0)]
+              (.ret p (some (.tuple p [ident "true", .arrayLit p [get 1], ident "$state", ident "$metadata"]))) none,
+            get 1])),
+      .tuple p [ident "false", ident "$values", ident "$state", ident "$metadata"]]
+    let firstBody := SExpr.app p (ident "$first") [.block p [
+      .decl p "$yielded" (some value.toSTy) false call,
+      .decl p "$packet" none false (.app p (.member p (ident "$consumer") "$take")
+        [ident "$yielded", ident "$initialState", ident "$initialMetadata"] true),
+      .tuple p [get 1, get 2, get 3]]] false
+    resumes := resumes ++ (["$visit", "$first"].map fun method =>
+      { name := impl ++ "." ++ method, forwarded, sourceContext := sourceContextOf ctx })
+    definitions := definitions ++ [.classDef p impl [] (contracts[i]! ++ frameParams) [] [parent] false []
+      [.fn p "$visit" (visitParams (inputs.map Ty.toSTy) value.toSTy)
+        [typeParam "$consumerResult", typeParam "$consumerState", typeParam "$consumerMetadata"]
+        ("override" :: specs) visitRet body,
+       .fn p "$first" (visitParams (inputs.map Ty.toSTy) value.toSTy)
+        [typeParam "$consumerResult", typeParam "$consumerState", typeParam "$consumerMetadata"]
+        ("override" :: "decides" :: specs) firstRet firstBody]]
+  return { family, consumer, definitions, frameTypes, resumes }
+
+
+def choiceForProducerProtocol (ctx : Ctx) (p methodPos : Pos) (method : String)
+    (arguments : List SExpr) (cases : List ChoiceOperationCase)
+    (canonical : List (List Ty × Ty)) (contracts : List (List TParam))
+    (specs : List String) (waiting : Bool) : ChoiceProducerProtocol := Id.run do
+  let owners := ctx.locals.filterMap (·.storage)
+  let frameVars := Ty.mergeParamBounds ((owners.flatMap (·.args)).flatMap Ty.paramsC)
+  let frameTypes := frameVars.map fun (name, bound) => Ty.param name bound
+  let frameParams := frameVars.zipIdx.map fun ((_, bound), i) =>
+    ({ pos := p, name := s!"$producerFrameType{i}", constraint := if bound then "comparable" else "type" } : TParam)
+  let frameColumns := frameParams.map fun tp => STy.name tp.name
+  let frameRename := frameVars.zip frameParams |>.map fun ((name, bound), tp) => (name, Ty.param tp.name bound)
+  let forwarded := owners.map fun owner =>
+    ({ frame := owner.frame, name := owner.name, args := owner.args.map fun ty => (ty.subst frameRename).toSTy } : Choice.ResumeStorage)
+  let labels := arguments.map fun | .decl _ n .. => n | _ => ""
+  let context := if cases.any (·.omittedDefaults) then reprStr (choiceDefaultContext ctx (.tuple p [])) else ""
+  let key := reprStr (method, specs, canonical, labels, context, ctx.frameName, frameTypes)
+  let family := s!"$choiceOperationDictionaryProducer{key.hash}{if cases.any (·.omittedDefaults) then "$choiceDefault" else ""}"
+  let family := family ++ (if waiting then "$waiting" else "$immediate")
+  let resumeSpecs := (if waiting then ["suspends"] else []) ++ specs
+  let consumer := family ++ "$consumer"
+  let names := "$producerReceiver" ::
+    (List.range arguments.length).map (s!"$producerArgument{·}") ++ ["$producerValue"]
+  let variables := names.map STy.name
+  let typeParam (n : String) : TParam := { pos := p, name := n, constraint := "type" }
+  let tparams := names.map typeParam ++ frameParams
+  let result := STy.name "$consumerResult"
+  let ready := STy.name "$consumerReady"
+  let state := STy.name "$consumerState"
+  let metadata := STy.name "$consumerMetadata"
+  let consumerParams := [typeParam "$consumerValue", typeParam "$consumerResult", typeParam "$consumerState", typeParam "$consumerMetadata", typeParam "$consumerReady"] ++ frameParams
+  let packet := STy.tup [.name "logic", result, state, metadata]
+  let visitRet := STy.tup [.name "logic", .arr result, state, metadata]
+  let callbackTy (value : STy) := STy.app consumer ([value, result, state, metadata, ready] ++ frameColumns)
+  let params (types : List STy) : List SParam := types.zipIdx.map fun (ty, i) =>
+    { name := s!"$producerInput{i}", ty }
+  let visitParams (types : List STy) (value : STy) := params types ++
+    [{ name := "$consumer", ty := callbackTy value }, { name := "$initialState", ty := state },
+      { name := "$initialMetadata", ty := metadata, metadataForward := true }]
+  let iface := STop.classDef p family [] tparams [] [] true []
+    [.fn p "$visit" (visitParams variables.dropLast variables.getLast!)
+      [typeParam "$consumerResult", typeParam "$consumerState", typeParam "$consumerMetadata", typeParam "$consumerReady"]
+      ("$abstract" :: resumeSpecs) visitRet (.tuple p [])]
+  let consumerIface := STop.classDef p consumer [] consumerParams [] [] true []
+    [.fn p "$take" [{ name := "$value", ty := .name "$consumerValue" },
+      { name := "$state", ty := state },
+      { name := "$metadata", ty := metadata, metadataForward := true }] [] ("$abstract" :: "decides" :: specs) ready (.tuple p []),
+     .fn p "$resume" [{ name := "$ready", ty := ready },
+      { name := "$state", ty := state },
+      { name := "$metadata", ty := metadata, metadataForward := true }]
+      [] ("$abstract" :: resumeSpecs) packet (.tuple p [])]
+  let mut definitions := [consumerIface, iface]
+  let mut resumes : List Choice.ForResume := []
+  for ((row, (inputs, value)), i) in (cases.zip canonical).zipIdx do
+    let impl := s!"{family}$case{i}"
+    let parent := STy.app family ((inputs ++ [value]).map Ty.toSTy ++ frameColumns)
+    let sourceValues := (List.range inputs.length).map fun j => SExpr.ident p s!"$producerInput{j}"
+    let call := SExpr.app p (.member methodPos sourceValues.head! method)
+      (choiceForwardArguments arguments sourceValues.tail) (row.specs.contains "decides")
+    let call := if row.omittedDefaults then
+      let owner := match row.receiver with
+        | .struct cls _ => (ctx.methodDecl? cls method).getD cls
+        | _ => ""
+      match choiceDefaultContext ctx call with
+      | .app _ _ [stack, flags, value] false =>
+        SExpr.app p (.ident p "$producerDefaultContext")
+          [.str p [.text (Choice.methodFnName owner method)], stack, flags, value] false
+      | _ => call
+    else call
+    let ident := SExpr.ident p
+    let get (j : Nat) := SExpr.app p (ident "$packet") [.int p (Int.ofNat j)] false
+    let body := SExpr.block p [
+      .decl p "$state" (some state) true (ident "$initialState"),
+      .decl p "$metadata" (some metadata) true (ident "$initialMetadata"),
+      .decl p "$values" (some (.arr result)) false
+        (.forE p [.gen p "$producerUnit" none (.arrayLit p [.tuple p []]),
+          .decl p "$yielded" (some value.toSTy) false call,
+          .decl p "$prepared" none false (.app p (.member p (ident "$consumer") "$take")
+            [ident "$yielded", ident "$state", ident "$metadata"] true)]
+          (.block p [
+            .decl p "$packet" none false (.app p (.member p (ident "$consumer") "$resume")
+              [ident "$prepared", ident "$state", ident "$metadata"] false),
+            .set p (ident "$state") none (get 2),
+            .set p (ident "$metadata") none (get 3),
+            .ite p [.query p (get 0)]
+              (.ret p (some (.tuple p [ident "true", .arrayLit p [get 1], ident "$state", ident "$metadata"]))) none,
+            get 1])),
+      .tuple p [ident "false", ident "$values", ident "$state", ident "$metadata"]]
+    resumes := resumes ++ (["$visit"].map fun method =>
+      { name := impl ++ "." ++ method, forwarded, sourceContext := sourceContextOf ctx })
+    definitions := definitions ++ [.classDef p impl [] (contracts[i]! ++ frameParams) [] [parent] false []
+      [.fn p "$visit" (visitParams (inputs.map Ty.toSTy) value.toSTy)
+        [typeParam "$consumerResult", typeParam "$consumerState", typeParam "$consumerMetadata", typeParam "$consumerReady"]
+        ("override" :: resumeSpecs) visitRet body]]
+  return { family, consumer, definitions, frameTypes, resumes }
+
+
+
 /-- Each dictionary implements the method at its original receiver and
     argument types. Omitted defaults retain their declaration scope and
     source context; their forwarding methods borrow caller task ownership. -/
 def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
     (stem binding : String) (plan : ChoiceTypes.Plan) (suffix : List SExpr)
     (forBody : Option SExpr := none) : EM ChoiceOperations := do
-  let mut ops : ChoiceOperations := { plan, casePrelude := plan.instances.map fun _ => [] }
+  let mut ops : ChoiceOperations := {
+    plan, casePrelude := plan.instances.map fun _ => [],
+    prepareArguments := fun site clauses => Choice.prepare clauses (choiceValues ctx) (choiceField ctx)
+      (site := site) (fieldOrder := choiceOrder ctx) (keepExcl := true) (keepBranches := choiceHasCast ctx) }
   if !(match plan.binding with | .param .. => true | _ => false) then return ops
   let source : List SExpr := match forBody with
     | some value => suffix.dropLast ++ [.forE value.pos [] value]
     | none => suffix
   let contexts := source.flatMap (choiceOperationContexts ctx)
   let mut seen : List SExpr := []
-  for (call, bindings) in (choiceMemberOperationSeq [(binding, none)] suffix).1 do
+  for (call, bindings) in (choiceMemberOperationSeq [{ name := binding, receiverAlias := true }] suffix).1 do
     let key := call
     if seen.contains key then continue
     seen := key :: seen
@@ -2129,10 +2432,9 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       else
         let .struct cls classArgs := actual | break
         let some owner := ctx.methodDecl? cls method | break
-        -- (#283) none for a family's stub: the method has several values,
-        -- which no operation gives; the clauses are copied instead
-        if ctx.types.familyStubs.contains s!"{owner}.{method}" then break
+        let producer := ctx.types.familyStubs.contains s!"{owner}.{method}"
         let some signature := ctx.sig? s!"{owner}.{method}" | break
+        if producer && signature.suspends then break
         let classVars := (ctx.types.sparams.lookup owner).getD []
         let own := signature.tparams.filter fun (n, _) => !classVars.any (·.1 == n)
         let methodVars := own.zipIdx.map fun ((_, b), i) => (s!"$operationMethod{i}", b)
@@ -2157,7 +2459,7 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
         let specs := (if signature.fx.isEmpty then ["computes"] else signature.fx) ++
           (if signature.decides then ["decides"] else []) ++
           (if signature.suspends then ["suspends"] else [])
-        cases := cases ++ [{ receiver := actual, inputs, result, specs, methodVars, methodBounds, omittedDefaults, instanceDefaults }]
+        cases := cases ++ [{ receiver := actual, inputs, result, specs, methodVars, methodBounds, omittedDefaults, instanceDefaults, producer }]
     if cases.length != plan.instances.length then
       -- A checked function-valued field fixes its result before its
       -- arguments are available, just as a monomorphic method does.
@@ -2169,12 +2471,16 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       continue
     let bracket := if indexed then cases.any (·.indexedDecides) else bracket
     if cases.any (!·.methodVars.isEmpty) then
-      if let some generic := choiceGenericOperation sourceCtx stem receiver receiverTy ops call arguments cases then
-        ops := generic
-        continue
+      -- A producer's instance is established by the same argument/default
+      -- binder as a scalar call, but its body must use the visitor rather
+      -- than a scalar generic dictionary's checking stub.
+      if !cases.any (·.producer) then
+        if let some generic := choiceGenericOperation sourceCtx stem receiver receiverTy ops call arguments cases then
+          ops := generic
+          continue
       let mut fixed : List ChoiceOperationCase := []
       for (row, instanceTypes) in cases.zip ops.plan.instances do
-        let some checked ← choiceFixedOperationCase elabE sourceCtx ops aliases instanceTypes p method arguments row | break
+        let some checked ← choiceFixedOperationCase elabE sourceCtx ops bindings aliases instanceTypes p method arguments row | break
         fixed := fixed ++ [checked]
       if fixed.length != cases.length then continue
       cases := fixed
@@ -2212,6 +2518,37 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
     let canonical := (cases.zip renames).map fun (row, rename) =>
       let types := row.receiver :: row.inputs
       (types.map (·.subst rename), row.result.subst rename)
+    if cases.any (·.producer) then
+      let visitorFx := heapFx.filter fun k => sourceCtx.fnFx.contains k || (allowedFx specs).contains k
+      let visitorSpecs := if visitorFx.isEmpty then ["computes"] else visitorFx
+      let methodPos := match call with
+        | .app _ (.member q _ _) _ _ => q
+        | _ => p
+      let protocol := choiceProducerProtocol sourceCtx p methodPos method arguments cases canonical (contracts.map Option.get!) visitorSpecs
+      let immediate := choiceForProducerProtocol sourceCtx p methodPos method arguments cases canonical (contracts.map Option.get!) visitorSpecs false
+      let waiting := choiceForProducerProtocol sourceCtx p methodPos method arguments cases canonical (contracts.map Option.get!) visitorSpecs true
+      let name := s!"{stem}$producer{ops.params.length}"
+      let columns := operationReceiverTy :: inputs ++ [result] ++ protocol.frameTypes
+      let ty := Ty.tup [.struct protocol.family columns, .struct immediate.family columns, .struct waiting.family columns]
+      let bindings := cases.zipIdx.map fun (row, i) =>
+        let vars := classVariables[i]!
+        let make (family : String) := SExpr.app p (.ident p "$choiceDictionary")
+          [.construct p s!"{family}$case{i}" ((vars.map fun (n, _) => .name n) ++ protocol.frameTypes.map Ty.toSTy) []] false
+        let columns := (row.receiver :: row.inputs ++ [row.result] ++ protocol.frameTypes).map Ty.toSTy
+        [.decl p name (some (.tup [.app protocol.family columns, .app immediate.family columns, .app waiting.family columns])) false
+          (.tuple p [make protocol.family, make immediate.family, make waiting.family])]
+      let invocation := SExpr.app p (.ident p "$choiceProducer")
+        (.construct p "$choiceProducerValue" [result.toSTy] [] ::
+          .construct p "$choiceProducerInputs" ((operationReceiverTy :: inputs).map Ty.toSTy) [] :: .ident p name ::
+          ops.rewrite receiver :: arguments.map (fun a => ops.rewrite (choiceArgumentValue a))) false
+      ops := { ops with
+        plan := finalPlan, params := ops.params ++ [(name, ty)],
+        knownTypes := ops.knownTypes ++ [(call, result)],
+        replacements := ops.replacements ++ [(key, invocation)],
+        casePrelude := (ops.casePrelude.zip bindings).map fun (old, next) => old ++ next,
+        sourceFns := ops.sourceFns ++ protocol.definitions ++ immediate.definitions ++ waiting.definitions,
+        resumes := ops.resumes ++ protocol.resumes ++ immediate.resumes ++ waiting.resumes }
+      continue
     let operationName := if indexed then "$indexSet:" ++ method ++ (if indices.length == 1 then "" else s!":{indices.length}") ++ ((setter.getD none).map (":" ++ ·)).getD "" else
       if let some op := setter then "$set:" ++ method ++ ":" ++ op.getD "=" else
       if callable then "$invoke:" ++ method else if isField then "$field:" ++ method else method

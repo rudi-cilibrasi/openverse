@@ -151,6 +151,9 @@ structure Sig where
   selfBounds : List (Nat × Nat) := []
   /-- Explicit parameters that carry dummy type values rather than data. -/
   typeValues : List Nat := []
+  /-- Compiler-only parameters forwarding actual provenance without a
+      declaration-level executable-evidence promise. -/
+  metadataForwards : List Nat := []
   deriving Inhabited
 
 /-- A function's own shape as a value (#503: its named parameters,
