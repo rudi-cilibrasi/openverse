@@ -73,7 +73,22 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
 
 partial def elabECore (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   let st0 ← get
-  let result ← elabERaw ctx se exp
+  let result ← tryCatch (elabERaw ctx se exp) fun err => do
+    -- A result hint can reject an earlier call operand before a later
+    -- refining cast is reached. Discover that cast without the hint;
+    -- only its actual refusal may request the existing ordered lifting.
+    -- The probe's result and elaboration state are never retained.
+    if exp.isNone || !ctx.canFail || (Refine.castRefusal? err).isSome then throw err
+    let casts := Refine.castsIn ctx.types.classes.contains se
+    if casts.isEmpty then throw err
+    let failed ← get
+    set st0
+    let refusal? ← tryCatch (do
+      discard <| elabERaw { ctx with typeOnly := true } se none
+      pure none) (fun probeErr => pure <|
+        if (Refine.castRefusal? probeErr).any (fun r => casts.contains r.pos) then some probeErr else none)
+    set failed
+    throw (refusal?.getD err)
   -- (a `for` whose values are not of the element type expected: its body
   -- at that type, as a typed binding is, so that `false` there is an empty
   -- option, `X:[][]?int = for (…) { for (…) { false } }`, the Book's tests,

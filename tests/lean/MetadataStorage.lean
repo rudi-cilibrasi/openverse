@@ -103,7 +103,13 @@ private def setIndexCapture (body : String) : String :=
 private def namedCapture (body : String) : String :=
   "pair(a:type,b:type):=class{}\ndup(t:type):=class(pair(t,t)){Index:int=0}\nSelect(?Index:int=0)<computes>:int=Index\nreader:=class<computes>{Pick(?Index:int=0)<computes>:int=Index}\nbox:=struct{Value:int}\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type)" ++ body
 
+private def expectedCallCapture (body : String) : String :=
+  "pair(a:type,b:type):=class{A:a;B:b}\ndup(t:type):=class(pair(t,t)){}\nEcho(X:t,?Other:t=X where t:type)<computes>:t=Other\nKeep(X:t,N:int where t:type)<computes>:t=X\nbox(t:type):=struct{Value:t}\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type)" ++ body
+
 private def cases : List (String × String) := [
+  ("expected call result metadata capture", expectedCallCapture "<transacts><decides>:b=\n    Echo(P.A,?Other:=Keep(dup[P].B,Dummy()))"),
+  ("expected call binding metadata capture", expectedCallCapture "<transacts><decides>:b=\n    V:b=Echo(P.A,?Other:=Keep(dup[P].B,Dummy()))\n    V"),
+  ("expected call field metadata capture", expectedCallCapture "<transacts><decides>:box(b)=\n    box(b){Value:=Echo(P.A,?Other:=Keep(dup[P].B,Dummy()))}"),
   ("named call metadata capture", namedCapture "<transacts><decides>:int=\n    Select(?Index:=dup[P].Index+Dummy())"),
   ("named method metadata capture", namedCapture "<transacts><decides>:int=\n    reader{}.Pick(?Index:=dup[P].Index+Dummy())"),
   ("named field metadata capture", namedCapture "<transacts><decides>:int=\n    box{Value:=Select(?Index:=dup[P].Index+Dummy())}.Value"),
@@ -282,6 +288,9 @@ private def cases : List (String × String) := [
   ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
+  ("expected call result real overwrite", expectedCallCapture "<transacts><decides>:b=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    Echo(P.A,?Other:=Keep(dup[P].B,Stored()))"),
+  ("expected call binding real overwrite", expectedCallCapture "<transacts><decides>:b=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    V:b=Echo(P.A,?Other:=Keep(dup[P].B,Stored()))\n    V"),
+  ("expected call field real overwrite", expectedCallCapture "<transacts><decides>:box(b)=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    box(b){Value:=Echo(P.A,?Other:=Keep(dup[P].B,Stored()))}"),
   ("named call real overwrite", namedCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    Select(?Index:=dup[P].Index+Stored())"),
   ("named method real overwrite", namedCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    reader{}.Pick(?Index:=dup[P].Index+Stored())"),
   ("named field real overwrite", namedCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    box{Value:=Select(?Index:=dup[P].Index+Stored())}.Value"),
