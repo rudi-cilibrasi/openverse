@@ -139,8 +139,12 @@ private partial def expr (fns : Array Fn) (stack : List Nat) (site : Nat)
       | .arrSet =>
         let value := union (elements out.memory (args.headD [0])) (args[2]?.getD [0])
         make out.memory site [value]
-      | .concat | .flatten =>
+      | .concat =>
         make out.memory site [args.foldl (fun r a => union r (elements out.memory a)) []]
+      | .flatten =>
+        -- The outer array stores row identities, not the flattened values.
+        let rows := args.foldl (fun r a => union r (elements out.memory a)) []
+        make out.memory site [elements out.memory rows]
       | _ => ([], out.memory)
     let value := match op, es with
       | .fail, _ | .userErr, _ | .query, [.lit (.logic false)] | .query, [.lit .none] => none

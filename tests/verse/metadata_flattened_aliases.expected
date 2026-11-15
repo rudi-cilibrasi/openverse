@@ -1,0 +1,9 @@
+FlatSignal 2
+UnrelatedSignal 1
+NestedSignal 2
+HelperSignal 2
+ConcatSignal 2
+FlatAwait 2
+FlatTask 2
+UnrelatedTask 1
+exit=0
