@@ -2,7 +2,8 @@ pair(a:type,b:type):=class{A:a;B:b}
 dup(t:type):=class(pair(t,t)){}
 Echo(X:t,?Other:t=X where t:type):t=Other
 cell:=class{var Trace:string=""}
-Key(H:cell,S:string,?Default:?t=false where t:type)<transacts>:?t={set H.Trace+=S;Default}
+DefaultCount(H:cell)<transacts>:int={set H.Trace+="d";0}
+Key(H:cell,S:string,?Count:int=DefaultCount(H),?Default:?t=false where t:type)<transacts>:?t={set H.Trace+=S;Default}
 Object(H:cell,S:string,P:pair(a,b) where a:type,b:type)<transacts>:pair(a,b)={set H.Trace+=S;P}
 Value(H:cell,S:string,X:t where t:type)<transacts>:t={set H.Trace+=S;X}
 Build(P:pair(a,b),Q:pair(c,d),H:cell where a:type,b:type,c:type,d:type)<decides>:[?int]tuple(b,d)=

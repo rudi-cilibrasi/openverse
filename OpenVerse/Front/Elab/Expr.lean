@@ -79,7 +79,9 @@ partial def elabECore (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     -- only its actual refusal may request the existing ordered lifting.
     -- The probe's result and elaboration state are never retained.
     if exp.isNone || !ctx.canFail || st0.refiningHintProbe || (Refine.castRefusal? err).isSome then throw err
-    let casts := Refine.castsIn ctx.types.classes.contains se
+    let completed := Refine.contextRetryCasts err
+    let casts := (Refine.castsIn ctx.types.classes.contains se).filter
+      (fun position => !completed.contains (reprStr position))
     if casts.isEmpty then throw err
     let failed ← get
     -- A cast can often be checked directly in its lexical context. This
@@ -2832,8 +2834,12 @@ partial def elabMapLit (ctx : Ctx) (p : Pos) (entries : List (SExpr × SExpr)) (
       if !kt.comparable ctx.types then eerr p (notComparable ctx.types kt "a map key")
       if let some c := kt.keyContainer? ctx.types then eerr p (keyContainerWhy kt c)
       let vt0 := vt?.getD rv0.ty
-      let mut rs : Array (SExpr × R × SExpr × R) := #[]
-      for (k, v) in entries do
+      -- The first pair already supplied the inferred types. Reusing it
+      -- avoids typing a nested literal twice at every enclosing level,
+      -- and its real code still runs once in the original entry order.
+      checkMapKeyCanFail ctx k0.pos rk0.e
+      let mut rs : Array (SExpr × R × SExpr × R) := #[(k0, rk0, v0, rv0)]
+      for (k, v) in entries.drop 1 do
         let rk ← elabE ctx k (some kt)
         -- (a key that can fail: "failure in map literal keys is not
         -- implemented", Book of Verse ch. 3, and its tests, Map.versetest:249)
@@ -2876,11 +2882,14 @@ partial def elabMapLit (ctx : Ctx) (p : Pos) (entries : List (SExpr × SExpr)) (
       -- Keep the contextual key type, discard every trial slot/effect,
       -- and let ordinary block lifting order the real keys and values.
       let casts := Refine.castsIn ctx.types.classes.contains (.mapLit p entries)
-      if !ctx.canFail || !(entries.any fun (key, _) => mapKeyNeedsContext ctx key) ||
-          !(Refine.castRefusal? err).any (fun refusal => casts.contains refusal.pos) then throw err
+      let some refusal := Refine.castRefusal? err | throw err
+      if !ctx.canFail || saved.refiningHintProbe || !(entries.any fun (key, _) => mapKeyNeedsContext ctx key) ||
+          !casts.contains refusal.pos then throw err
       set saved
       let typed := .mapLit p (entries.map fun (key, value) => (withMapKeyContext ctx kt key, value))
-      elabE ctx (.block p [typed]) exp
+      tryCatch (elabE ctx (.block p [typed]) exp) fun retryError =>
+        if (Refine.castRefusal? retryError).isSome then throw retryError
+        else throw (Refine.contextRetryError retryError [refusal.pos])
 
 partial def elabCase (ctx : Ctx) (p : Pos) (scrut : SExpr) (arms : List (Option SExpr × SExpr))
     (exp : Option Ty) : EM R := do
