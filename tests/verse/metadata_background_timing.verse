@@ -81,6 +81,38 @@ AliasCleanup(F:type{_()<computes>:int},G:type{_()<computes>:int})<suspends>:void
             Sleep(0.1)
             0
 
+SignalWrite(E:event(int),F:type{_()<computes>:int},G:type{_()<computes>:int})<suspends>:int=
+    var Stored:type{_()<computes>:int}=G
+    branch:
+        E.Await()
+        set Stored=G
+    set Stored=F
+    E.Signal(0)
+    Stored()
+
+NestedCleanup(F:type{_()<computes>:int},G:type{_()<computes>:int})<suspends>:void=
+    var Stored:type{_()<computes>:int}=G
+    defer:
+        Print("nested cleanup {Stored()}")
+    Values:=sync:
+        block:
+            defer:
+                set Stored=F
+            loop{Sleep(1.0)}
+        block:
+            loop{Sleep(1.0)}
+
+BranchCleanupOrder(F:type{_()<computes>:int},G:type{_()<computes>:int})<suspends>:void=
+    var Stored:type{_()<computes>:int}=G
+    defer:
+        Print("parent cleanup {Stored()}")
+    branch:
+        defer:
+            set Stored=F
+            Print("branch cleanup")
+        loop{Sleep(1.0)}
+    loop{Sleep(1.0)}
+
 Main()<suspends>:void=
     Print("branch late {BranchLate(One,Two)}")
     Print("rush late {RushLate(One,Two)}")
@@ -89,3 +121,11 @@ Main()<suspends>:void=
     Print("rush canceled {RushCanceled(One,Two)}")
     Cleanup(Two)
     AliasCleanup(One,Two)
+    T:=spawn{NestedCleanup(One,Two)}
+    Sleep(0.1)
+    T.Cancel()
+    B:=spawn{BranchCleanupOrder(One,Two)}
+    Sleep(0.1)
+    B.Cancel()
+    E:=event(int){}
+    Print("signal {SignalWrite(E,One,Two)}")

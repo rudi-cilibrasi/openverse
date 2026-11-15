@@ -33,6 +33,15 @@ private def forwards (kind : String) : List (String × String × Bool) := [
     s!"    Values:={kind}:\n        block:\n            var A:{functionTy}=Dummy\n            set A=F\n            Sleep(0.1)\n            A()\n        block:\n            var B:{functionTy}=Dummy\n            set B=F\n            Sleep(0.2)\n            B()\n        block:\n            var C:{functionTy}=Dummy\n            set C=F\n            Sleep(0.3)\n            C()\n    {result kind}", true)]
 
 private def extras : List (String × String × Bool) := [
+  ("branch: cleanup reads current shared value at owner return", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    branch:\n        defer:\n            Value:=Stored()\n        loop:\n            Sleep(1.0)\n    set Stored=F\n    0", true),
+  ("race: sibling startup makes cleanup data real", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    race:\n        block:\n            defer:\n                Value:=Stored()\n            loop:\n                Sleep(1.0)\n        block:\n            set Stored=F\n            Sleep(0.1)\n            0", true),
+  ("sync: child cleanup precedes owner cleanup", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    defer:\n        Value:=Stored()\n    Values:=sync:\n        block:\n            defer:\n                set Stored=F\n            loop:\n                Sleep(1.0)\n        block:\n            loop:\n                Sleep(1.0)\n    0", true),
+  ("branch: opaque helper return retains metadata",
+    "Later(V:v,R:v where v:type)<suspends>:v=\n    var Stored:v=V\n    branch:\n        Sleep(0.2)\n        set Stored=R\n    Sleep(0.1)\n    Stored\n" ++ header functionTy ++
+    "    Later(Dummy,F)", true),
   ("race: cleanup sees argument effects before the wait", header ++
     s!"    var Stored:{functionTy}=Dummy\n    race:\n        block:\n            defer:\n                Value:=Stored()\n            loop:\n                Sleep(block\{set Stored=F;1.0})\n        block:\n            Sleep(0.1)\n            0", true),
   ("race: real cleanup alias is independent of metadata cell", header ++
@@ -65,6 +74,13 @@ private def extras : List (String × String × Bool) := [
     s!"    var Stored:{functionTy}=Dummy\n    Values:=sync:\n        block:\n            Sleep(0.1)\n            set Stored=F\n            0\n        block:\n            Sleep(0.2)\n            0\n    Stored()", true)]
 
 private def backgroundRefusals : List (String × String × Bool) := [
+  ("branch: forwarded helper result remains metadata",
+    "Later(V:v,R:v where v:type)<suspends>:v=\n    var Stored:v=V\n    branch:\n        Sleep(0.2)\n        set Stored=R\n    Sleep(0.1)\n    Stored\n" ++ header ++
+    "    Saved:=Later(Dummy,F)\n    Saved()", true),
+  ("branch: owner return executes child cleanup", header ++
+    "    branch:\n        defer:\n            Value:=Dummy()\n        loop:\n            Sleep(1.0)\n    0", true),
+  ("branch: owner cleanup precedes background cleanup", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    defer:\n        Value:=Stored()\n    branch:\n        defer:\n            set Stored=F\n        loop:\n            Sleep(1.0)\n    loop:\n        Sleep(1.0)", true),
   ("branch: nonreturning background child does not hide owner return",
     "Finish()<suspends>:void=\n    branch:\n        loop:\n            Sleep(1.0)\n" ++ header ++
     "    spawn{Finish()}\n    Dummy()", true),
