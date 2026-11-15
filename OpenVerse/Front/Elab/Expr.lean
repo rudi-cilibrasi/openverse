@@ -1850,8 +1850,10 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
           Choice.prepare [.decl p b.name b.ty false a] (choiceValues ctx) (choiceField ctx)
             (fieldOrder := choiceOrder ctx)
             (site := s!"{t}a{i}") (keepBranches := choiceHasCast ctx)
+        let path (a : SExpr) (i : Nat) : SExpr :=
+          .app p (.ident p "$firstP") [.block p (liftAlt a i ++ rest ++ [tup])] false
         let alt (a : SExpr) (i : Nat) : SExpr :=
-          let value := SExpr.app p (.ident p "$firstP") [.block p (liftAlt a i ++ rest ++ [tup])] false
+          let value := path a i
           if !ctx.hasCopiedOverloads rest then value else
             let scope := ctx.copiedOverloadKey p b.name i
             .app p (.ident p "$copiedOverloads") [SExpr.str p [.text scope], value] false
@@ -1901,7 +1903,9 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
             let prefixState ← get
             -- (what refuses it known before the trial, which then costs nothing)
             let ok := same && rest.any isComposed
-            let (code1, c1) ← if ok then elabOneGo (ctx.withTrial .continuation) ([.decl p t none false (alt a0 0)] ++
+            -- Trial the shared source path, not a particular specialized
+            -- copy: its requests must survive rebuilding that source helper.
+            let (code1, c1) ← if ok then elabOneGo (ctx.withTrial .continuation) ([.decl p t none false (path a0 0)] ++
                 binds.zipIdx.map fun (n, i) => .decl p n none (vars.contains n) (.app p (.ident p t) [.int p (i : Int)] false))
               else pure (Expr.lit .void, ctx)
             -- (what follows the clauses is not the trial's)

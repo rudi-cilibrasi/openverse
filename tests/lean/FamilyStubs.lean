@@ -1,4 +1,5 @@
 import OpenVerse.Front.Elab
+import OpenVerse.Core.Interp
 
 open OpenVerse.Front
 
@@ -34,4 +35,27 @@ def main : IO Unit := do
   match elabProgram tops with
   | .ok _ => pure ()
   | .error e => throw (IO.userError s!"the program was refused: {e}")
+  -- A continuation may discover an overload after its site was previously
+  -- unreachable. Retire the empty sentinel and execute the real template,
+  -- rather than the single-value checking stub (#653, modeled seed 653109).
+  let orderSource := String.intercalate "\n" [
+    "Dup(V:t where t:type):t=V|V",
+    "Ov(N:int):int=N+1|N*2",
+    "Ov(N:int,M:int):int=N-M|M*3",
+    "Take(N:int):int=",
+    "    Y:=N|N+1",
+    "    Print(\"p{Y}\")",
+    "    if(Y=N+1):return 99|98",
+    "    Y",
+    "Main():void=",
+    "    if(A:=Dup(0)|Dup(1),B:=Take(Ov(-1))):Print(\"value {B}\")"]
+  let expected := "p0\nvalue 0\n".toList.map Char.toNat
+  for requests in ([{}, { overloads := [({ line := 10, col := 34 }, "")] }] : List Requests) do
+    let compiled ← match compileChecked orderSource { requests } with
+      | .ok c => pure c
+      | .error e => throw (IO.userError s!"copied overload continuation: {e}")
+    match compiled.prog.run 100000 with
+    | some (.ok _, out) =>
+      unless out == expected do throw (IO.userError s!"a copied overload continuation executed its checking stub: {out}")
+    | result => throw (IO.userError s!"copied overload continuation did not succeed: {reprStr result}")
   IO.println "family stub contracts passed"

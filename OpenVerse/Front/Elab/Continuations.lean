@@ -680,7 +680,13 @@ def refineTagOf (ctx : Ctx) (x body : SExpr) (els : Option SExpr) (exp : Option 
 /-- `ctx` for a trial of `t`. Code in a continuation's trial moves with the
     continuation, whatever trial inside it elaborates it. -/
 def Ctx.withTrial (ctx : Ctx) (t : Trial) : Ctx :=
-  { ctx with trial := if ctx.trial == some .continuation then ctx.trial else some t }
+  -- A shared continuation is rebuilt from its source clauses, not from
+  -- one copy's specialized AST. Discover its direct calls globally so the
+  -- next source round expands their real templates before moving them.
+  -- Nested copied paths establish their own ownership when elaborated.
+  { ctx with trial := if ctx.trial == some .continuation then ctx.trial else some t,
+             copiedOverloadScope := if t == .continuation then "" else ctx.copiedOverloadScope,
+             copiedOverloadSites := if t == .continuation then [] else ctx.copiedOverloadSites }
 
 /-- (#243, #453) Whether a refining cast's lift asked for here is kept. A
     trial (`Ctx.trial`) keeps a request only where the function its code is

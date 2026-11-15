@@ -510,7 +510,11 @@ def Requests.merge (a b : Requests) : Requests where
   eager := mergeByKey id a.eager b.eager
   lazy := mergeByKey id a.lazy b.lazy
   families := mergeByKey id a.families b.families
-  overloads := mergeByKey id a.overloads b.overloads
+  overloads :=
+    let picks := mergeByKey id a.overloads b.overloads
+    -- An empty pick means previously unreached, not another overload.
+    -- A later real discovery replaces that sentinel; real conflicts remain.
+    picks.filter fun (p, o) => o != "" || !picks.any (fun (q, n) => q == p && n != "")
   copiedOverloads := mergeByKey id a.copiedOverloads b.copiedOverloads
   nested := mergeByKey (·.1) a.nested b.nested
   fieldOrders := mergeByKey (·.1) a.fieldOrders b.fieldOrders
@@ -1512,7 +1516,9 @@ def Ctx.noteFunctionOverload (ctx : Ctx) (p : Pos) (f o : String) : EM Unit := d
   if !ctx.copiedOverloadScope.isEmpty && eligible && ctx.copiedOverloadSites.contains (p, f) then
     if !ctx.types.requests.copiedOverloads.contains (ctx.copiedOverloadScope, p, o) then
       noteNeeds { copiedOverloads := [(ctx.copiedOverloadScope, p, o)] }
-  else if ctx.types.overloadSites.contains (p, f) then noteNeeds { overloads := [(p, o)] }
+  else if ctx.types.overloadSites.contains (p, f) ||
+      (ctx.trial == some .continuation && eligible && !ctx.types.requests.overloads.contains (p, o)) then
+    noteNeeds { overloads := [(p, o)] }
 
 /-- Whether a copied suffix contains a nonrecursive multivalue overload call. -/
 def Ctx.hasCopiedOverloads (ctx : Ctx) (code : List SExpr) : Bool :=

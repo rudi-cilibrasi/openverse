@@ -870,12 +870,16 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             -- The copy's discovery scope covers its producer and body too.
             -- Specialize all of them; otherwise an overload first discovered
             -- there could remain a single-value checking stub forever.
-            let expanded ← match c.specializeCopiedOverloads scope (liftA a i ++ fs ++ moreClauses ++ [bd]) with
+            let original := liftA a i ++ fs ++ moreClauses ++ [bd]
+            let expanded ← match c.specializeCopiedOverloads scope original with
               | .ok code => pure code
               | .error why => eerr gp why
-            let clauses := Choice.prepare expanded.dropLast (choiceValues c) (choiceField c)
-              (fieldOrder := choiceOrder c) (site := s!"{site}copy{i}")
-              (keepExcl := true) (keepBranches := choiceHasCast c)
+            let bound := Choice.boundIn expanded.dropLast
+            let clauses := (original.dropLast.zip expanded.dropLast).zipIdx.flatMap fun ((before, after), j) =>
+              if before == after then [after] else
+                Choice.prepare [after] (fun n => choiceValues c n || bound.contains n) (choiceField c)
+                  (fieldOrder := choiceOrder c) (site := s!"{site}copy{i}_{j}")
+                  (keepExcl := true) (keepBranches := choiceHasCast c)
             let body := expanded.getLastD bd
             let sites := (clauses ++ [body]).flatMap Choice.callUses
             parts := parts ++ [← forWIn { bctx with copiedOverloadScope := scope, copiedOverloadSites := sites } clauses body]

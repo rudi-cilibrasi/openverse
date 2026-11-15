@@ -224,6 +224,8 @@ check "choice model regression (single-value method overload, seed 632113)" \
   scripts/fuzz-model-mv.sh 1 632113
 check "choice model regression (generated tuple and failable filters, seed 20773352)" \
   scripts/fuzz-model-mv.sh 1 20773352
+check "choice model regression (copied first-success early-return argument order, seed 653109)" \
+  scripts/fuzz-model-mv.sh 1 653109
 check "generic functions with several values (${FUZZ_MODEL_GENERIC:-150} programs, against a model of the docs)" \
   scripts/fuzz-model-generic.sh "${FUZZ_MODEL_GENERIC:-150}" "$seed"
 check "generic choice regression (omitted named argument in a <decides> wrapper)" \
