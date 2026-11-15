@@ -65,9 +65,56 @@ def returning_owner(model, finish, late_child=False, wrapped=False):
     assert all(n == 0 for n in model.S.sleepers.values()), 'cancelled timer remained registered'
 
 
+def outside_cancel_order(model):
+    """The ordinary #254 cancellation phases must not become a late drain."""
+    st = model.St
+
+    def branch_a():
+        return st('branch', body=[st('defer', label='A defer'), st('sleep', d='0.1'),
+            st('branch', body=[st('defer', label='A.1 defer'), st('sleep', d=150)]),
+            st('sleep', d=150)])
+
+    f = model.Fn('F', [st('defer', label='F defer'), branch_a(),
+        st('branch', body=[st('defer', label='B defer'), st('sleep', d=150)]),
+        st('sleep', d=150)], 'X')
+    g = model.Fn('G', [st('defer', label='G defer'), branch_a(),
+        st('conc', kind='rush', var='R', pick=0, arms=[
+            ([st('defer', label='r1 defer'),
+              st('branch', body=[st('defer', label='r1.b defer'), st('sleep', d=150)]),
+              st('sleep', d=150)], 'X'),
+            ([st('defer', label='r2 defer'), st('sleep', d=150)], 'X')])], 'X')
+    args = {'X': 1, 'Y': 1, 'Tag': '', 'N': 0}
+    model.S = model.Sched()
+
+    def h():
+        try:
+            yield from model.m_call(g, args)
+        finally:
+            model.S.p('H defer')
+
+    def main():
+        task = model.m_spawn(model.m_call(f, args))
+        yield from model.m_sleep('1.0')
+        model.m_cancel(task)
+        model.S.p('cancelled F')
+        task = model.m_spawn(h())
+        yield from model.m_sleep('1.0')
+        model.m_cancel(task)
+        model.S.p('cancelled H')
+
+    assert model.S.run(main()) == 0
+    actual = [line.removesuffix(' 0').strip() for line in model.S.out]
+    expected = ['F defer', 'B defer', 'A.1 defer', 'A defer', 'cancelled F',
+                'r2 defer', 'r1 defer', 'G defer', 'r1.b defer',
+                'A.1 defer', 'A defer', 'H defer', 'cancelled H']
+    assert actual == expected, (actual, expected)
+    assert all(n == 0 for n in model.S.sleepers.values()), 'cancelled timer remained registered'
+
+
 for name in ['sched_gen', 'sched_gen2']:
     for finish in [False, True]:
         for late_child in [0, 1, 2]:
             for wrapped in [False, True]:
                 returning_owner(load(name), finish, late_child, wrapped)
-print('scheduler-model: both models preserve active arms and late children (24 traces)')
+    outside_cancel_order(load(name))
+print('scheduler-model: both models preserve active arms and late children (26 traces)')

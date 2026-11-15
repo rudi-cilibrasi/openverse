@@ -494,19 +494,17 @@ def stop_owned(fr, owner):
 
 def owned_block(stmts, fr, owner):
     body = exec_block(stmts, fr, owner)
-    finished = False
     try:
         while True:
             try:
                 step = next(body)
             except StopIteration:
-                finished = True
                 return
             yield step
     finally:
         # A running owner may finish its current step after the source
         # function stopped it. New children still share that lifetime.
-        if (not finished or getattr(owner, 'cancelled', False) or
+        if (getattr(owner, 'cancelled', False) or
                 getattr(owner, 'cancel_req', False)):
             stop_owned(fr, owner)
         body.close()
