@@ -27,6 +27,16 @@ private def refusals : List (String × String) := [
     "    W:=worker{}\n    T:=spawn{W.Keep(Dummy)}\n    T.Await()()"),
   ("nonreturning task does not hide its caller", "Forever()<suspends>:void=loop{Sleep(0.1)}\n" ++ header ++
     "    spawn{Forever()}\n    Dummy()"),
+  ("nonreturning branch does not hide its owner's return", "Finish()<suspends>:void=\n    branch:\n        loop{Sleep(0.1)}\n" ++ header ++
+    "    spawn{Finish()}\n    Dummy()"),
+  ("nonreturning branch does not hide its owner's wait", "Finish()<suspends>:void=\n    branch:\n        loop{Sleep(0.1)}\n    Sleep(0.2)\n" ++ header ++
+    "    spawn{Finish()}\n    Dummy()"),
+  ("nonreturning branch does not hide its owner's waiting loop", "Finish()<suspends>:void=\n    branch:\n        loop{Sleep(0.1)}\n    loop{Sleep(0.2)}\n" ++ header ++
+    "    spawn{Finish()}\n    Dummy()"),
+  ("nonreturning branch helper does not hide its owner", "Forever()<suspends>:void=loop{Sleep(0.1)}\nFinish()<suspends>:void=branch{Forever()}\n" ++ header ++
+    "    spawn{Finish()}\n    Dummy()"),
+  ("return after nonreturning branch retains metadata result", "Finish(V:v where v:type)<suspends>:v=\n    branch:\n        loop{Sleep(0.1)}\n    V\n" ++ header ++
+    "    T:=spawn{Finish(Dummy)}\n    T.Await()()"),
   ("sync with a waiting arm lets its caller continue", "NoWait()<suspends>:void={}\nForever()<suspends>:void=\n    loop:\n        sync:\n            Sleep(0.1)\n            NoWait()\n" ++ header ++
     "    spawn{Forever()}\n    Dummy()")]
 
@@ -51,6 +61,12 @@ private def controls : List (String × String) := [
     "    spawn{Forever()}\n    Dummy()"),
   ("branch does not yield its owner", "NoWait()<suspends>:void={}\nForever()<suspends>:void=\n    branch{Sleep(0.1)}\n    loop{NoWait()}\n" ++ header ++
     "    spawn{Forever()}\n    Dummy()"),
+  ("branch that neither returns nor yields holds its owner", "NoWait()<suspends>:void={}\nForever()<suspends>:void=\n    branch:\n        loop{NoWait()}\n" ++ header ++
+    "    spawn{Forever()}\n    Dummy()"),
+  ("nonreturning branch does not yield its nonwaiting owner", "NoWait()<suspends>:void={}\nForever()<suspends>:void=\n    branch:\n        loop{Sleep(0.1)}\n    loop{NoWait()}\n" ++ header ++
+    "    spawn{Forever()}\n    Dummy()"),
+  ("return real result after nonreturning branch", "Finish(V:v,R:v where v:type)<suspends>:v=\n    branch:\n        loop{Sleep(0.1)}\n    R\n" ++ header ++
+    "    T:=spawn{Finish(Dummy,F)}\n    T.Await()()"),
   ("immediate race winner cannot yield its owner", "NoWait()<suspends>:void={}\nForever()<suspends>:void=\n    loop:\n        race:\n            Sleep(0.1)\n            NoWait()\n" ++ header ++
     "    spawn{Forever()}\n    Dummy()"),
   ("unreachable metadata argument", keep ++ header ++

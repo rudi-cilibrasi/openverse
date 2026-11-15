@@ -158,7 +158,10 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
         return ← concurrent fns infos fields fn info slots (name == "$syncMark") arms
     let (out, result, yielded) ← invoke fns infos fields fn info slots g es
     return { out with
-      value := if out.value.isSome then result else none
+      value := if name == "$branchMark" then
+          -- The child releases its owner when it completes or first waits.
+          if out.value.isSome || out.yielded then some false else none
+        else if out.value.isSome then result else none
       -- A branch starts its body to its first wait without yielding its owner.
       yielded := if name == "$branchMark" then false else out.yielded || yielded }
   | .prim op es => do
