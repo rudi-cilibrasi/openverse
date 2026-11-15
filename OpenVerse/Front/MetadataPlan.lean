@@ -44,6 +44,7 @@ structure Group where
   dst : Nat := 0
   next : Nat := 0
   context : Option (Nat × Nat) := none
+  taskContext : Option (Nat × Nat) := none
   task : Option Nat := none
   target : Option Nat := none
   arguments : List Nat := []
@@ -58,6 +59,8 @@ structure Plan where
   inlineFns : Array Bool := #[]
   signalFns : Array Bool := #[]
   context : Option (Nat × Nat) := none
+  taskContext : Option (Nat × Nat) := none
+  taskBorrowers : Array Bool := #[]
   permissions : Array (List (Nat × Nat)) := #[]
   sourceInfo : Array FrameRefs.Info := #[]
   sourceContexts : List (Nat × Nat) := []
@@ -207,7 +210,7 @@ private partial def lower (fns : Array Fn) (permissions : List (Nat × Nat))
           children := children.push (child, start)
         let definition : Group := {
           kind, owner := actor, children, advance, dst, next
-          context := (← get).context }
+          context := (← get).context, taskContext := (← get).taskContext }
         modify fun p => { p with groups := p.groups.set! group definition }
         return ← node (.fork group)
     if name == "$spawnMark" then
@@ -224,6 +227,7 @@ private partial def lower (fns : Array Fn) (permissions : List (Nat × Nat))
         let savedStack := p.callStack
         let savedReturn := p.returnTo
         let savedContext := p.context
+        let savedTaskContext := p.taskContext
         let aliases := borrowedAliases fns p g
         let savedSources := p.sourceContexts
         let leave ← node (.leaveCall dst next)
@@ -231,12 +235,14 @@ private partial def lower (fns : Array Fn) (permissions : List (Nat × Nat))
           slots := offset + callee.nslots
           callStack := g :: savedStack, returnTo := some (actor, dst, leave)
           context := some (g, offset), sourceContexts := (g, offset) :: savedSources
+          taskContext := if p.taskBorrowers[g]?.getD false then savedTaskContext else some (g, offset)
           aliases := aliases.map (fun (i, physical) => (i + offset, physical)) ++ p.aliases }
         let own := (p.permissions[g]?.getD []).map fun (i, k) => (i + offset, k)
         let entry ← lower fns own actor dst leave none
           (shift offset aliases (p.sourceInfo[g]?.getD {}).copies callee.body)
         modify fun p => { p with
           callStack := savedStack, returnTo := savedReturn, context := savedContext
+          taskContext := savedTaskContext
           sourceContexts := savedSources }
         node (.enterCall g offset args entry)
       else node (.call g args es dst next)
@@ -333,7 +339,7 @@ end
 def build (fns : Array Fn) (permissions : List (Nat × Nat)) (nslots : Nat)
     (body : Expr) (root : Option Nat := none)
     (allPermissions : Array (List (Nat × Nat)) := #[])
-    (sourceInfo : Array FrameRefs.Info := #[]) : Plan := Id.run do
+    (sourceInfo : Array FrameRefs.Info := #[]) (taskBorrowers : Array Bool := #[]) : Plan := Id.run do
   let action : B Unit := do
     let drain ← node .drained
     modify fun p => { p with drain }
@@ -344,7 +350,7 @@ def build (fns : Array Fn) (permissions : List (Nat × Nat)) (nslots : Nat)
   return (action.run {
     slots := nslots, inlineFns := (effects fns).zipWith (· || ·) (borrows fns sourceInfo)
     signalFns := effects fns true
-    permissions := allPermissions, callStack := root.toList, sourceInfo
+    permissions := allPermissions, callStack := root.toList, sourceInfo, taskBorrowers
     sourceContexts := root.toList.map (·, 0) }).2
 
 partial def reads : Expr → List Nat
@@ -394,5 +400,34 @@ partial def sites (fns : Array Fn) : Expr → Bool × List Expr
     return children.foldl (fun (background, cleanups) e =>
       let (b, ds) := sites fns e
       (background || b, cleanups ++ ds)) (own, [])
+
+/-- Readonly, nonescaping borrowers can use the ordinary transfer. Actual
+    source-cell writes and lifted background work require the owner's graph. -/
+private partial def borrowedWrites (info : FrameRefs.Info)
+    (borrowed : List (Nat × FrameRefs.Origin)) : Expr → Bool
+      | .assign i rhs =>
+        let target := borrowed.lookup i
+        let identity := match target, rhs with
+          | some a, .local j => (info.slots.lookup j).any (fun b => a.frame == b.frame && a.name == b.name)
+          | _, _ => false
+        (target.isSome && !identity && !info.copies.any (·.matches i rhs)) || borrowedWrites info borrowed rhs
+      | .local _ | .lit _ | .brk => false
+      | .seq a b => borrowedWrites info borrowed a || borrowedWrites info borrowed b
+      | .call _ es | .prim _ es | .heap _ es => es.any (borrowedWrites info borrowed)
+      | .ite c t e => borrowedWrites info borrowed c || borrowedWrites info borrowed t || borrowedWrites info borrowed e
+      | .forE _ a p b => borrowedWrites info borrowed a || borrowedWrites info borrowed p || borrowedWrites info borrowed b
+      | .loop e | .ret e | .print e => borrowedWrites info borrowed e
+
+def borrowedWork (fns : Array Fn) (sourceInfo : Array FrameRefs.Info)
+    (taskBorrowers : Array Bool) : Array Bool :=
+  propagate fns (fns.mapIdx fun g f =>
+    let info := sourceInfo[g]?.getD {}
+    let borrowed := info.slots.filter (fun (_, s) => s.frame != f.name)
+    borrowedWrites info borrowed f.body || ((taskBorrowers[g]?.getD false) && (sites fns f.body).1))
+
+/-- Lifted background tasks outlive their helper. Analyze them together
+    with the caller even if metadata first appears inside the callback. -/
+def borrowedTasks (fns : Array Fn) (taskBorrowers : Array Bool) : Array Bool :=
+  propagate fns (fns.mapIdx fun g f => (taskBorrowers[g]?.getD false) && (sites fns f.body).1)
 
 end OpenVerse.Front.MetadataPlan
