@@ -252,8 +252,12 @@ partial def castsIn (isClass : String → Bool) (c : SExpr) : List Pos :=
     -- A case evaluates its scrutinee before selecting an arm. Its arms
     -- and patterns retain their own scopes (`elabCase`).
     | .caseE _ x _ => go x
+    | .app _ (.ident _ "$each") _ false =>
+      match Choice.firstRangeBounds? e with
+      | some (lo, hi, _) => go lo ++ go hi
+      | none => []
     | .app _ (.ident _ n) _ _ => if n.startsWith "$" then [] else e.children.flatMap go ++ here e
-    | .app .. | .member .. | .bin .. | .cmp .. | .query .. | .neg .. | .tuple .. | .arrayLit ..
+    | .app .. | .member .. | .bin .. | .range .. | .cmp .. | .query .. | .neg .. | .tuple .. | .arrayLit ..
     | .str .. | .mapLit .. | .construct .. => e.children.flatMap go ++ here e
     | _ => []
   let inner : SExpr → List Pos := fun x => x.children.flatMap go

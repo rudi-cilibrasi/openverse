@@ -91,7 +91,13 @@ private def activeRushContinuation (body tail overwrite : String) : String := ca
 private def caseCapture (body : String) : String :=
   "pair(a:type,b:type):=class{}\ndup(t:type):=class(pair(t,t)){C:int=4}\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type)" ++ body
 
+private def rangeCapture (body : String) : String :=
+  "pair(a:type,b:type):=class{}\ndup(t:type):=class(pair(t,t)){Lo:int=1;Hi:int=2}\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type)" ++ body
+
 private def cases : List (String × String) := [
+  ("range lower metadata capture", rangeCapture "<transacts>:[]int=for(I:=dup[P].Lo+Dummy()..3){I}"),
+  ("range upper metadata capture", rangeCapture "<transacts>:[]int=for(I:=0..dup[P].Hi+Dummy()){I}"),
+  ("range first prefix metadata capture", rangeCapture "<transacts><decides>:int=first{Offset:=(0|1);I:=Offset+dup[P].Lo..Offset+dup[P].Hi+Dummy();I>1;I}"),
   ("case arm metadata capture", caseCapture "<transacts><decides>:int=case(1){1=>dup[P].C+Dummy(),_=>0}"),
   ("case scrutinee metadata capture", caseCapture "<transacts><decides>:int=case(dup[P].C+Dummy()){4=>1,_=>0}"),
   ("case pattern metadata capture", caseCapture "<transacts>:int=case(4){dup[P].C+Dummy()=>1,_=>0}"),
@@ -255,6 +261,9 @@ private def cases : List (String × String) := [
   ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
+  ("range lower real overwrite", rangeCapture "<transacts>:[]int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    for(I:=dup[P].Lo+Stored()..3){I}"),
+  ("range upper real overwrite", rangeCapture "<transacts>:[]int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    for(I:=0..dup[P].Hi+Stored()){I}"),
+  ("range first prefix real overwrite", rangeCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    first{Offset:=(0|1);I:=Offset+dup[P].Lo..Offset+dup[P].Hi+Stored();I>1;I}"),
   ("case arm real overwrite", caseCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    case(1){1=>dup[P].C+Stored(),_=>0}"),
   ("case scrutinee real overwrite", caseCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    case(dup[P].C+Stored()){4=>1,_=>0}"),
   ("case pattern real overwrite", caseCapture "<transacts>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    case(4){dup[P].C+Stored()=>1,_=>0}"),
