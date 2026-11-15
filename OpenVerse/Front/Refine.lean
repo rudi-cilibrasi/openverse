@@ -212,9 +212,31 @@ def castRefusal? (err : String) : Option CastRefusal :=
     | _ => none
   | _ => none
 
+/-- Completed contextual cast recovery is carried by the error, since
+    the exception rolls trial state back. Only those source casts are
+    excluded from rediscovery; an enclosing expression's later proof can
+    still establish a different typing world. The ordinary diagnostic is
+    retained, and `unmarked` removes this private payload. -/
+def contextRetryPrefix : String := "map-context:"
+
+def contextRetryCasts (err : String) : List String :=
+  match err.splitOn refusalMark with
+  | [_, data, ""] =>
+    if data.startsWith contextRetryPrefix then
+      (data.drop contextRetryPrefix.length).toString.splitOn "\x02"
+    else []
+  | _ => []
+
 /-- An error as a user reads it: without the places of cast refusals. -/
 def unmarked (err : String) : String :=
   String.join ((err.splitOn refusalMark).zipIdx.filterMap fun (part, i) => if i % 2 == 0 then some part else none)
+
+/-- Remember only the casts exhausted by one failed contextual attempt.
+    `reprStr` escapes control characters in source filenames, so the private
+    separator cannot occur in a position's serialized key. -/
+def contextRetryError (err : String) (casts : List Pos) : String :=
+  let completed := (contextRetryCasts err ++ casts.map reprStr).eraseDups
+  s!"{unmarked err}{refusalMark}{contextRetryPrefix}{"\x02".intercalate completed}{refusalMark}"
 
 /-- The expression whose value a branch gives: its last statement's,
     through blocks and `first{…}`. -/
