@@ -657,6 +657,9 @@ structure St where
       started (child, owner), so that each is stopped with its owner, before
       it, and not among the function's own (#254). -/
   killOwner : Array (Nat × Nat) := #[]
+  /-- Each background arm and its cleanup-tree entry. Its own cancellation
+      also drains children started after an earlier owner drain. -/
+  armKillOwner : Array (Nat × Nat) := #[]
   /-- In a marked function: the region's `sync`, `race` and `rush` sites,
       each with the code that runs its arms while a `Signal` walks down the
       arm that runs (`concAtMarked`). -/
@@ -838,12 +841,21 @@ def armKill (wf tag stopFn y pcA doneA can order : Nat) : M Kill := do
     let r ← freshT .int
     return { order, stop := [.assign y (fget wf),
       .assign r (.ite (.heap (.isTag [tag]) [.local y]) (.call stopFn [.local y, .local schS]) (int 0)),
-      .ite (allOf [.prim .gt [fget pcA, int 0], .prim .eq [fget doneA, int 0], .prim .eq [.local r, int 0]])
-        (.seq (seqVoid [.call can args, fset doneA (int 2)]) vd) vd] }
+      .ite (.prim .eq [fget doneA, int 0])
+        (.seq (.ite (allOf [.prim .gt [fget pcA, int 0], .prim .eq [.local r, int 0]])
+          (.seq (seqVoid [.call can args, fset doneA (int 2)]) vd)
+          (.ite (.prim .ne [fget pcA, int 0]) (.seq (fset doneA (int 3)) vd) vd)) vd) vd] }
   return { order, stop := [.assign y (fget wf),
     .ite (.heap (.isTag [tag]) [.local y]) (.call stopFn [.local y, .local schS]) vd,
     .ite (allOf [.prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
       (.seq (seqVoid [.call can args, fset doneA (int 2)]) vd) vd] }
+
+/-- Cancellation requested during an arm's active run is taken after that
+    run has saved its latest state. Its cancel also drains newly started
+    children, even when the arm completed during the run. -/
+def takeArmCancel (res doneA : Nat) (args : List Expr) : Expr :=
+  .ite (.prim .eq [fget doneA, int 3])
+    (.seq (seqVoid [.call (res + 1) args, fset doneA (int 2)]) vd) vd
 
 /-- Keep a lifted call's background roots in the caller's cleanup order.
     A query exposes its latest root dynamically; the legacy grouped mode
@@ -1086,7 +1098,7 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
         modify fun st => { st with arms := st.arms.set! a (res, can) }
         modify fun st => { st with kills := st.kills.push killInfo }
         -- (the branches and `rush` arms its arm starts are stopped with it)
-        modify fun st => ownKills st k0 k1 k1
+        modify fun st => { (ownKills st k0 k1 k1) with armKillOwner := st.armKillOwner.push (a, k1) }
         modify fun st => { st with branchArms := st.branchArms.set! i (env.fnBase + 2 * a, doneA, true) }
         -- (`start(sched, frame)` makes the wrapper, registers it, runs the
         -- arm once and gives the wrapper, kept in the frame for `stop`)
@@ -1505,7 +1517,8 @@ partial def concAt (isSync : Bool) (arms : List Expr) (isRush : Bool := false) :
          (.ite (.prim .eq [.local fS, int 1]) (.heap (.get env.leafF) [sch])
            (.ite (.prim .le [int env.leafMin, depth]) (.heap (.get env.leafF) [sch]) sch)))
        sch)]
-  let run (res doneA : Nat) : Expr := seqVoid ([spillMark] ++ resumeArm res ++ [
+  let run (res doneA : Nat) : Expr := seqVoid ([spillMark] ++ resumeArm res ++
+    (if env.events then [takeArmCancel res doneA args] else []) ++ [
     .ite (.prim .eq [.local st, int 1]) (.seq (fset doneA (int 1)) vd) vd,
     .ite (.prim .eq [.local st, int 2]) (.seq (seqVoid [fset doneA (int 1), returning]) vd) vd, reloadMark])
   if isSync then
@@ -1532,7 +1545,8 @@ partial def concAt (isSync : Bool) (arms : List Expr) (isRush : Bool := false) :
         modify fun st => { st with kills := st.kills.push kill }
         -- (the branches and `rush` arms this arm starts are stopped with it)
         let (lo, hi) := ranges.getD j (0, 0)
-        modify fun st => ownKills st lo hi (st.kills.size - 1)
+        modify fun st => { (ownKills st lo hi (st.kills.size - 1)) with
+          armKillOwner := st.armKillOwner.push ((res - env.fnBase) / 2, st.kills.size - 1) }
         modify fun st => { st with branchArms := st.branchArms.set! i (res, doneA, false) }
         goOn := goOn.push (Expr.ite (allOf [.prim .ne [.local w, int j], .prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
           (.seq (fset (childF site) (.call startFn [.local schS, fr])) vd) vd)
@@ -1639,7 +1653,8 @@ partial def concAtMarked (isSync : Bool) (arms : List Expr) (isRush : Bool := fa
   let restore : List Expr := match retSave with
     | some r => [fset resF (.local r)]
     | none => []
-  let run (res doneA : Nat) : Expr := seqVoid ([spillMark] ++ resumeArm res ++ [
+  let run (res doneA : Nat) : Expr := seqVoid ([spillMark] ++ resumeArm res ++
+    (if env.events then [takeArmCancel res doneA args] else []) ++ [
     .ite ootReturned
       (.seq (seqVoid ([.ite (.prim .ne [.local st, int 0]) (.seq (fset doneA (int 1)) vd) vd] ++ restore ++
         [returning])) vd)
@@ -1652,7 +1667,7 @@ partial def concAtMarked (isSync : Bool) (arms : List Expr) (isRush : Bool := fa
   let pst ← freshT .int
   let partialArms : Expr := seqVoid (info.toList.zipIdx.map fun ((res, _, pcA, doneA), i) =>
     Expr.ite (allOf [.prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
-      (.seq (seqVoid ([.assign pst (.call res args)] ++
+      (.seq (seqVoid ([.assign pst (.call res args), takeArmCancel res doneA args] ++
           (if env.leafy then [fset (armTop res) (.local schS)] else []) ++ [
         .ite (.prim .eq [.local pst, int 1])
           (.seq (seqVoid ([fset doneA (int 1)] ++ (if isSync then [] else
@@ -1692,7 +1707,8 @@ partial def concAtMarked (isSync : Bool) (arms : List Expr) (isRush : Bool := fa
         let kill ← armKill (childF site) wrapTag stopFn y pcA doneA can sk
         modify fun st => { st with kills := st.kills.push kill }
         let (lo, hi) := ranges.getD j (0, 0)
-        modify fun st => ownKills st lo hi (st.kills.size - 1)
+        modify fun st => { (ownKills st lo hi (st.kills.size - 1)) with
+          armKillOwner := st.armKillOwner.push ((res - env.fnBase) / 2, st.kills.size - 1) }
         modify fun st => { st with branchArms := st.branchArms.set! i (res, doneA, false) }
         goOn := goOn.push (Expr.ite (allOf [.prim .ne [.local w, int j], .prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
           (.seq (fset (childF site) (.call startFn [.local schS, fr])) vd) vd)
@@ -2071,6 +2087,12 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
         .ite (.prim .eq [.local whichS, int j]) (.seq stopTree vd) acc) vd
       if once then seqVoid (pickAmong ids ++ [.ite (.prim .eq [.local whichS, int (-1)]) vd dispatch])
       else .seq (.loop (seqVoid (pickAmong ids ++ [.ite (.prim .eq [.local whichS, int (-1)]) .brk vd, dispatch]))) vd
+  let killArmChildren (a : Nat) : Option Expr :=
+    match st.armKillOwner.find? (·.1 == a) with
+    | none => none
+    | some (_, owner) =>
+      let kids := (List.range st.kills.size).filter (ownerOf · == some owner)
+      if kids.isEmpty then none else some (loopOver (st.kills.size + 1) kids false)
   let roots := (List.range st.kills.size).filter (ownerOf · == none)
   let kill : Expr := if entries.isEmpty then vd
     else if !st.killOwner.isEmpty then
@@ -2098,7 +2120,11 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
   let ((res, can, arms, stop, order), more) := (do
       let r ← prep res
       let c ← prep can
-      let as ← st.arms.toList.mapM fun (r, c) => do return (← prep r, ← prep c)
+      let as ← st.arms.toList.zipIdx.mapM fun ((r, c), a) => do
+        let c := if !events then c else match killArmChildren a with
+          | none => c
+          | some kids => .seq (.ite (.prim .eq [fget (armDoneF sites a), int 3]) kids vd) c
+        return (← prep r, ← prep c)
       let stop ← if shareTasks then
           let stop := if taskClockF.isSome then killLatest else kill
           some <$> fixRefined S st.Γ .void (residentIn stop) (env.viaBase + st.vias.size) (some .void) stop
