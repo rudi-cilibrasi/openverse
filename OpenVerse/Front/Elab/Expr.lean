@@ -73,7 +73,38 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
 
 partial def elabECore (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   let st0 ← get
-  let result ← elabERaw ctx se exp
+  let result ← tryCatch (elabERaw ctx se exp) fun err => do
+    -- A result hint can reject an earlier call operand before a later
+    -- refining cast is reached. Discover that cast without the hint;
+    -- only its actual refusal may request the existing ordered lifting.
+    -- The probe's result and elaboration state are never retained.
+    if exp.isNone || !ctx.canFail || st0.refiningHintProbe || (Refine.castRefusal? err).isSome then throw err
+    let casts := Refine.castsIn ctx.types.classes.contains se
+    if casts.isEmpty then throw err
+    let failed ← get
+    -- A cast can often be checked directly in its lexical context. This
+    -- also discovers a later cast hidden by an earlier nested call's hint,
+    -- without replaying every enclosing failing subtree recursively.
+    for q in casts do
+      if let some cast := Refine.findPart (fun
+          | .app p (.ident _ T) [_] true => p == q && ctx.types.classes.contains T
+          | _ => false) false se then
+        set { st0 with refiningHintProbe := true }
+        let refusal? ← tryCatch (do
+          discard <| elabERaw { ctx with typeOnly := true } cast none
+          pure none) (fun probeErr => pure <|
+            if (Refine.castRefusal? probeErr).any (fun r => casts.contains r.pos) then some probeErr else none)
+        set failed
+        if let some refusal := refusal? then throw refusal
+    -- Retain the contextual probe for operands that cannot be checked on
+    -- their own. Its children cannot start another recovery probe.
+    set { st0 with refiningHintProbe := true }
+    let refusal? ← tryCatch (do
+      discard <| elabERaw { ctx with typeOnly := true } se none
+      pure none) (fun probeErr => pure <|
+        if (Refine.castRefusal? probeErr).any (fun r => casts.contains r.pos) then some probeErr else none)
+    set failed
+    throw (refusal?.getD err)
   -- (a `for` whose values are not of the element type expected: its body
   -- at that type, as a typed binding is, so that `false` there is an empty
   -- option, `X:[][]?int = for (…) { for (…) { false } }`, the Book's tests,
@@ -637,7 +668,9 @@ partial def elabSeqIn (closed : Bool) (ctx : Ctx) (ss : List SExpr) (exp : Optio
       | .error err =>
         match Refine.castRefusal? err with
         | some r =>
-          if inner.contains r.pos then return ← elabSeqIn closed ctx (liftCastClause ctx [] r.pos s ++ rest) exp
+          if inner.contains r.pos then
+            let lifted ← liftCastClause elabE ctx [] r.pos s
+            return ← elabSeqIn closed ctx (lifted ++ rest) exp
           throw err
         | none => throw err
     checkFilterCanFail ctx s r
@@ -2802,8 +2835,7 @@ partial def elabMapLit (ctx : Ctx) (p : Pos) (entries : List (SExpr × SExpr)) (
       let rk ← elabE ctx k (some kt)
       -- (a key that can fail: "failure in map literal keys is not
       -- implemented", Book of Verse ch. 3, and its tests, Map.versetest:249)
-      if rk.e.mayFail ctx.sigProg then
-        eerr k.pos "a map literal's key cannot fail: bind it first, in a failure context (Book of Verse ch. 3: \"failure in map literal keys is not implemented\")"
+      checkMapKeyCanFail ctx k.pos rk.e
       rs := rs.push (k, rk, v, ← elabE ctx v (some vt0))
     ofExcept <| checkTypeValueJoin ctx.types p vt? (rs.toList.map (·.2.2.2.ty))
     -- the values' type: the expected one (or the first's) when every value

@@ -575,6 +575,9 @@ structure LoopUse where
   lift : Except String Choice.FirstLift
 
 structure ESt where
+  /-- A result-hint discovery probe cannot recursively retry its failing
+      children. Kept in state so fresh source contexts inherit the guard. -/
+  refiningHintProbe : Bool := false
   /-- Compiler-only dummy provenance, retained until metadata admission. -/
   metadataSeeds : List Nat := []
   metadataUses : List Nat := []
