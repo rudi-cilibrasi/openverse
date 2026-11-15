@@ -174,6 +174,14 @@ retained in the dependency checks. Metadata admission for that control
 remains a precision limit: the writable-recursion heap summary broadens
 unrelated fields after conservative dispatch to sticky-event handlers.
 The left-only dependency contract does not establish precise heap effects.
+Function returns retain their heap state as well as the returned reference.
+Conditionals, loops and for bodies accumulate returning paths separately from
+fallthrough; a call joins the heap states of its normal and explicit returns.
+This preserves writes performed before an early return and the fields of
+fresh objects allocated on returning paths. Paired controls cover nested
+helpers, returned receivers, condition effects, both returning branches,
+unrelated events and rollback. `metadata_returned_heap_aliases.verse`
+and `metadata_for_returned_heap_alias.verse` retain the ordinary runtime results.
 Helpers that can wait or signal use distinct local slots in the control graph,
 with their own metadata permissions, return targets and cleanup scopes.
 A return in a surviving rush arm stops that arm after its group has ended;
@@ -199,7 +207,7 @@ and frame aliases remain in the #572 audit, including resource use for recursive
 choice producers. A private recursive-producer reader still reaches the 4 GB
 cap on the #640 baseline and a bounded timeout with the frame-alias changes;
 its real control passes. This remains an unresolved analysis case.
-`MetadataSignals.lean` retains 34 real/dummy refusal pairs and 30 positive pairs
+`MetadataSignals.lean` retains 41 real/dummy refusal pairs and 33 positive pairs
 for direct and indirect signals, recursive helpers, rollback, task completion,
 cleanup, helper returns and unrelated events. `metadata_signal_timing.verse`
 executes the corresponding ordinary data paths in both runtimes and profiles.

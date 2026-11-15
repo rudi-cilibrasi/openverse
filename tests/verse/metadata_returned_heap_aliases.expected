@@ -1,0 +1,10 @@
+EarlyWrite 2
+LoopWrite 2
+ReceiverWrite 2
+BothWrite 2
+ConditionWrite 2
+NestedWrite 2
+Unrelated 1
+Rollback 1
+FreshReturned 1
+exit=0

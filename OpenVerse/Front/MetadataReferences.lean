@@ -75,6 +75,8 @@ private structure Flow where
   memory : Memory
   value : Option Refs := some []
   returned : Option Refs := none
+  /-- Heap effects of paths that have returned rather than fallen through. -/
+  returnedMemory : Option Memory := none
   broken : Option Memory := none
   deriving Inhabited
 
@@ -92,6 +94,7 @@ private def joinMemory (a b : Option Memory) : Option Memory :=
 
 private def exits (a b : Flow) : Flow := { b with
   returned := joinValue a.returned b.returned
+  returnedMemory := joinMemory a.returnedMemory b.returnedMemory
   broken := joinMemory a.broken b.broken }
 
 mutual
@@ -161,19 +164,23 @@ private partial def expr (fns : Array Fn) (stack : List Nat) (site : Nat)
       | _, _ => no.memory
     exits condition {
       memory, value := joinValue yes.value no.value
-      returned := joinValue yes.returned no.returned, broken := joinMemory yes.broken no.broken }
+      returned := joinValue yes.returned no.returned
+      returnedMemory := joinMemory yes.returnedMemory no.returnedMemory
+      broken := joinMemory yes.broken no.broken }
   | .loop body => Id.run do
     let mut head := memory
     let mut returned := none
+    let mut returnedMemory := none
     let mut broken := none
     repeat
       let out := expr fns stack (child site 0) head body
       returned := joinValue returned out.returned
+      returnedMemory := joinMemory returnedMemory out.returnedMemory
       broken := joinMemory broken out.broken
       let next := if out.value.isSome then join head out.memory else head
       if next == head then break
       head := next
-    return { memory := broken.getD head, value := broken.map (fun _ => []), returned }
+    return { memory := broken.getD head, value := broken.map (fun _ => []), returned, returnedMemory }
   | .forE i source filter body => Id.run do
     let source := expr fns stack (child site 0) memory source
     if source.value.isNone then return source
@@ -195,7 +202,10 @@ private partial def expr (fns : Array Fn) (stack : List Nat) (site : Nat)
   | .brk => { memory, value := none, broken := some memory }
   | .ret e =>
     let out := expr fns stack (child site 0) memory e
-    { out with returned := joinValue out.returned out.value, value := none }
+    { out with
+      returned := joinValue out.returned out.value
+      returnedMemory := joinMemory out.returnedMemory (out.value.map (fun _ => out.memory))
+      value := none }
   | .print e =>
     let out := expr fns stack (child site 0) memory e
     { out with value := out.value.map (fun _ => []) }
@@ -223,7 +233,10 @@ private partial def invoke (fns : Array Fn) (stack : List Nat) (site : Nat)
     return ([0], if fn.writes then widenFields memory else memory)
   let slots := Array.ofFn (n := fn.nslots) fun i => args[i.val]?.getD []
   let out := expr fns (g :: stack) site { memory with slots } fn.body
-  return ((joinValue out.value out.returned).getD [0], { memory with fields := out.memory.fields, uncertain := out.memory.uncertain })
+  let final := out.returnedMemory.map (fun returned =>
+    if out.value.isSome then join out.memory returned else returned) |>.getD out.memory
+  return ((joinValue out.value out.returned).getD [0],
+    { memory with fields := final.fields, uncertain := final.uncertain })
 end
 
 private structure Dependency where
