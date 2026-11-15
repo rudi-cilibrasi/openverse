@@ -1,0 +1,4 @@
+readonly 1
+writable 2
+returned 2
+exit=0
