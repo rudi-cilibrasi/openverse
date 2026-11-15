@@ -88,7 +88,13 @@ private def activeRushContinuation (body tail overwrite : String) : String := ca
   ("Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    E:=event(int){}\n    branch:\n        R:=rush:\n            block:\n                Sleep(0.1)\n                E.Signal(1)\n" ++ body ++
    "                1\n            block:\n                Sleep(1.0)\n                1\n" ++ tail ++ overwrite ++ "    E.Await()\n    0")
 
+private def caseCapture (body : String) : String :=
+  "pair(a:type,b:type):=class{}\ndup(t:type):=class(pair(t,t)){C:int=4}\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type)" ++ body
+
 private def cases : List (String × String) := [
+  ("case arm metadata capture", caseCapture "<transacts><decides>:int=case(1){1=>dup[P].C+Dummy(),_=>0}"),
+  ("case scrutinee metadata capture", caseCapture "<transacts><decides>:int=case(dup[P].C+Dummy()){4=>1,_=>0}"),
+  ("case pattern metadata capture", caseCapture "<transacts>:int=case(4){dup[P].C+Dummy()=>1,_=>0}"),
   ("post-return child pending metadata cleanup", activeRushContinuation
     "                branch:\n                    defer:\n                        Value:=Stored()\n                    loop:\n                        Sleep(1.0)\n                Sleep(1.0)\n"
     "" ""),
@@ -249,6 +255,9 @@ private def cases : List (String × String) := [
   ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
+  ("case arm real overwrite", caseCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    case(1){1=>dup[P].C+Stored(),_=>0}"),
+  ("case scrutinee real overwrite", caseCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    case(dup[P].C+Stored()){4=>1,_=>0}"),
+  ("case pattern real overwrite", caseCapture "<transacts>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    case(4){dup[P].C+Stored()=>1,_=>0}"),
   ("post-return child pending real cleanup", activeRushContinuation
     "                branch:\n                    defer:\n                        Value:=Stored()\n                    loop:\n                        Sleep(1.0)\n                Sleep(1.0)\n"
     "" "    set Stored=F\n"),
