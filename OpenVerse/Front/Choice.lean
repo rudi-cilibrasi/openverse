@@ -2180,7 +2180,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       | .app _ (.ident _ "$tparams") (_ :: tps) false => tps.filterMap fun
           marker => (TParam.ofMarker marker).toOption.map (·.name)
       | _ => []
-    let ρt := tpNames.map fun n => (n, s!"{n}s{site}")
+    let ρt := tpNames.map fun n => (n, s!"{n}s{sitePrefix}{site}")
     let renTps : SExpr → SExpr
       | .app q (.ident q2 "$tparams") (fnm :: tps) false =>
         .app q (.ident q2 "$tparams") (fnm :: tps.map fun
@@ -2361,7 +2361,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
           for h in grp.filter (· != g) do
             let some fh := (memberFns.lookup h).orElse fun _ => mv.lookup h
               | throw s!"{p.show}: internal: the group of {g} (#283)"
-            let tagH (n : String) : String := s!"${h.replace "::" "_"}_{n}_{site}"
+            let tagH (n : String) : String := s!"${h.replace "::" "_"}_{n}_{sitePrefix}{site}"
             let renH := (fh.params.map (·.name) ++ localsOf fh.body).eraseDups.map fun n => (n, tagH n)
             let ρH := fh.tparams.map fun tp => (tp.name, memberTypeName h tp.name)
             let some (clsH, tailH) := loopShape? h (mv.map (·.1)) (renameTypes ρH (renameE renH fh.body)) grp (frames := true)
@@ -4064,8 +4064,9 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
   -- extracted before signature/elaboration. Checking stubs stay unchanged.
   let (copyTemplates, _) ← (ovMv.flatMap ovOf |>.filterMapM (m := StateT Nat (Except String)) fun (k, p, m) => do
     if !copiedOverloadNames.contains k then return none
+    let params ← goPs m.params
     let body ← go (((mfs.lookup k).getD m).body)
-    return some (STop.fn p ("$copiedOverload:" ++ k) m.params m.tparams m.fx m.ret body)).run nextSite
+    return some (STop.fn p ("$copiedOverload:" ++ k) params m.tparams m.fx m.ret body)).run nextSite
   -- (#283) the calls of those with an overload that has several values whose
   -- overload is not picked yet: the elaboration notes it, for the next one
   -- (`Requests.overloads`)

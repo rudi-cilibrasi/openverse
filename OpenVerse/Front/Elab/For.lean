@@ -867,13 +867,16 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               parts := parts ++ [← forW (liftA a i ++ fs ++ moreClauses) bd]
               continue
             let scope := c.copiedOverloadKey gp b.name i
-            let suffix ← match c.specializeCopiedOverloads scope (fs ++ moreClauses) with
+            -- The copy's discovery scope covers its producer and body too.
+            -- Specialize all of them; otherwise an overload first discovered
+            -- there could remain a single-value checking stub forever.
+            let expanded ← match c.specializeCopiedOverloads scope (liftA a i ++ fs ++ moreClauses ++ [bd]) with
               | .ok code => pure code
               | .error why => eerr gp why
-            let suffix := Choice.prepare suffix (choiceValues c) (choiceField c)
+            let clauses := Choice.prepare expanded.dropLast (choiceValues c) (choiceField c)
               (fieldOrder := choiceOrder c) (site := s!"{site}copy{i}")
               (keepExcl := true) (keepBranches := choiceHasCast c)
-            parts := parts ++ [← forWIn { bctx with copiedOverloadScope := scope } (liftA a i ++ suffix) bd]
+            parts := parts ++ [← forWIn { bctx with copiedOverloadScope := scope } clauses (expanded.getLastD bd)]
           let some r0 := parts.head? | eerr gp "internal: a choice without alternatives"
           if let some r := parts.find? (·.ty != r0.ty) then
             eerr gp s!"the for's values have the type {r0.ty.show} for one alternative of this choice and {r.ty.show} for another"
