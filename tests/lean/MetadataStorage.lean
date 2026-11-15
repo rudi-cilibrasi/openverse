@@ -89,6 +89,18 @@ private def activeRushContinuation (body tail overwrite : String) : String := ca
    "                1\n            block:\n                Sleep(1.0)\n                1\n" ++ tail ++ overwrite ++ "    E.Await()\n    0")
 
 private def cases : List (String × String) := [
+  ("primitive payload eq-direct-Dummy", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nCaller(Real:reader,Dummy:reader)<computes>:int=\n    if(Alias:=Dummy=Real)then Alias.Read()else 0\n"),
+  ("primitive payload eq-array-Dummy", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nCaller(Real:reader,Dummy:reader)<computes>:int=\n    if(Values:=array{Dummy}=array{Real},Alias:=Values[0])then Alias.Read()else 0\n"),
+  ("primitive payload eq-helper-Dummy", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nChoose(A:reader,B:reader)<computes><decides>:reader=A=B\nCaller(Real:reader,Dummy:reader)<computes>:int=\n    if(Alias:=Choose[Dummy,Real])then Alias.Read()else 0\n"),
+  ("primitive payload ne-direct-Dummy", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nCaller(Real:reader,Dummy:reader)<computes>:int=\n    if(Alias:=Dummy<>Real)then Alias.Read()else 0\n"),
+  ("primitive payload ne-array-Dummy", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nCaller(Real:reader,Dummy:reader)<computes>:int=\n    if(Values:=array{Dummy}<>array{Real},Alias:=Values[0])then Alias.Read()else 0\n"),
+  ("primitive payload ne-helper-Dummy", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nChoose(A:reader,B:reader)<computes><decides>:reader=A<>B\nCaller(Real:reader,Dummy:reader)<computes>:int=\n    if(Alias:=Choose[Dummy,Real])then Alias.Read()else 0\n"),
+  ("primitive payload index_metadata", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nCaller(Dummy:[]reader,Index:int)<computes>:int=\n    if(Alias:=Dummy[Index])then Alias.Read()else 0\n"),
+  ("primitive payload update_metadata", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nCaller(Items:[]reader,Dummy:reader,Index:int)<computes>:int=\n    var Updated:[]reader=Items\n    if(set Updated[Index]=Dummy,Alias:=Updated[0])then Alias.Read()else 0\n"),
+  ("primitive payload update_metadata_container", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nCaller(Dummy:[]reader,Real:reader,Index:int)<computes>:int=\n    var Updated:[]reader=Dummy\n    if(set Updated[Index]=Real,Alias:=Updated[0])then Alias.Read()else 0\n"),
+  ("primitive payload eq-right-operand-executes", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nInspect(R:reader)<computes>:reader=\n    Value:=R.Read()\n    R\nCaller(Real:reader,Dummy:reader)<computes>:int=\n    if(Alias:=Real=Inspect(Dummy))then Alias.Read()else 0\n"),
+  ("primitive payload ne-right-operand-executes", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nInspect(R:reader)<computes>:reader=\n    Value:=R.Read()\n    R\nCaller(Real:reader,Dummy:reader)<computes>:int=\n    if(Alias:=Real<>Inspect(Dummy))then Alias.Read()else 0\n"),
+  ("primitive payload index-operand-executes", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nIndex(R:reader)<computes>:int=R.Read()\nCaller(Items:[]reader,Dummy:reader)<computes>:int=\n    if(Alias:=Items[Index(Dummy)])then Alias.Read()else 0\n"),
   ("active cancellation late-MetadataRead", activeRushContinuation
     "                defer:\n                    Value:=Stored()\n                Sleep(1.0)\n"
     "" ""),
@@ -222,6 +234,14 @@ private def cases : List (String × String) := [
   ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
+  ("primitive payload eq-direct-Real", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nCaller(Real:reader,Dummy:reader)<computes>:int=\n    if(Alias:=Real=Dummy)then Alias.Read()else 0\n"),
+  ("primitive payload eq-array-Real", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nCaller(Real:reader,Dummy:reader)<computes>:int=\n    if(Values:=array{Real}=array{Dummy},Alias:=Values[0])then Alias.Read()else 0\n"),
+  ("primitive payload eq-helper-Real", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nChoose(A:reader,B:reader)<computes><decides>:reader=A=B\nCaller(Real:reader,Dummy:reader)<computes>:int=\n    if(Alias:=Choose[Real,Dummy])then Alias.Read()else 0\n"),
+  ("primitive payload ne-direct-Real", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nCaller(Real:reader,Dummy:reader)<computes>:int=\n    if(Alias:=Real<>Dummy)then Alias.Read()else 0\n"),
+  ("primitive payload ne-array-Real", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nCaller(Real:reader,Dummy:reader)<computes>:int=\n    if(Values:=array{Real}<>array{Dummy},Alias:=Values[0])then Alias.Read()else 0\n"),
+  ("primitive payload ne-helper-Real", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nChoose(A:reader,B:reader)<computes><decides>:reader=A<>B\nCaller(Real:reader,Dummy:reader)<computes>:int=\n    if(Alias:=Choose[Real,Dummy])then Alias.Read()else 0\n"),
+  ("primitive payload index_real", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nCaller(Items:[]reader,Dummy:int)<computes>:int=\n    if(Alias:=Items[Dummy])then Alias.Read()else 0\n"),
+  ("primitive payload update_real", "reader:=class<unique>{N:int;Read()<computes>:int=N}\nCaller(Items:[]reader,Real:reader,Dummy:int)<computes>:int=\n    var Updated:[]reader=Items\n    if(set Updated[Dummy]=Real,Alias:=Updated[0])then Alias.Read()else 0\n"),
   ("active cancellation late-RealRead", activeRushContinuation
     "                defer:\n                    Value:=Stored()\n                Sleep(1.0)\n"
     "" "    set Stored=F\n"),

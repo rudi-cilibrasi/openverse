@@ -313,9 +313,11 @@ private partial def dependency (signatures : Array Signature)
     | .heap (.set _) _ => return { out with value := values[1]?.getD [] }
     | .heap _ _ => return { out with value := all }
     | .prim op _ =>
-      if op == .eq || op == .ne then
+      if op == .eq || op == .ne || op == .index then
         return { out with value := values.headD [] }
-      return { out with value := if [.mkArr, .mkTup, .mkSome, .query, .index, .arrSet,
+      if op == .arrSet then
+        return { out with value := union (values.headD []) (values[2]?.getD []) }
+      return { out with value := if [.mkArr, .mkTup, .mkSome, .query,
         .concat, .flatten].contains op then all else
         match op with | .tupGet _ => all | _ => [] }
     | _ => return { out with value := [] }

@@ -284,6 +284,21 @@ def main : IO Unit := do
       let expected := if swap then [0, 1] else [0]
       unless (MetadataReferences.signalArguments fns)[index]! == expected do
         throw (IO.userError s!"comparison {op}, swap={swap}: wrong Signal dependencies")
+  for update in [false, true] do
+    let source := if update then
+      "Send(Es:[]event(int),I:int,Replacement:event(int),N:int)<transacts>:void=\n    if(N>0):\n        Send(Es,I,Replacement,N-1)\n    else:\n        var Updated:[]event(int)=Es\n        if(set Updated[I]=Replacement,E:=Updated[0])then E.Signal(0)\n"
+      else
+      "Send(Es:[]event(int),I:int,N:int)<transacts>:void=\n    if(N>0):\n        Send(Es,I,N-1)\n    else:\n        if(E:=Es[I])then E.Signal(0)\n"
+    let .ok c := compileCase source false
+      | throw (IO.userError "indexed dependency control failed to compile")
+    unless c.prog.check && c.prog.checkControl && c.prog.checkTypes c.sigs c.slotTys do
+      throw (IO.userError "indexed dependency control failed Core checks")
+    let fns := c.prog.fns.toArray
+    let some index := fns.findIdx? (·.name == "Send")
+      | throw (IO.userError "indexed dependency control lost Send")
+    let expected := if update then [0, 2] else [0]
+    unless (MetadataReferences.signalArguments fns)[index]! == expected do
+      throw (IO.userError s!"update={update}: wrong indexed Signal dependencies")
   let mut failures := 0
   for (label, source) in refusals ++ controls do
     for dummy in [false, true] do
