@@ -319,6 +319,26 @@ structure CastRest where
       and are not cast again. -/
   notAgain : List String
 
+/-- A conditional choice keeps its branch values. Reestablish a
+    refinement at those values, rather than carrying its opened witness
+    out of the conditional. Conditions still run once before the choice. -/
+private partial def rebindChoiceBranch (wrap : Pos → SExpr → SExpr) (e : SExpr) : SExpr :=
+  let clause (c : SExpr) : SExpr := match c with
+    | .decl p n t v value => .decl p n t v (rebindChoiceBranch wrap value)
+    | .gen p n index source => .gen p n index (rebindChoiceBranch wrap source)
+    | c => rebindChoiceBranch wrap c
+  match e with
+  | .ite p cs t u =>
+    .ite p (cs.map clause) (rebindChoiceBranch wrap t) (u.map (rebindChoiceBranch wrap))
+  | .block p cs => .block p (cs.map clause)
+  | .app p f@(.ident _ "$defer") [body] false =>
+    .app p f [rebindChoiceBranch wrap body] false
+  | .app p f@(.ident _ "$deferExits") [ds, value] false =>
+    .app p f [rebindChoiceBranch wrap ds, rebindChoiceBranch wrap value] false
+  | e => match Choice.alts? e with
+    | some as => Choice.mk e.pos (as.map (rebindChoiceBranch wrap))
+    | none => wrap e.pos e
+
 /-- (#243) Clauses `pre, D := T[X], rest` of a failure context (an `if`'s
     condition, a `for`'s clauses, `first{…}`'s) whose cast refines, with the
     code their names reach after them, `after` (the branch, the body, the
@@ -365,28 +385,34 @@ def castRestClauses (pre : List SExpr) (cast : Pos × String × String × SExpr)
   let wrap (q : Pos) (e : SExpr) : SExpr := if !uses e then e else
     .ite q [made (castOf q d T (.ident q (obj p)))] e (some (.app q (.ident q "Err") [] false))
   -- (a choice's alternatives each, so it stays a choice of the clause's)
-  let again (q : Pos) (e : SExpr) : SExpr := match Choice.alts? e with
-    | some as => if uses e then Choice.mk e.pos (as.map fun a => wrap a.pos a) else e
-    | none => wrap q e
+  -- A private binder records the generated branch body in its lift; it
+  -- has no corresponding cast at this expression in the original source.
+  let branchWrap (q : Pos) (e : SExpr) : SExpr := if !uses e then e else
+    let name := s!"$recast{q.line}_{q.col}_{d}"
+    .ite q [castOf q name T (.ident q (obj p))] (Choice.renameE [(d, name)] e)
+      (some (.app q (.ident q "Err") [] false))
+  let again (q : Pos) (e : SExpr) : SExpr := match e with
+    | .app p f@(.ident _ "$branchChoice") [i] false =>
+      .app p f [rebindChoiceBranch branchWrap i] false
+    | .app p f@(.ident _ "$branchChoiceAt") [l, i] false =>
+      .app p f [l, rebindChoiceBranch branchWrap i] false
+    | _ => match Choice.alts? e with
+      | some as => if uses e then Choice.mk e.pos (as.map fun a => wrap a.pos a) else e
+      | none => wrap q e
   -- (a choice inside such a clause lifted out of it first, `lift`, so it
   -- is a choice of the clauses, its alternatives each cast again)
   let later := later.flatMap fun c => if uses c then lift c else [c]
-  -- (but not one in a branch of an `if` that takes a choice's values, which
-  -- the `if` keeps: its condition decides which branch's values there are)
-  if later.any fun c => uses c && Choice.anyE (fun
-      | .app _ (.ident _ n) _ false => n == "$branchChoice" || n == "$branchChoiceAt"
-      | _ => false) c then
-    throw s!"a clause after it, past a generator, uses {d} in an if with a choice in its branches"
+  -- Retain source dependencies before the generated binders hide them.
+  let laterNames := later.flatMap fun
+    | .gen _ y i src => if uses src then y :: i.toList else []
+    | .decl _ n _ _ e => if uses e then [n] else []
+    | _ => []
   let later := later.map fun
     | .gen q y i src => .gen q y i (again q src)
     | .decl q n t v (.range q' a b) => .decl q n t v (.range q' (wrap a.pos a) (wrap b.pos b))
     | .decl q n t v e => .decl q n t v (again q e)
     | c => again c.pos c
   -- (and the names those clauses bind, of types the refinement gives)
-  let laterNames := later.flatMap fun
-    | .gen _ y i src => if uses src then y :: i.toList else []
-    | .decl _ n _ _ e => if uses e then [n] else []
-    | _ => []
   let usedLater := (Choice.namesUsed (.block p later)).filter (· != d)
   let usedAfter := Choice.namesUsed after
   -- (the later casts' objects to cast again, and the names whose values may

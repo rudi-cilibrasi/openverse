@@ -1,0 +1,22 @@
+positive
+get
+condition 0
+body 2 1
+body 10 1
+condition 1
+body 2 2
+body 10 2
+after 2
+negative
+get
+body 22 0
+body 32 0
+body 22 0
+body 32 0
+after 0
+empty
+get
+after 0
+no cast
+after 0
+exit=0
