@@ -1,0 +1,16 @@
+class int 7 7
+class string left left
+value int 7 7
+value string left left
+struct int 7 7
+struct string left left
+child int 7 7
+child string left left
+alias int 7 7
+alias string left left
+nested int 7 7
+nested string left left
+defaults int 7 7 0 0
+defaults string left left 0 0
+rest 7 7
+exit=0

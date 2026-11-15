@@ -256,9 +256,14 @@ partial def castsIn (isClass : String → Bool) (c : SExpr) : List Pos :=
       match Choice.firstRangeBounds? e with
       | some (lo, hi, _) => go lo ++ go hi
       | none => []
+    -- Field bindings name constructor arguments; their values are ordered
+    -- operands, not declaration scopes of their own.
+    | .construct _ _ _ fields => fields.flatMap fun
+      | .decl _ _ _ _ value => go value
+      | value => go value
     | .app _ (.ident _ n) _ _ => if n.startsWith "$" then [] else e.children.flatMap go ++ here e
     | .app .. | .member .. | .bin .. | .range .. | .cmp .. | .query .. | .neg .. | .tuple .. | .arrayLit ..
-    | .str .. | .mapLit .. | .construct .. => e.children.flatMap go ++ here e
+    | .str .. | .mapLit .. => e.children.flatMap go ++ here e
     | _ => []
   let inner : SExpr → List Pos := fun x => x.children.flatMap go
   match c with

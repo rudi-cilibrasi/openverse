@@ -94,7 +94,13 @@ private def caseCapture (body : String) : String :=
 private def rangeCapture (body : String) : String :=
   "pair(a:type,b:type):=class{}\ndup(t:type):=class(pair(t,t)){Lo:int=1;Hi:int=2}\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type)" ++ body
 
+private def constructorCapture (body : String) : String :=
+  "pair(a:type,b:type):=class{}\ndup(t:type):=class(pair(t,t)){C:int=4}\nrefbox:=class{Before:int=0;Value:int}\nvalbox:=struct{Before:int=0;Value:int}\nouter:=struct{Inner:refbox}\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type)" ++ body
+
 private def cases : List (String × String) := [
+  ("constructor class metadata capture", constructorCapture "<transacts><decides>:int=refbox{Value:=dup[P].C+Dummy()}.Value"),
+  ("constructor struct metadata capture", constructorCapture "<transacts><decides>:int=valbox{Value:=dup[P].C+Dummy()}.Value"),
+  ("constructor nested metadata capture", constructorCapture "<transacts><decides>:int=outer{Inner:=refbox{Value:=dup[P].C+Dummy()}}.Inner.Value"),
   ("range lower metadata capture", rangeCapture "<transacts>:[]int=for(I:=dup[P].Lo+Dummy()..3){I}"),
   ("range upper metadata capture", rangeCapture "<transacts>:[]int=for(I:=0..dup[P].Hi+Dummy()){I}"),
   ("range first prefix metadata capture", rangeCapture "<transacts><decides>:int=first{Offset:=(0|1);I:=Offset+dup[P].Lo..Offset+dup[P].Hi+Dummy();I>1;I}"),
@@ -264,6 +270,9 @@ private def cases : List (String × String) := [
   ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
+  ("constructor class real overwrite", constructorCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    refbox{Value:=dup[P].C+Stored()}.Value"),
+  ("constructor struct real overwrite", constructorCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    valbox{Value:=dup[P].C+Stored()}.Value"),
+  ("constructor nested real overwrite", constructorCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    outer{Inner:=refbox{Value:=dup[P].C+Stored()}}.Inner.Value"),
   ("range lower real overwrite", rangeCapture "<transacts>:[]int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    for(I:=dup[P].Lo+Stored()..3){I}"),
   ("range upper real overwrite", rangeCapture "<transacts>:[]int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    for(I:=0..dup[P].Hi+Stored()){I}"),
   ("range first prefix real overwrite", rangeCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    first{Offset:=(0|1);I:=Offset+dup[P].Lo..Offset+dup[P].Hi+Stored();I>1;I}"),
