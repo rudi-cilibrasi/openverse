@@ -6,8 +6,9 @@ namespace OpenVerse.Front.MetadataReferences
 open OpenVerse
 
 /-- 0 may denote any object; 1 denotes an object supplied by the caller.
-    Allocation sites have identities above 1. Repeated allocations at one
-    site are joined, so these are may-alias identities, not runtime tags. -/
+    Entry parameters are below 2^32, allocation sites occupy [2^32, 2^33),
+    and prototype identities start at 2^33. Prototypes can alias caller
+    objects. Repeated allocations are joined; these are may-alias identities. -/
 abbrev Refs := List Nat
 
 private def union (a b : Refs) : Refs := (a ++ b).mergeSort (· ≤ ·) |>.eraseDups
@@ -31,9 +32,11 @@ def set (m : Memory) (slot : Nat) (value : Refs) : Memory :=
 def widenFields (m : Memory) : Memory :=
   { m with fields := m.fields.map fun _ value => union value [0] }
 
+private def callerObject (r : Nat) : Bool := r < 4294967296 || r ≥ 8589934592
+
 def aliases (a b : Refs) : Bool :=
   !a.isEmpty && !b.isEmpty && (a.contains 0 || b.contains 0 || a.any b.contains ||
-    (a.any (· < 4294967296) && b.any (· < 4294967296)))
+    (a.any callerObject && b.any callerObject))
 
 def definitelyAliases (m : Memory) (a b : Refs) : Bool :=
   match a, b with
@@ -54,7 +57,9 @@ private def store (m : Memory) (objects : Refs) (field : Nat) (value : Refs) : M
 
 private def load (m : Memory) (objects : Refs) (field : Nat) : Refs :=
   objects.foldl (fun r object => union r
-    (if object < 4294967296 then m.fields.fold (fun values (o, k) v =>
+    -- Prototype fields are pre-existing caller objects too. Include writes
+    -- through possible aliases without making them alias fresh allocations.
+    (if callerObject object then m.fields.fold (fun values (o, k) v =>
         if k == field && aliases [object] [o] then union values v else values)
         [if object == 0 then 0 else 1]
       else m.fields[(object, field)]?.getD [0])) []
@@ -100,6 +105,7 @@ private def exits (a b : Flow) : Flow := { b with
 mutual
 private partial def expr (fns : Array Fn) (stack : List Nat) (site : Nat)
     (memory : Memory) : Expr → Flow
+  | .lit (.ref a) => { memory, value := some [8589934592 + a] }
   | .lit _ => { memory }
   | .local i => { memory, value := some (memory.slots[i]?.getD [0]) }
   | .assign i e =>

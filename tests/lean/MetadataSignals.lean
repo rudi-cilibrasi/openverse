@@ -49,7 +49,30 @@ private def returnedField (helpers : String)
 private def earlyChange : String :=
   "Change(H:holder,E:event(int),C:logic)<transacts>:int=\n    if(C?):\n        set H.E=E\n        return 0\n    0\n"
 
+private def moduleField (action : String) : String :=
+  "holder:=class{var E:event(int)}\nsession_key:=class<unique><module_scoped_var_weak_map_key>{}\n" ++
+  "var Holders:weak_map(session_key,holder)=map{}\n" ++
+  "Cache:=module:\n    var NestedHolders<public>:weak_map(session_key,holder)=map{}\n" ++
+  "Put(Key:session_key,H:holder)<transacts><decides>:void=set Holders[Key]=H\n" ++
+  "Get(Key:session_key)<transacts><decides>:holder=Holders[Key]\n" ++
+  "Change(Key:session_key,E:event(int))<transacts><decides>:void=\n    Alias:=Get[Key]\n    set Alias.E=E\n" ++
+  (header.replace "Caller(" "Caller(Key:session_key,") ++ setup ++
+  "    Other:=event(int){}\n    H:=holder{E:=Other}\n" ++ action ++
+  "\n    H.E.Signal(0)\n    Stored()"
+
 private def refusals : List (String × String) := [
+  ("A module weak map retains a field-write receiver", moduleField
+    "    if(set Holders[Key]=H,Alias:=Holders[Key]):\n        set Alias.E=E"),
+  ("A helper returns the receiver stored in a module weak map", moduleField
+    "    if(Put[Key,H],Alias:=Get[Key]):\n        set Alias.E=E"),
+  ("A helper mutates the receiver stored in a module weak map", moduleField
+    "    if(Put[Key,H],Change[Key,E]){}"),
+  ("A saved module weak-map alias retains its receiver", moduleField
+    "    if(set Holders[Key]=H,Alias:=Holders[Key]):\n        Saved:=Alias\n        set Saved.E=E"),
+  ("A nested module weak map retains its field-write receiver", moduleField
+    "    if(set Cache.NestedHolders[Key]=H,Alias:=Cache.NestedHolders[Key]):\n        set Alias.E=E"),
+  ("A committed module alias write follows a rolled-back write", moduleField
+    "    if(set Holders[Key]=H,Alias:=Holders[Key]):\n        if(set Alias.E=Other;false?){}\n        set Alias.E=E"),
   ("An early helper return preserves its heap write", returnedField earlyChange),
   ("A return from a loop preserves its heap write", returnedField
     "Change(H:holder,E:event(int),C:logic)<transacts>:int=\n    loop:\n        if(C?):\n            set H.E=E\n            return 0\n        else:\n            break\n    0\n"),
@@ -146,6 +169,14 @@ private def refusals : List (String × String) := [
     "    Other.Signal(0)\n    Stored()")]
 
 private def controls : List (String × String) := [
+  ("A module weak-map alias can write an unrelated event", moduleField
+    "    if(set Holders[Key]=H,Alias:=Holders[Key]):\n        set Alias.E=Other"),
+  ("Rollback restores a module weak-map alias write", moduleField
+    "    if(set Holders[Key]=H;Alias:=Holders[Key];set Alias.E=E;false?){}"),
+  ("A helper can update an unrelated event through a module weak map", moduleField
+    "    if(Put[Key,H],Change[Key,Other]){}"),
+  ("A nested module weak-map alias can write an unrelated event", moduleField
+    "    if(set Cache.NestedHolders[Key]=H,Alias:=Cache.NestedHolders[Key]):\n        set Alias.E=Other"),
   ("An early return can write an unrelated event", returnedField earlyChange
     "N:=Change(H,Other,true)"),
   ("Rollback restores a returning helper's heap write", returnedField earlyChange
