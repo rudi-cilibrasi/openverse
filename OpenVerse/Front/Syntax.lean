@@ -457,6 +457,8 @@ def SExpr.filterKind : SExpr → String
   | .app .. => "app"
   | .set .. => "set"
   | .block .. => "block"
+  -- Choice continuations pack tuples at their source expression's position.
+  | .tuple .. => "tuple"
   | _ => "other"
 
 /-- The local a `first`'s generator `I -> X : src` binds its source to,
