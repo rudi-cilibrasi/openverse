@@ -1,0 +1,8 @@
+borrowed read 1
+owner continues
+recursive write 2
+frame first 1
+frame second 2
+lifted write 2
+lifted cleanup 1
+exit=0

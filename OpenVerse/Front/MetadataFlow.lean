@@ -20,6 +20,8 @@ structure Info where
   uses : List Nat := []
   shared : List Nat := []
   metadataWrites : List (Nat × Nat) := []
+  source : FrameRefs.Info := {}
+  borrowTasks : Bool := false
   body : Option Expr := none
   deriving Inhabited
 
@@ -81,15 +83,35 @@ private structure Summary where
   key : Key
   result : Option Bool := none
   yielded : Bool := false
+  dependencies : Array (Nat × Option Bool × Bool) := #[]
+  cached : Bool := false
   deriving Inhabited
 
 private inductive ActorStatus where
   | idle | running | ready | waiting (resumable : Bool) | joining (group : Nat) | done
   deriving BEq, Inhabited
 
+private structure LoopCell where
+  slot : Nat
+  initialized : Bool
+  metadata : Bool
+  deriving BEq, Inhabited
+
+private def loopCells (shared : List Nat) (slots : Slots) : List LoopCell :=
+  shared.eraseDups.map fun i => {
+    slot := i, initialized := slots.initialized[i]?.getD false
+    metadata := slots.sharedMetadata[i]?.getD false }
+
+private def restoreLoopCells (cells : List LoopCell) (slots : Slots) : Slots :=
+  cells.foldl (fun slots cell => if cell.initialized then slots else { slots with
+    initialized := slots.initialized.set! cell.slot false
+    sharedMetadata := slots.sharedMetadata.set! cell.slot cell.metadata }) slots
+
 private structure LoopEntry where
   id : Nat
-  slots : Slots
+  /-- Back edges restore only entry modes of fresh shared cells. Retaining
+      scratch values here adds irrelevant facts to the configuration lattice. -/
+  cells : List LoopCell
   cleanups : List Nat
   deriving BEq, Inhabited
 
@@ -222,7 +244,10 @@ private def configurationKey (c : Configuration) : List Nat :=
     actorsKey t.actors ++ groupsKey t.groups ++ [t.signals.length] ++ t.signals ++ [t.launches.length] ++ t.launches ++ pendingKey t.pending)
 
 private def joinLoops (a b : List LoopEntry) : List LoopEntry :=
-  a.zipWith (fun s t => { t with slots := joinSlots s.slots t.slots }) b
+  a.zipWith (fun s t => { t with cells := s.cells.zipWith (fun x y => { y with
+    initialized := x.initialized || y.initialized
+    metadata := if !x.initialized then y.metadata else if !y.initialized then x.metadata
+      else x.metadata && y.metadata }) t.cells }) b
 
 private def joinActors (a b : Array Actor) : Array Actor :=
   a.zipWith (fun x y => { y with
@@ -476,6 +501,11 @@ private structure State where
   debug : Bool := false
   active : Option Key := none
   signalArguments : Option (Array (List Nat)) := none
+  dependencies : Option (Std.HashMap Nat (Option Bool × Bool)) := none
+  captureMismatch : Bool := false
+  borrowers : Array Bool := #[]
+  borrowedWork : Array Bool := #[]
+  borrowedTasks : Array Bool := #[]
 
 private abbrev M := StateT State (Except String)
 
@@ -491,10 +521,16 @@ private def request (key : Key) : M (Option Bool × Bool) := do
     set { st with live := st.live.push key, liveSeen := st.liveSeen.insert key () }
   let st ← get
   if let some i := st.indices[key]? then
-    return (st.summaries[i]!.result, st.summaries[i]!.yielded)
+    let value := (st.summaries[i]!.result, st.summaries[i]!.yielded)
+    if let some dependencies := st.dependencies then
+      if !dependencies.contains i then
+        modify fun st => { st with dependencies := some (dependencies.insert i value) }
+    return value
+  let i := st.summaries.size
+  let dependencies := st.dependencies.map (·.insert i (none, false))
   set { st with
-    indices := st.indices.insert key st.summaries.size
-    summaries := st.summaries.push { key }, changed := true }
+    indices := st.indices.insert key i
+    summaries := st.summaries.push { key }, changed := true, dependencies }
   return (none, false)
 
 mutual
@@ -670,13 +706,24 @@ private partial def spawned (fns : Array Fn) (infos : Array Info)
 
 private partial def invoke (fns : Array Fn) (infos : Array Info)
     (fields : Array (List Nat)) (fn : Fn) (info : Info) (slots : Slots)
-    (g : Nat) (es : List Expr) : M (Flow × Option Bool × Bool) := do
+    (g : Nat) (es : List Expr) (summarize : Bool := true) : M (Flow × Option Bool × Bool) := do
   let (args, out) ← arguments fns infos fields fn info slots es
   if out.value.isNone then return (out, none, false)
   let gi := infos[g]?.getD {}
+  -- A readonly borrower usually needs only the ordinary transfer. A
+  -- statically opaque capture can nevertheless be stale after a real
+  -- overwrite, in which case replay it against the owner's live cell.
+  for (i, origin) in gi.source.slots do
+    if origin.frame == (fns[g]?.map (·.name)).getD "" ||
+        !(gi.inputs.contains i || gi.seeds.contains i) then continue
+    if let some (cell, _) := info.source.slots.find? (fun (_, s) =>
+        s.frame == fn.name && s.frame == origin.frame && s.name == origin.name) then
+      if slots.initialized[cell]?.getD false && !(slots.values[cell]?.getD false) then
+        modify fun st => { st with captureMismatch := true }
   let roles := args.zipIdx.map fun (role, i) => role || gi.inputs.contains i
   if (← get).validateUses && gi.required.any (fun i => roles[i]?.getD false) then
     refuse fn info s!"provide executable evidence or a receiver to {(fns[g]?.map (·.name)).getD "a call"}"
+  if !summarize then return (out, none, false)
   let (result, yielded) ← request (g, roles)
   let name := (fns[g]?.map (·.name)).getD ""
   let yielded : Bool := if name == "$Sleep" then
@@ -782,19 +829,23 @@ private partial def actorEnvironment (env : ScheduleEnv) (a : Actor) : Fn × Inf
   | none => (env.fn, env.info)
   | some (g, offset) =>
     let info := env.infos[g]?.getD {}
+    let alias (i : Nat) := (env.plan.aliases.lookup (i + offset)).getD (i + offset)
     (env.fns[g]!, { info with
-      inputs := info.inputs.map (· + offset)
-      seeds := info.seeds.map (· + offset)
+      inputs := info.inputs.filterMap fun i => if (env.plan.aliases.lookup (i + offset)).isSome then none else some (i + offset)
+      seeds := info.seeds.filterMap fun i => if (env.plan.aliases.lookup (i + offset)).isSome then none else some (i + offset)
       uses := info.uses.map (· + offset)
-      shared := info.shared.map (· + offset)
+      shared := info.shared.map alias
+      source := { info.source with slots := info.source.slots.map fun (i, s) => (alias i, s) }
       metadataWrites := info.metadataWrites.map fun (i, k) => (i + offset, k) })
 
 private partial def cancelChildren (env : ScheduleEnv) (c : Configuration) (actor : Nat) (branch : Bool)
     (context : Option (Option (Nat × Nat)) := none) : List Pending :=
   c.launches.reverse.flatMap fun i =>
     let g := env.plan.groups[i]!
+    let scope := if g.kind == .branch || (g.kind == .rush && !c.groups[i]!.active) then
+      g.taskContext else g.context
     if g.owner == actor && g.kind != .spawn && (g.kind == .branch) == branch &&
-        (context.isNone || context == some g.context) then
+        (context.isNone || context == some scope) then
       g.children.toList.reverse.map (fun (child, _) => .cancel child)
     else []
 
@@ -867,6 +918,9 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
     if (← get).debug && cursor % 10000 == 0 then
       dbg_trace s!"metadata schedule {env.fn.name}: visited={cursor}, queued={work.size}, states={known.size}"
     let incoming := work[cursor]!
+    -- Processed configurations remain in `known`; release their queued
+    -- copies while exploring long lifted consumers.
+    work := work.set! cursor default
     cursor := cursor + 1
     let key := configurationKey incoming
     let c := match known[key]? with
@@ -981,7 +1035,7 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
     | .passTest next =>
       work := work.push (advanceActor { c with tests := c.tests.tail } actor next)
     | .enterCall g offset args next =>
-      let (out, _, _) ← invoke env.fns env.infos env.fields fn info c.slots g (args.map Expr.local)
+      let (out, _, _) ← invoke env.fns env.infos env.fields fn info c.slots g (args.map Expr.local) false
       if out.value.isNone then continue
       let callee := env.fns[g]!
       let ci := env.infos[g]?.getD {}
@@ -1117,13 +1171,14 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
       work := work.push (advanceActor c actor next)
     | .enterLoop scope next =>
       let c := { c with actors := c.actors.modify actor fun a =>
-        { a with loops := { id := scope, slots := c.slots, cleanups := a.cleanups } :: a.loops } }
+        { a with loops := {
+          id := scope, cells := loopCells info.shared c.slots, cleanups := a.cleanups } :: a.loops } }
       work := work.push (advanceActor c actor next)
     | .backLoop scope next =>
       let entry := (a.loops.find? (·.id == scope)).getD {
-        id := scope, slots := c.slots, cleanups := a.cleanups }
+        id := scope, cells := loopCells info.shared c.slots, cleanups := a.cleanups }
       let c := { c with
-        slots := freshLocals info.shared entry.slots c.slots
+        slots := restoreLoopCells entry.cells c.slots
         actors := c.actors.modify actor fun a => { a with cleanups := entry.cleanups } }
       work := work.push (advanceActor c actor next)
     | .leaveLoop scope next =>
@@ -1281,7 +1336,7 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       let (i, args) := key
       let some fn := fns[i]? | throw "internal: metadata call has no body"
       let info := infos[i]?.getD {}
-      modify fun st => { st with active := some key }
+      modify fun st => { st with active := some key, captureMismatch := false }
       let values := (List.range fn.nslots).map (fun i =>
         info.inputs.contains i || args[i]?.getD false) |>.toArray
       let initialized := (List.range fn.nslots).map (fun i => i < fn.arity : Nat → Bool) |>.toArray
@@ -1291,7 +1346,7 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       let body := info.body.getD fn.body
       modify fun st => { st with seen := values }
       let (background, cleanups) := (← get).sites[i]?.getD (false, [])
-      if !background && cleanups.isEmpty then
+      if !background && cleanups.isEmpty && !((← get).borrowers[i]?.getD false) then
         return ← expr fns infos fields fn info slots body
       let saved ← get
       -- Discover potential metadata without validating provisional or
@@ -1301,6 +1356,7 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
         validateUses := false, validateShared := false }
       let out ← expr fns infos fields fn info slots body
       let seen := (← get).seen
+      let captureMismatch := (← get).captureMismatch
       modify fun st => { st with
         discovery := saved.discovery
         validateUses := saved.validateUses, validateShared := saved.validateShared }
@@ -1318,11 +1374,24 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
         | .ok discovered =>
           modify fun st => { st with
             summaries := discovered.summaries
-            indices := discovered.indices, changed := discovered.changed }
+            indices := discovered.indices, changed := discovered.changed
+            dependencies := discovered.dependencies }
         if (MetadataPlan.assigns d).any (fun i =>
             info.shared.contains i && seen[i]?.getD false) then
           metadataCleanup := true
-      let needsSchedule := metadataCleanup || (background &&
+      -- A lifted task needs the caller's schedule only when it can observe
+      -- metadata at an executable boundary. Hidden type witnesses alone do
+      -- not make an ordinary default argument relevant to this analysis.
+      let mut metadataTask := false
+      if (← get).borrowedTasks[i]?.getD false then
+        match probeCleanup fns infos fields fn info cleanupSlots body (← get) with
+        | .error _ => metadataTask := true
+        | .ok discovered =>
+          modify fun st => { st with
+            summaries := discovered.summaries
+            indices := discovered.indices, changed := discovered.changed
+            dependencies := discovered.dependencies }
+      let needsSchedule := captureMismatch || metadataCleanup || metadataTask || (background &&
         (info.shared.any (fun i => seen[i]?.getD false) ||
           out.value.getD false || out.returned.getD false))
       if needsSchedule then
@@ -1332,7 +1401,8 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
           | none => do
             let bodies := fns.mapIdx fun j f => { f with body := (infos[j]?.getD {}).body.getD f.body }
             let plan := MetadataPlan.build bodies info.metadataWrites fn.nslots body (some i)
-              (infos.map (·.metadataWrites))
+              (infos.map (·.metadataWrites)) (infos.map (·.source))
+              (infos.map (·.borrowTasks))
             modify fun st => { st with plans := st.plans.set! i (some plan) }
             pure plan
         if debug then dbg_trace s!"metadata selected {fn.name}: slots={plan.slots}, actors={plan.actors}"
@@ -1343,6 +1413,7 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
     let seedRoots : M Unit := do
       for i in [:fns.size] do
         let info := infos[i]?.getD {}
+        if info.borrowTasks || info.source.slots.any (fun (_, s) => s.frame != fns[i]!.name) then continue
         discard <| request (i, (List.range fns[i]!.arity).map info.inputs.contains)
     seedRoots
     let mut growing := true
@@ -1352,7 +1423,29 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       for (summary, index) in summaries.zipIdx do
         let i := summary.key.1
         let info := infos[i]?.getD {}
+        -- Only summary solving is cached. The final replay still checks
+        -- every live context with stable shared-storage modes. Cleanup
+        -- relevance probes have private call queues, so keep those frames
+        -- out of this dependency cache.
+        let cacheable := ((← get).sites[i]?.getD (false, [])).2.isEmpty
+        let current := (← get).summaries
+        if cacheable && summary.cached && summary.dependencies.all (fun (j, result, yielded) =>
+            let s := current[j]!
+            s.result == result && s.yielded == yielded) then continue
+        modify fun st => { st with dependencies := if cacheable then some {} else none }
+        let validate := (← get).validateUses
+        -- Borrowed locals are validated against their actual owner by the
+        -- inlined graph. Discovery can also request a provisional summary
+        -- using old capture arguments; that summary is not a live frame.
+        if info.borrowTasks || info.source.slots.any (fun (_, s) => s.frame != fns[i]!.name) then
+          modify fun st => { st with validateUses := false }
         let out ← runContext summary.key
+        modify fun st => { st with validateUses := validate }
+        let dependencies := ((← get).dependencies.getD {}).toList.toArray.map fun (j, result, yielded) =>
+          (j, result, yielded)
+        modify fun st => { st with
+          dependencies := none
+          summaries := st.summaries.modify index fun s => { s with dependencies, cached := cacheable } }
         let returned := (joinRole out.value out.returned).map (· || info.metadataResult)
         let result := joinRole summary.result returned
         let yielded := summary.yielded || out.yielded
@@ -1369,8 +1462,19 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       let key := (← get).live[index]!
       index := index + 1
       discard <| runContext key
+  let borrowed := MetadataPlan.borrows fns (infos.map (·.source))
+  let bodies := fns.mapIdx fun i f => { f with body := (infos[i]?.getD {}).body.getD f.body }
+  let borrowedWork := MetadataPlan.borrowedWork bodies (infos.map (·.source)) (infos.map (·.borrowTasks))
+  let borrowedTasks := MetadataPlan.borrowedTasks bodies (infos.map (·.borrowTasks))
   let sites := fns.mapIdx fun i fn =>
-    MetadataPlan.sites fns ((infos[i]?.getD {}).body.getD fn.body)
-  discard <| action.run { debug, plans := Array.replicate fns.size none, sites }
+    let (background, cleanups) := MetadataPlan.sites fns ((infos[i]?.getD {}).body.getD fn.body)
+    (background || borrowedWork[i]!, cleanups)
+  discard <| action.run {
+    debug := debug
+    plans := Array.replicate fns.size none
+    sites := sites
+    borrowers := borrowed
+    borrowedWork := borrowedWork
+    borrowedTasks := borrowedTasks }
 
 end OpenVerse.Front.MetadataFlow
