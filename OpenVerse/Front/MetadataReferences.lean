@@ -1,6 +1,6 @@
 /- Abstract object identities used by the compiler's provenance scheduler. -/
 import OpenVerse.Core.Syntax
-import Std.Data.HashMap
+import Std.Data.HashMap.Lemmas
 
 namespace OpenVerse.Front.MetadataReferences
 open OpenVerse
@@ -11,21 +11,95 @@ open OpenVerse
     objects. Repeated allocations are joined; these are may-alias identities. -/
 abbrev Refs := List Nat
 
-private def union (a b : Refs) : Refs := (a ++ b).mergeSort (· ≤ ·) |>.eraseDups
+private def ordered : Refs → Bool
+  | [] => true
+  | x :: xs => match xs with
+    | [] => true
+    | y :: _ => x < y && ordered xs
+
+private def normalize (xs : Refs) : Refs :=
+  if ordered xs then xs else (xs.mergeSort (· ≤ ·)).eraseReps
+
+private def same (a b : Refs) : Bool :=
+  withPtrEq a b (fun _ => a == b) (by intro h; subst b; simp)
+
+private def union (a b : Refs) : Refs :=
+  let a := normalize a
+  let b := normalize b
+  if same a b then a else (a.merge b (· ≤ ·)).eraseReps
+
+private def joinField (fields : Std.HashMap (Nat × Nat) Refs)
+    (key : Nat × Nat) (value : Refs) : Std.HashMap (Nat × Nat) Refs :=
+  match fields[key]? with
+  | none => fields.insert key (normalize value)
+  | some old =>
+    let joined := union old value
+    if same joined old then fields else fields.insert key joined
+
+private def sameSlots (a b : Std.HashMap Nat Refs) : Bool :=
+  withPtrEq a b (fun _ => a == b)
+    (by intro h; subst b; exact Std.HashMap.Equiv.beq (Std.HashMap.Equiv.refl a))
+
+private def sameFields (a b : Std.HashMap (Nat × Nat) Refs) : Bool :=
+  withPtrEq a b (fun _ => a == b)
+    (by intro h; subst b; exact Std.HashMap.Equiv.beq (Std.HashMap.Equiv.refl a))
 
 structure Memory where
-  slots : Array Refs := #[]
+  /-- Empty reference sets are implicit; most graph slots hold scalar data. -/
+  slots : Std.HashMap Nat Refs := {}
+  nslots : Nat := 0
   fields : Std.HashMap (Nat × Nat) Refs := {}
   uncertain : Refs := []
-  deriving BEq, Inhabited
+  deriving Inhabited
 
-def join (a b : Memory) : Memory := {
-  slots := a.slots.zipWith union b.slots
-  fields := b.fields.fold (fun m k v => m.insert k (union (m[k]?.getD []) v)) a.fields
-  uncertain := union a.uncertain b.uncertain }
+instance : BEq Memory where
+  beq a b := sameSlots a.slots b.slots && a.nslots == b.nslots &&
+    sameFields a.fields b.fields && same a.uncertain b.uncertain
+
+def initial (nslots : Nat) (value : Nat → Refs) : Memory := Id.run do
+  let mut slots : Std.HashMap Nat Refs := {}
+  for i in [:nslots] do
+    let refs := value i
+    if !refs.isEmpty then slots := slots.insert i refs
+  return { slots, nslots }
+
+def get? (m : Memory) (slot : Nat) : Option Refs :=
+  if slot < m.nslots then some (m.slots[slot]?.getD []) else none
+
+def get (m : Memory) (slot : Nat) : Refs := (get? m slot).getD []
+
+def join (a b : Memory) : Memory := Id.run do
+  -- Equal canonical memories are already their own join. Raw API inputs
+  -- still take the normalization path below.
+  if a == b && ordered a.uncertain &&
+      a.slots.all (fun _ refs => ordered refs) &&
+      a.fields.all (fun _ refs => ordered refs) then return a
+  let nslots := min a.nslots b.nslots
+  let slots := if nslots == a.nslots then a.slots else a.slots.filter fun i _ => i < nslots
+  let slots := slots.fold (fun slots i refs =>
+    let value := normalize refs
+    if same value refs then slots else slots.insert i value) slots
+  let slots := b.slots.fold (fun slots i refs =>
+    if i ≥ nslots then slots else
+      match slots[i]? with
+      | none => slots.insert i (normalize refs)
+      | some old =>
+        let value := union old refs
+        if same value old then slots else slots.insert i value) slots
+  return {
+    slots, nslots
+    fields := b.fields.fold joinField a.fields
+    uncertain := union a.uncertain b.uncertain }
 
 def set (m : Memory) (slot : Nat) (value : Refs) : Memory :=
-  { m with slots := m.slots.set! slot value }
+  if slot ≥ m.nslots then m else
+    { m with slots := if value.isEmpty then m.slots.erase slot else m.slots.insert slot value }
+
+/-- Drop only dead local bindings. Heap and allocation-history facts stay
+    intact, including fields reachable through saved events or snapshots. -/
+def restrict (m : Memory) (keep : Nat → Bool) : Memory :=
+  if m.slots.all (fun i _ => keep i) then m
+  else { m with slots := m.slots.filter fun i _ => keep i }
 
 /-- Summarized workers may mutate any heap field, but cannot replace the
     caller's local reference bindings. -/
@@ -50,10 +124,10 @@ private def allocation (site : Nat) : Nat := site + 4294967296
 
 private def store (m : Memory) (objects : Refs) (field : Nat) (value : Refs) : Memory := Id.run do
   let fields := m.fields.fold (fun h (object, k) old =>
-    if k == field && aliases objects [object] then h.insert (object, k) (union old value)
+    if k == field && aliases objects [object] then joinField h (object, k) value
     else h) m.fields
   return { m with fields := objects.foldl (fun h object =>
-    h.insert (object, field) (union (h[(object, field)]?.getD []) value)) fields }
+    joinField h (object, field) value) fields }
 
 private def load (m : Memory) (objects : Refs) (field : Nat) : Refs :=
   objects.foldl (fun r object => union r
@@ -75,6 +149,11 @@ private def make (m : Memory) (site : Nat) (values : List Refs) : Refs × Memory
   let mut m := if repeated then { m with uncertain := union m.uncertain [object] } else m
   for (value, i) in values.zipIdx do m := store m [object] i value
   return ([object], m)
+
+/-- Immutable containers need identities only to track object references in
+    their contents. Heap allocations retain identity even with scalar fields. -/
+private def container (m : Memory) (site : Nat) (values : List Refs) : Refs × Memory :=
+  if values.all List.isEmpty then ([], m) else make m site values
 
 private structure Flow where
   memory : Memory
@@ -103,26 +182,26 @@ private def exits (a b : Flow) : Flow := { b with
   broken := joinMemory a.broken b.broken }
 
 mutual
-private partial def expr (fns : Array Fn) (stack : List Nat) (site : Nat)
+private partial def expr (fns : Array Fn) (scalarReturns : Array Bool) (stack : List Nat) (site : Nat)
     (memory : Memory) : Expr → Flow
   | .lit (.ref a) => { memory, value := some [8589934592 + a] }
   | .lit _ => { memory }
-  | .local i => { memory, value := some (memory.slots[i]?.getD [0]) }
+  | .local i => { memory, value := some ((get? memory i).getD [0]) }
   | .assign i e =>
-    let out := expr fns stack (child site 0) memory e
+    let out := expr fns scalarReturns stack (child site 0) memory e
     { out with memory := out.value.map (set out.memory i) |>.getD out.memory }
   | .seq a b =>
-    let out := expr fns stack (child site 0) memory a
+    let out := expr fns scalarReturns stack (child site 0) memory a
     if out.value.isNone then out
-    else exits out (expr fns stack (child site 1) out.memory b)
+    else exits out (expr fns scalarReturns stack (child site 1) out.memory b)
   | .call g es =>
-    let (args, out) := operands fns stack site memory es
+    let (args, out) := operands fns scalarReturns stack site memory es
     if out.value.isNone then out
     else
-      let (value, memory) := invoke fns stack (child site g) out.memory g args
+      let (value, memory) := invoke fns scalarReturns stack (child site g) out.memory g args
       { out with memory, value := some value }
   | .heap op es => Id.run do
-    let (args, out) := operands fns stack site memory es
+    let (args, out) := operands fns scalarReturns stack site memory es
     if out.value.isNone then return out
     let (value, memory) := match op with
       | .new _ => make out.memory site args
@@ -134,10 +213,10 @@ private partial def expr (fns : Array Fn) (stack : List Nat) (site : Nat)
       | .tag => ([], out.memory)
     return { out with memory, value := some value }
   | .prim op es => Id.run do
-    let (args, out) := operands fns stack site memory es
+    let (args, out) := operands fns scalarReturns stack site memory es
     if out.value.isNone then return out
     let (value, memory) := match op with
-      | .mkArr | .mkTup => make out.memory site args
+      | .mkArr | .mkTup => container out.memory site args
       | .mkSome | .query | .eq | .ne => (args.headD [], out.memory)
       | .tupGet k => (load out.memory (args.headD [0]) k, out.memory)
       | .index =>
@@ -147,23 +226,23 @@ private partial def expr (fns : Array Fn) (stack : List Nat) (site : Nat)
         (value, out.memory)
       | .arrSet =>
         let value := union (elements out.memory (args.headD [0])) (args[2]?.getD [0])
-        make out.memory site [value]
+        container out.memory site [value]
       | .concat =>
-        make out.memory site [args.foldl (fun r a => union r (elements out.memory a)) []]
+        container out.memory site [args.foldl (fun r a => union r (elements out.memory a)) []]
       | .flatten =>
         -- The outer array stores row identities, not the flattened values.
         let rows := args.foldl (fun r a => union r (elements out.memory a)) []
-        make out.memory site [elements out.memory rows]
+        container out.memory site [elements out.memory rows]
       | _ => ([], out.memory)
     let value := match op, es with
       | .fail, _ | .userErr, _ | .query, [.lit (.logic false)] | .query, [.lit .none] => none
       | _, _ => some value
     return { out with memory, value }
   | .ite c t e =>
-    let condition := expr fns stack (child site 0) memory c
-    let yes := if condition.value.isSome then expr fns stack (child site 1) condition.memory t
+    let condition := expr fns scalarReturns stack (child site 0) memory c
+    let yes := if condition.value.isSome then expr fns scalarReturns stack (child site 1) condition.memory t
       else { memory := condition.memory, value := none }
-    let no := expr fns stack (child site 2) memory e
+    let no := expr fns scalarReturns stack (child site 2) memory e
     let memory := match yes.value, no.value with
       | some _, some _ => join yes.memory no.memory
       | some _, none => yes.memory
@@ -179,7 +258,7 @@ private partial def expr (fns : Array Fn) (stack : List Nat) (site : Nat)
     let mut returnedMemory := none
     let mut broken := none
     repeat
-      let out := expr fns stack (child site 0) head body
+      let out := expr fns scalarReturns stack (child site 0) head body
       returned := joinValue returned out.returned
       returnedMemory := joinMemory returnedMemory out.returnedMemory
       broken := joinMemory broken out.broken
@@ -188,45 +267,45 @@ private partial def expr (fns : Array Fn) (stack : List Nat) (site : Nat)
       head := next
     return { memory := broken.getD head, value := broken.map (fun _ => []), returned, returnedMemory }
   | .forE i source filter body => Id.run do
-    let source := expr fns stack (child site 0) memory source
+    let source := expr fns scalarReturns stack (child site 0) memory source
     if source.value.isNone then return source
     let item := elements source.memory (source.value.getD [0])
     let mut head := source.memory
     let mut value := []
     let mut out := source
     repeat
-      let filter := expr fns stack (child site 1) (set head i item) filter
-      let body := if filter.value.isSome then expr fns stack (child site 2) filter.memory body
+      let filter := expr fns scalarReturns stack (child site 1) (set head i item) filter
+      let body := if filter.value.isSome then expr fns scalarReturns stack (child site 2) filter.memory body
         else { memory := head, value := none }
       out := exits filter (exits body out)
       value := union value (body.value.getD [])
       let next := if body.value.isSome then join head body.memory else head
       if next == head then break
       head := next
-    let (result, memory) := make head site [value]
+    let (result, memory) := container head site [value]
     return { out with memory, value := some result }
   | .brk => { memory, value := none, broken := some memory }
   | .ret e =>
-    let out := expr fns stack (child site 0) memory e
+    let out := expr fns scalarReturns stack (child site 0) memory e
     { out with
       returned := joinValue out.returned out.value
       returnedMemory := joinMemory out.returnedMemory (out.value.map (fun _ => out.memory))
       value := none }
   | .print e =>
-    let out := expr fns stack (child site 0) memory e
+    let out := expr fns scalarReturns stack (child site 0) memory e
     { out with value := out.value.map (fun _ => []) }
 
-private partial def operands (fns : Array Fn) (stack : List Nat) (site : Nat)
+private partial def operands (fns : Array Fn) (scalarReturns : Array Bool) (stack : List Nat) (site : Nat)
     (memory : Memory) (es : List Expr) : List Refs × Flow := Id.run do
   let mut out : Flow := { memory }
   let mut args := []
   for (e, i) in es.zipIdx do
     if out.value.isSome then
-      out := exits out (expr fns stack (child site i) out.memory e)
+      out := exits out (expr fns scalarReturns stack (child site i) out.memory e)
       args := args ++ [out.value.getD []]
   return (args, out)
 
-private partial def invoke (fns : Array Fn) (stack : List Nat) (site : Nat)
+private partial def invoke (fns : Array Fn) (scalarReturns : Array Bool) (stack : List Nat) (site : Nat)
     (memory : Memory) (g : Nat) (args : List Refs) : Refs × Memory := Id.run do
   let some fn := fns[g]? | return ([0], memory)
   if ["$Sleep", "$WaitDone", "$signalAll"].contains fn.name then return ([], memory)
@@ -236,9 +315,11 @@ private partial def invoke (fns : Array Fn) (stack : List Nat) (site : Nat)
     -- Readonly calls cannot replace fields of existing objects. Keep those
     -- identities precise; a returned allocation is still an unknown alias.
     -- Widen writable calls rather than impose an analysis fuel limit.
-    return ([0], if fn.writes then widenFields memory else memory)
-  let slots := Array.ofFn (n := fn.nslots) fun i => args[i.val]?.getD []
-  let out := expr fns (g :: stack) site { memory with slots } fn.body
+    let result := if scalarReturns[g]?.getD false then [] else [0]
+    return (result, if fn.writes then widenFields memory else memory)
+  let entry := initial fn.nslots fun i => args[i]?.getD []
+  let out := expr fns scalarReturns (g :: stack) site
+    { memory with slots := entry.slots, nslots := entry.nslots } fn.body
   let final := out.returnedMemory.map (fun returned =>
     if out.value.isSome then join out.memory returned else returned) |>.getD out.memory
   return ((joinValue out.value out.returned).getD [0],
@@ -356,18 +437,19 @@ def reachable (memory : Memory) (roots : Refs) : Refs := Id.run do
 
 /-- Preserve the element identities accumulated by a source `for`. -/
 def accumulate (memory : Memory) (site dst value : Nat) : Memory :=
-  let items := union (elements memory (memory.slots[dst]?.getD []))
-    (memory.slots[value]?.getD [0])
-  let (refs, memory) := make memory site [items]
+  let items := union (elements memory ((get? memory dst).getD []))
+    ((get? memory value).getD [0])
+  let (refs, memory) := container memory site [items]
   set memory dst refs
 
 /-- Transfer references through one graph atom. -/
-def eval (fns : Array Fn) (site : Nat) (memory : Memory) (e : Expr) : Refs × Memory :=
-  let out := expr fns [] site memory e
+def eval (fns : Array Fn) (site : Nat) (memory : Memory) (e : Expr)
+    (scalarReturns : Array Bool := #[]) : Refs × Memory :=
+  let out := expr fns scalarReturns [] site memory e
   (out.value.getD [0], out.memory)
 
 /-- Preserve argument aliases and fresh constructor identities through helpers. -/
 def call (fns : Array Fn) (site : Nat) (memory : Memory) (g : Nat)
-    (args : List Refs) : Refs × Memory := invoke fns [] site memory g args
+    (args : List Refs) (scalarReturns : Array Bool := #[]) : Refs × Memory := invoke fns scalarReturns [] site memory g args
 
 end OpenVerse.Front.MetadataReferences

@@ -398,7 +398,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     return .asking { loops := loopNeeds }
   if !opts.extendedDefaults then
     checkInitializerConvergence lowering.fns sigs classes.defs defaults.bodies admitted.intrinsicCalls
-  MetadataFlow.check lowering.fns lowering.metadata (metadataFields env) opts.debug
+  let scalarReturns := lowering.sigs.fns.toArray.map fun (_, result) => match result with
+    | .int | .logic | .char | .float => true
+    | _ => false
+  MetadataFlow.check lowering.fns lowering.metadata (metadataFields env) opts.debug scalarReturns
   let frameInfo := elaborated.map (·.frames)
   let c ← certify (← lowerProgram env sigs mainSig lowering frameInfo admitted.usesConc admitted.usesEvents
     admitted.awaitsTasks) methods.stubs

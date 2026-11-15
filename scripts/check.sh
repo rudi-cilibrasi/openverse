@@ -2,7 +2,7 @@
 # Everything that needs no QuickProof: the Lean proofs and front end, the C runtime and its tests,
 # both implementations on the Verse test suite, differential fuzzing, and the QuickProof pins.
 #
-# After the build, source-frame contracts and C runtime, the remaining checks are independent: they run
+# After the build, compiler API contracts and C runtime, the remaining checks are independent: they run
 # concurrently, at most CHECK_JOBS at a time (default: the number of CPUs), longest first so they
 # pack well, and each one's output is printed, in this order, once it has finished. CHECK_JOBS=1
 # runs them one after another. CHECK_JOBS must be a positive integer.
@@ -27,6 +27,15 @@ if lake build >"$logs/build" 2>&1; then
   tail -1 "$logs/build"
 else
   rc=$?; cat "$logs/build"; exit "$rc"
+fi
+# Keep the fixed-budget native resource check ahead of other CPU-heavy work.
+echo "== native metadata reader resource contracts"
+tests/scripts/test-metadata-reader.sh
+echo "== metadata fact representation contracts"
+if lake env lean -j1 --run tests/lean/MetadataFacts.lean >"$logs/metadata-facts" 2>&1; then
+  cat "$logs/metadata-facts"
+else
+  rc=$?; cat "$logs/metadata-facts"; exit "$rc"
 fi
 echo "== source-frame rewrite contracts"
 # Like the proof build, this check loads Lean modules. Run it before the

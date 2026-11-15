@@ -237,9 +237,10 @@ returns from active groups still propagate to the owning function.
 Recursive signaling helpers use a finite argument-dependency summary. Failed
 conditions restore listener registrations, task states and caller storage.
 Recursive calls that exclude heap writes preserve the identities already
-stored in object fields. Their returned references remain unknown, and
-writable recursive calls still widen fields. This keeps a pure recursive
-calculation from turning a known unrelated event into a possible wakeup;
+stored in object fields. Recursive returns with a checked scalar result type
+(`int`, `logic`, `char` or `float`) carry no object identity; other recursive
+returned references remain unknown. Writable recursive calls still widen fields.
+This keeps a pure recursive calculation from turning a known unrelated event into a possible wakeup;
 it does not infer a precise recursive return. The paired API controls and
 `metadata_readonly_recursive_alias.verse` cover readonly calls, writable
 calls and returned event aliases.
@@ -251,10 +252,27 @@ After those workers can progress, heap aliases widen and their possible signals
 and task completions join the schedule; the caller's local storage is preserved.
 This can admit extra schedules and reject safe programs. The exploration does
 not establish complete alias or timing precision. Generated witness, capture
-and frame aliases remain in the #572 audit, including resource use for recursive
-choice producers. A private recursive-producer reader still reaches the 4 GB
-cap on the #640 baseline and a bounded timeout with the frame-alias changes;
-its real control passes. This remains an unresolved analysis case.
+and frame aliases remain in the #572 audit. The recursive-producer reader is
+now retained in `MetadataReader.lean`: its real and metadata variants must both
+admit after a real overwrite before the event wakes the reader. Each source
+pair has the original 15-second / 4-GB allowance. Eight additional pairs cover
+an unoverwritten dummy, an immutable saved dummy, signal return continuations,
+rollback and spawn continuations; admitted programs pass all three Core checks.
+
+The scheduler stores boolean role facts as packed bit vectors and reference
+slots sparsely. Ordered reference joins and exact equality shortcuts preserve
+their original results. Immutable containers without object references do not
+need synthetic identities; heap objects retain their identities, including
+objects with empty fields. Ordinary summary transfers settle before pending
+schedule transfers run, and dependency changes still invalidate cached results.
+Control-state keys retain initialization modes for shared cells and source-frame
+captures. Backward may-liveness removes only reference slots that no actor,
+signal return, deferred continuation or cleanup can read. Saved transaction
+memories and heap fields remain intact. `MetadataFacts.lean` compares packed
+facts and sparse reference operations with independent dense models, including
+empty-field versus absent-field behavior, scalar recursion and heap identity.
+These finite resource and semantic controls do not establish complete alias
+precision or close the broader generated witness/capture/frame audit.
 `MetadataSignals.lean` retains 47 real/dummy refusal pairs and 37 positive pairs
 for direct and indirect signals, recursive helpers, rollback, task completion,
 cleanup, helper returns and unrelated events. `metadata_signal_timing.verse`
