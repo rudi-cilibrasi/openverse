@@ -241,6 +241,9 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
       fxCheck s!"construction block of {(name.dropEnd ".$block".length).toString}" budget st
   let inputs := (locals.filter (·.typeValue)).map (·.slot) ++
     (List.range dictTps.length).map (frame.witnessBase + ·)
+  -- Check executable inputs on emitted argument values in MetadataFlow. A
+  -- source hint can taint an independent real return from an opaque helper.
+  -- Keep the declaration's own domain, before substituting caller instances.
   let required := signature.params.zipIdx.filterMap fun (ty, i) =>
     if !signature.typeValues.contains i && (SubtypeEvidence.exposesEvidence env ty ||
         (i == 0 && ((signature.hasReceiver && !name.endsWith ".$block") ||

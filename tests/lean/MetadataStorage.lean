@@ -67,7 +67,62 @@ private def ordinaryBorrowedReader (overwrite : Bool) : String := callables
     (if overwrite then "    set Stored=F\n" else "") ++
     "    for(A:=(Dup(1)|Dup(2)),B:=(Dup(1)|Dup(2))):\n        Sleep(0.01)\n        Stored()")
 
+private def moduleFunction (body : String) : String := callables
+  ("session_key:=class<unique><module_scoped_var_weak_map_key>{}\nfunction_box:=class{Value:type{_()<computes>:int}}\nvar Functions:weak_map(session_key,type{_()<computes>:int})=map{}\nvar Optional:weak_map(session_key,?type{_()<computes>:int})=map{}\nvar Boxes:weak_map(session_key,function_box)=map{}\nCache:=module:\n    var NestedFunctions<public>:weak_map(session_key,type{_()<computes>:int})=map{}\nIdentity(V:v where v:type)<computes>:v=V\nIgnore(V:v,Real:type{_()<computes>:int} where v:type)<computes>:type{_()<computes>:int}=Real\nPut(Key:session_key,Value:type{_()<computes>:int})<transacts><decides>:void=set Functions[Key]=Value\nGet(Key:session_key)<transacts><decides>:type{_()<computes>:int}=Functions[Key]\n" ++
+   "Caller(Key:session_key,F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<transacts>:int=\n" ++ body)
+
+private def returnedArgument (helper body : String) : String := callables
+  ("UseFn(Value:type{_()<computes>:int})<computes>:int=Value()\nUseNamed(?Value:type{_()<computes>:int}=One)<computes>:int=Value()\nbox(v:type):=class<computes>{Value:v}\n" ++ helper ++
+   "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<computes>:int=\n" ++ body)
+
+private def returnedProof (helper body : String) : String :=
+  "proof_box(v:type):=class<computes>{Value:v}\n" ++
+  "UseProof(X:t,Proof:evidence(vehicle,t) where t:type)<computes>:int=Proof.Up(X).N\n" ++
+  helper ++ "Caller(X:t,F:evidence(vehicle,t),Dummy:evidence(vehicle,t) where t:type)<computes>:int=\n" ++ body
+
 private def cases : List (String × String) := [
+  ("metadata returned proof argument Direct", returnedProof
+    "Pass(M:v,R:v where v:type)<computes>:v=M\n"
+    "    UseProof(X,Pass(Dummy,F))"),
+  ("metadata returned proof argument Failable", returnedProof
+    "Pass(M:v,R:v where v:type)<computes><decides>:v=block{true?;M}\n"
+    "    if(V:=Pass[Dummy,F])then UseProof(X,V)else 0"),
+  ("metadata returned proof argument Field", returnedProof
+    "Pass(M:v,R:v where v:type)<computes>:proof_box(v)=proof_box(v){Value:=M}\n"
+    "    UseProof(X,Pass(Dummy,F).Value)"),
+  ("module function storage Direct", moduleFunction
+    "    if(set Functions[Key]=Dummy,V:=Functions[Key])then V()else 0"),
+  ("module function storage Unused", moduleFunction
+    "    if(set Functions[Key]=Dummy){}\n    0"),
+  ("module function storage Helper", moduleFunction
+    "    if(Put[Key,Dummy],V:=Get[Key])then V()else 0"),
+  ("module function storage Generic", moduleFunction
+    "    if(set Functions[Key]=Identity(Dummy),V:=Functions[Key])then V()else 0"),
+  ("module function storage Optional", moduleFunction
+    "    if(set Optional[Key]=option{Dummy},Maybe:=Optional[Key],V:=Maybe?)then V()else 0"),
+  ("module function storage Boxed", moduleFunction
+    "    H:=function_box{Value:=Dummy}\n    if(set Boxes[Key]=H,V:=Boxes[Key])then V.Value()else 0"),
+  ("module function storage Nested", moduleFunction
+    "    if(set Cache.NestedFunctions[Key]=Dummy,V:=Cache.NestedFunctions[Key])then V()else 0"),
+  ("module function storage Rollback", moduleFunction
+    "    if(set Functions[Key]=Dummy;false?){}\n    0"),
+  ("module function storage Overwrite", moduleFunction
+    "    if(set Functions[Key]=Dummy;set Functions[Key]=F;V:=Functions[Key])then V()else 0"),
+  ("metadata returned function argument Direct", returnedArgument
+    "Pass(M:v,R:v where v:type)<computes>:v=M\n"
+    "    UseFn(Pass(Dummy,F))"),
+  ("metadata returned function argument Failable", returnedArgument
+    "Pass(M:v,R:v where v:type)<decides><computes>:v=block{true?;M}\n"
+    "    if(V:=Pass[Dummy,F])then UseFn(V)else 0"),
+  ("metadata returned function argument Recursive", returnedArgument
+    "Pass(M:v,R:v,N:int where v:type)<computes>:v=if(N>0)then Pass(M,R,N-1)else M\n"
+    "    UseFn(Pass(Dummy,F,1))"),
+  ("metadata returned function argument Field", returnedArgument
+    "Pass(M:v,R:v where v:type)<computes>:box(v)=box(v){Value:=M}\n"
+    "    UseFn(Pass(Dummy,F).Value)"),
+  ("metadata returned function argument Named", returnedArgument
+    "Pass(M:v,R:v where v:type)<computes>:v=M\n"
+    "    UseNamed(?Value:=Pass(Dummy,F))"),
   ("lifted writer cannot put metadata into an initially real cell",
     liftedTask "            set Stored=Dummy\n" "    E.Signal(0)\n    Stored()" (initial := "F")),
   ("lifted real-cell write is checked without a later read",
@@ -137,6 +192,42 @@ private def cases : List (String × String) := [
   ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
+  ("real returned proof argument Direct", returnedProof
+    "Pass(M:v,R:v where v:type)<computes>:v=R\n"
+    "    UseProof(X,Pass(Dummy,F))"),
+  ("real returned proof argument Failable", returnedProof
+    "Pass(M:v,R:v where v:type)<computes><decides>:v=block{true?;R}\n"
+    "    if(V:=Pass[Dummy,F])then UseProof(X,V)else 0"),
+  ("real returned proof argument Field", returnedProof
+    "Pass(M:v,R:v where v:type)<computes>:proof_box(v)=proof_box(v){Value:=R}\n"
+    "    UseProof(X,Pass(Dummy,F).Value)"),
+  ("module function storage Real", moduleFunction
+    "    if(set Functions[Key]=F,V:=Functions[Key])then V()else 0"),
+  ("module function storage IgnoreMetadata", moduleFunction
+    "    if(set Functions[Key]=Ignore(Dummy,F),V:=Functions[Key])then V()else 0"),
+  ("module function storage RealHelper", moduleFunction
+    "    if(Put[Key,Ignore(Dummy,F)],V:=Get[Key])then V()else 0"),
+  ("module function storage RealRollback", moduleFunction
+    "    if(set Functions[Key]=F){}\n    if(set Functions[Key]=Ignore(Dummy,F);false?){}\n    if(V:=Functions[Key])then V()else 0"),
+  ("module function storage RealOptional", moduleFunction
+    "    if(set Optional[Key]=option{Ignore(Dummy,F)},Maybe:=Optional[Key],V:=Maybe?)then V()else 0"),
+  ("module function storage RealBoxed", moduleFunction
+    "    H:=function_box{Value:=Ignore(Dummy,F)}\n    if(set Boxes[Key]=H,V:=Boxes[Key])then V.Value()else 0"),
+  ("real returned function argument Direct", returnedArgument
+    "Pass(M:v,R:v where v:type)<computes>:v=R\n"
+    "    UseFn(Pass(Dummy,F))"),
+  ("real returned function argument Failable", returnedArgument
+    "Pass(M:v,R:v where v:type)<decides><computes>:v=block{true?;R}\n"
+    "    if(V:=Pass[Dummy,F])then UseFn(V)else 0"),
+  ("real returned function argument Recursive", returnedArgument
+    "Pass(M:v,R:v,N:int where v:type)<computes>:v=if(N>0)then Pass(M,R,N-1)else R\n"
+    "    UseFn(Pass(Dummy,F,1))"),
+  ("real returned function argument Field", returnedArgument
+    "Pass(M:v,R:v where v:type)<computes>:box(v)=box(v){Value:=R}\n"
+    "    UseFn(Pass(Dummy,F).Value)"),
+  ("real returned function argument Named", returnedArgument
+    "Pass(M:v,R:v where v:type)<computes>:v=R\n"
+    "    UseNamed(?Value:=Pass(Dummy,F))"),
   ("canceled lifted writer leaves an initially real cell alone",
     liftedTask "            set Stored=Dummy\n" "    0" (initial := "F")),
   ("canceled lifted task does not execute its metadata receiver",
