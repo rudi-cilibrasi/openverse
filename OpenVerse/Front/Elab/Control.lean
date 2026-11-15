@@ -1094,7 +1094,14 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     there is (`Refine.markCast`, `Choice.liftClause`). `bound`: names the
     clauses before it bind, which are values too. -/
 def liftCastClause (ctx : Ctx) (bound : List String) (q : Pos) (c : SExpr) : List SExpr :=
-  Choice.liftClause (fun n => choiceValues ctx n || bound.contains n) (choiceField ctx) (Refine.markCast q c)
+  -- A first range's synthesized producer can otherwise absorb a later
+  -- bound cast before its refinement reaches the first's remaining code.
+  -- Lift all its bound casts together, in the order of their operands.
+  let value := match c with | .decl _ _ _ _ v => v | e => e
+  let casts := if (Choice.firstRangeBounds? value).isSome then
+      Refine.castsIn ctx.types.classes.contains c else [q]
+  let marked := casts.foldl (fun e position => Refine.markCast position e) c
+  Choice.liftClause (fun n => choiceValues ctx n || bound.contains n) (choiceField ctx) marked
     (fieldOrder := choiceOrder ctx)
 
 /-- (#243, #351) A failure context's clauses `cs`, then `after` (an `if`'s

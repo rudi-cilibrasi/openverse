@@ -1088,7 +1088,12 @@ circle := class(shape, labelled):
   branch of an `if` in a failure context is in it too: one written as an
   expression with such a cast in it (`if (N > 0) then dup[P].C else 0`) is
   the block of it, where the cast is a clause, so it runs only when that
-  branch does. A `case` scrutinee is an ordered operand too: a cast there
+  branch does. Both bounds of a `for` or `first` range can contain such
+  casts, including inside computed bounds. Bounds run from left to right,
+  once before the range is iterated, and their refinements reach the
+  following clauses and body. An explicitly nested `for` remains a
+  separate failure context whose refinement does not escape its producer.
+  A `case` scrutinee is an ordered operand too: a cast there
   refines the arms and the following clauses. A cast in an arm stays in
   that arm, which must already be in a failure context. Computed patterns
   are separate failure conditions: a cast there stays inside its pattern,
@@ -1358,9 +1363,8 @@ circle := class(shape, labelled):
     view (#243, #250, #351) outside any failure context (a case's
     scrutinee and arms need an enclosing one; its computed patterns are
     failure conditions), or inside an expression where choice lifting
-    does not reach it, including an inline range bound (#243). In a
-    nested failure context of its own, such as an `option{…}` inside the
-    clause, it is that context's;
+    does not reach it (#243). In a nested failure context of its own,
+    such as an `option{…}` inside the clause, it is that context's;
   - after a cast that opens type arguments, a value of its failure
     context, or a name it binds that a branch or body uses, of a type that
     names them (#250): no type outside it can name them (it would be an

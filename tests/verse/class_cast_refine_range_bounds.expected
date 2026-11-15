@@ -1,0 +1,14 @@
+direct 1 7 left
+direct 2 7 left
+named 1 7 left
+named 2 7 left
+lower 1
+lower 2
+lower 3
+upper 0
+upper 1
+upper 2
+missing 0 0 0 0
+empty 0 0
+single missing 0 0
+exit=0

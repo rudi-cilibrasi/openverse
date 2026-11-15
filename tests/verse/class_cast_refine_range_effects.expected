@@ -1,0 +1,8 @@
+direct 1 2 LU
+direct 2 2 LU
+named 1 2 LU
+named 2 2 LU
+after 2 'LU' / 2 'LU'
+bad lower 0 0 2 'LU' / 2 'LU'
+bad upper 0 0 2 'LU' / 2 'LU'
+exit=0

@@ -232,6 +232,16 @@ def noLift (p : Pos) (why : String) (e : SExpr) : SExpr :=
 def shownName (n : String) : String :=
   if n.startsWith "$" && n.contains '\'' then ((n.splitOn "'").getLast?.getD n) else n
 
+/-- The parser's `first` range producer, with a way to replace its bounds.
+    An explicitly written `for` remains a scope of its own. -/
+def firstRangeBounds? : SExpr → Option (SExpr × SExpr × (SExpr → SExpr → SExpr))
+  | .app p f@(.ident _ "$each")
+      [.forE q [.decl r n none false (.range b lo hi)] v@(.ident _ result)] false =>
+    if n == result && (shownName n).startsWith "$firstRange" then
+      some (lo, hi, fun lo hi => .app p f [.forE q [.decl r n none false (.range b lo hi)] v] false)
+    else none
+  | _ => none
+
 /-- The names `ns` renamed for a place, `tag'N` (`tag` a made name, so
     `shownName` gives `N` back), so they stay its own there. -/
 def renamedFor (tag : String) (ns : List String) : List (String × String) :=
@@ -761,6 +771,15 @@ partial def bindParams (isVal : String → Bool) (isField : String → String �
 /-- `e` with its liftable choices lifted (into the state's clauses). -/
 partial def liftE (isVal : String → Bool) (isField : String → String → Bool) (e : SExpr) : LM SExpr := do
   if !hasLiftable e then return e
+  -- A source `first{I := lo..hi; ...}` has a synthesized array producer.
+  -- A marked bound cast belongs before that producer, so its refinement
+  -- reaches the first's remaining clauses. Keep ordinary ranges on their
+  -- existing path, and bind both bounds in their written evaluation order.
+  if let some (lo, hi, rebuild) := firstRangeBounds? e then
+    let marked := fun x => anyE (fun | .app _ (.ident _ "$liftCast") _ false => true | _ => false) x
+    if marked lo || marked hi then
+      let bounds ← liftOps isVal isField [lo, hi]
+      return ← LM.bind e.pos "c" (rebuild bounds[0]! bounds[1]!)
   match e with
   | .app p (.ident _ "$choice") _ false => LM.bind p "c" e
   | .app p (.ident _ "$liftCast") [c] false => LM.bind p "k" c
