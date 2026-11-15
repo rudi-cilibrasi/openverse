@@ -262,6 +262,7 @@ partial def hasLiftable : SExpr → Bool
   -- (an inlined function's parameter default, in its own context, #283)
   | .app _ (.ident _ "$paramDefault") _ false => false
   | .app _ (.ident _ "$constructProbe") _ false => false
+  | .app _ (.ident _ "$mapKeySources") [_, value] false => hasLiftable value
   -- (an exclusive choice, which a `for` compiles itself, #314)
   | .app _ (.ident _ "$excl") _ false => false
   | .app _ (.ident _ "$choice") _ false => true
@@ -863,6 +864,8 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
       return .ident q r
     -- (no template: only seeing whether a body has several values)
     | _ => LM.bind e.pos "c" e
+  | .app p f@(.ident _ "$mapKeySources") [keys, value] false =>
+    return .app p f [keys, ← liftE isVal isField value] false
   | .app p f args br =>
     let (hs, whole) := headOps isVal isField f
     -- (a call evaluates its positional arguments, then its named ones as
@@ -886,7 +889,15 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
   -- arithmetic, member access, `?`, tuples, arrays, maps and string
   -- interpolation; #283, a range's bounds, so a `for`'s range is a
   -- generator after them)
-  | .bin .. | .range .. | .member .. | .query .. | .neg .. | .tuple .. | .arrayLit .. | .str .. | .mapLit .. =>
+  | .mapLit p entries =>
+    -- Prefix bindings can hide a key's failure. Retain its source for a
+    -- type-only check at the map's inferred key type, without reexecution.
+    let value := e.withChildren (← liftOps isVal isField e.children)
+    -- Keys whose own choices were already lifted retain that existing
+    -- path; only newly hoisted ordinary keys need this additional check.
+    let keys := (entries.map (·.1)).filter (!hasLiftable ·)
+    return .app p (.ident p "$mapKeySources") [.block p keys, value] false
+  | .bin .. | .range .. | .member .. | .query .. | .neg .. | .tuple .. | .arrayLit .. | .str .. =>
     return e.withChildren (← liftOps isVal isField e.children)
   -- (#283) `A and B`: its operands in order, in one block, as the `and` is
   -- a scope of its own whose names `B` sees (Book of Verse ch. 7): `A` a

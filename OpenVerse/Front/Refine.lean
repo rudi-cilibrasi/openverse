@@ -272,7 +272,10 @@ partial def castsIn (isClass : String → Bool) (c : SExpr) : List Pos :=
       (indices.flatMap fun | .decl _ _ _ _ index => go index | _ => []) ++ go value
     | .app _ (.ident _ n) _ _ => if n.startsWith "$" then [] else e.children.flatMap go ++ here e
     | .app .. | .member .. | .bin .. | .range .. | .cmp .. | .query .. | .neg .. | .tuple .. | .arrayLit ..
-    | .str .. | .mapLit .. => e.children.flatMap go ++ here e
+    | .str .. => e.children.flatMap go ++ here e
+    -- Map keys cannot fail. Keep them in the literal, where elabMap
+    -- checks that restriction; lifting a cast would hide its failure.
+    | .mapLit _ entries => entries.flatMap fun (_, value) => go value
     | _ => []
   let inner : SExpr → List Pos := fun x => x.children.flatMap go
   match c with

@@ -42,6 +42,20 @@ partial def elabExprMarkersWith
     (next : Ctx → SExpr → Option Ty → EM R)
     (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   match se with
+  | .app _ (.ident _ "$mapKeySources") [.block _ keys, value] false =>
+    let result ← elabE ctx value exp
+    let keyTy := match result.ty with | .map k _ | .weakMap k _ => some k | _ => none
+    let saved ← get
+    let checked ← tryCatch (do
+      for key in keys do
+        set saved
+        let r ← elabE { ctx with typeOnly := true } key keyTy
+        checkMapKeyCanFail ctx key.pos r.e
+      pure (Except.ok ())) (fun err => pure (Except.error err))
+    set saved
+    match checked with
+    | .ok _ => return result
+    | .error err => throw err
   | .app _ (.ident _ "$nofail") [e] false =>
     elabE { ctx with canFail := false, inRollback := ctx.inRollback || ctx.canFail, inBlock := true } e exp
   | .app p (.ident _ "$defer") _ _ => eerr p "defer: is a statement: it has no value"
@@ -467,10 +481,12 @@ partial def elabExprMarkersWith
                 set saved
                 if let some refusal := refusal? then
                   if casts.contains refusal.pos then
-                    let lifted := liftCastClause before (Choice.boundIn (clauses.take k)) refusal.pos clause
+                    set prefixState
+                    let lifted ← liftCastClause elabE before (Choice.boundIn (clauses.take k)) refusal.pos clause
+                    set saved
                     return ← elabE ctx (.app p (.ident p "$first")
                       [.block bp (clauses.take k ++ lifted ++ clauses.drop (k + 1) ++ [value])] false) exp
-      if let some r ← withCastClauses ctx items.dropLast value (fun _ => false) (elabE { ctx with asWritten := true } se exp)
+      if let some r ← withCastClauses elabE elabOneClauses ctx items.dropLast value (fun _ => false) (elabE { ctx with asWritten := true } se exp)
           (fun cs v => elabE ctx (.app p (.ident p "$first") [.block bp (cs ++ [v])] false) exp) then
         return r
     let (rc, c1) ← elabOneClauses ctx items.dropLast

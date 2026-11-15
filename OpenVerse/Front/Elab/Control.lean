@@ -4,6 +4,12 @@ import OpenVerse.Front.Elab.Calls
 
 namespace OpenVerse.Front
 open OpenVerse
+
+/-- A map literal's keys retain their failable-key restriction after lifting. -/
+def checkMapKeyCanFail (ctx : Ctx) (p : Pos) (e : Expr) : EM Unit := do
+  if e.mayFail ctx.sigProg then
+    eerr p "a map literal's key cannot fail: bind it first, in a failure context (Book of Verse ch. 3: \"failure in map literal keys is not implemented\")"
+
 partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMember : Ctx → Pos → R → String → EM R)
     (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (rhs0 : SExpr)
     (rootInit : Option (String × Expr) := none) : EM R := do
@@ -1094,26 +1100,44 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     context's clause may be, lifted out to be one before it, as a choice
     there is (`Refine.markCast`, `Choice.liftClause`). `bound`: names the
     clauses before it bind, which are values too. -/
-def liftCastClause (ctx : Ctx) (bound : List String) (q : Pos) (c : SExpr) : List SExpr :=
-  -- A first range's synthesized producer can otherwise absorb a later
-  -- bound cast before its refinement reaches the first's remaining code.
-  -- Lift all its bound casts together, in the order of their operands.
-  let value := match c with | .decl _ _ _ _ v => v | e => e
-  -- Constructor fields/defaults also form one ordered operand sequence.
-  -- Repeated partial lifting would bind the same prefix/default names
-  -- again; lift all reachable casts in that clause in one pass.
-  let inConstructor := (Refine.findPart (fun
-    | e@(.construct ..) => (Refine.castsIn ctx.types.classes.contains e).contains q
-    | _ => false) false c).isSome
-  -- Named values share the call's positional/named/default sequence.
-  -- Keep its casts together rather than lifting the same prefix twice.
-  let inNamed := (Refine.findPart (fun
-    | .decl _ n _ _ v => n.startsWith "?" && (Refine.castsIn ctx.types.classes.contains v).contains q
-    | _ => false) false c).isSome
-  let casts := if inConstructor || inNamed || (Choice.firstRangeBounds? value).isSome then
-      Refine.castsIn ctx.types.classes.contains c else [q]
+def liftCastClause (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
+    (bound : List String) (q : Pos) (c : SExpr) (probeCtx : Option Ctx := none) : EM (List SExpr) := do
+  -- Group casts that need refinement (or depend on an earlier one), not
+  -- ordinary successful casts in unrelated operands. Hoisting those can
+  -- discard their surrounding contextual types.
+  let reachable := Refine.castsIn ctx.types.classes.contains c
+  let mut inspect := probeCtx.getD ctx
+  let saved ← get
+  let mut probeState := saved
+  let mut casts : List Pos := []
+  for position in reachable do
+    if let some cast := Refine.findPart (fun
+        | .app p (.ident _ T) [_] true => p == position && ctx.types.classes.contains T
+        | _ => false) false c then
+      set { probeState with refiningHintProbe := true }
+      let ordinary ← tryCatch (do
+        discard <| elabE { inspect with typeOnly := true } cast none
+        pure true) (fun _ => pure false)
+      if position == q || !ordinary then
+        casts := casts ++ [position]
+        -- Later casts may be ordinary once an earlier one establishes its
+        -- equality. Classify them in that refined world, not the old one.
+        if let .app p (.ident _ T) [x] true := cast then
+          set { probeState with refiningHintProbe := true }
+          let refinement? ← tryCatch
+            (refinedCastWith elabE { inspect with typeOnly := true } p
+              s!"$castProbe{p.line}_{p.col}" T x (.tuple p [])) (fun _ => pure none)
+          if let some refinement := refinement? then
+            inspect := refinement.refined (← fresh refinement.dTy)
+            let refinedTypes := inspect.types
+            modify fun state => { state with
+              env := refinedTypes
+              slotTys := state.slotTys.map (·.subst refinement.μT) }
+            probeState ← get
+  set saved
+  if !casts.contains q then casts := casts ++ [q]
   let marked := casts.foldl (fun e position => Refine.markCast position e) c
-  Choice.liftClause (fun n => choiceValues ctx n || bound.contains n) (choiceField ctx) marked
+  return Choice.liftClause (fun n => choiceValues ctx n || bound.contains n) (choiceField ctx) marked
     (fieldOrder := choiceOrder ctx)
 
 /-- (#243, #351) A failure context's clauses `cs`, then `after` (an `if`'s
@@ -1130,7 +1154,8 @@ def liftCastClause (ctx : Ctx) (bound : List String) (q : Pos) (c : SExpr) : Lis
     failure context evaluates outside its clauses (`blocks`: an `if`'s
     branch, with the elaboration with it replaced) makes that expression the
     block of it (`Refine.castsOf`). `none` without a cast to a class. -/
-def withCastClauses (ctx : Ctx) (cs : List SExpr) (after : SExpr) (isGen : SExpr → Bool) (asWritten : EM R)
+def withCastClauses (elabE : Ctx → SExpr → Option Ty → EM R)
+    (elabPrefix : Ctx → List SExpr → EM (R × Ctx)) (ctx : Ctx) (cs : List SExpr) (after : SExpr) (isGen : SExpr → Bool) (asWritten : EM R)
     (rebuild : List SExpr → SExpr → EM R) (later : Bool := false)
     (alone : Nat → String → EM (Option R) := fun _ _ => pure none)
     (blocks : List (SExpr × (SExpr → EM R)) := []) : EM (Option R) := do
@@ -1155,7 +1180,20 @@ def withCastClauses (ctx : Ctx) (cs : List SExpr) (after : SExpr) (isGen : SExpr
       return some (← elabWith (.block e.pos [e]))
     if let some (k, _) := inner.find? (·.2 == refusal.pos) then
       set st0
-      let lifted := liftCastClause ctx (Choice.boundIn (cs.take k)) refusal.pos cs[k]!
+      -- Classify later casts in the context of the preceding clauses,
+      -- including generator bindings, without retaining their probe state.
+      let before? ← tryCatch (do
+        modify fun state => { state with refiningHintProbe := true }
+        let (_, before) ← elabPrefix { ctx with typeOnly := true, canFail := true } (cs.take k)
+        pure (some (before, ← get))) (fun _ => pure none)
+      set st0
+      let lifted ← match before? with
+        | some (before, prefixState) => do
+          set prefixState
+          let lifted ← liftCastClause elabE ctx (Choice.boundIn (cs.take k)) refusal.pos cs[k]! (some before)
+          set st0
+          pure lifted
+        | none => liftCastClause elabE ctx (Choice.boundIn (cs.take k)) refusal.pos cs[k]!
       return some (← rebuild (cs.take k ++ lifted ++ cs.drop (k + 1)) after)
     let some (k, _) := castAt.find? (·.2 == refusal.pos) | throw err
     let some cast := Refine.castClause? cs[k]! | throw err

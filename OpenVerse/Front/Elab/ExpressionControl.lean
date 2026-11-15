@@ -132,7 +132,7 @@ partial def elabExprControlWith
       (thenE, fun b => elabE ctx (.ite p conds0 b elseE) exp) ::
         elseE.toList.map fun ee => (ee, fun b => elabE ctx (.ite p conds0 thenE (some b)) exp)
     if !asWritten then
-      if let some r ← withCastClauses ctx conds thenE (fun _ => false)
+      if let some r ← withCastClauses elabE elabOneClauses ctx conds thenE (fun _ => false)
           (elabE { ctx with asWritten := true } (.ite p conds0 thenE elseE) exp)
           (fun conds thenE => elabE ctx (.ite p conds thenE elseE) exp) (later := true) (alone := nested)
           (blocks := branches) then
@@ -223,7 +223,7 @@ partial def elabExprControlWith
           let v := s!"$forValue{p.line}_{p.col}"
           .block b.pos [.decl b.pos v (some t.toSTy) false b, .ident b.pos v]
         | _ => b
-      if let some r ← withCastClauses ctx clauses body isGen (elabE { ctx with asWritten := true } se exp)
+      if let some r ← withCastClauses elabE elabOneClauses ctx clauses body isGen (elabE { ctx with asWritten := true } se exp)
           (fun clauses body => elabE ctx (.forE p clauses (typed body)) exp) then
         return r
     -- (a `return` in the body: none can be in the clauses, a failure

@@ -1,4 +1,5 @@
 int 9 9 9 9
 string right right right right
 missing
+tuple 7 left 9 right
 exit=0
