@@ -419,15 +419,38 @@ private partial def borrowedWrites (info : FrameRefs.Info)
       | .loop e | .ret e | .print e => borrowedWrites info borrowed e
 
 def borrowedWork (fns : Array Fn) (sourceInfo : Array FrameRefs.Info)
-    (taskBorrowers : Array Bool) : Array Bool :=
-  propagate fns (fns.mapIdx fun g f =>
+    (taskBorrowers : Array Bool) : Array Bool := Id.run do
+  let direct := fns.mapIdx fun g f =>
     let info := sourceInfo[g]?.getD {}
     let borrowed := info.slots.filter (fun (_, s) => s.frame != f.name)
-    borrowedWrites info borrowed f.body || ((taskBorrowers[g]?.getD false) && (sites fns f.body).1))
+    borrowedWrites info borrowed f.body || ((taskBorrowers[g]?.getD false) && (sites fns f.body).1)
+  let forwards := fns.mapIdx fun g f => (taskBorrowers[g]?.getD false) ||
+    (sourceInfo[g]?.getD {}).slots.any (fun (_, s) => s.frame != f.name)
+  let mut exported := direct
+  let mut growing := true
+  while growing do
+    growing := false
+    for g in [:fns.size] do
+      if !exported[g]! && forwards[g]! &&
+          (callees fns[g]!.body).any (fun h => exported[h]?.getD false) then
+        exported := exported.set! g true
+        growing := true
+  return fns.mapIdx fun g f => exported[g]! ||
+    (callees f.body).any (fun h => exported[h]?.getD false)
 
 /-- Lifted background tasks outlive their helper. Analyze them together
     with the caller even if metadata first appears inside the callback. -/
-def borrowedTasks (fns : Array Fn) (taskBorrowers : Array Bool) : Array Bool :=
-  propagate fns (fns.mapIdx fun g f => (taskBorrowers[g]?.getD false) && (sites fns f.body).1)
+def borrowedTasks (fns : Array Fn) (taskBorrowers : Array Bool) : Array Bool := Id.run do
+  let mut exported := fns.mapIdx fun g f => (taskBorrowers[g]?.getD false) && (sites fns f.body).1
+  let mut growing := true
+  while growing do
+    growing := false
+    for g in [:fns.size] do
+      if !exported[g]! && (taskBorrowers[g]?.getD false) &&
+          (callees fns[g]!.body).any (fun h => exported[h]?.getD false) then
+        exported := exported.set! g true
+        growing := true
+  return fns.mapIdx fun g f => exported[g]! ||
+    (callees f.body).any (fun h => exported[h]?.getD false)
 
 end OpenVerse.Front.MetadataPlan
