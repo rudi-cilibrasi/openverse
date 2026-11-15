@@ -1381,8 +1381,7 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       let needsSchedule := captureMismatch || metadataCleanup ||
         ((← get).borrowedTasks[i]?.getD false) || (background &&
         (info.shared.any (fun i => seen[i]?.getD false) ||
-          out.value.getD false || out.returned.getD false ||
-          ((← get).borrowedWork[i]?.getD false) && seen.any id))
+          out.value.getD false || out.returned.getD false))
       if needsSchedule then
         let cached := (← get).plans[i]?.getD none
         let plan ← match cached with
