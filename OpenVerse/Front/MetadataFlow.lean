@@ -3,10 +3,12 @@ import OpenVerse.Front.Syntax
 import OpenVerse.Core.Syntax
 import OpenVerse.Front.MetadataPlan
 import OpenVerse.Front.MetadataReferences
+import OpenVerse.Front.MetadataBits
+import OpenVerse.Front.MetadataLiveness
 import Std.Data.HashMap
 
 namespace OpenVerse.Front.MetadataFlow
-open OpenVerse
+open OpenVerse MetadataBits
 
 /-- Roles collected before witness, capture and concurrency lowering erase
     the distinction between executable values and opaque type metadata. -/
@@ -26,21 +28,18 @@ structure Info where
   deriving Inhabited
 
 private structure Slots where
-  values : Array Bool := #[]
-  initialized : Array Bool := #[]
-  sharedMetadata : Array Bool := #[]
+  values : Bits := {}
+  initialized : Bits := {}
+  sharedMetadata : Bits := {}
   /-- Writes performed by this arm, excluding roles received from siblings. -/
-  written : Array Bool := #[]
+  written : Bits := {}
   deriving BEq, Inhabited
 
 private def joinSlots (a b : Slots) : Slots := {
-  values := a.values.zipWith (· || ·) b.values
-  initialized := a.initialized.zipWith (· || ·) b.initialized
-  written := a.written.zipWith (· || ·) b.written
-  sharedMetadata := a.sharedMetadata.mapIdx fun i role =>
-    if !(a.initialized[i]?.getD false) then b.sharedMetadata[i]?.getD false
-    else if !(b.initialized[i]?.getD false) then role
-    else role && b.sharedMetadata[i]?.getD false }
+  values := a.values.union b.values
+  initialized := a.initialized.union b.initialized
+  written := a.written.union b.written
+  sharedMetadata := a.sharedMetadata.joinModes a.initialized b.sharedMetadata b.initialized }
 
 private def joinOpt (a b : Option Slots) : Option Slots :=
   match a, b with
@@ -53,10 +52,10 @@ private def joinOpt (a b : Option Slots) : Option Slots :=
 private def freshLocals (shared : List Nat) (entry head : Slots) : Slots :=
   if shared.isEmpty then head else { head with
     initialized := head.initialized.mapIdx fun i ready =>
-      ready && (entry.initialized[i]?.getD false || !shared.contains i)
+      ready && ((entry.initialized.get i) || !shared.contains i)
     sharedMetadata := head.sharedMetadata.mapIdx fun i role =>
-      if entry.initialized[i]?.getD false || !shared.contains i then role
-      else entry.sharedMetadata[i]?.getD false }
+      if (entry.initialized.get i) || !shared.contains i then role
+      else (entry.sharedMetadata.get i) }
 
 private def joinRole (a b : Option Bool) : Option Bool :=
   match a, b with
@@ -99,8 +98,8 @@ private structure LoopCell where
 
 private def loopCells (shared : List Nat) (slots : Slots) : List LoopCell :=
   shared.eraseDups.map fun i => {
-    slot := i, initialized := slots.initialized[i]?.getD false
-    metadata := slots.sharedMetadata[i]?.getD false }
+    slot := i, initialized := (slots.initialized.get i)
+    metadata := (slots.sharedMetadata.get i) }
 
 private def restoreLoopCells (cells : List LoopCell) (slots : Slots) : Slots :=
   cells.foldl (fun slots cell => if cell.initialized then slots else { slots with
@@ -486,8 +485,12 @@ private structure ScheduleEnv where
   fn : Fn
   info : Info
   plan : MetadataPlan.Plan
+  referenceLive : MetadataLiveness.Analysis
 
 private structure State where
+  scalarReturns : Array Bool := #[]
+  deferSchedules : Bool := true
+  contextDeferred : Bool := false
   summaries : Array Summary := #[]
   indices : Std.HashMap Key Nat := {}
   changed : Bool := false
@@ -499,8 +502,9 @@ private structure State where
       discovery still disables this while selecting a transfer. -/
   validateUses : Bool := true
   discovery : Bool := false
-  seen : Array Bool := #[]
+  seen : Bits := {}
   plans : Array (Option MetadataPlan.Plan) := #[]
+  referenceLives : Array (Option MetadataLiveness.Analysis) := #[]
   sites : Array (Bool × List Expr) := #[]
   live : Array Key := #[]
   liveSeen : Std.HashMap Key Unit := {}
@@ -543,7 +547,7 @@ mutual
 private partial def expr (fns : Array Fn) (infos : Array Info)
     (fields : Array (List Nat)) (fn : Fn) (info : Info) (slots : Slots) : Expr → M Flow
   | .lit _ => pure { slots }
-  | .local i => pure { slots, value := some (slots.values[i]?.getD false) }
+  | .local i => pure { slots, value := some ((slots.values.get i)) }
   | .assign i e => do
     let out ← expr fns infos fields fn info slots e
     let some role := out.value | return out
@@ -551,11 +555,11 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
     if role then modify fun st => { st with seen := st.seen.set! i true }
     if (← get).validateUses && role && info.uses.contains i then
       refuse fn info "be an executable function or method receiver" s!"receiver slot {i}, value {reprStr e}"
-    if info.shared.contains i && out.slots.initialized[i]?.getD false && role &&
-        !(out.slots.sharedMetadata[i]?.getD false) then
+    if info.shared.contains i && (out.slots.initialized.get i) && role &&
+        !((out.slots.sharedMetadata.get i)) then
       if (← get).validateShared then
         refuse fn info "enter a shared local containing executable data" s!"shared slot {i}, value {reprStr e}"
-    let first := !(out.slots.initialized[i]?.getD false)
+    let first := !((out.slots.initialized.get i))
     return { out with
       value := some role
       slots := {
@@ -565,7 +569,7 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
         -- Once real data enters a shared cell, waiting aliases can execute it.
         -- A later metadata write must not reuse its original metadata mode.
         sharedMetadata := out.slots.sharedMetadata.set! i
-          (role && (first || out.slots.sharedMetadata[i]?.getD false)) } }
+          (role && (first || (out.slots.sharedMetadata.get i))) } }
   | .seq a b => do
     let a ← expr fns infos fields fn info slots a
     if a.value.isNone then return a
@@ -728,7 +732,7 @@ private partial def invoke (fns : Array Fn) (infos : Array Info)
         !(gi.inputs.contains i || gi.seeds.contains i) then continue
     if let some (cell, _) := info.source.slots.find? (fun (_, s) =>
         s.frame == fn.name && s.frame == origin.frame && s.name == origin.name) then
-      if slots.initialized[cell]?.getD false && !(slots.values[cell]?.getD false) then
+      if (slots.initialized.get cell) && !((slots.values.get cell)) then
         modify fun st => { st with captureMismatch := true }
   let roles := args.zipIdx.map fun (role, i) => role || gi.inputs.contains i
   if (← get).validateUses && gi.required.any (fun i => roles[i]?.getD false) then
@@ -749,24 +753,24 @@ private partial def concurrent (fns : Array Fn) (infos : Array Info)
     (sync : Bool) (arms : List Expr) : M Flow := do
   -- Only cells already in scope can be shared by sibling arms. A local
   -- declared inside an arm starts fresh on each analysis of that arm.
-  let shared := info.shared.filter fun i => slots.initialized[i]?.getD false
+  let shared := info.shared.filter fun i => (slots.initialized.get i)
   let entry (outs : Array Flow) (own : Nat) : Slots := Id.run do
     let mut joined := slots
     for (out, i) in outs.zipIdx do
       if i != own then
         let incoming := { out.slots with
           values := out.slots.values.mapIdx fun k role =>
-            if out.slots.written[k]?.getD false then role else slots.values[k]?.getD false
+            if (out.slots.written.get k) then role else (slots.values.get k)
           sharedMetadata := out.slots.sharedMetadata.mapIdx fun k role =>
-            if out.slots.written[k]?.getD false then role else slots.sharedMetadata[k]?.getD false }
+            if (out.slots.written.get k) then role else (slots.sharedMetadata.get k) }
         joined := joinSlots joined incoming
     return {
       values := slots.values.mapIdx fun i role =>
-        if shared.contains i then joined.values[i]?.getD false else role
+        if shared.contains i then (joined.values.get i) else role
       initialized := slots.initialized
-      written := Array.replicate slots.values.size false
+      written := Bits.replicate slots.values.size false
       sharedMetadata := slots.sharedMetadata.mapIdx fun i role =>
-        if shared.contains i then joined.sharedMetadata[i]?.getD false else role }
+        if shared.contains i then (joined.sharedMetadata.get i) else role }
   let runArms (outs : Array Flow) : M (Array Flow) := do
     let mut next := #[]
     for (arm, i) in arms.toArray.zipIdx do
@@ -809,13 +813,13 @@ private partial def concurrent (fns : Array Fn) (infos : Array Info)
     returned := joinRole returned out.returned
     broken := joinOpt broken out.broken
   let merged := joined.getD slots
-  let merged := { merged with written := slots.written.zipWith (· || ·) merged.written }
+  let merged := { merged with written := slots.written.union merged.written }
   -- A successful sync completes every arm. With metadata reentry barred,
   -- any arm that definitely leaves real data makes that shared cell real.
   -- Race/rush can finish with another arm still pending, so retain may roles.
   let finalSlots := if sync then { merged with
     values := merged.values.mapIdx fun i role =>
-      if shared.contains i then outs.all (fun out => out.slots.values[i]?.getD false) else role }
+      if shared.contains i then outs.all (fun out => (out.slots.values.get i)) else role }
     else merged
   let normal := if sync then outs.all (·.value.isSome) else outs.any (·.value.isSome)
   let yielded := if sync then
@@ -847,6 +851,44 @@ private partial def actorEnvironment (env : ScheduleEnv) (a : Actor) : Fn × Inf
       shared := info.shared.map alias
       source := { info.source with slots := info.source.slots.map fun (i, s) => (alias i, s) }
       metadataWrites := info.metadataWrites.map fun (i, k) => (i + offset, k) })
+
+/-- Initialization modes are observed only by shared-cell checks and by
+    source-frame capture checks. Ordinary scratch slots still retain their
+    value roles; their initialization history cannot affect either check.
+    Include every lexical call context, resolving its source aliases, so an
+    immutable borrowed capture keeps the same initialization evidence. -/
+private partial def modeMask (env : ScheduleEnv) : Bits := Id.run do
+  let mut result := Bits.replicate env.plan.slots false
+  let contexts := (none :: env.plan.contexts.toList ++ env.plan.nodes.toList.filterMap
+    (fun node => match node with | .enterCall g offset _ _ => some (some (g, offset)) | _ => none)).eraseDups
+  for context in contexts do
+    let (_, info) := actorEnvironment env { context }
+    for i in info.shared ++ info.source.slots.map (·.1) do
+      result := result.set! i true
+  return result
+
+private partial def keepModes (mask : Bits) (s : Slots) : Slots := { s with
+  initialized := s.initialized.intersect mask
+  sharedMetadata := s.sharedMetadata.intersect mask }
+
+private partial def keepConfigurationModes (mask : Bits) (c : Configuration) : Configuration := { c with
+  slots := keepModes mask c.slots
+  tests := c.tests.map fun t => { t with slots := keepModes mask t.slots } }
+
+/-- Current actors, deferred resumes, and signal return continuations can
+    all become active. Saved transaction memories are deliberately retained. -/
+private partial def restrictReferences (env : ScheduleEnv) (c : Configuration) : Configuration := Id.run do
+  let mut live := env.referenceLive.cleanup
+  for actor in c.actors do
+    live := live ||| env.referenceLive.get actor.pc
+    for pc in actor.signalReturns.filterMap id do
+      live := live ||| env.referenceLive.get pc
+  for step in c.pending do
+    match step with
+    | .cleanup _ _ pc | .resume _ pc | .returnCall _ pc | .returnScope _ _ _ _ pc =>
+      live := live ||| env.referenceLive.get pc
+    | _ => pure ()
+  return { c with refs := MetadataReferences.restrict c.refs live.testBit }
 
 private partial def cancelChildren (env : ScheduleEnv) (c : Configuration) (actor : Nat) (branch : Bool)
     (context : Option (Option (Nat × Nat)) := none) : List Pending :=
@@ -949,18 +991,19 @@ private partial def liveLateBranches (plan : MetadataPlan.Plan) (c : Configurati
 
 private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
   let extra := env.plan.slots - entry.values.size
-  let pad (a : Array Bool) := a ++ Array.replicate extra false
+  let pad (a : Bits) := a.appendZeros extra
   let slots : Slots := {
     values := pad entry.values, initialized := pad entry.initialized
     sharedMetadata := pad entry.sharedMetadata, written := pad entry.written }
   let initial : Configuration := {
     slots
-    refs := { slots := Array.ofFn (n := env.plan.slots) fun i =>
-      if i.val < env.fn.arity then [i.val + 2] else [] }
+    refs := MetadataReferences.initial env.plan.slots fun i =>
+      if i < env.fn.arity then [i + 2] else []
     actors := (Array.replicate env.plan.actors {}).set! 0 {
       pc := env.plan.entry, status := .running }
     groups := Array.replicate env.plan.groups.size {} }
-  modify fun st => { st with seen := st.seen ++ Array.replicate extra false }
+  modify fun st => { st with seen := st.seen.appendZeros extra }
+  let modes := modeMask env
   let mut work := #[initial]
   let mut cursor := 0
   let mut known : Std.HashMap (List Nat) Configuration := {}
@@ -970,9 +1013,8 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
   while cursor < work.size do
     if (← get).debug && cursor % 10000 == 0 then
       dbg_trace s!"metadata schedule {env.fn.name}: visited={cursor}, queued={work.size}, states={known.size}"
-    let incoming := work[cursor]!
-    -- Processed configurations remain in `known`; release their queued
-    -- copies while exploring long lifted consumers.
+    let incoming := restrictReferences env (keepConfigurationModes modes work[cursor]!)
+    -- Processed configurations remain in `known`; release their queued copies.
     work := work.set! cursor default
     cursor := cursor + 1
     let key := configurationKey incoming
@@ -1069,7 +1111,7 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
     let boundary := match node with
       | .call g args _ _ _ =>
         let name := env.fns[g]!.name
-        let receiver := objectRefs (args.head?.map (fun i => c.refs.slots[i]!) |>.getD [0])
+        let receiver := objectRefs (args.head?.map (fun i => (MetadataReferences.get c.refs i)) |>.getD [0])
         if name == "$signalAll" || MetadataPlan.isEventSignal env.fns g then
           some (PoolCause.event receiver)
         else if name == "$cancelMark" then some (.cancel receiver)
@@ -1087,7 +1129,7 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
         | some p => { info with metadataWrites := p :: info.metadataWrites }
       let out ← expr env.fns env.infos env.fields fn info c.slots e
       if let some role := out.value then
-        let (refs, memory) := MetadataReferences.eval env.fns a.pc c.refs e
+        let (refs, memory) := MetadataReferences.eval env.fns a.pc c.refs e (← get).scalarReturns
         let changed := { c with
           slots := putRole out.slots dst role
           refs := MetadataReferences.set memory dst refs }
@@ -1122,8 +1164,8 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
           sharedMetadata := slots.sharedMetadata.set! (offset + i) false }
         refs := MetadataReferences.set refs (offset + i) []
       for (source, i) in args.zipIdx do
-        slots := putRole slots (offset + i) (c.slots.values[source]! || ci.inputs.contains i)
-        refs := MetadataReferences.set refs (offset + i) (c.refs.slots[source]!)
+        slots := putRole slots (offset + i) ((c.slots.values.get source) || ci.inputs.contains i)
+        refs := MetadataReferences.set refs (offset + i) ((MetadataReferences.get c.refs source))
       let frame : CallFrame := { context := a.context, cleanups := a.cleanups, loops := a.loops }
       let c := { c with slots, refs, actors := c.actors.modify actor fun a =>
         { a with context := some (g, offset), cleanups := [], loops := [], frames := frame :: a.frames } }
@@ -1146,7 +1188,7 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
       work := work.push (advanceActor c actor yes)
       work := work.push (advanceActor c actor no)
     | .accumulate dst value next =>
-      let role := c.slots.values[dst]!.or c.slots.values[value]!
+      let role := (c.slots.values.get dst).or (c.slots.values.get value)
       work := work.push (advanceActor { c with
         slots := putRole c.slots dst role
         refs := MetadataReferences.accumulate c.refs a.pc dst value } actor next)
@@ -1165,12 +1207,12 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
         | some role => putRole out.slots dst role
         | none => out.slots
       let (references, memory) := MetadataReferences.call env.fns a.pc c.refs g
-        (args.map fun i => c.refs.slots[i]!)
+        (args.map fun i => (MetadataReferences.get c.refs i)) (← get).scalarReturns
       let c := { c with slots, refs := MetadataReferences.set memory dst references }
       let signaling := name == "$signalAll" ||
         (MetadataPlan.isEventSignal env.fns g && env.plan.signalFns[g]?.getD false)
       if name == "$Await" then
-        let task := objectRefs (args.head?.map (fun i => c.refs.slots[i]!) |>.getD [0])
+        let task := objectRefs (args.head?.map (fun i => (MetadataReferences.get c.refs i)) |>.getD [0])
         let options := taskOptions c task
         if options.contains 2 && role.isSome then
           let value := task.foldl (fun result task => unionRefs result (c.taskResults[task]?.getD [0])) []
@@ -1185,7 +1227,7 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
                 event := some task, taskWait := true, waitDst := some dst } }
           work := work.push (nextActor waiting)
       else if name == "$cancelMark" then
-        let task := objectRefs (args.head?.map (fun i => c.refs.slots[i]!) |>.getD [0])
+        let task := objectRefs (args.head?.map (fun i => (MetadataReferences.get c.refs i)) |>.getD [0])
         let options := taskOptions c task
         if options.contains 2 then work := work.push (advanceActor (setTask c task 2) actor next)
         if options.contains 1 || options.contains 4 then
@@ -1199,8 +1241,8 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
           for stops in choices do
             work := work.push (queue (setTask c task 4) (stops ++ [.resume actor next]))
       else if signaling then
-        let event := objectRefs (args.head?.map (fun i => c.refs.slots[i]!) |>.getD [0])
-        let payload := args[1]?.map (fun i => c.refs.slots[i]!)
+        let event := objectRefs (args.head?.map (fun i => (MetadataReferences.get c.refs i)) |>.getD [0])
+        let payload := args[1]?.map (fun i => (MetadataReferences.get c.refs i))
         for awake in wake (beginSignal env.plan c actor (some next)) event false payload do work := work.push awake
       else if env.plan.signalFns[g]?.getD false then
         -- A recursive edge uses a finite may-signal summary instead of
@@ -1213,7 +1255,7 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
             modify fun st => { st with signalArguments := some signatures }
             pure signatures
         let roots := (signatures[g]?.getD []).flatMap fun i =>
-          args[i]?.map (fun slot => c.refs.slots[slot]!) |>.getD []
+          args[i]?.map (fun slot => (MetadataReferences.get c.refs slot)) |>.getD []
         let event := MetadataReferences.reachable c.refs roots
         if role.isSome then work := work.push (advanceActor c actor next)
         for awake in wake (beginSignal env.plan c actor (some a.pc)) event do
@@ -1226,7 +1268,7 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
           work := work.push (advanceActor c actor next)
         if mayYield then
           let event := if name == "$EvAwait" || name == "$StickyAwait" then
-              some (objectRefs (args.head?.map (fun i => c.refs.slots[i]!) |>.getD [0]))
+              some (objectRefs (args.head?.map (fun i => (MetadataReferences.get c.refs i)) |>.getD [0]))
             else none
           let waiting := { c with
             events := if event.isSome then c.events ++ [actor] else c.events
@@ -1276,14 +1318,14 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
       for (child, pc) in g.children do
         actors := actors.set! child {
           pc, context := a.context, canComplete, canSignal
-          task := g.task.map fun slot => c.refs.slots[slot]! }
+          task := g.task.map fun slot => (MetadataReferences.get c.refs slot) }
       let started := { c with
         actors, groups := c.groups.set! group {
           active := true
           late := g.kind == .branch && c.actors.toList.zipIdx.any (fun (owner, i) =>
             owner.cancelRequested && !owner.canceling && (cancellationTree env.plan c i).contains actor) }
         launches := c.launches.filter (· != group) ++ [group] }
-      let started := g.task.map (fun slot => setTask started (started.refs.slots[slot]!) 1) |>.getD started
+      let started := g.task.map (fun slot => setTask started (MetadataReferences.get started.refs slot) 1) |>.getD started
       work := work.push (advanceActor started actor g.advance)
     | .advance group =>
       let g := env.plan.groups[group]!
@@ -1306,15 +1348,15 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
         refuse fn info "enter a spawned task's result field containing executable data"
       work := work.push (advanceActor c actor next)
     | .finishTask value =>
-      if (← get).validateUses && c.slots.values[value]! then
+      if (← get).validateUses && (c.slots.values.get value) then
         refuse fn info "enter a spawned task's result field containing executable data"
       let task := a.task.getD [0]
-      let c := setTask c task 2 (some (c.refs.slots[value]!))
+      let c := setTask c task 2 (some ((MetadataReferences.get c.refs value)))
       for awake in wake (beginSignal env.plan c actor none) task true
-          (some (c.refs.slots[value]!)) do work := work.push awake
+          (some ((MetadataReferences.get c.refs value))) do work := work.push awake
     | .finish value =>
       if actor == 0 then
-        let role := c.slots.values[value]!
+        let role := (c.slots.values.get value)
         let c := { c with actors := c.actors.modify actor fun a =>
           { a with status := .done, cleanups := [] } }
         work := work.push (queue c [.cancel 0, .result role])
@@ -1346,8 +1388,8 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
       steps := steps ++ cancelChildren env c owner false (some targetContext) ++ cleanup ++
         cancelChildren env c owner true (some targetContext)
       let c := { c with
-        slots := putRole c.slots dst c.slots.values[value]!
-        refs := MetadataReferences.set c.refs dst c.refs.slots[value]!
+        slots := putRole c.slots dst (c.slots.values.get value)
+        refs := MetadataReferences.set c.refs dst (MetadataReferences.get c.refs value)
         events := c.events.filter (fun a => a != owner && a != actor)
         signals := c.signals.filter (fun a => a != owner && a != actor)
         startup := c.startup.filter (fun a => a != owner && a != actor)
@@ -1362,7 +1404,7 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
       if let some late := lateReturnActor env.plan c actor 0 then
         work := work.push (queue c [.cancel late])
         continue
-      let role := c.slots.values[value]!
+      let role := (c.slots.values.get value)
       let c := { c with actors := c.actors.modify actor fun a =>
         { a with status := .done, cleanups := [] } }
       work := work.push (queue c [.cancel 0, .result role])
@@ -1384,18 +1426,18 @@ private def probeCleanup (fns : Array Fn) (infos : Array Info)
       let some callee := fns[i]? | throw "internal: cleanup call has no body"
       let ci := infos[i]?.getD {}
       let values := (List.range callee.nslots).map (fun j =>
-        ci.inputs.contains j || args[j]?.getD false) |>.toArray
+        ci.inputs.contains j || args[j]?.getD false) |>.toArray |> Bits.ofArray
       let entry : Slots := {
         values, sharedMetadata := values
         initialized := (List.range callee.nslots).map
-          (fun j => j < callee.arity : Nat → Bool) |>.toArray
-        written := Array.replicate callee.nslots false }
+          (fun j => j < callee.arity : Nat → Bool) |>.toArray |> Bits.ofArray
+        written := Bits.replicate callee.nslots false }
       modify fun st => { st with seen := values }
       discard <| expr fns infos fields callee ci entry (ci.body.getD callee.body)
       let observed := (← get).seen
       let possible := { entry with
-        values := observed, initialized := Array.replicate callee.nslots true
-        sharedMetadata := Array.replicate callee.nslots false }
+        values := observed, initialized := Bits.replicate callee.nslots true
+        sharedMetadata := Bits.replicate callee.nslots false }
       for d in ((← get).sites[i]?.getD (false, [])).2 do
         discard <| expr fns infos fields callee ci possible d
   let (_, result) ← action.run { state with
@@ -1407,19 +1449,19 @@ private def probeCleanup (fns : Array Fn) (infos : Array Info)
     Hidden witnesses do not taint an unrelated result: return roles come
     from the body, rather than the union of physical call arguments. -/
 def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
-    (debug : Bool := false) : Except String Unit := do
+    (debug : Bool := false) (scalarReturns : Array Bool := #[]) : Except String Unit := do
   let action : M Unit := do
     let runContext (key : Key) : M Flow := do
       let (i, args) := key
       let some fn := fns[i]? | throw "internal: metadata call has no body"
       let info := infos[i]?.getD {}
-      modify fun st => { st with active := some key, captureMismatch := false }
+      modify fun st => { st with active := some key, captureMismatch := false, contextDeferred := false }
       let values := (List.range fn.nslots).map (fun i =>
-        info.inputs.contains i || args[i]?.getD false) |>.toArray
-      let initialized := (List.range fn.nslots).map (fun i => i < fn.arity : Nat → Bool) |>.toArray
+        info.inputs.contains i || args[i]?.getD false) |>.toArray |> Bits.ofArray
+      let initialized := (List.range fn.nslots).map (fun i => i < fn.arity : Nat → Bool) |>.toArray |> Bits.ofArray
       let slots : Slots := {
         values, initialized, sharedMetadata := values
-        written := Array.replicate fn.nslots false }
+        written := Bits.replicate fn.nslots false }
       let body := info.body.getD fn.body
       modify fun st => { st with seen := values }
       let (background, cleanups) := (← get).sites[i]?.getD (false, [])
@@ -1442,8 +1484,8 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       -- shared writes also matter because another continuation can read them.
       let cleanupSlots := { slots with
         values := seen
-        initialized := Array.replicate fn.nslots true
-        sharedMetadata := Array.replicate fn.nslots false }
+        initialized := Bits.replicate fn.nslots true
+        sharedMetadata := Bits.replicate fn.nslots false }
       let mut metadataCleanup := false
       for d in cleanups do
         match probeCleanup fns infos fields fn info cleanupSlots d (← get) with
@@ -1454,7 +1496,7 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
             indices := discovered.indices, changed := discovered.changed
             dependencies := discovered.dependencies }
         if (MetadataPlan.assigns d).any (fun i =>
-            info.shared.contains i && seen[i]?.getD false) then
+            info.shared.contains i && seen.get i) then
           metadataCleanup := true
       -- A lifted task needs the caller's schedule only when it can observe
       -- metadata at an executable boundary. Hidden type witnesses alone do
@@ -1469,9 +1511,15 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
             indices := discovered.indices, changed := discovered.changed
             dependencies := discovered.dependencies }
       let needsSchedule := captureMismatch || metadataCleanup || metadataTask || (background &&
-        (info.shared.any (fun i => seen[i]?.getD false) ||
+        (info.shared.any (fun i => seen.get i) ||
           out.value.getD false || out.returned.getD false))
       if needsSchedule then
+        let st ← get
+        -- First settle ordinary transfers. Expensive schedule transfers run
+        -- in a forced pass once those summaries stop changing.
+        if st.deferSchedules then
+          modify fun st => { st with contextDeferred := true }
+          return { slots, value := none }
         let cached := (← get).plans[i]?.getD none
         let plan ← match cached with
           | some plan => pure plan
@@ -1483,7 +1531,13 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
             modify fun st => { st with plans := st.plans.set! i (some plan) }
             pure plan
         if debug then dbg_trace s!"metadata selected {fn.name}: slots={plan.slots}, actors={plan.actors}"
-        return ← schedule { fns, infos, fields, fn, info, plan } slots
+        let referenceLive ← match (← get).referenceLives[i]?.getD none with
+          | some live => pure live
+          | none => do
+            let live := MetadataLiveness.build fns plan
+            modify fun st => { st with referenceLives := st.referenceLives.set! i (some live) }
+            pure live
+        return ← schedule { fns, infos, fields, fn, info, plan, referenceLive } slots
       if saved.validateUses then
         return ← expr fns infos fields fn info slots body
       return out
@@ -1494,8 +1548,10 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
         discard <| request (i, (List.range fns[i]!.arity).map info.inputs.contains)
     seedRoots
     let mut growing := true
+    let mut forceSchedules := false
     while growing do
-      modify fun st => { st with changed := false }
+      modify fun st => { st with changed := false, deferSchedules := !forceSchedules }
+      let mut deferred := false
       let summaries := (← get).summaries
       for (summary, index) in summaries.zipIdx do
         let i := summary.key.1
@@ -1517,22 +1573,28 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
         if info.borrowTasks || info.source.slots.any (fun (_, s) => s.frame != fns[i]!.name) then
           modify fun st => { st with validateUses := false }
         let out ← runContext summary.key
+        let contextDeferred := (← get).contextDeferred
+        deferred := deferred || contextDeferred
         modify fun st => { st with validateUses := validate }
         let dependencies := ((← get).dependencies.getD {}).toList.toArray.map fun (j, result, yielded) =>
           (j, result, yielded)
         modify fun st => { st with
           dependencies := none
-          summaries := st.summaries.modify index fun s => { s with dependencies, cached := cacheable } }
+          summaries := st.summaries.modify index fun s => { s with dependencies, cached := cacheable && !contextDeferred } }
         let returned := (joinRole out.value out.returned).map (· || info.metadataResult)
         let result := joinRole summary.result returned
         let yielded := summary.yielded || out.yielded
         if result != summary.result || yielded != summary.yielded then
           modify fun st => { st with summaries := st.summaries.modify index (fun s => { s with result, yielded }), changed := true }
-      growing := (← get).changed
+      let changed := (← get).changed
+      growing := changed || deferred
+      -- If a recursive dependency component cannot progress without a
+      -- schedule, run the deferred transfers in the next pass.
+      forceSchedules := !changed && deferred
     -- A summary may grow from a real return to a metadata return. Follow
     -- calls again from the roots using the stable summaries: provisional
     -- argument contexts can disappear and must not be validated as live.
-    modify fun st => { st with validateShared := true, validateUses := true }
+    modify fun st => { st with validateShared := true, validateUses := true, deferSchedules := false }
     seedRoots
     let mut index := 0
     while index < (← get).live.size do
@@ -1547,8 +1609,9 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
     let (background, cleanups) := MetadataPlan.sites fns ((infos[i]?.getD {}).body.getD fn.body)
     (background || borrowedWork[i]!, cleanups)
   discard <| action.run {
-    debug := debug
+    debug := debug, scalarReturns
     plans := Array.replicate fns.size none
+    referenceLives := Array.replicate fns.size none
     sites := sites
     borrowers := borrowed
     borrowedWork := borrowedWork

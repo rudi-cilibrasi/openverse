@@ -1096,6 +1096,22 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let cond := pre.foldr Expr.seq (.heap (.isTag (tested.toList.map env.tagOf)) [.local y])
     return some ⟨← mark (.assign t (.ite cond acc eE)), τ'⟩
 
+/-- A key that ordered operand lifting can bind before a later value.
+    An already typed key needs no second contextual retry. -/
+def mapKeyNeedsContext (ctx : Ctx) (key : SExpr) : Bool :=
+  let typed := match key with
+    | .ident .. => true
+    | .block _ [.decl _ n _ _ _, .ident _ result] => n == result && n.startsWith "$mapKeyType"
+    | _ => false
+  !typed && !Choice.hasLiftable key && !Choice.stable (choiceValues ctx) key
+
+/-- Give a lifted key the type its original map context already supplied.
+    This local scope keeps its value and effects in their operand position. -/
+def withMapKeyContext (ctx : Ctx) (ty : Ty) (key : SExpr) : SExpr :=
+  if !mapKeyNeedsContext ctx key then key else
+    let name := s!"$mapKeyType{key.pos.line}_{key.pos.col}"
+    .block key.pos [.decl key.pos name (some ty.toSTy) false key, .ident key.pos name]
+
 /-- (#243) Clause `c` with the cast at `q` inside it, which only a failure
     context's clause may be, lifted out to be one before it, as a choice
     there is (`Refine.markCast`, `Choice.liftClause`). `bound`: names the
