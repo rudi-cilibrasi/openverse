@@ -1,0 +1,10 @@
+int 0 9 9
+string 0 right right
+other 0 other other
+int 1 7 7
+string 1 left left
+other fail
+int 2 9 9
+string 2 right right
+other fail
+exit=0

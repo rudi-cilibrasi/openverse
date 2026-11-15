@@ -2832,6 +2832,21 @@ partial def elabMapLit (ctx : Ctx) (p : Pos) (entries : List (SExpr × SExpr)) (
 
 partial def elabCase (ctx : Ctx) (p : Pos) (scrut : SExpr) (arms : List (Option SExpr × SExpr))
     (exp : Option Ty) : EM R := do
+  -- As with an if's branches, a cast inside an arm is a clause of that
+  -- arm's block, not a clause before the whole case. A computed pattern
+  -- similarly keeps its cast inside the condition that tests it: a failed
+  -- pattern rolls back and tries the next one. Preserve the original path
+  -- and its diagnostics unless that particular cast needs lifting.
+  let elabPart (e : SExpr) (expected : Option Ty) (pattern : Bool := false) : EM R := do
+    let casts := if ctx.canFail || pattern then Refine.castsOf ctx.types.classes.contains e else []
+    if casts.isEmpty then return ← elabE ctx e expected
+    let st ← get
+    tryCatch (elabE ctx e expected) fun err => do
+      let some refusal := Refine.castRefusal? err | throw err
+      if !casts.contains refusal.pos then throw err
+      set st
+      let partCtx := if pattern then { ctx with canFail := true } else ctx
+      elabE partCtx (.block e.pos [e]) expected
   let rs := widenR ctx.types (← elabE ctx scrut none)
   match rs.ty with
   | .int | .logic | .char | .char32 | .arr .char | .enum _ => pure ()
@@ -2846,7 +2861,7 @@ partial def elabCase (ctx : Ctx) (p : Pos) (scrut : SExpr) (arms : List (Option 
       let ignored := ctx.types.ignoredArms.contains ((pat.map (·.pos)).getD v.pos)
       if results.any (·.1.isNone) && !ignored then
         eerr ((pat.map (·.pos)).getD v.pos) "this case arm is never reached: it comes after _, which matches everything"
-      let rv ← elabE ctx v exp
+      let rv ← elabPart v exp
       match pat with
       | none =>
         -- (a `_` after arms that name every value of a closed enum is never
@@ -2861,7 +2876,7 @@ partial def elabCase (ctx : Ctx) (p : Pos) (scrut : SExpr) (arms : List (Option 
             warnAt v.start s!"this _ arm is never reached: the arms before it name every value of the closed enum {n}"
         results := results.push (none, rv)
       | some pe =>
-        let rp ← elabE ctx pe (some rs.ty)
+        let rp ← elabPart pe (some rs.ty) (pattern := true)
         if rp.ty != rs.ty then eerr pe.pos s!"pattern of type {rp.ty.show} for a value of type {rs.ty.show}"
         if let .lit v := rp.e then
           if !ignored && results.any (fun | (some (.lit w), _) => reprStr w == reprStr v | _ => false) then

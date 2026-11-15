@@ -88,10 +88,16 @@ private def activeRushContinuation (body tail overwrite : String) : String := ca
   ("Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    E:=event(int){}\n    branch:\n        R:=rush:\n            block:\n                Sleep(0.1)\n                E.Signal(1)\n" ++ body ++
    "                1\n            block:\n                Sleep(1.0)\n                1\n" ++ tail ++ overwrite ++ "    E.Await()\n    0")
 
+private def caseCapture (body : String) : String :=
+  "pair(a:type,b:type):=class{}\ndup(t:type):=class(pair(t,t)){C:int=4}\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type)" ++ body
+
 private def cases : List (String × String) := [
   ("conditional refined generator metadata object method", "pair(a:type,b:type):=class{A:a;B:b}\ndup(t:type):=class(pair(t,t)):\n    Items:[]int=array{1,2}\n    C:int=2\n    Read()<computes>:int=C\nCaller(Dummy:pair(a,b),Real:pair(a,b),N:int where a:type,b:type)<transacts>:[]int=\n    var P:pair(a,b)=Dummy\n    for(D:=dup[P],X:D.Items,Y:=(if(N>0)then(D.Read()|D.C)else 0)){Y}\n"),
   ("conditional refined generator read-False", "One()<computes>:int=1\nTwo()<computes>:int=2\nPick(C:logic)<computes>:type{_()<computes>:int}=if(C?)then One else Two\npair(a:type, b:type) := class:\n    A:a\n    B:b\ndup(t:type) := class(pair(t, t)):\n    Items:[]t = array{}\n    C:int = 1\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int},N:int where a:type,b:type)<transacts>:[]int=\n    var Stored:type{_()<computes>:int}=Dummy\n    for(D:=dup[P],X:D.Items,Y:=(if(N>0)then(Stored()|D.C)else 0)){Y}\n"),
   ("conditional refined generator write-False", "One()<computes>:int=1\nTwo()<computes>:int=2\nPick(C:logic)<computes>:type{_()<computes>:int}=if(C?)then One else Two\npair(a:type, b:type) := class:\n    A:a\n    B:b\ndup(t:type) := class(pair(t, t)):\n    Items:[]t = array{}\n    C:int = 1\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int},N:int where a:type,b:type)<transacts>:[]int=\n    var Stored:type{_()<computes>:int}=F\n    Values:=for(D:=dup[P],X:D.Items,Y:=(if(N>0)then block{set Stored=Dummy;(D.C|10)}else 0)){Y}\n    Value:=Stored()\n    Values\n"),
+  ("case arm metadata capture", caseCapture "<transacts><decides>:int=case(1){1=>dup[P].C+Dummy(),_=>0}"),
+  ("case scrutinee metadata capture", caseCapture "<transacts><decides>:int=case(dup[P].C+Dummy()){4=>1,_=>0}"),
+  ("case pattern metadata capture", caseCapture "<transacts>:int=case(4){dup[P].C+Dummy()=>1,_=>0}"),
   ("post-return child pending metadata cleanup", activeRushContinuation
     "                branch:\n                    defer:\n                        Value:=Stored()\n                    loop:\n                        Sleep(1.0)\n                Sleep(1.0)\n"
     "" ""),
@@ -255,6 +261,9 @@ private def forwards : List (String × String) := [
   ("conditional refined generator real overwritten object method", "pair(a:type,b:type):=class{A:a;B:b}\ndup(t:type):=class(pair(t,t)):\n    Items:[]int=array{1,2}\n    C:int=2\n    Read()<computes>:int=C\nCaller(Dummy:pair(a,b),Real:pair(a,b),N:int where a:type,b:type)<transacts>:[]int=\n    var P:pair(a,b)=Dummy\n    set P=Real\n    for(D:=dup[P],X:D.Items,Y:=(if(N>0)then(D.Read()|D.C)else 0)){Y}\n"),
   ("conditional refined generator read-True", "One()<computes>:int=1\nTwo()<computes>:int=2\nPick(C:logic)<computes>:type{_()<computes>:int}=if(C?)then One else Two\npair(a:type, b:type) := class:\n    A:a\n    B:b\ndup(t:type) := class(pair(t, t)):\n    Items:[]t = array{}\n    C:int = 1\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int},N:int where a:type,b:type)<transacts>:[]int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    for(D:=dup[P],X:D.Items,Y:=(if(N>0)then(Stored()|D.C)else 0)){Y}\n"),
   ("conditional refined generator write-True", "One()<computes>:int=1\nTwo()<computes>:int=2\nPick(C:logic)<computes>:type{_()<computes>:int}=if(C?)then One else Two\npair(a:type, b:type) := class:\n    A:a\n    B:b\ndup(t:type) := class(pair(t, t)):\n    Items:[]t = array{}\n    C:int = 1\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int},N:int where a:type,b:type)<transacts>:[]int=\n    var Stored:type{_()<computes>:int}=F\n    Values:=for(D:=dup[P],X:D.Items,Y:=(if(N>0)then block{set Stored=F;(D.C|10)}else 0)){Y}\n    Value:=Stored()\n    Values\n"),
+  ("case arm real overwrite", caseCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    case(1){1=>dup[P].C+Stored(),_=>0}"),
+  ("case scrutinee real overwrite", caseCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    case(dup[P].C+Stored()){4=>1,_=>0}"),
+  ("case pattern real overwrite", caseCapture "<transacts>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    case(4){dup[P].C+Stored()=>1,_=>0}"),
   ("post-return child pending real cleanup", activeRushContinuation
     "                branch:\n                    defer:\n                        Value:=Stored()\n                    loop:\n                        Sleep(1.0)\n                Sleep(1.0)\n"
     "" "    set Stored=F\n"),
