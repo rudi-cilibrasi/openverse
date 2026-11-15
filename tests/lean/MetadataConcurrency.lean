@@ -33,12 +33,84 @@ private def forwards (kind : String) : List (String × String × Bool) := [
     s!"    Values:={kind}:\n        block:\n            var A:{functionTy}=Dummy\n            set A=F\n            Sleep(0.1)\n            A()\n        block:\n            var B:{functionTy}=Dummy\n            set B=F\n            Sleep(0.2)\n            B()\n        block:\n            var C:{functionTy}=Dummy\n            set C=F\n            Sleep(0.3)\n            C()\n    {result kind}", true)]
 
 private def extras : List (String × String × Bool) := [
+  ("race: opaque cleanup helper stays valid",
+    "Keep(V:v where v:type)<computes>:v=V\n" ++ header ++
+    "    race:\n        block:\n            defer:\n                Saved:=Keep(Dummy)\n            loop{Sleep(1.0)}\n        block:\n            Sleep(0.1)\n            0", true),
+  ("race: nonwaiting arm cannot invoke its cleanup helper",
+    "reader:=class<computes>{Read()<computes>:int=7}\nUse(V:reader)<computes>:int=V.Read()\nNoWait()<suspends>:void={}\nCaller(F:reader,Dummy:reader)<suspends>:int=\n    race:\n        block:\n            defer:\n                Value:=Use(Dummy)\n            loop{NoWait()}\n        block:\n            Sleep(0.1)\n            0", false),
+  ("race: real cleanup store remains valid",
+    "box(t:type):=class{var Value:t}\nStore(B:box(t),V:t where t:type)<transacts>:void=set B.Value=V\n" ++ header ++
+    s!"    B:=box({functionTy})\{Value:=F}\n    race:\n        block:\n            defer:\n                Store(B,F)\n            loop\{Sleep(1.0)}\n        block:\n            Sleep(0.1)\n            0", true),
+  ("branch: cleanup reads current shared value at owner return", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    branch:\n        defer:\n            Value:=Stored()\n        loop:\n            Sleep(1.0)\n    set Stored=F\n    0", true),
+  ("race: sibling startup makes cleanup data real", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    race:\n        block:\n            defer:\n                Value:=Stored()\n            loop:\n                Sleep(1.0)\n        block:\n            set Stored=F\n            Sleep(0.1)\n            0", true),
+  ("sync: child cleanup precedes owner cleanup", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    defer:\n        Value:=Stored()\n    Values:=sync:\n        block:\n            defer:\n                set Stored=F\n            loop:\n                Sleep(1.0)\n        block:\n            loop:\n                Sleep(1.0)\n    0", true),
+  ("branch: opaque helper return retains metadata",
+    "Later(V:v,R:v where v:type)<suspends>:v=\n    var Stored:v=V\n    branch:\n        Sleep(0.2)\n        set Stored=R\n    Sleep(0.1)\n    Stored\n" ++ header functionTy ++
+    "    Later(Dummy,F)", true),
+  ("race: cleanup sees argument effects before the wait", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    race:\n        block:\n            defer:\n                Value:=Stored()\n            loop:\n                Sleep(block\{set Stored=F;1.0})\n        block:\n            Sleep(0.1)\n            0", true),
+  ("race: real cleanup alias is independent of metadata cell", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    Saved:=F\n    race:\n        block:\n            defer:\n                Value:=Saved()\n            loop:\n                Sleep(1.0)\n        block:\n            Sleep(0.1)\n            0", true),
+  ("race: cleanup forwards metadata opaquely", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    race:\n        block:\n            defer:\n                Saved:=Stored\n            loop:\n                Sleep(1.0)\n        block:\n            Sleep(0.1)\n            0", true),
+  ("race: nonwaiting call cannot run cancellation cleanup", "NoWait()<suspends>:void={}\n" ++ header ++
+    s!"    var Stored:{functionTy}=Dummy\n    race:\n        block:\n            defer:\n                Value:=Stored()\n            loop:\n                NoWait()\n        block:\n            Sleep(0.1)\n            0", true),
+  ("race: zero sleep cannot run cancellation cleanup", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    race:\n        block:\n            defer:\n                Value:=Stored()\n            loop:\n                Sleep(0.0)\n        block:\n            Sleep(0.1)\n            0", true),
+  ("branch: opaque metadata-only forwarding", header functionTy ++
+      s!"    var Stored:{functionTy}=Dummy\n    branch:\n        Sleep(0.1)\n        set Stored=Dummy\n    Sleep(0.2)\n    Stored", true),
+    ("branch: immediate metadata writer completes before real overwrite", header ++
+      s!"    var Stored:{functionTy}=Dummy\n    branch:\n        set Stored=Dummy\n    set Stored=F\n    Stored()", true),
+    ("branch: real overwrite before its first wait", header ++
+      s!"    var Stored:{functionTy}=Dummy\n    branch:\n        set Stored=F\n        Sleep(0.1)\n    Sleep(0.2)\n    Stored()", true),
+    ("branch: mutually exclusive real overwrite", ((header functionTy).replace "Caller(" "Caller(C:logic,") ++
+      s!"    var Stored:{functionTy}=Dummy\n    if(C?)then:\n        branch:\n            Sleep(0.1)\n            set Stored=Dummy\n    else:\n        set Stored=F\n    Sleep(0.2)\n    Stored", true),
+    ("branch: parent real overwrite rolls back", header functionTy ++
+      s!"    var Stored:{functionTy}=Dummy\n    branch:\n        Sleep(0.1)\n        set Stored=Dummy\n    if(set Stored=F;false?)\{}\n    Sleep(0.2)\n    Stored", true),
+    ("branch: pending metadata write canceled before it resumes", header ++
+      s!"    var Stored:{functionTy}=Dummy\n    branch:\n        Sleep(0.1)\n        set Stored=Dummy\n    set Stored=F\n    Stored()", true),
+    ("rush: loser canceled before it resumes", header ++
+      s!"    var Stored:{functionTy}=Dummy\n    Value:=rush:\n        block:\n            Sleep(0.1)\n            set Stored=Dummy\n            Sleep(1.0)\n            0\n        block:\n            Sleep(0.05)\n            0\n    set Stored=F\n    Stored()", true),
   ("sync: same-arm metadata write precedes its real overwrite", header ++
     s!"    var Stored:{functionTy}=Dummy\n    Values:=sync:\n        block:\n            set Stored=Dummy\n            set Stored=F\n            Sleep(0.1)\n            0\n        block:\n            Sleep(0.2)\n            0\n    Stored()", true),
   ("sync: rolled-back sibling write has no effect", header ++
     s!"    var Stored:{functionTy}=Dummy\n    Values:=sync:\n        block:\n            set Stored=Dummy\n            set Stored=F\n            Sleep(0.1)\n            0\n        block:\n            if(set Stored=F;false?)\{}\n            Sleep(0.2)\n            0\n    Stored()", true),
   ("sync: one definite real overwrite before continuation", header ++
     s!"    var Stored:{functionTy}=Dummy\n    Values:=sync:\n        block:\n            Sleep(0.1)\n            set Stored=F\n            0\n        block:\n            Sleep(0.2)\n            0\n    Stored()", true)]
+
+private def backgroundRefusals : List (String × String × Bool) := [
+  ("race: cancellation invokes an executable cleanup helper",
+    "reader:=class<computes>{Read()<computes>:int=7}\nUse(V:reader)<computes>:int=V.Read()\nCaller(F:reader,Dummy:reader)<suspends>:int=\n    Values:=race:\n        block:\n            defer:\n                Value:=Use(Dummy)\n            loop{Sleep(1.0)}\n        block:\n            Sleep(0.1)\n            0\n    0", false),
+  ("owner: cancellation invokes an executable cleanup helper",
+    "reader:=class<computes>{Read()<computes>:int=7}\nUse(V:reader)<computes>:int=V.Read()\nCaller(F:reader,Dummy:reader)<suspends>:int=\n    defer:\n        Value:=Use(Dummy)\n    loop{Sleep(1.0)}\n    0", false),
+  ("race: cancellation helper follows transitive executable effects",
+    "reader:=class<computes>{Read()<computes>:int=7}\nUse(V:reader)<computes>:int=V.Read()\nRelay(V:reader)<computes>:int=Use(V)\nCaller(F:reader,Dummy:reader)<suspends>:int=\n    Values:=race:\n        block:\n            defer:\n                Value:=Relay(Dummy)\n            loop{Sleep(1.0)}\n        block:\n            Sleep(0.1)\n            0\n    0", false),
+  ("race: cancellation helper writes metadata to an object field",
+    "box(t:type):=class{var Value:t}\nStore(B:box(t),V:t where t:type)<transacts>:void=set B.Value=V\n" ++ header ++
+    s!"    B:=box({functionTy})\{Value:=F}\n    race:\n        block:\n            defer:\n                Store(B,Dummy)\n            loop\{Sleep(1.0)}\n        block:\n            Sleep(0.1)\n            0", true),
+  ("branch: forwarded helper result remains metadata",
+    "Later(V:v,R:v where v:type)<suspends>:v=\n    var Stored:v=V\n    branch:\n        Sleep(0.2)\n        set Stored=R\n    Sleep(0.1)\n    Stored\n" ++ header ++
+    "    Saved:=Later(Dummy,F)\n    Saved()", true),
+  ("branch: owner return executes child cleanup", header ++
+    "    branch:\n        defer:\n            Value:=Dummy()\n        loop:\n            Sleep(1.0)\n    0", true),
+  ("branch: owner cleanup precedes background cleanup", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    defer:\n        Value:=Stored()\n    branch:\n        defer:\n            set Stored=F\n        loop:\n            Sleep(1.0)\n    loop:\n        Sleep(1.0)", true),
+  ("branch: nonreturning background child does not hide owner return",
+    "Finish()<suspends>:void=\n    branch:\n        loop:\n            Sleep(1.0)\n" ++ header ++
+    "    spawn{Finish()}\n    Dummy()", true),
+  ("race: cleanup alias survives real cell overwrite", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    Saved:=Stored\n    race:\n        block:\n            defer:\n                Value:=Saved()\n            set Stored=F\n            loop:\n                Sleep(1.0)\n        block:\n            Sleep(0.1)\n            0", true),
+  ("race: cancellation defer executes metadata", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    race:\n        block:\n            defer:\n                Value:=Stored()\n            loop:\n                Sleep(1.0)\n        block:\n            Sleep(0.1)\n            0", true),
+  ("branch: later caller real overwrite", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    branch:\n        Sleep(0.1)\n        set Stored=Dummy\n    set Stored=F\n    Sleep(0.2)\n    Stored()", true),
+  ("rush: loser writes after caller real overwrite", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    Value:=rush:\n        block:\n            Sleep(0.1)\n            set Stored=Dummy\n            Sleep(1.0)\n            0\n        block:\n            Sleep(0.05)\n            0\n    set Stored=F\n    Sleep(0.2)\n    Stored()", true),
+  ("branch: caller reads before background real overwrite", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    branch:\n        Sleep(0.2)\n        set Stored=F\n    Sleep(0.1)\n    Stored()", true)]
 
 private def compileCase (source : String) (dummy live : Bool) : Except String Compiled := do
   let implementations := if live then
@@ -52,7 +124,7 @@ private def compileCase (source : String) (dummy live : Bool) : Except String Co
 
 def main : IO Unit := do
   let kinds := ["sync", "race", "rush"]
-  let cases := kinds.flatMap refusals
+  let cases := kinds.flatMap refusals ++ backgroundRefusals
   let controls := kinds.flatMap forwards ++ extras
   let mut failures := 0
   for (label, source, live) in cases ++ controls do

@@ -72,7 +72,7 @@ Shared storage has a stricter boundary: metadata cannot enter an ordinary
 object field or a shared local that has held executable data, even if that
 local originally contained metadata. A real overwrite permanently ends its
 metadata-only mode along that path; a failed condition restores the incoming
-mode. Shared-local write checks run after recursive return summaries converge,
+mode. Executable-use and storage checks run after recursive return summaries converge,
 so an early real-only approximation cannot reject an opaque initializer that
 later acquires a metadata role. The final pass follows calls from the roots
 using converged summaries, excluding provisional argument contexts that are
@@ -114,16 +114,45 @@ arm entries, preserving ordered metadata-to-real writes within one arm.
 A successful `sync` completes every arm. Since metadata reentry is checked,
 a cell definitely left real by one completed arm is real in the continuation.
 `race` and `rush` retain possible roles from their arms because other arms may
-still be waiting when a winner returns. `MetadataConcurrency.lean` checks 15
-real/dummy rejection pairs and 15 forwarding/overwrite pairs, with Core checks
+still be waiting when a winner returns. `MetadataConcurrency.lean` checks 24
+real/dummy rejection pairs and 31 forwarding/overwrite pairs, with Core checks
 for every admitted case; `shared_function_sibling_writes.verse` executes the
 ordinary real controls. These controls cover sibling order, nonreturning arms,
 unimplemented dispatch, metadata-only forwarding, independent arm locals,
-rollback and definite real overwrites. The remaining #572 audit includes
-background work that survives its launch expression and generated
-witness/capture/frame storage roles. A `branch`, or a surviving `rush` loser,
-can still write metadata after the caller subsequently overwrites the cell
-with real data; sibling-arm convergence alone does not model that overlap.
+rollback and definite real overwrites.
+
+Frames with potentially relevant background work or cancellation cleanup also
+use a control-position analysis. `MetadataPlan` saves operand results before
+calls and records continuations, fork startup and cleanup registrations.
+Prefixes run atomically to a wait or completion. At a global wait, pending
+children may resume against the current shared slots; a branch or surviving
+rush loser cannot borrow the storage mode from its earlier launch point.
+Returning stops pending background work before it can resume again. Cleanup
+reads the current mutable cell, while a saved immutable alias retains its own
+value. Structured children are canceled before their owner's cleanup, and
+background branches after it, matching the suspension lowering.
+
+Configurations with different pending work remain separate through conditions;
+a failed condition restores its incoming slots. Loop back edges reset fresh
+shared-cell modes and restore cleanup scope. Results from this analysis feed
+the recursive return summaries, so forwarding an early background read through
+a helper cannot erase its role. The final replay follows only live call
+contexts. Functions without relevant scheduling sites keep the ordinary
+dataflow path. Cleanup is relevant when its possible roles reach an executable
+boundary, including effects in reachable helper contexts and their cleanup,
+or it writes shared metadata storage. The relevance probe keeps those call
+contexts private until the actual schedule makes them live. Forwarding hidden
+witnesses alone does not require exploring schedules; scheduler model seed 18 retains
+that distinction under the gate's unchanged 4 GB memory limit. No Core opcode,
+runtime tag or scheduling behavior changes.
+
+The scheduler exploration is conservative about the order of waits; it does
+not prove timer deadlines. `metadata_background_timing.verse` retains ordinary
+Lean/C traces for writes, cancellation, saved aliases and cleanup order in
+both source profiles. Reentrant event callbacks remain in the #572 audit:
+`Signal` can resume an awaiting branch without a global wait in its owner,
+and that wakeup is not yet represented here. Generated witness, capture and
+frame aliases also remain subject to the full audit.
 
 A spawned call has a separate result boundary: lowering writes its return
 value to the task's ordinary mutable `Result` field. The provenance check
