@@ -324,9 +324,16 @@ private partial def concurrent (fns : Array Fn) (infos : Array Info)
       written := Array.replicate slots.values.size false
       sharedMetadata := slots.sharedMetadata.mapIdx fun i role =>
         if shared.contains i then joined.sharedMetadata[i]?.getD false else role }
-  let runArms (outs : Array Flow) : M (Array Flow) :=
-    arms.toArray.zipIdx.mapM fun (arm, i) =>
-      expr fns infos fields fn info (entry outs i) arm
+  let runArms (outs : Array Flow) : M (Array Flow) := do
+    let mut next := #[]
+    for (arm, i) in arms.toArray.zipIdx do
+      let out ← expr fns infos fields fn info (entry outs i) arm
+      next := next.push out
+      -- Startup runs each arm to its first wait or completion, in order.
+      -- An arm that does neither holds startup; an immediate race/rush
+      -- winner also prevents the remaining arms from starting.
+      if !out.yielded && (out.value.isNone || !sync) then break
+    return next
   -- Every arm starts independently, including when a sibling has no
   -- normal return. Exchange their shared-cell roles until they stabilize.
   let validate := (← get).validateShared
@@ -339,12 +346,14 @@ private partial def concurrent (fns : Array Fn) (infos : Array Info)
   let mut growing := true
   while growing do
     let raw ← runArms outs
-    let next := outs.zipWith (fun old out => { out with
-      slots := joinSlots old.slots out.slots
-      value := joinRole old.value out.value
-      returned := joinRole old.returned out.returned
-      broken := joinOpt old.broken out.broken
-      yielded := old.yielded || out.yielded }) raw
+    let next := raw.mapIdx fun i out => match outs[i]? with
+      | none => out
+      | some old => { out with
+        slots := joinSlots old.slots out.slots
+        value := joinRole old.value out.value
+        returned := joinRole old.returned out.returned
+        broken := joinOpt old.broken out.broken
+        yielded := old.yielded || out.yielded }
     growing := next.map (·.slots) != outs.map (·.slots)
     outs := next
   modify fun st => { st with validateShared := validate }
