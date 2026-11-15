@@ -88,8 +88,8 @@ Opaque forwarding remains allowed, and reading an unrelated ordinary field
 of an object with hidden metadata still gives executable data.
 `MetadataGetters.lean` checks these accessor boundaries with 14 Core-checked
 controls, including execution after forwarding through another function.
-`MetadataStorage.lean` retains 72 real/dummy
-rejection pairs and 70 opaque-forwarding, real-overwrite and rollback pairs,
+`MetadataStorage.lean` retains 84 real/dummy
+rejection pairs and 78 opaque-forwarding, real-overwrite and rollback pairs,
 including a later GADT refinement, fresh unit-to-array conversions, ordinary
 helpers with independent real returns, virtual and spawned receivers, and
 bound-method captures across a wait. Shared-frame controls cover metadata,
@@ -112,6 +112,19 @@ cleanup; code only reached after that suspension stays unreachable.
 `metadata_returned_arguments.verse` retain 25 ordinary runtime results in both
 source profiles. These are
 compiler-API contracts; source programs reach the same analysis.
+
+Primitive result roles follow the payload returned by Core. Equality and
+inequality return their left operand, so metadata in the comparison operand
+does not taint a real returned object. An array index selects a payload
+without entering it; array update combines the original array and replacement
+roles. Every operand is still evaluated and its executable uses are checked.
+The storage controls cover both operand orders, array comparisons, helper
+returns and indexed reads/updates, including metadata executed inside an
+otherwise discarded comparison or index operand.
+`metadata_payload_operands.verse` preserves ordinary results and operand
+effects in both runtimes and profiles. Typed-Core Signal dependency controls
+also retain recursive indexed reads and updates: their receiver dependencies
+include the array and replacement payload, excluding the scalar index.
 
 For `sync`, `race` and `rush`, the provenance analysis follows source startup
 order to determine which arms can start. An arm that neither returns nor
@@ -233,7 +246,7 @@ and frame aliases remain in the #572 audit, including resource use for recursive
 choice producers. A private recursive-producer reader still reaches the 4 GB
 cap on the #640 baseline and a bounded timeout with the frame-alias changes;
 its real control passes. This remains an unresolved analysis case.
-`MetadataSignals.lean` retains 41 real/dummy refusal pairs and 33 positive pairs
+`MetadataSignals.lean` retains 47 real/dummy refusal pairs and 37 positive pairs
 for direct and indirect signals, recursive helpers, rollback, task completion,
 cleanup, helper returns and unrelated events. `metadata_signal_timing.verse`
 executes the corresponding ordinary data paths in both runtimes and profiles.

@@ -593,9 +593,13 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
     if out.value.isNone then return out
     let value := match op, es with
       | .fail, _ | .userErr, _ | .query, [.lit (.logic false)] | .query, [.lit .none] => none
-      | .query, _ | .mkArr, _ | .mkTup, _ | .mkSome, _ | .concat, _ | .index, _ |
-          .arrSet, _ | .flatten, _ | .tupGet _, _ |
-          .lt, _ | .le, _ | .gt, _ | .ge, _ | .eq, _ | .ne, _ |
+      -- Equality and inequality return the left operand; an array index selects a
+      -- payload without becoming part of it. All operands still run above.
+      | .eq, _ | .ne, _ | .index, _ => some (args.headD false)
+      | .arrSet, _ => some (args.headD false || args[2]?.getD false)
+      | .query, _ | .mkArr, _ | .mkTup, _ | .mkSome, _ | .concat, _ |
+          .flatten, _ | .tupGet _, _ |
+          .lt, _ | .le, _ | .gt, _ | .ge, _ |
           .flt, _ | .fle, _ | .fgt, _ | .fge, _ => some (args.any id)
       -- Length, formatting and arithmetic construct fresh scalar data;
       -- they cannot preserve a dictionary, function or opaque payload.
