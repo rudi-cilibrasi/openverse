@@ -97,7 +97,13 @@ private def rangeCapture (body : String) : String :=
 private def constructorCapture (body : String) : String :=
   "pair(a:type,b:type):=class{}\ndup(t:type):=class(pair(t,t)){C:int=4}\nrefbox:=class{Before:int=0;Value:int}\nvalbox:=struct{Before:int=0;Value:int}\nouter:=struct{Inner:refbox}\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type)" ++ body
 
+private def setIndexCapture (body : String) : String :=
+  "pair(a:type,b:type):=class{}\ndup(t:type):=class(pair(t,t)){Index:int=0}\ncell:=class{var Value:int=0}\nholder:=class{Items:[]cell}\nId(N:int)<computes>:int=N\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type)" ++ body
+
 private def cases : List (String × String) := [
+  ("set index array metadata capture", setIndexCapture "<transacts><decides>:int=\n    var A:[]int=array{0}\n    set A[dup[P].Index+Dummy()]=7\n    0"),
+  ("set index object path metadata capture", setIndexCapture "<transacts><decides>:int=\n    H:=holder{Items:=array{cell{}}}\n    set H.Items[dup[P].Index+Dummy()].Value=7\n    0"),
+  ("set index expression metadata capture", setIndexCapture "<transacts><decides>:int=\n    var A:[]int=array{0}\n    Id(set A[dup[P].Index+Dummy()]=7)"),
   ("constructor class metadata capture", constructorCapture "<transacts><decides>:int=refbox{Value:=dup[P].C+Dummy()}.Value"),
   ("constructor struct metadata capture", constructorCapture "<transacts><decides>:int=valbox{Value:=dup[P].C+Dummy()}.Value"),
   ("constructor nested metadata capture", constructorCapture "<transacts><decides>:int=outer{Inner:=refbox{Value:=dup[P].C+Dummy()}}.Inner.Value"),
@@ -270,6 +276,9 @@ private def cases : List (String × String) := [
   ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
+  ("set index array real overwrite", setIndexCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    var A:[]int=array{0}\n    set A[dup[P].Index+Stored()]=7\n    0"),
+  ("set index object path real overwrite", setIndexCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    H:=holder{Items:=array{cell{}}}\n    set H.Items[dup[P].Index+Stored()].Value=7\n    0"),
+  ("set index expression real overwrite", setIndexCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    var A:[]int=array{0}\n    Id(set A[dup[P].Index+Stored()]=7)"),
   ("constructor class real overwrite", constructorCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    refbox{Value:=dup[P].C+Stored()}.Value"),
   ("constructor struct real overwrite", constructorCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    valbox{Value:=dup[P].C+Stored()}.Value"),
   ("constructor nested real overwrite", constructorCapture "<transacts><decides>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    outer{Inner:=refbox{Value:=dup[P].C+Stored()}}.Inner.Value"),

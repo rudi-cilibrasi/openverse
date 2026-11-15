@@ -261,6 +261,9 @@ partial def castsIn (isClass : String → Bool) (c : SExpr) : List Pos :=
     | .construct _ _ _ fields => fields.flatMap fun
       | .decl _ _ _ _ value => go value
       | value => go value
+    | .set q path _ value =>
+      let (indices, _) := Choice.hoistPath q path
+      (indices.flatMap fun | .decl _ _ _ _ index => go index | _ => []) ++ go value
     | .app _ (.ident _ n) _ _ => if n.startsWith "$" then [] else e.children.flatMap go ++ here e
     | .app .. | .member .. | .bin .. | .range .. | .cmp .. | .query .. | .neg .. | .tuple .. | .arrayLit ..
     | .str .. | .mapLit .. => e.children.flatMap go ++ here e
@@ -268,7 +271,7 @@ partial def castsIn (isClass : String → Bool) (c : SExpr) : List Pos :=
   let inner : SExpr → List Pos := fun x => x.children.flatMap go
   match c with
   | .decl _ _ _ _ v => if (castClause? c).isSome then inner v else go v
-  | .set _ _ _ v | .gen _ _ _ v => go v
+  | .gen _ _ _ v => go v
   | .app .. => if (castClause? c).isSome then inner c else go c
   | e => go e
 
