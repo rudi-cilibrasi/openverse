@@ -13,10 +13,20 @@ def load(name):
     return model
 
 
-def returning_owner(model, finish):
+def returning_owner(model, finish, late_child=False):
     st = model.St
     active = [st('defer', label='active cleanup'), st('sleep', d='0.1'),
               st('signal', evar='E', val='X'), st('print', label='after signal')]
+    if late_child:
+        child = [st('defer', label='late cleanup')]
+        if late_child == 2:
+            child += [st('branch', body=[st('defer', label='grandchild cleanup'),
+                                        st('sleep', d='1.0'), st('print', label='wrong grandchild')])]
+        child += [st('sleep', d='1.0'), st('print', label='wrong child')]
+        active += [st('branch', body=child)]
+        if late_child == 2:
+            active += [st('branch', body=[st('defer', label='sibling cleanup'),
+                                         st('sleep', d='1.0'), st('print', label='wrong sibling')])]
     if not finish:
         active += [st('sleep', d='1.0'), st('print', label='wrong active')]
     other = [st('defer', label='other cleanup'), st('sleep', d='1.0'),
@@ -37,18 +47,24 @@ def returning_owner(model, finish):
 
     code = model.S.run(main())
     expected = ['probe owner done 0', 'probe owner cleanup 0',
-                'probe other cleanup 0', 'main continued', 'probe after signal 0',
-                'probe active cleanup 0']
+                'probe other cleanup 0', 'main continued', 'probe after signal 0']
+    late_cleanup = (['probe sibling cleanup 0', 'probe grandchild cleanup 0'] if late_child == 2 else []) + ['probe late cleanup 0']
+    if late_child and not finish:
+        expected += late_cleanup
+    expected += ['probe active cleanup 0']
+    if late_child and finish:
+        expected += late_cleanup
     if finish:
         expected += ['probe after rush 0']
     expected += ['main done']
     assert code == 0, (code, model.S.out)
     assert model.S.out == expected, (finish, model.S.out, expected)
-    assert len(model.S.roots) == 1 and model.S.roots[0].done, 'cancelled arms became roots'
+    assert len(model.S.roots) == (4 if late_child == 2 else 2 if late_child else 1) and all(r.done for r in model.S.roots), 'cancelled arms or children became live roots'
     assert all(n == 0 for n in model.S.sleepers.values()), 'cancelled timer remained registered'
 
 
 for name in ['sched_gen', 'sched_gen2']:
     for finish in [False, True]:
-        returning_owner(load(name), finish)
-print('scheduler-model: both models preserve active-arm cleanup and completion (4 traces)')
+        for late_child in [0, 1, 2]:
+            returning_owner(load(name), finish, late_child)
+print('scheduler-model: both models preserve active arms and late children (12 traces)')
