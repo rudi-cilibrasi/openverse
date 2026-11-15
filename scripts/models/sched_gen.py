@@ -348,6 +348,7 @@ def stop_one(root):
                 if not root.gen.gi_running:
                     root.gen.close()
             return
+        root.cancelled = True
         root = root.root
     if not root.done:
         if root in S.running:

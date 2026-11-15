@@ -13,7 +13,7 @@ def load(name):
     return model
 
 
-def returning_owner(model, finish, late_child=False):
+def returning_owner(model, finish, late_child=False, wrapped=False):
     st = model.St
     active = [st('defer', label='active cleanup'), st('sleep', d='0.1'),
               st('signal', evar='E', val='X'), st('print', label='after signal')]
@@ -31,11 +31,12 @@ def returning_owner(model, finish, late_child=False):
         active += [st('sleep', d='1.0'), st('print', label='wrong active')]
     other = [st('defer', label='other cleanup'), st('sleep', d='1.0'),
              st('print', label='wrong other')]
-    body = [st('defer', label='owner cleanup'), st('event', evar='E', sticky=False),
-            st('branch', body=[st('conc', kind='rush', var='R', pick=0,
-                                  arms=[(active, 'X'), (other, 'X')]),
-                               st('print', label='after rush')]),
-            st('evawait', evar='E', var='V'), st('print', label='owner done')]
+    if wrapped:
+        other = [st('defer', label='other cleanup'), st('sleep', d='0.0')]
+    rush = st('conc', kind='rush', var='R', pick=0, arms=[(active, 'X'), (other, 'X')])
+    start = [rush] if wrapped else [st('branch', body=[rush, st('print', label='after rush')])]
+    body = [st('defer', label='owner cleanup'), st('event', evar='E', sticky=False)] + start + [
+        st('evawait', evar='E', var='V'), st('print', label='owner done')]
     fn = model.Fn('Owner', body, 'X')
     model.S = model.Sched()
 
@@ -46,15 +47,16 @@ def returning_owner(model, finish, late_child=False):
         model.S.p('main done')
 
     code = model.S.run(main())
-    expected = ['probe owner done 0', 'probe owner cleanup 0',
-                'probe other cleanup 0', 'main continued', 'probe after signal 0']
+    expected = (['probe other cleanup 0', 'probe owner done 0', 'probe owner cleanup 0'] if wrapped else
+                ['probe owner done 0', 'probe owner cleanup 0', 'probe other cleanup 0'])
+    expected += ['main continued', 'probe after signal 0']
     late_cleanup = (['probe sibling cleanup 0', 'probe grandchild cleanup 0'] if late_child == 2 else []) + ['probe late cleanup 0']
     if late_child and not finish:
         expected += late_cleanup
     expected += ['probe active cleanup 0']
     if late_child and finish:
         expected += late_cleanup
-    if finish:
+    if finish and not wrapped:
         expected += ['probe after rush 0']
     expected += ['main done']
     assert code == 0, (code, model.S.out)
@@ -66,5 +68,6 @@ def returning_owner(model, finish, late_child=False):
 for name in ['sched_gen', 'sched_gen2']:
     for finish in [False, True]:
         for late_child in [0, 1, 2]:
-            returning_owner(load(name), finish, late_child)
-print('scheduler-model: both models preserve active arms and late children (12 traces)')
+            for wrapped in [False, True]:
+                returning_owner(load(name), finish, late_child, wrapped)
+print('scheduler-model: both models preserve active arms and late children (24 traces)')
