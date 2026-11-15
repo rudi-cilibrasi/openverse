@@ -1,0 +1,26 @@
+pos 0
+given E 1
+int D 2
+pick int
+body 4 2
+body 5 2
+pos 2
+given E 3
+int D 4
+pick int
+body 8 4
+body 9 4
+pos 4
+given E 5
+string D 6
+pick string x
+body 111 6
+body 112 6
+pos 6
+given E 7
+string D 8
+pick string x
+body 115 8
+body 116 8
+after 8
+exit=0

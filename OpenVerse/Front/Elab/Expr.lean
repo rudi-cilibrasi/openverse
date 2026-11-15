@@ -1851,7 +1851,10 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
             (fieldOrder := choiceOrder ctx)
             (site := s!"{t}a{i}") (keepBranches := choiceHasCast ctx)
         let alt (a : SExpr) (i : Nat) : SExpr :=
-          .app p (.ident p "$firstP") [.block p (liftAlt a i ++ rest ++ [tup])] false
+          let value := SExpr.app p (.ident p "$firstP") [.block p (liftAlt a i ++ rest ++ [tup])] false
+          if !ctx.hasCopiedOverloads rest then value else
+            let scope := ctx.copiedOverloadKey p b.name i
+            .app p (.ident p "$copiedOverloads") [SExpr.str p [.text scope], value] false
         let copied : List SExpr := [.decl p t none false (Choice.mk p (b.alts.zipIdx.map fun (a, i) => alt a i))] ++
           binds.zipIdx.map fun (n, i) => .decl p n none (vars.contains n) (.app p (.ident p t) [.int p (i : Int)] false)
         -- (#335: another such choice in the clauses after it: those clauses a

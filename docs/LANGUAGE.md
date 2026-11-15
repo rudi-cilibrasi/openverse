@@ -1916,7 +1916,11 @@ Main():void =
   itself, recursive (below); and a recursive one may call an overloaded
   one, as it may call any function with several values. A call in
   the clauses after a choice whose alternatives' values are of different
-  types, which are copied for each (#335), must take one overload in every
+  types, which are copied for each (#335), may take a different nonrecursive
+  top-level overload in each copy. Each copy selects its overload before
+  inlining, retaining argument/default order and its failure boundaries;
+  this applies to `for`, first-success and `option` consumers. Recursive
+  overloads and overloaded methods must still take one overload in every
   copy.
 
   A method with several values works the same way (#283): a call
@@ -2336,11 +2340,10 @@ Main():void =
   the function whose code calls it or with another, or is overloaded. A
   failure context in a recursive one's code that takes a call's values and
   gives a value of one of its type parameters that none of the names it
-  uses has is refused. A call in the clauses copied for each alternative of
-  a choice whose values are of different types that would take one overload
-  (or one list of an overloaded method) with several values in one copy and
-  another in another is refused, saying to write those clauses apart for
-  the alternatives or to give the overloads names of their own.
+  uses has is refused. In the clauses copied for alternatives of different
+  types, selecting different recursive overloads, or different lists of an
+  overloaded method with several values, remains refused. Nonrecursive
+  top-level overloads may differ between the copies, as described above.
   `Main` never has several values, nor does a `<suspends>` function: a call
   of one with several would have to be in a failure context, and a failure
   context cannot suspend (#156); a choice in its body outside a failure

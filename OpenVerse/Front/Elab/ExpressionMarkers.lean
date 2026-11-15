@@ -410,6 +410,13 @@ partial def elabExprMarkersWith
       (if typedLeaf then some fun slotOf => .assign (slotOf (some vl.ty)) (.local vl.slot) else none)
       (if typedLeaf then [vl.ty] else [])
     return ⟨.seq (.assign done (.lit (.logic false))) code, pty⟩
+  | .app p (.ident _ "$copiedOverloads") [.str _ [.text scope], .app q (.ident _ "$firstP") [.block bp items] false] false =>
+    let code ← match ctx.specializeCopiedOverloads scope items with
+      | .ok code => pure code
+      | .error why => eerr p why
+    let prepared := Choice.prepare code (choiceValues ctx) (choiceField ctx)
+      (site := s!"copy{scope.hash}") (fieldOrder := choiceOrder ctx) (keepBranches := choiceHasCast ctx)
+    elabE { ctx with copiedOverloadScope := scope } (.app q (.ident q "$firstP") [.block bp prepared] false) exp
   | .app p (.ident _ "$firstP") [.block _ items] false =>
     -- (#246) `first{…}` of clauses that are lifted already (a consumer's,
     -- taken into a lazily taken call's function of its own): not again,

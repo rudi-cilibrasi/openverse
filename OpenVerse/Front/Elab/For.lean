@@ -863,7 +863,17 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               else set st0
           let mut parts : List R := []
           for (a, i) in b.alts.zipIdx do
-            parts := parts ++ [← forW (liftA a i ++ fs ++ moreClauses) bd]
+            if !c.hasCopiedOverloads (fs ++ moreClauses) then
+              parts := parts ++ [← forW (liftA a i ++ fs ++ moreClauses) bd]
+              continue
+            let scope := c.copiedOverloadKey gp b.name i
+            let suffix ← match c.specializeCopiedOverloads scope (fs ++ moreClauses) with
+              | .ok code => pure code
+              | .error why => eerr gp why
+            let suffix := Choice.prepare suffix (choiceValues c) (choiceField c)
+              (fieldOrder := choiceOrder c) (site := s!"{site}copy{i}")
+              (keepExcl := true) (keepBranches := choiceHasCast c)
+            parts := parts ++ [← forWIn { bctx with copiedOverloadScope := scope } (liftA a i ++ suffix) bd]
           let some r0 := parts.head? | eerr gp "internal: a choice without alternatives"
           if let some r := parts.find? (·.ty != r0.ty) then
             eerr gp s!"the for's values have the type {r0.ty.show} for one alternative of this choice and {r.ty.show} for another"

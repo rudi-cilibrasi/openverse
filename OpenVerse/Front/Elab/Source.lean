@@ -295,6 +295,8 @@ structure Source where
   familySites : List (Pos × String)
   /-- The calls whose overload the arguments' types pick (#283). -/
   overloadSites : List (Pos × String)
+  copiedOverloadFns : List (String × Choice.MFn) := []
+  copiedOverloadClashes : List (String × List String) := []
   /-- The consumers in recursive groups' code whose names' types an
       elaboration is to note (#283). -/
   nestedSites : List String
@@ -320,7 +322,7 @@ def inlineSource (requests : Requests) (admitted : Admitted) :
   -- arguments' types pick, the consumers in recursive groups' code whose
   -- names' types it notes, the types whose field orders it notes)
   let written := admitted.resolved
-  let ⟨resolved, lazy, familySites, overloadSites, nestedSites, fieldSites⟩ ← Choice.inlineMulti written reserved
+  let ⟨resolved, lazy, familySites, overloadSites, nestedSites, fieldSites, copiedOverloadNames, copiedOverloadClashes⟩ ← Choice.inlineMulti written reserved
     requests.eager requests.families requests.lazy requests.overloads requests.nested
     requests.fieldOrders requests.instanceCalls
   -- (#246) the class of the stack cells of lazily taken ones
@@ -397,10 +399,22 @@ def inlineSource (requests : Requests) (admitted : Admitted) :
     (FnValues.desugar (resolved.take (resolved.length - admitted.rawEntry.length) ++ helpers)
       (resolved.drop (resolved.length - admitted.rawEntry.length)) (requests.fns.map fun (n, t) => (n, t.toSTy))
       requests.methods written))
+  -- Templates cross the same effect, function-value and witness transforms as
+  -- ordinary source. Keep their checking stubs single-valued as before.
+  let templateName (n : String) : Bool := copiedOverloadNames.any fun k => n == "$copiedOverload:" ++ k
+  let templateTops ← if copiedOverloadNames.isEmpty then pure [] else
+    (MethodOverloads.of (allTops00 ++ admitted.rawEntry)).apply
+      (allTops00.filter fun | .fn _ n .. => templateName n | _ => false)
+  let copiedOverloadFns := templateTops.filterMap fun
+    | .fn p n ps ts fx ret body =>
+      let original := (n.drop "$copiedOverload:".length).toString
+      some (original, (⟨p, ps, ts, fx, ret, body⟩ : Choice.MFn))
+    | _ => none
+  let allTops00 := allTops00.filter fun | .fn _ n .. => !templateName n | _ => true
   let entryTop := resolved.drop (resolved.length - admitted.rawEntry.length)
   return { tops := allTops00, entry := entryTop, constructionFx, access := admitted.access,
            ignoredArms := admitted.ignoredArms, forFilters := admitted.forFilters, familySites,
-           overloadSites, nestedSites, fieldSites }
+           overloadSites, nestedSites, fieldSites, copiedOverloadFns, copiedOverloadClashes }
 
 
 /-- A program's definitions complete (`argsAndMethodOverloads`), as the class
