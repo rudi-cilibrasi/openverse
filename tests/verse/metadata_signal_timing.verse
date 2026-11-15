@@ -106,6 +106,51 @@ OwnerCleanup(ListenerFirst:logic)<suspends>:void=
             E.Await()
             Print("unexpected canceled listener")
 
+HandshakeWorker(E:sticky_event(task(int)))<suspends>:int=
+    Me:=E.Await()
+    7
+
+TaskCompletion()<suspends>:int=
+    E:=sticky_event(task(int)){}
+    T:=spawn{HandshakeWorker(E)}
+    var Stored:type{_()<computes>:int}=Two
+    branch:
+        T.Await()
+        set Stored=Two
+    set Stored=One
+    E.Signal(T)
+    Stored()
+
+EventWorker(E:event(int))<suspends>:int=E.Await()
+
+CanceledWorker()<suspends>:int=
+    E:=event(int){}
+    T:=spawn{EventWorker(E)}
+    var Stored:type{_()<computes>:int}=Two
+    branch:
+        T.Await()
+        set Stored=Two
+    set Stored=One
+    T.Cancel()
+    E.Signal(0)
+    Stored()
+
+ArmReturn(V:v,R:v where v:type)<suspends>:v=
+    defer:
+        Print("helper owner cleanup")
+    Value:=race:
+        block:
+            defer:
+                Print("helper arm cleanup")
+            Sleep(0.1)
+            return V
+        block:
+            defer:
+                Print("helper loser cleanup")
+            Sleep(1.0)
+            R
+    R
+
 Main()<suspends>:void=
     Print("direct {Direct()}")
     Print("unrelated {Unrelated()}")
@@ -117,3 +162,7 @@ Main()<suspends>:void=
     Print("ordered {Ordered()}")
     OwnerCleanup(true)
     OwnerCleanup(false)
+    Print("task completion {TaskCompletion()}")
+    Print("canceled worker {CanceledWorker()}")
+    Saved:=ArmReturn(Two,One)
+    Print("helper return {Saved()}")

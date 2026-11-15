@@ -8,7 +8,34 @@ private def header : String :=
 private def setup (awaitExpr : String := "E.Await()") : String :=
   s!"    var Stored:{functionTy}=Dummy\n    branch:\n        {awaitExpr}\n        set Stored=Dummy\n    set Stored=F\n"
 
+private def returningHelper (value : String) : String :=
+  s!"Later(V:v,R:v where v:type)<suspends>:v=\n    Value:=race:\n        block:\n            Sleep(0.1)\n            return {value}\n        block:\n            Sleep(0.2)\n            {value}\n    R\n"
+
+private def scheduledCaller (body : String) : String := header ++
+  s!"    var Shadow:{functionTy}=Dummy\n    branch:\n        Sleep(1.0)\n        set Shadow=Dummy\n" ++ body
+
+private def loopTasks (signal : String) : String :=
+  "Work(E:event(int))<suspends>:int=E.Await()\n" ++ header ++
+  s!"    A:=event(int)\{}\n    B:=event(int)\{}\n    Other:=event(int)\{}\n    var Selected:event(int)=A\n    Tasks:=for(N:=0..1):\n        T:=spawn\{Work(Selected)}\n        set Selected=B\n        T\n    var Stored:{functionTy}=Dummy\n    if(T:=Tasks[0]):\n        branch:\n            T.Await()\n            set Stored=Dummy\n        set Stored=F\n        {signal}.Signal(0)\n        Stored()\n    else:\n        0"
+
 private def refusals : List (String × String) := [
+  ("An inlined helper arm can return metadata to its caller",
+    returningHelper "V" ++ scheduledCaller "    Saved:=Later(Shadow,F)\n    Saved()"),
+  ("Returns from every helper arm keep the caller reachable",
+    "Later(V:v,R:v where v:type)<suspends>:v=\n    race:\n        block:\n            Sleep(0.1)\n            return R\n        block:\n            Sleep(0.2)\n            return R\n    R\n" ++
+    scheduledCaller "    Saved:=Later(Shadow,F)\n    Dummy()"),
+  ("A user's Signal method follows its event field",
+    "signaler:=class{E:event(int);Signal():void=E.Signal(0)}\n" ++ header ++ setup ++
+    "    S:=signaler{E:=E}\n    S.Signal()\n    Stored()"),
+  ("An older worker can complete after another start at its spawn site", loopTasks "A"),
+  ("Recursive signals retain argument permutations",
+    "Send(E:event(int),Other:event(int),N:int):void=\n    if(N>0)then Send(Other,E,N-1)else E.Signal(0)\n" ++
+    header ++ setup ++ "    Other:=event(int){}\n    Send(Other,E,1)\n    Stored()"),
+  ("Task completion resumes its listener inside Signal",
+    "Work(E:sticky_event(task(int)))<suspends>:int=\n    Me:=E.Await()\n    7\n" ++ header ++
+    s!"    Handshake:=sticky_event(task(int))\{}\n    T:=spawn\{Work(Handshake)}\n    var Stored:{functionTy}=Dummy\n    branch:\n        T.Await()\n        set Stored=Dummy\n    set Stored=F\n    Handshake.Signal(T)\n    Stored()"),
+  ("Failed Signal still cannot reintroduce metadata into a data cell", header ++ setup ++
+    "    if(E.Signal(0);false?){}\n    Stored()"),
   ("Signal resumes a pending metadata writer", header ++ setup ++
     "    E.Signal(0)\n    Stored()"),
   ("Signal through an immutable event alias", header ++ setup ++
@@ -40,6 +67,29 @@ private def refusals : List (String × String) := [
     "    Other.Signal(0)\n    Stored()")]
 
 private def controls : List (String × String) := [
+  ("An inlined helper arm can return real data to its caller",
+    returningHelper "R" ++ scheduledCaller "    Saved:=Later(Shadow,F)\n    Saved()"),
+  ("A user's Signal method preserves a fresh unrelated event",
+    "signaler:=class{E:event(int);Signal():void=E.Signal(0)}\n" ++ header ++ setup ++
+    "    Other:=event(int){}\n    S:=signaler{E:=Other}\n    S.Signal()\n    Stored()"),
+  ("Repeated workers remain waiting on an unrelated Signal", loopTasks "Other"),
+  ("An unrelated Signal cannot finish a waiting worker",
+    "Work(E:event(int))<suspends>:int=E.Await()\n" ++ header ++
+    s!"    T:=spawn\{Work(E)}\n    var Stored:{functionTy}=Dummy\n    branch:\n        T.Await()\n        set Stored=Dummy\n    set Stored=F\n    Other:=event(int)\{}\n    Other.Signal(0)\n    Stored()"),
+  ("Signal cannot complete a worker's timer",
+    "Work()<suspends>:int=block{Sleep(0.1);7}\n" ++ header ++
+    s!"    T:=spawn\{Work()}\n    var Stored:{functionTy}=Dummy\n    branch:\n        T.Await()\n        set Stored=Dummy\n    set Stored=F\n    E.Signal(0)\n    Stored()"),
+  ("Cancellation does not signal a task's successful completion",
+    "Work(E:event(int))<suspends>:int=E.Await()\n" ++ header ++
+    s!"    T:=spawn\{Work(E)}\n    var Stored:{functionTy}=Dummy\n    branch:\n        T.Await()\n        set Stored=Dummy\n    set Stored=F\n    T.Cancel()\n    E.Signal(0)\n    Stored()"),
+  ("Await of a completed task can return without another wait",
+    "Work()<suspends>:int=7\n" ++ header ++
+    s!"    T:=spawn\{Work()}\n    var Stored:{functionTy}=Dummy\n    branch:\n        T.Await()\n        set Stored=F\n    Stored()"),
+  ("Failed Signal restores an opaque cell's metadata mode",
+    (header.replace "<suspends>:int=" s!"<suspends>:{functionTy}=") ++
+    s!"    var Stored:{functionTy}=Dummy\n    branch:\n        E.Await()\n        set Stored=F\n    if(E.Signal(0);false?)\{}\n    set Stored=Dummy\n    Stored"),
+  ("Failed Signal restores its listener before the next Signal", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    branch:\n        E.Await()\n        set Stored=F\n    if(E.Signal(0);false?)\{}\n    E.Signal(0)\n    Stored()"),
   ("Signal cannot wake a timer", header ++
     s!"    var Stored:{functionTy}=Dummy\n    branch:\n        Sleep(0.1)\n        set Stored=Dummy\n    set Stored=F\n    E.Signal(0)\n    Stored()"),
   ("A fresh unrelated event cannot wake this branch", header ++ setup ++
@@ -52,8 +102,6 @@ private def controls : List (String × String) := [
     "    Other:=event(int){}\n    Alias:=holder{E:=Other}\n    Alias.E.Signal(0)\n    Stored()"),
   ("A fresh unrelated event stays distinct through an array", header ++ setup ++
     "    Other:=event(int){}\n    Aliases:=array{Other}\n    if(Alias:=Aliases[0])then Alias.Signal(0)\n    Stored()"),
-  ("A failed condition rolls back callback writes", header ++ setup ++
-    "    if(E.Signal(0);false?){}\n    Stored()"),
   ("Signal cannot skip a helper's initial timer",
     "Wait(E:event(int))<suspends>:void=\n    Sleep(0.1)\n    E.Await()\n" ++ header ++ setup "Wait(E)" ++
     "    E.Signal(0)\n    Stored()"),

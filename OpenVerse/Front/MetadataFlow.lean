@@ -2,6 +2,7 @@
 import OpenVerse.Front.Syntax
 import OpenVerse.Core.Syntax
 import OpenVerse.Front.MetadataPlan
+import OpenVerse.Front.MetadataReferences
 import Std.Data.HashMap
 
 namespace OpenVerse.Front.MetadataFlow
@@ -83,7 +84,7 @@ private structure Summary where
   deriving Inhabited
 
 private inductive ActorStatus where
-  | idle | running | waiting (resumable : Bool) | joining (group : Nat) | done
+  | idle | running | ready | waiting (resumable : Bool) | joining (group : Nat) | done
   deriving BEq, Inhabited
 
 private structure LoopEntry where
@@ -92,11 +93,27 @@ private structure LoopEntry where
   cleanups : List Nat
   deriving BEq, Inhabited
 
+private structure CallFrame where
+  context : Option (Nat × Nat)
+  cleanups : List Nat
+  loops : List LoopEntry
+  deriving BEq, Inhabited
+
 private structure Actor where
   pc : Nat := 0
   status : ActorStatus := .idle
   cleanups : List Nat := []
   loops : List LoopEntry := []
+  context : Option (Nat × Nat) := none
+  frames : List CallFrame := []
+  event : Option MetadataReferences.Refs := none
+  canceling : Bool := false
+  task : Option MetadataReferences.Refs := none
+  taskWait : Bool := false
+  waitDst : Option Nat := none
+  signalReturns : List (Option Nat) := []
+  canComplete : Bool := false
+  canSignal : Bool := false
   deriving BEq, Inhabited
 
 private structure GroupStatus where
@@ -105,53 +122,311 @@ private structure GroupStatus where
   winner : Option Nat := none
   deriving BEq, Inhabited
 
+private inductive Pending where
+  | cancel (actor : Nat)
+  | cleanup (actor : Nat) (context : Option (Nat × Nat)) (entry : Nat)
+  | stop (actor : Nat)
+  | resume (actor pc : Nat)
+  | returnCall (actor next : Nat)
+  | returnScope (actor fn offset dropFrames next : Nat)
+  | result (role : Bool)
+  | discard
+  deriving BEq, Inhabited
+
+/-- Multiple live starts at one spawn site share a finite effect summary.
+    Their own metadata contexts remain independently validated. -/
+private structure Pool where
+  task : MetadataReferences.Refs := []
+  owners : MetadataReferences.Refs := []
+  events : MetadataReferences.Refs := []
+  tasks : MetadataReferences.Refs := []
+  canComplete : Bool := false
+  canSignal : Bool := false
+  progressed : Bool := false
+  deriving BEq, Inhabited
+
+private structure Snapshot where
+  owner : Nat
+  no : Nat
+  slots : Slots
+  refs : MetadataReferences.Memory
+  actors : Array Actor
+  groups : Array GroupStatus
+  startup : List Nat
+  events : List Nat
+  pending : List Pending
+  launches : List Nat
+  tasks : Std.HashMap Nat (List Nat)
+  taskResults : Std.HashMap Nat MetadataReferences.Refs
+  pools : Std.HashMap Nat Pool
+  signals : List Nat
+  deriving BEq, Inhabited
+
 private structure Configuration where
   slots : Slots
+  refs : MetadataReferences.Memory
   actors : Array Actor
   groups : Array GroupStatus
   current : Option Nat := some 0
   startup : List Nat := []
+  events : List Nat := []
+  pending : List Pending := []
+  tests : List Snapshot := []
+  launches : List Nat := []
+  tasks : Std.HashMap Nat (List Nat) := {}
+  taskResults : Std.HashMap Nat MetadataReferences.Refs := {}
+  pools : Std.HashMap Nat Pool := {}
+  signals : List Nat := []
   deriving BEq, Inhabited
+
+private def contextKey : Option (Nat × Nat) → List Nat
+  | none => [0]
+  | some (fn, offset) => [fn + 1, offset]
+
+private def loopsKey (loops : List LoopEntry) : List Nat :=
+  loops.length :: loops.flatMap (fun s => [s.id, s.cleanups.length] ++ s.cleanups)
+
+private def actorsKey (actors : Array Actor) : List Nat :=
+  actors.toList.flatMap fun a =>
+    let (tag, data) := match a.status with
+      | .idle => (0, 0) | .running => (1, 0) | .ready => (5, 0)
+      | .waiting ready => (2, if ready then 1 else 0)
+      | .joining g => (3, g) | .done => (4, 0)
+    [a.pc, tag, data, if a.canceling then 1 else 0, if a.taskWait then 1 else 0, a.cleanups.length] ++ a.cleanups ++ [a.waitDst.map (· + 1) |>.getD 0,
+      if a.canComplete then 1 else 0, if a.canSignal then 1 else 0, a.signalReturns.length] ++
+      a.signalReturns.map (fun pc => pc.map (· + 1) |>.getD 0) ++
+      loopsKey a.loops ++ contextKey a.context ++ [a.frames.length] ++
+      a.frames.flatMap (fun f => contextKey f.context ++ [f.cleanups.length] ++
+        f.cleanups ++ loopsKey f.loops)
+
+private def groupsKey (groups : Array GroupStatus) : List Nat :=
+  groups.toList.flatMap fun g =>
+    [if g.active then 1 else 0, g.started, g.winner.map (· + 1) |>.getD 0]
+
+private def pendingKey (pending : List Pending) : List Nat :=
+  pending.length :: pending.flatMap fun
+    | .cancel a => [0, a]
+    | .cleanup a ctx pc => [1, a, pc] ++ contextKey ctx
+    | .stop a => [2, a]
+    | .resume a pc => [3, a, pc]
+    | .returnCall a pc => [4, a, pc]
+    | .returnScope a f o n pc => [7, a, f, o, n, pc]
+    | .result role => [5, if role then 1 else 0]
+    | .discard => [6]
 
 private def configurationKey (c : Configuration) : List Nat :=
   [c.current.getD c.actors.size, c.startup.length] ++ c.startup ++
-  c.actors.toList.flatMap (fun a =>
-    let (tag, data) := match a.status with
-      | .idle => (0, 0) | .running => (1, 0)
-      | .waiting ready => (2, if ready then 1 else 0)
-      | .joining g => (3, g) | .done => (4, 0)
-    [a.pc, tag, data, a.cleanups.length] ++ a.cleanups ++
-      [a.loops.length] ++ a.loops.flatMap (fun s => [s.id, s.cleanups.length] ++ s.cleanups)) ++
-  c.groups.toList.flatMap (fun g =>
-    [if g.active then 1 else 0, g.started, g.winner.map (· + 1) |>.getD 0])
+  [c.events.length] ++ c.events ++ actorsKey c.actors ++ groupsKey c.groups ++
+  [c.signals.length] ++ c.signals ++ [c.launches.length] ++ c.launches ++ pendingKey c.pending ++ [c.tests.length] ++ c.tests.flatMap (fun t =>
+    [t.owner, t.no, t.startup.length] ++ t.startup ++ [t.events.length] ++ t.events ++
+    actorsKey t.actors ++ groupsKey t.groups ++ [t.signals.length] ++ t.signals ++ [t.launches.length] ++ t.launches ++ pendingKey t.pending)
+
+private def joinLoops (a b : List LoopEntry) : List LoopEntry :=
+  a.zipWith (fun s t => { t with slots := joinSlots s.slots t.slots }) b
+
+private def joinActors (a b : Array Actor) : Array Actor :=
+  a.zipWith (fun x y => { y with
+    task := match x.task, y.task with
+      | some a, some b => some ((a ++ b).mergeSort (· ≤ ·) |>.eraseDups)
+      | some a, none | none, some a => some a
+      | none, none => none
+    event := match x.event, y.event with
+      | some a, some b => some ((a ++ b).mergeSort (· ≤ ·) |>.eraseDups)
+      | some a, none | none, some a => some a
+      | none, none => none
+    loops := joinLoops x.loops y.loops
+    frames := x.frames.zipWith (fun s t => { t with loops := joinLoops s.loops t.loops }) y.frames }) b
+
+private def unionRefs (a b : List Nat) : List Nat :=
+  (a ++ b).mergeSort (· ≤ ·) |>.eraseDups
+
+private def joinTable (a b : Std.HashMap Nat (List Nat)) (missing : List Nat) :
+    Std.HashMap Nat (List Nat) :=
+  (a.keys ++ b.keys).eraseDups.foldl (fun result k =>
+    result.insert k (unionRefs (a[k]?.getD missing) (b[k]?.getD missing))) {}
+
+private def taskOptions (c : Configuration) (refs : MetadataReferences.Refs) : List Nat :=
+  refs.foldl (fun options reference =>
+    unionRefs options (c.tasks[reference]?.getD [1, 2, 4])) []
+
+private def setTask (c : Configuration) (refs : MetadataReferences.Refs) (state : Nat)
+    (result : Option MetadataReferences.Refs := none) : Configuration := Id.run do
+  let mut tasks := c.tasks
+  let mut results := c.taskResults
+  for reference in (refs ++ tasks.keys).eraseDups do
+    if !MetadataReferences.aliases refs [reference] then continue
+    if MetadataReferences.definitelyAliases c.refs refs [reference] then
+      tasks := tasks.insert reference [state]
+      if let some value := result then results := results.insert reference value
+    else
+      tasks := tasks.insert reference (unionRefs (tasks[reference]?.getD [1, 2, 4]) [state])
+      if let some value := result then
+        results := results.insert reference (unionRefs (results[reference]?.getD [0]) value)
+  return { c with tasks, taskResults := results }
+
+private def joinPool (a b : Pool) : Pool := {
+  task := unionRefs a.task b.task, owners := unionRefs a.owners b.owners
+  events := unionRefs a.events b.events
+  tasks := unionRefs a.tasks b.tasks
+  canComplete := a.canComplete || b.canComplete, canSignal := a.canSignal || b.canSignal
+  progressed := a.progressed || b.progressed }
+
+private def joinPools (a b : Std.HashMap Nat Pool) : Std.HashMap Nat Pool :=
+  b.fold (fun result k p => result.insert k (joinPool (result[k]?.getD {}) p)) a
 
 private def joinConfiguration (a b : Configuration) : Configuration := { b with
   slots := joinSlots a.slots b.slots
-  actors := a.actors.zipWith (fun x y => { y with
-    loops := x.loops.zipWith (fun s t => { t with slots := joinSlots s.slots t.slots }) y.loops }) b.actors }
+  refs := MetadataReferences.join a.refs b.refs
+  actors := joinActors a.actors b.actors
+  pools := joinPools a.pools b.pools
+  tasks := joinTable a.tasks b.tasks [1, 2, 4]
+  taskResults := joinTable a.taskResults b.taskResults [0]
+  tests := a.tests.zipWith (fun s t => { t with
+    slots := joinSlots s.slots t.slots, refs := MetadataReferences.join s.refs t.refs
+    actors := joinActors s.actors t.actors
+    pools := joinPools s.pools t.pools
+    tasks := joinTable s.tasks t.tasks [1, 2, 4]
+    taskResults := joinTable s.taskResults t.taskResults [0] }) b.tests }
 
 private def putRole (s : Slots) (i : Nat) (role : Bool) : Slots := { s with
   values := s.values.set! i role
   initialized := s.initialized.set! i true
   sharedMetadata := s.sharedMetadata.set! i role }
 
-private def nextActor (c : Configuration) : Configuration :=
-  match c.startup with
-  | a :: rest => { c with current := some a, startup := rest }
-  | [] => { c with current := none }
-
 private def advanceActor (c : Configuration) (a pc : Nat) : Configuration := { c with
   current := some a
-  actors := c.actors.modify a fun t => { t with pc, status := .running } }
+  events := c.events.filter (· != a)
+  actors := c.actors.modify a fun t => { t with pc, status := .running, event := none, taskWait := false, waitDst := none } }
+
+private def nextActor (c : Configuration) : Configuration := Id.run do
+  let mut c := c
+  for a in c.startup do
+    c := { c with startup := c.startup.tail }
+    if c.actors[a]!.status == .running || c.actors[a]!.status == .ready then
+      return advanceActor c a c.actors[a]!.pc
+  return { c with current := none }
 
 private def groupReady (p : MetadataPlan.Plan) (c : Configuration) (i : Nat) : Bool :=
   let g := p.groups[i]!
   let state := c.groups[i]!
-  if g.kind == .branch then state.started > 0
+  if g.kind == .branch || g.kind == .spawn then state.started > 0
   else if g.kind == .sync then
     state.started == g.children.size &&
       g.children.all (fun (a, _) => c.actors[a]!.status == .done)
   else state.winner.isSome
+
+private def restoreTest (c : Configuration) (actor : Nat) : Option Configuration := do
+  let t ← c.tests.head?
+  if t.owner != actor then none else
+    some <| advanceActor { c with
+      slots := t.slots, refs := t.refs, actors := t.actors
+      groups := t.groups, startup := t.startup, events := t.events
+      pending := t.pending, launches := t.launches, tasks := t.tasks
+      taskResults := t.taskResults, pools := t.pools, signals := t.signals, tests := c.tests.tail } actor t.no
+
+private def mayFail : Expr → Bool
+  | .heap (.isTag _) _ => true
+  | .prim .query [.lit (.logic true)] => false
+  | .prim op _ => [.query, .index, .lt, .le, .gt, .ge, .eq, .ne,
+      .flt, .fle, .fgt, .fge].contains op
+  | _ => false
+
+private def wake (c : Configuration) (event : MetadataReferences.Refs)
+    (task : Bool := false) (payload : Option MetadataReferences.Refs := none) : List Configuration := Id.run do
+  let mut states := [(c, [])]
+  for listener in c.events do
+    let a := c.actors[listener]!
+    if a.canceling || a.status != .waiting true || a.taskWait != task then continue
+    let some waiting := a.event | continue
+    if !MetadataReferences.aliases event waiting then continue
+    let certain := MetadataReferences.definitelyAliases c.refs event waiting
+    states := states.flatMap fun (c, ready) =>
+      let refs := match a.waitDst, payload with
+        | some dst, some value => MetadataReferences.set c.refs dst value
+        | _, _ => c.refs
+      let started := ({ c with
+        refs, events := c.events.filter (· != listener)
+        actors := c.actors.modify listener fun a => { a with status := .ready, event := none } },
+        ready ++ [listener])
+      if certain then [started] else [(c, ready), started]
+  return states.map fun (c, ready) =>
+    if ready.isEmpty then c else
+      let owner := c.current.toList
+      nextActor { c with startup := ready ++ owner ++ c.startup }
+
+private def beginSignal (plan : MetadataPlan.Plan) (c : Configuration)
+    (actor : Nat) (resume : Option Nat) : Configuration :=
+  let c := advanceActor c actor plan.drain
+  { c with signals := actor :: c.signals, actors := c.actors.modify actor fun a =>
+    { a with signalReturns := resume :: a.signalReturns } }
+
+private def descendants (plan : MetadataPlan.Plan) (root : Nat) : List Nat := Id.run do
+  let mut found := [root]
+  repeat
+    let next := plan.groups.foldl (fun found g =>
+      if found.contains g.owner then (found ++ g.children.toList.map (·.1)).eraseDups else found) found
+    if next == found then return found
+    found := next
+  return found
+
+private def capturePool (plan : MetadataPlan.Plan) (c : Configuration)
+    (group child : Nat) : Configuration :=
+  let a := c.actors[child]!
+  if a.status == .idle || a.status == .done then c else
+    let waiters := (descendants plan child).map fun i => c.actors[i]!
+    let active := waiters.filter (fun a => a.status != .idle && a.status != .done)
+    let summary : Pool := {
+      owners := active.flatMap (fun a => a.task.getD [])
+      task := active.filter (·.canComplete) |>.flatMap (fun a => a.task.getD [])
+      canComplete := active.any (fun a => a.task.isSome && a.canComplete)
+      canSignal := active.any (·.canSignal)
+      events := waiters.filter (fun a => !a.taskWait) |>.flatMap (fun a => a.event.getD [])
+      tasks := waiters.filter (·.taskWait) |>.flatMap (fun a => a.event.getD []) }
+    { c with pools := c.pools.insert group (joinPool (c.pools[group]?.getD {}) summary) }
+
+private inductive PoolCause where
+  | event (refs : MetadataReferences.Refs)
+  | task (refs : MetadataReferences.Refs)
+  | cancel (refs : MetadataReferences.Refs)
+  | inside | global
+
+private def objectRefs (refs : MetadataReferences.Refs) : MetadataReferences.Refs :=
+  if refs.isEmpty then [0] else refs
+
+/-- Widen the effects of older starts without restoring stale caller slots.
+    Each transition returns to the same suspension/drain boundary; the
+    ordinary configuration fixed point includes arbitrary repetitions. -/
+private def poolTransitions (plan : MetadataPlan.Plan) (c : Configuration)
+    (cause : PoolCause) : List Configuration := Id.run do
+  let mut output := []
+  for (group, pool) in c.pools.toList do
+    let eligible := pool.progressed || match cause with
+      | .event refs => MetadataReferences.aliases pool.events refs
+      | .task refs => MetadataReferences.aliases pool.tasks refs
+      | .cancel refs => MetadataReferences.aliases pool.owners refs
+      | .inside => false
+      | .global => true
+    if !eligible then continue
+    let progressed := { c with
+      refs := MetadataReferences.widenFields c.refs
+      pools := c.pools.insert group { pool with progressed := true } }
+    if progressed != c then output := output ++ [progressed]
+    let emit (base : Configuration) (refs : MetadataReferences.Refs) (task : Bool) : List Configuration :=
+      match c.current with
+      | some actor =>
+        let paused := beginSignal plan base actor (some c.actors[actor]!.pc)
+        (wake paused refs task (some [0])).filter (fun next => next.current != some actor)
+      | none =>
+        (wake base refs task (some [0])).filterMap fun next =>
+          if next.current.isSome then some { next with signals := c.actors.size :: next.signals }
+          else none
+    if pool.canSignal then output := output ++ emit progressed [0] false
+    let cancelled := match cause with | .cancel _ => !pool.progressed | _ => false
+    if pool.canComplete && !cancelled then
+      let completed := setTask progressed pool.task 2 (some [0])
+      if completed != c then output := output ++ [completed]
+      output := output ++ emit completed pool.task true
+  return output
 
 private partial def constantSleep : Expr → Option Float
   | .lit (.float bits) => some (VFloat.ofBits bits)
@@ -174,7 +449,10 @@ private structure State where
   /-- Shared-local modes depend on complete return summaries, not an early
       real-only approximation of a recursive initializer. -/
   validateShared : Bool := false
-  validateUses : Bool := false
+  /-- Executable roles grow with return summaries. Checking them during
+      solving avoids exploring continuations of an already invalid use;
+      discovery still disables this while selecting a transfer. -/
+  validateUses : Bool := true
   discovery : Bool := false
   seen : Array Bool := #[]
   plans : Array (Option MetadataPlan.Plan) := #[]
@@ -183,6 +461,7 @@ private structure State where
   liveSeen : Std.HashMap Key Unit := {}
   debug : Bool := false
   active : Option Key := none
+  signalArguments : Option (Array (List Nat)) := none
 
 private abbrev M := StateT State (Except String)
 
@@ -484,46 +763,61 @@ private partial def arguments (fns : Array Fn) (infos : Array Info)
       roles := roles ++ [out.value.getD false]
   return (roles, out)
 
-/-- Cancel the current structured wait before its cleanup, then stop the
-    background children owned by the frame. Completed arms can still own
-    background work, so their descendants must also be visited. -/
-private partial def cancelScheduled (env : ScheduleEnv) (c : Configuration)
-    (actor : Nat) : M Configuration := do
-  let mut c := c
-  for g in env.plan.groups.toList.reverse do
-    if g.owner == actor && g.kind != .branch then
-      for (child, _) in g.children.toList.reverse do
-        c ← cancelScheduled env c child
+private partial def actorEnvironment (env : ScheduleEnv) (a : Actor) : Fn × Info :=
+  match a.context with
+  | none => (env.fn, env.info)
+  | some (g, offset) =>
+    let info := env.infos[g]?.getD {}
+    (env.fns[g]!, { info with
+      inputs := info.inputs.map (· + offset)
+      seeds := info.seeds.map (· + offset)
+      uses := info.uses.map (· + offset)
+      shared := info.shared.map (· + offset)
+      metadataWrites := info.metadataWrites.map fun (i, k) => (i + offset, k) })
+
+private partial def cancelChildren (env : ScheduleEnv) (c : Configuration) (actor : Nat) (branch : Bool)
+    (context : Option (Option (Nat × Nat)) := none) : List Pending :=
+  c.launches.reverse.flatMap fun i =>
+    let g := env.plan.groups[i]!
+    if g.owner == actor && g.kind != .spawn && (g.kind == .branch) == branch &&
+        (context.isNone || context == some g.context) then
+      g.children.toList.reverse.map (fun (child, _) => .cancel child)
+    else []
+
+private partial def queue (c : Configuration) (steps : List Pending) : Configuration :=
+  { c with current := none, pending := steps ++ c.pending }
+
+private partial def cancelSteps (env : ScheduleEnv) (c : Configuration) (actor : Nat) : Configuration :=
   let a := c.actors[actor]!
-  if a.status != .done && a.status != .idle then
-    if let some d := a.cleanups.head? then
-      let out ← expr env.fns env.infos env.fields env.fn env.info c.slots env.plan.cleanups[d]!
-      c := { c with slots := out.slots }
-  c := { c with actors := c.actors.modify actor fun a =>
-    { a with status := .done, cleanups := [], loops := [] } }
-  for g in env.plan.groups.toList.reverse do
-    if g.owner == actor && g.kind == .branch then
-      for (child, _) in g.children.toList.reverse do
-        c ← cancelScheduled env c child
-  return c
+  if a.canceling then c else
+    let cleanups := if a.status == .done || a.status == .idle then [] else
+      (a.cleanups.head?.toList.map fun d =>
+        Pending.cleanup actor a.context env.plan.cleanupEntries[d]!) ++
+      a.frames.flatMap (fun f => f.cleanups.head?.toList.map fun d =>
+        Pending.cleanup actor f.context env.plan.cleanupEntries[d]!)
+    let c := { c with
+      events := c.events.filter (· != actor)
+      actors := c.actors.modify actor fun a => { a with canceling := true, event := none } }
+    queue c (cancelChildren env c actor false ++ cleanups ++ [.stop actor] ++
+      cancelChildren env c actor true)
 
 private partial def finishGroup (env : ScheduleEnv) (c : Configuration)
     (group : Nat) : M Configuration := do
   let g := env.plan.groups[group]!
-  let mut c := c
-  if g.kind == .race then
-    for (child, _) in g.children.toList.reverse do
-      if some child != c.groups[group]!.winner then
-        c ← cancelScheduled env c child
-  c := { c with
+  let losers := if g.kind == .race then g.children.toList.reverse.filterMap fun (child, _) =>
+      if some child != c.groups[group]!.winner then some (Pending.cancel child) else none
+    else []
+  let c := { c with
     groups := c.groups.modify group fun s => { s with active := false }
     slots := putRole c.slots g.dst false }
-  return advanceActor c g.owner g.next
+  return queue c (losers ++ [.resume g.owner g.next])
 
 private partial def completeScheduled (env : ScheduleEnv) (c : Configuration)
     (actor : Nat) : M Configuration := do
-  let mut c := { c with actors := c.actors.modify actor fun a =>
-    { a with status := .done, cleanups := [], loops := [] } }
+  let mut c := { c with
+    events := c.events.filter (· != actor)
+    actors := c.actors.modify actor fun a =>
+      { a with status := .done, cleanups := [], loops := [], frames := [], event := none, signalReturns := [] } }
   let parent := env.plan.groups.findIdx? fun g => g.children.any (·.1 == actor)
   if let some i := parent then
     if c.groups[i]!.active && c.groups[i]!.winner.isNone then
@@ -543,9 +837,12 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
     sharedMetadata := pad entry.sharedMetadata, written := pad entry.written }
   let initial : Configuration := {
     slots
+    refs := { slots := Array.ofFn (n := env.plan.slots) fun i =>
+      if i.val < env.fn.arity then [i.val + 2] else [] }
     actors := (Array.replicate env.plan.actors {}).set! 0 {
       pc := env.plan.entry, status := .running }
     groups := Array.replicate env.plan.groups.size {} }
+  modify fun st => { st with seen := st.seen ++ Array.replicate extra false }
   let mut work := #[initial]
   let mut cursor := 0
   let mut known : Std.HashMap (List Nat) Configuration := {}
@@ -553,6 +850,8 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
   let mut finalSlots : Option Slots := none
   let mut yielded := false
   while cursor < work.size do
+    if (← get).debug && cursor % 10000 == 0 then
+      dbg_trace s!"metadata schedule {env.fn.name}: visited={cursor}, queued={work.size}, states={known.size}"
     let incoming := work[cursor]!
     cursor := cursor + 1
     let key := configurationKey incoming
@@ -562,39 +861,155 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
     if (known[key]?).any (· == c) then continue
     known := known.insert key c
     let some actor := c.current | do
-      -- Only a global wait admits cancellation or a different runnable
-      -- child. Startup prefixes and nonwaiting loops remain atomic.
+      if let step :: rest := c.pending then
+        let c := { c with pending := rest }
+        match step with
+        | .cancel a => work := work.push (cancelSteps env c a)
+        | .cleanup a context pc =>
+          if c.actors[a]!.status == .done then continue
+          let c := { c with actors := c.actors.modify a fun a =>
+            { a with context, cleanups := [], loops := [] } }
+          work := work.push (advanceActor c a pc)
+        | .stop a =>
+          let c := match c.actors[a]!.task with
+            | some task => if !(taskOptions c task).contains 2 then setTask c task 4 else c
+            | none => c
+          work := work.push { c with
+            signals := c.signals.filter (· != a)
+            events := c.events.filter (· != a)
+            actors := c.actors.modify a fun a =>
+              { a with status := .done, cleanups := [], loops := [], frames := [], event := none, signalReturns := [] } }
+        | .resume a pc =>
+          if !(c.actors[a]!.canceling && c.actors[a]!.status == .done) then
+            work := work.push (advanceActor c a pc)
+        | .returnScope a fn offset dropFrames pc =>
+          if c.actors[a]!.canceling && c.actors[a]!.status == .done then continue
+          let c := { c with actors := c.actors.modify a fun a =>
+            { a with
+              context := some (fn, offset), cleanups := [], loops := []
+              frames := a.frames.drop dropFrames, signalReturns := [] } }
+          work := work.push (advanceActor c a pc)
+        | .returnCall a pc =>
+          let task := c.actors[a]!
+          if let frame :: rest := task.frames then
+            let c := { c with actors := c.actors.modify a fun t =>
+              { t with
+                context := frame.context, cleanups := frame.cleanups
+                loops := frame.loops, frames := rest } }
+            work := work.push (advanceActor c a pc)
+        | .result role =>
+          result := joinRole result (some role)
+          finalSlots := joinOpt finalSlots (some c.slots)
+        | .discard => pure ()
+        continue
+      if !c.startup.isEmpty then
+        work := work.push (nextActor c)
+        continue
+      if c.signals.head? == some c.actors.size then
+        work := work.push { c with signals := c.signals.tail }
+        continue
+      for transition in poolTransitions env.plan c .global do work := work.push transition
       if c.actors.any (fun a => match a.status with
           | .waiting _ | .joining _ => true | _ => false) then
         yielded := true
-        discard <| cancelScheduled env c 0
+        work := work.push (queue c [.cancel 0, .discard])
         for i in [:c.actors.size] do
-          if c.actors[i]!.status == .waiting true then
+          let a := c.actors[i]!
+          let resumableTask := !a.taskWait || a.event.any (fun task =>
+            (taskOptions c task).any (fun state => state == 1 || state == 2))
+          if a.status == .waiting true && !a.canceling && resumableTask then
             work := work.push (advanceActor c i c.actors[i]!.pc)
       continue
     let a := c.actors[actor]!
-    match env.plan.nodes[a.pc]! with
+    let lexical := env.plan.contexts[a.pc]?.getD a.context
+    let (fn, info) := actorEnvironment env { a with context := lexical }
+    let node := env.plan.nodes[a.pc]!
+    let boundary := match node with
+      | .call g args _ _ _ =>
+        let name := env.fns[g]!.name
+        let receiver := objectRefs (args.head?.map (fun i => c.refs.slots[i]!) |>.getD [0])
+        if name == "$signalAll" || MetadataPlan.isEventSignal env.fns g then
+          some (PoolCause.event receiver)
+        else if name == "$cancelMark" then some (.cancel receiver)
+        else if !c.signals.isEmpty then some .inside else none
+      | .finishTask _ => some (.task (a.task.getD [0]))
+      | .drained => none
+      | _ => if !c.signals.isEmpty then some .inside else none
+    if let some cause := boundary then
+      for transition in poolTransitions env.plan c cause do work := work.push transition
+    match node with
     | .jump pc => work := work.push (advanceActor c actor pc)
     | .atom e dst next permission =>
       let info := match permission with
-        | none => env.info
-        | some p => { env.info with metadataWrites := p :: env.info.metadataWrites }
-      let out ← expr env.fns env.infos env.fields env.fn info c.slots e
+        | none => info
+        | some p => { info with metadataWrites := p :: info.metadataWrites }
+      let out ← expr env.fns env.infos env.fields fn info c.slots e
       if let some role := out.value then
-        work := work.push (advanceActor { c with slots := putRole out.slots dst role } actor next)
+        let (refs, memory) := MetadataReferences.eval env.fns a.pc c.refs e
+        let changed := { c with
+          slots := putRole out.slots dst role
+          refs := MetadataReferences.set memory dst refs }
+        work := work.push (advanceActor changed actor next)
+      if out.value.isNone || mayFail e then
+        if let some restored := restoreTest c actor then work := work.push restored
     | .test condition yes no =>
-      let out ← expr env.fns env.infos env.fields env.fn env.info c.slots condition
+      let out ← expr env.fns env.infos env.fields fn info c.slots condition
       if out.value.isSome then
         work := work.push (advanceActor { c with slots := out.slots } actor yes)
       work := work.push (advanceActor c actor no)
+    | .beginTest no next =>
+      let snapshot : Snapshot := {
+        owner := actor, no, slots := c.slots, refs := c.refs
+        actors := c.actors, groups := c.groups, startup := c.startup
+        events := c.events, pending := c.pending, launches := c.launches
+        tasks := c.tasks, taskResults := c.taskResults, pools := c.pools, signals := c.signals }
+      work := work.push (advanceActor { c with tests := snapshot :: c.tests } actor next)
+    | .passTest next =>
+      work := work.push (advanceActor { c with tests := c.tests.tail } actor next)
+    | .enterCall g offset args next =>
+      let (out, _, _) ← invoke env.fns env.infos env.fields fn info c.slots g (args.map Expr.local)
+      if out.value.isNone then continue
+      let callee := env.fns[g]!
+      let ci := env.infos[g]?.getD {}
+      let mut slots := out.slots
+      let mut refs := c.refs
+      for i in [:callee.nslots] do
+        slots := { slots with
+          values := slots.values.set! (offset + i) false
+          initialized := slots.initialized.set! (offset + i) false
+          sharedMetadata := slots.sharedMetadata.set! (offset + i) false }
+        refs := MetadataReferences.set refs (offset + i) []
+      for (source, i) in args.zipIdx do
+        slots := putRole slots (offset + i) (c.slots.values[source]! || ci.inputs.contains i)
+        refs := MetadataReferences.set refs (offset + i) (c.refs.slots[source]!)
+      let frame : CallFrame := { context := a.context, cleanups := a.cleanups, loops := a.loops }
+      let c := { c with slots, refs, actors := c.actors.modify actor fun a =>
+        { a with context := some (g, offset), cleanups := [], loops := [], frames := frame :: a.frames } }
+      work := work.push (advanceActor c actor next)
+    | .leaveCall dst next =>
+      let metadata := a.context.any (fun (g, _) => (env.infos[g]?.getD {}).metadataResult)
+      let c := if metadata then { c with slots := putRole c.slots dst true } else c
+      work := work.push (queue c (cancelChildren env c actor false (some a.context) ++
+        cancelChildren env c actor true (some a.context) ++ [.returnCall actor next]))
+    | .cleanupDone =>
+      work := work.push { c with current := none }
+    | .drained =>
+      if let resume :: returns := a.signalReturns then
+        let c := { c with signals := c.signals.tail, actors := c.actors.modify actor fun a =>
+          { a with signalReturns := returns } }
+        match resume with
+        | some next => work := work.push (advanceActor c actor next)
+        | none => work := work.push (← completeScheduled env c actor)
     | .choose yes no =>
       work := work.push (advanceActor c actor yes)
       work := work.push (advanceActor c actor no)
     | .accumulate dst value next =>
       let role := c.slots.values[dst]!.or c.slots.values[value]!
-      work := work.push (advanceActor { c with slots := putRole c.slots dst role } actor next)
+      work := work.push (advanceActor { c with
+        slots := putRole c.slots dst role
+        refs := MetadataReferences.accumulate c.refs a.pc dst value } actor next)
     | .call g args original dst next =>
-      let (out, role, mayYield) ← invoke env.fns env.infos env.fields env.fn env.info
+      let (out, role, mayYield) ← invoke env.fns env.infos env.fields fn info
         c.slots g (args.map Expr.local)
       if out.value.isNone then continue
       let name := (env.fns[g]?.map (·.name)).getD ""
@@ -602,19 +1017,82 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
       let mayYield := if name == "$Sleep" then
           duration.map (fun n => decide (n > 0.0)) |>.getD true
         else mayYield
-      -- An ordinary event has no buffered value: each Await registers a
-      -- new listener before waiting. StickyAwait may still return at once.
       let mustYield := name == "$EvAwait" ||
         (name == "$Sleep" && duration.any (fun n => decide (n > 0.0)))
       let slots := match role with
         | some role => putRole out.slots dst role
         | none => out.slots
-      if !mustYield && role.isSome then
-        work := work.push (advanceActor { c with slots } actor next)
-      if mayYield then
-        let waiting := { c with slots, actors := c.actors.modify actor fun a =>
-          { a with pc := next, status := .waiting role.isSome } }
-        work := work.push (nextActor waiting)
+      let (references, memory) := MetadataReferences.call env.fns a.pc c.refs g
+        (args.map fun i => c.refs.slots[i]!)
+      let c := { c with slots, refs := MetadataReferences.set memory dst references }
+      let signaling := name == "$signalAll" ||
+        (MetadataPlan.isEventSignal env.fns g && env.plan.signalFns[g]?.getD false)
+      if name == "$Await" then
+        let task := objectRefs (args.head?.map (fun i => c.refs.slots[i]!) |>.getD [0])
+        let options := taskOptions c task
+        if options.contains 2 && role.isSome then
+          let value := task.foldl (fun result task => unionRefs result (c.taskResults[task]?.getD [0])) []
+          let c := { c with refs := MetadataReferences.set c.refs dst value }
+          work := work.push (advanceActor c actor next)
+        if options.contains 1 || options.contains 4 then
+          let waiting := { c with
+            events := c.events ++ [actor]
+            actors := c.actors.modify actor fun a =>
+              { a with
+                pc := next, status := .waiting (options.contains 1 && role.isSome)
+                event := some task, taskWait := true, waitDst := some dst } }
+          work := work.push (nextActor waiting)
+      else if name == "$cancelMark" then
+        let task := objectRefs (args.head?.map (fun i => c.refs.slots[i]!) |>.getD [0])
+        let options := taskOptions c task
+        if options.contains 2 then work := work.push (advanceActor (setTask c task 2) actor next)
+        if options.contains 1 || options.contains 4 then
+          let mut choices := [([] : List Pending)]
+          for (taskActor, i) in c.actors.toList.zipIdx do
+            let some identity := taskActor.task | continue
+            if taskActor.status == .done || !MetadataReferences.aliases task identity then continue
+            let certain := MetadataReferences.definitelyAliases c.refs task identity
+            choices := choices.flatMap fun stops =>
+              if certain then [stops ++ [.cancel i]] else [stops, stops ++ [.cancel i]]
+          for stops in choices do
+            work := work.push (queue (setTask c task 4) (stops ++ [.resume actor next]))
+      else if signaling then
+        let event := objectRefs (args.head?.map (fun i => c.refs.slots[i]!) |>.getD [0])
+        let payload := args[1]?.map (fun i => c.refs.slots[i]!)
+        for awake in wake (beginSignal env.plan c actor (some next)) event false payload do work := work.push awake
+      else if env.plan.signalFns[g]?.getD false then
+        -- A recursive edge uses a finite may-signal summary instead of
+        -- growing an unbounded stack of cloned frames. Repeat the edge
+        -- nondeterministically to include repeated signals and re-awaits.
+        let signatures ← match (← get).signalArguments with
+          | some signatures => pure signatures
+          | none => do
+            let signatures := MetadataReferences.signalArguments env.fns
+            modify fun st => { st with signalArguments := some signatures }
+            pure signatures
+        let roots := (signatures[g]?.getD []).flatMap fun i =>
+          args[i]?.map (fun slot => c.refs.slots[slot]!) |>.getD []
+        let event := MetadataReferences.reachable c.refs roots
+        if role.isSome then work := work.push (advanceActor c actor next)
+        for awake in wake (beginSignal env.plan c actor (some a.pc)) event do
+          if awake.current != some actor then work := work.push awake
+        if mayYield then
+          work := work.push (nextActor { c with actors := c.actors.modify actor fun a =>
+            { a with pc := a.pc, status := .waiting role.isSome } })
+      else
+        if !mustYield && role.isSome then
+          work := work.push (advanceActor c actor next)
+        if mayYield then
+          let event := if name == "$EvAwait" || name == "$StickyAwait" then
+              some (objectRefs (args.head?.map (fun i => c.refs.slots[i]!) |>.getD [0]))
+            else none
+          let waiting := { c with
+            events := if event.isSome then c.events ++ [actor] else c.events
+            actors := c.actors.modify actor fun a =>
+              { a with pc := next, status := .waiting role.isSome, event, taskWait := false, waitDst := some dst } }
+          work := work.push (nextActor waiting)
+      if env.fns[g]!.decides then
+        if let some restored := restoreTest c actor then work := work.push restored
     | .pushCleanup d next =>
       let c := { c with actors := c.actors.modify actor fun a =>
         { a with cleanups := d :: a.cleanups } }
@@ -631,7 +1109,7 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
       let entry := (a.loops.find? (·.id == scope)).getD {
         id := scope, slots := c.slots, cleanups := a.cleanups }
       let c := { c with
-        slots := freshLocals env.info.shared entry.slots c.slots
+        slots := freshLocals info.shared entry.slots c.slots
         actors := c.actors.modify actor fun a => { a with cleanups := entry.cleanups } }
       work := work.push (advanceActor c actor next)
     | .leaveLoop scope next =>
@@ -641,10 +1119,26 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
       work := work.push (advanceActor c actor next)
     | .fork group =>
       let g := env.plan.groups[group]!
+      let mut c := c
+      if g.kind == .spawn then
+        for (child, _) in g.children do c := capturePool env.plan c group child
+      let mut canComplete := false
+      let mut canSignal := false
+      if let some target := g.target then
+        let (_, role, _) ← invoke env.fns env.infos env.fields fn info c.slots target
+          (g.arguments.map Expr.local)
+        canComplete := role.isSome
+        canSignal := env.plan.signalFns[target]?.getD false
       let mut actors := c.actors
-      for (child, pc) in g.children do actors := actors.set! child { pc }
-      let c := { c with actors, groups := c.groups.set! group { active := true } }
-      work := work.push (advanceActor c actor g.advance)
+      for (child, pc) in g.children do
+        actors := actors.set! child {
+          pc, context := a.context, canComplete, canSignal
+          task := g.task.map fun slot => c.refs.slots[slot]! }
+      let started := { c with
+        actors, groups := c.groups.set! group { active := true }
+        launches := c.launches.filter (· != group) ++ [group] }
+      let started := g.task.map (fun slot => setTask started (started.refs.slots[slot]!) 1) |>.getD started
+      work := work.push (advanceActor started actor g.advance)
     | .advance group =>
       let g := env.plan.groups[group]!
       let state := c.groups[group]!
@@ -660,23 +1154,66 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
         let c := { c with actors := c.actors.modify actor fun a =>
           { a with status := .joining group } }
         work := work.push (nextActor c)
+    | .spawnCheck g args next =>
+      let (_, role, _) ← invoke env.fns env.infos env.fields fn info c.slots g (args.map Expr.local)
+      if (← get).validateUses && role.getD false then
+        refuse fn info "enter a spawned task's result field containing executable data"
+      work := work.push (advanceActor c actor next)
+    | .finishTask value =>
+      if (← get).validateUses && c.slots.values[value]! then
+        refuse fn info "enter a spawned task's result field containing executable data"
+      let task := a.task.getD [0]
+      let c := setTask c task 2 (some (c.refs.slots[value]!))
+      for awake in wake (beginSignal env.plan c actor none) task true
+          (some (c.refs.slots[value]!)) do work := work.push awake
     | .finish value =>
       if actor == 0 then
         let role := c.slots.values[value]!
         let c := { c with actors := c.actors.modify actor fun a =>
           { a with status := .done, cleanups := [] } }
-        let c ← cancelScheduled env c 0
-        result := joinRole result (some role)
-        finalSlots := joinOpt finalSlots (some c.slots)
+        work := work.push (queue c [.cancel 0, .result role])
       else
         work := work.push (← completeScheduled env c actor)
+    | .functionReturn owner value dst next target offset =>
+      let caller := c.actors[owner]!
+      let targetContext := some (target, offset)
+      let mut context := caller.context
+      let mut cleanups := caller.cleanups
+      let mut frames := caller.frames
+      let mut dropFrames := 0
+      let mut steps := []
+      while context != targetContext && !frames.isEmpty do
+        let cleanup := cleanups.head?.toList.map fun d =>
+          Pending.cleanup owner context env.plan.cleanupEntries[d]!
+        steps := steps ++ cancelChildren env c owner false (some context) ++ cleanup ++
+          cancelChildren env c owner true (some context)
+        let frame := frames.head!
+        context := frame.context
+        cleanups := frame.cleanups
+        frames := frames.tail
+        dropFrames := dropFrames + 1
+      let cleanup := if owner == actor then [] else cleanups.head?.toList.map fun d =>
+        Pending.cleanup owner targetContext env.plan.cleanupEntries[d]!
+      steps := steps ++ cancelChildren env c owner false (some targetContext) ++ cleanup ++
+        cancelChildren env c owner true (some targetContext)
+      let c := { c with
+        slots := putRole c.slots dst c.slots.values[value]!
+        refs := MetadataReferences.set c.refs dst c.refs.slots[value]!
+        events := c.events.filter (fun a => a != owner && a != actor)
+        signals := c.signals.filter (fun a => a != owner && a != actor)
+        startup := c.startup.filter (fun a => a != owner && a != actor)
+        actors := c.actors.modify owner fun a =>
+          { a with status := .running, event := none, signalReturns := [] } }
+      let c := if owner == actor then { c with actors := c.actors.modify actor fun a =>
+          { a with cleanups := [] } }
+        else { c with actors := c.actors.modify actor fun a =>
+            { a with status := .done, cleanups := [], loops := [], frames := [], signalReturns := [] } }
+      work := work.push (queue c (steps ++ [.returnScope owner target offset dropFrames next]))
     | .ret value =>
       let role := c.slots.values[value]!
       let c := { c with actors := c.actors.modify actor fun a =>
         { a with status := .done, cleanups := [] } }
-      let c ← cancelScheduled env c 0
-      result := joinRole result (some role)
-      finalSlots := joinOpt finalSlots (some c.slots)
+      work := work.push (queue c [.cancel 0, .result role])
   return { slots := finalSlots.getD slots, value := result, yielded }
 end
 
@@ -773,9 +1310,12 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
         let plan ← match cached with
           | some plan => pure plan
           | none => do
-            let plan := MetadataPlan.build fns info.metadataWrites fn.nslots body
+            let bodies := fns.mapIdx fun j f => { f with body := (infos[j]?.getD {}).body.getD f.body }
+            let plan := MetadataPlan.build bodies info.metadataWrites fn.nslots body (some i)
+              (infos.map (·.metadataWrites))
             modify fun st => { st with plans := st.plans.set! i (some plan) }
             pure plan
+        if debug then dbg_trace s!"metadata selected {fn.name}: slots={plan.slots}, actors={plan.actors}"
         return ← schedule { fns, infos, fields, fn, info, plan } slots
       if saved.validateUses then
         return ← expr fns infos fields fn info slots body
