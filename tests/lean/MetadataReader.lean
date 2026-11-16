@@ -4,8 +4,8 @@ import OpenVerse.Core.Encode
 
 open OpenVerse OpenVerse.Front
 
-private def waitingFunctionSource (kind : String) : String :=
-  let action := "Stored()"
+private def waitingFunctionSource (kind : String) (direct : Bool := false) : String :=
+  let action := if direct then "F()" else "Stored()"
   let initial := if kind == "rolled-back-write" then "F" else "Dummy"
   let statements := if kind == "overwrite-before-wait" then
       "        set Stored=F\n        Sleep(0.001)\n"
@@ -26,7 +26,10 @@ private def waitingFunctionSource (kind : String) : String :=
 private def waitingFunctionCases : List (String × String × Bool) :=
   [ ("waiting-function-overwrite-before-wait", waitingFunctionSource "overwrite-before-wait", true),
     ("waiting-function-overwrite-after-wait", waitingFunctionSource "overwrite-after-wait", true),
-    ("waiting-function-rolled-back-write", waitingFunctionSource "rolled-back-write", false)]
+    ("waiting-function-rolled-back-write", waitingFunctionSource "rolled-back-write", false),
+    ("waiting-function-direct-overwrite-before-wait", waitingFunctionSource "overwrite-before-wait" true, true),
+    ("waiting-function-direct-overwrite-after-wait", waitingFunctionSource "overwrite-after-wait" true, true),
+    ("waiting-function-direct-rolled-back-write", waitingFunctionSource "rolled-back-write" true, false)]
 
 private def cases : List (String × String × Bool) := [
   ("recursive producer real overwrite", "One()<computes>:int=1\nTwo()<computes>:int=2\nPick(C:logic)<computes>:type{_()<computes>:int}=if(C?)then One else Two\nDigit(N:int)<computes>:int=if(N>0)then (Digit(N-1)|N)else 0\nCaller(E:event(int),F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    branch:\n        Values:=for(A:=(Digit(1)|Digit(1)),B:=(Digit(1)|Digit(1))):\n            E.Await()\n            Stored()\n    set Stored=F\n    E.Signal(0)\n    0\nMain():void={}\n", true),
