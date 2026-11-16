@@ -31,7 +31,9 @@ private partial def stableRefinementReads (ctx : Ctx) (e : SExpr) : Bool :=
 private def stableRefinementCollector (ctx : Ctx) (clauses : List SExpr) (body : SExpr) : Bool :=
   -- Local declarations and implicit members can shadow a class identifier;
   -- only the unshadowed checked class-cast application is a stable read.
-  ctx.selfClass.isNone &&
+  -- Accessor dispatch can turn even a name or index into an effectful call;
+  -- keep full recovery whenever any accessor is available.
+  ctx.types.accessors.isEmpty && ctx.selfClass.isNone &&
     !(Choice.localDecls (.block body.pos (clauses ++ [body]))).any (fun (name, _) =>
       ctx.types.classes.contains name) &&
     clauses.all (stableRefinementReads ctx) && stableRefinementReads ctx body
