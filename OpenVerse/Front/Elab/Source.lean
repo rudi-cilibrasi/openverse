@@ -297,6 +297,7 @@ structure Source where
   overloadSites : List (Pos × String)
   copiedOverloadFns : List (String × Choice.MFn) := []
   copiedOverloadClashes : List (String × List String) := []
+  copiedMethods : Choice.CopiedMethods := {}
   /-- The consumers in recursive groups' code whose names' types an
       elaboration is to note (#283). -/
   nestedSites : List String
@@ -332,7 +333,7 @@ def inlineSource (requests : Requests) (admitted : Admitted) :
   -- contracts before inlining can replace a declaration by a checking stub.
   EffectPolicy.check producerTops
   let written := producerTops ++ admitted.resolved
-  let ⟨resolved, lazy, familySites, overloadSites, nestedSites, fieldSites, copiedOverloadNames, copiedOverloadClashes⟩ ← Choice.inlineMulti written reserved
+  let ⟨resolved, lazy, familySites, overloadSites, nestedSites, fieldSites, copiedOverloadNames, copiedOverloadClashes, copiedMethods⟩ ← Choice.inlineMulti written reserved
     requests.eager requests.families requests.lazy requests.overloads requests.nested
     requests.fieldOrders requests.instanceCalls
   let resolved := resolved.map (STop.mapAll id Choice.restoreProducerDefaultContexts)
@@ -424,11 +425,54 @@ def inlineSource (requests : Requests) (admitted : Admitted) :
       let original := (n.drop "$copiedOverload:".length).toString
       some (original, (⟨p, ps, ts, fx, ret, body⟩ : Choice.MFn))
     | _ => none
+  -- Family parameter types cross the same function-value/witness transforms
+  -- as the implementation templates. Raw source function types must not be
+  -- reintroduced by late dispatch specialization.
+  let methodSignatures ← if copiedMethods.families.isEmpty then pure [] else
+    (MethodOverloads.of (allTops00 ++ admitted.rawEntry)).apply allTops00
+  let families ← copiedMethods.families.mapM fun (slot, family) => do
+    let signature := methodSignatures.findSome? fun
+      | .classDef _ owner _ rootTps _ _ _ _ declarations =>
+        if owner != family.root then none else
+          declarations.findSome? fun
+            | .fn _ name parameters methodTps _ ret _ =>
+              if name == slot then some (parameters, methodTps, ret, rootTps) else none
+            | _ => none
+      | _ => none
+    match signature with
+    | some (parameters, methodTps, ret, rootTps) =>
+      pure (slot, { family with
+        params := parameters
+        methodTps := methodTps
+        ret := some ret
+        rootTps := rootTps })
+    | none => throw s!"internal: missing copied method signature {family.root}.{slot}"
+  let classes := methodSignatures.filterMap fun
+    | .classDef _ name _ tps _ parents _ _ _ => some (name, (parents, tps))
+    | _ => none
+  -- The same parent substitution as methodFns, after source type lowering.
+  let rec view (fuel : Nat) (owner root : String) : Option (List (String × STy)) :=
+    if owner == root then some (((classes.lookup root).map fun (_, tps) =>
+      tps.map fun tp => (tp.name, STy.name tp.name)).getD [])
+    else match fuel with
+      | 0 => none
+      | next + 1 => ((classes.lookup owner).map (·.1)).getD [] |>.findSome? fun parent =>
+          let (name, args) : String × List STy := match parent with
+            | .app name args => (name, args)
+            | .name name => (name, [])
+            | _ => ("", [])
+          (view next name root).map fun substitutions =>
+            let parameters := ((classes.lookup name).map fun (_, tps) => tps.map (·.name)).getD []
+            substitutions.map fun (parameter, ty) => (parameter, ty.substNames (parameters.zip args))
+  let copiedMethods := { copiedMethods with
+    families := families
+    views := copiedMethods.views.map fun ((owner, root), _) =>
+      ((owner, root), (view (classes.length + 1) owner root).getD []) }
   let allTops00 := allTops00.filter fun | .fn _ n .. => !templateName n | _ => true
   let entryTop := resolved.drop (resolved.length - admitted.rawEntry.length)
   return { tops := allTops00, entry := entryTop, constructionFx, access := admitted.access,
            ignoredArms := admitted.ignoredArms, forFilters := admitted.forFilters, familySites,
-           overloadSites, nestedSites, fieldSites, copiedOverloadFns, copiedOverloadClashes }
+           overloadSites, nestedSites, fieldSites, copiedOverloadFns, copiedOverloadClashes, copiedMethods }
 
 
 /-- A program's definitions complete (`argsAndMethodOverloads`), as the class

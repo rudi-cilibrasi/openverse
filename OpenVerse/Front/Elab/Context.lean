@@ -1725,20 +1725,29 @@ def Ctx.failabilityKnown (ctx : Ctx) : EM Bool := do
     `R` tells, one of `TyEnv.familySites`: the root of `M` above that class
     noted, none (`""`) for a receiver of another type. -/
 def Ctx.noteFamily (ctx : Ctx) (p : Pos) (recv : Ty) (m : String) : EM Unit := do
-  if ctx.types.familySites.contains (p, m) then
+  -- Scoped overload picks also need their receiver roots. An overloaded
+  -- written name has no root until its actual method slot is selected.
+  if ctx.types.familySites.contains (p, m) ||
+      ctx.types.copiedMethods.families.any (fun (slot, _) => slot == m) then
     let root := match recv with
       | .struct c _ => ((ctx.rootsOf c m).head?).getD ""
       | _ => ""
-    noteNeeds { families := [(p, root)] }
+    if (ctx.types.familySites.contains (p, m) || !root.isEmpty) &&
+        !ctx.types.requests.families.contains (p, root) then
+      noteNeeds { families := [(p, root)] }
 
 /-- (#283) A call at `p` of overloaded function `f` whose overload decides
     whether it has several values, one of `TyEnv.overloadSites`: the
     overload `o` it takes noted. -/
 def Ctx.noteOverload (ctx : Ctx) (p : Pos) (f o : String) : EM Unit := do
-  if ctx.types.overloadSites.contains (p, f) then noteNeeds { overloads := [(p, o)] }
+  if !ctx.copiedOverloadScope.isEmpty && ctx.types.copiedMethods.names.contains f &&
+      ctx.copiedOverloadSites.contains (p, f) then
+    if !ctx.types.requests.copiedOverloads.contains (ctx.copiedOverloadScope, p, o) then
+      noteNeeds { copiedOverloads := [(ctx.copiedOverloadScope, p, o)] }
+  else if ctx.types.overloadSites.contains (p, f) then
+    noteNeeds { overloads := [(p, o)] }
 
-/-- Only top-level calls participate in copied-suffix specialization; method
-    overloads retain their existing discovery and refusal boundary. -/
+/-- Top-level overload selection shares the typed copy request channel. -/
 def Ctx.noteFunctionOverload (ctx : Ctx) (p : Pos) (f o : String) : EM Unit := do
   let eligible := ctx.types.copiedOverloadFns.any fun (n, _) => n.startsWith (f ++ "$mv")
   if !ctx.copiedOverloadScope.isEmpty && eligible && ctx.copiedOverloadSites.contains (p, f) then
@@ -1748,10 +1757,11 @@ def Ctx.noteFunctionOverload (ctx : Ctx) (p : Pos) (f o : String) : EM Unit := d
       (ctx.trial == some .continuation && eligible && !ctx.types.requests.overloads.contains (p, o)) then
     noteNeeds { overloads := [(p, o)] }
 
-/-- Whether a copied suffix contains a top-level multivalue overload call. -/
+/-- Whether a copied suffix needs typed multivalue overload selection. -/
 def Ctx.hasCopiedOverloads (ctx : Ctx) (code : List SExpr) : Bool :=
-  (code.flatMap Choice.callUses).any fun (_, f) =>
-    ctx.types.copiedOverloadFns.any fun (n, _) => n.startsWith (f ++ "$mv")
+  (code.flatMap Choice.copiedOverloadUses).any fun (_, f) =>
+    ctx.types.copiedMethods.names.contains f ||
+      ctx.types.copiedOverloadFns.any fun (n, _) => n.startsWith (f ++ "$mv")
 
 /-- Distinguish nested copies and enclosing source functions without changing diagnostics. -/
 def Ctx.copiedOverloadKey (ctx : Ctx) (p : Pos) (name : String) (alt : Nat) : String :=
@@ -1769,7 +1779,10 @@ def Ctx.specializeCopiedOverloads (ctx : Ctx) (scope : String) (code : List SExp
       throw s!"{p.show}: one copied choice suffix selects different overloads: not supported yet (#283)"
   let fns := ctx.types.copiedOverloadFns
   let names := (fns.map fun (n, _) => (n.splitOn "$mv").headD n).eraseDups
-  let selected := code.map (Choice.pickOverloads names picks (fun n => (fns.lookup n).isSome))
+  let selected := code.map fun expression =>
+    let expression := ctx.types.copiedMethods.rewrite ctx.selfClass picks
+      ctx.types.requests.families expression
+    Choice.pickOverloads names picks (fun n => (fns.lookup n).isSome) expression
   let (expanded, _) ← (selected.mapM fun e =>
     Choice.inlineCalls fns e (clash := ctx.types.copiedOverloadClashes) (sitePrefix := s!"copy{scope.hash}_")).run 0
   return expanded
@@ -2791,7 +2804,12 @@ def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty := do
     whose value is a result packet, the tuple of the names they bind: an
     alternative of the choice of copies of the clauses after a choice, one
     for each of its alternatives (`elabOneGo`). -/
-def isFirstPacket : SExpr → Bool
+def firstPacketCode : SExpr → SExpr
+  | .app _ (.ident _ "$copiedOverloads") [.str _ [.text _], packet@(.app _ (.ident _ "$firstP") [_] false)] false => packet
+  | packet => packet
+
+/-- A typed overload-discovery scope preserves its result packet's shape. -/
+def isFirstPacket (expression : SExpr) : Bool := match firstPacketCode expression with
   | .app _ (.ident _ "$firstP") [_] false => true
   | _ => false
 
@@ -2873,7 +2891,7 @@ partial def choiceResultType (env : TyEnv) (types : List Ty) : Option Ty := do
 def packetJoin (p : Pos) (packet : SExpr) (types : List Ty) : EM Ty := do
   let env := (← get).env
   if let some t := choiceResultType env types then return t
-  let names := match packet with
+  let names := match firstPacketCode packet with
     | .app _ _ [.block _ items] _ => match items.getLast? with
       | some (.tuple _ es) => es.map fun | SExpr.ident _ n => n | _ => "$"
       | _ => []

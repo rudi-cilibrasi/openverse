@@ -523,7 +523,7 @@ partial def elabExprMarkersWith
       if before == after then [after] else
         Choice.prepare [after] (fun n => choiceValues ctx n || bound.contains n) (choiceField ctx)
           (site := s!"copy{scope.hash}_{i}") (fieldOrder := choiceOrder ctx) (keepBranches := choiceHasCast ctx)
-    elabE { ctx with copiedOverloadScope := scope, copiedOverloadSites := prepared.flatMap Choice.callUses }
+    elabE { ctx with copiedOverloadScope := scope, copiedOverloadSites := prepared.flatMap Choice.copiedOverloadUses }
       (.app q (.ident q "$firstP") [.block bp prepared] false) exp
   | .app p (.ident _ "$firstP") [.block _ items] false =>
     -- (#246) `first{…}` of clauses that are lifted already (a consumer's,
