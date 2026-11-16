@@ -1433,7 +1433,7 @@ def Ctx.methodValueNeedsType (ctx : Ctx) (c m : String) : Bool :=
     slots, effects and helper requests never enter the actual call. -/
 partial def argNeedsTypeWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (a : SExpr) : EM Bool := do
   if ctx.argNeedsType a then return true
-  let probe : EM Bool := do
+  let probe (preserveRefinement : Bool) : EM Bool := do
     if ctx.argumentTypeProbe then return false
     let saved ← get
     let probeCtx := { ctx with
@@ -1446,11 +1446,14 @@ partial def argNeedsTypeWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx
       if r.ty.hasNever then return true
       modify fun st => { st with natTys := probed.natTys, methodReceivers := probed.methodReceivers }
       return false
-    | .error _ => return true
+    | .error error =>
+      -- A cast refusal needs the normal clause-lifting retry, rather than
+      -- an unbound outer instance that would hide that refusal.
+      return !preserveRefinement || (Refine.castRefusal? error).isNone
   let compound (es : List SExpr) : EM Bool := do
     if !(← es.anyM (argNeedsTypeWith elabE ctx)) then return false
     -- Keep compounds that already infer naturally in the first pass.
-    probe
+    probe false
   match a with
   | .app _ (.ident _ "$callSingleton") [e] false => argNeedsTypeWith elabE ctx e
   | .app _ (.ident _ name) _ _ =>
@@ -1461,7 +1464,7 @@ partial def argNeedsTypeWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx
         !(ctx.selfClass.any fun c => (ctx.types.fields c).any (·.1 == name) ||
           ctx.hasMethod c name ||
           ((ctx.types.methodOverloads.lookup name).map (·.any (ctx.hasMethod c ·))).getD false) &&
-        (ctx.sig? name).any (fun s => !s.isConst && !s.tparams.isEmpty) then probe
+        (ctx.sig? name).any (fun s => !s.isConst && !s.tparams.isEmpty) then probe true
     else return false
   | .tuple _ es | .arrayLit _ es => compound es
   | .optionLit _ e => compound [e]
