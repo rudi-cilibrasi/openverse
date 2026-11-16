@@ -1380,7 +1380,9 @@ circle := class(shape, labelled):
   from a mutable field. A later write changes the field, not the saved
   object used by the cast. Subsequent choices and generators preserve that
   selected world without rereading the owner. Conditions keep their normal
-  rollback and first-success behavior; consumer bodies, cleanup, `return`
+  rollback and first-success behavior, including a range or array search
+  that accepts no rows. A suspending consumer stays outside its filter;
+  consumer bodies, cleanup, `return`
   and `break` keep their original scopes. The result still needs a type
   the caller can name: this does not expose an opened type outside its
   refinement.

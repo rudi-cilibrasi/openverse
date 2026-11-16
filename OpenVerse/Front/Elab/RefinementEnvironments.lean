@@ -276,7 +276,7 @@ def refinementOwnedLocals (ctx : Ctx) (p : Pos) (clauses : List SExpr)
   for clause in clauses do
     match clause with
     | .decl q name _ true value =>
-      if let some (_, privateName, _) := locals.find? (fun local => local.1 == name) then
+      if let some (_, privateName, _) := locals.find? (fun binding => binding.1 == name) then
         let value ← refinementRenameValues renames value
         rewritten := rewritten ++ [.decl q (privateName ++ "$initialized") none false
           (.block q [.set q (.ident q privateName) none value, .tuple q []])]

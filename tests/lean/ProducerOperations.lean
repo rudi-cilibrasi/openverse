@@ -43,7 +43,9 @@ private def checkMetadata : IO Unit := do
   let mut failures := 0
   let mixed := cases.filterMap fun (name, refusal, source) =>
     if name.endsWith "real overwrite" then
-      some (name ++ " mixed runtime state", name.startsWith "for " || refusal,
+      -- Tuple columns retain the independent real runtime captures even when
+      -- the separate metadata capture began opaque and is overwritten.
+      some (name ++ " mixed runtime state", refusal,
         (source.replace "var Stored:" "var Counter:int=0\n    var Runtime:type{_()<computes>:int}=F\n    var Stored:").replace "set Stored=F" "set Counter+=1;set Runtime=F;set Stored=F" |>.replace "Stored()" "Stored()+Runtime()+Counter")
     else none
   for (name, refusal, source) in cases ++ mixed do
