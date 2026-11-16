@@ -232,11 +232,24 @@ partial def elabExprControlWith
     -- An opening cast must retain the complete original world before
     -- ordinary clause replay moves its later snapshots into a lift.
     if !ctx.refinementTransportActive && clauses.any (fun clause =>
-        (Refine.castClause? clause).any (fun (_, _, target, _) => ctx.types.classes.contains target)) then
+        (Refine.castClause? clause).any (fun (_, _, target, _) => ctx.types.classes.contains target) ||
+        (refinementConditionalBinding? ctx clause).isSome) then
       if let some (.arr value) := exp then
         let saved ← get
         if !value.hasNever && !saved.refiningHintProbe then
-          return ← tryCatch (elabE { ctx with refinementTransportActive := true } se exp) fun original => do
+          return ← tryCatch (do
+            let ordinary ← elabE { ctx with refinementTransportActive := true } se exp
+            -- A waiting producer can defer its branch into a helper before
+            -- that helper exposes the lost snapshot world. Validate the
+            -- ordinary source first, then retain that world before staging.
+            let ordinaryState ← get
+            if ctx.suspends && ordinaryState.pendingWaitingCasts > saved.pendingWaitingCasts &&
+                clauses.any (fun clause => (refinementConditionalBinding? ctx clause).isSome) then
+              set saved
+              tryCatch (elabE { ctx with
+                refinementTransportActive := true, refinementTransportValue := some value, asWritten := true } se exp)
+                (fun _ => do set ordinaryState; pure ordinary)
+            else pure ordinary) fun original => do
             if !refinementRecoveryError original then throw original
             let failed ← get
             set saved

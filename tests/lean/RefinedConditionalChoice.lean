@@ -1,0 +1,71 @@
+import OpenVerse.Front.Elab
+import OpenVerse.Core.Bounded
+import OpenVerse.Core.Encode
+
+open OpenVerse OpenVerse.Front
+
+private def callable := "type{_()<computes>:int}"
+private def sourcePrefix := "expr(t:type) := class<abstract>:\n    Eval():t\nlit := class(expr(int)):\n    V:int\n    Eval<override>():int = V\nvpair(a:type, b:type) := class(expr(tuple(a, b))):\n    var L:expr(a)\n    R:expr(b)\n    Eval<override>():tuple(a, b) = (L.Eval(), R.Eval())\n"
+private def cases : List (String × String × String × String × Bool × Nat) := [
+  ("real", "F()", "", "", true, 1),
+  ("metadata", "Dummy()", "", "", false, 2),
+  ("tuple-real", "Pair(1)()", "    Pair:=(Dummy,F)\n", "", true, 1),
+  ("tuple-metadata", "Pair(0)()", "    Pair:=(Dummy,F)\n", "", false, 2),
+  ("overwritten", "Stored()", "    var Stored:" ++ callable ++ "=Dummy\n", "set Stored=F,", true, 1),
+  ("stored-metadata", "Stored()", "    var Stored:" ++ callable ++ "=Dummy\n", "", false, 2),
+  ("waiting-real", "F()", "", "", true, 1),
+  ("waiting-metadata", "Dummy()", "", "", false, 2),
+  ("waiting-tuple-real", "Pair(1)()", "    Pair:=(Dummy,F)\n", "", true, 1),
+  ("waiting-tuple-metadata", "Pair(0)()", "    Pair:=(Dummy,F)\n", "", false, 2)]
+
+private def source (action locals condition : String) (waiting : Bool) : String :=
+  let inner := action.startsWith "Pair"
+  let branchLocals := if inner then "Pair:=(Dummy,F);" else ""
+  let locals := if inner then "" else locals
+  let code := "One()<computes>:int=1\nTwo()<computes>:int=2\nPick(C:logic)<computes>:" ++ callable ++ "=if(C?)then One else Two\n" ++ sourcePrefix ++
+  "Rows(E:expr(t),F:" ++ callable ++ ",Dummy:" ++ callable ++ " where t:type):[]t=\n" ++ locals ++
+  "    for(N:=1..2,V:=if(Print(\"prefix\")," ++ condition ++ "P:=vpair[E],Saved:=P.L,L:=lit[Saved],set P.L=lit{V:=99},R:=lit[P.R])then{" ++ branchLocals ++ "((L.V+" ++ action ++ ",R.V)|(L.V+1+" ++ action ++ ",R.V))}else E.Eval()){V}\n" ++
+  "Main():void=\n    P:=vpair(int,int){L:=lit{V:=3},R:=lit{V:=7}}\n    Values:=Rows(P,One,Two)\n    for(V:Values){Print(\"{V(0)} {V(1)}\")}\n    Print(\"final {P.L.Eval()}\")\n"
+  if waiting then code.replace " where t:type):[]t" " where t:type)<suspends>:[]t"
+    |>.replace "){V}\n" "){Sleep(0.001);V}\n"
+    |>.replace "Main():void" "Main()<suspends>:void"
+  else code
+
+
+private def compile (source : String) (dummy : Bool) : Except String Compiled := do
+  let tops ← parseProgram source
+  elabProgram (tops.map fun
+    | .fn p name ps tps fx result body => .fn p name (ps.map fun parameter =>
+        { parameter with typeValue := dummy && name == "Rows" && parameter.name == "Dummy" }) tps fx result body
+    | top => top)
+
+def main (args : List String) : IO Unit := do
+  if args == ["--count"] then
+    IO.println cases.length
+    return
+  let index ← match args.head?.bind String.toNat? with
+    | some i => pure i
+    | none => throw <| IO.userError "expected conditional metadata case index"
+  let some (name, action, locals, condition, accepted, value) := cases[index]?
+    | throw <| IO.userError "invalid conditional metadata case index"
+  let expected := s!"prefix\nprefix\n{3+value} 7\n{4+value} 7\n{99+value} 7\n{100+value} 7\nfinal 99\n"
+  for dummy in [false,true] do
+    match compile (source action locals condition (name.startsWith "waiting")) dummy with
+    | .error message =>
+      if !dummy || accepted || (message.splitOn "dummy type value cannot").length ≤ 1 then
+        throw <| IO.userError s!"{name}/{dummy}: unexpected refusal {message}"
+    | .ok compiled =>
+      unless !dummy || accepted do throw <| IO.userError s!"{name}: metadata unexpectedly admitted"
+      unless compiled.prog.check && compiled.prog.checkControl &&
+          compiled.prog.checkTypes compiled.sigs compiled.slotTys do
+        throw <| IO.userError s!"{name}/{dummy}: invalid Core"
+      match compiled.prog.runB 10000000 10000 with
+      | .res (.ok _, output) =>
+        unless String.ofList (output.map Char.ofNat) == expected do
+          throw <| IO.userError s!"{name}/{dummy}: wrong complete VM trace"
+      | _ => throw <| IO.userError s!"{name}/{dummy}: VM exhaustion"
+      if let some directory := args[1]? then
+        let path := s!"{directory}/{name}-{dummy}"
+        IO.FS.writeBinFile (path ++ ".vbc") compiled.prog.encode
+        IO.FS.writeFile (path ++ ".expected") expected
+  IO.println s!"conditional selected-world metadata pair passed: {name}"

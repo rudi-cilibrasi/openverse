@@ -113,6 +113,8 @@ if grep -rnE '\bsorry\b|\badmit\b' OpenVerse/ Main.lean; then echo "error: sorry
 scripts/gen-claims.sh --check
 echo "== C runtime"
 make -s -C runtime test
+echo "== refined conditional branch-choice contracts"
+tests/scripts/test-refined-conditional-choice.sh
 echo "== metadata reader C-runtime oracles"
 tests/scripts/test-metadata-reader-runtime.sh "$logs/metadata-reader"
 

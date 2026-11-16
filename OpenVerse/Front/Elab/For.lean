@@ -122,6 +122,41 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
   let ctx := { ctx with refinementTransportValue := none }
   if let some value := transport then
     let c := ctx
+    -- Select the condition once, before searching its branch alternatives.
+    -- Only the opaque owner crosses that condition boundary: the branch,
+    -- later clauses and consumer retain the successful snapshot world.
+    if let some index := clauses.findIdx? (fun clause => (refinementConditionalBinding? c clause).isSome) then
+      let some (binding, annotation, conditional) := refinementConditionalBinding? c clauses[index]!
+        | eerr p "internal: refinement conditional producer"
+      let after := clauses.drop (index + 1)
+      let outcome := (ctx.canFail && !firstDecides) || failure.isSome || forReturnBody? body
+      let rec selected (expression : SExpr) (site : String) : SExpr :=
+        let resume (conditions : List SExpr) (branch : SExpr) : SExpr × SExpr :=
+          let ready := site ++ "$ready"
+          let branchClauses := Choice.prepare [SExpr.decl branch.pos binding annotation false branch]
+            (choiceValues c) (choiceField c) (site := site ++ "$branch") (fieldOrder := choiceOrder c)
+            (keepExcl := true) (keepBranches := choiceHasCast c)
+          let suffix := branchClauses ++ after
+          let prepare := refinementPrepareMarker c expression.pos value outcome
+            (ctx.canFail || ctx.inRollback) conditions suffix body (forBody := true)
+          let consumer := forStageBodyAs body
+            (.app expression.pos (.ident expression.pos "$refinementResume") [.ident expression.pos ready] false)
+          (.decl expression.pos ready none false prepare, consumer)
+        match expression with
+        | .ite q conditions branch (some otherwise) =>
+          let (prepare, consumer) := resume conditions branch
+          .ite q [prepare] consumer (some (selected otherwise (site ++ "$else")))
+        | branch => .forE expression.pos
+            (SExpr.decl branch.pos binding annotation false branch :: after) body
+      let chosen := selected conditional s!"$refinementBranch{p.line}_{p.col}_{index}"
+      let result := s!"$refinementBranchValues{p.line}_{p.col}_{index}"
+      let consumer := SExpr.block p
+        [.decl p result (some (Ty.arr value).toSTy) false chosen, .ident p result]
+      let outer ← elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq c p
+        (clauses.take index) consumer (prepared := prepared)
+        (firstDecides := firstDecides) (failure := failure)
+      let .arr (.arr resultType) := outer.ty | eerr p "internal: refinement conditional values"
+      return ⟨← flattenValues outer, .arr resultType⟩
     if let some (before, filterPrefix, suffix) := refinementProducerParts c clauses then
       let name := s!"$refinementReady{p.line}_{p.col}_{c.locals.length}"
       let outcome := (ctx.canFail && !firstDecides) || failure.isSome || forReturnBody? body
