@@ -1,0 +1,130 @@
+argument
+a enter
+a yield1
+a cleanup
+body
+a yield2
+a cleanup
+body
+argument
+a enter
+a yield1
+a cleanup
+body
+a yield2
+a cleanup
+body
+argument
+a enter
+a yield1
+a cleanup
+body
+a yield2
+a cleanup
+body
+argument
+a enter
+a yield1
+a cleanup
+body
+a yield2
+a cleanup
+body
+argument
+a enter
+a yield1
+a cleanup
+body
+a yield2
+a cleanup
+body
+argument
+a enter
+a yield1
+a cleanup
+body
+a yield2
+a cleanup
+body
+argument
+a enter
+a yield1
+a cleanup
+body
+a yield2
+a cleanup
+body
+argument
+a enter
+a yield1
+a cleanup
+body
+a yield2
+a cleanup
+body
+argument
+b enter
+b yield1
+b cleanup
+body
+b yield2
+b cleanup
+body
+argument
+b enter
+b yield1
+b cleanup
+body
+b yield2
+b cleanup
+body
+argument
+b enter
+b yield1
+b cleanup
+body
+b yield2
+b cleanup
+body
+argument
+b enter
+b yield1
+b cleanup
+body
+b yield2
+b cleanup
+body
+argument
+b enter
+b yield1
+b cleanup
+body
+b yield2
+b cleanup
+body
+argument
+b enter
+b yield1
+b cleanup
+body
+b yield2
+b cleanup
+body
+argument
+b enter
+b yield1
+b cleanup
+body
+b yield2
+b cleanup
+body
+argument
+b enter
+b yield1
+b cleanup
+body
+b yield2
+b cleanup
+body
+rows 32
+exit=0

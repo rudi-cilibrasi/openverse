@@ -13,6 +13,7 @@ kinds=(
   producer-method-for
   producer-method-generic
   producer-method-generic-local
+  producer-method-generic-cross-generator
   producer-method-mixed
   producer-method-option
   producer-method-recursive
@@ -2323,7 +2324,16 @@ PY
       diff -u "$tmp/expected" "$tmp/lean.out"
       diff -u "$tmp/expected" "$tmp/c.out"
     fi
-    if [[ $kind == producer-method-* && $count == 4 ]]; then
+    if [[ $kind == producer-method-generic-cross-generator && $count == 4 ]]; then
+      # The size source has 32^n rows. Use the same schema at two stages
+      # for a complete independent runtime oracle in both VMs.
+      python3 "$root/tests/scripts/producer-choice-model.py" source generic-cross-generator 2 >"$tmp/cross-oracle.verse"
+      python3 "$root/tests/scripts/producer-choice-model.py" oracle generic-cross-generator 2 >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/cross-oracle.verse" --emit "$tmp/cross-oracle.vbc" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/cross-oracle.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    elif [[ $kind == producer-method-* && $count == 4 ]]; then
       python3 "$root/tests/scripts/producer-choice-model.py" oracle "${kind#producer-method-}" "$count" >"$tmp/expected"
       timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
       timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"

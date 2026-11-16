@@ -456,6 +456,8 @@ structure Ctx where
       separately from the committing consumer. Never set by ordinary paths. -/
   refinementTransportValue : Option Ty := none
   refinementTransportActive : Bool := false
+  /-- A disposable prefix-body probe must not recursively batch itself. -/
+  discoveringStagePrefix : Bool := false
   forStage : Option Choice.ForStagePlan := none
   forStageArgs : List Ty := []
   forStageFlat : Bool := false
@@ -596,6 +598,9 @@ structure NaturalArgumentScope where
   selfClass : Option String
   selfMethod : Option String
   canFail : Bool
+  /-- Forward-header discovery is separate; ordinary natural probes carry
+      this bit unchanged. Raw `typeOnly` is intentionally not a scope key. -/
+  discoveringStagePrefix : Bool
   defaults : List (String × String)
 
   refinementTransportActive : Bool := false
@@ -646,6 +651,7 @@ private def NaturalArgumentScope.matches (scope : NaturalArgumentScope) (ctx : C
     scope.selfMethod == ctx.selfMethod && scope.canFail == ctx.canFail &&
     scope.refinementTransportActive == ctx.refinementTransportActive &&
     sameNaturalOptionalTy scope.refinementTransportValue ctx.refinementTransportValue &&
+    scope.discoveringStagePrefix == ctx.discoveringStagePrefix &&
     scope.defaults == ctx.defaults && sameNaturalVariables scope.variables ctx.types.tvars &&
     sameNaturalLocals scope.locals ctx.locals
 
@@ -1607,6 +1613,7 @@ def Ctx.argumentNaturalKey (ctx : Ctx) (a : SExpr) : EM String := do
     id, frame := ctx.frameName, locals := ctx.locals, variables := ctx.types.tvars
     selfClass := ctx.selfClass, selfMethod := ctx.selfMethod
     canFail := ctx.canFail, defaults := ctx.defaults
+    discoveringStagePrefix := ctx.discoveringStagePrefix
     refinementTransportActive := ctx.refinementTransportActive
     refinementTransportValue := ctx.refinementTransportValue }
   modify fun state => { state with
@@ -3188,5 +3195,62 @@ def packCallArgs (p : Pos) (s : Sig) (args : List SExpr)
   | .arr _ => if user.length > 1 then return packed (.arrayLit p user) else return args
   | .param .. => if user.length != 1 then return packed (.tuple p user) else return args
   | _ => return args
+
+/-- The tag of the lifts of the refining casts in a function (#53, #243):
+    a branch lifted from a class's copy of an interface's default, whose
+    name ends with the copy's tag (`$in` and the class), has the copy's, so
+    that its own casts' lifts are told apart too. -/
+def liftTagOf (name : String) : String :=
+  if name.startsWith "$refine" then
+    match (name.splitOn "$in").getLast? with
+    | some c => if (name.splitOn "$in").length > 1 then s!"$in{c}" else ""
+    | none => ""
+  else ""
+
+/-- Generated bodies use the same source exits, capture storage and naming
+    during effect inference and final elaboration. -/
+def functionBodyCtx (req : Requests) (ctx : Ctx) (p : Pos) (name : String)
+    (tps : List (String × Bool)) : Except String Ctx := do
+  let lifted := req.casts.find? (·.name == name)
+  let loopLift := if name.startsWith "$choiceOperationDictionary" then none else
+    req.loops.find? fun l => l.name == name || l.extraFns.any
+      (fun | .fn _ n .. => n == name | _ => false)
+  let resume := req.loops.findSome? fun l => l.resumes.find? (·.name == name)
+  let source := (resume.map (·.sourceContext)).getD
+    ((loopLift.map (·.sourceContext)).getD ((lifted.map (·.sourceContext)).getD {}))
+  let resumeStorage ← ((resume.map (·.storage)).getD []).mapM fun (n, r) => do
+    let args ← r.args.mapM fun t => (resolveTy ctx.types p t).run' { env := ctx.types }
+    pure (n, { frame := r.frame, name := r.name, args : SourceStorage })
+  let locals ← ctx.locals.mapM fun l => do
+    let storage ← ((lifted.bind fun r => r.storage.lookup l.name)).mapM fun r => do
+      let args ← r.args.mapM fun t => (resolveTy ctx.types p t).run' { env := ctx.types }
+      return { frame := r.frame, name := r.name, args : SourceStorage }
+    pure { l with storage := storage.orElse fun _ => (resumeStorage.lookup l.name).orElse fun _ => l.storage }
+  return { ctx with
+    locals := locals
+    resumeStorage
+    frameName := name
+    frameArgs := tps.map fun (v, c) => Ty.param v c
+    inRepeat := source.inRepeat || (resume.map (·.inRepeat)).getD (lifted.any (·.inRepeat))
+    inChoice := source.inChoice || (resume.map (·.inChoice)).getD ctx.inChoice
+    inParamDefault := source.inParamDefault || ctx.inParamDefault
+    inDefer := source.inDefer || ctx.inDefer
+    inRollback := resume.any (·.rollback) || loopLift.any (·.rollback) || lifted.any (·.rollback) || ctx.inRollback
+    inDefaultCheck := source.inDefaultCheck || ctx.inDefaultCheck
+    inArm := source.inArm || ctx.inArm
+    inBranch := source.inBranch || ctx.inBranch
+    defaults := source.defaults ++ ctx.defaults
+    refineExits := (lifted.map (·.exits)).getD {}
+    inBlock := source.inBlock || name.endsWith ".$block"
+    inCtor := source.inCtor || name.endsWith "$init"
+    selfClass := match name.splitOn "." with
+      | [c, _] => some c | _ => none
+    selfMethod := match name.splitOn "." with | [_, m] => some m | _ => none
+    liftTag := (resume.map (·.liftTag)).getD ((loopLift.map (·.liftTag)).getD
+      ((lifted.bind (·.liftTag)).getD (liftTagOf name)))
+    refineScope := (lifted.map (·.continuationScope)).getD
+      (if loopLift.isSome || resume.isSome then s!"$contScope{name.hash}" else "")
+    inlineScopes := (resume.map (·.inlineScopes)).getD
+      ((loopLift.map (·.inlineScopes)).getD ((lifted.map (·.inlineScopes)).getD [])) }
 
 end OpenVerse.Front
