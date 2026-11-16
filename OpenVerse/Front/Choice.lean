@@ -2261,14 +2261,12 @@ partial def elimLinearReturns (fresh : Nat → String) (ret : STy) (outcome : Bo
     if !scalarReturnBoundary many body then none else do
       let packet := fresh n ++ "$boundary"
       let key := packet ++ "Return"
-      let normal := packet ++ "Normal"
       let (rest, n1) ← elimLinearReturns fresh ret outcome (n+1) p rest defers outer many branchMany
-      let ready := returnBranches q (packet ++ "Ready")
-        [.decl q normal ty false (.query q (.app q (.ident q packet) [.int q 1] false))]
-        (.decl q name ty mutable (.ident q normal) :: rest)
-        [.app q (.ident q "Err") [] false]
-        branchMany
-        (some (if outcome then .opt ret else ret))
+      -- The normal outcome is present whenever the return outcome is absent.
+      -- Keep the binding in this continuation's prefix, rather than adding
+      -- another conditional frame that can lose its inferred result type.
+      let ready := .decl q name ty mutable
+        (.query q (.app q (.ident q packet) [.int q 1] false)) :: rest
       let payload := key ++ "Value"
       let (returned, n2) := linearReturnFinish fresh q ret n1 outcome (.ident q payload)
         (linearReturnCleanup outcome defers outer)
