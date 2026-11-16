@@ -1,0 +1,6 @@
+branch 5
+loop 15
+function 115
+v 5
+after
+exit=0
