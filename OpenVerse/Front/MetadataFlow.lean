@@ -6,6 +6,7 @@ import OpenVerse.Front.MetadataReferences
 import OpenVerse.Front.MetadataBits
 import OpenVerse.Front.MetadataLiveness
 import Std.Data.HashMap
+import Std.Data.TreeMap
 
 namespace OpenVerse.Front.MetadataFlow
 open OpenVerse MetadataBits
@@ -123,6 +124,15 @@ private def withExits (a b : Flow) : Flow := { b with
   yielded := a.yielded || b.yielded }
 
 private abbrev Key := Nat × List Argument
+
+/-- A full scheduled transfer checked executable roles and encountered no
+    shared-write diagnostic suppressed during summary solving. -/
+private structure ScheduleProof where
+  flow : Flow
+  calls : Array (Key × Option Bool × TupleParts × Bool)
+  seen : Bits
+  captureMismatch : Bool
+  signalArguments : Option (Array (List Nat))
 
 private structure Summary where
   key : Key
@@ -535,8 +545,13 @@ private structure ScheduleEnv where
   info : Info
   plan : MetadataPlan.Plan
   referenceLive : MetadataLiveness.Analysis
+  environments : Std.HashMap (Nat × Nat) (Fn × Info) := {}
 
 private structure State where
+  scheduleProofs : Std.HashMap Key ScheduleProof := {}
+  scheduledCalls : Option (Std.HashMap Key (Option Bool × TupleParts × Bool)) := none
+  scheduledCallOrder : Array Key := #[]
+  suppressedSharedWrite : Bool := false
   scalarReturns : Array Bool := #[]
   deferSchedules : Bool := true
   contextDeferred : Bool := false
@@ -574,6 +589,15 @@ private def refuse (fn : Fn) (info : Info) (what : String) (details : String := 
     s!"\nmetadata context: {reprStr st.active}\ninputs: {info.inputs}; seeds: {info.seeds}\n{details}\n{reprStr (info.body.getD fn.body)}" else ""
   throw s!"{info.pos.show}: dummy type value cannot {what} (in {fn.name}){context}"
 
+/-- Preserve first-request order as well as dependency values: live-context
+    replay must retain the original graph's diagnostic traversal order. -/
+private def rememberScheduledCall (key : Key) (value : Option Bool × TupleParts × Bool) : M Unit := do
+  let st ← get
+  if let some calls := st.scheduledCalls then
+    set { st with
+      scheduledCallOrder := if calls.contains key then st.scheduledCallOrder else st.scheduledCallOrder.push key
+      scheduledCalls := some (calls.insert key value) }
+
 private def request (key : Key) : M (Option Bool × TupleParts × Bool) := do
   let st ← get
   if st.validateUses && st.validateShared && !st.discovery && !st.liveSeen.contains key then
@@ -584,14 +608,28 @@ private def request (key : Key) : M (Option Bool × TupleParts × Bool) := do
     if let some dependencies := st.dependencies then
       if !dependencies.contains i then
         modify fun st => { st with dependencies := some (dependencies.insert i value) }
+    rememberScheduledCall key value
     return value
   let i := st.summaries.size
   let dependencies := st.dependencies.map (·.insert i (none, none, false))
   set { st with
     indices := st.indices.insert key i
     summaries := st.summaries.push { key }, changed := true, dependencies }
+  rememberScheduledCall key (none, none, false)
   return (none, none, false)
 
+
+
+/-- Pending configurations share their complete facts by control key and
+    run in graph reverse postorder. No provenance component is discarded. -/
+private structure ScheduleWork where
+  env : ScheduleEnv
+  modes : Bits
+  ranks : Array Nat
+  ready : Std.TreeMap (Nat × Nat) (List Nat) (fun a b =>
+    match compare a.1 b.1 with | .eq => compare a.2 b.2 | order => order) := {}
+  pending : Std.HashMap (List Nat) Configuration := {}
+  serial : Nat := 0
 
 
 mutual
@@ -610,6 +648,8 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
         !((out.slots.sharedMetadata.get i)) then
       if (← get).validateShared then
         refuse fn info "enter a shared local containing executable data" s!"shared slot {i}, value {reprStr e}"
+      else
+        modify fun st => { st with suppressedSharedWrite := true }
     let first := !((out.slots.initialized.get i))
     return { out with
       value := some role
@@ -913,6 +953,7 @@ private partial def actorEnvironment (env : ScheduleEnv) (a : Actor) : Fn × Inf
   match a.context with
   | none => (env.fn, env.info)
   | some (g, offset) =>
+    if let some cached := env.environments[(g, offset)]? then cached else
     let info := env.infos[g]?.getD {}
     let alias (i : Nat) := (env.plan.aliases.lookup (i + offset)).getD (i + offset)
     (env.fns[g]!, { info with
@@ -948,7 +989,7 @@ private partial def keepConfigurationModes (mask : Bits) (c : Configuration) : C
 
 /-- Current actors, deferred resumes, and signal return continuations can
     all become active. Saved transaction memories are deliberately retained. -/
-private partial def restrictReferences (env : ScheduleEnv) (c : Configuration) : Configuration := Id.run do
+private partial def restrictReferences (env : ScheduleEnv) (modes : Bits) (c : Configuration) : Configuration := Id.run do
   let mut live := env.referenceLive.cleanup
   for actor in c.actors do
     live := live ||| env.referenceLive.get actor.pc
@@ -959,7 +1000,28 @@ private partial def restrictReferences (env : ScheduleEnv) (c : Configuration) :
     | .cleanup _ _ pc | .resume _ pc | .returnCall _ pc | .returnScope _ _ _ _ pc =>
       live := live ||| env.referenceLive.get pc
     | _ => pure ()
-  return { c with refs := MetadataReferences.restrict c.refs live.testBit }
+  -- Tuple columns, like references, are observed through local reads. Keep
+  -- all source/shared cells as well as graph-live locals. Saved transaction
+  -- slots remain intact until their rollback destination becomes current.
+  let tupleLive := live ||| modes.bits
+  let tuples := if c.slots.tuples.all (fun i _ => tupleLive.testBit i) then c.slots.tuples
+    else c.slots.tuples.filter fun i _ => tupleLive.testBit i
+  return { c with
+    refs := MetadataReferences.restrict c.refs live.testBit
+    slots := { c.slots with tuples } }
+
+private partial def ScheduleWork.push (w : ScheduleWork) (c : Configuration) : ScheduleWork :=
+  let c := restrictReferences w.env w.modes (keepConfigurationModes w.modes c)
+  let key := configurationKey c
+  match w.pending[key]? with
+  | some old => { w with pending := w.pending.insert key (joinConfiguration old c) }
+  | none =>
+    let rank := c.current.map (fun i =>
+      (w.ranks[c.actors[i]!.pc]?.getD w.ranks.size) + 1) |>.getD 0
+    { w with
+      ready := w.ready.insert (rank, w.serial) key
+      pending := w.pending.insert key c
+      serial := w.serial + 1 }
 
 private partial def cancelChildren (env : ScheduleEnv) (c : Configuration) (actor : Nat) (branch : Bool)
     (context : Option (Option (Nat × Nat)) := none) : List Pending :=
@@ -1061,6 +1123,15 @@ private partial def liveLateBranches (plan : MetadataPlan.Plan) (c : Configurati
         c.actors[actor]!.status != .done && c.actors[actor]!.status != .idle)
 
 private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
+  -- A lexical source frame has the same shifted ownership facts at every
+  -- visit. Materialize it once per plan context rather than rebuilding its
+  -- alias substitutions at every abstract transition.
+  let mut env := env
+  for context in env.plan.contexts do
+    if let some key := context then
+      if !env.environments.contains key then
+        let value := actorEnvironment env { context }
+        env := { env with environments := env.environments.insert key value }
   let extra := env.plan.slots - entry.values.size
   let pad (a : Bits) := a.appendZeros extra
   let slots : Slots := {
@@ -1075,24 +1146,23 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
     groups := Array.replicate env.plan.groups.size {} }
   modify fun st => { st with seen := st.seen.appendZeros extra }
   let modes := modeMask env
-  let mut work := #[initial]
+  let mut work := ({ env, modes, ranks := MetadataLiveness.controlOrder env.plan } : ScheduleWork).push initial
   let mut cursor := 0
   let mut known : Std.HashMap (List Nat) Configuration := {}
   let mut result : Option Bool := none
   let mut resultParts : TupleParts := none
   let mut finalSlots : Option Slots := none
   let mut yielded := false
-  while cursor < work.size do
+  while !work.ready.isEmpty do
     if (← get).debug && cursor % 10000 == 0 then
-      dbg_trace s!"metadata schedule {env.fn.name}: visited={cursor}, queued={work.size}, states={known.size}"
-    let incoming := restrictReferences env (keepConfigurationModes modes work[cursor]!)
-    -- Processed configurations remain in `known`; release their queued copies.
-    work := work.set! cursor default
+      dbg_trace s!"metadata schedule {env.fn.name}: visited={cursor}, queued={cursor + work.pending.size}, states={known.size}"
+    let (ticket, key) := work.ready.minEntry!
+    let incoming := work.pending[key]!
+    work := { work with ready := work.ready.erase ticket, pending := work.pending.erase key }
     cursor := cursor + 1
-    let key := configurationKey incoming
     let c := match known[key]? with
       | none => incoming
-      | some old => joinConfiguration old incoming
+      | some old => if old == incoming then old else joinConfiguration old incoming
     if (known[key]?).any (· == c) then continue
     known := known.insert key c
     let stops := readyCancellations env.plan c
@@ -1617,14 +1687,58 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
             let live := MetadataLiveness.build fns plan
             modify fun st => { st with referenceLives := st.referenceLives.set! i (some live) }
             pure live
-        return ← schedule { fns, infos, fields, fn, info, plan, referenceLive } slots
+        -- Atomic expression fallbacks can run their own ordinary concurrent
+        -- fixed point. Keep the original replay for those conservative cases.
+        let cacheable := !(plan.nodes.any fun
+          | .atom e .. | .test e .. => !(MetadataPlan.calls e).isEmpty
+          | _ => false)
+        let st ← get
+        if cacheable && st.validateUses && st.validateShared then
+          if let some proof := st.scheduleProofs[key]? then
+            if proof.calls.all (fun (callee, result, parts, yielded) =>
+                match st.indices[callee]? with
+                | some j => let summary := st.summaries[j]!
+                            summary.result == result && summary.parts == parts && summary.yielded == yielded
+                | none => false) then
+              -- Publish only calls actually observed by this graph, never
+              -- provisional calls from its relevance/cleanup discovery.
+              for (callee, _, _, _) in proof.calls do discard <| request callee
+              modify fun st => { st with
+                seen := (st.seen.appendZeros (proof.seen.size - st.seen.size)).union
+                  (proof.seen.appendZeros (st.seen.size - proof.seen.size))
+                captureMismatch := st.captureMismatch || proof.captureMismatch
+                signalArguments := st.signalArguments.or proof.signalArguments }
+              if debug then dbg_trace s!"metadata scheduled proof reused {fn.name}"
+              return proof.flow
+        let savedCalls := st.scheduledCalls
+        let savedCallOrder := st.scheduledCallOrder
+        let savedSuppressed := st.suppressedSharedWrite
+        modify fun st => { st with scheduledCalls := some {}, scheduledCallOrder := #[], suppressedSharedWrite := false }
+        let out ← schedule { fns, infos, fields, fn, info, plan, referenceLive } slots
+        let checked ← get
+        let calls := checked.scheduledCallOrder.map fun key =>
+          let (result, parts, yielded) := (checked.scheduledCalls.getD {})[key]!
+          (key, result, parts, yielded)
+        modify fun st => { st with
+          scheduledCalls := savedCalls, scheduledCallOrder := savedCallOrder
+          suppressedSharedWrite := savedSuppressed || checked.suppressedSharedWrite
+          scheduleProofs := if cacheable && checked.validateUses && !checked.suppressedSharedWrite then
+            st.scheduleProofs.insert key {
+              flow := out, calls, seen := checked.seen
+              captureMismatch := checked.captureMismatch, signalArguments := checked.signalArguments }
+            else st.scheduleProofs.erase key }
+        return out
       if saved.validateUses then
         return ← expr fns infos fields fn info slots body
       return out
     let seedRoots : M Unit := do
       for i in [:fns.size] do
         let info := infos[i]?.getD {}
-        if info.borrowTasks || info.source.slots.any (fun (_, s) => s.frame != fns[i]!.name) then continue
+        -- Typed forwarding requires the same enclosing owner as a direct
+        -- source alias (SourceFrames.prepare). A bridge is checked through
+        -- actual requests, rather than an invented owner-free entry.
+        if info.borrowTasks || info.source.slots.any (fun (_, s) => s.frame != fns[i]!.name) ||
+            info.source.forwarded.any (fun s => s.frame != fns[i]!.name) then continue
         discard <| request (i, (List.range fns[i]!.arity).map (fun j => ({ role := info.inputs.contains j } : Argument)))
     seedRoots
     let mut growing := true
@@ -1636,8 +1750,9 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       for (summary, index) in summaries.zipIdx do
         let i := summary.key.1
         let info := infos[i]?.getD {}
-        -- Only summary solving is cached. The final replay still checks
-        -- every live context with stable shared-storage modes. Cleanup
+        -- Summary solving caches stable dependencies. Final validation
+        -- checks every live context, reusing only checked schedule proofs.
+        -- Cleanup
         -- relevance probes have private call queues, so keep those frames
         -- out of this dependency cache.
         let cacheable := ((← get).sites[i]?.getD (false, [])).2.isEmpty

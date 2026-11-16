@@ -1,3 +1,4 @@
+import OpenVerse.Front.MetadataLiveness
 import OpenVerse.Front.MetadataBits
 import OpenVerse.Front.MetadataReferences
 
@@ -204,6 +205,31 @@ example (a b : Memory) : (a == b) =
     ((a.slots == b.slots) && (a.nslots == b.nslots) &&
       (a.fields == b.fields) && (a.uncertain == b.uncertain)) := rfl
 
+namespace Liveness
+open OpenVerse OpenVerse.Front
+
+def run : IO Unit := do
+  -- A loop needs predecessor revisits; the assignment kills the incoming
+  -- destination while the branch retains both paths. Invalid destinations
+  -- and cleanup roots must conservatively keep all slots.
+  let plan : MetadataPlan.Plan := {
+    slots := 3
+    nodes := #[.atom (.local 0) 1 1 none, .choose 2 4,
+      .atom (.local 1) 0 3 none, .jump 1, .ret 0, .jump 99]
+    cleanupEntries := #[2,99] }
+  let live := MetadataLiveness.build #[] plan
+  unless live.entries == #[1,3,2,3,1,7] && live.cleanup == 7 && live.get 99 == 7 do
+    throw <| IO.userError "liveness loop/kill/cleanup/unknown-edge regression"
+  -- Generated producers contain long backwards chains. Every entry must
+  -- learn the terminal read, regardless of the node numbering.
+  let nodes := (Array.range 4096).map fun i =>
+    if i == 0 then MetadataPlan.Node.ret 2 else .jump (i-1)
+  let chain := MetadataLiveness.build #[] { slots := 3, nodes }
+  unless chain.entries.all (· == 4) do
+    throw <| IO.userError "liveness long predecessor chain regression"
+  IO.println "Metadata liveness predecessor contracts passed"
+end Liveness
+
 def main : IO Unit := do
   Packed.run
   References.run
@@ -211,3 +237,4 @@ def main : IO Unit := do
   Intersection.run
   ScalarResults.run
   Containers.run
+  Liveness.run

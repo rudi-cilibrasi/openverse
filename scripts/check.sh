@@ -30,7 +30,7 @@ else
 fi
 # Keep the fixed-budget native resource check ahead of other CPU-heavy work.
 echo "== native metadata reader resource contracts"
-tests/scripts/test-metadata-reader.sh
+METADATA_READER_ARTIFACTS="$logs/metadata-reader" tests/scripts/test-metadata-reader.sh
 echo "== metadata fact representation contracts"
 if lake env lean -j1 --run tests/lean/MetadataFacts.lean >"$logs/metadata-facts" 2>&1; then
   cat "$logs/metadata-facts"
@@ -113,6 +113,8 @@ if grep -rnE '\bsorry\b|\badmit\b' OpenVerse/ Main.lean; then echo "error: sorry
 scripts/gen-claims.sh --check
 echo "== C runtime"
 make -s -C runtime test
+echo "== metadata reader C-runtime oracles"
+tests/scripts/test-metadata-reader-runtime.sh "$logs/metadata-reader"
 
 # (from here on, each process may use at most CHECK_MEM_GB of virtual memory, 4 by default: on
 # 2026-11-09 a Lean run of a generated program reached 60 GB on a dev machine, and on a 16 GB CI
