@@ -1112,6 +1112,67 @@ def withMapKeyContext (ctx : Ctx) (ty : Ty) (key : SExpr) : SExpr :=
     let name := s!"$mapKeyType{key.pos.line}_{key.pos.col}"
     .block key.pos [.decl key.pos name (some ty.toSTy) false key, .ident key.pos name]
 
+/-- A call's known key domain remains available even when its value type
+    still needs inference. Preserve it before operand lifting separates the
+    literal's key from a later refining cast. Callee-local type parameters
+    are deliberately excluded: they are not caller-visible annotations. -/
+partial def withMapArgumentKeys (ctx : Ctx) (ty : Ty) (value : SExpr) : SExpr :=
+  match ty, value with
+  | _, .block p values =>
+    match values.reverse with
+    | last :: before => .block p (before.reverse ++ [withMapArgumentKeys ctx ty last])
+    | [] => value
+  | .map key item, .mapLit p entries | .weakMap key item, .mapLit p entries =>
+    .mapLit p (entries.map fun (k, v) =>
+      (if key.params.isEmpty then withMapKeyContext ctx key k else k,
+        withMapArgumentKeys ctx item v))
+  | .arr item, .arrayLit p values => .arrayLit p (values.map (withMapArgumentKeys ctx item))
+  | .opt item, .optionLit p value => .optionLit p (withMapArgumentKeys ctx item value)
+  | .tup items, .tuple p values =>
+    if items.length == values.length then
+      .tuple p ((items.zip values).map fun (t, v) => withMapArgumentKeys ctx t v)
+    else value
+  | _, _ => value
+
+partial def withCallMapKeysIn (ctx : Ctx) (bound : List String) (value : SExpr) : SExpr :=
+  Choice.mapE (fun
+    | .app p f@(.ident _ name) args bracket => Id.run do
+      -- Descend once before replacing the call: mapE does not visit a
+      -- replacement's children. Local/member calls keep ordinary lookup.
+      let args := args.map (withCallMapKeysIn ctx bound)
+      let unchanged := some (.app p f args bracket)
+      if bound.contains name || (ctx.lookup name).isSome ||
+          (ctx.types.overloads.lookup name).isSome then return unchanged
+      if ctx.selfClass.any (fun c => (ctx.types.fields c).any (·.1 == name) ||
+          ctx.hasMethod c name ||
+          ((ctx.types.methodOverloads.lookup name).map (·.any (ctx.hasMethod c ·))).getD false) then
+        return unchanged
+      let some signature := ctx.sig? name | return unchanged
+      let positional := signature.params.length - signature.named.length
+      let mut next := 0
+      let mut result := []
+      for arg in args do
+        let rewritten := match arg with
+          | .decl q n ty mutable rhs =>
+            if n.startsWith "?" then
+              match signature.named.findIdx? (·.1 == (n.drop 1).toString) with
+              | some index => match signature.params[positional + index]? with
+                | some expected => .decl q n ty mutable (withMapArgumentKeys ctx expected rhs)
+                | none => arg
+              | none => arg
+            else arg
+          | _ => match signature.params[next]? with
+            | some expected => withMapArgumentKeys ctx expected arg
+            | none => arg
+        if !(match arg with | .decl _ n .. => n.startsWith "?" | _ => false) then
+          next := next + 1
+        result := rewritten :: result
+      return some (.app p f result.reverse bracket)
+    | _ => none) value
+
+def withCallMapKeys (ctx : Ctx) (value : SExpr) : SExpr :=
+  withCallMapKeysIn ctx (Choice.localsOf value) value
+
 /-- (#243) Clause `c` with the cast at `q` inside it, which only a failure
     context's clause may be, lifted out to be one before it, as a choice
     there is (`Refine.markCast`, `Choice.liftClause`). `bound`: names the
@@ -1165,7 +1226,8 @@ def liftCastClause (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       casts := casts ++ [position]
   set saved
   if !casts.contains q then casts := casts ++ [q]
-  let marked := casts.foldl (fun e position => Refine.markCast position e) c
+  let contextual := withCallMapKeys ctx c
+  let marked := casts.foldl (fun e position => Refine.markCast position e) contextual
   return Choice.liftClause (fun n => choiceValues ctx n || bound.contains n) (choiceField ctx) marked
     (fieldOrder := choiceOrder ctx)
 
