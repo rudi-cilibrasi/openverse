@@ -2194,54 +2194,72 @@ private def linearReturnResume (p : Pos) (key : String) (ret : STy) (outcome : B
   let payload := key ++ "Value"
   returnBranches p (key ++ "Select")
     [.decl p payload (some ret) false (.query p (.ident p key))]
-    returned rest (fun _ => true) (some (if outcome then .opt ret else ret))
+    returned rest (fun body => hasChoice (stmtsOf body) || (stmtsOf body).any liftsHere)
+    (some (if outcome then .opt ret else ret))
+
+private def linearReturnCleanup (outcome : Bool) (defers : List SExpr)
+    (outer : List (List SExpr)) : List SExpr :=
+  runReturnDefers defers ++ if outcome then [] else outer.flatMap runReturnDefers
 
 /-- A branch produces either a returned value or fallthrough. Its caller
     contains the following source statements once, outside both branches. -/
 partial def elimLinearReturns (fresh : Nat → String) (ret : STy) (outcome : Bool) (n : Nat) (p : Pos)
-    (ss defers : List SExpr) : Option (List SExpr × Nat) := do
+    (ss defers : List SExpr) (outer : List (List SExpr) := []) : Option (List SExpr × Nat) := do
   match ss with
-  | [] => return (runReturnDefers defers ++
+  | [] => return (linearReturnCleanup outcome defers outer ++
       [if outcome then .ident p "false" else .tuple p []], n)
   | .ret q value :: _ =>
-    return linearReturnFinish fresh q ret n outcome (value.getD (.tuple q [])) (runReturnDefers defers)
+    return linearReturnFinish fresh q ret n outcome (value.getD (.tuple q []))
+      (linearReturnCleanup outcome defers outer)
   | d@(.app _ (.ident _ "$defer") _ _) :: rest =>
     let later := renamedFor "$later" (boundIn rest)
-    elimLinearReturns fresh ret outcome n p rest (defers ++ [renameE later d])
+    elimLinearReturns fresh ret outcome n p rest (defers ++ [renameE later d]) outer
   | s@(.ite q cs t u) :: rest =>
     if !hasReturn s then
-      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers
+      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer
       return (s :: tail, next)
     if cs.any hasReturn then none else do
       let key := fresh n ++ "$return"
-      let (tb, n1) ← elimLinearReturns fresh ret true (n+1) t.pos (stmtsOf t) []
-      let (ub, n2) ← elimLinearReturns fresh ret true n1 q ((u.map stmtsOf).getD []) []
-      let (rest, n3) ← elimLinearReturns fresh ret outcome n2 p rest defers
+      if !outcome && rest.isEmpty then
+        let (tb, n1) ← elimLinearReturns fresh ret false (n+1) t.pos
+          (tailReturns (stmtsOf t)) [] (defers :: outer)
+        let (ub, n2) ← elimLinearReturns fresh ret false n1 q
+          (tailReturns ((u.map stmtsOf).getD [])) [] (defers :: outer)
+        return (returnBranches q key cs tb ub
+          (fun body => hasChoice (stmtsOf body) || (stmtsOf body).any liftsHere) (some ret), n2)
+      let (tb, n1) ← elimLinearReturns fresh ret true (n+1) t.pos (stmtsOf t) [] outer
+      let (ub, n2) ← elimLinearReturns fresh ret true n1 q ((u.map stmtsOf).getD []) [] outer
+      let (rest, n3) ← elimLinearReturns fresh ret outcome n2 p rest defers outer
       let payload := key ++ "Value"
-      let (returned, n4) := linearReturnFinish fresh q ret n3 outcome (.ident q payload) (runReturnDefers defers)
+      let (returned, n4) := linearReturnFinish fresh q ret n3 outcome (.ident q payload)
+        (linearReturnCleanup outcome defers outer)
       let packet := SExpr.ite q cs (.block t.pos tb) (some (.block q ub))
       return (.decl q key (some (.opt ret)) false packet ::
         linearReturnResume q key ret outcome returned rest, n4)
   | s@(.block q items) :: rest =>
     if !hasReturn s then
-      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers
+      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer
       return (s :: tail, next)
+    if !outcome && rest.isEmpty then
+      elimLinearReturns fresh ret false (n+1) q (tailReturns items) [] (defers :: outer)
+    else do
     let key := fresh n ++ "$return"
-    let (items, n1) ← elimLinearReturns fresh ret true (n+1) q items []
-    let (rest, n2) ← elimLinearReturns fresh ret outcome n1 p rest defers
+    let (items, n1) ← elimLinearReturns fresh ret true (n+1) q items [] outer
+    let (rest, n2) ← elimLinearReturns fresh ret outcome n1 p rest defers outer
     let payload := key ++ "Value"
-    let (returned, n3) := linearReturnFinish fresh q ret n2 outcome (.ident q payload) (runReturnDefers defers)
+    let (returned, n3) := linearReturnFinish fresh q ret n2 outcome (.ident q payload)
+      (linearReturnCleanup outcome defers outer)
     return (.decl q key (some (.opt ret)) false (.block q items) ::
       linearReturnResume q key ret outcome returned rest, n3)
   | s@(.caseE ..) :: rest =>
     if !hasReturn s then
-      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers
+      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer
       return (s :: tail, next)
     let (select, chain) ← caseIf (fresh n ++ "$returnCase") s
-    elimLinearReturns fresh ret outcome (n+1) p (select :: chain :: rest) defers
+    elimLinearReturns fresh ret outcome (n+1) p (select :: chain :: rest) defers outer
   | s :: rest =>
     if hasReturn s then none else do
-      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers
+      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer
       return (s :: tail, next)
 
 /-- Retain the existing plain-return shape, and preserve scope boundaries
@@ -4237,7 +4255,10 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
       ((mfs.lookup h).map fun callee => callee.params.any (·.named)).getD false
     let body ← if namedCalls then inlineCalls mfs f.body needAll [] clash (groups := loopGroups) (fieldOrder := fieldOrder)
       else pure f.body
-    let ps := f.params.map fun sp => { sp with named := false, default := none }
+    -- The collector transports the original arguments into its checked
+    -- body. Actual execution still checks their propagated provenance.
+    let ps := f.params.map fun sp =>
+      { sp with named := false, default := none, metadataForward := true }
     return some (.fn f.pos s!"{g}$all" ps f.tparams (f.fx.filter (· != "decides"))
       (.arr f.ret) (allBody (if namedCalls then [] else needAll) f.ret body))).run nextSite
   -- (#283) each overload of an overloaded one kept as `F$mvK` too, for
