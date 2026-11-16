@@ -613,6 +613,9 @@ structure ESt where
       its position and text (#74): computed once, so nested overloaded calls
       take polynomial time (it survives the trials' state being restored). -/
   natTys : Std.HashMap String (Option Ty) := {}
+  /-- Exact expressions successfully typed without a result hint during
+      argument probes. Only classification is shared, never code or effects. -/
+  naturalArguments : Std.HashMap String SExpr := {}
   /-- Successful receiver-class probes, keyed by syntax and lexical typing
       context. Shared by isolated trials so nested callbacks stay polynomial. -/
   methodReceivers : Std.HashMap String (Option String) := {}
@@ -1520,6 +1523,15 @@ partial def argumentContextUsefulWith (elabE : Ctx → SExpr → Option Ty → E
   -- boundary would multiply the same unfixable inference failure.
   return !(fixedResult || noResultEvidence)
 
+/-- A natural argument classification belongs to its lexical typing world.
+    The stored expression is checked too, so generated syntax sharing a
+    source position cannot reuse another expression's classification. -/
+def Ctx.argumentNaturalKey (ctx : Ctx) (a : SExpr) : String :=
+  reprStr (a.pos, ctx.frameName,
+    ctx.locals.map (fun l => (l.name, l.slot, l.ty, l.typeValue, l.mutable,
+      l.joinedAt, l.storage.map (fun origin => (origin.frame, origin.name, origin.args)))),
+    ctx.types.tvars, ctx.selfClass, ctx.selfMethod, ctx.canFail, ctx.defaults)
+
 /-- Classify a bound value using an isolated receiver type probe. Its code,
     slots, effects and helper requests never enter the actual call. -/
 partial def argNeedsTypeWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (a : SExpr) : EM Bool := do
@@ -1535,7 +1547,9 @@ partial def argNeedsTypeWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx
     -- type from the other arguments)
     | .ok (r, probed) =>
       if r.ty.hasNever then return true
-      modify fun st => { st with natTys := probed.natTys, methodReceivers := probed.methodReceivers }
+      modify fun st => { st with
+        natTys := probed.natTys, methodReceivers := probed.methodReceivers
+        naturalArguments := probed.naturalArguments }
       return false
     | .error error =>
       -- A cast refusal needs the normal clause-lifting retry, rather than
@@ -1557,7 +1571,10 @@ partial def argNeedsTypeWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx
         !(ctx.selfClass.any fun c => (ctx.types.fields c).any (·.1 == name) ||
           ctx.hasMethod c name ||
           ((ctx.types.methodOverloads.lookup name).map (·.any (ctx.hasMethod c ·))).getD false) &&
-        (ctx.sig? name).any (fun s => !s.isConst && !s.tparams.isEmpty) then probe true
+        (ctx.sig? name).any (fun s => !s.isConst && !s.tparams.isEmpty) then
+      if let some checked := (← get).naturalArguments[ctx.argumentNaturalKey a]? then
+        if checked == a then return false
+      probe true
     else return false
   | .tuple _ es | .arrayLit _ es => compound es
   | .optionLit _ e => compound [e]

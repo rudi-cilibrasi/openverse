@@ -52,6 +52,15 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   let ctx := ctx.choiceCoercionScope
   let result ← elabECore ctx se exp
   let result ← choiceCoerceResult ctx se.pos result exp
+  -- A successful outer probe has already checked its hint-free children.
+  -- Retain their classifications so ordinary elaboration does not probe
+  -- every nested subtree again. Actual code/effects are elaborated normally.
+  if ctx.argumentTypeProbe && exp.isNone && !result.ty.hasNever then
+    if let .app _ (.ident _ name) _ _ := se then
+      if (ctx.lookup name).isNone &&
+          (ctx.sig? name).any (fun signature => !signature.isConst && !signature.tparams.isEmpty) then
+        let key := ctx.argumentNaturalKey se
+        modify fun st => { st with naturalArguments := st.naturalArguments.insert key se }
   -- Dataflow propagates roles through ordinary expressions. Only metadata
   -- origins need a marker; wrapping forwarding/control expressions can
   -- change the saved-local shape required by refinement copy-out.
@@ -546,12 +555,12 @@ partial def resolveOverload (ctx : Ctx) (p : Pos) (name : String) (ovs : List St
     let st ← get
     let r ← tryCatch (do return some (← elabE ctx a none).ty) (fun _ => pure none)
     let cache := (← get).natTys
-    set { st with natTys := cache.insert key r, methodReceivers := (← get).methodReceivers }
+    set { st with natTys := cache.insert key r, methodReceivers := (← get).methodReceivers, naturalArguments := (← get).naturalArguments }
     return r
   let coercible (t u : Ty) : EM Bool := do
     let st ← get
     let ok ← tryCatch (do discard <| coerce p ⟨.lit .void, t⟩ u; pure true) (fun _ => pure false)
-    set { st with natTys := (← get).natTys, methodReceivers := (← get).methodReceivers }
+    set { st with natTys := (← get).natTys, methodReceivers := (← get).methodReceivers, naturalArguments := (← get).naturalArguments }
     return ok
   let mut byNat : List String := []
   for o in cands do
@@ -578,14 +587,14 @@ partial def resolveOverload (ctx : Ctx) (p : Pos) (name : String) (ovs : List St
     let st ← get
     if !s.tparams.isEmpty then
       let ok ← tryCatch (do discard <| call o; pure true) (fun _ => pure false)
-      set { st with natTys := (← get).natTys, methodReceivers := (← get).methodReceivers }
+      set { st with natTys := (← get).natTys, methodReceivers := (← get).methodReceivers, naturalArguments := (← get).naturalArguments }
       return ok
     let ok ← tryCatch (do
         for (a, t) in argTys s do
           let r ← elabE ctx a (some t)
           discard <| coerce a.pos r t
         pure true) (fun _ => pure false)
-    set { st with natTys := (← get).natTys, methodReceivers := (← get).methodReceivers }
+    set { st with natTys := (← get).natTys, methodReceivers := (← get).methodReceivers, naturalArguments := (← get).naturalArguments }
     return ok
   -- the overloads the arguments' own types fit, then those the arguments
   -- elaborated at each one's parameter types fit
@@ -752,7 +761,7 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     if ctx.retries ≥ 8 then return ← elabAppBase ctx p f args bracket exp
     let saved ← get
     -- (the state is restored between attempts, but not the overload cache)
-    let restore : EM Unit := do set { saved with natTys := (← get).natTys, methodReceivers := (← get).methodReceivers }
+    let restore : EM Unit := do set { saved with natTys := (← get).natTys, methodReceivers := (← get).methodReceivers, naturalArguments := (← get).naturalArguments }
     tryCatch (elabAppBase ctx p f args bracket exp) fun err => do
       -- A one-argument candidate may fail its type, effects or call syntax
       -- before discovering a tuple for a different flattened overload.
