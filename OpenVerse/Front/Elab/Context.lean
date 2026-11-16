@@ -1429,6 +1429,97 @@ def Ctx.methodValueNeedsType (ctx : Ctx) (c m : String) : Bool :=
     | none => false
   | _ => false
 
+/-- Whether an expected result can repair this failed argument's inference.
+    Method receivers, returned callees and parameters absent from the result
+    keep their original errors instead of repeating shape/context retries. -/
+partial def argumentContextUsefulWith (elabE : Ctx → SExpr → Option Ty → EM R)
+    (ctx : Ctx) (a : SExpr) (err : String) : EM Bool := do
+  -- A nested generic call can itself require the element context.
+  -- Genuine producer errors propagate without a shape retry.
+  let emptyType := ["the type of an empty array{} must be given", "the type of an empty map{} must be given"].any
+    fun diagnostic => (err.splitOn diagnostic).length > 1
+  if (err.splitOn "cannot infer").length ≤ 1 && !emptyType then
+    return false
+  let missing := ((err.splitOn "cannot infer type parameter ")[1]?).map
+    fun text => (text.splitOn " ").headD ""
+  let memberName (g : String) := ctx.selfClass.any fun c =>
+    ctx.hasMethod c g || ((ctx.types.methodOverloads.lookup g).getD []).any (ctx.hasMethod c ·) ||
+    ((ctx.types.fields c).any (·.1 == g) && !builtins.contains g && !softBuiltins.contains g)
+  let callSig (g : String) : Option Sig :=
+    if memberName g then
+      ctx.selfClass.bind fun c => (ctx.methodDecl? c g).bind fun owner => ctx.sig? s!"{owner}.{g}"
+    else (ctx.sig? g).orElse fun _ => ctx.sig? s!"{g}$init"
+  let resultContext (s : Sig) :=
+    let owner := if s.hasReceiver then
+        match s.params.head? with
+        | some (.struct c _) => ((ctx.types.sparams.lookup c).getD []).map (·.1)
+        | _ => []
+      else []
+    s.ret.params.any fun v => s.tparams.any (·.1 == v) && !owner.contains v
+  let noHint (s : Sig) := !resultContext s || missing.any fun v =>
+    s.tparams.any (·.1 == v) && !s.ret.params.contains v
+  let fnValue : Ty → Bool := fun | .struct n _ => (FnValues.parseName n).isSome | _ => false
+  let probeState ← get
+  let typedField (receiver : SExpr) (method : String) : Bool :=
+    match (elabE { ctx with typeOnly := true, callInstanceProbe := none } receiver none).run probeState with
+    | .ok (⟨_, .struct c args⟩, _) =>
+      let method := if method.startsWith "$spawnMethod:" then (method.drop 13).toString else method
+      let (view, method) := if method.startsWith "(" then
+          match (method.drop 1).toString.splitOn ":)" with
+          | [owner, method] => (owner, method)
+          | _ => (c, method)
+        else (c, method)
+      (ctx.methodDecl? view method).isNone &&
+        !(((ctx.types.methodOverloads.lookup method).getD []).any (ctx.hasMethod view ·)) &&
+        (ctx.types.fields view (ctx.types.upArgs c args view)).any fun (n, t, _) => n == method && fnValue t
+    | _ => false
+  let fixedResult := match a with
+    | .app _ (.ident _ g) _ _ =>
+      match ctx.lookup g with
+      | some binding => fnValue binding.ty
+      | none =>
+        let receiver := if (ctx.lookup "Self").isSome then "Self" else "$Self"
+        (memberName g && typedField (.ident a.pos receiver) g) ||
+          (callSig g).any (fun s => !resultContext s)
+    | .app _ (.member _ receiver method) _ _ => typedField receiver method
+    | _ => false
+  let noResultEvidence := Choice.anyE (fun
+    | .app q (.ident _ g) _ _ =>
+      err.startsWith s!"{q.show}:" && (ctx.lookup g).isNone &&
+        (callSig g).any noHint
+    | .app q (.member _ receiver method) _ _ =>
+      if !err.startsWith s!"{q.show}:" &&
+          !Choice.anyE (fun e => err.startsWith s!"{e.pos.show}:") receiver then false else
+      let cls : Except String (Option String) := match receiver with
+        | .ident _ "(super:)" => .ok (ctx.selfClass.bind fun c => (ctx.types.info c).parent)
+        | _ => match (elabE { ctx with typeOnly := true, callInstanceProbe := none } receiver none).run probeState with
+          | .ok (⟨_, .struct cls _⟩, _) => .ok (some cls)
+          | .error receiverError => .error receiverError
+          | _ => .ok none
+      match cls with
+      -- Receiver expressions never receive the method's result
+      -- context. The same receiver error cannot be repaired by it.
+      | .error receiverError => receiverError == err
+      | .ok cls =>
+        let method := if method.startsWith "$spawnMethod:" then (method.drop 13).toString else method
+        let (cls, method) := if method.startsWith "(" then
+            match (method.drop 1).toString.splitOn ":)" with
+            | [owner, method] => (some owner, method)
+            | _ => (cls, method)
+          else (cls, method)
+        (cls.bind fun c => (ctx.methodDecl? c method).bind fun owner => ctx.sig? s!"{owner}.{method}").any noHint
+    | .app _ callee _ _ =>
+      -- A returned callable is also elaborated independently of
+      -- the expected result of invoking it.
+      match (elabE { ctx with typeOnly := true, callInstanceProbe := none } callee none).run probeState with
+      | .error calleeError => calleeError == err
+      | _ => false
+    | _ => false) a
+  -- A result hint cannot supply an unrelated parameter of the
+  -- failing producer. Retrying it at every enclosing singleton
+  -- boundary would multiply the same unfixable inference failure.
+  return !(fixedResult || noResultEvidence)
+
 /-- Classify a bound value using an isolated receiver type probe. Its code,
     slots, effects and helper requests never enter the actual call. -/
 partial def argNeedsTypeWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (a : SExpr) : EM Bool := do
@@ -1449,7 +1540,9 @@ partial def argNeedsTypeWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx
     | .error error =>
       -- A cast refusal needs the normal clause-lifting retry, rather than
       -- an unbound outer instance that would hide that refusal.
-      return !preserveRefinement || (Refine.castRefusal? error).isNone
+      if !preserveRefinement then return true
+      if (Refine.castRefusal? error).isSome then return false
+      argumentContextUsefulWith elabE probeCtx a error
   let compound (es : List SExpr) : EM Bool := do
     if !(← es.anyM (argNeedsTypeWith elabE ctx)) then return false
     -- Keep compounds that already infer naturally in the first pass.
