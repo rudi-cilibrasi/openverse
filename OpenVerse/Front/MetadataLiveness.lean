@@ -31,6 +31,27 @@ private def edges (plan : MetadataPlan.Plan) : MetadataPlan.Node → List Nat
       (List.range plan.groups.size).flatMap (groupEdges plan)
   | .cleanupDone | .drained | .ret _ => []
 
+private partial def visitOrder (successors : Array (List Nat)) (pc : Nat) :
+    StateM (Array Bool × List Nat) Unit := do
+  let (seen, _) ← get
+  if pc ≥ seen.size || seen[pc]! then return
+  modify fun (seen, order) => (seen.set! pc true, order)
+  for next in successors[pc]! do visitOrder successors next
+  modify fun (seen, order) => (seen, pc :: order)
+
+/-- Reverse postorder of the finite scheduler graph. This changes only the
+    order in which pending abstract configurations reach their fixed point. -/
+def controlOrder (plan : MetadataPlan.Plan) : Array Nat := Id.run do
+  let successors := plan.nodes.map (edges plan)
+  let (_, order) := ((do
+    visitOrder successors plan.entry
+    for pc in [:plan.nodes.size] do visitOrder successors pc
+    : StateM (Array Bool × List Nat) Unit).run
+      (Array.replicate plan.nodes.size false, [])).2
+  let mut ranks := Array.replicate plan.nodes.size plan.nodes.size
+  for (pc, rank) in order.zipIdx do ranks := ranks.set! pc rank
+  return ranks
+
 private def usesDefs (fns : Array Fn) (plan : MetadataPlan.Plan)
     (node : MetadataPlan.Node) : Nat × Nat :=
   let bits := mask plan.slots

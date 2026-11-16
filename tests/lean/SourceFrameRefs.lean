@@ -36,18 +36,18 @@ private def make (name : String) (body : Expr) : Fn :=
 private def origin (owner : String) (args : List VTy := []) : FrameRefs.Origin :=
   { frame := owner, name := "Value", args }
 private def ownerTag (n : String) : Option Nat := if n == "Owner" then some 0 else none
-private def prepared (cycle : Bool) : Except String SourceFrames.Prepared :=
+private def prepared (cycle : Bool) (forwardedOnly : Bool := false) : Except String SourceFrames.Prepared :=
   let branch := if cycle then Expr.ite (.lit (.logic false)) (.call 1 []) (.call 3 []) else .call 3 []
   let fns := #[make "Owner" (.call 1 []), make "BridgeA" (.call 2 []),
-    make "BridgeB" branch, make "Leaf" (.local 0)]
+    make "BridgeB" branch, make "Leaf" (if forwardedOnly then int 1 else .local 0)]
   let info : Array FrameRefs.Info := #[{ slots := [(0, origin "Owner")] }, {}, {},
-    { slots := [(0, origin "Owner")] }]
+    if forwardedOnly then { forwarded := [origin "Owner"] } else { slots := [(0, origin "Owner")] }]
   SourceFrames.prepare ownerTag fns #[[.int], [.int], [.int], [.int]]
     (List.replicate 4 ([], .int)) info
 
 private def checkForwarding : IO Unit := do
-  for cycle in [false, true] do
-    let p ← match prepared cycle with | .ok p => pure p | .error e => throw (IO.userError e)
+  for (cycle, forwardedOnly) in [(false,false),(true,false),(false,true),(true,true)] do
+    let p ← match prepared cycle forwardedOnly with | .ok p => pure p | .error e => throw (IO.userError e)
     unless p.refs[0]! == [] && (List.range 3).all (fun i =>
         (p.refs[i+1]!.lookup "Owner").isSome && p.fns[i+1]!.arity == 1) do
       throw (IO.userError s!"missing multi-hop/cyclic frame forwarding: {cycle}")
@@ -66,6 +66,13 @@ private def checkForwarding : IO Unit := do
   unless !(Prog.checkMain { fns := p.fns.toList, main := 0 }) &&
       (p.refs[0]!.lookup "Owner").isSome do
     throw (IO.userError "a distinct entry fabricated an unavailable owner's frame")
+  let onlyForwarded : Array FrameRefs.Info := #[{}, {}, { forwarded := [origin "Owner"] }]
+  let forwardRoot ← match SourceFrames.prepare ownerTag escape (Array.replicate 3 [.int])
+      (List.replicate 3 ([], .int)) onlyForwarded with
+    | .ok p => pure p | .error e => throw (IO.userError e)
+  unless !(Prog.checkMain { fns := forwardRoot.fns.toList, main := 0 }) &&
+      (forwardRoot.refs[0]!.lookup "Owner").isSome do
+    throw (IO.userError "forward-only transport fabricated an unavailable owner's frame")
   -- Explicit transport may use a different local generic coordinate; it
   -- cannot turn an int owner into the logic owner a callee requires.
   let wrong : Array Fn := #[make "Entry" (.call 2 []), make "Owner" (.lit .void), make "Leaf" (.local 0)]
