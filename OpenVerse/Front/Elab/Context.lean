@@ -1207,8 +1207,8 @@ partial def Ctx.isTypeValue (ctx : Ctx) : SExpr → Bool
     let (_, result) := values.foldl (fun (scope, _) value =>
       let role := scope.isTypeValue value
       let scope := match value with
-        | .decl _ name _ mutable body => { scope with locals :=
-            { name, slot := 0, ty := .void, mutable, typeValue := scope.isTypeValue body } :: scope.locals }
+        | .decl _ name _ mutable _ => { scope with locals :=
+            { name, slot := 0, ty := .void, mutable, typeValue := role } :: scope.locals }
         | .set _ (.ident _ name) _ _ => scope.withTypeValue name role
         | _ => scope
       (scope, role)) (ctx, false)

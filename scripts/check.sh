@@ -117,6 +117,9 @@ echo "== refined conditional branch-choice contracts"
 tests/scripts/test-refined-conditional-choice.sh
 echo "== metadata reader C-runtime oracles"
 tests/scripts/test-metadata-reader-runtime.sh "$logs/metadata-reader"
+# Fixed-budget compilation probes run before parallel jobs compete for CPU.
+echo "== enclosing cleanup growth and state resource contracts"
+python3 tests/scripts/test-enclosing-cleanup-growth.py
 
 # (from here on, each process may use at most CHECK_MEM_GB of virtual memory, 4 by default: on
 # 2026-11-09 a Lean run of a generated program reached 60 GB on a dev machine, and on a 16 GB CI
