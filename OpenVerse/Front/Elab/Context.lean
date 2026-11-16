@@ -468,6 +468,9 @@ structure Ctx where
       of its own an earlier elaboration asked for (#275, #335), which is
       keyed by place and may take clauses that bind other names. -/
   typeOnly : Bool := false
+  /-- An isolated argument classification probe already owns this subtree.
+      Do not recursively probe its nested generic applications again. -/
+  argumentTypeProbe : Bool := false
   /-- Isolated mutual-generator inference: return this call's inferred type
       arguments after normal binding, without requiring witnesses. -/
   callInstanceProbe : Option String := none
@@ -1430,12 +1433,12 @@ def Ctx.methodValueNeedsType (ctx : Ctx) (c m : String) : Bool :=
     slots, effects and helper requests never enter the actual call. -/
 partial def argNeedsTypeWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (a : SExpr) : EM Bool := do
   if ctx.argNeedsType a then return true
-  let compound (es : List SExpr) : EM Bool := do
-    if !(← es.anyM (argNeedsTypeWith elabE ctx)) then return false
-    -- A grouped positional argument can need a later named argument's
-    -- type. Keep compounds that already infer naturally in the first pass.
+  let probe : EM Bool := do
+    if ctx.argumentTypeProbe then return false
     let saved ← get
-    match (elabE { ctx with typeOnly := true, callInstanceProbe := none } a none).run saved with
+    let probeCtx := { ctx with
+      typeOnly := true, callInstanceProbe := none, argumentTypeProbe := true }
+    match (elabE probeCtx a none).run saved with
     -- (one with an empty `array{}` or `map{}` in it, whose type from no
     -- context is of `false`, says nothing of that element: it takes its
     -- type from the other arguments)
@@ -1444,8 +1447,22 @@ partial def argNeedsTypeWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx
       modify fun st => { st with natTys := probed.natTys, methodReceivers := probed.methodReceivers }
       return false
     | .error _ => return true
+  let compound (es : List SExpr) : EM Bool := do
+    if !(← es.anyM (argNeedsTypeWith elabE ctx)) then return false
+    -- Keep compounds that already infer naturally in the first pass.
+    probe
   match a with
   | .app _ (.ident _ "$callSingleton") [e] false => argNeedsTypeWith elabE ctx e
+  | .app _ (.ident _ name) _ _ =>
+    -- A generic call such as Empty() can need the containing parameter's
+    -- type just as an empty literal does. The isolated probe distinguishes
+    -- those calls from applications that already infer their own instance.
+    if (ctx.lookup name).isNone && (ctx.types.overloads.lookup name).isNone &&
+        !(ctx.selfClass.any fun c => (ctx.types.fields c).any (·.1 == name) ||
+          ctx.hasMethod c name ||
+          ((ctx.types.methodOverloads.lookup name).map (·.any (ctx.hasMethod c ·))).getD false) &&
+        (ctx.sig? name).any (fun s => !s.isConst && !s.tparams.isEmpty) then probe
+    else return false
   | .tuple _ es | .arrayLit _ es => compound es
   | .optionLit _ e => compound [e]
   | .mapLit _ kvs => compound (kvs.flatMap fun (k, v) => [k, v])
