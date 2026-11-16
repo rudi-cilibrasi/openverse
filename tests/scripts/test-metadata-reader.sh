@@ -6,6 +6,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root"
 python3 - <<'PY'
 import json
+import os
 import resource
 import shlex
 import subprocess
@@ -35,11 +36,15 @@ with tempfile.TemporaryDirectory(prefix="openverse-metadata-reader-") as work:
 
     count = int(subprocess.check_output([str(binary), "--count"], text=True,
                                         timeout=15, preexec_fn=limits))
+    artifacts = os.environ.get("METADATA_READER_ARTIFACTS")
+    if artifacts:
+        Path(artifacts).mkdir(parents=True, exist_ok=True)
     for index in range(count):
         try:
             # Each real/metadata source pair has the original diagnostic's
             # own 15-second / 4-GB allowance.
-            result = subprocess.run([str(binary), str(index)], text=True,
+            command = [str(binary), str(index)] + ([artifacts] if artifacts else [])
+            result = subprocess.run(command, text=True,
                                     capture_output=True, timeout=15, preexec_fn=limits)
         except subprocess.TimeoutExpired:
             raise SystemExit(f"metadata-reader: case {index} exceeded unchanged 15-second bound")
