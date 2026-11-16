@@ -1,0 +1,44 @@
+prefix
+second
+inner 1
+leave 1
+inner 2
+leave 2
+second
+inner 3
+leave 3
+inner 4
+leave 4
+prefix
+second
+inner 5
+leave 5
+99 7 99 9
+final 99 99
+second
+inner 1
+leave 1
+inner 2
+leave 2
+second
+inner 3
+leave 3
+11 12 99 9
+final 11 99
+prefix
+inner 1
+leave 1
+inner 2
+leave 2
+prefix
+inner 3
+leave 3
+99 7 11 12
+final 99 11
+inner 1
+leave 1
+inner 2
+leave 2
+11 12 11 12
+final 11 11
+exit=0

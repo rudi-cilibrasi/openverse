@@ -2755,6 +2755,9 @@ structure ForStagePlan where
   /-- A refinement prefix prepares a different world from the committing
       body. Retain the body's original lexical and rollback ownership. -/
   resumeContext : Option SourceContext := none
+  /-- Only a real source collector body carries this capability. Protocol
+      source/filter stages keep their existing private failure context. -/
+  resumeCanFail : Option Bool := none
   resumeRollback : Bool := false
   /-- Immediate refinement environments receive current caller copy-ins
       when resumed, after prefix cleanup has finished. -/
