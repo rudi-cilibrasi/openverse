@@ -21,6 +21,9 @@ private def cases : List (String × String × Bool) := [
   ("real shared write remains valid", "    var Stored:" ++ callable ++ "=Dummy\n    Rows:=for(A:=1|2):\n        set Stored=F\n        Sleep(0.001)\n        0\n    Rows.Length\n", true),
   ("opaque tuple column cannot reuse real context", "    Real:=Id((Dummy,F))\n    Other:=Id((F,Dummy))\n    Rows:=for(A:=1|2):\n        Sleep(0.001)\n        Real(1)()+Other(1)()\n    Rows.Length\n", false),
   ("distinct real tuple columns remain valid", "    Real:=Id((Dummy,F))\n    Other:=Id((F,Dummy))\n    Rows:=for(A:=1|2):\n        Sleep(0.001)\n        Real(1)()+Other(0)()\n    Rows.Length\n", true),
+  ("live forwarded tuple survives rollback and wait", "    Rows:=for(A:=1|2):\n        var T:tuple(" ++ callable ++ "," ++ callable ++ ")=(Dummy,F)\n        Saved:=Id(T)\n        if(set T=(F,Dummy);false?){}\n        Sleep(0.001)\n        Saved(1)()+T(1)()\n    Rows.Length\n", true),
+  ("live forwarded tuple retains opaque column", "    Rows:=for(A:=1|2):\n        var T:tuple(" ++ callable ++ "," ++ callable ++ ")=(Dummy,F)\n        Saved:=Id(T)\n        if(set T=(F,Dummy);false?){}\n        Sleep(0.001)\n        Saved(0)()\n    Rows.Length\n", false),
+  ("overwritten tuple retains its new real column", "    Rows:=for(A:=1|2):\n        var T:tuple(" ++ callable ++ "," ++ callable ++ ")=(Dummy,F)\n        set T=(F,Dummy)\n        Sleep(0.001)\n        Id(T)(0)()\n    Rows.Length\n", true),
   ("borrowed real overwrite remains valid", "    var Stored:" ++ callable ++ "=Dummy\n    branch:\n        Sleep(0.001)\n        Value:=Stored()\n    set Stored=F\n    Sleep(0.002)\n    0\n", true),
   ("saved borrowed metadata remains unsafe", "    var Stored:" ++ callable ++ "=Dummy\n    Saved:=Stored\n    branch:\n        Sleep(0.001)\n        Value:=Saved()\n    set Stored=F\n    Sleep(0.002)\n    0\n", false)]
 
@@ -78,4 +81,4 @@ def main : IO Unit := do
         if !dummy || accepted || (error.splitOn "dummy type value cannot").length ≤ 1 then
           throw <| IO.userError s!"{name}/{dummy}: unexpected refusal {error}"
   checkForwardedCalls
-  IO.println "metadata scheduled replay contracts passed (10 real/dummy pairs, 4 forwarded-owner controls)"
+  IO.println "metadata scheduled replay contracts passed (13 real/dummy pairs, 4 forwarded-owner controls)"

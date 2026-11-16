@@ -545,6 +545,7 @@ private structure ScheduleEnv where
   info : Info
   plan : MetadataPlan.Plan
   referenceLive : MetadataLiveness.Analysis
+  environments : Std.HashMap (Nat × Nat) (Fn × Info) := {}
 
 private structure State where
   scheduleProofs : Std.HashMap Key ScheduleProof := {}
@@ -952,6 +953,7 @@ private partial def actorEnvironment (env : ScheduleEnv) (a : Actor) : Fn × Inf
   match a.context with
   | none => (env.fn, env.info)
   | some (g, offset) =>
+    if let some cached := env.environments[(g, offset)]? then cached else
     let info := env.infos[g]?.getD {}
     let alias (i : Nat) := (env.plan.aliases.lookup (i + offset)).getD (i + offset)
     (env.fns[g]!, { info with
@@ -987,7 +989,7 @@ private partial def keepConfigurationModes (mask : Bits) (c : Configuration) : C
 
 /-- Current actors, deferred resumes, and signal return continuations can
     all become active. Saved transaction memories are deliberately retained. -/
-private partial def restrictReferences (env : ScheduleEnv) (c : Configuration) : Configuration := Id.run do
+private partial def restrictReferences (env : ScheduleEnv) (modes : Bits) (c : Configuration) : Configuration := Id.run do
   let mut live := env.referenceLive.cleanup
   for actor in c.actors do
     live := live ||| env.referenceLive.get actor.pc
@@ -998,10 +1000,18 @@ private partial def restrictReferences (env : ScheduleEnv) (c : Configuration) :
     | .cleanup _ _ pc | .resume _ pc | .returnCall _ pc | .returnScope _ _ _ _ pc =>
       live := live ||| env.referenceLive.get pc
     | _ => pure ()
-  return { c with refs := MetadataReferences.restrict c.refs live.testBit }
+  -- Tuple columns, like references, are observed through local reads. Keep
+  -- all source/shared cells as well as graph-live locals. Saved transaction
+  -- slots remain intact until their rollback destination becomes current.
+  let tupleLive := live ||| modes.bits
+  let tuples := if c.slots.tuples.all (fun i _ => tupleLive.testBit i) then c.slots.tuples
+    else c.slots.tuples.filter fun i _ => tupleLive.testBit i
+  return { c with
+    refs := MetadataReferences.restrict c.refs live.testBit
+    slots := { c.slots with tuples } }
 
 private partial def ScheduleWork.push (w : ScheduleWork) (c : Configuration) : ScheduleWork :=
-  let c := restrictReferences w.env (keepConfigurationModes w.modes c)
+  let c := restrictReferences w.env w.modes (keepConfigurationModes w.modes c)
   let key := configurationKey c
   match w.pending[key]? with
   | some old => { w with pending := w.pending.insert key (joinConfiguration old c) }
@@ -1113,6 +1123,15 @@ private partial def liveLateBranches (plan : MetadataPlan.Plan) (c : Configurati
         c.actors[actor]!.status != .done && c.actors[actor]!.status != .idle)
 
 private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
+  -- A lexical source frame has the same shifted ownership facts at every
+  -- visit. Materialize it once per plan context rather than rebuilding its
+  -- alias substitutions at every abstract transition.
+  let mut env := env
+  for context in env.plan.contexts do
+    if let some key := context then
+      if !env.environments.contains key then
+        let value := actorEnvironment env { context }
+        env := { env with environments := env.environments.insert key value }
   let extra := env.plan.slots - entry.values.size
   let pad (a : Bits) := a.appendZeros extra
   let slots : Slots := {
@@ -1143,7 +1162,7 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
     cursor := cursor + 1
     let c := match known[key]? with
       | none => incoming
-      | some old => joinConfiguration old incoming
+      | some old => if old == incoming then old else joinConfiguration old incoming
     if (known[key]?).any (· == c) then continue
     known := known.insert key c
     let stops := readyCancellations env.plan c
