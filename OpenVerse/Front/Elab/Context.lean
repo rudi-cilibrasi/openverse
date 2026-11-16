@@ -1723,7 +1723,7 @@ def Ctx.noteFunctionOverload (ctx : Ctx) (p : Pos) (f o : String) : EM Unit := d
       (ctx.trial == some .continuation && eligible && !ctx.types.requests.overloads.contains (p, o)) then
     noteNeeds { overloads := [(p, o)] }
 
-/-- Whether a copied suffix contains a nonrecursive multivalue overload call. -/
+/-- Whether a copied suffix contains a top-level multivalue overload call. -/
 def Ctx.hasCopiedOverloads (ctx : Ctx) (code : List SExpr) : Bool :=
   (code.flatMap Choice.callUses).any fun (_, f) =>
     ctx.types.copiedOverloadFns.any fun (n, _) => n.startsWith (f ++ "$mv")
