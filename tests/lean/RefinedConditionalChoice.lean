@@ -59,7 +59,42 @@ private def compile (source : String) (dummy : Bool) : Except String Compiled :=
         { parameter with typeValue := dummy && name == "Rows" && parameter.name == "Dummy" }) tps fx result body
     | top => top)
 
+/-- Internal firstDecides collection adds its singleton even with no source
+    prefix; the ordinary empty-prefix path does not. Both retain []t bodies. -/
+private def shapeModes (directory : String) : IO Unit := do
+  let source ← IO.FS.readFile "tests/verse/class_cast_refine_conditional_choice_nested_no_prefix.verse"
+  let expected := "prefix\n3 7\n3 7\n4 7\n4 7\nfinal 99\n"
+  for first in [false,true] do
+    let tops ← match parseProgram source with
+      | .ok tops => pure tops
+      | .error message => throw <| IO.userError message
+    let tops := if !first then tops else tops.map fun
+      | .fn p name ps tps fx result (.forE q clauses body) =>
+        if name != "Rows" then .fn p name ps tps fx result (.forE q clauses body) else
+        .fn p name ps tps fx result (.app q (.ident q "$refinementContinue")
+          [.decl q "$value" (some (.arr (.name "t"))) false (.tuple q []),
+           .app q (.ident q "$forFirst") [.block q clauses, body] false] false)
+      | top => top
+    let compiled ← match elabProgram tops with
+      | .ok compiled => pure compiled
+      | .error message => throw <| IO.userError s!"shape/{first}: {message}"
+    unless compiled.prog.check && compiled.prog.checkControl &&
+        compiled.prog.checkTypes compiled.sigs compiled.slotTys do
+      throw <| IO.userError s!"shape/{first}: invalid Core"
+    match compiled.prog.runB 10000000 10000 with
+    | .res (.ok _, output) =>
+      unless String.ofList (output.map Char.ofNat) == expected do
+        throw <| IO.userError s!"shape/{first}: wrong nested-array trace"
+    | _ => throw <| IO.userError s!"shape/{first}: VM did not complete"
+    let path := s!"{directory}/shape-{first}"
+    IO.FS.writeBinFile (path ++ ".vbc") compiled.prog.encode
+    IO.FS.writeFile (path ++ ".expected") expected
+  IO.println "nested array modes passed (ordinary and firstDecides)"
+
 def main (args : List String) : IO Unit := do
+  if let ["--shape", directory] := args then
+    shapeModes directory
+    return
   if args == ["--count"] then
     IO.println cases.length
     return

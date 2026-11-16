@@ -157,6 +157,10 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       let result := s!"$refinementBranchValues{p.line}_{p.col}_{index}"
       let consumer := forStageBodyAs body (SExpr.block p
         [.decl p result (some (Ty.arr value).toSTy) false chosen, .ident p result])
+      -- An empty prefix contributes no collection layer in an ordinary
+      -- for. The selected consumer already returns the complete array.
+      if index == 0 && !firstDecides then
+        return ← elabE c consumer (some (.arr value))
       let outer ← elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq c p
         (clauses.take index) consumer (prepared := prepared)
         (firstDecides := firstDecides) (failure := failure)
