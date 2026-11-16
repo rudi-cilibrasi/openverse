@@ -2262,13 +2262,41 @@ partial def elimLinearReturns (fresh : Nat → String) (ret : STy) (outcome : Bo
       let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer
       return (s :: tail, next)
 
+/-- Consecutive statements without escaping bindings or defer registrations
+    can share balanced block scopes. This keeps a large return prefix from
+    becoming a linear-depth nest of collection loops after choice lowering. -/
+private partial def balanceReturnRun (ss : List SExpr) : List SExpr :=
+  if ss.length ≤ 4 || !ss.any hasReturn then ss else
+  let middle := ss.length / 2
+  let left := balanceReturnRun (ss.take middle)
+  let right := balanceReturnRun (ss.drop middle)
+  [.block (left.head?.map (·.pos) |>.getD default) left,
+   .block (right.head?.map (·.pos) |>.getD default) right]
+
+private partial def balanceReturnSequence (ss : List SExpr) : List SExpr :=
+  let run := ss.takeWhile fun s => (boundIn [s]).isEmpty && !isDefer s &&
+    match s with
+    | .app _ (.ident _ name) _ _ => !name.startsWith "$"
+    | _ => true
+  let rest := ss.drop run.length
+  balanceReturnRun run ++ match rest with
+    | [] => []
+    | binding :: tail => binding :: balanceReturnSequence tail
+
+private partial def balanceReturnBlocks (e : SExpr) : SExpr :=
+  mapE (fun
+    | .block p ss => some (.block p (balanceReturnSequence (ss.map balanceReturnBlocks)))
+    | _ => none) e
+
 /-- Retain the existing plain-return shape, and preserve scope boundaries
     when a returning function also has cleanup. -/
 def elimReturns (fresh : Nat → String) (n : Nat) (multi : SExpr → Bool := fun _ => false)
     (ret : Option STy := none) (ss : List SExpr) (tailBlocks : Bool := false) : Option (List SExpr × Nat) :=
   if (ss.map countRetIfs).foldl (· + ·) 0 > 16 then
     match ret with
-    | some ty => elimLinearReturns fresh ty false n ((ss.head?.map (·.pos)).getD default) (tailReturns ss) []
+    | some ty =>
+      let balanced := balanceReturnSequence ((tailReturns ss).map balanceReturnBlocks)
+      elimLinearReturns fresh ty false n ((ss.head?.map (·.pos)).getD default) balanced []
     | none => none
   else if ss.any (anyE isDefer) then
     elimScopedReturns fresh multi ret n ((ss.head?.map (·.pos)).getD default) (tailReturns ss) [] []
