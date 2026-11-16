@@ -118,6 +118,12 @@ private def refinementSnapshot (overwrite : Bool) : String := callables
    (if overwrite then "    set Stored=F\n" else "") ++
    "    if(Print(\"prefix\"),P:=pair[E],Saved:=P.L,L:=lit[Saved],set P.L=lit{V:=99},R:=lit[P.R])then option{(L.V+Stored(),R.V)}else false")
 
+private def refinementClauseCell (overwrite : Bool) : String := callables
+  ("expr(t:type):=class<abstract>{Eval():t}\nlit:=class(expr(int)){V:int;Eval<override>():int=V}\npair(a:type,b:type):=class(expr(tuple(a,b))){var L:expr(a);R:expr(b);Eval<override>():tuple(a,b)=(L.Eval(),R.Eval())}\n" ++
+   "Caller(E:expr(t),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where t:type)<transacts>:[]t=\n" ++
+   "    for(var Stored:type{_()<computes>:int}=Dummy,P:=pair[E],Saved:=P.L,L:=lit[Saved],Changed:=block{set P.L=lit{V:=99};1},R:=lit[P.R],Written:=block{set Stored=" ++
+   (if overwrite then "F" else "Dummy") ++ ";1},N:=1..2){(L.V+Stored(),R.V)}")
+
 private def refinementSnapshotOpaque : String :=
   ((refinementSnapshot false).replace "<transacts>:?t="
     "<transacts>:tuple(type{_()<computes>:int},?t)=").replace
@@ -131,6 +137,7 @@ private def refinementComputedFirst (overwrite : Bool) : String := callables
    "    first{I:=Add(Read(H,\"L\",dup[P].Lo),Read(H,\"R\",dup[Change(H,R,Q)].Lo))..2;(I+Stored(),P.A,Q.A)}")
 
 private def cases : List (String × String) := [
+  ("typed row clause-cell metadata capture", refinementClauseCell false),
   ("typed snapshot environment metadata capture", refinementSnapshot false),
   ("typed environment choice after bound metadata capture", sameBoundCapture "<transacts>:[]tuple(b,d,int)=for(I:=Add(dup[P].Lo,dup[Q].Lo)..2,J:=(0|1)){(P.A,Q.A,I+J+Dummy())}"),
   ("typed environment first metadata capture", refinementComputedFirst false),
@@ -322,6 +329,7 @@ private def cases : List (String × String) := [
   ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
+  ("typed row clause-cell real overwrite", refinementClauseCell true),
   ("typed snapshot environment opaque forwarding", refinementSnapshotOpaque),
   ("typed snapshot environment real overwrite", refinementSnapshot true),
   ("typed environment choice after bound real overwrite", sameBoundCapture "<transacts>:[]tuple(b,d,int)=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    for(I:=Add(dup[P].Lo,dup[Q].Lo)..2,J:=(0|1)){(P.A,Q.A,I+J+Stored())}"),

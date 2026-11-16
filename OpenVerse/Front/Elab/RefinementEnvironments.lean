@@ -14,8 +14,8 @@ def refinementPrefixMarker (p : Pos) (clauses : List SExpr) (ready : SExpr) : SE
     substitution changes its arguments in the selected branch, so the
     environment's actual superclass records precisely that world's index. -/
 def refinementReadyMarker (p : Pos) (plan : Choice.ForStagePlan) (args : List Ty)
-    (copies : List SExpr) (suffix : List SExpr) (body : SExpr) : SExpr :=
-  .app p (.ident p "$refinementReady")
+    (copies : List SExpr) (suffix : List SExpr) (body : SExpr) (one : Bool := false) : SExpr :=
+  .app p (.ident p (if one then "$refinementReadyOne" else "$refinementReady"))
     [.str p [.text plan.base],
      .decl p "$refinementView" (some (forStageView plan.base (args.map Ty.toSTy))) false (.tuple p []),
      .block p copies, .block p suffix, body] false
@@ -163,7 +163,7 @@ def refinementPrefixOf (ctx : Ctx) (plan : Choice.ForStagePlan) (args : List Ty)
   let (tps, witnesses, typeArgs) ← contTypes ctx p (caps.map (·.ty)) args written
   let params := caps.map fun l => ({
     name := if l.mutable then l.name ++ "$in" else l.name
-    ty := l.ty.toSTy, typeValue := l.typeValue } : SParam)
+    ty := l.ty.toSTy, typeValue := l.typeValue, metadataForward := l.mutable } : SParam)
   let init := caps.filterMap fun l => if !l.mutable then none else some
     (SExpr.decl p l.name (some l.ty.toSTy) true
       (.app p (.ident p "$refineCopyIn") [.ident p (l.name ++ "$in")] false))
@@ -199,7 +199,7 @@ def refinementPrefixOf (ctx : Ctx) (plan : Choice.ForStagePlan) (args : List Ty)
     this context before this marker was reached. -/
 def elabRefinementReady (elabE : Ctx → SExpr → Option Ty → EM R)
     (ctx : Ctx) (p : Pos) (base : String) (view : STy)
-    (copies suffix : List SExpr) (body : SExpr) : EM R := do
+    (copies suffix : List SExpr) (body : SExpr) (one : Bool := false) : EM R := do
   let some plan := ctx.types.requests.loops.findSome? (fun r => r.stagePlan.filter (·.base == base))
     | eerr p "internal: missing refinement environment plan"
   let .struct _ args ← resolveTy ctx.types p view
@@ -220,6 +220,189 @@ def elabRefinementReady (elabE : Ctx → SExpr → Option Ty → EM R)
     else do
       askHelper p request
       pure (.prim .userErr [])
-  return ⟨.prim .mkArr [value], .arr ty⟩
+  return if one then ⟨value, ty⟩ else ⟨.prim .mkArr [value], .arr ty⟩
+
+/-- Rename live clause values without treating constructor field labels as
+    local declarations. A source local still cannot shadow a live clause local. -/
+private partial def refinementRenameValues (renames : List (String × String))
+    (expression : SExpr) : EM SExpr := do
+  match expression with
+  | .ident p name => return .ident p ((renames.lookup name).getD name)
+  | .construct p name types fields =>
+    let fields ← fields.mapM fun
+      | .decl q label annotation mutable value => do
+        return .decl q label (annotation.map (Choice.renameValueTypes renames)) mutable
+          (← refinementRenameValues renames value)
+      | value => refinementRenameValues renames value
+    return .construct p name (types.map (Choice.renameValueTypes renames)) fields
+  | .decl p name annotation mutable value =>
+    if (renames.lookup name).isSome then
+      eerr p s!"'{name}' is already defined; Verse does not allow shadowing (use set {name} = … for a var)"
+    return .decl p name (annotation.map (Choice.renameValueTypes renames)) mutable
+      (← refinementRenameValues renames value)
+  | .gen p name index source =>
+    for name in name :: index.toList do
+      if (renames.lookup name).isSome then
+        eerr p s!"'{name}' is already defined; Verse does not allow shadowing (use set {name} = … for a var)"
+    return .gen p name index (← refinementRenameValues renames source)
+  | expression => expression.mapChildrenM (refinementRenameValues renames)
+
+/-- Keep caller-nameable clause locals in live caller slots. Their source
+    initializers remain at the original clause; only the compiler's inert
+    slot default moves to the enclosing private scope. Bindings become visible
+    after their initializer, as they do in ordinary clause elaboration. -/
+def refinementOwnedLocals (ctx : Ctx) (p : Pos) (clauses : List SExpr)
+    (body : SExpr) : EM (Option SExpr) := do
+  let written := SExpr.forE p clauses body
+  let assigned := Choice.setsIn written
+  let stem := "refinementLocal" ++ contKey ctx p "$locals" [written]
+  let mut locals : List (String × String × Ty) := []
+  let mut earlier : List String := []
+  for clause in clauses do
+    if let .decl q name (some annotation) true _ := clause then
+      if assigned.contains name then
+        checkNewLocal ctx q name
+        if earlier.contains name then
+          eerr q s!"'{name}' is already defined; Verse does not allow shadowing (use set {name} = … for a var)"
+        let saved ← get
+        let ty ← tryCatch (some <$> resolveTy ctx.types q annotation) (fun _ => pure none)
+        set saved
+        if let some ty := ty.filter (!·.hasNever) then
+          locals := locals ++ [(name, s!"$refinementLocal{stem.hash}_{name}", ty)]
+    earlier := earlier ++ Choice.boundIn [clause]
+  if locals.isEmpty then return none
+  let mut renames : List (String × String) := []
+  let mut rewritten : List SExpr := []
+  for clause in clauses do
+    match clause with
+    | .decl q name _ true value =>
+      if let some (_, privateName, _) := locals.find? (fun local => local.1 == name) then
+        let value ← refinementRenameValues renames value
+        rewritten := rewritten ++ [.decl q (privateName ++ "$initialized") none false
+          (.block q [.set q (.ident q privateName) none value, .tuple q []])]
+        renames := renames ++ [(name, privateName)]
+      else rewritten := rewritten ++ [← refinementRenameValues renames clause]
+    | clause => rewritten := rewritten ++ [← refinementRenameValues renames clause]
+  let body ← refinementRenameValues renames body
+  let defaults := locals.map fun (_, name, ty) => SExpr.decl p name (some ty.toSTy) true
+    (.app p (.ident p "$refinementSlotDefault")
+      [.decl p "$type" (some ty.toSTy) false (.tuple p [])] false)
+  return some (.block p (defaults ++ [.forE p rewritten body]))
+
+/-- The same compiler-owned typed cell used by lazy function frames. -/
+def refinementCellRequest (p : Pos) : Choice.FirstLift := {
+  stageOnly := true, key := "$refinementVarCell", name := "$refinementVarCell", pos := p
+  params := [], tparams := [], specs := ["computes"], ret := .name "void", body := .tuple p []
+  binds := [], sets := [], args := []
+  extraFns := [.classDef p "$varcell" [] [{ pos := p, name := "t", constraint := "type" }]
+    [] [] false [{ name := "$VCell", ty := .name "t", isVar := true }] []] }
+
+/-- Plain source generators keep the Book's depth-first search journal. Calls
+    with several values deliberately retain their existing producer boundary. -/
+def refinementPlainGenerator (ctx : Ctx) : SExpr → Bool
+  | .gen .. | .decl _ _ _ false (.range ..) => true
+  | clause => (Choice.binding? clause).any fun binding =>
+      !binding.composed && binding.branchy.isNone && binding.each.isNone
+
+def refinementChainEligible (ctx : Ctx) (written suffix : List SExpr) : Bool :=
+  !suffix.isEmpty && refinementPlainGenerator ctx suffix.head! &&
+    !(written.any fun expression => Choice.anyE (fun
+      | .app _ (.ident _ name) _ _ => ["$inline", "$each", "$loop", "$dispatch", "$point"].contains name
+      | _ => false) expression) &&
+    suffix.all (fun clause =>
+      !((Choice.binding? clause).isSome || (match clause with | .gen .. | .decl _ _ _ false (.range ..) => true | _ => false)) ||
+        refinementPlainGenerator ctx clause)
+
+private structure RefinementChainNode where
+  request : Choice.FirstLift
+  args : List Ty
+  clauses : List SExpr
+  body : SExpr
+
+private def RefinementChainNode.plan (node : RefinementChainNode) : Choice.ForStagePlan :=
+  node.request.stagePlan.getD default
+
+private def RefinementChainNode.ty (node : RefinementChainNode) : Ty :=
+  .struct node.plan.base node.args
+
+private def RefinementChainNode.ready (node : RefinementChainNode) (p : Pos) : SExpr :=
+  refinementReadyMarker p node.plan node.args
+    (node.plan.copies.map fun (name, _) => .ident p name) node.clauses node.body (one := true)
+
+/-- One typed source/filter/body phase. Source/filter methods never wait;
+    only the final body retains the source consumer's suspension and exits. -/
+private def refinementChainNodeOf (ctx : Ctx) (p : Pos) (key : String)
+    (written : List SExpr) (sourceBody : SExpr) (value : Ty)
+    (outcome rollback originalFor consumer : Bool) (clauses : List SExpr) (body : SExpr) :
+    Except String RefinementChainNode := do
+  let phase := if consumer then ctx else { ctx with
+    suspends := false, fnFx := ctx.fnFx.filter (· != "suspends") }
+  let request ← refinementStagePlanOf phase p key written [] sourceBody value outcome
+  let some plan := request.stagePlan | throw "internal: refinement chain plan"
+  let source := { (sourceContextOf ctx) with inRepeat := consumer || ctx.inRepeat }
+  let plan := { plan with
+    resumeRollback := rollback
+    resumeContext := some source
+    resumeOriginalFor := originalFor }
+  let args := plan.tparams.map fun parameter =>
+    (ctx.types.tvars.lookup parameter.name).getD (.param parameter.name (parameter.constraint == "comparable"))
+  return { request := { request with stagePlan := some plan }, args, clauses, body }
+
+/-- Preserve the original generator search in the caller. Each source yields
+    opaque row owners; each row's filters produce its next world. Only the
+    final world's method executes the consumer, outside physical filters. -/
+partial def refinementChainOf (ctx : Ctx) (p : Pos) (headClauses suffix : List SExpr)
+    (body : SExpr) (value : Ty) (outcome rollback : Bool) : EM (Option (List SExpr × SExpr)) := do
+  let rec groups : List SExpr → List (SExpr × List SExpr)
+    | [] => []
+    | generator :: rest =>
+      let filters := rest.takeWhile (!refinementPlainGenerator ctx ·)
+      (generator, filters) :: groups (rest.drop filters.length)
+  let written := headClauses ++ suffix
+  let key := "refinementChain" ++ contKey ctx p "$search" (written ++ [body]) ++ reprStr value
+  let final ← match refinementChainNodeOf ctx p (key ++ "body") written body value
+      outcome rollback false true [] body with
+    | .ok node => pure node
+    | .error message => eerr p message
+  let mut current := final
+  let mut nodes := [final]
+  let mut stages : List (RefinementChainNode × RefinementChainNode) := []
+  for ((generator, filters), index) in (groups suffix).zipIdx.reverse do
+    let filter ← match refinementChainNodeOf ctx p (key ++ s!"filter{index}") written body current.ty
+        true true false false [] (refinementPrefixMarker p filters (current.ready p)) with
+      | .ok node => pure node
+      | .error message => eerr p message
+    let source ← match refinementChainNodeOf ctx p (key ++ s!"source{index}") written body filter.ty
+        false true true false [generator] (filter.ready p) with
+      | .ok node => pure node
+      | .error message => eerr p message
+    stages := (source, filter) :: stages
+    nodes := source :: filter :: nodes
+    current := source
+  let mut pending := false
+  for node in nodes do
+    if !ctx.types.requests.loops.any (·.key == node.request.key) then
+      askHelper p node.request
+      pending := true
+  if pending then return none
+  let root := current
+  let stem := s!"$refinementSearch{p.line}_{p.col}_{ctx.locals.length}"
+  let prepare := SExpr.app p (.ident p "$refinementPrepareKnown")
+    [.str p [.text root.plan.base], .block p headClauses, .block p root.clauses, root.body] false
+  let first (name : String) (array : SExpr) := SExpr.block p
+    [.decl p (name ++ "$array") none false array,
+     .app p (.ident p (name ++ "$array")) [.int p 0] true]
+  let resume (world : String) (filter : Bool := false) :=
+    SExpr.app p (.ident p (if filter then "$refinementFilterResume" else "$refinementResume"))
+      [.arrayLit p [.ident p world]] false
+  let mut world := stem ++ "$world0"
+  let mut clauses := [SExpr.decl p world none false (first world prepare)]
+  for (_, index) in stages.zipIdx do
+    let row := stem ++ s!"$row{index}"
+    let next := stem ++ s!"$world{index+1}"
+    clauses := clauses ++ [.gen p row none (resume world),
+      .decl p next none false (first next (resume row true))]
+    world := next
+  return some (clauses, forStageBodyAs body (resume world))
 
 end OpenVerse.Front

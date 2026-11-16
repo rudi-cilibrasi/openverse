@@ -115,7 +115,9 @@ partial def findPart (pr : SExpr → Bool) (outside : Bool) (e : SExpr) : Option
   else match e with
     | .app _ (.ident _ "$forPrepare") _ false
     | .app _ (.ident _ "$refinementPrepare") _ false
-    | .app _ (.ident _ "$refinementReady") _ false => none
+    | .app _ (.ident _ "$refinementPrepareKnown") _ false
+    | .app _ (.ident _ "$refinementReady") _ false
+    | .app _ (.ident _ "$refinementReadyOne") _ false => none
     | .loop .. => if outside then none else e.children.findSome? (findPart pr outside)
     | e => e.children.findSome? (findPart pr outside)
 

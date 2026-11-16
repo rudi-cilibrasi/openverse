@@ -942,7 +942,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       pos := p, bound := D, target := if chain then "" else T, tag, continuationScope := ctx.refineScope,
       name := liftName,
       params := { name := D, ty := dTy.toSTy } ::
-        (caps.zip sig).map (fun (binding, (name, ty)) => { name, ty := ty.toSTy, typeValue := binding.typeValue }) ++
+        (caps.zip sig).map (fun (binding, (name, ty)) => { name, ty := ty.toSTy, typeValue := binding.typeValue, metadataForward := binding.mutable }) ++
         extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n, typeValue := true },
       tparams := tps.map fun (n, c) => { pos := p, name := n, constraint := if c then "comparable" else "type" },
       specs, ret := ret.toSTy, branchTy := if retOfBranch then some τ'.toSTy else none, subst := σ, opened := if chain then [] else opened.map fun (n, v, _) => (n, v), waits := thenWaits, sourceSuspends,

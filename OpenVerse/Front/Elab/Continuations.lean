@@ -1306,7 +1306,7 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
   let copies := copyValues.map fun e => rename (Refine.substTypes σ e)
   let vals := s!"{name}$values"
   let failed : SExpr := if copies.isEmpty then .ident p "false" else .tuple p (.ident p "false" :: copies)
-  let run := if plan.outcome then
+  let run := if plan.resumeOriginalFor then SExpr.forE p clauses body else if plan.outcome then
       SExpr.app p (.ident p "$forFirstOutcome") [.block p clauses, body, failed] false
     else SExpr.app p (.ident p "$forFirst") [.block p clauses, body] false
   let run := forClauseExitScope body run

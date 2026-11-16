@@ -116,7 +116,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     (elabE : Ctx → SExpr → Option Ty → EM R) (elabInts : Ctx → Pos → List SExpr → EM (List Expr))
     (elabLoopGen : Ctx → Pos → List SExpr → EM LoopGen) (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx))
     (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) (prepared : Bool := false)
-    (firstDecides : Bool := false) (failure : Option SExpr := none) : EM R := do
+    (firstDecides : Bool := false) (failure : Option SExpr := none)
+    (searchPrepared : Bool := false) : EM R := do
   let transport := ctx.refinementTransportValue
   let ctx := { ctx with refinementTransportValue := none }
   if let some value := transport then
@@ -131,6 +132,31 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           if name == "$forReturns" || name == "$forReturnBody" then mode == "true"
           else (ctx.canFail && !firstDecides) || failure.isSome
         | _ => (ctx.canFail && !firstDecides) || failure.isSome
+      if refinementChainEligible c (before ++ filterPrefix ++ suffix) suffix then
+        if let some owned ← refinementOwnedLocals c p clauses body then
+          return ← elabE { c with refinementTransportValue := some value } owned (some (.arr value))
+        let names := (Choice.localDecls (.block p clauses)).map (·.1) |>.eraseDups
+        let written := SExpr.forE p clauses body
+        let writtenSets := Choice.setsIn written
+        let cells := names.filter fun name => writtenSets.contains name &&
+          Choice.anyE (fun | .decl _ n (some _) true _ => n == name | _ => false) (.block p clauses)
+        if !cells.isEmpty then
+          if !c.types.classes.contains "$varcell" then
+            askHelper p (refinementCellRequest p)
+            return ⟨.prim .userErr [], .arr value⟩
+          -- Use the existing typed cell transformation for clause-local
+          -- variables shared by successive row owners. Caller variables
+          -- keep the ordinary live copy-in/copy-out protocol.
+          return ← elabE { c with refinementTransportValue := some value }
+            (Choice.cellVars cells written) (some (.arr value))
+        let code ← refinementChainOf c p filterPrefix suffix body value outcome
+          (sourceFailure || ctx.inRollback)
+        let some (chainClauses, chainBody) := code | return ⟨.prim .userErr [], .arr value⟩
+        let r ← elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq c p
+          (before ++ chainClauses) chainBody (prepared := true)
+          (firstDecides := firstDecides) (failure := failure) (searchPrepared := true)
+        let .arr (.arr t) := r.ty | eerr p "internal: refinement chain values"
+        return ⟨← flattenValues r, .arr t⟩
       let prepare := refinementPrepareMarker c p value outcome (sourceFailure || ctx.inRollback)
         filterPrefix suffix body (forBody := true)
       let resume := SExpr.app p (.ident p "$refinementResume") [.ident p name] false
@@ -1047,7 +1073,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     | c => match Choice.binding? c with
       | some b => !b.composed && b.branchy.isNone && b.each.isNone
       | none => false
-  if stagePlan.isNone && !prepared && !firstDecides && failure.isNone && !gs.isEmpty &&
+  if stagePlan.isNone && (!prepared || searchPrepared) && !firstDecides && failure.isNone && !gs.isEmpty &&
       !written.any callsManyValued && !pre.any isExcl && gs.all (fun (g, fs) => plainGen g && !fs.any isExcl) then
     let start := (← get).nslots
     let (preE, unit, c0) ← match pre with

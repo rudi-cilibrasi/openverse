@@ -196,8 +196,38 @@ partial def elabExprMarkersWith
       elabE ctx (.app p (.ident p "$first")
         [.block p [cl, .decl p result (exp.map Ty.toSTy) false tail, .ident p result]] false) exp
   | .app p (.ident _ "$refinementReady")
+      [.str _ [.text base], .decl _ _ (some view) _ _, .block _ copies, .block _ suffix, body] false
+  | .app p (.ident _ "$refinementReadyOne")
       [.str _ [.text base], .decl _ _ (some view) _ _, .block _ copies, .block _ suffix, body] false =>
     elabRefinementReady elabE ctx p base view copies suffix body
+      (one := match se with | .app _ (.ident _ "$refinementReadyOne") _ _ => true | _ => false)
+  | .app p (.ident _ "$refinementSlotDefault")
+      [.decl _ _ (some annotation) _ _] false => do
+    let ty ← resolveTy ctx.types p annotation
+    let params := ((ctx.sig? ctx.frameName).map (·.params)).getD []
+    match slotDefault ctx.types ctx.dictBase params [] ty with
+    | .ok value => pure ⟨value, ty⟩
+    | .error message => eerr p message
+  | .app p (.ident _ "$refinementPrepareKnown")
+      [.str _ [.text base], .block _ headClauses, .block _ suffix, body] false => do
+    let some plan := ctx.types.requests.loops.findSome? (fun request =>
+      request.stagePlan.filter (·.base == base)) | eerr p "internal: missing refinement chain source"
+    let args := plan.tparams.map fun parameter =>
+      (ctx.types.tvars.lookup parameter.name).getD (.param parameter.name (parameter.constraint == "comparable"))
+    let helper ← match refinementPrefixOf ctx plan args p headClauses suffix body with
+      | .ok helper => pure helper
+      | .error message => eerr p message
+    if !ctx.types.requests.loops.any (·.key == helper.key) then
+      askHelper p helper
+      return ⟨.prim .fail [], .arr (.struct plan.base args)⟩
+    let call := SExpr.app p (.ident p helper.name) helper.args true
+    if plan.copies.isEmpty then return ← elabE ctx call exp
+    let packet := base ++ "$prepared"
+    let get (index : Nat) := SExpr.app p (.ident p packet) [.int p (index : Int)] false
+    let copied := plan.copies.zipIdx.map fun ((name, _), index) =>
+      SExpr.set p (.ident p name) none
+        (.app p (.ident p "$refineCopyOut") [get (index+1)] false)
+    elabE ctx (.block p (.decl p packet none false call :: copied ++ [get 0])) exp
   | .app p (.ident _ "$refinementPrepare")
       [.decl _ _ (some valueType) _ _, .ident _ outcome, .ident _ rollback, .int _ flags,
        .block _ filterPrefix, .block _ suffix, body] false => do
@@ -234,7 +264,12 @@ partial def elabExprMarkersWith
       SExpr.set p (.ident p name) none
         (.app p (.ident p "$refineCopyOut") [get (j + 1)] false)
     elabE ctx (.block p (.decl p packet none false call :: assignments ++ [get 0])) exp
-  | .app p (.ident _ "$refinementResume") [environments] false => do
+  | .app p (.ident _ "$refinementResume") [environments] false
+  | .app p (.ident _ "$refinementFilterResume") [environments] false => do
+    let ctx := match se with
+      | .app _ (.ident _ "$refinementFilterResume") _ _ =>
+        { ctx with forOutcomeSlot := none, forExitPacket := none }
+      | _ => ctx
     let r ← elabE ctx environments none
     let .arr (.struct base args) := r.ty | eerr p "internal: refinement ready values"
     let known := ctx.types.requests.loops.findSome? (fun r => r.stagePlan.filter (·.base == base))

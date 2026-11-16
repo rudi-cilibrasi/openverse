@@ -2627,6 +2627,8 @@ structure ForStagePlan where
   /-- Immediate refinement environments receive current caller copy-ins
       when resumed, after prefix cleanup has finished. -/
   resumeInputs : Bool := false
+  /-- A source-array stage keeps ordinary for search lowering. -/
+  resumeOriginalFor : Bool := false
   pos : Pos
   base : String
   method : String
