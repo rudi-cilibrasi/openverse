@@ -1936,10 +1936,10 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
           -- (the first elaboration: one alternative with the clauses after it,
           -- for their names' types and effects, and the function asked for;
           -- its code is not kept, as the next elaboration has the function)
-          -- Prefix probes recursively elaborate nested alternatives. A
-          -- continuation trial is useful when a later composed choice
-          -- can share its suffix; copied packets join their types directly.
-          if let some a0 := b.alts.head?.filter (fun _ => rest.any isComposed) then
+          -- Typed alternatives already share the binding's checked type.
+          -- Untyped alternatives still need heterogeneous adaptation even
+          -- when no later composed choice can share their continuation.
+          if let some a0 := b.alts.head?.filter (fun _ => b.ty.isNone || rest.any isComposed) then
             let st0 ← get
             let fx0 := st0.fx
             modify fun st => { st with fx := [] }
