@@ -1920,7 +1920,9 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
           | some b => b.composed
           | none => false
         if !b.alts.isEmpty then
-          let req := if ctx.typeOnly then none else ctx.types.requests.loops.find? (·.key == contKey ctx p b.name (b.alts ++ rest) ++ firstReturnKey ctx rest)
+          let req := if ctx.typeOnly || ctx.types.requests.loops.isEmpty then none else
+            let key := contKey ctx p b.name (b.alts ++ rest) ++ firstReturnKey ctx rest
+            ctx.types.requests.loops.find? (·.key == key)
           if let some l := req then
             -- (asked for where more effects are allowed than here, as in a
             -- function of its own of a call taken lazily, #246: copied)

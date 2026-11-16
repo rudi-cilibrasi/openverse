@@ -705,8 +705,9 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           let value := (stagePlan.map fun plan => Ty.struct plan.base stageArgs).getD value
           return (codeA, .prim .userErr [], value)
         let contOK := stagePlan.isNone && restCl.any isCF && forBodySafe cA bd && xty.isSome
-        let req := if !contOK || cA.typeOnly then none else
-          cA.types.requests.loops.find? (·.key == (if bodyFail then "fo" else "f") ++ contKey cA gp x (altsS ++ restCl ++ [bd]))
+        let req := if !contOK || cA.typeOnly || cA.types.requests.loops.isEmpty then none else
+          let key := (if bodyFail then "fo" else "f") ++ contKey cA gp x (altsS ++ restCl ++ [bd])
+          cA.types.requests.loops.find? (·.key == key)
         let kv := s!"$xk{gp.line}_{gp.col}{x}v"
         let plan : List (List SExpr × SExpr × Bool) ← if let some (prepare, plan, _, true) := staged then
             let (callCl, resumed) := forStageInvoke gp prepare plan.borrowed bd
@@ -845,8 +846,9 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           -- Failable bodies return outcomes so failure stops the entire
           -- for, rather than merely rejecting one continuation call.
           if forBodySafe c bd then
-            let req := if c.typeOnly then none else
-              c.types.requests.loops.find? (·.key == (if bodyFail then "fo" else "f") ++ contKey c gp b.name (b.alts ++ restCl ++ [bd]))
+            let req := if c.typeOnly || c.types.requests.loops.isEmpty then none else
+              let key := (if bodyFail then "fo" else "f") ++ contKey c gp b.name (b.alts ++ restCl ++ [bd])
+              c.types.requests.loops.find? (·.key == key)
             if let some l := req then
               if c.acceptsHelper l then
                 let kv := s!"{site}v"
