@@ -239,11 +239,13 @@ partial def elabExprControlWith
         if !value.hasNever && !saved.refiningHintProbe then
           return ← tryCatch (do
             let ordinary ← elabE { ctx with refinementTransportActive := true } se exp
-            -- A waiting producer can defer its branch into a helper before
-            -- that helper exposes the lost snapshot world. Validate the
-            -- ordinary source first, then retain that world before staging.
+            -- A producer can defer its suffix before the generated helper
+            -- exposes the lost world. Validate the ordinary source first,
+            -- then retain the world before that continuation is staged.
             let ordinaryState ← get
-            if ctx.suspends && ordinaryState.pendingWaitingCasts > saved.pendingWaitingCasts &&
+            let deferredSuffix := (ordinaryState.loopFirst.drop saved.loopFirst.length).any fun use =>
+              use.lift.toOption.any (fun helper => helper.name.startsWith "$contf")
+            if (ordinaryState.pendingWaitingCasts > saved.pendingWaitingCasts || deferredSuffix) &&
                 clauses.any (fun clause => (refinementConditionalBinding? ctx clause).isSome) then
               set saved
               tryCatch (elabE { ctx with

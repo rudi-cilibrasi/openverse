@@ -104,6 +104,10 @@ partial def elabExprMarkersWith
     return ⟨.lit .void, .void⟩
   -- (a continuation's body, #335: clauses lifted already, failing where their
   -- first filter does, then the values)
+  | .app p (.ident _ "$refinementContinue")
+      [.decl _ _ (some annotation) _ _, body] false => do
+    let value ← resolveTy ctx.types p annotation
+    elabE { ctx with refinementTransportValue := some value } body exp
   | .app p (.ident _ "$forFirst") [.block _ clauses, body] false => elabFor ctx p clauses body (prepared := true) (firstDecides := true)
   | .app _ (.ident _ "$forEnvCapture") [value] false => do
     let fx := (← get).fx

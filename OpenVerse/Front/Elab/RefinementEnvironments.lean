@@ -20,23 +20,6 @@ def refinementReadyMarker (p : Pos) (plan : Choice.ForStagePlan) (args : List Ty
      .decl p "$refinementView" (some (forStageView plan.base (args.map Ty.toSTy))) false (.tuple p []),
      .block p copies, .block p suffix, body] false
 
-/-- Inspect each clause in its own scope; castsIn deliberately treats a
-    block as an opaque declaration scope. -/
-def hasRefinementClauses (ctx : Ctx) (clauses : List SExpr) : Bool :=
-  clauses.any fun clause =>
-    (Refine.castClause? clause).any (fun (_, _, target, _) => ctx.types.classes.contains target) ||
-    !(Refine.castsIn ctx.types.classes.contains clause).isEmpty
-
-/-- A conditional producer selects its condition world before enumerating
-    its branch. Its condition binders are private to the selected owner. -/
-def refinementConditionalBinding? (ctx : Ctx) (clause : SExpr) : Option (String × Option STy × SExpr) :=
-  let binding := match clause with
-    | .decl _ name annotation false value@(.ite ..) => some (name, annotation, value)
-    | clause => (Choice.binding? clause).bind fun binding =>
-        binding.branchy.map fun value => (binding.name, binding.ty, value)
-  binding.filter fun (_, _, value) => Choice.liftsAsIf value &&
-    (Choice.arms value).any (fun (clauses, _) => clauses.any (hasRefinementClauses ctx))
-
 /-- Recovery repairs a refinement/type boundary, never an unrelated source
     restriction such as a cyclic default or a forbidden operation. -/
 def refinementRecoveryError (message : String) : Bool :=

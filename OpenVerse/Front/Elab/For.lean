@@ -146,8 +146,13 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         | .ite q conditions branch (some otherwise) =>
           let (prepare, consumer) := resume conditions branch
           .ite q [prepare] consumer (some (selected otherwise (site ++ "$else")))
-        | branch => .forE expression.pos
+        | branch =>
+          let suffix := SExpr.forE expression.pos
             (SExpr.decl branch.pos binding annotation false branch :: after) body
+          if after.any (fun clause => (refinementConditionalBinding? c clause).isSome) then
+            .app expression.pos (.ident expression.pos "$refinementContinue")
+              [.decl expression.pos "$value" (some value.toSTy) false (.tuple expression.pos []), suffix] false
+          else suffix
       let chosen := selected conditional s!"$refinementBranch{p.line}_{p.col}_{index}"
       let result := s!"$refinementBranchValues{p.line}_{p.col}_{index}"
       let consumer := SExpr.block p

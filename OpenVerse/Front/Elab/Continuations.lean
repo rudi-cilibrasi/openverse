@@ -3,6 +3,23 @@ import OpenVerse.Front.Elab.Context
 
 namespace OpenVerse.Front
 open OpenVerse
+/-- Inspect each clause in its own scope; castsIn deliberately treats a
+    block as an opaque declaration scope. -/
+def hasRefinementClauses (ctx : Ctx) (clauses : List SExpr) : Bool :=
+  clauses.any fun clause =>
+    (Refine.castClause? clause).any (fun (_, _, target, _) => ctx.types.classes.contains target) ||
+    !(Refine.castsIn ctx.types.classes.contains clause).isEmpty
+
+/-- A conditional producer selects its condition world before enumerating
+    its branch. Its condition binders are private to the selected owner. -/
+def refinementConditionalBinding? (ctx : Ctx) (clause : SExpr) : Option (String × Option STy × SExpr) :=
+  let binding := match clause with
+    | .decl _ name annotation false value@(.ite ..) => some (name, annotation, value)
+    | clause => (Choice.binding? clause).bind fun binding =>
+        binding.branchy.map fun value => (binding.name, binding.ty, value)
+  binding.filter fun (_, _, value) => Choice.liftsAsIf value &&
+    (Choice.arms value).any (fun (clauses, _) => clauses.any (hasRefinementClauses ctx))
+
 /-- The names that are values here, for lifting choices (#208): variables
     in scope, `Self` and its fields. -/
 def choiceValues (ctx : Ctx) (n : String) : Bool :=
@@ -1313,6 +1330,14 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
   let run := if plan.resumeOriginalFor then SExpr.forE p clauses body else if plan.outcome then
       SExpr.app p (.ident p "$forFirstOutcome") [.block p clauses, body, failed] false
     else SExpr.app p (.ident p "$forFirst") [.block p clauses, body] false
+  -- A resumed owner already knows the caller-nameable element type. Keep
+  -- it available to a later conditional producer; its independent selected
+  -- world must be retained just as the first owner's was.
+  let run := if plan.resumeContext.isSome &&
+      clauses.any (fun clause => (refinementConditionalBinding? ctx clause).isSome) then
+    SExpr.app p (.ident p "$refinementContinue")
+      [.decl p "$value" (some (plan.value.substNames σ)) false (.tuple p []), run] false
+    else run
   let run := forClauseExitScope body run
   let run := if ctx.forStageFlat then SExpr.app p (.ident p "$forStageFlatten") [run] false else run
   let code := if copies.isEmpty then run else .block p

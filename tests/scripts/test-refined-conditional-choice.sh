@@ -40,8 +40,8 @@ with tempfile.TemporaryDirectory(prefix="openverse-refined-conditional-") as tem
     for index in range(count):
         bounded([str(binary), str(index), str(work)])
     programs = sorted(work.glob("*.vbc"))
-    if len(programs) != 15:
-        raise SystemExit(f"conditional-choice: expected 15 admitted API artifacts, got {len(programs)}")
+    if len(programs) != 21:
+        raise SystemExit(f"conditional-choice: expected 21 admitted API artifacts, got {len(programs)}")
     for program in programs:
         actual = bounded(["runtime/build/cverse", str(program)]).stdout
         if actual != program.with_suffix(".expected").read_text():

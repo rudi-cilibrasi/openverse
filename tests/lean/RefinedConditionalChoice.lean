@@ -16,7 +16,11 @@ private def cases : List (String × String × String × String × Bool × Nat) :
   ("waiting-real", "F()", "", "", true, 1),
   ("waiting-metadata", "Dummy()", "", "", false, 2),
   ("waiting-tuple-real", "Pair(1)()", "    Pair:=(Dummy,F)\n", "", true, 1),
-  ("waiting-tuple-metadata", "Pair(0)()", "    Pair:=(Dummy,F)\n", "", false, 2)]
+  ("waiting-tuple-metadata", "Pair(0)()", "    Pair:=(Dummy,F)\n", "", false, 2),
+  ("composed-real", "F()", "", "", true, 1),
+  ("composed-metadata", "Dummy()", "", "", false, 2),
+  ("waiting-composed-real", "F()", "", "", true, 1),
+  ("waiting-composed-metadata", "Dummy()", "", "", false, 2)]
 
 private def source (action locals condition : String) (waiting : Bool) : String :=
   let inner := action.startsWith "Pair"
@@ -31,6 +35,22 @@ private def source (action locals condition : String) (waiting : Bool) : String 
     |>.replace "Main():void" "Main()<suspends>:void"
   else code
 
+
+private def composedSource (action : String) (waiting : Bool) : String :=
+  let code := "One()<computes>:int=1\nTwo()<computes>:int=2\nPick(C:logic)<computes>:" ++ callable ++ "=if(C?)then One else Two\n" ++ sourcePrefix ++
+    "Rows(E:expr(t),Other:expr(u),F:" ++ callable ++ ",Dummy:" ++ callable ++ " where t:type,u:type):[]tuple(t,u)=\n" ++
+    "    for(N:=1..2,V:=if(Print(\"prefix\"),P:=vpair[E],Saved:=P.L,L:=lit[Saved],set P.L=lit{V:=99},R:=lit[P.R])then((L.V,R.V)|(L.V+1,R.V))else E.Eval()," ++
+    "W:=if(Print(\"second\"),Q:=vpair[Other],SavedQ:=Q.L,LQ:=lit[SavedQ],set Q.L=lit{V:=99},RQ:=lit[Q.R])then((LQ.V+" ++ action ++ ",RQ.V)|(LQ.V+1+" ++ action ++ ",RQ.V))else Other.Eval()){(V,W)}\n" ++
+    "Main():void=\n    P:=vpair(int,int){L:=lit{V:=3},R:=lit{V:=7}}\n    Q:=vpair(int,int){L:=lit{V:=5},R:=lit{V:=9}}\n    Values:=Rows(P,Q,One,Two)\n    for(V:Values){Print(\"{V(0)(0)} {V(0)(1)} {V(1)(0)} {V(1)(1)}\")}\n    Print(\"final {P.L.Eval()} {Q.L.Eval()}\")\n"
+  if waiting then code.replace "):[]" ")<suspends>:[]"
+    |>.replace "){(V,W)}\n" "){Sleep(0.001);(V,W)}\n"
+    |>.replace "Main():void" "Main()<suspends>:void"
+  else code
+
+private def composedTrace (value : Nat) : String :=
+  "prefix\nsecond\nsecond\nprefix\nsecond\nsecond\n" ++
+    s!"3 7 {5+value} 9\n3 7 {6+value} 9\n4 7 {99+value} 9\n4 7 {100+value} 9\n" ++
+    s!"99 7 {99+value} 9\n99 7 {100+value} 9\n100 7 {99+value} 9\n100 7 {100+value} 9\nfinal 99 99\n"
 
 private def compile (source : String) (dummy : Bool) : Except String Compiled := do
   let tops ← parseProgram source
@@ -48,9 +68,12 @@ def main (args : List String) : IO Unit := do
     | none => throw <| IO.userError "expected conditional metadata case index"
   let some (name, action, locals, condition, accepted, value) := cases[index]?
     | throw <| IO.userError "invalid conditional metadata case index"
-  let expected := s!"prefix\nprefix\n{3+value} 7\n{4+value} 7\n{99+value} 7\n{100+value} 7\nfinal 99\n"
+  let composed := name.startsWith "composed" || name.startsWith "waiting-composed"
+  let program := if composed then composedSource action (name.startsWith "waiting")
+    else source action locals condition (name.startsWith "waiting")
+  let expected := if composed then composedTrace value else s!"prefix\nprefix\n{3+value} 7\n{4+value} 7\n{99+value} 7\n{100+value} 7\nfinal 99\n"
   for dummy in [false,true] do
-    match compile (source action locals condition (name.startsWith "waiting")) dummy with
+    match compile program dummy with
     | .error message =>
       if !dummy || accepted || (message.splitOn "dummy type value cannot").length ≤ 1 then
         throw <| IO.userError s!"{name}/{dummy}: unexpected refusal {message}"
