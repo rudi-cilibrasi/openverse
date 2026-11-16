@@ -22,7 +22,7 @@ def run(args):
                           text=True, timeout=20, preexec_fn=limits)
 
 
-def source(count, first, complete, void=False):
+def source(count, first, complete, void=False, selections=(4,)):
     code = ('pair(a:type,b:type):=class{A:a;B:b}\n'
             'dup(t:type):=class(pair(t,t)){C:int=0}\n'
             'F(P:pair(a,b),N:int where a:type,b:type)<transacts>:' +
@@ -36,8 +36,9 @@ def source(count, first, complete, void=False):
         code += '    else -1\n'
     code += 'Main()<transacts>:void=\n'
     for argument in ['dup(int){A:=1,B:=2,C:=3}', 'pair(int,string){A:=1,B:="x"}']:
-        call = f'F({argument},4)'
-        code += '    ' + (call if void else f'Print("{{{call}}}")') + '\n'
+        for selected in selections:
+            call = f'F({argument},{selected})'
+            code += '    ' + (call if void else f'Print("{{{call}}}")') + '\n'
     return code
 
 
@@ -48,11 +49,10 @@ with tempfile.TemporaryDirectory(prefix='openverse-refining-chain-') as work:
             for complete, void in [(False, False), (True, False), (False, True)]:
                 # Rejecting incomplete int chains must retain ordinary
                 # incomplete conditionals whose result is discarded.
-                if void and count != 15:
-                    continue
-                length = 6 if void else count
+                length = 6 if void and count == 15 else count
+                selections = (0, 16, 31, 32) if void and count == 32 else (4,)
                 path = work / f'chain-{first}-{length}-{complete}-{void}.verse'
-                path.write_text(source(length, first, complete, void))
+                path.write_text(source(length, first, complete, void, selections))
                 for profile in [[], ['--extended-defaults']]:
                     bytecode = work / 'chain.vbc'
                     bytecode.unlink(missing_ok=True)
@@ -64,8 +64,22 @@ with tempfile.TemporaryDirectory(prefix='openverse-refining-chain-') as work:
                         assert 'expected int, found void' in result.stderr, (label, result)
                         assert not bytecode.exists(), (label, 'refusal emitted bytecode')
                         continue
-                    expected = 'arm 4 3\n' if void else '7\n-1\n'
+                    expected = '7\n-1\n'
+                    if void:
+                        expected = 'arm 4 3\n' if count == 15 else 'arm 0 3\narm 16 3\narm 31 3\n'
                     assert result.returncode == 0 and result.stdout == expected, (label, result)
                     native = run([CV, bytecode, '--fuel', '200000'])
                     assert native.returncode == 0 and native.stdout == expected, (label, native)
-print('refining chains passed (15/32 typed arms, first/later casts, refusals and Lean/C controls)')
+        # A known void join still checks the entire else. Inference must
+        # not hide an invalid suffix while avoiding its repeated probes.
+        invalid = work / f'invalid-void-{first}.verse'
+        invalid.write_text(source(32, first, False, True).replace(
+            'Main()<transacts>', '    else Hidden\nMain()<transacts>'))
+        for profile in [[], ['--extended-defaults']]:
+            bytecode = work / 'invalid.vbc'
+            bytecode.unlink(missing_ok=True)
+            result = run([OV, 'emit', invalid, *profile, '-o', bytecode])
+            assert result.returncode == 4, (first, profile, result)
+            assert "unknown identifier 'Hidden'" in result.stderr, (first, profile, result)
+            assert not bytecode.exists(), (first, profile, 'invalid suffix emitted bytecode')
+print('refining chains passed (15/32 typed arms, 6/32 void arms, first/later casts, refusals and Lean/C controls)')

@@ -653,6 +653,12 @@ def refinedCastWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (
       return ⟨rb.e, if fits then e.getD rb.ty else branchTyOf rb.ty⟩
     let elseAt (k : Nat) (e : Option Ty) : EM R := elabE { ctx with typeOnly := true, retries := k } ee e
     let own? ← tryCatch (some <$> thenAt ctx.retries none) fun _ => pure none
+    -- A void branch fixes the join at void. The caller still checks the
+    -- actual else once; probing its entire suffix here repeats inference
+    -- at every link of an unhinted refining conditional chain.
+    if own?.any (·.ty == .void) then
+      set st
+      return (.void, false)
     let re? ← tryCatch (some <$> elseAt ctx.retries none) fun _ => pure none
     let fitsElse ← match re? with
       | some re => tryCatch (do pure ((← thenAt ctx.retries (some re.ty)).ty == re.ty)) fun _ => pure false
