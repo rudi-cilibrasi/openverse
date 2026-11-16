@@ -442,7 +442,7 @@ structure TyEnv where
       whether they have several values (`Choice.inlineMulti`), by place and
       name: their elaboration notes the overload each takes (`ESt.needs`). -/
   overloadSites : List (Pos × String) := []
-  /-- Nonrecursive top-level overload templates, after ordinary source desugaring. -/
+  /-- Top-level overload templates, with recursive entries normalized before source desugaring. -/
   copiedOverloadFns : List (String × Choice.MFn) := []
   copiedOverloadClashes : List (String × List String) := []
   /-- (#283) The consumers in recursive groups' code whose names' types this
