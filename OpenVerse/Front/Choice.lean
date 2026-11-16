@@ -86,7 +86,11 @@ partial def fillElse (e : SExpr) : SExpr :=
 /-- The part of a made name that names an inlined call's site (#235), set
     apart from the position after it (site 1 at line 12 is not site 11 at
     line 2); nothing outside one. -/
-def sitePart (site : String) : String := if site.isEmpty then "" else site ++ "@"
+def sitePart (site : String) : String :=
+  if site.isEmpty then "" else
+    -- First-success lowering reuses a renamed result as its next site.
+    -- Bound that prefix before it is added to more renamed locals.
+    (if site.utf8ByteSize <= 256 then site else s!"$site{site.hash}") ++ "@"
 
 /-- The name made for what is bound of kind `k` from `p` (`$c12_5` for a
     choice at 12:5), with an inlined call's `site` in it (`sitePart`). -/
