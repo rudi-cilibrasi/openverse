@@ -112,7 +112,28 @@ private def sameBoundCapture (body : String) : String :=
 private def mapContextCapture (body : String) : String :=
   "pair(a:type,b:type):=class{A:a;B:b}\ndup(t:type):=class(pair(t,t)){}\nEcho(X:t,?Other:t=X where t:type)<computes>:t=Other\nEmpty(?Count:int=0,?Default:?t=false where t:type)<computes>:?t=Default\nKeep(X:t,N:int where t:type)<computes>:t=X\nCaller(P:pair(a,b),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type)" ++ body
 
+private def refinementSnapshot (overwrite : Bool) : String := callables
+  ("expr(t:type):=class<abstract>{Eval():t}\nlit:=class(expr(int)){V:int;Eval<override>():int=V}\npair(a:type,b:type):=class(expr(tuple(a,b))){var L:expr(a);R:expr(b);Eval<override>():tuple(a,b)=(L.Eval(),R.Eval())}\n" ++
+   "Caller(E:expr(t),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where t:type)<transacts>:?t=\n    var Stored:type{_()<computes>:int}=Dummy\n" ++
+   (if overwrite then "    set Stored=F\n" else "") ++
+   "    if(Print(\"prefix\"),P:=pair[E],Saved:=P.L,L:=lit[Saved],set P.L=lit{V:=99},R:=lit[P.R])then option{(L.V+Stored(),R.V)}else false")
+
+private def refinementSnapshotOpaque : String :=
+  ((refinementSnapshot false).replace "<transacts>:?t="
+    "<transacts>:tuple(type{_()<computes>:int},?t)=").replace
+    "then option{(L.V+Stored(),R.V)}else false"
+    "then (Stored,option{(L.V,R.V)})else (Stored,false)"
+
+private def refinementComputedFirst (overwrite : Bool) : String := callables
+  ("pair(a:type,b:type):=class{A:a;B:b}\ndup(t:type):=class(pair(t,t)){var Lo:int=1}\ncell:=class{var Trace:string=\"\"}\nRead(H:cell,S:string,N:int)<transacts>:int={set H.Trace+=S;N}\nChange(H:cell,R:dup(int),Q:pair(c,d) where c:type,d:type)<transacts>:pair(c,d)={set H.Trace+=\"C\";set R.Lo=5;Q}\nAdd(X:int,Y:int):int=X+Y\n" ++
+   "Caller(P:pair(a,b),Q:pair(c,d),H:cell,R:dup(int),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type,c:type,d:type)<transacts><decides>:tuple(int,b,d)=\n    var Stored:type{_()<computes>:int}=Dummy\n" ++
+   (if overwrite then "    set Stored=F\n" else "") ++
+   "    first{I:=Add(Read(H,\"L\",dup[P].Lo),Read(H,\"R\",dup[Change(H,R,Q)].Lo))..2;(I+Stored(),P.A,Q.A)}")
+
 private def cases : List (String × String) := [
+  ("typed snapshot environment metadata capture", refinementSnapshot false),
+  ("typed environment choice after bound metadata capture", sameBoundCapture "<transacts>:[]tuple(b,d,int)=for(I:=Add(dup[P].Lo,dup[Q].Lo)..2,J:=(0|1)){(P.A,Q.A,I+J+Dummy())}"),
+  ("typed environment first metadata capture", refinementComputedFirst false),
   ("contextual map key metadata capture", mapContextCapture "<transacts><decides>:[?int]b=map{Empty(?Count:=Dummy())=>Echo(P.A,?Other:=dup[P].B)}"),
   ("contextual map value metadata capture", mapContextCapture "<transacts><decides>:[?int]b=map{Empty()=>Echo(P.A,?Other:=Keep(dup[P].B,Dummy()))}"),
   ("contextual map nested metadata capture", mapContextCapture "<transacts><decides>:[?int][?string]b=map{Empty()=>map{Empty()=>Echo(P.A,?Other:=Keep(dup[P].B,Dummy()))}}"),
@@ -301,6 +322,10 @@ private def cases : List (String × String) := [
   ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
+  ("typed snapshot environment opaque forwarding", refinementSnapshotOpaque),
+  ("typed snapshot environment real overwrite", refinementSnapshot true),
+  ("typed environment choice after bound real overwrite", sameBoundCapture "<transacts>:[]tuple(b,d,int)=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    for(I:=Add(dup[P].Lo,dup[Q].Lo)..2,J:=(0|1)){(P.A,Q.A,I+J+Stored())}"),
+  ("typed environment first real overwrite", refinementComputedFirst true),
   ("contextual map key real overwrite", mapContextCapture "<transacts><decides>:[?int]b=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    map{Empty(?Count:=Stored())=>Echo(P.A,?Other:=dup[P].B)}"),
   ("contextual map value real overwrite", mapContextCapture "<transacts><decides>:[?int]b=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    map{Empty()=>Echo(P.A,?Other:=Keep(dup[P].B,Stored()))}"),
   ("contextual map nested real overwrite", mapContextCapture "<transacts><decides>:[?int][?string]b=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    map{Empty()=>map{Empty()=>Echo(P.A,?Other:=Keep(dup[P].B,Stored()))}}"),

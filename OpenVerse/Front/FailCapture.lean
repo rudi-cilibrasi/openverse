@@ -66,7 +66,9 @@ def freshOption (ty : VTy) : M Nat := fresh (.opt ty) (.lit .none)
     or a literal/prototype the existing checker accepts at this type. -/
 partial def payloadDefault (ty : VTy) : M Expr := do
   let w ← get
-  let checks (e : Expr) := (tc w.sigs w.locals.toList w.rawRet e (some ty)).isSome
+  let checks (e : Expr) :=
+    checkDefault w.sigs w.arity w.locals.toList e ty &&
+      (tc w.sigs w.locals.toList w.rawRet e (some ty)).isSome
   let literal := Expr.lit ty.default
   if checks literal then return literal
   for (candidateTy, i) in w.locals.toList.zipIdx do
@@ -75,7 +77,9 @@ partial def payloadDefault (ty : VTy) : M Expr := do
         if checks value then return value
   -- A generic dispatch may obtain its type witness from its receiver's
   -- fields rather than a separate parameter. Reuse only a projection the
-  -- ordinary Core checker validates at the payload type.
+  -- ordinary Core initializer checker validates at the payload type.
+  -- A projection from a constructed scratch default is not a parameter
+  -- witness, even when an ordinary expression check can type it.
   let fields := w.sigs.classes.foldl (fun n fs => max n fs.length) 0
   for value in w.defaults.toList do
     for field in List.range fields do

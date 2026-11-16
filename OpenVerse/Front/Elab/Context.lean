@@ -452,10 +452,16 @@ structure Ctx where
   /-- A source return carried by a shared for continuation. -/
   forReturnSlot : Option String := none
   forExitPacket : Option SExpr := none
+  /-- A restored refinement-recovery pass may prepare its filter prefix
+      separately from the committing consumer. Never set by ordinary paths. -/
+  refinementTransportValue : Option Ty := none
+  refinementTransportActive : Bool := false
   forStage : Option Choice.ForStagePlan := none
   forStageArgs : List Ty := []
   forStageFlat : Bool := false
   forStageCopies : List String := []
+  /-- Refinement transports can return live boxed copy-out reads. -/
+  forStageCopyValues : List SExpr := []
   forStageBorrows : List String := []
   resumeStorage : List (String × SourceStorage) := []
   /-- Inside a block or construction kept with a choice in it (`$noLift`,
@@ -592,6 +598,9 @@ structure NaturalArgumentScope where
   canFail : Bool
   defaults : List (String × String)
 
+  refinementTransportActive : Bool := false
+  refinementTransportValue : Option Ty := none
+
 mutual
 private partial def sameNaturalTy : Ty → Ty → Bool
   | .param a ca, .param b cb => a == b && ca == cb
@@ -606,6 +615,11 @@ private partial def sameNaturalTypes : List Ty → List Ty → Bool
   | a :: as, b :: bs => sameNaturalTy a b && sameNaturalTypes as bs
   | _, _ => false
 end
+
+private def sameNaturalOptionalTy : Option Ty → Option Ty → Bool
+  | none, none => true
+  | some a, some b => sameNaturalTy a b
+  | _, _ => false
 
 private def sameNaturalVariables : List (String × Ty) → List (String × Ty) → Bool
   | [], [] => true
@@ -630,6 +644,8 @@ private def sameNaturalLocals : List Local → List Local → Bool
 private def NaturalArgumentScope.matches (scope : NaturalArgumentScope) (ctx : Ctx) : Bool :=
   scope.frame == ctx.frameName && scope.selfClass == ctx.selfClass &&
     scope.selfMethod == ctx.selfMethod && scope.canFail == ctx.canFail &&
+    scope.refinementTransportActive == ctx.refinementTransportActive &&
+    sameNaturalOptionalTy scope.refinementTransportValue ctx.refinementTransportValue &&
     scope.defaults == ctx.defaults && sameNaturalVariables scope.variables ctx.types.tvars &&
     sameNaturalLocals scope.locals ctx.locals
 
@@ -1590,7 +1606,9 @@ def Ctx.argumentNaturalKey (ctx : Ctx) (a : SExpr) : EM String := do
   let scope : NaturalArgumentScope := {
     id, frame := ctx.frameName, locals := ctx.locals, variables := ctx.types.tvars
     selfClass := ctx.selfClass, selfMethod := ctx.selfMethod
-    canFail := ctx.canFail, defaults := ctx.defaults }
+    canFail := ctx.canFail, defaults := ctx.defaults
+    refinementTransportActive := ctx.refinementTransportActive
+    refinementTransportValue := ctx.refinementTransportValue }
   modify fun state => { state with
     naturalArgumentScopes := state.naturalArgumentScopes.insert bucket (scope :: scopes)
     nextNaturalArgumentScope := id + 1 }

@@ -2603,6 +2603,10 @@ structure SourceContext where
 /-- Metadata for a typed continuation environment's method. -/
 structure ForResume where
   name : String
+  /-- Source rollback ownership, independent of a resume's physical frame. -/
+  rollback : Bool := false
+  /-- A compiler-only consumer keeps structured children in its source caller. -/
+  borrowTasks : Bool := false
   storage : List (String × ResumeStorage) := []
   /-- Typed borrowed owners forwarded without reading an aliased field. -/
   forwarded : List ResumeStorage := []
@@ -2616,6 +2620,13 @@ structure ForResume where
 /-- One filter's typed handoff to work that executes after it commits. -/
 structure ForStagePlan where
   key : String
+  /-- A refinement prefix prepares a different world from the committing
+      body. Retain the body's original lexical and rollback ownership. -/
+  resumeContext : Option SourceContext := none
+  resumeRollback : Bool := false
+  /-- Immediate refinement environments receive current caller copy-ins
+      when resumed, after prefix cleanup has finished. -/
+  resumeInputs : Bool := false
   pos : Pos
   base : String
   method : String

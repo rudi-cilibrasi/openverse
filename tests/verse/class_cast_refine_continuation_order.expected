@@ -1,0 +1,9 @@
+value 3 LCR 5
+row 0 2 7 left 0
+row 0 2 7 left 1
+row 0 3 7 left 0
+row 0 3 7 left 1
+row 1 3 7 left 0
+row 1 3 7 left 1
+LCRLCR 2
+exit=0

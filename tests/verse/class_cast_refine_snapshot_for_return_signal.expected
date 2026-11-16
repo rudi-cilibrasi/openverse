@@ -1,0 +1,3 @@
+prefix
+return signal 3 4 99
+exit=0

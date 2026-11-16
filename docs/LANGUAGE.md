@@ -1374,6 +1374,16 @@ circle := class(shape, labelled):
   or opening class cast in an `if` with choices in its branches, including
   after intervening generators. Each condition runs once for its element;
   selected values keep their normal order, mutable effects and cleanup.
+- **Refined snapshots and producer continuations.** A condition or producer
+  can retain the types established by its casts together with the selected
+  objects, including an object computed by an effectful call or read once
+  from a mutable field. A later write changes the field, not the saved
+  object used by the cast. Subsequent choices and generators preserve that
+  selected world without rereading the owner. Conditions keep their normal
+  rollback and first-success behavior; consumer bodies, cleanup, `return`
+  and `break` keep their original scopes. The result still needs a type
+  the caller can name: this does not expose an opened type outside its
+  refinement.
 - **Not yet supported** (each rejected with a message):
   - a cast that refines type arguments, opens them, or goes through a
     view (#243, #250, #351) outside any failure context (a case's
@@ -1384,9 +1394,7 @@ circle := class(shape, labelled):
   - after a cast that opens type arguments, a value of its failure
     context, or a name it binds that a branch or body uses, of a type that
     names them (#250): no type outside it can name them (it would be an
-    existential type); and, where the cast takes the clauses after it, the
-    refinement of a later cast whose object may name them and is not read
-    by fields that are no `var`s from a cast's name (#250);
+    existential type);
   - a variable, in generic code, of a class or interface type that
     requires an instance of itself (`Next:node(t)`) at type arguments that
     every class below it fixes otherwise: its hidden placeholder object
