@@ -555,7 +555,10 @@ partial def anyE (pr : SExpr → Bool) (e : SExpr) : Bool :=
   pr e || e.children.any (anyE pr)
 
 /-- Whether `e` has a `return` in it. -/
-def hasReturn : SExpr → Bool := anyE fun | .ret .. => true | _ => false
+partial def hasReturn : SExpr → Bool
+  | .app _ (.ident _ "$returnBoundary") _ false => false
+  | .ret .. => true
+  | e => e.children.any hasReturn
 
 /-- The statements of a body. -/
 def stmtsOf : SExpr → List SExpr
@@ -2203,12 +2206,37 @@ private def linearReturnFinish (fresh : Nat → String) (p : Pos) (ret : STy) (n
   let result := if outcome then SExpr.optionLit p (.block p [.ident p saved]) else .ident p saved
   (.decl p saved (some ret) false value :: cleanup ++ [result], n+1)
 
+/-- Only scalar expressions cross this private boundary. Choices that need
+    a lazy return-operand continuation retain the existing refusal. -/
+private partial def scalarReturnBoundary (many : SExpr → Bool) (e : SExpr) : Bool :=
+  !many e && match e with
+  | .app _ (.ident _ name) _ _ =>
+    !["$sync", "$race", "$rush", "$branch", "$spawn"].contains name &&
+      e.children.all (scalarReturnBoundary many)
+  | .ret _ value => value.all fun value => !many value && scalarReturnBoundary many value
+  | _ => e.children.all (scalarReturnBoundary many)
+
+private def returnBoundary (p : Pos) (key : String) (ret : STy)
+    (normal : Option STy) (body : SExpr) : SExpr :=
+  -- Only outer mutations are part of the caller's copy-out contract.
+  -- Names owned by the scalar expression stay private to that expression.
+  let owned := localsOf body
+  let writes := (setsIn body).eraseDups.filterMap fun name =>
+    if owned.contains name then none
+    else some (SExpr.set p (.ident p name) none (.ident p name))
+  .app p (.ident p "$returnBoundary")
+    [.block p writes, .decl p (key ++ "Type") (some ret) false (.tuple p []),
+     .decl p (key ++ "Body") normal false body] false
+
+private def returnChoices (body : SExpr) : Bool :=
+  hasChoice (stmtsOf body) || (stmtsOf body).any liftsHere
+
 private def linearReturnResume (p : Pos) (key : String) (ret : STy) (outcome : Bool)
-    (returned rest : List SExpr) : List SExpr :=
+    (returned rest : List SExpr) (branchMany : SExpr → Bool := returnChoices) : List SExpr :=
   let payload := key ++ "Value"
   returnBranches p (key ++ "Select")
     [.decl p payload (some ret) false (.query p (.ident p key))]
-    returned rest (fun body => hasChoice (stmtsOf body) || (stmtsOf body).any liftsHere)
+    returned rest branchMany
     (some (if outcome then .opt ret else ret))
 
 private def linearReturnCleanup (outcome : Bool) (defers : List SExpr)
@@ -2218,7 +2246,9 @@ private def linearReturnCleanup (outcome : Bool) (defers : List SExpr)
 /-- A branch produces either a returned value or fallthrough. Its caller
     contains the following source statements once, outside both branches. -/
 partial def elimLinearReturns (fresh : Nat → String) (ret : STy) (outcome : Bool) (n : Nat) (p : Pos)
-    (ss defers : List SExpr) (outer : List (List SExpr) := []) : Option (List SExpr × Nat) := do
+    (ss defers : List SExpr) (outer : List (List SExpr) := [])
+    (many : SExpr → Bool := hasLiftable) (branchMany : SExpr → Bool := returnChoices) :
+    Option (List SExpr × Nat) := do
   match ss with
   | [] => return (linearReturnCleanup outcome defers outer ++
       [if outcome then .ident p "false" else .tuple p []], n)
@@ -2227,53 +2257,86 @@ partial def elimLinearReturns (fresh : Nat → String) (ret : STy) (outcome : Bo
       (linearReturnCleanup outcome defers outer)
   | d@(.app _ (.ident _ "$defer") _ _) :: rest =>
     let later := renamedFor "$later" (boundIn rest)
-    elimLinearReturns fresh ret outcome n p rest (defers ++ [renameE later d]) outer
+    elimLinearReturns fresh ret outcome n p rest (defers ++ [renameE later d]) outer many branchMany
+  | s@(.decl q name ty mutable body) :: rest =>
+    if !hasReturn body then
+      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer many branchMany
+      return (s :: tail, next)
+    if !scalarReturnBoundary many body then none else do
+      let packet := fresh n ++ "$boundary"
+      let key := packet ++ "Return"
+      let (rest, n1) ← elimLinearReturns fresh ret outcome (n+1) p rest defers outer many branchMany
+      -- The normal outcome is present whenever the return outcome is absent.
+      -- Keep the binding in this continuation's prefix, rather than adding
+      -- another conditional frame that can lose its inferred result type.
+      let ready := .decl q name ty mutable
+        (.query q (.app q (.ident q packet) [.int q 1] false)) :: rest
+      let payload := key ++ "Value"
+      let (returned, n2) := linearReturnFinish fresh q ret n1 outcome (.ident q payload)
+        (linearReturnCleanup outcome defers outer)
+      return (.decl q packet none false (returnBoundary q packet ret ty body) ::
+        .decl q key (some (.opt ret)) false (.app q (.ident q packet) [.int q 0] false) ::
+        linearReturnResume q key ret outcome returned ready branchMany, n2)
+  | s@(.forE q ..) :: rest | s@(.loop q _) :: rest =>
+    if !hasReturn s then
+      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer many branchMany
+      return (s :: tail, next)
+    if !scalarReturnBoundary many s then none else do
+      let packet := fresh n ++ "$boundary"
+      let key := packet ++ "Return"
+      let (rest, n1) ← elimLinearReturns fresh ret outcome (n+1) p rest defers outer many branchMany
+      let payload := key ++ "Value"
+      let (returned, n2) := linearReturnFinish fresh q ret n1 outcome (.ident q payload)
+        (linearReturnCleanup outcome defers outer)
+      return (.decl q packet none false (returnBoundary q packet ret none s) ::
+        .decl q key (some (.opt ret)) false (.app q (.ident q packet) [.int q 0] false) ::
+        linearReturnResume q key ret outcome returned rest branchMany, n2)
   | s@(.ite q cs t u) :: rest =>
     if !hasReturn s then
-      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer
+      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer many branchMany
       return (s :: tail, next)
     if cs.any hasReturn then none else do
       let key := fresh n ++ "$return"
       if !outcome && rest.isEmpty then
         let (tb, n1) ← elimLinearReturns fresh ret false (n+1) t.pos
-          (tailReturns (stmtsOf t)) [] (defers :: outer)
+          (tailReturns (stmtsOf t)) [] (defers :: outer) many branchMany
         let (ub, n2) ← elimLinearReturns fresh ret false n1 q
-          (tailReturns ((u.map stmtsOf).getD [])) [] (defers :: outer)
+          (tailReturns ((u.map stmtsOf).getD [])) [] (defers :: outer) many branchMany
         return (returnBranches q key cs tb ub
-          (fun body => hasChoice (stmtsOf body) || (stmtsOf body).any liftsHere) (some ret), n2)
-      let (tb, n1) ← elimLinearReturns fresh ret true (n+1) t.pos (stmtsOf t) [] outer
-      let (ub, n2) ← elimLinearReturns fresh ret true n1 q ((u.map stmtsOf).getD []) [] outer
-      let (rest, n3) ← elimLinearReturns fresh ret outcome n2 p rest defers outer
+          branchMany (some ret), n2)
+      let (tb, n1) ← elimLinearReturns fresh ret true (n+1) t.pos (stmtsOf t) [] outer many branchMany
+      let (ub, n2) ← elimLinearReturns fresh ret true n1 q ((u.map stmtsOf).getD []) [] outer many branchMany
+      let (rest, n3) ← elimLinearReturns fresh ret outcome n2 p rest defers outer many branchMany
       let payload := key ++ "Value"
       let (returned, n4) := linearReturnFinish fresh q ret n3 outcome (.ident q payload)
         (linearReturnCleanup outcome defers outer)
       let packet := SExpr.ite q cs (.block t.pos tb) (some (.block q ub))
       return (.decl q key (some (.opt ret)) false packet ::
-        linearReturnResume q key ret outcome returned rest, n4)
+        linearReturnResume q key ret outcome returned rest branchMany, n4)
   | s@(.block q items) :: rest =>
     if !hasReturn s then
-      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer
+      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer many branchMany
       return (s :: tail, next)
     if !outcome && rest.isEmpty then
-      elimLinearReturns fresh ret false (n+1) q (tailReturns items) [] (defers :: outer)
+      elimLinearReturns fresh ret false (n+1) q (tailReturns items) [] (defers :: outer) many branchMany
     else do
     let key := fresh n ++ "$return"
-    let (items, n1) ← elimLinearReturns fresh ret true (n+1) q items [] outer
-    let (rest, n2) ← elimLinearReturns fresh ret outcome n1 p rest defers outer
+    let (items, n1) ← elimLinearReturns fresh ret true (n+1) q items [] outer many branchMany
+    let (rest, n2) ← elimLinearReturns fresh ret outcome n1 p rest defers outer many branchMany
     let payload := key ++ "Value"
     let (returned, n3) := linearReturnFinish fresh q ret n2 outcome (.ident q payload)
       (linearReturnCleanup outcome defers outer)
     return (.decl q key (some (.opt ret)) false (.block q items) ::
-      linearReturnResume q key ret outcome returned rest, n3)
+      linearReturnResume q key ret outcome returned rest branchMany, n3)
   | s@(.caseE ..) :: rest =>
     if !hasReturn s then
-      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer
+      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer many branchMany
       return (s :: tail, next)
     let (select, chain) ← caseIf (fresh n ++ "$returnCase") s
-    elimLinearReturns fresh ret outcome (n+1) p (select :: chain :: rest) defers outer
+    elimLinearReturns fresh ret outcome (n+1) p (select :: chain :: rest) defers outer many branchMany
   | s :: rest =>
     if hasReturn s then none else do
-      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer
+      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer many branchMany
       return (s :: tail, next)
 
 /-- Consecutive statements without escaping bindings or cleanup registrations
@@ -2308,15 +2371,26 @@ private partial def balanceReturnBlocks (e : SExpr) : SExpr :=
     | .block p ss => some (.block p (balanceReturnSequence (ss.map balanceReturnBlocks)))
     | _ => none) e
 
+private partial def needsReturnBoundary : SExpr → Bool
+  | .app _ (.ident _ "$returnBoundary") _ false => false
+  | e@(.forE ..) | e@(.loop ..) => hasReturn e
+  | .decl _ _ _ _ body => hasReturn body
+  | .block _ values => values.any needsReturnBoundary
+  | .ite _ _ yes no => needsReturnBoundary yes || no.any needsReturnBoundary
+  | .caseE _ _ arms => arms.any fun (_, body) => needsReturnBoundary body
+  | _ => false
+
 /-- Retain the existing plain-return shape, and preserve scope boundaries
     when a returning function also has cleanup. -/
 def elimReturns (fresh : Nat → String) (n : Nat) (multi : SExpr → Bool := fun _ => false)
-    (ret : Option STy := none) (ss : List SExpr) (tailBlocks : Bool := false) : Option (List SExpr × Nat) :=
-  if (ss.map countRetIfs).foldl (· + ·) 0 > 16 then
+    (ret : Option STy := none) (ss : List SExpr) (tailBlocks : Bool := false)
+    (many : SExpr → Bool := hasLiftable) : Option (List SExpr × Nat) :=
+  let nested := ss.any needsReturnBoundary
+  if nested || (ss.map countRetIfs).foldl (· + ·) 0 > 16 then
     match ret with
     | some ty =>
       let balanced := balanceReturnSequence ((tailReturns ss).map balanceReturnBlocks)
-      elimLinearReturns fresh ty false n ((ss.head?.map (·.pos)).getD default) balanced []
+      elimLinearReturns fresh ty false n ((ss.head?.map (·.pos)).getD default) balanced [] [] many (if nested then multi else returnChoices)
     | none => none
   else if ss.any (anyE isDefer) then
     elimScopedReturns fresh multi ret n ((ss.head?.map (·.pos)).getD default) (tailReturns ss) [] []
@@ -2595,7 +2669,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       -- Returning bodies keep registrations in their lexical scopes until
       -- return normalization. Other bodies keep the existing value cleanup.
       let ss := stmtsOf body
-      let hasRet := anyE (fun | .ret .. => true | _ => false) body
+      let hasRet := hasReturn body
       let ds := if hasRet then [] else deferBodies ss
       -- (one ending in a `defer:`, a `void` one: they are its value, a block
       -- of them, as a block ending in one has)
@@ -2605,9 +2679,12 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       let ds := if lastD then [] else ds
       -- (its `return`s as guarded alternatives, #283)
       let ss := stmtsOf body
-      let ss := if hasRet then
-          ((elimReturns (fun i => tag s!"$k{i}") 0
-            (fun b => (stmtsOf b).any liftsHere || hasChoice (stmtsOf b)) (tyOf f.ret) ss).map (·.1)).getD ss else ss
+      let ss ← if hasRet then do
+          let some (normalized, _) := elimReturns (fun i => tag s!"$k{i}") 0
+            (fun b => (stmtsOf b).any liftsHere || hasChoice (stmtsOf b)) (tyOf f.ret) ss
+            | throw s!"{q.show}: {shownFnName g} has a return in an unsupported expression: a loop or binding initializer with a return must be single-valued and cannot start concurrent work (#686, #687)"
+          pure normalized
+        else pure ss
       let r := tag "$r"
       let (init, last) := (ss.dropLast, ss.getLast?)
       let (init, res) : List SExpr × SExpr := match last with
@@ -4063,9 +4140,12 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
     if !anyE (fun | .ret .. => true | _ => false) f.body then
       return (n, if (stmtsOf f.body).any isDefer then { f with body := .block f.pos (deferLastLeaves f.pos (stmtsOf f.body)) } else f)
     let retIfs := (stmtsOf f.body).foldl (init := 0) fun acc s => acc + countRetIfs s
-    let resultType := if retIfs > 16 then some f.ret else none
+    let resultType := if retIfs > 16 || (stmtsOf f.body).any needsReturnBoundary then some f.ret else none
     let some (ss, _) := elimReturns (fun i => s!"$k{i}") 0 (fun _ => false) resultType (stmtsOf f.body) true
-      | throw (if anyE (fun | x@(.forE ..) | x@(.loop ..) => hasReturn x | _ => false) f.body then
+      (fun e => hasLiftable (markCalls mv e))
+      | throw (if (stmtsOf f.body).any needsReturnBoundary then
+          s!"{f.pos.show}: {shownFnName n} has several values and a return in a loop or binding initializer whose expression is not single-valued or starts concurrent work: not supported yet (#686, #687)"
+        else if anyE (fun | x@(.forE ..) | x@(.loop ..) => hasReturn x | _ => false) f.body then
           s!"{f.pos.show}: {shownFnName n} has several values and a return in a for or a loop, which would leave its caller once inlined: not supported yet (#235, #283); find what the loop looks for first (in a var it sets, or a for's array) and return in an if after it"
         else s!"{f.pos.show}: {shownFnName n} has several values and a return inside an expression or a condition, which would leave its caller once inlined (#235, #283): return in an if's branch, a block or a case's arm")
     return (n, { f with body := .block f.pos ss })
