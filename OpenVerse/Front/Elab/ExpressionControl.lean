@@ -134,7 +134,13 @@ partial def elabExprControlWith
           let outer := SExpr.ite p (pre ++ [tq]) (.ite p innerC thenV (some (.ident p "false")))
             (some (.ident p "false"))
           let rty : Ty := if isVoid then .logic else .opt τ
-          let r ← elabE ctx outer (some rty)
+          elabE ctx outer (some rty)
+        -- Only the selected branch can use the annotation retry. An error
+        -- in the unchanged else must not repeat that entire suffix at
+        -- every link of a refining conditional chain.
+        let finish (τ : Ty) (r : R) : EM R := do
+          let isVoid := τ == .void
+          let rty : Ty := if isVoid then .logic else .opt τ
           let t ← fresh rty
           if isVoid then
             let eE ← elabE ctx ee none
@@ -143,10 +149,13 @@ partial def elabExprControlWith
           let xv ← fresh τ
           return ⟨.seq (.assign t r.e) (.ite (.assign xv (.prim .query [.local t])) (.local xv) eE), τ⟩
         match exp with
-        | some τ => return some (← atExpected τ fun τ at? => attempt τ at?)
+        | some τ =>
+          let r ← atExpected τ fun τ at? => attempt τ at?
+          return some (← finish τ r)
         | none =>
           let some (τ, atType) ← refinedIfTy k ee | return none
-          return some (← attempt τ (if atType then some τ.toSTy else none))
+          let r ← attempt τ (if atType then some τ.toSTy else none)
+          return some (← finish τ r)
     -- (and in a failure context, the branches, which are in it too: a cast
     -- in one that is an expression makes it the block of it)
     let branches : List (SExpr × (SExpr → EM R)) := if !ctx.canFail then [] else
@@ -190,28 +199,30 @@ partial def elabExprControlWith
           Refine.castRest p more thenV (some (.ident p "false"))
         let rtyOf (τ : Ty) : Ty := if τ == .void then .logic else .opt τ
         let attempt (τ : Ty) (at? : Option STy := none) : EM (Option R) := do
-          let isVoid := τ == .void
           let inner := innerOf τ at?
           let rty : Ty := rtyOf τ
-          match ← elabRefinedIf ctx p dp d T x inner (some (.ident p "false")) (some rty) (made := true) with
-          | some r =>
-            let t ← fresh rty
-            if isVoid then
-              let eE ← elabE ctx ee none
-              return some ⟨.seq (.assign t r.e) (.ite (.prim .query [.local t]) (.lit .void) (← discardValue eE)), .void⟩
-            let eE ← coerce p (← elabE ctx ee (some τ)) τ
-            let xv ← fresh τ
-            return some ⟨.seq (.assign t r.e) (.ite (.assign xv (.prim .query [.local t])) (.local xv) eE), τ⟩
-          | none => return none
+          elabRefinedIf ctx p dp d T x inner (some (.ident p "false")) (some rty) (made := true)
+        let finish (τ : Ty) (r : R) : EM R := do
+          let t ← fresh (rtyOf τ)
+          if τ == .void then
+            let eE ← elabE ctx ee none
+            return ⟨.seq (.assign t r.e) (.ite (.prim .query [.local t]) (.lit .void) (← discardValue eE)), .void⟩
+          let eE ← coerce p (← elabE ctx ee (some τ)) τ
+          let xv ← fresh τ
+          return ⟨.seq (.assign t r.e) (.ite (.assign xv (.prim .query [.local t])) (.local xv) eE), τ⟩
         -- (without an expected type: any `if`'s, `refinedIfTy`; none for a
         -- clause that is no cast that refines, which the `if` takes as any)
-        let r? ← match exp with
-          | some t => atExpected t fun τ at? => attempt τ at?
+        let r? : Option (Ty × R) ← match exp with
+          | some t => do
+            let r ← atExpected t fun τ at? => attempt τ at?
+            pure (r.map (t, ·))
           | none => do
             match ← refinedIfTy 0 ee with
-            | some (τ, atType) => attempt τ (if atType then some τ.toSTy else none)
+            | some (τ, atType) => do
+              let r ← attempt τ (if atType then some τ.toSTy else none)
+              pure (r.map (τ, ·))
             | none => pure none
-        if let some r := r? then return r
+        if let some (τ, r) := r? then return ← finish τ r
     let (rc, ctxT) ← if Choice.hasChoice conds (choiceOrder ctx) then elabOneClauses { ctx with canFail := true } conds
       else elabSeq { ctx with canFail := true, inTaking := true } conds none
     -- (not while a function value is asked for, #214, #231: a call through
