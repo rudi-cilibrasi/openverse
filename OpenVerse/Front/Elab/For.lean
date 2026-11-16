@@ -223,6 +223,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       let .arr (.arr t) := r.ty | eerr p "internal: refinement consumer values"
       return ⟨← flattenValues r, .arr t⟩
   let stagePlan := ctx.forStage
+  let bodyExpected := if firstDecides || stagePlan.isSome then none else transport
   let stageArgs := ctx.forStageArgs
   let stageFlat := ctx.forStageFlat
   let stageCopies := ctx.forStageCopies
@@ -814,7 +815,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         return (filt, pick arrs (.lit Value.emptyArray), t)
     match gs with
     | [] =>
-      let r ← elabE (bodyCtx c) bd none
+      let r ← elabE (bodyCtx c) bd bodyExpected
       -- The generated arrays must infer their element type during
       -- suspension lowering. As for array/tuple literals, a body that
       -- never completes has Core's void type without changing its exit.
@@ -1146,7 +1147,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         | e => .seq e filt
       levels := levels.push (slot, src, srcTy, filt)
       c := c2
-    let r ← elabE (bodyCtx c) body none
+    let r ← elabE (bodyCtx c) body bodyExpected
     let r := if r.ty == .never then { r with e := .seq r.e (.lit .void) } else r
     let mutable := c.locals.filterMap fun l => if l.mutable && l.slot >= start then some l.slot else none
     let fx := forClauseEffects fun s => s < start || mutable.contains s

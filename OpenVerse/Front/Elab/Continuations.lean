@@ -1056,7 +1056,7 @@ partial def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   -- generic/default argument bindings) inside the body. Their ownership is
   -- checked when that consumer elaborates; they do not escape the helper.
   let safeMarkers := ["$sourceSuper", "$methodMiss", "$methodCast", "$methodCase", "$methodType", "$methodParams", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
-    "$forReturns", "$forReturnBody", "$choiceOperation", "$choiceGenericOperation", "$choiceFixedOperation", "$choiceCoercions", "$choiceDictionary", "$defer", "$deferExits", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
+    "$forReturns", "$forReturnBody", "$refinementBody", "$refinementConsumer", "$choiceOperation", "$choiceGenericOperation", "$choiceFixedOperation", "$choiceCoercions", "$choiceDictionary", "$defer", "$deferExits", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
     "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$noteTypes", "$noteFails", "$declNames", "$callArgs", "$callSingleton", "$then"]
   let rec blocked (e : SExpr) : Bool :=
     match e with
@@ -1290,7 +1290,10 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
   -- The private producer loop must not impose its lexical restrictions
   -- on a source if/first consumer, or lose a real source for-body ban.
   let body := if plan.resumeContext.isSome then
-      let mark (code : SExpr) := SExpr.app p (.ident p "$refinementBody") [.str p [.text plan.base], code] false
+      let mark (code : SExpr) :=
+        let hint := if plan.resumeCanFail.isSome then
+          [SExpr.decl p "$element" (some (plan.value.substNames σ)) false (.tuple p [])] else []
+        SExpr.app p (.ident p "$refinementBody") ([.str p [.text plan.base]] ++ hint ++ [code]) false
       match body with
       | .app q f@(.ident _ name) [metadata, mode, code] false =>
         if name == "$forReturns" || name == "$forReturnBody" then
