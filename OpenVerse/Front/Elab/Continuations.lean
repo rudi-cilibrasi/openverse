@@ -1249,7 +1249,8 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
   let qualify := match ctx.selfClass with | some c => selfQualify ctx c | none => id
   let clauses := clauses.map qualify
   let body := qualify body
-  let written := ctx.choiceCoercionBody (.block p (clauses ++ [body] ++ (ctx.forStageCopies ++ ctx.forStageBorrows).map (SExpr.ident p ·)))
+  let copyValues := if ctx.forStageCopyValues.isEmpty then ctx.forStageCopies.map (SExpr.ident p ·) else ctx.forStageCopyValues
+  let written := ctx.choiceCoercionBody (.block p (clauses ++ [body] ++ copyValues ++ ctx.forStageBorrows.map (SExpr.ident p ·)))
   let caps := ctx.capturesOf written
   let key := s!"env{ctx.forStageFlat}" ++ plan.key ++ contKey ctx p "$resume" [written] ++ forStageCaptureKey ctx ctx.forStageArgs caps
   let name := s!"{plan.base}$env{key.hash}"
@@ -1264,6 +1265,17 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
   let body := match body with
     | .app p (.ident _ "$forReturns") args false => .app p (.ident p "$forReturnBody") args false
     | b => b
+  -- The private producer loop must not impose its lexical restrictions
+  -- on a source if/first consumer, or lose a real source for-body ban.
+  let body := if plan.resumeContext.isSome then
+      let mark (code : SExpr) := SExpr.app p (.ident p "$refinementBody") [.str p [.text plan.base], code] false
+      match body with
+      | .app q f@(.ident _ name) [metadata, mode, code] false =>
+        if name == "$forReturns" || name == "$forReturnBody" then
+          .app q f [metadata, mode, mark code] false
+        else mark body
+      | _ => mark body
+    else body
   let localName (n : String) := if n == "Self" then "$sourceSelf" else n
   let captureName (l : Local) (j : Nat) := if l.typeValue then s!"$w.capture{j}" else s!"$capture{j}"
   let fields := caps.zipIdx.map fun (l, j) => ({ name := captureName l j, ty := l.ty.toSTy } : SField)
@@ -1279,8 +1291,11 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
     (bound.base.toSTy, bound.derived.toSTy))
   let borrowed (l : Local) := l.storage.filter fun s =>
     !(ctx.sig? s.frame).any (!·.suspends)
+  let liveName (n : String) := s!"$refinementCurrent{n}"
   let init := caps.zipIdx.flatMap fun (l, j) =>
-    let value := SExpr.app p (.ident p "$forEnvCapture")
+    let value := if plan.resumeInputs && plan.copies.any (·.1 == l.name) then
+        SExpr.ident p (liveName l.name)
+      else SExpr.app p (.ident p "$forEnvCapture")
       [.member p (.ident p "Self") (captureName l j)] false
     if (borrowed l).isSome then
       let saved := s!"$captureInit{j}"
@@ -1288,10 +1303,10 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
         .decl p (localName l.name) (some l.ty.toSTy) l.mutable
           (.app p (.ident p "$forEnvInit") [.ident p saved] false)]
     else [SExpr.decl p (localName l.name) (some l.ty.toSTy) l.mutable value]
-  let copies := ctx.forStageCopies.map fun n => SExpr.ident p (localName n)
+  let copies := copyValues.map fun e => rename (Refine.substTypes σ e)
   let vals := s!"{name}$values"
   let failed : SExpr := if copies.isEmpty then .ident p "false" else .tuple p (.ident p "false" :: copies)
-  let run := if plan.outcome then
+  let run := if plan.resumeOriginalFor then SExpr.forE p clauses body else if plan.outcome then
       SExpr.app p (.ident p "$forFirstOutcome") [.block p clauses, body, failed] false
     else SExpr.app p (.ident p "$forFirst") [.block p clauses, body] false
   let run := forClauseExitScope body run
@@ -1301,13 +1316,17 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
   let valueTy := if plan.outcome then STy.opt (.arr (plan.value.substNames σ)) else .arr (plan.value.substNames σ)
   let ret := if copies.isEmpty then valueTy else
     .tup (valueTy :: plan.copies.map (fun (_, t) => t.substNames σ))
-  let method := STop.fn p plan.method [] [] ("override" :: plan.specs) ret
+  let liveParams := if !plan.resumeInputs then [] else plan.copies.map fun (n, t) =>
+    ({ name := liveName n, ty := t.substNames σ, metadataForward := true } : SParam)
+  let method := STop.fn p plan.method liveParams [] ("override" :: plan.specs) ret
     (pruneConstructHints ctx s!"{name}.{plan.method}" (.block p (init ++ [ctx.choiceCoercionBody code])))
   let storage := caps.filterMap fun l => (borrowed l).map fun s =>
     (localName l.name, ({ frame := s.frame, name := s.name, args := s.args.map Ty.toSTy } : Choice.ResumeStorage))
   let resumeInfo : Choice.ForResume := {
     name := s!"{name}.{plan.method}", storage,
-    inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag, sourceContext := sourceContextOf ctx }
+    inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
+    rollback := plan.resumeRollback, borrowTasks := plan.resumeContext.isSome,
+    sourceContext := plan.resumeContext.getD (sourceContextOf ctx) }
   let cls := STop.classDef p name [] tps [] [forStageView plan.base (args.map Ty.toSTy)] false fields [method]
 
   let req : Choice.FirstLift := {

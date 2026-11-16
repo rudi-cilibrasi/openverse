@@ -113,7 +113,11 @@ def Lift.key (l : Lift) : String := keyOf l.pos l.bound l.tag
 partial def findPart (pr : SExpr → Bool) (outside : Bool) (e : SExpr) : Option SExpr :=
   if pr e then some e
   else match e with
-    | .app _ (.ident _ "$forPrepare") _ false => none
+    | .app _ (.ident _ "$forPrepare") _ false
+    | .app _ (.ident _ "$refinementPrepare") _ false
+    | .app _ (.ident _ "$refinementPrepareKnown") _ false
+    | .app _ (.ident _ "$refinementReady") _ false
+    | .app _ (.ident _ "$refinementReadyOne") _ false => none
     | .loop .. => if outside then none else e.children.findSome? (findPart pr outside)
     | e => e.children.findSome? (findPart pr outside)
 
@@ -487,14 +491,26 @@ def castRestClauses (pre : List SExpr) (cast : Pos × String × String × SExpr)
   -- at the producer, from the same already-selected objects.
   let later := if !replayAll then later else later.map fun c =>
     ((d, T, .ident p (obj p), none) :: objs).foldr (fun (name, target, object, _) c =>
-      let wrap (value : SExpr) : SExpr :=
-        .ite value.pos [made (castOf value.pos name target object)] value
-          (some (.app value.pos (.ident value.pos "Err") [] false))
+      let wrap (q : Pos) (value : SExpr) : SExpr :=
+        .ite q [made (castOf q name target object)] value
+          (some (.app q (.ident q "Err") [] false))
+      let branchWrap (q : Pos) (value : SExpr) : SExpr :=
+        let witness := s!"$recast{q.line}_{q.col}_{name}"
+        .ite q [castOf q witness target object] (Choice.renameE [(name, witness)] value)
+          (some (.app q (.ident q "Err") [] false))
+      let replay (value : SExpr) : SExpr := match value with
+        | .app p f@(.ident _ "$branchChoice") [i] false =>
+          .app p f [rebindChoiceBranch branchWrap i] false
+        | .app p f@(.ident _ "$branchChoiceAt") [l, i] false =>
+          .app p f [l, rebindChoiceBranch branchWrap i] false
+        | _ => match Choice.alts? value with
+          | some alternatives => Choice.mk value.pos (alternatives.map fun a => wrap a.pos a)
+          | none => wrap value.pos value
       match c with
-      | .gen q y index src => .gen q y index (wrap src)
-      | .decl q y t v (.range rp lo hi) => .decl q y t v (.range rp (wrap lo) (wrap hi))
-      | .decl q y t v value => .decl q y t v (wrap value)
-      | value => wrap value) c
+      | .gen q y index src => .gen q y index (replay src)
+      | .decl q y t v (.range rp lo hi) => .decl q y t v (.range rp (replay lo) (replay hi))
+      | .decl q y t v value => .decl q y t v (replay value)
+      | value => replay value) c
   -- (the casts `after` casts again, each when it uses its name or one bound
   -- after it, and no clause past a generator does: this one, of its object
   -- bound once, and those after it)

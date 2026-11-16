@@ -1,5 +1,6 @@
 /- Elaboration for; public declarations retain OpenVerse.Front names. -/
 import OpenVerse.Front.Elab.ProducerOperations
+import OpenVerse.Front.Elab.RefinementEnvironments
 import OpenVerse.Front.Elab.Calls
 
 namespace OpenVerse.Front
@@ -115,7 +116,59 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     (elabE : Ctx → SExpr → Option Ty → EM R) (elabInts : Ctx → Pos → List SExpr → EM (List Expr))
     (elabLoopGen : Ctx → Pos → List SExpr → EM LoopGen) (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx))
     (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) (prepared : Bool := false)
-    (firstDecides : Bool := false) (failure : Option SExpr := none) : EM R := do
+    (firstDecides : Bool := false) (failure : Option SExpr := none)
+    (searchPrepared : Bool := false) : EM R := do
+  let transport := ctx.refinementTransportValue
+  let ctx := { ctx with refinementTransportValue := none }
+  if let some value := transport then
+    let c := ctx
+    if let some (before, filterPrefix, suffix) := refinementProducerParts c clauses then
+      let name := s!"$refinementReady{p.line}_{p.col}_{c.locals.length}"
+      let outcome := (ctx.canFail && !firstDecides) || failure.isSome || forReturnBody? body
+      -- A return's abort packet is a protocol outcome, not a source
+      -- failure context. Keep its original Signal/cleanup boundary.
+      let sourceFailure := match body with
+        | .app _ (.ident _ name) [_, .ident _ mode, _] false =>
+          if name == "$forReturns" || name == "$forReturnBody" then mode == "true"
+          else (ctx.canFail && !firstDecides) || failure.isSome
+        | _ => (ctx.canFail && !firstDecides) || failure.isSome
+      if refinementChainEligible c (before ++ filterPrefix ++ suffix) suffix then
+        if let some owned ← refinementOwnedLocals c p clauses body then
+          return ← elabE { c with refinementTransportValue := some value } owned (some (.arr value))
+        let names := (Choice.localDecls (.block p clauses)).map (·.1) |>.eraseDups
+        let written := SExpr.forE p clauses body
+        let writtenSets := Choice.setsIn written
+        let cells := names.filter fun name => writtenSets.contains name &&
+          Choice.anyE (fun | .decl _ n (some _) true _ => n == name | _ => false) (.block p clauses)
+        if !cells.isEmpty then
+          if !c.types.classes.contains "$varcell" then
+            askHelper p (refinementCellRequest p)
+            return ⟨.prim .userErr [], .arr value⟩
+          -- Use the existing typed cell transformation for clause-local
+          -- variables shared by successive row owners. Caller variables
+          -- keep the ordinary live copy-in/copy-out protocol.
+          return ← elabE { c with refinementTransportValue := some value }
+            (Choice.cellVars cells written) (some (.arr value))
+        let code ← refinementChainOf c p filterPrefix suffix body value outcome
+          (sourceFailure || ctx.inRollback)
+        let some (chainClauses, chainBody) := code | return ⟨.prim .userErr [], .arr value⟩
+        let r ← elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq c p
+          (before ++ chainClauses) chainBody (prepared := true)
+          (firstDecides := firstDecides) (failure := failure) (searchPrepared := true)
+        let .arr (.arr t) := r.ty | eerr p "internal: refinement chain values"
+        return ⟨← flattenValues r, .arr t⟩
+      let prepare := refinementPrepareMarker c p value outcome (sourceFailure || ctx.inRollback)
+        filterPrefix suffix body (forBody := true)
+      let resume := SExpr.app p (.ident p "$refinementResume") [.ident p name] false
+      let consumer := forStageBodyAs body resume
+      -- One outer row prepares and resumes before the next row begins.
+      -- Flatten only that row's returned values, never pre-collect Ready
+      -- environments across generator iterations.
+      let r ← elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq c p
+        (before ++ [.decl p name none false prepare]) consumer
+        (prepared := true) (firstDecides := firstDecides) (failure := failure)
+      let .arr (.arr t) := r.ty | eerr p "internal: refinement consumer values"
+      return ⟨← flattenValues r, .arr t⟩
   let stagePlan := ctx.forStage
   let stageArgs := ctx.forStageArgs
   let stageFlat := ctx.forStageFlat
@@ -1020,7 +1073,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     | c => match Choice.binding? c with
       | some b => !b.composed && b.branchy.isNone && b.each.isNone
       | none => false
-  if stagePlan.isNone && !prepared && !firstDecides && failure.isNone && !gs.isEmpty &&
+  if stagePlan.isNone && (!prepared || searchPrepared) && !firstDecides && failure.isNone && !gs.isEmpty &&
       !written.any callsManyValued && !pre.any isExcl && gs.all (fun (g, fs) => plainGen g && !fs.any isExcl) then
     let start := (← get).nslots
     let (preE, unit, c0) ← match pre with

@@ -263,7 +263,8 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
     pos := p, inputs, required, seeds := inputs ++ st.metadataSeeds, uses := st.metadataUses
     shared := st.frameSlots.map (·.1), metadataWrites := st.metadataWrites
     source := frames
-    borrowTasks := defaultBridge name || choiceDefaultBridge name || requests.casts.any (·.name == name)
+    borrowTasks := defaultBridge name || choiceDefaultBridge name || requests.casts.any (·.name == name) ||
+      resume.any (·.borrowTasks)
     body := some (initPrefixE arity selfInits e) }
   return { fn := { name, arity, nslots := st.nslots, decides, writes := allowed.contains "writes",
                    body := initPrefixE arity inits e },

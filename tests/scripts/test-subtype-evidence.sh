@@ -11,6 +11,17 @@ lake env lean --run tests/lean/MetadataStorage.lean
 lake env lean --run tests/lean/MetadataConcurrency.lean
 lake env lean --run tests/lean/MetadataSignals.lean
 lake env lean --run tests/lean/MetadataGetters.lean
+lake env lean --run tests/lean/MetadataTuples.lean "$out"
+for metadata in false true; do
+  runtime/build/cverse "$out/mixed-overwrite-$metadata.vbc" > "$out/mixed-overwrite-$metadata.out" 2> "$out/mixed-overwrite-$metadata.err"
+  cmp "$out/mixed-overwrite.expected" "$out/mixed-overwrite-$metadata.out"
+  test ! -s "$out/mixed-overwrite-$metadata.err"
+done
+for bytecode in "$out"/waiting-tuple-*.vbc; do
+  runtime/build/cverse "$bytecode" > "$bytecode.out" 2> "$bytecode.err"
+  cmp "${bytecode%.vbc}.expected" "$bytecode.out"
+  test ! -s "$bytecode.err"
+done
 lake env lean --run tests/lean/MetadataTasks.lean
 lake env lean --run tests/lean/ChoiceBoundMethods.lean
 lake env lean --run tests/lean/BoundMethodValues.lean

@@ -33,6 +33,27 @@ partial def elabExprControlWith
   | e@(.ite _ [.decl _ _ none false (.app _ (.ident _ "$methodCase") _ false)] _ (some _)) =>
     elabE ctx (pruneMethodCases ctx e) exp
   | .ite p conds0 thenE elseE =>
+    if !ctx.refinementTransportActive && hasRefinementClauses ctx conds0 then
+      let saved ← get
+      if !saved.refiningHintProbe then
+        return ← tryCatch (elabE { ctx with refinementTransportActive := true } se exp) fun original => do
+          if !refinementRecoveryError original then throw original
+          let failed ← get
+          set { saved with refiningHintProbe := true }
+          let expected ← match exp, elseE with
+            | some ty, _ => pure (some ty)
+            | none, none => pure (some Ty.void)
+            | none, some otherwise =>
+              tryCatch (do
+                let thenTy ← refinementPrefixTypeWith elabE elabOneClauses ctx conds0 thenE
+                let elseTy := (← elabE { ctx with typeOnly := true } otherwise none).ty
+                pure (joinTy ctx.types thenTy elseTy none)) (fun _ => pure none)
+          set saved
+          let some expected := expected.filter (!·.hasNever) | do set failed; throw original
+          tryCatch (elabRefinementIfAt elabE { ctx with refinementTransportActive := true }
+            p conds0 thenE elseE expected) fun _ => do
+              set failed
+              throw original
     -- (a first clause the elaborator made, whose branch is its own too)
     let (madeCast, conds) := Refine.unmade conds0
     -- (#243, #351) a cast as a later clause of the condition, `if (c₁, …,
@@ -134,7 +155,8 @@ partial def elabExprControlWith
     if !asWritten then
       if let some r ← withCastClauses elabE elabOneClauses ctx conds thenE (fun _ => false)
           (elabE { ctx with asWritten := true } (.ite p conds0 thenE elseE) exp)
-          (fun conds thenE => elabE ctx (.ite p conds thenE elseE) exp) (later := true) (alone := nested)
+          (fun conds thenE => elabE ctx (.ite p conds thenE elseE) exp)
+          (later := true) (alone := nested)
           (blocks := branches) then
         return r
     -- (a cast that refines type arguments, as the whole condition, #243,
@@ -207,6 +229,22 @@ partial def elabExprControlWith
         (fun k e => elabE { ctx with retries := k } ee e)
         fun rt re ty => return ⟨.ite rc.e (← coerce p rt ty) (← coerce p re ty), ty⟩
   | .forE p clauses body => do
+    -- An opening cast must retain the complete original world before
+    -- ordinary clause replay moves its later snapshots into a lift.
+    if !ctx.refinementTransportActive && clauses.any (fun clause =>
+        (Refine.castClause? clause).any (fun (_, _, target, _) => ctx.types.classes.contains target)) then
+      if let some (.arr value) := exp then
+        let saved ← get
+        if !value.hasNever && !saved.refiningHintProbe then
+          return ← tryCatch (elabE { ctx with refinementTransportActive := true } se exp) fun original => do
+            if !refinementRecoveryError original then throw original
+            let failed ← get
+            set saved
+            tryCatch (elabE { ctx with
+              refinementTransportActive := true, refinementTransportValue := some value
+              asWritten := true } se exp) fun _ => do
+                set failed
+                throw original
     -- (#243, #351) a clause that casts as only a failure context's clause
     -- may: as written, else with the rest of its clauses as one block
     let asWritten := ctx.asWritten
@@ -224,7 +262,19 @@ partial def elabExprControlWith
           .block b.pos [.decl b.pos v (some t.toSTy) false b, .ident b.pos v]
         | _ => b
       if let some r ← withCastClauses elabE elabOneClauses ctx clauses body isGen (elabE { ctx with asWritten := true } se exp)
-          (fun clauses body => elabE ctx (.forE p clauses (typed body)) exp) then
+          (fun lifted liftedBody => do
+            let saved ← get
+            tryCatch (elabE ctx (.forE p lifted (typed liftedBody)) exp) fun original => do
+              if ctx.refinementTransportActive || saved.refiningHintProbe || !refinementRecoveryError original then throw original
+              let some (.arr value) := exp | throw original
+              if value.hasNever then throw original
+              set saved
+              tryCatch (elabE { ctx with
+                refinementTransportActive := true
+                refinementTransportValue := some value, asWritten := true }
+                (.forE p lifted (typed body)) exp) fun _ => do
+                  set saved
+                  throw original) then
         return r
     -- (a `return` in the body: none can be in the clauses, a failure
     -- context, nor can a `break`, `checkJumps`)

@@ -1,0 +1,9 @@
+prefix
+return 3 4
+prefix
+break 11
+prefix
+body
+cleanup
+copy 8
+exit=0
