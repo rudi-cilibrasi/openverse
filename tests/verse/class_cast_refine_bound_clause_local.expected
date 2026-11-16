@@ -1,0 +1,10 @@
+before-bound
+2 7 left 1
+2 7 left 2
+after-bound
+2 7 left 1
+2 7 left 2
+after-choice
+2 7 left 1
+2 7 left 1
+exit=0
