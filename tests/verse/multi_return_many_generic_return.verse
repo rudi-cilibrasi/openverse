@@ -1,0 +1,24 @@
+F(V:t,N:int where t:type)<computes>:t=
+    if(N=-9001):return V
+    if(N=-9002):return V
+    if(N=-9003):return V
+    if(N=-9004):return V
+    if(N=-9005):return V
+    if(N=-9006):return V
+    if(N=-9007):return V
+    if(N=-9008):return V
+    if(N=-9009):return V
+    if(N=-9010):return V
+    if(N=-9011):return V
+    if(N=-9012):return V
+    if(N=-9013):return V
+    if(N=-9014):return V
+    if(N=-9015):return V
+    if(N=-9016):return V
+    if(N=-9017):return V
+    if(N=-9018):return V
+    if(N=0):return V|V
+    V|V|V
+Main():void=
+    for(V:=F("s",0)){Print("v {V}")}
+    for(V:=F(7,1)){Print("v {V}")}

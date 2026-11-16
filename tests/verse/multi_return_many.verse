@@ -1,4 +1,4 @@
-# expect: 2:0: F has several values and 20 ifs with a return: more than 16
+# Large returning prefixes preserve the selected path and its effects.
 F(X : int)<transacts>:int =
     if (X > 1):
         if (X = 100):
