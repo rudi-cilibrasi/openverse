@@ -2182,11 +2182,77 @@ partial def elimScopedReturns (fresh : Nat → String) (multi : SExpr → Bool) 
       let (rest, n') ← elimScopedReturns fresh multi ret n p rest ds outer
       some (s :: rest, n')
 
+private def linearReturnFinish (fresh : Nat → String) (p : Pos) (ret : STy) (n : Nat) (outcome : Bool)
+    (value : SExpr) (cleanup : List SExpr) : List SExpr × Nat :=
+  if !outcome && cleanup.isEmpty then ([value], n) else
+  let saved := fresh n ++ "$returnValue"
+  let result := if outcome then SExpr.optionLit p (.block p [.ident p saved]) else .ident p saved
+  (.decl p saved (some ret) false value :: cleanup ++ [result], n+1)
+
+private def linearReturnResume (p : Pos) (key : String) (ret : STy) (outcome : Bool)
+    (returned rest : List SExpr) : List SExpr :=
+  let payload := key ++ "Value"
+  returnBranches p (key ++ "Select")
+    [.decl p payload (some ret) false (.query p (.ident p key))]
+    returned rest (fun _ => true) (some (if outcome then .opt ret else ret))
+
+/-- A branch produces either a returned value or fallthrough. Its caller
+    contains the following source statements once, outside both branches. -/
+partial def elimLinearReturns (fresh : Nat → String) (ret : STy) (outcome : Bool) (n : Nat) (p : Pos)
+    (ss defers : List SExpr) : Option (List SExpr × Nat) := do
+  match ss with
+  | [] => return (runReturnDefers defers ++
+      [if outcome then .ident p "false" else .tuple p []], n)
+  | .ret q value :: _ =>
+    return linearReturnFinish fresh q ret n outcome (value.getD (.tuple q [])) (runReturnDefers defers)
+  | d@(.app _ (.ident _ "$defer") _ _) :: rest =>
+    let later := renamedFor "$later" (boundIn rest)
+    elimLinearReturns fresh ret outcome n p rest (defers ++ [renameE later d])
+  | s@(.ite q cs t u) :: rest =>
+    if !hasReturn s then
+      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers
+      return (s :: tail, next)
+    if cs.any hasReturn then none else do
+      let key := fresh n ++ "$return"
+      let (tb, n1) ← elimLinearReturns fresh ret true (n+1) t.pos (stmtsOf t) []
+      let (ub, n2) ← elimLinearReturns fresh ret true n1 q ((u.map stmtsOf).getD []) []
+      let (rest, n3) ← elimLinearReturns fresh ret outcome n2 p rest defers
+      let payload := key ++ "Value"
+      let (returned, n4) := linearReturnFinish fresh q ret n3 outcome (.ident q payload) (runReturnDefers defers)
+      let packet := SExpr.ite q cs (.block t.pos tb) (some (.block q ub))
+      return (.decl q key (some (.opt ret)) false packet ::
+        linearReturnResume q key ret outcome returned rest, n4)
+  | s@(.block q items) :: rest =>
+    if !hasReturn s then
+      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers
+      return (s :: tail, next)
+    let key := fresh n ++ "$return"
+    let (items, n1) ← elimLinearReturns fresh ret true (n+1) q items []
+    let (rest, n2) ← elimLinearReturns fresh ret outcome n1 p rest defers
+    let payload := key ++ "Value"
+    let (returned, n3) := linearReturnFinish fresh q ret n2 outcome (.ident q payload) (runReturnDefers defers)
+    return (.decl q key (some (.opt ret)) false (.block q items) ::
+      linearReturnResume q key ret outcome returned rest, n3)
+  | s@(.caseE ..) :: rest =>
+    if !hasReturn s then
+      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers
+      return (s :: tail, next)
+    let (select, chain) ← caseIf (fresh n ++ "$returnCase") s
+    elimLinearReturns fresh ret outcome (n+1) p (select :: chain :: rest) defers
+  | s :: rest =>
+    if hasReturn s then none else do
+      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers
+      return (s :: tail, next)
+
 /-- Retain the existing plain-return shape, and preserve scope boundaries
     when a returning function also has cleanup. -/
 def elimReturns (fresh : Nat → String) (n : Nat) (multi : SExpr → Bool := fun _ => false)
     (ret : Option STy := none) (ss : List SExpr) (tailBlocks : Bool := false) : Option (List SExpr × Nat) :=
-  if ss.any (anyE isDefer) then
+  if (ss.map countRetIfs).foldl (· + ·) 0 > 16 then
+    match ret with
+    | some ty => elimLinearReturns fresh ty false n ((ss.head?.map (·.pos)).getD default) (tailReturns ss) []
+    | none => none
+  else if ss.any (anyE isDefer) then
     elimScopedReturns fresh multi ret n ((ss.head?.map (·.pos)).getD default) (tailReturns ss) [] []
   else elimPlainReturns fresh n multi ret tailBlocks ss
 
@@ -2497,7 +2563,7 @@ def genOver (site : String) (q : Pos) (x : String) (ty : Option STy) (src : SExp
   match ty with
   | none => [.gen q x none src]
   | some t =>
-    let e := madeName "e" site q
+    let e := madeName "e" site q ++ "$" ++ x
     [.gen q e none src, .decl q x (some t) false (.ident q e)]
 
 mutual
@@ -3874,9 +3940,8 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
     if !anyE (fun | .ret .. => true | _ => false) f.body then
       return (n, if (stmtsOf f.body).any isDefer then { f with body := .block f.pos (deferLastLeaves f.pos (stmtsOf f.body)) } else f)
     let retIfs := (stmtsOf f.body).foldl (init := 0) fun acc s => acc + countRetIfs s
-    if retIfs > 16 then
-      throw s!"{f.pos.show}: {shownFnName n} has several values and {retIfs} ifs with a return: more than 16, and the code of an inlined call doubles with each, until choices compose without copying the clauses after them (#283)"
-    let some (ss, _) := elimReturns (fun i => s!"$k{i}") 0 (fun _ => false) none (stmtsOf f.body) true
+    let resultType := if retIfs > 16 then some f.ret else none
+    let some (ss, _) := elimReturns (fun i => s!"$k{i}") 0 (fun _ => false) resultType (stmtsOf f.body) true
       | throw (if anyE (fun | x@(.forE ..) | x@(.loop ..) => hasReturn x | _ => false) f.body then
           s!"{f.pos.show}: {shownFnName n} has several values and a return in a for or a loop, which would leave its caller once inlined: not supported yet (#235, #283); find what the loop looks for first (in a var it sets, or a for's array) and return in an if after it"
         else s!"{f.pos.show}: {shownFnName n} has several values and a return inside an expression or a condition, which would leave its caller once inlined (#235, #283): return in an if's branch, a block or a case's arm")
