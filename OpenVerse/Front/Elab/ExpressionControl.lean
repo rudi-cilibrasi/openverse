@@ -243,11 +243,65 @@ partial def elabExprControlWith
     -- An opening cast must retain the complete original world before
     -- ordinary clause replay moves its later snapshots into a lift.
     if !ctx.refinementTransportActive && clauses.any (fun clause =>
-        (Refine.castClause? clause).any (fun (_, _, target, _) => ctx.types.classes.contains target)) then
-      if let some (.arr value) := exp then
+        (Refine.castClause? clause).any (fun (_, _, target, _) => ctx.types.classes.contains target) ||
+        (refinementConditionalBinding? ctx clause).isSome) then
+      let initial ← get
+      let transportExpected ← match exp with
+        | some ty => pure (some ty)
+        | none => do
+          if initial.refiningHintProbe then pure none else
+            -- Infer a caller-world candidate from the ordinary fallback.
+            -- The selected worlds are subsequently checked at that type;
+            -- this probe keeps neither effects nor elaboration state.
+            let ordinaryClauses := clauses.map fun clause =>
+              match refinementConditionalBinding? ctx clause with
+              | some (name, annotation, conditional) =>
+                match (Choice.arms conditional).getLast? with
+                | some (none, fallback) => .decl clause.pos name annotation false fallback
+                | _ => clause
+              | none => clause
+            set { initial with refiningHintProbe := true }
+            let candidate ← tryCatch
+              (some <$> elabE { ctx with typeOnly := true, refinementTransportActive := true }
+                (.forE p ordinaryClauses body) none)
+              (fun _ => pure none)
+            set initial
+            pure (candidate.map (·.ty))
+      if let some (.arr value) := transportExpected then
         let saved ← get
-        if !value.hasNever && !saved.refiningHintProbe then
-          return ← tryCatch (elabE { ctx with refinementTransportActive := true } se exp) fun original => do
+        -- A source return may leave the collector with no normal values.
+        -- Retain that bottom element; never invent a source initializer type.
+        let returnOnly := value == .never &&
+          (Refine.findPart (fun | .ret .. => true | _ => false) false body).isSome
+        if (!value.hasNever || returnOnly) && !saved.refiningHintProbe then
+          return ← tryCatch (do
+            let ordinary ← elabE { ctx with refinementTransportActive := true } se exp
+            -- A producer can defer its suffix before the generated helper
+            -- exposes the lost world. Validate the ordinary source first,
+            -- then retain the world before that continuation is staged.
+            let ordinaryState ← get
+            let deferredSuffix := (ordinaryState.loopFirst.drop saved.loopFirst.length).any fun use =>
+              use.lift.toOption.any (fun helper => helper.name.startsWith "$contf")
+            let mut needsWorld := false
+            if deferredSuffix then
+              -- A closed conditional value carries no caller-world index
+              -- across its branch. Keep its successful ordinary lowering.
+              set { ordinaryState with refiningHintProbe := true }
+              for clause in clauses do
+                if let some (_, _, conditional) := refinementConditionalBinding? ctx clause then
+                  let openResult ← tryCatch (do
+                    let some (none, fallback) := (Choice.arms conditional).getLast? | pure true
+                    let result ← elabE { ctx with typeOnly := true } fallback none
+                    pure (!result.ty.params.isEmpty)) (fun _ => pure true)
+                  needsWorld := needsWorld || openResult
+              set ordinaryState
+            if (ordinaryState.pendingWaitingCasts > saved.pendingWaitingCasts || needsWorld) &&
+                clauses.any (fun clause => (refinementConditionalBinding? ctx clause).isSome) then
+              set saved
+              tryCatch (elabE { ctx with
+                refinementTransportActive := true, refinementTransportValue := some value, asWritten := true } se exp)
+                (fun _ => do set ordinaryState; pure ordinary)
+            else pure ordinary) fun original => do
             if !refinementRecoveryError original then throw original
             let failed ← get
             set saved
