@@ -1274,17 +1274,25 @@ partial def parseFor (stop : Nat) : PM SExpr := do
   let t ← peekT
   bump
   let o ← peekT
+  -- An explicit source body has statement admission even when `do`
+  -- writes one expression without braces. Generated collector/filter
+  -- bodies do not pass through this parser boundary.
+  let doBody : PM SExpr := do
+    let body ← parseBranch stop
+    return match body with
+      | .block .. => body
+      | _ => .block body.pos [body]
   if o.isSym "(" then
     bump
     let clauses ← parseParenClauses
-    let body ← if (← peekT).isKw "do" then do bump; parseBranch stop else parseBody stop
+    let body ← if (← peekT).isKw "do" then do bump; doBody else parseBody stop
     return .forE t.pos clauses body
   if !o.startsBody then perr o s!"expected '(', '\{', ':' or '.' after for, found {o.tok.describe}"
   let cs ← parseClauses "for" (fun c => parseClause c) stop
   if cs.isEmpty then perr o "'for{}' needs a generator"
   if (← peekT).isKw "do" then
     bump
-    return .forE t.pos cs (← parseBranch stop)
+    return .forE t.pos cs (← doBody)
   noMacroBody "for" (← peekT) "its value is its last clause's; write 'for (…):' for a body"
   let (cs, v) := clausesValue cs
   return .forE t.pos cs v
