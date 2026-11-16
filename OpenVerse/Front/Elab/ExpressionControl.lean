@@ -17,10 +17,12 @@ def warnVoidReturn (p : Pos) (result value : Ty) : EM Unit := do
     needs no selected-world replay. Calls, writes and exits retain recovery. -/
 private partial def stableRefinementReads (ctx : Ctx) (e : SExpr) : Bool :=
   let allowed := match e with
-    | .int .. | .char .. | .char32 .. | .float .. | .ident ..
-    | .str .. | .member .. | .query .. | .neg .. | .notE ..
+    | .int .. | .char .. | .char32 .. | .float ..
+    | .member .. | .query .. | .neg .. | .notE ..
     | .cmp .. | .andE .. | .orE .. | .tuple .. | .block ..
     | .arrayLit .. | .optionLit .. | .logicLit .. | .ite .. => true
+    | .str _ parts => parts.all fun | .text _ => true | _ => false
+    | .ident _ name => (ctx.lookup name).isSome || !(ctx.sig? name).any (·.isConst)
     | .decl _ _ _ false _ => true
     | .app _ (.ident _ name) _ true =>
       ctx.types.classes.contains name && (ctx.lookup name).isNone && (ctx.sig? name).isNone
