@@ -74,7 +74,7 @@ with tempfile.TemporaryDirectory(prefix='openverse-refining-chain-') as work:
         # not hide an invalid suffix while avoiding its repeated probes.
         invalid = work / f'invalid-void-{first}.verse'
         invalid.write_text(source(32, first, False, True).replace(
-            'Main()<transacts>', '    else Hidden\nMain()<transacts>'))
+            'then Print("arm 31 {D31.C}")', 'then Hidden'))
         for profile in [[], ['--extended-defaults']]:
             bytecode = work / 'invalid.vbc'
             bytecode.unlink(missing_ok=True)

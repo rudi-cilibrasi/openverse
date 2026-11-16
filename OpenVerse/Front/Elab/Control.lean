@@ -593,6 +593,15 @@ structure RefinedCast where
       whether its branch must be elaborated at that type, not its own. -/
   ifTyAt : SExpr → EM (Ty × Bool)
 
+/-- An ordinary conditional chain with an omitted final else has type
+    void. Internal method cases can be pruned before their branches join. -/
+private def hasVoidElseTail : SExpr → Bool
+  | .ite _ [.decl _ _ none false (.app _ (.ident _ name) _ false)] _ (some otherwise) =>
+    name != "$methodCast" && name != "$methodCase" && hasVoidElseTail otherwise
+  | .ite _ _ _ (some otherwise) => hasVoidElseTail otherwise
+  | .ite _ _ _ none => true
+  | _ => false
+
 /-- The world under `D := T[X]` (`RefinedCast`), for its branch `body` (in a
     method, `Self`'s members qualified) in `ctx`; `none`, and the state as it
     was, when the cast does not refine. -/
@@ -653,10 +662,10 @@ def refinedCastWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (
       return ⟨rb.e, if fits then e.getD rb.ty else branchTyOf rb.ty⟩
     let elseAt (k : Nat) (e : Option Ty) : EM R := elabE { ctx with typeOnly := true, retries := k } ee e
     let own? ← tryCatch (some <$> thenAt ctx.retries none) fun _ => pure none
-    -- A void branch fixes the join at void. The caller still checks the
-    -- actual else once; probing its entire suffix here repeats inference
-    -- at every link of an unhinted refining conditional chain.
-    if own?.any (·.ty == .void) then
+    -- Both sides are already known to be void. The caller still checks
+    -- the actual else once. Other else shapes retain contextual typing:
+    -- a void branch can acquire an else's string, array or logic type.
+    if own?.any (·.ty == .void) && hasVoidElseTail ee then
       set st
       return (.void, false)
     let re? ← tryCatch (some <$> elseAt ctx.retries none) fun _ => pure none
