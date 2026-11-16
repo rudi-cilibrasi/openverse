@@ -3,6 +3,23 @@ import OpenVerse.Front.Elab.Context
 
 namespace OpenVerse.Front
 open OpenVerse
+/-- Inspect each clause in its own scope; castsIn deliberately treats a
+    block as an opaque declaration scope. -/
+def hasRefinementClauses (ctx : Ctx) (clauses : List SExpr) : Bool :=
+  clauses.any fun clause =>
+    (Refine.castClause? clause).any (fun (_, _, target, _) => ctx.types.classes.contains target) ||
+    !(Refine.castsIn ctx.types.classes.contains clause).isEmpty
+
+/-- A conditional producer selects its condition world before enumerating
+    its branch. Its condition binders are private to the selected owner. -/
+def refinementConditionalBinding? (ctx : Ctx) (clause : SExpr) : Option (String × Option STy × SExpr) :=
+  let binding := match clause with
+    | .decl _ name annotation false value@(.ite ..) => some (name, annotation, value)
+    | clause => (Choice.binding? clause).bind fun binding =>
+        binding.branchy.map fun value => (binding.name, binding.ty, value)
+  binding.filter fun (_, _, value) => Choice.liftsAsIf value &&
+    (Choice.arms value).any (fun (clauses, _) => clauses.any (hasRefinementClauses ctx))
+
 /-- The names that are values here, for lifting choices (#208): variables
     in scope, `Self` and its fields. -/
 def choiceValues (ctx : Ctx) (n : String) : Bool :=
@@ -1039,7 +1056,7 @@ partial def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   -- generic/default argument bindings) inside the body. Their ownership is
   -- checked when that consumer elaborates; they do not escape the helper.
   let safeMarkers := ["$sourceSuper", "$methodMiss", "$methodCast", "$methodCase", "$methodType", "$methodParams", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
-    "$forReturns", "$forReturnBody", "$choiceOperation", "$choiceGenericOperation", "$choiceFixedOperation", "$choiceCoercions", "$choiceDictionary", "$defer", "$deferExits", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
+    "$forReturns", "$forReturnBody", "$refinementBody", "$refinementConsumer", "$choiceOperation", "$choiceGenericOperation", "$choiceFixedOperation", "$choiceCoercions", "$choiceDictionary", "$defer", "$deferExits", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
     "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$noteTypes", "$noteFails", "$declNames", "$callArgs", "$callSingleton", "$then"]
   let rec blocked (e : SExpr) : Bool :=
     match e with
@@ -1272,7 +1289,10 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
   -- The private producer loop must not impose its lexical restrictions
   -- on a source if/first consumer, or lose a real source for-body ban.
   let body := if plan.resumeContext.isSome then
-      let mark (code : SExpr) := SExpr.app p (.ident p "$refinementBody") [.str p [.text plan.base], code] false
+      let mark (code : SExpr) :=
+        let hint := if plan.resumeCanFail.isSome then
+          [SExpr.decl p "$element" (some (plan.value.substNames σ)) false (.tuple p [])] else []
+        SExpr.app p (.ident p "$refinementBody") ([.str p [.text plan.base]] ++ hint ++ [code]) false
       match body with
       | .app q f@(.ident _ name) [metadata, mode, code] false =>
         if name == "$forReturns" || name == "$forReturnBody" then
@@ -1296,6 +1316,10 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
   let borrowed (l : Local) := l.storage.filter fun s =>
     !(ctx.sig? s.frame).any (!·.suspends)
   let liveName (n : String) := s!"$refinementCurrent{n}"
+  -- Proof-prefix parameters are readonly views of caller variables. The
+  -- plan's copy-out contract retains their source mutability for later
+  -- owners, including the live cell of a source return.
+  let captureMutable (l : Local) := l.mutable || plan.copies.any (·.1 == l.name)
   let init := caps.zipIdx.flatMap fun (l, j) =>
     let value := if plan.resumeInputs && plan.copies.any (·.1 == l.name) then
         SExpr.ident p (liveName l.name)
@@ -1304,15 +1328,28 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
     if (borrowed l).isSome then
       let saved := s!"$captureInit{j}"
       [SExpr.decl p saved (some l.ty.toSTy) false value,
-        .decl p (localName l.name) (some l.ty.toSTy) l.mutable
+        .decl p (localName l.name) (some l.ty.toSTy) (captureMutable l)
           (.app p (.ident p "$forEnvInit") [.ident p saved] false)]
-    else [SExpr.decl p (localName l.name) (some l.ty.toSTy) l.mutable value]
+    else [SExpr.decl p (localName l.name) (some l.ty.toSTy) (captureMutable l) value]
   let copies := copyValues.map fun e => rename (Refine.substTypes σ e)
   let vals := s!"{name}$values"
   let failed : SExpr := if copies.isEmpty then .ident p "false" else .tuple p (.ident p "false" :: copies)
-  let run := if plan.resumeOriginalFor then SExpr.forE p clauses body else if plan.outcome then
+  let run := if plan.resumeOriginalFor then
+      if plan.outcome then SExpr.app p (.ident p "$forCollectOutcome") [.block p clauses, body, failed] false
+      else SExpr.forE p clauses body
+    else if plan.outcome then
       SExpr.app p (.ident p "$forFirstOutcome") [.block p clauses, body, failed] false
     else SExpr.app p (.ident p "$forFirst") [.block p clauses, body] false
+  -- A resumed owner already knows the caller-nameable element type. Keep
+  -- it available to a later conditional producer; its independent selected
+  -- world must be retained just as the first owner's was.
+  let run := if plan.resumeContext.isSome &&
+      clauses.any (fun clause => (refinementConditionalBinding? ctx clause).isSome) then
+    SExpr.app p (.ident p "$refinementContinue")
+      [.decl p "$value" (some (plan.value.substNames σ)) false (.tuple p []), run] false
+    else run
+  let run := if plan.resumeCanFail.isSome then
+    SExpr.app p (.ident p "$refinementConsumer") [.str p [.text plan.base], run] false else run
   let run := forClauseExitScope body run
   let run := if ctx.forStageFlat then SExpr.app p (.ident p "$forStageFlatten") [run] false else run
   let code := if copies.isEmpty then run else .block p

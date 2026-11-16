@@ -104,6 +104,16 @@ partial def elabExprMarkersWith
     return ⟨.lit .void, .void⟩
   -- (a continuation's body, #335: clauses lifted already, failing where their
   -- first filter does, then the values)
+  | .app p (.ident _ "$refinementContinue")
+      [.decl _ _ (some annotation) _ _, body] false => do
+    let value ← resolveTy ctx.types p annotation
+    let c := { ctx with refinementTransportValue := some value }
+    -- This is a continuation of the existing source for, whose abort flag
+    -- and return cell are already live. Do not create a nested source exit
+    -- boundary through the ordinary .forE expression handler.
+    match body with
+    | .forE q clauses body => elabFor c q clauses body
+    | body => elabE c body exp
   | .app p (.ident _ "$forFirst") [.block _ clauses, body] false => elabFor ctx p clauses body (prepared := true) (firstDecides := true)
   | .app _ (.ident _ "$forEnvCapture") [value] false => do
     let fx := (← get).fx
@@ -158,11 +168,36 @@ partial def elabExprMarkersWith
       [.decl p ready none false prepare,
        .decl p values none false resume,
        .app p (.ident p values) [.int p 0] true]) exp
-  | .app p (.ident _ "$refinementBody") [.str _ [.text base], body] false => do
+  | .app p (.ident _ "$refinementBody") arguments false => do
+    let (base, annotation, body) ← match arguments with
+      | [.str _ [.text base], body] => pure (base, none, body)
+      | [.str _ [.text base], .decl _ _ (some annotation) _ _, body] => pure (base, some annotation, body)
+      | _ => eerr p "internal: invalid refinement body marker"
     let some plan := ctx.types.requests.loops.findSome? (fun request => request.stagePlan.filter (·.base == base))
       | eerr p "internal: missing refinement consumer scope"
     let some source := plan.resumeContext | eerr p "internal: missing source consumer scope"
-    elabE { ctx with inRepeat := source.inRepeat, inChoice := source.inChoice } body exp
+    let canFail := plan.resumeCanFail.getD ctx.canFail
+    let expected ← match exp, annotation with
+      | none, some supplied => some <$> resolveTy ctx.types p supplied
+      | _, _ => pure exp
+    let result ← elabE { ctx with canFail, inRepeat := source.inRepeat, inChoice := source.inChoice } body expected
+    if plan.resumeCanFail.isSome then
+      let escapes := (FailCapture.admissionBody result.e).mayFail ctx.sigProg
+      if !canFail && escapes then
+        eerr body.pos "this expression can fail, but it is not in a failure context"
+      -- Capture only the actual user body, after source admission. Filters
+      -- keep ordinary for search/rollback, and a nested for with no live
+      -- outcome target cannot accidentally return an ancestor's packet.
+      if canFail && escapes && ctx.forOutcomeSlot.isSome then
+        if let some failed := ctx.forExitPacket then
+          let packet ← elabE { ctx with canFail := false } failed (some ctx.retTy)
+          let hint ← fresh (.opt result.ty)
+          return ⟨FailCapture.marked hint result.e (.ret packet.e), result.ty⟩
+    return result
+  | .app p (.ident _ "$refinementConsumer") [.str _ [.text base], body] false => do
+    let some plan := ctx.types.requests.loops.findSome? (fun request => request.stagePlan.filter (·.base == base))
+      | eerr p "internal: missing refinement consumer mode"
+    elabE { ctx with canFail := plan.resumeCanFail.getD ctx.canFail } body exp
   | .app _ (.ident _ "$refinementExits")
       [.ident _ returns, binding, .block _ returnPacket,
        .ident _ breaks, .block _ breakPacket, body] false => do
@@ -240,7 +275,11 @@ partial def elabExprMarkersWith
     let some plan := request.stagePlan | eerr p "internal: refinement plan"
     let source := { (sourceContextOf ctx) with
       inRepeat := flags.toNat % 2 == 1, inChoice := (flags.toNat / 2) % 2 == 1 }
-    let plan := { plan with resumeRollback := rollback == "true", resumeContext := some source }
+    let originalFor := (flags.toNat / 4) % 2 == 1
+    let plan := { plan with
+      resumeRollback := rollback == "true", resumeContext := some source,
+      resumeOriginalFor := originalFor,
+      resumeCanFail := if originalFor then some ((flags.toNat / 8) % 2 == 1) else none }
     let request := { request with stagePlan := some plan }
     let args := plan.tparams.map fun tp =>
       (ctx.types.tvars.lookup tp.name).getD (.param tp.name (tp.constraint == "comparable"))
@@ -347,10 +386,16 @@ partial def elabExprMarkersWith
       (some (.app p (.ident p "Err") [] false))) none
     let .arr _ := values.ty | eerr p "internal: for resume values"
     return ⟨.seq (.assign slot r.e) values.e, values.ty⟩
-  | .app p (.ident _ "$forFirstOutcome") [.block _ clauses, body, failed] false => do
+  | .app p (.ident _ "$forFirstOutcome") [.block _ clauses, body, failed] false
+  | .app p (.ident _ "$forCollectOutcome") [.block _ clauses, body, failed] false => do
+    let first := match se with
+      | .app _ (.ident _ name) _ _ => name == "$forFirstOutcome"
+      | _ => false
     let flag ← fresh .logic
+    -- A resumed source collector keeps ordinary generator/filter semantics.
+    -- Its private abort still carries committed return-cell copy-outs.
     let r ← elabFor { ctx with forOutcomeSlot := some flag, forExitPacket := some failed } p clauses body
-      (prepared := true) (firstDecides := true) (failure := some failed)
+      (prepared := first) (firstDecides := first) (failure := if first then some failed else none)
     let result ← fresh (.opt r.ty)
     return ⟨.seq (.assign flag (.lit (.logic true)))
       (.seq (.assign result (.lit .none))

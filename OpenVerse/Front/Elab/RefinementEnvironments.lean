@@ -20,13 +20,6 @@ def refinementReadyMarker (p : Pos) (plan : Choice.ForStagePlan) (args : List Ty
      .decl p "$refinementView" (some (forStageView plan.base (args.map Ty.toSTy))) false (.tuple p []),
      .block p copies, .block p suffix, body] false
 
-/-- Inspect each clause in its own scope; castsIn deliberately treats a
-    block as an opaque declaration scope. -/
-def hasRefinementClauses (ctx : Ctx) (clauses : List SExpr) : Bool :=
-  clauses.any fun clause =>
-    (Refine.castClause? clause).any (fun (_, _, target, _) => ctx.types.classes.contains target) ||
-    !(Refine.castsIn ctx.types.classes.contains clause).isEmpty
-
 /-- Recovery repairs a refinement/type boundary, never an unrelated source
     restriction such as a cyclic default or a forbidden operation. -/
 def refinementRecoveryError (message : String) : Bool :=
@@ -40,8 +33,14 @@ def refinementRecoveryError (message : String) : Bool :=
     opaque Ready view; copy-outs are discharged by its elaborator before
     the consumer can run. -/
 def refinementPrepareMarker (ctx : Ctx) (p : Pos) (value : Ty) (outcome rollback : Bool)
-    (filterPrefix suffix : List SExpr) (body : SExpr) (forBody : Bool := false) : SExpr :=
-  let flags : Nat := (if forBody || ctx.inRepeat then 1 else 0) + (if ctx.inChoice then 2 else 0)
+    (filterPrefix suffix : List SExpr) (body : SExpr) (forBody : Bool := false)
+    (originalFor : Bool := false) : SExpr :=
+  let canFail := match body with
+    | .app _ (.ident _ name) [_, .ident _ mode, _] false =>
+      if name == "$forReturns" || name == "$forReturnBody" then mode == "true" else ctx.canFail
+    | _ => ctx.canFail
+  let flags : Nat := (if forBody || ctx.inRepeat then 1 else 0) + (if ctx.inChoice then 2 else 0) +
+    (if originalFor then 4 else 0) + (if canFail then 8 else 0)
   .app p (.ident p "$refinementPrepare")
     [.decl p "$refinementValue" (some value.toSTy) false (.tuple p []),
      .ident p (if outcome then "true" else "false"),

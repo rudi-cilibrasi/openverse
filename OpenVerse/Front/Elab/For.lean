@@ -122,6 +122,59 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
   let ctx := { ctx with refinementTransportValue := none }
   if let some value := transport then
     let c := ctx
+    -- Select the condition once, before searching its branch alternatives.
+    -- Only the opaque owner crosses that condition boundary: the branch,
+    -- later clauses and consumer retain the successful snapshot world.
+    if let some index := clauses.findIdx? (fun clause => (refinementConditionalBinding? c clause).isSome) then
+      let some (binding, annotation, conditional) := refinementConditionalBinding? c clauses[index]!
+        | eerr p "internal: refinement conditional producer"
+      let after := clauses.drop (index + 1)
+      let outcome := (ctx.canFail && !firstDecides) || failure.isSome || forReturnBody? body
+      let rec selected (expression : SExpr) (site : String) : SExpr :=
+        let resume (conditions : List SExpr) (branch : SExpr) : SExpr × SExpr :=
+          -- The selected world retains these locals, but their source names
+          -- belong only to this condition and branch, not later clauses.
+          let names := Choice.condDecls expression.pos conditions
+          let ren := Choice.renamedFor (site ++ "$condition") (names.map (·.1))
+          let conditions := Choice.declNames expression.pos names ++ conditions.map (Choice.renameE ren)
+          let branch := Choice.renameE ren branch
+          let ready := site ++ "$ready"
+          let branchClause := SExpr.decl branch.pos binding annotation false branch
+          -- Ordinary collectors prepare their raw suffix once in the
+          -- selected world. Legacy first continuations already require
+          -- prepared clauses; compact $loop/$each is not idempotent.
+          let branchClauses := if !firstDecides then [branchClause] else
+            Choice.prepare [branchClause] (choiceValues c) (choiceField c)
+              (site := site ++ "$branch") (fieldOrder := choiceOrder c)
+              (keepExcl := true) (keepBranches := choiceHasCast c)
+          let suffix := branchClauses ++ after
+          let prepare := refinementPrepareMarker c expression.pos value outcome
+            (ctx.canFail || ctx.inRollback) conditions suffix body (forBody := true) (originalFor := !firstDecides)
+          let consumer := forStageBodyAs body
+            (.app expression.pos (.ident expression.pos "$refinementResume") [.ident expression.pos ready] false)
+          (.decl expression.pos ready none false prepare, consumer)
+        match expression with
+        | .ite q conditions branch (some otherwise) =>
+          let (prepare, consumer) := resume conditions branch
+          .ite q [prepare] consumer (some (selected otherwise (site ++ "$else")))
+        | branch =>
+          let suffix := SExpr.forE expression.pos
+            (SExpr.decl branch.pos binding annotation false branch :: after) body
+          .app expression.pos (.ident expression.pos "$refinementContinue")
+            [.decl expression.pos "$value" (some value.toSTy) false (.tuple expression.pos []), suffix] false
+      let chosen := selected conditional s!"$refinementBranch{p.line}_{p.col}_{index}"
+      let result := s!"$refinementBranchValues{p.line}_{p.col}_{index}"
+      let consumer := forStageBodyAs body (SExpr.block p
+        [.decl p result (some (Ty.arr value).toSTy) false chosen, .ident p result])
+      -- An empty prefix contributes no collection layer in an ordinary
+      -- for. The selected consumer already returns the complete array.
+      if index == 0 && !firstDecides then
+        return ← elabE c consumer (some (.arr value))
+      let outer ← elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq c p
+        (clauses.take index) consumer (prepared := prepared)
+        (firstDecides := firstDecides) (failure := failure)
+      let .arr (.arr resultType) := outer.ty | eerr p "internal: refinement conditional values"
+      return ⟨← flattenValues outer, .arr resultType⟩
     if let some (before, filterPrefix, suffix) := refinementProducerParts c clauses then
       let name := s!"$refinementReady{p.line}_{p.col}_{c.locals.length}"
       let outcome := (ctx.canFail && !firstDecides) || failure.isSome || forReturnBody? body
@@ -170,6 +223,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       let .arr (.arr t) := r.ty | eerr p "internal: refinement consumer values"
       return ⟨← flattenValues r, .arr t⟩
   let stagePlan := ctx.forStage
+  let bodyExpected := if firstDecides || stagePlan.isSome then none else transport
   let stageArgs := ctx.forStageArgs
   let stageFlat := ctx.forStageFlat
   let stageCopies := ctx.forStageCopies
@@ -761,7 +815,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         return (filt, pick arrs (.lit Value.emptyArray), t)
     match gs with
     | [] =>
-      let r ← elabE (bodyCtx c) bd none
+      let r ← elabE (bodyCtx c) bd bodyExpected
       -- The generated arrays must infer their element type during
       -- suspension lowering. As for array/tuple literals, a body that
       -- never completes has Core's void type without changing its exit.
@@ -1093,7 +1147,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         | e => .seq e filt
       levels := levels.push (slot, src, srcTy, filt)
       c := c2
-    let r ← elabE (bodyCtx c) body none
+    let r ← elabE (bodyCtx c) body bodyExpected
     let r := if r.ty == .never then { r with e := .seq r.e (.lit .void) } else r
     let mutable := c.locals.filterMap fun l => if l.mutable && l.slot >= start then some l.slot else none
     let fx := forClauseEffects fun s => s < start || mutable.contains s
