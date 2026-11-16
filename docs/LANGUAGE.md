@@ -1379,7 +1379,9 @@ circle := class(shape, labelled):
   objects, including an object computed by an effectful call or read once
   from a mutable field. A later write changes the field, not the saved
   object used by the cast. Subsequent choices and generators preserve that
-  selected world without rereading the owner. Conditions keep their normal
+  selected world without rereading the owner. Mutable clause locals retain
+  their initializer position and per-row writes across computed refining
+  bounds and later choices. Conditions keep their normal
   rollback and first-success behavior, including a range or array search
   that accepts no rows. A suspending consumer stays outside its filter;
   consumer bodies, cleanup, `return`
