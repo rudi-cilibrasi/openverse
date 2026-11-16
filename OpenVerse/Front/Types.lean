@@ -445,6 +445,7 @@ structure TyEnv where
   /-- Top-level overload templates, with recursive entries normalized before source desugaring. -/
   copiedOverloadFns : List (String × Choice.MFn) := []
   copiedOverloadClashes : List (String × List String) := []
+  copiedMethods : Choice.CopiedMethods := {}
   /-- (#283) The consumers in recursive groups' code whose names' types this
       elaboration notes (`$noteTypes`), by `Choice.nestKey`: their groups are
       kept with one value until then (`Choice.inlineFns`). -/

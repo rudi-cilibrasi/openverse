@@ -2977,6 +2977,19 @@ structure MFam where
   cases : List (String × String) := []
   deriving Inhabited
 
+/-- Source hierarchy data needed to rewrite one typed copied method call.
+    The implementations travel through the ordinary retained-template pipeline. -/
+structure CopiedMethods where
+  families : List (String × MFam) := []
+  ancestors : List (String × List String) := []
+  interfaces : List String := []
+  views : List ((String × String) × List (String × STy)) := []
+  roots : List (String × List String) := []
+  deriving Inhabited
+
+def CopiedMethods.names (methods : CopiedMethods) : List String :=
+  (methods.families.map fun (slot, _) => (slot.splitOn "$ov").headD slot).eraseDups
+
 /-- The roots of a method's families (`roots`: the classes and interfaces
     that declare it without `<override>`) that a use `R.M` at `q` reaches,
     in the body of class `inC` (#283). When one declares it, that one,
@@ -3286,6 +3299,24 @@ partial def memberUses (e : SExpr) : List (Option Pos × Pos × SExpr × String)
   | .member q r m => (none, q, r, m) :: e.children.flatMap memberUses
   | _ => e.children.flatMap memberUses
 
+def copiedOverloadUses (code : SExpr) : List (Pos × String) :=
+  callUses code ++ (memberUses code).filterMap fun (call, _, _, name) =>
+    call.map (·, (qualified name).2)
+
+
+
+/-- Rewrite only the list selected in this typed copy. Other lists are not
+    guessed from a global first pick; existing family dispatch binds operands. -/
+def CopiedMethods.rewrite (methods : CopiedMethods) (inC : Option String)
+    (picks familyPicks : List (Pos × String)) (code : SExpr) : SExpr :=
+  let slots (p : Pos) (written : String) :=
+    if methods.names.contains written then
+      (picks.filterMap fun (q, slot) => if p == q then some slot else none).eraseDups
+    else [written]
+  rwFamCalls (fun c => (methods.ancestors.lookup c).getD [c]) methods.families false inC code
+    methods.interfaces.contains (fun c r => (methods.views.lookup (c, r)).getD [])
+    (fun name => (methods.roots.lookup name).getD []) familyPicks slots
+
 /-- Methods with several values (#283), as top-level functions that take
     `Self` explicitly, so that everything functions with several values
     have applies: `C$M($Self:C, params…)`, its body with the names of `C`'s
@@ -3315,11 +3346,11 @@ partial def memberUses (e : SExpr) : List (Option Pos × Pos × SExpr × String)
     the elaboration to note; they stay as written until then. -/
 def methodFns (tops : List STop) (reserved : List String := []) (picks : List (Pos × String) := [])
     (overloadPicks : List (Pos × String) := []) :
-    Except String (List STop × List (Pos × String) × List (Pos × String)) := do
+    Except String (List STop × List (Pos × String) × List (Pos × String) × CopiedMethods) := do
   let classes := tops.filterMap fun
     | .classDef _ n _ tps _ pa ii fs ms => some (n, (pa, ii, fs, ms, tps))
     | _ => none
-  if classes.isEmpty then return (tops, [], [])
+  if classes.isEmpty then return (tops, [], [], {})
   -- (#106) a method declaration's name is its list's (`M$ovK`) if its name
   -- is overloaded; a call's, the list picked for it, none before
   let mo := MethodOverloads.of tops
@@ -3561,7 +3592,7 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
         if anyE (fun | .app p (.member _ (.ident _ "(super:)") x) .. => slotAt p x == some n | _ => false) b &&
             (((anc c).drop 1).find? f.impls.contains).isNone then
           throw s!"{q.show}: nothing above {shown c} implements '{written n}'"
-  if sel.isEmpty then return (tops, [], [])
+  if sel.isEmpty then return (tops, [], [], {})
   -- (a parameter or local named like a member: refused, as in the class,
   -- since the body leaves it)
   for (n, f) in sel do
@@ -3664,7 +3695,15 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
       | none => []
   let ovSites := (tops.flatMap bodiesOf).flatMap fun (inC, b) =>
     (calls inC b).filter fun (p, m) => pending m && (overloadPicks.lookup p).isNone
-  return (out ++ implFns sel, sites, ovSites.eraseDups)
+  let copiedFamilies := sel.filter fun (slot, _) => overloaded (written slot)
+  let copied : CopiedMethods := {
+    families := copiedFamilies
+    ancestors := classes.map fun (c, _) => (c, anc c)
+    interfaces := classes.filterMap fun (c, (_, ii, _)) => if ii then some c else none
+    views := classes.flatMap fun (c, _) => copiedFamilies.map fun (_, family) =>
+      ((c, family.root), (rootView (classes.length + 1) c family.root).getD [])
+    roots := copiedFamilies.map fun (slot, _) => (slot, (rootsOf slot).eraseDups) }
+  return (out ++ implFns sel, sites, ovSites.eraseDups, copied)
 
 /-- (#283) A consumer in a recursive group's code of a call of a function
     with several values: the failure context that takes the call's values.
@@ -3814,6 +3853,7 @@ structure Inlined where
   /-- Top-level overload templates retained through source desugaring for copied suffixes. -/
   copiedOverloadNames : List String := []
   copiedOverloadClashes : List (String × List String) := []
+  copiedMethods : CopiedMethods := {}
 
 /-- The functions of the program that have several values, inlined at their
     calls (see above); the program unchanged when there are none. Also
@@ -3828,7 +3868,8 @@ structure Inlined where
 partial def inlineFns (tops : List STop) (eager : List String) (lazy : List String)
     (overloadPicks : List (Pos × String)) (nested : List (String × STy))
     (orders : List (String × List (String × Bool))) (sites methodOvSites : List (Pos × String)) (pending : List Pos := [])
-    (checking : List (Pos × SExpr) := []) (nestDone : Bool := false) : Except String Inlined := do
+    (checking : List (Pos × SExpr) := []) (nestDone : Bool := false)
+    (methodTemplates : List String := []) : Except String Inlined := do
   -- (#283) overloaded functions: each overload a function of its own,
   -- `F$mvK`. A call of `F` is one of the overload the arguments' types
   -- pick, which an earlier elaboration noted by its place (`overloadPicks`),
@@ -3977,7 +4018,7 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
     let marked := hs.eraseDups.filterMap fun h =>
       (rawMfs.lookup h).map fun f => (f.pos, unpickOverloads ovNamesAll (noteConsumers f has))
     let tops := marked.foldl (fun ts (p, b) => ts.map (withBody p b)) tops
-    inlineFns tops eager lazy overloadPicks nested orders sites methodOvSites (pending ++ marked.map (·.1)) checking true
+    inlineFns tops eager lazy overloadPicks nested orders sites methodOvSites (pending ++ marked.map (·.1)) checking true methodTemplates
   -- (the functions of the machines of groups taken lazily, not computable)
   let lazyRoots := recs.filter fun g => !computable g && !(groupOf g).any eager.contains
   if !nestDone then
@@ -3998,7 +4039,7 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
             | .fn q _ _ _ _ _ b => if isAt f.pos t then some (q, b) else none
             | _ => none
           tops := tops.map (withBody f.pos body) ++ more
-        return ← inlineFns tops eager lazy overloadPicks nested orders sites methodOvSites pending checking true
+        return ← inlineFns tops eager lazy overloadPicks nested orders sites methodOvSites pending checking true methodTemplates
       let r ← keepPending (targets.flatMap fun (g, _) => groupOf g)
       return { r with nestedSites := targets.flatMap fun (_, f) => (consumers f).map (nestKey ·.pos "") }
   let loops : List String := recs.filter fun g =>
@@ -4147,13 +4188,14 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
         seen := h :: seen
         todo := (callees.lookup h).getD [] ++ todo
     return false
-  let copiedOverloadNames := ovMv.flatMap fun f =>
-    (ovOf f).filterMap fun (k, _, _) => if mv.contains k then some k else none
+  let copiedOverloadNames := (ovMv.flatMap fun f =>
+    (ovOf f).filterMap fun (k, _, _) => if mv.contains k then some k else none) ++ methodTemplates
   let ovKept : List STop := ovMv.flatMap fun f => (ovOf f).filterMap fun (k, p, m) =>
     if mv.contains k then some (.fn p k m.params m.tparams m.fx m.ret (checkBody ((checking.lookup p).getD m.body))) else none
   -- Carry templates through the source transforms in private declarations,
   -- extracted before signature/elaboration. Checking stubs stay unchanged.
-  let (copyTemplates, _) ← (ovMv.flatMap ovOf |>.filterMapM (m := StateT Nat (Except String)) fun (k, p, m) => do
+  let (copyTemplates, _) ← ((ovMv.flatMap ovOf ++ methodTemplates.filterMap fun name =>
+      (rawMfs.lookup name).map fun body => (name, body.pos, body)) |>.filterMapM (m := StateT Nat (Except String)) fun (k, p, m) => do
     if !copiedOverloadNames.contains k then return none
     let params ← goPs m.params
     let body ← if reachesRecursive k then do
@@ -4241,8 +4283,12 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
     (picks : List (Pos × String) := []) (lazy : List String := []) (overloadPicks : List (Pos × String) := [])
     (nested : List (String × STy) := []) (orders : List (String × List (String × Bool)) := [])
     (instanceCalls : List (Pos × String) := []) : Except String Inlined := do
-  let (tops, sites, methodOvSites) ← methodFns tops reserved picks overloadPicks
+  let (tops, sites, methodOvSites, copiedMethods) ← methodFns tops reserved picks overloadPicks
   let tops ← instanceCopies tops instanceCalls
-  inlineFns tops eager lazy overloadPicks nested orders sites methodOvSites
+  let methodTemplates := (copiedMethods.families.flatMap fun (slot, family) =>
+    family.impls.map fun owner => methodFnName owner slot).eraseDups
+  let result ← inlineFns tops eager lazy overloadPicks nested orders sites methodOvSites
+    (methodTemplates := methodTemplates)
+  return { result with copiedMethods }
 
 end OpenVerse.Front.Choice
