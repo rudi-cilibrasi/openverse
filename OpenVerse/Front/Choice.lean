@@ -2218,8 +2218,12 @@ private partial def scalarReturnBoundary (many : SExpr → Bool) (e : SExpr) : B
 
 private def returnBoundary (p : Pos) (key : String) (ret : STy)
     (normal : Option STy) (body : SExpr) : SExpr :=
-  let writes := (setsIn body).eraseDups.map fun name =>
-    SExpr.set p (.ident p name) none (.ident p name)
+  -- Only outer mutations are part of the caller's copy-out contract.
+  -- Names owned by the scalar expression stay private to that expression.
+  let owned := localsOf body
+  let writes := (setsIn body).eraseDups.filterMap fun name =>
+    if owned.contains name then none
+    else some (SExpr.set p (.ident p name) none (.ident p name))
   .app p (.ident p "$returnBoundary")
     [.block p writes, .decl p (key ++ "Type") (some ret) false (.tuple p []),
      .decl p (key ++ "Body") normal false body] false
