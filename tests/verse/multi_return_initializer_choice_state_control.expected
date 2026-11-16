@@ -1,0 +1,27 @@
+init 11
+late 11
+out 111
+all 1 111
+late 111
+out 211
+all 2 211
+init 221
+late 221
+out 321
+all 212 321
+late 321
+out 421
+all 213 421
+init 11
+late 11
+out 111
+first 2 111
+init 11
+late 11
+out 111
+last 3 111
+none 0
+out 100
+early 0 100
+after
+exit=0
