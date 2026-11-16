@@ -22,10 +22,19 @@ private partial def stableRefinementReads (ctx : Ctx) (e : SExpr) : Bool :=
     | .cmp .. | .andE .. | .orE .. | .tuple .. | .block ..
     | .arrayLit .. | .optionLit .. | .logicLit .. | .ite .. => true
     | .decl _ _ _ false _ => true
-    | .app _ (.ident _ name) _ true => ctx.types.classes.contains name
+    | .app _ (.ident _ name) _ true =>
+      ctx.types.classes.contains name && (ctx.lookup name).isNone && (ctx.sig? name).isNone
     | .app _ (.ident _ name) _ false => ["$choice", "$excl", "$alt", "$group"].contains name
     | _ => false
   allowed && e.children.all (stableRefinementReads ctx)
+
+private def stableRefinementCollector (ctx : Ctx) (clauses : List SExpr) (body : SExpr) : Bool :=
+  -- Local declarations and implicit members can shadow a class identifier;
+  -- only the unshadowed checked class-cast application is a stable read.
+  ctx.selfClass.isNone &&
+    !(Choice.localDecls (.block body.pos (clauses ++ [body]))).any (fun (name, _) =>
+      ctx.types.classes.contains name) &&
+    clauses.all (stableRefinementReads ctx) && stableRefinementReads ctx body
 
 set_option maxHeartbeats 800000 in
 partial def elabExprControlWith
@@ -276,7 +285,7 @@ partial def elabExprControlWith
           let returning := sourceRet.any (fun ty => !ty.params.isEmpty) &&
             (Refine.findPart (fun | .ret .. => true | _ => false) false body).isSome
           if !deferred || (ordinary.ty.params.isEmpty && !returning) ||
-              (clauses.all (stableRefinementReads ctx) && stableRefinementReads ctx body) then return ordinary
+              stableRefinementCollector ctx clauses body then return ordinary
           let mut needsWorld := false
           set { after with refiningHintProbe := true }
           for clause in clauses do
@@ -353,7 +362,7 @@ partial def elabExprControlWith
                     pure (!result.ty.params.isEmpty)) (fun _ => pure true)
                   needsWorld := needsWorld || openResult
               set ordinaryState
-            if needsWorld &&
+            if needsWorld && !stableRefinementCollector ctx clauses body &&
                 clauses.any (fun clause => (refinementConditionalBinding? ctx clause).isSome) then
               set saved
               tryCatch (elabE { ctx with
