@@ -1,0 +1,15 @@
+visit 2
+visit 1
+first 1 1 9 count 1
+after 1
+visit 2
+visit 1
+first 1 1 5 count 1
+after 1
+visit 2
+visit 1
+first 1 1 -15 count 1
+after 1
+none 40 count 0
+after 0
+exit=0

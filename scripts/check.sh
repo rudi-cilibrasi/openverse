@@ -257,6 +257,8 @@ check "choice model regression (generated tuple and failable filters, seed 20773
   scripts/fuzz-model-mv.sh 1 20773352
 check "choice model regression (copied first-success early-return argument order, seed 653109)" \
   scripts/fuzz-model-mv.sh 1 653109
+check "choice model regression (copied recursive suffix bindings, seed 20773114)" \
+  scripts/fuzz-model-mv.sh 1 20773114
 check "generic functions with several values (${FUZZ_MODEL_GENERIC:-150} programs, against a model of the docs)" \
   scripts/fuzz-model-generic.sh "${FUZZ_MODEL_GENERIC:-150}" "$seed"
 check "generic choice regression (omitted named argument in a <decides> wrapper)" \
