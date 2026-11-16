@@ -1322,8 +1322,8 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
     Typed storage origins and capture keys are checked exactly as on restart. -/
 def stagePrefixEnvironmentWith
     (elabE : Ctx → SExpr → Option Ty → EM R)
-    (c : Ctx) (q : Pos) (prepare : Choice.FirstLift) (plan : Choice.ForStagePlan)
-    (args : List Ty) : EM (List Choice.FirstLift) := do
+    (c : Ctx) (q : Pos) (prepare : Choice.FirstLift) (plan : Choice.ForStagePlan) :
+    EM (List Choice.FirstLift) := do
   if c.discoveringStagePrefix then return []
   let environmentBefore ← get
   let environment ← tryCatch (do

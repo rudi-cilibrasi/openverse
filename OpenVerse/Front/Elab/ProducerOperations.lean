@@ -207,7 +207,7 @@ def elabProducerForWith
     params := { name := binding, ty := yieldTy.toSTy } :: helper.params.filter (·.name != binding),
     args := .ident p binding :: helper.args.filter (fun e => e != .ident p binding) }
   let environment ← if ctx.typeOnly || ctx.types.requests.loops.any (·.key == helper.key) then pure [] else
-    stagePrefixEnvironmentWith elabE bound p helper plan args
+    stagePrefixEnvironmentWith elabE bound p helper plan
   let readyTy := Ty.arr (.struct plan.base args)
   let (callback, obj, initial, initialMetadata) ← match producerForCallbackOf ctx p family frameTypes helper plan yieldTy readyTy valueTy with
     | .ok result => pure result

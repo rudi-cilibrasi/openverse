@@ -237,7 +237,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       sourceFns := prepare.sourceFns ++ extraSources,
       resumes := prepare.resumes ++ extraResumes }
     let environment ← if c.typeOnly || c.types.requests.loops.any (·.key == prepare.key) then pure [] else
-      stagePrefixEnvironmentWith elabE bound q prepare plan args
+      stagePrefixEnvironmentWith elabE bound q prepare plan
     let hasPlan := c.types.requests.loops.any (·.key == request.key)
     let hasPrefix := c.types.requests.loops.any (·.key == prepare.key)
     modify fun st => { st with

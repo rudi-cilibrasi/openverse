@@ -592,6 +592,9 @@ structure NaturalArgumentScope where
   selfClass : Option String
   selfMethod : Option String
   canFail : Bool
+  /-- Forward-header discovery is separate; ordinary natural probes carry
+      this bit unchanged. Raw `typeOnly` is intentionally not a scope key. -/
+  discoveringStagePrefix : Bool
   defaults : List (String × String)
 
 mutual
@@ -632,6 +635,7 @@ private def sameNaturalLocals : List Local → List Local → Bool
 private def NaturalArgumentScope.matches (scope : NaturalArgumentScope) (ctx : Ctx) : Bool :=
   scope.frame == ctx.frameName && scope.selfClass == ctx.selfClass &&
     scope.selfMethod == ctx.selfMethod && scope.canFail == ctx.canFail &&
+    scope.discoveringStagePrefix == ctx.discoveringStagePrefix &&
     scope.defaults == ctx.defaults && sameNaturalVariables scope.variables ctx.types.tvars &&
     sameNaturalLocals scope.locals ctx.locals
 
@@ -1592,7 +1596,8 @@ def Ctx.argumentNaturalKey (ctx : Ctx) (a : SExpr) : EM String := do
   let scope : NaturalArgumentScope := {
     id, frame := ctx.frameName, locals := ctx.locals, variables := ctx.types.tvars
     selfClass := ctx.selfClass, selfMethod := ctx.selfMethod
-    canFail := ctx.canFail, defaults := ctx.defaults }
+    canFail := ctx.canFail,
+    discoveringStagePrefix := ctx.discoveringStagePrefix, defaults := ctx.defaults }
   modify fun state => { state with
     naturalArgumentScopes := state.naturalArgumentScopes.insert bucket (scope :: scopes)
     nextNaturalArgumentScope := id + 1 }
