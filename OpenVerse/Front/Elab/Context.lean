@@ -580,6 +580,59 @@ structure LoopUse where
   argSet : Option Pos
   lift : Except String Choice.FirstLift
 
+/-- Exact lexical typing contexts are interned separately from subtree keys.
+    Reusing an id avoids repeatedly rendering a wide, unchanged local scope. -/
+structure NaturalArgumentScope where
+  id : Nat
+  frame : String
+  locals : List Local
+  variables : List (String × Ty)
+  selfClass : Option String
+  selfMethod : Option String
+  canFail : Bool
+  defaults : List (String × String)
+
+mutual
+private partial def sameNaturalTy : Ty → Ty → Bool
+  | .param a ca, .param b cb => a == b && ca == cb
+  | .arr a, .arr b | .opt a, .opt b => sameNaturalTy a b
+  | .tup a, .tup b => sameNaturalTypes a b
+  | .struct a as, .struct b bs => a == b && sameNaturalTypes as bs
+  | .map a b, .map c d | .weakMap a b, .weakMap c d =>
+    sameNaturalTy a c && sameNaturalTy b d
+  | a, b => a == b
+private partial def sameNaturalTypes : List Ty → List Ty → Bool
+  | [], [] => true
+  | a :: as, b :: bs => sameNaturalTy a b && sameNaturalTypes as bs
+  | _, _ => false
+end
+
+private def sameNaturalVariables : List (String × Ty) → List (String × Ty) → Bool
+  | [], [] => true
+  | (a, ta) :: as, (b, tb) :: bs =>
+    a == b && sameNaturalTy ta tb && sameNaturalVariables as bs
+  | _, _ => false
+
+private def sameNaturalStorage : Option SourceStorage → Option SourceStorage → Bool
+  | none, none => true
+  | some a, some b => a.frame == b.frame && a.name == b.name && sameNaturalTypes a.args b.args
+  | _, _ => false
+
+private def sameNaturalLocals : List Local → List Local → Bool
+  | [], [] => true
+  | a :: as, b :: bs =>
+    a.name == b.name && a.slot == b.slot && a.mutable == b.mutable &&
+      a.typeValue == b.typeValue && a.joinedAt == b.joinedAt &&
+      sameNaturalTy a.ty b.ty && sameNaturalStorage a.storage b.storage &&
+      sameNaturalLocals as bs
+  | _, _ => false
+
+private def NaturalArgumentScope.matches (scope : NaturalArgumentScope) (ctx : Ctx) : Bool :=
+  scope.frame == ctx.frameName && scope.selfClass == ctx.selfClass &&
+    scope.selfMethod == ctx.selfMethod && scope.canFail == ctx.canFail &&
+    scope.defaults == ctx.defaults && sameNaturalVariables scope.variables ctx.types.tvars &&
+    sameNaturalLocals scope.locals ctx.locals
+
 structure ESt where
   /-- A result-hint discovery probe cannot recursively retry its failing
       children. Kept in state so fresh source contexts inherit the guard. -/
@@ -616,6 +669,8 @@ structure ESt where
   /-- Exact expressions successfully typed without a result hint during
       argument probes. Only classification is shared, never code or effects. -/
   naturalArguments : Std.HashMap String SExpr := {}
+  naturalArgumentScopes : Std.HashMap (String × Option Nat) (List NaturalArgumentScope) := {}
+  nextNaturalArgumentScope : Nat := 0
   /-- Successful receiver-class probes, keyed by syntax and lexical typing
       context. Shared by isolated trials so nested callbacks stay polynomial. -/
   methodReceivers : Std.HashMap String (Option String) := {}
@@ -1523,14 +1578,23 @@ partial def argumentContextUsefulWith (elabE : Ctx → SExpr → Option Ty → E
   -- boundary would multiply the same unfixable inference failure.
   return !(fixedResult || noResultEvidence)
 
-/-- A natural argument classification belongs to its lexical typing world.
-    The stored expression is checked too, so generated syntax sharing a
-    source position cannot reuse another expression's classification. -/
-def Ctx.argumentNaturalKey (ctx : Ctx) (a : SExpr) : String :=
-  reprStr (a.pos, ctx.frameName,
-    ctx.locals.map (fun l => (l.name, l.slot, l.ty, l.typeValue, l.mutable,
-      l.joinedAt, l.storage.map (fun origin => (origin.frame, origin.name, origin.args)))),
-    ctx.types.tvars, ctx.selfClass, ctx.selfMethod, ctx.canFail, ctx.defaults)
+/-- Intern the complete lexical context once; subtree keys contain its id.
+    A frame/leading-slot bucket keeps distinct sequential scopes separate,
+    while exact typed equality prevents collisions across copied worlds. -/
+def Ctx.argumentNaturalKey (ctx : Ctx) (a : SExpr) : EM String := do
+  let bucket := (ctx.frameName, ctx.locals.head?.map (·.slot))
+  let scopes := ((← get).naturalArgumentScopes[bucket]?).getD []
+  if let some scope := scopes.find? (·.matches ctx) then
+    return reprStr (a.pos, scope.id)
+  let id := (← get).nextNaturalArgumentScope
+  let scope : NaturalArgumentScope := {
+    id, frame := ctx.frameName, locals := ctx.locals, variables := ctx.types.tvars
+    selfClass := ctx.selfClass, selfMethod := ctx.selfMethod
+    canFail := ctx.canFail, defaults := ctx.defaults }
+  modify fun state => { state with
+    naturalArgumentScopes := state.naturalArgumentScopes.insert bucket (scope :: scopes)
+    nextNaturalArgumentScope := id + 1 }
+  return reprStr (a.pos, id)
 
 /-- Classify a bound value using an isolated receiver type probe. Its code,
     slots, effects and helper requests never enter the actual call. -/
@@ -1549,7 +1613,9 @@ partial def argNeedsTypeWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx
       if r.ty.hasNever then return true
       modify fun st => { st with
         natTys := probed.natTys, methodReceivers := probed.methodReceivers
-        naturalArguments := probed.naturalArguments }
+        naturalArguments := probed.naturalArguments
+        naturalArgumentScopes := probed.naturalArgumentScopes
+        nextNaturalArgumentScope := probed.nextNaturalArgumentScope }
       return false
     | .error error =>
       -- A cast refusal needs the normal clause-lifting retry, rather than
@@ -1572,7 +1638,8 @@ partial def argNeedsTypeWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx
           ctx.hasMethod c name ||
           ((ctx.types.methodOverloads.lookup name).map (·.any (ctx.hasMethod c ·))).getD false) &&
         (ctx.sig? name).any (fun s => !s.isConst && !s.tparams.isEmpty) then
-      if let some checked := (← get).naturalArguments[ctx.argumentNaturalKey a]? then
+      let key ← ctx.argumentNaturalKey a
+      if let some checked := (← get).naturalArguments[key]? then
         if checked == a then return false
       probe true
     else return false

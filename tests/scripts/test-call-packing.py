@@ -19,27 +19,29 @@ override = os.environ.get('OV_COMMAND')
 compiler = shlex.split(override) if override else [str(ROOT / '.lake/build/bin/openverse')]
 with tempfile.TemporaryDirectory(prefix='ov-call-packing-') as directory:
     source, bytecode = (Path(directory) / name for name in ('program.verse', 'program.vbc'))
-    # A successful outer classification must share the hint-free subtree
-    # results: probing every nested generic call repeats quadratic typing work.
-    expression = 'Id(' * 2048 + '1' + ')' * 2048
-    program = ('Id(X:t where t:type):t=X\nMain():void=\n    N:=' + expression +
-               '\n    Print("value {N}")\n')
-    source.write_text(program)
-    try:
-        result = subprocess.run(compiler + ['emit', str(source), '-o', str(bytecode)],
-                                cwd=ROOT, capture_output=True, text=True, timeout=30)
-        valid = result.returncode == 0 and not result.stdout and not result.stderr and bytecode.exists()
-        if valid:
-            c = subprocess.run([str(ROOT / 'runtime/build/cverse'), str(bytecode)],
-                               capture_output=True, text=True, timeout=5)
-            valid = (c.returncode, c.stdout, c.stderr) == (0, 'value 1\n', '')
-    except subprocess.TimeoutExpired:
-        valid = False
-    if not valid:
-        saved = ROOT / 'fuzz-call-packing-natural-generic.verse'
-        saved.write_text(program)
-        raise SystemExit(f'nested inferable generic calls: oracle/30-second bound failed, saved {saved.name}')
-    bytecode.unlink()
+    # Share successful subtree classifications and avoid repeatedly serializing
+    # unrelated locals when identifying their lexical typing context.
+    for locals_count, depth in [(0, 2048), (8192, 512)]:
+        expression = 'Id(' * depth + '1' + ')' * depth
+        program = ('Id(X:t where t:type):t=X\nMain():void=\n' +
+                   ''.join(f'    Unused{i}:={i}\n' for i in range(locals_count)) +
+                   '    N:=' + expression + '\n    Print("value {N}")\n')
+        source.write_text(program)
+        try:
+            result = subprocess.run(compiler + ['emit', str(source), '-o', str(bytecode)],
+                                    cwd=ROOT, capture_output=True, text=True, timeout=30)
+            valid = result.returncode == 0 and not result.stdout and not result.stderr and bytecode.exists()
+            if valid:
+                c = subprocess.run([str(ROOT / 'runtime/build/cverse'), str(bytecode)],
+                                   capture_output=True, text=True, timeout=5)
+                valid = (c.returncode, c.stdout, c.stderr) == (0, 'value 1\n', '')
+        except subprocess.TimeoutExpired:
+            valid = False
+        if not valid:
+            saved = ROOT / f'fuzz-call-packing-natural-generic-{locals_count}.verse'
+            saved.write_text(program)
+            raise SystemExit(f'nested inferable generic calls ({locals_count} locals): oracle/30-second bound failed, saved {saved.name}')
+        bytecode.unlink()
     for name, header, expression, diagnostic in (
             ('method', 'box:=class<computes>:\n    Bad(?X:[]t=array{} where t:type)<computes>:int=X.Length\n'
              'Get()<computes>:box=box{}\n', 'Get().Bad()', 'cannot infer type parameter t of box.Bad'),
