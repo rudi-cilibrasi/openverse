@@ -40,18 +40,6 @@ with tempfile.TemporaryDirectory(prefix='openverse-return-boundaries-') as tmp:
             assert result.stderr.replace(str(source) + ':', '') == warnings, (source, result.stderr)
             result = run([CV, bytecode])
             assert result.returncode == 0 and result.stdout == expected and not result.stderr, (source, profile, result)
-    metadata = tmp / 'metadata'
-    # Run compiler-API admission inside Lean, as the other API contracts do.
-    # Native compilation and bytecode execution retain their 15s/4GiB limits.
-    result = subprocess.run(['lake', 'env', 'lean', '-j2', '--run',
-                             str(ROOT / 'tests/lean/ReturnBoundaries.lean'), str(metadata)],
-                            capture_output=True, text=True, timeout=60)
-    assert result.returncode == 0, result
-    bytecodes = list(metadata.glob('*.vbc'))
-    assert len(bytecodes) == 8, bytecodes
-    for bytecode in bytecodes:
-        result = run([CV, bytecode])
-        assert result.returncode == 0 and result.stdout == '1\n' and not result.stderr, result
     # Independent scalar controls use ordinary returns and explicit arrays;
     # their invocation returns do not cross a multi-value inlining boundary.
     control = tmp / 'control.verse'

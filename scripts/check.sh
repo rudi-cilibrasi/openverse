@@ -117,6 +117,8 @@ echo "== refined conditional branch-choice contracts"
 tests/scripts/test-refined-conditional-choice.sh
 echo "== metadata reader C-runtime oracles"
 tests/scripts/test-metadata-reader-runtime.sh "$logs/metadata-reader"
+echo "== invocation-local return metadata compiler API contracts"
+bash tests/scripts/test-return-boundary-metadata.sh
 # Fixed-budget compilation probes run before parallel jobs compete for CPU.
 echo "== enclosing cleanup growth and state resource contracts"
 python3 tests/scripts/test-enclosing-cleanup-growth.py
