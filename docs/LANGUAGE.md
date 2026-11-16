@@ -2124,10 +2124,38 @@ Main():void =
   # F(1): 10, 11; F(2): two, then 2, 3
   ```
 
-  A `return` elsewhere is refused: in a `for` or a `loop` (find what the loop
-  looks for first, in a `var` it sets or a `for`'s array, and return in an
-  `if` after it), or inside an expression or a condition (`X := if (C) then
-  (return 0) else 1`).
+  A scalar `return` in a `for` or `loop` body, or in a binding initializer,
+  also exits this producer invocation. Scalar callees keep their own return
+  boundary, and the caller continues its consumer after each produced value.
+  An ordinary `break` still leaves its own `loop`. The captured loop or
+  initializer expression must be single-valued throughout:
+
+  ```verse
+  LoopReturn(X:int)<transacts>:int =
+      for (I := 1..X):
+          if (I = 2): return I
+      X | X + 1
+  # LoopReturn(3): 2; LoopReturn(1): 1, 2
+
+  InitializerReturn(X:int)<transacts>:int =
+      Y := if (X > 2) then (return 0) else X * 10
+      Y | Y + 1
+  # InitializerReturn(3): 0; InitializerReturn(1): 10, 11
+  ```
+
+  Each return operand is saved before the cleanup it reached, including
+  branch, loop and initializer cleanup; the enclosing function's cleanup
+  runs as that value leaves the invocation. Later statements and cleanup
+  registrations remain unreached on the returned path. Mutation and a
+  rejected alternative's rollback follow the same rules as ordinary returns.
+  Existing source restrictions on failure contexts and invalid returned-value
+  expressions still apply.
+
+  Choices or calls with several values within the captured expression remain
+  implementation limits: multi-valued loop return operands are tracked by
+  #686, and choice-bearing normal initializer arms by #687. Direct concurrency
+  forms are not supported within a scalar captured expression. Other returns
+  inside expressions or conditions retain their existing restrictions.
 
   Cleanup stays with the scope that registered it. A returning branch runs
   only the `defer:` blocks it reached, from the innermost scope outward and
