@@ -2103,6 +2103,10 @@ Main():void =
   the filters after it reject undoes what came before it, the caller's
   clauses too, unless a choice of the program's own came in between.
 
+  There is no fixed limit on the number of returning conditionals in this
+  supported shape. Large prefixes retain each reached cleanup scope and
+  evaluate a return's operand before cleanup, for each yielded value.
+
   A block (`block:`) and a `case`'s arm are scopes a `return` leaves the
   invocation from too, as an `if`'s branch is (#283): the rest of the body
   is skipped for each value of the return, and runs, after the scope, for
@@ -2388,8 +2392,7 @@ Main():void =
   points must be where a choice is lifted from (a comparison's later
   operand, a `set`'s value, a named argument, a struct's field, `and`'s
   operands, an `if`'s branch, the right of `or`) (#283). Also one with a `return`
-  in a `for` or a `loop`, or inside an expression or a condition, or more
-  than 16 `if`s with a `return` (the inlined code doubles with each), a method of a class or
+  in a `for` or a `loop`, or inside an expression or a condition, a method of a class or
   interface below two others that each declare its name without `<override>`,
   one used as a function value, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or
