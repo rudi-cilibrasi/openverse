@@ -91,6 +91,12 @@ if lake env lean -j1 --run tests/lean/ProducerOperations.lean >"$logs/producer-c
 else
   rc=$?; cat "$logs/producer-contracts"; exit "$rc"
 fi
+echo "== copied recursive overload metadata contracts"
+if lake env lean -j1 --run tests/lean/CopiedRecursiveOverloads.lean >"$logs/copied-recursive-contracts" 2>&1; then
+  cat "$logs/copied-recursive-contracts"
+else
+  rc=$?; cat "$logs/copied-recursive-contracts"; exit "$rc"
+fi
 echo "== initializer convergence compiler API contracts"
 if lake env lean -j1 --run tests/lean/InitializerConvergence.lean >"$logs/initializer-contracts" 2>&1; then
   cat "$logs/initializer-contracts"
@@ -121,6 +127,7 @@ check "differential fuzzing (${FUZZ:-1000} random programs)" scripts/fuzz-diff.s
 check "equality model fuzzing (${FUZZ_EQUALITY:-150} programs, against the Book's equality)" scripts/fuzz-equality.sh "${FUZZ_EQUALITY:-150}" "$seed"
 check "Verse test suite, Lean and C" scripts/test-verse.sh --c
 check "overloading conformance matrix" bash tests/scripts/test-overload-conformance.sh
+check "copied recursive overload conformance" python3 tests/scripts/test-copied-recursive-overloads.py
 check "effect admission and executable controls" bash tests/scripts/test-effect-admission.sh
 check "construction effects and executable controls" bash tests/scripts/test-construction-effects.sh
 check "initializer convergence and extended-default models" \

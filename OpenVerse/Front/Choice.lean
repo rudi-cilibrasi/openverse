@@ -3811,7 +3811,7 @@ structure Inlined where
   overloadSites : List (Pos × String) := []
   nestedSites : List String := []
   fieldSites : List String := []
-  /-- Nonrecursive overload bodies retained through source desugaring for copied suffixes. -/
+  /-- Top-level overload templates retained through source desugaring for copied suffixes. -/
   copiedOverloadNames : List String := []
   copiedOverloadClashes : List (String × List String) := []
 
@@ -4148,9 +4148,7 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
         todo := (callees.lookup h).getD [] ++ todo
     return false
   let copiedOverloadNames := ovMv.flatMap fun f =>
-    let overloads := ovOf f
-    if overloads.any (fun (k, _, _) => reachesRecursive k) then []
-    else overloads.filterMap fun (k, _, _) => if mv.contains k then some k else none
+    (ovOf f).filterMap fun (k, _, _) => if mv.contains k then some k else none
   let ovKept : List STop := ovMv.flatMap fun f => (ovOf f).filterMap fun (k, p, m) =>
     if mv.contains k then some (.fn p k m.params m.tparams m.fx m.ret (checkBody ((checking.lookup p).getD m.body))) else none
   -- Carry templates through the source transforms in private declarations,
@@ -4158,7 +4156,16 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
   let (copyTemplates, _) ← (ovMv.flatMap ovOf |>.filterMapM (m := StateT Nat (Except String)) fun (k, p, m) => do
     if !copiedOverloadNames.contains k then return none
     let params ← goPs m.params
-    let body ← go (((mfs.lookup k).getD m).body)
+    let body ← if reachesRecursive k then do
+        -- Normalize the selected entry with the ordinary recursion metadata,
+        -- not its raw body with the late copied inliner's empty recs/loops.
+        -- All supplied formals leave omitted defaults to the outer call's
+        -- normal binder, while preserving lazy $loop / eager $all carriers.
+        let arguments := m.params.map fun sp =>
+          let value := SExpr.ident p sp.name
+          if sp.named then SExpr.decl p ("?" ++ sp.name) none false value else value
+        go (.app p (.ident p k) arguments (m.fx.contains "decides"))
+      else go (((mfs.lookup k).getD m).body)
     return some (STop.fn p ("$copiedOverload:" ++ k) params m.tparams m.fx m.ret body)).run nextSite
   -- (#283) the calls of those with an overload that has several values whose
   -- overload is not picked yet: the elaboration notes it, for the next one
