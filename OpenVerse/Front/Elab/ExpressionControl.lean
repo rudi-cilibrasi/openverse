@@ -313,7 +313,9 @@ partial def elabExprControlWith
               throw original
       if let some (.arr value) := exp then
         let saved ← get
-        if !value.hasNever && !saved.refiningHintProbe then
+        let returnOnly := value == .never &&
+          (Refine.findPart (fun | .ret .. => true | _ => false) false body).isSome
+        if (!value.hasNever || returnOnly) && !saved.refiningHintProbe then
           return ← tryCatch (do
             let ordinary ← elabE { ctx with refinementTransportActive := true } se exp
             -- A producer can defer its suffix before the generated helper
