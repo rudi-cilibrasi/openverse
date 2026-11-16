@@ -127,3 +127,36 @@ with tempfile.TemporaryDirectory(prefix='openverse-enclosing-rollback-') as tmp:
                 assert run([OV, 'run', source, *profile, '--emit', bytecode]) == expected, (target, name, profile, 'Lean')
                 assert run([CV, bytecode]) == expected, (target, name, profile, 'C')
 print('enclosing cleanup rollback passed (17 guards, rejected-first/all-rejected searches, both profiles/VMs)')
+
+# Two searches of the larger returning prefix used to double generated
+# site names until native compilation exhausted its address-space budget.
+prefix = 'F(N:int)<transacts>:int=\n    var Saved:int=10\n'
+for index in range(32):
+    prefix += registration(index, True)
+    prefix += (f'    if(N={index}):\n        set Saved+={index}\n'
+               '        return Saved|Saved+1\n')
+prefix += '    Saved|Saved+1\n'
+control = 'F(N:int)<transacts>:int=\n    var Saved:int=10\n'
+for index in range(17):
+    control += registration(index, True)
+control += '    set Saved+=16\n    Saved|Saved+1\n'
+main = ('Main()<transacts>:void=\n    var Count:int=0\n'
+        '    if(V:=F(16),set Count+=1,V=27):\n'
+        '        Print("found {V} {Count}")\n'
+        '    else:\n        Print("missing {Count}")\n'
+        '    Print("after {Count}")\n    var Rejected:int=0\n'
+        '    if(V:=F(16),set Rejected+=1,V=100):\n'
+        '        Print("unexpected")\n'
+        '    else:\n        Print("none {Rejected}")\n')
+expected = ''.join(f'scope {index} {43-index}\n' for index in reversed(range(17)))
+expected += 'found 27 1\nafter 1\nnone 0\n'
+with tempfile.TemporaryDirectory(prefix='openverse-first-success-cleanup-') as tmp:
+    tmp = Path(tmp)
+    for name, body in [('prefix', prefix), ('control', control)]:
+        path = tmp / f'{name}.verse'
+        path.write_text(body + main)
+        bytecode = path.with_suffix('.vbc')
+        for profile in [[], ['--extended-defaults']]:
+            assert run([OV, 'run', path, *profile, '--emit', bytecode]) == expected, (name, profile, 'Lean')
+            assert run([CV, bytecode]) == expected, (name, profile, 'C')
+print('enclosing cleanup first-success passed (32 guards, two searches, independent control, both profiles/VMs)')
