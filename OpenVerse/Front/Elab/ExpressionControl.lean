@@ -13,6 +13,20 @@ def warnVoidReturn (p : Pos) (result value : Ty) : EM Unit := do
   if result == .void && value != .void && value != .never && !value.isUnit then
     warnAt p s!"this return gives a value of type {value.show}, which a function whose result is void discards"
 
+/-- A successful ordinary collector whose values only read its source world
+    needs no selected-world replay. Calls, writes and exits retain recovery. -/
+private partial def stableRefinementReads (ctx : Ctx) (e : SExpr) : Bool :=
+  let allowed := match e with
+    | .int .. | .char .. | .char32 .. | .float .. | .ident ..
+    | .str .. | .member .. | .query .. | .neg .. | .notE ..
+    | .cmp .. | .andE .. | .orE .. | .tuple .. | .block ..
+    | .arrayLit .. | .optionLit .. | .logicLit .. | .ite .. => true
+    | .decl _ _ _ false _ => true
+    | .app _ (.ident _ name) _ true => ctx.types.classes.contains name
+    | .app _ (.ident _ name) _ false => ["$choice", "$excl", "$alt", "$group"].contains name
+    | _ => false
+  allowed && e.children.all (stableRefinementReads ctx)
+
 set_option maxHeartbeats 800000 in
 partial def elabExprControlWith
     (elabE : Ctx → SExpr → Option Ty → EM R)
@@ -261,7 +275,8 @@ partial def elabExprControlWith
           set after
           let returning := sourceRet.any (fun ty => !ty.params.isEmpty) &&
             (Refine.findPart (fun | .ret .. => true | _ => false) false body).isSome
-          if !deferred || (ordinary.ty.params.isEmpty && !returning) then return ordinary
+          if !deferred || (ordinary.ty.params.isEmpty && !returning) ||
+              (clauses.all (stableRefinementReads ctx) && stableRefinementReads ctx body) then return ordinary
           let mut needsWorld := false
           set { after with refiningHintProbe := true }
           for clause in clauses do
