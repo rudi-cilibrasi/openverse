@@ -1046,6 +1046,7 @@ partial def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
     -- Starting a task is immediate. elabSpawn checks its arguments in the
     -- caller and the waiting callee in its own suspension context.
     | .app _ (.ident _ "$spawn") _ false => false
+    | .app _ (.ident _ "$returnBoundary") _ false => false
     | e => (match e with
       | .ret .. => !returns
       | .app _ (.ident _ f) _ _ =>

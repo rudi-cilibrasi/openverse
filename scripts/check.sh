@@ -163,6 +163,7 @@ check "check runner checks" bash tests/scripts/test-check.sh
 check "front-end C translation-unit size" bash tests/scripts/test-frontend-c-size.sh
 check "choice continuation code size" bash tests/scripts/test-choice-size.sh
 check "return cleanup growth and state contracts" python3 tests/scripts/test-return-cleanup-growth.py
+check "invocation-local loop and initializer returns" python3 tests/scripts/test-return-boundaries.py
 check "refinement hint probe scaling" bash tests/scripts/test-refine-hint-probes.sh
 check "refining conditional refusal scaling" python3 tests/scripts/test-refining-chain-refusals.py
 check "construction/default choice models (${FUZZ_MODEL_CONSTRUCT:-60} seeds each)" \
