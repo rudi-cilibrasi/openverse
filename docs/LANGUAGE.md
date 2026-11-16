@@ -1986,9 +1986,13 @@ Main():void =
   default order, capture updates, rejected-value rollback and cleanup. A
   first-success or option consumer stops before the next producer alternative.
   A `for` body runs after its prefix commits; its failure and source return
-  keep their own outcomes. Method-owned type parameters use the ordinary
-  argument/default binder to establish the adapter's instance; where discovery
-  cannot establish that instance, the existing copied lowering remains.
+  keep their own outcomes. Method-owned type parameters can remain quantified
+  until another generator supplies their arguments, including a generic
+  `A.M(B.Data)` with heterogeneous `A` and `B`. A checked factory uses the
+  ordinary binder at the live call and carries its dictionaries and evaluated
+  inputs together. Supplied arguments still run once in their original scope.
+  Instance-specific omitted defaults and schemas that cannot be represented
+  retain the existing checked copied lowering.
   Methods marked `<suspends>` still cannot have several values (#283).
 
   An overloaded `M` (#106) is a method
