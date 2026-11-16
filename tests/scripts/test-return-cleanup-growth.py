@@ -61,3 +61,18 @@ with tempfile.TemporaryDirectory(prefix='openverse-return-cleanup-') as tmp:
     # Doubling source size must not multiply the generated continuation tree.
     assert sizes[2] < 3 * sizes[1], sizes
     print(f'return cleanup growth passed (17/32/64 guards, both profiles and VMs; bytes {sizes})')
+
+# Mixing plain returns with a later choice-bearing cleanup return must also
+# expose nested exclusive selections to the enclosing consumer. Exercise all
+# original large-return semantic fixtures in both compiler profiles here.
+for source in sorted((ROOT / 'tests/verse').glob('multi_return_many*.verse')):
+    expected = source.with_suffix('.expected').read_text()
+    assert expected.endswith('exit=0\n'), source
+    expected = expected[:-len('exit=0\n')]
+    with tempfile.TemporaryDirectory(prefix='openverse-return-contract-') as tmp:
+        bytecode = Path(tmp) / 'return.vbc'
+        for profile in ([], ['--extended-defaults']):
+            actual = run([OV, 'run', source, *profile, '--emit', bytecode])
+            assert actual == expected, (source.name, profile, 'Lean')
+            assert run([CV, bytecode]) == expected, (source.name, profile, 'C')
+print('large return semantic contracts passed (9 fixtures, both profiles and VMs)')

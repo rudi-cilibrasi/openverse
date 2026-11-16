@@ -266,6 +266,16 @@ partial def pathHas (has : SExpr → Bool) : SExpr → Bool
   | .member _ base _ | .query _ base => pathHas has base
   | _ => false
 
+/-- An exclusive selection already normalized inside a value block still
+    needs that block lifted into its consumer. Its own declaration remains
+    exclusive, so the consumer adds no generator at the selection boundary. -/
+private partial def blockHasExclusive : SExpr → Bool
+  | .app _ (.ident _ "$excl") _ false => true
+  | .block _ ss => ss.any blockHasExclusive
+  | .decl _ _ _ _ value => blockHasExclusive value
+  | .ite _ _ t u => blockHasExclusive t || u.any blockHasExclusive
+  | _ => false
+
 mutual
 /-- Whether `e` has a choice that lifting reaches. -/
 partial def hasLiftable : SExpr → Bool
@@ -309,7 +319,7 @@ partial def hasLiftable : SExpr → Bool
   -- (a construction's field values and a block's clauses, #283)
   | .construct _ _ _ fs => fs.any fun | .decl _ _ _ _ x => hasLiftable x | x => hasLiftable x
   | .set _ path _ value => pathHas hasLiftable path || hasLiftable value
-  | .block _ ss => ss.any liftsHere
+  | .block _ ss => ss.any liftsHere || ss.any blockHasExclusive
   -- (#283) a `case`'s scrutinee and arms, as the `if` chain that selects its
   -- arm is lifted (`caseIf`)
   | .caseE _ x arms => hasLiftable x || arms.any fun (_, a) => hasLiftable a
