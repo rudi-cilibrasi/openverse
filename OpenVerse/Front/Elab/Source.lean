@@ -438,7 +438,11 @@ def inlineSource (requests : Requests) (admitted : Admitted) :
       | _ => none
     match signature with
     | some (parameters, methodTps, ret, rootTps) =>
-      pure (slot, { family with params := parameters, methodTps, ret := some ret, rootTps })
+      pure (slot, { family with
+        params := parameters
+        methodTps := methodTps
+        ret := some ret
+        rootTps := rootTps })
     | none => throw s!"internal: missing copied method signature {family.root}.{slot}"
   let classes := methodSignatures.filterMap fun
     | .classDef _ name _ tps _ parents _ _ _ => some (name, (parents, tps))
@@ -457,7 +461,8 @@ def inlineSource (requests : Requests) (admitted : Admitted) :
           (view next name root).map fun substitutions =>
             let parameters := ((classes.lookup name).map fun (_, tps) => tps.map (·.name)).getD []
             substitutions.map fun (parameter, ty) => (parameter, ty.substNames (parameters.zip args))
-  let copiedMethods := { copiedMethods with families,
+  let copiedMethods := { copiedMethods with
+    families := families
     views := copiedMethods.views.map fun ((owner, root), _) =>
       ((owner, root), (view (classes.length + 1) owner root).getD []) }
   let allTops00 := allTops00.filter fun | .fn _ n .. => !templateName n | _ => true
