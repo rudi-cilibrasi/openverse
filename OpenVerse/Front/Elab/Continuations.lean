@@ -922,7 +922,11 @@ def contKey (ctx : Ctx) (p : Pos) (b : String) (rest : List SExpr) : String :=
   -- `defer:` run at a `return` and at the end of its scope is, each its own
   -- continuation, whose frame starts so, `FirstLift.rollback`)
   let rollback := if ctx.types.signalNoRollback && ctx.inRollback then "_rollback" else ""
-  s!"k{p.line}_{p.col}_{p.file}_{b}_{String.intercalate "," caps}_{String.intercalate "," places}{typed}{ctx.liftTag}{reprStr ctx.inlineScopes}{sourceContextKey ctx}{rollback}"
+  -- Typed copies can inline the same source call with different local
+  -- names. Those names are part of the helper's returned packet contract,
+  -- even when every source position and captured input is identical.
+  let bindings := reprStr (Choice.boundIn rest)
+  s!"k{p.line}_{p.col}_{p.file}_{b}_{String.intercalate "," caps}_{String.intercalate "," places}{typed}{ctx.liftTag}{reprStr ctx.inlineScopes}{sourceContextKey ctx}{rollback}_bindings:{bindings}"
 
 /-- (#335) The function of its own that the clauses after a composed choice
     (#296) are compiled as, where the first success is taken and those
