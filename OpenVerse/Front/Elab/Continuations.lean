@@ -1313,6 +1313,10 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
   let borrowed (l : Local) := l.storage.filter fun s =>
     !(ctx.sig? s.frame).any (!·.suspends)
   let liveName (n : String) := s!"$refinementCurrent{n}"
+  -- Proof-prefix parameters are readonly views of caller variables. The
+  -- plan's copy-out contract retains their source mutability for later
+  -- owners, including the live cell of a source return.
+  let captureMutable (l : Local) := l.mutable || plan.copies.any (·.1 == l.name)
   let init := caps.zipIdx.flatMap fun (l, j) =>
     let value := if plan.resumeInputs && plan.copies.any (·.1 == l.name) then
         SExpr.ident p (liveName l.name)
@@ -1321,9 +1325,9 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
     if (borrowed l).isSome then
       let saved := s!"$captureInit{j}"
       [SExpr.decl p saved (some l.ty.toSTy) false value,
-        .decl p (localName l.name) (some l.ty.toSTy) l.mutable
+        .decl p (localName l.name) (some l.ty.toSTy) (captureMutable l)
           (.app p (.ident p "$forEnvInit") [.ident p saved] false)]
-    else [SExpr.decl p (localName l.name) (some l.ty.toSTy) l.mutable value]
+    else [SExpr.decl p (localName l.name) (some l.ty.toSTy) (captureMutable l) value]
   let copies := copyValues.map fun e => rename (Refine.substTypes σ e)
   let vals := s!"{name}$values"
   let failed : SExpr := if copies.isEmpty then .ident p "false" else .tuple p (.ident p "false" :: copies)

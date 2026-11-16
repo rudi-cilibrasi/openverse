@@ -107,7 +107,13 @@ partial def elabExprMarkersWith
   | .app p (.ident _ "$refinementContinue")
       [.decl _ _ (some annotation) _ _, body] false => do
     let value ← resolveTy ctx.types p annotation
-    elabE { ctx with refinementTransportValue := some value } body exp
+    let c := { ctx with refinementTransportValue := some value }
+    -- This is a continuation of the existing source for, whose abort flag
+    -- and return cell are already live. Do not create a nested source exit
+    -- boundary through the ordinary .forE expression handler.
+    match body with
+    | .forE q clauses body => elabFor c q clauses body
+    | body => elabE c body exp
   | .app p (.ident _ "$forFirst") [.block _ clauses, body] false => elabFor ctx p clauses body (prepared := true) (firstDecides := true)
   | .app _ (.ident _ "$forEnvCapture") [value] false => do
     let fx := (← get).fx

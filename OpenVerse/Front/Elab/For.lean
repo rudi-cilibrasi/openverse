@@ -155,8 +155,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           else suffix
       let chosen := selected conditional s!"$refinementBranch{p.line}_{p.col}_{index}"
       let result := s!"$refinementBranchValues{p.line}_{p.col}_{index}"
-      let consumer := SExpr.block p
-        [.decl p result (some (Ty.arr value).toSTy) false chosen, .ident p result]
+      let consumer := forStageBodyAs body (SExpr.block p
+        [.decl p result (some (Ty.arr value).toSTy) false chosen, .ident p result])
       let outer ← elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq c p
         (clauses.take index) consumer (prepared := prepared)
         (firstDecides := firstDecides) (failure := failure)
