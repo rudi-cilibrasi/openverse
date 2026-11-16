@@ -111,7 +111,28 @@ private def checkGenericYield : IO Unit := do
           throw (IO.userError s!"generic producer evidence: {argument} dummy={dummy}: {error}")
   IO.println "generic producer yields preserve executable evidence and dummy refusals"
 
+private def checkGenericCrossGenerator : IO Unit := do
+  for argument in ["F", "Dummy"] do
+    for dummy in [false, true] do
+      let source := "a:=class<computes>{M(V:t where t:type)<computes>:t=V|V}\nb:=class<computes>{M(V:t where t:type)<computes>:t=V|V}\nleft:=class<computes>{Data:type{_()<computes>:int}}\nright:=class<computes>{Data:type{_()<computes>:int}}\nDup(V:t where t:type)<computes>:t=V|V\nCaller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<transacts>:int=\n    Rows:=for(A:=Dup(a{})|Dup(b{}),B:=Dup(left{Data:=" ++ argument ++ "})|Dup(right{Data:=" ++ argument ++ "}),X:=A.M(B.Data)):X()\n    Rows.Length\nMain():void={}\n"
+      let result := do
+        let tops ← parseProgram source
+        elabProgram (tops.map fun (top : STop) => match top with
+          | .fn p n ps ts fx ret body => .fn p n (ps.map fun (parameter : SParam) =>
+            { parameter with typeValue := dummy && n == "Caller" && parameter.name == "Dummy" }) ts fx ret body
+          | top => top)
+      match result with
+      | .ok compiled =>
+        if (dummy && argument == "Dummy") || !(compiled.prog.check && compiled.prog.checkControl &&
+            compiled.prog.checkTypes compiled.sigs compiled.slotTys) then
+          throw (IO.userError s!"generic producer yielded invalid executable evidence: {argument} dummy={dummy}")
+      | .error error =>
+        if !dummy || argument != "Dummy" || (error.splitOn "dummy type value cannot").length ≤ 1 then
+          throw (IO.userError s!"generic producer evidence: {argument} dummy={dummy}: {error}")
+  IO.println "cross-generator producer yields preserve executable evidence and dummy refusals"
+
 def main : IO Unit := do
   checkMetadata
   checkForwarding
   checkGenericYield
+  checkGenericCrossGenerator

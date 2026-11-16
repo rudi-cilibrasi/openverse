@@ -150,6 +150,22 @@ def producerForCallbackOf (ctx : Ctx) (p : Pos) (family : String) (frameTypes : 
     inRepeat := true, sourceContext := helper.sourceContext }
   return ({ req with extraFns, resumes := req.resumes ++ [resume] }, obj, initial, initialMetadata)
 
+/-- A factory's method arguments are known only in the live caller scope.
+    Its instantiated dictionary supplies the yield type after ordinary generic
+    argument/default inference has run, without widening to `any`. -/
+def producerYieldTypeWith (elabE : Ctx → SExpr → Option Ty → EM R)
+    (ctx : Ctx) (p : Pos) (annotation : Option STy) (value dictionary : SExpr)
+    (inputCount : Nat) : EM Ty := do
+  if let some ty := annotation then return ← resolveTy ctx.types p ty
+  match value with
+  | .construct _ "$choiceProducerValue" [ty] [] => resolveTy ctx.types p ty
+  | .construct _ "$choiceProducerInfer" [] [] => do
+    let result ← elabE { ctx with typeOnly := true } dictionary none
+    let .tup (.struct _ columns :: _) := result.ty | eerr p "internal: generic producer dictionary type"
+    let some ty := columns[inputCount]? | eerr p "internal: generic producer yield column"
+    return ty
+  | _ => eerr p "internal: producer yield type"
+
 /-- Consume the complete remaining suffix in each value's live producer scope. -/
 def elabProducerForWith
     (elabE : Ctx → SExpr → Option Ty → EM R)
@@ -161,7 +177,7 @@ def elabProducerForWith
   let saved ← get
   let slot ← fresh yieldTy
   let bound := { ctx with
-    typeOnly := true,
+    typeOnly := true, canFail := ctx.canFail || outcome,
     locals := { name := binding, ty := yieldTy, slot, mutable := false } :: ctx.locals }
   let trial ← elabFor bound p clauses body true (!outcome) none
   let .arr valueTy := trial.ty | eerr p "internal: producer suffix values"
@@ -190,12 +206,14 @@ def elabProducerForWith
     sets := plan.copies.map (·.1),
     params := { name := binding, ty := yieldTy.toSTy } :: helper.params.filter (·.name != binding),
     args := .ident p binding :: helper.args.filter (fun e => e != .ident p binding) }
+  let environment ← if ctx.typeOnly || ctx.types.requests.loops.any (·.key == helper.key) then pure [] else
+    stagePrefixEnvironmentWith elabE bound p helper plan args
   let readyTy := Ty.arr (.struct plan.base args)
   let (callback, obj, initial, initialMetadata) ← match producerForCallbackOf ctx p family frameTypes helper plan yieldTy readyTy valueTy with
     | .ok result => pure result
     | .error e => eerr p s!"internal: producer stage callback: {e}"
   let mut ready := true
-  for req in [planReq, helper, callback] do
+  for req in [planReq, helper, callback] ++ environment do
     if !(ctx.types.requests.loops.any (·.key == req.key)) then
       askHelper p req
       ready := false

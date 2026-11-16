@@ -210,7 +210,10 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           before.pendingSourceSuspends != after.pendingSourceSuspends || c.sourceWaits r.e))) (fun _ => pure none)
     set before
     let some (value, waits, effects, sourceSuspends) := value? | return none
-    if stagePlan.isNone && !waits && !immediate && forBodySafe c bd then return none
+    -- A synchronous suffix can use the existing direct continuation. A
+    -- producer capability does not itself require a staged environment:
+    -- forcing one serializes discovery of every later generator.
+    if stagePlan.isNone && !waits && forBodySafe c bd then return none
     -- Refining lifts can infer their effects. Their initially empty fnFx
     -- is not an explicit computes restriction; retain the suffix's typed
     -- effects, as immediate continuations do, and expose them to a parent
@@ -233,6 +236,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       extraFns := prepare.extraFns ++ extraTops,
       sourceFns := prepare.sourceFns ++ extraSources,
       resumes := prepare.resumes ++ extraResumes }
+    let environment ← if c.typeOnly || c.types.requests.loops.any (·.key == prepare.key) then pure [] else
+      stagePrefixEnvironmentWith elabE bound q prepare plan args
     let hasPlan := c.types.requests.loops.any (·.key == request.key)
     let hasPrefix := c.types.requests.loops.any (·.key == prepare.key)
     modify fun st => { st with
@@ -241,7 +246,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     noteFx q (heapFx.filter fun fx => (stagePlan.orElse fun _ => known).any (·.specs.contains fx))
       (some prepare.name)
     if !c.typeOnly then
-      for req in (if hasPlan then [] else [request]) ++ (if hasPrefix then [] else [prepare]) do
+      for req in (if hasPlan then [] else [request]) ++ (if hasPrefix then [] else [prepare]) ++
+          environment.filter (fun req => !c.types.requests.loops.any (·.key == req.key)) do
         askHelper q req
       modify fun st => { st with
         forStageUses := st.forStageUses + 1,
@@ -899,8 +905,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           return ⟨parts.tail.foldl (fun acc r => p2 .concat acc r.e) r0.e, r0.ty⟩
       if let some producer := Choice.binding? g then
         if let some (.app _ (.ident _ "$choiceProducer")
-            (.construct _ "$choiceProducerValue" [yieldSty] [] :: dictionary :: receiver :: arguments) false) := producer.each then
-          let yieldTy ← resolveTy c.types producer.pos (producer.ty.getD yieldSty)
+            (value :: dictionary :: receiver :: arguments) false) := producer.each then
+          let yieldTy ← producerYieldTypeWith elabE c producer.pos producer.ty value dictionary (arguments.length+1)
           let rest := fs ++ more.flatMap (fun (next, filters) => next :: filters)
           return ← elabProducerForWith elabE
             (fun c p clauses body prepared firstDecides failure =>

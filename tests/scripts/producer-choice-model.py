@@ -4,6 +4,15 @@ import sys
 
 
 def source(kind, count):
+    if kind == 'generic-cross-generator':
+        lines = ['a:=class<computes>{M(V:t where t:type)<computes>:t=V|V}',
+                 'b:=class<computes>{M(V:t where t:type)<computes>:t=V|V}',
+                 'left:=class<computes>{Data:int=1}',
+                 'right:=class<computes>{Data:string="s"}',
+                 'Dup(V:t where t:type)<computes>:t=V|V', 'Main():void=']
+        clauses = ','.join(f'A{i}:=Dup(a{{}})|Dup(b{{}}),B{i}:=Dup(left{{}})|Dup(right{{}}),X{i}:=A{i}.M(B{i}.Data)'
+                           for i in range(count))
+        return '\n'.join(lines+[f'    Rows:=for({clauses}):1', '    Print("{Rows.Length}")'])+'\n'
     if kind == 'waiting':
         lines = ['link:=class<unique>:', '    Code:int', '    Next:?link',
                  'trace:=class<unique>:', '    var Head:?link=false',
@@ -60,6 +69,8 @@ def source(kind, count):
 
 
 def oracle(kind, count):
+    if kind == 'generic-cross-generator':
+        return f'{32**count}\n'
     if kind in ['first', 'option']:
         return f'{2*count}\n'
     if kind == 'failure':

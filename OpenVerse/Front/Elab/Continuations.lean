@@ -1318,6 +1318,76 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
     (caps.zipIdx.map fun (l, j) => .decl p (captureName l j) none false (.ident p l.name))
   return (req, obj, .struct plan.base args)
 
+/-- Batch a prefix's environment using its actual declaration context.
+    Typed storage origins and capture keys are checked exactly as on restart. -/
+def stagePrefixEnvironmentWith
+    (elabE : Ctx → SExpr → Option Ty → EM R)
+    (c : Ctx) (q : Pos) (prepare : Choice.FirstLift) (plan : Choice.ForStagePlan)
+    (args : List Ty) : EM (List Choice.FirstLift) := do
+  if c.discoveringStagePrefix then return []
+  let environmentBefore ← get
+  let environment ← tryCatch (do
+    let formals ← match resolveTParams c.types prepare.tparams with
+      | .ok result => pure result
+      | .error _ => return none
+    let scope := formals.env c.types
+    let planFormals ← match resolveTParams c.types plan.tparams with
+      | .ok result => pure result
+      | .error _ => return none
+    let scope := { scope with
+      sparams := if planFormals.params.isEmpty then scope.sparams else (plan.base, planFormals.params) :: scope.sparams,
+      sbounds := (plan.base, planFormals.bounds.map fun bound => (bound.base, bound.derived)) :: scope.sbounds,
+      structs := if (scope.structs.lookup plan.base).isSome then scope.structs else scope.structs ++ [(plan.base, [])],
+      classes := if scope.classes.contains plan.base then scope.classes else scope.classes ++ [plan.base] }
+    let resultType ← resolveTy scope q prepare.ret
+    let parameterTypes ← prepare.params.mapM fun parameter => do
+      match c.locals.find? (fun capture =>
+          (if capture.mutable then capture.name ++ "$in" else capture.name) == parameter.name) with
+      | some capture => pure capture.ty
+      | none => resolveTy scope q parameter.ty
+    let signature : Sig := {
+      idx := 0, name := prepare.name, params := parameterTypes, ret := resultType,
+      decides := true, isConst := false, tparams := formals.params,
+      bounds := formals.bounds, fx := allowedFx prepare.specs,
+      typeValues := prepare.params.zipIdx.filterMap fun (parameter, i) => if parameter.typeValue then some i else none,
+      metadataForwards := prepare.params.zipIdx.filterMap fun (parameter, i) => if parameter.metadataForward then some i else none }
+    let scope := signature.typeEnv scope
+    let frame := signature.frame
+    if !frame.valid then return none
+    let parameters := (prepare.params.zip parameterTypes).zipIdx.map fun ((parameter, ty), i) =>
+      ({ name := parameter.name, ty, slot := i, mutable := false, typeValue := parameter.typeValue } : Local)
+    let localContext : Ctx := {
+      sigs := signature :: c.sigs, sigProg := c.sigProg,
+      types := scope, locals := (parameters ++ signature.evidenceLocals).reverse,
+      typeOnly := false, canFail := true, suspends := false, fnFx := signature.fx,
+      discoveringStagePrefix := true,
+      retTy := resultType,
+      dictVars := frame.orderedParams.map (·.1), dictBase := frame.witnessBase }
+    let requests := { c.types.requests with loops := prepare :: c.types.requests.loops }
+    let prefixContext ← match functionBodyCtx requests localContext q prepare.name formals.params with
+      | .ok result => pure result
+      | .error _ => return none
+    let prefixState : ESt := {
+      env := scope
+      nslots := frame.arity
+      slotTys := (parameterTypes ++ frame.hiddenTypes).toArray
+      frameSlots := prefixContext.locals.filterMap fun capture => capture.storage.map (capture.slot, ·) }
+    set prefixState
+    -- Elaborate the generated body through the same marker/filter path as
+    -- its real declaration. In particular, exclusive and already-prepared
+    -- argument producers must not be replayed as ordinary scalar filters.
+    let known := c.types.requests.loops.filter fun request => !request.name.startsWith (plan.base ++ "$env")
+    let requests := { c.types.requests with loops := known }
+    let prefixContext := { prefixContext with
+      forStage := some plan,
+      types := { prefixContext.types with requests } }
+    let _ ← elabE prefixContext prepare.body (some resultType)
+    let environments := (← get).loopFirst.filterMap fun use =>
+      use.lift.toOption.filter fun request => request.stageOnly && request.name.startsWith (plan.base ++ "$env")
+    return some environments) (fun _ => pure none)
+  set environmentBefore
+  return environment.getD []
+
 /-- A failed body is unwrapped in an iteration body. Inside an outcome
     producer, stop its private loop instead of failing the filter. -/
 def forOutcomeValues (ctx : Ctx) (p : Pos) (r : R) : EM R := do
@@ -1346,6 +1416,9 @@ structure ChoiceOperations where
   casePrelude : List (List SExpr) := []
   extraFns : List STop := []
   sourceFns : List STop := []
+  /-- Nominal headers needed to type a generated capability's generic result.
+      Full definitions still enter the normal checked helper restart. -/
+  trialNominals : List (String × List (String × Bool)) := []
   resumes : List Choice.ForResume := []
   prepareArguments : String → List SExpr → List SExpr := fun _ => id
 
@@ -1366,7 +1439,7 @@ partial def ChoiceOperations.rewrite (ops : ChoiceOperations) (body : SExpr) : S
     | call@(.app _ (.member ..) _ _) | call@(.member ..) =>
       (ops.replacements.find? (·.1 == call)).bind fun (_, value) =>
         match value with
-        | .app _ (.ident _ "$choiceProducer") _ false => none
+        | .app _ (.ident _ "$choiceProducer") _ false | .app _ (.ident _ "$choiceProducerFactory") _ false => none
         | _ => some value
     | _ => none) body
 
@@ -1379,7 +1452,9 @@ partial def ChoiceOperations.rewriteSeq (ops : ChoiceOperations) : List SExpr �
     match statement with
     | .app _ (.ident _ "$producerAnchorStart") [.decl p name ty false original] false =>
       let replacement := (ops.replacements.find? (·.1 == original)).map (·.2)
-      let producer := replacement.any fun | .app _ (.ident _ "$choiceProducer") _ false => true | _ => false
+      let producer := replacement.any fun
+        | .app _ (.ident _ "$choiceProducer") _ false | .app _ (.ident _ "$choiceProducerFactory") _ false => true
+        | _ => false
       let after := rest.dropWhile fun
         | .app _ (.ident _ "$producerAnchorEnd") [.decl _ n _ false _] false => n != name
         | _ => true
@@ -1394,13 +1469,30 @@ partial def ChoiceOperations.rewriteSeq (ops : ChoiceOperations) : List SExpr �
           .app p (.ident p "$producerFrameStart") [] false :: prepared ++
             [.decl p name ty false call, .app p (.ident p "$producerFrameEnd") [] false] ++
             ops.rewriteSeq after.tail
+        | .app q (.ident _ "$choiceProducerFactory") [.int _ count, factory] false =>
+          let packet := name ++ "$factoryPacket"
+          let dictionary := name ++ "$factoryDictionary"
+          let prepared := ops.rewriteSeq (ops.prepareArguments name [.decl q packet none false factory])
+          let get (i : Nat) := SExpr.app q (.ident q packet) [.int q (Int.ofNat i)] false
+          let names := (List.range count.toNat).map fun i => s!"{name}$input{i}"
+          let inputs := names.zipIdx.map fun (n, i) => SExpr.decl q n none false (get (i+1))
+          let value := SExpr.construct q "$choiceProducerInfer" [] []
+          let call := SExpr.app q (.ident q "$choiceProducer")
+            (value :: .ident q dictionary :: names.map (SExpr.ident q ·)) false
+          .app p (.ident p "$producerFrameStart") [] false :: prepared ++
+            [.decl q dictionary none false (get 0)] ++ inputs ++
+            [.decl p name ty false call, .app p (.ident p "$producerFrameEnd") [] false] ++
+            ops.rewriteSeq after.tail
         | _ => ops.rewrite statement :: ops.rewriteSeq rest
       else ops.rewrite statement :: ops.rewriteSeq rest
     | _ => ops.rewrite statement :: ops.rewriteSeq rest
 end
 
 def ChoiceOperations.context (ops : ChoiceOperations) (ctx : Ctx) : EM Ctx := do
-  let mut ctx := ctx
+  let headers := ops.trialNominals.filter fun (name, _) => (ctx.types.sparams.lookup name).isNone
+  let mut ctx := { ctx with types := { ctx.types with
+    sparams := headers ++ ctx.types.sparams,
+    classes := ctx.types.classes ++ (headers.map (·.1)).filter (!ctx.types.classes.contains ·) } }
   for (name, ty) in ops.params do
     let slot ← fresh ty
     ctx := { ctx with locals := { name, slot, ty, mutable := false } :: ctx.locals }
@@ -1743,7 +1835,9 @@ partial def choiceOperationContexts (ctx : Ctx) (body : SExpr) : List (SExpr × 
     later generators have supplied their values. Only receiver-dependent
     columns independent of those method parameters belong to its object. -/
 def choiceGenericOperation (ctx : Ctx) (stem : String) (receiver : SExpr) (receiverTy : Ty) (ops : ChoiceOperations)
-    (call : SExpr) (arguments : List SExpr) (cases : List ChoiceOperationCase) : Option ChoiceOperations := do
+    (call : SExpr) (arguments : List SExpr) (cases : List ChoiceOperationCase)
+    (caseBody : Option (Nat → ChoiceOperationCase → List SExpr → List (String × Ty) → SExpr) := none)
+    (transport : Bool := false) : Option ChoiceOperations := do
   let .app p (.member _ _ method) _ bracket := call | none
   if cases.any (·.instanceDefaults) then none else do
   let borrows := cases.any (·.omittedDefaults)
@@ -1805,7 +1899,8 @@ def choiceGenericOperation (ctx : Ctx) (stem : String) (receiver : SExpr) (recei
   let declarationSignature := signature.map (·.subst classRename)
   let classArgs := classNames.map fun (n, _) => STy.name n
   let classTps ← choiceMethodTParams p0 classNames (classBounds.map (fun b => SubtypeEvidence.Bound.subst b classRename))
-  let params (types : List Ty) : List SParam := types.zipIdx.map fun (ty, i) => { name := s!"$input{i}", ty := ty.toSTy }
+  let params (types : List Ty) : List SParam := types.zipIdx.map fun (ty, i) =>
+    { name := s!"$input{i}", ty := ty.toSTy, metadataForward := transport }
   let values := (List.range (arguments.length + 1)).map fun i => SExpr.ident p0 s!"$input{i}"
   let methodTps ← choiceMethodTParams p0 methodVars (bounds.map (fun b => SubtypeEvidence.Bound.subst b classRename))
   let iface := STop.classDef p0 family [] classTps [] [] true []
@@ -1826,8 +1921,10 @@ def choiceGenericOperation (ctx : Ctx) (stem : String) (receiver : SExpr) (recei
     let implementationClassTps ← choiceMethodTParams p0 canonicalVars
       (classBounds.map (fun b => SubtypeEvidence.Bound.subst (SubtypeEvidence.Bound.subst b instanceTypes) rename))
     let implementationTps ← choiceMethodTParams p0 methodVars (row.methodBounds.map (fun b => SubtypeEvidence.Bound.subst b rename))
-    let body := SExpr.app p0 (.member p0 values.head! method) (choiceForwardArguments arguments values.tail) bracket
-    let body := if borrows then choiceDefaultContext ctx body else body
+    let body := match caseBody with
+      | some make => make i row values rename
+      | none => SExpr.app p0 (.member p0 values.head! method) (choiceForwardArguments arguments values.tail) bracket
+    let body := if borrows && caseBody.isNone then choiceDefaultContext ctx body else body
     definitions := definitions ++ [STop.classDef p0 impl [] implementationClassTps [] [parentTy] false []
       [.fn p0 "$apply" (params implementationTypes.dropLast) implementationTps ("override" :: specs)
         implementationTypes.getLast!.toSTy body]]
@@ -2281,6 +2378,64 @@ def choiceForProducerProtocol (ctx : Ctx) (p methodPos : Pos) (method : String)
 
 
 
+/-- A generic producer capability is instantiated only after its argument
+    generators have bound their values. The scalar factory uses the ordinary
+    generic binder and returns both dictionaries and its evaluated inputs;
+    no source receiver/argument is evaluated twice. -/
+def choiceGenericProducerOperation (ctx : Ctx) (stem : String)
+    (receiver : SExpr) (receiverTy : Ty) (ops : ChoiceOperations)
+    (call : SExpr) (arguments : List SExpr) (cases : List ChoiceOperationCase) : Option ChoiceOperations := do
+  let .app p (.member methodPos _ method) _ _ := call | none
+  if cases.any (·.instanceDefaults) then none else do
+  let visitorFx := heapFx.filter fun k => ctx.fnFx.contains k ||
+    cases.any (fun row => (allowedFx row.specs).contains k)
+  let visitorSpecs := if visitorFx.isEmpty then ["computes"] else visitorFx
+  let canonical := cases.map fun row =>
+    let types := row.receiver :: row.inputs ++ [row.result]
+    let boundTypes := row.methodBounds.flatMap fun b => [b.base, b.derived]
+    let vars := Ty.mergeParamBounds ((types ++ boundTypes).flatMap Ty.paramsC)
+    let rename := vars.zipIdx.map fun ((n, b), i) => (n, Ty.param s!"$operationT{i}" b)
+    ((row.receiver :: row.inputs).map (·.subst rename), row.result.subst rename, vars, rename)
+  let contracts ← (cases.zip canonical).mapM fun (row, (_, _, vars, rename)) =>
+    choiceMethodTParams p (vars.zipIdx.map fun ((_, b), i) => (s!"$operationT{i}", b))
+      (row.methodBounds.map fun b => SubtypeEvidence.Bound.subst b rename)
+  let columns := canonical.map fun (inputs, result, _, _) => (inputs, result)
+  -- A capability with no borrowed owner or omitted default has no caller
+  -- frame in its implementation. Reuse it as later generators instantiate
+  -- its method parameters, rather than discovering identical method bodies
+  -- again for each generated continuation frame.
+  let protocolCtx := if cases.any (·.omittedDefaults) || ctx.locals.any (·.storage.isSome) then ctx
+    else { ctx with frameName := "" }
+  let protocols := [choiceProducerProtocol protocolCtx p methodPos method arguments cases columns contracts visitorSpecs,
+    choiceForProducerProtocol protocolCtx p methodPos method arguments cases columns contracts visitorSpecs false,
+    choiceForProducerProtocol protocolCtx p methodPos method arguments cases columns contracts visitorSpecs true]
+  let factoryCases := cases.map fun row =>
+    let signature := row.receiver :: row.inputs ++ [row.result] ++ protocols.head!.frameTypes
+    let dictionary := Ty.tup (protocols.map fun protocol => .struct protocol.family signature)
+    { row with result := .tup (dictionary :: row.receiver :: row.inputs), producer := false, specs := ["computes"] }
+  let makeBody (i : Nat) (_ : ChoiceOperationCase) (values : List SExpr) (rename : List (String × Ty)) :=
+    let (_, _, vars, _) := canonical[i]!
+    let dictionaries := protocols.map fun protocol =>
+      let arguments := (vars.map fun (name, bound) => (Ty.param name bound).subst rename) ++
+        protocol.frameTypes.map (·.subst rename)
+      SExpr.app p (.ident p "$choiceDictionary")
+        [.construct p s!"{protocol.family}$case{i}" (arguments.map Ty.toSTy) []] false
+    SExpr.tuple p (.tuple p dictionaries :: values)
+  let next ← choiceGenericOperation ctx stem receiver receiverTy ops call arguments factoryCases (some makeBody) true
+  let replacement ← (next.replacements.find? (·.1 == call)).map (·.2)
+  let factory := SExpr.app p (.ident p "$choiceProducerFactory")
+    [.int p (Int.ofNat (arguments.length+1)), replacement] false
+  some { next with
+    replacements := next.replacements.map fun (key, value) =>
+      (key, if key == call then factory else value),
+    knownTypes := next.knownTypes.filter (·.1 != call),
+    sourceFns := next.sourceFns ++ protocols.flatMap (·.definitions),
+    trialNominals := next.trialNominals ++ (protocols.flatMap (·.definitions)).filterMap (fun
+      | .classDef _ name _ parameters _ _ true _ _ =>
+          some (name, parameters.map fun parameter => (parameter.name, parameter.constraint == "comparable"))
+      | _ => none),
+    resumes := next.resumes ++ protocols.flatMap (·.resumes) }
+
 /-- Each dictionary implements the method at its original receiver and
     argument types. Omitted defaults retain their declaration scope and
     source context; their forwarding methods borrow caller task ownership. -/
@@ -2478,11 +2633,20 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
         if let some generic := choiceGenericOperation sourceCtx stem receiver receiverTy ops call arguments cases then
           ops := generic
           continue
+      else
+        if let some generic := choiceGenericProducerOperation sourceCtx stem receiver receiverTy ops call arguments cases then
+          ops := generic
+          continue
       let mut fixed : List ChoiceOperationCase := []
       for (row, instanceTypes) in cases.zip ops.plan.instances do
         let some checked ← choiceFixedOperationCase elabE sourceCtx ops bindings aliases instanceTypes p method arguments row | break
         fixed := fixed ++ [checked]
-      if fixed.length != cases.length then continue
+      if fixed.length != cases.length then
+        if cases.any (·.producer) then
+          if let some generic := choiceGenericProducerOperation sourceCtx stem receiver receiverTy ops call arguments cases then
+            ops := generic
+            continue
+        continue
       cases := fixed
     let borrows := cases.any (·.omittedDefaults)
     let (initialPlan, operationReceiverTy) := if indexed then
