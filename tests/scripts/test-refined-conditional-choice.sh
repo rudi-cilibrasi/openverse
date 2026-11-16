@@ -37,12 +37,14 @@ with tempfile.TemporaryDirectory(prefix="openverse-refined-conditional-") as tem
     subprocess.run(["lake", "env", "leanc", "-O3", "-o", str(binary),
                     "@" + str(response)], check=True)
     count = int(bounded([str(binary), "--count"]).stdout)
-    for index in range(count):
-        bounded([str(binary), str(index), str(work)])
+    for mode in [[], ["--inferred"]]:
+        for index in range(count):
+            bounded([str(binary), *mode, str(index), str(work)])
     bounded([str(binary), "--shape", str(work)])
+    bounded([str(binary), "--returns", str(work)])
     programs = sorted(work.glob("*.vbc"))
-    if len(programs) != 23:
-        raise SystemExit(f"conditional-choice: expected 23 admitted API artifacts, got {len(programs)}")
+    if len(programs) != 47:
+        raise SystemExit(f"conditional-choice: expected 47 admitted API artifacts, got {len(programs)}")
     for program in programs:
         actual = bounded(["runtime/build/cverse", str(program)]).stdout
         if actual != program.with_suffix(".expected").read_text():
@@ -69,6 +71,6 @@ with tempfile.TemporaryDirectory(prefix="openverse-refined-conditional-") as tem
         sizes.append(bytecode.stat().st_size)
     if sizes[-1] > 4 * 1024**2 or sizes[-1] > 20 * sizes[0]:
         raise SystemExit(f"conditional-choice: excessive branch growth {sizes}")
-    print(f"conditional selected-world contracts passed: {count} real/metadata pairs, "
+    print(f"conditional selected-world contracts passed: {2 * count + 2} real/metadata pairs, "
           f"{len(programs)} complete C traces, widths 2/8/32 bytecode {sizes}")
 PY

@@ -132,6 +132,12 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       let outcome := (ctx.canFail && !firstDecides) || failure.isSome || forReturnBody? body
       let rec selected (expression : SExpr) (site : String) : SExpr :=
         let resume (conditions : List SExpr) (branch : SExpr) : SExpr × SExpr :=
+          -- The selected world retains these locals, but their source names
+          -- belong only to this condition and branch, not later clauses.
+          let names := Choice.condDecls expression.pos conditions
+          let ren := Choice.renamedFor (site ++ "$condition") (names.map (·.1))
+          let conditions := Choice.declNames expression.pos names ++ conditions.map (Choice.renameE ren)
+          let branch := Choice.renameE ren branch
           let ready := site ++ "$ready"
           let branchClauses := Choice.prepare [SExpr.decl branch.pos binding annotation false branch]
             (choiceValues c) (choiceField c) (site := site ++ "$branch") (fieldOrder := choiceOrder c)
