@@ -1,0 +1,194 @@
+argument
+a enter
+a yield1
+a cleanup
+body
+resume
+body cleanup
+a yield2
+a cleanup
+body
+resume
+body cleanup
+argument
+a enter
+a yield1
+a cleanup
+body
+resume
+body cleanup
+a yield2
+a cleanup
+body
+resume
+body cleanup
+argument
+a enter
+a yield1
+a cleanup
+body
+resume
+body cleanup
+a yield2
+a cleanup
+body
+resume
+body cleanup
+argument
+a enter
+a yield1
+a cleanup
+body
+resume
+body cleanup
+a yield2
+a cleanup
+body
+resume
+body cleanup
+argument
+a enter
+a yield1
+a cleanup
+body
+resume
+body cleanup
+a yield2
+a cleanup
+body
+resume
+body cleanup
+argument
+a enter
+a yield1
+a cleanup
+body
+resume
+body cleanup
+a yield2
+a cleanup
+body
+resume
+body cleanup
+argument
+a enter
+a yield1
+a cleanup
+body
+resume
+body cleanup
+a yield2
+a cleanup
+body
+resume
+body cleanup
+argument
+a enter
+a yield1
+a cleanup
+body
+resume
+body cleanup
+a yield2
+a cleanup
+body
+resume
+body cleanup
+argument
+b enter
+b yield1
+b cleanup
+body
+resume
+body cleanup
+b yield2
+b cleanup
+body
+resume
+body cleanup
+argument
+b enter
+b yield1
+b cleanup
+body
+resume
+body cleanup
+b yield2
+b cleanup
+body
+resume
+body cleanup
+argument
+b enter
+b yield1
+b cleanup
+body
+resume
+body cleanup
+b yield2
+b cleanup
+body
+resume
+body cleanup
+argument
+b enter
+b yield1
+b cleanup
+body
+resume
+body cleanup
+b yield2
+b cleanup
+body
+resume
+body cleanup
+argument
+b enter
+b yield1
+b cleanup
+body
+resume
+body cleanup
+b yield2
+b cleanup
+body
+resume
+body cleanup
+argument
+b enter
+b yield1
+b cleanup
+body
+resume
+body cleanup
+b yield2
+b cleanup
+body
+resume
+body cleanup
+argument
+b enter
+b yield1
+b cleanup
+body
+resume
+body cleanup
+b yield2
+b cleanup
+body
+resume
+body cleanup
+argument
+b enter
+b yield1
+b cleanup
+body
+resume
+body cleanup
+b yield2
+b cleanup
+body
+resume
+body cleanup
+rows 32
+exit=0

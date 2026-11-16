@@ -1790,8 +1790,8 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
         return (code, { c with inlineScopes := Choice.inlineScopesAfter ctx.inlineScopes rest })
     if let some producer := Choice.binding? cl then
       if let some (.app _ (.ident _ "$choiceProducer")
-          (.construct _ "$choiceProducerValue" [yieldSty] [] :: dictionary :: receiver :: arguments) false) := producer.each then
-        let yieldTy ← resolveTy ctx.types producer.pos (producer.ty.getD yieldSty)
+          (value :: dictionary :: receiver :: arguments) false) := producer.each then
+        let yieldTy ← producerYieldTypeWith elabE ctx producer.pos producer.ty value dictionary (arguments.length+1)
         return ← elabProducerFirstWith elabE elabOneGo ctx producer.pos producer.name yieldTy
           dictionary receiver arguments rest
     match Choice.binding? cl with
