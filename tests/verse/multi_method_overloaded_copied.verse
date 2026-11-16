@@ -1,3 +1,4 @@
+# Each typed copy selects its own method overload list.
 a := class:
     M(N:int)<transacts>:int = N | N + 1
     M(S:string)<transacts>:int = 7 | 8
