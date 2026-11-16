@@ -27,16 +27,59 @@ structure Info where
   body : Option Expr := none
   deriving Inhabited
 
+/-- Known immediate tuple columns. Unknown values retain their whole-value
+    role, so absence of a shape never permits an executable use. -/
+private abbrev TupleParts := Option (List Bool)
+
+private def joinParts (a : Option Bool) (ap : TupleParts)
+    (b : Option Bool) (bp : TupleParts) : TupleParts :=
+  match a, b with
+  | none, _ => bp
+  | _, none => ap
+  | some ar, some br =>
+    match ap, bp with
+    | some xs, some ys => if xs.length == ys.length then some (xs.zipWith (· || ·) ys) else none
+    | some xs, none => if br then none else some xs
+    | none, some ys => if ar then none else some ys
+    | none, none => none
+
+private def putParts (parts : Std.HashMap Nat (List Bool)) (i : Nat) (value : TupleParts) :=
+  match value with
+  | none => parts.erase i
+  | some fields => if fields.any id then parts.insert i fields else parts.erase i
+
+private structure Argument where
+  role : Bool := false
+  parts : TupleParts := none
+  deriving BEq, Hashable, Inhabited, Repr
+
 private structure Slots where
   values : Bits := {}
+  tuples : Std.HashMap Nat (List Bool) := {}
   initialized : Bits := {}
   sharedMetadata : Bits := {}
   /-- Writes performed by this arm, excluding roles received from siblings. -/
   written : Bits := {}
   deriving BEq, Inhabited
 
+private def sameTuples (a b : Std.HashMap Nat (List Bool)) : Bool :=
+  withPtrEq a b (fun _ => a == b)
+    (by intro h; subst b; exact Std.HashMap.Equiv.beq (Std.HashMap.Equiv.refl a))
+
 private def joinSlots (a b : Slots) : Slots := {
   values := a.values.union b.values
+  -- Known columns join directly; their whole-value bits carry no extra
+  -- information. Only a missing shape needs the other path's opaque role.
+  -- Canonical maps omit all-real tuples, so equal maps are their own join.
+  tuples := if sameTuples a.tuples b.tuples then a.tuples else
+    b.tuples.fold (fun out i fields =>
+      if a.tuples.contains i || a.values.get i then out else putParts out i (some fields))
+      (a.tuples.fold (fun out i fields =>
+        let joined := match b.tuples[i]? with
+          | some other => if fields.length == other.length then
+              some (fields.zipWith (· || ·) other) else none
+          | none => if b.values.get i then none else some fields
+        putParts out i joined) {})
   initialized := a.initialized.union b.initialized
   written := a.written.union b.written
   sharedMetadata := a.sharedMetadata.joinModes a.initialized b.sharedMetadata b.initialized }
@@ -66,23 +109,27 @@ private def joinRole (a b : Option Bool) : Option Bool :=
 private structure Flow where
   slots : Slots
   value : Option Bool := some false
+  valueParts : TupleParts := none
   returned : Option Bool := none
+  returnedParts : TupleParts := none
   broken : Option Slots := none
   /-- May yield before normal completion or a nonreturning path. -/
   yielded : Bool := false
 
 private def withExits (a b : Flow) : Flow := { b with
   returned := joinRole a.returned b.returned
+  returnedParts := joinParts a.returned a.returnedParts b.returned b.returnedParts
   broken := joinOpt a.broken b.broken
   yielded := a.yielded || b.yielded }
 
-private abbrev Key := Nat × List Bool
+private abbrev Key := Nat × List Argument
 
 private structure Summary where
   key : Key
   result : Option Bool := none
+  parts : TupleParts := none
   yielded : Bool := false
-  dependencies : Array (Nat × Option Bool × Bool) := #[]
+  dependencies : Array (Nat × Option Bool × TupleParts × Bool) := #[]
   cached : Bool := false
   deriving Inhabited
 
@@ -155,7 +202,7 @@ private inductive Pending where
   | resume (actor pc : Nat)
   | returnCall (actor next : Nat)
   | returnScope (actor fn offset dropFrames next : Nat)
-  | result (role : Bool)
+  | result (role : Bool) (parts : TupleParts)
   | discard
   deriving BEq, Inhabited
 
@@ -238,7 +285,8 @@ private def pendingKey (pending : List Pending) : List Nat :=
     | .resume a pc => [3, a, pc]
     | .returnCall a pc => [4, a, pc]
     | .returnScope a f o n pc => [7, a, f, o, n, pc]
-    | .result role => [5, if role then 1 else 0]
+    | .result role parts => [5, if role then 1 else 0] ++
+        (match parts with | none => [0] | some fields => 1 :: fields.length :: fields.map (fun b => if b then 1 else 0))
     | .discard => [6]
 
 private def configurationKey (c : Configuration) : List Nat :=
@@ -318,7 +366,8 @@ private def joinConfiguration (a b : Configuration) : Configuration := { b with
     tasks := joinTable s.tasks t.tasks [1, 2, 4]
     taskResults := joinTable s.taskResults t.taskResults [0] }) b.tests }
 
-private def putRole (s : Slots) (i : Nat) (role : Bool) : Slots := { s with
+private def putRole (s : Slots) (i : Nat) (role : Bool) (parts : TupleParts := none) : Slots := { s with
+  tuples := putParts s.tuples i parts
   values := s.values.set! i role
   initialized := s.initialized.set! i true
   sharedMetadata := s.sharedMetadata.set! i role }
@@ -511,7 +560,7 @@ private structure State where
   debug : Bool := false
   active : Option Key := none
   signalArguments : Option (Array (List Nat)) := none
-  dependencies : Option (Std.HashMap Nat (Option Bool × Bool)) := none
+  dependencies : Option (Std.HashMap Nat (Option Bool × TupleParts × Bool)) := none
   captureMismatch : Bool := false
   borrowers : Array Bool := #[]
   borrowedWork : Array Bool := #[]
@@ -525,29 +574,31 @@ private def refuse (fn : Fn) (info : Info) (what : String) (details : String := 
     s!"\nmetadata context: {reprStr st.active}\ninputs: {info.inputs}; seeds: {info.seeds}\n{details}\n{reprStr (info.body.getD fn.body)}" else ""
   throw s!"{info.pos.show}: dummy type value cannot {what} (in {fn.name}){context}"
 
-private def request (key : Key) : M (Option Bool × Bool) := do
+private def request (key : Key) : M (Option Bool × TupleParts × Bool) := do
   let st ← get
   if st.validateUses && st.validateShared && !st.discovery && !st.liveSeen.contains key then
     set { st with live := st.live.push key, liveSeen := st.liveSeen.insert key () }
   let st ← get
   if let some i := st.indices[key]? then
-    let value := (st.summaries[i]!.result, st.summaries[i]!.yielded)
+    let value := (st.summaries[i]!.result, st.summaries[i]!.parts, st.summaries[i]!.yielded)
     if let some dependencies := st.dependencies then
       if !dependencies.contains i then
         modify fun st => { st with dependencies := some (dependencies.insert i value) }
     return value
   let i := st.summaries.size
-  let dependencies := st.dependencies.map (·.insert i (none, false))
+  let dependencies := st.dependencies.map (·.insert i (none, none, false))
   set { st with
     indices := st.indices.insert key i
     summaries := st.summaries.push { key }, changed := true, dependencies }
-  return (none, false)
+  return (none, none, false)
+
+
 
 mutual
 private partial def expr (fns : Array Fn) (infos : Array Info)
     (fields : Array (List Nat)) (fn : Fn) (info : Info) (slots : Slots) : Expr → M Flow
   | .lit _ => pure { slots }
-  | .local i => pure { slots, value := some ((slots.values.get i)) }
+  | .local i => pure { slots, value := some ((slots.values.get i)), valueParts := slots.tuples[i]? }
   | .assign i e => do
     let out ← expr fns infos fields fn info slots e
     let some role := out.value | return out
@@ -562,8 +613,10 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
     let first := !((out.slots.initialized.get i))
     return { out with
       value := some role
+      valueParts := if info.seeds.contains i then none else out.valueParts
       slots := {
         values := out.slots.values.set! i role
+        tuples := putParts out.slots.tuples i (if info.seeds.contains i then none else out.valueParts)
         initialized := out.slots.initialized.set! i true
         written := if info.shared.contains i then out.slots.written.set! i true else out.slots.written
         -- Once real data enters a shared cell, waiting aliases can execute it.
@@ -587,16 +640,17 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
     if ["$syncMark", "$raceMark", "$rushMark"].contains name then
       if let [.prim .mkArr arms] := es then
         return ← concurrent fns infos fields fn info slots (name == "$syncMark") arms
-    let (out, result, yielded) ← invoke fns infos fields fn info slots g es
+    let (out, result, parts, yielded) ← invoke fns infos fields fn info slots g es
     return { out with
       value := if name == "$branchMark" then
           -- The child releases its owner when it completes or first waits.
           if out.value.isSome || out.yielded then some false else none
         else if out.value.isSome then result else none
+      valueParts := if name == "$branchMark" then none else parts
       -- A branch starts its body to its first wait without yielding its owner.
       yielded := if name == "$branchMark" then false else out.yielded || yielded }
   | .prim op es => do
-    let (args, out) ← arguments fns infos fields fn info slots es
+    let (args, argumentParts, out) ← arguments fns infos fields fn info slots es
     if out.value.isNone then return out
     let value := match op, es with
       | .fail, _ | .userErr, _ | .query, [.lit (.logic false)] | .query, [.lit .none] => none
@@ -604,16 +658,17 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
       -- payload without becoming part of it. All operands still run above.
       | .eq, _ | .ne, _ | .index, _ => some (args.headD false)
       | .arrSet, _ => some (args.headD false || args[2]?.getD false)
+      | .tupGet i, _ => some ((argumentParts.headD none).bind (fun fields => fields[i]?) |>.getD (args.headD false))
       | .query, _ | .mkArr, _ | .mkTup, _ | .mkSome, _ | .concat, _ |
-          .flatten, _ | .tupGet _, _ |
+          .flatten, _ |
           .lt, _ | .le, _ | .gt, _ | .ge, _ |
           .flt, _ | .fle, _ | .fgt, _ | .fge, _ => some (args.any id)
       -- Length, formatting and arithmetic construct fresh scalar data;
       -- they cannot preserve a dictionary, function or opaque payload.
       | _, _ => some false
-    return { out with value }
+    return { out with value, valueParts := if op == .mkTup && args.any id then some args else none }
   | .heap op es => do
-    let (args, out) ← arguments fns infos fields fn info slots es
+    let (args, _, out) ← arguments fns infos fields fn info slots es
     if out.value.isNone then return out
     let role ← match op with
       | .new tag => pure (args.zipIdx.any fun (role, i) => role && !(fields[tag]?.getD []).contains i)
@@ -626,7 +681,7 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
         pure (args[1]?.getD false)
       | .get _ | .isTag _ => pure (args.headD false)
       | .tag => pure false
-    return { out with value := some role }
+    return { out with value := some role, valueParts := none }
   | .ite c t e => do
     let c ← expr fns infos fields fn info slots c
     let t ← if c.value.isSome then expr fns infos fields fn info c.slots t
@@ -639,7 +694,9 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
       | _, _ => e.slots
     return withExits c {
       slots := merged, value := joinRole t.value e.value
-      returned := joinRole t.returned e.returned, broken := joinOpt t.broken e.broken
+      valueParts := joinParts t.value t.valueParts e.value e.valueParts
+      returned := joinRole t.returned e.returned
+      returnedParts := joinParts t.returned t.returnedParts e.returned e.returnedParts, broken := joinOpt t.broken e.broken
       yielded := t.yielded || e.yielded }
   | .forE i source filt body => do
     let source ← expr fns infos fields fn info slots source
@@ -650,7 +707,7 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
     let mut exits := source
     let mut growing := true
     while growing do
-      let entry := { head with values := head.values.set! i item }
+      let entry := { head with values := head.values.set! i item, tuples := head.tuples.erase i }
       let filt ← expr fns infos fields fn info entry filt
       let body ← if filt.value.isSome then expr fns infos fields fn info filt.slots body
         else pure { slots := entry, value := none }
@@ -659,29 +716,33 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
       let next := if body.value.isSome then freshLocals info.shared source.slots (joinSlots head body.slots) else head
       growing := next != head
       head := next
-    return { exits with slots := head, value := some result }
+    return { exits with slots := head, value := some result, valueParts := none }
   | .loop body => do
     let mut head := slots
     let mut returned := none
+    let mut returnedParts := none
     let mut broken := none
     let mut yielded := false
     let mut growing := true
     while growing do
       let out ← expr fns infos fields fn info head body
+      returnedParts := joinParts returned returnedParts out.returned out.returnedParts
       returned := joinRole returned out.returned
       broken := joinOpt broken out.broken
       yielded := yielded || out.yielded
       let next := if out.value.isSome then freshLocals info.shared slots (joinSlots head out.slots) else head
       growing := next != head
       head := next
-    return { slots := broken.getD head, value := broken.map (fun _ => false), returned, yielded }
+    return { slots := broken.getD head, value := broken.map (fun _ => false), returned, returnedParts, yielded }
   | .brk => pure { slots, value := none, broken := some slots }
   | .ret e => do
     let out ← expr fns infos fields fn info slots e
-    return { out with value := none, returned := joinRole out.returned out.value }
+    return { out with
+      value := none, valueParts := none, returned := joinRole out.returned out.value
+      returnedParts := joinParts out.returned out.returnedParts out.value out.valueParts }
   | .print e => do
     let out ← expr fns infos fields fn info slots e
-    return { out with value := out.value.map (fun _ => false) }
+    return { out with value := out.value.map (fun _ => false), valueParts := none }
 
 /-- A spawn evaluates the selected call's arguments now. Its result belongs
     to the task; returning or yielding lets its caller continue. A task that
@@ -690,8 +751,8 @@ private partial def spawned (fns : Array Fn) (infos : Array Info)
     (fields : Array (List Nat)) (fn : Fn) (info : Info) (slots : Slots) :
     Expr → M (Option Bool × Flow)
   | .call g es => do
-    let (out, result, yielded) ← invoke fns infos fields fn info slots g es
-    return (result, { out with value :=
+    let (out, result, parts, yielded) ← invoke fns infos fields fn info slots g es
+    return (result, { out with valueParts := none, value :=
       if out.value.isSome && (result.isSome || yielded) then some false else none })
   | .seq a b => do
     let a ← expr fns infos fields fn info slots a
@@ -709,20 +770,22 @@ private partial def spawned (fns : Array Fn) (infos : Array Info)
       | _, _ => e.slots
     return (joinRole tr er, withExits c {
       slots := merged, value := joinRole t.value e.value
-      returned := joinRole t.returned e.returned, broken := joinOpt t.broken e.broken
+      valueParts := joinParts t.value t.valueParts e.value e.valueParts
+      returned := joinRole t.returned e.returned
+      returnedParts := joinParts t.returned t.returnedParts e.returned e.returnedParts, broken := joinOpt t.broken e.broken
       yielded := t.yielded || e.yielded })
   | .assign i e => do
     let (result, out) ← spawned fns infos fields fn info slots e
     return (result.map (· || info.seeds.contains i), out)
   | e => do
     let out ← expr fns infos fields fn info slots e
-    return (out.value, { out with value := out.value.map (fun _ => false) })
+    return (out.value, { out with value := out.value.map (fun _ => false), valueParts := none })
 
 private partial def invoke (fns : Array Fn) (infos : Array Info)
     (fields : Array (List Nat)) (fn : Fn) (info : Info) (slots : Slots)
-    (g : Nat) (es : List Expr) (summarize : Bool := true) : M (Flow × Option Bool × Bool) := do
-  let (args, out) ← arguments fns infos fields fn info slots es
-  if out.value.isNone then return (out, none, false)
+    (g : Nat) (es : List Expr) (summarize : Bool := true) : M (Flow × Option Bool × TupleParts × Bool) := do
+  let (args, argumentParts, out) ← arguments fns infos fields fn info slots es
+  if out.value.isNone then return (out, none, none, false)
   let gi := infos[g]?.getD {}
   -- A readonly borrower usually needs only the ordinary transfer. A
   -- statically opaque capture can nevertheless be stale after a real
@@ -735,10 +798,12 @@ private partial def invoke (fns : Array Fn) (infos : Array Info)
       if (slots.initialized.get cell) && !((slots.values.get cell)) then
         modify fun st => { st with captureMismatch := true }
   let roles := args.zipIdx.map fun (role, i) => role || gi.inputs.contains i
+  let keyArgs := roles.zipIdx.map fun (role, i) =>
+    ({ role, parts := if gi.inputs.contains i || !role then none else argumentParts[i]?.getD none } : Argument)
   if (← get).validateUses && gi.required.any (fun i => roles[i]?.getD false) then
     refuse fn info s!"provide executable evidence or a receiver to {(fns[g]?.map (·.name)).getD "a call"}"
-  if !summarize then return (out, none, false)
-  let (result, yielded) ← request (g, roles)
+  if !summarize then return (out, none, none, false)
+  let (result, parts, yielded) ← request (g, keyArgs)
   let name := (fns[g]?.map (·.name)).getD ""
   let yielded : Bool := if name == "$Sleep" then
     match es with
@@ -746,7 +811,7 @@ private partial def invoke (fns : Array Fn) (infos : Array Info)
     | [.prim .fneg [.lit (.float bits)]] => decide (-(VFloat.ofBits bits) > 0.0)
     | _ => true
     else name == "$WaitDone" || yielded
-  return (out, result, yielded)
+  return (out, result, parts, yielded)
 
 private partial def concurrent (fns : Array Fn) (infos : Array Info)
     (fields : Array (List Nat)) (fn : Fn) (info : Info) (slots : Slots)
@@ -759,6 +824,7 @@ private partial def concurrent (fns : Array Fn) (infos : Array Info)
     for (out, i) in outs.zipIdx do
       if i != own then
         let incoming := { out.slots with
+          tuples := {}
           values := out.slots.values.mapIdx fun k role =>
             if (out.slots.written.get k) then role else (slots.values.get k)
           sharedMetadata := out.slots.sharedMetadata.mapIdx fun k role =>
@@ -798,7 +864,9 @@ private partial def concurrent (fns : Array Fn) (infos : Array Info)
       | some old => { out with
         slots := joinSlots old.slots out.slots
         value := joinRole old.value out.value
+        valueParts := joinParts old.value old.valueParts out.value out.valueParts
         returned := joinRole old.returned out.returned
+        returnedParts := joinParts old.returned old.returnedParts out.returned out.returnedParts
         broken := joinOpt old.broken out.broken
         yielded := old.yielded || out.yielded }
     growing := next.map (·.slots) != outs.map (·.slots)
@@ -818,6 +886,7 @@ private partial def concurrent (fns : Array Fn) (infos : Array Info)
   -- any arm that definitely leaves real data makes that shared cell real.
   -- Race/rush can finish with another arm still pending, so retain may roles.
   let finalSlots := if sync then { merged with
+    tuples := {}
     values := merged.values.mapIdx fun i role =>
       if shared.contains i then outs.all (fun out => (out.slots.values.get i)) else role }
     else merged
@@ -829,14 +898,16 @@ private partial def concurrent (fns : Array Fn) (infos : Array Info)
 
 private partial def arguments (fns : Array Fn) (infos : Array Info)
     (fields : Array (List Nat)) (fn : Fn) (info : Info) (slots : Slots)
-    (es : List Expr) : M (List Bool × Flow) := do
+    (es : List Expr) : M (List Bool × List TupleParts × Flow) := do
   let mut out : Flow := { slots }
   let mut roles := []
+  let mut parts := []
   for e in es do
     if out.value.isSome then
       out := withExits out (← expr fns infos fields fn info out.slots e)
       roles := roles ++ [out.value.getD false]
-  return (roles, out)
+      parts := parts ++ [out.valueParts]
+  return (roles, parts, out)
 
 private partial def actorEnvironment (env : ScheduleEnv) (a : Actor) : Fn × Info :=
   match a.context with
@@ -993,7 +1064,7 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
   let extra := env.plan.slots - entry.values.size
   let pad (a : Bits) := a.appendZeros extra
   let slots : Slots := {
-    values := pad entry.values, initialized := pad entry.initialized
+    values := pad entry.values, tuples := entry.tuples, initialized := pad entry.initialized
     sharedMetadata := pad entry.sharedMetadata, written := pad entry.written }
   let initial : Configuration := {
     slots
@@ -1008,6 +1079,7 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
   let mut cursor := 0
   let mut known : Std.HashMap (List Nat) Configuration := {}
   let mut result : Option Bool := none
+  let mut resultParts : TupleParts := none
   let mut finalSlots : Option Slots := none
   let mut yielded := false
   while cursor < work.size do
@@ -1067,9 +1139,10 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
                 context := frame.context, cleanups := frame.cleanups
                 loops := frame.loops, frames := rest } }
             work := work.push (advanceActor c a pc)
-        | .result role =>
+        | .result role parts =>
           -- The result is already saved, but an active cancelled arm can
           -- still install and execute cleanup before its next suspension.
+          resultParts := joinParts result resultParts (some role) parts
           result := joinRole result (some role)
           finalSlots := joinOpt finalSlots (some c.slots)
           if (c.actors.any fun a => a.cancelRequested && !a.canceling) ||
@@ -1131,7 +1204,7 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
       if let some role := out.value then
         let (refs, memory) := MetadataReferences.eval env.fns a.pc c.refs e (← get).scalarReturns
         let changed := { c with
-          slots := putRole out.slots dst role
+          slots := putRole out.slots dst role out.valueParts
           refs := MetadataReferences.set memory dst refs }
         work := work.push (advanceActor changed actor next)
       if out.value.isNone || mayFail e then
@@ -1151,7 +1224,7 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
     | .passTest next =>
       work := work.push (advanceActor { c with tests := c.tests.tail } actor next)
     | .enterCall g offset args next =>
-      let (out, _, _) ← invoke env.fns env.infos env.fields fn info c.slots g (args.map Expr.local) false
+      let (out, _, _, _) ← invoke env.fns env.infos env.fields fn info c.slots g (args.map Expr.local) false
       if out.value.isNone then continue
       let callee := env.fns[g]!
       let ci := env.infos[g]?.getD {}
@@ -1160,11 +1233,13 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
       for i in [:callee.nslots] do
         slots := { slots with
           values := slots.values.set! (offset + i) false
+          tuples := slots.tuples.erase (offset + i)
           initialized := slots.initialized.set! (offset + i) false
           sharedMetadata := slots.sharedMetadata.set! (offset + i) false }
         refs := MetadataReferences.set refs (offset + i) []
       for (source, i) in args.zipIdx do
         slots := putRole slots (offset + i) ((c.slots.values.get source) || ci.inputs.contains i)
+          (if ci.inputs.contains i then none else c.slots.tuples[source]?)
         refs := MetadataReferences.set refs (offset + i) ((MetadataReferences.get c.refs source))
       let frame : CallFrame := { context := a.context, cleanups := a.cleanups, loops := a.loops }
       let c := { c with slots, refs, actors := c.actors.modify actor fun a =>
@@ -1193,7 +1268,7 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
         slots := putRole c.slots dst role
         refs := MetadataReferences.accumulate c.refs a.pc dst value } actor next)
     | .call g args original dst next =>
-      let (out, role, mayYield) ← invoke env.fns env.infos env.fields fn info
+      let (out, role, parts, mayYield) ← invoke env.fns env.infos env.fields fn info
         c.slots g (args.map Expr.local)
       if out.value.isNone then continue
       let name := (env.fns[g]?.map (·.name)).getD ""
@@ -1204,7 +1279,7 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
       let mustYield := name == "$EvAwait" ||
         (name == "$Sleep" && duration.any (fun n => decide (n > 0.0)))
       let slots := match role with
-        | some role => putRole out.slots dst role
+        | some role => putRole out.slots dst role parts
         | none => out.slots
       let (references, memory) := MetadataReferences.call env.fns a.pc c.refs g
         (args.map fun i => (MetadataReferences.get c.refs i)) (← get).scalarReturns
@@ -1310,7 +1385,7 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
       let mut canComplete := false
       let mut canSignal := false
       if let some target := g.target then
-        let (_, role, _) ← invoke env.fns env.infos env.fields fn info c.slots target
+        let (_, role, _, _) ← invoke env.fns env.infos env.fields fn info c.slots target
           (g.arguments.map Expr.local)
         canComplete := role.isSome
         canSignal := env.plan.signalFns[target]?.getD false
@@ -1343,7 +1418,7 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
           { a with status := .joining group } }
         work := work.push (nextActor c)
     | .spawnCheck g args next =>
-      let (_, role, _) ← invoke env.fns env.infos env.fields fn info c.slots g (args.map Expr.local)
+      let (_, role, _, _) ← invoke env.fns env.infos env.fields fn info c.slots g (args.map Expr.local)
       if (← get).validateUses && role.getD false then
         refuse fn info "enter a spawned task's result field containing executable data"
       work := work.push (advanceActor c actor next)
@@ -1359,7 +1434,7 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
         let role := (c.slots.values.get value)
         let c := { c with actors := c.actors.modify actor fun a =>
           { a with status := .done, cleanups := [] } }
-        work := work.push (queue c [.cancel 0, .result role])
+        work := work.push (queue c [.cancel 0, .result role c.slots.tuples[value]?])
       else
         work := work.push (← completeScheduled env c actor)
     | .functionReturn owner value dst next target offset =>
@@ -1388,7 +1463,7 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
       steps := steps ++ cancelChildren env c owner false (some targetContext) ++ cleanup ++
         cancelChildren env c owner true (some targetContext)
       let c := { c with
-        slots := putRole c.slots dst (c.slots.values.get value)
+        slots := putRole c.slots dst (c.slots.values.get value) c.slots.tuples[value]?
         refs := MetadataReferences.set c.refs dst (MetadataReferences.get c.refs value)
         events := c.events.filter (fun a => a != owner && a != actor)
         signals := c.signals.filter (fun a => a != owner && a != actor)
@@ -1407,8 +1482,8 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
       let role := (c.slots.values.get value)
       let c := { c with actors := c.actors.modify actor fun a =>
         { a with status := .done, cleanups := [] } }
-      work := work.push (queue c [.cancel 0, .result role])
-  return { slots := finalSlots.getD slots, value := result, yielded }
+      work := work.push (queue c [.cancel 0, .result role c.slots.tuples[value]?])
+  return { slots := finalSlots.getD slots, value := result, valueParts := resultParts, yielded }
 end
 
 /-- Check executable effects throughout the cleanup's call contexts without
@@ -1426,9 +1501,11 @@ private def probeCleanup (fns : Array Fn) (infos : Array Info)
       let some callee := fns[i]? | throw "internal: cleanup call has no body"
       let ci := infos[i]?.getD {}
       let values := (List.range callee.nslots).map (fun j =>
-        ci.inputs.contains j || args[j]?.getD false) |>.toArray |> Bits.ofArray
+        ci.inputs.contains j || (args[j]?.getD default).role) |>.toArray |> Bits.ofArray
       let entry : Slots := {
         values, sharedMetadata := values
+        tuples := args.zipIdx.foldl (fun tuples (arg, j) =>
+          putParts tuples j (if ci.inputs.contains j then none else arg.parts)) {}
         initialized := (List.range callee.nslots).map
           (fun j => j < callee.arity : Nat → Bool) |>.toArray |> Bits.ofArray
         written := Bits.replicate callee.nslots false }
@@ -1436,7 +1513,7 @@ private def probeCleanup (fns : Array Fn) (infos : Array Info)
       discard <| expr fns infos fields callee ci entry (ci.body.getD callee.body)
       let observed := (← get).seen
       let possible := { entry with
-        values := observed, initialized := Bits.replicate callee.nslots true
+        values := observed, tuples := {}, initialized := Bits.replicate callee.nslots true
         sharedMetadata := Bits.replicate callee.nslots false }
       for d in ((← get).sites[i]?.getD (false, [])).2 do
         discard <| expr fns infos fields callee ci possible d
@@ -1457,10 +1534,12 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       let info := infos[i]?.getD {}
       modify fun st => { st with active := some key, captureMismatch := false, contextDeferred := false }
       let values := (List.range fn.nslots).map (fun i =>
-        info.inputs.contains i || args[i]?.getD false) |>.toArray |> Bits.ofArray
+        info.inputs.contains i || (args[i]?.getD default).role) |>.toArray |> Bits.ofArray
       let initialized := (List.range fn.nslots).map (fun i => i < fn.arity : Nat → Bool) |>.toArray |> Bits.ofArray
       let slots : Slots := {
         values, initialized, sharedMetadata := values
+        tuples := args.zipIdx.foldl (fun tuples (arg, j) =>
+          putParts tuples j (if info.inputs.contains j then none else arg.parts)) {}
         written := Bits.replicate fn.nslots false }
       let body := info.body.getD fn.body
       modify fun st => { st with seen := values }
@@ -1484,6 +1563,7 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       -- shared writes also matter because another continuation can read them.
       let cleanupSlots := { slots with
         values := seen
+        tuples := {}
         initialized := Bits.replicate fn.nslots true
         sharedMetadata := Bits.replicate fn.nslots false }
       let mut metadataCleanup := false
@@ -1545,7 +1625,7 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       for i in [:fns.size] do
         let info := infos[i]?.getD {}
         if info.borrowTasks || info.source.slots.any (fun (_, s) => s.frame != fns[i]!.name) then continue
-        discard <| request (i, (List.range fns[i]!.arity).map info.inputs.contains)
+        discard <| request (i, (List.range fns[i]!.arity).map (fun j => ({ role := info.inputs.contains j } : Argument)))
     seedRoots
     let mut growing := true
     let mut forceSchedules := false
@@ -1562,9 +1642,9 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
         -- out of this dependency cache.
         let cacheable := ((← get).sites[i]?.getD (false, [])).2.isEmpty
         let current := (← get).summaries
-        if cacheable && summary.cached && summary.dependencies.all (fun (j, result, yielded) =>
+        if cacheable && summary.cached && summary.dependencies.all (fun (j, result, parts, yielded) =>
             let s := current[j]!
-            s.result == result && s.yielded == yielded) then continue
+            s.result == result && s.parts == parts && s.yielded == yielded) then continue
         modify fun st => { st with dependencies := if cacheable then some {} else none }
         let validate := (← get).validateUses
         -- Borrowed locals are validated against their actual owner by the
@@ -1576,16 +1656,19 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
         let contextDeferred := (← get).contextDeferred
         deferred := deferred || contextDeferred
         modify fun st => { st with validateUses := validate }
-        let dependencies := ((← get).dependencies.getD {}).toList.toArray.map fun (j, result, yielded) =>
-          (j, result, yielded)
+        let dependencies := ((← get).dependencies.getD {}).toList.toArray.map fun (j, result, parts, yielded) =>
+          (j, result, parts, yielded)
         modify fun st => { st with
           dependencies := none
           summaries := st.summaries.modify index fun s => { s with dependencies, cached := cacheable && !contextDeferred } }
         let returned := (joinRole out.value out.returned).map (· || info.metadataResult)
+        let returnedParts := if info.metadataResult then none else
+          joinParts out.value out.valueParts out.returned out.returnedParts
+        let parts := joinParts summary.result summary.parts returned returnedParts
         let result := joinRole summary.result returned
         let yielded := summary.yielded || out.yielded
-        if result != summary.result || yielded != summary.yielded then
-          modify fun st => { st with summaries := st.summaries.modify index (fun s => { s with result, yielded }), changed := true }
+        if result != summary.result || parts != summary.parts || yielded != summary.yielded then
+          modify fun st => { st with summaries := st.summaries.modify index (fun s => { s with result, parts, yielded }), changed := true }
       let changed := (← get).changed
       growing := changed || deferred
       -- If a recursive dependency component cannot progress without a

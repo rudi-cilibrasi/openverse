@@ -1,0 +1,9 @@
+prefix
+inner return 4
+outer return 4
+return 3 4
+prefix
+inner break 6
+outer break 6
+break 6
+exit=0

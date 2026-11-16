@@ -120,6 +120,173 @@ partial def elabExprMarkersWith
       return ⟨.seq (.assign result r.e) (.ite (.assign slot (.prim .query [.local result]))
         (.prim .mkSome [.prim .flatten [.local slot]]) (.lit .none)), .opt (.arr t)⟩
     | _ => eerr p "internal: staged flatten values"
+  | .app p (.ident _ "$refinementIfPacket")
+      [.decl _ _ (some packetType) _ _, .block _ clauses, body, otherwise] false => do
+    let ty ← resolveTy ctx.types p packetType
+    let name := s!"$refinementIf{p.line}_{p.col}_{ctx.locals.length}"
+    let ready := name ++ "$ready"
+    let values := name ++ "$values"
+    -- The caller supplies the existing refineExits packet body and
+    -- dispatches that packet afterwards. Only preparation is tested by
+    -- this conditional; failure in the resumed committing body cannot
+    -- accidentally select the source else branch.
+    let prepare := refinementPrepareMarker ctx p ty ctx.canFail (ctx.canFail || ctx.inRollback)
+      clauses [] body
+    let resume := SExpr.app p (.ident p "$refinementResume") [.ident p ready] false
+    let result := name ++ "$packet"
+    let get := SExpr.app p (.ident p values) [.int p 0] true
+    let consumer := SExpr.block p
+      [.decl p values none false resume,
+       .ite p [.decl p result none false get] (.ident p result)
+         (some (.app p (.ident p "Err") [] false))]
+    elabE ctx (.ite p [.decl p ready none false prepare] consumer (some otherwise)) exp
+  | .app p (.ident _ "$refinementFirst")
+      [.decl _ _ (some resultType) _ _, .block _ clauses, value] false => do
+    if !ctx.canFail then
+      eerr p "first{…} with a choice can fail, but it is not in a failure context (#208)"
+    let ty ← resolveTy ctx.types p resultType
+    let name := s!"$refinementFirst{p.line}_{p.col}_{ctx.locals.length}"
+    let ready := name ++ "$ready"
+    -- Resume the source value after its clauses, as the ordinary first
+    -- handler does. Its continuation remains in the same search: a failed
+    -- value tries the next alternative without repeating earlier operands.
+    let prepare := refinementPrepareMarker ctx p ty true (ctx.canFail || ctx.inRollback)
+      clauses [] value
+    let resume := SExpr.app p (.ident p "$refinementResume") [.ident p ready] false
+    let values := name ++ "$values"
+    elabE ctx (.block p
+      [.decl p ready none false prepare,
+       .decl p values none false resume,
+       .app p (.ident p values) [.int p 0] true]) exp
+  | .app p (.ident _ "$refinementBody") [.str _ [.text base], body] false => do
+    let some plan := ctx.types.requests.loops.findSome? (fun request => request.stagePlan.filter (·.base == base))
+      | eerr p "internal: missing refinement consumer scope"
+    let some source := plan.resumeContext | eerr p "internal: missing source consumer scope"
+    elabE { ctx with inRepeat := source.inRepeat, inChoice := source.inChoice } body exp
+  | .app _ (.ident _ "$refinementExits")
+      [.ident _ returns, binding, .block _ returnPacket,
+       .ident _ breaks, .block _ breakPacket, body] false => do
+    let binding := match binding with
+      | .decl _ name (some ty) _ _ => some (name, ty)
+      | _ => none
+    let exits : Refine.Exits := {
+      ret := if returns == "true" then some (binding, returnPacket) else none,
+      brk := if breaks == "true" then some breakPacket else none }
+    elabE { ctx with refineExits := exits } body exp
+  | .app p (.ident _ "$refinementPrefix") [.block _ clauses, ready] false => do
+    let ctx := { ctx with refinementTransportActive := true }
+    match clauses with
+    | [] => elabE ctx ready exp
+    | cl :: rest =>
+      let tail := refinementPrefixMarker p rest ready
+      if let some (_, _, target, _) := Refine.castClause? cl then
+        if ctx.types.classes.contains target then
+          -- Keeping all later filterPrefix work in the then branch avoids
+          -- exporting a narrowed snapshot and trying to recover its world.
+          return ← elabE ctx (.ite cl.pos [cl, .query cl.pos (.ident cl.pos "true")]
+            tail (some (Refine.noValue cl.pos))) exp
+      -- A cast in a computed bound must precede the remaining prefix,
+      -- retaining its selected world rather than replaying its owner.
+      if let some position := (Refine.castsIn ctx.types.classes.contains cl).head? then
+        let lifted ← liftCastClause elabE ctx [] position cl
+        return ← elabE ctx (refinementPrefixMarker p (lifted ++ rest) ready) exp
+      -- The continuation participates in the same search, so a later
+      -- failed cast still backtracks through an earlier choice.
+      let result := s!"$refinementNext{cl.pos.line}_{cl.pos.col}_{rest.length}"
+      elabE ctx (.app p (.ident p "$first")
+        [.block p [cl, .decl p result (exp.map Ty.toSTy) false tail, .ident p result]] false) exp
+  | .app p (.ident _ "$refinementReady")
+      [.str _ [.text base], .decl _ _ (some view) _ _, .block _ copies, .block _ suffix, body] false
+  | .app p (.ident _ "$refinementReadyOne")
+      [.str _ [.text base], .decl _ _ (some view) _ _, .block _ copies, .block _ suffix, body] false =>
+    elabRefinementReady elabE ctx p base view copies suffix body
+      (one := match se with | .app _ (.ident _ "$refinementReadyOne") _ _ => true | _ => false)
+  | .app p (.ident _ "$refinementSlotDefault")
+      [.decl _ _ (some annotation) _ _] false => do
+    let ty ← resolveTy ctx.types p annotation
+    let params := ((ctx.sig? ctx.frameName).map (·.params)).getD []
+    match slotDefault ctx.types ctx.dictBase params [] ty with
+    | .ok value => pure ⟨value, ty⟩
+    | .error message => eerr p message
+  | .app p (.ident _ "$refinementPrepareKnown")
+      [.str _ [.text base], .block _ headClauses, .block _ suffix, body] false => do
+    let some plan := ctx.types.requests.loops.findSome? (fun request =>
+      request.stagePlan.filter (·.base == base)) | eerr p "internal: missing refinement chain source"
+    let args := plan.tparams.map fun parameter =>
+      (ctx.types.tvars.lookup parameter.name).getD (.param parameter.name (parameter.constraint == "comparable"))
+    let helper ← match refinementPrefixOf ctx plan args p headClauses suffix body with
+      | .ok helper => pure helper
+      | .error message => eerr p message
+    if !ctx.types.requests.loops.any (·.key == helper.key) then
+      askHelper p helper
+      return ⟨.prim .fail [], .arr (.struct plan.base args)⟩
+    let call := SExpr.app p (.ident p helper.name) helper.args true
+    if plan.copies.isEmpty then return ← elabE ctx call exp
+    let packet := base ++ "$prepared"
+    let get (index : Nat) := SExpr.app p (.ident p packet) [.int p (index : Int)] false
+    let copied := plan.copies.zipIdx.map fun ((name, _), index) =>
+      SExpr.set p (.ident p name) none
+        (.app p (.ident p "$refineCopyOut") [get (index+1)] false)
+    elabE ctx (.block p (.decl p packet none false call :: copied ++ [get 0])) exp
+  | .app p (.ident _ "$refinementPrepare")
+      [.decl _ _ (some valueType) _ _, .ident _ outcome, .ident _ rollback, .int _ flags,
+       .block _ filterPrefix, .block _ suffix, body] false => do
+    let value ← resolveTy ctx.types p valueType
+    let key := "refinementWorld" ++ contKey ctx p "$ready" (filterPrefix ++ suffix ++ [body]) ++
+      reprStr (value, outcome, rollback, flags)
+    let request ← match refinementStagePlanOf ctx p key filterPrefix suffix body value (outcome == "true") with
+      | .ok request => pure request
+      | .error message => eerr p s!"cannot prepare this refinement world: {message}"
+    let some plan := request.stagePlan | eerr p "internal: refinement plan"
+    let source := { (sourceContextOf ctx) with
+      inRepeat := flags.toNat % 2 == 1, inChoice := (flags.toNat / 2) % 2 == 1 }
+    let plan := { plan with resumeRollback := rollback == "true", resumeContext := some source }
+    let request := { request with stagePlan := some plan }
+    let args := plan.tparams.map fun tp =>
+      (ctx.types.tvars.lookup tp.name).getD (.param tp.name (tp.constraint == "comparable"))
+    if !(ctx.types.requests.loops.any (·.key == request.key)) then
+      askHelper p request
+      return ⟨.prim .fail [], .arr (.struct plan.base args)⟩
+    let helper ← match refinementPrefixOf ctx plan args p filterPrefix suffix body with
+      | .ok helper => pure helper
+      | .error message => eerr p s!"cannot capture this refinement world: {message}"
+    if !(ctx.types.requests.loops.any (·.key == helper.key)) then
+      askHelper p helper
+      return ⟨.prim .fail [], .arr (.struct plan.base args)⟩
+    let call := SExpr.app p (.ident p helper.name) helper.args true
+    if plan.copies.isEmpty then return ← elabE ctx call exp
+    -- Copy-out belongs to the preparation transaction. The opaque Ready
+    -- value alone crosses into the committing consumer; evaluate its
+    -- preparation exactly once before assigning the mutable outputs.
+    let packet := s!"{plan.base}$prepared"
+    let get (j : Nat) := SExpr.app p (.ident p packet) [.int p (j : Int)] false
+    let assignments := plan.copies.zipIdx.map fun ((name, _), j) =>
+      SExpr.set p (.ident p name) none
+        (.app p (.ident p "$refineCopyOut") [get (j + 1)] false)
+    elabE ctx (.block p (.decl p packet none false call :: assignments ++ [get 0])) exp
+  | .app p (.ident _ "$refinementResume") [environments] false
+  | .app p (.ident _ "$refinementFilterResume") [environments] false => do
+    let ctx := match se with
+      | .app _ (.ident _ "$refinementFilterResume") _ _ =>
+        { ctx with forOutcomeSlot := none, forExitPacket := none }
+      | _ => ctx
+    let r ← elabE ctx environments none
+    let .arr (.struct base args) := r.ty | eerr p "internal: refinement ready values"
+    let known := ctx.types.requests.loops.findSome? (fun r => r.stagePlan.filter (·.base == base))
+    if known.isNone then
+      -- The plan requested by preparation belongs to the next ordinary
+      -- elaboration pass. Keep a typed placeholder in this disposable
+      -- pass instead of dispatching an as-yet undeclared method.
+      let pending := (← get).loopFirst.findSome? fun use =>
+        use.lift.toOption.bind fun request => request.stagePlan.filter (·.base == base)
+      let some plan := pending | eerr p "internal: missing refinement resume plan"
+      let σ := (plan.tparams.map (·.name)).zip (args.map Ty.toSTy)
+      let value ← resolveTy ctx.types p (plan.value.substNames σ)
+      return ⟨.prim .userErr [], .arr value⟩
+    let some plan := known | eerr p "internal: missing refinement resume plan"
+    elabE ctx (.app p (.ident p "$forResumeValues")
+      [environments, forStageCopyMetadata p (plan.copies.map (·.1)),
+       .block p (plan.borrowed.map (SExpr.ident p ·))] false) exp
   | .app p (.ident _ "$forPrepare") [.str _ [.text base], .decl _ _ (some view) _ _, .block _ copyIds, .block _ borrowIds, .ident _ flat, .block _ clauses, body] false => do
     let some plan := ctx.types.requests.loops.findSome? (fun l => l.stagePlan.filter (·.base == base))
       | eerr p "internal: missing for prepare plan"
@@ -164,14 +331,15 @@ partial def elabExprMarkersWith
     let env := source ++ "$env"
     let packet := source ++ "$packet"
     let c := { ctx with forStage := none, locals := { name := source, slot, ty := r.ty, mutable := false } :: ctx.locals }
-    let call := SExpr.app p (.member p (.ident p env) plan.method) [] false
+    let inputs := if plan.resumeInputs then copyNames.map (SExpr.ident p ·) else []
+    let call := SExpr.app p (.member p (.ident p env) plan.method) inputs false
     let body := if plan.copies.isEmpty then call else
       let get (j : Nat) := SExpr.app p (.ident p packet) [.int p (j : Int)] false
       SExpr.block p (.decl p packet none false call ::
         (copyNames.zipIdx.map fun (n, j) => .set p (.ident p n) none
           (.app p (.ident p "$refineCopyOut") [get (j + 1)] false)) ++ [get 0])
     let body := if plan.outcome then .app p (.ident p "$forOutcomeValues") [body] false else body
-    -- Preparation never executes a real generator: each successful prefix
+    -- Preparation never executes a real generator: each successful filterPrefix
     -- supplies exactly one environment. Dispatch directly, retaining the
     -- enclosing outcome target across this suspending call.
     let first := SExpr.app p (.ident p source) [.int p 0] true
@@ -365,6 +533,19 @@ partial def elabExprMarkersWith
     let rv ← elabE { c1 with canFail := ctx.canFail } (items.getLastD (.tuple p [])) exp
     return ⟨.seq code rv.e, rv.ty⟩
   | .app p (.ident _ "$first") [.block bp items] false =>
+    if !ctx.refinementTransportActive && hasRefinementClauses ctx items then
+      if let some expected := exp.filter (!·.hasNever) then
+        let saved ← get
+        if !saved.refiningHintProbe then
+          return ← tryCatch (elabE { ctx with refinementTransportActive := true } se exp) fun original => do
+            if !refinementRecoveryError original then throw original
+            set saved
+            let request := SExpr.app p (.ident p "$refinementFirst")
+              [.decl p "$valueType" (some expected.toSTy) false (.tuple p []),
+               .block bp items.dropLast, items.getLastD (.tuple p [])] false
+            tryCatch (elabE { ctx with refinementTransportActive := true } request exp) fun _ => do
+              set saved
+              throw original
     -- `first{…}` and `first(…){…}`: without a choice, a block
     if !Choice.hasChoice items.dropLast (choiceOrder ctx) then return ← elabE ctx (.block bp items) exp
     -- with one (#208): the first success of the clauses, then the value (or
@@ -388,11 +569,11 @@ partial def elabExprMarkersWith
         if let some (lo, hi, _) := Choice.firstRangeBounds? source then
           let casts := Refine.castsIn ctx.types.classes.contains clause
           if !casts.isEmpty then
-            let prefix? ← tryCatch (do
+            let filterPrefix? ← tryCatch (do
               let (_, before) ← elabOneClauses { ctx with canFail := true, typeOnly := true } (clauses.take k)
               pure (some (before, ← get))) (fun _ => pure none)
             set saved
-            if let some (before, prefixState) := prefix? then
+            if let some (before, prefixState) := filterPrefix? then
               for bound in [lo, hi] do
                 set prefixState
                 let refusal? ← tryCatch (do

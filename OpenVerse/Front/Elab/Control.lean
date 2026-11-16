@@ -678,6 +678,30 @@ def refinedIfTypeWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
   let some cast ← refinedCastWith elabE ctx p D T x body | return none
   some <$> cast.ifTyAt ee
 
+/-- Disposable inference under the actual ordered cast worlds. Only a
+    caller-visible result type leaves this probe; neither code, effects,
+    helpers nor opened type parameters are transported from it. -/
+partial def refinementPrefixTypeWith
+    (elabE : Ctx → SExpr → Option Ty → EM R)
+    (elabClauses : Ctx → List SExpr → EM (R × Ctx))
+    (ctx : Ctx) (clauses : List SExpr) (body : SExpr) : EM Ty := do
+  let c := { ctx with
+    canFail := true, inTaking := true, typeOnly := true
+    refinementTransportActive := true }
+  match clauses with
+  | [] => return (← elabE c (Refine.exitsAsErr body) none).ty
+  | clause :: rest =>
+    if let some (_, name, target, object) := Refine.castClause? clause then
+      if let some cast ← refinedCastWith elabE c clause.pos name target object
+          (.block body.pos (rest ++ [body])) then
+        let ty ← refinementPrefixTypeWith elabE elabClauses (cast.refined (← fresh cast.dTy)) rest body
+        let ty := cast.branchTyOf ty
+        if cast.opened.any (fun (name, _, _) => ty.params.contains name) then
+          eerr clause.pos "an opened type cannot escape its refinement"
+        return ty
+    let (_, next) ← elabClauses c [clause]
+    refinementPrefixTypeWith elabE elabClauses next rest body
+
 /-- `if (D := T[X]) then Body else Else`, where the cast holds only under a
     refinement of the code's type parameters (#243). `Body` is lifted into
     a generic function (`Refine.functions`), asked for in a first
@@ -918,7 +942,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       pos := p, bound := D, target := if chain then "" else T, tag, continuationScope := ctx.refineScope,
       name := liftName,
       params := { name := D, ty := dTy.toSTy } ::
-        (caps.zip sig).map (fun (binding, (name, ty)) => { name, ty := ty.toSTy, typeValue := binding.typeValue }) ++
+        (caps.zip sig).map (fun (binding, (name, ty)) => { name, ty := ty.toSTy, typeValue := binding.typeValue, metadataForward := binding.mutable }) ++
         extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n, typeValue := true },
       tparams := tps.map fun (n, c) => { pos := p, name := n, constraint := if c then "comparable" else "type" },
       specs, ret := ret.toSTy, branchTy := if retOfBranch then some τ'.toSTy else none, subst := σ, opened := if chain then [] else opened.map fun (n, v, _) => (n, v), waits := thenWaits, sourceSuspends,

@@ -1,0 +1,4 @@
+try 
+3 4 now 99
+rollback 99
+exit=0

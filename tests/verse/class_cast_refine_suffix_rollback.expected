@@ -1,0 +1,53 @@
+zero
+rows 0
+state 3
+one
+prefix
+rows 1
+state 99
+some
+prefix
+rows 2
+state 99
+body-failure
+failure
+state 3
+array-valued-body
+prefix
+rows 2
+state 99
+first-2
+failure
+state 3
+first-0
+prefix
+value 3 7
+state 99
+option-2
+failure
+state 3
+option-0
+prefix
+value 3 7
+state 99
+return-empty-value
+prefix
+body
+rows 0
+state 99
+cleanup-2
+rows 0
+state 3
+cleanup-0
+prefix
+cleanup
+rows 2
+state 99
+copyout-2
+rows 0 count 0
+state 3
+copyout-0
+prefix
+rows 2 count 2
+state 99
+exit=0
