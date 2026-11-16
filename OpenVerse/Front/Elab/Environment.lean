@@ -32,7 +32,7 @@ def typeEnvironment (classes : Classes) (fields : Fields) (methods : Methods) (s
                              if i.isIface || i.isAbstract then m else
                              (classes.henv.supers d).foldl (fun m T => m.insert T ((m[T]?.getD []) ++ [d])) m) {},
                            abstracts := methods.abstracts.toList, requests, signalNoRollback, familySites := source.familySites, familyStubs := methods.stubs.map (·.1),
-                           overloadSites := source.overloadSites, copiedOverloadFns := source.copiedOverloadFns, copiedOverloadClashes := source.copiedOverloadClashes, nestedSites := source.nestedSites,
+                           overloadSites := source.overloadSites, copiedOverloadFns := source.copiedOverloadFns, copiedOverloadClashes := source.copiedOverloadClashes, copiedMethods := source.copiedMethods, nestedSites := source.nestedSites,
                            fieldSites := source.fieldSites }
   env := { env with varFields := varFields, uniques := uniques,
                     overriders := (methods.overridePairs.toList.map fun (_, dm, _) => (dm.splitOn ".").headD "") ++

@@ -2002,8 +2002,11 @@ Main():void =
   then again), and then its family as above; bare, through `Self` or
   `(super:)` too. So one list may have several values and another one.
   Lists are a class hierarchy's, so a call compiled for receivers of
-  unrelated classes takes each one's list; one compiled for alternatives
-  whose arguments' types pick two method lists of one class is still refused.
+  unrelated classes takes each one's list. Calls in copied alternatives may
+  select different parameter lists of one class too, including its overrides
+  and generic class or method parameters. Each typed copy still requires one
+  determined list. Receivers, supplied arguments and omitted defaults retain
+  their ordinary evaluation order.
   A class below two roots of `M` (one
   listing two interfaces that both declare it) is refused when one of the
   families has several values. Such a
