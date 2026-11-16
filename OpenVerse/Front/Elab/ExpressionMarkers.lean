@@ -168,12 +168,19 @@ partial def elabExprMarkersWith
       [.decl p ready none false prepare,
        .decl p values none false resume,
        .app p (.ident p values) [.int p 0] true]) exp
-  | .app p (.ident _ "$refinementBody") [.str _ [.text base], body] false => do
+  | .app p (.ident _ "$refinementBody") arguments false => do
+    let (base, annotation, body) ← match arguments with
+      | [.str _ [.text base], body] => pure (base, none, body)
+      | [.str _ [.text base], .decl _ _ (some annotation) _ _, body] => pure (base, some annotation, body)
+      | _ => eerr p "internal: invalid refinement body marker"
     let some plan := ctx.types.requests.loops.findSome? (fun request => request.stagePlan.filter (·.base == base))
       | eerr p "internal: missing refinement consumer scope"
     let some source := plan.resumeContext | eerr p "internal: missing source consumer scope"
     let canFail := plan.resumeCanFail.getD ctx.canFail
-    let result ← elabE { ctx with canFail, inRepeat := source.inRepeat, inChoice := source.inChoice } body exp
+    let expected ← match exp, annotation with
+      | none, some supplied => some <$> resolveTy ctx.types p supplied
+      | _, _ => pure exp
+    let result ← elabE { ctx with canFail, inRepeat := source.inRepeat, inChoice := source.inChoice } body expected
     if plan.resumeCanFail.isSome then
       let escapes := (FailCapture.admissionBody result.e).mayFail ctx.sigProg
       if !canFail && escapes then

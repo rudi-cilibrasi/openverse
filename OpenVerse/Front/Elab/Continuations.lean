@@ -1289,7 +1289,10 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
   -- The private producer loop must not impose its lexical restrictions
   -- on a source if/first consumer, or lose a real source for-body ban.
   let body := if plan.resumeContext.isSome then
-      let mark (code : SExpr) := SExpr.app p (.ident p "$refinementBody") [.str p [.text plan.base], code] false
+      let mark (code : SExpr) :=
+        let hint := if plan.resumeCanFail.isSome then
+          [SExpr.decl p "$element" (some (plan.value.substNames σ)) false (.tuple p [])] else []
+        SExpr.app p (.ident p "$refinementBody") ([.str p [.text plan.base]] ++ hint ++ [code]) false
       match body with
       | .app q f@(.ident _ name) [metadata, mode, code] false =>
         if name == "$forReturns" || name == "$forReturnBody" then
