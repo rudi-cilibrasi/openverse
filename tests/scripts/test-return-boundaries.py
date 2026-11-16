@@ -41,8 +41,8 @@ with tempfile.TemporaryDirectory(prefix='openverse-return-boundaries-') as tmp:
             result = run([CV, bytecode])
             assert result.returncode == 0 and result.stdout == expected and not result.stderr, (source, profile, result)
     metadata = tmp / 'metadata'
-    # This compiler-API probe runs inside Lean, whose imported-module mappings
-    # exceed the native compiler's address-space budget before the test runs.
+    # Run compiler-API admission inside Lean, as the other API contracts do.
+    # Native compilation and bytecode execution retain their 15s/4GiB limits.
     result = subprocess.run(['lake', 'env', 'lean', '-j2', '--run',
                              str(ROOT / 'tests/lean/ReturnBoundaries.lean'), str(metadata)],
                             capture_output=True, text=True, timeout=60)
