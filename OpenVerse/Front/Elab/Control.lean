@@ -830,7 +830,11 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   let elseAt (alone : Except String R) (τ : Ty) : EM Expr := match alone with
     | .ok re => tryCatch (coerce p re τ) fun err => do coerce p (← elseAgainst τ err) τ
     | .error err => do coerce p (← elseAgainst τ err) τ
-  let tag := refineTagOf ctx x written elseE exp
+  -- Generated cast branches can retain different packets at the same
+  -- source cast during ordered replay. Their helpers must agree with
+  -- the exact branch and expected result that requested them.
+  let generated := if made then s!"$generated{(reprStr (x, written, elseE, exp)).hash}" else ""
+  let tag := refineTagOf ctx x written elseE exp ++ generated
   let key := Refine.keyOf p D tag
   let liftName := s!"$refine{p.line}_{p.col}_{D}" ++ (if p.file.isEmpty then "" else s!"_{p.file}") ++ tag
   -- Keep a suspending lift's available parameters in a stable order from
