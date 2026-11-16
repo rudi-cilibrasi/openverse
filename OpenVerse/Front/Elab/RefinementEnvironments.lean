@@ -33,8 +33,14 @@ def refinementRecoveryError (message : String) : Bool :=
     opaque Ready view; copy-outs are discharged by its elaborator before
     the consumer can run. -/
 def refinementPrepareMarker (ctx : Ctx) (p : Pos) (value : Ty) (outcome rollback : Bool)
-    (filterPrefix suffix : List SExpr) (body : SExpr) (forBody : Bool := false) : SExpr :=
-  let flags : Nat := (if forBody || ctx.inRepeat then 1 else 0) + (if ctx.inChoice then 2 else 0)
+    (filterPrefix suffix : List SExpr) (body : SExpr) (forBody : Bool := false)
+    (originalFor : Bool := false) : SExpr :=
+  let canFail := match body with
+    | .app _ (.ident _ name) [_, .ident _ mode, _] false =>
+      if name == "$forReturns" || name == "$forReturnBody" then mode == "true" else ctx.canFail
+    | _ => ctx.canFail
+  let flags : Nat := (if forBody || ctx.inRepeat then 1 else 0) + (if ctx.inChoice then 2 else 0) +
+    (if originalFor then 4 else 0) + (if canFail then 8 else 0)
   .app p (.ident p "$refinementPrepare")
     [.decl p "$refinementValue" (some value.toSTy) false (.tuple p []),
      .ident p (if outcome then "true" else "false"),

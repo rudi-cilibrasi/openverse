@@ -246,34 +246,76 @@ partial def elabExprControlWith
         (Refine.castClause? clause).any (fun (_, _, target, _) => ctx.types.classes.contains target) ||
         (refinementConditionalBinding? ctx clause).isSome) then
       let initial ← get
-      let transportExpected ← match exp with
-        | some ty => pure (some ty)
-        | none => do
-          if initial.refiningHintProbe then pure none else
-            -- Infer a caller-world candidate from the ordinary fallback.
-            -- The selected worlds are subsequently checked at that type;
-            -- this probe keeps neither effects nor elaboration state.
-            let ordinaryClauses := clauses.map fun clause =>
-              match refinementConditionalBinding? ctx clause with
-              | some (name, annotation, conditional) =>
-                match (Choice.arms conditional).getLast? with
-                | some (none, fallback) => .decl clause.pos name annotation false fallback
-                | _ => clause
-              | none => clause
-            set { initial with refiningHintProbe := true }
-            let candidate ← tryCatch
-              (some <$> elabE { ctx with typeOnly := true, refinementTransportActive := true }
-                (.forE p ordinaryClauses body) none)
-              (fun _ => pure none)
-            set initial
-            pure (candidate.map (·.ty))
-      if let some (.arr value) := transportExpected then
+      if exp.isNone && !initial.refiningHintProbe &&
+          clauses.any (fun clause => (refinementConditionalBinding? ctx clause).isSome) then
+        -- Preserve ordinary inference, including its joins. Only a refused
+        -- selected world needs a caller-world candidate from the fallback.
+        return ← tryCatch (do
+          let ordinary ← elabE { ctx with refinementTransportActive := true } se none
+          let after ← get
+          let deferred := after.pendingWaitingCasts > initial.pendingWaitingCasts ||
+            !(after.needs.without initial.needs).casts.isEmpty ||
+            (after.loopFirst.drop initial.loopFirst.length).any (fun use =>
+              use.lift.toOption.any (fun helper => helper.name.startsWith "$contf"))
+          let sourceRet ← tryCatch (some <$> resolveTy ctx.types p (firstReturnType ctx)) (fun _ => pure none)
+          set after
+          let returning := sourceRet.any (fun ty => !ty.params.isEmpty) &&
+            (Refine.findPart (fun | .ret .. => true | _ => false) false body).isSome
+          if !deferred || (ordinary.ty.params.isEmpty && !returning) then return ordinary
+          let mut needsWorld := false
+          set { after with refiningHintProbe := true }
+          for clause in clauses do
+            if let some (_, _, conditional) := refinementConditionalBinding? ctx clause then
+              let openResult ← tryCatch (do
+                let some (none, fallback) := (Choice.arms conditional).getLast? | pure true
+                let result ← elabE { ctx with typeOnly := true } fallback none
+                pure (!result.ty.params.isEmpty)) (fun _ => pure true)
+              needsWorld := needsWorld || openResult
+          set initial
+          -- Its ordinary join is authoritative; never replace it with the
+          -- fallback's narrower type during a deferred-world retry.
+          let named ← tryCatch (some <$> resolveTy ctx.types p ordinary.ty.toSTy) (fun _ => pure none)
+          set initial
+          let some (.arr value) := named | do set after; return ordinary
+          if !needsWorld || (value.hasNever && !(value == .never && returning)) then do
+            set after
+            return ordinary
+          tryCatch (elabE { ctx with
+            refinementTransportActive := true, refinementTransportValue := some value,
+            asWritten := true } se none) (fun _ => do set after; pure ordinary)) fun original => do
+          if !refinementRecoveryError original then throw original
+          let failed ← get
+          set { initial with refiningHintProbe := true }
+          let ordinaryClauses := clauses.map fun clause =>
+            match refinementConditionalBinding? ctx clause with
+            | some (name, annotation, conditional) =>
+              match (Choice.arms conditional).getLast? with
+              | some (none, fallback) => .decl clause.pos name annotation false fallback
+              | _ => clause
+            | none => clause
+          let candidate ← tryCatch (do
+            let result ← elabE { ctx with typeOnly := true, refinementTransportActive := true }
+              (.forE p ordinaryClauses body) none
+            -- The saved caller environment must name the candidate: no
+            -- nominal type or default placeholder created by the probe.
+            let named ← resolveTy ctx.types p result.ty.toSTy
+            pure (some named)) (fun _ => pure none)
+          set initial
+          let some (.arr value) := candidate | do set failed; throw original
+          -- A return-only collector retains its actual bottom element.
+          -- This supplies no invented type for a bottom-only initializer.
+          let returnOnly := value == .never &&
+            (Refine.findPart (fun | .ret .. => true | _ => false) false body).isSome
+          if value.hasNever && !returnOnly then do set failed; throw original
+          tryCatch (elabE { ctx with
+            refinementTransportActive := true, refinementTransportValue := some value, asWritten := true } se none) fun _ => do
+              set failed
+              throw original
+      if let some (.arr value) := exp then
         let saved ← get
-        -- A source return may leave the collector with no normal values.
-        -- Retain that bottom element; never invent a source initializer type.
-        let returnOnly := value == .never &&
-          (Refine.findPart (fun | .ret .. => true | _ => false) false body).isSome
-        if (!value.hasNever || returnOnly) && !saved.refiningHintProbe then
+        -- A supplied contextual type, including bottom components, is
+        -- checked directly; the separate inference probe invents no type.
+        if !saved.refiningHintProbe then
           return ← tryCatch (do
             let ordinary ← elabE { ctx with refinementTransportActive := true } se exp
             -- A producer can defer its suffix before the generated helper
@@ -283,7 +325,8 @@ partial def elabExprControlWith
             let deferredSuffix := (ordinaryState.loopFirst.drop saved.loopFirst.length).any fun use =>
               use.lift.toOption.any (fun helper => helper.name.startsWith "$contf")
             let mut needsWorld := false
-            if deferredSuffix then
+            if deferredSuffix || ordinaryState.pendingWaitingCasts > saved.pendingWaitingCasts ||
+                !(ordinaryState.needs.without saved.needs).casts.isEmpty then
               -- A closed conditional value carries no caller-world index
               -- across its branch. Keep its successful ordinary lowering.
               set { ordinaryState with refiningHintProbe := true }
@@ -295,7 +338,7 @@ partial def elabExprControlWith
                     pure (!result.ty.params.isEmpty)) (fun _ => pure true)
                   needsWorld := needsWorld || openResult
               set ordinaryState
-            if (ordinaryState.pendingWaitingCasts > saved.pendingWaitingCasts || needsWorld) &&
+            if needsWorld &&
                 clauses.any (fun clause => (refinementConditionalBinding? ctx clause).isSome) then
               set saved
               tryCatch (elabE { ctx with
@@ -406,7 +449,12 @@ partial def elabExprControlWith
     -- Other waiting consumers retain their original source-return lowering.
     let st0 ← get
     if let some (r, waits) ← tryCatch (some <$> withExits) (fun _ => pure none) then
-      if !waits then return r
+      -- Explicit conditional transport owns a staged outcome protocol,
+      -- including a waiting consumer. The legacy raw-body fallback would
+      -- drop its source return cell and mistake the helper's result type
+      -- for the source function's result.
+      if !waits || (ctx.refinementTransportValue.isSome &&
+          clauses.any (fun clause => (refinementConditionalBinding? ctx clause).isSome)) then return r
     set st0
     elabFor ctx p clauses body
   -- (the parser makes generators in for clauses, and in first's, which
@@ -460,6 +508,10 @@ partial def elabExprControlWith
       let value ← match e? with
         | some e => do
           let r ← elabE ctx e (some ty)
+          -- A direct `do return` has no enclosing source statement to
+          -- check the operand before it becomes an abort packet.
+          if !ctx.canFail && (FailCapture.admissionBody r.e).mayFail ctx.sigProg then
+            eerr e.pos "this expression can fail, but it is not in a failure context"
           warnVoidReturn p ty r.ty
           coerce p r ty
         | none =>

@@ -1,0 +1,12 @@
+prefix
+leave
+source
+3 7
+leave
+source
+int 5
+leave
+source
+string ok
+final 99
+exit=0

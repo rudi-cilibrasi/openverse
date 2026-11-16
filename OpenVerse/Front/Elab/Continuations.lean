@@ -1332,7 +1332,10 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
   let copies := copyValues.map fun e => rename (Refine.substTypes σ e)
   let vals := s!"{name}$values"
   let failed : SExpr := if copies.isEmpty then .ident p "false" else .tuple p (.ident p "false" :: copies)
-  let run := if plan.resumeOriginalFor then SExpr.forE p clauses body else if plan.outcome then
+  let run := if plan.resumeOriginalFor then
+      if plan.outcome then SExpr.app p (.ident p "$forCollectOutcome") [.block p clauses, body, failed] false
+      else SExpr.forE p clauses body
+    else if plan.outcome then
       SExpr.app p (.ident p "$forFirstOutcome") [.block p clauses, body, failed] false
     else SExpr.app p (.ident p "$forFirst") [.block p clauses, body] false
   -- A resumed owner already knows the caller-nameable element type. Keep
@@ -1343,6 +1346,8 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
     SExpr.app p (.ident p "$refinementContinue")
       [.decl p "$value" (some (plan.value.substNames σ)) false (.tuple p []), run] false
     else run
+  let run := if plan.resumeCanFail.isSome then
+    SExpr.app p (.ident p "$refinementConsumer") [.str p [.text plan.base], run] false else run
   let run := forClauseExitScope body run
   let run := if ctx.forStageFlat then SExpr.app p (.ident p "$forStageFlatten") [run] false else run
   let code := if copies.isEmpty then run else .block p
