@@ -2262,7 +2262,7 @@ partial def elimLinearReturns (fresh : Nat → String) (ret : STy) (outcome : Bo
       let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer
       return (s :: tail, next)
 
-/-- Consecutive statements without escaping bindings or defer registrations
+/-- Consecutive statements without escaping bindings or nested cleanup
     can share balanced block scopes. This keeps a large return prefix from
     becoming a linear-depth nest of collection loops after choice lowering. -/
 private partial def balanceReturnRun (ss : List SExpr) : List SExpr :=
@@ -2274,7 +2274,7 @@ private partial def balanceReturnRun (ss : List SExpr) : List SExpr :=
    .block (right.head?.map (·.pos) |>.getD default) right]
 
 private partial def balanceReturnSequence (ss : List SExpr) : List SExpr :=
-  let run := ss.takeWhile fun s => (boundIn [s]).isEmpty && !isDefer s &&
+  let run := ss.takeWhile fun s => (boundIn [s]).isEmpty && !anyE isDefer s &&
     match s with
     | .app _ (.ident _ name) _ _ => !name.startsWith "$"
     | _ => true
