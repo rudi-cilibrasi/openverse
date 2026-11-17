@@ -2163,7 +2163,9 @@ Main():void =
 
   Exactly one arm is a direct scalar return; the normal arm contains no
   return. Its conditions use ordinary numeric/logic expressions, comparisons
-  or queries, without calls, casts or local bindings. The normal value block
+  or queries, without explicit calls, casts or local bindings. Member getters
+  retain their effects and rollback, and the condition is evaluated once. The
+  normal value block
   keeps its cleanup scope: its cleanup finishes before the binding's following
   statements, which run for each normal value. Enclosing function cleanup
   still runs per produced value. Only that normal arm reaches the binding and
