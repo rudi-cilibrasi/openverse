@@ -54,7 +54,7 @@ Verdicts:
 | `=` between different types, `false` as a map, `X?` of a logic, `true` as a type | #600's | ch. 2 and ch. 4, as the rows quote | as the rows quote | #600's (equality and the empty value), not changed here; `false` as a map is on the owner's page already |
 | Ordering of rationals | exact; an int compares with a rational | `04_operators.md:318-321` and the API declare `<` … for `int` and `float` only | none order rationals (`CompareRational.versetest` 5, 11 test `=`) | **Book silent** (the Book declares no ordering of rationals; no test refuses one): keep |
 | Order of a choice's values | spatial | no choice `\|` in the chapters; `07_control.md:711-716`: nested generators give the cartesian product, leftmost outermost | `Operators/BinaryOps.versetest:3`: `a\|b` is a syntax error (3101, the code of syntax not yet supported) | **Book silent**: choice is an openverse feature from the Verse Calculus; keep |
-| Code before a choice | runs once; alternatives rolled back in `if`/`first{}`; in a `for` only an alternative's own clauses | `08_failure.md:147`: "changes … are provisional—they only become permanent if the entire context succeeds"; `07_control.md:196-198` | none with a choice; for a `for` without one see [what a `for` undoes](#what-a-for-undoes) | **Book silent** on choice; the `for` part follows the rollback reading below: a choice is one more choice point of the `for`'s search, so in a `for` too an alternative none of whose values reaches the body is undone (built for choices of values; a `for` with a composed or exclusive choice or a call of a function with several values keeps the old rule for now) |
+| Code before a choice | runs once; alternatives rolled back in `if`/`first{}`; in a `for` only an alternative's own clauses | `08_failure.md:147`: "changes … are provisional—they only become permanent if the entire context succeeds"; `07_control.md:196-198` | none with a choice; for a `for` without one see [what a `for` undoes](#what-a-for-undoes) | **Book silent** on choice; the `for` part follows the rollback reading below: a choice is one more choice point of the `for`'s search, so in a `for` too an alternative none of whose values reaches the body is undone (implemented for flat prepared clauses, including inlined and computed producers. Composed or exclusive choices and retained producer boundaries still use the older lowering.) |
 | A choice in an operand of `and` or `or` | `A`'s clauses then `B`'s; `if (T := A) then T else B` | `08_failure.md:216-218`: `or` "tries each option in order, stopping at the first success" | none with a choice | **Book silent** |
 | The three rows on functions with several values (#283) | as the rows say | silent (`yield` is not supported, `Yield.versetest:4-7`) | none | **Book silent** |
 | Precedence of `\|` | below `+`, above comparisons | the precedence table (`04_operators.md:44-55`) has no `\|` | `BinaryOps.versetest:3` refuses `a\|b`; the commented-out `TimSyntax.versetest:280` puts `\|` below `:=` | **Book silent** |
@@ -338,20 +338,18 @@ of a field or of a variable of the code around, or a `var` of the clauses,
 no call), the nested `forE`s are that search, and stay: those `for`s keep
 their bytes.
 
-**What follows the rule now, and what does not yet.** The lowering above
-serves every `for` whose generators are over ranges, arrays, maps and
-strings and choices of values (#208's `altE`, a parenthesized choice spliced
-in, a choice in an expression lifted to one), with no call of a function
-with several values anywhere in its clauses and no exclusive choice: two of
-the six lowerings (the nested `forE`s and #208's choice), and all the
-Book's own `for`s. A `for` with anything else keeps, entirely, the old rule
-(what a generator's clauses did stays once they succeed): one with a call
-of a function with several values (inlined, #235; computed at the call,
-#235; taken lazily, #246, `elabLoopGen`), a choice whose alternatives have
-values or clauses of their own (#283, `$contf`, #335), an exclusive choice
-(#314, #331), a refining cast (#243) or a waiting consumer (#417's staging,
-which only those lowerings use). What stands in the way of each, and the
-design that would bring it under the rule:
+**Current lowering.** The resumable search serves flat prepared clauses
+over ranges, arrays, maps, strings, and choices of values. This includes all
+of the pinned Book's `for` cases and flat producers inlined into their
+headers (#709). An eager producer computed as an array contributes an
+array level. Its arguments and call run within the search's rollback
+checkpoints. A producer retained in a nested failure context keeps that
+boundary.
+
+The older lowering applies when clauses retain a lazy producer (#246),
+a composed choice (#283, #335), an exclusive choice (#314, #331), or a
+continuation for a refining cast or a waiting consumer (#243, #417).
+Each form needs its own resumable search state.
 
 - *Composed and exclusive choices* (#283, #314): their alternatives or
   paths have levels of their own, so the levels are a tree, not a list: a
@@ -364,15 +362,11 @@ design that would bring it under the rule:
   the choice must be copied, or their levels' slots kept in an object the
   continuation is given. The heterogeneous copies (#335, a binding of a
   different type per alternative) are subtrees with bodies of their own.
-- *Calls of functions with several values*: an inlined one becomes the
-  clauses and choices above, so it follows with them; one computed at the
-  call is an array level (its arguments' effects are a step), so it could
-  follow now but for the classification that keeps one rule per `for`; a
-  lazily taken one (#246) is a tree of unbounded depth, so its alternatives'
-  nested transactions need recursion: a function of its own per search step
-  (as the first-success contexts already compile one, `Choice.FirstLift`)
-  that descends again to the deepest choice point each step, from a stack
-  of the alternatives taken, without running again the code above it.
+- *Lazy producers* (#246) can produce a tree of unbounded depth. Their
+  nested transactions need a recursive search step, similar to
+  `Choice.FirstLift` for first-success contexts. Each step resumes the
+  deepest choice point from the stack of already selected alternatives.
+  This preserves earlier effects without reevaluating the code above it.
 - *Waiting consumers* (#417): under the rule the body runs between steps,
   outside the search, so a waiting body needs no staging once its `for` is
   lowered as above; the staged prefix and environment (`$forStage`,

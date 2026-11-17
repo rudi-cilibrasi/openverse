@@ -41,21 +41,27 @@ import sys
 # values: none has a choice of its own, a parenthesized choice spliced in),
 # composed (one whose alternatives have choices of their own), exclusive (an
 # `if` picking a branch with choices, an `or` with a choice on its right),
-# call (a call of a function with several values anywhere in the clauses).
-FOR_BOOK = set(os.environ.get('OV_FOR_BOOK', 'plain,choice').split(',')) - {''}
+# inlined-call (a flat inlined producer) and call (a producer that retains
+# its own lowering). The call flag also enables inlined-call.
+FOR_BOOK = set(os.environ.get('OV_FOR_BOOK', 'plain,choice,inlined-call').split(',')) - {''}
+if 'call' in FOR_BOOK:
+    FOR_BOOK.add('inlined-call')
 
 
-def has_call(x):
-    """a call of a function with several values: an inlined one's alternatives
-    ('pv'), or a call of one ('mcall', 'rcall')"""
-    if isinstance(x, tuple) and x and x[0] in ('pv', 'mcall', 'rcall'):
-        return True
-    return isinstance(x, (tuple, list)) and any(has_call(y) for y in x)
+def call_kinds(x, inline=True):
+    if not isinstance(x, (tuple, list)):
+        return set()
+    kind = x[0] if isinstance(x, tuple) and x else None
+    if kind == 'rcall':
+        return {'call'}
+    if kind in ('pv', 'mcall'):
+        return {'inlined-call' if inline else 'call'}
+    return set().union(*(call_kinds(y, inline and kind != 'not') for y in x))
 
 
 def clause_kinds(c):
     k = c[0]
-    kinds = {'call'} if has_call(c) else set()
+    kinds = call_kinds(c)
     if k == 'range':
         kinds.add('plain')
     elif k in ('choice', 'setchoice'):

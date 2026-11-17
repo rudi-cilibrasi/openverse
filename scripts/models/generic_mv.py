@@ -539,6 +539,18 @@ d{n}({child_tps}) := class({parent}):{extra_field}
             return ins
         return pre + [("dyn", rest)]
 
+    def for_kinds(self):
+        """Kinds of generators left by the source shape of this producer."""
+        if self.path == 'eager':
+            return {'plain'}
+        if self.kind == 'INest':
+            return self.helper.for_kinds() | {'choice'}
+        if self.kind in ('I2', 'I3', 'IArr', 'IFx', 'IFx2', 'I2i',
+                         'IW', 'IWArr', 'IWOpt', 'IWPair'):
+            return {'choice'}
+        # A selected branch or a lazy call retains its own boundary.
+        return {'call'}
+
     def call(self, args):
         if getattr(self, "named", False):
             args = [args[0]] + ([] if args[1] is None else ["?Y := " + args[1]])
@@ -700,8 +712,9 @@ d{n}({child_tps}) := class({parent}):{extra_field}
 # undoes"): `OV_FOR_BOOK`, a comma-separated list of the kinds of choice point
 # whose fors follow the Book of Verse's rule (`all`: every for), by default the
 # kinds the compiler gives that rule; a for that reaches another kind keeps the
-# old one. Every for of this model takes the values of calls of functions with
-# several values (kind `call`). By that rule a
+# old one. Flat inlined calls contribute choices, computed producers
+# contribute arrays, and retained producer boundaries contribute `call`.
+# Under the search rule a
 # for's clauses are one search, as a first-success context's are, that goes on
 # after each success: reaching the body commits, and an alternative whose
 # clauses lead to no body is undone as a whole (FlowControl/for.versetest
@@ -931,10 +944,12 @@ class Gen:
         lines = []
         if form == "for":
             lines.append("for (%s := %s) { Print(%s) }" % (V, call, ty.show(V)))
-            m.forall(p.top(vals, V), lambda e: m.out.append(ty.mshow(e[V])))
+            m.forall(p.top(vals, V), lambda e: m.out.append(ty.mshow(e[V])),
+                     kinds=p.for_kinds())
         elif form == "forf":
             lines.append("for (%s := %s, %s) { Print(%s) }" % (V, call, pr, ty.show(V)))
-            m.forall(p.top(vals, V) + [("test", prm)], lambda e: m.out.append(ty.mshow(e[V])))
+            m.forall(p.top(vals, V) + [("test", prm)], lambda e: m.out.append(ty.mshow(e[V])),
+                     kinds=p.for_kinds())
         elif form == "for2":
             q = R.choice(self.prods)
             ty2 = self.pick_ty(q)
@@ -951,7 +966,8 @@ class Gen:
                 lines.append("for (%s := %s, %s := %s) { Print(%s); Print(%s) }" %
                              (V, call, W, q.call(args2), ty.show(V), ty2.show(W)))
                 seq = p.top(vals, V) + q.top(vals2, W)
-            m.forall(seq, lambda e: (m.out.append(ty.mshow(e[V])), m.out.append(ty2.mshow(e[W]))))
+            m.forall(seq, lambda e: (m.out.append(ty.mshow(e[V])), m.out.append(ty2.mshow(e[W]))),
+                     kinds=p.for_kinds() | q.for_kinds())
         elif form in ("if", "ifp"):
             usepred = R.random() < 0.7
             extra = ""
@@ -1000,7 +1016,7 @@ class Gen:
             lines.append("Print(\"n {%s.Length}\")" % Rn)
             lines.append("for (%s : %s) { Print(%s) }" % (S, Rn, S))
             got = []
-            m.forall(seq, lambda e: got.append(ty.mshow(e[V])))
+            m.forall(seq, lambda e: got.append(ty.mshow(e[V])), kinds=p.for_kinds())
             m.out.append("n %d" % len(got)); m.out.extend(got)
         elif form in ("gfor", "gif", "gopt", "gmv"):
             if form != "gmv":
@@ -1018,7 +1034,7 @@ class Gen:
                 lines.append("for (%s : %s) { Print(%s) }" % (V, Rn, ty.show(V)))
                 got = []
                 m.out.extend(tells)
-                m.forall(p.top(vals, "Zc"), lambda e: got.append(e["Zc"]))
+                m.forall(p.top(vals, "Zc"), lambda e: got.append(e["Zc"]), kinds=p.for_kinds())
                 m.out.extend(ty.mshow(x) for x in got)
             elif form == "gif":
                 s, d = ty.value()
@@ -1052,7 +1068,8 @@ class Gen:
                 gcall = ("%s[%s]" if p.decides else "%s(%s)") % (G, ", ".join(args))
                 if R.random() < 0.5:
                     lines.append("for (%s := %s, %s) { Print(%s) }" % (V, gcall, pr, ty.show(V)))
-                    m.forall(p.top(vals, V) + [("test", prm)], lambda e: m.out.append(ty.mshow(e[V])))
+                    m.forall(p.top(vals, V) + [("test", prm)], lambda e: m.out.append(ty.mshow(e[V])),
+                             kinds=p.for_kinds())
                 else:
                     lines.append("if (%s := %s, %s) then Print(%s) else Print(\"none\")" % (V, gcall, pr, ty.show(V)))
                     e = m.first(p.top(vals, V) + [("test", prm)])
