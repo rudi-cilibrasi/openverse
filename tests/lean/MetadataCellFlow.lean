@@ -2,6 +2,9 @@
    logical cells. These test metadata classifications; source/runtime equivalence
    has separate controls. Internal tags here stand for compiler annotations. -/
 import OpenVerse.Front.MetadataFlow
+import OpenVerse.Core.Check
+import OpenVerse.Core.Control
+import OpenVerse.Core.TypeCheck
 
 open OpenVerse OpenVerse.Front
 
@@ -562,9 +565,260 @@ def main : IO Unit := do
     if actual != !metadata then throw <| IO.userError "hidden metadata from background worker"
 end BackgroundMetadata
 
-end MetadataCellFlow
+namespace ArrayPrimitives
+private def cell (slot : Nat) : Expr := .heap (.new 0) [.local slot]
+private def array (es : List Expr) : Expr := .prim .mkArr es
+private def build (kind : String) (slot : Nat) : Expr :=
+ let a := cell slot
+ let b := cell slot
+ if kind == "concat" then .prim .concat [array [a],array [b]]
+ else if kind == "flatten" then .prim .flatten [array [array [a],array [b]]]
+ else .prim .arrSet [array [a,b],.lit (.int 1),cell slot]
+def main : IO Unit := do
+ let mut bad := 0
+ for kind in ["concat","flatten","arrSet"] do
+  for index in [0,1,2] do
+   let ix := if index == 2 then Expr.local 2 else .lit (.int (Int.ofNat index))
+   let fns : Array Fn := #[
+    { name := "Execute", arity := 1, nslots := 1, decides := false, body := .lit .void },
+    { name := "Caller", arity := 3, nslots := 4, decides := false,
+      body := .seq (.assign 3 (build kind 1))
+       (.call 0 [.heap (.get 0) [.prim .index [.local 3,ix]]]) }]
+   for metadata in [false,true] do
+    let infos : Array MetadataFlow.Info := fns.mapIdx fun i fn => {
+      body := some fn.body
+      cellTag := some 0
+      required := if i == 0 then [0] else []
+      inputs := if i == 1 && metadata then [1] else [] }
+    let result := MetadataFlow.check fns infos #[[]]
+    let admitted := match result with | .ok _ => true | .error _ => false
+    IO.println s!"kind={kind} index={index} metadata={metadata} expected={!metadata} actual={repr result}"
+    if admitted != !metadata then bad := bad+1
+ IO.println s!"18 classifications; {bad} mismatches"
+ if bad>0 then throw <| IO.userError "array primitive carrier contract failed"
+end ArrayPrimitives
+
+namespace ForArrayCarrier
 
 def main : IO Unit := do
+  for metadata in [false,true] do
+    let fns : Array Fn := #[
+      { name := "Execute", arity := 1, nslots := 1, decides := false, body := .lit .void },
+      { name := "Caller", arity := 1, nslots := 3, decides := false, body :=
+          .seq (.assign 1 (.forE 2 (.prim .mkArr [.lit (.int 0)]) (.lit .void)
+            (.heap (.new 0) [.local 0])))
+          (.call 0 [.heap (.get 0) [.prim .index [.local 1,.lit (.int 0)]]]) }]
+    let infos : Array MetadataFlow.Info := fns.mapIdx fun i fn => {
+      body := some fn.body, cellTag := some 0
+      inputs := if i == 1 && metadata then [0] else []
+      required := if i == 0 then [0] else [] }
+    let result := MetadataFlow.check fns infos #[[]]
+    let actual := match result with | .ok _ => true | _ => false
+    IO.println s!"metadata={metadata}; expected={!metadata}; {repr result}"
+    if actual != !metadata then throw <| IO.userError "for array lost private-cell alias"
+end ForArrayCarrier
+
+namespace ExactMixedArray
+def main : IO Unit := do
+ let mut bad := 0
+ for index in [0,1] do
+  let fns : Array Fn := #[
+   { name := "Execute", arity := 1, nslots := 1, decides := false, body := .lit .void },
+   { name := "Caller", arity := 2, nslots := 3, decides := false,
+     body := .seq (.assign 2 (.prim .mkArr [.heap (.new 0) [.local 0],.heap (.new 0) [.local 1]]))
+       (.call 0 [.heap (.get 0) [.prim .index [.local 2,.lit (.int (Int.ofNat index))]]]) }]
+  for metadata in [false,true] do
+   let infos : Array MetadataFlow.Info := fns.mapIdx fun i fn => {
+    body := some fn.body
+    cellTag := some 0
+    required := if i == 0 then [0] else []
+    inputs := if i == 1 && metadata then [1] else [] }
+   let result := MetadataFlow.check fns infos #[[]]
+   let admitted := match result with | .ok _ => true | .error _ => false
+   let expected := !metadata || index == 0
+   IO.println s!"index={index} metadata={metadata} expected={expected} actual={repr result}"
+   if admitted != expected then bad := bad+1
+ IO.println s!"4 classifications; {bad} mismatches"
+ if bad>0 then throw <| IO.userError "exact mixed-array contract failed"
+end ExactMixedArray
+
+namespace SummaryArrayRecency
+private def factory : Expr := .prim .concat [
+ .prim .mkArr [.heap (.new 0) [.local 0]],
+ .prim .mkArr [.heap (.new 0) [.local 0]]]
+def main : IO Unit := do
+ let mut bad := 0
+ for firstMeta in [false,true] do
+  let first := if firstMeta then 1 else 0
+  let second := if firstMeta then 0 else 1
+  let fns : Array Fn := #[
+   { name := "Execute", arity := 1, nslots := 1, decides := false, body := .lit .void },
+   { name := "$sourceLoopReturnArrayFactory", arity := 1, nslots := 1, decides := false, body := factory },
+   { name := "Caller", arity := 2, nslots := 4, decides := false,
+     body := .seq (.assign 2 (.call 1 [.local first]))
+      (.seq (.assign 3 (.call 1 [.local second]))
+       (.call 0 [.heap (.get 0) [.prim .index [.local 2,.lit (.int 1)]]])) }]
+  for metadata in [false,true] do
+   let infos : Array MetadataFlow.Info := fns.mapIdx fun i fn => {
+    body := some fn.body
+    cellTag := some 0
+    cellHelper := i == 1
+    required := if i == 0 then [0] else []
+    inputs := if i == 2 && metadata then [1] else [] }
+   let result := MetadataFlow.check fns infos #[[]]
+   let admitted := match result with | .ok _ => true | .error _ => false
+   let expected := !metadata || !firstMeta
+   IO.println s!"firstMeta={firstMeta} metadata={metadata} expected={expected} actual={repr result}"
+   if admitted != expected then bad := bad+1
+ IO.println s!"4 classifications; {bad} mismatches"
+ if bad>0 then throw <| IO.userError "summarized-array recency contract failed"
+end SummaryArrayRecency
+
+namespace Scale
+set_option maxRecDepth 100000
+private def program (count : Nat) : Array Fn := Id.run do
+ let body := (List.range count).foldr (fun i rest =>
+   .seq (.assign 2 (.heap (.new 1) [.lit (.int (Int.ofNat i))]))
+    (.seq (.call 0 [.local 1]) rest)) (.lit .void)
+ return #[
+  { name := "$sourceLoopReturnRead", arity := 1, nslots := 1, decides := false,
+    body := .heap (.get 0) [.local 0] },
+  { name := "Caller", arity := 1, nslots := 3, decides := false,
+    body := .seq (.assign 1 (.heap (.new 0) [.local 0])) body }]
+def main (args : List String) : IO Unit := do
+ let counts := if args.isEmpty then [32,64,128,256] else args.filterMap String.toNat?
+ for count in counts do
+  let fns := program count
+  for enabled in [false,true] do
+   let infos : Array MetadataFlow.Info := fns.mapIdx fun i fn => {
+     body := some fn.body
+     cellTag := if enabled then some 0 else none
+     cellHelper := enabled && i == 0
+     cellSlots := if !enabled then [] else if i == 0 then [0] else [1] }
+   let start ← IO.monoMsNow
+   let result := MetadataFlow.check fns infos #[[],[]]
+   let elapsed := (← IO.monoMsNow)-start
+   IO.println s!"count={count} enabled={enabled} elapsed_ms={elapsed} result={repr result}"
+   if let .error message := result then throw (IO.userError message)
+end Scale
+
+namespace FutureCarrierAlias
+def main : IO Unit := do
+ let fns : Array Fn := #[
+  { name := "Execute", arity := 1, nslots := 1, decides := false, body := .lit .void },
+  { name := "Identity", arity := 1, nslots := 1, decides := false, body := .local 0 },
+  { name := "Borrow", arity := 1, nslots := 1, decides := false,
+    body := .call 0 [.heap (.get 0) [.heap (.get 1) [.local 0]]] },
+  { name := "Caller", arity := 2, nslots := 5, decides := false,
+    body := .seq (.assign 2 (.heap (.new 1) [.lit .void,.lit .void]))
+     (.seq (.assign 3 (.call 1 [.local 2]))
+      (.seq (.assign 4 (.heap (.new 0) [.local 1]))
+       (.seq (.heap (.set 1) [.local 2,.local 4]) (.call 2 [.local 3])))) }]
+ let mut bad := 0
+ for metadata in [false,true] do
+  let infos : Array MetadataFlow.Info := fns.mapIdx fun i fn => {
+    body := some fn.body
+    cellTag := some 0
+    cellTransportTag := some 1
+    cellSlots := if i == 3 then [4] else []
+    required := if i == 0 then [0] else []
+    inputs := if i == 3 && metadata then [1] else [] }
+  let result := MetadataFlow.check fns infos #[[],[]]
+  let admitted := match result with | .ok _ => true | .error _ => false
+  IO.println s!"metadata={metadata}; expected={!metadata}; actual={repr result}"
+  if admitted != !metadata then bad := bad+1
+ IO.println s!"2 classifications; {bad} mismatches"
+ if bad>0 then throw <| IO.userError "future carrier alias contract failed"
+end FutureCarrierAlias
+
+namespace PrototypeCarriers
+private def callable : VTy := .ref [2] []
+private def cellTy : VTy := .ref [0] [callable]
+private def carrier : VTy := .ref [1] []
+private def variant (kind : String) : Value × VTy × Expr :=
+ if kind == "some" then (.some (.ref 0),.opt carrier,.prim .query [.local 2])
+ else if kind == "tuple" then (.tup [.ref 0],.tup [carrier],.prim (.tupGet 0) [.local 2])
+ else if kind == "array" then (.arr ⟨[.ref 0]⟩,.arr carrier,.prim .index [.local 2,.lit (.int 0)])
+ else (.ref 0,carrier,.local 2)
+def main : IO Unit := do
+ let mut bad := 0
+ for kind in ["direct","some","tuple","array"] do
+  let (literal,aliasTy,alias) := variant kind
+  let fns : Array Fn := #[
+   { name := "Execute", arity := 1, nslots := 1, decides := false, writes := false, body := .lit .void },
+   { name := "Borrow", arity := 1, nslots := 1, decides := true, writes := false,
+     body := .call 0 [.heap (.get 0) [.prim .query [.heap (.get 1) [.local 0]]]] },
+   { name := "Caller", arity := 2, nslots := 4, decides := true, writes := true,
+     body := .seq (.assign 2 (.lit literal))
+      (.seq (.assign 3 (.heap (.new 0) [.local 1]))
+       (.seq (.heap (.set 1) [.lit (.ref 0),.prim .mkSome [.local 3]]) (.call 1 [alias]))) },
+   { name := "Main", arity := 0, nslots := 0, decides := false, writes := true,
+     body := .ite (.call 2 [.heap (.new 2) [],.heap (.new 2) []]) (.lit .void) (.lit .void) },
+   { name := "$prototypes", arity := 0, nslots := 0, decides := false, writes := true,
+     body := .seq (.heap (.new 1) [.lit (.int 0),.lit .none]) (.call 3 []) }]
+  let prog : Prog := { fns := fns.toList, main := 4 }
+  -- Tag0 is a GENERIC private-cell family (one invariant type argument).
+  -- The sole prototype is ordinary mutable tag1, with an optional cell field.
+  let sigs : Sigs := {
+   fns := [([callable],.void),([carrier],.void),([callable,callable],.void),([],.void),([],.void)]
+   classes := [[.var 0],[.int,.opt cellTy],[]]
+   pins := [[none],[],[]]
+   protos := [(1,[])] }
+  let slots := [[callable],[carrier],[callable,callable,aliasTy,cellTy],[],[]]
+  let checked := prog.check && prog.checkControl && prog.checkTypes sigs slots
+  IO.println s!"kind={kind} CoreChecks={checked} check={prog.check} control={prog.checkControl} types={prog.checkTypes sigs slots} prelude={checkPrelude prog sigs}"
+  unless checked do throw <| IO.userError "INVALID Core prototype model"
+  for metadata in [false,true] do
+   let infos : Array MetadataFlow.Info := fns.mapIdx fun i fn => {
+    body := some fn.body
+    cellTag := some 0
+    cellSlots := if i == 2 then [3] else []
+    required := if i == 0 then [0] else []
+    inputs := if i == 2 && metadata then [1] else [] }
+   let result := MetadataFlow.check fns infos #[[],[],[]]
+   let admitted := match result with | .ok _ => true | .error _ => false
+   IO.println s!"kind={kind} metadata={metadata} expected={!metadata} actual={repr result}"
+   if admitted != !metadata then bad := bad+1
+ IO.println s!"8 classifications; {bad} mismatches"
+ if bad>0 then throw <| IO.userError "prototype carrier contract failed"
+end PrototypeCarriers
+
+namespace FormalTupleMetadata
+
+def main : IO Unit := do
+  let mut bad := 0
+  for wholeFormal in [false, true] do
+    for column in [0, 1] do
+      let fns : Array Fn := #[
+        { name := "Execute", arity := 1, nslots := 1, decides := false, body := .lit .void },
+        { name := "$sourceLoopReturnTuple", arity := 1, nslots := 2, decides := false,
+          body := .seq (.assign 1 (.heap (.new 0) [.local 0]))
+            (.call 0 [.prim (.tupGet column) [.heap (.get 0) [.local 1]]]) },
+        { name := "Caller", arity := 2, nslots := 2, decides := false,
+          body := .call 1 [.prim .mkTup [.local 1, .local 0]] }]
+      for metadata in [false, true] do
+        let infos : Array MetadataFlow.Info := fns.mapIdx fun i fn => {
+          body := some fn.body, cellTag := some 0
+          cellSlots := if i == 1 then [1] else []
+          cellHelper := i == 1
+          required := if i == 0 then [0] else []
+          inputs := if !metadata then [] else if i == 2 then [1]
+            else if i == 1 && wholeFormal then [0] else [] }
+        let expected := !metadata || (!wholeFormal && column == 1)
+        let result := MetadataFlow.check fns infos #[[]]
+        let admitted := match result with | .ok _ => true | .error _ => false
+        IO.println s!"wholeFormal={wholeFormal} column={column} metadata={metadata} expected={expected} actual={repr result}"
+        if admitted != expected then bad := bad + 1
+  IO.println s!"8 formal-tuple metadata API classifications, {bad} mismatches (no runtime/type-certificate claim)"
+  if bad > 0 then throw <| IO.userError "formal tuple metadata policy failed"
+end FormalTupleMetadata
+
+end MetadataCellFlow
+
+def main (args : List String) : IO Unit := do
+  if args.contains "--scale" then
+    MetadataCellFlow.Scale.main ["1024"]
+    return ()
   MetadataCellFlow.Calls.main ["--strict"]
   MetadataCellFlow.Cleanup.main ["--strict"]
   MetadataCellFlow.PendingArguments.main
@@ -575,3 +829,10 @@ def main : IO Unit := do
   MetadataCellFlow.RecursiveMutation.main
   MetadataCellFlow.RecursiveWriteback.main
   MetadataCellFlow.BackgroundMetadata.main
+  MetadataCellFlow.ArrayPrimitives.main
+  MetadataCellFlow.ForArrayCarrier.main
+  MetadataCellFlow.ExactMixedArray.main
+  MetadataCellFlow.SummaryArrayRecency.main
+  MetadataCellFlow.FutureCarrierAlias.main
+  MetadataCellFlow.PrototypeCarriers.main
+  MetadataCellFlow.FormalTupleMetadata.main

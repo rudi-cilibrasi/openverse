@@ -43,6 +43,7 @@ bash tests/scripts/test-metadata-values.sh
 bash tests/scripts/test-metadata-receivers.sh
 bash tests/scripts/test-metadata-cells.sh
 bash tests/scripts/test-metadata-cell-flow.sh
+bash tests/scripts/test-metadata-logical-cells.sh
 echo "== source-frame rewrite contracts"
 # Like the proof build, this check loads Lean modules. Run it before the
 # virtual-memory cap applied to generated programs below.

@@ -643,6 +643,21 @@ metadata/capture analysis and again after final lowering and entry wrappers.
 Thus a compiler-owned cell can implement a logical local while its actual
 heap writes remain visible to the unchanged `Prog.checkWriteSound` certificate.
 
+`MetadataCells` separates a compiler cell's ordinary runtime identity from
+its payload metadata and immediate tuple columns. Allocation sites retain
+recent and older identities; strong replacement requires one unique,
+unescaped object. Actual-call summaries transport heap state and aliases
+through returns, normal cleanup, rollback snapshots and cancellation.
+Caller and pending-operand aliases remain tracked during recency changes.
+Private-cell concurrency uses graph replay even when a worker introduces
+metadata and never returns. `MetadataReceivers` adds typed virtual locals
+only to the metadata body and analysis frame; emitted Core and runtime
+slots stay unchanged. Type-certified values without object references keep
+their metadata roles and tuple columns while omitting phantom object aliases.
+Ordinary heap permissions and shared-field checks
+remain in force. Merged older objects, deeper tuple shapes and call-result
+receivers without a type certificate retain conservative classifications.
+
 `lowerReturnLoops` makes a private lazy search helper returning an optional
 result. Each operand is first saved at the source return type, then wrapped
 as a present result; wrapping an unevaluated choice in `option{...}` would

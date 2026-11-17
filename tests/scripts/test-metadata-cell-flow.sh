@@ -43,10 +43,11 @@ with tempfile.TemporaryDirectory(prefix="openverse-metadata-cell-flow-") as temp
                     "tests/lean/MetadataCellFlow.lean"], check=True)
     subprocess.run(["lake", "env", "leanc", "-O3", "-o", str(binary),
                     "@" + str(response)], check=True)
-    result = subprocess.run([str(binary)], text=True, capture_output=True,
-                            timeout=15, preexec_fn=limits)
-    if result.returncode or result.stderr:
-        raise SystemExit(f"metadata cell flow failed ({result.returncode}):\n"
-                         f"{result.stdout}{result.stderr}")
-    print("private cell flow: 150 API classifications passed (15s, 4 GiB)")
+    for flags in ([], ["--scale"]):
+        result = subprocess.run([str(binary), *flags], text=True, capture_output=True,
+                                timeout=15, preexec_fn=limits)
+        if result.returncode or result.stderr:
+            raise SystemExit(f"metadata cell flow failed ({result.returncode}):\n"
+                             f"{result.stdout}{result.stderr}")
+    print("private cell flow: 196 API classifications and 1024-call transfer growth passed (15s, 4 GiB)")
 PY

@@ -4,6 +4,7 @@ import OpenVerse.Core.Syntax
 import OpenVerse.Front.MetadataPlan
 import OpenVerse.Front.MetadataReferences
 import OpenVerse.Front.MetadataCells
+import OpenVerse.Front.MetadataValues
 import OpenVerse.Front.MetadataBits
 import OpenVerse.Front.MetadataLiveness
 import Std.Data.HashMap
@@ -30,6 +31,13 @@ structure Info where
   cellParams : List Nat := []
   cellSlots : List Nat := []
   nonCellSlots : List Nat := []
+  /-- Metadata-only virtual locals; emitted frame sizes are unchanged. -/
+  extraSlots : Nat := 0
+  /-- Prepared once by check, including shifted graph-call contexts. -/
+  nonCellMask : Nat := 0
+  /-- Source-certified values containing no heap reference, including containers. -/
+  objectFreeSlots : List Nat := []
+  objectFreeMask : Nat := 0
   cellHelper : Bool := false
   source : FrameRefs.Info := {}
   borrowTasks : Bool := false
@@ -602,6 +610,13 @@ private def joinCellEffect (a b : CellEffect) : CellEffect := {
     out.insert key (MetadataCells.joinRefs (out[key]?.getD []) refs)) a.images
   yielded := a.yielded || b.yielded }
 
+private def cellLocalKinds (heap : MetadataCells.Memory) : Array Nat :=
+  heap.locals.fold (fun counts slot _ =>
+    let bucket := if slot < 4294967296 then 0 else
+      if slot < 18446744073709551616 then 1 else
+      if slot < 79228162514264337593543950336 then 2 else 3
+    counts.modify bucket (· + 1)) #[0, 0, 0, 0]
+
 private def cellPair (a b : Nat) : Nat :=
   let sum := a + b
   sum * (sum + 1) / 2 + b
@@ -659,13 +674,16 @@ private structure State where
   cellPath : List Nat := [0]
   cellSites : Std.HashMap (Nat × Option Nat × List Nat) Nat := {}
   cellScope : Nat := 0
+  cellEntry : Option Key := none
+  cellSteps : Nat := 0
+  cellJoinReports : Nat := 0
   cellGraphOwner : Option Nat := none
   cellTransports : Array Bool := #[]
-  cellCallStack : List Nat := []
+  cellArraySummaries : Array Bool := #[]
   cellSummaries : Array CellSummary := #[]
   cellSummaryIndices : Std.HashMap Nat (List Nat) := {}
   cellActive : List Nat := []
-  cellRecursive : Bits := {}
+  cellRecursive : Std.HashMap Nat Unit := {}
   cellRefBase : Nat := 0
   cellCapable : Array Bool := #[]
 
@@ -673,23 +691,32 @@ private abbrev M := StateT State (Except String)
 
 private def cellChild (child : Nat) (action : M α) : M α := do
   if !(← get).cellEnabled then return ← action
+  let state ← get
+  if state.debug then
+    let steps := state.cellSteps + 1
+    modify fun st => { st with cellSteps := steps }
+    if steps % 16384 == 0 then
+      dbg_trace s!"metadata expr-steps={steps} scope={state.cellScope} depth={state.cellPath.length}"
   let path := (← get).cellPath
   modify fun st => { st with cellPath := child :: path }
   let result ← action
   modify fun st => { st with cellPath := path }
   return result
 
-private def cellSite (fn : Fn) (transport : Option Bool) : M Nat := do
+private def cellSite (_fn : Fn) (transport : Option Bool) (arraySummary : Bool := false) : M Nat := do
   let st ← get
   let key := (st.cellScope, st.cellGraphOwner, st.cellPath)
   if let some site := st.cellSites[key]? then
     if let some transport := transport then
       modify fun st => { st with cellTransports := st.cellTransports.set! site transport }
+    if arraySummary then
+      modify fun st => { st with cellArraySummaries := st.cellArraySummaries.set! site true }
     return site
   let site := st.cellTransports.size
   modify fun st => { st with
     cellSites := st.cellSites.insert key site
-    cellTransports := st.cellTransports.push (transport.getD false) }
+    cellTransports := st.cellTransports.push (transport.getD false)
+    cellArraySummaries := st.cellArraySummaries.push arraySummary }
   return site
 
 private def cellTransport (heap : MetadataCells.Memory) (sites : Array Bool)
@@ -760,8 +787,16 @@ private structure ScheduleWork where
 mutual
 private partial def expr (fns : Array Fn) (infos : Array Info)
     (fields : Array (List Nat)) (fn : Fn) (info : Info) (slots : Slots) : Expr → M Flow
-  | .lit _ => pure { slots }
-  | .local i => do return { slots, value := some ((slots.values.get i)), valueParts := slots.tuples[i]?, valueRefs := MetadataCells.getLocal slots.heap ((← get).cellRefBase + i) }
+  | .lit value => do
+    let refs := if (← get).cellEnabled && MetadataValues.hasObjectRef value then [0] else []
+    return { slots, valueRefs := refs }
+  | .local i => do
+    let base := (← get).cellRefBase
+    return {
+      slots
+      value := some ((slots.values.get i))
+      valueParts := slots.tuples[i]?
+      valueRefs := if info.objectFreeMask.testBit i then [] else MetadataCells.getLocal slots.heap (base + i) }
   | .assign i e => do
     let out ← cellChild 0 (expr fns infos fields fn info slots e)
     let some role := out.value | return out
@@ -776,11 +811,13 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
       else
         modify fun st => { st with suppressedSharedWrite := true }
     let first := !((out.slots.initialized.get i))
+    let refs := if info.objectFreeMask.testBit i then [] else out.valueRefs
     return { out with
+      valueRefs := refs
       value := some role
       valueParts := if info.seeds.contains i then none else out.valueParts
       slots := {
-        heap := MetadataCells.setLocal out.slots.heap ((← get).cellRefBase + i) out.valueRefs
+        heap := MetadataCells.setLocal out.slots.heap ((← get).cellRefBase + i) refs
         values := out.slots.values.set! i role
         tuples := putParts out.slots.tuples i (if info.seeds.contains i then none else out.valueParts)
         initialized := out.slots.initialized.set! i true
@@ -841,17 +878,26 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
       let first := out.argumentRefs.headD []
       match op with
       | .mkArr | .mkTup | .mkSome =>
-        let site ← cellSite fn (some true)
-        let allocated := MetadataCells.allocate out.slots.heap site false values
-        out := { out with slots := { out.slots with heap := allocated.2 } }
-        refs := allocated.1
+        -- Immutable values whose children contain no object aliases cannot
+        -- acquire an alias later. Their scalar roles/tuple columns stay in
+        -- the ordinary domain; unknown 0/1 references are never omitted.
+        if values.any (fun value => !value.refs.isEmpty) then
+          let site ← cellSite fn (some true)
+          let allocated := MetadataCells.allocate out.slots.heap site false values
+          out := { out with slots := { out.slots with heap := allocated.2 } }
+          refs := allocated.1
       | .tupGet field => refs := MetadataCells.loadRefs out.slots.heap first field
       | .query => refs := MetadataCells.loadRefs out.slots.heap first 0
       | .eq | .ne => refs := first
       | .index =>
+        let summaries := (← get).cellArraySummaries
         refs := match (es[1]? : Option Expr) with
           | some (.lit (.int index)) =>
-            if index ≥ 0 then MetadataCells.loadRefs out.slots.heap first index.toNat else []
+            if index ≥ 0 then
+              first.foldl (fun refs object =>
+                let field := if object ≥ 2 && (summaries[(object - 2) / 2]?.getD false) then 0 else index.toNat
+                MetadataCells.joinRefs refs (MetadataCells.loadRefs out.slots.heap [object] field)) []
+            else []
           | _ => cellElements out.slots.heap first
       | .arrSet | .concat | .flatten =>
         let elements := if op == .flatten then
@@ -860,10 +906,11 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
             (out.argumentRefs[2]?.getD [])
           else out.argumentRefs.foldl (fun refs arg =>
             MetadataCells.joinRefs refs (cellElements out.slots.heap arg)) []
-        let site ← cellSite fn (some true)
-        let allocated := MetadataCells.allocate out.slots.heap site false [{ refs := elements }]
-        out := { out with slots := { out.slots with heap := allocated.2 } }
-        refs := allocated.1
+        if !elements.isEmpty then
+          let site ← cellSite fn (some true) true
+          let allocated := MetadataCells.allocate out.slots.heap site false [{ refs := elements }]
+          out := { out with slots := { out.slots with heap := allocated.2 } }
+          refs := allocated.1
       | _ => pure ()
     return { out with
       value, valueRefs := refs
@@ -890,14 +937,13 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
         let allocated := MetadataCells.allocate heap site isPrivate values
         out := { out with slots := { out.slots with heap := allocated.2 } }
         refs := allocated.1
-        if policy.debug && isPrivate then dbg_trace s!"CELL NEW {fn.name} site={site} path={reprStr policy.cellPath} refs={reprStr refs} values={reprStr values}"
       | .get field =>
         if field == 0 then payload := MetadataCells.readCell out.slots.heap privateObjects
         if payload.isNone && cellTransport out.slots.heap policy.cellTransports privateObjects then
           payload := MetadataCells.readFieldPayload out.slots.heap privateObjects field
         refs := MetadataCells.loadRefs out.slots.heap privateObjects field
         let excludesCell := es.head?.any fun
-          | .local obj => info.nonCellSlots.contains obj
+          | .local obj => info.nonCellMask.testBit obj
           | _ => false
         let possibleCell := field == 0 &&
           ((!excludesCell && privateObjects.any (· ≤ 1)) ||
@@ -910,7 +956,6 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
           payload := some <| if out.slots.heap.cells.isEmpty then { role := true, refs := [0] } else
             out.slots.heap.cells.fold (fun joined _ value => MetadataCells.joinPayload joined value)
               ({ role := args.headD false, refs } : MetadataCells.Payload)
-        if policy.debug && field == 0 then dbg_trace s!"CELL GET {fn.name} refs={reprStr privateObjects} payload={reprStr payload}"
       | .isTag _ => refs := privateObjects
       | _ => pure ()
     let role ← match op with
@@ -922,7 +967,6 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
           refs := out.argumentRefs[1]?.getD [] }
         let precise := if policy.cellEnabled && field == 0 then
             MetadataCells.writeCell out.slots.heap privateObjects rhs else none
-        if policy.debug && field == 0 then dbg_trace s!"CELL SET {fn.name} refs={reprStr privateObjects} rhs={reprStr rhs} precise={precise.isSome}"
         match precise with
         | some heap => out := { out with slots := { out.slots with heap } }
         | none => do
@@ -980,24 +1024,50 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
     let source ← cellChild 0 (expr fns infos fields fn info slots source)
     let some item := source.value | return source
     if item then modify fun st => { st with seen := st.seen.set! i true }
-    let mut head := source.slots
+    let enabled := (← get).cellEnabled
+    let site ← if enabled then cellSite fn (some true) true else pure 0
+    let base := (← get).cellRefBase
+    let sourceKey := 79228162514264337593543950336 + 2 * cellPair site base
+    let itemsKey := sourceKey + 1
+    let heap := if enabled then
+        MetadataCells.setLocal (MetadataCells.setLocal { source.slots.heap with
+          nslots := max source.slots.heap.nslots (itemsKey + 1) } sourceKey source.valueRefs) itemsKey []
+      else source.slots.heap
+    let mut head := { source.slots with heap }
     let mut result := false
     let mut exits := source
     let mut growing := true
+    let mut iterations := 0
     while growing do
+      iterations := iterations + 1
+      if (← get).debug && iterations % 32 == 0 then
+        dbg_trace s!"metadata fixedpoint {fn.name} iterations={iterations} nodes={head.heap.nodes.size} fields={head.heap.fields.size} cells={head.heap.cells.size} locals={head.heap.locals.size}"
       let state ← get
       let entry := { head with
         values := head.values.set! i item, tuples := head.tuples.erase i
-        heap := if state.cellEnabled then MetadataCells.setLocal head.heap (state.cellRefBase + i) (cellElements source.slots.heap source.valueRefs) else head.heap }
+        heap := if enabled then MetadataCells.setLocal head.heap (state.cellRefBase + i)
+          (cellElements head.heap (MetadataCells.getLocal head.heap sourceKey)) else head.heap }
       let filt ← cellChild 1 (expr fns infos fields fn info entry filt)
       let body ← if filt.value.isSome then cellChild 2 (expr fns infos fields fn info filt.slots body)
         else pure { slots := entry, value := none }
       exits := withExits filt (withExits body exits)
       result := result || body.value.getD false
+      let body := if enabled && body.value.isSome then { body with slots := { body.slots with
+        heap := MetadataCells.setLocal body.slots.heap itemsKey
+          (MetadataCells.joinRefs (MetadataCells.getLocal body.slots.heap itemsKey) body.valueRefs) } }
+        else body
       let next := if body.value.isSome then freshLocals info.shared source.slots (joinSlots head body.slots) else head
       growing := next != head
+      if (← get).debug && (← get).cellJoinReports < 32 then
+        modify fun st => { st with cellJoinReports := st.cellJoinReports + 1 }
+        dbg_trace s!"metadata loop-join {fn.name} iter={iterations} changed={growing} values={next.values != head.values} tuples={!(sameTuples next.tuples head.tuples)} init={next.initialized != head.initialized} modes={next.sharedMetadata != head.sharedMetadata} written={next.written != head.written} heap={next.heap != head.heap} nodes={head.heap.nodes.size}/{next.heap.nodes.size} cells={next.heap.cells.size} fields={head.heap.fields.size}/{next.heap.fields.size} locals={head.heap.locals.size}/{next.heap.locals.size} localKinds={reprStr (cellLocalKinds next.heap)}"
       head := next
-    return { exits with slots := head, value := some result, valueParts := none }
+    let items := if enabled then MetadataCells.getLocal head.heap itemsKey else []
+    if items.isEmpty then return { exits with slots := head, value := some result, valueParts := none, valueRefs := [] }
+    -- The array is a compiler-owned immutable carrier. Its stored item aliases
+    -- are evaluated before allocation, and recency rebases them once more.
+    let (refs, heap) := MetadataCells.allocate head.heap site false [{ role := result, refs := items }]
+    return { exits with slots := { head with heap }, value := some result, valueParts := none, valueRefs := refs }
   | .loop body => do
     let mut head := slots
     let mut returned := none
@@ -1006,7 +1076,11 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
     let mut broken := none
     let mut yielded := false
     let mut growing := true
+    let mut iterations := 0
     while growing do
+      iterations := iterations + 1
+      if (← get).debug && iterations % 32 == 0 then
+        dbg_trace s!"metadata fixedpoint {fn.name} iterations={iterations} nodes={head.heap.nodes.size} fields={head.heap.fields.size} cells={head.heap.cells.size} locals={head.heap.locals.size}"
       let out ← cellChild 0 (expr fns infos fields fn info head body)
       exits := withExits out exits
       returnedParts := joinParts returned returnedParts out.returned out.returnedParts
@@ -1015,6 +1089,9 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
       yielded := yielded || out.yielded
       let next := if out.value.isSome then freshLocals info.shared slots (joinSlots head out.slots) else head
       growing := next != head
+      if (← get).debug && (← get).cellJoinReports < 32 then
+        modify fun st => { st with cellJoinReports := st.cellJoinReports + 1 }
+        dbg_trace s!"metadata loop-join {fn.name} iter={iterations} changed={growing} values={next.values != head.values} tuples={!(sameTuples next.tuples head.tuples)} init={next.initialized != head.initialized} modes={next.sharedMetadata != head.sharedMetadata} written={next.written != head.written} heap={next.heap != head.heap} nodes={head.heap.nodes.size}/{next.heap.nodes.size} cells={next.heap.cells.size} fields={head.heap.fields.size}/{next.heap.fields.size} locals={head.heap.locals.size}/{next.heap.locals.size} localKinds={reprStr (cellLocalKinds next.heap)}"
       head := next
     return { exits with slots := broken.getD head, value := broken.map (fun _ => false), returned, returnedParts, yielded }
   | .brk => pure { slots, value := none, broken := some slots }
@@ -1028,7 +1105,7 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
         | some old => MetadataCells.join old out.slots.heap | none => out.slots.heap) }
   | .print e => do
     let out ← cellChild 0 (expr fns infos fields fn info slots e)
-    return { out with value := out.value.map (fun _ => false), valueParts := none }
+    return { out with value := out.value.map (fun _ => false), valueParts := none, valueRefs := [] }
 
 /-- A spawn evaluates the selected call's arguments now. Its result belongs
     to the task; returning or yielding lets its caller continue. A task that
@@ -1095,12 +1172,45 @@ private partial def invoke (fns : Array Fn) (infos : Array Info)
   if (← get).validateUses && gi.required.any (fun i => roles[i]?.getD false) then
     refuse fn info s!"provide executable evidence or a receiver to {(fns[g]?.map (·.name)).getD "a call"}"
   if !summarize then return (out, none, none, false)
+  let out := { out with argumentRefs := out.argumentRefs.zipIdx.map fun (refs, i) =>
+    if gi.objectFreeMask.testBit i then [] else refs }
   let state ← get
   let references := out.argumentRefs.flatten
   let privateCall := state.cellTag.isSome &&
     ((state.cellCapable[g]?.getD false) || MetadataCells.mayReachPrivate out.slots.heap references)
   if privateCall then
     let some callee := fns[g]? | throw "internal: private-cell call has no body"
+    let body := gi.body.getD callee.body
+    let directGetter := match body with
+      | .heap (.get _) [.local _] | .ret (.heap (.get _) [.local _]) => true
+      | _ => false
+    let base := state.cellRefBase + out.slots.values.size
+    let values := Bits.ofArray ((List.range callee.nslots).map fun i => roles[i]?.getD false).toArray
+    let mut child : Slots := {
+      values, initialized := Bits.ofArray ((List.range callee.nslots).map (fun i => decide (i < callee.arity))).toArray
+      sharedMetadata := values, written := Bits.replicate callee.nslots false
+      heap := { out.slots.heap with nslots := max out.slots.heap.nslots (base + callee.nslots) } }
+    for (refs, i) in out.argumentRefs.zipIdx do
+      child := { child with heap := MetadataCells.setLocal child.heap (base + i) refs }
+      child := { child with tuples := putParts child.tuples i (keyArgs[i]?.getD default).parts }
+    if directGetter then
+      -- An exact getter neither allocates nor writes nor calls another
+      -- function. Read the actual complete heap, without a heap-wide key or
+      -- recency witnesses; every caller alias therefore remains unchanged.
+      modify fun st => { st with
+        active := some (g, keyArgs), cellEnabled := true, cellRefBase := base
+        cellScope := g, cellGraphOwner := none, cellPath := [0] }
+      let result ← expr fns infos fields callee gi child body
+      modify fun st => { st with
+        active := state.active, cellEnabled := state.cellEnabled, cellRefBase := state.cellRefBase
+        cellScope := state.cellScope, cellGraphOwner := state.cellGraphOwner
+        cellPath := state.cellPath, seen := state.seen }
+      let role := (joinRole result.value result.returned).map (· || gi.metadataResult)
+      let parts := if gi.metadataResult then none else
+        joinParts result.value result.valueParts result.returned result.returnedParts
+      let refs := if state.scalarReturns[g]?.getD false then [] else
+        MetadataCells.joinRefs (if result.value.isSome then result.valueRefs else []) result.returnedRefs
+      return ({ out with valueRefs := refs }, role, parts, result.yielded)
     let input : CellInput := {
       fn := g
       arguments := keyArgs
@@ -1111,36 +1221,29 @@ private partial def invoke (fns : Array Fn) (infos : Array Info)
       | some index => pure index
       | none => do
         let index := state.cellSummaries.size
+        let count := (state.cellSummaryIndices[g]?.getD []).length
+        if state.debug && (index % 256 == 0 || count == 0) then
+          dbg_trace s!"metadata cell-context fn={callee.name} caller={fn.name} entry={(state.cellEntry.map fun key => (fns[key.1]?.map (·.name)).getD "?").getD "?"} per_fn={count + 1} total={index + 1} nodes={input.heap.nodes.size} cells={input.heap.cells.size} fields={input.heap.fields.size} phase={state.validateUses}/{state.validateShared}/{state.discovery}/{state.deferSchedules} inputs={gi.inputs} cellParams={gi.cellParams} cellSlots={gi.cellSlots} origins={gi.source.slots.map fun (slot, origin) => (slot,origin.frame,origin.name)} refs={reprStr out.argumentRefs}"
         modify fun st => { st with
           cellSummaries := st.cellSummaries.push { input }
           cellSummaryIndices := st.cellSummaryIndices.insert g (index :: (st.cellSummaryIndices[g]?.getD [])) }
         pure index
     if state.cellActive.contains index then
-      modify fun st => { st with cellRecursive := st.cellRecursive.set! index true }
+      modify fun st => { st with cellRecursive := st.cellRecursive.insert index () }
       let effect := ((← get).cellSummaries[index]!).effect
       let heap := applyCellEffect out.slots.heap effect
       return ({ out with slots := { out.slots with heap }, valueRefs := effect.references },
         effect.role, effect.parts, effect.yielded)
-    let base := state.cellRefBase + out.slots.values.size
-    let values := Bits.ofArray ((List.range callee.nslots).map fun i => roles[i]?.getD false).toArray
-    let mut child : Slots := {
-      values, initialized := Bits.ofArray ((List.range callee.nslots).map (fun i => decide (i < callee.arity))).toArray
-      sharedMetadata := values, written := Bits.replicate callee.nslots false
-      heap := { out.slots.heap with nslots := max out.slots.heap.nslots (base + callee.nslots) } }
-    for (refs, i) in out.argumentRefs.zipIdx do
-      child := { child with heap := MetadataCells.setLocal child.heap (base + i) refs }
-      child := { child with tuples := putParts child.tuples i (argumentParts[i]?.getD none) }
     for (object, _) in input.heap.nodes do
       let heap := { child.heap with nslots := max child.heap.nslots (cellWitness base object + 1) }
       child := { child with heap := MetadataCells.setLocal heap (cellWitness base object) [object] }
-    let body := gi.body.getD callee.body
     let (background, cleanups) := MetadataPlan.sites fns body
     let mut effect := ((← get).cellSummaries[index]!).effect
     repeat
       modify fun st => { st with
         active := some (g, keyArgs), cellEnabled := true, cellRefBase := base,
         cellScope := g, cellGraphOwner := none,
-        cellPath := [0], cellCallStack := g :: state.cellCallStack,
+        cellPath := [0],
         cellActive := index :: state.cellActive }
       let result ← if background || !cleanups.isEmpty || cellConcurrentBody fns body then do
         let bodies := fns.mapIdx fun index function =>
@@ -1153,7 +1256,7 @@ private partial def invoke (fns : Array Fn) (infos : Array Info)
       modify fun st => { st with
         active := state.active, cellEnabled := state.cellEnabled, cellRefBase := state.cellRefBase,
         cellScope := state.cellScope, cellGraphOwner := state.cellGraphOwner,
-        cellPath := state.cellPath, cellCallStack := state.cellCallStack,
+        cellPath := state.cellPath,
         cellActive := state.cellActive, seen := state.seen }
       let role := (joinRole result.value result.returned).map (· || gi.metadataResult)
       let parts := if gi.metadataResult then none else
@@ -1163,7 +1266,8 @@ private partial def invoke (fns : Array Fn) (infos : Array Info)
         | none, some returned => some returned
         | some _, none => some result.slots.heap
         | none, none => none
-      let refs := MetadataCells.joinRefs (if result.value.isSome then result.valueRefs else []) result.returnedRefs
+      let refs := if state.scalarReturns[g]?.getD false then [] else
+        MetadataCells.joinRefs (if result.value.isSome then result.valueRefs else []) result.returnedRefs
       let images := match heap with
         | none => {}
         | some heap => input.heap.nodes.fold (fun out object _ =>
@@ -1177,7 +1281,7 @@ private partial def invoke (fns : Array Fn) (infos : Array Info)
       effect := next
       modify fun st => { st with cellSummaries := st.cellSummaries.modify index fun summary =>
         { summary with effect } }
-      if !(← get).cellRecursive.get index then break
+      if !(← get).cellRecursive.contains index then break
     let heap := applyCellEffect out.slots.heap effect
     return ({ out with slots := { out.slots with heap }, valueRefs := effect.references },
       effect.role, effect.parts, effect.yielded)
@@ -1189,7 +1293,11 @@ private partial def invoke (fns : Array Fn) (infos : Array Info)
     | [.prim .fneg [.lit (.float bits)]] => decide (-(VFloat.ofBits bits) > 0.0)
     | _ => true
     else name == "$WaitDone" || yielded
-  return ({ out with valueRefs := [] }, result, parts, yielded)
+  -- An ordinary transfer may return an alias before any private cell has
+  -- been created. Preserve that possibility for later stores/observers;
+  -- absence of a current private object is not a no-alias certificate.
+  let refs := if state.cellEnabled && !(state.scalarReturns[g]?.getD false) then [0] else []
+  return ({ out with valueRefs := refs }, result, parts, yielded)
 
 private partial def concurrent (fns : Array Fn) (infos : Array Info)
     (fields : Array (List Nat)) (fn : Fn) (info : Info) (slots : Slots)
@@ -1304,7 +1412,14 @@ private partial def arguments (fns : Array Fn) (infos : Array Info)
           heap := MetadataCells.setLocal heap (scratch index) out.valueRefs } }
   let refs := if enabled then (List.range roles.length).map fun index =>
       MetadataCells.getLocal out.slots.heap (scratch index) else []
-  return (roles, parts, { out with argumentRefs := refs })
+  -- All operands are now evaluated. Their final aliases are snapshotted
+  -- above; constructors rebase those payloads on allocation, and calls bind
+  -- them before executing a callee. Only this operation's consumed parking
+  -- keys disappear. Outer pending operands and every exit snapshot remain.
+  let locals := (List.range roles.length).foldl
+    (fun locals index => locals.erase (scratch index)) out.slots.heap.locals
+  let heap := if enabled then { out.slots.heap with locals } else out.slots.heap
+  return (roles, parts, { out with slots := { out.slots with heap }, argumentRefs := refs })
 
 private partial def actorEnvironment (env : ScheduleEnv) (a : Actor) : Fn × Info :=
   match a.context with
@@ -1320,6 +1435,9 @@ private partial def actorEnvironment (env : ScheduleEnv) (a : Actor) : Fn × Inf
       shared := info.shared.map alias
       cellSlots := info.cellSlots.map alias
       nonCellSlots := info.nonCellSlots.map alias
+      nonCellMask := info.nonCellSlots.foldl (fun mask slot => mask ||| (1 <<< alias slot)) 0
+      objectFreeSlots := info.objectFreeSlots.map alias
+      objectFreeMask := info.objectFreeSlots.foldl (fun mask slot => mask ||| (1 <<< alias slot)) 0
       cellParams := info.cellParams.map (· + offset)
       source := { info.source with slots := info.source.slots.map fun (i, s) => (alias i, s) }
       metadataWrites := info.metadataWrites.map fun (i, k) => (i + offset, k) })
@@ -2139,6 +2257,7 @@ private def cellCapabilities (fns : Array Fn) (infos : Array Info) (tag : Option
     from the body, rather than the union of physical call arguments. -/
 def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
     (debug : Bool := false) (scalarReturns : Array Bool := #[]) : Except String Unit := do
+  if debug then dbg_trace s!"metadata begin functions={fns.size} first_helpers={fns.toList.zip infos.toList |>.filter (fun (fn, info) => fn.name.startsWith "$first" && info.cellHelper) |>.length}"
   let privateBarriers := privateStoreBarriers fns infos
   let referencedOwners := referencedPrivateOwners fns infos
   let infos := infos.mapIdx fun index info =>
@@ -2146,6 +2265,12 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
     { info with body := info.body.map fun body =>
         let body := withoutRolledBackCopies body
         if dead.isEmpty then body else withoutPrivateDeadStores dead body }
+  -- Virtual receiver locals belong exclusively to this analysis view.
+  -- Keep the original physical frame for the ownership/dead-store proof above.
+  let fns := fns.mapIdx fun i fn => { fn with nslots := fn.nslots + (infos[i]?.getD {}).extraSlots }
+  let infos := infos.map fun info => { info with
+    nonCellMask := info.nonCellSlots.foldl (fun mask slot => mask ||| (1 <<< slot)) 0
+    objectFreeMask := info.objectFreeSlots.foldl (fun mask slot => mask ||| (1 <<< slot)) 0 }
   let cellTag := infos.findSome? (·.cellTag)
   let capable := cellCapabilities fns infos cellTag
   let action : M Unit := do
@@ -2153,24 +2278,29 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       let (i, args) := key
       let some fn := fns[i]? | throw "internal: metadata call has no body"
       let info := infos[i]?.getD {}
+      if debug then dbg_trace s!"metadata entry {fn.name} slots={fn.nslots} helper={info.cellHelper} capable={(← get).cellCapable[i]?.getD false}"
       modify fun st => { st with
-        active := some key, captureMismatch := false, contextDeferred := false, cellPath := [0]
-        cellEnabled := (st.cellCapable[i]?.getD false), cellRefBase := 0, cellCallStack := [i],
+        active := some key, cellEntry := some key, captureMismatch := false, contextDeferred := false, cellPath := [0]
+        cellEnabled := (st.cellCapable[i]?.getD false), cellRefBase := 0,
         cellScope := i, cellGraphOwner := none }
       let values := (List.range fn.nslots).map (fun i =>
         info.inputs.contains i || (args[i]?.getD default).role) |>.toArray |> Bits.ofArray
       let initialized := (List.range fn.nslots).map (fun i => i < fn.arity : Nat → Bool) |>.toArray |> Bits.ofArray
       let slots : Slots := {
-        heap := if (← get).cellEnabled then MetadataCells.initialRefs fn.nslots (fun i => if i < fn.arity then [1] else []) else {}
+        heap := if (← get).cellEnabled then MetadataCells.initialRefs fn.nslots (fun i => if i < fn.arity && !info.objectFreeMask.testBit i then [1] else []) else {}
         values, initialized, sharedMetadata := values
         tuples := args.zipIdx.foldl (fun tuples (arg, j) =>
           putParts tuples j (if info.inputs.contains j then none else arg.parts)) {}
         written := Bits.replicate fn.nslots false }
+      if debug then dbg_trace s!"metadata initialized {fn.name}"
       let body := info.body.getD fn.body
       modify fun st => { st with seen := values }
       let (background, cleanups) := (← get).sites[i]?.getD (false, [])
+      if debug then dbg_trace s!"metadata sites {fn.name} background={background} cleanups={cleanups.length}"
       let privateConcurrent := (← get).cellEnabled && cellConcurrentBody fns body
+      if debug then dbg_trace s!"metadata concurrency {fn.name} concurrent={privateConcurrent}"
       if !background && cleanups.isEmpty && !privateConcurrent && !((← get).borrowers[i]?.getD false) then
+        if debug then dbg_trace s!"metadata inline {fn.name}"
         return ← expr fns infos fields fn info slots body
       let saved ← get
       -- Discover potential metadata without validating provisional or
@@ -2178,7 +2308,9 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       modify fun st => { st with
         seen := values, discovery := true
         validateUses := false, validateShared := false }
+      if debug then dbg_trace s!"metadata discovery {fn.name}"
       let out ← expr fns infos fields fn info slots body
+      if debug then dbg_trace s!"metadata discovered {fn.name}"
       let seen := (← get).seen
       let captureMismatch := (← get).captureMismatch
       modify fun st => { st with

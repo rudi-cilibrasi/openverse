@@ -404,9 +404,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     return .asking { loops := loopNeeds }
   if !opts.extendedDefaults then
     checkInitializerConvergence lowering.fns sigs classes.defs defaults.bodies admitted.intrinsicCalls
-  let scalarReturns := lowering.sigs.fns.toArray.map fun (_, result) => match result with
-    | .int | .logic | .char | .float => true
-    | _ => false
+  -- Includes immutable containers such as void/options/arrays of scalar data.
+  -- The shared theorem certifies that these Values contain no object alias.
+  let scalarReturns := lowering.sigs.fns.toArray.map fun (_, result) => MetadataValues.objectFree result
   MetadataFlow.check lowering.fns lowering.metadata (metadataFields env) opts.debug scalarReturns
   let frameInfo := elaborated.map (·.frames)
   let c ← certify (← lowerProgram env sigs mainSig lowering frameInfo admitted.usesConc admitted.usesEvents
