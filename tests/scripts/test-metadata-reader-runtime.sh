@@ -6,8 +6,8 @@ cd "$root"
 artifacts="${1:?expected metadata-reader artifact directory}"
 shopt -s nullglob
 programs=("$artifacts"/*.vbc)
-if [[ ${#programs[@]} != 10 ]]; then
-  echo "metadata-reader: expected 10 admitted waiting-function bytecode oracles" >&2
+if [[ ${#programs[@]} != 12 ]]; then
+  echo "metadata-reader: expected 12 admitted waiting-function bytecode oracles" >&2
   exit 1
 fi
 work="$(mktemp -d)"
@@ -16,4 +16,4 @@ for program in "${programs[@]}"; do
   (ulimit -v 4194304; timeout 15 runtime/build/cverse "$program") >"$work/actual"
   diff -u "${program%.vbc}.expected" "$work/actual"
 done
-echo "metadata reader C-runtime contracts passed (10 complete 64-row-count oracles)"
+echo "metadata reader C-runtime contracts passed (12 complete 64-row-count oracles)"

@@ -117,6 +117,8 @@ echo "== refined conditional branch-choice contracts"
 tests/scripts/test-refined-conditional-choice.sh
 echo "== metadata reader C-runtime oracles"
 tests/scripts/test-metadata-reader-runtime.sh "$logs/metadata-reader"
+echo "== failed local-copy metadata rollback contracts"
+tests/scripts/test-metadata-rollback-copies.sh
 echo "== invocation-local return metadata compiler API contracts"
 bash tests/scripts/test-return-boundary-metadata.sh
 echo "== choice-bearing initializer metadata contracts"
