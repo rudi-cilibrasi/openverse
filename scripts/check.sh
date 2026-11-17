@@ -40,6 +40,7 @@ fi
 echo "== physical Core write annotations"
 bash tests/scripts/test-physical-writes.sh
 bash tests/scripts/test-metadata-values.sh
+bash tests/scripts/test-metadata-closed-transfers.sh
 bash tests/scripts/test-metadata-receivers.sh
 bash tests/scripts/test-metadata-cells.sh
 bash tests/scripts/test-metadata-cell-flow.sh

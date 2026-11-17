@@ -407,7 +407,20 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- Includes immutable containers such as void/options/arrays of scalar data.
   -- The shared theorem certifies that these Values contain no object alias.
   let scalarReturns := lowering.sigs.fns.toArray.map fun (_, result) => MetadataValues.objectFree result
-  MetadataFlow.check lowering.fns lowering.metadata (metadataFields env) opts.debug scalarReturns
+  let fields := metadataFields env
+  let privateTags := (lowering.metadata.toList.flatMap fun info =>
+    info.cellTag.toList ++ info.cellTransportTag.toList) ++
+    (env.classes.zipIdx.filterMap fun (name, tag) => if name.contains '$' then some tag else none)
+  -- A separate certificate permits ordinary object graphs only when no
+  -- reachable field can carry private cells or type metadata.
+  let dataClasses := MetadataValues.dataClassFlags lowering.sigs.classes.toArray fields privateTags
+  let dataReturns := lowering.sigs.fns.toArray.map fun (_, result) => MetadataValues.dataOnly dataClasses result
+  let cleanPrototypes := lowering.sigs.protos.toArray.map fun (tag, args) =>
+    MetadataValues.dataOnly dataClasses (.ref [tag] args)
+  let metadata := lowering.metadata.mapIdx fun index info =>
+    { info with dataOnlySlots := (((elaborated[index]?).map (·.slotTys)).getD []).zipIdx.filterMap fun (ty, slot) =>
+        if MetadataValues.dataOnly dataClasses ty then some slot else none }
+  MetadataFlow.check lowering.fns metadata fields opts.debug scalarReturns dataReturns cleanPrototypes
   let frameInfo := elaborated.map (·.frames)
   let c ← certify (← lowerProgram env sigs mainSig lowering frameInfo admitted.usesConc admitted.usesEvents
     admitted.awaitsTasks) methods.stubs
