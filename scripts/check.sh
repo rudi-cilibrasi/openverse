@@ -39,6 +39,7 @@ else
 fi
 echo "== physical Core write annotations"
 bash tests/scripts/test-physical-writes.sh
+bash tests/scripts/test-metadata-receivers.sh
 bash tests/scripts/test-metadata-cells.sh
 bash tests/scripts/test-metadata-cell-flow.sh
 echo "== source-frame rewrite contracts"
