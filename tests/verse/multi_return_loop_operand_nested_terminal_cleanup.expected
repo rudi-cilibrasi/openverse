@@ -1,0 +1,16 @@
+loop 1
+range 1 11
+function 111
+all 0
+loop 112
+range 1 122
+function 222
+all 112
+state 222
+loop 1
+range 1 11
+function 111
+first 1
+state 111
+none 0
+exit=0

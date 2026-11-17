@@ -2188,7 +2188,9 @@ Main():void =
   Captured mutable locals retain their invocation storage across those values.
   An ordinary `loop:` body can also return several values. A `break` unwinds
   its iteration and reaches the producer's following statements. An inner
-  loop's `break` stays within that inner loop.
+  loop's `break` exits that inner loop and resumes the enclosing body.
+  These three loop forms can nest. A return from an inner loop skips every
+  enclosing loop's remaining iterations and the function's suffix.
   Range endpoints are evaluated once in source order. If a scalar endpoint
   fails, its range is empty, its clause effects roll back, and the producer
   reaches its following statements. A maximum-integer endpoint does not
@@ -2200,12 +2202,9 @@ Main():void =
   lowering. Selected generic types and real implicit proof capabilities stay
   attached to the loop site; metadata proof inputs cannot grant those views.
 
-  A returning integer-range loop can also be nested inside an eligible
-  enclosing loop. Its returned alternatives leave both iterations, running
-  each reached cleanup from the inner scope outward. Other multi-valued loop
-  shapes, including choice-bearing endpoints, nested returning array or
-  plain loops, and mutable implicit proof captures, remain implementation
-  limits (#686). Other return-containing initializer shapes
+  Other multi-valued loop shapes, including choice-bearing endpoints or
+  array sources and mutable implicit proof captures, remain
+  implementation limits (#686). Other return-containing initializer shapes
   retain their existing restrictions. Direct concurrency forms are not
   supported within a scalar captured expression. Existing source restrictions on returns inside
   expressions or conditions continue to apply.
