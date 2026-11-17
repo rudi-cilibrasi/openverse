@@ -55,23 +55,24 @@ def main (args : List String) : IO Unit := do
     | .ok c => unless c.prog.check && c.prog.checkControl && c.prog.checkTypes c.sigs c.slotTys do
         throw (IO.userError "unused generic cell Core mismatch")
     | .error message => throw (IO.userError s!"unused generic cell refusal: {message}")
-    let evidence ← IO.FS.readFile "tests/fixtures/loop-return-operands/loop-evidence-capture.verse"
-    for dummy in [false,true] do
-      let result : Except String Compiled := do
-        let tops ← parseProgram evidence
-        let rename (name : String) : Except String String :=
-          pure (if name == "evidence" then SubtypeEvidence.family else name)
-        let tops ← tops.mapM fun
-          | .fn p name params tparams specs ret body => do
-            let params ← params.mapM fun param => do
-              let ty ← param.ty.mapNamesM rename
-              pure { param with ty := ty, typeValue := dummy && name == "F" && param.name == "D" }
-            pure (.fn p name params tparams specs (← ret.mapNamesM rename) body)
-          | top => pure top
-        elabProgram tops { extendedDefaults := extended }
-      match result with
-      | .ok c => unless !dummy && c.prog.check && c.prog.checkControl && c.prog.checkTypes c.sigs c.slotTys do
-          throw (IO.userError "implicit proof admission or Core mismatch")
-      | .error message => unless dummy && (message.splitOn "has no member 'N'").length > 1 do
-          throw (IO.userError s!"implicit proof refusal: {message}")
-  IO.println "loop operand API passed (26 classifications, 14 complete Lean oracles, operational proof roles)"
+    for fixture in ["loop-evidence-capture", "choice-loop-local-evidence"] do
+      let evidence ← IO.FS.readFile s!"tests/fixtures/loop-return-operands/{fixture}.verse"
+      for dummy in [false,true] do
+        let result : Except String Compiled := do
+          let tops ← parseProgram evidence
+          let rename (name : String) : Except String String :=
+            pure (if name == "evidence" then SubtypeEvidence.family else name)
+          let tops ← tops.mapM fun
+            | .fn p name params tparams specs ret body => do
+              let params ← params.mapM fun param => do
+                let ty ← param.ty.mapNamesM rename
+                pure { param with ty := ty, typeValue := dummy && name == "F" && param.name == "D" }
+              pure (.fn p name params tparams specs (← ret.mapNamesM rename) body)
+            | top => pure top
+          elabProgram tops { extendedDefaults := extended }
+        match result with
+        | .ok c => unless !dummy && c.prog.check && c.prog.checkControl && c.prog.checkTypes c.sigs c.slotTys do
+            throw (IO.userError "implicit proof admission or Core mismatch")
+        | .error message => unless dummy && (message.splitOn "has no member 'N'").length > 1 do
+            throw (IO.userError s!"implicit proof refusal: {message}")
+  IO.println "loop operand API passed (30 classifications, 14 complete Lean oracles, operational proof roles)"

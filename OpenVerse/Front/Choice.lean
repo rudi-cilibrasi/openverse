@@ -4325,6 +4325,153 @@ private partial def returnLoopSites (owner : String) (f : MFn) (mv : List String
     | e => e.children.forM (walk scope defers)
   return ((walk initial [] f.body).run []).2
 
+/-- A return selected by an ordinary search header captures its lexical scope. -/
+private structure ChoiceReturnRoute where
+  pos : Pos
+  key : String
+  exit : SExpr
+  cleanups : List SExpr
+  scope : List LoopCapture
+  captures : List LoopCapture
+
+/-- Search-header return lowering carries mutable captures as logical cells. -/
+private structure ChoiceReturnLoopSite where
+  pos : Pos
+  key : String
+  clauses : List SExpr
+  body : SExpr
+  entryScope : List LoopCapture
+  entryCaptures : List LoopCapture
+  routes : List ChoiceReturnRoute
+  boxed : List LoopCapture
+
+private def choiceReturnBindings : SExpr → List LoopCapture
+  | .gen p item index _ =>
+    { name := item, pos := p } :: index.toList.map fun name => { name, pos := p }
+  | e => (loopBinding e).toList
+
+private def choiceReturnRouteKey (owner : String) (p : Pos) : String :=
+  s!"$choiceLoopReturn:{sitePart owner}:{p.file}:{p.line}:{p.col}/"
+
+/-- Keep only the innermost binding for a spelling. The production caller
+    also alpha-renames source locals before discovery, as for returnLoopSites. -/
+private def choiceReturnScope (scope : List LoopCapture) : List LoopCapture :=
+  scope.foldl (fun found binding =>
+    if found.any (·.name == binding.name) then found else found ++ [binding]) []
+
+private partial def choiceReturnRoutes (owner : String) (scope : List LoopCapture)
+    (cleanups : List SExpr) (body : SExpr) : List ChoiceReturnRoute :=
+  match body with
+  | e@(.ret p _) =>
+    let used := namesUsed (.block p (cleanups ++ [e]))
+    let scope := choiceReturnScope scope
+    [{ pos := p, key := choiceReturnRouteKey owner p, exit := e, cleanups, scope,
+       captures := scope.filter fun binding => used.contains binding.name }]
+  | .block _ statements => Id.run do
+    let mut scope := scope
+    let mut cleanups := cleanups
+    let mut routes := []
+    for statement in statements do
+      if isDefer statement then cleanups := cleanups ++ [statement]
+      else routes := routes ++ choiceReturnRoutes owner scope cleanups statement
+      scope := choiceReturnBindings statement ++ scope
+    return routes
+  | .ite _ conditions yes no =>
+    let bound := conditions.flatMap choiceReturnBindings
+    choiceReturnRoutes owner (bound.reverse ++ scope) cleanups yes ++
+      no.toList.flatMap (choiceReturnRoutes owner scope cleanups)
+  | .forE _ clauses body =>
+    choiceReturnRoutes owner ((clauses.flatMap choiceReturnBindings).reverse ++ scope) cleanups body
+  | .loop _ body => choiceReturnRoutes owner scope cleanups body
+  | .app _ (.ident _ "$returnBoundary") _ false => []
+  | e => e.children.flatMap (choiceReturnRoutes owner scope cleanups)
+
+/-- Locate returning loops whose headers require a search. The checking pass
+    elaborates the original for before moving the loop into a selector. -/
+private partial def choiceReturnLoopSites (owner : String) (f : MFn)
+    (mv : List String) : List ChoiceReturnLoopSite := Id.run do
+  let initial := f.params.map fun parameter =>
+    ({ name := parameter.name, pos := f.pos, annotation := some parameter.ty,
+       parameter := some parameter } : LoopCapture)
+  let concurrent (e : SExpr) := anyE (fun
+    | .app _ (.ident _ name) _ _ =>
+      ["$sync", "$race", "$rush", "$branch", "$spawn"].contains name
+    | _ => false) e
+  let rec walk (scope : List LoopCapture) (e : SExpr) : List ChoiceReturnLoopSite :=
+    match e with
+    | .block _ statements => Id.run do
+      let mut scope := scope
+      let mut sites := []
+      for statement in statements do
+        sites := sites ++ walk scope statement
+        scope := choiceReturnBindings statement ++ scope
+      return sites
+    | .ite _ conditions yes no =>
+      walk ((conditions.flatMap choiceReturnBindings).reverse ++ scope) yes ++
+        no.toList.flatMap (walk scope)
+    | .forE p clauses body =>
+      if clauses.any (fun clause => liftsHere (markCalls mv clause)) &&
+          !clauses.any hasReturn && !clauses.any concurrent &&
+          hasReturn body && loopBodyScalar mv body then
+        let bound := clauses.flatMap choiceReturnBindings
+        let routes := choiceReturnRoutes owner (bound.reverse ++ scope) [] body
+        let used := namesUsed (.forE p clauses body)
+        let entryScope := choiceReturnScope scope
+        let entryCaptures := entryScope.filter fun binding => binding.parameter.isSome || used.contains binding.name
+        [{ pos := p, key := choiceReturnRouteKey owner p, clauses, body, entryScope, entryCaptures, routes,
+           boxed := (uniqueLoopCaptures (entryCaptures ++ routes.flatMap (·.captures))).filter (·.mutable) }]
+      else []
+    | .loop .. => []
+    | .app _ (.ident _ "$defer") _ _ | .app _ (.ident _ "$returnBoundary") _ false => []
+    | e => e.children.flatMap (walk scope)
+  return walk initial f.body
+
+/-- Notes live immediately before each ORIGINAL return, preserving source
+    effect/failure checking and ordinary generator selection. No return or
+    cleanup is moved by this checking-only transformation. -/
+private partial def noteChoiceReturnLoops (owner : String) (sites : List ChoiceReturnLoopSite)
+    (body : SExpr) : SExpr :=
+  let routes := sites.flatMap (·.routes)
+  let boxed := uniqueLoopCaptures (sites.flatMap (·.boxed))
+  let note (p : Pos) (key : String) (captures : List LoopCapture) :=
+    SExpr.app p (.ident p "$noteTypes")
+      (.str p [.text key] :: [
+        .decl p "$observed" (some (.name "int")) false (.tuple p []),
+        .app p (.ident p "$captureEvidence") [] false
+      ] ++ captures.map (fun capture => .ident p capture.name)) false
+  let rec go (e : SExpr) : SExpr := Id.run do
+    if let .ret p _ := e then
+      if let some route := routes.find? (·.pos == p) then
+        return .block p [note p route.key route.captures, e]
+    match e with
+    | .block p statements =>
+      return .block p (statements.flatMap fun statement =>
+        let changed := go statement
+        match statement with
+        | .decl q name none true _ =>
+          match boxed.find? (fun binding => binding.name == name && binding.pos == q) with
+          | some binding => [changed, note q (loopDeclKey owner binding) [binding]]
+          | none => [changed]
+        | _ => [changed])
+    | .forE p clauses iteration =>
+      let original := SExpr.forE p clauses (go iteration)
+      match sites.find? (·.pos == p) with
+      | some site => return .block p [note p (site.key ++ "$entry/") site.entryCaptures, original]
+      | none => return original
+    | e => return e.mapChildrenM (m := Id) fun child => pure (go child)
+  checkBody (go body)
+
+private def choiceReturnNotesReady (owner : String) (sites : List ChoiceReturnLoopSite)
+    (types : List (String × STy)) : Bool :=
+  let observed (key : String) (captures : List LoopCapture) :=
+    (types.lookup (key ++ "$observed")).isSome &&
+      captures.all (fun capture => (types.lookup (key ++ capture.name)).isSome)
+  sites.all fun site =>
+    observed (site.key ++ "$entry/") site.entryCaptures &&
+    site.routes.all (fun route => observed route.key route.captures) &&
+    site.boxed.all (fun capture => capture.annotation.isSome ||
+      (types.lookup (loopDeclKey owner capture ++ capture.name)).isSome)
+
 private def loopNotesReady (owner : String) (parameters : List TParam) (sites : List ReturnLoopSite) (types : List (String × STy)) : Bool :=
   sites.all fun site => (types.lookup (site.key ++ "$return")).isSome &&
     (match site.source with
@@ -4612,6 +4759,117 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
     | _ => none) body
   return (changed, helpers)
 
+private def choiceLoopIteration (p : Pos) (clauses : List SExpr) (body : SExpr)
+    (stem : String) : SExpr :=
+  match clauses with
+  | [.decl q index _ false (.range _ low high)] =>
+    let integer := some (STy.name "int")
+    let lower := stem ++ "$low"
+    let upper := stem ++ "$high"
+    let cursor := stem ++ "$cursor"
+    let ident := SExpr.ident q
+    let bounds := [
+      SExpr.decl q lower integer false low,
+      .decl q upper integer false high,
+      .cmp q (ident lower) [("<=", ident upper)]]
+    let step := SExpr.block p [
+      .decl q index integer false (ident cursor), body,
+      .ite p [.cmp p (ident cursor) [(">=", ident upper)]] (.brk p) none,
+      .set p (ident cursor) none (.bin p "+" (ident cursor) (.int p 1))]
+    .forE p bounds (.block p [.decl q cursor integer true (ident lower), .loop p step])
+  | _ => .forE p clauses body
+
+private partial def lowerChoiceReturnLoops (owner : String) (f : MFn) (sites : List ChoiceReturnLoopSite)
+    (types : List (String × STy)) : Except String (SExpr × List STop) := do
+  let boxed := uniqueLoopCaptures (sites.flatMap (·.boxed))
+  let boxNames := boxed.map (·.name)
+  let storageAnnotation (capture : LoopCapture) (ty : STy) : STy :=
+    let declared := capture.annotation.orElse fun _ => types.lookup (loopDeclKey owner capture ++ capture.name)
+    if boxNames.contains capture.name then .app "$varcell" [declared.getD ty] else ty
+  let rec prepare (e : SExpr) : SExpr := Id.run do
+    match e with
+    | .decl p name none true rhs =>
+      match boxed.find? (fun capture => capture.name == name && capture.pos == p) with
+      | some capture => return .decl p name (types.lookup (loopDeclKey owner capture ++ name)) true (prepare rhs)
+      | none => return .decl p name none true (prepare rhs)
+    | _ => return e.mapChildrenM (m := Id) fun child => pure (prepare child)
+  let evidence (key : String) (capture : LoopCapture) : Bool :=
+    (types.lookup (key ++ "$evidence/" ++ capture.name)).isSome
+  let retain (key : String) (scope used : List LoopCapture) : Except String (List LoopCapture) := do
+    let proofs := scope.filter (evidence key)
+    for capture in proofs do
+      if capture.mutable then
+        throw s!"{capture.pos.show}: a loop return capturing a mutable implicit proof is not supported yet (#686)"
+    return scope.filter fun capture =>
+      evidence key capture || used.any (fun binding => binding.name == capture.name)
+  let noted (key : String) (capture : LoopCapture) : Option STy :=
+    (types.lookup (key ++ capture.name)).orElse fun _ =>
+      types.lookup (key ++ "$evidence/" ++ capture.name)
+  let mut helpers := []
+  let mut replacements := []
+  for site in sites do
+    let p := site.pos
+    let entryKey := site.key ++ "$entry/"
+    let entry ← retain entryKey site.entryScope site.entryCaptures
+    let routes ← site.routes.mapM fun route => do
+      let captures ← retain route.key route.scope route.captures
+      pure { route with captures }
+    let name := s!"$chooseLoopReturn{sitePart owner}_{p.line}_{p.col}"
+    let selected := name ++ "$selected"
+    let packet := name ++ "$packet"
+    let slots := name ++ "$slots"
+    let ident := SExpr.ident p
+    let params ← entry.mapM fun capture => do
+      let some ty := noted entryKey capture | throw "internal: missing choice loop selector input"
+      let original := capture.parameter.getD { name := capture.name, ty }
+      pure { original with
+        ty := storageAnnotation capture ty, named := false, default := none
+        metadataForward := original.metadataForward || (capture.parameter.isNone && !(evidence entryKey capture)) }
+    let routeTypes ← routes.mapM fun route => route.captures.mapM fun capture => do
+      let some ty := noted route.key capture
+        | throw "internal: missing choice loop return capture"
+      pure (storageAnnotation capture ty)
+    let packetType := STy.opt (.tup (routeTypes.map fun ty => .opt (.tup ty)))
+    let selection := mapE (fun
+      | .ret q _ => do
+        let index ← routes.findIdx? (·.pos == q)
+        let values := routes.zipIdx.map fun (route, slot) =>
+          if slot == index then SExpr.optionLit q (.tuple q
+            (route.captures.map fun capture => .ident q capture.name))
+          else .ident q "false"
+        some (.block q [.set q (.ident q selected) none (.ident q "true"),
+          .ret q (some (.optionLit q (.tuple q values)))])
+      | .app q deferFn@(.ident _ "$defer") [cleanup] false =>
+        some (.app q deferFn [.ite q [.notE q (.query q (.ident q selected))] cleanup none] false)
+      | _ => none) (cellVars boxNames (prepare site.body))
+    let traversal := choiceLoopIteration p (site.clauses.map fun clause => cellVars boxNames (prepare clause))
+      selection name
+    let selector := STop.fn p name params f.tparams f.fx packetType (.block p
+      [.decl p selected (some (.name "logic")) true (ident "false"), traversal, ident "false"])
+    let project (binding : String) (index : Nat) :=
+      SExpr.app p (ident binding) [.int p (Int.ofNat index)] false
+    let resumes := (routes.zip routeTypes).zipIdx.map fun ((route, types), index) =>
+      let input := s!"{name}$input{index}"
+      let bound := entry.map (·.name)
+      let restore := (route.captures.zip types).zipIdx.filterMap fun ((capture, ty), field) =>
+        if bound.contains capture.name then none else
+          some (SExpr.decl p capture.name (some ty) false (project input field))
+      let code := cellVars boxNames (.block p (route.cleanups ++ [route.exit]))
+      SExpr.ite p [.decl p input none false (.query p (project slots index))]
+        (.block p (restore ++ [code])) (some (.tuple p []))
+    let saved := SExpr.decl p packet none false (.app p (ident name) (params.map fun param => ident param.name) false)
+    let dispatch := SExpr.ite p [.decl p slots none false (.query p (ident packet))]
+      (.block p resumes) (some (.tuple p []))
+    helpers := helpers ++ [selector]
+    replacements := replacements ++ [(p, .block p [saved, dispatch])]
+  let lowered := mapE (fun
+    | e@(.forE p ..) => (replacements.lookup p).orElse fun _ => some (cellVars boxNames (prepare e))
+    | .decl p name ty mutable rhs => if boxNames.contains name then
+        some (cellVars boxNames (prepare (.decl p name ty mutable rhs))) else none
+    | .ident p name => if boxNames.contains name then some (.member p (.ident p name) "$VCell") else none
+    | _ => none) f.body
+  return (lowered, helpers)
+
 /-- What `inlineMulti` gives: the program with the functions that have
     several values inlined at their calls; whether some are taken lazily
     (#246), whose consumers need a class of stack cells; the uses of methods
@@ -4720,6 +4978,30 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
       let result ← inlineFns rewritten eager lazy overloadPicks nested orders sites methodOvSites
         (pending ++ loopTargets.map (·.2.1.pos)) checking nestDone methodTemplates
       return { result with nestedSites := result.nestedSites ++ loopTargets.flatMap (fun (_, _, loops, _) => loops.map (·.key)) }
+  let choiceLoopTargets := rawMfs.filterMap fun (owner, original) =>
+    if !hasReturningLoop original.body then none else
+    let f : MFn := { original with body := alphaReturnLoopLocals owner original.body }
+    let sites := choiceReturnLoopSites owner f mv
+    if sites.isEmpty then none else some (owner, f, sites, original.body)
+  if !choiceLoopTargets.isEmpty then
+    let ready := choiceLoopTargets.all fun (owner, _, sites, _) => choiceReturnNotesReady owner sites nested
+    let mut rewritten := tops
+    let mut original := checking
+    for (owner, f, loops, checked) in choiceLoopTargets do
+      let (body, helpers) ← if ready then lowerChoiceReturnLoops owner f loops nested
+        else pure (noteChoiceReturnLoops owner loops f.body, [])
+      rewritten := (rewritten.map fun
+        | .fn p name params tparams fx ret old =>
+          .fn p name params tparams fx ret (if p == f.pos then body else old)
+        | top => top) ++ helpers
+      if ready && (original.lookup f.pos).isNone then original := original ++ [(f.pos, checked)]
+    if ready then
+      let result ← inlineFns rewritten eager lazy overloadPicks nested orders sites methodOvSites pending original nestDone methodTemplates
+      let needsCells := choiceLoopTargets.any fun (_, _, loops, _) => loops.any (fun entry => !entry.boxed.isEmpty)
+      return { result with logicalCells := result.logicalCells || needsCells }
+    let result ← inlineFns rewritten eager lazy overloadPicks nested orders sites methodOvSites
+      (pending ++ choiceLoopTargets.map (·.2.1.pos)) checking nestDone methodTemplates
+    return { result with nestedSites := result.nestedSites ++ choiceLoopTargets.flatMap (fun (_, _, loops, _) => loops.map (·.key)) }
   -- Analyze recursive shapes after source returns have selected their paths.
   -- Keep original bodies for checking and nonrecursive inline boundaries.
   -- (#283) Its own `defer:`s after its value, as an inlined body's are, so

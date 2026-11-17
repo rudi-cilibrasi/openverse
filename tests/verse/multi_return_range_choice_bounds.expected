@@ -1,0 +1,31 @@
+number cleanup 118 112
+out 1112
+all 0 111
+second number
+number cleanup 125 1113
+out 2113
+all 0 218
+state 0 2113
+text cleanup ab! 622
+out 1622
+all 1 2
+second text
+text cleanup ab!! 1623
+out 2623
+all 1 103
+state 1 2623
+out 2321
+all 2 0
+out 3321
+all 2 100
+state 2 3321
+second number
+number cleanup 118 112
+out 1112
+number first 211 1112
+second text
+text cleanup ab! 622
+out 1622
+text first 102 1622
+none 0
+exit=0
