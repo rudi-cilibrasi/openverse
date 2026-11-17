@@ -100,6 +100,11 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
         | .decl q n (some annotation) _ _ =>
           let ty ← resolveTy ctx.types q annotation
           noteNeeds { nested := [(key ++ n, ty.toSTy)] }
+        | .app _ (.ident _ "$captureEvidence") [] false =>
+          -- Implicit member/container views can need a real proof whose
+          -- name does not occur in the source expression being lifted.
+          for root in ctx.captureEvidence [] do
+            noteNeeds { nested := [(key ++ "$evidence/" ++ root.name, root.ty.toSTy)] }
         | _ => pure ()
       pure (⟨.lit .void, .void⟩, ctx)
     | .app p (.ident _ "$freeNames") (.ident _ f :: ns) false => do

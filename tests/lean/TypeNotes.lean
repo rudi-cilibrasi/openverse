@@ -25,6 +25,30 @@ private def noExpression : Ctx → SExpr → Option Ty → EM R :=
 private def need (label : String) (value : Bool) : IO Unit :=
   unless value do throw (IO.userError label)
 
+private def evidenceContext (dummyProof dummyCarrier mutableField : Bool) : Ctx := Id.run do
+  let t := Ty.param "t" false
+  let vehicle := Ty.struct "vehicle" []
+  let family := SubtypeEvidence.family
+  let proof := (SubtypeEvidence.Bound.mk vehicle t).ty
+  let field := SubtypeEvidence.fieldName "holder" "t"
+  return {
+    sigs := [], sigProg := { fns := [], main := 0 }
+    types := {
+      classes := ["vehicle", family, "holder", "ordinary"]
+      structs := [("vehicle", []), (family, []), ("holder", [(field, proof, none)]),
+        ("ordinary", [("UserProof", proof, none)])]
+      cinfo := [("vehicle", {}), (family, { isIface := true }), ("holder", {}), ("ordinary", {})]
+      sparams := [(family, [("a", false), ("d", false)]), ("holder", [("t", false)]),
+        ("ordinary", [("t", false)])]
+      varFields := if mutableField then [("holder", field)] else []
+      tvars := [("t", t)] }
+    locals := [
+      { name := "D", slot := 3, ty := proof, mutable := false, typeValue := dummyProof },
+      { name := "Carrier", slot := 4, ty := .struct "holder" [t], mutable := false,
+        typeValue := dummyCarrier },
+      { name := "Unrelated", slot := 5, ty := .string, mutable := false },
+      { name := "UserCarrier", slot := 6, ty := .struct "ordinary" [t], mutable := false }] }
+
 def main : IO Unit := do
   for selected in [Ty.int, Ty.string, Ty.param "shared" false] do
     let ctx := context selected
@@ -55,4 +79,25 @@ def main : IO Unit := do
   | .ok _ => throw (IO.userError "unknown annotation type was admitted")
   | .error message =>
     need "unknown annotation retains its diagnostic" (decide ((message.splitOn "UnknownType").length > 1))
-  IO.println "helper type notes passed (selected worlds, annotations, captures, scope and no value evaluation)"
+  for dummyProof in [false, true] do
+    for dummyCarrier in [false, true] do
+      for mutableField in [false, true] do
+        let ctx := evidenceContext dummyProof dummyCarrier mutableField
+        let entry := SExpr.app p (.ident p "$captureEvidence") [] false
+        let .ok ((_, after), state) := (elabStmtWith noExpression ctx (note [entry]) none).run {}
+          | throw (IO.userError "evidence-note elaboration failed")
+        need "real implicit dictionary roots are retained; dummy roots are excluded"
+          ((state.needs.nested.lookup "loop/$evidence/D").isSome == !dummyProof)
+        need "only real readonly proof carriers provide roots"
+          ((state.needs.nested.lookup "loop/$evidence/Carrier").isSome ==
+            (!dummyCarrier && !mutableField))
+        need "evidence roots retain their complete captured type"
+          ((state.needs.nested.lookup "loop/$evidence/Carrier").all
+            (· == .app "holder" [.name "t"]))
+        need "unrelated source locals are not invented as proof roots"
+          ((state.needs.nested.lookup "loop/$evidence/Unrelated").isNone &&
+           (state.needs.nested.lookup "loop/$evidence/UserCarrier").isNone)
+        need "evidence discovery does not change source bindings or roles"
+          (after.locals.map (fun l => (l.name, l.slot, l.ty, l.mutable, l.typeValue)) ==
+           ctx.locals.map (fun l => (l.name, l.slot, l.ty, l.mutable, l.typeValue)))
+  IO.println "helper type notes passed (selected worlds, annotations, implicit proof roots, metadata, scope and no value evaluation)"
