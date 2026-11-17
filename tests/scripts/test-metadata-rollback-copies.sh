@@ -51,11 +51,11 @@ with tempfile.TemporaryDirectory(prefix="openverse-metadata-rollback-") as tempo
     for index in range(count):
         bounded([str(binary), str(index), str(work)])
     programs = sorted(work.glob("*.vbc"))
-    if len(programs) != 70:
-        raise SystemExit(f"metadata rollback: expected 70 admitted artifacts, got {len(programs)}")
+    if len(programs) != 72:
+        raise SystemExit(f"metadata rollback: expected 72 admitted artifacts, got {len(programs)}")
     for program in programs:
         result = bounded(["runtime/build/cverse", str(program)])
         if result.stdout != program.with_suffix(".expected").read_text() or result.stderr:
             raise SystemExit(f"metadata rollback: incomplete C trace for {program.name}")
-print("metadata local-copy rollback passed (25 cases, 100 classifications, 70 complete C traces)")
+print("metadata local-copy rollback passed (25 cases, 100 classifications, 72 complete C traces)")
 PY
