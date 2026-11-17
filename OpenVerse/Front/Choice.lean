@@ -4125,10 +4125,10 @@ def noteConsumers (f : MFn) (has : SExpr → Bool) : SExpr :=
 
 /-- Separate sibling lexical bindings before cells are shared with a helper.
     The original body is retained independently for source admission. -/
-private def freshLoopLocal (owner : String) : StateM Nat String := do
+private def freshLoopLocal (owner name : String) : StateM Nat String := do
   let serial ← get
   modify (· + 1)
-  return s!"$loopLocal{sitePart owner}{serial}"
+  return s!"$loopLocal{sitePart owner}{serial}'{shownName name}"
 
 private partial def alphaReturnLoopExpr (owner : String) (aliases : List (String × String)) (e : SExpr) :
     StateM Nat (SExpr × List (String × String)) := do
@@ -4137,17 +4137,17 @@ private partial def alphaReturnLoopExpr (owner : String) (aliases : List (String
   | .ident p name => return (.ident p ((aliases.lookup name).getD name), aliases)
   | .decl p name annotation mutable rhs =>
     let (rhs, _) ← alphaReturnLoopExpr owner aliases rhs
-    let renamed ← fresh
+    let renamed ← fresh name
     return (.decl p renamed (annotation.map (styRename aliases)) mutable rhs,
       (name, renamed) :: aliases)
   | .gen p name index source =>
     let (source, _) ← alphaReturnLoopExpr owner aliases source
-    let renamed ← fresh
+    let renamed ← fresh name
     let updated := (name, renamed) :: aliases
     let (index, updated) ← match index with
       | none => pure (none, updated)
       | some name => do
-        let renamed ← fresh
+        let renamed ← fresh name
         pure (some renamed, (name, renamed) :: updated)
     return (.gen p renamed index source, updated)
   | .block p statements =>
@@ -4228,22 +4228,32 @@ private def loopSiteKey (owner : String) (p : Pos) : String :=
 private def loopDeclKey (owner : String) (binding : LoopCapture) : String :=
   s!"$loopDeclaration:{sitePart owner}:{binding.pos.file}:{binding.pos.line}:{binding.pos.col}/"
 
-private partial def loopBodyScalar (mv : List String) (e : SExpr) : Bool :=
+private def loopConcurrent (e : SExpr) : Bool :=
+  anyE (fun
+    | .app _ (.ident _ name) _ _ =>
+      ["$sync", "$race", "$rush", "$branch", "$spawn"].contains name
+    | _ => false) e
+
+private partial def loopBodyScalar (mv : List String) (e : SExpr)
+    (searchHeaders : Bool := false) : Bool :=
+  let scalar := fun e => loopBodyScalar mv e searchHeaders
   match e with
-  | .ret _ value => value.all fun v => !anyE (fun
-      | .app _ (.ident _ name) _ _ => ["$sync", "$race", "$rush", "$branch", "$spawn"].contains name
-      | _ => false) v
+  | .ret _ value => value.all (!loopConcurrent ·)
   | .app _ (.ident _ name) _ _ =>
     !(["$choice", "$loop", "$each", "$all", "$sync", "$race", "$rush", "$branch", "$spawn"].contains name || mv.contains name) &&
-      e.children.all (loopBodyScalar mv)
-  | e@(.forE _ [.decl _ _ _ false (.range _ lower upper)] body) =>
-    (!hasReturn body || (!hasLiftable (markCalls mv lower) && !hasLiftable (markCalls mv upper))) &&
-      e.children.all (loopBodyScalar mv)
-  | .forE _ [.gen _ _ _ source] body =>
-    loopBodyScalar mv source && !hasLiftable (markCalls mv source) && loopBodyScalar mv body
-  | e@(.forE ..) => !hasReturn e && e.children.all (loopBodyScalar mv)
-  | .loop _ body => loopBodyScalar mv body
-  | e => e.children.all (loopBodyScalar mv)
+      e.children.all scalar
+  | .forE _ clauses body =>
+    if searchHeaders then
+      !clauses.any hasReturn && !clauses.any loopConcurrent && scalar body
+    else match clauses with
+      | [.decl _ _ _ false (.range _ lower upper)] =>
+        (!hasReturn body || (!hasLiftable (markCalls mv lower) && !hasLiftable (markCalls mv upper))) &&
+          e.children.all scalar
+      | [.gen _ _ _ source] =>
+        scalar source && !hasLiftable (markCalls mv source) && scalar body
+      | _ => !hasReturn e && e.children.all scalar
+  | .loop _ body => scalar body
+  | e => e.children.all scalar
 
 private def hasReturningLoop (e : SExpr) : Bool :=
   anyE (fun
@@ -4338,8 +4348,7 @@ private structure ChoiceReturnRoute where
 private structure ChoiceReturnLoopSite where
   pos : Pos
   key : String
-  clauses : List SExpr
-  body : SExpr
+  iteration : SExpr
   entryScope : List LoopCapture
   entryCaptures : List LoopCapture
   routes : List ChoiceReturnRoute
@@ -4393,10 +4402,10 @@ private partial def choiceReturnLoopSites (owner : String) (f : MFn)
   let initial := f.params.map fun parameter =>
     ({ name := parameter.name, pos := f.pos, annotation := some parameter.ty,
        parameter := some parameter } : LoopCapture)
-  let concurrent (e : SExpr) := anyE (fun
-    | .app _ (.ident _ name) _ _ =>
-      ["$sync", "$race", "$rush", "$branch", "$spawn"].contains name
-    | _ => false) e
+  let hasSearch := anyE (fun
+    | .forE _ clauses body =>
+      hasReturn body && clauses.any (fun clause => liftsHere (markCalls mv clause))
+    | _ => false)
   let rec walk (scope : List LoopCapture) (e : SExpr) : List ChoiceReturnLoopSite :=
     match e with
     | .block _ statements => Id.run do
@@ -4409,19 +4418,15 @@ private partial def choiceReturnLoopSites (owner : String) (f : MFn)
     | .ite _ conditions yes no =>
       walk ((conditions.flatMap choiceReturnBindings).reverse ++ scope) yes ++
         no.toList.flatMap (walk scope)
-    | .forE p clauses body =>
-      if clauses.any (fun clause => liftsHere (markCalls mv clause)) &&
-          !clauses.any hasReturn && !clauses.any concurrent &&
-          hasReturn body && loopBodyScalar mv body then
-        let bound := clauses.flatMap choiceReturnBindings
-        let routes := choiceReturnRoutes owner (bound.reverse ++ scope) [] body
-        let used := namesUsed (.forE p clauses body)
+    | iteration@(.forE p ..) | iteration@(.loop p _) =>
+      if hasSearch iteration && loopBodyScalar mv iteration (searchHeaders := true) then
+        let routes := choiceReturnRoutes owner scope [] iteration
+        let used := namesUsed iteration
         let entryScope := choiceReturnScope scope
         let entryCaptures := entryScope.filter fun binding => binding.parameter.isSome || used.contains binding.name
-        [{ pos := p, key := choiceReturnRouteKey owner p, clauses, body, entryScope, entryCaptures, routes,
+        [{ pos := p, key := choiceReturnRouteKey owner p, iteration, entryScope, entryCaptures, routes,
            boxed := (uniqueLoopCaptures (entryCaptures ++ routes.flatMap (·.captures))).filter (·.mutable) }]
       else []
-    | .loop .. => []
     | .app _ (.ident _ "$defer") _ _ | .app _ (.ident _ "$returnBoundary") _ false => []
     | e => e.children.flatMap (walk scope)
   return walk initial f.body
@@ -4438,7 +4443,8 @@ private partial def noteChoiceReturnLoops (owner : String) (sites : List ChoiceR
       (.str p [.text key] :: [
         .decl p "$observed" (some (.name "int")) false (.tuple p []),
         .app p (.ident p "$captureEvidence") [] false
-      ] ++ captures.map (fun capture => .ident p capture.name)) false
+        ] ++ captures.map (fun capture =>
+        .tuple p [.str p [.text capture.name], .ident p capture.name])) false
   let rec go (e : SExpr) : SExpr := Id.run do
     if let .ret p _ := e then
       if let some route := routes.find? (·.pos == p) then
@@ -4453,8 +4459,8 @@ private partial def noteChoiceReturnLoops (owner : String) (sites : List ChoiceR
           | some binding => [changed, note q (loopDeclKey owner binding) [binding]]
           | none => [changed]
         | _ => [changed])
-    | .forE p clauses iteration =>
-      let original := SExpr.forE p clauses (go iteration)
+    | iteration@(.forE p ..) | iteration@(.loop p _) =>
+      let original ← iteration.mapChildrenM (m := Id) fun child => pure (go child)
       match sites.find? (·.pos == p) with
       | some site => return .block p [note p (site.key ++ "$entry/") site.entryCaptures, original]
       | none => return original
@@ -4779,6 +4785,15 @@ private def choiceLoopIteration (p : Pos) (clauses : List SExpr) (body : SExpr)
     .forE p bounds (.block p [.decl q cursor integer true (ident lower), .loop p step])
   | _ => .forE p clauses body
 
+private partial def cursorChoiceLoops (iteration : SExpr) (owner : String) : SExpr :=
+  mapE (fun
+    | .forE p clauses body =>
+      if hasReturn body then
+        let stem := s!"{owner}$range{p.line}_{p.col}"
+        some (choiceLoopIteration p clauses (cursorChoiceLoops body owner) stem)
+      else none
+    | _ => none) iteration
+
 private partial def lowerChoiceReturnLoops (owner : String) (f : MFn) (sites : List ChoiceReturnLoopSite)
     (types : List (String × STy)) : Except String (SExpr × List STop) := do
   let boxed := uniqueLoopCaptures (sites.flatMap (·.boxed))
@@ -4828,7 +4843,7 @@ private partial def lowerChoiceReturnLoops (owner : String) (f : MFn) (sites : L
     let routeTypes ← routes.mapM fun route => route.captures.mapM fun capture => do
       let some ty := noted route.key capture
         | throw "internal: missing choice loop return capture"
-      pure (storageAnnotation capture ty)
+      pure (if boxNames.contains capture.name then .app "$varcell" [ty] else ty)
     let packetType := STy.opt (.tup (routeTypes.map fun ty => .opt (.tup ty)))
     let selection := mapE (fun
       | .ret q _ => do
@@ -4841,9 +4856,8 @@ private partial def lowerChoiceReturnLoops (owner : String) (f : MFn) (sites : L
           .ret q (some (.optionLit q (.tuple q values)))])
       | .app q deferFn@(.ident _ "$defer") [cleanup] false =>
         some (.app q deferFn [.ite q [.notE q (.query q (.ident q selected))] cleanup none] false)
-      | _ => none) (cellVars boxNames (prepare site.body))
-    let traversal := choiceLoopIteration p (site.clauses.map fun clause => cellVars boxNames (prepare clause))
-      selection name
+      | _ => none) (cellVars boxNames (prepare site.iteration))
+    let traversal := cursorChoiceLoops selection name
     let selector := STop.fn p name params f.tparams f.fx packetType (.block p
       [.decl p selected (some (.name "logic")) true (ident "false"), traversal, ident "false"])
     let project (binding : String) (index : Nat) :=
@@ -4851,10 +4865,14 @@ private partial def lowerChoiceReturnLoops (owner : String) (f : MFn) (sites : L
     let resumes := (routes.zip routeTypes).zipIdx.map fun ((route, types), index) =>
       let input := s!"{name}$input{index}"
       let bound := entry.map (·.name)
+      let narrowed := route.captures.filter fun capture =>
+        bound.contains capture.name && noted entryKey capture != noted route.key capture
+      let aliases := renamedFor input (narrowed.map (·.name))
       let restore := (route.captures.zip types).zipIdx.filterMap fun ((capture, ty), field) =>
-        if bound.contains capture.name then none else
-          some (SExpr.decl p capture.name (some ty) false (project input field))
-      let code := cellVars boxNames (.block p (route.cleanups ++ [route.exit]))
+        let alias := aliases.lookup capture.name
+        if bound.contains capture.name && alias.isNone then none else
+          some (SExpr.decl p (alias.getD capture.name) (some ty) false (project input field))
+      let code := renameE aliases (cellVars boxNames (.block p (route.cleanups ++ [route.exit])))
       SExpr.ite p [.decl p input none false (.query p (project slots index))]
         (.block p (restore ++ [code])) (some (.tuple p []))
     let saved := SExpr.decl p packet none false (.app p (ident name) (params.map fun param => ident param.name) false)
@@ -4863,7 +4881,8 @@ private partial def lowerChoiceReturnLoops (owner : String) (f : MFn) (sites : L
     helpers := helpers ++ [selector]
     replacements := replacements ++ [(p, .block p [saved, dispatch])]
   let lowered := mapE (fun
-    | e@(.forE p ..) => (replacements.lookup p).orElse fun _ => some (cellVars boxNames (prepare e))
+    | e@(.forE p ..) | e@(.loop p _) =>
+      (replacements.lookup p).orElse fun _ => some (cellVars boxNames (prepare e))
     | .decl p name ty mutable rhs => if boxNames.contains name then
         some (cellVars boxNames (prepare (.decl p name ty mutable rhs))) else none
     | .ident p name => if boxNames.contains name then some (.member p (.ident p name) "$VCell") else none

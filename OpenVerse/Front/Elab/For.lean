@@ -385,7 +385,9 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       -- type is the range's, `int`)
       if let some t := ty then
         let rt ← resolveTy c.types gp t
-        if rt != .int then eerr gp s!"a range's values are ints: {n}:{rt.show} := a..b is not one; write {n}:int := a..b"
+        if rt != .int then
+          let name := Choice.shownName n
+          eerr gp s!"a range's values are ints: {name}:{rt.show} := a..b is not one; write {name}:int := a..b"
       let es ← elabInts { c with canFail := true, inTaking := true } gp [lo, hi]
       let (slot, c1) ← declareAt g.pos c n .int
       -- (a bound that fails gives no iterations, its effects and the

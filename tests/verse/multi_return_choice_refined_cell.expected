@@ -1,0 +1,14 @@
+outer new
+matched 6
+outer new
+matched 5
+none
+outer old
+miss 9
+outer old
+miss 9
+outer old
+mixed 9
+outer old
+mixed 9
+exit=0
