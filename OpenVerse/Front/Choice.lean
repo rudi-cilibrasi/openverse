@@ -4234,6 +4234,9 @@ private partial def loopBodyScalar (mv : List String) (e : SExpr) : Bool :=
   | .app _ (.ident _ name) _ _ =>
     !(["$choice", "$loop", "$each", "$all", "$sync", "$race", "$rush", "$branch", "$spawn"].contains name || mv.contains name) &&
       e.children.all (loopBodyScalar mv)
+  | e@(.forE _ [.decl _ _ _ false (.range _ lower upper)] body) =>
+    (!hasReturn body || (!hasLiftable (markCalls mv lower) && !hasLiftable (markCalls mv upper))) &&
+      e.children.all (loopBodyScalar mv)
   | e@(.forE ..) | e@(.loop ..) => !hasReturn e && e.children.all (loopBodyScalar mv)
   | e => e.children.all (loopBodyScalar mv)
 
@@ -4355,14 +4358,21 @@ private partial def noteReturnLoops (owner : String) (ret : STy) (parameters : L
     | e => return e.mapChildrenM (m := Id) (fun child => pure (go child))
   return checkBody (go e)
 
-private partial def returnLoopOperands (ret : STy) (tag : String) (onBreak : Option SExpr) : SExpr → SExpr
+private partial def returnLoopOperands (ret : STy) (tag : String) (onBreak : Option SExpr)
+    (nested : Bool) : SExpr → SExpr
   | .ret p value =>
     let saved := s!"{tag}$operand{p.line}_{p.col}"
-    .block p [.decl p saved (some ret) false (value.getD (.tuple p [])),
-      .ret p (some (.optionLit p (.ident p saved)))]
+    let bind := SExpr.decl p saved (some ret) false (value.getD (.tuple p []))
+    let packet := SExpr.optionLit p (.ident p saved)
+    -- The next helper still needs a source return. Save the value outside
+    -- its option so the option's failure context cannot select a single arm.
+    if nested then .ret p (some (.block p [bind, packet]))
+    else .block p [bind, .ret p (some packet)]
   | e@(.brk p) => onBreak.map (fun noneValue => .ret p (some noneValue)) |>.getD e
-  | e@(.forE ..) | e@(.loop ..) => e
-  | e => Id.run (e.mapChildrenM fun child => pure (returnLoopOperands ret tag onBreak child))
+  | e@(.forE p clauses body) =>
+    if hasReturn body then .forE p clauses (returnLoopOperands ret tag none true body) else e
+  | e@(.loop ..) => e
+  | e => Id.run (e.mapChildrenM fun child => pure (returnLoopOperands ret tag onBreak nested child))
 
 private partial def boxReturnLoopCaptures (owner : String) (sites : List ReturnLoopSite)
     (types : List (String × STy)) (body : SExpr) : SExpr := Id.run do
@@ -4484,7 +4494,7 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
         let finish := SExpr.ident p endName
         let next := SExpr.ite p [.cmp p cursor [(">=", finish)]]
           noneValue (some (call [.bin p "+" cursor (.int p 1), finish]))
-        let iteration := returnLoopOperands ret site.helper none iterationBody
+        let iteration := returnLoopOperands ret site.helper none false iterationBody
         let iteration := if loopIterationTerminal iterationBody then iteration
           else SExpr.block p [iteration, next]
         let helperBody := SExpr.ite p [.cmp p cursor [(">", finish)]]
@@ -4492,9 +4502,15 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
         let low := site.helper ++ "$lower"
         let high := site.helper ++ "$upper"
         -- A failed endpoint makes the range empty and reaches the suffix.
-        let replacement := SExpr.ite p
-          [.decl p low (some (.name "int")) false (cellVars boxed lower),
-           .decl p high (some (.name "int")) false (cellVars boxed upper)]
+        let endpoints := [.decl p low (some (.name "int")) false (cellVars boxed lower),
+          .decl p high (some (.name "int")) false (cellVars boxed upper)]
+        let nestedReturns := owner.startsWith "$sourceLoopReturn" || anyE (fun
+          | .forE _ _ body | .loop _ body => hasReturn body
+          | _ => false) site.body
+        -- A generated range header can be checked again while extracting a
+        -- nested helper. Either endpoint can fail, but neither has to.
+        let endpoints := if nestedReturns then endpoints ++ [.query p (.ident p "true")] else endpoints
+        let replacement := SExpr.ite p endpoints
           (resume [.ident p low, .ident p high]) (some (.tuple p []))
         ([{ name := index, ty := .name "int" }, { name := endName, ty := .name "int" }],
           .opt ret, helperBody, replacement)
@@ -4506,7 +4522,7 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
         let endValue := SExpr.bin p "-" (.member p (.ident p items) "Length") (.int p 1)
         let next := SExpr.ite p [.cmp p (.ident p cursor) [(">=", endValue)]]
           noneValue (some (call [.bin p "+" (.ident p cursor) (.int p 1), .ident p items]))
-        let iteration := returnLoopOperands ret site.helper none iterationBody
+        let iteration := returnLoopOperands ret site.helper none false iterationBody
         let iteration := if loopIterationTerminal iterationBody then iteration
           else SExpr.block p [iteration, next]
         let helperBody := SExpr.ite p [.decl p index (some element) false
@@ -4525,7 +4541,7 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
         -- A break returns an absent result from the helper. Nested loops
         -- own their breaks and remain inside the current iteration.
         let mayBreak := hasOwnLoopBreak iterationBody
-        let iteration := if mayBreak then returnLoopOperands ret site.helper (some noneValue) iterationBody
+        let iteration := if mayBreak then returnLoopOperands ret site.helper (some noneValue) false iterationBody
           else iterationBody
         let helperBody := if loopIterationTerminal iterationBody then iteration
           else SExpr.block p [iteration, call []]

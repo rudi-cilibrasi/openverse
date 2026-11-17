@@ -2200,9 +2200,12 @@ Main():void =
   lowering. Selected generic types and real implicit proof capabilities stay
   attached to the loop site; metadata proof inputs cannot grant those views.
 
-  Other multi-valued loop shapes, including choice-bearing endpoints,
-  nested returning loops and mutable implicit proof captures, remain
-  implementation limits (#686). Other return-containing initializer shapes
+  A returning integer-range loop can also be nested inside an eligible
+  enclosing loop. Its returned alternatives leave both iterations, running
+  each reached cleanup from the inner scope outward. Other multi-valued loop
+  shapes, including choice-bearing endpoints, nested returning array or
+  plain loops, and mutable implicit proof captures, remain implementation
+  limits (#686). Other return-containing initializer shapes
   retain their existing restrictions. Direct concurrency forms are not
   supported within a scalar captured expression. Existing source restrictions on returns inside
   expressions or conditions continue to apply.
