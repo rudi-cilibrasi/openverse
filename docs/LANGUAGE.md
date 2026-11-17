@@ -2200,6 +2200,9 @@ Main():void =
   the source variable during iteration leaves the sequence of items intact.
   The indexed form `for (Index -> Item : Items)` also binds the current
   zero-based index, including in return operands and cleanup.
+  A single-valued map source uses the same loop return semantics and
+  preserves entry order. In `for (Key -> Item : Entries)`, the key and item
+  stay in scope in the return operand and cleanup.
   Source type, failure-context and event-effect checks still apply before this
   lowering. Selected generic types and real implicit proof capabilities stay
   attached to the loop site; metadata proof inputs cannot grant those views.
