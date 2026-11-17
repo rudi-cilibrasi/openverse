@@ -46,6 +46,8 @@ def intersect (a b : Bits) : Bits :=
 
 /-- A mode is meaningful only after its path initialized the cell. -/
 def joinModes (a ai b bi : Bits) : Bits :=
+  -- Most slots have no shared mode. Reuse the empty mask directly.
+  if a.bits == 0 && b.bits == 0 then a else
   let all := mask a.size
   { size := a.size
     bits := ((b.bits &&& (all ^^^ ai.bits)) |||
