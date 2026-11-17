@@ -96,6 +96,13 @@ def older (site : Nat) : Nat := 3 + 2 * site
 private def replace (old fresh : Nat) (refs : Refs) : Refs :=
   normalize (refs.map fun r => if r == old then fresh else r)
 
+/-- Rebase a pending value kept outside Memory when the next allocation at
+    this site demotes its previous instance. Use the pre-allocation memory. -/
+def demotePayloadForAllocation (before : Memory) (site : Nat) (payload : Payload) : Payload :=
+  if before.nodes.contains (recent site) then
+    { payload with refs := replace (recent site) (older site) payload.refs }
+  else payload
+
 /-- A new instance moves every alias of the previous recent object to the
     older identity, including aliases inside cell payloads and containers.
     Two different old instances force the summary's uniqueness to false. -/
@@ -119,16 +126,15 @@ private def demote (m : Memory) (site : Nat) : Memory :=
 
 /-- The caller assigns distinct dense sites to distinct allocation nodes.
     Private cells have exactly one payload field. Other objects transport
-    references but never acquire permission to store metadata payloads. -/
+    references but never acquire permission to store metadata payloads.
+    All live aliases must be in Memory or the operands; callers rebase any
+    other pending values or saved caller locals with the same demotion. -/
 def allocate (m : Memory) (site : Nat) (isPrivate : Bool)
     (values : List Payload) : Refs × Memory := Id.run do
-  let repeated := m.nodes.contains (recent site)
+  let values := values.map (demotePayloadForAllocation m site)
   let m := demote m site
   -- Operands were evaluated before allocation; their references denote the
   -- former recent object, not the fresh object now taking its identity.
-  let values := if repeated then values.map fun p =>
-      { p with refs := replace (recent site) (older site) p.refs }
-    else values
   let id := recent site
   let privateCell := isPrivate && values.length == 1
   let mut m := { m with nodes := m.nodes.insert id { privateCell } }

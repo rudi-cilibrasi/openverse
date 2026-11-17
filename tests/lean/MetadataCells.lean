@@ -41,8 +41,10 @@ private def models : IO Unit := do
   expect ((← payload m old).role) "strong recent overwrite must preserve the older summary"
 
   let (original, m) := allocate empty 8 true [real]
+  let pending := demotePayloadForAllocation m 8 { refs := original }
   let (next, m) := allocate m 8 true [{ refs := original }]
   expect ((← payload m next).refs == [older 8]) "constructor operands refer to the previous object"
+  expect (pending.refs == (← payload m next).refs) "pending caller values need the same allocation demotion"
   expect (loadRefs m next 0 == [older 8]) "payload reference fields must match constructor demotion"
   let (left, m) := allocate m 9 true [metadata]
   let (right, m) := allocate m 10 true [real]
