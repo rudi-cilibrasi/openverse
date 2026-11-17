@@ -1,0 +1,10 @@
+cleanup 1 2
+all 2
+cleanup 1 2
+all 12
+cleanup 1 2
+first 12
+none
+fallback 0
+fallback 1
+exit=0

@@ -3097,6 +3097,17 @@ def multiCandidates (tops : List STop) : List (String × MFn) :=
       if n == "Main" || n == "$Do" || fx.contains "suspends" then none else some (n, ⟨p, ps, tps, fx, r, b⟩)
     | _ => none
 
+/-- A returning iteration can expose choices through the rest of the
+    producer. Header choices belong to the for search. -/
+private partial def returningLoopChoice : SExpr → Bool
+  | .forE _ _ body | .loop _ body =>
+    hasReturn body && (hasChoice (stmtsOf body) || returningLoopChoice body)
+  | .block _ statements => statements.any returningLoopChoice
+  | .ite _ _ yes no => returningLoopChoice yes || no.any returningLoopChoice
+  | .caseE _ _ arms => arms.any (fun (_, body) => returningLoopChoice body)
+  | .decl _ _ _ _ value => returningLoopChoice value
+  | _ => false
+
 /-- Which of `fns` have several values, also through the calls of ones that
     have them, where the body itself does not take their values. -/
 def multiValued (fns : List (String × MFn)) : List String := Id.run do
@@ -3108,7 +3119,7 @@ def multiValued (fns : List (String × MFn)) : List String := Id.run do
       let b := markCalls mv f.body
       let ss := stmtsOf b
       -- (a choice in a `return`'s value too, #283)
-      if !mv.contains n && (hasChoice ss || ss.any liftsHere ||
+      if !mv.contains n && (hasChoice ss || ss.any liftsHere || returningLoopChoice b ||
           anyE (fun | .ret _ (some e) => hasLiftable e | _ => false) b) then
         mv := mv ++ [n]; changed := true
   return mv
@@ -4234,26 +4245,46 @@ private def loopConcurrent (e : SExpr) : Bool :=
       ["$sync", "$race", "$rush", "$branch", "$spawn"].contains name
     | _ => false) e
 
-private partial def loopBodyScalar (mv : List String) (e : SExpr)
-    (searchHeaders : Bool := false) : Bool :=
-  let scalar := fun e => loopBodyScalar mv e searchHeaders
+private partial def loopBodySupported (mv : List String) (e : SExpr)
+    (searchHeaders : Bool := false) (bodyChoices : Bool := false) : Bool :=
+  let scalar := fun e => loopBodySupported mv e searchHeaders bodyChoices
   match e with
   | .ret _ value => value.all (!loopConcurrent ·)
+  -- These scopes select at most one success. Choices in the arms of an
+  -- if or in the fallback of or can still reach the producer.
+  | .ite _ conditions yes no =>
+    !conditions.any loopConcurrent && scalar yes && no.all scalar
+  | .optionLit _ value | .logicLit _ value | .notE _ value =>
+    !loopConcurrent value
+  | .orE _ attempted fallback =>
+    !loopConcurrent attempted && scalar fallback
+  | .app _ (.ident _ "$first") _ false =>
+    !loopConcurrent e
   | .app _ (.ident _ name) _ _ =>
-    !(["$choice", "$loop", "$each", "$all", "$sync", "$race", "$rush", "$branch", "$spawn"].contains name || mv.contains name) &&
+    !["$sync", "$race", "$rush", "$branch", "$spawn"].contains name &&
+      (bodyChoices || !(["$choice", "$loop", "$each", "$all"].contains name || mv.contains name)) &&
       e.children.all scalar
   | .forE _ clauses body =>
-    if searchHeaders then
+    if searchHeaders || !hasReturn body then
       !clauses.any hasReturn && !clauses.any loopConcurrent && scalar body
     else match clauses with
       | [.decl _ _ _ false (.range _ lower upper)] =>
-        (!hasReturn body || (!hasLiftable (markCalls mv lower) && !hasLiftable (markCalls mv upper))) &&
+        !hasLiftable (markCalls mv lower) && !hasLiftable (markCalls mv upper) &&
           e.children.all scalar
       | [.gen _ _ _ source] =>
         scalar source && !hasLiftable (markCalls mv source) && scalar body
-      | _ => !hasReturn e && e.children.all scalar
+      | _ => false
   | .loop _ body => scalar body
   | e => e.children.all scalar
+
+/-- Recursive return helpers use scalar guards. A condition with its own
+    choice search runs in the selector that owns the iteration instead. -/
+private partial def iterationGuardChoices (mv : List String) : SExpr → Bool
+  | .ret .. => false
+  | e@(.ite _ conditions ..) =>
+    conditions.any (fun clause => liftsHere (markCalls mv clause)) ||
+      e.children.any (iterationGuardChoices mv)
+  | e => e.children.any (iterationGuardChoices mv)
 
 private def hasReturningLoop (e : SExpr) : Bool :=
   anyE (fun
@@ -4291,7 +4322,10 @@ private partial def returnLoopSites (owner : String) (f : MFn) (mv : List String
     let many := anyE (fun
       | .ret _ value => value.any fun operand => hasLiftable (markCalls mv operand)
       | _ => false) body
-    if hasReturn body && many && loopBodyScalar mv body then
+    let scalar := loopBodySupported mv body
+    if hasReturn body && (many || !scalar) &&
+        !(scalar && iterationGuardChoices mv body) &&
+        loopBodySupported mv body (bodyChoices := true) then
       let inner := localsOf body
       let names := namesUsed body
       let bindings := match source with
@@ -4325,7 +4359,7 @@ private partial def returnLoopSites (owner : String) (f : MFn) (mv : List String
       if !hasLiftable (markCalls mv lower) && !hasLiftable (markCalls mv upper) then
         record scope defers p (.range index lower upper) body
     | .forE p [.gen _ item index source] body =>
-      if loopBodyScalar mv source && !hasLiftable (markCalls mv source) then
+      if loopBodySupported mv source && !hasLiftable (markCalls mv source) then
         record scope defers p (.collection item index source) body
     | .loop p body => record scope defers p .loop body
     -- A nested loop is not a separately owned return boundary. Keep an
@@ -4419,7 +4453,8 @@ private partial def choiceReturnLoopSites (owner : String) (f : MFn)
       walk ((conditions.flatMap choiceReturnBindings).reverse ++ scope) yes ++
         no.toList.flatMap (walk scope)
     | iteration@(.forE p ..) | iteration@(.loop p _) =>
-      if hasSearch iteration && loopBodyScalar mv iteration (searchHeaders := true) then
+      if (hasSearch iteration || iterationGuardChoices mv iteration) &&
+          hasReturn iteration && loopBodySupported mv iteration (searchHeaders := true) then
         let routes := choiceReturnRoutes owner scope [] iteration
         let used := namesUsed iteration
         let entryScope := choiceReturnScope scope
