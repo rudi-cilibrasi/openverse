@@ -629,6 +629,14 @@ owned break cannot reach the following statement, so the enclosing helper
 omits its unreachable recursive step. Type-note discovery allows one further
 round per nested loop on a path to a return.
 
+For choice-bearing headers, a scalar selector runs the complete search and
+saves a typed packet at the first reached return. The caller saves the
+selector's option before querying it, so exhaustion preserves the effects of
+completed rows. The selected path defers its reached cleanup to the lazy
+operand. Other paths run their cleanup during traversal. A packet carries
+the selected types and shared cell references, including inside refined
+branches. Type notes keep their lexical keys through refinement copies.
+
 `returnLoopSites` records
 eligible sites and `$noteTypes` discovers the capture types, type parameters,
 collection type and return target in the original selected world. Declaration-site notes retain
