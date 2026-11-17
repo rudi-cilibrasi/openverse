@@ -3716,8 +3716,8 @@ Main()<suspends>:void =
       Print(B.Await())    # after 1 second: b data
       Print(A.Await())    # after 2 seconds: a data
   ```
-- **Library types.** `event`, `sticky_event`, `task`, `subscribable_event`
-  and `cancelable` are available wherever their types are used, including
+- **Library types.** `event`, `sticky_event`, `task`, `subscribable_event`,
+  `signalable` and `cancelable` are available wherever their types are used, including
   immediate functions, casts, unused loaded definitions, nested annotations,
   imports and command-line `do` expressions (#518). Type use alone does
   not require `<suspends>`; waiting and cancellation still follow their
@@ -3736,6 +3736,10 @@ Main()<suspends>:void =
   and the FORT-1088027 and FORT-1126351 cases): in the order they began
   waiting, each until it waits again or ends, all before `Signal` returns
   ([the rule](research/scheduler-conformance.md#awaiters-run-inside-signal)).
+  An `event(t)` and its subclasses can be passed as `signalable(t)`. Calls
+  through that interface dispatch to the concrete event, including the
+  `Signal` override on `sticky_event(t)`. The optional
+  `--signal-no-rollback` policy applies to calls through the interface.
   A waiter is a spawned task, `Main`, a `branch`, an arm of a `sync`,
   `race` or `rush` (also one of the signalling task's own: an arm awaiting
   while its sibling signals is resumed inside that sibling's `Signal`), or

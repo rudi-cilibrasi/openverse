@@ -102,7 +102,8 @@ def concurrencyHelpers (resolved : List STop) (requests : Requests) :
   -- awaiters inside it, `concPreludeAwaits`; event mode too)
   let awaits := usesConc && requests.awaits
   let usesEvents := usesConc && (usesSub || needs "event" || needs "sticky_event" || awaits)
-  let helpers := (← if usesConc then concTops privateNames usesEvents awaits else pure []) ++
+  let conc ← if usesConc then concTops privateNames usesEvents awaits (needs "signalable") else pure []
+  let helpers := conc ++
     (← if usesSub then subTops privateNames else pure []) ++ (← if usesSubVoid then subVoidTops privateNames else pure [])
   return (concurrencyNames, usesConc, usesEvents, awaits, helpers)
 

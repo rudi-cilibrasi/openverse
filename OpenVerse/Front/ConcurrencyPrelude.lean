@@ -185,10 +185,17 @@ def concPreludeAwaits : String :=
     "Await(T:task(t) where t:type)<suspends>:t =\n    if (R := T.Result?) then R else:\n        EvAwait(taskEnds(T))\n        if (V := T.Result?) then V else Err()\ntaskEnds(T:taskBase):event(void) =\n    if (E := T.Ends?) then E else:\n        F := event(void){}\n        set T.Ends = option{F}\n        F\ntaskEnd(T:taskBase):void =\n    if (E := T.Ends?) then signalAll(E, ())\n"
 
 /-- The concurrency prelude's definitions: plain, in event mode (`events`),
-    or in await mode (`awaits`, which is event mode too). -/
-def concTops (owned : List String := []) (events : Bool := false) (awaits : Bool := false) :
-    Except String (List STop) :=
-  parsePrelude (if awaits then concPreludeAwaits else if events then concPreludeEvents else concPrelude)
+    or in await mode (`awaits`, which is event mode too). Add the public
+    signaling interface when a source type needs it. -/
+def concTops (owned : List String := []) (events : Bool := false) (awaits : Bool := false)
+    (usesSignalable : Bool := false) : Except String (List STop) := do
+  let prelude := if awaits then concPreludeAwaits else if events then concPreludeEvents else concPrelude
+  let prelude := if usesSignalable then
+    prelude.replace "event(t:type) := class:\n" ("signalable(t:type) := interface:\n" ++
+      "    Signal(X:t):void\nevent(t:type) := class(signalable(t)):\n") |>.replace
+      "    Signal(X:t):void =\n" "    Signal<override>(X:t):void =\n"
+    else prelude
+  parsePrelude prelude
     (owned ++ (if events || awaits then ["CurRoot",
     "WaitRoot", "Pending", "Probe", "Drain", "MainTask", "Ev", "First", "wakeRoot"] else []) ++
     (if awaits then ["Ends", "taskEnds", "taskEnd"] else []) ++ ["sched", "Now", "Next", "sleep", "Pc", "Secs", "Wake", "sleepNew",

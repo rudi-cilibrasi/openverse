@@ -1341,8 +1341,8 @@ Tests/Bugs/FORT-1088027-UseOfNullInitializedDynamicallyTypedValue.versetest:185	
 Tests/Bugs/FORT-1088027-UseOfNullInitializedDynamicallyTypedValue.versetest:decls	not-translatable
 Tests/Bugs/FORT-1126351-GenericSignalableDeferredSignalConvertCrash.versetest:62	not-translatable
 Tests/Bugs/FORT-1126351-GenericSignalableDeferredSignalConvertCrash.versetest:decls	not-translatable
-Tests/Bugs/FORT-1126351-GenericSignalableReentrantConvertCrash.versetest:70	disagrees-refuses
-Tests/Bugs/FORT-1126351-GenericSignalableReentrantConvertCrash.versetest:decls	disagrees-refuses
+Tests/Bugs/FORT-1126351-GenericSignalableReentrantConvertCrash.versetest:70	agrees
+Tests/Bugs/FORT-1126351-GenericSignalableReentrantConvertCrash.versetest:decls	agrees
 Tests/Bugs/FORT-1126351-RaceArmSuspendedAfterResolution.versetest:46	agrees
 Tests/Bugs/FORT-1126351-RaceArmSuspendedAfterResolution.versetest:decls	agrees
 Tests/Bugs/FORT-1126351-RaceArmsDoNotStartAfterResolution.versetest:33	agrees
