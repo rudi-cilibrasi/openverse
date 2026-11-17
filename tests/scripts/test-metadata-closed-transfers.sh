@@ -54,6 +54,7 @@ PY
 
 # Ordinary reference-returning recursion must stay within the same native
 # budget even when its consumer is an independently validated dormant root.
+make -s -C runtime
 python3 - <<'PYRUN'
 import resource
 import subprocess
