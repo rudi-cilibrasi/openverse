@@ -4382,12 +4382,16 @@ private partial def returnLoopSites (owner : String) (f : MFn) (mv : List String
       if loopBodySupported mv source && !hasLiftable (markCalls mv source) then
         record scope defers p (.collection item index source) body
     | .forE p clauses body =>
-      let flatChoice : SExpr → Bool := fun
-        | .decl _ _ _ false (.app _ (.ident _ "$choice") values false) =>
-          values.all fun value => !liftsHere (markCalls mv value)
-        | _ => false
+      let alternatives : SExpr → Option (List SExpr) := fun
+        | .decl _ _ _ false (.app _ (.ident _ "$choice") values false) => some values
+        | _ => none
+      let flatChoice := fun clause =>
+        (alternatives clause).any fun values => values.all fun value => !liftsHere (markCalls mv value)
       let valid clause := flatChoice clause || !liftsHere (markCalls mv clause)
-      if clauses.any flatChoice && clauses.all valid && !clauses.any loopConcurrent &&
+      let flat := clauses.any flatChoice && clauses.all valid
+      let composed := clauses.head?.any (fun clause => (alternatives clause).isSome) &&
+        (clauses.drop 1).all valid
+      if (flat || composed) && !clauses.any loopConcurrent &&
           !loopBodySupported mv body then
         record scope defers p (.cursor clauses (boundIn clauses)) body
     | .loop p body => record scope defers p .loop body

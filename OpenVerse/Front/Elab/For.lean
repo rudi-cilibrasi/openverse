@@ -148,6 +148,24 @@ def ForLevel.step (found : Nat) : List ForLevel → Expr
               (.seq (ForLevel.step found (next :: more)) (isTrueIn found)))
           (.seq (.assign l.act (.lit (.logic true))) Expr.brkV) (.lit .void)))))
 
+/-- Advance nested generators with the same boundaries as nested Core fors.
+    A generator's filter commits before entering its child source. Exhausting
+    that child therefore leaves the parent's successful work in place. -/
+def ForLevel.stepNested (found : Nat) : List ForLevel → Expr
+  | [] => ForLevel.step found []
+  | [level] => ForLevel.step found [level]
+  | level :: child :: rest =>
+    let void := Expr.lit .void
+    let enter := Expr.seq (level.advance Expr.brkV)
+      (.ite (.seq level.bindElement level.filt)
+        (.seq child.enter (.seq (.assign level.res (.lit (.logic true))) void)) void)
+    .loop (.seq (.assign level.res (.local level.act))
+      (.seq (.assign level.act (.lit (.logic false)))
+        (.seq (.ite (isTrueIn level.res) void enter)
+          (.seq (.ite (isTrueIn level.res) (ForLevel.stepNested found (child :: rest)) void)
+            (.ite (isTrueIn found)
+              (.seq (.assign level.act (.lit (.logic true))) Expr.brkV) void)))))
+
 /-- The shared search code for a flat `for`. Its first successful step enters
     the first source and commits the prelude. Later steps advance the cursor. -/
 structure ForSearch where
@@ -156,6 +174,7 @@ structure ForSearch where
   prelude : Option Expr
   started : Nat
   found : Nat
+  nested : Bool := false
 
 def ForSearch.init (search : ForSearch) : Expr :=
   .assign search.started (.lit (.logic false))
@@ -168,6 +187,16 @@ def ForSearch.take (search : ForSearch) (row exhausted : Expr) : Expr :=
     (.seq (.ite (isTrueIn search.started) (.lit .void) enter)
       (.seq (ForLevel.step search.found (search.head :: search.tail)) (isTrueIn search.found)))
   .ite step (.seq (.assign search.started (.lit (.logic true))) row) exhausted
+
+def ForSearch.takeNested (search : ForSearch) (row exhausted : Expr) : Expr :=
+  let void := Expr.lit .void
+  let enter := Expr.ite (isTrueIn search.started) void
+    (.ite (search.prelude.getD void)
+      (.seq search.head.enter (.seq (.assign search.started (.lit (.logic true))) void)) void)
+  let step := Expr.ite (isTrueIn search.started)
+    (ForLevel.stepNested search.found (search.head :: search.tail)) void
+  .seq (.assign search.found (.lit (.logic false)))
+    (.seq enter (.seq step (.ite (isTrueIn search.found) row exhausted)))
 
 /-- Storage required to resume after a successful row. Clause bindings that
     remain live across the step are supplied by the caller. User cells stay
@@ -210,12 +239,63 @@ def ForSearch.takeFrom (search : ForSearch) (bindings : List Nat) (prior : Optio
   let payload := match row with
     | none => cursor
     | some row => ⟨.prim .mkTup [cursor.e, row.e], .tup [cursor.ty, row.ty]⟩
-  let result := search.take (.prim .mkSome [payload.e]) (.lit .none)
+  let take := if search.nested then search.takeNested else search.take
+  let result := take (.prim .mkSome [payload.e]) (.lit .none)
   return ⟨.seq setup result, .opt payload.ty⟩
 
 structure ForCursorRequest where
   prior : SExpr
   outputs : List String
+
+/-- One prepared alternative of a composed header, with its own cursor. -/
+structure ForCursorArm where
+  cursor : Ty
+  row : Ty
+  input : Nat
+  next : Expr
+
+def forCursorChoiceType (arms : List ForCursorArm) : Ty :=
+  .tup [.int, .tup (arms.map (fun arm => .opt arm.cursor))]
+
+/-- Resume the active alternative, then try later alternatives in source
+    order. Evaluating a step and querying its option are separate, so effects
+    committed by the alternative survive even when it has no rows. -/
+def forCursorChoice (p : Pos) (prior : Option Nat) (arms : List ForCursorArm) : EM R := do
+  let some first := arms.head? | eerr p "internal: a cursor choice without alternatives"
+  unless arms.all (fun arm => arm.row == first.row) do
+    eerr p "internal: composed cursor alternatives have different row types"
+  let cursor := forCursorChoiceType arms
+  let resultTy := Ty.opt (.tup [cursor, first.row])
+  let previous ← fresh cursor
+  let active ← fresh .int
+  let kept ← fresh .logic
+  let result ← fresh resultTy
+  let void := Expr.lit .void
+  let project (source : Expr) (index : Nat) := Expr.prim (.tupGet index) [source]
+  let readPrior := match prior with
+    | none => void
+    | some input => .ite (.assign previous (.prim .query [.local input]))
+      (.seq (.assign active (project (.local previous) 0)) void) void
+  let mut steps := []
+  for (arm, index) in arms.zipIdx do
+    let packetTy := Ty.tup [arm.cursor, arm.row]
+    let pending ← fresh (.opt packetTy)
+    let accepted ← fresh packetTy
+    let ordinal := Expr.lit (.int (Int.ofNat index))
+    let input := Expr.ite (p2 .eq (.local active) ordinal)
+      (project (project (.local previous) 1) index) (.lit .none)
+    let state := Expr.prim .mkTup [ordinal, .prim .mkTup (arms.zipIdx.map fun (_, column) =>
+      if column == index then .prim .mkSome [project (.local accepted) 0] else .lit .none)]
+    let success := Expr.seq (.assign result (.prim .mkSome [.prim .mkTup [state, project (.local accepted) 1]]))
+      (.seq (.assign kept (.lit (.logic true))) void)
+    let attempt := Expr.seq (.assign arm.input input) (.seq (.assign pending arm.next)
+      (.ite (.assign accepted (.prim .query [.local pending])) success void))
+    let eligible := Expr.seq (p2 .eq (.local kept) (.lit (.logic false)))
+      (p2 .le (.local active) ordinal)
+    steps := steps ++ [.ite eligible attempt void]
+  let start := [.assign active (.lit (.int (-1))), readPrior,
+    .assign kept (.lit (.logic false)), .assign result (.lit .none)]
+  return ⟨(start ++ steps).foldr Expr.seq (.local result), resultTy⟩
 
 /-- Whether `e` can do something that undoing it would change: print, set an
     object's field, call a function (which may do either), or write a slot
@@ -1283,8 +1363,42 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     | c => match Choice.binding? c with
       | some b => !b.composed && b.branchy.isNone && b.each.isNone
       | none => false
-  if stagePlan.isNone && (!prepared || searchPrepared) && !firstDecides && failure.isNone && !gs.isEmpty &&
-      !clauses.any callsManyValued && !pre.any isExcl && gs.all (fun (g, fs) => plainGen g && !fs.any isExcl) then
+  if let (some request, [], (g, fs) :: more) := (cursor, pre, gs) then
+    if let some binding := Choice.binding? g then
+      if binding.composed then
+        let suffix := fs ++ more.flatMap fun (next, filters) => next :: filters
+        let step (c : Ctx) (alt : SExpr) (index : Nat) (prior : SExpr) : EM R :=
+          let clauses := Choice.prepare [.decl binding.pos binding.name binding.ty false alt]
+            (choiceValues ctx) (choiceField ctx) (fieldOrder := choiceOrder ctx)
+            (site := s!"$cursor{p.line}_{p.col}_{index}") (keepExcl := true) (keepBranches := choiceHasCast ctx)
+          elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq
+            c p (clauses ++ suffix) body (prepared := true) (cursor := some { request with prior })
+        let saved ← get
+        let shapes ← binding.alts.zipIdx.mapM fun (alt, index) => do
+          let probe ← step { ctx with typeOnly := true } alt index (.ident p "false")
+          let .opt (.tup [state, row]) := probe.ty | eerr p "internal: malformed composed cursor arm"
+          pure (state, row)
+        restoreConstructProbe ctx saved
+        let arms ← (binding.alts.zip shapes).zipIdx.mapM fun ((alt, (state, row)), index) => do
+          let name := s!"$cursorArm{p.line}_{p.col}_{index}"
+          let inputTy := Ty.opt state
+          let input ← fresh inputTy
+          let c := { ctx with locals := { name, slot := input, ty := inputTy, mutable := false } :: ctx.locals }
+          let next ← step c alt index (.ident p name)
+          unless next.ty == .opt (.tup [state, row]) do
+            eerr p "internal: composed cursor arm changed type"
+          return { cursor := state, row, input, next := next.e : ForCursorArm }
+        let inputTy := Ty.opt (forCursorChoiceType arms)
+        let input ← elabE ctx request.prior (some inputTy)
+        let slot ← fresh inputTy
+        let input ← coerce p input inputTy
+        let result ← forCursorChoice p (some slot) arms
+        return { result with e := .seq (.assign slot input) result.e }
+  let cursorGroups := if cursor.isSome && gs.isEmpty then
+    [(.gen p s!"$cursorUnit{p.line}_{p.col}" none (.arrayLit p [.tuple p []]), [])]
+    else gs
+  if stagePlan.isNone && (!prepared || searchPrepared || cursor.isSome) && !firstDecides && failure.isNone && !cursorGroups.isEmpty &&
+      !clauses.any callsManyValued && !pre.any isExcl && cursorGroups.all (fun (g, fs) => plainGen g && !fs.any isExcl) then
     let start := (← get).nslots
     let (preE, unit, c0) ← match pre with
       | [] => pure (none, 0, ctx)
@@ -1293,7 +1407,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         pure (some filt, ← fresh .void, c1)
     let mut c := c0
     let mut levels : Array (Nat × ForDomain × Expr) := #[]
-    for (g, fs) in gs do
+    for (g, fs) in cursorGroups do
       let (slot, domain, c1, bind) ← elabSource c g (cursor.isSome || Choice.hasReturn body)
       let (filt, c2) ← elabFilters c1 fs
       let filt := if fs.isEmpty then bind else match bind with
@@ -1304,7 +1418,9 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     let newSearch : EM ForSearch := do
       let ls ← levels.toList.mapM fun (slot, domain, filt) => newForLevel slot domain filt
       let head :: tail := ls | eerr p "internal: a for without generators"
-      return { head, tail, prelude := preE, found := ← fresh .logic, started := ← fresh .logic }
+      let found ← fresh .logic
+      let started ← fresh .logic
+      return { head, tail, prelude := preE, found, started, nested := prepared && !searchPrepared }
     if let some request := cursor then
       let search ← newSearch
       let bindings := c.locals.filterMap fun l => if l.slot >= start then some l.slot else none
