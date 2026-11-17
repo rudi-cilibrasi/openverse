@@ -262,6 +262,19 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
   let metadata : MetadataFlow.Info := {
     pos := p, inputs, required, seeds := inputs ++ st.metadataSeeds, uses := st.metadataUses
     shared := st.frameSlots.map (·.1), metadataWrites := st.metadataWrites
+    cellTag := if env.classes.contains "$varcell" then some (env.tagOf "$varcell") else none
+    cellTransportTag := if env.classes.contains "$lazycell" then some (env.tagOf "$lazycell") else none
+    cellParams := ptys.zipIdx.filterMap fun (ty, i) =>
+      match ty with | .struct "$varcell" _ => some i | _ => none
+    cellSlots := st.slotTys.toList.zipIdx.filterMap fun (ty, i) =>
+      match ty with | .struct "$varcell" _ => some i | _ => none
+    nonCellSlots := st.slotTys.toList.zipIdx.filterMap fun (ty, i) =>
+      let disjoint := match ty with
+        | .param .. | .any | .dyn => false
+        | .struct owner _ => !env.isSub "$varcell" owner
+        | _ => true
+      if disjoint then some i else none
+    cellHelper := name.startsWith "$sourceLoopReturn"
     source := frames
     borrowTasks := defaultBridge name || choiceDefaultBridge name || requests.casts.any (·.name == name) ||
       resume.any (·.borrowTasks)
