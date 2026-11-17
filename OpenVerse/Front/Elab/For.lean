@@ -399,10 +399,17 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         else pure src
       pure (slot, src, .arr .int, c1, Expr.lit (.logic true))
     | .gen gp x idx srcE => do
+      -- A lazy-return site's checking pass records the selected iterable
+      -- type without inserting a binding or evaluating the source again.
+      let (note, srcE) := match srcE with
+        | .app _ (.ident _ "$noteLoopIterator") [.str _ [.text key], source] false =>
+          (some key, source)
+        | _ => (none, srcE)
       let rs ← elabE { c with canFail := true, inTaking := true } srcE none
       let rs ← elabContainerReceiverWith elabE c gp rs (fun
         | .arr _ | .map .. => true
         | _ => false) "iteration"
+      if let some key := note then noteNeeds { nested := [(key, rs.ty.toSTy)] }
       -- (a weak map has none, Book of Verse ch. 3: "you cannot iterate over
       -- its entries", `weak_map.versetest:130`, 3524)
       if let .weakMap .. := rs.ty then eerr gp (weakMapNotIterated rs.ty)

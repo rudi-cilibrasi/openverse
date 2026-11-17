@@ -1,0 +1,5 @@
+pure 99
+pure 100
+write 3
+write 4
+exit=0

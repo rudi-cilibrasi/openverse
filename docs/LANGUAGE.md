@@ -2171,9 +2171,9 @@ Main():void =
   still runs per produced value. Only that normal arm reaches the binding and
   suffix, so the suffix is retained once.
 
-  An integer-range `for` with single-valued endpoints and an ordinary
-  iteration body that is single-valued also supports choices in its return
-  operands:
+  An integer-range `for` with single-valued endpoints or a `for` with one
+  single-valued array source supports choices in its return operands. In
+  both forms, the ordinary iteration body is single-valued.
 
   ```verse
   RangeReturn(N:int)<transacts>:int =
@@ -2193,6 +2193,9 @@ Main():void =
   fails, its range is empty, its clause effects roll back, and the producer
   reaches its following statements. A maximum-integer endpoint does not
   require an extra increment.
+  For `for (Item : Items)`, the array expression is evaluated once. A failed
+  expression or an empty array rolls back the header's effects. Replacing
+  the source variable during iteration leaves the sequence of items intact.
   Source type, failure-context and event-effect checks still apply before this
   lowering. Selected generic types and real implicit proof capabilities stay
   attached to the loop site; metadata proof inputs cannot grant those views.

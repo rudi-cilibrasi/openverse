@@ -1,0 +1,13 @@
+hit 70
+hit 71
+miss 99
+miss 100
+empty 99
+empty 100
+first 71
+no fallthrough
+none
+option 70
+first block 70
+after
+exit=0
