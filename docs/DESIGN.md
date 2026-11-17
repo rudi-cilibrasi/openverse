@@ -620,7 +620,8 @@ type, effect and exit checks; the generated boundary grants no permission
 to leave a failure context.
 
 Plain loops, integer-range loops with single-valued endpoints, and loops over
-one single-valued array source can yield several return operands lazily (#686).
+one single-valued collection source can yield several return operands lazily
+(#686). A map helper traverses the source's ordered key-value pairs.
 These forms can nest when their iteration bodies are otherwise single-valued.
 Each helper propagates a returned value to its enclosing loop or function.
 A plain loop consumes only its own breaks. An inner plain loop with no
@@ -630,7 +631,7 @@ round per nested loop on a path to a return.
 
 `returnLoopSites` records
 eligible sites and `$noteTypes` discovers the capture types, type parameters,
-array type and return target in the original selected world. Declaration-site notes retain
+collection type and return target in the original selected world. Declaration-site notes retain
 the types needed to box mutable captures without moving a refinement before
 it is introduced. Evidence notes use `Ctx.captureEvidence`, including its
 existing readonly proof-carrier rules. Helpers retain operational proof
