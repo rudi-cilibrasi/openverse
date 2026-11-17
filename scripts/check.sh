@@ -39,6 +39,7 @@ else
 fi
 echo "== physical Core write annotations"
 bash tests/scripts/test-physical-writes.sh
+bash tests/scripts/test-metadata-cells.sh
 echo "== source-frame rewrite contracts"
 # Like the proof build, this check loads Lean modules. Run it before the
 # virtual-memory cap applied to generated programs below.
