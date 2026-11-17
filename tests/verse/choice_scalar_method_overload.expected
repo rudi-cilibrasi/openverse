@@ -5,7 +5,6 @@ scalar nested
 scalar alternative
 0
 many direct
-many direct prefix
 0
 many nested
 many nested prefix

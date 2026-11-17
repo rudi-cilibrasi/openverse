@@ -157,15 +157,17 @@ elements can change what undoing would restore (`forClauseEffects`: a
 or a `var` of the clauses), the nested `forE`s below are that search, and
 the `for` keeps them, byte for byte.
 
-**Which `for`s.** This serves every `for` whose generators are over ranges,
-arrays, maps and strings and choices of values (#208, below: an index
-generator whose element binds `altE`), with no call of a function with
-several values in its clauses (`callsManyValued`) and no exclusive choice.
-The others keep the lowerings of the [Choice](#choice-iteration-over-alternatives)
-section below, which keep what a generator's clauses did once they succeed
-(the old rule), entirely; what each needs to come under the search is in
-[the readings audit](research/readings-audit.md#what-a-for-undoes), and
-LANGUAGE.md says which `for`s follow which rule.
+**Which `for`s.** The search can handle ranges, arrays, maps, strings, and
+flat choices of values. The compiler selects the search after preparing
+the clauses. Flat inlined producers contribute their bindings and filters
+to that search. A producer computed as an array at the call contributes
+an array level. The search uses its usual checkpoints even when a
+producer's first alternatives never reach the body.
+
+The [Choice](#choice-iteration-over-alternatives) lowerings still serve
+clauses with a remaining producer boundary or a composed or exclusive
+choice. The [readings audit](research/readings-audit.md#what-a-for-undoes)
+describes what each needs to join the search.
 
 ## Choice: iteration over alternatives
 

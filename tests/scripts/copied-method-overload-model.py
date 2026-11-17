@@ -43,7 +43,17 @@ def cases():
     for name, predicate, want, trace in [('zero', 'N>2', 0, 'RAD' * 4), ('some', 'N>1', 8, 'RADBB' * 4)]:
         body = 'block{Add(H,"B");Y}'
         direct = prefix + f'    Rows:=for(X:=(Dup(1)|Dup("s")),Y:={call},N:=1..2,{predicate}):' + body + '\n    Print("rows {Rows.Length}")\n    Print("trace={H.Trace}")\n'
-        control = prefix + f'    Left:=for(X:=Dup(1),Y:={call},N:=1..2,{predicate}):' + body + '\n' + f'    Right:=for(X:=Dup("s"),Y:={call},N:=1..2,{predicate}):' + body + '\n    Print("rows {Left.Length+Right.Length}")\n    Print("trace={H.Trace}")\n'
+        # The heterogeneous copies retain a boundary before the suffix.
+        # Make that boundary explicit in the typed controls too.
+        control = prefix + (
+            f'    Left:=for(X:=Dup(1),Y:={call}):\n'
+            f'        for(N:=1..2,{predicate}):{body}\n'
+            f'    Right:=for(X:=Dup("s"),Y:={call}):\n'
+            f'        for(N:=1..2,{predicate}):{body}\n'
+            '    Rows:=for(Part:Left+Right,Row:Part){Row}\n'
+            '    Print("rows {Rows.Length}")\n'
+            '    Print("trace={H.Trace}")\n'
+        )
         specs.append(('suffix-' + name, direct, control, f'rows {want}\ntrace={trace}\n'))
     body = '{Add(H,"B");Print("v {Y}")}'
     direct = prefix + f'    if(X:=(Dup(1)|Dup("s")),Y:={call},Y>6)then ' + body + ' else Print("none")\n    Print("trace={H.Trace}")\n'
