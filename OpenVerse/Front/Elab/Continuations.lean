@@ -943,12 +943,14 @@ def contKey (ctx : Ctx) (p : Pos) (b : String) (rest : List SExpr) : String :=
   -- names. Those names are part of the helper's returned packet contract,
   -- even when every source position and captured input is identical.
   let bindings := reprStr (Choice.boundIn rest)
-  -- Preparing a nested choice can replace its suffix with a tuple-returning
-  -- continuation call without changing these positions or binding names.
-  -- Keep that code in the identity, as firstKey does, so its earlier packet
-  -- contract cannot be reused after the prepared suffix changes.
-  let prepared := reprStr rest
-  s!"k{p.line}_{p.col}_{p.file}_{b}_{String.intercalate "," caps}_{String.intercalate "," places}{typed}{ctx.liftTag}{reprStr ctx.inlineScopes}{sourceContextKey ctx}{rollback}_bindings:{bindings}_prepared:{prepared}"
+  -- A prepared suffix may bind a different nested continuation packet at
+  -- the same source position. Its callable ABI, rather than the generated
+  -- helper name, must distinguish that returned binding's type.
+  let packets := if ctx.types.requests.loops.isEmpty then [] else
+    (Choice.namesUsed (.block p rest)).filterMap fun name =>
+      (ctx.types.requests.loops.find? (·.name == name)).map fun lift =>
+        (lift.params.map (fun param => (param.ty, param.typeValue)), lift.ret, lift.joinedRet)
+  s!"k{p.line}_{p.col}_{p.file}_{b}_{String.intercalate "," caps}_{String.intercalate "," places}{typed}{ctx.liftTag}{reprStr ctx.inlineScopes}{sourceContextKey ctx}{rollback}_bindings:{bindings}_packets:{reprStr packets}"
 
 /-- (#335) The function of its own that the clauses after a composed choice
     (#296) are compiled as, where the first success is taken and those
