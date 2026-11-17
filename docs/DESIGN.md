@@ -617,11 +617,11 @@ bindings or refinement world. The original source still undergoes scope,
 type, effect and exit checks; the generated boundary grants no permission
 to leave a failure context.
 
-An integer-range loop with single-valued endpoints and a single-valued
-ordinary body can instead yield
-several return operands lazily (#686). `returnLoopSites` records eligible
-sites; `$noteTypes` discovers their capture types, type parameters and
-return target in the original selected world. Declaration-site notes retain
+An integer-range loop with single-valued endpoints or a loop over one
+single-valued array source can yield several return operands lazily (#686).
+The ordinary iteration body is single-valued. `returnLoopSites` records
+eligible sites and `$noteTypes` discovers the capture types, type parameters,
+array type and return target in the original selected world. Declaration-site notes retain
 the types needed to box mutable captures without moving a refinement before
 it is introduced. Evidence notes use `Ctx.captureEvidence`, including its
 existing readonly proof-carrier rules. Helpers retain operational proof
@@ -701,8 +701,12 @@ failure context: a failed endpoint rolls back those bindings and reaches
 the producer's following statements. Choice-bearing endpoints retain an
 implementation refusal, since an ordinary range can enumerate every endpoint
 combination. The helper tests the final endpoint before incrementing,
-including the maximum integer. An early return runs no later iteration or
-function suffix. Nested returning loops, concurrent iteration bodies and
+including the maximum integer. The array form evaluates the source once in
+the header and passes the resulting array to the helper. A failed or empty
+source rolls back the header. The helper reads each element by index. When
+every path in an iteration returns, the helper omits the recursive step.
+An early return runs no later iteration or function suffix.
+Nested returning loops, concurrent iteration bodies and
 mutable implicit proof captures retain explicit implementation refusals.
 
 A function with several values (#235) is inlined before elaboration, by
