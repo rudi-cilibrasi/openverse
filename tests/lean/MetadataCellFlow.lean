@@ -267,6 +267,14 @@ private def get (e : Expr) : Expr := .heap (.get 0) [e]
 def main : IO Unit := do
  let mut failures := 0
  for kind in ["direct","transport","tuple","array","external-field"] do
+  let callable : VTy := .ref [2] []
+  let cell : VTy := .ref [0] [callable]
+  let frame : VTy := .ref [1] []
+  let carrierTy := match kind with
+   | "direct" => cell
+   | "tuple" => VTy.tup [cell]
+   | "array" => VTy.arr cell
+   | _ => frame
   let select : Expr := match kind with
    | "direct" => .local 0
    | "tuple" => .prim (.tupGet 0) [.local 0]
@@ -277,28 +285,48 @@ def main : IO Unit := do
    | "tuple" => .prim .mkTup [.local 2]
    | "array" => .prim .mkArr [.local 2]
    | _ => .heap (.new 1) [.local 2]
+  let body := Expr.seq (.assign 2 (.heap (.new 0) [.local 1]))
+    (.seq (.assign 3 carrier)
+      (if kind == "external-field" then
+        .seq (.heap (.set 0) [.local 0,.local 2]) (.call 1 [.local 0])
+       else .call 1 [.local 3]))
+  let defaultCell := Expr.heap (.new 0) [.local 1]
+  let defaultCarrier := match kind with
+   | "direct" => defaultCell
+   | "tuple" => Expr.prim .mkTup [defaultCell]
+   | "array" => Expr.lit (.arr #[])
+   | _ => Expr.heap (.new 1) [defaultCell]
+  let physical := Expr.seq (.assign 2 defaultCell) (.seq (.assign 3 defaultCarrier) body)
   let fns : Array Fn := #[
-   { name := "Execute", arity := 1, nslots := 1, decides := false, body := .lit (.int 0) },
-   { name := "Borrow", arity := 1, nslots := 1, decides := false,
+   { name := "Execute", arity := 1, nslots := 1, decides := false, writes := false, body := .lit (.int 0) },
+   { name := "Borrow", arity := 1, nslots := 1, decides := kind == "array", writes := false,
      body := .call 0 [get select] },
-   { name := "Caller", arity := 2, nslots := 4, decides := false,
-     body := .seq (.assign 2 (.heap (.new 0) [.local 1]))
-       (if kind == "external-field" then
-         .seq (.heap (.set 0) [.local 0,.local 2]) (.call 1 [.local 0])
-        else .seq (.assign 3 carrier) (.call 1 [.local 3])) }]
+   { name := "Caller", arity := 2, nslots := 4, decides := kind == "array", writes := kind == "external-field", body := physical },
+   { name := "Root", arity := 0, nslots := 0, decides := false, writes := false, body := .lit .void }]
+  let sigs : Sigs := {
+   fns := [([callable],.int),([carrierTy],.int),([frame,callable],.int),([],.void)]
+   classes := [[.var 0],[cell],[]], pins := [[none],[],[]] }
+  let slots := [[callable],[carrierTy],[frame,callable,cell,carrierTy],[]]
+  let prog : Prog := { fns := fns.toList, main := 3 }
+  IO.println s!"kind={kind} check={prog.check} control={prog.checkControl} types={prog.checkTypes sigs slots} prelude={checkPrelude prog sigs}"
+  unless prog.check && prog.checkControl && prog.checkTypes sigs slots && checkPrelude prog sigs do
+   throw <| IO.userError "INVALID typed carrier model"
   for metadata in [false,true] do
    let infos : Array MetadataFlow.Info := fns.mapIdx fun i fn => {
-     body := some fn.body
-     cellTag := some 0
-     cellTransportTag := some 1
+     body := some (if i == 2 then body else fn.body), cellTag := some 0, cellTransportTag := some 1
+     -- Borrow is the caller-owned extraction bridge, not an unrelated public
+     -- function that accepts arbitrary incoming cells. Execute remains checked
+     -- at the actual call under its required executable-input policy.
+     cellHelper := i < 2
+     cellParams := if i == 1 && kind == "direct" then [0] else []
      cellSlots := if i == 2 then [2] else []
      required := if i == 0 then [0] else []
      inputs := if i == 2 && metadata then [1] else [] }
-   let result := MetadataFlow.check fns infos #[[],[]]
+   let result := MetadataFlow.check fns infos #[[],[],[]]
    let admitted := match result with | .ok _ => true | .error _ => false
    if admitted != !metadata then failures := failures + 1
    IO.println s!"kind={kind} metadata={metadata}; expected admission={!metadata}; actual={repr result}"
- IO.println s!"{failures} mismatches"
+ IO.println s!"10 typed carrier classifications; {failures} mismatches"
  if failures > 0 then throw <| IO.userError "private-cell carrier borrower contract failed"
 end Carriers
 
@@ -677,30 +705,46 @@ end Scale
 
 namespace FutureCarrierAlias
 def main : IO Unit := do
+ let callable : VTy := .ref [2] []
+ let cell : VTy := .ref [0] [callable]
+ let frame : VTy := .ref [1] []
+ let body := Expr.seq (.assign 2 (.heap (.new 1) [.lit .void,.lit .none]))
+   (.seq (.assign 3 (.call 1 [.local 2]))
+    (.seq (.assign 4 (.heap (.new 0) [.local 1]))
+     (.seq (.heap (.set 1) [.local 2,.prim .mkSome [.local 4]]) (.call 2 [.local 3]))))
+ let defaultFrame := Expr.heap (.new 1) [.lit .void,.lit .none]
+ let physical := Expr.seq (.assign 2 defaultFrame) (.seq (.assign 3 defaultFrame)
+   (.seq (.assign 4 (.heap (.new 0) [.local 1])) body))
  let fns : Array Fn := #[
-  { name := "Execute", arity := 1, nslots := 1, decides := false, body := .lit .void },
-  { name := "Identity", arity := 1, nslots := 1, decides := false, body := .local 0 },
-  { name := "Borrow", arity := 1, nslots := 1, decides := false,
-    body := .call 0 [.heap (.get 0) [.heap (.get 1) [.local 0]]] },
-  { name := "Caller", arity := 2, nslots := 5, decides := false,
-    body := .seq (.assign 2 (.heap (.new 1) [.lit .void,.lit .void]))
-     (.seq (.assign 3 (.call 1 [.local 2]))
-      (.seq (.assign 4 (.heap (.new 0) [.local 1]))
-       (.seq (.heap (.set 1) [.local 2,.local 4]) (.call 2 [.local 3])))) }]
+  { name := "Execute", arity := 1, nslots := 1, decides := false, writes := false, body := .lit .void },
+  { name := "Identity", arity := 1, nslots := 1, decides := false, writes := false, body := .local 0 },
+  { name := "Borrow", arity := 1, nslots := 1, decides := true, writes := false,
+    body := .call 0 [.heap (.get 0) [.prim .query [.heap (.get 1) [.local 0]]]] },
+  { name := "Caller", arity := 2, nslots := 5, decides := true, writes := true, body := physical },
+  { name := "Root", arity := 0, nslots := 0, decides := false, writes := false, body := .lit .void }]
+ let sigs : Sigs := {
+  fns := [([callable],.void),([frame],frame),([frame],.void),([callable,callable],.void),([],.void)]
+  classes := [[.var 0],[.void,.opt cell],[]], pins := [[none],[],[]] }
+ let slots := [[callable],[frame],[frame],[callable,callable,frame,frame,cell],[]]
+ let prog : Prog := { fns := fns.toList, main := 4 }
+ IO.println s!"future check={prog.check} control={prog.checkControl} types={prog.checkTypes sigs slots} prelude={checkPrelude prog sigs}"
+ unless prog.check && prog.checkControl && prog.checkTypes sigs slots && checkPrelude prog sigs do
+  throw <| IO.userError "INVALID typed future carrier model"
  let mut bad := 0
  for metadata in [false,true] do
   let infos : Array MetadataFlow.Info := fns.mapIdx fun i fn => {
-    body := some fn.body
-    cellTag := some 0
-    cellTransportTag := some 1
+    body := some (if i == 3 then body else fn.body), cellTag := some 0, cellTransportTag := some 1
+    -- Identity and Borrow are caller-owned transport bridges. Identity is
+    -- called before the logical body has allocated any private cell.
+    cellHelper := i < 3
     cellSlots := if i == 3 then [4] else []
     required := if i == 0 then [0] else []
     inputs := if i == 3 && metadata then [1] else [] }
-  let result := MetadataFlow.check fns infos #[[],[]]
+  let result := MetadataFlow.check fns infos #[[],[],[]]
   let admitted := match result with | .ok _ => true | .error _ => false
   IO.println s!"metadata={metadata}; expected={!metadata}; actual={repr result}"
   if admitted != !metadata then bad := bad+1
- IO.println s!"2 classifications; {bad} mismatches"
+ IO.println s!"2 typed future carrier classifications; {bad} mismatches"
  if bad>0 then throw <| IO.userError "future carrier alias contract failed"
 end FutureCarrierAlias
 
@@ -740,11 +784,13 @@ def main : IO Unit := do
   let slots := [[callable],[carrier],[callable,callable,aliasTy,cellTy],[],[]]
   let checked := prog.check && prog.checkControl && prog.checkTypes sigs slots
   IO.println s!"kind={kind} CoreChecks={checked} check={prog.check} control={prog.checkControl} types={prog.checkTypes sigs slots} prelude={checkPrelude prog sigs}"
-  unless checked do throw <| IO.userError "INVALID Core prototype model"
+  unless checked && checkPrelude prog sigs do throw <| IO.userError "INVALID Core prototype model"
   for metadata in [false,true] do
    let infos : Array MetadataFlow.Info := fns.mapIdx fun i fn => {
     body := some fn.body
     cellTag := some 0
+    -- Borrow is the actual caller-owned prototype-alias extraction bridge.
+    cellHelper := i < 2
     cellSlots := if i == 2 then [3] else []
     required := if i == 0 then [0] else []
     inputs := if i == 2 && metadata then [1] else [] }
