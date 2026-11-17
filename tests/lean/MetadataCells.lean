@@ -128,5 +128,97 @@ private def scale : IO Unit := do
     "escape loses write permissions without inventing metadata in an all-real chain"
   IO.println s!"PASS {count} distinct allocations and transitive escape ({(← IO.monoMsNow) - started}ms)"
 
+/-- A concrete reference remains its allocation index forever. This model
+    does not use the abstract heap's recency identities or update rules. -/
+private structure ConcreteObject where
+  site : Nat
+  metadata : Bool
+  escaped : Bool := false
+  deriving Inhabited
+
+private structure Concrete where
+  objects : Array ConcreteObject := #[]
+  locals : Array (Option Nat) := #[none, none, none]
+
+private def representedBy (c : Concrete) (index : Nat) : Nat :=
+  let site := c.objects[index]!.site
+  if (c.objects.toList.zipIdx).any (fun (object, later) => later > index && object.site == site) then
+    older site else recent site
+
+private def refines (c : Concrete) (m : Memory) : IO Unit := do
+  for (object, index) in c.objects.toList.zipIdx do
+    let id := representedBy c index
+    let value ← payload m [id]
+    expect (!object.metadata || value.role) "abstract payload lost a concrete metadata value"
+    let some node := m.nodes[id]? | throw <| IO.userError "missing concrete allocation identity"
+    expect (!object.escaped || node.escaped) "abstract heap lost a concrete escape"
+    if node.unique then
+      let represented := (c.objects.toList.zipIdx).filter fun (_, i) => representedBy c i == id
+      expect (represented.length ≤ 1) "strong-update permission covers several concrete cells"
+  for (value, slot) in c.locals.toList.zipIdx do
+    if let some index := value then
+      expect ((getLocal m slot).contains (representedBy c index)) "saved alias points to another allocation"
+
+private def modelStep (action : Nat) (c : Concrete) (m : Memory) : IO (Concrete × Memory) := do
+  if action < 4 then
+    let site := action / 2
+    let metadata := action % 2 == 1
+    let allocated := allocate m site true [{ role := metadata }]
+    let index := c.objects.size
+    return ({ objects := c.objects.push { site, metadata }, locals := c.locals.set! 2 (some index) },
+      setLocal allocated.2 2 allocated.1)
+  if action < 6 then
+    let slot := action - 4
+    return ({ c with locals := c.locals.set! slot (c.locals[2]?.getD none) },
+      setLocal m slot (getLocal m 2))
+  let slot := if action < 10 then (action - 6) / 2 else action - 10
+  let some index := c.locals[slot]?.getD none | return (c, m)
+  let refs := getLocal m slot
+  if action ≥ 10 then
+    return ({ c with objects := c.objects.modify index fun object => { object with escaped := true } },
+      markEscaped m refs)
+  let metadata := action % 2 == 1
+  match writeCell m refs { role := metadata } with
+  | some changed =>
+    expect (!c.objects[index]!.escaped) "private write permission escaped a concrete boundary"
+    return ({ c with objects := c.objects.modify index fun object => { object with metadata } }, changed)
+  | none =>
+    -- The ordinary object policy admits a real value. Metadata does not
+    -- acquire a permission merely because its private proof was lost.
+    if metadata then return (c, m)
+    return ({ c with objects := c.objects.modify index fun object => { object with metadata := false } },
+      writeKnownCells m refs {})
+
+private partial def explore (depth : Nat) (c : Concrete) (m : Memory) : IO Nat := do
+  refines c m
+  if depth == 0 then return 1
+  let mut count := 1
+  for action in [:12] do
+    let (next, memory) ← modelStep action c m
+    count := count + (← explore (depth - 1) next memory)
+  return count
+
+private def concreteModel : IO Unit := do
+  let initial := initialRefs 3 fun _ => []
+  let exhaustive ← explore 4 {} initial
+  let mut seed := 572
+  let mut transitions := 0
+  for _ in [:512] do
+    let mut c : Concrete := {}
+    let mut m := initial
+    let mut snapshot := initial
+    for step in [:40] do
+      seed := (seed * 1664525 + 1013904223) % 4294967296
+      let (next, memory) ← modelStep ((seed / 65536) % 12) c m
+      c := next
+      m := memory
+      if step % 7 == 0 then
+        m := join m snapshot
+        snapshot := memory
+      refines c m
+      transitions := transitions + 1
+  IO.println s!"PASS concrete heap refinement: {exhaustive} exhaustive states, {transitions} seeded transitions with joins"
+
 def main (args : List String) : IO Unit :=
-  if args.contains "--scale" then scale else models
+  if args.contains "--scale" then scale
+  else if args.contains "--model" then concreteModel else models
