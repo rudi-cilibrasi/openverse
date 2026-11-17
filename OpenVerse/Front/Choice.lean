@@ -4234,6 +4234,14 @@ private def forCursorNext (p : Pos) (clauses : List SExpr) (outputs : List Strin
   .app p (.ident p "$forCursorNext")
     [.block p clauses, .block p (outputs.map (SExpr.ident p)), prior] false
 
+private def cursorHeaderCells (clauses : List SExpr) : List String :=
+  clauses.filterMap fun
+    | .decl _ name (some _) true _ => some name
+    | _ => none
+
+private def boxCursorHeader (clauses : List SExpr) : List SExpr :=
+  clauses.map (cellVars (cursorHeaderCells clauses))
+
 private structure ReturnLoopSite where
   pos : Pos
   key : String
@@ -4590,7 +4598,7 @@ private partial def noteReturnLoops (owner : String) (ret : STy) (parameters : L
           | .cursor clauses outputs =>
             let p := e.pos
             [.app p (.ident p "$noteForCursor") [.str p [.text (site.key ++ "$cursor")],
-              forCursorNext p clauses outputs (.ident p "false")] false]
+              forCursorNext p (boxCursorHeader clauses) outputs (.ident p "false")] false]
           | _ => []
         return .block e.pos ([note e.pos site.key
           (.app e.pos (.ident e.pos "$captureEvidence") [] false :: site.captures.map (fun binding => .ident e.pos binding.name) ++
@@ -4784,9 +4792,10 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
         let rowValues := project (ident row) 1
         let bindings := (outputs.zip rowTypes).zipIdx.map fun ((name, ty), index) =>
           SExpr.decl p name (some ty) false (project rowValues (Int.ofNat index))
-        let clauses := clauses.map (fun e => cellVars boxed (e.mapAll (·.substNames substitution) id))
+        let bodyWithCells := cellVars (cursorHeaderCells clauses) iterationBody
+        let clauses := (boxCursorHeader clauses).map (fun e => cellVars boxed (e.mapAll (·.substNames substitution) id))
         let next := call [.optionLit p (project (ident row) 0)]
-        let iteration := returnLoopOperands ret site.helper (some noneValue) nested iterationBody
+        let iteration := returnLoopOperands ret site.helper (some noneValue) nested bodyWithCells
         let rest := if loopIterationTerminal iterationBody then [iteration] else [iteration,next]
         let rows := forCursorNext p clauses outputs (ident input)
         let helperBody := SExpr.block p [.decl p nextRow none false rows,
@@ -5086,6 +5095,10 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
     let sites := returnLoopSites owner f mv
     if sites.isEmpty then none else some (owner, f, sites, original.body)
   if !loopTargets.isEmpty then
+    let needsCells := loopTargets.any fun (_, _, loops, _) => loops.any fun entry =>
+      !entry.boxed.isEmpty || match entry.source with
+        | .cursor clauses _ => !(cursorHeaderCells clauses).isEmpty
+        | _ => false
     let ready := loopTargets.all fun (owner, f, sites, _) => loopNotesReady owner f.tparams sites nested
     let mut rewritten := tops
     let mut original := checking
@@ -5101,7 +5114,6 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
         original := original ++ [(f.pos, checked)]
         helperNames := helperNames ++ helpers.filterMap fun | .fn _ name .. => some name | _ => none
       let result ← inlineFns rewritten eager (lazy ++ helperNames) overloadPicks nested orders sites methodOvSites pending original nestDone methodTemplates
-      let needsCells := loopTargets.any (fun (_, _, loops, _) => loops.any (fun entry => !entry.boxed.isEmpty))
       return { result with logicalCells := result.logicalCells || needsCells }
     else
       for (owner, f, loops, _) in loopTargets do
@@ -5112,7 +5124,9 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
           | top => top
       let result ← inlineFns rewritten eager lazy overloadPicks nested orders sites methodOvSites
         (pending ++ loopTargets.map (·.2.1.pos)) checking nestDone methodTemplates
-      return { result with nestedSites := result.nestedSites ++ loopTargets.flatMap (fun (_, _, loops, _) => loops.map (·.key)) }
+      return { result with
+        logicalCells := result.logicalCells || needsCells
+        nestedSites := result.nestedSites ++ loopTargets.flatMap (fun (_, _, loops, _) => loops.map (·.key)) }
   let choiceLoopTargets := rawMfs.filterMap fun (owner, original) =>
     if !hasReturningLoop original.body then none else
     let f : MFn := { original with body := alphaReturnLoopLocals owner original.body }
