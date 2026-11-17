@@ -2186,6 +2186,9 @@ Main():void =
   Operands are taken lazily, saved before iteration cleanup, and re-evaluated
   after the preceding value's iteration and enclosing function cleanup.
   Captured mutable locals retain their invocation storage across those values.
+  An ordinary `loop:` body can also return several values. A `break` unwinds
+  its iteration and reaches the producer's following statements. An inner
+  loop's `break` stays within that inner loop.
   Range endpoints are evaluated once in source order. If a scalar endpoint
   fails, its range is empty, its clause effects roll back, and the producer
   reaches its following statements. A maximum-integer endpoint does not
