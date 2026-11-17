@@ -102,7 +102,7 @@ results with its target and build ID. Epic describes the
 | `signal-generic` | Check whether a generic `<transacts>` helper can call `Signal`. Its paired `-control` calls the helper outside the failure context. |
 | `signal-await` | If admitted, see whether the failed signal wakes the pending waiter with 1 or whether the later successful signal delivers 2. |
 | `signal-subscribe` | If admitted, read callback state after a failed signal and then a successful signal. The paired control verifies subscription, callback dispatch and cancellation outside a failure context. |
-| `compound-indexed-write` | After the right operand replaces the array, record the first row's length and first element. The Book's VerseVM-only case expects a single zero. [ArrayAppend case](https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests/ArrayAppend.versetest#L12). |
+| `compound-indexed-write` | After the right operand replaces the array, record the first row's length and first element. The Book's VerseVM-only case expects a single zero. [ArrayAppend case](https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests/ArrayAppend.versetest#L12) · [OpenVerse issue #704](https://github.com/rudi-cilibrasi/openverse/issues/704). |
 | `compound-whole-write` | The whole-variable control replaces the target during the right operand in the same way. The Book's VerseVM-only case expects `[0, 42]`. Run both probes on the same target to check whether the result changes when the assignment selects an array element. [ArrayAppend control](https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests/ArrayAppend.versetest#L7). |
 | `int-overflow` | Add 1 to the maximum signed 64-bit integer and compare the result with that maximum. The marker is a fixed string because the Book documents separate limits on interpolating large integers. [Book of Verse integer rules](https://verselang.github.io/book/02_primitives/#integers). |
 
@@ -115,15 +115,16 @@ and what it rolls back. [event.Signal](https://dev.epicgames.com/documentation/f
 
 ## OpenVerse observations
 
-On `07ae0c6fad3a98362700327e53eb41249a5a5442`, Lean and C agreed on the
-output and exit status for all eleven probes that produced bytecode.
+On the tested head of [#702](https://github.com/rudi-cilibrasi/openverse/pull/702),
+`adb392adb0dd8288c3366d1b45753b9c0904399c`, Lean and C agreed on stdout,
+stderr and exit status for all thirteen probes that produced bytecode.
 
 | Probe | Default outcome | With `--signal-no-rollback` |
 | --- | --- | --- |
 | `signal-control` | Prints `selected`. | Admitted. |
 | `signal-direct`, `signal-alias`, `signal-bound`, `signal-generic` | Print `after`. | Refused at the call in the failure context. The bound and generic controls are admitted. |
 | `signal-await` | Prints `waiting`, then `received 2`. | Refused at the first signal. |
-| `signal-interface` and its control | Refused because OpenVerse lacks the `signalable` interface. | Same refusal. |
+| `signal-interface` and its control | Both print `after`. | The failure-context call is refused through the interface. The control is admitted. |
 | `signal-subscribe` and its control | Refused because OpenVerse's `event` lacks `Subscribe`. OpenVerse provides subscription through `subscribable_event`. | Same refusal. |
 | `compound-indexed-write` | Prints `length 2`, then `first 0`. | Admitted. |
 | `compound-whole-write` | Prints `length 2`, `first 0`, and `second 42`. | Admitted. |
