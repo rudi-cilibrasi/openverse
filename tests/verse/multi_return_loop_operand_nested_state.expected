@@ -1,0 +1,29 @@
+inner 1 1 4
+inner 1 2 8
+outer 1 18
+inner 2 1 21
+inner 2 2 25
+outer 2 35
+out 135
+v 23
+inner 2 2 137
+outer 2 147
+out 247
+v 136
+inner 1 1 4
+inner 1 2 8
+outer 1 18
+out 118
+one 18
+out 218
+one 119
+inner 1 1 4
+inner 1 2 8
+outer 1 18
+inner 2 1 21
+inner 2 2 25
+outer 2 35
+out 135
+first 24
+none
+exit=0
