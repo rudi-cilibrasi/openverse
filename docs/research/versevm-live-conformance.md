@@ -103,7 +103,7 @@ results with its target and build ID. Epic describes the
 | `signal-await` | If admitted, see whether the failed signal wakes the pending waiter with 1 or whether the later successful signal delivers 2. |
 | `signal-subscribe` | If admitted, read callback state after a failed signal and then a successful signal. The paired control verifies subscription, callback dispatch and cancellation outside a failure context. |
 | `compound-indexed-write` | After the right operand replaces the array, record the first row's length and first element. The Book's VerseVM-only case expects a single zero. [ArrayAppend case](https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests/ArrayAppend.versetest#L12). |
-| `int-overflow` | Record the result of adding 1 to the maximum signed 64-bit integer. The [Book survey's precision cases](book-test-conformance.md#where-things-stand) expect unbounded VerseVM arithmetic and document OpenVerse's 64-bit behavior. |
+| `int-overflow` | Add 1 to the maximum signed 64-bit integer and compare the result with that maximum. The marker is a fixed string because the Book documents separate limits on interpolating large integers. [Book of Verse integer rules](https://verselang.github.io/book/02_primitives/#integers). |
 
 For [#515](https://github.com/rudi-cilibrasi/openverse/issues/515), the API
 pages render `transacts`, `predicts`, `dictates` and `no_rollback` together
