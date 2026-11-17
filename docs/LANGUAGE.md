@@ -2151,11 +2151,31 @@ Main():void =
   Existing source restrictions on failure contexts and invalid returned-value
   expressions still apply.
 
-  Choices or calls with several values within the captured expression remain
-  implementation limits: multi-valued loop return operands are tracked by
-  #686, and choice-bearing normal initializer arms by #687. Direct concurrency
-  forms are not supported within a scalar captured expression. Other returns
-  inside expressions or conditions retain their existing restrictions.
+  A conditional initializer also supports a choice-bearing normal arm when
+  its other arm is a direct scalar `return` (#687):
+
+  ```verse
+  ChoiceInitializer(X:int)<transacts>:int =
+      Y := if (X > 2) then (return 0) else (X | X + 1)
+      Y | Y + 1
+  # ChoiceInitializer(3): 0; ChoiceInitializer(1): 1, 2, 2, 3
+  ```
+
+  Exactly one arm is a direct scalar return; the normal arm contains no
+  return. Its conditions use ordinary numeric/logic expressions, comparisons
+  or queries, without explicit calls, casts or local bindings. Member getters
+  retain their effects and rollback, and the condition is evaluated once. The
+  normal value block
+  keeps its cleanup scope: its cleanup finishes before the binding's following
+  statements, which run for each normal value. Enclosing function cleanup
+  still runs per produced value. Only that normal arm reaches the binding and
+  suffix, so the suffix is retained once.
+
+  Multi-valued return operands inside captured loops remain an implementation
+  limit (#686). Other return-containing initializer shapes retain their
+  existing restrictions. Direct concurrency forms are not supported within a
+  scalar captured expression. Existing source restrictions on returns inside
+  expressions or conditions continue to apply.
 
   Cleanup stays with the scope that registered it. A returning branch runs
   only the `defer:` blocks it reached, from the innermost scope outward and

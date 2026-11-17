@@ -119,6 +119,8 @@ echo "== metadata reader C-runtime oracles"
 tests/scripts/test-metadata-reader-runtime.sh "$logs/metadata-reader"
 echo "== invocation-local return metadata compiler API contracts"
 bash tests/scripts/test-return-boundary-metadata.sh
+echo "== choice-bearing initializer metadata contracts"
+bash tests/scripts/test-initializer-choice-metadata.sh
 # Fixed-budget compilation probes run before parallel jobs compete for CPU.
 echo "== enclosing cleanup growth and state resource contracts"
 python3 tests/scripts/test-enclosing-cleanup-growth.py
@@ -168,6 +170,7 @@ check "front-end C translation-unit size" bash tests/scripts/test-frontend-c-siz
 check "choice continuation code size" bash tests/scripts/test-choice-size.sh
 check "return cleanup growth and state contracts" python3 tests/scripts/test-return-cleanup-growth.py
 check "invocation-local loop and initializer returns" python3 tests/scripts/test-return-boundaries.py
+check "choice-bearing initializer continuations" python3 tests/scripts/test-initializer-choice.py
 check "refinement hint probe scaling" bash tests/scripts/test-refine-hint-probes.sh
 check "refining conditional refusal scaling" python3 tests/scripts/test-refining-chain-refusals.py
 check "construction/default choice models (${FUZZ_MODEL_CONSTRUCT:-60} seeds each)" \

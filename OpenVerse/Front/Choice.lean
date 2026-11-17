@@ -2216,6 +2216,39 @@ private partial def scalarReturnBoundary (many : SExpr → Bool) (e : SExpr) : B
   | .ret _ value => value.all fun value => !many value && scalarReturnBoundary many value
   | _ => e.children.all (scalarReturnBoundary many)
 
+/-- Ordinary conditions cannot expose a selected binding or a refinement
+    world to the statements after an initializer. Keep those cases in the
+    original expression boundary rather than moving their continuation. -/
+private partial def plainReturnCondition : SExpr → Bool
+  | .int .. | .char .. | .char32 .. | .float .. | .ident .. => true
+  | .member _ value _ | .query _ value | .neg _ value | .notE _ value =>
+    plainReturnCondition value
+  | .bin _ _ left right | .andE _ left right | .orE _ left right =>
+    plainReturnCondition left && plainReturnCondition right
+  | .cmp _ first rest => plainReturnCondition first && rest.all (plainReturnCondition ·.2)
+  | _ => false
+
+/-- With one direct scalar return and one normal arm, only the normal arm
+    reaches the binding and its suffix. Its value block remains the binding's
+    RHS, so its own cleanup still finishes before that suffix starts. -/
+private def splitReturnInitializer (many : SExpr → Bool) (q : Pos) (name : String)
+    (ty : Option STy) (mutable : Bool) (body : SExpr) (rest : List SExpr) :
+    Option (List SExpr) := do
+  let .ite p conditions yes (some no) := body | none
+  guard (conditions.all plainReturnCondition)
+  let branch (arm : SExpr) : Option (List SExpr) :=
+    match arm with
+    | .ret .. => if scalarReturnBoundary many arm then some [arm] else none
+    | _ => if hasReturn arm then none else some (.decl q name ty mutable arm :: rest)
+  let oneReturn : Bool := match yes, no with
+    | .ret .., .ret .. => false
+    | .ret .., _ | _, .ret .. => true
+    | _, _ => false
+  guard oneReturn
+  let yes ← branch yes
+  let no ← branch no
+  return declNames q [(name, q)] ++ [.ite p conditions (.block p yes) (some (.block p no))]
+
 private def returnBoundary (p : Pos) (key : String) (ret : STy)
     (normal : Option STy) (body : SExpr) : SExpr :=
   -- Only outer mutations are part of the caller's copy-out contract.
@@ -2262,7 +2295,10 @@ partial def elimLinearReturns (fresh : Nat → String) (ret : STy) (outcome : Bo
     if !hasReturn body then
       let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer many branchMany
       return (s :: tail, next)
-    if !scalarReturnBoundary many body then none else do
+    if !scalarReturnBoundary many body then
+      let moved ← splitReturnInitializer many q name ty mutable body rest
+      elimLinearReturns fresh ret outcome n p moved defers outer many branchMany
+    else do
       let packet := fresh n ++ "$boundary"
       let key := packet ++ "Return"
       let (rest, n1) ← elimLinearReturns fresh ret outcome (n+1) p rest defers outer many branchMany
