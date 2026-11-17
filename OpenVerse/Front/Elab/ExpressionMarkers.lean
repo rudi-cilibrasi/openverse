@@ -84,6 +84,14 @@ partial def elabExprMarkersWith
     let run := Expr.loop (.seq (.assign normal (.prim .mkSome [captureReturns returned value.e])) Expr.brkV)
     return ⟨.seq (.assign returned (.lit .none)) (.seq (.assign normal (.lit .none))
       (.seq run (.prim .mkTup [.local returned, .local normal]))), .tup [.opt returnedTy, .opt value.ty]⟩
+  | .app p (.ident _ "$loopMapEntries") [source] false =>
+    let source ← elabE ctx source none
+    let source ← elabContainerReceiverWith elabE ctx p source (fun
+      | .map .. => true
+      | _ => false) "iteration"
+    let .map key value := source.ty | eerr p "internal: loop entry view requires a map"
+    -- Maps already use an ordered array of key-value pairs in Core.
+    return ⟨source.e, .arr (.tup [key, value])⟩
   | .app _ (.ident _ "$mapKeySources") [.block _ keys, value] false =>
     let result ← elabE ctx value exp
     let keyTy := match result.ty with | .map k _ | .weakMap k _ => some k | _ => none

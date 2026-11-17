@@ -2189,7 +2189,7 @@ Main():void =
   An ordinary `loop:` body can also return several values. A `break` unwinds
   its iteration and reaches the producer's following statements. An inner
   loop's `break` exits that inner loop and resumes the enclosing body.
-  These three loop forms can nest. A return from an inner loop skips every
+  These loop forms can nest. A return from an inner loop skips every
   enclosing loop's remaining iterations and the function's suffix.
   Range endpoints are evaluated once in source order. If a scalar endpoint
   fails, its range is empty, its clause effects roll back, and the producer
@@ -2200,12 +2200,15 @@ Main():void =
   the source variable during iteration leaves the sequence of items intact.
   The indexed form `for (Index -> Item : Items)` also binds the current
   zero-based index, including in return operands and cleanup.
+  A single-valued map source uses the same loop return semantics and
+  preserves entry order. In `for (Key -> Item : Entries)`, the key and item
+  stay in scope in the return operand and cleanup.
   Source type, failure-context and event-effect checks still apply before this
   lowering. Selected generic types and real implicit proof capabilities stay
   attached to the loop site; metadata proof inputs cannot grant those views.
 
   Other multi-valued loop shapes, including choice-bearing endpoints or
-  array sources and mutable implicit proof captures, remain
+  collection sources and mutable implicit proof captures, remain
   implementation limits (#686). Other return-containing initializer shapes
   retain their existing restrictions. Direct concurrency forms are not
   supported within a scalar captured expression. Existing source restrictions on returns inside
