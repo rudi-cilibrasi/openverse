@@ -17,7 +17,6 @@ This is not yet a compiled implementation. In particular, inspect/check:
 
 - the checking-only source value block must preserve original header effect/failure/selected-world admission;
 - empty or failing Source must match ordinary `for` rollback/exhaustion; successful empty arrays with source effects require an actual old-main oracle;
-- an owned return with zero operands must abort the producer, not become normal exhaustion;
 - source snapshot versus mutable source binding and heap elements, branch/function cleanup between return alternatives, first success, rejection and unused `Err()` alternatives;
 - generic element/return types and transitive bounds, selected-world captures, real/dummy evidence and callable/object payload roles;
 - source `<computes>` permissions, Signal policy, lexical shadowing/default/method scope, existing invalid returns;
@@ -29,11 +28,11 @@ Map/string/indexed-generator forms, multiple generator/filter clauses, multi-val
 
 `cases/basic*` has noncontiguous values (4,7,9) so confusing cursor with item is observable; target/control cover hit, normal exhaustion, empty array, all/first/reject/option/first. Its scalar-array control is independent of the new helper and has no stateful operands.
 
-`cases/empty_operand*` uses an empty failable operand and `Err()` sentinels in the next row and suffix. The independent ordinary return control must confirm termination even when zero values are produced.
+Both profiles on main `07ae0c6f` produce the same basic and source-failure control traces in Lean and C. The files ending `.control.expected` record those traces for use when validating the array helper. They are research fixtures. The helper itself has yet to run.
 
-`cases/source_failure*` pairs the new form with an existing scalar-return array loop, preserving the original header rather than assuming that a successful empty source commits or rolls back effects. NO expected trace is asserted until old-main controls run after the quiet window.
+The source-failure control distinguishes a failed source, a successful empty array, a selected return and an all-rejected search. In both the failed and empty cases, the suffix yields 99 and 100 with the source write rolled back. The selected return commits one write. The all-rejected search rolls it back.
 
-Files ending `.expected.unverified` are proposed hand oracles only, not passing evidence or registered regression fixtures. Nothing has run.
+`cases/empty_operand*` are source-admission controls. Main `07ae0c6f` and PR #697 at `1fb802ac` both reject these cases in both profiles because the return in a `<decides>` function is outside tail position.
 
 ## Integration hold
 
