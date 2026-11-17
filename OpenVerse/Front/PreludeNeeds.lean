@@ -3,7 +3,7 @@ import OpenVerse.Front.Syntax
 namespace OpenVerse.Front.PreludeNeeds
 
 /-- Public soft-library types supplied by the concurrency helpers. -/
-def names : List String := ["event", "sticky_event", "task", "subscribable_event", "cancelable"]
+def names : List String := ["event", "sticky_event", "task", "subscribable_event", "cancelable", "signalable"]
 
 private def relevant (n : String) : Bool :=
   names.contains n || n == "$subev0" || names.any (fun p => n == "$" ++ p)

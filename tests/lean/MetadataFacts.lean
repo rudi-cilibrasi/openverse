@@ -218,15 +218,21 @@ def run : IO Unit := do
       .atom (.local 1) 0 3 none, .jump 1, .ret 0, .jump 99]
     cleanupEntries := #[2,99] }
   let live := MetadataLiveness.build #[] plan
-  unless live.entries == #[1,3,2,3,1,7] && live.cleanup == 7 && live.get 99 == 7 do
+  unless live.entries == #[#[1],#[3],#[2],#[3],#[1],#[7]] && live.cleanup == #[7] && live.get 99 == #[7] do
     throw <| IO.userError "liveness loop/kill/cleanup/unknown-edge regression"
   -- Generated producers contain long backwards chains. Every entry must
   -- learn the terminal read, regardless of the node numbering.
   let nodes := (Array.range 4096).map fun i =>
     if i == 0 then MetadataPlan.Node.ret 2 else .jump (i-1)
   let chain := MetadataLiveness.build #[] { slots := 3, nodes }
-  unless chain.entries.all (· == 4) do
+  unless chain.entries.all (· == #[4]) do
     throw <| IO.userError "liveness long predecessor chain regression"
+  let wide := MetadataLiveness.build #[] {
+    slots := 130
+    nodes := #[.choose 1 2, .ret 63, .ret 128, .ret 64] }
+  unless wide.entries == #[#[9223372036854775808,0,1],#[9223372036854775808],#[0,0,1],#[0,1]] &&
+      wide.get 99 == #[18446744073709551615,18446744073709551615,3] do
+    throw <| IO.userError "liveness mask word boundaries regression"
   IO.println "Metadata liveness predecessor contracts passed"
 end Liveness
 
