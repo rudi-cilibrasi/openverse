@@ -659,14 +659,36 @@ remain in force. Merged older objects, deeper tuple shapes and call-result
 receivers without a type certificate retain conservative classifications.
 
 
+`MetadataValues.objectFree` proves that a typed value contains no object
+references. Its separate strict data certificate permits ordinary object
+graphs only when all reachable classes and type arguments exclude private
+cells and metadata-bearing storage. A reverse graph worklist rejects
+compiler-generated classes, opaque fields, unresolved parameters, unknown
+tags and missing class metadata; ordinary recursive data cycles remain
+safe. Source supplies these certificates from the original elaborated slot
+types. They omit only private-relevant aliases, preserving metadata roles,
+tuple columns and ordinary heap permissions.
+
 Metadata validation partitions independent entries by a conservative
-closed-entry certificate: object-free formals and no reachable metadata
-inputs, seeds, metadata results, annotated metadata writes, reference
-literals, borrowed or foreign source state, or unknown calls in either
-logical or physical bodies. Closed entries retain ordinary role and
-admission checks without interpreting private aliases. Open entries run
-the complete analysis in a separate fresh state. Queues, summaries and
-proofs never cross the two premises; every independent entry is checked.
+closed-entry certificate: every formal is object-free or strict data, with
+no reachable metadata inputs, seeds, metadata results, annotated metadata
+writes, unsafe prototype literals, borrowed or foreign source state, or
+unknown calls in either logical or physical bodies. Closed entries retain
+ordinary role and admission checks without interpreting private aliases.
+Open entries run the complete analysis in a separate fresh state. Each
+premise owns its queues, summaries, proofs and heap; every independent
+entry is checked.
+
+A completed closed transfer may supply only its result role, immediate
+tuple columns and yielding flag to an open call. Its return type must be
+object-free or strict data, and its transitive physical and logical bodies
+must exclude foreign owners, publication, cleanup, concurrency and scheduler
+observations. Reuse requires real whole-value and tuple-column roles, plus
+either certified formal types or a complete live alias interpretation
+proving every actual input reference empty. Arguments still execute once
+and retain their effects in the caller heap. A nonempty private transport
+keeps full alias analysis even when its current payload is real, because
+the callee can rewire aliases that later writes observe.
 
 `lowerReturnLoops` makes a private lazy search helper returning an optional
 result. Each operand is first saved at the source return type, then wrapped
