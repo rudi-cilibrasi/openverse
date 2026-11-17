@@ -52,11 +52,11 @@ with tempfile.TemporaryDirectory(prefix="openverse-metadata-private-") as tempor
     for index in range(count):
         bounded([str(binary), str(index), str(work)])
     programs = sorted(work.glob("*.vbc"))
-    if len(programs) != 52:
-        raise SystemExit(f"metadata private-store: expected 52 admitted artifacts, got {len(programs)}")
+    if len(programs) != 60:
+        raise SystemExit(f"metadata private-store: expected 60 admitted artifacts, got {len(programs)}")
     for program in programs:
         result = bounded(["runtime/build/cverse", str(program)])
         if result.stdout != program.with_suffix(".expected").read_text() or result.stderr:
             raise SystemExit(f"metadata private-store: incomplete C trace for {program.name}")
-print("metadata private stores passed (20 cases, 80 classifications, 12 ownership models, 52 complete C traces)")
+print("metadata private stores passed (23 cases, 92 classifications, 12 ownership models, 60 complete C traces)")
 PY
