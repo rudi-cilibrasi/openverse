@@ -286,7 +286,6 @@ private def cases : List (String × String) := [
     "Dup(N:int)<computes>:int=N|N\nCaller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:[]int=\n    var Stored:type{_()<computes>:int}=Dummy\n    Saved:=Stored\n    set Stored=F\n    for(A:=(Dup(1)|Dup(2)),B:=(Dup(1)|Dup(2))):block{Sleep(0.01);Saved()}"),
   ("borrowed frame metadata read in cancellation", callables
     "Dup(N:int)<computes>:int=N|N\nCaller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:[]int=\n    var Stored:type{_()<computes>:int}=Dummy\n    for(A:=(Dup(1)|Dup(2)),B:=(Dup(1)|Dup(2))):\n        defer:\n            Value:=Stored()\n        loop{Sleep(1.0)}\n        0"),
-  ("outer metadata-only local loses mode across loop iterations", callables "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    var N:int=0\n    loop:\n        if(N>0)then set Stored=Dummy\n        set Stored=F\n        Sleep(0.01)\n        set N+=1\n        if(N>=2)then break\n    0"),
   ("outer shared local retains data mode across loop iterations", callables "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var Stored:type{_()<computes>:int}=F\n    loop:\n        set Stored=Dummy\n        Sleep(0.01)\n        break\n    Stored()"),
   ("fresh loop local still rejects metadata execution", callables "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    loop:\n        var Stored:type{_()<computes>:int}=Dummy\n        Sleep(0.01)\n        Value:=Stored()\n        break\n    0"),
   ("live helper shared initializer", recursiveReaders ++
@@ -329,6 +328,8 @@ private def cases : List (String × String) := [
   ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
+  -- No read, alias, or export observes this owner-private destination.
+  ("write-only private local across loop iterations", callables "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    var N:int=0\n    loop:\n        if(N>0)then set Stored=Dummy\n        set Stored=F\n        Sleep(0.01)\n        set N+=1\n        if(N>=2)then break\n    0"),
   ("typed row clause-cell real overwrite", refinementClauseCell true),
   ("typed snapshot environment opaque forwarding", refinementSnapshotOpaque),
   ("typed snapshot environment real overwrite", refinementSnapshot true),
