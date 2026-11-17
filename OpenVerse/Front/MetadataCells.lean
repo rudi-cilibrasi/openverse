@@ -3,7 +3,7 @@ import Std.Data.HashMap.Lemmas
 
 namespace OpenVerse.Front.MetadataCells
 
-/-- Zero denotes an unknown object, one an object supplied by a caller.
+/-- Zero denotes an unknown closed-heap object, one an unseen caller value.
     Each dense allocation site owns two other identities: its most recent
     object and a summary of its older objects. -/
 abbrev Refs := List Nat
@@ -36,6 +36,8 @@ structure Node where
   privateCell : Bool := false
   unique : Bool := true
   escaped : Bool := false
+  /-- A symbolic incoming value. Different symbols may denote the same object. -/
+  external : Bool := false
   deriving BEq, Inhabited, Repr
 
 structure Memory where
@@ -67,7 +69,8 @@ def setLocal (m : Memory) (slot : Nat) (refs : Refs) : Memory :=
 private def joinNode (a b : Node) : Node := {
   privateCell := a.privateCell && b.privateCell
   unique := a.unique && b.unique
-  escaped := a.escaped || b.escaped }
+  escaped := a.escaped || b.escaped
+  external := a.external || b.external }
 
 private def joinField (fields : Std.HashMap (Nat × Nat) Refs)
     (key : Nat × Nat) (refs : Refs) : Std.HashMap (Nat × Nat) Refs :=
@@ -91,6 +94,18 @@ private def joinFieldPayloads (a b : Memory) : Std.HashMap (Nat × Nat) Payload 
     (b.fieldPayloads.fold (fun out key value =>
       if a.nodes.contains key.1 then out else out.insert key value) {})
 
+/-- An absent field on an existing incoming object is unknown, not empty.
+    An absent object contributes no field on that path. -/
+private def joinFields (a b : Memory) : Std.HashMap (Nat × Nat) Refs :=
+  a.fields.fold (fun out key value =>
+    match b.fields[key]? with
+    | some other => out.insert key (joinRefs value other)
+    | none => if (b.nodes[key.1]?.map (·.external)).getD false then out
+        else out.insert key value)
+    (b.fields.fold (fun out key value =>
+      if (a.nodes[key.1]?.map (·.external)).getD false then out
+      else out.insert key value) {})
+
 /-- Missing nodes describe paths on which that allocation has not occurred.
     A node present on both paths is unique only when both paths prove it. -/
 def join (a b : Memory) : Memory := {
@@ -99,7 +114,7 @@ def join (a b : Memory) : Memory := {
     if i < min a.nslots b.nslots then
       out.insert i (joinRefs (out[i]?.getD []) refs) else out)
     (a.locals.filter fun i _ => i < min a.nslots b.nslots)
-  fields := b.fields.fold joinField a.fields
+  fields := joinFields a b
   fieldPayloads := joinFieldPayloads a b
   cells := b.cells.fold joinCell a.cells
   nodes := b.nodes.fold (fun out id node =>
@@ -108,6 +123,14 @@ def join (a b : Memory) : Memory := {
 def recent (site : Nat) : Nat := 2 + 2 * site
 
 def older (site : Nat) : Nat := 3 + 2 * site
+
+/-- Reserve a distinct site for each incoming symbolic value. Its identity
+    denotes one value, but may alias every other external symbol. Registration
+    grants no private-cell permission. The site must not be a constructor site. -/
+def registerExternal (m : Memory) (site : Nat) : Refs × Memory :=
+  let object := recent site
+  ([object], { m with nodes := m.nodes.insert object {
+    unique := true, escaped := true, external := true } })
 
 private def replace (old fresh : Nat) (refs : Refs) : Refs :=
   normalize (refs.map fun r => if r == old then fresh else r)
@@ -174,9 +197,25 @@ def allocate (m : Memory) (site : Nat) (isPrivate : Bool)
     payloads. Caller and unknown objects can contain unseen references. -/
 def loadRefs (m : Memory) (objects : Refs) (field : Nat) : Refs :=
   objects.foldl (fun out object =>
-    let unknown := object ≤ 1 || !m.nodes.contains object
-    joinRefs out (joinRefs (if unknown then [0] else [])
-      (m.fields[(object, field)]?.getD (if unknown then [0] else [])))) []
+    let value := if object == 1 then joinRefs [1] (m.fields[(object, field)]?.getD [])
+      else if (m.nodes[object]?.map (·.external)).getD false then
+        m.fields[(object, field)]?.getD [1]
+      else
+        let unknown := object == 0 || !m.nodes.contains object
+        joinRefs (if unknown then [0] else [])
+          (m.fields[(object, field)]?.getD (if unknown then [0] else []))
+    joinRefs out value) []
+
+/-- Only definite post-write facts on ordinary incoming objects are read here.
+    These facts do not confer any permission to write metadata. -/
+def readExternalFieldPayload (m : Memory) (objects : Refs) (field : Nat) : Option Payload := do
+  let first :: rest := normalize objects | none
+  let read (object : Nat) : Option Payload := do
+    let node ← m.nodes[object]?
+    if !node.external || node.privateCell then none else m.fieldPayloads[(object, field)]?
+  let mut value ← read first
+  for object in rest do value := joinPayload value (← read object)
+  return value
 
 /-- Complete payload facts for proven compiler transport objects. Callers
     use this only for their approved transport tags, never to grant a heap
@@ -234,19 +273,22 @@ private def reachable (m : Memory) (roots : Refs) : Refs := Id.run do
   let mut pending := roots
   while let object :: tail := pending do
     pending := tail
-    if object ≤ 1 then return m.nodes.toList.map (·.1)
+    if object ≤ 1 || (m.nodes[object]?.map (·.external)).getD false then
+      return m.nodes.toList.map (·.1)
     if seen.contains object then continue
     seen := seen.insert object ()
     pending := (edges[object]?.getD []) ++ pending
   return seen.toList.map (·.1)
 
-/-- Actual call replay also follows private identities hidden in tuples,
-    arrays or heap frames. Unknown/caller roots may reach any tracked cell;
-    an empty private heap leaves activation to the callee capability check. -/
+/-- Actual call replay follows private identities hidden in carriers.
+    Incoming objects may already contain unseen private storage; unknown
+    closed-heap roots without tracked cells defer to callee capabilities. -/
 def mayReachPrivate (m : Memory) (roots : Refs) : Bool :=
   if roots.isEmpty then false
   else if roots.any (fun object => m.cells.contains object ||
       (m.nodes[object]?.map (·.privateCell)).getD false) then true
+  else if roots.any (fun object => object == 1 ||
+      (m.nodes[object]?.map (·.external)).getD false) then true
   else if m.cells.isEmpty then false
   else (reachable m roots).any fun object => m.cells.contains object ||
       (m.nodes[object]?.map (·.privateCell)).getD false
@@ -255,7 +297,7 @@ def mayReachPrivate (m : Memory) (roots : Refs) : Bool :=
     they may denote a private cell. This grants no write permission. -/
 def mayPrivate (m : Memory) (objects : Refs) : Bool :=
   objects.any fun object => object ≤ 1 ||
-    m.cells.contains object || (m.nodes[object]?.map (·.privateCell)).getD false
+    m.cells.contains object || (m.nodes[object]?.map fun n => n.privateCell || n.external).getD false
 
 /-- Escape prevents future private writes without erasing known payloads.
     Transport through compiler-owned containers is not itself an escape. -/
@@ -273,11 +315,11 @@ def widen (m : Memory) (roots : Refs) : Memory := Id.run do
   let affected : Std.HashMap Nat Unit := objects.foldl (fun out object => out.insert object ()) {}
   m := { m with
     fields := m.fields.map (fun (object, _) refs =>
-      if affected.contains object then joinRefs refs [0] else refs)
+      if affected.contains object then joinRefs refs [0, 1] else refs)
     fieldPayloads := m.fieldPayloads.filter fun (object, _) _ => !affected.contains object }
   for object in objects do
     if m.cells.contains object then
-      let refs := joinRefs (m.cells[object]?.getD {}).refs [0]
+      let refs := joinRefs (m.cells[object]?.getD {}).refs [0, 1]
       m := { m with cells := m.cells.insert object { role := true, refs }
                     fields := m.fields.insert (object, 0) refs }
   return m
@@ -297,26 +339,92 @@ def writeKnownCells (m : Memory) (objects : Refs) (value : Payload) : Memory := 
                     nodes := m.nodes.modify object fun node => { node with escaped := true } }
   return m
 
+/-- Other incoming symbols may alias a written receiver. Weakly join a
+    known write into their existing facts; an unknown prior field remains
+    unknown. A reference-only update cannot preserve payload-role facts. -/
+private def updateExternalAliases (m : Memory) (objects : Refs) (field : Nat)
+    (value : Payload) (rolesKnown : Bool) (strong : Option Nat) : Memory := Id.run do
+  let touches := objects.any fun object => object ≤ 1 ||
+    (m.nodes[object]?.map (·.external)).getD false
+  if !touches then return m
+  let affected (object : Nat) : Bool :=
+    (m.nodes[object]?.map (·.external)).getD false && strong != some object
+  let mut m := { m with
+    fields := m.fields.map fun (object, k) refs =>
+      if k == field && affected object then joinRefs refs value.refs else refs
+    fieldPayloads := m.fieldPayloads.fold (fun out key old =>
+      if key.2 == field && affected key.1 then
+        if rolesKnown then out.insert key (joinPayload old value) else out
+      else out.insert key old) {} }
+  if field == 0 then
+    for (object, old) in m.cells.toList do
+      if affected object then
+        let next := if rolesKnown then joinPayload old value
+          else { role := true, refs := joinRefs old.refs value.refs }
+        m := { m with cells := m.cells.insert object next
+                      fields := m.fields.insert (object, field) next.refs
+                      fieldPayloads := if rolesKnown then m.fieldPayloads.insert (object, field) next
+                        else m.fieldPayloads.erase (object, field) }
+  return m
+
 /-- Transfer references after an ordinary object write has been admitted.
     This grants no private payload permission. Unknown or escaped
     destinations make stored references available to unknown consumers. -/
 def storeRefs (m : Memory) (objects : Refs) (field : Nat) (value : Refs) : Memory := Id.run do
+  let objects := normalize objects
+  let externalTarget := match objects with
+    | [object] => if (m.nodes[object]?.map fun n => n.external && n.unique && !n.privateCell).getD false
+        then some object else none
+    | _ => none
   let unknown := objects.any fun object => object ≤ 1 ||
     (m.nodes[object]?.map (·.escaped)).getD true
   let privateObjects := objects.filter fun object =>
     (m.nodes[object]?.map (·.privateCell)).getD false
-  let m := if unknown then markEscaped m (0 :: value) else markEscaped m privateObjects
+  let m := if externalTarget.isSome then markEscaped m value
+    else if unknown then markEscaped m (0 :: value) else markEscaped m privateObjects
   let strong : Bool := match objects with
-    | [object] => (m.nodes[object]?.map fun n => n.unique && !n.escaped).getD false
+    | [object] => externalTarget.isSome ||
+        (m.nodes[object]?.map fun n => n.unique && !n.escaped).getD false
     | _ => false
+  let m := updateExternalAliases m objects field { role := true, refs := value } false externalTarget
   let mut m := writeKnownCells m objects { refs := value }
-  m := { m with fieldPayloads := if unknown then
+  m := { m with fieldPayloads := if unknown && externalTarget.isNone then
       m.fieldPayloads.filter (fun (_, k) _ => k != field)
     else objects.foldl (fun facts object => facts.erase (object, field)) m.fieldPayloads }
-  for object in normalize objects do
+  -- An unknown receiver may also denote a tracked, escaped ordinary object.
+  if objects.any (· ≤ 1) then
+    m := { m with fields := m.fields.map fun (_, k) refs =>
+      if k == field then joinRefs refs value else refs }
+  for object in objects do
     let fields := if strong then m.fields.insert (object, field) (normalize value)
+      else if (m.nodes[object]?.map (·.external)).getD false then
+        m.fields.insert (object, field) (joinRefs (loadRefs m [object] field) value)
       else joinField m.fields (object, field) value
     m := { m with fields }
+  return m
+
+/-- Remember an admitted ordinary write on incoming objects. A singleton
+    symbol names the same concrete receiver at its later reads, even though
+    other incoming symbols may alias it. The caller must check write policy. -/
+def storeExternalFieldPayload (m : Memory) (objects : Refs) (field : Nat)
+    (value : Payload) : Memory := Id.run do
+  let objects := normalize objects
+  let qualified := !objects.isEmpty && objects.all fun object =>
+    (m.nodes[object]?.map fun node => node.external && !node.privateCell).getD false
+  if !qualified then return storeRefs m objects field value.refs
+  let strong : Bool := match objects with
+    | [object] => (m.nodes[object]?.map (·.unique)).getD false
+    | _ => false
+  let value := { value with refs := normalize value.refs }
+  let definite := if strong then objects.head? else none
+  let m := markEscaped m value.refs
+  let mut m := updateExternalAliases m objects field value true definite
+  for object in objects do
+    let old := m.fieldPayloads[(object, field)]?.getD
+      { role := true, refs := loadRefs m [object] field }
+    let next := if strong then value else joinPayload old value
+    m := { m with fields := m.fields.insert (object, field) next.refs
+                  fieldPayloads := m.fieldPayloads.insert (object, field) next }
   return m
 
 /-- Preserve a compiler transport field AFTER the ordinary write policy

@@ -161,8 +161,8 @@ private def fieldPayloadModels : IO Unit := do
   IO.println "PASS compiler transport field payloads, tuple columns, invalidation and recency joins"
 
 private def reachabilityModels : IO Unit := do
-  expect (!mayReachPrivate empty [0] && !mayReachPrivate empty [1])
-    "unknown roots without tracked cells leave activation to callee capabilities"
+  expect (!mayReachPrivate empty [0] && mayReachPrivate empty [1])
+    "unseen caller values can contain private storage before local allocations"
   let (cell, m) := allocate empty 200 true [{ role := true }]
   let (tuple, m) := allocate m 201 false [{ refs := cell }]
   let (array, m) := allocate m 202 false [{ refs := tuple }]
@@ -315,6 +315,78 @@ private def concreteModel : IO Unit := do
       transitions := transitions + 1
   IO.println s!"PASS concrete heap refinement: {exhaustive} exhaustive states, {transitions} seeded transitions with joins"
 
+private def externalModels : IO Unit := do
+  let (a, initial) := registerExternal empty 200
+  let (b, initial) := registerExternal initial 201
+  let (real, initial) := allocate initial 202 true [{}]
+  let (metadata, initial) := allocate initial 203 true [{ role := true }]
+  let put (m : Memory) (target value : Refs) :=
+    storeExternalFieldPayload m target 0 { refs := value }
+  let mayMetadata (m : Memory) (target : Refs) : Bool :=
+    let refs := loadRefs m target 0
+    refs.any (· ≤ 1) || ((readCell m refs).map (·.role)).getD true
+  expect (a != b && loadRefs initial a 0 == [1] && loadRefs initial b 0 == [1])
+    "incoming symbols are distinct names, with unknown initial fields"
+  expect (mayReachPrivate (registerExternal empty 204).2 [recent 204])
+    "an incoming object may contain private storage before a local allocation"
+  let afterA := put initial a real
+  expect (!mayMetadata afterA a && mayMetadata afterA b)
+    "a definite overwrite is precise only for that symbolic receiver"
+  expect ((readExternalFieldPayload afterA a 0).map (·.role) == some false &&
+    (writeCell afterA a { role := true }).isNone)
+    "post-guard external field facts grant no private write permission"
+  let afterBReal := put afterA b real
+  expect (!mayMetadata afterBReal a && !mayMetadata afterBReal b)
+    "a possibly aliasing real write preserves an already-real field"
+  let afterBMetadata := put afterA b metadata
+  expect (mayMetadata afterBMetadata a && mayMetadata afterBMetadata b)
+    "a write through another symbol may overwrite the first receiver"
+  expect (!mayMetadata (put afterBMetadata a real) a &&
+    mayMetadata (put afterBMetadata a real) b)
+    "overwriting one receiver does not silently overwrite a distinct receiver"
+  expect (mayMetadata (storeRefs afterA [1] 0 metadata) a)
+    "an unseen caller write invalidates a previous real-only alias fact"
+  expect (mayMetadata (widen afterA a) a &&
+    (readExternalFieldPayload (widen afterA a) a 0).isNone)
+    "an unmodeled external writer forgets definite fields"
+  expect (loadRefs (join initial afterA) a 0 == [1] &&
+    loadRefs (join afterA initial) a 0 == [1])
+    "an existing external object's missing branch fact is unknown"
+  expect (loadRefs (join afterA empty) a 0 == real && join afterA afterA == afterA)
+    "absent-object paths and repeated joins retain definite incoming facts"
+  let (box, escaped) := allocate afterA 205 false [{}]
+  let escaped := put escaped a box
+  let changed := storeRefs escaped [1] 0 metadata
+  expect ((loadRefs changed box 0).any (metadata.contains ·))
+    "an unknown caller receiver may denote an escaped fresh object"
+
+  -- Independent concrete executions choose whether A and B denote the same
+  -- frame. Initially each frame may contain an unseen real or metadata cell.
+  -- Every later write stores one of the two known fresh cells above.
+  let mut checked := 0
+  for aliases in [false, true] do
+    for firstMeta in [false, true] do
+      for secondMeta in [false, true] do
+        for encoded in [:256] do
+          let mut code := encoded
+          let mut memory := initial
+          let mut left := firstMeta
+          let mut right := if aliases then firstMeta else secondMeta
+          for _ in [:4] do
+            let action := code % 4
+            code := code / 4
+            let targetA := action < 2
+            let newMeta := action % 2 == 1
+            memory := put memory (if targetA then a else b) (if newMeta then metadata else real)
+            if aliases then
+              left := newMeta
+              right := newMeta
+            else if targetA then left := newMeta else right := newMeta
+            expect (!left || mayMetadata memory a) "external alias model lost concrete A metadata"
+            expect (!right || mayMetadata memory b) "external alias model lost concrete B metadata"
+            checked := checked + 1
+  IO.println s!"PASS external identities, definite field writes and {checked} concrete may-alias transitions"
+
 def main (args : List String) : IO Unit :=
   if args.contains "--scale" then scale
   else if args.contains "--reach-scale" then reachabilityScale
@@ -322,3 +394,4 @@ def main (args : List String) : IO Unit :=
     models
     fieldPayloadModels
     reachabilityModels
+    externalModels

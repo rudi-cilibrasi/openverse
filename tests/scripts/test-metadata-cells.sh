@@ -52,9 +52,10 @@ with tempfile.TemporaryDirectory(prefix="openverse-metadata-cells-") as temporar
     subprocess.run(["lake", "env", "leanc", "-O3", "-o", str(binary),
                     "@" + str(response)], check=True)
     for flags in ([], ["--model"], ["--scale"], ["--reach-scale"]):
-        result = subprocess.run([str(binary), *flags], check=True, text=True,
+        result = subprocess.run([str(binary), *flags], text=True,
                                 capture_output=True, timeout=15, preexec_fn=limits)
-        if result.stderr:
-            raise SystemExit(f"metadata cells: unexpected stderr: {result.stderr}")
+        if result.returncode or result.stderr:
+            raise SystemExit(f"metadata cells failed ({result.returncode}, {flags}):\n"
+                             f"{result.stdout}{result.stderr}")
         print(result.stdout, end="")
 PY
