@@ -2473,7 +2473,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
         -- not below an interface: then one test of the object's class each
         let ds := ctx.types.concreteBelow sn
         let pos := ds.map fun d => ((fieldIndex (ctx.types.fields d []) f).map (·.1)).getD k
-        if ctx.types.isVarField sn f then
+        if ctx.types.isVarField sn f && (sn != "$varcell" || f != "$VCell") then
           noteFx p ["reads"] (if sn == ModuleVars.stateClass then some s!"reads the module-scoped var {ModuleVars.shown f}" else none)
         -- (where every class below has it, so does every placeholder below,
         -- even when that is not `k`: an interface listed after another,
@@ -2779,7 +2779,7 @@ partial def elabConstructionValue (ctx : Ctx) (p : Pos) (name : String) (targs :
     if i.isAbstract then eerr p s!"{name} is <abstract>: it cannot be constructed"
     -- a new object (#34); one that can change, or has an identity, allocates
     if ctx.types.isRefClass name then
-      if ctx.types.isUnique name || fs.any (fun (f, _, _) => ctx.types.isVarField name f) then
+      if name != "$varcell" && (ctx.types.isUnique name || fs.any (fun (f, _, _) => ctx.types.isVarField name f)) then
         noteFx p ["allocates"]
       -- then the `block:` clauses of its class chain, from the top
       let chain := ((ctx.types.supers name).filter fun d => !(ctx.types.info d).isIface).reverse

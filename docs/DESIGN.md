@@ -628,7 +628,13 @@ existing readonly proof-carrier rules. Helpers retain operational proof
 roots and transitive parameter bounds, preserve their roles, and prune
 unneeded inputs. Already evaluated parameters are passed without rerunning
 named defaults. Sibling lexical bindings are renamed before boxing, and a
-boxed initializer runs before construction of its cell.
+boxed initializer runs before construction of its cell. Cell-class demand
+is retained explicitly even if a dormant generic helper has only signature
+references left after inlining. The private cell's reads, writes and allocation
+implement source-local operations, so they do not add user heap permissions;
+ordinary object operations and accessor/callee effects still do. Physical Core
+write flags are derived separately and remain truthful before metadata analysis
+and after lowering.
 
 Source effect permissions and physical Core write annotations are separate.
 After source admission, `PhysicalWrites.annotate` retains declared writers

@@ -14,4 +14,4 @@ for program in "${programs[@]}"; do
   cmp "${program%.vbc}.expected" "$out/actual"
   test ! -s "$out/stderr"
 done
-echo "loop operand metadata contracts passed (24 classifications, 14 complete C oracles)"
+echo "loop operand metadata contracts passed (26 classifications, 14 complete C oracles)"

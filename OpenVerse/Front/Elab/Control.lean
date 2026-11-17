@@ -443,7 +443,10 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         if ctx.types.isRefClass sn then
           let (j, ft) := (fieldIndex (ctx.types.fields sn targs) f).get!
           pre := pre.push (← setFieldAt ctx.types p sn targs c f j ft newVal)
-          noteFx p ["writes"] (if sn == ModuleVars.stateClass then some s!"sets the module-scoped var {ModuleVars.shown f}" else none)
+          -- Compiler-owned cells implement source-local variables. Their
+          -- physical writes are retained in Core, not source heap effects.
+          if sn != "$varcell" || f != "$VCell" then
+            noteFx p ["writes"] (if sn == ModuleVars.stateClass then some s!"sets the module-scoped var {ModuleVars.shown f}" else none)
           wroteObject := true
         else
           let fs := ctx.types.fields sn targs
@@ -522,7 +525,8 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
           if !ctx.types.isVarField sn f then eerr p (classSetMsg sn f)
           checkMemberAccess ctx.types p sn f (write := true)
           let r ← rhsAt t
-          noteFx p (if op.isSome then ["reads", "writes"] else ["writes"])
+          if sn != "$varcell" || f != "$VCell" then
+            noteFx p (if op.isSome then ["reads", "writes"] else ["writes"])
           let (first, r) ← if op.isSome then rhsFirst r (readFails := false) else pure (id, r)
           let v ← match op with
             | none => coerce p r t

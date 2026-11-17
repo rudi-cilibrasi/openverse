@@ -48,6 +48,13 @@ def main (args : List String) : IO Unit := do
         let value := if safe then 11 else 22
         check out s!"exec-{extended}-{safe}-{dummy}" text dummy extended (safe || !dummy)
           s!"got {value}\ngot {value}\ncount 2\n" "dummy type value cannot"
+    -- No consumer or constructor survives in Main, but the boxed generic
+    -- helper signature still needs the private cell class registered.
+    let unused ← IO.FS.readFile "tests/fixtures/loop-return-operands/generic-unused.verse"
+    match compile unused false extended with
+    | .ok c => unless c.prog.check && c.prog.checkControl && c.prog.checkTypes c.sigs c.slotTys do
+        throw (IO.userError "unused generic cell Core mismatch")
+    | .error message => throw (IO.userError s!"unused generic cell refusal: {message}")
     let evidence ← IO.FS.readFile "tests/fixtures/loop-return-operands/loop-evidence-capture.verse"
     for dummy in [false,true] do
       let result : Except String Compiled := do
@@ -67,4 +74,4 @@ def main (args : List String) : IO Unit := do
           throw (IO.userError "implicit proof admission or Core mismatch")
       | .error message => unless dummy && (message.splitOn "has no member 'N'").length > 1 do
           throw (IO.userError s!"implicit proof refusal: {message}")
-  IO.println "loop operand API passed (24 classifications, 14 complete Lean oracles, operational proof roles)"
+  IO.println "loop operand API passed (26 classifications, 14 complete Lean oracles, operational proof roles)"

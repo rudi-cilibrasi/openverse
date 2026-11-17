@@ -4454,6 +4454,9 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
 structure Inlined where
   tops : List STop
   lazy : Bool := false
+  /-- Boxed logical locals need their private cell class even if no live
+      consumer materializes the helper's body. -/
+  logicalCells : Bool := false
   familySites : List (Pos × String) := []
   overloadSites : List (Pos × String) := []
   nestedSites : List String := []
@@ -4536,7 +4539,9 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
         rewritten := rewritten ++ helpers
         original := original ++ [(f.pos, checked)]
         helperNames := helperNames ++ helpers.filterMap fun | .fn _ name .. => some name | _ => none
-      return ← inlineFns rewritten eager (lazy ++ helperNames) overloadPicks nested orders sites methodOvSites pending original nestDone methodTemplates
+      let result ← inlineFns rewritten eager (lazy ++ helperNames) overloadPicks nested orders sites methodOvSites pending original nestDone methodTemplates
+      let needsCells := loopTargets.any (fun (_, _, loops, _) => loops.any (fun entry => !entry.boxed.isEmpty))
+      return { result with logicalCells := result.logicalCells || needsCells }
     else
       for (owner, f, loops, _) in loopTargets do
         let body := noteReturnLoops owner f.ret f.tparams loops f.body

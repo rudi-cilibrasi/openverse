@@ -108,6 +108,12 @@ refusals = [
     ('failure', 'F(N:int):int=\n    for(I:=1..N):\n        if(I=2):\n            Z:=option{return I|I+1}\n            0\n    N|N+1\nMain():void={}\n', 'return cannot leave a failure context'),
     ('scope', 'F(N:int):int=\n    for(I:=1..N):\n        if(I=2):return Hidden|I\n    Hidden:=1\n    N|N+1\nMain():void={}\n', "unknown identifier 'Hidden'"),
 ]
+for name, message in [('heap-write', 'sets a var field'), ('heap-read', 'reads a var field'),
+                      ('heap-allocate', 'constructs an object that has a var field'),
+                      ('lookalike', 'sets a var field')]:
+    for suffix in ('', '-control'):
+        path = ROOT/'tests/fixtures/loop-return-operands'/f'computes-{name}{suffix}.verse'
+        refusals.append((name+suffix, path.read_text(), message))
 with tempfile.TemporaryDirectory(prefix='openverse-loop-refusals-') as tmp:
     for name, text, message in refusals:
         path = Path(tmp) / (name+'.verse')
