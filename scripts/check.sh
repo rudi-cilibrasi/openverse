@@ -57,6 +57,8 @@ if lake env lean -j1 --run tests/lean/SuspendBreaks.lean >"$logs/break-contracts
 else
   rc=$?; cat "$logs/break-contracts"; exit "$rc"
 fi
+echo "== helper type-note contracts"
+lake env lean -j1 --run tests/lean/TypeNotes.lean
 echo "== source-profile compiler API contracts"
 if lake env lean -j1 --run tests/lean/SourceProfile.lean >"$logs/profile-contracts" 2>&1; then
   cat "$logs/profile-contracts"
