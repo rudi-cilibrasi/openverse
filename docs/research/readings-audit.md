@@ -338,20 +338,18 @@ of a field or of a variable of the code around, or a `var` of the clauses,
 no call), the nested `forE`s are that search, and stay: those `for`s keep
 their bytes.
 
-**What follows the rule now, and what does not yet.** The lowering above
-serves every `for` whose generators are over ranges, arrays, maps and
-strings and choices of values (#208's `altE`, a parenthesized choice spliced
-in, a choice in an expression lifted to one), with no call of a function
-with several values anywhere in its clauses and no exclusive choice: two of
-the six lowerings (the nested `forE`s and #208's choice), and all the
-Book's own `for`s. A `for` with anything else keeps, entirely, the old rule
-(what a generator's clauses did stays once they succeed): one with a call
-of a function with several values (inlined, #235; computed at the call,
-#235; taken lazily, #246, `elabLoopGen`), a choice whose alternatives have
-values or clauses of their own (#283, `$contf`, #335), an exclusive choice
-(#314, #331), a refining cast (#243) or a waiting consumer (#417's staging,
-which only those lowerings use). What stands in the way of each, and the
-design that would bring it under the rule:
+**Current lowering.** The resumable search serves flat prepared clauses
+over ranges, arrays, maps, strings, and choices of values. This includes all
+of the pinned Book's `for` cases and flat producers inlined into their
+headers (#709). An eager producer computed as an array contributes an
+array level. Its arguments and call run within the search's rollback
+checkpoints. A producer retained in a nested failure context keeps that
+boundary.
+
+The older lowering applies when clauses retain a lazy producer (#246),
+a composed choice (#283, #335), an exclusive choice (#314, #331), or a
+continuation for a refining cast or a waiting consumer (#243, #417).
+Each form needs its own resumable search state.
 
 - *Composed and exclusive choices* (#283, #314): their alternatives or
   paths have levels of their own, so the levels are a tree, not a list: a
@@ -364,15 +362,11 @@ design that would bring it under the rule:
   the choice must be copied, or their levels' slots kept in an object the
   continuation is given. The heterogeneous copies (#335, a binding of a
   different type per alternative) are subtrees with bodies of their own.
-- *Calls of functions with several values*: an inlined one becomes the
-  clauses and choices above, so it follows with them; one computed at the
-  call is an array level (its arguments' effects are a step), so it could
-  follow now but for the classification that keeps one rule per `for`; a
-  lazily taken one (#246) is a tree of unbounded depth, so its alternatives'
-  nested transactions need recursion: a function of its own per search step
-  (as the first-success contexts already compile one, `Choice.FirstLift`)
-  that descends again to the deepest choice point each step, from a stack
-  of the alternatives taken, without running again the code above it.
+- *Lazy producers* (#246) can produce a tree of unbounded depth. Their
+  nested transactions need a recursive search step, similar to
+  `Choice.FirstLift` for first-success contexts. Each step resumes the
+  deepest choice point from the stack of already selected alternatives.
+  This preserves earlier effects without reevaluating the code above it.
 - *Waiting consumers* (#417): under the rule the body runs between steps,
   outside the search, so a waiting body needs no staging once its `for` is
   lowered as above; the staged prefix and environment (`$forStage`,
