@@ -2127,8 +2127,8 @@ Main():void =
   A scalar `return` in a `for` or `loop` body, or in a binding initializer,
   also exits this producer invocation. Scalar callees keep their own return
   boundary, and the caller continues its consumer after each produced value.
-  An ordinary `break` still leaves its own `loop`. The captured loop or
-  initializer expression must be single-valued throughout:
+  An ordinary `break` still leaves its own `loop`. These loops and
+  initializers can return from an otherwise single-valued expression.
 
   ```verse
   LoopReturn(X:int)<transacts>:int =
@@ -2219,12 +2219,16 @@ Main():void =
   An `if` guard, `option{}`, or `first{}` inside the body can take its own
   choices before the return.
 
-  Exposed body choices combined with choice-bearing headers and mutable
-  implicit proof captures remain implementation limits (#686). Other
-  return-containing initializer shapes
-  retain their existing restrictions. Direct concurrency forms are not
-  supported within a scalar captured expression. Existing source restrictions on returns inside
-  expressions or conditions continue to apply.
+  A choice-bearing header can also reach a block where an exposed body
+  choice is followed by a terminal return. The statements from that
+  choice through the return run lazily. Each returned value runs the
+  cleanup it reached before going to the consumer.
+
+  Exposed body choices that can fall through after a choice-bearing header
+  remain an implementation limit (#686), as do mutable implicit proof
+  captures and direct concurrency in a captured expression. Restrictions
+  on other return-containing initializers and on returns inside
+  expressions or conditions still apply.
 
   Cleanup stays with the scope that registered it. A returning branch runs
   only the `defer:` blocks it reached, from the innermost scope outward and
