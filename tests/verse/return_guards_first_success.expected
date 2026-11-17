@@ -1,0 +1,16 @@
+all -1 2
+all -1 3
+all 0 0
+all 0 1
+all 10 100
+all 10 101
+all 20 200
+all 20 201
+all 21 2
+all 21 3
+first 201
+no fallthrough
+none
+option 0
+first block 0
+exit=0
