@@ -4210,7 +4210,7 @@ private structure LoopCapture where
 
 private inductive ReturnLoopSource where
   | range (index : String) (lower upper : SExpr)
-  | array (index : String) (source : SExpr)
+  | array (item : String) (index : Option String) (source : SExpr)
   | loop
 
 private structure ReturnLoopSite where
@@ -4239,7 +4239,7 @@ private partial def loopBodyScalar (mv : List String) (e : SExpr) : Bool :=
   | e@(.forE _ [.decl _ _ _ false (.range _ lower upper)] body) =>
     (!hasReturn body || (!hasLiftable (markCalls mv lower) && !hasLiftable (markCalls mv upper))) &&
       e.children.all (loopBodyScalar mv)
-  | .forE _ [.gen _ _ none source] body =>
+  | .forE _ [.gen _ _ _ source] body =>
     loopBodyScalar mv source && !hasLiftable (markCalls mv source) && loopBodyScalar mv body
   | e@(.forE ..) => !hasReturn e && e.children.all (loopBodyScalar mv)
   | .loop _ body => loopBodyScalar mv body
@@ -4284,10 +4284,12 @@ private partial def returnLoopSites (owner : String) (f : MFn) (mv : List String
     if hasReturn body && many && loopBodyScalar mv body then
       let inner := localsOf body
       let names := namesUsed body
-      let index := match source with
-        | .range name .. | .array name _ => some name
-        | .loop => none
-      let captures := scope.filter fun binding => index != some binding.name && !inner.contains binding.name
+      let bindings := match source with
+        | .range index .. => [index]
+        | .array item index _ => item :: index.toList
+        | .loop => []
+      let captures := scope.filter fun binding =>
+        !bindings.contains binding.name && !inner.contains binding.name
       let writes := setsIn body ++ defers.flatMap setsIn
       let boxed := captures.filterMap fun binding =>
         if binding.mutable && names.contains binding.name && writes.contains binding.name then some binding.name else none
@@ -4312,9 +4314,9 @@ private partial def returnLoopSites (owner : String) (f : MFn) (mv : List String
     | .forE p [.decl _ index _ false (.range _ lower upper)] body =>
       if !hasLiftable (markCalls mv lower) && !hasLiftable (markCalls mv upper) then
         record scope defers p (.range index lower upper) body
-    | .forE p [.gen _ index none source] body =>
+    | .forE p [.gen _ item index source] body =>
       if loopBodyScalar mv source && !hasLiftable (markCalls mv source) then
-        record scope defers p (.array index source) body
+        record scope defers p (.array item index source) body
     | .loop p body => record scope defers p .loop body
     -- A nested loop is not a separately owned return boundary. Keep an
     -- ineligible enclosing loop intact rather than lifting only its child.
@@ -4344,11 +4346,11 @@ private partial def noteReturnLoops (owner : String) (ret : STy) (parameters : L
       match e with
       | .forE .. | .loop .. =>
         let checked := match site.source, e with
-          | .array _ source, .forE q [.gen gp index none _] iteration =>
+          | .array _ _ source, .forE q [.gen gp item index _] iteration =>
             let key := site.key ++ site.helper ++ "$iterable"
             let marked := SExpr.app source.pos (.ident source.pos "$noteLoopIterator")
               [.str source.pos [.text key], source] false
-            .forE q [.gen gp index none marked] iteration
+            .forE q [.gen gp item index marked] iteration
           | _, _ => e
         return .block e.pos [note e.pos site.key
           (.app e.pos (.ident e.pos "$captureEvidence") [] false :: site.captures.map (fun binding => .ident e.pos binding.name) ++
@@ -4440,7 +4442,7 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
         | throw "internal: missing loop type parameter"
       pure (parameter.name, actual)
     let iterationBody := site.body.mapAll (·.substNames substitution) id
-    let arraySource := match site.source with | .array _ source => some source | _ => none
+    let arraySource := match site.source with | .array _ _ source => some source | _ => none
     let arrayType ← arraySource.mapM fun _ => do
       let some ty := types.lookup (site.key ++ site.helper ++ "$iterable")
         | throw "internal: missing loop array source type"
@@ -4448,10 +4450,10 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
       match ty with
       | .arr _ => pure ty
       | _ => throw s!"{site.pos.show}: lazy loop return operands currently require an array-valued iterator (#686)"
-    if let (.array index source, some (.arr (.name "$never"))) := (site.source, arrayType) then
+    if let (.array item index source, some (.arr (.name "$never"))) := (site.source, arrayType) then
       -- The source can still fail or have effects. Use ordinary iteration
       -- to handle it, with no helper that would bind an impossible item.
-      let iteration := SExpr.forE site.pos [.gen site.pos index none (cellVars boxed source)]
+      let iteration := SExpr.forE site.pos [.gen site.pos item index (cellVars boxed source)]
         (.tuple site.pos [])
       replacements := replacements ++ [(site.pos, iteration)]
       continue
@@ -4545,10 +4547,10 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
         else SExpr.ite p clauses (resume [.ident p low, .ident p high]) (some (.tuple p []))
         ([{ name := index, ty := .name "int" }, { name := endName, ty := .name "int" }],
           .opt ret, helperBody, replacement)
-      | .array index source =>
+      | .array item index source =>
         let ty := arrayType.getD (.arr (.name "$never"))
         let element := match ty with | .arr t => t | _ => .name "$never"
-        let cursor := site.helper ++ "$cursor"
+        let cursor := index.getD (site.helper ++ "$cursor")
         let items := site.helper ++ "$items"
         let endValue := SExpr.bin p "-" (.member p (.ident p items) "Length") (.int p 1)
         let next := SExpr.ite p [.cmp p (.ident p cursor) [(">=", endValue)]]
@@ -4556,11 +4558,11 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
         let iteration := returnLoopOperands ret site.helper none nested iterationBody
         let iteration := if loopIterationTerminal iterationBody then iteration
           else SExpr.block p [iteration, next]
-        let helperBody := SExpr.ite p [.decl p index (some element) false
+        let helperBody := SExpr.ite p [.decl p item (some element) false
           (.app p (.ident p items) [.ident p cursor] true)] iteration (some noneValue)
         let low := site.helper ++ "$lower"
         let high := site.helper ++ "$upper"
-        -- Keep the source's writes on the failing path if it has no first row.
+        -- The source and first item share a failure context.
         let replacement := SExpr.ite p
           [.decl p low (some (.name "int")) false (.int p 0),
            .decl p high (some ty) false (cellVars boxed source),

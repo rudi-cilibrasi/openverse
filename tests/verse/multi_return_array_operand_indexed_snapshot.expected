@@ -1,0 +1,27 @@
+row 0
+cleanup 0
+row 1
+cleanup 1
+int 7
+cleanup 1
+int 99
+row 0
+cleanup 0
+row 1
+cleanup 1
+string b
+cleanup 1
+string z
+row 0
+cleanup 0
+row 1
+cleanup 1
+first 99
+none
+row 0
+cleanup 0
+short 77
+short 77
+index 1
+index 2
+exit=0
