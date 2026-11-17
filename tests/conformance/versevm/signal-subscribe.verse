@@ -4,7 +4,7 @@ counter := class:
     Receive(N:int)<transacts>:void =
         set Last = N
 
-Main()<transacts>:void =
+Main():void =
     E := event(int){}
     C := counter{}
     Subscription := E.Subscribe(C.Receive)
