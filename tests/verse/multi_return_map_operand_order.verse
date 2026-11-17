@@ -13,6 +13,10 @@ Find(H:Cell,N:int)<transacts>:int=
 Unindexed()<computes>:int=
     for(V:map{"z"=>5,"a"=>6}):return V|V+1
     0|1
+Empty()<transacts>:int=
+    var N:int=3
+    for(Key -> Item:(block{set N+=10;map{}})):return 1|2
+    N|N+1
 Main()<transacts>:void=
     for(N:array{-1,0,1}):
         H:=Cell{}
@@ -23,3 +27,4 @@ Main()<transacts>:void=
     R:=Cell{}
     if(V:=Find(R,1),V=999)then Print("bad")else Print("none {R.Calls}")
     for(V:=Unindexed()):Print("unindexed {V}")
+    for(V:=Empty()):Print("empty {V}")

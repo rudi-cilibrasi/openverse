@@ -4453,13 +4453,19 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
       | .arr _ | .map .. => pure ty
       | _ => throw s!"{site.pos.show}: lazy loop return operands require an array, string or map iterator (#686)"
     let isMap := match collectionType with | some (.map ..) => true | _ => false
-    if let (.collection item index source, some (.arr (.name "$never"))) := (site.source, collectionType) then
-      -- The source can still fail or have effects. Use ordinary iteration
-      -- to handle it, with no helper that would bind an impossible item.
-      let iteration := SExpr.forE site.pos [.gen site.pos item index (cellVars boxed source)]
-        (.tuple site.pos [])
-      replacements := replacements ++ [(site.pos, iteration)]
-      continue
+    let emptyType := match collectionType with
+      | some (.arr (.name "$never"))
+      | some (.map (.name "$never") _)
+      | some (.map _ (.name "$never")) => true
+      | _ => false
+    if emptyType then
+      if let .collection item index source := site.source then
+        -- The source can still fail or have effects. Use ordinary iteration
+        -- to handle it, with no helper that would bind an impossible item.
+        let iteration := SExpr.forE site.pos [.gen site.pos item index (cellVars boxed source)]
+          (.tuple site.pos [])
+        replacements := replacements ++ [(site.pos, iteration)]
+        continue
     let typedCaptures ← site.captures.mapM fun binding => do
       let some ty := types.lookup (site.key ++ binding.name) | throw "internal: missing loop capture"
       let ty := ty.substNames substitution

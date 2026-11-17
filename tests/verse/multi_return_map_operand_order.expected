@@ -18,4 +18,6 @@ first 4 calls 1
 none 0
 unindexed 5
 unindexed 6
+empty 3
+empty 4
 exit=0
