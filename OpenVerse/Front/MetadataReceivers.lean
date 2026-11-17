@@ -11,6 +11,15 @@ structure Projection where
   nonCellSlots : List Nat := []
   deriving Inhabited
 
+/-- A resolved source signature, indexed by its emitted Core function. Only
+    the explicit source parameters precede hidden evidence/witness operands. -/
+structure CallType where
+  params : List Ty := []
+  ret : Ty
+  /-- Callee type parameter and its actual hidden witness operand. -/
+  witnesses : List (String × Nat) := []
+  deriving BEq, Inhabited
+
 /-- A generic or dynamically boxed value can still denote the private cell.
     A nominal receiver is excluded only by the actual class hierarchy. -/
 private def nonCell (env : TyEnv) : Ty → Bool
@@ -46,14 +55,22 @@ private partial def valueType (env : TyEnv) : Value → Option Ty
   | .none => none
 
 /-- This is intentionally a small type transfer, not a second elaborator.
-    Only resolved, closed call return types can create certificates; opaque
-    callee parameters must never be interpreted in the caller's type scope. -/
+    A generic result is instantiated only from its actual hidden witnesses,
+    whose types record the instance chosen during source elaboration. Opaque
+    callee parameters never become types in the caller's scope. -/
 private partial def infer (env : TyEnv) (types : Array Ty)
-    (fnReturns : Array (Option Ty)) : Expr → Option Ty
+    (fnReturns : Array (Option CallType)) : Expr → Option Ty
   | .local slot => types[slot]?
   | .lit value => valueType env value
-  | .call target _ => do
-    let ty ← (fnReturns[target]?).getD none
+  | .call target args => do
+    let signature ← (fnReturns[target]?).getD none
+    if signature.ret.params.isEmpty then return signature.ret
+    if (signature.witnesses.map (·.1)).eraseDups.length != signature.witnesses.length then none else pure ()
+    let substitution ← signature.witnesses.mapM fun (name, index) => do
+      let value ← args[index]?
+      let ty ← infer env types fnReturns value
+      if ty.params.isEmpty then some (name, ty) else none
+    let ty := signature.ret.subst substitution
     if ty.params.isEmpty then some ty else none
   | .assign slot value => types[slot]? <|> infer env types fnReturns value
   | .seq _ value => infer env types fnReturns value
@@ -83,7 +100,7 @@ private partial def infer (env : TyEnv) (types : Array Ty)
 
 private structure State where
   types : Array Ty
-  fnReturns : Array (Option Ty) := #[]
+  fnReturns : Array (Option CallType) := #[]
   extraSlots : Array Ty := #[]
   nonCellSlots : List Nat := []
 
@@ -122,7 +139,7 @@ private partial def rewrite (env : TyEnv) (body : Expr) : StateM State Expr := d
     source-frame ownership. Source admission and ordinary heap permissions
     are unchanged; the certificate excludes only private-cell payload taint. -/
 def project (env : TyEnv) (slotTys : Array Ty) (body : Expr)
-    (fnReturns : Array (Option Ty) := #[]) : Projection := Id.run do
+    (fnReturns : Array (Option CallType) := #[]) : Projection := Id.run do
   let privateType := if env.classIx.isEmpty then env.classes.contains "$varcell"
     else env.classIx.contains "$varcell"
   if !privateType then
