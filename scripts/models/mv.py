@@ -216,17 +216,29 @@ FOR_RULE = ['old']    # (the rule of the innermost for being run)
 # has a choice or a call with several values of its own, a parenthesized
 # choice spliced in), composed (one whose alternatives do), exclusive (an `if`
 # or `case` that picks a branch with a choice, an `or` with one on its right),
-# call (a call of a function or method with several values, anywhere in the
-# clauses, nested failure contexts included).
+# call (a producer that retains its own boundary, including calls in a
+# nested failure context).
 # mvm2 is the ordinary two-argument overload; only its arguments can choose.
 MANY_VALUED = {'mcall', 'rcall', 'gcall', 'gself', 'rt', 'rt2', 'rt3', 'nam', 'mvm',
                'ovl', 'ows', 'ow2', 'om', 'owr', 'gx', 'gchoice', 'gbif', 'gblk'}
 
 
-def has_call(x):
-    if isinstance(x, tuple) and x and isinstance(x[0], str) and x[0] in MANY_VALUED:
-        return True
-    return isinstance(x, (tuple, list)) and any(has_call(y) for y in x)
+def has_unexpanded_call(x, local_search=False):
+    if not isinstance(x, (tuple, list)):
+        return False
+    kind = x[0] if isinstance(x, tuple) and x and isinstance(x[0], str) else None
+    if kind in MANY_VALUED:
+        # The generated Ov overloads and Ow(string) have flat alternatives.
+        # OwR computes an array at the call because its recursive body uses
+        # the composed Ow(int,int) overload. Other recursion can stay lazy.
+        if local_search or kind not in {'ovl', 'ows', 'owr'}:
+            return True
+    if kind in ('not', 'logic'):
+        return has_unexpanded_call(x[1], True)
+    if kind in ('optor', 'orx', 'ifx'):
+        return has_unexpanded_call(x[1], True) or any(
+            has_unexpanded_call(value, local_search) for value in x[2:])
+    return any(has_unexpanded_call(value, local_search) for value in x)
 
 
 def has_choice(x):
@@ -271,7 +283,7 @@ def e_kinds(x):
 
 
 def for_kinds(cl):
-    return e_kinds(list(cl)) | ({'call'} if has_call(cl) else set())
+    return e_kinds(list(cl)) | ({'call'} if has_unexpanded_call(cl) else set())
 
 
 def for_book():
