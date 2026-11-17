@@ -4452,9 +4452,7 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
       match ty with
       | .arr _ | .map .. => pure ty
       | _ => throw s!"{site.pos.show}: lazy loop return operands require an array, string or map iterator (#686)"
-    let mapEntry := match collectionType with
-      | some (.map key value) => some (key, value)
-      | _ => none
+    let isMap := match collectionType with | some (.map ..) => true | _ => false
     if let (.collection item index source, some (.arr (.name "$never"))) := (site.source, collectionType) then
       -- The source can still fail or have effects. Use ordinary iteration
       -- to handle it, with no helper that would bind an impossible item.
@@ -4558,7 +4556,7 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
           | .arr t => t
           | .map key value => .tup [key, value]
           | _ => .name "$never"
-        let cursor := if mapEntry.isSome then site.helper ++ "$cursor"
+        let cursor := if isMap then site.helper ++ "$cursor"
           else index.getD (site.helper ++ "$cursor")
         let items := site.helper ++ "$items"
         let endValue := SExpr.bin p "-" (.member p (.ident p items) "Length") (.int p 1)
@@ -4567,18 +4565,17 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
         let iteration := returnLoopOperands ret site.helper none nested iterationBody
         let iteration := if loopIterationTerminal iterationBody then iteration
           else SExpr.block p [iteration, next]
-        let entry := if mapEntry.isSome then site.helper ++ "$entry" else item
-        let iteration := match mapEntry with
-          | some (key, value) =>
-            let project (column : Int) := SExpr.app p (.ident p entry) [.int p column] false
-            let bindKey := index.toList.map fun name =>
-              SExpr.decl p name (some key) false (project 0)
-            SExpr.block p (bindKey ++ [.decl p item (some value) false (project 1), iteration])
-          | none => iteration
-        let entries := if mapEntry.isSome then
+        let entry := if isMap then site.helper ++ "$entry" else item
+        let iteration := if isMap then
+          let project (column : Int) := SExpr.app p (.ident p entry) [.int p column] false
+          let bindKey := index.toList.map fun name => SExpr.decl p name none false (project 0)
+          SExpr.block p (bindKey ++ [.decl p item none false (project 1), iteration])
+          else iteration
+        let entries := if isMap then
           SExpr.app p (.ident p "$loopMapEntries") [.ident p items] false
           else .ident p items
-        let helperBody := SExpr.ite p [.decl p entry (some element) false
+        let annotation := if isMap then none else some element
+        let helperBody := SExpr.ite p [.decl p entry annotation false
           (.app p entries [.ident p cursor] true)] iteration (some noneValue)
         let low := site.helper ++ "$lower"
         let high := site.helper ++ "$upper"
