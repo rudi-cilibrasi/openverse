@@ -4265,6 +4265,7 @@ private partial def loopIterationTerminal : SExpr → Bool
   | .ret .. | .brk .. => true
   | .block _ statements => statements.any loopIterationTerminal
   | .ite _ _ yes (some no) => loopIterationTerminal yes && loopIterationTerminal no
+  | .loop _ body => !hasOwnLoopBreak body
   | _ => false
 
 private def uniqueLoopCaptures (bindings : List LoopCapture) : List LoopCapture :=
