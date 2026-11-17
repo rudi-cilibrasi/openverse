@@ -1,6 +1,6 @@
 # Array loop return slice — unvalidated working artifact
 
-Base: ac7963b5a312082d480e13bc7094d0e0895ddefe (the reviewed #697 implementation, including actual private-cell metadata, source-effect, ownership and #699 packet fixes). This tree has no copied cache and has not been built or tested. The Source patch is local only. No PR or issue has been published.
+Integration base: PR #697 at `1fb802acc1d52684ae5f0811de623947f029ff54`. The array code remains local and has yet to be built or tested. The original research branch remains available at `2f082273`.
 
 ## Existing isolated research
 
@@ -16,7 +16,7 @@ Base: ac7963b5a312082d480e13bc7094d0e0895ddefe (the reviewed #697 implementation
 This is not yet a compiled implementation. In particular, inspect/check:
 
 - the checking-only source value block must preserve original header effect/failure/selected-world admission;
-- empty or failing Source must match ordinary `for` rollback/exhaustion; successful empty arrays with source effects require an actual old-main oracle;
+- empty or failing Source must match ordinary `for` rollback/exhaustion. The array length guard in the generated header keeps the source's writes on the failing path for an empty array. Compare this against the measured control trace;
 - source snapshot versus mutable source binding and heap elements, branch/function cleanup between return alternatives, first success, rejection and unused `Err()` alternatives;
 - generic element/return types and transitive bounds, selected-world captures, real/dummy evidence and callable/object payload roles;
 - source `<computes>` permissions, Signal policy, lexical shadowing/default/method scope, existing invalid returns;
@@ -36,4 +36,4 @@ The source-failure control distinguishes a failed source, a successful empty arr
 
 ## Integration hold
 
-The ac foundation is now held on an independently reproduced existing-source compilation regression (`multi_nested_groups`), reported during its full gate. This array artifact must rebase onto the corrected, validated #697 implementation before any final candidate or gates. It does not work around that regression or replace any metadata code.
+The isolated integration branch includes the newer #697 corrections. Its array code needs a native build and focused comparisons against the controls before it is ready for review. PR #697's own validation runs in a different worktree.

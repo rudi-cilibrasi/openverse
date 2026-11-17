@@ -4493,8 +4493,12 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
     -- mutable array binding cannot change the original sequence of elements.
     let clauses := match site.arraySource, arrayType with
       | some source, some ty =>
+        -- An empty source produces no first row. Fail the header before its
+        -- writes can commit, just as ordinary array iteration does.
         [.decl site.pos lower (some (.name "int")) false (.int site.pos 0),
-         .decl site.pos upper (some ty) false (cellVars boxed source)]
+         .decl site.pos upper (some ty) false (cellVars boxed source),
+         .cmp site.pos (.member site.pos (.ident site.pos upper) "Length")
+           [(">", .int site.pos 0)]]
       | _, _ =>
         [.decl site.pos lower (some (.name "int")) false (cellVars boxed site.lower),
          .decl site.pos upper (some (.name "int")) false (cellVars boxed site.upper)]
