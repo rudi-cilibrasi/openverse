@@ -4455,10 +4455,7 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
     let mapEntry := match collectionType with
       | some (.map key value) => some (key, value)
       | _ => none
-    let arrayType := match mapEntry with
-      | some (key, value) => some (STy.arr (.tup [key, value]))
-      | none => collectionType
-    if let (.collection item index source, some (.arr (.name "$never"))) := (site.source, arrayType) then
+    if let (.collection item index source, some (.arr (.name "$never"))) := (site.source, collectionType) then
       -- The source can still fail or have effects. Use ordinary iteration
       -- to handle it, with no helper that would bind an impossible item.
       let iteration := SExpr.forE site.pos [.gen site.pos item index (cellVars boxed source)]
@@ -4478,7 +4475,7 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
         throw s!"{site.pos.show}: a loop return capturing a mutable implicit proof is not supported yet (#686)"
     let mut retained := typedCaptures.filter fun (binding, _) =>
       used.contains binding.name || operational.any (fun root => root.name == binding.name)
-    let required := [ret] ++ arrayType.toList ++ returnLoopWrittenTypes iterationBody
+    let required := [ret] ++ collectionType.toList ++ returnLoopWrittenTypes iterationBody
     let mut needed : List TParam := []
     let mut inferenceOnly : List String := []
     -- Adding an inference input may itself mention another index. Close over
@@ -4491,7 +4488,7 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
         needed := f.tparams.filter fun tp => needed.any (fun prior => prior.name == tp.name) ||
           bounds.any (styMentions [tp.name])
       let mut uncovered := needed.filter fun tp =>
-        !(arrayType.toList ++ retained.map (·.2)).any (styMentions [tp.name])
+        !(collectionType.toList ++ retained.map (·.2)).any (styMentions [tp.name])
       -- Inputs read solely to infer indices are metadata, and do not taint
       -- independent returned data. Operational proof roots stay real.
       for (binding, ty) in typedCaptures do
@@ -4556,8 +4553,11 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
         ([{ name := index, ty := .name "int" }, { name := endName, ty := .name "int" }],
           .opt ret, helperBody, replacement)
       | .collection item index source =>
-        let ty := arrayType.getD (.arr (.name "$never"))
-        let element := match ty with | .arr t => t | _ => .name "$never"
+        let ty := collectionType.getD (.arr (.name "$never"))
+        let element := match ty with
+          | .arr t => t
+          | .map key value => .tup [key, value]
+          | _ => .name "$never"
         let cursor := if mapEntry.isSome then site.helper ++ "$cursor"
           else index.getD (site.helper ++ "$cursor")
         let items := site.helper ++ "$items"
@@ -4575,18 +4575,17 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
               SExpr.decl p name (some key) false (project 0)
             SExpr.block p (bindKey ++ [.decl p item (some value) false (project 1), iteration])
           | none => iteration
+        let entries := if mapEntry.isSome then
+          SExpr.app p (.ident p "$loopMapEntries") [.ident p items] false
+          else .ident p items
         let helperBody := SExpr.ite p [.decl p entry (some element) false
-          (.app p (.ident p items) [.ident p cursor] true)] iteration (some noneValue)
+          (.app p entries [.ident p cursor] true)] iteration (some noneValue)
         let low := site.helper ++ "$lower"
         let high := site.helper ++ "$upper"
-        let source := cellVars boxed source
-        let source := if mapEntry.isSome then
-          SExpr.app p (.ident p "$loopMapEntries") [source] false
-          else source
         -- The source and first item share a failure context.
         let replacement := SExpr.ite p
           [.decl p low (some (.name "int")) false (.int p 0),
-           .decl p high (some ty) false source,
+           .decl p high (some ty) false (cellVars boxed source),
            .cmp p (.member p (.ident p high) "Length") [(">", .int p 0)]]
           (resume [.ident p low, .ident p high]) (some (.tuple p []))
         ([{ name := cursor, ty := .name "int" }, { name := items, ty }], .opt ret,
