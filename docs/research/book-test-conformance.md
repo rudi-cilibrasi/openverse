@@ -48,6 +48,10 @@ Epic compiler or engine was run, and no Epic source code was read: the
 harness reads the test files of the public Book repository, and this note
 quotes them by file and line only.
 
+The [live VerseVM comparison](versevm-live-conformance.md) describes running
+the development suite with Epic's test runner and collecting release results
+with UEFN.
+
 The harness is [`tests/conformance/book/booktests.py`](../../tests/conformance/book/booktests.py)
 (run it with [`scripts/book-conformance.sh`](../../scripts/book-conformance.sh)),
 its causes are [`causes.py`](../../tests/conformance/book/causes.py), and the

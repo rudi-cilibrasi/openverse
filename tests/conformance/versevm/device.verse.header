@@ -1,0 +1,9 @@
+using { /Fortnite.com/Devices }
+using { /Verse.org/Simulation }
+using { /Verse.org/Verse }
+
+openverse_probe := class(creative_device):
+    OnBegin<override>()<suspends>:void =
+        Print("OVPROBE begin")
+        Main()
+        Print("OVPROBE end")
