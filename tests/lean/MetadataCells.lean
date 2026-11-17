@@ -110,6 +110,56 @@ private def models : IO Unit := do
   expect ((readCell m wrongShape).isNone) "a private cell has exactly one payload field"
   IO.println "PASS private-cell recency, aliases, tuple columns, snapshots and escape models"
 
+private def fieldPayloadModels : IO Unit := do
+  let tuple : Payload := { role := true, parts := some [true, false] }
+  let other : Payload := { role := true, parts := some [false, true] }
+  let (frame, m) := allocate empty 100 false [tuple, {}]
+  expect ((readFieldPayload m frame 0).map (·.parts) == some (some [true, false]))
+    "lazy transport must preserve the real tuple column beside metadata"
+  let changed := storeFieldPayload m frame 0 other
+  expect ((readFieldPayload changed frame 0).map (·.parts) == some (some [false, true]))
+    "a unique transport field can strongly replace its tuple payload"
+  let forgotten := storeRefs m frame 0 []
+  expect ((readFieldPayload forgotten frame 0).isNone)
+    "an ordinary reference write invalidates payload facts"
+  expect ((readFieldPayload (join m forgotten) frame 0).isNone &&
+    (readFieldPayload (join forgotten m) frame 0).isNone)
+    "joins must not resurrect a field forgotten on an existing-object path"
+  expect ((readFieldPayload (join m empty) frame 0).map (·.parts) == some (some [true, false]))
+    "an absent-object path contributes no field value"
+  expect ((readFieldPayload (markEscaped m frame) frame 0).isNone &&
+    (readFieldPayload (widen m frame) frame 0).isNone)
+    "escaped or unknown-written transport fields do not retain precise permissions"
+
+  let (cell, m) := allocate empty 101 true [{}]
+  let (frame, m) := allocate m 102 false [{ tuple with refs := cell }]
+  let (_, m) := allocate m 101 true [{ role := true }]
+  expect ((readFieldPayload m frame 0).map (·.refs) == some [older 101])
+    "recency must rebase references inside transport payload facts"
+  let (_, m) := allocate m 102 false [{}]
+  expect ((readFieldPayload m [older 102] 0).map (·.parts) == some (some [true, false]))
+    "recency must rebase transport payload owner identities"
+  let (_, m) := allocate m 102 false [{}]
+  let weak := storeFieldPayload m [older 102] 0 {}
+  expect ((readFieldPayload weak [older 102] 0).map (·.parts) == some (some [true, false]))
+    "a summary write cannot erase another older transport's tuple metadata"
+  expect ((readFieldPayload weak [recent 102] 0).map (·.role) == some false)
+    "summary writes do not taint a separate recent transport"
+
+  let (first, m) := allocate empty 103 false [tuple]
+  let m := storeRefs m first 0 []
+  let (_, m) := allocate m 103 false [{}]
+  let (_, m) := allocate m 103 false [tuple]
+  expect ((readFieldPayload m [older 103] 0).isNone)
+    "demotion cannot recover a fact missing from an older instance"
+  let (_, m) := allocate empty 104 false [tuple]
+  let (second, m) := allocate m 104 false [{}]
+  let m := storeRefs m second 0 []
+  let (_, m) := allocate m 104 false [tuple]
+  expect ((readFieldPayload m [older 104] 0).isNone)
+    "demotion cannot retain a fact missing from the previous recent instance"
+  IO.println "PASS compiler transport field payloads, tuple columns, invalidation and recency joins"
+
 private def scale : IO Unit := do
   let count := 32000
   let started ← IO.monoMsNow
@@ -150,6 +200,8 @@ private def refines (c : Concrete) (m : Memory) : IO Unit := do
     let id := representedBy c index
     let value ← payload m [id]
     expect (!object.metadata || value.role) "abstract payload lost a concrete metadata value"
+    if let some field := readFieldPayload m [id] 0 then
+      expect (!object.metadata || field.role) "transport field facts lost a concrete metadata value"
     let some node := m.nodes[id]? | throw <| IO.userError "missing concrete allocation identity"
     expect (!object.escaped || node.escaped) "abstract heap lost a concrete escape"
     if node.unique then
@@ -221,4 +273,6 @@ private def concreteModel : IO Unit := do
 
 def main (args : List String) : IO Unit :=
   if args.contains "--scale" then scale
-  else if args.contains "--model" then concreteModel else models
+  else if args.contains "--model" then concreteModel else do
+    models
+    fieldPayloadModels

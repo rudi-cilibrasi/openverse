@@ -42,6 +42,7 @@ structure Memory where
   nslots : Nat := 0
   locals : Std.HashMap Nat Refs := {}
   fields : Std.HashMap (Nat × Nat) Refs := {}
+  fieldPayloads : Std.HashMap (Nat × Nat) Payload := {}
   cells : Std.HashMap Nat Payload := {}
   nodes : Std.HashMap Nat Node := {}
   deriving BEq, Inhabited
@@ -76,6 +77,20 @@ private def joinCell (cells : Std.HashMap Nat Payload) (id : Nat)
     (payload : Payload) : Std.HashMap Nat Payload :=
   cells.insert id (cells[id]?.map (joinPayload · payload) |>.getD payload)
 
+private def joinFieldPayload (facts : Std.HashMap (Nat × Nat) Payload)
+    (key : Nat × Nat) (value : Payload) : Std.HashMap (Nat × Nat) Payload :=
+  facts.insert key (facts[key]?.map (joinPayload · value) |>.getD value)
+
+/-- Missing facts on an existing object mean an unknown field, rather than
+    a real field. A path where the object is absent contributes no value. -/
+private def joinFieldPayloads (a b : Memory) : Std.HashMap (Nat × Nat) Payload :=
+  a.fieldPayloads.fold (fun out key value =>
+    match b.fieldPayloads[key]? with
+    | some other => out.insert key (joinPayload value other)
+    | none => if b.nodes.contains key.1 then out else out.insert key value)
+    (b.fieldPayloads.fold (fun out key value =>
+      if a.nodes.contains key.1 then out else out.insert key value) {})
+
 /-- Missing nodes describe paths on which that allocation has not occurred.
     A node present on both paths is unique only when both paths prove it. -/
 def join (a b : Memory) : Memory := {
@@ -85,6 +100,7 @@ def join (a b : Memory) : Memory := {
       out.insert i (joinRefs (out[i]?.getD []) refs) else out)
     (a.locals.filter fun i _ => i < min a.nslots b.nslots)
   fields := b.fields.fold joinField a.fields
+  fieldPayloads := joinFieldPayloads a b
   cells := b.cells.fold joinCell a.cells
   nodes := b.nodes.fold (fun out id node =>
     out.insert id (out[id]?.map (joinNode · node) |>.getD node)) a.nodes }
@@ -114,6 +130,13 @@ private def demote (m : Memory) (site : Nat) : Memory :=
     locals := m.locals.map fun _ refs => replace previous summary refs
     fields := m.fields.fold (fun out (object, field) refs =>
       joinField out (if object == previous then summary else object, field) (replace previous summary refs)) {}
+    fieldPayloads := m.fieldPayloads.fold (fun out (object, field) value =>
+      let missing := if object == previous then
+          m.nodes.contains summary && !m.fieldPayloads.contains (summary, field)
+        else object == summary && !m.fieldPayloads.contains (previous, field)
+      if missing then out else
+        joinFieldPayload out (if object == previous then summary else object, field)
+          { value with refs := replace previous summary value.refs }) {}
     cells := m.cells.fold (fun out id payload =>
       joinCell out (if id == previous then summary else id)
         { payload with refs := replace previous summary payload.refs }) {}
@@ -139,7 +162,9 @@ def allocate (m : Memory) (site : Nat) (isPrivate : Bool)
   let privateCell := isPrivate && values.length == 1
   let mut m := { m with nodes := m.nodes.insert id { privateCell } }
   for (payload, field) in values.zipIdx do
-    m := { m with fields := m.fields.insert (id, field) (normalize payload.refs) }
+    m := { m with fields := m.fields.insert (id, field) (normalize payload.refs)
+                  fieldPayloads := m.fieldPayloads.insert (id, field)
+                    { payload with refs := normalize payload.refs } }
   if privateCell then
     let payload := values.head!
     m := { m with cells := m.cells.insert id { payload with refs := normalize payload.refs } }
@@ -152,6 +177,19 @@ def loadRefs (m : Memory) (objects : Refs) (field : Nat) : Refs :=
     let unknown := object ≤ 1 || !m.nodes.contains object
     joinRefs out (joinRefs (if unknown then [0] else [])
       (m.fields[(object, field)]?.getD (if unknown then [0] else [])))) []
+
+/-- Complete payload facts for proven compiler transport objects. Callers
+    use this only for their approved transport tags, never to grant a heap
+    write permission. Unknown, escaped or incompletely tracked fields fail;
+    absence of a fact cannot prove that a transport field is real. -/
+def readFieldPayload (m : Memory) (objects : Refs) (field : Nat) : Option Payload := do
+  let first :: rest := normalize objects | none
+  let read (object : Nat) : Option Payload := do
+    let node ← m.nodes[object]?
+    if object ≤ 1 || node.escaped then none else m.fieldPayloads[(object, field)]?
+  let mut value ← read first
+  for object in rest do value := joinPayload value (← read object)
+  return value
 
 private def cell? (m : Memory) (object : Nat) : Option Payload := do
   let node ← m.nodes[object]?
@@ -182,7 +220,8 @@ def writeCell (m : Memory) (objects : Refs) (payload : Payload) : Option Memory 
     let old ← cell? m object
     let next := if strong then payload else joinPayload old payload
     m := { m with cells := m.cells.insert object next
-                  fields := m.fields.insert (object, 0) next.refs }
+                  fields := m.fields.insert (object, 0) next.refs
+                  fieldPayloads := m.fieldPayloads.insert (object, 0) next }
   return m
 
 /-- Reachability uses an adjacency index and a work list rather than
@@ -221,8 +260,10 @@ def widen (m : Memory) (roots : Refs) : Memory := Id.run do
   let objects := reachable m roots
   let mut m := markEscaped m roots
   let affected : Std.HashMap Nat Unit := objects.foldl (fun out object => out.insert object ()) {}
-  m := { m with fields := m.fields.map fun (object, _) refs =>
-    if affected.contains object then joinRefs refs [0] else refs }
+  m := { m with
+    fields := m.fields.map (fun (object, _) refs =>
+      if affected.contains object then joinRefs refs [0] else refs)
+    fieldPayloads := m.fieldPayloads.filter fun (object, _) _ => !affected.contains object }
   for object in objects do
     if m.cells.contains object then
       let refs := joinRefs (m.cells[object]?.getD {}).refs [0]
@@ -241,6 +282,7 @@ def writeKnownCells (m : Memory) (objects : Refs) (value : Payload) : Memory := 
       let payload := joinPayload old value
       m := { m with cells := m.cells.insert object payload
                     fields := m.fields.insert (object, 0) payload.refs
+                    fieldPayloads := m.fieldPayloads.insert (object, 0) payload
                     nodes := m.nodes.modify object fun node => { node with escaped := true } }
   return m
 
@@ -257,10 +299,35 @@ def storeRefs (m : Memory) (objects : Refs) (field : Nat) (value : Refs) : Memor
     | [object] => (m.nodes[object]?.map fun n => n.unique && !n.escaped).getD false
     | _ => false
   let mut m := writeKnownCells m objects { refs := value }
+  m := { m with fieldPayloads := if unknown then
+      m.fieldPayloads.filter (fun (_, k) _ => k != field)
+    else objects.foldl (fun facts object => facts.erase (object, field)) m.fieldPayloads }
   for object in normalize objects do
     let fields := if strong then m.fields.insert (object, field) (normalize value)
       else joinField m.fields (object, field) value
     m := { m with fields }
+  return m
+
+/-- Preserve a compiler transport field AFTER the ordinary write policy
+    admits its payload. No private-cell or unknown-object permission is
+    introduced here. Uncertain identities receive only weak updates. -/
+def storeFieldPayload (m : Memory) (objects : Refs) (field : Nat)
+    (value : Payload) : Memory := Id.run do
+  let objects := normalize objects
+  let qualified := !objects.isEmpty && objects.all fun object =>
+    object > 1 && (m.nodes[object]?.map fun n => !n.escaped && !n.privateCell).getD false
+  if !qualified then return storeRefs m objects field value.refs
+  let strong : Bool := match objects with
+    | [object] => (m.nodes[object]?.map (·.unique)).getD false
+    | _ => false
+  let value := { value with refs := normalize value.refs }
+  let mut m : Memory := m
+  for object in objects do
+    let previous := m.fieldPayloads[(object, field)]?.getD
+      { role := true, refs := joinRefs (loadRefs m [object] field) [0] }
+    let next := if strong then value else joinPayload previous value
+    m := { m with fields := m.fields.insert (object, field) next.refs
+                  fieldPayloads := m.fieldPayloads.insert (object, field) next }
   return m
 
 end OpenVerse.Front.MetadataCells
