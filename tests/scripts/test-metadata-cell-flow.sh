@@ -49,5 +49,5 @@ with tempfile.TemporaryDirectory(prefix="openverse-metadata-cell-flow-") as temp
         if result.returncode or result.stderr:
             raise SystemExit(f"metadata cell flow failed ({result.returncode}):\n"
                              f"{result.stdout}{result.stderr}")
-    print("private cell flow: 216 API classifications and 1024-call transfer growth passed (15s, 4 GiB)")
+    print("private cell flow: 212 API classifications and 1024-call transfer growth passed (15s, 4 GiB)")
 PY

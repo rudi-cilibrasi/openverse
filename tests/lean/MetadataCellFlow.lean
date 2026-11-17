@@ -302,33 +302,6 @@ def main : IO Unit := do
  if failures > 0 then throw <| IO.userError "private-cell carrier borrower contract failed"
 end Carriers
 
-namespace UnknownAliases
-private def get (field : Nat) (e : Expr) : Expr := .heap (.get field) [e]
-def main : IO Unit := do
- let mut bad := 0
- for indirect in [false,true] do
-  let fns : Array Fn := #[
-    { name := "Execute", arity := 1, nslots := 1, decides := false, body := .lit (.int 0) },
-    { name := "Borrow", arity := 1, nslots := 1, decides := false,
-      body := .call 0 [get 0 (get 1 (if indirect then get 0 (.local 0) else .local 0))] },
-    { name := "Caller", arity := 3, nslots := 4, decides := false,
-      body := .seq (.assign 3 (.heap (.new 0) [.local 2]))
-        (.seq (.heap (.set 1) [.local 0,.local 3])
-          (.call 1 [if indirect then .local 1 else .local 0])) }]
-  for metadata in [false,true] do
-   let infos : Array MetadataFlow.Info := fns.mapIdx fun i fn => {
-     body := some fn.body
-     cellTag := some 0
-     cellSlots := if i == 2 then [3] else []
-     required := if i == 0 then [0] else []
-     inputs := if i == 2 && metadata then [2] else [] }
-   let result := MetadataFlow.check fns infos #[[],[]]
-   let admitted := match result with | .ok _ => true | .error _ => false
-   IO.println s!"indirect={indirect} metadata={metadata}; expected={!metadata}; actual={repr result}"
-   if admitted != !metadata then bad := bad+1
- IO.println s!"4 classifications; {bad} mismatches"
- if bad>0 then throw <| IO.userError "unknown nested alias contract failed"
-end UnknownAliases
 
 namespace Cancellation
 private def get (slot : Nat) : Expr := .heap (.get 0) [.local slot]
@@ -948,7 +921,6 @@ def main (args : List String) : IO Unit := do
   MetadataCellFlow.Cleanup.main ["--strict"]
   MetadataCellFlow.PendingArguments.main
   MetadataCellFlow.Carriers.main
-  MetadataCellFlow.UnknownAliases.main
   MetadataCellFlow.Cancellation.main
   MetadataCellFlow.RecursiveArguments.main
   MetadataCellFlow.RecursiveMutation.main

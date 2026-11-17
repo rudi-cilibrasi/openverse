@@ -146,6 +146,29 @@ def checkParamDefaults (ctx : Ctx) (st0 : ESt) (name : String) (ps : List SParam
       if suspends msg then
         throw s!"{msg}: {what} cannot suspend, also of a <suspends> function (Book of Verse tests, DefaultNamed.versetest)"
 
+/-- Return certificates cannot import another function's opaque binder
+    into this function's metadata view. Only closed signatures are shared. -/
+private partial def metadataClosedReturn : Ty → Bool
+  | .param .. => false
+  | .arr ty | .opt ty => metadataClosedReturn ty
+  | .tup tys | .struct _ tys => tys.all metadataClosedReturn
+  | .map key value | .weakMap key value => metadataClosedReturn key && metadataClosedReturn value
+  | _ => true
+
+private def metadataReturns (signatures : List Sig) (count : Nat) : Array (Option Ty) := Id.run do
+  let mut types := Array.replicate count none
+  let mut seen := Array.replicate count false
+  for signature in signatures do
+    if signature.idx < count then
+      let candidate := if metadataClosedReturn signature.ret then some signature.ret else none
+      if seen[signature.idx]! then
+        -- A conflict is sticky: a later duplicate cannot resurrect a hint.
+        if types[signature.idx]! != candidate then types := types.set! signature.idx none
+      else
+        seen := seen.set! signature.idx true
+        types := types.set! signature.idx candidate
+  return types
+
 /-- A function or a constant of the program, elaborated (`elabFunctions`):
     its Verse Core code and the types of its slots, where it first calls
     `Err()` (#235), which of its locals live in a source frame (`FrameRefs`),
@@ -176,7 +199,7 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
     (suspends : Bool := false) (selfTps : List String := [])
     (selfFieldOf : Option (String → Option Nat) := none)
     (evidenceSignature : Option Sig := none) (extendedDefaults : Bool := false)
-    (callOnly : Bool := false) :
+    (callOnly : Bool := false) (fnReturns : Array (Option Ty) := #[]) :
     Except String ElaboratedFn := do
   -- (#209) the values of `selfTps` come from the receiver's hidden
   -- fields, in slots after the hidden parameters: a method's own class's
@@ -268,7 +291,7 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
       if env.classes.contains "$lazycell" then some (env.tagOf "$lazycell") else none
     else env.classIx["$lazycell"]?
   let metadataBody := initPrefixE arity selfInits e
-  let projected := if cellTag.isSome then MetadataReceivers.project env st.slotTys metadataBody
+  let projected := if cellTag.isSome then MetadataReceivers.project env st.slotTys metadataBody fnReturns
     else { body := metadataBody }
   let metadata : MetadataFlow.Info := {
     pos := p, inputs, required, seeds := inputs ++ st.metadataSeeds, uses := st.metadataUses
@@ -309,6 +332,7 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
     (extendedDefaults : Bool := false) :
     Except String (Array ElaboratedFn) := do
   let allSigs := sigs.all
+  let fnReturns := metadataReturns allSigs sigs.prog.fns.length
   let genvOf (g : Sig) : TyEnv := g.typeEnv env
   -- FirstLift records the exact compiler-owned family materialized for a
   -- rewritten source consumer. Its original public source owner remains a
@@ -325,7 +349,7 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
     match top with
     | .fn p n ps _ _ _ body =>
       elaborated := elaborated.push (← elabFn allSigs sigs.prog requests env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
-        (evidenceSignature := some sig) (extendedDefaults := extendedDefaults) (callOnly := firstHelpers.contains n))
+        (evidenceSignature := some sig) (extendedDefaults := extendedDefaults) (callOnly := firstHelpers.contains n) (fnReturns := fnReturns))
     | .const p n _ sty body =>
       -- a constant is computed at each use, so it would be a new object each
       -- time (until Verse Core has global state)
@@ -373,7 +397,7 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
     | .fn p n ps _ _ _ body =>
       elaborated := elaborated.push (← elabFn allSigs sigs.prog requests (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body
         g.suspends g.selfTps ((requests.casts.find? (·.name == n)).map fun l => fun v =>
-          (l.opened.lookup v).bind (env.witnessField? l.target ·)) (some g) extendedDefaults (firstHelpers.contains n))
+          (l.opened.lookup v).bind (env.witnessField? l.target ·)) (some g) extendedDefaults (firstHelpers.contains n) fnReturns)
     | _ => pure ()
   return elaborated
 
