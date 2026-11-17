@@ -103,6 +103,7 @@ results with its target and build ID. Epic describes the
 | `signal-await` | If admitted, see whether the failed signal wakes the pending waiter with 1 or whether the later successful signal delivers 2. |
 | `signal-subscribe` | If admitted, read callback state after a failed signal and then a successful signal. The paired control verifies subscription, callback dispatch and cancellation outside a failure context. |
 | `compound-indexed-write` | After the right operand replaces the array, record the first row's length and first element. The Book's VerseVM-only case expects a single zero. [ArrayAppend case](https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests/ArrayAppend.versetest#L12). |
+| `compound-whole-write` | The whole-variable control replaces the target during the right operand in the same way. The Book's VerseVM-only case expects `[0, 42]`. Run both probes on the same target to check whether the result changes when the assignment selects an array element. [ArrayAppend control](https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests/ArrayAppend.versetest#L7). |
 | `int-overflow` | Add 1 to the maximum signed 64-bit integer and compare the result with that maximum. The marker is a fixed string because the Book documents separate limits on interpolating large integers. [Book of Verse integer rules](https://verselang.github.io/book/02_primitives/#integers). |
 
 For [#515](https://github.com/rudi-cilibrasi/openverse/issues/515), the API
@@ -115,7 +116,7 @@ and what it rolls back. [event.Signal](https://dev.epicgames.com/documentation/f
 ## OpenVerse observations
 
 On `07ae0c6fad3a98362700327e53eb41249a5a5442`, Lean and C agreed on the
-output and exit status for all ten probes that produced bytecode.
+output and exit status for all eleven probes that produced bytecode.
 
 | Probe | Default outcome | With `--signal-no-rollback` |
 | --- | --- | --- |
@@ -125,4 +126,5 @@ output and exit status for all ten probes that produced bytecode.
 | `signal-interface` and its control | Refused because OpenVerse lacks the `signalable` interface. | Same refusal. |
 | `signal-subscribe` and its control | Refused because OpenVerse's `event` lacks `Subscribe`. OpenVerse provides subscription through `subscribable_event`. | Same refusal. |
 | `compound-indexed-write` | Prints `length 2`, then `first 0`. | Admitted. |
+| `compound-whole-write` | Prints `length 2`, `first 0`, and `second 42`. | Admitted. |
 | `int-overflow` | Runtime overflow, exit 2. | Admitted by `check`. |
