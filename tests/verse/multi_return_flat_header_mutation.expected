@@ -9,3 +9,4 @@ fallback 1
 advance 1 11
 fallback 1
 missed
+exit=0

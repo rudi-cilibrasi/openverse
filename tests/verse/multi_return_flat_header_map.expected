@@ -14,3 +14,4 @@ advance a 1
 cleanup a 1
 cleanup b 12
 first 12
+exit=0
