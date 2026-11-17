@@ -1635,13 +1635,112 @@ private partial def withoutRolledBackCopies : Expr → Expr
   | .print value => .print (withoutRolledBackCopies value)
   | other => other
 
+/-- Private-frame dead stores cannot cross an explicit frame export,
+    concurrent group, cancellation boundary or cleanup registration. -/
+private partial def privateStoreBarrier (fns : Array Fn) : Expr → Bool
+  | .seq (.ite (.prim .fail []) _ (.lit .void)) _ => true
+  | .heap (.get slot) [] => slot == FrameRefs.currentSlot
+  | .call g args =>
+    (fns[g]?).isNone || ["$branchMark", "$syncMark", "$raceMark", "$rushMark", "$spawnMark", "$cancelMark", "$signalAll"].contains
+      ((fns[g]?.map (·.name)).getD "") || MetadataPlan.isEventSignal fns g ||
+      args.any (privateStoreBarrier fns)
+  | .assign _ value | .loop value | .ret value | .print value => privateStoreBarrier fns value
+  | .seq left right => privateStoreBarrier fns left || privateStoreBarrier fns right
+  | .prim _ args | .heap _ args => args.any (privateStoreBarrier fns)
+  | .ite condition yes no =>
+    privateStoreBarrier fns condition || privateStoreBarrier fns yes || privateStoreBarrier fns no
+  | .forE _ source filter body =>
+    privateStoreBarrier fns source || privateStoreBarrier fns filter || privateStoreBarrier fns body
+  | _ => false
+
+/-- Observer/export facts include physical lowering code and transitives:
+    a source-level call name alone cannot establish that its callee is inert. -/
+private def privateStoreBarriers (fns : Array Fn) (infos : Array Info) : Array Bool := Id.run do
+  let bodies := fns.mapIdx fun index fn => (infos[index]?.getD {}).body.getD fn.body
+  let calls := fns.mapIdx fun index fn => MetadataPlan.calls fn.body ++ MetadataPlan.calls bodies[index]!
+  let mut barriers := fns.mapIdx fun index fn =>
+    privateStoreBarrier fns fn.body || privateStoreBarrier fns bodies[index]!
+  let mut callers := Array.replicate fns.size ([] : List Nat)
+  for index in [:fns.size] do
+    for callee in calls[index]! do
+      if callee < fns.size then
+        callers := callers.modify callee (index :: ·)
+  let mut queue := (List.range fns.size).filter (fun index => barriers[index]!) |>.toArray
+  let mut next := 0
+  while next < queue.size do
+    let callee := queue[next]!
+    next := next + 1
+    for caller in callers[callee]! do
+      if !barriers[caller]! then
+        barriers := barriers.set! caller true
+        queue := queue.push caller
+  return barriers
+
+/-- References from a different function protect an entire source owner.
+    Compute them once rather than rescanning the program for every local. -/
+private def referencedPrivateOwners (fns : Array Fn) (infos : Array Info) : Std.HashMap String Bool := Id.run do
+  let mut owners := {}
+  for index in [:fns.size] do
+    let fn := fns[index]!
+    let source := (infos[index]?.getD {}).source
+    for (_, origin) in source.slots do
+      if origin.frame != fn.name then owners := owners.insert origin.frame true
+    for origin in source.forwarded do
+      if origin.frame != fn.name then owners := owners.insert origin.frame true
+  return owners
+
+/-- A write-only local in a fresh, unexported owner frame has no observer.
+    Keep every parameter, seed, protocol copy, reader and borrowed frame.
+    A single foreign reference conservatively protects the whole owner. -/
+private def privateWriteOnlySlots (fns : Array Fn) (infos : Array Info) (barriers : Array Bool)
+    (referencedOwners : Std.HashMap String Bool) (index : Nat) : List Nat := Id.run do
+  let some fn := fns[index]? | return []
+  let info := infos[index]?.getD {}
+  if info.source.slots.isEmpty || info.shared.isEmpty then return []
+  let body := info.body.getD fn.body
+  if !info.source.forwarded.isEmpty || info.borrowTasks ||
+      info.source.slots.any (fun (_, origin) => origin.frame != fn.name) || barriers[index]?.getD true then return []
+  if referencedOwners.contains fn.name then return []
+  let reads := MetadataPlan.reads body ++ MetadataPlan.reads fn.body
+  return info.source.slots.filterMap fun (slot, origin) =>
+    if origin.frame == fn.name && slot >= fn.arity && info.shared.contains slot &&
+        !info.inputs.contains slot && !info.required.contains slot && !info.seeds.contains slot &&
+        !info.uses.contains slot && !reads.contains slot &&
+        !info.source.slots.any (fun (other, alias) => other != slot &&
+          alias.frame == origin.frame && alias.name == origin.name) &&
+        !info.source.copies.any (fun copy => copy.target == slot || copy.result == slot) then some slot else none
+
+/-- Only a dead destination disappears; its RHS still runs and retains its
+    value/provenance, including any calls, errors or metadata execution. -/
+private partial def withoutPrivateDeadStores (dead : List Nat) : Expr → Expr
+  | .assign slot value =>
+    let value := withoutPrivateDeadStores dead value
+    if dead.contains slot then value else .assign slot value
+  | .seq left right => .seq (withoutPrivateDeadStores dead left) (withoutPrivateDeadStores dead right)
+  | .call fn args => .call fn (args.map (withoutPrivateDeadStores dead))
+  | .prim op args => .prim op (args.map (withoutPrivateDeadStores dead))
+  | .heap op args => .heap op (args.map (withoutPrivateDeadStores dead))
+  | .ite condition yes no => .ite (withoutPrivateDeadStores dead condition)
+      (withoutPrivateDeadStores dead yes) (withoutPrivateDeadStores dead no)
+  | .forE slot source filter body => .forE slot (withoutPrivateDeadStores dead source)
+      (withoutPrivateDeadStores dead filter) (withoutPrivateDeadStores dead body)
+  | .loop body => .loop (withoutPrivateDeadStores dead body)
+  | .ret value => .ret (withoutPrivateDeadStores dead value)
+  | .print value => .print (withoutPrivateDeadStores dead value)
+  | other => other
+
 /-- Solve recursive call contexts and loop back edges to a fixed point.
     Hidden witnesses do not taint an unrelated result: return roles come
     from the body, rather than the union of physical call arguments. -/
 def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
     (debug : Bool := false) (scalarReturns : Array Bool := #[]) : Except String Unit := do
-  let infos := infos.map fun info =>
-    { info with body := info.body.map withoutRolledBackCopies }
+  let privateBarriers := privateStoreBarriers fns infos
+  let referencedOwners := referencedPrivateOwners fns infos
+  let infos := infos.mapIdx fun index info =>
+    let dead := privateWriteOnlySlots fns infos privateBarriers referencedOwners index
+    { info with body := info.body.map fun body =>
+        let body := withoutRolledBackCopies body
+        if dead.isEmpty then body else withoutPrivateDeadStores dead body }
   let action : M Unit := do
     let runContext (key : Key) : M Flow := do
       let (i, args) := key
