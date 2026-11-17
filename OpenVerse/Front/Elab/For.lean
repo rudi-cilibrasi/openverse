@@ -261,28 +261,39 @@ structure ForCursorArm where
   input : Nat
   next : Expr
 
-def forCursorChoiceType (arms : List ForCursorArm) : Ty :=
-  .tup [.int, .tup (arms.map (fun arm => .opt arm.cursor))]
+structure ForCursorPrefix where
+  code : Expr := .lit .void
+  bindings : List Local := []
+
+def forCursorChoiceType (arms : List ForCursorArm) (prelude : ForCursorPrefix := {}) : Ty :=
+  .tup [.int, .tup (arms.map (fun arm => .opt arm.cursor)), .tup (prelude.bindings.map (·.ty))]
 
 /-- Resume the active alternative, then try later alternatives in source
     order. Evaluating a step and querying its option are separate, so effects
     committed by the alternative survive even when it has no rows. -/
-def forCursorChoice (p : Pos) (prior : Option Nat) (arms : List ForCursorArm) : EM R := do
+def forCursorChoice (p : Pos) (prior : Option Nat) (arms : List ForCursorArm)
+    (prelude : ForCursorPrefix := {}) : EM R := do
   let some first := arms.head? | eerr p "internal: a cursor choice without alternatives"
   unless arms.all (fun arm => arm.row == first.row) do
     eerr p "internal: composed cursor alternatives have different row types"
-  let cursor := forCursorChoiceType arms
+  let cursor := forCursorChoiceType arms prelude
   let resultTy := Ty.opt (.tup [cursor, first.row])
   let previous ← fresh cursor
   let active ← fresh .int
   let kept ← fresh .logic
+  let ready ← fresh .logic
   let result ← fresh resultTy
   let void := Expr.lit .void
   let project (source : Expr) (index : Nat) := Expr.prim (.tupGet index) [source]
+  let proceed := Expr.seq (.assign ready (.lit (.logic true))) void
+  let firstStep := Expr.ite prelude.code proceed void
+  let restore := (prelude.bindings.zipIdx).foldr (fun (binding, index) rest =>
+    .seq (.assign binding.slot (project (project (.local previous) 2) index)) rest)
+    (.seq (.assign active (project (.local previous) 0)) proceed)
   let readPrior := match prior with
-    | none => void
-    | some input => .ite (.assign previous (.prim .query [.local input]))
-      (.seq (.assign active (project (.local previous) 0)) void) void
+    | none => firstStep
+    | some input => .ite (.assign previous (.prim .query [.local input])) restore firstStep
+  let prefixState := Expr.prim .mkTup (prelude.bindings.map (Expr.local ·.slot))
   let mut steps := []
   for (arm, index) in arms.zipIdx do
     let packetTy := Ty.tup [arm.cursor, arm.row]
@@ -291,16 +302,17 @@ def forCursorChoice (p : Pos) (prior : Option Nat) (arms : List ForCursorArm) : 
     let ordinal := Expr.lit (.int (Int.ofNat index))
     let input := Expr.ite (p2 .eq (.local active) ordinal)
       (project (project (.local previous) 1) index) (.lit .none)
-    let state := Expr.prim .mkTup [ordinal, .prim .mkTup (arms.zipIdx.map fun (_, column) =>
-      if column == index then .prim .mkSome [project (.local accepted) 0] else .lit .none)]
+    let armState := Expr.prim .mkTup (arms.zipIdx.map fun (_, column) =>
+      if column == index then .prim .mkSome [project (.local accepted) 0] else .lit .none)
+    let state := Expr.prim .mkTup [ordinal, armState, prefixState]
     let success := Expr.seq (.assign result (.prim .mkSome [.prim .mkTup [state, project (.local accepted) 1]]))
       (.seq (.assign kept (.lit (.logic true))) void)
     let attempt := Expr.seq (.assign arm.input input) (.seq (.assign pending arm.next)
       (.ite (.assign accepted (.prim .query [.local pending])) success void))
-    let eligible := Expr.seq (p2 .eq (.local kept) (.lit (.logic false)))
-      (p2 .le (.local active) ordinal)
+    let eligible := Expr.seq (isTrueIn ready) (.seq (p2 .eq (.local kept) (.lit (.logic false)))
+      (p2 .le (.local active) ordinal))
     steps := steps ++ [.ite eligible attempt void]
-  let start := [.assign active (.lit (.int (-1))), readPrior,
+  let start := [.assign active (.lit (.int (-1))), .assign ready (.lit (.logic false)), readPrior,
     .assign kept (.lit (.logic false)), .assign result (.lit .none)]
   return ⟨(start ++ steps).foldr Expr.seq (.local result), resultTy⟩
 
@@ -1370,19 +1382,24 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     | c => match Choice.binding? c with
       | some b => !b.composed && b.branchy.isNone && b.each.isNone
       | none => false
-  if let (some request, [], (g, fs) :: more) := (cursor, pre, gs) then
+  if let (some request, (g, fs) :: more) := (cursor, gs) then
     if let some binding := Choice.binding? g then
-      if binding.composed then
+      if binding.composed && !pre.any isExcl then
+        let start := (← get).nslots
+        let (prefixCode, prefixCtx) ← elabFilters ctx pre
+        let prelude : ForCursorPrefix := {
+          code := prefixCode
+          bindings := prefixCtx.locals.filter (·.slot >= start) }
         let suffix := fs ++ more.flatMap fun (next, filters) => next :: filters
         let step (c : Ctx) (alt : SExpr) (index : Nat) (prior : SExpr) : EM R :=
           let clauses := Choice.prepare [.decl binding.pos binding.name binding.ty false alt]
-            (choiceValues ctx) (choiceField ctx) (fieldOrder := choiceOrder ctx)
-            (site := s!"$cursor{p.line}_{p.col}_{index}") (keepExcl := true) (keepBranches := choiceHasCast ctx)
+            (choiceValues prefixCtx) (choiceField prefixCtx) (fieldOrder := choiceOrder prefixCtx)
+            (site := s!"$cursor{p.line}_{p.col}_{index}") (keepExcl := true) (keepBranches := choiceHasCast prefixCtx)
           elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq
             c p (clauses ++ suffix) body (prepared := true) (cursor := some { request with prior })
         let saved ← get
         let shapes ← binding.alts.zipIdx.mapM fun (alt, index) => do
-          let probe ← step { ctx with typeOnly := true } alt index (.ident p "false")
+          let probe ← step { prefixCtx with typeOnly := true } alt index (.ident p "false")
           let .opt (.tup [state, row]) := probe.ty | eerr p "internal: malformed composed cursor arm"
           pure (state, row)
         restoreConstructProbe ctx saved
@@ -1390,16 +1407,16 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           let name := s!"$cursorArm{p.line}_{p.col}_{index}"
           let inputTy := Ty.opt state
           let input ← fresh inputTy
-          let c := { ctx with locals := { name, slot := input, ty := inputTy, mutable := false } :: ctx.locals }
+          let c := { prefixCtx with locals := { name, slot := input, ty := inputTy, mutable := false } :: prefixCtx.locals }
           let next ← step c alt index (.ident p name)
           unless next.ty == .opt (.tup [state, row]) do
             eerr p "internal: composed cursor arm changed type"
           return { cursor := state, row, input, next := next.e : ForCursorArm }
-        let inputTy := Ty.opt (forCursorChoiceType arms)
+        let inputTy := Ty.opt (forCursorChoiceType arms prelude)
         let input ← elabE ctx request.prior (some inputTy)
         let slot ← fresh inputTy
         let input ← coerce p input inputTy
-        let result ← forCursorChoice p (some slot) arms
+        let result ← forCursorChoice p (some slot) arms prelude
         return { result with e := .seq (.assign slot input) result.e }
   let cursorGroups := if cursor.isSome && gs.isEmpty then
     [(.gen p s!"$cursorUnit{p.line}_{p.col}" none (.arrayLit p [.tuple p []]), [])]

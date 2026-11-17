@@ -4389,8 +4389,12 @@ private partial def returnLoopSites (owner : String) (f : MFn) (mv : List String
         (alternatives clause).any fun values => values.all fun value => !liftsHere (markCalls mv value)
       let valid clause := flatChoice clause || !liftsHere (markCalls mv clause)
       let flat := clauses.any flatChoice && clauses.all valid
-      let composed := clauses.head?.any (fun clause => (alternatives clause).isSome) &&
-        (clauses.drop 1).all valid
+      let before := clauses.takeWhile (fun clause => (alternatives clause).isNone)
+      let scalarPrefix : SExpr → Bool := fun
+        | .gen .. | .decl _ _ _ _ (.range ..) => false
+        | clause => !liftsHere (markCalls mv clause)
+      let composed := before.length < clauses.length && before.all scalarPrefix &&
+        (clauses.drop (before.length + 1)).all valid
       if (flat || composed) && !clauses.any loopConcurrent &&
           !loopBodySupported mv body then
         record scope defers p (.cursor clauses (boundIn clauses)) body
