@@ -4,13 +4,24 @@ import OpenVerse.Front.MetadataPlan
 namespace OpenVerse.Front.MetadataLiveness
 open OpenVerse
 
+/-- Native-width words allow repeated slot tests without shifting a Nat bignum. -/
+abbrev SlotMask := Array UInt64
+
+def pack (bits : Nat) : SlotMask := Id.run do
+  let mut words := #[]
+  let mut rest := bits
+  while rest != 0 do
+    words := words.push rest.toUInt64
+    rest := rest >>> 64
+  return words
+
 structure Analysis where
-  entries : Array Nat := #[]
-  cleanup : Nat := 0
-  full : Nat := 0
+  entries : Array SlotMask := #[]
+  cleanup : SlotMask := #[]
+  full : SlotMask := #[]
   deriving Inhabited
 
-def Analysis.get (a : Analysis) (pc : Nat) : Nat := a.entries[pc]?.getD a.full
+def Analysis.get (a : Analysis) (pc : Nat) : SlotMask := a.entries[pc]?.getD a.full
 
 private def mask (slots : Nat) (indices : List Nat) : Nat :=
   indices.foldl (fun bits i => if i < slots then bits ||| (1 <<< i) else bits) 0
@@ -104,6 +115,6 @@ def build (fns : Array Fn) (plan : MetadataPlan.Plan) : Analysis := Id.run do
           queued := queued.set! previous true
           work := work.push previous
   let cleanup := plan.cleanupEntries.foldl (fun bits pc => bits ||| live[pc]?.getD full) 0
-  return { entries := live, cleanup, full }
+  return { entries := live.map pack, cleanup := pack cleanup, full := pack full }
 
 end OpenVerse.Front.MetadataLiveness

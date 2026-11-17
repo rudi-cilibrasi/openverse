@@ -625,6 +625,7 @@ private def request (key : Key) : M (Option Bool × TupleParts × Bool) := do
 private structure ScheduleWork where
   env : ScheduleEnv
   modes : Bits
+  modeWords : MetadataLiveness.SlotMask
   ranks : Array Nat
   ready : Std.TreeMap (Nat × Nat) (List Nat) (fun a b =>
     match compare a.1 b.1 with | .eq => compare a.2 b.2 | order => order) := {}
@@ -989,29 +990,36 @@ private partial def keepConfigurationModes (mask : Bits) (c : Configuration) : C
 
 /-- Current actors, deferred resumes, and signal return continuations can
     all become active. Saved transaction memories are deliberately retained. -/
-private partial def restrictReferences (env : ScheduleEnv) (modes : Bits) (c : Configuration) : Configuration := Id.run do
-  let mut live := env.referenceLive.cleanup
+private partial def restrictReferences (env : ScheduleEnv)
+    (modeWords : MetadataLiveness.SlotMask) (c : Configuration) : Configuration := Id.run do
+  let mut live := #[env.referenceLive.cleanup]
   for actor in c.actors do
-    live := live ||| env.referenceLive.get actor.pc
+    live := live.push (env.referenceLive.get actor.pc)
     for pc in actor.signalReturns.filterMap id do
-      live := live ||| env.referenceLive.get pc
+      live := live.push (env.referenceLive.get pc)
   for step in c.pending do
     match step with
     | .cleanup _ _ pc | .resume _ pc | .returnCall _ pc | .returnScope _ _ _ _ pc =>
-      live := live ||| env.referenceLive.get pc
+      live := live.push (env.referenceLive.get pc)
     | _ => pure ()
+  let referenceLive (slot : Nat) : Bool :=
+    let word := slot / 64
+    let flag := (1 : UInt64) <<< (slot % 64).toUInt64
+    live.any fun mask => (mask[word]?.getD 0 &&& flag) != 0
   -- Tuple columns, like references, are observed through local reads. Keep
   -- all source/shared cells as well as graph-live locals. Saved transaction
   -- slots remain intact until their rollback destination becomes current.
-  let tupleLive := live ||| modes.bits
-  let tuples := if c.slots.tuples.all (fun i _ => tupleLive.testBit i) then c.slots.tuples
-    else c.slots.tuples.filter fun i _ => tupleLive.testBit i
+  let tupleLive (slot : Nat) : Bool :=
+    let flag := (1 : UInt64) <<< (slot % 64).toUInt64
+    (modeWords[slot / 64]?.getD 0 &&& flag) != 0 || referenceLive slot
+  let tuples := if c.slots.tuples.all (fun i _ => tupleLive i) then c.slots.tuples
+    else c.slots.tuples.filter fun i _ => tupleLive i
   return { c with
-    refs := MetadataReferences.restrict c.refs live.testBit
+    refs := MetadataReferences.restrict c.refs referenceLive
     slots := { c.slots with tuples } }
 
 private partial def ScheduleWork.push (w : ScheduleWork) (c : Configuration) : ScheduleWork :=
-  let c := restrictReferences w.env w.modes (keepConfigurationModes w.modes c)
+  let c := restrictReferences w.env w.modeWords (keepConfigurationModes w.modes c)
   let key := configurationKey c
   match w.pending[key]? with
   | some old => { w with pending := w.pending.insert key (joinConfiguration old c) }
@@ -1146,7 +1154,11 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
     groups := Array.replicate env.plan.groups.size {} }
   modify fun st => { st with seen := st.seen.appendZeros extra }
   let modes := modeMask env
-  let mut work := ({ env, modes, ranks := MetadataLiveness.controlOrder env.plan } : ScheduleWork).push initial
+  let initialWork : ScheduleWork := {
+    env, modes
+    modeWords := MetadataLiveness.pack modes.bits
+    ranks := MetadataLiveness.controlOrder env.plan }
+  let mut work := initialWork.push initial
   let mut cursor := 0
   let mut known : Std.HashMap (List Nat) Configuration := {}
   let mut result : Option Bool := none
