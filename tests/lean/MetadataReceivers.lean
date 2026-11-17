@@ -27,8 +27,8 @@ private def field (object : Expr) : Expr := .heap (.get 0) [object]
 private def string (s : String) : Expr :=
   .lit (.arr (s.toList.map fun c => Value.char c.toNat).toArray)
 
-private def run (slots : Nat) (body : Expr) : IO (Int × String) := do
-  let p : Prog := { fns := [{ name := "Main", arity := 0, nslots := slots, decides := false, body }], main := 0 }
+private def run (slots : Nat) (body : Expr) (helpers : List Fn := []) : IO (Int × String) := do
+  let p : Prog := { fns := [{ name := "Main", arity := 0, nslots := slots, decides := false, body }] ++ helpers, main := 0 }
   expect (p.check && p.checkControl) "projected frame must retain Core scope/control/write certificates"
   match p.runB 1000000 10000 with
   | .res (.ok (.int result), output) => return (result, String.ofList (output.map Char.ofNat))
@@ -38,11 +38,12 @@ private def setup (tail : Expr) : Expr :=
   .seq (.assign 0 (.heap (.new 1) [.lit (.int 7)]))
     (.seq (.assign 1 (.heap (.new 2) [.local 0])) tail)
 
-private def equivalent (tail : Expr) (expected : Int × String) : IO Unit := do
+private def equivalent (tail : Expr) (expected : Int × String)
+    (fnReturns : Array (Option Ty) := #[]) (helpers : List Fn := []) : IO Unit := do
   let body := setup tail
-  let projection := project env #[.struct "Inner" [], .struct "Outer" []] body
-  let before ← run 2 body
-  let after ← run (2 + projection.extraSlots.size) projection.body
+  let projection := project env #[.struct "Inner" [], .struct "Outer" []] body fnReturns
+  let before ← run 2 body helpers
+  let after ← run (2 + projection.extraSlots.size) projection.body helpers
   expect (before == expected && after == expected) "receiver projection changed values, order or rollback"
   expect (projection.extraSlots.size > 0 && projection.nonCellSlots == (List.range projection.extraSlots.size).map (2 + ·)) "expected a typed virtual receiver"
 
@@ -65,6 +66,28 @@ private def models : IO Unit := do
       (.struct "Holder" [.struct "Inner" []], field (.local 0))] do
     expect ((project env #[ty] (field receiver)).extraSlots == #[.struct "Inner" []])
       "tuple, array, option and instantiated field receivers retain their type"
+
+  let callReceiver := field (.call 1 [.local 0])
+  expect ((project env #[.struct "Outer" []] callReceiver
+    #[none, some (.struct "Inner" [])]).extraSlots == #[.struct "Inner" []])
+    "a resolved nominal call result retains its receiver type"
+  for returns in [#[], #[none, none]] do
+    expect ((project env #[.struct "Outer" []] callReceiver returns).extraSlots.isEmpty)
+      "unknown call targets must not acquire return certificates"
+  for ty in [Ty.any, .dyn, .param "t" false,
+      .struct "Holder" [.param "t" false], .struct "$varcell" [.int]] do
+    expect ((project env #[.struct "Outer" []] callReceiver #[none, some ty]).extraSlots.isEmpty)
+      "opaque, nested generic and private call returns must retain payload checks"
+  let callReturns := #[none, some (Ty.struct "Inner" [])]
+  let helper : Fn := {
+    name := "MakeBox", arity := 1, nslots := 1, decides := false
+    body := .seq (.print (string "call")) (field (.local 0)) }
+  equivalent (field (.call 1 [.local 1])) (7, "call\n") callReturns [helper]
+  equivalent (.seq (.heap (.set 0) [.call 1 [.local 1],
+    .seq (.print (string "rhs")) (.lit (.int 9))]) (field (field (.local 1))))
+    (9, "call\nrhs\n") callReturns [helper]
+  equivalent (.ite (.seq (.call 1 [.local 1]) (.prim .fail []))
+    (.lit (.int 0)) (field (.call 1 [.local 1]))) (7, "call\n") callReturns [helper]
 
   let mixed : TyEnv := { env with
     classes := env.classes ++ ["Iface", "A", "B"]
@@ -101,6 +124,14 @@ private def scale : IO Unit := do
   let started ← IO.monoMsNow
   for _ in [:count] do
     expect ((project large #[.struct "Outer" []] body).extraSlots.size == 1) "large class table projection failed"
+  let returns := (Array.replicate count (none : Option Ty)).set! (count - 1)
+    (some (.struct "Inner" []))
+  let returnsRef ← IO.mkRef returns
+  let indexedReturns ← returnsRef.get
+  let callBody := field (.call (count - 1) [.local 0])
+  for _ in [:count] do
+    expect ((project large #[.struct "Outer" []] callBody indexedReturns).extraSlots.size == 1)
+      "large function table must use indexed call return certificates"
   let absentPrepared : TyEnv := { large with
     classes := names
     classIx := names.zipIdx.foldl (fun map (name, index) => map.insert name index) {} }
@@ -108,7 +139,7 @@ private def scale : IO Unit := do
   let absent ← absentRef.get
   for _ in [:count] do
     expect ((project absent #[.struct "Outer" []] body).extraSlots.isEmpty) "no-private fast path must not project"
-  IO.println s!"PASS {count} typed projections and no-private fast paths in a large class table ({(← IO.monoMsNow) - started}ms)"
+  IO.println s!"PASS {count} typed projections, indexed call returns and no-private fast paths in large tables ({(← IO.monoMsNow) - started}ms)"
 
 def main (args : List String) : IO Unit :=
   if args.contains "--scale" then scale else models

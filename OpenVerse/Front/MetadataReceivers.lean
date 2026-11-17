@@ -46,38 +46,44 @@ private partial def valueType (env : TyEnv) : Value → Option Ty
   | .none => none
 
 /-- This is intentionally a small type transfer, not a second elaborator.
-    Unknown call results and opaque parameters never create certificates. -/
-private partial def infer (env : TyEnv) (types : Array Ty) : Expr → Option Ty
+    Only resolved, closed call return types can create certificates; opaque
+    callee parameters must never be interpreted in the caller's type scope. -/
+private partial def infer (env : TyEnv) (types : Array Ty)
+    (fnReturns : Array (Option Ty)) : Expr → Option Ty
   | .local slot => types[slot]?
   | .lit value => valueType env value
-  | .assign slot value => types[slot]? <|> infer env types value
-  | .seq _ value => infer env types value
+  | .call target _ => do
+    let ty ← (fnReturns[target]?).getD none
+    if ty.params.isEmpty then some ty else none
+  | .assign slot value => types[slot]? <|> infer env types fnReturns value
+  | .seq _ value => infer env types fnReturns value
   | .heap (.get index) [receiver] => do
-    let .struct name args ← infer env types receiver | none
+    let .struct name args ← infer env types fnReturns receiver | none
     fieldType env name args index
-  | .heap (.isTag _) [value] => infer env types value
+  | .heap (.isTag _) [value] => infer env types fnReturns value
   | .prim (.tupGet index) [value] => do
-    let .tup fields ← infer env types value | none
+    let .tup fields ← infer env types fnReturns value | none
     fields[index]?
   | .prim .index [values, _] => do
-    let .arr ty ← infer env types values | none
+    let .arr ty ← infer env types fnReturns values | none
     return ty
   | .prim .query [value] => do
-    let .opt ty ← infer env types value | none
+    let .opt ty ← infer env types fnReturns value | none
     return ty
-  | .prim .mkSome [value] => .opt <$> infer env types value
-  | .prim .mkTup values => .tup <$> values.mapM (infer env types)
+  | .prim .mkSome [value] => .opt <$> infer env types fnReturns value
+  | .prim .mkTup values => .tup <$> values.mapM (infer env types fnReturns)
   | .prim .mkArr values => do
     let first :: _ := values | none
-    let ty ← infer env types first
-    if values.all (fun value => (infer env types value).any (· == ty)) then some (.arr ty) else none
+    let ty ← infer env types fnReturns first
+    if values.all (fun value => (infer env types fnReturns value).any (· == ty)) then some (.arr ty) else none
   | .ite _ yes no => do
-    let ty ← infer env types yes
-    if (infer env types no).any (· == ty) then some ty else none
+    let ty ← infer env types fnReturns yes
+    if (infer env types fnReturns no).any (· == ty) then some ty else none
   | _ => none
 
 private structure State where
   types : Array Ty
+  fnReturns : Array (Option Ty) := #[]
   extraSlots : Array Ty := #[]
   nonCellSlots : List Nat := []
 
@@ -100,7 +106,7 @@ private partial def rewrite (env : TyEnv) (body : Expr) : StateM State Expr := d
     let receiver :: rest := values | return original
     if let .local _ := receiver then return original
     let state ← get
-    let some ty := infer env state.types receiver | return original
+    let some ty := infer env state.types state.fnReturns receiver | return original
     if !nonCell env ty then return original
     let slot := state.types.size
     set { state with types := state.types.push ty
@@ -115,12 +121,13 @@ private partial def rewrite (env : TyEnv) (body : Expr) : StateM State Expr := d
     analysis frame sizes, never the emitted program, runtime slot types or
     source-frame ownership. Source admission and ordinary heap permissions
     are unchanged; the certificate excludes only private-cell payload taint. -/
-def project (env : TyEnv) (slotTys : Array Ty) (body : Expr) : Projection := Id.run do
+def project (env : TyEnv) (slotTys : Array Ty) (body : Expr)
+    (fnReturns : Array (Option Ty) := #[]) : Projection := Id.run do
   let privateType := if env.classIx.isEmpty then env.classes.contains "$varcell"
     else env.classIx.contains "$varcell"
   if !privateType then
     return { body }
-  let (body, state) := (rewrite env body).run { types := slotTys }
+  let (body, state) := (rewrite env body).run { types := slotTys, fnReturns }
   return { body, extraSlots := state.extraSlots, nonCellSlots := state.nonCellSlots.reverse }
 
 end OpenVerse.Front.MetadataReceivers
