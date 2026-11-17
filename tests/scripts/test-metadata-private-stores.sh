@@ -48,6 +48,7 @@ with tempfile.TemporaryDirectory(prefix="openverse-metadata-private-") as tempor
     subprocess.run(["lake", "env", "leanc", "-O3", "-o", str(binary),
                     "@" + str(response)], check=True)
     bounded([str(binary), "--ownership"])
+    print(bounded([str(binary), "--scale"]).stdout, end="")
     count = int(bounded([str(binary), "--count"]).stdout)
     for index in range(count):
         bounded([str(binary), str(index), str(work)])

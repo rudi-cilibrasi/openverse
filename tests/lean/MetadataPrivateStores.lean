@@ -71,6 +71,38 @@ private def compile (source : String) (dummy extended : Bool) : Except String Co
   elabProgram tops { extendedDefaults := extended }
 
 def main (args : List String) : IO Unit := do
+  if args == ["--scale"] then
+    -- Ordinary functions without source cells must not trigger a whole-program
+    -- owner scan per function. This runs under the same 15-second/4-GiB cap.
+    let fns := (List.range 32000).toArray.map fun index =>
+      ({ name := s!"Constant{index}", arity := 0, nslots := 0,
+         body := .lit (.int 0), decides := false } : Fn)
+    match MetadataFlow.check fns (Array.replicate fns.size {}) #[] with
+    | .ok _ => IO.println "private owner scaling passed (32000 functions)"
+    | .error message => throw <| IO.userError message
+    let owners := (List.range 32000).toArray.map fun index =>
+      ({ name := s!"Owner{index}", arity := 2, nslots := 3,
+         body := .seq (.assign 2 (.local 0)) (.seq (.assign 2 (.local 1)) (.lit (.int 0))),
+         decides := false } : Fn)
+    let infos := owners.map fun fn => ({
+      inputs := [1], shared := [2],
+      source := { explicit := 2, slots := [(2,{frame := fn.name, name := "Stored", args := []})] },
+      body := some fn.body } : MetadataFlow.Info)
+    match MetadataFlow.check owners infos #[] with
+    | .ok _ => IO.println "private owner scaling passed (32000 independent owners)"
+    | .error message => throw <| IO.userError message
+    -- The final physical export must propagate backwards in one worklist,
+    -- rather than requiring one whole-program fixed-point pass per edge.
+    let chain := (List.range 32000).toArray.map fun index =>
+      ({ name := s!"Chain{index}", arity := 0, nslots := 0,
+         body := if index + 1 < 32000 then .call (index + 1) []
+           else .seq FrameRefs.current (.lit (.int 0)), decides := false } : Fn)
+    -- Borrowed helpers are checked through callers, so no unrelated root
+    -- summary solving obscures this whole-program barrier-closure control.
+    match MetadataFlow.check chain (Array.replicate chain.size { borrowTasks := true }) #[] with
+    | .ok _ => IO.println "private barrier scaling passed (32000 reversed calls)"
+    | .error message => throw <| IO.userError message
+    return
   if args == ["--count"] then
     IO.println cases.length
     return
