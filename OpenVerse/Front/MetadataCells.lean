@@ -240,6 +240,17 @@ private def reachable (m : Memory) (roots : Refs) : Refs := Id.run do
     pending := (edges[object]?.getD []) ++ pending
   return seen.toList.map (·.1)
 
+/-- Actual call replay also follows private identities hidden in tuples,
+    arrays or heap frames. Unknown/caller roots may reach any tracked cell;
+    an empty private heap leaves activation to the callee capability check. -/
+def mayReachPrivate (m : Memory) (roots : Refs) : Bool :=
+  if roots.isEmpty then false
+  else if roots.any (fun object => m.cells.contains object ||
+      (m.nodes[object]?.map (·.privateCell)).getD false) then true
+  else if m.cells.isEmpty then false
+  else (reachable m roots).any fun object => m.cells.contains object ||
+      (m.nodes[object]?.map (·.privateCell)).getD false
+
 /-- Unknown or mixed references need a conservative payload fallback when
     they may denote a private cell. This grants no write permission. -/
 def mayPrivate (m : Memory) (objects : Refs) : Bool :=

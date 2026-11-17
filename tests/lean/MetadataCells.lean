@@ -160,6 +160,50 @@ private def fieldPayloadModels : IO Unit := do
     "demotion cannot retain a fact missing from the previous recent instance"
   IO.println "PASS compiler transport field payloads, tuple columns, invalidation and recency joins"
 
+private def reachabilityModels : IO Unit := do
+  expect (!mayReachPrivate empty [0] && !mayReachPrivate empty [1])
+    "unknown roots without tracked cells leave activation to callee capabilities"
+  let (cell, m) := allocate empty 200 true [{ role := true }]
+  let (tuple, m) := allocate m 201 false [{ refs := cell }]
+  let (array, m) := allocate m 202 false [{ refs := tuple }]
+  let (frame, m) := allocate m 203 false [{ refs := array }]
+  expect (mayReachPrivate m cell && mayReachPrivate m tuple && mayReachPrivate m array && mayReachPrivate m frame)
+    "callee replay must follow private identities through all container layers"
+  expect (mayReachPrivate m [0] && mayReachPrivate m [1])
+    "caller and unknown roots can alias a tracked private cell"
+  let (unrelated, m) := allocate m 204 false [{}]
+  expect (!mayReachPrivate m unrelated && !mayReachPrivate m [])
+    "unrelated ordinary data must not acquire a private call capability"
+  let (a, m) := allocate m 205 false [{}]
+  let (b, m) := allocate m 206 false [{ refs := a }]
+  let m := storeRefs m a 0 b
+  expect (!mayReachPrivate m a) "an ordinary cycle without a cell must terminate"
+  let m := storeFieldPayload m b 0 { refs := frame }
+  expect (mayReachPrivate m a) "a container cycle can lead to a private cell"
+  let (_, ordinary) := allocate empty 200 false [{}]
+  let mixed := join m ordinary
+  expect (mayReachPrivate mixed cell)
+    "possible private payloads survive loss of an all-private node proof"
+  let external := storeRefs m [1] 0 frame
+  expect (mayReachPrivate external [1])
+    "actual calls through caller-owned carriers retain private reachability"
+  IO.println "PASS transitive private call capability through carriers, cycles and caller aliases"
+
+private def reachabilityScale : IO Unit := do
+  let count := 32000
+  let started ← IO.monoMsNow
+  let (leaf, initial) := allocate empty 0 true [{}]
+  let mut m := initial
+  let mut refs := leaf
+  for site in [1:count] do
+    let (head, next) := allocate m site false [{ refs }]
+    m := next
+    refs := head
+  expect (mayReachPrivate m refs) "callee capability must traverse a 32k transport chain"
+  let (unrelated, completed) := allocate m count false [{}]
+  expect (!mayReachPrivate completed unrelated) "an unrelated carrier stays outside the private chain"
+  IO.println s!"PASS {count} indexed transport reachability ({(← IO.monoMsNow) - started}ms)"
+
 private def scale : IO Unit := do
   let count := 32000
   let started ← IO.monoMsNow
@@ -273,6 +317,8 @@ private def concreteModel : IO Unit := do
 
 def main (args : List String) : IO Unit :=
   if args.contains "--scale" then scale
+  else if args.contains "--reach-scale" then reachabilityScale
   else if args.contains "--model" then concreteModel else do
     models
     fieldPayloadModels
+    reachabilityModels

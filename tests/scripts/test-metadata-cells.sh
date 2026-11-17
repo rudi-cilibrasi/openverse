@@ -51,7 +51,7 @@ with tempfile.TemporaryDirectory(prefix="openverse-metadata-cells-") as temporar
                     "tests/lean/MetadataCells.lean"], check=True)
     subprocess.run(["lake", "env", "leanc", "-O3", "-o", str(binary),
                     "@" + str(response)], check=True)
-    for flags in ([], ["--model"], ["--scale"]):
+    for flags in ([], ["--model"], ["--scale"], ["--reach-scale"]):
         result = subprocess.run([str(binary), *flags], check=True, text=True,
                                 capture_output=True, timeout=15, preexec_fn=limits)
         if result.stderr:
