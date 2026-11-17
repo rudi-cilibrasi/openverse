@@ -34,15 +34,19 @@ between the steps, outside every failure context. -/
 
 /-- A search source is a sequence or an optional pair of saved range bounds. -/
 private inductive ForDomain where
-  | sequence (code : Expr) (ty : Ty)
+  | sequence (code : Expr) (ty : Ty) (retained : List Nat := [])
   | bounds (code : Expr)
 
 private def ForDomain.code : ForDomain → Expr
-  | .sequence code _ | .bounds code => code
+  | .sequence code _ _ | .bounds code => code
 
 private def ForDomain.ty : ForDomain → Ty
-  | .sequence _ ty => ty
+  | .sequence _ ty _ => ty
   | .bounds _ => .opt (.tup [.int, .int])
+
+private def ForDomain.retained : ForDomain → List Nat
+  | .sequence _ _ slots => slots
+  | .bounds _ => []
 
 /-- One generator of a `for` searched by the Book's rule: the slot of its
     element, its source, the code that binds the element's names and runs the
@@ -59,6 +63,8 @@ structure ForLevel where
   act : Nat
   res : Nat
   range : Option (Nat × Nat) := none
+  /-- Source slots read by later steps, such as the array behind its indices. -/
+  retained : List Nat := []
 
 /-- Whether the `logic` in slot `s` is `true` (fails if not). -/
 def isTrueIn (s : Nat) : Expr := p2 .eq (.local s) (.lit (.logic true))
@@ -96,7 +102,8 @@ private def newForLevel (slot : Nat) (domain : ForDomain) (filter : Expr) : EM F
     | .sequence .. => pure none
   return {
     slot, src := domain.code, filt := filter, arr := ← fresh domain.ty
-    ix := ← fresh .int, act := ← fresh .logic, res := ← fresh .logic, range }
+    ix := ← fresh .int, act := ← fresh .logic, res := ← fresh .logic,
+    range, retained := domain.retained }
 
 /-- Preserve the traditional per-generator transaction boundaries while
     collecting a range's results in growing batches. -/
@@ -177,7 +184,7 @@ def ForSearch.cursorSlots (search : ForSearch) (bindings : List Nat) : List Nat 
   let rec levels : List ForLevel → List Nat
     | [] => []
     | level :: rest =>
-      [level.arr, level.ix] ++ level.range.toList.map (·.1) ++
+      [level.arr, level.ix] ++ level.retained ++ level.range.toList.map (·.1) ++
         (if rest.isEmpty then [] else [level.act, level.slot]) ++ levels rest
   (search.started :: (levels (search.head :: search.tail) ++ bindings)).eraseDups
 
@@ -592,7 +599,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         let (xslot, c2) ← declareAt g.pos c1 x ty
         let src := Expr.seq (.assign ta src0)
           (.prim .range [.lit (.int 0), p2 .sub (.prim .len [.local ta]) (.lit (.int 1))])
-        pure (islot, .sequence src (.arr .int), c2, Expr.assign xslot (p2 .index (.local ta) (.local islot)))
+        pure (islot, .sequence src (.arr .int) [ta], c2, Expr.assign xslot (p2 .index (.local ta) (.local islot)))
       | none => do
       let ty ← match rs.ty with
         | .arr t => pure t

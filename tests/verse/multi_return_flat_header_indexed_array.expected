@@ -1,0 +1,17 @@
+advance 1 0 10
+cleanup 1 0 10
+cleanup 1 1 11
+all 11
+cleanup 1 1 111
+all 111
+advance 1 0 110
+cleanup 1 0 110
+cleanup 1 1 11
+all 11
+cleanup 1 1 111
+all 111
+advance 1 0 10
+cleanup 1 0 10
+cleanup 1 1 111
+first 111
+exit=0
