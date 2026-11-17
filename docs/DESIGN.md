@@ -630,6 +630,13 @@ unneeded inputs. Already evaluated parameters are passed without rerunning
 named defaults. Sibling lexical bindings are renamed before boxing, and a
 boxed initializer runs before construction of its cell.
 
+Source effect permissions and physical Core write annotations are separate.
+After source admission, `PhysicalWrites.annotate` retains declared writers
+and marks direct heap writers and their transitive callers. It runs before
+metadata/capture analysis and again after final lowering and entry wrappers.
+Thus a compiler-owned cell can implement a logical local while its actual
+heap writes remain visible to the unchanged `Prog.checkWriteSound` certificate.
+
 `lowerReturnLoops` makes a private lazy search helper returning an optional
 result. Each operand is first saved at the source return type, then wrapped
 as a present result; wrapping an unevaluated choice in `option{...}` would

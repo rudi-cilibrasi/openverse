@@ -20,6 +20,7 @@ import OpenVerse.Front.Elab.Environment
 import OpenVerse.Front.Elab.Functions
 import OpenVerse.Front.SignalAdmission
 import OpenVerse.Front.InitializerConvergence
+import OpenVerse.Front.PhysicalWrites
 import OpenVerse.Front.Attributes
 import OpenVerse.Front.Reachability
 import OpenVerse.Front.Variance
@@ -115,7 +116,9 @@ def prepareLowering (env : TyEnv) (sigs : Signatures) (elaborated : Array Elabor
     fns := fns.set! gi { fn with body := Suspend.pruneDead S00 ((slotTys[gi]?).getD []) fn.body }
     metadataInfo := metadataInfo.modify gi fun info => { info with
       body := info.body.map (Suspend.pruneDead S00 ((slotTys[gi]?).getD [])) }
-  return { fns, slotTys, metadata := metadataInfo, sigs := S00 }
+  -- Source effects have already been checked. Compiler-owned local cells
+  -- still need truthful physical write flags before metadata/capture analysis.
+  return { fns := PhysicalWrites.annotate fns, slotTys, metadata := metadataInfo, sigs := S00 }
 
 /-- Initializer convergence (#511): each field default's code, `bodies`,
     converges, calling only functions that do (`InitializerConvergence`):
@@ -204,6 +207,9 @@ def lowerProgram (env : TyEnv) (sigs : Signatures) (mainSig : Sig) (lowering : L
     fsigs := fsigs ++ [([], if mainSig.suspends then VTy.void else mainSig.ret.toVTy env)]
   -- (the frame classes' pins after the classes', #244)
   let pins := (List.range classTable.length).map (fun t => (pins[t]?).getD []) ++ framePins
+  -- Capture/concurrency lowering and the entry wrapper may add physical writes.
+  -- Close their callers again before the unchanged Core certificate checks.
+  fns := PhysicalWrites.annotate fns
   return { prog := { fns := fns.toList, main },
            sigs := { fns := fsigs, classes := classTable ++ frameClasses.toList, protos, pins,
                      variances := env.coreVariances }, slotTys }
