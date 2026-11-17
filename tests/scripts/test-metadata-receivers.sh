@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Exercise the actual private-cell abstract heap, including its native scale path.
+# Check metadata-only receiver certificates and the native scale path.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root"

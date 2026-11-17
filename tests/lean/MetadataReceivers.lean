@@ -9,7 +9,7 @@ private def expect (condition : Bool) (message : String) : IO Unit :=
   unless condition do throw <| IO.userError message
 
 private def env : TyEnv := Id.run do
-  let classes := ["$varcell", "Inner", "Outer", "Holder", "Reader", "Node", "BadNode", "Grow"]
+  let classes := ["$varcell", "Inner", "Outer", "Holder"]
   return {
     classes
     classIx := classes.zipIdx.foldl (fun map (name, index) => map.insert name index) {}
@@ -20,12 +20,8 @@ private def env : TyEnv := Id.run do
       ("$varcell", [("VCell", .param "t" false, none)]),
       ("Inner", [("Work", .int, none)]),
       ("Outer", [("Box", .struct "Inner" [], none)]),
-      ("Holder", [("Value", .param "t" false, none)]),
-      ("Reader", [("N", .int, none)]),
-      ("Node", [("Next", .struct "Node" [], none), ("N", .int, none)]),
-      ("BadNode", [("Next", .struct "BadNode" [], none), ("Cell", .struct "$varcell" [.int], none)]),
-      ("Grow", [("Next", .struct "Grow" [.arr (.param "t" false)], none)])]
-    sparams := [("$varcell", [("t", false)]), ("Holder", [("t", false)]), ("Grow", [("t", false)])] }
+      ("Holder", [("Value", .param "t" false, none)])]
+    sparams := [("$varcell", [("t", false)]), ("Holder", [("t", false)])] }
 
 private def field (object : Expr) : Expr := .heap (.get 0) [object]
 private def string (s : String) : Expr :=
@@ -54,8 +50,6 @@ private def models : IO Unit := do
   let read := project env #[.struct "Outer" []] (field (field (.local 0)))
   expect (read.extraSlots == #[.struct "Inner" []] && read.nonCellSlots == [1])
     "H.Box receiver needs its resolved nominal certificate"
-  let readWithReach := withReachability env #[.struct "Outer" []] read
-  expect (read.noCellReachSlots.isEmpty && readWithReach.noCellReachSlots == [0,1]) "closed ordinary fields cannot reach a private cell"
   let direct := project env #[.struct "Inner" []] (field (.local 0))
   expect direct.extraSlots.isEmpty "direct locals already have source type certificates"
   for ty in [Ty.any, .dyn, .param "t" false] do
@@ -81,14 +75,6 @@ private def models : IO Unit := do
       ("B", [("Extra", .struct "$varcell" [.int], none), ("Box", .struct "Inner" [], none)])] }
   expect ((project mixed #[.struct "Iface" []] (field (field (.local 0)))).extraSlots.isEmpty)
     "incompatible physical interface positions must not create certificates"
-  expect (noCellReach env (.struct "Reader" []) && noCellReach env (.struct "Node" []))
-    "closed scalar readers and recursive data cycles contain no private cells"
-  expect (!noCellReach env (.struct "BadNode" []) && !noCellReach env (.struct "Grow" [.int]))
-    "private fields and growing instantiations remain possible private carriers"
-  for ty in [Ty.any, .dyn, .param "t" false, .arr (.struct "$varcell" [.int]),
-      .opt (.struct "$varcell" [.int]), .tup [.int, .struct "$varcell" [.int]]] do
-    expect (!noCellReach env ty) "opaque or nested private carriers must retain references"
-
   equivalent (field (field (.local 1))) (7, "")
   let receiver := .seq (.print (string "receiver")) (field (.local 1))
   let rhs := .seq (.print (string "rhs")) (.lit (.int 9))
@@ -98,7 +84,7 @@ private def models : IO Unit := do
   equivalent (.ite (field failed) (.lit (.int 0)) (field (field (.local 1)))) (7, "")
   let rhs := .seq (.assign 0 (.heap (.new 1) [.lit (.int 99)])) (.lit (.int 9))
   equivalent (.seq (.heap (.set 0) [field (.local 1), rhs]) (field (field (.local 1)))) (9, "")
-  IO.println "PASS typed metadata receivers, field layouts, reachability, evaluation order and rollback"
+  IO.println "PASS typed metadata receivers, field layouts, evaluation order and rollback"
 
 private def scale : IO Unit := do
   let count := 32000

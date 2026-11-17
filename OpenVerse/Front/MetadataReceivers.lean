@@ -9,7 +9,6 @@ structure Projection where
   body : Expr
   extraSlots : Array Ty := #[]
   nonCellSlots : List Nat := []
-  noCellReachSlots : List Nat := []
   deriving Inhabited
 
 /-- A generic or dynamically boxed value can still denote the private cell.
@@ -18,52 +17,6 @@ private def nonCell (env : TyEnv) : Ty → Bool
   | .param .. | .any | .dyn => false
   | .struct name _ => !env.isSub "$varcell" name
   | _ => true
-
-private structure ReachState where
-  active : Std.HashMap String Unit := {}
-  done : Std.HashMap String Bool := {}
-
-/-- Each query is a conjunction over all possible physical fields. A repeated
-    active type closes a coinductive cycle, while every outgoing field is
-    still checked by its active ancestor. Memoization stays inside one root
-    query, so a provisional positive never escapes a failed ancestor. -/
-private partial def proveNoReach (env : TyEnv) (fuel : Nat) (ty : Ty) : StateM ReachState Bool := do
-  if !nonCell env ty then return false
-  let key := reprStr ty
-  let state ← get
-  if let some answer := state.done[key]? then return answer
-  if state.active.contains key then return true
-  if fuel == 0 then return false
-  set { state with active := state.active.insert key () }
-  let children : Option (List Ty) := match ty with
-    | .arr element | .opt element => some [element]
-    | .tup fields => some fields
-    | .map key value | .weakMap key value => some [key, value]
-    | .struct name args =>
-      if (env.structs.lookup name).isNone then none else
-      if env.isRefClass name then
-        let variants := ((env.concreteBelow name) ++ env.phs.filter (env.isSub · name)).eraseDups
-        if variants.isEmpty then none else
-          some (args ++ variants.flatMap fun actual =>
-            (env.fieldsSeen name args actual).map (·.2.1))
-      else some (args ++ (env.fields name args).map (·.2.1))
-    | .param .. | .any | .dyn => none
-    | _ => some []
-  let mut answer := children.isSome
-  for child in children.getD [] do
-    if !(← proveNoReach env (fuel - 1) child) then
-      answer := false
-      break
-  modify fun state => { state with
-    active := state.active.erase key
-    done := state.done.insert key answer }
-  return answer
-
-/-- A stronger certificate than a non-cell root: no private identity can be
-    stored anywhere inside the value. Opaque types and growing instantiations
-    stay unknown. Failure to prove this is never itself a source refusal. -/
-def noCellReach (env : TyEnv) (ty : Ty) : Bool :=
-  ((proveNoReach env 64 ty).run {}).1
 
 /-- Heap field indices are physical. Inherited/interface layouts must all
     agree before a field type can certify a later receiver expression. -/
@@ -169,19 +122,5 @@ def project (env : TyEnv) (slotTys : Array Ty) (body : Expr) : Projection := Id.
     return { body }
   let (body, state) := (rewrite env body).run { types := slotTys }
   return { body, extraSlots := state.extraSlots, nonCellSlots := state.nonCellSlots.reverse }
-
-/-- Optional reachability proofs are separate from projection: callers can
-    use identity-only certificates without traversing nominal field graphs. -/
-def withReachability (env : TyEnv) (slotTys : Array Ty) (projection : Projection) : Projection := Id.run do
-  let mut cache : Std.HashMap String Bool := {}
-  let mut provedSlots := []
-  for (ty, slot) in (slotTys ++ projection.extraSlots).toList.zipIdx do
-    let key := reprStr ty
-    let proved := match cache[key]? with
-      | some proved => proved
-      | none => noCellReach env ty
-    cache := cache.insert key proved
-    if proved then provedSlots := slot :: provedSlots
-  return { projection with noCellReachSlots := provedSlots.reverse }
 
 end OpenVerse.Front.MetadataReceivers
