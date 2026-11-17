@@ -20,6 +20,7 @@ import OpenVerse.Front.Elab.Environment
 import OpenVerse.Front.Elab.Functions
 import OpenVerse.Front.SignalAdmission
 import OpenVerse.Front.InitializerConvergence
+import OpenVerse.Front.PhysicalWrites
 import OpenVerse.Front.Attributes
 import OpenVerse.Front.Reachability
 import OpenVerse.Front.Variance
@@ -115,7 +116,9 @@ def prepareLowering (env : TyEnv) (sigs : Signatures) (elaborated : Array Elabor
     fns := fns.set! gi { fn with body := Suspend.pruneDead S00 ((slotTys[gi]?).getD []) fn.body }
     metadataInfo := metadataInfo.modify gi fun info => { info with
       body := info.body.map (Suspend.pruneDead S00 ((slotTys[gi]?).getD [])) }
-  return { fns, slotTys, metadata := metadataInfo, sigs := S00 }
+  -- Source effects have already been checked. Compiler-owned local cells
+  -- still need truthful physical write flags before metadata/capture analysis.
+  return { fns := PhysicalWrites.annotate fns, slotTys, metadata := metadataInfo, sigs := S00 }
 
 /-- Initializer convergence (#511): each field default's code, `bodies`,
     converges, calling only functions that do (`InitializerConvergence`):
@@ -204,6 +207,9 @@ def lowerProgram (env : TyEnv) (sigs : Signatures) (mainSig : Sig) (lowering : L
     fsigs := fsigs ++ [([], if mainSig.suspends then VTy.void else mainSig.ret.toVTy env)]
   -- (the frame classes' pins after the classes', #244)
   let pins := (List.range classTable.length).map (fun t => (pins[t]?).getD []) ++ framePins
+  -- Capture/concurrency lowering and the entry wrapper may add physical writes.
+  -- Close their callers again before the unchanged Core certificate checks.
+  fns := PhysicalWrites.annotate fns
   return { prog := { fns := fns.toList, main },
            sigs := { fns := fsigs, classes := classTable ++ frameClasses.toList, protos, pins,
                      variances := env.coreVariances }, slotTys }
@@ -398,10 +404,23 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     return .asking { loops := loopNeeds }
   if !opts.extendedDefaults then
     checkInitializerConvergence lowering.fns sigs classes.defs defaults.bodies admitted.intrinsicCalls
-  let scalarReturns := lowering.sigs.fns.toArray.map fun (_, result) => match result with
-    | .int | .logic | .char | .float => true
-    | _ => false
-  MetadataFlow.check lowering.fns lowering.metadata (metadataFields env) opts.debug scalarReturns
+  -- Includes immutable containers such as void/options/arrays of scalar data.
+  -- The shared theorem certifies that these Values contain no object alias.
+  let scalarReturns := lowering.sigs.fns.toArray.map fun (_, result) => MetadataValues.objectFree result
+  let fields := metadataFields env
+  let privateTags := (lowering.metadata.toList.flatMap fun info =>
+    info.cellTag.toList ++ info.cellTransportTag.toList) ++
+    (env.classes.zipIdx.filterMap fun (name, tag) => if name.contains '$' then some tag else none)
+  -- A separate certificate permits ordinary object graphs only when no
+  -- reachable field can carry private cells or type metadata.
+  let dataClasses := MetadataValues.dataClassFlags lowering.sigs.classes.toArray fields privateTags
+  let dataReturns := lowering.sigs.fns.toArray.map fun (_, result) => MetadataValues.dataOnly dataClasses result
+  let cleanPrototypes := lowering.sigs.protos.toArray.map fun (tag, args) =>
+    MetadataValues.dataOnly dataClasses (.ref [tag] args)
+  let metadata := lowering.metadata.mapIdx fun index info =>
+    { info with dataOnlySlots := (((elaborated[index]?).map (·.slotTys)).getD []).zipIdx.filterMap fun (ty, slot) =>
+        if MetadataValues.dataOnly dataClasses ty then some slot else none }
+  MetadataFlow.check lowering.fns metadata fields opts.debug scalarReturns dataReturns cleanPrototypes
   let frameInfo := elaborated.map (·.frames)
   let c ← certify (← lowerProgram env sigs mainSig lowering frameInfo admitted.usesConc admitted.usesEvents
     admitted.awaitsTasks) methods.stubs

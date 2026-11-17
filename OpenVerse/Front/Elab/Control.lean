@@ -443,7 +443,10 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         if ctx.types.isRefClass sn then
           let (j, ft) := (fieldIndex (ctx.types.fields sn targs) f).get!
           pre := pre.push (← setFieldAt ctx.types p sn targs c f j ft newVal)
-          noteFx p ["writes"] (if sn == ModuleVars.stateClass then some s!"sets the module-scoped var {ModuleVars.shown f}" else none)
+          -- Compiler-owned cells implement source-local variables. Their
+          -- physical writes are retained in Core, not source heap effects.
+          if sn != "$varcell" || f != "$VCell" then
+            noteFx p ["writes"] (if sn == ModuleVars.stateClass then some s!"sets the module-scoped var {ModuleVars.shown f}" else none)
           wroteObject := true
         else
           let fs := ctx.types.fields sn targs
@@ -522,7 +525,8 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
           if !ctx.types.isVarField sn f then eerr p (classSetMsg sn f)
           checkMemberAccess ctx.types p sn f (write := true)
           let r ← rhsAt t
-          noteFx p (if op.isSome then ["reads", "writes"] else ["writes"])
+          if sn != "$varcell" || f != "$VCell" then
+            noteFx p (if op.isSome then ["reads", "writes"] else ["writes"])
           let (first, r) ← if op.isSome then rhsFirst r (readFails := false) else pure (id, r)
           let v ← match op with
             | none => coerce p r t
@@ -1436,11 +1440,28 @@ structure LoopFrame where
     it is not the group's result type `rty` (they do not coerce to it): its
     first alternative's, a value's, or the code's after a call in it. None
     when that is a call of the group, whose values are at `rty`. -/
-partial def probeHoleWith (elabE : Ctx → SExpr → Option Ty → EM R) (ca : Ctx) (rty : Ty) (cs : List SExpr)
+partial def probeHoleWith (elabE : Ctx → SExpr → Option Ty → EM R)
+    (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx)) (ca : Ctx) (rty : Ty) (cs : List SExpr)
     (recTy : SExpr → Option Ty := fun _ => none) : EM (Option Ty) := do
   -- (a call of a member: its values', `recTy`, #283)
   if let some x@(.app _ (.ident _ n) _ false) := cs.head? then
     if n == "$rec" || n == "$recTo" then return recTy x
+  -- A nested point can return through a continuation member at a type
+  -- different from the producer's. Probe its normalized tail in the same
+  -- lexical context, rather than guessing the producer result type.
+  if let some (.app p (.ident _ "$then") (point :: .ident _ hole :: code :: _) false) := cs.head? then
+    if let some (clauses, tail) := Choice.contOf? code then
+      let saved ← get
+      let result ← tryCatch (do
+        let input ← probeHoleWith elabE elabSeq ca rty ((Choice.alts? point).getD [point]) recTy
+        let holeLocal : Local := { name := hole, slot := ← fresh (input.getD rty), ty := input.getD rty, mutable := false }
+        let (_, context) ← elabSeq { ca with locals := holeLocal :: ca.locals, typeOnly := true, canFail := true, inTaking := true } clauses none
+        let branches ← elabLoopTailWith elabSeq context tail (← fresh .int) 0
+        match branches.arms[0]? with
+        | some (context, values) => probeHoleWith elabE elabSeq context rty values recTy
+        | none => pure none) (fun _ => pure none)
+      set saved
+      return result
   let st ← get
   let some (c, e) ← (match cs.head? with
     | some (.app _ (.ident _ "$then") (p@(.app _ (.ident _ _) _ false) :: .ident _ h :: k :: _) false) =>
@@ -1448,8 +1469,8 @@ partial def probeHoleWith (elabE : Ctx → SExpr → Option Ty → EM R) (ca : C
       -- (the hole's type: a call's, its member's values'; a choice's or an
       -- `if`'s leaf's, #283, its first alternative's)
       let ht ← match Choice.alts? p, p with
-        | some ps, _ => pure ((← probeHoleWith elabE ca rty ps recTy).getD rty)
-        | none, .app _ (.ident _ "$then") _ false => pure ((← probeHoleWith elabE ca rty [p] recTy).getD rty)
+        | some ps, _ => pure ((← probeHoleWith elabE elabSeq ca rty ps recTy).getD rty)
+        | none, .app _ (.ident _ "$then") _ false => pure ((← probeHoleWith elabE elabSeq ca rty [p] recTy).getD rty)
         | none, _ => pure ((recTy p).getD rty)
       let hl : Local := { name := h, slot := ← fresh ht, ty := ht, mutable := false }
       pure (some ({ ca with locals := hl :: ca.locals }, k))
@@ -1494,12 +1515,12 @@ partial def loopFlatWith (elabE : Ctx → SExpr → Option Ty → EM R)
   let lives := fc.captureEvidence ((Choice.namesUsed k).eraseDups.filterMap fun n =>
     if own.contains n then none else fc.lookup n) own
   let inTy ← match Choice.alts? c, c with
-    | some cs, _ => probeHoleWith elabE ca rty cs recTy
+    | some cs, _ => probeHoleWith elabE elabSeq fc rty cs recTy
     -- (a call of a member: its values' type, when other than the result
     -- type, `recTy`, #283)
     | none, .app _ (.ident _ "$rec") _ false | none, .app _ (.ident _ "$recTo") _ false => pure (recTy c)
     -- (a value entering a member, `Choice.enterOf`: its own type)
-    | none, _ => probeHoleWith elabE ca rty [c] recTy
+    | none, _ => probeHoleWith elabE elabSeq fc rty [c] recTy
   let outTy := match outer.head? with
     | some o => (frames[o]?).bind (·.inTy)
     | none => ownOut
@@ -1737,9 +1758,9 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
                 | _, _ => pure none
               | none => pure none
             let hty := (← match Choice.alts? pt, pt with
-              | some cs, _ => probeHoleWith elabE ca rty cs
+              | some cs, _ => probeHoleWith elabE elabSeq ca rty cs
               | none, .app _ (.ident _ "$rec") _ false | none, .app _ (.ident _ "$recTo") _ false => pure callTy
-              | none, _ => probeHoleWith elabE ca rty [pt]).getD rty
+              | none, _ => probeHoleWith elabE elabSeq ca rty [pt]).getD rty
             let hl : Local := { name := hn, slot := ← fresh hty, ty := hty, mutable := false }
             let (_, cm) ← elabSeq { ca with locals := hl :: ca.locals } ccls none
             let mcode ← elabLoopTailWith elabSeq cm ctail probeK 0

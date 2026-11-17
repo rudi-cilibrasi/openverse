@@ -1,0 +1,15 @@
+low 1
+high 2
+out 12
+all 2
+out 22
+all 13
+state 22
+low 1
+high 2
+out 12
+first 3
+state 12
+none 0
+after
+exit=0

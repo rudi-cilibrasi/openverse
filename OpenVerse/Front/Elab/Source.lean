@@ -334,7 +334,7 @@ def inlineSource (requests : Requests) (admitted : Admitted) :
   -- contracts before inlining can replace a declaration by a checking stub.
   EffectPolicy.check producerTops
   let written := producerTops ++ admitted.resolved
-  let ⟨resolved, lazy, familySites, overloadSites, nestedSites, fieldSites, copiedOverloadNames, copiedOverloadClashes, copiedMethods⟩ ← Choice.inlineMulti written reserved
+  let ⟨resolved, lazy, logicalCells, familySites, overloadSites, nestedSites, fieldSites, copiedOverloadNames, copiedOverloadClashes, copiedMethods⟩ ← Choice.inlineMulti written reserved
     requests.eager requests.families requests.lazy requests.overloads requests.nested
     requests.fieldOrders requests.instanceCalls
   let resolved := resolved.map (STop.mapAll id Choice.restoreProducerDefaultContexts)
@@ -342,7 +342,9 @@ def inlineSource (requests : Requests) (admitted : Admitted) :
   let helpers := admitted.helpers ++ (← if lazy then lazyTops else pure [])
   -- (#283) and of the cells of the vars their frames set
   let cells (e : SExpr) : Bool := Choice.anyE (fun | .construct _ "$varcell" .. => true | _ => false) e
-  let usesCells := lazy && resolved.any (·.code.any cells)
+  -- A dormant generic helper can retain a cell parameter after its
+  -- constructor/checking body disappears. Preserve the lowering's intent.
+  let usesCells := logicalCells || (lazy && resolved.any (·.code.any cells))
   let requestedCells := requests.loops.any fun request => request.extraFns.any fun
     | .classDef _ "$varcell" .. => true
     | _ => false

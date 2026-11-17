@@ -1,0 +1,11 @@
+out 101
+zero 1
+out 201
+zero 102
+out 121
+one 21
+out 221
+one 122
+out 121
+first 22
+exit=0

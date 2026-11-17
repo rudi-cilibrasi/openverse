@@ -1377,7 +1377,7 @@ structure MFn where
     separate from the consumer's and from the actual Core type names. -/
 def memberTypeName (member param : String) : String := s!"$groupType_{member}_{param}"
 
-/-- The names `e` uses: as identifiers and as calls' heads. -/
+/-- The names `e` uses as identifiers and call heads, in first-use order. -/
 partial def namesUsed (e : SExpr) : List String :=
   let rec go : SExpr → List String
     | .app _ (.ident _ "$constructHints") _ false => []
@@ -1385,7 +1385,10 @@ partial def namesUsed (e : SExpr) : List String :=
     -- (a struct's field defaults, which `children` leaves out)
     | .structDef _ _ _ fs => fs.flatMap fun f => (f.default.map go).getD []
     | e => e.children.flatMap go
-  (go e).eraseDups
+  let (_, names) := (go e).foldl (fun (seen, names) n =>
+    if seen.contains n then (seen, names) else (seen.insert n, n :: names))
+    (({} : Std.HashSet String), [])
+  names.reverse
 
 /-- Whether a written type mentions one of the names `tps`. -/
 partial def styMentions (tps : List String) : STy → Bool
@@ -1755,6 +1758,7 @@ structure ShapeOps where
   isCall : SExpr → Bool := isRec
   /-- A struct's or class's fields in declaration order, for the lifter. -/
   fieldOrder : String → FieldOrder := fun _ => {}
+  framePrefix : String := ""
 
 /-- (#283) The calls of a lazily taken group in `e` marked for the lifter,
     `$point(call)`, which binds each where it binds a choice (`liftE`). -/
@@ -1815,12 +1819,12 @@ mutual
     frame (`frameOf?`): `$then(point, hole, frame)`, with the clauses that
     run before the point when there are any, `$then(point, hole, frame,
     block{prefix})`. A choice's alternatives are in this form again, and the
-    frame is plain code, or a continuation member (`contBody?`) when it
+    frame is plain code, or a continuation member (`contBody?M`) when it
     reaches another choice point: so each choice point and each call is the
     head of the code after it. The hole of a frame of a call with plain code
     after it is named as #283's first frames were, after the alternative;
     others after the point and its kind. -/
-partial def normAlt (ops : ShapeOps) (a : SExpr) : Option SExpr := do
+partial def normAltM (ops : ShapeOps) (a : SExpr) : StateT Nat Option SExpr := do
   if ops.isRec a then return a
   -- (a value: its `if`s with a `return` in a branch plain ones again, as an
   -- eager body's, #283; a tail's own scope stays the tail's)
@@ -1836,7 +1840,7 @@ partial def normAlt (ops : ShapeOps) (a : SExpr) : Option SExpr := do
     if let some ([], tail) := lastChoiceTail ops.plain ss.dropLast ss.getLast! then
       -- (one of them with code before a choice of its own enters a member
       -- that runs it, `enterOf`, as anywhere a choice's alternatives are)
-      if let some as := alts? tail then return mk a.pos ((← as.mapM (normAlt ops)).map enterOf)
+      if let some as := alts? tail then return mk a.pos ((← as.mapM (normAltM ops)).map enterOf)
   -- (#283) an `if` with plain conditions and a point in a branch is one too:
   -- its branch's values go to the code after it
   let ifPoint : SExpr → Bool
@@ -1848,10 +1852,14 @@ partial def normAlt (ops : ShapeOps) (a : SExpr) : Option SExpr := do
   | none =>
     -- (a point `frameOf?` does not reach, but the lifter does: lifted)
     let a' ← liftPoints? ops a
-    normAlt ops a'
+    normAltM ops a'
   | some (c, k, pre) => do
-    let h := if ops.isRec c && ops.plain k then s!"$frame{a.pos.line}_{a.pos.col}"
-      else s!"$frame{c.pos.line}_{c.pos.col}{if ops.isRec c then "k" else if ifPoint c then "i" else "c"}"
+    guard (pre.all ops.plain)
+    let pre := pre.map eraseReturnTails
+    let serial ← get
+    modify (· + 1)
+    let h := (if ops.isRec c && ops.plain k then s!"$frame{a.pos.line}_{a.pos.col}"
+      else s!"$frame{c.pos.line}_{c.pos.col}{if ops.isRec c then "k" else if ifPoint c then "i" else "c"}") ++ s!"${ops.framePrefix}_{serial}"
     let k := renameE [(hole, h)] k
     -- (a frame that reaches no other point: plain code, its `if`s with a
     -- `return` in a branch plain ones again, as an eager body's, #283)
@@ -1860,9 +1868,9 @@ partial def normAlt (ops : ShapeOps) (a : SExpr) : Option SExpr := do
       -- (an `if`: entered as `enterOf` enters a member, its conditions the
       -- member's path, each leaf's values going to the frame, one for all,
       -- its code in the first leaf only, `sameFrame`)
-      let k ← if ops.plain k then some (plainFrame k) else contBody? ops k
+      let k ← if ops.plain k then pure (plainFrame k) else contBody?M ops k
       let tail := mapLoopLeavesIdx (fun i v => .app v.pos (.ident v.pos "$then")
-        [v, .ident v.pos h, if i == 0 then k else sameFrame v.pos] false) (← normTail ops c)
+        [v, .ident v.pos h, if i == 0 then k else sameFrame v.pos] false) (← normTailM ops c)
       let q := a.pos
       return .app q (.ident q "$then") [.tuple q [], .ident q s!"{h}e",
         .app q (.ident q "$cont") [.block q pre, tail] false] false
@@ -1870,63 +1878,79 @@ partial def normAlt (ops : ShapeOps) (a : SExpr) : Option SExpr := do
       | some cs => do
         -- (one of its alternatives with code before a choice of its own
         -- enters a member that runs it, `enterOf`)
-        let cs ← cs.mapM (normAlt ops)
+        let cs ← cs.mapM (normAltM ops)
         pure (mk c.pos (cs.map enterOf))
       | none => pure c
-    let k ← if ops.plain k then some (plainFrame k) else contBody? ops k
+    let k ← if ops.plain k then pure (plainFrame k) else contBody?M ops k
     let q := a.pos
     return .app q (.ident q "$then") ([c, .ident q h, k] ++ (if pre.isEmpty then [] else [.block q pre])) false
 
-/-- (#283) A tail's leaves in normal form (`normAlt`). A leaf that is one
+/-- (#283) A tail's leaves in normal form (`normAltM`). A leaf that is one
     choice with a prefix, `$then(choice, h, frame, block{prefix})`, has the
     prefix run as its path's, before the choice. -/
-partial def normTail (ops : ShapeOps) (tail : SExpr) : Option SExpr :=
+partial def normTailM (ops : ShapeOps) (tail : SExpr) : StateT Nat Option SExpr :=
   match tail with
   | .app p (.ident q "$returnTail") [.block r ss] false => do
     let (pre, value) := loopBlockParts r ss
     if pre.all ops.plain then
-      return .app p (.ident q "$returnTail") [.block r (pre ++ [← normTail ops value])] false
+      return .app p (.ident q "$returnTail") [.block r (pre.map eraseReturnTails ++ [← normTailM ops value])] false
     -- (a returning branch whose code before its value has choice points: as
     -- a body, its code up to the first its path's)
-    let (cls, t) ← bodyTail? ops r pre value
+    let (cls, t) ← bodyTail?M ops r pre value
     return .app p (.ident q "$returnTail") [.block r (cls ++ [t])] false
-  | .ite p cs t u => do return .ite p cs (← normTail ops t) (← u.mapM (normTail ops))
+  | .ite p cs t u => do return .ite p cs (← normTailM ops t) (← u.mapM (normTailM ops))
   | v => do
     match alts? v with
-    | some as => return mk v.pos ((← as.mapM (normAlt ops)).map enterOf)
+    | some as => return mk v.pos ((← as.mapM (normAltM ops)).map enterOf)
     | none =>
-      match ← normAlt ops v with
+      match ← normAltM ops v with
+      | a@(.app q (.ident _ "$then") [.tuple _ [], .ident _ hole,
+          .app _ (.ident _ "$cont") [.block _ pre, tail] false] false) =>
+        -- At a member's own tail there is no surrounding alternative to
+        -- enter. Keep its path prefix and selection, without an unused
+        -- void-return frame and its slot in every continuation tuple.
+        if pre.all ops.plain && !(namesUsed (.block q (pre ++ [tail]))).contains hole then
+          if pre.isEmpty then return tail
+          return .app q (.ident q "$returnTail") [.block q (pre ++ [tail])] false
+        return a
       | .app q (.ident r "$then") [c, h, k, .block _ pre] false =>
         if isChoice c then
           return .app q (.ident r "$returnTail") [.block q (pre ++ [.app q (.ident r "$then") [c, h, k] false])] false
-        normAlt ops v
+        normAltM ops v
       | a => return a
 
 /-- (#283) The clauses and tail of code whose clauses `cls` are followed by
     `last`: the clauses up to the first that is not plain, and the rest as
     the tail. A last choice bound with plain code after it is the choice of
     that code after each alternative (`lastChoiceTail`); otherwise what comes
-    from the first choice point on is one alternative (`normAlt`). -/
-partial def bodyTail? (ops : ShapeOps) (p : Pos) (cls : List SExpr) (last : SExpr) :
-    Option (List SExpr × SExpr) := do
-  let leafOf (cls : List SExpr) (tail : SExpr) : Option (List SExpr × SExpr) := do
-    return (cls, ← normTail ops (plainIfValues ops.plain (completeLoopTail ops.isRec false tail)))
+    from the first choice point on is one alternative (`normAltM`). -/
+partial def bodyTail?M (ops : ShapeOps) (p : Pos) (cls : List SExpr) (last : SExpr) :
+    StateT Nat Option (List SExpr × SExpr) := do
+  let leafOf (cls : List SExpr) (tail : SExpr) : StateT Nat Option (List SExpr × SExpr) := do
+    guard (cls.all ops.plain)
+    return (cls.map eraseReturnTails, ← normTailM ops (plainIfValues ops.plain (completeLoopTail ops.isRec false tail)))
   if cls.all ops.plain then
     leafOf cls (match last with | .decl _ _ _ false rhs => rhs | e => e)
   else match lastChoiceTail ops.plain cls last with
     | some (cls, tail) => leafOf cls tail
     | none =>
       let i ← cls.findIdx? (!ops.plain ·)
-      return (cls.take i, ← normTail ops (.block p (cls.drop i ++ [last])))
+      return (cls.take i, ← normTailM ops (.block p (cls.drop i ++ [last])))
 
 /-- (#283) The frame `k` that reaches another choice point as a continuation
-    member, `$cont(block{clauses}, tail)` (`bodyTail?`). -/
-partial def contBody? (ops : ShapeOps) (k : SExpr) : Option SExpr := do
+    member, `$cont(block{clauses}, tail)` (`bodyTail?M`). -/
+partial def contBody?M (ops : ShapeOps) (k : SExpr) : StateT Nat Option SExpr := do
   let ss := stmtsOf k
   let last ← ss.getLast?
-  let (cls, tail) ← bodyTail? ops k.pos ss.dropLast last
+  let (cls, tail) ← bodyTail?M ops k.pos ss.dropLast last
   return .app k.pos (.ident k.pos "$cont") [.block k.pos cls, tail] false
 end
+
+def normAlt (ops : ShapeOps) (a : SExpr) : Option SExpr := (normAltM ops a).run' 0
+def normTail (ops : ShapeOps) (tail : SExpr) : Option SExpr := (normTailM ops tail).run' 0
+def bodyTail? (ops : ShapeOps) (p : Pos) (cls : List SExpr) (last : SExpr) : Option (List SExpr × SExpr) :=
+  (bodyTail?M ops p cls last).run' 0
+def contBody? (ops : ShapeOps) (k : SExpr) : Option SExpr := (contBody?M ops k).run' 0
 
 /-- Why a recursive function with several values whose values are computed
     at the call must be effect-free, and when it is taken lazily instead. -/
@@ -1974,7 +1998,7 @@ def loopShapeOf? (g : String) (mv : List String) (body : SExpr) (grp : List Stri
   -- (no choice, and no call of a function with several values, nor any
   -- other mention of `g`: a call of it its own `if` or `for` takes, say)
   -- (#283: or of a function of its strongly connected group, `grp`)
-  let plain (e : SExpr) : Bool := !liftsHere (markCalls mv e) && !(namesUsed e).any grp.contains
+  let plain (e : SExpr) : Bool := !liftsHere (markCalls mv (eraseReturnTails e)) && !(namesUsed e).any grp.contains
   let isRec : SExpr → Bool
     | .app _ (.ident _ h) as _ => grp.contains h && as.all fun a =>
         match a with
@@ -1992,7 +2016,7 @@ def loopShapeOf? (g : String) (mv : List String) (body : SExpr) (grp : List Stri
   let isCall : SExpr → Bool
     | .app _ (.ident _ h) _ _ => grp.contains h
     | _ => false
-  let ops : ShapeOps := { plain, isRec, inert := inert (params ++ localsOf body), isCall, fieldOrder }
+  let ops : ShapeOps := { plain, isRec, inert := inert (params ++ localsOf body), isCall, fieldOrder, framePrefix := sitePart g }
   let (cls, tail) ← bodyTail? ops body.pos cls last
   let isVar (n : String) : Bool := anyE (fun | .decl _ x _ true _ => x == n | _ => false) body
   let groupOK (e : SExpr) : Bool := ((alts? e).getD [e]).all (altOK ops isVar)
@@ -2060,7 +2084,7 @@ partial def tailReturns (ss : List SExpr) : List SExpr :=
     boundary; only a branch's own choices generate values. -/
 def returnBranches (p : Pos) (k : String) (cs tb ub : List SExpr)
     (multi : SExpr → Bool) (ret : Option STy) (tailBlocks : Bool := false) : List SExpr :=
-  if !multi (.block p tb) && !multi (.block p ub) then
+  if tailBlocks || (!multi (.block p tb) && !multi (.block p ub)) then
     let scope (ss : List SExpr) := if tailBlocks then
       SExpr.app p (.ident p "$returnTail") [.block p ss] false else .block p ss
     [.ite p cs (scope tb) (some (scope ub))]
@@ -2265,12 +2289,12 @@ private def returnChoices (body : SExpr) : Bool :=
   hasChoice (stmtsOf body) || (stmtsOf body).any liftsHere
 
 private def linearReturnResume (p : Pos) (key : String) (ret : STy) (outcome : Bool)
-    (returned rest : List SExpr) (branchMany : SExpr → Bool := returnChoices) : List SExpr :=
+    (returned rest : List SExpr) (branchMany : SExpr → Bool := returnChoices) (tailBlocks : Bool := false) : List SExpr :=
   let payload := key ++ "Value"
   returnBranches p (key ++ "Select")
     [.decl p payload (some ret) false (.query p (.ident p key))]
     returned rest branchMany
-    (some (if outcome then .opt ret else ret))
+    (some (if outcome then .opt ret else ret)) tailBlocks
 
 private def linearReturnCleanup (outcome : Bool) (defers : List SExpr)
     (outer : List (List SExpr)) : List SExpr :=
@@ -2280,7 +2304,7 @@ private def linearReturnCleanup (outcome : Bool) (defers : List SExpr)
     contains the following source statements once, outside both branches. -/
 partial def elimLinearReturns (fresh : Nat → String) (ret : STy) (outcome : Bool) (n : Nat) (p : Pos)
     (ss defers : List SExpr) (outer : List (List SExpr) := [])
-    (many : SExpr → Bool := hasLiftable) (branchMany : SExpr → Bool := returnChoices) :
+    (many : SExpr → Bool := hasLiftable) (branchMany : SExpr → Bool := returnChoices) (tailBlocks : Bool := false) :
     Option (List SExpr × Nat) := do
   match ss with
   | [] => return (linearReturnCleanup outcome defers outer ++
@@ -2290,18 +2314,18 @@ partial def elimLinearReturns (fresh : Nat → String) (ret : STy) (outcome : Bo
       (linearReturnCleanup outcome defers outer)
   | d@(.app _ (.ident _ "$defer") _ _) :: rest =>
     let later := renamedFor "$later" (boundIn rest)
-    elimLinearReturns fresh ret outcome n p rest (defers ++ [renameE later d]) outer many branchMany
+    elimLinearReturns fresh ret outcome n p rest (defers ++ [renameE later d]) outer many branchMany tailBlocks
   | s@(.decl q name ty mutable body) :: rest =>
     if !hasReturn body then
-      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer many branchMany
+      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer many branchMany tailBlocks
       return (s :: tail, next)
     if !scalarReturnBoundary many body then
       let moved ← splitReturnInitializer many q name ty mutable body rest
-      elimLinearReturns fresh ret outcome n p moved defers outer many branchMany
+      elimLinearReturns fresh ret outcome n p moved defers outer many branchMany tailBlocks
     else do
       let packet := fresh n ++ "$boundary"
       let key := packet ++ "Return"
-      let (rest, n1) ← elimLinearReturns fresh ret outcome (n+1) p rest defers outer many branchMany
+      let (rest, n1) ← elimLinearReturns fresh ret outcome (n+1) p rest defers outer many branchMany tailBlocks
       -- The normal outcome is present whenever the return outcome is absent.
       -- Keep the binding in this continuation's prefix, rather than adding
       -- another conditional frame that can lose its inferred result type.
@@ -2312,67 +2336,67 @@ partial def elimLinearReturns (fresh : Nat → String) (ret : STy) (outcome : Bo
         (linearReturnCleanup outcome defers outer)
       return (.decl q packet none false (returnBoundary q packet ret ty body) ::
         .decl q key (some (.opt ret)) false (.app q (.ident q packet) [.int q 0] false) ::
-        linearReturnResume q key ret outcome returned ready branchMany, n2)
+        linearReturnResume q key ret outcome returned ready branchMany tailBlocks, n2)
   | s@(.forE q ..) :: rest | s@(.loop q _) :: rest =>
     if !hasReturn s then
-      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer many branchMany
+      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer many branchMany tailBlocks
       return (s :: tail, next)
     if !scalarReturnBoundary many s then none else do
       let packet := fresh n ++ "$boundary"
       let key := packet ++ "Return"
-      let (rest, n1) ← elimLinearReturns fresh ret outcome (n+1) p rest defers outer many branchMany
+      let (rest, n1) ← elimLinearReturns fresh ret outcome (n+1) p rest defers outer many branchMany tailBlocks
       let payload := key ++ "Value"
       let (returned, n2) := linearReturnFinish fresh q ret n1 outcome (.ident q payload)
         (linearReturnCleanup outcome defers outer)
       return (.decl q packet none false (returnBoundary q packet ret none s) ::
         .decl q key (some (.opt ret)) false (.app q (.ident q packet) [.int q 0] false) ::
-        linearReturnResume q key ret outcome returned rest branchMany, n2)
+        linearReturnResume q key ret outcome returned rest branchMany tailBlocks, n2)
   | s@(.ite q cs t u) :: rest =>
     if !hasReturn s then
-      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer many branchMany
+      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer many branchMany tailBlocks
       return (s :: tail, next)
     if cs.any hasReturn then none else do
       let key := fresh n ++ "$return"
       if !outcome && rest.isEmpty then
         let (tb, n1) ← elimLinearReturns fresh ret false (n+1) t.pos
-          (tailReturns (stmtsOf t)) [] (defers :: outer) many branchMany
+          (tailReturns (stmtsOf t)) [] (defers :: outer) many branchMany tailBlocks
         let (ub, n2) ← elimLinearReturns fresh ret false n1 q
-          (tailReturns ((u.map stmtsOf).getD [])) [] (defers :: outer) many branchMany
+          (tailReturns ((u.map stmtsOf).getD [])) [] (defers :: outer) many branchMany tailBlocks
         return (returnBranches q key cs tb ub
-          branchMany (some ret), n2)
-      let (tb, n1) ← elimLinearReturns fresh ret true (n+1) t.pos (stmtsOf t) [] outer many branchMany
-      let (ub, n2) ← elimLinearReturns fresh ret true n1 q ((u.map stmtsOf).getD []) [] outer many branchMany
-      let (rest, n3) ← elimLinearReturns fresh ret outcome n2 p rest defers outer many branchMany
+          branchMany (some ret) tailBlocks, n2)
+      let (tb, n1) ← elimLinearReturns fresh ret true (n+1) t.pos (stmtsOf t) [] outer many branchMany tailBlocks
+      let (ub, n2) ← elimLinearReturns fresh ret true n1 q ((u.map stmtsOf).getD []) [] outer many branchMany tailBlocks
+      let (rest, n3) ← elimLinearReturns fresh ret outcome n2 p rest defers outer many branchMany tailBlocks
       let payload := key ++ "Value"
       let (returned, n4) := linearReturnFinish fresh q ret n3 outcome (.ident q payload)
         (linearReturnCleanup outcome defers outer)
       let packet := SExpr.ite q cs (.block t.pos tb) (some (.block q ub))
       return (.decl q key (some (.opt ret)) false packet ::
-        linearReturnResume q key ret outcome returned rest branchMany, n4)
+        linearReturnResume q key ret outcome returned rest branchMany tailBlocks, n4)
   | s@(.block q items) :: rest =>
     if !hasReturn s then
-      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer many branchMany
+      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer many branchMany tailBlocks
       return (s :: tail, next)
     if !outcome && rest.isEmpty then
-      elimLinearReturns fresh ret false (n+1) q (tailReturns items) [] (defers :: outer) many branchMany
+      elimLinearReturns fresh ret false (n+1) q (tailReturns items) [] (defers :: outer) many branchMany tailBlocks
     else do
     let key := fresh n ++ "$return"
-    let (items, n1) ← elimLinearReturns fresh ret true (n+1) q items [] outer many branchMany
-    let (rest, n2) ← elimLinearReturns fresh ret outcome n1 p rest defers outer many branchMany
+    let (items, n1) ← elimLinearReturns fresh ret true (n+1) q items [] outer many branchMany tailBlocks
+    let (rest, n2) ← elimLinearReturns fresh ret outcome n1 p rest defers outer many branchMany tailBlocks
     let payload := key ++ "Value"
     let (returned, n3) := linearReturnFinish fresh q ret n2 outcome (.ident q payload)
       (linearReturnCleanup outcome defers outer)
     return (.decl q key (some (.opt ret)) false (.block q items) ::
-      linearReturnResume q key ret outcome returned rest branchMany, n3)
+      linearReturnResume q key ret outcome returned rest branchMany tailBlocks, n3)
   | s@(.caseE ..) :: rest =>
     if !hasReturn s then
-      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer many branchMany
+      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer many branchMany tailBlocks
       return (s :: tail, next)
     let (select, chain) ← caseIf (fresh n ++ "$returnCase") s
-    elimLinearReturns fresh ret outcome (n+1) p (select :: chain :: rest) defers outer many branchMany
+    elimLinearReturns fresh ret outcome (n+1) p (select :: chain :: rest) defers outer many branchMany tailBlocks
   | s :: rest =>
     if hasReturn s then none else do
-      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer many branchMany
+      let (tail, next) ← elimLinearReturns fresh ret outcome n p rest defers outer many branchMany tailBlocks
       return (s :: tail, next)
 
 /-- Consecutive statements without escaping bindings or cleanup registrations
@@ -2426,7 +2450,7 @@ def elimReturns (fresh : Nat → String) (n : Nat) (multi : SExpr → Bool := fu
     match ret with
     | some ty =>
       let balanced := balanceReturnSequence ((tailReturns ss).map balanceReturnBlocks)
-      elimLinearReturns fresh ty false n ((ss.head?.map (·.pos)).getD default) balanced [] [] many (if nested then multi else returnChoices)
+      elimLinearReturns fresh ty false n ((ss.head?.map (·.pos)).getD default) balanced [] [] many (if nested then multi else returnChoices) tailBlocks
     | none => none
   else if ss.any (anyE isDefer) then
     elimScopedReturns fresh multi ret n ((ss.head?.map (·.pos)).getD default) (tailReturns ss) [] []
@@ -4097,6 +4121,332 @@ def noteConsumers (f : MFn) (has : SExpr → Bool) : SExpr :=
     if c.conds then code ++ [mark] else code ++ [mark] ++ c.outs.map (SExpr.ident c.pos ·)
   checkBody (Id.run (mapConsumersM has note f.body))
 
+/-- Separate sibling lexical bindings before cells are shared with a helper.
+    The original body is retained independently for source admission. -/
+private def freshLoopLocal (owner : String) : StateM Nat String := do
+  let serial ← get
+  modify (· + 1)
+  return s!"$loopLocal{sitePart owner}{serial}"
+
+private partial def alphaReturnLoopExpr (owner : String) (aliases : List (String × String)) (e : SExpr) :
+    StateM Nat (SExpr × List (String × String)) := do
+  let fresh := freshLoopLocal owner
+  match e with
+  | .ident p name => return (.ident p ((aliases.lookup name).getD name), aliases)
+  | .decl p name annotation mutable rhs =>
+    let (rhs, _) ← alphaReturnLoopExpr owner aliases rhs
+    let renamed ← fresh
+    return (.decl p renamed (annotation.map (styRename aliases)) mutable rhs,
+      (name, renamed) :: aliases)
+  | .gen p name index source =>
+    let (source, _) ← alphaReturnLoopExpr owner aliases source
+    let renamed ← fresh
+    let updated := (name, renamed) :: aliases
+    let (index, updated) ← match index with
+      | none => pure (none, updated)
+      | some name => do
+        let renamed ← fresh
+        pure (some renamed, (name, renamed) :: updated)
+    return (.gen p renamed index source, updated)
+  | .block p statements =>
+    let mut selected := aliases
+    let mut output := []
+    for statement in statements do
+      let (statement, next) ← alphaReturnLoopExpr owner selected statement
+      output := output ++ [statement]
+      selected := next
+    return (.block p output, aliases)
+  | .ite p conditions yes no =>
+    let mut selected := aliases
+    let mut output := []
+    for condition in conditions do
+      let (condition, next) ← alphaReturnLoopExpr owner selected condition
+      output := output ++ [condition]
+      selected := next
+    let (yes, _) ← alphaReturnLoopExpr owner selected yes
+    let no ← no.mapM fun no => do return (← alphaReturnLoopExpr owner aliases no).1
+    return (.ite p output yes no, aliases)
+  | .forE p clauses body =>
+    let mut selected := aliases
+    let mut output := []
+    for clause in clauses do
+      let (clause, next) ← alphaReturnLoopExpr owner selected clause
+      output := output ++ [clause]
+      selected := next
+    let (body, _) ← alphaReturnLoopExpr owner selected body
+    return (.forE p output body, aliases)
+  | .construct p name arguments fields =>
+    let fields ← fields.mapM fun field => do
+      match field with
+      | .decl q name annotation mutable rhs =>
+        return .decl q name (annotation.map (styRename aliases)) mutable (← alphaReturnLoopExpr owner aliases rhs).1
+      | field => return (← alphaReturnLoopExpr owner aliases field).1
+    return (.construct p ((aliases.lookup name).getD name) (arguments.map (styRename aliases)) fields, aliases)
+  | .app p fn arguments bracket =>
+    let (fn, _) ← alphaReturnLoopExpr owner aliases fn
+    let arguments ← arguments.mapM fun argument => do
+      match argument with
+      | .decl q name annotation mutable rhs =>
+        if name.startsWith "?" then
+          return .decl q name (annotation.map (styRename aliases)) mutable (← alphaReturnLoopExpr owner aliases rhs).1
+        return (← alphaReturnLoopExpr owner aliases argument).1
+      | argument => return (← alphaReturnLoopExpr owner aliases argument).1
+    return (.app p fn arguments bracket, aliases)
+  | e =>
+    let changed ← e.mapChildrenM fun child => do return (← alphaReturnLoopExpr owner aliases child).1
+    return (changed, aliases)
+
+private def alphaReturnLoopLocals (owner : String) (body : SExpr) : SExpr :=
+  ((alphaReturnLoopExpr owner [] body).run 0).1.1
+
+private structure LoopCapture where
+  name : String
+  pos : Pos
+  mutable : Bool := false
+  annotation : Option STy := none
+  parameter : Option SParam := none
+
+private structure ReturnLoopSite where
+  pos : Pos
+  key : String
+  helper : String
+  index : String
+  lower : SExpr
+  upper : SExpr
+  body : SExpr
+  captures : List LoopCapture
+  boxed : List String
+
+private def loopSiteKey (owner : String) (p : Pos) : String :=
+  s!"$loopReturn:{sitePart owner}:{p.file}:{p.line}:{p.col}/"
+
+private def loopDeclKey (owner : String) (binding : LoopCapture) : String :=
+  s!"$loopDeclaration:{sitePart owner}:{binding.pos.file}:{binding.pos.line}:{binding.pos.col}/"
+
+private partial def loopBodyScalar (mv : List String) (e : SExpr) : Bool :=
+  match e with
+  | .ret _ value => value.all fun v => !anyE (fun
+      | .app _ (.ident _ name) _ _ => ["$sync", "$race", "$rush", "$branch", "$spawn"].contains name
+      | _ => false) v
+  | .app _ (.ident _ name) _ _ =>
+    !(["$choice", "$loop", "$each", "$all", "$sync", "$race", "$rush", "$branch", "$spawn"].contains name || mv.contains name) &&
+      e.children.all (loopBodyScalar mv)
+  | e@(.forE ..) | e@(.loop ..) => !hasReturn e && e.children.all (loopBodyScalar mv)
+  | e => e.children.all (loopBodyScalar mv)
+
+private def loopBinding : SExpr → Option LoopCapture
+  | .decl p name annotation mutable _ => some { name, pos := p, mutable, annotation }
+  | .gen p name _ _ => some { name, pos := p }
+  | _ => none
+
+private def uniqueLoopCaptures (bindings : List LoopCapture) : List LoopCapture :=
+  bindings.foldl (fun out binding =>
+    if out.any (fun prior => prior.name == binding.name && prior.pos == binding.pos) then out else out ++ [binding]) []
+
+private partial def returnLoopSites (owner : String) (f : MFn) (mv : List String) : List ReturnLoopSite := Id.run do
+  let initial := f.params.map fun param =>
+    ({ name := param.name, pos := f.pos, annotation := some param.ty, parameter := some param } : LoopCapture)
+  let rec walk (scope : List LoopCapture) (defers : List SExpr) (e : SExpr) : StateM (List ReturnLoopSite) Unit := do
+    match e with
+    | .block _ statements =>
+      let mut scope := scope
+      let mut defers := defers
+      for statement in statements do
+        walk scope defers statement
+        scope := (loopBinding statement).toList ++ scope
+        if isDefer statement then defers := defers ++ [statement]
+    | .ite _ conditions yes no =>
+      for condition in conditions do walk scope defers condition
+      let bound := conditions.filterMap loopBinding
+      walk (bound.reverse ++ scope) defers yes
+      no.toList.forM (walk scope defers)
+    | .forE p [.decl _ index _ false (.range _ lower upper)] body =>
+      let many := anyE (fun
+        | .ret _ value => value.any fun operand => hasLiftable (markCalls mv operand)
+        | _ => false) body
+      if hasReturn body && many && loopBodyScalar mv body &&
+          !hasLiftable (markCalls mv lower) && !hasLiftable (markCalls mv upper) then
+        let inner := localsOf body
+        let names := namesUsed body
+        let captures := scope.filter fun binding => binding.name != index && !inner.contains binding.name
+        let writes := setsIn body ++ defers.flatMap setsIn
+        let boxed := captures.filterMap fun binding =>
+          if binding.mutable && names.contains binding.name && writes.contains binding.name then some binding.name else none
+        let key := loopSiteKey owner p
+        modify (· ++ [{
+          pos := p, key, helper := s!"$sourceLoopReturn{sitePart owner}_{p.line}_{p.col}"
+          index, lower, upper, body, captures, boxed }])
+      else pure ()
+    -- A nested loop is not a separately owned return boundary. Keep an
+    -- ineligible enclosing loop intact rather than lifting only its child.
+    | .forE .. | .loop .. => pure ()
+    | .app _ (.ident _ "$defer") _ _ => pure ()
+    | e => e.children.forM (walk scope defers)
+  return ((walk initial [] f.body).run []).2
+
+private def loopNotesReady (owner : String) (parameters : List TParam) (sites : List ReturnLoopSite) (types : List (String × STy)) : Bool :=
+  sites.all fun site => (types.lookup (site.key ++ "$return")).isSome &&
+    parameters.all (fun parameter => (types.lookup (site.key ++ "$type/" ++ parameter.name)).isSome) &&
+    site.captures.all fun binding =>
+      (types.lookup (site.key ++ binding.name)).isSome &&
+      (!site.boxed.contains binding.name || binding.annotation.isSome ||
+        (types.lookup (loopDeclKey owner binding ++ binding.name)).isSome)
+
+private partial def noteReturnLoops (owner : String) (ret : STy) (parameters : List TParam) (sites : List ReturnLoopSite) (e : SExpr) : SExpr := Id.run do
+  let note (p : Pos) (key : String) (entries : List SExpr) :=
+    SExpr.app p (.ident p "$noteTypes") (.str p [.text key] :: entries) false
+  let declarations := uniqueLoopCaptures (sites.flatMap fun site => site.captures.filter fun binding =>
+    site.boxed.contains binding.name && binding.annotation.isNone)
+  let rec go (e : SExpr) : SExpr := Id.run do
+    if let some site := sites.find? (·.pos == e.pos) then
+      if let .forE .. := e then
+        return .block e.pos [note e.pos site.key
+          (.app e.pos (.ident e.pos "$captureEvidence") [] false :: site.captures.map (fun binding => .ident e.pos binding.name) ++
+            (.decl e.pos "$return" (some ret) false (.tuple e.pos []) :: parameters.map (fun parameter =>
+              .decl e.pos ("$type/" ++ parameter.name) (some (.name parameter.name)) false (.tuple e.pos [])))), e]
+    match e with
+    | .block p statements =>
+      let statements := statements.flatMap fun statement =>
+        let changed := go statement
+        match statement with
+        | .decl q name _ true _ =>
+          match declarations.find? (fun binding => binding.name == name && binding.pos == q) with
+          | some binding => [changed, note q (loopDeclKey owner binding) [.ident q name]]
+          | none => [changed]
+        | _ => [changed]
+      return .block p statements
+    | e => return e.mapChildrenM (m := Id) (fun child => pure (go child))
+  return checkBody (go e)
+
+private partial def returnLoopOperands (ret : STy) (tag : String) : SExpr → SExpr
+  | .ret p value =>
+    let saved := s!"{tag}$operand{p.line}_{p.col}"
+    .block p [.decl p saved (some ret) false (value.getD (.tuple p [])),
+      .ret p (some (.optionLit p (.ident p saved)))]
+  | e => Id.run (e.mapChildrenM fun child => pure (returnLoopOperands ret tag child))
+
+private partial def boxReturnLoopCaptures (owner : String) (sites : List ReturnLoopSite)
+    (types : List (String × STy)) (body : SExpr) : SExpr := Id.run do
+  let bindings := uniqueLoopCaptures (sites.flatMap fun site => site.captures.filter fun binding =>
+    site.boxed.contains binding.name)
+  let rec prepare (e : SExpr) : SExpr := Id.run do
+    match e with
+    | .block p statements =>
+      return .block p (statements.flatMap fun statement =>
+        match statement with
+        | .decl q name annotation true rhs =>
+          match bindings.find? (fun binding => binding.name == name && binding.pos == q) with
+          | some binding =>
+            let ty := annotation.orElse fun _ => types.lookup (loopDeclKey owner binding ++ name)
+            let initial := s!"$loopInitial{sitePart owner}_{q.line}_{q.col}"
+            [.decl q initial ty false (prepare rhs), .decl q name ty true (.ident q initial)]
+          | none => [prepare statement]
+        | _ => [prepare statement])
+    | e => return e.mapChildrenM (m := Id) (fun child => pure (prepare child))
+  return cellVars (bindings.map (·.name)) (prepare body)
+
+private partial def returnLoopWrittenTypes (e : SExpr) : List STy :=
+  let own := match e with
+    | .decl _ _ annotation _ _ => annotation.toList
+    | .construct _ _ arguments _ => arguments
+    | .refineDef _ _ ty _ => [ty]
+    | .typeAlias _ _ ty => [ty]
+    | .structDef _ _ _ fields => fields.map (·.ty)
+    | _ => []
+  own ++ e.children.flatMap returnLoopWrittenTypes
+
+private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoopSite)
+    (types : List (String × STy)) : Except String (SExpr × List STop) := do
+  let body := boxReturnLoopCaptures owner sites types f.body
+  let boxed := (sites.flatMap (·.boxed)).eraseDups
+  let mut helpers := []
+  let mut replacements := []
+  for site in sites do
+    let some ret := types.lookup (site.key ++ "$return") | throw "internal: missing loop return target"
+    let substitution ← f.tparams.mapM fun parameter => do
+      let some actual := types.lookup (site.key ++ "$type/" ++ parameter.name)
+        | throw "internal: missing loop type parameter"
+      pure (parameter.name, actual)
+    let iterationBody := site.body.mapAll (·.substNames substitution) id
+    let typedCaptures ← site.captures.mapM fun binding => do
+      let some ty := types.lookup (site.key ++ binding.name) | throw "internal: missing loop capture"
+      let ty := ty.substNames substitution
+      let ty := if boxed.contains binding.name then STy.app "$varcell" [ty] else ty
+      pure (binding, ty)
+    let used := namesUsed site.body
+    let operational := site.captures.filter fun binding =>
+      (types.lookup (site.key ++ "$evidence/" ++ binding.name)).isSome
+    for binding in operational do
+      if binding.mutable then
+        throw s!"{site.pos.show}: a loop return capturing a mutable implicit proof is not supported yet (#686)"
+    let mut retained := typedCaptures.filter fun (binding, _) =>
+      used.contains binding.name || operational.any (fun root => root.name == binding.name)
+    let required := [ret] ++ returnLoopWrittenTypes iterationBody
+    let mut needed : List TParam := []
+    let mut inferenceOnly : List String := []
+    -- Adding an inference input may itself mention another index. Close over
+    -- both those input types and transitive bounds before choosing formals.
+    for _ in (() :: f.tparams.map (fun _ => ())) do
+      needed := f.tparams.filter fun tp =>
+        (required ++ retained.map (·.2)).any (styMentions [tp.name])
+      for _ in f.tparams do
+        let bounds := needed.filterMap (·.upperBound)
+        needed := f.tparams.filter fun tp => needed.any (fun prior => prior.name == tp.name) ||
+          bounds.any (styMentions [tp.name])
+      let mut uncovered := needed.filter fun tp =>
+        !(retained.map (·.2)).any (styMentions [tp.name])
+      -- Inputs read solely to infer indices are metadata, and do not taint
+      -- independent returned data. Operational proof roots stay real.
+      for (binding, ty) in typedCaptures do
+        if !retained.any (fun (prior, _) => prior.name == binding.name) &&
+            uncovered.any (fun tp => styMentions [tp.name] ty) then
+          retained := retained ++ [(binding, ty)]
+          inferenceOnly := inferenceOnly ++ [binding.name]
+          uncovered := uncovered.filter fun tp => !styMentions [tp.name] ty
+    let caps := retained.map fun (binding, ty) =>
+      let original := binding.parameter.getD { name := binding.name, ty }
+      { original with
+        ty, named := false, default := none
+        typeValue := original.typeValue || inferenceOnly.contains binding.name
+        metadataForward := original.metadataForward || (binding.parameter.isNone &&
+          !operational.any (fun root => root.name == binding.name)) }
+    let endName := site.helper ++ "$end"
+    let packet := site.helper ++ "$packet"
+    let value := site.helper ++ "$returned"
+    let noneName := site.helper ++ "$none"
+    let noneValue := SExpr.block site.pos
+      [.decl site.pos noneName (some (.opt ret)) false (.ident site.pos "false"), .ident site.pos noneName]
+    let args := caps.map fun param => SExpr.ident site.pos param.name
+    let next := SExpr.ite site.pos [.cmp site.pos (.ident site.pos site.index) [(">=", .ident site.pos endName)]]
+      noneValue (some (.app site.pos (.ident site.pos site.helper)
+        ([.bin site.pos "+" (.ident site.pos site.index) (.int site.pos 1), .ident site.pos endName] ++ args) false))
+    let iteration := returnLoopOperands ret site.helper (cellVars boxed iterationBody)
+    let helperBody := SExpr.ite site.pos [.cmp site.pos (.ident site.pos site.index) [(">", .ident site.pos endName)]]
+      noneValue (some (.block site.pos [iteration, next]))
+    let tparams := needed.map fun tp =>
+      { tp with upperBound := tp.upperBound.map (·.substNames substitution) }
+    helpers := helpers ++ [.fn site.pos site.helper
+      ([{ name := site.index, ty := .name "int" }, { name := endName, ty := .name "int" }] ++ caps)
+      tparams f.fx (.opt ret) helperBody]
+    let lower := site.helper ++ "$lower"
+    let upper := site.helper ++ "$upper"
+    let call := SExpr.app site.pos (.ident site.pos site.helper)
+      ([.ident site.pos lower, .ident site.pos upper] ++ args) false
+    -- Range clauses take failure locally: a failed endpoint makes this
+    -- iteration empty and still reaches the producer's following statements.
+    let replacement := SExpr.ite site.pos
+      [.decl site.pos lower (some (.name "int")) false (cellVars boxed site.lower),
+       .decl site.pos upper (some (.name "int")) false (cellVars boxed site.upper)]
+      (.block site.pos [.decl site.pos packet (some (.opt ret)) false call,
+        .ite site.pos [.decl site.pos value none false (.query site.pos (.ident site.pos packet))]
+          (.ret site.pos (some (.ident site.pos value))) (some (.tuple site.pos []))])
+      (some (.tuple site.pos []))
+    replacements := replacements ++ [(site.pos, replacement)]
+  let changed := mapE (fun
+    | .forE p .. => replacements.lookup p
+    | _ => none) body
+  return (changed, helpers)
+
 /-- What `inlineMulti` gives: the program with the functions that have
     several values inlined at their calls; whether some are taken lazily
     (#246), whose consumers need a class of stack cells; the uses of methods
@@ -4107,6 +4457,9 @@ def noteConsumers (f : MFn) (has : SExpr → Bool) : SExpr :=
 structure Inlined where
   tops : List STop
   lazy : Bool := false
+  /-- Boxed logical locals need their private cell class even if no live
+      consumer materializes the helper's body. -/
+  logicalCells : Bool := false
   familySites : List (Pos × String) := []
   overloadSites : List (Pos × String) := []
   nestedSites : List String := []
@@ -4167,6 +4520,41 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
   -- normalized: the elaborator's (`TyEnv.fieldOrder`), as an earlier
   -- elaboration noted it (`orders`)
   let fieldOrder (n : String) : FieldOrder := { fields := (orders.lookup n).getD [] }
+  -- Source loop exits become a lazy helper only after its lexical input
+  -- types and return target have been recorded in their original world.
+  let loopTargets := rawMfs.filterMap fun (owner, original) =>
+    if !anyE (fun | .forE _ _ body => hasReturn body | _ => false) original.body then none else
+    let f : MFn := { original with body := alphaReturnLoopLocals owner original.body }
+    let sites := returnLoopSites owner f mv
+    if sites.isEmpty then none else some (owner, f, sites, original.body)
+  if !loopTargets.isEmpty then
+    let ready := loopTargets.all fun (owner, f, sites, _) => loopNotesReady owner f.tparams sites nested
+    let mut rewritten := tops
+    let mut original := checking
+    let mut helperNames := []
+    if ready then
+      for (owner, f, sites, checked) in loopTargets do
+        let (body, helpers) ← lowerReturnLoops owner f sites nested
+        rewritten := rewritten.map fun
+          | .fn p name params tparams fx ret old =>
+            .fn p name params tparams fx ret (if p == f.pos then body else old)
+          | top => top
+        rewritten := rewritten ++ helpers
+        original := original ++ [(f.pos, checked)]
+        helperNames := helperNames ++ helpers.filterMap fun | .fn _ name .. => some name | _ => none
+      let result ← inlineFns rewritten eager (lazy ++ helperNames) overloadPicks nested orders sites methodOvSites pending original nestDone methodTemplates
+      let needsCells := loopTargets.any (fun (_, _, loops, _) => loops.any (fun entry => !entry.boxed.isEmpty))
+      return { result with logicalCells := result.logicalCells || needsCells }
+    else
+      for (owner, f, loops, _) in loopTargets do
+        let body := noteReturnLoops owner f.ret f.tparams loops f.body
+        rewritten := rewritten.map fun
+          | .fn p name params tparams fx ret old =>
+            .fn p name params tparams fx ret (if p == f.pos then body else old)
+          | top => top
+      let result ← inlineFns rewritten eager lazy overloadPicks nested orders sites methodOvSites
+        (pending ++ loopTargets.map (·.2.1.pos)) checking nestDone methodTemplates
+      return { result with nestedSites := result.nestedSites ++ loopTargets.flatMap (fun (_, _, loops, _) => loops.map (·.key)) }
   -- Analyze recursive shapes after source returns have selected their paths.
   -- Keep original bodies for checking and nonrecursive inline boundaries.
   -- (#283) Its own `defer:`s after its value, as an inlined body's are, so

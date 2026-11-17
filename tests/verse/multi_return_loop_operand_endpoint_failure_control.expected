@@ -1,0 +1,28 @@
+low 1
+high 2
+out 12
+yes 2
+out 22
+yes 3
+state 22
+out 10
+upper 0
+out 20
+upper 1
+state 20
+out 10
+lower -1
+out 20
+lower 0
+state 20
+low 1
+high 2
+out 12
+first 3
+state 12
+out 10
+fallback 1
+state 10
+none 0
+after
+exit=0

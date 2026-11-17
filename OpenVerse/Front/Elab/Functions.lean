@@ -1,6 +1,7 @@
 /- Elaboration of a program's field defaults and functions (phases 13–14 of
    `elabProgramCore`); public declarations retain OpenVerse.Front names. -/
 import OpenVerse.Front.Elab.Signatures
+import OpenVerse.Front.MetadataReceivers
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -145,6 +146,28 @@ def checkParamDefaults (ctx : Ctx) (st0 : ESt) (name : String) (ps : List SParam
       if suspends msg then
         throw s!"{msg}: {what} cannot suspend, also of a <suspends> function (Book of Verse tests, DefaultNamed.versetest)"
 
+/-- Keep each actual Core signature's full call type. The metadata receiver
+    projector binds generic parameters only from actual hidden witnesses;
+    opaque binders never become caller-scope type certificates. -/
+private def metadataReturns (signatures : List Sig) (count : Nat) : Array (Option MetadataReceivers.CallType) := Id.run do
+  let mut types := Array.replicate count none
+  let mut seen := Array.replicate count false
+  for signature in signatures do
+    if signature.idx < count then
+      let frame := signature.frame
+      let witnesses := (signature.tparams.filter fun (name, _) => !signature.selfTps.contains name).zipIdx.map
+        fun ((name, _), index) => (name, frame.witnessBase + index)
+      let candidate := if frame.valid then
+        some ({ params := signature.params, ret := signature.ret, witnesses } : MetadataReceivers.CallType)
+        else none
+      if seen[signature.idx]! then
+        -- A conflict is sticky: a later duplicate cannot resurrect a hint.
+        if types[signature.idx]! != candidate then types := types.set! signature.idx none
+      else
+        seen := seen.set! signature.idx true
+        types := types.set! signature.idx candidate
+  return types
+
 /-- A function or a constant of the program, elaborated (`elabFunctions`):
     its Verse Core code and the types of its slots, where it first calls
     `Err()` (#235), which of its locals live in a source frame (`FrameRefs`),
@@ -174,7 +197,8 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
     (decides : Bool) (allowed : List String) (tps : List (String × Bool)) (body : SExpr)
     (suspends : Bool := false) (selfTps : List String := [])
     (selfFieldOf : Option (String → Option Nat) := none)
-    (evidenceSignature : Option Sig := none) (extendedDefaults : Bool := false) :
+    (evidenceSignature : Option Sig := none) (extendedDefaults : Bool := false)
+    (callOnly : Bool := false) (fnReturns : Array (Option MetadataReceivers.CallType) := #[]) :
     Except String ElaboratedFn := do
   -- (#209) the values of `selfTps` come from the receiver's hidden
   -- fields, in slots after the hidden parameters: a method's own class's
@@ -259,13 +283,39 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
   let frames : FrameRefs.Info := {
     explicit := ps.length, copies := st.frameCopies, forwarded, slots := st.frameSlots.map fun (i, s) =>
       (i, { frame := s.frame, name := s.name, args := s.args.map (Ty.toVTy env) }) }
+  let cellTag := if env.classIx.isEmpty then
+      if env.classes.contains "$varcell" then some (env.tagOf "$varcell") else none
+    else env.classIx["$varcell"]?
+  let transportTag := if env.classIx.isEmpty then
+      if env.classes.contains "$lazycell" then some (env.tagOf "$lazycell") else none
+    else env.classIx["$lazycell"]?
+  let metadataBody := initPrefixE arity selfInits e
+  let projected := if cellTag.isSome then MetadataReceivers.project env st.slotTys metadataBody fnReturns
+    else { body := metadataBody }
   let metadata : MetadataFlow.Info := {
     pos := p, inputs, required, seeds := inputs ++ st.metadataSeeds, uses := st.metadataUses
     shared := st.frameSlots.map (·.1), metadataWrites := st.metadataWrites
+    cellTag
+    cellTransportTag := transportTag
+    extraSlots := projected.extraSlots.size
+    objectFreeSlots := if cellTag.isNone then [] else
+      (st.slotTys ++ projected.extraSlots).toList.zipIdx.filterMap fun (ty, i) =>
+        if MetadataValues.objectFree (ty.toVTy env) then some i else none
+    cellParams := ptys.zipIdx.filterMap fun (ty, i) =>
+      match ty with | .struct "$varcell" _ => some i | _ => none
+    cellSlots := st.slotTys.toList.zipIdx.filterMap fun (ty, i) =>
+      match ty with | .struct "$varcell" _ => some i | _ => none
+    nonCellSlots := (if cellTag.isNone then [] else st.slotTys.toList.zipIdx.filterMap fun (ty, i) =>
+      let disjoint := match ty with
+        | .param .. | .any | .dyn => false
+        | .struct owner _ => !env.isSub "$varcell" owner
+        | _ => true
+      if disjoint then some i else none) ++ projected.nonCellSlots
+    cellHelper := callOnly || name.startsWith "$sourceLoopReturn"
     source := frames
     borrowTasks := defaultBridge name || choiceDefaultBridge name || requests.casts.any (·.name == name) ||
       resume.any (·.borrowTasks)
-    body := some (initPrefixE arity selfInits e) }
+    body := some projected.body }
   return { fn := { name, arity, nslots := st.nslots, decides, writes := allowed.contains "writes",
                    body := initPrefixE arity inits e },
            slotTys := spawnParamTypes env name (st.slotTys.toList.map (Ty.toVTy env)), errAt := st.errAt,
@@ -281,7 +331,16 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
     (extendedDefaults : Bool := false) :
     Except String (Array ElaboratedFn) := do
   let allSigs := sigs.all
+  let fnReturns := metadataReturns allSigs sigs.prog.fns.length
   let genvOf (g : Sig) : TyEnv := g.typeEnv env
+  -- FirstLift records the exact compiler-owned family materialized for a
+  -- rewritten source consumer. Its original public source owner remains a
+  -- root; these helpers are checked with that consumer's actual captures.
+  let firstHelpers := requests.loops.foldl (fun names lift =>
+    if !lift.name.startsWith "$first" then names else
+      lift.extraFns.foldl (fun names top => match top with
+        | .fn _ name .. => names.insert name ()
+        | _ => names) (names.insert lift.name ())) ({} : Std.HashMap String Unit)
   -- (the functions, then the generic ones, by index)
   let mut elaborated : Array ElaboratedFn := #[]
   for (top, idx) in sigs.tops.zip (List.range sigs.tops.length) do
@@ -289,7 +348,7 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
     match top with
     | .fn p n ps _ _ _ body =>
       elaborated := elaborated.push (← elabFn allSigs sigs.prog requests env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
-        (evidenceSignature := some sig) (extendedDefaults := extendedDefaults))
+        (evidenceSignature := some sig) (extendedDefaults := extendedDefaults) (callOnly := firstHelpers.contains n) (fnReturns := fnReturns))
     | .const p n _ sty body =>
       -- a constant is computed at each use, so it would be a new object each
       -- time (until Verse Core has global state)
@@ -337,7 +396,7 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
     | .fn p n ps _ _ _ body =>
       elaborated := elaborated.push (← elabFn allSigs sigs.prog requests (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body
         g.suspends g.selfTps ((requests.casts.find? (·.name == n)).map fun l => fun v =>
-          (l.opened.lookup v).bind (env.witnessField? l.target ·)) (some g) extendedDefaults)
+          (l.opened.lookup v).bind (env.witnessField? l.target ·)) (some g) extendedDefaults (firstHelpers.contains n) fnReturns)
     | _ => pure ()
   return elaborated
 

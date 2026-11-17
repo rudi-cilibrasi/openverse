@@ -37,6 +37,15 @@ if lake env lean -j1 --run tests/lean/MetadataFacts.lean >"$logs/metadata-facts"
 else
   rc=$?; cat "$logs/metadata-facts"; exit "$rc"
 fi
+echo "== physical Core write annotations"
+bash tests/scripts/test-physical-writes.sh
+bash tests/scripts/test-metadata-values.sh
+bash tests/scripts/test-metadata-closed-transfers.sh
+bash tests/scripts/test-metadata-receivers.sh
+bash tests/scripts/test-metadata-cells.sh
+bash tests/scripts/test-metadata-cell-flow.sh
+bash tests/scripts/test-metadata-incoming-cells.sh
+bash tests/scripts/test-metadata-logical-cells.sh
 echo "== source-frame rewrite contracts"
 # Like the proof build, this check loads Lean modules. Run it before the
 # virtual-memory cap applied to generated programs below.
@@ -57,6 +66,8 @@ if lake env lean -j1 --run tests/lean/SuspendBreaks.lean >"$logs/break-contracts
 else
   rc=$?; cat "$logs/break-contracts"; exit "$rc"
 fi
+echo "== helper type-note contracts"
+lake env lean -j1 --run tests/lean/TypeNotes.lean
 echo "== source-profile compiler API contracts"
 if lake env lean -j1 --run tests/lean/SourceProfile.lean >"$logs/profile-contracts" 2>&1; then
   cat "$logs/profile-contracts"
@@ -123,11 +134,15 @@ echo "== owner-private metadata store contracts"
 tests/scripts/test-metadata-private-stores.sh
 echo "== invocation-local return metadata compiler API contracts"
 bash tests/scripts/test-return-boundary-metadata.sh
+echo "== lazy range-loop return metadata contracts"
+bash tests/scripts/test-loop-return-operand-metadata.sh
 echo "== choice-bearing initializer metadata contracts"
 bash tests/scripts/test-initializer-choice-metadata.sh
 # Fixed-budget compilation probes run before parallel jobs compete for CPU.
 echo "== enclosing cleanup growth and state resource contracts"
 python3 tests/scripts/test-enclosing-cleanup-growth.py
+echo "== lazy range-loop return runtime and growth contracts"
+python3 tests/scripts/test-loop-return-operands.py
 
 # (from here on, each process may use at most CHECK_MEM_GB of virtual memory, 4 by default: on
 # 2026-11-09 a Lean run of a generated program reached 60 GB on a dev machine, and on a 16 GB CI

@@ -90,9 +90,22 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
     | .app _ (.ident _ "$noteTypes") (.str _ [.text key] :: ns) false => do
       -- (#283) a consumer in a recursive group's code, kept for checking
       -- until its function of its own is made (`Choice.nestFns`): the types
-      -- of the names it takes and gives, as they are here
-      for n in ns.filterMap (fun | .ident _ n => some n | _ => none) do
-        if let some l := ctx.lookup n then noteNeeds { nested := [(key ++ n, l.ty.toSTy)] }
+      -- of the names it takes and gives, as they are here. An annotation
+      -- can also record a return target in this refined world without
+      -- constructing a value or binding a local of that type.
+      for entry in ns do
+        match entry with
+        | .ident _ n =>
+          if let some l := ctx.lookup n then noteNeeds { nested := [(key ++ n, l.ty.toSTy)] }
+        | .decl q n (some annotation) _ _ =>
+          let ty ← resolveTy ctx.types q annotation
+          noteNeeds { nested := [(key ++ n, ty.toSTy)] }
+        | .app _ (.ident _ "$captureEvidence") [] false =>
+          -- Implicit member/container views can need a real proof whose
+          -- name does not occur in the source expression being lifted.
+          for root in ctx.captureEvidence [] do
+            noteNeeds { nested := [(key ++ "$evidence/" ++ root.name, root.ty.toSTy)] }
+        | _ => pure ()
       pure (⟨.lit .void, .void⟩, ctx)
     | .app p (.ident _ "$freeNames") (.ident _ f :: ns) false => do
       -- (#283) the names an inlined body uses from outside: not bound
