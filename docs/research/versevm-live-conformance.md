@@ -47,6 +47,13 @@ client for playtesting, and Epic says the client cannot run in virtual
 machines. [UEFN installation](https://dev.epicgames.com/documentation/fortnite/install-and-launch-fortnite-creative-and-unreal-editor-for-fortnite)
 · [Epic's virtual-machine support statement](https://www.epicgames.com/help/c-34254770/c-38015632/a25107496).
 
+UEFN also offers **Connect To Platform** for a console or phone signed in
+with the editor's Epic account. That gives the playtest a separate client
+if the editor works in a Windows guest. Editor startup and session launch
+in this guest configuration still need verification.
+[Epic's playtest instructions](https://dev.epicgames.com/documentation/en-us/fortnite/playtesting-your-island-in-unreal-editor-for-fortnite)
+· [Epic's mobile instructions](https://dev.epicgames.com/documentation/fortnite/playtesting-on-mobile-devices-in-fortnite).
+
 ## Run the same probe bodies
 
 The sources are under [tests/conformance/versevm](../../tests/conformance/versevm).
