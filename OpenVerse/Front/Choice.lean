@@ -4322,14 +4322,10 @@ private partial def noteReturnLoops (owner : String) (ret : STy) (parameters : L
       if let .forE q clauses iteration := e then
         let checked := match site.arraySource, clauses with
           | some source, [.gen gp index none _] =>
-            let iterable := site.helper ++ "$iterable"
-            -- This checking-only value block stays in the original for
-            -- header's failure/effect context. It evaluates no extra source
-            -- expression and notes the whole iterable's selected type.
-            .forE q [.gen gp index none (.block source.pos
-              [.decl source.pos iterable none false source,
-               note source.pos site.key [.ident source.pos iterable],
-               .ident source.pos iterable])] iteration
+            let key := site.key ++ site.helper ++ "$iterable"
+            let marked := SExpr.app source.pos (.ident source.pos "$noteLoopIterator")
+              [.str source.pos [.text key], source] false
+            .forE q [.gen gp index none marked] iteration
           | _, _ => e
         return .block e.pos [note e.pos site.key
           (.app e.pos (.ident e.pos "$captureEvidence") [] false :: site.captures.map (fun binding => .ident e.pos binding.name) ++
@@ -4414,6 +4410,13 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
       match ty with
       | .arr _ => pure ty
       | _ => throw s!"{site.pos.show}: lazy loop return operands currently require an array-valued iterator (#686)"
+    if let (some source, some (.arr (.name "$never"))) := (site.arraySource, arrayType) then
+      -- The source can still fail or have effects. Use ordinary iteration
+      -- to handle it, with no helper that would bind an impossible item.
+      let iteration := SExpr.forE site.pos [.gen site.pos site.index none (cellVars boxed source)]
+        (.tuple site.pos [])
+      replacements := replacements ++ [(site.pos, iteration)]
+      continue
     let typedCaptures ← site.captures.mapM fun binding => do
       let some ty := types.lookup (site.key ++ binding.name) | throw "internal: missing loop capture"
       let ty := ty.substNames substitution
