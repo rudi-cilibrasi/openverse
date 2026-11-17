@@ -1,0 +1,10 @@
+other 7
+other 8
+cleanup 10
+loop 0
+cleanup 20
+loop 11
+cleanup 10
+first 1
+after
+exit=0

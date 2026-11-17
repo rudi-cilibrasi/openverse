@@ -1,0 +1,15 @@
+early 90
+row 1 12
+row 2 24
+out 124
+all3 14
+row 2 134
+out 234
+all3 125
+row 1 12
+out 112
+all1 12
+out 212
+all1 113
+after
+exit=0

@@ -2171,10 +2171,34 @@ Main():void =
   still runs per produced value. Only that normal arm reaches the binding and
   suffix, so the suffix is retained once.
 
-  Multi-valued return operands inside captured loops remain an implementation
-  limit (#686). Other return-containing initializer shapes retain their
-  existing restrictions. Direct concurrency forms are not supported within a
-  scalar captured expression. Existing source restrictions on returns inside
+  An integer-range `for` with single-valued endpoints and an ordinary
+  iteration body that is single-valued also supports choices in its return
+  operands:
+
+  ```verse
+  RangeReturn(N:int)<transacts>:int =
+      for (I := 1..N):
+          if (I = 2): return I | I + 1
+      N | N + 1
+  # RangeReturn(3): 2, 3; RangeReturn(1): 1, 2
+  ```
+
+  Operands are taken lazily, saved before iteration cleanup, and re-evaluated
+  after the preceding value's iteration and enclosing function cleanup.
+  Captured mutable locals retain their invocation storage across those values.
+  Range endpoints are evaluated once in source order. If a scalar endpoint
+  fails, its range is empty, its clause effects roll back, and the producer
+  reaches its following statements. A maximum-integer endpoint does not
+  require an extra increment.
+  Source type, failure-context and event-effect checks still apply before this
+  lowering. Selected generic types and real implicit proof capabilities stay
+  attached to the loop site; metadata proof inputs cannot grant those views.
+
+  Other multi-valued loop shapes, including choice-bearing endpoints,
+  nested returning loops and mutable implicit proof captures, remain
+  implementation limits (#686). Other return-containing initializer shapes
+  retain their existing restrictions. Direct concurrency forms are not
+  supported within a scalar captured expression. Existing source restrictions on returns inside
   expressions or conditions continue to apply.
 
   Cleanup stays with the scope that registered it. A returning branch runs

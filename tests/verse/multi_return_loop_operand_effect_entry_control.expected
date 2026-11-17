@@ -1,0 +1,24 @@
+pre 1 10
+pre 2 20
+out 120
+all 20
+out 220
+all 121
+state 220
+pre 1 10
+pre 2 20
+out 120
+first 21
+state 120
+none 0
+pre 1 10
+out 110
+short 10
+out 210
+short 111
+out 100
+empty 0
+out 200
+empty 101
+after
+exit=0

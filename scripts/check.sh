@@ -123,11 +123,15 @@ echo "== failed local-copy metadata rollback contracts"
 tests/scripts/test-metadata-rollback-copies.sh
 echo "== invocation-local return metadata compiler API contracts"
 bash tests/scripts/test-return-boundary-metadata.sh
+echo "== lazy range-loop return metadata contracts"
+bash tests/scripts/test-loop-return-operand-metadata.sh
 echo "== choice-bearing initializer metadata contracts"
 bash tests/scripts/test-initializer-choice-metadata.sh
 # Fixed-budget compilation probes run before parallel jobs compete for CPU.
 echo "== enclosing cleanup growth and state resource contracts"
 python3 tests/scripts/test-enclosing-cleanup-growth.py
+echo "== lazy range-loop return runtime and growth contracts"
+python3 tests/scripts/test-loop-return-operands.py
 
 # (from here on, each process may use at most CHECK_MEM_GB of virtual memory, 4 by default: on
 # 2026-11-09 a Lean run of a generated program reached 60 GB on a dev machine, and on a 16 GB CI

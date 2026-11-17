@@ -600,10 +600,50 @@ Where the first success is taken, those clauses are a function of their own sinc
 `checkBody` reads an exclusive choice as an if-chain on its guards.
 Programs without one compile byte for byte as before. The last statement's branches return
 their values (`tailReturns`), and a `return` without a value gives `()`.
-The rest copied into branches that fall through doubles the code with
-each such `if`, so a function with more than 16 is refused. A `return`
-elsewhere (in a loop, a condition, an expression), or in a recursive one,
-is refused.
+`elimReturns` keeps the ordinary branch form for small bodies. Above 16
+returning conditionals, or when an expression needs a return boundary,
+`elimLinearReturns` uses typed return-or-fallthrough packets and keeps each
+following suffix once. Balanced statement scopes limit nesting depth; 16 is
+a normalization threshold, not an admission limit. Cleanup normalization
+saves each operand before running the reached registrations, in lexical
+LIFO order. A return discards later statements and registrations that were
+never reached.
+
+Scalar returns in a loop or binding initializer use an invocation-local
+`$returnBoundary`. This catches the producer's exit before its body is
+inlined into a consumer. A choice-bearing normal initializer arm can move
+its binding and suffix into that arm when its conditions expose no new
+bindings or refinement world. The original source still undergoes scope,
+type, effect and exit checks; the generated boundary grants no permission
+to leave a failure context.
+
+An integer-range loop with single-valued endpoints and a single-valued
+ordinary body can instead yield
+several return operands lazily (#686). `returnLoopSites` records eligible
+sites; `$noteTypes` discovers their capture types, type parameters and
+return target in the original selected world. Declaration-site notes retain
+the types needed to box mutable captures without moving a refinement before
+it is introduced. Evidence notes use `Ctx.captureEvidence`, including its
+existing readonly proof-carrier rules. Helpers retain operational proof
+roots and transitive parameter bounds, preserve their roles, and prune
+unneeded inputs. Already evaluated parameters are passed without rerunning
+named defaults. Sibling lexical bindings are renamed before boxing, and a
+boxed initializer runs before construction of its cell.
+
+`lowerReturnLoops` makes a private lazy search helper returning an optional
+result. Each operand is first saved at the source return type, then wrapped
+as a present result; wrapping an unevaluated choice in `option{...}` would
+incorrectly take only its first success. An absent result resumes normal
+fallthrough. The next operand sees the preceding value's reached cleanup,
+and first-success consumption skips unused operands. Range bounds run once
+in source order in conditional bindings, preserving the range clause's
+failure context: a failed endpoint rolls back those bindings and reaches
+the producer's following statements. Choice-bearing endpoints retain an
+implementation refusal, since an ordinary range can enumerate every endpoint
+combination. The helper tests the final endpoint before incrementing,
+including the maximum integer. An early return runs no later iteration or
+function suffix. Nested returning loops, concurrent iteration bodies and
+mutable implicit proof captures retain explicit implementation refusals.
 
 A function with several values (#235) is inlined before elaboration, by
 `Choice.inlineMulti`, which runs right after module resolution. A method
@@ -895,6 +935,12 @@ code after one call and the values of the names that code uses.
   The loop elaborates that prefix once (`loopFramesWith`) and runs it with
   the call's arguments, in the item's step, as an argument's code, which
   stays when the callee's clauses fail; the frame keeps its names.
+- Frame holes have a fresh serial within one normalization traversal,
+  qualified by the member function. Source positions alone do not identify
+  them: balanced return blocks can put distinct continuation points at the
+  same position. `normAltM`, `normTailM`, `bodyTail?M` and `contBody?M` share
+  that serial state. Leaves marked `$sameFrame` retain their owning frame's
+  exact identity, and `copyHoles` still distinguishes instance copies.
 - The loop's items keep one more name, the continuation `$K`, a list of
   `$lazycell`s, innermost frame first. A frame is a tuple with one option
   per `$then` of the group, the one of the call that pushed it holding its
@@ -1027,6 +1073,12 @@ code after it, which is its frame.
   function of its own, `{name}$retN`, the value given to the one of its
   type (`firstBody`'s `retOf`), and `$frameReturn` gives the final value at
   the result type its name, `$Vfin`.
+  A nested continuation member is probed by binding its point's hole,
+  elaborating its prefix and following its tail in the resulting branch
+  contexts. This preserves intermediate types such as a nested optional
+  return packet instead of guessing the producer's result type. The probe
+  restores its temporary elaboration state. Prefix locals are in scope
+  when probing the point (`loopFlatWith` uses its post-prefix context).
 
 - A point where `frameOf?` does not look (a comparison's later operand, a
   `set`'s value, before its old value is read, a named argument, a struct's field in
@@ -1068,6 +1120,12 @@ code after it, which is its frame.
   …)))` (`Choice.enterOf`): a value of no use, `()`, whose frame's hole is
   `void`, so it is a value with a frame as any choice's alternative is. Alone
   in its leaf, that code is the leaf's path code instead (`$returnTail`).
+  At a member's own tail, `normTailM` removes such a unit entry only when
+  its hole is unused and its prefix is plain, keeping that prefix and the
+  tail's selection under `$returnTail`. Entry frames inside alternatives
+  remain. Shape checking treats return-tail markers as transparent; only
+  proven-plain prefixes lose those markers when passed to ordinary
+  elaboration. This keeps path scopes while avoiding redundant frames.
 
 **Consumers in a group's own code (#283).** A call of a function with
 several values, the group's or another's, in a failure context of the
