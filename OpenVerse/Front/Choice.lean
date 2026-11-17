@@ -4241,6 +4241,19 @@ private def loopBinding : SExpr → Option LoopCapture
   | .gen p name _ _ => some { name, pos := p }
   | _ => none
 
+/-- A break governed by this iteration can reach the producer suffix. -/
+private partial def hasOwnLoopBreak : SExpr → Bool
+  | .brk .. => true
+  | .forE .. | .loop .. => false
+  | e => e.children.any hasOwnLoopBreak
+
+/-- Explicit terminal paths cannot reach the helper's next iteration. -/
+private partial def loopIterationTerminal : SExpr → Bool
+  | .ret .. | .brk .. => true
+  | .block _ statements => statements.any loopIterationTerminal
+  | .ite _ _ yes (some no) => loopIterationTerminal yes && loopIterationTerminal no
+  | _ => false
+
 private def uniqueLoopCaptures (bindings : List LoopCapture) : List LoopCapture :=
   bindings.foldl (fun out binding =>
     if out.any (fun prior => prior.name == binding.name && prior.pos == binding.pos) then out else out ++ [binding]) []
@@ -4433,7 +4446,7 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
        .ite p [.decl p value none false (.query p (.ident p packet))]
          (.ret p (some (.ident p value))) (some (.tuple p []))]
     let iterationBody := cellVars boxed iterationBody
-    let (parameters, helperBody, replacement) : List SParam × SExpr × SExpr := match site.source with
+    let (parameters, helperRet, helperBody, replacement) : List SParam × STy × SExpr × SExpr := match site.source with
       | .range index lower upper =>
         let endName := site.helper ++ "$end"
         let cursor := SExpr.ident p index
@@ -4451,15 +4464,20 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
            .decl p high (some (.name "int")) false (cellVars boxed upper)]
           (resume [.ident p low, .ident p high]) (some (.tuple p []))
         ([{ name := index, ty := .name "int" }, { name := endName, ty := .name "int" }],
-          helperBody, replacement)
+          .opt ret, helperBody, replacement)
       | .loop =>
         -- A break returns an absent result from the helper. Nested loops
         -- own their breaks and remain inside the current iteration.
-        let iteration := returnLoopOperands ret site.helper (some noneValue) iterationBody
-        ([], .block p [iteration, call []], resume [])
+        let mayBreak := hasOwnLoopBreak iterationBody
+        let iteration := if mayBreak then returnLoopOperands ret site.helper (some noneValue) iterationBody
+          else iterationBody
+        let helperBody := if loopIterationTerminal iterationBody then iteration
+          else SExpr.block p [iteration, call []]
+        let replacement := if mayBreak then resume [] else .ret p (some (call []))
+        ([], if mayBreak then .opt ret else ret, helperBody, replacement)
     let tparams := needed.map fun tp =>
       { tp with upperBound := tp.upperBound.map (·.substNames substitution) }
-    helpers := helpers ++ [.fn p site.helper (parameters ++ caps) tparams f.fx (.opt ret) helperBody]
+    helpers := helpers ++ [.fn p site.helper (parameters ++ caps) tparams f.fx helperRet helperBody]
     replacements := replacements ++ [(p, replacement)]
   let changed := mapE (fun
     | .forE p .. | .loop p _ => replacements.lookup p
