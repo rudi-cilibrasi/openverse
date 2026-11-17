@@ -658,6 +658,16 @@ Ordinary heap permissions and shared-field checks
 remain in force. Merged older objects, deeper tuple shapes and call-result
 receivers without a type certificate retain conservative classifications.
 
+
+Metadata validation partitions independent entries by a conservative
+closed-entry certificate: object-free formals and no reachable metadata
+inputs, seeds, metadata results, annotated metadata writes, reference
+literals, borrowed or foreign source state, or unknown calls in either
+logical or physical bodies. Closed entries retain ordinary role and
+admission checks without interpreting private aliases. Open entries run
+the complete analysis in a separate fresh state. Queues, summaries and
+proofs never cross the two premises; every independent entry is checked.
+
 `lowerReturnLoops` makes a private lazy search helper returning an optional
 result. Each operand is first saved at the source return type, then wrapped
 as a present result; wrapping an unevaluated choice in `option{...}` would

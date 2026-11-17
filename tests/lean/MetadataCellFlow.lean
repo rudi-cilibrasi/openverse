@@ -813,6 +813,131 @@ def main : IO Unit := do
   if bad > 0 then throw <| IO.userError "formal tuple metadata policy failed"
 end FormalTupleMetadata
 
+namespace MixedRootCertificate
+
+open OpenVerse OpenVerse.Front
+
+/- Compiler-policy boundary model, with valid Core programs. Tag0 represents
+   the generic compiler cell and tag1 an opaque executable carrier. Execute
+   and Reader are internal bridges, so only the two named root functions are
+   independent entries. No forged objectFree certificate is supplied for a
+   reference formal. The sequential Reader variant avoids the getter fast path.
+   MetadataFlow validates every independent root, even if Main selects only
+   ClosedRoot in this concrete program. No Source/runtime claim is made. -/
+private def callable : VTy := .ref [1] []
+private def cell : VTy := .ref [0] [callable]
+private def realCell : Expr := .heap (.new 0) [.heap (.new 1) []]
+private def readAndExecute (value : Expr) : Expr := .call 0 [.call 1 [value]]
+
+private def program (reverse indirect : Bool) (mode : String) : Array Fn × Sigs × List (List VTy) × Array MetadataFlow.Info × Nat := Id.run do
+  let readerBody := Expr.heap (.get 0) [.local 0]
+  let readerBody := if indirect then Expr.seq (.lit .void) readerBody else readerBody
+  let sink : Fn := { name := "Execute", arity := 1, nslots := 1, decides := false, body := .lit .void }
+  let reader : Fn := { name := "$sourceLoopReturnReader", arity := 1, nslots := 1, decides := false, body := readerBody }
+  let closed : Fn := { name := "ClosedRoot", arity := 0, nslots := 0, decides := false, body := readAndExecute realCell }
+  let openReal := mode == "all-real-open"
+  let opened : Fn := {
+    name := "OpenRoot", arity := (if openReal then 0 else 1),
+    nslots := (if openReal then 0 else 1), decides := false,
+    body := readAndExecute (if openReal then realCell else .local 0) }
+  let fns := #[sink,reader] ++ (if reverse then #[opened,closed] else #[closed,opened])
+  let closedIndex := if reverse then 3 else 2
+  let openedIndex := if reverse then 2 else 3
+  let rootTypes := if reverse then [if openReal then [] else [cell], []] else [[], if openReal then [] else [cell]]
+  let sigs : Sigs := {
+    fns := [([callable],.void),([cell],callable)] ++ rootTypes.map (fun params => (params,.void))
+    classes := [[.var 0],[]], pins := [[none],[]] }
+  let slots := [[callable],[cell]] ++ rootTypes
+  let infos := fns.mapIdx fun index fn => {
+    body := some fn.body, cellTag := some 0
+    cellHelper := index < 2 || (index == openedIndex && mode == "hidden-open")
+    cellParams := if index == 1 || (index == openedIndex && !openReal) then [0] else []
+    cellSlots := if index == 1 || (index == openedIndex && !openReal) then [0] else []
+    inputs := if index == openedIndex && mode == "metadata-open" then [0] else []
+    required := if index == 0 then [0] else [] }
+  return (fns,sigs,slots,infos,closedIndex)
+
+def main : IO Unit := do
+  let mut bad := 0
+  for reverse in [false,true] do
+    for indirect in [false,true] do
+      for mode in ["all-real-open","hidden-open","unknown-open","metadata-open"] do
+        let (fns,sigs,slots,infos,entry) := program reverse indirect mode
+        let prog : Prog := { fns := fns.toList, main := entry }
+        let checked := prog.check && prog.checkControl && prog.checkTypes sigs slots && checkPrelude prog sigs
+        IO.println s!"reverse={reverse} indirect={indirect} mode={mode} check={prog.check} control={prog.checkControl} types={prog.checkTypes sigs slots} prelude={checkPrelude prog sigs}"
+        unless checked do throw <| IO.userError "INVALID mixed-root model"
+        let result := MetadataFlow.check fns infos #[[],[]]
+        let admitted := match result with | .ok _ => true | .error _ => false
+        let expected := mode == "all-real-open" || mode == "hidden-open"
+        IO.println s!"expected={expected} actual={repr result}"
+        if admitted != expected then bad := bad + 1
+  IO.println s!"16 policy classifications; {bad} mismatches"
+  if bad > 0 then throw <| IO.userError "mixed-root certificate boundary mismatch"
+end MixedRootCertificate
+
+namespace ZeroSlotPending
+
+open OpenVerse OpenVerse.Front
+
+/- Read-only audit model. The only prototype is ordinary mutable tag1.
+   Tag0 is a generic private cell; tag2 is an opaque callable carrier.
+   A prototype flag makes the concrete recursive call terminate after one
+   reentry. No zero-slot function accesses a local slot. MetadataProducer's
+   metadataResult is the explicit policy premise varied by this model. -/
+private def callable : VTy := .ref [2] []
+private def cell : VTy := .ref [0] [callable]
+private def makeReal : Expr := .heap (.new 0) [.heap (.new 2) []]
+private def flag : Expr := .heap (.get 0) [.lit (.ref 0)]
+private def recurBody : Expr :=
+  .ite (.prim .query [flag]) makeReal
+    (.seq (.heap (.set 0) [.lit (.ref 0), .lit (.logic true)])
+      (.prim (.tupGet 0) [.prim .mkTup [
+        .heap (.new 0) [.call 1 []],
+        .call 2 []]]))
+
+private def functions (padded : Bool) : Array Fn := #[
+  { name := "Execute", arity := 1, nslots := 1, decides := false, body := .lit .void },
+  { name := "MetadataProducer", arity := 0, nslots := 0, decides := false,
+    body := .heap (.new 2) [] },
+  { name := "$sourceLoopReturnZeroSlot", arity := 0, nslots := if padded then 1 else 0,
+    decides := false, writes := true, body := if padded then .seq (.assign 0 (.lit .void)) recurBody else recurBody },
+  { name := "Caller", arity := 0, nslots := 0, decides := false, writes := true,
+    body := .call 0 [.heap (.get 0) [.call 2 []]] },
+  { name := "Main", arity := 0, nslots := 0, decides := false, writes := true, body := .call 3 [] },
+  { name := "$prototypes", arity := 0, nslots := 0, decides := false, writes := true,
+    body := .seq (.heap (.new 1) [.lit (.logic false)]) (.call 4 []) }]
+
+private def signatures : Sigs := {
+  fns := [([callable], .void), ([], callable), ([], cell), ([], .void), ([], .void), ([], .void)]
+  classes := [[.var 0], [.logic], []]
+  pins := [[none], [], []]
+  protos := [(1, [])] }
+
+def main : IO Unit := do
+  let mut bad := 0
+  for padded in [false, true] do
+    let fns := functions padded
+    let program : Prog := { fns := fns.toList, main := 5 }
+    let slots : List (List VTy) := [[callable], [], if padded then [.void] else [], [], [], []]
+    let checked := program.check && program.checkControl && program.checkTypes signatures slots
+    IO.println s!"padded={padded} check={program.check} control={program.checkControl} types={program.checkTypes signatures slots} prelude={checkPrelude program signatures}"
+    unless checked && checkPrelude program signatures do
+      throw <| IO.userError "INVALID zero-slot pending model; do not interpret policy results"
+    for metadata in [false, true] do
+      let infos : Array MetadataFlow.Info := fns.mapIdx fun index fn => {
+        body := some fn.body, cellTag := some 0
+        cellHelper := index == 2
+        metadataResult := index == 1 && metadata
+        required := if index == 0 then [0] else [] }
+      let actual := MetadataFlow.check fns infos #[[], [], []]
+      let admitted := match actual with | .ok _ => true | .error _ => false
+      IO.println s!"padded={padded} metadata={metadata} expected={!metadata} actual={repr actual}"
+      if admitted != !metadata then bad := bad + 1
+  IO.println s!"4 policy classifications; {bad} mismatches"
+  if bad > 0 then throw <| IO.userError "zero-slot pending policy mismatch"
+end ZeroSlotPending
+
 end MetadataCellFlow
 
 def main (args : List String) : IO Unit := do
@@ -836,3 +961,5 @@ def main (args : List String) : IO Unit := do
   MetadataCellFlow.FutureCarrierAlias.main
   MetadataCellFlow.PrototypeCarriers.main
   MetadataCellFlow.FormalTupleMetadata.main
+  MetadataCellFlow.MixedRootCertificate.main
+  MetadataCellFlow.ZeroSlotPending.main
