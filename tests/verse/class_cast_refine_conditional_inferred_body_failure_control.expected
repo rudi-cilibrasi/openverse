@@ -1,0 +1,29 @@
+prefix
+body 1
+body 2
+prefix
+body 3
+body 4
+v 3 7
+v 4 7
+v 99 7
+v 100 7
+after 99 4
+rejected 3 0
+after 3 0
+empty 0 3 0
+prefix
+prefix
+after 99 0
+prefix
+prefix
+empty 0 99 0
+prefix
+body 1
+body 2
+prefix
+v 3 7
+v 4 7
+after 99 2
+rejected 3 0
+exit=0

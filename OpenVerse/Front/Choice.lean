@@ -2718,7 +2718,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       let ss ← if hasRet then do
           let some (normalized, _) := elimReturns (fun i => tag s!"$k{i}") 0
             (fun b => (stmtsOf b).any liftsHere || hasChoice (stmtsOf b)) (tyOf f.ret) ss
-            | throw s!"{q.show}: {shownFnName g} has a return in an unsupported expression: a loop or binding initializer with a return must be single-valued and cannot start concurrent work (#677)"
+            | throw s!"{q.show}: {shownFnName g} has a return in an unsupported expression: a loop or binding initializer with a return must be single-valued and cannot start concurrent work (#686, #687)"
           pure normalized
         else pure ss
       let r := tag "$r"
@@ -2868,6 +2868,9 @@ structure ForStagePlan where
   /-- A refinement prefix prepares a different world from the committing
       body. Retain the body's original lexical and rollback ownership. -/
   resumeContext : Option SourceContext := none
+  /-- Only a real source collector body carries this capability. Protocol
+      source/filter stages keep their existing private failure context. -/
+  resumeCanFail : Option Bool := none
   resumeRollback : Bool := false
   /-- Immediate refinement environments receive current caller copy-ins
       when resumed, after prefix cleanup has finished. -/
@@ -4177,7 +4180,7 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
     let some (ss, _) := elimReturns (fun i => s!"$k{i}") 0 (fun _ => false) resultType (stmtsOf f.body) true
       (fun e => hasLiftable (markCalls mv e))
       | throw (if (stmtsOf f.body).any needsReturnBoundary then
-          s!"{f.pos.show}: {shownFnName n} has several values and a return in a loop or binding initializer whose expression is not single-valued or starts concurrent work: not supported yet (#677)"
+          s!"{f.pos.show}: {shownFnName n} has several values and a return in a loop or binding initializer whose expression is not single-valued or starts concurrent work: not supported yet (#686, #687)"
         else if anyE (fun | x@(.forE ..) | x@(.loop ..) => hasReturn x | _ => false) f.body then
           s!"{f.pos.show}: {shownFnName n} has several values and a return in a for or a loop, which would leave its caller once inlined: not supported yet (#235, #283); find what the loop looks for first (in a var it sets, or a for's array) and return in an if after it"
         else s!"{f.pos.show}: {shownFnName n} has several values and a return inside an expression or a condition, which would leave its caller once inlined (#235, #283): return in an if's branch, a block or a case's arm")

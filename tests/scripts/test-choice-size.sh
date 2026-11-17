@@ -317,6 +317,7 @@ kinds=(
   bound-method-for
   bound-method-nested-first
   bound-method-phantom-first
+  bound-typed-failure
   context-value-first
   context-value-for
   context-method-first
@@ -2043,11 +2044,12 @@ if kind.startswith('bound-'):
     if kind == 'bound-first':
         print(f'Run({params} where {tparams}):int = if({clauses}, E:[]t0=array{{}}) then E.Length else -1')
     else:
-        specs = '<decides>' if kind == 'bound-failure' else ''
+        specs = '<decides>' if kind in ('bound-failure', 'bound-typed-failure') else ''
         test = '\n        1=1' if specs else ''
-        print(f'Run({params} where {tparams}){specs}:int =\n    R:=for({clauses}):{test}\n        A0\n    R.Length')
+        binding = 'R:[]t0=' if kind == 'bound-typed-failure' else 'R:='
+        print(f'Run({params} where {tparams}){specs}:int =\n    {binding}for({clauses}):{test}\n        A0\n    R.Length')
     args = ', '.join('tight(int,string){A:=1,E:="s"}' if i%2==0 else 'tight(string,int){A:="s",E:=1}' for i in range(count))
-    specs = '<decides>' if kind == 'bound-failure' else ''
+    specs = '<decides>' if kind in ('bound-failure', 'bound-typed-failure') else ''
     call = f'Run[{args}]' if specs else f'Run({args})'
     print(f'Main(){specs}:void = Print("{{{call}}}")')
     sys.exit(0)

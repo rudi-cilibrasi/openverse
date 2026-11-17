@@ -1056,7 +1056,7 @@ partial def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   -- generic/default argument bindings) inside the body. Their ownership is
   -- checked when that consumer elaborates; they do not escape the helper.
   let safeMarkers := ["$sourceSuper", "$methodMiss", "$methodCast", "$methodCase", "$methodType", "$methodParams", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
-    "$forReturns", "$forReturnBody", "$choiceOperation", "$choiceGenericOperation", "$choiceFixedOperation", "$choiceCoercions", "$choiceDictionary", "$defer", "$deferExits", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
+    "$forReturns", "$forReturnBody", "$refinementBody", "$refinementConsumer", "$choiceOperation", "$choiceGenericOperation", "$choiceFixedOperation", "$choiceCoercions", "$choiceDictionary", "$defer", "$deferExits", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
     "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$noteTypes", "$noteFails", "$declNames", "$callArgs", "$callSingleton", "$then"]
   let rec blocked (e : SExpr) : Bool :=
     match e with
@@ -1290,7 +1290,10 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
   -- The private producer loop must not impose its lexical restrictions
   -- on a source if/first consumer, or lose a real source for-body ban.
   let body := if plan.resumeContext.isSome then
-      let mark (code : SExpr) := SExpr.app p (.ident p "$refinementBody") [.str p [.text plan.base], code] false
+      let mark (code : SExpr) :=
+        let hint := if plan.resumeCanFail.isSome then
+          [SExpr.decl p "$element" (some (plan.value.substNames σ)) false (.tuple p [])] else []
+        SExpr.app p (.ident p "$refinementBody") ([.str p [.text plan.base]] ++ hint ++ [code]) false
       match body with
       | .app q f@(.ident _ name) [metadata, mode, code] false =>
         if name == "$forReturns" || name == "$forReturnBody" then
@@ -1332,7 +1335,10 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
   let copies := copyValues.map fun e => rename (Refine.substTypes σ e)
   let vals := s!"{name}$values"
   let failed : SExpr := if copies.isEmpty then .ident p "false" else .tuple p (.ident p "false" :: copies)
-  let run := if plan.resumeOriginalFor then SExpr.forE p clauses body else if plan.outcome then
+  let run := if plan.resumeOriginalFor then
+      if plan.outcome then SExpr.app p (.ident p "$forCollectOutcome") [.block p clauses, body, failed] false
+      else SExpr.forE p clauses body
+    else if plan.outcome then
       SExpr.app p (.ident p "$forFirstOutcome") [.block p clauses, body, failed] false
     else SExpr.app p (.ident p "$forFirst") [.block p clauses, body] false
   -- A resumed owner already knows the caller-nameable element type. Keep
@@ -1343,6 +1349,8 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
     SExpr.app p (.ident p "$refinementContinue")
       [.decl p "$value" (some (plan.value.substNames σ)) false (.tuple p []), run] false
     else run
+  let run := if plan.resumeCanFail.isSome then
+    SExpr.app p (.ident p "$refinementConsumer") [.str p [.text plan.base], run] false else run
   let run := forClauseExitScope body run
   let run := if ctx.forStageFlat then SExpr.app p (.ident p "$forStageFlatten") [run] false else run
   let code := if copies.isEmpty then run else .block p

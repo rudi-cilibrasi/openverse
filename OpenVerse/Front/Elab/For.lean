@@ -139,12 +139,17 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           let conditions := Choice.declNames expression.pos names ++ conditions.map (Choice.renameE ren)
           let branch := Choice.renameE ren branch
           let ready := site ++ "$ready"
-          let branchClauses := Choice.prepare [SExpr.decl branch.pos binding annotation false branch]
-            (choiceValues c) (choiceField c) (site := site ++ "$branch") (fieldOrder := choiceOrder c)
-            (keepExcl := true) (keepBranches := choiceHasCast c)
+          let branchClause := SExpr.decl branch.pos binding annotation false branch
+          -- Ordinary collectors prepare their raw suffix once in the
+          -- selected world. Legacy first continuations already require
+          -- prepared clauses; compact $loop/$each is not idempotent.
+          let branchClauses := if !firstDecides then [branchClause] else
+            Choice.prepare [branchClause] (choiceValues c) (choiceField c)
+              (site := site ++ "$branch") (fieldOrder := choiceOrder c)
+              (keepExcl := true) (keepBranches := choiceHasCast c)
           let suffix := branchClauses ++ after
           let prepare := refinementPrepareMarker c expression.pos value outcome
-            (ctx.canFail || ctx.inRollback) conditions suffix body (forBody := true)
+            (ctx.canFail || ctx.inRollback) conditions suffix body (forBody := true) (originalFor := !firstDecides)
           let consumer := forStageBodyAs body
             (.app expression.pos (.ident expression.pos "$refinementResume") [.ident expression.pos ready] false)
           (.decl expression.pos ready none false prepare, consumer)
@@ -155,10 +160,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         | branch =>
           let suffix := SExpr.forE expression.pos
             (SExpr.decl branch.pos binding annotation false branch :: after) body
-          if after.any (fun clause => (refinementConditionalBinding? c clause).isSome) then
-            .app expression.pos (.ident expression.pos "$refinementContinue")
-              [.decl expression.pos "$value" (some value.toSTy) false (.tuple expression.pos []), suffix] false
-          else suffix
+          .app expression.pos (.ident expression.pos "$refinementContinue")
+            [.decl expression.pos "$value" (some value.toSTy) false (.tuple expression.pos []), suffix] false
       let chosen := selected conditional s!"$refinementBranch{p.line}_{p.col}_{index}"
       let result := s!"$refinementBranchValues{p.line}_{p.col}_{index}"
       let consumer := forStageBodyAs body (SExpr.block p
@@ -220,6 +223,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       let .arr (.arr t) := r.ty | eerr p "internal: refinement consumer values"
       return ⟨← flattenValues r, .arr t⟩
   let stagePlan := ctx.forStage
+  let bodyExpected := if firstDecides || stagePlan.isSome then none else transport
   let stageArgs := ctx.forStageArgs
   let stageFlat := ctx.forStageFlat
   let stageCopies := ctx.forStageCopies
@@ -811,7 +815,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         return (filt, pick arrs (.lit Value.emptyArray), t)
     match gs with
     | [] =>
-      let r ← elabE (bodyCtx c) bd none
+      let r ← elabE (bodyCtx c) bd bodyExpected
       -- The generated arrays must infer their element type during
       -- suspension lowering. As for array/tuple literals, a body that
       -- never completes has Core's void type without changing its exit.
@@ -1143,7 +1147,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         | e => .seq e filt
       levels := levels.push (slot, src, srcTy, filt)
       c := c2
-    let r ← elabE (bodyCtx c) body none
+    let r ← elabE (bodyCtx c) body bodyExpected
     let r := if r.ty == .never then { r with e := .seq r.e (.lit .void) } else r
     let mutable := c.locals.filterMap fun l => if l.mutable && l.slot >= start then some l.slot else none
     let fx := forClauseEffects fun s => s < start || mutable.contains s
