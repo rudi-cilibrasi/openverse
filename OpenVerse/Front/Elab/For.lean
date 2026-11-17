@@ -231,7 +231,6 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
   let ctx := { ctx with liftWhy := "", forStage := none, forStageArgs := [], forStageFlat := false, forStageCopies := [], forStageBorrows := [] }
   -- (a choice is a generator over its alternatives, #208; clauses lifted
   -- already, `prepared`, are not lifted again)
-  let written := clauses
   let clauses := if prepared then clauses else
     Choice.prepare clauses (choiceValues ctx) (choiceField ctx) (fieldOrder := choiceOrder ctx) (keepExcl := true)
       (keepBranches := choiceHasCast ctx)
@@ -1124,8 +1123,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         | .arr t => return ⟨← flattenValues ⟨loopE, .arr inner.ty⟩, .arr t⟩
         | _ => eerr p "internal: nested for"
   -- (A `for` whose generators are over ranges, arrays, maps, strings and
-  -- choices of values, with no call of a function with several values in
-  -- its clauses and no exclusive choice: by the Book's rule, above. One
+  -- choices of values, with no producer calls left after clause
+  -- preparation and no exclusive choice: by the Book's rule, above. One
   -- whose clauses can do nothing that undoing would change before its last
   -- generator's elements is the nested `forE`s, as they are that search;
   -- another is the search. The others keep their lowerings below, which
@@ -1137,7 +1136,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       | some b => !b.composed && b.branchy.isNone && b.each.isNone
       | none => false
   if stagePlan.isNone && (!prepared || searchPrepared) && !firstDecides && failure.isNone && !gs.isEmpty &&
-      !written.any callsManyValued && !pre.any isExcl && gs.all (fun (g, fs) => plainGen g && !fs.any isExcl) then
+      !clauses.any callsManyValued && !pre.any isExcl && gs.all (fun (g, fs) => plainGen g && !fs.any isExcl) then
     let start := (← get).nslots
     let (preE, unit, c0) ← match pre with
       | [] => pure (none, 0, ctx)
