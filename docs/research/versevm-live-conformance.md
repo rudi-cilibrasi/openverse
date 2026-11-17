@@ -38,6 +38,15 @@ launch and returned `ENOENT` for `VerseTestScriptCmdVM.exe`. The authenticated
 GitHub API calls for `EpicGames/UnrealEngine` and `EpicGames/fortniteMain`
 returned 404. The probe results below have no live Epic observations yet.
 
+QEMU and KVM are available on this Linux host. A
+[Windows evaluation guest](https://www.microsoft.com/en-us/evalcenter/evaluate-windows-11-enterprise)
+could host the standalone runner if its executable and dependencies become
+available. [Wine](https://manpages.ubuntu.com/manpages/noble/man1/wine-stable.1.html)
+is another candidate for that runner. The UEFN route requires the Fortnite
+client for playtesting, and Epic says the client cannot run in virtual
+machines. [UEFN installation](https://dev.epicgames.com/documentation/fortnite/install-and-launch-fortnite-creative-and-unreal-editor-for-fortnite)
+· [Epic's virtual-machine support statement](https://www.epicgames.com/help/c-34254770/c-38015632/a25107496).
+
 ## Run the same probe bodies
 
 The sources are under [tests/conformance/versevm](../../tests/conformance/versevm).
