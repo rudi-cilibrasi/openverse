@@ -1,0 +1,20 @@
+row 0 z
+row 0 a
+row 1 b
+row 1 a
+all 4
+all 99
+row 0 z
+row 0 a
+row 1 b
+row 1 a
+first 99
+none
+row 0 a
+short 7
+short 7
+row 0 z
+row 1 a
+string b
+string x
+exit=0

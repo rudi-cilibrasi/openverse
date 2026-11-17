@@ -1436,6 +1436,12 @@ structure LoopFrame where
       the hole's of the frame after it (a choice's frame its values go to). -/
   outTy : Option Ty := none
 
+/-- A lifted frame leaves the parameter bindings of its original prefix.
+    Resolve their lexical aliases while that prefix's context is available. -/
+def LoopFrame.liftSource (frame : LoopFrame) : String × List String × SExpr :=
+  let aliases := frame.ctx.types.tvars.map fun (name, ty) => (name, ty.toSTy)
+  (frame.hole, frame.lives.map (·.name), Refine.substTypes aliases frame.code)
+
 /-- (#283) The type of the values of a choice that go through its frame, when
     it is not the group's result type `rty` (they do not coerce to it): its
     first alternative's, a value's, or the code's after a call in it. None
@@ -2100,7 +2106,7 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
         (.seq (.assign st (.lit .none)) (push (.local r))) vd))
     | none => pure after
   return { init, step, sp, has, value, after, vty := rty, itemCode, argSet, instances, bnd := bnd?,
-           frames := frames.map (fun f => (f.hole, f.lives.map (·.name), f.code)),
+           frames := frames.map LoopFrame.liftSource,
            frameTys := frames.map (fun f => (f.inTy, f.outTy)), kTy := kl?.map (·.ty), memberTys := ownTys }
 
 /-- Check a construction's value choices at the field's expected type.
