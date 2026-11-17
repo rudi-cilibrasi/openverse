@@ -4,6 +4,9 @@ final -1 0
 all 0 99 state 0
 all 0 100 state 0
 final 0 0
+all 1 99 state 1
+all 1 100 state 1
+final 1 1
 all 3 70 state 1
 all 3 71 state 1
 final 3 1
