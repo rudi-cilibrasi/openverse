@@ -1377,7 +1377,7 @@ structure MFn where
     separate from the consumer's and from the actual Core type names. -/
 def memberTypeName (member param : String) : String := s!"$groupType_{member}_{param}"
 
-/-- The names `e` uses: as identifiers and as calls' heads. -/
+/-- The names `e` uses as identifiers and call heads, in first-use order. -/
 partial def namesUsed (e : SExpr) : List String :=
   let rec go : SExpr → List String
     | .app _ (.ident _ "$constructHints") _ false => []
@@ -1385,7 +1385,10 @@ partial def namesUsed (e : SExpr) : List String :=
     -- (a struct's field defaults, which `children` leaves out)
     | .structDef _ _ _ fs => fs.flatMap fun f => (f.default.map go).getD []
     | e => e.children.flatMap go
-  (go e).eraseDups
+  let (_, names) := (go e).foldl (fun (seen, names) n =>
+    if seen.contains n then (seen, names) else (seen.insert n, n :: names))
+    (({} : Std.HashSet String), [])
+  names.reverse
 
 /-- Whether a written type mentions one of the names `tps`. -/
 partial def styMentions (tps : List String) : STy → Bool

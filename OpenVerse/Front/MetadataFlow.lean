@@ -1441,24 +1441,28 @@ private partial def arguments (fns : Array Fn) (infos : Array Info)
   let scratch (index : Nat) : Nat :=
     4294967296 + cellPair (cellPair scratchSite refBase) index
   for (e, index) in es.zipIdx do
-    if out.value.isSome then
-      out := withExits out (← cellChild index (expr fns infos fields fn info out.slots e))
-      roles := roles ++ [out.value.getD false]
-      parts := parts ++ [out.valueParts]
-      if enabled then
-        let heap := { out.slots.heap with nslots := max out.slots.heap.nslots (scratch index + 1) }
-        out := { out with slots := { out.slots with
-          heap := MetadataCells.setLocal heap (scratch index) out.valueRefs } }
+    if out.value.isNone then break
+    out := withExits out (← cellChild index (expr fns infos fields fn info out.slots e))
+    roles := out.value.getD false :: roles
+    parts := out.valueParts :: parts
+    if enabled then
+      let heap := { out.slots.heap with nslots := max out.slots.heap.nslots (scratch index + 1) }
+      out := { out with slots := { out.slots with
+        heap := MetadataCells.setLocal heap (scratch index) out.valueRefs } }
+  -- Operand evaluation goes left to right. Reverse the accumulated roles
+  -- once so consumers see the same positional order as the parked aliases.
   let refs := if enabled then (List.range roles.length).map fun index =>
       MetadataCells.getLocal out.slots.heap (scratch index) else []
   -- All operands are now evaluated. Their final aliases are snapshotted
   -- above; constructors rebase those payloads on allocation, and calls bind
   -- them before executing a callee. Only this operation's consumed parking
   -- keys disappear. Outer pending operands and every exit snapshot remain.
-  let locals := (List.range roles.length).foldl
-    (fun locals index => locals.erase (scratch index)) out.slots.heap.locals
-  let heap := if enabled then { out.slots.heap with locals } else out.slots.heap
-  return (roles, parts, { out with slots := { out.slots with heap }, argumentRefs := refs })
+  let heap := if enabled then
+    let locals := (List.range roles.length).foldl
+      (fun locals index => locals.erase (scratch index)) out.slots.heap.locals
+    { out.slots.heap with locals }
+    else out.slots.heap
+  return (roles.reverse, parts.reverse, { out with slots := { out.slots with heap }, argumentRefs := refs })
 
 private partial def actorEnvironment (env : ScheduleEnv) (a : Actor) : Fn × Info :=
   match a.context with
