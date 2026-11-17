@@ -1,0 +1,20 @@
+cleanup 1 1
+cleanup 2 2
+all 2
+cleanup 2 3
+all 3
+cleanup 1 2
+cleanup 2 2
+all 2
+cleanup 2 3
+all 3
+cleanup 1 1
+cleanup 2 3
+first 3
+none
+cleanup 1 1
+suffix 1
+cleanup 1 2
+suffix 1
+first unused 1
+exit=0

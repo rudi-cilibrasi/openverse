@@ -2212,8 +2212,16 @@ Main():void =
   the reached return's values lazily. Choice-bearing headers can also occur
   in nested loops with otherwise single-valued bodies.
 
-  Choice-bearing iteration bodies and mutable implicit proof captures remain
-  implementation limits (#686). Other return-containing initializer shapes
+  A range loop with single-valued endpoints, a loop over a single-valued
+  collection, or a plain loop can expose an iteration's choices to the
+  producer's caller. An iteration's fallthrough continues with the next row
+  for each exposed alternative. The reached return still skips later rows.
+  An `if` guard, `option{}`, or `first{}` inside the body can take its own
+  choices before the return.
+
+  Exposed body choices combined with choice-bearing headers and mutable
+  implicit proof captures remain implementation limits (#686). Other
+  return-containing initializer shapes
   retain their existing restrictions. Direct concurrency forms are not
   supported within a scalar captured expression. Existing source restrictions on returns inside
   expressions or conditions continue to apply.
