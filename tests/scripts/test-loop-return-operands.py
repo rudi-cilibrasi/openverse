@@ -24,33 +24,34 @@ def run(args):
     return result.stdout
 
 
-with tempfile.TemporaryDirectory(prefix='openverse-loop-operands-') as tmp:
-    tmp = Path(tmp)
-    sizes = []
-    for count in (17, 32, 64):
-        # One owned return site, many lazy operands; the enclosing cleanup
-        # runs per yielded value, and rejected alternatives leave no output.
-        source = ('F(N:int)<transacts>:int=\n'
-                  '    defer:Print("out {N}")\n'
-                  '    for(I:=1..N):\n'
-                  '        if(I=2):return ' + '|'.join(f'N+{i}' for i in range(count)) + '\n'
-                  '    N|N+1\nMain()<transacts>:void=\n'
-                  '    for(V:=F(3)){Print("v {V}")}\n'
-                  '    for(V:=F(1)){Print("short {V}")}\n')
-        source += f'    if(V:=F(3),V={3+count-1})then Print("first {{V}}")else Print("bad")\n'
-        source += '    if(V:=F(3),V=999)then Print("bad")else Print("none")\n'
-        expected = ''.join(f'out 3\nv {3+i}\n' for i in range(count))
-        expected += f'out 1\nshort 1\nout 1\nshort 2\nout 3\nfirst {3+count-1}\nnone\n'
-        path = tmp / f'{count}.verse'
-        path.write_text(source)
-        for profile in ([], ['--extended-defaults']):
-            bytecode = tmp / 'growth.vbc'
-            assert run([OV, 'run', path, *profile, '--emit', bytecode]) == expected
-            assert run([CV, bytecode]) == expected
-            if not profile:
-                sizes.append(bytecode.stat().st_size)
-    assert sizes[2] < 3 * sizes[1], sizes
-    print(f'loop operand growth passed (17/32/64 alternatives; bytes {sizes})')
+for kind, generator in (('range', 'I:=1..N'), ('array', 'I:(if(N=1)then array{1} else array{1,2,3})')):
+    with tempfile.TemporaryDirectory(prefix='openverse-loop-operands-') as tmp:
+        tmp = Path(tmp)
+        sizes = []
+        for count in (17, 32, 64):
+            # One owned return site, many lazy operands; the enclosing cleanup
+            # runs per yielded value, and rejected alternatives leave no output.
+            source = ('F(N:int)<transacts>:int=\n'
+                      '    defer:Print("out {N}")\n'
+                      f'    for({generator}):\n'
+                      '        if(I=2):return ' + '|'.join(f'N+{i}' for i in range(count)) + '\n'
+                      '    N|N+1\nMain()<transacts>:void=\n'
+                      '    for(V:=F(3)){Print("v {V}")}\n'
+                      '    for(V:=F(1)){Print("short {V}")}\n')
+            source += f'    if(V:=F(3),V={3+count-1})then Print("first {{V}}")else Print("bad")\n'
+            source += '    if(V:=F(3),V=999)then Print("bad")else Print("none")\n'
+            expected = ''.join(f'out 3\nv {3+i}\n' for i in range(count))
+            expected += f'out 1\nshort 1\nout 1\nshort 2\nout 3\nfirst {3+count-1}\nnone\n'
+            path = tmp / f'{kind}-{count}.verse'
+            path.write_text(source)
+            for profile in ([], ['--extended-defaults']):
+                bytecode = tmp / 'growth.vbc'
+                assert run([OV, 'run', path, *profile, '--emit', bytecode]) == expected
+                assert run([CV, bytecode]) == expected
+                if not profile:
+                    sizes.append(bytecode.stat().st_size)
+        assert sizes[2] < 3 * sizes[1], sizes
+        print(f'{kind} loop operand growth passed (17/32/64 alternatives; bytes {sizes})')
 
 # Two fallthrough paths per guard must share the later guards. A continuation
 # copied into both paths would grow exponentially despite the tiny runtime.
@@ -89,7 +90,11 @@ with tempfile.TemporaryDirectory(prefix='openverse-loop-return-guards-') as tmp:
         assert sizes[2] < 4*sizes[1], sizes
         print(f'loop return guard growth passed (nested={nested}, 17/32/64 guards; bytes {sizes})')
 
-fixtures = sorted((ROOT / 'tests/verse').glob('multi_return_loop_operand_*.verse'))
+fixtures = sorted(
+    source
+    for kind in ('loop', 'array')
+    for source in (ROOT / 'tests/verse').glob(f'multi_return_{kind}_operand_*.verse')
+)
 for source in fixtures:
     expected = source.with_suffix('.expected').read_text()
     assert expected.endswith('exit=0\n'), source
