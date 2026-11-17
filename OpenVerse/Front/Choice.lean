@@ -4449,6 +4449,31 @@ private partial def choiceReturnRoutes (owner : String) (scope : List LoopCaptur
   | .app _ (.ident _ "$returnBoundary") _ false => []
   | e => e.children.flatMap (choiceReturnRoutes owner scope cleanups)
 
+/-- A choice followed by a terminal return can run with that return's
+    operand. Delay the statements after the choice, including their defers,
+    until the selected iteration's values are taken. -/
+private partial def moveTerminalLoopChoices (mv : List String) (e : SExpr)
+    (inIteration : Bool := false) : SExpr :=
+  let move := fun e => moveTerminalLoopChoices mv e inIteration
+  match e with
+  | .block p statements =>
+    let statements := statements.map move
+    let body := SExpr.block p statements
+    if !inIteration then body else Id.run do
+      let some index := statements.findIdx? (fun statement =>
+        !hasReturn statement && liftsHere (markCalls mv statement)) | return body
+      let suffix := statements.drop index
+      let some (.ret q value) := suffix.getLast? | return body
+      let preceding := suffix.dropLast
+      if preceding.any (fun statement => hasReturn statement || hasOwnLoopBreak statement) then return body
+      let operand := SExpr.block q (preceding ++ [value.getD (.tuple q [])])
+      return .block p (statements.take index ++ [.ret q (some operand)])
+  | .ite p conditions yes no => .ite p conditions (move yes) (no.map move)
+  | .caseE p input arms => .caseE p input (arms.map fun (pat, body) => (pat, move body))
+  | .forE p clauses body => .forE p clauses (moveTerminalLoopChoices mv body true)
+  | .loop p body => .loop p (moveTerminalLoopChoices mv body true)
+  | _ => e
+
 /-- Locate returning loops whose headers require a search. The checking pass
     elaborates the original for before moving the loop into a selector. -/
 private partial def choiceReturnLoopSites (owner : String) (f : MFn)
@@ -5091,7 +5116,7 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
   let choiceLoopTargets := rawMfs.filterMap fun (owner, original) =>
     if !hasReturningLoop original.body then none else
     let f : MFn := { original with body := alphaReturnLoopLocals owner original.body }
-    let sites := choiceReturnLoopSites owner f mv
+    let sites := choiceReturnLoopSites owner { f with body := moveTerminalLoopChoices mv f.body } mv
     if sites.isEmpty then none else some (owner, f, sites, original.body)
   if !choiceLoopTargets.isEmpty then
     let ready := choiceLoopTargets.all fun (owner, _, sites, _) => choiceReturnNotesReady owner sites nested
