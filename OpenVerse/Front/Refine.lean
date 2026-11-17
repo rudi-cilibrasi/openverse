@@ -113,6 +113,7 @@ def Lift.key (l : Lift) : String := keyOf l.pos l.bound l.tag
 partial def findPart (pr : SExpr → Bool) (outside : Bool) (e : SExpr) : Option SExpr :=
   if pr e then some e
   else match e with
+    | .app _ (.ident _ "$returnBoundary") [metadata, _, _] false => findPart pr outside metadata
     | .app _ (.ident _ "$forPrepare") _ false
     | .app _ (.ident _ "$refinementPrepare") _ false
     | .app _ (.ident _ "$refinementPrepareKnown") _ false
@@ -154,6 +155,7 @@ def isBreak : SExpr → Bool
     caller breaks again. A loop inside it keeps its own. -/
 def liftBreaks (e : SExpr) : SExpr :=
   Choice.mapE (fun
+    | e@(.app _ (.ident _ "$returnBoundary") _ false) => some e
     | .brk q => some (liftedBreak q)
     | l@(.loop ..) => some l
     | _ => none) e
@@ -162,8 +164,12 @@ def liftBreaks (e : SExpr) : SExpr :=
     for the type of what it gives when it ends. -/
 def exitsAsErr (e : SExpr) : SExpr :=
   let err (q : Pos) : SExpr := .app q (.ident q "Err") [] false
-  let e := Choice.mapE (fun | .ret q _ => some (err q) | _ => none) e
+  let e := Choice.mapE (fun
+    | e@(.app _ (.ident _ "$returnBoundary") _ false) => some e
+    | .ret q _ => some (err q)
+    | _ => none) e
   Choice.mapE (fun
+    | e@(.app _ (.ident _ "$returnBoundary") _ false) => some e
     | .brk q => some (err q)
     | b@(.app _ (.ident _ "$refineBreak") [] false) => some (err b.pos)
     | l@(.loop ..) => some l

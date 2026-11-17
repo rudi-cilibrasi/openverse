@@ -28,6 +28,25 @@ def refuseCall (ctx : Ctx) (p : Pos) (f : String) : EM R :=
   let shown := Choice.shownFnName f
   refuseSeveral ctx p s!"a call of {shown}, which has several values," s!"{shown} has several values, so a call of it" "#235"
 
+/-- Catch an invocation-local return using existing loop control. A return
+    caught by an inner loop is forwarded after that loop; ordinary source
+    breaks leave the outcome empty and keep their original destination. -/
+private partial def captureReturns (slot : Nat) : Expr → Expr
+  | .ret value => .seq (.assign slot (.prim .mkSome [captureReturns slot value]))
+      (.seq .brk (.prim .userErr []))
+  | .loop body => .seq (.loop (captureReturns slot body))
+      (.ite (.prim .query [.local slot]) Expr.brkV (.lit .void))
+  | .assign index value => .assign index (captureReturns slot value)
+  | .seq first rest => .seq (captureReturns slot first) (captureReturns slot rest)
+  | .prim op values => .prim op (values.map (captureReturns slot))
+  | .heap op values => .heap op (values.map (captureReturns slot))
+  | .call fn args => .call fn (args.map (captureReturns slot))
+  | .ite cond yes no => .ite (captureReturns slot cond) (captureReturns slot yes) (captureReturns slot no)
+  | .forE index values filter body => .forE index (captureReturns slot values)
+      (captureReturns slot filter) (captureReturns slot body)
+  | .print value => .print (captureReturns slot value)
+  | value => value
+
 set_option maxHeartbeats 800000 in
 partial def elabExprMarkersWith
     (elabE : Ctx → SExpr → Option Ty → EM R)
@@ -42,6 +61,29 @@ partial def elabExprMarkersWith
     (next : Ctx → SExpr → Option Ty → EM R)
     (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   match se with
+  | .app p (.ident _ "$returnBoundary")
+      [_, .decl _ _ (some returnedTy) _ _, .decl _ _ normalTy _ body] false => do
+    let returnedTy ← resolveTy ctx.types p returnedTy
+    let normalTy ← normalTy.mapM (resolveTy ctx.types p)
+    -- This is the non-deciding producer invocation, not its inlined
+    -- caller. Source admission checked its original jump restrictions.
+    let owned := { ctx with
+      retTy := returnedTy, defers := [], refineExits := {},
+      forReturnSlot := none, forExitPacket := none, forOutcomeSlot := none,
+      canFail := false, inRollback := ctx.inRollback || ctx.canFail,
+      inLoop := false, inChoice := false, inTaking := false, loopDefers := 0,
+      loopRollback := false, inDefer := false, inParamDefault := false,
+      inCtor := false, inBlock := false, inBranch := false, inArm := false, suspends := false }
+    let raw ← elabE owned body normalTy
+    let value ← match normalTy with
+      | some ty => pure (⟨← coerce p raw ty, ty⟩ : R)
+      | none => pure raw
+    noteFailCalls ctx p "a producer invocation" value.e
+    let returned ← fresh (.opt returnedTy)
+    let normal ← fresh (.opt value.ty)
+    let run := Expr.loop (.seq (.assign normal (.prim .mkSome [captureReturns returned value.e])) Expr.brkV)
+    return ⟨.seq (.assign returned (.lit .none)) (.seq (.assign normal (.lit .none))
+      (.seq run (.prim .mkTup [.local returned, .local normal]))), .tup [.opt returnedTy, .opt value.ty]⟩
   | .app _ (.ident _ "$mapKeySources") [.block _ keys, value] false =>
     let result ← elabE ctx value exp
     let keyTy := match result.ty with | .map k _ | .weakMap k _ => some k | _ => none

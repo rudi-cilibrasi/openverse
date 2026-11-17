@@ -305,7 +305,10 @@ partial def elabExprControlWith
           let named ← tryCatch (some <$> resolveTy ctx.types p ordinary.ty.toSTy) (fun _ => pure none)
           set initial
           let some (.arr value) := named | do set after; return ordinary
-          if !needsWorld || (value.hasNever && !(value == .never && returning)) then do
+          -- This type came from successful ordinary inference and is
+          -- nameable in the saved caller world. Empty components retain
+          -- their principal bottom type; no fallback candidate is invented.
+          if !needsWorld then do
             set after
             return ordinary
           tryCatch (elabE { ctx with

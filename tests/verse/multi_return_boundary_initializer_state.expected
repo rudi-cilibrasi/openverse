@@ -1,0 +1,10 @@
+init 12
+out 112
+found 2 112
+none 0
+init 11
+late
+out 111
+normal 2 111
+after
+exit=0
