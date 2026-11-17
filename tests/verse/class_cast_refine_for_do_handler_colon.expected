@@ -1,0 +1,5 @@
+touch 1
+row 1
+row 0
+after 1
+exit=0
