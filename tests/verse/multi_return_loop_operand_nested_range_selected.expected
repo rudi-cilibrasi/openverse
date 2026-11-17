@@ -1,0 +1,11 @@
+dup3 3
+dup3 7
+else3 9
+else3 9
+dup1 7
+dup1 7
+first 7
+strings a
+strings b
+after
+exit=0

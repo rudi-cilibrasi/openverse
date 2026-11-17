@@ -1,0 +1,24 @@
+inner cleanup 1 1 (1)
+inner cleanup 1 2 (2)
+outer cleanup 1 (2)
+inner cleanup 2 1 (3)
+inner cleanup 2 2 (4)
+outer cleanup 2 (4)
+all 4
+second operand
+inner cleanup 2 2 (4)
+outer cleanup 2 (4)
+all 5
+inner cleanup 1 1 (1)
+inner cleanup 1 2 (2)
+outer cleanup 1 (2)
+inner cleanup 2 1 (3)
+inner cleanup 2 2 (4)
+outer cleanup 2 (4)
+first 4
+none
+inner cleanup 1 1 (1)
+outer cleanup 1 (1)
+suffix 101
+suffix 102
+exit=0

@@ -464,6 +464,15 @@ partial def liftDepth (e : SExpr) : Nat :=
 def topLiftDepth (t : STop) : Nat :=
   t.code.foldl (fun n e => max n (liftDepth e)) 0
 
+private partial def returnLoopDepth (depth : Nat) (e : SExpr) : Nat :=
+  match e with
+  | .ret _ value => max depth ((value.map (returnLoopDepth depth)).getD 0)
+  | .loop _ body => returnLoopDepth (depth + 1) body
+  | .forE _ clauses body =>
+    clauses.foldl (fun n clause => max n (returnLoopDepth depth clause))
+      (returnLoopDepth (depth + 1) body)
+  | e => e.children.foldl (fun n child => max n (returnLoopDepth depth child)) 0
+
 /-- Named defaults can discover forwarding helpers along a dependency
     chain. Interface copies may instantiate each source method per class. -/
 partial def topDefaultCount : STop → Nat
@@ -523,11 +532,15 @@ def elabProgram (allTops000 : List STop) (opts : Options := {}) : Except String 
   -- more methods have several values, whose uses the next one notes. A
   -- restart discards helpers prepared for the lazy group; their bodies
   -- must be discovered again after its calls become eager. Each restart
-  -- forces a new source function's group, so source definitions bound it.)
+  -- forces a new source function's group, so source definitions bound it.
+  -- A nested returning loop becomes visible after its enclosing helper is
+  -- discovered. Each further level can add a round of type notes.)
   let eagerRounds := allTops00.foldl (fun n t => n + match t with
     | .fn .. => 1
     | .classDef _ _ _ _ _ _ _ _ ms => ms.length
     | _ => 0) 1
+  let eagerRounds := allTops00.foldl (fun n t =>
+    t.code.foldl (fun n e => n + (returnLoopDepth 0 e - 1)) n) eagerRounds
   let rec loop (eagerFuel witnessFuel fuel : Nat) (req : Requests) : Except String Compiled := do
     let c ← elabProgramCore allTops00 { opts with requests := req }
     let new := c.needs.without req
