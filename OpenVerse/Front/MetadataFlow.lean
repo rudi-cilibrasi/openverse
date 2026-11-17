@@ -293,50 +293,70 @@ private structure Configuration where
   signals : List Nat := []
   deriving BEq, Inhabited
 
-private def contextKey : Option (Nat × Nat) → List Nat
-  | none => [0]
-  | some (fn, offset) => [fn + 1, offset]
+private def appendKeyList (key : Array Nat) (values : List Nat) : Array Nat :=
+  values.foldl Array.push (key.push values.length)
 
-private def loopsKey (loops : List LoopEntry) : List Nat :=
-  loops.length :: loops.flatMap (fun s => [s.id, s.cleanups.length] ++ s.cleanups)
+private def appendContextKey (key : Array Nat) : Option (Nat × Nat) → Array Nat
+  | none => key.push 0
+  | some (fn, offset) => key.push (fn + 1) |>.push offset
 
-private def actorsKey (actors : Array Actor) : List Nat :=
-  actors.toList.flatMap fun a =>
+private def appendLoopsKey (key : Array Nat) (loops : List LoopEntry) : Array Nat :=
+  loops.foldl (fun key loop => appendKeyList (key.push loop.id) loop.cleanups)
+    (key.push loops.length)
+
+private def appendActorsKey (key : Array Nat) (actors : Array Actor) : Array Nat :=
+  actors.foldl (fun key a => Id.run do
     let (tag, data) := match a.status with
       | .idle => (0, 0) | .running => (1, 0) | .ready => (5, 0)
-      | .waiting ready => (2, if ready then 1 else 0)
+      | .waiting ready => (2, ready.toNat)
       | .joining g => (3, g) | .done => (4, 0)
-    [a.pc, tag, data, if a.canceling then 1 else 0, if a.cancelRequested then 1 else 0,
-      if a.taskWait then 1 else 0, a.cleanups.length] ++ a.cleanups ++ [a.waitDst.map (· + 1) |>.getD 0,
-      if a.canComplete then 1 else 0, if a.canSignal then 1 else 0, a.signalReturns.length] ++
-      a.signalReturns.map (fun pc => pc.map (· + 1) |>.getD 0) ++
-      loopsKey a.loops ++ contextKey a.context ++ [a.frames.length] ++
-      a.frames.flatMap (fun f => contextKey f.context ++ [f.cleanups.length] ++
-        f.cleanups ++ loopsKey f.loops)
+    let key := key.push a.pc |>.push tag |>.push data |>.push a.canceling.toNat
+      |>.push a.cancelRequested.toNat |>.push a.taskWait.toNat
+    let key := appendKeyList key a.cleanups |>.push (a.waitDst.map (· + 1) |>.getD 0)
+      |>.push a.canComplete.toNat |>.push a.canSignal.toNat |>.push a.signalReturns.length
+    let key := a.signalReturns.foldl (fun key pc => key.push (pc.map (· + 1) |>.getD 0)) key
+    let key := appendContextKey (appendLoopsKey key a.loops) a.context
+    return a.frames.foldl (fun key f =>
+      appendLoopsKey (appendKeyList (appendContextKey key f.context) f.cleanups) f.loops)
+      (key.push a.frames.length)) key
 
-private def groupsKey (groups : Array GroupStatus) : List Nat :=
-  groups.toList.flatMap fun g =>
-    [if g.late then 1 else 0, if g.active then 1 else 0, g.started, g.winner.map (· + 1) |>.getD 0]
+private def appendGroupsKey (key : Array Nat) (groups : Array GroupStatus) : Array Nat :=
+  groups.foldl (fun key g => key.push g.late.toNat |>.push g.active.toNat
+    |>.push g.started |>.push (g.winner.map (· + 1) |>.getD 0)) key
 
-private def pendingKey (pending : List Pending) : List Nat :=
-  pending.length :: pending.flatMap fun
-    | .cancel a => [0, a]
-    | .cleanup a ctx pc => [1, a, pc] ++ contextKey ctx
-    | .stop a => [2, a]
-    | .resume a pc => [3, a, pc]
-    | .returnCall a pc => [4, a, pc]
-    | .returnScope a f o n pc => [7, a, f, o, n, pc]
-    | .result role parts slot => [5, if role then 1 else 0] ++
-        (match parts with | none => [0] | some fields => 1 :: fields.length :: fields.map (fun b => if b then 1 else 0)) ++
-        (match slot with | none => [0] | some value => [1, value])
-    | .discard => [6]
+private def appendPendingKey (key : Array Nat) (pending : List Pending) : Array Nat :=
+  pending.foldl (fun key => fun
+    | .cancel a => key.push 0 |>.push a
+    | .cleanup a ctx pc => appendContextKey (key.push 1 |>.push a |>.push pc) ctx
+    | .stop a => key.push 2 |>.push a
+    | .resume a pc => key.push 3 |>.push a |>.push pc
+    | .returnCall a pc => key.push 4 |>.push a |>.push pc
+    | .returnScope a f o n pc => key.push 7 |>.push a |>.push f |>.push o |>.push n |>.push pc
+    | .result role parts slot =>
+      let key := key.push 5 |>.push role.toNat
+      let key := match parts with
+        | none => key.push 0
+        | some fields => fields.foldl (fun key (field : Bool) => key.push field.toNat)
+            (key.push 1 |>.push fields.length)
+      match slot with
+      | none => key.push 0
+      | some value => key.push 1 |>.push value
+    | .discard => key.push 6) (key.push pending.length)
 
-private def configurationKey (c : Configuration) : List Nat :=
-  [c.current.getD c.actors.size, c.startup.length] ++ c.startup ++
-  [c.events.length] ++ c.events ++ actorsKey c.actors ++ groupsKey c.groups ++
-  [c.signals.length] ++ c.signals ++ [c.launches.length] ++ c.launches ++ pendingKey c.pending ++ [c.tests.length] ++ c.tests.flatMap (fun t =>
-    [t.owner, t.no, t.startup.length] ++ t.startup ++ [t.events.length] ++ t.events ++
-    actorsKey t.actors ++ groupsKey t.groups ++ [t.signals.length] ++ t.signals ++ [t.launches.length] ++ t.launches ++ pendingKey t.pending)
+/-- Encode control and continuation fields in one buffer. The scheduler joins
+    provenance facts only after every field in this key compares equal. -/
+private def configurationKey (c : Configuration) : Array Nat := Id.run do
+  let key := Array.emptyWithCapacity (1 + 16 * c.actors.size + 4 * c.groups.size)
+  let key := (key : Array Nat).push (c.current.getD c.actors.size)
+  let key := appendKeyList (appendKeyList key c.startup) c.events
+  let key := appendGroupsKey (appendActorsKey key c.actors) c.groups
+  let key := appendKeyList (appendKeyList key c.signals) c.launches
+  let key := appendPendingKey key c.pending |>.push c.tests.length
+  return c.tests.foldl (fun key t =>
+    let key := appendKeyList (appendKeyList (key.push t.owner |>.push t.no) t.startup) t.events
+    let key := appendGroupsKey (appendActorsKey key t.actors) t.groups
+    let key := appendKeyList (appendKeyList key t.signals) t.launches
+    appendPendingKey key t.pending) key
 
 private def joinLoops (a b : List LoopEntry) : List LoopEntry :=
   a.zipWith (fun s t => { t with cells := s.cells.zipWith (fun x y => { y with
@@ -803,9 +823,9 @@ private structure ScheduleWork where
   modes : Bits
   modeWords : MetadataLiveness.SlotMask
   ranks : Array Nat
-  ready : Std.TreeMap (Nat × Nat) (List Nat) (fun a b =>
+  ready : Std.TreeMap (Nat × Nat) (Array Nat) (fun a b =>
     match compare a.1 b.1 with | .eq => compare a.2 b.2 | order => order) := {}
-  pending : Std.HashMap (List Nat) Configuration := {}
+  pending : Std.HashMap (Array Nat) Configuration := {}
   serial : Nat := 0
 
 
@@ -1686,7 +1706,7 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
     ranks := MetadataLiveness.controlOrder env.plan }
   let mut work := initialWork.push initial
   let mut cursor := 0
-  let mut known : Std.HashMap (List Nat) Configuration := {}
+  let mut known : Std.HashMap (Array Nat) Configuration := {}
   let mut result : Option Bool := none
   let mut resultParts : TupleParts := none
   let mut resultRefs : MetadataCells.Refs := []
@@ -1699,10 +1719,11 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
     let incoming := work.pending[key]!
     work := { work with ready := work.ready.erase ticket, pending := work.pending.erase key }
     cursor := cursor + 1
-    let c := match known[key]? with
+    let prior := known[key]?
+    let c := match prior with
       | none => incoming
       | some old => if old == incoming then old else joinConfiguration old incoming
-    if (known[key]?).any (· == c) then continue
+    if prior.any (· == c) then continue
     known := known.insert key c
     let stops := readyCancellations env.plan c
     if !stops.isEmpty then
