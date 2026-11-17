@@ -121,8 +121,10 @@ structure Fn where
   /-- `<decides>`: calls may fail (and must be written `F[…]`). -/
   decides : Bool
   body    : Expr
-  /-- Calls may change an existing object (#35): `false` for a function
-      whose effects exclude `writes` (`<computes>`, `<reads>`, `<allocates>`). -/
+  /-- Calls may change an existing object (#35). A false flag certifies
+      that the body and its callees do not write the heap. Source effect
+      admission happens before lowering; compiler-owned local cells can
+      require a true flag even for a source `<computes>` function. -/
   writes  : Bool := true
   deriving Repr, Inhabited
 
