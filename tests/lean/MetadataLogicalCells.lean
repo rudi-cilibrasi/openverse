@@ -49,7 +49,11 @@ def main (args : List String) : IO Unit := do
     ("nested-real-reader-wrap", true, "row\nrow\n"),
     ("recursive-reader", true, "v 7\nv 8\n"),
     ("projected-private-exec", false, "row\nrow\n"),
-    ("projected-object-exec", false, "row\nrow\n")]
+    ("projected-object-exec", false, "row\nrow\n"),
+    ("dormant-first-execute", false, ""),
+    ("dormant-first-opaque", true, ""),
+    ("live-first-execute", false, "value 0\n"),
+    ("live-first-opaque", true, "value 1\n")]
   for (name, metadataAllowed, expected) in cases do
     for control in [false,true] do
       let suffix := if control then "-control" else ""
@@ -61,4 +65,4 @@ def main (args : List String) : IO Unit := do
             (!metadata || metadataAllowed)
           IO.println s!"{name} control={control} extended={extended} metadata={metadata} elapsed_ms={(← IO.monoMsNow) - start}"
           (← IO.getStdout).flush
-  IO.println "logical-cell source: 136 API classifications, 92 complete Lean oracles"
+  IO.println "logical-cell source: 168 API classifications, 116 complete Lean oracles"
