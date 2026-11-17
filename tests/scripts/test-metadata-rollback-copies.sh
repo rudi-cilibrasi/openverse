@@ -31,6 +31,15 @@ with tempfile.TemporaryDirectory(prefix="openverse-metadata-rollback-") as tempo
     args = shlex.split(Path(".lake/build/bin/openverse.rsp").read_text())
     if not args or not args[0].endswith("Main.c.o.export"):
         raise SystemExit("metadata rollback: unrecognized Lake linker inputs")
+    # Copied Lake caches can retain response paths into another worktree.
+    # Such a link would silently validate that tree's provenance checker.
+    build = (Path.cwd() / ".lake/build").resolve()
+    for arg in args:
+        if ".lake/build/" in arg:
+            try:
+                Path(arg).resolve().relative_to(build)
+            except ValueError:
+                raise SystemExit(f"metadata rollback: stale foreign linker input: {arg}")
     args[0] = str(source)
     response = work / "api.rsp"
     response.write_text("\n".join(json.dumps(arg) for arg in args) + "\n")
