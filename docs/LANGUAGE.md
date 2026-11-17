@@ -2191,8 +2191,8 @@ Main():void =
   loop's `break` exits that inner loop and resumes the enclosing body.
   These loop forms can nest. A return from an inner loop skips every
   enclosing loop's remaining iterations and the function's suffix.
-  Range endpoints are evaluated once in source order. If a scalar endpoint
-  fails, its range is empty, its clause effects roll back, and the producer
+  Single-valued range endpoints are evaluated once in source order. If an
+  endpoint fails, its range is empty, its clause effects roll back, and the producer
   reaches its following statements. A maximum-integer endpoint does not
   require an extra increment.
   For `for (Item : Items)`, the array expression is evaluated once. A failed
@@ -2207,8 +2207,12 @@ Main():void =
   lowering. Selected generic types and real implicit proof capabilities stay
   attached to the loop site; metadata proof inputs cannot grant those views.
 
-  Other multi-valued loop shapes, including choice-bearing endpoints or
-  collection sources and mutable implicit proof captures, remain
+  A `for` can search choice-bearing range endpoints or collection sources.
+  It visits rows using the usual header order and rollback rules, then takes
+  the reached return's values lazily. Choice-bearing headers can also occur
+  in nested loops with otherwise single-valued bodies.
+
+  Choice-bearing iteration bodies and mutable implicit proof captures remain
   implementation limits (#686). Other return-containing initializer shapes
   retain their existing restrictions. Direct concurrency forms are not
   supported within a scalar captured expression. Existing source restrictions on returns inside

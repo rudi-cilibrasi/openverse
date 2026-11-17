@@ -97,6 +97,9 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
         match entry with
         | .ident _ n =>
           if let some l := ctx.lookup n then noteNeeds { nested := [(key ++ n, l.ty.toSTy)] }
+        | .tuple _ [.str _ [.text label], .ident _ name] =>
+          if let some binding := ctx.lookup name then
+            noteNeeds { nested := [(key ++ label, binding.ty.toSTy)] }
         | .decl q n (some annotation) _ _ =>
           let ty ← resolveTy ctx.types q annotation
           noteNeeds { nested := [(key ++ n, ty.toSTy)] }

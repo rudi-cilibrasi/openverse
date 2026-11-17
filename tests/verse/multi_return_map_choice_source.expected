@@ -1,0 +1,47 @@
+source 1
+row z 21
+cleanup z 22
+row a 52
+cleanup a 53
+row b 103
+cleanup b 104
+row a 174
+cleanup a 175
+all 174
+second 175
+cleanup a 176
+all 275
+state 176
+source 1
+row z 21
+cleanup z 22
+row a 52
+cleanup a 53
+row b 103
+cleanup b 104
+row a 174
+second 174
+cleanup a 175
+first 274
+state 175
+none 0
+source 1
+row z 21
+cleanup z 22
+row a 52
+cleanup a 53
+row b 103
+cleanup b 104
+row a 174
+cleanup a 175
+fallback 175
+fallback 1175
+state 175
+empty -1 0
+empty -1 1000
+state 0
+source 1
+empty 0 1
+empty 0 1001
+state 1
+exit=0

@@ -1,0 +1,35 @@
+inner a 11
+inner b 32
+outer 1 132
+inner a 144
+inner b 166
+outer 2 266
+all 156
+second 266
+inner b 276
+outer 2 376
+all 1266
+state 376
+inner a 11
+inner b 32
+outer 1 132
+inner a 144
+second 156
+inner b 166
+outer 2 266
+first 1156
+state 266
+none 0
+inner a 11
+inner b 32
+outer 1 132
+inner a 144
+inner b 166
+outer 2 266
+inner a 278
+inner b 300
+outer 2 400
+suffix 400
+suffix 2400
+state 400
+exit=0

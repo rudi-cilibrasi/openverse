@@ -32,6 +32,18 @@ anything that undoing would change; otherwise the generators are levels of
 the search below, one search step a failure context, and the bodies run
 between the steps, outside every failure context. -/
 
+/-- A search source is a sequence or an optional pair of saved range bounds. -/
+private inductive ForDomain where
+  | sequence (code : Expr) (ty : Ty)
+  | bounds (code : Expr)
+
+private def ForDomain.code : ForDomain → Expr
+  | .sequence code _ | .bounds code => code
+
+private def ForDomain.ty : ForDomain → Ty
+  | .sequence _ ty => ty
+  | .bounds _ => .opt (.tup [.int, .int])
+
 /-- One generator of a `for` searched by the Book's rule: the slot of its
     element, its source, the code that binds the element's names and runs the
     filters after it, and the slots of the search: the source's value, the
@@ -46,9 +58,72 @@ structure ForLevel where
   ix : Nat
   act : Nat
   res : Nat
+  range : Option (Nat × Nat) := none
 
 /-- Whether the `logic` in slot `s` is `true` (fails if not). -/
 def isTrueIn (s : Nat) : Expr := p2 .eq (.local s) (.lit (.logic true))
+
+private def ForLevel.enter (level : ForLevel) : Expr :=
+  let clear := Expr.seq (.assign level.ix (.lit (.int (-1))))
+    (.seq (.assign level.act (.lit (.logic false))) (.lit .void))
+  let clear := match level.range with
+    | none => clear
+    | some (first, _) => .seq (.assign first (.lit (.logic true))) clear
+  .seq (.assign level.arr level.src) clear
+
+private def ForLevel.advance (level : ForLevel) (exhausted : Expr) : Expr :=
+  let next := Expr.assign level.ix (p2 .add (.local level.ix) (.lit (.int 1)))
+  let ready := Expr.lit .void
+  match level.range with
+  | none => .seq next
+    (.ite (p2 .lt (.local level.ix) (.prim .len [.local level.arr])) ready exhausted)
+  | some (first, bounds) =>
+    let bound (i : Nat) := Expr.prim (.tupGet i) [.local bounds]
+    .ite (.assign bounds (.prim .query [.local level.arr]))
+      (.ite (isTrueIn first)
+        (.seq (.assign first (.lit (.logic false))) (.seq (.assign level.ix (bound 0))
+          (.ite (p2 .le (.local level.ix) (bound 1)) ready exhausted)))
+        (.ite (p2 .lt (.local level.ix) (bound 1)) (.seq next ready) exhausted))
+      exhausted
+
+private def ForLevel.bindElement (level : ForLevel) : Expr :=
+  .assign level.slot (if level.range.isSome then .local level.ix
+    else p2 .index (.local level.arr) (.local level.ix))
+
+private def newForLevel (slot : Nat) (domain : ForDomain) (filter : Expr) : EM ForLevel := do
+  let range ← match domain with
+    | .bounds _ => pure (some (← fresh .logic, ← fresh (.tup [.int, .int])))
+    | .sequence .. => pure none
+  return {
+    slot, src := domain.code, filt := filter, arr := ← fresh domain.ty
+    ix := ← fresh .int, act := ← fresh .logic, res := ← fresh .logic, range }
+
+/-- Preserve the traditional per-generator transaction boundaries while
+    collecting a range's results in growing batches. -/
+private def iterateForDomain (slot : Nat) (domain : ForDomain) (filter body : Expr)
+    (bodyTy : Ty) : EM Expr := do
+  let .bounds _ := domain | return .forE slot domain.code filter body
+  let level ← newForLevel slot domain filter
+  let done ← fresh .logic
+  let size ← fresh .int
+  let acc ← fresh (.arr bodyTy)
+  let scratch ← fresh .int
+  let empty := Expr.lit Value.emptyArray
+  let datum := Expr.seq level.bindElement (.ite filter (.prim .mkArr [body]) empty)
+  let exhausted := Expr.seq (.assign done (.lit (.logic true))) (.lit .void)
+  let row := Expr.seq (level.advance exhausted)
+    (.ite (isTrueIn done) empty datum)
+  let batch := Expr.forE scratch (p2 .range (.lit (.int 1)) (.local size))
+    (p2 .eq (.local done) (.lit (.logic false))) row
+  let collect := Expr.seq (.assign acc (p2 .concat (.local acc) (.prim .flatten [batch])))
+    (.ite (isTrueIn done) Expr.brkV (.seq
+      (.assign size (p2 .mul (.local size) (.lit (.int 2)))) (.lit .void)))
+  -- A break from a filter or body continues outward.
+  let result := if filter.brkSafe false && body.brkSafe false then Expr.local acc
+    else Expr.ite (isTrueIn done) (.local acc) (.seq .brk empty)
+  return .seq level.enter (.seq (.assign done (.lit (.logic false)))
+    (.seq (.assign size (.lit (.int 16))) (.seq (.assign acc empty)
+      (.seq (.loop collect) result))))
 
 /-- The code of one search step through the levels `ls` (the first entered
     already: its source's value in its slot, its index `-1`): it finds the next
@@ -63,19 +138,13 @@ def isTrueIn (s : Nat) : Expr := p2 .eq (.local s) (.lit (.logic true))
 def ForLevel.step (found : Nat) : List ForLevel → Expr
   | [] => .seq (.assign found (.lit (.logic true))) (.lit .void)
   | [l] =>
-    .loop (.seq (.assign l.ix (p2 .add (.local l.ix) (.lit (.int 1))))
-      (.seq (.ite (p2 .lt (.local l.ix) (.prim .len [.local l.arr])) (.lit .void) Expr.brkV)
-        (.ite (.seq (.assign l.slot (p2 .index (.local l.arr) (.local l.ix))) l.filt)
-          (.seq (.assign found (.lit (.logic true))) Expr.brkV) (.lit .void))))
+    .loop (.seq (l.advance Expr.brkV)
+      (.ite (.seq l.bindElement l.filt)
+        (.seq (.assign found (.lit (.logic true))) Expr.brkV) (.lit .void)))
   | l :: next :: more =>
-    let enterNext := Expr.seq (.assign next.arr next.src)
-      (.seq (.assign next.ix (.lit (.int (-1)))) (.seq (.assign next.act (.lit (.logic false))) (.lit .void)))
     .loop (.seq (.assign l.res (.local l.act)) (.seq (.assign l.act (.lit (.logic false)))
-      (.seq (.ite (isTrueIn l.res) (.lit .void)
-          (.seq (.assign l.ix (p2 .add (.local l.ix) (.lit (.int 1))))
-            (.ite (p2 .lt (.local l.ix) (.prim .len [.local l.arr])) (.lit .void) Expr.brkV)))
-        (.ite (.seq (.ite (isTrueIn l.res) (.lit .void)
-                (.seq (.assign l.slot (p2 .index (.local l.arr) (.local l.ix))) (.seq l.filt enterNext)))
+      (.seq (.ite (isTrueIn l.res) (.lit .void) (l.advance Expr.brkV))
+        (.ite (.seq (.ite (isTrueIn l.res) (.lit .void) (.seq l.bindElement (.seq l.filt next.enter)))
               (.seq (ForLevel.step found (next :: more)) (isTrueIn found)))
           (.seq (.assign l.act (.lit (.logic true))) Expr.brkV) (.lit .void)))))
 
@@ -377,7 +446,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
   -- source's type, the context with the names it binds, and the code that
   -- binds them from the element (a choice's alternative is evaluated there,
   -- so a failing one is skipped).
-  let elabSource (c : Ctx) (g : SExpr) : EM (Nat × Expr × Ty × Ctx × Expr) := do
+  let elabSource (c : Ctx) (g : SExpr) (stream : Bool) : EM (Nat × ForDomain × Ctx × Expr) := do
     match g with
     | .decl gp n ty false (.range _ lo hi) => do
       -- (a typed binding, `X:int := a..b`, Book of Verse tests,
@@ -385,18 +454,26 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       -- type is the range's, `int`)
       if let some t := ty then
         let rt ← resolveTy c.types gp t
-        if rt != .int then eerr gp s!"a range's values are ints: {n}:{rt.show} := a..b is not one; write {n}:int := a..b"
+        if rt != .int then
+          let name := Choice.shownName n
+          eerr gp s!"a range's values are ints: {name}:{rt.show} := a..b is not one; write {name}:int := a..b"
       let es ← elabInts { c with canFail := true, inTaking := true } gp [lo, hi]
       let (slot, c1) ← declareAt g.pos c n .int
       -- (a bound that fails gives no iterations, its effects and the
       -- other bound's rolled back, as a failing source does: Book of
       -- Verse ch. 7, "that iteration is skipped"; `for.versetest:317`)
-      let src := Expr.prim .range es
-      let src ← if src.mayFail ctx.sigProg then do
-          let tmp ← fresh (.arr .int)
-          pure (Expr.orE tmp src (.lit Value.emptyArray))
+      let domain ← if stream then do
+        let bounds := Expr.prim .mkSome [.prim .mkTup es]
+        if bounds.mayFail ctx.sigProg then
+          pure (ForDomain.bounds (Expr.orE (← fresh (.opt (.tup [.int, .int]))) bounds (.lit .none)))
+        else pure (ForDomain.bounds bounds)
+      else do
+        let src := Expr.prim .range es
+        let src ← if src.mayFail ctx.sigProg then
+          pure (Expr.orE (← fresh (.arr .int)) src (.lit Value.emptyArray))
         else pure src
-      pure (slot, src, .arr .int, c1, Expr.lit (.logic true))
+        pure (ForDomain.sequence src (.arr .int))
+      pure (slot, domain, c1, Expr.lit (.logic true))
     | .gen gp x idx srcE => do
       -- A lazy-return site's checking pass records the selected iterable
       -- type without inserting a binding or evaluating the source again.
@@ -428,7 +505,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             let (xs, c2) ← declareAt g.pos c1 x vt
             pure (Expr.seq (.assign is (.prim (.tupGet 0) [.local tp]))
               (.assign xs (.prim (.tupGet 1) [.local tp])), c2)
-        pure (tp, src, rs.ty, c1, pre)
+        pure (tp, .sequence src rs.ty, c1, pre)
       | _ =>
       match idx with
       | some i => do
@@ -444,7 +521,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         let (xslot, c2) ← declareAt g.pos c1 x ty
         let src := Expr.seq (.assign ta src0)
           (.prim .range [.lit (.int 0), p2 .sub (.prim .len [.local ta]) (.lit (.int 1))])
-        pure (islot, src, .arr .int, c2, Expr.assign xslot (p2 .index (.local ta) (.local islot)))
+        pure (islot, .sequence src (.arr .int), c2, Expr.assign xslot (p2 .index (.local ta) (.local islot)))
       | none => do
       let ty ← match rs.ty with
         | .arr t => pure t
@@ -453,7 +530,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       let src := if (rs.e.mayFail ctx.sigProg) then
           Expr.orE tmp rs.e (.lit Value.emptyArray) else rs.e
       let (slot, c1) ← declareAt g.pos c x ty
-      pure (slot, src, rs.ty, c1, Expr.lit (.logic true))
+      pure (slot, .sequence src rs.ty, c1, Expr.lit (.logic true))
     | .decl gp n _ false _ => do
       -- `X := a₁ | … | aₙ` (#208): over the alternatives' indices, each
       -- alternative bound in the filter (so a failing one is skipped)
@@ -466,7 +543,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       let k ← fresh .int
       let (xs, c1) ← declareAt g.pos c n ty
       let idx := Expr.lit (.arr (choiceIdx es.length))
-      pure (k, (pre.map (Expr.seq · idx)).getD idx, .arr .int, c1, Expr.assign xs (Expr.altE k es))
+      pure (k, .sequence ((pre.map (Expr.seq · idx)).getD idx) (.arr .int), c1, Expr.assign xs (Expr.altE k es))
     | _ => eerr g.pos "bad for clause"
   -- (`peel`: the first group's filter, then its values, without the loop
   -- over its one element, for a continuation's clauses below)
@@ -1098,7 +1175,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         | .arr t => return ⟨.prim .flatten [code], .arr t⟩
         | _ => eerr gp "internal: nested for"
       -- the source: evaluated before the iterations; a failing source gives no iterations
-      let (slot, src, _, c1, pre) ← elabSource c g
+      let (slot, domain, c1, pre) ← elabSource c g (Choice.hasReturn bd)
       -- (an exclusive choice among the filters, #314: its paths in this
       -- iteration's filter, so that a failure in one rolls back to this
       -- generator, as the `if` it stands for would)
@@ -1108,14 +1185,14 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           | .lit _ => filtE
           | e => .seq e filtE
         if peel then return ⟨.seq filt arr, .arr ety⟩
-        return ⟨← flattenValues ⟨Expr.forE slot src filt arr, .arr (.arr ety)⟩, .arr ety⟩
+        return ⟨← flattenValues ⟨← iterateForDomain slot domain filt arr (.arr ety), .arr (.arr ety)⟩, .arr ety⟩
       let (filt, c2) ← elabFilters c1 fs
       let filt := if fs.isEmpty then pre else
         match pre with
         | .lit _ => filt
         | e => .seq e filt
       let inner ← build c2 more bd (flatOverride := flatOverride)
-      let loopE := Expr.forE slot src filt inner.e
+      let loopE ← iterateForDomain slot domain filt inner.e inner.ty
       match more with
       | [] => return ⟨loopE, .arr inner.ty⟩
       | _ =>
@@ -1144,28 +1221,28 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         let (filt, c1) ← elabFilters ctx pre
         pure (some filt, ← fresh .void, c1)
     let mut c := c0
-    let mut levels : Array (Nat × Expr × Ty × Expr) := #[]
+    let mut levels : Array (Nat × ForDomain × Expr) := #[]
     for (g, fs) in gs do
-      let (slot, src, srcTy, c1, bind) ← elabSource c g
+      let (slot, domain, c1, bind) ← elabSource c g (Choice.hasReturn body)
       let (filt, c2) ← elabFilters c1 fs
       let filt := if fs.isEmpty then bind else match bind with
         | .lit _ => filt
         | e => .seq e filt
-      levels := levels.push (slot, src, srcTy, filt)
+      levels := levels.push (slot, domain, filt)
       c := c2
     let r ← elabE (bodyCtx c) body bodyExpected
     let r := if r.ty == .never then { r with e := .seq r.e (.lit .void) } else r
     let mutable := c.locals.filterMap fun l => if l.mutable && l.slot >= start then some l.slot else none
     let fx := forClauseEffects fun s => s < start || mutable.contains s
     let n := levels.size
-    let undoes := preE.any fx || (levels.toList.zipIdx.any fun ((_, src, _, filt), k) =>
-      fx src || (k + 1 < n && fx filt))
+    let undoes := preE.any fx || (levels.toList.zipIdx.any fun ((_, domain, filt), k) =>
+      fx domain.code || (k + 1 < n && fx filt))
     if !undoes then
       -- (the nested `forE`s, as `build` makes them)
       let mut inner : R := r
       let mut innermost := true
-      for (slot, src, _, filt) in levels.toList.reverse do
-        let loopE := Expr.forE slot src filt inner.e
+      for (slot, domain, filt) in levels.toList.reverse do
+        let loopE ← iterateForDomain slot domain filt inner.e inner.ty
         if innermost then inner := ⟨loopE, .arr inner.ty⟩
         else match inner.ty with
           | .arr t => inner := ⟨← flattenValues ⟨loopE, .arr inner.ty⟩, .arr t⟩
@@ -1178,9 +1255,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     -- rounds of `forE`s twice as long as the last, so that the values are
     -- collected in linear time, as for a lazily taken call, `elabLoopGen`)
     let mut ls : Array ForLevel := #[]
-    for (slot, src, srcTy, filt) in levels do
-      ls := ls.push { slot, src, filt, arr := ← fresh srcTy, ix := ← fresh .int,
-                      act := ← fresh .logic, res := ← fresh .logic }
+    for (slot, domain, filt) in levels do
+      ls := ls.push (← newForLevel slot domain filt)
     let some l1 := ls[0]? | eerr p "internal: a for without generators"
     let found ← fresh .logic
     let started ← fresh .logic
@@ -1189,8 +1265,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     let v ← fresh (.arr r.ty)
     let size ← fresh .int
     let d ← fresh .int
-    let enter := Expr.seq (.assign l1.arr l1.src)
-      (.seq (.assign l1.ix (.lit (.int (-1)))) (.seq (.assign l1.act (.lit (.logic false))) (.lit .void)))
+    let enter := l1.enter
     let enter := match preE with
       | some filt => Expr.seq filt enter
       | none => enter
