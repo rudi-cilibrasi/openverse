@@ -47,10 +47,12 @@ PARSE_ONLY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ParseOnly
 BASELINE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baseline.tsv")
 PINNED = "beaa719ba165cbf33eff462f2b0fe078a6dd9ab0"
 
-# Seconds a single openverse or cverse process may take, and the fuel both get
-# (a tenth of openverse's default: a Book test that loops forever then ends in
-# a few seconds, well inside the timeout, so verdicts do not depend on load).
+# Wall-clock limit per subprocess and the fixed fuel budget for both runtimes.
+# The harness uses a tenth of OpenVerse's CLI default fuel.
 TIMEOUT = 60
+# The UObject-limit stand-in deliberately exhausts all of Lean's fuel.
+# Keep that fuel budget and allow the reference interpreter time to reach it.
+LEAN_TIMEOUTS = {"Tests/Bugs/SOL-4284-InfiniteLoopTriggersUObjectLimit.versetest:18": 90}
 FUEL = "10000000"
 MEM_BYTES = 4 * 1024 ** 3
 
@@ -963,13 +965,14 @@ def split_warnings(err, path):
     return warnings, "\n".join(rest)
 
 
-def run_program(path):
+def run_program(path, lean_timeout):
     """Compile and run a program with the Lean interpreter and, when it compiles,
     with the C runtime. Returns a dict describing the outcome."""
     vbc = path[:-len(".verse")] + ".vbc"
     if os.path.exists(vbc):
         os.remove(vbc)
-    rc, out, err = run([OPENVERSE, "run", path, "--fuel", FUEL, "--emit", vbc])
+    rc, out, err = run([OPENVERSE, "run", path, "--fuel", FUEL, "--emit", vbc],
+                       timeout=lean_timeout)
     warnings, err = split_warnings(err, path)
     # (the Lean runtime out of memory: its allocator prints this and exits with
     # 1, which no Lean program can catch; it is the resource limit cverse
@@ -978,7 +981,7 @@ def run_program(path):
         rc, err = 3, "limit: memory\n"
     r = {"rc": rc, "out": out, "err": err, "diag": diag(err, path), "warnings": warnings}
     if rc is None:
-        r["internal"] = "hang (Lean): no result in %ds" % TIMEOUT
+        r["internal"] = "hang (Lean): no result in %ds" % lean_timeout
         return r
     if rc not in (0, 1, 2, 3, 4):
         r["internal"] = "crash (Lean): exit %d: %s" % (rc, first_line(err)[:200])
@@ -1103,7 +1106,7 @@ def run_cases(book, work, jobs, only=None, quiet=False):
     cases = all_cases(book, only)
     os.makedirs(work, exist_ok=True)
     write_programs(work, cases)
-    todo = []     # programs to compile and run
+    todo = {}     # programs to compile and run, and their Lean timeouts
     parse = []    # programs to parse
     for c in cases:
         if c.nt:
@@ -1113,15 +1116,13 @@ def run_cases(book, work, jobs, only=None, quiet=False):
             p = os.path.join(d, wrap + ".verse")
             parse.append(p)
             if c.expect != "parses" and k == 0:
-                todo.append(p)
+                todo[p] = LEAN_TIMEOUTS.get(c.id, TIMEOUT)
     if not quiet:
         print("%d cases, %d programs to run, %d to parse" % (len(cases), len(todo), len(parse)),
               file=sys.stderr)
     parsed = parse_only(work, parse, jobs)
-    results = {}
     with concurrent.futures.ThreadPoolExecutor(jobs) as ex:
-        for p, r in zip(todo, ex.map(run_program, todo)):
-            results[p] = r
+        results = dict(zip(todo, ex.map(run_program, todo, todo.values())))
     rows = []
     for c in cases:
         v, detail = verdict(c, results, parsed, work)
