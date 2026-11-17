@@ -2198,6 +2198,8 @@ Main():void =
   For `for (Item : Items)`, the array expression is evaluated once. A failed
   expression or an empty array rolls back the header's effects. Replacing
   the source variable during iteration leaves the sequence of items intact.
+  The indexed form `for (Index -> Item : Items)` also binds the current
+  zero-based index, including in return operands and cleanup.
   Source type, failure-context and event-effect checks still apply before this
   lowering. Selected generic types and real implicit proof capabilities stay
   attached to the loop site; metadata proof inputs cannot grant those views.
