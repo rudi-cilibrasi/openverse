@@ -4206,13 +4206,15 @@ private structure LoopCapture where
   annotation : Option STy := none
   parameter : Option SParam := none
 
+private inductive ReturnLoopSource where
+  | range (index : String) (lower upper : SExpr)
+  | loop
+
 private structure ReturnLoopSite where
   pos : Pos
   key : String
   helper : String
-  index : String
-  lower : SExpr
-  upper : SExpr
+  source : ReturnLoopSource
   body : SExpr
   captures : List LoopCapture
   boxed : List String
@@ -4246,6 +4248,23 @@ private def uniqueLoopCaptures (bindings : List LoopCapture) : List LoopCapture 
 private partial def returnLoopSites (owner : String) (f : MFn) (mv : List String) : List ReturnLoopSite := Id.run do
   let initial := f.params.map fun param =>
     ({ name := param.name, pos := f.pos, annotation := some param.ty, parameter := some param } : LoopCapture)
+  let record (scope : List LoopCapture) (defers : List SExpr) (p : Pos)
+      (source : ReturnLoopSource) (body : SExpr) : StateM (List ReturnLoopSite) Unit := do
+    let many := anyE (fun
+      | .ret _ value => value.any fun operand => hasLiftable (markCalls mv operand)
+      | _ => false) body
+    if hasReturn body && many && loopBodyScalar mv body then
+      let inner := localsOf body
+      let names := namesUsed body
+      let index := match source with | .range name _ _ => some name | .loop => none
+      let captures := scope.filter fun binding => index != some binding.name && !inner.contains binding.name
+      let writes := setsIn body ++ defers.flatMap setsIn
+      let boxed := captures.filterMap fun binding =>
+        if binding.mutable && names.contains binding.name && writes.contains binding.name then some binding.name else none
+      modify (· ++ [{
+        pos := p, key := loopSiteKey owner p
+        helper := s!"$sourceLoopReturn{sitePart owner}_{p.line}_{p.col}"
+        source, body, captures, boxed }])
   let rec walk (scope : List LoopCapture) (defers : List SExpr) (e : SExpr) : StateM (List ReturnLoopSite) Unit := do
     match e with
     | .block _ statements =>
@@ -4261,25 +4280,12 @@ private partial def returnLoopSites (owner : String) (f : MFn) (mv : List String
       walk (bound.reverse ++ scope) defers yes
       no.toList.forM (walk scope defers)
     | .forE p [.decl _ index _ false (.range _ lower upper)] body =>
-      let many := anyE (fun
-        | .ret _ value => value.any fun operand => hasLiftable (markCalls mv operand)
-        | _ => false) body
-      if hasReturn body && many && loopBodyScalar mv body &&
-          !hasLiftable (markCalls mv lower) && !hasLiftable (markCalls mv upper) then
-        let inner := localsOf body
-        let names := namesUsed body
-        let captures := scope.filter fun binding => binding.name != index && !inner.contains binding.name
-        let writes := setsIn body ++ defers.flatMap setsIn
-        let boxed := captures.filterMap fun binding =>
-          if binding.mutable && names.contains binding.name && writes.contains binding.name then some binding.name else none
-        let key := loopSiteKey owner p
-        modify (· ++ [{
-          pos := p, key, helper := s!"$sourceLoopReturn{sitePart owner}_{p.line}_{p.col}"
-          index, lower, upper, body, captures, boxed }])
-      else pure ()
+      if !hasLiftable (markCalls mv lower) && !hasLiftable (markCalls mv upper) then
+        record scope defers p (.range index lower upper) body
+    | .loop p body => record scope defers p .loop body
     -- A nested loop is not a separately owned return boundary. Keep an
     -- ineligible enclosing loop intact rather than lifting only its child.
-    | .forE .. | .loop .. => pure ()
+    | .forE .. => pure ()
     | .app _ (.ident _ "$defer") _ _ => pure ()
     | e => e.children.forM (walk scope defers)
   return ((walk initial [] f.body).run []).2
@@ -4299,11 +4305,13 @@ private partial def noteReturnLoops (owner : String) (ret : STy) (parameters : L
     site.boxed.contains binding.name && binding.annotation.isNone)
   let rec go (e : SExpr) : SExpr := Id.run do
     if let some site := sites.find? (·.pos == e.pos) then
-      if let .forE .. := e then
+      match e with
+      | .forE .. | .loop .. =>
         return .block e.pos [note e.pos site.key
           (.app e.pos (.ident e.pos "$captureEvidence") [] false :: site.captures.map (fun binding => .ident e.pos binding.name) ++
             (.decl e.pos "$return" (some ret) false (.tuple e.pos []) :: parameters.map (fun parameter =>
               .decl e.pos ("$type/" ++ parameter.name) (some (.name parameter.name)) false (.tuple e.pos [])))), e]
+      | _ => pure ()
     match e with
     | .block p statements =>
       let statements := statements.flatMap fun statement =>
@@ -4318,12 +4326,14 @@ private partial def noteReturnLoops (owner : String) (ret : STy) (parameters : L
     | e => return e.mapChildrenM (m := Id) (fun child => pure (go child))
   return checkBody (go e)
 
-private partial def returnLoopOperands (ret : STy) (tag : String) : SExpr → SExpr
+private partial def returnLoopOperands (ret : STy) (tag : String) (onBreak : Option SExpr) : SExpr → SExpr
   | .ret p value =>
     let saved := s!"{tag}$operand{p.line}_{p.col}"
     .block p [.decl p saved (some ret) false (value.getD (.tuple p [])),
       .ret p (some (.optionLit p (.ident p saved)))]
-  | e => Id.run (e.mapChildrenM fun child => pure (returnLoopOperands ret tag child))
+  | e@(.brk p) => onBreak.map (fun noneValue => .ret p (some noneValue)) |>.getD e
+  | e@(.forE ..) | e@(.loop ..) => e
+  | e => Id.run (e.mapChildrenM fun child => pure (returnLoopOperands ret tag onBreak child))
 
 private partial def boxReturnLoopCaptures (owner : String) (sites : List ReturnLoopSite)
     (types : List (String × STy)) (body : SExpr) : SExpr := Id.run do
@@ -4359,7 +4369,7 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
     (types : List (String × STy)) : Except String (SExpr × List STop) := do
   let body := boxReturnLoopCaptures owner sites types f.body
   let boxed := (sites.flatMap (·.boxed)).eraseDups
-  let mut helpers := []
+  let mut helpers : List STop := []
   let mut replacements := []
   for site in sites do
     let some ret := types.lookup (site.key ++ "$return") | throw "internal: missing loop return target"
@@ -4410,40 +4420,49 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
         typeValue := original.typeValue || inferenceOnly.contains binding.name
         metadataForward := original.metadataForward || (binding.parameter.isNone &&
           !operational.any (fun root => root.name == binding.name)) }
-    let endName := site.helper ++ "$end"
+    let p := site.pos
     let packet := site.helper ++ "$packet"
     let value := site.helper ++ "$returned"
     let noneName := site.helper ++ "$none"
-    let noneValue := SExpr.block site.pos
-      [.decl site.pos noneName (some (.opt ret)) false (.ident site.pos "false"), .ident site.pos noneName]
-    let args := caps.map fun param => SExpr.ident site.pos param.name
-    let next := SExpr.ite site.pos [.cmp site.pos (.ident site.pos site.index) [(">=", .ident site.pos endName)]]
-      noneValue (some (.app site.pos (.ident site.pos site.helper)
-        ([.bin site.pos "+" (.ident site.pos site.index) (.int site.pos 1), .ident site.pos endName] ++ args) false))
-    let iteration := returnLoopOperands ret site.helper (cellVars boxed iterationBody)
-    let helperBody := SExpr.ite site.pos [.cmp site.pos (.ident site.pos site.index) [(">", .ident site.pos endName)]]
-      noneValue (some (.block site.pos [iteration, next]))
+    let noneValue := SExpr.block p
+      [.decl p noneName (some (.opt ret)) false (.ident p "false"), .ident p noneName]
+    let args := caps.map fun param => SExpr.ident p param.name
+    let call (leading : List SExpr) := SExpr.app p (.ident p site.helper) (leading ++ args) false
+    let resume (leading : List SExpr) := SExpr.block p
+      [.decl p packet (some (.opt ret)) false (call leading),
+       .ite p [.decl p value none false (.query p (.ident p packet))]
+         (.ret p (some (.ident p value))) (some (.tuple p []))]
+    let iterationBody := cellVars boxed iterationBody
+    let (parameters, helperBody, replacement) : List SParam × SExpr × SExpr := match site.source with
+      | .range index lower upper =>
+        let endName := site.helper ++ "$end"
+        let cursor := SExpr.ident p index
+        let finish := SExpr.ident p endName
+        let next := SExpr.ite p [.cmp p cursor [(">=", finish)]]
+          noneValue (some (call [.bin p "+" cursor (.int p 1), finish]))
+        let iteration := returnLoopOperands ret site.helper none iterationBody
+        let helperBody := SExpr.ite p [.cmp p cursor [(">", finish)]]
+          noneValue (some (.block p [iteration, next]))
+        let low := site.helper ++ "$lower"
+        let high := site.helper ++ "$upper"
+        -- A failed endpoint makes the range empty and reaches the suffix.
+        let replacement := SExpr.ite p
+          [.decl p low (some (.name "int")) false (cellVars boxed lower),
+           .decl p high (some (.name "int")) false (cellVars boxed upper)]
+          (resume [.ident p low, .ident p high]) (some (.tuple p []))
+        ([{ name := index, ty := .name "int" }, { name := endName, ty := .name "int" }],
+          helperBody, replacement)
+      | .loop =>
+        -- A break returns an absent result from the helper. Nested loops
+        -- own their breaks and remain inside the current iteration.
+        let iteration := returnLoopOperands ret site.helper (some noneValue) iterationBody
+        ([], .block p [iteration, call []], resume [])
     let tparams := needed.map fun tp =>
       { tp with upperBound := tp.upperBound.map (·.substNames substitution) }
-    helpers := helpers ++ [.fn site.pos site.helper
-      ([{ name := site.index, ty := .name "int" }, { name := endName, ty := .name "int" }] ++ caps)
-      tparams f.fx (.opt ret) helperBody]
-    let lower := site.helper ++ "$lower"
-    let upper := site.helper ++ "$upper"
-    let call := SExpr.app site.pos (.ident site.pos site.helper)
-      ([.ident site.pos lower, .ident site.pos upper] ++ args) false
-    -- Range clauses take failure locally: a failed endpoint makes this
-    -- iteration empty and still reaches the producer's following statements.
-    let replacement := SExpr.ite site.pos
-      [.decl site.pos lower (some (.name "int")) false (cellVars boxed site.lower),
-       .decl site.pos upper (some (.name "int")) false (cellVars boxed site.upper)]
-      (.block site.pos [.decl site.pos packet (some (.opt ret)) false call,
-        .ite site.pos [.decl site.pos value none false (.query site.pos (.ident site.pos packet))]
-          (.ret site.pos (some (.ident site.pos value))) (some (.tuple site.pos []))])
-      (some (.tuple site.pos []))
-    replacements := replacements ++ [(site.pos, replacement)]
+    helpers := helpers ++ [.fn p site.helper (parameters ++ caps) tparams f.fx (.opt ret) helperBody]
+    replacements := replacements ++ [(p, replacement)]
   let changed := mapE (fun
-    | .forE p .. => replacements.lookup p
+    | .forE p .. | .loop p _ => replacements.lookup p
     | _ => none) body
   return (changed, helpers)
 
@@ -4523,7 +4542,7 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
   -- Source loop exits become a lazy helper only after its lexical input
   -- types and return target have been recorded in their original world.
   let loopTargets := rawMfs.filterMap fun (owner, original) =>
-    if !anyE (fun | .forE _ _ body => hasReturn body | _ => false) original.body then none else
+    if !anyE (fun | .forE _ _ body | .loop _ body => hasReturn body | _ => false) original.body then none else
     let f : MFn := { original with body := alphaReturnLoopLocals owner original.body }
     let sites := returnLoopSites owner f mv
     if sites.isEmpty then none else some (owner, f, sites, original.body)

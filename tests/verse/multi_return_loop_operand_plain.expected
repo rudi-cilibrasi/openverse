@@ -1,0 +1,19 @@
+inner 1
+cleanup 1
+break yielded 8
+break yielded 9
+inner 1
+cleanup 1
+inner 2
+cleanup 2
+return yielded 2
+second operand 2
+cleanup 2
+return yielded 3
+inner 1
+cleanup 1
+inner 2
+cleanup 2
+first yielded 2
+all rejected
+exit=0
