@@ -17,7 +17,7 @@ private def cases : List (String × String × Bool) := [
   ("recursive real return remains valid", "    Rows:=for(A:=1|2):\n        Sleep(0.001)\n        Use(Keep(F,2))\n    Rows.Length\n", true),
   ("called receiver remains executable", "    Rows:=for(A:=1|2):\n        Sleep(0.001)\n        Use(Dummy)\n    Rows.Length\n", false),
   ("real called receiver remains valid", "    Rows:=for(A:=1|2):\n        Sleep(0.001)\n        Use(F)\n    Rows.Length\n", true),
-  ("suppressed shared write must force validation", "    var Stored:" ++ callable ++ "=F\n    Rows:=for(A:=1|2):\n        set Stored=Dummy\n        Sleep(0.001)\n        0\n    Rows.Length\n", false),
+  ("suppressed shared write must force validation", "    var Stored:" ++ callable ++ "=F\n    Rows:=for(A:=1|2):\n        set Stored=Dummy\n        Sleep(0.001)\n        0\n    Saved:=Stored\n    Rows.Length\n", false),
   ("real shared write remains valid", "    var Stored:" ++ callable ++ "=Dummy\n    Rows:=for(A:=1|2):\n        set Stored=F\n        Sleep(0.001)\n        0\n    Rows.Length\n", true),
   ("opaque tuple column cannot reuse real context", "    Real:=Id((Dummy,F))\n    Other:=Id((F,Dummy))\n    Rows:=for(A:=1|2):\n        Sleep(0.001)\n        Real(1)()+Other(1)()\n    Rows.Length\n", false),
   ("distinct real tuple columns remain valid", "    Real:=Id((Dummy,F))\n    Other:=Id((F,Dummy))\n    Rows:=for(A:=1|2):\n        Sleep(0.001)\n        Real(1)()+Other(0)()\n    Rows.Length\n", true),
