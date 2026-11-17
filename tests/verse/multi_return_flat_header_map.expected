@@ -1,0 +1,16 @@
+advance a 1
+cleanup a 1
+cleanup b 2
+all 2
+cleanup b 12
+all 12
+advance a 11
+cleanup a 11
+cleanup b 2
+all 2
+cleanup b 12
+all 12
+advance a 1
+cleanup a 1
+cleanup b 12
+first 12

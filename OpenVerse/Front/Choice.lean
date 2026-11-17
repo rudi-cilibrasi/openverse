@@ -1430,6 +1430,10 @@ partial def dispatchBlocks (e : SExpr) : SExpr :=
     calls are inlined. -/
 partial def checkBody : SExpr → SExpr :=
   mapE fun
+    -- The cursor elaborator prepares the header itself. Scalarizing its
+    -- choices here would change the saved frame's layout.
+    | e@(.app _ (.ident _ "$forCursorNext") _ false)
+      | e@(.app _ (.ident _ "$noteForCursor") _ false) => some e
     | .app p (.ident _ "$methodMiss") [] false => some (.app p (.ident p "Err") [] false)
     -- (an exclusive choice, #314: an if-chain on its guards)
     | .app p (.ident _ "$excl") alts false =>
@@ -4222,7 +4226,13 @@ private structure LoopCapture where
 private inductive ReturnLoopSource where
   | range (index : String) (lower upper : SExpr)
   | collection (item : String) (index : Option String) (source : SExpr)
+  | cursor (clauses : List SExpr) (outputs : List String)
   | loop
+
+private def forCursorNext (p : Pos) (clauses : List SExpr) (outputs : List String)
+    (prior : SExpr) : SExpr :=
+  .app p (.ident p "$forCursorNext")
+    [.block p clauses, .block p (outputs.map (SExpr.ident p)), prior] false
 
 private structure ReturnLoopSite where
   pos : Pos
@@ -4327,14 +4337,16 @@ private partial def returnLoopSites (owner : String) (f : MFn) (mv : List String
         !(scalar && iterationGuardChoices mv body) &&
         loopBodySupported mv body (bodyChoices := true) then
       let inner := localsOf body
-      let names := namesUsed body
+      let header := match source with | .cursor clauses _ => clauses | _ => []
+      let names := namesUsed body ++ header.flatMap namesUsed
       let bindings := match source with
         | .range index .. => [index]
         | .collection item index _ => item :: index.toList
+        | .cursor _ outputs => outputs
         | .loop => []
       let captures := scope.filter fun binding =>
         !bindings.contains binding.name && !inner.contains binding.name
-      let writes := setsIn body ++ defers.flatMap setsIn
+      let writes := setsIn body ++ header.flatMap setsIn ++ defers.flatMap setsIn
       let boxed := captures.filterMap fun binding =>
         if binding.mutable && names.contains binding.name && writes.contains binding.name then some binding.name else none
       modify (· ++ [{
@@ -4361,10 +4373,18 @@ private partial def returnLoopSites (owner : String) (f : MFn) (mv : List String
     | .forE p [.gen _ item index source] body =>
       if loopBodySupported mv source && !hasLiftable (markCalls mv source) then
         record scope defers p (.collection item index source) body
+    | .forE p clauses body =>
+      let flatChoice : SExpr → Bool := fun
+        | .decl _ _ _ false (.app _ (.ident _ "$choice") values false) =>
+          values.all fun value => !liftsHere (markCalls mv value)
+        | _ => false
+      let valid clause := flatChoice clause || !liftsHere (markCalls mv clause)
+      if clauses.any flatChoice && clauses.all valid && !clauses.any loopConcurrent &&
+          !loopBodySupported mv body then
+        record scope defers p (.cursor clauses (boundIn clauses)) body
     | .loop p body => record scope defers p .loop body
     -- A nested loop is not a separately owned return boundary. Keep an
     -- ineligible enclosing loop intact rather than lifting only its child.
-    | .forE .. => pure ()
     | .app _ (.ident _ "$defer") _ _ => pure ()
     | e => e.children.forM (walk scope defers)
   return ((walk initial [] f.body).run []).2
@@ -4517,6 +4537,7 @@ private def loopNotesReady (owner : String) (parameters : List TParam) (sites : 
   sites.all fun site => (types.lookup (site.key ++ "$return")).isSome &&
     (match site.source with
      | .collection .. => (types.lookup (site.key ++ site.helper ++ "$iterable")).isSome
+     | .cursor .. => (types.lookup (site.key ++ "$cursor")).isSome
      | _ => true) &&
     parameters.all (fun parameter => (types.lookup (site.key ++ "$type/" ++ parameter.name)).isSome) &&
     site.captures.all fun binding =>
@@ -4540,10 +4561,17 @@ private partial def noteReturnLoops (owner : String) (ret : STy) (parameters : L
               [.str source.pos [.text key], source] false
             .forE q [.gen gp item index marked] iteration
           | _, _ => e
-        return .block e.pos [note e.pos site.key
+        let cursor := match site.source with
+          | .cursor clauses outputs =>
+            let p := e.pos
+            [.app p (.ident p "$noteForCursor") [.str p [.text (site.key ++ "$cursor")],
+              forCursorNext p clauses outputs (.ident p "false")] false]
+          | _ => []
+        return .block e.pos ([note e.pos site.key
           (.app e.pos (.ident e.pos "$captureEvidence") [] false :: site.captures.map (fun binding => .ident e.pos binding.name) ++
             (.decl e.pos "$return" (some ret) false (.tuple e.pos []) :: parameters.map (fun parameter =>
-              .decl e.pos ("$type/" ++ parameter.name) (some (.name parameter.name)) false (.tuple e.pos [])))), checked]
+              .decl e.pos ("$type/" ++ parameter.name) (some (.name parameter.name)) false (.tuple e.pos []))))]
+          ++ cursor ++ [checked])
       | _ => pure ()
     match e with
     | .block p statements =>
@@ -4659,7 +4687,14 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
       let ty := ty.substNames substitution
       let ty := if boxed.contains binding.name then STy.app "$varcell" [ty] else ty
       pure (binding, ty)
-    let used := namesUsed site.body
+    let cursorPacket ← match site.source with
+      | .cursor .. =>
+        let some ty := types.lookup (site.key ++ "$cursor") | throw "internal: missing for cursor type"
+        pure (some (ty.substNames substitution))
+      | _ => pure none
+    let used := namesUsed site.body ++ (match site.source with
+      | .cursor clauses _ => clauses.flatMap namesUsed
+      | _ => [])
     let operational := site.captures.filter fun binding =>
       (types.lookup (site.key ++ "$evidence/" ++ binding.name)).isSome
     for binding in operational do
@@ -4667,7 +4702,7 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
         throw s!"{site.pos.show}: a loop return capturing a mutable implicit proof is not supported yet (#686)"
     let mut retained := typedCaptures.filter fun (binding, _) =>
       used.contains binding.name || operational.any (fun root => root.name == binding.name)
-    let required := [ret] ++ collectionType.toList ++ returnLoopWrittenTypes iterationBody
+    let required := [ret] ++ collectionType.toList ++ cursorPacket.toList ++ returnLoopWrittenTypes iterationBody
     let mut needed : List TParam := []
     let mut inferenceOnly : List String := []
     -- Adding an inference input may itself mention another index. Close over
@@ -4711,7 +4746,28 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
     let nested := owner.startsWith "$sourceLoopReturn" || hasReturningLoop iterationBody
     let iterationBody := if nested then loopReturnInitializers iterationBody else iterationBody
     let iterationBody := cellVars boxed iterationBody
-    let (parameters, helperRet, helperBody, replacement) : List SParam × STy × SExpr × SExpr := match site.source with
+    let (parameters, helperRet, helperBody, replacement) : List SParam × STy × SExpr × SExpr ← match site.source with
+      | .cursor clauses outputs => do
+        let some (.opt (.tup [prior, .tup rowTypes])) := cursorPacket
+          | throw "internal: malformed for cursor type"
+        if outputs.length != rowTypes.length then throw "internal: malformed for cursor row"
+        let input := site.helper ++ "$cursor"
+        let nextRow := site.helper ++ "$nextRow"
+        let row := site.helper ++ "$row"
+        let ident := SExpr.ident p
+        let project (value : SExpr) (index : Int) := SExpr.app p value [.int p index] false
+        let rowValues := project (ident row) 1
+        let bindings := (outputs.zip rowTypes).zipIdx.map fun ((name, ty), index) =>
+          SExpr.decl p name (some ty) false (project rowValues (Int.ofNat index))
+        let clauses := clauses.map (fun e => cellVars boxed (e.mapAll (·.substNames substitution) id))
+        let next := call [.optionLit p (project (ident row) 0)]
+        let iteration := returnLoopOperands ret site.helper (some noneValue) nested iterationBody
+        let rest := if loopIterationTerminal iterationBody then [iteration] else [iteration,next]
+        let rows := forCursorNext p clauses outputs (ident input)
+        let helperBody := SExpr.block p [.decl p nextRow none false rows,
+          .ite p [.decl p row none false (.query p (ident nextRow))]
+            (.block p (bindings ++ rest)) (some noneValue)]
+        pure ([{ name := input, ty := .opt prior }], .opt ret, helperBody, resume [ident "false"])
       | .range index lower upper =>
         let endName := site.helper ++ "$end"
         let cursor := SExpr.ident p index
@@ -4742,7 +4798,7 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
               .decl p high (some (.name "int")) false (bound 1),
               resume [.ident p low, .ident p high]]) (some (.tuple p []))
         else SExpr.ite p clauses (resume [.ident p low, .ident p high]) (some (.tuple p []))
-        ([{ name := index, ty := .name "int" }, { name := endName, ty := .name "int" }],
+        pure ([{ name := index, ty := .name "int" }, { name := endName, ty := .name "int" }],
           .opt ret, helperBody, replacement)
       | .collection item index source =>
         let ty := collectionType.getD (.arr (.name "$never"))
@@ -4779,7 +4835,7 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
            .decl p high (some ty) false (cellVars boxed source),
            .cmp p (.member p (.ident p high) "Length") [(">", .int p 0)]]
           (resume [.ident p low, .ident p high]) (some (.tuple p []))
-        ([{ name := cursor, ty := .name "int" }, { name := items, ty }], .opt ret,
+        pure ([{ name := cursor, ty := .name "int" }, { name := items, ty }], .opt ret,
           helperBody, replacement)
       | .loop =>
         -- A break returns an absent result from the helper. Nested loops
@@ -4790,7 +4846,7 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
         let helperBody := if loopIterationTerminal iterationBody then iteration
           else SExpr.block p [iteration, call []]
         let replacement := if mayBreak then resume [] else .ret p (some (call []))
-        ([], if mayBreak then .opt ret else ret, helperBody, replacement)
+        pure ([], if mayBreak then .opt ret else ret, helperBody, replacement)
     let tparams := needed.map fun tp =>
       { tp with upperBound := tp.upperBound.map (·.substNames substitution) }
     helpers := helpers ++ [.fn p site.helper (parameters ++ caps) tparams f.fx helperRet helperBody]

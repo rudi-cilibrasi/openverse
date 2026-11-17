@@ -1,0 +1,38 @@
+cleanup 110 110 1002
+all 110
+cleanup 110 110 1003
+all 10110
+advance 110 1110
+cleanup 110 1110 1004
+advance 111 111
+cleanup 111 111 1005
+cleanup 210 210 1007
+all 210
+cleanup 210 210 1008
+all 10210
+cleanup 210 1210 1009
+all 1210
+cleanup 210 1210 1010
+all 11210
+advance 111 1111
+cleanup 111 1111 1011
+cleanup 210 210 1013
+all 210
+cleanup 210 210 1014
+all 10210
+cleanup 210 1210 1015
+all 1210
+cleanup 210 1210 1016
+all 11210
+state 1016
+cleanup 110 110 1002
+first 110
+state 1002
+advance 110 1110
+cleanup 110 1110 1002
+advance 111 111
+cleanup 111 111 1003
+cleanup 210 1210 1005
+later 1210
+state 1005
+reject 0

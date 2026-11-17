@@ -148,6 +148,75 @@ def ForLevel.step (found : Nat) : List ForLevel → Expr
               (.seq (ForLevel.step found (next :: more)) (isTrueIn found)))
           (.seq (.assign l.act (.lit (.logic true))) Expr.brkV) (.lit .void)))))
 
+/-- The shared search code for a flat `for`. Its first successful step enters
+    the first source and commits the prelude. Later steps advance the cursor. -/
+structure ForSearch where
+  head : ForLevel
+  tail : List ForLevel
+  prelude : Option Expr
+  started : Nat
+  found : Nat
+
+def ForSearch.init (search : ForSearch) : Expr :=
+  .assign search.started (.lit (.logic false))
+
+def ForSearch.take (search : ForSearch) (row exhausted : Expr) : Expr :=
+  let enter := match search.prelude with
+    | some pre => Expr.seq pre search.head.enter
+    | none => search.head.enter
+  let step := Expr.seq (.assign search.found (.lit (.logic false)))
+    (.seq (.ite (isTrueIn search.started) (.lit .void) enter)
+      (.seq (ForLevel.step search.found (search.head :: search.tail)) (isTrueIn search.found)))
+  .ite step (.seq (.assign search.started (.lit (.logic true))) row) exhausted
+
+/-- Storage required to resume after a successful row. Clause bindings that
+    remain live across the step are supplied by the caller. User cells stay
+    in the surrounding invocation and are never copied by restoring this
+    list. The final generator rebinds its element on every step. -/
+def ForSearch.cursorSlots (search : ForSearch) (bindings : List Nat) : List Nat :=
+  let rec levels : List ForLevel → List Nat
+    | [] => []
+    | level :: rest =>
+      [level.arr, level.ix] ++ level.range.toList.map (·.1) ++
+        (if rest.isEmpty then [] else [level.act, level.slot]) ++ levels rest
+  (search.started :: (levels (search.head :: search.tail) ++ bindings)).eraseDups
+
+def ForSearch.capture (search : ForSearch) (bindings : List Nat) : EM R := do
+  let slots := search.cursorSlots bindings
+  let types := (← get).slotTys
+  let columns ← slots.mapM fun slot =>
+    match types[slot]? with
+    | some ty => pure ty
+    | none => throw s!"internal: missing type of for cursor slot {slot}"
+  return ⟨.prim .mkTup (slots.map Expr.local), .tup columns⟩
+
+def ForSearch.restore (search : ForSearch) (bindings : List Nat) (packet : Nat) (next : Expr) : Expr :=
+  ((search.cursorSlots bindings).zipIdx).foldr (fun (slot, index) rest =>
+    .seq (.assign slot (.prim (.tupGet index) [.local packet])) rest) next
+
+/-- Return the next live row's cursor to the producer. An absent input
+    starts a new search. A resumed input restores private slots before
+    searching, without restoring enclosing mutable storage. Exhaustion is
+    an absent result rather than a failing expression. -/
+def ForSearch.takeFrom (search : ForSearch) (bindings : List Nat) (prior : Option Nat)
+    (row : Option R := none) : EM R := do
+  let cursor ← search.capture bindings
+  let setup ← match prior with
+    | none => pure search.init
+    | some slot => do
+      let packet ← fresh cursor.ty
+      pure (.ite (.assign packet (.prim .query [.local slot]))
+        (search.restore bindings packet (.lit .void)) (.seq search.init (.lit .void)))
+  let payload := match row with
+    | none => cursor
+    | some row => ⟨.prim .mkTup [cursor.e, row.e], .tup [cursor.ty, row.ty]⟩
+  let result := search.take (.prim .mkSome [payload.e]) (.lit .none)
+  return ⟨.seq setup result, .opt payload.ty⟩
+
+structure ForCursorRequest where
+  prior : SExpr
+  outputs : List String
+
 /-- Whether `e` can do something that undoing it would change: print, set an
     object's field, call a function (which may do either), or write a slot
     that `observable` names (a variable of the code around the `for`, or a
@@ -186,8 +255,10 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     (elabLoopGen : Ctx → Pos → List SExpr → EM LoopGen) (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx))
     (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) (prepared : Bool := false)
     (firstDecides : Bool := false) (failure : Option SExpr := none)
-    (searchPrepared : Bool := false) : EM R := do
+    (searchPrepared : Bool := false) (cursor : Option ForCursorRequest := none) : EM R := do
   let transport := ctx.refinementTransportValue
+  if cursor.isSome && transport.isSome then
+    eerr p "internal: refinement transport for resumable for headers"
   let ctx := { ctx with refinementTransportValue := none }
   if let some value := transport then
     let c := ctx
@@ -1223,13 +1294,31 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     let mut c := c0
     let mut levels : Array (Nat × ForDomain × Expr) := #[]
     for (g, fs) in gs do
-      let (slot, domain, c1, bind) ← elabSource c g (Choice.hasReturn body)
+      let (slot, domain, c1, bind) ← elabSource c g (cursor.isSome || Choice.hasReturn body)
       let (filt, c2) ← elabFilters c1 fs
       let filt := if fs.isEmpty then bind else match bind with
         | .lit _ => filt
         | e => .seq e filt
       levels := levels.push (slot, domain, filt)
       c := c2
+    let newSearch : EM ForSearch := do
+      let ls ← levels.toList.mapM fun (slot, domain, filt) => newForLevel slot domain filt
+      let head :: tail := ls | eerr p "internal: a for without generators"
+      return { head, tail, prelude := preE, found := ← fresh .logic, started := ← fresh .logic }
+    if let some request := cursor then
+      let search ← newSearch
+      let bindings := c.locals.filterMap fun l => if l.slot >= start then some l.slot else none
+      let row ← request.outputs.mapM fun name =>
+        match c.lookup name with
+        | some l => pure l
+        | none => eerr p s!"internal: unknown resumable for binding {name}"
+      let row : R := ⟨.prim .mkTup (row.map (Expr.local ·.slot)), .tup (row.map (·.ty))⟩
+      let saved ← search.capture bindings
+      let input ← elabE ctx request.prior (some (.opt saved.ty))
+      let slot ← fresh (.opt saved.ty)
+      let input ← coerce p input (.opt saved.ty)
+      let next ← search.takeFrom bindings (some slot) (some row)
+      return { next with e := .seq (.assign slot input) next.e }
     let r ← elabE (bodyCtx c) body bodyExpected
     let r := if r.ty == .never then { r with e := .seq r.e (.lit .void) } else r
     let mutable := c.locals.filterMap fun l => if l.mutable && l.slot >= start then some l.slot else none
@@ -1254,28 +1343,15 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     -- (the search: each step a failure context, `if (step) then body`, in
     -- rounds of `forE`s twice as long as the last, so that the values are
     -- collected in linear time, as for a lazily taken call, `elabLoopGen`)
-    let mut ls : Array ForLevel := #[]
-    for (slot, domain, filt) in levels do
-      ls := ls.push (← newForLevel slot domain filt)
-    let some l1 := ls[0]? | eerr p "internal: a for without generators"
-    let found ← fresh .logic
-    let started ← fresh .logic
+    let search ← newSearch
     let done ← fresh .logic
     let acc ← fresh (.arr r.ty)
     let v ← fresh (.arr r.ty)
     let size ← fresh .int
     let d ← fresh .int
-    let enter := l1.enter
-    let enter := match preE with
-      | some filt => Expr.seq filt enter
-      | none => enter
-    -- (the first step runs the clauses before the first generator and its source)
-    let step := Expr.seq (.assign found (.lit (.logic false)))
-      (.seq (.ite (isTrueIn started) (.lit .void) enter)
-        (.seq (ForLevel.step found ls.toList) (isTrueIn found)))
     let one := Expr.seq (.assign v (.lit Value.emptyArray))
-      (.seq (.ite step
-          (.seq (.assign started (.lit (.logic true))) (.seq (.assign v (.prim .mkArr [r.e])) (.lit .void)))
+      (.seq (search.take
+          (.seq (.assign v (.prim .mkArr [r.e])) (.lit .void))
           (.seq (.assign done (.lit (.logic true))) (.lit .void)))
         (.local v))
     let round := Expr.forE d (p2 .range (.lit (.int 1)) (.local size))
@@ -1288,9 +1364,11 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     let values := match c.forOutcomeSlot with
       | some flag => Expr.ite (.prim .query [.local flag]) (.local acc) (.seq .brk (.prim .userErr []))
       | none => Expr.local acc
-    return ⟨.seq (.assign started (.lit (.logic false))) (.seq (.assign done (.lit (.logic false)))
+    return ⟨.seq search.init (.seq (.assign done (.lit (.logic false)))
       (.seq (.assign acc (.lit Value.emptyArray)) (.seq (.assign size (.lit (.int 16)))
         (.seq (.loop roundBody) values)))), .arr r.ty⟩
+  if cursor.isSome then
+    eerr p "internal: resumable for header needs flat prepared clauses"
   match pre with
   | [] =>
     let r ← build ctx gs body
