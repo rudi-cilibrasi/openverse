@@ -4356,6 +4356,14 @@ private partial def returnLoopOperands (ret : STy) (tag : String) : SExpr → SE
       .ret p (some (.optionLit p (.ident p saved)))]
   | e => Id.run (e.mapChildrenM fun child => pure (returnLoopOperands ret tag child))
 
+/-- An iteration with an explicit return on every path needs no recursive step.
+    The original iteration still receives source checking. -/
+private partial def returnLoopIterationEnds : SExpr → Bool
+  | .ret .. => true
+  | .block _ statements => statements.any returnLoopIterationEnds
+  | .ite _ _ yes (some no) => returnLoopIterationEnds yes && returnLoopIterationEnds no
+  | _ => false
+
 private partial def boxReturnLoopCaptures (owner : String) (sites : List ReturnLoopSite)
     (types : List (String × STy)) (body : SExpr) : SExpr := Id.run do
   let bindings := uniqueLoopCaptures (sites.flatMap fun site => site.captures.filter fun binding =>
@@ -4465,15 +4473,17 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
       noneValue (some (.app site.pos (.ident site.pos site.helper)
         ([.bin site.pos "+" (.ident site.pos cursor) (.int site.pos 1)] ++ iterationArgs ++ args) false))
     let iteration := returnLoopOperands ret site.helper (cellVars boxed iterationBody)
+    let iteration := if returnLoopIterationEnds iterationBody then iteration
+      else SExpr.block site.pos [iteration, next]
     let helperBody := match arrayType with
       | some (.arr element) =>
         -- A single checked array index owns the empty/end failure locally.
         -- The original item name remains scoped to this iteration's body.
         SExpr.ite site.pos [.decl site.pos site.index (some element) false
           (.app site.pos (.ident site.pos arrayName) [.ident site.pos cursor] true)]
-          (.block site.pos [iteration, next]) (some noneValue)
+          iteration (some noneValue)
       | _ => SExpr.ite site.pos [.cmp site.pos (.ident site.pos cursor) [(">", .ident site.pos endName)]]
-          noneValue (some (.block site.pos [iteration, next]))
+          noneValue (some iteration)
     let tparams := needed.map fun tp =>
       { tp with upperBound := tp.upperBound.map (·.substNames substitution) }
     let iteratorParam := match arrayType with
