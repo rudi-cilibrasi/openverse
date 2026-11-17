@@ -1,0 +1,7 @@
+touch 1
+touch 2
+rows 2
+after 2
+rejected 0
+after 0
+exit=0
