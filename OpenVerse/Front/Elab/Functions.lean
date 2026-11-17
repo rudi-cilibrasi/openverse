@@ -146,21 +146,20 @@ def checkParamDefaults (ctx : Ctx) (st0 : ESt) (name : String) (ps : List SParam
       if suspends msg then
         throw s!"{msg}: {what} cannot suspend, also of a <suspends> function (Book of Verse tests, DefaultNamed.versetest)"
 
-/-- Return certificates cannot import another function's opaque binder
-    into this function's metadata view. Only closed signatures are shared. -/
-private partial def metadataClosedReturn : Ty → Bool
-  | .param .. => false
-  | .arr ty | .opt ty => metadataClosedReturn ty
-  | .tup tys | .struct _ tys => tys.all metadataClosedReturn
-  | .map key value | .weakMap key value => metadataClosedReturn key && metadataClosedReturn value
-  | _ => true
-
-private def metadataReturns (signatures : List Sig) (count : Nat) : Array (Option Ty) := Id.run do
+/-- Keep each actual Core signature's full call type. The metadata receiver
+    projector binds generic parameters only from actual hidden witnesses;
+    opaque binders never become caller-scope type certificates. -/
+private def metadataReturns (signatures : List Sig) (count : Nat) : Array (Option MetadataReceivers.CallType) := Id.run do
   let mut types := Array.replicate count none
   let mut seen := Array.replicate count false
   for signature in signatures do
     if signature.idx < count then
-      let candidate := if metadataClosedReturn signature.ret then some signature.ret else none
+      let frame := signature.frame
+      let witnesses := (signature.tparams.filter fun (name, _) => !signature.selfTps.contains name).zipIdx.map
+        fun ((name, _), index) => (name, frame.witnessBase + index)
+      let candidate := if frame.valid then
+        some ({ params := signature.params, ret := signature.ret, witnesses } : MetadataReceivers.CallType)
+        else none
       if seen[signature.idx]! then
         -- A conflict is sticky: a later duplicate cannot resurrect a hint.
         if types[signature.idx]! != candidate then types := types.set! signature.idx none
@@ -199,7 +198,7 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
     (suspends : Bool := false) (selfTps : List String := [])
     (selfFieldOf : Option (String → Option Nat) := none)
     (evidenceSignature : Option Sig := none) (extendedDefaults : Bool := false)
-    (callOnly : Bool := false) (fnReturns : Array (Option Ty) := #[]) :
+    (callOnly : Bool := false) (fnReturns : Array (Option MetadataReceivers.CallType) := #[]) :
     Except String ElaboratedFn := do
   -- (#209) the values of `selfTps` come from the receiver's hidden
   -- fields, in slots after the hidden parameters: a method's own class's
