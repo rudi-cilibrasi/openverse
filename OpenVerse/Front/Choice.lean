@@ -4213,6 +4213,8 @@ private structure ReturnLoopSite where
   index : String
   lower : SExpr
   upper : SExpr
+  /-- One ordinary, single-valued array source, evaluated before lazy iteration. -/
+  arraySource : Option SExpr := none
   body : SExpr
   captures : List LoopCapture
   boxed : List String
@@ -4277,6 +4279,23 @@ private partial def returnLoopSites (owner : String) (f : MFn) (mv : List String
           pos := p, key, helper := s!"$sourceLoopReturn{sitePart owner}_{p.line}_{p.col}"
           index, lower, upper, body, captures, boxed }])
       else pure ()
+    | .forE p [.gen _ index none source] body =>
+      let many := anyE (fun
+        | .ret _ value => value.any fun operand => hasLiftable (markCalls mv operand)
+        | _ => false) body
+      if hasReturn body && many && loopBodyScalar mv body && loopBodyScalar mv source &&
+          !hasLiftable (markCalls mv source) then
+        let inner := localsOf body
+        let names := namesUsed body
+        let captures := scope.filter fun binding => binding.name != index && !inner.contains binding.name
+        let writes := setsIn body ++ defers.flatMap setsIn
+        let boxed := captures.filterMap fun binding =>
+          if binding.mutable && names.contains binding.name && writes.contains binding.name then some binding.name else none
+        let key := loopSiteKey owner p
+        modify (· ++ [{
+          pos := p, key, helper := s!"$sourceLoopReturn{sitePart owner}_{p.line}_{p.col}"
+          index, lower := .int p 0, upper := .int p 0, arraySource := some source,
+          body, captures, boxed }])
     -- A nested loop is not a separately owned return boundary. Keep an
     -- ineligible enclosing loop intact rather than lifting only its child.
     | .forE .. | .loop .. => pure ()
@@ -4286,6 +4305,7 @@ private partial def returnLoopSites (owner : String) (f : MFn) (mv : List String
 
 private def loopNotesReady (owner : String) (parameters : List TParam) (sites : List ReturnLoopSite) (types : List (String × STy)) : Bool :=
   sites.all fun site => (types.lookup (site.key ++ "$return")).isSome &&
+    (site.arraySource.isNone || (types.lookup (site.key ++ site.helper ++ "$iterable")).isSome) &&
     parameters.all (fun parameter => (types.lookup (site.key ++ "$type/" ++ parameter.name)).isSome) &&
     site.captures.all fun binding =>
       (types.lookup (site.key ++ binding.name)).isSome &&
@@ -4299,11 +4319,18 @@ private partial def noteReturnLoops (owner : String) (ret : STy) (parameters : L
     site.boxed.contains binding.name && binding.annotation.isNone)
   let rec go (e : SExpr) : SExpr := Id.run do
     if let some site := sites.find? (·.pos == e.pos) then
-      if let .forE .. := e then
+      if let .forE q clauses iteration := e then
+        let checked := match site.arraySource, clauses with
+          | some source, [.gen gp index none _] =>
+            let key := site.key ++ site.helper ++ "$iterable"
+            let marked := SExpr.app source.pos (.ident source.pos "$noteLoopIterator")
+              [.str source.pos [.text key], source] false
+            .forE q [.gen gp index none marked] iteration
+          | _, _ => e
         return .block e.pos [note e.pos site.key
           (.app e.pos (.ident e.pos "$captureEvidence") [] false :: site.captures.map (fun binding => .ident e.pos binding.name) ++
             (.decl e.pos "$return" (some ret) false (.tuple e.pos []) :: parameters.map (fun parameter =>
-              .decl e.pos ("$type/" ++ parameter.name) (some (.name parameter.name)) false (.tuple e.pos [])))), e]
+              .decl e.pos ("$type/" ++ parameter.name) (some (.name parameter.name)) false (.tuple e.pos [])))), checked]
     match e with
     | .block p statements =>
       let statements := statements.flatMap fun statement =>
@@ -4324,6 +4351,14 @@ private partial def returnLoopOperands (ret : STy) (tag : String) : SExpr → SE
     .block p [.decl p saved (some ret) false (value.getD (.tuple p [])),
       .ret p (some (.optionLit p (.ident p saved)))]
   | e => Id.run (e.mapChildrenM fun child => pure (returnLoopOperands ret tag child))
+
+/-- An iteration with an explicit return on every path needs no recursive step.
+    The original iteration still receives source checking. -/
+private partial def returnLoopIterationEnds : SExpr → Bool
+  | .ret .. => true
+  | .block _ statements => statements.any returnLoopIterationEnds
+  | .ite _ _ yes (some no) => returnLoopIterationEnds yes && returnLoopIterationEnds no
+  | _ => false
 
 private partial def boxReturnLoopCaptures (owner : String) (sites : List ReturnLoopSite)
     (types : List (String × STy)) (body : SExpr) : SExpr := Id.run do
@@ -4368,6 +4403,20 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
         | throw "internal: missing loop type parameter"
       pure (parameter.name, actual)
     let iterationBody := site.body.mapAll (·.substNames substitution) id
+    let arrayType ← site.arraySource.mapM fun _ => do
+      let some ty := types.lookup (site.key ++ site.helper ++ "$iterable")
+        | throw "internal: missing loop array source type"
+      let ty := ty.substNames substitution
+      match ty with
+      | .arr _ => pure ty
+      | _ => throw s!"{site.pos.show}: lazy loop return operands currently require an array-valued iterator (#686)"
+    if let (some source, some (.arr (.name "$never"))) := (site.arraySource, arrayType) then
+      -- The source can still fail or have effects. Use ordinary iteration
+      -- to handle it, with no helper that would bind an impossible item.
+      let iteration := SExpr.forE site.pos [.gen site.pos site.index none (cellVars boxed source)]
+        (.tuple site.pos [])
+      replacements := replacements ++ [(site.pos, iteration)]
+      continue
     let typedCaptures ← site.captures.mapM fun binding => do
       let some ty := types.lookup (site.key ++ binding.name) | throw "internal: missing loop capture"
       let ty := ty.substNames substitution
@@ -4381,7 +4430,7 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
         throw s!"{site.pos.show}: a loop return capturing a mutable implicit proof is not supported yet (#686)"
     let mut retained := typedCaptures.filter fun (binding, _) =>
       used.contains binding.name || operational.any (fun root => root.name == binding.name)
-    let required := [ret] ++ returnLoopWrittenTypes iterationBody
+    let required := [ret] ++ arrayType.toList ++ returnLoopWrittenTypes iterationBody
     let mut needed : List TParam := []
     let mut inferenceOnly : List String := []
     -- Adding an inference input may itself mention another index. Close over
@@ -4394,7 +4443,7 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
         needed := f.tparams.filter fun tp => needed.any (fun prior => prior.name == tp.name) ||
           bounds.any (styMentions [tp.name])
       let mut uncovered := needed.filter fun tp =>
-        !(retained.map (·.2)).any (styMentions [tp.name])
+        !(arrayType.toList ++ retained.map (·.2)).any (styMentions [tp.name])
       -- Inputs read solely to infer indices are metadata, and do not taint
       -- independent returned data. Operational proof roots stay real.
       for (binding, ty) in typedCaptures do
@@ -4417,30 +4466,56 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
     let noneValue := SExpr.block site.pos
       [.decl site.pos noneName (some (.opt ret)) false (.ident site.pos "false"), .ident site.pos noneName]
     let args := caps.map fun param => SExpr.ident site.pos param.name
-    let next := SExpr.ite site.pos [.cmp site.pos (.ident site.pos site.index) [(">=", .ident site.pos endName)]]
+    let cursor := if arrayType.isSome then site.helper ++ "$cursor" else site.index
+    let arrayName := site.helper ++ "$items"
+    let endValue := if arrayType.isSome then
+        SExpr.bin site.pos "-" (.member site.pos (.ident site.pos arrayName) "Length") (.int site.pos 1)
+      else .ident site.pos endName
+    let iterationArgs := if arrayType.isSome then [.ident site.pos arrayName] else [.ident site.pos endName]
+    let next := SExpr.ite site.pos [.cmp site.pos (.ident site.pos cursor) [(">=", endValue)]]
       noneValue (some (.app site.pos (.ident site.pos site.helper)
-        ([.bin site.pos "+" (.ident site.pos site.index) (.int site.pos 1), .ident site.pos endName] ++ args) false))
+        ([.bin site.pos "+" (.ident site.pos cursor) (.int site.pos 1)] ++ iterationArgs ++ args) false))
     let iteration := returnLoopOperands ret site.helper (cellVars boxed iterationBody)
-    let helperBody := SExpr.ite site.pos [.cmp site.pos (.ident site.pos site.index) [(">", .ident site.pos endName)]]
-      noneValue (some (.block site.pos [iteration, next]))
+    let iteration := if returnLoopIterationEnds iterationBody then iteration
+      else SExpr.block site.pos [iteration, next]
+    let helperBody := match arrayType with
+      | some (.arr element) =>
+        -- A single checked array index owns the empty/end failure locally.
+        -- The original item name remains scoped to this iteration's body.
+        SExpr.ite site.pos [.decl site.pos site.index (some element) false
+          (.app site.pos (.ident site.pos arrayName) [.ident site.pos cursor] true)]
+          iteration (some noneValue)
+      | _ => SExpr.ite site.pos [.cmp site.pos (.ident site.pos cursor) [(">", .ident site.pos endName)]]
+          noneValue (some iteration)
     let tparams := needed.map fun tp =>
       { tp with upperBound := tp.upperBound.map (·.substNames substitution) }
+    let iteratorParam := match arrayType with
+      | some ty => ({ name := arrayName, ty } : SParam)
+      | none => { name := endName, ty := .name "int" }
     helpers := helpers ++ [.fn site.pos site.helper
-      ([{ name := site.index, ty := .name "int" }, { name := endName, ty := .name "int" }] ++ caps)
+      ([{ name := cursor, ty := .name "int" }, iteratorParam] ++ caps)
       tparams f.fx (.opt ret) helperBody]
     let lower := site.helper ++ "$lower"
     let upper := site.helper ++ "$upper"
-    let call := SExpr.app site.pos (.ident site.pos site.helper)
-      ([.ident site.pos lower, .ident site.pos upper] ++ args) false
-    -- Range clauses take failure locally: a failed endpoint makes this
-    -- iteration empty and still reaches the producer's following statements.
-    let replacement := SExpr.ite site.pos
-      [.decl site.pos lower (some (.name "int")) false (cellVars boxed site.lower),
-       .decl site.pos upper (some (.name "int")) false (cellVars boxed site.upper)]
-      (.block site.pos [.decl site.pos packet (some (.opt ret)) false call,
-        .ite site.pos [.decl site.pos value none false (.query site.pos (.ident site.pos packet))]
-          (.ret site.pos (some (.ident site.pos value))) (some (.tuple site.pos []))])
-      (some (.tuple site.pos []))
+    let selected := SExpr.block site.pos [.decl site.pos packet (some (.opt ret)) false
+      (.app site.pos (.ident site.pos site.helper)
+        ([.ident site.pos lower, .ident site.pos upper] ++ args) false),
+      .ite site.pos [.decl site.pos value none false (.query site.pos (.ident site.pos packet))]
+        (.ret site.pos (some (.ident site.pos value))) (some (.tuple site.pos []))]
+    -- Both forms snapshot their iterable before lazy iteration. A replaced
+    -- mutable array binding cannot change the original sequence of elements.
+    let clauses := match site.arraySource, arrayType with
+      | some source, some ty =>
+        -- An empty source produces no first row. Fail the header before its
+        -- writes can commit, just as ordinary array iteration does.
+        [.decl site.pos lower (some (.name "int")) false (.int site.pos 0),
+         .decl site.pos upper (some ty) false (cellVars boxed source),
+         .cmp site.pos (.member site.pos (.ident site.pos upper) "Length")
+           [(">", .int site.pos 0)]]
+      | _, _ =>
+        [.decl site.pos lower (some (.name "int")) false (cellVars boxed site.lower),
+         .decl site.pos upper (some (.name "int")) false (cellVars boxed site.upper)]
+    let replacement := SExpr.ite site.pos clauses selected (some (.tuple site.pos []))
     replacements := replacements ++ [(site.pos, replacement)]
   let changed := mapE (fun
     | .forE p .. => replacements.lookup p
