@@ -1592,11 +1592,56 @@ private def probeCleanup (fns : Array Fn) (infos : Array Info)
     live := #[], liveSeen := {} }
   return result
 
+/-- Copies into local slots cannot publish a value or run another actor.
+    Return whether there was a write; calls, heap accesses and exits are excluded. -/
+private partial def rollbackLocalCopies : Expr → Option Bool
+  | .lit _ | .local _ => some false
+  | .assign _ value => if (rollbackLocalCopies value).isSome then some true else none
+  | .seq left right => do
+    let left ← rollbackLocalCopies left
+    let right ← rollbackLocalCopies right
+    pure (left || right)
+  | _ => none
+
+/-- A literal failure after local copies rolls those copies back before
+    any observer can run. Require an actual write: bare failures also form
+    structural markers, including compiler-owned cleanup registrations. -/
+private partial def failsAfterLocalCopies (condition : Expr) (written : Bool := false) : Bool :=
+  match condition with
+  | .prim .query [.lit (.logic false)] | .prim .query [.lit .none] => written
+  | .prim .fail [] => written
+  | .seq left right =>
+    match rollbackLocalCopies left with
+    | some copied => failsAfterLocalCopies right (written || copied)
+    | none => false
+  | _ => false
+
+/-- This changes only the compiler's provenance view, never runtime Core.
+    A source-frame cell may temporarily contain metadata in a failed test;
+    no call, heap access, suspension or cleanup is hidden by this rule. -/
+private partial def withoutRolledBackCopies : Expr → Expr
+  | .ite condition yes no =>
+    if failsAfterLocalCopies condition then withoutRolledBackCopies no else
+      .ite (withoutRolledBackCopies condition) (withoutRolledBackCopies yes) (withoutRolledBackCopies no)
+  | .assign slot value => .assign slot (withoutRolledBackCopies value)
+  | .seq left right => .seq (withoutRolledBackCopies left) (withoutRolledBackCopies right)
+  | .call fn args => .call fn (args.map withoutRolledBackCopies)
+  | .prim op args => .prim op (args.map withoutRolledBackCopies)
+  | .heap op args => .heap op (args.map withoutRolledBackCopies)
+  | .forE slot source filter body =>
+    .forE slot (withoutRolledBackCopies source) (withoutRolledBackCopies filter) (withoutRolledBackCopies body)
+  | .loop body => .loop (withoutRolledBackCopies body)
+  | .ret value => .ret (withoutRolledBackCopies value)
+  | .print value => .print (withoutRolledBackCopies value)
+  | other => other
+
 /-- Solve recursive call contexts and loop back edges to a fixed point.
     Hidden witnesses do not taint an unrelated result: return roles come
     from the body, rather than the union of physical call arguments. -/
 def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
     (debug : Bool := false) (scalarReturns : Array Bool := #[]) : Except String Unit := do
+  let infos := infos.map fun info =>
+    { info with body := info.body.map withoutRolledBackCopies }
   let action : M Unit := do
     let runContext (key : Key) : M Flow := do
       let (i, args) := key
