@@ -4396,15 +4396,25 @@ private partial def returnLoopSites (owner : String) (f : MFn) (mv : List String
         | clause => !liftsHere (markCalls mv clause)
       let composed := before.length < clauses.length && before.all scalarPrefix &&
         (clauses.drop (before.length + 1)).all valid
+      let exclusiveClause : SExpr → Bool := fun
+        | .decl _ _ _ false value =>
+          let marked := markCalls mv value
+          liftsAsIf marked || (caseIf "$cursorCase" marked).any (liftsAsIf ·.2)
+        | _ => false
+      let beforeExclusive := clauses.takeWhile (!exclusiveClause ·)
+      let exclusive := beforeExclusive.length < clauses.length && beforeExclusive.all valid &&
+        (clauses.drop (beforeExclusive.length + 1)).all valid
       let producer : SExpr → Option String := fun
         | .decl _ _ _ false (.app _ (.ident _ name) args _) =>
           if recursiveProducer name && !args.any (fun arg => liftsHere (markCalls mv arg)) then some name
           else none
         | _ => none
-      let recursive := if clauses.all (fun clause => (producer clause).isSome || valid clause) then
+      let recursive :=
+        if exclusive then (clauses.flatMap namesUsed).filter recursiveProducer |>.eraseDups
+        else if clauses.all (fun clause => (producer clause).isSome || valid clause) then
           (clauses.filterMap producer).eraseDups
         else []
-      if (flat || composed || !recursive.isEmpty) && !clauses.any loopConcurrent &&
+      if (flat || composed || exclusive || !recursive.isEmpty) && !clauses.any loopConcurrent &&
           !loopBodySupported mv body then
         record scope defers p (.cursor clauses (boundIn clauses) recursive) body
     | .loop p body => record scope defers p .loop body

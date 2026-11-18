@@ -359,9 +359,15 @@ search resumes in the outer row's lexical context. Exhaustion advances
 the outer search after any effects the inner search committed. Body
 alternatives share mutations to captured cells when they resume a row.
 
-The older lowering applies when clauses retain other lazy producers (#246),
-a composed choice (#283, #335), an exclusive choice (#314, #331), or a
-continuation for a refining cast or a waiting consumer (#243, #417).
+A resumable conditional or `case` header saves the selected branch.
+Branch alternatives share the selector's effects and yield values at
+their common type. A preceding generator supplies the lexical context
+for the selection and advances after that branch is exhausted.
+
+The older lowering applies when clauses retain other lazy producers
+(#246), unsupported composed or exclusive choices (#283, #314, #331,
+#335), or a continuation for a refining cast or a waiting consumer
+(#243, #417).
 Each form needs its own resumable search state.
 
 - *Composed and exclusive choices* (#283, #314): their alternatives or

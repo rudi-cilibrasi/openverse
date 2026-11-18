@@ -1511,50 +1511,73 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         let input ← coerce p input inputTy
         let result ← step slot
         return { result with e := .seq (.assign slot input) result.e }
+  let cursorArms (request : ForCursorRequest) (before suffix : List SExpr)
+      (prepareArms : Ctx → EM (List (List SExpr))) : EM R := do
+    let start := (← get).nslots
+    let (prefixCode, prefixCtx) ← elabFilters ctx before
+    let prelude : ForCursorPrefix := {
+      code := prefixCode
+      bindings := prefixCtx.locals.filter (·.slot >= start) }
+    let arms ← prepareArms prefixCtx
+    let step (c : Ctx) (arm : List SExpr) (index : Nat) (prior : SExpr) : EM R :=
+      let clauses := Choice.prepare arm (choiceValues prefixCtx) (choiceField prefixCtx)
+        (site := s!"$cursor{p.line}_{p.col}_{index}") (fieldOrder := choiceOrder prefixCtx)
+        (keepExcl := true) (keepBranches := choiceHasCast prefixCtx)
+      elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq
+        c p (clauses ++ suffix) body (prepared := true) (cursor := some { request with prior })
+    let saved ← get
+    let shapes ← arms.zipIdx.mapM fun (arm, index) => do
+      let probe ← step { prefixCtx with typeOnly := true } arm index (.ident p "false")
+      let .opt (.tup [state, row]) := probe.ty | eerr p "internal: malformed cursor alternative"
+      pure (state, row)
+    restoreConstructProbe ctx saved
+    let frames ← (arms.zip shapes).zipIdx.mapM fun ((arm, (state, row)), index) => do
+      let name := s!"$cursorArm{p.line}_{p.col}_{index}"
+      let inputTy := Ty.opt state
+      let input ← fresh inputTy
+      let c := { prefixCtx with locals := { name, slot := input, ty := inputTy, mutable := false } :: prefixCtx.locals }
+      let next ← step c arm index (.ident p name)
+      unless next.ty == .opt (.tup [state, row]) do
+        eerr p "internal: cursor alternative changed type"
+      return { cursor := state, row, input, next := next.e : ForCursorArm }
+    let inputTy := Ty.opt (forCursorChoiceType frames prelude)
+    let input ← elabE ctx request.prior (some inputTy)
+    let slot ← fresh inputTy
+    let input ← coerce p input inputTy
+    let result ← forCursorChoice p (some slot) frames prelude
+    return { result with e := .seq (.assign slot input) result.e }
+  if let some request := cursor then
+    let before := pre.takeWhile (!isExcl ·)
+    if let some (.decl gp x xty false (.app _ (.ident _ "$excl") alts false)) := pre[before.length]? then
+      let suffix := pre.drop (before.length + 1) ++ rest
+      return ← cursorArms request before suffix fun c => do
+        let annotation ← match xty with
+          | some t => pure (some t)
+          | none => joinOfType elabBranchAlts c gp alts
+        return alts.filterMap fun
+          | .app _ (.ident _ "$alt") [.block _ guards, value] false =>
+            some (guards ++ [.decl gp x annotation false value])
+          | _ => none
+    if (pre[before.length]?).any isBranch then
+      eerr p "a loop return with a refining conditional header is not supported yet (#686)"
   if let (some request, (g, fs) :: more) := (cursor, gs) then
     if let some binding := Choice.binding? g then
       if binding.composed && !pre.any isExcl then
-        let start := (← get).nslots
-        let (prefixCode, prefixCtx) ← elabFilters ctx pre
-        let prelude : ForCursorPrefix := {
-          code := prefixCode
-          bindings := prefixCtx.locals.filter (·.slot >= start) }
         let suffix := fs ++ more.flatMap fun (next, filters) => next :: filters
-        let step (c : Ctx) (alt : SExpr) (index : Nat) (prior : SExpr) : EM R :=
-          let clauses := Choice.prepare [.decl binding.pos binding.name binding.ty false alt]
-            (choiceValues prefixCtx) (choiceField prefixCtx) (fieldOrder := choiceOrder prefixCtx)
-            (site := s!"$cursor{p.line}_{p.col}_{index}") (keepExcl := true) (keepBranches := choiceHasCast prefixCtx)
-          elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq
-            c p (clauses ++ suffix) body (prepared := true) (cursor := some { request with prior })
-        let saved ← get
-        let shapes ← binding.alts.zipIdx.mapM fun (alt, index) => do
-          let probe ← step { prefixCtx with typeOnly := true } alt index (.ident p "false")
-          let .opt (.tup [state, row]) := probe.ty | eerr p "internal: malformed composed cursor arm"
-          pure (state, row)
-        restoreConstructProbe ctx saved
-        let arms ← (binding.alts.zip shapes).zipIdx.mapM fun ((alt, (state, row)), index) => do
-          let name := s!"$cursorArm{p.line}_{p.col}_{index}"
-          let inputTy := Ty.opt state
-          let input ← fresh inputTy
-          let c := { prefixCtx with locals := { name, slot := input, ty := inputTy, mutable := false } :: prefixCtx.locals }
-          let next ← step c alt index (.ident p name)
-          unless next.ty == .opt (.tup [state, row]) do
-            eerr p "internal: composed cursor arm changed type"
-          return { cursor := state, row, input, next := next.e : ForCursorArm }
-        let inputTy := Ty.opt (forCursorChoiceType arms prelude)
-        let input ← elabE ctx request.prior (some inputTy)
-        let slot ← fresh inputTy
-        let input ← coerce p input inputTy
-        let result ← forCursorChoice p (some slot) arms prelude
-        return { result with e := .seq (.assign slot input) result.e }
+        return ← cursorArms request pre suffix fun _ =>
+          pure (binding.alts.map fun alt => [.decl binding.pos binding.name binding.ty false alt])
   if let (some request, (g, fs) :: more) := (cursor, gs) then
     let isRecursive (g : SExpr) : Bool := (Choice.binding? g).any fun binding =>
       match binding.each with
       | some (.app _ (.ident _ "$loop") _ false) => true
       | _ => false
-    if !more.isEmpty && (isRecursive g || more.any (isRecursive ·.1)) && !pre.any isExcl && !fs.any isExcl then
-      let left := pre ++ (g :: fs)
-      let right := more.flatMap fun (next, filters) => next :: filters
+    let before := fs.takeWhile (!isExcl ·)
+    let after := fs.drop before.length
+    let right := after ++ more.flatMap (fun (next, filters) => next :: filters)
+    let hasBoundary := isRecursive g || !after.isEmpty ||
+      more.any (fun (next, filters) => isRecursive next || filters.any isExcl)
+    if !right.isEmpty && hasBoundary && !pre.any isExcl then
+      let left := pre ++ (g :: before)
       let makeArm (c : Ctx) (clauses : List SExpr) (names : List String) : EM ForCursorArm := do
         let step (c : Ctx) (prior : SExpr) :=
           elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq c p clauses body
