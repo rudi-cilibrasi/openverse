@@ -1396,7 +1396,7 @@ def refinedCursorOwnerOf (ctx : Ctx) (p : Pos) (base row cursor : Ty) (method : 
   let clauses := clauses.map qualify
   let written := ctx.choiceCoercionBody (.block p (clauses ++ outputs))
   let caps := ctx.capturesOf written
-  let t := (base :: row :: cursor :: caps.map (·.ty))
+  let t := (base :: row :: cursor :: caps.map (·.ty)) ++ caps.flatMap (fun l => l.storage.toList.flatMap (·.args))
   let (parameters, _, _) ← contTypes ctx p t [] written
   let key := "refinedCursor" ++ contKey ctx p method [written] ++ forStageCaptureKey ctx t caps
   let name := s!"$refinedCursor{p.line}_{p.col}_{key.hash}"
@@ -1406,32 +1406,51 @@ def refinedCursorOwnerOf (ctx : Ctx) (p : Pos) (base row cursor : Ty) (method : 
   let localName (n : String) := if n == "Self" then "$cursorSourceSelf" else n
   let fieldName (l : Local) (i : Nat) := if l.typeValue then s!"$w.cursor{i}" else s!"$cursorCapture{i}"
   let fields := caps.zipIdx.map fun (l, i) => ({ name := fieldName l i, ty := l.ty.toSTy } : SField)
-  let fields := fields ++ [{ name := "$cursorState", ty := .opt cursor.toSTy }]
-  let slots := caps.zipIdx.map fun (l, i) =>
-    SExpr.decl p (localName l.name) (some l.ty.toSTy) l.mutable (member (fieldName l i))
+  let relations := (SubtypeEvidence.capabilities ctx.types (caps.map fun l =>
+    (l.name, if l.typeValue then Ty.void else l.ty))).map (fun plan => plan.bound ctx.types) |>.eraseDups
+  let fields := fields ++ [{ name := "$cursorState", ty := .opt cursor.toSTy }] ++
+    SubtypeEvidence.relationFields p name (relations.map fun bound =>
+      (bound.base.toSTy, bound.derived.toSTy))
+  let borrowed (l : Local) := l.storage.filter fun s =>
+    !(ctx.sig? s.frame).any (!·.suspends)
+  let slots := caps.zipIdx.flatMap fun (l, i) =>
+    let value := SExpr.app p (ident "$forEnvCapture") [member (fieldName l i)] false
+    if (borrowed l).isSome then
+      let saved := s!"$cursorCaptureInit{i}"
+      [SExpr.decl p saved (some l.ty.toSTy) false value,
+        .decl p (localName l.name) (some l.ty.toSTy) l.mutable
+          (.app p (ident "$forEnvInit") [ident saved] false)]
+    else [SExpr.decl p (localName l.name) (some l.ty.toSTy) l.mutable value]
   let aliases := ctx.types.tvars.map fun (n, ty) => (n, ty.toSTy)
   let clauses := clauses.map (fun clause =>
     Choice.renameE [("Self", "$cursorSourceSelf")] (Refine.substTypes aliases clause))
-  let step := SExpr.app p (ident "$forCursorNext") [.block p clauses, .block p outputs, member "$cursorState"] false
+  let step := SExpr.app p (ident "$forNestedCursorNext") [.block p clauses, .block p outputs, member "$cursorState"] false
   let packet := "$cursorPacket"
   let get (i : Int) (value : SExpr) := SExpr.app p value [.int p i] false
   let make (values : List SExpr) (state : SExpr) :=
     SExpr.construct p name arguments ((caps.zipIdx.zip values).map (fun ((l, i), v) =>
       SExpr.decl p (fieldName l i) none false v) ++ [.decl p "$cursorState" none false state])
   let state := SExpr.optionLit p (get 0 (ident packet))
-  let next := make (caps.zipIdx.map fun (l, i) => member (fieldName l i)) state
+  let next := make (caps.map fun l => ident (localName l.name)) state
   let values := get 1 (ident packet)
   let value := if scalar then get 0 values else values
   let result := SExpr.ite p [.decl p packet none false (.query p (ident "$cursorStep"))]
     (.optionLit p (.tuple p [next, value])) (some (ident "false"))
   let effects := if ctx.fnFx.isEmpty then ["computes"] else ctx.fnFx
+  let code := ctx.choiceCoercionBody (.block p (slots ++ [.decl p "$cursorStep" none false step, result]))
+  let methodName := s!"{name}.{method}"
   let nextMethod := STop.fn p method [] [] ("override" :: effects)
-    (.opt (.tup [base.toSTy, row.toSTy])) (.block p (slots ++ [.decl p "$cursorStep" none false step, result]))
+    (.opt (.tup [base.toSTy, row.toSTy])) (pruneConstructHints ctx methodName code)
   let cls := STop.classDef p name [] parameters [] [base.toSTy] false fields [nextMethod]
+  let storage := caps.filterMap fun l => (borrowed l).map fun slot =>
+    (localName l.name, ({ frame := slot.frame, name := slot.name, args := slot.args.map Ty.toSTy } : Choice.ResumeStorage))
+  let resume : Choice.ForResume := {
+    name := methodName, storage, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
+    rollback := ctx.inRollback, sourceContext := sourceContextOf ctx }
   let request : Choice.FirstLift := {
-    stageOnly := true, key, pos := p, name, params := [], specs := ["computes"],
+    stageOnly := true, resumes := [resume], key, pos := p, name, params := [], specs := ["computes"],
     ret := .name "void", body := .tuple p [], binds := [], sets := [], args := [], extraFns := [cls] }
-  return (request, make (caps.map (ident ∘ (·.name))) (ident "false"))
+  return (request, make (caps.map fun l => ident l.name) (ident "false"))
 
 /-- Batch a prefix's environment using its actual declaration context.
     Typed storage origins and capture keys are checked exactly as on restart. -/

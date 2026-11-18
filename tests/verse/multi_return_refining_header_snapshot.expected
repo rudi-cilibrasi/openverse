@@ -1,0 +1,28 @@
+advance 3 3 1000
+cleanup 3 3 1010
+cleanup 1 1 1020
+all 1
+cleanup 1 1 1030
+all 1001
+cleanup 1 101 1040
+all 101
+cleanup 1 101 1050
+all 1101
+advance 3 103 1050
+cleanup 3 103 1060
+cleanup 1 1 1070
+all 1
+cleanup 1 1 1080
+all 1001
+cleanup 1 101 1090
+all 101
+cleanup 1 101 1100
+all 1101
+state 1100
+advance 4 4 0
+cleanup 4 4 10
+cleanup 1 101 20
+first 101
+state 20
+mutated 99
+exit=0

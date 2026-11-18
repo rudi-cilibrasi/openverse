@@ -187,7 +187,7 @@ partial def elabExprMarkersWith
     let row ← resolveTy ctx.types p payload
     let saved ← get
     let probe ← elabE { ctx with typeOnly := true }
-      (.app p (.ident p "$forCursorNext") [.block p clauses, .block p outputs, .ident p "false"] false) none
+      (.app p (.ident p "$forNestedCursorNext") [.block p clauses, .block p outputs, .ident p "false"] false) none
     restoreConstructProbe ctx saved
     let .opt (.tup [state, actual]) := probe.ty | eerr p "internal: malformed refined cursor"
     let scalar := actual != row && actual == .tup [row]
