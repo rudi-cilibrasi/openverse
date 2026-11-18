@@ -315,6 +315,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let fields ← classFields classes opts.requests
   let methods ← classMethods defs.tops classes fields
   let env ← typeEnvironment classes fields methods source admitted.concurrencyNames opts.requests opts.signalNoRollback
+  let env := { env with defaultNoRollback := opts.defaultNoRollback }
   let env ← upperBounds env methods.tops
   checkAliasBounds env admitted.aliases
   let views ← interfaceViews env classes.defs opts.requests
@@ -635,14 +636,14 @@ def compileTops (tops : List STop) (args : List String) (mentionsArgs : Bool) (d
     (`Compiled.warnings`), in the order of the source. -/
 def compileTopsWarned (tops : List STop) (args : List String) (mentionsArgs : Bool) (doExpr : Option String)
     (debug : Bool := false) (profile : SourceProfile := .full)
-    (extendedDefaults : Bool := false) (signalNoRollback : Bool := true) :
+    (extendedDefaults : Bool := false) (signalNoRollback : Bool := true) (defaultNoRollback : Bool := false) :
     Except String (Prog × List String) := do
   let entry ← match doExpr with
     | some t => some <$> parseExprText t
     | none => pure none
   let useArgs := !args.isEmpty || mentionsArgs
   let opts : Options := { args := if useArgs then some args else none, entry, debug, profile, extendedDefaults }
-  let c ← elabProgram tops { opts with signalNoRollback }
+  let c ← elabProgram tops { opts with signalNoRollback, defaultNoRollback }
   return (c.prog, c.warnings.map fun (p, m) => s!"{p.show}: warning: {m}")
 
 /-- Compile with shell arguments (bound to `Args` when given or used) and an

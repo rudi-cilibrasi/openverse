@@ -398,6 +398,10 @@ structure TyEnv where
       contexts and bodies whose effects exclude `no_rollback` make
       (`ESt.failCalls`, `ESt.bodyCalls`). -/
   signalNoRollback : Bool := false
+  /-- (#515, strict, `--default-no-rollback`) Generated helpers keep the
+      `no_rollback` context of the code they come from
+      (`Choice.SourceContext.rollbackOnly`, `plainDecides`). -/
+  defaultNoRollback : Bool := false
   /-- The variances of the classes in Verse Core, by tag and Verse Core type
       argument position (docs/research/variance.md): what the certificate
       gives (`Sigs.variances`), so that a conversion the front end makes by

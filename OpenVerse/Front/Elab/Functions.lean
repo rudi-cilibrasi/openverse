@@ -202,7 +202,7 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
     (selfFieldOf : Option (String → Option Nat) := none)
     (evidenceSignature : Option Sig := none) (extendedDefaults : Bool := false)
     (callOnly : Bool := false) (fnReturns : Array (Option MetadataReceivers.CallType) := #[])
-    (rollbackOnly : Bool := false) :
+    (rollbackOnly : Bool := false) (plainDecides : Bool := false) :
     Except String ElaboratedFn := do
   -- (#209) the values of `selfTps` come from the receiver's hidden
   -- fields, in slots after the hidden parameters: a method's own class's
@@ -240,6 +240,7 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
     fnFx := allowed
     canFail := decides
     rollbackOnly
+    plainDecides
     retTy := ret
     dictBase := frame.witnessBase
     suspends := suspends
@@ -355,7 +356,8 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
     | .fn p n ps _ specs _ body =>
       elaborated := elaborated.push (← elabFn allSigs sigs.prog requests env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
         (evidenceSignature := some sig) (extendedDefaults := extendedDefaults) (callOnly := firstHelpers.contains n) (fnReturns := fnReturns)
-        (rollbackOnly := (SignalAdmission.excludesNoRollback n specs).isSome))
+        (rollbackOnly := (SignalAdmission.excludesNoRollback n specs).isSome)
+        (plainDecides := SignalAdmission.plainDecides specs))
     | .const p n _ sty body =>
       -- a constant is computed at each use, so it would be a new object each
       -- time (until Verse Core has global state)
@@ -404,7 +406,7 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
       elaborated := elaborated.push (← elabFn allSigs sigs.prog requests (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body
         g.suspends g.selfTps ((requests.casts.find? (·.name == n)).map fun l => fun v =>
           (l.opened.lookup v).bind (env.witnessField? l.target ·)) (some g) extendedDefaults (firstHelpers.contains n) fnReturns
-        (SignalAdmission.excludesNoRollback n specs).isSome)
+        (SignalAdmission.excludesNoRollback n specs).isSome (SignalAdmission.plainDecides specs))
     | _ => pure ()
   return elaborated
 

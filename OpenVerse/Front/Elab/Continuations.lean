@@ -230,7 +230,9 @@ def sourceContextOf (ctx : Ctx) : Choice.SourceContext := {
   inBlock := ctx.inBlock, inDefer := ctx.inDefer,
   inDefaultCheck := ctx.inDefaultCheck, inRepeat := ctx.inRepeat,
   inChoice := ctx.inChoice, inArm := ctx.inArm, inBranch := ctx.inBranch,
-  defaults := ctx.defaults }
+  defaults := ctx.defaults
+  rollbackOnly := ctx.types.defaultNoRollback && ctx.rollbackOnly
+  plainDecides := ctx.types.defaultNoRollback && ctx.plainDecides }
 
 def sourceContextKey (ctx : Ctx) : String :=
   let scope := sourceContextOf ctx

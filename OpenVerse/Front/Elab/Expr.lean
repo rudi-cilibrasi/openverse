@@ -1122,6 +1122,8 @@ partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bra
       -- are passed by name, #503)
       let k := sh.positional
       let shape : Sig := { idx := 0, name := n, params := ts.take k, ret := .void, decides := false, isConst := false }
+      -- (#515, `--default-no-rollback`) a value of a type with no_rollback
+      checkNoRollbackCall ctx p { shape with noRollback := sh.noRollback } s!"a value of type {r.ty.show}"
       let args := packCallArgs p shape args false
       let names := args.filterMap fun | .decl _ x .. => if x.startsWith "?" then some (x.drop 1).toString else none | _ => none
       if let some x := names.find? (!sh.named.contains ·) then

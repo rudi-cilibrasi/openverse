@@ -139,6 +139,9 @@ structure Sig where
   fx : List String := heapFx
   /-- `<suspends>` (#156): lowered to a frame and a resume function. -/
   suspends : Bool := false
+  /-- (#515, `--default-no-rollback`) It has the `no_rollback` effect
+      (`SignalAdmission.noRollbackMarker`). -/
+  noRollback : Bool := false
   /-- Of a method of a class with type parameters that its parent's type
       arguments do not give (#209): those type parameters, whose values it
       reads from its receiver's hidden fields (`$w.…`), not from hidden
@@ -161,7 +164,8 @@ structure Sig where
     shape's order. -/
 def Sig.valueShape (s : Sig) : FnValues.Shape × List Ty :=
   let npos := s.params.length - s.named.length
-  let (sh, order) := ({ arity := 0, decides := s.decides, suspends := s.suspends, fx := s.fx } : FnValues.Shape).withParams
+  let (sh, order) := ({ arity := 0, decides := s.decides, suspends := s.suspends, fx := s.fx,
+                        noRollback := s.noRollback } : FnValues.Shape).withParams
     (s.params.zipIdx.map fun (_, i) => if i < npos then none else (s.named[i - npos]?).map fun (n, d) => (n, d.isSome))
   (sh, order.filterMap (s.params[·]?))
 
@@ -378,6 +382,11 @@ structure Ctx where
       or of a class's `block:` (`SignalAdmission.excludesNoRollback`):
       nothing here may signal an event, failure context or not. -/
   rollbackOnly : Bool := false
+  /-- (#515, `--default-no-rollback`) In the body of a `<decides>` function
+      without a heap specifier, whose `no_rollback` the evidence leaves
+      open (docs/research/effect-conformance.md, "The default effect"):
+      its calls are not judged. -/
+  plainDecides : Bool := false
   /-- (#515) The innermost loop is in a failure context (or inside one):
       the `defer:`s a `break` runs, out of the scopes inside the loop, run
       in that context, not in the one at the `break`. -/
@@ -1335,6 +1344,16 @@ def noteFailCalls (ctx : Ctx) (p : Pos) (what : String) (e : Expr) : EM Unit := 
       modify fun st => { st with failCalls := st.failCalls.push site }
     else
       modify fun st => { st with bodyCalls := st.bodyCalls.push site }
+
+/-- (#515, `--default-no-rollback`) A call at `p` of `s`, which may have
+    the `no_rollback` effect: refused in a failure context (or inside one)
+    and in a body whose effects exclude it, as Epic's compiler does (UEFN
+    43.12: error 3512). -/
+def checkNoRollbackCall (ctx : Ctx) (p : Pos) (s : Sig) (shown : String) : EM Unit := do
+  if s.noRollback && !ctx.typeOnly && !ctx.plainDecides && (ctx.canFail || ctx.inRollback || ctx.rollbackOnly) &&
+      !(ctx.frameName.splitOn "$call").tail.any (fun _ => true) then
+    let context := if ctx.canFail || ctx.inRollback then "a failure context" else "a body whose effects exclude it"
+    throw s!"{p.show}: this invocation calls a function ({shown}) that has the 'no_rollback' effect, which {context} does not allow: a function without a heap specifier (<transacts>, <computes>, <reads>, …) or <decides> has it (Epic's Verse compiler, UEFN 43.12: error 3512; --default-no-rollback)"
 
 /-- `ctx` with the `defer:` body `d` pending for every `return` and `break`
     that leaves its scope (#80), with the locals in scope here. -/
@@ -3271,6 +3290,8 @@ def functionBodyCtx (req : Requests) (ctx : Ctx) (p : Pos) (name : String)
     inDefaultCheck := source.inDefaultCheck || ctx.inDefaultCheck
     inArm := source.inArm || ctx.inArm
     inBranch := source.inBranch || ctx.inBranch
+    rollbackOnly := source.rollbackOnly || ctx.rollbackOnly
+    plainDecides := source.plainDecides || ctx.plainDecides
     defaults := source.defaults ++ ctx.defaults
     refineExits := (lifted.map (·.exits)).getD {}
     inBlock := source.inBlock || name.endsWith ".$block"

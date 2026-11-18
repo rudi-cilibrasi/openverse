@@ -3864,7 +3864,12 @@ Main()<suspends>:void =
   is, and the waiters wait again where they waited
   (`Coroutines/Concurrency.versetest:1562-1580`). `--signal-no-rollback`,
   the opt-in name of the policy before it became the default, is accepted
-  and changes nothing. A failure context is an `if`'s condition, a `for`'s clause, a
+  and changes nothing. A function without a heap specifier has the
+  `no_rollback` effect in Epic's compiler too (UEFN 43.12, error 3512 for
+  its call from a `<transacts>` function or a class's `block:`); openverse
+  applies that rule only under the strict `--default-no-rollback`, so by
+  default it still diverges
+  ([the default effect](research/effect-conformance.md#the-default-effect-515---default-no-rollback)). A failure context is an `if`'s condition, a `for`'s clause, a
   `<decides>` function's body, `option{…}`, `logic{…}`, `not`, the left of
   `or`, a `first{…}` or a `do` expression, with everything that runs
   inside it: a `block`, a named argument's default, a `defer:`. A refining

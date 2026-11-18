@@ -232,6 +232,8 @@ def checkSpecs (p : Pos) (subject : String) (specs : List String)
     -- (a name that is no specifier openverse knows may name an access
     -- level, `S := scoped{…}`: `resolveSpecifiers` decides)
     if !typeOnly && (metadata.contains sp || sp.startsWith "$" || isAccess sp || !known sp) then continue
+    -- (#515, `--default-no-rollback`: the compiler's own mark)
+    if sp == noRollbackMarker then continue
     reject p s!"unknown or unsupported {if typeOnly then "function-type effect" else "function specifier"} <{sp}> on {subject} (#494)"
 
 /-- Construction has the same heap family as functions, but is immediate and

@@ -127,6 +127,7 @@ OPENVERSE_DEBUG=1 .lake/build/bin/openverse check F.verse   # an internal error 
 .lake/build/bin/openverse core F.verse                      # each function's Verse Core, one statement per line
 .lake/build/bin/openverse check F.verse --no-choice         # enforce the choice-free source profile
 .lake/build/bin/openverse check F.verse --signal-rollback     # legacy: roll an event Signal back with its context
+.lake/build/bin/openverse check F.verse --default-no-rollback # strict: Epic's default effect, no_rollback
 ```
 
 `--no-choice` is an opt-in source profile for `check`, `core`, `emit`, and

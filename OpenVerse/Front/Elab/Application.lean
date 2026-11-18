@@ -300,6 +300,7 @@ partial def elabFunctionCall (cb : AppElab) (ctx : Ctx) (p : Pos) (f : SExpr) (n
     -- (a built-in's call that the front end wrote as its helper's names
     -- the built-in, `FinalSuper.calledBy?`)
     noteFx p s.fx (some (if s.isConst then s!"uses the constant {name}" else s!"calls {(FinalSuper.calledBy? name).getD name}"))
+    checkNoRollbackCall ctx p s (Choice.shownFnName name)
     if s.isConst then
       elabValueApp cb ctx p f ⟨.call s.idx [], s.ret⟩ args bracket
     else
@@ -995,6 +996,7 @@ partial def elabMethodCall (cb : AppElab) (ctx : Ctx) (p mp : Pos) (obj : SExpr)
       if ctx.implFor? d o m != ctx.implFor? d root m then
         eerr p s!"{d} implements {m} separately for {root} and {o}: call it as X.({root}:){m}(…) or X.({o}:){m}(…)"
   let ms := (ctx.sig? s!"{owner}.{m}").get!
+  checkNoRollbackCall ctx p ms s!"{owner}.{m}"
   let args := packCallArgs p { ms with params := ms.params.drop 1, pnames := ms.pnames.drop 1 } args false
   if spawning && !ms.suspends then
     eerr p "spawn{…} takes a call of a <suspends> function (#156)"

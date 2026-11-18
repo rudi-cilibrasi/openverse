@@ -161,6 +161,62 @@ Explicit `<converges>` remains refused in both modes. Data types still cannot
 declare `<decides>` or `<suspends>`. Neither a heap budget nor compatibility
 mode asserts termination, single-valuedness, output purity or engine behavior.
 
+## The default effect (#515, `--default-no-rollback`)
+
+UEFN 43.12 (build `++Fortnite+Release-43.12-CL-60598086`, 2026-11-18;
+[the probes](versevm-live-conformance.md)) refuses with error 3512 a
+`<transacts>` function calling a function written without specifiers
+(Book of Verse tests, `Effects.versetest:490`) and a class's `block:`
+calling one (`Effects.versetest:551`): "This invocation calls a function
+(`F`) that has the 'no_rollback' effect, which is not allowed by its
+context". It refuses with 3509 a function without specifiers where a
+`<transacts><decides>` one is expected (`FunctionTypes.versetest:191`), and
+with 3512 the calls of a field of type `t->t` in `<transacts><decides>`
+functions (`ParametricTypes.versetest:222`). A function, method or function
+type without a heap specifier therefore has `no_rollback`, Epic's default,
+and what has it may be called neither from a failure context nor from a
+body whose effects exclude it.
+
+OpenVerse implements this rule as a strict mode, `--default-no-rollback`
+(`Options.defaultNoRollback`), **not the default: the default still
+diverges from 43.12 here.** Under the mode, source functions and function
+types without a heap specifier and without `<decides>` are marked
+(`SignalAdmission.markDefault`, `noRollbackMarker`). A call of one, a
+method declared without one or a value of such a type
+(`checkNoRollbackCall`) is refused in a failure context, in a function
+with a heap specifier and in a class's `block:`; generated helpers keep
+their source body's context (`Choice.SourceContext`). A function type
+with `no_rollback` is a shape of its own (`FnValues.Shape.noRollback`): a
+function without it fits it, one with it fits no shape without it. The
+mode leaves alone what the evidence leaves open: a `<decides>` function
+without a heap specifier is not marked, and its body's calls are not
+judged (in one reading its body cannot call a `no_rollback` function, in
+the other it has `no_rollback` itself and a failure context cannot call
+it); builtins and the concurrency prelude's methods keep their effects
+(only the prelude's function types are marked, so a function without
+specifiers can subscribe to a `subscribable_event`, as in UEFN); module
+constants are not judged.
+
+Blast radius, measured on this branch:
+
+| Measure | Default | `--default-no-rollback` |
+| --- | --- | --- |
+| `tests/verse` programs refused (of 2,191) | 0 | 281: 224 calls in failure contexts (helpers such as `Two(N:int):int = N \| N + 1` in a `for` clause), 35 in bodies with a heap specifier, 1 function without specifiers given where a `<decides>` type is expected, 21 refining-cast programs whose abstract `Eval():t` call in a clause surfaces as a cast type error |
+| Book survey against the baseline | 7 worse (the `Signal` refusals) | 8 worse, 5 better: `Effects.versetest:490`, `:551`, `:552`, `FunctionTypes.versetest:191` and `SoftwareTransactionalMemory.versetest:505` now agree; `FunctionTypes.versetest:decls` regresses through a separate bug (a `<decides>` function-type parameter that no function value implements cannot fail, `g[] or 3`, also in the default mode) |
+| Judging plain `<decides>` bodies too | | about 770 more Book cases regress, nearly all the harness's `assert` bodies, translated as `Main()<decides>`, calling functions without specifiers |
+
+Migration plan before the rule can become the default: settle the
+`<decides>` question and the `for` clause, constructor, module-constant
+and prelude (`Await`, `Subscribe`, `Cancel`, `Print`) effects with Epic
+probes; annotate the 281 test programs' helpers (mostly `<transacts>` or
+`<computes>`), the generators and models of `scripts/` that write
+unannotated helpers into conditions, the Lean API contracts and the
+upper-bound fixtures; check whole Verse Core bodies as
+`SignalAdmission.checkBodies` does, so no helper can hide a call; fix the
+`<decides>` function-type parameter bug; then flip the default, keeping
+the option's name. The Book translation and openverse-docs' programs need
+the same pass.
+
 ## Verification
 
 After `lake build` and `make -C runtime`:

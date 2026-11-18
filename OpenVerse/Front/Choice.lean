@@ -2873,6 +2873,11 @@ structure SourceContext where
   inArm : Bool := false
   inBranch : Bool := false
   defaults : List (String × String) := []
+  /-- (#515, `--default-no-rollback` only) The source body excludes
+      `no_rollback` (`Ctx.rollbackOnly`), or is a plain `<decides>` one's
+      (`Ctx.plainDecides`). -/
+  rollbackOnly : Bool := false
+  plainDecides : Bool := false
   deriving Inhabited, BEq, Repr
 
 /-- Metadata for a typed continuation environment's method. -/

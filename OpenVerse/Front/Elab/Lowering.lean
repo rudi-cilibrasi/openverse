@@ -57,6 +57,14 @@ structure Options where
       transactional reference mode, which rolls the signal back with its
       context (`--signal-rollback`). -/
   signalNoRollback : Bool := true
+  /-- (#515, strict, `--default-no-rollback`) Epic's default effect: a
+      source function without a heap specifier and without `<decides>` has
+      the `no_rollback` effect, so neither a failure context nor a body
+      whose effects exclude it (a function with a heap specifier, a class's
+      `block:`) may call it (UEFN 43.12: error 3512). Off by default: the
+      test suite and the Book's translated tests call such functions there
+      (docs/research/effect-conformance.md, "The default effect"). -/
+  defaultNoRollback : Bool := false
   requests : Requests := {}
 
 /-- A class or interface definition, as parsed. -/

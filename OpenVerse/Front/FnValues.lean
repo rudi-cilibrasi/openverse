@@ -71,12 +71,16 @@ structure Shape where
   named : List String := []
   /-- Those of `named` a caller may omit (`?N:t = …` in the type). -/
   optional : List String := []
+  /-- (#515, `--default-no-rollback`) Its functions have the `no_rollback`
+      effect (`noRollbackMarker`): a function without it fits it, one with
+      it fits no shape without it. -/
+  noRollback : Bool := false
   deriving BEq, Repr, Inhabited
 
 def shapeOf (arity : Nat) (effs : List String) (named : List String := []) (optional : List String := []) :
     Shape :=
   { arity, decides := effs.contains "decides", suspends := effs.contains "suspends", fx := allowedFx effs,
-    named, optional }
+    named, optional, noRollback := effs.contains noRollbackMarker }
 
 /-- How many positional parameters a shape has. -/
 def Shape.positional (s : Shape) : Nat := s.arity - s.named.length
@@ -97,7 +101,8 @@ def shapeOfParams (ps : List (Option (String × Bool))) (effs : List String) : S
 /-- The effect specifiers that give a shape's effects. -/
 def Shape.effs (s : Shape) : List String :=
   (if s.decides then ["decides"] else []) ++ (if s.suspends then ["suspends"] else []) ++
-  (if s.fx == heapFx then [] else if s.fx.isEmpty then ["computes"] else s.fx)
+  (if s.fx == heapFx then [] else if s.fx.isEmpty then ["computes"] else s.fx) ++
+  (if s.noRollback then [noRollbackMarker] else [])
 
 /-- The effects part of a shape's names: `:decides:reads`, say. -/
 def Shape.tag (s : Shape) : String := String.join (s.effs.map (":" ++ ·))
@@ -151,7 +156,7 @@ def Shape.show (s : Shape) (ps : List String) (r : String) (effs : List String :
   let named := s.named.zip (ps.drop s.positional) |>.map fun (n, t) =>
     s!"?{n}:{t}" ++ if s.optional.contains n then " = …" else ""
   "type{_(" ++ ", ".intercalate ((ps.take s.positional).map (":" ++ ·) ++ named) ++ ")" ++
-    String.join (effs.map fun e => s!"<{e}>") ++ ":" ++ r ++ "}"
+    String.join (effs.map fun e => s!"<{if e == noRollbackMarker then "no_rollback" else e}>") ++ ":" ++ r ++ "}"
 
 /-- An error message with the hidden names read as Verse: `F$fn.$call…`
     is `F` called as a value, another `$call…` a function value, a shape's
@@ -189,7 +194,8 @@ def pretty (msg : String) : String :=
 def Shape.within (s t : Shape) : Bool :=
   s.positional == t.positional && t.named.all s.named.contains &&
     s.named.all (fun n => t.named.contains n || s.optional.contains n) && t.optional.all s.optional.contains &&
-    (!s.decides || t.decides) && (!s.suspends || t.suspends) && s.fx.all t.fx.contains
+    (!s.decides || t.decides) && (!s.suspends || t.suspends) && s.fx.all t.fx.contains &&
+    (!s.noRollback || t.noRollback)
 
 /-- Of the arguments `args` of shape `s` (its parameters', then its
     result's), those of a shape `t` it is `within`. -/
