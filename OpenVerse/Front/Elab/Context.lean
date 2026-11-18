@@ -2768,6 +2768,25 @@ partial def joinTy (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Bool := f
     else none
 end
 
+/-- Class types (no type values) with more than one nearest common supertype
+    at the same type arguments, a class among them: a common base class and
+    a common interface not above it. Epic's Verse compiler, UEFN 43.12,
+    types an array of such elements `[]any` and refuses it where `[]base`
+    is expected (error 3509; the Book of Verse's tests,
+    SOL-5838-JoinOfClassesWithCommonBaseClassWithInterfaceInheritance.versetest:13). -/
+def ambiguousClassJoin (env : TyEnv) (tys : List Ty) : Option (List String) :=
+  let classes := tys.filterMap fun
+    | .struct S as => if env.classes.contains S && (TypeValues.valueClass? S).isNone then some (S, as) else none
+    | _ => none
+  match classes with
+  | (S, as) :: rest@(_ :: _) =>
+    if classes.length != tys.length then none else
+    let common := (env.supers S).filter fun U =>
+      rest.all fun (T, bs) => env.isSub T U && env.upArgs S as U == env.upArgs T bs U
+    let minimal := common.filter fun U => !common.any fun U' => U' != U && env.isSub U' U
+    if minimal.length > 1 && minimal.any (fun U => !(env.info U).isIface) then some minimal else none
+  | _ => none
+
 /-- What two types with nothing else in common join at (`fallbackJoin`):
     an `if`'s branches and a choice's alternatives that join so are tried
     against each other's types first (#366). -/

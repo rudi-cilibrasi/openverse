@@ -320,6 +320,15 @@ partial def elabExprValuesWith
       let rs ← rest.mapM fun e' => elabE ctx e' (some t)
       ofExcept <| checkTypeValueJoin ctx.types p elemExp ((r :: rs).map (·.ty))
       let all := (e :: rest).zip (r :: rs)
+      -- (elements of two classes with two nearest common supertypes, a
+      -- class among them: an array of `any`, which only an array of `any`
+      -- expects, `ambiguousClassJoin`)
+      let tys := ((r :: rs).map (·.ty)).eraseDups
+      if let some us := ambiguousClassJoin ctx.types tys then
+        if elemExp.isNone || elemExp == some .any then
+          let es ← all.mapM fun (e', x) => coerce e'.pos x .any
+          return ⟨.prim .mkArr es, .arr .any⟩
+        eerr p s!"the elements of this array ({", ".intercalate (tys.map (·.show))}) have more than one nearest common supertype ({", ".intercalate us}), so it is an array of any, not of {(elemExp.getD .any).show} (Epic's Verse compiler, UEFN 43.12: error 3509)"
       -- the expected element type (or the first's), when every element
       -- converts to it; else the join of their types (classes at a common
       -- supertype, #67), with no element elaborated again

@@ -885,6 +885,13 @@ circle := class(shape, labelled):
     expected, and so can arrays and options of them.
   - Two `if` branches of different classes take the expected type when both
     are below it, else their nearest common supertype.
+  - An array literal's elements of classes with more than one nearest
+    common supertype, a class among them (a common base class and a common
+    interface not above it), make an array of `any`, whatever is expected,
+    so it is refused where an array of the base class or of an interface
+    above both is expected (Epic's compiler, UEFN 43.12, error 3509; the
+    Book's tests, `SOL-5838`). Elements with one nearest common supertype
+    keep it.
   - A method call runs the most specific implementation for the value's own
     class: the nearest in its class chain, else the default of the
     interface that declares the method, whatever order the parents are
