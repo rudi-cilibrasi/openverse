@@ -13,6 +13,9 @@ private def write (m : Memory) (refs : Refs) (value : Payload) : IO Memory := do
   let some m := writeCell m refs value | throw <| IO.userError "expected a private write"
   return m
 
+private def columns (roles : List Bool) : TupleParts :=
+  some (roles.map fun role => .mk role [])
+
 private def models : IO Unit := do
   let real : Payload := {}
   let metadata : Payload := { role := true }
@@ -53,19 +56,19 @@ private def models : IO Unit := do
   expect ((← payload m left).role) "a may-alias write cannot erase an untouched metadata cell"
   expect (!(← payload m right).role) "a weak real write need not taint an independently real cell"
 
-  let pair : Payload := { role := true, parts := some [true, false] }
+  let pair : Payload := { role := true, parts := columns [true, false] }
   let (cell, m) := allocate empty 20 true [pair]
-  expect ((← payload m cell).parts == some [true, false]) "preserve immediate tuple columns"
+  expect ((← payload m cell).parts == columns [true, false]) "preserve immediate tuple columns"
   let snapshot := m
   let changed ← write m cell real
   expect (!(← payload changed cell).role && (← payload snapshot cell).role) "snapshots retain pre-write payloads"
   let merged := join snapshot changed
-  expect ((← payload merged cell).parts == some [true, false]) "join a real overwrite with known tuple columns"
+  expect ((← payload merged cell).parts == columns [true, false]) "join a real overwrite with known tuple columns"
   expect (join m m == m) "memory joins must be idempotent"
   expect ((joinPayload pair metadata).parts.isNone) "an opaque metadata path erases column precision"
-  expect ((joinPayload pair { role := true, parts := some [false, true] }).parts == some [true, true])
+  expect ((joinPayload pair { role := true, parts := columns [false, true] }).parts == columns [true, true])
     "tuple branches join component roles"
-  expect ((joinPayload pair { role := true, parts := some [true] }).parts.isNone)
+  expect ((joinPayload pair { role := true, parts := columns [true] }).parts.isNone)
     "different tuple shapes lose column precision"
 
   let (env, m) := allocate m 21 false [{ refs := cell }]
@@ -111,13 +114,13 @@ private def models : IO Unit := do
   IO.println "PASS private-cell recency, aliases, tuple columns, snapshots and escape models"
 
 private def fieldPayloadModels : IO Unit := do
-  let tuple : Payload := { role := true, parts := some [true, false] }
-  let other : Payload := { role := true, parts := some [false, true] }
+  let tuple : Payload := { role := true, parts := columns [true, false] }
+  let other : Payload := { role := true, parts := columns [false, true] }
   let (frame, m) := allocate empty 100 false [tuple, {}]
-  expect ((readFieldPayload m frame 0).map (·.parts) == some (some [true, false]))
+  expect ((readFieldPayload m frame 0).map (·.parts) == some ((columns [true, false])))
     "lazy transport must preserve the real tuple column beside metadata"
   let changed := storeFieldPayload m frame 0 other
-  expect ((readFieldPayload changed frame 0).map (·.parts) == some (some [false, true]))
+  expect ((readFieldPayload changed frame 0).map (·.parts) == some ((columns [false, true])))
     "a unique transport field can strongly replace its tuple payload"
   let forgotten := storeRefs m frame 0 []
   expect ((readFieldPayload forgotten frame 0).isNone)
@@ -125,7 +128,7 @@ private def fieldPayloadModels : IO Unit := do
   expect ((readFieldPayload (join m forgotten) frame 0).isNone &&
     (readFieldPayload (join forgotten m) frame 0).isNone)
     "joins must not resurrect a field forgotten on an existing-object path"
-  expect ((readFieldPayload (join m empty) frame 0).map (·.parts) == some (some [true, false]))
+  expect ((readFieldPayload (join m empty) frame 0).map (·.parts) == some ((columns [true, false])))
     "an absent-object path contributes no field value"
   expect ((readFieldPayload (markEscaped m frame) frame 0).isNone &&
     (readFieldPayload (widen m frame) frame 0).isNone)
@@ -137,11 +140,11 @@ private def fieldPayloadModels : IO Unit := do
   expect ((readFieldPayload m frame 0).map (·.refs) == some [older 101])
     "recency must rebase references inside transport payload facts"
   let (_, m) := allocate m 102 false [{}]
-  expect ((readFieldPayload m [older 102] 0).map (·.parts) == some (some [true, false]))
+  expect ((readFieldPayload m [older 102] 0).map (·.parts) == some ((columns [true, false])))
     "recency must rebase transport payload owner identities"
   let (_, m) := allocate m 102 false [{}]
   let weak := storeFieldPayload m [older 102] 0 {}
-  expect ((readFieldPayload weak [older 102] 0).map (·.parts) == some (some [true, false]))
+  expect ((readFieldPayload weak [older 102] 0).map (·.parts) == some ((columns [true, false])))
     "a summary write cannot erase another older transport's tuple metadata"
   expect ((readFieldPayload weak [recent 102] 0).map (·.role) == some false)
     "summary writes do not taint a separate recent transport"

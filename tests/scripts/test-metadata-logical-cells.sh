@@ -55,8 +55,8 @@ with tempfile.TemporaryDirectory(prefix="openverse-metadata-logical-cells-") as 
         raise SystemExit(f"logical cell source failed ({result.returncode}):\n"
                          f"{result.stdout}{result.stderr}")
     programs = sorted(artifacts.glob("*.vbc"))
-    if len(programs) != 116:
-        raise SystemExit(f"logical cell source: expected 116 artifacts, got {len(programs)}")
+    if len(programs) != 120:
+        raise SystemExit(f"logical cell source: expected 120 artifacts, got {len(programs)}")
     for program in programs:
         expected = program.with_suffix(".expected").read_text()
         run = subprocess.run(["runtime/build/cverse", str(program)], text=True,
@@ -64,5 +64,5 @@ with tempfile.TemporaryDirectory(prefix="openverse-metadata-logical-cells-") as 
         if run.returncode or run.stderr or run.stdout != expected:
             raise SystemExit(f"logical cell C oracle failed: {program.name}: "
                              f"{run.returncode}: {run.stdout!r} {run.stderr!r}")
-    print("logical cell source: 168 API classifications, 116 matching Lean/C oracle pairs (15s, 4 GiB)")
+    print("logical cell source: 168 API classifications, 120 matching Lean/C oracle pairs (15s, 4 GiB)")
 PY
