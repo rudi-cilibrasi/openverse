@@ -56,6 +56,10 @@ for ((s=first; s<first+n; s++)); do
   # (gadt_spawn_defaults, #468), and a default that waits (gadt_waiting_contexts,
   # #283).
   case $g in gadt_spawn_defaults|gadt_waiting_contexts) compat+=(--extended-defaults) ;; esac
+  # This model signals in a <decides> function's for body and checks that a
+  # failure rolls the signal back: the legacy transactional mode (#515; Epic's
+  # compiler, and openverse's default, refuse such a Signal).
+  case $g in gadt_event_body) compat+=(--signal-rollback) ;; esac
   timeout 120 "$ov" run "$tmp/p.verse" "${compat[@]}" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.err"
   want=$(head -1 "$tmp/p.exp" | sed 's/exit=//')
   if [[ $want == 4 ]]; then
