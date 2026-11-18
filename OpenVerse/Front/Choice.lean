@@ -5101,6 +5101,12 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
     if !hasReturningLoop original.body then none else
     let f : MFn := { original with body := alphaReturnLoopLocals owner original.body }
     let sites := returnLoopSites owner f mv
+    let sites := if sites.any (fun site => match site.source with | .cursor .. => true | _ => false) then
+      let selected := choiceReturnLoopSites owner { f with body := moveTerminalLoopChoices mv f.body } mv
+      sites.filter fun site => match site.source with
+        | .cursor .. => !selected.any (·.pos == site.pos)
+        | _ => true
+      else sites
     if sites.isEmpty then none else some (owner, f, sites, original.body)
   if !loopTargets.isEmpty then
     let needsCells := loopTargets.any fun (_, _, loops, _) => loops.any fun entry =>

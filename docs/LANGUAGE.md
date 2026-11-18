@@ -2224,11 +2224,18 @@ Main():void =
   choice through the return run lazily. Each returned value runs the
   cleanup it reached before going to the consumer.
 
-  Exposed body choices that can fall through after a choice-bearing header
-  remain an implementation limit (#686), as do mutable implicit proof
-  captures and direct concurrency in a captured expression. Restrictions
-  on other return-containing initializers and on returns inside
-  expressions or conditions still apply.
+  An exposed body choice can fall through to the next row when the header
+  uses flat choices or has a composed choice as its first generator, with
+  matching body binding types across the alternatives. Each body alternative
+  resumes the header from the same row and shares mutations from accepted values.
+  The clauses before a composed choice run once. A failed prefix rolls
+  back its effects and gives no rows.
+
+  Recursive producer headers, other unsupported choice-bearing headers,
+  mutable implicit proof captures, and direct concurrency in a captured
+  expression remain implementation limits (#686). Restrictions on other
+  return-containing initializers and on returns inside expressions or
+  conditions still apply.
 
   Cleanup stays with the scope that registered it. A returning branch runs
   only the `defer:` blocks it reached, from the innermost scope outward and
