@@ -129,12 +129,15 @@ with tempfile.TemporaryDirectory(prefix='openverse-loop-refusals-') as tmp:
                                     capture_output=True, text=True, timeout=15, preexec_fn=limits)
             assert result.returncode == 4 and message in result.stderr and not bytecode.exists(), (name, profile, result)
     source = ROOT/'tests/fixtures/loop-return-operands/loop-signal-policy.verse'
+    # (#515: refused by default, as with the old --signal-no-rollback, still
+    # accepted; the legacy transactional mode, --signal-rollback, runs it)
     for profile in ([], ['--extended-defaults']):
         bytecode = Path(tmp)/'signal.vbc'
-        assert run([OV, 'run', source, *profile, '--emit', bytecode]) == 'value 2\nvalue 3\nafter\n'
+        assert run([OV, 'run', source, *profile, '--signal-rollback', '--emit', bytecode]) == 'value 2\nvalue 3\nafter\n'
         assert run([CV, bytecode]) == 'value 2\nvalue 3\nafter\n'
         bytecode.unlink()
-        result = subprocess.run([str(OV), 'run', str(source), *profile, '--signal-no-rollback', '--emit', str(bytecode)],
-                                capture_output=True, text=True, timeout=15, preexec_fn=limits)
-        assert result.returncode == 4 and 'event.Signal' in result.stderr and 'failure context' in result.stderr and not bytecode.exists(), result
+        for policy in ([], ['--signal-no-rollback']):
+            result = subprocess.run([str(OV), 'run', str(source), *profile, *policy, '--emit', str(bytecode)],
+                                    capture_output=True, text=True, timeout=15, preexec_fn=limits)
+            assert result.returncode == 4 and 'event.Signal' in result.stderr and 'failure context' in result.stderr and not bytecode.exists(), result
 print('loop operand source checking and Signal policy passed before bytecode emission')
