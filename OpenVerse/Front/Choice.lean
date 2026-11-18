@@ -4226,7 +4226,7 @@ private structure LoopCapture where
 private inductive ReturnLoopSource where
   | range (index : String) (lower upper : SExpr)
   | collection (item : String) (index : Option String) (source : SExpr)
-  | cursor (clauses : List SExpr) (outputs : List String) (recursive : Bool)
+  | cursor (clauses : List SExpr) (outputs : List String) (recursive : Option String)
   | loop
 
 private def forCursorNext (p : Pos) (clauses : List SExpr) (outputs : List String)
@@ -4396,14 +4396,17 @@ private partial def returnLoopSites (owner : String) (f : MFn) (mv : List String
         | clause => !liftsHere (markCalls mv clause)
       let composed := before.length < clauses.length && before.all scalarPrefix &&
         (clauses.drop (before.length + 1)).all valid
-      let producer : SExpr → Bool := fun
+      let producer : SExpr → Option String := fun
         | .decl _ _ _ false (.app _ (.ident _ name) args _) =>
-          scalarProducer name && !args.any (fun arg => liftsHere (markCalls mv arg))
-        | _ => false
-      let prefixClauses := clauses.takeWhile (!producer ·)
-      let recursive := prefixClauses.length < clauses.length && prefixClauses.all scalarPrefix &&
-        (clauses.drop (prefixClauses.length + 1)).all scalarPrefix
-      if (flat || composed || recursive) && !clauses.any loopConcurrent &&
+          if scalarProducer name && !args.any (fun arg => liftsHere (markCalls mv arg)) then some name
+          else none
+        | _ => none
+      let prefixClauses := clauses.takeWhile (fun clause => (producer clause).isNone)
+      let recursive := if prefixClauses.all scalarPrefix &&
+          (clauses.drop (prefixClauses.length + 1)).all scalarPrefix then
+        clauses[prefixClauses.length]?.bind producer
+        else none
+      if (flat || composed || recursive.isSome) && !clauses.any loopConcurrent &&
           !loopBodySupported mv body then
         record scope defers p (.cursor clauses (boundIn clauses) recursive) body
     | .loop p body => record scope defers p .loop body
@@ -4804,7 +4807,7 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
     -- The recursive header has its own continuation. A scalar call keeps
     -- its search out of the body helper's choice machine.
     let advance := match site.source, cursorPacket with
-      | .cursor clauses outputs true, some ty@(.opt (.tup [prior, _])) =>
+      | .cursor clauses outputs (some _), some ty@(.opt (.tup [prior, _])) =>
         let body := forCursorNext p (prepareHeader clauses) outputs (.ident p cursorInput)
         [STop.fn p advanceName ({ name := cursorInput, ty := .opt prior } :: caps) tparams f.fx ty body]
       | _, _ => []
@@ -4825,7 +4828,7 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
         let next := call [.optionLit p (project (ident row) 0)]
         let iteration := returnLoopOperands ret site.helper (some noneValue) nested bodyWithCells
         let rest := if loopIterationTerminal iterationBody then [iteration] else [iteration,next]
-        let rows := if recursive then SExpr.app p (ident advanceName) (ident input :: args) false
+        let rows := if recursive.isSome then SExpr.app p (ident advanceName) (ident input :: args) false
           else forCursorNext p (prepareHeader clauses) outputs (ident input)
         let helperBody := SExpr.block p [.decl p nextRow none false rows,
           .ite p [.decl p row none false (.query p (ident nextRow))]
@@ -5114,16 +5117,13 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
   -- normalized: the elaborator's (`TyEnv.fieldOrder`), as an earlier
   -- elaboration noted it (`orders`)
   let fieldOrder (n : String) : FieldOrder := { fields := (orders.lookup n).getD [] }
-  let computableBody (name : String) (f : MFn) : Bool :=
-    !lazy.contains name && f.fx.contains "computes" && !["reads", "writes", "allocates"].any f.fx.contains &&
-      !anyE (fun | .set .. | .decl _ _ _ true _ => true | _ => false) f.body
   let scalarProducer (name : String) : Bool :=
     !eager.contains name && (rawMfs.lookup name).any (fun f =>
       let calls := (namesUsed f.body).filter mv.contains
       let shape (frames : Bool) :=
         loopShape? name mv f.body (frames := frames) (params := f.params.map (·.name)) (fieldOrder := fieldOrder)
       calls.contains name && calls.all (· == name) &&
-        ((shape false).isSome || (!computableBody name f && (shape true).isSome)))
+        ((shape false).isSome || (shape true).isSome))
   -- Source loop exits become a lazy helper only after its lexical input
   -- types and return target have been recorded in their original world.
   let loopTargets := rawMfs.filterMap fun (owner, original) =>
@@ -5138,6 +5138,13 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
       else sites
     if sites.isEmpty then none else some (owner, f, sites, original.body)
   if !loopTargets.isEmpty then
+    -- Even a pure producer can trap in an unused alternative. Keep
+    -- recursive header producers lazy in both the probe and the helper.
+    let headers := loopTargets.flatMap fun (_, _, loops, _) => loops.filterMap fun site =>
+      match site.source with
+      | .cursor _ _ recursive => recursive
+      | _ => none
+    let lazy := (lazy ++ headers).eraseDups
     let needsCells := loopTargets.any fun (_, _, loops, _) => loops.any fun entry =>
       !entry.boxed.isEmpty || match entry.source with
         | .cursor clauses _ _ => !(cursorHeaderCells clauses).isEmpty
@@ -5268,8 +5275,11 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
   -- call: when its group is <computes> and keeps no local state, as before,
   -- and nothing it runs prints or calls Err() (`lazy`, after a first
   -- elaboration that found it did)
-  let computable (g : String) : Bool := (groupOf g).all fun h =>
-    (rawMfs.lookup h).any (computableBody h)
+  let computable (g : String) : Bool := (groupOf g).all fun h => !lazy.contains h &&
+    match rawMfs.lookup h with
+    | some f => f.fx.contains "computes" && !["reads", "writes", "allocates"].any f.fx.contains &&
+        !anyE (fun | .set .. | .decl _ _ _ true _ => true | _ => false) f.body
+    | none => false
   -- (#283) the functions one machine takes lazily: a group's strongly
   -- connected functions, and, for one taken lazily (not computable), every
   -- function with several values its code calls, those that one calls, and
