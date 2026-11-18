@@ -846,6 +846,9 @@ structure LoopGen where
       consumer reads it after catching that break, and its `after` pushes
       the item that resumes there. -/
   bnd : Option Nat := none
+  /-- Slots read by the pending `after` and subsequent steps. Copies keep
+      stack and cell references, so user-visible mutations stay shared. -/
+  resumeSlots : List Nat := []
 
 /-- Run `m`, attributing the heap effects it records first to `p` (a field
     or argument default: the effect is the construction's or the call's). -/

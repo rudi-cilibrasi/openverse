@@ -2107,6 +2107,7 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
     | none => pure after
   return { init, step, sp, has, value, after, vty := rty, itemCode, argSet, instances, bnd := bnd?,
            frames := frames.map LoopFrame.liftSource,
+           resumeSlots := [w, sp, nx] ++ stash?.toList ++ all.map (·.slot),
            frameTys := frames.map (fun f => (f.inTy, f.outTy)), kTy := kl?.map (·.ty), memberTys := ownTys }
 
 /-- Check a construction's value choices at the field's expected type.

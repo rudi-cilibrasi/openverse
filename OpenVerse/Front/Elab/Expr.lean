@@ -2282,7 +2282,8 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
     | none => pure value
   let after : Expr := .ite (p2 .ge (.local nx) (.lit (.int 0))) (push (item (.local nx) cur)) vd
   return { init, step, sp, has, value, after, vty := rty, itemCode, argSet,
-           frames := frames.map LoopFrame.liftSource, kTy := kl?.map (·.ty) }
+           frames := frames.map LoopFrame.liftSource, kTy := kl?.map (·.ty),
+           resumeSlots := w :: sp :: nx :: tls.map (·.slot) }
 
 /-- Bind a selected spawn's defaults in the caller, then spawn an adapter
     whose result is the static declaration's result (task types are invariant). -/
