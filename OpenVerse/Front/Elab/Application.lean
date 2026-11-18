@@ -88,6 +88,24 @@ partial def elabRefinementCast (elabE : Ctx → SExpr → Option Ty → EM R) (c
   let checks := conds.foldr (fun c acc => Expr.seq (test c) acc) (.local tv)
   return ⟨.seq (.assign tv r.e) checks, .refine name⟩
 
+/-- `int[X]` of an int `X` (also of a refinement of int): `X`, a cast to
+    the type of every int, failable as every cast is (so it may be an `if`'s
+    condition), which no 64-bit int fails: its test, `X` at least the least
+    64-bit int, always passes. UEFN 43.12
+    (build ++Fortnite+Release-43.12-CL-60598086) admits `int[Big]` of an int
+    (tests/conformance/versevm/book/book-int-cast-int.verse; the Book of
+    Verse's tests, WhereConstrainedInts.versetest:219-222, verse_vm_only),
+    and refuses it of a class's value with error 3509 (Cast.versetest:35).
+    VerseVM's ints are unbounded, and its `int[2^63]` succeeds; openverse's
+    arithmetic stops with an overflow before such a cast. -/
+partial def elabIntCast (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p : Pos) (args : List SExpr) :
+    EM R := do
+  let [a] := args | eerr p "a cast to int takes one value"
+  let r := widenR ctx.types (← elabE ctx a (some .int))
+  if r.ty != .int then eerr p s!"a cast to int takes an int, found {r.ty.show} (Epic's Verse compiler, UEFN 43.12: error 3509)"
+  let tv ← fresh .int
+  return ⟨.seq (.assign tv r.e) (.seq (p2 .ge (.local tv) (.lit (Value.ofInt (-9223372036854775808)))) (.local tv)), .int⟩
+
 /-! ## Applications of a name -/
 
 /-- A call of an extension method's function `name`, `$ext:M` (Book of
@@ -1093,6 +1111,8 @@ partial def elabAppBaseWith (cb : AppElab) (ctx : Ctx) (p : Pos) (f : SExpr) (ar
       return ← elabRefinementCast cb.elabE ctx p name base conds args bracket
     if convertsByName ctx name bracket then
       return ← elabConversionWith cb.elabE ctx p (.name name) args
+    if name == "int" && bracket && (ctx.sig? name).isNone && (ctx.types.overloads.lookup name).isNone then
+      return ← elabIntCast cb.elabE ctx p args
     if let some ovs := ctx.types.overloads.lookup name then
       return ← elabOverloadedCall cb ctx p name ovs args bracket exp
     let (builtin, name) := builtinCalled ctx name
