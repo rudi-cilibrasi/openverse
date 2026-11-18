@@ -4397,10 +4397,12 @@ private partial def returnLoopSites (owner : String) (f : MFn) (mv : List String
       let composed := before.length < clauses.length && before.all scalarPrefix &&
         (clauses.drop (before.length + 1)).all valid
       let exclusiveClause : SExpr → Bool := fun
-        | .decl _ _ _ false value => liftsAsIf (markCalls mv value)
+        | .decl _ _ _ false value =>
+          let marked := markCalls mv value
+          liftsAsIf marked || (caseIf "$cursorCase" marked).any (liftsAsIf ·.2)
         | _ => false
       let beforeExclusive := clauses.takeWhile (!exclusiveClause ·)
-      let exclusive := beforeExclusive.length < clauses.length && beforeExclusive.all scalarPrefix &&
+      let exclusive := beforeExclusive.length < clauses.length && beforeExclusive.all valid &&
         (clauses.drop (beforeExclusive.length + 1)).all valid
       let producer : SExpr → Option String := fun
         | .decl _ _ _ false (.app _ (.ident _ name) args _) =>

@@ -1558,6 +1558,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           | .app _ (.ident _ "$alt") [.block _ guards, value] false =>
             some (guards ++ [.decl gp x annotation false value])
           | _ => none
+    if (pre[before.length]?).any isBranch then
+      eerr p "a loop return with a refining conditional header is not supported yet (#686)"
   if let (some request, (g, fs) :: more) := (cursor, gs) then
     if let some binding := Choice.binding? g then
       if binding.composed && !pre.any isExcl then
@@ -1569,9 +1571,13 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       match binding.each with
       | some (.app _ (.ident _ "$loop") _ false) => true
       | _ => false
-    if !more.isEmpty && (isRecursive g || more.any (isRecursive ·.1)) && !pre.any isExcl && !fs.any isExcl then
-      let left := pre ++ (g :: fs)
-      let right := more.flatMap fun (next, filters) => next :: filters
+    let before := fs.takeWhile (!isExcl ·)
+    let after := fs.drop before.length
+    let right := after ++ more.flatMap (fun (next, filters) => next :: filters)
+    let hasBoundary := isRecursive g || !after.isEmpty ||
+      more.any (fun (next, filters) => isRecursive next || filters.any isExcl)
+    if !right.isEmpty && hasBoundary && !pre.any isExcl then
+      let left := pre ++ (g :: before)
       let makeArm (c : Ctx) (clauses : List SExpr) (names : List String) : EM ForCursorArm := do
         let step (c : Ctx) (prior : SExpr) :=
           elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq c p clauses body

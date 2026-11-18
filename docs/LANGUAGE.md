@@ -2225,18 +2225,19 @@ Main():void =
   cleanup it reached before going to the consumer.
 
   An exposed body choice can fall through to the next row when the header
-  uses flat choices, a composed choice as its first generator, or recursive
-  producers alongside flat generators, with matching body binding types
-  across alternatives. The recursive producers may call each other or
-  yield through return frames. Each body alternative resumes the header
-  from the same row and shares mutations from accepted values. A
-  first-success search skips unused recursive alternatives. The clauses
-  before a composed choice run once. A failed prefix rolls back its
-  effects and gives no rows.
+  uses flat choices, a composed choice as its first generator, recursive
+  producers alongside flat generators, or a conditional or `case` choice
+  with flat surrounding clauses. Body bindings must have matching types
+  across alternatives. Recursive producers may call each other or yield
+  through return frames. Each body alternative resumes the header from
+  the same row and shares mutations from accepted values. First success
+  skips unused recursive alternatives. A composed prefix and an
+  exclusive branch selection run once for each surrounding row. A
+  failed prefix rolls back its effects and gives no rows.
 
-  Other choice-bearing headers, mutable implicit proof captures, and
-  direct concurrency in a captured expression remain implementation
-  limits (#686). Restrictions on other
+  Choice headers with type-refining conditions, mutable implicit proof
+  captures, and direct concurrency in a captured expression remain
+  implementation limits (#686). Restrictions on other
   return-containing initializers and on returns inside expressions or
   conditions still apply.
 
