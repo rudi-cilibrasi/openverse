@@ -159,7 +159,7 @@ Tests/Array.versetest:153	agrees
 Tests/Array.versetest:154	agrees
 Tests/Array.versetest:decls	agrees
 Tests/ArrayAppend.versetest:7	agrees
-Tests/ArrayAppend.versetest:12	wrong-output
+Tests/ArrayAppend.versetest:12	agrees
 Tests/ArrayAppend.versetest:17	not-translatable
 Tests/ArrayAppend.versetest:23	not-translatable
 Tests/ArrayAppend.versetest:30	not-translatable

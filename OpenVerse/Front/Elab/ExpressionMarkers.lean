@@ -110,6 +110,9 @@ partial def elabExprMarkersWith
     | .app _ (.ident _ "$producerAnchorEnd") [_] false
     | .app _ (.ident _ "$producerFrameStart") [] false
     | .app _ (.ident _ "$producerFrameEnd") [] false => return ⟨.lit .void, .void⟩
+  -- (#704) a guarded compound set's right side, met where the set did not
+  -- take it (`CompoundPlaces`): its value
+  | .app _ (.ident _ "$placeGuard") [e, _, _] false => elabE ctx e exp
   | .app _ (.ident _ "$nofail") [e] false =>
     elabE { ctx with canFail := false, inRollback := ctx.inRollback || ctx.canFail, inBlock := true } e exp
   | .app p (.ident _ "$defer") _ _ => eerr p "defer: is a statement: it has no value"

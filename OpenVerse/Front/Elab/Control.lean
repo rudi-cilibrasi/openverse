@@ -1,6 +1,7 @@
 /- Elaboration control; public declarations retain OpenVerse.Front names. -/
 import OpenVerse.Front.Elab.For
 import OpenVerse.Front.Elab.Calls
+import OpenVerse.Front.CompoundPlaces
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -22,6 +23,14 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
       modify fun st => { st with frameCopies := st.frameCopies ++ [{ target, result, field := some field }] }
     | _ => eerr p "internal error: a refining copy-out is not a saved result"
     return r
+  -- (#704) `$placeGuard(R, Lost, Snap)`: a compound `set` of a local
+  -- variable's path whose `R` may replace the place's container
+  -- (`CompoundPlaces`); when `Lost` holds after `R`, the place is read from
+  -- `Snap` and the variable is not written
+  let (rhs0, guard?) := match rhs0 with
+    | .app _ (.ident _ n) [r, .ident _ lost, .ident _ snap] false =>
+      if n == CompoundPlaces.guardName then (r, some (lost, snap)) else (rhs0, none)
+    | _ => (rhs0, none)
   -- (`$withOld(O, R)`: for `op=`, the old value was read into `O` before
   -- the code that computes `R`, as `set` evaluates, #208)
   -- Private indexed adapters have already read/validated the leaf in the
@@ -207,7 +216,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
       if let some rty := rootTy? root then
         if throughMap rty steps then
           eerr p "set through a map's key can fail (the key's reference is <decides> in Verse, the Book of Verse's API reference; its last key inserts), so it must be in a failure context (an if condition, a for clause, option{…}, logic{…}, not, the left of or, or a <decides> function)"
-  if let some (root, steps) := path lhs then if general steps || opaqueIndex root steps then
+  if let some (root, steps) := path lhs then if general steps || opaqueIndex root steps || guard?.isSome then
     -- `set X.p = e` with a path of two or more steps (Book of Verse §3.5, §9.3):
     -- the indices and keys are evaluated once, left to right; then each
     -- intermediate container is read (an index or an intermediate key that
@@ -292,6 +301,20 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
 
     if refLevel?.isNone && !l.mutable then
       eerr p s!"'{root}' is not a var; declare it with var {root}:t = …"
+    -- (#704) a guarded place's flag and snapshot (`CompoundPlaces`); with an
+    -- object on the path, the object is the one the path names before the
+    -- right side runs (below), so the guard has nothing to add
+    let guardSlots? : Option (Nat × Nat) ← match guard?, refLevel? with
+      | some (lost, snap), none =>
+        match ctx.lookup lost, ctx.lookup snap with
+        | some lostL, some snapL => pure (some (lostL.slot, snapL.slot))
+        | _, _ => eerr p "internal error: a compound set's place guard is not in scope (#704)"
+      | _, _ => pure none
+    -- the container as the place was resolved: the variable, or, once the
+    -- right side has replaced the container, the variable as it was then
+    let rootNow : Expr := match guardSlots? with
+      | some (lost, snap) => .ite (.prim .query [.local lost]) (.local snap) (.local l.slot)
+      | none => .local l.slot
     -- read one step of the container in slot `c` of type `cty`
     let readStep (c : Nat) (cty : Ty) (step : Option String) (key : Option (Nat × Ty)) : EM Expr := do
       match step, key, cty with
@@ -367,9 +390,10 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     -- the intermediate containers: level 0 is a copy of the variable, taken
     -- after the indices (and for `op=` the new value), so that the right-hand
     -- side of `=` cannot change what is rebuilt (as for `set A[i] = e`); the
-    -- variable is written once, last
+    -- variable is written once, last (#704: for a guarded place, the
+    -- container as it was resolved, `rootNow`)
     let c0 ← fresh l.ty
-    pre := pre.push (.assign c0 (.local l.slot))
+    pre := pre.push (.assign c0 rootNow)
     cur := c0
     let stepsA := steps.toArray
     -- with an object on the path, the right-hand side runs once the path has
@@ -468,7 +492,12 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         pre := pre.push keyRefDecides
       | _, _, _ => eerr p "internal: set path"
       newVal := .local c
-    if !wroteObject then pre := pre.push (.assign l.slot (.local c0))
+    -- (#704: a guarded place whose container the right side replaced is
+    -- written in that container, which the variable no longer holds)
+    if !wroteObject then
+      pre := pre.push (.assign l.slot (match guardSlots? with
+        | some (lost, _) => .ite (.prim .query [.local lost]) (.local l.slot) (.local c0)
+        | none => .local c0))
     return ⟨pre.toList.foldr Expr.seq (.local tv), leafTy⟩
   match lhs with
   | .ident _ n =>

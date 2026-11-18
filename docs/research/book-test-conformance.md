@@ -59,7 +59,7 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
 
 ## Where things stand
 
-With [tuple and array concatenation](#after-tuple-and-array-concatenation) on `cf0ced0e` (#630): **8,799 agree, 602 refuse, 55 accept, 92 differ, 3,956 not translatable** of 13,504 cases (a fresh full comparison with causes; before this change, 8,797 agreed and 604 were refused). This is the one table of what is left; the sections below are the history, each written when its work landed, and the four maps ([the first map](#the-remaining-causes-a-map), [classes](#classes-and-subtyping-the-map), [forms](#forms-of-expressions-statements-and-the-library-a-map), [the forms still on the list](#the-forms-still-on-the-list-a-map)) hold the case-by-case reading each row points to.
+With [compound places](#after-compound-places) on main `617c89f1` (#704): **8,802 agree, 600 refuse, 55 accept, 91 differ, 3,956 not translatable** of 13,504 cases (a full comparison against the baseline; before this change, 8,801 agreed and 92 differed; with [tuple and array concatenation](#after-tuple-and-array-concatenation) on `cf0ced0e` (#630), 8,799 agreed and 602 were refused, the count the refusals' table below still has). This is the one table of what is left; the sections below are the history, each written when its work landed, and the four maps ([the first map](#the-remaining-causes-a-map), [classes](#classes-and-subtyping-the-map), [forms](#forms-of-expressions-statements-and-the-library-a-map), [the forms still on the list](#the-forms-still-on-the-list-a-map)) hold the case-by-case reading each row points to.
 
 **Accepted where the tests refuse (55)**
 
@@ -73,13 +73,12 @@ With [tuple and array concatenation](#after-tuple-and-array-concatenation) on `c
 | initializer-effects | 4 | a module constant whose construction runs a `block` that allocates a `var` (VerseVM's link error 9003, `GlobalVariables.versetest` 86-105); the BPVM's twins are valid, and `:143` is valid where the `var` is not reached: a check of what the initializer does when it runs | left: a VM split and a check at run time, [the forms still on the list](#the-forms-still-on-the-list-a-map) |
 | final-members | 1 | a `<final>` method that does not implement an interface's method of its name (`final.versetest:125`): members keyed by qualifier | left with the two members of one name, [the forms still on the list](#the-forms-still-on-the-list-a-map) |
 
-**Different output (92)**
+**Different output (91)**
 
 | Cause | Cases | What it is, and what it needs | Who decided what |
 |---|---:|---|---|
 | int-precision | 87 | VerseVM's unbounded `int` against openverse's 64 bits (`Bitwise`, the arithmetic operators, 5 `ToDiagnostic` operands): bignums in the C runtime | openverse's reading, the BPVM's, [Readings](../LANGUAGE.md#readings-openverse-takes) |
 | empty-values-equal | 4 | the value of `X?` on a `logic`, `true?` (the empty value in the tests) | the Book disagrees with itself; built and measured: right for the 4 and no output changed, but 722 programs' bytes, which the elaborator's own `or` and `void` conversions take; needs a flag every value-dropping context sets ([the rule](book-forms-rules.md#the-value-of-true)), [After the forms still on the list](#after-the-forms-still-on-the-list) |
-| compound-set-order | 1 | `set X[0] +=` whose value sets `X` (`ArrayAppend.versetest:12`, VerseVM's) | left: a VM split; the untagged tests agree, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 
 **Refused where the tests accept (602)**
 
@@ -2677,6 +2676,27 @@ pair retains a whole-tuple proof's custom conversion. The full default
 gate includes these fixtures and the model fuzzers. Core semantics,
 proofs, OVBC and the C runtime are unchanged.
 
+## After compound places
+
+`set X.p op= e`, on a path from a local `var` whose container `e`
+replaces (`set X[0] += e` whose `e` sets `X`), writes into the container
+`e` replaced, and `X` keeps what `e` left: Epic's VerseVM does so on UEFN
+43.12 (++Fortnite+Release-43.12-CL-60598086, "Use Verse VM", 2026-11-18;
+`tests/conformance/versevm/compound-indexed-write.verse` printed a row of
+length 1 holding 0), as `ArrayAppend.versetest:12` expects. The whole
+variable's control, `:7`, is unchanged, on Epic too, and so are `:140` and
+`:183`, whose `e` writes into the container. The front end guards such a
+`set` with a flag and a snapshot of the variable
+(`Front/CompoundPlaces.lean`, [the rule](../LANGUAGE.md#mutation-macros-tooling)).
+
+On top of main `617c89f1`, one case newly agrees (`ArrayAppend.versetest:12`,
+from a different result) and none is worse. The baseline records it.
+Two Lean/C execution fixtures (`set_op_place_replaced`,
+`set_op_place_replaced_failure`) cover nested indices, map entries, struct
+fields in an array, objects on the path, the four operators, the set's
+value, failure and rollback, single evaluation of keys, choices and loops
+in `e`. Core semantics, proofs, OVBC and the C runtime are unchanged.
+
 ## Ten causes to remove first
 
 Ranked by cases moved per unit of risk. A count is the upper bound above;
@@ -2828,7 +2848,6 @@ Grouped by the causes of the tables above. Lines are given per file, with
 
 **Different output: empty-values-equal** (4): `Operators/BoolQuery.versetest` 3, 4; `Operators/LogicalAnd.versetest` 29; `Operators/Precedence.versetest` 121
 
-**Different output: compound-set-order** (1): `ArrayAppend.versetest` 12(v)
 
 ## Appendix B: totals per file
 

@@ -5,6 +5,7 @@ import OpenVerse.Front.InitializerConvergence
 import OpenVerse.Front.Aliases
 import OpenVerse.Front.BuiltinValues
 import OpenVerse.Front.FinalSuper
+import OpenVerse.Front.CompoundPlaces
 import OpenVerse.Front.Bitwise
 import OpenVerse.Front.Localization
 import OpenVerse.Front.TypeValues
@@ -147,7 +148,9 @@ def concurrencyHelpers (resolved : List STop) (requests : Requests) :
        and constructions, parents and overrides used where they may be
        (`Access.checkUses`, with `Access.Env`, which the elaboration reads);
     7. the desugarings: module-scoped `var`s, checked and made the `var`
-       fields of the module state's object (`ModuleVars`), types given as
+       fields of the module state's object (`ModuleVars`), compound `set`s
+       whose right side may replace their place's container
+       (`CompoundPlaces`, #704), types given as
        arguments (`TypeArguments`), the calls of the final super class
        queries (`FinalSuper`), types as values (`TypeValues`), fields
        with accessors (`Accessors`), castable bounds
@@ -245,6 +248,10 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   --    built-ins the program names as values: definitions of their own
   --    (after the aliases, whose names are no values' and bind nothing)
   let resolved ← ModuleVars.desugar resolved
+  -- (#704) a compound `set` whose right side may replace its place's
+  -- container, guarded so that its write goes where the place was
+  -- resolved (`CompoundPlaces`)
+  let resolved := CompoundPlaces.desugar resolved
   let resolved ← TypeArguments.desugar resolved
   let resolved ← FinalSuper.desugar resolved
   let resolved ← TypeValues.desugar resolved
