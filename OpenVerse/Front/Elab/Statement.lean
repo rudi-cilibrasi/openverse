@@ -87,6 +87,12 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
       for n in ns do
         if let .ident q n := n then checkNewLocal ctx q n
       pure (⟨.lit .void, .void⟩, ctx)
+    | .app _ (.ident _ "$noteForCursor") [.str _ [.text key], code] false => do
+      let saved ← get
+      let probe ← elabE { ctx with typeOnly := true } code none
+      set saved
+      noteNeeds { nested := [(key, probe.ty.toSTy)] }
+      pure (⟨.lit .void, .void⟩, ctx)
     | .app _ (.ident _ "$noteTypes") (.str _ [.text key] :: ns) false => do
       -- (#283) a consumer in a recursive group's code, kept for checking
       -- until its function of its own is made (`Choice.nestFns`): the types
