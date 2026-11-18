@@ -39,12 +39,13 @@ There are two ways to get fresh Epic results:
   · [UEFN system requirements](https://dev.epicgames.com/documentation/fortnite/install-and-launch-fortnite-creative-and-unreal-editor-for-fortnite).
 
 Live compiler results for UEFN 43.12 are below
-([Epic observations](#epic-observations-uefn-4312)). The Linux workspace
+([Epic observations](#epic-observations-uefn-4312-compiler)). The Linux workspace
 has no Epic runner available. On November 17, 2026, the
 pinned Book's `vtest Tests/ArrayAppend.versetest --verbose` reached process
 launch and returned `ENOENT` for `VerseTestScriptCmdVM.exe`. The authenticated
 GitHub API calls for `EpicGames/UnrealEngine` and `EpicGames/fortniteMain`
-returned 404.
+returned 404. The probe results below had no live Epic observations then;
+the two compound-write probes have one since (below).
 
 QEMU and KVM are available on this Linux host. A
 [Windows evaluation guest](https://www.microsoft.com/en-us/evalcenter/evaluate-windows-11-enterprise)
@@ -112,6 +113,16 @@ results with its target and build ID. Epic describes the
 | `signal-subscribe` | If admitted, read callback state after a failed signal and then a successful signal. The paired control verifies subscription, callback dispatch and cancellation outside a failure context. |
 | `compound-indexed-write` | After the right operand replaces the array, record the first row's length and first element. The Book's VerseVM-only case expects a single zero. [ArrayAppend case](https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests/ArrayAppend.versetest#L12) · [OpenVerse issue #704](https://github.com/rudi-cilibrasi/openverse/issues/704). |
 | `compound-whole-write` | The whole-variable control replaces the target during the right operand in the same way. The Book's VerseVM-only case expects `[0, 42]`. Run both probes on the same target to check whether the result changes when the assignment selects an array element. [ArrayAppend control](https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests/ArrayAppend.versetest#L7). |
+| `compound-nested-root`, `compound-nested-row` | Nested indices: the right operand replaces the variable, the element's row, or (a control) another row. Each header gives OpenVerse's output and the other reading's. [#704](https://github.com/rudi-cilibrasi/openverse/issues/704) |
+| `compound-map-replaced`, `compound-struct-replaced`, `compound-operators` | The same rule for a map's entry, a struct's field (a struct variable, an array of structs), and `-=`, `*=`, float `*=` and `/=`. |
+| `compound-replaced-length` | Whether the element is read from the replaced array or its replacement, when only one of them has it. |
+| `compound-object-replaced`, `compound-object-field-array` | An object on the path: a variable holding it replaced, and an array in its field replaced. |
+| `compound-root-append` | Whether `set X += …` in the right operand replaces `X`'s array or appends to it in place. |
+| `compound-object-alias`, `compound-object-call`, `compound-object-task` | An array or struct in an object's field replaced through another name for the object, inside a called function, and by another task while the right operand is suspended. |
+| `compound-object-nested`, `compound-object-in-place`, `compound-object-generic` | Rows in an object's field; writes into the field that replace nothing (controls); a generic class's and an interface's fields. |
+| `compound-module-entry` | A module-scoped `weak_map(session, []int)` entry replaced by the right operand (Epic only: OpenVerse has no `session`). |
+| `compound-plain-append`, `compound-index-appended` | Whether `set X = X + …` replaces `X`'s array, and whether an index is checked when the place is resolved or when the old value is read. |
+| `compound-indexed-control` | Controls: a later failure undoes everything, the index runs once, and the update's value. |
 | `int-overflow` | Add 1 to the maximum signed 64-bit integer and compare the result with that maximum. The marker is a fixed string because the Book documents separate limits on interpolating large integers. [Book of Verse integer rules](https://verselang.github.io/book/02_primitives/#integers). |
 
 For [#515](https://github.com/rudi-cilibrasi/openverse/issues/515), the API
@@ -121,7 +132,7 @@ runtime traces are needed to decide how a specific release admits the calls
 and what it rolls back. [event.Signal](https://dev.epicgames.com/documentation/fortnite/verse-api/versedotorg/verse/event/event%28t%29/signal)
 · [signalable.Signal](https://dev.epicgames.com/documentation/fortnite/verse-api/versedotorg/verse/signalable/signalable%28payload%29/signal).
 
-## Epic observations (UEFN 43.12)
+## Epic observations (UEFN 43.12 compiler)
 
 UEFN 43.12, build `++Fortnite+Release-43.12-CL-60598086`, compiled each
 probe body on 2026-11-18 through the editor's Build Verse Scripts, one body
@@ -143,12 +154,48 @@ diagnostics, from the front end the Verse VM target shares with the BPVM.
 
 The rewritten `signal-bound-control`, `signal-subscribe` and
 `signal-subscribe-control` have not been run on Epic yet. OpenVerse makes
-the 3512 refusals its default (#515): see the next section.
+the 3512 refusals its default (#515): see [OpenVerse
+observations](#openverse-observations).
+
+## Epic observations (Verse VM runs)
+
+On UEFN 43.12 (++Fortnite+Release-43.12-CL-60598086), in sessions launched
+with **Use Verse VM** (the matchmaking ticket carried
+`player.option.newVerseVm=true`), on 2026-11-18, every compound probe
+below compiled and ran:
+
+| Probe | Epic |
+| --- | --- |
+| `compound-indexed-write` | `length 1`, `first 0`, as `ArrayAppend.versetest:12` expects |
+| `compound-whole-write` | `length 2`, `first 0`, `second 42`, as `ArrayAppend.versetest:7` |
+| `compound-nested-root` | `row1 7 7` |
+| `compound-nested-row` | `same row 9 9`, `other row 13 4` |
+| `compound-map-replaced` | `entry 100 size 1` |
+| `compound-struct-replaced` | `struct 50`, `array replaced 40`, `element replaced 70` |
+| `compound-operators` | `minus 100`, `times 200`, `float times 4`, `float divide 8` |
+| `compound-replaced-length` | `short failed 0`, `long ok 0` |
+| `compound-object-replaced` | `old 6 new 100` |
+| `compound-object-field-array` | `field 8 9` |
+| `compound-root-append` | `rows 2 row0 4` |
+| `compound-indexed-control` | `rolled back 3`, `index calls 1`, `value 5 rows 1 row0 1` |
+
+The rule they give: the place is resolved before the right operand, and an
+update whose container the right operand replaced (with a plain `set`) goes
+to that container; `+=` appends in place. OpenVerse follows it since #704
+([the rule](../LANGUAGE.md#mutation-macros-tooling)), and prints these
+results for all twelve. The probes `compound-object-alias`,
+`compound-object-call`, `compound-object-task`, `compound-object-nested`,
+`compound-object-in-place`, `compound-object-generic`,
+`compound-module-entry`, `compound-plain-append` and
+`compound-index-appended` are not yet run on Epic; each header gives
+OpenVerse's output and the other reading's.
 
 ## OpenVerse observations
 
-On this branch (#515's default), Lean and C agreed on stdout, stderr and
-exit status for every probe that produced bytecode. The legacy column is
+On the merge of #515's branch with main after #704, Lean and C agreed on
+stdout, stderr and exit status for every probe below that produced
+bytecode (the compound probes' outputs are in their headers and in
+[Epic observations (Verse VM runs)](#epic-observations-verse-vm-runs)). The legacy column is
 `--signal-rollback`, the transactional mode that was the default before
 (and the previous table's `default`).
 
@@ -159,7 +206,7 @@ exit status for every probe that produced bytecode. The legacy column is
 | `signal-direct`, `signal-alias`, `signal-bound`, `signal-interface`, `signal-await` | Refused at the `Signal` in the condition, as 43.12 (3512). | Print `after`; `signal-await` prints `waiting`, then `received 2`. |
 | `signal-generic`, `signal-generic-control` | Refused at the `Signal` in the `<transacts>` helper `Send`, as 43.12 (3512). | Print `after`. |
 | `signal-subscribe` and its control (rewritten: the field is `Seen`) | Refused because OpenVerse's `event` lacks `Subscribe`; it provides subscription through `subscribable_event` (`followup/subscribable-event-control.verse` asks 43.12 which type has it). | Same refusal. |
-| `compound-indexed-write` | Prints `length 2`, then `first 0`. | Same. |
+| `compound-indexed-write` | Prints `length 1`, then `first 0`, as Epic does (#704). | Same. |
 | `compound-whole-write` | Prints `length 2`, `first 0`, and `second 42`. | Same. |
 | `int-overflow` | Runtime overflow, exit 2. | Same. |
 
@@ -183,3 +230,54 @@ effects of `Await`, `Subscribe` and `Print` (`await-in-transacts`,
 (`join-if-common-base-interface`, `join-if-expected-interface`, `join-interface-only`), `int[X]` of an
 `any` (`int-cast-variants`) and which event type has `Subscribe`
 (`subscribable-event-control`).
+
+## Running many probes
+
+[`ovprobe.py`](../../tests/conformance/versevm/ovprobe.py) (Python 3
+standard library, Linux or Windows) generates the UEFN sources, runs
+OpenVerse, reads UEFN's logs and writes the comparison. Probe directories:
+the original probes, [`book/`](../../tests/conformance/versevm/book) (a ranked
+shortlist of Book cases where OpenVerse and the Book differ, with the cases
+and expectations in its `expectations.tsv`) and
+[`fingerprint/`](../../tests/conformance/versevm/fingerprint) (behaviour
+reported to differ between Epic's VMs) and
+[`followup/`](../../tests/conformance/versevm/followup) (what the 43.12
+compiler results leave open, [above](#follow-up-probes)). With `P` for
+`tests/conformance/versevm`:
+
+```sh
+python3 $P/ovprobe.py openverse $P $P/book $P/fingerprint $P/followup --json ov.json --tsv ov.tsv
+python3 $P/ovprobe.py generate --mode single --out single $P $P/book $P/fingerprint $P/followup
+# build each single/<probe>/openverse_probe.verse alone; for each build's log:
+python3 $P/ovprobe.py parse --single <probe> --out admit/<probe>.json UnrealEditorFortnite.log
+python3 $P/ovprobe.py generate --mode batch --exclude-refused admit --risky-last ov.json \
+    --out batch $P $P/book $P/fingerprint $P/followup
+python3 $P/ovprobe.py parse --manifest batch/manifest.json --out session.json UnrealEditorFortnite.log
+python3 $P/ovprobe.py compare --openverse ov.json --epic admit --epic session.json \
+    --tsv report.tsv --md report.md
+```
+
+Test compile admission with `--mode single`, one file at a time, as above:
+its output is byte for byte this runbook's concatenation. Run only admitted
+probes in a batch. The default batch is one file,
+`ovprobes/openverse_probe_driver.verse`, with one inline module per probe and
+one device, `openverse_probe_driver`, that runs them in order, every line
+tagged `OVPROBE <probe> …`. A Verse runtime error ends the session's Verse:
+`parse` reports the probe that began without an end as aborted and the later
+ones as missing, and `generate --exclude-done session.json` makes the next
+batch from the rest. Empty the single-probe file before a batch build: a
+probe's `Main` left at the project's top level would be shadowed by the
+batch modules' own, which the Book forbids (chapter 16). `--layout devices`
+instead gives each probe a folder and its own device class. `parse` also
+reads the JSON that
+[`uefn_mcp.py`](../../tests/conformance/versevm/uefn_mcp.py) writes from
+UEFN's local MCP server (`admit` builds the single-mode files one by one;
+`build`, `session`, `logs`). That client has not been run against an editor.
+
+No wrapper here has been compiled by Epic's compiler. The batch layout uses
+the Book's module forms (chapter 16): inline `module:` definitions and
+`<public>` entries called as `ovp_<probe>.RunOVProbe()`. OpenVerse runs the
+same file with its device class replaced by a `Main`
+(`generate --host openverse`, checked by `tests/scripts/test-versevm-live.py`).
+If the first build cannot resolve a name of the header, such as `Print`,
+pass an edited copy with `--header`.

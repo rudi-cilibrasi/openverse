@@ -278,7 +278,7 @@ def classFields (classes : Classes) (requests : Requests) : Except String Fields
       for i in ifacesUp do
         -- (in terms of this class's type parameters, #53)
         let iσ := ((((classes.cdef? i).map (·.tps)).getD []).map (·.name)).zip ((classes.supArgsSTy cd.name i).getD [])
-        for (f, sty0, _, isVar) in fullMap[i]?.getD [] do
+        for (f, sty0, d0, isVar) in fullMap[i]?.getD [] do
           let sty := sty0.substNames iσ
           if ((classes.henv.supers cd.name).drop 1).any (classes.declares · f) then
             throw s!"{cd.pos.show}: field '{f}' of {cd.name} has the name of an inherited method"
@@ -298,7 +298,8 @@ def classFields (classes : Classes) (requests : Requests) : Except String Fields
             if best.length > 1 && !cd.overrides.contains f then
               defaultClashes := defaultClashes.push
                 s!"{cd.pos.show}: {cd.name} inherits a default for field '{f}' from both {best[0]!} and {best[1]!}: give it one with {f}<override>:t = e"
-            let d := best.head?.bind ownDefault
+            -- (#704: a hidden field of watches is the interface's, empty)
+            let d := if f.startsWith "$watch." then d0 else best.head?.bind ownDefault
             fs := fs ++ [(f, sty, d, isVar)]
       for ⟨f, sty, d, isVar, _, _⟩ in cd.fields do
         if f == "Self" then throw s!"{cd.pos.show}: a field of {cd.name} cannot be called Self"
@@ -417,6 +418,12 @@ def classFields (classes : Classes) (requests : Requests) : Except String Fields
           -- which a dispatch through a view opens, #351)
           if requests.witnesses.contains cd.name || !qargs.any (fun | .name v => v == tp.name | _ => false) then
             fs := fs ++ [(s!"$w.{cd.name}.{tp.name}", .name tp.name, some (.ident cd.pos "$witness"), false)]
+      -- (#704) the watches on containers in its fields that compound `set`s
+      -- resolve before their right sides, each a hidden `var` field that
+      -- starts empty (`PlaceWatch`)
+      for w in requests.watches do
+        if w.owner == cd.name && !fs.any (·.1 == w.name) then
+          fs := fs ++ [(w.name, w.ty, some (.arrayLit cd.pos []), true)]
       fullMap := fullMap.insert cd.name fs
     if fullMap.size == before then break
   let fields : Fields := { map := fullMap, overrides := fieldOverrides, narrowings, defaultClashes }

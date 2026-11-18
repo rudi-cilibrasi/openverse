@@ -1,0 +1,6 @@
+# The Book's expectation for the original probes, where a Book test or chapter gives one.
+# book_lines: the OVPROBE lines (without the marker) a run as the Book has it prints, |-separated.
+probe	book_case	book_outcome	book_lines	note
+compound-indexed-write	Tests/ArrayAppend.versetest:12 (verse_vm_only)	ran	length 1|first 0	The row is replaced by the right operand's set: X = array{array{0}} (#704).
+compound-whole-write	Tests/ArrayAppend.versetest:7 (verse_vm_only)	ran	length 2|first 0|second 42	X = array{0, 42}.
+int-overflow	Tests/Operators/BinaryAddInt.versetest:35 (verse_vm_only); docs/02_primitives.md, Overflow and VM Differences	ran	above signed 64-bit max	VerseVM integers are arbitrary precision; the BPVM raises MathIntrinsicCallFailure.
