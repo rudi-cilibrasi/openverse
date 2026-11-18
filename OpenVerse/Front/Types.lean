@@ -206,6 +206,26 @@ structure ClassInfo where
   isFinal : Bool := false
   deriving Inhabited
 
+/-- (#704) A container inside an object's field that a compound `set`
+    resolves before its right side runs: the class or interface that
+    declares the field (`TyEnv.fieldSrc`), the field, and the steps from the
+    field's value to the container (`some g` a struct's field `g`, `some "?"`
+    an option's value, `none` an index or a key). Its watches are a hidden
+    `var` field of the declaring class, of type `ty` in that class's type
+    parameters: one entry per compound `set` running, the container's keys,
+    whether a write has replaced it, and the field's value just before that
+    write. -/
+structure PlaceWatch where
+  owner : String
+  field : String
+  steps : List (Option String)
+  ty : STy
+  deriving Inhabited, BEq
+
+/-- The hidden field that holds a watch's entries. -/
+def PlaceWatch.name (w : PlaceWatch) : String :=
+  s!"$watch.{w.field}" ++ String.join (w.steps.map fun | some g => s!".{g}" | none => "[]")
+
 /-- What an elaboration of the program asks for that only types tell, for
     the program to be elaborated again with it (`Compiled.needs`), and what
     earlier elaborations asked for (`Options.requests`): `elabProgram`
@@ -263,6 +283,9 @@ structure Requests where
       that are not a prefix of their own (#351): hidden fields for all of
       their type parameters. -/
   witnesses : List String := []
+  /-- (#704) The containers in objects' fields that compound `set`s resolve
+      before their right sides: a hidden field of watches for each. -/
+  watches : List PlaceWatch := []
   /-- The program awaits a task: its prelude is the await mode's, whose
       task's end resumes the awaiters inside it (`concPreludeAwaits`; the
       Book's API, `task`'s `Await`). Only types tell a task's `Await` from

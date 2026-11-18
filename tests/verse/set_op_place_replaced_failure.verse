@@ -4,7 +4,11 @@
 # no such element, though the variable has one, and succeeds when the
 # replaced container has it, though the variable does not; a choice in e,
 # and a loop in e, record the replacement as any write does, and a write that
-# a break leaves does not replace anything.
+# a break leaves does not replace anything. Epic's VerseVM, UEFN 43.12
+# (++Fortnite+Release-43.12-CL-60598086, "Use Verse VM", 2026-11-18), gives
+# the results of the cases marked (Epic) for the same bodies
+# (tests/conformance/versevm/compound-indexed-control.verse,
+# compound-replaced-length.verse).
 pair := struct<computes>:
     N:int = 0
 
@@ -29,7 +33,7 @@ ShowRows(Rows:[][]int):string =
     "[{S}]"
 
 Main()<transacts>:void =
-    # (a later clause fails: the replacement and the write are undone)
+    # (Epic: a later clause fails: the replacement and the write are undone)
     var Rows:[][]int = array{array{1, 2, 3}}
     if (set Rows[0] += if (set Rows = array{array{0}}; 0 = 0) then array{42} else array{42}, Rows.Length = 5):
         Print("unreachable")
@@ -40,17 +44,18 @@ Main()<transacts>:void =
         Print("unreachable")
     else:
         Print("right side failed {ShowRows(Rows)}")
-    # (the replaced container has no row 0, the new one has)
+    # (Epic: the replaced container has no row 0, the new one has)
     var Short:[][]int = array{}
     if (set Short[0] += if (set Short = array{array{0}}; 0 = 0) then array{42} else array{42}):
         Print("unreachable")
     else:
         Print("no row in the replaced array {ShowRows(Short)}")
-    # (the replaced container has row 0, the new one has not)
+    # (Epic: the replaced container has row 0, the new one has not)
     var Long:[][]int = array{array{1}}
     if (set Long[0] += if (set Long = array{}; 0 = 0) then array{42} else array{42}):
         Print("row in the replaced array {ShowRows(Long)}")
-    # (the keys once, before e; then e's own write's keys)
+    # (the keys once, before e, as Epic runs an index once; then e's own
+    # write's keys)
     var G:[][]int = array{array{1}, array{2}}
     if (set G[Log("row", 1)][Log("column", 0)] +=
             if (set G[Log("replaced row", 1)] = array{8}; 0 = 0) then Log("value", 3) else 0):

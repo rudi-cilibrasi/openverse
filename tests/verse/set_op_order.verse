@@ -34,6 +34,8 @@ Main()<decides>:void =
     C := cell{}
     set C.V *= (set C.V = 7; 3)
     Print("object field {C.V}")
+    # (e replaces the field's array: the update goes to the array it
+    # replaced, and the field keeps e's, as Epic's VerseVM does, #704)
     set C.Arr[1] += (set C.Arr = array{8, 9}; 1)
     Print("object path {C.Arr[0]} {C.Arr[1]}")
     # (the indices first, once, then e, then the old value)

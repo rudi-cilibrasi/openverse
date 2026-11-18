@@ -19,4 +19,6 @@ float /= 8.000000
 value [5, 42] [[0]]
 object replaced 6 100
 object in array, array replaced 6 50
+appended in place [[1, 2, 3, 42] [5]]
+row appended in place [[1, 2] [13, 4, 5]]
 exit=0

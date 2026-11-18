@@ -11,6 +11,28 @@ def checkMapKeyCanFail (ctx : Ctx) (p : Pos) (e : Expr) : EM Unit := do
   if e.mayFail ctx.sigProg then
     eerr p "a map literal's key cannot fail: bind it first, in a failure context (Book of Verse ch. 3: \"failure in map literal keys is not implemented\")"
 
+/-- (#704) The types of the keys on the steps `shape` from a value of type
+    `t` (`PlaceWatch.steps`): an array's `int`, a map's key type; none when
+    a step does not fit `t`, or goes into an object. -/
+partial def watchKeys (env : TyEnv) : Ty → List (Option String) → Option (List Ty)
+  | _, [] => some []
+  | .arr t, none :: rest => (Ty.int :: ·) <$> watchKeys env t rest
+  | .map k v, none :: rest | .weakMap k v, none :: rest => (k :: ·) <$> watchKeys env v rest
+  | .opt t, some "?" :: rest => watchKeys env t rest
+  | .struct s args, some g :: rest =>
+    if env.classes.contains s then none else
+    ((env.fields s args).find? (·.1 == g)).bind fun (_, gt, _) => watchKeys env gt rest
+  | _, _ => none
+
+/-- (#704) The watch on the container at `shape` inside field `f` of a
+    `sn`: the field's declaring class, and the hidden field's type in that
+    class's type parameters (`PlaceWatch`). -/
+def placeWatch? (env : TyEnv) (sn f : String) (shape : List (Option String)) : Option PlaceWatch := do
+  let owner := (env.fieldSrc sn f).getD sn
+  let (_, ft, _) ← (env.fields owner).find? (·.1 == f)
+  let keys ← watchKeys env ft shape
+  return { owner, field := f, steps := shape, ty := (Ty.arr (.tup (keys ++ [.logic, ft]))).toSTy }
+
 partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMember : Ctx → Pos → R → String → EM R)
     (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (rhs0 : SExpr)
     (rootInit : Option (String × Expr) := none) : EM R := do
@@ -216,6 +238,83 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
       if let some rty := rootTy? root then
         if throughMap rty steps then
           eerr p "set through a map's key can fail (the key's reference is <decides> in Verse, the Book of Verse's API reference; its last key inserts), so it must be in a failure context (an if condition, a for clause, option{…}, logic{…}, not, the left of or, or a <decides> function)"
+  -- (#704) an object's hidden field of watches (`PlaceWatch`), read: the
+  -- compiler's bookkeeping, as a `$varcell`'s is, not a source effect
+  let quietMember (obj : Nat) (objTy : Ty) (f : String) : EM Expr := do
+    let fx0 := (← get).fx
+    let e := (← elabMember ctx p ⟨.local obj, objTy⟩ f).e
+    modify fun st => { st with fx := fx0 }
+    return e
+  -- (#704) the code that runs right before a plain write at the steps `t`
+  -- (the keys of its indices in `tKeys`) into field `f` of the object in
+  -- `obj`, through whatever reference: each watch on a container that the
+  -- write replaces (its steps start with `t`, at the same keys) is marked
+  -- replaced, with the field's value as it is before the write, unless it
+  -- was replaced before. None when the program watches no such container.
+  let watchWrites (obj : Nat) (objTy : Ty) (f : String) (t : List (Option String))
+      (tKeys : List (Nat × Ty)) : EM (List Expr) := do
+    let .struct sn targs := objTy | return []
+    let owner := (ctx.types.fieldSrc sn f).getD sn
+    let fs := ctx.types.fields sn targs
+    let some (_, fieldTy) := fieldIndex fs f | return []
+    let mut out : List Expr := []
+    for w in ctx.types.requests.watches do
+      if w.owner != owner || w.field != f || t.length > w.steps.length ||
+          !(t.zip w.steps).all (fun (a, b) => a == b) then continue
+      let some (wj, wTy) := fieldIndex fs w.name | continue
+      let .arr (.tup ets) := wTy | continue
+      let n := ets.length - 2
+      let wl ← fresh wTy
+      let wf ← fresh fieldTy
+      let readL ← quietMember obj objTy w.name
+      let readF ← quietMember obj objTy f
+      let entry (i : Nat) : SExpr := .app p (.ident p "$we") [.int p i] false
+      let conds := SExpr.notE p (.query p (entry n)) ::
+        tKeys.zipIdx.map fun (_, i) => SExpr.cmp p (entry i) [("=", .ident p s!"$wk{i}")]
+      let marked := SExpr.tuple p ((List.range n).map entry ++ [.ident p "true", .ident p "$wf"])
+      let marks := SExpr.forE p [.gen p "$we" none (.ident p "$wl")] (.ite p conds marked (some (.ident p "$we")))
+      let locals : List Local := [{ name := "$wl", slot := wl, ty := wTy, mutable := false },
+        { name := "$wf", slot := wf, ty := fieldTy, mutable := false }] ++
+        tKeys.zipIdx.map fun ((slot, ty), i) => { name := s!"$wk{i}", slot, ty, mutable := false }
+      let r ← elabE { ctx with locals := locals ++ ctx.locals } marks (some wTy)
+      let write ← setFieldAt ctx.types p sn targs obj w.name wj wTy r.e
+      out := out ++ [.assign wl readL, .assign wf readF,
+        .ite (.prim .lt [.lit (.int 0), .prim .len [.local wl]]) (.seq write (.lit .void)) (.lit .void)]
+    return out
+  -- (#704) for a compound set whose path goes on past field `f` of the
+  -- object in `obj` to a container at the steps `shape` (the keys of its
+  -- indices in `keys`): its watch, pushed before the right side runs, and
+  -- popped after it, with whether the container was replaced and the
+  -- field's value then. None, and the watch asked for, when the program's
+  -- classes do not have its field yet (`PlaceWatch`).
+  let watchPush (obj : Nat) (objTy fieldTy : Ty) (f : String) (shape : List (Option String))
+      (keys : List (Nat × Ty)) : EM (Option (List Expr × List Expr × Nat × Nat)) := do
+    let .struct sn targs := objTy | return none
+    let some w := placeWatch? ctx.types sn f shape | return none
+    let some (wj, wTy) := fieldIndex (ctx.types.fields sn targs) w.name
+      | do noteNeeds { watches := [w] }; return none
+    let .arr entryTy := wTy | return none
+    let n := keys.length
+    let wl0 ← fresh wTy
+    let wf0 ← fresh fieldTy
+    let wIdx ← fresh .int
+    let wl1 ← fresh wTy
+    let we ← fresh entryTy
+    let lost ← fresh .logic
+    let snap ← fresh fieldTy
+    let readL ← quietMember obj objTy w.name
+    let readF ← quietMember obj objTy f
+    let entry := Expr.prim .mkTup (keys.map (fun (s, _) => Expr.local s) ++ [.lit (.logic false), .local wf0])
+    let push ← setFieldAt ctx.types p sn targs obj w.name wj wTy (p2 .concat (.local wl0) (.prim .mkArr [entry]))
+    let pop ← setFieldAt ctx.types p sn targs obj w.name wj wTy (.local wl0)
+    let before := [.assign wl0 readL, .assign wf0 readF, .seq push (.lit .void), .assign wIdx (.prim .len [.local wl0])]
+    let after := [.assign wl1 readL, .assign lost (.lit (.logic false)), .assign snap (.local wf0),
+      .ite (.assign we (p2 .index (.local wl1) (.local wIdx)))
+        (.seq (.assign lost (.prim (.tupGet n) [.local we]))
+          (.seq (.assign snap (.prim (.tupGet (n + 1)) [.local we])) (.lit .void)))
+        (.lit .void),
+      .seq pop (.lit .void)]
+    return some (before, after, lost, snap)
   if let some (root, steps) := path lhs then if general steps || opaqueIndex root steps || guard?.isSome then
     -- `set X.p = e` with a path of two or more steps (Book of Verse §3.5, §9.3):
     -- the indices and keys are evaluated once, left to right; then each
@@ -404,6 +503,9 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
       | some kr => kr
       | none => stepsA.size
     let mut oldLeaf : Option Nat := none
+    -- (#704) a compound set past an object's field: whether the right side
+    -- replaced the container, and the field's value then (`watchPush`)
+    let mut watched : Option (Nat × Nat) := none
     for k in [0:stepsA.size] do
       let (sp, f?, _) := stepsA[k]!
       let (before, viewed) ← activate k cur
@@ -429,12 +531,34 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
             pre := pre.push (.assign c3 (← readStep c2 tys[k2]! f2 keys[k2]!))
             c2 := c3
           oldLeaf := some c2
+        -- (#704) past an object's field, the containers are the field's,
+        -- the one the last step writes into resolved before the right side
+        -- runs, as a variable's are (`CompoundPlaces`): a right side that
+        -- may write anything is watched for a write that replaces it,
+        -- through any reference to the object (`watchPush`, `watchWrites`)
+        let mut after : List Expr := []
+        if refLevel?.isSome && op.isSome && !preloaded && oldLeaf.isNone && !effectFree r.e &&
+            k + 1 < stepsA.size && (List.range (stepsA.size - k - 1)).all (fun d => views[k + 1 + d]!.isNone) then
+          if let some f := f? then
+            let below := (List.range (stepsA.size - k - 2)).map (k + 1 + ·)
+            let shape := below.map fun j => (stepsA[j]!).2.1
+            let wkeys := below.filterMap fun j => keys[j]!
+            if let some (before, after', lost, snap) ← watchPush cur tys[k]! rawTys[k + 1]! f shape wkeys then
+              pre := pre ++ before.toArray
+              after := after'
+              watched := some (lost, snap)
         let tr ← fresh r.ty
         pre := pre.push (.assign tr r.e)
+        pre := pre ++ after.toArray
         rhsVal := some ⟨.local tr, r.ty⟩
       if k + 1 < stepsA.size then
         let c ← fresh rawTys[k + 1]!
-        pre := pre.push (.assign c (← readStep cur tys[k]! f? keys[k]!))
+        -- (#704: a watched field whose container the right side replaced is
+        -- read as it was then)
+        let read ← readStep cur tys[k]! f? keys[k]!
+        pre := pre.push (.assign c (match watched, refLevel? with
+          | some (lost, snap), some kr => if k == kr then .ite (.prim .query [.local lost]) (.local snap) read else read
+          | _, _ => read))
         cur := c
     let (lc, lty, _, lf, lkey) := levels[levels.size - 1]!
     -- a last `?` step also needs the option to be set
@@ -466,7 +590,17 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
       | some f, _, .struct sn targs =>
         if ctx.types.isRefClass sn then
           let (j, ft) := (fieldIndex (ctx.types.fields sn targs) f).get!
-          pre := pre.push (← setFieldAt ctx.types p sn targs c f j ft newVal)
+          -- (#704) a plain write replaces what it writes: the watches on the
+          -- containers there are marked (`watchWrites`)
+          if op.isNone then
+            let below := (List.range (stepsA.size - k - 1)).map (k + 1 + ·)
+            pre := pre ++ (← watchWrites c cty f (below.map fun j => (stepsA[j]!).2.1) (below.filterMap fun j => keys[j]!)).toArray
+          let write ← setFieldAt ctx.types p sn targs c f j ft newVal
+          -- (#704) the container the right side replaced is not the field's:
+          -- the write goes to it, and the object keeps the field
+          pre := pre.push (match watched with
+            | some (lost, _) => .ite (.prim .query [.local lost]) (.lit .void) (.seq write (.lit .void))
+            | none => write)
           -- Compiler-owned cells implement source-local variables. Their
           -- physical writes are retained in Core, not source heap effects.
           if sn != "$varcell" || f != "$VCell" then
@@ -561,6 +695,12 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
             | none => coerce p r t
             -- (the current value, read as a read does, after the new one)
             | some o => combine (← elabMember ctx p ⟨.local l.slot, l.ty⟩ f).e t o r
+          -- (#704) a plain write replaces the field: the watches on the
+          -- containers in it are marked first (`watchWrites`)
+          let writes ← if op.isNone then watchWrites l.slot l.ty f [] [] else pure []
+          if !writes.isEmpty then
+            let tv ← fresh t
+            return ⟨.seq (.assign tv v) (writes.foldr Expr.seq (← setFieldAt ctx.types p sn targs l.slot f k t (.local tv))), t⟩
           return ⟨first (← setFieldAt ctx.types p sn targs l.slot f k t v), t⟩
     if let some l := ctx.lookup n then
       if let .struct sn targs := l.ty then

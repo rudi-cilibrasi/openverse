@@ -2678,24 +2678,34 @@ proofs, OVBC and the C runtime are unchanged.
 
 ## After compound places
 
-`set X.p op= e`, on a path from a local `var` whose container `e`
-replaces (`set X[0] += e` whose `e` sets `X`), writes into the container
-`e` replaced, and `X` keeps what `e` left: Epic's VerseVM does so on UEFN
-43.12 (++Fortnite+Release-43.12-CL-60598086, "Use Verse VM", 2026-11-18;
-`tests/conformance/versevm/compound-indexed-write.verse` printed a row of
-length 1 holding 0), as `ArrayAppend.versetest:12` expects. The whole
-variable's control, `:7`, is unchanged, on Epic too, and so are `:140` and
-`:183`, whose `e` writes into the container. The front end guards such a
-`set` with a flag and a snapshot of the variable
-(`Front/CompoundPlaces.lean`, [the rule](../LANGUAGE.md#mutation-macros-tooling)).
+`set P op= e` resolves its place before `e` runs: when `e` replaces, with
+a plain `set`, the container the last step writes into (or one above it),
+the update goes to the container `e` replaced, and the variable or field
+keeps what `e` left; `set X += …` in `e` appends in place and replaces
+nothing. Epic's VerseVM on UEFN 43.12 (++Fortnite+Release-43.12-CL-60598086,
+"Use Verse VM", 2026-11-18) gives these results for twelve probes,
+`tests/conformance/versevm/compound-*.verse`: `ArrayAppend.versetest:12`'s
+case (a row of length 1 holding 0, as the test expects) and the whole
+variable's control (`:7`), nested indices, maps, struct fields, the
+operators, an array in an object's field, an object variable, the element
+read from the replaced container, the update's value and `+=` in place.
+`:140` and `:183`, whose `e` writes into the container, are unchanged. A
+local variable's writes are guarded in the source (`Front/CompoundPlaces.lean`);
+past an object's field, a watch in a hidden field of the object sees a
+replacement through any reference, call or task (`PlaceWatch`,
+[the rule](../LANGUAGE.md#mutation-macros-tooling)).
 
 On top of main `617c89f1`, one case newly agrees (`ArrayAppend.versetest:12`,
 from a different result) and none is worse. The baseline records it.
-Two Lean/C execution fixtures (`set_op_place_replaced`,
-`set_op_place_replaced_failure`) cover nested indices, map entries, struct
-fields in an array, objects on the path, the four operators, the set's
-value, failure and rollback, single evaluation of keys, choices and loops
-in `e`. Core semantics, proofs, OVBC and the C runtime are unchanged.
+Three Lean/C execution fixtures (`set_op_place_replaced`,
+`set_op_place_replaced_failure`, `set_op_place_object`) cover nested
+indices, map entries, struct fields, objects reached through other names,
+calls and tasks, generic classes, interface fields, module-scoped entries,
+the four operators, the set's value, failure and rollback, single
+evaluation of keys, choices, loops and `break`; `set_op_order` and
+`set_op_order_paths` now expect the replaced container's reading for an
+object's field. Core semantics, proofs, OVBC and the C runtime are
+unchanged.
 
 ## Ten causes to remove first
 

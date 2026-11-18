@@ -1,6 +1,11 @@
-# set P op= e and V := e; set P = P + V agree, also when e changes the option, map or array (#58
-# review): e runs first, then P's old value is read from what e left (the Book of Verse's tests,
-# ArrayAppend.versetest 140 and 183)
+# set P op= e (D = 0) and V := e; set P = P + V (D = 1), when e, a call, replaces the option, map,
+# array or struct in a field that P goes into (#58 review, #704): e runs first in both. set P op= e
+# resolved P's container before e, so its old value is read from, and its new one written into, the
+# container e replaced, whose element may be missing though the field's is there, or there though the
+# field's is missing; the field keeps e's (Epic's VerseVM, UEFN 43.12,
+# tests/conformance/versevm/compound-object-field-array.verse). set P = P + V reads and writes the
+# field as e left it (the Book of Verse's tests, ArrayAppend.versetest 140 and 183, for what e
+# writes into the container)
 sub := struct<computes>:
     F:int = 0
     G:int = 0

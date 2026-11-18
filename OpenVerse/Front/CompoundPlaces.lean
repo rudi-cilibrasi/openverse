@@ -11,12 +11,13 @@ container the last step writes into (`X` itself for one step, `X[i]` for
 and the new one written into it.
 
 When `e` only writes into the container (`set X[0] = …` for `set X[0] += e`,
-`set S.F = …` for `set S.F += e`), the container is still the one `X` holds,
-so `e`'s writes are seen (the Book of Verse's tests, `ArrayAppend.versetest`
-140 and 183). When `e` replaces the container itself, or a container above it
-on the path (`set X = …` for `set X[0] += e`), the old value is read from the
-container that was replaced and the new one written into it: `X` keeps what
-`e` left. This is what Epic's VerseVM does (UEFN 43.12,
+`set S.F = …` for `set S.F += e`, or appends to it, `set X += …`), the
+container is still the one `X` holds, so `e`'s writes are seen (the Book of
+Verse's tests, `ArrayAppend.versetest` 140 and 183; Epic's VerseVM,
+`compound-root-append.verse`). When `e` replaces the container itself, or a
+container above it on the path, with a plain `set` (`set X = …` for
+`set X[0] += e`), the old value is read from the container that was replaced
+and the new one written into it: `X` keeps what `e` left. This is what Epic's VerseVM does (UEFN 43.12,
 ++Fortnite+Release-43.12-CL-60598086, "Use Verse VM": `var X:[][]int =
 array{array{1, 2, 3}}`, `set X[0] += (if (set X = array{array{0}}; 0 = 0)
 then array{42} else array{42})` leaves `X` as `array{array{0}}`,
@@ -28,9 +29,9 @@ Book's VerseVM test `ArrayAppend.versetest` 12-15 expects. A whole variable,
 openverse's variables hold values, not mutable containers, so the identity
 of the container is kept by a flag. For a local `var X`, every write that `e`
 makes into `X` is written in `e` (Verse has no closures over variables), so
-this pass, on the source, finds them. Where one may replace the container
-(its path is the container's path or a prefix of it: field names equal,
-index and key steps compared when it runs), it becomes
+this pass, on the source, finds them. Where a plain one may replace the
+container (its path is the container's path or a prefix of it: field names
+equal, index and key steps compared when it runs), it becomes
 
     block:
         K₀ := …; …                     # its keys, once, in order
@@ -55,11 +56,12 @@ container was replaced, when `Lost` holds, and then leaves `X` as it is.
 A failure undoes `Lost` and `Snap` with every other write (they are
 variables), and the names are hidden ones (`$place…`).
 
-Only local `var`s are guarded. A path through an object already resolves
-the object before `e` (#34); below it, and for module-scoped variables,
-`e` can replace a container through a call or another reference to the
-object, which this pass cannot see: those keep `e`'s replacement in place
-(`docs/LANGUAGE.md`, "Mutation"), as before.
+Only local `var`s are guarded here. A path through an object resolves the
+object before `e` (#34), and past the object's field `e` can replace a
+container through a call, another reference to the object or another task,
+which no pass over the source sees: the elaborator watches those through the
+object itself (`PlaceWatch`, `elabSetWith`'s `watchPush` and `watchWrites`),
+also for module-scoped variables, the fields of the module state's object.
 -/
 
 namespace OpenVerse.Front.CompoundPlaces
@@ -141,10 +143,12 @@ def mayReplace (g : Guard) (p : Pos) (l : SExpr) : Bool :=
   | some (n, ss) => n == g.root && (covers p ss g.container).isSome
   | none => false
 
-/-- Whether a `set` in `e` may replace `g`'s container. -/
+/-- Whether a `set` in `e` may replace `g`'s container: a plain one. A
+    compound one, `set X += …` of an array (the only `op=` of a container),
+    appends in place, as Epic's VerseVM does (`compound-root-append.verse`). -/
 partial def replaces (g : Guard) (e : SExpr) : Bool :=
   (match e with
-    | .set p l _ _ => mayReplace g p l
+    | .set p l none _ => mayReplace g p l
     | _ => false) || e.children.any (replaces g)
 
 /-- `body` when every one of `conds` succeeds (all of them none: always). -/
@@ -159,7 +163,7 @@ def whenAll (q : Pos) (conds : List SExpr) (body : SExpr) : SExpr :=
     evaluates them before its value; its value stays the code's. -/
 partial def instrument (g : Guard) (e : SExpr) : SExpr :=
   match e with
-  | .set q l op r =>
+  | .set q l none r =>
     if !mayReplace g q l then Id.run (e.mapChildrenM fun c => pure (instrument g c)) else
     let pfx := s!"{g.tag}_w{q.line}_{q.col}"
     let (keys, l') := bindKeys s!"{pfx}_k" l
@@ -168,7 +172,7 @@ partial def instrument (g : Guard) (e : SExpr) : SExpr :=
       (.set q (.ident q g.snap) none (.ident q g.root))
     let replaced := whenAll q tests (.set q (.ident q g.lost) none (.ident q "true"))
     .block q (keys.map (instrument g) ++ [snapshot,
-      .decl q s!"{pfx}_v" none false (.set q l' op (instrument g r)), replaced, .ident q s!"{pfx}_v"])
+      .decl q s!"{pfx}_v" none false (.set q l' none (instrument g r)), replaced, .ident q s!"{pfx}_v"])
   | e => Id.run (e.mapChildrenM fun c => pure (instrument g c))
 
 /-- The local `var`s that code declares, each with its written type when
