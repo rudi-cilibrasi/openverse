@@ -48,26 +48,19 @@ structure Info where
   body : Option Expr := none
   deriving Inhabited
 
-/-- Known immediate tuple columns. Unknown values retain their whole-value
-    role, so absence of a shape never permits an executable use. -/
-private abbrev TupleParts := Option (List Bool)
+private abbrev TupleParts := MetadataCells.TupleParts
 
 private def joinParts (a : Option Bool) (ap : TupleParts)
     (b : Option Bool) (bp : TupleParts) : TupleParts :=
   match a, b with
   | none, _ => bp
   | _, none => ap
-  | some ar, some br =>
-    match ap, bp with
-    | some xs, some ys => if xs.length == ys.length then some (xs.zipWith (· || ·) ys) else none
-    | some xs, none => if br then none else some xs
-    | none, some ys => if ar then none else some ys
-    | none, none => none
+  | some ar, some br => MetadataCells.joinParts ar ap br bp
 
-private def putParts (parts : Std.HashMap Nat (List Bool)) (i : Nat) (value : TupleParts) :=
+private def putParts (parts : Std.HashMap Nat (List MetadataCells.Column)) (i : Nat) (value : TupleParts) :=
   match value with
   | none => parts.erase i
-  | some fields => if fields.any id then parts.insert i fields else parts.erase i
+  | some fields => if fields.any (·.role) then parts.insert i fields else parts.erase i
 
 private structure Argument where
   role : Bool := false
@@ -76,7 +69,7 @@ private structure Argument where
 
 private structure Slots where
   values : Bits := {}
-  tuples : Std.HashMap Nat (List Bool) := {}
+  tuples : Std.HashMap Nat (List MetadataCells.Column) := {}
   initialized : Bits := {}
   sharedMetadata : Bits := {}
   /-- Writes performed by this arm, excluding roles received from siblings. -/
@@ -84,24 +77,18 @@ private structure Slots where
   heap : MetadataCells.Memory := {}
   deriving BEq, Inhabited
 
-private def sameTuples (a b : Std.HashMap Nat (List Bool)) : Bool :=
-  withPtrEq a b (fun _ => a == b)
-    (by intro h; subst b; exact Std.HashMap.Equiv.beq (Std.HashMap.Equiv.refl a))
-
 private def joinSlots (a b : Slots) : Slots := {
   heap := MetadataCells.join a.heap b.heap
   values := a.values.union b.values
   -- Known columns join directly; their whole-value bits carry no extra
   -- information. Only a missing shape needs the other path's opaque role.
   -- Canonical maps omit all-real tuples, so equal maps are their own join.
-  tuples := if sameTuples a.tuples b.tuples then a.tuples else
+  tuples := if a.tuples == b.tuples then a.tuples else
     b.tuples.fold (fun out i fields =>
       if a.tuples.contains i || a.values.get i then out else putParts out i (some fields))
       (a.tuples.fold (fun out i fields =>
-        let joined := match b.tuples[i]? with
-          | some other => if fields.length == other.length then
-              some (fields.zipWith (· || ·) other) else none
-          | none => if b.values.get i then none else some fields
+        let joined := MetadataCells.joinParts (a.values.get i) (some fields)
+          (b.values.get i) b.tuples[i]?
         putParts out i joined) {})
   initialized := a.initialized.union b.initialized
   written := a.written.union b.written
@@ -324,6 +311,12 @@ private def appendGroupsKey (key : Array Nat) (groups : Array GroupStatus) : Arr
   groups.foldl (fun key g => key.push g.late.toNat |>.push g.active.toNat
     |>.push g.started |>.push (g.winner.map (· + 1) |>.getD 0)) key
 
+private partial def appendTupleKey (key : Array Nat) (parts : TupleParts) : Array Nat :=
+  match parts with
+  | none => key.push 0
+  | some fields => fields.foldl (fun key field =>
+      appendTupleKey (key.push field.role.toNat) field.parts) (key.push 1 |>.push fields.length)
+
 private def appendPendingKey (key : Array Nat) (pending : List Pending) : Array Nat :=
   pending.foldl (fun key => fun
     | .cancel a => key.push 0 |>.push a
@@ -333,11 +326,7 @@ private def appendPendingKey (key : Array Nat) (pending : List Pending) : Array 
     | .returnCall a pc => key.push 4 |>.push a |>.push pc
     | .returnScope a f o n pc => key.push 7 |>.push a |>.push f |>.push o |>.push n |>.push pc
     | .result role parts slot =>
-      let key := key.push 5 |>.push role.toNat
-      let key := match parts with
-        | none => key.push 0
-        | some fields => fields.foldl (fun key (field : Bool) => key.push field.toNat)
-            (key.push 1 |>.push fields.length)
+      let key := appendTupleKey (key.push 5 |>.push role.toNat) parts
       match slot with
       | none => key.push 0
       | some value => key.push 1 |>.push value
@@ -901,13 +890,16 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
   | .prim op es => do
     let (args, argumentParts, out) ← arguments fns infos fields fn info slots es
     if out.value.isNone then return out
+    let column := match op with
+      | .tupGet i => (argumentParts.headD none).bind (·[i]?)
+      | _ => none
     let value := match op, es with
       | .fail, _ | .userErr, _ | .query, [.lit (.logic false)] | .query, [.lit .none] => none
       -- Equality and inequality return the left operand; an array index selects a
       -- payload without becoming part of it. All operands still run above.
       | .eq, _ | .ne, _ | .index, _ => some (args.headD false)
       | .arrSet, _ => some (args.headD false || args[2]?.getD false)
-      | .tupGet i, _ => some ((argumentParts.headD none).bind (fun fields => fields[i]?) |>.getD (args.headD false))
+      | .tupGet _, _ => some ((column.map (·.role)).getD (args.headD false))
       | .query, _ | .mkArr, _ | .mkTup, _ | .mkSome, _ | .concat, _ |
           .flatten, _ |
           .lt, _ | .le, _ | .gt, _ | .ge, _ |
@@ -957,9 +949,12 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
           out := { out with slots := { out.slots with heap := allocated.2 } }
           refs := allocated.1
       | _ => pure ()
-    return { out with
-      value, valueRefs := refs
-      valueParts := if op == .mkTup && args.any id then some args else none }
+    let valueParts := match op with
+      | .mkTup => MetadataCells.tupleParts args argumentParts
+      | .mkSome | .query => argumentParts.headD none
+      | .tupGet _ => column.bind (·.parts)
+      | _ => none
+    return { out with value, valueRefs := refs, valueParts }
   | .heap op es => do
     let (args, parts, out) ← arguments fns infos fields fn info slots es
     if out.value.isNone then return out
@@ -995,7 +990,7 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
         let excludesCell := es.head?.any fun
           | .local obj => info.nonCellMask.testBit obj
           | _ => false
-        let possibleCell := field == 0 &&
+        let possibleCell := policy.cellTag.isSome && field == 0 &&
           ((!excludesCell && (privateObjects.any (· ≤ 1) || cellExternal out.slots.heap privateObjects)) ||
             (es.head?.any fun | .local obj => info.cellSlots.contains obj | _ => false) ||
             privateObjects.any (fun object => out.slots.heap.cells.contains object))
@@ -1009,6 +1004,12 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
               ({ role := args.headD false, refs } : MetadataCells.Payload)
       | .isTag _ => refs := privateObjects
       | _ => pure ()
+    -- Only tuples and the immutable compiler-owned lazy stack carry
+    -- structural columns. Heap reads can consume the lazy stack's columns
+    -- even when an ordinary call summary has lost the physical identity.
+    let knownColumn := match op with
+      | .get i => (parts.headD none).bind (·[i]?)
+      | _ => none
     let role ← match op with
       | .new tag => pure (if policy.cellEnabled && policy.cellTag == some tag && args.length == 1 then false else
           args.zipIdx.any fun (role, i) => role && !(fields[tag]?.getD []).contains i)
@@ -1039,6 +1040,7 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
         pure rhs.role
       | .get field =>
         if let some p := payload then pure p.role
+        else if let some column := knownColumn then pure column.role
         else if policy.cellEnabled && cellTransport out.slots.heap policy.cellTransports privateObjects then
           pure true
         else if field == 0 && policy.cellEnabled &&
@@ -1049,8 +1051,16 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
         else pure (args.headD false)
       | .isTag _ => pure (args.headD false)
       | .tag => pure false
+    let valueParts := match op with
+      | .new tag =>
+        if policy.cellTransportTag == some tag then MetadataCells.tupleParts args parts else none
+      | .get _ =>
+        match payload with
+        | some value => value.parts
+        | none => knownColumn.bind (·.parts)
+      | _ => none
     return { out with
-      value := some role, valueParts := payload.bind (·.parts)
+      value := some role, valueParts
       valueRefs := (payload.map (·.refs)).getD refs }
   | .ite c t e => do
     let c ← cellChild 0 (expr fns infos fields fn info slots c)
@@ -1227,8 +1237,8 @@ private partial def invoke (fns : Array Fn) (infos : Array Info)
   -- effects. Results are either object-free or Source-certified data whose
   -- typed reachable fields exclude private cells and metadata. Only those
   -- private-irrelevant aliases may be omitted; argument effects stay in out.
-  if keyArgs.all (fun arg => !arg.role && (arg.parts.getD []).all (! ·)) &&
-      argumentParts.all (fun parts => (parts.getD []).all (! ·)) then
+  if keyArgs.all (fun arg => !arg.role && (arg.parts.getD []).all (! ·.role)) &&
+      argumentParts.all (fun parts => (parts.getD []).all (! ·.role)) then
     if let some (needsEmptyInputs, result, parts, yielded) := state.closedTransfers[g]? then
       -- A dynamic premise is checked only with complete alias interpretation.
       -- Empty refs denote no reachable private-relevant caller identity; they
@@ -2462,6 +2472,9 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
   let closedRoots := roots.filter closedEntry
   let openRoots := roots.filter (fun i => !closedEntry i)
   let capable := cellCapabilities fns infos cellTag
+  let transportTag := infos.findSome? (·.cellTransportTag)
+  let localTransport := fns.mapIdx fun i fn =>
+    transportTag.any fun tag => cellConstructor tag ((infos[i]?.getD {}).body.getD fn.body)
   let transferSafe := if cellTag.isSome then closedTransferSafety fns infos referencedOwners else #[]
   -- The static path proves private-irrelevant formal inputs. Other functions may
   -- use the same all-real transfer only in a caller context whose complete
@@ -2474,14 +2487,15 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
   let closedSeeds := closedRoots ++ freshFunctions.filter (fun i => !closedRootSet.contains i)
   if debug then
     dbg_trace s!"metadata closed-real entries={closedRoots.length} open={openRoots.length}"
-  let action (roots : List Nat) : M Unit := do
+  let action (roots : List Nat) (trackTransports : Bool) : M Unit := do
     let runContext (key : Key) : M Flow := do
       let (i, args) := key
       let some fn := fns[i]? | throw "internal: metadata call has no body"
       let info := infos[i]?.getD {}
       modify fun st => { st with
         active := some key, captureMismatch := false, contextDeferred := false, cellPath := [0]
-        cellEnabled := (st.cellCapable[i]?.getD false), cellRefBase := 0,
+        cellEnabled := (st.cellCapable[i]?.getD false) ||
+          (trackTransports && (localTransport[i]?.getD false)), cellRefBase := 0,
         cellScope := i, cellGraphOwner := none }
       let values := (List.range fn.nslots).map (fun i =>
         info.inputs.contains i || (args[i]?.getD default).role) |>.toArray |> Bits.ofArray
@@ -2712,11 +2726,12 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
   -- state. A callable root with open arguments is still checked independently
   -- even when it is also reached from a certified closed entry.
   let run (entries : List Nat) (tag : Option Nat) (capabilities : Array Bool)
-      (closed : Std.HashMap Nat (Bool × Option Bool × TupleParts × Bool)) : Except String State := do
-    let (_, final) ← (action entries).run {
+      (closed : Std.HashMap Nat (Bool × Option Bool × TupleParts × Bool)) (trackTransports : Bool) :
+      Except String State := do
+    let (_, final) ← (action entries trackTransports).run {
       debug := debug, scalarReturns
       cellTag := tag, cellCapable := capabilities, closedTransfers := closed
-      cellTransportTag := infos.findSome? (·.cellTransportTag)
+      cellTransportTag := transportTag
       plans := Array.replicate fns.size none
       referenceLives := Array.replicate fns.size none
       sites := sites
@@ -2725,7 +2740,7 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       borrowedTasks := borrowedTasks }
     return final
   let closedState ← if closedSeeds.isEmpty then pure ({} : State)
-    else run closedSeeds none (Array.replicate fns.size false) {}
+    else run closedSeeds none (Array.replicate fns.size false) {} false
   let closedResults := freshFunctions.foldl (fun out g =>
     let key := (g, List.replicate fns[g]!.arity ({} : Argument))
     match closedState.indices[key]? with
@@ -2734,6 +2749,6 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       let summary := closedState.summaries[index]!
       out.insert g (!closedEntry g, summary.result, summary.parts, summary.yielded)) {}
   if !openRoots.isEmpty then
-    discard <| run openRoots cellTag capable closedResults
+    discard <| run openRoots cellTag capable closedResults true
 
 end OpenVerse.Front.MetadataFlow
