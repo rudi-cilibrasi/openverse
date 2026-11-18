@@ -346,8 +346,8 @@ array level. Its arguments and call run within the search's rollback
 checkpoints. A producer retained in a nested failure context keeps that
 boundary.
 
-A returning loop with exposed body choices can also resume one direct
-self-recursive producer in its header (#686). Its cursor saves the
+A returning loop with exposed body choices can also resume one recursive
+producer in its header, including a mutually recursive group (#686). Its cursor saves the
 producer's recursion frames and pending continuation between iterations.
 This includes return frames that transform each recursive value and
 continuation members that reach another choice before yielding a row.

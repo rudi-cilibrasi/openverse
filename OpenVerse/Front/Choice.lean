@@ -4333,7 +4333,7 @@ private def uniqueLoopCaptures (bindings : List LoopCapture) : List LoopCapture 
     if out.any (fun prior => prior.name == binding.name && prior.pos == binding.pos) then out else out ++ [binding]) []
 
 private partial def returnLoopSites (owner : String) (f : MFn) (mv : List String)
-    (scalarProducer : String → Bool) : List ReturnLoopSite := Id.run do
+    (recursiveProducer : String → Bool) : List ReturnLoopSite := Id.run do
   let initial := f.params.map fun param =>
     ({ name := param.name, pos := f.pos, annotation := some param.ty, parameter := some param } : LoopCapture)
   let record (scope : List LoopCapture) (defers : List SExpr) (p : Pos)
@@ -4398,7 +4398,7 @@ private partial def returnLoopSites (owner : String) (f : MFn) (mv : List String
         (clauses.drop (before.length + 1)).all valid
       let producer : SExpr → Option String := fun
         | .decl _ _ _ false (.app _ (.ident _ name) args _) =>
-          if scalarProducer name && !args.any (fun arg => liftsHere (markCalls mv arg)) then some name
+          if recursiveProducer name && !args.any (fun arg => liftsHere (markCalls mv arg)) then some name
           else none
         | _ => none
       let recursive := if clauses.all (fun clause => (producer clause).isSome || valid clause) then
@@ -5064,6 +5064,18 @@ structure Inlined where
   copiedOverloadClashes : List (String × List String) := []
   copiedMethods : CopiedMethods := {}
 
+/-- All producer functions reachable from the root's outgoing calls. -/
+private def reachableFunctions (calls : String → List String) (root : String) : List String := Id.run do
+  let mut seen : List String := []
+  let mut todo := calls root
+  while !todo.isEmpty do
+    let h := todo.head!
+    todo := todo.tail!
+    if !seen.contains h then
+      seen := seen ++ [h]
+      todo := calls h ++ todo
+  return seen
+
 /-- The functions of the program that have several values, inlined at their
     calls (see above); the program unchanged when there are none. Also
     whether some are taken lazily (#246), whose consumers need a class of
@@ -5115,19 +5127,21 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
   -- normalized: the elaborator's (`TyEnv.fieldOrder`), as an earlier
   -- elaboration noted it (`orders`)
   let fieldOrder (n : String) : FieldOrder := { fields := (orders.lookup n).getD [] }
-  let scalarProducer (name : String) : Bool :=
-    !eager.contains name && (rawMfs.lookup name).any (fun f =>
-      let calls := (namesUsed f.body).filter mv.contains
-      let shape (frames : Bool) :=
-        loopShape? name mv f.body (frames := frames) (params := f.params.map (·.name)) (fieldOrder := fieldOrder)
-      calls.contains name && calls.all (· == name) &&
-        ((shape false).isSome || (shape true).isSome))
+  let rawCalls (name : String) : List String :=
+    (rawMfs.lookup name).map (fun f => (namesUsed f.body).filter mv.contains) |>.getD []
+  let recursiveProducer (name : String) : Bool :=
+    let group := reachableFunctions rawCalls name
+    group.contains name && !group.any eager.contains &&
+      group.all fun member => (rawMfs.lookup member).any fun f =>
+        let shape (frames : Bool) :=
+          loopShape? member mv f.body group frames (f.params.map (·.name)) fieldOrder
+        (shape true).isSome || (group.length == 1 && (shape false).isSome)
   -- Source loop exits become a lazy helper only after its lexical input
   -- types and return target have been recorded in their original world.
   let loopTargets := rawMfs.filterMap fun (owner, original) =>
     if !hasReturningLoop original.body then none else
     let f : MFn := { original with body := alphaReturnLoopLocals owner original.body }
-    let sites := returnLoopSites owner f mv scalarProducer
+    let sites := returnLoopSites owner f mv recursiveProducer
     let sites := if sites.any (fun site => match site.source with | .cursor .. => true | _ => false) then
       let selected := choiceReturnLoopSites owner { f with body := moveTerminalLoopChoices mv f.body } mv
       sites.filter fun site => match site.source with
@@ -5251,16 +5265,7 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
   -- alternatives calls of the group's: one stack of items for the group,
   -- tagged by function. Parameter instances are inferred from those edges
   -- when the group is elaborated in its consumer's context.
-  let reachSet (g : String) : List String := Id.run do
-    let mut seen : List String := []
-    let mut todo := (callees.lookup g).getD []
-    while !todo.isEmpty do
-      let h := todo.head!
-      todo := todo.tail!
-      if !seen.contains h then
-        seen := seen ++ [h]
-        todo := ((callees.lookup h).getD []) ++ todo
-    return seen
+  let reachSet (g : String) := reachableFunctions (fun h => (callees.lookup h).getD []) g
   let groupOf (g : String) : List String :=
     g :: (mfs.map (·.1)).filter fun h => h != g && (reachSet g).contains h && (reachSet h).contains g
   let groupOK (grp : List String) (frames : Bool) : Bool :=
