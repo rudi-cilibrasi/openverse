@@ -349,7 +349,8 @@ boundary.
 A returning loop with exposed body choices can also resume one direct
 self-recursive producer in its header (#686). Its cursor saves the
 producer's recursion frames and pending continuation between iterations.
-This includes scalar return frames that transform each recursive value.
+This includes return frames that transform each recursive value and
+continuation members that reach another choice before yielding a row.
 Scalar clauses around the producer stay in the header search. The
 body's alternatives can reuse a row cursor while sharing mutations to
 captured cells.

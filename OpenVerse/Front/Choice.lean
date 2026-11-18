@@ -5123,8 +5123,7 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
       let shape (frames : Bool) :=
         loopShape? name mv f.body (frames := frames) (params := f.params.map (·.name)) (fieldOrder := fieldOrder)
       calls.contains name && calls.all (· == name) &&
-        ((shape false).isSome || (!computableBody name f && (shape true).any fun (_, tail) =>
-          !hasContinuation tail)))
+        ((shape false).isSome || (!computableBody name f && (shape true).isSome)))
   -- Source loop exits become a lazy helper only after its lexical input
   -- types and return target have been recorded in their original world.
   let loopTargets := rawMfs.filterMap fun (owner, original) =>

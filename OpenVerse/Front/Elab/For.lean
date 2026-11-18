@@ -238,12 +238,13 @@ def ForSearch.restore (search : ForSearch) (bindings : List Nat) (packet : Nat) 
 def LoopGen.captureCursor (generator : LoopGen) (bindings : List Nat) : EM R :=
   packCursorSlots (generator.resumeSlots ++ bindings)
 
-/-- Try a scalar producer value and its filter in one failure context.
+/-- Try a producer value and its filter in one failure context.
+    A continuation member can commit work before reaching a value.
     Keep the pending `after` in the returned cursor, to run if the body
     later continues this header. A rejected filter advances immediately. -/
 def LoopGen.takeCursor (generator : LoopGen) (prior : Nat) (prelude filter : Expr)
-    (bindings : List Nat) (row : R) : EM R := do
-  if generator.resumeSlots.isEmpty || generator.bnd.isSome then
+    (bindings : List Nat) (row : R) (outcome : Option Nat) : EM R := do
+  if generator.resumeSlots.isEmpty then
     throw "internal: this loop producer has no scalar row cursor"
   let cursor ← generator.captureCursor bindings
   let previous ← fresh cursor.ty
@@ -254,13 +255,27 @@ def LoopGen.takeCursor (generator : LoopGen) (prior : Nat) (prelude filter : Exp
   let setup := Expr.ite (.assign previous (.prim .query [.local prior]))
     (restoreCursor (generator.resumeSlots ++ bindings) previous (.seq generator.after start))
     (.ite prelude (.seq generator.init start) void)
-  let testValue := Expr.ite filter
-    (.seq (.assign found (.lit (.logic true))) Expr.brkV) (.seq generator.after void)
+  let attempt := Expr.ite filter (.seq (.assign found (.lit (.logic true))) void) void
+  let advance := Expr.ite (isTrueIn found) Expr.brkV (.seq generator.after void)
+  let testValue := match generator.bnd with
+    | none => .seq attempt advance
+    | some boundary =>
+      -- Match the ordinary for's continuation boundary. A member can stop
+      -- here to enqueue its choice before a row is ready for the body.
+      let done := Expr.seq (.assign boundary (.lit (.logic true))) Expr.brkV
+      .seq (.assign boundary (.lit (.logic false)))
+        (.seq (.loop (.seq attempt done))
+          (.ite (isTrueIn boundary) advance (.seq .brk (.prim .userErr []))))
   let step := Expr.seq generator.step (.ite (isTrueIn generator.has) testValue void)
   let search := Expr.ite (isTrueIn ready)
     (.loop (.ite (p2 .eq (.local generator.sp) (.lit (.int 0))) Expr.brkV step)) void
   let result := Expr.ite (isTrueIn found)
     (.prim .mkSome [.prim .mkTup [cursor.e, row.e]]) (.lit .none)
+  -- A failed nested outcome can break the search loop. Forward its flag
+  -- to the surrounding collector before returning an exhausted cursor.
+  let result := match outcome with
+    | some flag => Expr.ite (isTrueIn flag) result (.seq .brk (.prim .userErr []))
+    | none => result
   return ⟨.seq (.assign ready (.lit (.logic false)))
     (.seq setup (.seq (.assign found (.lit (.logic false))) (.seq search result))),
     .opt (.tup [cursor.ty, row.ty])⟩
@@ -1441,6 +1456,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         let slot ← fresh inputTy
         let input ← coerce p input inputTy
         let result ← generator.takeCursor slot prelude (.seq (.assign bound value) filter) bindings row
+          c0.forOutcomeSlot
         return { result with e := .seq (.assign slot input) result.e }
   if let (some request, (g, fs) :: more) := (cursor, gs) then
     if let some binding := Choice.binding? g then
