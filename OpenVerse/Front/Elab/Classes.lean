@@ -428,6 +428,20 @@ def classFields (classes : Classes) (requests : Requests) : Except String Fields
       -- an inherited one's or an interface's too)
       if cd.specs.contains "concrete" && d.isNone then
         throw s!"{cd.pos.show}: {cd.name} is <concrete>, so its field '{f}' needs a default"
+      -- (and a class below a `<concrete>` one is concrete too: Epic's Verse
+      -- compiler, UEFN 43.12, refuses a subclass's field without a default
+      -- with error 3519, "(Reason: inherited class 'base' is `concrete`)",
+      -- as the Book's tests do, SOL-3366-MakeClassesConcreteByDefault.versetest:8;
+      -- an <abstract> one is left alone, untested; and an override written
+      -- without a value of a field a class above gives one keeps it, as the
+      -- Book's tests accept, Attributes/concrete.versetest:59,
+      -- SOL-3366-MakeClassesConcreteByDefault.versetest:53)
+      let inheritsDefault := (classes.henv.supers cd.name).any fun s =>
+        s != cd.name && (fields.of s).any fun (g, _, d', _) => g == f && d'.isSome
+      if d.isNone && !inheritsDefault && !cd.isIface && !cd.specs.contains "abstract" then
+        if let some base := (classes.henv.supers cd.name).find? fun s =>
+            s != cd.name && (classes.cdef? s).any fun b => !b.isIface && b.specs.contains "concrete" then
+          throw s!"{cd.pos.show}: {cd.name} inherits <concrete> from {base}, so its field '{f}' needs a default (Epic's Verse compiler, UEFN 43.12: error 3519)"
   return fields
 
 /-- The classes' methods and constructors, as functions. -/

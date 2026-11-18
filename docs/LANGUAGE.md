@@ -354,7 +354,7 @@ of them; the Book's tests `Tests/Attributes/` and `Castable.versetest`):
 | specifier | on | requires |
 |---|---|---|
 | `<abstract>` | a class (ch. 10; not a method, a field, an interface or a struct) | not `<concrete>` too |
-| `<concrete>` | a class or a struct | a default for every field, inherited ones and an interface's included (ch. 10, "Concrete") |
+| `<concrete>` | a class or a struct | a default for every field, inherited ones and an interface's included (ch. 10, "Concrete"); a class below a `<concrete>` class (not `<abstract>`) gives one too to every field no class above gives one, as Epic's compiler (UEFN 43.12, error 3519, "inherited class 'base' is `concrete`") and the Book's tests (`SOL-3366`, `SOL-7781`) have it; an override written without a value keeps the inherited default |
 | `<final>` | a class, a method or a field, a struct's included (not an interface, a struct, a module's function) | a method's body, a field's value; no class below overrides a `<final>` field and no construction gives it a value |
 | `<final_super>` | a class | a parent, a class or an interface (ch. 10, "Final"; the tests' 3679) |
 | `<final_super_base>` | a class or an interface | a class right below it is `<final_super>` |
