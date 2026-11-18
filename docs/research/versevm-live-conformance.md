@@ -129,3 +129,52 @@ stderr and exit status for all thirteen probes that produced bytecode.
 | `compound-indexed-write` | Prints `length 2`, then `first 0`. | Admitted. |
 | `compound-whole-write` | Prints `length 2`, `first 0`, and `second 42`. | Admitted. |
 | `int-overflow` | Runtime overflow, exit 2. | Admitted by `check`. |
+
+## Running many probes
+
+[`ovprobe.py`](../../tests/conformance/versevm/ovprobe.py) (Python 3
+standard library, Linux or Windows) generates the UEFN sources, runs
+OpenVerse, reads UEFN's logs and writes the comparison. Probe directories:
+the original probes, [`book/`](../../tests/conformance/versevm/book) (a ranked
+shortlist of Book cases where OpenVerse and the Book differ, with the cases
+and expectations in its `expectations.tsv`) and
+[`fingerprint/`](../../tests/conformance/versevm/fingerprint) (behaviour
+reported to differ between Epic's VMs). With `P` for
+`tests/conformance/versevm`:
+
+```sh
+python3 $P/ovprobe.py openverse $P $P/book $P/fingerprint --json ov.json --tsv ov.tsv
+python3 $P/ovprobe.py generate --mode single --out single $P $P/book $P/fingerprint
+# build each single/<probe>/openverse_probe.verse alone; for each build's log:
+python3 $P/ovprobe.py parse --single <probe> --out admit/<probe>.json UnrealEditorFortnite.log
+python3 $P/ovprobe.py generate --mode batch --exclude-refused admit --risky-last ov.json \
+    --out batch $P $P/book $P/fingerprint
+python3 $P/ovprobe.py parse --manifest batch/manifest.json --out session.json UnrealEditorFortnite.log
+python3 $P/ovprobe.py compare --openverse ov.json --epic admit --epic session.json \
+    --tsv report.tsv --md report.md
+```
+
+Test compile admission with `--mode single`, one file at a time, as above:
+its output is byte for byte this runbook's concatenation. Run only admitted
+probes in a batch. The default batch is one file,
+`ovprobes/openverse_probe_driver.verse`, with one inline module per probe and
+one device, `openverse_probe_driver`, that runs them in order, every line
+tagged `OVPROBE <probe> …`. A Verse runtime error ends the session's Verse:
+`parse` reports the probe that began without an end as aborted and the later
+ones as missing, and `generate --exclude-done session.json` makes the next
+batch from the rest. Empty the single-probe file before a batch build: a
+probe's `Main` left at the project's top level would be shadowed by the
+batch modules' own, which the Book forbids (chapter 16). `--layout devices`
+instead gives each probe a folder and its own device class. `parse` also
+reads the JSON that
+[`uefn_mcp.py`](../../tests/conformance/versevm/uefn_mcp.py) writes from
+UEFN's local MCP server (`admit` builds the single-mode files one by one;
+`build`, `session`, `logs`). That client has not been run against an editor.
+
+No wrapper here has been compiled by Epic's compiler. The batch layout uses
+the Book's module forms (chapter 16): inline `module:` definitions and
+`<public>` entries called as `ovp_<probe>.RunOVProbe()`. OpenVerse runs the
+same file with its device class replaced by a `Main`
+(`generate --host openverse`, checked by `tests/scripts/test-versevm-live.py`).
+If the first build cannot resolve a name of the header, such as `Print`,
+pass an edited copy with `--header`.
