@@ -32,11 +32,13 @@ There are two ways to get fresh Epic results:
   · [Verse Insights setup](https://dev.epicgames.com/documentation/fortnite/verse-insights-in-uefn)
   · [UEFN system requirements](https://dev.epicgames.com/documentation/fortnite/install-and-launch-fortnite-creative-and-unreal-editor-for-fortnite).
 
-The Linux workspace has no Epic runner available. On November 17, 2026, the
+Live compiler results for UEFN 43.12 are below
+([Epic observations](#epic-observations-uefn-4312)). The Linux workspace
+has no Epic runner available. On November 17, 2026, the
 pinned Book's `vtest Tests/ArrayAppend.versetest --verbose` reached process
 launch and returned `ENOENT` for `VerseTestScriptCmdVM.exe`. The authenticated
 GitHub API calls for `EpicGames/UnrealEngine` and `EpicGames/fortniteMain`
-returned 404. The probe results below have no live Epic observations yet.
+returned 404.
 
 QEMU and KVM are available on this Linux host. A
 [Windows evaluation guest](https://www.microsoft.com/en-us/evalcenter/evaluate-windows-11-enterprise)
@@ -64,7 +66,7 @@ probe=tests/conformance/versevm/signal-direct.verse
 work=$(mktemp -d)
 .lake/build/bin/openverse run "$probe" --emit "$work/probe.vbc"
 runtime/build/cverse "$work/probe.vbc"
-.lake/build/bin/openverse check "$probe" --signal-no-rollback
+.lake/build/bin/openverse check "$probe" --signal-rollback
 ```
 
 Run C after successful bytecode emission. Save stdout, stderr and exit status
@@ -112,6 +114,29 @@ for both the concrete and interface methods. The compiler diagnostics and
 runtime traces are needed to decide how a specific release admits the calls
 and what it rolls back. [event.Signal](https://dev.epicgames.com/documentation/fortnite/verse-api/versedotorg/verse/event/event%28t%29/signal)
 · [signalable.Signal](https://dev.epicgames.com/documentation/fortnite/verse-api/versedotorg/verse/signalable/signalable%28payload%29/signal).
+
+## Epic observations (UEFN 43.12)
+
+UEFN 43.12, build `++Fortnite+Release-43.12-CL-60598086`, compiled each
+probe body on 2026-11-18 through the editor's Build Verse Scripts, one body
+at a time in the device wrapper above. A diagnostic's line there is 0-based
+in the wrapped file: the header's 9 lines and a blank line come first, so
+the body's 0-based line is the reported line minus 10.
+
+| Probe | UEFN 43.12 compiler |
+| --- | --- |
+| `signal-control`, `signal-interface-control` | Admitted. |
+| `signal-direct`, `signal-alias`, `signal-await` | Refused, error 3512 at the `Signal` in the condition: "This invocation calls a function (`(/Verse.org/Verse/event:)Signal`) that has the 'no_rollback' effect, which is not allowed by its context." |
+| `signal-interface` | Refused, 3512, naming `(/Verse.org/Verse/signalable:)Signal`. |
+| `signal-bound` | Refused, 3512 at `Send(1)`: "This invocation calls a function that has the 'no_rollback' effect, which is not allowed by its context." |
+| `signal-generic`, `signal-generic-control` | Both refused, 3512 at the `Signal` in the `<transacts>` helper `Send`: a `<transacts>` function cannot call `Signal`, even when it is called outside every failure context. |
+| `signal-bound-control` (first version) | Refused, 3502: coercing `Signal` from package `Verse` to `int->void` is unsupported; "Consider writing a wrapper function". Not the effect under test: the probe now binds a method of its own that signals. |
+| `signal-subscribe` and its control (first version) | Refused, 3588: the field name `Last` is ambiguous with the built-in `.Last`. `signal-subscribe` also has 3512 at its condition's `Signal`. The field is now `Seen`. |
+| `compound-indexed-write`, `compound-whole-write`, `int-overflow` | Admitted. |
+
+The rewritten `signal-bound-control`, `signal-subscribe` and
+`signal-subscribe-control` have not been run on Epic yet. OpenVerse makes
+the 3512 refusals its default (#515): see the next section.
 
 ## OpenVerse observations
 

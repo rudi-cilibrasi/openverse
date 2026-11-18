@@ -1,8 +1,8 @@
 counter := class:
-    var Last:int = 0
+    var Seen:int = 0
 
     Receive(N:int)<transacts>:void =
-        set Last = N
+        set Seen = N
 
 Main():void =
     E := event(int){}
@@ -10,7 +10,7 @@ Main():void =
     Subscription := E.Subscribe(C.Receive)
     if (E.Signal(1), false?):
         Print("OVPROBE unexpected")
-    Print("OVPROBE after failure {C.Last}")
+    Print("OVPROBE after failure {C.Seen}")
     E.Signal(2)
-    Print("OVPROBE after success {C.Last}")
+    Print("OVPROBE after success {C.Seen}")
     Subscription.Cancel()

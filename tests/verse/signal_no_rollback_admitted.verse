@@ -1,4 +1,4 @@
-# (#515) programs --signal-no-rollback admits: each Signal outside every
+# (#515) programs the no_rollback admission of an event's Signal admits: each Signal outside every
 # failure context, though near one (an if's branches, a for's body, also one
 # the compiler moves into a continuation, a function called after the
 # condition, a <decides> function that signals nothing, a task spawned by a

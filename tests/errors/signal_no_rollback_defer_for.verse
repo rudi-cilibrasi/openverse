@@ -1,5 +1,5 @@
 # expect: this call may signal an event (subscribable_event.Signal) in a failure context
-# (#515) under --signal-no-rollback, a for over two choices, whose body the
+# (#515) a for over two choices, whose body the
 # compiler moves into a continuation of its own, in a defer: in an if's
 # condition: the body runs inside the condition, so it is refused
 Hear(X:int):void = Print("heard {X}")

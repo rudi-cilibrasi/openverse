@@ -3802,8 +3802,8 @@ Main()<suspends>:void =
   ([the rule](research/scheduler-conformance.md#awaiters-run-inside-signal)).
   An `event(t)` and its subclasses can be passed as `signalable(t)`. Calls
   through that interface dispatch to the concrete event, including the
-  `Signal` override on `sticky_event(t)`. The optional
-  `--signal-no-rollback` policy applies to calls through the interface.
+  `Signal` override on `sticky_event(t)`. The `no_rollback` admission of
+  `Signal` (below) applies to calls through the interface.
   A waiter is a spawned task, `Main`, a `branch`, an arm of a `sync`,
   `race` or `rush` (also one of the signalling task's own: an arm awaiting
   while its sibling signals is resumed inside that sibling's `Signal`), or
@@ -3840,18 +3840,31 @@ Main()<suspends>:void =
   function subscribed during a `Signal` is first called at the next one; a
   function cancelled during a `Signal`, by one called before it, is not
   called by it. As in the Book (ch. 14, "Transactional Behavior"), a
-  `Subscribe` or a `Cancel` in a failure context that fails is undone. A
-  `Signal` may be called in a failure context too, as the Book's tests do
-  (`Event.versetest` signals in `<decides>` functions, and every
-  assertion's body is one): what the waiters it resumes and the functions
-  it calls do is rolled back with the context when it fails, as `Print`
+  `Subscribe` or a `Cancel` in a failure context that fails is undone. An
+  event's `Signal` has the `no_rollback` effect, as in Epic's Verse
+  compiler (#515): a program that may call it from a failure context, from
+  a function whose specifiers name heap effects (`<transacts>`,
+  `<computes>`, `<reads>`, `<writes>`, `<allocates>`: such a function has
+  no `no_rollback`, Book of Verse ch. 13) or from a class's `block:` is
+  refused before it runs or is emitted. UEFN 43.12 (build
+  ++Fortnite+Release-43.12-CL-60598086) refuses each of these with error
+  3512, "This invocation calls a function (`(/Verse.org/Verse/event:)Signal`)
+  that has the 'no_rollback' effect, which is not allowed by its context":
+  directly, through an alias, a `signalable` view and a bound method, and
+  in a generic `<transacts>` helper also when the helper is called outside
+  every failure context
+  ([the probes](research/versevm-live-conformance.md)). The Book's tests
+  read it otherwise (`Event.versetest` signals in `<decides>` functions,
+  and every assertion's body is one; the Book's API gives `event`'s
+  `Signal` no `no_rollback`). Their reading is kept as the legacy
+  transactional mode, `--signal-rollback` (`openverse run`, `emit`, `check`
+  and `core`; `Options.signalNoRollback := false`): there a `Signal` may be
+  called anywhere, and what the waiters it resumes and the functions it
+  calls do is rolled back with a failure context that fails, as `Print`
   is, and the waiters wait again where they waited
-  (`Coroutines/Concurrency.versetest:1562-1580`). With
-  `--signal-no-rollback` (`openverse run`, `emit`, `check` and `core`,
-  opt-in, #515: the reading of Epic's published `event` pages, which make
-  `Signal` `<no_rollback>`; the Book's API gives `event`'s `Signal` no such
-  effect), a program that may call an event's `Signal` from a failure
-  context is refused before it runs or is emitted. A failure context is an `if`'s condition, a `for`'s clause, a
+  (`Coroutines/Concurrency.versetest:1562-1580`). `--signal-no-rollback`,
+  the opt-in name of the policy before it became the default, is accepted
+  and changes nothing. A failure context is an `if`'s condition, a `for`'s clause, a
   `<decides>` function's body, `option{…}`, `logic{…}`, `not`, the left of
   `or`, a `first{…}` or a `do` expression, with everything that runs
   inside it: a `block`, a named argument's default, a `defer:`. A refining
@@ -3864,8 +3877,10 @@ Main()<suspends>:void =
   `Signal`. An `if`'s branches and a `for`'s body are not failure contexts
   (unless the `if` or `for` is in one), also when the compiler moves the
   body into a function of its own, and neither is the call a `spawn`
-  starts (its task runs it later; its arguments count). `Subscribe` and
-  `Cancel` in a failure context stay admitted, undone as above.
+  starts (its task runs it later; its arguments count). In a function with
+  a heap specifier or a class's `block:`, all of the body counts, wherever
+  the compiler moves its code. `Subscribe` and `Cancel` in a failure
+  context stay admitted, undone as above.
   A `subscribable_event()` is one without a value: `E.Signal()`,
   `E.Await()`, and functions of type `type{_():void}` to subscribe (#220).
   It is an `event(void)`, but not a `subscribable_event(t)`, whose
@@ -3984,7 +3999,7 @@ Main()<suspends>:void =
 | Order of a `subscribable_event`'s functions | the API: "invoked in a randomised order on every signal", "only after every waiting task has been resumed"; ch. 14's example lists them in subscription order | subscription order, after the tasks awaiting the event went on inside `Signal` (#210) |
 | Event waiter resumption | the Book's API: awaiting tasks "resumed first, in the order they suspended", each until it blocks before the next, and `Signal` "returns before the resumed tasks have finished"; its tests have awaiters run inside `Signal` (`Event.versetest:21-32`, FORT-1088027, FORT-1126351) | the Book's: inside `Signal`, in the order they suspended, each until it waits again or ends, the same task's arms included; an await made meanwhile joins the next `Signal`; nested `Signal`s depth first (#513, [the rule](research/scheduler-conformance.md#awaiters-run-inside-signal)); a task's end resumes its awaiters inside it the same way, in the order they registered (the API's `task`, `Await`; [the rule](research/scheduler-conformance.md#a-tasks-end-resumes-its-awaiters)) |
 | Awaiting a cancelled task | the API (`task`, `Await`): "a cancelled task never resumes its awaiters, so the call does not fail, does not error, and simply stays suspended for ever"; ch. 14: "it propagates cancellation: if the awaited task was canceled, `Await()` passes that cancellation on to the caller"; the tests decide neither (`SpawnAndTask.versetest:342-355`); `Cancel` itself is unreleased (ch. 14) and `<epic_internal>` (the API): the Book disagrees with itself | the API's: the await waits for ever; the awaiter can be cancelled itself (a `race` it loses); a `Main` stalled on one ends the program with exit 2 ([the cancelled task](research/scheduler-conformance.md#the-cancelled-task)) |
-| Signal in a failure context | the Book's tests signal in `<decides>` functions and assertions and expect success (`Event.versetest` 64-119); a failed context undoes the resumption (`Coroutines/Concurrency.versetest:1562-1580`); the Book's API gives `event`'s `Signal` no `<no_rollback>` (Epic's published pages do) | the tests': allowed, and what it and the awaiters it resumed did is rolled back with a failing context; `--signal-no-rollback` refuses it, as Epic's pages read (#515) |
+| Signal in a failure context | the Book's tests signal in `<decides>` functions and assertions and expect success (`Event.versetest` 64-119); a failed context undoes the resumption (`Coroutines/Concurrency.versetest:1562-1580`); the Book's API gives `event`'s `Signal` no `<no_rollback>` (Epic's published pages do) | Epic's compiler's (UEFN 43.12, error 3512): refused, as in a function with a heap specifier and in a class's `block:` (#515); `--signal-rollback` keeps the tests' reading: allowed, and what it and the awaiters it resumed did is rolled back with a failing context |
 | Extent of a `<#>` comment | "everything indented by four spaces on subsequent lines" (§1.1) | the rest of the `<#>` line and every following line indented more than that line, whatever the amount (blank lines included); `<#>` may also follow code on a line |
 
 ## Not supported in v1

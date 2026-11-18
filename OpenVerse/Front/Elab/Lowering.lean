@@ -51,10 +51,12 @@ structure Options where
       for a bug report (`OPENVERSE_DEBUG=1`). -/
   debug : Bool := false
   /-- (#515) Refuse a program that may call an event's `Signal` from a
-      failure context (the published API's `<no_rollback>`), instead of
-      rolling the signal back with its context: opt-in
-      (`SignalAdmission`). -/
-  signalNoRollback : Bool := false
+      failure context or from a body whose effects exclude `no_rollback`,
+      as Epic's Verse compiler does (UEFN 43.12: error 3512;
+      `SignalAdmission`). The default; `false` keeps the legacy
+      transactional reference mode, which rolls the signal back with its
+      context (`--signal-rollback`). -/
+  signalNoRollback : Bool := true
   requests : Requests := {}
 
 /-- A class or interface definition, as parsed. -/

@@ -441,7 +441,7 @@ mode*: its prelude has the drain below. Other programs compile byte for
 byte as before. In event mode, the suspends functions from which the
 prelude's `signalAll` is reachable through calls (an arm's or `branch`'s
 code and a spawned call's first run included, a method's dispatch and a
-function value's call conservatively, as for `--signal-no-rollback`) are
+function value's call conservatively, as for the `Signal` admission of #515) are
 *marked*: their regions keep the running markers below. Only a marked
 function's regions can be running while a `Signal` runs, as the code
 under the `Signal` is theirs. The other functions compile as before.
@@ -574,10 +574,10 @@ separate rule), as do a spawned call whose arguments suspend and the
 
 **Flags.** `--event-fifo` (#513) goes: the Book's order and timing are
 the default, and FIFO order without the timing is no reading of the
-Book. Its tests become tests of the default. `--signal-no-rollback`
-(#515) stays an opt-in for the reading of Epic's published `event` pages;
-the default, allowed and undone with its context, is the Book's tests'
-(rule 11).
+Book. Its tests become tests of the default. (#515, later: the refusal of
+a `Signal` in a failure context, Epic's compiler's, became the default once
+UEFN 43.12's diagnostics were obtained; the Book's tests' reading, allowed
+and undone with its context (rule 11), is the legacy `--signal-rollback`.)
 
 **Models first.** The scheduler models (`scripts/models/sched_gen.py`,
 `sched_gen2.py`, `event_fifo.py`) are changed to the rule before the

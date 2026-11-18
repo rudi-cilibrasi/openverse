@@ -394,8 +394,9 @@ structure TyEnv where
       of an interface below them that does), so a reference to it relates
       its type arguments to each class's through the class's view. -/
   viewed : List String := []
-  /-- (#515, `--signal-no-rollback`) Record the calls failure contexts make
-      (`ESt.failCalls`). -/
+  /-- (#515; off with `--signal-rollback`) Record the calls failure
+      contexts and bodies whose effects exclude `no_rollback` make
+      (`ESt.failCalls`, `ESt.bodyCalls`). -/
   signalNoRollback : Bool := false
   /-- The variances of the classes in Verse Core, by tag and Verse Core type
       argument position (docs/research/variance.md): what the certificate

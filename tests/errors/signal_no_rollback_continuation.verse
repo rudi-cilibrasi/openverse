@@ -1,5 +1,5 @@
-# expect: this call may signal an event (Note → event.Signal) in a failure context, which --signal-no-rollback refuses
-# (#515) under --signal-no-rollback, a for clause after two choices, which
+# expect: this call may signal an event (Note → event.Signal) in a failure context, which the no_rollback effect of an event's Signal does not allow
+# (#515) a for clause after two choices, which
 # the compiler moves into a continuation of its own: still the for's clause,
 # so still refused
 Two(N:int):int = N | N + 1

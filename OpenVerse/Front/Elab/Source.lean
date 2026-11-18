@@ -258,6 +258,8 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   checkConstantOrder resolved
   let resolved := if opts.extendedDefaults then resolved
     else resolved.map InitializerConvergence.markSource
+  -- (#515) and the functions whose heap specifiers exclude `no_rollback`
+  let resolved := resolved.map SignalAdmission.markSource
   -- Primitive overloads keep their intrinsic convergence contract; the
   -- program's overloads above retain their ordinary source-call contract.
   let resolved := resolved ++ BuiltinValues.toStringOverloads resolved

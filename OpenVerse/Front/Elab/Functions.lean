@@ -183,6 +183,9 @@ structure ElaboratedFn where
   loopFirst : List LoopUse
   /-- (#515) Its calls in failure contexts (`ESt.failCalls`). -/
   failCalls : Array ((Pos × String) × List Nat)
+  /-- (#515) Its other calls, in a body whose effects exclude `no_rollback`
+      (`ESt.bodyCalls`). -/
+  bodyCalls : Array ((Pos × String) × List Nat) := #[]
   /-- The warnings its elaboration found (`ESt.warnings`). -/
   warnings : Array (Pos × String) := #[]
 
@@ -198,7 +201,8 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
     (suspends : Bool := false) (selfTps : List String := [])
     (selfFieldOf : Option (String → Option Nat) := none)
     (evidenceSignature : Option Sig := none) (extendedDefaults : Bool := false)
-    (callOnly : Bool := false) (fnReturns : Array (Option MetadataReceivers.CallType) := #[]) :
+    (callOnly : Bool := false) (fnReturns : Array (Option MetadataReceivers.CallType) := #[])
+    (rollbackOnly : Bool := false) :
     Except String ElaboratedFn := do
   -- (#209) the values of `selfTps` come from the receiver's hidden
   -- fields, in slots after the hidden parameters: a method's own class's
@@ -235,6 +239,7 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
     types := env
     fnFx := allowed
     canFail := decides
+    rollbackOnly
     retTy := ret
     dictBase := frame.witnessBase
     suspends := suspends
@@ -320,7 +325,8 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
                    body := initPrefixE arity inits e },
            slotTys := spawnParamTypes env name (st.slotTys.toList.map (Ty.toVTy env)), errAt := st.errAt,
            frames,
-           needs := st.needs, loopFirst := st.loopFirst, failCalls := st.failCalls, warnings := st.warnings, metadata }
+           needs := st.needs, loopFirst := st.loopFirst, failCalls := st.failCalls, bodyCalls := st.bodyCalls,
+           warnings := st.warnings, metadata }
 
 /-- Function elaboration, a phase of `elabProgramCore`: each function and
     constant of `sigs`, by index (a constant may not hold a mutable object, as
@@ -346,9 +352,10 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
   for (top, idx) in sigs.tops.zip (List.range sigs.tops.length) do
     let sig := sigs.sigs[idx]!
     match top with
-    | .fn p n ps _ _ _ body =>
+    | .fn p n ps _ specs _ body =>
       elaborated := elaborated.push (← elabFn allSigs sigs.prog requests env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
-        (evidenceSignature := some sig) (extendedDefaults := extendedDefaults) (callOnly := firstHelpers.contains n) (fnReturns := fnReturns))
+        (evidenceSignature := some sig) (extendedDefaults := extendedDefaults) (callOnly := firstHelpers.contains n) (fnReturns := fnReturns)
+        (rollbackOnly := (SignalAdmission.excludesNoRollback n specs).isSome))
     | .const p n _ sty body =>
       -- a constant is computed at each use, so it would be a new object each
       -- time (until Verse Core has global state)
@@ -393,10 +400,11 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
   -- instantiation (`Typed.subst`)
   for (top, g) in sigs.generics.zip sigs.gsigs.toList do
     match top with
-    | .fn p n ps _ _ _ body =>
+    | .fn p n ps _ specs _ body =>
       elaborated := elaborated.push (← elabFn allSigs sigs.prog requests (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body
         g.suspends g.selfTps ((requests.casts.find? (·.name == n)).map fun l => fun v =>
-          (l.opened.lookup v).bind (env.witnessField? l.target ·)) (some g) extendedDefaults (firstHelpers.contains n) fnReturns)
+          (l.opened.lookup v).bind (env.witnessField? l.target ·)) (some g) extendedDefaults (firstHelpers.contains n) fnReturns
+        (SignalAdmission.excludesNoRollback n specs).isSome)
     | _ => pure ()
   return elaborated
 

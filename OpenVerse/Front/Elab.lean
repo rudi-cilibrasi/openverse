@@ -389,11 +389,34 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     | _ => none)) opts.requests.lazy
   if !lazyNeeds.isEmpty then
     return .asking { lazy := lazyNeeds }
-  let failCalls := elaborated.foldl (fun acc f => acc ++ f.failCalls) #[]
-  -- (#515, `--signal-no-rollback`) no event signal from a failure context
+  -- (#515) no event signal from a failure context, nor from a body whose
+  -- effects exclude no_rollback: an event's Signal has that effect (Epic's
+  -- Verse compiler, UEFN 43.12: error 3512), unless the program is compiled
+  -- in the legacy transactional mode (`--signal-rollback`)
+  -- (the bodies first: Epic's compiler reports the call in a `<transacts>`
+  -- function, not a call of that function, which has no no_rollback)
   if opts.signalNoRollback then
+    let specsOf : Std.HashMap String (Pos × List String) := (sigs.tops ++ sigs.generics).foldl
+      (fun m t => match t with | .fn p n _ _ specs .. => m.insert n (p, specs) | _ => m) {}
+    let bodies : List (Nat × (Pos × String) × Array ((Pos × String) × List Nat)) :=
+      (elaborated.toList.zipIdx).filterMap fun (f, i) =>
+        (specsOf.get? f.fn.name).bind fun (p, specs) =>
+          (SignalAdmission.excludesNoRollback f.fn.name specs).map fun desc =>
+            (i, (p, desc), f.bodyCalls ++ f.failCalls)
+    -- (of the calls in the bodies, failure contexts in them included, the
+    -- one closest to a `Signal`)
+    let found := bodies.filterMap fun (_, (_, desc), calls) =>
+      (SignalAdmission.checkSites lowering.fns calls (continuations := true)).map
+        fun site => (site, desc)
+    if let some (((p, what), way), desc) := found.foldl (fun best c => match best with
+        | some b => if c.1.2.length < b.1.2.length then some c else best
+        | none => some c) none then
+      throw s!"{p.show}: this {what} may signal an event ({" → ".intercalate way}), whose Signal has the no_rollback effect, in {desc} (Epic's Verse compiler, UEFN 43.12: error 3512; #515)"
+    if let some ((p, desc), way) := SignalAdmission.checkBodies lowering.fns (bodies.toArray.map fun (i, site, _) => (site, i)) then
+      throw s!"{p.show}: this code may signal an event ({" → ".intercalate way}), whose Signal has the no_rollback effect, in {desc} (Epic's Verse compiler, UEFN 43.12: error 3512; #515)"
+    let failCalls := elaborated.foldl (fun acc f => acc ++ f.failCalls) #[]
     if let some ((p, what), way) := SignalAdmission.checkSites lowering.fns failCalls then
-      throw s!"{p.show}: this {what} may signal an event ({" → ".intercalate way}) in a failure context, which --signal-no-rollback refuses: the published Verse API makes an event's Signal <no_rollback> (#515)"
+      throw s!"{p.show}: this {what} may signal an event ({" → ".intercalate way}) in a failure context, which the no_rollback effect of an event's Signal does not allow (Epic's Verse compiler, UEFN 43.12: error 3512; #515)"
   -- (the lazily taken functions with several values that contexts taking
   -- their first success consume, #246)
   let loopFirst := elaborated.toList.flatMap (·.loopFirst)
@@ -600,7 +623,7 @@ def compile (src : String) (opts : Options := {}) : Except String Prog := do
     bound to `Args` when given or mentioned, and an optional `do` expression. -/
 def compileTops (tops : List STop) (args : List String) (mentionsArgs : Bool) (doExpr : Option String)
     (debug : Bool := false) (profile : SourceProfile := .full)
-    (extendedDefaults : Bool := false) (signalNoRollback : Bool := false) : Except String Prog := do
+    (extendedDefaults : Bool := false) (signalNoRollback : Bool := true) : Except String Prog := do
   let entry ← match doExpr with
     | some t => some <$> parseExprText t
     | none => pure none
@@ -612,7 +635,7 @@ def compileTops (tops : List STop) (args : List String) (mentionsArgs : Bool) (d
     (`Compiled.warnings`), in the order of the source. -/
 def compileTopsWarned (tops : List STop) (args : List String) (mentionsArgs : Bool) (doExpr : Option String)
     (debug : Bool := false) (profile : SourceProfile := .full)
-    (extendedDefaults : Bool := false) (signalNoRollback : Bool := false) :
+    (extendedDefaults : Bool := false) (signalNoRollback : Bool := true) :
     Except String (Prog × List String) := do
   let entry ← match doExpr with
     | some t => some <$> parseExprText t
