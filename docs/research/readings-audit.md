@@ -811,7 +811,7 @@ page](https://github.com/rudi-cilibrasi/openverse/wiki/Where-the-Book-disagrees-
 
 - **Prose** (`01_expressions.md:753`): `set Total += 1  # Equivalent to: set Total = Total + 1`, which, taken literally for a right side with an effect, reads `Total` first.
 - **Tests:** `ArrayAppend.versetest` 140 and 183 run `e` first and see what it wrote; `:12` (`verse_vm_only`) and its native twin `:23-27` ("TODO (SOL-9022): This doesn't produce the same result as the non-native array. Either it should or we should runtime error") show VerseVM writing through a reference taken before `e`.
-- **openverse now:** the tests' (`e`, then the old value read); `:12` still differs.
+- **openverse now:** the tests' (`e`, then the old value read), and VerseVM's reference behaviour of `:12` too (#704, [Mutation](../LANGUAGE.md#mutation-macros-tooling)): when `e` replaces the place's container with a plain `set`, through a variable or an object's field, the write goes to the container `e` replaced; `set X += …` in `e` appends in place. Epic's VerseVM on UEFN 43.12 gives these results for the probes `tests/conformance/versevm/compound-*.verse`.
 
 ### Integer range, by VM
 

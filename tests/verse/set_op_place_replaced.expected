@@ -1,0 +1,24 @@
+variable replaced [[0]]
+whole variable [0, 42]
+element written in place [[0, 42]]
+nested, variable replaced [[0, 0] [7, 7]]
+nested, row replaced [[1, 2] [9, 9]]
+nested, row replaced by key [[1, 2] [9, 9]]
+nested, other row replaced [[5] [13, 4]]
+nested, row written in place [[1, 2] [110, 200]]
+map replaced 100 1
+struct replaced 50 []
+struct in array, array replaced [30, 40]
+struct in array, element replaced [1, 70]
+struct in array, other field [1, 7] [9]
+-= [100]
+*= [200]
+-= in place [299]
+float *= 4.000000
+float /= 8.000000
+value [5, 42] [[0]]
+object replaced 6 100
+object in array, array replaced 6 50
+appended in place [[1, 2, 3, 42] [5]]
+row appended in place [[1, 2] [13, 4, 5]]
+exit=0

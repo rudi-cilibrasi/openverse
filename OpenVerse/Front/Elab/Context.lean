@@ -539,6 +539,7 @@ def Requests.merge (a b : Requests) : Requests where
   casts := mergeByKey (·.key) a.casts b.casts
   loops := mergeByKey (·.key) a.loops b.loops
   witnesses := mergeByKey id a.witnesses b.witnesses
+  watches := mergeByKey (fun w => (w.owner, w.field, w.steps)) a.watches b.watches
   awaits := a.awaits || b.awaits
   boxes := mergeByKey id a.boxes b.boxes
   anys := SubtypeEvidence.mergeRequests a.anys b.anys
@@ -563,6 +564,7 @@ def Requests.without (r old : Requests) : Requests where
   casts := dropByKey (·.key) r.casts old.casts
   loops := dropByKey (·.key) r.loops old.loops
   witnesses := dropByKey id r.witnesses old.witnesses
+  watches := dropByKey (fun w => (w.owner, w.field, w.steps)) r.watches old.watches
   awaits := r.awaits && !old.awaits
   boxes := dropByKey id r.boxes old.boxes
   anys := dropByKey SubtypeEvidence.declarationName r.anys old.anys
@@ -571,7 +573,7 @@ def Requests.isEmpty (r : Requests) : Bool :=
   r.eager.isEmpty && r.lazy.isEmpty && r.families.isEmpty && r.overloads.isEmpty && r.copiedOverloads.isEmpty && r.nested.isEmpty &&
     r.fieldOrders.isEmpty && r.instanceCalls.isEmpty &&
     r.fns.isEmpty && r.methods.isEmpty &&
-    r.casts.isEmpty && r.loops.isEmpty && r.witnesses.isEmpty && !r.awaits && r.subtypes.isEmpty && r.boxes.isEmpty &&
+    r.casts.isEmpty && r.loops.isEmpty && r.witnesses.isEmpty && r.watches.isEmpty && !r.awaits && r.subtypes.isEmpty && r.boxes.isEmpty &&
     r.anys.isEmpty
 
 /-- A lazily taken call where the first success is taken (#246): its
