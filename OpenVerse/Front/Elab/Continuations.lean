@@ -1386,6 +1386,53 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
     (caps.zipIdx.map fun (l, j) => .decl p (captureName l j) none false (.ident p l.name))
   return (req, obj, .struct plan.base args)
 
+/-- Generate an immutable owner for a cursor whose private type is only
+    available in a refined scope. The public view has a caller-nameable
+    row type. A successful step returns a new owner for the next step. -/
+def refinedCursorOwnerOf (ctx : Ctx) (p : Pos) (base row cursor : Ty) (method : String)
+    (clauses outputs : List SExpr) (scalar : Bool) : Except String (Choice.FirstLift × SExpr) := do
+  let ctx := ctx.choiceCoercionScope
+  let qualify := match ctx.selfClass with | some c => selfQualify ctx c | none => id
+  let clauses := clauses.map qualify
+  let written := ctx.choiceCoercionBody (.block p (clauses ++ outputs))
+  let caps := ctx.capturesOf written
+  let t := (base :: row :: cursor :: caps.map (·.ty))
+  let (parameters, _, _) ← contTypes ctx p t [] written
+  let key := "refinedCursor" ++ contKey ctx p method [written] ++ forStageCaptureKey ctx t caps
+  let name := s!"$refinedCursor{p.line}_{p.col}_{key.hash}"
+  let arguments := parameters.map fun tp => STy.name tp.name
+  let ident := SExpr.ident p
+  let member := SExpr.member p (ident "Self")
+  let localName (n : String) := if n == "Self" then "$cursorSourceSelf" else n
+  let fieldName (l : Local) (i : Nat) := if l.typeValue then s!"$w.cursor{i}" else s!"$cursorCapture{i}"
+  let fields := caps.zipIdx.map fun (l, i) => ({ name := fieldName l i, ty := l.ty.toSTy } : SField)
+  let fields := fields ++ [{ name := "$cursorState", ty := .opt cursor.toSTy }]
+  let slots := caps.zipIdx.map fun (l, i) =>
+    SExpr.decl p (localName l.name) (some l.ty.toSTy) l.mutable (member (fieldName l i))
+  let aliases := ctx.types.tvars.map fun (n, ty) => (n, ty.toSTy)
+  let clauses := clauses.map (fun clause =>
+    Choice.renameE [("Self", "$cursorSourceSelf")] (Refine.substTypes aliases clause))
+  let step := SExpr.app p (ident "$forCursorNext") [.block p clauses, .block p outputs, member "$cursorState"] false
+  let packet := "$cursorPacket"
+  let get (i : Int) (value : SExpr) := SExpr.app p value [.int p i] false
+  let make (values : List SExpr) (state : SExpr) :=
+    SExpr.construct p name arguments ((caps.zipIdx.zip values).map (fun ((l, i), v) =>
+      SExpr.decl p (fieldName l i) none false v) ++ [.decl p "$cursorState" none false state])
+  let state := SExpr.optionLit p (get 0 (ident packet))
+  let next := make (caps.zipIdx.map fun (l, i) => member (fieldName l i)) state
+  let values := get 1 (ident packet)
+  let value := if scalar then get 0 values else values
+  let result := SExpr.ite p [.decl p packet none false (.query p (ident "$cursorStep"))]
+    (.optionLit p (.tuple p [next, value])) (some (ident "false"))
+  let effects := if ctx.fnFx.isEmpty then ["computes"] else ctx.fnFx
+  let nextMethod := STop.fn p method [] [] ("override" :: effects)
+    (.opt (.tup [base.toSTy, row.toSTy])) (.block p (slots ++ [.decl p "$cursorStep" none false step, result]))
+  let cls := STop.classDef p name [] parameters [] [base.toSTy] false fields [nextMethod]
+  let request : Choice.FirstLift := {
+    stageOnly := true, key, pos := p, name, params := [], specs := ["computes"],
+    ret := .name "void", body := .tuple p [], binds := [], sets := [], args := [], extraFns := [cls] }
+  return (request, make (caps.map (ident ∘ (·.name))) (ident "false"))
+
 /-- Batch a prefix's environment using its actual declaration context.
     Typed storage origins and capture keys are checked exactly as on restart. -/
 def stagePrefixEnvironmentWith

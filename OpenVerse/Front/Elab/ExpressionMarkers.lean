@@ -180,6 +180,26 @@ partial def elabExprMarkersWith
       return ⟨.seq (.assign result r.e) (.ite (.assign slot (.prim .query [.local result]))
         (.prim .mkSome [.prim .flatten [.local slot]]) (.lit .none)), .opt (.arr t)⟩
     | _ => eerr p "internal: staged flatten values"
+  | .app p (.ident _ "$refinedCursorOwner")
+      [.decl _ _ (some view) _ _, .decl _ _ (some payload) _ _, .str _ [.text method],
+       .block _ clauses, .block _ outputs] false => do
+    let base ← resolveTy ctx.types p view
+    let row ← resolveTy ctx.types p payload
+    let saved ← get
+    let probe ← elabE { ctx with typeOnly := true }
+      (.app p (.ident p "$forCursorNext") [.block p clauses, .block p outputs, .ident p "false"] false) none
+    restoreConstructProbe ctx saved
+    let .opt (.tup [state, actual]) := probe.ty | eerr p "internal: malformed refined cursor"
+    let scalar := actual != row && actual == .tup [row]
+    unless actual == row || scalar do eerr p "internal: refined cursor payload changed type"
+    let (request, object) ← match refinedCursorOwnerOf ctx p base row state method clauses outputs scalar with
+      | .ok answer => pure answer
+      | .error why => eerr p why
+    if !ctx.types.requests.loops.any (·.key == request.key) then
+      if !ctx.typeOnly then askHelper p request
+      return ⟨.prim .userErr [], base⟩
+    let r ← elabE ctx object (some base)
+    return ⟨← coerce p r base, base⟩
   | .app p (.ident _ "$refinementIfPacket")
       [.decl _ _ (some packetType) _ _, .block _ clauses, body, otherwise] false => do
     let ty ← resolveTy ctx.types p packetType
