@@ -14,22 +14,53 @@ private def normalize (refs : Refs) : Refs :=
 def joinRefs (a b : Refs) : Refs :=
   ((normalize a).merge (normalize b) (· ≤ ·)).eraseReps
 
+/-- A tuple column can retain the tuple carried by that column, including
+    through option wrappers. An opaque metadata column has no known fields. -/
+inductive Column where
+  | mk (role : Bool) (fields : List Column)
+  deriving BEq, Hashable, Repr, Inhabited
+
+def Column.role : Column → Bool
+  | .mk role _ => role
+
+def Column.parts : Column → Option (List Column)
+  | .mk _ [] => none
+  | .mk _ fields => some fields
+
+abbrev TupleParts := Option (List Column)
+
+private def Column.limit : Nat → Column → Column
+  | 0, .mk role _ => .mk role []
+  | depth + 1, .mk role fields => .mk role (fields.map (Column.limit depth))
+
+/-- Bound the tracked shape even when a recursive dynamic value embeds
+    itself in another tuple at each iteration. -/
+def tupleParts (roles : List Bool) (parts : List TupleParts) : TupleParts :=
+  if roles.any id then
+    some <| roles.zipWith (fun role fields => Column.limit 3 (.mk role (fields.getD []))) parts
+  else none
+
+/-- A missing shape on a metadata path contributes opaque metadata. A
+    real path can contribute no metadata to any column. -/
+partial def joinParts (ar : Bool) (ap : TupleParts) (br : Bool) (bp : TupleParts) : TupleParts :=
+  match ap, bp with
+  | some xs, some ys =>
+    if xs.length != ys.length then none else
+      some <| xs.zipWith (fun a b =>
+        .mk (a.role || b.role) ((joinParts a.role a.parts b.role b.parts).getD [])) ys
+  | some xs, none => if br then none else some xs
+  | none, some ys => if ar then none else some ys
+  | none, none => none
+
 structure Payload where
   role : Bool := false
-  parts : Option (List Bool) := none
+  parts : TupleParts := none
   refs : Refs := []
   deriving BEq, Inhabited, Repr
 
-/-- Immediate tuple columns follow the ordinary metadata domain. A missing
-    shape with a metadata whole value cannot prove any column real. -/
 def joinPayload (a b : Payload) : Payload := {
   role := a.role || b.role
-  parts := match a.parts, b.parts with
-    | some xs, some ys =>
-      if xs.length == ys.length then some (xs.zipWith (· || ·) ys) else none
-    | some xs, none => if b.role then none else some xs
-    | none, some ys => if a.role then none else some ys
-    | none, none => none
+  parts := joinParts a.role a.parts b.role b.parts
   refs := joinRefs a.refs b.refs }
 
 structure Node where
