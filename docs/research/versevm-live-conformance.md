@@ -140,17 +140,39 @@ the 3512 refusals its default (#515): see the next section.
 
 ## OpenVerse observations
 
-On the tested head of [#702](https://github.com/rudi-cilibrasi/openverse/pull/702),
-`adb392adb0dd8288c3366d1b45753b9c0904399c`, Lean and C agreed on stdout,
-stderr and exit status for all thirteen probes that produced bytecode.
+On this branch (#515's default), Lean and C agreed on stdout, stderr and
+exit status for every probe that produced bytecode. The legacy column is
+`--signal-rollback`, the transactional mode that was the default before
+(and the previous table's `default`).
 
-| Probe | Default outcome | With `--signal-no-rollback` |
+| Probe | Default outcome | With `--signal-rollback` |
 | --- | --- | --- |
-| `signal-control` | Prints `selected`. | Admitted. |
-| `signal-direct`, `signal-alias`, `signal-bound`, `signal-generic` | Print `after`. | Refused at the call in the failure context. The bound and generic controls are admitted. |
-| `signal-await` | Prints `waiting`, then `received 2`. | Refused at the first signal. |
-| `signal-interface` and its control | Both print `after`. | The failure-context call is refused through the interface. The control is admitted. |
-| `signal-subscribe` and its control | Refused because OpenVerse's `event` lacks `Subscribe`. OpenVerse provides subscription through `subscribable_event`. | Same refusal. |
-| `compound-indexed-write` | Prints `length 2`, then `first 0`. | Admitted. |
-| `compound-whole-write` | Prints `length 2`, `first 0`, and `second 42`. | Admitted. |
-| `int-overflow` | Runtime overflow, exit 2. | Admitted by `check`. |
+| `signal-control`, `signal-interface-control` | Print `selected` and `after`. | Same. |
+| `signal-bound-control` (rewritten: a method of its own that signals, bound) | Prints `after`. | Same. |
+| `signal-direct`, `signal-alias`, `signal-bound`, `signal-interface`, `signal-await` | Refused at the `Signal` in the condition, as 43.12 (3512). | Print `after`; `signal-await` prints `waiting`, then `received 2`. |
+| `signal-generic`, `signal-generic-control` | Refused at the `Signal` in the `<transacts>` helper `Send`, as 43.12 (3512). | Print `after`. |
+| `signal-subscribe` and its control (rewritten: the field is `Seen`) | Refused because OpenVerse's `event` lacks `Subscribe`; it provides subscription through `subscribable_event` (`followup/subscribable-event-control.verse` asks 43.12 which type has it). | Same refusal. |
+| `compound-indexed-write` | Prints `length 2`, then `first 0`. | Same. |
+| `compound-whole-write` | Prints `length 2`, `first 0`, and `second 42`. | Same. |
+| `int-overflow` | Runtime overflow, exit 2. | Same. |
+
+## Follow-up probes
+
+[`followup/`](../../tests/conformance/versevm/followup) holds bodies, in the
+same wrapper, for what the 43.12 results leave open: whether a plain
+`<decides>` function has `no_rollback` (`decides-plain-if`,
+`decides-body-default-call`), whether a `<transacts>` function is a value
+of a `<transacts><decides>` type (`transacts-into-decides-type`) and a
+function without specifiers one of a function type without them
+(`default-into-default-type`), whether a `for`'s range and filter are
+failure contexts for `no_rollback` (`for-range-default-call`,
+`for-filter-default-call`), constructors and module constants without
+specifiers (`constructor-default-in-if`, `constant-default-call`), the
+effects of `Await`, `Subscribe` and `Print` (`await-in-transacts`,
+`subscribe-in-transacts`, `print-in-condition`), `Signal` in a
+`<transacts>` method and a class's `block:` (`signal-transacts-method`,
+`signal-class-block`), an `<abstract>` class below a `<concrete>` one
+(`concrete-abstract-child`), joins outside array literals
+(`join-if-common-base-interface`, `join-if-expected-interface`, `join-interface-only`), `int[X]` of an
+`any` (`int-cast-variants`) and which event type has `Subscribe`
+(`subscribable-event-control`).
