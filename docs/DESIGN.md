@@ -723,9 +723,14 @@ including the maximum integer. The array form evaluates the source once in
 the header and passes the resulting array to the helper. A failed or empty
 source rolls back the header. The helper reads each element by index. When
 every path in an iteration returns, the helper omits the recursive step.
-An early return runs no later iteration or function suffix.
-Nested returning loops, concurrent iteration bodies and
-mutable implicit proof captures retain explicit implementation refusals.
+An early return runs no later iteration or function suffix. Nested
+returning loops with supported headers use additional helpers. Recursive
+header cursors save the producer's pending continuation. When generators
+are nested in that header, a cursor also saves the active outer row and
+both search positions. The inner search uses the original outer
+binding context and keeps its committed effects on exhaustion.
+Concurrent iteration bodies and mutable implicit proof captures retain
+explicit implementation refusals.
 
 A function with several values (#235) is inlined before elaboration, by
 `Choice.inlineMulti`, which runs right after module resolution. A method

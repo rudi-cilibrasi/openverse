@@ -346,17 +346,18 @@ array level. Its arguments and call run within the search's rollback
 checkpoints. A producer retained in a nested failure context keeps that
 boundary.
 
-A returning loop with exposed body choices can also resume one direct
-self-recursive producer in its header (#686). Its cursor saves the
-producer's recursion frames and pending continuation between iterations.
-This includes return frames that transform each recursive value and
-continuation members that reach another choice before yielding a row.
-The compiler also takes these producers lazily when they declare
-`<computes>`, so a first-success search never evaluates a later
-alternative that traps. Scalar clauses around the producer stay in the
-header search. The
-body's alternatives can reuse a row cursor while sharing mutations to
-captured cells.
+Returning loops with exposed body choices can also resume recursive
+producers in their headers (#686), including mutually recursive groups.
+A producer cursor saves its recursion frames and pending continuation.
+A continuation member can reach another choice before yielding its row.
+The compiler takes these producers lazily even when they declare
+`<computes>`, so first success leaves later trapping alternatives unused.
+
+When a header nests generators around a recursive producer, the cursor
+saves the active outer row and the positions of both searches. The inner
+search resumes in the outer row's lexical context. Exhaustion advances
+the outer search after any effects the inner search committed. Body
+alternatives share mutations to captured cells when they resume a row.
 
 The older lowering applies when clauses retain other lazy producers (#246),
 a composed choice (#283, #335), an exclusive choice (#314, #331), or a
