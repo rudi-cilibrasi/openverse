@@ -217,8 +217,7 @@ def ForSearch.cursorSlots (search : ForSearch) (bindings : List Nat) : List Nat 
         (if rest.isEmpty then [] else [level.act, level.slot]) ++ levels rest
   (search.started :: (levels (search.head :: search.tail) ++ bindings)).eraseDups
 
-def ForSearch.capture (search : ForSearch) (bindings : List Nat) : EM R := do
-  let slots := search.cursorSlots bindings
+private def packCursorSlots (slots : List Nat) : EM R := do
   let types := (← get).slotTys
   let columns ← slots.mapM fun slot =>
     match types[slot]? with
@@ -226,9 +225,60 @@ def ForSearch.capture (search : ForSearch) (bindings : List Nat) : EM R := do
     | none => throw s!"internal: missing type of for cursor slot {slot}"
   return ⟨.prim .mkTup (slots.map Expr.local), .tup columns⟩
 
-def ForSearch.restore (search : ForSearch) (bindings : List Nat) (packet : Nat) (next : Expr) : Expr :=
-  ((search.cursorSlots bindings).zipIdx).foldr (fun (slot, index) rest =>
+private def restoreCursor (slots : List Nat) (packet : Nat) (next : Expr) : Expr :=
+  slots.zipIdx.foldr (fun (slot, index) rest =>
     .seq (.assign slot (.prim (.tupGet index) [.local packet])) rest) next
+
+def ForSearch.capture (search : ForSearch) (bindings : List Nat) : EM R :=
+  packCursorSlots (search.cursorSlots bindings)
+
+def ForSearch.restore (search : ForSearch) (bindings : List Nat) (packet : Nat) (next : Expr) : Expr :=
+  restoreCursor (search.cursorSlots bindings) packet next
+
+def LoopGen.captureCursor (generator : LoopGen) (bindings : List Nat) : EM R :=
+  packCursorSlots (generator.resumeSlots ++ bindings)
+
+/-- Try a producer value and its filter in one failure context.
+    A continuation member can commit work before reaching a value.
+    Keep the pending `after` in the returned cursor, to run if the body
+    later continues this header. A rejected filter advances immediately. -/
+def LoopGen.takeCursor (generator : LoopGen) (prior : Nat) (prelude filter : Expr)
+    (bindings : List Nat) (row : R) (outcome : Option Nat) : EM R := do
+  if generator.resumeSlots.isEmpty then
+    throw "internal: this loop producer has no scalar row cursor"
+  let cursor ← generator.captureCursor bindings
+  let previous ← fresh cursor.ty
+  let found ← fresh .logic
+  let ready ← fresh .logic
+  let void := Expr.lit .void
+  let start := Expr.seq (.assign ready (.lit (.logic true))) void
+  let setup := Expr.ite (.assign previous (.prim .query [.local prior]))
+    (restoreCursor (generator.resumeSlots ++ bindings) previous (.seq generator.after start))
+    (.ite prelude (.seq generator.init start) void)
+  let attempt := Expr.ite filter (.seq (.assign found (.lit (.logic true))) void) void
+  let advance := Expr.ite (isTrueIn found) Expr.brkV (.seq generator.after void)
+  let testValue := match generator.bnd with
+    | none => .seq attempt advance
+    | some boundary =>
+      -- Match the ordinary for's continuation boundary. A member can stop
+      -- here to enqueue its choice before a row is ready for the body.
+      let done := Expr.seq (.assign boundary (.lit (.logic true))) Expr.brkV
+      .seq (.assign boundary (.lit (.logic false)))
+        (.seq (.loop (.seq attempt done))
+          (.ite (isTrueIn boundary) advance (.seq .brk (.prim .userErr []))))
+  let step := Expr.seq generator.step (.ite (isTrueIn generator.has) testValue void)
+  let search := Expr.ite (isTrueIn ready)
+    (.loop (.ite (p2 .eq (.local generator.sp) (.lit (.int 0))) Expr.brkV step)) void
+  let result := Expr.ite (isTrueIn found)
+    (.prim .mkSome [.prim .mkTup [cursor.e, row.e]]) (.lit .none)
+  -- A failed nested outcome can break the search loop. Forward its flag
+  -- to the surrounding collector before returning an exhausted cursor.
+  let result := match outcome with
+    | some flag => Expr.ite (isTrueIn flag) result (.seq .brk (.prim .userErr []))
+    | none => result
+  return ⟨.seq (.assign ready (.lit (.logic false)))
+    (.seq setup (.seq (.assign found (.lit (.logic false))) (.seq search result))),
+    .opt (.tup [cursor.ty, row.ty])⟩
 
 /-- Return the next live row's cursor to the producer. An absent input
     starts a new search. A resumed input restores private slots before
@@ -1382,6 +1432,32 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     | c => match Choice.binding? c with
       | some b => !b.composed && b.branchy.isNone && b.each.isNone
       | none => false
+  if let (some request, [(g, fs)]) := (cursor, gs) then
+    if let some { pos := gp, name, ty := annotation, each := some (.app _ (.ident _ "$loop") args false), .. } := Choice.binding? g then
+      if !pre.any isExcl && !fs.any isExcl then
+        let preStart := (← get).nslots
+        let (prelude, c0) ← elabFilters ctx pre
+        let bindings := c0.locals.filterMap (fun binding => if binding.slot >= preStart then some binding.slot else none)
+        let generator ← elabLoopGen { c0 with canFail := true, inTaking := true } gp args
+        let ty ← match annotation with
+          | some written => resolveTy c0.types gp written
+          | none => pure generator.vty
+        let (bound, c) ← declareAt gp c0 name ty
+        let (filter, c) ← elabFilters c fs
+        let value ← coerce gp ⟨generator.value, generator.vty⟩ ty
+        let fields ← request.outputs.mapM fun name =>
+          match c.lookup name with
+          | some field => pure field
+          | none => eerr p s!"internal: unknown recursive cursor binding {name}"
+        let row : R := ⟨.prim .mkTup (fields.map (Expr.local ·.slot)), .tup (fields.map (·.ty))⟩
+        let saved ← generator.captureCursor bindings
+        let inputTy := Ty.opt saved.ty
+        let input ← elabE ctx request.prior (some inputTy)
+        let slot ← fresh inputTy
+        let input ← coerce p input inputTy
+        let result ← generator.takeCursor slot prelude (.seq (.assign bound value) filter) bindings row
+          c0.forOutcomeSlot
+        return { result with e := .seq (.assign slot input) result.e }
   if let (some request, (g, fs) :: more) := (cursor, gs) then
     if let some binding := Choice.binding? g then
       if binding.composed && !pre.any isExcl then
