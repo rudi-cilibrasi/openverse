@@ -44,7 +44,7 @@ def main (args : List String) : IO Unit := do
     ("operand-taints-next", false, "value 1\nvalue 2\n"),
     ("tuple-real-column", true, "value 1\nvalue 1\n"),
     ("tuple-metadata-column", false, "value 2\nvalue 2\n"),
-    ("nested-tuple-real-column", false, "value 1\nvalue 1\n"),
+    ("nested-tuple-real-column", true, "value 1\nvalue 1\n"),
     ("nested-tuple-metadata-column", false, "value 2\nvalue 2\n"),
     ("nested-real-reader-wrap", true, "row\nrow\n"),
     ("recursive-reader", true, "v 7\nv 8\n"),
@@ -65,4 +65,4 @@ def main (args : List String) : IO Unit := do
             (!metadata || metadataAllowed)
           IO.println s!"{name} control={control} extended={extended} metadata={metadata} elapsed_ms={(← IO.monoMsNow) - start}"
           (← IO.getStdout).flush
-  IO.println "logical-cell source: 168 API classifications, 116 complete Lean oracles"
+  IO.println "logical-cell source: 168 API classifications, 120 complete Lean oracles"
