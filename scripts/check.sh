@@ -171,6 +171,7 @@ check "initializer convergence and extended-default models" \
   bash tests/scripts/test-initializer-convergence.sh "${FUZZ_MODEL_INITIALIZERS:-96}" "$seed"
 check "scheduler conformance traces and controls" bash tests/scripts/test-scheduler-conformance.sh
 check "scheduler model cancellation contracts" python3 -I tests/scripts/test-scheduler-model.py
+check "live VerseVM probe tools (generation, UEFN logs, comparison)" python3 -I tests/scripts/test-versevm-live.py
 check "bounded clock domain (${FUZZ_CLOCK_DOMAIN:-100} programs and boundary traces)" \
   bash tests/scripts/test-clock-domain.sh "${FUZZ_CLOCK_DOMAIN:-100}" "$seed"
 check "overload domains (${FUZZ_OVERLOAD_SHAPES:-546} programs, across seven contexts)" \

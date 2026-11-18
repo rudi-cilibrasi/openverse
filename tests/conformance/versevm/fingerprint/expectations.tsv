@@ -1,0 +1,6 @@
+# VM fingerprints: what the Book says, and what is reported for Epic's new Verse VM (unverified).
+probe	book_case	book_outcome	book_lines	note
+vm-branch-outlives-return	docs/14_concurrency.md, The branch Expression (example 13)	ran	function returning|branch cleanup|returned|after wait	Reported for the new Verse VM (Epic staff, unverified): a branch runs until its parent task ends, which would print function returning|returned|branch body finished|branch cleanup|after wait.
+vm-branch-await-after-return	docs/14_concurrency.md, The branch Expression	ran	function returning|returned|signaled|after wait	If the branch outlives the function (reported for the new Verse VM), it prints branch received 7 inside the Signal, before signaled.
+vm-sleep-zero-yields	docs/api (Sleep: 0.0 resumes on the next update and always yields)	ran	worker before sleep|main after spawn|worker after sleep|main after wait	The Book disagrees with itself: its tested chapter 14 examples complete Sleep(0.0) at once, as OpenVerse does (docs/LANGUAGE.md, Readings).
+vm-map-struct-option-key	docs/03_containers.md (map keys are comparable values)	ran	struct key found 7|option key found 8|empty option key missing	Struct and option map-key hashing mismatches were reported on the new Verse VM, with a fix slated for 43.10.
