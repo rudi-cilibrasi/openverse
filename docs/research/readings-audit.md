@@ -346,7 +346,14 @@ array level. Its arguments and call run within the search's rollback
 checkpoints. A producer retained in a nested failure context keeps that
 boundary.
 
-The older lowering applies when clauses retain a lazy producer (#246),
+A returning loop with exposed body choices can also resume one direct
+self-recursive producer in its header (#686). Its cursor saves the
+producer's recursion frames and pending continuation between iterations.
+Scalar clauses around the producer stay in the header search. The
+body's alternatives can reuse a row cursor while sharing mutations to
+captured cells.
+
+The older lowering applies when clauses retain other lazy producers (#246),
 a composed choice (#283, #335), an exclusive choice (#314, #331), or a
 continuation for a refining cast or a waiting consumer (#243, #417).
 Each form needs its own resumable search state.
