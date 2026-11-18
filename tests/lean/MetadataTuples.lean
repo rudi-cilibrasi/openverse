@@ -6,6 +6,12 @@ open OpenVerse OpenVerse.Front
 private def fnTy := "type{_()<computes>:int}"
 private def sourcePrefix := "One()<computes>:int=1\nTwo()<computes>:int=2\nPair(A:t,B:u where t:type,u:type)<computes>:tuple(t,u)=(A,B)\nId(X:t where t:type)<computes>:t=X\nRec(N:int,A:t,B:u where t:type,u:type)<computes>:tuple(t,u)=if(N>0)then Rec(N-1,A,B)else(A,B)\n"
 private def cases : List (String × String × Bool) := [
+  ("option-real-column", "    O:=option{(Dummy,F)}\n    if(T:=O?) then T(1)() else 0\n",true),
+  ("option-metadata-column", "    O:=option{(Dummy,F)}\n    if(T:=O?) then T(0)() else 0\n",false),
+  ("nested-real-column", "    T:=Id(((Dummy,F),F))\n    T(0)(1)()\n",true),
+  ("nested-metadata-column", "    T:=Id(((Dummy,F),F))\n    T(0)(0)()\n",false),
+  ("nested-option-real-column", "    O:=option{((Dummy,F),F)}\n    if(T:=O?) then T(0)(1)() else 0\n",true),
+  ("nested-option-metadata-column", "    O:=option{((Dummy,F),F)}\n    if(T:=O?) then T(0)(0)() else 0\n",false),
   ("literal-real-column", "    T:=(Dummy,F)\n    T(1)()\n",true),
   ("literal-metadata-column", "    T:=(Dummy,F)\n    T(0)()\n",false),
   ("forwarded-real-column", "    T:=Id(Pair(Dummy,F))\n    T(1)()\n",true),
@@ -41,7 +47,7 @@ private def checkTupleColumns : IO Unit := do
         if !dummy || accepted || (error.splitOn "dummy type value cannot").length ≤ 1 then
           throw <| IO.userError s!"{name} dummy={dummy}: unexpected refusal {error}"
         IO.println s!"PASS {name} dummy={dummy} REFUSED"
-  IO.println "PASS all 28 tuple-column controls"
+  IO.println s!"PASS all {cases.length * 2} tuple-column controls"
 
 /-- The independent oracle is the union of the two source branch masks,
     rather than the compiler's tuple representation or cache entries. -/

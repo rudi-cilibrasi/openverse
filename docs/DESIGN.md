@@ -662,7 +662,8 @@ Thus a compiler-owned cell can implement a logical local while its actual
 heap writes remain visible to the unchanged `Prog.checkWriteSound` certificate.
 
 `MetadataCells` separates a compiler cell's ordinary runtime identity from
-its payload metadata and immediate tuple columns. Allocation sites retain
+its payload metadata and tracked tuple columns, including tuple payloads
+inside options. Allocation sites retain
 recent and older identities; strong replacement requires one unique,
 unescaped object. Actual-call summaries transport heap state and aliases
 through returns, normal cleanup, rollback snapshots and cancellation.
