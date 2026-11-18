@@ -1,0 +1,54 @@
+advance 3 3 1
+cleanup 3 3 11
+advance 201 201 13
+cleanup 201 201 23
+cleanup 300 300 34
+all 300
+cleanup 300 300 44
+all 10300
+cleanup 300 1300 54
+all 1300
+cleanup 300 1300 64
+all 11300
+advance 201 1201 64
+cleanup 201 1201 74
+cleanup 300 300 85
+all 300
+cleanup 300 300 95
+all 10300
+cleanup 300 1300 105
+all 1300
+cleanup 300 1300 115
+all 11300
+advance 3 1003 115
+cleanup 3 1003 125
+advance 201 201 127
+cleanup 201 201 137
+cleanup 300 300 148
+all 300
+cleanup 300 300 158
+all 10300
+cleanup 300 1300 168
+all 1300
+cleanup 300 1300 178
+all 11300
+advance 201 1201 178
+cleanup 201 1201 188
+cleanup 300 300 199
+all 300
+cleanup 300 300 209
+all 10300
+cleanup 300 1300 219
+all 1300
+cleanup 300 1300 229
+all 11300
+state 229
+advance 3 3 1
+cleanup 3 3 11
+advance 201 201 13
+cleanup 201 201 23
+cleanup 300 1300 34
+first 1300
+state 34
+reject 0
+exit=0

@@ -5114,11 +5114,17 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
   -- normalized: the elaborator's (`TyEnv.fieldOrder`), as an earlier
   -- elaboration noted it (`orders`)
   let fieldOrder (n : String) : FieldOrder := { fields := (orders.lookup n).getD [] }
+  let computableBody (name : String) (f : MFn) : Bool :=
+    !lazy.contains name && f.fx.contains "computes" && !["reads", "writes", "allocates"].any f.fx.contains &&
+      !anyE (fun | .set .. | .decl _ _ _ true _ => true | _ => false) f.body
   let scalarProducer (name : String) : Bool :=
     !eager.contains name && (rawMfs.lookup name).any (fun f =>
       let calls := (namesUsed f.body).filter mv.contains
+      let shape (frames : Bool) :=
+        loopShape? name mv f.body (frames := frames) (params := f.params.map (·.name)) (fieldOrder := fieldOrder)
       calls.contains name && calls.all (· == name) &&
-        (loopShape? name mv f.body (params := f.params.map (·.name)) (fieldOrder := fieldOrder)).isSome)
+        ((shape false).isSome || (!computableBody name f && (shape true).any fun (_, tail) =>
+          !hasContinuation tail)))
   -- Source loop exits become a lazy helper only after its lexical input
   -- types and return target have been recorded in their original world.
   let loopTargets := rawMfs.filterMap fun (owner, original) =>
@@ -5263,11 +5269,8 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
   -- call: when its group is <computes> and keeps no local state, as before,
   -- and nothing it runs prints or calls Err() (`lazy`, after a first
   -- elaboration that found it did)
-  let computable (g : String) : Bool := (groupOf g).all fun h => !lazy.contains h &&
-    match rawMfs.lookup h with
-    | some f => f.fx.contains "computes" && !["reads", "writes", "allocates"].any f.fx.contains &&
-        !anyE (fun | .set .. | .decl _ _ _ true _ => true | _ => false) f.body
-    | none => false
+  let computable (g : String) : Bool := (groupOf g).all fun h =>
+    (rawMfs.lookup h).any (computableBody h)
   -- (#283) the functions one machine takes lazily: a group's strongly
   -- connected functions, and, for one taken lazily (not computable), every
   -- function with several values its code calls, those that one calls, and
