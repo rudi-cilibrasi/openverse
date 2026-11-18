@@ -2,6 +2,12 @@
 
 ## Reference targets
 
+OpenVerse's target is Epic's Verse VM wherever it and the legacy Blueprint
+VM (BPVM) disagree (the owner's decision, 2026-11-18). The compile-time
+rules taken from the UEFN 43.12 results below (3512 `no_rollback`, 3519
+concrete initializers, 3509 subtypes) come from the compiler front end
+both VMs share.
+
 The [Book of Verse's pinned Tests tree](https://github.com/verselang/book/tree/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests)
 contains 636 `.versetest` files. The Book's [development guide](https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/DEVELOPMENT.md#refreshing-tests)
 identifies it as a copy of the compiler's own suite and gives the original
@@ -121,7 +127,8 @@ UEFN 43.12, build `++Fortnite+Release-43.12-CL-60598086`, compiled each
 probe body on 2026-11-18 through the editor's Build Verse Scripts, one body
 at a time in the device wrapper above. A diagnostic's line there is 0-based
 in the wrapped file: the header's 9 lines and a blank line come first, so
-the body's 0-based line is the reported line minus 10.
+the body's 0-based line is the reported line minus 10. These are compiler
+diagnostics, from the front end the Verse VM target shares with the BPVM.
 
 | Probe | UEFN 43.12 compiler |
 | --- | --- |

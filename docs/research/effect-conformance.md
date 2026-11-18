@@ -177,7 +177,8 @@ type without a heap specifier therefore has `no_rollback`, Epic's default,
 and what has it may be called neither from a failure context nor from a
 body whose effects exclude it.
 
-OpenVerse implements this rule as a strict mode, `--default-no-rollback`
+These are diagnostics of the front end the Verse VM target shares with
+the BPVM. OpenVerse implements this rule as a strict mode, `--default-no-rollback`
 (`Options.defaultNoRollback`), **not the default: the default still
 diverges from 43.12 here.** Under the mode, source functions and function
 types without a heap specifier and without `<decides>` are marked

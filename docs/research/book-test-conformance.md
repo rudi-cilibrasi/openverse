@@ -2762,7 +2762,8 @@ Epic's shipped compiler, UEFN 43.12 (build
 `++Fortnite+Release-43.12-CL-60598086`), compiled the probes of
 [`tests/conformance/versevm`](../../tests/conformance/versevm) on
 2026-11-18 ([the results](versevm-live-conformance.md#epic-observations-uefn-4312)).
-openverse follows it where it rules (#515):
+openverse, whose target is the Verse VM, follows its front end where it
+rules (#515):
 
 - An event's `Signal` has the `no_rollback` effect: refused in a failure
   context, a function with a heap specifier and a class's `block:` (3512).
