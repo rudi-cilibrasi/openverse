@@ -4226,7 +4226,7 @@ private structure LoopCapture where
 private inductive ReturnLoopSource where
   | range (index : String) (lower upper : SExpr)
   | collection (item : String) (index : Option String) (source : SExpr)
-  | cursor (clauses : List SExpr) (outputs : List String) (recursive : Option String)
+  | cursor (clauses : List SExpr) (outputs : List String) (recursive : List String)
   | loop
 
 private def forCursorNext (p : Pos) (clauses : List SExpr) (outputs : List String)
@@ -4401,12 +4401,10 @@ private partial def returnLoopSites (owner : String) (f : MFn) (mv : List String
           if scalarProducer name && !args.any (fun arg => liftsHere (markCalls mv arg)) then some name
           else none
         | _ => none
-      let prefixClauses := clauses.takeWhile (fun clause => (producer clause).isNone)
-      let recursive := if prefixClauses.all scalarPrefix &&
-          (clauses.drop (prefixClauses.length + 1)).all scalarPrefix then
-        clauses[prefixClauses.length]?.bind producer
-        else none
-      if (flat || composed || recursive.isSome) && !clauses.any loopConcurrent &&
+      let recursive := if clauses.all (fun clause => (producer clause).isSome || valid clause) then
+          (clauses.filterMap producer).eraseDups
+        else []
+      if (flat || composed || !recursive.isEmpty) && !clauses.any loopConcurrent &&
           !loopBodySupported mv body then
         record scope defers p (.cursor clauses (boundIn clauses) recursive) body
     | .loop p body => record scope defers p .loop body
@@ -4807,7 +4805,7 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
     -- The recursive header has its own continuation. A scalar call keeps
     -- its search out of the body helper's choice machine.
     let advance := match site.source, cursorPacket with
-      | .cursor clauses outputs (some _), some ty@(.opt (.tup [prior, _])) =>
+      | .cursor clauses outputs (_ :: _), some ty@(.opt (.tup [prior, _])) =>
         let body := forCursorNext p (prepareHeader clauses) outputs (.ident p cursorInput)
         [STop.fn p advanceName ({ name := cursorInput, ty := .opt prior } :: caps) tparams f.fx ty body]
       | _, _ => []
@@ -4828,7 +4826,7 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
         let next := call [.optionLit p (project (ident row) 0)]
         let iteration := returnLoopOperands ret site.helper (some noneValue) nested bodyWithCells
         let rest := if loopIterationTerminal iterationBody then [iteration] else [iteration,next]
-        let rows := if recursive.isSome then SExpr.app p (ident advanceName) (ident input :: args) false
+        let rows := if !recursive.isEmpty then SExpr.app p (ident advanceName) (ident input :: args) false
           else forCursorNext p (prepareHeader clauses) outputs (ident input)
         let helperBody := SExpr.block p [.decl p nextRow none false rows,
           .ite p [.decl p row none false (.query p (ident nextRow))]
@@ -5140,10 +5138,10 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
   if !loopTargets.isEmpty then
     -- Even a pure producer can trap in an unused alternative. Keep
     -- recursive header producers lazy in both the probe and the helper.
-    let headers := loopTargets.flatMap fun (_, _, loops, _) => loops.filterMap fun site =>
+    let headers := loopTargets.flatMap fun (_, _, loops, _) => loops.flatMap fun site =>
       match site.source with
       | .cursor _ _ recursive => recursive
-      | _ => none
+      | _ => []
     let lazy := (lazy ++ headers).eraseDups
     let needsCells := loopTargets.any fun (_, _, loops, _) => loops.any fun entry =>
       !entry.boxed.isEmpty || match entry.source with

@@ -366,6 +366,53 @@ def forCursorChoice (p : Pos) (prior : Option Nat) (arms : List ForCursorArm)
     .assign kept (.lit (.logic false)), .assign result (.lit .none)]
   return ⟨(start ++ steps).foldr Expr.seq (.local result), resultTy⟩
 
+private def forCursorProductType (outer inner : ForCursorArm) : Ty :=
+  .tup [.tup [outer.cursor, outer.row], inner.cursor]
+
+/-- Resume the inner search for the active outer row. Commit each step
+    before testing for exhaustion, as the source's nested loops do. -/
+private def forCursorProduct (outer inner : ForCursorArm) (outerBindings : List Local)
+    (prior : Nat) (outcome : Option Nat) : EM R := do
+  let state := forCursorProductType outer inner
+  let outerPacket := Ty.tup [outer.cursor, outer.row]
+  let innerPacket := Ty.tup [inner.cursor, inner.row]
+  let resultTy := Ty.opt (.tup [state, inner.row])
+  let old ← fresh state
+  let outerPending ← fresh (.opt outerPacket)
+  let innerPending ← fresh (.opt innerPacket)
+  let outerRow ← fresh outerPacket
+  let innerRow ← fresh innerPacket
+  let active ← fresh .logic
+  let result ← fresh resultTy
+  let void := Expr.lit .void
+  let project (value : Expr) (index : Nat) := Expr.prim (.tupGet index) [value]
+  let someValue (value : Expr) := Expr.prim .mkSome [value]
+  let bindOuter : Expr :=
+    let fields := project (.local outerRow) 1
+    let bindings := outerBindings.zipIdx.map fun (binding, index) =>
+      Expr.assign binding.slot (project fields index)
+    (Expr.assign outer.input (someValue (project (.local outerRow) 0)) :: bindings).foldr Expr.seq
+      (.seq (.assign active (.lit (.logic true))) void)
+  let resumeOuter := Expr.seq (.assign outerRow (project (.local old) 0))
+    (.seq bindOuter (.seq (.assign inner.input (someValue (project (.local old) 1))) void))
+  let start := [Expr.assign outer.input (.lit .none), .assign inner.input (.lit .none),
+    .assign active (.lit (.logic false)), .assign result (.lit .none),
+    .ite (.assign old (.prim .query [.local prior])) resumeOuter void]
+  let nextOuter := Expr.seq (.assign outerPending outer.next)
+    (.ite (.assign outerRow (.prim .query [.local outerPending]))
+      (.seq bindOuter (.seq (.assign inner.input (.lit .none)) void)) Expr.brkV)
+  let packet := Expr.prim .mkTup [.local outerRow, project (.local innerRow) 0]
+  let accepted := Expr.prim .mkTup [packet, project (.local innerRow) 1]
+  let nextInner := Expr.seq (.assign innerPending inner.next)
+    (.ite (.assign innerRow (.prim .query [.local innerPending]))
+      (.seq (.assign result (someValue accepted)) Expr.brkV)
+      (.seq (.assign active (.lit (.logic false))) void))
+  let search := Expr.loop (.seq (.ite (isTrueIn active) void nextOuter) nextInner)
+  let read := match outcome with
+    | some flag => Expr.ite (isTrueIn flag) (.local result) (.seq .brk (.prim .userErr []))
+    | none => Expr.local result
+  return ⟨(start ++ [search]).foldr Expr.seq read, resultTy⟩
+
 /-- Whether `e` can do something that undoing it would change: print, set an
     object's field, call a function (which may do either), or write a slot
     that `observable` names (a variable of the code around the `for`, or a
@@ -1494,6 +1541,43 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         let input ← coerce p input inputTy
         let result ← forCursorChoice p (some slot) arms prelude
         return { result with e := .seq (.assign slot input) result.e }
+  if let (some request, (g, fs) :: more) := (cursor, gs) then
+    let isRecursive (g : SExpr) : Bool := (Choice.binding? g).any fun binding =>
+      match binding.each with
+      | some (.app _ (.ident _ "$loop") _ false) => true
+      | _ => false
+    if !more.isEmpty && (isRecursive g || more.any (isRecursive ·.1)) && !pre.any isExcl && !fs.any isExcl then
+      let left := pre ++ (g :: fs)
+      let right := more.flatMap fun (next, filters) => next :: filters
+      let outerNames := Choice.boundIn left
+      let makeArm (c : Ctx) (clauses : List SExpr) (names : List String) : EM ForCursorArm := do
+        let step (c : Ctx) (prior : SExpr) :=
+          elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq c p clauses body
+            (prepared := true) (cursor := some { prior, outputs := names })
+        let saved ← get
+        let probe ← step { c with typeOnly := true } (.ident p "false")
+        let .opt (.tup [state, row]) := probe.ty | eerr p "internal: malformed nested cursor arm"
+        let inputTy := Ty.opt state
+        if c.typeOnly then
+          return { cursor := state, row, input := ← fresh inputTy, next := .lit .none }
+        restoreConstructProbe c saved
+        let input ← fresh inputTy
+        let name := s!"$cursorInput{input}"
+        let binding : Local := { name, slot := input, ty := inputTy, mutable := false }
+        let next ← step { c with locals := binding :: c.locals } (.ident p name)
+        unless next.ty == probe.ty do eerr p "internal: nested cursor arm changed type"
+        return { cursor := state, row, input, next := next.e }
+      let outer ← makeArm ctx left outerNames
+      let .tup rowTypes := outer.row | eerr p "internal: malformed nested cursor row"
+      let locals ← (outerNames.zip rowTypes).mapM fun (name, ty) => do
+        return { name, slot := ← fresh ty, ty, mutable := false : Local }
+      let inner ← makeArm { ctx with locals := locals.reverse ++ ctx.locals } right request.outputs
+      let inputTy := Ty.opt (forCursorProductType outer inner)
+      let input ← elabE ctx request.prior (some inputTy)
+      let slot ← fresh inputTy
+      let input ← coerce p input inputTy
+      let result ← forCursorProduct outer inner locals slot ctx.forOutcomeSlot
+      return { result with e := .seq (.assign slot input) result.e }
   let cursorGroups := if cursor.isSome && gs.isEmpty then
     [(.gen p s!"$cursorUnit{p.line}_{p.col}" none (.arrayLit p [.tuple p []]), [])]
     else gs
