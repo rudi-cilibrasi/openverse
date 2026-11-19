@@ -9342,8 +9342,8 @@ Tests/ParametricFunctions.versetest:411	agrees
 Tests/ParametricFunctions.versetest:416	agrees
 Tests/ParametricFunctions.versetest:421	agrees
 Tests/ParametricFunctions.versetest:426	agrees
-Tests/ParametricFunctions.versetest:431	disagrees-accepts
-Tests/ParametricFunctions.versetest:438	disagrees-accepts
+Tests/ParametricFunctions.versetest:431	agrees
+Tests/ParametricFunctions.versetest:438	agrees
 Tests/ParametricFunctions.versetest:454	agrees
 Tests/ParametricFunctions.versetest:459	agrees
 Tests/ParametricFunctions.versetest:464	disagrees-refuses
@@ -9352,7 +9352,7 @@ Tests/ParametricFunctions.versetest:475	agrees
 Tests/ParametricFunctions.versetest:480	agrees
 Tests/ParametricFunctions.versetest:485	agrees
 Tests/ParametricFunctions.versetest:490	disagrees-refuses
-Tests/ParametricFunctions.versetest:496	disagrees-accepts
+Tests/ParametricFunctions.versetest:496	agrees
 Tests/ParametricFunctions.versetest:501	not-translatable
 Tests/ParametricFunctions.versetest:508	agrees
 Tests/ParametricFunctions.versetest:519	agrees

@@ -607,23 +607,49 @@ parameters (9200), identifiers past 1024 characters (3655) and class
 names past 1023 (9002), enums past 256 values (3552), an interface's
 abstract method implemented only below the interface (3591), no packing
 of several arguments into a tuple parameter beside a named one (3509),
-and `spawn`'s `no_rollback` (3512). Not taken: a method's mangled name
-(its limit counts the project's path), and the parametric `var` fields
-(3552, 3502), which refuse 32 of openverse's own test programs and
-change the refusal of 4 error tests. The function-value
-coercions (3502) are another change's.
-[`followup-book3/`](../../tests/conformance/versevm/followup-book3) asks
-the edges the evidence leaves open, one construct each, with OpenVerse's
-verdict in each header: names differing only in case under other
-parameter names, beside a named parameter, in a subclass, as two classes,
-a function and a constant, an interface's methods; a class of 1023
-characters, a field, a function and a struct of 1024, mangled names (a
-class of 1000 with `F()`, one of 976 with `Function()`); an interface
-default beside a class's method of its name; mutable data through another
-class's field, in a body, in a field not of the parameter; the named
-argument given, an array parameter beside a named one, packing without
-one; a spawn in a condition, in a class's `block:`, at the top of a plain
-`<decides>` body.
+`spawn`'s `no_rollback` (3512), and the parametric `var` fields (3552,
+3502), with `--parametric-var-fields` to keep openverse's extension (32
+of openverse's test programs and 4 error tests take it). Not taken: a
+method's mangled name with parameters (its limit counts names openverse
+does not have). The function-value coercions (3502) are another change's.
+
+[`followup-book3/`](../../tests/conformance/versevm/followup-book3) asked
+the edges the evidence left open, one construct each: names differing
+only in case under other parameter names, beside a named parameter, in a
+subclass, as two classes, a function and a constant, an interface's
+methods; long names; an interface default beside a class's method of its
+name; mutable data through another class's field, in a body, in a field
+not of the parameter; the named argument given, an array parameter
+beside a named one, packing without one; a spawn in a condition, in a
+class's `block:`, at the top of a plain `<decides>` body. UEFN 43.12
+compiled them one at a time on 2026-11-19 (~16:45Z, `compile-book3.json`):
+13 as openverse had them; it refused two classes whose names differ only
+in case (9002, "Found existing type 'CC' that is already being created
+this compile"), an interface's two such methods (9200), an array of
+several arguments beside a named parameter (3509), mutable data through a
+class's field (3552), and the long names, which a bisection on the same
+build then measured, for definitions without parameters:
+
+| What | Longest admitted | Shortest refused |
+| --- | ---: | ---: |
+| a field of a class, a local constant | 1004 | 1005 |
+| a module function | 990 | 991 |
+| a class with a field only | 1023 | 1024 (9002) |
+| that class with a method `F()` | 983 | 984 |
+| a method in a class `holder` | 981 | 982 |
+| a struct | | 1024 (9002, "Cannot find struct"); a struct name of 1016 characters crashed the editor |
+
+openverse follows all 22 since (the length limits as constants citing
+these measurements). [`followup-book4/`](../../tests/conformance/versevm/followup-book4)
+asks the edges of those rules: two structs, interfaces, enums, a class
+and a struct, an interface or an enum of case-different names (refused by
+openverse), a class and a function so named, a class in a module and one
+at the top level (admitted); a generic parameter beside a named one
+(admitted, packed into a tuple); a method and a module function with a
+parameter at the measured limits, a parameter and a module constant of
+1005 characters, an interface and an enum of 1023; mutable data through a
+struct's field (admitted), in an array type and a method's own type
+parameter (refused). Not yet compiled by Epic.
 
 Of the 323 refusals of `verse_vm_only` cases, all but one are of forms
 UEFN 43.12 refuses too, or that the sentinels above ask: `union` (138: the
