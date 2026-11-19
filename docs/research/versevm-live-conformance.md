@@ -290,9 +290,13 @@ agreeing.
 | `sticky-event-subscribe` | refused, 3506 "Unknown identifier `sticky_event`" (it asks for `using { /Verse.org/Restricted }`) | admitted: `subscribed`, `sticky 2`, `after` |
 
 So a `Signal` resumes its awaiters, then calls the functions subscribed
-at that point. Two probes ask what that rule leaves open and have not run
-yet: `cancel-from-awaiter` (a subscription a resumed awaiter cancels) and
-`await-from-subscriber` (an await a called function starts).
+at that point. Two probes asked what that rule leaves open and ran on
+the Verse VM at 09:43Z, both printing what OpenVerse prints:
+`cancel-from-awaiter` (a subscription a resumed awaiter cancels is skipped
+by that `Signal`: `awaiter 1`, `after signal 1`, `after signal 2`) and
+`await-from-subscriber` (an await a called function starts is resumed by
+the next `Signal`: `handler 1`, `after signal 1`, `waiter 2`, `handler 2`,
+`after signal 2`).
 
 ## Running many probes
 
