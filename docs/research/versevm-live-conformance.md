@@ -157,6 +157,17 @@ results for all twelve. The probes `compound-object-alias`,
 `compound-index-appended` are not yet run on Epic; each header gives
 OpenVerse's output and the other reading's.
 
+### Fingerprint and Book probes ([#724](https://github.com/rudi-cilibrasi/openverse/issues/724))
+
+The same build, the same day: Verse VM sessions had "Use Verse VM" on (the
+ticket carried `newVerseVm=true`), Blueprint VM sessions had it off. The
+lines are shown without the `OVPROBE` marker. Where the two VMs disagree,
+OpenVerse follows the Verse VM (the owner's decision).
+
+| Probe | Verse VM | Blueprint VM | OpenVerse before | OpenVerse now |
+| --- | --- | --- | --- | --- |
+| [`vm-sleep-zero-yields`](../../tests/conformance/versevm/fingerprint/vm-sleep-zero-yields.verse) | `worker before sleep`, `main after spawn`, `worker after sleep`, `main after wait` | the same | `worker after sleep` before `main after spawn`: `Sleep(0.0)` completed at once (#608) | the VMs': `Sleep(0.0)` yields, a tick ([the rule](scheduler-conformance.md#sleep00-yields)) |
+
 ## OpenVerse observations
 
 On the tested head of [#702](https://github.com/rudi-cilibrasi/openverse/pull/702),

@@ -1237,7 +1237,7 @@ same 110 and 56 were measured before the merge: 7,842, 1,710, 136, 95).
 |---|---|---|---|
 | `ToString` of a float: six digits after the point, the exact value rounded half to even, every integer digit, the sign kept, as the API and `FloatToString.versetest` (Verse Core's `VFloat.fixed6`, the C runtime's `%.6f`) | 7 different | 7: `Intrinsics/FloatToString.versetest` 15, 18, 19, 21, 22, 23, 24 | 0 (25 and 26 use the test runner's `FloatConstants`) |
 | the bitwise functions, written with Verse Core's operations on 64-bit ints (no Core, format or runtime change) | 159 refused | 103: `Math/Bitwise.versetest`'s 84 untagged cases within int64, its 13 `bp_vm_only` cases (the overflow error), and 6 `verse_vm_only` ones whose result is the same (a negative count's failure, a runtime error) | 56 `verse_vm_only` cases now differ (cause int-precision, 26 → 82): they assume unbounded ints, and their own operands overflow here (`9223372036854775807 + 1`, `Pow2_64`), the Blueprint VM's documented behaviour, as the 26 before them |
-| `Sleep(S)` rounds up; `Sleep(0.0)` completes at once | none translatable (the Book tests no `Sleep`; ch. 14's examples are not run by the harness) | | |
+| `Sleep(S)` rounds up; `Sleep(0.0)` completes at once (yields again since Epic's VMs were measured, UEFN 43.12) | none translatable (the Book tests no `Sleep`; ch. 14's examples are not run by the harness) | | |
 
 `scripts/book-conformance.sh compare` reports the 56 as worse (a refusal
 became a different result); each is a `verse_vm_only` case of unbounded

@@ -3704,9 +3704,10 @@ Main()<suspends>:void =
   to wait, as `sync`'s arms can (the Book's tests, "Ensure all top-level
   expressions in race/rush are async", `Concurrency.versetest:831`; the
   prose is silent): an arm that cannot is refused. An arm that ends without
-  waiting, such as one that starts with `Sleep(0.0)` (which completes at
-  once, as in ch. 14's example of a race resolved before its last arm
-  starts), wins at once, and the arms after it never start. The losers that
+  waiting, such as one whose only suspending call is of a suspends function
+  that does not wait, wins at once, and the arms after it never start
+  (`Sleep(0.0)` waits a tick, below, so an arm that starts with it no
+  longer wins before the next arm starts, as in ch. 14's example). The losers that
   started are cancelled at once, last started first: each unwinds from where
   it waits, running the `defer:` blocks active there, those of the functions
   it called first.
@@ -3945,17 +3946,22 @@ Main()<suspends>:void =
   uses the binary64 product `T = 30·S` rounded up, `Ceil(T)`, at least
   one tick, for a supported positive finite input, also a subnormal one:
   a sleep wakes at the first tick at or after its deadline (the Book's API
-  reference). `Sleep(0.0)` (and `-0.0`, which is `0.0`) completes at once,
-  without suspending, as the Book's tested examples have it: it gives
-  neither other tasks nor a cancellation a turn, so a loop that should
-  give way sleeps a positive time (`Sleep(0.01)` is one tick). The product must
+  reference). `Sleep(0.0)` (and `-0.0`, which is `0.0`) yields: it waits
+  one tick, as any duration of at most one does, so other tasks and a
+  cancellation get their turn, as Epic's Verse VM and Blueprint VM both do
+  (UEFN 43.12, `++Fortnite+Release-43.12-CL-60598086`, probe
+  `vm-sleep-zero-yields`) and the Book's API reference says ("0.0 resumes on
+  the next update and, crucially, does yield"); the Book's tested examples
+  of ch. 14, which had it complete at once, are not followed (they were,
+  from #608 until this change). The product must
   be below `2^63`; the largest supported binary64 duration is exactly
   `307445734561825792.0` seconds, giving `2^63 − 2048` ticks. The next
   binary64 duration, `307445734561825856.0`, is outside this domain.
   An unsupported finite input terminates immediately with `error: user`;
   it is a fatal runtime error, not a failable result or an infinite wait.
   `Sleep(Inf)` alone is the intentional indefinite timer; a negative or
-  NaN input returns at once. The virtual clock starts at zero and ranges
+  NaN input returns at once, without yielding (not yet checked against
+  Epic's VMs: the follow-up probe `sleep-negative-yields`). The virtual clock starts at zero and ranges
   through `2^63 − 1`: if current time plus the requested ticks exceeds
   that maximum, checked addition terminates with `error: overflow`, without
   wrapping or clamping. These are reference-clock limits, not measured
@@ -4016,7 +4022,7 @@ Main()<suspends>:void =
 | A recursive function with several values whose only calls of itself are in failure contexts of its own code | not stated (the Verse Calculus: a call is its body) | inlined, as a function recursive only through another function that consumes it is (the contexts are functions of their own): where its clauses fail in a `for`'s clauses (which keeps the old rule for now, as any `for` taking a call of a function with several values), what those clauses did since their last generator is undone with them, as for any inlined call, not kept as at a lazily taken call, which is a generator of its own (#283): **the Book is silent** |
 | A clause of a `for` with a choice in it | (the Book has no choice; ch. 7: "Each filter must be failable") | a generator over its values, as a clause that calls a function with several values is: not a filter, so it need not fail (`for (X := 1..2, set N = (1 \| 2))` runs the body for each value); the statements of a function with several values that a `for` takes are the function's, not the `for`'s filters |
 | Precedence of `\|` | (not in the Book) | below `+`, above the comparisons: `X = 1 \| 2` is `X = (1 \| 2)` (#208) |
-| `Sleep(0.0)` | "may resume in the same tick" (ch. 14), "One frame" (ch. 14); the API reference: it always yields; the tested ch. 14 examples (`03`, `05` to `11`): it completes at once, in a `race`, a `sync` and plain code: the Book disagrees with itself ([the rules](research/scheduler-conformance.md#sleep00-completes-at-once)) | the tested examples': completes at once, without suspending, as a negative or NaN duration does |
+| `Sleep(0.0)` | "may resume in the same tick" (ch. 14), "One frame" (ch. 14); the API reference: it always yields; the tested ch. 14 examples (`03`, `05` to `11`): it completes at once, in a `race`, a `sync` and plain code: the Book disagrees with itself ([the rules](research/scheduler-conformance.md#sleep00-yields)) | **Epic's**: it yields, as both of Epic's VMs do (UEFN 43.12, `++Fortnite+Release-43.12-CL-60598086`, `vm-sleep-zero-yields`), and as the API reference says: it waits one tick, the next update; a negative or NaN duration completes at once |
 | `Sleep(S)` rounding | the API: "a sleep resumes on the first update at or after its deadline and never sooner than the next one. Short sleeps therefore round up"; no tick rate | the first tick at or after the deadline: the binary64 product `30·S` rounded up, at least one tick (`Sleep(0.04)` takes 2 ticks; `Sleep(0.1)`, whose product is exactly 3.0, 3); bounded inputs and checked clock accumulation follow the explicit reference policy above (#514) |
 | End of a program with tasks | not stated | the program ends when `Main` does; a `Main` that waits with no task able to run is an error (exit 2) (#156) |
 | Order of a `subscribable_event`'s functions | the API: "invoked in a randomised order on every signal", "only after every waiting task has been resumed"; ch. 14's example lists them in subscription order | subscription order, after the tasks awaiting the event went on inside `Signal` (#210) |

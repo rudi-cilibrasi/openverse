@@ -24,7 +24,7 @@ registered; a cancelled task's awaiters wait for ever (the Book's API)."""
 import random, sys, os
 from collections import Counter
 
-TICKS = {"0.0": 0, "0.1": 3, "0.2": 6, "0.3": 9, "0.5": 15, "1.0": 30}
+TICKS = {"0.0": 1, "0.1": 3, "0.2": 6, "0.3": 9, "0.5": 15, "1.0": 30}
 DURS = list(TICKS)
 
 
@@ -169,10 +169,8 @@ S = None  # the scheduler of the current model run
 
 def m_sleep(d):
     ticks = TICKS[d] if isinstance(d, str) else d
-    # (Sleep(0.0) completes at once, without suspending: the Book's tested
-    # examples in ch. 14; any positive duration waits at least one tick)
-    if ticks == 0:
-        return
+    # (Sleep(0.0) waits one tick, as any duration below one does: it yields
+    # and resumes on the next update, as Epic's VMs do, UEFN 43.12)
     wake = S.clock + max(1, ticks)
     S.sleepers[wake] += 1
     try:
@@ -627,6 +625,8 @@ def exec_stmt(s, fr, owner=None):
         S.p(f"{env['Tag']} {s.label} {env['N']}")
     elif k == "sleep":
         yield from m_sleep(s.d)
+    elif k == "nowait":
+        pass
     elif k == "branch":
         sn = fr.counter; fr.counter += 1
         r = Root("branch", None, owner=S.cur_task())
@@ -818,11 +818,12 @@ class Gen:
             for ai in range(na):
                 imm = (c != "sync" and ai == na - 1 and r.random() < 0.1)
                 body, sc = self.block(scope, depth + 1, in_branch, r.randint(0, 2), need_wait=not imm)
-                # (an arm that may end without waiting starts with Sleep(0.0),
-                # which completes at once: every arm of a race or a rush can
-                # suspend, the Book's tests, Concurrency.versetest:831)
+                # (an arm that may end without waiting starts with Nw(), a
+                # suspends function that does not wait: every arm of a race or
+                # a rush can suspend, the Book's tests, Concurrency.versetest:831;
+                # Sleep(0.0) yields, as Epic's VMs do, UEFN 43.12)
                 if imm:
-                    body.insert(0, St("sleep", d="0.0"))
+                    body.insert(0, St("nowait"))
                 if r.random() < 0.5:
                     body.insert(0, St("defer", label=self.fresh("ad")))
                 body.append(St("print", label=self.fresh("ap")))
@@ -1021,6 +1022,8 @@ def emit_stmt(s, ind):
         return [p + f'Print("{{Tag}} {s.label} {{N}}")']
     if k == "sleep":
         return [p + f"Sleep({s.d})"]
+    if k == "nowait":
+        return [p + "Nw()"]
     if k == "defer":
         out = [p + "defer:", p + f'    Print("{{Tag}} {s.label} {{N}}")']
         if getattr(s, "kill", None):
@@ -1098,7 +1101,8 @@ def emit_stmt(s, ind):
     raise ValueError(k)
 
 
-PRELUDE = '''pt := class:
+PRELUDE = '''Nw()<suspends>:void = {}
+pt := class:
     K:int
 bx(t:type) := class:
     V:t

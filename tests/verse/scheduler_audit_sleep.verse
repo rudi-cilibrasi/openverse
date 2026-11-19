@@ -1,6 +1,8 @@
-# Reference-clock trace: negative, NaN and zero durations complete at once,
-# without yielding (zero: the Book's tested examples in ch. 14); a positive
-# one waits for the first tick at or after its deadline, at least one.
+# Reference-clock trace: negative and NaN durations complete at once,
+# without yielding; zero yields and resumes on the next tick, as Epic's
+# Verse VM and Blueprint VM do (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# probe vm-sleep-zero-yields); a positive one waits for the first tick at or
+# after its deadline, at least one.
 Main()<suspends>:void=
     sync:
         block:
@@ -10,7 +12,7 @@ Main()<suspends>:void=
             Sleep(0.0/0.0)
             Print("nan")
             Sleep(0.0)
-            Print("zero, at once")
+            Print("zero resumed")
         block:
             Print("peer started")
             Sleep(0.01)

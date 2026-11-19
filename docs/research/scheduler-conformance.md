@@ -39,7 +39,7 @@ the sources disagree, the table records that disagreement.
 | Rule | Upstream evidence | Reference scheduler and trace evidence | Classification |
 | --- | --- | --- | --- |
 | Clock and positive delays | The Book uses simulation updates. Epic permits variable update durations, independent of rendering. Neither cited timing description specifies a fixed 30 Hz rate. The Book's API reference (`Sleep`, line 3939): "a sleep resumes on the first update at or after its deadline and never sooner than the next one. Short sleeps therefore round up". | A virtual 30 Hz clock skips idle ticks. Supported positive finite delays use `max(1, Ceil(30*S))` after binary64 multiplication: the first tick at or after the deadline ([the Book's rules](#the-books-scheduler-rules)). In [sleep](../../tests/verse/scheduler_audit_sleep.verse), `Sleep(0.04)` (1.2 ticks) completes at the second tick, after the first one-tick sleeper. | The API's rounding up; the 30 Hz rate is the reference clock's, no engine-rate claim. |
-| Zero delay | The pinned Book's NextTick discussion permits same-tick resumption for `Sleep(0.0)`; its tested ch. 14 examples have it complete at once. Epic's Sleep page and the Book's API reference specify the next update. | Zero completes at once, without yielding, as negative and NaN durations do ([the Book's rules](#sleep00-completes-at-once)); in [sleep](../../tests/verse/scheduler_audit_sleep.verse) the zero sleeper goes on before its peer starts. | The Book's tested examples; its prose and API differ. |
+| Zero delay | The pinned Book's NextTick discussion permits same-tick resumption for `Sleep(0.0)`; its tested ch. 14 examples have it complete at once. Epic's Sleep page and the Book's API reference specify the next update. Epic's Verse VM and Blueprint VM, UEFN 43.12 (`++Fortnite+Release-43.12-CL-60598086`), both yield (probe `vm-sleep-zero-yields`). | Zero yields and waits one tick, the next update, as any positive duration of at most a tick does ([the rule](#sleep00-yields)); in [sleep](../../tests/verse/scheduler_audit_sleep.verse) the zero sleeper resumes after its peer started. Negative and NaN durations complete at once. | Epic's VMs, measured, and the API; the tested examples and the prose differ. |
 | Negative, NaN and infinite delays | Epic describes negative durations as immediate and positive infinity as indefinite. The cited API does not specify NaN. | Negative/NaN durations return immediately; positive infinity never wakes. [Sleep](../../tests/verse/scheduler_audit_sleep.verse), [cancel](../../tests/verse/scheduler_audit_cancel.verse) and [deadlock](../../tests/verse/scheduler_audit_deadlock.verse) separate these cases. | Negative/infinite cases follow the API; NaN is a reference choice. |
 | Numeric limits | The cited timing sources give no matching finite cutoff or int64 accumulation limit. | The binary64 product `30*S` must be below `2^63`. Finite inputs outside that domain terminate immediately with `error: user`; they do not become infinite waits. Current time plus the rounded ticks uses checked int64 addition and terminates with `error: overflow` beyond the clock maximum. [Bounds](../../tests/verse/scheduler_audit_clock_bounds.verse) now completes across the former cutoff; [overflow](../../tests/verse/scheduler_audit_clock_overflow.verse) retains its deliberate overflow result. | Explicit bounded reference-clock policy ([#514](https://github.com/rudi-cilibrasi/openverse/issues/514)); not measured engine limits. |
 | Structured completion and ties | The Book and Epic tutorial describe sync waiting for all, race cancelling losers, and rush allowing unfinished work to continue. | Arms run to a wait/end in source order. Same-tick race completion chooses the earlier arm; an immediate winner prevents later arms from starting. [Ties](../../tests/verse/scheduler_audit_ties.verse) records winner and cleanup. | Common completion behavior; the exact tie/start/cleanup ordering here is the tested reference policy, not a measured engine trace. |
@@ -80,9 +80,8 @@ checked-int/heap proofs remain the trust boundary.
 
 Positive infinity alone is the intentional indefinite input. Negative
 values (including negative infinity) and NaNs retain their immediate
-reference behavior, as both signed zeros now do (the tested examples of
-ch. 14, [below](#sleep00-completes-at-once)); positive subnormals wait at
-least one tick. Infinite terminal deadlock and unsupported finite input
+reference behavior; both signed zeros wait one tick, as Epic's VMs do
+([below](#sleep00-yields)), and so do positive subnormals. Infinite terminal deadlock and unsupported finite input
 share the generic `error: user` text, but differ observably: the
 [invalid finite race](../../tests/verse/clock_domain_fatal_first_unsupported.verse)
 errors before its peer starts, while the
@@ -194,9 +193,16 @@ what openverse does now.
   (#514) is unchanged: products at or above 2^52 are integers, so the
   largest supported duration and its ticks are the same.
 
-### `Sleep(0.0)` completes at once
+### `Sleep(0.0)` yields
 
-The Book disagrees with itself.
+The Book disagrees with itself, and both of Epic's VMs settle it: on
+UEFN 43.12 (`++Fortnite+Release-43.12-CL-60598086`), 2026-11-18, the probe
+[`vm-sleep-zero-yields`](../../tests/conformance/versevm/fingerprint/vm-sleep-zero-yields.verse)
+printed `worker before sleep`, `main after spawn`, `worker after sleep`,
+`main after wait` in sessions with "Use Verse VM" on and off alike: the
+spawned task's `Sleep(0.0)` gave `Main` its turn. OpenVerse follows them
+(the owner's rule: Epic's Verse VM where it and the Book disagree), and
+the API reference, which agrees.
 
 - **Prose** (ch. 14): `14_concurrency.md:1210`, "`Sleep(0.0)      # One
   frame, the smallest possible delay`"; `:1213-1219`, "While it does not
@@ -223,19 +229,30 @@ The Book disagrees with itself.
   `Sleep(0.0)` on the task's path completed without suspending: the
   spawned task ran to its end within the `spawn`.
 - **Book tests** (`Tests/`): none call `Sleep(0.0)`.
-- **openverse:** the tested examples': `Sleep(0.0)` (and `-0.0`, which is
-  `0.0`) completes at once, without suspending, as a negative or NaN
-  duration does; it is no suspension point, so neither cancellation nor
-  other tasks get a turn there. Until now it always yielded, to the next
-  tick. A positive duration, however small, waits at least one tick
-  (`Sleep(0.01)` is one tick, rounded up). The audit had proposed a
-  narrower rule ("complete without yielding when no other task is
-  runnable at that point of a `race`'s first pass"); the examples `03`,
-  `10` and `11` show the same in a `sync` and in plain code, and openverse
-  has no notion of a task that is runnable without running it, so the rule
-  is the examples' without a condition. A loop whose only wait is
-  `Sleep(0.0)` never lets another task run (the API says the same of a
-  negative duration); a loop that should give way writes a positive one.
+- **openverse:** Epic's: `Sleep(0.0)` (and `-0.0`, which is `0.0`)
+  suspends and resumes on the next tick, as a positive duration of at most
+  one tick does (`sleepResume` takes a zero as a positive duration: `30·0`
+  rounded up, at least one tick). Cancellation and other tasks get a turn
+  there, so a loop whose only wait is `Sleep(0.0)` lets them run, as the
+  API says. A negative or NaN duration still completes at once, without
+  suspending (Epic's VMs not yet measured: the follow-up probe
+  [`sleep-negative-yields`](../../tests/conformance/versevm/followup-conc/sleep-negative-yields.verse)).
+  Whether Epic resumes a zero sleep in the same update when nothing else
+  is pending (the prose's "may resume in the same tick") is not settled by
+  the probe, which has `Main` sleep 0.1 s; the follow-up probe
+  [`sleep-zero-next-update`](../../tests/conformance/versevm/followup-conc/sleep-zero-next-update.verse)
+  tells the two apart.
+- **History:** until #608 a zero sleep yielded to the next tick (#156);
+  #608 made it complete at once, after the tested examples, which the
+  audit had proposed as a narrower rule ("complete without yielding when no
+  other task is runnable at that point of a `race`'s first pass"); this
+  change returns to the yield, after Epic's VMs. The tests and generators
+  that #608 moved to `Sleep(0.01)` keep it (one tick under either rule);
+  those that relied on a zero sleep completing at once now call a suspends
+  function that does not wait (`sync_race`, `task_cancel_race_loser_then_end`,
+  `task_cancel_rush_loser`, the scheduler models' immediate arms, `Nw()`);
+  [`sleep_zero_yields`](../../tests/verse/sleep_zero_yields.verse) runs the
+  tested examples' shapes and the probe's under the new rule.
 
 ### Awaiters run inside `Signal`
 
