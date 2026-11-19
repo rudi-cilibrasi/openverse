@@ -3339,6 +3339,17 @@ def toStringOf (p : Pos) (r0 : R) : EM Expr := do
   | .arr .char => pure r.e
   | t => eerr p s!"no ToString for {t.show} (Verse defines it for int, float, char, char32 and string)"
 
+/-- (#724) For an arity message: why `found` positional arguments do not
+    fit `s`'s single tuple parameter (after `off` receivers) when it has a
+    named one too, where `packCallArgs` packs none (UEFN 43.12: 3509). -/
+def namedPackNote (s : Sig) (off found : Nat) : String :=
+  match s.params.drop off |>.take (s.params.length - s.named.length - off) with
+  | [.tup _] =>
+    if found > 1 && !s.named.isEmpty then
+      ": several arguments are not packed into a tuple parameter beside a named one, since the function's parameter is then the tuple of all its parameters; write the tuple, (…) (Epic's Verse compiler, UEFN 43.12: error 3509, \"This function parameter expects a value of type tuple(…), but this argument is an incompatible value\")"
+    else ""
+  | _ => ""
+
 /-- Canonicalise the user positional arguments before binding a call. A
     receiver is not part of the argument tuple; named arguments retain their
     written order. A lone scalar keeps its meaning for arrays and bare type
@@ -3356,6 +3367,14 @@ def packCallArgs (p : Pos) (s : Sig) (args : List SExpr)
   match pt with
   | .void => if user.isEmpty then return packed (.tuple p []) else return args
   | .tup _ =>
+    -- (#724: not beside a named parameter. The function's parameter is
+    -- then the tuple of its parameters, named ones included, which several
+    -- arguments do not fit: UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+    -- refuses F(1.0, 2.0) of F(X:tuple(float, float), ?E:float = 0.1),
+    -- error 3509, followup-book2/overload-tuple-named-call, and admits
+    -- F((1.0, 2.0), ?E := 10.0), the control; the Book's tests,
+    -- Bugs/FORT-744399-DefaultTupleFieldsCrashComplier.versetest:62)
+    if user.length > 1 && !s.named.isEmpty then return args
     if user.length != 1 then return packed (.tuple p user)
     if let .tup [_] := pt then
       let [a] := user | return args

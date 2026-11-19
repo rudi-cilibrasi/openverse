@@ -2930,6 +2930,11 @@ openverse takes Epic's compiler's refusals, one commit each (#724):
   relied on the Java reading: four now implement the method in the class,
   and two error tests give the interface a default, which keeps the
   signature check they test.
+- **No packing beside a named parameter** (3509): several positional
+  arguments are not packed into the single tuple parameter of a function
+  that has a named one too; the arity message says why and cites 3509.
+  `Bugs/FORT-744399-DefaultTupleFieldsCrashComplier.versetest:62` moves to
+  agree. Four of openverse's tests (#501's packing) write the tuple out.
 
 ## Not covered, and why it matters
 

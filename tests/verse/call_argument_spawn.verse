@@ -1,4 +1,7 @@
 # Packed values/defaults are bound before spawn; cancellation unwinds once.
+# (#724: beside a named parameter the tuple is written out: Epic's compiler packs no
+# several arguments into a tuple parameter there, UEFN 43.12 error 3509,
+# followup-book2/overload-tuple-named-call)
 state:=class:
     var N:int=0
 Mark(S:state,Name:string,V:int):int=
@@ -22,9 +25,9 @@ Receiver(S:state):worker=
     child{}
 Main()<suspends>:void=
     S:=state{}
-    T:=spawn{Go(Mark(S,"left",1),Mark(S,"right",2),?B:=Mark(S,"named",3))}
+    T:=spawn{Go((Mark(S,"left",1),Mark(S,"right",2)),?B:=Mark(S,"named",3))}
     Print("spawned {S.N}")
     T.Cancel()
-    U:=spawn{Receiver(S).Go(Mark(S,"mleft",4),Mark(S,"mright",5),?B:=Mark(S,"mnamed",6))}
+    U:=spawn{Receiver(S).Go((Mark(S,"mleft",4),Mark(S,"mright",5)),?B:=Mark(S,"mnamed",6))}
     Print("spawned method {S.N}")
     U.Cancel()

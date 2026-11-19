@@ -38,7 +38,11 @@ Main():void=
     else:
         ty, args, expr, answer = 'tuple(int,tuple(int,int))', [a, (b, c)], 'P(0)*10+P(1)(0)*3+P(1)(1)', a*10+b*3+c
 
-    named = context != 'function_value'
+    # (#724: several arguments are not packed into a tuple parameter beside a
+    # named one, UEFN 43.12 error 3509, followup-book2/overload-tuple-named-call:
+    # the tuple shapes take no named parameters; one argument, none, or an
+    # array's elements still pack beside them)
+    named = context != 'function_value' and shape not in ('tuple', 'nested')
     params = 'P:' + ty
     if named:
         params += ',?A:int,?B:int,?D:int=block{Print("default");A+B}'
