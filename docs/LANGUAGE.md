@@ -3240,14 +3240,15 @@ Main():void =
   (Epic: "i64 cast failed"), and `int[2^63]` succeeds, as `int[X]` does for
   every int (Epic: "int cast succeeded").
 - A known difference, kept by the owner's decision (#724): Epic's Verse VM
-  computes the operators, comparisons, map keys, `Min`, `Max`, and `Floor`
-  and `Ceil` of a rational past 64 bits, but its native `Quotient` and
-  `Clamp` stop with a runtime error, "Value exceeds the range of a 64 bit
+  computes the operators, comparisons, map keys, `Min`, `Max`, `Abs`,
+  `Sgn`, array and tuple equality, and `Floor` and `Ceil` of a rational
+  past 64 bits, but its native `Quotient`, `Mod` and `Clamp` stop with a runtime error, "Value exceeds the range of a 64 bit
   integer", when an argument is beyond 64 bits, also for a zero divisor
   (`Quotient[2^63, 0]`). openverse does not imitate those native errors: it
-  gives the exact result, and fails on a zero divisor. What Epic's `Mod`,
-  `Sgn` and `Abs` do with such an argument, and its equality of arrays and
-  tuples holding one, is not yet observed (follow-up probes).
+  gives the exact result, and fails on a zero divisor. At the length
+  limit they differ too: on Epic the multiplication whose result reaches
+  2^20 bits does not return (`int-length-steps`), where openverse raises
+  the overflow error.
 - An int has at most 2^20 bits (its magnitude is below 2^(2^20)): a longer
   result is the overflow error, exit 2, as a 64-bit overflow was. This is
   the Verse VM's `MaxLengthBits`, which the Book's `verse_vm_only` tests pin

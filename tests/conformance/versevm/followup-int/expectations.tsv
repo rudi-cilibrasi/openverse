@@ -7,8 +7,8 @@ int-float-floor-big	verse_api_overrides.md, Floor(float)	runtime-error	before fl
 int-index-big	-	-	-	ran	index failed|negative index failed|set failed	Same. OpenVerse: index failed|negative index failed|set failed.
 int-range-big	-	-	-	ran	count 4|two above	Same. OpenVerse: count 4|two above.
 int-map-key-big	-	-	-	ran	found 2^63|found 2^126|one entry	Same. OpenVerse: found 2^63|found 2^126|one entry.
-int-length-max	Tests/Math/Bitwise.versetest:221	ran	longest computed|longer than half	no-output	-	Unsettled: three Epic sessions printed nothing and reported no error, and the game then left the startable state; cause unknown. OpenVerse: longest computed|longer than half (the Book's MaxLengthBits, 2^20, for shifts).
-int-length-over	Tests/Math/Bitwise.versetest:222	runtime-error	half computed	no-output	-	Unsettled: three Epic sessions printed nothing, not even half computed, and reported no error; cause unknown. OpenVerse: half computed, then the overflow error at 2^(2^20), as the Book's shifts have it.
+int-length-max	Tests/Math/Bitwise.versetest:221	ran	longest computed|longer than half	no-output	-	Differs. Three Epic sessions printed nothing and reported no error, and the game then left the startable state. int-length-steps shows why: the multiplication whose result reaches 2^20 bits does not return. OpenVerse: longest computed|longer than half (the Book's MaxLengthBits, 2^20, for shifts).
+int-length-over	Tests/Math/Bitwise.versetest:222	runtime-error	half computed	no-output	-	Differs. Three Epic sessions printed nothing, not even half computed (output arrives when the task yields, and this one never does), and reported no error; see int-length-steps. OpenVerse: half computed, then the overflow error at 2^(2^20), as the Book's shifts have it.
 int-module-const-call	-	-	-	refused	-	Differs. Epic: 3582 "Divergent calls (calls that might not complete) cannot be used to define data-members" at the call (Next is <computes>). OpenVerse admits it and prints above; the 3582 rule is left to a separate change.
 int-module-const-back	-	-	-	refused	-	Same. Epic: 9003 "Runtime error while evaluating module"; OpenVerse refuses at compile time (integer add overflow on the way), the owner's decision to keep (#724).
 int-module-const-back-control	-	-	-	ran	max	Same (control). OpenVerse: max.
@@ -19,10 +19,11 @@ int-intrinsics-big	-	-	-	runtime-error	min max	Differs, a known difference. Epic
 int-euclid-big	-	-	-	runtime-error	-	Differs, a known difference. Epic: ErrRuntime_GeneratedNativeInternal "Value exceeds the range of a 64 bit integer" in native Quotient(:int,:int), at the first statement. OpenVerse: quotient -4|mod D - 1|floor -4|ceil -3. Mod alone is int-mod-big.
 int-where-natural-big	Tests/WhereConstrainedInts.versetest:219	-	-	ran	natural cast succeeded|negative cast failed	Same. OpenVerse: natural cast succeeded|negative cast failed.
 int-compound-mul	-	-	-	ran	squared|minus one	Same. OpenVerse: squared|minus one.
-int-mod-big	-	-	-	-	-	Not yet run on Epic. OpenVerse: before mod|mod D - 1.
-int-mod-zero-big	-	-	-	-	-	Not yet run on Epic. OpenVerse: before mod|mod failed.
-int-floor-div-zero-big	-	-	-	-	-	Not yet run on Epic. OpenVerse: before floor|floor failed.
-int-sgn-big	-	-	-	-	-	Not yet run on Epic. OpenVerse: before sgn|sgn -1.
-int-abs-big	-	-	-	-	-	Not yet run on Epic. OpenVerse: before abs|abs 2^63 + 1 (book-int-abs-min has Abs of -2^63, an argument inside 64 bits, give 2^63 there).
-int-array-equal-big	-	-	-	-	-	Not yet run on Epic. OpenVerse: before arrays|arrays equal|arrays differ.
-int-tuple-equal-big	-	-	-	-	-	Not yet run on Epic. OpenVerse: before tuples|tuples equal|tuples differ.
+int-mod-big	-	-	-	runtime-error	before mod	Differs, a known difference (as Quotient and Clamp). Epic: ErrRuntime_GeneratedNativeInternal "Value exceeds the range of a 64 bit integer" in native Mod(:int,:int). OpenVerse: before mod|mod D - 1.
+int-mod-zero-big	-	-	-	runtime-error	before mod	Differs, a known difference. Epic: ErrRuntime_GeneratedNativeInternal "Value exceeds the range of a 64 bit integer" in native Mod(:int,:int). OpenVerse: before mod|mod failed.
+int-floor-div-zero-big	-	-	-	ran	before floor|floor failed	Same.
+int-sgn-big	-	-	-	ran	before sgn|sgn -1	Same.
+int-abs-big	-	-	-	ran	before abs|abs 2^63 + 1	Same.
+int-array-equal-big	-	-	-	ran	before arrays|arrays equal|arrays differ	Same.
+int-tuple-equal-big	-	-	-	ran	before tuples|tuples equal|tuples differ	Same.
+int-length-steps	Tests/Math/Bitwise.versetest:222	runtime-error	-	no-end	step 1|…|step 19	Differs at the last step. Squares 2 twenty times, printing and yielding (Sleep(0.0)) after each. Epic (2026-11-19 09:20Z): step 1 to step 19, then nothing: no step 20, no error, no end marker; the squaring of the 2^19-bit value does not return. OpenVerse: step 1 to step 19, then the overflow error.

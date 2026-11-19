@@ -288,11 +288,23 @@ The owner's decisions (#724), and the differences that remain:
   user function is refused (3565, "The 'converges' effect is only allowed
   on native functions").
 - **The longest int**: `int-length-max` and `int-length-over` printed
-  nothing on Epic, with no error; a step-by-step probe is pending.
+  nothing on Epic, with no error. `int-length-steps` (2026-11-19 09:20Z)
+  squares 2 twenty times, printing and yielding after each: Epic printed
+  `step 1` to `step 19` and then nothing, no error and no end marker. So
+  an int of 2^19 bits is computed, and the multiplication whose result
+  would reach 2^20 bits does not return (the session then has to be
+  replaced); OpenVerse raises the overflow error there. The two earlier
+  probes never yield, and their lines before the stall were not delivered.
 
-Added after these runs, not yet run on Epic, one call that might stop the
-session per probe, after a `before …` line, so that an error hides nothing
-else (OpenVerse's output, Lean and C agreeing):
+Added after these runs and run on Epic 2026-11-19 09:09Z to 09:16Z, one
+call that might stop the session per probe, after a `before …` line, so
+that an error hides nothing else. Epic agrees with OpenVerse on
+`int-floor-div-zero-big`, `int-sgn-big`, `int-abs-big`,
+`int-array-equal-big` and `int-tuple-equal-big`; in `int-mod-big` and
+`int-mod-zero-big` its native `Mod(:int,:int)` raises the same internal
+error as `Quotient` and `Clamp` ("Value exceeds the range of a 64 bit
+integer"), the known difference above. OpenVerse's output, Lean and C
+agreeing:
 
 | Probe | Asks | OpenVerse |
 | --- | --- | --- |
