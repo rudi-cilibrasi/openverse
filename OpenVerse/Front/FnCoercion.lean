@@ -80,6 +80,18 @@ partial def needsWrapper (env : TyEnv) (a b : Ty) : Bool :=
   | _, _ => false
 end
 
+/-- A value of type `a` used as one of type `b` holds a function value that
+    `needsWrapper`: `a` and `b` function types that do, or options, arrays,
+    tuples or maps (their values) of such (UEFN 43.12: "Using a value of type
+    ?((?A:int = ...)->int) as a value of type ?(tuple()->int)",
+    `option-of-fn-default`). -/
+partial def needsWrapperDeep (env : TyEnv) : Ty → Ty → Bool
+  | a@(.struct _ _), b@(.struct _ _) => isFn a && isFn b && needsWrapper env a b
+  | .opt a, .opt b | .arr a, .arr b => needsWrapperDeep env a b
+  | .tup as, .tup bs => as.length == bs.length && (as.zip bs).any fun (a, b) => needsWrapperDeep env a b
+  | .map _ a, .map _ b | .map _ a, .weakMap _ b | .weakMap _ a, .weakMap _ b => needsWrapperDeep env a b
+  | _, _ => false
+
 /-- The type parameters a type mentions inside a function type (`t` in
     `t->void`, `[]type{_():t}`, `tuple(tuple()->t, int)`). -/
 partial def paramsInFn : Ty → List String

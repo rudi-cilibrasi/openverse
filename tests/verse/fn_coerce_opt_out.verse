@@ -1,8 +1,10 @@
 # (#724) --function-coercions keeps openverse's conversions of function values
 # that Epic's Verse compiler refuses with error 3502: a branch of an if of
 # another function type, a higher-order generic function as a value, a call
-# of a generic function whose result has a type parameter inside a function
-# type, an override of a parametric interface's method with one.
+# of a generic function or a parametric class's method whose result has a
+# type parameter inside a function type, an override of a parametric
+# interface's method with one, and a function value that is no name (a
+# parameter, an option's content) at another function type.
 F2(?A:int = 2):int = A
 F4(?B:int = 4):int = B
 Identity(X:t where t:type)<computes>:t = X
@@ -17,6 +19,11 @@ a(t:type) := interface:
     F(G(:t)<transacts>:void)<transacts>:void
 b := class(a(int)):
     F<override>(G(:int)<transacts>:void)<transacts>:void = G(3)
+Inc(X:int)<computes>:int = X + 1
+Run(F(:int)<transacts>:int)<transacts>:int = F(1)
+Forward(G(:int)<computes>:int)<transacts>:int = Run(G)
+box(t:type) := class:
+    Make(F(:t):void):(t->void) = F
 Pick(Flag:logic):int =
     F:type{_():int} = if (Flag?) { F2 } else { F4 }
     F()
@@ -31,3 +38,8 @@ Main():void =
     G(2)
     Obj:b = b{}
     Obj.F(TakeT)
+    O:?type{_():int} = option{F2}
+    if (H := O?):
+        Print("{H()} {Forward(Inc)}")
+    K := box(int){}.Make(TakeInt)
+    K(4)

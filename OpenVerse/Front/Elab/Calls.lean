@@ -405,7 +405,19 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
           if pass == 0 && !bound σ pt then
             deferred := deferred.set! i true
           else
-            es := es.set! i (← elabArgumentCoerceWith elabE ctx a.pos r (pt.subst σ))
+            -- (#724: a function named as the argument is named at the
+            -- parameter's type, once the call's type arguments give it, as
+            -- Epic's compiler converts a function named where its type is
+            -- expected: `Apply(Incr, 1)`, ParametricFunctions.versetest:189)
+            let target := pt.subst σ
+            -- (a method named, `C.Inc`, too: a field's function value keeps
+            -- its own type there, and is converted as a value)
+            let named? := ctx.namesFunction a || match branchValue a with | .member .. => true | _ => false
+            let r ← if FnCoercion.isFn target && r.ty != target && named? then do
+                let named ← elabE ctx a (some target)
+                pure (if named.ty == target then named else r)
+              else pure r
+            es := es.set! i (← elabArgumentCoerceWith elabE ctx a.pos r target)
         | none => eerr a.pos (if contextual[i]! then cannot else
             s!"expected {(pt.subst σ).show}, found {r.ty.show} (in a call of {Choice.shownFnName s.name})")
   -- the arguments, in their temporaries, then the defaults
@@ -413,23 +425,27 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
     | some inferred => pure inferred
     | none => eerr p (inconsistentInstance ctx.evidenceEnv s σ)
   σ := inferred
-  -- (#724) a generic function whose result has one of its type parameters
-  -- inside a function type (`MakeClosure(…):(p_type->void)`), called at an
-  -- instance other than `any` or `comparable`: the function value it
-  -- returns needs a wrapper at the instance, which Epic's Verse compiler
-  -- does not make (UEFN 43.12, error 3502: followup-book2's
-  -- `parametric-method-value`; the Book of Verse's
-  -- `FORT-592189-MaybeCoerceToTypeCrash.versetest:4`, `bp_vm_only`). Not a
-  -- method's call, whose type parameters its receiver may give, nor the
-  -- compiler's own functions'.
-  if !ctx.types.functionCoercions && !s.name.contains '$' &&
-      !(s.pnames.head? == some "Self" || s.pnames.head? == some "$Self") then
+  -- (#724) a generic function, or a method of a parametric class, whose
+  -- result has one of its type parameters inside a function type
+  -- (`MakeClosure(…):(p_type->void)`, `box(t).Make(…):(t->void)`), called at
+  -- an instance other than a type parameter of the calling code, `any` or
+  -- `comparable`: the function value it returns needs a wrapper at the
+  -- instance, which Epic's Verse compiler does not make (UEFN 43.12, error
+  -- 3502: followup-book2's `parametric-method-value`, followup-coerce's
+  -- `generic-result-fn` and `parametric-method-fn-result`; the Book of
+  -- Verse's `FORT-592189-MaybeCoerceToTypeCrash.versetest:4`, `bp_vm_only`).
+  -- Not the compiler's own functions.
+  if !ctx.types.functionCoercions && !s.name.contains '$' then
     let tps := s.tparams.map (·.1)
     let changed := FnCoercion.changedBy σ ((FnCoercion.paramsInFn s.ret).filter tps.contains)
     if let some v := changed.head? then
-      let (sh, ts) := s.valueShape
+      -- (a method's type without its receiver, as Epic's compiler writes it)
+      let method := s.pnames.head? == some "Self" || s.pnames.head? == some "$Self"
+      let shown := if method then { s with params := s.params.drop 1, pnames := s.pnames.drop 1 } else s
+      let (sh, ts) := shown.valueShape
       let gen : Ty := .struct sh.name (ts ++ [s.ret])
-      eerr p s!"using a value of type {FnCoercion.showGeneric gen tps} as a value of type {(gen.subst σ).show} is not yet implemented: the result of {Choice.shownFnName s.name}, {s.ret.show}, has its type parameter {v} inside a function type, and the function it returns needs a wrapper at {v} = {((σ.lookup v).getD (.param v false)).show}, which Epic's compiler does not make {FnCoercion.cite}"
+      let whose := if method then s!"the method {Choice.shownFnName s.name}" else Choice.shownFnName s.name
+      eerr p s!"using a value of type {FnCoercion.showGeneric gen tps} as a value of type {(gen.subst σ).show} is not yet implemented: the result of {whose}, {s.ret.show}, has its type parameter {v} inside a function type, and the function it returns needs a wrapper at {v} = {((σ.lookup v).getD (.param v false)).show}, which Epic's compiler does not make {FnCoercion.cite}"
   let mut steps : Array Expr := #[]
   let mut slots : Array (Option Nat) := Array.replicate s.params.length none
   let mut roles : Array Bool := s.params.toArray.mapIdx fun index _ => s.typeValues.contains index
