@@ -1370,10 +1370,17 @@ def noteFailCalls (ctx : Ctx) (p : Pos) (what : String) (e : Expr) : EM Unit := 
 
 /-- (#724) A call at `p` of `shown` in a data member's definition
     (`Ctx.dataMember`) that might not complete: noted, and refused once the
-    definition is elaborated (`divergentCallError`). Elsewhere nothing. -/
+    definition is elaborated (`divergentCallError`). Elsewhere nothing. A
+    call of a function with several values leaves no call: its code is put
+    in its place (`Choice.inlineCalls`), and `$fxOf` notes the call. The
+    calls in that code (`Ctx.inlineScopes`) are the function's, not the
+    data member's, and are not noted (a recursive one taken a value at a
+    time, #246, has its code elaborated outside such a scope: its calls
+    are noted too, which changes only which call is named). -/
 def noteDivergentCall (ctx : Ctx) (p : Pos) (shown : String) : EM Unit := do
   if let some what := ctx.dataMember then
-    modify fun st => { st with divergentCalls := st.divergentCalls.push (p, what, shown) }
+    if ctx.inlineScopes.isEmpty then
+      modify fun st => { st with divergentCalls := st.divergentCalls.push (p, what, shown) }
 
 /-- (#724) Epic's rule for data members: the definition of a module's
     constant or of a field's default may call only a function that is

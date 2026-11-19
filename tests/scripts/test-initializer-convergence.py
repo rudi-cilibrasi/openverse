@@ -116,8 +116,21 @@ with tempfile.TemporaryDirectory(prefix='openverse-initializer-') as directory:
         text = fixture.read_text()
         want, status = fixture.with_suffix('.expected').read_text().rsplit('exit=', 1)
         require(status.strip() == '0', fixture.stem+' oracle')
+        # (one whose `.args` selects --extended-defaults calls a function of
+        # the program's in a default, with several values: refused without
+        # the option, as a data member's definition calls none, UEFN 43.12
+        # error 3582, #724)
+        args = fixture.with_suffix('.args')
+        divergent = args.exists() and '--extended-defaults' in args.read_text().split()
         for profile in [[], ['--no-choice']]:
             if profile and fixture.stem.endswith(('choice_literal', 'choice_function')):
+                continue
+            if divergent:
+                source.write_text(text)
+                result = invoke([OV, 'check', source, *profile])
+                require(result.returncode == 4 and 'which might not complete' in result.stderr,
+                        fixture.stem+' divergent', (result.returncode, result.stderr))
+                runtime(text, ['--extended-defaults', *profile], want, fixture.stem+' extension')
                 continue
             strict = runtime(text, profile, want, fixture.stem)
             extended = runtime(text, ['--extended-defaults', *profile], want, fixture.stem+' extension')
