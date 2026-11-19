@@ -5,10 +5,12 @@
 # after the right operand: "entry 8 10".
 var Entries:weak_map(session, []int) = map{}
 
+Replace()<transacts>:int =
+    if (set Entries[GetSession()] = array{8, 9}) then 1 else 1
+
 Main()<transacts>:void =
     if (set Entries[GetSession()] = array{1, 2}):
-        if (set Entries[GetSession()][1] += if (set Entries[GetSession()] = array{8, 9}; 0 = 0) then 1 else 1,
-                E := Entries[GetSession()], A := E[0], B := E[1]):
+        if (set Entries[GetSession()][1] += Replace(), E := Entries[GetSession()], A := E[0], B := E[1]):
             Print("OVPROBE entry {A} {B}")
         else:
             Print("OVPROBE update failed")
