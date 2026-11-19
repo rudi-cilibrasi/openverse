@@ -207,55 +207,66 @@ static void flatten_alias_cases(void)
     t_max_heap = 0;
 }
 
+/* The int x * f + y, built from 64-bit literals (an int beyond 64 bits has
+   no literal). */
+static uint32_t n_wide(tfn *m, int64_t x, int64_t f, int64_t y)
+{
+    return n_prim(m, VX_P_ADD, 0, 2, n_prim(m, VX_P_MUL, 0, 2, n_int(m, x), n_int(m, f)), n_int(m, y));
+}
+
 static void rational_cases(void)
 {
+    /* the expected parts are numerator = nx * nf + ny, denominator = dx * df + dy:
+       a reduced part past 64 bits is an int (#724) */
     static const struct {
         uint32_t op;
         int64_t a, b, c, d;
         int kind, code;
-        int64_t numerator, denominator;
+        int64_t nx, nf, ny, dx, df, dy;
     } cases[] = {
-        {VX_P_ADD, 1, 2, 1, 3, VX_R_OK, 0, 5, 6},
-        {VX_P_SUB, 1, 2, 2, 3, VX_R_OK, 0, -1, 6},
-        {VX_P_MUL, -2, 3, 9, 4, VX_R_OK, 0, -3, 2},
-        {VX_P_QUOTIENT, 2, 3, -4, 5, VX_R_OK, 0, -5, 6},
-        {VX_P_ADD, 1, INT64_MAX, INT64_MAX-1, INT64_MAX, VX_R_OK, 0, 1, 1},
-        {VX_P_ADD, INT64_MAX, INT64_MAX-1, INT64_MIN, INT64_MAX-1, VX_R_OK, 0, -1, INT64_MAX-1},
-        {VX_P_ADD, INT64_MIN, INT64_MAX, INT64_MAX-1, INT64_MAX, VX_R_OK, 0, -2, INT64_MAX},
-        {VX_P_ADD, INT64_MIN, INT64_MAX, INT64_MIN, INT64_MAX, VX_R_ERR, VX_E_OVERFLOW, 0, 0},
-        {VX_P_SUB, INT64_MAX, INT64_MAX, INT64_MIN, INT64_MAX, VX_R_ERR, VX_E_OVERFLOW, 0, 0},
-        {VX_P_SUB, INT64_MIN, 1, INT64_MIN, 1, VX_R_OK, 0, 0, 1},
-        {VX_P_MUL, INT64_MAX, 2, 2, INT64_MAX, VX_R_OK, 0, 1, 1},
-        {VX_P_QUOTIENT, INT64_MIN, 1, INT64_MIN, 1, VX_R_OK, 0, 1, 1},
-        {VX_P_QUOTIENT, 0, INT64_MAX, -1, INT64_MAX, VX_R_OK, 0, 0, 1},
-        {VX_P_ADD, INT64_MIN, 1, INT64_MIN, 1, VX_R_ERR, VX_E_OVERFLOW, 0, 0},
-        {VX_P_SUB, INT64_MAX, 1, INT64_MIN, 1, VX_R_ERR, VX_E_OVERFLOW, 0, 0},
-        {VX_P_MUL, INT64_MIN, 1, -1, 1, VX_R_ERR, VX_E_OVERFLOW, 0, 0},
-        {VX_P_QUOTIENT, 1, 1, INT64_MIN, 1, VX_R_ERR, VX_E_OVERFLOW, 0, 0},
-        {VX_P_QUOTIENT, 1, 1, 0, 1, VX_R_FAIL, 0, 0, 0},
+        {VX_P_ADD, 1, 2, 1, 3, VX_R_OK, 0, 0, 0, 5, 0, 0, 6},
+        {VX_P_SUB, 1, 2, 2, 3, VX_R_OK, 0, 0, 0, -1, 0, 0, 6},
+        {VX_P_MUL, -2, 3, 9, 4, VX_R_OK, 0, 0, 0, -3, 0, 0, 2},
+        {VX_P_QUOTIENT, 2, 3, -4, 5, VX_R_OK, 0, 0, 0, -5, 0, 0, 6},
+        {VX_P_ADD, 1, INT64_MAX, INT64_MAX-1, INT64_MAX, VX_R_OK, 0, 0, 0, 1, 0, 0, 1},
+        {VX_P_ADD, INT64_MAX, INT64_MAX-1, INT64_MIN, INT64_MAX-1, VX_R_OK, 0, 0, 0, -1, 0, 0, INT64_MAX-1},
+        {VX_P_ADD, INT64_MIN, INT64_MAX, INT64_MAX-1, INT64_MAX, VX_R_OK, 0, 0, 0, -2, 0, 0, INT64_MAX},
+        /* -2^64 / (2^63 - 1) and (2^64 - 1) / (2^63 - 1), in lowest terms */
+        {VX_P_ADD, INT64_MIN, INT64_MAX, INT64_MIN, INT64_MAX, VX_R_OK, 0, INT64_MIN, 2, 0, 0, 0, INT64_MAX},
+        {VX_P_SUB, INT64_MAX, INT64_MAX, INT64_MIN, INT64_MAX, VX_R_OK, 0, INT64_MAX, 2, 1, 0, 0, INT64_MAX},
+        {VX_P_SUB, INT64_MIN, 1, INT64_MIN, 1, VX_R_OK, 0, 0, 0, 0, 0, 0, 1},
+        {VX_P_MUL, INT64_MAX, 2, 2, INT64_MAX, VX_R_OK, 0, 0, 0, 1, 0, 0, 1},
+        {VX_P_QUOTIENT, INT64_MIN, 1, INT64_MIN, 1, VX_R_OK, 0, 0, 0, 1, 0, 0, 1},
+        {VX_P_QUOTIENT, 0, INT64_MAX, -1, INT64_MAX, VX_R_OK, 0, 0, 0, 0, 0, 0, 1},
+        /* -2^64, 2^64 - 1, 2^63, and 1 / -2^63 = -1 / 2^63 */
+        {VX_P_ADD, INT64_MIN, 1, INT64_MIN, 1, VX_R_OK, 0, INT64_MIN, 2, 0, 0, 0, 1},
+        {VX_P_SUB, INT64_MAX, 1, INT64_MIN, 1, VX_R_OK, 0, INT64_MAX, 2, 1, 0, 0, 1},
+        {VX_P_MUL, INT64_MIN, 1, -1, 1, VX_R_OK, 0, INT64_MAX, 1, 1, 0, 0, 1},
+        {VX_P_QUOTIENT, 1, 1, INT64_MIN, 1, VX_R_OK, 0, 0, 0, -1, INT64_MAX, 1, 1},
+        {VX_P_QUOTIENT, 1, 1, 0, 1, VX_R_FAIL, 0, 0, 0, 0, 0, 0, 0},
         /* Raw Core denominator guards, including the signed minimum. */
-        {VX_P_ADD, INT64_MIN, INT64_MIN, INT64_MIN, INT64_MIN, VX_R_ERR, VX_E_OVERFLOW, 0, 0},
-        {VX_P_MUL, 1, 0, 2, 3, VX_R_ERR, VX_E_OVERFLOW, 0, 0},
-        {VX_P_QUOTIENT, 1, 1, 2, -1, VX_R_ERR, VX_E_OVERFLOW, 0, 0}
+        {VX_P_ADD, INT64_MIN, INT64_MIN, INT64_MIN, INT64_MIN, VX_R_ERR, VX_E_OVERFLOW, 0, 0, 0, 0, 0, 0},
+        {VX_P_MUL, 1, 0, 2, 3, VX_R_ERR, VX_E_OVERFLOW, 0, 0, 0, 0, 0, 0},
+        {VX_P_QUOTIENT, 1, 1, 2, -1, VX_R_ERR, VX_E_OVERFLOW, 0, 0, 0, 0, 0, 0}
     };
     size_t i;
     for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
         tbuf p = {0};
         tfn m = {0};
-        char out[96];
         uint32_t value = n_prim(&m, cases[i].op, 0, 4,
             n_int(&m, cases[i].a), n_int(&m, cases[i].b),
             n_int(&m, cases[i].c), n_int(&m, cases[i].d));
         if (cases[i].kind == VX_R_OK) {
             uint32_t save = n_assign(&m, 0, value);
-            uint32_t a = n_print_int(&m, n_prim(&m, VX_P_TUPGET, 0, 1, n_local(&m, 0)));
-            uint32_t b = n_print_int(&m, n_prim(&m, VX_P_TUPGET, 1, 1, n_local(&m, 0)));
-            n_seq(&m, save, n_seq(&m, a, b));
-            snprintf(out, sizeof out, "%lld\n%lld\n", (long long)cases[i].numerator,
-                     (long long)cases[i].denominator);
-        } else out[0] = 0;
+            uint32_t a = n_prim(&m, VX_P_EQ, 0, 2, n_prim(&m, VX_P_TUPGET, 0, 1, n_local(&m, 0)),
+                                n_wide(&m, cases[i].nx, cases[i].nf, cases[i].ny));
+            uint32_t b = n_prim(&m, VX_P_EQ, 0, 2, n_prim(&m, VX_P_TUPGET, 1, 1, n_local(&m, 0)),
+                                n_wide(&m, cases[i].dx, cases[i].df, cases[i].dy));
+            n_seq(&m, save, n_ite(&m, n_seq(&m, a, b), n_print(&m, n_str(&m, "parts")),
+                                  n_print(&m, n_str(&m, "other parts"))));
+        }
         main_only(&p, &m, 1, m.count - 1);
-        EXPECT(&p, cases[i].kind, cases[i].code, out);
+        EXPECT(&p, cases[i].kind, cases[i].code, cases[i].kind == VX_R_OK ? "parts\n" : "");
     }
     {
         tbuf p = {0};
@@ -279,12 +290,28 @@ static void prim_cases(void)
                       n_print_int(&m, n_prim(&m, VX_P_CEILDIV, 0, 2, n_int(&m, -7), n_int(&m, 2))))));
     main_only(&p, &m, 0, m.count - 1);
     OK_OUT(&p, "-9223372036854775808\n0\n-4\n-3\n");
-    n_seq(&m, n_print(&m, n_str(&m, "before")), n_prim(&m, VX_P_ABS, 0, 1, n_int(&m, INT64_MIN)));
+    /* past 64 bits an int is exact (#724): Abs(INT64_MIN) and
+       Quotient[INT64_MIN, -1] are 2^63, which ToString refuses */
+    n_seq(&m, n_print(&m, n_str(&m, "before")),
+          n_print_int(&m, n_prim(&m, VX_P_ABS, 0, 1, n_int(&m, INT64_MIN))));
     main_only(&p, &m, 0, m.count - 1);
     EXPECT(&p, VX_R_ERR, VX_E_OVERFLOW, "before\n");
-    n_prim(&m, VX_P_QUOTIENT, 0, 2, n_int(&m, INT64_MIN), n_int(&m, -1));
+    a = n_prim(&m, VX_P_EQ, 0, 2, n_prim(&m, VX_P_QUOTIENT, 0, 2, n_int(&m, INT64_MIN), n_int(&m, -1)),
+               n_wide(&m, INT64_MAX, 1, 1));
+    n_ite(&m, a, n_print(&m, n_str(&m, "2^63")), n_print(&m, n_str(&m, "other")));
     main_only(&p, &m, 0, m.count - 1);
-    EXPECT(&p, VX_R_ERR, VX_E_OVERFLOW, "");
+    OK_OUT(&p, "2^63\n");
+    /* the longest int: 2 squared twenty times is 2^(2^20), one bit too long */
+    a = n_assign(&m, 0, n_int(&m, 2));
+    {
+        int k;
+        for (k = 0; k < 19; k++)
+            a = n_seq(&m, a, n_assign(&m, 0, n_prim(&m, VX_P_MUL, 0, 2, n_local(&m, 0), n_local(&m, 0))));
+    }
+    a = n_seq(&m, a, n_print(&m, n_str(&m, "2^(2^19)")));
+    n_seq(&m, a, n_prim(&m, VX_P_MUL, 0, 2, n_local(&m, 0), n_local(&m, 0)));
+    main_only(&p, &m, 1, m.count - 1);
+    EXPECT(&p, VX_R_ERR, VX_E_OVERFLOW, "2^(2^19)\n");
     /* division by zero fails; it is caught by a condition */
     a = n_prim(&m, VX_P_FLOORDIV, 0, 2, n_int(&m, 7), n_int(&m, 0));
     n_ite(&m, a, n_print(&m, n_str(&m, "q")), n_print(&m, n_str(&m, "div0")));

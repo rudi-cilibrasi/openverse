@@ -1,4 +1,5 @@
-# rationals at the edges of int (#116): normalising never overflows unless the numerator is out of range
+# rationals at the edges of int (#116): normalising never overflows; a
+# numerator past 64 bits is an int (#724), 2^63 for M / -3
 Main():void =
     M := -9223372036854775807 - 1
     if (R := M / 2) then Print("{Floor(R)}")

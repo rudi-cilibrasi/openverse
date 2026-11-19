@@ -41,7 +41,7 @@ flowchart TD
         direction LR
         load["load.c: validating loader<br/>QuickProof law (WellScoped)"]
         store["store.c: frame + undo journal<br/>QuickProof law (rollback)"]
-        arith["arith.c: int64 operations<br/>QuickProof law + Lean seam (Seams.lean)"]
+        arith["arith.c: int64 operations, the fast path<br/>QuickProof law + Lean seam (Seams.lean)"]
         cint["interp.c: transcription of Interp.lean<br/>differential tests and fuzzing"]
         load ~~~ store ~~~ arith ~~~ cint
     end
@@ -75,7 +75,7 @@ flowchart TD
 | `Prog.check_ok` | `Core/Check.lean` | `Prog.check` establishes the hypotheses of `<decides>` soundness and scoping |
 | `Eval.no_control`, `Runs.no_control` | `Core/Control.lean` | a `break` never escapes its loop (no control errors) |
 | `Eval.no_writes`, `Prog.accepted_no_writes` | `Core/Writes.lean`, `Core/Guarantees.lean` | **heap effects**: a function without `<writes>` (`<computes>`, `<reads>`, `<allocates>`) leaves every existing object as it was |
-| **`Prog.accepted`** | `Core/Guarantees.lean` | **every program the front end accepts** has one outcome and one output; it never raises a slot, call, type or control error, so the only runtime errors left are integer overflow and `Err()`; `Main`'s value has its type; and it never fails unless `Main` is `<decides>` |
+| **`Prog.accepted`** | `Core/Guarantees.lean` | **every program the front end accepts** has one outcome and one output; it never raises a slot, call, type or control error, so the only runtime errors left are the overflow error (an int longer than 2^20 bits, an int beyond 64 bits given to `ToString`, a float too large for an int) and `Err()`; `Main`'s value has its type; and it never fails unless `Main` is `<decides>` |
 | `add_seam` … `modulo_seam`, `apply_*` | `Core/Seams.lean` | each int operation equals the C99 formula that the QuickProof law `arith_exact` asserts |
 
 **In Rocq, with QuickProof** (`proofs/quickproof/`; a separate evidence class,
@@ -83,7 +83,7 @@ flowchart TD
 
 | Law | C under test | Status |
 |---|---|---|
-| `arith_exact` | `runtime/src/arith.c` | **PROVED**: `qp verify` PASS, 10 axioms (standard + VST malloc). With `Seams.lean`, the nine int operations compute `Prim.apply` on every pair of 64-bit inputs |
+| `arith_exact` | `runtime/src/arith.c` | **PROVED**: `qp verify` PASS, 10 axioms (standard + VST malloc). With `Seams.lean`, the nine int operations compute `Prim.apply` on every pair of 64-bit inputs whose result fits in 64 bits, and report the others, which `bigint.c` (tested, not proved) computes |
 | `store_rollback_model` | `runtime/src/store.c` | **PROVED**: `qp verify` PASS, 12 axioms (standard + VST malloc). For any 32 operations on up to 3 nested contexts, 4 slots, and journal and output capacities up to 8, rollback restores the slots and the output, and commit keeps them, against a naive snapshot model |
 | `loader_wellscoped` | `runtime/src/load.c` | **PROVED**: `qp verify` PASS, 13 axioms (standard + VST malloc). For every buffer of up to 4 KiB, `vx_load` reads only inside it; when it accepts, the program is well formed and `Prog.WellScoped`, so its Verse Core semantics raises no slot or call error (`Eval.scoped_ok`) |
 
@@ -189,6 +189,12 @@ Trusted, besides Lean's kernel:
   `proofs/quickproof/README.md`), and the reading that each C law formula and
   its Lean restatement are the same formula (`docs/SEAMS.md`);
 - the gap between CompCert's C and the GCC build of `cverse`.
+
+Ints are the Verse VM's (#724): exact past 64 bits, up to 2^20 bits. The C
+runtime's ints beyond 64 bits (`runtime/src/bigint.c`) are tested against
+Python's ints and the Lean interpreter, outside QuickProof's law, which
+covers the 64-bit fast path. See [the arithmetic
+seam](docs/SEAMS.md#1-integer-arithmetic-runtimesrcarithc).
 
 Exact rational arithmetic (#489) is an OpenVerse extension. Its Lean Core
 semantics and safety proofs cover the four-int primitive forms; the C

@@ -9,10 +9,22 @@
  * The arguments a[0..n) live on the interpreter's value stack, which no
  * primitive changes; heap cells, however, move when the heap grows, so
  * element pointers are taken only after the last allocation.
+ *
+ * Ints are the Verse VM's, up to 2^20 bits (#724).  Two INT operands take
+ * arith.c's fast path; when it reports VX_OVERFLOW (the result does not fit
+ * in 64 bits), or an operand is BIG, bigint.c computes the result.
  */
 #include <math.h>
 #include <string.h>
 #include "vx_runtime.h"
+
+/* The paths of ints beyond 64 bits stay out of vx_prim_apply's code, so that
+   its 64-bit paths keep their size. */
+#if defined(__GNUC__)
+#define VX_SLOW __attribute__((noinline, cold))
+#else
+#define VX_SLOW
+#endif
 
 static void ok_copy(vx_res *r, const vx_val *v)
 {
@@ -34,15 +46,39 @@ static int64_t I(const vx_val *v)
     return vx_int_of(v->bits);
 }
 
-/* Res.ofInt of an arith.c result (VX_FAIL: the `if b = 0 then .fail`). */
-static void arith(vx_res *r, int rc, int64_t z)
+/* The int operation op on two ints of which one at least is BIG, or whose
+   result arith.c found out of 64 bits: Res.ofInt of the exact result
+   (VX_FAIL: the `if b = 0 then .fail`). */
+static VX_SLOW void big(vx_ctx *c, uint32_t op, const vx_val *x, const vx_val *y, vx_res *r)
+{
+    vx_val z;
+    int rc = vx_big_op(&c->heap, op, x, y, &z);
+    if (rc == VX_OK)
+        vx_res_ok(r, z.tag, z.bits);
+    else if (rc == VX_FAIL)
+        vx_res_fail(r);
+    else if (rc == VX_OVERFLOW)
+        vx_res_error(r, VX_E_OVERFLOW);   /* longer than IntBits.max bits */
+    else
+        nomem(r);
+}
+
+/* Res.ofInt of an arith.c result: the fast path; on VX_OVERFLOW (the result
+   does not fit in 64 bits), bigint.c's. */
+static void arith(vx_ctx *c, uint32_t op, const vx_val *a, vx_res *r, int rc, int64_t z)
 {
     if (rc == VX_OK)
         vx_res_ok(r, VX_T_INT, vx_bits_of(z));
     else if (rc == VX_FAIL)
         vx_res_fail(r);
     else
-        vx_res_error(r, VX_E_OVERFLOW);
+        big(c, op, &a[0], &a[op == VX_P_NEG || op == VX_P_ABS ? 0 : 1], r);
+}
+
+/* The order of two ints: -1, 0, 1. */
+static VX_SLOW int order(vx_ctx *c, const vx_val *x, const vx_val *y)
+{
+    return vx_big_cmp(&c->heap, x, y);
 }
 
 /* cmpRes b left = if b then .ok left else .fail */
@@ -81,7 +117,8 @@ static int new_from(vx_ctx *c, uint64_t tag, const vx_val *src, size_t n, vx_res
 
 /* Exact rational forms of ADD/SUB/MUL/QUOTIENT take four int parts.
    Positive int64 denominators bound every product and add/sub sum inside
-   signed 128 bits. Reduction precedes the final int64 checks. */
+   signed 128 bits; a reduced part outside 64 bits is BIG, and BIG
+   operands take bigint.c's path (vx_big_rational). */
 static void rational(vx_ctx *c, uint32_t op, int64_t a, int64_t b,
                      int64_t p, int64_t q, vx_res *r)
 {
@@ -123,12 +160,36 @@ static void rational(vx_ctx *c, uint32_t op, int64_t a, int64_t b,
     ud /= g;
     bound = negative ? (uwide)INT64_MAX + 1 : (uwide)INT64_MAX;
     if (un > bound || ud > (uwide)INT64_MAX) {
-        vx_res_error(r, VX_E_OVERFLOW);
-        return;
+        uint64_t wn[2], wd[2];
+        wn[0] = (uint64_t)un;
+        wn[1] = (uint64_t)(un >> 64);
+        wd[0] = (uint64_t)ud;
+        wd[1] = (uint64_t)(ud >> 64);
+        if (vx_big_words(&c->heap, negative, wn, 2, &parts[0]) != VX_OK ||
+            vx_big_words(&c->heap, 0, wd, 2, &parts[1]) != VX_OK) {
+            nomem(r);
+            return;
+        }
+    } else {
+        parts[0] = (vx_val){VX_T_INT, negative ? UINT64_C(0) - (uint64_t)un : (uint64_t)un};
+        parts[1] = (vx_val){VX_T_INT, (uint64_t)ud};
     }
-    parts[0] = (vx_val){VX_T_INT, negative ? UINT64_C(0) - (uint64_t)un : (uint64_t)un};
-    parts[1] = (vx_val){VX_T_INT, (uint64_t)ud};
     new_from(c, VX_T_TUP, parts, 2, r);
+}
+
+/* The rational forms with a BIG part. */
+static VX_SLOW void big_rational(vx_ctx *c, uint32_t op, const vx_val *a, vx_res *r)
+{
+    vx_val parts[2];
+    int rc = vx_big_rational(&c->heap, op, a, parts);
+    if (rc == VX_OK)
+        new_from(c, VX_T_TUP, parts, 2, r);
+    else if (rc == VX_FAIL)
+        vx_res_fail(r);
+    else if (rc == VX_OVERFLOW)
+        vx_res_error(r, VX_E_OVERFLOW);
+    else
+        nomem(r);
 }
 
 /* A string value of the ASCII text s[0..n). */
@@ -256,6 +317,33 @@ static void flatten(vx_ctx *c, const vx_val *x, vx_res *r)
     vx_res_ok(r, VX_T_ARR, o);
 }
 
+/* .range with a BIG bound: rangeVals a b, each element a + k (INT or BIG) */
+static VX_SLOW void big_range(vx_ctx *c, const vx_val *a, const vx_val *b, vx_res *r)
+{
+    vx_val d, one = { VX_T_INT, 1 }, x;
+    size_t o, k, cnt;
+    if (vx_big_cmp(&c->heap, a, b) > 0) {
+        vx_res_ok(r, VX_T_ARR, 0);
+        return;
+    }
+    /* the count, b - a + 1, must fit the heap */
+    if (vx_big_op(&c->heap, VX_P_SUB, b, a, &d) != VX_OK || d.tag != VX_T_INT ||
+        d.bits >= (uint64_t)c->heap.max || vx_heap_alloc(&c->heap, (size_t)d.bits + 1, &o) != VX_OK) {
+        nomem(r);
+        return;
+    }
+    cnt = (size_t)d.bits + 1;
+    x = *a;
+    for (k = 0; k < cnt; k++) {
+        vx_obj_elems(&c->heap, o)[k] = x;
+        if (k + 1 < cnt && vx_big_op(&c->heap, VX_P_ADD, &x, &one, &x) != VX_OK) {
+            nomem(r);
+            return;
+        }
+    }
+    vx_res_ok(r, VX_T_ARR, o);
+}
+
 /* .range, [.int a, .int b] => .ok (.arr (rangeVals a b)) -- a..b inclusive */
 static void range(vx_ctx *c, int64_t a, int64_t b, vx_res *r)
 {
@@ -310,70 +398,89 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
     int ff = n == 2 && is(&a[0], VX_T_FLOAT) && is(&a[1], VX_T_FLOAT);
     int f1 = n == 1 && is(&a[0], VX_T_FLOAT);
     char fb[VX_FMT_MAX];
+    /* ints, one at least BIG (tested only where ii or i1 did not hold, so the
+       fast path pays nothing) */
+#define bb (n == 2 && vx_isint(&a[0]) && vx_isint(&a[1]))
+#define b1 (n == 1 && vx_isint(&a[0]))
 
     if (n == 4 && (op == VX_P_ADD || op == VX_P_SUB || op == VX_P_MUL || op == VX_P_QUOTIENT)) {
         if (is(&a[0], VX_T_INT) && is(&a[1], VX_T_INT) &&
             is(&a[2], VX_T_INT) && is(&a[3], VX_T_INT))
             rational(c, op, I(&a[0]), I(&a[1]), I(&a[2]), I(&a[3]), r);
+        else if (vx_isint(&a[0]) && vx_isint(&a[1]) && vx_isint(&a[2]) && vx_isint(&a[3]))
+            big_rational(c, op, a, r);
         else
             vx_res_error(r, VX_E_TYPE);
         return;
     }
 
     switch (op) {
-    /* | .add, [.int a, .int b] => Res.ofInt (a + b) */
+    /* | .add, [.int a, .int b] => .ok (.int (a + b)) */
     case VX_P_ADD:
-        if (ii) { rc = vx_add(I(&a[0]), I(&a[1]), &z); arith(r, rc, z); return; }
+        if (ii) { rc = vx_add(I(&a[0]), I(&a[1]), &z); arith(c, op, a, r, rc, z); return; }
+        if (bb) { big(c, op, &a[0], &a[1], r); return; }
         break;
-    /* | .sub, [.int a, .int b] => Res.ofInt (a - b) */
+    /* | .sub, [.int a, .int b] => .ok (.int (a - b)) */
     case VX_P_SUB:
-        if (ii) { rc = vx_sub(I(&a[0]), I(&a[1]), &z); arith(r, rc, z); return; }
+        if (ii) { rc = vx_sub(I(&a[0]), I(&a[1]), &z); arith(c, op, a, r, rc, z); return; }
+        if (bb) { big(c, op, &a[0], &a[1], r); return; }
         break;
-    /* | .mul, [.int a, .int b] => Res.ofInt (a * b) */
+    /* | .mul, [.int a, .int b] => .ok (.int (a * b)) */
     case VX_P_MUL:
-        if (ii) { rc = vx_mul(I(&a[0]), I(&a[1]), &z); arith(r, rc, z); return; }
+        if (ii) { rc = vx_mul(I(&a[0]), I(&a[1]), &z); arith(c, op, a, r, rc, z); return; }
+        if (bb) { big(c, op, &a[0], &a[1], r); return; }
         break;
-    /* | .neg, [.int a] => Res.ofInt (-a) */
+    /* | .neg, [.int a] => .ok (.int (-a)) */
     case VX_P_NEG:
-        if (i1) { rc = vx_neg(I(&a[0]), &z); arith(r, rc, z); return; }
+        if (i1) { rc = vx_neg(I(&a[0]), &z); arith(c, op, a, r, rc, z); return; }
+        if (b1) { big(c, op, &a[0], &a[0], r); return; }
         break;
-    /* | .abs, [.int a] => Res.ofInt (if a < 0 then -a else a) */
+    /* | .abs, [.int a] => .ok (.int (if a < 0 then -a else a)) */
     case VX_P_ABS:
-        if (i1) { rc = vx_abs(I(&a[0]), &z); arith(r, rc, z); return; }
+        if (i1) { rc = vx_abs(I(&a[0]), &z); arith(c, op, a, r, rc, z); return; }
+        if (b1) { big(c, op, &a[0], &a[0], r); return; }
         break;
-    /* | .floorDiv, [.int a, .int b] => if b = 0 then .fail else Res.ofInt (floorDivInt a b) */
+    /* | .floorDiv, [.int a, .int b] => if b = 0 then .fail else .ok (.int (floorDivInt a b)) */
     case VX_P_FLOORDIV:
-        if (ii) { rc = vx_floordiv(I(&a[0]), I(&a[1]), &z); arith(r, rc, z); return; }
+        if (ii) { rc = vx_floordiv(I(&a[0]), I(&a[1]), &z); arith(c, op, a, r, rc, z); return; }
+        if (bb) { big(c, op, &a[0], &a[1], r); return; }
         break;
-    /* | .ceilDiv, [.int a, .int b] => if b = 0 then .fail else Res.ofInt (ceilDivInt a b) */
+    /* | .ceilDiv, [.int a, .int b] => if b = 0 then .fail else .ok (.int (ceilDivInt a b)) */
     case VX_P_CEILDIV:
-        if (ii) { rc = vx_ceildiv(I(&a[0]), I(&a[1]), &z); arith(r, rc, z); return; }
+        if (ii) { rc = vx_ceildiv(I(&a[0]), I(&a[1]), &z); arith(c, op, a, r, rc, z); return; }
+        if (bb) { big(c, op, &a[0], &a[1], r); return; }
         break;
-    /* | .quotient, [.int a, .int b] => if b = 0 then .fail else Res.ofInt (Int.ediv a b) */
+    /* | .quotient, [.int a, .int b] => if b = 0 then .fail else .ok (.int (Int.ediv a b)) */
     case VX_P_QUOTIENT:
-        if (ii) { rc = vx_quotient(I(&a[0]), I(&a[1]), &z); arith(r, rc, z); return; }
+        if (ii) { rc = vx_quotient(I(&a[0]), I(&a[1]), &z); arith(c, op, a, r, rc, z); return; }
+        if (bb) { big(c, op, &a[0], &a[1], r); return; }
         break;
-    /* | .modulo, [.int a, .int b] => if b = 0 then .fail else Res.ofInt (Int.emod a b) */
+    /* | .modulo, [.int a, .int b] => if b = 0 then .fail else .ok (.int (Int.emod a b)) */
     case VX_P_MODULO:
-        if (ii) { rc = vx_modulo(I(&a[0]), I(&a[1]), &z); arith(r, rc, z); return; }
+        if (ii) { rc = vx_modulo(I(&a[0]), I(&a[1]), &z); arith(c, op, a, r, rc, z); return; }
+        if (bb) { big(c, op, &a[0], &a[1], r); return; }
         break;
     /* | .lt, [.int a, .int b] => cmpRes (decide (a < b)) (.int a)
        | .lt, [.char a, .char b] => cmpRes (decide (a < b)) (.char a)   (and le, gt, ge) */
     case VX_P_LT:
         if (ii) { cmp(r, I(&a[0]) < I(&a[1]), &a[0]); return; }
         if (cc) { cmp(r, a[0].bits < a[1].bits, &a[0]); return; }
+        if (bb) { cmp(r, order(c, &a[0], &a[1]) < 0, &a[0]); return; }
         break;
     case VX_P_LE:
         if (ii) { cmp(r, I(&a[0]) <= I(&a[1]), &a[0]); return; }
         if (cc) { cmp(r, a[0].bits <= a[1].bits, &a[0]); return; }
+        if (bb) { cmp(r, order(c, &a[0], &a[1]) <= 0, &a[0]); return; }
         break;
     case VX_P_GT:
         if (ii) { cmp(r, I(&a[0]) > I(&a[1]), &a[0]); return; }
         if (cc) { cmp(r, a[0].bits > a[1].bits, &a[0]); return; }
+        if (bb) { cmp(r, order(c, &a[0], &a[1]) > 0, &a[0]); return; }
         break;
     case VX_P_GE:
         if (ii) { cmp(r, I(&a[0]) >= I(&a[1]), &a[0]); return; }
         if (cc) { cmp(r, a[0].bits >= a[1].bits, &a[0]); return; }
+        if (bb) { cmp(r, order(c, &a[0], &a[1]) >= 0, &a[0]); return; }
         break;
     /* | .eq, [a, b] => cmpRes (Value.veq a b) a
        | .ne, [a, b] => cmpRes (!Value.veq a b) a  (vx_equal) */
@@ -419,9 +526,11 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
     /* | .range, [.int a, .int b] => .ok (.arr (rangeVals a b)) */
     case VX_P_RANGE:
         if (ii) { range(c, I(&a[0]), I(&a[1]), r); return; }
+        if (bb) { big_range(c, &a[0], &a[1], r); return; }
         break;
     /* | .index, [.arr xs, .int i] =>
-         if 0 ≤ i then match xs[i.toNat]? with | some v => .ok v | none => .fail else .fail */
+         if 0 ≤ i then match xs[i.toNat]? with | some v => .ok v | none => .fail else .fail
+       (a BIG index is past every array, or negative: it fails) */
     case VX_P_INDEX:
         if (n == 2 && is(&a[0], VX_T_ARR) && is(&a[1], VX_T_INT)) {
             int64_t i = I(&a[1]);
@@ -431,6 +540,7 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
                 vx_res_fail(r);
             return;
         }
+        if (n == 2 && is(&a[0], VX_T_ARR) && is(&a[1], VX_T_BIG)) { vx_res_fail(r); return; }
         break;
     /* | .len, [.arr xs] => .ok (.int xs.length) */
     case VX_P_LEN:
@@ -445,6 +555,7 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
             arr_set(c, &a[0], I(&a[1]), &a[2], r);
             return;
         }
+        if (n == 3 && is(&a[0], VX_T_ARR) && is(&a[1], VX_T_BIG)) { vx_res_fail(r); return; }
         break;
     /* | .tupGet k, [.tup vs] => match vs[k]? with | some v => .ok v | none => .err .type */
     case VX_P_TUPGET:
@@ -457,7 +568,8 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
         }
         break;
     /* | .toStr, [v] => toStrValue v, where
-       toStrValue (.int i) = .ok (.arr ((intBytes i).map .char))
+       toStrValue (.int i) = if Int64.inRange i then .ok (.arr ((intBytes i).map .char))
+                             else .err .overflow   (the Verse VM's ToString(:int), #724)
        toStrValue (.char c) = .ok (.arr [.char c])
        toStrValue (.arr vs) = match asBytes vs with | some _ => .ok (.arr vs) | none => .err .type
        toStrValue _ = .err .type */
@@ -465,6 +577,8 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
         if (n == 1) {
             if (is(&a[0], VX_T_INT))
                 int_to_str(c, I(&a[0]), r);
+            else if (is(&a[0], VX_T_BIG))
+                vx_res_error(r, VX_E_OVERFLOW);
             else if (is(&a[0], VX_T_CHAR))
                 new_from(c, VX_T_ARR, &a[0], 1, r);
             /* toStrValue (.float b) = .ok (Value.ofString (VFloat.fixed6 b)) */
@@ -532,6 +646,7 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
     /* | .fofInt, [.int i] => .ok (.float (canon (Float.ofInt i))) */
     case VX_P_FOFINT:
         if (i1) { ok_float(r, (double)I(&a[0])); return; }
+        if (b1) { ok_float(r, vx_big_double(&c->heap, &a[0])); return; }
         break;
     /* | .ffloor, [.float a] => VFloat.toIntRes .floor a, and fceil, fround, ftrunc */
     case VX_P_FFLOOR:
@@ -582,10 +697,13 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
     /* | .fofBits, [.int i] => .ok (.float (canon (ofBits i))) (a float literal) */
     case VX_P_FOFBITS:
         if (i1) { vx_res_ok(r, VX_T_FLOAT, vx_fcanon(vx_fval(a[0].bits))); return; }
+        if (b1) { vx_res_ok(r, VX_T_FLOAT, vx_fcanon(vx_fval(vx_big_low64(&c->heap, &a[0])))); return; }
         break;
     default:
         break;
     }
+#undef bb
+#undef b1
     /* | _, _ => .err .type */
     vx_res_error(r, VX_E_TYPE);
 }

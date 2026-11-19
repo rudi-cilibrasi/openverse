@@ -31,7 +31,11 @@ unsafe def main : IO Unit := do
   for i in [Int64.minV, -1, 0, 1025, 1026, Int64.maxV] do
     unless directInt i = .int i && arithmeticInt i = .int i && rangeInt i = .int i do
       throw (IO.userError s!"integer boundary {i} changed value")
-  for i in [Int64.minV - 1, Int64.maxV + 1] do
+  -- (ints go past 64 bits, #724: the overflow is past 2^20 bits)
+  for i in [Int64.minV - 1, Int64.maxV + 1, 2 ^ IntBits.max - 1, -(2 ^ IntBits.max - 1)] do
+    unless Res.ofInt i = .ok (.int i) do
+      throw (IO.userError s!"integer {i} past 64 bits was not kept")
+  for i in [(2 : Int) ^ IntBits.max, -(2 ^ IntBits.max)] do
     unless Res.ofInt i = .err .overflow do
-      throw (IO.userError s!"integer overflow {i} was not preserved")
+      throw (IO.userError s!"an integer of {IntBits.max + 1} bits did not overflow")
   IO.println "small integer cache: 0..1025 share wrappers; boundaries and overflow preserved"

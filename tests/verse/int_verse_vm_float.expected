@@ -1,0 +1,8 @@
+2^63
+2^64 + 2^11: a tie, to even
+2^64 + 2^11 + 1: up
+2^64 + 3 * 2^11: a tie, to even, up
+negative
+2^1008
+2^1071: infinity
+exit=2

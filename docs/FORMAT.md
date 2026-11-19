@@ -49,7 +49,10 @@ Lit := 0 INT  i:i64
 
 A literal that is not one of these (a non-string array, a non-empty tuple,
 `some v`) is encoded as the `PRIM` node that builds it (`mkArr`, `mkTup`,
-`mkSome`) applied to literal children. That evaluates to the same value
+`mkSome`) applied to literal children. An int literal outside 64 bits (Verse
+Core's ints are longer, #724, though no source literal is) is the
+arithmetic that computes it from INT literals, `(d₀ · 2^32 + d₁) · 2^32 + …`
+over its base-2^32 digits, negated when it is negative (`Encode.encInt`). That evaluates to the same value
 (`Prim.apply .mkArr vs = .ok (.arr vs.toArray)`), and it keeps every node flat, so the
 loader needs no recursion. A float (#127) is `fofBits` of an INT literal of
 its bits: the bits of a canonical double are their own float, so this too
@@ -108,8 +111,8 @@ four-int rational form (#489): arguments `(a,b,c,d)` denote `a/b` and
 `c/d`, and the result is the reduced tuple `(numerator,denominator)`.
 Operand denominators must be positive; otherwise the result is the
 overflow error. `quotient` fails on `c = 0`; the other forms never fail.
-Final parts must fit int64 with a positive denominator. Intermediate
-products and sums are exact and may exceed int64. The existing two-int
+Final parts are ints (of at most 2^20 bits, #724) with a positive
+denominator. Intermediate products and sums are exact. The existing two-int
 forms are unchanged. Four-argument arithmetic requires a runtime with
 this extension; opcode numbers and the loader's accepted format are unchanged.
 
@@ -171,7 +174,7 @@ for every input buffer, and reads only inside the buffer.
 |---|---|---|
 | 0 | `Main` succeeded | — |
 | 1 | `Main` failed (only a `<decides>` `Main` can) | `failure` |
-| 2 | runtime error | `error: overflow` / `type` / `slot` / `call` / `control` / `user` |
+| 2 | runtime error | `error: overflow` (an int longer than 2^20 bits; `ToString` of one beyond 64 bits; a float too large for an int) / `type` / `slot` / `call` / `control` / `user` |
 | 3 | resource limit (fuel, recursion depth, memory) | `limit: …` |
 | 4 | the program could not be loaded or compiled | the reason |
 

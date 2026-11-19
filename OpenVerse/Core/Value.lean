@@ -7,22 +7,39 @@ import OpenVerse.Core.Float
   represented by the two constructors `none` (written `false` in Verse) and
   `some`.
 
-  `int` is Verse's 64-bit signed integer. Values of `int` always lie in
-  [`Int64.minV`, `Int64.maxV`]; an operation whose mathematical result lies
-  outside is a runtime error (`ErrKind.overflow`), never a wrap-around.
+  `int` is Lean's `Int`, as long as the Verse VM's ints (Book of Verse
+  ch. 2, "Integers"; Epic's Verse VM, UEFN 43.12, #724): a magnitude of up
+  to `IntBits.max` bits, 2^20. An operation whose mathematical result is
+  longer is a runtime error (`ErrKind.overflow`), never a wrap-around. What
+  needs 64 bits checks for them: `ToString` of an int outside
+  [`Int64.minV`, `Int64.maxV`], and a float converted to an int out of that
+  range, are the overflow error too.
 -/
 namespace OpenVerse
 
-/-- Smallest Verse `int`. -/
+/-- The smallest int of 64 bits. -/
 def Int64.minV : Int := -9223372036854775808
-/-- Largest Verse `int`. -/
+/-- The largest int of 64 bits. -/
 def Int64.maxV : Int := 9223372036854775807
 
-/-- `i` is representable as a Verse `int`. -/
+/-- `i` fits in 64 bits: the range of an int literal, of `ToString` and of a
+    float converted to an int. -/
 def Int64.inRange (i : Int) : Bool := decide (Int64.minV ≤ i) && decide (i ≤ Int64.maxV)
 
+/-- The most bits of an int's magnitude: the Verse VM's limit
+    (`MaxLengthBits`; the Book's tests, `Math/Bitwise.versetest`,
+    `verse_vm_only`: `BitShiftLeft[1, 1048575]` is an int and
+    `BitShiftLeft[1, 1048576]` the runtime error). -/
+def IntBits.max : Nat := 1048576
+
+/-- `i` is an int: its magnitude has at most `IntBits.max` bits, so is less
+    than 2^(2^20) (`Nat.log2_lt`; the 64-bit test first: the common case, and
+    cheap). -/
+def IntBits.fits (i : Int) : Bool := Int64.inRange i || decide (i.natAbs.log2 < IntBits.max)
+
 inductive Value where
-  /-- `int`; invariant (not enforced by the type): `Int64.inRange i`. -/
+  /-- `int`; invariant (not enforced by the type): `IntBits.fits i` (the C
+      runtime holds one outside 64 bits on its heap, `runtime/src/bigint.c`). -/
   | int   : Int → Value
   /-- `logic`: `true` / `false`. -/
   | logic : Bool → Value
@@ -438,7 +455,9 @@ end Value
 
 /-- Runtime errors. They end the whole program; failure contexts do not catch them. -/
 inductive ErrKind where
-  /-- An `int` result outside the 64-bit range. -/
+  /-- An `int` result longer than `IntBits.max` bits; an int outside the
+      64-bit range where 64 bits are needed (`ToString`, a float converted
+      to an int); a rational with no positive denominator. -/
   | overflow
   /-- An operation applied to values of the wrong shape (excluded by the type checker). -/
   | type
@@ -478,8 +497,9 @@ def isOk : Res → Bool
 @[simp] theorem isOk_ret (v : Value) : (Res.ret v).isOk = false := rfl
 @[simp] theorem isOk_err (e : ErrKind) : (Res.err e).isOk = false := rfl
 
-/-- Range-checked `int` result. -/
-def ofInt (i : Int) : Res := if Int64.inRange i then .ok (Value.ofInt i) else .err .overflow
+/-- Length-checked `int` result: outside 64 bits too (#724; before, a
+    result outside 64 bits was the overflow error). -/
+def ofInt (i : Int) : Res := if IntBits.fits i then .ok (Value.ofInt i) else .err .overflow
 end Res
 
 /-- The outcome of evaluating a list of expressions left to right. -/
