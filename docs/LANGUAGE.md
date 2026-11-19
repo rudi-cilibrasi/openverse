@@ -716,7 +716,20 @@ Nothing else shares a name in one scope (the top level or a module): two
 classes, interfaces, structs, enums or constants of one name, or one of them
 and a function (`c := class{}` with `c(I:int):c`, which the Book's tests
 refuse as "overloading a class"), are a name defined twice. A local cannot
-take an overloaded function's name either.
+take an overloaded function's name either. Nor may two functions of one
+module (or of the top level), or two methods of one class, have names that
+differ only in case and take the same parameters (their types, and a named
+one's name), `<suspends>` alike: Epic's toolchain, whose names are
+case-insensitive, gives them one (#724; UEFN 43.12 refuses `Function():int`
+beside `FUNCTION():int`, error 9200, "Found multiple functions that map to
+the same target function", two such `<suspends>` methods with 9002 and
+9200, and two of one parameter type with 9000,
+`followup-book2/case-collision-*`). Their return types, effects but
+`<suspends>`, and access specifiers do not tell them apart; other parameter
+types, a `<suspends>` function beside one that is not, and names in
+different classes or modules do, as do a function and a constant (the
+Book's tests, `Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest`).
+An interface's methods are not measured.
 - **`ToString`.** A program may add overloads beside the primitive ones
   (`int`, `float`, `char`, `char32`, `string`), including several arguments
   and named parameters. `ToString(L:label):string = "label {L.Code}"`

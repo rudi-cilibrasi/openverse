@@ -2900,6 +2900,15 @@ openverse takes Epic's compiler's refusals, one commit each (#724):
   accepted to agree; their Verse VM twins, `Effects.versetest` 572 and 580,
   from agree to refused: the Book's Verse VM admits what Epic's shipped
   compiler refuses.
+- **Names that differ only in case** (9200, "Found multiple functions that
+  map to the same target function"; 9002, 9000): two functions of one
+  module or of the top level, or two methods of one class, whose names are
+  equal but for case and that take the same parameters (types, a named
+  one's name) and are `<suspends>` alike, are refused. The 16 `bp_vm_only`
+  cases of `Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest` move
+  from accepted to agree; its valid cases (other parameters, `<suspends>`
+  beside a function that is not) still agree. The edges the evidence
+  leaves open are probes (`followup-book3/case-collision-*`).
 
 ## Not covered, and why it matters
 
