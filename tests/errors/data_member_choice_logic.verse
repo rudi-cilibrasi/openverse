@@ -1,0 +1,9 @@
+# expect: 8:18: the value of the constant Has calls Two, which might not complete
+# A data member's definition calls only converging functions (#724, Epic's
+# 3582), also through `logic{…}` with a call of a function with several
+# values. Admitted before this follow-up, as such a call leaves no call
+# (`Choice.inlineCalls` puts the function's code in its place); `$fxOf`,
+# which stands for it, is noted now.
+Two(N:int)<computes>:int = N | N + 1
+Has:logic = logic{Two(1) > 1}
+Main():void = Print("{if (Has?) then 1 else 0}")

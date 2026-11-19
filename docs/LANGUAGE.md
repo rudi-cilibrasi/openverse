@@ -393,11 +393,22 @@ interpolation, is noted (`noteDivergentCall`), and the first, in the
 order of the source, is refused once the definition is elaborated
 (`divergentCallError`), before the effect checks, so a call of a function
 without specifiers there is refused as divergent rather than for its
-`no_rollback` effect. A call that the elaboration compiles into a helper
-of its own is not seen: one of a function with several values in a `for`'s
-generator (`Vals:[]int = for (X := Two("abc")) { X }` with `Two` an
-overloaded function of several values, [Choice](#choice)) is admitted in a
-constant; in a field's default #511's check still refuses it.
+`no_rollback` effect. A call of a function with several values
+([Choice](#choice)) leaves no call: the function's code is put in its
+place (`Choice.inlineCalls`), with a marker for the call (`$fxOf`), which
+is noted as the call is, wherever it is written (`Vals:[]int = for (X :=
+Two(3)) { X }`, a `for`'s filter, an `if`'s condition, `option{…}`,
+`first{…}`; a recursive function's, a method's); the calls in the code
+put in its place are the function's, not the data member's, and are not
+noted (`Ctx.inlineScopes`), but in the code of a recursive one taken a
+value at a time (#246), which the message may name instead.
+Calls nested in what the definition is made of (a `for`'s body, filter or
+range, an `if`, `case`, `block:`, `let`, an archetype's field, an index,
+an operator the program overloads, a call through a function value) are
+noted where they are written (the tests `tests/errors/data_member_choice_*`
+and `data_member_nested_*`). A class's `block:` is no data member: an
+archetype of a `<computes>` class in a constant runs it, with the calls
+it makes (`followup-3582/div-const-class-block` asks UEFN 43.12).
 
 `--extended-defaults` on `run`, `emit`, `check` or `core` explicitly retains
 OpenVerse's reading of defaults from before the Book's tests pinned theirs,
