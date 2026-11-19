@@ -301,8 +301,14 @@ a rational, `BitAnd` and its kin, `ConcatenateMaps`, the char conversions)
 and on none of `Min` (written in Verse), `Sqrt`, `Quotient`, `ToString` and
 the other natives. openverse takes that list
 ([the rule](../LANGUAGE.md#data-members-call-only-converging-functions));
-the other twenty-one probes ask UEFN 43.12 about one construct each and are
-compiled only: `Abs`, `Min`, `BitAnd`, `Sqrt`, `Quotient`, `ToString`,
+the other twenty-one probes ask UEFN 43.12 about one construct each. It
+compiled them on 2026-11-19 (10:40Z) and gave openverse's verdict on every
+one, so the list is confirmed as far as they reach: 3582 for `Min`, `Sqrt`,
+`Quotient`, `ToString`, `Floor` of a float, the interpolated int, `Min` in
+a field default and the module-scoped `var`; 3512 for the struct's
+archetype; 3502 ("Only <final> fields may be referenced from the default
+value of a data member") for the default that reads a field of its own
+object; the rest admitted. The constructs: `Abs`, `Min`, `BitAnd`, `Sqrt`, `Quotient`, `ToString`,
 `Floor` of a float, an interpolated int, an array's `Length`, indexing and
 `+`, archetypes of a `<computes>` class and of a struct, an enum value,
 `option{…}`, a tuple, a map, a field default that reads another field of its
