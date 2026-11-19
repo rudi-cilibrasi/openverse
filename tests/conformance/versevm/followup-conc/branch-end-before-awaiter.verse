@@ -6,6 +6,10 @@
 #   runner ending | branch cleanup | awaited 5 | after wait
 # If awaiters were resumed first:
 #   runner ending | awaited 5 | branch cleanup | after wait
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use
+# Verse VM" on, 2026-11-19) printed
+#   runner ending | branch cleanup | awaited 5 | after wait
+# as OpenVerse does.
 Helper()<suspends>:void =
     branch:
         defer:

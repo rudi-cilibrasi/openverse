@@ -5,6 +5,10 @@
 #   winner done | winner branch cleanup | loser cleanup | after race | after wait
 # If a race arm's branch belonged to the function's task instead:
 #   winner done | loser cleanup | after race | winner branch tick | ... | after wait
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use
+# Verse VM" on, 2026-11-19) printed
+#   winner done | winner branch cleanup | loser cleanup | after race | after wait
+# as OpenVerse does.
 Run()<suspends>:void =
     race:
         block:

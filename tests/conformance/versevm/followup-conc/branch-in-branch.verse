@@ -8,6 +8,10 @@
 # (Main's):
 #   function returned | outer done | outer cleanup | inner tick | inner tick |
 #   inner tick | after wait (and inner cleanup when Main's task ends)
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use
+# Verse VM" on, 2026-11-19) printed
+#   function returned | outer done | outer cleanup | inner cleanup | after wait
+# as OpenVerse does.
 Start()<suspends>:void =
     branch:
         defer:

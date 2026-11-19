@@ -11,6 +11,11 @@
 # If it were cancelled when the helper returns (the Blueprint VM's rule):
 #   helper returning | branch cleanup | runner after helper | runner ending |
 #   main after wait
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use
+# Verse VM" on, 2026-11-19) printed
+#   helper returning | runner after helper | branch tick | runner ending |
+#   branch cleanup | main after wait
+# as OpenVerse does.
 Helper()<suspends>:void =
     branch:
         defer:

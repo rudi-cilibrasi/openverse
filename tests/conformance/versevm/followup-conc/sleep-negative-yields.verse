@@ -6,6 +6,10 @@
 #   worker before sleep | worker after sleep | main after spawn | main after wait
 # If a negative duration yields as zero does:
 #   worker before sleep | main after spawn | worker after sleep | main after wait
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use
+# Verse VM" on, 2026-11-19) printed
+#   worker before sleep | worker after sleep | main after spawn | main after wait
+# as OpenVerse does: a negative duration does not yield.
 Worker()<suspends>:void =
     Print("OVPROBE worker before sleep")
     Sleep(-1.0)

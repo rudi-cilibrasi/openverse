@@ -213,9 +213,35 @@ Follow-up probes for the shapes OpenVerse extrapolates from these
 a task's defers and its children's; `Sleep` of a negative duration and of
 zero within an update; a module constant whose own initialiser declares a
 `var`) are in [`followup-conc/`](../../tests/conformance/versevm/followup-conc),
-each with OpenVerse's output and the other reading in its header. Run
+each with OpenVerse's output, the other reading and Epic's result in its
+header, and in its `expectations.tsv` (`epic_outcome`, `epic_lines`). Run
 `branch-at-entry-top-level` and `link-constant-own-var` alone: the first
 leaves a branch to its device's `OnBegin`, the second may fail the cook.
+On the Verse VM (the same build, "Use Verse VM" on, `newVerseVm=true`,
+2026-11-19; nine in one batch, `branch-at-entry-top-level` alone, the two
+refusals in the editor's build):
+
+| Probe | Verse VM | OpenVerse |
+| --- | --- | --- |
+| [`branch-cancel-order`](../../tests/conformance/versevm/followup-conc/branch-cancel-order.verse) | `winner done`, `branch cleanup`, `arm cleanup`, `after race`, `after wait`: a cancelled task's child is stopped before the task's own defers run | had `arm cleanup` before `branch cleanup`; now Epic's ([the rule](../LANGUAGE.md#concurrency)) |
+| [`branch-in-branch`](../../tests/conformance/versevm/followup-conc/branch-in-branch.verse) | `function returned`, `outer done`, `outer cleanup`, `inner cleanup`, `after wait`: a task that ends runs its defers, then stops its children | the same |
+| [`branch-end-before-awaiter`](../../tests/conformance/versevm/followup-conc/branch-end-before-awaiter.verse), [`branch-in-race-winner`](../../tests/conformance/versevm/followup-conc/branch-in-race-winner.verse), [`branch-in-spawned-helper`](../../tests/conformance/versevm/followup-conc/branch-in-spawned-helper.verse), [`branch-in-sync-arm`](../../tests/conformance/versevm/followup-conc/branch-in-sync-arm.verse), [`rush-loser-outlives-return`](../../tests/conformance/versevm/followup-conc/rush-loser-outlives-return.verse) | as in their headers' first reading | the same |
+| [`branch-at-entry-top-level`](../../tests/conformance/versevm/followup-conc/branch-at-entry-top-level.verse) | `begin`, `main returning`, `end`, `branch cleanup`, no `branch tick` in the 12 s after: stopped when the device's `OnBegin` ends | `main returning`, `branch cleanup` (stopped when `Main` ends) |
+| [`sleep-negative-yields`](../../tests/conformance/versevm/followup-conc/sleep-negative-yields.verse) | `worker before sleep`, `worker after sleep`, `main after spawn`, `main after wait`: no yield | the same |
+| [`sleep-zero-next-update`](../../tests/conformance/versevm/followup-conc/sleep-zero-next-update.verse) | `b after short sleep`, `a after three zero sleeps`, `main after wait`: each zero sleep waits for the next update | the same |
+| [`branch-in-defer`](../../tests/conformance/versevm/followup-conc/branch-in-defer.verse) | refused, 3512: the `branch` macro's `suspends` effect is not allowed in a `defer` | refused (#156) |
+| [`link-constant-own-var`](../../tests/conformance/versevm/followup-conc/link-constant-own-var.verse) | refused: 3512 (the `var`'s `allocates`, `Sum`'s `reads`), 3582 twice (side effects, divergent calls defining data-members) | refused (the constant allocates a `var`) |
+
+The rule's open cases, asked by the probes `cancel-grandchild-order`,
+`cancel-two-children-order`, `cancel-spawned-not-child`,
+`cancel-sync-arm-child`, `cancel-branch-before-sync-arms`,
+`cancel-rush-child`, `cancel-task-child`, `end-grandchild-order` and
+`end-two-children-order` (not yet run on Epic; OpenVerse's lines in each
+header and in `expectations.tsv`): a stopped child cancelled the same way,
+its own children first; children newest first; a spawned task nobody's
+child; a `sync` arm cancelled with its task as a `race` arm that loses; a
+cancelled task's branches before the arms it waits in; a `rush` arm that
+went on as a child; `T.Cancel()` as a race's loss.
 
 ## OpenVerse observations
 

@@ -3,6 +3,10 @@
 # parent would be the task that runs the defer (here Main's code, through the
 # function's exit): it would print
 #   function returned | deferred branch done | after wait
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use
+# Verse VM" on, 2026-11-19) refuses it at compile time, 3512: "This 'branch' macro has the
+# 'suspends' effect, which is not allowed by its context" (a defer cannot
+# suspend). OpenVerse refuses it too, with its own message.
 Exit()<suspends>:void =
     defer:
         branch:

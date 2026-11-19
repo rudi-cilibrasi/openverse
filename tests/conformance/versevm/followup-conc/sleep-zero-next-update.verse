@@ -8,6 +8,10 @@
 #   b after short sleep | a after three zero sleeps | main after wait
 # If zero sleeps resume within the update they were made in:
 #   a after three zero sleeps | b after short sleep | main after wait
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use
+# Verse VM" on, 2026-11-19) printed
+#   b after short sleep | a after three zero sleeps | main after wait
+# as OpenVerse does: each Sleep(0.0) waits for the next update.
 A()<suspends>:void =
     Sleep(0.0)
     Sleep(0.0)

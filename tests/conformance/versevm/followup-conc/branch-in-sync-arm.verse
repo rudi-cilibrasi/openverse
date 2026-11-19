@@ -8,6 +8,10 @@
 #   arm one done | branch tick | arm two done | branch cleanup | after sync | after wait
 # If only when the function returns (the Blueprint VM's rule):
 #   arm one done | branch tick | arm two done | after sync | branch tick ... | branch cleanup | after wait
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use
+# Verse VM" on, 2026-11-19) printed
+#   arm one done | branch cleanup | arm two done | after sync | after wait
+# as OpenVerse does.
 Run()<suspends>:void =
     sync:
         block:
