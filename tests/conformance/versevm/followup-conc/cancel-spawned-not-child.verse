@@ -7,6 +7,10 @@
 #   winner done | arm cleanup | after race | spawned done | spawned cleanup | after wait
 # If a spawned task were a child of the task whose code spawned it:
 #   winner done | spawned cleanup | arm cleanup | after race | after wait
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use
+# Verse VM" on, 2026-11-19) printed
+#   winner done | arm cleanup | after race | spawned done | spawned cleanup | after wait
+# as OpenVerse does.
 Spawned()<suspends>:void =
     defer:
         Print("OVPROBE spawned cleanup")

@@ -232,16 +232,22 @@ refusals in the editor's build):
 | [`branch-in-defer`](../../tests/conformance/versevm/followup-conc/branch-in-defer.verse) | refused, 3512: the `branch` macro's `suspends` effect is not allowed in a `defer` | refused (#156) |
 | [`link-constant-own-var`](../../tests/conformance/versevm/followup-conc/link-constant-own-var.verse) | refused: 3512 (the `var`'s `allocates`, `Sum`'s `reads`), 3582 twice (side effects, divergent calls defining data-members) | refused (the constant allocates a `var`) |
 
-The rule's open cases, asked by the probes `cancel-grandchild-order`,
-`cancel-two-children-order`, `cancel-spawned-not-child`,
-`cancel-sync-arm-child`, `cancel-branch-before-sync-arms`,
-`cancel-rush-child`, `cancel-task-child`, `end-grandchild-order` and
-`end-two-children-order` (not yet run on Epic; OpenVerse's lines in each
-header and in `expectations.tsv`): a stopped child cancelled the same way,
-its own children first; children newest first; a spawned task nobody's
-child; a `sync` arm cancelled with its task as a `race` arm that loses; a
-cancelled task's branches before the arms it waits in; a `rush` arm that
-went on as a child; `T.Cancel()` as a race's loss.
+The rule's open cases, a second batch the same day (same build, Verse VM,
+`newVerseVm=true`):
+
+| Probe | Verse VM | OpenVerse |
+| --- | --- | --- |
+| [`cancel-branch-before-sync-arms`](../../tests/conformance/versevm/followup-conc/cancel-branch-before-sync-arms.verse) | `winner done`, `arm two cleanup`, `arm one cleanup`, `branch cleanup`, `loser cleanup`, `after race`, `after wait`: the arms a cancelled task waits in go first, as its newest children | had `branch cleanup` first; now Epic's ([the rule](../LANGUAGE.md#concurrency)) |
+| [`cancel-grandchild-order`](../../tests/conformance/versevm/followup-conc/cancel-grandchild-order.verse), [`end-grandchild-order`](../../tests/conformance/versevm/followup-conc/end-grandchild-order.verse) | a stopped child's own children first: `grandchild cleanup` before `child cleanup` | the same |
+| [`cancel-two-children-order`](../../tests/conformance/versevm/followup-conc/cancel-two-children-order.verse), [`end-two-children-order`](../../tests/conformance/versevm/followup-conc/end-two-children-order.verse) | newest first: `second cleanup` before `first cleanup` | the same |
+| [`cancel-spawned-not-child`](../../tests/conformance/versevm/followup-conc/cancel-spawned-not-child.verse) | the spawned task goes on: `spawned done`, `spawned cleanup` after `after race` | the same |
+| [`cancel-sync-arm-child`](../../tests/conformance/versevm/followup-conc/cancel-sync-arm-child.verse), [`cancel-rush-child`](../../tests/conformance/versevm/followup-conc/cancel-rush-child.verse) | a cancelled `sync` arm's branch, a `rush` arm that went on, stopped before the defers of the task that is cancelled | the same |
+| [`cancel-task-child`](../../tests/conformance/versevm/followup-conc/cancel-task-child.verse) | refused, 3593: ``(/Verse.org/Concurrency/task:)Cancel`` is `epic_internal` | admitted (`T.Cancel()`), a known difference |
+
+Not yet run: `cancel-branch-before-race-arms`, `cancel-branch-in-and-before-sync-arm`
+and `cancel-branch-before-nested-sync` (a `race`'s arms, a branch started
+in an arm, the arms one call deeper; OpenVerse's lines in each header and
+in `expectations.tsv`).
 
 ## OpenVerse observations
 

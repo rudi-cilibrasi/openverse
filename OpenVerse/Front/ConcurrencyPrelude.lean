@@ -196,10 +196,12 @@ def concPreludeAwaits : String :=
     `Main`'s scope); the scheduler holds the scope whose code runs and
     `Main`'s, a task its own. The lowering does the rest (`$stopScope`). -/
 def withScopes (prelude : String) : String :=
-  -- (the scheduler's two fields after its others, which the lowering
-  -- reaches by their places)
+  -- (the scheduler's fields after its others, which the lowering reaches
+  -- by their places; `Unwinding`, the scope of the task being cancelled
+  -- whose children are still to be stopped, before its first defer runs:
+  -- `OuterUnwind` the one it hides, `UnwindDue` whether still to stop)
   let s := prelude.replace "taskBase := class:\n"
-    "    var Scope:scope = scope{}\n    var MainScope:scope = scope{}\nscope := class:\n    var Kids:?int = false\n    var Own:logic = false\ntaskBase := class:\n"
+    "    var Scope:scope = scope{}\n    var MainScope:scope = scope{}\n    var Unwinding:?scope = false\nscope := class:\n    var Kids:?int = false\n    var Own:logic = false\n    var OuterUnwind:?scope = false\n    var UnwindDue:logic = false\ntaskBase := class:\n"
   let s := s.replace "    var Result:?t = false\n" "    var Result:?t = false\n    var TScope:scope = scope{}\n"
   -- (await mode: a task whose call has ended has its result before its
   -- children are stopped, and is done after: an `Await` made meanwhile, in
@@ -224,7 +226,8 @@ def concTops (owned : List String := []) (events : Bool := false) (awaits : Bool
     (owned ++ (if events || awaits then ["CurRoot",
     "WaitRoot", "Pending", "Probe", "Drain", "MainTask", "Ev", "First", "wakeRoot"] else []) ++
     (if awaits then ["Ends", "taskEnds", "taskEnd"] else []) ++
-    (if scopes then ["scope", "Kids", "Own", "Scope", "MainScope", "TScope"] else []) ++ ["sched", "Now", "Next", "sleep", "Pc", "Secs", "Wake", "sleepNew",
+    (if scopes then ["scope", "Kids", "Own", "Scope", "MainScope", "TScope", "Unwinding", "OuterUnwind",
+      "UnwindDue"] else []) ++ ["sched", "Now", "Next", "sleep", "Pc", "Secs", "Wake", "sleepNew",
     "sleepInit", "sleepResume", "Sleep", "Ticks", "syncMark", "raceMark", "S", "F", "C", "N", "R", "A",
     "Progress", "Roots", "taskBase", "Done", "Result", "waitf", "T", "X", "waitNew", "waitInit", "waitResume",
     "WaitDone", "Await", "spawnMark", "t", "Sch", "Dead", "evrec", "Got", "Next", "Head", "Tail", "Cur", "W", "L", "V",

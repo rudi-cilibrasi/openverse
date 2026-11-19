@@ -78,9 +78,10 @@ def returning_owner(model, finish, late_child=False, wrapped=False):
 
 def outside_cancel_order(model):
     """A cancelled task stops its children, newest first, each the same
-    way, then its code unwinds (its defers): Epic's Verse VM (UEFN 43.12,
-    branch-cancel-order, #724); the arms it waits in after its children;
-    what a function started is its task's, not stopped with the function
+    way, before its defers run: the arms it waits in first (its newest
+    children), then its branches: Epic's Verse VM (UEFN 43.12,
+    branch-cancel-order, cancel-branch-before-sync-arms, #724); what a
+    function started is its task's, not stopped with the function
     (tests/verse/stop_order_cancel_outside)."""
     st = model.St
 
@@ -120,7 +121,7 @@ def outside_cancel_order(model):
     assert model.S.run(main()) == 0
     actual = [line.removesuffix(' 0').strip() for line in model.S.out]
     expected = ['B defer', 'A.1 defer', 'A defer', 'F defer', 'cancelled F',
-                'A.1 defer', 'A defer', 'r2 defer', 'r1.b defer', 'r1 defer',
+                'r2 defer', 'r1.b defer', 'r1 defer', 'A.1 defer', 'A defer',
                 'G defer', 'H defer', 'cancelled H']
     assert actual == expected, (actual, expected)
     assert all(n == 0 for n in model.S.sleepers.values()), 'cancelled timer remained registered'

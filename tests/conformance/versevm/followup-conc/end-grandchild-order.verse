@@ -8,6 +8,10 @@
 #   runner ending | runner cleanup | grandchild cleanup | child cleanup | after wait
 # If the child ran its own defers first:
 #   runner ending | runner cleanup | child cleanup | grandchild cleanup | after wait
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use
+# Verse VM" on, 2026-11-19) printed
+#   runner ending | runner cleanup | grandchild cleanup | child cleanup | after wait
+# as OpenVerse does.
 Helper()<suspends>:void =
     branch:
         defer:

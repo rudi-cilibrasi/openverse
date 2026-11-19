@@ -9,6 +9,10 @@
 # If a rush arm that goes on were stopped after the defers of the task that
 # ran the rush:
 #   rush done | winner done | loser cleanup | slow arm cleanup | after race | after wait
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use
+# Verse VM" on, 2026-11-19) printed
+#   rush done | winner done | slow arm cleanup | loser cleanup | after race | after wait
+# as OpenVerse does.
 Loser()<suspends>:void =
     defer:
         Print("OVPROBE loser cleanup")

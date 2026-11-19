@@ -1,16 +1,18 @@
-# A cancelled task stops its children (its branches and the rush arms that
-# went on), newest first, each the same way, before its own code unwinds
-# (#724). Measured (1): on UEFN 43.12 (++Fortnite+Release-43.12-CL-60598086,
-# "Use Verse VM" on), the probe followup-conc/branch-cancel-order printed
-# `winner done | branch cleanup | arm cleanup | after race | after wait`;
-# a task that ends runs its defers first, then stops its children
-# (branch-in-branch). The rest extends the rule, as the follow-up probes
-# cancel-*.verse and end-*.verse ask Epic: a child is stopped as a
-# cancelled task is, its own children first (2, 9), newest first (3, 10);
-# a spawned task is nobody's child (4); a sync arm cancelled with its task
-# stops its children first too (5); a cancelled task's children come before
-# the arms it waits in, last started first, then its defers (6); a rush's
-# arm that went on is a child (7); and T.Cancel() of a spawned task (8).
+# A cancelled task stops its children before any of its defers runs, newest
+# first, each the same way (#724): the arms of the sync, race or rush it
+# waits in (its newest), last started first, then its branches and the rush
+# arms that went on. Measured on UEFN 43.12
+# (++Fortnite+Release-43.12-CL-60598086, "Use Verse VM" on), the follow-up
+# probes (tests/conformance/versevm/followup-conc/) printed what 1 to 7, 9
+# and 10 print here: branch-cancel-order (1), cancel-grandchild-order (2),
+# cancel-two-children-order (3), cancel-spawned-not-child (4: a spawned
+# task is nobody's child), cancel-sync-arm-child (5),
+# cancel-branch-before-sync-arms (6: the arms before the branch),
+# cancel-rush-child (7), end-grandchild-order (9) and end-two-children-order
+# (10: a task that ends runs its defers first, then stops its children).
+# Epic refuses T.Cancel() in user code (8, cancel-task-child, 3593). Not yet
+# measured: a race's arms as a sync's (11), a branch started in an arm as
+# that arm's child (12), the arms one call deeper (13).
 Wait()<suspends>:void = Sleep(10.0)
 Child(Tag:string)<suspends>:void =
     branch:
@@ -84,6 +86,50 @@ Seven()<suspends>:void =
             Wait()
     Print("7: rush done")
     Wait()
+Eleven()<suspends>:void =
+    defer:
+        Print("11: loser cleanup")
+    Child("11: branch")
+    race:
+        block:
+            defer:
+                Print("11: arm one cleanup")
+            Wait()
+        block:
+            defer:
+                Print("11: arm two cleanup")
+            Wait()
+Twelve()<suspends>:void =
+    defer:
+        Print("12: loser cleanup")
+    Child("12: task branch")
+    sync:
+        block:
+            defer:
+                Print("12: arm one cleanup")
+            Child("12: arm branch")
+            Wait()
+        block:
+            defer:
+                Print("12: arm two cleanup")
+            Wait()
+Inner()<suspends>:void =
+    defer:
+        Print("13: inner cleanup")
+    sync:
+        block:
+            defer:
+                Print("13: arm one cleanup")
+            Wait()
+        block:
+            defer:
+                Print("13: arm two cleanup")
+            Wait()
+Thirteen()<suspends>:void =
+    defer:
+        Print("13: loser cleanup")
+    Child("13: branch")
+    Inner()
 Lose(Tag:string, F:type{_()<suspends>:void})<suspends>:void =
     race:
         F()
@@ -121,4 +167,7 @@ Main()<suspends>:void =
     Sleep(0.3)
     spawn{Ending("10:", false)}
     Sleep(0.3)
+    Lose("11:", Eleven)
+    Lose("12:", Twelve)
+    Lose("13:", Thirteen)
     Print("end")

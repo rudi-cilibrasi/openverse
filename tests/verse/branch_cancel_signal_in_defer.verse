@@ -1,7 +1,8 @@
 # A Signal made by a defer that runs while a task is cancelled wakes none of
-# that task's waits (#724): its children are stopped first (Epic's Verse VM,
-# UEFN 43.12, followup-conc/branch-cancel-order), and a child's defer may
-# signal an event the task waits on; the task unwinds from where it waited.
+# that task's waits (#724): its children are stopped before its defers run
+# (Epic's Verse VM, UEFN 43.12, followup-conc/branch-cancel-order), and a
+# child's defer may signal an event the task waits on; the task unwinds
+# from where it waited.
 # Also a sync's arm that waits on an event its sibling's defer signals, as
 # the sibling is cancelled first, last started first (2), and a race arm
 # that loses, waiting in a sync's arm on an event its child signals (4).

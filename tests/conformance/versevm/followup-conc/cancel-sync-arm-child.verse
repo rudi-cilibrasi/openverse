@@ -7,6 +7,10 @@
 #   winner done | branch cleanup | sync arm cleanup | loser cleanup | after race | after wait
 # If a sync arm cancelled with its task unwound before its children:
 #   winner done | sync arm cleanup | branch cleanup | loser cleanup | after race | after wait
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use
+# Verse VM" on, 2026-11-19) printed
+#   winner done | branch cleanup | sync arm cleanup | loser cleanup | after race | after wait
+# as OpenVerse does.
 Helper()<suspends>:void =
     branch:
         defer:

@@ -600,6 +600,16 @@ structure Env where
   ownF : Nat := 0
   schedScopeF : Nat := 0
   stopScopeFn : Nat := 0
+  /-- (#724) A cancelled task stops its children after the arms of the
+      `sync`, `race` or `rush` it waits in (its newest children), before
+      any of its defers runs, as Epic's Verse VM does: `unwindPushFn(sched,
+      scope)` makes the scope due when the cancel starts, `unwindFlushFn(sched)`
+      stops a due scope where a site's waits were cancelled and before its
+      defers, and `unwindPopFn(sched, scope)` stops it if still due and
+      restores the one it hid (the lowering's `$unwindPush`, …). -/
+  unwindPushFn : Nat := 0
+  unwindFlushFn : Nat := 0
+  unwindPopFn : Nat := 0
   /-- The code that stops the scope of the arm being lowered (none in a
       function's body): run when it ends, or `return`s. -/
   armStop : Expr := vd
@@ -837,7 +847,7 @@ def resetScope (a : Nat) : M Expr := do
   let f := armScopeMark a
   return .ite (.prim .query [.heap (.get env.ownF) [fget f]])
     (.seq (.heap (.set env.kidsF) [fget f, .lit .none]) vd)
-    (.seq (fset f (.heap (.new env.scopeTag) [.lit .none, .lit (.logic true)])) vd)
+    (.seq (fset f (.heap (.new env.scopeTag) [.lit .none, .lit (.logic true), .lit .none, .lit (.logic false)])) vd)
 
 /-- (#724) `run`, which runs arm `a`'s code, with the scheduler's current
     scope the arm's, and the one before after it. -/
@@ -1813,17 +1823,30 @@ partial def region (pcFld : Nat) (done : Option (Expr → Expr)) (body : Expr) (
       | .arms as => seqVoid (as.reverse.map fun (_, can, pcA, doneA) =>
           .ite (allOf [.prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
             (.seq (seqVoid [spillMark, .call can args, reloadMark, fset doneA (int 2)]) vd) vd)
-    .ite (.prim .eq [fget pcFld, int s.id]) (.seq (seqVoid [child, s.defers]) vd) vd
+    -- (#724: the task being cancelled stops its children once the waits
+    -- here are cancelled, the arms of a `sync`, `race` or `rush` first,
+    -- before the first defer runs, `Env.unwindFlushFn`)
+    let flush : Expr := if env.scopes then .call env.unwindFlushFn [.local schS] else vd
+    .ite (.prim .eq [fget pcFld, int s.id]) (.seq (seqVoid [child, flush, s.defers]) vd) vd
   -- (a function's cancel also stops its branches, before the rest)
   -- (a function's branches are stopped last, after its own defers, as when
   -- it returns)
   -- (where frames are resumed directly, #362, the cancelled frame is marked
   -- done, so a record of it that stayed would resume it from the root)
-  -- (#724: an arm cancelled first stops its children, each the same way,
-  -- then its code unwinds, its defers run, as Epic's Verse VM does: UEFN
-  -- 43.12, followup-conc/branch-cancel-order; an arm that ends stops them
-  -- after its code, `finish` and `retToDone`)
-  let cancel := seqVoid ([reloadMark, armStop] ++ st.sites.toList.map cancelAt ++
+  -- (#724: an arm cancelled stops its children before any of its defers
+  -- runs, after the arms of a `sync`, `race` or `rush` it waits in, its
+  -- newest children, last started first, each the same way, as Epic's
+  -- Verse VM does: UEFN 43.12, followup-conc/branch-cancel-order and
+  -- cancel-branch-before-sync-arms; its scope is made due as the cancel
+  -- starts and stopped where the waits are cancelled, `cancelAt`, or at
+  -- the end; an arm that ends stops them after its code, `finish` and
+  -- `retToDone`)
+  let (unwindPush, unwindPop) : List Expr × List Expr := match armIdx with
+    | some a => if env.scopes then
+        ([.call env.unwindPushFn [.local schS, fget (armScopeMark a)]],
+         [.call env.unwindPopFn [.local schS, fget (armScopeMark a)]]) else ([], [])
+    | none => ([], [])
+  let cancel := seqVoid ([reloadMark] ++ unwindPush ++ st.sites.toList.map cancelAt ++ unwindPop ++
     (if pcFld == pcF then [killMark] else []) ++
     (if pcFld == pcF && env.leafy then [fset pcF (int (-1))] else []) ++ [spillMark])
   modify fun st => { st with regionNext := saved.regionNext, sites := saved.sites, defers := saved.defers }
@@ -2064,6 +2087,9 @@ structure ScopeInfo where
   ownF : Nat
   schedScopeF : Nat
   stopScopeFn : Nat
+  unwindPushFn : Nat
+  unwindFlushFn : Nat
+  unwindPopFn : Nat
 
 /-- A lowered suspends function. -/
 structure Lowered where
@@ -2120,7 +2146,10 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
                      events, marks, scopes := scopes.isSome,
                      scopeTag := (scopes.map (·.scopeTag)).getD 0, kidsF := (scopes.map (·.kidsF)).getD 0,
                      ownF := (scopes.map (·.ownF)).getD 0, schedScopeF := (scopes.map (·.schedScopeF)).getD 0,
-                     stopScopeFn := (scopes.map (·.stopScopeFn)).getD 0 }
+                     stopScopeFn := (scopes.map (·.stopScopeFn)).getD 0,
+                     unwindPushFn := (scopes.map (·.unwindPushFn)).getD 0,
+                     unwindFlushFn := (scopes.map (·.unwindFlushFn)).getD 0,
+                     unwindPopFn := (scopes.map (·.unwindPopFn)).getD 0 }
   let done : Expr → Expr := fun v => .seq (fset resF v) (doneRet (if leafy then some leafDepthF else none))
   let ((res, can), st) ← ((region pcF (some done) b).run env).run { Γ := Γ0, trans := trans0 }
   if st.next != sites || st.armsNext != armsTotal then

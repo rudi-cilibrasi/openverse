@@ -7,6 +7,10 @@
 #   winner done | second cleanup | first cleanup | arm cleanup | after race | after wait
 # If the oldest were stopped first:
 #   winner done | first cleanup | second cleanup | arm cleanup | after race | after wait
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use
+# Verse VM" on, 2026-11-19) printed
+#   winner done | second cleanup | first cleanup | arm cleanup | after race | after wait
+# as OpenVerse does.
 First()<suspends>:void =
     branch:
         defer:

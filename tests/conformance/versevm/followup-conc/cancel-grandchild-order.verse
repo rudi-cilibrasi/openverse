@@ -9,6 +9,10 @@
 # If a stopped child ran its own defers before stopping its children (as a
 # task that ends does, branch-in-branch):
 #   winner done | child cleanup | grandchild cleanup | arm cleanup | after race | after wait
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use
+# Verse VM" on, 2026-11-19) printed
+#   winner done | grandchild cleanup | child cleanup | arm cleanup | after race | after wait
+# as OpenVerse does.
 Helper()<suspends>:void =
     branch:
         defer:

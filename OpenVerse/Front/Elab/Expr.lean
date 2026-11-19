@@ -467,7 +467,8 @@ partial def elabSpawnIn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   -- scopes, #724, a scope of its own, for its children)
   let fieldVals := (ctx.types.fields task [r.ty]).map fun (_, ft, _) =>
     if ft == .logic then Expr.lit (.logic false)
-    else if ft == .struct "$scope" [] then .heap (.new (ctx.types.tagOf "$scope")) [.lit .none, .lit (.logic false)]
+    else if ft == .struct "$scope" [] then
+      .heap (.new (ctx.types.tagOf "$scope")) [.lit .none, .lit (.logic false), .lit .none, .lit (.logic false)]
     else Expr.lit .none
   let spawnE : Expr := .seq (.assign t (.heap (.new tagT) fieldVals))
     (.seq (.call mark.idx [.prim .mkArr [.seq callE (.lit .void), .seq (.local t) (.lit .void)]]) (.local t))

@@ -8,6 +8,14 @@
 # If the task's own defers ran first:
 #   runner cleanup | branch cleanup | cancelled | after wait
 # (and `cancelled` first if Cancel() only asks, the task unwinding later)
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use
+# Verse VM" on, 2026-11-19) refuses it at compile time, 3593: "Invalid
+# access of epic_internal function `(/Verse.org/Concurrency/task:)Cancel`
+# from control scope": user code cannot cancel a task on 43.12, so the
+# question cannot be asked this way; a task's cancellation is asked through
+# a race arm that loses (branch-cancel-order and the other cancel-*
+# probes). OpenVerse admits T.Cancel() (its tests use it) and prints the
+# lines above.
 Helper()<suspends>:void =
     branch:
         defer:

@@ -6,6 +6,10 @@
 #   runner ending | runner cleanup | second cleanup | first cleanup | after wait
 # If the oldest were stopped first:
 #   runner ending | runner cleanup | first cleanup | second cleanup | after wait
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use
+# Verse VM" on, 2026-11-19) printed
+#   runner ending | runner cleanup | second cleanup | first cleanup | after wait
+# as OpenVerse does.
 First()<suspends>:void =
     branch:
         defer:

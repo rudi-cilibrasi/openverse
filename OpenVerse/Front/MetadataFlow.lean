@@ -1605,7 +1605,7 @@ private partial def cancelSteps (env : ScheduleEnv) (c : Configuration) (actor :
       let c := { c with
         events := c.events.filter (· != actor)
         actors := c.actors.modify actor fun a => { a with cancelRequested := true, event := none } }
-      queue c (cancelChildren env c actor true ++ cancelChildren env c actor false)
+      queue c (cancelChildren env c actor false ++ cancelChildren env c actor true)
     else
       let cleanups := if a.status == .done || a.status == .idle then [] else
         (a.cleanups.head?.toList.map fun d =>
@@ -1615,10 +1615,11 @@ private partial def cancelSteps (env : ScheduleEnv) (c : Configuration) (actor :
       let c := { c with
         events := c.events.filter (· != actor)
         actors := c.actors.modify actor fun a => { a with canceling := true, event := none } }
-      -- (#724: a cancelled task's children first, its branches, then the
-      -- arms it waits in, then its own cleanups, as Epic's Verse VM cancels
-      -- a task: UEFN 43.12, followup-conc/branch-cancel-order)
-      queue c (cancelChildren env c actor true ++ cancelChildren env c actor false ++ cleanups ++
+      -- (#724: a cancelled task's children first, the arms it waits in, its
+      -- newest, then its branches, then its own cleanups, as Epic's Verse VM
+      -- cancels a task: UEFN 43.12, followup-conc/branch-cancel-order and
+      -- cancel-branch-before-sync-arms)
+      queue c (cancelChildren env c actor false ++ cancelChildren env c actor true ++ cleanups ++
         [.stop actor])
 
 /-- An active cancellation waits for the complete current step, including

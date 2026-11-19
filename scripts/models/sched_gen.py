@@ -86,6 +86,10 @@ class Sched:
         self.sleepers = Counter(); self.running = []; self.main = None
         # (the Signals running, one inside another; a probe of a rush loser)
         self.drain = 0; self.probe = False
+        # (#724: the scopes of the tasks being cancelled, innermost last,
+        # each None once stopped: a cancelled task stops its children after
+        # the arms it waits in and before its first defer, `flush`)
+        self.unwinding = []
         # (the code running: a root, or an arm of a running sync, race or
         # rush, innermost last)
         self.ctx = []
@@ -355,11 +359,22 @@ def stop_scope(scope):
         stop_kid(scope.kids.pop())
 
 
+def flush():
+    """The children of the task being cancelled, if not yet stopped: once
+    the arms it waits in are cancelled, before its first defer runs."""
+    if S.unwinding and S.unwinding[-1] is not None:
+        scope = S.unwinding[-1]
+        S.unwinding[-1] = None
+        stop_scope(scope)
+
+
 def scoped(body, scope):
     """`body` run as a task's code (#724): the scheduler's current scope is
     the task's while it runs; when it ends its children are stopped; when it
-    is cancelled, its children are stopped first, then its code unwinds (its
-    defers), as Epic's Verse VM does (UEFN 43.12, branch-cancel-order)."""
+    is cancelled, its children are stopped before any of its defers runs,
+    after the arms of a sync, race or rush it waits in (its newest
+    children), as Epic's Verse VM does (UEFN 43.12, branch-cancel-order,
+    cancel-branch-before-sync-arms)."""
     ended = False
     try:
         while True:
@@ -377,8 +392,12 @@ def scoped(body, scope):
             yield step
     finally:
         if not ended:
-            stop_scope(scope)
-            body.close()
+            S.unwinding.append(scope)
+            try:
+                body.close()
+                flush()
+            finally:
+                S.unwinding.pop()
 
 
 def m_call(fn, args):
@@ -426,6 +445,9 @@ def killer_gen(t, tag, k, d):
         S.p(f"{tag} k{k} cancelled")
         yield from m_sleep(3)
         S.p(f"{tag} k{k} end")
+    except GeneratorExit:
+        flush()
+        raise
     finally:
         S.p(f"{tag} k{k} defer")
 
@@ -434,6 +456,9 @@ def awaiter_gen(t, tag, k):
     try:
         yield from m_await_task(t)
         S.p(f"{tag} a{k} got")
+    except GeneratorExit:
+        flush()
+        raise
     finally:
         S.p(f"{tag} a{k} defer")
 
@@ -457,6 +482,10 @@ def exec_block(stmts, fr, owner=None):
             try:
                 v = yield from exec_block(stmts[i + 1:], fr, owner)
                 return v
+            except GeneratorExit:
+                # (cancelled: its task's children before this defer, #724)
+                flush()
+                raise
             finally:
                 S.p(f"{fr.env['Tag']} {s.label} {fr.env['N']}")
                 if getattr(s, "kill", None):
@@ -549,6 +578,8 @@ def exec_conc(s, fr, owner=None):
         if not finished:
             for i in reversed([i for i in started if not site.done[i]]):
                 site.gens[i].close()
+            # (cancelled: the arms first, then its task's other children)
+            flush()
 
 
 def exec_stmt(s, fr, owner=None):
@@ -654,6 +685,10 @@ def helper_gen(kind, env):
             v = yield from m_await_event(e["E"])
             S.p(f"{e['Tag']} w{e['K']} woke")
             return v
+    except GeneratorExit:
+        # (cancelled: its task's children before this defer, #724)
+        flush()
+        raise
     finally:
         S.p(f"{e['Tag']} {'h' if kind == 'hd' else 'w'}{e['K']} defer")
 
@@ -1284,6 +1319,7 @@ def conc_gens(kind, gens, fr):
         if not finished:
             for item in reversed(pend):
                 item[1].close()
+            flush()
 
 
 def main():

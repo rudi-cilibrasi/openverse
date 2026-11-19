@@ -23,9 +23,9 @@
 5: loser cleanup
 5: after race
 6: winner done
-6: branch cleanup
 6: arm two cleanup
 6: arm one cleanup
+6: branch cleanup
 6: loser cleanup
 6: after race
 7: rush done
@@ -44,5 +44,25 @@
 10: runner cleanup
 10: second cleanup
 10: first cleanup
+11: winner done
+11: arm two cleanup
+11: arm one cleanup
+11: branch cleanup
+11: loser cleanup
+11: after race
+12: winner done
+12: arm two cleanup
+12: arm branch cleanup
+12: arm one cleanup
+12: task branch cleanup
+12: loser cleanup
+12: after race
+13: winner done
+13: arm two cleanup
+13: arm one cleanup
+13: branch cleanup
+13: inner cleanup
+13: loser cleanup
+13: after race
 end
 exit=0

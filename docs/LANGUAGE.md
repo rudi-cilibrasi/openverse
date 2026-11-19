@@ -3811,11 +3811,13 @@ Main()<suspends>:void =
   stopped when the arm ends, and one started inside another branch's body
   is that branch's. A task that completes runs its own `defer:` blocks (its
   code's end), then stops its children, the last started first, each by
-  cancelling it. A task that is cancelled stops its children first, the
-  last started first, each the same way (its own children first, then its
-  defers), and then its code unwinds from where it waits: the arms of a
-  `sync`, `race` or `rush` it waits in, last started first, each the same
-  way, then its own `defer:` blocks. A spawned task is nobody's child. A
+  cancelling it. A task that is cancelled stops all its children before
+  any of its `defer:` blocks runs, the last started first, each the same
+  way (its own children first, then its defers): first the arms of the
+  `sync`, `race` or `rush` it waits in (its newest children, also when the
+  wait is in a function it called), then its branches and the `rush` arms
+  that went on; then its code unwinds, its defers innermost first. A
+  spawned task is nobody's child. A
   spawned call's children are stopped when the call ends,
   before its task is done and its awaiters resumed (an `Await` of it made
   meanwhile, by a task a child's defer spawns, waits for it to be done,
@@ -3839,11 +3841,18 @@ Main()<suspends>:void =
   before its own defers run (`branch-cancel-order`: openverse had them
   after until then); a spawned task's children are stopped before its
   awaiters resume; a branch at the top of the device's `OnBegin` is
-  stopped when `OnBegin` ends, as one at the top of `Main` is here. Not yet
-  measured, openverse's choice, asked by the probes `cancel-*` and `end-*`:
-  that a stopped child stops its own children first, the newest first; that
-  a cancelled task's children go before the arms it waits in; a spawned
-  task as nobody's child. A function that starts a
+  stopped when `OnBegin` ends, as one at the top of `Main` is here; a
+  stopped child stops its own children first, newest first, at a task's
+  end and at its cancel; a spawned task is nobody's child; a `sync` arm
+  cancelled with its task stops its children as a losing `race` arm does;
+  a `rush` arm that went on is a child; and the arms a cancelled task waits
+  in go before its branch (`cancel-branch-before-sync-arms`: openverse had
+  the branch first until then). Not yet measured, openverse's choice, asked
+  by `cancel-branch-before-race-arms`, `cancel-branch-in-and-before-sync-arm`
+  and `cancel-branch-before-nested-sync`: a `race`'s arms as a `sync`'s, a
+  branch started in an arm as that arm's child, the arms one call deeper.
+  Epic refuses `T.Cancel()` in user code (3593, `epic_internal`;
+  `cancel-task-child`); openverse admits it. A function that starts a
   branch or a `rush` gets a frame of its own at each call, as its tasks
   share it and may outlive the call. A `branch` cannot be in a `loop` or
   `for` body (the Book's rule), even through an arm. If cancellation is requested while an arm
@@ -4151,7 +4160,7 @@ Main()<suspends>:void =
 | A clause of a `for` with a choice in it | (the Book has no choice; ch. 7: "Each filter must be failable") | a generator over its values, as a clause that calls a function with several values is: not a filter, so it need not fail (`for (X := 1..2, set N = (1 \| 2))` runs the body for each value); the statements of a function with several values that a `for` takes are the function's, not the `for`'s filters |
 | Precedence of `\|` | (not in the Book) | below `+`, above the comparisons: `X = 1 \| 2` is `X = (1 \| 2)` (#208) |
 | `Sleep(0.0)` | "may resume in the same tick" (ch. 14), "One frame" (ch. 14); the API reference: it always yields; the tested ch. 14 examples (`03`, `05` to `11`): it completes at once, in a `race`, a `sync` and plain code: the Book disagrees with itself ([the rules](research/scheduler-conformance.md#sleep00-yields)) | **Epic's**: it yields, as both of Epic's VMs do (UEFN 43.12, `++Fortnite+Release-43.12-CL-60598086`, `vm-sleep-zero-yields`), and as the API reference says: it waits one tick, the next update; a negative or NaN duration completes at once |
-| Lifetime of a `branch` | ch. 14's prose: "a branch task is automatically canceled when execution leaves the enclosing function scope"; its tested example 13 (cancelled when the spawned function that ran it returns, its task's end too); the Verse VM's tests (`Bugs/BPVMOnly/AsyncContextCancellation.versetest`): a child of the current task, cancelled when it ends, a task each spawn, branch and arm of a `sync`, `race` and `rush`; their Blueprint VM twins: cancelled at the function's exit | **the Verse VM's** (measured, UEFN 43.12 (`++Fortnite+Release-43.12-CL-60598086`), `vm-branch-*`): a child of the task whose code started it, stopped when that task ends; a function's return stops nothing; a task that completes runs its own defers before its children's, a cancelled task its children's first (`followup-conc/`) ([`branch`](#concurrency)) |
+| Lifetime of a `branch` | ch. 14's prose: "a branch task is automatically canceled when execution leaves the enclosing function scope"; its tested example 13 (cancelled when the spawned function that ran it returns, its task's end too); the Verse VM's tests (`Bugs/BPVMOnly/AsyncContextCancellation.versetest`): a child of the current task, cancelled when it ends, a task each spawn, branch and arm of a `sync`, `race` and `rush`; their Blueprint VM twins: cancelled at the function's exit | **the Verse VM's** (measured, UEFN 43.12 (`++Fortnite+Release-43.12-CL-60598086`), `vm-branch-*`): a child of the task whose code started it, stopped when that task ends; a function's return stops nothing; a task that completes runs its own defers before its children's, a cancelled task its children's first, the arms it waits in before its branches (`followup-conc/`) ([`branch`](#concurrency)) |
 | A module constant whose computation allocates a `var` | `verse_vm_only`: link error 9003 (`GlobalVariables.versetest` 86, 90, 97, 105); `bp_vm_only`: valid, "BPVM doesn't run blocks on global instances of classes" (114-141); `:143` valid on both where the `var` is not reached; ch. 16: only "as long as their construction does not actually allocate mutable memory" | **the Verse VM's** (the owner's choice where the VMs differ; measured on UEFN 43.12, probes `book-global-block-*`): refused before the program runs, the constant computed at compile time to find the path it takes ([Modules](#modules)) |
 | `Sleep(S)` rounding | the API: "a sleep resumes on the first update at or after its deadline and never sooner than the next one. Short sleeps therefore round up"; no tick rate | the first tick at or after the deadline: the binary64 product `30·S` rounded up, at least one tick (`Sleep(0.04)` takes 2 ticks; `Sleep(0.1)`, whose product is exactly 3.0, 3); bounded inputs and checked clock accumulation follow the explicit reference policy above (#514) |
 | End of a program with tasks | not stated | the program ends when `Main` does; a `Main` that waits with no task able to run is an error (exit 2) (#156) |
