@@ -3,6 +3,8 @@
 # admits it:
 #   lower 1 | upper 2
 # If Epic refuses it, a type and a function collide too.
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# BuildAll, 2026-11-19) admits it (compiled only).
 cc := class:
     V:int = 1
 
