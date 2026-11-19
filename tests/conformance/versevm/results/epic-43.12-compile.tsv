@@ -1,6 +1,9 @@
 # Epic's compiler verdicts, one probe compiled alone per build (VerseToolset.BuildAll), UEFN 43.12 ++Fortnite+Release-43.12-CL-60598086, 2026-11-18 and 2026-11-19 (#724).
 # set: the batch of probes it was compiled with (a probe rewritten and compiled again has a row per set).
 probe	set	verdict	error_codes	error_messages	warning_codes
+array-named-pack	book3	refused	3509	This function parameter expects a value of type tuple([]int,?B:int = ...), but this argument is an incompatible value of type tuple(type{1},type{2}).	-
+array-of-fns-control	coerce	admitted	-	-	-
+array-of-fns-default	coerce	admitted	-	-	-
 await-and-subscribe	event	admitted	-	-	-
 await-from-subscriber	event2	admitted	-	-	-
 await-in-transacts	followup	refused	3512	This invocation calls a function (`(/Verse.org/Verse/event:)Await`) that has the 'no_rollback' effect, which is not allowed by its context.	-
@@ -71,6 +74,28 @@ cancel-sync-arm-child	conc2	admitted	-	-	-
 cancel-task-child	conc2	refused	3593	Invalid access of epic_internal function `(/Verse.org/Concurrency/task:)Cancel` from control scope `/<project>/Main`.	-
 cancel-twice	event	admitted	-	-	-
 cancel-two-children-order	conc2	admitted	-	-	-
+case-collision-class-enum	book4	refused	9002	Found existing type 'CC' that is already being created this compile. Please rename the enumeration to be case insensitive unique.	-
+case-collision-class-function	book4	admitted	-	-	-
+case-collision-class-interface	book4	refused	9002	Found existing type 'CC' that is already being created this compile. Please rename the interface to be case insensitive unique.	-
+case-collision-class-modules	book4	admitted	-	-	-
+case-collision-class-struct	book4	refused	9002	Found existing type 'CC' that is already being created this compile. Please rename the struct to be case insensitive unique.	-
+case-collision-classes	book3	refused	9002	Found existing type 'CC' that is already being created this compile. Please rename the class to be case insensitive unique.	-
+case-collision-enums	book4	refused	9002	Found existing type 'EE' that is already being created this compile. Please rename the enumeration to be case insensitive unique.	-
+case-collision-function-constant	book3	admitted	-	-	-
+case-collision-inherited	book3	admitted	-	-	-
+case-collision-interface	book3	refused	9200	Found multiple functions that map to the same target function. Please rename the function to be case insensitive unique. See:	-
+case-collision-interfaces	book4	refused	9002	Found existing type 'II' that is already being created this compile. Please rename the interface to be case insensitive unique.	-
+case-collision-method	book2	refused	9200	Found multiple functions that map to the same target function. Please rename the function to be case insensitive unique. See:	-
+case-collision-module-fn	book2	refused	9200	Found multiple functions that map to the same target function. Please rename the function to be case insensitive unique. See:	-
+case-collision-module-fn-control	book2	admitted	-	-	-
+case-collision-named-positional	book3	admitted	-	-	-
+case-collision-param-names	book3	refused	9000,9000	Local variable `A` not found internally in VM. ; Local variable `A` not found internally in VM.	-
+case-collision-same-params	book2	refused	9000,9000	Local variable `Value` not found internally in VM. ; Local variable `Value` not found internally in VM.	-
+case-collision-structs	book4	refused	9002	Found existing type 'SS' that is already being created this compile. Please rename the struct to be case insensitive unique.	-
+case-collision-suspends	book2	refused	9002,9200	Found existing type 'task_cc$Function' that is already being created this compile. Please rename the other to be case insensitive unique. ; Found multiple functions that map to the same target function. Please rename the function to be case insensitive unique. See:	-
+case-join-control	coerce	admitted	-	-	-
+case-join-default	coerce	admitted	-	-	-
+class-override-fn-param	coerce	refused	3502	Using a value of type (int->void)->void as a value of type (any->void)->void is not yet implemented.	-
 compound-index-appended	704b	admitted	-	-	-
 compound-indexed-control	704	admitted	-	-	-
 compound-indexed-write	15	admitted	-	-	-
@@ -106,18 +131,26 @@ div-const-array-concat	3582b	admitted	-	-	-
 div-const-array-index	3582b	admitted	-	-	-
 div-const-array-length	3582b	admitted	-	-	-
 div-const-bitand	3582b	admitted	-	-	-
+div-const-class-block	3582c	refused	9000	Linker task graph contains a cycle:	-
 div-const-computes-archetype	3582b	admitted	-	-	-
 div-const-constructor	3582	refused	3512	This archetype instantiation constructs a class that has the 'transacts' effect, which is not allowed by its context.	-
 div-const-constructor-fn	3582	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
 div-const-converges	3582	refused	3565	The 'converges' effect is only allowed on native functions.	-
 div-const-enum	3582b	admitted	-	-	-
 div-const-floor-float	3582b	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
+div-const-fn-value-call	3582c	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
+div-const-fn-value-call-control	3582c	admitted	-	-	-
+div-const-for-body-call	3582c	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
+div-const-for-choice-call	3582c	refused	3101	Infix `|` operator is unimplemented.	-
+div-const-for-choice-call-control	3582c	refused	3101	Infix `|` operator is unimplemented.	-
+div-const-if-condition-call	3582c	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
 div-const-interpolation	3582b	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
 div-const-intrinsic	3582	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
 div-const-map	3582b	admitted	-	-	-
 div-const-method	3582	refused	3582,3512	Divergent calls (calls that might not complete) cannot be used to define data-members. ; This archetype instantiation constructs a class that has the 'transacts' effect, which is not allowed by its context.	-
 div-const-min	3582b	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
 div-const-operator	3582	admitted	-	-	-
+div-const-operator-overload	3582c	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
 div-const-option	3582b	admitted	-	-	-
 div-const-quotient	3582b	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
 div-const-sqrt	3582b	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
@@ -134,9 +167,31 @@ div-local-const-call	3582	admitted	-	-	-
 div-module-var-call	3582b	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
 end-grandchild-order	conc2	admitted	-	-	-
 end-two-children-order	conc2	admitted	-	-	-
+enum-wide	book2	refused	3552	Enumerator value `wide.e100` is out of byte-range which is not yet supported	-
+enum-wide-control	book2	admitted	-	-	-
 event-unit-subscribe	event	admitted	-	-	-
+final-method-interface	book2	refused	3591	Non-abstract class inherits abstract function `MethodX` from `i_y` but does not provide an implementation.	-
+final-method-interface-control	book2	admitted	-	-	-
+final-method-interface-nonfinal	book2	refused	3591	Non-abstract class inherits abstract function `MethodX` from `i_y` but does not provide an implementation.	-
 for-filter-default-call	followup	refused	3512	This invocation calls a function (`(/<project>:)Value`) that has the 'no_rollback' effect, which is not allowed by its context.	-
 for-range-default-call	followup	refused	3512	This invocation calls a function (`(/<project>:)Limit`) that has the 'no_rollback' effect, which is not allowed by its context.	-
+generic-arg-concrete	coerce	admitted	-	-	-
+generic-arg-generic	coerce	admitted	-	-	-
+generic-arg-generic-late	coerce	admitted	-	-	-
+generic-bound-first	coerce	admitted	-	-	-
+generic-higher-order	book2	refused	3502,3502,3502,3502,3502,3502,3502,3502	Using a value of type type{_(:type{_(:t)<transacts>:t},:t where t)<transacts>:t} as a value of type type{_(:type{_(:int)<transacts>:int},:int)<transacts>:int} is not yet implemented. ; Using a value of type type{_(:type{_(:t)<transacts>:t},:t where t)<transacts>:t} as a value of type type{_(:type{_(:int)<transacts>:int},:int)<transacts>:int} is not yet implemented. ; Using a value of type type{_(:type{_(:t)<transacts>:t},:t where t)<transacts>:t} as a value of type type{_(:type{_(:int)<transacts>:int},:int)<transacts>:int} is not yet implemented. ; Using a value of type type{_(:type{_(:t)<transacts>:t},:t where t)<transacts>:t} as a value of type type{_(:type{_(:int)<transacts>:int},:int)<transacts>:int} is not yet implemented. ; Using a value of type type{_(:type{_(:t)<transacts>:t},:t where t)<transacts>:t} as a value of type type{_(:type{_(:int)<transacts>:int},:int)<transacts>:int} is not yet implemented. ; Using a value of type type{_(:type{_(:t)<transacts>:t},:t where t)<transacts>:t} as a value of type type{_(:type{_(:int)<transacts>:int},:int)<transacts>:int} is not yet implemented. ; Using a value of type type{_(:type{_(:t)<transacts>:t},:t where t)<transacts>:t} as a value of type type{_(:type{_(:int)<transacts>:int},:int)<transacts>:int} is not yet implemented. ; Using a value of type type{_(:type{_(:t)<transacts>:t},:t where t)<transacts>:t} as a value of type type{_(:type{_(:int)<transacts>:int},:int)<transacts>:int} is not yet implemented.	-
+generic-higher-order-bound	coerce	refused	3502	Using a value of type type{_(:type{_(:t)<transacts>:t},:t where t)<transacts>:t} as a value of type type{_(:type{_(:int)<transacts>:int},:int)<transacts>:int} is not yet implemented.	-
+generic-higher-order-concrete-param	coerce	refused	3502	Using a value of type type{_(:type{_(:t)<transacts>:t},:t where t)<transacts>:t} as a value of type type{_(:type{_(:int)<transacts>:int},:int)<transacts>:int} is not yet implemented.	-
+generic-higher-order-control	book2	admitted	-	-	-
+generic-param-named-pack	book4	refused	3506,3502	Unknown identifier `t`. ; The 'where' operator is limited to numeric range-like clauses with literal bounds. e.g. `type{X:int where 0 <= X, X < 256}` or `type{X:int where X > 0}`. The left hand side of the `where` should be a data definition	-
+generic-param-named-pack	book4b	refused	3509	This function parameter expects a value of type tuple(any,?E:int), but this argument is an incompatible value of type tuple(type{1},type{2},?E:type{5}).	-
+generic-result-fn	coerce	refused	3502	Using a value of type type{_(:t,:t->void where t):t->void} as a value of type tuple(int,type{_X:int where 1 <= _X, _X <= 5}->void)->(int->void) is not yet implemented.	-
+generic-result-fn-comparable	coerce	admitted	-	-	-
+generic-result-plain	coerce	admitted	-	-	-
+iface-fn-param-any	coerce	admitted	-	-	-
+iface-override-array-param	coerce	admitted	-	-	-
+iface-override-fn-result	coerce	refused	3502	Using a value of type type{_()<transacts>:int->void} as a value of type type{_()<transacts>:any->void} is not yet implemented.	-
+iface-own-param-fn	coerce	admitted	-	-	-
 int-abs-big	int2	admitted	-	-	-
 int-array-equal-big	int2	admitted	-	-	-
 int-cast-variants	followup	refused	3509	Dynamic cast to `int` takes an int as its parameter, instead got any	-
@@ -167,11 +222,77 @@ int-sgn-big	int2	admitted	-	-	-
 int-tostring-direct	int	admitted	-	-	-
 int-tuple-equal-big	int2	admitted	-	-	-
 int-where-natural-big	int	admitted	-	-	-
+interface-default-from-other-class	book3	admitted	-	-	-
+interface-fn-param-generic	book2	refused	3502	Using a value of type type{_(:int->void)<transacts>:void} as a value of type type{_(:any->void)<transacts>:void} is not yet implemented.	-
+interface-fn-param-generic-control	book2	admitted	-	-	-
+interface-var-field	book2	admitted	-	-	-
+join-class-param	coerce	admitted	-	-	-
+join-class-result	coerce	admitted	-	-	-
+join-computes-transacts	coerce	refused	3502	Using a value of type type{_(:int)<computes>:int} as a value of type type{_(:int)<transacts>:int} is not yet implemented.	-
+join-computes-transacts-control	coerce	admitted	-	-	-
+join-generic-effects-decides	book2	refused	3502	Using a value of type type{_(:int)<computes>:int} as a value of type type{_(:int)<computes><decides>:int} is not yet implemented.	-
+join-generic-effects-decides-control	book2	admitted	-	-	-
+join-generic-effects-transacts	book2	refused	3502,3502	Using a value of type type{_(:int)<computes><decides>:int} as a value of type type{_(:int)<transacts><decides>:int} is not yet implemented. ; Using a value of type type{_(:int)<transacts>:int} as a value of type type{_(:int)<transacts><decides>:int} is not yet implemented.	-
+join-generic-effects-transacts-control	book2	admitted	-	-	-
 join-if-common-base-interface	followup	refused	3510	This function returns a value of type super_class, but the function body's result is an incompatible value of type any.	-
 join-if-expected-interface	followup	refused	3510	This function returns a value of type named, but the function body's result is an incompatible value of type any.	-
+join-int-rational	coerce2	refused	3502	Using a value of type tuple()->int as a value of type tuple()->rational is not yet implemented.	-
 join-interface-only	followup	admitted	-	-	-
+join-method-values	coerce	refused	3502	Using a value of type type{_(:int)<computes>:int} as a value of type type{_(:int)<transacts>:int} is not yet implemented.	-
+join-method-values-control	coerce	admitted	-	-	-
+join-named-default-fn	book2	refused	3502,3502	Using a value of type (?A:int = ...)->int as a value of type tuple()->int is not yet implemented. ; Using a value of type (?B:int = ...)->int as a value of type tuple()->int is not yet implemented.	-
+join-named-default-fn-control	book2	admitted	-	-	-
+join-named-default-param	book2	refused	3502,3502	Using a value of type ((?A:int)->int)->int as a value of type (tuple(?A:int = ...,?B:int = ...)->int)->int is not yet implemented. ; Using a value of type ((?B:int)->int)->int as a value of type (tuple(?A:int = ...,?B:int = ...)->int)->int is not yet implemented.	-
+join-named-default-param-control	book2	admitted	-	-	-
+join-named-tuple	book2	refused	3502	Using a value of type tuple([]char,?Y:int = ...)->[]char as a value of type []char->[]char is not yet implemented.	-
+join-named-tuple-control	book2	admitted	-	-	-
 link-constant-own-var	conc	refused	3512,3582,3582,3512	This mutable data definition has the 'allocates' effect, which is not allowed by its context. ; Expressions with side effects cannot be used when defining data-members. ; Divergent calls (calls that might not complete) cannot be used to define data-members. ; This mutable data read has the 'reads' effect, which is not allowed by its context.	-
+live-await-block-sentinel	book2	refused	3506	Unknown identifier `await`.	-
+live-upon-sentinel	book2	refused	3506	Unknown identifier `upon`.	-
+live-when-sentinel	book2	refused	3506	Unknown identifier `when`.	-
+long-ident-1025	book2	refused	3655,3655	Identifier is too long ; Identifier is too long	-
+long-ident-4096	book2	refused	3655,3655	Identifier is too long ; Identifier is too long	-
+long-ident-class-1023	book3	refused	3655	Identifier is too long	-
+long-ident-class-1024	book2	refused	9002	Cannot find class: `Class___AbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefgh`.	-
+long-ident-class-1024-control	book2	admitted	-	-	-
+long-ident-constant-1005	book4	refused	3655,3655,3655,3655	Identifier is too long ; Identifier is too long ; Identifier is too long ; Identifier is too long	-
+long-ident-enum-1023	book4	admitted	-	-	-
+long-ident-field-1024	book3	refused	3655,3655,3655,3655	Identifier is too long ; Identifier is too long ; Identifier is too long ; Identifier is too long	-
+long-ident-function-1024	book3	refused	3655	Identifier is too long	-
+long-ident-function-param	book4	refused	3655	Identifier is too long	-
+long-ident-interface-1023	book4	admitted	-	-	-
+long-ident-mangled	book2	refused	3655	Identifier is too long	-
+long-ident-mangled-no-params	book3	admitted	-	-	-
+long-ident-mangled-short-method	book3	refused	3655	Identifier is too long	-
+long-ident-method-param	book4	refused	3655	Identifier is too long	-
+long-ident-parameter-1005	book4	admitted	-	-	-
+long-ident-struct-1024	book3	refused	9002	Cannot find struct: `Struct__AbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefghAbcdefgh`.	-
+method-arg-generic	coerce2	admitted	-	-	-
+method-value-effect	coerce	admitted	-	-	-
+name-computes-as-transacts	coerce	admitted	-	-	-
+name-decides-as-plain	coerce	refused	3509	This variable expects to be initialized with a value of type type{_(:int)<computes>:int}, but this initializer is an incompatible value of type type{_(:int)<computes><decides>:int}.	-
+name-default-arg	coerce	admitted	-	-	-
+name-int-rational-param	coerce2	admitted	-	-	-
+name-void-result	coerce2	admitted	-	-	-
 nested-signal-in-handler	event	admitted	-	-	-
+option-of-fn-default	coerce	refused	3502	Using a value of type ?((?A:int = ...)->int) as a value of type ?(tuple()->int) is not yet implemented.	-
+overload-tuple-named-call	book2	refused	3509	This function parameter expects a value of type tuple(tuple(float,float),?E:float = ...), but this argument is an incompatible value of type tuple(type{1.000000},type{2.000000}).	-
+overload-tuple-named-call-control	book2	admitted	-	-	-
+overloaded-fn-value	coerce	refused	3502	Referencing an overloaded function without immediately calling it is not yet implemented; (/<project>:)Over or (/<project>:)Over	-
+parametric-interface-var	book2	refused	3502	Mutable members in parametric interfaces are not yet implemented.	-
+parametric-interface-var-control	book2	admitted	-	-	-
+parametric-method-fn-result	coerce	refused	3502	Using a value of type (t->void)->(t->void) as a value of type (int->void)->(int->void) is not yet implemented.	-
+parametric-method-fn-result-any	coerce2	admitted	-	-	-
+parametric-method-value	book2	refused	3502	Using a value of type type{_(:tuple(p_type,c_type)->void,:c_type where p_type,c_type):p_type->void} as a value of type tuple(tuple(first_arg,second_arg)->void,second_arg)->(first_arg->void) is not yet implemented.	-
+parametric-var-array-param	book4	refused	3552	An implicit type parameter (`t`) used in the type of mutable data (`/<project>/c.Data`) may not be used in the type of a function.	-
+parametric-var-method	book4	refused	3552	An implicit type parameter (`u`) used in the type of mutable data (`/<project>/c.Data`) may not be used in the type of a function.	-
+parametric-var-other-field	book3	admitted	-	-	-
+parametric-var-struct-field	book4	refused	3552	An implicit type parameter (`t`) used in the type of mutable data (`/<project>/c.Data`) may not be used in the type of a function.	-
+parametric-var-where-construct	book2	refused	3552	An implicit type parameter (`t`) used in the type of mutable data (`/<project>/c.Data`) may not be used in the type of a function.	-
+parametric-var-where-construct-control	book2	admitted	-	-	-
+parametric-var-where-local	book3	admitted	-	-	-
+parametric-var-where-nested	book3	refused	3552	An implicit type parameter (`t`) used in the type of mutable data (`/<project>/c.Data`) may not be used in the type of a function.	-
+parametric-var-where-param	book2	refused	3552	An implicit type parameter (`t`) used in the type of mutable data (`/<project>/c.Data`) may not be used in the type of a function.	-
 print-decides-call	print	admitted	-	-	-
 print-for-filter	print	admitted	-	-	-
 print-in-condition	followup	admitted	-	-	-
@@ -204,6 +325,14 @@ signal-subscribe-control	followup	admitted	-	-	-
 signal-transacts-method	followup	refused	3512	This invocation calls a function (`(/Verse.org/Verse/event:)Signal`) that has the 'no_rollback' effect, which is not allowed by its context.	-
 sleep-negative-yields	conc	admitted	-	-	-
 sleep-zero-next-update	conc	admitted	-	-	-
+spawn-in-class-block	book3	refused	3512,3512	This 'spawn' macro has the 'no_rollback' effect, which is not allowed by its context. ; This invocation calls a function (`(/<project>:)Work`) that has the 'no_rollback' effect, which is not allowed by its context.	-
+spawn-in-condition	book3	refused	3512,3512	This 'spawn' macro has the 'no_rollback' effect, which is not allowed by its context. ; This invocation calls a function (`(/<project>:)Work`) that has the 'no_rollback' effect, which is not allowed by its context.	-
+spawn-in-decides-body	book3	admitted	-	-	-
+spawn-in-transacts-computes	book2	refused	3512	This 'spawn' macro has the 'no_rollback' effect, which is not allowed by its context.	-
+spawn-in-transacts-computes-control	book2	admitted	-	-	-
+spawn-in-transacts-decides	book2	refused	3512,3512	This 'spawn' macro has the 'no_rollback' effect, which is not allowed by its context. ; This invocation calls a function (`(/<project>:)Work`) that has the 'no_rollback' effect, which is not allowed by its context.	-
+spawn-in-transacts-decides-rollback	book2	refused	3512,3512	This 'spawn' macro has the 'no_rollback' effect, which is not allowed by its context. ; This invocation calls a function (`(/<project>:)Work`) that has the 'no_rollback' effect, which is not allowed by its context.	-
+spawn-in-transacts-transacts	book2	refused	3512	This 'spawn' macro has the 'no_rollback' effect, which is not allowed by its context.	-
 sticky-event-subscribe	event	refused	3506	Unknown identifier `sticky_event`.	-
 subscribable-event-control	followup	refused	3506	Unknown identifier `subscribable_event`.	-
 subscribe-during-signal	event	admitted	-	-	-
@@ -212,6 +341,26 @@ subscribe-in-transacts	followup	admitted	-	-	-
 subscribe-order	event	admitted	-	-	-
 subscribe-rollback	event	admitted	-	-	-
 transacts-into-decides-type	followup	admitted	-	-	-
+tuple-named-pack-named-arg	book3	refused	3509	This function parameter expects a value of type tuple(tuple(float,float),?E:float = ...), but this argument is an incompatible value of type tuple(type{1.000000},type{2.000000},?E:type{3.000000}).	-
+tuple-of-fns-default	coerce	admitted	-	-	-
+tuple-pack-no-named	book3	admitted	-	-	-
+value-arg-generic	coerce2	refused	3502	Using a value of type tuple(type{_(:int)<computes>:int},type{1}) as a value of type tuple(type{_(:type{1})<transacts>:int},type{1}) is not yet implemented.	-
+value-array-effect	coerce2	refused	3502	Using a value of type []type{_(:int)<computes>:int} as a value of type []type{_(:int)<transacts>:int} is not yet implemented.	-
+value-call-result-effect	coerce2	refused	3502	Using a value of type type{_(:int)<computes>:int} as a value of type type{_(:int)<transacts>:int} is not yet implemented.	-
+value-class-result	coerce2	admitted	-	-	-
+value-class-variance	coerce	admitted	-	-	-
+value-computes-as-transacts	coerce	refused	3502	Using a value of type type{_(:int)<computes>:int} as a value of type type{_(:int)<transacts>:int} is not yet implemented.	-
+value-computes-as-transacts-control	coerce	admitted	-	-	-
+value-default-drop	coerce	refused	3502	Using a value of type (?A:int = ...)->int as a value of type tuple()->int is not yet implemented.	-
+value-field-effect	coerce2	refused	3502	Using a value of type type{_(:int)<computes>:int} as a value of type type{_(:int)<transacts>:int} is not yet implemented.	-
+value-field-store-effect	coerce2	refused	3502	Using a value of type type{_(:int)<computes>:int} as a value of type type{_(:int)<transacts>:int} is not yet implemented.	-
+value-int-rational-result	coerce2	refused	3502	Using a value of type int->int as a value of type int->rational is not yet implemented.	-
+value-map-effect	coerce2	refused	3502	Using a value of type [int]type{_(:int)<computes>:int} as a value of type [int]type{_(:int)<transacts>:int} is not yet implemented.	-
+value-plain-as-decides	coerce	refused	3502	Using a value of type type{_(:int)<computes>:int} as a value of type type{_(:int)<computes><decides>:int} is not yet implemented.	-
+value-return-effect	coerce2	refused	3502	Using a value of type type{_(:int)<computes>:int} as a value of type type{_(:int)<transacts>:int} is not yet implemented.	-
+value-return-same	coerce2	admitted	-	-	-
+value-tuple-effect	coerce2	refused	3502	Using a value of type tuple(type{_(:int)<computes>:int},type{1}) as a value of type tuple(type{_(:int)<transacts>:int},int) is not yet implemented.	-
+value-void-result	coerce2	refused	3502	Using a value of type int->int as a value of type int->void is not yet implemented.	-
 vm-branch-await-after-return	book	admitted	-	-	-
 vm-branch-outlives-return	book	admitted	-	-	-
 vm-map-struct-option-key	book	admitted	-	-	2017
