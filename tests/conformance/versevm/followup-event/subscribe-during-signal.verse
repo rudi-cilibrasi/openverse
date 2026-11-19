@@ -5,6 +5,8 @@
 #   first 1 | first 2 | added 2 | after
 # If the Signal that is running calls it too:
 #   first 1 | added 1 | first 2 | added 2 | after
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use Verse VM",
+# 2026-11-19) prints the same.
 adder := class:
     E:event(int)
     var Extra:?cancelable = false

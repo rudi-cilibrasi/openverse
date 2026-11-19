@@ -1,11 +1,14 @@
-# (#724) An event's Subscribe on each kind of event and receiver: a
-# sticky_event, which is an event (Subscribe calls nothing at once, only
-# later Signals call the function; followup-event/sticky-event-subscribe);
-# an event() and a sticky_event() without a value, whose functions take
-# none (followup-event/event-unit-subscribe); a type parameter whose bound
-# is an event; an event signalled through signalable; and a
-# subscribable_event, the openverse extension, which is an event and
-# nothing more, cast from and to one
+# (#724) An event's Subscribe on each kind of event and receiver: an
+# event() without a value, whose functions take none, as on Epic's Verse
+# VM (UEFN 43.12, build ++Fortnite+Release-43.12-CL-60598086, "Use Verse
+# VM", 2026-11-19: followup-event/event-unit-subscribe prints ping); a
+# sticky_event (and sticky_event()), which is an event (Subscribe calls
+# nothing at once, only later Signals call the function: openverse's
+# reading, as 43.12 does not let a program name sticky_event,
+# followup-event/sticky-event-subscribe); a type parameter whose bound is an
+# event; an event signalled through signalable; and a subscribable_event,
+# the openverse extension, which is an event and nothing more, cast from
+# and to one
 Plain(N:int):void = Print("plain {N}")
 Ping():void = Print("ping")
 Attach(E:t, F:type{_(:int):void} where t:subtype(event(int)))<transacts>:cancelable = E.Subscribe(F)

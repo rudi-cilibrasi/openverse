@@ -9,6 +9,8 @@
 #   a 1 | b 1 after cancel | a 2 | after
 # If B was called before A (a shuffled order), the first round shows
 #   b 1 before cancel | a 1, and the second round only a 2.
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use Verse VM",
+# 2026-11-19) prints the same: a 1 | a 2 | after.
 canceller := class:
     var Victim:?cancelable = false
     var Done:logic = false

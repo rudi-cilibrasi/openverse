@@ -6,6 +6,8 @@
 #   rolled back | seen 1
 # If the cancellation survives the failed condition:
 #   rolled back | seen 0
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use Verse VM",
+# 2026-11-19) prints the same.
 counter := class:
     var Seen:int = 0
     Receive(N:int):void =

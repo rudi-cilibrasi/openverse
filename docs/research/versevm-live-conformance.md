@@ -253,10 +253,34 @@ nearest common supertypes are an `any`, whatever is expected; a class below
 a `<concrete>` one cannot be `<abstract>`; `int[X]` of an `any` is refused.
 One difference remains: `Print`'s rollback (openverse's output is
 transactional in Core and in the C runtime). `Subscribe` is on `event` now
-(#724); what these results leave open about it is asked in
-[`followup-event/`](../../tests/conformance/versevm/followup-event), each
-probe's header giving what OpenVerse prints and the other readings, with
-the Book's expectations and OpenVerse's lines in its `expectations.tsv`.
+(#724).
+
+### Subscribe follow-up probes
+
+[`followup-event/`](../../tests/conformance/versevm/followup-event) asks
+what the results above leave open about `Subscribe` (#724); each probe's
+header gives what OpenVerse prints and the other readings, and its
+`expectations.tsv` the Book's expectation, Epic's outcome and the
+comparison. UEFN 43.12 (the same build, "Use Verse VM",
+`newVerseVm=true`) compiled twelve and ran the eleven it admitted on
+2026-11-19 (08:38Z). OpenVerse's column is after #724's fix, Lean and C
+agreeing.
+
+| Probe | Verse VM | OpenVerse |
+| --- | --- | --- |
+| `await-and-subscribe` | `awaiter 1`, `handler 1`, `after signal`, `after wait`: the awaiter goes on inside `Signal`, then the function | the same |
+| `subscribe-from-awaiter` | `awaiter 1`, `late 1`, `after signal 1`, `late 2`, `after signal 2`: a function a resumed awaiter subscribes is called by that `Signal` | the same (before the fix, no `late 1`) |
+| `subscribe-during-signal` | `first 1`, `first 2`, `added 2`, `after`: one a called function subscribes waits for the next `Signal` | the same |
+| `cancel-during-signal`, `cancel-twice`, `same-handler-twice`, `nested-signal-in-handler` | one cancelled before its turn is skipped; a second `Cancel` does nothing; a function subscribed twice is called twice; a nested `Signal` runs depth first | the same |
+| `subscribe-rollback`, `cancel-rollback` | `Subscribe` and `Cancel` in a failing condition are undone | the same |
+| `event-unit-subscribe` | `event()` takes a function without parameters | the same |
+| `subscribe-order` | `c 1`, `b 1`, `a 1`, `c 2`, `b 2`, `a 2`, `a 3`, `b 3`, `c 3`: the order varies between `Signal`s | subscription order. **Differs**, a documented difference: a program must not rely on the order |
+| `sticky-event-subscribe` | refused, 3506 "Unknown identifier `sticky_event`" (it asks for `using { /Verse.org/Restricted }`) | admitted: `subscribed`, `sticky 2`, `after` |
+
+So a `Signal` resumes its awaiters, then calls the functions subscribed
+at that point. Two probes ask what that rule leaves open and have not run
+yet: `cancel-from-awaiter` (a subscription a resumed awaiter cancels) and
+`await-from-subscriber` (an await a called function starts).
 
 ## Running many probes
 

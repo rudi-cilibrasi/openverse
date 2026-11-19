@@ -1,14 +1,18 @@
 # (#724) What an event's Signal does with the functions subscribed to it,
-# where Epic's behaviour is not established yet (each asked of the Verse VM
-# in tests/conformance/versevm/followup-event/): the functions are called in
-# the order they subscribed (subscribe-order), those subscribed when the
-# Signal began only (subscribe-during-signal, subscribe-from-awaiter), each
-# skipped if cancelled before its turn (cancel-during-signal); a second
-# Cancel does nothing (cancel-twice); a function subscribed twice is called
-# twice (same-handler-twice); a Signal made by a subscribed function calls
-# them at once, depth first (nested-signal-in-handler); a task awaiting the
-# event goes on inside Signal before the functions are called
-# (await-and-subscribe)
+# as Epic's Verse VM does (UEFN 43.12, build
+# ++Fortnite+Release-43.12-CL-60598086, "Use Verse VM", 2026-11-19: the
+# probes in tests/conformance/versevm/followup-event/ named here): a task
+# awaiting the event goes on inside Signal before the functions are called
+# (await-and-subscribe); the Signal then calls the functions subscribed at
+# that point, so one that the resumed awaiter subscribes too
+# (subscribe-from-awaiter), but not one that a called function subscribes
+# (subscribe-during-signal), each skipped if cancelled before its turn
+# (cancel-during-signal); a second Cancel does nothing (cancel-twice); a
+# function subscribed twice is called twice (same-handler-twice); a Signal
+# made by a subscribed function calls them at once, depth first
+# (nested-signal-in-handler). The order of the functions is openverse's:
+# the order they subscribed, where the Verse VM's varies from one Signal to
+# the next (subscribe-order), so a program must not rely on it.
 tally := class:
     Name:string
     Note(N:int):void = Print("{Name} {N}")

@@ -2,11 +2,14 @@
 # called the subscribed ones: does that same Signal call it? (Epic's API: a
 # Signal reaches "the tasks already suspended in Await and the callbacks
 # currently subscribed"; subscribers are invoked after the awaiters.)
-# OpenVerse (#724) prints (the Signal calls the functions subscribed when it
-# began; the new one is first called by the next Signal):
-#   awaiter 1 | after signal 1 | late 2 | after signal 2
-# If the Signal calls the functions subscribed when the awaiters are done:
+# OpenVerse (#724) prints (the Signal resumes the awaiters, then calls the
+# functions subscribed at that point, the new one too):
 #   awaiter 1 | late 1 | after signal 1 | late 2 | after signal 2
+# If the Signal called the functions subscribed when it began:
+#   awaiter 1 | after signal 1 | late 2 | after signal 2
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use Verse VM",
+# 2026-11-19) prints awaiter 1 | late 1 | after signal 1 | late 2 | after signal 2,
+# which OpenVerse printed without late 1 before; it now follows the VM.
 holder := class:
     var Sub:?cancelable = false
 

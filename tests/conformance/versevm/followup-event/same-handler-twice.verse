@@ -4,6 +4,8 @@
 #   twice 1 | twice 1 | twice 2 | after
 # If the second Subscribe of the same function were merged with the first:
 #   twice 1 | after   (or twice 1 | twice 2 | after)
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use Verse VM",
+# 2026-11-19) prints the same.
 OnTwice(N:int):void =
     Print("OVPROBE twice {N}")
 

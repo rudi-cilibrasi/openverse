@@ -189,24 +189,27 @@ def concPreludeAwaits : String :=
     Verse VM: tests/conformance/versevm/followup/subscribe-in-transacts.verse),
     so an event keeps the functions subscribed to it, each with its
     subscription (`subPrelude`'s `subscription`, a `cancelable`), and its
-    `Signal`, a sticky event's too, calls those subscribed when it began
-    (the API: "A Signal reaches exactly the tasks already suspended in
-    Await and the callbacks currently subscribed"), after the awaiters it
-    resumed went on (the Book's API: "Subscribers ... are invoked only
-    after every waiting task has been resumed"), in the order they
-    subscribed, each skipped if cancelled before its turn; it drops the
-    cancelled ones. `Subscribe` adds one. -/
+    `Signal`, a sticky event's too, first resumes the awaiters (the Book's
+    API: "Subscribers ... are invoked only after every waiting task has
+    been resumed"), then calls the functions subscribed at that point, in
+    the order they subscribed, each skipped if cancelled before its turn,
+    and drops the cancelled ones. So a function that a resumed awaiter
+    subscribes is called by that `Signal`, and one that a called function
+    subscribes is not, as on Epic's Verse VM (UEFN 43.12, 2026-11-19:
+    followup-event/subscribe-from-awaiter, subscribe-during-signal; the
+    VM's order of the functions varies, followup-event/subscribe-order).
+    `Subscribe` adds one. -/
 def withSubscriptions (s : String) : String :=
-  let notify := "        set Handlers = for (H : Handlers, H(0).Live?) { H }\n" ++
+  let notify := "        Hs := Handlers\n        set Handlers = for (H : Hs, H(0).Live?) { H }\n" ++
     "        for (H : Hs, H(0).Live?):\n            H(1)(X)\n"
   let s := s.replace
     "    var Tail:?evrec(t) = false\n    Signal(X:t):void =\n        if (Head?) then signalAll(Self, X)\n"
     ("    var Tail:?evrec(t) = false\n    var Handlers:[]tuple(subscription, type{_(:t):void}) = array{}\n" ++
-     "    Signal(X:t):void =\n        Hs := Handlers\n        if (Head?) then signalAll(Self, X)\n" ++ notify ++
+     "    Signal(X:t):void =\n        if (Head?) then signalAll(Self, X)\n" ++ notify ++
      "    Subscribe(F:type{_(:t):void}):cancelable =\n        S := subscription{}\n" ++
      "        set Handlers += array{(S, F)}\n        S\n")
   s.replace "        set Last = option{X}\n        if (Head?) then signalAll(Self, X)\n"
-    ("        Hs := Handlers\n        set Last = option{X}\n        if (Head?) then signalAll(Self, X)\n" ++ notify)
+    ("        set Last = option{X}\n        if (Head?) then signalAll(Self, X)\n" ++ notify)
 
 /-- The concurrency prelude's definitions: plain, in event mode (`events`),
     or in await mode (`awaits`, which is event mode too). Add the public

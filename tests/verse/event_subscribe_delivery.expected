@@ -20,6 +20,7 @@ out 2
 out 1
 awaited 7
 plain 7
+from waiter 7
 after 7
 plain 8
 from waiter 8

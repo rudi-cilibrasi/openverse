@@ -3914,23 +3914,33 @@ Main()<suspends>:void =
   it returns; `Subscribe` is admitted in a `<transacts>` function. As
   Epic's API gives `Subscribe` and `Cancel` `<transacts>`, both are
   admitted in a failure context too, and a `<computes>`, `<reads>`,
-  `<writes>` or `<allocates>` function cannot call either. Where Epic's
-  behaviour is not established yet, openverse's reading, each asked of the
-  Verse VM in [`followup-event/`](../tests/conformance/versevm/followup-event):
-  an event without a value (`event()`, `sticky_event()`) takes functions
-  of type `type{_():void}`; a `Signal` calls the functions subscribed when
-  it began, in the order they
-  subscribed (see [Readings](#readings-openverse-takes)), after the tasks
-  awaiting `E` went on (the Book's API: "Subscribers ... are invoked only
-  after every waiting task has been resumed"), each skipped if cancelled
-  before its turn: a function subscribed during a `Signal` (by a function
-  it calls or a task it resumes) is first called at the next one. A
-  second `Cancel` does nothing; a function subscribed twice is called
-  twice; a `Signal` made by a subscribed function calls the functions at
-  once, depth first; a `sticky_event` has `Subscribe` too, and a
-  `Subscribe` calls nothing at once. As in the Book (ch. 14,
+  `<writes>` or `<allocates>` function cannot call either. As the Verse VM
+  does (UEFN 43.12, the same build, 2026-11-19: the probes in
+  [`followup-event/`](../tests/conformance/versevm/followup-event), each
+  named here): a `Signal` first resumes the tasks awaiting `E` (the
+  Book's API: "Subscribers ... are invoked only after every waiting task
+  has been resumed"; `await-and-subscribe`), then calls the functions
+  subscribed at that point, each skipped if cancelled before its turn
+  (`cancel-during-signal`). So a function that a resumed awaiter subscribes
+  is called by that `Signal` (`subscribe-from-awaiter`), while one that a
+  called function subscribes is first called at the next one
+  (`subscribe-during-signal`). A second `Cancel` does nothing
+  (`cancel-twice`); a function subscribed twice is called twice
+  (`same-handler-twice`); a `Signal` made by a subscribed function calls
+  the functions at once, depth first (`nested-signal-in-handler`); an
+  event without a value, `event()`, takes functions of type
+  `type{_():void}` (`event-unit-subscribe`); and, as in the Book (ch. 14,
   "Transactional Behavior"), a `Subscribe` or a `Cancel` in a failure
-  context that fails is undone. A `subscribable_event(t)` (an openverse
+  context that fails is undone (`subscribe-rollback`, `cancel-rollback`).
+  The functions are called in the order they subscribed, where the Verse
+  VM's order varies from one `Signal` to the next (`subscribe-order`, as
+  the API says: "randomised"): a documented difference (see
+  [Readings](#readings-openverse-takes)), and a program must not rely on
+  the order. A `sticky_event` (and `sticky_event()`, whose functions take
+  no value) has `Subscribe` too, which calls nothing at once: openverse's
+  reading, as UEFN 43.12 does not let a program name `sticky_event`
+  (3506, "Did you forget to specify using { /Verse.org/Restricted }",
+  `sticky-event-subscribe`). A `subscribable_event(t)` (an openverse
   extension: Epic's API has none, UEFN 43.12 says "Unknown identifier",
   `followup/subscribable-event-control`) is an `event(t)` and nothing more,
   kept for the programs written for it (#210). An
@@ -4095,7 +4105,7 @@ Main()<suspends>:void =
 | `Sleep(0.0)` | "may resume in the same tick" (ch. 14), "One frame" (ch. 14); the API reference: it always yields; the tested ch. 14 examples (`03`, `05` to `11`): it completes at once, in a `race`, a `sync` and plain code: the Book disagrees with itself ([the rules](research/scheduler-conformance.md#sleep00-completes-at-once)) | the tested examples': completes at once, without suspending, as a negative or NaN duration does |
 | `Sleep(S)` rounding | the API: "a sleep resumes on the first update at or after its deadline and never sooner than the next one. Short sleeps therefore round up"; no tick rate | the first tick at or after the deadline: the binary64 product `30·S` rounded up, at least one tick (`Sleep(0.04)` takes 2 ticks; `Sleep(0.1)`, whose product is exactly 3.0, 3); bounded inputs and checked clock accumulation follow the explicit reference policy above (#514) |
 | End of a program with tasks | not stated | the program ends when `Main` does; a `Main` that waits with no task able to run is an error (exit 2) (#156) |
-| Order of an event's subscribed functions | the API: "invoked in a randomised order on every signal", "only after every waiting task has been resumed"; ch. 14's example lists them in subscription order | subscription order, after the tasks awaiting the event went on inside `Signal` (#210, #724; asked of the Verse VM, `followup-event/subscribe-order`) |
+| Order of an event's subscribed functions | the API: "invoked in a randomised order on every signal", "only after every waiting task has been resumed"; ch. 14's example lists them in subscription order; Epic's Verse VM (UEFN 43.12) varies it from one `Signal` to the next (`followup-event/subscribe-order`) | subscription order, after the tasks awaiting the event went on inside `Signal` (#210, #724): a documented difference from the Verse VM, so a program must not rely on the order |
 | Event waiter resumption | the Book's API: awaiting tasks "resumed first, in the order they suspended", each until it blocks before the next, and `Signal` "returns before the resumed tasks have finished"; its tests have awaiters run inside `Signal` (`Event.versetest:21-32`, FORT-1088027, FORT-1126351) | the Book's: inside `Signal`, in the order they suspended, each until it waits again or ends, the same task's arms included; an await made meanwhile joins the next `Signal`; nested `Signal`s depth first (#513, [the rule](research/scheduler-conformance.md#awaiters-run-inside-signal)); a task's end resumes its awaiters inside it the same way, in the order they registered (the API's `task`, `Await`; [the rule](research/scheduler-conformance.md#a-tasks-end-resumes-its-awaiters)) |
 | Awaiting a cancelled task | the API (`task`, `Await`): "a cancelled task never resumes its awaiters, so the call does not fail, does not error, and simply stays suspended for ever"; ch. 14: "it propagates cancellation: if the awaited task was canceled, `Await()` passes that cancellation on to the caller"; the tests decide neither (`SpawnAndTask.versetest:342-355`); `Cancel` itself is unreleased (ch. 14) and `<epic_internal>` (the API): the Book disagrees with itself | the API's: the await waits for ever; the awaiter can be cancelled itself (a `race` it loses); a `Main` stalled on one ends the program with exit 2 ([the cancelled task](research/scheduler-conformance.md#the-cancelled-task)) |
 | Signal in a failure context | the Book's tests signal in `<decides>` functions and assertions and expect success (`Event.versetest` 64-119); a failed context undoes the resumption (`Coroutines/Concurrency.versetest:1562-1580`); the Book's API gives `event`'s `Signal` no `<no_rollback>` (Epic's published pages do) | Epic's compiler's (UEFN 43.12, error 3512): refused, as in a function with a heap specifier and in a class's `block:` (#515); `--signal-rollback` keeps the tests' reading: allowed, and what it and the awaiters it resumed did is rolled back with a failing context |

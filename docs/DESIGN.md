@@ -2445,14 +2445,15 @@ flowchart LR
   type `type{_(:t):void}`, and `Subscribe`; `subPrelude` adds the
   subscription class and `cancelable`. Other programs' events are as
   before. A subscription is a non-generic object with a live flag;
-  `Signal` (a sticky event's too) takes a snapshot of the array when it
-  begins, resumes the awaiters, drops the cancelled pairs, so the array
-  holds the live subscriptions and those cancelled since the last
-  `Signal` (a loop that subscribes and cancels without signalling grows it
-  until the next `Signal`), and calls the snapshot's handlers, checking
-  each flag just before the call, so a function subscribed during a
-  `Signal` waits for the next one and one cancelled before its turn is
-  skipped. An event without a value (`event()`, `sticky_event()`) takes
+  `Signal` (a sticky event's too) resumes the awaiters, then takes a
+  snapshot of the array, drops the cancelled pairs, so the array holds the
+  live subscriptions and those cancelled since the last `Signal` (a loop
+  that subscribes and cancels without signalling grows it until the next
+  `Signal`), and calls the snapshot's handlers, checking each flag just
+  before the call. So a function a resumed awaiter subscribes is called by
+  that `Signal`, one a called handler subscribes waits for the next one,
+  and one cancelled before its turn is skipped, as on Epic's Verse VM
+  (UEFN 43.12, `tests/conformance/versevm/followup-event`). An event without a value (`event()`, `sticky_event()`) takes
   handlers of `type{_():void}`: the elaborator calls `$subscribeUnit(E, F)`
   for its `Subscribe` (`elabEventSubscribe?`), which subscribes a bound
   `CallUnit` of an object holding `F` (a `$` method is no value, so that

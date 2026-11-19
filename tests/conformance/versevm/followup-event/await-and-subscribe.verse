@@ -10,6 +10,8 @@
 #   handler 1 | awaiter 1 | after signal | after wait
 # If the awaiter only resumed after the Signal returned:
 #   handler 1 | after signal | awaiter 1 | after wait
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use Verse VM",
+# 2026-11-19) prints the same.
 OnHandler(N:int):void =
     Print("OVPROBE handler {N}")
 

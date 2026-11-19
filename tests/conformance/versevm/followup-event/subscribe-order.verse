@@ -6,6 +6,12 @@
 #   a 1 | b 1 | c 1 | a 2 | b 2 | c 2 | a 3 | b 3 | c 3 | after
 # If the order is shuffled on each Signal, the letters within a round vary
 # (and may vary from run to run).
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use Verse VM",
+# 2026-11-19) prints, in one run:
+#   c 1 | b 1 | a 1 | c 2 | b 2 | a 2 | a 3 | b 3 | c 3 | after
+# The order varies between Signals, as the API says. A documented
+# difference: OpenVerse keeps subscription order; programs must not rely on
+# the order.
 tally := class:
     Name:string
     Note(N:int):void =
