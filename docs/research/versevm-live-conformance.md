@@ -191,6 +191,17 @@ results for all twelve. The probes `compound-object-alias`,
 `compound-index-appended` are not yet run on Epic; each header gives
 OpenVerse's output and the other reading's.
 
+`compound-module-entry` and `compound-object-in-place` were first refused
+by Epic's compiler for their form, not their meaning: a condition continued
+on a second line gave error 3100 (S88, "Expected expression, got "else" in
+indented block") in one and "Unknown identifier" (3506) for the names it
+defined in the other. Rewritten with one-line conditions and helper
+functions, both are admitted and ran on the Verse VM (UEFN 43.12, CL
+60598086, 2026-11-19 08:47Z): `entry 8 9`, and `element 1 51`,
+`append 1 3 7`, `other object 1 3 8 9`. OpenVerse prints the same three
+lines for `compound-object-in-place`, and `entry 8 9` for its own
+module-scoped entries.
+
 ### Integers beyond 64 bits
 
 Same build, sessions with **Use Verse VM** (issue #724; the raw records are
@@ -315,17 +326,6 @@ agreeing:
 | `int-abs-big` | `Abs(-2^63 - 1)`, an argument beyond 64 bits (`book-int-abs-min`'s, `-2^63`, is inside) | `before abs`, `abs 2^63 + 1` |
 | `int-array-equal-big` | `array{2^63, 1} = array{(2^63 - 1) + 1, 1}`, `array{2^63} <> array{2^63 - 1}` | `before arrays`, `arrays equal`, `arrays differ` |
 | `int-tuple-equal-big` | the same with tuples | `before tuples`, `tuples equal`, `tuples differ` |
-
-`compound-module-entry` and `compound-object-in-place` were first refused
-by Epic's compiler for their form, not their meaning: a condition continued
-on a second line gave error 3100 (S88, "Expected expression, got "else" in
-indented block") in one and "Unknown identifier" (3506) for the names it
-defined in the other. Rewritten with one-line conditions and helper
-functions, both are admitted and ran on the Verse VM (UEFN 43.12, CL
-60598086, 2026-11-19 08:47Z): `entry 8 9`, and `element 1 51`,
-`append 1 3 7`, `other object 1 3 8 9`. OpenVerse prints the same three
-lines for `compound-object-in-place`, and `entry 8 9` for its own
-module-scoped entries.
 
 ## OpenVerse observations
 
