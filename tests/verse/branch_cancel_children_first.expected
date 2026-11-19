@@ -1,0 +1,48 @@
+1: winner done
+1: branch cleanup
+1: arm cleanup
+1: after race
+2: winner done
+2: grandchild cleanup
+2: child cleanup
+2: arm cleanup
+2: after race
+3: winner done
+3: second cleanup
+3: first cleanup
+3: arm cleanup
+3: after race
+4: winner done
+4: arm cleanup
+4: after race
+4: spawned done
+4: spawned cleanup
+5: winner done
+5: branch cleanup
+5: sync arm cleanup
+5: loser cleanup
+5: after race
+6: winner done
+6: branch cleanup
+6: arm two cleanup
+6: arm one cleanup
+6: loser cleanup
+6: after race
+7: rush done
+7: winner done
+7: slow arm cleanup
+7: loser cleanup
+7: after race
+8: branch cleanup
+8: runner cleanup
+8: cancelled
+9: runner ending
+9: runner cleanup
+9: grandchild cleanup
+9: child cleanup
+10: runner ending
+10: runner cleanup
+10: second cleanup
+10: first cleanup
+end
+exit=0

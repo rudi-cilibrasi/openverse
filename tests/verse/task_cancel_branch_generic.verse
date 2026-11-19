@@ -3,8 +3,8 @@
 # no longer the function's exit).
 # (Each function's branches now go on after it returns, until Main ends.)
 # (#724: a branch and a rush's arm that goes on are children of the task whose
-# code started them, stopped when that task ends, after its own defers: Epic's
-# Verse VM, UEFN 43.12; no longer when the function that started them exits.)
+# code started them, stopped when it ends, after its defers, or is cancelled,
+# before them (Epic's Verse VM, UEFN 43.12); not when their function exits.)
 W()<suspends>:int =
     Sleep(9.0)
     1

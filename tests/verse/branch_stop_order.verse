@@ -1,6 +1,6 @@
 # a task's branches and rush losers are stopped last started first
 # (#187), each unwinding whole: one started inside another branch is stopped
-# with it (#254), after its own defers, when its task ends (#724)
+# with it (#254), before its own defers, as it is cancelled, when its task ends (#724)
 F()<suspends>:int =
     defer:
         Print("F defer")

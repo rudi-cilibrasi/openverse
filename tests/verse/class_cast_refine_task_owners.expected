@@ -22,10 +22,10 @@ order cast defer 0
 order source end
 order source defer 8
 cancel winner
+cancel child 7
+cancel before 7
 cancel cast defer 7
 cancel source defer 8
-cancel child 8
-cancel before 8
 return cast defer 8
 return source defer 9
 return operand 7
@@ -39,13 +39,13 @@ reuse 2
 opened child woke
 opened child defer
 opened source 4 opened
-opened source cancelled
 opened child cancelled
+opened source cancelled
 opened cancelled value 8 cancelled
 ordinary child cleanup
 tree after
-tree parent
 tree child
+tree parent
 return child 9
 order after 8
 order last 8

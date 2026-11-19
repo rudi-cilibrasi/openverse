@@ -1,8 +1,8 @@
 # exit by cancellation from outside: a task cancelled while its function has (#254, from the review of #258)
 # live nested branches (and while it waits in a rush whose arm started one)
 # (#724: a branch and a rush's arm that goes on are children of the task whose
-# code started them, stopped when that task ends, after its own defers: Epic's
-# Verse VM, UEFN 43.12; no longer when the function that started them exits.)
+# code started them, stopped when it ends, after its defers, or is cancelled,
+# before them (Epic's Verse VM, UEFN 43.12); not when their function exits.)
 F()<suspends>:int =
     defer:
         Print("F defer")

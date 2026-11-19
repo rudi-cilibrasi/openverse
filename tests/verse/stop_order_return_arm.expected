@@ -3,8 +3,8 @@ arm2 defer
 F defer
 7
 s2 defer
-s1 defer
 s1.b defer
+s1 defer
 G defer
 8
 B defer
@@ -12,6 +12,6 @@ A.r2 defer
 A.r1 defer
 A defer
 B defer
-A defer
 A.1 defer
+A defer
 exit=0

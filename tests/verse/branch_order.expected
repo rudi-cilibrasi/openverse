@@ -1,8 +1,8 @@
 normal F end
 normal F defer
-cancelled F defer
 cancelled B2 defer
 cancelled B1 defer
+cancelled F defer
 main end
 normal B2 defer
 normal B1 defer

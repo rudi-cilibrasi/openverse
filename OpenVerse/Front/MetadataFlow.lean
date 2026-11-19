@@ -1605,7 +1605,7 @@ private partial def cancelSteps (env : ScheduleEnv) (c : Configuration) (actor :
       let c := { c with
         events := c.events.filter (· != actor)
         actors := c.actors.modify actor fun a => { a with cancelRequested := true, event := none } }
-      queue c (cancelChildren env c actor false ++ cancelChildren env c actor true)
+      queue c (cancelChildren env c actor true ++ cancelChildren env c actor false)
     else
       let cleanups := if a.status == .done || a.status == .idle then [] else
         (a.cleanups.head?.toList.map fun d =>
@@ -1615,8 +1615,11 @@ private partial def cancelSteps (env : ScheduleEnv) (c : Configuration) (actor :
       let c := { c with
         events := c.events.filter (· != actor)
         actors := c.actors.modify actor fun a => { a with canceling := true, event := none } }
-      queue c (cancelChildren env c actor false ++ cleanups ++ [.stop actor] ++
-        cancelChildren env c actor true)
+      -- (#724: a cancelled task's children first, its branches, then the
+      -- arms it waits in, then its own cleanups, as Epic's Verse VM cancels
+      -- a task: UEFN 43.12, followup-conc/branch-cancel-order)
+      queue c (cancelChildren env c actor true ++ cancelChildren env c actor false ++ cleanups ++
+        [.stop actor])
 
 /-- An active cancellation waits for the complete current step, including
     enclosing group continuations and fresh startup prefixes. Pending
@@ -1841,8 +1844,11 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
     -- (#724) once the owner has returned, the tasks its code started go on
     -- (`orphanBackground`); only they can read its frame's shared locals
     -- then, so metadata entering one is checked where they execute it,
-    -- not refused as it enters
-    let orphaned := actor != 0 && (c.actors[0]?.map (·.status == .done)).getD false
+    -- not refused as it enters; so too once the owner is being cancelled,
+    -- whose children's cleanups run before its own (`cancelSteps`), which
+    -- are checked where they execute it
+    let orphaned := actor != 0 &&
+      (c.actors[0]?.map (fun a => a.status == .done || a.canceling)).getD false
     modify fun st => { st with validateShared := baseValidateShared && !orphaned }
     match node with
     | .jump pc => work := work.push (advanceActor c actor pc)

@@ -2,8 +2,8 @@
 # branches and a rush, run 3 times (its frame reused), and 3 spawned tasks of
 # it, cancelled in turn
 # (#724: a branch and a rush's arm that goes on are children of the task whose
-# code started them, stopped when that task ends, after its own defers: Epic's
-# Verse VM, UEFN 43.12; no longer when the function that started them exits.)
+# code started them, stopped when it ends, after its defers, or is cancelled,
+# before them (Epic's Verse VM, UEFN 43.12); not when their function exits.)
 F(N:int, D:float)<suspends>:int =
     defer:
         Print("F{N} defer")

@@ -1,11 +1,11 @@
 # The shapes of the follow-up probes for Epic's Verse VM
 # (tests/conformance/versevm/followup-conc/branch-*.verse,
-# rush-loser-outlives-return.verse), as OpenVerse runs them since #724: a
+# rush-loser-outlives-return.verse), 1 to 7 as Epic printed them (UEFN 43.12): a
 # branch and a rush's arm that goes on are children of the task whose code
-# started them, stopped when that task ends; a task that ends or is
-# cancelled runs its own defers first, then stops its children, newest
-# first; a spawned task's children are stopped before its result is
-# published to its awaiters.
+# started them, stopped when that task ends; a task that ends runs its own
+# defers first, then stops its children, newest first; a cancelled task
+# stops them first (6); a spawned task's children are stopped before its
+# result is published to its awaiters.
 
 # a branch started in a helper of a spawned task: the spawned task's child
 SpawnHelper()<suspends>:void =
@@ -85,7 +85,7 @@ RushThenReturn()<suspends>:void =
             Print("5: slow arm done")
     Print("5: function returning")
 
-# a race arm cancelled: its own defer, then its child's
+# a race arm cancelled: its child's defer, then its own
 CancelHelper()<suspends>:void =
     branch:
         defer:

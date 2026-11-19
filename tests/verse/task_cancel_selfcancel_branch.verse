@@ -1,7 +1,7 @@
 # A task cancels itself, then starts a branch before its next wait.
 # Expected: the branch's first run prints "branch runs", then the task
-# reaches its wait and is cancelled: "selfstop defer" and the branch's
-# "branch defer" (cancelled when its function exits), then "end".
+# reaches its wait and is cancelled: its child's "branch defer", then
+# "selfstop defer" (a cancelled task's children first, #724), then "end".
 SelfStop(Me:event(task(int)))<suspends>:int =
     defer:
         Print("selfstop defer")

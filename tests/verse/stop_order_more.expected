@@ -1,18 +1,18 @@
 inner loser defer
 2
-G defer
 G.B defer
-G.A defer
 G.A.1 defer
+G.A defer
+G defer
 2
-K.A race loser defer
 K.A.loser.b defer
+K.A race loser defer
 K.A won 2
 0
 Main defer
 Main.B defer
-Main.A defer
 Main.A.1 defer
+Main.A defer
 K.B defer
 K.A defer
 C defer

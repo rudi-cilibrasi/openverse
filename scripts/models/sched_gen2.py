@@ -20,7 +20,8 @@ cancelled/was signalled, arms in source order, race losers cancelled last
 started first, rush losers become roots. A branch and a rush loser are
 children of the task whose code started them (a spawned task, Main, a
 branch, an arm of a sync, race or rush), stopped, newest first, when that
-task ends: completes, or is cancelled and has unwound (#724; the Book's
+task ends: completes (after its code), or is cancelled (before its code
+unwinds: Epic's Verse VM, branch-cancel-order) (#724; the Book's
 AsyncContextCancellation.versetest, Epic's Verse VM); a function's return
 stops nothing. A Signal and a
 task's end resume their awaiters inside them, in the order they suspended or
@@ -365,7 +366,8 @@ def stop_scope(scope):
 def scoped(body, scope):
     """`body` run as a task's code (#724): the scheduler's current scope is
     the task's while it runs; when it ends its children are stopped; when it
-    is cancelled, its code unwinds (its defers), then its children."""
+    is cancelled, its children are stopped first, then its code unwinds (its
+    defers), as Epic's Verse VM does (UEFN 43.12, branch-cancel-order)."""
     ended = False
     try:
         while True:
@@ -383,8 +385,8 @@ def scoped(body, scope):
             yield step
     finally:
         if not ended:
-            body.close()
             stop_scope(scope)
+            body.close()
 
 
 def m_call(fn, args):

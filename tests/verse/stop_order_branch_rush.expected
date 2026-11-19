@@ -7,7 +7,7 @@ R1 defer
 0
 C defer
 C defer
-B defer
 R2 defer
 R1 defer
+B defer
 exit=0

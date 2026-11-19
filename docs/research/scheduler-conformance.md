@@ -48,7 +48,7 @@ the sources disagree, the table records that disagreement.
 | Task end and its awaiters | The Book's API (`task`, `Await`): "Multiple awaiters are allowed and are resumed in the order they registered"; "a cancelled task never resumes its awaiters ... simply stays suspended for ever"; ch. 14 has `Await` pass a cancellation on. | A task's end resumes its awaiters inside its last step, in registration order, each to its next wait ([order](../../tests/verse/task_end_order.verse), [before others](../../tests/verse/task_end_before_others.verse)); an await of a cancelled task waits for ever ([Main](../../tests/verse/task_cancel_main.verse)). | The Book's API ([a task's end](#a-tasks-end-resumes-its-awaiters)). |
 | Signal boundary and re-await | The Book drops signals with no waiter; its API resumes the waiters inside `Signal`, each until it waits again, and an await made meanwhile waits for the next signal. | Each waiter runs inside the `Signal`, to its next wait. Consecutive signals 1 and 2 deliver 1 and then, to the waits made inside the first, 2; signal 3 finds no one. [Re-await](../../tests/verse/scheduler_audit_event_reawait.verse). | The Book's ([awaiters inside `Signal`](#awaiters-run-inside-signal), #513). |
 | Subscriptions and event transactions | The Book describes transactional Subscribe/Cancel; its tests signal in `<decides>` functions; its API invokes subscribers after every waiting task resumed. Epic's Signal pages render no_rollback. | Waiters run inside the Signal, then callbacks in subscription order. A failed Signal restores what the waiters and callbacks did, output included, and the waiters wait again. Failed Subscribe/Cancel restores the subscriber list. [Transactions](../../tests/verse/scheduler_audit_transactions.verse) counts exactly `2+3+4=9`; the waiter receives 2, never rolled-back 1. | Epic's compiler (UEFN 43.12, error 3512) by default, which refuses a `Signal` in a failure context; the Book's tests' rollback with `--signal-rollback`, which [this case](../../tests/verse/scheduler_audit_transactions.verse) uses ([#515](https://github.com/rudi-cilibrasi/openverse/issues/515)). |
-| Cancellation and source return | The Book requires immediate, non-suspending cleanup; return in a concurrent arm leaves the enclosing function. | Nested defers run once; repeated Cancel is harmless. An arm return unwinds that arm, cancels its race siblings and runs surrounding defers; the function's branches go on, children of its task (#724). [Cancel](../../tests/verse/scheduler_audit_cancel.verse), [source return](../../tests/verse/scheduler_audit_source_return.verse). | Lifetime/cleanup checks; a task's own defers before its children is an OpenVerse policy, not yet measured ([task scopes](#a-branch-lives-as-long-as-its-task)). |
+| Cancellation and source return | The Book requires immediate, non-suspending cleanup; return in a concurrent arm leaves the enclosing function. | Nested defers run once; repeated Cancel is harmless. An arm return unwinds that arm, cancels its race siblings and runs surrounding defers; the function's branches go on, children of its task (#724). [Cancel](../../tests/verse/scheduler_audit_cancel.verse), [source return](../../tests/verse/scheduler_audit_source_return.verse). | Lifetime/cleanup checks; measured on Epic's Verse VM (UEFN 43.12): a task that ends runs its own defers before its children's, a cancelled one its children's first; their order beyond one child is an OpenVerse policy, not yet measured ([task scopes](#a-branch-lives-as-long-as-its-task)). |
 | Creator and host lifetime | Structured concurrency constrains child lifetimes. The Book distinguishes spawn from branch. A standalone Main/process shutdown is not an engine-device lifetime rule. Epic's Verse VM (UEFN 43.12 (`++Fortnite+Release-43.12-CL-60598086`)): a branch outlives the function that started it, until its parent task ends. | A spawn survives its creating function and task; a branch survives its creating function, not its task ([task scopes](#a-branch-lives-as-long-as-its-task)). Main finishing stops Main's children, then ends this host without cancelling unfinished unstructured tasks, so their pending defers do not run. Main stalled with no possible wake exits 2. [Lifetime](../../tests/verse/scheduler_audit_lifetime.verse), [deadlock](../../tests/verse/scheduler_audit_deadlock.verse). | Epic's Verse VM for the branch; explicit command-line host boundary, not a Fortnite session guarantee. |
 
 ### Bounded clock domain (#514)
@@ -235,13 +235,16 @@ the API reference, which agrees.
   rounded up, at least one tick). Cancellation and other tasks get a turn
   there, so a loop whose only wait is `Sleep(0.0)` lets them run, as the
   API says. A negative or NaN duration still completes at once, without
-  suspending (Epic's VMs not yet measured: the follow-up probe
-  [`sleep-negative-yields`](../../tests/conformance/versevm/followup-conc/sleep-negative-yields.verse)).
-  Whether Epic resumes a zero sleep in the same update when nothing else
-  is pending (the prose's "may resume in the same tick") is not settled by
-  the probe, which has `Main` sleep 0.1 s; the follow-up probe
+  suspending, as a negative one does on Epic's Verse VM (UEFN 43.12, the
+  follow-up probe
+  [`sleep-negative-yields`](../../tests/conformance/versevm/followup-conc/sleep-negative-yields.verse):
+  `worker before sleep`, `worker after sleep`, `main after spawn`, `main
+  after wait`). A zero sleep resumes on the next update, not in the same
+  one when nothing else is pending (the prose's "may resume in the same
+  tick"): on the Verse VM the follow-up probe
   [`sleep-zero-next-update`](../../tests/conformance/versevm/followup-conc/sleep-zero-next-update.verse)
-  tells the two apart.
+  printed `b after short sleep`, `a after three zero sleeps`, `main after
+  wait`, as openverse does.
 - **History:** until #608 a zero sleep yielded to the next tick (#156);
   #608 made it complete at once, after the tested examples, which the
   audit had proposed as a narrower rule ("complete without yielding when no
@@ -744,15 +747,19 @@ of a `rush` a task, the ones that go on children of the current task;
 call, each `branch` and each arm of a `sync`, `race` or `rush`; a function
 call is none. A branch, and a `rush`'s arm that goes on after it, is a
 child of the task whose code starts it. A task that ends stops its
-children, the last started first; a cancelled task ends once its code has
-unwound. As built: each such task has a scope, a list of its children (the
+children, the last started first, after its own code (its defers); a
+cancelled task stops them first, then its code unwinds (Epic's order,
+below). As built: each such task has a scope, a list of its children (the
 scheduler's root cells); the scheduler's current scope is the running
 task's (its trampoline, or the code that runs an arm, sets it around the
 run); a branch's or `rush` loser's `start` registers its wrapper in it; an
-arm's end (its last statement, or a `return`) and its cancel stop its
-scope (`$stopScope`, through each child's `stopKid`, which cancels the
-child's arm, whose cancel stops its own scope in turn); a spawned call's
-root stops its task's scope when the call ends, before the task is done;
+arm's end (its last statement, or a `return`) stops its scope after its
+code, and its cancel before its code unwinds (`$stopScope`, through each
+child's `stopKid`, which cancels the child's arm, whose cancel stops its
+own scope first in turn); a spawned call's root stops its task's scope
+when the call ends, before the task is done, and its cancel
+(`$spawnK$cancelT`) before it unwinds the root; a root whose task is being
+cancelled is not woken by a `Signal` in a defer that runs meanwhile;
 `$Run` stops `Main`'s when `Main` ends. A function's exit stops nothing,
 and a function that starts tasks over its frame gets a new frame at each
 call. The Book's seven cases of `AsyncContextCancellation.versetest` and
@@ -763,19 +770,40 @@ print the Verse VM's logs. The scheduler models (`sched_gen`, `sched_gen2`)
 predict the same rule independently, and match the lowering on 450
 programs (seeds 1 to 450).
 
-**Extrapolated, and asked of Epic** (the follow-up probes in
+**Measured on Epic** (the follow-up probes in
 [`followup-conc/`](../../tests/conformance/versevm/followup-conc), each
-with openverse's output and the other reading in its header): a branch in
-a spawned task's helper is the spawned task's child; one in a `sync` arm
-is stopped when that arm ends, not the `sync`; one in a winning `race` arm
-when that arm ends; one inside a branch is that branch's child; a `rush`
-loser outlives its function (the Book's test 6); a task's own defers run
-before its children are stopped, at its end and at its cancel (the order
-the function's exit had for its branches; #254 had a branch's children
-before its own defers); a spawned call's children are stopped before its
-awaiters resume; a branch at the top of `Main` is stopped when `Main`
-ends (on UEFN, `Main` is called from the device's `OnBegin`, whose task is
-the parent); a `branch` in a `defer:` stays refused (#156).
+with openverse's output, the other reading and Epic's in its header, and
+in its `expectations.tsv`; UEFN 43.12, `++Fortnite+Release-43.12-CL-60598086`,
+"Use Verse VM" on, 2026-11-19): a branch in a spawned task's helper is the
+spawned task's child; one in a `sync` arm is stopped when that arm ends,
+not the `sync`; one in a winning `race` arm when that arm ends; one inside
+a branch is that branch's child; a `rush` loser outlives its function (the
+Book's test 6); a task that ends runs its own defers before its children
+are stopped (`branch-in-branch`: `outer cleanup`, `inner cleanup`); a
+spawned call's children are stopped before its awaiters resume; a branch
+at the top of the device's `OnBegin` (the probe run alone) is stopped when
+`OnBegin` ends, after `OVPROBE end`, as one at the top of `Main` is here; a
+`branch` in a `defer:` is refused by Epic's compiler too (3512, the
+`suspends` effect not allowed there). One difference: a **cancelled task
+stops its children before its own defers run**
+([`branch-cancel-order`](../../tests/conformance/versevm/followup-conc/branch-cancel-order.verse):
+`winner done`, `branch cleanup`, `arm cleanup`, `after race`, `after
+wait`), where openverse had them after, as at a task's end (#254 had a
+branch's children before its own defers). openverse now does Epic's
+([`branch_cancel_children_first`](../../tests/verse/branch_cancel_children_first.verse)).
+
+**Extrapolated, and asked of Epic** (the follow-up probes `cancel-*` and
+`end-*` in the same directory): a stopped child is cancelled the same way,
+its own children first, so a cancelled task's descendants unwind
+innermost first, and a task that ends runs its defers, then its
+grandchildren's, then its children's; a task's children go newest first,
+at its end and at its cancel; a spawned task is nobody's child (the Book's
+tests) and goes on; a `sync` arm cancelled with its task stops its
+children first, as a `race` arm that loses does; a cancelled task's
+children (its branches, the `rush` arms that went on) go before the arms
+of the `sync`, `race` or `rush` it waits in, which unwind last started
+first, then its defers; `T.Cancel()` of a spawned task does the same,
+inside the call.
 
 ### A task's end resumes its awaiters
 

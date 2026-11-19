@@ -4,8 +4,8 @@ main continued
 probe after signal 0
 probe active cleanup 0
 probe sibling cleanup 0
-probe late cleanup 0
 probe grandchild cleanup 0
+probe late cleanup 0
 probe after rush 0
 probe other cleanup 0
 main done

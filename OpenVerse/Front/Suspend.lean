@@ -1765,10 +1765,10 @@ partial def region (pcFld : Nat) (done : Option (Expr → Expr)) (body : Expr) (
   modify fun st => { st with regionNext := 0, sites := #[], defers := vd, partials := #[] }
   let regionTotal := countSusp (fun f => (env.callee f).isSome || isMark env f)
     (fun f => isMark env f || f == env.branchMark) true (· == env.spawnMark) body
-  -- (#724: an arm's end, by its last statement or a `return`, and its
-  -- cancel, once it has unwound, stop the tasks its scope holds: Epic's
-  -- Verse VM cancels a task's children when the task ends; a function's
-  -- body has no scope)
+  -- (#724: an arm's end, by its last statement or a `return`, stops the
+  -- tasks its scope holds once its code has ended, and its cancel before
+  -- its code unwinds: Epic's Verse VM cancels a task's children when the
+  -- task ends; a function's body has no scope)
   let armStop : Expr := match armIdx with
     | some a => if env.scopes then .call env.stopScopeFn [.local schS, fget (armScopeMark a)] else vd
     | none => vd
@@ -1819,9 +1819,11 @@ partial def region (pcFld : Nat) (done : Option (Expr → Expr)) (body : Expr) (
   -- it returns)
   -- (where frames are resumed directly, #362, the cancelled frame is marked
   -- done, so a record of it that stayed would resume it from the root)
-  -- (#724: an arm cancelled ends once its code has unwound, its defers
-  -- run: then its children are stopped, as when it ends)
-  let cancel := seqVoid ([reloadMark] ++ st.sites.toList.map cancelAt ++ [armStop] ++
+  -- (#724: an arm cancelled first stops its children, each the same way,
+  -- then its code unwinds, its defers run, as Epic's Verse VM does: UEFN
+  -- 43.12, followup-conc/branch-cancel-order; an arm that ends stops them
+  -- after its code, `finish` and `retToDone`)
+  let cancel := seqVoid ([reloadMark, armStop] ++ st.sites.toList.map cancelAt ++
     (if pcFld == pcF then [killMark] else []) ++
     (if pcFld == pcF && env.leafy then [fset pcF (int (-1))] else []) ++ [spillMark])
   modify fun st => { st with regionNext := saved.regionNext, sites := saved.sites, defers := saved.defers }

@@ -175,6 +175,9 @@ else:
                 h += bump
                 bumped = True
             if cancel and finish > 0.250001:
+                # (the arm cancelled: its child, Use's branch, is stopped
+                # before its code unwinds, Epic's Verse VM, #724)
+                lines.append(f'background {h}')
                 lines.append(f'body {h} {total}')
                 interrupted = True
                 raise Interrupted()
@@ -227,9 +230,10 @@ else:
     answer = -1 if interrupted else 10000 * len(values) + 100 * total + (sum(values) if packed else 0)
 lines.append(f'source {h} {total}')
 # (#724: Use's branch is a child of the task that runs Use, not stopped when
-# Use returns: in a race's arm, stopped when that arm ends, at once; called
-# from Main, stopped when Main ends, after its last line)
-if mode == 'waiting' and cancel:
+# Use returns: in a race's arm, stopped when that arm ends, at once, or, when
+# the arm is cancelled, before its code unwinds, above; called from Main,
+# stopped when Main ends, after its last line)
+if mode == 'waiting' and cancel and not interrupted:
     lines.append(f'background {h}')
 lines.append(f'result {answer} state {h}')
 if mode == 'waiting' and not cancel:

@@ -50,23 +50,25 @@ def returning_owner(model, finish, late_child=False, wrapped=False):
     code = model.S.run(main())
     # (#724) the owner's return stops nothing: the rush's arm that goes on
     # is a child of the task whose code ran the rush (the branch, or Main's
-    # when wrapped), stopped when that task ends, after its own defers; a
-    # task's children go newest first, each its own defers, then its own
-    # children (traces checked against openverse's lowering, Lean and C)
+    # when wrapped), stopped when that task ends; a task's children go
+    # newest first, each cancelled: its own children first, then its own
+    # defers (Epic's Verse VM, UEFN 43.12, branch-cancel-order); an arm that
+    # ends runs its defers, then stops its children (traces checked against
+    # openverse's lowering, Lean and C: tests/verse/signal_rush_*)
     late = {0: [], 1: ['late cleanup'],
-            2: ['sibling cleanup', 'late cleanup', 'grandchild cleanup']}[late_child]
+            2: ['sibling cleanup', 'grandchild cleanup', 'late cleanup']}[late_child]
     if wrapped and finish:
         expected = ['other cleanup', 'owner done', 'owner cleanup', 'main continued', 'after signal',
                     'active cleanup'] + late + ['main done']
     elif wrapped:
         expected = ['other cleanup', 'owner done', 'owner cleanup', 'main continued', 'after signal',
-                    'main done', 'active cleanup'] + late
+                    'main done'] + late + ['active cleanup']
     elif finish:
         expected = ['owner done', 'owner cleanup', 'main continued', 'after signal', 'active cleanup'] + late + [
             'after rush', 'other cleanup', 'main done']
     else:
         expected = ['owner done', 'owner cleanup', 'main continued', 'after signal', 'wrong other',
-                    'other cleanup', 'after rush', 'active cleanup'] + late + ['main done']
+                    'other cleanup', 'after rush'] + late + ['active cleanup', 'main done']
     expected = [e if e.startswith('main') else 'probe ' + e + ' 0' for e in expected]
     assert code == 0, (code, model.S.out)
     assert model.S.out == expected, (finish, late_child, wrapped, model.S.out, expected)
@@ -75,9 +77,11 @@ def returning_owner(model, finish, late_child=False, wrapped=False):
 
 
 def outside_cancel_order(model):
-    """A cancelled task unwinds its code (its defers), then stops its
-    children, newest first, each the same way (#724): what a function
-    started is its task's, not stopped with the function."""
+    """A cancelled task stops its children, newest first, each the same
+    way, then its code unwinds (its defers): Epic's Verse VM (UEFN 43.12,
+    branch-cancel-order, #724); the arms it waits in after its children;
+    what a function started is its task's, not stopped with the function
+    (tests/verse/stop_order_cancel_outside)."""
     st = model.St
 
     def branch_a():
@@ -115,9 +119,9 @@ def outside_cancel_order(model):
 
     assert model.S.run(main()) == 0
     actual = [line.removesuffix(' 0').strip() for line in model.S.out]
-    expected = ['F defer', 'B defer', 'A defer', 'A.1 defer', 'cancelled F',
-                'r2 defer', 'r1 defer', 'r1.b defer', 'G defer',
-                'H defer', 'A defer', 'A.1 defer', 'cancelled H']
+    expected = ['B defer', 'A.1 defer', 'A defer', 'F defer', 'cancelled F',
+                'A.1 defer', 'A defer', 'r2 defer', 'r1.b defer', 'r1 defer',
+                'G defer', 'H defer', 'cancelled H']
     assert actual == expected, (actual, expected)
     assert all(n == 0 for n in model.S.sleepers.values()), 'cancelled timer remained registered'
 

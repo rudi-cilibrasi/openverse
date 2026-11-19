@@ -45,6 +45,12 @@ private def extras : List (String × String × Bool) := [
     s!"    var Stored:{functionTy}=Dummy\n    branch:\n        defer:\n            Value:=Stored()\n        loop:\n            Sleep(1.0)\n    set Stored=F\n    0", true),
   ("race: sibling startup makes cleanup data real", header ++
     s!"    var Stored:{functionTy}=Dummy\n    race:\n        block:\n            defer:\n                Value:=Stored()\n            loop:\n                Sleep(1.0)\n        block:\n            set Stored=F\n            Sleep(0.1)\n            0", true),
+  -- (#724: a cancelled task stops its children before its own cleanups
+  -- run, Epic's Verse VM, UEFN 43.12: the branch's cleanup makes the data
+  -- real first; until then a refusal, "owner cleanup precedes background
+  -- cleanup")
+  ("branch: child cleanup precedes owner cleanup at cancellation", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    defer:\n        Value:=Stored()\n    branch:\n        defer:\n            set Stored=F\n        loop:\n            Sleep(1.0)\n    loop:\n        Sleep(1.0)", true),
   ("sync: child cleanup precedes owner cleanup", header ++
     s!"    var Stored:{functionTy}=Dummy\n    defer:\n        Value:=Stored()\n    Values:=sync:\n        block:\n            defer:\n                set Stored=F\n            loop:\n                Sleep(1.0)\n        block:\n            loop:\n                Sleep(1.0)\n    0", true),
   ("branch: opaque helper return retains metadata",
@@ -96,8 +102,6 @@ private def backgroundRefusals : List (String × String × Bool) := [
     "    Saved:=Later(Dummy,F)\n    Saved()", true),
   ("branch: owner return executes child cleanup", header ++
     "    branch:\n        defer:\n            Value:=Dummy()\n        loop:\n            Sleep(1.0)\n    0", true),
-  ("branch: owner cleanup precedes background cleanup", header ++
-    s!"    var Stored:{functionTy}=Dummy\n    defer:\n        Value:=Stored()\n    branch:\n        defer:\n            set Stored=F\n        loop:\n            Sleep(1.0)\n    loop:\n        Sleep(1.0)", true),
   ("branch: nonreturning background child does not hide owner return",
     "Finish()<suspends>:void=\n    branch:\n        loop:\n            Sleep(1.0)\n" ++ header ++
     "    spawn{Finish()}\n    Dummy()", true),

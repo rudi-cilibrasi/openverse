@@ -200,7 +200,12 @@ def withScopes (prelude : String) : String :=
   -- reaches by their places)
   let s := prelude.replace "taskBase := class:\n"
     "    var Scope:scope = scope{}\n    var MainScope:scope = scope{}\nscope := class:\n    var Kids:?int = false\n    var Own:logic = false\ntaskBase := class:\n"
-  s.replace "    var Result:?t = false\n" "    var Result:?t = false\n    var TScope:scope = scope{}\n"
+  let s := s.replace "    var Result:?t = false\n" "    var Result:?t = false\n    var TScope:scope = scope{}\n"
+  -- (await mode: a task whose call has ended has its result before its
+  -- children are stopped, and is done after: an `Await` made meanwhile, in
+  -- a child's defer, waits for it to be done, with the other awaiters)
+  s.replace "Await(T:task(t) where t:type)<suspends>:t =\n    if (R := T.Result?) then R else:\n"
+    "Await(T:task(t) where t:type)<suspends>:t =\n    if (T.Done?, R := T.Result?) then R else:\n"
 
 /-- The concurrency prelude's definitions: plain, in event mode (`events`),
     or in await mode (`awaits`, which is event mode too), with scopes

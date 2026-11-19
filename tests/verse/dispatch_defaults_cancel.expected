@@ -1,7 +1,7 @@
 default done
 body start 3
 cancel
+background stop
 body stop
 source stop
-background stop
 exit=0

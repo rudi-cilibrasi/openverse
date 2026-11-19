@@ -1,6 +1,6 @@
 branch runs
 still running until it waits
-selfstop defer
 branch defer
+selfstop defer
 end
 exit=0

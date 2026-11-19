@@ -7,6 +7,6 @@ loser 1 defer
 late branch 0 defer
 loser 0 defer
 second branch defer
-outer branch defer
 inner branch defer
+outer branch defer
 exit=0

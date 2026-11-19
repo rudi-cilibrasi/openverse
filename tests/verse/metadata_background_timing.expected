@@ -9,7 +9,7 @@ cleanup 2
 alias 2
 helper cleanup 7
 nested cleanup 1
-parent cleanup 2
 branch cleanup
+parent cleanup 1
 signal 2
 exit=0

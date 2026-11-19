@@ -3809,12 +3809,19 @@ Main()<suspends>:void =
   (a function call is none: its code is its caller's task's), so a branch
   started in a function called from a `sync` arm is that arm's child,
   stopped when the arm ends, and one started inside another branch's body
-  is that branch's. A task that ends, by completing or by being cancelled
-  once its code has unwound (its own `defer:` blocks), stops its children,
-  the last started first, each the same way: its own defers, then its
-  children. A spawned call's children are stopped when the call ends,
-  before its task is done and its awaiters resumed; `Main`'s when `Main`
-  ends, before the program does. This is Epic's Verse VM's rule (on
+  is that branch's. A task that completes runs its own `defer:` blocks (its
+  code's end), then stops its children, the last started first, each by
+  cancelling it. A task that is cancelled stops its children first, the
+  last started first, each the same way (its own children first, then its
+  defers), and then its code unwinds from where it waits: the arms of a
+  `sync`, `race` or `rush` it waits in, last started first, each the same
+  way, then its own `defer:` blocks. A spawned task is nobody's child. A
+  spawned call's children are stopped when the call ends,
+  before its task is done and its awaiters resumed (an `Await` of it made
+  meanwhile, by a task a child's defer spawns, waits for it to be done,
+  after the awaiters before it); `Main`'s when `Main`
+  ends, before the program does. A `Signal` made in a defer while a task is
+  cancelled resumes none of that task's waits. This is Epic's Verse VM's rule (on
   UEFN 43.12 (`++Fortnite+Release-43.12-CL-60598086`), the probes `vm-branch-outlives-return` and
   `vm-branch-await-after-return` show a branch outliving the function that
   started it; Epic's staff: "returning from a function no longer cancels
@@ -3823,11 +3830,20 @@ Main()<suspends>:void =
   "Tasks are cancelled when their PARENT TASK ends ... NOT by
   function/loop/block boundaries"); the Blueprint VM, and openverse until
   #724, cancelled a branch when the function that started it exited, as
-  ch. 14's prose says. Where they are not yet measured on Epic's VM (the
-  order of a task's own defers and its children's, a branch at the top of
-  the entry point, children against a task's awaiters), openverse's choice
-  is the follow-up probes' first reading
-  (`tests/conformance/versevm/followup-conc/`). A function that starts a
+  ch. 14's prose says. Its follow-up probes
+  (`tests/conformance/versevm/followup-conc/`, UEFN 43.12) measured the
+  rest: a branch in a spawned task's helper, a `sync` arm, a winning `race`
+  arm or another branch is that task's child; a `rush` arm that goes on
+  outlives its function; a task that ends runs its defers before its
+  children's (`branch-in-branch`); a cancelled task's children are stopped
+  before its own defers run (`branch-cancel-order`: openverse had them
+  after until then); a spawned task's children are stopped before its
+  awaiters resume; a branch at the top of the device's `OnBegin` is
+  stopped when `OnBegin` ends, as one at the top of `Main` is here. Not yet
+  measured, openverse's choice, asked by the probes `cancel-*` and `end-*`:
+  that a stopped child stops its own children first, the newest first; that
+  a cancelled task's children go before the arms it waits in; a spawned
+  task as nobody's child. A function that starts a
   branch or a `rush` gets a frame of its own at each call, as its tasks
   share it and may outlive the call. A `branch` cannot be in a `loop` or
   `for` body (the Book's rule), even through an arm. If cancellation is requested while an arm
@@ -4069,8 +4085,8 @@ Main()<suspends>:void =
   An unsupported finite input terminates immediately with `error: user`;
   it is a fatal runtime error, not a failable result or an infinite wait.
   `Sleep(Inf)` alone is the intentional indefinite timer; a negative or
-  NaN input returns at once, without yielding (not yet checked against
-  Epic's VMs: the follow-up probe `sleep-negative-yields`). The virtual clock starts at zero and ranges
+  NaN input returns at once, without yielding, as a negative one does on
+  Epic's Verse VM (UEFN 43.12, the follow-up probe `sleep-negative-yields`). The virtual clock starts at zero and ranges
   through `2^63 − 1`: if current time plus the requested ticks exceeds
   that maximum, checked addition terminates with `error: overflow`, without
   wrapping or clamping. These are reference-clock limits, not measured
@@ -4135,7 +4151,7 @@ Main()<suspends>:void =
 | A clause of a `for` with a choice in it | (the Book has no choice; ch. 7: "Each filter must be failable") | a generator over its values, as a clause that calls a function with several values is: not a filter, so it need not fail (`for (X := 1..2, set N = (1 \| 2))` runs the body for each value); the statements of a function with several values that a `for` takes are the function's, not the `for`'s filters |
 | Precedence of `\|` | (not in the Book) | below `+`, above the comparisons: `X = 1 \| 2` is `X = (1 \| 2)` (#208) |
 | `Sleep(0.0)` | "may resume in the same tick" (ch. 14), "One frame" (ch. 14); the API reference: it always yields; the tested ch. 14 examples (`03`, `05` to `11`): it completes at once, in a `race`, a `sync` and plain code: the Book disagrees with itself ([the rules](research/scheduler-conformance.md#sleep00-yields)) | **Epic's**: it yields, as both of Epic's VMs do (UEFN 43.12, `++Fortnite+Release-43.12-CL-60598086`, `vm-sleep-zero-yields`), and as the API reference says: it waits one tick, the next update; a negative or NaN duration completes at once |
-| Lifetime of a `branch` | ch. 14's prose: "a branch task is automatically canceled when execution leaves the enclosing function scope"; its tested example 13 (cancelled when the spawned function that ran it returns, its task's end too); the Verse VM's tests (`Bugs/BPVMOnly/AsyncContextCancellation.versetest`): a child of the current task, cancelled when it ends, a task each spawn, branch and arm of a `sync`, `race` and `rush`; their Blueprint VM twins: cancelled at the function's exit | **the Verse VM's** (measured, UEFN 43.12 (`++Fortnite+Release-43.12-CL-60598086`), `vm-branch-*`): a child of the task whose code started it, stopped when that task ends; a function's return stops nothing; a task's own defers before its children's ([`branch`](#concurrency)) |
+| Lifetime of a `branch` | ch. 14's prose: "a branch task is automatically canceled when execution leaves the enclosing function scope"; its tested example 13 (cancelled when the spawned function that ran it returns, its task's end too); the Verse VM's tests (`Bugs/BPVMOnly/AsyncContextCancellation.versetest`): a child of the current task, cancelled when it ends, a task each spawn, branch and arm of a `sync`, `race` and `rush`; their Blueprint VM twins: cancelled at the function's exit | **the Verse VM's** (measured, UEFN 43.12 (`++Fortnite+Release-43.12-CL-60598086`), `vm-branch-*`): a child of the task whose code started it, stopped when that task ends; a function's return stops nothing; a task that completes runs its own defers before its children's, a cancelled task its children's first (`followup-conc/`) ([`branch`](#concurrency)) |
 | A module constant whose computation allocates a `var` | `verse_vm_only`: link error 9003 (`GlobalVariables.versetest` 86, 90, 97, 105); `bp_vm_only`: valid, "BPVM doesn't run blocks on global instances of classes" (114-141); `:143` valid on both where the `var` is not reached; ch. 16: only "as long as their construction does not actually allocate mutable memory" | **the Verse VM's** (the owner's choice where the VMs differ; measured on UEFN 43.12, probes `book-global-block-*`): refused before the program runs, the constant computed at compile time to find the path it takes ([Modules](#modules)) |
 | `Sleep(S)` rounding | the API: "a sleep resumes on the first update at or after its deadline and never sooner than the next one. Short sleeps therefore round up"; no tick rate | the first tick at or after the deadline: the binary64 product `30·S` rounded up, at least one tick (`Sleep(0.04)` takes 2 ticks; `Sleep(0.1)`, whose product is exactly 3.0, 3); bounded inputs and checked clock accumulation follow the explicit reference policy above (#514) |
 | End of a program with tasks | not stated | the program ends when `Main` does; a `Main` that waits with no task able to run is an error (exit 2) (#156) |

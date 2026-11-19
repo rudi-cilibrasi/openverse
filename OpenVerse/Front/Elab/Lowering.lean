@@ -1573,11 +1573,13 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     let task : Expr := .heap (.get (Suspend.slotBaseOf sites arms)) [.local 0]
     -- (marked cancelled first: a cancel of it while it unwinds, from a
     -- defer, changes nothing, #261)
-    -- (#724: its code unwinds, then, as it has ended, its children are
-    -- stopped)
+    -- (#724: its children are stopped first, each the same way, then its
+    -- code unwinds, as Epic's Verse VM cancels a task: UEFN 43.12,
+    -- followup-conc/branch-cancel-order)
     let cbody : Expr := Suspend.seqVoid ([.heap (.set tCancelledF) [task, .lit (.logic true)],
-      .heap (.set tDoneF) [task, .lit (.logic true)], .call (nFns + 4 * j + 2) (.local 0 :: .local 1 :: pass)] ++
-      (if scopes then [.call stopScopeMark [.local 1, .heap (.get taskScopeF) [task]]] else []))
+      .heap (.set tDoneF) [task, .lit (.logic true)]] ++
+      (if scopes then [.call stopScopeMark [.local 1, .heap (.get taskScopeF) [task]]] else []) ++
+      [.call (nFns + 4 * j + 2) (.local 0 :: .local 1 :: pass)])
     let cfn : Fn := { name := s!"$spawn{k}$cancelT", arity := 2, nslots := 2, decides := false, writes := true, body := cbody }
     cancelFns := cancelFns.push cfn
     cancelTys := cancelTys.push [frameTy j, schedTy]
@@ -1717,9 +1719,16 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       (.seq (Suspend.seqVoid ([.heap (.set Suspend.pcF) [.local 0, Suspend.int (-1)],
         .heap (.set progressF) [sch, .lit (.logic true)]] ++
         (if dead then [.heap (.set deadF) [sch, .lit (.logic true)]] else []))) Suspend.vd) Suspend.vd
-    let wakeFn (name : String) (rootTy : VTy) (isRunning : Expr) (run notRun : List Expr) (dead : Bool) :
-        Fn × List VTy × (List VTy × VTy) :=
-      let body := .ite (.prim .ne [.heap (.get Suspend.pcF) [.local 0], Suspend.int (-1)])
+    let wakeFn (name : String) (rootTy : VTy) (isRunning : Expr) (run notRun : List Expr) (dead : Bool)
+        (cancelling : Option Expr := none) : Fn × List VTy × (List VTy × VTy) :=
+      -- (#724: a root whose task is being cancelled, its children stopped
+      -- or its code unwinding, is not resumed: a `Signal` in their defers
+      -- wakes none of its waits)
+      let live : Expr := .prim .ne [.heap (.get Suspend.pcF) [.local 0], Suspend.int (-1)]
+      let live : Expr := match cancelling with
+        | some c => Suspend.allOf [live, .prim .eq [c, .lit (.logic false)]]
+        | none => live
+      let body := .ite live
         (.seq (Suspend.seqVoid (pro ++ [.ite isRunning (.seq (Suspend.seqVoid run) Suspend.vd)
           (.seq (Suspend.seqVoid notRun) Suspend.vd)] ++ epi ++ [ended dead])) Suspend.vd) Suspend.vd
       ({ name, arity := 2, nslots := if scopes then 7 else 6, decides := false, writes := true,
@@ -1757,7 +1766,8 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       let isRun : Expr := .prim .eq [.heap (.get rootRunIdx[j]!) [.local 0], Suspend.int 1]
       wakes := wakes.push (tagBase + j, wakeFn s!"$spawn{k}$wake" (frameTy j) isRun
         (running task (.call ri (.local 0 :: sch :: pass)) (some (.heap (.get taskScopeF) [task])))
-        ([.assign 2 (.call (trampOf k) [.local 0, sch])] ++ forget sch ++ [takeCancelW]) true)
+        ([.assign 2 (.call (trampOf k) [.local 0, sch])] ++ forget sch ++ [takeCancelW]) true
+        (some (.heap (.get tCancelledF) [task])))
     for K in List.range B do
       let (armRes, _, pass) := branchInfo[K]!
       let fr : Expr := .heap (.get 1) [.local 0]
@@ -1880,10 +1890,12 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       ] ++ (if events then [setCur sch (.local 1)] else []) ++ mainScope ++ mainRun 1 ++
       resumeChain (.local 1) sch (.call mainSig.idx [.local 1, sch]) topIdx[j]! st 8 9 ++ mainRun 0 ++ [
       .ite (.prim .eq [.local st, Suspend.int 1]) (.seq (.assign mainDone (Suspend.int 1)) .brk) Suspend.vd,
-      -- (`Main` awaited a cancelled task: it is cancelled, and so the program ends)
+      -- (`Main` awaited a cancelled task: it is cancelled, and so the program
+      -- ends; #724: its children first, as any cancelled task's)
       .ite (.prim .query [.heap (.get cancelCurF) [sch]])
-        (.seq (Suspend.seqVoid [.heap (.set cancelCurF) [sch, .lit (.logic false)],
-          .call (nFns + 4 * j + 2) [.local 1, sch], .assign mainDone (Suspend.int 1)]) .brk) Suspend.vd] ++
+        (.seq (Suspend.seqVoid ([.heap (.set cancelCurF) [sch, .lit (.logic false)]] ++
+          (if scopes then [.call stopScopeMark [sch, .heap (.get mainScopeF) [sch]]] else []) ++
+          [.call (nFns + 4 * j + 2) [.local 1, sch], .assign mainDone (Suspend.int 1)])) .brk) Suspend.vd] ++
       pollRoots ++
       -- (event mode: `Main` may end in a `Signal` during the roots' poll)
       (if events then [.ite (.prim .eq [.local mainDone, Suspend.int 1]) .brk Suspend.vd] else []) ++

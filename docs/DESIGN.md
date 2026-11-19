@@ -2626,15 +2626,22 @@ a spawned root's and a branch's trampoline, `$Run` for `Main`, the code
 that runs a `sync`'s, `race`'s or `rush`'s arms (`inScope`) and the wake
 functions of event mode set it around the run and restore it after. A
 wrapper's `start` registers it in the current scope. An arm's end (its
-last statement, or a `return`) and its cancel, once its defers have run,
+last statement, or a `return`), once its code ran, and its cancel, before
+its code unwinds (the region's cancel body starts with it, as Epic's Verse
+VM cancels a task's children first, `followup-conc/branch-cancel-order`),
 stop its scope (`$stopScope(sched, scope)`: each child popped, newest
 first, and stopped by `$stopRoot`'s dispatch on its class to its
 wrapper's `stopKid`, which marks the wrapper done and cancels its arm,
-whose cancel stops the arm's own scope in turn; in event mode an arm that
+whose cancel stops the arm's own scope first in turn; in event mode an arm that
 runs is left to its trampoline, which cancels it when the run returns). A
 spawned root stops its task's scope once its call ended, before the task
-is done; a cancelled task's after its root unwound; `$Run` stops `Main`'s
-once `Main` ended. A function's exit stops nothing, so a function that
+is done (its result is set first, so the prelude's `Await` of await mode,
+with scopes, tests `Done` before the result: one made meanwhile waits for
+the task's end with the other awaiters); a cancelled task's (`$spawnK$cancelT`) once the task is marked
+cancelled and before its root unwinds, and the wake function of event mode
+resumes no root whose task is marked cancelled, so a `Signal` in a defer
+that runs meanwhile wakes none of its waits; `$Run` stops `Main`'s
+once `Main` ended, or before `Main` unwinds when it is cancelled. A function's exit stops nothing, so a function that
 starts tasks over its frame (`Callee.fresh`) gets a new frame at each
 call instead of the call site's reset one. Until #724 every exit of a
 function, and its cancel function, stopped its branches, last started
@@ -2644,7 +2651,11 @@ analysis (`MetadataFlow`) follows: a function's return makes its branches
 and continuing `rush` arms late groups, analysed on after the result
 (`orphanBackground`), and once the owner has returned, metadata entering
 one of its frame's shared locals is checked where the surviving tasks
-execute it, not refused as it enters (only they can read the frame).
+execute it, not refused as it enters (only they can read the frame). Its
+cancellation (`cancelSteps`) stops an actor's children (branches, then the
+arms it waits in) before the actor's own cleanups, as the lowering does;
+while the owner is being cancelled, its children's cleanups are checked
+the same way, and its own cleanups where they execute.
 
 `T.Cancel()` reaches the task's root (recorded in the task when it starts)
 through `$cancelRoot`, which calls the root's cancel function. That marks

@@ -1,10 +1,10 @@
 F defer
 0
-B defer
 B.1 defer
-A defer
+B defer
 A.2 defer
-A.1 defer
 A.1.2 defer
 A.1.1 defer
+A.1 defer
+A defer
 exit=0

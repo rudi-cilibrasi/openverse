@@ -148,6 +148,11 @@ private def cases : List (String × String) := [
     "" ""),
   ("canceled lifted task does not execute its metadata receiver",
     liftedTask "            Value:=Dummy()\n" "    0" (initial := "F")),
+  -- (#724) A cancelled task stops its children before its own cleanups run
+  -- (Epic's Verse VM, UEFN 43.12): its cleanup would execute the dummy a
+  -- child's cleanup wrote.
+  ("cancelled owner cleanup executes its child's cleanup write", callables
+    "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var Stored:type{_()<computes>:int}=F\n    defer:\n        Value:=Stored()\n    branch:\n        defer:\n            set Stored=Dummy\n        Sleep(10.0)\n    Sleep(10.0)\n    0"),
   ("typed row clause-cell metadata capture", refinementClauseCell false),
   ("typed snapshot environment metadata capture", refinementSnapshot false),
   ("typed environment choice after bound metadata capture", sameBoundCapture "<transacts>:[]tuple(b,d,int)=for(I:=Add(dup[P].Lo,dup[Q].Lo)..2,J:=(0|1)){(P.A,Q.A,I+J+Dummy())}"),

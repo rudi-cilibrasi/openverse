@@ -1,0 +1,18 @@
+1: branch cleanup
+1: task cleanup
+1: cancelled
+2: arm two cleanup
+2: arm one cleanup
+2: task cleanup
+2: cancelled
+3: winner done
+3: branch cleanup
+3: arm cleanup
+3: after race
+4: winner done
+4: branch cleanup
+4: sync arm cleanup
+4: arm cleanup
+4: after race
+end
+exit=0

@@ -1,0 +1,8 @@
+runner ending
+branch cleanup
+branch cleanup done
+early awaiter got 5
+main got 5
+late awaiter got 5
+end
+exit=0

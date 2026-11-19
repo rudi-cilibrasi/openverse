@@ -26,8 +26,8 @@
 5: slow cleanup
 5: after wait
 6: winner done
-6: arm cleanup
 6: branch cleanup
+6: arm cleanup
 6: after race
 7: runner ending
 7: branch cleanup
