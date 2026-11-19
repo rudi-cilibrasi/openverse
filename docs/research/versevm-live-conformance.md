@@ -206,7 +206,7 @@ bytecode (the compound probes' outputs are in their headers and in
 | `signal-bound-control` (rewritten: a method of its own that signals, bound) | Prints `after`. | Same. |
 | `signal-direct`, `signal-alias`, `signal-bound`, `signal-interface`, `signal-await` | Refused at the `Signal` in the condition, as 43.12 (3512). | Print `after`; `signal-await` prints `waiting`, then `received 2`. |
 | `signal-generic`, `signal-generic-control` | Refused at the `Signal` in the `<transacts>` helper `Send`, as 43.12 (3512). | Print `after`. |
-| `signal-subscribe` and its control (rewritten: the field is `Seen`) | Refused because OpenVerse's `event` lacks `Subscribe`; it provides subscription through `subscribable_event` (`followup/subscribable-event-control.verse` asks 43.12 which type has it). | Same refusal. |
+| `signal-subscribe` and its control (rewritten: the field is `Seen`) | `signal-subscribe` is refused at its condition's `Signal` only, as 43.12 (3512); the control prints `after success 2`, as the Verse VM does: `event` has `Subscribe` (#724). | `signal-subscribe` prints `after failure 0`, `after success 2`; the control as the default. |
 | `compound-indexed-write` | Prints `length 1`, then `first 0`, as Epic does (#704). | Same. |
 | `compound-whole-write` | Prints `length 2`, `first 0`, and `second 42`. | Same. |
 | `int-overflow` | Runtime overflow, exit 2. | Same. |
@@ -236,12 +236,12 @@ Lean and C agreeing wherever a program ran.
 | `join-interface-only` | admitted; `length 2` | `length 2` |
 | `print-in-condition` | admitted; `printed in condition`, `after` | `after`: openverse rolls the `Print` back with the failed condition. **Differs**: the Verse VM keeps output across rollback |
 | `signal-class-block`, `signal-transacts-method` | 3512 L3, L4: `Signal` has `no_rollback` | refused, the same |
-| `subscribable-event-control` | 3506 L7 "Unknown identifier `subscribable_event`" | `after success 2`: `subscribable_event` is an openverse extension |
-| `subscribe-in-transacts` | admitted; `seen 4` | refused: openverse's `event` has no `Subscribe`. **Differs** |
+| `subscribable-event-control` | 3506 L7 "Unknown identifier `subscribable_event`" | `after success 2`: `subscribable_event` is an openverse extension, an `event` and nothing more (#724) |
+| `subscribe-in-transacts` | admitted; `seen 4` | `seen 4`: `event` has `Subscribe` (#724) |
 | `transacts-into-decides-type` | admitted; `result 1` | `result 1` |
 | `signal-bound-control` (rewritten) | admitted; `after` | `after` |
-| `signal-subscribe` (rewritten) | 3512 L10 at its condition's `Signal`, nothing else | refused: no `Subscribe` on `event` |
-| `signal-subscribe-control` (rewritten) | admitted; `after success 2` | refused: no `Subscribe` on `event`. **Differs** |
+| `signal-subscribe` (rewritten) | 3512 L10 at its condition's `Signal`, nothing else | refused at its condition's `Signal`, nothing else (#724) |
+| `signal-subscribe-control` (rewritten) | admitted; `after success 2` | `after success 2` (#724) |
 
 What they settle, now openverse's rules: a plain `<decides>` function has
 `no_rollback`, and its body's top may call one that has it, while a failure
@@ -251,9 +251,12 @@ it, `Print` and `Subscribe` do not; a `<transacts>` function is a value of a
 `<transacts><decides>` type; an `if`'s branches of two classes with two
 nearest common supertypes are an `any`, whatever is expected; a class below
 a `<concrete>` one cannot be `<abstract>`; `int[X]` of an `any` is refused.
-Two differences remain: `Print`'s rollback (openverse's output is
-transactional in Core and in the C runtime) and `Subscribe` on `event`
-(openverse has it on `subscribable_event` only).
+One difference remains: `Print`'s rollback (openverse's output is
+transactional in Core and in the C runtime). `Subscribe` is on `event` now
+(#724); what these results leave open about it is asked in
+[`followup-event/`](../../tests/conformance/versevm/followup-event), each
+probe's header giving what OpenVerse prints and the other readings, with
+the Book's expectations and OpenVerse's lines in its `expectations.tsv`.
 
 ## Running many probes
 

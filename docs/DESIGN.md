@@ -2437,20 +2437,30 @@ flowchart LR
   dispatch infers from all given positional
   and named arguments together, then emits them in their original order
   before evaluating the selected implementation's defaults.
-- **`subscribable_event(t)`** is Verse code in a prelude (`subPrelude`):
-  `event(t)` with an array of (subscription, handler) pairs, the handlers
-  of type `type{_(:t):void}`, called under the refinement in `Signal`. A
-  subscription is a non-generic object with a live flag; `Signal`
-  drops the cancelled ones, so the array holds the live subscriptions and
-  those cancelled since the last `Signal` (a loop that subscribes and
-  cancels without signalling grows it until the next `Signal`). `Signal`
-  calls a snapshot of the array and checks each flag just before the call,
-  so a function subscribed during a `Signal` waits for the next one and one
-  cancelled before its turn is skipped.
-  `subscribable_event()` (#220) is a second prelude class, `subVoidPrelude`'s
-  `$subev0 := class(event(void))`, whose handlers take no value
-  (`type{_():void}`); the parser maps the type and its constructor to it,
-  and it is added only to a program that mentions it.
+- **An event's `Subscribe`** (#210, #724) is Verse code in the preludes:
+  in a program that subscribes (one that names a member `Subscribe` and
+  uses the prelude's events, `PreludeNeeds.subscribeMark`, or mentions
+  `subscribable_event` or `cancelable`), `withSubscriptions` gives
+  `event(t)` an array of (subscription, handler) pairs, the handlers of
+  type `type{_(:t):void}`, and `Subscribe`; `subPrelude` adds the
+  subscription class and `cancelable`. Other programs' events are as
+  before. A subscription is a non-generic object with a live flag;
+  `Signal` (a sticky event's too) takes a snapshot of the array when it
+  begins, resumes the awaiters, drops the cancelled pairs, so the array
+  holds the live subscriptions and those cancelled since the last
+  `Signal` (a loop that subscribes and cancels without signalling grows it
+  until the next `Signal`), and calls the snapshot's handlers, checking
+  each flag just before the call, so a function subscribed during a
+  `Signal` waits for the next one and one cancelled before its turn is
+  skipped. An event without a value (`event()`, `sticky_event()`) takes
+  handlers of `type{_():void}`: the elaborator calls `$subscribeUnit(E, F)`
+  for its `Subscribe` (`elabEventSubscribe?`), which subscribes a bound
+  `CallUnit` of an object holding `F` (a `$` method is no value, so that
+  one name is public). `subscribable_event(t)`, an openverse extension
+  (Epic has none), is `class(event(t)){}`; `subscribable_event()` (#220)
+  is `subVoidPrelude`'s `$subev0 := class(event(void)){}`, to which the
+  parser maps the type and its constructor, added only to a program that
+  mentions it.
 - **Over-approximation.** The pass makes a method's value class whenever
   `X.M` is written outside a call for some `X` and a class declares `M`,
   as it cannot tell a method from a field, or from an array's `Length`.
