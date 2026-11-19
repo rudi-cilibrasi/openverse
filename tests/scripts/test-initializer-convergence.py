@@ -122,18 +122,21 @@ with tempfile.TemporaryDirectory(prefix='openverse-initializer-') as directory:
         # error 3582, #724)
         args = fixture.with_suffix('.args')
         divergent = args.exists() and '--extended-defaults' in args.read_text().split()
+        # (#724: one whose `.args` selects --parametric-var-fields keeps
+        # openverse's parametric var fields, which Epic's compiler refuses)
+        extra = [a for a in args.read_text().split() if a == '--parametric-var-fields'] if args.exists() else []
         for profile in [[], ['--no-choice']]:
             if profile and fixture.stem.endswith(('choice_literal', 'choice_function')):
                 continue
             if divergent:
                 source.write_text(text)
-                result = invoke([OV, 'check', source, *profile])
+                result = invoke([OV, 'check', source, *extra, *profile])
                 require(result.returncode == 4 and 'which might not complete' in result.stderr,
                         fixture.stem+' divergent', (result.returncode, result.stderr))
-                runtime(text, ['--extended-defaults', *profile], want, fixture.stem+' extension')
+                runtime(text, ['--extended-defaults', *extra, *profile], want, fixture.stem+' extension')
                 continue
-            strict = runtime(text, profile, want, fixture.stem)
-            extended = runtime(text, ['--extended-defaults', *profile], want, fixture.stem+' extension')
+            strict = runtime(text, [*extra, *profile], want, fixture.stem)
+            extended = runtime(text, ['--extended-defaults', *extra, *profile], want, fixture.stem+' extension')
             require(strict == extended, fixture.stem+' mode bytecode')
 
     # An unused imported default has the same admission boundary and retains

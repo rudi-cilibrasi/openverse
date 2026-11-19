@@ -19,7 +19,10 @@ for ((s=first; s<first+n; s++)); do
     bad=$((bad+1)); echo "GENERATOR FAILED seed $s"; continue
   fi
   rm -f "$tmp/p.vbc"
-  compat=()
+  # (#724: the generator writes parametric interfaces with var fields and generic
+  # functions over parametric classes whose var fields hold their parameters,
+  # openverse's extension, which Epic's compiler refuses, 3552 and 3502)
+  compat=(--parametric-var-fields)
   if head -1 "$tmp/p.verse" | grep -qx '# openverse: extended-defaults'; then
     compat+=(--extended-defaults)
   fi

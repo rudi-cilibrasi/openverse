@@ -48,7 +48,10 @@ for ((s=first; s<first+n; s++)); do
   # The lexical-field variants call Concatenate and Id, and their for/lazy
   # ones the ordinary Sum/Lazy helpers, in a field's default, which a data
   # member may not (#511; UEFN 43.12 error 3582, #724).
-  compat=()
+  # (#724: the models write parametric interfaces with var fields and generic
+  # functions over parametric classes whose var fields hold their parameters,
+  # openverse's extension, which Epic's compiler refuses, 3552 and 3502)
+  compat=(--parametric-var-fields)
   if [[ $g == gadt_contexts ]] && (( s % 9 == 1 )); then
     compat+=(--extended-defaults)
   fi

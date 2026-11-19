@@ -18,7 +18,9 @@ for ((s=first; s<first+n; s++)); do
     bad=$((bad+1)); echo "GENERATOR FAILED seed $s"; continue
   fi
   rm -f "$tmp/p.vbc"
-  timeout 60 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.err"
+  # (#724: the generator writes parametric interfaces with var fields, openverse's
+  # extension, which Epic's compiler refuses, 3502)
+  timeout 60 "$ov" run "$tmp/p.verse" --parametric-var-fields --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.err"
   if [[ $le -ne 0 ]]; then
     bad=$((bad+1)); cp "$tmp/p.verse" "$root/fuzz-conc-$s.verse"
     echo "REFUSED or INTERNAL seed $s (exit $le, saved fuzz-conc-$s.verse): $(head -c 200 "$tmp/l.err")"
