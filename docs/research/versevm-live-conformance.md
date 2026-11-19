@@ -658,8 +658,11 @@ now follows; it refused a function of 990 characters and a method whose
 names make 977, each with one parameter (3655), which openverse admits, a
 known difference (a parameter lowers the limit, not modelled); and it
 refused `generic-param-named-pack` for its form (the default `0 where
-t:type` read as one expression: 3502, 3506), so that probe is rewritten,
-`F(X:t, ?E:int where t:type)`, not yet compiled.
+t:type` read as one expression: 3502, 3506), so that probe was
+rewritten, `F(X:t, ?E:int where t:type)` called `F(1, 2, ?E := 5)`, which
+it refuses (3509, "This function parameter expects a value of type
+tuple(any,?E:int)", ~20:40Z, `compile-book4b.json`): openverse packs no
+several arguments into a generic parameter beside a named one since.
 
 Of the 323 refusals of `verse_vm_only` cases, all but one are of forms
 UEFN 43.12 refuses too, or that the sentinels above ask: `union` (138: the

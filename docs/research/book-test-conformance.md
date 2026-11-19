@@ -2977,9 +2977,10 @@ them (the six type collisions refused, 9002); openverse now refuses mutable
 data through a struct's field (3552) and admits a parameter of 1005
 characters, as Epic does; a function and a method with a parameter at the
 measured limits, refused by Epic (3655), stay a known difference; and
-the generic parameter beside a named one, refused for its form (`0 where
-t:type` read as one expression), is rewritten and still open. No Book case
-moves with these.
+the generic parameter beside a named one, refused first for its form (`0
+where t:type` read as one expression), was rewritten and is refused
+(3509), which openverse follows: no several arguments pack into a
+generic parameter beside a named one. No Book case moves with these.
 
 ## Not covered, and why it matters
 

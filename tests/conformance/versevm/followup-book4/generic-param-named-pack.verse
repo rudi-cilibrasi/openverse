@@ -12,7 +12,11 @@
 # tuple and prints
 #   result 5
 # If Epic refuses it (3509), a generic parameter beside a named one takes
-# no several arguments either. Not yet compiled by Epic.
+# no several arguments either. Epic's compiler (UEFN 43.12,
+# ++Fortnite+Release-43.12-CL-60598086, BuildAll, 2026-11-19 ~20:40Z)
+# refuses it: 3509 (L18) "This function parameter expects a value of type
+# tuple(any,?E:int), but this argument is an incompatible value of type
+# tuple(type{1},type{2},?E:type{5})". OpenVerse refuses it now.
 F(X:t, ?E:int where t:type):int = E
 
 Main():void =
