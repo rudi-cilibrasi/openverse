@@ -225,7 +225,7 @@ Lean and C agreeing wherever a program ran.
 | --- | --- | --- |
 | `await-in-transacts` | 3512 L1: `(/Verse.org/Verse/event:)Await` has `no_rollback` | refused, `event.Await` has `no_rollback` |
 | `concrete-abstract-child` | 3632 L3 "`concrete` classes must not be `abstract`"; 3519 for `B` | refused, 3632's reason |
-| `constant-default-call` | 3582 L2 "Divergent calls (calls that might not complete) cannot be used to define data-members" | refused: the constant calls a function that writes |
+| `constant-default-call` | 3582 L2 "Divergent calls (calls that might not complete) cannot be used to define data-members" | refused, the same: `Count` might not complete ([data members](#data-members-3582)) |
 | `constructor-default-in-if` | 3512 L7: `MakeThing` has `no_rollback` | refused, the same |
 | `decides-body-default-call` | admitted; prints `compiled` | `compiled` |
 | `decides-plain-if` | 3512 L4: `Positive` has `no_rollback` | refused, the same |
@@ -254,6 +254,50 @@ a `<concrete>` one cannot be `<abstract>`; `int[X]` of an `any` is refused.
 Two differences remain: `Print`'s rollback (openverse's output is
 transactional in Core and in the C runtime) and `Subscribe` on `event`
 (openverse has it on `subscribable_event` only).
+
+### Data members (3582)
+
+[`followup-3582/`](../../tests/conformance/versevm/followup-3582) holds the
+probes of the rule behind `constant-default-call`, with their outcomes in
+its `expectations.tsv`. UEFN 43.12 compiled the first eleven one at a time
+(2026-11-18/19) and ran the three it admitted on the Verse VM
+(`newVerseVm=true`, 2026-11-19). L is the diagnostic's 0-based body line;
+Epic's span is the call's argument list.
+
+| Probe | UEFN 43.12 | OpenVerse |
+| --- | --- | --- |
+| `div-const-intrinsic`: `Limit:int = Min(Abs(-3), 7)` | 3582 L2 at `Min`'s arguments, nothing for `Abs` | refused, `Min` might not complete (before #724: admitted, `limit 3`) |
+| `div-const-constructor-fn`: a `<constructor>` function | 3582 L8 | refused, the same reason (before: it writes) |
+| `div-const-method`: `Twice:int = Shared.Double()`, a `<computes>` method | 3582 L7, and 3512 L6 for `Shared:thing = thing{}` | refused at L6, 3512's reason |
+| `div-const-constructor`: `Shared:thing = thing{}`, a class without specifiers | 3512 L5 "This archetype instantiation constructs a class that has the 'transacts' effect, which is not allowed by its context" | refused, the same reason |
+| `div-const-converges`, `div-field-default-converges`: a function of the program's marked `<converges>` | 3565 L2 "The 'converges' effect is only allowed on native functions" | refused: `<converges>` is unsupported (#494) |
+| `div-field-default-call`: `Size:int = Count()`, `Count` without specifiers | 3582 L5 | refused, the same reason (before: `Count`'s `no_rollback`, 3512) |
+| `div-field-default-computes`: the same with `Count()<computes>` | 3582 L5 | refused, the same reason (before: #511's convergence) |
+| `div-const-operator`: `Half:int = Floor(Base / 4) or 0` | admitted; `half 1` | `half 1` |
+| `div-archetype-call`: `thing{Size := Count()}` in a function | admitted; `size 3` | `size 3` |
+| `div-local-const-call`: a local `Limit:int = Count()` | admitted; `limit 3` | `limit 3` |
+
+So a data member's definition (a module's constant, a field's default) may
+call only a `<converges>` function, which only a native one may be: no
+function, method or constructor of the program's, whatever its
+specifiers. Of the built-ins, the operators and `Floor` of a rational are
+admitted and `Min` is not; the Book's Runtime API reference, generated from
+the Verse runtime of UE 6.0.0, declares `<converges>` on the compiler's
+intrinsics (the operators, indexing, `Length`, `Abs`, `Floor` and `Ceil` of
+a rational, `BitAnd` and its kin, `ConcatenateMaps`, the char conversions)
+and on none of `Min` (written in Verse), `Sqrt`, `Quotient`, `ToString` and
+the other natives. openverse takes that list
+([the rule](../LANGUAGE.md#data-members-call-only-converging-functions));
+the other twenty-one probes ask UEFN 43.12 about one construct each and are
+compiled only: `Abs`, `Min`, `BitAnd`, `Sqrt`, `Quotient`, `ToString`,
+`Floor` of a float, an interpolated int, an array's `Length`, indexing and
+`+`, archetypes of a `<computes>` class and of a struct, an enum value,
+`option{…}`, a tuple, a map, a field default that reads another field of its
+object (3502 in the Book's tests) or a field of another object, `Min` in a
+field default, and a module-scoped `var` initialised by a call. openverse
+admits the converging ones and refuses the others; it refuses the struct's
+archetype for its `<transacts>` construction (#512) and the module-scoped
+`var` because it has no `session`.
 
 ## Running many probes
 
