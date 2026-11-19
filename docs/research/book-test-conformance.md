@@ -2922,6 +2922,16 @@ baseline records it.
   no wrapper). The cause function-coercions counts 12: the 11 twins and
   `:546`.
 
+UEFN 43.12's answers to the boundary probes (`followup-coerce`, 31 of 37 as
+openverse had them) widened the rule to every function value that is no
+function named where its type is expected (a local, a parameter, a field, a
+call's result, an option's content), and to a parametric class's method
+returning a function of its type parameter. Against the baseline above it
+moves no case: 0 better, 0 worse, the same counts. A function named as an
+argument of a generic call is named at the parameter's type once the call
+gives it, as Epic's compiler does (`ParametricFunctions.versetest` 189 and
+208, `Apply(Incr, 1)`, still agree).
+
 ## Not covered, and why it matters
 
 - 1,264 cases need the runner's virtual packages and modules (`vpackage`,

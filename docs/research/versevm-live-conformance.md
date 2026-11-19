@@ -636,27 +636,61 @@ parameter as `any`. The branches that need no conversion are not reported
 (`ArrayToString`, `DecidesIdentity` at its own type), and the Book's tests
 show conversions that change nothing admitted in a join (classes,
 `FunctionTypes.versetest` 198-203; a default kept, `DefaultNamed.versetest`
-623). openverse refuses these four forms with the same error since #724
-([the rule](../LANGUAGE.md#function-values-epics-compiler-does-not-convert-724),
-`--function-coercions` keeps its conversions); the Book survey moves the ten
-cases to agree and their eleven `verse_vm_only` twins to refused
-([After function coercions](book-test-conformance.md#after-function-coercions)).
+623).
 
-[`followup-coerce`](../../tests/conformance/versevm/followup-coerce) asks
-where the rule's edges are, one construct per compile-only probe, each
-header and its `expectations.tsv` note giving openverse's verdict and what
-either answer changes: an effect added in a join without `<decides>`; a
-parameter's value (no name) converted outside a join (effects added,
-`<decides>` added, a default dropped, class variance, which openverse
-refuses); class results and parameters joined; a higher-order generic
-function bound to a local or passed to a function that is not generic;
-`Identity` passed to generic and other functions; methods as values, alone
-and joined; an overloaded function as a value; arrays, options and tuples
-of functions; a `case`'s arms; a generic result at `int` and at
-`comparable`, and a method of a parametric class returning a function;
-overrides of a parametric interface's method with `[]t`, a result `t->void`,
-in a class that passes its type parameter on, at `any`, and of a parametric
-class's method. Not yet compiled by Epic.
+[`followup-coerce`](../../tests/conformance/versevm/followup-coerce) asked
+where the edges are, 37 compile-only probes, one construct each. UEFN 43.12
+compiled them one at a time on 2026-11-19 (~15:40Z); its outcome and
+diagnostics are in the probes' headers and `expectations.tsv`. 31 agreed
+with openverse's first rule (branches of an `if`, generic values, generic
+results, overrides); six did not, and the rule is now wider:
+
+| Probe | UEFN 43.12 | openverse before, now |
+| --- | --- | --- |
+| `value-computes-as-transacts` | 3502, a parameter of `<computes>` type passed as `<transacts>` (its control, the parameter at its own type, admitted) | admitted, refused |
+| `value-plain-as-decides` | 3502, the same to `<computes><decides>` | admitted, refused |
+| `value-default-drop` | 3502 "Using a value of type (?A:int = ...)->int as a value of type tuple()->int", a local bound to `F2` | admitted, refused |
+| `option-of-fn-default` | 3502 "Using a value of type ?((?A:int = ...)->int) as a value of type ?(tuple()->int)", `option{F2}` (an array's and a tuple's elements naming `F2`, and a `case`'s arms, admitted) | admitted, refused |
+| `parametric-method-fn-result` | 3502 "Using a value of type (t->void)->(t->void) as a value of type (int->void)->(int->void)", `box(int){}.Make(TakeInt)` | admitted, refused |
+| `value-class-variance` | admitted: a `type{_(:animal):int}` parameter passed as a `type{_(:dog):int}` | refused (no variance for values), refused: a recorded difference |
+
+The matching refusals: `join-computes-transacts` and `join-method-values`
+(an effect added in a join, functions and methods), `generic-higher-order-bound`
+and `generic-higher-order-concrete-param` (`One` bound to a local, passed
+to a function that is not generic), `generic-result-fn` ("Using a value of
+type type{_(:t,:t->void where t):t->void} as a value of type
+tuple(int,type{_X:int where 1 <= _X, _X <= 5}->void)->(int->void)": Epic's
+flow types give `t` the literals' range), `iface-override-fn-result` and
+`class-override-fn-param` (3502, the override as `any->void`),
+`overloaded-fn-value` (3502 "Referencing an overloaded function without
+immediately calling it is not yet implemented") and `name-decides-as-plain`
+(3509). Admitted, as by openverse: names at other types
+(`name-computes-as-transacts`, `name-default-arg`, `method-value-effect`,
+`generic-arg-*`, `generic-bound-first`), joins of class results and
+parameters, `array-of-fns-*`, `tuple-of-fns-default`, `case-join-*`,
+`generic-result-plain`, `generic-result-fn-comparable`, the
+`iface-*` overrides that need no wrapper, and the controls.
+
+So the rule is about values, not joins: any function value that is no
+function named where its type is expected (a local, a parameter, a field,
+a call's result, an option's content, a branch of an `if`) needs the
+wrapper to be one of another function type that changes it, and a
+parametric class's method returning a function of its type parameter is
+judged as a generic function is ([the
+rule](../LANGUAGE.md#function-values-epics-compiler-does-not-convert-724),
+`--function-coercions` keeps openverse's conversions). The Book survey moves
+no case for the wider rule. One difference is left, `value-class-variance`:
+openverse has no class variance for function values (Verse Core has no
+contravariance, and the front end makes adapters for names only).
+
+[`followup-coerce2`](../../tests/conformance/versevm/followup-coerce2) asks
+what the wider rule leaves unasked, 17 probes: a parameter returned at a
+wider type (and its control), a field read and one stored, a call's result,
+an array, a map and a tuple holding such values, a field passed to a
+generic call and a method named there, `int` and `rational` (a value's
+result, a name's parameter, a join), a result discarded (`void`, a value and
+a name, which openverse refuses already), a value's class result, and a
+parametric class's method at `any`. Not yet compiled by Epic.
 
 ## Running many probes
 

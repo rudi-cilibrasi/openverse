@@ -154,11 +154,12 @@ the old rule.
 
 A function value of one function type is used as one of another only where
 Epic's Verse compiler makes the wrapper that needs (UEFN 43.12, error 3502,
-#724): a function named where a function type is expected, not a branch of
-an `if` of another function type, a generic function with a type parameter
-inside a function type of its own as a value, the call of a generic function
-returning a function of its type parameter, nor an override of such a
-parametric interface's method ([the
+#724): a function or method named where a function type is expected, not a
+local, a parameter, a field, a call's result, an option's content or a
+branch of an `if` of another function type, a generic function with a type
+parameter inside a function type of its own as a value, the call of a
+generic function or parametric class's method returning a function of its
+type parameter, nor an override of such a parametric method ([the
 rule](docs/LANGUAGE.md#function-values-epics-compiler-does-not-convert-724));
 `--function-coercions` keeps openverse's conversions.
 
