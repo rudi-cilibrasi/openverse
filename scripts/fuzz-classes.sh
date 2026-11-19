@@ -28,7 +28,7 @@ for ((s=first; s<first+n; s++)); do
   fi
   # (#515: Epic's default effect, written out: <transacts> where a function without one is called from a failure context or <transacts> code)
   python3 -I "$root/scripts/models/default_effect.py" "$tmp/p.verse"
-  timeout 60 "$ov" run "$tmp/p.verse" "${compat[@]}" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.err"
+  timeout 60 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" "${compat[@]}" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.err"
   # (the generator writes no Err(), so a user error is unreachable code run:
   # a lowering bug; other runtime errors are compared with C)
   if [[ $le -ne 0 && $le -ne 3 && $le -ne 2 ]] || grep -q "error: user" "$tmp/l.err"; then
