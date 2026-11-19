@@ -165,32 +165,38 @@ ctr := class:
 
 
 class EagerOverflow(Exception):
-    """An int leaves 64-bit range: the program stops with an overflow, which
-    is not modelled (where it stops, which prints a failure context keeps).
-    A recursive function's values are all computed at the call (#245), so
-    this also covers one in a value a first success would not reach (#246)."""
+    """(No longer raised: ints are unbounded, #724. An int that left 64 bits
+    stopped the program, which was not modelled for a recursive function's
+    values, all computed at the call, #245, #246.)"""
 
 
 class StOverflow(Exception):
-    """An int leaves 64-bit range where the program computes it (not an
-    eager F$all value): the program stops there with an overflow (exit 2),
-    having printed what the path it is on printed, those of failure contexts
-    still open included."""
+    """An int beyond 64 bits is printed: its ToString is the overflow error
+    (ints are the Verse VM's, unbounded, #724; the programs here stay far
+    below their 2^20-bit limit), so the program stops there (exit 2), having
+    printed what the path it is on printed, those of failure contexts still
+    open included."""
 
     def __init__(self, st):
         self.st = st
 
 
 def chks(v, st):
-    if not (-(1 << 63) <= v < (1 << 63)):
-        raise StOverflow(st)
+    """An int the program computes: any (#724; before, one beyond 64 bits
+    was the overflow error there)."""
     return v
 
 
 def chk(v):
-    if not (-(1 << 63) <= v < (1 << 63)):
-        raise EagerOverflow()
     return v
+
+
+def fmt(v, st):
+    """The text of a value the program prints: an int beyond 64 bits is the
+    overflow error, in state st."""
+    if isinstance(v, int) and not isinstance(v, bool) and not (-(1 << 63) <= v < (1 << 63)):
+        raise StOverflow(st)
+    return str(v)
 
 
 class Fail(Exception):
@@ -2427,7 +2433,7 @@ def ev(e, st, k, mode):
     if t == 'str':
         return k(e[1], st)
     if t == 'sfmt':
-        return ev(e[1], st, lambda v, s: k(str(v), s), mode)
+        return ev(e[1], st, lambda v, s: k(fmt(v, s), s), mode)
     if t == 'slen':
         return ev(e[1], st, lambda v, s: k(len(v), s), mode)
     if t == 'tell':
@@ -2447,13 +2453,13 @@ def ev(e, st, k, mode):
                 return lambda s1, k2: k2(chks(x, s1), s1)
 
             def alt_ret(s1, k2):
-                s1.out.append(f"p{chks(v + 1, s1)}")
+                s1.out.append(f"p{fmt(v + 1, s1)}")
                 s1.out.append('rt')
                 return k2(99, s1)
             def fall(y):
                 def th(s1, k2):
-                    s1.out.append(f"p{y}")
-                    s1.out.append(f"e{chks(y * 2, s1)}")
+                    s1.out.append(f"p{fmt(y, s1)}")
+                    s1.out.append(f"e{fmt(y * 2, s1)}")
                     return k2(chks(y * 10, s1), s1)
                 return th
             return choice_point([fall(v), alt_ret, fall(v + 2)], s0, k, mode)
@@ -2463,7 +2469,7 @@ def ev(e, st, k, mode):
             def val(x):
                 return lambda s1, k2: k2(x, s1)
             def alt_ret(s1, k2):
-                s1.out.append(f"p{chks(v + 1, s1)}")
+                s1.out.append(f"p{fmt(v + 1, s1)}")
                 s1.out.append('rt')
                 def leave(x, s):
                     if RET_DEFER:
@@ -2475,11 +2481,11 @@ def ev(e, st, k, mode):
             def fall(y):
                 def th(s1, k2):
                     yy = chks(y, s1)
-                    s1.out.append(f"p{yy}")
-                    s1.out.append(f"e{yy}")
+                    s1.out.append(f"p{fmt(yy, s1)}")
+                    s1.out.append(f"e{fmt(yy, s1)}")
                     if RET_DEFER and y == v:
                         s1.out.extend([f'branch b {t.upper()}', f'branch a {t.upper()}'])
-                    s1.out.append(f"q{yy}")
+                    s1.out.append(f"q{fmt(yy, s1)}")
                     y10 = chks(yy * 10, s1)
                     def leave(x, s):
                         if RET_DEFER:
@@ -2541,7 +2547,7 @@ def ev(e, st, k, mode):
         def kow2(a, s0):
             def kb(b, s1):
                 return choice_point([lambda s2, k2: k2(chks(a * 5, s2), s2),
-                                     lambda s2, k2: choice_point([lambda s3, k3: k3(len(str(b)), s3),
+                                     lambda s2, k2: choice_point([lambda s3, k3: k3(len(fmt(b, s3)), s3),
                                                                   lambda s3, k3: k3(9, s3)], s2, k2, mode)],
                                     s1, k, mode)
             return ev(e[2], s0, kb, mode)
@@ -2598,7 +2604,7 @@ def ev(e, st, k, mode):
         def kgx(a, s):
             def body(s1, k1):
                 if e[1] == 'x':
-                    s1.out.append(f"ox {a}")
+                    s1.out.append(f"ox {fmt(a, s1)}")
                     if not a > 0:
                         raise Fail()
                     return choice_point([(lambda s2, k2: k2(a, s2)), (lambda s2, k2: k2(chks(a + 3, s2), s2))],
@@ -2936,9 +2942,11 @@ def run_clauses(cl, st, k, mode):
             return nxt(s)
         return ev(c[2], st, kb, mode)
     if t == 'sbind':
+        # (each part is made a string before the next is evaluated)
         def ka(va, s1):
+            sa = fmt(va, s1)
             def kb2(vb, s2):
-                s2.binds[c[1]] = f"<{va}-{vb}>"
+                s2.binds[c[1]] = f"<{sa}-{fmt(vb, s2)}>"
                 return nxt(s2)
             return ev(c[2][1], s1, kb2, mode)
         return ev(c[2][0], st, ka, mode)
@@ -3419,7 +3427,7 @@ for ti in range(NT):
     vals_str = " ".join("{" + b + "}" for b in binds)
 
     def vals(s):
-        return " ".join(str(s.binds[b]) for b in binds)
+        return " ".join(fmt(s.binds[b], s) for b in binds)
     tout = []
     body_first = lambda s2: s2
     try:
@@ -3450,6 +3458,7 @@ for ti in range(NT):
             res = first_inner(lambda s, kk: run_clauses(cl, s, lambda s2: kk(clause_value(cl, s2), s2), 'first'), st)
             if res is not None:
                 v, st = res
+                v = fmt(v, st)
                 st.out.append({'first': f"first {v}", 'ifmacro': f"v {v}", 'option': f"o {v}", 'or': f"w {v}"}[kind])
             else:
                 st.out.append({'first': "none", 'ifmacro': "v -7", 'option': "o none", 'or': "w -7"}[kind])
@@ -3494,7 +3503,12 @@ for ti in range(NT):
                 st = run_for_clauses(cl, s0, fbody2, for_kinds(cl))
             except Fail:
                 pass
-            st.out += [f"e {v}" for v in vs]
+            for v in vs:
+                st.out.append(f"e {fmt(v, st)}")
+        # (the state line: an int beyond 64 bits in it stops the program there)
+        for v in [st.vars[vars_[0]], st.vars[vars_[1]], st.vars['K.C'], st.vars['J.C']] + list(st.A) + \
+                ([st.vars['S.Cn']] if meth else []):
+            fmt(v, st)
     except StOverflow as ov:
         # (the program stops in this test: the later ones never run)
         L.append("    " + show_state)

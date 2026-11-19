@@ -14,7 +14,7 @@ the C side.
 ```mermaid
 flowchart LR
     subgraph lean["Lean (OpenVerse/Core)"]
-        L1["Prim.apply on int64,<br/>as formulas (Seams.lean)"]
+        L1["Prim.apply on int64,<br/>as formulas (Seams.lean);<br/>past 64 bits, bigint.c (tested)"]
         L2["Prog.WellScoped ⟹ Eval.scoped_ok<br/>(Scoping.lean)"]
         L3["a failed context restarts<br/>from the saved state<br/>(Eval.ite_fail, EvalFor.skip)"]
     end
@@ -41,7 +41,7 @@ flowchart LR
 | `Ceil(a/b)` | `(r != 0 && ((r < 0) == (b < 0))) ? q + 1 : q` | `cCeilDiv a b` |
 | `Quotient[a,b]` | `r < 0 ? (b > 0 ? q - 1 : q + 1) : q` | `cQuotient a b` |
 | `Mod[a,b]` | `r < 0 ? (b > 0 ? r + b : r - b) : r` | `cModulo a b` |
-| `(INT64_MIN, -1)` | floor, ceil, quotient: `VX_OVERFLOW`; mod: `VX_OK`, 0 | `apply_min_neg_one` |
+| `(INT64_MIN, -1)` | floor, ceil, quotient: `VX_OVERFLOW` (2^63 does not fit); mod: `VX_OK`, 0 | `apply_min_neg_one` (2^63, which `bigint.c` gives) |
 | zero divisor | `VX_FAIL` | `apply_div_zero` |
 
 What each side proves:
@@ -51,15 +51,27 @@ What each side proves:
   `modulo_seam : Int.emod a b = cModulo a b`. The corollaries `apply_add`, …,
   `apply_modulo` state `Prim.apply` itself in these terms, for instance
   `Prim.apply .add [.int a, .int b] = if cAddFits a b then .ok (.int (a + b))
-  else .err .overflow`.
+  else Res.ofInt (a + b)`.
 - **Rocq (QuickProof)**: for every pair of `int64_t` values, `vx_add`, …,
   `vx_modulo` return the status and the value that the formula gives, and
   leave `*out` alone when they do not return `VX_OK`.
 
-Together they show that the C function computes `Prim.apply` on every input.
-This assumes that the C law's text and the Lean text above are the same
-formula, and that CompCert's `/` and `%` on `long` are C99's (`Int64.divs`
-and `Int64.mods` round toward zero).
+Together they show that the C function computes `Prim.apply` on every input
+whose result fits in 64 bits, and reports `VX_OVERFLOW` exactly on the
+others. This assumes that the C law's text and the Lean text above are the
+same formula, and that CompCert's `/` and `%` on `long` are C99's
+(`Int64.divs` and `Int64.mods` round toward zero).
+
+Ints are as long as the Verse VM's, 2^20 bits (#724), so `VX_OVERFLOW` is
+not the program's error: `prims.c` then asks `runtime/src/bigint.c` for
+`Res.ofInt` of the exact result, as it does when an operand lies outside
+64 bits (a BIG value). `bigint.c` is **tested, not proved**: against
+Python's ints (`runtime/tests/test_bigint.c`, vectors from
+`scripts/gen-bigint-vectors.py`, under ASan/UBSan) and, with the Lean
+interpreter, on random programs (`scripts/fuzz-bigint.sh`). What the seam
+still gives is that the C runtime holds an int in a 64-bit word exactly
+when `Int64.inRange` holds of it, which makes its representation of ints
+unique (DESIGN.md, "Ints beyond 64 bits").
 
 ## 2. Scoping (`runtime/src/load.c`)
 
@@ -98,14 +110,16 @@ filter), and rolls back exactly where they restore one.
 The four-int forms of `add`, `sub`, `mul` and `quotient` (#489) are defined
 by `ratArith` and `rationalRes` in `Core/Prims.lean`. They compute exact
 integer products/sums, reduce by a gcd, normalize the sign, then check the
-final parts against int64 bounds. Source rational operands have positive
+final parts' length, the ints' (2^20 bits, #724; before, int64 bounds). Source rational operands have positive
 denominators; malformed nonpositive denominators in raw Core report
 overflow. Division by a zero numerator in the right operand fails.
 
 `runtime/src/prims.c` implements these forms using signed and unsigned
-128-bit integers. Positive int64 operand denominators bound every product
-and sum inside signed 128 bits; unsigned magnitudes avoid signed-negation
-overflow during reduction. This C implementation is **tested, not proved
+128-bit integers when the four parts fit in 64 bits. Positive int64 operand
+denominators bound every product and sum inside signed 128 bits; unsigned
+magnitudes avoid signed-negation overflow during reduction; a reduced part
+past 64 bits is made an int on the heap. Parts past 64 bits take
+`bigint.c`'s `vx_big_rational`. This C implementation is **tested, not proved
 by QuickProof**. The existing `arith_exact` law still covers the unchanged
 two-int scalar functions in `arith.c`, and the loader/store pins are unchanged.
 

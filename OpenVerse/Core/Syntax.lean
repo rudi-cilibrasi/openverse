@@ -17,7 +17,8 @@ namespace OpenVerse
 /-- Primitive operations. Each is a function of the values of its arguments
     (`Prim.apply`); only `print` (a separate node) touches the output. -/
 inductive Prim where
-  -- int arithmetic (overflow is a runtime error)
+  -- int arithmetic (a result longer than `IntBits.max` bits is a runtime
+  -- error; #724: before, one outside 64 bits)
   -- add/sub/mul also take four int rational parts, returning a reduced
   -- numerator/denominator pair (#489); quotient has the division form.
   | add | sub | mul | neg | abs

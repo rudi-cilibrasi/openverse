@@ -24,8 +24,8 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Area | Supported | Book |
 |---|---|---|
 | Comments | `#` to the end of the line, nested `<# … #>`, `<#>` indented comments (the rest of the line and every following line indented more than it; see [Source text](#source-text)) | ch. 0 |
-| Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` an ASCII character other than a line break, a tab included, or an escape; a non-ASCII one, `'é'`, is a `char32`, Book of Verse ch. 1), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates), `float` `1.5`, `2.0e-7`, `1e3`, `12.34f64`, `1234f64` (digits, then a point and digits or an exponent or both, or the suffix `f64`, which may follow either; the nearest double, which must be finite: `2.0e308` is refused; `f32` and `f16` are read and refused as not supported); paths `/Verse.org/Random` parse (in `using{…}`, ignored when in a package openverse knows, `/Verse.org/…`, `/Fortnite.com/…`, `/UnrealEngine.com/…`, and refused otherwise, as naming nothing, ch. 16, `Using2.versetest:94`; as values, refused; see [Source text](#source-text)) | §1.3–1.7 |
-| Types | `int`, `logic`, `char`, `char32`, `any` (see [any](#any)), `comparable` (see [comparable](#comparable)), `rational` (see [rational](#rational)), `float` (see [float](#float)), refinement types `type{_X:int where 0 <= _X, _X <= 120}` (see [Refinement types](#refinement-types)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void` (which takes any value; `tuple()` is the type of the empty value alone, see [Equality and the empty value](#equality-and-the-empty-value)), `message` (a localized message, `X<localizes>:message = "…"`, `F<localizes>(N:int):message = "… {N}"`, rendered by `Localize` and joined by `Join`; openverse has no culture, so a message is its default text, an int written with comma separators: ch. 12, [the rule](research/book-forms-rules.md#localized-messages)), `false` (the type with no value, below every type: a function whose result is `false` never returns, ch. 2, [the rule](research/book-forms-rules.md#false-as-a-type); `true`, the type of the empty value alone, as `tuple()` is, below `logic`, [the rule](research/book-forms-rules.md#true-as-a-type)), function types `type{_(:int)<decides>:int}`, with named parameters `type{_(:int, ?B:int):int}`, and `int->int` (see [Function values](#function-values)); type aliases `player_id := int`, `pair(t:type) := tuple(t, t)` (see [Type aliases](#type-aliases)); types as values of classes and interfaces, `subtype(c)`, `castable_subtype(c)`, `concrete_subtype(c)` and `type` (see [Types as values](#types-as-values)); a conversion written as a call, `int(0)`, `void(0)`, `(?int)(option{0})`, `s(s{})`, of a value of a type that is a subtype of the one named; `int[X]` of an int, a failable cast that no 64-bit int fails (UEFN 43.12 admits it; the Book's tests, `WhereConstrainedInts.versetest:219-222`; of a class's value it is refused, `Cast.versetest:35`); a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
+| Literals | `int` (decimal, `0x` hex; must fit in 64 bits, though ints go past it: [int](#int)), `'c'` `char` (`c` an ASCII character other than a line break, a tab included, or an escape; a non-ASCII one, `'é'`, is a `char32`, Book of Verse ch. 1), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates), `float` `1.5`, `2.0e-7`, `1e3`, `12.34f64`, `1234f64` (digits, then a point and digits or an exponent or both, or the suffix `f64`, which may follow either; the nearest double, which must be finite: `2.0e308` is refused; `f32` and `f16` are read and refused as not supported); paths `/Verse.org/Random` parse (in `using{…}`, ignored when in a package openverse knows, `/Verse.org/…`, `/Fortnite.com/…`, `/UnrealEngine.com/…`, and refused otherwise, as naming nothing, ch. 16, `Using2.versetest:94`; as values, refused; see [Source text](#source-text)) | §1.3–1.7 |
+| Types | `int`, `logic`, `char`, `char32`, `any` (see [any](#any)), `comparable` (see [comparable](#comparable)), `rational` (see [rational](#rational)), `float` (see [float](#float)), refinement types `type{_X:int where 0 <= _X, _X <= 120}` (see [Refinement types](#refinement-types)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void` (which takes any value; `tuple()` is the type of the empty value alone, see [Equality and the empty value](#equality-and-the-empty-value)), `message` (a localized message, `X<localizes>:message = "…"`, `F<localizes>(N:int):message = "… {N}"`, rendered by `Localize` and joined by `Join`; openverse has no culture, so a message is its default text, an int written with comma separators: ch. 12, [the rule](research/book-forms-rules.md#localized-messages)), `false` (the type with no value, below every type: a function whose result is `false` never returns, ch. 2, [the rule](research/book-forms-rules.md#false-as-a-type); `true`, the type of the empty value alone, as `tuple()` is, below `logic`, [the rule](research/book-forms-rules.md#true-as-a-type)), function types `type{_(:int)<decides>:int}`, with named parameters `type{_(:int, ?B:int):int}`, and `int->int` (see [Function values](#function-values)); type aliases `player_id := int`, `pair(t:type) := tuple(t, t)` (see [Type aliases](#type-aliases)); types as values of classes and interfaces, `subtype(c)`, `castable_subtype(c)`, `concrete_subtype(c)` and `type` (see [Types as values](#types-as-values)); a conversion written as a call, `int(0)`, `void(0)`, `(?int)(option{0})`, `s(s{})`, of a value of a type that is a subtype of the one named; `int[X]` of an int, a failable cast that no int fails, past 64 bits too ([int](#int); UEFN 43.12 admits it, and it succeeds there for 2^63; the Book's tests, `WhereConstrainedInts.versetest:219-222`; of a class's value it is refused, `Cast.versetest:35`); a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
 | Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e`, which state their type there as in a module (ch. 16: "type inference with `:=` alone is not allowed"; `C := e` names a type, when `e` is one: [Type aliases](#type-aliases)) (definitions on one line, at the top level, in a module or in a block, are separated by `;` or `,`: `X:int=0, Y:int=0`; a constant may use one defined before it in its own scope, a module's or the top level's, and one of another module or of an enclosing scope wherever it is defined, as the Book's tests have it (`DefaultValueAssignment.versetest` 102, 128); not itself, directly or through other constants; and its value has no side effect, writing nothing, also through what it calls or constructs, as the Book's tests have it, `DefaultValueAssignment.versetest:199`, `ModuleDefinitions.versetest:278`, `ParametricTypes.versetest:465`: a function with no heap specifier, or a class or struct with none, has `<transacts>`, and so writes, [the rule](research/book-remaining-rules.md#a-module-constant-has-no-side-effect)); module-scoped `var X:weak_map(k, v) = map{}` (see [Module-scoped variables](#module-scoped-variables)); locals `X := e`, `X:t = e`, `var X:t = e`, and a tuple destructured, `(X:int, _, Z:string) = e` (each named element a local of the block, `_` skipping one, `e` evaluated once); no shadowing; no name defined twice in a scope but [overloaded](#overloading) functions; no [reserved name](#reserved-names) | §3.1–3.4 |
 | Mutation | `set X = e`, `set X += e` (`-=`, `*=`), `set A[i] = e` (fails out of range; returns `e`), and paths `set S.F.G = e`, `set A[i][j] op= e`, `set M[k].F = e`: indices and keys evaluated once, left to right, then the new value, then the variable rebuilt (for `op=`, the old value is read after the new one, from the variable as the new one left it, which is then rebuilt from that: `set X += e` is `V := e; set X = X + V`, the Book's tests, `ArrayAppend.versetest` 140, 183); but when `e` replaces, with a plain `set`, the container the path's last step writes into, the old value is read from, and the new one written into, the container `e` replaced, through a variable or an object's field, as Epic's VerseVM does ([below](#mutation-macros-tooling), #704); an index out of range or a missing intermediate key fails, while the last key of a path inserts | §3.3, §3.5, §9.3 |
 | Blocks | indented (`:`), braced (`{ }`), inline (`then`/`do`), `.` and an expression on its line wherever `:` or `{…}` may start a body (`if (c). e else. f`, `for (X:Xs). e`, `spawn. F()`, `loop. break`; also `option`, `logic`, and `array` and `map`, whose `:` blocks separate their items by `,`, `;` or new lines: `array:` and the lines `1`, `2`; in braces an array's elements are separated by commas, or by `;` and new lines, not both: `array{1; 2; 3}`), `block:`, `( a; b )` sequences, also as an argument (`F(Log(); 42)` passes 42) and as a `case`'s value (`case(a; b)`); `;` and new lines separate the items of a block, and `;` may end a line or a braced block (`{1; 2;}` is `{1; 2}`) (the next item then follows the line rules, so a class's last field may end in `;`); in a block, statements that commas join on a line are a tuple (ch. 1, "Semicolons vs Commas", and its tests, `SemicolonsVsCommas.versetest` 70, 95, 100: `{1.0, 2}` is a `tuple(float, int)`, `option{1, 2}` holds `(1, 2)`, `for (X := 1..2) {3, X}` is an array of pairs), definitions joined so are the block's definitions in turn (`X:int = 0, Y:int = 0`), and a group of definitions and values is each in order, a definition visible to what follows it, then the tuple of their values (`option{V := 3, V > 0, V}` holds `(3, 3, 3)`, a `var`'s value taken where it is defined); the clauses of `if`, `for`, `first` and the clause macros, the arms of `sync`, `race` and `rush`, a construction's fields and an array's or map's items keep commas as separators; a comma that starts a line is not the block's but the list's around it; a body after `:` may be empty wherever one may be written, as `{}` may (`class:`, `struct:`, `then:`, … whose next line is no deeper than the construct, or nothing follows); a function's or method's braced body may put its `{` on the next line, at the definition's column; a value after `=`, `:=`, `set … =` or a `case` arm's `=>` that starts a later line, deeper, is the indented block of those lines (`Value :=` and the lines `1`, `2`, `3` is `3`; and the line `1, 2, 3`, `(1, 2, 3)`), as a function's body is | §2.2–2.4 |
@@ -42,7 +42,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Enums | `name := enum:` / `enum{A, B}`, `name.A`, equality, `case` that needs no `_` when every value is named (an enumerator is its index in Verse Core); `enum<open>` may gain values, so a `case` on one needs `_` or a failure context (`<closed>` is the default) | ch. 9 |
 | Maps | `[k]v` (a comparable key with no array or map in it, through its options, tuples and a struct's fields, but `string`: "neither may serve as a map key", ch. 3), `map{k => v, …}` (a key given twice keeps its last value, at its last position; a key cannot fail, ch. 3: "failure in map literal keys is not implemented"; [the rules](research/book-remaining-rules.md#map-keys-and-a-refinements-range)), `M[k]` (fails on a missing key), `set M[k] = v` (insert or update; in Verse the key's reference is `<decides>`, the Book's API reference, so such a `set`, also as a path's last step, `set S.M[k] = v`, is written in a failure context, as the Book's tests do, `if (set M0[0] = 42)`, `(set Map[I] = I) or Err()`; its last key inserts, so it succeeds; its value is `v`), `set M[k] op= v` (fails on a missing key), `.Length`, `for (V : M)`, `for (K -> V : M)` in insertion order, `ConcatenateMaps(M1, M2)` (exactly two maps, ch. 3: more by chained calls; their pairs laid down in turn, as `map{…}` lays its own: a key both maps have takes the second map's value at the second map's place, the Book's API reference and `ConcatenateMaps.versetest` 21, 33), order-sensitive equality (a map is the array of its pairs in Verse Core); a key of a class above or beside the map's key class reads, looked up at the class above both; `weak_map(k, v)`, a supertype of `[k]v` with entry access only (see [Weak maps](#weak-maps)) | §3, §9.3 |
 | Array methods | (also of a tuple of one element type, which is an array where one is expected: `('a', 'b', 'c').Slice[1]`) `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`, `A.RemoveFirstElement[x]`, `A.Remove[i, j]` (half-open), `A.ReplaceElement[i, x]`, `A.ReplaceFirstElement[x, y]`, `A.Insert[i, B]`, `A.Last[]`, `A.Last[n]` (the element n before the last) (all failable); `A.RemoveAllElements(x)`, `A.ReplaceAllElements(x, y)`, `A.ReplaceAll(Pattern, Replacement)` (contiguous subarrays, left to right, not overlapping; an empty pattern changes nothing), `Concatenate(A, B, …)` or `Concatenate(Arrays)` (#150) (never failing) | §9.1 |
-| Built-ins | `Print(s)`, `ToString(x)` (int, float, char, char32, string), `Floor[F]`, `Ceil[F]`, `Round[F]`, `Int[F]` (of a float, failable), `Floor(R)`, `Ceil(R)` (of a rational or an int, never failing; `Floor(X / Y)` fails when `Y = 0`, as `X / Y` does), `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Clamp(Val, A, B)` (the median of the three, of ints or of floats, NaN ordering above +Inf), `Sgn(X)` (-1, 0 or 1 of an int or a float, NaN of NaN), `F.IsFinite[]` (as `IsFinite[F]`), `BitAnd(X, Y)`, `BitOr`, `BitXor`, `BitNot(X)`, `BitShiftLeft[X, N]`, `BitShiftRight[X, N]` (see [Bitwise functions](#bitwise-functions)), `Err()` and `Err(Message)` (stops the program; ch. 8: "a runtime error with an optional message", the API reference `Err(Message:string)`: no argument or one string, which is evaluated first); a built-in given another number of arguments than it takes is refused (`Quotient takes two ints, found 3 argument(s)`); the conversions of chars and code points as methods (see [char32](#char32)): `C.ToCodeUnit()`, `C.ToAsciiChar32[]` of a char, `C.ToCodePoint()`, `C.ToAsciiString()` of a char32, `N.ToChar[]`, `N.ToChar32[]` of an int | API reference |
+| Built-ins | `Print(s)`, `ToString(x)` (int, float, char, char32, string; of an int beyond 64 bits, the overflow error: [int](#int)), `Floor[F]`, `Ceil[F]`, `Round[F]`, `Int[F]` (of a float, failable), `Floor(R)`, `Ceil(R)` (of a rational or an int, never failing; `Floor(X / Y)` fails when `Y = 0`, as `X / Y` does), `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Clamp(Val, A, B)` (the median of the three, of ints or of floats, NaN ordering above +Inf), `Sgn(X)` (-1, 0 or 1 of an int or a float, NaN of NaN), `F.IsFinite[]` (as `IsFinite[F]`), `BitAnd(X, Y)`, `BitOr`, `BitXor`, `BitNot(X)`, `BitShiftLeft[X, N]`, `BitShiftRight[X, N]` (see [Bitwise functions](#bitwise-functions)), `Err()` and `Err(Message)` (stops the program; ch. 8: "a runtime error with an optional message", the API reference `Err(Message:string)`: no argument or one string, which is evaluated first); a built-in given another number of arguments than it takes is refused (`Quotient takes two ints, found 3 argument(s)`); the conversions of chars and code points as methods (see [char32](#char32)): `C.ToCodeUnit()`, `C.ToAsciiChar32[]` of a char, `C.ToCodePoint()`, `C.ToAsciiString()` of a char32, `N.ToChar[]`, `N.ToChar32[]` of an int | API reference |
 | Modules | `name := module:` (nested), `M.F`, `A.B.F`, the types `M.c` and values `M.c{…}`, `(M:)F`, `using{M}` at file or module scope (a `using` of a path is accepted and ignored, but of `/localhost` and the paths below it, which the Book's tests refuse, "Explicitly using a "/localhost" package is not allowed", `Modules/Using2.versetest` 84-90), `<public>` members (`<internal>` is the default); see [Modules](#modules) | ch. 16 |
 | Access | `<public>`, `<internal>` (the default), `<protected>`, `<private>`, `<scoped{M, …}>` and `S := scoped{…}`, `<epic_internal>`, on modules, their definitions, a class's members and constructor, and `var<w> X<r>:t`; checked where each use is written, and no definition exposes a less visible one; see [Access](#access) | ch. 12 |
 | Attributes | `@deprecated`, `@experimental`, `@available{MinUploadedAtFNVersion := N}`, custom attributes (a class below `attribute` with its scopes `@attribscope_…`, `@c{F := e}` or a constructor's `@f(…)`) before a definition, a member, a struct's field or an enum's value; `@ignore_unreachable` on an expression or a `case` arm: checked where the Book checks them, metadata but `@available`; see [Attributes](#attributes) | ch. 12 |
@@ -2706,7 +2706,7 @@ produces may vary between VM implementations"):
 | Value | Text |
 |---|---|
 | `false`, `true` | `false`, `true` |
-| an int | decimal, `-1000` |
+| an int | decimal, `-1000`, also beyond 64 bits ([int](#int)) |
 | a rational | reduced, `1/2`, `-1/5`; an integral one as its int, `2` |
 | a char | printable ASCII in quotes, `'a'`; a tab, a new line, a carriage return and `" # & ' < > \ { } ~` escaped, `'\t'`, `'\#'`; any other as `0oXX`, `0o7f` |
 | a char32 | `0uX` in lowercase hex, `0u1f600` |
@@ -3206,6 +3206,108 @@ Main():void =
   class{}` and `a<public> := c` is an error (Book of Verse ch. 11; see
   [Access](#access)).
 
+## int
+
+An `int` is the Verse VM's: past the signed 64-bit range, arithmetic gives
+the exact result (#724). OpenVerse targets Epic's Verse VM where it and the
+Blueprint VM differ; the Book of Verse (ch. 2, "Overflow and VM
+Differences") has the two readings, and Epic's Verse VM on UEFN 43.12
+(`++Fortnite+Release-43.12-CL-60598086`, "Use Verse VM", 2026-11-18) prints
+the Verse VM's for every integer probe of
+[tests/conformance/versevm](../tests/conformance/versevm)
+([the observations](research/versevm-live-conformance.md#integers-beyond-64-bits)),
+and openverse's output for most of its follow-up probes (2026-11-19); the
+known differences are below
+([the follow-up probes](research/versevm-live-conformance.md#follow-up-probes-for-ints)).
+
+```verse
+Next(N:int)<computes>:int = N + 1
+
+Main():void =
+    Big := Next(9223372036854775807)                        # 2^63
+    if (Big > 9223372036854775807) then Print("above")      # above
+    if (Q := Quotient[Big * Big, Big - 1]) then Print("{Q - Big}")   # 1
+    Print("{Big}")                                          # error: overflow
+```
+
+- `+`, `-`, `*`, unary `-`, `Abs`, `Floor(X / Y)`, `Ceil(X / Y)`,
+  `Quotient[X, Y]` and `Mod[X, Y]` (Euclidean), `Min`, `Max`, `Clamp`,
+  `Sgn`, `set +=`, `-=` and `*=` give the exact int; the divisions fail on a
+  zero divisor, as for any int. Comparisons, `=` and `<>` are exact, so an
+  int and a value equal to it, however computed, are one map key, and a
+  refinement's cast compares with its bounds exactly: `i64[2^63]` fails for
+  `i64 := type{_X:int where _X >= -9223372036854775808, _X <= 9223372036854775807}`
+  (Epic: "i64 cast failed"), and `int[2^63]` succeeds, as `int[X]` does for
+  every int (Epic: "int cast succeeded").
+- A known difference, kept by the owner's decision (#724): Epic's Verse VM
+  computes the operators, comparisons, map keys, `Min`, `Max`, `Abs`,
+  `Sgn`, array and tuple equality, and `Floor` and `Ceil` of a rational
+  past 64 bits, but its native `Quotient`, `Mod` and `Clamp` stop with a runtime error, "Value exceeds the range of a 64 bit
+  integer", when an argument is beyond 64 bits, also for a zero divisor
+  (`Quotient[2^63, 0]`). openverse does not imitate those native errors: it
+  gives the exact result, and fails on a zero divisor. At the length
+  limit they differ too: on Epic the multiplication whose result reaches
+  2^20 bits does not return (`int-length-steps`), where openverse raises
+  the overflow error.
+- An int has at most 2^20 bits (its magnitude is below 2^(2^20)): a longer
+  result is the overflow error, exit 2, as a 64-bit overflow was. This is
+  the Verse VM's `MaxLengthBits`, which the Book's `verse_vm_only` tests pin
+  (`Math/Bitwise.versetest`: `BitShiftLeft[1, 1048575]` is an int,
+  `BitShiftLeft[1, 1048576]` a runtime error). Not yet observed on Epic:
+  the probes that reach it by multiplication printed nothing there.
+- What needs 64 bits checks for them. `ToString` of an int beyond 64 bits,
+  and so its interpolation, is the overflow error: Epic's Verse VM stops
+  with "Value exceeds the range of a 64 bit integer" in `ToString(:int)`,
+  and the Book says such ints "cannot be used in string interpolation".
+  `ToDiagnostic` prints them in decimal (the Book's `verse_vm_only` cases,
+  `ToDiagnostic.versetest:35-40`). `Floor[F]`, `Ceil[F]`, `Round[F]` and
+  `Int[F]` of a float stay 64-bit (the API reference's integer-bounds
+  error; [float](#float); Epic's Verse VM stops for `Floor[1.0e19]` with
+  `ErrRuntime_IntegerBoundsExceeded`).
+- An int literal fits in 64 bits (the Book: "integers exceeding 64-bit
+  [...] can be computed but not written as literals"; UEFN 43.12: error
+  3555).
+- `X * 1.5` converts the int to the nearest double, ties to even (IEEE's
+  default rounding), and to `Inf` or `-Inf` past the largest double, as
+  Epic's Verse VM does.
+- An index beyond 64 bits is past every array: indexing and `set A[I]` fail,
+  as for any index out of range. A range with a bound beyond 64 bits gives
+  its ints one by one (`for (I := Big..Big + 2)`), across the 64-bit
+  boundary too; its length must fit in memory, as any range's. Epic's
+  Verse VM does both.
+- A module's constant is evaluated in 64 bits, as Epic's compiler evaluates
+  it when it links the module: `TwoTo64:int = (9223372036854775807 + 1) * 2`
+  is refused (`the value of the module constant TwoTo64 leaves the 64-bit
+  range when the module is evaluated (integer add overflow:
+  9223372036854775807 + 1)`), as UEFN 43.12 refuses it with error 9003,
+  "Runtime error while evaluating module" (its log: "integer add
+  overflow"), though the same arithmetic in a function gives 2^64 at run
+  time. openverse computes a constant at each use, at run time, so it
+  checks this when it compiles, for the constants it can evaluate without
+  running the program: int arithmetic on literals and on other such
+  constants. UEFN 43.12 refuses `(9223372036854775807 + 1) - 1` too
+  (9003), a value in range that leaves it on the way, and so does
+  openverse. The Book's own test of this, `Math/Bitwise.versetest:73`
+  (`verse_vm_only`), expects the constant to be 2^64, and 38 cases of that
+  file use it: openverse refuses the 39, as Epic's compiler does
+  ([the survey](research/book-test-conformance.md#after-ints-beyond-64-bits)).
+  Keeping this check, at the cost of those 39, is the owner's decision
+  (#724).
+- A known difference, for a later change: a module constant whose value
+  calls a function is computed at run time with the Verse VM's ints, while
+  Epic's compiler refuses such a constant, error 3582, "Divergent calls
+  (calls that might not complete) cannot be used to define data-members",
+  for a `<computes>` function (`Big:int = Next(9223372036854775807)`) and
+  for built-ins (`Min(Abs(-3), 7)`); `Floor(Base / 4) or 0` it admits
+  ([the follow-up probes](research/versevm-live-conformance.md#follow-up-probes-for-ints)).
+- Rationals are pairs of these ints, reduced ([rational](#rational)).
+- In Verse Core an int is Lean's `Int` (`Res.ofInt` checks the length); the
+  C runtime keeps one that fits in 64 bits in a word (`arith.c`, the fast
+  path, proved with QuickProof) and any other on its heap
+  (`runtime/src/bigint.c`; DESIGN.md, "Ints beyond 64 bits"). The format is
+  unchanged: an int literal is 64-bit, and Verse Core's operations are the
+  same.
+
 ## float
 
 A `float` is an IEEE 64-bit float (Book of Verse ch. 2, #127), except that
@@ -3314,8 +3416,7 @@ is tracked in #494; `<predicts>` is not currently enforced.
 
 The Book's ch. 4 ("Bitwise Operations", "Bit Shift Operations") and its
 API reference: of ints, on their two's complement bit patterns, "sign-extended
-forever to the left", on openverse's 64-bit ints (the Blueprint VM's: a
-result out of range is the overflow error, exit 2; [the pinned
+forever to the left", on the Verse VM's ints ([int](#int); [the pinned
 rules](research/book-library-functions.md#bitwise-functions)):
 
 ```verse
@@ -3330,19 +3431,23 @@ Main():void =
 - `BitShiftLeft[X, N]` is `X · 2^N` and `BitShiftRight[X, N]` is
   `Floor(X / 2^N)` (an arithmetic shift: toward minus infinity, so 0 or -1
   once every bit is shifted out, `BitShiftRight[-1, 1000]` is -1); both
-  fail when `N < 0`. A left shift out of range is the overflow error
-  (`BitShiftLeft[1, 63]`; `BitShiftLeft[-1, 63]` is the least int;
-  `BitShiftLeft[0, N]` is 0 for every `N ≥ 0`).
+  fail when `N < 0`. A left shift is the overflow error only past the
+  ints' length, 2^20 bits (`BitShiftLeft[1, 63]` is 2^63,
+  `BitShiftLeft[1, 1048576]` the error; `BitShiftLeft[0, N]` is 0 for every
+  `N ≥ 0`), as the Book's `verse_vm_only` cases have it. UEFN 43.12 has
+  neither shift (error 3506, unknown identifier).
 - Each argument is evaluated once, in order; floats are refused. They are
   soft built-ins, as `Clamp` is (a program may define its own), and of one
   signature, so a program may name one as a value (`F(:int, :int):int`,
   the shifts `<decides>`).
-- On VerseVM ints are unbounded and so are these; openverse's are not
-  (see [Readings](#readings-openverse-takes), `int` range), so the Book's
-  `verse_vm_only` cases with operands beyond 64 bits differ.
+- Operands and results go past 64 bits, as the Book's `verse_vm_only`
+  cases have it (Epic's Verse VM, UEFN 43.12: `BitAnd(2^63, 1) = 0`,
+  `BitOr(2^63, 0) = 2^63`, `BitNot(2^63) = -(2^63 + 1)`).
 - They are written in Verse with Verse Core's existing operations
   (`Front/Bitwise.lean`; DESIGN.md, "Bitwise functions"): no Verse Core,
-  format or runtime change.
+  format or runtime change. A shift computes `2^N` by squaring, so it
+  takes as many steps as `N` has bits; `BitAnd`, `BitOr` and `BitXor` take
+  one step per bit of their operands.
 
 ## rational
 
@@ -3381,13 +3486,12 @@ does not specify the arithmetic family above. These overloads are an
 OpenVerse design decision, not a claim of released-UEFN conformance.
 
 In Verse Core a rational is the tuple of its numerator and denominator, in
-lowest terms with a positive denominator. Its parts are 64-bit ints, so
-`X / Y` raises the overflow error when the result's numerator or
-denominator is out of range, as in `(-2^63) / -3` or `1 / (-2^63)`.
-Arithmetic checks these bounds **after reduction**, using exact intermediate
-products/sums. Cancellation can therefore succeed even when intermediate
-values exceed int64; a reduced result outside the range raises overflow,
-which is an error rather than a recoverable failure. Zero is always `0/1`.
+lowest terms with a positive denominator. Its parts are ints, of the Verse
+VM's length ([int](#int)), so `(-2^63) / -3` and `1 / (-2^63)` are
+rationals whose parts go past 64 bits. Arithmetic checks the parts' length
+**after reduction**, using exact intermediate products/sums; a reduced
+result whose part is longer than 2^20 bits raises overflow, which is an
+error rather than a recoverable failure. Zero is always `0/1`.
 `Floor(R / S)` and `Ceil(R / S)` first compute the rational quotient; the
 existing direct int/int rounding path remains unchanged.
 
@@ -4017,7 +4121,9 @@ Main()<suspends>:void =
   NaN input returns at once. The virtual clock starts at zero and ranges
   through `2^63 − 1`: if current time plus the requested ticks exceeds
   that maximum, checked addition terminates with `error: overflow`, without
-  wrapping or clamping. These are reference-clock limits, not measured
+  wrapping or clamping (the clock keeps its 64-bit ticks though ints go
+  past 64 bits, #724: `Sleep` checks its wake time as `ToString` checks an
+  int). These are reference-clock limits, not measured
   engine limits (#514); ordinary source overrides do not alter the
   scheduler's primitive rounding or infinity classification.
 - **The program.** A suspends `Main` runs under the scheduler. The program
@@ -4044,7 +4150,7 @@ Main()<suspends>:void =
 
 | Question | Book | openverse |
 |---|---|---|
-| `int` range | arbitrary precision on VerseVM; 64-bit with a runtime error on BPVM (§4.1) | **BPVM**: 64-bit, overflow is a runtime error (not a failure), never wrap-around |
+| `int` range | arbitrary precision on VerseVM; 64-bit with a runtime error on BPVM (§4.1) | **VerseVM** (#724, Epic's Verse VM on UEFN 43.12 agrees): exact past 64 bits, up to 2^20 bits (the Book's tests' `MaxLengthBits`), a longer result the overflow error; `ToString` of one beyond 64 bits the overflow error, as on Epic's Verse VM; module constants evaluated in 64 bits, as Epic's compiler does; `Quotient` and `Clamp` exact past 64 bits, where Epic's natives stop (a known difference) ([int](#int)) |
 | `X = Y` result | the operators page says `logic`; elsewhere the left operand (§5.4) | the left operand |
 | Associativity of comparisons | the prose: chains "check all adjacent pairs" (ch. 1); the table: right (ch. 4); the tests: `<>` left-associative (`Associativity.versetest:9`), the others as a chain: the Book disagrees with itself ([the audit](research/readings-audit.md#comparison-chains-with-)) | chains: every adjacent pair checked, each operand evaluated once, result is the leftmost |
 | Value of a successful `not e` | unspecified | `void` |

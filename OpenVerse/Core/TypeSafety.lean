@@ -1326,7 +1326,9 @@ theorem ofString_typed (s : String) : hasTy V Ξ (Value.ofString s) VTy.str = tr
 theorem toStr_typed {v t} (ht : PrimTy .toStr [t] VTy.str) (hv : hasTy V Ξ v t = true) {ρ} :
     ResOK V Ξ VTy.str ρ (toStrValue v) := by
   cases ht with
-  | toStrInt => obtain ⟨a, rfl⟩ := hasTy_int hv; simp [toStrValue, ResOK, hasTy, VTy.str, intBytes_typed]
+  | toStrInt =>
+    obtain ⟨a, rfl⟩ := hasTy_int hv
+    simp only [toStrValue]; split <;> simp [ResOK, hasTy, VTy.str, intBytes_typed]
   | toStrChar =>
     obtain ⟨c, rfl, hc⟩ := hasTy_char hv
     simp [toStrValue, ResOK, hasTy, VTy.str, allTy, hc]

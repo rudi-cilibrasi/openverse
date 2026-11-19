@@ -4,7 +4,8 @@ Pick(Count:int)<transacts>:int=
         defer:Print("cleanup {I} {Y}")
         if(I=2):return Y
     Count
-Overflow(N:int)<computes>:int=9223372036854775807+N
+# (an int beyond 64 bits given to ToString: the overflow error, #724)
+Overflow(N:int)<computes>:int=ToString(9223372036854775807+N).Length
 PickEarly()<computes>:int=
     for(I:=1..9223372036854775807):
         Y:=I|Overflow(I)
