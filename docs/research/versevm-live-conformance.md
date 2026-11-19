@@ -543,6 +543,48 @@ admits the converging ones and refuses the others; it refuses the struct's
 archetype for its `<transacts>` construction (#512) and the module-scoped
 `var` because it has no `session`.
 
+### The Book's accepted refusals
+
+The survey's baseline (`0471c1d4`) has 74 cases where openverse runs a
+program the Book's tests refuse (38) or gets another result (36). The 36
+are `bp_vm_only` ints, the Blueprint VM's 64-bit overflow: settled, the
+Verse VM's exact ints, by the int probes above (`int-overflow`,
+`book-int-*`, `followup-int/`; the shifts of `Math/Bitwise.versetest`
+194-200 by `book-int-shift-63`, UEFN 43.12 having no `BitShiftLeft`). None
+of the 38 had been asked of Epic.
+[`followup-book2/`](../../tests/conformance/versevm/followup-book2) asks
+whether Epic's shipped compiler refuses each of them, one construct per
+probe, with controls; each header gives the Book's case and openverse's
+output, Lean and C agreeing, and its `expectations.tsv` the same. Not yet
+compiled by Epic.
+
+| Probes | Book cases | Asks whether UEFN 43.12 refuses |
+| --- | --- | --- |
+| `case-collision-*` (4 and a control) | `FORT-793952…` (16, `bp_vm_only`, 9200, 9002, 9000) | names of one scope that differ only in case: module functions, methods, `<suspends>` methods, the same parameters |
+| `long-ident-*` (4 and a control) | `FORT-555217…` 25, 31, 37 (`bp_vm_only`, 9002, 3655); 11 (3655, both VMs, agreeing only for another reason) | a class name of 1024 characters, a mangled method name too long, a name of 1025, one of 4096 |
+| `join-named-*`, `join-generic-effects-*`, `generic-higher-order`, `parametric-method-value`, `interface-fn-param-generic` (8 and 7 controls) | `DefaultNamed` 629, 640, 741, 751; `Tuple:456`; `Function` 238, 271; `ParametricFunctions:276`; `FORT-592189:4`; `SOL-5477:5` (all `bp_vm_only`, IR error 3502; their Verse VM twins valid) | the Blueprint VM's code generation limits on function values: joins of functions with named or defaulted parameters, joins of generic functions with other effects, generic functions passed as values, a parametric class's method as a value, a function parameter in a parametric interface |
+| `overload-tuple-named-call` and its control | `FORT-744399:62` (3509, both VMs) | two arguments packed into a tuple parameter beside a named one |
+| `parametric-var-where-*`, `parametric-interface-var`, `interface-var-field` (3 and 3 controls) | `ParametricFunctions` 431, 438 (3552), 496 (3502), both VMs | a parametric class's `var` field used in a generic function; a parametric interface with a `var` field |
+| `enum-wide` and its control | `Enum:171` (`bp_vm_only`, 3552) | an enum of 257 values |
+| `final-method-interface`, `-nonfinal`, `-control` | `Attributes/final.versetest:125` (3591, both VMs) | a class's `<final>` method (and, not a Book case, one that is not `<final>`) taken for an interface's method of its name |
+| `spawn-in-transacts-*` (4 and a control) | `Effects` 557, 565, `SoftwareTransactionalMemory:505` (`bp_vm_only`, 3512) | `spawn` in a `<transacts>` and a `<transacts><decides>` function, and whether a failed condition undoes the spawn (openverse undoes it) |
+| `live-when-sentinel`, `live-upon-sentinel`, `live-await-block-sentinel` | `when:7`, `upon:7`, `await:6` (`verse_vm_only`, valid) | whether 43.12 knows `when`, `upon` and `await{…}` (it refuses `live`, `book-live-set`); openverse refuses all three |
+
+Build the `long-ident-*` probes alone, in single mode: Epic's names for
+them may depend on the module that holds them.
+
+Of the 323 refusals of `verse_vm_only` cases, all but one are of forms
+UEFN 43.12 refuses too, or that the sentinels above ask: `union` (138: the
+cause's 136 and 2 counted under others; `book-union-equality`), live
+variables (90: `live-variables` 57, `set-forms` 28, 3 of `metatypes`, 2
+`when` cases of `syntax-other`; `book-live-set` and the sentinels),
+module constants beyond 64 bits (39, `book-int-pow64-module-const`),
+nested functions (26, `book-nested-function`), `<closed>` functions as
+types (6, `book-closed-function-type`), and the `spawn`, function-join,
+sibling-key, default-cycle, field-tuple, `branch`-in-a-loop and
+type-parameter forms of the `book/` probes (23). Left unasked: a generic
+function joined with another (`Castable.versetest:601`).
+
 ## Running many probes
 
 [`ovprobe.py`](../../tests/conformance/versevm/ovprobe.py) (Python 3

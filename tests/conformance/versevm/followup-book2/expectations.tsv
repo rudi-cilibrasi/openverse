@@ -1,0 +1,48 @@
+# Follow-up probes for the Book of Verse cases OpenVerse accepts where the tests refuse (#724): the Book's case and expectation (for a bp_vm_only case the Blueprint VM's, its Verse VM twin in note), what OpenVerse prints in each probe's header and in note (Lean and C agreeing, at 0471c1d4); Epic's outcome and lines in epic_outcome and epic_lines (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086; - where not yet compiled). The question each asks: does Epic's shipped compiler refuse it? Run the long-ident probes alone (single mode).
+probe	book_case	book_outcome	book_lines	epic_outcome	epic_lines	note
+case-collision-method	Tests/Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest:5;Tests/Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest:11;Tests/Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest:73;Tests/Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest:79;Tests/Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest:85;Tests/Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest:160	refused	-	-	-	Book: bp_vm_only, link error 9200; no Verse VM twin. OpenVerse: ran, lower 42|upper 420.
+case-collision-module-fn	Tests/Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest:92;Tests/Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest:98;Tests/Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest:166;Tests/Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest:172	refused	-	-	-	Book: bp_vm_only, link error 9200 (the Blueprint VM's case-insensitive names); no Verse VM twin. OpenVerse: ran, lower 42|upper 420.
+case-collision-module-fn-control	Tests/Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest:106	ran	lower 42|upper 420	-	-	Control. Book: valid (untagged). OpenVerse: ran, lower 42|upper 420.
+case-collision-same-params	Tests/Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest:187;Tests/Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest:193;Tests/Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest:199;Tests/Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest:205	refused	-	-	-	Book: bp_vm_only, link errors 9000, 9000; no Verse VM twin. OpenVerse: ran, lower 42|upper 420.
+case-collision-suspends	Tests/Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest:67;Tests/Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest:154	refused	-	-	-	Book: bp_vm_only, link errors 9002 and 9200; no Verse VM twin. OpenVerse: ran, lower 42|upper 420.
+enum-wide	Tests/Enum.versetest:171	refused	-	-	-	Book: bp_vm_only, link error 3552 (more than 256 values); Verse VM twin :233 valid. OpenVerse: ran, e100 compared.
+enum-wide-control	-	-	-	-	-	Control (not a Book case). OpenVerse: ran, e0FF compared.
+final-method-interface	Tests/Attributes/final.versetest:125	refused	-	-	-	Book: semantic error 3591 on both VMs. OpenVerse: ran, defined.
+final-method-interface-control	-	-	-	-	-	Control (not a Book case). OpenVerse: ran, methods 2 1.
+final-method-interface-nonfinal	-	-	-	-	-	Variant of final-method-interface (not a Book case). OpenVerse: ran, defined.
+generic-higher-order	Tests/ParametricFunctions.versetest:276	refused	-	-	-	Book: bp_vm_only, IR error 3502 x8; Verse VM twin :288 valid. OpenVerse: ran, one one 2|one two 3|two one 3|two two 4.
+generic-higher-order-control	-	-	-	-	-	Control (not a Book case). OpenVerse: ran, one 1|two 2.
+interface-fn-param-generic	Tests/Bugs/SOL-5477-CrashInGenClassDefinition.versetest:5	refused	-	-	-	Book: bp_vm_only, IR error 3502; Verse VM twin :21 valid. OpenVerse: ran, called.
+interface-fn-param-generic-control	-	-	-	-	-	Control (not a Book case). OpenVerse: ran, called.
+interface-var-field	-	-	-	-	-	Second control of parametric-interface-var (not a Book case). OpenVerse: ran, defined.
+join-generic-effects-decides	Tests/Function.versetest:238	refused	-	-	-	Book: bp_vm_only, IR error 3502; Verse VM twin :249 valid. OpenVerse: ran, true branch 1|false branch 1.
+join-generic-effects-decides-control	Tests/Function.versetest:217	ran	value 1	-	-	Control. Book: valid (untagged). OpenVerse: ran, value 1.
+join-generic-effects-transacts	Tests/Function.versetest:271	refused	-	-	-	Book: bp_vm_only, IR error 3502 x2; Verse VM twin :281 valid. OpenVerse: ran, true branch 1|false branch 1.
+join-generic-effects-transacts-control	Tests/Function.versetest:231	ran	value 1	-	-	Control. Book: valid (untagged). OpenVerse: ran, value 1.
+join-named-default-fn	Tests/DefaultNamed.versetest:629;Tests/DefaultNamed.versetest:640	refused	-	-	-	Book: bp_vm_only, IR error 3502 x2; Verse VM twins :653, :664, :678, :682 valid (F() = 2, F() = 4). OpenVerse: ran, true branch 2|false branch 4.
+join-named-default-fn-control	Tests/Bugs/FORT-744399-DefaultTupleFieldsCrashComplier.versetest:36	ran	value 2	-	-	Control. Book: valid (untagged). OpenVerse: ran, value 2.
+join-named-default-param	Tests/DefaultNamed.versetest:741;Tests/DefaultNamed.versetest:751	refused	-	-	-	Book: bp_vm_only, IR error 3502 x2; Verse VM twins :764, :768 valid (11, 12). OpenVerse: ran, true branch 11|false branch 12.
+join-named-default-param-control	-	-	-	-	-	Control (not a Book case). OpenVerse: ran, value 11.
+join-named-tuple	Tests/Tuple.versetest:456	refused	-	-	-	Book: bp_vm_only, IR error 3502 x2; Verse VM twin :466 valid (its assert, :473, calls Main[], not translatable). OpenVerse: ran, true branch hello|false branch hello.
+join-named-tuple-control	-	-	-	-	-	Control (not a Book case). OpenVerse: ran, value hello.
+live-await-block-sentinel	Tests/await.versetest:6	ran	admitted	-	-	Sentinel for the live-variables cause (verse_vm_only, valid). OpenVerse: refused (unknown struct 'await').
+live-upon-sentinel	Tests/upon.versetest:7	ran	admitted	-	-	Sentinel for the live-variables cause (verse_vm_only, valid). OpenVerse: refused (parse).
+live-when-sentinel	Tests/when.versetest:7	ran	admitted	-	-	Sentinel for the live-variables cause (verse_vm_only, valid). OpenVerse: refused (parse).
+long-ident-1025	Tests/Bugs/FORT-555217-VeryLongIdentifier.versetest:37	refused	-	-	-	Book: bp_vm_only, link error 3655 (three, one per long name). Run alone. OpenVerse: ran, field 42.
+long-ident-4096	Tests/Bugs/FORT-555217-VeryLongIdentifier.versetest:11	refused	-	-	-	Book: semantic error 3655 on both VMs (the case agrees in the survey for another reason). Run alone. OpenVerse: ran, field 42.
+long-ident-class-1024	Tests/Bugs/FORT-555217-VeryLongIdentifier.versetest:25	refused	-	-	-	Book: bp_vm_only, link error 9002. Run alone. OpenVerse: ran, field 42.
+long-ident-class-1024-control	Tests/Bugs/FORT-555217-VeryLongIdentifier.versetest:decls	ran	field 42	-	-	Control. Book: valid (untagged). Run alone. OpenVerse: ran, field 42.
+long-ident-mangled	Tests/Bugs/FORT-555217-VeryLongIdentifier.versetest:31	refused	-	-	-	Book: bp_vm_only, link error 3655. Run alone. OpenVerse: ran, field 42.
+overload-tuple-named-call	Tests/Bugs/FORT-744399-DefaultTupleFieldsCrashComplier.versetest:62	refused	-	-	-	Book: semantic error 3509 on both VMs. OpenVerse: ran, packed into the tuple.
+overload-tuple-named-call-control	Tests/Bugs/FORT-744399-DefaultTupleFieldsCrashComplier.versetest:55	ran	explicit tuple	-	-	Control. Book: valid (untagged). OpenVerse: ran, explicit tuple.
+parametric-interface-var	Tests/ParametricFunctions.versetest:496	refused	-	-	-	Book: semantic error 3502 on both VMs. OpenVerse: ran, defined.
+parametric-interface-var-control	-	-	-	-	-	Control (not a Book case). OpenVerse: ran, defined.
+parametric-method-value	Tests/Bugs/FORT-592189-MaybeCoerceToTypeCrash.versetest:4	refused	-	-	-	Book: bp_vm_only, IR error 3502; Verse VM twin :24 (assert :44) valid. OpenVerse: ran, callback called|after test.
+parametric-var-where-construct	Tests/ParametricFunctions.versetest:431	refused	-	-	-	Book: semantic error 3552 on both VMs. OpenVerse: ran, data 2.
+parametric-var-where-construct-control	-	-	-	-	-	Control (not a Book case) of both parametric-var-where probes. OpenVerse: ran, data 2.
+parametric-var-where-param	Tests/ParametricFunctions.versetest:438	refused	-	-	-	Book: semantic error 3552 on both VMs. Control: parametric-var-where-construct-control. OpenVerse: ran, called.
+spawn-in-transacts-computes	Tests/Effects.versetest:557	refused	-	-	-	Book: bp_vm_only, 3512; Verse VM twin :572 valid. OpenVerse: ran, started|after sleep.
+spawn-in-transacts-computes-control	Tests/Effects.versetest:556;Tests/Effects.versetest:571	ran	started|after sleep	-	-	Control. Book: valid on both VMs. OpenVerse: ran, started|after sleep.
+spawn-in-transacts-decides	Tests/SoftwareTransactionalMemory.versetest:505	refused	-	-	-	Book: bp_vm_only, 3512 x2; no Verse VM twin. OpenVerse: ran, spawned kept|call succeeded|before sleep|after sleep.
+spawn-in-transacts-decides-rollback	Tests/SoftwareTransactionalMemory.versetest:505	refused	-	-	-	Book: bp_vm_only, 3512 x2; no Verse VM twin. OpenVerse: ran, before sleep|after sleep (the spawn is undone with the failed condition).
+spawn-in-transacts-transacts	Tests/Effects.versetest:565	refused	-	-	-	Book: bp_vm_only, 3512; Verse VM twin :580 valid. OpenVerse: ran, spawned ran|started|after sleep.
