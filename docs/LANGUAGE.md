@@ -602,6 +602,79 @@ Main():void =
   See the [closure design and release evidence](research/closure-design.md)
   for the proposed capture/lifetime rules and implementation gates.
 
+### Function values Epic's compiler does not convert (#724)
+
+A function value used as a value of another function type needs a
+*wrapper* unless the conversion leaves the value as it is: a function that
+takes the other type's arguments, converts them, calls the value and
+converts its result. Epic's Verse compiler (UEFN 43.12,
+++Fortnite+Release-43.12-CL-60598086) makes one for a function or a method
+*named* where a function type is expected, for every conversion above
+(effects added, named parameters' defaults, tuples, a generic function's
+instance, variance), and for no other value: it refuses the others with
+error 3502, "Using a value of type A as a value of type B is not yet
+implemented". openverse needs no wrapper (a function value is an object of
+every function type it fits, `FnValues`), so it refuses, by the same error
+(`FnCoercion`; `--function-coercions` on `run`, `emit`, `check` and `core`,
+`Options.functionCoercions := true`, keeps its conversions), exactly these
+four forms:
+
+1. **A branch of an `if … else` that is a function of another type than the
+   `if`'s** (the expected type, else the branches' join), when its type
+   needs a wrapper to be the `if`'s (`checkJoinBranch`). A branch's type is
+   a named function's own (a generic one's at the instance the `if`'s type
+   gives, with its own effects and named parameters), a method's or a
+   field's as it is alone, any other value's. A function type A is one of
+   B as it is when they have the same effects and the same parameters,
+   positional and named, every named parameter B lets a caller omit has a
+   default in A, each of B's parameters is one of A's as it is and A's
+   result one of B's: the same type, `void` and `true`, a class or an
+   interface above (a reference), such a function type, or `int` and
+   `rational` (not yet asked of Epic, and the Book's `verse_vm_only`
+   `Rational.versetest` 127-140 joins them). Anything else is a wrapper:
+   other effects (`<computes>` at `<computes><decides>`, `<computes><decides>`
+   at `<transacts><decides>`), a named parameter dropped (`(?A:int = …)->int`
+   at `type{_():int}`), a tuple's or an array's parameter for two, `void` for
+   `int`, a result `int` at `comparable`. So `F:type{_():int} = if (C?) {F2}
+   else {F4}` is refused, with `F2(?A:int = 2)`, and `F:type{_():int} = F2`
+   is not; `if (C?) {F13} else {F14}` with `F13():c2` and `F14():c3` is
+   admitted, as is `F:type{_(?A:int):int} = if (C?) {F1} else {F2}`.
+2. **A generic function as a value with one of its type parameters inside a
+   function type of its own**, a parameter's (`One(F(:t)<transacts>:t, X:t
+   where t:type)`) or its result's, at an instance other than generic code's
+   own type parameters (`checkGenericValue`): `Plus(One, One, Succ, 0)` and
+   `F:type{_(:type{_(:int)<transacts>:int}, :int)<transacts>:int} = One` are
+   refused; `Identity(X:t):t` as a value, and `One(Succ, 0)`, are not.
+3. **A call of a generic function whose result has one of its type
+   parameters inside a function type** (`MakeClosure(…):(p_type->void)`),
+   at an instance other than a type parameter of the calling code, `any` or
+   `comparable` (the Book's `ParametricFunctions.versetest:546` passes a
+   `comparable` "so a function coercion isn't required"). A method's call is
+   not judged.
+4. **An override of a parametric class's or interface's method whose type
+   has one of that type's parameters inside a function type**
+   (`F(G(:t):void)` of `a(t)`), in a class that gives it another type
+   argument than one of its own type parameters, `any` or `comparable`
+   (`b := class(a(int))`): refused at the override, Epic's compiler calling
+   it through the declaration's type with `t` as `any`. `F(X:t)` is not.
+
+| Evidence (UEFN 43.12) | Refused, 3502 | Admitted |
+|---|---|---|
+| [`followup-book2`](../tests/conformance/versevm/followup-book2) | `join-named-default-fn`, `join-named-default-param`, `join-named-tuple` (the branch with the default only), `join-generic-effects-decides` (Identity's branch only), `join-generic-effects-transacts` (both), `generic-higher-order` (each argument), `parametric-method-value` (the call), `interface-fn-param-generic` (the override) | their controls: the same functions named at the types, `One(Succ, 0)`, `F(X:t)` overridden |
+| [`book`](../tests/conformance/versevm/book) | `book-join-void-param`, `book-join-void-result`, `book-join-fn-result`, `book-join-array-tuple-param`, `book-join-named-array-param`, `book-join-comparable-param` (openverse refused them already: no join of their types) | |
+| The Book of Verse's tests (both VMs) | | `FunctionTypes.versetest` 198-203 (classes), `DefaultNamed.versetest` 623, 731, 735 (defaults), `Void.versetest` 161-173 (`void` and `true`), `ParametricFunctions.versetest` 182, 192 (`Identity` passed) |
+
+The Book's `bp_vm_only` tests refuse these programs (`DefaultNamed` 629,
+640, 741, 751; `Tuple:456`; `Function` 238, 271; `ParametricFunctions:276`;
+`FORT-592189:4`; `SOL-5477:5`) and their `verse_vm_only` twins expect them
+to run: openverse takes UEFN 43.12's verdict, which is the Blueprint VM's.
+Not refused, as not yet asked of Epic, and each a probe of
+[`followup-coerce`](../tests/conformance/versevm/followup-coerce): such a
+conversion of a value that is no name outside an `if` (a parameter, a local,
+a field, a call's result), a `case`'s arms, `array{…}`, `option{…}` and
+tuples of functions, an `int` and a `rational` result joined, and the
+methods of a parametric class.
+
 ## Extension methods
 
 An extension method adds a method to a type without changing the type
@@ -4332,6 +4405,7 @@ Main()<suspends>:void =
 | `false` where a map is expected | prose: accepted (ch. 2); tests: refused (`Map.versetest` 343) | refused, as the tests (it equals an empty map) |
 | `X?` of a logic | "equivalent to comparing against true" (ch. 4); ch. 8: "succeeds with that value"; the tests: `true?` is the empty value (`BoolQuery.versetest` 3, 4, `LogicalAnd.versetest:29`, `Precedence.versetest:121`) | the tests' and **Epic's**: `X?` succeeds when `X` is `true`, with the empty value, `false`, so `true? = false` holds; both of Epic's VMs agree (UEFN 43.12 (`++Fortnite+Release-43.12-CL-60598086`), probes `book-query-*`) ([the rule](research/book-forms-rules.md#the-value-of-true)) |
 | `true` as a type | the type of the empty value, as `tuple()` (ch. 2); `void` and `true` interchange (`Void.versetest`); `Result:true = branch: …` refused, `Result:any = branch: …` valid (`FORT-582630-BranchResult.versetest`) | the Book's: `tuple()`; `void` and it interchange inside options, arrays and maps; a `branch:`'s value is an `any` ([the rule](research/book-forms-rules.md#true-as-a-type)); not yet in a function type (`int->true` and `int->void` are two types) |
+| A function joined with another of another type | `bp_vm_only`: refused, 3502 "not yet implemented" (`DefaultNamed` 629, 640, 741, 751, `Function` 238, 271, …); `verse_vm_only`: valid (their twins) | **Epic's UEFN 43.12**: refused, 3502, as the Blueprint VM's tests have it, where it needs a wrapper; `--function-coercions` keeps openverse's conversion ([the rule](#function-values-epics-compiler-does-not-convert-724)) |
 | Ordering of rationals | not stated (§2 lists `<` … for `int` and `float`) | exact (by continued fractions, so it cannot overflow), and an int compares with a rational |
 | Order of a choice's values | (not in the Book; the Verse Calculus: spatial) | spatial: the leftmost choice varies slowest, as nested generators do (#208) |
 | Code before a choice | (the Verse Calculus is pure) | runs once, also within an expression (the operands before the choice are evaluated first, as written); each alternative runs the code after the choice, from where the choice was reached; in an `if` or `first{}`, one that leads to no success is rolled back (as backtracking does); in a `for` too, one none of whose values reaches the body (the Book's rule for a `for`, above, a choice being one more choice point); a `for` that keeps the old rule for now rolls back only an alternative whose own clauses fail (#208): **the Book is silent** on choice |

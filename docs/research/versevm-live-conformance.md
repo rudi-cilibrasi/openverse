@@ -585,6 +585,57 @@ sibling-key, default-cycle, field-tuple, `branch`-in-a-loop and
 type-parameter forms of the `book/` probes (23). Left unasked: a generic
 function joined with another (`Castable.versetest:601`).
 
+### Function-value coercions (3502)
+
+UEFN 43.12 compiled the eight function-value probes of
+[`followup-book2`](../../tests/conformance/versevm/followup-book2) and their
+seven controls one at a time (2026-11-19; L is the diagnostic's 1-based
+body line). It refused every probe with error 3502 and admitted every
+control:
+
+| Probe | UEFN 43.12 | Control, admitted |
+| --- | --- | --- |
+| `join-named-default-fn` | L14, both branches: "Using a value of type (?A:int = ...)->int as a value of type tuple()->int is not yet implemented" (and ?B's) | `F:type{_():int} = F2` |
+| `join-named-default-param` | L16, both branches: "((?A:int)->int)->int as … (tuple(?A:int = ...,?B:int = ...)->int)->int" | `F1(F9)` |
+| `join-named-tuple` | L14, the branch with the default only: "tuple([]char,?Y:int = ...)->[]char as … []char->[]char" | the function at the type alone |
+| `join-generic-effects-decides` | L15, `Identity`'s branch only: "type{_(:int)<computes>:int} as … type{_(:int)<computes><decides>:int}" | `F:… = Identity` |
+| `join-generic-effects-transacts` | L15, both: "type{_(:int)<computes><decides>:int} as … type{_(:int)<transacts><decides>:int}", and `<transacts>` as `<transacts><decides>` | `F:… = TransactsIdentity` |
+| `generic-higher-order` | L18-21, each of the eight arguments: "type{_(:type{_(:t)<transacts>:t},:t where t)<transacts>:t} as … type{_(:type{_(:int)<transacts>:int},:int)<transacts>:int}" | `One(Succ, 0)` |
+| `parametric-method-value` | L27, the call's arguments: "type{_(:tuple(p_type,c_type)->void,:c_type where p_type,c_type):p_type->void} as … tuple(tuple(first_arg,second_arg)->void,second_arg)->(first_arg->void)" | (none) |
+| `interface-fn-param-generic` | L17, the override: "type{_(:int->void)<transacts>:void} as … type{_(:any->void)<transacts>:void}" | `F(X:t)` overridden |
+
+So Epic's compiler converts a function named where a function type is
+expected, whatever the conversion (the controls), and no other function
+value that the conversion changes: a branch of an `if`, even a branch that
+names a function; a generic function whose type parameter is inside a
+function type of its own; the function a generic function's call returns;
+an override called through a parametric interface's declaration, its type
+parameter as `any`. The branches that need no conversion are not reported
+(`ArrayToString`, `DecidesIdentity` at its own type), and the Book's tests
+show conversions that change nothing admitted in a join (classes,
+`FunctionTypes.versetest` 198-203; a default kept, `DefaultNamed.versetest`
+623). openverse refuses these four forms with the same error since #724
+([the rule](../LANGUAGE.md#function-values-epics-compiler-does-not-convert-724),
+`--function-coercions` keeps its conversions); the Book survey moves the ten
+cases to agree and their eleven `verse_vm_only` twins to refused
+([After function coercions](book-test-conformance.md#after-function-coercions)).
+
+[`followup-coerce`](../../tests/conformance/versevm/followup-coerce) asks
+where the rule's edges are, one construct per compile-only probe, each
+header and its `expectations.tsv` note giving openverse's verdict and what
+either answer changes: an effect added in a join without `<decides>`; a
+parameter's value (no name) converted outside a join (effects added,
+`<decides>` added, a default dropped, class variance, which openverse
+refuses); class results and parameters joined; a higher-order generic
+function bound to a local or passed to a function that is not generic;
+`Identity` passed to generic and other functions; methods as values, alone
+and joined; an overloaded function as a value; arrays, options and tuples
+of functions; a `case`'s arms; a generic result at `int` and at
+`comparable`, and a method of a parametric class returning a function;
+overrides of a parametric interface's method with `[]t`, a result `t->void`,
+in a class that passes its type parameter on, at `any`, and of a parametric
+class's method. Not yet compiled by Epic.
+
 ## Running many probes
 
 [`ovprobe.py`](../../tests/conformance/versevm/ovprobe.py) (Python 3

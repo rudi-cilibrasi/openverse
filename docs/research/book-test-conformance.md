@@ -2880,6 +2880,48 @@ Against the baseline of main `b640fa6d` (Epic's default effect the
 default): 8 cases better, 4 worse, none changed otherwise: 8,815 agree,
 606 refuse, 38 accept, 89 differ. The baseline records it.
 
+## After function coercions
+
+UEFN 43.12 refuses, with error 3502 ("not yet implemented"), the
+conversions of function values its compiler would need a wrapper for and
+makes none for: a branch of an `if` of another function type, a generic
+function with a type parameter inside a function type of its own as a
+value, the call of a generic function whose result has one, and an
+override through a parametric interface's declaration
+([versevm-live-conformance.md](versevm-live-conformance.md#function-value-coercions-3502)).
+openverse refuses them too since #724 ([the
+rule](../LANGUAGE.md#function-values-epics-compiler-does-not-convert-724);
+`--function-coercions` keeps its conversions). Against the baseline of
+`af036ef5` (8,829 agree, 645 refuse, 38 accept, 36 differ, 3,956 not
+translatable): 10 cases better, 11 worse, none changed otherwise: **8,828
+agree, 656 refuse, 28 accept, 36 differ, 3,956 not translatable**. The
+baseline records it.
+
+- Better, accepted to agree (the `bp_vm_only` cases of the epic-limits
+  cause): `DefaultNamed.versetest` 629, 640, 741, 751; `Tuple.versetest:456`;
+  `Function.versetest` 238, 271; `ParametricFunctions.versetest:276`;
+  `FORT-592189-MaybeCoerceToTypeCrash.versetest:4`;
+  `SOL-5477-CrashInGenClassDefinition.versetest:5`.
+- Worse, agree to refused (cause function-coercions): their `verse_vm_only`
+  twins, the same programs, which UEFN 43.12 refuses:
+  `DefaultNamed.versetest` 653, 664, 678, 682, 764, 768;
+  `Function.versetest` 249, 281; `ParametricFunctions.versetest:288`;
+  `FORT-592189…:44`; `SOL-5477…:21` (`Tuple.versetest:473`, the twin of 456,
+  is not translatable).
+- Still agreeing, by the rule's exemptions: the joins that need no wrapper
+  (`FunctionTypes.versetest` 200, 201, classes; `DefaultNamed.versetest`
+  623, 731, 735, a default kept; the `verse_vm_only` `Rational.versetest`
+  131, 132, 139, 140, `int` and `rational`, not yet asked of Epic), and
+  `Identity` passed as a value (`ParametricFunctions.versetest` 182).
+- Refused by the rule first, the verdict unchanged:
+  `ParametricFunctions.versetest` 263 and 269 (expected 3509, still
+  agreeing: `MakeIdentity(0)` returns `type{_(:t)<computes>:t}` at `int`,
+  and openverse reports that call before the argument `"0"`'s type), and
+  `:546` (refused before for another cause: openverse infers `F(1)`'s `t` as
+  `int`, where the Book's flow types widen it to `comparable`, which needs
+  no wrapper). The cause function-coercions counts 12: the 11 twins and
+  `:546`.
+
 ## Not covered, and why it matters
 
 - 1,264 cases need the runner's virtual packages and modules (`vpackage`,
