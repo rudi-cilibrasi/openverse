@@ -158,7 +158,9 @@ def checkTypeCaseCollisions (tops : List STop) : Except String Unit := do
     `maxFunctionNameLength`, `maxMethodNamesLength`, `maxClassNameLength`
     for a struct; a class's is `classHierarchy`'s, every identifier's past
     1024 the lexer's): measured on UEFN 43.12 for definitions without
-    parameters (followup-book3). -/
+    parameters (followup-book3). A function or method with parameters may
+    be refused shorter by Epic's compiler (followup-book4/long-ident-function-param,
+    -method-param): not modelled, a known difference. -/
 def checkNameLengths (tops : List STop) : Except String Unit := do
   let simple (n : String) : String := (qualParts n).getLastD n
   let tooLong (p : Pos) (what n : String) (limit : Nat) : Except String Unit :=
@@ -168,17 +170,18 @@ def checkNameLengths (tops : List STop) : Except String Unit := do
   let data (body : SExpr) : Except String Unit := do
     for (q, x) in body.definedNames do
       if !x.contains '$' then tooLong q "a local" x maxDataNameLength
-  let params (p : Pos) (ps : List SParam) : Except String Unit := do
+  -- (a parameter's name is not measured: UEFN 43.12 admits one of 1005
+  -- characters, followup-book4/long-ident-parameter-1005, so it has the
+  -- lexer's 1024; its default's locals are measured)
+  let params (ps : List SParam) : Except String Unit := do
     for prm in ps do
-      let x := bareName prm.name
-      if !x.contains '$' then tooLong p "a parameter" x maxDataNameLength
       if let some d := prm.default then data d
   for t in tops do
     match t with
     | .fn p n ps _ _ _ body =>
       let f := simple n
       if !n.startsWith "(" && !n.contains '$' then tooLong p "a function" f maxFunctionNameLength
-      params p ps
+      params ps
       data body
     | .const p n _ _ body =>
       if !n.contains '$' then
@@ -206,7 +209,7 @@ def checkNameLengths (tops : List STop) : Except String Unit := do
             | _ => mn
           if !isIface && !mname.startsWith "$" && (simple c).length + mname.length > maxMethodNamesLength then
             throw s!"{q.show}: the method {(mname.take 16).toString}… of {((simple c).take 16).toString}…: their names have {(simple c).length + mname.length} characters together, more than {maxMethodNamesLength}, the most Epic's compiler takes for a method's (UEFN 43.12, measured for methods without parameters, 983 + 1 and 6 + 981: error 3655, \"Identifier is too long\")"
-          params q ps
+          params ps
           data body
 
 /-- No definition takes the name of a definition of a scope around it

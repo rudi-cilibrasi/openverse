@@ -244,11 +244,17 @@ def maxClassNameLength : Nat := 1023
     the longest admitted; tests/conformance/versevm/followup-book3,
     expectations.tsv): these are for definitions without parameters, and
     parameters and the project's path may lower them in Epic's compiler,
-    which openverse does not model. -/
+    which openverse does not model (a function of 990 characters and a
+    method whose names make 977, each with one parameter, are refused,
+    followup-book4/long-ident-function-param, -method-param: a known
+    difference). -/
 
-/-- A field's, a local's (a constant in `Main`), a parameter's and a
-    module constant's name: a field of `holder` of 1004 characters is
-    admitted, of 1005 refused, and so is a local constant. -/
+/-- A field's, a local's (a constant in `Main`) and a module constant's
+    name: a field of `holder` of 1004 characters is admitted, of 1005
+    refused, and so is a local constant and a module constant
+    (followup-book4/long-ident-constant-1005). Not a parameter's: one of
+    1005 is admitted (followup-book4/long-ident-parameter-1005), and no
+    longer one was measured. -/
 def maxDataNameLength : Nat := 1004
 
 /-- A module function's name: `FunX…():int = 42` of 990 characters is

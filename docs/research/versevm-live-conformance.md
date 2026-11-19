@@ -649,7 +649,17 @@ at the top level (admitted); a generic parameter beside a named one
 parameter at the measured limits, a parameter and a module constant of
 1005 characters, an interface and an enum of 1023; mutable data through a
 struct's field (admitted), in an array type and a method's own type
-parameter (refused). Not yet compiled by Epic.
+parameter (refused). UEFN 43.12 compiled them on 2026-11-19 (~19:55Z,
+`compile-book4.json`): 13 as openverse had them, the six type collisions
+among them (9002, "Please rename the struct/interface/enumeration to be
+case insensitive unique"). It refused mutable data through a struct's
+field (3552) and admitted a parameter of 1005 characters, which openverse
+now follows; it refused a function of 990 characters and a method whose
+names make 977, each with one parameter (3655), which openverse admits, a
+known difference (a parameter lowers the limit, not modelled); and it
+refused `generic-param-named-pack` for its form (the default `0 where
+t:type` read as one expression: 3502, 3506), so that probe is rewritten,
+`F(X:t, ?E:int where t:type)`, not yet compiled.
 
 Of the 323 refusals of `verse_vm_only` cases, all but one are of forms
 UEFN 43.12 refuses too, or that the sentinels above ask: `union` (138: the

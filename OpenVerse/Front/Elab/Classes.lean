@@ -122,8 +122,8 @@ partial def mutableArgs (mutable : List (String × List (Nat × String))) (t : S
     applies a parametric class to an implicit type parameter of the
     function's own (one its `where` clause introduces) where the class's
     mutable data holds that class parameter: a `var` field whose type
-    mentions it, or a field, `var` or not, of a class whose mutable data
-    holds the argument written there. UEFN 43.12
+    mentions it, or a field, `var` or not, of a class or a struct whose
+    mutable data holds the argument written there. UEFN 43.12
     (++Fortnite+Release-43.12-CL-60598086) refuses
     `F(X:t where t:type):c(t)` and `F(X:c(t) where t:type):void` with
     `c(t) := class{var Data:t}`, error 3552, "An implicit type parameter
@@ -148,17 +148,23 @@ def checkImplicitMutable (tops : List STop) (cdefs : List CDef) : Except String 
         (i, s!"{cd.name}.{f.name}")
     if hits.isEmpty then none else some (cd.name, hits)
   if mutable.isEmpty then return
-  -- (and those whose fields hold such a class at one of their parameters)
-  for _ in [0:cdefs.length + 1] do
+  -- (and the classes and structs whose fields hold such a type at one of
+  -- their parameters: UEFN 43.12 refuses a struct's too, 3552,
+  -- followup-book4/parametric-var-struct-field)
+  let holders : List (String × List TParam × List SField) :=
+    cdefs.map (fun cd => (cd.name, cd.tps, cd.fields)) ++ tops.filterMap fun
+      | .const _ n _ none (.structDef _ tps _ fs) => some (n, tps, fs)
+      | _ => none
+  for _ in [0:holders.length + 1] do
     let mut grew := false
-    for cd in cdefs do
-      let known := (mutable.lookup cd.name).getD []
-      let found := cd.tps.zipIdx.filterMap fun (tp, i) =>
+    for (name, tps, fields) in holders do
+      let known := (mutable.lookup name).getD []
+      let found := tps.zipIdx.filterMap fun (tp, i) =>
         if known.any (·.1 == i) then none else
-        (cd.fields.filter (!·.name.startsWith "$")).findSome? fun f =>
+        (fields.filter (!·.name.startsWith "$")).findSome? fun f =>
           ((mutableArgs mutable f.ty).find? fun (a, _) => a.mentions tp.name).map fun (_, data) => (i, data)
       if !found.isEmpty then
-        mutable := (cd.name, known ++ found) :: mutable.filter (·.1 != cd.name)
+        mutable := (name, known ++ found) :: mutable.filter (·.1 != name)
         grew := true
     if !grew then break
   let check (p : Pos) (fname : String) (tps : List TParam) (ps : List SParam) (ret : STy) : Except String Unit := do

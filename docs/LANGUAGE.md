@@ -126,14 +126,18 @@ long" (`followup-book2/long-ident-*`; the Book's tests,
 toolchain derives from a definition's are longer, and their limit falls on
 the identifier at less, by the kind of definition. Measured on UEFN 43.12
 for definitions without parameters (Epic's bisection,
-`followup-book3/expectations.tsv`), and taken: a field's, a local's, a
-parameter's and a module constant's name has at most 1004 characters; a
-module function's at most 990; a class's and a struct's at most 1023 (9002,
-"Cannot find class", "Cannot find struct", at 1024); and a method's name
-and its class's together at most 987 (983 + 1, 6 + 981). In Epic's
-compiler, parameters and the project's path may lower these (a method
-`Function(Param:int)` in a class of 976 characters is refused, 3655, the
-Book's `:31`, though 984 is within 987); openverse does not model that.
+`followup-book3/expectations.tsv`), and taken: a field's, a local's and a
+module constant's name has at most 1004 characters; a module function's at
+most 990; a class's and a struct's at most 1023 (9002, "Cannot find
+class", "Cannot find struct", at 1024); and a method's name and its
+class's together at most 987 (983 + 1, 6 + 981). A parameter's name is not
+limited below 1024: Epic admits one of 1005, and no longer one was
+measured. In Epic's compiler, parameters and the project's path may lower
+the function and method limits, a known difference openverse does not
+model: it refuses a function of 990 characters with one parameter, a
+method `F(P:int)` in a class of 976 characters (977 together), and
+`Function(Param:int)` there (the Book's `:31`), all within the limits
+above (`followup-book4/long-ident-function-param`, `-method-param`).
 
 ### Reserved names
 
@@ -1173,8 +1177,8 @@ circle := class(shape, labelled):
   (#39): `stack(t)` can have `var` fields (but no generic function's type,
   its parameters' or result's, may apply one to an implicit type parameter
   of its own, a `where` clause's, that its mutable data holds: a `var` field
-  whose type mentions the class's parameter, or a field of a class whose
-  mutable data holds it, `F(X:t where t:type):c(t)` with
+  whose type mentions the class's parameter, or a field of a class or a
+  struct whose mutable data holds it (`followup-book4/parametric-var-struct-field`), `F(X:t where t:type):c(t)` with
   `c(t) := class{var Data:t}`, or `:holder(t)` with
   `holder(t) := class{Inner:c(t)}`: UEFN 43.12 refuses them, error 3552,
   "An implicit type parameter (`t`) used in the type of mutable data (`c.Data`)

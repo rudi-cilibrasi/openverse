@@ -2970,9 +2970,16 @@ UEFN 43.12 compiled on 2026-11-19: 13 as openverse had them, 9 not (two
 classes and an interface's methods of case-different names, an array
 beside a named parameter, mutable data through a class's field, the long
 names), which the rules above now follow, with Epic's bisection of the
-name lengths. Their own edges are compile-first probes in
-[`followup-book4/`](../../tests/conformance/versevm/followup-book4), not
-yet compiled by Epic.
+name lengths. Their own edges are
+[`followup-book4/`](../../tests/conformance/versevm/followup-book4)'s,
+which UEFN 43.12 compiled on 2026-11-19 (~19:55Z): 13 as openverse had
+them (the six type collisions refused, 9002); openverse now refuses mutable
+data through a struct's field (3552) and admits a parameter of 1005
+characters, as Epic does; a function and a method with a parameter at the
+measured limits, refused by Epic (3655), stay a known difference; and
+the generic parameter beside a named one, refused for its form (`0 where
+t:type` read as one expression), is rewritten and still open. No Book case
+moves with these.
 
 ## Not covered, and why it matters
 
