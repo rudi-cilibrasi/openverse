@@ -134,7 +134,7 @@ partial def mutableArgs (mutable : List (String × List (Nat × String))) (t : S
     it admits the class at `int` (-construct-control), `c(t)` in a body only
     (-where-local) and a `var` field that does not mention the parameter
     (-other-field). The Book's tests (ParametricFunctions.versetest 431,
-    438) refuse both, and admit a type passed as an argument,
+    438) refuse both, and accept a type passed as an argument,
     `F(t:type, X:t):c(t)`. A class's own type parameters are no method's
     implicit ones. -/
 def checkImplicitMutable (tops : List STop) (cdefs : List CDef) : Except String Unit := do
