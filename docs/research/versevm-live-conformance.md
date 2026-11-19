@@ -139,8 +139,8 @@ and what it rolls back. [event.Signal](https://dev.epicgames.com/documentation/f
 
 Every Epic result this page cites is also in two tables under
 [`tests/conformance/versevm/results/`](../../tests/conformance/versevm/results):
-`epic-43.12-compile.tsv` (215 compiler verdicts with their error codes and
-messages) and `epic-43.12-runs.tsv` (166 session records: the probe's lines
+`epic-43.12-compile.tsv` (364 compiler verdicts with their error codes and
+messages) and `epic-43.12-runs.tsv` (182 session records: the probe's lines
 on the Verse VM or the Blueprint VM, and the runtime error if any). They
 are extracts of the raw MCP records, with the project's identifiers
 replaced by `<project>`; the raw records are not in the repository.

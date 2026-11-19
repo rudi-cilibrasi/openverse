@@ -65,6 +65,7 @@ cancel-spawned-not-child	verse-vm	conc-vm	completed	winner done|arm cleanup|afte
 cancel-sync-arm-child	verse-vm	conc-vm	completed	winner done|branch cleanup|sync arm cleanup|loser cleanup|after race|after wait	-	-	2026-11-19T10:33:21Z
 cancel-twice	verse-vm	event-vm	completed	seen 1|cancelled twice|seen 1	-	-	2026-11-19T08:38:59Z
 cancel-two-children-order	verse-vm	conc-vm	completed	winner done|second cleanup|first cleanup|arm cleanup|after race|after wait	-	-	2026-11-19T10:33:21Z
+case-collision-module-fn-control	verse-vm	book2-vm	completed	lower 42|upper 420	-	-	2026-11-19T14:41:44Z
 compound-index-appended	verse-vm	follow-vm	completed	ok rows 1 row0 2	-	-	2026-11-19T00:02:09Z
 compound-indexed-control	blueprint-vm	all-bpvm	completed	rolled back 3|index calls 1|value 0 rows 1 row0 2	-	-	2026-11-18T19:26:46Z
 compound-indexed-control	verse-vm	704-vm	completed	rolled back 3|index calls 1|value 5 rows 1 row0 1	-	-	2026-11-18T18:57:00Z
@@ -105,7 +106,10 @@ div-const-operator	verse-vm	misc-vm	completed	half 1	-	-	2026-11-19T08:47:55Z
 div-local-const-call	verse-vm	misc-vm	completed	limit 3	-	-	2026-11-19T08:47:55Z
 end-grandchild-order	verse-vm	conc-vm	completed	runner ending|runner cleanup|grandchild cleanup|child cleanup|after wait	-	-	2026-11-19T10:33:21Z
 end-two-children-order	verse-vm	conc-vm	completed	runner ending|runner cleanup|second cleanup|first cleanup|after wait	-	-	2026-11-19T10:33:21Z
+enum-wide-control	verse-vm	book2-vm	completed	e0FF compared	-	-	2026-11-19T14:41:44Z
 event-unit-subscribe	verse-vm	event-vm	completed	ping|after first|after second	-	-	2026-11-19T08:38:59Z
+final-method-interface-control	verse-vm	book2-vm	completed	methods 2 1	-	-	2026-11-19T14:41:44Z
+generic-higher-order-control	verse-vm	book2-vm	completed	one 1|two 2	-	-	2026-11-19T14:41:44Z
 int-abs-big	verse-vm	int-vm	completed	before abs|abs 2^63 + 1	-	-	2026-11-19T09:09:29Z
 int-array-equal-big	verse-vm	int-vm	completed	before arrays|arrays equal|arrays differ	-	-	2026-11-19T09:09:29Z
 int-compound-mul	verse-vm	int-vm	completed	squared|minus one	-	-	2026-11-19T03:39:36Z
@@ -132,8 +136,19 @@ int-sgn-big	verse-vm	int-vm	completed	before sgn|sgn -1	-	-	2026-11-19T09:16:31Z
 int-tostring-direct	verse-vm	int-vm	runtime-error	in range	ErrRuntime_GeneratedNativeInternal: An internal runtime error occurred in (generated) native code that was called from Verse. There is no other information available. (Value exceeds the range of a 64 bit integer.)	ToString(:int)	2026-11-19T07:31:42Z
 int-tuple-equal-big	verse-vm	int-vm	completed	before tuples|tuples equal|tuples differ	-	-	2026-11-19T09:16:31Z
 int-where-natural-big	verse-vm	int-vm	completed	natural cast succeeded|negative cast failed	-	-	2026-11-19T07:24:56Z
+interface-fn-param-generic-control	verse-vm	book2-vm	completed	called	-	-	2026-11-19T14:41:44Z
+interface-var-field	verse-vm	book2-vm	completed	defined	-	-	2026-11-19T14:41:44Z
+join-generic-effects-decides-control	verse-vm	book2-vm	completed	value 1	-	-	2026-11-19T14:41:44Z
+join-generic-effects-transacts-control	verse-vm	book2-vm	completed	value 1	-	-	2026-11-19T14:41:44Z
 join-interface-only	verse-vm	follow-vm	completed	length 2	-	-	2026-11-19T00:02:09Z
+join-named-default-fn-control	verse-vm	book2-vm	completed	value 2	-	-	2026-11-19T14:41:44Z
+join-named-default-param-control	verse-vm	book2-vm	completed	value 11	-	-	2026-11-19T14:41:44Z
+join-named-tuple-control	verse-vm	book2-vm	completed	value hello	-	-	2026-11-19T14:41:44Z
+long-ident-class-1024-control	verse-vm	book2-single	completed	field 42	-	-	2026-11-19T14:46:38Z
 nested-signal-in-handler	verse-vm	event-vm	completed	in 1|in 2|in 3|out 3|out 2|out 1|after	-	-	2026-11-19T08:38:59Z
+overload-tuple-named-call-control	verse-vm	book2-vm	completed	explicit tuple	-	-	2026-11-19T14:41:44Z
+parametric-interface-var-control	verse-vm	book2-vm	completed	defined	-	-	2026-11-19T14:41:44Z
+parametric-var-where-construct-control	verse-vm	book2-vm	completed	data 2	-	-	2026-11-19T14:41:44Z
 print-decides-call	verse-vm	print-vm	completed	(Rolling Back) checking 3|checking 7|seven passed|after	-	-	2026-11-19T08:43:39Z
 print-for-filter	verse-vm	print-vm	completed	filter 1|body 1|(Rolling Back) filter 2|filter 3|body 3|(Rolling Back) filter 4|after	-	-	2026-11-19T08:43:39Z
 print-in-condition	verse-vm	follow-vm	completed	(Rolling Back) printed in condition|after	-	-	2026-11-19T00:02:09Z
@@ -155,6 +170,7 @@ signal-interface-control	verse-vm	15-vm	completed	after	-	-	2026-11-18T17:00:46Z
 signal-subscribe-control	verse-vm	follow-vm	completed	after success 2	-	-	2026-11-19T00:02:09Z
 sleep-negative-yields	verse-vm	conc-vm	completed	worker before sleep|worker after sleep|main after spawn|main after wait	-	-	2026-11-19T08:34:24Z
 sleep-zero-next-update	verse-vm	conc-vm	completed	b after short sleep|a after three zero sleeps|main after wait	-	-	2026-11-19T08:34:24Z
+spawn-in-transacts-computes-control	verse-vm	book2-vm	completed	started|after sleep	-	-	2026-11-19T14:41:44Z
 subscribe-during-signal	verse-vm	event-vm	completed	first 1|first 2|added 2|after	-	-	2026-11-19T08:38:59Z
 subscribe-from-awaiter	verse-vm	event-vm	completed	awaiter 1|late 1|after signal 1|late 2|after signal 2	-	-	2026-11-19T08:38:59Z
 subscribe-in-transacts	verse-vm	follow-vm	completed	seen 4	-	-	2026-11-19T00:02:09Z
