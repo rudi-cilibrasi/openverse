@@ -132,6 +132,17 @@ def classHierarchy (tops : List STop) (constructionFx : Std.HashMap String (List
       some { pos := p, name := n, tps, specs, parents := names, parentArgs := args, isIface,
              fields, methods, accessors }
     | _ => none
+  -- (#724: a class's name has at most 1023 characters, as the Blueprint
+  -- VM's names do: UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, refuses
+  -- a class of 1024 with error 9002, "Cannot find class",
+  -- followup-book2/long-ident-class-1024, and runs one of 960, the Book's
+  -- valid one, long-ident-class-1024-control; an identifier past 1024 is
+  -- the lexer's to refuse. Interfaces and structs are not measured.)
+  for cd in cdefs do
+    if !cd.isIface && !cd.name.startsWith "$" then
+      let simple := (qualParts cd.name).getLastD cd.name
+      if simple.length > maxClassNameLength then
+        throw s!"{cd.pos.show}: the class name {(simple.take 24).toString}… has {simple.length} characters, more than {maxClassNameLength} (Epic's Verse compiler, UEFN 43.12: error 9002, \"Cannot find class\")"
   -- the hierarchy
   let mut cinfo : Array (String × ClassInfo) := #[]
   for cd in cdefs do

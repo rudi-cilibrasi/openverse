@@ -223,6 +223,16 @@ partial def skipSpace : LexM Unit := do
 
 def isIdStart (c : Char) : Bool := c.isAlpha || c == '_'
 def isIdChar (c : Char) : Bool := c.isAlphanum || c == '_'
+
+/-- (#724) The longest identifier Epic's compiler takes (UEFN 43.12: 3655
+    "Identifier is too long" past it). -/
+def maxIdentifierLength : Nat := 1024
+
+/-- (#724) The longest class name Epic's toolchain takes: the Blueprint
+    VM's names hold 1023 characters, and UEFN 43.12 refuses a class of 1024
+    with error 9002, "Cannot find class" (followup-book2/long-ident-class-1024;
+    one of 960 is admitted and runs). -/
+def maxClassNameLength : Nat := 1023
 def isHex (c : Char) : Bool := c.isDigit || ('a' ≤ c ∧ c ≤ 'f') || ('A' ≤ c ∧ c ≤ 'F')
 
 def escapeChar : Char → Option Char
@@ -389,6 +399,13 @@ partial def lexAll (acc : Array Token) : LexM (Array Token) := do
   | some c =>
     if isIdStart c then
       let id ← readWhile isIdChar ""
+      -- (#724: an identifier has at most 1024 characters. UEFN 43.12,
+      -- ++Fortnite+Release-43.12-CL-60598086, refuses one of 1025 and one of
+      -- 4096 at each occurrence, error 3655, followup-book2/long-ident-1025
+      -- and -4096, and passes one of 1024 on, long-ident-class-1024; the
+      -- Book's tests, Bugs/FORT-555217-VeryLongIdentifier.versetest)
+      if id.length > maxIdentifierLength then
+        errHere s!"this identifier has {id.length} characters, more than {maxIdentifierLength} (Epic's Verse compiler, UEFN 43.12: error 3655, \"Identifier is too long\")"
       lexAll (← emit (.ident id))
     else if c.isDigit then
       if c == '0' && (← peekC 1) == some 'x' then

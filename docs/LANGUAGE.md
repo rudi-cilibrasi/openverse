@@ -119,6 +119,17 @@ lines are exempt. Indented blocks are those after `:` (and a function's
 brackets, or a braced block that starts on the line of its `{`, are checked
 against the enclosing indented block.
 
+An identifier has at most 1024 characters, and a class's name at most
+1023 (#724): UEFN 43.12 refuses one of 1025 and one of 4096 characters at
+each occurrence, error 3655, "Identifier is too long", and a class of 1024
+characters with 9002, "Cannot find class"; it runs the Book's class of 960
+characters with a field of 992 (`followup-book2/long-ident-*`; the Book's
+tests, `Bugs/FORT-555217-VeryLongIdentifier.versetest`). It also refuses a
+method whose own name is short in a class of 976 characters (3655, the
+Book's `:31`: "the mangled function name will be too large"); openverse does
+not, since that limit counts names of Epic's toolchain (the project's path
+among them) that a program does not fix.
+
 ### Reserved names
 
 No definition, at any scope (a module's or a class's member, a function's

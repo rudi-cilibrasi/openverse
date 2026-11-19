@@ -2909,6 +2909,13 @@ openverse takes Epic's compiler's refusals, one commit each (#724):
   from accepted to agree; its valid cases (other parameters, `<suspends>`
   beside a function that is not) still agree. The edges the evidence
   leaves open are probes (`followup-book3/case-collision-*`).
+- **Long names** (3655, "Identifier is too long"; 9002, "Cannot find
+  class"): an identifier has at most 1024 characters, a class's name 1023.
+  `Bugs/FORT-555217-VeryLongIdentifier.versetest` 25 and 37 move to agree;
+  `:31`, a method whose mangled name is too long in a class of 976
+  characters, stays accepted: Epic's limit counts names of its toolchain
+  (the project's path among them) that a program does not fix, and
+  `followup-book3/long-ident-*` asks its edges.
 
 ## Not covered, and why it matters
 
