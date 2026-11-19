@@ -5,15 +5,25 @@
 cell := class:
     var Arr:[]int = array{1, 2}
 
+SetElement(C:cell)<transacts>:int =
+    if (set C.Arr[1] = 50) then 1 else 1
+
+Append(C:cell)<transacts>:int =
+    set C.Arr += array{7}
+    1
+
+SetOther(Other:cell)<transacts>:int =
+    set Other.Arr = array{8, 9}
+    1
+
 Main()<transacts>:void =
     C := cell{}
-    if (set C.Arr[1] += if (set C.Arr[1] = 50; 0 = 0) then 1 else 1, A := C.Arr[0], B := C.Arr[1]):
+    if (set C.Arr[1] += SetElement(C), A := C.Arr[0], B := C.Arr[1]):
         Print("OVPROBE element {A} {B}")
     set C.Arr = array{1, 2}
-    if (set C.Arr[1] += if (set C.Arr += array{7}; 0 = 0) then 1 else 1, A := C.Arr[0], B := C.Arr[1], E := C.Arr[2]):
+    if (set C.Arr[1] += Append(C), A := C.Arr[0], B := C.Arr[1], E := C.Arr[2]):
         Print("OVPROBE append {A} {B} {E}")
     set C.Arr = array{1, 2}
     Other := cell{}
-    if (set C.Arr[1] += if (set Other.Arr = array{8, 9}; 0 = 0) then 1 else 1,
-            A := C.Arr[0], B := C.Arr[1], X := Other.Arr[0], Y := Other.Arr[1]):
+    if (set C.Arr[1] += SetOther(Other), A := C.Arr[0], B := C.Arr[1], X := Other.Arr[0], Y := Other.Arr[1]):
         Print("OVPROBE other object {A} {B} {X} {Y}")
