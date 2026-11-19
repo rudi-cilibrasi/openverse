@@ -153,7 +153,8 @@ diagnostics, from the front end the Verse VM target shares with the BPVM.
 | `compound-indexed-write`, `compound-whole-write`, `int-overflow` | Admitted. |
 
 The rewritten `signal-bound-control`, `signal-subscribe` and
-`signal-subscribe-control` have not been run on Epic yet. OpenVerse makes
+`signal-subscribe-control` were compiled and run later, with the
+[follow-up probes](#follow-up-probes): they now test what they intend. OpenVerse makes
 the 3512 refusals its default (#515): see [OpenVerse
 observations](#openverse-observations).
 
@@ -213,23 +214,46 @@ bytecode (the compound probes' outputs are in their headers and in
 ## Follow-up probes
 
 [`followup/`](../../tests/conformance/versevm/followup) holds bodies, in the
-same wrapper, for what the 43.12 results leave open: whether a plain
-`<decides>` function has `no_rollback` (`decides-plain-if`,
-`decides-body-default-call`), whether a `<transacts>` function is a value
-of a `<transacts><decides>` type (`transacts-into-decides-type`) and a
-function without specifiers one of a function type without them
-(`default-into-default-type`), whether a `for`'s range and filter are
-failure contexts for `no_rollback` (`for-range-default-call`,
-`for-filter-default-call`), constructors and module constants without
-specifiers (`constructor-default-in-if`, `constant-default-call`), the
-effects of `Await`, `Subscribe` and `Print` (`await-in-transacts`,
-`subscribe-in-transacts`, `print-in-condition`), `Signal` in a
-`<transacts>` method and a class's `block:` (`signal-transacts-method`,
-`signal-class-block`), an `<abstract>` class below a `<concrete>` one
-(`concrete-abstract-child`), joins outside array literals
-(`join-if-common-base-interface`, `join-if-expected-interface`, `join-interface-only`), `int[X]` of an
-`any` (`int-cast-variants`) and which event type has `Subscribe`
-(`subscribable-event-control`).
+same wrapper, for what the first 43.12 results left open. UEFN 43.12
+(the same build) compiled them, with the three rewritten signal probes,
+through BuildAll on 2026-11-18 (about 23:58Z), and ran the eight it admitted
+in one Verse VM session (`newVerseVm=true`) on 2026-11-19 (00:02Z). L is the
+diagnostic's 0-based body line. OpenVerse's column is this branch's default,
+Lean and C agreeing wherever a program ran.
+
+| Probe | UEFN 43.12 | OpenVerse |
+| --- | --- | --- |
+| `await-in-transacts` | 3512 L1: `(/Verse.org/Verse/event:)Await` has `no_rollback` | refused, `event.Await` has `no_rollback` |
+| `concrete-abstract-child` | 3632 L3 "`concrete` classes must not be `abstract`"; 3519 for `B` | refused, 3632's reason |
+| `constant-default-call` | 3582 L2 "Divergent calls (calls that might not complete) cannot be used to define data-members" | refused: the constant calls a function that writes |
+| `constructor-default-in-if` | 3512 L7: `MakeThing` has `no_rollback` | refused, the same |
+| `decides-body-default-call` | admitted; prints `compiled` | `compiled` |
+| `decides-plain-if` | 3512 L4: `Positive` has `no_rollback` | refused, the same |
+| `default-into-default-type` | admitted; `result 1` | `result 1` |
+| `for-filter-default-call`, `for-range-default-call` | 3512 L3 (`Value`, `Limit`) | refused, the same |
+| `int-cast-variants` | 3509 L5 "Dynamic cast to `int` takes an int as its parameter, instead got any" | refused, the same reason |
+| `join-if-common-base-interface`, `join-if-expected-interface` | 3510 L6: the body's value is an `any`, not a `super_class` / `named` | refused, the same reason |
+| `join-interface-only` | admitted; `length 2` | `length 2` |
+| `print-in-condition` | admitted; `printed in condition`, `after` | `after`: openverse rolls the `Print` back with the failed condition. **Differs**: the Verse VM keeps output across rollback |
+| `signal-class-block`, `signal-transacts-method` | 3512 L3, L4: `Signal` has `no_rollback` | refused, the same |
+| `subscribable-event-control` | 3506 L7 "Unknown identifier `subscribable_event`" | `after success 2`: `subscribable_event` is an openverse extension |
+| `subscribe-in-transacts` | admitted; `seen 4` | refused: openverse's `event` has no `Subscribe`. **Differs** |
+| `transacts-into-decides-type` | admitted; `result 1` | `result 1` |
+| `signal-bound-control` (rewritten) | admitted; `after` | `after` |
+| `signal-subscribe` (rewritten) | 3512 L10 at its condition's `Signal`, nothing else | refused: no `Subscribe` on `event` |
+| `signal-subscribe-control` (rewritten) | admitted; `after success 2` | refused: no `Subscribe` on `event`. **Differs** |
+
+What they settle, now openverse's rules: a plain `<decides>` function has
+`no_rollback`, and its body's top may call one that has it, while a failure
+context inside it may not; a `for`'s range and filter are failure contexts;
+constructors without specifiers have `no_rollback`; an event's `Await` has
+it, `Print` and `Subscribe` do not; a `<transacts>` function is a value of a
+`<transacts><decides>` type; an `if`'s branches of two classes with two
+nearest common supertypes are an `any`, whatever is expected; a class below
+a `<concrete>` one cannot be `<abstract>`; `int[X]` of an `any` is refused.
+Two differences remain: `Print`'s rollback (openverse's output is
+transactional in Core and in the C runtime) and `Subscribe` on `event`
+(openverse has it on `subscribable_event` only).
 
 ## Running many probes
 

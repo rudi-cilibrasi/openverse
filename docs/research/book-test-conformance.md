@@ -59,7 +59,7 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
 
 ## Where things stand
 
-With [the UEFN 43.12 probes](#after-the-uefn-4312-probes), merged with [compound places](#after-compound-places) (#704): **8,806 agree, 603 refuse, 46 accept, 93 differ, 3,956 not translatable** of 13,504 cases (a fresh full comparison, the baseline regenerated). Before both, on main `617c89f1`: 8,801 agreed, 600 refused, 55 accepted and 92 differed; compound places alone gave 8,802 agreed and 91 differed; with [tuple and array concatenation](#after-tuple-and-array-concatenation) on `cf0ced0e` (#630), 8,799 agreed and 602 were refused, the count the refusals' table below still has. This is the one table of what is left; the sections below are the history, each written when its work landed, and the four maps ([the first map](#the-remaining-causes-a-map), [classes](#classes-and-subtyping-the-map), [forms](#forms-of-expressions-statements-and-the-library-a-map), [the forms still on the list](#the-forms-still-on-the-list-a-map)) hold the case-by-case reading each row points to.
+With [the UEFN 43.12 probes](#after-the-uefn-4312-probes), merged with [compound places](#after-compound-places) (#704), with Epic's default effect the default: **8,811 agree, 602 refuse, 42 accept, 93 differ, 3,956 not translatable** of 13,504 cases (a fresh full comparison, the baseline regenerated; before the default effect, 8,806, 603, 46, 93). Before both, on main `617c89f1`: 8,801 agreed, 600 refused, 55 accepted and 92 differed; compound places alone gave 8,802 agreed and 91 differed; with [tuple and array concatenation](#after-tuple-and-array-concatenation) on `cf0ced0e` (#630), 8,799 agreed and 602 were refused, the count the refusals' table below still has. This is the one table of what is left; the sections below are the history, each written when its work landed, and the four maps ([the first map](#the-remaining-causes-a-map), [classes](#classes-and-subtyping-the-map), [forms](#forms-of-expressions-statements-and-the-library-a-map), [the forms still on the list](#the-forms-still-on-the-list-a-map)) hold the case-by-case reading each row points to.
 
 **Accepted where the tests refuse (55)**
 
@@ -2810,12 +2810,13 @@ rules (#515):
   agree; `:219` and `:222` now differ instead of being refused, by the
   64-bit overflow.
 
-Epic's default effect, `no_rollback` on a function without a heap
-specifier, is measured but not the default: under `--default-no-rollback`
-(`booktests.py --compiler-option`) `Effects.versetest:490, 551, 552`,
-`FunctionTypes.versetest:191` and `SoftwareTransactionalMemory.versetest:505`
-agree and `FunctionTypes.versetest:decls` regresses
-([the default effect](effect-conformance.md#the-default-effect-515---default-no-rollback)).
+- Epic's default effect, `no_rollback` on a function without a heap
+  specifier, is the default since the follow-up probes settled `<decides>`
+  and `for` clauses ([the default effect](effect-conformance.md#the-default-effect-515)):
+  `Effects.versetest:490, 551, 552` and `FunctionTypes.versetest:191`
+  agree, and `Function.versetest:83`, once refused through a call of a
+  `<decides>` function type no function value implements, which cannot
+  fail no more; none is worse.
 
 ## Not covered, and why it matters
 

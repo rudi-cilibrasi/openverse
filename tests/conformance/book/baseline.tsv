@@ -3875,7 +3875,7 @@ Tests/Effects.versetest:465	agrees
 Tests/Effects.versetest:473	agrees
 Tests/Effects.versetest:480	agrees
 Tests/Effects.versetest:489	agrees
-Tests/Effects.versetest:490	disagrees-accepts
+Tests/Effects.versetest:490	agrees
 Tests/Effects.versetest:491	agrees
 Tests/Effects.versetest:492	agrees
 Tests/Effects.versetest:493	agrees
@@ -3922,8 +3922,8 @@ Tests/Effects.versetest:547	agrees
 Tests/Effects.versetest:548	agrees
 Tests/Effects.versetest:549	agrees
 Tests/Effects.versetest:550	agrees
-Tests/Effects.versetest:551	disagrees-accepts
-Tests/Effects.versetest:552	disagrees-accepts
+Tests/Effects.versetest:551	agrees
+Tests/Effects.versetest:552	agrees
 Tests/Effects.versetest:556	agrees
 Tests/Effects.versetest:557	disagrees-accepts
 Tests/Effects.versetest:558	agrees
@@ -4792,7 +4792,7 @@ Tests/Function.versetest:75	agrees
 Tests/Function.versetest:76	agrees
 Tests/Function.versetest:79	agrees
 Tests/Function.versetest:82	agrees
-Tests/Function.versetest:83	disagrees-refuses
+Tests/Function.versetest:83	agrees
 Tests/Function.versetest:86	agrees
 Tests/Function.versetest:99	not-translatable
 Tests/Function.versetest:106	agrees
@@ -4902,7 +4902,7 @@ Tests/FunctionTypes.versetest:172	agrees
 Tests/FunctionTypes.versetest:188	agrees
 Tests/FunctionTypes.versetest:189	agrees
 Tests/FunctionTypes.versetest:190	agrees
-Tests/FunctionTypes.versetest:191	disagrees-accepts
+Tests/FunctionTypes.versetest:191	agrees
 Tests/FunctionTypes.versetest:200	agrees
 Tests/FunctionTypes.versetest:201	agrees
 Tests/FunctionTypes.versetest:204	agrees
