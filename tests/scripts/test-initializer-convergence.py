@@ -129,7 +129,7 @@ with tempfile.TemporaryDirectory(prefix='openverse-initializer-') as directory:
     dependency.write_text('Helper()<computes>:int=42\nc:=class{N:int=Helper()}\n')
     source.write_text('using{"Dependency.verse"}\nMain():void={}\n')
     result = invoke([OV, 'check', source])
-    require(result.returncode == 4 and 'requires convergence' in result.stderr and
+    require(result.returncode == 4 and 'calls Helper, which might not complete' in result.stderr and
             'Dependency.verse' in result.stderr, 'unused import', result.stderr)
 
     for seed in range(FIRST, FIRST+COUNT):
@@ -137,21 +137,24 @@ with tempfile.TemporaryDirectory(prefix='openverse-initializer-') as directory:
         control, control_want = model(seed, True)
         require(want == control_want, f'model {seed} oracle identity')
         for profile in [[], ['--no-choice']]:
-            # Value's default can fail, which the Book refuses (ch. 13 and its
-            # tests, Effects.versetest:537) before convergence is asked.
+            # Empty's default, before Value's, calls a function of the
+            # program's: a data member's definition may not (UEFN 43.12,
+            # error 3582, #724), which is checked as each default is
+            # elaborated, before Value's can fail (the Book refuses that too,
+            # ch. 13 and its tests, Effects.versetest:537).
             source.write_text(text)
             result = invoke([OV, 'check', source, *profile])
             require(result.returncode == 4 and not result.stdout and
-                    "default of field 'Value'" in result.stderr and 'can fail' in result.stderr,
-                    f'model {seed} failing default', result.stderr)
+                    "default of field 'Empty'" in result.stderr and 'calls Make, which might not complete' in result.stderr,
+                    f'model {seed} divergent default', result.stderr)
             # With its failure caught in the default, the defaults' calls are
-            # past the convergence boundary.
+            # still refused.
             caught = re.sub(r'Value:int=Get\[(-?[0-9]+)\]', r'Value:int=if(V:=Get[\1])then V else 0', text)
             require(caught != text, f'model {seed} caught default')
             source.write_text(caught)
             result = invoke([OV, 'check', source, *profile])
             require(result.returncode == 4 and not result.stdout and
-                    'requires convergence' in result.stderr, f'model {seed} boundary', result.stderr)
+                    'which might not complete' in result.stderr, f'model {seed} boundary', result.stderr)
             runtime(text, ['--extended-defaults', *profile], want, f'model {seed} extension')
             runtime(control, profile, want, f'model {seed} explicit control')
 

@@ -981,6 +981,9 @@ partial def elabMethod (ctx : Ctx) (p : Pos) (r : R) (m : String) (args : List S
     EM R := do
   -- (the methods of chars, code points, ints and floats)
   if let some res ← scalarMethod? p r m args bracket then return res
+  -- (#724) an array's methods are the library's, none `<converges>` (the
+  -- char conversions above are): none in a data member (3582)
+  noteDivergentCall ctx p s!"the array method {m}"
   -- (a tuple of one element type is an array of its elements where an array
   -- is expected, as its receiver is: `('a', 'b').Slice[1]`)
   let r ← match r.ty with
@@ -1129,8 +1132,11 @@ partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bra
       -- are passed by name, #503)
       let k := sh.positional
       let shape : Sig := { idx := 0, name := n, params := ts.take k, ret := .void, decides := false, isConst := false }
+      -- (#724) a function value's call might not complete: openverse has no
+      -- `<converges>` function types (#494), so none in a data member (3582)
+      noteDivergentCall ctx p s!"a value of type {r.ty.show}"
       -- (#515, `--default-no-rollback`) a value of a type with no_rollback
-      checkNoRollbackCall ctx p { shape with noRollback := sh.noRollback } s!"a value of type {r.ty.show}"
+      checkNoRollbackCall ctx p { shape with noRollback := sh.noRollback, sourceCall := true } s!"a value of type {r.ty.show}"
       let args := packCallArgs p shape args false
       let names := args.filterMap fun | .decl _ x .. => if x.startsWith "?" then some (x.drop 1).toString else none | _ => none
       if let some x := names.find? (!sh.named.contains ·) then

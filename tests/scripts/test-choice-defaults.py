@@ -296,8 +296,11 @@ def projection_program(seed):
     x = r.choice(['7', '"s"', 'array{1,2}', 'option{7}', '(7,"s")'])
     y = r.choice(['2', '"key"', "(2,'k')"])
     n, depth, default = r.randint(2, 6), r.randint(1, 4), r.randint(10, 20)
-    fields = ['E:[]a=Concatenate()', 'O:?a=false', 'M:[b]a=map{}',
-              'T:tuple(?a,[]b)=(false,Concatenate())', 'W:leaf(a)=leaf{}',
+    # (empty arrays as literals: a data member calls no Concatenate, which
+    # is not <converges>, UEFN 43.12 error 3582, #724; N's default is the
+    # computed one)
+    fields = ['E:[]a=array{}', 'O:?a=false', 'M:[b]a=map{}',
+              'T:tuple(?a,[]b)=(false,array{})', 'W:leaf(a)=leaf{}',
               'V:a', 'K:b', f'N:int={default}+0']
     r.shuffle(fields)
     suffix = r.choice(['N', 'E.Length', 'M.Length', 'T(1).Length', 'W.E.Length'])
@@ -310,7 +313,7 @@ def projection_program(seed):
     failure = f'\n        if(V={stop})then Fail[] else 0' if fail else ''
     specs = '<decides>' if fail else ''
     source = f'''# struct projection model seed {seed}
-leaf(t:type) := struct<computes> {{ E:[]t=Concatenate() }}
+leaf(t:type) := struct<computes> {{ E:[]t=array{{}} }}
 pack(a:type,b:subtype(comparable)) := struct<computes>:
 ''' + ''.join('    ' + field + '\n' for field in fields) + f'''
 One(X:a,Y:b,N:int where a:type,b:subtype(comparable))<computes>:int = pack(a,b){{{scalar_fields}}}.{suffix}

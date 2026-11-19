@@ -321,6 +321,31 @@ use, so it could not hold a mutable object, but it could write).
 constant whose initializer has the effect `<writes>`, saying what has it.
 `<reads>` is left allowed, as the tests pin only writes.
 
+**UEFN 43.12 (#724).** Epic's compiler reads 3582 as a rule about calls:
+"Divergent calls (calls that might not complete) cannot be used to define
+data-members". It refuses a constant that calls a function without
+specifiers, a `<computes>` one, a constructor function, a `<computes>`
+method or `Min`, and a field's default that calls a function without
+specifiers or a `<computes>` one; it admits operators, `Floor` of a
+rational and `or` in a constant, and calls in a local constant or in an
+archetype inside a function; a `<converges>` function of the program's is
+3565, "only allowed on native functions"
+([the probes](versevm-live-conformance.md#data-members-3582)). So no
+function, method or constructor a program writes may be called there, and
+of the built-ins only those the Runtime API reference declares
+`<converges>`. openverse now refuses each such call in a constant or a
+field's default as the definition is elaborated, before the writes check
+above, which still refuses a construction of a `<transacts>` class (3512
+in UEFN 43.12) and a `set` ([the
+rule](../LANGUAGE.md#data-members-call-only-converging-functions));
+`--extended-defaults` keeps only the writes check for constants. The Book's
+four cases above are still refused, now as calls, and no case of the
+survey changes its verdict (13,504 cases, 8,811 agreeing, before and
+after); thirteen are refused with this reason instead of another, among
+them `Effects.versetest` 367 and 375, `DefaultValueAssignment.versetest`
+207, 235 and 295, and `Overloading.versetest:258` (a field's default that
+calls the program's `operator'+'`).
+
 ## A loop that nothing leaves
 
 **The rule.** A `loop` of a function that cannot suspend has a way out: a

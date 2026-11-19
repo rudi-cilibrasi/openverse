@@ -276,7 +276,17 @@ partial def elabExprInitialWith
       | .text s => pure (Expr.lit (Value.ofString s))
       | .code (.app p (.ident _ "$interpolationArgs") args false) => do
         elabToStringWith elabE ctx p (← elabE ctx (.app p (.ident p "ToString") args false) none)
-      | .code e => do elabToStringWith elabE ctx e.pos (← elabE ctx e none)
+      | .code e => do
+        let r ← elabE ctx e none
+        -- (#724) a value that is not a string is interpolated by a call of
+        -- its `ToString`, which is not `<converges>`: none in a data member
+        -- (3582). A character written as a literal, `{0u004d}`, is the
+        -- character itself (the Book's tests interpolate them in constants,
+        -- Localization.versetest:34, SOL-3734-UnicodeCausesCompilerErrors)
+        let literal := match e with | .char .. | .char32 .. => true | _ => false
+        if !literal && (widenR ctx.types r).ty != Ty.string then
+          noteDivergentCall ctx e.pos s!"ToString (to interpolate {withArticle r.ty.show})"
+        elabToStringWith elabE ctx e.pos r
     let _ := p
     match pieces with
     | [] => return ⟨.lit (Value.ofString ""), Ty.string⟩

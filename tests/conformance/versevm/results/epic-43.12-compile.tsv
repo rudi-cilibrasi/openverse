@@ -1,0 +1,218 @@
+# Epic's compiler verdicts, one probe compiled alone per build (VerseToolset.BuildAll), UEFN 43.12 ++Fortnite+Release-43.12-CL-60598086, 2026-11-18 and 2026-11-19 (#724).
+# set: the batch of probes it was compiled with (a probe rewritten and compiled again has a row per set).
+probe	set	verdict	error_codes	error_messages	warning_codes
+await-and-subscribe	event	admitted	-	-	-
+await-from-subscriber	event2	admitted	-	-	-
+await-in-transacts	followup	refused	3512	This invocation calls a function (`(/Verse.org/Verse/event:)Await`) that has the 'no_rollback' effect, which is not allowed by its context.	-
+book-branch-in-loop	book	refused	3552	'branch' is not currently supported in loops.	-
+book-closed-function-type	book	refused	3547	Expected a type, got function identifier instead.	-
+book-concrete-inherited	book	refused	3519	Data member `valueChild` of class `child` must have an initializer. (Reason: inherited class 'base' is `concrete`)	-
+book-concrete-inherited-control	book	admitted	-	-	-
+book-default-cycle	book	refused	9000	Linker task graph contains a cycle:	-
+book-default-effect-from-transacts	book	refused	3512	This invocation calls a function (`(/<project>:)F`) that has the 'no_rollback' effect, which is not allowed by its context.	-
+book-default-effect-in-class-block	book	refused	3512	This invocation calls a function (`(/<project>:)F`) that has the 'no_rollback' effect, which is not allowed by its context.	-
+book-function-subtype-decides	book	refused	3509	This function parameter expects a value of type type{_()<transacts><decides>:int}, but this argument is an incompatible value of type tuple()->int.	-
+book-global-block-call-var	book	admitted	-	-	-
+book-global-block-cond-var	book	admitted	-	-	-
+book-global-block-cond-var-control	book	admitted	-	-	-
+book-global-block-fn-var	book	admitted	-	-	-
+book-global-block-var	book	admitted	-	-	-
+book-int-abs-min	book	admitted	-	-	-
+book-int-bitwise-pow63	book	admitted	-	-	-
+book-int-cast-int	book	admitted	-	-	-
+book-int-compound-add	book	admitted	-	-	-
+book-int-floor-div-min	book	admitted	-	-	-
+book-int-interpolate-pow63	book	admitted	-	-	-
+book-int-mul-overflow	book	admitted	-	-	-
+book-int-negate-min	book	admitted	-	-	-
+book-int-pow64-module-const	book	refused	9003	Runtime error while evaluating module.	-
+book-int-shift-63	book	refused	3506,3506	Unknown identifier `BitShiftLeft`. ; Unknown identifier `BitShiftRight`.	-
+book-int-sub-below-min	book	admitted	-	-	-
+book-int-where-i64	book	admitted	-	-	-
+book-join-array-tuple-param	book	refused	3502	Using a value of type []int->void as a value of type tuple(int,int)->void is not yet implemented.	-
+book-join-common-base-interface	book	refused	3509	This function parameter expects a value of type []super_class, but this argument is an incompatible value of type []any.	-
+book-join-common-base-interface-control	book	admitted	-	-	-
+book-join-comparable-param	book	refused	3502	Using a value of type comparable->void as a value of type comparable_class->void is not yet implemented.	-
+book-join-fn-result	book	refused	3502,3502	Using a value of type tuple()->int as a value of type tuple()->comparable is not yet implemented. ; Using a value of type tuple()->float as a value of type tuple()->comparable is not yet implemented.	-
+book-join-named-array-param	book	refused	3502,3502,3502,3502	Using a value of type ([]int->int)->int as a value of type (any->int)->int is not yet implemented. ; Using a value of type (tuple(int,?X:int)->int)->int as a value of type (any->int)->int is not yet implemented. ; Using a value of type ([]int->int)->int as a value of type (any->int)->int is not yet implemented. ; Using a value of type (tuple(int,?X:int)->int)->int as a value of type (any->int)->int is not yet implemented.	-
+book-join-void-param	book	refused	3502,3502	Using a value of type void->int as a value of type int->int is not yet implemented. ; Using a value of type void->int as a value of type int->int is not yet implemented.	-
+book-join-void-result	book	refused	3502,3502,3502,3502	Using a value of type int->void as a value of type int->comparable is not yet implemented. ; Using a value of type int->int as a value of type int->comparable is not yet implemented. ; Using a value of type int->void as a value of type int->comparable is not yet implemented. ; Using a value of type int->int as a value of type int->comparable is not yet implemented.	-
+book-live-set	book	refused	3506	Unknown identifier `live`.	-
+book-map-sibling-key	book	refused	3509	No overload of the function `operator'()'` matches the provided arguments (:ref [key_a]entry,:key_b). Could be any of:	-
+book-nested-function	book	refused	3502	Functions declared at this scope are not supported.	-
+book-parametric-fn-field-tuple	book	refused	3512,3512	This invocation calls a function that has the 'no_rollback' effect, which is not allowed by its context. ; This invocation calls a function that has the 'no_rollback' effect, which is not allowed by its context.	-
+book-query-and-value	book	admitted	-	-	-
+book-query-or-value	book	admitted	-	-	-
+book-query-true-equals-false	book	admitted	-	-	-
+book-spawn-block	book	refused	3508	Too many arguments. `spawn` will ignore everything except the first argument.	-
+book-spawn-nonsuspending-call	book	refused	3512	This invocation calls a function (`(/<project>:)Produce`) that has the 'suspends' effect, which is not allowed by its context.	-
+book-spawn-suspending-arg	book	refused	3512	This invocation calls a function (`(/<project>:)Make`) that has the 'suspends' effect, which is not allowed by its context.	-
+book-typeparam-as-value	book	refused	9001,9001	Type variables introduced by `where` cannot yet be used as values. ; Type variables introduced by `where` cannot yet be used as values.	-
+book-union-equality	book	refused	3506,3506,3506	Unknown identifier `union`. ; Unknown identifier `u1`. ; Unknown identifier `u1`.	-
+branch-at-entry-top-level	conc	admitted	-	-	-
+branch-cancel-order	conc	admitted	-	-	-
+branch-end-before-awaiter	conc	admitted	-	-	-
+branch-in-branch	conc	admitted	-	-	-
+branch-in-defer	conc	refused	3512	This 'branch' macro has the 'suspends' effect, which is not allowed by its context.	-
+branch-in-race-winner	conc	admitted	-	-	-
+branch-in-spawned-helper	conc	admitted	-	-	-
+branch-in-sync-arm	conc	admitted	-	-	-
+cancel-branch-before-nested-sync	conc3	admitted	-	-	-
+cancel-branch-before-race-arms	conc3	admitted	-	-	-
+cancel-branch-before-sync-arms	conc2	admitted	-	-	-
+cancel-branch-in-and-before-sync-arm	conc3	admitted	-	-	-
+cancel-during-signal	event	admitted	-	-	-
+cancel-from-awaiter	event2	admitted	-	-	-
+cancel-grandchild-order	conc2	admitted	-	-	-
+cancel-rollback	event	admitted	-	-	-
+cancel-rush-child	conc2	admitted	-	-	-
+cancel-spawned-not-child	conc2	admitted	-	-	-
+cancel-sync-arm-child	conc2	admitted	-	-	-
+cancel-task-child	conc2	refused	3593	Invalid access of epic_internal function `(/Verse.org/Concurrency/task:)Cancel` from control scope `/<project>/Main`.	-
+cancel-twice	event	admitted	-	-	-
+cancel-two-children-order	conc2	admitted	-	-	-
+compound-index-appended	704b	admitted	-	-	-
+compound-indexed-control	704	admitted	-	-	-
+compound-indexed-write	15	admitted	-	-	-
+compound-map-replaced	704	admitted	-	-	-
+compound-module-entry	704b	refused	3100	vErr:S88: Expected expression, got "else" in indented block	-
+compound-module-entry	704c	admitted	-	-	-
+compound-nested-root	704	admitted	-	-	-
+compound-nested-row	704	admitted	-	-	-
+compound-object-alias	704b	admitted	-	-	-
+compound-object-call	704b	admitted	-	-	-
+compound-object-field-array	704	admitted	-	-	-
+compound-object-generic	704b	admitted	-	-	-
+compound-object-in-place	704b	refused	3506,3506,3506,3506	Unknown identifier `A`. ; Unknown identifier `B`. ; Unknown identifier `X`. ; Unknown identifier `Y`.	-
+compound-object-in-place	704c	admitted	-	-	-
+compound-object-nested	704b	admitted	-	-	-
+compound-object-replaced	704	admitted	-	-	-
+compound-object-task	704b	admitted	-	-	-
+compound-operators	704	admitted	-	-	-
+compound-plain-append	704b	admitted	-	-	-
+compound-replaced-length	704	admitted	-	-	-
+compound-root-append	704	admitted	-	-	-
+compound-struct-replaced	704	admitted	-	-	-
+compound-whole-write	15	admitted	-	-	-
+concrete-abstract-child	followup	refused	3632,3519	`concrete` classes must not be `abstract. `concrete` class child is `abstract`. ; Data member `B` of class `child` must have an initializer. (Reason: inherited class 'base' is `concrete`)	-
+constant-default-call	followup	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
+constructor-default-in-if	followup	refused	3512	This invocation calls a function (`(/<project>:)MakeThing`) that has the 'no_rollback' effect, which is not allowed by its context.	-
+decides-body-default-call	followup	admitted	-	-	-
+decides-plain-if	followup	refused	3512	This invocation calls a function (`(/<project>:)Positive`) that has the 'no_rollback' effect, which is not allowed by its context.	-
+default-into-default-type	followup	admitted	-	-	-
+div-archetype-call	3582	admitted	-	-	-
+div-const-abs	3582b	admitted	-	-	-
+div-const-array-concat	3582b	admitted	-	-	-
+div-const-array-index	3582b	admitted	-	-	-
+div-const-array-length	3582b	admitted	-	-	-
+div-const-bitand	3582b	admitted	-	-	-
+div-const-computes-archetype	3582b	admitted	-	-	-
+div-const-constructor	3582	refused	3512	This archetype instantiation constructs a class that has the 'transacts' effect, which is not allowed by its context.	-
+div-const-constructor-fn	3582	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
+div-const-converges	3582	refused	3565	The 'converges' effect is only allowed on native functions.	-
+div-const-enum	3582b	admitted	-	-	-
+div-const-floor-float	3582b	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
+div-const-interpolation	3582b	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
+div-const-intrinsic	3582	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
+div-const-map	3582b	admitted	-	-	-
+div-const-method	3582	refused	3582,3512	Divergent calls (calls that might not complete) cannot be used to define data-members. ; This archetype instantiation constructs a class that has the 'transacts' effect, which is not allowed by its context.	-
+div-const-min	3582b	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
+div-const-operator	3582	admitted	-	-	-
+div-const-option	3582b	admitted	-	-	-
+div-const-quotient	3582b	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
+div-const-sqrt	3582b	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
+div-const-struct-archetype	3582b	refused	3512	This archetype instantiation constructs a class that has the 'transacts' effect, which is not allowed by its context.	-
+div-const-tostring	3582b	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
+div-const-tuple	3582b	admitted	-	-	-
+div-field-default-call	3582	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
+div-field-default-computes	3582	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
+div-field-default-converges	3582	refused	3565	The 'converges' effect is only allowed on native functions.	-
+div-field-default-min	3582b	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
+div-field-default-reads-other	3582b	admitted	-	-	-
+div-field-default-reads-own-field	3582b	refused	3502	Only <final> fields may be referenced from the default value of a data member, and `A` is not <final>.	-
+div-local-const-call	3582	admitted	-	-	-
+div-module-var-call	3582b	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
+end-grandchild-order	conc2	admitted	-	-	-
+end-two-children-order	conc2	admitted	-	-	-
+event-unit-subscribe	event	admitted	-	-	-
+for-filter-default-call	followup	refused	3512	This invocation calls a function (`(/<project>:)Value`) that has the 'no_rollback' effect, which is not allowed by its context.	-
+for-range-default-call	followup	refused	3512	This invocation calls a function (`(/<project>:)Limit`) that has the 'no_rollback' effect, which is not allowed by its context.	-
+int-abs-big	int2	admitted	-	-	-
+int-array-equal-big	int2	admitted	-	-	-
+int-cast-variants	followup	refused	3509	Dynamic cast to `int` takes an int as its parameter, instead got any	-
+int-compound-mul	int	admitted	-	-	-
+int-div-zero-big	int	admitted	-	-	-
+int-euclid-big	int	admitted	-	-	-
+int-float-floor-big	int	admitted	-	-	-
+int-float-inf	int	admitted	-	-	-
+int-float-tie	int	admitted	-	-	-
+int-floor-div-zero-big	int2	admitted	-	-	-
+int-index-big	int	admitted	-	-	-
+int-intrinsics-big	int	admitted	-	-	-
+int-length-max	int	admitted	-	-	-
+int-length-over	int	admitted	-	-	-
+int-length-steps	int2	admitted	-	-	-
+int-length-steps	steps	admitted	-	-	-
+int-literal-big	int	refused	3555	Integer literal must be in the range -9223372036854775808 to 9223372036854775807.	-
+int-map-key-big	int	admitted	-	-	-
+int-mod-big	int2	admitted	-	-	-
+int-mod-zero-big	int2	admitted	-	-	-
+int-module-const-back	int	refused	9003	Runtime error while evaluating module.	-
+int-module-const-back-control	int	admitted	-	-	-
+int-module-const-call	int	refused	3582	Divergent calls (calls that might not complete) cannot be used to define data-members.	-
+int-overflow	15	admitted	-	-	-
+int-range-big	int	admitted	-	-	-
+int-rational-big	int	admitted	-	-	-
+int-sgn-big	int2	admitted	-	-	-
+int-tostring-direct	int	admitted	-	-	-
+int-tuple-equal-big	int2	admitted	-	-	-
+int-where-natural-big	int	admitted	-	-	-
+join-if-common-base-interface	followup	refused	3510	This function returns a value of type super_class, but the function body's result is an incompatible value of type any.	-
+join-if-expected-interface	followup	refused	3510	This function returns a value of type named, but the function body's result is an incompatible value of type any.	-
+join-interface-only	followup	admitted	-	-	-
+link-constant-own-var	conc	refused	3512,3582,3582,3512	This mutable data definition has the 'allocates' effect, which is not allowed by its context. ; Expressions with side effects cannot be used when defining data-members. ; Divergent calls (calls that might not complete) cannot be used to define data-members. ; This mutable data read has the 'reads' effect, which is not allowed by its context.	-
+nested-signal-in-handler	event	admitted	-	-	-
+print-decides-call	print	admitted	-	-	-
+print-for-filter	print	admitted	-	-	-
+print-in-condition	followup	admitted	-	-	-
+print-interpolation-effect	print	admitted	-	-	-
+print-multiline-in-condition	print	admitted	-	-	-
+print-nested-contexts	print	admitted	-	-	-
+print-not	print	admitted	-	-	-
+print-option	print	admitted	-	-	-
+print-or-left	print	admitted	-	-	-
+print-passing-condition	print	admitted	-	-	-
+print-var-control	print	admitted	-	-	-
+rush-loser-outlives-return	conc	admitted	-	-	-
+same-handler-twice	event	admitted	-	-	-
+signal-alias	15	refused	3512	This invocation calls a function (`(/Verse.org/Verse/event:)Signal`) that has the 'no_rollback' effect, which is not allowed by its context.	-
+signal-await	15	refused	3512	This invocation calls a function (`(/Verse.org/Verse/event:)Signal`) that has the 'no_rollback' effect, which is not allowed by its context.	-
+signal-bound	15	refused	3512	This invocation calls a function that has the 'no_rollback' effect, which is not allowed by its context.	-
+signal-bound-control	15	refused	3502	Coercing the function Signal from package Verse/Verse to type int->void in package <project> is unsupported. Consider writing a wrapper function in package <project>.	-
+signal-bound-control	followup	admitted	-	-	-
+signal-class-block	followup	refused	3512	This invocation calls a function (`(/Verse.org/Verse/event:)Signal`) that has the 'no_rollback' effect, which is not allowed by its context.	-
+signal-control	15	admitted	-	-	-
+signal-direct	15	refused	3512	This invocation calls a function (`(/Verse.org/Verse/event:)Signal`) that has the 'no_rollback' effect, which is not allowed by its context.	-
+signal-generic	15	refused	3512	This invocation calls a function (`(/Verse.org/Verse/event:)Signal`) that has the 'no_rollback' effect, which is not allowed by its context.	-
+signal-generic-control	15	refused	3512	This invocation calls a function (`(/Verse.org/Verse/event:)Signal`) that has the 'no_rollback' effect, which is not allowed by its context.	-
+signal-interface	15	refused	3512	This invocation calls a function (`(/Verse.org/Verse/signalable:)Signal`) that has the 'no_rollback' effect, which is not allowed by its context.	-
+signal-interface-control	15	admitted	-	-	-
+signal-subscribe	15	refused	3588,3512	Ambiguous identifier; could be (/<project>/counter:)Last, (/Verse.org/Verse:)operator'.Last', or (/Verse.org/Verse:)operator'.Last' ; This invocation calls a function (`(/Verse.org/Verse/event:)Signal`) that has the 'no_rollback' effect, which is not allowed by its context.	-
+signal-subscribe	followup	refused	3512	This invocation calls a function (`(/Verse.org/Verse/event:)Signal`) that has the 'no_rollback' effect, which is not allowed by its context.	-
+signal-subscribe-control	15	refused	3588	Ambiguous identifier; could be (/<project>/counter:)Last, (/Verse.org/Verse:)operator'.Last', or (/Verse.org/Verse:)operator'.Last'	-
+signal-subscribe-control	followup	admitted	-	-	-
+signal-transacts-method	followup	refused	3512	This invocation calls a function (`(/Verse.org/Verse/event:)Signal`) that has the 'no_rollback' effect, which is not allowed by its context.	-
+sleep-negative-yields	conc	admitted	-	-	-
+sleep-zero-next-update	conc	admitted	-	-	-
+sticky-event-subscribe	event	refused	3506	Unknown identifier `sticky_event`.	-
+subscribable-event-control	followup	refused	3506	Unknown identifier `subscribable_event`.	-
+subscribe-during-signal	event	admitted	-	-	-
+subscribe-from-awaiter	event	admitted	-	-	-
+subscribe-in-transacts	followup	admitted	-	-	-
+subscribe-order	event	admitted	-	-	-
+subscribe-rollback	event	admitted	-	-	-
+transacts-into-decides-type	followup	admitted	-	-	-
+vm-branch-await-after-return	book	admitted	-	-	-
+vm-branch-outlives-return	book	admitted	-	-	-
+vm-map-struct-option-key	book	admitted	-	-	2017
+vm-sleep-zero-yields	book	admitted	-	-	-

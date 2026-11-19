@@ -321,6 +321,10 @@ partial def elabFunctionCall (cb : AppElab) (ctx : Ctx) (p : Pos) (f : SExpr) (n
     if s.isConst then
       elabValueApp cb ctx p f ⟨.call s.idx [], s.ret⟩ args bracket
     else
+      -- (#724) the program's own function, method or constructor might not
+      -- complete: none in a data member's definition (3582)
+      if s.sourceCall then
+        noteDivergentCall ctx p ((FinalSuper.calledBy? name).getD (Choice.shownFnName name))
       let args := packCallArgs p s args
       if s.decides && !bracket then eerr p s!"{name} is <decides>: call it with {name}[…]"
       -- the call syntax marks failure (Book of Verse §8.1)
@@ -1054,6 +1058,8 @@ partial def elabMethodCall (cb : AppElab) (ctx : Ctx) (p mp : Pos) (obj : SExpr)
     eerr p "spawn{…} takes a call of a <suspends> function (#156)"
   if ms.decides && !bracket then eerr p s!"{m} is <decides>: call it with {m}[…]"
   if !ms.decides && bracket then eerr p s!"{m} cannot fail: call it with {m}(…)"
+  -- (#724) a method of the program's might not complete (3582)
+  if ms.sourceCall then noteDivergentCall ctx p s!"{owner}.{m}"
   checkNoRollbackCall ctx p ms s!"{owner}.{m}"
   if ms.named.isEmpty && args.length + 1 != ms.params.length then
     eerr p s!"{m} takes {ms.params.length - 1} argument(s), found {args.length}"
@@ -1153,6 +1159,8 @@ partial def elabAppBaseWith (cb : AppElab) (ctx : Ctx) (p : Pos) (f : SExpr) (ar
       return ← elabOverloadedCall cb ctx p name ovs args bracket exp
     let (builtin, name) := builtinCalled ctx name
     if let some b := builtinFunctions.find? (·.name == builtin) then
+      -- (#724) a built-in that is not `<converges>` (3582 in a data member)
+      if !builtinConverges builtin then noteDivergentCall ctx p builtin
       return ← b.elaborate { elabE := cb.elabE, elabArgs := cb.elabArgs, elabInts := cb.elabInts,
                              ctx, p, name, arity := b.arity, args, bracket, exp }
     elabFunctionCall cb ctx p f name args bracket exp

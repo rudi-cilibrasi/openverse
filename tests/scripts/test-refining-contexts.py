@@ -40,12 +40,14 @@ with tempfile.TemporaryDirectory(prefix='openverse-refining-contexts-') as direc
             if oracle is not None and oracle != want:
                 raise SystemExit(f'{label}: source/control oracle differs at seed {seed}')
             oracle = want
-            # gadt_contexts' field for/lazy cases call ordinary Sum/Lazy
-            # helpers. Their existing extension remains explicit. And every
+            # gadt_contexts' field cases call Concatenate and Id, and their
+            # for/lazy ones ordinary Sum/Lazy helpers, in a field's default,
+            # which a data member may not (#511; UEFN 43.12 error 3582,
+            # #724). Their extension remains explicit. And every
             # program of gadt_waiting_contexts has a parameter's default that
             # waits (#283), which the Book refuses (DefaultNamed.versetest:844).
             extended = (model == 'gadt_waiting_contexts.py' or
-                        model == 'gadt_contexts.py' and seed % 9 == 1 and (seed // 9) % 4 >= 2)
+                        model == 'gadt_contexts.py' and seed % 9 == 1)
             flags = ['--extended-defaults'] if extended else []
             lean = invoke([compiler, 'run', source, *flags, '--emit', bytecode])
             bad = f'exit={lean.returncode}\n' + lean.stdout != want or bool(lean.stderr)

@@ -2,6 +2,7 @@
    declarations retain OpenVerse.Front names. -/
 import OpenVerse.Front.Elab.Classes
 import OpenVerse.Front.BuiltinValues
+import OpenVerse.Front.InitializerConvergence
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -121,6 +122,7 @@ def declareSignatures (env : TyEnv) (tops : List STop) (requests : Requests) :
       sigs := sigs.push { idx, name := n, params := tys, ret := rt, decides := effs.contains "decides",
                           suspends := effs.contains "suspends",
                           noRollback := effs.contains SignalAdmission.noRollbackMarker,
+                          sourceCall := effs.contains InitializerConvergence.sourceCallMarker,
                           -- (a `block:`'s effects are inferred below, from none, as a
                           -- constant's: blocks that construct each other's classes)
                           fx := if n.endsWith ".$block" || defaultBridge n || (n.splitOn "$default$").length > 1 then [] else allowedFx effs,
@@ -206,6 +208,7 @@ def declareSignatures (env : TyEnv) (tops : List STop) (requests : Requests) :
                             decides := effs.contains "decides", isConst := false,
                             suspends := effs.contains "suspends",
                             noRollback := effs.contains SignalAdmission.noRollbackMarker,
+                            sourceCall := effs.contains InitializerConvergence.sourceCallMarker,
                             -- (a parametric class's `block:`: inferred from none, #41)
                             fx := if n.endsWith ".$block" || defaultBridge n then [] else allowedFx effs,
                             tparams, bounds := resolved.bounds, selfBounds,
