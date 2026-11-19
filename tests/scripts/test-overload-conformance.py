@@ -63,7 +63,12 @@ def main():
             expected = case['expected'] if gap else suite_oracle(path)
             bytecode = Path(directory) / (case['id'] + '.vbc')
             try:
-                result = run([OV, 'run', path, '--emit', bytecode])
+                # (the suite's options, NAME.args lines that start with --:
+                # --function-coercions, #724)
+                options = path.with_suffix('.args')
+                flags = [line for line in options.read_text().splitlines()
+                         if line.startswith('--')] if options.exists() else []
+                result = run([OV, 'run', path, '--emit', bytecode, *flags])
                 compatible = matches(result, expected)
                 # Compilation errors must precede bytecode emission.
                 if result.returncode == 4 and bytecode.exists():
