@@ -663,7 +663,7 @@ if kind.startswith('callpacking-'):
         print(cls+':=class{'+fields+'}')
     clauses=[f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))' for i in range(n)];calls=[]
     for i in range(n):
-        args='PairValue' if shape in ['tuplevar','tuple-generic','callable'] else '(array{},false,7)' if shape=='literal-generic' else '1,2' if shape in ['arraypack','tuplepack','named','callable-array','mixedpack'] else '(1,2)' if shape=='mixedliteral' else '7' if shape in ['singleton','mixedsingle'] else ''
+        args='PairValue' if shape in ['tuplevar','tuple-generic','callable'] else '(array{},false,7)' if shape=='literal-generic' else '1,2' if shape in ['arraypack','tuplepack','callable-array','mixedpack'] else '(1,2)' if shape in ['mixedliteral','named'] else '7' if shape in ['singleton','mixedsingle'] else ''
         calls.append(f'A{i}.'+('F' if shape.startswith('callable') else 'M')+'('+args+')')
     params='V:t where t:type' if shape=='tuple-generic' else ''
     print('Run('+params+')'+('<suspends>' if mode=='waiting' else '')+':int=')
