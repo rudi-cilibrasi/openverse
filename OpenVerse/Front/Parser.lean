@@ -1465,6 +1465,12 @@ partial def parseEnumBody (p : Pos) : PM SExpr := do
       if a.isSym "," || a.isSym ";" then bump; continue
       names := names.push (← value)
   else perr o "expected ':' or '{' after enum"
+  -- (#724: at most 256 values, each a byte. UEFN 43.12,
+  -- ++Fortnite+Release-43.12-CL-60598086, refuses the 257th, error 3552,
+  -- followup-book2/enum-wide, and admits 256, enum-wide-control; the
+  -- Book's Blueprint VM test, Enum.versetest:171)
+  if h : 256 < names.size then
+    throw s!"{p.show}: this enum has {names.size} values, and its 257th, {names[256]}, is out of byte range: an enum has at most 256 values (Epic's Verse compiler, UEFN 43.12: error 3552, \"Enumerator value … is out of byte-range which is not yet supported\")"
   return .enumDef p names.toList seen
 
 partial def parseInterp (parts : List StrPart) : PM (List SPart) := do

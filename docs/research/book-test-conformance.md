@@ -2916,6 +2916,10 @@ openverse takes Epic's compiler's refusals, one commit each (#724):
   characters, stays accepted: Epic's limit counts names of its toolchain
   (the project's path among them) that a program does not fix, and
   `followup-book3/long-ident-*` asks its edges.
+- **Enums of at most 256 values** (3552, "out of byte-range").
+  `Enum.versetest:171` (`bp_vm_only`) moves to agree; its Verse VM twin,
+  `:233`, from agree to refused: Epic's shipped compiler refuses what the
+  Book's Verse VM admits.
 
 ## Not covered, and why it matters
 
