@@ -819,13 +819,14 @@ As built: a cancelled task's scope is made due as its cancel starts
 were cancelled, before that site's defers, at whatever call depth the
 task waits, or as its cancel ends (`$unwindPop`).
 
-**Extrapolated, and asked of Epic** (`cancel-branch-before-race-arms`,
-`cancel-branch-in-and-before-sync-arm`, `cancel-branch-before-nested-sync`):
-a `race`'s arms are cancelled as a `sync`'s; a branch started in an arm is
-that arm's child, stopped before the arm's defer and so before the
-cancelled task's own branch; the arms one call deeper still go before the
-task's branch, and the branch before the defers of the function that holds
-the arms.
+A third round (the same build and day) confirmed what openverse printed
+for the cases this left open: a `race`'s arms are cancelled as a `sync`'s
+(`cancel-branch-before-race-arms`); a branch started in an arm is that
+arm's child, stopped before the arm's defer and so before the cancelled
+task's own branch (`cancel-branch-in-and-before-sync-arm`); the arms one
+call deeper still go before the task's branch, and the branch before the
+defers of the function that holds the arms
+(`cancel-branch-before-nested-sync`).
 
 ### A task's end resumes its awaiters
 

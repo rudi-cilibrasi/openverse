@@ -10,9 +10,11 @@
 # cancel-branch-before-sync-arms (6: the arms before the branch),
 # cancel-rush-child (7), end-grandchild-order (9) and end-two-children-order
 # (10: a task that ends runs its defers first, then stops its children).
-# Epic refuses T.Cancel() in user code (8, cancel-task-child, 3593). Not yet
-# measured: a race's arms as a sync's (11), a branch started in an arm as
-# that arm's child (12), the arms one call deeper (13).
+# Epic refuses T.Cancel() in user code (8, cancel-task-child, 3593). A third
+# round printed 11 to 13 too: a race's arms as a sync's
+# (cancel-branch-before-race-arms), a branch started in an arm as that arm's
+# child (cancel-branch-in-and-before-sync-arm), the arms one call deeper
+# (cancel-branch-before-nested-sync).
 Wait()<suspends>:void = Sleep(10.0)
 Child(Tag:string)<suspends>:void =
     branch:

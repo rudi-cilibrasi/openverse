@@ -3951,10 +3951,11 @@ Main()<suspends>:void =
   cancelled with its task stops its children as a losing `race` arm does;
   a `rush` arm that went on is a child; and the arms a cancelled task waits
   in go before its branch (`cancel-branch-before-sync-arms`: openverse had
-  the branch first until then). Not yet measured, openverse's choice, asked
-  by `cancel-branch-before-race-arms`, `cancel-branch-in-and-before-sync-arm`
-  and `cancel-branch-before-nested-sync`: a `race`'s arms as a `sync`'s, a
-  branch started in an arm as that arm's child, the arms one call deeper.
+  the branch first until then); a `race`'s arms go as a `sync`'s
+  (`cancel-branch-before-race-arms`), a branch started in an arm is that
+  arm's child (`cancel-branch-in-and-before-sync-arm`), and the arms one
+  call deeper still go before the branch, which goes before the defers of
+  the function that holds the arms (`cancel-branch-before-nested-sync`).
   Epic refuses `T.Cancel()` in user code (3593, `epic_internal`;
   `cancel-task-child`); openverse admits it. A function that starts a
   branch or a `rush` gets a frame of its own at each call, as its tasks

@@ -12,6 +12,10 @@
 # started, or after the branch:
 #   winner done | arm one cleanup | arm two cleanup | branch cleanup | loser cleanup | after race | after wait
 #   winner done | branch cleanup | arm two cleanup | arm one cleanup | loser cleanup | after race | after wait
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use
+# Verse VM" on, 2026-11-19) printed
+#   winner done | arm two cleanup | arm one cleanup | branch cleanup | loser cleanup | after race | after wait
+# as OpenVerse does.
 Helper()<suspends>:void =
     branch:
         defer:

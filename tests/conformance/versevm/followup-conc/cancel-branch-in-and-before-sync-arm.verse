@@ -12,6 +12,10 @@
 # If the branch started in the sync arm belonged to the race arm (the task
 # that runs the sync), stopped newest first after the sync's arms:
 #   winner done | arm two cleanup | arm one cleanup | arm branch cleanup | task branch cleanup | loser cleanup | after race | after wait
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use
+# Verse VM" on, 2026-11-19) printed
+#   winner done | arm two cleanup | arm branch cleanup | arm one cleanup | task branch cleanup | loser cleanup | after race | after wait
+# as OpenVerse does.
 First()<suspends>:void =
     branch:
         defer:

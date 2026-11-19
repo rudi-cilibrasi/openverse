@@ -382,10 +382,12 @@ The rule's open cases, a second batch the same day (same build, Verse VM,
 | [`cancel-sync-arm-child`](../../tests/conformance/versevm/followup-conc/cancel-sync-arm-child.verse), [`cancel-rush-child`](../../tests/conformance/versevm/followup-conc/cancel-rush-child.verse) | a cancelled `sync` arm's branch, a `rush` arm that went on, stopped before the defers of the task that is cancelled | the same |
 | [`cancel-task-child`](../../tests/conformance/versevm/followup-conc/cancel-task-child.verse) | refused, 3593: ``(/Verse.org/Concurrency/task:)Cancel`` is `epic_internal` | admitted (`T.Cancel()`), a known difference |
 
-Not yet run: `cancel-branch-before-race-arms`, `cancel-branch-in-and-before-sync-arm`
-and `cancel-branch-before-nested-sync` (a `race`'s arms, a branch started
-in an arm, the arms one call deeper; OpenVerse's lines in each header and
-in `expectations.tsv`).
+A third batch (the same build, 2026-11-19 11:32 UTC) printed what OpenVerse
+prints for `cancel-branch-before-race-arms` (a `race`'s arms as a
+`sync`'s), `cancel-branch-in-and-before-sync-arm` (a branch started in an
+arm is that arm's child) and `cancel-branch-before-nested-sync` (the arms
+one call deeper still before the branch); the lines are in each header
+and in `expectations.tsv`.
 
 ## OpenVerse observations
 
