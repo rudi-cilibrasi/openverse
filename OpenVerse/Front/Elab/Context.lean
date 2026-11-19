@@ -752,6 +752,9 @@ structure ESt where
   /-- The warnings found so far (`warnAt`): what the Book of Verse's compiler
       reports and compiles all the same, each with where it is. -/
   warnings : Array (Pos × String) := #[]
+  /-- The slots of the source's `var` locals declared so far (#724: a
+      module constant that allocates one is refused, `LinkCheck`). -/
+  sourceVars : List (Nat × String) := []
   /-- (#724) The calls in a data member's definition (`Ctx.dataMember`) of
       functions that might not complete, each with where it is, what calls
       it and what it calls (`noteDivergentCall`; a trial whose state is

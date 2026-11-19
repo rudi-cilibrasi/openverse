@@ -5,6 +5,7 @@
 W()<suspends>:int =
     Sleep(9.0)
     1
+NoWait()<suspends>:void = {}
 F(T:task(int))<suspends>:int =
     defer:
         Print("F defer")
@@ -13,10 +14,10 @@ F(T:task(int))<suspends>:int =
             defer:
                 Print("loser defer")
             T.Await()
-        # (Sleep(0.0) completes at once: an arm that can suspend, as every
-        # arm of a rush must, and ends without waiting)
+        # (a call of a suspends function that does not wait: an arm that can
+        # suspend, as every arm of a rush must, and ends without waiting)
         block:
-            Sleep(0.0)
+            NoWait()
             5
     Print("F got {X}")
     Sleep(0.2)

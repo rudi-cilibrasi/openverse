@@ -1,6 +1,6 @@
 G end
 G defer
-branch defer
 7
 main end
+branch defer
 exit=0

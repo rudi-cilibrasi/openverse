@@ -16,10 +16,13 @@ test path in `fortniteMain`. OpenVerse's
 recorded expectations. In particular, `verse_vm_only` and `bp_vm_only`
 identify different targets in that development corpus.
 
-The checked-in baseline has 702 VerseVM-targeted records. Of those, 216
-agree, 288 are refused by OpenVerse, 4 are accepted by OpenVerse where the
-Book expects a refusal, 88 produce different output and 106 cannot be
-translated by the harness. The other records are 585 BPVM-targeted (including
+The checked-in baseline has 702 VerseVM-targeted records. Of those, 273
+agree, 323 are refused by OpenVerse, none is accepted where the Book
+expects a refusal (the four were the module-evaluation link errors, given
+since #724), none produces different output and 106 cannot be translated
+by the harness (with ints beyond 64 bits alone: 269, 323, 4, 0, 106; with
+Epic's VM results alone: 223, 284, 0, 89, 106; on main `b640fa6d`, before
+#724: 219, 284, 4, 89, 106). The other records are 585 BPVM-targeted (including
 `verse_vm_todo`) and 12,217 with no target restriction recognized by the
 harness. See the [baseline verdicts](../../tests/conformance/book/baseline.tsv)
 and the harness's [target handling](../../tests/conformance/book/booktests.py).
@@ -334,6 +337,65 @@ agreeing:
 | `int-abs-big` | `Abs(-2^63 - 1)`, an argument beyond 64 bits (`book-int-abs-min`'s, `-2^63`, is inside) | `before abs`, `abs 2^63 + 1` |
 | `int-array-equal-big` | `array{2^63, 1} = array{(2^63 - 1) + 1, 1}`, `array{2^63} <> array{2^63 - 1}` | `before arrays`, `arrays equal`, `arrays differ` |
 | `int-tuple-equal-big` | the same with tuples | `before tuples`, `tuples equal`, `tuples differ` |
+
+### Fingerprint and Book probes ([#724](https://github.com/rudi-cilibrasi/openverse/issues/724))
+
+The same build, the same day: Verse VM sessions had "Use Verse VM" on (the
+ticket carried `newVerseVm=true`), Blueprint VM sessions had it off. The
+lines are shown without the `OVPROBE` marker. Where the two VMs disagree,
+OpenVerse follows the Verse VM (the owner's decision).
+
+| Probe | Verse VM | Blueprint VM | OpenVerse before | OpenVerse now |
+| --- | --- | --- | --- | --- |
+| [`book-query-true-equals-false`](../../tests/conformance/versevm/book/book-query-true-equals-false.verse), [`book-query-and-value`](../../tests/conformance/versevm/book/book-query-and-value.verse), [`book-query-or-value`](../../tests/conformance/versevm/book/book-query-or-value.verse) | `query value equals false`, `and value equals false`, `or value equals false` | the same | `… differs from false`: `true?` was `true` | the VMs' and the Book's tests': `X?` of a logic succeeds with the empty value ([the rule](book-forms-rules.md#the-value-of-true)) |
+| [`book-global-block-var`](../../tests/conformance/versevm/book/book-global-block-var.verse), [`-call-var`](../../tests/conformance/versevm/book/book-global-block-call-var.verse), [`-fn-var`](../../tests/conformance/versevm/book/book-global-block-fn-var.verse), [`-cond-var`](../../tests/conformance/versevm/book/book-global-block-cond-var.verse) | the editor builds them; the session's server cook (`linux-server-vm`) fails: `Script error 9003: Runtime error while evaluating module.` | `linked` | `linked` | the Verse VM's: refused before the program runs, naming the constant and the `var` ([the rule](../LANGUAGE.md#modules)) |
+| [`book-global-block-cond-var-control`](../../tests/conformance/versevm/book/book-global-block-cond-var-control.verse) | `linked` | `linked` | `linked` | `linked` |
+| [`vm-branch-outlives-return`](../../tests/conformance/versevm/fingerprint/vm-branch-outlives-return.verse) | `function returning`, `returned`, `branch body finished`, `branch cleanup`, `after wait` | `function returning`, `branch cleanup`, `returned`, `after wait` | the Blueprint VM's: the function's return cancelled its branch | the Verse VM's: a branch is a child of the task whose code started it, stopped when that task ends ([the rule](scheduler-conformance.md#a-branch-lives-as-long-as-its-task)) |
+| [`vm-branch-await-after-return`](../../tests/conformance/versevm/fingerprint/vm-branch-await-after-return.verse) | `function returning`, `returned`, `branch received 7`, `signaled`, `after wait` | `function returning`, `returned`, `signaled`, `after wait` | the Blueprint VM's | the Verse VM's |
+| [`vm-sleep-zero-yields`](../../tests/conformance/versevm/fingerprint/vm-sleep-zero-yields.verse) | `worker before sleep`, `main after spawn`, `worker after sleep`, `main after wait` | the same | `worker after sleep` before `main after spawn`: `Sleep(0.0)` completed at once (#608) | the VMs': `Sleep(0.0)` yields, a tick ([the rule](scheduler-conformance.md#sleep00-yields)) |
+
+Follow-up probes for the shapes OpenVerse extrapolates from these
+(branches and `rush` arms in spawned tasks, arms and branches; the order of
+a task's defers and its children's; `Sleep` of a negative duration and of
+zero within an update; a module constant whose own initialiser declares a
+`var`) are in [`followup-conc/`](../../tests/conformance/versevm/followup-conc),
+each with OpenVerse's output, the other reading and Epic's result in its
+header, and in its `expectations.tsv` (`epic_outcome`, `epic_lines`). Run
+`branch-at-entry-top-level` and `link-constant-own-var` alone: the first
+leaves a branch to its device's `OnBegin`, the second may fail the cook.
+On the Verse VM (the same build, "Use Verse VM" on, `newVerseVm=true`,
+2026-11-19; nine in one batch, `branch-at-entry-top-level` alone, the two
+refusals in the editor's build):
+
+| Probe | Verse VM | OpenVerse |
+| --- | --- | --- |
+| [`branch-cancel-order`](../../tests/conformance/versevm/followup-conc/branch-cancel-order.verse) | `winner done`, `branch cleanup`, `arm cleanup`, `after race`, `after wait`: a cancelled task's child is stopped before the task's own defers run | had `arm cleanup` before `branch cleanup`; now Epic's ([the rule](../LANGUAGE.md#concurrency)) |
+| [`branch-in-branch`](../../tests/conformance/versevm/followup-conc/branch-in-branch.verse) | `function returned`, `outer done`, `outer cleanup`, `inner cleanup`, `after wait`: a task that ends runs its defers, then stops its children | the same |
+| [`branch-end-before-awaiter`](../../tests/conformance/versevm/followup-conc/branch-end-before-awaiter.verse), [`branch-in-race-winner`](../../tests/conformance/versevm/followup-conc/branch-in-race-winner.verse), [`branch-in-spawned-helper`](../../tests/conformance/versevm/followup-conc/branch-in-spawned-helper.verse), [`branch-in-sync-arm`](../../tests/conformance/versevm/followup-conc/branch-in-sync-arm.verse), [`rush-loser-outlives-return`](../../tests/conformance/versevm/followup-conc/rush-loser-outlives-return.verse) | as in their headers' first reading | the same |
+| [`branch-at-entry-top-level`](../../tests/conformance/versevm/followup-conc/branch-at-entry-top-level.verse) | `begin`, `main returning`, `end`, `branch cleanup`, no `branch tick` in the 12 s after: stopped when the device's `OnBegin` ends | `main returning`, `branch cleanup` (stopped when `Main` ends) |
+| [`sleep-negative-yields`](../../tests/conformance/versevm/followup-conc/sleep-negative-yields.verse) | `worker before sleep`, `worker after sleep`, `main after spawn`, `main after wait`: no yield | the same |
+| [`sleep-zero-next-update`](../../tests/conformance/versevm/followup-conc/sleep-zero-next-update.verse) | `b after short sleep`, `a after three zero sleeps`, `main after wait`: each zero sleep waits for the next update | the same |
+| [`branch-in-defer`](../../tests/conformance/versevm/followup-conc/branch-in-defer.verse) | refused, 3512: the `branch` macro's `suspends` effect is not allowed in a `defer` | refused (#156) |
+| [`link-constant-own-var`](../../tests/conformance/versevm/followup-conc/link-constant-own-var.verse) | refused: 3512 (the `var`'s `allocates`, `Sum`'s `reads`), 3582 twice (side effects, divergent calls defining data-members) | refused (the constant allocates a `var`) |
+
+The rule's open cases, a second batch the same day (same build, Verse VM,
+`newVerseVm=true`):
+
+| Probe | Verse VM | OpenVerse |
+| --- | --- | --- |
+| [`cancel-branch-before-sync-arms`](../../tests/conformance/versevm/followup-conc/cancel-branch-before-sync-arms.verse) | `winner done`, `arm two cleanup`, `arm one cleanup`, `branch cleanup`, `loser cleanup`, `after race`, `after wait`: the arms a cancelled task waits in go first, as its newest children | had `branch cleanup` first; now Epic's ([the rule](../LANGUAGE.md#concurrency)) |
+| [`cancel-grandchild-order`](../../tests/conformance/versevm/followup-conc/cancel-grandchild-order.verse), [`end-grandchild-order`](../../tests/conformance/versevm/followup-conc/end-grandchild-order.verse) | a stopped child's own children first: `grandchild cleanup` before `child cleanup` | the same |
+| [`cancel-two-children-order`](../../tests/conformance/versevm/followup-conc/cancel-two-children-order.verse), [`end-two-children-order`](../../tests/conformance/versevm/followup-conc/end-two-children-order.verse) | newest first: `second cleanup` before `first cleanup` | the same |
+| [`cancel-spawned-not-child`](../../tests/conformance/versevm/followup-conc/cancel-spawned-not-child.verse) | the spawned task goes on: `spawned done`, `spawned cleanup` after `after race` | the same |
+| [`cancel-sync-arm-child`](../../tests/conformance/versevm/followup-conc/cancel-sync-arm-child.verse), [`cancel-rush-child`](../../tests/conformance/versevm/followup-conc/cancel-rush-child.verse) | a cancelled `sync` arm's branch, a `rush` arm that went on, stopped before the defers of the task that is cancelled | the same |
+| [`cancel-task-child`](../../tests/conformance/versevm/followup-conc/cancel-task-child.verse) | refused, 3593: ``(/Verse.org/Concurrency/task:)Cancel`` is `epic_internal` | admitted (`T.Cancel()`), a known difference |
+
+A third batch (the same build, 2026-11-19 11:32 UTC) printed what OpenVerse
+prints for `cancel-branch-before-race-arms` (a `race`'s arms as a
+`sync`'s), `cancel-branch-in-and-before-sync-arm` (a branch started in an
+arm is that arm's child) and `cancel-branch-before-nested-sync` (the arms
+one call deeper still before the branch); the lines are in each header
+and in `expectations.tsv`.
 
 ## OpenVerse observations
 

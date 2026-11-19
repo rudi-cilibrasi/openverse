@@ -199,6 +199,8 @@ structure ElaboratedFn where
   bodyCalls : Array ((Pos × String) × List Nat) := #[]
   /-- The warnings its elaboration found (`ESt.warnings`). -/
   warnings : Array (Pos × String) := #[]
+  /-- The slots of its source `var` locals (`ESt.sourceVars`, #724). -/
+  sourceVars : List (Nat × String) := []
 
 /-- A function: its body under the type environment `env` (which binds the
     type parameters `tps` of a generic function to themselves), after the
@@ -338,7 +340,7 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
            slotTys := spawnParamTypes env name (st.slotTys.toList.map (Ty.toVTy env)), errAt := st.errAt,
            frames,
            needs := st.needs, loopFirst := st.loopFirst, failCalls := st.failCalls, bodyCalls := st.bodyCalls,
-           warnings := st.warnings, metadata }
+           warnings := st.warnings, metadata, sourceVars := st.sourceVars }
 
 /-- Function elaboration, a phase of `elabProgramCore`: each function and
     constant of `sigs`, by index (a constant may not hold a mutable object, as
@@ -416,6 +418,7 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
                 writes := sig.fx.contains "writes", body := initPrefixE 0 inits e }
         slotTys := st.slotTys.toList.map (Ty.toVTy env), errAt := st.errAt, needs := st.needs,
         loopFirst := st.loopFirst, failCalls := st.failCalls, warnings := st.warnings
+        sourceVars := st.sourceVars
         metadata := {
           pos := p, seeds := st.metadataSeeds, uses := st.metadataUses
           metadataWrites := st.metadataWrites, body := some e } }

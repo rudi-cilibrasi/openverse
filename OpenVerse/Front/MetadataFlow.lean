@@ -1615,8 +1615,12 @@ private partial def cancelSteps (env : ScheduleEnv) (c : Configuration) (actor :
       let c := { c with
         events := c.events.filter (· != actor)
         actors := c.actors.modify actor fun a => { a with canceling := true, event := none } }
-      queue c (cancelChildren env c actor false ++ cleanups ++ [.stop actor] ++
-        cancelChildren env c actor true)
+      -- (#724: a cancelled task's children first, the arms it waits in, its
+      -- newest, then its branches, then its own cleanups, as Epic's Verse VM
+      -- cancels a task: UEFN 43.12, followup-conc/branch-cancel-order and
+      -- cancel-branch-before-sync-arms)
+      queue c (cancelChildren env c actor false ++ cancelChildren env c actor true ++ cleanups ++
+        [.stop actor])
 
 /-- An active cancellation waits for the complete current step, including
     enclosing group continuations and fresh startup prefixes. Pending
@@ -1659,6 +1663,17 @@ private partial def completeScheduled (env : ScheduleEnv) (c : Configuration)
     if c.actors[owner]!.status == .joining i && groupReady env.plan c i then
       return ← finishGroup env c i
   return c
+
+/-- (#724) A function's return stops none of the tasks its code started:
+    its branches and the `rush` arms that went on are its task's children,
+    which outlive it. They become late, out of the return's cancellation
+    tree, and are analysed on after the result, as late branches are. -/
+private partial def orphanBackground (plan : MetadataPlan.Plan) (c : Configuration) : Configuration :=
+  { c with groups := c.groups.mapIdx fun i st =>
+      match plan.groups[i]? with
+      | some g => if c.launches.contains i && (g.kind == .branch || (g.kind == .rush && !st.active))
+          then { st with late := true } else st
+      | none => st }
 
 /-- Branches launched after a stop are not reached by that earlier drain.
     Analyze their live descendants even after the owning result was saved. -/
@@ -1707,6 +1722,9 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
   let mut resultRefs : MetadataCells.Refs := []
   let mut finalSlots : Option Slots := none
   let mut yielded := false
+  -- (#724: the check of metadata entering a shared local, relaxed for the
+  -- steps of tasks that outlive their returned owner, below)
+  let baseValidateShared := (← get).validateShared
   while !work.ready.isEmpty do
     if (← get).debug && cursor % 10000 == 0 then
       dbg_trace s!"metadata schedule {env.fn.name}: visited={cursor}, queued={cursor + work.pending.size}, states={known.size}"
@@ -1824,6 +1842,15 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
     modify fun st => { st with
       cellPath := [a.pc], cellGraphOwner := some rootScope,
       cellScope := lexical.map (·.1) |>.getD rootScope }
+    -- (#724) once the owner has returned, the tasks its code started go on
+    -- (`orphanBackground`); only they can read its frame's shared locals
+    -- then, so metadata entering one is checked where they execute it,
+    -- not refused as it enters; so too once the owner is being cancelled,
+    -- whose children's cleanups run before its own (`cancelSteps`), which
+    -- are checked where they execute it
+    let orphaned := actor != 0 &&
+      (c.actors[0]?.map (fun a => a.status == .done || a.canceling)).getD false
+    modify fun st => { st with validateShared := baseValidateShared && !orphaned }
     match node with
     | .jump pc => work := work.push (advanceActor c actor pc)
     | .atom e dst next permission =>
@@ -2068,7 +2095,7 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
     | .finish value =>
       if actor == 0 then
         let role := (c.slots.values.get value)
-        let c := { c with actors := c.actors.modify actor fun a =>
+        let c := orphanBackground env.plan { c with actors := c.actors.modify actor fun a =>
           { a with status := .done, cleanups := [] } }
         work := work.push (queue c [.cancel 0, .result role c.slots.tuples[value]? (if (← get).cellEnabled then some value else none)])
       else
@@ -2118,9 +2145,10 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
         work := work.push (queue c [.cancel late])
         continue
       let role := (c.slots.values.get value)
-      let c := { c with actors := c.actors.modify actor fun a =>
+      let c := orphanBackground env.plan { c with actors := c.actors.modify actor fun a =>
         { a with status := .done, cleanups := [] } }
       work := work.push (queue c [.cancel 0, .result role c.slots.tuples[value]? (if (← get).cellEnabled then some value else none)])
+  modify fun st => { st with validateShared := baseValidateShared }
   return { slots := finalSlots.getD slots, value := result, valueParts := resultParts, valueRefs := resultRefs, yielded }
 end
 

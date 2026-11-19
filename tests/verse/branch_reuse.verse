@@ -1,4 +1,5 @@
-# a branching function called again through a reused frame, a branch ending on its own, and one stopped by a cancelled caller (#156)
+# a branching function called again (each call a frame of its own since #724, as its branches outlive it), a branch ending on its own,
+# and one stopped with a cancelled caller's task (#156, #724)
 Pulse(Tag:string, N:int)<suspends>:void =
     var Seen:int = 0
     branch:

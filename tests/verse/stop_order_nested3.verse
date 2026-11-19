@@ -1,4 +1,7 @@
 # nested branches 3 levels deep (#254, from the review of #258)
+# (#724: a branch and a rush's arm that goes on are children of the task whose
+# code started them, stopped when it ends, after its defers, or is cancelled,
+# before them (Epic's Verse VM, UEFN 43.12); not when their function exits.)
 F()<suspends>:int =
     defer:
         Print("F defer")

@@ -2657,22 +2657,63 @@ helper, which no code calls.
 A `branch` is an arm over the enclosing frame, run as a root through a
 wrapper `[pc, frame, owner]`, its owner the task whose code started it
 (the scheduler's `$CurTask`, a dummy task for `Main`'s code). The
-wrapper's trampoline resumes the arm unless the function stopped it. Every exit of the function, and its cancel function,
-stops its branches: it marks each wrapper done (through a test of its
-class, kept in a frame field) and cancels each arm still pending. A frame
-reused for another call so never shares an arm with an old wrapper. They
-are stopped last started first: each branch and `rush` arm records a
-start number (a counter in the frame) when it starts, and the stop is a
-loop that picks the highest recorded number, stops that one and clears
-it (#187). Each unwinds whole (#254): the branches and `rush` arms whose
-start is in a branch's or a `rush` arm's own code are owned by it
-(`St.killOwner`, from the entries of `kills` its region's lowering adds),
-and stopping it first stops those, by the same loop over its own, then
-itself; the function's loop picks among the unowned. A function with no
-such nesting keeps the flat loop, so its code is as before. A
-`rush` is a `race` whose arms each get such a wrapper: when the first arm
-ends, the others that are pending are registered as roots (not run again
-at once) instead of cancelled.
+wrapper's trampoline resumes the arm unless it was stopped. A `rush` is a
+`race` whose arms each get such a wrapper: when the first arm ends, the
+others that are pending are registered as roots (not run again at once)
+instead of cancelled.
+
+**Task scopes (#724).** A branch and a `rush` arm that goes on are
+children of the task whose code started them, stopped when that task
+ends, as on Epic's Verse VM; the function that started them may return
+first. The tasks are `Main`, a spawned call, and each arm (a `branch`'s
+body and each arm of a `sync`, `race` or `rush`). In a program with a
+`branch` or a `rush` (its prelude `withScopes`), each has a scope, a
+`$scope` object listing its children in the root list's cells, newest
+first: `Main`'s is the scheduler's `MainScope` (the class's prototype), a
+spawned task's its task's `TScope`, an arm's a frame field after the
+arms' records (`armScopeMark`, emptied, or made the first time, when the
+arm starts, `resetScope`). The scheduler's `Scope` is the running task's:
+a spawned root's and a branch's trampoline, `$Run` for `Main`, the code
+that runs a `sync`'s, `race`'s or `rush`'s arms (`inScope`) and the wake
+functions of event mode set it around the run and restore it after. A
+wrapper's `start` registers it in the current scope. An arm's end (its
+last statement, or a `return`), once its code ran, and its cancel, before
+its first defer and after the waits it is in (the arms of a `sync`, `race`
+or `rush`, its newest children) are cancelled, as Epic's Verse VM does
+(`followup-conc/branch-cancel-order`, `cancel-branch-before-sync-arms`),
+stop its scope. For the cancel the region's cancel body makes the scope due
+first (`$unwindPush(sched, scope)`: it becomes the scheduler's `Unwinding`,
+the one it hides kept in its `OuterUnwind`), each site's cancel stops a due
+scope (`$unwindFlush(sched)`) between the waits it cancels and its defers,
+in whatever function the task waits, and the body ends with `$unwindPop`,
+which stops it if still due and restores the hidden one
+(`$stopScope(sched, scope)`: each child popped, newest
+first, and stopped by `$stopRoot`'s dispatch on its class to its
+wrapper's `stopKid`, which marks the wrapper done and cancels its arm,
+whose cancel stops the arm's own scope first in turn; in event mode an arm that
+runs is left to its trampoline, which cancels it when the run returns). A
+spawned root stops its task's scope once its call ended, before the task
+is done (its result is set first, so the prelude's `Await` of await mode,
+with scopes, tests `Done` before the result: one made meanwhile waits for
+the task's end with the other awaiters); a cancelled task's (`$spawnK$cancelT`) is made due once the task is marked
+cancelled, around its root's unwinding, and the wake function of event mode
+resumes no root whose task is marked cancelled, so a `Signal` in a defer
+that runs meanwhile wakes none of its waits; `$Run` stops `Main`'s
+once `Main` ended, or as `Main` unwinds when it is cancelled. A function's exit stops nothing, so a function that
+starts tasks over its frame (`Callee.fresh`) gets a new frame at each
+call instead of the call site's reset one. Until #724 every exit of a
+function, and its cancel function, stopped its branches, last started
+first by start numbers in the frame (#187), each unwinding whole (#254);
+that code (`St.kills`) is no longer emitted. The compiler-only metadata
+analysis (`MetadataFlow`) follows: a function's return makes its branches
+and continuing `rush` arms late groups, analysed on after the result
+(`orphanBackground`), and once the owner has returned, metadata entering
+one of its frame's shared locals is checked where the surviving tasks
+execute it, not refused as it enters (only they can read the frame). Its
+cancellation (`cancelSteps`) stops an actor's children (the arms it waits
+in, then its branches) before the actor's own cleanups, as the lowering does;
+while the owner is being cancelled, its children's cleanups are checked
+the same way, and its own cleanups where they execute.
 
 `T.Cancel()` reaches the task's root (recorded in the task when it starts)
 through `$cancelRoot`, which calls the root's cancel function. That marks
@@ -3031,11 +3072,11 @@ byte.
 rationals' are). A suspends `Main` starts a loop of passes, one per tick,
 each resuming `Main`'s frame. A sleeping frame reports the tick it waits
 for, and the clock then moves to the earliest of them, so idle ticks cost
-nothing. A sleep of `S > 0` seconds waits `Ceil(30·S)` ticks of the binary64
+nothing. A sleep of `S >= 0` seconds waits `Ceil(30·S)` ticks of the binary64
 product, at least one (the first tick at or after its deadline, the Book's
-API); `Sleep(0.0)`, a negative or a NaN duration completes at once, with no
-suspension (`sleepResume` gives 1 on its first poll), as the Book's tested
-examples of ch. 14 have it for zero.
+API), so `Sleep(0.0)` yields and waits one tick, as Epic's Verse VM and
+Blueprint VM do (UEFN 43.12); a negative or a NaN duration completes at
+once, with no suspension (`sleepResume` gives 1 on its first poll).
 
 The scheduler holds its task roots as references without type
 arguments; a generic frame that is not a root is resumed by its caller,

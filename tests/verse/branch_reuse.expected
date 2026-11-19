@@ -3,16 +3,45 @@ p1 pulse 1
 p1 pulse 2
 p1 exits after 2
 p2 short branch done
+p1 pulse 3
 p2 pulse 1
+p1 pulse 4
 p2 pulse 2
 p2 exits after 2
+p1 pulse 5
 p3 short branch done
+p2 pulse 3
+p1 pulse 6
 p3 pulse 1
+p2 pulse 4
+p1 pulse 7
 p3 pulse 2
 p3 exits after 2
+p2 pulse 5
 loser short branch done
+p1 pulse 8
+p3 pulse 3
+p2 pulse 6
 loser pulse 1
+p1 pulse 9
+p3 pulse 4
+p2 pulse 7
 loser pulse 2
 winner
+p1 pulse 10
+p3 pulse 5
+p2 pulse 8
+p1 pulse 11
+p3 pulse 6
+p2 pulse 9
+p1 pulse 12
+p3 pulse 7
+p2 pulse 10
+p1 pulse 13
+p3 pulse 8
+p2 pulse 11
+p1 pulse 14
+p3 pulse 9
+p2 pulse 12
 end
 exit=0

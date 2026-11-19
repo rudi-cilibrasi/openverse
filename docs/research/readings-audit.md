@@ -58,7 +58,7 @@ Verdicts:
 | A choice in an operand of `and` or `or` | `A`'s clauses then `B`'s; `if (T := A) then T else B` | `08_failure.md:216-218`: `or` "tries each option in order, stopping at the first success" | none with a choice | **Book silent** |
 | The three rows on functions with several values (#283) | as the rows say | silent (`yield` is not supported, `Yield.versetest:4-7`) | none | **Book silent** |
 | Precedence of `\|` | below `+`, above comparisons | the precedence table (`04_operators.md:44-55`) has no `\|` | `BinaryOps.versetest:3` refuses `a\|b`; the commented-out `TimSyntax.versetest:280` puts `\|` below `:=` | **Book silent** |
-| `Sleep(0.0)` | always yields, resumes next tick | `14_concurrency.md:1210`: "One frame, the smallest possible delay"; `:1227-1228`: "may resume in the same tick if no other work is pending"; the API (line 3939): "0.0 resumes on the next update and, crucially, does yield" | the tested example `14_concurrency.md:385-406` (`<!--versetest-->`): `Sleep(0.0)` "Completes at once, and wins" a `race` before a later arm begins | **the Book disagrees with itself**; the tested example contradicts openverse; openverse follows the tested examples: **changed** in `feat/core-book-primitives`, `Sleep(0.0)` completes at once ([the rules](scheduler-conformance.md#sleep00-completes-at-once)) |
+| `Sleep(0.0)` | always yields, resumes next tick | `14_concurrency.md:1210`: "One frame, the smallest possible delay"; `:1227-1228`: "may resume in the same tick if no other work is pending"; the API (line 3939): "0.0 resumes on the next update and, crucially, does yield" | the tested example `14_concurrency.md:385-406` (`<!--versetest-->`): `Sleep(0.0)` "Completes at once, and wins" a `race` before a later arm begins | **the Book disagrees with itself**; the tested example contradicts openverse; openverse follows the tested examples: **changed** in `feat/core-book-primitives`, `Sleep(0.0)` completes at once; **changed back** after Epic's Verse VM and Blueprint VM both yielded on UEFN 43.12 (`++Fortnite+Release-43.12-CL-60598086`) (probe `vm-sleep-zero-yields`): it yields, a tick ([the rule](scheduler-conformance.md#sleep00-yields)) |
 | `Sleep(S)` rounding | `Round(30·S)`, at least one tick | no tick rate; the API (line 3939): "a sleep resumes on the first update at or after its deadline and never sooner than the next one. Short sleeps therefore round up" | none | **contradicts** the API (it rounds up, openverse to nearest): **changed** in `feat/core-book-primitives` (the scheduler is Verse in the front end's prelude: [the rules](scheduler-conformance.md#the-books-scheduler-rules)) |
 | End of a program with tasks | ends with `Main`; `Main` waiting on nothing is exit 2 | no entry point; `14_concurrency.md:829-832` leaves a task suspended at the end | none | **Book silent** |
 | Order of a `subscribable_event`'s functions | subscription order; awaiters woken first, run after `Signal` returns | `14_concurrency.md:1606` (unreleased): listed in subscription order; the API (line 4341): "invoked in a randomised order on every signal"; line 4346: awaiting tasks "resumed first, in the order they suspended", line 4510: "Signal returns before the resumed tasks have finished" | `Event.versetest:27` (four `Signal`s in a loop all received: the awaiter runs inside `Signal`); `Bugs/BPVMOnly/RaceCompletionTiming.versetest` 65, 95 | **contradicts** (awaiters run inside `Signal`, before the code after it); runtime: **designed, not changed** |
@@ -631,8 +631,10 @@ nor the C runtime's: it is Verse in the front end's prelude
 (`Front/ConcurrencyPrelude.lean`), lowered with every suspends function into
 ordinary Verse Core (DESIGN, "Concurrency"), so Core, its proofs and the C
 runtime are unchanged by all three. `Sleep(S)` rounds up and `Sleep(0.0)`
-completes at once, unconditionally, as eight tested examples have it, not
-only in a `race`'s first pass ([the rules](scheduler-conformance.md#the-books-scheduler-rules));
+completed at once, unconditionally, as eight tested examples have it, not
+only in a `race`'s first pass ([the rules](scheduler-conformance.md#the-books-scheduler-rules)),
+until Epic's VMs were measured: both yield, and so does openverse again
+([`Sleep(0.0)` yields](scheduler-conformance.md#sleep00-yields));
 the later arms of a `race` resolved in its first pass already never began.
 An awaiter running inside `Signal` is not built: [the
 obstacle](scheduler-conformance.md#awaiters-run-inside-signal-not-built).
@@ -781,7 +783,8 @@ page](https://github.com/rudi-cilibrasi/openverse/wiki/Where-the-Book-disagrees-
 - **Prose:** `14_concurrency.md:1210`: "`Sleep(0.0)      # One frame, the smallest possible delay`"; `:1227-1228`: "Unlike `Sleep(0.0)` which yields control and may resume in the same tick if no other work is pending"; the API (line 3939): "0.0 resumes on the next update and, crucially, does yield".
 - **Tested example** (`14_concurrency.md:385-406`, a `<!--versetest-->` block): in a `race`, an arm `Sleep(0.0); 2` "Completes at once, and wins", and a later arm never begins.
 - **More tested examples:** ch. 14's `<!-- 03 -->`, `05`, `06`, `07`, `09`, `10` and `11` check a task's effects right after its `spawn`, every `Sleep(0.0)` on its path having completed without suspending, in `sync` arms and plain code too ([the scheduler note](scheduler-conformance.md#sleep00-completes-at-once)).
-- **openverse now:** the tested examples': `Sleep(0.0)` completes at once, without suspending (`feat/core-book-primitives`); until then it always yielded, to the next tick (#156).
+- **Epic's VMs** (UEFN 43.12 (`++Fortnite+Release-43.12-CL-60598086`), probe `vm-sleep-zero-yields`): both the Verse VM and the Blueprint VM yield, `main after spawn` before `worker after sleep`.
+- **openverse now:** Epic's and the API's: `Sleep(0.0)` yields and resumes on the next tick; from `feat/core-book-primitives` (#608) until this change, the tested examples': it completed at once; before #608 it yielded, as now (#156).
 
 ### How many awaiters one `Signal` wakes
 
@@ -817,3 +820,17 @@ page](https://github.com/rudi-cilibrasi/openverse/wiki/Where-the-Book-disagrees-
 ### Integer range, by VM
 
 Already on the wiki page (entry 5).
+
+### `branch` lifetime, by VM
+
+- **Prose** (ch. 14, "The branch Expression"): "a branch task is automatically canceled when execution leaves the enclosing function scope"; its tested example 13 runs the function in a spawned task, which ends when the function returns, so it does not tell the readings apart.
+- **Tests:** `Bugs/BPVMOnly/AsyncContextCancellation.versetest` (Verse VM expectations, with Blueprint VM ones beside): a branch's parent is the current task (a spawn, a branch, each arm of a `sync`, `race` or `rush`), and it is cancelled when that task ends, "NOT by function/loop/block boundaries"; a `rush`'s arms that go on likewise (TEST 6: they outlive the function that ran the `rush`).
+- **Epic's VMs** (UEFN 43.12, `++Fortnite+Release-43.12-CL-60598086`, probes `vm-branch-outlives-return`, `vm-branch-await-after-return`): the Verse VM lets the branch outlive the function; the Blueprint VM cancels it at the return.
+- **openverse now:** the Verse VM's (#724; [the rule](scheduler-conformance.md#a-branch-lives-as-long-as-its-task)); until then the prose's.
+
+### A module constant that allocates a `var`, by VM
+
+- **Tests:** `GlobalVariables.versetest` 86, 90, 97, 105 (`verse_vm_only`): link error 9003 for a module constant whose class's `block:` declares a `var`, constructs an object with a `var` field, or calls a function that declares one on the path taken; their `bp_vm_only` twins (114-141): valid, "BPVM doesn't run blocks on global instances of classes"; `:143`, untagged: valid where the `var` is not reached.
+- **Prose** (ch. 16, `16_modules.md:617`): `<allocates>` objects at module scope "as long as their construction does not actually allocate mutable memory".
+- **Epic's VMs** (UEFN 43.12, `++Fortnite+Release-43.12-CL-60598086`, probes `book-global-block-*`): the Verse VM's session cook fails with "Script error 9003: Runtime error while evaluating module." for the four, and the control links; the Blueprint VM links all five.
+- **openverse now:** the Verse VM's (#724): refused before the program runs ([Modules](../LANGUAGE.md#modules)); the four `bp_vm_only` twins now differ.

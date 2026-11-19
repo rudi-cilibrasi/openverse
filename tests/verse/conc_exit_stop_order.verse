@@ -1,5 +1,6 @@
-# At a function's exit, its branches and rush losers stop last started first,
-# each unwinding whole: what it started (a rush it waits in) first (#254).
+# When a task ends, its branches and rush losers stop last started first,
+# each unwinding whole (#254), its own defers before its children (#724: a
+# function's exit no longer stops them; here Main's end does).
 F1()<suspends>:int =
     branch:
         defer:

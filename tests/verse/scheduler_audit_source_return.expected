@@ -2,6 +2,6 @@ branch started
 return arm 1
 race loser 11
 function 1011
+result 7 state 1011
 branch 1111
-result 7 state 1111
 exit=0

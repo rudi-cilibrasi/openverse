@@ -152,8 +152,8 @@ arm entries, preserving ordered metadata-to-real writes within one arm.
 A successful `sync` completes every arm. Since metadata reentry is checked,
 a cell definitely left real by one completed arm is real in the continuation.
 `race` and `rush` retain possible roles from their arms because other arms may
-still be waiting when a winner returns. `MetadataConcurrency.lean` checks 28
-real/dummy rejection pairs and 34 forwarding/overwrite pairs, with Core checks
+still be waiting when a winner returns. `MetadataConcurrency.lean` checks 27
+real/dummy rejection pairs and 35 forwarding/overwrite pairs, with Core checks
 for every admitted case; `shared_function_sibling_writes.verse` executes the
 ordinary real controls. These controls cover sibling order, nonreturning arms,
 unimplemented dispatch, metadata-only forwarding, independent arm locals,

@@ -1,8 +1,8 @@
 begin 7
 cancelling
+observer stop 7
 wait cleanup 7
 body 107
 source 107
-observer stop 107
 cancelled
 exit=0

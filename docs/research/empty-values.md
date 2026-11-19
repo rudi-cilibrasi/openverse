@@ -137,7 +137,9 @@ fails. Before this change openverse refused it where two scalar types met
   give `true?` the empty value: `Operators/BoolQuery.versetest` 3
   (`true?=false`), 4 (`not true??`), `LogicalAnd.versetest` 30
   (`(true? and true?) = false`), `Precedence.versetest` 121 (`x := true? or
-  true; x = false`). openverse's `true?` is `true` (part 2, 3.1).
+  true; x = false`). openverse's `true?` was `true` (part 2, 3.1); it is
+  the empty value since #724, after Epic's Verse VM and Blueprint VM gave
+  the tests' results (UEFN 43.12).
 
 ## 2. Part 1: what openverse does
 
@@ -285,7 +287,7 @@ less ([the survey](book-test-conformance.md#after-the-empty-value)).
 - "Empty values are one value" (32): **28 agree**. The 4 left are the value
   of `true?` (`BoolQuery.versetest` 3, 4, `LogicalAnd.versetest` 29,
   `Precedence.versetest` 121): openverse's `true?` is `true`, the tests'
-  is the empty value (1.5; part 2).
+  is the empty value (1.5; part 2). (Since #724 these agree too.)
 - "Comparisons of different types" (51 refused): 35 agree; the 16 left
   compare a tuple of a type parameter with a string in generic code
   (`CompareString.versetest` 168 to 182 and `:decls`, part 2).
@@ -542,5 +544,7 @@ its model of the Book's equality.
 
 The last two are the separate front-end items of 3.4: the Book's prose and
 its tests disagree on the value of `X?` of a logic, and `true` waits on the
-type of `branch:`, so neither is done.
+type of `branch:`, so neither is done. (The value of `X?` of a logic is
+done since #724: the tests' empty value, as Epic's Verse VM and Blueprint
+VM both give it, UEFN 43.12; [the rule](book-forms-rules.md#the-value-of-true).)
 

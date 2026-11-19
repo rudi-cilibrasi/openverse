@@ -1,4 +1,7 @@
 # A spawn survives its creator; the command-line host ends with Main.
+# (#724: a branch and a rush's arm that goes on are children of the task whose
+# code started them, stopped when it ends, after its defers, or is cancelled,
+# before them (Epic's Verse VM, UEFN 43.12); not when their function exits.)
 Finish()<suspends>:void=
     Print("spawn started")
     Sleep(0.01)

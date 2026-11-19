@@ -3,9 +3,9 @@ leave a 6
 enter a 6
 leave a 9
 enter a 9
+background 9
 leave a 9
 source 9 1
-background 9
 result -1 state 9
 enter a 0
 leave a 6
@@ -72,6 +72,6 @@ leave b 81
 enter b 81
 leave b 85
 source 85 16
-background 85
 result 16 state 85
+background 85
 exit=0

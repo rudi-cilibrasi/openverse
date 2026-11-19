@@ -9,14 +9,19 @@ usage: gen.py SEED OUTDIR   -> writes OUTDIR/gSEED.verse and OUTDIR/gSEED.expect
 The model follows docs/LANGUAGE.md "Concurrency": polling scheduler, 30 ticks/s,
 Main first then roots in start order, repass while something ended/was
 cancelled/was signalled, arms in source order, race losers cancelled last
-started first, rush losers become roots (stopped at function exit with the
-branches, last started first, after the function's defers). A Signal and a
+started first, rush losers become roots. A branch and a rush loser are
+children of the task whose code started them (a spawned task, Main, a
+branch, an arm of a sync, race or rush), stopped, newest first, when that
+task ends: completes (after its code), or is cancelled (before its code
+unwinds: Epic's Verse VM, branch-cancel-order) (#724; the Book's
+AsyncContextCancellation.versetest, Epic's Verse VM); a function's return
+stops nothing. A Signal and a
 task's end resume their awaiters inside them, in the order they suspended or
 registered; a cancelled task's awaiters wait for ever (the Book's API)."""
 import random, sys, os
 from collections import Counter
 
-TICKS = {"0.0": 0, "0.1": 3, "0.2": 6, "0.3": 9, "0.5": 15, "1.0": 30}
+TICKS = {"0.0": 1, "0.1": 3, "0.2": 6, "0.3": 9, "0.5": 15, "1.0": 30}
 DURS = list(TICKS)
 
 
@@ -66,12 +71,25 @@ class Rec:
         self.done = False; self.val = None; self.pending = False; self.root = None
 
 
+class Scope:
+    """A task's children (#724): its branches and the arms of its rushes
+    that go on, in the order they started."""
+    def __init__(self):
+        self.kids = []
+
+
 class Sched:
     def __init__(self):
+        # (the scope of the code that runs: Main's, a task's or an arm's)
+        self.scope = Scope(); self.main_scope = self.scope
         self.clock = 0; self.roots = []; self.out = []; self.progress = False
         self.sleepers = Counter(); self.running = []; self.main = None
         # (the Signals running, one inside another; a probe of a rush loser)
         self.drain = 0; self.probe = False
+        # (#724: the scopes of the tasks being cancelled, innermost last,
+        # each None once stopped: a cancelled task stops its children after
+        # the arms it waits in and before its first defer, `flush`)
+        self.unwinding = []
         # (the code running: a root, or an arm of a running sync, race or
         # rush, innermost last)
         self.ctx = []
@@ -130,7 +148,7 @@ class Sched:
         self.progress = True
 
     def run(self, main_gen):
-        self.main = Root("main", main_gen)
+        self.main = Root("main", scoped(main_gen, self.main_scope))
         while True:
             while True:
                 self.progress = False
@@ -161,10 +179,8 @@ S = None  # the scheduler of the current model run
 
 def m_sleep(d):
     ticks = TICKS[d] if isinstance(d, str) else d
-    # (Sleep(0.0) completes at once, without suspending: the Book's tested
-    # examples in ch. 14; any positive duration waits at least one tick)
-    if ticks == 0:
-        return
+    # (Sleep(0.0) waits one tick, as any duration below one does: it yields
+    # and resumes on the next update, as Epic's VMs do, UEFN 43.12)
     wake = S.clock + max(1, ticks)
     S.sleepers[wake] += 1
     try:
@@ -324,91 +340,78 @@ class Frame:
         self.env = env; self.starts = []; self.counter = 0
 
 
-# (the documented stop order, #254; IMPL_ORDER=1 for the order before it)
-IMPL_ORDER = os.environ.get("IMPL_ORDER", "") != ""
-
-
-class ArmRef:
-    """A rush arm, as stopped at its function's exit: (IMPL_ORDER) a pending
-    arm of a rush that has not ended, stopped by its own start number; or
-    (the documented order, #254) the arm all along, which owns what its code
-    starts, and once its rush ended without it, its loser's root."""
-    def __init__(self, gen):
-        self.gen = gen; self.done = False; self.root = None; self.cancelled = False
-
-
-def stop_one(root):
-    if isinstance(root, ArmRef):
-        if root.root is None:
-            if not root.done:
-                root.done = True; root.cancelled = True
-                # An owner can return inside a Signal made by this arm.
-                # Its running root takes cancellation after the current poll;
-                # closing the active arm here would reenter its generator.
-                if not root.gen.gi_running:
-                    root.gen.close()
-            return
-        root.cancelled = True
-        root = root.root
-    if not root.done:
-        if root in S.running:
-            root.cancel_req = True
-            return
-        root.done = True
-        root.gen.close()
-        S.progress = True
-
-
-def stop_tree(e, kids):
-    # what its code started first, last started first, then it (#254)
-    for sn, c in sorted(kids.get(id(e), []), key=lambda x: -x[0]):
-        stop_tree(c, kids)
-    stop_one(e)
-
-
-def stop_all(fr):
-    if not IMPL_ORDER:
-        # each unwinding whole: the function's own last started first (#254)
-        kids, tops = {}, []
-        for sn, e, owner in fr.starts:
-            if owner is None:
-                tops.append((sn, e))
-            else:
-                kids.setdefault(id(owner), []).append((sn, e))
-        for sn, e in sorted(tops, key=lambda x: -x[0]):
-            stop_tree(e, kids)
+def stop_kid(r):
+    """Stop a child: one that runs (its code made the Signal under which its
+    task ended) is cancelled after that run, as a cancelled running root."""
+    if r.done:
         return
-    # branches and rush losers, last started first
-    for sn, root, _ in sorted(fr.starts, key=lambda x: -x[0]):
-        if isinstance(root, ArmRef):
-            if not root.done:
-                root.done = True; root.cancelled = True
-                if not root.gen.gi_running:
-                    root.gen.close()
-            continue
-        if not root.done:
-            if root in S.running:
-                root.cancel_req = True
-                continue
-            root.done = True
-            root.gen.close()
-            S.progress = True
+    if r in S.running:
+        r.cancel_req = True
+        return
+    r.done = True
+    r.gen.close()
+    S.progress = True
+
+
+def stop_scope(scope):
+    """A task's children, newest first, each ending as a task does."""
+    while scope.kids:
+        stop_kid(scope.kids.pop())
+
+
+def flush():
+    """The children of the task being cancelled, if not yet stopped: once
+    the arms it waits in are cancelled, before its first defer runs."""
+    if S.unwinding and S.unwinding[-1] is not None:
+        scope = S.unwinding[-1]
+        S.unwinding[-1] = None
+        stop_scope(scope)
+
+
+def scoped(body, scope):
+    """`body` run as a task's code (#724): the scheduler's current scope is
+    the task's while it runs; when it ends its children are stopped; when it
+    is cancelled, its children are stopped before any of its defers runs,
+    after the arms of a sync, race or rush it waits in (its newest
+    children), as Epic's Verse VM does (UEFN 43.12, branch-cancel-order,
+    cancel-branch-before-sync-arms)."""
+    ended = False
+    try:
+        while True:
+            saved = S.scope
+            S.scope = scope
+            try:
+                step = next(body)
+            except StopIteration as e:
+                ended = True
+                S.scope = saved
+                stop_scope(scope)
+                return e.value
+            finally:
+                S.scope = saved
+            yield step
+    finally:
+        if not ended:
+            S.unwinding.append(scope)
+            try:
+                body.close()
+                flush()
+            finally:
+                S.unwinding.pop()
 
 
 def m_call(fn, args):
+    # (a function's return stops none of the tasks its code started, #724)
     fr = Frame(dict(args))
-    try:
-        v = yield from exec_block(fn.body, fr)
-        return fr.env[fn.ret] if fn.ret else v
-    finally:
-        stop_all(fr)
+    v = yield from exec_block(fn.body, fr)
+    return fr.env[fn.ret] if fn.ret else v
 
 
 def m_spawn(gen):
     task = Task()
 
     def wrap():
-        v = yield from gen
+        v = yield from scoped(gen, Scope())
         # (its end: the result set, then its awaiters resumed, inside this
         # last step, as a Signal's round)
         task.done = True; task.result = v
@@ -442,6 +445,9 @@ def killer_gen(t, tag, k, d):
         S.p(f"{tag} k{k} cancelled")
         yield from m_sleep(3)
         S.p(f"{tag} k{k} end")
+    except GeneratorExit:
+        flush()
+        raise
     finally:
         S.p(f"{tag} k{k} defer")
 
@@ -450,6 +456,9 @@ def awaiter_gen(t, tag, k):
     try:
         yield from m_await_task(t)
         S.p(f"{tag} a{k} got")
+    except GeneratorExit:
+        flush()
+        raise
     finally:
         S.p(f"{tag} a{k} defer")
 
@@ -473,6 +482,10 @@ def exec_block(stmts, fr, owner=None):
             try:
                 v = yield from exec_block(stmts[i + 1:], fr, owner)
                 return v
+            except GeneratorExit:
+                # (cancelled: its task's children before this defer, #724)
+                flush()
+                raise
             finally:
                 S.p(f"{fr.env['Tag']} {s.label} {fr.env['N']}")
                 if getattr(s, "kill", None):
@@ -483,38 +496,8 @@ def exec_block(stmts, fr, owner=None):
     return None
 
 
-def stop_owned(fr, owner):
-    """Drain the current children, including starts after an earlier drain."""
-    kids = {}
-    for sn, child, parent in fr.starts:
-        kids.setdefault(id(parent), []).append((sn, child))
-    for sn, child in sorted(kids.get(id(owner), []), key=lambda item: -item[0]):
-        stop_tree(child, kids)
-
-
-def owned_block(stmts, fr, owner):
-    body = exec_block(stmts, fr, owner)
-    try:
-        while True:
-            try:
-                step = next(body)
-            except StopIteration:
-                return
-            yield step
-    finally:
-        # A running owner may finish its current step after the source
-        # function stopped it. New children still share that lifetime.
-        if (getattr(owner, 'cancelled', False) or
-                getattr(owner, 'cancel_req', False)):
-            stop_owned(fr, owner)
-        body.close()
-
-
-def run_arm(stmts, val, fr, owner=None, owns=False):
-    if owns:
-        yield from owned_block(stmts, fr, owner)
-    else:
-        yield from exec_block(stmts, fr, owner)
+def run_arm(stmts, val, fr, owner=None):
+    yield from exec_block(stmts, fr, owner)
     return fr.env[val] if val else None
 
 
@@ -522,25 +505,17 @@ def exec_conc(s, fr, owner=None):
     kind = s.kind
     n = len(s.arms)
     site = ConcSite(kind, n)
-    sns = [None] * n
+
     started = []
     winner = None
     finished = False
-    refs = {}
     enter(site)
     try:
         for i, (stmts, val) in enumerate(s.arms):
-            sn = fr.counter; fr.counter += 1
-            # (a rush arm owns what its code starts, #254; a sync or race arm's
-            # is its enclosing owner's)
-            ref = ArmRef(None) if kind == "rush" and not IMPL_ORDER else None
-            g = run_arm(stmts, val, fr, ref if ref is not None else owner, owns=ref is not None)
-            if ref is not None:
-                ref.gen = g; refs[i] = ref; fr.starts.append((sn, ref, owner))
-            site.gens[i] = g; sns[i] = sn; started.append(i)
+            # (each arm a task of its own, with its scope, #724)
+            g = scoped(run_arm(stmts, val, fr, owner), Scope())
+            site.gens[i] = g; started.append(i)
             ended = step_arm(site, i)
-            if not ended and kind == "rush" and IMPL_ORDER:
-                refs[i] = ArmRef(g); fr.starts.append((sn, refs[i], owner))
             if kind != "sync":
                 # (an arm that ended inside a Signal this one made came first;
                 # the arms after never start, the Book's ch. 14)
@@ -586,30 +561,25 @@ def exec_conc(s, fr, owner=None):
             finally:
                 leave(site)
         finished = True
-        for ref in refs.values():
-            ref.done = True
-        pend = [i for i in started if not site.done[i] and
-                not (i in refs and refs[i].cancelled)]
+        pend = [i for i in started if not site.done[i]]
         if kind == "race":
             for i in reversed(pend):
                 site.gens[i].close()
-        else:  # rush: losers become roots
+        else:  # rush: losers become roots, children of the task whose
+            # code ran the rush (#724)
             for i in pend:
                 g = site.gens[i]
                 r = Root("rushloser", g, owner=S.cur_task())
-                if IMPL_ORDER:
-                    fr.starts.append((sns[i], r, owner))
-                else:
-                    refs[i].root = r   # (its arm's entry stands for it)
+                S.scope.kids.append(r)
                 S.roots.append(r)
                 probe(r)
         return site.results[winner]
     finally:
         if not finished:
-            for ref in refs.values():
-                ref.done = True
             for i in reversed([i for i in started if not site.done[i]]):
                 site.gens[i].close()
+            # (cancelled: the arms first, then its task's other children)
+            flush()
 
 
 def exec_stmt(s, fr, owner=None):
@@ -619,11 +589,13 @@ def exec_stmt(s, fr, owner=None):
         S.p(f"{env['Tag']} {s.label} {env['N']}")
     elif k == "sleep":
         yield from m_sleep(s.d)
+    elif k == "nowait":
+        pass
     elif k == "branch":
-        sn = fr.counter; fr.counter += 1
+        # (a task of its own, a child of the task whose code starts it, #724)
         r = Root("branch", None, owner=S.cur_task())
-        r.gen = owned_block(s.body, fr, r)
-        fr.starts.append((sn, r, owner))
+        r.gen = scoped(exec_block(s.body, fr), Scope())
+        S.scope.kids.append(r)
         S.roots.append(r)
         S.poll(r)
     elif k == "conc":
@@ -713,6 +685,10 @@ def helper_gen(kind, env):
             v = yield from m_await_event(e["E"])
             S.p(f"{e['Tag']} w{e['K']} woke")
             return v
+    except GeneratorExit:
+        # (cancelled: its task's children before this defer, #724)
+        flush()
+        raise
     finally:
         S.p(f"{e['Tag']} {'h' if kind == 'hd' else 'w'}{e['K']} defer")
 
@@ -810,11 +786,12 @@ class Gen:
             for ai in range(na):
                 imm = (c != "sync" and ai == na - 1 and r.random() < 0.1)
                 body, sc = self.block(scope, depth + 1, in_branch, r.randint(0, 2), need_wait=not imm)
-                # (an arm that may end without waiting starts with Sleep(0.0),
-                # which completes at once: every arm of a race or a rush can
-                # suspend, the Book's tests, Concurrency.versetest:831)
+                # (an arm that may end without waiting starts with Nw(), a
+                # suspends function that does not wait: every arm of a race or
+                # a rush can suspend, the Book's tests, Concurrency.versetest:831;
+                # Sleep(0.0) yields, as Epic's VMs do, UEFN 43.12)
                 if imm:
-                    body.insert(0, St("sleep", d="0.0"))
+                    body.insert(0, St("nowait"))
                 if r.random() < 0.5:
                     body.insert(0, St("defer", label=self.fresh("ad")))
                 body.append(St("print", label=self.fresh("ap")))
@@ -1011,6 +988,8 @@ def emit_stmt(s, ind):
         return [p + f'Print("{{Tag}} {s.label} {{N}}")']
     if k == "sleep":
         return [p + f"Sleep({s.d})"]
+    if k == "nowait":
+        return [p + "Nw()"]
     if k == "defer":
         out = [p + "defer:", p + f'    Print("{{Tag}} {s.label} {{N}}")']
         if getattr(s, "kill", None):
@@ -1085,7 +1064,8 @@ def emit_stmt(s, ind):
     raise ValueError(k)
 
 
-PRELUDE = '''pt := class:
+PRELUDE = '''Nw()<suspends>:void = {}
+pt := class:
     K:int
 bx(t:type) := class:
     V:t
@@ -1289,13 +1269,16 @@ def model_program(fns, mstmts):
                 S.p(f"{job[4]} = {INSTS[job[1]][3](v)}")
             S.p("main end")
         finally:
-            stop_all(fr)
+            # (Main's children are stopped when it ends: `Sched.run`'s scope)
+            pass
     code = S.run(main())
     return S.out, code
 
 
 def conc_gens(kind, gens, fr):
-    """sync/race over ready-made arm generators (Main's arms)."""
+    """sync/race over ready-made arm generators (Main's arms), each a task
+    of its own (#724)."""
+    gens = [scoped(g, Scope()) for g in gens]
     pend = []
     results = [None] * len(gens)
     winner = None; won = False
@@ -1336,6 +1319,7 @@ def conc_gens(kind, gens, fr):
         if not finished:
             for item in reversed(pend):
                 item[1].close()
+            flush()
 
 
 def main():

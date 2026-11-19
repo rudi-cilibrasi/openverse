@@ -1,13 +1,19 @@
 w tick 1
 w tick 2
 work done, count 4
-w ticker stopped
 got 4
+w tick 3
+w tick 4
 again
+w tick 5
 w tick 1
+w tick 6
 w tick 2
 work done, count 4
-w ticker stopped
 got 4
+w tick 7
+w tick 3
 end
+w ticker stopped
+w ticker stopped
 exit=0

@@ -1,8 +1,10 @@
 probe owner done 0
 probe owner cleanup 0
-probe other cleanup 0
 main continued
 probe after signal 0
+probe wrong other 0
+probe other cleanup 0
+probe after rush 0
 probe late cleanup 0
 probe active cleanup 0
 main done

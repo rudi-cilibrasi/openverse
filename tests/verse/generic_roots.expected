@@ -1,13 +1,36 @@
 watching int
 watching int
 5
+watching int
 watching str
+watching int
 watching str
 s
+watching int
+watching str
+watching int
+watching str
 tick a
 1
+watching int
+watching str
+watching int
+watching str
+b done
 tick later
 2
+watching int
+watching str
+watching int
+watching str
 tick later
 u
+watching int
+watching str
+watching int
+watching str
+watching int
+watching str
+watching int
+watching str
 exit=0

@@ -1,5 +1,8 @@
 # branches (nested, and a rush inside) in a generic function, and in one (#254, from the review of #258)
 # that calls itself at ever bigger types (polymorphic recursion)
+# (#724: a branch and a rush's arm that goes on are children of the task whose
+# code started them, stopped when it ends, after its defers, or is cancelled,
+# before them (Epic's Verse VM, UEFN 43.12); not when their function exits.)
 G(X:t, Tag:string where t:type)<suspends>:t =
     defer:
         Print("{Tag} defer")

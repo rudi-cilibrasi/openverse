@@ -7,6 +7,7 @@ Worker(Name:string, N:int, D:float)<suspends>:int =
         set I += 1
         Print("{Name} {I}")
     I * 10
+NoWait()<suspends>:void = {}
 Main()<suspends>:void =
     R := sync:
         Worker("a", 3, 1.0)
@@ -32,10 +33,10 @@ Main()<suspends>:void =
     Print("{X}")
     # (an arm that ends without waiting wins at once, and the arms after it
     # never start; every arm can suspend, the Book's rule, so this one
-    # starts with Sleep(0.0), which completes at once)
+    # starts with a call of a suspends function that does not wait)
     Y := race:
         block:
-            Sleep(0.0)
+            NoWait()
             Print("first")
             7
         block:

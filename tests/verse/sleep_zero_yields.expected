@@ -1,0 +1,23 @@
+worker before sleep
+main after spawn
+ids 0 0 0
+race won by 0
+arm three ran
+abandon gave 0
+arm two did not go past its sleep
+the sync was left
+Main's zero sleep waited a tick
+ids 0 0 0
+race won by 0
+arm three ran
+abandon gave 0
+arm two did not go past its sleep
+the sync was left
+worker after sleep
+ids 1 2 3
+race won by 1
+arm three ran
+abandon gave 5
+arm two did not go past its sleep
+the sync was left
+exit=0

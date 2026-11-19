@@ -404,7 +404,9 @@ starts with `Sleep(0.0)`, which completes at once, so their output is the
 same. The scheduler models (`sched_gen.py`, `sched_gen2.py`) start the arm
 they draw to end at once (one race or rush in ten) with `Sleep(0.0)`, drawn
 from no random number: 58 of the first 400 seeds of each change their text,
-none its predicted output.
+none its predicted output. (Since `Sleep(0.0)` yields again, as Epic's
+VMs do, those arms start with a call of a suspends function that does not
+wait instead: `NoWait()` in the tests, `Nw()` in the models.)
 
 ## `spawn` has `<transacts>`'s effects
 

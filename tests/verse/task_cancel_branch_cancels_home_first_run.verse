@@ -1,6 +1,6 @@
 # A (resumed by the scheduler) starts a branch whose first run cancels A,
 # which is running. Expected: A at its next wait: branch cancelled A /
-# A after branch / A defer / branch defer / end
+# A after branch / branch defer / A defer / end (its child first, #724)
 A(Me:event(task(int)))<suspends>:int =
     defer:
         Print("A defer")

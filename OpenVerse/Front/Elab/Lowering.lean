@@ -574,6 +574,33 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let schedTy : VTy := .ref [schedTag] []
   let fieldIdx (c f : String) : Nat := ((env.fields c).findIdx? (·.1 == f)).getD 0
   let Sorig : Sigs := { fns := fsigs0, classes := classTable, protos, pins, variances := env.coreVariances }
+  -- (#724) scopes, in a program with a `branch` or a `rush` (its prelude
+  -- has them, `withScopes`): a task's children are stopped when it ends
+  let scopes : Bool := env.classes.contains "$scope"
+  let scopeTag := env.tagOf "$scope"
+  let scopeTy : VTy := .ref [scopeTag] []
+  let kidsF := fieldIdx "$scope" "$Kids"
+  let schedScopeF := fieldIdx "$sched" "$Scope"
+  let mainScopeF := fieldIdx "$sched" "$MainScope"
+  let taskScopeF := fieldIdx (env.concurrencyName "task") "$TScope"
+  -- (`$stopScope(sched, scope)`, made below: a mark until its index is known)
+  let stopScopeMark : Nat := 0xFFFFFB
+  -- (and `$unwindPush(sched, scope)`, `$unwindFlush(sched)`,
+  -- `$unwindPop(sched, scope)`: a cancelled task's children stopped after
+  -- the arms it waits in, before its defers, `Suspend.Env.unwindPushFn`)
+  let unwindPushMark : Nat := 0xFFFFFA
+  let unwindFlushMark : Nat := 0xFFFFF9
+  let unwindPopMark : Nat := 0xFFFFF8
+  let unwindingF := fieldIdx "$sched" "$Unwinding"
+  let outerUnwindF := fieldIdx "$scope" "$OuterUnwind"
+  let unwindDueF := fieldIdx "$scope" "$UnwindDue"
+  let scopeInfo : Option Suspend.ScopeInfo := if scopes then
+      some { scopeTag, kidsF, ownF := fieldIdx "$scope" "$Own", schedScopeF, stopScopeFn := stopScopeMark,
+             unwindPushFn := unwindPushMark, unwindFlushFn := unwindFlushMark, unwindPopFn := unwindPopMark }
+    else none
+  -- (the scheduler: its class's prototype, a literal)
+  let some schedLit0 := Suspend.coreDefault Sorig [] 0 schedTy
+    | throw "internal error: no prototype for the scheduler"
   -- each `spawn` (#156) gets a root: a function `$spawnK(T, args…)` that
   -- runs the spawned call and fills the task `T`
   let mut roots : Array (Nat × String × Nat) := #[]
@@ -667,6 +694,19 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   fns := sourceFrames.fns
   slotTys := sourceFrames.slots
   fsigs := sourceFrames.sigs
+  -- (#724) a spawned call's root stops its task's children, its branches
+  -- and `rush` arms that go on, once the call has ended, before the task
+  -- is done and its awaiters are resumed (a call of `$stopScope`, a mark
+  -- until its index is known, added after the frames' preparation, which
+  -- reads every call's callee)
+  if scopes then
+    for (ri, _, _) in roots do
+      let fn := fns[ri]!
+      let body := match fn.body with
+        | .seq setResult (.seq setDone ended) =>
+          .seq setResult (.seq (.seq (.call stopScopeMark [schedLit0, .heap (.get taskScopeF) [.local 0]]) setDone) ended)
+        | b => b
+      fns := fns.set! ri { fn with body }
   let fsigs0 := sourceFrames.sigs
   let nFns := fns.size
   -- (#362: a root records the waiting frame to resume first, and the
@@ -777,9 +817,9 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     request.resumes.filterMap fun resume => if resume.borrowTasks then some resume.name else none
   let lifts := lows.filter fun (_, name, _) => defaultBridge name || choiceDefaultBridge name ||
     env.requests.casts.any (·.name == name) || consumerBorrowers.contains name
-  let mut taskLifts := lifts.filterMap fun (gi, _, _) =>
-    if Suspend.countSusp (· == branchMark) (fun _ => false) false (· == spawnMark) fns[gi]!.body > 0 ||
-        Suspend.countArms (· == rushMark) fns[gi]!.body > 0 then some gi else none
+  -- (#724: no function's exit stops the tasks its code started, a borrowed
+  -- helper's no more than any: none borrows)
+  let mut taskLifts : List Nat := (lifts.filter fun _ => false).map (·.1)
   for _ in List.range lifts.length do
     for (gi, _, _) in lifts do
       if !taskLifts.contains gi && (Suspend.callsOf fns[gi]!.body).any (fun (g, _) => taskLifts.contains g) then
@@ -815,6 +855,12 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     branchOf := branchOf.push ((List.range n).map (· + branchHome.size))
     branchHome := branchHome ++ (List.replicate n j).toArray
   let B := branchHome.size
+  -- (#724: a scope holds its children in root cells, as the scheduler's
+  -- list does, `[root, next]`, the class after the wrappers')
+  if scopes then
+    classTable := classTable.set scopeTag ((classTable[scopeTag]!).set kidsF (.opt (.ref [tagBase + L + B] [])))
+  if B > 0 && !scopes then
+    throw "internal error: a branch or a rush in a program lowered without scopes (#724)"
   -- (`$link(sched, root)`, which adds a root to the scheduler's list,
   -- comes before them)
   let linkIdx := selfBase + targets.length + 2 * roots.size
@@ -860,6 +906,9 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
                resField := some Suspend.resF, generic := ownArgs j, newSched := true,
                resultFn := some (nFns + 4 * j + 3), ntp,
                stopTasksFn := (taskIndex j).map fun i => taskBase + taskStride * i + 1,
+               -- (#724: a function that starts tasks over its frame gets a
+               -- frame of its own at each call, as they may outlive it)
+               fresh := !((branchOf[j]?).getD []).isEmpty,
                taskOrderFn := if taskClockF.isSome then (taskIndex j).map (fun i => taskBase + taskStride * i + 3) else none,
                selfFns := (targets.idxOf? gi).map fun i =>
                  (ownBase + 4 * j, selfBase + i, ownBase + 4 * j + 1, ownBase + 4 * j + 2) }
@@ -895,8 +944,11 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     let ps := slotTys[gi]!.take a
     let locals := (List.range a).map Expr.local
     let pass := (List.range a).map fun i => Expr.heap (.get (Suspend.slotBaseOf sites arms + i)) [.local 0]
-    let arriveBody : Expr := .seq (.ite (.heap (.isTag [tagBase + j]) [.local a]) (.call (nFns + 4 * j + 1) (.local a :: locals))
-      (.seq (.assign a (.call (nFns + 4 * j) (.local (a + 1) :: locals))) Suspend.vd)) (.local a)
+    let makeNew : Expr := .seq (.assign a (.call (nFns + 4 * j) (.local (a + 1) :: locals))) Suspend.vd
+    -- (#724: a frame of its own at each call where its tasks may outlive it)
+    let arriveBody : Expr := if !((branchOf[j]?).getD []).isEmpty then .seq makeNew (.local a) else
+      .seq (.ite (.heap (.isTag [tagBase + j]) [.local a]) (.call (nFns + 4 * j + 1) (.local a :: locals)) makeNew)
+        (.local a)
     ownFns := ownFns ++ #[
       { name := s!"{gname}$arrive", arity := a + 2, nslots := a + 2, decides := false, writes := true,
         body := arriveBody },
@@ -980,6 +1032,8 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   -- (each branch's arm resume function, done field, and the passing of its
   -- function's parameters from the frame, for cancelling it)
   let mut branchInfo : Array (Nat × Nat × List Expr) := #[]
+  -- (#724: each one's arm's scope field in its home frame)
+  let mut branchScope : Array Nat := #[]
   let mut branchSigs : Array (List VTy × VTy) := #[]
   let progressF := fieldIdx "$sched" "$Progress"
   let headF := fieldIdx "$sched" "$Head"
@@ -1082,7 +1136,8 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     let shared ← SourceFrames.aliases sourceFrames gi sourceBase
     let low ← (Suspend.lower Sinf callee syncMark raceMark rushMark spawnMark spawns branchMark branches a Γ ρ (frameTy j)
       schedTag nilTag resCellTag fnBase b leafF leafDepthF isRoot leafy resumeAnyMark leafDepthMin parTy shared
-      (sourceFrames.info[gi]?.getD {}).copies (taskLifts.contains gi) taskClockF events (marked.contains gi)).mapError
+      (sourceFrames.info[gi]?.getD {}).copies (taskLifts.contains gi) taskClockF events (marked.contains gi)
+      scopeInfo).mapError
       fun e => inFn gname e
     -- its branches' wrappers: `tramp(w, sched)` resumes the arm (with the
     -- function's parameters from its frame) unless the function stopped
@@ -1098,7 +1153,11 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       -- again when the function exits, #181)
       -- (#362: resumed from the waiting frame its arm recorded, as a root;
       -- the arms' records are the frame's last fields)
-      let armTopIdx := low.fields.length - armsJ + (armRes - fnBase) / 2
+      let armTopIdx := low.fields.length - (if scopes then 2 * armsJ else armsJ) + (armRes - fnBase) / 2
+      -- (#724: its arm's scope, the frame's last fields)
+      let armScopeIdx := low.fields.length - armsJ + (armRes - fnBase) / 2
+      let scopeSlot := if leafy then 8 else 6
+      branchScope := branchScope.push armScopeIdx
       let resumeArm : List Expr := resumeChain fr (.local 1) (.call armRes (fr :: .local 1 :: pass)) armTopIdx 2 6 7 ++
         (if leafy then [.ite (.prim .eq [.local 2, Suspend.int 0]) Suspend.vd
           (.seq (.heap (.set armTopIdx) [fr, .local 1]) Suspend.vd)] else [])
@@ -1130,7 +1189,9 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
         .heap (.set runningF) [.local 3, .lit (.logic true)],
         .heap (.set curTaskF) [.local 1, .local 3]] ++
         (if events then [.heap (.set 3) [.local 0, Suspend.int 1]] else []) ++
-        [.assign 2 tramp] ++ stoppedThen ++ [
+        (if scopes then [.heap (.set schedScopeF) [.local 1, .heap (.get armScopeIdx) [fr]]] else []) ++
+        [.assign 2 tramp] ++
+        (if scopes then [.heap (.set schedScopeF) [.local 1, .local scopeSlot]] else []) ++ stoppedThen ++ [
         .heap (.set curTaskF) [.local 1, .local 5],
         .heap (.set runningF) [.local 3, .local 4],
         .ite (.prim .eq [.local 4, .lit (.logic false)])
@@ -1138,16 +1199,23 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
             (.seq (Suspend.seqVoid [.heap (.set cancelReqF) [.local 3, .lit (.logic false)],
               .call cancelTaskRootMark [.local 1, .local 3]])
               Suspend.vd) Suspend.vd) Suspend.vd) Suspend.vd]) |> fun e => Expr.seq e (.local 2)
-      branchFns := branchFns.push { name := s!"$branch{K}$tramp", arity := 2, nslots := if leafy then 8 else 6,
+      branchFns := branchFns.push { name := s!"$branch{K}$tramp", arity := 2,
+                                    nslots := (if leafy then 8 else 6) + (if scopes then 1 else 0),
                                     decides := false, writes := true, body := initPrefixE 2 ([Suspend.int 0,
                                       .heap (.get ownerF) [.local 0], .lit (.logic false),
                                       .heap (.get curTaskF) [.local 1]] ++
-                                      (if leafy then [Suspend.int 0, Suspend.int 0] else [])) owned }
+                                      (if leafy then [Suspend.int 0, Suspend.int 0] else []) ++
+                                      (if scopes then [.heap (.get schedScopeF) [.local 1]] else [])) owned }
       branchTys := branchTys.push ([wrapTy K, schedTy, .int, taskBaseTy, .logic, taskBaseTy] ++
-        (if leafy then [.int, .int] else []))
+        (if leafy then [.int, .int] else []) ++ (if scopes then [scopeTy] else []))
       branchSigs := branchSigs.push ([wrapTy K, schedTy], .int)
       -- (a `rush` loser's wrapper only registers it: it already started)
       let register : Expr := .call linkIdx [.local 0, .local 2]
+      -- (#724: and, a child of the task whose code starts it, in the
+      -- scheduler's current scope, newest first)
+      let curScope : Expr := .heap (.get schedScopeF) [.local 0]
+      let pushKid : List Expr := if !scopes then [] else
+        [.heap (.set kidsF) [curScope, .prim .mkSome [.heap (.new (tagBase + L + B)) [.local 2, .heap (.get kidsF) [curScope]]]]]
       -- (#513: and, in FIFO mode, probes it as its own root, so that the
       -- waiters in it record that root, not the function's, which no
       -- longer runs it: a `Signal` before its first turn then gives it its
@@ -1159,7 +1227,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
         .assign 3 (.call (wrapFnBase + 3 * K) [.local 2, .local 0]),
         .heap (.set curRootF) [.local 0, .local 5],
         .heap (.set probeF) [.local 0, .lit (.logic false)]] ++ forget (.local 0)
-      let start : Expr := .seq (Suspend.seqVoid (if !runNow then register :: probe else [register,
+      let start : Expr := .seq (Suspend.seqVoid (if !runNow then register :: pushKid ++ probe else [register] ++ pushKid ++ [
         .assign 4 (.heap (.get cancelCurF) [.local 0]),
         .heap (.set cancelCurF) [.local 0, .lit (.logic false)]] ++
         -- (#513: its run is the branch's, for the waiters it records)
@@ -1387,12 +1455,16 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     -- of it, the task's flag is left as it was and a cancel of the task is
     -- left to that run, as a branch's trampoline does)
     let wasRun := if leafy then 6 else 4
+    -- (#724: while the root runs, the scheduler's current scope is its task's)
+    let scopeSlot := (if leafy then 6 else 4) + (if events then 1 else 0)
+    let toScope : List Expr := if scopes then [.heap (.set schedScopeF) [.local 1, .heap (.get taskScopeF) [task]]] else []
+    let fromScope : List Expr := if scopes then [.heap (.set schedScopeF) [.local 1, .local scopeSlot]] else []
     let trampBody : Expr := if events then Suspend.seqVoid ([
       .assign wasRun (.heap (.get runningF) [task]),
       .heap (.set runningF) [task, .lit (.logic true)],
       .heap (.set curTaskF) [.local 1, task],
-      .heap (.set rootRunIdx[j]!) [.local 0, Suspend.int 1]] ++
-      resumeChain (.local 0) (.local 1) (.call ri (.local 0 :: .local 1 :: pass)) topIdx[j]! 2 4 5 ++ [
+      .heap (.set rootRunIdx[j]!) [.local 0, Suspend.int 1]] ++ toScope ++
+      resumeChain (.local 0) (.local 1) (.call ri (.local 0 :: .local 1 :: pass)) topIdx[j]! 2 4 5 ++ fromScope ++ [
       .heap (.set rootRunIdx[j]!) [.local 0, Suspend.int 0],
       .heap (.set curTaskF) [.local 1, .local 3],
       .heap (.set runningF) [task, .local wasRun],
@@ -1400,19 +1472,21 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
         fun e => Expr.seq e (.local 2)
       else Suspend.seqVoid ([
       .heap (.set runningF) [task, .lit (.logic true)],
-      .heap (.set curTaskF) [.local 1, task]] ++
-      resumeChain (.local 0) (.local 1) (.call ri (.local 0 :: .local 1 :: pass)) topIdx[j]! 2 4 5 ++ [
+      .heap (.set curTaskF) [.local 1, task]] ++ toScope ++
+      resumeChain (.local 0) (.local 1) (.call ri (.local 0 :: .local 1 :: pass)) topIdx[j]! 2 4 5 ++ fromScope ++ [
       .heap (.set curTaskF) [.local 1, .local 3],
       .heap (.set runningF) [task, .lit (.logic false)],
       takeReq]) |>
         fun e => Expr.seq e (.local 2)
     rootFns := rootFns.push { name := s!"$spawn{k}$tramp", arity := 2,
-                              nslots := (if leafy then 6 else 4) + (if events then 1 else 0), decides := false,
+                              nslots := (if leafy then 6 else 4) + (if events then 1 else 0) + (if scopes then 1 else 0),
+                              decides := false,
                               writes := true, body := initPrefixE 2 ([Suspend.int 0, .heap (.get curTaskF) [.local 1]] ++
                                 (if leafy then [Suspend.int 0, Suspend.int 0] else []) ++
-                                (if events then [.lit (.logic false)] else [])) trampBody }
+                                (if events then [.lit (.logic false)] else []) ++
+                                (if scopes then [.heap (.get schedScopeF) [.local 1]] else [])) trampBody }
     rootTys := rootTys.push ([frameTy j, schedTy, .int, taskBaseTy] ++ (if leafy then [.int, .int] else []) ++
-      (if events then [.logic] else []))
+      (if events then [.logic] else []) ++ (if scopes then [scopeTy] else []))
     let start : Expr := Suspend.seqVoid ([
       .call linkIdx [.local 0, .local 1],
       .heap (.set rootF) [.heap (.get (Suspend.slotBaseOf sites arms)) [.local 1], .prim .mkSome [.local 1]],
@@ -1502,8 +1576,15 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     let task : Expr := .heap (.get (Suspend.slotBaseOf sites arms)) [.local 0]
     -- (marked cancelled first: a cancel of it while it unwinds, from a
     -- defer, changes nothing, #261)
-    let cbody : Expr := Suspend.seqVoid [.heap (.set tCancelledF) [task, .lit (.logic true)],
-      .heap (.set tDoneF) [task, .lit (.logic true)], .call (nFns + 4 * j + 2) (.local 0 :: .local 1 :: pass)]
+    -- (#724: its children are stopped before any of its defers runs, after
+    -- the arms it waits in, as Epic's Verse VM cancels a task: UEFN 43.12,
+    -- followup-conc/branch-cancel-order, cancel-branch-before-sync-arms)
+    let tscope : Expr := .heap (.get taskScopeF) [task]
+    let cbody : Expr := Suspend.seqVoid ([.heap (.set tCancelledF) [task, .lit (.logic true)],
+      .heap (.set tDoneF) [task, .lit (.logic true)]] ++
+      (if scopes then [.call unwindPushMark [.local 1, tscope]] else []) ++
+      [.call (nFns + 4 * j + 2) (.local 0 :: .local 1 :: pass)] ++
+      (if scopes then [.call unwindPopMark [.local 1, tscope]] else []))
     let cfn : Fn := { name := s!"$spawn{k}$cancelT", arity := 2, nslots := 2, decides := false, writes := true, body := cbody }
     cancelFns := cancelFns.push cfn
     cancelTys := cancelTys.push [frameTy j, schedTy]
@@ -1546,6 +1627,93 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   fns := fns ++ cancelFns
   slotTys := slotTys ++ cancelTys
   fsigs := fsigs ++ cancelSigs.toList
+  -- (#724) stopping a scope's children: `$stopScope(sched, scope)` takes
+  -- them newest first, each out of the list before it is stopped
+  -- (`$popKid(cell, sched, scope)`), and stops each through a dispatch on
+  -- its class (`$stopRoot(root, sched)`) to its wrapper's `stopKid(w,
+  -- sched)`: the wrapper marked done and, unless the arm ended, the arm
+  -- cancelled, which runs its defers and then stops its own scope's
+  -- children (`Suspend.region`); in event mode an arm that runs (it made the
+  -- `Signal` under which its task ended) is cancelled by its trampoline when
+  -- the run returns, as a function's stopped branch was (#513)
+  let stopScopeIdx := fns.size
+  if scopes then
+    let cellTagS := tagBase + L + B
+    let cellTyS : VTy := .ref [cellTagS] []
+    let popKidIdx := stopScopeIdx + 1
+    let stopRootIdx := stopScopeIdx + 2
+    let stopWOf (K : Nat) : Nat := stopScopeIdx + 3 + K
+    let stopScopeBody : Expr := .loop (.ite (.assign 2 (.prim .query [.heap (.get kidsF) [.local 1]]))
+      (.seq (.ite (.heap (.isTag [cellTagS]) [.local 2]) (.call popKidIdx [.local 2, .local 0, .local 1]) Suspend.vd)
+        Suspend.vd) .brk)
+    fns := fns.push { name := "$stopScope", arity := 2, nslots := 3, decides := false, writes := true,
+                      body := initPrefixE 2 [.local 1] stopScopeBody }
+    slotTys := slotTys.push [schedTy, scopeTy, .ref [cellTagS, scopeTag] []]
+    fsigs := fsigs ++ [([schedTy, scopeTy], VTy.void)]
+    fns := fns.push { name := "$popKid", arity := 3, nslots := 3, decides := false, writes := true,
+                      body := Suspend.seqVoid [.heap (.set kidsF) [.local 2, .heap (.get 1) [.local 0]],
+                        .call stopRootIdx [.heap (.get 0) [.local 0], .local 1]] }
+    slotTys := slotTys.push [cellTyS, schedTy, scopeTy]
+    fsigs := fsigs ++ [([cellTyS, schedTy, scopeTy], VTy.void)]
+    let stopRootBody : Expr := (List.range B).foldr (fun K acc =>
+      Expr.ite (.heap (.isTag [wrapTag K]) [.local 0]) (.call (stopWOf K) [.local 0, .local 1]) acc) Suspend.vd
+    fns := fns.push { name := "$stopRoot", arity := 2, nslots := 2, decides := false, writes := true,
+                      body := stopRootBody }
+    slotTys := slotTys.push [rootAny, schedTy]
+    fsigs := fsigs ++ [([rootAny, schedTy], VTy.void)]
+    for K in List.range B do
+      let (armRes, doneA, pass) := branchInfo[K]!
+      let fr : Expr := .heap (.get 1) [.local 0]
+      let pass := pass.map fun e => match e with
+        | .heap op _ => Expr.heap op [fr]
+        | e => e
+      let pcA := doneA - 1
+      let cancelArm : Expr := .seq (Suspend.seqVoid [.heap (.set doneA) [fr, Suspend.int 2],
+        .call (armRes + 1) (fr :: .local 1 :: pass)]) Suspend.vd
+      let stopW := wrapFnBase + 3 * K + 2
+      let body : Expr := if events then Suspend.seqVoid [
+          .assign 2 (.call stopW [.local 0, .local 1]),
+          .ite (.prim .eq [.heap (.get doneA) [fr], Suspend.int 0])
+            (.seq (.ite (Suspend.allOf [.prim .lt [Suspend.int 0, .heap (.get pcA) [fr]], .prim .eq [.local 2, Suspend.int 0]])
+              cancelArm
+              (.ite (.prim .ne [.heap (.get pcA) [fr], Suspend.int 0])
+                (.seq (.heap (.set doneA) [fr, Suspend.int 3]) Suspend.vd) Suspend.vd)) Suspend.vd) Suspend.vd]
+        else Suspend.seqVoid [.call stopW [.local 0, .local 1],
+          .ite (Suspend.allOf [.prim .ne [.heap (.get pcA) [fr], Suspend.int 0], .prim .eq [.heap (.get doneA) [fr], Suspend.int 0]])
+            cancelArm Suspend.vd]
+      fns := fns.push { name := s!"$branch{K}$stopKid", arity := 2, nslots := if events then 3 else 2,
+                        decides := false, writes := true,
+                        body := if events then initPrefixE 2 [Suspend.int 0] body else body }
+      slotTys := slotTys.push ([wrapTy K, schedTy] ++ (if events then [.int] else []))
+      fsigs := fsigs ++ [([wrapTy K, schedTy], VTy.void)]
+    -- (#724) a cancelled task's children are stopped after the arms it waits
+    -- in, its newest children, and before any of its defers runs (Epic's
+    -- Verse VM, UEFN 43.12, followup-conc/cancel-branch-before-sync-arms):
+    -- `$unwindPush(sched, scope)`, as its cancel starts, makes its scope due
+    -- and the scheduler's `Unwinding`, keeping the one it hides;
+    -- `$unwindFlush(sched)`, where a site's waits were cancelled and before
+    -- its defers, stops a due scope; `$unwindPop(sched, scope)`, as the
+    -- cancel ends, stops it if still due and restores the one hidden
+    let unwindFlushIdx := stopScopeIdx + 4 + B
+    fns := fns.push { name := "$unwindPush", arity := 2, nslots := 2, decides := false, writes := true,
+                      body := Suspend.seqVoid [.heap (.set outerUnwindF) [.local 1, .heap (.get unwindingF) [.local 0]],
+                        .heap (.set unwindDueF) [.local 1, .lit (.logic true)],
+                        .heap (.set unwindingF) [.local 0, .prim .mkSome [.local 1]]] }
+    slotTys := slotTys.push [schedTy, scopeTy]
+    fsigs := fsigs ++ [([schedTy, scopeTy], VTy.void)]
+    let flushBody : Expr := .ite (.assign 1 (.prim .query [.heap (.get unwindingF) [.local 0]]))
+      (.seq (.ite (.prim .eq [.heap (.get unwindDueF) [.local 1], .lit (.logic true)])
+        (.seq (Suspend.seqVoid [.heap (.set unwindDueF) [.local 1, .lit (.logic false)],
+          .call stopScopeIdx [.local 0, .local 1]]) Suspend.vd) Suspend.vd) Suspend.vd) Suspend.vd
+    fns := fns.push { name := "$unwindFlush", arity := 1, nslots := 2, decides := false, writes := true,
+                      body := initPrefixE 1 [.heap (.get mainScopeF) [.local 0]] flushBody }
+    slotTys := slotTys.push [schedTy, scopeTy]
+    fsigs := fsigs ++ [([schedTy], VTy.void)]
+    fns := fns.push { name := "$unwindPop", arity := 2, nslots := 2, decides := false, writes := true,
+                      body := Suspend.seqVoid [.call unwindFlushIdx [.local 0],
+                        .heap (.set unwindingF) [.local 0, .heap (.get outerUnwindF) [.local 1]]] }
+    slotTys := slotTys.push [schedTy, scopeTy]
+    fsigs := fsigs ++ [([schedTy, scopeTy], VTy.void)]
   -- (event mode) `$wakeRoot(waiter, sched)`, the prelude's stub's body: the
   -- root the waiter was last polled in, resumed inside the `Signal` that
   -- woke it, through a dispatch on its class to a `wake` function of each
@@ -1565,8 +1733,13 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     let pro : List Expr := [.assign 3 (.heap (.get cancelCurF) [sch]), .heap (.set cancelCurF) [sch, .lit (.logic false)],
       .assign 4 (.heap (.get curRootF) [sch]), setCur sch (.local 0)]
     let epi : List Expr := [.heap (.set curRootF) [sch, .local 4], .heap (.set cancelCurF) [sch, .local 3]]
-    let running (task call : Expr) : List Expr := [.assign 5 (.heap (.get curTaskF) [sch]),
-      .heap (.set curTaskF) [sch, task], .assign 2 call, .assign 2 (Suspend.int 0),
+    -- (#724: and with the scheduler's current scope that code's, then back)
+    let inScopeW (scope : Option Expr) (code : List Expr) : List Expr := match scope with
+      | some sc => if scopes then [.assign 6 (.heap (.get schedScopeF) [sch]), .heap (.set schedScopeF) [sch, sc]] ++
+          code ++ [.heap (.set schedScopeF) [sch, .local 6]] else code
+      | none => code
+    let running (task call : Expr) (scope : Option Expr := none) : List Expr := [.assign 5 (.heap (.get curTaskF) [sch]),
+      .heap (.set curTaskF) [sch, task]] ++ inScopeW scope [.assign 2 call] ++ [.assign 2 (Suspend.int 0),
       .heap (.set curTaskF) [sch, .local 5],
       .ite (.prim .query [.heap (.get cancelCurF) [sch]])
         (.seq (Suspend.seqVoid [.heap (.set cancelCurF) [sch, .lit (.logic false)],
@@ -1579,33 +1752,48 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       (.seq (Suspend.seqVoid ([.heap (.set Suspend.pcF) [.local 0, Suspend.int (-1)],
         .heap (.set progressF) [sch, .lit (.logic true)]] ++
         (if dead then [.heap (.set deadF) [sch, .lit (.logic true)]] else []))) Suspend.vd) Suspend.vd
-    let wakeFn (name : String) (rootTy : VTy) (isRunning : Expr) (run notRun : List Expr) (dead : Bool) :
-        Fn × List VTy × (List VTy × VTy) :=
-      let body := .ite (.prim .ne [.heap (.get Suspend.pcF) [.local 0], Suspend.int (-1)])
+    let wakeFn (name : String) (rootTy : VTy) (isRunning : Expr) (run notRun : List Expr) (dead : Bool)
+        (cancelling : Option Expr := none) : Fn × List VTy × (List VTy × VTy) :=
+      -- (#724: a root whose task is being cancelled, its children stopped
+      -- or its code unwinding, is not resumed: a `Signal` in their defers
+      -- wakes none of its waits)
+      let live : Expr := .prim .ne [.heap (.get Suspend.pcF) [.local 0], Suspend.int (-1)]
+      let live : Expr := match cancelling with
+        | some c => Suspend.allOf [live, .prim .eq [c, .lit (.logic false)]]
+        | none => live
+      let body := .ite live
         (.seq (Suspend.seqVoid (pro ++ [.ite isRunning (.seq (Suspend.seqVoid run) Suspend.vd)
           (.seq (Suspend.seqVoid notRun) Suspend.vd)] ++ epi ++ [ended dead])) Suspend.vd) Suspend.vd
-      ({ name, arity := 2, nslots := 6, decides := false, writes := true,
-         body := initPrefixE 2 [Suspend.int 0, .lit (.logic false), .lit .none, .heap (.get curTaskF) [sch]] body },
-       [rootTy, schedTy, .int, .logic, .opt rootAny, taskBaseTy], ([rootTy, schedTy], VTy.void))
+      ({ name, arity := 2, nslots := if scopes then 7 else 6, decides := false, writes := true,
+         body := initPrefixE 2 ([Suspend.int 0, .lit (.logic false), .lit .none, .heap (.get curTaskF) [sch]] ++
+           (if scopes then [.heap (.get schedScopeF) [sch]] else [])) body },
+       [rootTy, schedTy, .int, .logic, .opt rootAny, taskBaseTy] ++ (if scopes then [scopeTy] else []),
+       ([rootTy, schedTy], VTy.void))
     let mut wakes : Array (Nat × (Fn × List VTy × (List VTy × VTy))) := #[]
     if mainSig.suspends then
       let j := mainJ
       let isRun : Expr := .prim .eq [.heap (.get rootRunIdx[j]!) [.local 0], Suspend.int 1]
       let notRun : List Expr := [.assign 5 (.heap (.get curTaskF) [sch]),
         .heap (.set curTaskF) [sch, .heap (.get mainTaskF) [sch]],
-        .heap (.set rootRunIdx[j]!) [.local 0, Suspend.int 1],
-        .assign 2 (.call mainSig.idx [.local 0, sch]),
+        .heap (.set rootRunIdx[j]!) [.local 0, Suspend.int 1]] ++
+        inScopeW (some (.heap (.get mainScopeF) [sch])) [.assign 2 (.call mainSig.idx [.local 0, sch])] ++ [
         .heap (.set rootRunIdx[j]!) [.local 0, Suspend.int 0],
         .heap (.set curTaskF) [sch, .local 5]] ++
         (if leafy then [.heap (.set topIdx[j]!) [.local 0, sch]] else []) ++ forget sch ++ [
-        -- (`Main` awaited a cancelled task: it is cancelled, as `$Run` does)
+        -- (`Main` awaited a cancelled task: it is cancelled, as `$Run` does,
+        -- its children before its defers, #724)
         .ite (.prim .query [.heap (.get cancelCurF) [sch]])
           (.seq (Suspend.seqVoid [.heap (.set cancelCurF) [sch, .lit (.logic false)],
             .ite (.prim .eq [.local 2, Suspend.int 1]) Suspend.vd
-              (.seq (Suspend.seqVoid [.call (nFns + 4 * j + 2) [.local 0, sch], .assign 2 (Suspend.int 1)]) Suspend.vd)])
+              (.seq (Suspend.seqVoid (
+                (if scopes then [.call unwindPushMark [sch, .heap (.get mainScopeF) [sch]]] else []) ++
+                [.call (nFns + 4 * j + 2) [.local 0, sch]] ++
+                (if scopes then [.call unwindPopMark [sch, .heap (.get mainScopeF) [sch]]] else []) ++
+                [.assign 2 (Suspend.int 1)])) Suspend.vd)])
             Suspend.vd) Suspend.vd]
       wakes := wakes.push (tagBase + j, wakeFn "$Main$wake" (frameTy j) isRun
-        (running (.heap (.get mainTaskF) [sch]) (.call mainSig.idx [.local 0, sch])) notRun false)
+        (running (.heap (.get mainTaskF) [sch]) (.call mainSig.idx [.local 0, sch]) (some (.heap (.get mainScopeF) [sch])))
+        notRun false)
     for k in List.range roots.size do
       let j := rootJ k
       let (ri, _, _) := roots[k]!
@@ -1615,8 +1803,9 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       let task : Expr := .heap (.get (Suspend.slotBaseOf sites arms)) [.local 0]
       let isRun : Expr := .prim .eq [.heap (.get rootRunIdx[j]!) [.local 0], Suspend.int 1]
       wakes := wakes.push (tagBase + j, wakeFn s!"$spawn{k}$wake" (frameTy j) isRun
-        (running task (.call ri (.local 0 :: sch :: pass)))
-        ([.assign 2 (.call (trampOf k) [.local 0, sch])] ++ forget sch ++ [takeCancelW]) true)
+        (running task (.call ri (.local 0 :: sch :: pass)) (some (.heap (.get taskScopeF) [task])))
+        ([.assign 2 (.call (trampOf k) [.local 0, sch])] ++ forget sch ++ [takeCancelW]) true
+        (some (.heap (.get tCancelledF) [task])))
     for K in List.range B do
       let (armRes, _, pass) := branchInfo[K]!
       let fr : Expr := .heap (.get 1) [.local 0]
@@ -1625,7 +1814,8 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
         | e => e
       let isRun : Expr := .prim .eq [.heap (.get 3) [.local 0], Suspend.int 1]
       wakes := wakes.push (wrapTag K, wakeFn s!"$branch{K}$wake" (wrapTy K) isRun
-        (running (.heap (.get ownerF) [.local 0]) (.call armRes (fr :: sch :: pass)))
+        (running (.heap (.get ownerF) [.local 0]) (.call armRes (fr :: sch :: pass))
+          (some (.heap (.get (branchScope[K]?.getD 0)) [fr])))
         ([.assign 2 (.call (wrapFnBase + 3 * K) [.local 0, sch])] ++ forget sch ++ [takeCancelW]) true)
     for (_, (f, tys, sg)) in wakes do
       fns := fns.push f
@@ -1729,16 +1919,23 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     -- (event mode: `Main`'s frame records that it runs, for a `Signal` its
     -- code makes, `$wakeRoot`)
     let mainRun (v : Int) : List Expr := if events then [.heap (.set rootRunIdx[j]!) [.local 1, Suspend.int v]] else []
+    -- (#724: `Main`'s code runs in `Main`'s scope)
+    let mainScope : List Expr := if scopes then
+        [.heap (.set schedScopeF) [sch, .heap (.get mainScopeF) [sch]]] else []
     let pass : Expr := .loop (Suspend.seqVoid ([
       .heap (.set progressF) [sch, .lit (.logic false)],
       .heap (.set 1) [sch, Suspend.int (-1)],
-      ] ++ (if events then [setCur sch (.local 1)] else []) ++ mainRun 1 ++
+      ] ++ (if events then [setCur sch (.local 1)] else []) ++ mainScope ++ mainRun 1 ++
       resumeChain (.local 1) sch (.call mainSig.idx [.local 1, sch]) topIdx[j]! st 8 9 ++ mainRun 0 ++ [
       .ite (.prim .eq [.local st, Suspend.int 1]) (.seq (.assign mainDone (Suspend.int 1)) .brk) Suspend.vd,
-      -- (`Main` awaited a cancelled task: it is cancelled, and so the program ends)
+      -- (`Main` awaited a cancelled task: it is cancelled, and so the program
+      -- ends; #724: its children first, as any cancelled task's)
       .ite (.prim .query [.heap (.get cancelCurF) [sch]])
-        (.seq (Suspend.seqVoid [.heap (.set cancelCurF) [sch, .lit (.logic false)],
-          .call (nFns + 4 * j + 2) [.local 1, sch], .assign mainDone (Suspend.int 1)]) .brk) Suspend.vd] ++
+        (.seq (Suspend.seqVoid ([.heap (.set cancelCurF) [sch, .lit (.logic false)]] ++
+          (if scopes then [.call unwindPushMark [sch, .heap (.get mainScopeF) [sch]]] else []) ++
+          [.call (nFns + 4 * j + 2) [.local 1, sch]] ++
+          (if scopes then [.call unwindPopMark [sch, .heap (.get mainScopeF) [sch]]] else []) ++
+          [.assign mainDone (Suspend.int 1)])) .brk) Suspend.vd] ++
       pollRoots ++
       -- (event mode: `Main` may end in a `Signal` during the roots' poll)
       (if events then [.ite (.prim .eq [.local mainDone, Suspend.int 1]) .brk Suspend.vd] else []) ++
@@ -1761,11 +1958,15 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
             .heap (.set tailF) [sch, .prim .mkSome [.local c]]]) Suspend.vd)
           (.seq (.heap (.set tailF) [sch, .lit .none]) Suspend.vd)]) Suspend.vd) Suspend.vd]
     -- (event mode: the task `Main`'s code runs as, for `$wakeRoot`)
+    -- (#724: once `Main` has ended, its children are stopped, its branches
+    -- and `rush` arms that go on, wherever its code started them, as when a
+    -- task ends; then the program ends, without the other tasks)
     let run : Expr := Suspend.seqVoid ((if events then [.heap (.set mainTaskF) [sch, .heap (.get curTaskF) [sch]]] else []) ++
       [.loop (Suspend.seqVoid (compact ++ [pass,
       .ite (.prim .eq [.local mainDone, Suspend.int 1]) .brk Suspend.vd,
       .ite (.prim .lt [.heap (.get 1) [sch], Suspend.int 0]) (.seq (.prim .userErr []) Suspend.vd) Suspend.vd,
-      .heap (.set 0) [sch, .heap (.get 1) [sch]]]))])
+      .heap (.set 0) [sch, .heap (.get 1) [sch]]]))] ++
+      (if scopes then [.call stopScopeMark [sch, .heap (.get mainScopeF) [sch]]] else []))
     let cellInit : Expr := .heap (.new cellTag) [.local 1, .lit .none]
     fns := fns.push { name := "$Run", arity := 2, nslots := if leafy then 10 else 8,
                       decides := false, writes := true,
@@ -1783,6 +1984,11 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     fsigs := fsigs ++ [([], VTy.void)]
     mainCall := .call (runIdx + 1) []
   fns := fns.map fun fn => { fn with body := Suspend.substCall resumeAnyMark (fun es => .call resumeAnyIdx es) fn.body }
+  if scopes then
+    fns := fns.map fun fn => { fn with body := Suspend.substCall stopScopeMark (fun es => .call stopScopeIdx es) fn.body }
+    fns := fns.map fun fn => { fn with body := Suspend.substCall unwindPushMark (fun es => .call (stopScopeIdx + 3 + B) es) fn.body }
+    fns := fns.map fun fn => { fn with body := Suspend.substCall unwindFlushMark (fun es => .call (stopScopeIdx + 4 + B) es) fn.body }
+    fns := fns.map fun fn => { fn with body := Suspend.substCall unwindPopMark (fun es => .call (stopScopeIdx + 5 + B) es) fn.body }
   -- (and the values of the scheduler's fields it adds, #362, for its prototype)
   return { fns, slotTys, fsigs, classTable, frameClasses, mainCall, framePins := framePins.toList,
            schedMore := (if leafy then [(match schedLit with | .lit v => v | _ => .none), .int (-1)] else []) ++
