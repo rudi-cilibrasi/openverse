@@ -7,6 +7,9 @@
 # a for, with a class's block that allocates nothing, with a function that
 # declares a var only on a path not taken, beside functions that do declare
 # vars and are called from Main (not from a constant).
+# Run with --extended-defaults: Limit is defined by a call of a function of
+# the program, which Epic's compiler refuses in a data member (3582, UEFN
+# 43.12) and openverse refuses too without the flag.
 F(Condition:logic)<allocates>:int =
     if (Condition?):
         var X:int = 0
