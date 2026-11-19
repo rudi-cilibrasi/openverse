@@ -636,6 +636,19 @@ def classMethods (tops : List STop) (classes : Classes) (fields : Fields) : Exce
       let clsOf (f : String) : String := (f.splitOn ".").head!
       let mut chosen : List String := []
       for r in roots do
+        -- (#724: an interface's method is implemented below the interface,
+        -- in a class or interface that inherits it: a class's method of its
+        -- name from a class that does not is a method of its own, qualified
+        -- apart, `<final>` or not (the Book of Verse's tests,
+        -- Attributes/final.versetest:121, "qualified separately ... it stays
+        -- unmet"). UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, refuses
+        -- such a class, error 3591, followup-book2/final-method-interface
+        -- and -nonfinal, and admits one that overrides the method itself,
+        -- final-method-interface-control. `slotImpls` reaches the class
+        -- chain's for an interface default's dispatch, as Java does.)
+        if (classes.henv.info r).isIface && (classes.henv.slotImpls (implAt r) (ups.filter (classes.henv.isSub · r)) r).isEmpty then
+          if let some f := (classes.henv.slotImpls (implAt r) ups r).head? then
+            throw s!"{cd.pos.show}: {cd.name} inherits the abstract method {mn} from {r} and does not implement it: {clsOf f}'s {mn} is not {r}'s, since {clsOf f} is not below {r} (a method is qualified by where it is introduced); override it in {cd.name} (Epic's Verse compiler, UEFN 43.12: error 3591, \"Non-abstract class inherits abstract function `{mn}` from `{r}` but does not provide an implementation\")"
         match classes.henv.slotImpls (implAt r) ups r with
         | [] => throw s!"{cd.pos.show}: {cd.name} must implement {mn} (declared abstract in {r})"
         | f :: g :: _ =>

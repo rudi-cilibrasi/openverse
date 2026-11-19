@@ -2920,6 +2920,16 @@ openverse takes Epic's compiler's refusals, one commit each (#724):
   `Enum.versetest:171` (`bp_vm_only`) moves to agree; its Verse VM twin,
   `:233`, from agree to refused: Epic's shipped compiler refuses what the
   Book's Verse VM admits.
+- **An interface's abstract method is implemented below the interface**
+  (3591, "Non-abstract class inherits abstract function … but does not
+  provide an implementation"): a class that adds an interface no longer
+  takes a method of its name from a class that is not below it, `<final>`
+  or not, as `slotImpls` did, as Java does; a default of such an interface
+  still yields to the class chain's method (`followup-book3` asks Epic).
+  `Attributes/final.versetest:125` moves to agree. Six of openverse's tests
+  relied on the Java reading: four now implement the method in the class,
+  and two error tests give the interface a default, which keeps the
+  signature check they test.
 
 ## Not covered, and why it matters
 

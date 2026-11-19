@@ -1,5 +1,8 @@
-# qualified implementations of class roots, and a default a superclass
-# inherits implementing an interface a subclass adds (#70)
+# qualified implementations of class roots (#70), and a subclass that adds an
+# interface implementing its method itself beside a default its superclass
+# inherits (#724: the inherited default, from an interface that is not below
+# j, does not implement j's N, UEFN 43.12 error 3591,
+# followup-book2/final-method-interface)
 
 a := class<abstract>:
     M():int
@@ -19,6 +22,7 @@ b := class(i):
     V:int = 0
 e := class(b, j):
     W:int = 0
+    N<override>():int = 7
 
 Main():void =
     X:a = d{}

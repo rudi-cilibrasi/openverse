@@ -1050,9 +1050,18 @@ circle := class(shape, labelled):
   - **Choosing.** For an object, a slot's implementation is the most
     specific `(r:)M` or plain `M` above its class that is below `r` or
     reached through a class of its chain that is not below `r`. As in Java,
-    what a class has (its own method, or a default it inherits) implements an
-    interface that a subclass adds. A default of the class's own interfaces
-    implements only the slots above it.
+    what a class has (its own method, or a default it inherits) is chosen
+    over a default of an interface that a subclass adds. A default of the
+    class's own interfaces implements only the slots above it. An abstract
+    method of an interface is implemented below the interface only: a
+    concrete class that adds the interface implements it itself (or a class
+    between them does), since a method of its name from a class that is not
+    below the interface is that class's own, qualified apart, `<final>` or
+    not (#724; UEFN 43.12 refuses `class_z := class(class_x, i_y){}` with
+    `class_x`'s `MethodX` and `i_y`'s abstract one, error 3591,
+    "Non-abstract class inherits abstract function `MethodX` from `i_y` but
+    does not provide an implementation", `followup-book2/final-method-interface`;
+    the Book's tests, `Attributes/final.versetest:121`).
   - **Calls.** A call through an `i1` uses slot `i1`. `X.(i1:)M()` names it,
     and inside a method a bare `(i1:)M()` is `Self.(i1:)M()`. The qualifier
     names the class or interface that introduces `M`: one that inherits or
