@@ -2209,6 +2209,8 @@ elif kind == 'refined-for':
 else:
     print('Main():void = Print("{Run(7)}")' if kind.startswith('typed-') else 'Main():void = Print("{Run(7).Length}")')
 PY
+    # (#515: Epic's default effect written out)
+    python3 -I "$root/scripts/models/default_effect.py" "$tmp/p.verse"
     timeout "$limit" "$root/.lake/build/bin/openverse" emit "$tmp/p.verse" "${compat[@]}" -o "$tmp/p.vbc" || {
       rc=$?
       if (( rc == 124 )); then

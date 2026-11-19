@@ -14,7 +14,9 @@ with tempfile.TemporaryDirectory(prefix='openverse-rational-') as directory:
         source,expected,bytecode=[tmp/f'p.{ext}' for ext in ['verse','expected','vbc']]
         gen=subprocess.run(['python3','-I',str(root/'scripts/models/rational_arith.py'),str(seed),str(expected)],capture_output=True,text=True,timeout=10)
         if gen.returncode:raise SystemExit(f'rational generator failed seed {seed}: {gen.stderr}')
+        # (#515: Epic's default effect, written out)
         source.write_text(gen.stdout)
+        subprocess.run(['python3','-I',str(root/'scripts/models/default_effect.py'),str(source)],check=True)
         r=subprocess.run([str(ov),'run',str(source),'--emit',str(bytecode)],capture_output=True,text=True,timeout=30)
         want=expected.read_text();actual=f'exit={r.returncode}\n'+r.stdout
         c=None if r.returncode==4 else subprocess.run([str(cv),str(bytecode)],capture_output=True,text=True,timeout=30)
