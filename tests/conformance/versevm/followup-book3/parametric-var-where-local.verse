@@ -3,6 +3,8 @@
 # prints
 #   result 1
 # If Epic refuses it, the rule is not only about a function's type.
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# BuildAll, 2026-11-19) admits it (compiled only).
 c(t:type) := class:
     var Data:t
 

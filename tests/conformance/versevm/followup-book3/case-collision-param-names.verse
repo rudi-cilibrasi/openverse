@@ -6,6 +6,9 @@
 # that differ only in case and take the same parameters"). If Epic admits
 # it, it prints
 #   lower 42 | upper 420
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# BuildAll, 2026-11-19) refuses it: 9000 (L8) "Local variable `A` not found
+# internally in VM.".
 Function(A:int):int = A
 FUNCTION(B:int):int = 420
 

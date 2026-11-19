@@ -4,6 +4,8 @@
 # class's own methods only, and prints
 #   lower 42 | upper 420
 # If Epic refuses it, a subclass's methods count with its parents'.
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# BuildAll, 2026-11-19) admits it (compiled only).
 base_class := class:
     Function():int = 42
 

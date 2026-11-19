@@ -6,6 +6,8 @@
 #   through the interface 1
 # If Epic takes the interface's default: through the interface 3; it may
 # also refuse it as ambiguous.
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# BuildAll, 2026-11-19) admits it (compiled only).
 class_x := class:
     MethodX():int = 1
 

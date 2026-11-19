@@ -3,6 +3,8 @@
 # OpenVerse admits it and prints
 #   count 2
 # If Epic refuses it, any var field of a parametric class counts.
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# BuildAll, 2026-11-19) admits it (compiled only).
 c(t:type) := class:
     var Count:int = 0
     Data:t
