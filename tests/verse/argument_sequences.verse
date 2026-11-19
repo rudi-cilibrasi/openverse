@@ -2,7 +2,7 @@
 # then passes 2 (Book of Verse ch. 1, "Semicolons vs Commas": `Process(
 # LogEvent("called"); 42)`; its tests: `F0(99;100,20)`, `case(Bar; Baz)`).
 F(A:int, B:int):int = A * 10 + B
-G(I:int)<decides>:int = I + 1
+G(I:int)<transacts><decides>:int = I + 1
 Main():void =
     var Count:int = 0
     R := F(set Count = 5; 2, 3)

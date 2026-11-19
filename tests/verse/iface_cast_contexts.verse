@@ -1,28 +1,28 @@
 # (#53, #351) casts to an interface beside the object's type, or that open
 # its type arguments, in the contexts refining casts work in
 base(t:type) := interface:
-    Id():t
+    Id()<transacts>:t
 i1(t:type) := interface(base(t)):
-    A():int
+    A()<transacts>:int
 i2(t:type) := interface(base(t)):
-    B():int
+    B()<transacts>:int
 c(t:type) := class(i1(t), i2(t)):
     V:t
-    Id<override>():t = V
-    A<override>():int = 1
-    B<override>():int = 2
+    Id<override>()<transacts>:t = V
+    A<override>()<transacts>:int = 1
+    B<override>()<transacts>:int = 2
 k := class(i1(string), i2(string)):
-    Id<override>():string = "k"
-    A<override>():int = 10
-    B<override>():int = 20
+    Id<override>()<transacts>:string = "k"
+    A<override>()<transacts>:int = 10
+    B<override>()<transacts>:int = 20
 only2(t:type) := class(i2(t)):
     V:t
-    Id<override>():t = V
-    B<override>():int = 3
+    Id<override>()<transacts>:t = V
+    B<override>()<transacts>:int = 3
 cell := class:
     var N:int = 0
 # the interfaces above both relate them: J is an i1(u), so J.Id() a u
-Swap(I:i2(u) where u:type):?u =
+Swap(I:i2(u) where u:type)<transacts>:?u =
     if (J := i1[I]) then option{J.Id()} else false
 # in a <decides> body, after a write the failure undoes
 Sum(H:cell, I:i2(u) where u:type)<transacts><decides>:int =

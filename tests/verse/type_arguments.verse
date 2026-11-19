@@ -1,7 +1,7 @@
 # A type given as an argument and used as a type (Book of Verse tests,
 # ParametricTypes.versetest 613-624, TypeParam.versetest 57-60): the function is
 # generic over it, and the call writes its type argument.
-FalseOption(t:type):?t = false
+FalseOption(t:type)<transacts>:?t = false
 EmptyArray(t:type):[]t = array{}
 Pair(t:type, X:t, Y:t):tuple(t, t) = (X, Y)
 c := class:

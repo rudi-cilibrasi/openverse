@@ -5,18 +5,18 @@
 # for unrelated classes (which a function taking an any takes), and the others keep theirs.
 a := class:
     M()<transacts>:int = 1 | 2
-    Q():int = 7
+    Q()<transacts>:int = 7
 b := class:
     M()<transacts>:int = 30 | 40
-    Q():int = 8
+    Q()<transacts>:int = 8
 c := class:
     G()<transacts>:int = 5 | 6
 d := class:
     G()<transacts>:string = "x" | "y"
 Dup(V:t where t:type):t = V | V
-Tag(V:a):string = "a"
-Tag(V:b):string = "b"
-Take(V:any):void = Print("took")
+Tag(V:a)<transacts>:string = "a"
+Tag(V:b)<transacts>:string = "b"
+Take(V:any)<transacts>:void = Print("took")
 Main()<transacts>:void =
     # an if with an else: X an int after it, A an any
     if (A := (Dup(a{}) | Dup(b{})), X := A.M(), X > 2):

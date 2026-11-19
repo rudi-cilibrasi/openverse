@@ -8,7 +8,7 @@ pt := struct:
 Tell(S:string, X:int)<transacts>:int =
     Print(S)
     X
-Tw(A:int, ?B:int = 1):int = A * 10 + B
+Tw(A:int, ?B:int = 1)<transacts>:int = A * 10 + B
 Named(N:int)<transacts>:int =
     if (N <= 0) then 1 else (Tw(Tell("n {N}", 1), ?B := Named(N - 1)) | N)
 Built(N:int)<transacts>:int =

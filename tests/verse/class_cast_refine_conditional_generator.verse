@@ -7,14 +7,14 @@ dup(t:type) := class(pair(t, t)):
     var Counter:int=0
 Condition(P:pair(a, b), N:int where a:type, b:type):[]int =
     for (D := dup[P], X : D.Items, Y := (if (D.C > 0) then (N | 10) else 0)) { Y }
-Values(P:pair(a, b), N:int where a:type, b:type):[]a =
+Values(P:pair(a, b), N:int where a:type, b:type)<transacts>:[]a =
     for (D := dup[P], X : D.Items, Y := (if (N > 0) then (D.A | D.B) else D.A)) { Y }
-OtherValues(P:pair(a, b), N:int where a:type, b:type):[]b =
+OtherValues(P:pair(a, b), N:int where a:type, b:type)<transacts>:[]b =
     for (D := dup[P], X : D.Items, Y := (if (N > 0) then (D.A | D.B) else D.A)) { Y }
 Local(P:pair(a, b), N:int where a:type, b:type):[]int =
     var Count:int=0
     for (D := dup[P], X : D.Items, (set Count=(if (N > 0) then (D.C | 10) else 0);true?), Y:=Count) { Y }
-Field(P:pair(a, b), N:int where a:type, b:type):[]int =
+Field(P:pair(a, b), N:int where a:type, b:type)<transacts>:[]int =
     for (D := dup[P], X : D.Items, (set D.Counter=(if (N > 0) then (D.C | 10) else 0);true?), Y:=D.Counter) { Y }
 Main():void=
     D:=dup(int){A:=7,B:=8,Items:=array{5,6},C:=2}

@@ -3,14 +3,14 @@
 pair(a:type,b:type):=class{}
 dup(t:type):=class(pair(t,t)){C:int=4}
 box:=class{Value:int}
-Opt(P:pair(a,b) where a:type,b:type):?box=option{box{Value:=dup[P].C}}
+Opt(P:pair(a,b) where a:type,b:type)<transacts>:?box=option{box{Value:=dup[P].C}}
 Cond(P:pair(a,b) where a:type,b:type):int=if(V:=box{Value:=dup[P].C})then V.Value else -1
-Collect(Ps:[]pair(a,b) where a:type,b:type):[]int=for(P:Ps,V:=box{Value:=dup[P].C}){V.Value}
-First(Ps:[]pair(a,b) where a:type,b:type)<decides>:box=first{P:Ps;V:=box{Value:=dup[P].C};V.Value>3;V}
-Pick(P:pair(a,b),N:int where a:type,b:type)<decides>:box=case(N){1=>box{Value:=dup[P].C},_=>box{Value:=0}}
-Make<constructor>(P:pair(a,b) where a:type,b:type)<decides>:=box:
+Collect(Ps:[]pair(a,b) where a:type,b:type)<transacts>:[]int=for(P:Ps,V:=box{Value:=dup[P].C}){V.Value}
+First(Ps:[]pair(a,b) where a:type,b:type)<transacts><decides>:box=first{P:Ps;V:=box{Value:=dup[P].C};V.Value>3;V}
+Pick(P:pair(a,b),N:int where a:type,b:type)<transacts><decides>:box=case(N){1=>box{Value:=dup[P].C},_=>box{Value:=0}}
+Make<constructor>(P:pair(a,b) where a:type,b:type)<transacts><decides>:=box:
     Value:=dup[P].C
-Named(P:pair(a,b) where a:type,b:type)<decides>:box=(D:=dup[P];box{Value:=D.C})
+Named(P:pair(a,b) where a:type,b:type)<transacts><decides>:box=(D:=dup[P];box{Value:=D.C})
 Main():void=
     Good:pair(int,int)=dup(int){}
     Bad:pair(int,int)=pair(int,int){}

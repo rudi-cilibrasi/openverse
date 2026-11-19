@@ -4,7 +4,7 @@ pair(t:type, u:type) := class:
     B:u
 dup(t:type) := class(pair(t, t)):
     C:int = 2
-G(P:pair(a, b), K:int, X:a where a:type, b:type)<decides>:a =
+G(P:pair(a, b), K:int, X:a where a:type, b:type)<transacts><decides>:a =
     if (D := dup[P], K > 2):
         Print("in branch")
         D.C > 3

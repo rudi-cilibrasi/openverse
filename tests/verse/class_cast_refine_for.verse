@@ -13,7 +13,7 @@ fixl(u:type) := class(pair(int, u)):
 cell := class:
     var N:int = 0
 # a filter after the generator; the body's value under the refinement
-Bs(Ps:[]pair(a, b) where a:type, b:type):[]b =
+Bs(Ps:[]pair(a, b) where a:type, b:type)<transacts>:[]b =
     for (P : Ps, D := dup[P]):
         D.A
 # clauses with effects before and after it, names after it in the body
@@ -23,15 +23,15 @@ Fx(H:cell, Ps:[]pair(a, b) where a:type, b:type)<transacts>:[]int =
         set H.N += 100
         Z + F.A
 # the cast before a generator that does not use it
-Grid(P:pair(a, b) where a:type, b:type):[]int =
+Grid(P:pair(a, b) where a:type, b:type)<transacts>:[]int =
     for (D := dup[P], X := 1..3):
         D.C * 10 + X
 # a bare cast, a test; and a return from the body
-First(Ps:[]pair(a, b) where a:type, b:type):int =
+First(Ps:[]pair(a, b) where a:type, b:type)<transacts>:int =
     for (P : Ps, dup[P], Q := dup[P]):
         if (Q.C > 3) then return Q.C
     -1
-Show(Xs:[]int):string =
+Show(Xs:[]int)<transacts>:string =
     var S:string = ""
     for (X : Xs) { set S = "{S}{X}," }
     S

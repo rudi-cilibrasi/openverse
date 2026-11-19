@@ -4,6 +4,10 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+# (#515: Epic's default effect written out in every program this writes)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts/models'))
+import default_effect  # noqa: E402
+default_effect.install()
 
 root = Path(__file__).resolve().parents[2]
 count = int(sys.argv[1]) if len(sys.argv) > 1 else 60

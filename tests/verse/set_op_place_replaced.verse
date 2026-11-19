@@ -22,23 +22,23 @@ pair := struct<computes>:
 cell := class:
     var V:int = 1
 
-Id(N:int):int = N
+Id(N:int)<transacts>:int = N
 
-ShowInts(Items:[]int):string =
+ShowInts(Items:[]int)<transacts>:string =
     var S:string = ""
     for (I -> X : Items):
         if (I > 0) then set S += ", "
         set S += ToString(X)
     "[{S}]"
 
-ShowRows(Rows:[][]int):string =
+ShowRows(Rows:[][]int)<transacts>:string =
     var S:string = ""
     for (I -> Row : Rows):
         if (I > 0) then set S += " "
         set S += ShowInts(Row)
     "[{S}]"
 
-Ns(Ps:[]pair):[]int = for (P : Ps) { P.N }
+Ns(Ps:[]pair)<transacts>:[]int = for (P : Ps) { P.N }
 
 Main()<transacts>:void =
     # (Epic, and the Book's VerseVM test: the variable replaced)

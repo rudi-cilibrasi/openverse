@@ -40,7 +40,7 @@ Nested():void =
         Print("in block")
     Print("after block")
 
-Fails()<decides>:void =
+Fails()<transacts><decides>:void =
     defer:
         Print("never printed")
     1 = 2

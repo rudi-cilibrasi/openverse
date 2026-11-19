@@ -7,7 +7,7 @@ holder := class { var F:int = 0 }
 D():int = 1 | 2
 Small():nonneg = 1 | 2
 Pets():animal = dog{} | cat{}
-Get(A:[]int, I:int):int = if (V := A[I]) then V else -1
+Get(A:[]int, I:int)<transacts>:int = if (V := A[I]) then V else -1
 Upto(A:int, B:int)<transacts><decides>:int =
     A <= B
     Print("visit {A}")

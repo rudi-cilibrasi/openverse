@@ -7,7 +7,7 @@ vpair(a:type, b:type) := class(expr(tuple(a, b))):
     var L:expr(a)
     R:expr(b)
     Eval<override>():tuple(a, b) = (L.Eval(), R.Eval())
-ReturnCleanup(E:expr(t) where t:type):?t =
+ReturnCleanup(E:expr(t) where t:type)<transacts>:?t =
     var N:int=0
     defer:
         Print("outer return {N}")

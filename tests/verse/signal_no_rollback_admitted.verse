@@ -1,4 +1,4 @@
-# (#515) programs --signal-no-rollback admits: each Signal outside every
+# (#515) programs the no_rollback admission of an event's Signal admits: each Signal outside every
 # failure context, though near one (an if's branches, a for's body, also one
 # the compiler moves into a continuation, a function called after the
 # condition, a <decides> function that signals nothing, a task spawned by a
@@ -12,12 +12,12 @@ Two(N:int):int = N | N + 1
 Note(E:event(int), N:int):int =
     E.Signal(N)
     N
-Positive(N:int)<decides>:void = N > 0
+Positive(N:int)<transacts><decides>:void = N > 0
 Log(N:int):void = Print("heard {N}")
 Shouter(E:event(int))<suspends>:void =
     Sleep(0.01)
     E.Signal(5)
-Start(E:event(int)):int =
+Start(E:event(int))<transacts>:int =
     spawn{Shouter(E)}
     1
 Count(N:int):int =

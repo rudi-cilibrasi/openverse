@@ -1,6 +1,6 @@
 Dup(V:t where t:type):t=V|V
-Pick(N:int):int=N|N+10
-Pick(S:string):int=S.Length|S.Length+10
+Pick(N:int)<transacts>:int=N|N+10
+Pick(S:string)<transacts>:int=S.Length|S.Length+10
 Take(N:int):int=
     Y:=N|N+1
     Print("p{Y}")

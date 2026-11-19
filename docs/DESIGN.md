@@ -1454,7 +1454,7 @@ where an elaboration asks for something and goes no further
 17. `elabFunctions`: each function and constant, then each generic function once (`ElaboratedFn`), the environment knowing where the accessors are.
 18. `roundNeeds` (`Elab.lean`): what the round asks for; an elaboration that asks how choices are inlined (tier 1), for the await mode's prelude (tier 2: it calls a task's `Await`, `$Await`, without it), or for functions (tier 3), goes no further.
 19. `mainSignature` and `prepareLowering`: the function the program runs; the accessors, the class table, prototypes and pins, and the refined tests that cannot pass removed (`Lowering`).
-20. The checks of the prepared functions, in order: functions with several values computed at their calls (`checkEager`, which may ask for lazy ones), event signals in failure contexts (with `--signal-no-rollback`), lazily taken calls that need functions of their own (`checkLoopFirst`, which may ask for them), the convergence of field defaults (`checkInitializerConvergence`) and the flow of type metadata (`MetadataFlow.check`).
+20. The checks of the prepared functions, in order: functions with several values computed at their calls (`checkEager`, which may ask for lazy ones), event signals in failure contexts and in bodies whose effects exclude `no_rollback` (unless `--signal-rollback`), lazily taken calls that need functions of their own (`checkLoopFirst`, which may ask for them), the convergence of field defaults (`checkInitializerConvergence`) and the flow of type metadata (`MetadataFlow.check`).
 21. `lowerProgram`: failure capture, concurrency and the `$Main` prelude (`LoweredProgram`).
 22. `certify`: no call names a family's stub, and the program passes `Prog.check`, `Prog.checkControl` and `Prog.checkTypes` (`Compiled`).
 
@@ -2747,8 +2747,10 @@ field, `$taskEnds`, `$taskEnd` and the `$Await` above) and the roots' call of
 `$taskEnd`. Programs that do not await a task compile byte for byte as
 before, also those that use events and spawn tasks.
 
-**Signal admission (opt-in, `Options.signalNoRollback`,
-`--signal-no-rollback`, #515).** The front end records each call,
+**Signal admission (the default, `Options.signalNoRollback`, #515).** An
+event's `Signal` has the `no_rollback` effect, as in Epic's Verse compiler
+(UEFN 43.12 refuses each case below with error 3512:
+`docs/research/versevm-live-conformance.md`). The front end records each call,
 construction (its classes' `block:`s), use of a constant (its
 initialiser) and `spawn` (its arguments, not the spawned call) that it
 elaborates in a failure context (`Ctx.canFail`) or inside one where the
@@ -2769,8 +2771,20 @@ clauses are recorded where it is elaborated, and its body is not a
 failure context unless the source `for`'s body is, or the `for` is inside
 one (`FirstLift.rollback`, which starts the continuation's frame with
 `inRollback`; under the option, `contKey` tells the two apart, so a
-`defer:` run at a `return` and at the end of its scope has one of each). The default records
-nothing and refuses nothing.
+`defer:` run at a `return` and at the end of its scope has one of each).
+The bodies whose effects exclude `no_rollback` are checked the same way,
+first: a source function with a heap specifier (`<transacts>`,
+`<computes>`, `<reads>`, `<writes>`, `<allocates>`; marked
+`SignalAdmission.rollbackOnlyMarker` before the source is rewritten, so
+the mark survives overloads, modules and extraction) and a class's
+`block:`. Each records its calls where it is elaborated
+(`Ctx.rollbackOnly`, `ESt.bodyCalls`), continuations followed, and then
+its whole Verse Core body is checked (`SignalAdmission.checkBodies`), so
+code the lowering moved into a helper counts. Epic's compiler reports a
+`Signal` in a `<transacts>` helper, not the helper's call in a condition,
+so these come before the failure contexts. The legacy transactional mode
+(`--signal-rollback`, `Options.signalNoRollback := false`) records nothing
+and refuses nothing.
 
 The roots are a list of cells `[root, next]` (adding one costs a cell; an
 array would be copied at each spawn, and C keeps every copy). A pass follows

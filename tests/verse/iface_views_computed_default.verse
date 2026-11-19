@@ -8,17 +8,17 @@ Tick(S:string)<transacts>:int =
 container(t:type) := interface:
     Get():t
 sink(u:type) := interface:
-    Put(X:u, ?N:int = Tick("i")):int
+    Put(X:u, ?N:int = Tick("i"))<transacts>:int
     Use(X:u, ?M:int = 5, ?K:int = M * 2)<transacts>:int
     Two(X:u, ?A:int = Tick("a"), ?B:int = Tick("b"))<transacts>:int
 both(t:type, u:type) := class(container(t), sink(u)):
     V:t
     Get<override>():t = V
-    Put<override>(X:u, ?N:int = Tick("both")):int = N
+    Put<override>(X:u, ?N:int = Tick("both"))<transacts>:int = N
     Use<override>(X:u, ?M:int = 5, ?K:int = M * 2)<transacts>:int = M + K
     Two<override>(X:u, ?A:int = Tick("a"), ?B:int = Tick("b"))<transacts>:int = A * 10 + B
 one(u:type) := class(sink(u)):
-    Put<override>(X:u, ?N:int = Tick("one") + 1):int = N
+    Put<override>(X:u, ?N:int = Tick("one") + 1)<transacts>:int = N
     Use<override>(X:u, ?M:int = 6, ?K:int = M * 3)<transacts>:int = M + K
     Two<override>(X:u, ?A:int = 1, ?B:int = Tick("b1"))<transacts>:int = A + B
 Main()<transacts>:void =

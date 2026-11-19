@@ -11,8 +11,8 @@ b := class:
 c := class:
     M()<transacts>:int = 500
 Dup(V:t where t:type):t = V | V
-Tag(V:a):string = "a"
-Tag(V:b):string = "b"
+Tag(V:a)<transacts>:string = "a"
+Tag(V:b)<transacts>:string = "b"
 Main()<transacts>:void =
     for (A := (Dup(a{}) | Dup(b{})), X := A.M()) { Print("x {X}") }
     for (A := (a{} | Dup(c{})), X := A.M()) { Print("y {X}") }

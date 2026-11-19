@@ -1,7 +1,7 @@
 expr(t:type):=class<abstract>{Eval()<transacts>:t}
 lit:=class(expr(int)){V:int;Eval<override>()<transacts>:int=V}
 vpair(a:type,b:type):=class(expr(tuple(a,b))){var L:expr(a);R:expr(b);Eval<override>()<transacts>:tuple(a,b)=(L.Eval(),R.Eval())}
-Run(E:expr(t),Ev:event(int),Limit:int where t:type)<transacts><suspends>:[]t=
+Run(E:expr(t),Ev:event(int),Limit:int where t:type)<suspends>:[]t=
     for(P:=vpair[E],Saved:=P.L,L:=lit[Saved],Changed:=block{Print("prefix");set P.L=lit{V:=99};1},R:=lit[P.R],N:=1..2,N>Limit):
         Ev.Await()
         (L.V,R.V)

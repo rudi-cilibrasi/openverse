@@ -1,7 +1,7 @@
 pair(a:type,b:type):=class{A:a;B:b}
 dup(t:type):=class(pair(t,t)){Lo:int=1}
 box:=class{Count:int}
-Add(X:int,Y:int):int=X+Y
+Add(X:int,Y:int)<transacts>:int=X+Y
 F0(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<transacts><decides>:[]tuple(int,b,d,int)=
     for(var Count:int=0,I:=Add(dup[P].Lo,dup[Q].Lo)..2,J:=(0|1),Written:=block{set Count+=1;1}):
         B:=box{Count:=Count}

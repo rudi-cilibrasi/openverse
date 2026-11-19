@@ -47,7 +47,7 @@ the sources disagree, the table records that disagreement.
 | Event wake order | The Book's API and Epic specify suspension order. | Waiters resume in the order they began waiting: B waits first and resumes first in [event order](../../tests/verse/scheduler_audit_event_order.verse). | The Book's ([awaiters inside `Signal`](#awaiters-run-inside-signal), #513). |
 | Task end and its awaiters | The Book's API (`task`, `Await`): "Multiple awaiters are allowed and are resumed in the order they registered"; "a cancelled task never resumes its awaiters ... simply stays suspended for ever"; ch. 14 has `Await` pass a cancellation on. | A task's end resumes its awaiters inside its last step, in registration order, each to its next wait ([order](../../tests/verse/task_end_order.verse), [before others](../../tests/verse/task_end_before_others.verse)); an await of a cancelled task waits for ever ([Main](../../tests/verse/task_cancel_main.verse)). | The Book's API ([a task's end](#a-tasks-end-resumes-its-awaiters)). |
 | Signal boundary and re-await | The Book drops signals with no waiter; its API resumes the waiters inside `Signal`, each until it waits again, and an await made meanwhile waits for the next signal. | Each waiter runs inside the `Signal`, to its next wait. Consecutive signals 1 and 2 deliver 1 and then, to the waits made inside the first, 2; signal 3 finds no one. [Re-await](../../tests/verse/scheduler_audit_event_reawait.verse). | The Book's ([awaiters inside `Signal`](#awaiters-run-inside-signal), #513). |
-| Subscriptions and event transactions | The Book describes transactional Subscribe/Cancel; its tests signal in `<decides>` functions; its API invokes subscribers after every waiting task resumed. Epic's Signal pages render no_rollback. | Waiters run inside the Signal, then callbacks in subscription order. A failed Signal restores what the waiters and callbacks did, output included, and the waiters wait again. Failed Subscribe/Cancel restores the subscriber list. [Transactions](../../tests/verse/scheduler_audit_transactions.verse) counts exactly `2+3+4=9`; the waiter receives 2, never rolled-back 1. | The Book's tests (default); `--signal-no-rollback` for Epic's pages ([#515](https://github.com/rudi-cilibrasi/openverse/issues/515)). |
+| Subscriptions and event transactions | The Book describes transactional Subscribe/Cancel; its tests signal in `<decides>` functions; its API invokes subscribers after every waiting task resumed. Epic's Signal pages render no_rollback. | Waiters run inside the Signal, then callbacks in subscription order. A failed Signal restores what the waiters and callbacks did, output included, and the waiters wait again. Failed Subscribe/Cancel restores the subscriber list. [Transactions](../../tests/verse/scheduler_audit_transactions.verse) counts exactly `2+3+4=9`; the waiter receives 2, never rolled-back 1. | Epic's compiler (UEFN 43.12, error 3512) by default, which refuses a `Signal` in a failure context; the Book's tests' rollback with `--signal-rollback`, which [this case](../../tests/verse/scheduler_audit_transactions.verse) uses ([#515](https://github.com/rudi-cilibrasi/openverse/issues/515)). |
 | Cancellation and source return | The Book requires immediate, non-suspending cleanup; return in a concurrent arm leaves the enclosing function. | Nested defers run once; repeated Cancel is harmless. An arm return unwinds that arm, cancels its race siblings, runs surrounding defers, then stops the function's registered branches. [Cancel](../../tests/verse/scheduler_audit_cancel.verse), [source return](../../tests/verse/scheduler_audit_source_return.verse). | Lifetime/cleanup checks; the complete ordering is an OpenVerse policy, including function defers before registered branches. |
 | Creator and host lifetime | Structured concurrency constrains child lifetimes. The Book distinguishes spawn from branch. A standalone Main/process shutdown is not an engine-device lifetime rule. | A spawn survives its creating function; a branch does not. Main finishing ends this host without cancelling unfinished unstructured tasks, so their pending defers do not run. Main stalled with no possible wake exits 2. [Lifetime](../../tests/verse/scheduler_audit_lifetime.verse), [deadlock](../../tests/verse/scheduler_audit_deadlock.verse). | Explicit command-line host boundary, not a Fortnite session guarantee. |
 
@@ -441,7 +441,7 @@ mode*: its prelude has the drain below. Other programs compile byte for
 byte as before. In event mode, the suspends functions from which the
 prelude's `signalAll` is reachable through calls (an arm's or `branch`'s
 code and a spawned call's first run included, a method's dispatch and a
-function value's call conservatively, as for `--signal-no-rollback`) are
+function value's call conservatively, as for the `Signal` admission of #515) are
 *marked*: their regions keep the running markers below. Only a marked
 function's regions can be running while a `Signal` runs, as the code
 under the `Signal` is theirs. The other functions compile as before.
@@ -574,10 +574,10 @@ separate rule), as do a spawned call whose arguments suspend and the
 
 **Flags.** `--event-fifo` (#513) goes: the Book's order and timing are
 the default, and FIFO order without the timing is no reading of the
-Book. Its tests become tests of the default. `--signal-no-rollback`
-(#515) stays an opt-in for the reading of Epic's published `event` pages;
-the default, allowed and undone with its context, is the Book's tests'
-(rule 11).
+Book. Its tests become tests of the default. (#515, later: the refusal of
+a `Signal` in a failure context, Epic's compiler's, became the default once
+UEFN 43.12's diagnostics were obtained; the Book's tests' reading, allowed
+and undone with its context (rule 11), is the legacy `--signal-rollback`.)
 
 **Models first.** The scheduler models (`scripts/models/sched_gen.py`,
 `sched_gen2.py`, `event_fifo.py`) are changed to the rule before the

@@ -5,7 +5,7 @@ Nat(N:int)<transacts><decides>:int =
 finder := class:
     Limit:int = 2
     var Hits:int = 0
-    Big(X:int):logic = if (X > Limit) then true else false
+    Big(X:int)<transacts>:logic = if (X > Limit) then true else false
     Find()<transacts>:int =
         if (X := Nat[0], set Hits += 1, Big(X)?, X > Self.Limit) then X else -1
 Main():void =

@@ -5,20 +5,20 @@ animal := class:
     Name:string
 dog := class(animal):
     Barks:int = 1
-Describe(A:animal):string = "an animal named {A.Name}"
-Count():int = 3
-Id(X:t where t:type):t = X
-Pair(X:t, Y:t where t:type):[]t = array{X, Y}
-OnDog(F:type{_(:dog):string}, D:dog):string = F(D)
-Ratio(F:type{_():rational}):int = Floor(F())
-UseId(F:int->int):int = F(5)
-UseIdS(F:string->string):string = F("s")
+Describe(A:animal)<transacts>:string = "an animal named {A.Name}"
+Count()<transacts>:int = 3
+Id(X:t where t:type)<transacts>:t = X
+Pair(X:t, Y:t where t:type)<transacts>:[]t = array{X, Y}
+OnDog(F:type{_(:dog)<transacts>:string}, D:dog)<transacts>:string = F(D)
+Ratio(F:type{_()<transacts>:rational})<transacts>:int = Floor(F())
+UseId(F:type{_(:int)<transacts>:int})<transacts>:int = F(5)
+UseIdS(F:type{_(:string)<transacts>:string})<transacts>:string = F("s")
 Main():void =
     D := dog{Name := "rex"}
     Print(OnDog(Describe, D))
     Print("{Ratio(Count)}")
     Print("{UseId(Id)} {UseIdS(Id)}")
-    G:tuple(int, int)->[]int = Pair
+    G:type{_(:tuple(int, int))<transacts>:[]int} = Pair
     for (X : G(1, 2)) { Print("{X}") }
-    H:type{_(:dog):string} = Describe
+    H:type{_(:dog)<transacts>:string} = Describe
     Print(H(D))

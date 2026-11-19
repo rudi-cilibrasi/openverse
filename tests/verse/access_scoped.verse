@@ -5,7 +5,7 @@ Gameplay := module:
     SharedGameplayScope := scoped{Inventory, Crafting}
     item<SharedGameplayScope> := class:
         ID<public>:int
-    CreateItem<SharedGameplayScope>(TheID:int):item = item{ID := TheID}
+    CreateItem<SharedGameplayScope>(TheID:int)<transacts>:item = item{ID := TheID}
     stock<public> := class:
         var<SharedGameplayScope> Count<public>:int = 0     # read anywhere, set in the scope
 Inventory := module:
@@ -16,7 +16,7 @@ Inventory := module:
         S.Count
 Crafting := module:
     using{Gameplay}
-    CraftItem<public>(Recipe:[]int)<decides>:int = CreateItem(Recipe[0]).ID
+    CraftItem<public>(Recipe:[]int)<transacts><decides>:int = CreateItem(Recipe[0]).ID
 Graphics := module:
     shape<scoped{Physics}> := class:
         Size<scoped{Physics}>:int = 1

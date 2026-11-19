@@ -12,20 +12,20 @@
 pair := struct<computes>:
     N:int = 0
 
-Id(N:int):int = N
+Id(N:int)<transacts>:int = N
 
-Log(S:string, N:int):int =
+Log(S:string, N:int)<transacts>:int =
     Print(S)
     N
 
-ShowInts(Items:[]int):string =
+ShowInts(Items:[]int)<transacts>:string =
     var S:string = ""
     for (I -> X : Items):
         if (I > 0) then set S += ", "
         set S += ToString(X)
     "[{S}]"
 
-ShowRows(Rows:[][]int):string =
+ShowRows(Rows:[][]int)<transacts>:string =
     var S:string = ""
     for (I -> Row : Rows):
         if (I > 0) then set S += " "

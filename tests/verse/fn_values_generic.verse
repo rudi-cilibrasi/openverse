@@ -2,19 +2,19 @@
 # type, called with functions that fix its type arguments (under the
 # refinement, #142); a function passed where a <decides> one is expected; a
 # function-typed field of a generic class
-Double(X:int):int = 2 * X
-Show(X:int):string = "<{X}>"
-Echo(S:string):string = S + S
-Half(X:int)<decides>:int =
+Double(X:int)<transacts>:int = 2 * X
+Show(X:int)<transacts>:string = "<{X}>"
+Echo(S:string)<transacts>:string = S + S
+Half(X:int)<transacts><decides>:int =
     X > 2
     X - 2
-Map(Xs:[]t, F:type{_(:t):u} where t:type, u:type):[]u = for (X : Xs) { F(X) }
-Filter(Xs:[]int, F:type{_(:int)<decides>:int}):[]int = for (X : Xs, Y := F[X]) { Y }
+Map(Xs:[]t, F:type{_(:t)<transacts>:u} where t:type, u:type)<transacts>:[]u = for (X : Xs) { F(X) }
+Filter(Xs:[]int, F:type{_(:int)<transacts><decides>:int})<transacts>:[]int = for (X : Xs, Y := F[X]) { Y }
 box(t:type) := class:
     V:t
-    F:type{_(:t):t}
-    Go():t = F(V)
-Neg(X:int):int = -X
+    F:type{_(:t)<transacts>:t}
+    Go()<transacts>:t = F(V)
+Neg(X:int)<transacts>:int = -X
 Main():void =
     for (S : Map(array{1, 2, 3}, Show)) { Print(S) }
     Ys := Map(array{1, 2}, Double)

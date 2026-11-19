@@ -4,12 +4,12 @@ pair(a:type,b:type):=class:
     A:a
     B:b
 dup(t:type):=class(pair(t,t)){}
-Direct(P:pair(a,b),N:int where a:type,b:type)<decides>:[]b=
+Direct(P:pair(a,b),N:int where a:type,b:type)<transacts><decides>:[]b=
     case(N):
         0 => array{P.B}
         1 => array{dup[P].A}
         _ => array{dup[P].B}
-Named(P:pair(a,b),N:int where a:type,b:type)<decides>:[]b=
+Named(P:pair(a,b),N:int where a:type,b:type)<transacts><decides>:[]b=
     case(N):
         0 => array{P.B}
         1 => (D:=dup[P];array{D.A})

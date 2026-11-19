@@ -5,7 +5,7 @@
 stack(t:type) := class:
     var Items:[]t = array{}
     Push(X:t):void = set Items += array{X}
-    Pop()<decides>:t =
+    Pop()<transacts><decides>:t =
         X := Items[Items.Length - 1]
         set Items = for (I -> Y : Items, I < Items.Length - 1) { Y }
         X

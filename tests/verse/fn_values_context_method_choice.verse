@@ -1,19 +1,19 @@
 cell:=class{var N:int=0}
 box:=class:
     C:cell
-    Same(X:t where t:type):t=
+    Same(X:t where t:type)<transacts>:t=
         set C.N+=1
         Print("same {C.N}")
         X
-Touch(B:box):box=
+Touch(B:box)<transacts>:box=
     set B.C.N+=1
     Print("receiver {B.C.N}")
     B
-Arg(C:cell,X:t where t:type):t=
+Arg(C:cell,X:t where t:type)<transacts>:t=
     set C.N+=1
     Print("arg {C.N}")
     X
-Twice(F:type{_(:t):t},X:t where t:type):t=F(X)|F(X)
+Twice(F:type{_(:t)<transacts>:t},X:t where t:type):t=F(X)|F(X)
 Run(B:box,X:t where t:type):int=
     if(V:=Twice(Touch(B).Same,Arg(B.C,X)),false?)then Print("wrong")else Print("miss {B.C.N}")
     R:=for(V:=Twice(Touch(B).Same,Arg(B.C,X))):Print("value {B.C.N}")

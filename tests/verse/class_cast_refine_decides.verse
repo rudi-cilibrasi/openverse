@@ -16,11 +16,11 @@ Bump(H:cell, K:int)<transacts><decides>:int =
     set H.N += K
     K
 # b = a under the refinement: D.A is a b
-SameB(P:pair(a, b) where a:type, b:type)<decides>:b =
+SameB(P:pair(a, b) where a:type, b:type)<transacts><decides>:b =
     D := dup[P]
     D.A
 # a = int under it: an int is an a
-FixA(P:pair(a, b) where a:type, b:type)<decides>:a =
+FixA(P:pair(a, b) where a:type, b:type)<transacts><decides>:a =
     F := fixl[P]
     F.D + F.A
 # effects before and after the cast, undone when it, or a clause after it, fails
@@ -33,26 +33,26 @@ Fx(H:cell, P:pair(a, b), Min:int where a:type, b:type)<transacts><decides>:int =
     D.C > Min
     D.C + M
 # a bare cast, a test; the cast as the body's value
-IsDup(P:pair(a, b) where a:type, b:type)<decides>:void =
+IsDup(P:pair(a, b) where a:type, b:type)<transacts><decides>:void =
     dup[P]
-AsDup(P:pair(a, b) where a:type, b:type)<decides>:dup(a) =
+AsDup(P:pair(a, b) where a:type, b:type)<transacts><decides>:dup(a) =
     dup[P]
 # a second cast in the first's branch, of a value the first gives
-Twice(P:pair(a, b) where a:type, b:type)<decides>:b =
+Twice(P:pair(a, b) where a:type, b:type)<transacts><decides>:b =
     D := dup[P]
     Q:pair(b, a) = dup(b){A := D.B, B := D.A, C := D.C + 1}
     E := dup[Q]
     E.A
 # a return in the branch (in tail position, a branch of the body's last if:
 # the function is <decides>, Return.versetest:157)
-Early(P:pair(a, b), N:int where a:type, b:type)<decides>:int =
+Early(P:pair(a, b), N:int where a:type, b:type)<transacts><decides>:int =
     D := dup[P]
     if (N > 0) then return N + D.C else D.C
 # in a method: Self's members in the branch
 box(t:type) := class:
     P:pair(t, int)
     K:int = 100
-    Get()<decides>:t =
+    Get()<transacts><decides>:t =
         D := dup[P]
         D.A + K - K
 Main()<transacts>:void =

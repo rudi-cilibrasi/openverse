@@ -6,7 +6,7 @@ node := class:
     var Tag:[]int = array{}
 
 # post-order: a node's own array field is updated after the recursive call
-Build(N:int):node =
+Build(N:int)<transacts>:node =
     X := node{V := N, Tag := array{N}}
     if (N > 0):
         set X.Next = option{Build(N - 1)}

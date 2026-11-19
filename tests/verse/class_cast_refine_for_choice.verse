@@ -61,18 +61,18 @@ Cleanup(P:pair(a, b) where a:type, b:type)<transacts>:void =
         Print("kept {V}")
         V
     Print("cleaned {R.Length}")
-Typed(P:pair(a, b) where a:type, b:type):[]b =
+Typed(P:pair(a, b) where a:type, b:type)<transacts>:[]b =
     for (V:b = if (D := dup[P]) then (D.A | D.B) else P.B):
         E:[]b = array{V}
         V
-Independent(P:pair(a, b), Q:pair(c, d) where a:type, b:type, c:type, d:type):void =
+Independent(P:pair(a, b), Q:pair(c, d) where a:type, b:type, c:type, d:type)<transacts>:void =
     var Total:int = 0
     R := for (V := if (D := dup[P]) then (D.C | D.C + 1) else 0, (set Total += V; true?),
         W := if (E := dup[Q]) then (E.C | E.C + 1) else 0):
         set Total += W
         V + W
     Print("independent {Total} {R.Length}")
-Nested(P:pair(a, b) where a:type, b:type):void =
+Nested(P:pair(a, b) where a:type, b:type)<transacts>:void =
     for (V := if (false?) then -1 else if (D := dup[P], D.C > 0) then (D.C | D.C + 1) else 0):
         Print("nested {V}")
 Main()<transacts>:void =

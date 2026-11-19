@@ -28,6 +28,8 @@ for ((s=first; s<first+n; s++)); do
   # timeout below, rec mode's enumerations at times: skipped, not counted as bad)
   if [[ $(wc -l < "$tmp/p.expected") -gt 12000 ]]; then long=$((long+1)); continue; fi
   rm -f "$tmp/p.vbc"
+  # (#515: Epic's default effect, written out: <transacts> where a function without one is called from a failure context or <transacts> code)
+  python3 -I "$root/scripts/models/default_effect.py" "$tmp/p.verse"
   timeout 60 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.err"
   if [[ $le -eq 3 ]]; then fuel=$((fuel+1)); continue; fi
   # (Lean timed out: the reference interpreter is far slower than C on some long backtracking

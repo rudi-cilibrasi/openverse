@@ -1,6 +1,6 @@
 # Type-only captures retain their witnesses in shared continuations.
-Two(N:int):int = N | N + 1
-First(Unused:t where t:type):int =
+Two(N:int)<transacts>:int = N | N + 1
+First(Unused:t where t:type)<transacts>:int =
     if (A0 := (Two(0) | Two(2)), A0 = 0,
         A1 := (Two(0) | Two(2)), A1 = 0,
         A2 := (Two(0) | Two(2)), A2 = 0,
@@ -15,7 +15,7 @@ First(Unused:t where t:type):int =
         A11 := (Two(0) | Two(2)), A11 = 0,
         A12 := (Two(0) | Two(2)), A12 = 0,
         A13 := (Two(0) | Two(2)), A13 = 0, E:[]t = array{}, E.Length = 0) then A0 else -1
-All(Unused:t where t:type):int =
+All(Unused:t where t:type)<transacts>:int =
     R := for (A0 := (Two(0) | Two(2)), A0 = 0,
         A1 := (Two(0) | Two(2)), A1 = 0,
         A2 := (Two(0) | Two(2)), A2 = 0,
@@ -34,14 +34,14 @@ All(Unused:t where t:type):int =
         E.Length
     R.Length
 
-Shape(Unused:t, Key:u where t:type, u:subtype(comparable)):int =
+Shape(Unused:t, Key:u where t:type, u:subtype(comparable))<transacts>:int =
     if (A := (Two(0) | Two(2)), A = 0, B := (Two(10) | Two(20)), B = 10,
         Empty:[]?t = array{}, M:[u]t = map{}, Fns:[]type{_(:t):t} = array{},
         Empty.Length + M.Length + Fns.Length = 0):
         A + B
     else:
         -1
-ReturnEmpty(Unused:t where t:type):[]?t =
+ReturnEmpty(Unused:t where t:type)<transacts>:[]?t =
     if (A := (Two(0) | Two(2)), A = 0, B := (Two(10) | Two(20)), B = 10, Empty:[]?t = array{}):
         Empty
     else:
@@ -63,7 +63,7 @@ State(Unused:t where t:type)<transacts>:int =
     Total
 box(t:type) := class:
     V:t
-    Size():int =
+    Size()<transacts>:int =
         R := for (A := (Two(0) | Two(2)), A = 0, B := (Two(10) | Two(20)), B = 10):
             Empty:[]t = array{}
             Empty.Length
@@ -72,7 +72,7 @@ pair(t:type, u:type) := class:
     A:t
     B:u
 dup(t:type) := class(pair(t, t)) {}
-Refined(P:pair(a, b) where a:type, b:type):int =
+Refined(P:pair(a, b) where a:type, b:type)<transacts>:int =
     if (D := dup[P]):
         if (A := (Two(0) | Two(2)), A = 0, B := (Two(10) | Two(20)), B = 10,
             Empty:[]a = array{}, Other:[]b = array{}):
@@ -85,7 +85,7 @@ expr(t:type) := class {}
 parts(a:type, b:type) := class(expr(tuple(a, b))):
     L:a
     R:b
-Opened(P:expr(t) where t:type):int =
+Opened(P:expr(t) where t:type)<transacts>:int =
     if (D := parts[P]):
         R := for (A := (Two(0) | Two(2)), A = 0, B := (Two(10) | Two(20)), B = 10):
             Empty:[]t = array{}

@@ -1,5 +1,5 @@
 cell:=class{var N:int=0}
-Tick(C:cell,Tag:string):int=
+Tick(C:cell,Tag:string)<transacts>:int=
     set C.N+=1
     Print("{Tag} {C.N}")
     C.N
@@ -12,7 +12,7 @@ root(t:type):=class:
     N:int
     Id(X:u where u:subtype(comparable))<computes>:u=X
 extra(a:subtype(comparable),b:subtype(comparable)):=class(root(a)){Other:b}
-Touch(B:root(t) where t:type):root(t)=
+Touch(B:root(t) where t:type)<transacts>:root(t)=
     N:=Tick(B.C,"receiver")
     B
 Bind(B:root(t),X:a,Y:b where t:type,a:subtype(comparable),b:subtype(comparable))<computes>:type{_(:a,:b)<computes>:tuple(a,b)}=B.Id

@@ -4,7 +4,7 @@ fsmall:=type{_X:float where 0.0 <= _X, _X <= 10.0}
 Upper(Base:t,Value:u where t:type,u:subtype(t))<computes>:t=Value
 Choose(X:u,Y:v where t:type,u:subtype(t),v:subtype(t))<computes>:t=X
 Process(X:t where t:subtype(wide))<computes>:t=X
-Same(X:t,Y:t where t:subtype(wide))<decides>:t=X=Y
+Same(X:t,Y:t where t:subtype(wide))<transacts><decides>:t=X=Y
 holder(t:subtype(wide)):=class<computes>:
     Value:t
     Get()<computes>:t=Value

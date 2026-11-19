@@ -2,8 +2,8 @@
 # the type of the empty value alone, as tuple() is, below logic; void and
 # true interchange inside options, arrays and maps (Tests/Void.versetest
 # 50-80, 177-221).
-VoidOutput(:int):void = {}
-TrueOutput(:int):true = {}
+VoidOutput(:int)<transacts>:void = {}
+TrueOutput(:int)<transacts>:true = {}
 TrueInput(:true):int = 42
 VoidInput(:void):int = 19
 Erase(X:void):true = X

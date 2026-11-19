@@ -9,10 +9,10 @@ Mark(H:cell,S:string)<transacts>:int=
 Pick(H:cell,N:int,?X:int=0,?Y:int=0,?Z:int=Mark(H,"D"))<transacts>:int=
     set H.Trace+="C"
     N+X+Y+Z
-Direct(P:pair(a,b),Q:pair(c,d),H:cell where a:type,b:type,c:type,d:type)<decides>:tuple(b,d)=
+Direct(P:pair(a,b),Q:pair(c,d),H:cell where a:type,b:type,c:type,d:type)<transacts><decides>:tuple(b,d)=
     N:=Pick(H,Mark(H,"P"),?Y:=Mark(H,"Y")+dup[Q].Index,?X:=Mark(H,"X")+dup[P].Index)
     (P.A,Q.A)
-Named(P:pair(a,b),Q:pair(c,d),H:cell where a:type,b:type,c:type,d:type)<decides>:tuple(b,d)=
+Named(P:pair(a,b),Q:pair(c,d),H:cell where a:type,b:type,c:type,d:type)<transacts><decides>:tuple(b,d)=
     N:=Mark(H,"P")
     Y:=Mark(H,"Y")
     DQ:=dup[Q]

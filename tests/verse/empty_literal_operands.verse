@@ -3,7 +3,7 @@
 # nor for an if, a case, a tuple, … whose values are such. Where Verse Core
 # infers a type (the operand of .Length, an index or a projection, the left
 # of a comparison), it gets the one it was elaborated at.
-Pick(S:string)<decides>:string = { S.Length > 0; S }
+Pick(S:string)<transacts><decides>:string = { S.Length > 0; S }
 Main():void =
     Print("{"".Length} {(if (false?) then "" else "").Length}")
     Print("{(if (false?) then "" else if (true?) then "" else "").Length}")

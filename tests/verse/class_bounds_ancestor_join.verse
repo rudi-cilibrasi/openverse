@@ -8,7 +8,7 @@ strong(t:subtype(comparable)) := class(root(t)):
     Tag<override>():int = 1
 weak(t:type) := class(root(t)):
     Tag<override>():int = 2
-Get(P:root(t) where t:type):[]root(t) = for (V:=if (D:=strong[P]) then (D | D) else if (W:=weak[P]) then (W | W) else (P | P)) { V }
+Get(P:root(t) where t:type)<transacts>:[]root(t) = for (V:=if (D:=strong[P]) then (D | D) else if (W:=weak[P]) then (W | W) else (P | P)) { V }
 Main():void =
     for(R : Get(strong(int){A:=3})) { Print("{R.Tag()}") }
     for(R : Get(weak(string){A:="s"})) { Print("{R.Tag()}") }

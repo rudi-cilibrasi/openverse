@@ -1,7 +1,7 @@
 # A loop's body is no failure context, also in a <decides> function (Book of
 # Verse tests, SOL-4199-BreakFromIf.versetest:79): what may fail in it is in
 # a failure context of its own; the function fails after the loop.
-First(Xs:[]int, Min:int)<decides>:int =
+First(Xs:[]int, Min:int)<transacts><decides>:int =
     var I:int = 0
     var Found:?int = false
     loop:

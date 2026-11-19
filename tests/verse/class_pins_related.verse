@@ -2,11 +2,11 @@
 pair(t:type, u:type) := class:
     A:t
     B:u
-    Get():t = A
+    Get()<transacts>:t = A
 optpair(t:type) := class(pair(?t, t)):
-    Get<override>():?t = option{B}
+    Get<override>()<transacts>:?t = option{B}
 nestpair(t:type) := class(pair([]t, t)):
-    Get<override>():[]t = array{B, B}
+    Get<override>()<transacts>:[]t = array{B, B}
 Show(P:pair(?int, int)):string = if (V := P.Get()?) then "{V}" else "none"
 Main():void =
     Print(Show(pair(?int, int){A := false, B := 5}))

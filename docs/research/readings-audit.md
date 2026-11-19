@@ -793,7 +793,8 @@ page](https://github.com/rudi-cilibrasi/openverse/wiki/Where-the-Book-disagrees-
 
 - **API** (agent_group, line 1070): "subscribable_event_intrnl.Signal has the no_rollback effect, which a `<transacts>` function cannot call"; line 1067: event delivery "is not un-run if the surrounding transaction later rolls back".
 - **Tests:** `Event.versetest` 83 and 117 call `Signal` inside `<decides>` functions and expect success.
-- **openverse today:** allowed and rolled back by default, as the tests (with the awaiters it resumed inside it, since awaiters run inside `Signal`); `--signal-no-rollback` gives the API's.
+- **Epic's compiler** (UEFN 43.12, build ++Fortnite+Release-43.12-CL-60598086, 2026-11-18): refused with error 3512 in a failure context and in a `<transacts>` function (`docs/research/versevm-live-conformance.md`).
+- **openverse today:** refused, as Epic's compiler and the API have it (#515); `--signal-rollback` keeps the tests' reading, allowed and rolled back (with the awaiters it resumed inside it, since awaiters run inside `Signal`).
 
 ### `break` in a `for` body
 

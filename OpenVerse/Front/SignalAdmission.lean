@@ -1,10 +1,17 @@
 /-
-  (#515, `--signal-no-rollback`) An opt-in admission policy for event
-  signals in failure contexts: the published API renders an event's
-  `Signal` `<no_rollback>`, which a failure context cannot use, while
-  openverse's reference mode rolls a signal back with its context. Under
-  the policy, a program that may call an event's `Signal` from a failure
-  context is refused before it runs or is emitted.
+  (#515) Event signals and the `no_rollback` effect. Epic's Verse compiler
+  gives an event's `Signal` the `no_rollback` effect, which neither a
+  failure context nor a function whose effects exclude it may call: UEFN
+  43.12 (build ++Fortnite+Release-43.12-CL-60598086) refuses each of
+  these with error 3512, "This invocation calls a function
+  (`(/Verse.org/Verse/event:)Signal`) that has the 'no_rollback' effect,
+  which is not allowed by its context", directly, through an alias, a
+  `signalable` view, a bound method, a subscribed event, and in a generic
+  `<transacts>` helper, also one called outside a failure context
+  (tests/conformance/versevm). This is openverse's default; the
+  transactional reference mode, in which a failing context rolls the signal
+  back, stays available as an explicit legacy opt-out (`--signal-rollback`,
+  `Options.signalNoRollback := false`).
 
   The functions that may signal are found on the elaborated Verse Core,
   before the concurrency lowering: those from which the prelude's
@@ -17,8 +24,18 @@
   choice lowering puts in a continuation of its own (`continuation`) is
   still not one: the continuation is not followed from a call, and its
   own failure contexts are recorded where it is elaborated.
+
+  The bodies whose effects exclude `no_rollback` (`excludesNoRollback`):
+  a source function with a heap specifier (`<transacts>`, `<computes>`,
+  `<reads>`, `<writes>`, `<allocates>`; Book of Verse ch. 13: the default
+  is `no_rollback` with the heap effects) and a class's `block:` (Book of
+  Verse tests, Effects.versetest:551, refused by UEFN 43.12 with 3512).
+  Their calls are recorded where they are elaborated (`ESt.bodyCalls`),
+  and the whole body, wherever the lowering moves its code, is checked
+  again on Verse Core (`checkBodies`).
 -/
 import OpenVerse.Core.Syntax
+import OpenVerse.Front.Syntax
 import Std.Data.HashMap
 import Std.Data.HashSet
 
@@ -64,9 +81,25 @@ def stem (n : String) : String :=
   | _ => String.ofList (n.toList.takeWhile (· != '$'))
 
 /-- `way` without a step that repeats the one before it (`stem`). -/
-def tidy : List String → List String
-  | a :: b :: rest => if stem a == stem b then tidy (a :: rest) else a :: tidy (b :: rest)
-  | way => way
+def tidy (way : List String) : List String :=
+  -- (and without the compiler's own helpers, a refining cast's stage or a
+  -- for's continuation, say: names the source never wrote, which keep a
+  -- `$` once a function value's, an overload's, a constructor's and the
+  -- prelude's are read)
+  let generated (n : String) : Bool :=
+    let n := if (n.splitOn "$fn.$call").length > 1 then "" else n
+    let n := n.replace "$init" ""
+    let n := (n.splitOn "$ov").headD n
+    n.contains '$'
+  let go : List String → List String := fun way => Id.run do
+    let mut out : List String := []
+    for a in way do
+      match out.getLast? with
+      | some b => if stem a != stem b then out := out ++ [a]
+      | none => out := [a]
+    return out
+  let kept := way.filter (!generated ·)
+  go (if kept.isEmpty then way else kept)
 
 /-- The functions that may signal: each with the function it calls on a
     way to `signalAll` (`none` for `signalAll` itself). -/
@@ -127,13 +160,124 @@ def continuation (n : String) : Bool := n.startsWith "$contf"
     elaborator where it is in one: an if's condition, a for's filter, a
     `<decides>` function's body, …) that
     calls a function that may signal, with the way to the `Signal`. -/
-def checkSites {α : Type} (fns : Array Fn) (sites : Array (α × List Nat)) : Option (α × List String) := Id.run do
+def checkSites {α : Type} (fns : Array Fn) (sites : Array (α × List Nat)) (continuations : Bool := false) :
+    Option (α × List String) := Id.run do
   let ms := maySignal fns
   if ms.isEmpty then return none
   let followed (f : Nat) : Bool :=
-    ms.contains f && !(fns[f]?.any fun fn => continuation fn.name)
+    ms.contains f && (continuations || !(fns[f]?.any fun fn => continuation fn.name))
   for (p, callees) in sites do
     if let some f := callees.find? followed then return some (p, tidy (path fns ms f))
+  return none
+
+/-- The heap specifiers (Book of Verse ch. 13): a function that has one has
+    the heap effects it names and not `no_rollback`, which is the default
+    only of a function without one. -/
+def heapSpecifiers : List String := ["transacts", "computes", "reads", "writes", "allocates", "converges"]
+
+/-- The private marker of a source function whose effects exclude
+    `no_rollback` (`markSource`): it stays on the function through the
+    rewriting of the source, as its specifiers do, and is no specifier a
+    source can write. -/
+def rollbackOnlyMarker : String := "$rollbackOnly"
+
+/-- Mark the source functions (methods included) with a heap specifier
+    (`rollbackOnlyMarker`). -/
+def markSource : STop → STop
+  | .fn p n ps ts specs ret body =>
+    if specs.any heapSpecifiers.contains then .fn p n ps ts (rollbackOnlyMarker :: specs) ret body
+    else .fn p n ps ts specs ret body
+  | .classDef p n nsp ts specs parents iface fields methods =>
+    .classDef p n nsp ts specs parents iface fields (methods.map markSource)
+  | t => t
+
+/-- (#515) The private marker of a source function that has Epic's default
+    effect, `no_rollback`: one without a heap specifier (`heapSpecifiers`;
+    `markDefault`). -/
+def noRollbackMarker : String := OpenVerse.Front.noRollbackMarker
+
+/-- (#515) Mark the source functions, methods and constructors included,
+    that have the `no_rollback` effect (`noRollbackMarker`): those without
+    a heap specifier, `<decides>` or not. UEFN 43.12 (build
+    ++Fortnite+Release-43.12-CL-60598086) refuses with error 3512 their
+    calls from a `<transacts>` function and from a class's `block:` (Book of
+    Verse tests, Effects.versetest:490 and 551), and from a failure context:
+    an `if`'s condition, also of a plain `<decides>` function's call, and a
+    `for`'s range and filter (tests/conformance/versevm/followup); it admits
+    them at the top of a plain `<decides>` function's body (`Ctx.bodyFailure`).
+    A class's `block:` is no function of its own. -/
+partial def markFunction : STop → STop
+  | .fn p n ps ts specs ret body =>
+    if n == "$block" || specs.any heapSpecifiers.contains then .fn p n ps ts specs ret body
+    else .fn p n ps ts (noRollbackMarker :: specs) ret body
+  | .classDef p n nsp ts specs parents iface fields methods =>
+    .classDef p n nsp ts specs parents iface fields (methods.map markFunction)
+  | t => t
+
+/-- (#515) A function type without a heap specifier has `no_rollback` too:
+    a function that has it is no value of a function type that has not
+    (UEFN 43.12 refuses a function without specifiers where a
+    `<transacts><decides>` one is expected, error 3509: Book of Verse
+    tests, FunctionTypes.versetest:191; it admits a `<transacts>` one,
+    followup/transacts-into-decides-type), and a value of it cannot be
+    called where its function could not (43.12: 3512,
+    ParametricTypes.versetest:222). -/
+def markTy : STy → STy
+  | .fn ps es r =>
+    if es.any heapSpecifiers.contains || es.contains noRollbackMarker then .fn ps es r
+    else .fn ps (noRollbackMarker :: es) r
+  | t => t
+
+/-- The types a definition writes outside its code and its fields'
+    (`STop.mapAll`'s): its type parameters' bounds and a class's parents. -/
+partial def markHeads : STop → STop
+  | .fn p n ps tps specs r b =>
+    .fn p n ps (tps.map fun tp => { tp with upperBound := tp.upperBound.map (·.mapTy markTy) }) specs r b
+  | .classDef p n ns tps specs parents isI fs ms =>
+    .classDef p n ns (tps.map fun tp => { tp with upperBound := tp.upperBound.map (·.mapTy markTy) }) specs
+      (parents.map (·.mapTy markTy)) isI fs (ms.map markHeads)
+  | t => t
+
+/-- (#515) A definition with Epic's default effect marked
+    on the function types it writes only: the concurrency prelude's, whose
+    functions keep their effects but whose callbacks are of Epic's types,
+    `subscribable_event`'s `type{_(:t):void}` (so a function without
+    specifiers subscribes, as in UEFN). -/
+def markTypes (t : STop) : STop :=
+  markHeads <| t.mapAll (STy.mapTy markTy) fun
+    | .typeAlias p tps body => .typeAlias p tps (body.mapTy markTy)
+    | .refineDef p v base cs => .refineDef p v (base.mapTy markTy) cs
+    | e => e
+
+/-- (#515) A definition with Epic's default effect marked
+    on its functions (`markFunction`) and the function types it writes
+    (`markTy`). -/
+def markDefault (t : STop) : STop :=
+  markHeads <| (markFunction t).mapAll (STy.mapTy markTy) fun
+    | .typeAlias p tps body => .typeAlias p tps (body.mapTy markTy)
+    | .refineDef p v base cs => .refineDef p v (base.mapTy markTy) cs
+    | e => e
+
+/-- What a body whose effects exclude `no_rollback` is, for messages: a
+    marked function (`rollbackOnlyMarker`), with its heap specifiers, or a
+    class's `block:`; `none` for any other. -/
+def excludesNoRollback (name : String) (specs : List String) : Option String :=
+  if name.endsWith ".$block" then
+    -- (Book of Verse tests, Effects.versetest:551)
+    some s!"the block: of class {(name.dropEnd ".$block".length).toString}, which excludes no_rollback"
+  else if specs.contains rollbackOnlyMarker then
+    let written := String.join ((specs.filter heapSpecifiers.contains).map (s!"<{·}>"))
+    some s!"{stem name}, whose effects ({written}) exclude no_rollback"
+  else none
+
+/-- The first of `bodies` (each a function by index, with what to report)
+    that may signal, anywhere in it except a task it spawns, with the way
+    from it to the `Signal`. -/
+def checkBodies {α : Type} (fns : Array Fn) (bodies : Array (α × Nat)) : Option (α × List String) := Id.run do
+  let ms := maySignal fns
+  if ms.isEmpty then return none
+  for (a, f) in bodies do
+    if ms.contains f then return some (a, tidy (path fns ms f))
   return none
 
 end OpenVerse.Front.SignalAdmission

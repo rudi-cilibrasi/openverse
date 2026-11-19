@@ -1,13 +1,13 @@
 counter := class:
-    var Last:int = 0
+    var Seen:int = 0
 
     Receive(N:int)<transacts>:void =
-        set Last = N
+        set Seen = N
 
 Main():void =
     E := event(int){}
     C := counter{}
     Subscription := E.Subscribe(C.Receive)
     E.Signal(2)
-    Print("OVPROBE after success {C.Last}")
+    Print("OVPROBE after success {C.Seen}")
     Subscription.Cancel()

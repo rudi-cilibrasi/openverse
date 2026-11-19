@@ -3,10 +3,10 @@ pair(t:type, u:type) := class:
     A:t
     B:u
     Describe():string = "pair"
-    First()<decides>:t = A
+    First()<transacts><decides>:t = A
 pair_int(u:type) := class(pair(int, u)):
     Describe<override>():string = "pair_int {A}"
-    First<override>()<decides>:int =
+    First<override>()<transacts><decides>:int =
         A > 0
         A
 Show(P:pair(t, u) where t:type, u:type):string = P.Describe()

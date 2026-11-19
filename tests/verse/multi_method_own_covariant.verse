@@ -8,7 +8,7 @@ factory(a:type) := class:
 kennel(u:type) := class(factory(u)):
     Make<override>(X:v where v:type)<transacts>:dog(u,v) =
         dog(u,v){First:=Value,Second:=X,Code:=1}|dog(u,v){First:=Value,Second:=X,Code:=2}
-Run(B:kennel(v),X:u where u:type,v:type):[]tuple(v,u,int) =
+Run(B:kennel(v),X:u where u:type,v:type)<transacts>:[]tuple(v,u,int) =
     for(D:=B.Make(X)): (D.First,D.Second,D.Code)
 Main():void =
     for(V:Run(kennel(int){Value:=7},"s")): Print("{V(0)} {V(1)} {V(2)}")

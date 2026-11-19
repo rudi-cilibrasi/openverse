@@ -2,7 +2,7 @@
 None(V:t where t:type)<decides>:t =
     false?
     V
-NeedCmp(X:t,Y:t where t:subtype(comparable))<decides>:void = X = Y
+NeedCmp(X:t,Y:t where t:subtype(comparable))<transacts><decides>:void = X = Y
 root(t:type) := class:
     A:t
 tight(t:subtype(comparable)) := class(root(t)) {}

@@ -25,7 +25,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 |---|---|---|
 | Comments | `#` to the end of the line, nested `<# … #>`, `<#>` indented comments (the rest of the line and every following line indented more than it; see [Source text](#source-text)) | ch. 0 |
 | Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` an ASCII character other than a line break, a tab included, or an escape; a non-ASCII one, `'é'`, is a `char32`, Book of Verse ch. 1), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates), `float` `1.5`, `2.0e-7`, `1e3`, `12.34f64`, `1234f64` (digits, then a point and digits or an exponent or both, or the suffix `f64`, which may follow either; the nearest double, which must be finite: `2.0e308` is refused; `f32` and `f16` are read and refused as not supported); paths `/Verse.org/Random` parse (in `using{…}`, ignored when in a package openverse knows, `/Verse.org/…`, `/Fortnite.com/…`, `/UnrealEngine.com/…`, and refused otherwise, as naming nothing, ch. 16, `Using2.versetest:94`; as values, refused; see [Source text](#source-text)) | §1.3–1.7 |
-| Types | `int`, `logic`, `char`, `char32`, `any` (see [any](#any)), `comparable` (see [comparable](#comparable)), `rational` (see [rational](#rational)), `float` (see [float](#float)), refinement types `type{_X:int where 0 <= _X, _X <= 120}` (see [Refinement types](#refinement-types)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void` (which takes any value; `tuple()` is the type of the empty value alone, see [Equality and the empty value](#equality-and-the-empty-value)), `message` (a localized message, `X<localizes>:message = "…"`, `F<localizes>(N:int):message = "… {N}"`, rendered by `Localize` and joined by `Join`; openverse has no culture, so a message is its default text, an int written with comma separators: ch. 12, [the rule](research/book-forms-rules.md#localized-messages)), `false` (the type with no value, below every type: a function whose result is `false` never returns, ch. 2, [the rule](research/book-forms-rules.md#false-as-a-type); `true`, the type of the empty value alone, as `tuple()` is, below `logic`, [the rule](research/book-forms-rules.md#true-as-a-type)), function types `type{_(:int)<decides>:int}`, with named parameters `type{_(:int, ?B:int):int}`, and `int->int` (see [Function values](#function-values)); type aliases `player_id := int`, `pair(t:type) := tuple(t, t)` (see [Type aliases](#type-aliases)); types as values of classes and interfaces, `subtype(c)`, `castable_subtype(c)`, `concrete_subtype(c)` and `type` (see [Types as values](#types-as-values)); a conversion written as a call, `int(0)`, `void(0)`, `(?int)(option{0})`, `s(s{})`, of a value of a type that is a subtype of the one named; a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
+| Types | `int`, `logic`, `char`, `char32`, `any` (see [any](#any)), `comparable` (see [comparable](#comparable)), `rational` (see [rational](#rational)), `float` (see [float](#float)), refinement types `type{_X:int where 0 <= _X, _X <= 120}` (see [Refinement types](#refinement-types)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void` (which takes any value; `tuple()` is the type of the empty value alone, see [Equality and the empty value](#equality-and-the-empty-value)), `message` (a localized message, `X<localizes>:message = "…"`, `F<localizes>(N:int):message = "… {N}"`, rendered by `Localize` and joined by `Join`; openverse has no culture, so a message is its default text, an int written with comma separators: ch. 12, [the rule](research/book-forms-rules.md#localized-messages)), `false` (the type with no value, below every type: a function whose result is `false` never returns, ch. 2, [the rule](research/book-forms-rules.md#false-as-a-type); `true`, the type of the empty value alone, as `tuple()` is, below `logic`, [the rule](research/book-forms-rules.md#true-as-a-type)), function types `type{_(:int)<decides>:int}`, with named parameters `type{_(:int, ?B:int):int}`, and `int->int` (see [Function values](#function-values)); type aliases `player_id := int`, `pair(t:type) := tuple(t, t)` (see [Type aliases](#type-aliases)); types as values of classes and interfaces, `subtype(c)`, `castable_subtype(c)`, `concrete_subtype(c)` and `type` (see [Types as values](#types-as-values)); a conversion written as a call, `int(0)`, `void(0)`, `(?int)(option{0})`, `s(s{})`, of a value of a type that is a subtype of the one named; `int[X]` of an int, a failable cast that no 64-bit int fails (UEFN 43.12 admits it; the Book's tests, `WhereConstrainedInts.versetest:219-222`; of a class's value it is refused, `Cast.versetest:35`); a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
 | Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e`, which state their type there as in a module (ch. 16: "type inference with `:=` alone is not allowed"; `C := e` names a type, when `e` is one: [Type aliases](#type-aliases)) (definitions on one line, at the top level, in a module or in a block, are separated by `;` or `,`: `X:int=0, Y:int=0`; a constant may use one defined before it in its own scope, a module's or the top level's, and one of another module or of an enclosing scope wherever it is defined, as the Book's tests have it (`DefaultValueAssignment.versetest` 102, 128); not itself, directly or through other constants; and its value has no side effect, writing nothing, also through what it calls or constructs, as the Book's tests have it, `DefaultValueAssignment.versetest:199`, `ModuleDefinitions.versetest:278`, `ParametricTypes.versetest:465`: a function with no heap specifier, or a class or struct with none, has `<transacts>`, and so writes, [the rule](research/book-remaining-rules.md#a-module-constant-has-no-side-effect)); module-scoped `var X:weak_map(k, v) = map{}` (see [Module-scoped variables](#module-scoped-variables)); locals `X := e`, `X:t = e`, `var X:t = e`, and a tuple destructured, `(X:int, _, Z:string) = e` (each named element a local of the block, `_` skipping one, `e` evaluated once); no shadowing; no name defined twice in a scope but [overloaded](#overloading) functions; no [reserved name](#reserved-names) | §3.1–3.4 |
 | Mutation | `set X = e`, `set X += e` (`-=`, `*=`), `set A[i] = e` (fails out of range; returns `e`), and paths `set S.F.G = e`, `set A[i][j] op= e`, `set M[k].F = e`: indices and keys evaluated once, left to right, then the new value, then the variable rebuilt (for `op=`, the old value is read after the new one, from the variable as the new one left it, which is then rebuilt from that: `set X += e` is `V := e; set X = X + V`, the Book's tests, `ArrayAppend.versetest` 140, 183); but when `e` replaces, with a plain `set`, the container the path's last step writes into, the old value is read from, and the new one written into, the container `e` replaced, through a variable or an object's field, as Epic's VerseVM does ([below](#mutation-macros-tooling), #704); an index out of range or a missing intermediate key fails, while the last key of a path inserts | §3.3, §3.5, §9.3 |
 | Blocks | indented (`:`), braced (`{ }`), inline (`then`/`do`), `.` and an expression on its line wherever `:` or `{…}` may start a body (`if (c). e else. f`, `for (X:Xs). e`, `spawn. F()`, `loop. break`; also `option`, `logic`, and `array` and `map`, whose `:` blocks separate their items by `,`, `;` or new lines: `array:` and the lines `1`, `2`; in braces an array's elements are separated by commas, or by `;` and new lines, not both: `array{1; 2; 3}`), `block:`, `( a; b )` sequences, also as an argument (`F(Log(); 42)` passes 42) and as a `case`'s value (`case(a; b)`); `;` and new lines separate the items of a block, and `;` may end a line or a braced block (`{1; 2;}` is `{1; 2}`) (the next item then follows the line rules, so a class's last field may end in `;`); in a block, statements that commas join on a line are a tuple (ch. 1, "Semicolons vs Commas", and its tests, `SemicolonsVsCommas.versetest` 70, 95, 100: `{1.0, 2}` is a `tuple(float, int)`, `option{1, 2}` holds `(1, 2)`, `for (X := 1..2) {3, X}` is an array of pairs), definitions joined so are the block's definitions in turn (`X:int = 0, Y:int = 0`), and a group of definitions and values is each in order, a definition visible to what follows it, then the tuple of their values (`option{V := 3, V > 0, V}` holds `(3, 3, 3)`, a `var`'s value taken where it is defined); the clauses of `if`, `for`, `first` and the clause macros, the arms of `sync`, `race` and `rush`, a construction's fields and an array's or map's items keep commas as separators; a comma that starts a line is not the block's but the list's around it; a body after `:` may be empty wherever one may be written, as `{}` may (`class:`, `struct:`, `then:`, … whose next line is no deeper than the construct, or nothing follows); a function's or method's braced body may put its `{` on the next line, at the definition's column; a value after `=`, `:=`, `set … =` or a `case` arm's `=>` that starts a later line, deeper, is the indented block of those lines (`Value :=` and the lines `1`, `2`, `3` is `3`; and the line `1, 2, 3`, `(1, 2, 3)`), as a function's body is | §2.2–2.4 |
@@ -304,6 +304,35 @@ propagation or explicit function termination contracts. Ordinary recursion
 and loops remain available outside the initializer admission boundary;
 `computes` and execution fuel do not prove termination.
 
+**The default effect, `no_rollback`** (#515). A function, method or
+constructor written without a heap specifier (`<transacts>`, `<computes>`,
+`<reads>`, `<writes>`, `<allocates>`), `<decides>` or not, and a function
+type written without one (`int->int`, `type{_(:int)<decides>:int}`), have
+the `no_rollback` effect, as in Epic's Verse compiler (UEFN 43.12, error
+3512; [the probes](research/versevm-live-conformance.md)). Such a
+function cannot be called
+- in a failure context: an `if`'s condition (also a plain `<decides>`
+  function's call there, `if (Positive[1])`), a `for`'s range and filter,
+  `option{…}`, `logic{…}`, `not`, the left of `or`, and the conditions and
+  clauses inside a `<decides>` function's body;
+- from a function with a heap specifier (`<transacts>`, `<transacts><decides>`,
+  `<computes>`, …) or a class's `block:`.
+
+The top of a plain `<decides>` function's body may call one (UEFN 43.12
+admits `G()<decides>:void = F() = 1` with `F` unannotated), and so may every
+function without a heap specifier, `Main` included, outside its failure
+contexts. A function value of a type without a heap specifier has it too,
+and a function that has it is no value of a type that has not (3509, Book
+of Verse tests `FunctionTypes.versetest:191`); a `<transacts>` function is a
+value of either. An event's `Signal` and `Await` have it; `Print` and
+`Subscribe` do not. A spawned call is not judged where it is spawned. Write
+`<transacts>` on a function its callers need to call from such a place.
+`--default-rollback` (on `run`, `emit`, `check` and `core`;
+`Options.defaultNoRollback := false`) keeps openverse's old rule, under
+which a function without a heap specifier is rolled back as a
+`<transacts>` one is; `--default-no-rollback` names the default and changes
+nothing.
+
 Source `native`/`native_callable` tags cannot create trusted external bindings.
 Explicit internal/implicit effect spellings (`no_rollback`, `dictates`,
 `diverges`, `succeeds`, `fails`) and obsolete `varies` are rejected.
@@ -354,7 +383,7 @@ of them; the Book's tests `Tests/Attributes/` and `Castable.versetest`):
 | specifier | on | requires |
 |---|---|---|
 | `<abstract>` | a class (ch. 10; not a method, a field, an interface or a struct) | not `<concrete>` too |
-| `<concrete>` | a class or a struct | a default for every field, inherited ones and an interface's included (ch. 10, "Concrete") |
+| `<concrete>` | a class or a struct | a default for every field, inherited ones and an interface's included (ch. 10, "Concrete"); a class below a `<concrete>` class (not `<abstract>`) gives one too to every field no class above gives one, as Epic's compiler (UEFN 43.12, error 3519, "inherited class 'base' is `concrete`") and the Book's tests (`SOL-3366`, `SOL-7781`) have it; an override written without a value keeps the inherited default |
 | `<final>` | a class, a method or a field, a struct's included (not an interface, a struct, a module's function) | a method's body, a field's value; no class below overrides a `<final>` field and no construction gives it a value |
 | `<final_super>` | a class | a parent, a class or an interface (ch. 10, "Final"; the tests' 3679) |
 | `<final_super_base>` | a class or an interface | a class right below it is `<final_super>` |
@@ -885,6 +914,13 @@ circle := class(shape, labelled):
     expected, and so can arrays and options of them.
   - Two `if` branches of different classes take the expected type when both
     are below it, else their nearest common supertype.
+  - An array literal's elements of classes with more than one nearest
+    common supertype, a class among them (a common base class and a common
+    interface not above it), make an array of `any`, whatever is expected,
+    so it is refused where an array of the base class or of an interface
+    above both is expected (Epic's compiler, UEFN 43.12, error 3509; the
+    Book's tests, `SOL-5838`). Elements with one nearest common supertype
+    keep it.
   - A method call runs the most specific implementation for the value's own
     class: the nearest in its class chain, else the default of the
     interface that declares the method, whatever order the parents are
@@ -3840,8 +3876,8 @@ Main()<suspends>:void =
   ([the rule](research/scheduler-conformance.md#awaiters-run-inside-signal)).
   An `event(t)` and its subclasses can be passed as `signalable(t)`. Calls
   through that interface dispatch to the concrete event, including the
-  `Signal` override on `sticky_event(t)`. The optional
-  `--signal-no-rollback` policy applies to calls through the interface.
+  `Signal` override on `sticky_event(t)`. The `no_rollback` admission of
+  `Signal` (below) applies to calls through the interface.
   A waiter is a spawned task, `Main`, a `branch`, an arm of a `sync`,
   `race` or `rush` (also one of the signalling task's own: an arm awaiting
   while its sibling signals is resumed inside that sibling's `Signal`), or
@@ -3867,8 +3903,11 @@ Main()<suspends>:void =
   `Signal` itself never waits. `event()` is an event without a value (`event(void)`),
   with `E.Signal()` and `E.Await()`. A `sticky_event(t)` (or
   `sticky_event()`) is an event that keeps its last signal: an `Await`
-  after a `Signal` gives that value at once. A `subscribable_event(t)` is an
-  event that also calls the functions subscribed to it:
+  after a `Signal` gives that value at once. A `subscribable_event(t)` (an
+  openverse extension: Epic's API has no `subscribable_event`, UEFN 43.12
+  says "Unknown identifier"; its `event(t)` itself has `Subscribe`, which
+  openverse's `event` lacks, [the probes](research/versevm-live-conformance.md))
+  is an event that also calls the functions subscribed to it:
   `E.Subscribe(F)` (with `F` a function or method value of type
   `type{_(:t):void}`) gives a `cancelable`, whose `Cancel()` unsubscribes
   `F`, and `E.Signal(X)` calls each subscribed function in the order they
@@ -3878,18 +3917,36 @@ Main()<suspends>:void =
   function subscribed during a `Signal` is first called at the next one; a
   function cancelled during a `Signal`, by one called before it, is not
   called by it. As in the Book (ch. 14, "Transactional Behavior"), a
-  `Subscribe` or a `Cancel` in a failure context that fails is undone. A
-  `Signal` may be called in a failure context too, as the Book's tests do
-  (`Event.versetest` signals in `<decides>` functions, and every
-  assertion's body is one): what the waiters it resumes and the functions
-  it calls do is rolled back with the context when it fails, as `Print`
+  `Subscribe` or a `Cancel` in a failure context that fails is undone. An
+  event's `Signal` has the `no_rollback` effect, as in Epic's Verse
+  compiler (#515): a program that may call it from a failure context, from
+  a function whose specifiers name heap effects (`<transacts>`,
+  `<computes>`, `<reads>`, `<writes>`, `<allocates>`: such a function has
+  no `no_rollback`, Book of Verse ch. 13) or from a class's `block:` is
+  refused before it runs or is emitted. UEFN 43.12 (build
+  ++Fortnite+Release-43.12-CL-60598086) refuses each of these with error
+  3512, "This invocation calls a function (`(/Verse.org/Verse/event:)Signal`)
+  that has the 'no_rollback' effect, which is not allowed by its context":
+  directly, through an alias, a `signalable` view and a bound method, and
+  in a generic `<transacts>` helper also when the helper is called outside
+  every failure context
+  ([the probes](research/versevm-live-conformance.md)). The Book's tests
+  read it otherwise (`Event.versetest` signals in `<decides>` functions,
+  and every assertion's body is one; the Book's API gives `event`'s
+  `Signal` no `no_rollback`). Their reading is kept as the legacy
+  transactional mode, `--signal-rollback` (`openverse run`, `emit`, `check`
+  and `core`; `Options.signalNoRollback := false`): there a `Signal` may be
+  called anywhere, and what the waiters it resumes and the functions it
+  calls do is rolled back with a failure context that fails, as `Print`
   is, and the waiters wait again where they waited
-  (`Coroutines/Concurrency.versetest:1562-1580`). With
-  `--signal-no-rollback` (`openverse run`, `emit`, `check` and `core`,
-  opt-in, #515: the reading of Epic's published `event` pages, which make
-  `Signal` `<no_rollback>`; the Book's API gives `event`'s `Signal` no such
-  effect), a program that may call an event's `Signal` from a failure
-  context is refused before it runs or is emitted. A failure context is an `if`'s condition, a `for`'s clause, a
+  (`Coroutines/Concurrency.versetest:1562-1580`). `--signal-no-rollback`,
+  the opt-in name of the policy before it became the default, is accepted
+  and changes nothing. A function without a heap specifier has the
+  `no_rollback` effect too ([effect contracts](#effect-contracts)), so a
+  function that signals and has none cannot be called from a failure
+  context either, and the error names it; the way to the `Signal` the
+  analysis below follows matters where such a function is `<transacts>`
+  (refused at its `Signal`) and under `--default-rollback`. A failure context is an `if`'s condition, a `for`'s clause, a
   `<decides>` function's body, `option{…}`, `logic{…}`, `not`, the left of
   `or`, a `first{…}` or a `do` expression, with everything that runs
   inside it: a `block`, a named argument's default, a `defer:`. A refining
@@ -3902,8 +3959,10 @@ Main()<suspends>:void =
   `Signal`. An `if`'s branches and a `for`'s body are not failure contexts
   (unless the `if` or `for` is in one), also when the compiler moves the
   body into a function of its own, and neither is the call a `spawn`
-  starts (its task runs it later; its arguments count). `Subscribe` and
-  `Cancel` in a failure context stay admitted, undone as above.
+  starts (its task runs it later; its arguments count). In a function with
+  a heap specifier or a class's `block:`, all of the body counts, wherever
+  the compiler moves its code. `Subscribe` and `Cancel` in a failure
+  context stay admitted, undone as above.
   A `subscribable_event()` is one without a value: `E.Signal()`,
   `E.Await()`, and functions of type `type{_():void}` to subscribe (#220).
   It is an `event(void)`, but not a `subscribable_event(t)`, whose
@@ -3994,7 +4053,7 @@ Main()<suspends>:void =
 | What a `for` undoes | its clauses are one search: what they did since the last value that reached the body is kept at the body and undone when the search ends; a failure undoes back to its own element or alternative (`FlowControl/for.versetest` 317-392, `Range.versetest` 140, 159, `SoftwareTransactionalMemory.versetest` 74-88; `08_failure.md:92`: "a failure context for each iteration of the domain clause"): **the Book decides** | the Book's, for a `for` whose prepared clauses have only range, array, map, string, or flat value-choice generators. This includes flat inlined calls and producers computed as arrays at the call. A `for` with a remaining producer boundary, composed choice, or exclusive choice keeps the older rule. Its generator's successful clauses keep their effects even when the generators after it give no value. See [the audit](research/readings-audit.md#what-a-for-undoes). |
 | A failing `for` source | "When any expression in the iteration header fails, that iteration is skipped" (ch. 7); `for.versetest:317`: a failing range bound gives `array{}`: **the Book decides** | zero iterations, for an iterated source (`X : F[]`) and a range bound (`I := 1..F[]`) alike, what the source did rolled back (with what the search did since its last value, by the rule above); the `for` itself does not fail |
 | `?` on other values | conflict (§6.1) | only `logic` and `?t` (the API's typed reading) |
-| Output inside a failed failure context | unspecified for `Print` (the API's `log` class, another function, prints rolled-back lines prefixed "(Rolling Back)") | rolled back with the writes (transactional `Print`) |
+| Output inside a failed failure context | unspecified for `Print` (the API's `log` class, another function, prints rolled-back lines prefixed "(Rolling Back)"); Epic's Verse VM (UEFN 43.12, 2026-11-19) prints it and keeps it: `if (Print("x"), false?)` prints `x` (followup/print-in-condition) | rolled back with the writes (transactional `Print`): a known divergence from the Verse VM, which output kept across rollback in Core and the C runtime would remove |
 | `Main` failing | (no entry point in the book) | exit code 1; output already printed stays |
 | `return` or `break` inside a failure context | refused by the tests (`SOL-4199-BreakFromIf.versetest`, `Reachability.versetest` 12-15, `Return.versetest` 157-163; [the audit](research/readings-audit.md#return-and-break-in-a-failure-context)) | the Book's: refused ([Control](#supported)); a `break` in a `for`'s body, which the Book's tests allow and its prose refuses, stays refused |
 | Comparability | `comparable` covers the primitive types, enums, structs, `<unique>` classes and containers of comparable types (ch. 4); not functions, `any`, nor classes and interfaces without `<unique>` (ch. 11, `CompareInstance.versetest:11`) | the Book's: the types it names, and a type parameter declared `subtype(comparable)`; `comparable` itself is a type ([comparable](#comparable)) |
@@ -4022,7 +4081,7 @@ Main()<suspends>:void =
 | Order of a `subscribable_event`'s functions | the API: "invoked in a randomised order on every signal", "only after every waiting task has been resumed"; ch. 14's example lists them in subscription order | subscription order, after the tasks awaiting the event went on inside `Signal` (#210) |
 | Event waiter resumption | the Book's API: awaiting tasks "resumed first, in the order they suspended", each until it blocks before the next, and `Signal` "returns before the resumed tasks have finished"; its tests have awaiters run inside `Signal` (`Event.versetest:21-32`, FORT-1088027, FORT-1126351) | the Book's: inside `Signal`, in the order they suspended, each until it waits again or ends, the same task's arms included; an await made meanwhile joins the next `Signal`; nested `Signal`s depth first (#513, [the rule](research/scheduler-conformance.md#awaiters-run-inside-signal)); a task's end resumes its awaiters inside it the same way, in the order they registered (the API's `task`, `Await`; [the rule](research/scheduler-conformance.md#a-tasks-end-resumes-its-awaiters)) |
 | Awaiting a cancelled task | the API (`task`, `Await`): "a cancelled task never resumes its awaiters, so the call does not fail, does not error, and simply stays suspended for ever"; ch. 14: "it propagates cancellation: if the awaited task was canceled, `Await()` passes that cancellation on to the caller"; the tests decide neither (`SpawnAndTask.versetest:342-355`); `Cancel` itself is unreleased (ch. 14) and `<epic_internal>` (the API): the Book disagrees with itself | the API's: the await waits for ever; the awaiter can be cancelled itself (a `race` it loses); a `Main` stalled on one ends the program with exit 2 ([the cancelled task](research/scheduler-conformance.md#the-cancelled-task)) |
-| Signal in a failure context | the Book's tests signal in `<decides>` functions and assertions and expect success (`Event.versetest` 64-119); a failed context undoes the resumption (`Coroutines/Concurrency.versetest:1562-1580`); the Book's API gives `event`'s `Signal` no `<no_rollback>` (Epic's published pages do) | the tests': allowed, and what it and the awaiters it resumed did is rolled back with a failing context; `--signal-no-rollback` refuses it, as Epic's pages read (#515) |
+| Signal in a failure context | the Book's tests signal in `<decides>` functions and assertions and expect success (`Event.versetest` 64-119); a failed context undoes the resumption (`Coroutines/Concurrency.versetest:1562-1580`); the Book's API gives `event`'s `Signal` no `<no_rollback>` (Epic's published pages do) | Epic's compiler's (UEFN 43.12, error 3512): refused, as in a function with a heap specifier and in a class's `block:` (#515); `--signal-rollback` keeps the tests' reading: allowed, and what it and the awaiters it resumed did is rolled back with a failing context |
 | Extent of a `<#>` comment | "everything indented by four spaces on subsequent lines" (§1.1) | the rest of the `<#>` line and every following line indented more than that line, whatever the amount (blank lines included); `<#>` may also follow code on a line |
 
 ## Not supported in v1

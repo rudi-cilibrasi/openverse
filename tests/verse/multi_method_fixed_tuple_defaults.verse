@@ -5,7 +5,7 @@ fixed := class(box(int)):
 extra(t:type,u:type) := class(box(t)):
     X:u
     Mix<override>(A:t,B:[]t,?D:[]t=Concatenate()):int = B.Length + D.Length | B.Length + D.Length + 2
-Run(P:box(t),A:t where t:type):[]int = for (V:=P.Mix((A,array{}))) { V }
+Run(P:box(t),A:t where t:type)<transacts>:[]int = for (V:=P.Mix((A,array{}))) { V }
 Main():void =
     for (V : Run(fixed{},7)) { Print("f {V}") }
     for (V : Run(box(string){},"s")) { Print("b {V}") }

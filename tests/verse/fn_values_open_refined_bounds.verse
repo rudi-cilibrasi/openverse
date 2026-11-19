@@ -1,4 +1,4 @@
-Same(X:t,Y:t where t:subtype(comparable))<decides>:t=
+Same(X:t,Y:t where t:subtype(comparable))<transacts><decides>:t=
     X=Y
     X
 root(t:type):=class:
@@ -7,7 +7,7 @@ bounded(t:subtype(comparable),u:type):=class(root(t)):
     Extra:u
 Use(P:root(t) where t:type):void=
     if(D:=bounded[P]):
-        F:type{_(:t,:t)<decides>:t}=Same
+        F:type{_(:t,:t)<transacts><decides>:t}=Same
         if(F[D.V,P.V])then Print("same")else Print("different")
     else:
         Print("base")

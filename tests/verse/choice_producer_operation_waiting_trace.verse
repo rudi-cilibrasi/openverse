@@ -3,18 +3,18 @@ link:=class<unique>:
     Next:?link
 trace:=class<unique>:
     var Head:?link=false
-    Note(Code:int):void=set Head=option{link{Code:=Code,Next:=Head}}
+    Note(Code:int)<transacts>:void=set Head=option{link{Code:=Code,Next:=Head}}
 a:=class<computes>:
     T:trace
     N:int=1
-    M():int=
+    M()<transacts>:int=
         T.Note(101)
         defer{T.Note(119)}
         (block{T.Note(111);N})|(block{T.Note(112);N+10})
 b:=class<computes>:
     T:trace
     N:int=2
-    M():int=
+    M()<transacts>:int=
         T.Note(201)
         defer{T.Note(219)}
         (block{T.Note(211);N})|(block{T.Note(212);N+10})

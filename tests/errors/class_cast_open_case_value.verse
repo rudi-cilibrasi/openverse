@@ -9,7 +9,7 @@ pairE(a:type, b:type) := class(expr(tuple(a, b))):
     L:expr(a)
     R:expr(b)
     Tag<override>():string = "pair"
-LeftTag(E:expr(t) where t:type)<decides>:string =
+LeftTag(E:expr(t) where t:type)<transacts><decides>:string =
     X := case(1){1 => option{pairE[E].L}, _ => false}
     if (L := X?) then L.Tag() else "none"
 Main():void =

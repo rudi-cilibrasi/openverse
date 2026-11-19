@@ -2,6 +2,6 @@
 Nat(N:int)<transacts><decides>:int =
     Print("at {N}")
     N | Nat[N + 1]
-Pick(V:t where t:type):?t = if (X := Nat[0], X > 1) then option{V} else false
+Pick(V:t where t:type)<transacts>:?t = if (X := Nat[0], X > 1) then option{V} else false
 Main():void =
     if (S := Pick("s")?) then Print(S)

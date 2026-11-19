@@ -7,7 +7,7 @@ vpair(a:type, b:type) := class(expr(tuple(a, b))):
     var L:expr(a)
     R:expr(b)
     Eval<override>():tuple(a, b) = (L.Eval(), R.Eval())
-Returns(E:expr(t) where t:type):?t =
+Returns(E:expr(t) where t:type)<transacts>:?t =
     if (Print("prefix"), P := vpair[E], Saved := P.L, L := lit[Saved], set P.L = lit{V:=99}, R := lit[P.R]) then block:
         return option{(L.V, R.V)}
     false

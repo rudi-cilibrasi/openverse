@@ -5,6 +5,6 @@ Nat(N:int)<transacts><decides>:int =
 holder(t:type) := class:
     V:t
     Len:int = 2
-    Get():?t = if (X := Nat[0], X > Len) then option{V} else false
+    Get()<transacts>:?t = if (X := Nat[0], X > Len) then option{V} else false
 Main():void =
     if (V := holder(string){V := "s"}.Get()?) then Print(V)

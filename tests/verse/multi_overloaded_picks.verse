@@ -6,15 +6,15 @@
 # defaults, a class block, parameters' defaults
 Two(N:int)<computes>:int = N * 2
 Two(S:string)<computes>:int = S.Length | 100
-Twice(N:int):int = Two(N) + 1
-Both(S:string):int = Two(S) + 1
+Twice(N:int)<transacts>:int = Two(N) + 1
+Both(S:string)<transacts>:int = Two(S) + 1
 Vals:[]int = for (X := Two("abc")) { X }
 c := class:
     Ks:[]int = for (X := Two("ab")) { X }
     block:
         for (X := Both("q")) { Print("blk {X}") }
     Get(N:int):int = Two(N) + 1
-    Gets(S:string):int = Two(S) + 1
+    Gets(S:string)<transacts>:int = Two(S) + 1
 F(?Xs:[]int = for (X := Two("q")) { X }):int = Xs.Length
 Main():void =
     Print("a {Twice(3)}")

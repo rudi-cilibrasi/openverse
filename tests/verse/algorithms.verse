@@ -14,7 +14,7 @@ Sort(Input:[]int):[]int =
     A
 
 # Binary search: fails when the value is absent.
-Find(A:[]int, X:int)<decides>:int =
+Find(A:[]int, X:int)<transacts><decides>:int =
     var Lo:int = 0
     var Hi:int = A.Length - 1
     var Found:int = -1
@@ -34,7 +34,7 @@ Find(A:[]int, X:int)<decides>:int =
     Found >= 0
     Found
 
-IsPrime(N:int)<decides>:void =
+IsPrime(N:int)<transacts><decides>:void =
     N >= 2
     not (for (D := 2..N - 1, D * D <= N, Mod[N, D] = 0) { D })[0]
 

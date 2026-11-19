@@ -4,9 +4,9 @@
 # depth, so Verse Core's equality relates them (Value.veq). y: the
 # comparison holds, n: it fails.
 p(t:type) := struct{X:t}
-IsFalse(X:t where t:subtype(comparable))<decides>:void = X = false
-IsEmptyString(X:t where t:subtype(comparable))<decides>:void = X = ""
-Same(X:t, Y:t where t:subtype(comparable))<decides>:void = X = Y
+IsFalse(X:t where t:subtype(comparable))<transacts><decides>:void = X = false
+IsEmptyString(X:t where t:subtype(comparable))<transacts><decides>:void = X = ""
+Same(X:t, Y:t where t:subtype(comparable))<transacts><decides>:void = X = Y
 Show(B:logic):string = if (B?) then "y" else "n"
 Main():void =
     LL:[]logic = array{false, false}

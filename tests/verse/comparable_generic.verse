@@ -11,16 +11,16 @@ p := struct:
     C:int
 Equal(X:t, Y:comparable where t:subtype(comparable))<computes><decides>:t = X = Y
 NotEqual(X:t, Y:comparable where t:subtype(comparable))<computes><decides>:t = X <> Y
-Same(X:t, Y:u where t:subtype(comparable), u:subtype(comparable))<decides>:void = X = Y
-Outer(X:t, Y:u where t:subtype(comparable), u:subtype(comparable))<decides>:void = Same[X, Y]
-InArrays(X:t, Y:u where t:subtype(comparable), u:subtype(comparable))<decides>:void = array{X} = array{Y}
-IsFalse(X:t where t:subtype(comparable))<decides>:void = X = false
-TupleIsString(A:tuple(t, t, t), B:string where t:subtype(comparable))<decides>:void = A = B
-AsComparable(X:comparable):comparable = X
-Box(X:t where t:subtype(comparable)):comparable = AsComparable(X)
-SameT(X:t, Y:t where t:subtype(comparable))<decides>:void = X = Y
-BoxResult(X:t where t:subtype(comparable)):comparable = X
-BoxAll(X:t, Y:u where t:subtype(comparable), u:subtype(comparable)):[]comparable =
+Same(X:t, Y:u where t:subtype(comparable), u:subtype(comparable))<transacts><decides>:void = X = Y
+Outer(X:t, Y:u where t:subtype(comparable), u:subtype(comparable))<transacts><decides>:void = Same[X, Y]
+InArrays(X:t, Y:u where t:subtype(comparable), u:subtype(comparable))<transacts><decides>:void = array{X} = array{Y}
+IsFalse(X:t where t:subtype(comparable))<transacts><decides>:void = X = false
+TupleIsString(A:tuple(t, t, t), B:string where t:subtype(comparable))<transacts><decides>:void = A = B
+AsComparable(X:comparable)<transacts>:comparable = X
+Box(X:t where t:subtype(comparable))<transacts>:comparable = AsComparable(X)
+SameT(X:t, Y:t where t:subtype(comparable))<transacts><decides>:void = X = Y
+BoxResult(X:t where t:subtype(comparable))<transacts>:comparable = X
+BoxAll(X:t, Y:u where t:subtype(comparable), u:subtype(comparable))<transacts>:[]comparable =
     A:comparable = X
     B:comparable = BoxResult(Y)
     array{A, B}
