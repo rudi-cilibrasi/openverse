@@ -48,7 +48,10 @@ for ((s=first; s<first+n; s++)); do
   # The lexical-field variants call Concatenate and Id, and their for/lazy
   # ones the ordinary Sum/Lazy helpers, in a field's default, which a data
   # member may not (#511; UEFN 43.12 error 3582, #724).
-  compat=()
+  # (#724: the models write parametric interfaces with var fields and generic
+  # functions over parametric classes whose var fields hold their parameters,
+  # openverse's extension, which Epic's compiler refuses, 3552 and 3502)
+  compat=(--parametric-var-fields)
   if [[ $g == gadt_contexts ]] && (( s % 9 == 1 )); then
     compat+=(--extended-defaults)
   fi
@@ -70,8 +73,13 @@ for ((s=first; s<first+n; s++)); do
   # function values whose calls Epic's compiler refuses (UEFN 43.12, error
   # 3502, #724): openverse's conversions, --function-coercions.
   case $g in gadt_function_*|gadt_method_*|gadt_context_methods|gadt_choice_values) compat+=(--function-coercions) ;; esac
-  # (#515: Epic's default effect, written out: <transacts> where a function without one is called from a failure context or <transacts> code)
-  python3 -I "$root/scripts/models/default_effect.py" "$tmp/p.verse"
+  # (#515: Epic's default effect, written out: <transacts> where a function without one is called from a failure context or <transacts> code;
+  # not for the models whose functions spawn, written for the default effect already: a spawn has no_rollback,
+  # which no <transacts> function may have, #724)
+  case $g in
+    gadt_spawn_callers|gadt_spawn_body|gadt_spawn_defaults) ;;
+    *) python3 -I "$root/scripts/models/default_effect.py" "$tmp/p.verse" ;;
+  esac
   timeout 120 "$ov" run "$tmp/p.verse" "${compat[@]}" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.err"
   want=$(head -1 "$tmp/p.exp" | sed 's/exit=//')
   if [[ $want == 4 ]]; then

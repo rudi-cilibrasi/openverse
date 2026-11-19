@@ -7,6 +7,11 @@
 # after before sleep; the Verse VM may label a rolled-back line "(Rolling
 # Back)"), or a runtime error. Asked only if spawn-in-transacts-decides is
 # admitted.
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# BuildAll, 2026-11-19) refuses it: 3512 (L13) "This 'spawn' macro has the
+# 'no_rollback' effect, which is not allowed by its context."; 3512 (L13)
+# "This invocation calls a function (`(<project>:)Work`) that has the
+# 'no_rollback' effect, which is not allowed by its context.".
 Work(Tag:string)<suspends>:void =
     Print("OVPROBE spawned {Tag}")
 

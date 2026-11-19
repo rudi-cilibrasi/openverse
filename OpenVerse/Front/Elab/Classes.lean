@@ -96,6 +96,92 @@ def checkParametricRecursion (cdefs : List CDef) : Except String Unit := do
     if let some d := (next cd.name).find? (reaches · cd.name) then
       throw s!"{cd.pos.show}: the fields of {cd.name} name {d}, and those of {d} name {cd.name}{if (next d).contains cd.name then "" else " through others"}: parametric types cannot be mutually recursive (Book of Verse ch. 10, \"Disallowed: Mutual Recursion\")"
 
+/-- `checkImplicitMutable`'s walk of one type `t` of function `fname`:
+    `mutable` gives, for each class, the positions of its type parameters
+    that its mutable data holds, each with that data (`c.Data`). -/
+partial def walkImplicitMutable (mutable : List (String × List (Nat × String))) (p : Pos) (fname : String)
+    (implicit : List String) (t : STy) : Except String Unit := do
+  if let .app c args := t then
+    if let some hits := mutable.lookup c then
+      for (i, data) in hits do
+        if let some a := args[i]? then
+          if let some v := implicit.find? a.mentions then
+            throw s!"{p.show}: {fname}'s type has {c}({", ".intercalate (args.map fun _ => "…")}) at its implicit type parameter {v}, which mutable data holds, {data}: an implicit type parameter used in the type of mutable data may not be used in the type of a function; pass the type as an argument, {v}:type (Epic's Verse compiler, UEFN 43.12: error 3552, \"An implicit type parameter (`{v}`) used in the type of mutable data (`{data}`) may not be used in the type of a function\"; --parametric-var-fields keeps openverse's extension)"
+  for u in t.children do walkImplicitMutable mutable p fname implicit u
+
+/-- The positions of `t`'s type arguments `walkImplicitMutable` would find
+    mutable data at, with the data: those of an application of a class of
+    `mutable` anywhere in `t`, each with the argument written there. -/
+partial def mutableArgs (mutable : List (String × List (Nat × String))) (t : STy) : List (STy × String) :=
+  let here := match t with
+    | .app c args => ((mutable.lookup c).getD []).filterMap fun (i, data) => args[i]?.map (·, data)
+    | _ => []
+  here ++ t.children.flatMap (mutableArgs mutable)
+
+/-- (#724) No function's type, its parameters' types and its result's,
+    applies a parametric class to an implicit type parameter of the
+    function's own (one its `where` clause introduces) where the class's
+    mutable data holds that class parameter: a `var` field whose type
+    mentions it, or a field, `var` or not, of a class or a struct whose
+    mutable data holds the argument written there. UEFN 43.12
+    (++Fortnite+Release-43.12-CL-60598086) refuses
+    `F(X:t where t:type):c(t)` and `F(X:c(t) where t:type):void` with
+    `c(t) := class{var Data:t}`, error 3552, "An implicit type parameter
+    (`t`) used in the type of mutable data (`c.Data`) may not be used in the
+    type of a function" (followup-book2/parametric-var-where-construct and
+    -param), and so `F(X:t where t:type):holder(t)` with
+    `holder(t) := class{Inner:c(t)}` (followup-book3/parametric-var-where-nested);
+    it admits the class at `int` (-construct-control), `c(t)` in a body only
+    (-where-local) and a `var` field that does not mention the parameter
+    (-other-field). The Book's tests (ParametricFunctions.versetest 431,
+    438) refuse both, and accept a type passed as an argument,
+    `F(t:type, X:t):c(t)`. A class's own type parameters are no method's
+    implicit ones. -/
+def checkImplicitMutable (tops : List STop) (cdefs : List CDef) : Except String Unit := do
+  -- (each class whose mutable data holds one of its type parameters: their
+  -- positions, each with the data; not the compiler's own fields, a task's
+  -- `$Result`: Epic's `task` is native, with no mutable data a program
+  -- sees)
+  let mut mutable : List (String × List (Nat × String)) := cdefs.filterMap fun cd =>
+    let hits := cd.tps.zipIdx.filterMap fun (tp, i) =>
+      (cd.fields.find? fun f => f.isVar && !f.name.startsWith "$" && f.ty.mentions tp.name).map fun f =>
+        (i, s!"{cd.name}.{f.name}")
+    if hits.isEmpty then none else some (cd.name, hits)
+  if mutable.isEmpty then return
+  -- (and the classes and structs whose fields hold such a type at one of
+  -- their parameters: UEFN 43.12 refuses a struct's too, 3552,
+  -- followup-book4/parametric-var-struct-field)
+  let holders : List (String × List TParam × List SField) :=
+    cdefs.map (fun cd => (cd.name, cd.tps, cd.fields)) ++ tops.filterMap fun
+      | .const _ n _ none (.structDef _ tps _ fs) => some (n, tps, fs)
+      | _ => none
+  for _ in [0:holders.length + 1] do
+    let mut grew := false
+    for (name, tps, fields) in holders do
+      let known := (mutable.lookup name).getD []
+      let found := tps.zipIdx.filterMap fun (tp, i) =>
+        if known.any (·.1 == i) then none else
+        (fields.filter (!·.name.startsWith "$")).findSome? fun f =>
+          ((mutableArgs mutable f.ty).find? fun (a, _) => a.mentions tp.name).map fun (_, data) => (i, data)
+      if !found.isEmpty then
+        mutable := (name, known ++ found) :: mutable.filter (·.1 != name)
+        grew := true
+    if !grew then break
+  let check (p : Pos) (fname : String) (tps : List TParam) (ps : List SParam) (ret : STy) : Except String Unit := do
+    -- (a type passed as an argument, `F(t:type, X:t)`, is a type parameter
+    -- with a parameter `$typeArgument:t` in its place, `TypeArguments`:
+    -- explicit; nor are the compiler's own functions measured)
+    if tps.isEmpty || fname.startsWith "$" then return
+    let implicit := (tps.filter fun tp => !ps.any (·.name == "$typeArgument:" ++ tp.name)).map (·.name)
+    for t in ret :: ps.map (·.ty) do walkImplicitMutable mutable p fname implicit t
+  for t in tops do
+    match t with
+    | .fn p n ps tps _ ret _ => check p n tps ps ret
+    | .classDef _ c _ _ _ _ _ _ methods =>
+      for m in methods do
+        if let .fn p n ps mtps _ ret _ := m then check p s!"{c}.{n}" mtps ps ret
+    | _ => pure ()
+
 /-- The class hierarchy, a phase of `elabProgramCore`: the classes and
     interfaces of `tops` (#14, #18), each one's parent and interfaces, which
     must exist, take the type arguments given, and inherit as classes and
@@ -106,8 +192,8 @@ def checkParametricRecursion (cdefs : List CDef) : Except String Unit := do
     `<castable>` or below a `<castable>` one, and a class right below a
     `<final_super_base>` one is `<final_super>`; and each class's
     construction effects `constructionFx` allow those its parents declare. -/
-def classHierarchy (tops : List STop) (constructionFx : Std.HashMap String (List String)) :
-    Except String Classes := do
+def classHierarchy (tops : List STop) (constructionFx : Std.HashMap String (List String))
+    (parametricVarFields : Bool := false) : Except String Classes := do
   -- classes and interfaces (#14, #18): each is a struct whose fields are
   -- those inherited first, then its own; each method `M` of `c` a function
   -- `c.M` whose first parameter is `Self`, generic over the class's type
@@ -132,6 +218,30 @@ def classHierarchy (tops : List STop) (constructionFx : Std.HashMap String (List
       some { pos := p, name := n, tps, specs, parents := names, parentArgs := args, isIface,
              fields, methods, accessors }
     | _ => none
+  -- (#724: a class's name has at most 1023 characters, as the Blueprint
+  -- VM's names do: UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, refuses
+  -- a class of 1024 with error 9002, "Cannot find class",
+  -- followup-book2/long-ident-class-1024, and runs one of 960, the Book's
+  -- valid one, long-ident-class-1024-control; an identifier past 1024 is
+  -- the lexer's to refuse. Interfaces and structs are not measured.)
+  for cd in cdefs do
+    if !cd.isIface && !cd.name.startsWith "$" then
+      let simple := (qualParts cd.name).getLastD cd.name
+      if simple.length > maxClassNameLength then
+        throw s!"{cd.pos.show}: the class name {(simple.take 24).toString}… has {simple.length} characters, more than {maxClassNameLength} (Epic's Verse compiler, UEFN 43.12: error 9002, \"Cannot find class\")"
+  -- (#724: a parametric interface has no var field. UEFN 43.12,
+  -- ++Fortnite+Release-43.12-CL-60598086, refuses one with error 3502,
+  -- "Mutable members in parametric interfaces are not yet implemented",
+  -- followup-book2/parametric-interface-var, and admits its field not var
+  -- and a var field in an interface that is not parametric; the Book's
+  -- tests, ParametricFunctions.versetest:496. `--parametric-var-fields`
+  -- keeps openverse's extension, as for `checkImplicitMutable`.)
+  if !parametricVarFields then
+    for cd in cdefs do
+      if cd.isIface && !cd.tps.isEmpty then
+        if let some f := cd.fields.find? (·.isVar) then
+          throw s!"{cd.pos.show}: interface {cd.name} has type parameters and a var field, {f.name}: Epic's compiler has no mutable members in parametric interfaces yet (Epic's Verse compiler, UEFN 43.12: error 3502, \"Mutable members in parametric interfaces are not yet implemented\"; --parametric-var-fields keeps openverse's extension)"
+    checkImplicitMutable tops cdefs
   -- the hierarchy
   let mut cinfo : Array (String × ClassInfo) := #[]
   for cd in cdefs do
@@ -625,6 +735,19 @@ def classMethods (tops : List STop) (classes : Classes) (fields : Fields) : Exce
       let clsOf (f : String) : String := (f.splitOn ".").head!
       let mut chosen : List String := []
       for r in roots do
+        -- (#724: an interface's method is implemented below the interface,
+        -- in a class or interface that inherits it: a class's method of its
+        -- name from a class that does not is a method of its own, qualified
+        -- apart, `<final>` or not (the Book of Verse's tests,
+        -- Attributes/final.versetest:121, "qualified separately ... it stays
+        -- unmet"). UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, refuses
+        -- such a class, error 3591, followup-book2/final-method-interface
+        -- and -nonfinal, and admits one that overrides the method itself,
+        -- final-method-interface-control. `slotImpls` reaches the class
+        -- chain's for an interface default's dispatch, as Java does.)
+        if (classes.henv.info r).isIface && (classes.henv.slotImpls (implAt r) (ups.filter (classes.henv.isSub · r)) r).isEmpty then
+          if let some f := (classes.henv.slotImpls (implAt r) ups r).head? then
+            throw s!"{cd.pos.show}: {cd.name} inherits the abstract method {mn} from {r} and does not implement it: {clsOf f}'s {mn} is not {r}'s, since {clsOf f} is not below {r} (a method is qualified by where it is introduced); override it in {cd.name} (Epic's Verse compiler, UEFN 43.12: error 3591, \"Non-abstract class inherits abstract function `{mn}` from `{r}` but does not provide an implementation\")"
         match classes.henv.slotImpls (implAt r) ups r with
         | [] => throw s!"{cd.pos.show}: {cd.name} must implement {mn} (declared abstract in {r})"
         | f :: g :: _ =>

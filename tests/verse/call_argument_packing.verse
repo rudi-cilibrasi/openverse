@@ -1,4 +1,7 @@
 # Ordinary, generic and callable argument packing (#501).
+# (#724: beside a named parameter the tuple is written out: Epic's compiler packs no
+# several arguments into a tuple parameter there, UEFN 43.12 error 3509,
+# followup-book2/overload-tuple-named-call)
 First(P:tuple(int,string))<computes>:string=P(1)
 Unit(P:tuple())<computes>:int=7
 One(P:tuple(int))<computes>:int=P(0)
@@ -10,7 +13,7 @@ Named(P:tuple(int,string),?B:int,?A:int=4)<computes>:string="{P(0)} {P(1)} {B} {
 animal:=class{}
 dog:=class(animal){}
 Main():void=
-    Print(Context(array{},false,?V:=7))
+    Print(Context((array{},false),?V:=7))
     Print(First(3,"value"))
     Print("{Unit()} {Unit(())} {One(9)}")
     Print(Nested(4,("nested",5)))
@@ -20,7 +23,7 @@ Main():void=
     Print("{R(0)} {R(1)} {A.Length} {E.Length} {Id(8)}")
     Print("{Count(1,2)} {Count(array{3})} {Count((4,5))}")
     Print("{Count(dog{},animal{})} {Count(animal{},dog{})}")
-    Print(Named(6,"named",?B:=7))
+    Print(Named((6,"named"),?B:=7))
     F:type{_(:tuple(int,string))<computes>:string}=First
     U:type{_(:tuple())<computes>:int}=Unit
     O:type{_(:tuple(int))<computes>:int}=One

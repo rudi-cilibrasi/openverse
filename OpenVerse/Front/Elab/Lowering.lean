@@ -44,6 +44,11 @@ structure Options where
       effects, failure contexts, suspension, the source profile and Verse
       Core's checks. -/
   extendedDefaults : Bool := false
+  /-- (#724) Keep openverse's extension: generic functions over a parametric
+      class whose mutable data holds an implicit type parameter, and `var`
+      fields in parametric interfaces, which Epic's compiler refuses (3552,
+      3502; `--parametric-var-fields`). -/
+  parametricVarFields : Bool := false
   args : Option (List String) := none
   entry : Option SExpr := none
   /-- On an internal error (an elaborated function the checker rejects),

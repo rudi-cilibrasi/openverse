@@ -9,6 +9,14 @@
 #   callback called | after test
 # If UEFN 43.12 refuses it (Build Verse Scripts, or the cook of a Verse VM
 # session), Epic's shipped toolchain refuses a program OpenVerse runs.
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# BuildAll, 2026-11-19) refuses it: 3502 (L26) "Using a value of type
+# type{_(:tuple(p_type,c_type)->void,:c_type where
+# p_type,c_type):p_type->void} as a value of type
+# tuple(tuple(first_arg,second_arg)->void,s".
+# OpenVerse refuses it now, as Epic does: #735's rule for the conversions of
+# function values Epic's compiler does not make (3502; --function-coercions
+# keeps openverse's).
 bound_call(p_type:type, c_type:type) := class:
     Callback:tuple(p_type, c_type)->void
     Context:c_type

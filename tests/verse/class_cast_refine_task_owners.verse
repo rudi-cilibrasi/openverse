@@ -1,3 +1,4 @@
+# (run with --parametric-var-fields, openverse's extension: Epic's compiler refuses a generic function over a parametric class whose mutable data holds an implicit type parameter, or a var field in a parametric interface, UEFN 43.12 errors 3552 and 3502, #724)
 # Lifted background tasks retain their source scope and cleanup order.
 # (#724: a branch and a rush's arm that goes on are children of the task whose
 # code started them, stopped when it ends, after its defers, or is cancelled,

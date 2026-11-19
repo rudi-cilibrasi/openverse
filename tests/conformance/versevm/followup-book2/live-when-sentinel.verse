@@ -5,6 +5,8 @@
 # called, so a run cannot wait on it. OpenVerse refuses it (a parse error).
 # If UEFN admits it, OpenVerse prints
 #   admitted
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# BuildAll, 2026-11-19) refuses it: 3506 (L8) "Unknown identifier `when`.".
 Unused():void =
     when(1){2}
 

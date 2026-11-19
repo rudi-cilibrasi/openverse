@@ -8,6 +8,15 @@
 # session), Epic's shipped toolchain refuses a program OpenVerse runs.
 # Control: join-generic-effects-transacts-control (TransactsIdentity alone,
 # the Book's :231).
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# BuildAll, 2026-11-19) refuses it: 3502 (L14) "Using a value of type
+# type{_(:int)<computes><decides>:int} as a value of type
+# type{_(:int)<transacts><decides>:int} is not yet implemented."; 3502 (L14)
+# "Using a value of type type{_(:int)<transacts>:int} as a value of type
+# type{_(:int)<transacts><decides>:int} is not yet implemented.".
+# OpenVerse refuses it now, as Epic does: #735's rule for the conversions of
+# function values Epic's compiler does not make (3502; --function-coercions
+# keeps openverse's).
 DecidesIdentity(X:t where t:type)<computes><decides>:t = X
 TransactsIdentity(X:t where t:type)<transacts>:t = X
 

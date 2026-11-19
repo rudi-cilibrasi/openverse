@@ -277,14 +277,21 @@ def resolve(cls, root, skip_own=False):
     The nearest qualified or plain implementation in the class chain wins.  Otherwise
     the candidates are the most specific interface default of root, and (as in Java)
     what the class above the one that introduced the slot has for the name; two
-    different candidates are a conflict that the class must resolve by overriding."""
+    different candidates are a conflict that the class must resolve by overriding.
+    An interface's abstract method is implemented below the interface only (#724,
+    UEFN 43.12: error 3591)."""
     full = cls.chain()
     chain = full[1:] if skip_own else full
+    # (#724: an interface's slot is implemented below the interface, so a plain
+    # method of a class of the chain that is not below it is not its
+    # implementation: UEFN 43.12 refuses such a class, error 3591,
+    # followup-book2/final-method-interface)
+    below = (lambda c: not root.owner.is_iface or c.below(root.owner))
     for c in chain:
         if root in c.impls:
             return c.impls[root]
         im = c.plain.get(root.name)
-        if good(im):
+        if good(im) and below(c):
             return im
     d1 = iface_default(cls.all_ifaces(), root)
     top = [c for c in full if root in c.all_roots()][-1]
@@ -300,7 +307,9 @@ def resolve(cls, root, skip_own=False):
         return 'ambig'
     if good(d1):
         return d1
-    if good(d2):
+    # (as in Java, what the class above has, but not for an interface's
+    # abstract method, #724)
+    if good(d2) and not root.owner.is_iface:
         return d2
     return d1
 

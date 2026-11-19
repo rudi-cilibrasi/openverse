@@ -2,7 +2,9 @@
 # failure context, though near one (an if's branches, a for's body, also one
 # the compiler moves into a continuation, a function called after the
 # condition, a <decides> function that signals nothing, a task spawned by a
-# function called in a condition, which signals later in its own task, a
+# function called before a condition, which signals later in its own task (a
+# spawn has no_rollback, so neither a condition nor a <transacts> function
+# may spawn, UEFN 43.12: 3512, #724), a
 # defer: that a return or a break runs, which commits; and a for over
 # choices in a defer: that signals nothing, at a return and, in a
 # condition, at the end of its block. A return or break cannot leave a
@@ -17,7 +19,7 @@ Log(N:int):void = Print("heard {N}")
 Shouter(E:event(int))<suspends>:void =
     Sleep(0.01)
     E.Signal(5)
-Start(E:event(int))<transacts>:int =
+Start(E:event(int)):int =
     spawn{Shouter(E)}
     1
 Count(N:int):int =
@@ -55,7 +57,8 @@ Main()<suspends>:void =
     Print("sticky {S.Await()}")
     C.Cancel()
     U.Signal(4)
-    if (Start(E) > 0) then Print("started")
+    Started := Start(E)
+    if (Started > 0) then Print("started")
     Sleep(0.1)
     W := subscribable_event(int){}
     K := W.Subscribe(Log)

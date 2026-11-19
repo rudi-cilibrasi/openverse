@@ -533,9 +533,13 @@ private def forwards : List (String × String) := [
   ("real overwrite alias in suspended stage", "Dup(N:int)<computes>:int=N|N\nCaller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:[]int=\n    var Stored:type{_()<computes>:int}=Dummy\n    set Stored=F\n    Saved:=Stored\n    for(A:=(Dup(1)|Dup(2)),B:=(Dup(1)|Dup(2))):block{Sleep(0.01);Saved()}"),
   ("mutable implicit evidence after real overwrite", "Caller(X:t,Dummy:evidence(vehicle,t),Real:type{_()<computes>:evidence(vehicle,t)} where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    set Stored=Real()\n    X.N")]
 
+-- (#724: `helper object write` writes through a generic function over a
+-- parametric class with a var field, which Epic's compiler refuses, 3552;
+-- these contracts are about metadata, so openverse's extension is kept,
+-- `--parametric-var-fields`)
 private def compileCase (source : String) (dummy : Bool) : Except String Compiled := do
   let tops ← parseProgram ("vehicle:=class<computes>{N:int=7}\n" ++ source ++ "\nMain():void={}")
-  elabProgram (← tops.mapM (roles dummy))
+  elabProgram (← tops.mapM (roles dummy)) { parametricVarFields := true }
 
 def main : IO Unit := do
   let mut failures := 0

@@ -344,7 +344,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let admitted ← admitSource allTops0r opts
   let source ← inlineSource opts.requests admitted
   let defs ← argsAndMethodOverloads source.tops source.entry opts.args
-  let classes ← classHierarchy defs.tops source.constructionFx
+  let classes ← classHierarchy defs.tops source.constructionFx opts.parametricVarFields
   let fields ← classFields classes opts.requests
   let methods ← classMethods defs.tops classes fields
   let env ← typeEnvironment classes fields methods source admitted.concurrencyNames opts.requests opts.signalNoRollback
@@ -689,13 +689,14 @@ def compileTops (tops : List STop) (args : List String) (mentionsArgs : Bool) (d
 def compileTopsWarned (tops : List STop) (args : List String) (mentionsArgs : Bool) (doExpr : Option String)
     (debug : Bool := false) (profile : SourceProfile := .full)
     (extendedDefaults : Bool := false) (signalNoRollback : Bool := true) (defaultNoRollback : Bool := true)
-    (functionCoercions : Bool := false) :
+    (functionCoercions : Bool := false) (parametricVarFields : Bool := false) :
     Except String (Prog × List String) := do
   let entry ← match doExpr with
     | some t => some <$> parseExprText t
     | none => pure none
   let useArgs := !args.isEmpty || mentionsArgs
-  let opts : Options := { args := if useArgs then some args else none, entry, debug, profile, extendedDefaults }
+  let opts : Options := { args := if useArgs then some args else none, entry, debug, profile, extendedDefaults,
+                          parametricVarFields }
   let c ← elabProgram tops { opts with signalNoRollback, defaultNoRollback, functionCoercions }
   return (c.prog, c.warnings.map fun (p, m) => s!"{p.show}: warning: {m}")
 

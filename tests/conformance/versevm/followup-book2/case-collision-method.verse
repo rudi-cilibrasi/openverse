@@ -9,6 +9,10 @@
 # session), Epic's shipped toolchain refuses a program OpenVerse runs.
 # Control: case-collision-module-fn-control (module functions; the Book's
 # :19 is its class form).
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# BuildAll, 2026-11-19) refuses it: 9200 (L13) "Found multiple functions
+# that map to the same target function. Please rename the function to be
+# case insensitive unique. See:".
 cc := class:
     Function():int = 42
     FUNCTION():int = 420

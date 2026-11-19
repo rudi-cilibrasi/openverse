@@ -59,18 +59,18 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
 
 ## Where things stand
 
-With [ints beyond 64 bits](#after-ints-beyond-64-bits) and [Epic's VM results](#after-epics-vm-results) (#724, merged): **8,829 agree, 645 refuse, 38 accept, 36 differ, 3,956 not translatable** of 13,504 cases (a fresh full comparison of the merge, the baseline regenerated; against the ints' baseline 8 cases better, `BoolQuery.versetest` 3, 4, `LogicalAnd.versetest:29`, `Precedence.versetest:121` and `GlobalVariables.versetest` 86, 90, 97, 105, and 4 worse, their `bp_vm_only` twins 115, 119, 126, 134). With ints beyond 64 bits alone, on main `b640fa6d`: 8,825 agree, 641 refuse, 42 accept, 40 differ; with Epic's VM results alone, 8,815, 606, 38, 89. Before them, with [the UEFN 43.12 probes](#after-the-uefn-4312-probes), merged with [compound places](#after-compound-places) (#704), with Epic's default effect the default: 8,811 agree, 602 refuse, 42 accept, 93 differ, 3,956 not translatable of 13,504 cases (a fresh full comparison, the baseline regenerated; before the default effect, 8,806, 603, 46, 93). Before both, on main `617c89f1`: 8,801 agreed, 600 refused, 55 accepted and 92 differed; compound places alone gave 8,802 agreed and 91 differed; with [tuple and array concatenation](#after-tuple-and-array-concatenation) on `cf0ced0e` (#630), 8,799 agreed and 602 were refused, the count the refusals' table below still has. This is the one table of what is left; the sections below are the history, each written when its work landed, and the four maps ([the first map](#the-remaining-causes-a-map), [classes](#classes-and-subtyping-the-map), [forms](#forms-of-expressions-statements-and-the-library-a-map), [the forms still on the list](#the-forms-still-on-the-list-a-map)) hold the case-by-case reading each row points to.
+With [Epic's verdicts on the accepted refusals](#after-epics-verdicts-on-the-accepted-refusals) and [function coercions](#after-function-coercions) (#724, the two merged): **8,854 agree, 657 refuse, 1 accept, 36 differ, 3,956 not translatable** of 13,504 cases (a fresh full comparison of the merge, the baseline regenerated; the two rule sets move disjoint cases, each as it did alone, and none is moved by both; the 1 left is a method's mangled name with a parameter, `FORT-555217:31`). With the verdicts alone: 8,853 agree, 648 refuse, 11 accept, 36 differ (27 cases better, the accepted refusals of `FORT-793952` (16), `FORT-555217` 25, 37, `FORT-744399:62`, `Enum.versetest:171`, `final.versetest:125`, `Effects.versetest` 557, 565, `SoftwareTransactionalMemory.versetest:505` and `ParametricFunctions.versetest` 431, 438, 496, and 3 worse, the Verse VM twins `Effects.versetest` 572, 580 and `Enum.versetest:233`, which Epic's shipped compiler refuses; the 11 left: the function-value coercions Epic refuses with 3502 (10, which [function coercions](#after-function-coercions) takes) and `FORT-555217:31`); with function coercions alone, 8,830, 654, 28, 36. Before them, with [ints beyond 64 bits](#after-ints-beyond-64-bits) and [Epic's VM results](#after-epics-vm-results) (#724, merged): 8,829 agree, 645 refuse, 38 accept, 36 differ, 3,956 not translatable of 13,504 cases (a fresh full comparison of the merge, the baseline regenerated; against the ints' baseline 8 cases better, `BoolQuery.versetest` 3, 4, `LogicalAnd.versetest:29`, `Precedence.versetest:121` and `GlobalVariables.versetest` 86, 90, 97, 105, and 4 worse, their `bp_vm_only` twins 115, 119, 126, 134). With ints beyond 64 bits alone, on main `b640fa6d`: 8,825 agree, 641 refuse, 42 accept, 40 differ; with Epic's VM results alone, 8,815, 606, 38, 89. Before them, with [the UEFN 43.12 probes](#after-the-uefn-4312-probes), merged with [compound places](#after-compound-places) (#704), with Epic's default effect the default: 8,811 agree, 602 refuse, 42 accept, 93 differ, 3,956 not translatable of 13,504 cases (a fresh full comparison, the baseline regenerated; before the default effect, 8,806, 603, 46, 93). Before both, on main `617c89f1`: 8,801 agreed, 600 refused, 55 accepted and 92 differed; compound places alone gave 8,802 agreed and 91 differed; with [tuple and array concatenation](#after-tuple-and-array-concatenation) on `cf0ced0e` (#630), 8,799 agreed and 602 were refused, the count the refusals' table below still has. This is the one table of what is left; the sections below are the history, each written when its work landed, and the four maps ([the first map](#the-remaining-causes-a-map), [classes](#classes-and-subtyping-the-map), [forms](#forms-of-expressions-statements-and-the-library-a-map), [the forms still on the list](#the-forms-still-on-the-list-a-map)) hold the case-by-case reading each row points to.
 
 **Accepted where the tests refuse (51)**
 
 | Cause | Cases | What it is, and what it needs | Who decided what |
 |---|---:|---|---|
-| name-limits | 19 | names equal but for case, names too long for the engine (`FORT-793952`, `FORT-555217`, BPVM link errors); no rule of the language to check | left: an engine's limit, [the first map](#the-remaining-causes-a-map) |
-| epic-limits | 11 | the BPVM's code generation and Epic's limits (`DefaultNamed`, `ParametricFunctions`, `Function`, …); no rule to check | left, [the first map](#the-remaining-causes-a-map) |
+| name-limits | 19 → 1 | names equal but for case, names too long for the engine (`FORT-793952`, `FORT-555217`, BPVM link errors) | UEFN 43.12 refuses them (9200, 9002, 9000, 3655), and openverse does since [Epic's verdicts](#after-epics-verdicts-on-the-accepted-refusals); left: `FORT-555217:31`, a method's mangled name |
+| epic-limits | 11 | the BPVM's code generation and Epic's limits (`DefaultNamed`, `ParametricFunctions`, `Function`, …) | UEFN 43.12 refuses all of them (3502), [Epic's verdicts](#after-epics-verdicts-on-the-accepted-refusals): the function-value coercions (10) agree since [function coercions](#after-function-coercions); `ParametricFunctions.versetest:496` agrees since (`--parametric-var-fields` keeps openverse's extension) |
 | concrete-classes | 7 → 0 | a class below a `<concrete>` one: is it concrete? | settled by UEFN 43.12 (3519), as the tests have it ([After the UEFN 43.12 probes](#after-the-uefn-4312-probes)) |
 | type-checks-other | 7 | Epic's compiler limits (`ParametricFunctions` 431, 438, `FORT-744399`, an enum of 256 values), a join of two classes at a type both are below (`SOL-5838`, 2), a function without `<decides>` as a `<transacts><decides>` value (`FunctionTypes.versetest:191`) | left, [the forms still on the list](#the-forms-still-on-the-list-a-map): `FunctionTypes:191` is where the Book disagrees with itself (ch. 13 against the test's comment), `SOL-5838` the owner's reading |
-| effect-checks | 6 | `no_rollback` as a function's default effect (3), the BPVM's `spawn` in a `<transacts>` function (2, their VerseVM twins agree) and in a `<transacts><decides>` one (`SoftwareTransactionalMemory.versetest:505`) | left: the Book disagrees with itself, and its tests split by VM, [the held rules](#after-the-held-rules), [the forms still on the list](#the-forms-still-on-the-list-a-map) |
-| final-members | 1 | a `<final>` method that does not implement an interface's method of its name (`final.versetest:125`): members keyed by qualifier | left with the two members of one name, [the forms still on the list](#the-forms-still-on-the-list-a-map) |
+| effect-checks | 6 → 0 | `no_rollback` as a function's default effect (3), the BPVM's `spawn` in a `<transacts>` function (2) and in a `<transacts><decides>` one (`SoftwareTransactionalMemory.versetest:505`) | settled by UEFN 43.12: the default effect (#515), and a spawn has `no_rollback` (3512, [Epic's verdicts](#after-epics-verdicts-on-the-accepted-refusals)) |
+| final-members | 1 → 0 | a `<final>` method that does not implement an interface's method of its name (`final.versetest:125`) | UEFN 43.12 refuses it, `<final>` or not (3591), and openverse does, [Epic's verdicts](#after-epics-verdicts-on-the-accepted-refusals) |
 
 **Different output (36; 40 before Epic's VM results)**
 
@@ -2879,6 +2879,108 @@ changes, one commit each on `fix/verse-vm-branch-sleep-query`:
 Against the baseline of main `b640fa6d` (Epic's default effect the
 default): 8 cases better, 4 worse, none changed otherwise: 8,815 agree,
 606 refuse, 38 accept, 89 differ. The baseline records it.
+
+## After Epic's verdicts on the accepted refusals
+
+UEFN 43.12 (`++Fortnite+Release-43.12-CL-60598086`) compiled the probes of
+[`followup-book2/`](../../tests/conformance/versevm/followup-book2) on
+2026-11-19 and refused every probe of an accepted refusal, admitting every
+control, which then printed on the Verse VM what openverse prints
+([the results](versevm-live-conformance.md#the-books-accepted-refusals)).
+openverse takes Epic's compiler's refusals, one commit each (#724):
+
+- **`spawn` has the `no_rollback` effect** (3512, "This 'spawn' macro has
+  the 'no_rollback' effect, which is not allowed by its context"): refused
+  where a call of a function without a heap specifier is, a `<transacts>`
+  or other heap-specified function, a class's `block:`, a failure context;
+  admitted in a function without one and at the top of a plain
+  `<decides>` body. `--default-rollback` keeps the old rule, as it does for
+  an event's `Await`. `Effects.versetest` 557, 565 and
+  `SoftwareTransactionalMemory.versetest:505` (`bp_vm_only`) move from
+  accepted to agree; their Verse VM twins, `Effects.versetest` 572 and 580,
+  from agree to refused: the Book's Verse VM admits what Epic's shipped
+  compiler refuses.
+- **Names that differ only in case** (9200, "Found multiple functions that
+  map to the same target function"; 9002, 9000): two functions of one
+  module or of the top level, or two methods of one class, whose names are
+  equal but for case and that take the same parameters (types, a named
+  one's name) and are `<suspends>` alike, are refused. The 16 `bp_vm_only`
+  cases of `Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest` move
+  from accepted to agree; its valid cases (other parameters, `<suspends>`
+  beside a function that is not) still agree. The edges the evidence
+  leaves open are probes (`followup-book3/case-collision-*`).
+- **Long names** (3655, "Identifier is too long"; 9002, "Cannot find
+  class"): an identifier has at most 1024 characters, a class's name 1023.
+  `Bugs/FORT-555217-VeryLongIdentifier.versetest` 25 and 37 move to agree;
+  `:31`, a method whose mangled name is too long in a class of 976
+  characters, stays accepted: Epic's limit counts names of its toolchain
+  (the project's path among them) that a program does not fix, and
+  `followup-book3/long-ident-*` asks its edges.
+- **Enums of at most 256 values** (3552, "out of byte-range").
+  `Enum.versetest:171` (`bp_vm_only`) moves to agree; its Verse VM twin,
+  `:233`, from agree to refused: Epic's shipped compiler refuses what the
+  Book's Verse VM admits.
+- **An interface's abstract method is implemented below the interface**
+  (3591, "Non-abstract class inherits abstract function … but does not
+  provide an implementation"): a class that adds an interface no longer
+  takes a method of its name from a class that is not below it, `<final>`
+  or not, as `slotImpls` did, as Java does; a default of such an interface
+  still yields to the class chain's method (`followup-book3` asks Epic).
+  `Attributes/final.versetest:125` moves to agree. Six of openverse's tests
+  relied on the Java reading: four now implement the method in the class,
+  and two error tests give the interface a default, which keeps the
+  signature check they test.
+- **No packing beside a named parameter** (3509): several positional
+  arguments are not packed into the single tuple parameter of a function
+  that has a named one too; the arity message says why and cites 3509.
+  `Bugs/FORT-744399-DefaultTupleFieldsCrashComplier.versetest:62` moves to
+  agree. Four of openverse's tests (#501's packing) write the tuple out.
+- **Parametric mutable data** (3552, 3502), the rules built and stopped
+  before for their cost, are taken with an opt-out,
+  `--parametric-var-fields`: a generic function's type applies no class to
+  an implicit type parameter that the class's mutable data holds, its own
+  `var` field or one of a class in its fields (`followup-book3/
+  parametric-var-where-nested`), and a parametric interface has no `var`
+  field. `ParametricFunctions.versetest` 431, 438 and 496 move to agree,
+  none worse; the 32 run tests and 4 error tests of openverse's they refuse
+  take the flag.
+- **Type names that differ only in case**, and an interface's methods
+  (Epic's verdicts on `followup-book3`: 9002 "Found existing type 'CC'"
+  for two classes, 9200 for an interface's two methods): no two types of
+  one scope, classes, interfaces, structs or enums, have names equal but
+  for case (the kinds other than classes taken alike, asked in
+  `followup-book4`), and an interface's methods are measured as a class's.
+  No Book case moves.
+- **No array of several arguments beside a named parameter** (3509,
+  `followup-book3/array-named-pack`). No Book case moves; the call-packing
+  model gives its array shapes no named parameters.
+- **The measured name lengths** (3655; 9002 for a struct): Epic's
+  bisection on UEFN 43.12, for definitions without parameters, gives a
+  field, a local, a parameter and a constant at most 1004 characters, a
+  module function 990, a class and a struct 1023, and a method's name and
+  its class's together 987. No Book case moves: `FORT-555217:31`'s
+  `Function(Param:int)` in a class of 976 is 984, within 987, which its
+  parameter lowers in Epic's compiler and openverse does not model.
+
+Before: 8,829 agree, 645 refuse, 38 accept, 36 differ; after: 8,853, 648,
+11, 36 (27 better, 3 worse, as [Where things stand](#where-things-stand)
+lists). The edges were asked in
+[`followup-book3/`](../../tests/conformance/versevm/followup-book3), which
+UEFN 43.12 compiled on 2026-11-19: 13 as openverse had them, 9 not (two
+classes and an interface's methods of case-different names, an array
+beside a named parameter, mutable data through a class's field, the long
+names), which the rules above now follow, with Epic's bisection of the
+name lengths. Their own edges are
+[`followup-book4/`](../../tests/conformance/versevm/followup-book4)'s,
+which UEFN 43.12 compiled on 2026-11-19 (~19:55Z): 13 as openverse had
+them (the six type collisions refused, 9002); openverse now refuses mutable
+data through a struct's field (3552) and admits a parameter of 1005
+characters, as Epic does; a function and a method with a parameter at the
+measured limits, refused by Epic (3655), stay a known difference; and
+the generic parameter beside a named one, refused first for its form (`0
+where t:type` read as one expression), was rewritten and is refused
+(3509), which openverse follows: no several arguments pack into a
+generic parameter beside a named one. No Book case moves with these.
 
 ## After function coercions
 

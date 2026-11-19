@@ -5,6 +5,8 @@
 # OpenVerse prints
 #   data 2
 # A refusal here means such a class is refused whatever uses it.
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# 2026-11-19) admits it, and its Verse VM prints data 2, as OpenVerse does.
 c(t:type) := class:
     var Data:t
 

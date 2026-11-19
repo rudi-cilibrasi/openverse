@@ -1,6 +1,9 @@
 # Control of enum-wide: an enum of 256 values, the most the Book's Blueprint
 # VM takes. Not a Book case. OpenVerse prints
 #   e0FF compared
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# 2026-11-19) admits it, and its Verse VM prints e0FF compared, as OpenVerse
+# does.
 wide := enum {
     e000,e001,e002,e003,e004,e005,e006,e007,e008,e009,e00A,e00B,e00C,e00D,e00E,e00F,
     e010,e011,e012,e013,e014,e015,e016,e017,e018,e019,e01A,e01B,e01C,e01D,e01E,e01F,

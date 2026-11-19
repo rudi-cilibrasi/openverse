@@ -1,3 +1,4 @@
+# (run with --parametric-var-fields, openverse's extension: Epic's compiler refuses a generic function over a parametric class whose mutable data holds an implicit type parameter, or a var field in a parametric interface, UEFN 43.12 errors 3552 and 3502, #724)
 # Interfaces referred to through views (#351): a class below one has its own
 # pins as Verse Core pins (c3's second type argument is its first), which
 # a variable's initial object needs where the view gives only the first;

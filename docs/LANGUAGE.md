@@ -33,13 +33,13 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Failure | failure contexts (`if` conditions, `for` clauses, `option{}`, `logic{}`, `not`, left of `or`, `<decides>` bodies) with rollback of `var` writes **and output** (a `loop`'s body is none, also in a `<decides>` function, nor is a field's default: "`decides` is not allowed in `loop`", the Book's tests, `SOL-4199-BreakFromIf.versetest:79`, and ch. 13, [the rules](research/book-remaining-rules.md#a-loops-body-and-a-fields-default-are-no-failure-contexts); `--extended-defaults` keeps failing field defaults, which make a construction fail); an `if` condition, `logic{…}`, the operand of `not` and the left of `or` must be able to fail (the Book's tests refuse `not` of one that cannot, and an `or` whose left cannot, `LogicalOr.versetest:143`; its own `(set Map[I] = I) or Err()` has a failable left, a set through a map's key) | ch. 8 |
 | Control | `if`/`else if`/`else` (all styles: the conditions in `(…)`, followed by a body or `then`; or as `{…}`, `:` and a block, or `.` and an expression, followed by `then` and a branch, or by nothing, which is the clause macro `if{c}` (see [Mutation, macros, tooling](#mutation-macros-tooling)): `if:`…`then:`, `if:`…`else:`, `if. c then. a else. b`; `for` likewise, with `do`), `for` with `X : array`, `I -> X : array`, `X := a..b` (`X:int := a..b` too), filters, bindings, several generators (cartesian product), and with none, failable clauses that run the body at most once (clauses of literals only, `for(X := array{1, 2})`, are refused: `X : array{1, 2}` iterates); each filter, a clause that is neither a generator nor a definition (`X := e`, `X:t = e`, `var X:t = e`), must be able to fail, as "Each filter must be failable" (ch. 7, `for.versetest:223`, [the rule](research/book-remaining-rules.md#every-filter-of-a-for-can-fail)): a print, a `set` or a call that cannot fail is refused as a filter, and goes with a check that can, as the Book's tests write it, `(set Temp = Element; true?)` (`for.versetest:233`), or in a definition's value or a generator's source, where effects stay among the clauses, or in the body; a clause with a choice in it, or a call of a function with several values, is a generator over their values (the Book has no choice: openverse's reading); a `for`'s clauses are one search, as the Book's tests have it (`FlowControl/for.versetest` 317-392): reaching the body keeps what they did since the last value, a failure undoes back to the element or alternative being tried, and what they did since the last value is undone when no more reaches the body, a source's or a range's bounds' included (which `for`s keep an older rule for now: [Readings](#readings-openverse-takes), "What a `for` undoes"), `loop`/`break` (a loop that nothing leaves, no `break` of its own and no `return`, is refused outside a `<suspends>` function, as the Book's tests have it, `Break.versetest` 117, 160, [the rule](research/book-remaining-rules.md#a-loop-that-nothing-leaves)), `return` (in a function's body: not in a constant's value or a field's default, which no function encloses; in a function whose result is not `void`, not a part of the value it returns: a `return` is the body's value, a branch of it or of a `case`, a `return`'s operand, or in code whose value is not returned, a block's other items, an `if`'s conditions or an `if` with no `else`, a `loop`, as the Book's tests have it, `Return.versetest` 114-162; `array{0, return A}` and `X + (return 0)` are refused), `profile(Tag): body`, `profile: body` and `profile{body}` (the tag a string, the value the body's; openverse measures nothing; not in an initializer, ch. 7, "Profiling"), `case` with literal or computed scalar patterns and `_` (an arm after `_`, or with an earlier arm's pattern, is never reached and refused, ch. 9; a `_` after every value of a closed enum is a [warning](#warnings)); code after a `return` or `break` that is never reached is a [warning](#warnings); no `return` or `break` leaves a failure context, as the Book's tests have it (`Reachability.versetest:12`, "Explicit return out of a failure context is not allowed"; `SOL-4199-BreakFromIf.versetest`): a `return` is refused in an `if`'s conditions, a `for`'s clauses (its body may return), `first`'s clauses, `option{…}`, `logic{…}`, `not`'s operand and the left of `or`, and, in a `<decides>` function, whose body is a failure context, anywhere but in tail position (`Return.versetest:157`: the body's last expression, the branches of an `if` with an `else` and the arms of a `case` in tail position, a block's last expression in tail position, a `return`'s value); a `break`, in those contexts between it and its loop | ch. 7 |
 | Choice | `a \| b \| …` with several values in spatial order, in a clause of an `if` condition, `first{…}`, `option{…}`, `logic{…}`, `not` or `or` (the first success) or of a `for` (all of them), also inside expressions (`(1 \| 2) + (10 \| 20)`, `X = 1 \| 2`, `X > 0 and (1 \| 2)`, `M? or (1 \| 2)`); see [Choice](#choice) (#208) | (the Verse Calculus) |
-| Functions | a parameter may be unnamed, `F(:int):void = {}`, as in function types (the body cannot name it; so may a parametric type's, `t(:type) := class{}`); a parameter may destructure a tuple, `Func(A:int, (B:int, C:int), D:int)`, to any depth: it is a parameter of the tuple type whose names the body sees (see [the rules](research/tuple-parameters.md); named parameters inside such a group are not supported); a tuple argument expands into parameters (`Describe(MyTuple)`); positional arguments pack into a single tuple parameter, including `tuple()` and singleton tuples; several arguments make a single array parameter (`Sum(1, 2, 3)`), including generic, overloaded, method and spawned calls (#134, #140, #501; nested fields retain their shape, and empty/singleton arrays use explicit array values); recursion, mutual recursion, `<decides>` (called with `F[…]`; other functions with `F(…)`; also `F of X` for `F(X)` and `F at X` for `F[X]`, the argument in braces `F of {42}`, a body after `:` or `.`, or an operand `F of array: …`, and a function defined `F of {I:int}:int = …`, the Book's tests, `Operators/Of.versetest`; `F at {…}` defines nothing), named parameters `?P:t = default` passed as `?P := e`, after the positional arguments (only a named parameter has a default, and a positional argument after a named one is refused, ch. 6, [the rules](research/book-remaining-rules.md#five-forms-the-tests-refuse)) (positional, then named as written, then defaults; a default may use the parameters before it, and a method's default the method's fields; a call dispatched to an override evaluates that override's own default for an omitted argument; a default is evaluated at the call and cannot return, break or use itself; it is its function's: it has only the heap effects the function allows and neither fails nor suspends, also of a `<decides>` or `<suspends>` function, checked once at the definition where the default can be elaborated in the function's scope, the Book's tests, `DefaultNamed.versetest` 805-878; `--extended-defaults` keeps openverse's reading, the default's effects the caller's, see [the rule](research/book-remaining-rules.md#a-named-parameters-default)), the heap effects `<computes>`, `<reads>`, `<writes>`, `<allocates>`, `<transacts>` (checked, see [Classes](#classes)), unsupported effect contracts are diagnosed before lowering (see [Effect contracts](#effect-contracts)) | ch. 6, 13 |
+| Functions | a parameter may be unnamed, `F(:int):void = {}`, as in function types (the body cannot name it; so may a parametric type's, `t(:type) := class{}`); a parameter may destructure a tuple, `Func(A:int, (B:int, C:int), D:int)`, to any depth: it is a parameter of the tuple type whose names the body sees (see [the rules](research/tuple-parameters.md); named parameters inside such a group are not supported); a tuple argument expands into parameters (`Describe(MyTuple)`); positional arguments pack into a single tuple parameter, including `tuple()` and singleton tuples, but not several beside a named parameter (`F(1.0, 2.0)` of `F(X:tuple(float, float), ?E:float = 0.1)`: the function's parameter is then the tuple of its parameters, named ones included, and UEFN 43.12 refuses it, error 3509, `followup-book2/overload-tuple-named-call`, the Book's `FORT-744399…:62`; write the tuple, `F((1.0, 2.0))`, #724); several arguments make a single array parameter (`Sum(1, 2, 3)`; not beside a named parameter: UEFN 43.12 refuses `F(1, 2)` of `F(A:[]int, ?B:int = 2)`, 3509, `followup-book3/array-named-pack`, #724, nor pack into a generic parameter beside one, `F(1, 2, ?E := 5)` of `F(X:t, ?E:int where t:type)`, `followup-book4/generic-param-named-pack`), including generic, overloaded, method and spawned calls (#134, #140, #501; nested fields retain their shape, and empty/singleton arrays use explicit array values); recursion, mutual recursion, `<decides>` (called with `F[…]`; other functions with `F(…)`; also `F of X` for `F(X)` and `F at X` for `F[X]`, the argument in braces `F of {42}`, a body after `:` or `.`, or an operand `F of array: …`, and a function defined `F of {I:int}:int = …`, the Book's tests, `Operators/Of.versetest`; `F at {…}` defines nothing), named parameters `?P:t = default` passed as `?P := e`, after the positional arguments (only a named parameter has a default, and a positional argument after a named one is refused, ch. 6, [the rules](research/book-remaining-rules.md#five-forms-the-tests-refuse)) (positional, then named as written, then defaults; a default may use the parameters before it, and a method's default the method's fields; a call dispatched to an override evaluates that override's own default for an omitted argument; a default is evaluated at the call and cannot return, break or use itself; it is its function's: it has only the heap effects the function allows and neither fails nor suspends, also of a `<decides>` or `<suspends>` function, checked once at the definition where the default can be elaborated in the function's scope, the Book's tests, `DefaultNamed.versetest` 805-878; `--extended-defaults` keeps openverse's reading, the default's effects the caller's, see [the rule](research/book-remaining-rules.md#a-named-parameters-default)), the heap effects `<computes>`, `<reads>`, `<writes>`, `<allocates>`, `<transacts>` (checked, see [Classes](#classes)), unsupported effect contracts are diagnosed before lowering (see [Effect contracts](#effect-contracts)) | ch. 6, 13 |
 | Extension methods | `(R:t).M(…)<effects>:r = body`, at the top level, in a module or in a class, on a receiver of any type (`(:t)` unnamed; a `where` in its parentheses for a generic one), called `X.M(…)`, or `X.M[…]` when `<decides>`; overloaded by the receiver's type and the parameters', scoped like functions, never values; see [Extension methods](#extension-methods) | ch. 6 |
 | Parametric functions | `F(X:t, … where t:type, u:subtype(comparable))`: type parameters in parameter types, the result type and local declarations; type arguments inferred at each call (see [Parametric functions](#parametric-functions)) | Types: where clauses |
 | Structs | `name := struct:` with typed fields and defaults, `name{F := e, …}` (each field given at most once, evaluated in declaration order; separated by commas, or by `;` and new lines, not both; or as an indented block after `name:`, an archetype block; the type may be parenthesized, `(pair(int)){…}`; with `let:` clauses, whose definitions the field values after them see, and `block` clauses, which run where they are written and can neither fail nor `return`, the clauses and the field values run in the order written, ch. 10, "Let Clauses in Archetypes", [the rule](research/book-forms-rules.md#a-constructions-let-and-block-clauses)), `S.F`, `set S.F = e` / `op=` of a `struct<computes>` (ch. 5: "Only structs marked `<computes>` (pure structs) allow field mutation through a variable"; a path that reaches an object reads the structs before it, [the rule](research/book-forms-rules.md#a-structs-field-set)), structural equality (a struct is the tuple of its fields in Verse Core) | ch. 9 |
 | Parametric structs | `pair(t:type, u:type) := struct:`, the type `pair(int, string)`, values `pair(int, string){First := 1, Second := "a"}` (or `pair{…}` where the expected type gives the type arguments); see [Parametric structs](#parametric-structs) | ch. 9 |
 | Classes | `name := class:` and `name(t:type) := class:` with fields and methods; `class(parent, interface, …)` (`class()` has none, as `class`; a type `t()` or value `t(){…}` with no type arguments is `t`, `t{…}`), `interface`, `<abstract>`, `<override>`, `<final>`, `(super:)`, virtual dispatch, casts `T[X]` and `T(X)`, `var` fields; members in braces on one line separated by `,` or `;` (`class{X:int block{}}` is refused, as the Book's tests have it, `ClassBlockClause.versetest:19`); see [Classes](#classes) | ch. 10 |
-| Enums | `name := enum:` / `enum{A, B}`, `name.A`, equality, `case` that needs no `_` when every value is named (an enumerator is its index in Verse Core); `enum<open>` may gain values, so a `case` on one needs `_` or a failure context (`<closed>` is the default) | ch. 9 |
+| Enums | `name := enum:` / `enum{A, B}`, `name.A`, equality, `case` that needs no `_` when every value is named (an enumerator is its index in Verse Core); `enum<open>` may gain values, so a `case` on one needs `_` or a failure context (`<closed>` is the default); at most 256 values (UEFN 43.12 refuses the 257th, error 3552, "out of byte-range", and admits 256, `followup-book2/enum-wide`, #724) | ch. 9 |
 | Maps | `[k]v` (a comparable key with no array or map in it, through its options, tuples and a struct's fields, but `string`: "neither may serve as a map key", ch. 3), `map{k => v, …}` (a key given twice keeps its last value, at its last position; a key cannot fail, ch. 3: "failure in map literal keys is not implemented"; [the rules](research/book-remaining-rules.md#map-keys-and-a-refinements-range)), `M[k]` (fails on a missing key), `set M[k] = v` (insert or update; in Verse the key's reference is `<decides>`, the Book's API reference, so such a `set`, also as a path's last step, `set S.M[k] = v`, is written in a failure context, as the Book's tests do, `if (set M0[0] = 42)`, `(set Map[I] = I) or Err()`; its last key inserts, so it succeeds; its value is `v`), `set M[k] op= v` (fails on a missing key), `.Length`, `for (V : M)`, `for (K -> V : M)` in insertion order, `ConcatenateMaps(M1, M2)` (exactly two maps, ch. 3: more by chained calls; their pairs laid down in turn, as `map{…}` lays its own: a key both maps have takes the second map's value at the second map's place, the Book's API reference and `ConcatenateMaps.versetest` 21, 33), order-sensitive equality (a map is the array of its pairs in Verse Core); a key of a class above or beside the map's key class reads, looked up at the class above both; `weak_map(k, v)`, a supertype of `[k]v` with entry access only (see [Weak maps](#weak-maps)) | §3, §9.3 |
 | Array methods | (also of a tuple of one element type, which is an array where one is expected: `('a', 'b', 'c').Slice[1]`) `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`, `A.RemoveFirstElement[x]`, `A.Remove[i, j]` (half-open), `A.ReplaceElement[i, x]`, `A.ReplaceFirstElement[x, y]`, `A.Insert[i, B]`, `A.Last[]`, `A.Last[n]` (the element n before the last) (all failable); `A.RemoveAllElements(x)`, `A.ReplaceAllElements(x, y)`, `A.ReplaceAll(Pattern, Replacement)` (contiguous subarrays, left to right, not overlapping; an empty pattern changes nothing), `Concatenate(A, B, …)` or `Concatenate(Arrays)` (#150) (never failing) | §9.1 |
 | Built-ins | `Print(s)`, `ToString(x)` (int, float, char, char32, string; of an int beyond 64 bits, the overflow error: [int](#int)), `Floor[F]`, `Ceil[F]`, `Round[F]`, `Int[F]` (of a float, failable), `Floor(R)`, `Ceil(R)` (of a rational or an int, never failing; `Floor(X / Y)` fails when `Y = 0`, as `X / Y` does), `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Clamp(Val, A, B)` (the median of the three, of ints or of floats, NaN ordering above +Inf), `Sgn(X)` (-1, 0 or 1 of an int or a float, NaN of NaN), `F.IsFinite[]` (as `IsFinite[F]`), `BitAnd(X, Y)`, `BitOr`, `BitXor`, `BitNot(X)`, `BitShiftLeft[X, N]`, `BitShiftRight[X, N]` (see [Bitwise functions](#bitwise-functions)), `Err()` and `Err(Message)` (stops the program; ch. 8: "a runtime error with an optional message", the API reference `Err(Message:string)`: no argument or one string, which is evaluated first); a built-in given another number of arguments than it takes is refused (`Quotient takes two ints, found 3 argument(s)`); the conversions of chars and code points as methods (see [char32](#char32)): `C.ToCodeUnit()`, `C.ToAsciiChar32[]` of a char, `C.ToCodePoint()`, `C.ToAsciiString()` of a char32, `N.ToChar[]`, `N.ToChar32[]` of an int | API reference |
@@ -118,6 +118,26 @@ lines are exempt. Indented blocks are those after `:` (and a function's
 `case {…}` whose first element starts a line; lines inside parentheses,
 brackets, or a braced block that starts on the line of its `{`, are checked
 against the enclosing indented block.
+
+An identifier has at most 1024 characters (#724): UEFN 43.12 refuses one of
+1025 and one of 4096 at each occurrence, error 3655, "Identifier is too
+long" (`followup-book2/long-ident-*`; the Book's tests,
+`Bugs/FORT-555217-VeryLongIdentifier.versetest`). The names Epic's
+toolchain derives from a definition's are longer, and their limit falls on
+the identifier at less, by the kind of definition. Measured on UEFN 43.12
+for definitions without parameters (Epic's bisection,
+`followup-book3/expectations.tsv`), and taken: a field's, a local's and a
+module constant's name has at most 1004 characters; a module function's at
+most 990; a class's and a struct's at most 1023 (9002, "Cannot find
+class", "Cannot find struct", at 1024); and a method's name and its
+class's together at most 987 (983 + 1, 6 + 981). A parameter's name is not
+limited below 1024: Epic admits one of 1005, and no longer one was
+measured. In Epic's compiler, parameters and the project's path may lower
+the function and method limits, a known difference openverse does not
+model: it refuses a function of 990 characters with one parameter, a
+method `F(P:int)` in a class of 976 characters (977 together), and
+`Function(Param:int)` there (the Book's `:31`), all within the limits
+above (`followup-book4/long-ident-function-param`, `-method-param`).
 
 ### Reserved names
 
@@ -325,12 +345,20 @@ contexts. A function value of a type without a heap specifier has it too,
 and a function that has it is no value of a type that has not (3509, Book
 of Verse tests `FunctionTypes.versetest:191`); a `<transacts>` function is a
 value of either. An event's `Signal` and `Await` have it; `Print` and
-`Subscribe` do not. A spawned call is not judged where it is spawned. Write
+`Subscribe` do not. A `spawn{…}` has it too (#724): UEFN 43.12 refuses a
+spawn in a `<transacts>` function and in a `<transacts><decides>` one, 3512,
+"This 'spawn' macro has the 'no_rollback' effect, which is not allowed by its
+context", and admits one in a function without specifiers
+(`followup-book2/spawn-in-transacts-*`), so a spawn is refused wherever such
+a call is. The spawned call itself is not judged apart: where a spawn is
+admitted, so is a call that has `no_rollback`. Write
 `<transacts>` on a function its callers need to call from such a place.
 `--default-rollback` (on `run`, `emit`, `check` and `core`;
 `Options.defaultNoRollback := false`) keeps openverse's old rule, under
 which a function without a heap specifier is rolled back as a
-`<transacts>` one is; `--default-no-rollback` names the default and changes
+`<transacts>` one is, and a spawn has `<transacts>`'s heap effects only (as
+the Book's Verse VM tests have it, `Effects.versetest` 572, 580);
+`--default-no-rollback` names the default and changes
 nothing.
 
 Source `native`/`native_callable` tags cannot create trusted external bindings.
@@ -818,7 +846,26 @@ Nothing else shares a name in one scope (the top level or a module): two
 classes, interfaces, structs, enums or constants of one name, or one of them
 and a function (`c := class{}` with `c(I:int):c`, which the Book's tests
 refuse as "overloading a class"), are a name defined twice. A local cannot
-take an overloaded function's name either.
+take an overloaded function's name either. Nor may two functions of one
+module (or of the top level), or two methods of one class, have names that
+differ only in case and take the same parameters (their types, and a named
+one's name), `<suspends>` alike: Epic's toolchain, whose names are
+case-insensitive, gives them one (#724; UEFN 43.12 refuses `Function():int`
+beside `FUNCTION():int`, error 9200, "Found multiple functions that map to
+the same target function", two such `<suspends>` methods with 9002 and
+9200, and two of one parameter type with 9000,
+`followup-book2/case-collision-*`). Their return types, effects but
+`<suspends>`, and access specifiers do not tell them apart; other parameter
+types, a `<suspends>` function beside one that is not, and names in
+different classes or modules do, as do a function and a constant (the
+Book's tests, `Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest`).
+An interface's methods are measured as a class's are (9200,
+`followup-book3/case-collision-interface`), a subclass's against its
+parent's not (`case-collision-inherited`). Nor may two types of one scope,
+classes, interfaces, structs or enums, have names that differ only in case
+(UEFN 43.12 refuses two classes, 9002, "Found existing type 'CC' that is
+already being created this compile", `case-collision-classes`; the other
+kinds are taken alike, and `followup-book4` asks).
 - **`ToString`.** A program may add overloads beside the primitive ones
   (`int`, `float`, `char`, `char32`, `string`), including several arguments
   and named parameters. `ToString(L:label):string = "label {L.Code}"`
@@ -1128,9 +1175,18 @@ circle := class(shape, labelled):
   - **Choosing.** For an object, a slot's implementation is the most
     specific `(r:)M` or plain `M` above its class that is below `r` or
     reached through a class of its chain that is not below `r`. As in Java,
-    what a class has (its own method, or a default it inherits) implements an
-    interface that a subclass adds. A default of the class's own interfaces
-    implements only the slots above it.
+    what a class has (its own method, or a default it inherits) is chosen
+    over a default of an interface that a subclass adds. A default of the
+    class's own interfaces implements only the slots above it. An abstract
+    method of an interface is implemented below the interface only: a
+    concrete class that adds the interface implements it itself (or a class
+    between them does), since a method of its name from a class that is not
+    below the interface is that class's own, qualified apart, `<final>` or
+    not (#724; UEFN 43.12 refuses `class_z := class(class_x, i_y){}` with
+    `class_x`'s `MethodX` and `i_y`'s abstract one, error 3591,
+    "Non-abstract class inherits abstract function `MethodX` from `i_y` but
+    does not provide an implementation", `followup-book2/final-method-interface`;
+    the Book's tests, `Attributes/final.versetest:121`).
   - **Calls.** A call through an `i1` uses slot `i1`. `X.(i1:)M()` names it,
     and inside a method a bare `(i1:)M()` is `Self.(i1:)M()`. The qualifier
     names the class or interface that introduces `M`: one that inherits or
@@ -1217,7 +1273,19 @@ circle := class(shape, labelled):
       Print(if (T[physics{}]) then "physics" else "?")      # physics
   ```
 - **Parametric classes.** A parametric class is a reference like any other
-  (#39): `stack(t)` can have `var` fields, be `<unique>`, and refer to
+  (#39): `stack(t)` can have `var` fields (but no generic function's type,
+  its parameters' or result's, may apply one to an implicit type parameter
+  of its own, a `where` clause's, that its mutable data holds: a `var` field
+  whose type mentions the class's parameter, or a field of a class or a
+  struct whose mutable data holds it (`followup-book4/parametric-var-struct-field`), `F(X:t where t:type):c(t)` with
+  `c(t) := class{var Data:t}`, or `:holder(t)` with
+  `holder(t) := class{Inner:c(t)}`: UEFN 43.12 refuses them, error 3552,
+  "An implicit type parameter (`t`) used in the type of mutable data (`c.Data`)
+  may not be used in the type of a function", and so do the Book's tests,
+  `ParametricFunctions.versetest` 431, 438; it admits `c(t)` in a body only,
+  a `var` field that does not mention the parameter, and a type passed as an
+  argument, `F(t:type, X:t):c(t)`; #724, `--parametric-var-fields` keeps
+  openverse's extension), be `<unique>`, and refer to
   itself (`node(t) := class: Value:t; var Next:?node(t) = false`), in its
   fields only at its own type parameters, in order: `Next:?node(?t)` or,
   for `bi(t, u)`, `Next:?bi(u, t)` is refused, and so are two parametric
@@ -1229,7 +1297,11 @@ circle := class(shape, labelled):
   type parameters (`square(t) := class(shape(t))`, in any order:
   `swap(a, b) := class(pair(b, a))`), fixed ones
   (`intcell := class(cell(int))`), and it may have type parameters of its
-  own (`named(t, n) := class(cell(t))`). A class overrides a method if
+  own (`named(t, n) := class(cell(t))`). A parametric interface has no
+  `var` field (UEFN 43.12: error 3502, "Mutable members in parametric
+  interfaces are not yet implemented", `followup-book2/parametric-interface-var`,
+  the Book's `ParametricFunctions.versetest:496`; #724,
+  `--parametric-var-fields`). A class overrides a method if
   it has as many Verse Core type arguments as the class that declares it
   (its parent's, then its own type parameters that are not one of them:
   `dup(t)` has `pair`'s two, `t` and `t`). It may fix
@@ -4147,21 +4219,29 @@ Main()<suspends>:void =
   with the rest. A task awaiting itself, or two awaiting each other, wait
   for ever. A task is not tied to the
   code that spawned it: it runs until it ends or the program does. A
-  `spawn` has `<transacts>`'s heap effects (`<reads>`, `<writes>` and
-  `<allocates>`), besides those of the call it starts (the Book's tests:
-  "spawn requires the transacts effect in addition to the effects of the
-  spawned async function", `Effects.versetest:554`; the prose has spawn
-  work "anywhere you can write code", ch. 14): it is allowed in any
-  function whose effects allow those, immediate ones too, not in a
-  `<computes>`, `<reads>` or `<allocates>` one; with `--extended-defaults`,
-  also in a field's default of a class whose effects allow them (a task per
-  construction that omits the field). A `spawn` may be in a failure
-  context, as the Book's tests have it (assertions spawn;
-  `LiveVariables.versetest:450-545` spawn in `if: …; false?`): its start,
-  the task's first run included, is the context's code, so a context that
-  fails undoes it, and the task never runs again; in a suspends function a
-  `spawn` in a condition or a filter starts the task there (it is not a
-  suspension point). A `spawn` in a `defer:` is refused (#156).
+  `spawn` has the `no_rollback` effect (#724), as UEFN 43.12 has it (3512,
+  "This 'spawn' macro has the 'no_rollback' effect, which is not allowed by
+  its context", `followup-book2/spawn-in-transacts-*`): it is allowed where
+  a call of a function without a heap specifier is, in a function without
+  one, immediate ones too, outside its failure contexts, and at the top of a
+  plain `<decides>` function's body; not in a `<transacts>`, `<computes>` or
+  other heap-specified function, a class's `block:`, a field's default, an
+  `if`'s condition or a `for`'s clauses ([the default effect](#effect-contracts)).
+  With `--default-rollback`, openverse's old rule: a `spawn` has
+  `<transacts>`'s heap effects (`<reads>`, `<writes>` and `<allocates>`),
+  besides those of the call it starts (the Book's tests: "spawn requires
+  the transacts effect in addition to the effects of the spawned async
+  function", `Effects.versetest:554`), so it is allowed in any function
+  whose effects allow those, not in a `<computes>`, `<reads>` or
+  `<allocates>` one; with `--extended-defaults` too, also in a field's
+  default of a class whose effects allow them (a task per construction
+  that omits the field); and it may be in a failure context, as the Book's
+  tests have it (`LiveVariables.versetest:450-545` spawn in `if: …;
+  false?`): its start, the task's first run included, is the context's
+  code, so a context that fails undoes it, and the task never runs again;
+  in a suspends function a `spawn` in a condition or a filter starts the
+  task there (it is not a suspension point). A `spawn` in a `defer:` is
+  refused (#156).
   Without a suspends `Main`, a task runs up to its first wait, and on only
   inside a `Signal` that resumes it (below).
   `T.Cancel()` (in a suspends function) cancels a task that has not ended:

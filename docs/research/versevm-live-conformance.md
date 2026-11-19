@@ -577,23 +577,94 @@ of the 38 had been asked of Epic.
 [`followup-book2/`](../../tests/conformance/versevm/followup-book2) asks
 whether Epic's shipped compiler refuses each of them, one construct per
 probe, with controls; each header gives the Book's case and openverse's
-output, Lean and C agreeing, and its `expectations.tsv` the same. Not yet
-compiled by Epic.
+output, Lean and C agreeing, and its `expectations.tsv` the same, with
+Epic's results. UEFN 43.12 (`++Fortnite+Release-43.12-CL-60598086`)
+compiled each alone with BuildAll on 2026-11-19 (~13:10Z; raw records
+`compile-book2.json`) and refused every probe of an accepted refusal; it
+admitted the 15 controls and `interface-var-field`, which then ran on the
+Verse VM (`newVerseVm=true`, 14:41Z, `live-book2-vm.json`;
+`long-ident-class-1024-control` alone, in single mode, 14:44Z) and printed
+what openverse prints. So each refusal is the form's under test:
 
-| Probes | Book cases | Asks whether UEFN 43.12 refuses |
-| --- | --- | --- |
-| `case-collision-*` (4 and a control) | `FORT-793952…` (16, `bp_vm_only`, 9200, 9002, 9000) | names of one scope that differ only in case: module functions, methods, `<suspends>` methods, the same parameters |
-| `long-ident-*` (4 and a control) | `FORT-555217…` 25, 31, 37 (`bp_vm_only`, 9002, 3655); 11 (3655, both VMs, agreeing only for another reason) | a class name of 1024 characters, a mangled method name too long, a name of 1025, one of 4096 |
-| `join-named-*`, `join-generic-effects-*`, `generic-higher-order`, `parametric-method-value`, `interface-fn-param-generic` (8 and 7 controls) | `DefaultNamed` 629, 640, 741, 751; `Tuple:456`; `Function` 238, 271; `ParametricFunctions:276`; `FORT-592189:4`; `SOL-5477:5` (all `bp_vm_only`, IR error 3502; their Verse VM twins valid) | the Blueprint VM's code generation limits on function values: joins of functions with named or defaulted parameters, joins of generic functions with other effects, generic functions passed as values, a parametric class's method as a value, a function parameter in a parametric interface |
-| `overload-tuple-named-call` and its control | `FORT-744399:62` (3509, both VMs) | two arguments packed into a tuple parameter beside a named one |
-| `parametric-var-where-*`, `parametric-interface-var`, `interface-var-field` (3 and 3 controls) | `ParametricFunctions` 431, 438 (3552), 496 (3502), both VMs | a parametric class's `var` field used in a generic function; a parametric interface with a `var` field |
-| `enum-wide` and its control | `Enum:171` (`bp_vm_only`, 3552) | an enum of 257 values |
-| `final-method-interface`, `-nonfinal`, `-control` | `Attributes/final.versetest:125` (3591, both VMs) | a class's `<final>` method (and, not a Book case, one that is not `<final>`) taken for an interface's method of its name |
-| `spawn-in-transacts-*` (4 and a control) | `Effects` 557, 565, `SoftwareTransactionalMemory:505` (`bp_vm_only`, 3512) | `spawn` in a `<transacts>` and a `<transacts><decides>` function, and whether a failed condition undoes the spawn (openverse undoes it) |
-| `live-when-sentinel`, `live-upon-sentinel`, `live-await-block-sentinel` | `when:7`, `upon:7`, `await:6` (`verse_vm_only`, valid) | whether 43.12 knows `when`, `upon` and `await{…}` (it refuses `live`, `book-live-set`); openverse refuses all three |
+| Probes | Book cases | Asks whether UEFN 43.12 refuses | UEFN 43.12 |
+| --- | --- | --- | --- |
+| `case-collision-*` (4 and a control) | `FORT-793952…` (16, `bp_vm_only`, 9200, 9002, 9000) | names of one scope that differ only in case: module functions, methods, `<suspends>` methods, the same parameters | refuses all four: 9200 "Found multiple functions that map to the same target function. Please rename the function to be case insensitive unique" (module functions, methods), 9002 and 9200 (`<suspends>` methods: "Found existing type 'task_cc$Function'"), 9000 twice (the same parameters: "Local variable `Value` not found internally in VM"); admits the control |
+| `long-ident-*` (4 and a control) | `FORT-555217…` 25, 31, 37 (`bp_vm_only`, 9002, 3655); 11 (3655, both VMs, agreeing only for another reason) | a class name of 1024 characters, a mangled method name too long, a name of 1025, one of 4096 | refuses a name of 1025 and one of 4096 characters, 3655 "Identifier is too long" at each occurrence, the mangled method name, 3655 at the method, and the class of 1024 characters, 9002 "Cannot find class"; admits the class of 960 |
+| `join-named-*`, `join-generic-effects-*`, `generic-higher-order`, `parametric-method-value`, `interface-fn-param-generic` (8 and 7 controls) | `DefaultNamed` 629, 640, 741, 751; `Tuple:456`; `Function` 238, 271; `ParametricFunctions:276`; `FORT-592189:4`; `SOL-5477:5` (all `bp_vm_only`, IR error 3502; their Verse VM twins valid) | the Blueprint VM's code generation limits on function values: joins of functions with named or defaulted parameters, joins of generic functions with other effects, generic functions passed as values, a parametric class's method as a value, a function parameter in a parametric interface | refuses all eight, 3502 "Using a value of type … as a value of type … is not yet implemented"; admits the seven controls (left to another change) |
+| `overload-tuple-named-call` and its control | `FORT-744399:62` (3509, both VMs) | two arguments packed into a tuple parameter beside a named one | refuses it, 3509 "This function parameter expects a value of type tuple(tuple(float,float),?E:float = ...), but this argument is an incompatible value of type tuple(type{1.000000},type{2.000000})"; admits the control |
+| `parametric-var-where-*`, `parametric-interface-var`, `interface-var-field` (3 and 3 controls) | `ParametricFunctions` 431, 438 (3552), 496 (3502), both VMs | a parametric class's `var` field used in a generic function; a parametric interface with a `var` field | refuses the two generic functions, 3552 "An implicit type parameter (`t`) used in the type of mutable data (`…/c.Data`) may not be used in the type of a function", and the interface, 3502 "Mutable members in parametric interfaces are not yet implemented"; admits the three controls |
+| `enum-wide` and its control | `Enum:171` (`bp_vm_only`, 3552) | an enum of 257 values | refuses 257 values, 3552 "Enumerator value `wide.e100` is out of byte-range which is not yet supported"; admits 256 |
+| `final-method-interface`, `-nonfinal`, `-control` | `Attributes/final.versetest:125` (3591, both VMs) | a class's `<final>` method (and, not a Book case, one that is not `<final>`) taken for an interface's method of its name | refuses both, `<final>` or not, 3591 "Non-abstract class inherits abstract function `MethodX` from `i_y` but does not provide an implementation"; admits the control |
+| `spawn-in-transacts-*` (4 and a control) | `Effects` 557, 565, `SoftwareTransactionalMemory:505` (`bp_vm_only`, 3512) | `spawn` in a `<transacts>` and a `<transacts><decides>` function, and whether a failed condition undoes the spawn (openverse undoes it) | refuses all four, 3512 "This 'spawn' macro has the 'no_rollback' effect, which is not allowed by its context" (in the `<transacts><decides>` ones, also 3512 for the call of `Work`, which has `no_rollback`); admits the control |
+| `live-when-sentinel`, `live-upon-sentinel`, `live-await-block-sentinel` | `when:7`, `upon:7`, `await:6` (`verse_vm_only`, valid) | whether 43.12 knows `when`, `upon` and `await{…}` (it refuses `live`, `book-live-set`); openverse refuses all three | refuses all three, 3506 "Unknown identifier `when`", `upon`, `await` |
 
 Build the `long-ident-*` probes alone, in single mode: Epic's names for
 them may depend on the module that holds them.
+
+openverse takes these refusals (#724; [the survey](book-test-conformance.md#after-epics-verdicts-on-the-accepted-refusals)):
+names of one scope's functions that differ only in case with the same
+parameters (9200), identifiers past 1024 characters (3655) and class
+names past 1023 (9002), enums past 256 values (3552), an interface's
+abstract method implemented only below the interface (3591), no packing
+of several arguments into a tuple parameter beside a named one (3509),
+`spawn`'s `no_rollback` (3512), and the parametric `var` fields (3552,
+3502), with `--parametric-var-fields` to keep openverse's extension (32
+of openverse's test programs and 4 error tests take it). Not taken: a
+method's mangled name with parameters (its limit counts names openverse
+does not have). The function-value coercions (3502) are refused since
+#735 ([below](#function-value-coercions-3502)), so the eight such probes of
+`followup-book2` are refused by openverse as by Epic.
+
+[`followup-book3/`](../../tests/conformance/versevm/followup-book3) asked
+the edges the evidence left open, one construct each: names differing
+only in case under other parameter names, beside a named parameter, in a
+subclass, as two classes, a function and a constant, an interface's
+methods; long names; an interface default beside a class's method of its
+name; mutable data through another class's field, in a body, in a field
+not of the parameter; the named argument given, an array parameter
+beside a named one, packing without one; a spawn in a condition, in a
+class's `block:`, at the top of a plain `<decides>` body. UEFN 43.12
+compiled them one at a time on 2026-11-19 (~16:45Z, `compile-book3.json`):
+13 as openverse had them; it refused two classes whose names differ only
+in case (9002, "Found existing type 'CC' that is already being created
+this compile"), an interface's two such methods (9200), an array of
+several arguments beside a named parameter (3509), mutable data through a
+class's field (3552), and the long names, which a bisection on the same
+build then measured, for definitions without parameters:
+
+| What | Longest admitted | Shortest refused |
+| --- | ---: | ---: |
+| a field of a class, a local constant | 1004 | 1005 |
+| a module function | 990 | 991 |
+| a class with a field only | 1023 | 1024 (9002) |
+| that class with a method `F()` | 983 | 984 |
+| a method in a class `holder` | 981 | 982 |
+| a struct | | 1024 (9002, "Cannot find struct"); a struct name of 1016 characters crashed the editor |
+
+openverse follows all 22 since (the length limits as constants citing
+these measurements). [`followup-book4/`](../../tests/conformance/versevm/followup-book4)
+asks the edges of those rules: two structs, interfaces, enums, a class
+and a struct, an interface or an enum of case-different names (refused by
+openverse), a class and a function so named, a class in a module and one
+at the top level (admitted); a generic parameter beside a named one
+(admitted, packed into a tuple); a method and a module function with a
+parameter at the measured limits, a parameter and a module constant of
+1005 characters, an interface and an enum of 1023; mutable data through a
+struct's field (admitted), in an array type and a method's own type
+parameter (refused). UEFN 43.12 compiled them on 2026-11-19 (~19:55Z,
+`compile-book4.json`): 13 as openverse had them, the six type collisions
+among them (9002, "Please rename the struct/interface/enumeration to be
+case insensitive unique"). It refused mutable data through a struct's
+field (3552) and admitted a parameter of 1005 characters, which openverse
+now follows; it refused a function of 990 characters and a method whose
+names make 977, each with one parameter (3655), which openverse admits, a
+known difference (a parameter lowers the limit, not modelled); and it
+refused `generic-param-named-pack` for its form (the default `0 where
+t:type` read as one expression: 3502, 3506), so that probe was
+rewritten, `F(X:t, ?E:int where t:type)` called `F(1, 2, ?E := 5)`, which
+it refuses (3509, "This function parameter expects a value of type
+tuple(any,?E:int)", ~20:40Z, `compile-book4b.json`): openverse packs no
+several arguments into a generic parameter beside a named one since.
 
 Of the 323 refusals of `verse_vm_only` cases, all but one are of forms
 UEFN 43.12 refuses too, or that the sentinels above ask: `union` (138: the
@@ -606,6 +677,7 @@ types (6, `book-closed-function-type`), and the `spawn`, function-join,
 sibling-key, default-cycle, field-tuple, `branch`-in-a-loop and
 type-parameter forms of the `book/` probes (23). Left unasked: a generic
 function joined with another (`Castable.versetest:601`).
+
 
 ### Function-value coercions (3502)
 

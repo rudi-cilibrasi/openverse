@@ -1432,6 +1432,28 @@ def checkNoRollbackCall (ctx : Ctx) (p : Pos) (s : Sig) (shown : String) : EM Un
     let context := if (ctx.canFail || ctx.inRollback) && !ctx.bodyFailure then "a failure context" else "a body whose effects exclude it"
     throw s!"{p.show}: this invocation calls a function ({shown}) that has the 'no_rollback' effect, which {context} does not allow: a function without a heap specifier (<transacts>, <computes>, <reads>, …) has it (Epic's Verse compiler, UEFN 43.12: error 3512; --default-rollback keeps the old rule)"
 
+/-- (#724, `--default-no-rollback`) `spawn{…}` at `p` has the `no_rollback`
+    effect, as a call of a function without a heap specifier does
+    (`checkNoRollbackCall`): refused in a failure context (or inside one)
+    and in a body whose effects exclude it, a `<transacts>`, `<computes>`
+    or other heap-specified function's or a class's `block:`, and admitted
+    at the top of a plain `<decides>` function's body. UEFN 43.12
+    (++Fortnite+Release-43.12-CL-60598086) refuses a spawn in a
+    `<transacts>` function and in a `<transacts><decides>` one with error
+    3512, "This 'spawn' macro has the 'no_rollback' effect, which is not
+    allowed by its context", and admits one in a function without
+    specifiers (tests/conformance/versevm/followup-book2,
+    spawn-in-transacts-*; the Book's Blueprint VM tests, Effects.versetest
+    557, 565 and SoftwareTransactionalMemory.versetest:505, against their
+    Verse VM twins). `--default-rollback` keeps the old rule, under which a
+    spawn has `<transacts>`'s heap effects only, as it keeps an event's
+    `Await` (`awaitSig`). -/
+def checkSpawnNoRollback (ctx : Ctx) (p : Pos) : EM Unit := do
+  if ctx.types.defaultNoRollback && !ctx.typeOnly && ((ctx.canFail || ctx.inRollback) && !ctx.bodyFailure || ctx.rollbackOnly) &&
+      !(ctx.frameName.splitOn "$call").tail.any (fun _ => true) then
+    let context := if (ctx.canFail || ctx.inRollback) && !ctx.bodyFailure then "a failure context" else "a body whose effects exclude it"
+    throw s!"{p.show}: this spawn has the 'no_rollback' effect, which {context} does not allow, as a call of a function without a heap specifier would not be (Epic's Verse compiler, UEFN 43.12: error 3512, \"This 'spawn' macro has the 'no_rollback' effect, which is not allowed by its context\"; --default-rollback keeps the old rule)"
+
 /-- `ctx` with the `defer:` body `d` pending for every `return` and `break`
     that leaves its scope (#80), with the locals in scope here. -/
 def Ctx.withDefer (ctx : Ctx) (d : SExpr) : Ctx :=
@@ -3479,6 +3501,26 @@ def toStringOf (p : Pos) (r0 : R) : EM Expr := do
   | .arr .char => pure r.e
   | t => eerr p s!"no ToString for {t.show} (Verse defines it for int, float, char, char32 and string)"
 
+/-- (#724) For an arity message: why `found` positional arguments do not
+    fit `s`'s single tuple, array or generic parameter (after `off`
+    receivers) when it has a named one too, where `packCallArgs` packs none (UEFN 43.12:
+    3509). -/
+def namedPackNote (s : Sig) (off found : Nat) : String :=
+  match s.params.drop off |>.take (s.params.length - s.named.length - off) with
+  | [.tup _] =>
+    if found > 1 && !s.named.isEmpty then
+      ": several arguments are not packed into a tuple parameter beside a named one, since the function's parameter is then the tuple of all its parameters; write the tuple, (…) (Epic's Verse compiler, UEFN 43.12: error 3509, \"This function parameter expects a value of type tuple(…), but this argument is an incompatible value\")"
+    else ""
+  | [.param ..] =>
+    if found > 1 && !s.named.isEmpty then
+      ": several arguments are not packed into a generic parameter beside a named one, since the function's parameter is then the tuple of all its parameters; write the tuple, (…) (Epic's Verse compiler, UEFN 43.12: error 3509, \"This function parameter expects a value of type tuple(any,…), but this argument is an incompatible value\")"
+    else ""
+  | [.arr _] =>
+    if found > 1 && !s.named.isEmpty then
+      ": several arguments do not make an array parameter beside a named one, since the function's parameter is then the tuple of all its parameters; write the array, array{…} (Epic's Verse compiler, UEFN 43.12: error 3509, \"This function parameter expects a value of type tuple([]…), but this argument is an incompatible value\")"
+    else ""
+  | _ => ""
+
 /-- Canonicalise the user positional arguments before binding a call. A
     receiver is not part of the argument tuple; named arguments retain their
     written order. A lone scalar keeps its meaning for arrays and bare type
@@ -3496,6 +3538,14 @@ def packCallArgs (p : Pos) (s : Sig) (args : List SExpr)
   match pt with
   | .void => if user.isEmpty then return packed (.tuple p []) else return args
   | .tup _ =>
+    -- (#724: not beside a named parameter. The function's parameter is
+    -- then the tuple of its parameters, named ones included, which several
+    -- arguments do not fit: UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+    -- refuses F(1.0, 2.0) of F(X:tuple(float, float), ?E:float = 0.1),
+    -- error 3509, followup-book2/overload-tuple-named-call, and admits
+    -- F((1.0, 2.0), ?E := 10.0), the control; the Book's tests,
+    -- Bugs/FORT-744399-DefaultTupleFieldsCrashComplier.versetest:62)
+    if user.length > 1 && !s.named.isEmpty then return args
     if user.length != 1 then return packed (.tuple p user)
     if let .tup [_] := pt then
       let [a] := user | return args
@@ -3503,8 +3553,14 @@ def packCallArgs (p : Pos) (s : Sig) (args : List SExpr)
       | .tuple _ [_] | .app _ (.ident _ "$callSingleton") [_] false => return args
       | _ => return packed (.app a.pos (.ident a.pos "$callSingleton") [a] false)
     return args
-  | .arr _ => if user.length > 1 then return packed (.arrayLit p user) else return args
-  | .param .. => if user.length != 1 then return packed (.tuple p user) else return args
+  -- (#724: nor into an array parameter beside a named one: UEFN 43.12
+  -- refuses F(1, 2) of F(A:[]int, ?B:int = 2), error 3509,
+  -- followup-book3/array-named-pack)
+  | .arr _ => if user.length > 1 && s.named.isEmpty then return packed (.arrayLit p user) else return args
+  -- (#724: nor into a generic parameter's tuple beside a named one: UEFN
+  -- 43.12 refuses F(1, 2, ?E := 5) of F(X:t, ?E:int where t:type), error
+  -- 3509, followup-book4/generic-param-named-pack)
+  | .param .. => if user.length != 1 && !(user.length > 1 && !s.named.isEmpty) then return packed (.tuple p user) else return args
   | _ => return args
 
 /-- The tag of the lifts of the refining casts in a function (#53, #243):

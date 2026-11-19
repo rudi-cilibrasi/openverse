@@ -1,3 +1,4 @@
+# (run with --parametric-var-fields, openverse's extension: Epic's compiler refuses a generic function over a parametric class whose mutable data holds an implicit type parameter, or a var field in a parametric interface, UEFN 43.12 errors 3552 and 3502, #724)
 # a field read and set through an interface, in a class that repeats the
 # interface's type arguments, where the field sits elsewhere (#157, #209)
 pairish(t:type, u:type) := interface:

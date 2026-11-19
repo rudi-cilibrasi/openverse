@@ -1,3 +1,4 @@
+# (run with --parametric-var-fields, openverse's extension: Epic's compiler refuses a generic function over a parametric class whose mutable data holds an implicit type parameter, or a var field in a parametric interface, UEFN 43.12 errors 3552 and 3502, #724)
 # generic code over an interface that declares fields, when every class
 # implementing it fixes its type argument: the loop variable starts as a
 # hidden placeholder laid out like the interface (#157)

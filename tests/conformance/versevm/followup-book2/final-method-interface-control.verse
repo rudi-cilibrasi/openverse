@@ -2,6 +2,9 @@
 # another name and an interface, the interface's method overridden in
 # class_z. Not a Book case. OpenVerse prints
 #   methods 2 1
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# 2026-11-19) admits it, and its Verse VM prints methods 2 1, as OpenVerse
+# does.
 class_x := class:
     MethodY<final>():int = 1
 

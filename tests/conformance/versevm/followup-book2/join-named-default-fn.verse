@@ -7,6 +7,14 @@
 # If UEFN 43.12 refuses it (Build Verse Scripts, or the cook of a Verse VM
 # session), Epic's shipped toolchain refuses a program OpenVerse runs.
 # Control: join-named-default-fn-control (one such function, no join).
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# BuildAll, 2026-11-19) refuses it: 3502 (L13) "Using a value of type
+# (?A:int = ...)->int as a value of type tuple()->int is not yet
+# implemented."; 3502 (L13) "Using a value of type (?B:int = ...)->int as a
+# value of type tuple()->int is not yet implemented.".
+# OpenVerse refuses it now, as Epic does: #735's rule for the conversions of
+# function values Epic's compiler does not make (3502; --function-coercions
+# keeps openverse's).
 F2(?A:int = 2):int = A
 F4(?B:int = 4):int = B
 

@@ -1,3 +1,4 @@
+# (run with --parametric-var-fields, openverse's extension: Epic's compiler refuses a generic function over a parametric class whose mutable data holds an implicit type parameter, or a var field in a parametric interface, UEFN 43.12 errors 3552 and 3502, #724)
 # A field default that reads or sets a field through an accessor (#157, #511):
 # `Value` sits at different places in c1 and c2, so a read through holder(int)
 # calls each class's accessor. Its convergence is checked through the accessor,

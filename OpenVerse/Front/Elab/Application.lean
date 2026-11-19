@@ -247,7 +247,7 @@ partial def elabNamedArgsCall (cb : AppElab) (ctx : Ctx) (p : Pos) (name : Strin
     let (shown, off) := match name.splitOn "." with
       | [_, m] => (m, 1)
       | _ => (name, 0)
-    eerr p s!"{shown} takes {npos - off} positional argument(s), found {pos.length - off}"
+    eerr p s!"{shown} takes {npos - off} positional argument(s), found {pos.length - off}{namedPackNote s off (pos.length - off)}"
   for ((ap, n, _), i) in named.zip (List.range named.length) do
     if (s.named.find? (·.1 == n)).isNone then eerr ap s!"{name} has no parameter ?{n}"
     if (named.take i).any (·.2.1 == n) then eerr ap s!"?{n} is given twice"
@@ -668,7 +668,7 @@ partial def dispatchArgs (cb : AppElab) (ctx : Ctx) (p : Pos) (mc : MethodCall) 
     | _ => none
   let npos := ms.params.length - ms.named.length
   if posArgs.length + 1 != npos then
-    eerr p s!"{m} takes {npos - 1} positional argument(s), found {posArgs.length}"
+    eerr p s!"{m} takes {npos - 1} positional argument(s), found {posArgs.length}{namedPackNote ms 1 posArgs.length}"
   for (ap, n, _) in namedArgs do
     if (ms.named.find? (·.1 == n)).isNone then eerr ap s!"{m} has no parameter ?{n}"
   let mut pre : Array Expr := #[.assign slot r.e]

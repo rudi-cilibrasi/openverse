@@ -1,3 +1,4 @@
+# (run with --parametric-var-fields, openverse's extension: Epic's compiler refuses a generic function over a parametric class whose mutable data holds an implicit type parameter, or a var field in a parametric interface, UEFN 43.12 errors 3552 and 3502, #724)
 # Parametric classes are references (#39): objects with var fields, shared
 # by every variable that refers to them, compared by identity when
 # <unique>, and recursive through their own type, at every instantiation.

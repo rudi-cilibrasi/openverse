@@ -346,7 +346,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
       let (shown, off) := match s.name.splitOn "." with
         | [_, m] => if s.pnames.head? == some "Self" then (m, 1) else (s.name, 0)
         | _ => (s.name, 0)
-      eerr p s!"{shown} takes {npos - off} positional argument(s), found {pos.length - off}"
+      eerr p s!"{shown} takes {npos - off} positional argument(s), found {pos.length - off}{namedPackNote s off (pos.length - off)}"
     for ((ap, n, _), i) in named.zip (List.range named.length) do
       if (s.named.find? (·.1 == n)).isNone then eerr ap s!"{s.name} has no parameter ?{n}"
       if (named.take i).any (·.2.1 == n) then eerr ap s!"?{n} is given twice"

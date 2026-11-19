@@ -187,6 +187,8 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   checkReservedNames allTops0r
   checkBuiltinTypeNames allTops0r
   checkDefinedOnce allTops0r
+  checkTypeCaseCollisions allTops0r
+  checkNameLengths allTops0r
   let scopePairs ← checkNoShadowing allTops0r
   checkReturns allTops0r
   checkJumps allTops0r

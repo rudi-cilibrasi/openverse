@@ -7,6 +7,10 @@
 # If UEFN 43.12 refuses it, OpenVerse should not pack positional arguments
 # into a tuple parameter that has a named parameter beside it. Control:
 # overload-tuple-named-call-control (the tuple written out, the Book's :55).
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# BuildAll, 2026-11-19) refuses it: 3509 (L12) "This function parameter
+# expects a value of type tuple(tuple(float,float),?E:float = ...), but this
+# argument is an incompatible value of type tuple(type{1.000000".
 F(X:tuple(float, float), ?E:float = 0.1):float = X(0) + X(1) + E
 
 Main():void =

@@ -1,3 +1,4 @@
+# (run with --parametric-var-fields, openverse's extension: Epic's compiler refuses a generic function over a parametric class whose mutable data holds an implicit type parameter, or a var field in a parametric interface, UEFN 43.12 errors 3552 and 3502, #724)
 # a for over objects of an interface whose field its classes give fixed types:
 # the loop variable's placeholder gets the field at the interface's type
 slot(t:type) := interface:

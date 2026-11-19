@@ -456,6 +456,49 @@ def checkSignatures (env : TyEnv) (sigs : Signatures) (cdefs : List CDef) (field
   let primitiveString (name : String) := sigs.tops.any fun
     | .fn _ n _ _ specs .. => n == name && specs.contains BuiltinValues.toStringMarker
     | _ => false
+  -- (#724) no two functions of one module (or of the top level), nor two
+  -- methods of one class, have names that differ only in case and the same
+  -- parameters (types, named ones by name) and `<suspends>`: Epic's
+  -- toolchain maps them to one function. UEFN 43.12
+  -- (++Fortnite+Release-43.12-CL-60598086) refuses `Function():int` and
+  -- `FUNCTION():int` among a module's functions and a class's methods, error
+  -- 9200, "Found multiple functions that map to the same target function.
+  -- Please rename the function to be case insensitive unique", two
+  -- `<suspends>` methods with 9002 and 9200, and two of one parameter type
+  -- with 9000 ("Local variable `Value` not found internally in VM"), and
+  -- admits `Function(Value:int)` beside `FUNCTION()`
+  -- (followup-book2/case-collision-*). The Book's tests,
+  -- Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest, refuse them so
+  -- whatever the return types, effects (but `<suspends>`) and access
+  -- specifiers, and accept different parameter types, a `<suspends>` beside
+  -- one that is not, and names in different classes or modules (a method
+  -- and a subclass's method, followup-book3/case-collision-inherited). An
+  -- interface's methods are one scope as a class's are. A function's own
+  -- overloads share one spelling, and are checked above.
+  let caseKey (s : Sig) : Option (String × String) :=
+    if !s.sourceCall then none else
+    let base := (s.name.splitOn "$ov").headD s.name
+    if base.contains '$' || base.contains '(' then none else
+    let parts := qualParts base
+    let last := parts.getLastD base
+    let (cls, simple) := match last.splitOn "." with
+      | [c, m] => (some c, m)
+      | _ => (none, last)
+    -- (an interface's methods too: UEFN 43.12 refuses two of them so, 9200,
+    -- followup-book3/case-collision-interface)
+    some (qualJoin (parts.dropLast ++ cls.toList), simple)
+  let keyed := allSigs.filterMap fun s => (caseKey s).map (s, ·)
+  for (sa, (scopeA, a), i) in keyed.zipIdx.map (fun ((s, k), i) => (s, k, i)) do
+    for (sb, (scopeB, b)) in keyed.take i do
+      if scopeA == scopeB && a != b && a.toLower == b.toLower && sa.suspends == sb.suspends &&
+          sa.params == sb.params && sa.named.map (·.1) == sb.named.map (·.1) then
+        let posOf (n : String) : Pos := ((sigs.tops ++ sigs.generics).findSome? fun
+          | .fn q m .. => if m == n then some q else none
+          | _ => none).getD { line := 0, col := 0 }
+        let (pa, pb) := (posOf sa.name, posOf sb.name)
+        let later := if pa.line > pb.line || (pa.line == pb.line && pa.col >= pb.col) then pa else pb
+        let what := if scopeA.isEmpty then "the top level" else scopeA.replace "::" "."
+        throw s!"{later.show}: {b} and {a}, of {what}, have names that differ only in case and take the same parameters: Epic's toolchain maps the two to one function, its names being case-insensitive, so rename one (Epic's Verse compiler, UEFN 43.12: error 9200, \"Found multiple functions that map to the same target function. Please rename the function to be case insensitive unique\"; 9002 for <suspends> ones, 9000 when they have parameters)"
   -- overloads take parameters no call fits both of (Book of Verse ch. 6)
   let sigNamed (s : Sig) : List (String × Bool × Ty) :=
     let npos := s.params.length - s.named.length

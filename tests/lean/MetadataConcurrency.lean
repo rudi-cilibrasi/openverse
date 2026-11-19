@@ -116,6 +116,10 @@ private def backgroundRefusals : List (String × String × Bool) := [
   ("branch: caller reads before background real overwrite", header ++
     s!"    var Stored:{functionTy}=Dummy\n    branch:\n        Sleep(0.2)\n        set Stored=F\n    Sleep(0.1)\n    Stored()", true)]
 
+-- (#724: two cases write through Store(B:box(t),V:t where t:type) over a
+-- class with a var field, which Epic's compiler refuses, 3552; these
+-- contracts are about metadata, so openverse's extension is kept,
+-- `--parametric-var-fields`)
 private def compileCase (source : String) (dummy live : Bool) : Except String Compiled := do
   let implementations := if live then
     s!"One()<computes>:int=1\nTwo()<computes>:int=2\nPick(C:logic)<computes>:{functionTy}=if(C?)then One else Two\n" else ""
@@ -124,7 +128,7 @@ private def compileCase (source : String) (dummy live : Bool) : Except String Co
     | .fn p name ps tps specs ret body => .fn p name (ps.map fun param =>
         { param with typeValue := dummy && name == "Caller" && param.name == "Dummy" }) tps specs ret body
     | top => top
-  elabProgram tops
+  elabProgram tops { parametricVarFields := true }
 
 def main : IO Unit := do
   let kinds := ["sync", "race", "rush"]
