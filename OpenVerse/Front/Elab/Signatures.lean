@@ -470,7 +470,7 @@ def checkSignatures (env : TyEnv) (sigs : Signatures) (cdefs : List CDef) (field
   -- (followup-book2/case-collision-*). The Book's tests,
   -- Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest, refuse them so
   -- whatever the return types, effects (but `<suspends>`) and access
-  -- specifiers, and admit different parameter types, a `<suspends>` beside
+  -- specifiers, and accept different parameter types, a `<suspends>` beside
   -- one that is not, and names in different classes or modules. A
   -- function's own overloads share one spelling, and are checked above.
   let caseKey (s : Sig) : Option (String × String) :=
