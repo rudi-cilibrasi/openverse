@@ -152,8 +152,11 @@ partial def elabExprMarkersWith
     return ⟨← witness ctx.types ctx.dictBase ctx.dictVars ty, ty⟩
   | .app p (.ident _ "$fxOf") [.ident _ f] false =>
     -- (an inlined call of a function with several values: its declared
-    -- effects, as at a call, #235)
-    if let some s := ctx.sig? f then noteFx p s.fx (some s!"calls {Choice.shownFnName f}")
+    -- effects, as at a call, #235; and, as the program's function, one
+    -- that might not complete, none in a data member's definition, #724)
+    if let some s := ctx.sig? f then
+      noteFx p s.fx (some s!"calls {Choice.shownFnName f}")
+      if s.sourceCall then noteDivergentCall ctx p (Choice.shownFnName f)
     return ⟨.lit .void, .void⟩
   -- (a continuation's body, #335: clauses lifted already, failing where their
   -- first filter does, then the values)

@@ -543,6 +543,28 @@ admits the converging ones and refuses the others; it refuses the struct's
 archetype for its `<transacts>` construction (#512) and the module-scoped
 `var` because it has no `session`.
 
+Eight more ask about the paths a call can take inside
+a constant's definition, which openverse now notes wherever the call is
+written (#724's follow-up to the rule): a `for` whose generator calls a
+function with several values (`div-const-for-choice-call`, admitted by
+openverse before the follow-up, and its control in a local constant), a
+call in a `for`'s body and in an `if`'s condition, an operator the
+program overloads, a call through a function value (with a control that
+only names the function), all refused by openverse, and an archetype of a
+`<computes>` class whose `block:` calls a function, which openverse
+admits.
+
+UEFN 43.12 compiled them on 2026-11-19 (15:00Z). It refuses the call in a
+`for`'s body, in an `if`'s condition, the overloaded operator and the call
+through a function value with 3582, and admits the control that only names
+the function: openverse's verdicts. The two probes with a function of
+several values are refused for another reason, 3101 "Infix `|` operator is
+unimplemented": the shipped compiler has no choice operator, so the gap
+closed here cannot be asked of it. The class whose `block:` calls a
+function is refused with 9000, "Linker task graph contains a cycle"
+(`_Root`, `thing`, `_Root`): a limit of Epic's linker, not a rule about
+data members, and openverse keeps admitting it.
+
 ## Running many probes
 
 [`ovprobe.py`](../../tests/conformance/versevm/ovprobe.py) (Python 3
