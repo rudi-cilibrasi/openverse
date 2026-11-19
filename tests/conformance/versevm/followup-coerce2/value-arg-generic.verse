@@ -4,6 +4,10 @@
 # OpenVerse refuses it: 3502 rule: using a value of type
 # type{_(:int)<computes>:int} as a value of type
 # type{_(:int)<transacts>:int}
+# Epic (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, 2026-11-19)
+# refuses it: 3502 L14 "Using a value of type
+# tuple(type{_(:int)<computes>:int},type{1}) as a value of type
+# tuple(type{_(:type{1})<transacts>:int},type{1}) is not yet implemented."
 holder := class:
     F:type{_(:int)<computes>:int}
 Inc(X:int)<computes>:int = X + 1

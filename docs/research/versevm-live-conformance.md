@@ -683,14 +683,25 @@ no case for the wider rule. One difference is left, `value-class-variance`:
 openverse has no class variance for function values (Verse Core has no
 contravariance, and the front end makes adapters for names only).
 
-[`followup-coerce2`](../../tests/conformance/versevm/followup-coerce2) asks
-what the wider rule leaves unasked, 17 probes: a parameter returned at a
-wider type (and its control), a field read and one stored, a call's result,
-an array, a map and a tuple holding such values, a field passed to a
-generic call and a method named there, `int` and `rational` (a value's
-result, a name's parameter, a join), a result discarded (`void`, a value and
-a name, which openverse refuses already), a value's class result, and a
-parametric class's method at `any`. Not yet compiled by Epic.
+[`followup-coerce2`](../../tests/conformance/versevm/followup-coerce2) asked
+what the wider rule left unasked, 17 probes. UEFN 43.12 compiled them one
+at a time on 2026-11-19 (~17:40Z), and 14 agreed with openverse. It refuses
+with 3502 every function value converted where that needs a wrapper: a
+parameter returned at a wider type, a field read and one stored at a
+construction, a call's result, an array ("[]type{_(:int)<computes>:int}
+as []type{_(:int)<transacts>:int}"), a map, a tuple's element, a field
+passed to a generic call, and `int->int` as `int->rational` and as
+`int->void` (which openverse refused as type errors and now refuses citing
+3502); it admits a parameter returned at its own type, a method named as a
+generic call's argument, a function of a `rational` named at
+`type{_(:int):int}`, and a parametric class's method at `any`. Three
+differed:
+
+| Probe | UEFN 43.12 | openverse before, now |
+| --- | --- | --- |
+| `join-int-rational` | 3502 "Using a value of type tuple()->int as a value of type tuple()->rational", an if's branches | admitted (an `int`/`rational` exemption), refused: the exemption is gone |
+| `name-void-result` | admitted: `IntIdentity` named where a `type{_(:int):void}` is expected | refused, admitted: a function named converts by variance to a `void` result or from a `void` parameter |
+| `value-class-result` | admitted: a `type{_():dog}` local as a `type{_():animal}` | refused, refused: the class-variance difference, with `value-class-variance` |
 
 ## Running many probes
 

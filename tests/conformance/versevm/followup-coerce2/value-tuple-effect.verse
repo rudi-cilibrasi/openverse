@@ -5,6 +5,10 @@
 # OpenVerse refuses it: 3502 rule: using a value of type
 # tuple(type{_(:int)<computes>:int}, int) as a value of type
 # tuple(type{_(:int)<transacts>:int}, int)
+# Epic (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, 2026-11-19)
+# refuses it: 3502 L12 "Using a value of type
+# tuple(type{_(:int)<computes>:int},type{1}) as a value of type
+# tuple(type{_(:int)<transacts>:int},int) is not yet implemented."
 Inc(X:int)<computes>:int = X + 1
 
 Main():void =

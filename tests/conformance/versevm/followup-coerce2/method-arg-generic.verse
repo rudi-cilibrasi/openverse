@@ -5,6 +5,8 @@
 # admits it: the method is named at the parameter's type once the call gives
 # it.
 # OpenVerse (Lean and C agreeing) prints value 2
+# Epic (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, 2026-11-19) admits
+# it.
 counter := class:
     Inc(X:int)<computes>:int = X + 1
 Apply(F(:t)<transacts>:u, X:t where t:type, u:type):u = F(X)

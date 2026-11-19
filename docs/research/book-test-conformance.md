@@ -2932,6 +2932,19 @@ argument of a generic call is named at the parameter's type once the call
 gives it, as Epic's compiler does (`ParametricFunctions.versetest` 189 and
 208, `Apply(Incr, 1)`, still agree).
 
+Its answers to the second set (`followup-coerce2`, 14 of 17 as openverse
+had them) removed the rule's `int`/`rational` exemption and let a function
+named convert to a `void` result or from a `void` parameter. Against the
+baseline above: 6 better, `Void.versetest` 92 and 104 (a function named at
+`int->void`, `VoidInput` at `int->int`) and 161, 165, 169, 173 (joins of
+`true` and `void` functions, now named at the `if`'s type); 4 worse,
+`Rational.versetest` 131, 132, 139 and 140, `verse_vm_only` joins of an
+`int` and a `rational` result, the form UEFN 43.12 refuses
+(`join-int-rational`). `Void.versetest` 140-152, refused before, are now
+refused by the rule (cause function-coercions, 20 cases). **8,830 agree,
+654 refuse, 28 accept, 36 differ, 3,956 not translatable**; the baseline
+records it.
+
 ## Not covered, and why it matters
 
 - 1,264 cases need the runner's virtual packages and modules (`vpackage`,
