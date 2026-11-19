@@ -2947,6 +2947,13 @@ openverse takes Epic's compiler's refusals, one commit each (#724):
   other of these rules; left for a decision, on the local branch
   `wip/book-parametric-var-fields` (not pushed). Nor is a method's mangled
   name measured (`FORT-555217:31`, above).
+- **Type names that differ only in case**, and an interface's methods
+  (Epic's verdicts on `followup-book3`: 9002 "Found existing type 'CC'"
+  for two classes, 9200 for an interface's two methods): no two types of
+  one scope, classes, interfaces, structs or enums, have names equal but
+  for case (the kinds other than classes taken alike, asked in
+  `followup-book4`), and an interface's methods are measured as a class's.
+  No Book case moves.
 
 Before: 8,829 agree, 645 refuse, 38 accept, 36 differ; after: 8,850, 648,
 14, 36 (24 better, 3 worse, as [Where things stand](#where-things-stand)

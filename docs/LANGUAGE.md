@@ -751,7 +751,13 @@ the same target function", two such `<suspends>` methods with 9002 and
 types, a `<suspends>` function beside one that is not, and names in
 different classes or modules do, as do a function and a constant (the
 Book's tests, `Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest`).
-An interface's methods are not measured.
+An interface's methods are measured as a class's are (9200,
+`followup-book3/case-collision-interface`), a subclass's against its
+parent's not (`case-collision-inherited`). Nor may two types of one scope,
+classes, interfaces, structs or enums, have names that differ only in case
+(UEFN 43.12 refuses two classes, 9002, "Found existing type 'CC' that is
+already being created this compile", `case-collision-classes`; the other
+kinds are taken alike, and `followup-book4` asks).
 - **`ToString`.** A program may add overloads beside the primitive ones
   (`int`, `float`, `char`, `char32`, `string`), including several arguments
   and named parameters. `ToString(L:label):string = "label {L.Code}"`

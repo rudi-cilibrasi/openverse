@@ -122,6 +122,37 @@ def checkDefinedOnce (tops : List STop) : Except String Unit := do
       | some a, some (_, types) => types ++ [a]
       | none, _ => [])
 
+/-- (#724) No two types of one scope, the top level or a module, have names
+    that differ only in case: Epic's toolchain gives each a name its own,
+    and its names are case-insensitive. UEFN 43.12
+    (++Fortnite+Release-43.12-CL-60598086) refuses `cc := class{V:int = 1}`
+    beside `CC := class{V:int = 2}`, error 9002, "Found existing type 'CC'
+    that is already being created this compile. Please rename the class to
+    be case insensitive unique" (followup-book3/case-collision-classes); a
+    function and a constant of such names it admits
+    (case-collision-function-constant). Interfaces, structs and enums are
+    taken to be types as classes are, each against every other kind
+    (followup-book4 asks). A type alias is no type of its own. -/
+def checkTypeCaseCollisions (tops : List STop) : Except String Unit := do
+  let mut seen : Std.HashMap String String := {}
+  for t in tops do
+    let def? : Option (Pos × String) := match t with
+      | .classDef p n .. => some (p, n)
+      | .const p n _ none (.structDef ..) => some (p, n)
+      | .const p n _ _ (.enumDef ..) => some (p, n)
+      | _ => none
+    if let some (p, n) := def? then
+      if (qualParts n).any (·.contains '$') then continue
+      let parts := qualParts n
+      let simple := parts.getLastD n
+      let key := qualJoin (parts.dropLast ++ [simple.toLower])
+      match seen[key]? with
+      | some m =>
+        if m != n then
+          let shown (x : String) := ".".intercalate (qualParts x)
+          throw s!"{p.show}: the types {shown m} and {shown n} have names that differ only in case: Epic's toolchain makes the two one, its names being case-insensitive, so rename one (Epic's Verse compiler, UEFN 43.12: error 9002, \"Found existing type '{simple}' that is already being created this compile. Please rename the class to be case insensitive unique\")"
+      | none => seen := seen.insert key n
+
 /-- No definition takes the name of a definition of a scope around it
     (Book of Verse ch. 10, "Shadowing and Qualification": "you cannot
     redefine names that already exist in an enclosing scope"; the rule is

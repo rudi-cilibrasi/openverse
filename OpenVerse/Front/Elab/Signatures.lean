@@ -471,8 +471,10 @@ def checkSignatures (env : TyEnv) (sigs : Signatures) (cdefs : List CDef) (field
   -- Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest, refuse them so
   -- whatever the return types, effects (but `<suspends>`) and access
   -- specifiers, and accept different parameter types, a `<suspends>` beside
-  -- one that is not, and names in different classes or modules. A
-  -- function's own overloads share one spelling, and are checked above.
+  -- one that is not, and names in different classes or modules (a method
+  -- and a subclass's method, followup-book3/case-collision-inherited). An
+  -- interface's methods are one scope as a class's are. A function's own
+  -- overloads share one spelling, and are checked above.
   let caseKey (s : Sig) : Option (String × String) :=
     if !s.sourceCall then none else
     let base := (s.name.splitOn "$ov").headD s.name
@@ -482,10 +484,9 @@ def checkSignatures (env : TyEnv) (sigs : Signatures) (cdefs : List CDef) (field
     let (cls, simple) := match last.splitOn "." with
       | [c, m] => (some c, m)
       | _ => (none, last)
-    let scope := qualJoin (parts.dropLast ++ cls.toList)
-    -- (an interface's methods are not measured)
-    if cls.any fun c => (env.info (qualJoin (parts.dropLast ++ [c]))).isIface then none
-    else some (scope, simple)
+    -- (an interface's methods too: UEFN 43.12 refuses two of them so, 9200,
+    -- followup-book3/case-collision-interface)
+    some (qualJoin (parts.dropLast ++ cls.toList), simple)
   let keyed := allSigs.filterMap fun s => (caseKey s).map (s, ·)
   for (sa, (scopeA, a), i) in keyed.zipIdx.map (fun ((s, k), i) => (s, k, i)) do
     for (sb, (scopeB, b)) in keyed.take i do
