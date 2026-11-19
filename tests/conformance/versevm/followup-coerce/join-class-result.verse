@@ -4,8 +4,10 @@
 # FunctionTypes.versetest:198 joins them without an expected type, valid on
 # both VMs)? OpenVerse's rule: a reference to a class above needs no
 # wrapper, admitted.
-# OpenVerse (Lean and C agreeing) prints   true branch dog | false branch
+# OpenVerse (Lean and C agreeing) prints true branch dog | false branch
 # animal
+# Epic (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, 2026-11-19):
+# admitted it
 animal := class:
     Name():string = "animal"
 dog := class(animal):

@@ -1,6 +1,8 @@
 # followup-coerce (#724): Control of join-method-values: both methods
 # <transacts>.
-# OpenVerse (Lean and C agreeing) prints   true branch 11 | false branch 9
+# OpenVerse (Lean and C agreeing) prints true branch 11 | false branch 9
+# Epic (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, 2026-11-19):
+# admitted it
 counter := class:
     Inc(X:int)<transacts>:int = X + 1
     Dec(X:int)<transacts>:int = X - 1

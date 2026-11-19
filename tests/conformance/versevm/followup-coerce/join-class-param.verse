@@ -1,7 +1,9 @@
 # followup-coerce (#724): Does UEFN 43.12 admit an if whose branches take a
 # class and its subclass, at the function type taking the subclass
 # (contravariant parameters, no wrapper)? OpenVerse's rule: admitted.
-# OpenVerse (Lean and C agreeing) prints   true branch 1 | false branch 2
+# OpenVerse (Lean and C agreeing) prints true branch 1 | false branch 2
+# Epic (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, 2026-11-19):
+# admitted it
 animal := class {}
 dog := class(animal) {}
 

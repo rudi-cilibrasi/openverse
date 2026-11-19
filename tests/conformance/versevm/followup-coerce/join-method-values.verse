@@ -5,6 +5,9 @@
 # OpenVerse refuses it: 3502 rule: using a value of type
 # type{_(:int)<computes>:int} as a value of type
 # type{_(:int)<transacts>:int}
+# Epic (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, 2026-11-19)
+# refuses it: 3502 L13 "Using a value of type type{_(:int)<computes>:int} as
+# a value of type type{_(:int)<transacts>:int} is not yet implemented."
 counter := class:
     Inc(X:int)<computes>:int = X + 1
     Dec(X:int)<transacts>:int = X - 1

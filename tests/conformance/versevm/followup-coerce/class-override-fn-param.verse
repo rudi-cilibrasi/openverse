@@ -5,6 +5,9 @@
 # OpenVerse refuses it: 3502 rule: using a value of type
 # type{_(:type{_(:int):void}):void} as a value of type
 # type{_(:type{_(:any):void}):void}
+# Epic (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, 2026-11-19)
+# refuses it: 3502 L13 "Using a value of type (int->void)->void as a value
+# of type (any->void)->void is not yet implemented."
 TheG(X:int):void = Print("OVPROBE called {X}")
 base(t:type) := class:
     F(G(:t):void):void = {}

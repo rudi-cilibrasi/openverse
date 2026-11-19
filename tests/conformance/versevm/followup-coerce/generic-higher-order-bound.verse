@@ -9,6 +9,11 @@
 # OpenVerse refuses it: 3502 rule: using a value of type
 # type{_(:type{_(:t)<transacts>:t}, :t)<transacts>:t} where t as a value of
 # type type{_(:type{_(:int)<transacts>:int}, :int)<transacts>:int}
+# Epic (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, 2026-11-19)
+# refuses it: 3502 L16 "Using a value of type
+# type{_(:type{_(:t)<transacts>:t},:t where t)<transacts>:t} as a value of
+# type type{_(:type{_(:int)<transacts>:int},:int)<transacts>:int} is not yet
+# implemented."
 One(F(:t)<transacts>:t, X:t where t:type)<transacts>:t = F(X)
 Succ(X:int)<transacts>:int = X + 1
 

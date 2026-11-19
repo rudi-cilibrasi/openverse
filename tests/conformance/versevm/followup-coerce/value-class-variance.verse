@@ -1,10 +1,10 @@
 # followup-coerce (#724): Does UEFN 43.12 admit a function value that is no
 # function's name (a parameter of type type{_(:animal):int}) passed where a
 # type{_(:dog):int} is expected (contravariance, no wrapper)?
-# OpenVerse refuses it: a value of one function type does not convert to
-# another by variance (only a named function does, #214). If Epic admits it,
-# OpenVerse refuses a valid program. OpenVerse refuses it: expected
-# type{_(:dog):int}, found type{_(:animal):int}
+# OpenVerse refuses it: expected type{_(:dog):int}, found
+# type{_(:animal):int}
+# Epic (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, 2026-11-19):
+# admitted it
 animal := class {}
 dog := class(animal) {}
 
