@@ -467,11 +467,12 @@ class EndToEnd(Tmp):
         driver batch on OpenVerse, demultiplex to the same results; with
         them a probe that ends in a runtime error (ToString of 2^63, #724:
         int-overflow no longer does), which the batch puts last."""
-        probes = [str(p) for p in sorted(VM.glob("*.verse")) if "subscribe" not in p.name]
+        probes = [str(p) for p in sorted(VM.glob("*.verse"))]
         probes.append(str(VM / "book" / "book-int-interpolate-pow63.verse"))
         ovj = self.tmp / "ov.json"
         # (those OpenVerse refuses, as the event Signal probes it refuses
-        # as Epic does, #515, would refuse the whole batch)
+        # as Epic does, #515, signal-subscribe among them, #724, would
+        # refuse the whole batch)
         quiet(ov.main, ["openverse", "--modes", "default", "--json", str(ovj)] + probes)
         refused = {r["path"] for r in json.loads(ovj.read_text())["records"]
                    if r["runtime"] == "lean" and r["outcome"] == "refused"}

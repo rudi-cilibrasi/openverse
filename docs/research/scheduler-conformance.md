@@ -385,9 +385,11 @@ says what landed.
     allowed, and undone with its context.
 12. **Subscribers after awaiters.** Line 4346: "Subscribers, on
     implementations that have them, are invoked only after every waiting
-    task has been resumed" (openverse's `subscribable_event` already calls
-    them after `signalAll`; the API's random order of subscribers is not
-    followed).
+    task has been resumed" (openverse's events, which have `Subscribe` as
+    Epic's do since #724, call them after `signalAll`, as the Verse VM
+    does, UEFN 43.12; the API's random order of subscribers is not
+    followed, though the Verse VM's order varies between `Signal`s,
+    `tests/conformance/versevm/followup-event/subscribe-order`).
 
 What else resumes code inside the code that causes it:
 

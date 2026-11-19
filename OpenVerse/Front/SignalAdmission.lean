@@ -241,8 +241,9 @@ partial def markHeads : STop → STop
 /-- (#515) A definition with Epic's default effect marked
     on the function types it writes only: the concurrency prelude's, whose
     functions keep their effects but whose callbacks are of Epic's types,
-    `subscribable_event`'s `type{_(:t):void}` (so a function without
-    specifiers subscribes, as in UEFN). -/
+    an event's `Subscribe`'s `type{_(:t):void}` (so a function without
+    specifiers subscribes, as in UEFN 43.12: followup/subscribe-in-transacts,
+    #724). -/
 def markTypes (t : STop) : STop :=
   markHeads <| t.mapAll (STy.mapTy markTy) fun
     | .typeAlias p tps body => .typeAlias p tps (body.mapTy markTy)

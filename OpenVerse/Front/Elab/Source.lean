@@ -93,6 +93,11 @@ def concurrencyHelpers (resolved : List STop) (requests : Requests) :
   if usesSub then
     if let some p := defines0 "cancelable" then
       throw s!"{p.show}: cancelable is the type subscribable_event's Subscribe gives: a program that uses subscribable_event cannot define its own (#210)"
+  -- (#724) a program that may call an event's `Subscribe` (it names a
+  -- member `Subscribe`, and uses the prelude's events): Epic's `event(t)`
+  -- has it (UEFN 43.12), so its events keep subscriptions
+  let subscribes := usesSub ||
+    (uses.contains PreludeNeeds.subscribeMark && (needs "event" || needs "sticky_event"))
   let usesConc := usesSub || uses.contains "$suspends" || PreludeNeeds.names.any needs
   -- (the program's own definitions of the prelude's names kept apart from
   -- the prelude's: its sticky_event extends its own event when the program
@@ -105,10 +110,12 @@ def concurrencyHelpers (resolved : List STop) (requests : Requests) :
   let usesEvents := usesConc && (usesSub || needs "event" || needs "sticky_event" || awaits)
   -- (scopes, #724: a program with a `branch` or a `rush`, whose tasks are
   -- stopped when the task that started them ends)
-  let conc ← if usesConc then concTops privateNames usesEvents awaits (needs "signalable") (uses.contains "$scopes")
+  let scopes := uses.contains "$scopes"
+  let conc ← if usesConc then
+      concTops privateNames usesEvents awaits (needs "signalable") (subscribes := subscribes) (scopes := scopes)
     else pure []
   let helpers := conc ++
-    (← if usesSub then subTops privateNames else pure []) ++ (← if usesSubVoid then subVoidTops privateNames else pure [])
+    (← if subscribes then subTops privateNames else pure []) ++ (← if usesSubVoid then subVoidTops privateNames else pure [])
   return (concurrencyNames, usesConc, usesEvents, awaits, helpers)
 
 /-- Source admission, the first phase of `elabProgramCore`: the program as
