@@ -325,12 +325,20 @@ contexts. A function value of a type without a heap specifier has it too,
 and a function that has it is no value of a type that has not (3509, Book
 of Verse tests `FunctionTypes.versetest:191`); a `<transacts>` function is a
 value of either. An event's `Signal` and `Await` have it; `Print` and
-`Subscribe` do not. A spawned call is not judged where it is spawned. Write
+`Subscribe` do not. A `spawn{…}` has it too (#724): UEFN 43.12 refuses a
+spawn in a `<transacts>` function and in a `<transacts><decides>` one, 3512,
+"This 'spawn' macro has the 'no_rollback' effect, which is not allowed by its
+context", and admits one in a function without specifiers
+(`followup-book2/spawn-in-transacts-*`), so a spawn is refused wherever such
+a call is. The spawned call itself is not judged apart: where a spawn is
+admitted, so is a call that has `no_rollback`. Write
 `<transacts>` on a function its callers need to call from such a place.
 `--default-rollback` (on `run`, `emit`, `check` and `core`;
 `Options.defaultNoRollback := false`) keeps openverse's old rule, under
 which a function without a heap specifier is rolled back as a
-`<transacts>` one is; `--default-no-rollback` names the default and changes
+`<transacts>` one is, and a spawn has `<transacts>`'s heap effects only (as
+the Book's Verse VM tests have it, `Effects.versetest` 572, 580);
+`--default-no-rollback` names the default and changes
 nothing.
 
 Source `native`/`native_callable` tags cannot create trusted external bindings.
@@ -4037,21 +4045,29 @@ Main()<suspends>:void =
   with the rest. A task awaiting itself, or two awaiting each other, wait
   for ever. A task is not tied to the
   code that spawned it: it runs until it ends or the program does. A
-  `spawn` has `<transacts>`'s heap effects (`<reads>`, `<writes>` and
-  `<allocates>`), besides those of the call it starts (the Book's tests:
-  "spawn requires the transacts effect in addition to the effects of the
-  spawned async function", `Effects.versetest:554`; the prose has spawn
-  work "anywhere you can write code", ch. 14): it is allowed in any
-  function whose effects allow those, immediate ones too, not in a
-  `<computes>`, `<reads>` or `<allocates>` one; with `--extended-defaults`,
-  also in a field's default of a class whose effects allow them (a task per
-  construction that omits the field). A `spawn` may be in a failure
-  context, as the Book's tests have it (assertions spawn;
-  `LiveVariables.versetest:450-545` spawn in `if: …; false?`): its start,
-  the task's first run included, is the context's code, so a context that
-  fails undoes it, and the task never runs again; in a suspends function a
-  `spawn` in a condition or a filter starts the task there (it is not a
-  suspension point). A `spawn` in a `defer:` is refused (#156).
+  `spawn` has the `no_rollback` effect (#724), as UEFN 43.12 has it (3512,
+  "This 'spawn' macro has the 'no_rollback' effect, which is not allowed by
+  its context", `followup-book2/spawn-in-transacts-*`): it is allowed where
+  a call of a function without a heap specifier is, in a function without
+  one, immediate ones too, outside its failure contexts, and at the top of a
+  plain `<decides>` function's body; not in a `<transacts>`, `<computes>` or
+  other heap-specified function, a class's `block:`, a field's default, an
+  `if`'s condition or a `for`'s clauses ([the default effect](#effect-contracts)).
+  With `--default-rollback`, openverse's old rule: a `spawn` has
+  `<transacts>`'s heap effects (`<reads>`, `<writes>` and `<allocates>`),
+  besides those of the call it starts (the Book's tests: "spawn requires
+  the transacts effect in addition to the effects of the spawned async
+  function", `Effects.versetest:554`), so it is allowed in any function
+  whose effects allow those, not in a `<computes>`, `<reads>` or
+  `<allocates>` one; with `--extended-defaults` too, also in a field's
+  default of a class whose effects allow them (a task per construction
+  that omits the field); and it may be in a failure context, as the Book's
+  tests have it (`LiveVariables.versetest:450-545` spawn in `if: …;
+  false?`): its start, the task's first run included, is the context's
+  code, so a context that fails undoes it, and the task never runs again;
+  in a suspends function a `spawn` in a condition or a filter starts the
+  task there (it is not a suspension point). A `spawn` in a `defer:` is
+  refused (#156).
   Without a suspends `Main`, a task runs up to its first wait, and on only
   inside a `Signal` that resumes it (below).
   `T.Cancel()` (in a suspends function) cancels a task that has not ended:

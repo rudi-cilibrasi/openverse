@@ -342,11 +342,13 @@ partial def elabConc (ctx : Ctx) (p : Pos) (isSync : Bool) (arms : List SExpr) (
     the task, a `task(t)`. The lowering (`Suspend.lean`) turns the marker
     `$spawnMark(array{F(…), T})` into a new task root. -/
 partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
+  -- (#724: the spawn itself has the no_rollback effect, UEFN 43.12: 3512)
+  checkSpawnNoRollback ctx p
   -- (#515: the task runs the call later, outside a failure context the
   -- `spawn` is in; its arguments, evaluated now, are recorded here)
-  -- (nor does the no_rollback of the spawned function count against the
-  -- context: Epic's Verse VM spawns in <transacts> code, the Book's
-  -- VerseVM tests; its arguments are not judged either)
+  -- (the no_rollback of the spawned function is not judged apart: where a
+  -- spawn is admitted, so is a call that has it; UEFN 43.12 reports both
+  -- where neither is, followup-book2/spawn-in-transacts-decides)
   let r ← elabSpawnIn { ctx with inRollback := false, rollbackOnly := false, bodyFailure := true } p body
   noteFailCalls ctx p "spawn's arguments" r.e
   -- (a spawn has <transacts>'s heap effects, besides its call's: "spawn

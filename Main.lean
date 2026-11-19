@@ -54,8 +54,9 @@ def usage : String :=
   "       or a <transacts> function cannot call it (#515). --signal-rollback keeps the legacy\n" ++
   "       transactional mode, which rolls it back; --signal-no-rollback, the default, is accepted.\n" ++
   "       A function without a heap specifier has the no_rollback effect, Epic's default: a failure\n" ++
-  "       context or a <transacts> function cannot call it (#515). --default-rollback keeps the old\n" ++
-  "       rule, which rolls it back; --default-no-rollback, the default, is accepted.\n" ++
+  "       context or a <transacts> function cannot call it (#515), nor spawn, which has it too (#724).\n" ++
+  "       --default-rollback keeps the old rule, which rolls both back; --default-no-rollback, the\n" ++
+  "       default, is accepted.\n" ++
   "       --extended-defaults retains extended field defaults without a convergence assertion (#511),\n" ++
   "       and module constants and field defaults that call functions which might not complete (#724).\n" ++
   "       openverse example NAME [--emit FILE.vbc] | openverse examples"
@@ -69,7 +70,8 @@ def usage : String :=
 structure Policies where
   signalNoRollback : Bool := true
   /-- (#515) Epic's default effect, `no_rollback`, on a function without a
-      heap specifier; `--default-rollback` keeps the old rule. -/
+      heap specifier, and (#724) on `spawn`; `--default-rollback` keeps the
+      old rule. -/
   defaultNoRollback : Bool := true
   extendedDefaults : Bool := false
 

@@ -65,8 +65,13 @@ for ((s=first; s<first+n; s++)); do
   # no_rollback, which its call in a condition cannot have: the old rule
   # too, --default-rollback)
   case $g in gadt_event_body) compat+=(--signal-rollback --default-rollback) ;; esac
-  # (#515: Epic's default effect, written out: <transacts> where a function without one is called from a failure context or <transacts> code)
-  python3 -I "$root/scripts/models/default_effect.py" "$tmp/p.verse"
+  # (#515: Epic's default effect, written out: <transacts> where a function without one is called from a failure context or <transacts> code;
+  # not for the models whose functions spawn, written for the default effect already: a spawn has no_rollback,
+  # which no <transacts> function may have, #724)
+  case $g in
+    gadt_spawn_callers|gadt_spawn_body|gadt_spawn_defaults) ;;
+    *) python3 -I "$root/scripts/models/default_effect.py" "$tmp/p.verse" ;;
+  esac
   timeout 120 "$ov" run "$tmp/p.verse" "${compat[@]}" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.err"
   want=$(head -1 "$tmp/p.exp" | sed 's/exit=//')
   if [[ $want == 4 ]]; then

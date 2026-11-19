@@ -2880,6 +2880,27 @@ Against the baseline of main `b640fa6d` (Epic's default effect the
 default): 8 cases better, 4 worse, none changed otherwise: 8,815 agree,
 606 refuse, 38 accept, 89 differ. The baseline records it.
 
+## After Epic's verdicts on the accepted refusals
+
+UEFN 43.12 (`++Fortnite+Release-43.12-CL-60598086`) compiled the probes of
+[`followup-book2/`](../../tests/conformance/versevm/followup-book2) on
+2026-11-19 and refused every probe of an accepted refusal, admitting every
+control, which then printed on the Verse VM what openverse prints
+([the results](versevm-live-conformance.md#the-books-accepted-refusals)).
+openverse takes Epic's compiler's refusals, one commit each (#724):
+
+- **`spawn` has the `no_rollback` effect** (3512, "This 'spawn' macro has
+  the 'no_rollback' effect, which is not allowed by its context"): refused
+  where a call of a function without a heap specifier is, a `<transacts>`
+  or other heap-specified function, a class's `block:`, a failure context;
+  admitted in a function without one and at the top of a plain
+  `<decides>` body. `--default-rollback` keeps the old rule, as it does for
+  an event's `Await`. `Effects.versetest` 557, 565 and
+  `SoftwareTransactionalMemory.versetest:505` (`bp_vm_only`) move from
+  accepted to agree; their Verse VM twins, `Effects.versetest` 572 and 580,
+  from agree to refused: the Book's Verse VM admits what Epic's shipped
+  compiler refuses.
+
 ## Not covered, and why it matters
 
 - 1,264 cases need the runner's virtual packages and modules (`vpackage`,

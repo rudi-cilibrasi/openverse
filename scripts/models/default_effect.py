@@ -9,7 +9,8 @@ failure context or `<transacts>` function may call it
 
 Left as they are: `Main`; `<suspends>` functions and function types, which
 no failure context calls; and functions whose code awaits or signals an
-event, which Epic's compiler refuses in a `<transacts>` function.
+event, or spawns, which Epic's compiler refuses in a `<transacts>` function
+(a spawn has `no_rollback`, #724).
 
   default_effect.py FILE...       annotate each file in place
   default_effect.py < IN > OUT    annotate standard input
@@ -123,7 +124,7 @@ def annotate(src):
         effs = rest.group(1)
         if any(h in effs for h in HEAP) or '<suspends>' in effs:
             continue
-        if re.search(r'\.(Await|Signal)\(', body_of(code, m.start(3), close + 1)):
+        if re.search(r'\.(Await|Signal)\(|\bspawn\b', body_of(code, m.start(3), close + 1)):
             continue
         inserts.add(close + 1)
     out, pos = [], 0

@@ -1424,6 +1424,28 @@ def checkNoRollbackCall (ctx : Ctx) (p : Pos) (s : Sig) (shown : String) : EM Un
     let context := if (ctx.canFail || ctx.inRollback) && !ctx.bodyFailure then "a failure context" else "a body whose effects exclude it"
     throw s!"{p.show}: this invocation calls a function ({shown}) that has the 'no_rollback' effect, which {context} does not allow: a function without a heap specifier (<transacts>, <computes>, <reads>, …) has it (Epic's Verse compiler, UEFN 43.12: error 3512; --default-rollback keeps the old rule)"
 
+/-- (#724, `--default-no-rollback`) `spawn{…}` at `p` has the `no_rollback`
+    effect, as a call of a function without a heap specifier does
+    (`checkNoRollbackCall`): refused in a failure context (or inside one)
+    and in a body whose effects exclude it, a `<transacts>`, `<computes>`
+    or other heap-specified function's or a class's `block:`, and admitted
+    at the top of a plain `<decides>` function's body. UEFN 43.12
+    (++Fortnite+Release-43.12-CL-60598086) refuses a spawn in a
+    `<transacts>` function and in a `<transacts><decides>` one with error
+    3512, "This 'spawn' macro has the 'no_rollback' effect, which is not
+    allowed by its context", and admits one in a function without
+    specifiers (tests/conformance/versevm/followup-book2,
+    spawn-in-transacts-*; the Book's Blueprint VM tests, Effects.versetest
+    557, 565 and SoftwareTransactionalMemory.versetest:505, against their
+    Verse VM twins). `--default-rollback` keeps the old rule, under which a
+    spawn has `<transacts>`'s heap effects only, as it keeps an event's
+    `Await` (`awaitSig`). -/
+def checkSpawnNoRollback (ctx : Ctx) (p : Pos) : EM Unit := do
+  if ctx.types.defaultNoRollback && !ctx.typeOnly && ((ctx.canFail || ctx.inRollback) && !ctx.bodyFailure || ctx.rollbackOnly) &&
+      !(ctx.frameName.splitOn "$call").tail.any (fun _ => true) then
+    let context := if (ctx.canFail || ctx.inRollback) && !ctx.bodyFailure then "a failure context" else "a body whose effects exclude it"
+    throw s!"{p.show}: this spawn has the 'no_rollback' effect, which {context} does not allow, as a call of a function without a heap specifier would not be (Epic's Verse compiler, UEFN 43.12: error 3512, \"This 'spawn' macro has the 'no_rollback' effect, which is not allowed by its context\"; --default-rollback keeps the old rule)"
+
 /-- `ctx` with the `defer:` body `d` pending for every `return` and `break`
     that leaves its scope (#80), with the locals in scope here. -/
 def Ctx.withDefer (ctx : Ctx) (d : SExpr) : Ctx :=
