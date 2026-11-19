@@ -54,9 +54,32 @@ def emitPrim (op : Prim) (args : List Nat) : EncM Nat :=
   let (c, k) := primCode op
   emit (u8 4 ++ u8 c ++ u32 k ++ u32 args.length ++ args.foldl (fun b a => b ++ u32 a) .empty)
 
+/-- The base-2^32 digits of `n`, the most significant first. -/
+def digits32 (n : Nat) : List Nat :=
+  if n < 4294967296 then [n] else digits32 (n / 4294967296) ++ [n % 4294967296]
+termination_by n
+decreasing_by omega
+
+/-- An int literal: a LIT INT when it fits in 64 bits. Ints go past 64 bits
+    (#724) and an int literal of the source fits, but a Core program may hold
+    any int: one that does not fit is the arithmetic that computes it from
+    its base-2^32 digits, `(d₀ · 2^32 + d₁) · 2^32 + …`, negated when it is
+    negative, so the format needs no other literal kind. -/
+def encInt (i : Int) : EncM Nat :=
+  if Int64.inRange i then emit (u8 0 ++ u8 0 ++ i64 i) else do
+    let lit (n : Nat) : EncM Nat := emit (u8 0 ++ u8 0 ++ i64 n)
+    let ds := digits32 i.natAbs
+    let mut acc ← lit (ds.headD 0)
+    for d in ds.drop 1 do
+      let base ← lit 4294967296
+      let hi ← emitPrim .mul [acc, base]
+      let lo ← lit d
+      acc ← emitPrim .add [hi, lo]
+    if i < 0 then emitPrim .neg [acc] else pure acc
+
 mutual
 def encLit : Value → EncM Nat
-  | .int i => emit (u8 0 ++ u8 0 ++ i64 i)
+  | .int i => encInt i
   | .logic b => emit (u8 0 ++ u8 1 ++ u8 (if b then 1 else 0))
   | .char c => emit (u8 0 ++ u8 2 ++ u8 c)
   -- a float (#127): the float of its bits, as an int literal (the loader's

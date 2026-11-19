@@ -18,11 +18,13 @@ CORE     := $(ROOT)/tests/core
 FUZZ_N   ?= 5000
 FUZZ_SEED ?= 1
 
-LIBSRC   := src/arith.c src/store.c src/load.c src/value.c src/objects.c src/prims.c src/floats.c src/interp.c
+LIBSRC   := src/arith.c src/store.c src/load.c src/value.c src/bigint.c src/objects.c src/prims.c src/floats.c src/interp.c
 OBJ      := $(LIBSRC:src/%.c=$(B)/obj/%.o)
 OBJ_SAN  := $(LIBSRC:src/%.c=$(B)/obj-san/%.o)
 TESTS    := test_arith test_store test_load test_interp
-TESTBIN  := $(TESTS:%=$(B)/%) $(B)/fuzz_smoke
+# test_bigint reads vectors that Python computes (scripts/gen-bigint-vectors.py)
+VECTORS  := $(B)/bigint_vectors.txt
+TESTBIN  := $(TESTS:%=$(B)/%) $(B)/test_bigint $(B)/fuzz_smoke
 
 .PHONY: all asan test unit core fuzz clean
 .SECONDARY:
@@ -56,8 +58,12 @@ $(B)/obj $(B)/obj-san:
 
 test: unit core fuzz
 
-unit: $(TESTS:%=$(B)/%)
+unit: $(TESTS:%=$(B)/%) $(B)/test_bigint $(VECTORS)
 	@for t in $(TESTS); do echo "== $$t"; $(B)/$$t $(CORE) || exit 1; done
+	@echo "== test_bigint"; $(B)/test_bigint $(VECTORS)
+
+$(VECTORS): $(ROOT)/scripts/gen-bigint-vectors.py | $(B)/obj
+	python3 -I $< 1 > $@.tmp && mv $@.tmp $@
 
 core: $(B)/cverse $(B)/cverse-asan
 	@sh tests/run_core.sh $(B)/cverse $(LEAN) $(CORE) $(B)/core

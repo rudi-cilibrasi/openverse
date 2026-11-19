@@ -1,5 +1,5 @@
 # set A.Data?[0] += A.RHS(): RHS empties the array first, so the old value's read fails, and the
-# clause with it, before an addition that would overflow
+# clause with it, before an addition past 64 bits
 ca:=class:
     var Data:?[]int=option{array{1}}
     RHS()<transacts>:int=block{Print("rhs");set Data=option{array{}};9223372036854775807}

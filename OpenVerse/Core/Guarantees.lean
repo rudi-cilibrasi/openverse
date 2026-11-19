@@ -16,7 +16,9 @@
   * it never raises a control error: `break` stays inside its loop
     (`Runs.no_control`).
 
-  The only runtime errors left are integer overflow and `Err()`.
+  The only runtime errors left are the overflow error (an int longer than
+  2^20 bits, or one outside 64 bits given to `ToString`, a float too large
+  for an int) and `Err()`.
 -/
 import OpenVerse.Core.Check
 import OpenVerse.Core.TypeCheck
