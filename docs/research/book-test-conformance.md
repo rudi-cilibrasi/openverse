@@ -2880,6 +2880,71 @@ Against the baseline of main `b640fa6d` (Epic's default effect the
 default): 8 cases better, 4 worse, none changed otherwise: 8,815 agree,
 606 refuse, 38 accept, 89 differ. The baseline records it.
 
+## After function coercions
+
+UEFN 43.12 refuses, with error 3502 ("not yet implemented"), the
+conversions of function values its compiler would need a wrapper for and
+makes none for: a branch of an `if` of another function type, a generic
+function with a type parameter inside a function type of its own as a
+value, the call of a generic function whose result has one, and an
+override through a parametric interface's declaration
+([versevm-live-conformance.md](versevm-live-conformance.md#function-value-coercions-3502)).
+openverse refuses them too since #724 ([the
+rule](../LANGUAGE.md#function-values-epics-compiler-does-not-convert-724);
+`--function-coercions` keeps its conversions). Against the baseline of
+`af036ef5` (8,829 agree, 645 refuse, 38 accept, 36 differ, 3,956 not
+translatable): 10 cases better, 11 worse, none changed otherwise: **8,828
+agree, 656 refuse, 28 accept, 36 differ, 3,956 not translatable**. The
+baseline records it.
+
+- Better, accepted to agree (the `bp_vm_only` cases of the epic-limits
+  cause): `DefaultNamed.versetest` 629, 640, 741, 751; `Tuple.versetest:456`;
+  `Function.versetest` 238, 271; `ParametricFunctions.versetest:276`;
+  `FORT-592189-MaybeCoerceToTypeCrash.versetest:4`;
+  `SOL-5477-CrashInGenClassDefinition.versetest:5`.
+- Worse, agree to refused (cause function-coercions): their `verse_vm_only`
+  twins, the same programs, which UEFN 43.12 refuses:
+  `DefaultNamed.versetest` 653, 664, 678, 682, 764, 768;
+  `Function.versetest` 249, 281; `ParametricFunctions.versetest:288`;
+  `FORT-592189…:44`; `SOL-5477…:21` (`Tuple.versetest:473`, the twin of 456,
+  is not translatable).
+- Still agreeing, by the rule's exemptions: the joins that need no wrapper
+  (`FunctionTypes.versetest` 200, 201, classes; `DefaultNamed.versetest`
+  623, 731, 735, a default kept; the `verse_vm_only` `Rational.versetest`
+  131, 132, 139, 140, `int` and `rational`, not yet asked of Epic), and
+  `Identity` passed as a value (`ParametricFunctions.versetest` 182).
+- Refused by the rule first, the verdict unchanged:
+  `ParametricFunctions.versetest` 263 and 269 (expected 3509, still
+  agreeing: `MakeIdentity(0)` returns `type{_(:t)<computes>:t}` at `int`,
+  and openverse reports that call before the argument `"0"`'s type), and
+  `:546` (refused before for another cause: openverse infers `F(1)`'s `t` as
+  `int`, where the Book's flow types widen it to `comparable`, which needs
+  no wrapper). The cause function-coercions counts 12: the 11 twins and
+  `:546`.
+
+UEFN 43.12's answers to the boundary probes (`followup-coerce`, 31 of 37 as
+openverse had them) widened the rule to every function value that is no
+function named where its type is expected (a local, a parameter, a field, a
+call's result, an option's content), and to a parametric class's method
+returning a function of its type parameter. Against the baseline above it
+moves no case: 0 better, 0 worse, the same counts. A function named as an
+argument of a generic call is named at the parameter's type once the call
+gives it, as Epic's compiler does (`ParametricFunctions.versetest` 189 and
+208, `Apply(Incr, 1)`, still agree).
+
+Its answers to the second set (`followup-coerce2`, 14 of 17 as openverse
+had them) removed the rule's `int`/`rational` exemption and let a function
+named convert to a `void` result or from a `void` parameter. Against the
+baseline above: 6 better, `Void.versetest` 92 and 104 (a function named at
+`int->void`, `VoidInput` at `int->int`) and 161, 165, 169, 173 (joins of
+`true` and `void` functions, now named at the `if`'s type); 4 worse,
+`Rational.versetest` 131, 132, 139 and 140, `verse_vm_only` joins of an
+`int` and a `rational` result, the form UEFN 43.12 refuses
+(`join-int-rational`). `Void.versetest` 140-152, refused before, are now
+refused by the rule (cause function-coercions, 20 cases). **8,830 agree,
+654 refuse, 28 accept, 36 differ, 3,956 not translatable**; the baseline
+records it.
+
 ## Not covered, and why it matters
 
 - 1,264 cases need the runner's virtual packages and modules (`vpackage`,

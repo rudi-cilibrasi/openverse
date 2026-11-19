@@ -128,6 +128,7 @@ OPENVERSE_DEBUG=1 .lake/build/bin/openverse check F.verse   # an internal error 
 .lake/build/bin/openverse check F.verse --no-choice         # enforce the choice-free source profile
 .lake/build/bin/openverse check F.verse --signal-rollback     # legacy: roll an event Signal back with its context
 .lake/build/bin/openverse check F.verse --default-rollback    # legacy: a function without a heap specifier is rolled back
+.lake/build/bin/openverse check F.verse --function-coercions  # keep function-value conversions Epic refuses (3502)
 ```
 
 `--no-choice` is an opt-in source profile for `check`, `core`, `emit`, and
@@ -150,6 +151,17 @@ has `no_rollback` too, Epic's default effect: a failure context or a
 `<transacts>` function cannot call it ([effect
 contracts](docs/LANGUAGE.md#effect-contracts)); `--default-rollback` keeps
 the old rule.
+
+A function value of one function type is used as one of another only where
+Epic's Verse compiler makes the wrapper that needs (UEFN 43.12, error 3502,
+#724): a function or method named where a function type is expected, not a
+local, a parameter, a field, a call's result, an option's content or a
+branch of an `if` of another function type, a generic function with a type
+parameter inside a function type of its own as a value, the call of a
+generic function or parametric class's method returning a function of its
+type parameter, nor an override of such a parametric method ([the
+rule](docs/LANGUAGE.md#function-values-epics-compiler-does-not-convert-724));
+`--function-coercions` keeps openverse's conversions.
 
 ```verse
 Half(N:int)<decides>:int =

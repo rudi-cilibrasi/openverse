@@ -349,6 +349,8 @@ def subAt (anc : String → List String) (a0 b0 : STy) : Bool :=
   let b := normS b0
   reprStr a == reprStr b || match a, b with
     | .name "int", .name "rational" => true
+    -- (any value to `void`, which accepts it, #724: `TyEnv.convertsAt`)
+    | _, .name "void" => true
     | .name x, .name y => (anc x).contains y
     -- (a map is a weak map of its key and value types: `TyEnv.convertsAt`)
     | .map k v, .app "weak_map" [k', v'] => reprStr k == reprStr k' && reprStr v == reprStr v'

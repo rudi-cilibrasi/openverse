@@ -126,18 +126,23 @@ Main():void=
     R:=F(7)
     Print("{R(0)} {Floor(R(1))}")''',
     }
+    # (#724: these bind functions through generic functions that return
+    # them, `Bind(…):type{_(:t):t}`, whose calls Epic's compiler refuses,
+    # error 3502: openverse's conversions, --function-coercions)
+    coerced = {'open-function-value', 'method-instance', 'method-tuple', 'method-variance'}
     for name, text in positive.items():
         path = source(f'{name}.verse', text)
         full, strict = tmp / 'full.vbc', tmp / 'strict.vbc'
-        a = run('run', path, '--emit', full)
-        b = run('run', path, '--no-choice', '--emit', strict)
+        flags = ['--function-coercions'] if name in coerced else []
+        a = run('run', path, '--emit', full, *flags)
+        b = run('run', path, '--no-choice', '--emit', strict, *flags)
         require(a.returncode == 0, (name, 'normal mode', a.stderr))
         require((b.stdout, b.stderr, b.returncode) == (a.stdout, a.stderr, a.returncode), (name, b))
         require(full.read_bytes() == strict.read_bytes(), (name, 'profile changed bytecode'))
         c = subprocess.run([str(cv), str(strict)], capture_output=True, text=True, timeout=30)
         require((c.stdout, c.stderr, c.returncode) == (a.stdout, a.stderr, a.returncode), (name, c))
         for command in ('check', 'core'):
-            a, b = run(command, path), run(command, path, '--no-choice')
+            a, b = run(command, path, *flags), run(command, path, '--no-choice', *flags)
             require(a.returncode == 0 and (a.stdout, a.stderr, a.returncode) ==
                     (b.stdout, b.stderr, b.returncode), (name, command, b))
 

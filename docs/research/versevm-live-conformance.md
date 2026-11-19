@@ -565,6 +565,144 @@ function is refused with 9000, "Linker task graph contains a cycle"
 (`_Root`, `thing`, `_Root`): a limit of Epic's linker, not a rule about
 data members, and openverse keeps admitting it.
 
+### The Book's accepted refusals
+
+The survey's baseline (`0471c1d4`) has 74 cases where openverse runs a
+program the Book's tests refuse (38) or gets another result (36). The 36
+are `bp_vm_only` ints, the Blueprint VM's 64-bit overflow: settled, the
+Verse VM's exact ints, by the int probes above (`int-overflow`,
+`book-int-*`, `followup-int/`; the shifts of `Math/Bitwise.versetest`
+194-200 by `book-int-shift-63`, UEFN 43.12 having no `BitShiftLeft`). None
+of the 38 had been asked of Epic.
+[`followup-book2/`](../../tests/conformance/versevm/followup-book2) asks
+whether Epic's shipped compiler refuses each of them, one construct per
+probe, with controls; each header gives the Book's case and openverse's
+output, Lean and C agreeing, and its `expectations.tsv` the same. Not yet
+compiled by Epic.
+
+| Probes | Book cases | Asks whether UEFN 43.12 refuses |
+| --- | --- | --- |
+| `case-collision-*` (4 and a control) | `FORT-793952…` (16, `bp_vm_only`, 9200, 9002, 9000) | names of one scope that differ only in case: module functions, methods, `<suspends>` methods, the same parameters |
+| `long-ident-*` (4 and a control) | `FORT-555217…` 25, 31, 37 (`bp_vm_only`, 9002, 3655); 11 (3655, both VMs, agreeing only for another reason) | a class name of 1024 characters, a mangled method name too long, a name of 1025, one of 4096 |
+| `join-named-*`, `join-generic-effects-*`, `generic-higher-order`, `parametric-method-value`, `interface-fn-param-generic` (8 and 7 controls) | `DefaultNamed` 629, 640, 741, 751; `Tuple:456`; `Function` 238, 271; `ParametricFunctions:276`; `FORT-592189:4`; `SOL-5477:5` (all `bp_vm_only`, IR error 3502; their Verse VM twins valid) | the Blueprint VM's code generation limits on function values: joins of functions with named or defaulted parameters, joins of generic functions with other effects, generic functions passed as values, a parametric class's method as a value, a function parameter in a parametric interface |
+| `overload-tuple-named-call` and its control | `FORT-744399:62` (3509, both VMs) | two arguments packed into a tuple parameter beside a named one |
+| `parametric-var-where-*`, `parametric-interface-var`, `interface-var-field` (3 and 3 controls) | `ParametricFunctions` 431, 438 (3552), 496 (3502), both VMs | a parametric class's `var` field used in a generic function; a parametric interface with a `var` field |
+| `enum-wide` and its control | `Enum:171` (`bp_vm_only`, 3552) | an enum of 257 values |
+| `final-method-interface`, `-nonfinal`, `-control` | `Attributes/final.versetest:125` (3591, both VMs) | a class's `<final>` method (and, not a Book case, one that is not `<final>`) taken for an interface's method of its name |
+| `spawn-in-transacts-*` (4 and a control) | `Effects` 557, 565, `SoftwareTransactionalMemory:505` (`bp_vm_only`, 3512) | `spawn` in a `<transacts>` and a `<transacts><decides>` function, and whether a failed condition undoes the spawn (openverse undoes it) |
+| `live-when-sentinel`, `live-upon-sentinel`, `live-await-block-sentinel` | `when:7`, `upon:7`, `await:6` (`verse_vm_only`, valid) | whether 43.12 knows `when`, `upon` and `await{…}` (it refuses `live`, `book-live-set`); openverse refuses all three |
+
+Build the `long-ident-*` probes alone, in single mode: Epic's names for
+them may depend on the module that holds them.
+
+Of the 323 refusals of `verse_vm_only` cases, all but one are of forms
+UEFN 43.12 refuses too, or that the sentinels above ask: `union` (138: the
+cause's 136 and 2 counted under others; `book-union-equality`), live
+variables (90: `live-variables` 57, `set-forms` 28, 3 of `metatypes`, 2
+`when` cases of `syntax-other`; `book-live-set` and the sentinels),
+module constants beyond 64 bits (39, `book-int-pow64-module-const`),
+nested functions (26, `book-nested-function`), `<closed>` functions as
+types (6, `book-closed-function-type`), and the `spawn`, function-join,
+sibling-key, default-cycle, field-tuple, `branch`-in-a-loop and
+type-parameter forms of the `book/` probes (23). Left unasked: a generic
+function joined with another (`Castable.versetest:601`).
+
+### Function-value coercions (3502)
+
+UEFN 43.12 compiled the eight function-value probes of
+[`followup-book2`](../../tests/conformance/versevm/followup-book2) and their
+seven controls one at a time (2026-11-19; L is the diagnostic's 1-based
+body line). It refused every probe with error 3502 and admitted every
+control:
+
+| Probe | UEFN 43.12 | Control, admitted |
+| --- | --- | --- |
+| `join-named-default-fn` | L14, both branches: "Using a value of type (?A:int = ...)->int as a value of type tuple()->int is not yet implemented" (and ?B's) | `F:type{_():int} = F2` |
+| `join-named-default-param` | L16, both branches: "((?A:int)->int)->int as … (tuple(?A:int = ...,?B:int = ...)->int)->int" | `F1(F9)` |
+| `join-named-tuple` | L14, the branch with the default only: "tuple([]char,?Y:int = ...)->[]char as … []char->[]char" | the function at the type alone |
+| `join-generic-effects-decides` | L15, `Identity`'s branch only: "type{_(:int)<computes>:int} as … type{_(:int)<computes><decides>:int}" | `F:… = Identity` |
+| `join-generic-effects-transacts` | L15, both: "type{_(:int)<computes><decides>:int} as … type{_(:int)<transacts><decides>:int}", and `<transacts>` as `<transacts><decides>` | `F:… = TransactsIdentity` |
+| `generic-higher-order` | L18-21, each of the eight arguments: "type{_(:type{_(:t)<transacts>:t},:t where t)<transacts>:t} as … type{_(:type{_(:int)<transacts>:int},:int)<transacts>:int}" | `One(Succ, 0)` |
+| `parametric-method-value` | L27, the call's arguments: "type{_(:tuple(p_type,c_type)->void,:c_type where p_type,c_type):p_type->void} as … tuple(tuple(first_arg,second_arg)->void,second_arg)->(first_arg->void)" | (none) |
+| `interface-fn-param-generic` | L17, the override: "type{_(:int->void)<transacts>:void} as … type{_(:any->void)<transacts>:void}" | `F(X:t)` overridden |
+
+So Epic's compiler converts a function named where a function type is
+expected, whatever the conversion (the controls), and no other function
+value that the conversion changes: a branch of an `if`, even a branch that
+names a function; a generic function whose type parameter is inside a
+function type of its own; the function a generic function's call returns;
+an override called through a parametric interface's declaration, its type
+parameter as `any`. The branches that need no conversion are not reported
+(`ArrayToString`, `DecidesIdentity` at its own type), and the Book's tests
+show conversions that change nothing admitted in a join (classes,
+`FunctionTypes.versetest` 198-203; a default kept, `DefaultNamed.versetest`
+623).
+
+[`followup-coerce`](../../tests/conformance/versevm/followup-coerce) asked
+where the edges are, 37 compile-only probes, one construct each. UEFN 43.12
+compiled them one at a time on 2026-11-19 (~15:40Z); its outcome and
+diagnostics are in the probes' headers and `expectations.tsv`. 31 agreed
+with openverse's first rule (branches of an `if`, generic values, generic
+results, overrides); six did not, and the rule is now wider:
+
+| Probe | UEFN 43.12 | openverse before, now |
+| --- | --- | --- |
+| `value-computes-as-transacts` | 3502, a parameter of `<computes>` type passed as `<transacts>` (its control, the parameter at its own type, admitted) | admitted, refused |
+| `value-plain-as-decides` | 3502, the same to `<computes><decides>` | admitted, refused |
+| `value-default-drop` | 3502 "Using a value of type (?A:int = ...)->int as a value of type tuple()->int", a local bound to `F2` | admitted, refused |
+| `option-of-fn-default` | 3502 "Using a value of type ?((?A:int = ...)->int) as a value of type ?(tuple()->int)", `option{F2}` (an array's and a tuple's elements naming `F2`, and a `case`'s arms, admitted) | admitted, refused |
+| `parametric-method-fn-result` | 3502 "Using a value of type (t->void)->(t->void) as a value of type (int->void)->(int->void)", `box(int){}.Make(TakeInt)` | admitted, refused |
+| `value-class-variance` | admitted: a `type{_(:animal):int}` parameter passed as a `type{_(:dog):int}` | refused (no variance for values), refused: a recorded difference |
+
+The matching refusals: `join-computes-transacts` and `join-method-values`
+(an effect added in a join, functions and methods), `generic-higher-order-bound`
+and `generic-higher-order-concrete-param` (`One` bound to a local, passed
+to a function that is not generic), `generic-result-fn` ("Using a value of
+type type{_(:t,:t->void where t):t->void} as a value of type
+tuple(int,type{_X:int where 1 <= _X, _X <= 5}->void)->(int->void)": Epic's
+flow types give `t` the literals' range), `iface-override-fn-result` and
+`class-override-fn-param` (3502, the override as `any->void`),
+`overloaded-fn-value` (3502 "Referencing an overloaded function without
+immediately calling it is not yet implemented") and `name-decides-as-plain`
+(3509). Admitted, as by openverse: names at other types
+(`name-computes-as-transacts`, `name-default-arg`, `method-value-effect`,
+`generic-arg-*`, `generic-bound-first`), joins of class results and
+parameters, `array-of-fns-*`, `tuple-of-fns-default`, `case-join-*`,
+`generic-result-plain`, `generic-result-fn-comparable`, the
+`iface-*` overrides that need no wrapper, and the controls.
+
+So the rule is about values, not joins: any function value that is no
+function named where its type is expected (a local, a parameter, a field,
+a call's result, an option's content, a branch of an `if`) needs the
+wrapper to be one of another function type that changes it, and a
+parametric class's method returning a function of its type parameter is
+judged as a generic function is ([the
+rule](../LANGUAGE.md#function-values-epics-compiler-does-not-convert-724),
+`--function-coercions` keeps openverse's conversions). The Book survey moves
+no case for the wider rule. One difference is left, `value-class-variance`:
+openverse has no class variance for function values (Verse Core has no
+contravariance, and the front end makes adapters for names only).
+
+[`followup-coerce2`](../../tests/conformance/versevm/followup-coerce2) asked
+what the wider rule left unasked, 17 probes. UEFN 43.12 compiled them one
+at a time on 2026-11-19 (~17:40Z), and 14 agreed with openverse. It refuses
+with 3502 every function value converted where that needs a wrapper: a
+parameter returned at a wider type, a field read and one stored at a
+construction, a call's result, an array ("[]type{_(:int)<computes>:int}
+as []type{_(:int)<transacts>:int}"), a map, a tuple's element, a field
+passed to a generic call, and `int->int` as `int->rational` and as
+`int->void` (which openverse refused as type errors and now refuses citing
+3502); it admits a parameter returned at its own type, a method named as a
+generic call's argument, a function of a `rational` named at
+`type{_(:int):int}`, and a parametric class's method at `any`. Three
+differed:
+
+| Probe | UEFN 43.12 | openverse before, now |
+| --- | --- | --- |
+| `join-int-rational` | 3502 "Using a value of type tuple()->int as a value of type tuple()->rational", an if's branches | admitted (an `int`/`rational` exemption), refused: the exemption is gone |
+| `name-void-result` | admitted: `IntIdentity` named where a `type{_(:int):void}` is expected | refused, admitted: a function named converts by variance to a `void` result or from a `void` parameter |
+| `value-class-result` | admitted: a `type{_():dog}` local as a `type{_():animal}` | refused, refused: the class-variance difference, with `value-class-variance` |
+
 ## Running many probes
 
 [`ovprobe.py`](../../tests/conformance/versevm/ovprobe.py) (Python 3

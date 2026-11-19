@@ -366,6 +366,9 @@ partial def elabExprInitialWith
             if let some ty := exp then
               if let .struct shape _ := ty then
                 if let some sh := FnValues.parse shape then
+                  -- (#724: not one whose type parameter is inside a
+                  -- function type of its own, Epic's 3502)
+                  checkGenericValue ctx p n s ty
                   for cls in [s!"{n}$fn", s!"{n}$fnPack", s!"{n}$fnUnpack{sh.positional}"] do
                     let some args := fnClassArgs ctx.types cls ty | continue
                     let r ← elabConstruct ctx p cls [] [] (some (.struct cls args))
@@ -392,10 +395,13 @@ partial def elabExprInitialWith
               | _ => own
             -- (through its own type; when the expected one does not fit, as
             -- its own, which the caller then joins or names in a mismatch)
-            let r ← elabE ctx (.construct p s!"{n}$fn" [] []) none
-            let r : R := ⟨← coerce p r own, own⟩
+            let obj ← elabE ctx (.construct p s!"{n}$fn" [] []) none
+            let r : R := ⟨← coerce p obj own, own⟩
             if ty == own then return r
-            match ← tryCatch (some <$> coerce p r ty) (fun _ => pure none) with
+            -- (from its value class, which fits every function type it
+            -- fits: a function named where its type is expected is
+            -- converted, as Epic's compiler converts it, #724)
+            match ← tryCatch (some <$> coerce p obj ty) (fun _ => pure none) with
             | some e => return ⟨e, ty⟩
             | none =>
               if let some t := askFor then
@@ -408,7 +414,7 @@ partial def elabExprInitialWith
           else eerr p s!"'{n}' is a function: call it with {n}(…)"
         | none =>
           if (ctx.types.overloads.lookup n).isSome then
-            eerr p s!"{n} is overloaded: an overloaded function cannot be used as a value (Book of Verse ch. 6)"
+            eerr p s!"{n} is overloaded: an overloaded function cannot be used as a value (Book of Verse ch. 6; Epic's Verse compiler, UEFN 43.12: error 3502, \"Referencing an overloaded function without immediately calling it is not yet implemented\", followup-coerce/overloaded-fn-value)"
           -- the float constants (#132), unless the program defines them
           match n with
           | "PiFloat" => return ⟨.lit (.float (VFloat.canon 3.141592653589793)), .float⟩

@@ -613,6 +613,105 @@ Main():void =
   See the [closure design and release evidence](research/closure-design.md)
   for the proposed capture/lifetime rules and implementation gates.
 
+### Function values Epic's compiler does not convert (#724)
+
+A function value used as a value of another function type needs a
+*wrapper* unless the conversion leaves the value as it is: a function that
+takes the other type's arguments, converts them, calls the value and
+converts its result. Epic's Verse compiler (UEFN 43.12,
+++Fortnite+Release-43.12-CL-60598086) makes one only for a function or a
+method *named* where a function type is expected, for every conversion
+above (effects added, named parameters' defaults, tuples, a generic
+function's instance, variance): `F:type{_():int} = F2`, `Run(Inc)`,
+`T:type{_(:int)<transacts>:int} = C.Step`, an array's or a tuple's element
+or a `case` arm that names one, and a function or method named as an
+argument of a generic call, at the parameter's type the call gives it
+(`Apply(Incr, 1)`). It refuses every other conversion that needs a wrapper
+with error 3502, "Using a value of type A as a value of type B is not yet
+implemented". openverse needs no wrapper (a function value is an object of
+every function type it fits, `FnValues`), so it refuses, by the same error
+(`FnCoercion`; `--function-coercions` on `run`, `emit`, `check` and `core`,
+`Options.functionCoercions := true`, keeps its conversions), these forms:
+
+1. **A function value that is no function named where its type is
+   expected, used at another function type that needs a wrapper** (`coerce`):
+   a local, a parameter, a field, a call's result, a function's result, the
+   values of an array, an option, a tuple or a map that holds such values,
+   and a branch of an `if … else`, even one that names a function
+   (`checkJoinBranch`: Epic's branches are blocks whose value is converted),
+   and the content of `option{…}`, which Epic types at its own type before it
+   converts the option (`checkOptionContent`). A function type A is one of
+   B as it is when they have the same effects and the same parameters,
+   positional and named, every named parameter B lets a caller omit has a
+   default in A, each of B's parameters is one of A's as it is and A's
+   result one of B's: the same type, `void` and `true`, a class or an
+   interface above (a reference), or such a function type. Anything else is
+   a wrapper: other effects (`<computes>` at `<transacts>`, at
+   `<computes><decides>`), a named parameter dropped (`(?A:int = …)->int` at
+   `type{_():int}`), a tuple's or an array's parameter for two, `void` for
+   `int`, a result `int` at `rational`, `void` or `comparable`. So `G := F2` then `Call(G)` is refused, and
+   `Call(F2)` is not; `F(G(:int)<computes>:int) = Run(G)` with
+   `Run(F(:int)<transacts>:int)` is refused; `if (C?) {F13} else {F14}`
+   with `F13():c2` and `F14():c3` is admitted, as is
+   `F:type{_(?A:int):int} = if (C?) {F1} else {F2}`. A conversion
+   openverse does not make at all stays the type error it is (a
+   `<decides>` function where none is expected, 3509), except that a value
+   of a type a function named there would convert to by variance cites
+   3502 where that needs a wrapper (`G:type{_(:int):int}` used as a
+   `type{_(:int):rational}` or a `type{_(:int):void}`, as Epic does).
+   A function named converts by variance with `void` above every type too:
+   its result discarded (`Run(IntIdentity)` with `Run(F(:int):void)`), an
+   argument given to its `void` parameter (`G:int->int = VoidInput`), as
+   Epic admits and the Book's `Void.versetest` 91, 104 have it.
+2. **A generic function as a value with one of its type parameters inside a
+   function type of its own**, a parameter's (`One(F(:t)<transacts>:t, X:t
+   where t:type)`) or its result's, at an instance other than generic code's
+   own type parameters (`checkGenericValue`): `Plus(One, One, Succ, 0)`,
+   `RunOne(One)` and `F:type{_(:type{_(:int)<transacts>:int}, :int)<transacts>:int} = One`
+   are refused; `Identity(X:t):t` as a value, and `One(Succ, 0)`, are not.
+3. **A call of a generic function, or of a parametric class's method, whose
+   result has one of its type parameters inside a function type**
+   (`MakeClosure(…):(p_type->void)`, `box(t).Make(…):(t->void)` on
+   `box(int)`), at an instance other than a type parameter of the calling
+   code, `any` or `comparable` (the Book's
+   `ParametricFunctions.versetest:546` passes a `comparable` "so a function
+   coercion isn't required").
+4. **An override of a parametric class's or interface's method whose type
+   has one of that type's parameters inside a function type**, a
+   parameter's (`F(G(:t):void)`) or its result's (`F():(t->void)`), in a
+   class that gives it another type argument than one of its own type
+   parameters, `any` or `comparable` (`b := class(a(int))`): refused at the
+   override, Epic's compiler calling it through the declaration's type with
+   `t` as `any`. `F(X:t)` and `F(X:[]t)` are not.
+
+| Evidence (UEFN 43.12) | Refused, 3502 | Admitted |
+|---|---|---|
+| [`followup-book2`](../tests/conformance/versevm/followup-book2) | `join-named-default-fn`, `join-named-default-param`, `join-named-tuple` (the branch with the default only), `join-generic-effects-decides` (Identity's branch only), `join-generic-effects-transacts` (both), `generic-higher-order` (each argument), `parametric-method-value` (the call), `interface-fn-param-generic` (the override) | their controls: the same functions named at the types, `One(Succ, 0)`, `F(X:t)` overridden |
+| [`followup-coerce2`](../tests/conformance/versevm/followup-coerce2) | a parameter returned at a wider type, a field read and one stored, a call's result, an array, a map and a tuple of such values, a field passed to a generic call (`value-*`), `join-int-rational`, `value-int-rational-result`, `value-void-result` | `value-return-same`, `method-arg-generic`, `name-int-rational-param`, `name-void-result`, `parametric-method-fn-result-any`, `value-class-result` |
+| [`followup-coerce`](../tests/conformance/versevm/followup-coerce) | `value-computes-as-transacts`, `value-plain-as-decides`, `value-default-drop` (a parameter's or a local's value), `option-of-fn-default`, `join-computes-transacts`, `join-method-values`, `generic-higher-order-bound`, `generic-higher-order-concrete-param`, `generic-result-fn`, `parametric-method-fn-result`, `iface-override-fn-result`, `class-override-fn-param`; `overloaded-fn-value` ("Referencing an overloaded function without immediately calling it is not yet implemented"); `name-decides-as-plain` (3509) | names at other types (`name-computes-as-transacts`, `name-default-arg`, `method-value-effect`, `generic-arg-*`, `generic-bound-first`), class variance (`join-class-result`, `join-class-param`, `value-class-variance`), `array-of-fns-default`, `tuple-of-fns-default`, `case-join-default`, `generic-result-plain`, `generic-result-fn-comparable`, `iface-override-array-param`, `iface-own-param-fn`, `iface-fn-param-any`, the controls |
+| [`book`](../tests/conformance/versevm/book) | `book-join-void-param`, `book-join-void-result`, `book-join-fn-result`, `book-join-array-tuple-param`, `book-join-named-array-param`, `book-join-comparable-param` (openverse refused them already: no join of their types) | |
+| The Book of Verse's tests (both VMs) | | `FunctionTypes.versetest` 198-203 (classes), `DefaultNamed.versetest` 623, 731, 735 (defaults), `Void.versetest` 91, 104 (names, `void`), 161-173 (`void` and `true`), `ParametricFunctions.versetest` 182, 189, 192 (functions passed to a generic call) |
+
+The Book's `bp_vm_only` tests refuse these programs (`DefaultNamed` 629,
+640, 741, 751; `Tuple:456`; `Function` 238, 271; `ParametricFunctions:276`;
+`FORT-592189:4`; `SOL-5477:5`) and their `verse_vm_only` twins expect them
+to run: openverse takes UEFN 43.12's verdict, which is the Blueprint VM's,
+also for the `verse_vm_only` `Rational.versetest` 131, 132, 139 and 140,
+joins of an `int` and a `rational` result (`join-int-rational`). One
+difference is left: Epic converts a function value by class variance
+where no wrapper is needed (`value-class-variance`, a
+`type{_(:animal):int}` parameter passed as a `type{_(:dog):int}`;
+`value-class-result`, a `type{_():dog}` local used as a
+`type{_():animal}`), and openverse refuses it, as a value of one function
+type does not convert to another by variance (only a named function does, #214). Verse Core's
+variances are covariant, invariant or bivariant, and a function type's
+parameters would need contravariance there, or the front end an adapter
+object that holds the value and converts each call's arguments (as #214's
+classes do for a name). UEFN 43.12 answered every probe of
+[`followup-coerce`](../tests/conformance/versevm/followup-coerce) and
+[`followup-coerce2`](../tests/conformance/versevm/followup-coerce2) (54, one
+construct each): openverse agrees with all but these two.
+
 ## Extension methods
 
 An extension method adds a method to a type without changing the type
@@ -4343,6 +4442,7 @@ Main()<suspends>:void =
 | `false` where a map is expected | prose: accepted (ch. 2); tests: refused (`Map.versetest` 343) | refused, as the tests (it equals an empty map) |
 | `X?` of a logic | "equivalent to comparing against true" (ch. 4); ch. 8: "succeeds with that value"; the tests: `true?` is the empty value (`BoolQuery.versetest` 3, 4, `LogicalAnd.versetest:29`, `Precedence.versetest:121`) | the tests' and **Epic's**: `X?` succeeds when `X` is `true`, with the empty value, `false`, so `true? = false` holds; both of Epic's VMs agree (UEFN 43.12 (`++Fortnite+Release-43.12-CL-60598086`), probes `book-query-*`) ([the rule](research/book-forms-rules.md#the-value-of-true)) |
 | `true` as a type | the type of the empty value, as `tuple()` (ch. 2); `void` and `true` interchange (`Void.versetest`); `Result:true = branch: …` refused, `Result:any = branch: …` valid (`FORT-582630-BranchResult.versetest`) | the Book's: `tuple()`; `void` and it interchange inside options, arrays and maps; a `branch:`'s value is an `any` ([the rule](research/book-forms-rules.md#true-as-a-type)); not yet in a function type (`int->true` and `int->void` are two types) |
+| A function value of another function type | `bp_vm_only`: refused, 3502 "not yet implemented" (`DefaultNamed` 629, 640, 741, 751, `Function` 238, 271, …); `verse_vm_only`: valid (their twins) | **Epic's UEFN 43.12**: refused, 3502, where it needs a wrapper and is no function named at the type, as the Blueprint VM's tests have it; `--function-coercions` keeps openverse's conversion ([the rule](#function-values-epics-compiler-does-not-convert-724)) |
 | Ordering of rationals | not stated (§2 lists `<` … for `int` and `float`) | exact (by continued fractions, so it cannot overflow), and an int compares with a rational |
 | Order of a choice's values | (not in the Book; the Verse Calculus: spatial) | spatial: the leftmost choice varies slowest, as nested generators do (#208) |
 | Code before a choice | (the Verse Calculus is pure) | runs once, also within an expression (the operands before the choice are evaluated first, as written); each alternative runs the code after the choice, from where the choice was reached; in an `if` or `first{}`, one that leads to no success is rolled back (as backtracking does); in a `for` too, one none of whose values reaches the body (the Book's rule for a `for`, above, a choice being one more choice point); a `for` that keeps the old rule for now rolls back only an alternative whose own clauses fail (#208): **the Book is silent** on choice |
