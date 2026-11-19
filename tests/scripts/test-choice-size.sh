@@ -592,10 +592,12 @@ kinds=(
   waiting-refined-state
 )
 for kind in "${kinds[@]}"; do
-  # These six schemas deliberately retain ordinary computed field defaults.
+  # These schemas deliberately retain ordinary computed field defaults (the
+  # field-default contexts call Concatenate and the program's functions,
+  # which a data member may not, UEFN 43.12 error 3582, #724).
   compat=()
   case $kind in
-    construct-first|construct-for|construct-failure|context-field-default-lazy-first|context-refining-field-first|context-refining-field-for)
+    construct-first|construct-for|construct-failure|context-field-default-*|context-refining-field-*)
       compat+=(--extended-defaults) ;;
     # (and these a named parameter's default that suspends, #283's waiting
     # defaults, which the Book refuses: DefaultNamed.versetest:844)

@@ -142,6 +142,11 @@ structure Sig where
   /-- (#515, `--default-no-rollback`) It has the `no_rollback` effect
       (`SignalAdmission.noRollbackMarker`). -/
   noRollback : Bool := false
+  /-- (#511, #724) A function the program defines (a function, a method, a
+      constructor; `InitializerConvergence.sourceCallMarker`): no program's
+      function is `<converges>`, so a call of it might not complete, and a
+      data member's definition may not make one (Epic's error 3582). -/
+  sourceCall : Bool := false
   /-- Of a method of a class with type parameters that its parent's type
       arguments do not give (#209): those type parameters, whose values it
       reads from its receiver's hidden fields (`$w.…`), not from hidden
@@ -451,6 +456,12 @@ structure Ctx where
       elaborated again at each construction that omits the field, in that
       construction's context (#156). -/
   inDefaultCheck : Bool := false
+  /-- (#724) The definition of a data member being elaborated, as a message
+      names it ("the constant Limit", "the default of field 'Size' of
+      thing"): each call in it of a function that might not complete is
+      noted (`noteDivergentCall`), and refused after its elaboration
+      (Epic's error 3582). None elsewhere, and with `--extended-defaults`. -/
+  dataMember : Option String := none
   /-- In the body of a `loop` or `for`, also through arms (#156): a
       `branch` there would start again before the last one ended. -/
   inRepeat : Bool := false
@@ -741,6 +752,11 @@ structure ESt where
   /-- The warnings found so far (`warnAt`): what the Book of Verse's compiler
       reports and compiles all the same, each with where it is. -/
   warnings : Array (Pos × String) := #[]
+  /-- (#724) The calls in a data member's definition (`Ctx.dataMember`) of
+      functions that might not complete, each with where it is, what calls
+      it and what it calls (`noteDivergentCall`; a trial whose state is
+      discarded discards its own). -/
+  divergentCalls : Array (Pos × String × String) := #[]
   deriving Inhabited
 
 abbrev EM := StateT ESt (Except String)
@@ -1349,11 +1365,57 @@ def noteFailCalls (ctx : Ctx) (p : Pos) (what : String) (e : Expr) : EM Unit := 
     else
       modify fun st => { st with bodyCalls := st.bodyCalls.push site }
 
+/-- (#724) A call at `p` of `shown` in a data member's definition
+    (`Ctx.dataMember`) that might not complete: noted, and refused once the
+    definition is elaborated (`divergentCallError`). Elsewhere nothing. -/
+def noteDivergentCall (ctx : Ctx) (p : Pos) (shown : String) : EM Unit := do
+  if let some what := ctx.dataMember then
+    modify fun st => { st with divergentCalls := st.divergentCalls.push (p, what, shown) }
+
+/-- (#724) Epic's rule for data members: the definition of a module's
+    constant or of a field's default may call only a function that is
+    `<converges>`, which only a native function may be (3565). So no
+    function, method or constructor of the program qualifies, nor a
+    function value; of the built-ins, those the Book's Runtime API
+    reference declares `<converges>` (its "Intrinsic functions": the
+    operators, `Abs`, `Floor` and `Ceil` of a rational, `BitAnd`,
+    `BitOr`, `BitXor`, `BitNot`, `ConcatenateMaps`, indexing, `Length`,
+    the char conversions; `builtinConverges`) do, the others
+    (`Min`, `Max`, `Clamp`, `Sqrt`, `ToString`, …) do not. UEFN 43.12
+    (++Fortnite+Release-43.12-CL-60598086) refuses a call of each kind
+    (error 3582, `tests/conformance/versevm/followup-3582`). The first such
+    call of `calls`, in the order of the source. -/
+def divergentCallError (calls : Array (Pos × String × String)) : Option String :=
+  let before (a b : Pos × String × String) : Bool :=
+    a.1.line < b.1.line || (a.1.line == b.1.line && a.1.col < b.1.col)
+  match (calls.qsort before)[0]? with
+  | some (p, what, shown) => some s!"{p.show}: {what} calls {shown}, which might not complete: a data member's definition (a module's constant, a field's default) may call only a function that converges, which no function, method or constructor of the program is, and of the built-ins only those the Verse API declares <converges> (operators, Abs, Floor and Ceil of a rational, BitAnd, BitOr, BitXor, BitNot, indexing): Epic's Verse compiler, UEFN 43.12, error 3582 \"Divergent calls (calls that might not complete) cannot be used to define data-members\" (#724; --extended-defaults keeps openverse's extension)"
+  | none => none
+
+/-- (#724) Whether a call of the built-in function `name` (a row of
+    `builtinFunctions`) converges: it is one of the intrinsics the Book's
+    Runtime API reference (`docs/api/verse_runtime_api.html` at the pinned
+    revision, "Intrinsic functions", generated from the Verse runtime of UE
+    6.0.0) declares `<converges>`. `Floor` and `Ceil` are, of a rational or
+    an int; of a float they are natives with `<reads>` and are not
+    (`elabFloorCeil` notes those). `any` and `comparable` are conversions,
+    and the `$` names the compiler's own. Every other built-in function is
+    a native without `<converges>` (`Sqrt`, `Quotient`, `ToString`, `Err`,
+    …) or written in Verse (`Min`, `Max`, `Sgn`, `Concatenate`, `Print`,
+    …), and might not complete; UEFN 43.12 refuses `Min` in a constant
+    (followup-3582/div-const-intrinsic). -/
+def builtinConverges (name : String) : Bool :=
+  ["Abs", "Floor", "Ceil", "BitAnd", "BitOr", "BitXor", "BitNot", "ConcatenateMaps",
+   "any", "comparable"].contains name || name.startsWith "$"
+
 /-- (#515, `--default-no-rollback`) A call at `p` of `s`, which may have
     the `no_rollback` effect: refused in a failure context (or inside one)
     and in a body whose effects exclude it, as Epic's compiler does (UEFN
-    43.12: error 3512). -/
+    43.12: error 3512). (#724) In a data member's definition, a call of the
+    program's own function is refused as divergent instead (3582), as
+    UEFN 43.12 does: no 3512 for it there. -/
 def checkNoRollbackCall (ctx : Ctx) (p : Pos) (s : Sig) (shown : String) : EM Unit := do
+  if ctx.dataMember.isSome && s.sourceCall then return
   if s.noRollback && !ctx.typeOnly && ((ctx.canFail || ctx.inRollback) && !ctx.bodyFailure || ctx.rollbackOnly) &&
       !(ctx.frameName.splitOn "$call").tail.any (fun _ => true) then
     let context := if (ctx.canFail || ctx.inRollback) && !ctx.bodyFailure then "a failure context" else "a body whose effects exclude it"

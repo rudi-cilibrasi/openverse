@@ -20,26 +20,30 @@ def main : IO Unit := do
   let tops ← match parseProgram source with
     | .ok t => pure t
     | .error e => throw (IO.userError e)
-  refused "compile" "requires convergence" (compile source)
-  refused "checked" "requires convergence" (compileChecked source)
-  refused "with" "requires convergence" (compileWith source [] none)
-  refused "tops" "requires convergence" (compileTops tops [] false none)
-  refused "program" "requires convergence" (elabProgram tops)
-  refused "core" "requires convergence" (elabProgramCore tops)
-  refused "choice-free" "requires convergence" (compile source { profile := .choiceFree })
+  -- (#724) a data member's definition calls no function of the program's:
+  -- refused as the default is elaborated (Epic's 3582), before #511's check
+  let divergent := "calls Helper, which might not complete"
+  refused "compile" divergent (compile source)
+  refused "checked" divergent (compileChecked source)
+  refused "with" divergent (compileWith source [] none)
+  refused "tops" divergent (compileTops tops [] false none)
+  refused "program" divergent (elabProgram tops)
+  refused "core" divergent (elabProgramCore tops)
+  refused "choice-free" divergent (compile source { profile := .choiceFree })
   checked "explicit extension" (compileChecked source { extendedDefaults := true })
   checked "explicit extension core" (elabProgramCore tops { extendedDefaults := true })
   let indirect := "Helper()<computes>:int=42\nF:type{_()<computes>:int}=Helper\nc:=class<computes>{N:int=F()}\nMain():void={}"
   let indirectTops ← match parseProgram indirect with
     | .ok t => pure t
     | .error e => throw (IO.userError e)
-  refused "indirect checked" "requires convergence" (compileChecked indirect)
-  refused "indirect with" "requires convergence" (compileWith indirect [] none)
-  refused "indirect tops" "requires convergence" (compileTops indirectTops [] false none)
+  let valueCall := "which might not complete"
+  refused "indirect checked" valueCall (compileChecked indirect)
+  refused "indirect with" valueCall (compileWith indirect [] none)
+  refused "indirect tops" valueCall (compileTops indirectTops [] false none)
   -- The low-level discovery API may return a request instead of a program;
   -- it must not return a completed program with an unchecked indirect call.
   match elabProgramCore indirectTops with
-  | .error e => unless (e.splitOn "requires convergence").length > 1 do
+  | .error e => unless (e.splitOn valueCall).length > 1 do
       throw (IO.userError s!"indirect core: {e}")
   | .ok c => unless !c.needs.fns.isEmpty || !c.needs.methods.isEmpty || !c.needs.loops.isEmpty do
       throw (IO.userError "indirect core: completed without convergence admission")
@@ -53,7 +57,7 @@ def main : IO Unit := do
   let request (extra : List STop) : Choice.FirstLift :=
     { (default : Choice.FirstLift) with
         stageOnly := true, key := "initializer-api", name := "$stage", pos := p, extraFns := extra }
-  refused "request field" "requires convergence"
+  refused "request field" divergent
     (elabProgramCore [helper, main] { requests := { loops := [request [packet "Helper"]] } })
   let forwarding := STop.fn p "$forward" [] [] ["computes"] (.name "int")
     (.app p (.ident p "Helper") [] false)
@@ -64,7 +68,7 @@ def main : IO Unit := do
   refused "request recursion" "recursive helper"
     (elabProgramCore [packet "$cycle", main] { requests := { loops := [request [cyclic]] } })
   let fakeBlock := STop.fn p "fake.$block" [] [] ["computes"] (.name "int") (.int p 42)
-  refused "ordinary block spelling" "ordinary function"
+  refused "ordinary block spelling" "of Packet calls fake"
     (elabProgramCore [fakeBlock, packet "fake.$block", main])
   for extended in [false, true] do
     refused "heap remains checked" "construction of cell"

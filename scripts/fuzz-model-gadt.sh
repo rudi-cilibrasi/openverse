@@ -45,9 +45,11 @@ for ((s=first; s<first+n; s++)); do
     mv "$tmp/a.verse" "$tmp/p.verse"
   fi
   rm -f "$tmp/p.vbc"
-  # Only these lexical-field variants call ordinary Sum/Lazy default helpers.
+  # The lexical-field variants call Concatenate and Id, and their for/lazy
+  # ones the ordinary Sum/Lazy helpers, in a field's default, which a data
+  # member may not (#511; UEFN 43.12 error 3582, #724).
   compat=()
-  if [[ $g == gadt_contexts ]] && (( s % 9 == 1 && (s / 9) % 4 >= 2 )); then
+  if [[ $g == gadt_contexts ]] && (( s % 9 == 1 )); then
     compat+=(--extended-defaults)
   fi
   # These two models are of openverse's own reading of a named parameter's

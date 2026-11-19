@@ -314,6 +314,8 @@ def elabFloorCeil (up : Bool) (c : BuiltinCall) : EM R := do
   let { elabE, ctx, p, name, args, bracket, .. } := c
   let ofFloat (r : R) : EM R := do
     if !bracket then eerr p s!"{name} of a float can fail: call it with {name}[…]"
+    -- (#724) of a float, a native with `<reads>`, not `<converges>`
+    noteDivergentCall ctx p s!"{name} of a float"
     return ⟨.prim (if up then .fceil else .ffloor) [r.e], .int⟩
   match args with
   | [.bin bp "/" a b] =>
