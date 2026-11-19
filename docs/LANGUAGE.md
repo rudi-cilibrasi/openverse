@@ -119,16 +119,21 @@ lines are exempt. Indented blocks are those after `:` (and a function's
 brackets, or a braced block that starts on the line of its `{`, are checked
 against the enclosing indented block.
 
-An identifier has at most 1024 characters, and a class's name at most
-1023 (#724): UEFN 43.12 refuses one of 1025 and one of 4096 characters at
-each occurrence, error 3655, "Identifier is too long", and a class of 1024
-characters with 9002, "Cannot find class"; it runs the Book's class of 960
-characters with a field of 992 (`followup-book2/long-ident-*`; the Book's
-tests, `Bugs/FORT-555217-VeryLongIdentifier.versetest`). It also refuses a
-method whose own name is short in a class of 976 characters (3655, the
-Book's `:31`: "the mangled function name will be too large"); openverse does
-not, since that limit counts names of Epic's toolchain (the project's path
-among them) that a program does not fix.
+An identifier has at most 1024 characters (#724): UEFN 43.12 refuses one of
+1025 and one of 4096 at each occurrence, error 3655, "Identifier is too
+long" (`followup-book2/long-ident-*`; the Book's tests,
+`Bugs/FORT-555217-VeryLongIdentifier.versetest`). The names Epic's
+toolchain derives from a definition's are longer, and their limit falls on
+the identifier at less, by the kind of definition. Measured on UEFN 43.12
+for definitions without parameters (Epic's bisection,
+`followup-book3/expectations.tsv`), and taken: a field's, a local's, a
+parameter's and a module constant's name has at most 1004 characters; a
+module function's at most 990; a class's and a struct's at most 1023 (9002,
+"Cannot find class", "Cannot find struct", at 1024); and a method's name
+and its class's together at most 987 (983 + 1, 6 + 981). In Epic's
+compiler, parameters and the project's path may lower these (a method
+`Function(Param:int)` in a class of 976 characters is refused, 3655, the
+Book's `:31`, though 984 is within 987); openverse does not model that.
 
 ### Reserved names
 

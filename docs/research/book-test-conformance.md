@@ -2957,6 +2957,13 @@ openverse takes Epic's compiler's refusals, one commit each (#724):
 - **No array of several arguments beside a named parameter** (3509,
   `followup-book3/array-named-pack`). No Book case moves; the call-packing
   model gives its array shapes no named parameters.
+- **The measured name lengths** (3655; 9002 for a struct): Epic's
+  bisection on UEFN 43.12, for definitions without parameters, gives a
+  field, a local, a parameter and a constant at most 1004 characters, a
+  module function 990, a class and a struct 1023, and a method's name and
+  its class's together 987. No Book case moves: `FORT-555217:31`'s
+  `Function(Param:int)` in a class of 976 is 984, within 987, which its
+  parameter lowers in Epic's compiler and openverse does not model.
 
 Before: 8,829 agree, 645 refuse, 38 accept, 36 differ; after: 8,850, 648,
 14, 36 (24 better, 3 worse, as [Where things stand](#where-things-stand)

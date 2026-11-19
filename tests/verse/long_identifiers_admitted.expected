@@ -1,3 +1,4 @@
-field 42
+field 42 1
 longest 7
+local 9 function 5 method 3
 exit=0

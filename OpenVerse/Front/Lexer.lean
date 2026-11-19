@@ -231,8 +231,35 @@ def maxIdentifierLength : Nat := 1024
 /-- (#724) The longest class name Epic's toolchain takes: the Blueprint
     VM's names hold 1023 characters, and UEFN 43.12 refuses a class of 1024
     with error 9002, "Cannot find class" (followup-book2/long-ident-class-1024;
-    one of 960 is admitted and runs). -/
+    one of 960 is admitted and runs; Epic's bisection, a class with a field
+    only: 1023 admitted, 1024 refused). A struct's likewise (9002, "Cannot
+    find struct", at 1024, followup-book3/long-ident-struct-1024). -/
 def maxClassNameLength : Nat := 1023
+
+/-! (#724) The names Epic's toolchain derives from a definition's are
+    longer than its identifier, so their limit, 1024 characters with the
+    decoration, falls on the identifier at less, by the kind of definition.
+    UEFN 43.12 (++Fortnite+Release-43.12-CL-60598086) measured on
+    2026-11-19, each compiled alone (3655, "Identifier is too long", past
+    the longest admitted; tests/conformance/versevm/followup-book3,
+    expectations.tsv): these are for definitions without parameters, and
+    parameters and the project's path may lower them in Epic's compiler,
+    which openverse does not model. -/
+
+/-- A field's, a local's (a constant in `Main`), a parameter's and a
+    module constant's name: a field of `holder` of 1004 characters is
+    admitted, of 1005 refused, and so is a local constant. -/
+def maxDataNameLength : Nat := 1004
+
+/-- A module function's name: `FunX…():int = 42` of 990 characters is
+    admitted, of 991 refused. -/
+def maxFunctionNameLength : Nat := 990
+
+/-- A method's name and its class's together: a class with a method
+    `F():int = 1` of 983 characters is admitted, of 984 refused, and a
+    method `MethX…():int = 1` of 981 characters in `holder` admitted, of
+    982 refused: 983 + 1 and 6 + 981, at most 987 together. -/
+def maxMethodNamesLength : Nat := 987
 def isHex (c : Char) : Bool := c.isDigit || ('a' ≤ c ∧ c ≤ 'f') || ('A' ≤ c ∧ c ≤ 'F')
 
 def escapeChar : Char → Option Char
