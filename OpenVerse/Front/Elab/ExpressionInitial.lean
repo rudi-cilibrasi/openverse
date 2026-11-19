@@ -366,6 +366,9 @@ partial def elabExprInitialWith
             if let some ty := exp then
               if let .struct shape _ := ty then
                 if let some sh := FnValues.parse shape then
+                  -- (#724: not one whose type parameter is inside a
+                  -- function type of its own, Epic's 3502)
+                  checkGenericValue ctx p n s ty
                   for cls in [s!"{n}$fn", s!"{n}$fnPack", s!"{n}$fnUnpack{sh.positional}"] do
                     let some args := fnClassArgs ctx.types cls ty | continue
                     let r ← elabConstruct ctx p cls [] [] (some (.struct cls args))

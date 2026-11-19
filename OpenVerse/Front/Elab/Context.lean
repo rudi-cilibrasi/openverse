@@ -39,6 +39,7 @@ import OpenVerse.Front.FrameRefs
 import OpenVerse.Front.SourceFrames
 import OpenVerse.Front.FailCapture
 import OpenVerse.Front.Types
+import OpenVerse.Front.FnCoercion
 import OpenVerse.Front.Variance
 import OpenVerse.Front.ChoiceTypes
 import OpenVerse.Front.UpperBounds
@@ -2943,6 +2944,92 @@ def firstPacketCode : SExpr → SExpr
 def isFirstPacket (expression : SExpr) : Bool := match firstPacketCode expression with
   | .app _ (.ident _ "$firstP") [_] false => true
   | _ => false
+
+/-- The expression whose value a branch is: the one of a block of one. -/
+partial def branchValue : SExpr → SExpr
+  | .block _ [e] => branchValue e
+  | e => e
+
+/-- (#724) A branch `branch` of an `if`, of value `r`, whose value is a
+    function used at the `if`'s function type `ty`, other than its own, that
+    needs a wrapper (`FnCoercion.needsWrapper`): refused, as Epic's Verse
+    compiler refuses it (UEFN 43.12, error 3502:
+    tests/conformance/versevm/followup-book2's `join-named-default-fn`,
+    `join-named-default-param`, `join-named-tuple`,
+    `join-generic-effects-decides` and `-transacts`; the Book of Verse's
+    `bp_vm_only` tests, `DefaultNamed.versetest` 629, 640, 741, 751,
+    `Tuple.versetest:456`, `Function.versetest` 238, 271), though it makes
+    the wrapper for a function named where its type is expected
+    (`F:type{_():int} = F2`, the controls). The branch's own type: a named
+    function's, a generic one's at the instance `ty` gives (its own effects
+    and named parameters, `ty`'s parameters and result), a method's or a
+    field's as `elabE` gives it without an expected type (in a trial whose
+    state is not kept), another value's `r.ty`. -/
+def checkJoinBranch (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (branch : SExpr) (r : R) (ty : Ty) :
+    EM Unit := do
+  if ctx.types.functionCoercions then return
+  let some tsh := FnCoercion.shape? ty | return
+  if r.ty == .never then return
+  let v := branchValue branch
+  let alone : EM (Option Ty) := do
+    let st ← get
+    let o ← tryCatch (some <$> elabE ctx v none) (fun _ => pure none)
+    set st
+    return o.map (·.ty)
+  let own? : Option Ty ← match v with
+    | .ident _ n =>
+      if (ctx.lookup n).isSome then pure (some r.ty)
+      else if (ctx.selfClass.any fun c => (ctx.types.fields c).any (·.1 == n) || ctx.hasMethod c n) then alone
+      else match ctx.sig? n with
+        | some s =>
+          if s.isConst then pure (some r.ty) else
+          let (sh, ts) := s.valueShape
+          if s.tparams.isEmpty then pure (some (.struct sh.name (ts ++ [s.ret])))
+          else match ty with
+            | .struct _ targs =>
+              if sh.positional == tsh.positional && sh.named == tsh.named && sh.optional == tsh.optional then
+                let inst : FnValues.Shape :=
+                  { tsh with decides := sh.decides, suspends := sh.suspends, fx := sh.fx, noRollback := sh.noRollback }
+                pure (some (.struct inst.name targs))
+              else pure (some (.struct sh.name (ts ++ [s.ret])))
+            | _ => pure none
+        | none => pure (some r.ty)
+    | .member .. => alone
+    | _ => pure (some r.ty)
+  let some own := own? | return
+  if !FnCoercion.isFn own then return
+  if FnCoercion.needsWrapper (← get).env own ty then
+    eerr v.pos s!"using a value of type {own.show} as a value of type {ty.show} is not yet implemented: this branch of an if is a function of another type than the if's, which needs a wrapper Epic's compiler makes only for a function named where a function type is expected {FnCoercion.cite}"
+
+/-- (#724) A generic function `n` named as a value at the function type
+    `ty`, one of whose type parameters is inside a function type of its
+    own (a parameter `F(:t)<transacts>:t`, a result `t->void`): its
+    instance as a value needs a wrapper that converts a function value,
+    which Epic's Verse compiler does not make (UEFN 43.12, error 3502:
+    tests/conformance/versevm/followup-book2's `generic-higher-order`,
+    `Plus(One, One, Succ, 0)`; the Book of Verse's
+    `ParametricFunctions.versetest:276`, `bp_vm_only`). It makes one for a
+    generic function whose type parameters are not inside a function type
+    (`F:type{_(:int)<computes><decides>:int} = Identity`,
+    `join-generic-effects-decides-control`; `Apply(Identity, (1, 2))`,
+    `ParametricFunctions.versetest:192`), and a call of `One` is no value
+    of it (`generic-higher-order-control`). -/
+def checkGenericValue (ctx : Ctx) (p : Pos) (n : String) (s : Sig) (ty : Ty) : EM Unit := do
+  if ctx.types.functionCoercions then return
+  let tps := s.tparams.map (·.1)
+  let inFn := ((s.params ++ [s.ret]).flatMap FnCoercion.paramsInFn).filter tps.contains
+  if inFn.isEmpty then return
+  let (sh, ts) := s.valueShape
+  let own : Ty := .struct sh.name (ts ++ [s.ret])
+  -- (its instance: its parameters and result matched with the type's; one
+  -- in generic code, at the code's own type parameters, needs no wrapper)
+  let σ : List (String × Ty) := match ty with
+    | .struct _ targs =>
+      if targs.length != ts.length + 1 then []
+      else (((ts ++ [s.ret]).zip targs).foldlM (fun σ ((a : Ty), (b : Ty)) => Ty.matchArg ctx.types σ a b) ([] : List (String × Ty))).getD []
+    | _ => []
+  let some v := (FnCoercion.changedBy σ inFn (unknown := true)).head? | return
+  eerr p s!"using a value of type {FnCoercion.showGeneric own tps} as a value of type {ty.show} is not yet implemented: {n} is generic, its type parameter {v} inside a function type of its own, and as a value at an instance it needs a wrapper that converts a function value, which Epic's compiler makes for no generic function {FnCoercion.cite}"
 
 /-- An `if … then … else …`'s branches and its type, which `finish` takes
     (#32, #366): at an expected type, both at it; with none, the `then`

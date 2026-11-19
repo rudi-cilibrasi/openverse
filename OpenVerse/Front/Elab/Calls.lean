@@ -413,6 +413,23 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
     | some inferred => pure inferred
     | none => eerr p (inconsistentInstance ctx.evidenceEnv s σ)
   σ := inferred
+  -- (#724) a generic function whose result has one of its type parameters
+  -- inside a function type (`MakeClosure(…):(p_type->void)`), called at an
+  -- instance other than `any` or `comparable`: the function value it
+  -- returns needs a wrapper at the instance, which Epic's Verse compiler
+  -- does not make (UEFN 43.12, error 3502: followup-book2's
+  -- `parametric-method-value`; the Book of Verse's
+  -- `FORT-592189-MaybeCoerceToTypeCrash.versetest:4`, `bp_vm_only`). Not a
+  -- method's call, whose type parameters its receiver may give, nor the
+  -- compiler's own functions'.
+  if !ctx.types.functionCoercions && !s.name.contains '$' &&
+      !(s.pnames.head? == some "Self" || s.pnames.head? == some "$Self") then
+    let tps := s.tparams.map (·.1)
+    let changed := FnCoercion.changedBy σ ((FnCoercion.paramsInFn s.ret).filter tps.contains)
+    if let some v := changed.head? then
+      let (sh, ts) := s.valueShape
+      let gen : Ty := .struct sh.name (ts ++ [s.ret])
+      eerr p s!"using a value of type {FnCoercion.showGeneric gen tps} as a value of type {(gen.subst σ).show} is not yet implemented: the result of {Choice.shownFnName s.name}, {s.ret.show}, has its type parameter {v} inside a function type, and the function it returns needs a wrapper at {v} = {((σ.lookup v).getD (.param v false)).show}, which Epic's compiler does not make {FnCoercion.cite}"
   let mut steps : Array Expr := #[]
   let mut slots : Array (Option Nat) := Array.replicate s.params.length none
   let mut roles : Array Bool := s.params.toArray.mapIdx fun index _ => s.typeValues.contains index

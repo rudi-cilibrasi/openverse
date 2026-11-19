@@ -425,6 +425,11 @@ structure TyEnv where
       `no_rollback` context of the code they come from
       (`Choice.SourceContext.rollbackOnly`, `bodyFailure`). -/
   defaultNoRollback : Bool := false
+  /-- (#724, `--function-coercions`) Keep openverse's conversions of
+      function values that Epic's Verse compiler does not make (UEFN 43.12,
+      error 3502, "not yet implemented"; `FnCoercion`). Off by default:
+      they are refused. -/
+  functionCoercions : Bool := false
   /-- The variances of the classes in Verse Core, by tag and Verse Core type
       argument position (docs/research/variance.md): what the certificate
       gives (`Sigs.variances`), so that a conversion the front end makes by

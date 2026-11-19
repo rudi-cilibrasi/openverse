@@ -308,6 +308,13 @@ private partial def rewriteTop (replacements : List (String × SExpr)) : STop �
       (← methods.mapM (rewriteTop replacements))
   | .const p name sp ty body => return .const p name sp ty (← rewrite replacements body)
 
+/-- (#724) These contracts' programs bind methods of generic receivers
+    through generic functions (`Bind(…):type{_()<computes>:t}`), a conversion
+    of function values Epic's compiler refuses (error 3502): they are
+    compiled with openverse's conversions, `--function-coercions`. -/
+def elabCoerced (tops : List STop) (opts : Options := {}) : Except String Compiled :=
+  elabProgram tops { opts with functionCoercions := true }
+
 private def source := "
 vehicle:=class<computes>:
     Speed:int=1
@@ -1156,7 +1163,7 @@ def main (args : List String) : IO Unit := do
   let tops ← getOK "resolve dictionary controls" (tops.mapM (rewriteTop replacements))
   let nominals ← getOK "generate canonical nominal families"
     ([ ("car", "vehicle"), ("truck", "vehicle"), ("node", "vehicle") ].mapM fun (source, target) => nominal env pos source target)
-  let compiled ← getOK "checked dictionaries" (elabProgram (protocol pos ++ nominals ++ tops))
+  let compiled ← getOK "checked dictionaries" (elabCoerced (protocol pos ++ nominals ++ tops))
   need "Core admission" (compiled.prog.check && compiled.prog.checkControl &&
     compiled.prog.checkTypes compiled.sigs compiled.slotTys)
   match compiled.prog.runB 1000000 10000 with
@@ -1174,14 +1181,14 @@ def main (args : List String) : IO Unit := do
   let bad := (Plan.compose carPlan (.identity .int)).value env pos
   let badMain := STop.fn pos "Main" [] [] [] (.name "void") bad
   let declarations := tops.filter fun | .fn _ "Main" .. => false | _ => true
-  match elabProgram (protocol pos ++ nominals ++ declarations ++ [badMain]) with
+  match elabCoerced (protocol pos ++ nominals ++ declarations ++ [badMain]) with
   | .error message =>
     need "wrong composition reaches a type diagnostic" ((message.splitOn "expected").length > 1)
   | .ok _ => throw (IO.userError "ill-typed dictionary composition passed the compiler")
   let stateTops ← getOK "parse mutation/order control" (parseProgram stateSource)
   let stateTops ← getOK "rewrite mutation/order control" (stateTops.mapM (rewriteTop replacements))
   let carNominal ← getOK "state nominal dictionary" (nominal env pos "car" "vehicle")
-  let state ← getOK "checked mutation/order control" (elabProgram (protocol pos ++ [carNominal] ++ stateTops))
+  let state ← getOK "checked mutation/order control" (elabCoerced (protocol pos ++ [carNominal] ++ stateTops))
   need "state control passes Core admission" (state.prog.check && state.prog.checkControl &&
     state.prog.checkTypes state.sigs state.slotTys)
   match state.prog.runB 1000000 10000 with
@@ -1192,20 +1199,20 @@ def main (args : List String) : IO Unit := do
     "Touch(X:t,D:evidence(vehicle,t) where t:type)<computes>"
   let badStateTops ← getOK "parse forbidden bound write" (parseProgram badState)
   let badStateTops ← getOK "rewrite forbidden bound write" (badStateTops.mapM (rewriteTop replacements))
-  let refusedWrite := elabProgram (protocol pos ++ [carNominal] ++ badStateTops)
+  let refusedWrite := elabCoerced (protocol pos ++ [carNominal] ++ badStateTops)
   expectError "bound write retains its source effect budget" "<computes>" refusedWrite
   expectError "bound write names the source function" "Touch" refusedWrite
   let controlTops ← getOK "parse independent state control" (parseProgram stateControlSource)
   let controlTops ← getOK "rewrite independent state control" (controlTops.mapM (rewriteTop replacements))
-  let control ← getOK "compile independent state control" (elabProgram (protocol pos ++ [carNominal] ++ controlTops))
+  let control ← getOK "compile independent state control" (elabCoerced (protocol pos ++ [carNominal] ++ controlTops))
   checkTrace "explicit state control" control stateTrace
   let cancellation ← getOK "parse cancellation control" (parseProgram cancelSource)
   let cancellation ← getOK "rewrite cancellation control" (cancellation.mapM (rewriteTop replacements))
-  let cancellation ← getOK "compile cancellation control" (elabProgram (protocol pos ++ [carNominal] ++ cancellation))
+  let cancellation ← getOK "compile cancellation control" (elabCoerced (protocol pos ++ [carNominal] ++ cancellation))
   checkTrace "bound cancellation" cancellation cancelTrace
   let cancelControl ← getOK "parse explicit cancellation control" (parseProgram cancelControlSource)
   let cancelControl ← getOK "rewrite explicit cancellation control" (cancelControl.mapM (rewriteTop replacements))
-  let cancelControl ← getOK "compile explicit cancellation control" (elabProgram (protocol pos ++ [carNominal] ++ cancelControl))
+  let cancelControl ← getOK "compile explicit cancellation control" (elabCoerced (protocol pos ++ [carNominal] ++ cancelControl))
   checkTrace "explicit cancellation control" cancelControl cancelTrace
   let automatic := [
     ("CarEvidence", witness vehicle car),
@@ -1219,8 +1226,8 @@ def main (args : List String) : IO Unit := do
   let materialize (label source : String) : IO Compiled := do
     let parsed ← getOK s!"{label}: parse" (parseProgram source)
     let rewritten ← getOK s!"{label}: rewrite" (parsed.mapM (rewriteTop automatic))
-    let full ← getOK s!"{label}: compile" (elabProgram rewritten)
-    let strict ← getOK s!"{label}: choice-free compile" (elabProgram rewritten { profile := .choiceFree })
+    let full ← getOK s!"{label}: compile" (elabCoerced rewritten)
+    let strict ← getOK s!"{label}: choice-free compile" (elabCoerced rewritten { profile := .choiceFree })
     need s!"{label}: profile preserves admitted bytecode" (full.prog.encode == strict.prog.encode)
     return full
   let materialized ← materialize "automatic dictionaries" source
@@ -1239,16 +1246,16 @@ def main (args : List String) : IO Unit := do
   let receiverTops ← getOK "parse receiver dictionaries" (parseProgram receiverSource)
   let receiverTops ← getOK "rewrite receiver dictionaries" (receiverTops.mapM (rewriteTop automatic))
   let receiverTops := receiverTops.map receiverFields
-  let receiver ← getOK "checked receiver dictionaries" (elabProgram receiverTops)
+  let receiver ← getOK "checked receiver dictionaries" (elabCoerced receiverTops)
   checkTrace "receiver dictionaries" receiver receiverTrace
   let strictReceiver ← getOK "choice-free receiver dictionaries"
-    (elabProgram receiverTops { profile := .choiceFree })
+    (elabCoerced receiverTops { profile := .choiceFree })
   need "receiver dictionaries preserve admitted profile bytecode"
     (receiver.prog.encode == strictReceiver.prog.encode)
   let receiverCompile (label source : String) : IO Compiled := do
     let parsed ← getOK s!"{label}: parse" (parseProgram source)
     let rewritten ← getOK s!"{label}: rewrite" (parsed.mapM (rewriteTop automatic))
-    getOK s!"{label}: compile" (elabProgram (rewritten.map receiverFields))
+    getOK s!"{label}: compile" (elabCoerced (rewritten.map receiverFields))
   let ordinaryState ← receiverCompile "ordinary subtype state" ordinaryStateSource
   checkTrace "ordinary subtype state" ordinaryState ordinaryStateTrace
   let ordinaryStateControl ← receiverCompile "concrete ordinary subtype state" ordinaryStateControlSource
@@ -1302,24 +1309,24 @@ def main (args : List String) : IO Unit := do
   let tupleArgs := [Ty.int, Ty.string, tupleType]
   let tupleTops ← getOK "rewrite compound nominal proof" (tupleTops.mapM (rewriteTop
     [("TupleEvidence", witness (.struct "bridge_base" tupleArgs) (.struct "tuple_bridge" tupleArgs))]))
-  let tupleRelation ← getOK "checked compound adapter proof" (elabProgram (tupleRelations tupleTops))
+  let tupleRelation ← getOK "checked compound adapter proof" (elabCoerced (tupleRelations tupleTops))
   let tupleRelationTrace := "tuple relation 1 s\nnominal tuple 2 n\n"
   checkTrace "compound adapter proof" tupleRelation tupleRelationTrace
   let tupleStrict ← getOK "choice-free compound adapter proof"
-    (elabProgram (tupleRelations tupleTops) { profile := .choiceFree })
+    (elabCoerced (tupleRelations tupleTops) { profile := .choiceFree })
   need "compound adapter proof preserves the admitted profile"
     (tupleRelation.prog.encode == tupleStrict.prog.encode)
   let badTupleTops ← getOK "parse invalid compound adapter instance" (parseProgram
     "tuple_bridge(a:type,b:type,t:type):=class<computes>{}\nMain():void=B:=tuple_bridge(int,string,int){}")
   expectError "whole-value constraint cannot be erased at construction" "does not satisfy subtype(int)"
-    (elabProgram (tupleRelations badTupleTops))
+    (elabCoerced (tupleRelations badTupleTops))
   let entryTops ← getOK "entry-only dictionary declarations"
     (parseProgram "vehicle:=class<computes>{Speed:int=9}\ncar:=class<computes>(vehicle){}\nMain():void={}")
   let entry := SExpr.member pos
     (.app pos (.member pos (witness vehicle car) "Up") [.construct pos "car" [] []] false) "Speed"
-  let autoEntry ← getOK "entry-only dictionary discovery" (elabProgram entryTops { entry := some entry })
+  let autoEntry ← getOK "entry-only dictionary discovery" (elabCoerced entryTops { entry := some entry })
   let strictEntry ← getOK "choice-free entry-only dictionary discovery"
-    (elabProgram entryTops { entry := some entry, profile := .choiceFree })
+    (elabCoerced entryTops { entry := some entry, profile := .choiceFree })
   need "entry dictionary preserves admitted bytecode" (autoEntry.prog.encode == strictEntry.prog.encode)
   checkTrace "entry-only dictionary discovery" autoEntry "9\n"
   let badRequest := STop.classDef pos "$subtypeNominalBad" [] [] ["predicts"] [] false [] []
@@ -1331,7 +1338,7 @@ def main (args : List String) : IO Unit := do
     [.app family [task, task]] false []
     [.fn pos "Up" [{ name := "X", ty := task }] [] ["override", "computes"] task (.ident pos "X")]
   let _ ← getOK "materialized subtype request loads its own library types"
-    (elabProgram [main] { requests := { subtypes := [taskDictionary] } })
+    (elabCoerced [main] { requests := { subtypes := [taskDictionary] } })
   if let [out] := args then
     IO.FS.writeBinFile (out ++ "/evidence.vbc") compiled.prog.encode
     IO.FS.writeFile (out ++ "/evidence.expected") trace
