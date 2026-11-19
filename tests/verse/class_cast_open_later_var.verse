@@ -8,9 +8,9 @@ vpair(a:type, b:type) := class(expr(tuple(a, b))):
     var L:expr(a)
     R:expr(b)
     Eval<override>():tuple(a, b) = (L.Eval(), R.Eval())
-Lits(E:expr(t) where t:type):?t =
+Lits(E:expr(t) where t:type)<transacts>:?t =
     if (Print("try "), P := vpair[E], L := lit[P.L], set P.L = lit{V:=99}, R := lit[P.R]) then option{(L.V, R.V)} else false
-Fail(E:expr(t) where t:type):?t =
+Fail(E:expr(t) where t:type)<transacts>:?t =
     if (Print("try "), P := vpair[E], L := lit[P.L], set P.L = lit{V:=77}, R := lit[P.R], false?) then option{(L.V, R.V)} else false
 Main():void =
     P:=vpair(int,int){L:=lit{V:=3},R:=lit{V:=4}}

@@ -1,6 +1,6 @@
 # choice (#208): a choice's values in spatial order; for takes all of them,
 # if and first{} the first success; failed alternatives are rolled back
-Pick()<decides>:int = first(X := 2 | 3 | 4, X > 2) { X * 10 }
+Pick()<transacts><decides>:int = first(X := 2 | 3 | 4, X > 2) { X * 10 }
 Main():void =
     # for: all values, the leftmost choice slowest; nested choices spliced
     for (X := 1 | 2 | 3):

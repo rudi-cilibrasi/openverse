@@ -2,13 +2,13 @@ pair(a:type,b:type):=class:
     A:a
     B:b
 dup(t:type):=class(pair(t,t)){Index:int=0}
-Select(?Index:int=0):int=Index
-Echo(X:t,?Other:t=X where t:type):t=Other
-Direct(P:pair(a,b) where a:type,b:type)<decides>:tuple(b,b)=
+Select(?Index:int=0)<transacts>:int=Index
+Echo(X:t,?Other:t=X where t:type)<transacts>:t=Other
+Direct(P:pair(a,b) where a:type,b:type)<transacts><decides>:tuple(b,b)=
     X:=Select(?Index:=dup[P].Index)
     Y:=Echo(P.A,?Other:=dup[P].B)
     (P.A,Y)
-Named(P:pair(a,b) where a:type,b:type)<decides>:tuple(b,b)=
+Named(P:pair(a,b) where a:type,b:type)<transacts><decides>:tuple(b,b)=
     D:=dup[P]
     X:=Select(?Index:=D.Index)
     Y:=Echo(P.A,?Other:=D.B)

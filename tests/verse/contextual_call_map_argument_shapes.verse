@@ -1,41 +1,41 @@
 # Map domains survive lifting through each known call-argument shape.
-Empty(?Default:?t=false where t:type):?t=Default
-Id(X:t where t:type):t=X
+Empty(?Default:?t=false where t:type)<transacts>:?t=Default
+Id(X:t where t:type)<transacts>:t=X
 pair(a:type,b:type):=class{A:a;B:b}
 dup(t:type):=class(pair(t,t)){Index:int=0}
-Leaf(X:t,?Index:int=0 where t:type):t=X
-Choose(M:[?int]t,Other:t where t:type):t=Other
-NamedMap(Other:t,?Values:[?int]t where t:type):t=Other
-NamedOther(M:[?int]t,?Other:t where t:type):t=Other
-Array(M:[][?int]t,Other:t where t:type):t=Other
-Option(M:?[?int]t,Other:t where t:type):t=Other
-Tuple(M:tuple([?int]t,int),Other:t where t:type):t=Other
-Nested(M:[?int][?string]t,Other:t where t:type):t=Other
-Weak(M:weak_map(?int,t),Other:t where t:type):t=Other
-Key(V:?int):?int=V
-Case_map(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<decides>:b=
+Leaf(X:t,?Index:int=0 where t:type)<transacts>:t=X
+Choose(M:[?int]t,Other:t where t:type)<transacts>:t=Other
+NamedMap(Other:t,?Values:[?int]t where t:type)<transacts>:t=Other
+NamedOther(M:[?int]t,?Other:t where t:type)<transacts>:t=Other
+Array(M:[][?int]t,Other:t where t:type)<transacts>:t=Other
+Option(M:?[?int]t,Other:t where t:type)<transacts>:t=Other
+Tuple(M:tuple([?int]t,int),Other:t where t:type)<transacts>:t=Other
+Nested(M:[?int][?string]t,Other:t where t:type)<transacts>:t=Other
+Weak(M:weak_map(?int,t),Other:t where t:type)<transacts>:t=Other
+Key(V:?int)<transacts>:?int=V
+Case_map(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<transacts><decides>:b=
     Choose(map{Empty()=>Leaf(P.A,?Index:=dup[Q].Index)},dup[P].B)
-Case_wrapped_key(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<decides>:b=
+Case_wrapped_key(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<transacts><decides>:b=
     Choose(map{Id(Empty())=>Leaf(P.A,?Index:=dup[Q].Index)},dup[P].B)
-Case_named_map(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<decides>:b=
+Case_named_map(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<transacts><decides>:b=
     NamedMap(dup[P].B,?Values:=map{Empty()=>Leaf(P.A,?Index:=dup[Q].Index)})
-Case_named_other(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<decides>:b=
+Case_named_other(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<transacts><decides>:b=
     NamedOther(map{Empty()=>Leaf(P.A,?Index:=dup[Q].Index)},?Other:=dup[P].B)
-Case_array_map(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<decides>:b=
+Case_array_map(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<transacts><decides>:b=
     Array(array{map{Empty()=>Leaf(P.A,?Index:=dup[Q].Index)}},dup[P].B)
-Case_option_map(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<decides>:b=
+Case_option_map(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<transacts><decides>:b=
     Option(option{map{Empty()=>Leaf(P.A,?Index:=dup[Q].Index)}},dup[P].B)
-Case_tuple_map(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<decides>:b=
+Case_tuple_map(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<transacts><decides>:b=
     Tuple((map{Empty()=>Leaf(P.A,?Index:=dup[Q].Index)},0),dup[P].B)
-Case_nested_map(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<decides>:b=
+Case_nested_map(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<transacts><decides>:b=
     Nested(map{Empty()=>map{Empty()=>Leaf(P.A,?Index:=dup[Q].Index)}},dup[P].B)
-Case_weak_map(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<decides>:b=
+Case_weak_map(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<transacts><decides>:b=
     Weak(map{Empty()=>Leaf(P.A,?Index:=dup[Q].Index)},dup[P].B)
-Case_nested_call(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<decides>:b=
+Case_nested_call(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<transacts><decides>:b=
     Choose(map{Empty()=>Choose(map{Empty()=>Leaf(P.A,?Index:=dup[Q].Index)},dup[P].B)},dup[P].B)
-Case_multiple_keys(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<decides>:b=
+Case_multiple_keys(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<transacts><decides>:b=
     Choose(map{Empty()=>Leaf(P.A,?Index:=dup[Q].Index),Empty(?Default:=option{0})=>P.A},dup[P].B)
-Case_explicit_key_control(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<decides>:b=
+Case_explicit_key_control(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<transacts><decides>:b=
     Choose(map{Key(Empty())=>Leaf(P.A,?Index:=dup[Q].Index)},dup[P].B)
 Main():void=
     if(V:=Case_map[dup(int){A:=7,B:=9},dup(string){A:="left",B:="right"}])then Print("map value {V}")else Print("map wrong")

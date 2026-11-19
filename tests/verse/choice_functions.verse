@@ -2,7 +2,7 @@
 # values are the caller's, in spatial order, with rollback of failed ones
 Digit():int = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
 Twice(X:int):int = X | X * 2
-Tell(S:string, V:int):int =
+Tell(S:string, V:int)<transacts>:int =
     Print(S)
     V
 Pick(X:int):int =

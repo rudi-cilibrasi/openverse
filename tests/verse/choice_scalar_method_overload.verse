@@ -1,10 +1,10 @@
-Tell(S:string,V:int):int=
+Tell(S:string,V:int)<transacts>:int=
     Print(S)
     V
 
 probe:=class:
-    Many(N:int):int=N|(N+1)
-    Many(A:int,B:int):int=A*10+B
+    Many(N:int)<transacts>:int=N|(N+1)
+    Many(A:int,B:int)<transacts>:int=A*10+B
     Run():void=
         Print("scalar direct")
         A:=for{X:=Tell("wrong scalar prefix",0)+(1|2);Y:=Self.Many(0,1);false?;X+Y}

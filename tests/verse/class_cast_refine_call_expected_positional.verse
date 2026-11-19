@@ -10,9 +10,9 @@ Mark(H:cell,S:string,X:t where t:type)<transacts>:t=
 Mix(H:cell,X:t,Y:u,Left:t,Right:u,?Z:int=Mark(H,"D",0) where t:type,u:type)<transacts>:tuple(t,u)=
     set H.Trace+="C"
     (Left,Right)
-Direct(P:pair(a,b),Q:pair(c,d),H:cell where a:type,b:type,c:type,d:type)<decides>:tuple(b,d)=
+Direct(P:pair(a,b),Q:pair(c,d),H:cell where a:type,b:type,c:type,d:type)<transacts><decides>:tuple(b,d)=
     Mix(H,Mark(H,"P",P.A),Mark(H,"Q",Q.A),Mark(H,"X",dup[P].B),Mark(H,"Y",dup[Q].B))
-Named(P:pair(a,b),Q:pair(c,d),H:cell where a:type,b:type,c:type,d:type)<decides>:tuple(b,d)=
+Named(P:pair(a,b),Q:pair(c,d),H:cell where a:type,b:type,c:type,d:type)<transacts><decides>:tuple(b,d)=
     A:=Mark(H,"P",P.A)
     B:=Mark(H,"Q",Q.A)
     DP:=dup[P]
@@ -20,7 +20,7 @@ Named(P:pair(a,b),Q:pair(c,d),H:cell where a:type,b:type,c:type,d:type)<decides>
     DQ:=dup[Q]
     R:=Mark(H,"Y",DQ.B)
     Mix(H,A,B,L,R)
-Stop(P:pair(a,b),Q:pair(c,d),H:cell where a:type,b:type,c:type,d:type)<decides>:tuple(b,d)=
+Stop(P:pair(a,b),Q:pair(c,d),H:cell where a:type,b:type,c:type,d:type)<transacts><decides>:tuple(b,d)=
     V:tuple(b,d)=Mix(H,Mark(H,"P",P.A),Mark(H,"Q",Q.A),Mark(H,"X",dup[P].B),Mark(H,"Y",dup[Q].B))
     false?
     V

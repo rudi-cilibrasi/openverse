@@ -1,5 +1,5 @@
 # Rollback spans calls: output written by a failed callee is undone.
-Check(X:int)<decides>:int =
+Check(X:int)<transacts><decides>:int =
     Print("checking {X}")
     X > 10
 

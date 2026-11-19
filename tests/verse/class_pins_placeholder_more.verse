@@ -2,21 +2,21 @@
 # argument: receivers read from fields, arrays, for loops and if-bindings,
 # and variables of its type, start as a hidden placeholder object (#157)
 expr(t:type) := class<abstract>:
-    Eval():t
+    Eval()<transacts>:t
 int_lit := class(expr(int)):
     N:int
-    Eval<override>():int = N
+    Eval<override>()<transacts>:int = N
 neg := class(expr(int)):
     E:expr(int)
-    Eval<override>():int = -E.Eval()
+    Eval<override>()<transacts>:int = -E.Eval()
 bool_lit := class(expr(logic)):
     B:logic
-    Eval<override>():logic = B
+    Eval<override>()<transacts>:logic = B
 holder(t:type) := class:
     E:expr(t)
-All(Es:[]expr(t) where t:type):[]t = for (E : Es) { E.Eval() }
+All(Es:[]expr(t) where t:type)<transacts>:[]t = for (E : Es) { E.Eval() }
 First(Es:[]expr(t), X:t where t:type):t = if (E := Es[0]) then E.Eval() else X
-Held(H:holder(t) where t:type):t = H.E.Eval()
+Held(H:holder(t) where t:type)<transacts>:t = H.E.Eval()
 Last(Es:[]expr(t), X:t where t:type):t =
     var Cur:?expr(t) = false
     for (E : Es) { set Cur = option{E} }

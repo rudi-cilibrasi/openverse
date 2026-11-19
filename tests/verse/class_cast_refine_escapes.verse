@@ -8,17 +8,17 @@ pair(t:type, u:type) := class:
     B:u
 dup(t:type) := class(pair(t, t)):
     C:int = 0
-    Try(P:pair(a, b) where a:type, b:type):int =
+    Try(P:pair(a, b) where a:type, b:type)<transacts>:int =
         if (D := dup[P]):
             if (D.C = C) then return 1
         0
-SR(P:pair(a, b) where a:type, b:type):int =
+SR(P:pair(a, b) where a:type, b:type)<transacts>:int =
     var N:int = 10
     if (D := dup[P]):
         set N += D.C
         if (N > 12) then return N * 100
     N
-Loop(P:pair(a, b) where a:type, b:type):int =
+Loop(P:pair(a, b) where a:type, b:type)<transacts>:int =
     if (D := dup[P]):
         for (I := 1..5):
             if (I = D.C) then return I * 1000
@@ -28,22 +28,22 @@ Def(P:pair(a, b) where a:type, b:type)<transacts>:int =
     if (D := dup[P]):
         return D.C
     0
-More(P:pair(a, b) where a:type, b:type):int =
+More(P:pair(a, b) where a:type, b:type)<transacts>:int =
     if (D := dup[P], D.C > 2):
         return D.C
     0
-F(P:pair(a, b), X:a where a:type, b:type):b =
+F(P:pair(a, b), X:a where a:type, b:type)<transacts>:b =
     if (D := dup[P]):
         return D.A
     else:
         P.B
-G(P:pair(a, b) where a:type, b:type):int =
+G(P:pair(a, b) where a:type, b:type)<transacts>:int =
     if (D := dup[P]):
         if (D.C > 5) then return 100
         Print("small")
     Print("after")
     1
-H(Ps:[]pair(a, b) where a:type, b:type):int =
+H(Ps:[]pair(a, b) where a:type, b:type)<transacts>:int =
     var N:int = 0
     for (P : Ps):
         set N += 1
@@ -53,12 +53,12 @@ H(Ps:[]pair(a, b) where a:type, b:type):int =
         else:
             break
     N
-V(P:pair(a, b) where a:type, b:type):void =
+V(P:pair(a, b) where a:type, b:type)<transacts>:void =
     if (D := dup[P]):
         Print("dup {D.C}")
         return
     Print("not dup")
-K(P:pair(a, b), X:a where a:type, b:type):int =
+K(P:pair(a, b), X:a where a:type, b:type)<transacts>:int =
     R:int = if (D := dup[P]):
         if (D.C > 1) then return 7
         D.C * 10

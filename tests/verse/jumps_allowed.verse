@@ -17,7 +17,7 @@ Count(Limit:int):int =
     N
 # a <decides> function's returns in tail position: the body, the branches
 # of its last if, the arms of its last case, a return's value
-Sign(X:int)<decides>:int =
+Sign(X:int)<transacts><decides>:int =
     if (X > 0):
         return 1
     else if (X < 0):
@@ -25,14 +25,14 @@ Sign(X:int)<decides>:int =
     else:
         X = 0
         return 0
-Pick(X:int)<decides>:int =
+Pick(X:int)<transacts><decides>:int =
     case (X):
         1 => return 10
         2 => 20
         _ => return X * 100
-Same(X:int)<decides>:int = return X
+Same(X:int)<transacts><decides>:int = return X
 # a loop in a <decides> function, left by a break in a branch
-Steps(X:int)<decides>:int =
+Steps(X:int)<transacts><decides>:int =
     X > 0
     var N:int = X
     loop:

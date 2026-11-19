@@ -4,12 +4,12 @@ pair(a:type,b:type):=class:
     A:a
     B:b
 dup(t:type):=class(pair(t,t)){Index:int=0}
-Second(Stop:logic):int=if(Stop?)then Err()else 0
-Direct(P:pair(a,b),Q:pair(c,d),Stop:logic where a:type,b:type,c:type,d:type)<decides>:tuple(d,d)=
+Second(Stop:logic)<transacts>:int=if(Stop?)then Err()else 0
+Direct(P:pair(a,b),Q:pair(c,d),Stop:logic where a:type,b:type,c:type,d:type)<transacts><decides>:tuple(d,d)=
     var A:[][]d=array{array{Q.B}}
     R:=set A[dup[P].Index][Second(Stop)+dup[Q].Index]=Q.A
     (R,A[0][0])
-Named(P:pair(a,b),Q:pair(c,d),Stop:logic where a:type,b:type,c:type,d:type)<decides>:tuple(d,d)=
+Named(P:pair(a,b),Q:pair(c,d),Stop:logic where a:type,b:type,c:type,d:type)<transacts><decides>:tuple(d,d)=
     var A:[][]d=array{array{Q.B}}
     D:=dup[P]
     I:=D.Index

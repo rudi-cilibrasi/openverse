@@ -1,8 +1,8 @@
 # Preserve producer/consumer order, cleanup and storage across shared operations (#335).
-Default(N:int):int=
+Default(N:int)<transacts>:int=
     Print("default {N}")
     N+3
-Arg(N:int):int=
+Arg(N:int)<transacts>:int=
     Print("arg {N}")
     N
 Many(N:int):int=

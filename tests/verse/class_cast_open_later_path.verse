@@ -2,28 +2,28 @@
 # opens type arguments: where the cast takes the clauses after it (the
 # clauses before it print), the branch casts again, reading the object again
 expr(t:type) := class<abstract>:
-    Eval():t
+    Eval()<transacts>:t
 lit := class(expr(int)):
     V:int
-    Eval<override>():int = V
+    Eval<override>()<transacts>:int = V
 txt := class(expr(string)):
     S:string
-    Eval<override>():string = S
+    Eval<override>()<transacts>:string = S
 pairE(a:type, b:type) := class(expr(tuple(a, b))):
     L:expr(a)
     R:expr(b)
-    Eval<override>():tuple(a, b) = (L.Eval(), R.Eval())
+    Eval<override>()<transacts>:tuple(a, b) = (L.Eval(), R.Eval())
 holder(t:type) := class:
     E:expr(t)
 # t = tuple(a', b'), a' = int, b' = string
 # (a failed condition undoes its output)
-Lits(E:expr(t) where t:type):?t =
+Lits(E:expr(t) where t:type)<transacts>:?t =
     if (Print("try "), P := pairE[E], L := lit[P.L], R := txt[P.R]) then option{(L.V + 1, R.S + "!")} else false
 # through a field of a field: t = tuple(tuple(int, b''), b')
-Deep(H:holder(t) where t:type):?t =
+Deep(H:holder(t) where t:type)<transacts>:?t =
     if (Print("deep "), P := pairE[H.E], Q := pairE[P.L], L := lit[Q.L]) then option{((L.V * 10, Q.R.Eval()), P.R.Eval())} else false
 # in a for, the same: each element's clauses, then the body
-Sums(Es:[]expr(t) where t:type):[]t =
+Sums(Es:[]expr(t) where t:type)<transacts>:[]t =
     for (E : Es, (Print("e "); true?), P := pairE[E], L := lit[P.L], R := lit[P.R]) { (L.V + R.V, R.V) }
 Main():void =
     if (V := Lits(pairE(int, string){L := lit{V := 4}, R := txt{S := "s"}})?) then Print("{V(0)} {V(1)}")

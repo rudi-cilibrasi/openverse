@@ -267,7 +267,10 @@ private def compileCase (source : String) (dummy : Bool) : Except String Compile
     | .fn p name ps tps specs ret body => .fn p name (ps.map fun param =>
         { param with typeValue := dummy && name == "Caller" && param.name == "Dummy" }) tps specs ret body
     | top => top
-  elabProgram tops
+  -- (#515: the cases signal in <transacts> functions and conditions, which
+  -- the default admission refuses; these contracts are about metadata
+  -- flow, so they compile in the legacy transactional mode, as before)
+  elabProgram tops { signalNoRollback := false }
 
 def main : IO Unit := do
   -- Inspect the dependencies on a typed program independently of the

@@ -26,7 +26,7 @@ int_box := box(int)
 box_of(t:type) := box(t)
 pair_box(t:type) := box(tuple(t, t))
 
-Shade(C:colour):hue = C
+Shade(C:colour)<transacts>:hue = C
 Speak(G:hello):string = G.Greet()
 Total(P:pt):int = P.X + P.Y
 

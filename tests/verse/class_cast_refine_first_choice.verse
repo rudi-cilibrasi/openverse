@@ -13,7 +13,7 @@ Touch(H:counter, Amount:int, Value:int)<transacts>:int =
     set H.N += Amount
     Value
 Values(N:int)<computes>:int = N | N + 1
-Simple(P:pair(a, b) where a:type, b:type):void =
+Simple(P:pair(a, b) where a:type, b:type)<transacts>:void =
     if (V := if (D := dup[P]) then (D.C | D.C + 1) else 0, V > 4):
         Print("simple {V}")
     else:
@@ -38,7 +38,7 @@ NoFallback(P:pair(a, b) where a:type, b:type)<transacts>:void =
         Print("fallback {V} {H.N}")
     else:
         Print("no fallback {H.N}")
-More(P:pair(a, b), Threshold:int where a:type, b:type):void =
+More(P:pair(a, b), Threshold:int where a:type, b:type)<transacts>:void =
     if (V := if (D := dup[P], K := D.C, K > Threshold) then (K | K + 1) else 0, V > 4):
         Print("more {V}")
     else:
@@ -47,7 +47,7 @@ More(P:pair(a, b), Threshold:int where a:type, b:type):void =
         Print("chain {V}")
     else:
         Print("chain missed")
-Join(P:pair(a, b) where a:type, b:type):void =
+Join(P:pair(a, b) where a:type, b:type)<transacts>:void =
     if (V := if (D := dup[P]) then (false | option{D.C}) else option{8}, N := V?):
         Print("join {N}")
 Cleanup(P:pair(a, b) where a:type, b:type)<transacts>:void =
@@ -61,10 +61,10 @@ Cleanup(P:pair(a, b) where a:type, b:type)<transacts>:void =
         Print("cleanup {V} {H.N}")
     else:
         Print("cleanup missed {H.N}")
-Prior(P:pair(a, b), Q:pair(a, b) where a:type, b:type):void =
+Prior(P:pair(a, b), Q:pair(a, b) where a:type, b:type)<transacts>:void =
     if (X := P | Q, V := if (D := dup[X]) then (D.C | D.C + 1) else 0, V = 0):
         Print("prior choice {V}")
-LocalState(P:pair(a, b) where a:type, b:type):void =
+LocalState(P:pair(a, b) where a:type, b:type)<transacts>:void =
     var Total:int = 0
     if (V := if (D := dup[P]) then (D.C | D.C + 1) else 0, set Total += V, W := Total, V > 4):
         Print("local {Total} {W}")

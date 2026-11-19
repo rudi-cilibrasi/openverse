@@ -19,6 +19,7 @@ ret="[?int]int" if shape=="map" else "int"
 pathlib.Path(sys.argv[2]).write_text("Empty(?Default:?t=false where t:type):?t=Default\npair(a:type,b:type):=class{}\ndup(t:type):=class(pair(t,t)){Index:int=0}\nWrap(X:int):int=X\nNeed(X:string,?Index:int=0):int=Index\nF(P:pair(a,b) where a:type,b:type)<decides>:"+ret+"="+body+"\nMain():void={}\n")
 PY
   status=0
+  python3 -I "$root/scripts/models/default_effect.py" "$tmp/invalid.verse"  # (#515: Epic's default effect written out)
   (ulimit -v 4194304; timeout "$limit" "$ov" check "$tmp/invalid.verse") >"$tmp/out" 2>"$tmp/err" || status=$?
   diagnostic=0
   grep -qF 'expected string, found int' "$tmp/err" && diagnostic=1
@@ -46,6 +47,7 @@ source='Empty(?Default:?t=false where t:type):?t=Default\npair(a:type,b:type):=c
 if shape=='map':source=source.replace('if(V:=F[','if(M:=F[').replace('}])then','}],V:=M[false])then')
 pathlib.Path(sys.argv[2]).write_text(source)
 PY
+  python3 -I "$root/scripts/models/default_effect.py" "$tmp/valid.verse"  # (#515: Epic's default effect written out)
   { (ulimit -v 4194304; timeout "$limit" "$ov" run "$tmp/valid.verse" --emit "$tmp/p.vbc"); echo "exit=$?"; } >"$tmp/lean"
   { timeout "$limit" "$cv" "$tmp/p.vbc"; echo "exit=$?"; } >"$tmp/c"
   cmp "$tmp/want" "$tmp/lean"
@@ -68,12 +70,14 @@ for ty,a,b,label in [('int','7','9','int'),('string','"left"','"right"','string'
 pathlib.Path(sys.argv[3]).write_text(source)
 PYMAP
   status=0
+  python3 -I "$root/scripts/models/default_effect.py" "$tmp/nested-invalid.verse"  # (#515: Epic's default effect written out)
   (ulimit -v 4194304; timeout "$limit" "$ov" check "$tmp/nested-invalid.verse") >"$tmp/out" 2>"$tmp/err" || status=$?
   if [[ $status != 4 ]] || ! grep -qF 'expected string, found int' "$tmp/err"; then
     echo "FAIL nested map recovery: $n literals, status $status"
     cat "$tmp/err"
     exit 1
   fi
+  python3 -I "$root/scripts/models/default_effect.py" "$tmp/nested-valid.verse"  # (#515: Epic's default effect written out)
   { (ulimit -v 4194304; timeout "$limit" "$ov" run "$tmp/nested-valid.verse" --emit "$tmp/p.vbc"); echo "exit=$?"; } >"$tmp/lean"
   { timeout "$limit" "$cv" "$tmp/p.vbc"; echo "exit=$?"; } >"$tmp/c"
   cmp "$tmp/want" "$tmp/lean"

@@ -32,7 +32,7 @@ MakePlayer<constructor>(N:string) := player:
 MakeNewPlayer<constructor>(N:string) := player:
     MakePlayer<constructor>(N)
 
-MakeValid<constructor>(N:string, L:int)<decides> := character:
+MakeValid<constructor>(N:string, L:int)<transacts><decides> := character:
     let:
         Ok := L > 0
     Health := L
@@ -46,7 +46,7 @@ node := class:
     V:int
     Next:?node = false
 
-MakeList<constructor>(N:int) := node:
+MakeList<constructor>(N:int)<transacts> := node:
     V := N
     Next := if (N > 0) then option{MakeList(N - 1)} else false
 

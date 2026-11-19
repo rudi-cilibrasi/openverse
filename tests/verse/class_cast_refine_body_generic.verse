@@ -8,7 +8,7 @@ Repeat(X:t,N:int where t:type)<computes><decides>:t =
     N >= 0
     X | Repeat[X,N-1]
 Pick(X:t,?Y:t=X where t:type)<computes>:t = X | Y
-Typed(X:t,P:pair(a,b) where t:type,a:type,b:type):[][]t =
+Typed(X:t,P:pair(a,b) where t:type,a:type,b:type)<transacts>:[][]t =
     for (V := if (D := dup[P]) then (D.C | D.C + 1) else 0):
         for (Y := Repeat[X,1], Z := Pick(Y)):
             Empty:[]t = array{}
@@ -26,7 +26,7 @@ Written(Unused:t,P:pair(a,b) where t:type,a:type,b:type):int =
     R.Length
 box(t:type) := class:
     Value:t
-    Run(P:pair(a,b) where a:type,b:type):[][]t =
+    Run(P:pair(a,b) where a:type,b:type)<transacts>:[][]t =
         for (V := if (D := dup[P]) then (D.C | D.C + 1) else 0):
             for (Y := Repeat[Value,0], Z := Pick(Y)):
                 Z

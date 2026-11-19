@@ -5,7 +5,7 @@
 box(t:type) := class:
     Value:t
     Count:int = 0
-    Get():t = Value
+    Get()<transacts>:t = Value
 
 pair(a:type, b:type) := class:
     First:a
@@ -33,7 +33,7 @@ MakeLabeled<constructor>(V:int, L:string) := intbox:
     Label := L
     MakeBox<constructor>(V)
 
-MakeOpt<constructor>(V:t where t:type) := box(?t):
+MakeOpt<constructor>(V:t where t:type)<transacts> := box(?t):
     Value := option{V}
 
 Main():void =

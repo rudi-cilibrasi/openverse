@@ -4,12 +4,12 @@
 # first success is taken (with the overload of several values or of one),
 # a class block, and an if with no filter
 G(N:int):int = N | N + 1
-F(N:int):int = N | N * 10
-F(S:string):[]int = for (X := G(S.Length)) { X }
-Two(N:int):int = N * 2
-Two(S:string):int = S.Length | 100
-H(S:string):int = Two(S) + 1
-H2(N:int):int = Two(N) + 1
+F(N:int)<transacts>:int = N | N * 10
+F(S:string)<transacts>:[]int = for (X := G(S.Length)) { X }
+Two(N:int)<transacts>:int = N * 2
+Two(S:string)<transacts>:int = S.Length | 100
+H(S:string)<transacts>:int = Two(S) + 1
+H2(N:int)<transacts>:int = Two(N) + 1
 c := class:
     K : int = 3
     block:

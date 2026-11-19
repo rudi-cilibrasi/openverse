@@ -1,6 +1,6 @@
 # Covariant multi-value calls preserve static results and consumer boundaries (#283).
-animal(t:type) := class { V:t; Label():string="animal" }
-dog(t:type) := class(animal(t)) { Bark:int=0; Label<override>():string="dog" }
+animal(t:type) := class { V:t; Label()<transacts>:string="animal" }
+dog(t:type) := class(animal(t)) { Bark:int=0; Label<override>()<transacts>:string="dog" }
 maker(a:type,b:type) := class:
     Get(X:a,Y:[]b,?K:int=0)<transacts>:animal(a) = animal(a){V:=X} | animal(a){V:=X}
 fixed(u:type) := class(maker(int,u)):

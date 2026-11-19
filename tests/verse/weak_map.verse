@@ -19,7 +19,7 @@ holder := class:
     var Cells:weak_map(int, []int) = map{}
 
 Identity(X:t where t:type):t = X
-Lookup(W:weak_map(base, int), K:base)<decides>:int = W[K]
+Lookup(W:weak_map(base, int), K:base)<transacts><decides>:int = W[K]
 Make(K:derived):weak_map(derived, int) = map{K => 7}
 
 Main():void =

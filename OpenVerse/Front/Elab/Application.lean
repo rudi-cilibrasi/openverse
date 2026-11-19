@@ -88,6 +88,24 @@ partial def elabRefinementCast (elabE : Ctx → SExpr → Option Ty → EM R) (c
   let checks := conds.foldr (fun c acc => Expr.seq (test c) acc) (.local tv)
   return ⟨.seq (.assign tv r.e) checks, .refine name⟩
 
+/-- `int[X]` of an int `X` (also of a refinement of int): `X`, a cast to
+    the type of every int, failable as every cast is (so it may be an `if`'s
+    condition), which no int fails: its test, `X = X`, always passes, past
+    64 bits too (#724). UEFN 43.12
+    (build ++Fortnite+Release-43.12-CL-60598086) admits `int[Big]` of an int
+    and it succeeds for 2^63 there
+    (tests/conformance/versevm/book/book-int-cast-int.verse: "int cast
+    succeeded"; the Book of Verse's tests, WhereConstrainedInts.versetest:219-222,
+    verse_vm_only), and refuses it of a class's value with error 3509
+    (Cast.versetest:35). -/
+partial def elabIntCast (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p : Pos) (args : List SExpr) :
+    EM R := do
+  let [a] := args | eerr p "a cast to int takes one value"
+  let r := widenR ctx.types (← elabE ctx a (some .int))
+  if r.ty != .int then eerr p s!"a cast to int takes an int, found {r.ty.show} (Epic's Verse compiler, UEFN 43.12: error 3509)"
+  let tv ← fresh .int
+  return ⟨.seq (.assign tv r.e) (.seq (p2 .eq (.local tv) (.local tv)) (.local tv)), .int⟩
+
 /-! ## Applications of a name -/
 
 /-- A call of an extension method's function `name`, `$ext:M` (Book of
@@ -313,6 +331,9 @@ partial def elabFunctionCall (cb : AppElab) (ctx : Ctx) (p : Pos) (f : SExpr) (n
         if !ctx.suspends then eerr p s!"{shown} suspends: it can only be called in a <suspends> function (#156)"
         if ctx.inDefer then eerr p s!"{shown} suspends, and a defer cannot suspend (#156)"
         if ctx.canFail then eerr p s!"{shown} suspends, and a failure context (a condition, a filter, or a <decides> call's arguments) cannot (#156)"
+      -- (#515) after the call's own form: a function without a heap
+      -- specifier has no_rollback
+      checkNoRollbackCall ctx p s (Choice.shownFnName name)
       if !s.tparams.isEmpty then
         let r ← cb.elabGenericCall ctx p s args exp
         if s.suspends then return ⟨← cb.withDeferMark ctx r.e, r.ty⟩ else return r
@@ -408,6 +429,12 @@ partial def elabEventSignal? (cb : AppElab) (ctx : Ctx) (p mp : Pos) (obj : SExp
     else return none
   | _ => return none
 
+/-- (#515) An event's `Await` as a callee: it has `no_rollback` (UEFN 43.12
+    refuses it in a `<transacts>` function, 3512, followup/await-in-transacts). -/
+def awaitSig (ctx : Ctx) : Sig :=
+  { idx := 0, name := "Await", params := [], ret := .void, decides := false, isConst := false,
+    noRollback := ctx.types.defaultNoRollback }
+
 /-- `T.Await()` of a task, and `E.Await()` of an event (#156): the helper
     `$Await(T)`, `$EvAwait(E)` or, of a sticky event, `$StickyAwait(E)`.
     `none` for any other call (its receiver is elaborated). -/
@@ -420,9 +447,15 @@ partial def elabAwait? (cb : AppElab) (ctx : Ctx) (p mp : Pos) (obj : SExpr) (m0
       return some (← cb.elabApp ctx p (.ident mp "$Await") [obj] false exp)
     else if ((n == ctx.types.concurrencyName "event" || n == ctx.types.concurrencyName "subscribable_event") &&
         ts.length == 1) || (n == "$subev0" && ts.isEmpty) then
-      return some (← cb.elabApp ctx p (.ident mp "$EvAwait") [obj] false exp)
+      let r ← cb.elabApp ctx p (.ident mp "$EvAwait") [obj] false exp
+      checkNoRollbackCall ctx p (awaitSig ctx) "event.Await"
+      return some r
     else if n == ctx.types.concurrencyName "sticky_event" && ts.length == 1 then
-      return some (← cb.elabApp ctx p (.ident mp "$StickyAwait") [obj] false exp)
+      -- (#515: an event's Await has no_rollback, UEFN 43.12: 3512,
+      -- followup/await-in-transacts)
+      let r ← cb.elabApp ctx p (.ident mp "$StickyAwait") [obj] false exp
+      checkNoRollbackCall ctx p (awaitSig ctx) "sticky_event.Await"
+      return some r
     else return none
   | _ => return none
 
@@ -969,6 +1002,10 @@ partial def elabValueDispatch (cb : AppElab) (ctx : Ctx) (p : Pos) (mc : MethodC
     let rc ← cb.elabApp ctx' p (.ident mc.mp fname) (.ident mc.mp s!"$self{sd}" :: da.argIds.toList) mc.bracket mc.exp
     acc := .ite (.assign td (.prim .query [.prim (.tupGet j) [.local mc.slot]]))
       (.seq (.assign sd (classWrap env d d (.local td))) (← coerce p rc da.msRet)) acc
+  -- (no class can be the receiver, a function type's shape no function
+  -- value has, say: the call cannot run; a failable one still fails, for
+  -- the failure checks, as a reference's dispatch does)
+  if mc.ds.isEmpty && mc.ms.decides then acc := .prim .fail []
   let y ← fresh da.msRet
   return ⟨da.pre.toList.foldr Expr.seq (.assign y acc), da.msRet⟩
 
@@ -1000,6 +1037,7 @@ partial def elabMethodCall (cb : AppElab) (ctx : Ctx) (p mp : Pos) (obj : SExpr)
     eerr p "spawn{…} takes a call of a <suspends> function (#156)"
   if ms.decides && !bracket then eerr p s!"{m} is <decides>: call it with {m}[…]"
   if !ms.decides && bracket then eerr p s!"{m} cannot fail: call it with {m}(…)"
+  checkNoRollbackCall ctx p ms s!"{owner}.{m}"
   if ms.named.isEmpty && args.length + 1 != ms.params.length then
     eerr p s!"{m} takes {ms.params.length - 1} argument(s), found {args.length}"
   let slot ← fresh r.ty
@@ -1091,6 +1129,8 @@ partial def elabAppBaseWith (cb : AppElab) (ctx : Ctx) (p : Pos) (f : SExpr) (ar
       return ← elabRefinementCast cb.elabE ctx p name base conds args bracket
     if convertsByName ctx name bracket then
       return ← elabConversionWith cb.elabE ctx p (.name name) args
+    if name == "int" && bracket && (ctx.sig? name).isNone && (ctx.types.overloads.lookup name).isNone then
+      return ← elabIntCast cb.elabE ctx p args
     if let some ovs := ctx.types.overloads.lookup name then
       return ← elabOverloadedCall cb ctx p name ovs args bracket exp
     let (builtin, name) := builtinCalled ctx name

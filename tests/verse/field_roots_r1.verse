@@ -2,7 +2,7 @@
 box := class:
     var A:[]int = array{}
 
-FailAfterPut(B:box)<decides>:void =
+FailAfterPut(B:box)<transacts><decides>:void =
     set B.A = array{99, 99, 99}
     1 > 2
 

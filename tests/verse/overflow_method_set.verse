@@ -16,7 +16,7 @@ ctr := class:
     Add(X:int)<transacts>:int =
         set C += X
         C
-Tell(S:string, X:int):int =
+Tell(S:string, X:int)<transacts>:int =
     Print(S)
     X
 Main():void =

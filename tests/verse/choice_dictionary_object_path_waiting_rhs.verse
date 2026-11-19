@@ -6,7 +6,7 @@ sb:=struct{X:rational;Tail:int}
 ca:=class:
     H:cell
     var State:sa
-    RHS(E:event(int))<transacts><suspends>:int=
+    RHS(E:event(int))<suspends>:int=
         defer:Print("leave a")
         Print("wait a")
         set H.N+=1
@@ -18,7 +18,7 @@ ca:=class:
 cb:=class:
     H:cell
     var State:sb
-    RHS(E:event(int))<transacts><suspends>:int=
+    RHS(E:event(int))<suspends>:int=
         defer:Print("leave b")
         Print("wait b")
         set H.N+=1

@@ -1,11 +1,11 @@
 root(t:type):=class:
     V:t
-    Match(X:u,Y:u where u:subtype(comparable))<decides>:u=block{X=Y;X}
+    Match(X:u,Y:u where u:subtype(comparable))<transacts><decides>:u=block{X=Y;X}
 bounded(t:subtype(comparable),u:type):=class(root(t)):
     Extra:u
 Use(P:root(t) where t:type):void=
     if(D:=bounded[P]):
-        F:type{_(:t,:t)<decides>:t}=D.Match
+        F:type{_(:t,:t)<transacts><decides>:t}=D.Match
         if(F[D.V,P.V])then Print("same")else Print("bad")
     else:
         Print("base")

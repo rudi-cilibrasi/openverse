@@ -14,7 +14,7 @@ Noisy(N:int, M:[int]int):[int]int =
     Print("arg {N}")
     M
 
-Pick(B:logic)<decides>:[int]int =
+Pick(B:logic)<transacts><decides>:[int]int =
     B?
     map{9 => 9}
 

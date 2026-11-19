@@ -120,6 +120,7 @@ def declareSignatures (env : TyEnv) (tops : List STop) (requests : Requests) :
       checkExclusive p n effs
       sigs := sigs.push { idx, name := n, params := tys, ret := rt, decides := effs.contains "decides",
                           suspends := effs.contains "suspends",
+                          noRollback := effs.contains SignalAdmission.noRollbackMarker,
                           -- (a `block:`'s effects are inferred below, from none, as a
                           -- constant's: blocks that construct each other's classes)
                           fx := if n.endsWith ".$block" || defaultBridge n || (n.splitOn "$default$").length > 1 then [] else allowedFx effs,
@@ -204,6 +205,7 @@ def declareSignatures (env : TyEnv) (tops : List STop) (requests : Requests) :
       gsigs := gsigs.push { idx := tops.length + gidx, name := n, params := tys, ret := rt, selfTps,
                             decides := effs.contains "decides", isConst := false,
                             suspends := effs.contains "suspends",
+                            noRollback := effs.contains SignalAdmission.noRollbackMarker,
                             -- (a parametric class's `block:`: inferred from none, #41)
                             fx := if n.endsWith ".$block" || defaultBridge n then [] else allowedFx effs,
                             tparams, bounds := resolved.bounds, selfBounds,

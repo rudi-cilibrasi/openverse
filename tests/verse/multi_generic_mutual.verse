@@ -21,7 +21,7 @@ C(Z:tuple(c,d),N:int,H:cell where c:type,d:subtype(comparable))<transacts><decid
     Print("C {N}")
     E:[]c=Concatenate()
     if(N>0)then (Emit(Z(0),Z(1),10*N+4) | A[Z(0),Z(1),N-1,H] | Emit(Z(0),Z(1),10*N+5))else Emit(Z(0),Z(1),4)
-Run(X:b,Y:a,W:w where a:subtype(comparable),b:type,w:type):?tuple(b,a,int) =
+Run(X:b,Y:a,W:w where a:subtype(comparable),b:type,w:type)<transacts>:?tuple(b,a,int) =
     F:=cell{}
     var Seen:int=0
     Result:=option{V:=B[(Y,X,2,F)];E:[]w=Concatenate();set Seen+=V(2);V(2)=0;V}

@@ -1,5 +1,5 @@
-Alt(A:int,B:int):int = A - B | B * 3
-Alt(S:string):int = S.Length | 0
+Alt(A:int,B:int)<transacts>:int = A - B | B * 3
+Alt(S:string)<transacts>:int = S.Length | 0
 Pick(A:int)<computes>:int = A * 5
 Pick(S:string)<computes>:int = S.Length | 9
 Pick(A:int,B:int)<computes>:int = Pick(A) | Pick("{B}")

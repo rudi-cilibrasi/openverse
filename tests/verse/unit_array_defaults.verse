@@ -3,7 +3,7 @@ buffer(t:type) := class:
 
     Add(X:t):void = set Items += array{X}
 
-    Take()<decides>:t =
+    Take()<transacts><decides>:t =
         Result := Items[0]
         set Items = for (I -> X : Items, I > 0) { X }
         Result

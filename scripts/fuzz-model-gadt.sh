@@ -56,11 +56,22 @@ for ((s=first; s<first+n; s++)); do
   # (gadt_spawn_defaults, #468), and a default that waits (gadt_waiting_contexts,
   # #283).
   case $g in gadt_spawn_defaults|gadt_waiting_contexts) compat+=(--extended-defaults) ;; esac
+  # This model signals in a <decides> function's for body and checks that a
+  # failure rolls the signal back: the legacy transactional mode (#515; Epic's
+  # compiler, and openverse's default, refuse such a Signal).
+  # (its <decides> function signals, so it keeps Epic's default effect,
+  # no_rollback, which its call in a condition cannot have: the old rule
+  # too, --default-rollback)
+  case $g in gadt_event_body) compat+=(--signal-rollback --default-rollback) ;; esac
+  # (#515: Epic's default effect, written out: <transacts> where a function without one is called from a failure context or <transacts> code)
+  python3 -I "$root/scripts/models/default_effect.py" "$tmp/p.verse"
   timeout 120 "$ov" run "$tmp/p.verse" "${compat[@]}" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.err"
   want=$(head -1 "$tmp/p.exp" | sed 's/exit=//')
   if [[ $want == 4 ]]; then
     msg=$(sed -n 2p "$tmp/p.exp")
-    if [[ $le == 4 ]] && grep -qF "$msg" "$tmp/l.err" && ! grep -q "internal" "$tmp/l.err"; then ref=$((ref+1)); continue; fi
+    # (the model's message has the types it wrote; the program has them with
+    # <transacts> written out, #515)
+    if [[ $le == 4 ]] && sed 's/<transacts>//g' "$tmp/l.err" | grep -qF "$msg" && ! grep -q "internal" "$tmp/l.err"; then ref=$((ref+1)); continue; fi
     bad=$((bad+1)); save; echo "EXPECTED REFUSAL $g seed $s (exit $le, saved fuzz-model-$tag-$g-$s.verse): $(head -c 200 "$tmp/l.err")"; continue
   fi
   if [[ $le != "$want" ]]; then

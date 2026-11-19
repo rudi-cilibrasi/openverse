@@ -1,14 +1,14 @@
 # Generic calls needing an expected type can occur inside another argument.
-Empty(?Default:?t=false where t:type):?t=Default
+Empty(?Default:?t=false where t:type)<transacts>:?t=Default
 Id(X:t where t:type):t=X
-Choose(M:[?int]t,Other:t where t:type):t=Other
+Choose(M:[?int]t,Other:t where t:type)<transacts>:t=Other
 PairCall(Values:tuple(?t,t),Other:t where t:type):t=Other
 ArrayCall(Values:[]?t,Other:t where t:type):t=Other
 OptionCall(Value:?t,Other:t where t:type):t=Other
 pair(a:type,b:type):=class{A:a;B:b}
 dup(t:type):=class(pair(t,t)){Index:int=0}
-Leaf(X:t,?Index:int=0 where t:type):t=X
-Refined(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<decides>:b=
+Leaf(X:t,?Index:int=0 where t:type)<transacts>:t=X
+Refined(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<transacts><decides>:b=
     Choose(map{Empty()=>Leaf(P.A,?Index:=dup[Q].Index)},dup[P].B)
 Main():void=
     Print("plain {Choose(map{Empty()=>7},9)}")

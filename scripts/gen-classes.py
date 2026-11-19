@@ -1275,8 +1275,8 @@ class Gen:
         R.shuffle(As)
         R.shuffle(Bs)
         a, b = tmpname('QA'), tmpname('QB')
-        M.append('%s:[]%s = array{%s}' % (a, qa, ', '.join(As)))
-        M.append('%s:[]%s = array{%s}' % (b, qb, ', '.join(Bs)))
+        M.append('%s:[]%s = array{%s}' % (a, qa, ', '.join('%s(%s)' % (qa, e) for e in As)))
+        M.append('%s:[]%s = array{%s}' % (b, qb, ', '.join('%s(%s)' % (qb, e) for e in Bs)))
         y = tmpname('X')
         M.append('for (%s : %s) { Print("qa {%s.%s()}") }' % (y, a, y, m))
         y = tmpname('X')
@@ -2052,7 +2052,7 @@ class Gen:
                         # reference is <decides>, the Book of Verse's API reference)
                         M.append('if (set %s.%s["%s"] = %s) {}' % (v, f.name, key, R.choice(cands)))
                 else:
-                    ws = [R.choice(cands) for _ in range(R.randint(1, 3))]
+                    ws = ['%s(%s)' % (fty[1].name, R.choice(cands)) for _ in range(R.randint(1, 3))]
                     M.append('set %s.%s = %s.%s + array{%s}' % (v, f.name, v, f.name, ', '.join(ws)))
         mctx = self.main_ctx(objs)
         # show each object
@@ -2114,7 +2114,10 @@ class Gen:
             narr += 1
             arr = tmpname('Xs')
             R.shuffle(below_)
-            M.append('%s:[]%s = array{%s}' % (arr, t.name, ', '.join(v for v, _ in below_)))
+            # (each element upcast to t: classes with a common base class and
+            # a common interface not above it make an array of any, which
+            # Epic's compiler refuses where an array of t is expected, #515)
+            M.append('%s:[]%s = array{%s}' % (arr, t.name, ', '.join('%s(%s)' % (t.name, v) for v, _ in below_)))
             x = tmpname('X')
             ictx = self.main_ctx(objs + [(x, t)])
             parts = []

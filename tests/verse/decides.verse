@@ -1,9 +1,9 @@
 # <decides> functions, Euclidean Mod/Quotient, case.
-Half(N:int)<decides>:int =
+Half(N:int)<transacts><decides>:int =
     Mod[N, 2] = 0
     Quotient[N, 2]
 
-ValidateAge(Age:int)<decides>:int =
+ValidateAge(Age:int)<transacts><decides>:int =
     Age >= 0
     Age <= 150
     Age

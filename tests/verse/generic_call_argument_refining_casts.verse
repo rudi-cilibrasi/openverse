@@ -1,41 +1,41 @@
 # Generic argument probes must preserve errors that trigger cast lifting.
 pair(a:type,b:type):=class{A:a;B:b}
 dup(t:type):=class(pair(t,t)){Index:int=9}
-Id(X:t where t:type):t=X
-Run_plain_2(P:pair(a,b) where a:type,b:type)<decides>:b=
+Id(X:t where t:type)<transacts>:t=X
+Run_plain_2(P:pair(a,b) where a:type,b:type)<transacts><decides>:b=
     X:=Id(Id(dup[P].B))
     X
-Run_block_2(P:pair(a,b) where a:type,b:type)<decides>:int=
+Run_block_2(P:pair(a,b) where a:type,b:type)<transacts><decides>:int=
     X:=Id(block{Id(Id(dup[P].Index))})
     X
-Run_option_2(P:pair(a,b) where a:type,b:type)<decides>:?int=
+Run_option_2(P:pair(a,b) where a:type,b:type)<transacts><decides>:?int=
     X:=Id(option{Id(Id(dup[P].Index))})
     X
-Run_option_block_2(P:pair(a,b) where a:type,b:type)<decides>:?int=
+Run_option_block_2(P:pair(a,b) where a:type,b:type)<transacts><decides>:?int=
     X:=Id(option{block{Id(Id(dup[P].Index))}})
     X
-Run_array_2(P:pair(a,b) where a:type,b:type)<decides>:[]b=
+Run_array_2(P:pair(a,b) where a:type,b:type)<transacts><decides>:[]b=
     X:=Id(array{Id(Id(dup[P].B))})
     X
-Run_map_2(P:pair(a,b) where a:type,b:type)<decides>:[int]b=
+Run_map_2(P:pair(a,b) where a:type,b:type)<transacts><decides>:[int]b=
     X:=Id(map{0=>Id(Id(dup[P].B))})
     X
-Run_plain_4(P:pair(a,b) where a:type,b:type)<decides>:b=
+Run_plain_4(P:pair(a,b) where a:type,b:type)<transacts><decides>:b=
     X:=Id(Id(Id(Id(dup[P].B))))
     X
-Run_block_4(P:pair(a,b) where a:type,b:type)<decides>:int=
+Run_block_4(P:pair(a,b) where a:type,b:type)<transacts><decides>:int=
     X:=Id(block{Id(Id(Id(Id(dup[P].Index))))})
     X
-Run_option_4(P:pair(a,b) where a:type,b:type)<decides>:?int=
+Run_option_4(P:pair(a,b) where a:type,b:type)<transacts><decides>:?int=
     X:=Id(option{Id(Id(Id(Id(dup[P].Index))))})
     X
-Run_option_block_4(P:pair(a,b) where a:type,b:type)<decides>:?int=
+Run_option_block_4(P:pair(a,b) where a:type,b:type)<transacts><decides>:?int=
     X:=Id(option{block{Id(Id(Id(Id(dup[P].Index))))}})
     X
-Run_array_4(P:pair(a,b) where a:type,b:type)<decides>:[]b=
+Run_array_4(P:pair(a,b) where a:type,b:type)<transacts><decides>:[]b=
     X:=Id(array{Id(Id(Id(Id(dup[P].B))))})
     X
-Run_map_4(P:pair(a,b) where a:type,b:type)<decides>:[int]b=
+Run_map_4(P:pair(a,b) where a:type,b:type)<transacts><decides>:[int]b=
     X:=Id(map{0=>Id(Id(Id(Id(dup[P].B))))})
     X
 Main():void=

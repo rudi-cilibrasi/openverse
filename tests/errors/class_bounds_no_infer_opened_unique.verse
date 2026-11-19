@@ -1,5 +1,5 @@
 # expect: must be comparable
-NeedCmp(X:t,Y:t where t:subtype(comparable))<decides>:void = X = Y
+NeedCmp(X:t,Y:t where t:subtype(comparable))<transacts><decides>:void = X = Y
 holder(t:type) := class<unique>:
     V:t
 root(z:subtype(comparable)) := class:

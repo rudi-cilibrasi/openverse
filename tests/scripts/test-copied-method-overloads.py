@@ -3,7 +3,12 @@
 from pathlib import Path
 import importlib.util
 import subprocess
+import sys
 import tempfile
+# (#515: Epic's default effect written out in every program this writes)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts/models'))
+import default_effect  # noqa: E402
+default_effect.install()
 
 root = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location(

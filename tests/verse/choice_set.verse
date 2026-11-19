@@ -7,8 +7,8 @@ dog := class(animal):
     Name<override>():string = "dog"
 cat := class(animal):
     Name<override>():string = "cat"
-Id(X:t where t:type):t = X
-Idx(I:int):int =
+Id(X:t where t:type)<transacts>:t = X
+Idx(I:int)<transacts>:int =
     Print("idx {I}")
     I
 Main():void =

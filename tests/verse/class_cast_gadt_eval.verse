@@ -16,7 +16,7 @@ cond(t:type) := class(expr(t)):
     Then:expr(t)
     Else:expr(t)
     Tag<override>():string = "cond"
-Eval(E:expr(t) where t:type):t =
+Eval(E:expr(t) where t:type)<transacts>:t =
     if (L := lit[E]) then L.V
     else if (B := boolE[E]) then B.V
     else if (A := add[E]) then Eval(A.L) + Eval(A.R)

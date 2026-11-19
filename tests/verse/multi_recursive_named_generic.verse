@@ -17,17 +17,17 @@ holder(t:type) := class:
         Print("method {N}")
         X | Get[N-1]
 Plain(X:a,?Xs:[]a=block{ E:[]a=Concatenate(); E } where a:type)<computes>:int = Xs.Length
-Shadow(X:t,Y:a where t:type,a:type):int = Plain(X)
-Infer(X:int,?Y:t=X,?Z:[]t=block{ E:[]t=Concatenate(); E } where t:type):int = Z.Length
+Shadow(X:t,Y:a where t:type,a:type)<transacts>:int = Plain(X)
+Infer(X:int,?Y:t=X,?Z:[]t=block{ E:[]t=Concatenate(); E } where t:type)<transacts>:int = Z.Length
 defaultbox(t:type) := struct:
     E:[]t = Concatenate()
     V:t
-Boxed(X:a,?B:?defaultbox(a)=option{ D:defaultbox(a)=defaultbox{V:=X|X}; D } where a:type):int =
+Boxed(X:a,?B:?defaultbox(a)=option{ D:defaultbox(a)=defaultbox{V:=X|X}; D } where a:type)<transacts>:int =
     if (D := B?) then D.E.Length else -1
-BoxedCaller(X:t,Y:a where t:type,a:type):int = Boxed(X)
-BoxedPair(X:a,Y:b,?B:?defaultbox(a)=option{ D:defaultbox(a)=defaultbox{V:=X|X}; D } where a:type,b:type):int =
+BoxedCaller(X:t,Y:a where t:type,a:type)<transacts>:int = Boxed(X)
+BoxedPair(X:a,Y:b,?B:?defaultbox(a)=option{ D:defaultbox(a)=defaultbox{V:=X|X}; D } where a:type,b:type)<transacts>:int =
     if (D := B?) then D.E.Length else -1
-BoxedSwap(X:b,Y:a where a:type,b:type):int = BoxedPair(X,Y)
+BoxedSwap(X:b,Y:a where a:type,b:type)<transacts>:int = BoxedPair(X,Y)
 Both(X:a,Y:b,N:int,?D:a=block{ O:=option{ P:defaultbox(a)=defaultbox{V:=X|X}; P }; if(P:=O?)then P.V else X } where a:type,b:type)<transacts><decides>:tuple(a,int) =
     N>0
     Print("both {N}")

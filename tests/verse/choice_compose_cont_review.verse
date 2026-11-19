@@ -9,18 +9,18 @@ base := class:
 ca := class(base) {}
 cb := class(base) {}
 MkA(K:int):ca = ca{K := K} | ca{K := K + 1}
-Two(X:int):int = X | X + 1
+Two(X:int)<transacts>:int = X | X + 1
 TwoC(X:int)<computes>:int = X | X + 1
 Nat(N:int)<computes><decides>:int =
     Print("at {N}")
     N | Nat[N + 1]
-G1(B:int):int =
+G1(B:int)<transacts>:int =
     Q := B | B + 50
     if (X := (Two(Q) | Two(Q + 1)), Y := (Two(10) | Two(20)), X + Y > 70) then X + Y else Q
-G2(B:int):int =
+G2(B:int)<transacts>:int =
     Q := B | B + 50
     if (X := (Two(Q) | G1(Q)), Y := (Two(10) | Two(20)), X + Y > 70) then X + Y else Q
-G3(B:int):int =
+G3(B:int)<transacts>:int =
     Q := B | B + 50
     if (X := (Two(Q) | G2(Q)), Y := (Two(10) | Two(20)), X + Y > 70) then X + Y else Q
 G4(B:int):int =

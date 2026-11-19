@@ -1,7 +1,7 @@
 # profile(Tag): body, profile: body, profile{body}: the body's value, the
 # tag a string (Book of Verse ch. 7, "Profiling"); openverse measures nothing
 s:?string = option{"123"}
-F()<decides>:int =
+F()<transacts><decides>:int =
     profile(s?):
         1+1
 G():int =

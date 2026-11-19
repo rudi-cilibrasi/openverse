@@ -1,12 +1,12 @@
 expr(t:type) := class<abstract>:
-    Eval():t
+    Eval()<transacts>:t
 lit := class(expr(int)):
     V:int
-    Eval<override>():int = V
+    Eval<override>()<transacts>:int = V
 vpair(a:type, b:type) := class(expr(tuple(a, b))):
     var L:expr(a)
     R:expr(b)
-    Eval<override>():tuple(a, b) = (L.Eval(), R.Eval())
+    Eval<override>()<transacts>:tuple(a, b) = (L.Eval(), R.Eval())
 counter:=class{var N:int=0}
 Read(H:counter,V:int)<transacts>:int={set H.N+=1;V}
 Pairs(L:int,R:int,N:int)<computes><decides>:tuple(int,int)=

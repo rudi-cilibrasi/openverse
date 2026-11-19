@@ -42,7 +42,9 @@ private def compile (source : String) (dummy extended : Bool) : Except String Co
     | .fn p name ps tps specs ret body => .fn p name (ps.map fun param =>
       { param with typeValue := dummy && name == "Caller" && param.name == "Dummy" }) tps specs ret body
     | top => top
-  elabProgram tops { extendedDefaults := extended }
+  -- (#515: the `signal` case rolls a Signal back with its condition, the
+  -- legacy transactional mode these contracts were written for)
+  elabProgram tops { extendedDefaults := extended, signalNoRollback := false }
 
 def main (args : List String) : IO Unit := do
   if args == ["--count"] then

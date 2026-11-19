@@ -4,21 +4,21 @@
 # (t as tuple(a, b) for pairE), so its hidden argument is built from the
 # caller's own (t's), which the dispatch types under the refinement too
 expr(t:type) := class<abstract>:
-    W(X:u, ?K:?int = false where u:type):u = X
+    W(X:u, ?K:?int = false where u:type)<transacts>:u = X
     Ws(X:u, ?Us:[]u = array{} where u:type):int = Us.Length
     Wt(X:u, ?K:int = 0 where u:type):u = X
 pairE(a:type, b:type) := class(expr(tuple(a, b))):
-    W<override>(X:u, ?K:?int = false where u:type):u = X
+    W<override>(X:u, ?K:?int = false where u:type)<transacts>:u = X
     Ws<override>(X:u, ?Us:[]u = array{} where u:type):int = Us.Length + 10
     Wt<override>(X:u, ?K:int = 0 where u:type):u = X
 num := class(expr(int)):
-    W<override>(X:u, ?K:?int = false where u:type):u = X
+    W<override>(X:u, ?K:?int = false where u:type)<transacts>:u = X
     Ws<override>(X:u, ?Us:[]u = array{} where u:type):int = Us.Length + 20
     Wt<override>(X:u, ?K:int = 0 where u:type):u = X
 F1(E:expr(t), X:t where t:type):t = E.W(X)
 F2(E:expr(t), X:t where t:type):int = E.Ws(X) + E.Ws(X, ?Us := array{X, X})
 F3(E:expr(t), X:t where t:type):t = E.Wt(X, ?K := 2)
-F4(E:expr(t), X:t where t:type):?t = E.W(option{X})
+F4(E:expr(t), X:t where t:type)<transacts>:?t = E.W(option{X})
 F5(E:expr(t), X:t where t:type):[]t = E.Wt(array{X, X})
 # (at the caller's other type parameter, which the dispatch does not refine,
 # and at a type mentioning both)
