@@ -1,3 +1,4 @@
+# (run with --parametric-var-fields, openverse's extension: Epic's compiler refuses a generic function over a parametric class whose mutable data holds an implicit type parameter, or a var field in a parametric interface, UEFN 43.12 errors 3552 and 3502, #724)
 # one field declared by two interfaces, as the type parameter in one and as
 # int in the other, in classes that fix the parameter to int: read and set
 # through either interface, and through a class whose subclass takes the

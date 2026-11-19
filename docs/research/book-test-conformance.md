@@ -2935,18 +2935,15 @@ openverse takes Epic's compiler's refusals, one commit each (#724):
   that has a named one too; the arity message says why and cites 3509.
   `Bugs/FORT-744399-DefaultTupleFieldsCrashComplier.versetest:62` moves to
   agree. Four of openverse's tests (#501's packing) write the tuple out.
-- **Not taken: parametric `var` fields** (3552, "An implicit type parameter
-  (`t`) used in the type of mutable data … may not be used in the type of
-  a function"; 3502, "Mutable members in parametric interfaces are not yet
-  implemented"). Built and measured: `ParametricFunctions.versetest` 431,
-  438 and 496 agree and no Book case is worse, but 32 of openverse's own
-  programs (and 4 of its error tests, for another reason first) are refused, generic functions over
-  `box(t) := class{var V:t}` (function values of methods, refined casts,
-  pins, `unit_array_defaults`, …) and parametric interfaces with `var`
-  fields (interface views and pins, placeholders, …), far more than any
-  other of these rules; left for a decision, on the local branch
-  `wip/book-parametric-var-fields` (not pushed). Nor is a method's mangled
-  name measured (`FORT-555217:31`, above).
+- **Parametric mutable data** (3552, 3502), the rules built and stopped
+  before for their cost, are taken with an opt-out,
+  `--parametric-var-fields`: a generic function's type applies no class to
+  an implicit type parameter that the class's mutable data holds, its own
+  `var` field or one of a class in its fields (`followup-book3/
+  parametric-var-where-nested`), and a parametric interface has no `var`
+  field. `ParametricFunctions.versetest` 431, 438 and 496 move to agree,
+  none worse; the 32 run tests and 4 error tests of openverse's they refuse
+  take the flag.
 - **Type names that differ only in case**, and an interface's methods
   (Epic's verdicts on `followup-book3`: 9002 "Found existing type 'CC'"
   for two classes, 9200 for an interface's two methods): no two types of

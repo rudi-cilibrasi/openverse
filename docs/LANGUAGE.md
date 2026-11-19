@@ -1170,7 +1170,19 @@ circle := class(shape, labelled):
       Print(if (T[physics{}]) then "physics" else "?")      # physics
   ```
 - **Parametric classes.** A parametric class is a reference like any other
-  (#39): `stack(t)` can have `var` fields, be `<unique>`, and refer to
+  (#39): `stack(t)` can have `var` fields (but no generic function's type,
+  its parameters' or result's, may apply one to an implicit type parameter
+  of its own, a `where` clause's, that its mutable data holds: a `var` field
+  whose type mentions the class's parameter, or a field of a class whose
+  mutable data holds it, `F(X:t where t:type):c(t)` with
+  `c(t) := class{var Data:t}`, or `:holder(t)` with
+  `holder(t) := class{Inner:c(t)}`: UEFN 43.12 refuses them, error 3552,
+  "An implicit type parameter (`t`) used in the type of mutable data (`c.Data`)
+  may not be used in the type of a function", and so do the Book's tests,
+  `ParametricFunctions.versetest` 431, 438; it admits `c(t)` in a body only,
+  a `var` field that does not mention the parameter, and a type passed as an
+  argument, `F(t:type, X:t):c(t)`; #724, `--parametric-var-fields` keeps
+  openverse's extension), be `<unique>`, and refer to
   itself (`node(t) := class: Value:t; var Next:?node(t) = false`), in its
   fields only at its own type parameters, in order: `Next:?node(?t)` or,
   for `bi(t, u)`, `Next:?bi(u, t)` is refused, and so are two parametric
@@ -1182,7 +1194,11 @@ circle := class(shape, labelled):
   type parameters (`square(t) := class(shape(t))`, in any order:
   `swap(a, b) := class(pair(b, a))`), fixed ones
   (`intcell := class(cell(int))`), and it may have type parameters of its
-  own (`named(t, n) := class(cell(t))`). A class overrides a method if
+  own (`named(t, n) := class(cell(t))`). A parametric interface has no
+  `var` field (UEFN 43.12: error 3502, "Mutable members in parametric
+  interfaces are not yet implemented", `followup-book2/parametric-interface-var`,
+  the Book's `ParametricFunctions.versetest:496`; #724,
+  `--parametric-var-fields`). A class overrides a method if
   it has as many Verse Core type arguments as the class that declares it
   (its parent's, then its own type parameters that are not one of them:
   `dup(t)` has `pair`'s two, `t` and `t`). It may fix
