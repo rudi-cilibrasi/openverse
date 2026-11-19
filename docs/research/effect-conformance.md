@@ -124,8 +124,15 @@ The same contracts survive generic instantiation, refining contexts and
 receiver/function-value adapters; no Core or VM rule changes are needed.
 
 These are **heap** contracts. The pinned `3582` tests separately restrict class
-field initializers and permit effectful construction as an exception. This is
-source evidence, not a released-engine execution result.
+field initializers and permit effectful construction as an exception. UEFN
+43.12 confirms 3582 as a rule about calls, not effects: a data member's
+definition (a module's constant, a field's default) may call only a
+`<converges>` function, so no function, method or constructor of the
+program's, whatever its specifiers, and of the built-ins only the converging
+intrinsics (#724, [the rule](../LANGUAGE.md#data-members-call-only-converging-functions),
+[the probes](versevm-live-conformance.md#data-members-3582)). The front end
+checks it as each definition is elaborated, before the heap and
+`no_rollback` checks.
 
 Initializer admission (#511) is checked independently, after implementation
 helpers have been materialized. Every class/interface/struct field default is
@@ -154,8 +161,15 @@ Existing Core safety, rollback and interpreter-agreement claims are unchanged.
 `--extended-defaults` / `Options.extendedDefaults := true` explicitly select
 the previous OpenVerse extension for ordinary computed/callback/spawn defaults.
 Heap budgets and all caller failure/suspension/profile checks remain enforced.
-Seventeen existing fixtures select that mode; heap/default and lexical-field
-models select it only where they exercise the extension. Finite multi-value
+Seventeen existing fixtures selected that mode for #511, and thirty more
+for #724 (constants and defaults that call a function, print or use
+`Concatenate`); heap/default and lexical-field
+models select it only where they exercise the extension (for #724 also
+every lexical-field case of `gadt_contexts` and of the choice-size
+schemas, which call `Concatenate` and the program's functions in a field's
+default). The same option
+also turns off #724's rule for module constants, whose values then keep the
+older rule only: they write nothing. Finite multi-value
 selection and failable primitive defaults remain admitted by the checked mode.
 Explicit `<converges>` remains refused in both modes. Data types still cannot
 declare `<decides>` or `<suspends>`. Neither a heap budget nor compatibility

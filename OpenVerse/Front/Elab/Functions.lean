@@ -75,9 +75,19 @@ def elabFieldDefaults (env : TyEnv) (sigs : Signatures) (tops : List STop) (cdef
           -- (an inherited default sees its home class's type parameters, #39)
           let home := (env.defaultHome.lookup (n, f)).getD n
           let hσ := (((env.sparams.lookup home).getD []).map (·.1)).zip (env.argsAt n nps home)
-          let ctx := { ctx with defaults := [(n, f)], types := { senv with tvars := hσ } }
+          -- (#724) a field's default is a data member's definition: it calls
+          -- no function that might not complete (Epic's error 3582), unless
+          -- `--extended-defaults` (the compiler's own classes have no
+          -- source defaults, but for the module-scoped vars' state)
+          let dataMember : Option String :=
+            if extendedDefaults then none
+            else if n == ModuleVars.stateClass then some s!"the module-scoped var {ModuleVars.shown f}"
+            else if n.contains '$' then none
+            else some s!"the default of field '{f}' of {n}"
+          let ctx := { ctx with defaults := [(n, f)], types := { senv with tvars := hσ }, dataMember }
           match (do coerce d.pos (← elabE ctx d (some ft)) ft : EM Expr).run { env } with
           | .ok (body, st) =>
+            if let some msg := divergentCallError st.divergentCalls then throw msg
             -- (a class declares no <decides>, and "Class member initializers
             -- and block clauses are implicitly restricted to have no more
             -- effects than what the class declares", Book of Verse ch. 13;
@@ -364,8 +374,14 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
       -- time (until Verse Core has global state)
       if sig.ret.holdsMutable env then
         throw s!"{p.show}: the constant {n} would hold an object with var fields or of a <unique> class, which would be a new one at each use: make it a function"
-      let ctx : Ctx := { sigs := allSigs, sigProg := sigs.prog, types := env }
+      -- (#724) a module's constant is a data member: its definition calls
+      -- no function that might not complete (Epic's error 3582), unless
+      -- `--extended-defaults`
+      let dataMember := if extendedDefaults || n.startsWith "$" then none
+        else some s!"the value of the constant {n}"
+      let ctx : Ctx := { sigs := allSigs, sigProg := sigs.prog, types := env, dataMember }
       let (r, st) ← elabBody ctx body (some sig.ret) { env }
+      if let some msg := divergentCallError st.divergentCalls then throw msg
       let (e, st) ← (coerce p r.1 sig.ret).run st
       -- a module's constant has no side effect: its initializer writes
       -- nothing, also through what it calls or constructs ("all non-local
@@ -382,7 +398,14 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
           let what := match via with
             | some f => s!"{f}, which has the effect <writes>"
             | none => "sets a var field"
-          throw s!"{kp.show}: the value of the constant {n} {what}: a module's constant has no side effect (Book of Verse tests, DefaultValueAssignment.versetest; UEFN 43.12 refuses a call of a function without specifiers there too, error 3582, followup/constant-default-call); make it a function, or call one that does not write"
+          -- (#724) UEFN 43.12's codes: a construction of a class without
+          -- specifiers, 3512 (followup-3582/div-const-constructor); other
+          -- side effects, 3582 (a call is refused as divergent before this,
+          -- `divergentCallError`, unless `--extended-defaults`)
+          let epic := if (via.map (·.startsWith "constructs")).getD false then
+              "UEFN 43.12 refuses it with error 3512, \"This archetype instantiation constructs a class that has the 'transacts' effect, which is not allowed by its context\""
+            else "UEFN 43.12 refuses it with error 3582, \"Expressions with side effects cannot be used when defining data-members\""
+          throw s!"{kp.show}: the value of the constant {n} {what}: a module's constant has no side effect (Book of Verse tests, DefaultValueAssignment.versetest:199; {epic}); make it a function, or give it a value that writes nothing"
       -- slots start like a function's (a class-typed one as a placeholder)
       let inits ← match st.slotTys.toList.mapM (slotDefault env 0 [] []) with
         | .ok ds => pure ds

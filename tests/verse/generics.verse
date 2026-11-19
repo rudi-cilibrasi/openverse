@@ -81,11 +81,13 @@ Log():void = Print("logged")
 # same at every type argument
 IsTrue(X:t where t:subtype(comparable))<transacts><decides>:void = X = true
 
-# constants may call generic functions, and refer to constants defined before
-# them in their scope
+# constants refer to constants defined before them in their scope; a
+# function, not a constant, calls generic functions (UEFN 43.12 refuses a
+# call in a constant's value, error 3582, #724)
 Later:int = 42
-Answer:int = Identity(Later)
-Names:[]string = Repeat("n", 2)
+Answer:int = Later
+AnswerOf():int = Identity(Answer)
+Names():[]string = Repeat("n", 2)
 
 point := struct:
     X:int = 0
@@ -127,7 +129,7 @@ Main():void =
     Checked(Log(), 1)
     if (IsTrue[true]) then Print("true is true")
     if (not IsTrue[1], not IsTrue[option{true}]) then Print("1 and an option are not")
-    Print("{Answer} {Names.Length}")
+    Print("{AnswerOf()} {Names().Length}")
     Print("depth {Depth('x', 10)}, {Flatten(7, 3).Length} leaves")
     # deeply nested calls: the Core checker checks each argument once
     Print("{Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(30))))))))))))))))))))))))))))))}")

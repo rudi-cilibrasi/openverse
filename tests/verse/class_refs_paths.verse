@@ -50,11 +50,12 @@ Haunt(G:ghost):string =
     set G.N = 3
     "{G.N} {G.Boo()}"
 
-# a constant whose initialiser uses an object (in a temporary)
+# a constant whose initialiser uses an object (in a temporary; not its
+# method, a call that UEFN 43.12 refuses there, error 3582, #724)
 point := class<computes>:
     X:int
     Twice()<computes>:int = 2 * X
-Six:int = point{X := 3}.Twice()
+Six:int = point{X := 3}.X * 2
 
 Main():void =
     Print("{Six}")

@@ -56,7 +56,8 @@ def usage : String :=
   "       A function without a heap specifier has the no_rollback effect, Epic's default: a failure\n" ++
   "       context or a <transacts> function cannot call it (#515). --default-rollback keeps the old\n" ++
   "       rule, which rolls it back; --default-no-rollback, the default, is accepted.\n" ++
-  "       --extended-defaults retains extended field defaults without a convergence assertion (#511).\n" ++
+  "       --extended-defaults retains extended field defaults without a convergence assertion (#511),\n" ++
+  "       and module constants and field defaults that call functions which might not complete (#724).\n" ++
   "       openverse example NAME [--emit FILE.vbc] | openverse examples"
 
 /-- The compiler's semantic policies: no event signal in a failure context

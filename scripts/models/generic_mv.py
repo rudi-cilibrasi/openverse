@@ -1340,7 +1340,7 @@ class Gen:
 {eager}(X:t, N:int, ?Y:t=X where t:type)<computes>:t =
     if (N>0) then ({pair}(X,?Y:=Y) | {pair}(X) | {eager}(X,N-1)) else X
 {box}(t:type) := struct:
-    E:[]t = Concatenate()
+    E:[]t = array{{}}
     V:t
 {repeat}(X:a,Other:b,N:int,?Y:a=block{{ O:=option{{ B:{box}(a)={box}{{V:=X|X}}; B }}; if(B:=O?)then B.V else X }} where a:type,b:type)<transacts><decides>:a =
     N > 0
