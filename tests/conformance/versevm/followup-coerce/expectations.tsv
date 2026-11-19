@@ -1,0 +1,39 @@
+# Compile-only probes of the boundaries of the 3502 function-coercion rule (#724; docs/LANGUAGE.md, "Function values", Epic's 3502). Each asks UEFN 43.12 (++Fortnite+Release-43.12-CL-60598086) about one construct; its header and note give OpenVerse's verdict (Lean and C agreeing, at the commit that adds them) and what each answer would change in the rule. book_case: a Book of Verse case of the same shape, where there is one; epic_outcome and epic_lines: - until compiled.
+probe	book_case	book_outcome	book_lines	epic_outcome	epic_lines	note
+array-of-fns-control	-	-	-	-	-	OpenVerse: ran, value 2|value 4. Control.
+array-of-fns-default	-	-	-	-	-	OpenVerse: ran, value 2|value 4. Refused: an array literal's elements join as an if's branches; extend the rule to array{...}. Admitted: each element is a name at the element type, as implemented.
+case-join-control	-	-	-	-	-	OpenVerse: ran, one 2|two 4. Control.
+case-join-default	-	-	-	-	-	OpenVerse: ran, one 2|two 4. Refused: case arms join as an if's branches; extend checkJoinBranch to case. Admitted: as implemented (if only).
+class-override-fn-param	-	-	-	-	-	OpenVerse: refused, 3502 rule: using a value of type type{_(:type{_(:int):void}):void} as a value of type type{_(:type{_(:any):void}):void}. Refused expected (a parametric class, as an interface). Admitted: the override rule is about interfaces only.
+generic-arg-concrete	Tests/ParametricFunctions.versetest:182 (shape)	ran	-	-	-	OpenVerse: ran, value 1. Admitted expected. Refused: generic functions are no values at all where an argument's type is fixed.
+generic-arg-generic	Tests/ParametricFunctions.versetest:192 (shape)	ran	-	-	-	OpenVerse: ran, value 1. Admitted expected. Refused: a generic function is no value where a generic function's type parameter is still being inferred, whatever its own type (the rule would then be about the call, not One's higher-order type).
+generic-arg-generic-late	-	-	-	-	-	OpenVerse: ran, value 1. As generic-arg-generic, the type parameter given first.
+generic-bound-first	-	-	-	-	-	OpenVerse: ran, value 1. Control.
+generic-higher-order-bound	-	-	-	-	-	OpenVerse: refused, 3502 rule: using a value of type type{_(:type{_(:t)<transacts>:t}, :t)<transacts>:t} where t as a value of type type{_(:type{_(:int)<transacts>:int}, :int)<transacts>:int}. Refused: the rule as implemented (a generic function with a type parameter inside its own function type is no value). Admitted: the 3502 of generic-higher-order is about inference inside Plus's call; narrow checkGenericValue to arguments of generic calls.
+generic-higher-order-concrete-param	-	-	-	-	-	OpenVerse: refused, 3502 rule: using a value of type type{_(:type{_(:t)<transacts>:t}, :t)<transacts>:t} where t as a value of type type{_(:type{_(:int)<transacts>:int}, :int)<transacts>:int}. As generic-higher-order-bound, as an argument of a function that is not generic.
+generic-result-fn	-	-	-	-	-	OpenVerse: refused, 3502 rule: using a value of type type{_(:t, :type{_(:t):void}):type{_(:t):void}} where t as a value of type type{_(:int, :type{_(:int):void}):type{_(:int):void}}. Refused: the result rule as implemented. Admitted: parametric-method-value's 3502 comes from its class or its method value, not the generic result; narrow the rule.
+generic-result-fn-comparable	Tests/ParametricFunctions.versetest:546 (comment)	ran	-	-	-	OpenVerse: ran, took. Admitted expected (an instance comparable needs no wrapper). Refused: drop the comparable exemption.
+generic-result-plain	-	-	-	-	-	OpenVerse: ran, took 5|kept 5. Control (One(Succ, 0)'s shape).
+iface-fn-param-any	-	-	-	-	-	OpenVerse: ran, called. Admitted expected (any needs no wrapper). Refused: drop the any exemption.
+iface-override-array-param	-	-	-	-	-	OpenVerse: ran, length 2. Admitted expected ([]t is no function type). Refused: containers of t need the wrapper too.
+iface-override-fn-result	-	-	-	-	-	OpenVerse: refused, 3502 rule: using a value of type type{_()<transacts>:type{_(:int):void}} as a value of type type{_()<transacts>:type{_(:any):void}}. Refused expected (t inside the result's function type). Admitted: only parameters count.
+iface-own-param-fn	-	-	-	-	-	OpenVerse: ran, called. Admitted expected (the class passes its own type parameter on). Refused: any parametric override with a function of t needs the wrapper.
+join-class-param	-	-	-	-	-	OpenVerse: ran, true branch 1|false branch 2. Admitted expected (contravariant class parameter). Refused: as join-class-result.
+join-class-result	Tests/FunctionTypes.versetest:198 (no expected type)	ran	C3|C2	-	-	OpenVerse: ran, true branch dog|false branch animal. Admitted expected: a class reference converts as it is. Refused: class variance in a join needs the wrapper too; asIs loses refUp.
+join-computes-transacts	-	-	-	-	-	OpenVerse: refused, 3502 rule: using a value of type type{_(:int)<computes>:int} as a value of type type{_(:int)<transacts>:int}. Refused: confirms an effect-only join (no <decides>, no generic) needs the wrapper. Admitted: the effect rule is about <decides> or generic instances; narrow needsWrapper's effect test.
+join-computes-transacts-control	-	-	-	-	-	OpenVerse: ran, true branch 11|false branch 9. Control.
+join-method-values	-	-	-	-	-	OpenVerse: refused, 3502 rule: using a value of type type{_(:int)<computes>:int} as a value of type type{_(:int)<transacts>:int}. Refused expected, as for functions. Admitted: method values join without a wrapper; exempt them.
+join-method-values-control	-	-	-	-	-	OpenVerse: ran, true branch 11|false branch 9. Control.
+method-value-effect	-	-	-	-	-	OpenVerse: ran, value 2. Admitted expected (a method named). Refused: methods as values get no effect wrapper.
+name-computes-as-transacts	-	-	-	-	-	OpenVerse: ran, value 2. Admitted expected (a name gets its wrapper). Refused: named functions get no effect wrapper either; the rule would cover names too.
+name-decides-as-plain	Tests/FunctionTypes.versetest:191 (shape)	refused	-	-	-	OpenVerse: refused, expected type{_(:int)<computes>:int}, found type{_(:int)<decides><computes>:int}. Refused (3509) expected, a type error both ways. Admitted would be a new subtyping.
+name-default-arg	-	-	-	-	-	OpenVerse: ran, value 2. Control (admitted expected).
+option-of-fn-default	-	-	-	-	-	OpenVerse: ran, value 2. Refused: option{...} needs the rule too. Admitted: as implemented.
+overloaded-fn-value	Book ch. 6 Capture	refused	-	-	-	OpenVerse: refused, Over is overloaded: an overloaded function cannot be used as a value (Book of Verse ch. 6). OpenVerse refuses. Admitted: Epic picks the overload from the expected type; OpenVerse refuses a valid program.
+parametric-method-fn-result	-	-	-	-	-	OpenVerse: ran, took 5. Refused: the result rule covers methods of parametric classes too (not implemented). Admitted: as implemented.
+tuple-of-fns-default	-	-	-	-	-	OpenVerse: ran, value 2. Refused: a tuple's elements need the rule too. Admitted: as implemented.
+value-class-variance	-	-	-	-	-	OpenVerse: refused, expected type{_(:dog):int}, found type{_(:animal):int}. OpenVerse refuses it (no variance for values, #214). Admitted: OpenVerse refuses a valid program; values should convert by class variance.
+value-computes-as-transacts	-	-	-	-	-	OpenVerse: ran, value 2. Refused: every value that is no name needs the wrapper (a rule for parameters, locals, fields and call results, not yet implemented). Admitted: the 3502 is about joins and generics only, as implemented.
+value-computes-as-transacts-control	-	-	-	-	-	OpenVerse: ran, value 2. Control.
+value-default-drop	-	-	-	-	-	OpenVerse: ran, value 2. As value-computes-as-transacts, for a named default dropped.
+value-plain-as-decides	-	-	-	-	-	OpenVerse: ran, value 2. As value-computes-as-transacts, for <decides> added.
