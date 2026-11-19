@@ -4,6 +4,6 @@ end 7
 wait cleanup 7
 body 120
 source 120
-observer stop 120
 result 17
+observer stop 120
 exit=0

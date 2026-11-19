@@ -1,6 +1,9 @@
 # A Signal resumes the owner, which returns while this rush arm runs.
 # Pending siblings stop immediately; the active arm reaches its next wait
 # before cancellation runs its saved cleanup.
+# (#724: a branch and a rush's arm that goes on are children of the task whose
+# code started them, stopped when that task ends, after its own defers: Epic's
+# Verse VM, UEFN 43.12; no longer when the function that started them exits.)
 Owner()<suspends>:int=
     defer:
         Print("probe owner cleanup 0")

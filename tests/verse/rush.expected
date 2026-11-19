@@ -5,6 +5,8 @@ fast unwound
 winner fast
 slow step 2
 leader exits
+slow step 3
+slow step 4
 slow unwound
 end
 exit=0

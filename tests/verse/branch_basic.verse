@@ -1,4 +1,5 @@
-# branch runs its body as a task over the function's variables, stopped (and its defers run) when the function exits (#156)
+# branch runs its body as a task over the function's variables (#156), stopped (and its defers run)
+# when the task that started it ends (#724): here Main, so the tickers go on after Work returns
 Ticker(Name:string)<suspends>:void =
     defer:
         Print("{Name} ticker stopped")

@@ -820,6 +820,13 @@ page](https://github.com/rudi-cilibrasi/openverse/wiki/Where-the-Book-disagrees-
 
 Already on the wiki page (entry 5).
 
+### `branch` lifetime, by VM
+
+- **Prose** (ch. 14, "The branch Expression"): "a branch task is automatically canceled when execution leaves the enclosing function scope"; its tested example 13 runs the function in a spawned task, which ends when the function returns, so it does not tell the readings apart.
+- **Tests:** `Bugs/BPVMOnly/AsyncContextCancellation.versetest` (Verse VM expectations, with Blueprint VM ones beside): a branch's parent is the current task (a spawn, a branch, each arm of a `sync`, `race` or `rush`), and it is cancelled when that task ends, "NOT by function/loop/block boundaries"; a `rush`'s arms that go on likewise (TEST 6: they outlive the function that ran the `rush`).
+- **Epic's VMs** (UEFN 43.12, `++Fortnite+Release-43.12-CL-60598086`, probes `vm-branch-outlives-return`, `vm-branch-await-after-return`): the Verse VM lets the branch outlive the function; the Blueprint VM cancels it at the return.
+- **openverse now:** the Verse VM's (#724; [the rule](scheduler-conformance.md#a-branch-lives-as-long-as-its-task)); until then the prose's.
+
 ### A module constant that allocates a `var`, by VM
 
 - **Tests:** `GlobalVariables.versetest` 86, 90, 97, 105 (`verse_vm_only`): link error 9003 for a module constant whose class's `block:` declares a `var`, constructs an object with a `var` field, or calls a function that declares one on the path taken; their `bp_vm_only` twins (114-141): valid, "BPVM doesn't run blocks on global instances of classes"; `:143`, untagged: valid where the `var` is not reached.

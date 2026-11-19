@@ -169,7 +169,18 @@ OpenVerse follows the Verse VM (the owner's decision).
 | [`book-query-true-equals-false`](../../tests/conformance/versevm/book/book-query-true-equals-false.verse), [`book-query-and-value`](../../tests/conformance/versevm/book/book-query-and-value.verse), [`book-query-or-value`](../../tests/conformance/versevm/book/book-query-or-value.verse) | `query value equals false`, `and value equals false`, `or value equals false` | the same | `… differs from false`: `true?` was `true` | the VMs' and the Book's tests': `X?` of a logic succeeds with the empty value ([the rule](book-forms-rules.md#the-value-of-true)) |
 | [`book-global-block-var`](../../tests/conformance/versevm/book/book-global-block-var.verse), [`-call-var`](../../tests/conformance/versevm/book/book-global-block-call-var.verse), [`-fn-var`](../../tests/conformance/versevm/book/book-global-block-fn-var.verse), [`-cond-var`](../../tests/conformance/versevm/book/book-global-block-cond-var.verse) | the editor builds them; the session's server cook (`linux-server-vm`) fails: `Script error 9003: Runtime error while evaluating module.` | `linked` | `linked` | the Verse VM's: refused before the program runs, naming the constant and the `var` ([the rule](../LANGUAGE.md#modules)) |
 | [`book-global-block-cond-var-control`](../../tests/conformance/versevm/book/book-global-block-cond-var-control.verse) | `linked` | `linked` | `linked` | `linked` |
+| [`vm-branch-outlives-return`](../../tests/conformance/versevm/fingerprint/vm-branch-outlives-return.verse) | `function returning`, `returned`, `branch body finished`, `branch cleanup`, `after wait` | `function returning`, `branch cleanup`, `returned`, `after wait` | the Blueprint VM's: the function's return cancelled its branch | the Verse VM's: a branch is a child of the task whose code started it, stopped when that task ends ([the rule](scheduler-conformance.md#a-branch-lives-as-long-as-its-task)) |
+| [`vm-branch-await-after-return`](../../tests/conformance/versevm/fingerprint/vm-branch-await-after-return.verse) | `function returning`, `returned`, `branch received 7`, `signaled`, `after wait` | `function returning`, `returned`, `signaled`, `after wait` | the Blueprint VM's | the Verse VM's |
 | [`vm-sleep-zero-yields`](../../tests/conformance/versevm/fingerprint/vm-sleep-zero-yields.verse) | `worker before sleep`, `main after spawn`, `worker after sleep`, `main after wait` | the same | `worker after sleep` before `main after spawn`: `Sleep(0.0)` completed at once (#608) | the VMs': `Sleep(0.0)` yields, a tick ([the rule](scheduler-conformance.md#sleep00-yields)) |
+
+Follow-up probes for the shapes OpenVerse extrapolates from these
+(branches and `rush` arms in spawned tasks, arms and branches; the order of
+a task's defers and its children's; `Sleep` of a negative duration and of
+zero within an update; a module constant whose own initialiser declares a
+`var`) are in [`followup-conc/`](../../tests/conformance/versevm/followup-conc),
+each with OpenVerse's output and the other reading in its header. Run
+`branch-at-entry-top-level` and `link-constant-own-var` alone: the first
+leaves a branch to its device's `OnBegin`, the second may fail the cook.
 
 ## OpenVerse observations
 

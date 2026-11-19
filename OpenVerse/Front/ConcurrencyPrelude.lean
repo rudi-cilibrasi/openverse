@@ -186,12 +186,30 @@ def concPreludeAwaits : String :=
   s.replace "Await(T:task(t) where t:type)<suspends>:t =\n    WaitDone(T)\n    if (R := T.Result?) then R else Err()\n"
     "Await(T:task(t) where t:type)<suspends>:t =\n    if (R := T.Result?) then R else:\n        EvAwait(taskEnds(T))\n        if (V := T.Result?) then V else Err()\ntaskEnds(T:taskBase):event(void) =\n    if (E := T.Ends?) then E else:\n        F := event(void){}\n        set T.Ends = option{F}\n        F\ntaskEnd(T:taskBase):void =\n    if (E := T.Ends?) then signalAll(E, ())\n"
 
+/-- `prelude` with scopes (#724), for a program with a `branch` or a `rush`:
+    a task's children (its branches, the arms of its `rush`es that go on)
+    are stopped when the task ends, as on Epic's Verse VM ("Tasks are
+    cancelled when their PARENT TASK ends", the Book's
+    `Tests/Bugs/BPVMOnly/AsyncContextCancellation.versetest`), not when the
+    function that started them returns. A scope is a list of children (the
+    lowering's root cells; `Own`: not the class's prototype, which is
+    `Main`'s scope); the scheduler holds the scope whose code runs and
+    `Main`'s, a task its own. The lowering does the rest (`$stopScope`). -/
+def withScopes (prelude : String) : String :=
+  -- (the scheduler's two fields after its others, which the lowering
+  -- reaches by their places)
+  let s := prelude.replace "taskBase := class:\n"
+    "    var Scope:scope = scope{}\n    var MainScope:scope = scope{}\nscope := class:\n    var Kids:?int = false\n    var Own:logic = false\ntaskBase := class:\n"
+  s.replace "    var Result:?t = false\n" "    var Result:?t = false\n    var TScope:scope = scope{}\n"
+
 /-- The concurrency prelude's definitions: plain, in event mode (`events`),
-    or in await mode (`awaits`, which is event mode too). Add the public
-    signaling interface when a source type needs it. -/
+    or in await mode (`awaits`, which is event mode too), with scopes
+    (`scopes`, #724) for a program with a `branch` or a `rush`. Add the
+    public signaling interface when a source type needs it. -/
 def concTops (owned : List String := []) (events : Bool := false) (awaits : Bool := false)
-    (usesSignalable : Bool := false) : Except String (List STop) := do
+    (usesSignalable : Bool := false) (scopes : Bool := false) : Except String (List STop) := do
   let prelude := if awaits then concPreludeAwaits else if events then concPreludeEvents else concPrelude
+  let prelude := if scopes then withScopes prelude else prelude
   let prelude := if usesSignalable then
     prelude.replace "event(t:type) := class:\n" ("signalable(t:type) := interface:\n" ++
       "    Signal(X:t):void\nevent(t:type) := class(signalable(t)):\n") |>.replace
@@ -200,7 +218,8 @@ def concTops (owned : List String := []) (events : Bool := false) (awaits : Bool
   parsePrelude prelude
     (owned ++ (if events || awaits then ["CurRoot",
     "WaitRoot", "Pending", "Probe", "Drain", "MainTask", "Ev", "First", "wakeRoot"] else []) ++
-    (if awaits then ["Ends", "taskEnds", "taskEnd"] else []) ++ ["sched", "Now", "Next", "sleep", "Pc", "Secs", "Wake", "sleepNew",
+    (if awaits then ["Ends", "taskEnds", "taskEnd"] else []) ++
+    (if scopes then ["scope", "Kids", "Own", "Scope", "MainScope", "TScope"] else []) ++ ["sched", "Now", "Next", "sleep", "Pc", "Secs", "Wake", "sleepNew",
     "sleepInit", "sleepResume", "Sleep", "Ticks", "syncMark", "raceMark", "S", "F", "C", "N", "R", "A",
     "Progress", "Roots", "taskBase", "Done", "Result", "waitf", "T", "X", "waitNew", "waitInit", "waitResume",
     "WaitDone", "Await", "spawnMark", "t", "Sch", "Dead", "evrec", "Got", "Next", "Head", "Tail", "Cur", "W", "L", "V",

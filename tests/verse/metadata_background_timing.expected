@@ -3,6 +3,8 @@ rush late 2
 branch early 2
 branch canceled 1
 rush canceled 1
+uncanceled branch
+uncanceled rush
 cleanup 2
 alias 2
 helper cleanup 7

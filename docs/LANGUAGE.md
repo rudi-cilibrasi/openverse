@@ -1205,10 +1205,11 @@ circle := class(shape, labelled):
   `<suspends>` function the branch and the `else` may suspend (#243): the
   branch's function is then `<suspends>`, and the `if` a suspends call of
   it, cancelled as any (its `defer:`s, then the caller's). A `branch` or
-  continuing `rush` arm started there belongs to the enclosing source
-  function (#419): it can outlive the cast and is stopped when that source
-  function exits, after its own defers, in the documented task cleanup
-  order. The cast's lexical defers still run when the cast finishes.
+  continuing `rush` arm started there is, as any, a child of the task
+  whose code runs the cast (#419, #724): it can outlive the cast and the
+  source function, and is stopped when that task ends, in the documented
+  task cleanup order. The cast's lexical defers still run when the cast
+  finishes.
   The existing restrictions on task starts in loop/for bodies apply
   through lifted branches too. In a
   `<suspends>` source function, mutable captures share their source storage
@@ -3755,23 +3756,45 @@ Main()<suspends>:void =
       Print(Result)    # fetch cancelled or done, then timeout
   ```
 - **`rush`.** As `race`, but the arms that started and have not ended when
-  the first ends go on, as tasks of their own, until they end or the
-  function that contains the `rush` exits (which cancels them, running
-  their defers, as it does its branches). They take their places in the
+  the first ends go on, as tasks of their own, until they end or the task
+  whose code ran the `rush` ends (which cancels them, running their
+  defers, as it does its branches, below; #724: not when the function
+  that contains the `rush` returns). They take their places in the
   scheduler's order when the `rush` ends, after the tasks already there. A `return` in such an arm, once the `rush` has ended,
   ends that arm only: the function has gone on, and the value is dropped.
   A `rush` cannot be in a `loop` or `for` body (the Book's rule).
 - **`branch`.** The body of a `branch:` runs as a task of its own, at once
   up to its first wait, while the code after it goes on. It shares the
-  enclosing function's variables, and it is cancelled (running its active
-  `defer:` blocks) when that function exits, by returning, ending or being
-  cancelled: after the function's own `defer:` blocks, the last started
-  branch (or `rush` arm going on) first, each unwinding whole: what its own
-  code started (a `rush` it waits in, the branches it started) is stopped
-  first, the same way, then its own `defer:` blocks run (#254). A branch or
-  `rush` arm that has ended still owns what it started: those are stopped
-  in its place in that order, not by their own start among the function's. A `branch` cannot be in a `loop` or `for` body (the Book's
-  rule), even through an arm. If cancellation is requested while an arm
+  enclosing function's variables, and it is a child of the task whose code
+  starts it: it runs until it ends or that task ends, which cancels it
+  (running its active `defer:` blocks). The function that starts it may
+  return meanwhile: that stops nothing (#724). The tasks are `Main`, a
+  spawned call, each `branch`, and each arm of a `sync`, `race` or `rush`
+  (a function call is none: its code is its caller's task's), so a branch
+  started in a function called from a `sync` arm is that arm's child,
+  stopped when the arm ends, and one started inside another branch's body
+  is that branch's. A task that ends, by completing or by being cancelled
+  once its code has unwound (its own `defer:` blocks), stops its children,
+  the last started first, each the same way: its own defers, then its
+  children. A spawned call's children are stopped when the call ends,
+  before its task is done and its awaiters resumed; `Main`'s when `Main`
+  ends, before the program does. This is Epic's Verse VM's rule (on
+  UEFN 43.12 (`++Fortnite+Release-43.12-CL-60598086`), the probes `vm-branch-outlives-return` and
+  `vm-branch-await-after-return` show a branch outliving the function that
+  started it; Epic's staff: "returning from a function no longer cancels
+  tasks it created", `branch` "runs until its parent task ends"), and the
+  Book's Verse VM tests' (`Bugs/BPVMOnly/AsyncContextCancellation.versetest`:
+  "Tasks are cancelled when their PARENT TASK ends ... NOT by
+  function/loop/block boundaries"); the Blueprint VM, and openverse until
+  #724, cancelled a branch when the function that started it exited, as
+  ch. 14's prose says. Where they are not yet measured on Epic's VM (the
+  order of a task's own defers and its children's, a branch at the top of
+  the entry point, children against a task's awaiters), openverse's choice
+  is the follow-up probes' first reading
+  (`tests/conformance/versevm/followup-conc/`). A function that starts a
+  branch or a `rush` gets a frame of its own at each call, as its tasks
+  share it and may outlive the call. A `branch` cannot be in a `loop` or
+  `for` body (the Book's rule), even through an arm. If cancellation is requested while an arm
   runs inside `Signal`, children it starts before the run ends share that
   cancellation. Their reached cleanup runs whether the active arm waits
   again or finishes; nested children retain the same ownership order.
@@ -3830,7 +3853,7 @@ Main()<suspends>:void =
   does not error, and simply stays suspended for ever"; ch. 14 says it
   "propagates cancellation", which was openverse's reading until now). The
   awaiter can itself be cancelled (a `race` arm that loses, a branch whose
-  function exits); a `Main` that awaits a cancelled task ends the program
+  task ends); a `Main` that awaits a cancelled task ends the program
   as a stalled `Main` does (below) once no task can run. A task asked to
   be cancelled at its next wait that ends before it waits again ends as
   usual; cancelling a task that has ended changes nothing.
@@ -3995,8 +4018,11 @@ Main()<suspends>:void =
   engine limits (#514); ordinary source overrides do not alter the
   scheduler's primitive rounding or infinity classification.
 - **The program.** A suspends `Main` runs under the scheduler. The program
-  ends when `Main` does, even if tasks are still running; unfinished
-  unstructured tasks are not cancelled, so their pending defers do not run.
+  ends when `Main` does, even if tasks are still running; `Main`'s children
+  (its code's branches and `rush` arms that go on, wherever in the
+  functions it called they started) are stopped first, as any task's when
+  it ends (#724), but unfinished unstructured tasks are not cancelled, so
+  their pending defers do not run.
   If `Main` waits
   and no task can run again (for example after `Sleep(Inf)`, or awaiting a
   task that never ends or was cancelled), it ends as `Err()` does: exit 2,
@@ -4050,6 +4076,7 @@ Main()<suspends>:void =
 | A clause of a `for` with a choice in it | (the Book has no choice; ch. 7: "Each filter must be failable") | a generator over its values, as a clause that calls a function with several values is: not a filter, so it need not fail (`for (X := 1..2, set N = (1 \| 2))` runs the body for each value); the statements of a function with several values that a `for` takes are the function's, not the `for`'s filters |
 | Precedence of `\|` | (not in the Book) | below `+`, above the comparisons: `X = 1 \| 2` is `X = (1 \| 2)` (#208) |
 | `Sleep(0.0)` | "may resume in the same tick" (ch. 14), "One frame" (ch. 14); the API reference: it always yields; the tested ch. 14 examples (`03`, `05` to `11`): it completes at once, in a `race`, a `sync` and plain code: the Book disagrees with itself ([the rules](research/scheduler-conformance.md#sleep00-yields)) | **Epic's**: it yields, as both of Epic's VMs do (UEFN 43.12, `++Fortnite+Release-43.12-CL-60598086`, `vm-sleep-zero-yields`), and as the API reference says: it waits one tick, the next update; a negative or NaN duration completes at once |
+| Lifetime of a `branch` | ch. 14's prose: "a branch task is automatically canceled when execution leaves the enclosing function scope"; its tested example 13 (cancelled when the spawned function that ran it returns, its task's end too); the Verse VM's tests (`Bugs/BPVMOnly/AsyncContextCancellation.versetest`): a child of the current task, cancelled when it ends, a task each spawn, branch and arm of a `sync`, `race` and `rush`; their Blueprint VM twins: cancelled at the function's exit | **the Verse VM's** (measured, UEFN 43.12 (`++Fortnite+Release-43.12-CL-60598086`), `vm-branch-*`): a child of the task whose code started it, stopped when that task ends; a function's return stops nothing; a task's own defers before its children's ([`branch`](#concurrency)) |
 | A module constant whose computation allocates a `var` | `verse_vm_only`: link error 9003 (`GlobalVariables.versetest` 86, 90, 97, 105); `bp_vm_only`: valid, "BPVM doesn't run blocks on global instances of classes" (114-141); `:143` valid on both where the `var` is not reached; ch. 16: only "as long as their construction does not actually allocate mutable memory" | **the Verse VM's** (the owner's choice where the VMs differ; measured on UEFN 43.12, probes `book-global-block-*`): refused before the program runs, the constant computed at compile time to find the path it takes ([Modules](#modules)) |
 | `Sleep(S)` rounding | the API: "a sleep resumes on the first update at or after its deadline and never sooner than the next one. Short sleeps therefore round up"; no tick rate | the first tick at or after the deadline: the binary64 product `30·S` rounded up, at least one tick (`Sleep(0.04)` takes 2 ticks; `Sleep(0.1)`, whose product is exactly 3.0, 3); bounded inputs and checked clock accumulation follow the explicit reference policy above (#514) |
 | End of a program with tasks | not stated | the program ends when `Main` does; a `Main` that waits with no task able to run is an error (exit 2) (#156) |

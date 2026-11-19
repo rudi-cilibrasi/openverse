@@ -72,6 +72,6 @@ leave b 81
 enter b 81
 leave b 85
 source 85 16
-background 85
 result 16 state 85
+background 85
 exit=0

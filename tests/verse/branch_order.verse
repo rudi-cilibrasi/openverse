@@ -1,4 +1,5 @@
-# a function's own defers run first, then its branches are stopped, last started first, whether it returns or is cancelled (#156)
+# a task's own defers run first, then its branches are stopped, last started first, whether it ends or is cancelled (#156, #724: the
+# task's, not the function's, which no longer stops them when it returns)
 F(Tag:string, D:float)<suspends>:void =
     defer:
         Print("{Tag} F defer")

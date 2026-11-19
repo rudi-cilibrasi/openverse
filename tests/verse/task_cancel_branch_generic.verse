@@ -1,7 +1,10 @@
 # branches in a generic function (at two types) that await a cancelled task
-# in their first runs: each waits until its function exits, which stops it.
-# Expected: b2 end int / b2 defer int / G end int / G defer int / b1 defer int
-# / 7 / the same for string / s ...
+# in their first runs: each waits until its task ends, which stops it (#724:
+# no longer the function's exit).
+# (Each function's branches now go on after it returns, until Main ends.)
+# (#724: a branch and a rush's arm that goes on are children of the task whose
+# code started them, stopped when that task ends, after its own defers: Epic's
+# Verse VM, UEFN 43.12; no longer when the function that started them exits.)
 W()<suspends>:int =
     Sleep(9.0)
     1

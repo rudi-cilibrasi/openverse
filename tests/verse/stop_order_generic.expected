@@ -1,30 +1,30 @@
 int defer
-int B defer
-int A.r2 defer
-int A.r1 defer
-int A.1 defer
-int A defer
 5
 string defer
+s
+Rec0 defer
+inner gave 0
+Rec1 defer
+inner gave 1
+Rec2 defer
+2
+Rec0 B defer
+Rec0 A defer
+Rec0 A.1 defer
+Rec1 B defer
+Rec1 A defer
+Rec1 A.1 defer
+Rec2 B defer
+Rec2 A defer
+Rec2 A.1 defer
 string B defer
 string A.r2 defer
 string A.r1 defer
-string A.1 defer
 string A defer
-s
-Rec0 defer
-Rec0 B defer
-Rec0 A.1 defer
-Rec0 A defer
-inner gave 0
-Rec1 defer
-Rec1 B defer
-Rec1 A.1 defer
-Rec1 A defer
-inner gave 1
-Rec2 defer
-Rec2 B defer
-Rec2 A.1 defer
-Rec2 A defer
-2
+string A.1 defer
+int B defer
+int A.r2 defer
+int A.r1 defer
+int A defer
+int A.1 defer
 exit=0

@@ -3,9 +3,9 @@ probe owner done 0
 probe owner cleanup 0
 main continued
 probe after signal 0
-probe sibling cleanup 0
-probe grandchild cleanup 0
-probe late cleanup 0
-probe active cleanup 0
 main done
+probe active cleanup 0
+probe sibling cleanup 0
+probe late cleanup 0
+probe grandchild cleanup 0
 exit=0

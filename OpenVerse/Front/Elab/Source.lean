@@ -103,7 +103,10 @@ def concurrencyHelpers (resolved : List STop) (requests : Requests) :
   -- awaiters inside it, `concPreludeAwaits`; event mode too)
   let awaits := usesConc && requests.awaits
   let usesEvents := usesConc && (usesSub || needs "event" || needs "sticky_event" || awaits)
-  let conc ← if usesConc then concTops privateNames usesEvents awaits (needs "signalable") else pure []
+  -- (scopes, #724: a program with a `branch` or a `rush`, whose tasks are
+  -- stopped when the task that started them ends)
+  let conc ← if usesConc then concTops privateNames usesEvents awaits (needs "signalable") (uses.contains "$scopes")
+    else pure []
   let helpers := conc ++
     (← if usesSub then subTops privateNames else pure []) ++ (← if usesSubVoid then subVoidTops privateNames else pure [])
   return (concurrencyNames, usesConc, usesEvents, awaits, helpers)

@@ -131,6 +131,10 @@ structure Callee where
   stopTasksFn : Option Nat := none
   /-- Latest source root's start number, for merging interleaved helpers. -/
   taskOrderFn : Option Nat := none
+  /-- (#724) The callee starts tasks over its frame (a `branch`, a `rush`):
+      each call makes a frame of its own, not the call site's reset, as
+      those tasks may outlive the call. -/
+  fresh : Bool := false
   deriving Inhabited
 
 /-- Slots of a resume function: the frame, the scheduler. -/
@@ -156,6 +160,13 @@ def slotBaseOf (sites arms : Nat) : Nat := 2 + sites + 2 * arms
     placeholder index, filled in once the number of slots is known: the
     arms' fields come after the slots. -/
 def armTopMark (a : Nat) : Nat := 1100000000 + a
+
+/-- An arm's field holding its scope (#724): the tasks its code starts (its
+    `branch`es, the arms of its `rush`es that go on), stopped when the arm
+    ends or is cancelled, as Epic's Verse VM stops a task's children when
+    the task ends. A placeholder index, filled in after the arms' records
+    of #362 (`fillArmScopes`). -/
+def armScopeMark (a : Nat) : Nat := 1200000000 + a
 
 /-- Placeholders for "store every slot in the frame" and "reload every slot
     from it", filled in once the number of slots is known. -/
@@ -210,18 +221,18 @@ partial def shift (d : Nat) : Expr → Expr
     stop its branches and give 1 (done), or (in an arm of a `sync`, `race`
     or `rush`) give 2: the function returns, which the code around the arm
     carries out. -/
-partial def retToDone (arm : Bool := false) (leaf : Option Nat := none) : Expr → Expr
-  | .ret e => .seq (fset resF (retToDone arm leaf e))
-      (if arm then .ret (int 2) else doneRet leaf)
-  | .assign i e => .assign i (retToDone arm leaf e)
-  | .forE i it f b => .forE i (retToDone arm leaf it) (retToDone arm leaf f) (retToDone arm leaf b)
-  | .seq a b => .seq (retToDone arm leaf a) (retToDone arm leaf b)
-  | .prim p es => .prim p (es.map (retToDone arm leaf))
-  | .call f es => .call f (es.map (retToDone arm leaf))
-  | .heap op es => .heap op (es.map (retToDone arm leaf))
-  | .ite c t e => .ite (retToDone arm leaf c) (retToDone arm leaf t) (retToDone arm leaf e)
-  | .loop b => .loop (retToDone arm leaf b)
-  | .print e => .print (retToDone arm leaf e)
+partial def retToDone (arm : Bool := false) (leaf : Option Nat := none) (stop : Expr := vd) : Expr → Expr
+  | .ret e => .seq (fset resF (retToDone arm leaf stop e))
+      (if arm then .seq stop (.ret (int 2)) else doneRet leaf)
+  | .assign i e => .assign i (retToDone arm leaf stop e)
+  | .forE i it f b => .forE i (retToDone arm leaf stop it) (retToDone arm leaf stop f) (retToDone arm leaf stop b)
+  | .seq a b => .seq (retToDone arm leaf stop a) (retToDone arm leaf stop b)
+  | .prim p es => .prim p (es.map (retToDone arm leaf stop))
+  | .call f es => .call f (es.map (retToDone arm leaf stop))
+  | .heap op es => .heap op (es.map (retToDone arm leaf stop))
+  | .ite c t e => .ite (retToDone arm leaf stop c) (retToDone arm leaf stop t) (retToDone arm leaf stop e)
+  | .loop b => .loop (retToDone arm leaf stop b)
+  | .print e => .print (retToDone arm leaf stop e)
   | e => e
 
 /-- Whether `e` contains a suspension point (a call of a function that
@@ -577,6 +588,21 @@ structure Env where
       `armsPc`), so that a `Signal` made under them walks down their code
       and runs the arms that wait beside it (`concAtMarked`, `region`). -/
   marks : Bool := false
+  /-- (#724) The program has a `branch` or a `rush`: each arm has a scope
+      (`armScopeMark`), the scheduler's current scope (its field
+      `schedScopeF`) is the arm's while the arm runs, a `branch` and a
+      `rush`'s arms that go on are registered in the scope current where
+      they start, and an arm's end or cancel stops its scope's tasks
+      (`stopScopeFn(sched, scope)`, the lowering's `$stopScope`). -/
+  scopes : Bool := false
+  scopeTag : Nat := 0
+  kidsF : Nat := 0
+  ownF : Nat := 0
+  schedScopeF : Nat := 0
+  stopScopeFn : Nat := 0
+  /-- The code that stops the scope of the arm being lowered (none in a
+      function's body): run when it ends, or `return`s. -/
+  armStop : Expr := vd
 
 /-- A marked region's suspension point while it runs code between sites. -/
 def runningPc : Int := -2
@@ -802,6 +828,28 @@ def callHints (g : Nat) (es : List Expr) : M (List (Option VTy)) := do
     return ps.map fun p => if p.unbound acc then none else some (p.subst θ)
   | none => return []
 
+/-- (#724) The statement that readies arm `a`'s scope as the arm starts: the
+    scope it had, emptied (what it registered was stopped when the arm last
+    ended or was cancelled), or a new one the first time (a frame's field
+    starts as the scope class's prototype, which is not its own). -/
+def resetScope (a : Nat) : M Expr := do
+  let env ← read
+  let f := armScopeMark a
+  return .ite (.prim .query [.heap (.get env.ownF) [fget f]])
+    (.seq (.heap (.set env.kidsF) [fget f, .lit .none]) vd)
+    (.seq (fset f (.heap (.new env.scopeTag) [.lit .none, .lit (.logic true)])) vd)
+
+/-- (#724) `run`, which runs arm `a`'s code, with the scheduler's current
+    scope the arm's, and the one before after it. -/
+def inScope (a : Nat) (run : List Expr) : M (List Expr) := do
+  let env ← read
+  if !env.scopes then return run
+  let saved ← freshT (.ref [env.scopeTag] [])
+  let sch : Expr := .local schS
+  return [.assign saved (.heap (.get env.schedScopeF) [sch]),
+    .heap (.set env.schedScopeF) [sch, fget (armScopeMark a)]] ++ run ++
+    [.heap (.set env.schedScopeF) [sch, .local saved]]
+
 /-- A new slot recording the start number of a branch or `rush` arm, and
     the statements that number it (#187). -/
 def startNumber : M (Nat × Expr) := do
@@ -1001,7 +1049,7 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
   -- code is emitted: inference sees the code as written)
   if !(← hasS e) then
     let e ← loopify e k.isSome
-    return [← emit (pure (app k (retToDone (← read).inArmR (← read).leafOpt e)))]
+    return [← emit (pure (app k (retToDone (← read).inArmR (← read).leafOpt (← read).armStop e)))]
   match e with
   -- the defers active at the suspension points of `b` (`withDeferMark`)
   | .seq (.ite (.prim .fail []) d (.lit .void)) b =>
@@ -1025,7 +1073,7 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
         | none => block t k
       let mid := (← get).next
       let eb ← block e2 k
-      let sel : Expr := .ite (← seeking) (.ite (← inRange lo mid) (int 1) (int 0)) (.ite (retToDone (← read).inArmR (← read).leafOpt c) (int 1) (int 0))
+      let sel : Expr := .ite (← seeking) (.ite (← inRange lo mid) (int 1) (int 0)) (.ite (retToDone (← read).inArmR (← read).leafOpt (← read).armStop c) (int 1) (int 0))
       pure (.seq (.assign b sel) (.ite (.prim .eq [.local b, int 1]) (seqVoid tb) (seqVoid eb)))]
   | .loop body =>
     let l ← emit do pure (.loop (seqVoid (← block body none)))
@@ -1041,7 +1089,7 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
       -- (then the filter's spawns, as `spawnSites` meets them)
       let filt ← inlineSpawns filt
       let fe ← loopify (.forE i (.local a) filt body) k.isSome
-      return pre ++ [← emit (pure (app k (retToDone (← read).inArmR (← read).leafOpt fe)))]
+      return pre ++ [← emit (pure (app k (retToDone (← read).inArmR (← read).leafOpt (← read).armStop fe)))]
     -- a loop over an index (and the array of the body's values, when used)
     let (filt, body, finish) ← protectForBreaks filt body
     let a ← fresh (← infer it ((← get).Γ[i]?.map .arr))
@@ -1082,6 +1130,7 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
       modify fun st => { st with branchNext := i + 1, branchArms := st.branchArms.push (0, 0, true) }
       let some (startFn, stopFn, wrapTag) := env.branches[i]? | throw "internal error: branches miscounted"
       let wide : VTy := .ref [wrapTag, env.schedTag] []
+      let _ := stopFn
       let s ← emit do
         let site := (← get).next + 1
         modify fun st => { st with next := site, children := st.children.push wide }
@@ -1089,22 +1138,19 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
         modify fun st => { st with armsNext := a + 1, arms := st.arms.push (vd, vd) }
         let pcA := armPcF env.sites a
         let doneA := armDoneF env.sites a
-        let k0 := (← get).kills.size
-        let (res, can) ← region pcA none arm
-        let k1 := (← get).kills.size
-        let y ← freshT wide
-        let (sk, number) ← startNumber
-        let killInfo ← armKill (childF site) wrapTag stopFn y pcA doneA (env.fnBase + 2 * a + 1) sk
+        -- (#724: the branch is a task of its own, a child of the task whose
+        -- code starts it, whatever function that code is in: its `start`
+        -- registers it in the scheduler's current scope, which stops it when
+        -- its own task ends; the function's exit does not, and the frame,
+        -- which the branch shares, is the call's own, `Callee.fresh`)
+        let (res, can) ← region pcA none arm (some a)
         modify fun st => { st with arms := st.arms.set! a (res, can) }
-        modify fun st => { st with kills := st.kills.push killInfo }
-        -- (the branches and `rush` arms its arm starts are stopped with it)
-        modify fun st => { (ownKills st k0 k1 k1) with armKillOwner := st.armKillOwner.push (a, k1) }
         modify fun st => { st with branchArms := st.branchArms.set! i (env.fnBase + 2 * a, doneA, true) }
         -- (`start(sched, frame)` makes the wrapper, registers it, runs the
-        -- arm once and gives the wrapper, kept in the frame for `stop`)
+        -- arm once and gives the wrapper, kept in the frame)
         -- (its arm's record, #362, which its wrapper reads, starts as none)
         pure (seqVoid ([fset pcA (int 0), fset doneA (int 0)] ++
-          (if env.leafy then [fset (armTopMark a) (.local schS)] else []) ++ [number, spillMark,
+          (if env.leafy then [fset (armTopMark a) (.local schS)] else []) ++ [← resetScope a, spillMark,
           fset (childF site) (.call startFn [.local schS, fr]), reloadMark]))
       match k with
       | some k => return [s, ← emit (pure (k vd))]
@@ -1153,7 +1199,7 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
       (block e1 (some fun v => .seq (fset resF v) (if arm then .ret (int 2) else doneRet leaf)))
   | e =>
     let e ← loopify e k.isSome
-    return [← emit (pure (app k (retToDone (← read).inArmR (← read).leafOpt e)))]
+    return [← emit (pure (app k (retToDone (← read).inArmR (← read).leafOpt (← read).armStop e)))]
 
 /-- Operands evaluated left to right, some of which suspend: those before
     the last that suspends go to temporaries first. -/
@@ -1165,7 +1211,7 @@ partial def operands (es : List Expr) (hints : List (Option VTy) := []) : M (Lis
     let mut pre : Array Expr := #[]
     let mut rs : Array Expr := #[]
     for (e, i) in es.zipIdx do
-      if i > j || (i < j && stable e) then rs := rs.push (retToDone (← read).inArmR (← read).leafOpt (← loopify e))
+      if i > j || (i < j && stable e) then rs := rs.push (retToDone (← read).inArmR (← read).leafOpt (← read).armStop (← loopify e))
       else
         let τ ← infer e (hints[i]?).join
         let t ← fresh τ
@@ -1208,8 +1254,9 @@ partial def suspendAt (g : Nat) (c : Callee) (rs : List Expr) : M (Expr × Expr)
       let some af := c.arriveFn | throw "internal error: a generic callee without `arrive`"
       pure [fset cf (.call af (rs ++ [fget cf, .local schS]))]
     else pure ((argSlots.zip rs).map (fun (a, r) => .assign a r) ++
+      (if c.fresh then [fset cf (.call c.newFn (newArgs as))] else
       [.assign y (fget cf),
-       .ite isC (.call c.initFn (.local y :: as)) (.seq (fset cf (.call c.newFn (newArgs as))) vd)])
+       .ite isC (.call c.initFn (.local y :: as)) (.seq (fset cf (.call c.newFn (newArgs as))) vd)]))
   let number ← forwardTasks c cf wide
   let arrive : Expr := .ite (← seeking) vd (seqVoid (make ++ number ++ [fset env.pcFld (int k)]))
   let pass := if c.passFields.isEmpty then [] else as
@@ -1451,10 +1498,8 @@ partial def concAt (isSync : Bool) (arms : List Expr) (isRush : Bool := false) :
   let env ← read
   let defersHere := (← get).defers
   -- (a `rush`'s arms each get a wrapper, as a `branch`, for its losers to
-  -- go on as tasks; their numbers and fields are taken first)
-  let mut rushW : Array (Nat × Nat × Nat × Nat × Nat × Nat) := #[]
-  -- (and each is numbered when it starts, at the `rush`, #187)
-  let mut numbers : Array Expr := #[]
+  -- go on as tasks; their fields are taken first)
+  let mut rushW : Array (Nat × Nat × Nat × Nat × Nat) := #[]
   if isRush then
     for _ in arms do
       let i := (← get).branchNext
@@ -1462,21 +1507,15 @@ partial def concAt (isSync : Bool) (arms : List Expr) (isRush : Bool := false) :
       let some (startFn, stopFn, wrapTag) := env.branches[i]? | throw "internal error: branches miscounted"
       let site := (← get).next + 1
       modify fun st => { st with next := site, children := st.children.push (.ref [wrapTag, env.schedTag] []) }
-      let (sk, number) ← startNumber
-      numbers := numbers.push number
-      rushW := rushW.push (i, startFn, stopFn, wrapTag, site, sk)
-  -- each arm, a region of its own
+      rushW := rushW.push (i, startFn, stopFn, wrapTag, site)
+  -- each arm, a region of its own (with a scope of its own, #724)
   let mut info : Array (Nat × Nat × Nat × Nat) := #[]
-  -- (the entries of `kills` each arm's own code adds, #254)
-  let mut ranges : Array (Nat × Nat) := #[]
   for arm in arms do
     let a := (← get).armsNext
     modify fun st => { st with armsNext := a + 1, arms := st.arms.push (vd, vd) }
     let pcA := armPcF env.sites a
     let doneA := armDoneF env.sites a
-    let k0 := (← get).kills.size
-    let (res, can) ← region pcA (none) arm
-    ranges := ranges.push (k0, (← get).kills.size)
+    let (res, can) ← region pcA (none) arm (some a)
     modify fun st => { st with arms := st.arms.set! a (res, can) }
     info := info.push (env.fnBase + 2 * a, env.fnBase + 2 * a + 1, pcA, doneA)
   modify fun st => { st with sites := st.sites.push { id := k, waits := .arms info.toList, defers := defersHere } }
@@ -1485,9 +1524,11 @@ partial def concAt (isSync : Bool) (arms : List Expr) (isRush : Bool := false) :
   -- (where frames are resumed directly, #362, each arm records the waiting
   -- frame its chain found, from which it is resumed while it waits)
   let armTop (res : Nat) : Nat := armTopMark ((res - env.fnBase) / 2)
+  let resets : List Expr ← if env.scopes then (info.toList.mapM fun (res, _, _, _) =>
+      resetScope ((res - env.fnBase) / 2)) else pure []
   let arrive : Expr := .ite (← seeking) vd (seqVoid
     (info.toList.flatMap (fun (res, _, pcA, doneA) => [fset pcA (int 0), fset doneA (int 0)] ++
-        (if env.leafy then [fset (armTop res) (.local schS)] else [])) ++ numbers.toList ++
+        (if env.leafy then [fset (armTop res) (.local schS)] else [])) ++ resets ++
       [fset env.pcFld (int k)]))
   let found : Expr := .assign env.rS (int 0)
   -- an arm that gives 2 makes the function return: the other arms that
@@ -1517,7 +1558,10 @@ partial def concAt (isSync : Bool) (arms : List Expr) (isRush : Bool := false) :
          (.ite (.prim .eq [.local fS, int 1]) (.heap (.get env.leafF) [sch])
            (.ite (.prim .le [int env.leafMin, depth]) (.heap (.get env.leafF) [sch]) sch)))
        sch)]
-  let run (res doneA : Nat) : Expr := seqVoid ([spillMark] ++ resumeArm res ++
+  let armRuns : Array (List Expr) ← info.mapM fun (res, _, _, _) => inScope ((res - env.fnBase) / 2) (resumeArm res)
+  let scopedOf (res : Nat) : List Expr :=
+    (((info.toList.zip armRuns.toList).find? (·.1.1 == res)).map (·.2)).getD []
+  let run (res doneA : Nat) : Expr := seqVoid ([spillMark] ++ scopedOf res ++
     (if env.events then [takeArmCancel res doneA args] else []) ++ [
     .ite (.prim .eq [.local st, int 1]) (.seq (fset doneA (int 1)) vd) vd,
     .ite (.prim .eq [.local st, int 2]) (.seq (seqVoid [fset doneA (int 1), returning]) vd) vd, reloadMark])
@@ -1537,16 +1581,11 @@ partial def concAt (isSync : Bool) (arms : List Expr) (isRush : Bool := false) :
       (← waitThen true (.seq spillMark (.ret (int 0)))) vd
     if isRush then
       -- the arms that started and are pending go on as tasks, through
-      -- their wrappers (registered, not run), stopped when the function exits
+      -- their wrappers (registered, not run), children of the task whose
+      -- code ran the `rush`, stopped when it ends (#724), not when the
+      -- function exits
       let mut goOn : Array Expr := #[]
-      for (((res, can, pcA, doneA), (i, startFn, stopFn, wrapTag, site, sk)), j) in (info.toList.zip rushW.toList).zipIdx do
-        let y ← freshT (.ref [wrapTag, env.schedTag] [])
-        let kill ← armKill (childF site) wrapTag stopFn y pcA doneA can sk
-        modify fun st => { st with kills := st.kills.push kill }
-        -- (the branches and `rush` arms this arm starts are stopped with it)
-        let (lo, hi) := ranges.getD j (0, 0)
-        modify fun st => { (ownKills st lo hi (st.kills.size - 1)) with
-          armKillOwner := st.armKillOwner.push ((res - env.fnBase) / 2, st.kills.size - 1) }
+      for (((res, _, pcA, doneA), (i, startFn, _, _, site)), j) in (info.toList.zip rushW.toList).zipIdx do
         modify fun st => { st with branchArms := st.branchArms.set! i (res, doneA, false) }
         goOn := goOn.push (Expr.ite (allOf [.prim .ne [.local w, int j], .prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
           (.seq (fset (childF site) (.call startFn [.local schS, fr])) vd) vd)
@@ -1574,8 +1613,7 @@ partial def concAtMarked (isSync : Bool) (arms : List Expr) (isRush : Bool := fa
   let env ← read
   let defersHere := (← get).defers
   let n := arms.length
-  let mut rushW : Array (Nat × Nat × Nat × Nat × Nat × Nat) := #[]
-  let mut numbers : Array Expr := #[]
+  let mut rushW : Array (Nat × Nat × Nat × Nat × Nat) := #[]
   if isRush then
     for _ in arms do
       let i := (← get).branchNext
@@ -1583,9 +1621,7 @@ partial def concAtMarked (isSync : Bool) (arms : List Expr) (isRush : Bool := fa
       let some (startFn, stopFn, wrapTag) := env.branches[i]? | throw "internal error: branches miscounted"
       let site := (← get).next + 1
       modify fun st => { st with next := site, children := st.children.push (.ref [wrapTag, env.schedTag] []) }
-      let (sk, number) ← startNumber
-      numbers := numbers.push number
-      rushW := rushW.push (i, startFn, stopFn, wrapTag, site, sk)
+      rushW := rushW.push (i, startFn, stopFn, wrapTag, site)
   -- (a race's or rush's arms each write a value slot of their own: an arm
   -- is `t := value`, the arms' common slot `t`)
   let mut armsV : Array Expr := #[]
@@ -1606,24 +1642,23 @@ partial def concAtMarked (isSync : Bool) (arms : List Expr) (isRush : Bool := fa
   let withRet := arms.any hasRet && env.ρ != .void
   let retSave ← if withRet then some <$> fresh env.ρ else pure none
   let mut info : Array (Nat × Nat × Nat × Nat) := #[]
-  let mut ranges : Array (Nat × Nat) := #[]
   for arm in armsV do
     let a := (← get).armsNext
     modify fun st => { st with armsNext := a + 1, arms := st.arms.push (vd, vd) }
     let pcA := armPcF env.sites a
     let doneA := armDoneF env.sites a
-    let k0 := (← get).kills.size
-    let (res, can) ← region pcA (none) arm
-    ranges := ranges.push (k0, (← get).kills.size)
+    let (res, can) ← region pcA (none) arm (some a)
     modify fun st => { st with arms := st.arms.set! a (res, can) }
     info := info.push (env.fnBase + 2 * a, env.fnBase + 2 * a + 1, pcA, doneA)
   modify fun st => { st with sites := st.sites.push { id := k, waits := .arms info.toList, defers := defersHere } }
   let args ← armArgs
   let st ← freshT .int
   let armTop (res : Nat) : Nat := armTopMark ((res - env.fnBase) / 2)
+  let resets : List Expr ← if env.scopes then (info.toList.mapM fun (res, _, _, _) =>
+      resetScope ((res - env.fnBase) / 2)) else pure []
   let arrive : Expr := .ite (← seeking) vd (seqVoid
     (info.toList.flatMap (fun (res, _, pcA, doneA) => [fset pcA (int 0), fset doneA (int 0)] ++
-        (if env.leafy then [fset (armTop res) (.local schS)] else [])) ++ numbers.toList ++
+        (if env.leafy then [fset (armTop res) (.local schS)] else [])) ++ resets ++
       [.assign oot (int (-1)), fset env.pcFld (int k)]))
   let found : Expr := .assign env.rS (int 0)
   let running : Expr := fset env.pcFld (int (armsPc k))
@@ -1653,7 +1688,10 @@ partial def concAtMarked (isSync : Bool) (arms : List Expr) (isRush : Bool := fa
   let restore : List Expr := match retSave with
     | some r => [fset resF (.local r)]
     | none => []
-  let run (res doneA : Nat) : Expr := seqVoid ([spillMark] ++ resumeArm res ++
+  let armRuns : Array (List Expr) ← info.mapM fun (res, _, _, _) => inScope ((res - env.fnBase) / 2) (resumeArm res)
+  let scopedOf (res : Nat) : List Expr :=
+    (((info.toList.zip armRuns.toList).find? (·.1.1 == res)).map (·.2)).getD []
+  let run (res doneA : Nat) : Expr := seqVoid ([spillMark] ++ scopedOf res ++
     (if env.events then [takeArmCancel res doneA args] else []) ++ [
     .ite ootReturned
       (.seq (seqVoid ([.ite (.prim .ne [.local st, int 0]) (.seq (fset doneA (int 1)) vd) vd] ++ restore ++
@@ -1665,9 +1703,11 @@ partial def concAtMarked (isSync : Bool) (arms : List Expr) (isRush : Bool := fa
   -- the code a `Signal` under an arm runs at the region's entry: the other
   -- arms that started and are pending, each to its next wait or end
   let pst ← freshT .int
-  let partialArms : Expr := seqVoid (info.toList.zipIdx.map fun ((res, _, pcA, doneA), i) =>
+  let partialRuns : Array (List Expr) ← info.mapM fun (res, _, _, _) =>
+    inScope ((res - env.fnBase) / 2) [.assign pst (.call res args)]
+  let partialArms : Expr := seqVoid ((info.toList.zip partialRuns.toList).zipIdx.map fun (((res, _, pcA, doneA), runIt), i) =>
     Expr.ite (allOf [.prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
-      (.seq (seqVoid ([.assign pst (.call res args), takeArmCancel res doneA args] ++
+      (.seq (seqVoid (runIt ++ [takeArmCancel res doneA args] ++
           (if env.leafy then [fset (armTop res) (.local schS)] else []) ++ [
         .ite (.prim .eq [.local pst, int 1])
           (.seq (seqVoid ([fset doneA (int 1)] ++ (if isSync then [] else
@@ -1702,13 +1742,7 @@ partial def concAtMarked (isSync : Bool) (arms : List Expr) (isRush : Bool := fa
       | none => []
     if isRush then
       let mut goOn : Array Expr := #[]
-      for (((res, can, pcA, doneA), (i, startFn, stopFn, wrapTag, site, sk)), j) in (info.toList.zip rushW.toList).zipIdx do
-        let y ← freshT (.ref [wrapTag, env.schedTag] [])
-        let kill ← armKill (childF site) wrapTag stopFn y pcA doneA can sk
-        modify fun st => { st with kills := st.kills.push kill }
-        let (lo, hi) := ranges.getD j (0, 0)
-        modify fun st => { (ownKills st lo hi (st.kills.size - 1)) with
-          armKillOwner := st.armKillOwner.push ((res - env.fnBase) / 2, st.kills.size - 1) }
+      for (((res, _, pcA, doneA), (i, startFn, _, _, site)), j) in (info.toList.zip rushW.toList).zipIdx do
         modify fun st => { st with branchArms := st.branchArms.set! i (res, doneA, false) }
         goOn := goOn.push (Expr.ite (allOf [.prim .ne [.local w, int j], .prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
           (.seq (fset (childF site) (.call startFn [.local schS, fr])) vd) vd)
@@ -1723,21 +1757,30 @@ partial def concAtMarked (isSync : Bool) (arms : List Expr) (isRush : Bool := fa
 /-- Lower `body` as a region whose suspension point is in field `pcFld`:
     its resume body (ending with `done`, or, for an arm, storing the slots
     and giving 1) and its cancel body. -/
-partial def region (pcFld : Nat) (done : Option (Expr → Expr)) (body : Expr) : M (Expr × Expr) := do
+partial def region (pcFld : Nat) (done : Option (Expr → Expr)) (body : Expr) (armIdx : Option Nat := none) :
+    M (Expr × Expr) := do
   let env ← read
   let rS ← freshT .int
   let saved ← get
   modify fun st => { st with regionNext := 0, sites := #[], defers := vd, partials := #[] }
   let regionTotal := countSusp (fun f => (env.callee f).isSome || isMark env f)
     (fun f => isMark env f || f == env.branchMark) true (· == env.spawnMark) body
-  let stmts ← withReader (fun e => { e with pcFld, rS, regionTotal, inArmR := pcFld != pcF }) (block body done)
+  -- (#724: an arm's end, by its last statement or a `return`, and its
+  -- cancel, once it has unwound, stop the tasks its scope holds: Epic's
+  -- Verse VM cancels a task's children when the task ends; a function's
+  -- body has no scope)
+  let armStop : Expr := match armIdx with
+    | some a => if env.scopes then .call env.stopScopeFn [.local schS, fget (armScopeMark a)] else vd
+    | none => vd
+  let stmts ← withReader (fun e => { e with pcFld, rS, regionTotal, inArmR := pcFld != pcF, armStop })
+    (block body done)
   let st ← get
   if st.regionNext != regionTotal then
     throw "internal error: lowering a <suspends> function: suspension points miscounted"
   let seek : Expr := .assign rS (.ite (.prim .eq [fget pcFld, int 0]) (int 0) (int 1))
   let finish : List Expr := match done with
     | some _ => []
-    | none => [spillMark]
+    | none => [armStop, spillMark]
   -- (a frame that is done gives 1 again, #362)
   let doneAgain : List Expr := if pcFld == pcF && env.leafy then
       [.ite (.prim .eq [fget pcF, int (-1)]) (.seq (.ret (int 1)) vd) vd]
@@ -1776,7 +1819,9 @@ partial def region (pcFld : Nat) (done : Option (Expr → Expr)) (body : Expr) :
   -- it returns)
   -- (where frames are resumed directly, #362, the cancelled frame is marked
   -- done, so a record of it that stayed would resume it from the root)
-  let cancel := seqVoid ([reloadMark] ++ st.sites.toList.map cancelAt ++
+  -- (#724: an arm cancelled ends once its code has unwound, its defers
+  -- run: then its children are stopped, as when it ends)
+  let cancel := seqVoid ([reloadMark] ++ st.sites.toList.map cancelAt ++ [armStop] ++
     (if pcFld == pcF then [killMark] else []) ++
     (if pcFld == pcF && env.leafy then [fset pcF (int (-1))] else []) ++ [spillMark])
   modify fun st => { st with regionNext := saved.regionNext, sites := saved.sites, defers := saved.defers }
@@ -1967,8 +2012,8 @@ partial def renumber (ren : Nat → Nat) : Expr → Expr
 partial def fillArmTops (base : Nat) : Expr → Expr
   | .heap op es =>
     let op := match op with
-      | .get k => if armTopMark 0 ≤ k then HeapOp.get (base + (k - armTopMark 0)) else op
-      | .set k => if armTopMark 0 ≤ k then HeapOp.set (base + (k - armTopMark 0)) else op
+      | .get k => if armTopMark 0 ≤ k && k < armScopeMark 0 then HeapOp.get (base + (k - armTopMark 0)) else op
+      | .set k => if armTopMark 0 ≤ k && k < armScopeMark 0 then HeapOp.set (base + (k - armTopMark 0)) else op
       | op => op
     .heap op (es.map (fillArmTops base))
   | .assign j e => .assign j (fillArmTops base e)
@@ -1988,6 +2033,35 @@ partial def fillArmTops (base : Nat) : Expr → Expr
 structure LFn where
   body : Expr
   slots : List VTy
+
+/-- `e` with the arms' scope fields' placeholders (`armScopeMark`) at their
+    indices from `base` (#724). -/
+partial def fillArmScopes (base : Nat) : Expr → Expr
+  | .heap op es =>
+    let op := match op with
+      | .get k => if armScopeMark 0 ≤ k then HeapOp.get (base + (k - armScopeMark 0)) else op
+      | .set k => if armScopeMark 0 ≤ k then HeapOp.set (base + (k - armScopeMark 0)) else op
+      | op => op
+    .heap op (es.map (fillArmScopes base))
+  | .assign j e => .assign j (fillArmScopes base e)
+  | .forE i it f b => .forE i (fillArmScopes base it) (fillArmScopes base f) (fillArmScopes base b)
+  | .seq a b => .seq (fillArmScopes base a) (fillArmScopes base b)
+  | .prim p es => .prim p (es.map (fillArmScopes base))
+  | .call g es => .call g (es.map (fillArmScopes base))
+  | .ite c t e => .ite (fillArmScopes base c) (fillArmScopes base t) (fillArmScopes base e)
+  | .loop b => .loop (fillArmScopes base b)
+  | .ret e => .ret (fillArmScopes base e)
+  | .print e => .print (fillArmScopes base e)
+  | e => e
+
+/-- What `lower` needs for scopes (#724), `Env.scopes`: the scope class,
+    its fields, the scheduler's current-scope field and `$stopScope`. -/
+structure ScopeInfo where
+  scopeTag : Nat
+  kidsF : Nat
+  ownF : Nat
+  schedScopeF : Nat
+  stopScopeFn : Nat
 
 /-- A lowered suspends function. -/
 structure Lowered where
@@ -2020,7 +2094,7 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
     (leafF leafDepthF : Nat := 0) (isRoot : Bool := false) (leafy : Bool := false)
     (resumeAnyFn leafMin : Nat := 0) (armTopTy : VTy := .opt .void)
     (shared : List FrameRefs.Slot := []) (copies : List FrameRefs.CopyOut := []) (shareTasks : Bool := false)
-    (taskClockF : Option Nat := none) (events marks : Bool := false) :
+    (taskClockF : Option Nat := none) (events marks : Bool := false) (scopes : Option ScopeInfo := none) :
     Except String Lowered := do
   let schedTy : VTy := .ref [schedTag] []
   let isM := fun f => f == syncMark || f == raceMark || f == rushMark
@@ -2041,7 +2115,10 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
   let env : Env := { S, ρ, callee, syncMark, raceMark, rushMark, arity, sites, fnBase, schedTag, nilTag, resCellTag, spawnMark, spawns,
                      branchMark, branches, viaBase := fnBase + 2 * armsTotal, expTy := some ρ,
                      pcFld := pcF, rS := 0, regionTotal := 0, leafF, leafDepthF, isRoot, leafy, resumeAnyFn, leafMin, taskClockF,
-                     events, marks }
+                     events, marks, scopes := scopes.isSome,
+                     scopeTag := (scopes.map (·.scopeTag)).getD 0, kidsF := (scopes.map (·.kidsF)).getD 0,
+                     ownF := (scopes.map (·.ownF)).getD 0, schedScopeF := (scopes.map (·.schedScopeF)).getD 0,
+                     stopScopeFn := (scopes.map (·.stopScopeFn)).getD 0 }
   let done : Expr → Expr := fun v => .seq (fset resF v) (doneRet (if leafy then some leafDepthF else none))
   let ((res, can), st) ← ((region pcF (some done) b).run env).run { Γ := Γ0, trans := trans0 }
   if st.next != sites || st.armsNext != armsTotal then
@@ -2110,13 +2187,22 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
   -- (the refined tests on slots that become frame fields go through helpers
   -- of their own, after the refined suspending calls', #179)
   let prep (e : Expr) : StateM (Array (Expr × List VTy × VTy)) Expr :=
-    let e := fill vd vd (if shareTasks then vd else kill) e
+    -- (#724: a function's exit stops none of the tasks its code started:
+    -- they are their task's children, stopped with it, `Env.scopes`)
+    let _ := kill
+    let e := fill vd vd vd e
     fixRefined S st.Γ ρ (residentIn e) (env.viaBase + st.vias.size) none e
   -- (the arms' fields come after the slots, #362)
   let armBase := slotBaseOf sites armsTotal + (st.Γ.size - 2)
   let res := if leafy then fillArmTops armBase res else res
   let can := if leafy then fillArmTops armBase can else can
   let st := if leafy then { st with arms := st.arms.map fun (r, c) => (fillArmTops armBase r, fillArmTops armBase c) } else st
+  -- (and the arms' scopes after those, #724)
+  let scopeBase := armBase + (if leafy then armsTotal else 0)
+  let res := if scopes.isSome then fillArmScopes scopeBase res else res
+  let can := if scopes.isSome then fillArmScopes scopeBase can else can
+  let st := if scopes.isSome then
+      { st with arms := st.arms.map fun (r, c) => (fillArmScopes scopeBase r, fillArmScopes scopeBase c) } else st
   let ((res, can, arms, stop, order), more) := (do
       let r ← prep res
       let c ← prep can
@@ -2146,6 +2232,9 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
            stopTasks := stop.map finish, taskOrder := order.map finish,
            branchArms := st.branchArms.toList, vias := st.vias.toList ++ more.toList,
            fields := [.int, ρ] ++ st.children.toList ++ List.replicate (2 * armsTotal) .int ++
-             (st.Γ.toList.drop 2) ++ (if leafy then List.replicate armsTotal armTopTy else []) }
+             (st.Γ.toList.drop 2) ++ (if leafy then List.replicate armsTotal armTopTy else []) ++
+             (match scopes with
+              | some si => List.replicate armsTotal (.ref [si.scopeTag] [])
+              | none => []) }
 
 end OpenVerse.Front.Suspend

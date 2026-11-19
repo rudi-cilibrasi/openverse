@@ -137,6 +137,17 @@ private def refinementComputedFirst (overwrite : Bool) : String := callables
    "    first{I:=Add(Read(H,\"L\",dup[P].Lo),Read(H,\"R\",dup[Change(H,R,Q)].Lo))..2;(I+Stored(),P.A,Q.A)}")
 
 private def cases : List (String × String) := [
+  -- (#724) A branch outlives the function that started it, until its task
+  -- ends: these three execute the dummy after the function returns, which
+  -- once stopped them, so they are refused now (they were forwarding cases).
+  ("unreached post-return child metadata read", activeRushContinuation
+    "                Sleep(1.0)\n                branch:\n                    Sleep(0.1)\n                    Value:=Stored()\n                Sleep(1.0)\n"
+    "" ""),
+  ("active cancellation afterwait-MetadataRead", activeRushContinuation
+    "                Sleep(1.0)\n                defer:\n                    Value:=Stored()\n                Sleep(1.0)\n"
+    "" ""),
+  ("canceled lifted task does not execute its metadata receiver",
+    liftedTask "            Value:=Dummy()\n" "    0" (initial := "F")),
   ("typed row clause-cell metadata capture", refinementClauseCell false),
   ("typed snapshot environment metadata capture", refinementSnapshot false),
   ("typed environment choice after bound metadata capture", sameBoundCapture "<transacts>:[]tuple(b,d,int)=for(I:=Add(dup[P].Lo,dup[Q].Lo)..2,J:=(0|1)){(P.A,Q.A,I+J+Dummy())}"),
@@ -175,9 +186,6 @@ private def cases : List (String × String) := [
   ("post-return child delayed metadata read", activeRushContinuation
     "                branch:\n                    Sleep(0.1)\n                    Value:=Stored()\n                Sleep(1.0)\n"
     "" ""),
-  ("post-return child delayed metadata write", activeRushContinuation
-    "                branch:\n                    Sleep(0.1)\n                    set Stored=Dummy\n                Sleep(1.0)\n"
-    "" "    set Stored=F\n"),
   ("post-return child delayed metadata cleanup", activeRushContinuation
     "                branch:\n                    defer:\n                        Value:=Stored()\n                    Sleep(0.1)\n                Sleep(1.0)\n"
     "" ""),
@@ -199,15 +207,9 @@ private def cases : List (String × String) := [
   ("active cancellation late-MetadataRead", activeRushContinuation
     "                defer:\n                    Value:=Stored()\n                Sleep(1.0)\n"
     "" ""),
-  ("active cancellation late-MetadataWrite", activeRushContinuation
-    "                defer:\n                    set Stored=Dummy\n                Sleep(1.0)\n"
-    "" "    set Stored=F\n"),
   ("active cancellation direct-MetadataRead", activeRushContinuation
     "                Value:=Stored()\n                Sleep(1.0)\n"
     "" ""),
-  ("active cancellation direct-MetadataWrite", activeRushContinuation
-    "                set Stored=Dummy\n                Sleep(1.0)\n"
-    "" "    set Stored=F\n"),
   ("active cancellation afterrush-MetadataRead", activeRushContinuation
     ""
     "        defer:\n            Value:=Stored()\n        Sleep(1.0)\n" ""),
@@ -216,8 +218,6 @@ private def cases : List (String × String) := [
     "        defer:\n            set Stored=Dummy\n        Sleep(1.0)\n" "    set Stored=F\n"),
   ("running rush cleanup cannot execute metadata",
     activeRushCleanup "Value:=Stored()" ""),
-  ("running rush cleanup cannot restore metadata to a real cell",
-    activeRushCleanup "set Stored=Dummy" "    set Stored=F\n"),
   ("metadata returned proof argument Direct", returnedProof
     "Pass(M:v,R:v where v:type)<computes>:v=M\n"
     "    UseProof(X,Pass(Dummy,F))"),
@@ -266,9 +266,6 @@ private def cases : List (String × String) := [
     liftedTask "            set Stored=Dummy\n" "    E.Signal(0)\n    0" (initial := "F")),
   ("lifted task can execute metadata without a metadata cell",
     liftedTask "            Value:=Dummy()\n" "    E.Signal(0)\n    0" (initial := "F")),
-  ("lifted branch cleanup sees the actual owner's data mode",
-    liftedTask "" "    0" "    defer:\n        set Stored=F\n"
-      "            defer:\n                set Stored=Dummy\n"),
   ("nonescaping borrowed metadata reader", ordinaryBorrowedReader false),
   ("lifted branch survives its helper and writes metadata",
     liftedTask "            set Stored=Dummy\n" "    set Stored=F\n    E.Signal(0)\n    Stored()"),
@@ -328,6 +325,24 @@ private def cases : List (String × String) := [
   ("mutable implicit evidence without overwrite", "Caller(X:t,Dummy:evidence(vehicle,t) where t:type)<transacts>:int=\n    var Stored:evidence(vehicle,t)=Dummy\n    X.N")]
 
 private def forwards : List (String × String) := [
+  -- (#724) Once the owner has returned, its frame's shared locals are read
+  -- only by the tasks that outlive it, whose uses are checked where they
+  -- execute: these five write the dummy after the owner returned and execute
+  -- nothing, so they are admitted now (they were refusals).
+  ("post-return child delayed metadata write", activeRushContinuation
+    "                branch:\n                    Sleep(0.1)\n                    set Stored=Dummy\n                Sleep(1.0)\n"
+    "" "    set Stored=F\n"),
+  ("active cancellation late-MetadataWrite", activeRushContinuation
+    "                defer:\n                    set Stored=Dummy\n                Sleep(1.0)\n"
+    "" "    set Stored=F\n"),
+  ("active cancellation direct-MetadataWrite", activeRushContinuation
+    "                set Stored=Dummy\n                Sleep(1.0)\n"
+    "" "    set Stored=F\n"),
+  ("running rush cleanup cannot restore metadata to a real cell",
+    activeRushCleanup "set Stored=Dummy" "    set Stored=F\n"),
+  ("lifted branch cleanup sees the actual owner's data mode",
+    liftedTask "" "    0" "    defer:\n        set Stored=F\n"
+      "            defer:\n                set Stored=Dummy\n"),
   -- No read, alias, or export observes this owner-private destination.
   ("write-only private local across loop iterations", callables "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<suspends>:int=\n    var Stored:type{_()<computes>:int}=Dummy\n    var N:int=0\n    loop:\n        if(N>0)then set Stored=Dummy\n        set Stored=F\n        Sleep(0.01)\n        set N+=1\n        if(N>=2)then break\n    0"),
   ("typed row clause-cell real overwrite", refinementClauseCell true),
@@ -378,9 +393,6 @@ private def forwards : List (String × String) := [
   ("post-return grandchild real read", activeRushContinuation
     "                branch:\n                    Sleep(0.1)\n                    branch:\n                        Sleep(0.1)\n                        Value:=Stored()\n                Sleep(1.0)\n"
     "" "    set Stored=F\n"),
-  ("unreached post-return child metadata read", activeRushContinuation
-    "                Sleep(1.0)\n                branch:\n                    Sleep(0.1)\n                    Value:=Stored()\n                Sleep(1.0)\n"
-    "" ""),
   ("unreached post-return child real read", activeRushContinuation
     "                Sleep(1.0)\n                branch:\n                    Sleep(0.1)\n                    Value:=Stored()\n                Sleep(1.0)\n"
     "" "    set Stored=F\n"),
@@ -404,9 +416,6 @@ private def forwards : List (String × String) := [
   ("active cancellation direct-RealWrite", activeRushContinuation
     "                set Stored=F\n                Sleep(1.0)\n"
     "" "    set Stored=F\n"),
-  ("active cancellation afterwait-MetadataRead", activeRushContinuation
-    "                Sleep(1.0)\n                defer:\n                    Value:=Stored()\n                Sleep(1.0)\n"
-    "" ""),
   ("active cancellation afterwait-RealRead", activeRushContinuation
     "                Sleep(1.0)\n                defer:\n                    Value:=Stored()\n                Sleep(1.0)\n"
     "" "    set Stored=F\n"),
@@ -464,8 +473,6 @@ private def forwards : List (String × String) := [
     "    UseNamed(?Value:=Pass(Dummy,F))"),
   ("canceled lifted writer leaves an initially real cell alone",
     liftedTask "            set Stored=Dummy\n" "    0" (initial := "F")),
-  ("canceled lifted task does not execute its metadata receiver",
-    liftedTask "            Value:=Dummy()\n" "    0" (initial := "F")),
   ("lifted task reads an initially real cell",
     liftedTask "            Value:=Stored()\n" "    E.Signal(0)\n    0" (initial := "F")),
   ("actual owner cleanup precedes its lifted branch cleanup",

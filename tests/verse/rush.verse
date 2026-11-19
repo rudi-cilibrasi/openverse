@@ -1,4 +1,4 @@
-# rush: the first arm to end gives the value; the others go on as tasks until the function exits (#156)
+# rush: the first arm to end gives the value; the others go on as tasks, children of the task that ran the rush, until it ends (#156, #724)
 Step(Name:string, N:int, D:float)<suspends>:string =
     defer:
         Print("{Name} unwound")

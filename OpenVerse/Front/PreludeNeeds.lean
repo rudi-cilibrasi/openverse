@@ -49,7 +49,8 @@ partial def expr (types values : List String) (e : SExpr) : List String :=
       | .decl _ _ t _ _ => t.toList.flatMap (ty types)
       | .construct _ n ts _ => nominal types n ++ ts.flatMap (ty types)
       | .app _ (.ident _ n) _ _ =>
-        if ["$spawn", "$sync", "$race", "$rush", "$branch"].contains n then ["$suspends"]
+        if ["$rush", "$branch"].contains n then ["$suspends", "$scopes"]
+        else if ["$spawn", "$sync", "$race"].contains n then ["$suspends"]
         else if !values.contains n then nominal types n else []
       | _ => []
     here ++ e.children.flatMap (expr types values)

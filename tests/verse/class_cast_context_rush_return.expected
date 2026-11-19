@@ -4,6 +4,6 @@ source 10
 result 14
 cast 10
 source 10
-other 10
 result 0
+other 10
 exit=0
