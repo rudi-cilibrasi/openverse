@@ -59,9 +59,9 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
 
 ## Where things stand
 
-With [the UEFN 43.12 probes](#after-the-uefn-4312-probes), merged with [compound places](#after-compound-places) (#704), with Epic's default effect the default: **8,811 agree, 602 refuse, 42 accept, 93 differ, 3,956 not translatable** of 13,504 cases (a fresh full comparison, the baseline regenerated; before the default effect, 8,806, 603, 46, 93). Before both, on main `617c89f1`: 8,801 agreed, 600 refused, 55 accepted and 92 differed; compound places alone gave 8,802 agreed and 91 differed; with [tuple and array concatenation](#after-tuple-and-array-concatenation) on `cf0ced0e` (#630), 8,799 agreed and 602 were refused, the count the refusals' table below still has. This is the one table of what is left; the sections below are the history, each written when its work landed, and the four maps ([the first map](#the-remaining-causes-a-map), [classes](#classes-and-subtyping-the-map), [forms](#forms-of-expressions-statements-and-the-library-a-map), [the forms still on the list](#the-forms-still-on-the-list-a-map)) hold the case-by-case reading each row points to.
+With [Epic's VM results](#after-epics-vm-results) (#724) on main `b640fa6d`: **8,815 agree, 606 refuse, 38 accept, 89 differ, 3,956 not translatable** of 13,504 cases (a full comparison against the baseline: 8 cases better, 4 worse, the Blueprint VM's twins of the Verse VM's module-evaluation errors). With [the UEFN 43.12 probes](#after-the-uefn-4312-probes), merged with [compound places](#after-compound-places) (#704), with Epic's default effect the default: 8,811 agreed, 602 refused, 42 accepted, 93 differed (a fresh full comparison, the baseline regenerated; before the default effect, 8,806, 603, 46, 93). Before both, on main `617c89f1`: 8,801 agreed, 600 refused, 55 accepted and 92 differed; compound places alone gave 8,802 agreed and 91 differed; with [tuple and array concatenation](#after-tuple-and-array-concatenation) on `cf0ced0e` (#630), 8,799 agreed and 602 were refused, the count the refusals' table below still has. This is the one table of what is left; the sections below are the history, each written when its work landed, and the four maps ([the first map](#the-remaining-causes-a-map), [classes](#classes-and-subtyping-the-map), [forms](#forms-of-expressions-statements-and-the-library-a-map), [the forms still on the list](#the-forms-still-on-the-list-a-map)) hold the case-by-case reading each row points to.
 
-**Accepted where the tests refuse (55)**
+**Accepted where the tests refuse (51)**
 
 | Cause | Cases | What it is, and what it needs | Who decided what |
 |---|---:|---|---|
@@ -70,17 +70,15 @@ With [the UEFN 43.12 probes](#after-the-uefn-4312-probes), merged with [compound
 | concrete-classes | 7 → 0 | a class below a `<concrete>` one: is it concrete? | settled by UEFN 43.12 (3519), as the tests have it ([After the UEFN 43.12 probes](#after-the-uefn-4312-probes)) |
 | type-checks-other | 7 | Epic's compiler limits (`ParametricFunctions` 431, 438, `FORT-744399`, an enum of 256 values), a join of two classes at a type both are below (`SOL-5838`, 2), a function without `<decides>` as a `<transacts><decides>` value (`FunctionTypes.versetest:191`) | left, [the forms still on the list](#the-forms-still-on-the-list-a-map): `FunctionTypes:191` is where the Book disagrees with itself (ch. 13 against the test's comment), `SOL-5838` the owner's reading |
 | effect-checks | 6 | `no_rollback` as a function's default effect (3), the BPVM's `spawn` in a `<transacts>` function (2, their VerseVM twins agree) and in a `<transacts><decides>` one (`SoftwareTransactionalMemory.versetest:505`) | left: the Book disagrees with itself, and its tests split by VM, [the held rules](#after-the-held-rules), [the forms still on the list](#the-forms-still-on-the-list-a-map) |
-| initializer-effects | 4 | a module constant whose construction runs a `block` that allocates a `var` (VerseVM's link error 9003, `GlobalVariables.versetest` 86-105); the BPVM's twins are valid, and `:143` is valid where the `var` is not reached: a check of what the initializer does when it runs | left: a VM split and a check at run time, [the forms still on the list](#the-forms-still-on-the-list-a-map) |
 | final-members | 1 | a `<final>` method that does not implement an interface's method of its name (`final.versetest:125`): members keyed by qualifier | left with the two members of one name, [the forms still on the list](#the-forms-still-on-the-list-a-map) |
 
-**Different output (91)**
+**Different output (87)**
 
 | Cause | Cases | What it is, and what it needs | Who decided what |
 |---|---:|---|---|
 | int-precision | 87 | VerseVM's unbounded `int` against openverse's 64 bits (`Bitwise`, the arithmetic operators, 5 `ToDiagnostic` operands): bignums in the C runtime | openverse's reading, the BPVM's, [Readings](../LANGUAGE.md#readings-openverse-takes) |
-| empty-values-equal | 4 | the value of `X?` on a `logic`, `true?` (the empty value in the tests) | the Book disagrees with itself; built and measured: right for the 4 and no output changed, but 722 programs' bytes, which the elaborator's own `or` and `void` conversions take; needs a flag every value-dropping context sets ([the rule](book-forms-rules.md#the-value-of-true)), [After the forms still on the list](#after-the-forms-still-on-the-list) |
 
-**Refused where the tests accept (602)**
+**Refused where the tests accept (606)**
 
 | Cause | Cases | What it is, and what it needs | Who decided what |
 |---|---:|---|---|
@@ -101,6 +99,7 @@ With [the UEFN 43.12 probes](#after-the-uefn-4312-probes), merged with [compound
 | unnamed-parameters | 7 | parser forms (`TimSyntax`, `Roundtrip`) | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 | module-objects | 5 | module constants of `<unique>` classes, made once before `Main`: the module state of [weak-map.md](weak-map.md) | left (designed there), [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 | subtyping-to-any | 5 | conversions to a type with `any` inside | left, [classes](#classes-and-subtyping-the-map) |
+| module-evaluation | 4 | the Blueprint VM's twins (`bp_vm_only`, `GlobalVariables.versetest` 115, 119, 126, 134) of the Verse VM's module-evaluation link errors, which openverse now gives ([Modules](../LANGUAGE.md#modules)) | the owner's: the Verse VM where the VMs differ, [After Epic's VM results](#after-epics-vm-results) |
 | attributes | 4 | an attribute of the engine's (`@expose_to_web_data_sync_service_reads`, 2) and two parser forms | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 | comparable-classes | 4 | `<unique>` interfaces with no class below them, compared (`ComparableInterface.versetest`) | left: a class rule, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 | nested-tuple-parameters | 4 | parser forms (`TimSyntax`, `Roundtrip`) | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
@@ -2818,6 +2817,41 @@ rules (#515):
   `<decides>` function type no function value implements, which cannot
   fail no more; none is worse.
 
+## After Epic's VM results
+
+Epic's Verse VM and Blueprint VM ran the live probes on UEFN 43.12
+(`++Fortnite+Release-43.12-CL-60598086`, 2026-11-18, #724), and openverse
+follows the Verse VM where the two differ (the owner's decision). Four
+changes, one commit each on `fix/verse-vm-branch-sleep-query`:
+
+- `Sleep(0.0)` yields, a tick, as both VMs do ([the
+  rule](scheduler-conformance.md#sleep00-yields)); no case of the Book's
+  tests calls it, and ch. 14's tested examples are not run by the
+  harness: no verdict moves.
+- `X?` of a `logic` succeeds with the empty value, as both VMs and the
+  Book's tests have it ([the rule](book-forms-rules.md#the-value-of-true)):
+  `BoolQuery.versetest` 3 and 4, `LogicalAnd.versetest:29` and
+  `Precedence.versetest:121` move from different output to agree (the
+  empty-values-equal cause is gone).
+- A module constant whose computation allocates a `var` is refused before
+  the program runs, as the Verse VM's link does ([Modules](../LANGUAGE.md#modules)):
+  `GlobalVariables.versetest` 86, 90, 97 and 105 (`verse_vm_only`) move from
+  accepted to agree (the initializer-effects cause is gone); their
+  `bp_vm_only` twins, 115, 119, 126 and 134, move from agree to refused
+  (cause module-evaluation); `:143`, the control, still agrees.
+- A `branch` lives until its task ends, not its function ([the
+  rule](scheduler-conformance.md#a-branch-lives-as-long-as-its-task)): the
+  Book cases that show it (`AsyncContextCancellation.versetest`,
+  `NestedUpdateStateCorruption.versetest`, `SOL-4332-BranchRace.versetest`,
+  `branch.versetest`'s timed ones) use the test runner's `CoroUtils` and are
+  not translatable; no verdict moves. Their Verse VM expectations are
+  translated by hand into `tests/verse/branch_task_scopes.verse` and
+  `branch_task_scopes_events.verse`, which give them.
+
+Against the baseline of main `b640fa6d` (Epic's default effect the
+default): 8 cases better, 4 worse, none changed otherwise: 8,815 agree,
+606 refuse, 38 accept, 89 differ. The baseline records it.
+
 ## Not covered, and why it matters
 
 - 1,264 cases need the runner's virtual packages and modules (`vpackage`,
@@ -2882,13 +2916,11 @@ Grouped by the causes of the tables above. Lines are given per file, with
 
 **Accepted: effect-checks** (6): `Effects.versetest` 490, 551, 552, 557(b), 565(b); `SoftwareTransactionalMemory.versetest` 505(b)
 
-**Accepted: initializer-effects** (4): `GlobalVariables.versetest` 86(v), 90(v), 97(v), 105(v)
 
 **Accepted: final-members** (1): `Attributes/final.versetest` 125
 
 **Different output: int-precision** (87): `Intrinsics/Abs.versetest` 17(v); `Intrinsics/ToDiagnostic.versetest` 36(v), 37(v), 38(v), 39(v), 40(v); `Math/Bitwise.versetest` 62(v), 63(v), 64(v), 65(v), 66(v), 67(v), 73(v), 76(v), 77(v), 78(v), 79(v), 80(v), 83(v), 84(v), 85(v), 86(v), 87(v), 90(v), 91(v), 92(v), 95(v), 96(v), 97(v), 98(v), 204(v), 205(v), 206(v), 207(v), 208(v), 209(v), 210(v), 215(v), 220(v), 221(v), 222(v), 223(v), 224(v), 229(v), 230(v), 231(v), 232(v), 233(v), 234(v), 235(v), 236(v), 237(v), 238(v), 243(v), 244(v), 245(v), 246(v), 248(v), 249(v), 254(v), 255(v), 256(v); `Operators/BinaryAddInt.versetest` 35(v), 36(v), 37(v), 38(v), 65(v), 66(v), 67(v), 68(v); `Operators/BinaryDivInt.versetest` 49(v), 50(v); `Operators/BinaryMulInt.versetest` 49(v), 50(v), 52(v), 53(v); `Operators/BinarySubInt.versetest` 39(v), 40(v), 41(v), 42(v), 44(v), 45(v), 47(v), 48(v); `Operators/Negate.versetest` 14(v); `WhereConstrainedInts.versetest` 224(v), 227(v)
 
-**Different output: empty-values-equal** (4): `Operators/BoolQuery.versetest` 3, 4; `Operators/LogicalAnd.versetest` 29; `Operators/Precedence.versetest` 121
 
 
 ## Appendix B: totals per file

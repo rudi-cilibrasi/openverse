@@ -16,10 +16,11 @@ test path in `fortniteMain`. OpenVerse's
 recorded expectations. In particular, `verse_vm_only` and `bp_vm_only`
 identify different targets in that development corpus.
 
-The checked-in baseline has 702 VerseVM-targeted records. Of those, 216
-agree, 288 are refused by OpenVerse, 4 are accepted by OpenVerse where the
-Book expects a refusal, 88 produce different output and 106 cannot be
-translated by the harness. The other records are 585 BPVM-targeted (including
+The checked-in baseline has 702 VerseVM-targeted records. Of those, 223
+agree, 284 are refused by OpenVerse, none is accepted where the Book
+expects a refusal (the four were the module-evaluation link errors, given
+since #724), 89 produce different output and 106 cannot be translated by
+the harness (on main `b640fa6d`, before #724: 219, 284, 4, 89, 106). The other records are 585 BPVM-targeted (including
 `verse_vm_todo`) and 12,217 with no target restriction recognized by the
 harness. See the [baseline verdicts](../../tests/conformance/book/baseline.tsv)
 and the harness's [target handling](../../tests/conformance/book/booktests.py).

@@ -80,6 +80,9 @@ rule("comments-in-strings", OUT, prog=r'"[^"\n]*<#')
 rule("output-other", OUT)
 
 # --- refusals: first by openverse's diagnostic, where it names the feature
+# (the Blueprint VM's twins of the Verse VM's module-evaluation link errors,
+# GlobalVariables.versetest 115-141: openverse follows the Verse VM, #724)
+rule("module-evaluation", REF, diag=r"computing the constant .* allocates")
 K = r"(?:class|struct|module|interface|enum|union|scoped|type)\b"
 rule("override-defaults", REF, diag=r"must give a new default|must have the type it inherits|"
      r"must have the signature of")
