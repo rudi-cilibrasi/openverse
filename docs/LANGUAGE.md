@@ -3450,6 +3450,28 @@ Main():void =
   Qualification"): see [Shadowing](#shadowing). A local, parameter or class
   member (inherited ones included) named like a visible module or module
   member (its own module's, or an open module's) is an error too.
+- **A constant's computation allocates no `var`** (#724). Epic's Verse VM
+  computes a module's constants, the top level's among them, when it links
+  the program, and a computation that allocates a mutable variable fails
+  the link: on UEFN 43.12 (`++Fortnite+Release-43.12-CL-60598086`) the
+  session's server cook stops with "Script error 9003: Runtime error while
+  evaluating module." for the probes `book-global-block-*`, as the Book's
+  `verse_vm_only` tests expect (`GlobalVariables.versetest` 86, 90, 97,
+  105); the Blueprint VM, which runs no block of a module's instances,
+  links them. The prose agrees (ch. 16: `<allocates>` objects may be made
+  at module scope "as long as their construction does not actually
+  allocate mutable memory"). openverse refuses such a program before it runs: allocating
+  a `var` is declaring a `var` local of the source or constructing an
+  object of a class with a `var` field, in the constant's initialiser or
+  any code it runs (a function it calls, a class's `block:`), on the path
+  it takes. So `C0:c0 = c0{}` is refused when `c0`'s block runs
+  `F(true)` and `F` declares a `var` under `if (Condition?)`, and links
+  when it runs `F(false)` (`:143`, which linked on both VMs). Which path
+  is taken is found by computing the constant at compile time with the
+  reference interpreter (`Front/LinkCheck.lean`), only for constants from
+  which such an allocation is reachable at all; a computation that fails,
+  raises an error or runs out of its fuel is left to run as before. The
+  error names the constant and what it allocates.
 
 Modules exist only in the front end. Each member becomes a definition of
 its qualified name before elaboration, and messages show it as `M.F`.
@@ -4028,6 +4050,7 @@ Main()<suspends>:void =
 | A clause of a `for` with a choice in it | (the Book has no choice; ch. 7: "Each filter must be failable") | a generator over its values, as a clause that calls a function with several values is: not a filter, so it need not fail (`for (X := 1..2, set N = (1 \| 2))` runs the body for each value); the statements of a function with several values that a `for` takes are the function's, not the `for`'s filters |
 | Precedence of `\|` | (not in the Book) | below `+`, above the comparisons: `X = 1 \| 2` is `X = (1 \| 2)` (#208) |
 | `Sleep(0.0)` | "may resume in the same tick" (ch. 14), "One frame" (ch. 14); the API reference: it always yields; the tested ch. 14 examples (`03`, `05` to `11`): it completes at once, in a `race`, a `sync` and plain code: the Book disagrees with itself ([the rules](research/scheduler-conformance.md#sleep00-yields)) | **Epic's**: it yields, as both of Epic's VMs do (UEFN 43.12, `++Fortnite+Release-43.12-CL-60598086`, `vm-sleep-zero-yields`), and as the API reference says: it waits one tick, the next update; a negative or NaN duration completes at once |
+| A module constant whose computation allocates a `var` | `verse_vm_only`: link error 9003 (`GlobalVariables.versetest` 86, 90, 97, 105); `bp_vm_only`: valid, "BPVM doesn't run blocks on global instances of classes" (114-141); `:143` valid on both where the `var` is not reached; ch. 16: only "as long as their construction does not actually allocate mutable memory" | **the Verse VM's** (the owner's choice where the VMs differ; measured on UEFN 43.12, probes `book-global-block-*`): refused before the program runs, the constant computed at compile time to find the path it takes ([Modules](#modules)) |
 | `Sleep(S)` rounding | the API: "a sleep resumes on the first update at or after its deadline and never sooner than the next one. Short sleeps therefore round up"; no tick rate | the first tick at or after the deadline: the binary64 product `30·S` rounded up, at least one tick (`Sleep(0.04)` takes 2 ticks; `Sleep(0.1)`, whose product is exactly 3.0, 3); bounded inputs and checked clock accumulation follow the explicit reference policy above (#514) |
 | End of a program with tasks | not stated | the program ends when `Main` does; a `Main` that waits with no task able to run is an error (exit 2) (#156) |
 | Order of a `subscribable_event`'s functions | the API: "invoked in a randomised order on every signal", "only after every waiting task has been resumed"; ch. 14's example lists them in subscription order | subscription order, after the tasks awaiting the event went on inside `Signal` (#210) |

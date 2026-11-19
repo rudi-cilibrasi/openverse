@@ -24,6 +24,7 @@ import OpenVerse.Front.PhysicalWrites
 import OpenVerse.Front.Attributes
 import OpenVerse.Front.Reachability
 import OpenVerse.Front.Variance
+import OpenVerse.Front.LinkCheck
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -453,6 +454,22 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     { info with dataOnlySlots := (((elaborated[index]?).map (·.slotTys)).getD []).zipIdx.filterMap fun (ty, slot) =>
         if MetadataValues.dataOnly dataClasses ty then some slot else none }
   MetadataFlow.check lowering.fns metadata fields opts.debug scalarReturns dataReturns cleanPrototypes
+  -- (#724) a module constant whose computation allocates a var: Epic's
+  -- Verse VM computes a module's constants when it links the program, where
+  -- that is an error (`LinkCheck`)
+  let constants := (sigs.tops.zip (List.range sigs.tops.length)).filterMap fun
+    | (.const p n .., i) =>
+      if n.startsWith "$" || ((lowering.fns[i]?).map (·.name)) != some n then none else some (i, n, p)
+    | _ => none
+  if !constants.isEmpty then
+    let vars := lowering.fns.mapIdx fun i _ => ((elaborated[i]?).map (·.sourceVars)).getD []
+    let withVar (c : String) : Bool := (env.fields c).any (fun (f, _, _) => env.isVarField c f) ||
+      (env.supers c).any fun d => (env.fields d).any fun (f, _, _) => env.isVarField d f
+    let varTags := (env.classes.filter fun c => !c.contains '$' && env.isRefClass c && withVar c).map
+      fun c => (env.tagOf c, c)
+    let protos := env.protos.map fun (_, t, vs) => (t, vs)
+    if let some (n, p, what) := LinkCheck.firstAllocating lowering.fns vars varTags protos constants then
+      throw s!"{p.show}: computing the constant {n} allocates {what}: Epic's Verse VM computes a module's constants when it links the program, and allocating a var there fails the link (error 9003, as the Book's tests have it, GlobalVariables.versetest:86-105; UEFN 43.12, #724): make it a function, or keep the var out of the code its value runs"
   let frameInfo := elaborated.map (·.frames)
   let c ← certify (← lowerProgram env sigs mainSig lowering frameInfo admitted.usesConc admitted.usesEvents
     admitted.awaitsTasks) methods.stubs

@@ -819,3 +819,10 @@ page](https://github.com/rudi-cilibrasi/openverse/wiki/Where-the-Book-disagrees-
 ### Integer range, by VM
 
 Already on the wiki page (entry 5).
+
+### A module constant that allocates a `var`, by VM
+
+- **Tests:** `GlobalVariables.versetest` 86, 90, 97, 105 (`verse_vm_only`): link error 9003 for a module constant whose class's `block:` declares a `var`, constructs an object with a `var` field, or calls a function that declares one on the path taken; their `bp_vm_only` twins (114-141): valid, "BPVM doesn't run blocks on global instances of classes"; `:143`, untagged: valid where the `var` is not reached.
+- **Prose** (ch. 16, `16_modules.md:617`): `<allocates>` objects at module scope "as long as their construction does not actually allocate mutable memory".
+- **Epic's VMs** (UEFN 43.12, `++Fortnite+Release-43.12-CL-60598086`, probes `book-global-block-*`): the Verse VM's session cook fails with "Script error 9003: Runtime error while evaluating module." for the four, and the control links; the Blueprint VM links all five.
+- **openverse now:** the Verse VM's (#724): refused before the program runs ([Modules](../LANGUAGE.md#modules)); the four `bp_vm_only` twins now differ.
