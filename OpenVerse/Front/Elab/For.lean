@@ -14,7 +14,7 @@ def joinOfType (elabBranchAlts : Ctx → Pos → SExpr → Option STy → Option
     (ctx : Ctx) (p : Pos) (alts : List SExpr) : EM (Option STy) := do
   let some (i, place) := Choice.joinOf? alts | return none
   let st ← get
-  let (_, ty, _, _) ← elabBranchAlts { ctx with canFail := true, inTaking := true, typeOnly := true } p i none place
+  let (_, ty, _, _) ← elabBranchAlts { ctx with canFail := true, bodyFailure := false, inTaking := true, typeOnly := true } p i none place
   restoreConstructProbe ctx st
   return some ty.toSTy
 
@@ -606,8 +606,11 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
   -- A failable continuation body returns an explicit outcome. Its first
   -- filter still fails the call, so the caller retains that boundary.
   let bodyFail := (ctx.canFail && !firstDecides) || failure.isSome || forReturnBody? body
+  -- (#515: a body's failure is a source failure context only where the
+  -- for is in one; otherwise it is the function's own, or the lowering's)
   let bodyCtx (c : Ctx) : Ctx := { c with
     canFail := bodyFail, inLoop := false, inRepeat := true,
+    bodyFailure := if ctx.canFail && !firstDecides then ctx.bodyFailure else true,
     refineExits := { c.refineExits with brk := none },
     forExitPacket := failure.orElse fun _ => c.forExitPacket }
   -- elaborate the filters of one generator (in a failure context)
@@ -615,7 +618,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     match fs with
     | [] => return (.lit (.logic true), c)
     | _ =>
-      let (r, c') ← elabSeq { c with canFail := true, inTaking := true } fs none
+      let (r, c') ← elabSeq { c with canFail := true, bodyFailure := false, inTaking := true } fs none
       return (r.e, c')
   -- The ordinary composed/exclusive paths use the same handoff as a
   -- refining path. Probe a suffix once at its binding's common type;
@@ -727,7 +730,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         if rt != .int then
           let name := Choice.shownName n
           eerr gp s!"a range's values are ints: {name}:{rt.show} := a..b is not one; write {name}:int := a..b"
-      let es ← elabInts { c with canFail := true, inTaking := true } gp [lo, hi]
+      let es ← elabInts { c with canFail := true, bodyFailure := false, inTaking := true } gp [lo, hi]
       let (slot, c1) ← declareAt g.pos c n .int
       -- (a bound that fails gives no iterations, its effects and the
       -- other bound's rolled back, as a failing source does: Book of
@@ -751,7 +754,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         | .app _ (.ident _ "$noteLoopIterator") [.str _ [.text key], source] false =>
           (some key, source)
         | _ => (none, srcE)
-      let rs ← elabE { c with canFail := true, inTaking := true } srcE none
+      let rs ← elabE { c with canFail := true, bodyFailure := false, inTaking := true } srcE none
       let rs ← elabContainerReceiverWith elabE c gp rs (fun
         | .arr _ | .map .. => true
         | _ => false) "iteration"
@@ -807,8 +810,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       let some b := Choice.binding? g | eerr g.pos "bad for clause"
       -- (an `if` with choices in its branches picks its branch first, once, #235)
       let (pre, ty, es, _) ← match b.branchy with
-        | some i => elabBranchAlts { c with canFail := true, inTaking := true } gp i b.ty b.place
-        | none => do let (ty, es) ← elabAlts { c with canFail := true } gp b; pure (none, ty, es, false)
+        | some i => elabBranchAlts { c with canFail := true, bodyFailure := false, inTaking := true } gp i b.ty b.place
+        | none => do let (ty, es) ← elabAlts { c with canFail := true, bodyFailure := false } gp b; pure (none, ty, es, false)
       checkNewLocal c gp n
       let k ← fresh .int
       let (xs, c1) ← declareAt g.pos c n ty
@@ -868,7 +871,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         if let some b@{ branchy := some i, .. } := fs[j]?.bind Choice.binding? then
           let i := pruneMethodCases cA i
           let st ← get
-          let (_, ty, _, refined) ← elabBranchAlts { cA with canFail := true, inTaking := true, typeOnly := true }
+          let (_, ty, _, refined) ← elabBranchAlts { cA with canFail := true, bodyFailure := false, inTaking := true, typeOnly := true }
             b.pos i b.ty b.place
           restoreConstructProbe cA st
           if refined && stagePlan.isNone && forBodySafe cA bd then
@@ -925,7 +928,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                       [clauses, .ident b.pos elem, .app b.pos (.ident b.pos "Err") [] false] false
                   else .app b.pos (.ident b.pos "$forFirst") [clauses, .ident b.pos elem] false)
               let selected := Choice.consumeBranches i site consume
-              let values ← elabE { cA with canFail := true, inTaking := true } (.query b.pos selected) none
+              let values ← elabE { cA with canFail := true, bodyFailure := false, inTaking := true } (.query b.pos selected) none
               let arrTy := if bodyFail then match values.ty with | .opt t => t | t => t else values.ty
               let .arr t := arrTy | eerr b.pos "internal: a refining for's values"
               let slot ← fresh values.ty
@@ -1042,7 +1045,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                     (.app b.pos (.ident b.pos "$refineCopyOut") [get (j + 1)] false)) ++ [get 0])
               .optionLit b.pos code
             let selected := Choice.consumeBranches i site consume
-            let values ← elabE { cA with canFail := true, inTaking := true }
+            let values ← elabE { cA with canFail := true, bodyFailure := false, inTaking := true }
               (.query b.pos selected) none
             let slot ← fresh values.ty
             if stagePlan.isSome then
@@ -1072,7 +1075,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         -- (the selector: the first alternative whose guards hold)
         let selS : SExpr := alts.zipIdx.foldr (fun ((gs, _), i) acc =>
           .ite gp gs (.int gp (i : Int)) (some acc)) (.int gp (-1))
-        let rsel ← elabE { cA with canFail := true, inTaking := true } selS (some .int)
+        let rsel ← elabE { cA with canFail := true, bodyFailure := false, inTaking := true } selS (some .int)
         let sel ← fresh .int
         -- (a path's clauses: its guards, then its value bound to the choice's name)
         let liftP (gs : List SExpr) (r : SExpr) (i : Nat) : List SExpr :=
@@ -1194,7 +1197,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           -- site's, #314)
           let site := s!"$cf{gp.line}_{gp.col}{b.name}"
           let moreClauses := more.flatMap fun (g', fs') => g' :: fs'
-          let bctx : Ctx := { c with canFail := ctx.canFail && !firstDecides, inTaking := ctx.inTaking, inLoop := ctx.inLoop,
+          let bctx : Ctx := { c with canFail := ctx.canFail && !firstDecides, bodyFailure := ctx.bodyFailure, inTaking := ctx.inTaking, inLoop := ctx.inLoop,
                                      inRepeat := ctx.inRepeat }
           let liftA (a : SExpr) (i : Nat) : List SExpr :=
             -- (its exclusive choices kept: this for compiles them, #314)
@@ -1374,7 +1377,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             (fun c p clauses body prepared firstDecides failure =>
               elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq
                 c p clauses body prepared firstDecides failure)
-            { c with canFail := ctx.canFail && !firstDecides }
+            { c with canFail := ctx.canFail && !firstDecides, bodyFailure := ctx.bodyFailure }
             producer.pos producer.name yieldTy dictionary receiver arguments rest bd bodyFail
       -- (a call of a recursive function with several values taken lazily,
       -- #246: a loop over its values, each one iteration, over a one-element
@@ -1382,7 +1385,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       -- whose values are collected)
       if let some { pos := gp, name := n, ty := sty, each := some (.app _ (.ident _ "$loop") lp false), .. } :=
           Choice.binding? g then
-        let lg ← elabLoopGen { c with canFail := true, inTaking := true } gp lp
+        let lg ← elabLoopGen { c with canFail := true, bodyFailure := false, inTaking := true } gp lp
         let ty ← match ← sty.mapM (resolveTy c.types gp) with
           | some t => pure t
           | none => pure lg.vty
@@ -1488,7 +1491,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         let preStart := (← get).nslots
         let (prelude, c0) ← elabFilters ctx pre
         let bindings := c0.locals.filterMap (fun binding => if binding.slot >= preStart then some binding.slot else none)
-        let generator ← elabLoopGen { c0 with canFail := true, inTaking := true } gp args
+        let generator ← elabLoopGen { c0 with canFail := true, bodyFailure := false, inTaking := true } gp args
         let ty ← match annotation with
           | some written => resolveTy c0.types gp written
           | none => pure generator.vty

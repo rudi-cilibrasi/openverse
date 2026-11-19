@@ -1,5 +1,5 @@
 # Comparable facts from a selected class case remain local to that case (#209).
-None(V:t where t:type)<decides>:t =
+None(V:t where t:type)<transacts><decides>:t =
     false?
     V
 NeedCmp(X:t,Y:t where t:subtype(comparable))<decides>:void = X = Y

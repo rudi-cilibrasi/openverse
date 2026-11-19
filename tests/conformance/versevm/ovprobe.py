@@ -30,7 +30,9 @@ the same on Linux and Windows.
                        [--json OUT] [--tsv OUT] PROBE...
       run every probe with the Lean interpreter (`openverse run --emit`) and,
       when bytecode was written, with the C runtime, in each mode (`default`,
-      `signal-no-rollback`); record stdout, stderr and exit status.
+      and `signal-rollback`, the legacy transactional mode, #515; also
+      `signal-no-rollback`, the default's old opt-in name, which older
+      result files use); record stdout, stderr and exit status.
 
   ovprobe.py parse [--manifest M | --single ID] [--marker WORD]
                    [--line-regex RE] [--diag-regex RE] [--runtime-error-regex RE]
@@ -75,7 +77,10 @@ DRIVER_CLASS = "openverse_probe_driver"
 DRIVER_ID = "ovprobe-driver"
 ENTRY = "RunOVProbe"
 OV_DRIVER_FN = "Main"
-MODES = ("default", "signal-no-rollback")
+MODES = ("default", "signal-rollback", "signal-no-rollback")
+# (the modes `openverse` runs unless told: the default, Epic's admission of
+# an event's Signal, and the legacy transactional mode, #515)
+DEFAULT_MODES = ("default", "signal-rollback")
 OUTCOMES_RUN = ("ran", "runtime-error", "failed", "limit")
 VERDICTS = ("agree", "differ", "epic-refuses", "openverse-refuses", "inconclusive")
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -404,7 +409,7 @@ def cmd_openverse(a):
             sha = hashlib.sha256(read_bytes(path)).hexdigest()
             for mode in modes:
                 vbc = os.path.join(tmp, "%s.%s.vbc" % (pid, mode))
-                flags = ["--signal-no-rollback"] if mode == "signal-no-rollback" else []
+                flags = ["--" + mode] if mode in ("signal-rollback", "signal-no-rollback") else []
                 cmd = [a.openverse, "run", src] + flags + ["--emit", vbc]
                 rc, out, err = run_cmd(cmd, a.timeout)
                 warnings, _ = split_warnings(err, src)
@@ -1163,7 +1168,7 @@ def main(argv=None):
     o.add_argument("probes", nargs="+")
     o.add_argument("--openverse", default=os.path.join(ROOT, ".lake", "build", "bin", "openverse"))
     o.add_argument("--cverse", default=os.path.join(ROOT, "runtime", "build", "cverse"))
-    o.add_argument("--modes", default=",".join(MODES))
+    o.add_argument("--modes", default=",".join(DEFAULT_MODES))
     o.add_argument("--timeout", type=int, default=120)
     o.add_argument("--json")
     o.add_argument("--tsv")

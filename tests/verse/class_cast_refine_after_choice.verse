@@ -10,7 +10,7 @@ dup(t:type) := class(pair(t, t)):
     C:int = 4
 A1(P:pair(a, b) where a:type, b:type):int =
     if (X := (1 | 2 | 3), X > 1, D := dup[P]) then D.C + X else -1
-A2(P:pair(a, b) where a:type, b:type):?b =
+A2(P:pair(a, b) where a:type, b:type)<transacts>:?b =
     if (X := (1 | 2 | 3), X > 1, D := dup[P], Print("{X}")) then option{D.A} else false
 A3(P:pair(a, b) where a:type, b:type):int =
     var R:int = 0

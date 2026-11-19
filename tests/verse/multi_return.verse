@@ -54,7 +54,7 @@ c := class:
             return 7
         Y * 2
 # a plain function with an early return stays one
-P(X : int):int =
+P(X : int)<transacts>:int =
     if (X > 0):
         return 1
     2

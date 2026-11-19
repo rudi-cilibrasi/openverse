@@ -783,7 +783,7 @@ def refinedCastWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (
   let env := ctx.types
   if !env.classes.contains T then return none
   let st0 ← get
-  let rx ← elabE { ctx with canFail := true, inTaking := true } x none
+  let rx ← elabE { ctx with canFail := true, bodyFailure := false, inTaking := true } x none
   let some (S, sargs, targs, common, eqs, opened) := refiningCast? env T rx.ty (env.tvars.map (·.1))
     | do set st0; return none
   -- (#53, #351: to a type beside the object's, or to an interface whose type
@@ -874,7 +874,7 @@ partial def refinementPrefixTypeWith
     (elabClauses : Ctx → List SExpr → EM (R × Ctx))
     (ctx : Ctx) (clauses : List SExpr) (body : SExpr) : EM Ty := do
   let c := { ctx with
-    canFail := true, inTaking := true, typeOnly := true
+    canFail := true, bodyFailure := false, inTaking := true, typeOnly := true
     refinementTransportActive := true }
   match clauses with
   | [] => return (← elabE c (Refine.exitsAsErr body) none).ty
@@ -1491,7 +1491,7 @@ def withCastClauses (elabE : Ctx → SExpr → Option Ty → EM R)
       -- including generator bindings, without retaining their probe state.
       let before? ← tryCatch (do
         modify fun state => { state with refiningHintProbe := true }
-        let (_, before) ← elabPrefix { ctx with typeOnly := true, canFail := true } (cs.take k)
+        let (_, before) ← elabPrefix { ctx with typeOnly := true, canFail := true, bodyFailure := false } (cs.take k)
         pure (some (before, ← get))) (fun _ => pure none)
       set st0
       let lifted ← match before? with
@@ -1559,7 +1559,7 @@ structure LoopTailCode where
 partial def elabLoopTailWith (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx))
     (ctx : Ctx) (tail : SExpr) (k start : Nat) : EM LoopTailCode := do
   let vd : Expr := .lit .void
-  let c := { ctx with canFail := true, inTaking := true }
+  let c := { ctx with canFail := true, bodyFailure := false, inTaking := true }
   match tail with
   | .app _ (.ident _ "$returnTail") [.block p ss] false =>
     let (pre, value) := Choice.loopBlockParts p ss
@@ -1630,7 +1630,7 @@ partial def probeHoleWith (elabE : Ctx → SExpr → Option Ty → EM R)
       let result ← tryCatch (do
         let input ← probeHoleWith elabE elabSeq ca rty ((Choice.alts? point).getD [point]) recTy
         let holeLocal : Local := { name := hole, slot := ← fresh (input.getD rty), ty := input.getD rty, mutable := false }
-        let (_, context) ← elabSeq { ca with locals := holeLocal :: ca.locals, typeOnly := true, canFail := true, inTaking := true } clauses none
+        let (_, context) ← elabSeq { ca with locals := holeLocal :: ca.locals, typeOnly := true, canFail := true, bodyFailure := false, inTaking := true } clauses none
         let branches ← elabLoopTailWith elabSeq context tail (← fresh .int) 0
         match branches.arms[0]? with
         | some (context, values) => probeHoleWith elabE elabSeq context rty values recTy
@@ -1654,7 +1654,7 @@ partial def probeHoleWith (elabE : Ctx → SExpr → Option Ty → EM R)
   -- (a probe only: when the value does not elaborate apart, as a call's
   -- code that reads a name its prefix binds, the result type)
   let ty? ← tryCatch (do
-      let r ← elabE { c with typeOnly := true, canFail := true, inTaking := true } e none
+      let r ← elabE { c with typeOnly := true, canFail := true, bodyFailure := false, inTaking := true } e none
       let fits ← tryCatch (do let _ ← coerce e.pos r rty; pure true) (fun _ => pure false)
       pure (if fits then none else some r.ty))
     (fun _ => pure none)
@@ -1675,8 +1675,8 @@ partial def loopFlatWith (elabE : Ctx → SExpr → Option Ty → EM R)
   let .app _ (.ident _ "$then") (c :: .ident _ h :: k :: rest) false := a | return (frames, [(a, outer)])
   let (pre, fc) ← match rest with
     | [.block _ ss] => do
-      let (r, c) ← elabSeq { ca with canFail := true, inTaking := true } ss none
-      pure (some r.e, { c with canFail := ca.canFail, inTaking := ca.inTaking })
+      let (r, c) ← elabSeq { ca with canFail := true, bodyFailure := false, inTaking := true } ss none
+      pure (some r.e, { c with canFail := ca.canFail, bodyFailure := ca.bodyFailure, inTaking := ca.inTaking })
     | _ => pure (none, ca)
   -- (#283) the frame of an `if` that is a point, in each of its leaves: one
   -- for all, made at its first, which has its code (`Choice.sameFrame`)
@@ -1780,7 +1780,7 @@ def frameApplyWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p
     let (inTy, outTy) := (f.inTy.getD rty, f.outTy.getD rty)
     let h ← fresh inTy
     let hole : Local := { name := f.hole, slot := h, ty := inTy, mutable := false }
-    let c : Ctx := { f.ctx with canFail := true, inTaking := true, locals := hole :: ls.reverse ++ f.ctx.locals }
+    let c : Ctx := { f.ctx with canFail := true, bodyFailure := false, inTaking := true, locals := hole :: ls.reverse ++ f.ctx.locals }
     let r ← elabE c f.code (some outTy)
     let e ← coerce f.code.pos r outTy
     let unpack := ls.zipIdx.foldr (fun (l, i) acc => Expr.seq (.assign l.slot (.prim (.tupGet i) [.local t])) acc) vd
@@ -1848,7 +1848,7 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
         | (.ident _ n, t) => do return ({ name := n, slot := ← fresh t, ty := t, mutable := false } : Local)
         | _ => eerr p "internal: a $member parameter (#283)"
       let c := loopMemberCtx ctx g h ((instances.lookup h).getD [])
-      let c := { c with locals := pls.reverse ++ c.locals, typeOnly := true, canFail := true, inTaking := true }
+      let c := { c with locals := pls.reverse ++ c.locals, typeOnly := true, canFail := true, bodyFailure := false, inTaking := true }
       let (_, cc) ← elabSeq c hcls none
       let probeK ← fresh .int
       let code ← elabLoopTailWith elabSeq cc htail probeK 0
@@ -1904,7 +1904,7 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
                     let t := t.subst σt
                     return ({ name := "$arg", slot := ← fresh t, ty := t, mutable := false } : Local)
                   let fits ← tryCatch (do
-                      let _ ← elabLoopArgsWith elabE { ca with canFail := true, inTaking := true } q target as ls
+                      let _ ← elabLoopArgsWith elabE { ca with canFail := true, bodyFailure := false, inTaking := true } q target as ls
                         (ls.map (·.slot)) σt
                       pure true) fun _ => pure false
                   if !fits then copyAt := some (q, h)
@@ -1984,7 +1984,7 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
     let c := loopMemberCtx ctx g h ((instances.lookup h).getD [])
     let lctx : Ctx := { c with locals := pls.reverse ++ c.locals }
     let newOf (c : Ctx) : List Local := c.locals.take (c.locals.length - lctx.locals.length)
-    let (rc, cc) ← elabSeq { lctx with canFail := true, inTaking := true } mcls none
+    let (rc, cc) ← elabSeq { lctx with canFail := true, bodyFailure := false, inTaking := true } mcls none
     let code ← elabLoopTailWith elabSeq cc mtail k 0
     let mut tls : List Local := pls
     for l in (newOf cc ++ code.arms.toList.flatMap fun (ca, _) => newOf ca).reverse do
@@ -2036,7 +2036,7 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
           let ls ← f.lives.mapM fun l => do return { l with slot := ← fresh l.ty }
           let lctx : Ctx := { f.ctx with locals := hl :: ls.reverse ++ f.ctx.locals }
           let newOf (c : Ctx) : List Local := c.locals.take (c.locals.length - lctx.locals.length)
-          let (rc, cc) ← elabSeq { lctx with canFail := true, inTaking := true } ccls none
+          let (rc, cc) ← elabSeq { lctx with canFail := true, bodyFailure := false, inTaking := true } ccls none
           let code ← elabLoopTailWith elabSeq cc ctail kms 0
           let mut tls : List Local := hl :: ls
           for l in (newOf cc ++ code.arms.toList.flatMap fun (ca, _) => newOf ca).reverse do
@@ -2095,8 +2095,8 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
       Ctx × Option LoopFrame × Option (Nat × List SExpr × Pos) :=
     let fr? := fs.head?.bind (frames[·]?)
     let actx : Ctx := match fr?.bind (·.pre), fr? with
-      | some _, some f => { f.ctx with canFail := true, inTaking := true }
-      | _, _ => { ca with canFail := true, inTaking := true }
+      | some _, some f => { f.ctx with canFail := true, bodyFailure := false, inTaking := true }
+      | _, _ => { ca with canFail := true, bodyFailure := false, inTaking := true }
     (actx, fr?, match a with
       | .app q (.ident _ "$rec") args' false => some (origin.getD i 0, args', q)
       | .app q (.ident _ "$recTo") (.ident _ h :: args') false => (names.idxOf? h).map (·, args', q)

@@ -40,6 +40,12 @@ def qualifierMarker : String := "$uses:qualifiers"
 def afterPrefix? (pre n : String) : Option String :=
   if n.startsWith pre then some (n.drop pre.length).toString else none
 
+/-- (#515, `--default-no-rollback`) The private marker of Epic's default
+    effect, `no_rollback`, on a source function and on a function type
+    written without a heap specifier or `<decides>`
+    (`SignalAdmission.markDefault`); no source can write it. -/
+def noRollbackMarker : String := "$noRollback"
+
 /-- A module's marker, `$module:A::B`: a constant the parser writes where
     the module `A::B` is defined, with the module's specifiers, and
     `resolveModules` reads and takes out. -/

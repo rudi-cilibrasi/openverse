@@ -1,2 +1,3 @@
+--signal-rollback
 do
 block{E:=sticky_event(int){};E.Signal(1)}

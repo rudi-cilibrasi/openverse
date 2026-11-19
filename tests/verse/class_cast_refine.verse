@@ -36,7 +36,7 @@ Count(P:pair(a, b), K:counter where a:type, b:type)<transacts>:int =
     else:
         -1
 # (a branch that fails, in a failure context)
-Check(P:pair(a, b) where a:type, b:type)<decides>:int =
+Check(P:pair(a, b) where a:type, b:type)<transacts><decides>:int =
     if (D := dup[P]):
         D.C > 1
         D.C

@@ -2,19 +2,19 @@
 # the loop variable's placeholder gets the field at the interface's type
 slot(t:type) := interface:
     var Item:t
-    Show():string
+    Show()<transacts>:string
 islot := class(slot(int)):
     A:int = 0
-    Show<override>():string = "i{Item}"
+    Show<override>()<transacts>:string = "i{Item}"
 sslot := class(slot(string)):
     B:string = "b"
     C:int = 1
-    Show<override>():string = "s{Item}"
+    Show<override>()<transacts>:string = "s{Item}"
 base(t:type) := class(slot(t)):
     Z:int = 9
-    Show<override>():string = "base"
-Items(Ss:[]slot(t) where t:type):[]t = for (S : Ss) { S.Item }
-Shows(Ss:[]slot(t) where t:type):[]string = for (S : Ss) { S.Show() }
+    Show<override>()<transacts>:string = "base"
+Items(Ss:[]slot(t) where t:type)<transacts>:[]t = for (S : Ss) { S.Item }
+Shows(Ss:[]slot(t) where t:type)<transacts>:[]string = for (S : Ss) { S.Show() }
 Main():void =
     for (X : Items(array{islot{Item := 1}, islot{Item := 2}})) { Print("{X}") }
     for (X : Shows(array{sslot{Item := "a"}})) { Print(X) }

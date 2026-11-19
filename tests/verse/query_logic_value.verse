@@ -15,9 +15,9 @@ OrRight()<computes><decides>:void =
     X := false? or true
     X = true
 NotQueryQuery()<computes><decides>:void = not true??
-Queried(B:logic)<decides>:logic = B?
+Queried(B:logic)<computes><decides>:logic = B?
 
-IsEven(N:int):logic = logic{Mod[N, 2] = 0}
+IsEven(N:int)<computes>:logic = logic{Mod[N, 2] = 0}
 
 Show(B:logic):string = if (B?) then "true" else "false"
 

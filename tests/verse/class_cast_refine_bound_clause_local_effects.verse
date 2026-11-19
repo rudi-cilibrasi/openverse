@@ -1,7 +1,7 @@
 pair(a:type,b:type):=class{A:a;B:b}
 dup(t:type):=class(pair(t,t)){Lo:int=1}
 cell:=class{var Init:int=0;var Sum:int=0}
-Add(X:int,Y:int):int=X+Y
+Add(X:int,Y:int)<transacts>:int=X+Y
 Initialize(H:cell)<transacts>:int={set H.Init+=1;Print("init {H.Init}");0}
 F0(P:pair(a,b),Q:pair(c,d),H:cell,Limit:int where a:type,b:type,c:type,d:type)<transacts><decides>:[]tuple(int,b,d,int)=
     for(var Count:int=Initialize(H),I:=Add(dup[P].Lo,dup[Q].Lo)..2,J:=(0|1),Written:=block{set Count+=1;set H.Sum+=Count;Print("step {Count}");1},J>Limit):

@@ -1,5 +1,5 @@
-# expect: 7:39: this call may signal an event (event.Signal) in a failure context, which --signal-no-rollback refuses
-# (#515, #283) under --signal-no-rollback, a Signal in the defer: of a block with
+# expect: 7:39: this call may signal an event (event.Signal) in a failure context, which the no_rollback effect of an event's Signal does not allow
+# (#515, #283) a Signal in the defer: of a block with
 # a choice of its own in a condition: it runs as each value leaves the block
 Main()<suspends>:void =
     E := event(int){}

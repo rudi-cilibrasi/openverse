@@ -1,7 +1,7 @@
 counter := class:
     var Ticks:int = 0
 
-Empty(C:counter, Tag:string):void =
+Empty(C:counter, Tag:string)<transacts>:void =
     set C.Ticks += 1
     Print("{Tag} {C.Ticks}")
 

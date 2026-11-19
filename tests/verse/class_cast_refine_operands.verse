@@ -11,22 +11,22 @@ dup(t:type) := class(pair(t, t)):
 cell := class:
     var N:int = 0
 # the value of option{…} at a type that holds under the refinement only
-Opt(P:pair(a, b) where a:type, b:type):?a = option{D := dup[P]; D.B}
+Opt(P:pair(a, b) where a:type, b:type)<transacts>:?a = option{D := dup[P]; D.B}
 # without a type there: the branch's own, int
-OptC(P:pair(a, b) where a:type, b:type):int =
+OptC(P:pair(a, b) where a:type, b:type)<transacts>:int =
     X := option{D := dup[P]; D.C * 2}
     if (V := X?) then V else -1
 # effects before and after, undone with the failure
 Undo(H:cell, P:pair(a, b), Min:int where a:type, b:type)<transacts>:?int =
     option{set H.N += 1; Print("in"); D := dup[P]; set H.N += D.C; D.C > Min; H.N}
-Logic(P:pair(a, b) where a:type, b:type):logic = logic{dup[P]}
-Not(P:pair(a, b) where a:type, b:type):int = if (not dup[P]) then 1 else 0
-And(P:pair(a, b), N:int where a:type, b:type):int = if (N > 0 and (D := dup[P]; D.C > N)) then 1 else 0
-Or(P:pair(a, b), N:int where a:type, b:type):int = if ((D := dup[P]; D.C > N) or N < 0) then 1 else 0
+Logic(P:pair(a, b) where a:type, b:type)<transacts>:logic = logic{dup[P]}
+Not(P:pair(a, b) where a:type, b:type)<transacts>:int = if (not dup[P]) then 1 else 0
+And(P:pair(a, b), N:int where a:type, b:type)<transacts>:int = if (N > 0 and (D := dup[P]; D.C > N)) then 1 else 0
+Or(P:pair(a, b), N:int where a:type, b:type)<transacts>:int = if ((D := dup[P]; D.C > N) or N < 0) then 1 else 0
 # first{…} with a choice before the cast and after it
-FirstBefore(P:pair(a, b) where a:type, b:type):int =
+FirstBefore(P:pair(a, b) where a:type, b:type)<transacts>:int =
     if (V := first{X := (1 | 2 | 3); X > 1; D := dup[P]; D.C + X}) then V else -1
-FirstAfter(P:pair(a, b) where a:type, b:type):int =
+FirstAfter(P:pair(a, b) where a:type, b:type)<transacts>:int =
     if (V := first{D := dup[P]; X := (D.C | D.C + 1); X > 4; X}) then V else -1
 Main()<transacts>:void =
     H := cell{}

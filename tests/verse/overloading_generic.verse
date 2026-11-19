@@ -5,8 +5,8 @@ Describe(?X:t where t:type):string = "one value"
 Describe(X:int, Y:int):string = "two ints {X + Y}"
 Describe():string = "nothing"
 
-Wrap(?X:t where t:type):?t = option{X}
-Wrap(X:t, Times:int where t:type):[]t =
+Wrap(?X:t where t:type)<transacts>:?t = option{X}
+Wrap(X:t, Times:int where t:type)<transacts>:[]t =
     var R:[]t = array{}
     for (I := 1..Times) { set R = R + array{X} }
     R

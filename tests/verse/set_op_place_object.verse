@@ -35,7 +35,7 @@ key := class<unique><module_scoped_var_weak_map_key>:
 
 var Entries:weak_map(key, []int) = map{}
 
-Id(N:int):int = N
+Id(N:int)<transacts>:int = N
 
 Replace(C:cell)<transacts>:int =
     set C.Arr = array{8, 9}

@@ -1,8 +1,8 @@
 # choice inside expressions (#208): a choice in an operand is lifted out of
 # its clause, the code before it bound first, so it still runs once
-Sq(X:int):int = X * X
-Big(X:int)<decides>:int = X > 4
-Tell(S:string):int =
+Sq(X:int)<transacts>:int = X * X
+Big(X:int)<transacts><decides>:int = X > 4
+Tell(S:string)<transacts>:int =
     Print(S)
     1
 pt := struct:

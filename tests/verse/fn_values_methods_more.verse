@@ -2,27 +2,27 @@
 # class; <decides> and <suspends> methods as values; the receiver is
 # evaluated once, when the value is made
 animal := class:
-    Name():string = "animal"
+    Name()<transacts>:string = "animal"
 dog := class(animal):
-    Name<override>():string = "dog"
+    Name<override>()<transacts>:string = "dog"
 picky := class:
     Min:int
-    Keep(X:int)<decides>:int =
+    Keep(X:int)<transacts><decides>:int =
         X >= Min
         X
 sleeper := class:
     D:float
-    Nap(X:int)<suspends>:int =
+    Nap(X:int)<transacts><suspends>:int =
         Sleep(D)
         X + 1
 tally := class:
     var Made:int = 0
-    Make():picky =
+    Make()<transacts>:picky =
         set Made += 1
         picky{Min := 3}
-Show(F:type{_():string}):string = F()
-Filter(Xs:[]int, F:type{_(:int)<decides>:int}):[]int = for (X : Xs, Y := F[X]) { Y }
-RunNap(F:type{_(:int)<suspends>:int})<suspends>:int = F(1)
+Show(F:type{_()<transacts>:string})<transacts>:string = F()
+Filter(Xs:[]int, F:type{_(:int)<transacts><decides>:int})<transacts>:[]int = for (X : Xs, Y := F[X]) { Y }
+RunNap(F:type{_(:int)<transacts><suspends>:int})<transacts><suspends>:int = F(1)
 Main()<suspends>:void =
     A:animal = dog{}
     Print(Show(A.Name))

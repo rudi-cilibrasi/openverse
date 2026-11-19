@@ -6,14 +6,14 @@ counter := class:
     Name:string
     Step:int = 1
     # fields by bare name
-    Next(X:int):int = X + Step
+    Next(X:int)<transacts>:int = X + Step
     # methods by bare name
     Twice(X:int):int = Next(Next(X))
     Rename(N:string):counter = counter{Name := N, Step := Step}
     Me():counter = Self
     Describe():string = "{Name} steps by {Step}"
     # a <decides> method is called with []
-    Below(X:int)<decides>:int =
+    Below(X:int)<transacts><decides>:int =
         X < 10
         Next(X)
 
@@ -27,7 +27,7 @@ box(t:type) := class:
 stack(t:type) := class:
     Items:[]t = array{}
     Push(X:t):stack(t) = stack(t){Items := Items + array{X}}
-    Peek()<decides>:t = Items[Items.Length - 1]
+    Peek()<transacts><decides>:t = Items[Items.Length - 1]
     Size():int = Items.Length
 
 # a field default is elaborated where it is defined, not in the method that

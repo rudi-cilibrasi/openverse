@@ -139,6 +139,9 @@ structure Sig where
   fx : List String := heapFx
   /-- `<suspends>` (#156): lowered to a frame and a resume function. -/
   suspends : Bool := false
+  /-- (#515, `--default-no-rollback`) It has the `no_rollback` effect
+      (`SignalAdmission.noRollbackMarker`). -/
+  noRollback : Bool := false
   /-- Of a method of a class with type parameters that its parent's type
       arguments do not give (#209): those type parameters, whose values it
       reads from its receiver's hidden fields (`$w.…`), not from hidden
@@ -161,7 +164,8 @@ structure Sig where
     shape's order. -/
 def Sig.valueShape (s : Sig) : FnValues.Shape × List Ty :=
   let npos := s.params.length - s.named.length
-  let (sh, order) := ({ arity := 0, decides := s.decides, suspends := s.suspends, fx := s.fx } : FnValues.Shape).withParams
+  let (sh, order) := ({ arity := 0, decides := s.decides, suspends := s.suspends, fx := s.fx,
+                        noRollback := s.noRollback } : FnValues.Shape).withParams
     (s.params.zipIdx.map fun (_, i) => if i < npos then none else (s.named[i - npos]?).map fun (n, d) => (n, d.isSome))
   (sh, order.filterMap (s.params[·]?))
 
@@ -374,6 +378,17 @@ structure Ctx where
       frame where the code itself cannot fail (a `defer:` body, a `block`,
       a named argument's default): still rolled back with it. -/
   inRollback : Bool := false
+  /-- (#515) In the body of a function whose effects exclude `no_rollback`,
+      or of a class's `block:` (`SignalAdmission.excludesNoRollback`):
+      nothing here may signal an event, failure context or not. -/
+  rollbackOnly : Bool := false
+  /-- (#515) The failure context here is only the enclosing `<decides>`
+      function's own body: its top level may call a function that has
+      `no_rollback` (UEFN 43.12 admits followup/decides-body-default-call).
+      A failure context inside it, a condition or a `for`'s clause, resets
+      it: there such a call is refused, as everywhere (decides-plain-if,
+      for-range-default-call, for-filter-default-call). -/
+  bodyFailure : Bool := false
   /-- (#515) The innermost loop is in a failure context (or inside one):
       the `defer:`s a `break` runs, out of the scopes inside the loop, run
       in that context, not in the one at the `break`. -/
@@ -677,6 +692,9 @@ structure ESt where
       constant, `spawn`) in a failure context, what it is, and the Verse
       Core functions it calls. -/
   failCalls : Array ((Pos × String) × List Nat) := #[]
+  /-- (#515) Likewise, each outside a failure context in a body whose effects
+      exclude `no_rollback` (`Ctx.rollbackOnly`). -/
+  bodyCalls : Array ((Pos × String) × List Nat) := #[]
   /-- The program's types, for conversions between class types (`coerce`). -/
   env : TyEnv := {}
   nslots : Nat := 0
@@ -1321,14 +1339,28 @@ def Ctx.captureEvidence (ctx : Ctx) (captures : List Local) (excluded : List Str
 def Ctx.exitDefers (ctx : Ctx) (rollback : Bool) : Ctx :=
   { ctx with canFail := false, inRollback := rollback }
 
-/-- (#515, `--signal-no-rollback`) Record the functions code `e` at `p`
-    (`what` it is: a call, a construction, …) calls when it runs in a
-    failure context (or inside one, `inRollback`), for
-    `SignalAdmission.checkSites`. -/
+/-- (#515) Record the functions code `e` at `p` (`what` it is: a call, a
+    construction, …) calls when it runs in a failure context (or inside one,
+    `inRollback`), or in a body whose effects exclude `no_rollback`
+    (`rollbackOnly`), for `SignalAdmission.checkSites`. -/
 def noteFailCalls (ctx : Ctx) (p : Pos) (what : String) (e : Expr) : EM Unit := do
-  if ctx.types.signalNoRollback && (ctx.canFail || ctx.inRollback) then
+  if ctx.types.signalNoRollback && (ctx.canFail || ctx.inRollback || ctx.rollbackOnly) then
     let spawn := (ctx.sig? "$spawnMark").map (·.idx)
-    modify fun st => { st with failCalls := st.failCalls.push ((p, what), SignalAdmission.calls spawn e) }
+    let site := ((p, what), SignalAdmission.calls spawn e)
+    if ctx.canFail || ctx.inRollback then
+      modify fun st => { st with failCalls := st.failCalls.push site }
+    else
+      modify fun st => { st with bodyCalls := st.bodyCalls.push site }
+
+/-- (#515, `--default-no-rollback`) A call at `p` of `s`, which may have
+    the `no_rollback` effect: refused in a failure context (or inside one)
+    and in a body whose effects exclude it, as Epic's compiler does (UEFN
+    43.12: error 3512). -/
+def checkNoRollbackCall (ctx : Ctx) (p : Pos) (s : Sig) (shown : String) : EM Unit := do
+  if s.noRollback && !ctx.typeOnly && ((ctx.canFail || ctx.inRollback) && !ctx.bodyFailure || ctx.rollbackOnly) &&
+      !(ctx.frameName.splitOn "$call").tail.any (fun _ => true) then
+    let context := if (ctx.canFail || ctx.inRollback) && !ctx.bodyFailure then "a failure context" else "a body whose effects exclude it"
+    throw s!"{p.show}: this invocation calls a function ({shown}) that has the 'no_rollback' effect, which {context} does not allow: a function without a heap specifier (<transacts>, <computes>, <reads>, …) has it (Epic's Verse compiler, UEFN 43.12: error 3512; --default-rollback keeps the old rule)"
 
 /-- `ctx` with the `defer:` body `d` pending for every `return` and `break`
     that leaves its scope (#80), with the locals in scope here. -/
@@ -2686,13 +2718,21 @@ partial def joinTyShaped (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Boo
       let cands := (env.supers S).filter fun U => (up U (env.upArgs S as U) || (joinArgsAt U).isSome) &&
         !(typeValues && (kind U == some "concrete_subtype" || U == TypeValues.castableMark ||
           (kind U == some "castable_subtype" && !env.isSub U TypeValues.castableMark)))
+      let minimal := cands.filter (fun U => !cands.any fun U' => U' != U && env.isSub U' U)
       let common : Option Ty :=
         match cands.find? fun U => !(env.info U).isIface with
         | some U => some (atU U)
         | none =>
-          match cands.filter (fun U => !cands.any fun U' => U' != U && env.isSub U' U) with
+          match minimal with
           | [U] => some (atU U)
           | _ => none
+      -- (a common class and a common interface not above it are two
+      -- nearest common supertypes: no join, whatever is expected, so the
+      -- value is an `any`. UEFN 43.12 refuses an if of two such classes
+      -- where either supertype is expected, error 3510,
+      -- followup/join-if-common-base-interface, join-if-expected-interface;
+      -- `ambiguousClassJoin` for an array's elements, 3509)
+      if !typeValues && minimal.length > 1 && (minimal.any fun U => !(env.info U).isIface) then none else
       -- (two type values join at their metatype before the expected type
       -- is met: Castable.versetest:145, "array-type is []{false, class1}
       -- which is NOT castable")
@@ -2742,6 +2782,25 @@ partial def joinTy (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Bool := f
         a.params.isEmpty && b.params.isEmpty then some .dyn
     else none
 end
+
+/-- Class types (no type values) with more than one nearest common supertype
+    at the same type arguments, a class among them: a common base class and
+    a common interface not above it. Epic's Verse compiler, UEFN 43.12,
+    types an array of such elements `[]any` and refuses it where `[]base`
+    is expected (error 3509; the Book of Verse's tests,
+    SOL-5838-JoinOfClassesWithCommonBaseClassWithInterfaceInheritance.versetest:13). -/
+def ambiguousClassJoin (env : TyEnv) (tys : List Ty) : Option (List String) :=
+  let classes := tys.filterMap fun
+    | .struct S as => if env.classes.contains S && (TypeValues.valueClass? S).isNone then some (S, as) else none
+    | _ => none
+  match classes with
+  | (S, as) :: rest@(_ :: _) =>
+    if classes.length != tys.length then none else
+    let common := (env.supers S).filter fun U =>
+      rest.all fun (T, bs) => env.isSub T U && env.upArgs S as U == env.upArgs T bs U
+    let minimal := common.filter fun U => !common.any fun U' => U' != U && env.isSub U' U
+    if minimal.length > 1 && minimal.any (fun U => !(env.info U).isIface) then some minimal else none
+  | _ => none
 
 /-- What two types with nothing else in common join at (`fallbackJoin`):
     an `if`'s branches and a choice's alternatives that join so are tried
@@ -2806,6 +2865,8 @@ def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty := do
           | some w, _ | none, some w => s!": {w}"
           | none, none => ""
         | none => ""
+      if let some us := ambiguousClassJoin env [a, b] then
+        eerr p s!"the branches have different types: {a.show} and {b.show}, which have more than one nearest common supertype ({", ".intercalate us}), so the value is an any{(exp.map fun e => s!", not {withArticle e.show}").getD ""} (Epic's Verse compiler, UEFN 43.12: error 3510)"
       eerr p s!"the branches have different types: {a.show} and {b.show}{why}"
 
 /-- (#283, #335) The first success of clauses lifted already (`$firstP`),
@@ -3265,6 +3326,10 @@ def functionBodyCtx (req : Requests) (ctx : Ctx) (p : Pos) (name : String)
     inDefaultCheck := source.inDefaultCheck || ctx.inDefaultCheck
     inArm := source.inArm || ctx.inArm
     inBranch := source.inBranch || ctx.inBranch
+    rollbackOnly := source.rollbackOnly || ctx.rollbackOnly
+    -- (a helper's failure is its source code's: `bodyFailure` only where
+    -- that code is at the top of a `<decides>` function's body)
+    bodyFailure := if lifted.isSome || loopLift.isSome || resume.isSome then source.bodyFailure else ctx.bodyFailure
     defaults := source.defaults ++ ctx.defaults
     refineExits := (lifted.map (·.exits)).getD {}
     inBlock := source.inBlock || name.endsWith ".$block"

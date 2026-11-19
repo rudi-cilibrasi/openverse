@@ -1,7 +1,7 @@
 box(t:type):=class{A:t}
 lit:=class(box(int)){}
 pair(a:type,b:type):=class(box(tuple(a,b))){L:box(a);R:box(b)}
-Rows(E:box(t) where t:type):[]t=
+Rows(E:box(t) where t:type)<transacts>:[]t=
     Values:=for(V:=if(P:=pair[E],L:=lit[P.L],R:=lit[P.R])then((L.A,R.A)|(L.A+1,R.A))else E.A){V}
     Values
 Main():void=

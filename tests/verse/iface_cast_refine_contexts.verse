@@ -3,43 +3,43 @@
 # one from an interface referred to through views (#351): evaluation by
 # <decides> helpers, one per class, instead of an if chain.
 expr(t:type) := interface:
-    Show():string
+    Show()<transacts>:string
 lit := class(expr(int)):
     V:int
-    Show<override>():string = "{V}"
+    Show<override>()<transacts>:string = "{V}"
 add := class(expr(int)):
     L:expr(int)
     R:expr(int)
-    Show<override>():string = "({L.Show()}+{R.Show()})"
+    Show<override>()<transacts>:string = "({L.Show()}+{R.Show()})"
 isz := class(expr(logic)):
     E:expr(int)
-    Show<override>():string = "isz({E.Show()})"
+    Show<override>()<transacts>:string = "isz({E.Show()})"
 pairE(a:type, b:type) := class(expr(tuple(a, b))):
     L:expr(a)
     R:expr(b)
-    Show<override>():string = "<{L.Show()},{R.Show()}>"
-AsLit(E:expr(t) where t:type)<decides>:t =
+    Show<override>()<transacts>:string = "<{L.Show()},{R.Show()}>"
+AsLit(E:expr(t) where t:type)<transacts><decides>:t =
     L := lit[E]
     L.V
-AsAdd(E:expr(t) where t:type)<decides>:t =
+AsAdd(E:expr(t) where t:type)<transacts><decides>:t =
     A := add[E]
     Eval(A.L) + Eval(A.R)
-AsIsz(E:expr(t) where t:type)<decides>:t =
+AsIsz(E:expr(t) where t:type)<transacts><decides>:t =
     Z := isz[E]
     logic{Eval(Z.E) = 0}
 # (t is tuple(a', b') here, a' and b' the types the cast opens)
-AsPair(E:expr(t) where t:type)<decides>:t =
+AsPair(E:expr(t) where t:type)<transacts><decides>:t =
     P := pairE[E]
     (Eval(P.L), Eval(P.R))
-Eval(E:expr(t) where t:type):t =
+Eval(E:expr(t) where t:type)<transacts>:t =
     if (V := AsLit[E]) then V
     else if (V := AsAdd[E]) then V
     else if (V := AsIsz[E]) then V
     else if (V := AsPair[E]) then V
     else Err()
 # option{…} and a for's clauses
-Lit(E:expr(t) where t:type):?t = option{L := lit[E]; L.V + 100}
-Lits(Es:[]expr(t) where t:type):[]t = for (E : Es, L := lit[E]) { L.V }
+Lit(E:expr(t) where t:type)<transacts>:?t = option{L := lit[E]; L.V + 100}
+Lits(Es:[]expr(t) where t:type)<transacts>:[]t = for (E : Es, L := lit[E]) { L.V }
 # views (#351): a reference to an interface a class gives other type arguments
 container(t:type) := interface:
     Get():t

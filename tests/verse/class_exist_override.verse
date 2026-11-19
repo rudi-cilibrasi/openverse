@@ -3,27 +3,27 @@
 # parent opens them (#209)
 base(t:type) := class:
     Value:t
-    Get():t = Value
+    Get()<transacts>:t = Value
     Tag():string = "base"
 pair(t:type, u:type) := class(base(t)):
     Other:u
-    Get<override>():t = Value
+    Get<override>()<transacts>:t = Value
     Tag<override>():string = "pair"
 box(t:type) := class:
     V:t
-    Get():t = V
+    Get()<transacts>:t = V
 arr_box(u:type) := class(box([]u)):
     E:u
-    Get<override>():[]u = array{E, E}
+    Get<override>()<transacts>:[]u = array{E, E}
 pair2(t:type, u:type) := class:
     A:t
     B:u
-    Get():t = A
+    Get()<transacts>:t = A
 nest(t:type) := class(pair2(?t, ?t)):
-    Get<override>():?t = B
+    Get<override>()<transacts>:?t = B
 Show(B:base(t) where t:type):string = B.Tag()
 Size(B:box([]t) where t:type):int = B.Get().Length
-First(P:pair2(t, u) where t:type, u:type):t = P.Get()
+First(P:pair2(t, u) where t:type, u:type)<transacts>:t = P.Get()
 Main():void =
     Print(Show(pair(int, string){Value := 1, Other := "o"}))
     Print(Show(base(int){Value := 2}))

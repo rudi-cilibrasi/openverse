@@ -1,5 +1,5 @@
 # expect: 15:13: this call may signal an event (Apply → loud.Shout (called as a function value) → event.Signal) in a failure context
-# (#515) under --signal-no-rollback, a function value's call counts as a call
+# (#515) a function value's call counts as a call
 # of every function of its type given as a value (conservatively): Apply's
 # call in the if's condition is refused, though this one passes Quiet
 loud := class:

@@ -28,7 +28,7 @@ counter := class:
         set Log = Log + "SetLimit({V}) "
         set Max = V
 
-Note(S:string):int =
+Note(S:string)<transacts>:int =
     Print(S)
     0
 

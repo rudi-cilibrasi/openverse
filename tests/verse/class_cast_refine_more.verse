@@ -17,7 +17,7 @@ pt(t:type) := struct:
     X:t
     Y:t
 # (comparable type parameters, a struct and a function value captured)
-Eq(P:pair(a, b), V:pt(a), F:type{_(:a)<computes>:a}, X:a where a:subtype(comparable), b:subtype(comparable))<decides>:b =
+Eq(P:pair(a, b), V:pt(a), F:type{_(:a)<computes>:a}, X:a where a:subtype(comparable), b:subtype(comparable))<transacts><decides>:b =
     if (D := dup[P]):
         G := F(V.X)
         G = X
@@ -29,7 +29,7 @@ Inc(N:int)<computes>:int = N + 1
 Sum(Ps:[]pair(a, b), X:a where a:type, b:type):[]b =
     for (P : Ps):
         if (D := dup[P]) then X else P.B
-Maybe(P:pair(a, b), X:a where a:type, b:type):?b =
+Maybe(P:pair(a, b), X:a where a:type, b:type)<transacts>:?b =
     option{if (D := dup[P]) then X else P.B}
 Twice(P:pair(a, b), Q:pair(a, b), X:a where a:type, b:type):tuple(b, b) =
     L := if (D := dup[P]) then X else P.B

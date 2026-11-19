@@ -4,7 +4,7 @@
 # over sink(x) dispatches through the view; casts come back; a subclass
 # overrides; c gives two interfaces different closed type arguments
 named := interface:
-    Name():string
+    Name()<transacts>:string
 container(t:type) := interface:
     Get():t
 sink(u:type) := interface(named):
@@ -16,10 +16,10 @@ both(t:type, u:type) := class(container(t), sink(u)):
     Put<override>(X:u):int =
         set N += 1
         N
-    Name<override>():string = "both"
+    Name<override>()<transacts>:string = "both"
 one(u:type) := class(sink(u)):
     Put<override>(X:u):int = 100
-    Name<override>():string = "one"
+    Name<override>()<transacts>:string = "one"
 loud(t:type, u:type) := class(both(t, u)):
     Put<override>(X:u):int = 1000
 i1(t:type) := interface:
@@ -30,7 +30,7 @@ c := class(i1(int), i2(string)):
     A<override>():int = 7
     B<override>():string = "seven"
 GS(S:sink(x), V:x where x:type):int = S.Put(V)
-GN(Ns:[]named):[]string = for (N : Ns) { N.Name() }
+GN(Ns:[]named)<transacts>:[]string = for (N : Ns) { N.Name() }
 GB(I:i2(y) where y:type):y = I.B()
 Main():void =
     B := both(int, string){V := 3}

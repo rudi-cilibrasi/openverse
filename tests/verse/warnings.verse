@@ -2,7 +2,7 @@
 # them on standard error and compiles the program all the same
 light := enum{Red, Amber, Green}
 # a `_` after arms that name every value of a closed enum is never reached
-Next(L:light):light =
+Next(L:light)<transacts>:light =
     case (L):
         light.Red => light.Green
         light.Amber => light.Red

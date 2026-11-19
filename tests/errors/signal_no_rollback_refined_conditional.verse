@@ -4,7 +4,7 @@ pair(a:type,b:type):=class{}
 dup(t:type):=class(pair(t,t)):
     Items:[]int=array{1,2}
     C:int=3
-Emit(E:event(int),N:int):int=
+Emit(E:event(int),N:int)<transacts>:int=
     E.Signal(N)
     N
 Values(P:pair(a,b),E:event(int),N:int where a:type,b:type):[]int=

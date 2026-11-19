@@ -2,6 +2,12 @@
 
 ## Reference targets
 
+OpenVerse's target is Epic's Verse VM wherever it and the legacy Blueprint
+VM (BPVM) disagree (the owner's decision, 2026-11-18). The compile-time
+rules taken from the UEFN 43.12 results below (3512 `no_rollback`, 3519
+concrete initializers, 3509 subtypes) come from the compiler front end
+both VMs share.
+
 The [Book of Verse's pinned Tests tree](https://github.com/verselang/book/tree/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests)
 contains 636 `.versetest` files. The Book's [development guide](https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/DEVELOPMENT.md#refreshing-tests)
 identifies it as a copy of the compiler's own suite and gives the original
@@ -32,7 +38,9 @@ There are two ways to get fresh Epic results:
   · [Verse Insights setup](https://dev.epicgames.com/documentation/fortnite/verse-insights-in-uefn)
   · [UEFN system requirements](https://dev.epicgames.com/documentation/fortnite/install-and-launch-fortnite-creative-and-unreal-editor-for-fortnite).
 
-The Linux workspace has no Epic runner available. On November 17, 2026, the
+Live compiler results for UEFN 43.12 are below
+([Epic observations](#epic-observations-uefn-4312-compiler)). The Linux workspace
+has no Epic runner available. On November 17, 2026, the
 pinned Book's `vtest Tests/ArrayAppend.versetest --verbose` reached process
 launch and returned `ENOENT` for `VerseTestScriptCmdVM.exe`. The authenticated
 GitHub API calls for `EpicGames/UnrealEngine` and `EpicGames/fortniteMain`
@@ -65,7 +73,7 @@ probe=tests/conformance/versevm/signal-direct.verse
 work=$(mktemp -d)
 .lake/build/bin/openverse run "$probe" --emit "$work/probe.vbc"
 runtime/build/cverse "$work/probe.vbc"
-.lake/build/bin/openverse check "$probe" --signal-no-rollback
+.lake/build/bin/openverse check "$probe" --signal-rollback
 ```
 
 Run C after successful bytecode emission. Save stdout, stderr and exit status
@@ -124,7 +132,33 @@ runtime traces are needed to decide how a specific release admits the calls
 and what it rolls back. [event.Signal](https://dev.epicgames.com/documentation/fortnite/verse-api/versedotorg/verse/event/event%28t%29/signal)
 · [signalable.Signal](https://dev.epicgames.com/documentation/fortnite/verse-api/versedotorg/verse/signalable/signalable%28payload%29/signal).
 
-## Epic observations
+## Epic observations (UEFN 43.12 compiler)
+
+UEFN 43.12, build `++Fortnite+Release-43.12-CL-60598086`, compiled each
+probe body on 2026-11-18 through the editor's Build Verse Scripts, one body
+at a time in the device wrapper above. A diagnostic's line there is 0-based
+in the wrapped file: the header's 9 lines and a blank line come first, so
+the body's 0-based line is the reported line minus 10. These are compiler
+diagnostics, from the front end the Verse VM target shares with the BPVM.
+
+| Probe | UEFN 43.12 compiler |
+| --- | --- |
+| `signal-control`, `signal-interface-control` | Admitted. |
+| `signal-direct`, `signal-alias`, `signal-await` | Refused, error 3512 at the `Signal` in the condition: "This invocation calls a function (`(/Verse.org/Verse/event:)Signal`) that has the 'no_rollback' effect, which is not allowed by its context." |
+| `signal-interface` | Refused, 3512, naming `(/Verse.org/Verse/signalable:)Signal`. |
+| `signal-bound` | Refused, 3512 at `Send(1)`: "This invocation calls a function that has the 'no_rollback' effect, which is not allowed by its context." |
+| `signal-generic`, `signal-generic-control` | Both refused, 3512 at the `Signal` in the `<transacts>` helper `Send`: a `<transacts>` function cannot call `Signal`, even when it is called outside every failure context. |
+| `signal-bound-control` (first version) | Refused, 3502: coercing `Signal` from package `Verse` to `int->void` is unsupported; "Consider writing a wrapper function". Not the effect under test: the probe now binds a method of its own that signals. |
+| `signal-subscribe` and its control (first version) | Refused, 3588: the field name `Last` is ambiguous with the built-in `.Last`. `signal-subscribe` also has 3512 at its condition's `Signal`. The field is now `Seen`. |
+| `compound-indexed-write`, `compound-whole-write`, `int-overflow` | Admitted. |
+
+The rewritten `signal-bound-control`, `signal-subscribe` and
+`signal-subscribe-control` were compiled and run later, with the
+[follow-up probes](#follow-up-probes): they now test what they intend. OpenVerse makes
+the 3512 refusals its default (#515): see [OpenVerse
+observations](#openverse-observations).
+
+## Epic observations (Verse VM runs)
 
 On UEFN 43.12 (++Fortnite+Release-43.12-CL-60598086), in sessions launched
 with **Use Verse VM** (the matchmaking ticket carried
@@ -184,20 +218,67 @@ leaves a branch to its device's `OnBegin`, the second may fail the cook.
 
 ## OpenVerse observations
 
-On the tested head of [#702](https://github.com/rudi-cilibrasi/openverse/pull/702),
-`adb392adb0dd8288c3366d1b45753b9c0904399c`, Lean and C agreed on stdout,
-stderr and exit status for all thirteen probes that produced bytecode.
+On the merge of #515's branch with main after #704, Lean and C agreed on
+stdout, stderr and exit status for every probe below that produced
+bytecode (the compound probes' outputs are in their headers and in
+[Epic observations (Verse VM runs)](#epic-observations-verse-vm-runs)). The legacy column is
+`--signal-rollback`, the transactional mode that was the default before
+(and the previous table's `default`).
 
-| Probe | Default outcome | With `--signal-no-rollback` |
+| Probe | Default outcome | With `--signal-rollback` |
 | --- | --- | --- |
-| `signal-control` | Prints `selected`. | Admitted. |
-| `signal-direct`, `signal-alias`, `signal-bound`, `signal-generic` | Print `after`. | Refused at the call in the failure context. The bound and generic controls are admitted. |
-| `signal-await` | Prints `waiting`, then `received 2`. | Refused at the first signal. |
-| `signal-interface` and its control | Both print `after`. | The failure-context call is refused through the interface. The control is admitted. |
-| `signal-subscribe` and its control | Refused because OpenVerse's `event` lacks `Subscribe`. OpenVerse provides subscription through `subscribable_event`. | Same refusal. |
-| `compound-indexed-write` | Prints `length 2`, then `first 0`; since #704, `length 1`, then `first 0`, as Epic does. | Admitted. |
-| `compound-whole-write` | Prints `length 2`, `first 0`, and `second 42`. | Admitted. |
-| `int-overflow` | Runtime overflow, exit 2. | Admitted by `check`. |
+| `signal-control`, `signal-interface-control` | Print `selected` and `after`. | Same. |
+| `signal-bound-control` (rewritten: a method of its own that signals, bound) | Prints `after`. | Same. |
+| `signal-direct`, `signal-alias`, `signal-bound`, `signal-interface`, `signal-await` | Refused at the `Signal` in the condition, as 43.12 (3512). | Print `after`; `signal-await` prints `waiting`, then `received 2`. |
+| `signal-generic`, `signal-generic-control` | Refused at the `Signal` in the `<transacts>` helper `Send`, as 43.12 (3512). | Print `after`. |
+| `signal-subscribe` and its control (rewritten: the field is `Seen`) | Refused because OpenVerse's `event` lacks `Subscribe`; it provides subscription through `subscribable_event` (`followup/subscribable-event-control.verse` asks 43.12 which type has it). | Same refusal. |
+| `compound-indexed-write` | Prints `length 1`, then `first 0`, as Epic does (#704). | Same. |
+| `compound-whole-write` | Prints `length 2`, `first 0`, and `second 42`. | Same. |
+| `int-overflow` | Runtime overflow, exit 2. | Same. |
+
+## Follow-up probes
+
+[`followup/`](../../tests/conformance/versevm/followup) holds bodies, in the
+same wrapper, for what the first 43.12 results left open. UEFN 43.12
+(the same build) compiled them, with the three rewritten signal probes,
+through BuildAll on 2026-11-18 (about 23:58Z), and ran the eight it admitted
+in one Verse VM session (`newVerseVm=true`) on 2026-11-19 (00:02Z). L is the
+diagnostic's 0-based body line. OpenVerse's column is this branch's default,
+Lean and C agreeing wherever a program ran.
+
+| Probe | UEFN 43.12 | OpenVerse |
+| --- | --- | --- |
+| `await-in-transacts` | 3512 L1: `(/Verse.org/Verse/event:)Await` has `no_rollback` | refused, `event.Await` has `no_rollback` |
+| `concrete-abstract-child` | 3632 L3 "`concrete` classes must not be `abstract`"; 3519 for `B` | refused, 3632's reason |
+| `constant-default-call` | 3582 L2 "Divergent calls (calls that might not complete) cannot be used to define data-members" | refused: the constant calls a function that writes |
+| `constructor-default-in-if` | 3512 L7: `MakeThing` has `no_rollback` | refused, the same |
+| `decides-body-default-call` | admitted; prints `compiled` | `compiled` |
+| `decides-plain-if` | 3512 L4: `Positive` has `no_rollback` | refused, the same |
+| `default-into-default-type` | admitted; `result 1` | `result 1` |
+| `for-filter-default-call`, `for-range-default-call` | 3512 L3 (`Value`, `Limit`) | refused, the same |
+| `int-cast-variants` | 3509 L5 "Dynamic cast to `int` takes an int as its parameter, instead got any" | refused, the same reason |
+| `join-if-common-base-interface`, `join-if-expected-interface` | 3510 L6: the body's value is an `any`, not a `super_class` / `named` | refused, the same reason |
+| `join-interface-only` | admitted; `length 2` | `length 2` |
+| `print-in-condition` | admitted; `printed in condition`, `after` | `after`: openverse rolls the `Print` back with the failed condition. **Differs**: the Verse VM keeps output across rollback |
+| `signal-class-block`, `signal-transacts-method` | 3512 L3, L4: `Signal` has `no_rollback` | refused, the same |
+| `subscribable-event-control` | 3506 L7 "Unknown identifier `subscribable_event`" | `after success 2`: `subscribable_event` is an openverse extension |
+| `subscribe-in-transacts` | admitted; `seen 4` | refused: openverse's `event` has no `Subscribe`. **Differs** |
+| `transacts-into-decides-type` | admitted; `result 1` | `result 1` |
+| `signal-bound-control` (rewritten) | admitted; `after` | `after` |
+| `signal-subscribe` (rewritten) | 3512 L10 at its condition's `Signal`, nothing else | refused: no `Subscribe` on `event` |
+| `signal-subscribe-control` (rewritten) | admitted; `after success 2` | refused: no `Subscribe` on `event`. **Differs** |
+
+What they settle, now openverse's rules: a plain `<decides>` function has
+`no_rollback`, and its body's top may call one that has it, while a failure
+context inside it may not; a `for`'s range and filter are failure contexts;
+constructors without specifiers have `no_rollback`; an event's `Await` has
+it, `Print` and `Subscribe` do not; a `<transacts>` function is a value of a
+`<transacts><decides>` type; an `if`'s branches of two classes with two
+nearest common supertypes are an `any`, whatever is expected; a class below
+a `<concrete>` one cannot be `<abstract>`; `int[X]` of an `any` is refused.
+Two differences remain: `Print`'s rollback (openverse's output is
+transactional in Core and in the C runtime) and `Subscribe` on `event`
+(openverse has it on `subscribable_event` only).
 
 ## Running many probes
 
@@ -208,16 +289,18 @@ the original probes, [`book/`](../../tests/conformance/versevm/book) (a ranked
 shortlist of Book cases where OpenVerse and the Book differ, with the cases
 and expectations in its `expectations.tsv`) and
 [`fingerprint/`](../../tests/conformance/versevm/fingerprint) (behaviour
-reported to differ between Epic's VMs). With `P` for
+reported to differ between Epic's VMs) and
+[`followup/`](../../tests/conformance/versevm/followup) (what the 43.12
+compiler results leave open, [above](#follow-up-probes)). With `P` for
 `tests/conformance/versevm`:
 
 ```sh
-python3 $P/ovprobe.py openverse $P $P/book $P/fingerprint --json ov.json --tsv ov.tsv
-python3 $P/ovprobe.py generate --mode single --out single $P $P/book $P/fingerprint
+python3 $P/ovprobe.py openverse $P $P/book $P/fingerprint $P/followup --json ov.json --tsv ov.tsv
+python3 $P/ovprobe.py generate --mode single --out single $P $P/book $P/fingerprint $P/followup
 # build each single/<probe>/openverse_probe.verse alone; for each build's log:
 python3 $P/ovprobe.py parse --single <probe> --out admit/<probe>.json UnrealEditorFortnite.log
 python3 $P/ovprobe.py generate --mode batch --exclude-refused admit --risky-last ov.json \
-    --out batch $P $P/book $P/fingerprint
+    --out batch $P $P/book $P/fingerprint $P/followup
 python3 $P/ovprobe.py parse --manifest batch/manifest.json --out session.json UnrealEditorFortnite.log
 python3 $P/ovprobe.py compare --openverse ov.json --epic admit --epic session.json \
     --tsv report.tsv --md report.md

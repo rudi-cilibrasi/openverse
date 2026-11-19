@@ -23,6 +23,8 @@ for ((s=first; s<first+n; s++)); do
   for p in $(sed -n 's/^paths=\([^ ]*\).*/\1/p' "$tmp/p.meta" | tr , ' '); do paths[$p]=$(( ${paths[$p]:-0} + 1 )); done
   grep -q ' bounds=yes' "$tmp/p.meta" && bounded=$((bounded+1))
   rm -f "$tmp/p.vbc"
+  # (#515: Epic's default effect, written out: <transacts> where a function without one is called from a failure context or <transacts> code)
+  python3 -I "$root/scripts/models/default_effect.py" "$tmp/p.verse"
   timeout 60 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.err"
   if [[ $(tail -n 1 "$tmp/p.expected") == exit=4 ]]; then
     if [[ $le -eq 4 && ! -s "$tmp/l.out" ]] &&

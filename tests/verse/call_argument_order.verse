@@ -1,7 +1,7 @@
 # Packed positional fields precede written names, selected defaults and body.
 state:=class:
     var N:int=0
-Mark(S:state,Name:string,V:int):int=
+Mark(S:state,Name:string,V:int)<transacts>:int=
     set S.N+=1
     Print("{Name} {S.N}")
     V
@@ -9,7 +9,7 @@ F(S:state,P:tuple(int,int),?B:int,?A:int,?D:int=Mark(S,"D",P(0)+A),?E:int=Mark(S
     Print("body {D+E}")
     D+E
 # The sole positional formal is a nested tuple; fields stay nested.
-G(P:tuple(state,tuple(int,int)),?B:int,?A:int,?D:int=Mark(P(0),"D",P(1)(0)+A),?E:int=Mark(P(0),"E",P(1)(1)+B))<decides>:int=
+G(P:tuple(state,tuple(int,int)),?B:int,?A:int,?D:int=Mark(P(0),"D",P(1)(0)+A),?E:int=Mark(P(0),"E",P(1)(1)+B))<transacts><decides>:int=
     Print("body {D+E}")
     D+E
 Main():void=

@@ -479,10 +479,10 @@ event's suspending intrinsic.
 Ordinary suspension, defer and failure-context restrictions still apply.
 Source/control pairs check event and sticky-event waits, precise task results,
 once-only receivers, unit signals and cancellation cleanup. Admitted bytecode
-stays identical in both source profiles and with `--signal-no-rollback`.
-Separate direct and named-default controls retain legacy rollback signals by
-default and require specific policy refusals in both profiles when the flag is
-enabled. Checked dictionary conversion does not hide those calls from admission.
+stays identical in both source profiles and with the `Signal` admission of
+#515. Separate direct and named-default controls retain legacy rollback signals
+with `--signal-rollback` and require specific policy refusals in both profiles
+by default. Checked dictionary conversion does not hide those calls from admission.
 
 Member lookup uses actual nominal views. Root and interior mutation preserve
 the source storage type, evaluate indices/keys before traversal, and perform

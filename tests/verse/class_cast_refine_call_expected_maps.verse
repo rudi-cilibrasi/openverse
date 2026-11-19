@@ -1,30 +1,30 @@
 pair(a:type,b:type):=class{A:a;B:b}
 dup(t:type):=class(pair(t,t)){Index:int=0}
-Echo(X:t,?Other:t=X where t:type):t=Other
+Echo(X:t,?Other:t=X where t:type)<transacts>:t=Other
 cell:=class{var Trace:string=""}
 dog:=class<unique>{}
 Key(H:cell,N:int)<transacts>:?int={set H.Trace+="K";option{N}}
 Value(H:cell,X:t where t:type)<transacts>:t={set H.Trace+="V";X}
-Build(P:pair(a,b),H:cell where a:type,b:type)<decides>:[?int]b=
+Build(P:pair(a,b),H:cell where a:type,b:type)<transacts><decides>:[?int]b=
     map{Key(H,0)=>Echo(P.A,?Other:=Value(H,dup[P].B)),Key(H,1)=>Echo(P.A,?Other:=Value(H,dup[P].A))}
-Named(P:pair(a,b),H:cell where a:type,b:type)<decides>:[?int]b=
+Named(P:pair(a,b),H:cell where a:type,b:type)<transacts><decides>:[?int]b=
     K:=Key(H,0)
     D:=dup[P]
     V:=Value(H,D.B)
     L:=Key(H,1)
     W:=Value(H,D.A)
     map{K=>V,L=>W}
-EmptyKey(P:pair(a,b) where a:type,b:type)<decides>:[?int]b=
+EmptyKey(P:pair(a,b) where a:type,b:type)<transacts><decides>:[?int]b=
     map{false=>Echo(P.A,?Other:=dup[P].B)}
-KnownKey(P:pair(a,b),K:dog where a:type,b:type)<decides>:[dog]b=
+KnownKey(P:pair(a,b),K:dog where a:type,b:type)<transacts><decides>:[dog]b=
     map{K=>Echo(P.A,?Other:=dup[P].B)}
 animal:=class<abstract>{}
 cat:=class(animal){N:int=1}
-Empty(?Default:?t=false where t:type):?t=Default
-Choose(X:t,Y:t,Values:[?int]int where t:type):t=Y
-Unrelated(P:pair(a,b),A:animal where a:type,b:type)<decides>:b=
+Empty(?Default:?t=false where t:type)<transacts>:?t=Default
+Choose(X:t,Y:t,Values:[?int]int where t:type)<transacts>:t=Y
+Unrelated(P:pair(a,b),A:animal where a:type,b:type)<transacts><decides>:b=
     Choose(P.A,dup[P].B,map{Empty()=>cat[A].N})
-Repeated(P:pair(a,b) where a:type,b:type)<decides>:b=
+Repeated(P:pair(a,b) where a:type,b:type)<transacts><decides>:b=
     Choose(P.A,dup[P].B,map{Empty()=>dup[P].Index})
 Main():void=
     H:=cell{}

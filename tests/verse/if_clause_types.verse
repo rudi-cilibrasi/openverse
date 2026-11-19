@@ -12,7 +12,7 @@ animal := class:
     N:int = 1
 dog := class(animal):
     D:int = 3
-Pos(K:int)<decides>:int =
+Pos(K:int)<transacts><decides>:int =
     K > 0
     K
 F(B:box(t), A:animal, Xs:[]int, K:int where t:type):void =

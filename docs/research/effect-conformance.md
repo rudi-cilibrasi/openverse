@@ -43,7 +43,7 @@ effect guarantee.
 | `suspends` | Suspension contexts, call restrictions, overrides, callback types and cancellation cleanup remain checked. A suspending constructor remains unsupported. | Enforced; [cleanup control](../../tests/verse/effect_admission_cleanup.verse), existing suspension contracts. |
 | `predicts` | Refused in definitions, abstract signatures, callbacks/types, defaults and all loaded source, including unused declarations. | Explicitly rejected. No prediction call propagation or client/server execution model is advertised. [Direct](../../tests/errors/effect_admission_predicts.verse), [type](../../tests/errors/effect_admission_predicts_type.verse), [generated context](../../tests/errors/effect_admission_generated_context.verse). |
 | `converges` | Refused even in the Book's eligible abstract/type/native contexts. Regular implementations are ineligible in the Book as well. A native tag cannot confer a trusted implementation. | Explicitly rejected. [Ordinary](../../tests/errors/effect_admission_converges.verse), [recursive](../../tests/errors/effect_admission_converges_recursive.verse), [abstract](../../tests/errors/effect_admission_converges_abstract.verse). Fuel is not a termination proof. |
-| `no_rollback` | An explicit user annotation is refused. Existing output/events keep their transactional behavior; the opt-in `--signal-no-rollback` admission policy rejects event signals from source failure contexts, including contexts moved into refining helpers. | Explicitly rejected annotation; current transaction policy is tracked in [#495](https://github.com/rudi-cilibrasi/openverse/issues/495), and the separate Signal admission/version-evidence audit in [#515](https://github.com/rudi-cilibrasi/openverse/issues/515). No SDK/engine compatibility claim follows from the local option. |
+| `no_rollback` | An explicit user annotation is refused. Output keeps its transactional behavior. An event's `Signal` has the `no_rollback` effect by default, as in Epic's Verse compiler (UEFN 43.12, error 3512): it is refused in source failure contexts, including contexts moved into refining helpers, in functions with a heap specifier and in class `block:`s; `--signal-rollback` keeps the legacy transactional mode. | Explicitly rejected annotation; current transaction policy is tracked in [#495](https://github.com/rudi-cilibrasi/openverse/issues/495), and the separate Signal admission/version-evidence audit in [#515](https://github.com/rudi-cilibrasi/openverse/issues/515). No SDK/engine compatibility claim follows from the local option. |
 | `dictates`, `diverges` | Explicit annotations are refused. OpenVerse models neither authoritative/predicting locations nor termination effect bits. | Explicitly rejected; loops and recursion remain available without a termination promise. |
 | `succeeds`, `fails` | Explicit annotations are refused. Existing implicit success/failure discipline is unchanged. | Explicitly rejected spelling; cardinality enforcement is not removed. |
 | `varies` | Refused as obsolete/unsupported, matching the pinned effect tests' rejection. | Explicitly rejected. |
@@ -160,6 +160,85 @@ selection and failable primitive defaults remain admitted by the checked mode.
 Explicit `<converges>` remains refused in both modes. Data types still cannot
 declare `<decides>` or `<suspends>`. Neither a heap budget nor compatibility
 mode asserts termination, single-valuedness, output purity or engine behavior.
+
+## The default effect (#515)
+
+UEFN 43.12 (build `++Fortnite+Release-43.12-CL-60598086`, 2026-11-18;
+[the probes](versevm-live-conformance.md)) gives a function, method,
+constructor or function type written without a heap specifier the
+`no_rollback` effect, `<decides>` or not, and refuses with error 3512 its
+call
+- from a `<transacts>` function and from a class's `block:` (Book of
+  Verse tests, `Effects.versetest:490`, `:551`);
+- in an `if`'s condition, also a plain `<decides>` function's call there
+  (followup/decides-plain-if), and in a `for`'s range and filter
+  (for-range-default-call, for-filter-default-call), a constructor function's
+  too (constructor-default-in-if);
+- through a value of a function type without one, in a
+  `<transacts><decides>` function (`ParametricTypes.versetest:222`).
+
+It admits such a call at the top of a plain `<decides>` function's body
+(decides-body-default-call). An event's `Await` has `no_rollback` too
+(await-in-transacts); `Print` in a condition and `Subscribe` in a
+`<transacts>` function do not (print-in-condition, subscribe-in-transacts).
+A function without one is no value of a type that has not (3509,
+`FunctionTypes.versetest:191`), while a `<transacts>` one is a value of a
+`<transacts><decides>` type (transacts-into-decides-type) and an
+unannotated one of an unannotated type (default-into-default-type).
+
+**This is openverse's default.** Source functions and function types without
+a heap specifier are marked (`SignalAdmission.markDefault`,
+`noRollbackMarker`) as written, before any is generated; the concurrency
+prelude's function types too, so a function without specifiers can
+subscribe. A call of one, of a method declared without one, of a value of
+such a type or of an event's `Await` (`checkNoRollbackCall`) is refused in a
+failure context and in a body whose effects exclude it (`Ctx.rollbackOnly`:
+a heap specifier, a class's `block:`). `Ctx.bodyFailure` marks code whose
+failure is only its `<decides>` function's own: every failure context
+inside it resets it, and the branches and bodies after a condition restore
+it. Generated helpers keep their source code's context
+(`Choice.SourceContext.rollbackOnly`, `bodyFailure`). A function type with
+`no_rollback` is a shape of its own (`FnValues.Shape.noRollback`): a function
+without it fits it, one with it fits no shape without it; messages write a
+type as Verse does (no specifier for `no_rollback`, `<transacts>` for all
+the heap effects without it). A spawned call is not judged where it is
+spawned (Epic's Verse VM spawns in `<transacts>` code). The form of a call
+(brackets, suspension) is checked before its `no_rollback`, so those errors
+come first.
+
+`--default-rollback` (`Options.defaultNoRollback := false`) keeps the old
+rule, under which such a function is rolled back as a `<transacts>` one is;
+`--default-no-rollback`, the strict mode's name before the flip, is accepted
+and changes nothing.
+
+Migration, measured on the merge of this branch with main: the flip refused
+390 of the 2,191 programs of `tests/verse` (327 calls in failure contexts,
+42 in bodies with a heap specifier, the rest the same calls reported through
+a refining cast's trial or as a function value's type). All 390 were
+annotated, none moved to the legacy flag: `<transacts>` on the functions,
+methods and function types their failure contexts and `<transacts>` callers
+call (by a fix-point script that adds it where the compiler names a
+function, then by hand where a value's type or an `Await` was named: three
+`<transacts><suspends>` functions that await lost their `<transacts>`, as
+Epic refuses an `Await` there), with their outputs unchanged in Lean and C.
+50 error tests were annotated the same way, so their own error comes first;
+8, whose subject is the `Signal` analysis through unannotated helpers, run
+under `--default-rollback`, where that analysis still applies (with the
+default, those helpers' calls are refused first, as Epic reports them); so
+do the loop-return Signal-policy fixture and the GADT model of a signalling
+`<decides>` function (`gadt_event_body`), for the same reason. Four Lean
+contracts' and one upper-bound fixture's helpers were annotated by hand.
+The generators of `scripts/` and of the test scripts write programs for
+the old rule; `scripts/models/default_effect.py` writes the effect out in
+what they generate (`<transacts>` on every function and function type
+without a heap specifier, but `Main`, `<suspends>` ones and those that
+await or signal), in the fuzzers' runners and through `install()` in the
+Python test scripts. Book survey: 5 cases better, none worse (8,811 agree).
+
+A pre-existing bug the flip exposed is fixed: a call through a `<decides>`
+function type that no function value implements could not fail
+(`elabValueDispatch`), so `g[] or 3` was refused; it fails, as a
+reference's dispatch already did.
 
 ## Verification
 

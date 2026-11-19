@@ -245,7 +245,7 @@ partial def elabExprInitialWith
     return r
   | .app p (.ident _ "$constructValuesType") [value] false =>
     let name := s!"$constructValue{p.line}_{p.col}"
-    let (r, c) ← elabOneClauses { ctx with canFail := true, inTaking := true }
+    let (r, c) ← elabOneClauses { ctx with canFail := true, bodyFailure := false, inTaking := true }
       [.decl p name (exp.map Ty.toSTy) false value]
     let some valueLocal := c.lookup name | eerr p "construction type probe did not bind its value"
     return ⟨.seq r.e (.local valueLocal.slot), valueLocal.ty⟩

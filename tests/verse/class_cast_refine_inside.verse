@@ -7,17 +7,17 @@ pair(a:type, b:type) := class:
     B:b
 dup(t:type) := class(pair(t, t)):
     C:int = 4
-    Same():t = B
+    Same()<transacts>:t = B
 cell := class:
     var N:int = 0
 Bump(H:cell, K:int)<transacts><decides>:int =
     K > 0
     set H.N += K
     K
-Show(X:int):string = "<{X}>"
-Id(X:t where t:type):t = X
+Show(X:int)<transacts>:string = "<{X}>"
+Id(X:t where t:type)<transacts>:t = X
 # a member of a cast in an if's condition
-Cond(P:pair(a, b) where a:type, b:type):int =
+Cond(P:pair(a, b) where a:type, b:type)<transacts>:int =
     if (dup[P].C > 3) then 1 else 0
 # a cast in an argument, after an operand with effects, in a <decides> body:
 # the operand runs first, and is undone when the cast fails
@@ -25,13 +25,13 @@ Arg(H:cell, P:pair(a, b) where a:type, b:type)<transacts><decides>:string =
     Bump[H, 1] + dup[P].C > 0
     Show(dup[P].C)
 # a method of the cast, its value at b; the cast as a whole argument
-Val(P:pair(a, b) where a:type, b:type)<decides>:b = dup[P].Same()
-Whole(P:pair(a, b) where a:type, b:type)<decides>:b = Id(dup[P]).A
+Val(P:pair(a, b) where a:type, b:type)<transacts><decides>:b = dup[P].Same()
+Whole(P:pair(a, b) where a:type, b:type)<transacts><decides>:b = Id(dup[P]).A
 # in option{} and a for's clause
-Opt(P:pair(a, b) where a:type, b:type):?int = option{dup[P].C * 10}
-Fil(Ps:[]pair(a, b) where a:type, b:type):[]int = for (P : Ps, dup[P].C > 3) { 1 }
+Opt(P:pair(a, b) where a:type, b:type)<transacts>:?int = option{dup[P].C * 10}
+Fil(Ps:[]pair(a, b) where a:type, b:type)<transacts>:[]int = for (P : Ps, dup[P].C > 3) { 1 }
 # in a branch of an if, the cast written as a clause of a block there
-Br(P:pair(a, b), N:int where a:type, b:type):?int = option{X := (if (N > 0) then (D := dup[P]; D.C) else 0); X + 1}
+Br(P:pair(a, b), N:int where a:type, b:type)<transacts>:?int = option{X := (if (N > 0) then (D := dup[P]; D.C) else 0); X + 1}
 Main()<transacts>:void =
     H := cell{}
     Y:pair(int, int) = dup(int){A := 1, B := 2}

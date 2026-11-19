@@ -126,7 +126,8 @@ scripts/worktree.sh feat/x                  # a worktree ../openverse-x on branc
 OPENVERSE_DEBUG=1 .lake/build/bin/openverse check F.verse   # an internal error also prints the rejected Verse Core
 .lake/build/bin/openverse core F.verse                      # each function's Verse Core, one statement per line
 .lake/build/bin/openverse check F.verse --no-choice         # enforce the choice-free source profile
-.lake/build/bin/openverse check F.verse --signal-no-rollback  # refuse an event Signal in a failure context
+.lake/build/bin/openverse check F.verse --signal-rollback     # legacy: roll an event Signal back with its context
+.lake/build/bin/openverse check F.verse --default-rollback    # legacy: a function without a heap specifier is rolled back
 ```
 
 `--no-choice` is an opt-in source profile for `check`, `core`, `emit`, and
@@ -138,11 +139,17 @@ run at runtime. Both modes use the same deterministic Core semantics.
 
 A `Signal` resumes the tasks awaiting it inside it, in the order they began
 to wait, each until it waits again, as the Book's API and tests have it
-(#513). `--signal-no-rollback` is an opt-in event policy: it refuses, before
-the program runs, an event's `Signal` that a failure context may call, as
-Epic's published `<no_rollback>` `Signal` would be (#515); by default, as the
-Book's tests, it is allowed and undone with a failing context. See
-[events](docs/LANGUAGE.md#concurrency).
+(#513). An event's `Signal` has the `no_rollback` effect, as in Epic's
+Verse compiler (UEFN 43.12, error 3512; #515): a program that may call it
+from a failure context, a `<transacts>` function (or another with a heap
+specifier) or a class's `block:` is refused before it runs.
+`--signal-rollback` keeps the legacy transactional mode, the Book's tests'
+reading, in which it is allowed and undone with a failing context. See
+[events](docs/LANGUAGE.md#concurrency). A function without a heap specifier
+has `no_rollback` too, Epic's default effect: a failure context or a
+`<transacts>` function cannot call it ([effect
+contracts](docs/LANGUAGE.md#effect-contracts)); `--default-rollback` keeps
+the old rule.
 
 ```verse
 Half(N:int)<decides>:int =

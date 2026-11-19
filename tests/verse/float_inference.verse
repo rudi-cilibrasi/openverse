@@ -1,6 +1,6 @@
 # floats with generic operands, Floor[X / Y] on ints, and 1e3 literals (#127 review)
 Id(X:t where t:type):t = X
-Last(Xs:[]t where t:type)<decides>:t = Xs[Xs.Length - 1]
+Last(Xs:[]t where t:type)<transacts><decides>:t = Xs[Xs.Length - 1]
 Main():void =
     if (X := Floor[7/2], Y := Ceil[7 / 2]) then Print("{X} {Y}")
     Print("{-Id(2.5)} {Id(2.5) / 2.0} {2.0 / Id(2.5)} {2 * Id(1.5)} {2.0 * Id(3)}")

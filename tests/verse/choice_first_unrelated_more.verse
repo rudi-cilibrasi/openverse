@@ -13,7 +13,7 @@ b := class:
 d := class:
     M()<transacts>:int = 7
 Dup(V:t where t:type):t = V | V
-Take(V:any):void = Print("took")
+Take(V:any)<transacts>:void = Print("took")
 Main()<transacts>:void =
     if (A := (Dup(a{}) | Dup(c{}) | Dup(b{})), X := A.M(), X > 5):
         Take(A)

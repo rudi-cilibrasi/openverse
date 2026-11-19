@@ -1,22 +1,22 @@
 # Independent casts in one bound retain both equalities in aggregate results.
 pair(a:type,b:type):=class{A:a;B:b}
 dup(t:type):=class(pair(t,t)){Lo:int=1;Hi:int=2}
-Add(X:int,Y:int):int=X+Y
-Lower(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type):[]tuple(int,b,d)=
+Add(X:int,Y:int)<transacts>:int=X+Y
+Lower(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<transacts>:[]tuple(int,b,d)=
     for(I:=Add(dup[P].Lo,dup[Q].Lo)..2){(I,P.A,Q.A)}
-Upper(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type):[]tuple(int,b,d)=
+Upper(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<transacts>:[]tuple(int,b,d)=
     for(I:=2..Add(dup[P].Hi,dup[Q].Hi)){(I,P.A,Q.A)}
-Both(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type):[]tuple(tuple(b,d),int)=
+Both(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<transacts>:[]tuple(tuple(b,d),int)=
     for(I:=Add(Add(dup[P].Lo,dup[Q].Lo),0)..Add(dup[P].Hi,dup[Q].Hi)){((P.A,Q.A),I)}
-First(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<decides>:tuple(int,b,d)=
+First(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<transacts><decides>:tuple(int,b,d)=
     first{I:=Add(dup[P].Lo,dup[Q].Lo)..Add(dup[P].Hi,dup[Q].Hi);I>2;(I,P.A,Q.A)}
-Named(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type):[]tuple(int,b,d)=
+Named(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<transacts>:[]tuple(int,b,d)=
     if(D:=dup[P],E:=dup[Q])then for(I:=Add(D.Lo,E.Lo)..2){(I,P.A,Q.A)}else array{}
-Values(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type):[]tuple(b,d)=
+Values(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<transacts>:[]tuple(b,d)=
     for(I:=Add(dup[P].Lo,dup[Q].Lo)..2){(P.A,Q.A)}
-Shared(P:pair(a,b),Q:pair(c,d),X:a,Y:c where a:type,b:type,c:type,d:type):[]tuple(b,d)=
+Shared(P:pair(a,b),Q:pair(c,d),X:a,Y:c where a:type,b:type,c:type,d:type)<transacts>:[]tuple(b,d)=
     for(I:=Add(dup[P].Lo,dup[Q].Lo)..2){(X,Y)}
-Triple(P:pair(a,b),Q:pair(c,d),R:pair(e,f) where a:type,b:type,c:type,d:type,e:type,f:type):[]tuple(b,d,f)=
+Triple(P:pair(a,b),Q:pair(c,d),R:pair(e,f) where a:type,b:type,c:type,d:type,e:type,f:type)<transacts>:[]tuple(b,d,f)=
     for(I:=Add(Add(dup[P].Lo,dup[Q].Lo),dup[R].Lo)..3){(P.A,Q.A,R.A)}
 Main():void=
     P:=dup(int){A:=7,B:=9}

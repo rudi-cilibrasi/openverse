@@ -16,6 +16,8 @@ for ((s = first; s < first + n; s++)); do
   python3 -I "$root/scripts/gen-equality.py" "$s" > "$tmp/p.verse"
   python3 -I "$root/scripts/gen-equality.py" "$s" --expected > "$tmp/want"
   rm -f "$tmp/p.vbc"
+  # (#515: Epic's default effect, written out: <transacts> where a function without one is called from a failure context or <transacts> code)
+  python3 -I "$root/scripts/models/default_effect.py" "$tmp/p.verse"
   timeout 60 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.err"
   if [[ $le -ne 0 ]] || ! cmp -s "$tmp/l.out" "$tmp/want"; then
     bad=$((bad+1)); echo "MISMATCH seed $s (Lean exit $le)"

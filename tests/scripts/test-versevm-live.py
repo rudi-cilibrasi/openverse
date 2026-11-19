@@ -467,6 +467,12 @@ class EndToEnd(Tmp):
         driver batch on OpenVerse, demultiplex to the same results."""
         probes = [str(p) for p in sorted(VM.glob("*.verse")) if "subscribe" not in p.name]
         ovj = self.tmp / "ov.json"
+        # (those OpenVerse refuses, as the event Signal probes it refuses
+        # as Epic does, #515, would refuse the whole batch)
+        quiet(ov.main, ["openverse", "--modes", "default", "--json", str(ovj)] + probes)
+        refused = {r["path"] for r in json.loads(ovj.read_text())["records"]
+                   if r["runtime"] == "lean" and r["outcome"] == "refused"}
+        probes = [p for p in probes if str(Path(p).relative_to(ROOT)) not in refused and p not in refused]
         quiet(ov.main, ["openverse", "--modes", "default", "--json", str(ovj)] + probes)
         out, m = self.generate("--mode", "batch", "--host", "openverse", "--risky-last", str(ovj),
                                *probes)

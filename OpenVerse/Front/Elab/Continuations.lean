@@ -230,7 +230,9 @@ def sourceContextOf (ctx : Ctx) : Choice.SourceContext := {
   inBlock := ctx.inBlock, inDefer := ctx.inDefer,
   inDefaultCheck := ctx.inDefaultCheck, inRepeat := ctx.inRepeat,
   inChoice := ctx.inChoice, inArm := ctx.inArm, inBranch := ctx.inBranch,
-  defaults := ctx.defaults }
+  defaults := ctx.defaults
+  rollbackOnly := ctx.types.defaultNoRollback && ctx.rollbackOnly
+  bodyFailure := ctx.types.defaultNoRollback && ctx.bodyFailure }
 
 def sourceContextKey (ctx : Ctx) : String :=
   let scope := sourceContextOf ctx
@@ -1427,7 +1429,7 @@ def stagePrefixEnvironmentWith
     let localContext : Ctx := {
       sigs := signature :: c.sigs, sigProg := c.sigProg,
       types := scope, locals := (parameters ++ signature.evidenceLocals).reverse,
-      typeOnly := false, canFail := true, suspends := false, fnFx := signature.fx,
+      typeOnly := false, canFail := true, bodyFailure := false, suspends := false, fnFx := signature.fx,
       discoveringStagePrefix := true,
       retTy := resultType,
       dictVars := frame.orderedParams.map (·.1), dictBase := frame.witnessBase }

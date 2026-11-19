@@ -1,10 +1,10 @@
 # Overloaded functions with several values (#283): a nested call, a call in an
 # inlined body and in a method, an overload with one value called as written
-Two(N : int):int = N | N * 10
-Two(S : string):string = S | S + "!"
-Pick(S : string):int = S.Length
-Pick(N : int):int = N | N + 1
-H(N : int):int = Two(N) + 1
+Two(N : int)<transacts>:int = N | N * 10
+Two(S : string)<transacts>:string = S | S + "!"
+Pick(S : string)<transacts>:int = S.Length
+Pick(N : int)<transacts>:int = N | N + 1
+H(N : int)<transacts>:int = Two(N) + 1
 c := class:
     K : int = 3
     Run()<transacts>:void =

@@ -1,5 +1,5 @@
 # Failure, failure contexts and rollback (Book of Verse ch. 8).
-IsPositive(X:int)<decides>:int = X > 0
+IsPositive(X:int)<transacts><decides>:int = X > 0
 
 Main():void =
     var Attempts:int = 0

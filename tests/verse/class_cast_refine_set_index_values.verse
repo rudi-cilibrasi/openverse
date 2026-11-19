@@ -5,27 +5,27 @@ pair(a:type,b:type):=class:
     B:b
 dup(t:type):=class(pair(t,t)){Index:int=0}
 box(t:type):=struct{Value:t}
-Id(X:t where t:type):t=X
-Direct(P:pair(a,b) where a:type,b:type)<decides>:b=
+Id(X:t where t:type)<transacts>:t=X
+Direct(P:pair(a,b) where a:type,b:type)<transacts><decides>:b=
     var A:[]b=array{P.B}
     set A[dup[P].Index]=P.A
     A[0]
-Named(P:pair(a,b) where a:type,b:type)<decides>:b=
+Named(P:pair(a,b) where a:type,b:type)<transacts><decides>:b=
     var A:[]b=array{P.B}
     D:=dup[P]
     set A[D.Index]=P.A
     A[0]
-Result(P:pair(a,b) where a:type,b:type)<decides>:tuple(b,b)=
+Result(P:pair(a,b) where a:type,b:type)<transacts><decides>:tuple(b,b)=
     var A:[]b=array{P.B}
     R:=set A[dup[P].Index]=P.A
     (R,A[0])
-Argument(P:pair(a,b) where a:type,b:type)<decides>:b=
+Argument(P:pair(a,b) where a:type,b:type)<transacts><decides>:b=
     var A:[]b=array{P.B}
     Id(set A[dup[P].Index]=P.A)
-Field(P:pair(a,b) where a:type,b:type)<decides>:box(b)=
+Field(P:pair(a,b) where a:type,b:type)<transacts><decides>:box(b)=
     var A:[]b=array{P.B}
     box(b){Value:=set A[dup[P].Index]=P.A}
-Map(P:pair(a,b) where a:type,b:type)<decides>:b=
+Map(P:pair(a,b) where a:type,b:type)<transacts><decides>:b=
     var A:[int]b=map{0=>P.B}
     set A[dup[P].Index]=P.A
     A[0]

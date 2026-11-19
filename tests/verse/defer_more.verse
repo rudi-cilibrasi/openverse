@@ -2,7 +2,7 @@
 # that declares locals, including one named like a later local of the scope
 # (the body sees the locals where it was registered); a branch that is only
 # a defer; X := B? at type logic (Core's checker)
-F(B:logic)<decides>:void =
+F(B:logic)<transacts><decides>:void =
     defer:
         Print("d")
     B?

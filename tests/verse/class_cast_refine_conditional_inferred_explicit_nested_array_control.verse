@@ -1,12 +1,12 @@
 expr(t:type) := class<abstract>:
-    Eval():t
+    Eval()<transacts>:t
 lit := class(expr(int)):
     V:int
-    Eval<override>():int = V
+    Eval<override>()<transacts>:int = V
 vpair(a:type, b:type) := class(expr(tuple(a, b))):
     var L:expr(a)
     R:expr(b)
-    Eval<override>():tuple(a, b) = (L.Eval(), R.Eval())
+    Eval<override>()<transacts>:tuple(a, b) = (L.Eval(), R.Eval())
 Rows(E:expr(tuple(int,int))):tuple(int,int)=
     Values:[][]false=for(N:=1..2,V:=if(Print("prefix"),P:=vpair[E],Saved:=P.L,L:=lit[Saved],set P.L=lit{V:=99},R:=lit[P.R])then((L.V,R.V)|(L.V+1,R.V))else E.Eval()){return V}
     E.Eval()

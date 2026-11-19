@@ -12,9 +12,12 @@ programs it writes live in a work directory outside it, and the baseline holds
 identifiers and verdicts only.
 
   booktests.py run BOOK [--work DIR] [--jobs N] [--only SUBSTR] [--results FILE] [--causes]
+                   [--compiler-option OPT]...
       run every case and print the totals per file; --results writes one line
       per case (id, form, expectation, tags, verdict, cause, detail), and
-      --causes also prints the counts by cause (causes.py)
+      --causes also prints the counts by cause (causes.py); each
+      --compiler-option is passed to `openverse run` (`--default-no-rollback`,
+      say), to measure a policy that is not the default
   booktests.py compare BOOK [--baseline FILE] [run options]
       run, then report the cases whose verdict changed against the baseline
       (worse or better); exits 1 when a case got worse
@@ -54,6 +57,8 @@ TIMEOUT = 60
 # Keep that fuel budget and allow the reference interpreter time to reach it.
 LEAN_TIMEOUTS = {"Tests/Bugs/SOL-4284-InfiniteLoopTriggersUObjectLimit.versetest:18": 90}
 FUEL = "10000000"
+# Extra `openverse run` options (`--compiler-option`), for measuring a policy.
+COMPILER_OPTIONS = []
 MEM_BYTES = 4 * 1024 ** 3
 
 # ---------------------------------------------------------------------------
@@ -971,7 +976,7 @@ def run_program(path, lean_timeout):
     vbc = path[:-len(".verse")] + ".vbc"
     if os.path.exists(vbc):
         os.remove(vbc)
-    rc, out, err = run([OPENVERSE, "run", path, "--fuel", FUEL, "--emit", vbc],
+    rc, out, err = run([OPENVERSE, "run", path, *COMPILER_OPTIONS, "--fuel", FUEL, "--emit", vbc],
                        timeout=lean_timeout)
     warnings, err = split_warnings(err, path)
     # (the Lean runtime out of memory: its allocator prints this and exits with
@@ -1241,7 +1246,10 @@ def main():
     ap.add_argument("--results", default=None, help="write per-case results (TSV) here")
     ap.add_argument("--baseline", default=BASELINE)
     ap.add_argument("--causes", action="store_true", help="also print the counts by cause")
+    ap.add_argument("--compiler-option", action="append", default=[],
+                    help="pass this option to `openverse run` (repeatable)")
     a = ap.parse_args()
+    COMPILER_OPTIONS.extend(a.compiler_option)
     book = os.path.abspath(a.book)
     if not os.path.isdir(os.path.join(book, "Tests")):
         sys.exit("%s has no Tests directory" % book)
@@ -1277,6 +1285,8 @@ def main():
     if a.causes:
         print_causes(rows)
     if a.command == "baseline":
+        if a.compiler_option:
+            sys.exit("baseline: refusing to write a baseline with --compiler-option")
         if a.only:
             sys.exit("baseline: refusing to write a baseline of a subset (--only)")
         write_baseline(rows, a.baseline)

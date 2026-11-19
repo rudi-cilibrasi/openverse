@@ -3,28 +3,28 @@
 # expr(t) opens them, and their methods take values of them (for their
 # slots) from hidden fields of the object
 expr(t:type) := class<abstract>:
-    Eval():t
+    Eval()<transacts>:t
     Describe():string = "expr"
 lit := class(expr(int)):
     V:int
-    Eval<override>():int = V
+    Eval<override>()<transacts>:int = V
     Describe<override>():string = "lit {V}"
 add := class(expr(int)):
     L:expr(int)
     R:expr(int)
-    Eval<override>():int = L.Eval() + R.Eval()
+    Eval<override>()<transacts>:int = L.Eval() + R.Eval()
 iszero := class(expr(logic)):
     E:expr(int)
-    Eval<override>():logic = logic{E.Eval() = 0}
+    Eval<override>()<transacts>:logic = logic{E.Eval() = 0}
 cond(t:type) := class(expr(t)):
     C:expr(logic)
     T:expr(t)
     F:expr(t)
-    Eval<override>():t = if (C.Eval()?) then T.Eval() else F.Eval()
+    Eval<override>()<transacts>:t = if (C.Eval()?) then T.Eval() else F.Eval()
 pairE(a:type, b:type) := class(expr(tuple(a, b))):
     L:expr(a)
     R:expr(b)
-    Eval<override>():tuple(a, b) =
+    Eval<override>()<transacts>:tuple(a, b) =
         var X:a = L.Eval()
         Y:b = R.Eval()
         set X = L.Eval()
@@ -32,15 +32,15 @@ pairE(a:type, b:type) := class(expr(tuple(a, b))):
     Describe<override>():string = "pair of {L.Describe()} and {R.Describe()}"
 fstE(a:type, b:type) := class(expr(a)):
     P:expr(tuple(a, b))
-    Eval<override>():a = P.Eval()(0)
+    Eval<override>()<transacts>:a = P.Eval()(0)
 sndE(a:type, b:type) := class(expr(b)):
     P:expr(tuple(a, b))
-    Eval<override>():b = P.Eval()(1)
+    Eval<override>()<transacts>:b = P.Eval()(1)
 # a class below pairE with a type parameter of its own too
 tagged(a:type, b:type, n:type) := class(pairE(a, b)):
     Tag:n
     Describe<override>():string = "tagged {(super:)Describe()}"
-Run(E:expr(t) where t:type):t = E.Eval()
+Run(E:expr(t) where t:type)<transacts>:t = E.Eval()
 Main():void =
     One := lit{V := 1}
     Two := add{L := lit{V := 2}, R := lit{V := 0}}

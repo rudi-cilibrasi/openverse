@@ -4,7 +4,7 @@ node := class:
     L:?node = false
 Walk(T:node)<computes><decides>:int =
     if (A := T.L?) then (Walk[A] | T.V) else T.V
-Chain(N:int):node = if (N > 0) then node{V := N, L := option{Chain(N - 1)}} else node{}
+Chain(N:int)<transacts>:node = if (N > 0) then node{V := N, L := option{Chain(N - 1)}} else node{}
 Main():void =
     T := Chain(10000)
     var S:int = 0

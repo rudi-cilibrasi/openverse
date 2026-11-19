@@ -111,7 +111,10 @@ def main (args : List String) : IO Unit := do
   for (name, artifact) in cases do
     let root := s!"tests/upper-bounds/{name}"
     let source ← IO.FS.readFile (root ++ ".verse")
-    let result := parseProgram source >>= fun tops => elabProgram tops {}
+    -- (#515: the programs that signal in a failure context compile in the
+    -- legacy transactional mode, `--signal-rollback`; the default refuses them)
+    let result := parseProgram source >>= fun tops =>
+      elabProgram tops { signalNoRollback := !signalRefused.contains name }
     if negative.contains name then
       let fragment := (← IO.FS.readFile (root ++ ".error")).trimAscii.toString
       match result with
@@ -144,7 +147,9 @@ def main (args : List String) : IO Unit := do
               if signalRefused.contains name then
                 match flagged with
                 | .error message =>
-                  unless (message.splitOn "in a failure context, which --signal-no-rollback refuses").length > 1 do
+                  -- (Touch is <transacts>: its own Signal is reported first)
+                  unless (message.splitOn "may signal an event").length > 1 &&
+                      (message.splitOn "no_rollback").length > 1 do
                     throw (IO.userError s!"{artifact}: wrong signal policy refusal: {message}")
                 | .ok _ => throw (IO.userError s!"{artifact}: signal policy admitted a bounded rollback signal")
               else
@@ -164,7 +169,7 @@ def main (args : List String) : IO Unit := do
             | .ok _ => throw (IO.userError s!"{artifact}: --no-choice admitted collection iteration")
           if profiled.contains name then
             let strict ← match parseProgram source >>= fun tops =>
-                elabProgram tops { profile := .choiceFree } with
+                elabProgram tops { profile := .choiceFree, signalNoRollback := !signalRefused.contains name } with
               | .ok strict => pure strict
               | .error message => throw (IO.userError s!"{artifact}: --no-choice refused: {message}")
             unless strict.prog.encode == compiled.prog.encode do

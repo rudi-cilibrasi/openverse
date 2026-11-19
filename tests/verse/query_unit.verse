@@ -1,11 +1,11 @@
 counter := class:
     var Count:int = 0
 
-Touch(C:counter):void =
+Touch(C:counter)<transacts>:void =
     set C.Count += 1
     Print("touch")
 
-Fail(C:counter)<decides>:void =
+Fail(C:counter)<transacts><decides>:void =
     set C.Count += 10
     Print("hidden")
     false?

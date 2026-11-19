@@ -59,7 +59,7 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
 
 ## Where things stand
 
-With [compound places](#after-compound-places) on main `617c89f1` (#704): **8,802 agree, 600 refuse, 55 accept, 91 differ, 3,956 not translatable** of 13,504 cases (a full comparison against the baseline; before this change, 8,801 agreed and 92 differed; with [tuple and array concatenation](#after-tuple-and-array-concatenation) on `cf0ced0e` (#630), 8,799 agreed and 602 were refused, the count the refusals' table below still has). This is the one table of what is left; the sections below are the history, each written when its work landed, and the four maps ([the first map](#the-remaining-causes-a-map), [classes](#classes-and-subtyping-the-map), [forms](#forms-of-expressions-statements-and-the-library-a-map), [the forms still on the list](#the-forms-still-on-the-list-a-map)) hold the case-by-case reading each row points to.
+With [the UEFN 43.12 probes](#after-the-uefn-4312-probes), merged with [compound places](#after-compound-places) (#704), with Epic's default effect the default: **8,811 agree, 602 refuse, 42 accept, 93 differ, 3,956 not translatable** of 13,504 cases (a fresh full comparison, the baseline regenerated; before the default effect, 8,806, 603, 46, 93). Before both, on main `617c89f1`: 8,801 agreed, 600 refused, 55 accepted and 92 differed; compound places alone gave 8,802 agreed and 91 differed; with [tuple and array concatenation](#after-tuple-and-array-concatenation) on `cf0ced0e` (#630), 8,799 agreed and 602 were refused, the count the refusals' table below still has. This is the one table of what is left; the sections below are the history, each written when its work landed, and the four maps ([the first map](#the-remaining-causes-a-map), [classes](#classes-and-subtyping-the-map), [forms](#forms-of-expressions-statements-and-the-library-a-map), [the forms still on the list](#the-forms-still-on-the-list-a-map)) hold the case-by-case reading each row points to.
 
 **Accepted where the tests refuse (55)**
 
@@ -67,7 +67,7 @@ With [compound places](#after-compound-places) on main `617c89f1` (#704): **8,80
 |---|---:|---|---|
 | name-limits | 19 | names equal but for case, names too long for the engine (`FORT-793952`, `FORT-555217`, BPVM link errors); no rule of the language to check | left: an engine's limit, [the first map](#the-remaining-causes-a-map) |
 | epic-limits | 11 | the BPVM's code generation and Epic's limits (`DefaultNamed`, `ParametricFunctions`, `Function`, …); no rule to check | left, [the first map](#the-remaining-causes-a-map) |
-| concrete-classes | 7 | a class below a `<concrete>` one: is it concrete? | the owner's question ([the wiki](https://github.com/rudi-cilibrasi/openverse/wiki/Concrete-classes-and-their-subclasses)) |
+| concrete-classes | 7 → 0 | a class below a `<concrete>` one: is it concrete? | settled by UEFN 43.12 (3519), as the tests have it ([After the UEFN 43.12 probes](#after-the-uefn-4312-probes)) |
 | type-checks-other | 7 | Epic's compiler limits (`ParametricFunctions` 431, 438, `FORT-744399`, an enum of 256 values), a join of two classes at a type both are below (`SOL-5838`, 2), a function without `<decides>` as a `<transacts><decides>` value (`FunctionTypes.versetest:191`) | left, [the forms still on the list](#the-forms-still-on-the-list-a-map): `FunctionTypes:191` is where the Book disagrees with itself (ch. 13 against the test's comment), `SOL-5838` the owner's reading |
 | effect-checks | 6 | `no_rollback` as a function's default effect (3), the BPVM's `spawn` in a `<transacts>` function (2, their VerseVM twins agree) and in a `<transacts><decides>` one (`SoftwareTransactionalMemory.versetest:505`) | left: the Book disagrees with itself, and its tests split by VM, [the held rules](#after-the-held-rules), [the forms still on the list](#the-forms-still-on-the-list-a-map) |
 | initializer-effects | 4 | a module constant whose construction runs a `block` that allocates a `var` (VerseVM's link error 9003, `GlobalVariables.versetest` 86-105); the BPVM's twins are valid, and `:143` is valid where the `var` is not reached: a check of what the initializer does when it runs | left: a VM split and a check at run time, [the forms still on the list](#the-forms-still-on-the-list-a-map) |
@@ -2785,6 +2785,38 @@ owner's design (`comparable` as a type is built: [After
 outputs) is dangerous but changes Core equality: it needs an owner
 decision first; [the readings audit](readings-audit.md) designs the
 readings the tests contradict that it did not change.
+
+## After the UEFN 43.12 probes
+
+Epic's shipped compiler, UEFN 43.12 (build
+`++Fortnite+Release-43.12-CL-60598086`), compiled the probes of
+[`tests/conformance/versevm`](../../tests/conformance/versevm) on
+2026-11-18 ([the results](versevm-live-conformance.md#epic-observations-uefn-4312-compiler)).
+openverse, whose target is the Verse VM, follows its front end where it
+rules (#515):
+
+- An event's `Signal` has the `no_rollback` effect: refused in a failure
+  context, a function with a heap specifier and a class's `block:` (3512).
+  7 cases go from agrees to disagrees-refuses: assertion bodies, translated
+  as `<decides>` functions, that signal (`Event.versetest:54`,
+  `FORT-1088027` 4, `FORT-1126351` 2). `--signal-rollback` keeps the
+  tests' reading.
+- A class below a `<concrete>` one gives its own fields defaults (3519):
+  `concrete.versetest:38, 76`, `SOL-3366:8, 15, 24`, `SOL-7781:28, 54`
+  agree (7).
+- An array of classes with two nearest common supertypes is an array of
+  `any` (3509): `SOL-5838:13, 22` agree (2).
+- `int[X]` of an int is a cast: `WhereConstrainedInts.versetest:220, 221`
+  agree; `:219` and `:222` now differ instead of being refused, by the
+  64-bit overflow.
+
+- Epic's default effect, `no_rollback` on a function without a heap
+  specifier, is the default since the follow-up probes settled `<decides>`
+  and `for` clauses ([the default effect](effect-conformance.md#the-default-effect-515)):
+  `Effects.versetest:490, 551, 552` and `FunctionTypes.versetest:191`
+  agree, and `Function.versetest:83`, once refused through a call of a
+  `<decides>` function type no function value implements, which cannot
+  fail no more; none is worse.
 
 ## Not covered, and why it matters
 

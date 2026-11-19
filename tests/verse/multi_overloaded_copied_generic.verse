@@ -1,10 +1,10 @@
-Id(X:t where t:type):t = X
+Id(X:t where t:type)<transacts>:t = X
 Dup(V:t where t:type):t = V | V
-Keep(N:int,X:t where t:type):t =
-    F:type{_(:t):t} = Id
+Keep(N:int,X:t where t:type)<transacts>:t =
+    F:type{_(:t)<transacts>:t} = Id
     F(X) | F(X)
-Keep(S:string,X:t where t:type):t =
-    F:type{_(:t):t} = Id
+Keep(S:string,X:t where t:type)<transacts>:t =
+    F:type{_(:t)<transacts>:t} = Id
     F(X) | F(X)
 Main()<transacts>:void =
     var Count:int = 0

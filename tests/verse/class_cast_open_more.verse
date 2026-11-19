@@ -17,7 +17,7 @@ pairNo(a:type, b:type) := class<abstract>(expr(tuple(a, b))):
     R:expr(b)
 tagged(a:type, b:type, n:type) := class(pairNo(a, b)):
     Note:n
-Truth(E:expr(t) where t:type):logic =
+Truth(E:expr(t) where t:type)<transacts>:logic =
     if (Q := eqE[E]) then (if (Q.X = Q.Y) then true else false) else false
 Num(E:expr(t) where t:type):int =
     if (H := holderA[E]) then 40

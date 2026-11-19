@@ -6,7 +6,7 @@ int_ref := class:
     var Contents:int = 0
 int_map_ref := class:
     var Contents:[int]int = map{}
-Effectful(Ref:int_ref, X:t where t:type):t =
+Effectful(Ref:int_ref, X:t where t:type)<transacts>:t =
     set Ref.Contents += 1
     X
 Main():void =

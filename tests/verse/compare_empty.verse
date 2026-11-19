@@ -1,6 +1,6 @@
 # Comparing with an empty literal: the right operand takes the left's type
 # (issue #7; the Core checker checks it against that type).
-IsNone(O:?t where t:subtype(comparable))<decides>:void = O = false
+IsNone(O:?t where t:subtype(comparable))<transacts><decides>:void = O = false
 
 Main():void =
     O:?int = false

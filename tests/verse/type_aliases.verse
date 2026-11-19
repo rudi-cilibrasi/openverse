@@ -18,7 +18,7 @@ transformer(a:type, b:type) := a -> b
 twice(t:type) := pair_of(pair_of(t))
 
 ProcessPlayer(ID:player_id):game_id = ID + 1
-Unwrap(O:maybe2)<decides>:int = O??
+Unwrap(O:maybe2)<transacts><decides>:int = O??
 Sum(X:ints):int =
     var R:int = 0
     for (Y : X) { set R += Y }
@@ -28,7 +28,7 @@ Call(G:thunk):int = G()
 Inc(X:int):int = X + 1
 Seven():int = 7
 Swap(P:pair_of(int)):pair_of(int) = (P(1), P(0))
-Valid(Items:optional_array(int)):[]int = for (Item : Items; Value := Item?) { Value }
+Valid(Items:optional_array(int))<transacts>:[]int = for (Item : Items; Value := Item?) { Value }
 Show(T:transformer(int, string), V:int):string = T(V)
 Str(X:int):string = "<{X}>"
 Corner(Q:twice(int)):int = Q(1)(0)

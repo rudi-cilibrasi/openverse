@@ -191,6 +191,9 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   checkProfiles allTops0r
   checkDefers allTops0r
   checkForClauses allTops0r
+  -- (#515, `--default-no-rollback`) the functions with Epic's default
+  -- effect, `no_rollback`, marked as written, before any is generated
+  let allTops0r := if opts.defaultNoRollback then allTops0r.map SignalAdmission.markDefault else allTops0r
   -- 3. the helpers the markers and the entry expression ask for: the
   --    rationals' (#116), ReplaceAll's, the bitwise
   --    functions'. They expand finite intrinsic operations
@@ -268,6 +271,8 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   checkConstantOrder resolved
   let resolved := if opts.extendedDefaults then resolved
     else resolved.map InitializerConvergence.markSource
+  -- (#515) and the functions whose heap specifiers exclude `no_rollback`
+  let resolved := resolved.map SignalAdmission.markSource
   -- Primitive overloads keep their intrinsic convergence contract; the
   -- program's overloads above retain their ordinary source-call contract.
   let resolved := resolved ++ BuiltinValues.toStringOverloads resolved
@@ -277,6 +282,8 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   --    packets implement source expressions, and acquire no contract
   --    merely because their implementation uses a data type
   let (concurrencyNames, usesConc, usesEvents, awaitsTasks, prelude) ← concurrencyHelpers resolved opts.requests
+  -- (#515, `--default-no-rollback`) its callbacks' types have Epic's default
+  let prelude := if opts.defaultNoRollback then prelude.map SignalAdmission.markTypes else prelude
   let constructionFx := resolved.foldl (fun budgets top => match top with
     | .classDef _ n _ _ specs .. | .const _ n _ _ (.structDef _ _ specs _) =>
       budgets.insert n (EffectPolicy.constructionFx specs)

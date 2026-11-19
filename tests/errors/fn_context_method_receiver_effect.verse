@@ -3,7 +3,7 @@ cell:=class{var N:int=0}
 box:=class:
     C:cell
     Same(X:t where t:type)<computes>:t=X
-Touch(B:box):box=
+Touch(B:box)<transacts>:box=
     set B.C.N+=1
     B
 Apply(F:type{_(:t)<computes>:t},X:t where t:type)<computes>:t=F(X)

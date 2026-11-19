@@ -2,38 +2,38 @@
 # own opens them: a test of each class below both, each of whose branches
 # calls the one function the branch is made into, at that class's
 container(t:type) := interface:
-    Get():t
+    Get()<transacts>:t
 c2(t:type) := interface(container([]t)):
-    Size():int
-    Name():string
+    Size()<transacts>:int
+    Name()<transacts>:string
 box(t:type) := class(c2(t)):
     V:t
-    Get<override>():[]t = array{V, V}
-    Size<override>():int = 2
-    Name<override>():string = "box"
+    Get<override>()<transacts>:[]t = array{V, V}
+    Size<override>()<transacts>:int = 2
+    Name<override>()<transacts>:string = "box"
 sbox(t:type) := class(box(t)):
-    Name<override>():string = "sbox"
+    Name<override>()<transacts>:string = "sbox"
 tb(a:type, b:type) := class(c2(tuple(a, b))):
     A:a
     B:b
-    Get<override>():[]tuple(a, b) = array{(A, B)}
-    Size<override>():int = 1
-    Name<override>():string = "tb"
+    Get<override>()<transacts>:[]tuple(a, b) = array{(A, B)}
+    Size<override>()<transacts>:int = 1
+    Name<override>()<transacts>:string = "tb"
 ib := class(c2(int)):
-    Get<override>():[]int = array{1, 2, 3}
-    Size<override>():int = 3
-    Name<override>():string = "ib"
+    Get<override>()<transacts>:[]int = array{1, 2, 3}
+    Size<override>()<transacts>:int = 3
+    Name<override>()<transacts>:string = "ib"
 plain(t:type) := class(container(t)):
     W:t
-    Get<override>():t = W
-Count(Xs:[]t where t:type):int = Xs.Length
+    Get<override>()<transacts>:t = W
+Count(Xs:[]t where t:type)<transacts>:int = Xs.Length
 Firsts(Xs:[]t where t:type)<decides>:t = Xs[0]
 # u = []t', t' opened: the branch is generic over t', whose value each
 # class's test gives (box's and tb's from their hidden fields, ib's int)
-Try(C:container(u) where u:type):string =
+Try(C:container(u) where u:type)<transacts>:string =
     if (B := c2[C]) then "{B.Name()} {B.Size()} {Count(B.Get())}" else "not c2"
 # its value at the code's own type: u = []t', so the branch's []t' is a u
-Again(C:container(u) where u:type):?u =
+Again(C:container(u) where u:type)<transacts>:?u =
     if (B := c2[C]) then option{B.Get()} else false
 # in a for's clauses, and the object a call, evaluated once
 counter := class:
@@ -41,7 +41,7 @@ counter := class:
 Pick(K:counter, Cs:[]container(u), I:int where u:type)<transacts><decides>:container(u) =
     set K.N += 1
     Cs[I]
-Sizes(Cs:[]container(u) where u:type):[]int =
+Sizes(Cs:[]container(u) where u:type)<transacts>:[]int =
     for (C : Cs, B := c2[C]) { B.Size() }
 Main()<transacts>:void =
     Print(Try(box(string){V := "x"}))
