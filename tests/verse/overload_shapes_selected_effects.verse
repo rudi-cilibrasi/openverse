@@ -1,7 +1,7 @@
 cell := class:
     var N:int = 0
-F(X:int,Y:int)<decides>:int = X+Y
-F(X:string):int = 0
+F(X:int,Y:int)<transacts><decides>:int = X+Y
+F(X:string)<transacts>:int = 0
 G(X:int,Y:int)<computes>:int = X+Y
 G(X:string)<suspends>:int = X.Length
 H(X:int,Y:int)<computes>:int = X+Y

@@ -304,6 +304,35 @@ propagation or explicit function termination contracts. Ordinary recursion
 and loops remain available outside the initializer admission boundary;
 `computes` and execution fuel do not prove termination.
 
+**The default effect, `no_rollback`** (#515). A function, method or
+constructor written without a heap specifier (`<transacts>`, `<computes>`,
+`<reads>`, `<writes>`, `<allocates>`), `<decides>` or not, and a function
+type written without one (`int->int`, `type{_(:int)<decides>:int}`), have
+the `no_rollback` effect, as in Epic's Verse compiler (UEFN 43.12, error
+3512; [the probes](research/versevm-live-conformance.md)). Such a
+function cannot be called
+- in a failure context: an `if`'s condition (also a plain `<decides>`
+  function's call there, `if (Positive[1])`), a `for`'s range and filter,
+  `option{…}`, `logic{…}`, `not`, the left of `or`, and the conditions and
+  clauses inside a `<decides>` function's body;
+- from a function with a heap specifier (`<transacts>`, `<transacts><decides>`,
+  `<computes>`, …) or a class's `block:`.
+
+The top of a plain `<decides>` function's body may call one (UEFN 43.12
+admits `G()<decides>:void = F() = 1` with `F` unannotated), and so may every
+function without a heap specifier, `Main` included, outside its failure
+contexts. A function value of a type without a heap specifier has it too,
+and a function that has it is no value of a type that has not (3509, Book
+of Verse tests `FunctionTypes.versetest:191`); a `<transacts>` function is a
+value of either. An event's `Signal` and `Await` have it; `Print` and
+`Subscribe` do not. A spawned call is not judged where it is spawned. Write
+`<transacts>` on a function its callers need to call from such a place.
+`--default-rollback` (on `run`, `emit`, `check` and `core`;
+`Options.defaultNoRollback := false`) keeps openverse's old rule, under
+which a function without a heap specifier is rolled back as a
+`<transacts>` one is; `--default-no-rollback` names the default and changes
+nothing.
+
 Source `native`/`native_callable` tags cannot create trusted external bindings.
 Explicit internal/implicit effect spellings (`no_rollback`, `dictates`,
 `diverges`, `succeeds`, `fails`) and obsolete `varies` are rejected.
@@ -3874,8 +3903,11 @@ Main()<suspends>:void =
   `Signal` itself never waits. `event()` is an event without a value (`event(void)`),
   with `E.Signal()` and `E.Await()`. A `sticky_event(t)` (or
   `sticky_event()`) is an event that keeps its last signal: an `Await`
-  after a `Signal` gives that value at once. A `subscribable_event(t)` is an
-  event that also calls the functions subscribed to it:
+  after a `Signal` gives that value at once. A `subscribable_event(t)` (an
+  openverse extension: Epic's API has no `subscribable_event`, UEFN 43.12
+  says "Unknown identifier"; its `event(t)` itself has `Subscribe`, which
+  openverse's `event` lacks, [the probes](research/versevm-live-conformance.md))
+  is an event that also calls the functions subscribed to it:
   `E.Subscribe(F)` (with `F` a function or method value of type
   `type{_(:t):void}`) gives a `cancelable`, whose `Cancel()` unsubscribes
   `F`, and `E.Signal(X)` calls each subscribed function in the order they
@@ -3910,11 +3942,11 @@ Main()<suspends>:void =
   (`Coroutines/Concurrency.versetest:1562-1580`). `--signal-no-rollback`,
   the opt-in name of the policy before it became the default, is accepted
   and changes nothing. A function without a heap specifier has the
-  `no_rollback` effect in Epic's compiler too (UEFN 43.12, error 3512 for
-  its call from a `<transacts>` function or a class's `block:`); openverse
-  applies that rule only under the strict `--default-no-rollback`, so by
-  default it still diverges
-  ([the default effect](research/effect-conformance.md#the-default-effect-515---default-no-rollback)). A failure context is an `if`'s condition, a `for`'s clause, a
+  `no_rollback` effect too ([effect contracts](#effect-contracts)), so a
+  function that signals and has none cannot be called from a failure
+  context either, and the error names it; the way to the `Signal` the
+  analysis below follows matters where such a function is `<transacts>`
+  (refused at its `Signal`) and under `--default-rollback`. A failure context is an `if`'s condition, a `for`'s clause, a
   `<decides>` function's body, `option{…}`, `logic{…}`, `not`, the left of
   `or`, a `first{…}` or a `do` expression, with everything that runs
   inside it: a `block`, a named argument's default, a `defer:`. A refining
@@ -4021,7 +4053,7 @@ Main()<suspends>:void =
 | What a `for` undoes | its clauses are one search: what they did since the last value that reached the body is kept at the body and undone when the search ends; a failure undoes back to its own element or alternative (`FlowControl/for.versetest` 317-392, `Range.versetest` 140, 159, `SoftwareTransactionalMemory.versetest` 74-88; `08_failure.md:92`: "a failure context for each iteration of the domain clause"): **the Book decides** | the Book's, for a `for` whose prepared clauses have only range, array, map, string, or flat value-choice generators. This includes flat inlined calls and producers computed as arrays at the call. A `for` with a remaining producer boundary, composed choice, or exclusive choice keeps the older rule. Its generator's successful clauses keep their effects even when the generators after it give no value. See [the audit](research/readings-audit.md#what-a-for-undoes). |
 | A failing `for` source | "When any expression in the iteration header fails, that iteration is skipped" (ch. 7); `for.versetest:317`: a failing range bound gives `array{}`: **the Book decides** | zero iterations, for an iterated source (`X : F[]`) and a range bound (`I := 1..F[]`) alike, what the source did rolled back (with what the search did since its last value, by the rule above); the `for` itself does not fail |
 | `?` on other values | conflict (§6.1) | only `logic` and `?t` (the API's typed reading) |
-| Output inside a failed failure context | unspecified for `Print` (the API's `log` class, another function, prints rolled-back lines prefixed "(Rolling Back)") | rolled back with the writes (transactional `Print`) |
+| Output inside a failed failure context | unspecified for `Print` (the API's `log` class, another function, prints rolled-back lines prefixed "(Rolling Back)"); Epic's Verse VM (UEFN 43.12, 2026-11-19) prints it and keeps it: `if (Print("x"), false?)` prints `x` (followup/print-in-condition) | rolled back with the writes (transactional `Print`): a known divergence from the Verse VM, which output kept across rollback in Core and the C runtime would remove |
 | `Main` failing | (no entry point in the book) | exit code 1; output already printed stays |
 | `return` or `break` inside a failure context | refused by the tests (`SOL-4199-BreakFromIf.versetest`, `Reachability.versetest` 12-15, `Return.versetest` 157-163; [the audit](research/readings-audit.md#return-and-break-in-a-failure-context)) | the Book's: refused ([Control](#supported)); a `break` in a `for`'s body, which the Book's tests allow and its prose refuses, stays refused |
 | Comparability | `comparable` covers the primitive types, enums, structs, `<unique>` classes and containers of comparable types (ch. 4); not functions, `any`, nor classes and interfaces without `<unique>` (ch. 11, `CompareInstance.versetest:11`) | the Book's: the types it names, and a type parameter declared `subtype(comparable)`; `comparable` itself is a type ([comparable](#comparable)) |

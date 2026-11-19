@@ -15,7 +15,7 @@ pack := class:
     block:
         set D.N += 1
         Print("block {X} {Y} cell {D.N}")
-None()<decides>:int =
+None()<transacts><decides>:int =
     false?
     0
 Main():void =

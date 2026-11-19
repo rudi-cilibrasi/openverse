@@ -11,7 +11,7 @@ c2(t:type) := interface(container([]t)):
 kv(k:type, v:type) := interface(container(tuple(k, v))):
     Key():k
 c3(t:type) := interface(c2(?t)):
-    Has():logic
+    Has()<transacts>:logic
 box(t:type) := class(c2(t)):
     Value:t
     Get<override>():[]t = array{Value, Value}
@@ -33,7 +33,7 @@ obox(t:type) := class(c3(t)):
     Get<override>():[]?t = array{O}
     Fetch<override>()<suspends>:[]?t = array{O, O}
     Size<override>():int = 1
-    Has<override>():logic = if (O?) then true else false
+    Has<override>()<transacts>:logic = if (O?) then true else false
 G(C:container(u) where u:type):u = C.Get()
 F(C:container(u) where u:type)<suspends>:u = C.Fetch()
 H(C:c2(t) where t:type):int = C.Size() + C.Get().Length

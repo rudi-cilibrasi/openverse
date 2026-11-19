@@ -4,20 +4,20 @@
 pair(t:type, u:type) := class:
     A:t
     B:u
-    Get():t = A
+    Get()<transacts>:t = A
     Name():string = "pair"
 pint(u:type) := class(pair(int, u)):
     Name<override>():string = "pint {A}"
 wrapint(w:type) := class(pint([]w)):
     C:w
 dup(t:type) := class(pair(t, t)):
-    Get<override>():t = B
+    Get<override>()<transacts>:t = B
 optdup(u:type) := class(dup(?u)):
     C:u
 arrdup(u:type) := class(dup([]u)):
     C:u
 Show(P:pair(t, u) where t:type, u:type):string = P.Name()
-First(P:pair(t, u) where t:type, u:type):t = P.Get()
+First(P:pair(t, u) where t:type, u:type)<transacts>:t = P.Get()
 Last(Ps:[]pair(int, []string)):string =
     var Cur:?pair(int, []string) = false
     for (P : Ps) { set Cur = option{P} }

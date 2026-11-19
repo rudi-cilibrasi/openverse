@@ -127,7 +127,7 @@ OPENVERSE_DEBUG=1 .lake/build/bin/openverse check F.verse   # an internal error 
 .lake/build/bin/openverse core F.verse                      # each function's Verse Core, one statement per line
 .lake/build/bin/openverse check F.verse --no-choice         # enforce the choice-free source profile
 .lake/build/bin/openverse check F.verse --signal-rollback     # legacy: roll an event Signal back with its context
-.lake/build/bin/openverse check F.verse --default-no-rollback # strict: Epic's default effect, no_rollback
+.lake/build/bin/openverse check F.verse --default-rollback    # legacy: a function without a heap specifier is rolled back
 ```
 
 `--no-choice` is an opt-in source profile for `check`, `core`, `emit`, and
@@ -145,7 +145,11 @@ from a failure context, a `<transacts>` function (or another with a heap
 specifier) or a class's `block:` is refused before it runs.
 `--signal-rollback` keeps the legacy transactional mode, the Book's tests'
 reading, in which it is allowed and undone with a failing context. See
-[events](docs/LANGUAGE.md#concurrency).
+[events](docs/LANGUAGE.md#concurrency). A function without a heap specifier
+has `no_rollback` too, Epic's default effect: a failure context or a
+`<transacts>` function cannot call it ([effect
+contracts](docs/LANGUAGE.md#effect-contracts)); `--default-rollback` keeps
+the old rule.
 
 ```verse
 Half(N:int)<decides>:int =

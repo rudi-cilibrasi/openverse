@@ -156,7 +156,15 @@ def Shape.show (s : Shape) (ps : List String) (r : String) (effs : List String :
   let named := s.named.zip (ps.drop s.positional) |>.map fun (n, t) =>
     s!"?{n}:{t}" ++ if s.optional.contains n then " = …" else ""
   "type{_(" ++ ", ".intercalate ((ps.take s.positional).map (":" ++ ·) ++ named) ++ ")" ++
-    String.join (effs.map fun e => s!"<{if e == noRollbackMarker then "no_rollback" else e}>") ++ ":" ++ r ++ "}"
+    -- (#515: written as Verse writes them, a type without a heap specifier
+    -- having no_rollback, and one with all the heap effects but no
+    -- no_rollback written <transacts>)
+    let effs := if effs.contains noRollbackMarker then effs.filter (· != noRollbackMarker)
+      else if s.fx == heapFx && !effs.contains "transacts" then
+        effs.filter (fun e => e == "decides" || e == "suspends") ++ ["transacts"] ++
+          effs.filter (fun e => e != "decides" && e != "suspends")
+      else effs
+    String.join (effs.map fun e => s!"<{e}>") ++ ":" ++ r ++ "}"
 
 /-- An error message with the hidden names read as Verse: `F$fn.$call…`
     is `F` called as a value, another `$call…` a function value, a shape's

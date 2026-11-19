@@ -1,4 +1,4 @@
-# expect: 9:13: this call may signal an event (Relay → event.Signal), whose Signal has the no_rollback effect, in counter.Bump, whose effects (<reads><writes><allocates>) exclude no_rollback
+# expect: 9:13: this invocation calls a function (Relay) that has the 'no_rollback' effect, which a body whose effects exclude it does not allow
 # (#515) a method whose heap specifiers exclude no_rollback cannot call a
 # function that signals: Relay has no specifiers, so the no_rollback effect
 # (Book of Verse ch. 13; UEFN 43.12 refuses such a call with error 3512,

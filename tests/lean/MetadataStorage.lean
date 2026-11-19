@@ -131,7 +131,7 @@ private def refinementSnapshotOpaque : String :=
     "then (Stored,option{(L.V,R.V)})else (Stored,false)"
 
 private def refinementComputedFirst (overwrite : Bool) : String := callables
-  ("pair(a:type,b:type):=class{A:a;B:b}\ndup(t:type):=class(pair(t,t)){var Lo:int=1}\ncell:=class{var Trace:string=\"\"}\nRead(H:cell,S:string,N:int)<transacts>:int={set H.Trace+=S;N}\nChange(H:cell,R:dup(int),Q:pair(c,d) where c:type,d:type)<transacts>:pair(c,d)={set H.Trace+=\"C\";set R.Lo=5;Q}\nAdd(X:int,Y:int):int=X+Y\n" ++
+  ("pair(a:type,b:type):=class{A:a;B:b}\ndup(t:type):=class(pair(t,t)){var Lo:int=1}\ncell:=class{var Trace:string=\"\"}\nRead(H:cell,S:string,N:int)<transacts>:int={set H.Trace+=S;N}\nChange(H:cell,R:dup(int),Q:pair(c,d) where c:type,d:type)<transacts>:pair(c,d)={set H.Trace+=\"C\";set R.Lo=5;Q}\nAdd(X:int,Y:int)<transacts>:int=X+Y\n" ++
    "Caller(P:pair(a,b),Q:pair(c,d),H:cell,R:dup(int),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where a:type,b:type,c:type,d:type)<transacts><decides>:tuple(int,b,d)=\n    var Stored:type{_()<computes>:int}=Dummy\n" ++
    (if overwrite then "    set Stored=F\n" else "") ++
    "    first{I:=Add(Read(H,\"L\",dup[P].Lo),Read(H,\"R\",dup[Change(H,R,Q)].Lo))..2;(I+Stored(),P.A,Q.A)}")

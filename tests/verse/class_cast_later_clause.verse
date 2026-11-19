@@ -6,9 +6,9 @@ pair(t:type, u:type) := class:
     B:u
 dup(t:type) := class(pair(t, t)):
     C:int = 0
-F(P:pair(a, b), X:a where a:type, b:type):b =
+F(P:pair(a, b), X:a where a:type, b:type)<transacts>:b =
     if (Y := 1, D := dup[P], D.C > Y) then X else P.B
-G(P:pair(a, b), Ys:[]int where a:type, b:type):int =
+G(P:pair(a, b), Ys:[]int where a:type, b:type)<transacts>:int =
     if (N := Ys[0], N > 0, D := dup[P]):
         D.C + N
     else:
@@ -16,7 +16,7 @@ G(P:pair(a, b), Ys:[]int where a:type, b:type):int =
 H(P:pair(a, b), M:?int where a:type, b:type)<transacts>:void =
     if (V := M?, D := dup[P], D.C = V):
         Print("match {V}")
-Plain(X:pair(int, int)):int =
+Plain(X:pair(int, int))<transacts>:int =
     if (Y := 1, D := dup[X]) then D.C + Y else 0
 container(t:type) := interface:
     Get():t
@@ -29,7 +29,7 @@ both(t:type, u:type) := class(container(t), sink(u)):
 one(u:type) := class(sink(u)):
     W:u
     Put<override>(X:u):int = 100
-VW(S:sink(string), N:int):string =
+VW(S:sink(string), N:int)<transacts>:string =
     if (N > 0, O := one[S]) then "one {O.W}" else "not one"
 Main()<transacts>:void =
     Print("{F(dup(int){A := 1, B := 2, C := 3}, 7)} {F(dup(int){A := 1, B := 2, C := 0}, 7)} {F(pair(int, string){A := 1, B := "x"}, 7)}")

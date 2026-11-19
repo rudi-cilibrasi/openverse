@@ -4,7 +4,7 @@
 c := class:
     V:int = 4
     GetSelf():c = { return(Self); }
-Two():int = {1; 2;}
+Two()<transacts>:int = {1; 2;}
 Main():void =
     if (A := first{Two() = 2; 5;}):
         Print("{c{}.GetSelf().V} {Two()} {A}")

@@ -4,7 +4,7 @@ dup(t:type):=class(pair(t,t)):
 box:=class:
     Value:int
 Emit(E:event(int),N:int):int={E.Signal(N);N}
-Select(X:int,?Index:int=0):int=Index
+Select(X:int,?Index:int=0)<transacts>:int=Index
 Constructor(P:pair(a,b),E:event(int) where a:type,b:type):[]int=
     for(X:array{1}){if(B:=box{Value:=dup[P].C})then Emit(E,B.Value)else 0}
 Named(P:pair(a,b),E:event(int) where a:type,b:type):[]int=

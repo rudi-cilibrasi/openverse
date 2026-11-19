@@ -21,7 +21,7 @@ SuitName(S:suit):string =
         suit.Spades => "spades"
         suit.Clubs => "clubs"
 
-IsRed(S:suit)<decides>:void =
+IsRed(S:suit)<transacts><decides>:void =
     S = suit.Hearts
 
 Main():void =

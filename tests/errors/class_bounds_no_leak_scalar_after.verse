@@ -1,5 +1,5 @@
 # expect: must be comparable
-NeedCmp(X:t,Y:t where t:subtype(comparable))<decides>:void = X = Y
+NeedCmp(X:t,Y:t where t:subtype(comparable))<transacts><decides>:void = X = Y
 root(t:type) := class:
     A:t
     Hit(N:t):int = 0

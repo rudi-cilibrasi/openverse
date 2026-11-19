@@ -639,7 +639,7 @@ def compileTops (tops : List STop) (args : List String) (mentionsArgs : Bool) (d
     (`Compiled.warnings`), in the order of the source. -/
 def compileTopsWarned (tops : List STop) (args : List String) (mentionsArgs : Bool) (doExpr : Option String)
     (debug : Bool := false) (profile : SourceProfile := .full)
-    (extendedDefaults : Bool := false) (signalNoRollback : Bool := true) (defaultNoRollback : Bool := false) :
+    (extendedDefaults : Bool := false) (signalNoRollback : Bool := true) (defaultNoRollback : Bool := true) :
     Except String (Prog × List String) := do
   let entry ← match doExpr with
     | some t => some <$> parseExprText t

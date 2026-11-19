@@ -14,19 +14,19 @@ Pick(H:cell, P:pair(a, b), Q:pair(c, d), N:int where a:type, b:type, c:type, d:t
     set H.N += 1
     if (N > 1) then dup[P].C + N else if (N > 0) then dup[Q].C * 10 else -1
 # the branch's value at the refined type; a branch that is a cast alone
-Same(P:pair(a, b), N:int where a:type, b:type)<decides>:b =
+Same(P:pair(a, b), N:int where a:type, b:type)<transacts><decides>:b =
     if (N > 0) then dup[P].A else dup[P].B
-Itself(P:pair(a, b), N:int where a:type, b:type)<decides>:dup(a) =
+Itself(P:pair(a, b), N:int where a:type, b:type)<transacts><decides>:dup(a) =
     if (N > 0) then dup[P] else dup[P]
 # inside a refining if's branch
-Two(P:pair(a, b), Q:pair(c, d) where a:type, b:type, c:type, d:type)<decides>:int =
+Two(P:pair(a, b), Q:pair(c, d) where a:type, b:type, c:type, d:type)<transacts><decides>:int =
     if (D := dup[P]) then dup[Q].C + D.C else 0
 # a statement if in a <decides> body
 Stmt(H:cell, P:pair(a, b), N:int where a:type, b:type)<transacts><decides>:int =
     if (N > 0) then set H.N += dup[P].C
     H.N
 # in a branch of an if that a block binds, in option{}
-Br(P:pair(a, b), N:int where a:type, b:type):?int = option{X := (if (N > 0) then dup[P].C else 0); X + 1}
+Br(P:pair(a, b), N:int where a:type, b:type)<transacts>:?int = option{X := (if (N > 0) then dup[P].C else 0); X + 1}
 Main()<transacts>:void =
     H := cell{}
     Y:pair(int, int) = dup(int){A := 1, B := 2}

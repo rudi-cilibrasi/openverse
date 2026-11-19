@@ -8,7 +8,7 @@ child(a:type) := class(base(a)):
     Pick<override>(X:b,Y:b,?E:[]b=array{X} where b:type)<transacts>:tuple(a,b) =
         Print("child {E.Length}")
         (Value,Y)|(super:)Pick((X,Y))
-Run(B:base(b),X:a,Y:a where a:type,b:type):[]tuple(b,a) =
+Run(B:base(b),X:a,Y:a where a:type,b:type)<transacts>:[]tuple(b,a) =
     for(V:=B.Pick((X,Y))): V
 Main():void =
     B:base(int)=child(int){Value:=7}

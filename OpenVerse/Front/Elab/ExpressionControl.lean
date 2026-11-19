@@ -108,9 +108,9 @@ partial def elabExprControlWith
       let st ← get
       let some (_, d, T, x) := conds[k]?.bind Refine.castClause? | return none
       let c ← if k == 0 then pure ctx else
-        pure (← elabSeq { ctx with canFail := true, inTaking := true, typeOnly := true } (conds.take k) none).2
+        pure (← elabSeq { ctx with canFail := true, bodyFailure := false, inTaking := true, typeOnly := true } (conds.take k) none).2
       let branch := Refine.castRest p (conds.drop (k + 1)) thenE (some (Refine.noValue p))
-      let τ? ← refinedIfType { c with canFail := ctx.canFail, inTaking := ctx.inTaking, typeOnly := true } p d T x branch ee
+      let τ? ← refinedIfType { c with canFail := ctx.canFail, bodyFailure := ctx.bodyFailure, inTaking := ctx.inTaking, typeOnly := true } p d T x branch ee
       set st
       return τ?
     -- (at an expected type `τ`, `attempt`'s branch as it is, else, when
@@ -128,7 +128,7 @@ partial def elabExprControlWith
       modify fun s => { s with fx := [] }
       -- (ones that take a choice's values, which this cannot elaborate apart,
       -- the cast's clause of its own takes too: `withCastClauses`)
-      let some (rp, _) ← tryCatch (some <$> elabSeq { ctx with canFail := true, inTaking := true, asWritten := true } pre none)
+      let some (rp, _) ← tryCatch (some <$> elabSeq { ctx with canFail := true, bodyFailure := false, inTaking := true, asWritten := true } pre none)
           fun _ => do set st0; pure none
         | return none
       let fxP := (← get).fx
@@ -250,14 +250,14 @@ partial def elabExprControlWith
               pure (r.map (τ, ·))
             | none => pure none
         if let some (τ, r) := r? then return ← finish τ r
-    let (rc, ctxT) ← if Choice.hasChoice conds (choiceOrder ctx) then elabOneClauses { ctx with canFail := true } conds
-      else elabSeq { ctx with canFail := true, inTaking := true } conds none
+    let (rc, ctxT) ← if Choice.hasChoice conds (choiceOrder ctx) then elabOneClauses { ctx with canFail := true, bodyFailure := false } conds
+      else elabSeq { ctx with canFail := true, bodyFailure := false, inTaking := true } conds none
     -- (not while a function value is asked for, #214, #231: a call through
     -- it may fail once its class is made, in the elaboration that follows;
     -- likewise for the families of methods' uses, #283: `failabilityKnown`)
     if !(rc.e.mayFail ctx.sigProg) && (← ctx.failabilityKnown) then
       eerr p "the condition of this if cannot fail (Verse requires a failable condition)"
-    let thenCtx := { ctxT with canFail := ctx.canFail, inTaking := ctx.inTaking }
+    let thenCtx := { ctxT with canFail := ctx.canFail, bodyFailure := ctx.bodyFailure, inTaking := ctx.inTaking }
     match elseE with
     | none =>
       let rt ← elabE thenCtx thenE (some .void)

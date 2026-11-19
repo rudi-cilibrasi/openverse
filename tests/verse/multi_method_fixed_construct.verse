@@ -8,7 +8,7 @@ extra(t:type,u:type) := class(root(t)):
     Builds<override>():box(t) =
         E:[]u = Concatenate()
         box{B:=7|8}
-Get(P:root(t) where t:type):[]box(t) = for (V:=P.Builds()) { V }
+Get(P:root(t) where t:type)<transacts>:[]box(t) = for (V:=P.Builds()) { V }
 plain(t:type) := class(root(t)) {}
 Main():void =
     for (V : Get(plain(string){})) { Print("p {V.E.Length} {V.B}") }

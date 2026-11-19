@@ -1,6 +1,6 @@
 # Covariant multi-value calls preserve static results and consumer boundaries (#283).
-animal := class { N:int=0; Label():string="animal" }
-dog := class(animal) { Bark:int=7; Label<override>():string="dog" }
+animal := class { N:int=0; Label()<transacts>:string="animal" }
+dog := class(animal) { Bark:int=7; Label<override>()<transacts>:string="dog" }
 supply := interface:
     Get()<transacts>:animal = animal{N:=1} | animal{N:=2}
 parent := class(supply):

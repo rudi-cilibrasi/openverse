@@ -1,4 +1,4 @@
-# expect: 12:7: this invocation calls a function (a value of type type{_(:int)<no_rollback>:int}) that has the 'no_rollback' effect, which a failure context does not allow
+# expect: 12:7: this invocation calls a function (a value of type type{_(:int):int}) that has the 'no_rollback' effect, which a body whose effects exclude it does not allow
 # (#515, --default-no-rollback) a function type without a heap specifier
 # has no_rollback too, so a value of it cannot be called in a <transacts>
 # <decides> function: UEFN 43.12 refuses both calls of the field with 3512

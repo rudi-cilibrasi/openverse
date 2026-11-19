@@ -67,7 +67,7 @@ def elabFieldDefaults (env : TyEnv) (sigs : Signatures) (tops : List STop) (cdef
         tvars := (env.sparams.lookup n).getD [] |>.map fun (v, c) => (v, Ty.param v c)
         boundFacts := (env.sbounds.lookup n).getD [] }
       let allowed := env.constructionFx[n]?.getD heapFx
-      let ctx : Ctx := { sigs := allSigs, sigProg := sigs.prog, types := senv, canFail := true,
+      let ctx : Ctx := { sigs := allSigs, sigProg := sigs.prog, types := senv, canFail := true, bodyFailure := false,
                           fnFx := allowed, inDefaultCheck := true }
       for (f, ft, d) in (env.structs.lookup n).getD [] do
         if let some d := d then
@@ -202,7 +202,7 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
     (selfFieldOf : Option (String → Option Nat) := none)
     (evidenceSignature : Option Sig := none) (extendedDefaults : Bool := false)
     (callOnly : Bool := false) (fnReturns : Array (Option MetadataReceivers.CallType) := #[])
-    (rollbackOnly : Bool := false) (plainDecides : Bool := false) :
+    (rollbackOnly : Bool := false) (bodyFailure : Bool := false) :
     Except String ElaboratedFn := do
   -- (#209) the values of `selfTps` come from the receiver's hidden
   -- fields, in slots after the hidden parameters: a method's own class's
@@ -240,7 +240,7 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
     fnFx := allowed
     canFail := decides
     rollbackOnly
-    plainDecides
+    bodyFailure
     retTy := ret
     dictBase := frame.witnessBase
     suspends := suspends
@@ -357,7 +357,7 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
       elaborated := elaborated.push (← elabFn allSigs sigs.prog requests env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
         (evidenceSignature := some sig) (extendedDefaults := extendedDefaults) (callOnly := firstHelpers.contains n) (fnReturns := fnReturns)
         (rollbackOnly := (SignalAdmission.excludesNoRollback n specs).isSome)
-        (plainDecides := SignalAdmission.plainDecides specs))
+        (bodyFailure := sig.decides))
     | .const p n _ sty body =>
       -- a constant is computed at each use, so it would be a new object each
       -- time (until Verse Core has global state)
@@ -381,7 +381,7 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
           let what := match via with
             | some f => s!"{f}, which has the effect <writes>"
             | none => "sets a var field"
-          throw s!"{kp.show}: the value of the constant {n} {what}: a module's constant has no side effect (Book of Verse tests, DefaultValueAssignment.versetest); make it a function, or call one that does not write"
+          throw s!"{kp.show}: the value of the constant {n} {what}: a module's constant has no side effect (Book of Verse tests, DefaultValueAssignment.versetest; UEFN 43.12 refuses a call of a function without specifiers there too, error 3582, followup/constant-default-call); make it a function, or call one that does not write"
       -- slots start like a function's (a class-typed one as a placeholder)
       let inits ← match st.slotTys.toList.mapM (slotDefault env 0 [] []) with
         | .ok ds => pure ds
@@ -406,7 +406,7 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
       elaborated := elaborated.push (← elabFn allSigs sigs.prog requests (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body
         g.suspends g.selfTps ((requests.casts.find? (·.name == n)).map fun l => fun v =>
           (l.opened.lookup v).bind (env.witnessField? l.target ·)) (some g) extendedDefaults (firstHelpers.contains n) fnReturns
-        (SignalAdmission.excludesNoRollback n specs).isSome (SignalAdmission.plainDecides specs))
+        (SignalAdmission.excludesNoRollback n specs).isSome g.decides)
     | _ => pure ()
   return elaborated
 

@@ -4,7 +4,7 @@ base(t:type) := class:
     E:[]t = block{V:[]t = Concatenate(); V}
     B:int
 child(u:type) := class(base(tuple(char, u))) {}
-Read(P:child(string)):int =
+Read(P:child(string))<transacts>:int =
     E:[]tuple(char, string) = P.E
     P.B + E.Length
 Main():void =

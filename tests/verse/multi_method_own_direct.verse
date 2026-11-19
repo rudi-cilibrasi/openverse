@@ -10,9 +10,9 @@ solo(t:type) := class:
         set Count+=1
         Print("visit {N}")
         (Value,X,N)|Self.Repeat[(X,N-1)]
-All(B:solo(a),X:b,Y:b where a:type,b:type):[]tuple(a,b) =
+All(B:solo(a),X:b,Y:b where a:type,b:type)<transacts>:[]tuple(a,b) =
     for(V:=B.Both(X,?Y:=Y)): V
-First(B:solo(a),X:b,W:w where a:type,b:type,w:type):?tuple(a,b,int) =
+First(B:solo(a),X:b,W:w where a:type,b:type,w:type)<transacts>:?tuple(a,b,int) =
     option{V:=B.Repeat[X,2]; E:[]w=Concatenate(); V(2)=0; V}
 Main():void =
     I:=solo(int){Value:=7}

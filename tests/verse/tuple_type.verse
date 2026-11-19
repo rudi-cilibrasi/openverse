@@ -6,9 +6,9 @@
 # the extension methods of the Book's ExtensionFields test are.
 F(:tuple()):int = 1
 F(X:int):int = 2 + X
-G(X:tuple()):tuple() = X
+G(X:tuple())<transacts>:tuple() = X
 EmptyTupleFunc(Arg1:tuple()):void = {}
-UnitOutput(:int):tuple() = {}
+UnitOutput(:int)<transacts>:tuple() = {}
 UnitInput(:tuple()):int = 42
 (X:tuple()).Extension():int = 42
 (A:int).Extension():int = 10 * A

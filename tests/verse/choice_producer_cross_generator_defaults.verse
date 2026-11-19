@@ -1,4 +1,4 @@
-Default():int=
+Default()<transacts>:int=
     Print("default")
     7
 a:=class:
@@ -14,7 +14,7 @@ b:=class:
 left:=class<computes>{Data:int=1}
 right:=class<computes>{Data:string="s"}
 Dup(V:t where t:type)<computes>:t=V|V
-Arg(V:t where t:type):t=
+Arg(V:t where t:type)<transacts>:t=
     Print("argument")
     V
 Main():void=

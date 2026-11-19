@@ -5,7 +5,7 @@ import OpenVerse.Core.Encode
 open OpenVerse OpenVerse.Front
 
 private def callable := "type{_()<computes>:int}"
-private def sourcePrefix := "expr(t:type) := class<abstract>:\n    Eval():t\nlit := class(expr(int)):\n    V:int\n    Eval<override>():int = V\nvpair(a:type, b:type) := class(expr(tuple(a, b))):\n    var L:expr(a)\n    R:expr(b)\n    Eval<override>():tuple(a, b) = (L.Eval(), R.Eval())\n"
+private def sourcePrefix := "expr(t:type) := class<abstract>:\n    Eval()<transacts>:t\nlit := class(expr(int)):\n    V:int\n    Eval<override>()<transacts>:int = V\nvpair(a:type, b:type) := class(expr(tuple(a, b))):\n    var L:expr(a)\n    R:expr(b)\n    Eval<override>()<transacts>:tuple(a, b) = (L.Eval(), R.Eval())\n"
 private def cases : List (String × String × String × String × Bool × Nat) := [
   ("real", "F()", "", "", true, 1),
   ("metadata", "Dummy()", "", "", false, 2),
@@ -70,7 +70,7 @@ private def compile (source : String) (dummy inferred : Bool) : Except String Co
 /-- The normal collector path has bottom element type. Executable evidence
     in a callable tuple still crosses the source return cell precisely. -/
 private def returnCellCases (directory : String) : IO Unit := do
-  let source : String := "One()<computes>:int=1\nTwo()<computes>:int=2\nexpr(t:type) := class<abstract>:\n    Eval():t\nlit := class(expr(int)):\n    V:int\n    Eval<override>():int = V\nvpair(a:type, b:type) := class(expr(tuple(a, b))):\n    var L:expr(a)\n    R:expr(b)\n    Eval<override>():tuple(a, b) = (L.Eval(), R.Eval())\nRows(E:expr(t),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where t:type):tuple(type{_()<computes>:int},t)=\n    for(N:=1..2,V:=if(Print(\"prefix\"),P:=vpair[E],Saved:=P.L,L:=lit[Saved],set P.L=lit{V:=99},R:=lit[P.R])then((L.V,R.V)|(L.V+1,R.V))else E.Eval()){return(ACTION,V)}\n    (F,E.Eval())\nMain():void=\n    P:=vpair(int,int){L:=lit{V:=3},R:=lit{V:=7}}\n    Value:=Rows(P,One,Two)\n    Print(\"{Value(0)()} {Value(1)(0)} {Value(1)(1)}\")\n    Print(\"final {P.L.Eval()}\")\n"
+  let source : String := "One()<computes>:int=1\nTwo()<computes>:int=2\nexpr(t:type) := class<abstract>:\n    Eval()<transacts>:t\nlit := class(expr(int)):\n    V:int\n    Eval<override>()<transacts>:int = V\nvpair(a:type, b:type) := class(expr(tuple(a, b))):\n    var L:expr(a)\n    R:expr(b)\n    Eval<override>()<transacts>:tuple(a, b) = (L.Eval(), R.Eval())\nRows(E:expr(t),F:type{_()<computes>:int},Dummy:type{_()<computes>:int} where t:type):tuple(type{_()<computes>:int},t)=\n    for(N:=1..2,V:=if(Print(\"prefix\"),P:=vpair[E],Saved:=P.L,L:=lit[Saved],set P.L=lit{V:=99},R:=lit[P.R])then((L.V,R.V)|(L.V+1,R.V))else E.Eval()){return(ACTION,V)}\n    (F,E.Eval())\nMain():void=\n    P:=vpair(int,int){L:=lit{V:=3},R:=lit{V:=7}}\n    Value:=Rows(P,One,Two)\n    Print(\"{Value(0)()} {Value(1)(0)} {Value(1)(1)}\")\n    Print(\"final {P.L.Eval()}\")\n"
   for waiting in [false,true] do
     let source := if waiting then source.replace " where t:type):tuple" " where t:type)<suspends>:tuple"
       |>.replace "){return(" "){Sleep(0.001);return("

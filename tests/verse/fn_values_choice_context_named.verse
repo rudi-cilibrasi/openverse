@@ -1,10 +1,10 @@
 cell:=class{var N:int=0}
 Id(X:t where t:type)<computes>:t=X
-Mark(C:cell,X:t where t:type):t=
+Mark(C:cell,X:t where t:type)<transacts>:t=
     set C.N+=1
     Print("arg {C.N}")
     X
-Default(C:cell):int=
+Default(C:cell)<transacts>:int=
     set C.N+=1
     Print("default {C.N}")
     C.N

@@ -167,7 +167,7 @@ partial def elabExprValuesWith
   | .notE p e =>
     -- (with a choice, its first success, #208)
     let e := (Choice.takeFirst? e (choiceOrder ctx)).getD e
-    let r ← operand { ctx with canFail := true, inTaking := true } e none
+    let r ← operand { ctx with canFail := true, bodyFailure := false, inTaking := true } e none
     -- (a failure context of an expression that cannot fail, as an `if`'s
     -- condition and `logic{…}`: `not` of one always fails)
     if !(r.e.mayFail ctx.sigProg) && (← ctx.failabilityKnown) then
@@ -257,7 +257,7 @@ partial def elabExprValuesWith
     return (← elabBlock ctx [a, b] exp).1
   | .orE p a b =>
     let a := (Choice.takeFirst? a (choiceOrder ctx)).getD a
-    let ra ← operand { ctx with canFail := true, inTaking := true } a exp
+    let ra ← operand { ctx with canFail := true, bodyFailure := false, inTaking := true } a exp
     -- (the left operand of `or` must be able to fail, as `not`'s: the Book of
     -- Verse's tests, `Operators/LogicalOr.versetest:143`, error 3513; its
     -- `(set Map[I] = I) or Err()` has a failable left, a set through a map's
@@ -359,7 +359,7 @@ partial def elabExprValuesWith
     let inner : Option Ty := match exp with
       | some (.opt t) => some t
       | _ => none
-    let r ← operand { ctx with canFail := true, inTaking := true } e inner
+    let r ← operand { ctx with canFail := true, bodyFailure := false, inTaking := true } e inner
     -- an expression that cannot fail needs no failure context (and no
     -- saved state to roll back to: the interpreter's heap is not copied)
     -- (one that never gives a value, without an expected type: followed by
@@ -371,7 +371,7 @@ partial def elabExprValuesWith
     return ⟨Expr.optionE t r.e, .opt r.ty⟩
   | .logicLit p e =>
     let e := (Choice.takeFirst? e (choiceOrder ctx)).getD e
-    let r ← operand { ctx with canFail := true, inTaking := true } e none
+    let r ← operand { ctx with canFail := true, bodyFailure := false, inTaking := true } e none
     if !(r.e.mayFail ctx.sigProg) && (← ctx.failabilityKnown) then eerr p "logic{…} needs an expression that can fail"
     return ⟨Expr.logicE (← inferable r), .logic⟩
   | _ => eerr se.pos "internal: expression routed to the wrong elaboration stage"

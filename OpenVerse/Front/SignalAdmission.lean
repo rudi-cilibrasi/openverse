@@ -191,39 +191,40 @@ def markSource : STop → STop
     .classDef p n nsp ts specs parents iface fields (methods.map markSource)
   | t => t
 
-/-- (`--default-no-rollback`) The private marker of a source function that
-    has Epic's default effect, `no_rollback`: one without a heap specifier
-    (`heapSpecifiers`) and without `<decides>` (`markDefault`). -/
+/-- (#515) The private marker of a source function that has Epic's default
+    effect, `no_rollback`: one without a heap specifier (`heapSpecifiers`;
+    `markDefault`). -/
 def noRollbackMarker : String := OpenVerse.Front.noRollbackMarker
 
-/-- (`--default-no-rollback`) Mark the source functions, methods included,
-    that have the `no_rollback` effect (`noRollbackMarker`): those with no
-    heap specifier, which Epic's Verse compiler gives `no_rollback` (UEFN
-    43.12 refuses their calls from a `<transacts>` function and from a
-    class's `block:` with error 3512: Book of Verse tests,
-    Effects.versetest:490 and 551), and no `<decides>`, which a failure
-    context calls (the Book's tests call a `<decides>` function without
-    one in another's body: Effects.versetest:606). A class's `block:` is no
-    function of its own. -/
+/-- (#515) Mark the source functions, methods and constructors included,
+    that have the `no_rollback` effect (`noRollbackMarker`): those without
+    a heap specifier, `<decides>` or not. UEFN 43.12 (build
+    ++Fortnite+Release-43.12-CL-60598086) refuses with error 3512 their
+    calls from a `<transacts>` function and from a class's `block:` (Book of
+    Verse tests, Effects.versetest:490 and 551), and from a failure context:
+    an `if`'s condition, also of a plain `<decides>` function's call, and a
+    `for`'s range and filter (tests/conformance/versevm/followup); it admits
+    them at the top of a plain `<decides>` function's body (`Ctx.bodyFailure`).
+    A class's `block:` is no function of its own. -/
 partial def markFunction : STop → STop
   | .fn p n ps ts specs ret body =>
-    if n == "$block" || specs.any heapSpecifiers.contains || specs.contains "decides" then
-      .fn p n ps ts specs ret body
+    if n == "$block" || specs.any heapSpecifiers.contains then .fn p n ps ts specs ret body
     else .fn p n ps ts (noRollbackMarker :: specs) ret body
   | .classDef p n nsp ts specs parents iface fields methods =>
     .classDef p n nsp ts specs parents iface fields (methods.map markFunction)
   | t => t
 
-/-- (`--default-no-rollback`) A function type without a heap specifier and
-    without `<decides>` has `no_rollback` too: a function that has it is no
-    value of a function type that has not (UEFN 43.12 refuses a function
-    without specifiers where a `<transacts><decides>` one is expected,
-    error 3509: Book of Verse tests, FunctionTypes.versetest:191), and a
-    value of it cannot be called where its function could not (43.12:
-    3512, ParametricTypes.versetest:222). -/
+/-- (#515) A function type without a heap specifier has `no_rollback` too:
+    a function that has it is no value of a function type that has not
+    (UEFN 43.12 refuses a function without specifiers where a
+    `<transacts><decides>` one is expected, error 3509: Book of Verse
+    tests, FunctionTypes.versetest:191; it admits a `<transacts>` one,
+    followup/transacts-into-decides-type), and a value of it cannot be
+    called where its function could not (43.12: 3512,
+    ParametricTypes.versetest:222). -/
 def markTy : STy → STy
   | .fn ps es r =>
-    if es.any heapSpecifiers.contains || es.contains "decides" || es.contains noRollbackMarker then .fn ps es r
+    if es.any heapSpecifiers.contains || es.contains noRollbackMarker then .fn ps es r
     else .fn ps (noRollbackMarker :: es) r
   | t => t
 
@@ -237,7 +238,7 @@ partial def markHeads : STop → STop
       (parents.map (·.mapTy markTy)) isI fs (ms.map markHeads)
   | t => t
 
-/-- (`--default-no-rollback`) A definition with Epic's default effect marked
+/-- (#515) A definition with Epic's default effect marked
     on the function types it writes only: the concurrency prelude's, whose
     functions keep their effects but whose callbacks are of Epic's types,
     `subscribable_event`'s `type{_(:t):void}` (so a function without
@@ -248,7 +249,7 @@ def markTypes (t : STop) : STop :=
     | .refineDef p v base cs => .refineDef p v (base.mapTy markTy) cs
     | e => e
 
-/-- (`--default-no-rollback`) A definition with Epic's default effect marked
+/-- (#515) A definition with Epic's default effect marked
     on its functions (`markFunction`) and the function types it writes
     (`markTy`). -/
 def markDefault (t : STop) : STop :=
@@ -256,13 +257,6 @@ def markDefault (t : STop) : STop :=
     | .typeAlias p tps body => .typeAlias p tps (body.mapTy markTy)
     | .refineDef p v base cs => .refineDef p v (base.mapTy markTy) cs
     | e => e
-
-/-- (`--default-no-rollback`) A `<decides>` function without a heap
-    specifier: whether it has `no_rollback` (so that its body may call a
-    function that has it, and a failure context may not call it) or not
-    (the reverse) is not settled by the evidence, so neither is judged. -/
-def plainDecides (specs : List String) : Bool :=
-  specs.contains "decides" && !specs.any heapSpecifiers.contains
 
 /-- What a body whose effects exclude `no_rollback` is, for messages: a
     marked function (`rollbackOnlyMarker`), with its heap specifiers, or a

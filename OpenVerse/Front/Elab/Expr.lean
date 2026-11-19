@@ -344,7 +344,10 @@ partial def elabConc (ctx : Ctx) (p : Pos) (isSync : Bool) (arms : List SExpr) (
 partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   -- (#515: the task runs the call later, outside a failure context the
   -- `spawn` is in; its arguments, evaluated now, are recorded here)
-  let r ← elabSpawnIn { ctx with inRollback := false } p body
+  -- (nor does the no_rollback of the spawned function count against the
+  -- context: Epic's Verse VM spawns in <transacts> code, the Book's
+  -- VerseVM tests; its arguments are not judged either)
+  let r ← elabSpawnIn { ctx with inRollback := false, rollbackOnly := false, bodyFailure := true } p body
   noteFailCalls ctx p "spawn's arguments" r.e
   -- (a spawn has <transacts>'s heap effects, besides its call's: "spawn
   -- requires the transacts effect in addition to the effects of the
@@ -1497,16 +1500,16 @@ partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) 
     match cs? with
     | some cs =>
       let (rc, cT, refines) ← if ctx.typeOnly && choiceHasCast ctx i then
-          elabChoiceTypeCondition { ctx with canFail := true, inTaking := true } cs
+          elabChoiceTypeCondition { ctx with canFail := true, bodyFailure := false, inTaking := true } cs
         else do
-          let (rc, cT) ← if Choice.hasChoice cs (choiceOrder ctx) then elabOneClauses { ctx with canFail := true } cs
-            else elabSeq { ctx with canFail := true, inTaking := true } cs none
+          let (rc, cT) ← if Choice.hasChoice cs (choiceOrder ctx) then elabOneClauses { ctx with canFail := true, bodyFailure := false } cs
+            else elabSeq { ctx with canFail := true, bodyFailure := false, inTaking := true } cs none
           pure (rc, cT, false)
       refined := refined || refines
       if !(rc.e.mayFail ctx.sigProg) && (← ctx.failabilityKnown) then
         eerr p "the condition of this if cannot fail (Verse requires a failable condition)"
       conds := conds.push (some rc.e)
-      ctxs := ctxs.push { cT with canFail := ctx.canFail, inTaking := ctx.inTaking }
+      ctxs := ctxs.push { cT with canFail := ctx.canFail, bodyFailure := ctx.bodyFailure, inTaking := ctx.inTaking }
     | none =>
       conds := conds.push none
       ctxs := ctxs.push ctx
@@ -1959,7 +1962,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
             -- too, so that nesting takes no more elaborations)
             let mut tys : List Ty := []
             for (a, i) in b.alts.zipIdx do
-              let r ← elabE { ctx with canFail := true, inTaking := true }
+              let r ← elabE { ctx with canFail := true, bodyFailure := false, inTaking := true }
                 (.app p (.ident p "$firstP") [.block p (liftAlt a i ++ [.ident p b.name])] false) none
               tys := tys ++ [r.ty]
             let same := tys.all (some · == tys.head?)
@@ -2169,7 +2172,7 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
   let lctx : Ctx := { ctx with locals := pls.reverse ++ ctx.locals }
   let newOf (c : Ctx) : List Local := c.locals.take (c.locals.length - lctx.locals.length)
   -- (the clauses, then each branch's conditions)
-  let (rc, cc) ← elabSeq { lctx with canFail := true, inTaking := true } cls none
+  let (rc, cc) ← elabSeq { lctx with canFail := true, bodyFailure := false, inTaking := true } cls none
   let k ← fresh .int
   let code ← elabLoopTailWith elabSeq cc tail k 0
   let armCode := code.arms
@@ -2216,7 +2219,7 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
   for ((ca, as), start) in armCode.toList.zip starts do
     for (a, j) in as.zipIdx do
       let i := start + j
-      let actx : Ctx := { ca with canFail := true, inTaking := true }
+      let actx : Ctx := { ca with canFail := true, bodyFailure := false, inTaking := true }
       let next? : Option Nat := if j + 1 < as.length then some (i + 1) else none
       let cont : Expr := match next? with
         | some n => push (item (.lit (.int (n : Nat))) cur)
@@ -2231,7 +2234,7 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
       -- (its prefix, if any: before the arguments, in whose context they are)
       let pre? : Option Expr := if kE.isSome then fr?.bind (·.pre) else none
       let actx : Ctx := match pre?, fr? with
-        | some _, some f => { f.ctx with canFail := true, inTaking := true }
+        | some _, some f => { f.ctx with canFail := true, bodyFailure := false, inTaking := true }
         | _, _ => actx
       if kE.isSome then fi := fi + 1
       match a with
@@ -2935,7 +2938,7 @@ partial def elabCase (ctx : Ctx) (p : Pos) (scrut : SExpr) (arms : List (Option 
       let some refusal := Refine.castRefusal? err | throw err
       if !casts.contains refusal.pos then throw err
       set st
-      let partCtx := if pattern then { ctx with canFail := true } else ctx
+      let partCtx := if pattern then { ctx with canFail := true, bodyFailure := false } else ctx
       elabE partCtx (.block e.pos [e]) expected
   let rs := widenR ctx.types (← elabE ctx scrut none)
   match rs.ty with

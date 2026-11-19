@@ -1,8 +1,8 @@
 # Preserve producer/consumer order, cleanup and storage across shared operations (#335).
-Default(N:int):int=
+Default(N:int)<transacts>:int=
     Print("default {N}")
     N+3
-Arg(N:int):int=
+Arg(N:int)<transacts>:int=
     Print("arg {N}")
     N
 Many(N:int):int=
@@ -18,13 +18,13 @@ Gate(N:int)<decides>:int=
     N
 a:=class:
     N:int=1
-    M(V:int,?D:int=Default(N)):int=
+    M(V:int,?D:int=Default(N))<transacts>:int=
         Print("a start {V} {D}")
         defer{Print("a cleanup")}
         (V+N+D)|(V+N+D+10)
 b:=class:
     N:int=2
-    M(V:int,?D:int=Default(N)):int=
+    M(V:int,?D:int=Default(N))<transacts>:int=
         Print("b start {V} {D}")
         defer{Print("b cleanup")}
         (V+N+D)|(V+N+D+10)

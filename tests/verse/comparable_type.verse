@@ -15,8 +15,8 @@ s := struct {}
 pc(t:type) := struct{X:t}
 holder := struct:
     V:comparable
-AsComparable(X:comparable):comparable = X
-Same(A:comparable, B:comparable)<decides>:void = A = B
+AsComparable(X:comparable)<transacts>:comparable = X
+Same(A:comparable, B:comparable)<transacts><decides>:void = A = B
 Show(B:logic):string = if (B?) then "y" else "n"
 Main():void =
     # the Book's own examples

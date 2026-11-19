@@ -7,7 +7,7 @@ a := class:
 b := class:
     N():int = 20
 Dup(V:t where t:type):t = V | V
-Need(V:a):void = Print("need")
+Need(V:a)<transacts>:void = Print("need")
 Main()<transacts>:void =
     if (A := (Dup(a{}) | Dup(b{})), X := A.N(), X > 10):
         Print("{X}")

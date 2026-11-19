@@ -24,7 +24,7 @@ obj := class:
     SetY():int =
         set P.Y = 7
         1
-    SetA():int =
+    SetA()<transacts>:int =
         if (set Arr[1] = 7) {}
         1
 

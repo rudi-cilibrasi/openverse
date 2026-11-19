@@ -12,12 +12,12 @@ F(X:int)<transacts>:int =
         return 0
     X | X + 1
 TwoU():int = 1 | 2
-GF(I:t where t:type):int =
+GF(I:t where t:type)<transacts>:int =
     R := for (X := (TwoU() | TwoU()), Y := (TwoU() | TwoU())):
         E:[]t = array{}
         X + Y + E.Length
     R.Length
-GI(I:t where t:type):int =
+GI(I:t where t:type)<transacts>:int =
     if (X := (TwoU() | TwoU()), Y := (TwoU() | TwoU()), E:[]t = array{}, X + Y + E.Length > 3) then X + Y else 0
 Main()<transacts>:void =
     for (A := F(1), B := F(2), C := F(3), A + B + C > 7):

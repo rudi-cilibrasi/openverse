@@ -423,7 +423,7 @@ structure TyEnv where
   signalNoRollback : Bool := false
   /-- (#515, strict, `--default-no-rollback`) Generated helpers keep the
       `no_rollback` context of the code they come from
-      (`Choice.SourceContext.rollbackOnly`, `plainDecides`). -/
+      (`Choice.SourceContext.rollbackOnly`, `bodyFailure`). -/
   defaultNoRollback : Bool := false
   /-- The variances of the classes in Verse Core, by tag and Verse Core type
       argument position (docs/research/variance.md): what the certificate

@@ -1,5 +1,5 @@
 # Covariant multi-value calls preserve static results and consumer boundaries (#283).
-animal(t:type) := class { V:t; Label():string="animal" }
+animal(t:type) := class { V:t; Label()<transacts>:string="animal" }
 dog(t:type) := class(animal(t)) { Bark:int=7 }
 shelter(t:type) := interface:
     Get()<transacts>:animal(t)

@@ -7,10 +7,10 @@
 # called outside failure contexts, and a <decides> function without a heap
 # specifier, whose no_rollback the evidence leaves open, neither of whose
 # calls is judged
-Log(N:int):void = Print("log {N}")
+Log(N:int)<transacts>:void = Print("log {N}")
 Twice(N:int)<transacts>:int = N * 2
 Small(N:int)<computes>:logic = if (N < 3) then true else false
-Positive(N:int)<decides>:void =
+Positive(N:int)<transacts><decides>:void =
     Log(N)
     N > 0
 Apply(F:int->int, N:int):int = F(N)

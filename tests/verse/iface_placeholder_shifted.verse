@@ -35,7 +35,7 @@ m1 := class(m(int)):
     Get<override>():int = F + G
 m2 := class(m(string)):
     Get<override>():string = "s{F}"
-Fs(Ms:[]m(t) where t:type):[]int = for (M : Ms) { M.F }
+Fs(Ms:[]m(t) where t:type)<transacts>:[]int = for (M : Ms) { M.F }
 Bump(Ms:[]m(t) where t:type):void =
     for (M : Ms):
         set M.F = M.F + 10
@@ -44,13 +44,13 @@ TopF(T:top(t) where t:type):int = T.F
 # placeholder of `slot(slot(u))` holds one of `slot(u)`
 slot(t:type) := interface:
     var Item:t
-    Show():string
+    Show()<transacts>:string
 islot := class(slot(int)):
-    Show<override>():string = "i{Item}"
+    Show<override>()<transacts>:string = "i{Item}"
 sslot := class(slot(slot(int))):
-    Show<override>():string = "s({Item.Show()})"
-Shows(Ss:[]slot(t) where t:type):[]string = for (S : Ss) { S.Show() }
-Inner(Ss:[]slot(slot(u)) where u:type):[]string = for (S : Ss) { S.Item.Show() }
+    Show<override>()<transacts>:string = "s({Item.Show()})"
+Shows(Ss:[]slot(t) where t:type)<transacts>:[]string = for (S : Ss) { S.Show() }
+Inner(Ss:[]slot(slot(u)) where u:type)<transacts>:[]string = for (S : Ss) { S.Item.Show() }
 Main():void =
     Print(NameOf(ni{Name := "n"}))
     C := c{A := 1, B := 2}

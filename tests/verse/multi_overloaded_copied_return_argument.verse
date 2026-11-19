@@ -1,7 +1,7 @@
 # Regression #653 review: unchanged prepared return clauses retain spatial argument order.
 Dup(V:t where t:type):t=V|V
-Ov(N:int):int=N+1|N*2
-Ov(N:int,M:int):int=N-M|M*3
+Ov(N:int)<transacts>:int=N+1|N*2
+Ov(N:int,M:int)<transacts>:int=N-M|M*3
 Take(N:int):int=
     Y:=N|N+1
     Print("p{Y}")

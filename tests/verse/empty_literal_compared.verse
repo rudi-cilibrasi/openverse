@@ -3,8 +3,8 @@
 # (), a void, false, a logic or an option) goes through a temporary of its
 # type. All of them are the one empty value (Book of Verse ch. 2), so they are
 # equal, whatever their types.
-Same(V:void, O:?int, L:logic)<decides>:void = { V = ""; () = ""; O = ""; L = ""; false = "" }
-Differ(V:void, O:?int, L:logic)<decides>:void = { V <> ""; () <> ""; O <> ""; L <> ""; false <> "" }
+Same(V:void, O:?int, L:logic)<transacts><decides>:void = { V = ""; () = ""; O = ""; L = ""; false = "" }
+Differ(V:void, O:?int, L:logic)<transacts><decides>:void = { V <> ""; () <> ""; O <> ""; L <> ""; false <> "" }
 Main():void =
     if (Same[(), false, false]) then Print("same") else Print("not same")
     if (Differ[(), false, false]) then Print("differ") else Print("not differ")

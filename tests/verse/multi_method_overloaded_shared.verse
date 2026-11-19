@@ -9,11 +9,11 @@ a := class:
 b := class:
     Vals()<transacts>:int = 30 | 40
 c := class:
-    Vals():int = 500
+    Vals()<transacts>:int = 500
 d := class:
     Vals()<transacts>:int = 7 | 8
     Vals(S : string)<transacts>:int = S.Length | 9
-Twice(O : a):int = O.Vals(7) * 2
+Twice(O : a)<transacts>:int = O.Vals(7) * 2
 shape := interface:
     Parts()<transacts>:int = 0 | 1
     Parts(N : int)<transacts>:int

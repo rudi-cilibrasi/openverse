@@ -5,7 +5,7 @@ listener := class:
     Add(N:int):void=
         set Sum+=N
         Print("heard {N} {Sum}")
-Use(P:pair(a,b),E:subscribable_event(int),L:listener where a:type,b:type)<decides>:void=
+Use(P:pair(a,b),E:subscribable_event(int),L:listener where a:type,b:type)<transacts><decides>:void=
     for(V:=if(D:=dup[P])then(D.C|D.C+1)else 0):
         E.Signal(V)
         C:=E.Subscribe(L.Add)

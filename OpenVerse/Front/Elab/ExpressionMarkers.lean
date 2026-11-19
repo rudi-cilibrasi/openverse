@@ -594,7 +594,7 @@ partial def elabExprMarkersWith
       let ls ← f.lives.mapM fun l => do return { l with slot := ← fresh l.ty }
       let hty := f.inTy.getD vty
       let h ← fresh hty
-      let c : Ctx := { ctx with canFail := true, inTaking := true, locals :=
+      let c : Ctx := { ctx with canFail := true, bodyFailure := false, inTaking := true, locals :=
         { name := "$Krest", slot := kk, ty := rk.ty, mutable := false } ::
         { name := f.hole, slot := h, ty := hty, mutable := false } :: ls.reverse ++ ctx.locals }
       let r ← elabE c f.code (some pty)
@@ -627,8 +627,8 @@ partial def elabExprMarkersWith
     -- (#246) `first{…}` of clauses that are lifted already (a consumer's,
     -- taken into a lazily taken call's function of its own): not again,
     -- which would bind their lifted names a second time
-    let (code, c1) ← elabFirstGo { ctx with canFail := true } items.dropLast
-    let rv ← elabE { c1 with canFail := ctx.canFail } (items.getLastD (.tuple p [])) exp
+    let (code, c1) ← elabFirstGo { ctx with canFail := true, bodyFailure := false } items.dropLast
+    let rv ← elabE { c1 with canFail := ctx.canFail, bodyFailure := ctx.bodyFailure } (items.getLastD (.tuple p [])) exp
     return ⟨.seq code rv.e, rv.ty⟩
   | .app p (.ident _ "$first") [.block bp items] false =>
     if !ctx.refinementTransportActive && hasRefinementClauses ctx items then
@@ -668,14 +668,14 @@ partial def elabExprMarkersWith
           let casts := Refine.castsIn ctx.types.classes.contains clause
           if !casts.isEmpty then
             let filterPrefix? ← tryCatch (do
-              let (_, before) ← elabOneClauses { ctx with canFail := true, typeOnly := true } (clauses.take k)
+              let (_, before) ← elabOneClauses { ctx with canFail := true, bodyFailure := false, typeOnly := true } (clauses.take k)
               pure (some (before, ← get))) (fun _ => pure none)
             set saved
             if let some (before, prefixState) := filterPrefix? then
               for bound in [lo, hi] do
                 set prefixState
                 let refusal? ← tryCatch (do
-                  discard <| elabE { before with canFail := true, inTaking := true, typeOnly := true } bound none
+                  discard <| elabE { before with canFail := true, bodyFailure := false, inTaking := true, typeOnly := true } bound none
                   pure none) (fun err => pure (Refine.castRefusal? err))
                 set saved
                 if let some refusal := refusal? then

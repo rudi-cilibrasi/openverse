@@ -1,12 +1,12 @@
 cell:=class{var Trace:string=""}
 Note(H:cell,S:string,N:int)<transacts>:int={set H.Trace+=S;N}
 Empty(H:cell,?Count:int=Note(H,"D",0),?Default:?t=false where t:type)<transacts>:?t=Default
-Choose(M:[?int]t,Other:t where t:type):t=Other
+Choose(M:[?int]t,Other:t where t:type)<transacts>:t=Other
 pair(a:type,b:type):=class{A:a;B:b}
 dup(t:type):=class(pair(t,t)){Index:int=0}
-Leaf(X:t,?Index:int=0 where t:type):t=X
+Leaf(X:t,?Index:int=0 where t:type)<transacts>:t=X
 Value(H:cell,S:string,X:t where t:type)<transacts>:t={set H.Trace+=S;X}
-Refined(P:pair(a,b),Q:pair(c,d),H:cell where a:type,b:type,c:type,d:type)<decides>:b=
+Refined(P:pair(a,b),Q:pair(c,d),H:cell where a:type,b:type,c:type,d:type)<transacts><decides>:b=
     Choose(map{Empty(H)=>Leaf(Value(H,"V",P.A),?Index:=dup[Value(H,"Q",Q)].Index)},Value(H,"O",dup[Value(H,"P",P)].B))
 Main()<transacts>:void=
     H:=cell{}

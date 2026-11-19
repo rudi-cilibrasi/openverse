@@ -1,4 +1,4 @@
-# expect: 9:14: this call may signal an event (Note → event.Signal), whose Signal has the no_rollback effect, in the block: of class loud
+# expect: 9:14: this invocation calls a function (Note) that has the 'no_rollback' effect, which a body whose effects exclude it does not allow
 # (#515) a class's block: excludes no_rollback, so it cannot signal, even
 # through a function, and even where no construction is in a failure
 # context (UEFN 43.12 refuses a block calling a function without specifiers

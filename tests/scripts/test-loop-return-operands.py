@@ -130,8 +130,12 @@ with tempfile.TemporaryDirectory(prefix='openverse-loop-refusals-') as tmp:
             assert result.returncode == 4 and message in result.stderr and not bytecode.exists(), (name, profile, result)
     source = ROOT/'tests/fixtures/loop-return-operands/loop-signal-policy.verse'
     # (#515: refused by default, as with the old --signal-no-rollback, still
-    # accepted; the legacy transactional mode, --signal-rollback, runs it)
-    for profile in ([], ['--extended-defaults']):
+    # accepted; the legacy transactional mode, --signal-rollback, runs it.
+    # F has no heap specifier: under Epic's default effect its call in the
+    # for's clause is refused for that first, so the Signal analysis, the
+    # subject here, runs under the old rule, --default-rollback)
+    profiles = ([], ['--extended-defaults'])
+    for profile in [p + ['--default-rollback'] for p in profiles]:
         bytecode = Path(tmp)/'signal.vbc'
         assert run([OV, 'run', source, *profile, '--signal-rollback', '--emit', bytecode]) == 'value 2\nvalue 3\nafter\n'
         assert run([CV, bytecode]) == 'value 2\nvalue 3\nafter\n'

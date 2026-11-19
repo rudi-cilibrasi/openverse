@@ -24,7 +24,7 @@ ca:=class:
     var Child:ma
     Original:ma
     Other:ma
-    Args(E:event(void))<transacts><suspends>:tuple(int,int)=
+    Args(E:event(void))<suspends>:tuple(int,int)=
         defer:Print("leave args a")
         Print("wait a")
         set H.N+=1
@@ -38,7 +38,7 @@ cb:=class:
     var Child:mb
     Original:mb
     Other:mb
-    Args(E:event(void))<transacts><suspends>:tuple(int,int)=
+    Args(E:event(void))<suspends>:tuple(int,int)=
         defer:Print("leave args b")
         Print("wait b")
         set H.N+=1

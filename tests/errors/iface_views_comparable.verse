@@ -5,12 +5,12 @@
 container(t:type) := interface:
     Get():t
 sink(u:type) := interface:
-    Eq2(Y:w, Z:w where w:subtype(comparable)):logic
+    Eq2(Y:w, Z:w where w:subtype(comparable))<transacts>:logic
 both(t:type, u:type) := class(container(t), sink(u)):
     V:t
     Get<override>():t = V
-    Eq2<override>(Y:w, Z:w where w:subtype(comparable)):logic = if (Y = Z) then true else false
-G(S:sink(x), A:x where x:type):logic = S.Eq2(A, A)
+    Eq2<override>(Y:w, Z:w where w:subtype(comparable))<transacts>:logic = if (Y = Z) then true else false
+G(S:sink(x), A:x where x:type)<transacts>:logic = S.Eq2(A, A)
 Main():void =
     B := both(int, string){V := 3}
     if (G(B, "a")?) then Print("eq") else Print("ne")

@@ -1,5 +1,5 @@
 # rationals (#116): X / Y, int <: rational, Floor/Ceil, equality in lowest terms, exact ordering
-Half(X:int)<decides>:rational = X / 2
+Half(X:int)<transacts><decides>:rational = X / 2
 Show(R:rational):string = "{Floor(R)}..{Ceil(R)}"
 Main():void =
     if (R := 7 / 2):

@@ -382,11 +382,13 @@ structure Ctx where
       or of a class's `block:` (`SignalAdmission.excludesNoRollback`):
       nothing here may signal an event, failure context or not. -/
   rollbackOnly : Bool := false
-  /-- (#515, `--default-no-rollback`) In the body of a `<decides>` function
-      without a heap specifier, whose `no_rollback` the evidence leaves
-      open (docs/research/effect-conformance.md, "The default effect"):
-      its calls are not judged. -/
-  plainDecides : Bool := false
+  /-- (#515) The failure context here is only the enclosing `<decides>`
+      function's own body: its top level may call a function that has
+      `no_rollback` (UEFN 43.12 admits followup/decides-body-default-call).
+      A failure context inside it, a condition or a `for`'s clause, resets
+      it: there such a call is refused, as everywhere (decides-plain-if,
+      for-range-default-call, for-filter-default-call). -/
+  bodyFailure : Bool := false
   /-- (#515) The innermost loop is in a failure context (or inside one):
       the `defer:`s a `break` runs, out of the scopes inside the loop, run
       in that context, not in the one at the `break`. -/
@@ -1352,10 +1354,10 @@ def noteFailCalls (ctx : Ctx) (p : Pos) (what : String) (e : Expr) : EM Unit := 
     and in a body whose effects exclude it, as Epic's compiler does (UEFN
     43.12: error 3512). -/
 def checkNoRollbackCall (ctx : Ctx) (p : Pos) (s : Sig) (shown : String) : EM Unit := do
-  if s.noRollback && !ctx.typeOnly && !ctx.plainDecides && (ctx.canFail || ctx.inRollback || ctx.rollbackOnly) &&
+  if s.noRollback && !ctx.typeOnly && ((ctx.canFail || ctx.inRollback) && !ctx.bodyFailure || ctx.rollbackOnly) &&
       !(ctx.frameName.splitOn "$call").tail.any (fun _ => true) then
-    let context := if ctx.canFail || ctx.inRollback then "a failure context" else "a body whose effects exclude it"
-    throw s!"{p.show}: this invocation calls a function ({shown}) that has the 'no_rollback' effect, which {context} does not allow: a function without a heap specifier (<transacts>, <computes>, <reads>, …) or <decides> has it (Epic's Verse compiler, UEFN 43.12: error 3512; --default-no-rollback)"
+    let context := if (ctx.canFail || ctx.inRollback) && !ctx.bodyFailure then "a failure context" else "a body whose effects exclude it"
+    throw s!"{p.show}: this invocation calls a function ({shown}) that has the 'no_rollback' effect, which {context} does not allow: a function without a heap specifier (<transacts>, <computes>, <reads>, …) has it (Epic's Verse compiler, UEFN 43.12: error 3512; --default-rollback keeps the old rule)"
 
 /-- `ctx` with the `defer:` body `d` pending for every `return` and `break`
     that leaves its scope (#80), with the locals in scope here. -/
@@ -3312,7 +3314,9 @@ def functionBodyCtx (req : Requests) (ctx : Ctx) (p : Pos) (name : String)
     inArm := source.inArm || ctx.inArm
     inBranch := source.inBranch || ctx.inBranch
     rollbackOnly := source.rollbackOnly || ctx.rollbackOnly
-    plainDecides := source.plainDecides || ctx.plainDecides
+    -- (a helper's failure is its source code's: `bodyFailure` only where
+    -- that code is at the top of a `<decides>` function's body)
+    bodyFailure := if lifted.isSome || loopLift.isSome || resume.isSome then source.bodyFailure else ctx.bodyFailure
     defaults := source.defaults ++ ctx.defaults
     refineExits := (lifted.map (·.exits)).getD {}
     inBlock := source.inBlock || name.endsWith ".$block"

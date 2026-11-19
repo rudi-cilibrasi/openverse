@@ -5,7 +5,7 @@ Early(N:int):int =
     if (N < 0):
         return 0
     N | N + 1
-Composed(I:t where t:type):[]t =
+Composed(I:t where t:type)<transacts>:[]t =
     for (A0 := (Two(0) | Two(2)), A0 = 0,
         A1 := (Two(0) | Two(2)), A1 = 0,
         A2 := (Two(0) | Two(2)), A2 = 0,
@@ -20,7 +20,7 @@ Composed(I:t where t:type):[]t =
         A11 := (Two(0) | Two(2)), A11 = 0,
         A12 := (Two(0) | Two(2)), A12 = 0,
         A13 := (Two(0) | Two(2)), A13 = 0) { I }
-Exclusive(I:t where t:type):[]t =
+Exclusive(I:t where t:type)<transacts>:[]t =
     for (A0 := Early(0), A0 = 0,
         A1 := Early(0), A1 = 0,
         A2 := Early(0), A2 = 0,
@@ -53,7 +53,7 @@ Effects(X:t, Y:t, Required:int where t:subtype(comparable))<transacts>:void =
         Print("copied")
     else:
         Print("original")
-EmptyInts():[]int = array{}
+EmptyInts()<transacts>:[]int = array{}
 LateEmpty(X:t, Y:t where t:subtype(comparable))<transacts>:void =
     H := counter{}
     var Current:t = X
@@ -68,7 +68,7 @@ Fails(X:t where t:type)<transacts><decides>:[]t =
 box(t:type) := class:
     X:t
     Y:t
-    Values():[]t =
+    Values()<transacts>:[]t =
         var Current:t = X
         for (A := (Two(0) | Two(2)), A = 0, (set Current = Y; true?),
             B := (Two(10) | Two(20)), B = 10) { Current }

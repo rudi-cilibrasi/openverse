@@ -3,22 +3,22 @@
 # arguments the interfaces above both relate to the object's are known,
 # the others opened
 named := interface:
-    Name():string
+    Name()<transacts>:string
 container(t:type) := interface(named):
     Get():t
 sink(u:type) := interface(named):
     Put(X:u):string
 both(t:type, u:type) := class(container(t), sink(u)):
     V:t
-    Name<override>():string = "both"
+    Name<override>()<transacts>:string = "both"
     Get<override>():t = V
     Put<override>(X:u):string = "put"
 c := class(container(int), sink(string)):
-    Name<override>():string = "c"
+    Name<override>()<transacts>:string = "c"
     Get<override>():int = 7
     Put<override>(X:string):string = "c got {X}"
 d := class(sink(string)):
-    Name<override>():string = "d"
+    Name<override>()<transacts>:string = "d"
     Put<override>(X:string):string = "d got {X}"
 i1(t:type) := interface:
     A():t

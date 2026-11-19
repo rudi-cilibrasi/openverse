@@ -6,7 +6,7 @@ dog := class(animal):
     Name<override>():string = "dog"
 cat := class(animal):
     Name<override>():string = "cat"
-Pick(X:t, Y:t where t:type)<decides>:t = first{Z := X | Y; Z}
+Pick(X:t, Y:t where t:type)<transacts><decides>:t = first{Z := X | Y; Z}
 counter := class:
     var N:int = 0
     Bump()<transacts>:int =

@@ -7,7 +7,7 @@ b:=class<computes>:
     M()<computes>:int=N|N+10
 Dup(V:t where t:type)<computes>:t=V|V
 cell:=class{var N:int=0}
-Use(C:cell)<decides>:void=
+Use(C:cell)<transacts><decides>:void=
     Rows:=for(A0:=Dup(a{})|Dup(b{}),X0:=A0.M(),A1:=Dup(a{})|Dup(b{}),X1:=A1.M(),A2:=Dup(a{})|Dup(b{}),X2:=A2.M(),A3:=Dup(a{})|Dup(b{}),X3:=A3.M()):
         set C.N+=1
         C.N<2

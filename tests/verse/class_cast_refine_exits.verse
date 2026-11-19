@@ -15,7 +15,7 @@ DefSet(P:pair(a, b) where a:type, b:type)<transacts>:int =
         set N = D.C
         return N * 10
     N
-NestSR(P:pair(a, b), Q:pair(c, d) where a:type, b:type, c:type, d:type):int =
+NestSR(P:pair(a, b), Q:pair(c, d) where a:type, b:type, c:type, d:type)<transacts>:int =
     var N:int = 0
     if (D := dup[P]):
         set N += D.C
@@ -33,33 +33,33 @@ InnerDefer(P:pair(a, b), Q:pair(c, d) where a:type, b:type, c:type, d:type)<tran
             return 1
         set M = 99
     0
-DecRet(P:pair(a, b), Xs:[]int where a:type, b:type)<decides>:int =
+DecRet(P:pair(a, b), Xs:[]int where a:type, b:type)<transacts><decides>:int =
     if (D := dup[P]):
         return Xs[D.C]
     else:
         0
-DecRetVal(P:pair(a, b), Xs:[]int where a:type, b:type)<decides>:int =
+DecRetVal(P:pair(a, b), Xs:[]int where a:type, b:type)<transacts><decides>:int =
     if (D := dup[P]):
         if (D.C > 0) then return Xs[D.C] else 7
     else:
         8
-PlainRet(Xs:[]int, K:int)<decides>:int =
+PlainRet(Xs:[]int, K:int)<transacts><decides>:int =
     if (K > 0):
         return Xs[K]
     else:
         0
-ValFail(P:pair(a, b), Xs:[]int where a:type, b:type)<decides>:int =
+ValFail(P:pair(a, b), Xs:[]int where a:type, b:type)<transacts><decides>:int =
     if (D := dup[P]):
         if (D.C > 50) then return 1 else Xs[D.C]
     else:
         Xs[9]
-NoEsc(P:pair(a, b), Xs:[]int where a:type, b:type)<decides>:int =
+NoEsc(P:pair(a, b), Xs:[]int where a:type, b:type)<transacts><decides>:int =
     X:int = if (D := dup[P]):
         Xs[D.C]
     else:
         Xs[9]
     X
-Mid(P:pair(a, b) where a:type, b:type):int =
+Mid(P:pair(a, b) where a:type, b:type)<transacts>:int =
     if (D := dup[P]):
         if (D.C > 3) then return D.C * 10
     else:
