@@ -3213,9 +3213,12 @@ the exact result (#724). OpenVerse targets Epic's Verse VM where it and the
 Blueprint VM differ; the Book of Verse (ch. 2, "Overflow and VM
 Differences") has the two readings, and Epic's Verse VM on UEFN 43.12
 (`++Fortnite+Release-43.12-CL-60598086`, "Use Verse VM", 2026-11-18) prints
-the Verse VM's for every probe of
+the Verse VM's for every integer probe of
 [tests/conformance/versevm](../tests/conformance/versevm)
-([the observations](research/versevm-live-conformance.md#integers-beyond-64-bits)).
+([the observations](research/versevm-live-conformance.md#integers-beyond-64-bits)),
+and openverse's output for most of its follow-up probes (2026-11-19); the
+known differences are below
+([the follow-up probes](research/versevm-live-conformance.md#follow-up-probes-for-ints)).
 
 ```verse
 Next(N:int)<computes>:int = N + 1
@@ -3236,11 +3239,21 @@ Main():void =
   `i64 := type{_X:int where _X >= -9223372036854775808, _X <= 9223372036854775807}`
   (Epic: "i64 cast failed"), and `int[2^63]` succeeds, as `int[X]` does for
   every int (Epic: "int cast succeeded").
+- A known difference, kept by the owner's decision (#724): Epic's Verse VM
+  computes the operators, comparisons, map keys, `Min`, `Max`, and `Floor`
+  and `Ceil` of a rational past 64 bits, but its native `Quotient` and
+  `Clamp` stop with a runtime error, "Value exceeds the range of a 64 bit
+  integer", when an argument is beyond 64 bits, also for a zero divisor
+  (`Quotient[2^63, 0]`). openverse does not imitate those native errors: it
+  gives the exact result, and fails on a zero divisor. What Epic's `Mod`,
+  `Sgn` and `Abs` do with such an argument, and its equality of arrays and
+  tuples holding one, is not yet observed (follow-up probes).
 - An int has at most 2^20 bits (its magnitude is below 2^(2^20)): a longer
   result is the overflow error, exit 2, as a 64-bit overflow was. This is
   the Verse VM's `MaxLengthBits`, which the Book's `verse_vm_only` tests pin
   (`Math/Bitwise.versetest`: `BitShiftLeft[1, 1048575]` is an int,
-  `BitShiftLeft[1, 1048576]` a runtime error).
+  `BitShiftLeft[1, 1048576]` a runtime error). Not yet observed on Epic:
+  the probes that reach it by multiplication printed nothing there.
 - What needs 64 bits checks for them. `ToString` of an int beyond 64 bits,
   and so its interpolation, is the overflow error: Epic's Verse VM stops
   with "Value exceeds the range of a 64 bit integer" in `ToString(:int)`,
@@ -3248,15 +3261,19 @@ Main():void =
   `ToDiagnostic` prints them in decimal (the Book's `verse_vm_only` cases,
   `ToDiagnostic.versetest:35-40`). `Floor[F]`, `Ceil[F]`, `Round[F]` and
   `Int[F]` of a float stay 64-bit (the API reference's integer-bounds
-  error; [float](#float)).
+  error; [float](#float); Epic's Verse VM stops for `Floor[1.0e19]` with
+  `ErrRuntime_IntegerBoundsExceeded`).
 - An int literal fits in 64 bits (the Book: "integers exceeding 64-bit
-  [...] can be computed but not written as literals").
+  [...] can be computed but not written as literals"; UEFN 43.12: error
+  3555).
 - `X * 1.5` converts the int to the nearest double, ties to even (IEEE's
-  default rounding), and to `Inf` or `-Inf` past the largest double.
+  default rounding), and to `Inf` or `-Inf` past the largest double, as
+  Epic's Verse VM does.
 - An index beyond 64 bits is past every array: indexing and `set A[I]` fail,
   as for any index out of range. A range with a bound beyond 64 bits gives
   its ints one by one (`for (I := Big..Big + 2)`), across the 64-bit
-  boundary too; its length must fit in memory, as any range's.
+  boundary too; its length must fit in memory, as any range's. Epic's
+  Verse VM does both.
 - A module's constant is evaluated in 64 bits, as Epic's compiler evaluates
   it when it links the module: `TwoTo64:int = (9223372036854775807 + 1) * 2`
   is refused (`the value of the module constant TwoTo64 leaves the 64-bit
@@ -3267,13 +3284,21 @@ Main():void =
   time. openverse computes a constant at each use, at run time, so it
   checks this when it compiles, for the constants it can evaluate without
   running the program: int arithmetic on literals and on other such
-  constants. A constant whose value calls a function is computed at run
-  time with the Verse VM's ints (whether Epic refuses it too is
-  [a follow-up probe](research/versevm-live-conformance.md#follow-up-probes-for-ints)).
-  The Book's own test of this, `Math/Bitwise.versetest:73`
+  constants. UEFN 43.12 refuses `(9223372036854775807 + 1) - 1` too
+  (9003), a value in range that leaves it on the way, and so does
+  openverse. The Book's own test of this, `Math/Bitwise.versetest:73`
   (`verse_vm_only`), expects the constant to be 2^64, and 38 cases of that
   file use it: openverse refuses the 39, as Epic's compiler does
   ([the survey](research/book-test-conformance.md#after-ints-beyond-64-bits)).
+  Keeping this check, at the cost of those 39, is the owner's decision
+  (#724).
+- A known difference, for a later change: a module constant whose value
+  calls a function is computed at run time with the Verse VM's ints, while
+  Epic's compiler refuses such a constant, error 3582, "Divergent calls
+  (calls that might not complete) cannot be used to define data-members",
+  for a `<computes>` function (`Big:int = Next(9223372036854775807)`) and
+  for built-ins (`Min(Abs(-3), 7)`); `Floor(Base / 4) or 0` it admits
+  ([the follow-up probes](research/versevm-live-conformance.md#follow-up-probes-for-ints)).
 - Rationals are pairs of these ints, reduced ([rational](#rational)).
 - In Verse Core an int is Lean's `Int` (`Res.ofInt` checks the length); the
   C runtime keeps one that fits in 64 bits in a word (`arith.c`, the fast
@@ -4124,7 +4149,7 @@ Main()<suspends>:void =
 
 | Question | Book | openverse |
 |---|---|---|
-| `int` range | arbitrary precision on VerseVM; 64-bit with a runtime error on BPVM (§4.1) | **VerseVM** (#724, Epic's Verse VM on UEFN 43.12 agrees): exact past 64 bits, up to 2^20 bits (the Book's tests' `MaxLengthBits`), a longer result the overflow error; `ToString` of one beyond 64 bits the overflow error, as on Epic's Verse VM; module constants evaluated in 64 bits, as Epic's compiler does ([int](#int)) |
+| `int` range | arbitrary precision on VerseVM; 64-bit with a runtime error on BPVM (§4.1) | **VerseVM** (#724, Epic's Verse VM on UEFN 43.12 agrees): exact past 64 bits, up to 2^20 bits (the Book's tests' `MaxLengthBits`), a longer result the overflow error; `ToString` of one beyond 64 bits the overflow error, as on Epic's Verse VM; module constants evaluated in 64 bits, as Epic's compiler does; `Quotient` and `Clamp` exact past 64 bits, where Epic's natives stop (a known difference) ([int](#int)) |
 | `X = Y` result | the operators page says `logic`; elsewhere the left operand (§5.4) | the left operand |
 | Associativity of comparisons | the prose: chains "check all adjacent pairs" (ch. 1); the table: right (ch. 4); the tests: `<>` left-associative (`Associativity.versetest:9`), the others as a chain: the Book disagrees with itself ([the audit](research/readings-audit.md#comparison-chains-with-)) | chains: every adjacent pair checked, each operand evaluated once, result is the leftmost |
 | Value of a successful `not e` | unspecified | `void` |

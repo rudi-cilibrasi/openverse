@@ -1,6 +1,6 @@
 # Follow-up (#724): an index beyond 64 bits. OpenVerse fails, as for any
 # index out of range, and prints "index failed", "negative index failed",
-# "set failed"; a runtime error would stop the session.
+# "set failed", as Epic's Verse VM does.
 Next(N:int)<computes>:int = N + 1
 
 Main():void =

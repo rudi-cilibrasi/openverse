@@ -1,6 +1,9 @@
 # Follow-up (#724): Min, Max, Clamp and Sgn of ints beyond 64 bits, and
 # equality inside arrays and tuples. OpenVerse prints "min max", "clamp",
-# "sgn", "containers equal".
+# "sgn", "containers equal". Epic's Verse VM prints "min max", then stops in
+# its native Clamp(:int,:int,:int): "Value exceeds the range of a 64 bit
+# integer", a known difference (int-sgn-big, int-array-equal-big and
+# int-tuple-equal-big ask about the rest one at a time).
 Next(N:int)<computes>:int = N + 1
 
 Main():void =

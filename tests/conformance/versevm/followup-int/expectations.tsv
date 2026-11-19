@@ -1,21 +1,28 @@
-# Follow-up probes for ints beyond 64 bits (#724): what OpenVerse prints is in each probe's header and in note; the Book's expectation where it has one.
-probe	book_case	book_outcome	book_lines	note
-int-div-zero-big	-	-	-	OpenVerse: quotient failed|mod failed|floor failed. A runtime error would mean heap ints treat a zero divisor apart.
-int-float-tie	-	-	-	OpenVerse: tie to even|above tie up|odd tie up (round to nearest, ties to even).
-int-float-inf	-	-	-	Risky. OpenVerse: big computed|infinity. A runtime error would stop the session after big computed.
-int-float-floor-big	verse_api_overrides.md, Floor(float)	runtime-error	before floor	Risky. The API reference: a halting integer-bounds error outside 64 bits; OpenVerse agrees. The Verse VM might give an int beyond 64 bits (floor above).
-int-index-big	-	-	-	OpenVerse: index failed|negative index failed|set failed.
-int-range-big	-	-	-	OpenVerse: count 4|two above.
-int-map-key-big	-	-	-	OpenVerse: found 2^63|found 2^126|one entry.
-int-length-max	Tests/Math/Bitwise.versetest:221	ran	longest computed|longer than half	The Book's MaxLengthBits (2^20) for shifts; this reaches the longest int by multiplication.
-int-length-over	Tests/Math/Bitwise.versetest:222	runtime-error	half computed	Risky. OpenVerse raises the overflow error at 2^(2^20) by multiplication, as the Book's shifts do; without a limit for multiplication Epic prints squared.
-int-module-const-call	-	-	-	OpenVerse computes it at run time: above. A 9003 refusal would mean every module constant is evaluated in 64 bits.
-int-module-const-back	-	-	-	OpenVerse refuses at compile time (integer add overflow on the way); admitted, it prints back to max.
-int-module-const-back-control	-	-	-	Control: both admit and print max.
-int-tostring-direct	-	-	-	Risky. OpenVerse: in range, then the overflow error (as Epic does for interpolation).
-int-literal-big	docs/02_primitives.md, Integers	refused	-	The Book: literals must fit in 64 bits. OpenVerse refuses.
-int-rational-big	-	-	-	OpenVerse: floor 2^63|ceil 2^63 + 1|reduced.
-int-intrinsics-big	-	-	-	OpenVerse: min max|clamp|sgn|containers equal.
-int-euclid-big	-	-	-	OpenVerse: quotient -4|mod D - 1|floor -4|ceil -3.
-int-where-natural-big	Tests/WhereConstrainedInts.versetest:219	-	-	OpenVerse: natural cast succeeded|negative cast failed.
-int-compound-mul	-	-	-	OpenVerse: squared|minus one.
+# Follow-up probes for ints beyond 64 bits (#724): what OpenVerse prints is in each probe's header and in note; the Book's expectation where it has one; Epic's outcome and lines in epic_outcome and epic_lines (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, Use Verse VM, newVerseVm=true, 2026-11-19; - where not yet run), its error and the comparison in note. Known differences: Epic's native Quotient and Clamp stop for an argument beyond 64 bits, where OpenVerse keeps the exact result (the owner's decision, #724); Epic refuses a module constant that calls a function (3582), a rule OpenVerse does not have yet.
+probe	book_case	book_outcome	book_lines	epic_outcome	epic_lines	note
+int-div-zero-big	-	-	-	runtime-error	-	Differs, a known difference. Epic: ErrRuntime_GeneratedNativeInternal "Value exceeds the range of a 64 bit integer" in native Quotient(:int,:int), at the first statement. OpenVerse: quotient failed|mod failed|floor failed (a zero divisor fails, as for any int); Mod and Floor alone are int-mod-zero-big and int-floor-div-zero-big.
+int-float-tie	-	-	-	ran	tie to even|above tie up|odd tie up	Same. OpenVerse: tie to even|above tie up|odd tie up (round to nearest, ties to even).
+int-float-inf	-	-	-	ran	big computed|infinity	Same. OpenVerse: big computed|infinity.
+int-float-floor-big	verse_api_overrides.md, Floor(float)	runtime-error	before floor	runtime-error	before floor	Same, as the API reference has it. Epic: ErrRuntime_IntegerBoundsExceeded "The value 10000000000000000000.000000 cannot be converted to an integer because it does not fall inside the representable range of a Verse integer" in native Floor(:float); OpenVerse: the overflow error.
+int-index-big	-	-	-	ran	index failed|negative index failed|set failed	Same. OpenVerse: index failed|negative index failed|set failed.
+int-range-big	-	-	-	ran	count 4|two above	Same. OpenVerse: count 4|two above.
+int-map-key-big	-	-	-	ran	found 2^63|found 2^126|one entry	Same. OpenVerse: found 2^63|found 2^126|one entry.
+int-length-max	Tests/Math/Bitwise.versetest:221	ran	longest computed|longer than half	no-output	-	Unsettled: three Epic sessions printed nothing and reported no error, and the game then left the startable state; cause unknown. OpenVerse: longest computed|longer than half (the Book's MaxLengthBits, 2^20, for shifts).
+int-length-over	Tests/Math/Bitwise.versetest:222	runtime-error	half computed	no-output	-	Unsettled: three Epic sessions printed nothing, not even half computed, and reported no error; cause unknown. OpenVerse: half computed, then the overflow error at 2^(2^20), as the Book's shifts have it.
+int-module-const-call	-	-	-	refused	-	Differs. Epic: 3582 "Divergent calls (calls that might not complete) cannot be used to define data-members" at the call (Next is <computes>). OpenVerse admits it and prints above; the 3582 rule is left to a separate change.
+int-module-const-back	-	-	-	refused	-	Same. Epic: 9003 "Runtime error while evaluating module"; OpenVerse refuses at compile time (integer add overflow on the way), the owner's decision to keep (#724).
+int-module-const-back-control	-	-	-	ran	max	Same (control). OpenVerse: max.
+int-tostring-direct	-	-	-	runtime-error	in range	Same. Epic: ErrRuntime_GeneratedNativeInternal "Value exceeds the range of a 64 bit integer" in native ToString(:int); OpenVerse: in range, then the overflow error.
+int-literal-big	docs/02_primitives.md, Integers	refused	-	refused	-	Same, as the Book has it. Epic: 3555 "Integer literal must be in the range -9223372036854775808 to 9223372036854775807"; OpenVerse refuses.
+int-rational-big	-	-	-	ran	floor 2^63|ceil 2^63 + 1|reduced	Same. OpenVerse: floor 2^63|ceil 2^63 + 1|reduced.
+int-intrinsics-big	-	-	-	runtime-error	min max	Differs, a known difference. Epic: min max, then ErrRuntime_GeneratedNativeInternal "Value exceeds the range of a 64 bit integer" in native Clamp(:int,:int,:int). OpenVerse: min max|clamp|sgn|containers equal. Sgn and the containers alone are int-sgn-big, int-array-equal-big and int-tuple-equal-big.
+int-euclid-big	-	-	-	runtime-error	-	Differs, a known difference. Epic: ErrRuntime_GeneratedNativeInternal "Value exceeds the range of a 64 bit integer" in native Quotient(:int,:int), at the first statement. OpenVerse: quotient -4|mod D - 1|floor -4|ceil -3. Mod alone is int-mod-big.
+int-where-natural-big	Tests/WhereConstrainedInts.versetest:219	-	-	ran	natural cast succeeded|negative cast failed	Same. OpenVerse: natural cast succeeded|negative cast failed.
+int-compound-mul	-	-	-	ran	squared|minus one	Same. OpenVerse: squared|minus one.
+int-mod-big	-	-	-	-	-	Not yet run on Epic. OpenVerse: before mod|mod D - 1.
+int-mod-zero-big	-	-	-	-	-	Not yet run on Epic. OpenVerse: before mod|mod failed.
+int-floor-div-zero-big	-	-	-	-	-	Not yet run on Epic. OpenVerse: before floor|floor failed.
+int-sgn-big	-	-	-	-	-	Not yet run on Epic. OpenVerse: before sgn|sgn -1.
+int-abs-big	-	-	-	-	-	Not yet run on Epic. OpenVerse: before abs|abs 2^63 + 1 (book-int-abs-min has Abs of -2^63, an argument inside 64 bits, give 2^63 there).
+int-array-equal-big	-	-	-	-	-	Not yet run on Epic. OpenVerse: before arrays|arrays equal|arrays differ.
+int-tuple-equal-big	-	-	-	-	-	Not yet run on Epic. OpenVerse: before tuples|tuples equal|tuples differ.

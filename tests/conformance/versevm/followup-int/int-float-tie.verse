@@ -1,7 +1,7 @@
 # Follow-up (#724): an int beyond 64 bits times a float converts it to a
 # double. OpenVerse rounds to nearest, ties to even (IEEE's default), and
-# prints "tie to even", "above tie up", "odd tie up". Truncation would
-# print "tie down", "above tie down", "odd tie down".
+# prints "tie to even", "above tie up", "odd tie up", as Epic's Verse VM
+# does.
 Next(N:int)<computes>:int = N + 1
 
 Main():void =

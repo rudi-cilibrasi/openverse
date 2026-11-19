@@ -218,25 +218,91 @@ VM's lines in Lean and C (`book-int-cast-int` too, with #727's `int[X]`,
 which succeeds for every int), and `book-int-pow64-module-const` is refused
 at compile time. The longest int, 2^20 bits, is the
 Book's (`Math/Bitwise.versetest`, `verse_vm_only`, "MaxLengthBits"), not yet
-observed: UEFN 43.12 has no shifts, and multiplication's limit is a
-follow-up probe.
+observed: UEFN 43.12 has no shifts, and the probes that reach it by
+multiplication printed nothing there ([below](#follow-up-probes-for-ints)).
 
 ### Follow-up probes for ints
 
 [`followup-int/`](../../tests/conformance/versevm/followup-int) asks what
 the evidence above leaves open, one question per probe, each header saying
-what OpenVerse prints and what the other reading would (its
-`expectations.tsv` has the same in its `note` column). The risky ones, which
-OpenVerse ends with a runtime error, are `int-float-inf` (an int past the
-largest double times a float: OpenVerse gives `Inf`), `int-float-floor-big`
-(`Floor[1.0e19]`: the API reference's integer-bounds error, which OpenVerse
-raises), `int-length-over` (2^(2^20) by multiplication: OpenVerse's overflow
-error) and `int-tostring-direct` (`ToString` called directly). The others
-ask about a zero divisor, ties in the int-to-float conversion, an index and
-a range beyond 64 bits, map keys, the longest int, module constants
-computed by a call or leaving 64 bits on the way, an int literal beyond 64
-bits (a compile probe), rationals, `Min`, `Max`, `Clamp`, `Sgn`, Euclidean
-division, a one-sided refinement and `set *=`.
+what OpenVerse prints (its `expectations.tsv` has the same in its `note`
+column, with Epic's outcome and lines in `epic_outcome` and `epic_lines`).
+UEFN 43.12 (the same build) compiled the first 19 one at a time
+(2026-11-19 03:37Z; the raw records: `compile-int.json`) and ran the 16 it
+admitted in Verse VM sessions (from 03:39Z), every session's ticket carrying
+`newVerseVm=true` (`live-int-vm.json`; with "Auto Start Game" some records
+repeat a run after its `end`, and only the first run counts). OpenVerse's
+column is this branch, Lean and C agreeing.
+
+| Probe | UEFN 43.12, Verse VM | OpenVerse |
+| --- | --- | --- |
+| `int-compound-mul` | `squared`, `minus one` | the same |
+| `int-float-tie` | `tie to even`, `above tie up`, `odd tie up` | the same |
+| `int-float-inf` | `big computed`, `infinity` | the same |
+| `int-index-big` | `index failed`, `negative index failed`, `set failed` | the same |
+| `int-range-big` | `count 4`, `two above` | the same |
+| `int-map-key-big` | `found 2^63`, `found 2^126`, `one entry` | the same |
+| `int-rational-big` | `floor 2^63`, `ceil 2^63 + 1`, `reduced` | the same |
+| `int-where-natural-big` | `natural cast succeeded`, `negative cast failed` | the same |
+| `int-module-const-back-control` | `max` | the same |
+| `int-float-floor-big` | `before floor`, then `ErrRuntime_IntegerBoundsExceeded` in the native `Floor(:float)`: "The value 10000000000000000000.000000 cannot be converted to an integer because it does not fall inside the representable range of a Verse integer" | `before floor`, then the overflow error |
+| `int-tostring-direct` | `in range`, then `ErrRuntime_GeneratedNativeInternal` in the native `ToString(:int)`: "Value exceeds the range of a 64 bit integer" | `in range`, then the overflow error |
+| `int-literal-big` | refused, 3555 "Integer literal must be in the range -9223372036854775808 to 9223372036854775807" | refused |
+| `int-module-const-back` | refused, 9003 "Runtime error while evaluating module" | refused at compile time (integer add overflow) |
+| `int-div-zero-big` | no line: the first statement, `Quotient[2^63, 0]`, stops with `ErrRuntime_GeneratedNativeInternal` in the native `Quotient(:int,:int)`, "Value exceeds the range of a 64 bit integer" | `quotient failed`, `mod failed`, `floor failed`. **Differs** |
+| `int-euclid-big` | no line: the same error in `Quotient`, at the first statement | `quotient -4`, `mod D - 1`, `floor -4`, `ceil -3`. **Differs** |
+| `int-intrinsics-big` | `min max`, then the same error in the native `Clamp(:int,:int,:int)` | `min max`, `clamp`, `sgn`, `containers equal`. **Differs** |
+| `int-module-const-call` | refused, 3582 "Divergent calls (calls that might not complete) cannot be used to define data-members", at the call of `Next`, a `<computes>` function | `above`. **Differs** |
+| `int-length-max`, `int-length-over` | nothing, in three sessions each (`int-length-over` not even `half computed`), and no error reported; the game then left the startable state. Cause not known | `longest computed`, `longer than half`; `half computed`, then the overflow error |
+
+What they settle: on Epic's Verse VM, ints past 64 bits go through the
+operators, `set *=` and `-=`, comparisons, map keys, ranges, indices (which
+fail), the conversion to a float (to nearest, ties to even, `Inf` past the
+largest double), `Min`, `Max`, rationals and their `Floor` and `Ceil`, and
+a one-sided refinement's cast; `Floor[F]` of a float and `ToString` of an
+int stay 64-bit, with a runtime error; an int literal must fit in 64 bits.
+OpenVerse prints the same for all of these.
+
+The owner's decisions (#724), and the differences that remain:
+
+- **Module constants in 64 bits: kept.** `int-module-const-back`, whose
+  value is in range but whose evaluation leaves it, is refused with 9003,
+  as `book-int-pow64-module-const` is: Epic evaluates a module's constants
+  in 64 bits when it links the module. OpenVerse keeps its compile-time
+  refusal of a module constant that leaves 64 bits, though it costs the 39
+  Book cases that use `Pow2_64` in `Math/Bitwise.versetest`
+  ([the survey](book-test-conformance.md#after-ints-beyond-64-bits)).
+- **Native intrinsics limited to 64 bits: not imitated.** Epic's native
+  `Quotient(:int,:int)` and `Clamp(:int,:int,:int)` stop with
+  `ErrRuntime_GeneratedNativeInternal`, "Value exceeds the range of a 64 bit
+  integer", when an argument is beyond 64 bits, even with a zero divisor.
+  OpenVerse keeps computing the exact result (and fails on a zero divisor):
+  a known difference where Epic's native intrinsics are limited to 64 bits.
+  `ToString` is unchanged: the overflow error, as Epic's.
+- **A module constant that calls a function**: Epic refuses it at compile
+  time (3582); OpenVerse admits it and computes it at run time, with the
+  Verse VM's ints. The rule is left to a separate change. Compile-only
+  evidence from the same build, 2026-11-19 (08:29Z, `compile-3582.json`):
+  `Limit:int = Min(Abs(-3), 7)` is refused with 3582 too,
+  `Half:int = Floor(Base / 4) or 0` is admitted, and `<converges>` on a
+  user function is refused (3565, "The 'converges' effect is only allowed
+  on native functions").
+- **The longest int**: `int-length-max` and `int-length-over` printed
+  nothing on Epic, with no error; a step-by-step probe is pending.
+
+Added after these runs, not yet run on Epic, one call that might stop the
+session per probe, after a `before …` line, so that an error hides nothing
+else (OpenVerse's output, Lean and C agreeing):
+
+| Probe | Asks | OpenVerse |
+| --- | --- | --- |
+| `int-mod-big` | `Mod[N, D]` with `D = 2^63`, `N = -(3 D) - 1` | `before mod`, `mod D - 1` |
+| `int-mod-zero-big` | `Mod[2^63, 0]` | `before mod`, `mod failed` |
+| `int-floor-div-zero-big` | `Floor(2^63 / 0)` | `before floor`, `floor failed` |
+| `int-sgn-big` | `Sgn(-2^63 - 1)` | `before sgn`, `sgn -1` |
+| `int-abs-big` | `Abs(-2^63 - 1)`, an argument beyond 64 bits (`book-int-abs-min`'s, `-2^63`, is inside) | `before abs`, `abs 2^63 + 1` |
+| `int-array-equal-big` | `array{2^63, 1} = array{(2^63 - 1) + 1, 1}`, `array{2^63} <> array{2^63 - 1}` | `before arrays`, `arrays equal`, `arrays differ` |
+| `int-tuple-equal-big` | the same with tuples | `before tuples`, `tuples equal`, `tuples differ` |
 
 ## OpenVerse observations
 

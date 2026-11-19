@@ -1,6 +1,7 @@
 # Follow-up (#724): ToString called directly, not through interpolation, on
 # an int beyond 64 bits. OpenVerse raises the overflow error after "in
-# range" (as Epic does for interpolation, book-int-interpolate-pow63).
+# range", as Epic's Verse VM does ("Value exceeds the range of a 64 bit
+# integer" in its native ToString(:int)).
 Next(N:int)<computes>:int = N + 1
 
 Main():void =

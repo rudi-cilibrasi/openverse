@@ -1,6 +1,6 @@
 # Follow-up (#724): an int past the largest double (2^1071) times a float.
-# OpenVerse gives Inf (round to nearest) and prints "infinity"; a runtime
-# error would stop the session after "big computed".
+# OpenVerse gives Inf (round to nearest) and prints "big computed",
+# "infinity", as Epic's Verse VM does.
 Next(N:int)<computes>:int = N + 1
 
 Main():void =
