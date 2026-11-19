@@ -315,10 +315,17 @@ varcell(t:type) := class:
 
 def varcellTops : Except String (List STop) := parsePrelude varcellPrelude ["varcell", "VCell"]
 
-/-- `subscribable_event(t)` (#210): an event whose `Signal` also calls the
-    functions subscribed to it, each `Subscribe` giving a `cancelable` whose
-    `Cancel` unsubscribes it. Added, with the concurrency prelude it
-    extends, to a program that mentions it. -/
+/-- Subscriptions (#210, #724), added with the concurrency prelude's events
+    that keep them (`withSubscriptions`) to a program that subscribes: the
+    `cancelable` a `Subscribe` gives, whose `Cancel` unsubscribes its
+    function (a second `Cancel` does nothing); `E.Subscribe(F)` of an event
+    without a value (`event()`, `sticky_event()`, `subscribable_event()`),
+    whose `F` takes none, through `subscribeUnit` (`elabEventSubscribe?`),
+    which subscribes `unitHandler`'s bound `CallUnit` (public: a method
+    whose name has a `$` is no value); and `subscribable_event(t)`, an
+    openverse extension (Epic's API has none, UEFN 43.12:
+    followup/subscribable-event-control.verse), now an `event(t)` with
+    nothing of its own. -/
 def subPrelude : String := "
 cancelable := interface:
     Cancel():void
@@ -326,42 +333,28 @@ subscription := class(cancelable):
     var Live:logic = true
     Cancel<override>():void =
         set Live = false
-subscribable_event(t:type) := class(event(t)):
-    var Handlers:[]tuple(subscription, type{_(:t):void}) = array{}
-    Signal<override>(X:t):void =
-        if (Head?) then signalAll(Self, X)
-        Hs := Handlers
-        set Handlers = for (H : Hs, H(0).Live?) { H }
-        for (H : Hs, H(0).Live?):
-            H(1)(X)
-    Subscribe(F:type{_(:t):void}):cancelable =
-        S := subscription{}
-        set Handlers += array{(S, F)}
-        S
+unitHandler := class:
+    G:type{_():void}
+    CallUnit(X:void):void = G()
+subscribeUnit(E:event(void), F:type{_():void}):cancelable =
+    S := subscription{}
+    set E.Handlers += array{(S, unitHandler{G := F}.CallUnit)}
+    S
+subscribable_event(t:type) := class(event(t)){}
 "
 
 /-- `subscribable_event()` (#220): one without a value, whose functions take
-    none. Added after `subPrelude` to a program that mentions it. -/
+    none (`subscribeUnit`). Added after `subPrelude` to a program that
+    mentions it. -/
 def subVoidPrelude : String := "
-subev0 := class(event(void)):
-    var Handlers:[]tuple(subscription, type{_():void}) = array{}
-    Signal<override>(X:void):void =
-        if (Head?) then signalAll(Self, X)
-        Hs := Handlers
-        set Handlers = for (H : Hs, H(0).Live?) { H }
-        for (H : Hs, H(0).Live?):
-            H(1)()
-    Subscribe(F:type{_():void}):cancelable =
-        S := subscription{}
-        set Handlers += array{(S, F)}
-        S
+subev0 := class(event(void)){}
 "
 
 def subTops (owned : List String := []) : Except String (List STop) :=
-  parsePrelude subPrelude (owned ++ ["subscription", "Live", "Handlers", "Hs", "H", "S", "F", "X", "t", "Head", "signalAll"])
+  parsePrelude subPrelude (owned ++ ["subscription", "Live", "Handlers", "unitHandler", "G", "subscribeUnit", "E", "F", "S", "X", "t"])
 
 def subVoidTops (owned : List String := []) : Except String (List STop) :=
-  parsePrelude subVoidPrelude (owned ++ ["subscription", "Live", "Handlers", "Hs", "H", "S", "F", "X", "Head", "signalAll", "subev0"])
+  parsePrelude subVoidPrelude (owned ++ ["subev0"])
 
 /-- An error of the lowering in function `name` (#156): with the position of
     its definition among `tops`. -/

@@ -433,6 +433,23 @@ partial def elabEventSignal? (cb : AppElab) (ctx : Ctx) (p mp : Pos) (obj : SExp
     else return none
   | _ => return none
 
+/-- `E.Subscribe(F)` of an event without a value, an `event()`, a
+    `sticky_event()` or a `subscribable_event()` (#220, #724): the
+    subscriptions' helper `$subscribeUnit(E, F)`, whose `F` takes no value,
+    as `Signal()` gives none. `none` for any other call (its receiver is
+    elaborated). -/
+partial def elabEventSubscribe? (cb : AppElab) (ctx : Ctx) (p mp : Pos) (obj : SExpr) (m0 : String)
+    (args : List SExpr) (bracket : Bool) (exp : Option Ty) : EM (Option R) := do
+  if !(m0 == "Subscribe" && args.length == 1 && !bracket) || (ctx.sig? "$subscribeUnit").isNone then
+    return none
+  match (← cb.elabE ctx obj none).ty with
+  | .struct n ts =>
+    if ((n == ctx.types.concurrencyName "event" || n == ctx.types.concurrencyName "sticky_event") &&
+        ts == [.void]) || (n == "$subev0" && ts.isEmpty) then
+      return some (← cb.elabApp ctx p (.ident mp "$subscribeUnit") (obj :: args) false exp)
+    else return none
+  | _ => return none
+
 /-- (#515) An event's `Await` as a callee: it has `no_rollback` (UEFN 43.12
     refuses it in a `<transacts>` function, 3512, followup/await-in-transacts). -/
 def awaitSig (ctx : Ctx) : Sig :=
@@ -1075,6 +1092,7 @@ partial def elabMemberApp (cb : AppElab) (ctx : Ctx) (p : Pos) (f : SExpr) (mp :
   if let some r ← elabParamConcurrencyCall? cb ctx p mp obj m0 spawning args bracket exp then return r
   if let some r ← elabTaskCancel? cb ctx p obj m0 args then return r
   if let some r ← elabEventSignal? cb ctx p mp obj m0 args bracket exp then return r
+  if let some r ← elabEventSubscribe? cb ctx p mp obj m0 args bracket exp then return r
   if let some r ← elabAwait? cb ctx p mp obj m0 args exp then return r
   let r0 ← elabBoundReceiverWith cb.elabE ctx p (← cb.elabE ctx obj none) m0
   ctx.noteFamily mp r0.ty m0
