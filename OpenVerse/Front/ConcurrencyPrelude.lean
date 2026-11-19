@@ -113,7 +113,12 @@ sleepResume(F:sleep, C:sched):int =
             Ticks:float = F.Secs * 30.0
             if (Ticks < 9223372036854775808.0):
                 N:int = if (R := Ceil[Ticks]) then (if (R >= 1) then R else 1) else Err()
-                set F.Wake = C.Now + N
+                At:int = C.Now + N
+                # (the reference clock counts ticks in 64 bits, #514: ints go
+                # past them, #724, so a wake past them is the overflow error
+                # that ToString raises for an int beyond 64 bits)
+                ToString(At)
+                set F.Wake = At
             else:
                 Err()
         else:

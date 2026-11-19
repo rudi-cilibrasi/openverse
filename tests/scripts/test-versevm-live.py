@@ -464,8 +464,11 @@ CVERSE = ROOT / "runtime" / "build" / "cverse"
 class EndToEnd(Tmp):
     def test_openverse_batch_matches_single_runs(self):
         """The original probes OpenVerse admits, run one by one and as one
-        driver batch on OpenVerse, demultiplex to the same results."""
+        driver batch on OpenVerse, demultiplex to the same results; with
+        them a probe that ends in a runtime error (ToString of 2^63, #724:
+        int-overflow no longer does), which the batch puts last."""
         probes = [str(p) for p in sorted(VM.glob("*.verse"))]
+        probes.append(str(VM / "book" / "book-int-interpolate-pow63.verse"))
         ovj = self.tmp / "ov.json"
         # (those OpenVerse refuses, as the event Signal probes it refuses
         # as Epic does, #515, signal-subscribe among them, #724, would
@@ -477,10 +480,10 @@ class EndToEnd(Tmp):
         quiet(ov.main, ["openverse", "--modes", "default", "--json", str(ovj)] + probes)
         out, m = self.generate("--mode", "batch", "--host", "openverse", "--risky-last", str(ovj),
                                *probes)
-        self.assertEqual(m["probes"][-1]["id"], "int-overflow")
+        self.assertEqual(m["probes"][-1]["id"], "book-int-interpolate-pow63")
         p = subprocess.run([str(OPENVERSE), "run", str(out / "ovprobes" / "openverse_probe_driver.verse")],
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=300)
-        self.assertEqual(p.returncode, 2)          # int-overflow, last, ends the batch
+        self.assertEqual(p.returncode, 2)          # the ToString error, last, ends the batch
         log = self.tmp / "batch.log"
         log.write_bytes(p.stdout)
         parsed = self.tmp / "parsed.json"

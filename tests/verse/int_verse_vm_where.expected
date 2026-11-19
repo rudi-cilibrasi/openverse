@@ -1,0 +1,8 @@
+big computed
+i64 cast failed
+i64 cast of the maximum succeeded
+i64 cast below the minimum failed
+i64 cast of the minimum succeeded
+natural cast succeeded
+natural cast of a negative failed
+exit=0

@@ -90,21 +90,21 @@ partial def elabRefinementCast (elabE : Ctx → SExpr → Option Ty → EM R) (c
 
 /-- `int[X]` of an int `X` (also of a refinement of int): `X`, a cast to
     the type of every int, failable as every cast is (so it may be an `if`'s
-    condition), which no 64-bit int fails: its test, `X` at least the least
-    64-bit int, always passes. UEFN 43.12
+    condition), which no int fails: its test, `X = X`, always passes, past
+    64 bits too (#724). UEFN 43.12
     (build ++Fortnite+Release-43.12-CL-60598086) admits `int[Big]` of an int
-    (tests/conformance/versevm/book/book-int-cast-int.verse; the Book of
-    Verse's tests, WhereConstrainedInts.versetest:219-222, verse_vm_only),
-    and refuses it of a class's value with error 3509 (Cast.versetest:35).
-    VerseVM's ints are unbounded, and its `int[2^63]` succeeds; openverse's
-    arithmetic stops with an overflow before such a cast. -/
+    and it succeeds for 2^63 there
+    (tests/conformance/versevm/book/book-int-cast-int.verse: "int cast
+    succeeded"; the Book of Verse's tests, WhereConstrainedInts.versetest:219-222,
+    verse_vm_only), and refuses it of a class's value with error 3509
+    (Cast.versetest:35). -/
 partial def elabIntCast (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p : Pos) (args : List SExpr) :
     EM R := do
   let [a] := args | eerr p "a cast to int takes one value"
   let r := widenR ctx.types (← elabE ctx a (some .int))
   if r.ty != .int then eerr p s!"a cast to int takes an int, found {r.ty.show} (Epic's Verse compiler, UEFN 43.12: error 3509)"
   let tv ← fresh .int
-  return ⟨.seq (.assign tv r.e) (.seq (p2 .ge (.local tv) (.lit (Value.ofInt (-9223372036854775808)))) (.local tv)), .int⟩
+  return ⟨.seq (.assign tv r.e) (.seq (p2 .eq (.local tv) (.local tv)) (.local tv)), .int⟩
 
 /-! ## Applications of a name -/
 

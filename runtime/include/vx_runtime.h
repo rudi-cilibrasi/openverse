@@ -21,8 +21,12 @@
  *   VX_T_SOME  .some v        heap index of a one-element object
  *   VX_T_REF   .ref a         a, the index of an object of the object store
  *   VX_T_FLOAT .float b       b, the bits of a canonical double (#127)
+ *   VX_T_BIG   .int i         heap index of i's sign and magnitude, for an i
+ *                             outside [INT64_MIN, INT64_MAX] (bigint.c, #724)
  *
  * Strings are arrays of chars, as in Lean.  `void` = .tup [] = (TUP, 0).
+ * An int is INT exactly when it fits in 64 bits, so each int has one
+ * representation.
  * ------------------------------------------------------------------------ */
 #define VX_T_INT    0
 #define VX_T_LOGIC  1
@@ -33,6 +37,7 @@
 #define VX_T_SOME   6
 #define VX_T_REF    7
 #define VX_T_FLOAT  8
+#define VX_T_BIG    9
 
 /* floats.c (#127): canonical bits, the conversions to int, ToString. */
 #define VX_FFLOOR 0
@@ -45,9 +50,19 @@ int      vx_ftoint(int mode, uint64_t b, int64_t *out);
 #define VX_FMT_MAX 330  /* vx_fmt's buffer: the longest result is 317 bytes */
 size_t   vx_fmt(uint64_t b, char *out);
 
+/* ARR, TUP, SOME and BIG hold a heap index: one bit test, as the heap's
+   reclamation asks this of every cell it marks. */
+#define VX_REF_TAGS ((UINT64_C(1) << VX_T_ARR) | (UINT64_C(1) << VX_T_TUP) | \
+                     (UINT64_C(1) << VX_T_SOME) | (UINT64_C(1) << VX_T_BIG))
 static inline int vx_isref(const vx_val *v)
 {
-    return v->tag == VX_T_ARR || v->tag == VX_T_TUP || v->tag == VX_T_SOME;
+    return v->tag < 64 && ((VX_REF_TAGS >> v->tag) & 1);
+}
+
+/* An int: INT, or BIG beyond 64 bits. */
+static inline int vx_isint(const vx_val *v)
+{
+    return v->tag == VX_T_INT || v->tag == VX_T_BIG;
 }
 
 /* int64 <-> bits without implementation-defined conversions. */
@@ -101,6 +116,29 @@ int  vx_heap_keep_roots(vx_heap *h, size_t mark, vx_val **roots, size_t n,
                         size_t *fieldkept);                    /* VX_OK | VX_EFULL */
 /* Structural equality, `decide (a = b)` (iterative). */
 int  vx_equal(const vx_heap *h, const vx_val *a, const vx_val *b, int *eq);
+
+/* ------------------------------------------------------------------------
+ * Ints beyond 64 bits (bigint.c, #724): the slow path of the int operations,
+ * taken when an operand is BIG or arith.c's fast path reports VX_OVERFLOW.
+ * A BIG object is 1 + n cells: cell 0 (INT, 1 if negative else 0), cells
+ * 1..n (INT, w) the magnitude's 64-bit words, least significant first, the
+ * last nonzero.  Results are INT whenever they fit.  An int has at most
+ * VX_BIG_MAX_WORDS words, 2^20 bits (IntBits.max): a longer result is the
+ * overflow error (VX_OVERFLOW).  VX_EFULL: no memory.
+ * ------------------------------------------------------------------------ */
+#define VX_BIG_MAX_WORDS ((size_t)1 << 14)
+/* op a b (b unused by NEG, ABS) for op an int operation, VX_P_ADD ..
+   VX_P_MODULO, of two ints: VX_OK, VX_FAIL (a zero divisor), VX_OVERFLOW,
+   VX_EFULL. */
+int      vx_big_op(vx_heap *h, uint32_t op, const vx_val *a, const vx_val *b, vx_val *r);
+/* The int ±Σ w[k]·2^(64k): VX_OK, VX_OVERFLOW, VX_EFULL. */
+int      vx_big_words(vx_heap *h, int neg, const uint64_t *w, size_t n, vx_val *r);
+int      vx_big_cmp(const vx_heap *h, const vx_val *a, const vx_val *b);   /* -1, 0, 1 */
+double   vx_big_double(const vx_heap *h, const vx_val *a);   /* nearest, ties to even */
+uint64_t vx_big_low64(const vx_heap *h, const vx_val *a);    /* a mod 2^64 */
+/* ratArith op of the four ints in[0..3] (a/b, c/d): the reduced parts, or
+   VX_FAIL (quotient by 0), VX_OVERFLOW (a denominator <= 0), VX_EFULL. */
+int      vx_big_rational(vx_heap *h, uint32_t op, const vx_val *in, vx_val parts[2]);
 
 /* ------------------------------------------------------------------------
  * Object store (objects.c): the heap of class instances, Glob.heap of

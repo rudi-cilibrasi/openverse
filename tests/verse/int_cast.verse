@@ -1,5 +1,6 @@
 # int[X] of an int: a cast to the type of every int, failable as a cast is,
-# which no 64-bit int fails. UEFN 43.12 (++Fortnite+Release-43.12-CL-60598086)
+# which no int fails (past 64 bits too: int_verse_vm_cast). UEFN 43.12
+# (++Fortnite+Release-43.12-CL-60598086)
 # admits it (tests/conformance/versevm/book/book-int-cast-int.verse; the
 # Book of Verse's tests, WhereConstrainedInts.versetest:219-222)
 age := type{_X:int where 0 <= _X, _X <= 120}

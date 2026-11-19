@@ -1,5 +1,5 @@
 # set A.Data[0][0] += A.Zap(): Zap empties the inner array first, so the old value's read fails,
-# and the clause with it, before an addition that would overflow
+# and the clause with it, before an addition past 64 bits
 ca:=class:
     var Data:[][]int=array{array{1}}
     Zap()<transacts>:int=block{Print("rhs");set Data=array{array{}};9223372036854775807}

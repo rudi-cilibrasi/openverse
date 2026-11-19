@@ -7,7 +7,9 @@
   function bodies are all `brkSafe`, evaluation never produces
   `err .control`, and no expression outside a loop ends in `brk`
   (`Eval.no_control`). Together with `Prog.accepted`, the only runtime
-  errors left to a checked program are integer overflow and `Err()`.
+  errors left to a checked program are the overflow error (an int longer
+  than 2^20 bits, or one outside 64 bits given to `ToString`, a float too
+  large for an int) and `Err()`.
 -/
 import OpenVerse.Core.Adequacy
 

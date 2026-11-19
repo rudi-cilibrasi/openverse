@@ -1,4 +1,5 @@
-Overflow(N:int)<computes>:int=9223372036854775807+N
+# (an int beyond 64 bits given to ToString: the overflow error, #724)
+Overflow(N:int)<computes>:int=ToString(9223372036854775807+N).Length
 Sources()<computes>:[]int=array{}|array{1}|array{Overflow(1)}
 Pick()<computes>:int=
     for(I:Sources()):
