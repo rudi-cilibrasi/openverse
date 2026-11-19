@@ -11,6 +11,13 @@ private def relevant (n : String) : Bool :=
 private def nominal (bound : List String) (n : String) : List String :=
   if relevant n && !bound.contains n then [n] else []
 
+/-- (#724) The mark of a member named `Subscribe` (also qualified, `(c:)Subscribe`),
+    which may be an event's: such a program's events keep subscriptions. -/
+def subscribeMark : String := "$Subscribe"
+
+private def subscribes (m : String) : Bool :=
+  m == "Subscribe" || m.endsWith ":Subscribe" || m.endsWith ")Subscribe"
+
 /-- A parameter's spelling is not a nominal dependency. -/
 partial def ty (bound : List String) : STy → List String
   | .name n => nominal bound n
@@ -51,6 +58,7 @@ partial def expr (types values : List String) (e : SExpr) : List String :=
       | .app _ (.ident _ n) _ _ =>
         if ["$spawn", "$sync", "$race", "$rush", "$branch"].contains n then ["$suspends"]
         else if !values.contains n then nominal types n else []
+      | .member _ _ m => if subscribes m then [subscribeMark] else []
       | _ => []
     here ++ e.children.flatMap (expr types values)
 

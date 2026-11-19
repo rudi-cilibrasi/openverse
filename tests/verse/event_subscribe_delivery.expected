@@ -1,0 +1,27 @@
+a 1
+b 1
+plain 1
+a 2
+plain 2
+a 3
+plain 3
+holder 3
+a 4
+holder 4
+late 4
+twice 5
+twice 5
+twice 6
+in 1
+in 2
+in 3
+out 3
+out 2
+out 1
+awaited 7
+plain 7
+after 7
+plain 8
+from waiter 8
+done
+exit=0

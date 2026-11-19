@@ -465,10 +465,11 @@ class EndToEnd(Tmp):
     def test_openverse_batch_matches_single_runs(self):
         """The original probes OpenVerse admits, run one by one and as one
         driver batch on OpenVerse, demultiplex to the same results."""
-        probes = [str(p) for p in sorted(VM.glob("*.verse")) if "subscribe" not in p.name]
+        probes = [str(p) for p in sorted(VM.glob("*.verse"))]
         ovj = self.tmp / "ov.json"
         # (those OpenVerse refuses, as the event Signal probes it refuses
-        # as Epic does, #515, would refuse the whole batch)
+        # as Epic does, #515, signal-subscribe among them, #724, would
+        # refuse the whole batch)
         quiet(ov.main, ["openverse", "--modes", "default", "--json", str(ovj)] + probes)
         refused = {r["path"] for r in json.loads(ovj.read_text())["records"]
                    if r["runtime"] == "lean" and r["outcome"] == "refused"}
