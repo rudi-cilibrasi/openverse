@@ -1,0 +1,171 @@
+# Output of the admitted probes in UEFN sessions, UEFN 43.12 ++Fortnite+Release-43.12-CL-60598086, 2026-11-18 and 2026-11-19 (#724).
+# vm: verse-vm (Use Verse VM on, newVerseVm=true in the matchmaking ticket) or blueprint-vm. lines: the probe's OVPROBE lines of its first run, without the marker;
+# "(Rolling Back) " is kept on a line only where no runtime error occurred (the label of a failed context's Print). error: the first line of the runtime error; native: the native function it names.
+# outcome no-end-marker with no error: the probe did not finish (int-length-steps stalls at its last step).
+probe	vm	set	outcome	lines	error	native	utc
+await-and-subscribe	verse-vm	event-vm	completed	awaiter 1|handler 1|after signal|after wait	-	-	2026-11-19T08:38:59Z
+await-from-subscriber	verse-vm	event-vm	completed	handler 1|after signal 1|waiter 2|handler 2|after signal 2	-	-	2026-11-19T09:43:32Z
+book-concrete-inherited-control	blueprint-vm	all-bpvm	completed	compiled	-	-	2026-11-18T19:26:46Z
+book-concrete-inherited-control	verse-vm	book-vm-first	completed	compiled	-	-	2026-11-18
+book-global-block-call-var	blueprint-vm	all-bpvm	completed	linked	-	-	2026-11-18T19:26:46Z
+book-global-block-call-var	verse-vm	book-vm	server-cook-error	-	-	-	-
+book-global-block-cond-var	blueprint-vm	all-bpvm	completed	linked	-	-	2026-11-18T19:26:46Z
+book-global-block-cond-var	verse-vm	book-vm	server-cook-error	-	-	-	-
+book-global-block-cond-var-control	blueprint-vm	all-bpvm	completed	linked	-	-	2026-11-18T19:26:46Z
+book-global-block-cond-var-control	verse-vm	book-vm	completed	linked	-	-	2026-11-18T18:41:45Z
+book-global-block-fn-var	blueprint-vm	all-bpvm	completed	linked	-	-	2026-11-18T19:26:46Z
+book-global-block-fn-var	verse-vm	book-vm	server-cook-error	-	-	-	-
+book-global-block-var	blueprint-vm	all-bpvm	completed	linked	-	-	2026-11-18T19:26:46Z
+book-global-block-var	verse-vm	book-vm	server-cook-error	-	-	-	-
+book-int-abs-min	blueprint-vm	all-bpvm	runtime-error	-	ErrRuntime_MathIntrinsicCallFailure: A math intrinsic failed. (integer abs overflow)	-	2026-11-18T19:40:18Z
+book-int-abs-min	verse-vm	book-vm-first	completed	above signed 64-bit max	-	-	2026-11-18
+book-int-bitwise-pow63	blueprint-vm	all-bpvm	runtime-error	-	ErrRuntime_MathIntrinsicCallFailure: A math intrinsic failed. (integer add overflow)	-	2026-11-18T19:54:14Z
+book-int-bitwise-pow63	verse-vm	book-vm-first	completed	big computed|and zero|or unchanged|not negated	-	-	2026-11-18
+book-int-cast-int	blueprint-vm	all-bpvm	runtime-error	-	ErrRuntime_MathIntrinsicCallFailure: A math intrinsic failed. (integer add overflow)	-	2026-11-18T19:56:22Z
+book-int-cast-int	verse-vm	book-vm-first	completed	big computed|int cast succeeded	-	-	2026-11-18
+book-int-compound-add	blueprint-vm	all-bpvm	runtime-error	start	ErrRuntime_MathIntrinsicCallFailure: A math intrinsic failed. (integer add overflow)	-	2026-11-18T19:58:28Z
+book-int-compound-add	verse-vm	book-vm-first	completed	start|above signed 64-bit max	-	-	2026-11-18
+book-int-floor-div-min	blueprint-vm	all-bpvm	runtime-error	-	ErrRuntime_IntegerOverflow: Integer overflow encountered. (integer divide overflow)	-	2026-11-18T20:00:38Z
+book-int-floor-div-min	verse-vm	book-vm-first	completed	above signed 64-bit max	-	-	2026-11-18
+book-int-interpolate-pow63	blueprint-vm	all-bpvm	runtime-error	-	ErrRuntime_MathIntrinsicCallFailure: A math intrinsic failed. (integer add overflow)	-	2026-11-18T20:02:50Z
+book-int-interpolate-pow63	verse-vm	book-vm-first	runtime-error	big computed	ErrRuntime_GeneratedNativeInternal: An internal runtime error occurred in (generated) native code that was called from Verse. There is no other information available. (Value exceeds the range of a 64 bit integer.)	ToString(:int)	2026-11-18
+book-int-mul-overflow	blueprint-vm	all-bpvm	runtime-error	-	ErrRuntime_MathIntrinsicCallFailure: A math intrinsic failed. (integer multiply overflow)	-	2026-11-18T20:03:49Z
+book-int-mul-overflow	verse-vm	book-vm	completed	above signed 64-bit max	-	-	2026-11-18T18:19:43Z
+book-int-negate-min	blueprint-vm	all-bpvm	runtime-error	-	ErrRuntime_MathIntrinsicCallFailure: A math intrinsic failed. (integer negate overflow)	-	2026-11-18T20:04:57Z
+book-int-negate-min	verse-vm	book-vm	completed	above signed 64-bit max	-	-	2026-11-18T18:25:18Z
+book-int-sub-below-min	blueprint-vm	all-bpvm	runtime-error	-	ErrRuntime_MathIntrinsicCallFailure: A math intrinsic failed. (integer subtract overflow)	-	2026-11-18T20:06:05Z
+book-int-sub-below-min	verse-vm	book-vm	completed	below signed 64-bit min	-	-	2026-11-18T18:30:48Z
+book-int-where-i64	blueprint-vm	all-bpvm	runtime-error	-	ErrRuntime_MathIntrinsicCallFailure: A math intrinsic failed. (integer add overflow)	-	2026-11-18T20:07:12Z
+book-int-where-i64	verse-vm	book-vm	completed	big computed|i64 cast failed	-	-	2026-11-18T18:36:22Z
+book-join-common-base-interface-control	blueprint-vm	all-bpvm	completed	called	-	-	2026-11-18T19:26:46Z
+book-join-common-base-interface-control	verse-vm	book-vm	completed	called	-	-	2026-11-18T18:14:32Z
+book-query-and-value	blueprint-vm	all-bpvm	completed	and value equals false	-	-	2026-11-18T19:26:46Z
+book-query-and-value	verse-vm	book-vm	completed	and value equals false	-	-	2026-11-18T17:58:30Z
+book-query-or-value	blueprint-vm	all-bpvm	completed	or value equals false	-	-	2026-11-18T19:26:46Z
+book-query-or-value	verse-vm	book-vm	completed	or value equals false	-	-	2026-11-18T18:03:42Z
+book-query-true-equals-false	blueprint-vm	all-bpvm	completed	query value equals false	-	-	2026-11-18T19:26:46Z
+book-query-true-equals-false	verse-vm	book-vm	completed	query value equals false	-	-	2026-11-18T18:09:06Z
+branch-at-entry-top-level	verse-vm	conc-single	completed	main returning|branch cleanup	-	-	2026-11-19T09:07:37Z
+branch-cancel-order	verse-vm	conc-vm	completed	winner done|branch cleanup|arm cleanup|after race|after wait	-	-	2026-11-19T08:34:24Z
+branch-end-before-awaiter	verse-vm	conc-vm	completed	runner ending|branch cleanup|awaited 5|after wait	-	-	2026-11-19T08:34:24Z
+branch-in-branch	verse-vm	conc-vm	completed	function returned|outer done|outer cleanup|inner cleanup|after wait	-	-	2026-11-19T08:34:24Z
+branch-in-race-winner	verse-vm	conc-vm	completed	winner done|winner branch cleanup|loser cleanup|after race|after wait	-	-	2026-11-19T08:34:24Z
+branch-in-spawned-helper	verse-vm	conc-vm	completed	helper returning|runner after helper|branch tick|runner ending|branch cleanup|main after wait	-	-	2026-11-19T08:34:24Z
+branch-in-sync-arm	verse-vm	conc-vm	completed	arm one done|branch cleanup|arm two done|after sync|after wait	-	-	2026-11-19T08:34:24Z
+cancel-branch-before-nested-sync	verse-vm	conc-vm	completed	winner done|arm two cleanup|arm one cleanup|branch cleanup|inner cleanup|loser cleanup|after race|after wait	-	-	2026-11-19T11:32:02Z
+cancel-branch-before-race-arms	verse-vm	conc-vm	completed	winner done|arm two cleanup|arm one cleanup|branch cleanup|loser cleanup|after race|after wait	-	-	2026-11-19T11:32:02Z
+cancel-branch-before-sync-arms	verse-vm	conc-vm	completed	winner done|arm two cleanup|arm one cleanup|branch cleanup|loser cleanup|after race|after wait	-	-	2026-11-19T10:33:21Z
+cancel-branch-in-and-before-sync-arm	verse-vm	conc-vm	completed	winner done|arm two cleanup|arm branch cleanup|arm one cleanup|task branch cleanup|loser cleanup|after race|after wait	-	-	2026-11-19T11:32:02Z
+cancel-during-signal	verse-vm	event-vm	completed	a 1|a 2|after	-	-	2026-11-19T08:38:59Z
+cancel-from-awaiter	verse-vm	event-vm	completed	awaiter 1|after signal 1|after signal 2	-	-	2026-11-19T09:43:32Z
+cancel-grandchild-order	verse-vm	conc-vm	completed	winner done|grandchild cleanup|child cleanup|arm cleanup|after race|after wait	-	-	2026-11-19T10:33:21Z
+cancel-rollback	verse-vm	event-vm	completed	rolled back|seen 1	-	-	2026-11-19T08:38:59Z
+cancel-rush-child	verse-vm	conc-vm	completed	rush done|winner done|slow arm cleanup|loser cleanup|after race|after wait	-	-	2026-11-19T10:33:21Z
+cancel-spawned-not-child	verse-vm	conc-vm	completed	winner done|arm cleanup|after race|spawned done|spawned cleanup|after wait	-	-	2026-11-19T10:33:21Z
+cancel-sync-arm-child	verse-vm	conc-vm	completed	winner done|branch cleanup|sync arm cleanup|loser cleanup|after race|after wait	-	-	2026-11-19T10:33:21Z
+cancel-twice	verse-vm	event-vm	completed	seen 1|cancelled twice|seen 1	-	-	2026-11-19T08:38:59Z
+cancel-two-children-order	verse-vm	conc-vm	completed	winner done|second cleanup|first cleanup|arm cleanup|after race|after wait	-	-	2026-11-19T10:33:21Z
+compound-index-appended	verse-vm	follow-vm	completed	ok rows 1 row0 2	-	-	2026-11-19T00:02:09Z
+compound-indexed-control	blueprint-vm	all-bpvm	completed	rolled back 3|index calls 1|value 0 rows 1 row0 2	-	-	2026-11-18T19:26:46Z
+compound-indexed-control	verse-vm	704-vm	completed	rolled back 3|index calls 1|value 5 rows 1 row0 1	-	-	2026-11-18T18:57:00Z
+compound-indexed-write	blueprint-vm	all-bpvm	completed	length 2|first 0	-	-	2026-11-18T19:26:46Z
+compound-indexed-write	verse-vm	15-vm	completed	length 1|first 0	-	-	2026-11-18T16:53:50Z
+compound-map-replaced	blueprint-vm	all-bpvm	completed	entry 100 size 1	-	-	2026-11-18T19:26:46Z
+compound-map-replaced	verse-vm	704-vm	completed	entry 100 size 1	-	-	2026-11-18T18:57:00Z
+compound-module-entry	verse-vm	misc-vm	completed	entry 8 9	-	-	2026-11-19T08:47:55Z
+compound-nested-root	blueprint-vm	all-bpvm	completed	row1 7 7	-	-	2026-11-18T19:26:46Z
+compound-nested-root	verse-vm	704-vm	completed	row1 7 7	-	-	2026-11-18T18:57:00Z
+compound-nested-row	blueprint-vm	all-bpvm	completed	same row 19 9|other row 13 4	-	-	2026-11-18T19:26:46Z
+compound-nested-row	verse-vm	704-vm	completed	same row 9 9|other row 13 4	-	-	2026-11-18T18:57:00Z
+compound-object-alias	verse-vm	follow-vm	completed	alias 8 9	-	-	2026-11-19T00:02:09Z
+compound-object-call	verse-vm	follow-vm	completed	call 8 9	-	-	2026-11-19T00:02:09Z
+compound-object-field-array	blueprint-vm	all-bpvm	completed	field 8 10	-	-	2026-11-18T19:26:46Z
+compound-object-field-array	verse-vm	704-vm	completed	field 8 9	-	-	2026-11-18T18:57:00Z
+compound-object-generic	verse-vm	follow-vm	completed	generic 40|interface 8 9	-	-	2026-11-19T00:02:09Z
+compound-object-in-place	verse-vm	misc-vm	completed	element 1 51|append 1 3 7|other object 1 3 8 9	-	-	2026-11-19T08:47:55Z
+compound-object-nested	verse-vm	follow-vm	completed	same row 9 9|other row 13 4|field 7 7	-	-	2026-11-19T00:02:09Z
+compound-object-replaced	blueprint-vm	all-bpvm	completed	old 6 new 100	-	-	2026-11-18T19:26:46Z
+compound-object-replaced	verse-vm	704-vm	completed	old 6 new 100	-	-	2026-11-18T18:57:00Z
+compound-object-task	verse-vm	follow-vm	completed	task 50|alone 2	-	-	2026-11-19T00:02:09Z
+compound-operators	blueprint-vm	all-bpvm	completed	minus 99|times 400|float times 8|float divide 4	-	-	2026-11-18T19:26:46Z
+compound-operators	verse-vm	704-vm	completed	minus 100|times 200|float times 4|float divide 8	-	-	2026-11-18T18:57:00Z
+compound-plain-append	verse-vm	follow-vm	completed	rows 2 row0 3	-	-	2026-11-19T00:02:09Z
+compound-replaced-length	blueprint-vm	all-bpvm	completed	short failed 0|long ok 0	-	-	2026-11-18T19:26:46Z
+compound-replaced-length	verse-vm	704-vm	completed	short failed 0|long ok 0	-	-	2026-11-18T18:57:00Z
+compound-root-append	blueprint-vm	all-bpvm	completed	rows 2 row0 3	-	-	2026-11-18T19:26:46Z
+compound-root-append	verse-vm	704-vm	completed	rows 2 row0 4	-	-	2026-11-18T18:57:00Z
+compound-struct-replaced	blueprint-vm	all-bpvm	completed	struct 55|array replaced 45|element replaced 75	-	-	2026-11-18T19:26:46Z
+compound-struct-replaced	verse-vm	704-vm	completed	struct 50|array replaced 40|element replaced 70	-	-	2026-11-18T18:57:00Z
+compound-whole-write	blueprint-vm	all-bpvm	completed	length 2|first 0|second 42	-	-	2026-11-18T19:26:46Z
+compound-whole-write	verse-vm	15-vm	completed	length 2|first 0|second 42	-	-	2026-11-18T16:57:20Z
+decides-body-default-call	verse-vm	follow-vm	completed	compiled	-	-	2026-11-19T00:02:09Z
+default-into-default-type	verse-vm	follow-vm	completed	result 1	-	-	2026-11-19T00:02:09Z
+div-archetype-call	verse-vm	misc-vm	completed	size 3	-	-	2026-11-19T08:47:55Z
+div-const-operator	verse-vm	misc-vm	completed	half 1	-	-	2026-11-19T08:47:55Z
+div-local-const-call	verse-vm	misc-vm	completed	limit 3	-	-	2026-11-19T08:47:55Z
+end-grandchild-order	verse-vm	conc-vm	completed	runner ending|runner cleanup|grandchild cleanup|child cleanup|after wait	-	-	2026-11-19T10:33:21Z
+end-two-children-order	verse-vm	conc-vm	completed	runner ending|runner cleanup|second cleanup|first cleanup|after wait	-	-	2026-11-19T10:33:21Z
+event-unit-subscribe	verse-vm	event-vm	completed	ping|after first|after second	-	-	2026-11-19T08:38:59Z
+int-abs-big	verse-vm	int-vm	completed	before abs|abs 2^63 + 1	-	-	2026-11-19T09:09:29Z
+int-array-equal-big	verse-vm	int-vm	completed	before arrays|arrays equal|arrays differ	-	-	2026-11-19T09:09:29Z
+int-compound-mul	verse-vm	int-vm	completed	squared|minus one	-	-	2026-11-19T03:39:36Z
+int-div-zero-big	verse-vm	int-vm	runtime-error	-	ErrRuntime_GeneratedNativeInternal: An internal runtime error occurred in (generated) native code that was called from Verse. There is no other information available. (Value exceeds the range of a 64 bit integer.)	Quotient(:int,:int)	2026-11-19T03:39:36Z
+int-euclid-big	verse-vm	int-vm	runtime-error	-	ErrRuntime_GeneratedNativeInternal: An internal runtime error occurred in (generated) native code that was called from Verse. There is no other information available. (Value exceeds the range of a 64 bit integer.)	Quotient(:int,:int)	2026-11-19T03:41:58Z
+int-float-floor-big	verse-vm	int-vm	runtime-error	before floor	ErrRuntime_IntegerBoundsExceeded: A value does not fall inside the representable range of a Verse integer. (The value 10000000000000000000.000000 cannot be converted to an integer because it does not fall inside the representable range of a Verse integer.)	Floor(:float)	2026-11-19T07:29:01Z
+int-float-inf	verse-vm	int-vm	completed	big computed|infinity	-	-	2026-11-19T07:26:22Z
+int-float-tie	verse-vm	int-vm	completed	tie to even|above tie up|odd tie up	-	-	2026-11-19T03:44:41Z
+int-floor-div-zero-big	verse-vm	int-vm	completed	before floor|floor failed	-	-	2026-11-19T09:09:29Z
+int-index-big	verse-vm	int-vm	completed	index failed|negative index failed|set failed	-	-	2026-11-19T03:44:41Z
+int-intrinsics-big	verse-vm	int-vm	runtime-error	min max	ErrRuntime_GeneratedNativeInternal: An internal runtime error occurred in (generated) native code that was called from Verse. There is no other information available. (Value exceeds the range of a 64 bit integer.)	Clamp(:int,:int,:int)	2026-11-19T03:44:41Z
+int-length-max	verse-vm	int-vm	no-output	-	-	-	2026-11-19
+int-length-over	verse-vm	int-vm	no-output	-	-	-	2026-11-19
+int-length-steps	verse-vm	int-vm	no-end-marker	step 1|step 2|step 3|step 4|step 5|step 6|step 7|step 8|step 9|step 10|step 11|step 12|step 13|step 14|step 15|step 16|step 17|step 18|step 19	-	-	2026-11-19T09:20:55Z
+int-map-key-big	verse-vm	int-vm	completed	found 2^63|found 2^126|one entry	-	-	2026-11-19T07:24:56Z
+int-mod-big	verse-vm	int-vm	runtime-error	before mod	ErrRuntime_GeneratedNativeInternal: An internal runtime error occurred in (generated) native code that was called from Verse. There is no other information available. (Value exceeds the range of a 64 bit integer.)	Mod(:int,:int)	2026-11-19T09:09:29Z
+int-mod-zero-big	verse-vm	int-vm	runtime-error	before mod	ErrRuntime_GeneratedNativeInternal: An internal runtime error occurred in (generated) native code that was called from Verse. There is no other information available. (Value exceeds the range of a 64 bit integer.)	Mod(:int,:int)	2026-11-19T09:12:18Z
+int-module-const-back-control	verse-vm	int-vm	completed	max	-	-	2026-11-19T07:24:56Z
+int-overflow	blueprint-vm	all-bpvm	runtime-error	-	ErrRuntime_MathIntrinsicCallFailure: A math intrinsic failed. (integer add overflow)	-	2026-11-18T20:09:33Z
+int-overflow	verse-vm	15-vm	completed	above signed 64-bit max	-	-	2026-11-18T17:04:47Z
+int-range-big	verse-vm	int-vm	completed	count 4|two above	-	-	2026-11-19T07:24:56Z
+int-rational-big	verse-vm	int-vm	completed	floor 2^63|ceil 2^63 + 1|reduced	-	-	2026-11-19T07:24:56Z
+int-sgn-big	verse-vm	int-vm	completed	before sgn|sgn -1	-	-	2026-11-19T09:16:31Z
+int-tostring-direct	verse-vm	int-vm	runtime-error	in range	ErrRuntime_GeneratedNativeInternal: An internal runtime error occurred in (generated) native code that was called from Verse. There is no other information available. (Value exceeds the range of a 64 bit integer.)	ToString(:int)	2026-11-19T07:31:42Z
+int-tuple-equal-big	verse-vm	int-vm	completed	before tuples|tuples equal|tuples differ	-	-	2026-11-19T09:16:31Z
+int-where-natural-big	verse-vm	int-vm	completed	natural cast succeeded|negative cast failed	-	-	2026-11-19T07:24:56Z
+join-interface-only	verse-vm	follow-vm	completed	length 2	-	-	2026-11-19T00:02:09Z
+nested-signal-in-handler	verse-vm	event-vm	completed	in 1|in 2|in 3|out 3|out 2|out 1|after	-	-	2026-11-19T08:38:59Z
+print-decides-call	verse-vm	print-vm	completed	(Rolling Back) checking 3|checking 7|seven passed|after	-	-	2026-11-19T08:43:39Z
+print-for-filter	verse-vm	print-vm	completed	filter 1|body 1|(Rolling Back) filter 2|filter 3|body 3|(Rolling Back) filter 4|after	-	-	2026-11-19T08:43:39Z
+print-in-condition	verse-vm	follow-vm	completed	(Rolling Back) printed in condition|after	-	-	2026-11-19T00:02:09Z
+print-interpolation-effect	verse-vm	print-vm	completed	(Rolling Back) computing 4|(Rolling Back) value 4|after	-	-	2026-11-19T08:43:39Z
+print-multiline-in-condition	verse-vm	print-vm	completed	(Rolling Back) first\nsecond line|after	-	-	2026-11-19T08:43:39Z
+print-nested-contexts	verse-vm	print-vm	completed	outer one|(Rolling Back) inner one|end one|one passed|(Rolling Back) outer two|(Rolling Back) inner two|(Rolling Back) end two|after	-	-	2026-11-19T08:43:39Z
+print-not	verse-vm	print-vm	completed	(Rolling Back) operand fails|not succeeded|(Rolling Back) operand succeeds|not failed|after	-	-	2026-11-19T08:43:39Z
+print-option	verse-vm	print-vm	completed	(Rolling Back) inside 2|empty|inside 8|some 8	-	-	2026-11-19T08:43:39Z
+print-or-left	verse-vm	print-vm	completed	(Rolling Back) left 1|result 42|left 9|result 9	-	-	2026-11-19T08:43:39Z
+print-passing-condition	verse-vm	print-vm	completed	in passing condition|then branch|after	-	-	2026-11-19T08:43:39Z
+print-var-control	verse-vm	print-vm	completed	(Rolling Back) count set to 5|count after 0	-	-	2026-11-19T08:43:39Z
+rush-loser-outlives-return	verse-vm	conc-vm	completed	fast arm|function returning|returned|slow arm done|slow cleanup|after wait	-	-	2026-11-19T08:34:24Z
+same-handler-twice	verse-vm	event-vm	completed	twice 1|twice 1|twice 2|after	-	-	2026-11-19T08:38:59Z
+signal-bound-control	verse-vm	follow-vm	completed	after	-	-	2026-11-19T00:02:09Z
+signal-control	blueprint-vm	all-bpvm	completed	selected	-	-	2026-11-18T19:26:46Z
+signal-control	verse-vm	15-vm	completed	selected	-	-	2026-11-18T17:01:20Z
+signal-interface-control	blueprint-vm	all-bpvm	completed	after	-	-	2026-11-18T19:26:46Z
+signal-interface-control	verse-vm	15-vm	completed	after	-	-	2026-11-18T17:00:46Z
+signal-subscribe-control	verse-vm	follow-vm	completed	after success 2	-	-	2026-11-19T00:02:09Z
+sleep-negative-yields	verse-vm	conc-vm	completed	worker before sleep|worker after sleep|main after spawn|main after wait	-	-	2026-11-19T08:34:24Z
+sleep-zero-next-update	verse-vm	conc-vm	completed	b after short sleep|a after three zero sleeps|main after wait	-	-	2026-11-19T08:34:24Z
+subscribe-during-signal	verse-vm	event-vm	completed	first 1|first 2|added 2|after	-	-	2026-11-19T08:38:59Z
+subscribe-from-awaiter	verse-vm	event-vm	completed	awaiter 1|late 1|after signal 1|late 2|after signal 2	-	-	2026-11-19T08:38:59Z
+subscribe-in-transacts	verse-vm	follow-vm	completed	seen 4	-	-	2026-11-19T00:02:09Z
+subscribe-order	verse-vm	event-vm	completed	c 1|b 1|a 1|c 2|b 2|a 2|a 3|b 3|c 3|after	-	-	2026-11-19T08:38:59Z
+subscribe-rollback	verse-vm	event-vm	completed	rolled back|seen 0	-	-	2026-11-19T08:38:59Z
+transacts-into-decides-type	verse-vm	follow-vm	completed	result 1	-	-	2026-11-19T00:02:09Z
+vm-branch-await-after-return	blueprint-vm	all-bpvm	completed	function returning|returned|signaled|after wait	-	-	2026-11-18T19:26:46Z
+vm-branch-await-after-return	verse-vm	book-vm	completed	function returning|returned|branch received 7|signaled|after wait	-	-	2026-11-18T17:35:44Z
+vm-branch-outlives-return	blueprint-vm	all-bpvm	completed	function returning|branch cleanup|returned|after wait	-	-	2026-11-18T19:26:46Z
+vm-branch-outlives-return	verse-vm	book-vm	completed	function returning|returned|branch body finished|branch cleanup|after wait	-	-	2026-11-18T17:41:27Z
+vm-map-struct-option-key	blueprint-vm	all-bpvm	runtime-error	-	Throttling replicated Verse log entries	-	2026-11-18T19:26:46Z
+vm-map-struct-option-key	verse-vm	book-vm	completed	struct key found 7|option key found 8|empty option key missing	-	-	2026-11-18T17:46:58Z
+vm-sleep-zero-yields	blueprint-vm	all-bpvm	completed	worker before sleep|main after spawn|worker after sleep|main after wait	-	-	2026-11-18T19:27:55Z
+vm-sleep-zero-yields	verse-vm	book-vm	completed	worker before sleep|main after spawn|worker after sleep|main after wait	-	-	2026-11-18T17:52:42Z
