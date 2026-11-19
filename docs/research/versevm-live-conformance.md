@@ -543,6 +543,17 @@ admits the converging ones and refuses the others; it refuses the struct's
 archetype for its `<transacts>` construction (#512) and the module-scoped
 `var` because it has no `session`.
 
+Eight more, not yet compiled, ask about the paths a call can take inside
+a constant's definition, which openverse now notes wherever the call is
+written (#724's follow-up to the rule): a `for` whose generator calls a
+function with several values (`div-const-for-choice-call`, admitted by
+openverse before the follow-up, and its control in a local constant), a
+call in a `for`'s body and in an `if`'s condition, an operator the
+program overloads, a call through a function value (with a control that
+only names the function), all refused by openverse, and an archetype of a
+`<computes>` class whose `block:` calls a function, which openverse
+admits.
+
 ## Running many probes
 
 [`ovprobe.py`](../../tests/conformance/versevm/ovprobe.py) (Python 3
