@@ -7,6 +7,10 @@
 # If UEFN 43.12 refuses it (Build Verse Scripts, or the cook of a Verse VM
 # session), Epic's shipped toolchain refuses a program OpenVerse runs.
 # Control: join-named-tuple-control (one function, no join).
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# BuildAll, 2026-11-19) refuses it: 3502 (L13) "Using a value of type
+# tuple([]char,?Y:int = ...)->[]char as a value of type []char->[]char is
+# not yet implemented.".
 ArrayAndNamedToString(X:string, ?Y:int = 1):string = X
 ArrayToString(X:string):string = X
 

@@ -7,6 +7,9 @@
 # If UEFN 43.12 refuses it (Build Verse Scripts, or the cook of a Verse VM
 # session), Epic's shipped toolchain refuses a program OpenVerse runs.
 # Control: enum-wide-control (256 values).
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# BuildAll, 2026-11-19) refuses it: 3552 (L26) "Enumerator value `wide.e100`
+# is out of byte-range which is not yet supported".
 wide := enum {
     e000,e001,e002,e003,e004,e005,e006,e007,e008,e009,e00A,e00B,e00C,e00D,e00E,e00F,
     e010,e011,e012,e013,e014,e015,e016,e017,e018,e019,e01A,e01B,e01C,e01D,e01E,e01F,

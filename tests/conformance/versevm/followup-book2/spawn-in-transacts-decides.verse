@@ -9,6 +9,11 @@
 # Verse Scripts, or the cook of a Verse VM session), Epic's shipped
 # toolchain refuses a program OpenVerse runs. The rollback is
 # spawn-in-transacts-decides-rollback.
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# BuildAll, 2026-11-19) refuses it: 3512 (L15) "This 'spawn' macro has the
+# 'no_rollback' effect, which is not allowed by its context."; 3512 (L15)
+# "This invocation calls a function (`(<project>:)Work`) that has the
+# 'no_rollback' effect, which is not allowed by its context.".
 Work(Tag:string)<suspends>:void =
     Print("OVPROBE spawned {Tag}")
 

@@ -8,6 +8,10 @@
 # If UEFN 43.12 refuses it (Build Verse Scripts, or the cook of a Verse VM
 # session), Epic's shipped toolchain refuses a program OpenVerse runs.
 # Control: interface-fn-param-generic-control (the same with F(X:t)).
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# BuildAll, 2026-11-19) refuses it: 3502 (L16) "Using a value of type
+# type{_(:int->void)<transacts>:void} as a value of type
+# type{_(:any->void)<transacts>:void} is not yet implemented.".
 TheG(X:int):void = {}
 
 a(t:type) := interface:

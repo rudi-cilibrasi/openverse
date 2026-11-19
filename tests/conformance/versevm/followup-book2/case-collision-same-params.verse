@@ -7,6 +7,10 @@
 #   lower 42 | upper 420
 # If UEFN 43.12 refuses it (Build Verse Scripts, or the cook of a Verse VM
 # session), Epic's shipped toolchain refuses a program OpenVerse runs.
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# BuildAll, 2026-11-19) refuses it: 9000 (L9) "Local variable `Value` not
+# found internally in VM."; 9000 (L9) "Local variable `Value` not found
+# internally in VM.".
 Function(Value:int):int = Value
 FUNCTION(Value:int):int = 420
 

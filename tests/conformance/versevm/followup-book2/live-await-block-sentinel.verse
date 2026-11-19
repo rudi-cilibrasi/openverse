@@ -5,6 +5,8 @@
 # wait on it. OpenVerse refuses it (unknown struct 'await'). If UEFN admits
 # it, OpenVerse prints
 #   admitted
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# BuildAll, 2026-11-19) refuses it: 3506 (L8) "Unknown identifier `await`.".
 Unused()<suspends>:void =
     await{1}
 

@@ -8,6 +8,31 @@
 # session), Epic's shipped toolchain refuses a program OpenVerse runs.
 # Control: generic-higher-order-control (One and Two called with Succ, no
 # generic function passed).
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# BuildAll, 2026-11-19) refuses it: 3502 (L17) "Using a value of type
+# type{_(:type{_(:t)<transacts>:t},:t where t)<transacts>:t} as a value of
+# type type{_(:type{_(:int)<transacts>:int},:int)<transacts>:int} i"; 3502
+# (L17) "Using a value of type type{_(:type{_(:t)<transacts>:t},:t where
+# t)<transacts>:t} as a value of type
+# type{_(:type{_(:int)<transacts>:int},:int)<transacts>:int} i"; 3502 (L18)
+# "Using a value of type type{_(:type{_(:t)<transacts>:t},:t where
+# t)<transacts>:t} as a value of type
+# type{_(:type{_(:int)<transacts>:int},:int)<transacts>:int} i"; 3502 (L18)
+# "Using a value of type type{_(:type{_(:t)<transacts>:t},:t where
+# t)<transacts>:t} as a value of type
+# type{_(:type{_(:int)<transacts>:int},:int)<transacts>:int} i"; 3502 (L19)
+# "Using a value of type type{_(:type{_(:t)<transacts>:t},:t where
+# t)<transacts>:t} as a value of type
+# type{_(:type{_(:int)<transacts>:int},:int)<transacts>:int} i"; 3502 (L19)
+# "Using a value of type type{_(:type{_(:t)<transacts>:t},:t where
+# t)<transacts>:t} as a value of type
+# type{_(:type{_(:int)<transacts>:int},:int)<transacts>:int} i"; 3502 (L20)
+# "Using a value of type type{_(:type{_(:t)<transacts>:t},:t where
+# t)<transacts>:t} as a value of type
+# type{_(:type{_(:int)<transacts>:int},:int)<transacts>:int} i"; 3502 (L20)
+# "Using a value of type type{_(:type{_(:t)<transacts>:t},:t where
+# t)<transacts>:t} as a value of type
+# type{_(:type{_(:int)<transacts>:int},:int)<transacts>:int} i".
 Zero(F(:t):t, X:t where t:type):t = X
 One(F(:t)<transacts>:t, X:t where t:type)<transacts>:t = F(X)
 Two(F(:t)<transacts>:t, X:t where t:type)<transacts>:t = F(F(X))

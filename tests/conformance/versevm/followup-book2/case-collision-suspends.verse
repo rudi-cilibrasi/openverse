@@ -6,6 +6,12 @@
 #   lower 42 | upper 420
 # If UEFN 43.12 refuses it (Build Verse Scripts, or the cook of a Verse VM
 # session), Epic's shipped toolchain refuses a program OpenVerse runs.
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# BuildAll, 2026-11-19) refuses it: 9002 (L9) "Found existing type
+# 'task_cc$Function' that is already being created this compile. Please
+# rename the other to be case insensitive unique."; 9200 (L10) "Found
+# multiple functions that map to the same target function. Please rename the
+# function to be case insensitive unique. See:".
 cc := class:
     Function()<suspends>:int = 42
     FUNCTION()<suspends>:int = 420

@@ -8,6 +8,12 @@
 # If UEFN 43.12 refuses it (Build Verse Scripts, or the cook of a Verse VM
 # session), Epic's shipped toolchain refuses a program OpenVerse runs.
 # Control: join-named-default-param-control (F1(F9) called, no join).
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# BuildAll, 2026-11-19) refuses it: 3502 (L15) "Using a value of type
+# ((?A:int)->int)->int as a value of type (tuple(?A:int = ...,?B:int =
+# ...)->int)->int is not yet implemented."; 3502 (L15) "Using a value of
+# type ((?B:int)->int)->int as a value of type (tuple(?A:int = ...,?B:int =
+# ...)->int)->int is not yet implemented.".
 F1(F(?A:int):int):int = F(?A := 1)
 F3(F(?B:int):int):int = F(?B := 3)
 F9(?A:int = 9, ?B:int = 10):int = A + B

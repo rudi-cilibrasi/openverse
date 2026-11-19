@@ -4,6 +4,8 @@
 #   value 1
 # A refusal here means generic functions are no values in UEFN 43.12 (the
 # Book's types-other refusals count 4 such cases).
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# 2026-11-19) admits it, and its Verse VM prints value 1, as OpenVerse does.
 Identity(X:t where t:type)<computes>:t = X
 
 Apply()<computes><decides>:int =

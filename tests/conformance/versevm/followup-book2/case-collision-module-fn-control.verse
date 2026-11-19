@@ -5,6 +5,9 @@
 #   lower 42 | upper 420
 # A refusal here means the names themselves are refused, whatever their
 # parameters.
+# Epic's compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# 2026-11-19) admits it, and its Verse VM prints lower 42 | upper 420, as
+# OpenVerse does.
 Function(Value:int):int = Value
 FUNCTION():int = 420
 
