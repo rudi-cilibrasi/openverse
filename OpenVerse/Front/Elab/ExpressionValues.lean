@@ -132,7 +132,11 @@ partial def elabExprValuesWith
       | t => t.isUnit || t == .never) "query"
     match r.ty with
     | .opt t => return ⟨.prim .query [r.e], t⟩
-    | .logic => return ⟨.prim .query [r.e], .logic⟩
+    -- A query of a logic succeeds with the empty value, `false` (the Book's
+    -- tests, `BoolQuery.versetest` 3 and 4, `LogicalAnd.versetest:29`,
+    -- `Precedence.versetest:121`; Epic's Verse VM and Blueprint VM, UEFN
+    -- 43.12: `true? = false` holds), not with `true`.
+    | .logic => return ⟨.seq (.prim .query [r.e]) (.lit (.logic false)), .logic⟩
     | t =>
       -- The empty value of void/true converts to logic's false, as it
       -- does in an argument or assignment. Run the operand before its

@@ -46,6 +46,38 @@ def mainSignature (sigs : Signatures) (entry : Option SExpr) : Except String Sig
     pure s
   | none => throw "the program has no Main() function"
 
+mutual
+/-- A query of a logic is elaborated as `(query X; false)`, its value the
+    empty value (#724). Where the code drops that value (an `if`'s
+    condition, a statement of a sequence, a loop's body, a `for`'s
+    filter), it is `query X` alone, as before, so that only code that takes
+    the value changes. -/
+partial def dropQueryValues : Expr → Expr
+  | .ite c t e => .ite (droppedQuery (dropQueryValues c)) (dropQueryValues t) (dropQueryValues e)
+  | .seq a b => .seq (droppedQuery (dropQueryValues a)) (dropQueryValues b)
+  | .loop b => .loop (droppedQuery (dropQueryValues b))
+  | .assign i e => .assign i (dropQueryValues e)
+  | .prim p es => .prim p (es.map dropQueryValues)
+  | .heap op es => .heap op (es.map dropQueryValues)
+  | .call f es => .call f (es.map dropQueryValues)
+  | .forE i it f b => .forE i (dropQueryValues it) (droppedQuery (dropQueryValues f)) (dropQueryValues b)
+  | .ret e => .ret (dropQueryValues e)
+  | .print e => .print (dropQueryValues e)
+  | e => e
+
+/-- `e`, whose value is dropped, without a query's value at its end: a
+    sequence's last part's, an `if`'s branches' (also an `or`'s, `if (T :=
+    A) then T else B`, whose `T` is read only by its own branch). -/
+partial def droppedQuery : Expr → Expr
+  | .seq (.prim .query [x]) (.lit (.logic false)) => .prim .query [x]
+  | .seq a b => .seq a (droppedQuery b)
+  | .ite (.assign i v) (.local j) e =>
+    if i == j then .ite (.assign i (droppedQuery v)) (.local j) (droppedQuery e)
+    else .ite (.assign i v) (.local j) (droppedQuery e)
+  | .ite c t e => .ite c (droppedQuery t) (droppedQuery e)
+  | e => e
+end
+
 /-- The functions of a program prepared for lowering (`prepareLowering`). -/
 structure Lowering where
   /-- The functions, by index, then the accessors (#157). -/
@@ -113,9 +145,9 @@ def prepareLowering (env : TyEnv) (sigs : Signatures) (elaborated : Array Elabor
   let S00 : Sigs := { fns := fsigs0, classes := classTable, protos, pins, variances := env.coreVariances }
   for gi in List.range fns.size do
     let fn := fns[gi]!
-    fns := fns.set! gi { fn with body := Suspend.pruneDead S00 ((slotTys[gi]?).getD []) fn.body }
+    fns := fns.set! gi { fn with body := dropQueryValues (Suspend.pruneDead S00 ((slotTys[gi]?).getD []) fn.body) }
     metadataInfo := metadataInfo.modify gi fun info => { info with
-      body := info.body.map (Suspend.pruneDead S00 ((slotTys[gi]?).getD [])) }
+      body := info.body.map fun b => dropQueryValues (Suspend.pruneDead S00 ((slotTys[gi]?).getD []) b) }
   -- Source effects have already been checked. Compiler-owned local cells
   -- still need truthful physical write flags before metadata/capture analysis.
   return { fns := PhysicalWrites.annotate fns, slotTys, metadata := metadataInfo, sigs := S00 }

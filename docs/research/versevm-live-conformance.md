@@ -166,6 +166,7 @@ OpenVerse follows the Verse VM (the owner's decision).
 
 | Probe | Verse VM | Blueprint VM | OpenVerse before | OpenVerse now |
 | --- | --- | --- | --- | --- |
+| [`book-query-true-equals-false`](../../tests/conformance/versevm/book/book-query-true-equals-false.verse), [`book-query-and-value`](../../tests/conformance/versevm/book/book-query-and-value.verse), [`book-query-or-value`](../../tests/conformance/versevm/book/book-query-or-value.verse) | `query value equals false`, `and value equals false`, `or value equals false` | the same | `… differs from false`: `true?` was `true` | the VMs' and the Book's tests': `X?` of a logic succeeds with the empty value ([the rule](book-forms-rules.md#the-value-of-true)) |
 | [`vm-sleep-zero-yields`](../../tests/conformance/versevm/fingerprint/vm-sleep-zero-yields.verse) | `worker before sleep`, `main after spawn`, `worker after sleep`, `main after wait` | the same | `worker after sleep` before `main after spawn`: `Sleep(0.0)` completed at once (#608) | the VMs': `Sleep(0.0)` yields, a tick ([the rule](scheduler-conformance.md#sleep00-yields)) |
 
 ## OpenVerse observations

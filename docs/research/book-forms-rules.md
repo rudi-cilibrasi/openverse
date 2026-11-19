@@ -522,7 +522,29 @@ the tests make it the empty value: `assert{true?=false}`, `assert{not
 true??}` (`Tests/Operators/BoolQuery.versetest` 3, 4), `(true? and true?) =
 false` (`Operators/LogicalAnd.versetest:29`), `x := true? or true; x =
 false` (`Operators/Precedence.versetest:121`), as ch. 2's `true` type has
-it. openverse follows the tests, in design: **left.**
+it. openverse follows the tests, in design: **left**; **built** since
+Epic's VMs settled it (below).
+
+**Epic's VMs** (UEFN 43.12, `++Fortnite+Release-43.12-CL-60598086`,
+2026-11-18, #724): the probes `book-query-true-equals-false`,
+`book-query-and-value` and `book-query-or-value` print `query value equals
+false`, `and value equals false` and `or value equals false` on the Verse
+VM and the Blueprint VM alike: the tests' reading.
+
+**As built.** `X?` of a `logic` is of type `logic`, its code `(query X;
+false)` (`elabE`'s `.query`, `Elab/ExpressionValues.lean`): it succeeds
+or fails as before, with the empty value. The type stays `logic`, not
+`true`, so that `X := true? or true` joins at `logic` (whose `false` is
+the empty value) and `X = false` compares at it. Where the code drops the
+value, `dropQueryValues` (`Elab.lean`, in `prepareLowering`) takes the
+`false` off again: an `if`'s condition, a statement of a sequence, a
+loop's body, a `for`'s filter, an `if`'s branches where the `if`'s value
+is dropped, and an `or`'s left, `if (T := A) then T else B`, whose `T`
+only its own branch reads. So only code that takes the value changes its
+bytes: five of the suite's programs (`choice_scalar_method_overload`,
+`class_cast_refine_for_filter`, `class_cast_refine_for_outcomes`,
+`commas_tuples`, `defer_more`), whose output is the same; the four cases
+agree; `tests/verse/query_logic_value.verse` checks the values.
 
 **The design.** `X?` of a `logic` is of type `true` (`tuple()`), its code
 `(query X; ())`. Every program that writes `X?` would then change its

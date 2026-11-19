@@ -3037,7 +3037,12 @@ It converts to `logic` as `false` too (`X:logic = if (C?) then () else true`), a
 querying the empty value (`()?`, `V?` of `V:void` or `V:true`,
 `(not F[])?`) uses that conversion and fails, with its operand's effects
 rolled back by the surrounding failure context. A populated `O:?void`
-passes `O?`, but `O??` fails on its empty payload. Also,
+passes `O?`, but `O??` fails on its empty payload. A query of a `logic`
+that holds succeeds with the empty value, of type `logic`: `true? =
+false` holds, `(true? and true?) = false` too, and `X := true? or true`
+binds `false`, as the Book's tests have it and Epic's Verse VM and
+Blueprint VM do (UEFN 43.12, #724); `logic{B?}` is still `true` when `B`
+holds, as any `logic{…}` of a success is. Also,
 `void` and `true` interchange inside options, arrays and maps (`?void` to
 `?true`, `[]void` to `[]true`, `[int]void` to `[int]true`), as the Book
 has them one type (ch. 2: "These are interchangeable"); not yet as a
@@ -4011,7 +4016,7 @@ Main()<suspends>:void =
 | `NaN < X` | `not (Nan < 1.0)`, `Nan = Nan` (ch. 1, ch. 2) | fails (IEEE: NaN orders with nothing); `NaN = NaN` succeeds (the Book) |
 | `=` between different types | "Comparisons between different types still compile, but they always fail" (ch. 4); the empty value is one value of `logic`, `void`, `tuple()`, options, arrays, strings and maps (ch. 2) | the Book's (see [Equality and the empty value](#equality-and-the-empty-value)), at every depth and in generic code; where Verse Core cannot tell the two types' values apart (two type parameters, one and another type, a tuple of them and a string, `[]tuple(int, []int)` and `[]tuple(int, []char32)`), both operands are boxed and compared as `comparable`s ([comparable](#comparable)), so a `char32` and an `int` differ there too |
 | `false` where a map is expected | prose: accepted (ch. 2); tests: refused (`Map.versetest` 343) | refused, as the tests (it equals an empty map) |
-| `X?` of a logic | "equivalent to comparing against true" (ch. 4); the tests: `true?` is the empty value (`BoolQuery.versetest` 3, 4) | `true?` is `true`, not yet the tests' empty value ([empty-values.md](research/empty-values.md), 3.1) |
+| `X?` of a logic | "equivalent to comparing against true" (ch. 4); ch. 8: "succeeds with that value"; the tests: `true?` is the empty value (`BoolQuery.versetest` 3, 4, `LogicalAnd.versetest:29`, `Precedence.versetest:121`) | the tests' and **Epic's**: `X?` succeeds when `X` is `true`, with the empty value, `false`, so `true? = false` holds; both of Epic's VMs agree (UEFN 43.12 (`++Fortnite+Release-43.12-CL-60598086`), probes `book-query-*`) ([the rule](research/book-forms-rules.md#the-value-of-true)) |
 | `true` as a type | the type of the empty value, as `tuple()` (ch. 2); `void` and `true` interchange (`Void.versetest`); `Result:true = branch: …` refused, `Result:any = branch: …` valid (`FORT-582630-BranchResult.versetest`) | the Book's: `tuple()`; `void` and it interchange inside options, arrays and maps; a `branch:`'s value is an `any` ([the rule](research/book-forms-rules.md#true-as-a-type)); not yet in a function type (`int->true` and `int->void` are two types) |
 | Ordering of rationals | not stated (§2 lists `<` … for `int` and `float`) | exact (by continued fractions, so it cannot overflow), and an int compares with a rational |
 | Order of a choice's values | (not in the Book; the Verse Calculus: spatial) | spatial: the leftmost choice varies slowest, as nested generators do (#208) |
