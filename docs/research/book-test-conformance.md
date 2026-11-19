@@ -59,7 +59,7 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
 
 ## Where things stand
 
-With [compound places](#after-compound-places) on main `617c89f1` (#704): **8,802 agree, 600 refuse, 55 accept, 91 differ, 3,956 not translatable** of 13,504 cases (a full comparison against the baseline; before this change, 8,801 agreed and 92 differed; with [tuple and array concatenation](#after-tuple-and-array-concatenation) on `cf0ced0e` (#630), 8,799 agreed and 602 were refused, the count the refusals' table below still has). This is the one table of what is left; the sections below are the history, each written when its work landed, and the four maps ([the first map](#the-remaining-causes-a-map), [classes](#classes-and-subtyping-the-map), [forms](#forms-of-expressions-statements-and-the-library-a-map), [the forms still on the list](#the-forms-still-on-the-list-a-map)) hold the case-by-case reading each row points to.
+With [ints beyond 64 bits](#after-ints-beyond-64-bits) (#724, on `1bc227bc`): **8,814 agree, 639 refuse, 55 accept, 40 differ, 3,956 not translatable** of 13,504 cases (a full comparison against the baseline; before it, 8,802 agreed, 600 were refused and 91 differed). With [compound places](#after-compound-places) on main `617c89f1` (#704): 8,802 agree, 600 refuse, 55 accept, 91 differ, 3,956 not translatable (before that change, 8,801 agreed and 92 differed; with [tuple and array concatenation](#after-tuple-and-array-concatenation) on `cf0ced0e` (#630), 8,799 agreed and 602 were refused, the count the refusals' table below still has). This is the one table of what is left; the sections below are the history, each written when its work landed, and the four maps ([the first map](#the-remaining-causes-a-map), [classes](#classes-and-subtyping-the-map), [forms](#forms-of-expressions-statements-and-the-library-a-map), [the forms still on the list](#the-forms-still-on-the-list-a-map)) hold the case-by-case reading each row points to.
 
 **Accepted where the tests refuse (55)**
 
@@ -73,17 +73,18 @@ With [compound places](#after-compound-places) on main `617c89f1` (#704): **8,80
 | initializer-effects | 4 | a module constant whose construction runs a `block` that allocates a `var` (VerseVM's link error 9003, `GlobalVariables.versetest` 86-105); the BPVM's twins are valid, and `:143` is valid where the `var` is not reached: a check of what the initializer does when it runs | left: a VM split and a check at run time, [the forms still on the list](#the-forms-still-on-the-list-a-map) |
 | final-members | 1 | a `<final>` method that does not implement an interface's method of its name (`final.versetest:125`): members keyed by qualifier | left with the two members of one name, [the forms still on the list](#the-forms-still-on-the-list-a-map) |
 
-**Different output (91)**
+**Different output (40)**
 
 | Cause | Cases | What it is, and what it needs | Who decided what |
 |---|---:|---|---|
-| int-precision | 87 | VerseVM's unbounded `int` against openverse's 64 bits (`Bitwise`, the arithmetic operators, 5 `ToDiagnostic` operands): bignums in the C runtime | openverse's reading, the BPVM's, [Readings](../LANGUAGE.md#readings-openverse-takes) |
+| int-precision | 36 | the Blueprint VM's 64-bit `int` (`bp_vm_only`: `MathIntrinsicCallFailure` in `Bitwise`, the arithmetic operators, `Abs`, `Negate`) against openverse's, the Verse VM's (#724) | the owner's: OpenVerse targets the Verse VM, which Epic's UEFN 43.12 confirms, [int](../LANGUAGE.md#int) |
 | empty-values-equal | 4 | the value of `X?` on a `logic`, `true?` (the empty value in the tests) | the Book disagrees with itself; built and measured: right for the 4 and no output changed, but 722 programs' bytes, which the elaborator's own `or` and `void` conversions take; needs a flag every value-dropping context sets ([the rule](book-forms-rules.md#the-value-of-true)), [After the forms still on the list](#after-the-forms-still-on-the-list) |
 
-**Refused where the tests accept (602)**
+**Refused where the tests accept (602; 641 since ints beyond 64 bits, the 39 of `int-module-constants`)**
 
 | Cause | Cases | What it is, and what it needs | Who decided what |
 |---|---:|---|---|
+| int-module-constants | 39 | `Math/Bitwise.versetest`'s `verse_vm_only` module constant `Pow2_64 : int = (9223372036854775807 + 1) * 2` (`:73`) and the 38 cases that use it: Epic's UEFN 43.12 refuses it, 9003 (`book-int-pow64-module-const`), as openverse does since #724 | Epic's compiler over the Book's tests, [int](../LANGUAGE.md#int); one line to change if the owner prefers the tests |
 | union-types | 136 | `union{…}` (VerseVM only, in no chapter) | left, [the first map](#the-remaining-causes-a-map) |
 | types-other | 91 | sorted in [the forms still on the list](#the-forms-still-on-the-list-a-map) (T1-T24): `true` in a function type (5), function values joined through `any` (8, v), F-bounded classes (6), refinement overloads (6), two interfaces' methods (3), `spawn` forms (7), inference from an expected type (3), a generic function as a value (4), library (12), cyclic defaults (4), a parametric class as a value (2), others one each | left, listed there |
 | syntax-other | 68 | sorted in [the forms still on the list](#the-forms-still-on-the-list-a-map) (S1-S11): `TimSyntax.versetest`'s grammar (35: specifiers after an expression, `:` and `where` as expressions, keywords as names, `try`/`catch`, `&x`, units), a type written as an argument (6), constructor delegation outside a constructor (4), roundtrip and function-type syntax (11), VerseVM's (4), one each (8) | left: no prose for the `TimSyntax` grammar; a type written as an argument with the metatypes |
@@ -2706,6 +2707,31 @@ evaluation of keys, choices, loops and `break`; `set_op_order` and
 `set_op_order_paths` now expect the replaced container's reading for an
 object's field. Core semantics, proofs, OVBC and the C runtime are
 unchanged.
+
+## After ints beyond 64 bits
+
+`int` is the Verse VM's (#724): exact past the signed 64-bit range, up to
+2^20 bits (the Book's `MaxLengthBits`), as Epic's Verse VM on UEFN 43.12
+(++Fortnite+Release-43.12-CL-60598086, "Use Verse VM", 2026-11-18) prints
+for every integer probe of `tests/conformance/versevm`; `ToString` of an
+int beyond 64 bits is the overflow error, as it is there; a module
+constant whose literal arithmetic leaves 64 bits is refused when it
+compiles, as Epic's compiler refuses it (9003). Verse Core's `Res.ofInt`
+checks the length instead of the range; the C runtime keeps an int beyond
+64 bits on its heap (`runtime/src/bigint.c`) and `arith.c`, proved, is its
+fast path ([int](../LANGUAGE.md#int); DESIGN.md, "Ints beyond 64 bits").
+
+On top of `1bc227bc`: 49 cases newly agree (the `verse_vm_only` cases of
+`Math/Bitwise.versetest`, the arithmetic operators, `Abs`, `Negate`, five
+`ToDiagnostic` operands, `WhereConstrainedInts.versetest` 224 and 227); 36
+are worse, the `bp_vm_only` cases that expect the Blueprint VM's
+`MathIntrinsicCallFailure` (now int-precision, different output); 39 are
+now refused, the `verse_vm_only` cases that use the module constant
+`Pow2_64` (`int-module-constants`; 38 were different output, and `:247`,
+which expects a runtime error from `BitShiftLeft[1, Pow2_64]`, agreed by
+the constant's own overflow), which would agree were module constants
+computed at run time, as the Book's tests expect and Epic's compiler does
+not do. The baseline records them.
 
 ## Ten causes to remove first
 

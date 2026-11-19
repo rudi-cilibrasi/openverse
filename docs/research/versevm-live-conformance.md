@@ -157,6 +157,53 @@ results for all twelve. The probes `compound-object-alias`,
 `compound-index-appended` are not yet run on Epic; each header gives
 OpenVerse's output and the other reading's.
 
+### Integers beyond 64 bits
+
+Same build, sessions with **Use Verse VM** (issue #724; the raw records are
+the comparer's `vm-all.json` and, for the Blueprint VM, `live-all-bpvm.json`):
+
+| Probe | Verse VM | Blueprint VM |
+| --- | --- | --- |
+| `int-overflow` (`2^63 - 1 + 1` compared with `2^63 - 1`) | `above signed 64-bit max` | `ErrRuntime_MathIntrinsicCallFailure` (integer add overflow) |
+| `book-int-mul-overflow`, `book-int-negate-min`, `book-int-abs-min`, `book-int-floor-div-min` | `above signed 64-bit max` | integer multiply, negate, abs overflow; `ErrRuntime_IntegerOverflow` (integer divide overflow) |
+| `book-int-sub-below-min` | `below signed 64-bit min` | integer subtract overflow |
+| `book-int-compound-add` (`set +=`) | `start`, `above signed 64-bit max` | `start`, integer add overflow |
+| `book-int-bitwise-pow63` | `big computed`, `and zero`, `or unchanged`, `not negated` | integer add overflow |
+| `book-int-where-i64` | `big computed`, `i64 cast failed` | integer add overflow |
+| `book-int-cast-int` | `big computed`, `int cast succeeded` | integer add overflow |
+| `book-int-interpolate-pow63` | `big computed`, then the session stops: `ErrRuntime_GeneratedNativeInternal` in `ToString(:int)`, "Value exceeds the range of a 64 bit integer." | integer add overflow |
+| `book-int-pow64-module-const` | refused by the editor build: 9003, "Runtime error while evaluating module" (its log: "integer add overflow") | not built with the Verse VM off |
+| `book-int-shift-63` | refused: 3506, unknown identifier `BitShiftLeft`, `BitShiftRight` | not built with the Verse VM off |
+
+The rule they give: on the Verse VM, `int` arithmetic is exact past 64 bits,
+a 64-bit refinement's cast compares exactly, and `ToString` of such an int is
+a runtime error; a module's constants are evaluated in 64 bits when the
+module is linked. OpenVerse follows it since #724
+([LANGUAGE.md, int](../LANGUAGE.md#int)): every probe above prints the Verse
+VM's lines in Lean and C, `book-int-pow64-module-const` is refused at compile
+time, and `book-int-cast-int` waits for `int[...]`, which another branch
+adds (`fix/epic-effect-admission`). The longest int, 2^20 bits, is the
+Book's (`Math/Bitwise.versetest`, `verse_vm_only`, "MaxLengthBits"), not yet
+observed: UEFN 43.12 has no shifts, and multiplication's limit is a
+follow-up probe.
+
+### Follow-up probes
+
+[`followup-int/`](../../tests/conformance/versevm/followup-int) asks what
+the evidence above leaves open, one question per probe, each header saying
+what OpenVerse prints and what the other reading would (its
+`expectations.tsv` has the same in its `note` column). The risky ones, which
+OpenVerse ends with a runtime error, are `int-float-inf` (an int past the
+largest double times a float: OpenVerse gives `Inf`), `int-float-floor-big`
+(`Floor[1.0e19]`: the API reference's integer-bounds error, which OpenVerse
+raises), `int-length-over` (2^(2^20) by multiplication: OpenVerse's overflow
+error) and `int-tostring-direct` (`ToString` called directly). The others
+ask about a zero divisor, ties in the int-to-float conversion, an index and
+a range beyond 64 bits, map keys, the longest int, module constants
+computed by a call or leaving 64 bits on the way, an int literal beyond 64
+bits (a compile probe), rationals, `Min`, `Max`, `Clamp`, `Sgn`, Euclidean
+division, a one-sided refinement and `set *=`.
+
 ## OpenVerse observations
 
 On the tested head of [#702](https://github.com/rudi-cilibrasi/openverse/pull/702),
@@ -172,7 +219,7 @@ stderr and exit status for all thirteen probes that produced bytecode.
 | `signal-subscribe` and its control | Refused because OpenVerse's `event` lacks `Subscribe`. OpenVerse provides subscription through `subscribable_event`. | Same refusal. |
 | `compound-indexed-write` | Prints `length 2`, then `first 0`; since #704, `length 1`, then `first 0`, as Epic does. | Admitted. |
 | `compound-whole-write` | Prints `length 2`, `first 0`, and `second 42`. | Admitted. |
-| `int-overflow` | Runtime overflow, exit 2. | Admitted by `check`. |
+| `int-overflow` | Runtime overflow, exit 2; since #724, `above signed 64-bit max`, as Epic's Verse VM prints. | Admitted by `check`. |
 
 ## Running many probes
 

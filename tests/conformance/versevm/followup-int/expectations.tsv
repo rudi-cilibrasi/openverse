@@ -1,0 +1,21 @@
+# Follow-up probes for ints beyond 64 bits (#724): what OpenVerse prints is in each probe's header and in note; the Book's expectation where it has one.
+probe	book_case	book_outcome	book_lines	note
+int-div-zero-big	-	-	-	OpenVerse: quotient failed|mod failed|floor failed. A runtime error would mean heap ints treat a zero divisor apart.
+int-float-tie	-	-	-	OpenVerse: tie to even|above tie up|odd tie up (round to nearest, ties to even).
+int-float-inf	-	-	-	Risky. OpenVerse: big computed|infinity. A runtime error would stop the session after big computed.
+int-float-floor-big	verse_api_overrides.md, Floor(float)	runtime-error	before floor	Risky. The API reference: a halting integer-bounds error outside 64 bits; OpenVerse agrees. The Verse VM might give an int beyond 64 bits (floor above).
+int-index-big	-	-	-	OpenVerse: index failed|negative index failed|set failed.
+int-range-big	-	-	-	OpenVerse: count 4|two above.
+int-map-key-big	-	-	-	OpenVerse: found 2^63|found 2^126|one entry.
+int-length-max	Tests/Math/Bitwise.versetest:221	ran	longest computed|longer than half	The Book's MaxLengthBits (2^20) for shifts; this reaches the longest int by multiplication.
+int-length-over	Tests/Math/Bitwise.versetest:222	runtime-error	half computed	Risky. OpenVerse raises the overflow error at 2^(2^20) by multiplication, as the Book's shifts do; without a limit for multiplication Epic prints squared.
+int-module-const-call	-	-	-	OpenVerse computes it at run time: above. A 9003 refusal would mean every module constant is evaluated in 64 bits.
+int-module-const-back	-	-	-	OpenVerse refuses at compile time (integer add overflow on the way); admitted, it prints back to max.
+int-module-const-back-control	-	-	-	Control: both admit and print max.
+int-tostring-direct	-	-	-	Risky. OpenVerse: in range, then the overflow error (as Epic does for interpolation).
+int-literal-big	docs/02_primitives.md, Integers	refused	-	The Book: literals must fit in 64 bits. OpenVerse refuses.
+int-rational-big	-	-	-	OpenVerse: floor 2^63|ceil 2^63 + 1|reduced.
+int-intrinsics-big	-	-	-	OpenVerse: min max|clamp|sgn|containers equal.
+int-euclid-big	-	-	-	OpenVerse: quotient -4|mod D - 1|floor -4|ceil -3.
+int-where-natural-big	Tests/WhereConstrainedInts.versetest:219	-	-	OpenVerse: natural cast succeeded|negative cast failed.
+int-compound-mul	-	-	-	OpenVerse: squared|minus one.

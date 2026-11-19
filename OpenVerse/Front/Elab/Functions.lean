@@ -2,6 +2,7 @@
    `elabProgramCore`); public declarations retain OpenVerse.Front names. -/
 import OpenVerse.Front.Elab.Signatures
 import OpenVerse.Front.MetadataReceivers
+import OpenVerse.Front.ConstantRange
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -387,6 +388,16 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
           pos := p, seeds := st.metadataSeeds, uses := st.metadataUses
           metadataWrites := st.metadataWrites, body := some e } }
     | .classDef .. => pure ()   -- expanded above
+  -- (#724) a module constant that Epic's linker evaluates in 64 bits, and
+  -- that leaves them, is refused (`ConstantRange`)
+  let constBody (f : Nat) : Option Expr := match sigs.tops[f]?, elaborated[f]? with
+    | some (.const _ n ..), some ef => if n.startsWith "$" then none else some ef.fn.body
+    | _, _ => none
+  for (top, idx) in sigs.tops.zip (List.range sigs.tops.length) do
+    if let .const p n .. := top then
+      if let some b := constBody idx then
+        if let some what := ConstantRange.check constBody b then
+          throw s!"{p.show}: the value of the module constant {n} leaves the 64-bit range when the module is evaluated ({what}): Epic's Verse compiler evaluates module constants with 64-bit ints and refuses this (error 9003, UEFN 43.12), though at run time ints go past 64 bits; compute it in a function"
   -- each generic function is elaborated once, with its type parameters
   -- opaque, as Verse checks it, into one Verse Core function whose types
   -- mention type variables; `Prog.checkTypes` checks it once, for every

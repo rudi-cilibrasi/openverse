@@ -3178,7 +3178,8 @@ Blueprint VM differ; the Book of Verse (ch. 2, "Overflow and VM
 Differences") has the two readings, and Epic's Verse VM on UEFN 43.12
 (`++Fortnite+Release-43.12-CL-60598086`, "Use Verse VM", 2026-11-18) prints
 the Verse VM's for every probe of
-[tests/conformance/versevm](../tests/conformance/versevm) (issue #724).
+[tests/conformance/versevm](../tests/conformance/versevm)
+([the observations](research/versevm-live-conformance.md#integers-beyond-64-bits)).
 
 ```verse
 Next(N:int)<computes>:int = N + 1
@@ -3219,6 +3220,23 @@ Main():void =
   as for any index out of range. A range with a bound beyond 64 bits gives
   its ints one by one (`for (I := Big..Big + 2)`), across the 64-bit
   boundary too; its length must fit in memory, as any range's.
+- A module's constant is evaluated in 64 bits, as Epic's compiler evaluates
+  it when it links the module: `TwoTo64:int = (9223372036854775807 + 1) * 2`
+  is refused (`the value of the module constant TwoTo64 leaves the 64-bit
+  range when the module is evaluated (integer add overflow:
+  9223372036854775807 + 1)`), as UEFN 43.12 refuses it with error 9003,
+  "Runtime error while evaluating module" (its log: "integer add
+  overflow"), though the same arithmetic in a function gives 2^64 at run
+  time. openverse computes a constant at each use, at run time, so it
+  checks this when it compiles, for the constants it can evaluate without
+  running the program: int arithmetic on literals and on other such
+  constants. A constant whose value calls a function is computed at run
+  time with the Verse VM's ints (whether Epic refuses it too is
+  [a follow-up probe](research/versevm-live-conformance.md#follow-up-probes)).
+  The Book's own test of this, `Math/Bitwise.versetest:73`
+  (`verse_vm_only`), expects the constant to be 2^64, and 38 cases of that
+  file use it: openverse refuses the 39, as Epic's compiler does
+  ([the survey](research/book-test-conformance.md#after-ints-beyond-64-bits)).
 - Rationals are pairs of these ints, reduced ([rational](#rational)).
 - In Verse Core an int is Lean's `Int` (`Res.ofInt` checks the length); the
   C runtime keeps one that fits in 64 bits in a word (`arith.c`, the fast
@@ -4046,7 +4064,7 @@ Main()<suspends>:void =
 
 | Question | Book | openverse |
 |---|---|---|
-| `int` range | arbitrary precision on VerseVM; 64-bit with a runtime error on BPVM (§4.1) | **VerseVM** (#724, Epic's Verse VM on UEFN 43.12 agrees): exact past 64 bits, up to 2^20 bits (the Book's tests' `MaxLengthBits`), a longer result the overflow error; `ToString` of one beyond 64 bits the overflow error, as on Epic's Verse VM ([int](#int)) |
+| `int` range | arbitrary precision on VerseVM; 64-bit with a runtime error on BPVM (§4.1) | **VerseVM** (#724, Epic's Verse VM on UEFN 43.12 agrees): exact past 64 bits, up to 2^20 bits (the Book's tests' `MaxLengthBits`), a longer result the overflow error; `ToString` of one beyond 64 bits the overflow error, as on Epic's Verse VM; module constants evaluated in 64 bits, as Epic's compiler does ([int](#int)) |
 | `X = Y` result | the operators page says `logic`; elsewhere the left operand (§5.4) | the left operand |
 | Associativity of comparisons | the prose: chains "check all adjacent pairs" (ch. 1); the table: right (ch. 4); the tests: `<>` left-associative (`Associativity.versetest:9`), the others as a chain: the Book disagrees with itself ([the audit](research/readings-audit.md#comparison-chains-with-)) | chains: every adjacent pair checked, each operand evaluated once, result is the leftmost |
 | Value of a successful `not e` | unspecified | `void` |

@@ -67,6 +67,9 @@ rule("type-checks-other", ACC)
 
 # --- different output
 rule("int-precision", OUT, diag=r"overflow")
+# (the Blueprint VM's 64-bit ints: a runtime error where openverse, with the
+# Verse VM's ints, #724, goes on)
+rule("int-precision", OUT, form="assert_runtime_error", prog=r"922337203685477580[78]|Pow2_64|BitShiftLeft\[")
 rule("empty-values-equal", OUT, prog=r"(Y:(void|logic|tuple\(\)|\?int|\[\]int|\[int\]int|string)\s*=\s*"
      r"(\{\}|false|\(\)|array\{\}|map\{\}|\"\"))|\(\)\s*=\s*\"\"|\"\"\s*=\s*\(\)|X:void\s*=|true\?\s*\??|"
      r"X\s*=\s*\(\)$|\(true\? and true\?\) = false|true\?\s+or true")
@@ -83,6 +86,7 @@ rule("output-other", OUT)
 K = r"(?:class|struct|module|interface|enum|union|scoped|type)\b"
 rule("override-defaults", REF, diag=r"must give a new default|must have the type it inherits|"
      r"must have the signature of")
+rule("int-module-constants", REF, diag=r"leaves the 64-bit range when the module is evaluated")
 rule("partial-modules", REF, diag=r"module \S+ is defined twice")
 rule("empty-containers", REF, diag=r"the type of an empty (array|map)")
 rule("comparisons", REF, diag=r"compares values of different types|no operator '(=|<>)'|"
