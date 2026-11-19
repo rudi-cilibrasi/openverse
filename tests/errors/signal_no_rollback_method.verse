@@ -1,4 +1,4 @@
-# expect: 18:16: this call may signal an event (loud.Notify → subscribable_event.Signal) in a failure context
+# expect: 18:16: this call may signal an event (loud.Notify → event.Signal) in a failure context
 # (#515) an interface method whose implementation
 # signals, called in an if's condition: a dispatch counts as a call of every
 # implementation

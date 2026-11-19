@@ -342,7 +342,7 @@ bytecode (the compound probes' outputs are in their headers and in
 | `signal-bound-control` (rewritten: a method of its own that signals, bound) | Prints `after`. | Same. |
 | `signal-direct`, `signal-alias`, `signal-bound`, `signal-interface`, `signal-await` | Refused at the `Signal` in the condition, as 43.12 (3512). | Print `after`; `signal-await` prints `waiting`, then `received 2`. |
 | `signal-generic`, `signal-generic-control` | Refused at the `Signal` in the `<transacts>` helper `Send`, as 43.12 (3512). | Print `after`. |
-| `signal-subscribe` and its control (rewritten: the field is `Seen`) | Refused because OpenVerse's `event` lacks `Subscribe`; it provides subscription through `subscribable_event` (`followup/subscribable-event-control.verse` asks 43.12 which type has it). | Same refusal. |
+| `signal-subscribe` and its control (rewritten: the field is `Seen`) | `signal-subscribe` is refused at its condition's `Signal` only, as 43.12 (3512); the control prints `after success 2`, as the Verse VM does: `event` has `Subscribe` (#724). | `signal-subscribe` prints `after failure 0`, `after success 2`; the control as the default. |
 | `compound-indexed-write` | Prints `length 1`, then `first 0`, as Epic does (#704). | Same. |
 | `compound-whole-write` | Prints `length 2`, `first 0`, and `second 42`. | Same. |
 | `int-overflow` | Runtime overflow, exit 2; since #724, `above signed 64-bit max`, as Epic's Verse VM prints. | Same. |
@@ -372,12 +372,12 @@ Lean and C agreeing wherever a program ran.
 | `join-interface-only` | admitted; `length 2` | `length 2` |
 | `print-in-condition` | admitted; `(Rolling Back) printed in condition`, `after` (the raw log's label, which the batch runner strips) | `after`: openverse rolls the `Print` back with the failed condition and does not echo it. **Open** (#724): the Verse VM logs the line labelled as rolled back; [`followup-print/`](../../tests/conformance/versevm/followup-print) asks which lines get the label |
 | `signal-class-block`, `signal-transacts-method` | 3512 L3, L4: `Signal` has `no_rollback` | refused, the same |
-| `subscribable-event-control` | 3506 L7 "Unknown identifier `subscribable_event`" | `after success 2`: `subscribable_event` is an openverse extension |
-| `subscribe-in-transacts` | admitted; `seen 4` | refused: openverse's `event` has no `Subscribe`. **Differs** |
+| `subscribable-event-control` | 3506 L7 "Unknown identifier `subscribable_event`" | `after success 2`: `subscribable_event` is an openverse extension, an `event` and nothing more (#724) |
+| `subscribe-in-transacts` | admitted; `seen 4` | `seen 4`: `event` has `Subscribe` (#724) |
 | `transacts-into-decides-type` | admitted; `result 1` | `result 1` |
 | `signal-bound-control` (rewritten) | admitted; `after` | `after` |
-| `signal-subscribe` (rewritten) | 3512 L10 at its condition's `Signal`, nothing else | refused: no `Subscribe` on `event` |
-| `signal-subscribe-control` (rewritten) | admitted; `after success 2` | refused: no `Subscribe` on `event`. **Differs** |
+| `signal-subscribe` (rewritten) | 3512 L10 at its condition's `Signal`, nothing else | refused at its condition's `Signal`, nothing else (#724) |
+| `signal-subscribe-control` (rewritten) | admitted; `after success 2` | `after success 2` (#724) |
 
 What they settle, now openverse's rules: a plain `<decides>` function has
 `no_rollback`, and its body's top may call one that has it, while a failure
@@ -387,11 +387,41 @@ it, `Print` and `Subscribe` do not; a `<transacts>` function is a value of a
 `<transacts><decides>` type; an `if`'s branches of two classes with two
 nearest common supertypes are an `any`, whatever is expected; a class below
 a `<concrete>` one cannot be `<abstract>`; `int[X]` of an `any` is refused.
-One difference remains, `Subscribe` on `event` (openverse has it on
-`subscribable_event` only), and one question is open: the Verse VM logs a
-rolled-back `Print`'s line with the label `(Rolling Back)`, while
-openverse's output is transactional in Core and in the C runtime and
-echoes nothing (#724, `followup-print/`).
+`Subscribe` is on `event` now (#724). The Verse VM logs a rolled-back
+`Print`'s line with the label `(Rolling Back)`, while openverse's output is
+transactional in Core and in the C runtime and echoes nothing (#724,
+`followup-print/`).
+
+### Subscribe follow-up probes
+
+[`followup-event/`](../../tests/conformance/versevm/followup-event) asks
+what the results above leave open about `Subscribe` (#724); each probe's
+header gives what OpenVerse prints and the other readings, and its
+`expectations.tsv` the Book's expectation, Epic's outcome and the
+comparison. UEFN 43.12 (the same build, "Use Verse VM",
+`newVerseVm=true`) compiled twelve and ran the eleven it admitted on
+2026-11-19 (08:38Z). OpenVerse's column is after #724's fix, Lean and C
+agreeing.
+
+| Probe | Verse VM | OpenVerse |
+| --- | --- | --- |
+| `await-and-subscribe` | `awaiter 1`, `handler 1`, `after signal`, `after wait`: the awaiter goes on inside `Signal`, then the function | the same |
+| `subscribe-from-awaiter` | `awaiter 1`, `late 1`, `after signal 1`, `late 2`, `after signal 2`: a function a resumed awaiter subscribes is called by that `Signal` | the same (before the fix, no `late 1`) |
+| `subscribe-during-signal` | `first 1`, `first 2`, `added 2`, `after`: one a called function subscribes waits for the next `Signal` | the same |
+| `cancel-during-signal`, `cancel-twice`, `same-handler-twice`, `nested-signal-in-handler` | one cancelled before its turn is skipped; a second `Cancel` does nothing; a function subscribed twice is called twice; a nested `Signal` runs depth first | the same |
+| `subscribe-rollback`, `cancel-rollback` | `Subscribe` and `Cancel` in a failing condition are undone | the same |
+| `event-unit-subscribe` | `event()` takes a function without parameters | the same |
+| `subscribe-order` | `c 1`, `b 1`, `a 1`, `c 2`, `b 2`, `a 2`, `a 3`, `b 3`, `c 3`: the order varies between `Signal`s | subscription order. **Differs**, a documented difference: a program must not rely on the order |
+| `sticky-event-subscribe` | refused, 3506 "Unknown identifier `sticky_event`" (it asks for `using { /Verse.org/Restricted }`) | admitted: `subscribed`, `sticky 2`, `after` |
+
+So a `Signal` resumes its awaiters, then calls the functions subscribed
+at that point. Two probes asked what that rule leaves open and ran on
+the Verse VM at 09:43Z, both printing what OpenVerse prints:
+`cancel-from-awaiter` (a subscription a resumed awaiter cancels is skipped
+by that `Signal`: `awaiter 1`, `after signal 1`, `after signal 2`) and
+`await-from-subscriber` (an await a called function starts is resumed by
+the next `Signal`: `handler 1`, `after signal 1`, `waiter 2`, `handler 2`,
+`after signal 2`).
 
 ## Running many probes
 

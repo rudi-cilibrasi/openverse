@@ -180,6 +180,9 @@ def pretty (msg : String) : String :=
     else if w.startsWith "$fn" then "a function type"
     -- (the prelude's `subscribable_event()`, #220)
     else if w == "$subev0" then "subscribable_event()"
+    -- (#724) the subscriptions' helper and class, as the API names them
+    else if w == "$subscribeUnit" then "event.Subscribe"
+    else if (w.splitOn ".").headD "" == "$subscription" then "cancelable" ++ (w.drop "$subscription".length).toString
     else if ["$event", "$sticky_event", "$task", "$subscribable_event", "$cancelable"].contains
         ((w.splitOn ".").headD "") then (w.drop 1).toString
     else w
