@@ -579,6 +579,30 @@ what openverse prints. So each refusal is the form's under test:
 Build the `long-ident-*` probes alone, in single mode: Epic's names for
 them may depend on the module that holds them.
 
+openverse takes these refusals (#724; [the survey](book-test-conformance.md#after-epics-verdicts-on-the-accepted-refusals)):
+names of one scope's functions that differ only in case with the same
+parameters (9200), identifiers past 1024 characters (3655) and class
+names past 1023 (9002), enums past 256 values (3552), an interface's
+abstract method implemented only below the interface (3591), no packing
+of several arguments into a tuple parameter beside a named one (3509),
+and `spawn`'s `no_rollback` (3512). Not taken: a method's mangled name
+(its limit counts the project's path), and the parametric `var` fields
+(3552, 3502), which refuse 32 of openverse's own test programs and
+change the refusal of 4 error tests. The function-value
+coercions (3502) are another change's.
+[`followup-book3/`](../../tests/conformance/versevm/followup-book3) asks
+the edges the evidence leaves open, one construct each, with OpenVerse's
+verdict in each header: names differing only in case under other
+parameter names, beside a named parameter, in a subclass, as two classes,
+a function and a constant, an interface's methods; a class of 1023
+characters, a field, a function and a struct of 1024, mangled names (a
+class of 1000 with `F()`, one of 976 with `Function()`); an interface
+default beside a class's method of its name; mutable data through another
+class's field, in a body, in a field not of the parameter; the named
+argument given, an array parameter beside a named one, packing without
+one; a spawn in a condition, in a class's `block:`, at the top of a plain
+`<decides>` body.
+
 Of the 323 refusals of `verse_vm_only` cases, all but one are of forms
 UEFN 43.12 refuses too, or that the sentinels above ask: `union` (138: the
 cause's 136 and 2 counted under others; `book-union-equality`), live
