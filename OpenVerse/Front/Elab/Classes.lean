@@ -427,6 +427,14 @@ def classFields (classes : Classes) (requests : Requests) : Except String Fields
       fullMap := fullMap.insert cd.name fs
     if fullMap.size == before then break
   let fields : Fields := { map := fullMap, overrides := fieldOverrides, narrowings, defaultClashes }
+  -- (a class below a `<concrete>` one is concrete, so it cannot be
+  -- `<abstract>`: UEFN 43.12 refuses one with error 3632, "`concrete`
+  -- classes must not be `abstract`", followup/concrete-abstract-child)
+  for cd in classes.defs do
+    if !cd.isIface && cd.specs.contains "abstract" then
+      if let some base := (classes.henv.supers cd.name).find? fun s =>
+          s != cd.name && (classes.cdef? s).any fun b => !b.isIface && b.specs.contains "concrete" then
+        throw s!"{cd.pos.show}: {cd.name} is <abstract>, but it inherits <concrete> from {base}, and a concrete class cannot be abstract (Epic's Verse compiler, UEFN 43.12: error 3632)"
   for cd in classes.defs do
     for (f, _, d, _) in fields.of cd.name do
       if (classes.henv.supers cd.name).any (classes.declaresBase · f) then
@@ -439,7 +447,7 @@ def classFields (classes : Classes) (requests : Requests) : Except String Fields
       -- compiler, UEFN 43.12, refuses a subclass's field without a default
       -- with error 3519, "(Reason: inherited class 'base' is `concrete`)",
       -- as the Book's tests do, SOL-3366-MakeClassesConcreteByDefault.versetest:8;
-      -- an <abstract> one is left alone, untested; and an override written
+      -- an <abstract> one is refused above; and an override written
       -- without a value of a field a class above gives one keeps it, as the
       -- Book's tests accept, Attributes/concrete.versetest:59,
       -- SOL-3366-MakeClassesConcreteByDefault.versetest:53)

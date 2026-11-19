@@ -2715,13 +2715,21 @@ partial def joinTyShaped (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Boo
       let cands := (env.supers S).filter fun U => (up U (env.upArgs S as U) || (joinArgsAt U).isSome) &&
         !(typeValues && (kind U == some "concrete_subtype" || U == TypeValues.castableMark ||
           (kind U == some "castable_subtype" && !env.isSub U TypeValues.castableMark)))
+      let minimal := cands.filter (fun U => !cands.any fun U' => U' != U && env.isSub U' U)
       let common : Option Ty :=
         match cands.find? fun U => !(env.info U).isIface with
         | some U => some (atU U)
         | none =>
-          match cands.filter (fun U => !cands.any fun U' => U' != U && env.isSub U' U) with
+          match minimal with
           | [U] => some (atU U)
           | _ => none
+      -- (a common class and a common interface not above it are two
+      -- nearest common supertypes: no join, whatever is expected, so the
+      -- value is an `any`. UEFN 43.12 refuses an if of two such classes
+      -- where either supertype is expected, error 3510,
+      -- followup/join-if-common-base-interface, join-if-expected-interface;
+      -- `ambiguousClassJoin` for an array's elements, 3509)
+      if !typeValues && minimal.length > 1 && (minimal.any fun U => !(env.info U).isIface) then none else
       -- (two type values join at their metatype before the expected type
       -- is met: Castable.versetest:145, "array-type is []{false, class1}
       -- which is NOT castable")
@@ -2854,6 +2862,8 @@ def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty := do
           | some w, _ | none, some w => s!": {w}"
           | none, none => ""
         | none => ""
+      if let some us := ambiguousClassJoin env [a, b] then
+        eerr p s!"the branches have different types: {a.show} and {b.show}, which have more than one nearest common supertype ({", ".intercalate us}), so the value is an any{(exp.map fun e => s!", not {withArticle e.show}").getD ""} (Epic's Verse compiler, UEFN 43.12: error 3510)"
       eerr p s!"the branches have different types: {a.show} and {b.show}{why}"
 
 /-- (#283, #335) The first success of clauses lifted already (`$firstP`),
