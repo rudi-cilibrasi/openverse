@@ -191,6 +191,17 @@ results for all twelve. The probes `compound-object-alias`,
 `compound-index-appended` are not yet run on Epic; each header gives
 OpenVerse's output and the other reading's.
 
+`compound-module-entry` and `compound-object-in-place` were first refused
+by Epic's compiler for their form, not their meaning: a condition continued
+on a second line gave error 3100 (S88, "Expected expression, got "else" in
+indented block") in one and "Unknown identifier" (3506) for the names it
+defined in the other. Rewritten with one-line conditions and helper
+functions, both are admitted and ran on the Verse VM (UEFN 43.12, CL
+60598086, 2026-11-19 08:47Z): `entry 8 9`, and `element 1 51`,
+`append 1 3 7`, `other object 1 3 8 9`. OpenVerse prints the same three
+lines for `compound-object-in-place`, and `entry 8 9` for its own
+module-scoped entries.
+
 ## OpenVerse observations
 
 On the merge of #515's branch with main after #704, Lean and C agreed on
