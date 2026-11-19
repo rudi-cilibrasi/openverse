@@ -234,7 +234,7 @@ Lean and C agreeing wherever a program ran.
 | `int-cast-variants` | 3509 L5 "Dynamic cast to `int` takes an int as its parameter, instead got any" | refused, the same reason |
 | `join-if-common-base-interface`, `join-if-expected-interface` | 3510 L6: the body's value is an `any`, not a `super_class` / `named` | refused, the same reason |
 | `join-interface-only` | admitted; `length 2` | `length 2` |
-| `print-in-condition` | admitted; `printed in condition`, `after` | `after`: openverse rolls the `Print` back with the failed condition. **Differs**: the Verse VM keeps output across rollback |
+| `print-in-condition` | admitted; `(Rolling Back) printed in condition`, `after` (the raw log's label, which the batch runner strips) | `after`: openverse rolls the `Print` back with the failed condition and does not echo it. **Open** (#724): the Verse VM logs the line labelled as rolled back; [`followup-print/`](../../tests/conformance/versevm/followup-print) asks which lines get the label |
 | `signal-class-block`, `signal-transacts-method` | 3512 L3, L4: `Signal` has `no_rollback` | refused, the same |
 | `subscribable-event-control` | 3506 L7 "Unknown identifier `subscribable_event`" | `after success 2`: `subscribable_event` is an openverse extension |
 | `subscribe-in-transacts` | admitted; `seen 4` | refused: openverse's `event` has no `Subscribe`. **Differs** |
@@ -251,9 +251,11 @@ it, `Print` and `Subscribe` do not; a `<transacts>` function is a value of a
 `<transacts><decides>` type; an `if`'s branches of two classes with two
 nearest common supertypes are an `any`, whatever is expected; a class below
 a `<concrete>` one cannot be `<abstract>`; `int[X]` of an `any` is refused.
-Two differences remain: `Print`'s rollback (openverse's output is
-transactional in Core and in the C runtime) and `Subscribe` on `event`
-(openverse has it on `subscribable_event` only).
+One difference remains, `Subscribe` on `event` (openverse has it on
+`subscribable_event` only), and one question is open: the Verse VM logs a
+rolled-back `Print`'s line with the label `(Rolling Back)`, while
+openverse's output is transactional in Core and in the C runtime and
+echoes nothing (#724, `followup-print/`).
 
 ## Running many probes
 

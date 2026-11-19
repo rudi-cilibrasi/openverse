@@ -1,0 +1,22 @@
+# Follow-up probes for #724: Print in failure contexts on the Verse VM.
+# followup/print-in-condition (UEFN 43.12 CL 60598086, Verse VM, 2026-11-19 00:02Z) logged
+# "(Rolling Back) OVPROBE print-in-condition printed in condition", then "... after": the line of the
+# failed condition was printed with the label the Verse VM gives every line of a rolled-back
+# transaction (also the lines before a runtime error). These probes ask which lines get the label.
+# Read the raw editor log: tools/batch_loop.py strips "(Rolling Back) " from every line, and
+# `ovprobe.py compare` leaves labelled lines out unless --keep-rolled-back.
+# openverse_lines: what OpenVerse main (b640fa6d) prints, Lean and C agreeing (it rolls output back).
+# labelled_lines: what the Verse VM logs if it echoes a failed context's lines once, labelled, in
+# program order. book_*: the Book is silent on Print (its API's `log` class: "If the transaction
+# rolls back the lines are still printed, each prefixed with (Rolling Back)").
+probe	book_case	book_outcome	book_lines	openverse_lines	labelled_lines	note
+print-decides-call	-	-	-	checking 7|seven passed|after	(Rolling Back) checking 3|checking 7|seven passed|after	A <decides><transacts> callee's Print, in a condition that fails through the call.
+print-for-filter	-	-	-	filter 1|body 1|filter 3|body 3|after	filter 1|body 1|(Rolling Back) filter 2|filter 3|body 3|(Rolling Back) filter 4|after	A for filter (a <decides><transacts> call) rejecting the even elements.
+print-or-left	-	-	-	result 42|left 9|result 9	(Rolling Back) left 1|result 42|left 9|result 9	The left of `or`, failing then succeeding.
+print-option	-	-	-	empty|inside 8|some 8	(Rolling Back) inside 2|empty|inside 8|some 8	option{} of a failing then a succeeding call.
+print-not	-	-	-	not succeeded|not failed|after	(Rolling Back) operand fails|not succeeded|(Rolling Back) operand succeeds|not failed|after	`not` discards its operand's effects also when the operand succeeds (Book ch. 6): is that line labelled too?
+print-nested-contexts	-	-	-	outer one|end one|one passed|after	outer one|(Rolling Back) inner one|end one|one passed|(Rolling Back) outer two|(Rolling Back) inner two|(Rolling Back) end two|after	Also: is "inner two" (kept by its call, rolled back by the outer condition) labelled once or twice, and does "(Rolling Back) inner one" come before "outer one" (committed lines held to the outermost commit)?
+print-interpolation-effect	-	-	-	after	(Rolling Back) computing 4|(Rolling Back) value 4|after	An interpolation that calls a printing function, in a failed condition.
+print-var-control	-	-	-	count after 0	(Rolling Back) count set to 5|count after 0	Control: the var write is rolled back on every reading.
+print-passing-condition	-	-	-	in passing condition|then branch|after	in passing condition|then branch|after	Control: a condition that succeeds; no line may carry the label.
+print-multiline-in-condition	-	-	-	after	(Rolling Back) first|after	The string's second line ("second line") has no marker, so look for it in the raw log right after the labelled line: is it labelled too?
