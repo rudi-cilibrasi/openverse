@@ -3347,13 +3347,18 @@ def toStringOf (p : Pos) (r0 : R) : EM Expr := do
   | t => eerr p s!"no ToString for {t.show} (Verse defines it for int, float, char, char32 and string)"
 
 /-- (#724) For an arity message: why `found` positional arguments do not
-    fit `s`'s single tuple parameter (after `off` receivers) when it has a
-    named one too, where `packCallArgs` packs none (UEFN 43.12: 3509). -/
+    fit `s`'s single tuple or array parameter (after `off` receivers) when
+    it has a named one too, where `packCallArgs` packs none (UEFN 43.12:
+    3509). -/
 def namedPackNote (s : Sig) (off found : Nat) : String :=
   match s.params.drop off |>.take (s.params.length - s.named.length - off) with
   | [.tup _] =>
     if found > 1 && !s.named.isEmpty then
       ": several arguments are not packed into a tuple parameter beside a named one, since the function's parameter is then the tuple of all its parameters; write the tuple, (…) (Epic's Verse compiler, UEFN 43.12: error 3509, \"This function parameter expects a value of type tuple(…), but this argument is an incompatible value\")"
+    else ""
+  | [.arr _] =>
+    if found > 1 && !s.named.isEmpty then
+      ": several arguments do not make an array parameter beside a named one, since the function's parameter is then the tuple of all its parameters; write the array, array{…} (Epic's Verse compiler, UEFN 43.12: error 3509, \"This function parameter expects a value of type tuple([]…), but this argument is an incompatible value\")"
     else ""
   | _ => ""
 
@@ -3389,7 +3394,10 @@ def packCallArgs (p : Pos) (s : Sig) (args : List SExpr)
       | .tuple _ [_] | .app _ (.ident _ "$callSingleton") [_] false => return args
       | _ => return packed (.app a.pos (.ident a.pos "$callSingleton") [a] false)
     return args
-  | .arr _ => if user.length > 1 then return packed (.arrayLit p user) else return args
+  -- (#724: nor into an array parameter beside a named one: UEFN 43.12
+  -- refuses F(1, 2) of F(A:[]int, ?B:int = 2), error 3509,
+  -- followup-book3/array-named-pack)
+  | .arr _ => if user.length > 1 && s.named.isEmpty then return packed (.arrayLit p user) else return args
   | .param .. => if user.length != 1 then return packed (.tuple p user) else return args
   | _ => return args
 

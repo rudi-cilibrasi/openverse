@@ -2954,6 +2954,9 @@ openverse takes Epic's compiler's refusals, one commit each (#724):
   for case (the kinds other than classes taken alike, asked in
   `followup-book4`), and an interface's methods are measured as a class's.
   No Book case moves.
+- **No array of several arguments beside a named parameter** (3509,
+  `followup-book3/array-named-pack`). No Book case moves; the call-packing
+  model gives its array shapes no named parameters.
 
 Before: 8,829 agree, 645 refuse, 38 accept, 36 differ; after: 8,850, 648,
 14, 36 (24 better, 3 worse, as [Where things stand](#where-things-stand)
