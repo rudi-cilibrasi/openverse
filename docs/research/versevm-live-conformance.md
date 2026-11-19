@@ -134,6 +134,14 @@ and what it rolls back. [event.Signal](https://dev.epicgames.com/documentation/f
 
 ## Epic observations (UEFN 43.12 compiler)
 
+Every Epic result this page cites is also in two tables under
+[`tests/conformance/versevm/results/`](../../tests/conformance/versevm/results):
+`epic-43.12-compile.tsv` (215 compiler verdicts with their error codes and
+messages) and `epic-43.12-runs.tsv` (166 session records: the probe's lines
+on the Verse VM or the Blueprint VM, and the runtime error if any). They
+are extracts of the raw MCP records, with the project's identifiers
+replaced by `<project>`; the raw records are not in the repository.
+
 UEFN 43.12, build `++Fortnite+Release-43.12-CL-60598086`, compiled each
 probe body on 2026-11-18 through the editor's Build Verse Scripts, one body
 at a time in the device wrapper above. A diagnostic's line there is 0-based
