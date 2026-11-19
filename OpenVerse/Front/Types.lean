@@ -1585,7 +1585,11 @@ def Ty.mergeParamBounds (xs : List (String × Bool)) : List (String × Bool) :=
     function type to one whose shape is above its own at the same
     arguments (#503). -/
 def TyEnv.convertsAt (env : TyEnv) (a b : Ty) : Bool :=
-  a == b || (a == .int && b == .rational) || match a, b with
+  -- (and any value to `void`, which accepts any value: a function named
+  -- where a `type{_(:int):void}` is expected discards its result, as
+  -- Epic's compiler admits, UEFN 43.12, followup-coerce2/name-void-result,
+  -- and the Book of Verse's `Void.versetest` 91, 104 have it, #724)
+  a == b || b == .void || (a == .int && b == .rational) || match a, b with
     | .struct x [], .struct y [] => x != y && env.isSub x y
     -- (a map is a weak map of its key and value types, the same value,
     -- Book of Verse ch. 3)

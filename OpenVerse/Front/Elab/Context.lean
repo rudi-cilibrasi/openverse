@@ -2612,6 +2612,20 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
     -- (a class at other type arguments: why its variance does not allow it)
     if let some why := (← get).env.varianceWhy r.ty target then
       eerr p s!"expected {target.show}, found {r.ty.show}: {why}"
+    -- (#724) a function value at a function type a function named there
+    -- would be a value of (`fnTyFits`), by variance: where that needs a
+    -- wrapper, Epic's Verse compiler refuses it too, 3502 (UEFN 43.12,
+    -- followup-coerce2's `value-int-rational-result`, `value-void-result`);
+    -- where it needs none, a class's reference, Epic admits it and openverse,
+    -- which converts no function value by variance, does not
+    -- (`value-class-variance`, `value-class-result`)
+    let env := (← get).env
+    if FnCoercion.isFn r.ty && FnCoercion.isFn target && fnTyFits env r.ty target then
+      if FnCoercion.needsWrapper env r.ty target then
+        if !env.functionCoercions then
+          eerr p s!"using a value of type {r.ty.show} as a value of type {target.show} is not yet implemented: a function value that is no function named where its type is expected needs a wrapper to be one of another function type, which Epic's compiler does not make {FnCoercion.cite}"
+      else
+        eerr p s!"expected {target.show}, found {r.ty.show}: openverse converts a function value by class variance only where a function is named (#214), which Epic's Verse compiler does for any function value (UEFN 43.12: followup-coerce's value-class-variance; #724)"
     eerr p s!"expected {target.show}, found {r.ty.show}"
 
 /-- `coerce`, whose error says why a name is an `any` (`Ctx.anyWhy`). -/

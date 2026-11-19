@@ -47,14 +47,14 @@ mutual
     `Void.versetest` 161-173, admitted on both VMs), a reference to a class
     or interface above (`refUp`; `FunctionTypes.versetest` 198-203, the
     join of `tuple()->C2` and `tuple()->C3`), a function type that
-    `needsWrapper` does not, and (unasked of Epic, so not refused: the Book's
-    `verse_vm_only` `Rational.versetest` 127-140 joins them)
-    `int` to `rational`. Anything else changes the value: `int` or `float`
-    to `comparable`, a class to `comparable`, `void` to `int` (UEFN 43.12:
+    `needsWrapper` does not. Anything else changes the value: `int` to
+    `rational` or to `void`, `int` or `float` to `comparable`, a class to
+    `comparable`, `void` to `int` (UEFN 43.12: followup-coerce2's
+    `join-int-rational`, `value-int-rational-result`, `value-void-result`;
     `book-join-fn-result`, `book-join-comparable-param`,
     `book-join-void-param`). -/
 partial def asIs (env : TyEnv) (a b : Ty) : Bool :=
-  a == b || (a.isUnit && b.isUnit) || (!a.isUnit && a.unitUp b) || (a == .int && b == .rational) ||
+  a == b || (a.isUnit && b.isUnit) || (!a.isUnit && a.unitUp b) ||
     match shape? a, shape? b with
     | some _, some _ => !needsWrapper env a b
     | none, none => refUp env a b
