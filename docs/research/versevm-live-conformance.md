@@ -16,11 +16,13 @@ test path in `fortniteMain`. OpenVerse's
 recorded expectations. In particular, `verse_vm_only` and `bp_vm_only`
 identify different targets in that development corpus.
 
-The checked-in baseline has 702 VerseVM-targeted records. Of those, 223
-agree, 284 are refused by OpenVerse, none is accepted where the Book
+The checked-in baseline has 702 VerseVM-targeted records. Of those, 273
+agree, 323 are refused by OpenVerse, none is accepted where the Book
 expects a refusal (the four were the module-evaluation link errors, given
-since #724), 89 produce different output and 106 cannot be translated by
-the harness (on main `b640fa6d`, before #724: 219, 284, 4, 89, 106). The other records are 585 BPVM-targeted (including
+since #724), none produces different output and 106 cannot be translated
+by the harness (with ints beyond 64 bits alone: 269, 323, 4, 0, 106; with
+Epic's VM results alone: 223, 284, 0, 89, 106; on main `b640fa6d`, before
+#724: 219, 284, 4, 89, 106). The other records are 585 BPVM-targeted (including
 `verse_vm_todo`) and 12,217 with no target restriction recognized by the
 harness. See the [baseline verdicts](../../tests/conformance/book/baseline.tsv)
 and the harness's [target handling](../../tests/conformance/book/booktests.py).
@@ -192,6 +194,142 @@ results for all twelve. The probes `compound-object-alias`,
 `compound-index-appended` are not yet run on Epic; each header gives
 OpenVerse's output and the other reading's.
 
+`compound-module-entry` and `compound-object-in-place` were first refused
+by Epic's compiler for their form, not their meaning: a condition continued
+on a second line gave error 3100 (S88, "Expected expression, got "else" in
+indented block") in one and "Unknown identifier" (3506) for the names it
+defined in the other. Rewritten with one-line conditions and helper
+functions, both are admitted and ran on the Verse VM (UEFN 43.12, CL
+60598086, 2026-11-19 08:47Z): `entry 8 9`, and `element 1 51`,
+`append 1 3 7`, `other object 1 3 8 9`. OpenVerse prints the same three
+lines for `compound-object-in-place`, and `entry 8 9` for its own
+module-scoped entries.
+
+### Integers beyond 64 bits
+
+Same build, sessions with **Use Verse VM** (issue #724; the raw records are
+the comparer's `vm-all.json` and, for the Blueprint VM, `live-all-bpvm.json`):
+
+| Probe | Verse VM | Blueprint VM |
+| --- | --- | --- |
+| `int-overflow` (`2^63 - 1 + 1` compared with `2^63 - 1`) | `above signed 64-bit max` | `ErrRuntime_MathIntrinsicCallFailure` (integer add overflow) |
+| `book-int-mul-overflow`, `book-int-negate-min`, `book-int-abs-min`, `book-int-floor-div-min` | `above signed 64-bit max` | integer multiply, negate, abs overflow; `ErrRuntime_IntegerOverflow` (integer divide overflow) |
+| `book-int-sub-below-min` | `below signed 64-bit min` | integer subtract overflow |
+| `book-int-compound-add` (`set +=`) | `start`, `above signed 64-bit max` | `start`, integer add overflow |
+| `book-int-bitwise-pow63` | `big computed`, `and zero`, `or unchanged`, `not negated` | integer add overflow |
+| `book-int-where-i64` | `big computed`, `i64 cast failed` | integer add overflow |
+| `book-int-cast-int` | `big computed`, `int cast succeeded` | integer add overflow |
+| `book-int-interpolate-pow63` | `big computed`, then the session stops: `ErrRuntime_GeneratedNativeInternal` in `ToString(:int)`, "Value exceeds the range of a 64 bit integer." | integer add overflow |
+| `book-int-pow64-module-const` | refused by the editor build: 9003, "Runtime error while evaluating module" (its log: "integer add overflow") | not built with the Verse VM off |
+| `book-int-shift-63` | refused: 3506, unknown identifier `BitShiftLeft`, `BitShiftRight` | not built with the Verse VM off |
+
+The rule they give: on the Verse VM, `int` arithmetic is exact past 64 bits,
+a 64-bit refinement's cast compares exactly, and `ToString` of such an int is
+a runtime error; a module's constants are evaluated in 64 bits when the
+module is linked. OpenVerse follows it since #724
+([LANGUAGE.md, int](../LANGUAGE.md#int)): every probe above prints the Verse
+VM's lines in Lean and C (`book-int-cast-int` too, with #727's `int[X]`,
+which succeeds for every int), and `book-int-pow64-module-const` is refused
+at compile time. The longest int, 2^20 bits, is the
+Book's (`Math/Bitwise.versetest`, `verse_vm_only`, "MaxLengthBits"), not yet
+observed: UEFN 43.12 has no shifts, and the probes that reach it by
+multiplication printed nothing there ([below](#follow-up-probes-for-ints)).
+
+### Follow-up probes for ints
+
+[`followup-int/`](../../tests/conformance/versevm/followup-int) asks what
+the evidence above leaves open, one question per probe, each header saying
+what OpenVerse prints (its `expectations.tsv` has the same in its `note`
+column, with Epic's outcome and lines in `epic_outcome` and `epic_lines`).
+UEFN 43.12 (the same build) compiled the first 19 one at a time
+(2026-11-19 03:37Z; the raw records: `compile-int.json`) and ran the 16 it
+admitted in Verse VM sessions (from 03:39Z), every session's ticket carrying
+`newVerseVm=true` (`live-int-vm.json`; with "Auto Start Game" some records
+repeat a run after its `end`, and only the first run counts). OpenVerse's
+column is this branch, Lean and C agreeing.
+
+| Probe | UEFN 43.12, Verse VM | OpenVerse |
+| --- | --- | --- |
+| `int-compound-mul` | `squared`, `minus one` | the same |
+| `int-float-tie` | `tie to even`, `above tie up`, `odd tie up` | the same |
+| `int-float-inf` | `big computed`, `infinity` | the same |
+| `int-index-big` | `index failed`, `negative index failed`, `set failed` | the same |
+| `int-range-big` | `count 4`, `two above` | the same |
+| `int-map-key-big` | `found 2^63`, `found 2^126`, `one entry` | the same |
+| `int-rational-big` | `floor 2^63`, `ceil 2^63 + 1`, `reduced` | the same |
+| `int-where-natural-big` | `natural cast succeeded`, `negative cast failed` | the same |
+| `int-module-const-back-control` | `max` | the same |
+| `int-float-floor-big` | `before floor`, then `ErrRuntime_IntegerBoundsExceeded` in the native `Floor(:float)`: "The value 10000000000000000000.000000 cannot be converted to an integer because it does not fall inside the representable range of a Verse integer" | `before floor`, then the overflow error |
+| `int-tostring-direct` | `in range`, then `ErrRuntime_GeneratedNativeInternal` in the native `ToString(:int)`: "Value exceeds the range of a 64 bit integer" | `in range`, then the overflow error |
+| `int-literal-big` | refused, 3555 "Integer literal must be in the range -9223372036854775808 to 9223372036854775807" | refused |
+| `int-module-const-back` | refused, 9003 "Runtime error while evaluating module" | refused at compile time (integer add overflow) |
+| `int-div-zero-big` | no line: the first statement, `Quotient[2^63, 0]`, stops with `ErrRuntime_GeneratedNativeInternal` in the native `Quotient(:int,:int)`, "Value exceeds the range of a 64 bit integer" | `quotient failed`, `mod failed`, `floor failed`. **Differs** |
+| `int-euclid-big` | no line: the same error in `Quotient`, at the first statement | `quotient -4`, `mod D - 1`, `floor -4`, `ceil -3`. **Differs** |
+| `int-intrinsics-big` | `min max`, then the same error in the native `Clamp(:int,:int,:int)` | `min max`, `clamp`, `sgn`, `containers equal`. **Differs** |
+| `int-module-const-call` | refused, 3582 "Divergent calls (calls that might not complete) cannot be used to define data-members", at the call of `Next`, a `<computes>` function | `above`. **Differs** |
+| `int-length-max`, `int-length-over` | nothing, in three sessions each (`int-length-over` not even `half computed`), and no error reported; the game then left the startable state. Cause not known | `longest computed`, `longer than half`; `half computed`, then the overflow error |
+
+What they settle: on Epic's Verse VM, ints past 64 bits go through the
+operators, `set *=` and `-=`, comparisons, map keys, ranges, indices (which
+fail), the conversion to a float (to nearest, ties to even, `Inf` past the
+largest double), `Min`, `Max`, rationals and their `Floor` and `Ceil`, and
+a one-sided refinement's cast; `Floor[F]` of a float and `ToString` of an
+int stay 64-bit, with a runtime error; an int literal must fit in 64 bits.
+OpenVerse prints the same for all of these.
+
+The owner's decisions (#724), and the differences that remain:
+
+- **Module constants in 64 bits: kept.** `int-module-const-back`, whose
+  value is in range but whose evaluation leaves it, is refused with 9003,
+  as `book-int-pow64-module-const` is: Epic evaluates a module's constants
+  in 64 bits when it links the module. OpenVerse keeps its compile-time
+  refusal of a module constant that leaves 64 bits, though it costs the 39
+  Book cases that use `Pow2_64` in `Math/Bitwise.versetest`
+  ([the survey](book-test-conformance.md#after-ints-beyond-64-bits)).
+- **Native intrinsics limited to 64 bits: not imitated.** Epic's native
+  `Quotient(:int,:int)` and `Clamp(:int,:int,:int)` stop with
+  `ErrRuntime_GeneratedNativeInternal`, "Value exceeds the range of a 64 bit
+  integer", when an argument is beyond 64 bits, even with a zero divisor.
+  OpenVerse keeps computing the exact result (and fails on a zero divisor):
+  a known difference where Epic's native intrinsics are limited to 64 bits.
+  `ToString` is unchanged: the overflow error, as Epic's.
+- **A module constant that calls a function**: Epic refuses it at compile
+  time (3582); OpenVerse admits it and computes it at run time, with the
+  Verse VM's ints. The rule is left to a separate change. Compile-only
+  evidence from the same build, 2026-11-19 (08:29Z, `compile-3582.json`):
+  `Limit:int = Min(Abs(-3), 7)` is refused with 3582 too,
+  `Half:int = Floor(Base / 4) or 0` is admitted, and `<converges>` on a
+  user function is refused (3565, "The 'converges' effect is only allowed
+  on native functions").
+- **The longest int**: `int-length-max` and `int-length-over` printed
+  nothing on Epic, with no error. `int-length-steps` (2026-11-19 09:20Z)
+  squares 2 twenty times, printing and yielding after each: Epic printed
+  `step 1` to `step 19` and then nothing, no error and no end marker. So
+  an int of 2^19 bits is computed, and the multiplication whose result
+  would reach 2^20 bits does not return (the session then has to be
+  replaced); OpenVerse raises the overflow error there. The two earlier
+  probes never yield, and their lines before the stall were not delivered.
+
+Added after these runs and run on Epic 2026-11-19 09:09Z to 09:16Z, one
+call that might stop the session per probe, after a `before …` line, so
+that an error hides nothing else. Epic agrees with OpenVerse on
+`int-floor-div-zero-big`, `int-sgn-big`, `int-abs-big`,
+`int-array-equal-big` and `int-tuple-equal-big`; in `int-mod-big` and
+`int-mod-zero-big` its native `Mod(:int,:int)` raises the same internal
+error as `Quotient` and `Clamp` ("Value exceeds the range of a 64 bit
+integer"), the known difference above. OpenVerse's output, Lean and C
+agreeing:
+
+| Probe | Asks | OpenVerse |
+| --- | --- | --- |
+| `int-mod-big` | `Mod[N, D]` with `D = 2^63`, `N = -(3 D) - 1` | `before mod`, `mod D - 1` |
+| `int-mod-zero-big` | `Mod[2^63, 0]` | `before mod`, `mod failed` |
+| `int-floor-div-zero-big` | `Floor(2^63 / 0)` | `before floor`, `floor failed` |
+| `int-sgn-big` | `Sgn(-2^63 - 1)` | `before sgn`, `sgn -1` |
+| `int-abs-big` | `Abs(-2^63 - 1)`, an argument beyond 64 bits (`book-int-abs-min`'s, `-2^63`, is inside) | `before abs`, `abs 2^63 + 1` |
+| `int-array-equal-big` | `array{2^63, 1} = array{(2^63 - 1) + 1, 1}`, `array{2^63} <> array{2^63 - 1}` | `before arrays`, `arrays equal`, `arrays differ` |
+| `int-tuple-equal-big` | the same with tuples | `before tuples`, `tuples equal`, `tuples differ` |
+
 ### Fingerprint and Book probes ([#724](https://github.com/rudi-cilibrasi/openverse/issues/724))
 
 The same build, the same day: Verse VM sessions had "Use Verse VM" on (the
@@ -267,7 +405,7 @@ bytecode (the compound probes' outputs are in their headers and in
 | `signal-subscribe` and its control (rewritten: the field is `Seen`) | Refused because OpenVerse's `event` lacks `Subscribe`; it provides subscription through `subscribable_event` (`followup/subscribable-event-control.verse` asks 43.12 which type has it). | Same refusal. |
 | `compound-indexed-write` | Prints `length 1`, then `first 0`, as Epic does (#704). | Same. |
 | `compound-whole-write` | Prints `length 2`, `first 0`, and `second 42`. | Same. |
-| `int-overflow` | Runtime overflow, exit 2. | Same. |
+| `int-overflow` | Runtime overflow, exit 2; since #724, `above signed 64-bit max`, as Epic's Verse VM prints. | Same. |
 
 ## Follow-up probes
 
@@ -292,7 +430,7 @@ Lean and C agreeing wherever a program ran.
 | `int-cast-variants` | 3509 L5 "Dynamic cast to `int` takes an int as its parameter, instead got any" | refused, the same reason |
 | `join-if-common-base-interface`, `join-if-expected-interface` | 3510 L6: the body's value is an `any`, not a `super_class` / `named` | refused, the same reason |
 | `join-interface-only` | admitted; `length 2` | `length 2` |
-| `print-in-condition` | admitted; `printed in condition`, `after` | `after`: openverse rolls the `Print` back with the failed condition. **Differs**: the Verse VM keeps output across rollback |
+| `print-in-condition` | admitted; `(Rolling Back) printed in condition`, `after` (the raw log's label, which the batch runner strips) | `after`: openverse rolls the `Print` back with the failed condition and does not echo it. **Open** (#724): the Verse VM logs the line labelled as rolled back; [`followup-print/`](../../tests/conformance/versevm/followup-print) asks which lines get the label |
 | `signal-class-block`, `signal-transacts-method` | 3512 L3, L4: `Signal` has `no_rollback` | refused, the same |
 | `subscribable-event-control` | 3506 L7 "Unknown identifier `subscribable_event`" | `after success 2`: `subscribable_event` is an openverse extension |
 | `subscribe-in-transacts` | admitted; `seen 4` | refused: openverse's `event` has no `Subscribe`. **Differs** |
@@ -309,9 +447,11 @@ it, `Print` and `Subscribe` do not; a `<transacts>` function is a value of a
 `<transacts><decides>` type; an `if`'s branches of two classes with two
 nearest common supertypes are an `any`, whatever is expected; a class below
 a `<concrete>` one cannot be `<abstract>`; `int[X]` of an `any` is refused.
-Two differences remain: `Print`'s rollback (openverse's output is
-transactional in Core and in the C runtime) and `Subscribe` on `event`
-(openverse has it on `subscribable_event` only).
+One difference remains, `Subscribe` on `event` (openverse has it on
+`subscribable_event` only), and one question is open: the Verse VM logs a
+rolled-back `Print`'s line with the label `(Rolling Back)`, while
+openverse's output is transactional in Core and in the C runtime and
+echoes nothing (#724, `followup-print/`).
 
 ## Running many probes
 

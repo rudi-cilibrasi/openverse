@@ -67,7 +67,9 @@ def forFilter : Prog where
         loop:
             set I = I * 3
             if (I > 1000000000000000000) { Print("{I}") }
-    ``` -/
+    ```
+    The third value printed is past 64 bits: an int (#724), whose `ToString`
+    is the overflow error. -/
 def overflow : Prog where
   fns := [
     { name := "Main", arity := 0, nslots := 1, decides := false,

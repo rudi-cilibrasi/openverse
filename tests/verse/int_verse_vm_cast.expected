@@ -1,0 +1,6 @@
+big computed
+int cast succeeded
+64-bit ends
+below the 64-bit range
+2^126 is an int, not an i64
+exit=0

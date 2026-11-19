@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Exact Fraction oracle for rational operators, order, rollback and updates."""
+"""Exact Fraction oracle for rational operators, order, rollback and updates.
+
+A rational's parts are ints, unbounded (#724), so no result overflows; the
+checks write a part beyond 64 bits as arithmetic on literals (`lit`), and
+print `Floor` and `Ceil` with `Show`, as `ToString` refuses an int beyond 64
+bits."""
 from fractions import Fraction
 from pathlib import Path
 import random
@@ -10,7 +15,11 @@ MIN,MAX=-(1<<63),(1<<63)-1
 mode=rng.randrange(6)
 op=rng.choice(['+','-','*','/','neg'])
 
-def lit(n):return '(-9223372036854775807-1)' if n==MIN else str(n)
+def lit(n):
+    if n==MIN:return '(-9223372036854775807-1)'
+    if MIN<n<=MAX:return str(n)
+    # (beyond 64 bits: n = q·2^62 + r, 0 <= r < 2^62)
+    return f'({lit(n>>62)}*4611686018427387904+{n&((1<<62)-1)})'
 def fits(q):return MIN<=q.numerator<=MAX and 1<=q.denominator<=MAX
 def integer():return rng.choice([MIN,MIN+1,-MAX,-2,-1,0,1,2,MAX-1,MAX,rng.randrange(-100,101)])
 def fraction():
@@ -48,7 +57,7 @@ zero=op=='/' and b==0
 if not zero:
     result={'+' :lambda:a+b,'-':lambda:a-b,'*':lambda:a*b,'/':lambda:a/b,'neg':lambda:-a}[op]()
 else:result=None
-overflow=result is not None and not fits(result)
+overflow=False   # (ints are unbounded, #724)
 lines=[]
 status=2 if overflow else 0
 
@@ -57,8 +66,19 @@ def check_lines(q):
 def verify(q,indent):
     return ' '*indent+f'Check(R,{lit(q.numerator)},{lit(q.denominator)})'
 
-header='''Check(R:rational,N:int,D:int):void=
-    if(E:=N/D,R=E)then Print("ok {Floor(R)} {Ceil(R)}")else Print("bad")
+header='''Digits18(X:int):string=
+    var S:string="{X}"
+    loop:
+        if(S.Length>=18)then break
+        set S="0"+S
+    S
+Show(X:int):string=
+    if(X>=-9223372036854775807,X<=9223372036854775807)then "{X}"
+    else if(X<0)then "-"+Show(-X)
+    else if(Q:=Quotient[X,1000000000000000000],R:=Mod[X,1000000000000000000])then Show(Q)+Digits18(R)
+    else "?"
+Check(R:rational,N:int,D:int):void=
+    if(E:=N/D,R=E)then Print("ok {Show(Floor(R))} {Show(Ceil(R))}")else Print("bad")
 cell:=class{var N:int=0;var R:rational=0}
 '''
 create=f'    if(A:={lit(a.numerator)}/{lit(a.denominator)},B:={lit(b.numerator)}/{lit(b.denominator)}):\n'
@@ -94,8 +114,6 @@ elif mode==4:
     # then reads that, the Book of Verse's order, ArrayAppend.versetest 140, 183)
     if not zero:
         result={'+':lambda:99+b,'-':lambda:99-b,'*':lambda:99*b,'/':lambda:Fraction(99)/b}[op]()
-        overflow=not fits(result)
-        status=2 if overflow else 0
     header+='''Rhs(C:cell,X:rational):rational=
     set C.N+=1
     set C.R=99

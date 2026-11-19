@@ -10,7 +10,7 @@ against it. This page records the decisions behind the shape of the code.
 
 - Semantics: [Two languages, one semantics](#two-languages-one-semantics) · [Failure and rollback](#failure-and-rollback) · [What a `for` undoes](#what-a-for-undoes-one-search) · [Choice](#choice-iteration-over-alternatives) · [Fuel](#fuel)
 - Elaboration: [The elaborator's mutual block](#the-elaborators-mutual-block-325) · [Elaboration in phases](#elaboration-in-phases) · [Applications, in order](#applications-in-order) · [Elaboration in rounds](#elaboration-in-rounds) · [Translation validation](#translation-validation-instead-of-a-verified-front-end)
-- Front end: [Modules](#modules-a-renaming-before-elaboration) · [Qualified names](#qualified-names-one-resolver-for-every-qualifier) · [Access](#access-one-order-checked-where-names-are-resolved) · [Attributes](#attributes-checked-and-taken-out-first) · [Markers](#markers-what-the-passes-before-elaboration-write-for-one-another) · [Types as values](#types-as-values-classes-the-front-end-writes) · [Fields with accessors](#fields-with-accessors-calls-of-their-classs-methods) · [Type aliases](#type-aliases-a-substitution-before-elaboration) · [Commas in blocks](#commas-in-blocks-tuples-in-the-parser) · [Destructured parameters](#destructured-parameters-a-desugaring-in-the-parser) · [Extension methods](#extension-methods-functions-that-method-calls-find) · [Floats](#floats-canonical-bits) · [Equality](#equality-verse-cores-veq-and-the-front-end-across-types) · [comparable](#comparable-boxes-in-verse-cores-dyn) · [Weak maps and module-scoped vars](#weak-maps-and-module-scoped-vars) · [Rationals](#rationals-helpers-written-in-verse) · [Bitwise functions](#bitwise-functions-helpers-written-in-verse) · [Generic functions](#generic-functions-polymorphic-verse-core) · [Function values](#function-values-hidden-interfaces-and-classes) · [Concurrency](#concurrency-suspends-functions-as-frames)
+- Front end: [Modules](#modules-a-renaming-before-elaboration) · [Qualified names](#qualified-names-one-resolver-for-every-qualifier) · [Access](#access-one-order-checked-where-names-are-resolved) · [Attributes](#attributes-checked-and-taken-out-first) · [Markers](#markers-what-the-passes-before-elaboration-write-for-one-another) · [Types as values](#types-as-values-classes-the-front-end-writes) · [Fields with accessors](#fields-with-accessors-calls-of-their-classs-methods) · [Type aliases](#type-aliases-a-substitution-before-elaboration) · [Commas in blocks](#commas-in-blocks-tuples-in-the-parser) · [Destructured parameters](#destructured-parameters-a-desugaring-in-the-parser) · [Extension methods](#extension-methods-functions-that-method-calls-find) · [Floats](#floats-canonical-bits) · [Equality](#equality-verse-cores-veq-and-the-front-end-across-types) · [comparable](#comparable-boxes-in-verse-cores-dyn) · [Weak maps and module-scoped vars](#weak-maps-and-module-scoped-vars) · [Rationals](#rationals-helpers-written-in-verse) · [Bitwise functions](#bitwise-functions-helpers-written-in-verse) · [Ints beyond 64 bits](#ints-beyond-64-bits-a-fast-path-and-a-heap-representation) · [Generic functions](#generic-functions-polymorphic-verse-core) · [Function values](#function-values-hidden-interfaces-and-classes) · [Concurrency](#concurrency-suspends-functions-as-frames)
 - Classes and the heap: [Classes as references](#classes-as-references) · [Unification](#unification) · [Typing the heap](#typing-the-heap) · [Typed defaults](#why-every-slot-starts-with-a-typed-default)
 - C runtime: [The binary format and the loader](#the-binary-format-and-the-loader) · [Two semantics, one seam](#two-semantics-one-seam) · [Objects in the C runtime](#objects-in-the-c-runtime)
 - [Readings of the Book](#readings-of-the-book)
@@ -2196,12 +2196,15 @@ projecting their parts. Unary negation saves one operand and negates its
 numerator. The ordinary two-int forms and loader remain unchanged.
 
 `Core/Prims.lean` defines these operations with exact `Int` intermediates
-and checks int64 bounds after gcd reduction and sign normalization. C uses
-signed 128-bit intermediates: with int64 numerators and positive int64
-denominators, each product and each add/subtract sum fits that range.
+and checks the parts' length (the ints', 2^20 bits, #724; before, int64
+bounds) after gcd reduction and sign normalization. C uses signed 128-bit
+intermediates for four parts that fit in 64 bits: each product and each
+add/subtract sum fits that range, and a reduced part past 64 bits becomes
+an int on the heap (`vx_big_words`); a part already past 64 bits takes
+`bigint.c`'s path (`vx_big_rational`, Euclid's gcd on magnitudes).
 Unsigned magnitudes support reduction without negating a signed minimum.
-Only rational division can fail, on a zero divisor; an unrepresentable
-reduced result raises overflow. The extended primitive typing, checker
+Only rational division can fail, on a zero divisor; a reduced part longer
+than an int raises overflow. The extended primitive typing, checker
 soundness, type-safety, scoping and control proofs build as before. The C
 wide implementation is tested against independent exact-fraction oracles;
 it is outside QuickProof's existing two-int arithmetic law. See
@@ -2258,17 +2261,54 @@ marker `$uses:bitwise`, or the entry expression), renamed `$bitAnd` etc.:
   `Floor(X / 2)` (toward minus infinity, so a negative number's bits are
   its two's complement), until both operands are 0 or -1, every bit above
   being the sign's; the bits seen are summed, and the rest, the operation
-  of the two signs from bit `i` up, weigh `-2^i` together. At most 63
-  rounds; every number computed is in range.
-- `BitShiftLeft[X, N]`: fails for `N < 0`, else doubles `X` up to `N` times
-  or until it is 0, a doubling out of range being the overflow error
-  (which an out-of-range result always reaches, and an in-range one never).
-- `BitShiftRight[X, N]`: fails for `N < 0`, else halves `X` up to `N` times
-  or until it is 0 or -1.
+  of the two signs from bit `i` up, weigh `-2^i` together, added as twice
+  the last bit's weight so that no number computed is longer than an
+  operand. As many rounds as the operands' highest differing bit.
+- `BitShiftLeft[X, N]`: fails for `N < 0`, else `X · 2^N`, with `2^N` by
+  squaring (`$bitPow2`, which squares only while bits of `N` remain, so
+  nothing it computes exceeds `2^N`); past the ints' 2^20 bits, the
+  overflow error.
+- `BitShiftRight[X, N]`: fails for `N < 0`, else `Floor(X / 2^N)`, or 0 or
+  -1 once `N` is 2^20 or more (no int is that long).
 
 `scripts/fuzz-bitwise.sh` checks both implementations against Python's
-unbounded ints with the int64 range, programs ending with the overflow
-error included.
+unbounded ints, programs ending with `ToString` of an int beyond 64 bits
+(the overflow error) included; `scripts/fuzz-bigint.sh` checks them on
+operands beyond 64 bits.
+
+## Ints beyond 64 bits: a fast path and a heap representation
+
+Verse Core's ints are Lean's `Int`, as long as the Verse VM's (2^20 bits,
+#724): `Res.ofInt` gives the exact result of every int operation, and the
+overflow error only past that length. The Lean interpreter computes with
+`Int` directly; `IntBits.fits` tests the 64-bit range first, so an int
+that fits costs what it did.
+
+The C runtime keeps one representation per int. An int that fits in 64 bits
+is `(INT, bits)`, as before, and the interpreter's two-INT case calls
+`arith.c`, whose QuickProof law is unchanged: its `VX_OVERFLOW` used to be
+the program's error and is now the signal that the exact result does not
+fit (`Seams.lean`: the law's condition is `Int64.inRange` of the result).
+Then, or when an operand is not INT, `bigint.c` computes it. An int outside
+64 bits is `(BIG, o)`, an object of the value heap whose first cell is its
+sign and whose others are its magnitude's 64-bit words, the last nonzero. As
+the representation is unique, the value heap's structural equality is the
+equality of ints (map keys, `=`, `<>`), and its reclamation keeps a BIG as
+it keeps an array: `vx_isref` counts it, and its cells are no references.
+The arithmetic unpacks magnitudes into 32-bit limbs, computes there
+(schoolbook multiplication; Knuth's algorithm D for division, in unsigned
+arithmetic only), and packs the result, as INT when it fits. No primitive,
+literal kind or opcode is new, so the loader and the header that QuickProof
+pins are unchanged; an int literal outside 64 bits, which no source has,
+is encoded as arithmetic on 64-bit literals (`Encode.encInt`).
+
+`bigint.c` is not proved: `runtime/tests/test_bigint.c` checks it against
+Python's ints (`scripts/gen-bigint-vectors.py`: 4,800 cases, divisions that
+take algorithm D's rare add-back step among them, nearest doubles at ties,
+the length limit), and `scripts/fuzz-bigint.sh` checks both interpreters
+against Python on random programs. Its multiplication is quadratic, so the
+longest ints cost the C runtime seconds where Lean's (GMP's) cost
+milliseconds.
 
 ## Generic functions: polymorphic Verse Core
 
@@ -3974,6 +4014,10 @@ flowchart LR
     lf <-. "read by a person:<br/>the same formula" .-> cf
 ```
 
+Since ints are as long as the Verse VM's (#724), `arith.c` is the fast
+path: where the law's condition fails, the exact result does not fit in 64
+bits and the unproved `bigint.c` computes it (`apply_add` … say so).
+
 The interpreter itself is not proved. It is a transcription of
 `Interp.lean`, and it is compared with the Lean interpreter on the Verse test
 suite, on thousands of random Core programs that exercise every node and
@@ -4031,8 +4075,9 @@ value heap, and kept out of the proved `store.c`, whose law
 Where the Book of Verse is silent or contradicts itself, openverse takes
 one reading and records it in `docs/LANGUAGE.md`. The most consequential:
 
-- `int` is 64-bit with overflow as a runtime error, as on BPVM. The other
-  choice, VerseVM's unbounded integers, would need bignums in the C runtime.
+- `int` is the Verse VM's (#724): exact past 64 bits, up to 2^20 bits; the
+  Blueprint VM's 64-bit ints with overflow as a runtime error were the
+  reading until Epic's Verse VM was observed (UEFN 43.12).
 - comparisons return their left operand;
 - a failing `for` body makes the `for` fail, as in the Verse Calculus.
 - a choice's values come in the Verse Calculus's spatial order, and the code

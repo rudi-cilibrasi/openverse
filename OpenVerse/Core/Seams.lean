@@ -12,6 +12,14 @@
   primitive (`floorDiv_seam`, `add_seam`, …). The only step of the seam that
   no tool checks is that the C text of the law and the Lean text here are
   the same formula; they are printed side by side in `docs/SEAMS.md`.
+
+  Ints are as long as the Verse VM's, 2^20 bits (#724), so `arith.c` is
+  the fast path: on two ints that fit in 64 bits it returns the exact
+  result exactly when that fits too (`add_seam`: `cAddFits a b` is
+  `Int64.inRange (a + b)`), and `VX_OVERFLOW` otherwise, when
+  `runtime/src/bigint.c`, which no law covers, computes `Res.ofInt` of it.
+  So the C runtime holds an int in a 64-bit word exactly when
+  `Int64.inRange` holds of it.
 -/
 import OpenVerse.Core.Prims
 namespace OpenVerse
@@ -208,23 +216,48 @@ theorem mul_seam {a b : Int} (ha : InR a) (_hb : InR b) : Int64.inRange (a * b) 
     · rintro ⟨l, r⟩; exact ⟨by omega, by omega⟩
     · rintro ⟨l, r⟩; exact ⟨by omega, by omega⟩
 
-/-! ### The primitives, in the terms of the C law -/
+/-! ### The primitives, in the terms of the C law
+
+Where the C law's condition holds, `arith.c`'s result is the exact one;
+where it does not, the result does not fit in 64 bits, and `bigint.c`
+computes `Res.ofInt` of it. -/
+
+/-- An int that fits in 64 bits is an int of the Verse VM's length. -/
+theorem IntBits.fits_of_inRange {i : Int} (h : Int64.inRange i = true) : IntBits.fits i = true := by
+  simp [IntBits.fits, h]
+
+/-- So is one of at most 64 bits. -/
+theorem IntBits.fits_of_natAbs_lt {i : Int} (h : i.natAbs < 2 ^ 64) : IntBits.fits i = true := by
+  simp only [IntBits.fits, Bool.or_eq_true, decide_eq_true_eq]
+  right
+  by_cases h0 : i.natAbs = 0
+  · simp [h0, IntBits.max]
+  · rw [Nat.log2_lt h0]
+    exact Nat.lt_of_lt_of_le h (Nat.pow_le_pow_right (by decide) (by decide))
 
 theorem apply_add {a b : Int} (ha : InR a) (hb : InR b) :
-    Prim.apply .add [.int a, .int b] = if cAddFits a b then .ok (.int (a + b)) else .err .overflow := by
-  simp only [Prim.apply, Res.ofInt, Value.ofInt, add_seam ha hb]
+    Prim.apply .add [.int a, .int b] = if cAddFits a b then .ok (.int (a + b)) else Res.ofInt (a + b) := by
+  split
+  · next h => simp [Prim.apply, Res.ofInt, IntBits.fits_of_inRange ((add_seam ha hb).trans h), Value.ofInt]
+  · rfl
 
 theorem apply_sub {a b : Int} (ha : InR a) (hb : InR b) :
-    Prim.apply .sub [.int a, .int b] = if cSubFits a b then .ok (.int (a - b)) else .err .overflow := by
-  simp only [Prim.apply, Res.ofInt, Value.ofInt, sub_seam ha hb]
+    Prim.apply .sub [.int a, .int b] = if cSubFits a b then .ok (.int (a - b)) else Res.ofInt (a - b) := by
+  split
+  · next h => simp [Prim.apply, Res.ofInt, IntBits.fits_of_inRange ((sub_seam ha hb).trans h), Value.ofInt]
+  · rfl
 
 theorem apply_mul {a b : Int} (ha : InR a) (hb : InR b) :
-    Prim.apply .mul [.int a, .int b] = if cMulFits a b then .ok (.int (a * b)) else .err .overflow := by
-  simp only [Prim.apply, Res.ofInt, Value.ofInt, mul_seam ha hb]
+    Prim.apply .mul [.int a, .int b] = if cMulFits a b then .ok (.int (a * b)) else Res.ofInt (a * b) := by
+  split
+  · next h => simp [Prim.apply, Res.ofInt, IntBits.fits_of_inRange ((mul_seam ha hb).trans h), Value.ofInt]
+  · rfl
 
 theorem apply_neg {a : Int} (ha : InR a) :
-    Prim.apply .neg [.int a] = if cNegFits a then .ok (.int (-a)) else .err .overflow := by
-  simp only [Prim.apply, Res.ofInt, Value.ofInt, neg_seam ha]
+    Prim.apply .neg [.int a] = if cNegFits a then .ok (.int (-a)) else Res.ofInt (-a) := by
+  split
+  · next h => simp [Prim.apply, Res.ofInt, IntBits.fits_of_inRange ((neg_seam ha).trans h), Value.ofInt]
+  · rfl
 
 theorem apply_floorDiv {a b : Int} (hb : b ≠ 0) :
     Prim.apply .floorDiv [.int a, .int b] = Res.ofInt (cFloorDiv a b) := by
@@ -249,13 +282,18 @@ theorem apply_div_zero (a : Int) :
   simp [Prim.apply]
 
 /-- The one pair where C's `/` and `%` are undefined, `(INT64_MIN, -1)`: floor,
-    ceiling and Euclidean quotient overflow (the exact result is 2^63); the
-    Euclidean remainder is 0. -/
+    ceiling and Euclidean quotient are 2^63, one past the 64-bit range (which
+    `arith.c` reports, and `bigint.c` computes); the Euclidean remainder is
+    0. -/
 theorem apply_min_neg_one :
-    Prim.apply .floorDiv [.int Int64.minV, .int (-1)] = .err .overflow ∧
-    Prim.apply .ceilDiv [.int Int64.minV, .int (-1)] = .err .overflow ∧
-    Prim.apply .quotient [.int Int64.minV, .int (-1)] = .err .overflow ∧
+    Prim.apply .floorDiv [.int Int64.minV, .int (-1)] = .ok (.int (Int64.maxV + 1)) ∧
+    Prim.apply .ceilDiv [.int Int64.minV, .int (-1)] = .ok (.int (Int64.maxV + 1)) ∧
+    Prim.apply .quotient [.int Int64.minV, .int (-1)] = .ok (.int (Int64.maxV + 1)) ∧
     Prim.apply .modulo [.int Int64.minV, .int (-1)] = .ok (.int 0) := by
-  refine ⟨?_, ?_, ?_, ?_⟩ <;> decide
+  have h : IntBits.fits (Int64.maxV + 1) = true := IntBits.fits_of_natAbs_lt (by decide)
+  have e1 : floorDivInt Int64.minV (-1) = Int64.maxV + 1 := by decide
+  have e2 : ceilDivInt Int64.minV (-1) = Int64.maxV + 1 := by decide
+  have e3 : Int.ediv Int64.minV (-1) = Int64.maxV + 1 := by decide
+  refine ⟨?_, ?_, ?_, by decide⟩ <;> simp [Prim.apply, Res.ofInt, e1, e2, e3, h, Value.ofInt]
 
 end OpenVerse

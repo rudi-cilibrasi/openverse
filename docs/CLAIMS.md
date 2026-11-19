@@ -482,7 +482,7 @@ VTy.sub_ref_of_prefix : ∀ (V : Variances) {ts us : List Nat} {as bs : List VTy
   InR a →
     InR b →
       Prim.mul.apply [Value.int a, Value.int b] =
-        if cMulFits a b = true then Res.ok (Value.int (a * b)) else Res.err ErrKind.overflow
+        if cMulFits a b = true then Res.ok (Value.int (a * b)) else Res.ofInt (a * b)
 ```
 
 ## `apply_floorDiv`: Floor(a/b) in the terms of the C law
@@ -514,8 +514,8 @@ VTy.sub_ref_of_prefix : ∀ (V : Variances) {ts us : List Nat} {as bs : List VTy
 `OpenVerse/Core/Seams.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
-apply_min_neg_one : Prim.floorDiv.apply [Value.int Int64.minV, Value.int (-1)] = Res.err ErrKind.overflow ∧
-  Prim.ceilDiv.apply [Value.int Int64.minV, Value.int (-1)] = Res.err ErrKind.overflow ∧
-    Prim.quotient.apply [Value.int Int64.minV, Value.int (-1)] = Res.err ErrKind.overflow ∧
+apply_min_neg_one : Prim.floorDiv.apply [Value.int Int64.minV, Value.int (-1)] = Res.ok (Value.int (Int64.maxV + 1)) ∧
+  Prim.ceilDiv.apply [Value.int Int64.minV, Value.int (-1)] = Res.ok (Value.int (Int64.maxV + 1)) ∧
+    Prim.quotient.apply [Value.int Int64.minV, Value.int (-1)] = Res.ok (Value.int (Int64.maxV + 1)) ∧
       Prim.modulo.apply [Value.int Int64.minV, Value.int (-1)] = Res.ok (Value.int 0)
 ```

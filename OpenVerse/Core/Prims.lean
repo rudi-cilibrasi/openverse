@@ -6,9 +6,13 @@
   which the C runtime also reports, so that both implementations agree on
   every loaded program, typed or not.
 
-  The two-int scalar operations are the seam with the C runtime: `runtime/src/arith.c`
-  implements them and the QuickProof law `proofs/quickproof/arith` states the
-  same conditions (see `docs/SEAMS.md`).
+  The two-int scalar operations are the seam with the C runtime: ints are
+  the Verse VM's, up to 2^20 bits (#724), and `runtime/src/arith.c`
+  implements them on two ints
+  that fit in 64 bits, reporting a result that does not fit, which
+  `runtime/src/bigint.c` then computes; the QuickProof law
+  `proofs/quickproof/arith` states the conditions of that fast path (see
+  `docs/SEAMS.md`).
 -/
 import OpenVerse.Core.Syntax
 
@@ -19,11 +23,12 @@ def floorDivInt (a b : Int) : Int := Int.fdiv a b
 /-- Ceiling division `⌈a / b⌉` for `b ≠ 0`. -/
 def ceilDivInt (a b : Int) : Int := -Int.fdiv (-a) b
 
-/-- Reduce before checking int64 bounds. A zero denominator denotes an
+/-- Reduce before checking the parts' length (ints, as long as `IntBits`
+    allows, #724; before, 64 bits). A zero denominator denotes an
     unrepresentable result, hence overflow. Source rational operands have
     positive denominators; the guard in `ratArith` also defines raw Core. -/
 def checkedRationalRes (p q : Int) : Res :=
-  if 0 < q && Int64.inRange p && Int64.inRange q then
+  if 0 < q && IntBits.fits p && IntBits.fits q then
     .ok (.tup [.int p, .int q])
   else .err .overflow
 
@@ -35,9 +40,9 @@ def rationalRes (n d : Int) : Res :=
   let q := if q < 0 then -q else q
   checkedRationalRes p q
 
-/-- Wide exact arithmetic, with bounds checked only after reduction.
-    Nonpositive operand denominators are invalid rational representations;
-    raw well-typed Core reports overflow rather than a type error. -/
+/-- Exact arithmetic, reduced. Nonpositive operand denominators are invalid
+    rational representations; raw well-typed Core reports overflow rather
+    than a type error. -/
 def ratArith (op : Prim) (a b c d : Int) : Res :=
   if b ≤ 0 || d ≤ 0 then .err .overflow else
   match op with
@@ -85,9 +90,12 @@ def VFloat.toIntRes (r : VFloat.Rounding) (b : UInt64) : Res :=
     | some i => .ok (.int i)
     | none => .err .overflow
 
-/-- The string value of `ToString(v)`. -/
+/-- The string value of `ToString(v)`. An int outside 64 bits has none: the
+    overflow error, as the Verse VM's `ToString(:int)` raises "Value exceeds
+    the range of a 64 bit integer" (UEFN 43.12, #724). -/
 def toStrValue : Value → Res
-  | .int i => .ok (Value.ofArray ((intBytes i).map Value.char).toArray)
+  | .int i => if Int64.inRange i then .ok (Value.ofArray ((intBytes i).map Value.char).toArray)
+    else .err .overflow
   | .char c => .ok (Value.ofArray #[.char c])
   | .float b => .ok (Value.ofString (VFloat.fixed6 b))
   | .arr vs => match asBytes vs.toList with

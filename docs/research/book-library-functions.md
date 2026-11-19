@@ -172,27 +172,29 @@ Verse (`OpenVerse/Front/Bitwise.lean`), added to a program that names one:
   operands are 0 or -1, from where every bit is the sign's: the bits seen
   are summed, and the rest, all the operation of the two signs, weigh
   `-2^i` together. A call takes as many rounds as the operands' highest bit
-  that is not a sign bit, at most 63, each a dozen Core steps; every number
-  it computes is in range (the weight `-2^i` reaches at most `-2^63`).
-- `BitShiftLeft[X, N]` fails for `N < 0`; else it doubles `X` `N` times or
-  until it is 0. A doubling out of range is Core's overflow error, which a
-  result out of range always reaches and an in-range one never does (the
-  magnitudes grow), so `BitShiftLeft[-1, 63]` is `-2^63` and
-  `BitShiftLeft[5, 0x7FFFFFFFFFFFFFFF]` an error after 61 doublings, as the
-  `bp_vm_only` tests say.
-- `BitShiftRight[X, N]` fails for `N < 0`; else it halves `X` `N` times or
-  until it is 0 or -1, which halving keeps (`BitShiftRight[5,
-  0x7FFFFFFFFFFFFFFF]` is 0 after three rounds).
+  that is not a sign bit, each a dozen Core steps; no number it computes is
+  longer than an operand (the sign bits' weight is added as twice the last
+  bit's).
+- `BitShiftLeft[X, N]` fails for `N < 0`; else it is `X · 2^N`, with `2^N`
+  by squaring. Since #724 ints are the Verse VM's, so `BitShiftLeft[1, 63]`
+  is 2^63, as the `verse_vm_only` tests say; a result past 2^20 bits is
+  Core's overflow error (`BitShiftLeft[5, 0x7FFFFFFFFFFFFFFF]`, which the
+  `verse_vm_only` and `bp_vm_only` tests both expect to be a runtime
+  error).
+- `BitShiftRight[X, N]` fails for `N < 0`; else it is `Floor(X / 2^N)`, 0
+  or -1 once `N` is 2^20 or more (`BitShiftRight[5, 0x7FFFFFFFFFFFFFFF]` is
+  0).
 
 They are soft built-ins, as `Clamp` and `Sgn` are (a program may define its
 own), and functions of one signature, so a program may name one as a value
 (`BuiltinValues`). Each argument is evaluated once, in order. A float
-argument is a type error (the tests' 3509). Out of range, the error is
-openverse's `error: overflow` (exit 2), where the Blueprint VM names
+argument is a type error (the tests' 3509). Past 2^20 bits, the error is
+openverse's `error: overflow` (exit 2), where the Verse VM names
 `MathIntrinsicCallFailure`; the harness counts both as the runtime error
-the `bp_vm_only` cases expect. The 62 `verse_vm_only` cases stay
-different: they assume unbounded ints, whose own operands overflow here
-(`9223372036854775807 + 1`, `Pow2_64`), as the 26 `int`-precision cases do.
+the tests expect. Since #724 the `verse_vm_only` cases agree, but those
+that use the module constant `Pow2_64`, which openverse refuses as Epic's
+compiler does, and the `bp_vm_only` cases that expect a 64-bit overflow
+differ ([the survey](book-test-conformance.md#after-ints-beyond-64-bits)).
 `scripts/fuzz-bitwise.sh` (`scripts/gen-bitwise.py`) checks Lean and C
 against Python's unbounded `&`, `|`, `^`, `~`, `<<` and `>>` with the
 int64 range, including programs that end with the overflow error.
