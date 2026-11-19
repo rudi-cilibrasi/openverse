@@ -14,6 +14,9 @@
 # type{_(:int)<transacts><decides>:int} is not yet implemented."; 3502 (L14)
 # "Using a value of type type{_(:int)<transacts>:int} as a value of type
 # type{_(:int)<transacts><decides>:int} is not yet implemented.".
+# OpenVerse refuses it now, as Epic does: #735's rule for the conversions of
+# function values Epic's compiler does not make (3502; --function-coercions
+# keeps openverse's).
 DecidesIdentity(X:t where t:type)<computes><decides>:t = X
 TransactsIdentity(X:t where t:type)<transacts>:t = X
 

@@ -44,7 +44,8 @@ with tempfile.TemporaryDirectory(prefix='openverse-construction-effects-') as di
     source = tmp / 'Case.verse'
     output = tmp / 'Case.vbc'
 
-    def case(label, text, admitted, needle='', stdout='ok\n', profile=False, extended=False):
+    def case(label, text, admitted, needle='', stdout='ok\n', profile=False, extended=False,
+             coerced=False):
         global cases
         cases += 1
         source.write_text(text)
@@ -52,6 +53,8 @@ with tempfile.TemporaryDirectory(prefix='openverse-construction-effects-') as di
         extra = ['--no-choice'] if profile else []
         if extended:
             extra.append('--extended-defaults')
+        if coerced:
+            extra.append('--function-coercions')
         result = run(OV + ['run', source, '--emit', output] + extra)
         if admitted:
             require((result.returncode, result.stdout, result.stderr) == (0, stdout, ''),
@@ -156,8 +159,9 @@ with tempfile.TemporaryDirectory(prefix='openverse-construction-effects-') as di
         stdout, exit_code = expected.rsplit('exit=', 1)
         require(int(exit_code.strip()) == 0, f'{fixture}: nonzero oracle')
         args = fixture.with_suffix('.args')
-        extended = args.exists() and '--extended-defaults' in args.read_text().splitlines()
-        case(fixture.stem, fixture.read_text(), True, stdout=stdout, extended=extended)
+        options = args.read_text().splitlines() if args.exists() else []
+        case(fixture.stem, fixture.read_text(), True, stdout=stdout,
+             extended='--extended-defaults' in options, coerced='--function-coercions' in options)
 
 print(f'construction-effects: {checks} checks across {cases} cases, '
       'declared calls/defaults/inheritance and Lean/C traces agree')

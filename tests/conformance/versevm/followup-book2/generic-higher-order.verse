@@ -33,6 +33,9 @@
 # "Using a value of type type{_(:type{_(:t)<transacts>:t},:t where
 # t)<transacts>:t} as a value of type
 # type{_(:type{_(:int)<transacts>:int},:int)<transacts>:int} i".
+# OpenVerse refuses it now, as Epic does: #735's rule for the conversions of
+# function values Epic's compiler does not make (3502; --function-coercions
+# keeps openverse's).
 Zero(F(:t):t, X:t where t:type):t = X
 One(F(:t)<transacts>:t, X:t where t:type)<transacts>:t = F(X)
 Two(F(:t)<transacts>:t, X:t where t:type)<transacts>:t = F(F(X))

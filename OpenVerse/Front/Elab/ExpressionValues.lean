@@ -364,6 +364,9 @@ partial def elabExprValuesWith
       | some (.opt t) => some t
       | _ => none
     let r ← operand { ctx with canFail := true, bodyFailure := false, inTaking := true } e inner
+    -- (#724: of a function whose own type needs a wrapper to be the one
+    -- expected, Epic's 3502)
+    if let some t := inner then checkOptionContent elabE ctx e r t
     -- an expression that cannot fail needs no failure context (and no
     -- saved state to roll back to: the interpreter's heap is not copied)
     -- (one that never gives a value, without an expected type: followed by

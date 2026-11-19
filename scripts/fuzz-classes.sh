@@ -26,9 +26,13 @@ for ((s=first; s<first+n; s++)); do
   if head -1 "$tmp/p.verse" | grep -qx '# openverse: extended-defaults'; then
     compat+=(--extended-defaults)
   fi
+  # (#724: the generator converts function values between effects, a
+  # <computes> one held by a local or a field to <reads> or <transacts>,
+  # which Epic's compiler refuses, error 3502: openverse's conversions,
+  # --function-coercions after the run's own arguments)
   # (#515: Epic's default effect, written out: <transacts> where a function without one is called from a failure context or <transacts> code)
   python3 -I "$root/scripts/models/default_effect.py" "$tmp/p.verse"
-  timeout 60 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" "${compat[@]}" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.err"
+  timeout 60 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" "${compat[@]}" --function-coercions > "$tmp/l.out" 2> "$tmp/l.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.err"
   # (the generator writes no Err(), so a user error is unreachable code run:
   # a lowering bug; other runtime errors are compared with C)
   if [[ $le -ne 0 && $le -ne 3 && $le -ne 2 ]] || grep -q "error: user" "$tmp/l.err"; then

@@ -14,6 +14,9 @@
 # ...)->int)->int is not yet implemented."; 3502 (L15) "Using a value of
 # type ((?B:int)->int)->int as a value of type (tuple(?A:int = ...,?B:int =
 # ...)->int)->int is not yet implemented.".
+# OpenVerse refuses it now, as Epic does: #735's rule for the conversions of
+# function values Epic's compiler does not make (3502; --function-coercions
+# keeps openverse's).
 F1(F(?A:int):int):int = F(?A := 1)
 F3(F(?B:int):int):int = F(?B := 3)
 F9(?A:int = 9, ?B:int = 10):int = A + B

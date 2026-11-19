@@ -649,6 +649,32 @@ def checkSignatures (env : TyEnv) (sigs : Signatures) (cdefs : List CDef) (field
         throw s!"{mp.show}: {mine} must {if b.suspends then "be" else "not be"} <suspends>, as {theirs}, which it overrides, is{if b.suspends then "" else " not"} (#156)"
       if let some k := fxOver a b then
         throw s!"{mp.show}: {mine} allows the effect <{k}>, which {theirs}, which it overrides, does not"
+      -- (#724) an override of a method of a parametric class or interface
+      -- whose type has one of that type's type parameters inside a
+      -- function type (`F(G(:t):void)` of `a(t)`), in a class that gives
+      -- it another type argument than one of its own, `any` or
+      -- `comparable` (`class(a(int))`): Epic's Verse compiler calls the
+      -- override through the declaration's type, its type parameters as
+      -- `any` (`type{_(:any->void)<transacts>:void}`), which needs a
+      -- wrapper that converts a function value, and refuses it (UEFN
+      -- 43.12, error 3502: followup-book2's `interface-fn-param-generic`;
+      -- the Book of Verse's `SOL-5477-CrashInGenClassDefinition.versetest:5`,
+      -- `bp_vm_only`). A parameter `X:t` it converts
+      -- (`interface-fn-param-generic-control`).
+      if !env.functionCoercions then
+        let c := clsOf mine
+        let e := clsOf theirs
+        let eps := ((env.sparams.lookup e).getD []).map (·.1)
+        let decl := { b with params := b.params.drop 1 }
+        let inFn := ((decl.params ++ [decl.ret]).flatMap FnCoercion.paramsInFn).filter eps.contains
+        let cps := ((env.sparams.lookup c).getD []).map fun (v, k) => Ty.param v k
+        let σ := eps.zip (env.upArgs c cps e)
+        let changed := FnCoercion.changedBy σ inFn
+        if let some v := changed.head? then
+          let (shb, tsb) := decl.valueShape
+          let (sha, tsa) := { a with params := a.params.drop 1 }.valueShape
+          let erased : Ty := (Ty.struct shb.name (tsb ++ [decl.ret])).subst (eps.map (·, Ty.any))
+          throw s!"{mp.show}: using a value of type {(Ty.struct sha.name (tsa ++ [a.ret])).show} as a value of type {erased.show} is not yet implemented: {mine.replace "::" "."} overrides {theirs.replace "::" "."}, whose type has {e}'s type parameter {v} inside a function type, here {((σ.lookup v).getD .any).show}, and a call through the declaration needs a wrapper that converts a function value, which Epic's compiler does not make {FnCoercion.cite}"
     | _, _ => pure ()
   -- the implementation a concrete class uses has the signature of every
   -- declaration of the method above it

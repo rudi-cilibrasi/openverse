@@ -14,6 +14,9 @@
 # type{_(:tuple(p_type,c_type)->void,:c_type where
 # p_type,c_type):p_type->void} as a value of type
 # tuple(tuple(first_arg,second_arg)->void,s".
+# OpenVerse refuses it now, as Epic does: #735's rule for the conversions of
+# function values Epic's compiler does not make (3502; --function-coercions
+# keeps openverse's).
 bound_call(p_type:type, c_type:type) := class:
     Callback:tuple(p_type, c_type)->void
     Context:c_type

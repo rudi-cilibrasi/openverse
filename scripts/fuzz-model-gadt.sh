@@ -68,6 +68,11 @@ for ((s=first; s<first+n; s++)); do
   # no_rollback, which its call in a condition cannot have: the old rule
   # too, --default-rollback)
   case $g in gadt_event_body) compat+=(--signal-rollback --default-rollback) ;; esac
+  # These models bind functions and methods of generic receivers through
+  # generic functions (`Bind(…):type{_()<computes>:t}`), a conversion of
+  # function values whose calls Epic's compiler refuses (UEFN 43.12, error
+  # 3502, #724): openverse's conversions, --function-coercions.
+  case $g in gadt_function_*|gadt_method_*|gadt_context_methods|gadt_choice_values) compat+=(--function-coercions) ;; esac
   # (#515: Epic's default effect, written out: <transacts> where a function without one is called from a failure context or <transacts> code;
   # not for the models whose functions spawn, written for the default effect already: a spawn has no_rollback,
   # which no <transacts> function may have, #724)

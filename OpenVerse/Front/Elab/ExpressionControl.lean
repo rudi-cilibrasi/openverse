@@ -265,7 +265,12 @@ partial def elabExprControlWith
     | some ee =>
       ifBranches p exp ctx.retries (fun k e => elabE { thenCtx with retries := k } thenE e)
         (fun k e => elabE { ctx with retries := k } ee e)
-        fun rt re ty => return ⟨.ite rc.e (← coerce p rt ty) (← coerce p re ty), ty⟩
+        fun rt re ty => do
+          -- (#724: no function branch at another function type that needs
+          -- a wrapper, Epic's 3502)
+          checkJoinBranch elabE thenCtx thenE rt ty
+          checkJoinBranch elabE ctx ee re ty
+          return ⟨.ite rc.e (← coerce p rt ty) (← coerce p re ty), ty⟩
   | .forE p clauses body => do
     -- An opening cast must retain the complete original world before
     -- ordinary clause replay moves its later snapshots into a lift.

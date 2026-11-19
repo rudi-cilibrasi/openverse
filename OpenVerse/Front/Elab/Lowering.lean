@@ -70,6 +70,15 @@ structure Options where
       default; `false` keeps the old rule, under which such a function is
       rolled back as a `<transacts>` one is (`--default-rollback`). -/
   defaultNoRollback : Bool := true
+  /-- (#724) Keep openverse's conversions of function values that Epic's
+      Verse compiler does not make: a branch of an `if` that is a function
+      of another type than the `if`'s, a higher-order generic function as a
+      value, a generic function's result with a type parameter inside a
+      function type, an override of a parametric type's method with one
+      (UEFN 43.12: error 3502, "not yet implemented"; `FnCoercion`,
+      docs/LANGUAGE.md "Function values"). Off by default: they are
+      refused; `--function-coercions` keeps them. -/
+  functionCoercions : Bool := false
   requests : Requests := {}
 
 /-- A class or interface definition, as parsed. -/

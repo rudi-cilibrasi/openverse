@@ -106,6 +106,11 @@ def main (args : List String) : IO Unit := do
     "bound-concurrency-unproved-refusal", "bound-concurrency-cancel-effects-refusal", "bound-concurrency-cancel-effects-control-refusal",
     "bound-undetermined-refusal", "bound-visibility-refusal", "bound-alias-refusal", "peer-void-tuple-refusal",
     "castable-bound-refusal", "castable-bound-peer-refusal", "concrete-bound-refusal"]
+  -- (#724: generic functions whose results have a type parameter inside a
+  -- function type, `Build(…):type{_(:t)<reads>:vehicle}`, compile with
+  -- openverse's conversions, `--function-coercions`; Epic's compiler refuses
+  -- their calls, error 3502)
+  let functionCoerced := ["method-value-argument", "method-value-cancel", "method-value-state"]
   let mut failures := 0
   let cases := (positive ++ fifo ++ methodValues ++ callables ++ containers ++ iterators ++ operators ++ formatting ++ concatenate ++ construction ++ concurrency ++ negative).map (fun name => (name, name))
   for (name, artifact) in cases do
@@ -113,8 +118,9 @@ def main (args : List String) : IO Unit := do
     let source ← IO.FS.readFile (root ++ ".verse")
     -- (#515: the programs that signal in a failure context compile in the
     -- legacy transactional mode, `--signal-rollback`; the default refuses them)
-    let result := parseProgram source >>= fun tops =>
-      elabProgram tops { signalNoRollback := !signalRefused.contains name }
+    let options : Options := { signalNoRollback := !signalRefused.contains name }
+    let options := { options with functionCoercions := functionCoerced.contains name }
+    let result := parseProgram source >>= fun tops => elabProgram tops options
     if negative.contains name then
       let fragment := (← IO.FS.readFile (root ++ ".error")).trimAscii.toString
       match result with
@@ -143,7 +149,9 @@ def main (args : List String) : IO Unit := do
         else
           if signalAdmitted.contains name || signalRefused.contains name then
             for profile in [SourceProfile.full, .choiceFree] do
-              let flagged := parseProgram source >>= fun tops => elabProgram tops { profile, signalNoRollback := true }
+              let coerced := functionCoerced.contains name
+              let flagged := parseProgram source >>= fun tops =>
+                elabProgram tops { profile := profile, signalNoRollback := true, functionCoercions := coerced }
               if signalRefused.contains name then
                 match flagged with
                 | .error message =>
@@ -168,8 +176,9 @@ def main (args : List String) : IO Unit := do
                 throw (IO.userError s!"{artifact}: wrong choice-free refusal: {message}")
             | .ok _ => throw (IO.userError s!"{artifact}: --no-choice admitted collection iteration")
           if profiled.contains name then
-            let strict ← match parseProgram source >>= fun tops =>
-                elabProgram tops { profile := .choiceFree, signalNoRollback := !signalRefused.contains name } with
+            let options : Options := { profile := .choiceFree, signalNoRollback := !signalRefused.contains name }
+            let options := { options with functionCoercions := functionCoerced.contains name }
+            let strict ← match parseProgram source >>= fun tops => elabProgram tops options with
               | .ok strict => pure strict
               | .error message => throw (IO.userError s!"{artifact}: --no-choice refused: {message}")
             unless strict.prog.encode == compiled.prog.encode do
