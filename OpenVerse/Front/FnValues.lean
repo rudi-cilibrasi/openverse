@@ -579,6 +579,16 @@ def callMethods (p : Pos) (own : Shape) (targs : List STy) (fits : List Shape) (
 def classParents (own : Shape) (targs : List STy) (fits : List Shape) : List STy :=
   (own :: fits.filter (· != own)).map fun s => STy.app s.name (own.select s targs)
 
+/-- (#724) The class of the `i`-th function value adapter asked for
+    (`Requests.fnAdapters`): an object of it holds a function value, in its
+    field `$f`, as a value of another function type that the value's is one
+    of by class variance. -/
+def adapterName (i : Nat) : String := s!"$fnAdapter{i}"
+
+/-- Whether `n` is a function value adapter's class (`adapterName`). -/
+def isAdapter (n : String) : Bool :=
+  n.startsWith "$fnAdapter" && ((n.drop "$fnAdapter".length).toString.toNat?).isSome
+
 /-- Add the shapes' interfaces and the value classes of the functions used
     as values (#210). A function is used as a value when its name occurs
     other than as the head of a call (an over-approximation: a parameter of
@@ -586,7 +596,8 @@ def classParents (own : Shape) (targs : List STy) (fits : List Shape) : List STy
     functions and hidden ones get none (the elaborator explains why such a
     function is no value). -/
 def desugar (tops : List STop) (extra : List STop := []) (requests : List (String × STy) := [])
-    (methodRequests : List MethodRequest := []) (written : List STop := []) :
+    (methodRequests : List MethodRequest := []) (written : List STop := [])
+    (valueAdapters : List (STy × STy) := []) :
     List STop := Id.run do
   let defs := classDefs tops
   let scans := scanTops tops extra
@@ -692,7 +703,7 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
     | _, _ => []
   let anc := ancOf (defs.length + 1)
   if values.isEmpty && mvalues.isEmpty && gvalues.isEmpty && requests.isEmpty && methodRequests.isEmpty &&
-      (scans.all fun (s, _) => s.isEmpty) then return tops
+      valueAdapters.isEmpty && (scans.all fun (s, _) => s.isEmpty) then return tops
   -- every shape written, and each value's own (a value's type when nothing
   -- else gives one)
   let mut shapes : List Shape := []
@@ -703,7 +714,8 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
         r.receiver.fnShapes ++ r.params.flatMap STy.fnShapes ++ r.ret.fnShapes ++
         r.tparams.flatMap (fun tp => tp.upperBound.toList.flatMap STy.fnShapes) ++
         r.relations.flatMap (fun (upper, lower) => upper.fnShapes ++ lower.fnShapes)) ++
-      requests.flatMap (fun (_, ty) => ty.fnShapes) do
+      requests.flatMap (fun (_, ty) => ty.fnShapes) ++
+      valueAdapters.flatMap (fun (a, b) => a.fnShapes ++ b.fnShapes) do
     if !shapes.contains s then shapes := shapes ++ [s]
   -- (tuple adapters change the positional parameters, #231)
   let arities := (shapes.map (·.positional)).eraseDups
@@ -856,6 +868,20 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
               [{ name := "$self", ty := .name c }] then
             out := out ++ [v]
             k := k + 1
+  -- (#724) an adapter per function value converted by class variance: an
+  -- object holding the value in `$f`, of the other type's shape (and those
+  -- above it) at the other type's arguments, whose `$call…` calls `$f` with
+  -- the arguments it is given, the call converting them (a reference to a
+  -- class above, or a function value of a nested function type by an
+  -- adapter of its own) and its result (`FnCoercion.byVariance`); the
+  -- value's effects and parameters are the other type's
+  for ((a, b), i) in valueAdapters.zipIdx do
+    let .fn qs es u := b | continue
+    let (t, tqs, u) := fnTyShape qs es u
+    let fits := shapes.filter (t.within ·)
+    out := out ++ [.classDef p0 (adapterName i) [] [] [] (classParents t (tqs ++ [u]) fits) false
+      [{ name := "$f", ty := a }]
+      (callMethods p0 t (tqs ++ [u]) fits (xs p0 t.positional) fun args => .app p0 (.ident p0 "$f") args t.decides)]
   for (r, i) in methodRequests.zipIdx do
     let own := r.shape
     let fits := shapes.filter fun s => s != own && own.within s

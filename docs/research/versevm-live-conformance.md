@@ -724,7 +724,7 @@ results, overrides); six did not, and the rule is now wider:
 | `value-default-drop` | 3502 "Using a value of type (?A:int = ...)->int as a value of type tuple()->int", a local bound to `F2` | admitted, refused |
 | `option-of-fn-default` | 3502 "Using a value of type ?((?A:int = ...)->int) as a value of type ?(tuple()->int)", `option{F2}` (an array's and a tuple's elements naming `F2`, and a `case`'s arms, admitted) | admitted, refused |
 | `parametric-method-fn-result` | 3502 "Using a value of type (t->void)->(t->void) as a value of type (int->void)->(int->void)", `box(int){}.Make(TakeInt)` | admitted, refused |
-| `value-class-variance` | admitted: a `type{_(:animal):int}` parameter passed as a `type{_(:dog):int}` | refused (no variance for values), refused: a recorded difference |
+| `value-class-variance` | admitted: a `type{_(:animal):int}` parameter passed as a `type{_(:dog):int}` | refused (no variance for values), refused: a recorded difference; admitted since (an adapter, below) |
 
 The matching refusals: `join-computes-transacts` and `join-method-values`
 (an effect added in a join, functions and methods), `generic-higher-order-bound`
@@ -751,9 +751,10 @@ parametric class's method returning a function of its type parameter is
 judged as a generic function is ([the
 rule](../LANGUAGE.md#function-values-epics-compiler-does-not-convert-724),
 `--function-coercions` keeps openverse's conversions). The Book survey moves
-no case for the wider rule. One difference is left, `value-class-variance`:
-openverse has no class variance for function values (Verse Core has no
-contravariance, and the front end makes adapters for names only).
+no case for the wider rule. One difference was left, `value-class-variance`:
+openverse had no class variance for function values (Verse Core has no
+contravariance, and the front end made adapters for names only); it is
+closed below.
 
 [`followup-coerce2`](../../tests/conformance/versevm/followup-coerce2) asked
 what the wider rule left unasked, 17 probes. UEFN 43.12 compiled them one
@@ -773,7 +774,34 @@ differed:
 | --- | --- | --- |
 | `join-int-rational` | 3502 "Using a value of type tuple()->int as a value of type tuple()->rational", an if's branches | admitted (an `int`/`rational` exemption), refused: the exemption is gone |
 | `name-void-result` | admitted: `IntIdentity` named where a `type{_(:int):void}` is expected | refused, admitted: a function named converts by variance to a `void` result or from a `void` parameter |
-| `value-class-result` | admitted: a `type{_():dog}` local as a `type{_():animal}` | refused, refused: the class-variance difference, with `value-class-variance` |
+| `value-class-result` | admitted: a `type{_():dog}` local as a `type{_():animal}` | refused, refused: the class-variance difference, with `value-class-variance`; admitted since (an adapter, below) |
+
+Both differences are closed: openverse converts a function value by class
+variance wherever its conversion needs no wrapper by the 3502 rule (the
+same effects and parameters, each parameter and the result the same,
+`void`/`true`, or a class or an interface below or above, nested function
+types alike), in every place a value converts, inside arrays, options,
+tuples and maps too. Verse Core cannot relate the two types (a function
+value's class pins its shape's type arguments, and Verse Core has no
+contravariance), so the front end makes the value an object of an adapter
+class that holds it and whose `$call` calls it ([the
+rule](../LANGUAGE.md#function-values-epics-compiler-does-not-convert-724));
+no theorem, nor the format or the C runtime, changes. `value-class-variance`
+and `value-class-result` now run (`value 1`, `value dog`, Lean and C
+agreeing; `tests/verse/fn_value_class_variance`, `fn_value_class_result`),
+and every probe of `followup-coerce` and `followup-coerce2` agrees.
+[`followup-variance`](../../tests/conformance/versevm/followup-variance)
+asks, compile and run, 16 cases the evidence does not reach, one each:
+an interface parameter and result (`iface-*`), a function type nested in a
+parameter and in the result (`nested-*`), an array, an option, a tuple and
+a map of function values (`*-of-values`), a bound method's value
+(`method-value`), a parametric class's instance in a parameter
+(`generic-class-param`), `any` and `comparable` above a parameter's or a
+result's class (`any-*`, `comparable-*`, a `<unique>` class), and `void`
+and `true` beside the variance (`variance-void-*`). openverse runs 12 of
+them and refuses the four with `any` or `comparable` (a type error, which
+it gives a function named there too); each header says what either answer
+changes.
 
 ### The Book's valid programs openverse refuses
 

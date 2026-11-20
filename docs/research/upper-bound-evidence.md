@@ -433,11 +433,12 @@ dictionaries; declaration facts and dummy type values cannot create an
 adapter. Whole-tuple proofs remain whole and do not imply component facts.
 
 This preserves the existing distinction between adapting a method expression
-and converting a previously materialized function value. The latter still
-requires matching parameter/result types under the ordinary function-value
-rules; a class upper bound does not introduce function-object variance.
-`method-value-stored-refusal` and its concrete control document that baseline
-restriction. The positive method-value controls cover escaping captures,
+and converting a previously materialized function value. The latter follows
+the ordinary function-value rules: since #724 a closed function type's value
+converts by class variance through an adapter object (the concrete control,
+`method-value-stored-control`, runs), and a class upper bound does not
+introduce function-object variance where a type parameter is in the function
+type (`method-value-stored-refusal`). The positive method-value controls cover escaping captures,
 once-only receiver evaluation, mutation, rollback and cancellation.
 
 An opaque value whose upper bound is a function type can be called through
@@ -792,7 +793,7 @@ Each by its own rule and message, not by a blanket guard:
 | a cast of a bounded value, `i[X]` | upcast it first | 3509 |
 | a cast to or construction of a type parameter, `t[X]`, `t{}` | no type value of `t` is passed (the prose's `dynamic_handler` in ch. 10 casts with `t[Item]`) | valid in the prose |
 | a write through a container upper, `set X[0] = …` with `X:t` | no conversion back to `t` exists | not tested |
-| variance of an existing function object | a bound adapts a method expression, not a function value already made (`method-value-stored-refusal`) | not tested |
+| variance of an existing function object, at a type with a type parameter | a bound adapts a method expression, not a function value already made (`method-value-stored-refusal`); at closed types such a value converts by class variance (#724) | admitted at closed types (UEFN 43.12, `value-class-variance`) |
 | `subtype(t)` of a type parameter, as a value's type | types as values hold classes, interfaces and types written of types, not a type parameter (`types-as-values.md`); a type given as an argument, `F(t:type, X:t)`, and a bounded one, `F(t:subtype(c), X:t)`, are a type parameter whose argument the call writes since (`TypeArguments`) | valid (`ParametricTypes.versetest` 1305-1329) |
 
 The castability of `castable_subtype(c)` is a subtype relation: a program that

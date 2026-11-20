@@ -2,8 +2,9 @@
 # type{_():dog} used as a type{_():animal} (a covariant class result, no
 # wrapper; followup-coerce's value-class-variance, a contravariant
 # parameter, is admitted)?
-# OpenVerse refuses it: expected type{_():animal}, found type{_():dog} (the
-# class-variance difference)
+# OpenVerse refused it: expected type{_():animal}, found type{_():dog} (the
+# class-variance difference); it now converts the value by an adapter and
+# (Lean and C agreeing) prints value dog, as Epic admits.
 # Epic (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, 2026-11-19) admits
 # it.
 animal := class:

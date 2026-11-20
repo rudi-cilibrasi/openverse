@@ -48,7 +48,7 @@ def main (args : List String) : IO Unit := do
     "fifo-bound-two-losers", "fifo-bound-two-losers-control", "fifo-bound-sleep", "fifo-bound-sleep-control"]
   let methodValues := ["method-value-argument", "method-value-argument-control",
     "method-value-result", "method-value-result-control", "method-value-state", "method-value-state-control",
-    "method-value-cancel", "method-value-cancel-control"]
+    "method-value-cancel", "method-value-cancel-control", "method-value-stored-control"]
   let callables := ["callable-upper", "callable-upper-control", "callable-default", "callable-default-control",
     "callable-state", "callable-state-control", "callable-waiting", "callable-waiting-control",
     "callable-decides", "callable-decides-control", "callable-bound-only", "callable-bound-only-control",
@@ -85,7 +85,7 @@ def main (args : List String) : IO Unit := do
     "choice-method-bound-refusal", "peer-void-narrow-refusal", "peer-void-comparable-refusal",
     "peer-comparable-equality-refusal", "choice-class-unproved-refusal",
     "method-value-argument-refusal", "method-value-result-refusal",
-    "method-value-stored-refusal", "method-value-stored-control-refusal",
+    "method-value-stored-refusal",
     "callable-bracket-refusal", "callable-decides-refusal", "callable-suspends-refusal",
     "callable-effect-refusal", "callable-effect-control-refusal", "callable-unproved-refusal",
     "container-view-unproved-refusal", "container-view-query-unproved-refusal", "container-view-element-refusal",
