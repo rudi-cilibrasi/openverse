@@ -775,6 +775,66 @@ differed:
 | `name-void-result` | admitted: `IntIdentity` named where a `type{_(:int):void}` is expected | refused, admitted: a function named converts by variance to a `void` result or from a `void` parameter |
 | `value-class-result` | admitted: a `type{_():dog}` local as a `type{_():animal}` | refused, refused: the class-variance difference, with `value-class-variance` |
 
+### The Book's valid programs openverse refuses
+
+The survey at `ce8632ea` (8,854 agree, 657 refuse, 1 accept, 36 differ,
+3,956 not translatable) has 657 cases where openverse refuses a program the
+Book's tests call valid. 341 are `verse_vm_only`, of forms UEFN 43.12
+refuses ([above](#the-books-accepted-refusals), and the 19 function-coercion
+twins since, 3502) but for `Castable.versetest:601`, unasked. The other 316
+are the candidates for openverse's gaps on valid Verse, if Epic's shipped
+compiler takes them; the Book is ahead of it in places, so each is asked
+first.
+
+- 18 are of forms UEFN 43.12 already refuses: an event's `Signal` in a
+  failure context (7, `signal-direct`, 3512), the `bp_vm_only` twins of the
+  Verse VM's module evaluation (4, `book-global-block-var`, 9003 at the
+  Verse VM's cook), nested functions (2, `book-nested-function`, 3502),
+  field defaults that construct each other (2, `book-default-cycle`, 9000),
+  an overloaded function as a value (`overloaded-fn-value`, 3502), a generic
+  function whose result holds functions of its type parameter, called
+  (`ParametricFunctions.versetest:546`, `generic-result-fn`, 3502), and, by
+  the 3502 rule rather than a probe of its own, a generic function joined
+  with another in an `if` (`Castable.versetest:563`). None is of a form a
+  43.12 probe has admitted.
+- 6 use the test runner's names (`snippet`, `test_external_parametric_type4`,
+  `TestDangerousTypePassing`).
+- 62 are parse-only (`assert_valid_syntax`, `assert_roundtrip`:
+  `TimSyntax.versetest` 44, `FunctionTypes.versetest` 7, `Roundtrip/` 8,
+  `Attributes.versetest` 2, one more): they assert that the text parses, and
+  Epic's compiler judges programs. Not asked.
+- [`followup-refused/`](../../tests/conformance/versevm/followup-refused)
+  asks the rest, 192 cases in 50 forms, one probe each (10 with a control):
+  each probe is the smallest program with the form, written to print, if
+  Epic admits it, what the Book says the form does; its header names the
+  Book's cases and quotes openverse's refusal, and `expectations.tsv` has
+  the cases, the lines, and Epic's outcome once compiled. openverse
+  (`ce8632ea`) refuses every probe and runs every control but
+  `override-parametric-result-control`, Lean and C agreeing.
+
+| Probes | Book cases | Asks whether UEFN 43.12 admits |
+| --- | --- | --- |
+| `classifiable-subset` (and control), `classifiable-subset-var`, `castable-concrete-subtype`, `subscribable-event-intrnl`, `get-seconds-since-epoch`, `fits-in-player-map`, `get-random-int`, `todiagnostic-float` (and control) | 20, 7, 7, 5, 3, 3, 2, 14 | library names openverse lacks: `classifiable_subset` and its `_var`, `castable_concrete_subtype`, `subscribable_event_intrnl`, `GetSecondsSinceEpoch`, `FitsInPlayerMap`, `GetRandomInt`, `ToDiagnostic` of a float. The Book's API reference marks `MakeClassifiableSubsetVar`, `subscribable_event_intrnl` and `diagnostic`'s `String` `<epic_internal>`, and the control `ToDiagnostic(15).String`, which openverse runs, asks whether openverse admits there what Epic refuses |
+| `qualified-second-method`, `two-interfaces-same-method`, `class-interface-same-field` | 11, 3, 2 | two members of one name told apart by qualifiers: `(derived:)F` beside an inherited `F`, two interfaces' default methods, a class's and an interface's fields |
+| `override-tuple-result` (and control), `override-array-param`, `override-parametric-result` (and control), `override-wider-param` | 4, 5, 3, 2 | overrides at another signature: a tuple result over an array, one `[]int` parameter over two ints, `t` over `comparable`, a superclass parameter. openverse refuses the second control too, for a gap of its own (its message names an internal type, `$ext0`) |
+| `type-argument-array` (and control), `class-type-param-as-arg`, `subtype-alias`, `class-value-construct`, `fn-type-named-signature` | 12, 3, 2, 2, 2 | types where values go: `[]int` as a type argument, a class's type parameter as one (a `where` variable is refused, 9001, `book-typeparam-as-value`), an alias of `subtype(c0)`, a class bound to a local and constructed, `type{f():void}` |
+| `castable-subtype-any`, `castable-subtype-of-param`, `concrete-subtype-bound`, `castable-param-result-type` | 3, 4, 4, 3 | metatypes: `castable_subtype(any)`, `castable_subtype(t)`, a `concrete_subtype` bound, a `castable_subtype` parameter used as a type in its function's result |
+| `named-tuple-param`, `named-tuple-value` | 8, 3 (`verse_vm_todo`) | named parameters inside a tuple parameter; a tuple value with a named element |
+| `refinement-overloads` (and control), `refinement-literal-local`, `join-fn-refinement-result` | 4, 2, 2 | overloads on disjoint refinements; a literal-bound local's negation at a refinement without a cast; function values joined at a refinement's base |
+| `variance-covariant-join`, `variance-contravariant-concat`, `join-fn-type-params`, `map-literal-sibling-keys`, `concatenate-maps-key-join`, `map-any-value-generic`, `named-fn-any-result` | 4, 2, 2, 2, 1, 1, 2 | joins and conversions: parametric classes by variance (openverse joins `covariant_class(dog)` with `covariant_class(animal)`; it refuses an `int` held as an `any`), function values of type parameters, map keys of sibling classes or of `int` and `string`, `[int]string` as `[t]any`, a function named at an `any` result |
+| `fbounded-class` (and control), `infer-from-empty-array`, `generic-fn-local`, `generic-arg-result-param` | 6, 3, 1, 1 | generics: a class in its own parent's type argument, a type parameter given only by `array{}`, a generic function bound to a local, a type parameter only a generic argument's result gives |
+| `module-const-unique` (and control), `module-const-empty-map-unique-key`, `unique-interface-equality` (and control), `constructor-delegation-archetype` (and control), `persistable-class`, `converges-abstract-method` | 4, 1, 4, 4, 1, 3 | classes and modules: module constants of a `class<unique><allocates>` (made `<computes>` too), an empty map keyed by a `<unique>` class, an `interface<unique>` no class implements compared, `MakeBase<constructor>(…)` in an archetype outside a constructor, a `<persistable>` class, `<converges>` on an abstract method (43.12 refuses it on a function with a body, 3565) |
+| `definition-in-expression`, `spawn-in-defer`, `break-in-for-in-loop`, `overloads-struct-and-array` | 2, 1, 1, 1 | `X:int = Y:int = 4`, `spawn` in a `defer`, `break` in a `for` inside a `loop`, `F(:a)` beside `F(:[]a)` |
+
+Left unasked (38 cases besides the parse-only ones): custom accessors
+(3; the API reference marks `accessor` `<epic_internal>`), the engine's
+attributes and specifiers (4), a parametric class applied as a value (2),
+and 29 cases of forms with one or two cases each
+(`ParametricTypes.versetest:578`'s override of `F(:tuple())` by `F()`, a
+`[]t` parameter given no arguments, `<closed>`, `generator`, `import`,
+`for ((K->V):M)`, …). Compile each probe alone first (single mode), then
+run the admitted ones on the Verse VM.
+
 ## Running many probes
 
 [`ovprobe.py`](../../tests/conformance/versevm/ovprobe.py) (Python 3
