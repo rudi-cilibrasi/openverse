@@ -2534,8 +2534,8 @@ flowchart LR
   several at one tuple of them, `$call(X0)` calls `F(X0(0), X0(1))`.
 - **The cost of that choice.** A class implements an interface at one
   instantiation, so a value of one function type does not convert to
-  another by variance (that would need a wrapper object made at the
-  conversion), and variance applies only where a closed type is written.
+  another by variance for free: that needs a wrapper object made at the
+  conversion (below), and variance applies only where a closed type is written.
   At an open expected type, a generic function instead uses its generic
   value class (`Identity$fn(t)` implementing `$fn1(t, t)`). `fnValueArgs`
   matches its declared parameter/result shape against that expected type,
@@ -2552,6 +2552,38 @@ flowchart LR
   from the expected type. Tuple arguments are stored once before projection.
   Other closed requests keep the specialization path above. These adapters
   do not convert already-bound function values to different function types.
+- **Variance of values, by adapters** (#724). Epic's Verse compiler
+  converts any function value by class variance, with no wrapper (UEFN
+  43.12, `value-class-variance`, `value-class-result`). Verse Core cannot
+  relate the two types: its variances are `co`, `inv` and `bi`, and a value
+  class pins its shape's type arguments, which makes them invariant
+  (`Sigs.VarOK`), and a contravariant pin would break the equational
+  refinement a dispatch is typed under (`PinRefines`;
+  research/variance.md). Contravariance in Verse Core would change its
+  checker, `hasTy_sub`'s and the dispatch's proofs and `Sigs.VarOK`; an
+  adapter changes none of them, nor the format or the C runtime. So where
+  `convert` meets two closed function types that `FnCoercion.byVariance`
+  relates (the same effects and parameters, each parameter and the result
+  equal, `void`/`true`, or a class or interface below or above, or such a
+  function type), it makes `new $fnAdapter`*i*`(value)`: a class
+  `FnValues.desugar` writes for the pair (asked for as #214's classes are,
+  `Requests.fnAdapters`, `Err()` standing for the object until the next
+  round), implementing the target's shape and the shapes above it at the
+  target's arguments, whose `$call…` calls its field `$f` with the
+  arguments it is given. The call converts each argument from the
+  target's parameter type to the value's (a reference as it is, a nested
+  function value by an adapter of its own) and the result back, so the
+  value runs as it would, with its effects; the object is the only cost
+  (no `var` field, so no heap effect is charged), and an extra call frame
+  per call. Containers convert element by element through `convert` as
+  before, and joins of two such types take the expected function type or
+  the type with the lower parameters and the joined result (`fnJoinTy`).
+  `ToDiagnostic`'s printer of a function type prints an adapter as the
+  value in `$f`, so the conversion is not seen; printers made before a
+  round that adds function value classes are made again after it
+  (`elabProgram`), so a function named at another type prints its name too.
+  Generic code is left: a type parameter in either type is refused with a
+  message, as #214's classes are made for closed types only.
 
 ## Concurrency: suspends functions as frames
 

@@ -116,7 +116,9 @@ Function types:
    same terms; its own type marks the named parameters with defaults as
    omittable. As before (#214), such a name also fits a closed function type
    by variance: parameter types above the type's and a result below. A value
-   of a function type does not convert to another by variance.
+   of a function type converts to another by class variance only (#724: a
+   class or an interface below in a parameter, above in the result, `void`
+   and `true`), its effects and parameters, named ones included, the same.
 4. **Calls.** A call through a value gives the positional arguments, then
    named ones in any order. It must give every name the type requires, and
    may give only names the type has. Explicit arguments run in written order.

@@ -161,7 +161,10 @@ parameter inside a function type of its own as a value, the call of a
 generic function or parametric class's method returning a function of its
 type parameter, nor an override of such a parametric method ([the
 rule](docs/LANGUAGE.md#function-values-epics-compiler-does-not-convert-724));
-`--function-coercions` keeps openverse's conversions.
+`--function-coercions` keeps openverse's conversions. A conversion that
+needs no wrapper, by class variance (a class or interface below in a
+parameter, above in the result), is made for any function value, as Epic
+makes it: openverse holds the value in an adapter object.
 
 ```verse
 Half(N:int)<decides>:int =
