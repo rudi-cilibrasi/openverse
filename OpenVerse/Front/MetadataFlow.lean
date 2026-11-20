@@ -990,7 +990,7 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
         let excludesCell := es.head?.any fun
           | .local obj => info.nonCellMask.testBit obj
           | _ => false
-        let possibleCell := field == 0 &&
+        let possibleCell := policy.cellTag.isSome && field == 0 &&
           ((!excludesCell && (privateObjects.any (· ≤ 1) || cellExternal out.slots.heap privateObjects)) ||
             (es.head?.any fun | .local obj => info.cellSlots.contains obj | _ => false) ||
             privateObjects.any (fun object => out.slots.heap.cells.contains object))
@@ -1004,6 +1004,12 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
               ({ role := args.headD false, refs } : MetadataCells.Payload)
       | .isTag _ => refs := privateObjects
       | _ => pure ()
+    -- Only tuples and the immutable compiler-owned lazy stack carry
+    -- structural columns. Heap reads can consume the lazy stack's columns
+    -- even when an ordinary call summary has lost the physical identity.
+    let knownColumn := match op with
+      | .get i => (parts.headD none).bind (·[i]?)
+      | _ => none
     let role ← match op with
       | .new tag => pure (if policy.cellEnabled && policy.cellTag == some tag && args.length == 1 then false else
           args.zipIdx.any fun (role, i) => role && !(fields[tag]?.getD []).contains i)
@@ -1034,6 +1040,7 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
         pure rhs.role
       | .get field =>
         if let some p := payload then pure p.role
+        else if let some column := knownColumn then pure column.role
         else if policy.cellEnabled && cellTransport out.slots.heap policy.cellTransports privateObjects then
           pure true
         else if field == 0 && policy.cellEnabled &&
@@ -1044,8 +1051,16 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
         else pure (args.headD false)
       | .isTag _ => pure (args.headD false)
       | .tag => pure false
+    let valueParts := match op with
+      | .new tag =>
+        if policy.cellTransportTag == some tag then MetadataCells.tupleParts args parts else none
+      | .get _ =>
+        match payload with
+        | some value => value.parts
+        | none => knownColumn.bind (·.parts)
+      | _ => none
     return { out with
-      value := some role, valueParts := payload.bind (·.parts)
+      value := some role, valueParts
       valueRefs := (payload.map (·.refs)).getD refs }
   | .ite c t e => do
     let c ← cellChild 0 (expr fns infos fields fn info slots c)
@@ -2485,6 +2500,9 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
   let closedRoots := roots.filter closedEntry
   let openRoots := roots.filter (fun i => !closedEntry i)
   let capable := cellCapabilities fns infos cellTag
+  let transportTag := infos.findSome? (·.cellTransportTag)
+  let localTransport := fns.mapIdx fun i fn =>
+    transportTag.any fun tag => cellConstructor tag ((infos[i]?.getD {}).body.getD fn.body)
   let transferSafe := if cellTag.isSome then closedTransferSafety fns infos referencedOwners else #[]
   -- The static path proves private-irrelevant formal inputs. Other functions may
   -- use the same all-real transfer only in a caller context whose complete
@@ -2497,14 +2515,15 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
   let closedSeeds := closedRoots ++ freshFunctions.filter (fun i => !closedRootSet.contains i)
   if debug then
     dbg_trace s!"metadata closed-real entries={closedRoots.length} open={openRoots.length}"
-  let action (roots : List Nat) : M Unit := do
+  let action (roots : List Nat) (trackTransports : Bool) : M Unit := do
     let runContext (key : Key) : M Flow := do
       let (i, args) := key
       let some fn := fns[i]? | throw "internal: metadata call has no body"
       let info := infos[i]?.getD {}
       modify fun st => { st with
         active := some key, captureMismatch := false, contextDeferred := false, cellPath := [0]
-        cellEnabled := (st.cellCapable[i]?.getD false), cellRefBase := 0,
+        cellEnabled := (st.cellCapable[i]?.getD false) ||
+          (trackTransports && (localTransport[i]?.getD false)), cellRefBase := 0,
         cellScope := i, cellGraphOwner := none }
       let values := (List.range fn.nslots).map (fun i =>
         info.inputs.contains i || (args[i]?.getD default).role) |>.toArray |> Bits.ofArray
@@ -2735,11 +2754,12 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
   -- state. A callable root with open arguments is still checked independently
   -- even when it is also reached from a certified closed entry.
   let run (entries : List Nat) (tag : Option Nat) (capabilities : Array Bool)
-      (closed : Std.HashMap Nat (Bool × Option Bool × TupleParts × Bool)) : Except String State := do
-    let (_, final) ← (action entries).run {
+      (closed : Std.HashMap Nat (Bool × Option Bool × TupleParts × Bool)) (trackTransports : Bool) :
+      Except String State := do
+    let (_, final) ← (action entries trackTransports).run {
       debug := debug, scalarReturns
       cellTag := tag, cellCapable := capabilities, closedTransfers := closed
-      cellTransportTag := infos.findSome? (·.cellTransportTag)
+      cellTransportTag := transportTag
       plans := Array.replicate fns.size none
       referenceLives := Array.replicate fns.size none
       sites := sites
@@ -2748,7 +2768,7 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       borrowedTasks := borrowedTasks }
     return final
   let closedState ← if closedSeeds.isEmpty then pure ({} : State)
-    else run closedSeeds none (Array.replicate fns.size false) {}
+    else run closedSeeds none (Array.replicate fns.size false) {} false
   let closedResults := freshFunctions.foldl (fun out g =>
     let key := (g, List.replicate fns[g]!.arity ({} : Argument))
     match closedState.indices[key]? with
@@ -2757,6 +2777,6 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       let summary := closedState.summaries[index]!
       out.insert g (!closedEntry g, summary.result, summary.parts, summary.yielded)) {}
   if !openRoots.isEmpty then
-    discard <| run openRoots cellTag capable closedResults
+    discard <| run openRoots cellTag capable closedResults true
 
 end OpenVerse.Front.MetadataFlow

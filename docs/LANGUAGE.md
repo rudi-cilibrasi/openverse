@@ -2578,11 +2578,13 @@ Main():void =
   the same row and shares mutations from accepted values. First success
   skips unused recursive alternatives. A composed prefix and an
   exclusive branch selection run once for each surrounding row. A
-  failed prefix rolls back its effects and gives no rows.
+  failed prefix rolls back its effects and gives no rows. A conditional
+  header with a type-refining condition can also resume when the selected
+  alternatives produce a row type visible outside the branch. Its branch
+  bindings and refined types remain available while that branch resumes.
 
-  Choice headers with type-refining conditions, mutable implicit proof
-  captures, and direct concurrency in a captured expression remain
-  implementation limits (#686). Restrictions on other
+  Mutable implicit proof captures and direct concurrency in a captured
+  expression remain implementation limits (#686). Restrictions on other
   return-containing initializers and on returns inside expressions or
   conditions still apply.
 

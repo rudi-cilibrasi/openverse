@@ -303,6 +303,8 @@ def ForSearch.takeFrom (search : ForSearch) (bindings : List Nat) (prior : Optio
 structure ForCursorRequest where
   prior : SExpr
   outputs : List String
+  /-- A selected branch commits before entering the generators inside it. -/
+  nested : Bool := false
   /-- An enclosing product supplies the input slot and uses the exact
       lexical context of the accepted outer row to build its inner step. -/
   attach : Option (Ctx → List Local → Ty → (Nat → EM R) → EM R) := none
@@ -455,6 +457,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) (prepared : Bool := false)
     (firstDecides : Bool := false) (failure : Option SExpr := none)
     (searchPrepared : Bool := false) (cursor : Option ForCursorRequest := none) : EM R := do
+  let sourceClauses := clauses
   let transport := ctx.refinementTransportValue
   if cursor.isSome && transport.isSome then
     eerr p "internal: refinement transport for resumable for headers"
@@ -1561,8 +1564,51 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           | .app _ (.ident _ "$alt") [.block _ guards, value] false =>
             some (guards ++ [.decl gp x annotation false value])
           | _ => none
+    if let some (binding, annotation, conditional) :=
+        pre[before.length]?.bind (refinementConditionalBinding? ctx) then
+      let suffix := pre.drop (before.length + 1) ++ rest
+      let outputs := request.outputs.map (SExpr.ident p)
+      let rowExpr := SExpr.tuple p outputs
+      let saved ← get
+      let probeCtx := { ctx with typeOnly := true }
+      let probe ← if prepared then
+        elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq
+          probeCtx p sourceClauses rowExpr (prepared := true)
+        else elabE probeCtx (.forE p sourceClauses rowExpr) none
+      restoreConstructProbe ctx saved
+      let .arr row := probe.ty | eerr p "internal: malformed refined cursor row"
+      let name := Choice.refinedCursorViewName ctx.fnFx
+      let view := Ty.struct name [row]
+      let resultTy := Ty.opt (.tup [view, row])
+      if ctx.typeOnly then return ⟨.lit .none, resultTy⟩
+      let viewHint := SExpr.decl p "$cursorView" (some view.toSTy) false (.tuple p [])
+      let optionHint := SExpr.decl p "$cursorView" (some (Ty.opt view).toSTy) false (.tuple p [])
+      let rowHint := SExpr.decl p "$cursorRow" (some row.toSTy) false (.tuple p [])
+      let owner (branch : SExpr) :=
+        let first := SExpr.decl branch.pos binding annotation false branch
+        let arm := Choice.prepare [first] (choiceValues ctx) (choiceField ctx)
+          (fieldOrder := choiceOrder ctx) (keepExcl := true) (keepBranches := choiceHasCast ctx)
+        SExpr.optionLit p (.app p (.ident p "$refinedCursorOwner")
+          [viewHint, rowHint, .str p [.text Choice.refinedCursorMethod],
+           .block p (arm ++ suffix), .block p outputs] false)
+      let rec choose (branch : SExpr) : SExpr :=
+        match branch with
+        | .ite q conditions yes (some no) =>
+          .app q (.ident q "$refinementIfPacket")
+            [optionHint, .block q conditions, owner yes, choose no] false
+        | branch => owner branch
+      let cold := if before.isEmpty then choose conditional else
+        .ite p before (choose conditional) (some (.ident p "false"))
+      let name := s!"$refinedCursorInput{(← get).nslots}"
+      let selected := s!"{name}$selected"
+      let prior := SExpr.ite p
+        [.decl p selected none false (.query p request.prior)]
+        (.optionLit p (.ident p selected)) (some cold)
+      let take := SExpr.app p (.member p (.ident p name) Choice.refinedCursorMethod) [] false
+      return ← elabE ctx (.ite p [.decl p name none false (.query p prior)] take
+        (some (.ident p "false"))) (some resultTy)
     if (pre[before.length]?).any isBranch then
-      eerr p "a loop return with a refining conditional header is not supported yet (#686)"
+      eerr p "a loop return with this refining conditional header is not supported yet (#686)"
   if let (some request, (g, fs) :: more) := (cursor, gs) then
     if let some binding := Choice.binding? g then
       if binding.composed && !pre.any isExcl then
@@ -1639,7 +1685,9 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       let head :: tail := ls | eerr p "internal: a for without generators"
       let found ← fresh .logic
       let started ← fresh .logic
-      return { head, tail, prelude := preE, found, started, nested := prepared && !searchPrepared }
+      return {
+        head, tail, prelude := preE, found, started
+        nested := (prepared || cursor.any (·.nested)) && !searchPrepared }
     if let some request := cursor then
       let search ← newSearch
       let bindings := c.locals.filterMap fun l => if l.slot >= start then some l.slot else none

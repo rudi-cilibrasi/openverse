@@ -636,6 +636,12 @@ completed rows. The selected path defers its reached cleanup to the lazy
 operand. Other paths run their cleanup during traversal. A packet carries
 the selected types and shared cell references, including inside refined
 branches. Type notes keep their lexical keys through refinement copies.
+A refining conditional stores the selected branch's cursor and proof
+captures in a generated object. Its public interface returns the visible
+row and the next cursor. Each resume reads the selected branch's saved
+captures without replaying the condition. The metadata checker tracks
+immutable choice-frame fields through calls and retains local heap
+tracking for stacks of pending frames.
 
 `returnLoopSites` records
 eligible sites and `$noteTypes` discovers the capture types, type parameters,
