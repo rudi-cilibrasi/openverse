@@ -23,9 +23,12 @@ positives require the same profile comparison.
 
 The method-value pairs check contravariant arguments and covariant results
 using real dictionaries, with escaping, once-only receiver, rollback and
-cancellation oracles. The stored-function refusal pair records the existing
-restriction on variance of already materialized function objects, independently
-of class bounds. Reverse narrowing is refused separately.
+cancellation oracles. The stored-function pair records variance of an already
+materialized function object: its concrete control converts by class variance
+(#724, an adapter, as Epic's compiler converts any function value whose
+conversion needs no wrapper), and the bounded `method-value-stored-refusal`,
+a type parameter in the function type, stays refused, independently of class
+bounds. Reverse narrowing is refused separately.
 
 The callable-upper pairs invoke opaque function values through actual bound
 dictionaries. They cover defaults, precise returned values, receiver-before-
