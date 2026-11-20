@@ -80,6 +80,20 @@ partial def needsWrapper (env : TyEnv) (a b : Ty) : Bool :=
   | _, _ => false
 end
 
+/-- (#724) A value of function type `a` is one of the other function type
+    `b` by class variance, which Epic's Verse compiler admits for any
+    function value (UEFN 43.12: followup-coerce's `value-class-variance`, a
+    contravariant parameter; followup-coerce2's `value-class-result`, a
+    covariant result): no wrapper is needed (`needsWrapper`), so the same
+    effects and parameters and each parameter and the result a class or an
+    interface below or above, `void` and `true`, or such a function type.
+    Verse Core does not relate the two (a function value's class fixes its
+    shape's type arguments, `TyEnv.varianceOf`), so the value becomes an
+    object of an adapter class that holds it (`FnValues.adapterName`), made
+    for closed types only, as #214's classes for names are. -/
+def byVariance (env : TyEnv) (a b : Ty) : Bool :=
+  isFn a && isFn b && !(a == b) && a.params.isEmpty && b.params.isEmpty && !needsWrapper env a b
+
 /-- A value of type `a` used as one of type `b` holds a function value that
     `needsWrapper`: `a` and `b` function types that do, or options, arrays,
     tuples or maps (their values) of such (UEFN 43.12: "Using a value of type

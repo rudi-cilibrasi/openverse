@@ -82,7 +82,8 @@ def concurrencyHelpers (resolved : List STop) (requests : Requests) :
     requests.methods.map (fun r => STop.fn r.pos "$methodRequest"
       ((r.receiver :: r.params).map fun t => { name := "$arg", ty := t }) r.tparams r.effs r.ret (.block r.pos r.args))
   let uses := PreludeNeeds.uses (resolved ++ requestTops) ++
-    requests.fns.flatMap (fun (_, t) => t.helperUses)
+    requests.fns.flatMap (fun (_, t) => t.helperUses) ++
+    requests.fnAdapters.flatMap (fun (a, b) => a.helperUses ++ b.helperUses)
   let privateNames := PreludeNeeds.privateNames owned uses
   let concurrencyNames := privateNames.map fun n => (n, "$" ++ n)
   let needs (n : String) := uses.contains ((concurrencyNames.lookup n).getD n)
@@ -428,6 +429,9 @@ def inlineSource (requests : Requests) (admitted : Admitted) :
     | none => budgets) admitted.constructionFx
   for (_, ty) in requests.fns do
     EffectPolicy.checkTy { line := 0, col := 0 } ty.toSTy
+  for (a, b) in requests.fnAdapters do
+    EffectPolicy.checkTy { line := 0, col := 0 } a.toSTy
+    EffectPolicy.checkTy { line := 0, col := 0 } b.toSTy
   for request in requests.methods do
     EffectPolicy.checkSpecs request.pos request.key request.effs
     EffectPolicy.checkTParams request.tparams
@@ -442,7 +446,7 @@ def inlineSource (requests : Requests) (admitted : Admitted) :
   let allTops00 := (SubtypeEvidence.addFields
     (FnValues.desugar (resolved.take (resolved.length - admitted.rawEntry.length) ++ helpers)
       (resolved.drop (resolved.length - admitted.rawEntry.length)) (requests.fns.map fun (n, t) => (n, t.toSTy))
-      requests.methods written))
+      requests.methods written (requests.fnAdapters.map fun (a, b) => (a.toSTy, b.toSTy))))
   -- Templates cross the same effect, function-value and witness transforms as
   -- ordinary source. Keep their checking stubs single-valued as before.
   let templateName (n : String) : Bool := copiedOverloadNames.any fun k => n == "$copiedOverload:" ++ k

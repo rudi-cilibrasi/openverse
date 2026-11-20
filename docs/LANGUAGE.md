@@ -525,8 +525,19 @@ Main():void =
   - a function of two parameters is a `type{_(:tuple(int, int)):int}`
     (the call takes it apart);
   - a generic one at an instance, its single parameter standing for the
-    whole tuple: `Id(X:t):t` is a `type{_(:int, :string):tuple(int, string)}`. A
-  value of one function type does not convert to another by variance.
+    whole tuple: `Id(X:t):t` is a `type{_(:int, :string):tuple(int, string)}`.
+  A value of one function type converts to another by class variance too,
+  as Epic's compiler converts any function value whose conversion needs no
+  wrapper (#724): `G:type{_(:animal):int}` is a `type{_(:dog):int}`,
+  `M:type{_():dog}` a `type{_():animal}`, with an interface above or below
+  as with a class, a function type nested in a parameter or the result
+  converting the same way (a parameter's flips the direction), in a local,
+  a parameter, a field, a result, an `if`'s branches and arrays, options,
+  tuples and maps of such values. The effects and the parameters, named
+  ones included, must be the same, and every other parameter and the
+  result the same type, `void` and `true`, or a class above or below
+  ([the rule](#function-values-epics-compiler-does-not-convert-724)); not
+  yet where a function type has a type parameter in it (generic code).
 - Function values are not comparable and have no `ToString`.
 - A method as a value, `C.Add` (or `Add` in a method of the class), holds
   its receiver: calling it calls `C.Add`, the receiver's class's
@@ -681,7 +692,9 @@ every function type it fits, `FnValues`), so it refuses, by the same error
    `Call(F2)` is not; `F(G(:int)<computes>:int) = Run(G)` with
    `Run(F(:int)<transacts>:int)` is refused; `if (C?) {F13} else {F14}`
    with `F13():c2` and `F14():c3` is admitted, as is
-   `F:type{_(?A:int):int} = if (C?) {F1} else {F2}`. A conversion
+   `F:type{_(?A:int):int} = if (C?) {F1} else {F2}`. A value of a type
+   it is of as it is, by class variance, converts (`FnCoercion.byVariance`,
+   below). A conversion
    openverse does not make at all stays the type error it is (a
    `<decides>` function where none is expected, 3509), except that a value
    of a type a function named there would convert to by variance cites
@@ -725,20 +738,46 @@ The Book's `bp_vm_only` tests refuse these programs (`DefaultNamed` 629,
 `FORT-592189:4`; `SOL-5477:5`) and their `verse_vm_only` twins expect them
 to run: openverse takes UEFN 43.12's verdict, which is the Blueprint VM's,
 also for the `verse_vm_only` `Rational.versetest` 131, 132, 139 and 140,
-joins of an `int` and a `rational` result (`join-int-rational`). One
-difference is left: Epic converts a function value by class variance
-where no wrapper is needed (`value-class-variance`, a
-`type{_(:animal):int}` parameter passed as a `type{_(:dog):int}`;
-`value-class-result`, a `type{_():dog}` local used as a
-`type{_():animal}`), and openverse refuses it, as a value of one function
-type does not convert to another by variance (only a named function does, #214). Verse Core's
-variances are covariant, invariant or bivariant, and a function type's
-parameters would need contravariance there, or the front end an adapter
-object that holds the value and converts each call's arguments (as #214's
-classes do for a name). UEFN 43.12 answered every probe of
+joins of an `int` and a `rational` result (`join-int-rational`). UEFN 43.12
+answered every probe of
 [`followup-coerce`](../tests/conformance/versevm/followup-coerce) and
 [`followup-coerce2`](../tests/conformance/versevm/followup-coerce2) (54, one
-construct each): openverse agrees with all but these two.
+construct each), and openverse agrees with all of them.
+
+**Class variance of a function value** (#724). Epic converts any function
+value by class variance where no wrapper is needed (`value-class-variance`,
+a `type{_(:animal):int}` parameter passed as a `type{_(:dog):int}`;
+`value-class-result`, a `type{_():dog}` local used as a
+`type{_():animal}`), and so does openverse: a value of function type A is
+one of function type B when A is one of B as it is (rule 1 above: the same
+effects and parameters, named ones included, and each parameter and the
+result the same, `void` and `true`, a class or an interface below or above,
+or such a function type) and Verse Core does not relate them already
+(`FnCoercion.byVariance`). Verse Core's variances are covariant, invariant
+or bivariant, and a function value's class fixes its shape's type
+arguments, so the front end makes the conversion an object of an adapter
+class, `$fnAdapter`*i*, one per pair of types (`FnValues.desugar`, asked
+for as #214's classes are, `Requests.fnAdapters`), which holds the value
+and whose `$call` calls it with the arguments it is given, a reference to
+a class above them as it is, a nested function value by an adapter of its
+own; the result likewise. No Verse program can tell: the value calls the
+same function with the same effects (`<decides>`, `<suspends>`, heap
+effects, rollback), a bound method its one receiver; function values are
+not comparable; constructing the adapter is no heap effect (it has no
+`var` field); and `ToDiagnostic` prints the value it holds. Branches of an
+`if` and elements of an array join by it (`fnJoinTy`): at the expected
+function type, else at the type whose parameters are the lower of the two
+and whose result is the join. Containers convert element by element, as
+for any conversion. A result `void` taken as `true` converts the same way
+(the Book's `Void.versetest:100`, `F:int->true = VoidOutput`, now runs).
+Not yet: a function type with a type parameter in it
+(generic code, refused with a message, as #214's classes are made for
+closed types only), and `any` or `comparable` as the type above, which
+openverse refuses as it does for a function named there.
+[`followup-variance`](../tests/conformance/versevm/followup-variance) asks
+Epic the cases the evidence does not reach: interfaces, nested function
+types, containers of values, a method's value, a parametric class's
+instance, `any` and `comparable` above, `void` and `true` beside.
 
 ## Extension methods
 
@@ -1604,7 +1643,8 @@ circle := class(shape, labelled):
   and overrides one of the type's methods or is the target of a refining
   cast (`pp := class(producer(player))` with `Get<override>`), or sees it
   through an interface referred to through views (#351). Function types
-  convert as before (#214).
+  convert as before (#214), and a function value by class variance through
+  an adapter (#724, [function values](#function-values-epics-compiler-does-not-convert-724)).
 - **Heap effects** (#35). A
   function's specifiers allow a set of heap effects: all of them when it has
   none or `<transacts>`, none with `<computes>` alone, and those named by
@@ -2948,7 +2988,7 @@ produces may vary between VM implementations"):
 | a map | `map{K => V, …}` in its order |
 | an enum's value | `e.A` |
 | a struct or an object | its type's name (without type arguments) and its fields in declaration order, `my_class{X := 10}`, the object's own class, not its static type's |
-| a function | its name and parameter types, `Scale(:int, :float)`; a method's `(c:)M(:int)`; the language's own `(/Verse.org/Verse:)ToDiagnostic(:any)` |
+| a function | its name and parameter types, `Scale(:int, :float)`; a method's `(c:)M(:int)`; the language's own `(/Verse.org/Verse:)ToDiagnostic(:any)`; a function value converted by class variance as the value it was (#724: a `type{_(:animal):void}` value of `Bark` used as a `type{_(:dog):void}` prints `Bark(:animal)`) |
 | `()`, a `void` | `false` |
 
 A definition in a module is qualified by it, `(M:)c{…}`; one at the top

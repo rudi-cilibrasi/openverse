@@ -97,7 +97,7 @@ def elabFieldDefaults (env : TyEnv) (sigs : Signatures) (tops : List STop) (cdef
             fxCheck s!"default of field '{f}' of {n}" allowed st
             initializerBodies := initializerBodies ++ [(n, f, d.pos, body)]
             fieldNeeds := fieldNeeds.merge
-              { methods := st.needs.methods, loops := st.needs.loops, subtypes := st.needs.subtypes, anys := st.needs.anys }
+              { methods := st.needs.methods, fnAdapters := st.needs.fnAdapters, loops := st.needs.loops, subtypes := st.needs.subtypes, anys := st.needs.anys }
           | .error msg => throw s!"{msg} (in the default of field '{f}' of {n})"
     | _ => pure ()
   return { needs := fieldNeeds, bodies := initializerBodies }
