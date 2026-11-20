@@ -269,6 +269,11 @@ structure Requests where
   /-- Methods wanted as values at function types their own fit only by
       variance: an adapter for each, by key. -/
   methods : List FnValues.MethodRequest := []
+  /-- (#724) Function values converted to another closed function type by
+      class variance (`FnCoercion.byVariance`), each by its type and the
+      other: an adapter class for each pair, the `i`-th
+      `FnValues.adapterName i`, whose object holds the value. -/
+  fnAdapters : List (Ty × Ty) := []
   /-- Canonical checked upcast dictionaries discovered by elaboration. -/
   subtypes : List STop := []
   /-- Branches of casts that refine type arguments (#243): a function for

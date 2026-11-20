@@ -643,10 +643,18 @@ def elabProgram (allTops000 : List STop) (opts : Options := {}) : Except String 
       | 0 =>
         if !newDefaults.isEmpty then throw "internal error: default forwarding helpers still to infer after several elaborations"
         if !new.methods.isEmpty then throw "internal error: method variance adapters still to infer after several elaborations"
+        if !new.fnAdapters.isEmpty then throw "internal error: function values' variance adapters still to make after several elaborations (#724)"
         -- (a program with a placeholder left is never given out)
         if !new.fns.isEmpty then throw "internal error: functions still wanted as values after several elaborations (#214)"
         throw "internal error: casts that refine type arguments, or lazily taken calls, still to lift after several elaborations (#243, #246)"
       | fuel + 1 =>
+        -- (#724) the printer of a function type for `ToDiagnostic` casts to
+        -- the classes of the values it may be (`Diagnostic.printer`): those
+        -- made before a round that adds such classes (functions as values
+        -- at other types, method adapters, function value adapters) are made
+        -- again, in the round after, with them
+        let (req, new) := if new.fns.isEmpty && new.methods.isEmpty && new.fnAdapters.isEmpty then (req, new)
+          else ({ req with anys := [] }, { new with anys := [] })
         if newDefaults.isEmpty then return ← loop eagerFuel witnessFuel fuel (req.merge new)
         -- A newly materialized dispatch-default helper can reveal heap effects
         -- absent from an earlier suffix trial. Rediscover consumers after those
@@ -654,7 +662,7 @@ def elabProgram (allTops000 : List STop) (opts : Options := {}) : Except String 
         -- interfaces, prefixes and resume methods must agree on permissions.
         -- Each restart retains the new bridges, so discovery still progresses.
         let bridges := req.loops.filter fun l => defaultBridge l.name || spawnAdapter l.name
-        loop eagerFuel witnessFuel fuel { req.merge { fns := new.fns, methods := new.methods, subtypes := new.subtypes, anys := new.anys } with
+        loop eagerFuel witnessFuel fuel { req.merge { fns := new.fns, methods := new.methods, fnAdapters := new.fnAdapters, subtypes := new.subtypes, anys := new.anys } with
           casts := [], loops := bridges ++ newDefaults }
   termination_by (eagerFuel, witnessFuel, fuel)
   let c ← (loop eagerRounds witnessRounds rounds opts.requests).mapError fun msg =>

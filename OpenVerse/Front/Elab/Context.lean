@@ -562,6 +562,7 @@ def Requests.merge (a b : Requests) : Requests where
   instanceCalls := mergeByKey id a.instanceCalls b.instanceCalls
   fns := mergeByKey id a.fns b.fns
   methods := mergeByKey (·.key) a.methods b.methods
+  fnAdapters := mergeByKey id a.fnAdapters b.fnAdapters
   subtypes := SubtypeEvidence.mergeRequests a.subtypes b.subtypes
   casts := mergeByKey (·.key) a.casts b.casts
   loops := mergeByKey (·.key) a.loops b.loops
@@ -587,6 +588,7 @@ def Requests.without (r old : Requests) : Requests where
   instanceCalls := dropByKey id r.instanceCalls old.instanceCalls
   fns := dropByKey id r.fns old.fns
   methods := dropByKey (·.key) r.methods old.methods
+  fnAdapters := dropByKey id r.fnAdapters old.fnAdapters
   subtypes := dropByKey SubtypeEvidence.declarationName r.subtypes old.subtypes
   casts := dropByKey (·.key) r.casts old.casts
   loops := dropByKey (·.key) r.loops old.loops
@@ -599,7 +601,7 @@ def Requests.without (r old : Requests) : Requests where
 def Requests.isEmpty (r : Requests) : Bool :=
   r.eager.isEmpty && r.lazy.isEmpty && r.families.isEmpty && r.overloads.isEmpty && r.copiedOverloads.isEmpty && r.nested.isEmpty &&
     r.fieldOrders.isEmpty && r.instanceCalls.isEmpty &&
-    r.fns.isEmpty && r.methods.isEmpty &&
+    r.fns.isEmpty && r.methods.isEmpty && r.fnAdapters.isEmpty &&
     r.casts.isEmpty && r.loops.isEmpty && r.witnesses.isEmpty && r.watches.isEmpty && !r.awaits && r.subtypes.isEmpty && r.boxes.isEmpty &&
     r.anys.isEmpty
 
@@ -1845,11 +1847,13 @@ def Ctx.rootsOf (ctx : Ctx) (c m : String) : List String :=
 
 /-- Whether this elaboration knows if an expression can fail: not one for
     types, nor one to be done again with functions as values (#214, #231)
-    or with the families of methods' uses or the overloads of calls (#283),
-    which may make a call fail or have several values. -/
+    or their adapters (#724), or with the families of methods' uses or the
+    overloads of calls (#283), which may make a call fail or have several
+    values. -/
 def Ctx.failabilityKnown (ctx : Ctx) : EM Bool := do
   let st ← get
-  return st.needs.fns.isEmpty && st.needs.methods.isEmpty && st.needs.copiedOverloads.isEmpty && ctx.types.familySites.isEmpty &&
+  return st.needs.fns.isEmpty && st.needs.methods.isEmpty && st.needs.fnAdapters.isEmpty &&
+    st.needs.copiedOverloads.isEmpty && ctx.types.familySites.isEmpty &&
     ctx.types.overloadSites.isEmpty && ctx.types.nestedSites.isEmpty && ctx.types.fieldSites.isEmpty &&
     !ctx.typeOnly
 
@@ -2421,6 +2425,26 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
       let y ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push b })
       return some (.seq (.assign x e) (.ite (.assign y (.heap (.isTag fits) [.local x])) (.local y) (.prim .userErr [])))
     | _, _, _ => return some e
+  -- (#724) a function value at another function type it is one of by class
+  -- variance (contravariant parameters, a covariant result: a class or an
+  -- interface below or above, `void` and `true`, such function types
+  -- nested), which Epic's Verse compiler admits for any function value, no
+  -- wrapper needed, and which Verse Core's types do not relate (a function
+  -- value's class fixes its shape's type arguments): an object of an adapter
+  -- class that holds the value, the same function to every caller, whose
+  -- `$call…` calls it (`FnCoercion.byVariance`, `FnValues.desugar`). Asked
+  -- for the first time, `Err()` stands for it, and the program is
+  -- elaborated again with the class made.
+  if FnCoercion.byVariance env a b then
+    if let some i := env.requests.fnAdapters.idxOf? (a, b) then
+      let name := FnValues.adapterName i
+      if env.classes.contains name then
+        -- (its one field, `$f`: no type parameters, no parent class)
+        if (env.fields name).map (·.1) != ["$f"] then
+          throw s!"internal error: the function value adapter {name} has fields {(env.fields name).map (·.1)} (#724)"
+        return some (.heap (.new (env.tagOf name)) [e])
+    noteNeeds { fnAdapters := [(a, b)] }
+    return some (.seq (← discardValue ⟨e, a⟩) (.prim .userErr []))
   -- no value has a class type with no concrete class below it (an interface
   -- nothing implements, an abstract class with no subclass): the conversion
   -- to a type above it is unreachable (#98)
@@ -2560,6 +2584,16 @@ partial def unwrapNever : Expr → Ty → Ty → Expr
       | e => e)
   | e, _, _ => e
 
+/-- (#724) `fnTyFits` inside arrays, options, tuples and maps' values: a
+    container of function values whose every function value fits the other
+    container's by variance. -/
+partial def fnTyFitsDeep (env : TyEnv) : Ty → Ty → Bool
+  | a@(.struct _ _), b@(.struct _ _) => FnCoercion.isFn a && FnCoercion.isFn b && fnTyFits env a b
+  | .arr a, .arr b | .opt a, .opt b => fnTyFitsDeep env a b
+  | .tup as, .tup bs => as.length == bs.length && (as.zip bs).all fun (a, b) => a == b || fnTyFitsDeep env a b
+  | .map k a, .map k' b => k == k' && fnTyFitsDeep env a b
+  | _, _ => false
+
 /-- Convert `r` to type `target`: equal types, `false` (bottom) to anything,
     anything to `void` (Book of Verse: "void accepts any value"), and a
     class to a class or interface above it (`convert`). -/
@@ -2638,16 +2672,22 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
     -- would be a value of (`fnTyFits`), by variance: where that needs a
     -- wrapper, Epic's Verse compiler refuses it too, 3502 (UEFN 43.12,
     -- followup-coerce2's `value-int-rational-result`, `value-void-result`);
-    -- where it needs none, a class's reference, Epic admits it and openverse,
-    -- which converts no function value by variance, does not
-    -- (`value-class-variance`, `value-class-result`)
+    -- where it needs none, a class's reference, `convert` makes an adapter
+    -- (`FnCoercion.byVariance`), for closed types only: a type parameter in
+    -- either type is left
     let env := (← get).env
     if FnCoercion.isFn r.ty && FnCoercion.isFn target && fnTyFits env r.ty target then
       if FnCoercion.needsWrapper env r.ty target then
         if !env.functionCoercions then
           eerr p s!"using a value of type {r.ty.show} as a value of type {target.show} is not yet implemented: a function value that is no function named where its type is expected needs a wrapper to be one of another function type, which Epic's compiler does not make {FnCoercion.cite}"
       else
-        eerr p s!"expected {target.show}, found {r.ty.show}: openverse converts a function value by class variance only where a function is named (#214), which Epic's Verse compiler does for any function value (UEFN 43.12: followup-coerce's value-class-variance; #724)"
+        eerr p s!"expected {target.show}, found {r.ty.show}: openverse converts a function value by class variance at function types without type parameters only, as it does a function named (#214), not yet in generic code where they have them (Epic's Verse compiler converts any function value so, UEFN 43.12: followup-coerce's value-class-variance; #724)"
+    -- (and an array, an option, a tuple or a map of such values, one of
+    -- which needs a wrapper: "Using a value of type []type{_(:int)<computes>:int}
+    -- as a value of type []type{_(:int)<transacts>:int}", followup-coerce2's
+    -- `value-array-effect`, here with class variance besides)
+    if !env.functionCoercions && fnTyFitsDeep env r.ty target && FnCoercion.needsWrapperDeep env r.ty target then
+      eerr p s!"using a value of type {r.ty.show} as a value of type {target.show} is not yet implemented: a function value that is no function named where its type is expected needs a wrapper to be one of another function type, which Epic's compiler does not make {FnCoercion.cite}"
     eerr p s!"expected {target.show}, found {r.ty.show}"
 
 /-- `coerce`, whose error says why a name is an `any` (`Ctx.anyWhy`). -/
@@ -2758,6 +2798,114 @@ def methodVarianceRequest (ctx : Ctx) (p : Pos) (owner method : String)
   return none
 
 mutual
+/-- `joinTy` of two class or interface types (or function types, of
+    their shapes), at the same value: the expected type when both are
+    below it, else the nearest common class above both, else the one
+    interface above both that no other common one is below. -/
+partial def joinClassTy (env : TyEnv) (S : String) (as : List Ty) (T : String) (bs : List Ty)
+    (exp : Option Ty) (inner : Bool) : Option Ty :=
+  -- (inside a container, only references convert for free)
+  if env.classes.contains S && env.classes.contains T &&
+      (!inner || (env.isRefClass S && env.isRefClass T)) then
+    -- the expected type, when both are below it, else the nearest common
+    -- class above both, else the one interface above both that no other
+    -- common one is below (at the same type arguments, #39)
+    -- (a class's instance fits one of a class above at type arguments
+    -- that fit by the Book's variance, as `refUp`: the same value)
+    let fitsAt (C : String) (cs : List Ty) (U : String) (us : List Ty) : Bool :=
+      env.upArgs C cs U == us ||
+        (env.isRefClass C && env.isRefClass U && refUp env (.struct C cs) (.struct U us)) ||
+        (C == U && !env.isRefClass C && (env.concreteBelow C).isEmpty && env.argsFit U cs us)
+    let up (U : String) (us : List Ty) : Bool :=
+      env.isSub S U && env.isSub T U && fitsAt S as U us && fitsAt T bs U us
+    -- (the type arguments of `U` above both: equal ones, else at each
+    -- position by `U`'s variance, the first where bivariant, the one above
+    -- (or their join) where covariant, the one below where contravariant)
+    let joinArgsAt (U : String) : Option (List Ty) := do
+      if !(env.isSub S U && env.isSub T U) then none
+      let xs := env.upArgs S as U
+      let ys := env.upArgs T bs U
+      if xs == ys then return xs
+      if xs.length != ys.length then none
+      let vs := env.varianceOf U
+      let js ← (xs.zip ys).zipIdx.mapM fun ((x, y), j) => match vs[j]?.getD .inv with
+        | .inv => if x == y then some x else none
+        | .bi => some x
+        | .co =>
+          if env.argFits x y then some y else if env.argFits y x then some x else
+          match joinTy env x y none true with
+          | some z => if env.argFits x z && env.argFits y z then some z else none
+          | none => none
+        | .contra => if env.argFits x y then some x else if env.argFits y x then some y else none
+      if up U js then some js else none
+    let atU (U : String) : Ty :=
+      let old := (Ty.struct U (env.upArgs S as U)).commonBounds (.struct U (env.upArgs T bs U))
+      if env.upArgs S as U == env.upArgs T bs U then old else
+      match joinArgsAt U with
+      | some js => Ty.struct U js
+      | none => old
+    -- (two type values join at a metatype that constructs neither, as
+    -- a class value's type is its own class, and a join of two keeps only
+    -- the bound above both: Book of Verse tests, Archetypes.versetest:110,
+    -- "Ensure a particular class (rather than a bound)"; `TypeValues`)
+    let typeValues := (TypeValues.valueClass? S).isSome && (TypeValues.valueClass? T).isSome
+    let kind (U : String) : Option String := (TypeValues.bound? U).map (·.1)
+    let cands := (env.supers S).filter fun U => (up U (env.upArgs S as U) || (joinArgsAt U).isSome) &&
+      !(typeValues && (kind U == some "concrete_subtype" || U == TypeValues.castableMark ||
+        (kind U == some "castable_subtype" && !env.isSub U TypeValues.castableMark)))
+    let minimal := cands.filter (fun U => !cands.any fun U' => U' != U && env.isSub U' U)
+    let common : Option Ty :=
+      match cands.find? fun U => !(env.info U).isIface with
+      | some U => some (atU U)
+      | none =>
+        match minimal with
+        | [U] => some (atU U)
+        | _ => none
+    -- (a common class and a common interface not above it are two
+    -- nearest common supertypes: no join, whatever is expected, so the
+    -- value is an `any`. UEFN 43.12 refuses an if of two such classes
+    -- where either supertype is expected, error 3510,
+    -- followup/join-if-common-base-interface, join-if-expected-interface;
+    -- `ambiguousClassJoin` for an array's elements, 3509)
+    if !typeValues && minimal.length > 1 && (minimal.any fun U => !(env.info U).isIface) then none else
+    -- (two type values join at their metatype before the expected type
+    -- is met: Castable.versetest:145, "array-type is []{false, class1}
+    -- which is NOT castable")
+    match exp with
+    | some (.struct U us) => if !typeValues && env.classes.contains U && up U us then some (atU U) else common
+    | _ => common
+  else none
+
+/-- (#724) The join of two function types of one shape whose values convert
+    to it by class variance, as Epic's Verse compiler converts any function
+    value whose conversion needs no wrapper (`FnCoercion.byVariance`): the
+    expected type when both do, else the type whose parameters are the lower
+    of the two (contravariant) and whose result is their join (covariant),
+    when both do. Each branch is then converted, by an adapter where it needs
+    one (`convert`). -/
+partial def fnJoinTy (env : TyEnv) (a b : Ty) (exp : Option Ty) : Option Ty :=
+  -- (a value of `x` is one of `y` as it is, or by an adapter)
+  let to (x y : Ty) : Bool :=
+    x == y || (x.isUnit && y.isUnit) || refUp env x y || FnCoercion.byVariance env x y
+  match a, b with
+  | .struct S as, .struct T bs =>
+    if !(FnCoercion.isFn a && FnCoercion.isFn b) || S != T || as.length != bs.length then none else
+    -- (each parameter the lower of the two, the result their join)
+    let natural : Option Ty := do
+      let k := as.length - 1
+      let ps ← ((as.take k).zip (bs.take k)).mapM fun (x, y) =>
+        if to x y then some x else if to y x then some y else none
+      let x := as.getLastD .void
+      let y := bs.getLastD .void
+      let r ← if to x y then some y else if to y x then some x else
+        (joinTy env x y none true).filter fun z => to x z && to y z
+      let c := Ty.struct S (ps ++ [r])
+      if to a c && to b c then some c else none
+    match exp with
+    | some e => if FnCoercion.isFn e && to a e && to b e then some e else natural
+    | none => natural
+  | _, _ => none
+
 /-- `joinTy`, but for the join at `comparable` of two comparable types with
     nothing else in common. -/
 partial def joinTyShaped (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Bool := false) : Option Ty :=
@@ -2790,77 +2938,10 @@ partial def joinTyShaped (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Boo
     | some (base, _), b => if base == b then some base else none
     | none, _ => none
   | .struct S as, .struct T bs =>
-    -- (inside a container, only references convert for free)
-    if env.classes.contains S && env.classes.contains T &&
-        (!inner || (env.isRefClass S && env.isRefClass T)) then
-      -- the expected type, when both are below it, else the nearest common
-      -- class above both, else the one interface above both that no other
-      -- common one is below (at the same type arguments, #39)
-      -- (a class's instance fits one of a class above at type arguments
-      -- that fit by the Book's variance, as `refUp`: the same value)
-      let fitsAt (C : String) (cs : List Ty) (U : String) (us : List Ty) : Bool :=
-        env.upArgs C cs U == us ||
-          (env.isRefClass C && env.isRefClass U && refUp env (.struct C cs) (.struct U us)) ||
-          (C == U && !env.isRefClass C && (env.concreteBelow C).isEmpty && env.argsFit U cs us)
-      let up (U : String) (us : List Ty) : Bool :=
-        env.isSub S U && env.isSub T U && fitsAt S as U us && fitsAt T bs U us
-      -- (the type arguments of `U` above both: equal ones, else at each
-      -- position by `U`'s variance, the first where bivariant, the one above
-      -- (or their join) where covariant, the one below where contravariant)
-      let joinArgsAt (U : String) : Option (List Ty) := do
-        if !(env.isSub S U && env.isSub T U) then none
-        let xs := env.upArgs S as U
-        let ys := env.upArgs T bs U
-        if xs == ys then return xs
-        if xs.length != ys.length then none
-        let vs := env.varianceOf U
-        let js ← (xs.zip ys).zipIdx.mapM fun ((x, y), j) => match vs[j]?.getD .inv with
-          | .inv => if x == y then some x else none
-          | .bi => some x
-          | .co =>
-            if env.argFits x y then some y else if env.argFits y x then some x else
-            match joinTy env x y none true with
-            | some z => if env.argFits x z && env.argFits y z then some z else none
-            | none => none
-          | .contra => if env.argFits x y then some x else if env.argFits y x then some y else none
-        if up U js then some js else none
-      let atU (U : String) : Ty :=
-        let old := (Ty.struct U (env.upArgs S as U)).commonBounds (.struct U (env.upArgs T bs U))
-        if env.upArgs S as U == env.upArgs T bs U then old else
-        match joinArgsAt U with
-        | some js => Ty.struct U js
-        | none => old
-      -- (two type values join at a metatype that constructs neither, as
-      -- a class value's type is its own class, and a join of two keeps only
-      -- the bound above both: Book of Verse tests, Archetypes.versetest:110,
-      -- "Ensure a particular class (rather than a bound)"; `TypeValues`)
-      let typeValues := (TypeValues.valueClass? S).isSome && (TypeValues.valueClass? T).isSome
-      let kind (U : String) : Option String := (TypeValues.bound? U).map (·.1)
-      let cands := (env.supers S).filter fun U => (up U (env.upArgs S as U) || (joinArgsAt U).isSome) &&
-        !(typeValues && (kind U == some "concrete_subtype" || U == TypeValues.castableMark ||
-          (kind U == some "castable_subtype" && !env.isSub U TypeValues.castableMark)))
-      let minimal := cands.filter (fun U => !cands.any fun U' => U' != U && env.isSub U' U)
-      let common : Option Ty :=
-        match cands.find? fun U => !(env.info U).isIface with
-        | some U => some (atU U)
-        | none =>
-          match minimal with
-          | [U] => some (atU U)
-          | _ => none
-      -- (a common class and a common interface not above it are two
-      -- nearest common supertypes: no join, whatever is expected, so the
-      -- value is an `any`. UEFN 43.12 refuses an if of two such classes
-      -- where either supertype is expected, error 3510,
-      -- followup/join-if-common-base-interface, join-if-expected-interface;
-      -- `ambiguousClassJoin` for an array's elements, 3509)
-      if !typeValues && minimal.length > 1 && (minimal.any fun U => !(env.info U).isIface) then none else
-      -- (two type values join at their metatype before the expected type
-      -- is met: Castable.versetest:145, "array-type is []{false, class1}
-      -- which is NOT castable")
-      match exp with
-      | some (.struct U us) => if !typeValues && env.classes.contains U && up U us then some (atU U) else common
-      | _ => common
-    else none
+    -- (#724) two function types whose values convert to a third by class
+    -- variance: after the joins of their shapes (effects, names) at the
+    -- same type arguments
+    (joinClassTy env S as T bs exp inner).orElse fun _ => fnJoinTy env a b exp
   | .arr x, .arr y => (joinTy env x y (match exp with | some (.arr e) => some e | _ => none) true).map .arr
   | .opt x, .opt y => (joinTy env x y (match exp with | some (.opt e) => some e | _ => none) true).map .opt
   -- (an empty `map{}` with no type from its context, of `false`, joins

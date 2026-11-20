@@ -274,10 +274,20 @@ def printer (env : TyEnv) (p : Pos) (t : Ty) : Except String (STop × List Ty) :
           | [f] => if bookNames.contains f || BuiltinValues.signatures.any (·.1 == f) then s!"(/Verse.org/Verse:){f}"
             else displayName f
           | parts => s!"({".".intercalate (parts.dropLast.map displayName)}:){parts.getLast!}"
+        -- (#724) a function value converted by class variance is an object
+        -- of an adapter class that holds it (`FnValues.adapterName`): it
+        -- prints as the value it holds, which Epic's Verse compiler makes no
+        -- wrapper for, so the conversion is not seen
+        let held (d : String) : Option Ty :=
+          if FnValues.isAdapter d then ((env.fields d []).find? (·.1 == "$f")).map (·.2.1) else none
         let e := below.foldr (fun d e =>
-          SExpr.ite p [.decl p "$Y" none false (.app p (.ident p d) [x] true)] (s (named d ++ params)) (some e))
+          let y := SExpr.ident p "$Y"
+          let shown := match held d with
+            | some u => pr u (.member p y "$f")
+            | none => s (named d ++ params)
+          SExpr.ite p [.decl p "$Y" none false (.app p (.ident p d) [x] true)] shown (some e))
           (s ("function" ++ params))
-        pure (e, [])
+        pure (e, below.filterMap held)
       else if hiddenName n then
         if n.startsWith "$type" then refuse "a type"
         else refuse s!"a value of the compiler's type {n}"
