@@ -775,6 +775,36 @@ differed:
 | `name-void-result` | admitted: `IntIdentity` named where a `type{_(:int):void}` is expected | refused, admitted: a function named converts by variance to a `void` result or from a `void` parameter |
 | `value-class-result` | admitted: a `type{_():dog}` local as a `type{_():animal}` | refused, refused: the class-variance difference, with `value-class-variance` |
 
+## Differential corpus
+
+[`differential/`](../../tests/conformance/versevm/differential) widens the
+probes above from single questions to ordinary runtime semantics: 120
+programs, each printing a short transcript to compare line by line with
+the Verse VM. They are named by area: floats and their `ToString` (`float-`,
+14), rationals (`rat-`, 4), ints inside 64 bits (`int-`, 6), strings
+(`str-`, 11), arrays (`arr-`, 9), maps (`map-`, 8), tuples, options, `logic`
+and the empty value (`tup-`, `opt-`, `logic-`, `eq-`, 10), failure and
+rollback (`fail-`, `for-`, 7), classes, structs, enums and `case` (`cls-`,
+`struct-`, `enum-`, `case-`, 18), control flow (`ctl-`, 7), precedence and
+evaluation order (`prec-`, `order-`, 6), parameters, overloading and
+extension methods (`param-`, `ovl-`, `ext-`, 8), two lexical readings
+(`misc-`) and concurrency (`conc-`, 10). Most target the Readings and claims
+of [LANGUAGE.md](../LANGUAGE.md) that no Epic run had settled: the float
+formatter (six decimals, ties, signs, `NaN`, `Inf`), negative zero, NaN
+comparisons and NaN map keys, `Round`'s ties, `Clamp`'s median, the
+`ArcSin` clamp, map literal and `ConcatenateMaps` order, map equality,
+comparison chains and the value of a comparison, what a `for` undoes, a
+failing `for` source and body, the order of an archetype's fields, an
+override's own default, and a `race` decided before its later arms begin.
+Each header gives what the probe exercises, the reading it tests (quoted)
+and OpenVerse's output (Lean and C agreeing); `expectations.tsv` repeats
+the output and has Epic's columns empty until a run, and `batches.txt` lists
+the sessions (eight of up to 15 probes, then four probes alone that may
+stop a session). OpenVerse runs every batch in the driver layout with the
+lines of its single runs, except `ovl-operator`: it does not find an
+operator a program defines inside a module, as the driver places each probe
+(LANGUAGE.md, Overloading: operators "at the top level").
+
 ## Running many probes
 
 [`ovprobe.py`](../../tests/conformance/versevm/ovprobe.py) (Python 3
