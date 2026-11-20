@@ -1,0 +1,30 @@
+# Sessions for the differential corpus (#724): one batch per line, `NN: probe ...`,
+# for `ovprobe.py generate --mode batch` (driver layout) after the probes are compiled one at a
+# time; leave out of a batch any probe the compiler refuses. At most 15 probes and about 50
+# OpenVerse lines per batch (begin/end markers not counted). Batches 09-12 hold one probe each
+# and come last: a runtime error ends the session's Verse (ctl-err-call raises one by design;
+# float-round-edges and int-tostring-min may hit a native's range check), and
+# str-replace-all-empty may never return.
+#
+# Probes whose admission by 43.12 is itself in question (each alone on its form, so a refusal
+# answers it): rat-ordering, prec-compare-chain, prec-compare-result, eq-different-types,
+# eq-empty-values, tup-array-compare, param-array-pack, param-tuple-pack, param-override-default,
+# case-string, case-no-default-fails, struct-field-set, misc-commas-in-blocks,
+# misc-indented-comment, for-failing-body, arr-set-value, str-interp-nested.
+#
+# OpenVerse runs every batch in the driver layout (`generate --host openverse`) with the same
+# lines as its single runs, except ovl-operator (batch 07), which it runs only alone: operators
+# a program defines inside a module are not found by OpenVerse (LANGUAGE.md, Overloading:
+# "at the top level"); Epic compiles it in the driver's module.
+01: float-compound float-int-mix float-math-fns float-minmax-nan float-nan-compare float-negative-zero float-round-fail float-round-ties float-specials float-tostring-basic float-tostring-large float-tostring-rounding float-tostring-small rat-div-zero rat-equality
+02: rat-floor-ceil-signs rat-ordering int-arith-precedence int-hex-literals int-intrinsics-small int-quotient-mod-signs int-tostring-edges str-array-methods str-concat-compare str-escapes str-for-chars str-index-length str-interp-kinds str-interp-nested str-slice
+03: str-tostring-calls str-unicode arr-concat arr-equality arr-for-filters arr-for-ranges arr-index arr-methods arr-set-index arr-set-value arr-value-semantics map-concatenate map-equality map-float-keys map-insertion-order
+04: map-key-kinds map-literal-dup-key map-lookup-update map-nested tup-array-compare tup-expand-args tup-index-equality opt-basics opt-capture-failure opt-equality logic-ops logic-or-short-circuit eq-different-types eq-empty-values fail-decides-fns
+05: fail-if-clauses fail-nested-contexts fail-var-rollback for-failing-body for-failing-source for-undo-filter cls-abstract cls-cast cls-construction-order cls-field-override-default cls-interface-dispatch cls-override-super cls-parametric cls-reference-semantics cls-unique-equality
+06: struct-archetype-order struct-equality-copy struct-field-set struct-in-containers enum-compare-case enum-map-key case-int-char case-no-default-fails case-string ctl-block-if-values ctl-defer-in-loop ctl-defer-order ctl-defer-return ctl-loop-break ctl-return-nested
+07: prec-compare-chain prec-compare-result prec-not-and-or order-call-args order-named-args order-set-paths param-array-pack param-method-default-field param-named-defaults param-override-default param-tuple-pack ovl-operator ovl-resolution ext-methods misc-commas-in-blocks
+08: misc-indented-comment conc-event-not-sticky conc-event-two-awaiters conc-race-await-timeout conc-race-immediate conc-race-result conc-rush-result conc-same-update-order conc-sleep-order conc-spawn-await conc-sync-result
+09: float-round-edges
+10: int-tostring-min
+11: str-replace-all-empty
+12: ctl-err-call

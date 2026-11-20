@@ -874,6 +874,64 @@ and 29 cases of forms with one or two cases each
 `for ((K->V):M)`, …). Compile each probe alone first (single mode), then
 run the admitted ones on the Verse VM.
 
+## Differential corpus
+
+**Result (UEFN 43.12, CL 60598086, Verse VM, 2026-11-20 01:45Z to 02:40Z).**
+Epic's compiler took 119 of the 120; 115 print the same lines on the Verse
+VM as on openverse (Lean and C), the float `ToString` probes among them.
+The differences, each row marked DIFFERS in `expectations.tsv`:
+
+- **Archetype fields are evaluated in the order written.**
+  `derived_cls{B := Note("b", 20), A := Note("a", 10)}` prints `value b`
+  then `value a` on the Verse VM (`cls-construction-order`), and a struct's
+  archetype likewise (`struct-archetype-order`: `c`, `a`, `b`). openverse
+  evaluates them in declaration order.
+- **A comparison chain that changes direction groups from the left.**
+  `3 < 5 < 4` fails on both (each adjacent pair is checked), but
+  `5 > 1 < 3`, `3 > 1 < 2`, `9 > 1 < 5` and `3 > 1 <= 1` fail on the Verse
+  VM, where openverse checks adjacent pairs and succeeds: Epic compares the
+  left operand of the first comparison with the next (`(5 > 1) < 3` is
+  `5 < 3`). A comparison yields its left operand on both (`prec-compare-chain`,
+  `prec-compare-chain-mixed`). `1 < 5 > 3` does not parse on Epic (3100, S77:
+  `< 5 >` is read as brackets).
+- **`Clamp` with a NaN argument is NaN** in any position on the Verse VM;
+  openverse gives a bound or the value (`float-minmax-nan`,
+  `float-clamp-nan`). Swapped bounds agree.
+- **`<` and `>` on rationals do not exist** on 43.12 (3509, "No overload of
+  the function `operator'<'` matches the provided arguments
+  (:rational,:rational)"); openverse compares them (`rat-ordering`).
+
+`ctl-err-call` raises its error on both; Epic's message carries the text
+given to `Err`.
+
+[`differential/`](../../tests/conformance/versevm/differential) widens the
+probes above from single questions to ordinary runtime semantics: 120
+programs, each printing a short transcript to compare line by line with
+the Verse VM. They are named by area: floats and their `ToString` (`float-`,
+14), rationals (`rat-`, 4), ints inside 64 bits (`int-`, 6), strings
+(`str-`, 11), arrays (`arr-`, 9), maps (`map-`, 8), tuples, options, `logic`
+and the empty value (`tup-`, `opt-`, `logic-`, `eq-`, 10), failure and
+rollback (`fail-`, `for-`, 7), classes, structs, enums and `case` (`cls-`,
+`struct-`, `enum-`, `case-`, 18), control flow (`ctl-`, 7), precedence and
+evaluation order (`prec-`, `order-`, 6), parameters, overloading and
+extension methods (`param-`, `ovl-`, `ext-`, 8), two lexical readings
+(`misc-`) and concurrency (`conc-`, 10). Most target the Readings and claims
+of [LANGUAGE.md](../LANGUAGE.md) that no Epic run had settled: the float
+formatter (six decimals, ties, signs, `NaN`, `Inf`), negative zero, NaN
+comparisons and NaN map keys, `Round`'s ties, `Clamp`'s median, the
+`ArcSin` clamp, map literal and `ConcatenateMaps` order, map equality,
+comparison chains and the value of a comparison, what a `for` undoes, a
+failing `for` source and body, the order of an archetype's fields, an
+override's own default, and a `race` decided before its later arms begin.
+Each header gives what the probe exercises, the reading it tests (quoted)
+and OpenVerse's output (Lean and C agreeing); `expectations.tsv` repeats
+the output and has Epic's columns empty until a run, and `batches.txt` lists
+the sessions (eight of up to 15 probes, then four probes alone that may
+stop a session). OpenVerse runs every batch in the driver layout with the
+lines of its single runs, except `ovl-operator`: it does not find an
+operator a program defines inside a module, as the driver places each probe
+(LANGUAGE.md, Overloading: operators "at the top level").
+
 ## Running many probes
 
 [`ovprobe.py`](../../tests/conformance/versevm/ovprobe.py) (Python 3
