@@ -786,6 +786,17 @@ are the candidates for openverse's gaps on valid Verse, if Epic's shipped
 compiler takes them; the Book is ahead of it in places, so each is asked
 first.
 
+**Epic's answer (UEFN 43.12, CL 60598086, compiled 2026-11-19 23:50Z, run
+on the Verse VM 2026-11-20 01:09Z to 01:40Z).** It admits 56 of the 60
+probes below, and all 56 ran and printed what the Book's cases expect, so
+these are openverse's gaps on Verse that ships today. It refuses four, all
+with 3593 for names that are `epic_internal`: `classifiable-subset-var`
+(`classifiable_subset_var`, `MakeClassifiableSubsetVar`),
+`subscribable-event-intrnl`, and `todiagnostic-float` with its control
+(`diagnostic.String`). The control shows one more program openverse
+accepts and Epic refuses: `ToDiagnostic(15).String`. Each probe's row in
+`followup-refused/expectations.tsv` has Epic's outcome and lines.
+
 - 18 are of forms UEFN 43.12 already refuses: an event's `Signal` in a
   failure context (7, `signal-direct`, 3512), the `bp_vm_only` twins of the
   Verse VM's module evaluation (4, `book-global-block-var`, 9003 at the
