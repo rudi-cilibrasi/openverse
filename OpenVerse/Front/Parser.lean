@@ -736,7 +736,13 @@ partial def parseCmp (stop : Nat) : PM SExpr := do
         -- `1 <> 2 <> 1` is `(1 <> 2) <> 1`, which fails; the others chain,
         -- `0 <= X <= 9` checks `0 <= X` and `X <= 9`: the Book of Verse's
         -- tests, `Operators/Associativity.versetest` 6-33)
-        if op == "<>" && !rest.isEmpty then
+        -- (#724: `<` or `<=` after `>` or `>=` groups from the left too, as
+        -- on Epic's Verse VM: `5 > 1 < 3` is `(5 > 1) < 3`, that is `5 < 3`,
+        -- which fails; `3 < 5 < 4`, `5 > 3 > 4` and `1 < 5 > 3` stay chains:
+        -- tests/conformance/versevm/differential/prec-compare-chain-mixed)
+        let turns := (op == "<" || op == "<=") &&
+          (rest.back?.map (·.1)).any fun o => o == ">" || o == ">="
+        if (op == "<>" || turns) && !rest.isEmpty then
           a := .cmp a.pos a rest.toList
           rest := #[]
         rest := rest.push (op, ← parseChoice stop)
