@@ -1587,8 +1587,8 @@ Tests/Bugs/FORT-976754-GetterSetter.versetest:58	disagrees-refuses
 Tests/Bugs/FORT-976754-GetterSetter.versetest:decls	disagrees-refuses
 Tests/Bugs/FORT-987013-MissingUploadedAtFNVersion.versetest:7	not-translatable
 Tests/Bugs/FORT-987013-MissingUploadedAtFNVersion.versetest:14	not-translatable
-Tests/Bugs/FORT-995029-CrashHashingDynamicallyTypedMapKey.versetest:10	disagrees-refuses
-Tests/Bugs/FORT-995029-CrashHashingDynamicallyTypedMapKey.versetest:18	disagrees-refuses
+Tests/Bugs/FORT-995029-CrashHashingDynamicallyTypedMapKey.versetest:10	agrees
+Tests/Bugs/FORT-995029-CrashHashingDynamicallyTypedMapKey.versetest:18	agrees
 Tests/Bugs/FORT-995029-CrashHashingDynamicallyTypedMapKey.versetest:decls	agrees
 Tests/Bugs/FunctionWithoutExclamationPoint.versetest:1	agrees
 Tests/Bugs/IteratingOverDataMemberArray.versetest:1	agrees
@@ -1843,7 +1843,7 @@ Tests/Bugs/SOL-4196-ErrCauseEnsureFailure.versetest:8	agrees
 Tests/Bugs/SOL-4196-ErrCauseEnsureFailure.versetest:decls	agrees
 Tests/Bugs/SOL-4199-BreakFromIf.versetest:4	agrees
 Tests/Bugs/SOL-4199-BreakFromIf.versetest:15	agrees
-Tests/Bugs/SOL-4199-BreakFromIf.versetest:39	disagrees-refuses
+Tests/Bugs/SOL-4199-BreakFromIf.versetest:39	agrees
 Tests/Bugs/SOL-4199-BreakFromIf.versetest:51	agrees
 Tests/Bugs/SOL-4199-BreakFromIf.versetest:60	agrees
 Tests/Bugs/SOL-4199-BreakFromIf.versetest:68	agrees
@@ -3568,7 +3568,7 @@ Tests/Definitions.versetest:15	agrees
 Tests/Definitions.versetest:18	agrees
 Tests/Definitions.versetest:20	agrees
 Tests/Definitions.versetest:28	agrees
-Tests/Definitions.versetest:37	disagrees-refuses
+Tests/Definitions.versetest:37	agrees
 Tests/Definitions.versetest:41	agrees
 Tests/Definitions.versetest:44	agrees
 Tests/Definitions.versetest:68	agrees
@@ -3816,7 +3816,7 @@ Tests/Effects.versetest:299	not-translatable
 Tests/Effects.versetest:300	agrees
 Tests/Effects.versetest:301	agrees
 Tests/Effects.versetest:302	agrees
-Tests/Effects.versetest:304	disagrees-refuses
+Tests/Effects.versetest:304	agrees
 Tests/Effects.versetest:305	disagrees-refuses
 Tests/Effects.versetest:308	agrees
 Tests/Effects.versetest:309	agrees
@@ -4637,7 +4637,7 @@ Tests/FlowControl/defer.versetest:1032	agrees
 Tests/FlowControl/defer.versetest:1044	agrees
 Tests/FlowControl/defer.versetest:1063	agrees
 Tests/FlowControl/defer.versetest:1078	agrees
-Tests/FlowControl/defer.versetest:1094	disagrees-refuses
+Tests/FlowControl/defer.versetest:1094	agrees
 Tests/FlowControl/defer.versetest:decls	not-translatable
 Tests/FlowControl/first.versetest:13	agrees
 Tests/FlowControl/first.versetest:17	agrees
@@ -5014,8 +5014,8 @@ Tests/GetCastableFinalSuperClass.versetest:335	agrees
 Tests/GetCastableFinalSuperClass.versetest:337	agrees
 Tests/GetCastableFinalSuperClass.versetest:338	agrees
 Tests/GetCastableFinalSuperClass.versetest:decls	agrees
-Tests/GetSecondsSinceEpoch.versetest:6	disagrees-refuses
-Tests/GetSecondsSinceEpoch.versetest:12	disagrees-refuses
+Tests/GetSecondsSinceEpoch.versetest:6	agrees
+Tests/GetSecondsSinceEpoch.versetest:12	agrees
 Tests/GetSecondsSinceEpoch.versetest:16	disagrees-refuses
 Tests/GlobalVariables.versetest:5	agrees
 Tests/GlobalVariables.versetest:9	agrees
@@ -13467,9 +13467,9 @@ Tests/weak_map.versetest:576	not-translatable
 Tests/weak_map.versetest:580	not-translatable
 Tests/weak_map.versetest:589	agrees
 Tests/weak_map.versetest:595	agrees
-Tests/weak_map.versetest:605	disagrees-refuses
-Tests/weak_map.versetest:611	disagrees-refuses
-Tests/weak_map.versetest:615	disagrees-refuses
+Tests/weak_map.versetest:605	agrees
+Tests/weak_map.versetest:611	wrong-output
+Tests/weak_map.versetest:615	wrong-output
 Tests/weak_map.versetest:618	agrees
 Tests/weak_map.versetest:624	agrees
 Tests/weak_map.versetest:631	agrees
