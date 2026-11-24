@@ -1,0 +1,19 @@
+body
+after spawn in defer
+F body
+slow 1 starts
+after spawn in F's defer
+quick 2
+after spawn in Early's defer
+Early goes on
+quick 1
+after spawn in Early's defer
+1 0
+slow 11 starts
+slow 12 starts
+looped 2
+slow 1 ends
+slow 11 ends
+slow 12 ends
+end
+exit=0

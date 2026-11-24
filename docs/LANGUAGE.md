@@ -4281,8 +4281,14 @@ Main()<suspends>:void =
   false?`): its start, the task's first run included, is the context's
   code, so a context that fails undoes it, and the task never runs again;
   in a suspends function a `spawn` in a condition or a filter starts the
-  task there (it is not a suspension point). A `spawn` in a `defer:` is
-  refused (#156).
+  task there (it is not a suspension point). A `defer:` of a function that
+  cannot suspend may spawn (#724: the Book's tests, "Ensure that defer
+  allows immediate `spawn` expression", `FlowControl/defer.versetest:1094`;
+  UEFN 43.12, `followup-refused/spawn-in-defer`): the task starts where
+  the defer runs, at each exit of its scope, and runs to its first wait
+  before the defer goes on. A `spawn` in a `defer:` of a `<suspends>`
+  function is refused (#156; the defer is also the code of the function's
+  cancellation), though a function it calls there may spawn.
   Without a suspends `Main`, a task runs up to its first wait, and on only
   inside a `Signal` that resumes it (below).
   `T.Cancel()` (in a suspends function) cancels a task that has not ended:

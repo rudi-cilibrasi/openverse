@@ -869,6 +869,7 @@ Closed since (#724), each now printing Epic's lines in Lean and C, with
 its row's note in `followup-refused/expectations.tsv`:
 
 - `break-in-for-in-loop`: a `break` in a `for`'s body leaves the `loop` around the `for`.
+- `spawn-in-defer`: a `defer:` of a function that cannot suspend may spawn.
 Left unasked (38 cases besides the parse-only ones): custom accessors
 (3; the API reference marks `accessor` `<epic_internal>`), the engine's
 attributes and specifiers (4), a parametric class applied as a value (2),

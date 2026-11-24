@@ -360,7 +360,17 @@ partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
 
 partial def elabSpawnIn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   let sourceBefore := (← get).pendingSourceSuspends
-  if ctx.inDefer then eerr p "spawn in a defer is not supported (#156)"
+  -- (#724) a defer of a function that cannot suspend may spawn, as the
+  -- Book's tests have it ("Ensure that defer allows immediate `spawn`
+  -- expression", FlowControl/defer.versetest:1094) and Epic's compiler
+  -- (UEFN 43.12, followup-refused/spawn-in-defer): the task starts where
+  -- the defer runs, and runs to its first wait there, as any spawn's. In a
+  -- <suspends> function a defer is also the code of the function's
+  -- cancellation (`withDeferMark`), which is left as it was: refused.
+  if ctx.inDefer && ctx.suspends then
+    eerr p "spawn in a defer of a <suspends> function is not supported (#156); a defer of a function that cannot suspend may spawn"
+  -- (the spawned call is no code of the defer: it may suspend)
+  let ctx := { ctx with inDefer := false }
   -- (a failure context may spawn, the Book's tests: assertions spawn, and
   -- `LiveVariables.versetest:450-545` spawn in `if: …; false?`; the task's
   -- start, its link and its first run, is the context's code, undone with
