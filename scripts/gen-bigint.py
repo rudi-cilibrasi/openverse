@@ -121,7 +121,10 @@ def expr(depth):
 
 
 def small(t, v):
-    """Keep magnitudes moderate (at most about 600 bits) so a run stays quick."""
+    """Keep magnitudes moderate (at most about 600 bits) so a run stays quick.
+    Every value the program prints with `Show` passes this test, so the
+    expected output never holds an int of more than 181 digits (Python refuses
+    to format one of more than 4300, and `Show` of one takes a long time)."""
     return abs(v).bit_length() <= 600
 
 
@@ -145,7 +148,8 @@ for i in range(rng.randint(12, 30)):
         else:
             call = f"{f}({ta} / {tb})"
             res = None if b == 0 else (a // b if f == "Floor" else -((-a) // b))
-        if not small(ta, a):
+        # the result too: Mod of a negative by a long divisor is as long as the divisor
+        if not small(ta, a) or (res is not None and not small(call, res)):
             continue
         lines.append(f'    if (Q := {call}) then Print("{tag} {{Show(Q)}}") else Print("{tag} fails")')
         out.append(f"{tag} {res}" if res is not None else f"{tag} fails")
@@ -186,6 +190,8 @@ for i in range(rng.randint(12, 30)):
     elif k < 0.72:
         # compound assignment
         (ta, a), (tb, b), (tc, c) = expr(1), expr(1), expr(1)
+        if not small(f"W{i}", (a + b) * c - a):
+            continue
         lines.append(f"    var W{i}:int = {ta}")
         lines.append(f"    set W{i} += {tb}")
         lines.append(f"    set W{i} *= {tc}")

@@ -4518,7 +4518,11 @@ Main()<suspends>:void =
   (its code's branches and `rush` arms that go on, wherever in the
   functions it called they started) are stopped first, as any task's when
   it ends (#724), but unfinished unstructured tasks are not cancelled, so
-  their pending defers do not run.
+  their pending defers do not run. A `Main` that ends inside a `Signal` or
+  a task's end that resumed it has its children stopped there, before the
+  awaiters after it in that `Signal` go on (#723; Epic's recorded probes do
+  not reach this corner, which has no `Main`: it is the task's rule, a
+  task's children stopped when it ends, before its awaiters resume).
   If `Main` waits
   and no task can run again (for example after `Sleep(Inf)`, or awaiting a
   task that never ends or was cancelled), it ends as `Err()` does: exit 2,
