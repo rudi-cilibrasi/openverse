@@ -31,11 +31,23 @@ open OpenVerse
 
 /-- What an elaboration asks for (`Requests`, by tiers: `Requests.tier`): what
     its functions and the fields' defaults ask, and (#283) the families and
-    overloads of the inlining's sites it did not reach (`Source`). -/
-def roundNeeds (elaborated : Array ElaboratedFn) (fieldNeeds : Requests) (source : Source) : Requests := Id.run do
+    overloads of the inlining's sites it did not reach (`Source`).
+    A site reached only in the copies of a suffix (`Ctx.noteOverload`'s
+    `copiedOverloads`, this elaboration's and those `granted` before it)
+    is not one of no overload: where the copies agree it has theirs (#723),
+    as the code a later elaboration moves into a function of its own
+    (`$cont`) is the source's, not a copy's, and would call the family's
+    stub. -/
+def roundNeeds (elaborated : Array ElaboratedFn) (fieldNeeds : Requests) (source : Source)
+    (granted : List (String × Pos × String) := []) : Requests := Id.run do
   let mut needs := elaborated.foldl (fun acc f => acc.merge f.needs) fieldNeeds
   if needs.families.isEmpty then needs := needs.merge { families := source.familySites.map fun (q, _) => (q, "") }
-  if needs.overloads.isEmpty then needs := needs.merge { overloads := source.overloadSites.map fun (q, _) => (q, "") }
+  if needs.overloads.isEmpty then
+    let copied := needs.copiedOverloads ++ granted
+    needs := needs.merge { overloads := source.overloadSites.map fun (q, _) =>
+      match (copied.filterMap fun (_, q', o) => if q' == q then some o else none).eraseDups with
+      | [o] => (q, o)
+      | _ => (q, "") }
   return needs
 
 /-- The function the program runs: `Main`, or with an entry expression its
@@ -377,7 +389,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   checkSignatures env sigs classes.defs fields methods admitted.scopePairs
   let defaults ← elabFieldDefaults env sigs methods.tops classes.defs opts.extendedDefaults
   let elaborated ← elabFunctions env sigs opts.requests opts.extendedDefaults
-  let needs := roundNeeds elaborated defaults.needs source
+  let needs := roundNeeds elaborated defaults.needs source opts.requests.copiedOverloads
   -- (#283) the eager groups, the families of the uses of methods whose
   -- receivers' classes this one found, and the overloads of the calls whose
   -- arguments' types it found; those it did not reach, of no family or
