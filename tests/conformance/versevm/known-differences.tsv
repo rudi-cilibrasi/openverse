@@ -1,0 +1,80 @@
+# Every probe on which OpenVerse differs from Epic's recorded result (UEFN 43.12, Verse VM), with the cause.
+# scoreboard.py --check fails when a difference is missing here or a listed probe no longer differs,
+# so this list and docs/COMPATIBILITY.md stay true: fix a difference, delete its row.
+# category: epic-defect, book-ahead, restricted-name, kept, gap, bug, harness (scoreboard.py has the meanings).
+probe	category	reason
+int-div-zero-big	epic-defect	Epic's native stops with ErrRuntime_GeneratedNativeInternal, "Value exceeds the range of a 64 bit integer", for an int past 64 bits; OpenVerse computes the exact result (the owner's decision, #724): Quotient
+int-euclid-big	epic-defect	Epic's native stops with ErrRuntime_GeneratedNativeInternal, "Value exceeds the range of a 64 bit integer", for an int past 64 bits; OpenVerse computes the exact result (the owner's decision, #724): Quotient
+int-intrinsics-big	epic-defect	Epic's native stops with ErrRuntime_GeneratedNativeInternal, "Value exceeds the range of a 64 bit integer", for an int past 64 bits; OpenVerse computes the exact result (the owner's decision, #724): Clamp
+int-mod-big	epic-defect	Epic's native stops with ErrRuntime_GeneratedNativeInternal, "Value exceeds the range of a 64 bit integer", for an int past 64 bits; OpenVerse computes the exact result (the owner's decision, #724): Mod
+int-mod-zero-big	epic-defect	Epic's native stops with ErrRuntime_GeneratedNativeInternal, "Value exceeds the range of a 64 bit integer", for an int past 64 bits; OpenVerse computes the exact result (the owner's decision, #724): Mod
+int-length-max	epic-defect	Epic's multiplication whose result reaches 2^20 bits never returns and the session has to be replaced; OpenVerse computes up to 2^20 bits (the Book's MaxLengthBits) and raises the overflow error past it
+int-length-over	epic-defect	Epic's multiplication whose result reaches 2^20 bits never returns and the session has to be replaced; OpenVerse computes up to 2^20 bits (the Book's MaxLengthBits) and raises the overflow error past it
+int-length-steps	epic-defect	Epic's multiplication whose result reaches 2^20 bits never returns and the session has to be replaced; OpenVerse computes up to 2^20 bits (the Book's MaxLengthBits) and raises the overflow error past it
+div-const-class-block	epic-defect	Epic's linker reports a cycle (9000) for a module constant built from a class whose block calls a function of the module; no rule of the language refuses it
+book-int-shift-63	book-ahead	BitShiftLeft and BitShiftRight are in the Book and its tests; UEFN 43.12 does not know the names (3506)
+div-const-for-choice-call-control	book-ahead	The choice operator `|` is in the Book; UEFN 43.12 has not implemented it (3101)
+subscribable-event-control	book-ahead	subscribable_event is the Book's name; on UEFN 43.12 Subscribe is on event and the name is unknown (3506)
+sticky-event-subscribe	restricted-name	sticky_event needs /Verse.org/Restricted on UEFN 43.12 (3506)
+cancel-task-child	restricted-name	task.Cancel is <epic_internal> on UEFN 43.12 (3593)
+todiagnostic-float-control	restricted-name	diagnostic's String is <epic_internal> on UEFN 43.12 (3593)
+subscribe-order	kept	Subscribers are called in subscription order; the Verse VM's order varies from one Signal to the next (the API: "randomised"), so no program may rely on it
+long-ident-mangled	kept	Epic's identifier limit (3655) is on a derived name that a parameter lengthens; OpenVerse applies the measured limits without parameters
+long-ident-function-param	kept	Epic's identifier limit (3655) is on a derived name that a parameter lengthens; OpenVerse applies the measured limits without parameters
+long-ident-method-param	kept	Epic's identifier limit (3655) is on a derived name that a parameter lengthens; OpenVerse applies the measured limits without parameters
+compound-module-entry	harness	The probe keys a module-scoped weak_map by session, which only the UEFN device wrapper has; OpenVerse runs its own module-scoped entries the same way (entry 8 9)
+cls-construction-order	bug	An archetype's fields are evaluated in the order written on the Verse VM; OpenVerse evaluates them in declaration order
+struct-archetype-order	bug	An archetype's fields are evaluated in the order written on the Verse VM; OpenVerse evaluates them in declaration order
+float-clamp-nan	bug	Clamp with a NaN argument is NaN on the Verse VM; OpenVerse gives a bound or the value
+float-minmax-nan	bug	Clamp with a NaN argument is NaN on the Verse VM; OpenVerse gives a bound or the value
+prec-compare-chain	bug	A comparison chain that changes direction compares the first comparison's left operand with the next on the Verse VM; OpenVerse checks adjacent pairs
+prec-compare-chain-mixed	bug	A comparison chain that changes direction compares the first comparison's left operand with the next on the Verse VM; OpenVerse checks adjacent pairs
+rat-ordering	bug	UEFN 43.12 has no `<` or `>` on rationals (3509); OpenVerse compares them
+break-in-for-in-loop	gap	UEFN 43.12 admits and runs it; OpenVerse refuses `break` in a `for` inside a `loop`
+castable-concrete-subtype	gap	UEFN 43.12 admits and runs it; OpenVerse refuses the library type castable_concrete_subtype
+castable-param-result-type	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a castable_subtype parameter used as a type in its function's result
+castable-subtype-any	gap	UEFN 43.12 admits and runs it; OpenVerse refuses castable_subtype(any)
+castable-subtype-of-param	gap	UEFN 43.12 admits and runs it; OpenVerse refuses castable_subtype(t) of a type parameter
+class-interface-same-field	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a class's and an interface's fields of one name, told apart by qualifiers
+class-type-param-as-arg	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a class's type parameter given as a type argument
+class-value-construct	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a class bound to a local and constructed through it
+classifiable-subset	gap	UEFN 43.12 admits and runs it; OpenVerse refuses the library type classifiable_subset
+concatenate-maps-key-join	gap	UEFN 43.12 admits and runs it; OpenVerse refuses ConcatenateMaps joining maps whose keys are int and string
+concrete-subtype-bound	gap	UEFN 43.12 admits and runs it; OpenVerse refuses concrete_subtype(…) as a type parameter's bound
+constructor-delegation-archetype	gap	UEFN 43.12 admits and runs it; OpenVerse refuses MakeBase<constructor>(…) in an archetype outside a constructor
+converges-abstract-method	gap	UEFN 43.12 admits and runs it; OpenVerse refuses <converges> on an abstract method
+definition-in-expression	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a definition inside an expression, `X:int = Y:int = 4`
+fbounded-class	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a class in its own parent's type argument (F-bounded)
+fits-in-player-map	gap	UEFN 43.12 admits and runs it; OpenVerse refuses the library function FitsInPlayerMap
+fn-type-named-signature	gap	UEFN 43.12 admits and runs it; OpenVerse refuses the function type `type{f():void}` with a named signature
+generic-arg-result-param	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a type parameter given only by a generic argument's result
+generic-fn-local	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a generic function bound to a local
+get-random-int	gap	UEFN 43.12 admits and runs it; OpenVerse refuses the library function GetRandomInt
+get-seconds-since-epoch	gap	UEFN 43.12 admits and runs it; OpenVerse refuses the library function GetSecondsSinceEpoch
+infer-from-empty-array	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a type parameter given only by `array{}`
+join-fn-refinement-result	gap	UEFN 43.12 admits and runs it; OpenVerse refuses function values joined at a refinement's base type
+join-fn-type-params	gap	UEFN 43.12 admits and runs it; OpenVerse refuses function values of two type parameters joined
+map-any-value-generic	gap	UEFN 43.12 admits and runs it; OpenVerse refuses [int]string passed as [t]any
+map-literal-sibling-keys	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a map literal whose keys are of sibling classes
+module-const-empty-map-unique-key	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a module constant holding an empty map keyed by a <unique> class
+module-const-unique	gap	UEFN 43.12 admits and runs it; OpenVerse refuses module constants of a class<unique><allocates>
+named-fn-any-result	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a function named where a function with an `any` result is expected
+named-tuple-param	gap	UEFN 43.12 admits and runs it; OpenVerse refuses named parameters inside a tuple parameter
+named-tuple-value	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a tuple value with a named element
+overloads-struct-and-array	gap	UEFN 43.12 admits and runs it; OpenVerse refuses the overloads F(:a) and F(:[]a)
+override-array-param	gap	UEFN 43.12 admits and runs it; OpenVerse refuses an override taking one []int where the overridden method takes two ints
+override-parametric-result-control	gap	UEFN 43.12 admits and runs it; OpenVerse refuses the control of override-parametric-result: boxing a value of an extension type as comparable
+override-parametric-result	gap	UEFN 43.12 admits and runs it; OpenVerse refuses an override whose result is t where the overridden method's is comparable
+override-tuple-result	gap	UEFN 43.12 admits and runs it; OpenVerse refuses an override with a tuple result over an array result
+override-wider-param	gap	UEFN 43.12 admits and runs it; OpenVerse refuses an override whose parameter is a superclass of the overridden one
+persistable-class	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a <persistable> class
+qualified-second-method	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a second method `(derived:)F` beside an inherited F
+refinement-literal-local	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a literal-bound local's negation at a refinement type without a cast
+refinement-overloads	gap	UEFN 43.12 admits and runs it; OpenVerse refuses overloads on disjoint refinement types
+spawn-in-defer	gap	UEFN 43.12 admits and runs it; OpenVerse refuses `spawn` in a `defer`
+subtype-alias	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a type alias of subtype(c)
+two-interfaces-same-method	gap	UEFN 43.12 admits and runs it; OpenVerse refuses two interfaces' default methods of one name in one class
+type-argument-array	gap	UEFN 43.12 admits and runs it; OpenVerse refuses `[]int` as a type argument
+unique-interface-equality	gap	UEFN 43.12 admits and runs it; OpenVerse refuses equality on an interface<unique> no class implements
+variance-contravariant-concat	gap	UEFN 43.12 admits and runs it; OpenVerse refuses arrays of a contravariant parametric class concatenated at two type arguments
+variance-covariant-join	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a covariant parametric class joined at int and any

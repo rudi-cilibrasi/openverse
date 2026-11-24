@@ -183,6 +183,7 @@ Main():void =
 
 | Page | What it covers |
 |---|---|
+| [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) | how closely openverse matches Epic's shipped Verse (UEFN 43.12): the count of probes that agree and every known difference with its cause (generated, checked by the gate) |
 | [`docs/LANGUAGE.md`](docs/LANGUAGE.md) | the supported Verse subset, and the reading taken wherever the Book of Verse is silent or contradicts itself |
 | [`docs/DESIGN.md`](docs/DESIGN.md) | the decisions behind the code: Verse Core, rollback, fuel, translation validation, classes and the heap, the C runtime |
 | [`docs/CLAIMS.md`](docs/CLAIMS.md) | the statement and axioms of every theorem, as Lean prints them (generated) |

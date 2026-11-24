@@ -1,5 +1,10 @@
 # Live VerseVM conformance
 
+For where openverse stands now, read [COMPATIBILITY.md](../COMPATIBILITY.md):
+the count of probes that match Epic's recorded results and every difference
+with its cause, checked by the gate. This page is the record of how each
+result was learned, in the order it was learned.
+
 ## Reference targets
 
 OpenVerse's target is Epic's Verse VM wherever it and the legacy Blueprint
