@@ -294,6 +294,16 @@ check "choice model regression (copied first-success early-return argument order
   scripts/fuzz-model-mv.sh 1 653109
 check "choice model regression (copied recursive suffix bindings, seed 20773114)" \
   scripts/fuzz-model-mv.sh 1 20773114
+check "choice model regression (a for over an inlined producer follows the search, seed 20779098)" \
+  scripts/fuzz-model-mv.sh 1 20779098
+check "choice model regression (a for over a lazily taken generator keeps the old rule beside an inlined one, seed 20776478)" \
+  scripts/fuzz-model-mv.sh 1 20776478
+check "choice model regression (a for over a recursive producer's array follows the search, seed 20776995)" \
+  scripts/fuzz-model-mv.sh 1 20776995
+check "choice model regression (an interpolated int's overflow before the next value's lifted code, seed 20778801)" \
+  scripts/fuzz-model-mv.sh 1 20778801
+check "choice model regression (an overloaded method's call reached only in copies, seed 20782035)" \
+  scripts/fuzz-model-mv.sh 1 20782035
 check "generic functions with several values (${FUZZ_MODEL_GENERIC:-150} programs, against a model of the docs)" \
   scripts/fuzz-model-generic.sh "${FUZZ_MODEL_GENERIC:-150}" "$seed"
 check "generic choice regression (omitted named argument in a <decides> wrapper)" \
