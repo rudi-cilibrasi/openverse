@@ -2299,6 +2299,10 @@ the clock and the player map") states each as a difference from Epic's.
   The scheduler's virtual time is a field of the scheduler object, which
   only code lowered for suspension can reach, so the clock does not follow
   it.
+- `FitsInPlayerMap[X]` is `X` behind a query that succeeds, its argument's
+  type checked to persist (`TyEnv.persists`, the predicate `<persistable>`
+  structs are checked with).
+
 ## Ints beyond 64 bits: a fast path and a heap representation
 
 Verse Core's ints are Lean's `Int`, as long as the Verse VM's (2^20 bits,

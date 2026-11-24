@@ -451,6 +451,23 @@ def elabGetSecondsSinceEpoch (c : BuiltinCall) : EM R := do
   noteFx c.p ["reads"] (some c.name)
   return ⟨.lit (.float (VFloat.canon (Float.ofInt secondsSinceEpoch))), .float⟩
 
+/-- (#724) `FitsInPlayerMap[Value]` (the Book's Runtime API reference:
+    `FitsInPlayerMap(Value:t where t:subtype(persistable))<converges><reads><decides>:t`,
+    "Succeeds when Value is something a player's persistent map is allowed
+    to hold, and produces the value unchanged when it does"): the value, of
+    a type that persists (`TyEnv.persists`). openverse has no limit on what
+    a player's map holds, so it always succeeds, as Epic's Verse VM does of
+    an int (UEFN 43.12, followup-refused/fits-in-player-map). -/
+def elabFitsInPlayerMap (c : BuiltinCall) : EM R := do
+  c.needBracket
+  let [a] := c.args | c.wrongArity "argument"
+  let r ← c.elabE c.ctx a c.exp
+  if !c.ctx.types.persists r.ty then
+    eerr a.pos s!"FitsInPlayerMap takes a value of a persistable type, and {r.ty.show} is not (Book of Verse ch. 17; the API reference: Value:t where t:subtype(persistable))"
+  noteFx c.p ["reads"] (some c.name)
+  -- (it can fail, as a failure context's checks ask of its code; it never does)
+  return ⟨.seq (.prim .query [.lit (.logic true)]) r.e, r.ty⟩
+
 /-- `Err()`, `Err(Message)`: the program stops with an error; its value is
     of every type. The first place it is called is noted (`errAt`). Its one
     argument, if written, is a string, evaluated before it stops (Book of
@@ -557,6 +574,7 @@ def builtinFunctions : List Builtin := [
   ⟨"BitShiftRight", .exactly 2, elabBitwise true⟩,
   ⟨"GetRandomInt", .exactly 2, elabGetRandomInt⟩,
   ⟨"GetSecondsSinceEpoch", .exactly 0, elabGetSecondsSinceEpoch⟩,
+  ⟨"FitsInPlayerMap", .exactly 1, elabFitsInPlayerMap⟩,
   ⟨"Err", .upToOne, elabErr⟩,
   ⟨"$Show", .exactly 1, elabShow⟩,
   ⟨"$asAnything", .exactly 1, elabAsAnything⟩,
