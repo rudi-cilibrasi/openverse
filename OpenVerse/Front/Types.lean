@@ -413,6 +413,9 @@ structure TyEnv where
       class each one is of, with its tag and fields. A slot of class type
       starts as a reference to one. -/
   protos : List (String × Nat × List Value) := []
+  /-- The structs and enums declared `<persistable>` (Book of Verse
+      ch. 17), as `TyEnv.persists` asks. -/
+  persistable : List String := []
   /-- The classes whose fixed type arguments Verse Core records as pins
       (#142): those at or below a class whose implementation of a method
       fixes type arguments that the method's declaring class leaves open. -/
@@ -1510,6 +1513,23 @@ def TyEnv.makeProtos (env : TyEnv) : List (String × Nat × List Value) :=
   cs.filterMap fun d =>
     ((env.fields d).mapM fun (f : String × Ty × Option SExpr) => protoValue env addrs f.2.1).map
       fun vs => (d, env.tagOf d, vs)
+
+/-- Whether a type persists (Book of Verse ch. 17): not `any`, `comparable`
+    (ch. 17, 178: "Abstract interface type"), a rational, a type parameter,
+    a function, an interface or a class (openverse has no persistable
+    classes), nor a struct or an enum that is not `<persistable>` (ch. 17:
+    "Enums without `<persistable>` specifier cannot be used"); a container
+    persists when its parts do. -/
+partial def TyEnv.persists (env : TyEnv) : Ty → Bool
+  | .any | .dyn | .rational | .param .. => false
+  | .arr t | .opt t => env.persists t
+  | .tup ts => ts.all env.persists
+  | .map k v => env.persists k && env.persists v
+  -- (Book of Verse ch. 17: "`weak_map` - Weak references are not persistable")
+  | .weakMap .. => false
+  | .struct n args => !env.classes.contains n && env.persistable.contains n && args.all env.persists
+  | .enum n => env.persistable.contains n
+  | _ => true
 
 /-- The type parameters a type mentions, with whether each is comparable. -/
 partial def Ty.paramsC : Ty → List (String × Bool)

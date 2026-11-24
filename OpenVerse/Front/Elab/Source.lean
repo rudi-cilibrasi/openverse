@@ -7,6 +7,7 @@ import OpenVerse.Front.BuiltinValues
 import OpenVerse.Front.FinalSuper
 import OpenVerse.Front.CompoundPlaces
 import OpenVerse.Front.Bitwise
+import OpenVerse.Front.Random
 import OpenVerse.Front.Localization
 import OpenVerse.Front.TypeValues
 import OpenVerse.Front.TypeArguments
@@ -177,10 +178,17 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   -- 0. localized messages written out (`Localization`): `<localizes>`
   --    definitions as the strings of their default text, `Localize` and
   --    `Join` as calls of their helpers
+  -- (#724) a definition whose value is a definition, `X:int = Y:int = 4`,
+  -- written as the two it is (`SExpr.flattenChainedDecls`)
+  let written := written.map STop.flattenChainedDecls
+  let opts := { opts with entry := opts.entry.map (SExpr.mapAll id SExpr.flattenChainedDecls) }
   let (allTops0r, usesLocalization) ← Localization.desugar written
   -- 1. effects and specifiers, and the source profile
   EffectPolicy.check allTops0r opts.entry
   EffectPolicy.checkPlaces allTops0r
+  -- (#724) an admitted <converges> abstract method, as the elaboration
+  -- takes it
+  let allTops0r := allTops0r.map EffectPolicy.normalizeConverges
   SourceProfile.check opts.profile allTops0r opts.entry
   -- 2. the rules of the source as written, on the definitions as parsed
   --    (`SourceRules`)
@@ -230,9 +238,15 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   -- (not `ToDiagnostic`'s: it calls a `diagnosable` object's own method,
   -- which may not converge)
   let helpers := helpers ++ (← if usesDiagnostic then Diagnostic.tops else pure [])
+  -- (#724; nor `GetRandomInt`'s, which is <transacts>: unless the program
+  -- defines the name itself, and then its own is the one it calls)
+  let definesRandom := allTops0r.any fun
+    | .fn _ n .. | .const _ n .. | .classDef _ n .. => n == "GetRandomInt"
+  let usesRandom := (marked randomMarker || (opts.entry.map mentionsRandom).getD false) && !definesRandom
+  let helpers := helpers ++ (← if usesRandom then randomTops else pure [])
   let ignoredArms := ignoredArmsOf allTops0r
   let unmarked := allTops0r.filter fun
-    | .const _ n _ _ _ => ![ratMarker, replaceAllMarker, ignoredArmsMarker, bitwiseMarker, diagnosticMarker].contains n
+    | .const _ n _ _ _ => ![ratMarker, replaceAllMarker, ignoredArmsMarker, bitwiseMarker, diagnosticMarker, randomMarker].contains n
     | _ => true
   -- 4. access levels written out (Book of Verse ch. 12), and the levels of
   --    the definitions and modules; modules (#112): every reference to a

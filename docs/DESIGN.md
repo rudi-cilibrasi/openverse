@@ -2276,6 +2276,33 @@ unbounded ints, programs ending with `ToString` of an int beyond 64 bits
 (the overflow error) included; `scripts/fuzz-bigint.sh` checks them on
 operands beyond 64 bits.
 
+## Random numbers and the clock: no primitive, no nondeterminism
+
+Epic's library has functions that read a random source, the wall clock and
+a player's storage (#724; its shipped compiler admits and runs them). A
+Core primitive for one would either make a run's result depend on the
+machine, so the Lean interpreter and the C runtime could not be compared
+byte for byte, or carry a state through Verse Core's semantics, its proofs,
+the format and the runtime. None is needed; LANGUAGE.md ("Random numbers,
+the clock and the player map") states each as a difference from Epic's.
+
+- `GetRandomInt` is a helper written in Verse (`Front/Random.lean`, added
+  to a program that names it, as the bitwise helpers are): a 64-bit linear
+  congruential generator with a fixed seed. Its state is the one `var`
+  field of the prototype of a hidden class, `$randomState`, read by the
+  name `$randomCell` as the module state is read (`ModuleVars`): a
+  prototype is an object every function can reach as a literal, so the
+  state needs no parameter and no module-scoped variable. It is `<transacts>`,
+  as Epic's is, and a failure context undoes its draws with its other
+  writes.
+- `GetSecondsSinceEpoch()` is a float literal, `<reads>`: a frozen clock.
+  The scheduler's virtual time is a field of the scheduler object, which
+  only code lowered for suspension can reach, so the clock does not follow
+  it.
+- `FitsInPlayerMap[X]` is `X` behind a query that succeeds, its argument's
+  type checked to persist (`TyEnv.persists`, the predicate `<persistable>`
+  structs are checked with).
+
 ## Ints beyond 64 bits: a fast path and a heap representation
 
 Verse Core's ints are Lean's `Int`, as long as the Verse VM's (2^20 bits,

@@ -425,6 +425,49 @@ def elabBitwise (shift : Bool) (c : BuiltinCall) : EM R := do
   let some s := c.ctx.sig? helper | eerr c.p s!"internal error: the bitwise helper {helper} is missing"
   return ⟨.call s.idx es, .int⟩
 
+/-- (#724) `GetRandomInt(Low, High)` (the Book's Runtime API reference,
+    `/Verse.org/Random`): an int of `[Low, High]`, the bounds in either
+    order, `<transacts>`. openverse is deterministic: the helper
+    `$randomInt`, written in Verse (`Front/Random.lean`), draws from a
+    generator with a fixed seed. -/
+def elabGetRandomInt (c : BuiltinCall) : EM R := do
+  c.noBracket
+  c.checkArity "int"
+  if (c.ctx.sig? "$randomInt").isNone then eerr c.p "internal error: the helper $randomInt is missing"
+  c.elabE c.ctx (.app c.p (.ident c.p "$randomInt") c.args false) c.exp
+
+/-- What openverse's clock reads, in seconds since the Unix epoch:
+    2026-11-20T00:00:00Z, the day Epic's answers to the probes of #724
+    were recorded. -/
+def secondsSinceEpoch : Int := 1795132800
+
+/-- (#724) `GetSecondsSinceEpoch()` (the Book's Runtime API reference,
+    `/Verse.org/Verse`; ch. 14, "Time is frozen within a transaction"): a
+    float, `<reads>`. openverse is deterministic and has no wall clock:
+    every call gives `secondsSinceEpoch`, in every run. -/
+def elabGetSecondsSinceEpoch (c : BuiltinCall) : EM R := do
+  c.noBracket
+  c.checkArity "argument"
+  noteFx c.p ["reads"] (some c.name)
+  return ⟨.lit (.float (VFloat.canon (Float.ofInt secondsSinceEpoch))), .float⟩
+
+/-- (#724) `FitsInPlayerMap[Value]` (the Book's Runtime API reference:
+    `FitsInPlayerMap(Value:t where t:subtype(persistable))<converges><reads><decides>:t`,
+    "Succeeds when Value is something a player's persistent map is allowed
+    to hold, and produces the value unchanged when it does"): the value, of
+    a type that persists (`TyEnv.persists`). openverse has no limit on what
+    a player's map holds, so it always succeeds, as Epic's Verse VM does of
+    an int (UEFN 43.12, followup-refused/fits-in-player-map). -/
+def elabFitsInPlayerMap (c : BuiltinCall) : EM R := do
+  c.needBracket
+  let [a] := c.args | c.wrongArity "argument"
+  let r ← c.elabE c.ctx a c.exp
+  if !c.ctx.types.persists r.ty then
+    eerr a.pos s!"FitsInPlayerMap takes a value of a persistable type, and {r.ty.show} is not (Book of Verse ch. 17; the API reference: Value:t where t:subtype(persistable))"
+  noteFx c.p ["reads"] (some c.name)
+  -- (it can fail, as a failure context's checks ask of its code; it never does)
+  return ⟨.seq (.prim .query [.lit (.logic true)]) r.e, r.ty⟩
+
 /-- `Err()`, `Err(Message)`: the program stops with an error; its value is
     of every type. The first place it is called is noted (`errAt`). Its one
     argument, if written, is a string, evaluated before it stops (Book of
@@ -529,6 +572,9 @@ def builtinFunctions : List Builtin := [
   ⟨"BitNot", .exactly 1, elabBitwise false⟩,
   ⟨"BitShiftLeft", .exactly 2, elabBitwise true⟩,
   ⟨"BitShiftRight", .exactly 2, elabBitwise true⟩,
+  ⟨"GetRandomInt", .exactly 2, elabGetRandomInt⟩,
+  ⟨"GetSecondsSinceEpoch", .exactly 0, elabGetSecondsSinceEpoch⟩,
+  ⟨"FitsInPlayerMap", .exactly 1, elabFitsInPlayerMap⟩,
   ⟨"Err", .upToOne, elabErr⟩,
   ⟨"$Show", .exactly 1, elabShow⟩,
   ⟨"$asAnything", .exactly 1, elabAsAnything⟩,

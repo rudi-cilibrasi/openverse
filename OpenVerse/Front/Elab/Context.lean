@@ -31,6 +31,7 @@ import OpenVerse.Front.SignalAdmission
 import OpenVerse.Front.MetadataFlow
 import OpenVerse.Front.Suspend
 import OpenVerse.Front.Rational
+import OpenVerse.Front.Random
 import OpenVerse.Front.Modules
 import OpenVerse.Front.FnValues
 import OpenVerse.Front.Choice
@@ -993,7 +994,8 @@ def builtins : List String :=
 def softBuiltins : List String :=
   ["Round", "Int", "Sqrt", "Exp", "Ln", "Log", "Pow", "Sin", "Cos", "Tan", "ArcSin", "ArcCos", "ArcTan",
    "IsFinite", "Concatenate", "Sinh", "Cosh", "Tanh", "ArSinh", "ArCosh", "ArTanh", "Lerp", "Clamp", "Sgn",
-   "BitAnd", "BitOr", "BitXor", "BitNot", "BitShiftLeft", "BitShiftRight"]
+   "BitAnd", "BitOr", "BitXor", "BitNot", "BitShiftLeft", "BitShiftRight",
+   "GetRandomInt", "GetSecondsSinceEpoch", "FitsInPlayerMap"]
 
 /-- The type arguments `ts` of the parametric type `n` as its type
     parameters take them: `void` given as a program's type's argument is
@@ -1419,7 +1421,7 @@ def divergentCallError (calls : Array (Pos × String × String)) : Option String
     (followup-3582/div-const-intrinsic). -/
 def builtinConverges (name : String) : Bool :=
   ["Abs", "Floor", "Ceil", "BitAnd", "BitOr", "BitXor", "BitNot", "ConcatenateMaps",
-   "any", "comparable"].contains name || name.startsWith "$"
+   "FitsInPlayerMap", "any", "comparable"].contains name || name.startsWith "$"
 
 /-- (#515, `--default-no-rollback`) A call at `p` of `s`, which may have
     the `no_rollback` effect: refused in a failure context (or inside one)

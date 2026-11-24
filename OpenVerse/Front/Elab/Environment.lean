@@ -103,7 +103,7 @@ def typeEnvironment (classes : Classes) (fields : Fields) (methods : Methods) (s
       let external := f.specs.contains Accessors.externalSpec
       accessors := accessors.push { owner := cd.name, name := f.name, getter, setter, ty, external, prev, next }
   env := { env with accessors := accessors.toList }
-  -- what `<persistable>` requires of a struct (Book of Verse ch. 17,
+  -- what `<persistable>` requires of a struct (`TyEnv.persists`) (Book of Verse ch. 17,
   -- `EffectPolicy.specifierPlaces`): no type parameters, and fields whose
   -- types persist, not `any`, `comparable` (ch. 17, 178: "Abstract interface
   -- type"), a rational, a function, an interface or a class
@@ -114,16 +114,8 @@ def typeEnvironment (classes : Classes) (fields : Fields) (methods : Methods) (s
     | .const _ n _ none (.structDef _ _ specs _) | .const _ n _ none (.enumDef _ _ specs) =>
       if specs.contains "persistable" then some n else none
     | _ => none
-  let rec persists : Ty → Bool
-    | .any | .dyn | .rational | .param .. => false
-    | .arr t | .opt t => persists t
-    | .tup ts => ts.attach.all fun ⟨t, _⟩ => persists t
-    | .map k v => persists k && persists v
-    -- (Book of Verse ch. 17: "`weak_map` - Weak references are not persistable")
-    | .weakMap .. => false
-    | .struct n args => !env.classes.contains n && persistable.contains n && args.attach.all fun ⟨t, _⟩ => persists t
-    | .enum n => persistable.contains n
-    | _ => true
+  env := { env with persistable }
+  let persists := env.persists
   for t in methods.tops do
     if let .const p n _ none (.structDef _ tps specs _) := t then
       if specs.contains "persistable" then
