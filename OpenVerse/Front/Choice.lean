@@ -952,8 +952,37 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     -- path; only newly hoisted ordinary keys need this additional check.
     let keys := (entries.map (·.1)).filter (!hasLiftable ·)
     return .app p (.ident p "$mapKeySources") [.block p keys, value] false
-  | .bin .. | .range .. | .member .. | .query .. | .neg .. | .tuple .. | .arrayLit .. | .str .. =>
+  | .bin .. | .range .. | .member .. | .query .. | .neg .. | .tuple .. | .arrayLit .. =>
     return e.withChildren (← liftOps isVal isField e.children)
+  -- (#723) a string's interpolated values, as `liftOps` takes operands, but
+  -- one before the last with something to lift is bound as its text,
+  -- `"{e}"`, not as its value: interpolation calls `ToString` on each value
+  -- where it is written, before the code of the next one runs, and
+  -- `ToString` of an int beyond 64 bits is the overflow error (#724), which
+  -- must stop the program before what the later values' lifted clauses do
+  | .str p parts =>
+    let codes := parts.filterMap fun | .code c => some c | .text _ => none
+    match (codes.zipIdx.filter (hasLiftable ·.1)).getLast?.map (·.2) with
+    | none => return e
+    | some j =>
+      let mut out : Array SPart := #[]
+      let mut i := 0
+      for part in parts do
+        match part with
+        | .text _ => out := out.push part
+        | .code c =>
+          if i < j then
+            let c' ← liftE isVal isField c
+            -- (a literal's text is its own: nothing to do before the rest)
+            let literal := match c' with
+              | .int .. | .char .. | .char32 .. | .float .. => true
+              | .str _ ps => ps.all fun | .text _ => true | .code _ => false
+              | _ => false
+            out := out.push (.code (← if literal then pure c' else LM.bind c.pos "t" (.str c.pos [.code c'])))
+          else if i == j then out := out.push (.code (← liftE isVal isField c))
+          else out := out.push part
+          i := i + 1
+      return .str p out.toList
   -- (#283) `A and B`: its operands in order, in one block, as the `and` is
   -- a scope of its own whose names `B` sees (Book of Verse ch. 7): `A` a
   -- clause, then `B` the value
