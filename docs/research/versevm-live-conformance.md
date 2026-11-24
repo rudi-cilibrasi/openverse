@@ -865,6 +865,10 @@ accepts and Epic refuses: `ToDiagnostic(15).String`. Each probe's row in
 | `module-const-unique` (and control), `module-const-empty-map-unique-key`, `unique-interface-equality` (and control), `constructor-delegation-archetype` (and control), `persistable-class`, `converges-abstract-method` | 4, 1, 4, 4, 1, 3 | classes and modules: module constants of a `class<unique><allocates>` (made `<computes>` too), an empty map keyed by a `<unique>` class, an `interface<unique>` no class implements compared, `MakeBase<constructor>(…)` in an archetype outside a constructor, a `<persistable>` class, `<converges>` on an abstract method (43.12 refuses it on a function with a body, 3565) |
 | `definition-in-expression`, `spawn-in-defer`, `break-in-for-in-loop`, `overloads-struct-and-array` | 2, 1, 1, 1 | `X:int = Y:int = 4`, `spawn` in a `defer`, `break` in a `for` inside a `loop`, `F(:a)` beside `F(:[]a)` |
 
+Closed since (#724), each now printing Epic's lines in Lean and C, with
+its row's note in `followup-refused/expectations.tsv`:
+
+- `break-in-for-in-loop`: a `break` in a `for`'s body leaves the `loop` around the `for`.
 Left unasked (38 cases besides the parse-only ones): custom accessors
 (3; the API reference marks `accessor` `<epic_internal>`), the engine's
 attributes and specifiers (4), a parametric class applied as a value (2),

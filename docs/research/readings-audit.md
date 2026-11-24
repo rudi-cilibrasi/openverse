@@ -81,7 +81,7 @@ The readings outside the table that the survey names:
 | Rollback of a `for` iteration | a source's or a range bound's effects kept when later clauses fail | `08_failure.md:92`: "The `for` expression creates a failure context for each iteration of the domain clause"; `:147` (provisional changes) | `FlowControl/for.versetest` 344, 362, 371, 392; `Range.versetest` 140, 159; `SoftwareTransactionalMemory.versetest` 88 (74 and 81 moved with the range bound) | **contradicts**, deeply load-bearing: **changed** for the `for`s of the Book's forms and of choices of values; designed for the rest ([below](#what-a-for-undoes)) |
 | Commas and semicolons in blocks | `,` separates a block's statements like `;` | `01_expressions.md:1048`: "Commas within parentheses create *tuples*"; `:1153-1156`: `option{1, 2}?` is `(1, 2)`; `:1119-1129`: in a block "semicolons and commas are interchangeable as separators between definitions" | `SemicolonsVsCommas.versetest` 70 (`Value :=` then `1, 2, 3` is `(1,2,3)`), 95 (`{3,X}`), 100 (`option{1,2}`); `Option.versetest:44`; `for.versetest:293`; 22 parser cases (`TimSyntax.versetest:224` `"1,2"`, …) | **contradicts**: **changed** ([below](#commas-in-blocks)) |
 | What the Book calls warnings | code after `return`/`break`, `_` after a closed enum's every value, `return 3` in a `:void` function: accepted silently | `09_structs_enums.md:297-318`, `:411` ("⚠ Warning - unreachable wildcard"), `07_control.md:423-435` ("you'll get a warning") | `assert_semantic_error(2000)` (`Reachability.versetest` 5, 11, 23 "Treat unreachable expressions after break as warning not error"), 2302 (`Enum.versetest:356`), 2002 (`Return.versetest:179`, "produces a warning"): the runner counts a warning as a diagnostic | **contradicts** (a diagnostic the Book gives and openverse did not): **changed**, with the warning channel ([below](#warnings)) |
-| `break` in a `for` body | refused ("only inside loop (not for)") | `07_control.md:764`: "The `break` statement cannot exit `for` loops early" | `SOL-4199-BreakFromIf.versetest:38-48`: "`break` in a `for` body is allowed and breaks the surrounding `loop`" | **the Book disagrees with itself** (owner list); not changed |
+| `break` in a `for` body | refused ("only inside loop (not for)") | `07_control.md:764`: "The `break` statement cannot exit `for` loops early" | `SOL-4199-BreakFromIf.versetest:38-48`: "`break` in a `for` body is allowed and breaks the surrounding `loop`" | **the Book disagrees with itself**; since #724 the tests' reading, which UEFN 43.12 takes (`followup-refused/break-in-for-in-loop`): allowed in a `for` inside a `loop` |
 
 ## The changes
 
@@ -466,8 +466,10 @@ marked with `<decides>` create a failure context for their entire body").
   `for`'s body is where the Book disagrees with itself ([For the
   owner](#break-in-a-for-body)): the tests allow it (`:38-48`), the prose
   refuses it; the failure-context rule does not refuse it (a `for`'s body is
-  no failure context), and openverse keeps its own refusal ("break is only
-  allowed inside loop (not for)").
+  no failure context), and openverse kept its own refusal ("break is only
+  allowed inside loop (not for)") until #724; it now takes the tests'
+  reading, as Epic's compiler does: the `break` leaves the `loop` around
+  the `for`.
 - Not this rule: 3534, a `return` as a strict subexpression of the value a
   function returns, explicitly or implicitly (`Return.versetest:110-133`,
   `F(X:int):int=X+(return 0)`): openverse accepts those still (with a
@@ -803,7 +805,8 @@ page](https://github.com/rudi-cilibrasi/openverse/wiki/Where-the-Book-disagrees-
 
 - **Prose** (`07_control.md:764`): "The `break` statement cannot exit `for` loops early."
 - **Tests:** `Bugs/SOL-4199-BreakFromIf.versetest:38-48`: "`break` in a `for` body is allowed and breaks the surrounding `loop`", which leaves the `for` too.
-- **openverse today:** refuses a `break` in a `for` body ("break is only allowed inside loop (not for)").
+- **Epic's compiler** (UEFN 43.12, build ++Fortnite+Release-43.12-CL-60598086, Verse VM, 2026-11-20): admits it and leaves the loop (`followup-refused/break-in-for-in-loop` prints `count 1`).
+- **openverse today:** the tests' and Epic's (#724): a `break` in the body of a `for` inside a `loop` leaves that loop; a `for` in no `loop` has nothing to leave, and its `break` is refused ("break is only allowed inside loop (not for: …)").
 
 ### `break` as part of an expression
 
