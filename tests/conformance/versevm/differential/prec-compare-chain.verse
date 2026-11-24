@@ -7,8 +7,15 @@
 # (the Book's prose: chains check all adjacent pairs). Left associativity for
 # < would give y for 3 < 5 < 4; a chain for <> would give y for 1 <> 2 <> 1.
 # Each letter: y the comparison succeeded, n it failed.
-# OpenVerse prints (Lean and C agree):
+# OpenVerse (#724) printed, until Epic's result below (every adjacent pair
+# of 5 > 1 < 3):
 #   y n y y ne n y value 2
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use
+# Verse VM" on, 2026-11-20) printed
+#   y n n y ne n y value 2
+# 5 > 1 < 3 fails: < after > groups from the left, (5 > 1) < 3, which is
+# 5 < 3 (prec-compare-chain-mixed asks more). OpenVerse now prints it too
+# (#724, Lean and C agreeing).
 Main():void =
     A := if (1 < 2 < 3) then "y" else "n"
     B := if (3 < 5 < 4) then "y" else "n"

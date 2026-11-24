@@ -4,4 +4,4 @@ Ratio(N:int)<transacts><decides>:rational =
     Print("r {N}")
     N | Ratio[N + 1]
 Main():void =
-    if (R := Ratio[0], R > 1/1) then Print("rat {Floor(R)}")
+    if (R := Ratio[0], R <> 1/1, Floor(R) > 1) then Print("rat {Floor(R)}")

@@ -4,8 +4,13 @@
 # cannot overflow), and an int compares with a rational". Epic's compiler may
 # refuse < on rationals: that refusal is the answer. Each letter: y the
 # comparison succeeded, n it failed.
-# OpenVerse prints (Lean and C agree):
+# OpenVerse (#724) printed, until Epic's result below:
 #   order y y y y y n
+# Epic's Verse compiler (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# 2026-11-20) refuses the program: 3509, "No overload of the function
+# `operator'<'` matches the provided arguments (:rational,:rational)". The
+# Book declares the relational operators for int and float only, so
+# OpenVerse now refuses it too (#724), citing 3509.
 Main():void =
     if (A := 1 / 3, B := 1 / 2, C := 7 / 2, D := -5 / 3):
         P := if (A < B) then "y" else "n"

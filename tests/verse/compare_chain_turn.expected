@@ -1,0 +1,13 @@
+y n n y ne n y
+mixed n n n n y n n y
+values 2 9 -1 2
+grouped n y
+more n y y n n y
+kept y n
+eval a
+eval b
+eval c
+eval d
+2 > 1 < 5 <= 5
+float n y
+exit=0

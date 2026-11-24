@@ -350,8 +350,10 @@ places their own `defer:`s too, at their end, with the marker outside;
 with no exit gets none, so the code of a block without one does not
 change.
 
-A construction evaluates its fields in its type's declaration order, so its
-fields are first put in that order, which by itself changes nothing. Then
+A construction evaluates the fields it gives in the order written (#724, as
+Epic's Verse VM does), at the places the given fields have in its type's
+declaration order, and an omitted default at its own place; its fields are
+first put in that order of evaluation, which by itself changes nothing. Then
 they are lifted as a call's arguments. `Choice` works on syntax, so the
 elaborator passes the order in (`choiceOrder`, through `prepare`,
 `hasChoice` and `takeFirst?`). Each field's entry also says whether its default is more than a literal.

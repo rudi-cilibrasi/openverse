@@ -1,0 +1,22 @@
+value default a
+value d
+value default c
+value b
+done 10 2 30 4
+value default a
+value b
+value default c
+value d
+done 10 2 30 4
+value d
+value c
+value b
+value a
+done 1 2 3 4
+value default a
+value d
+value default c
+value b
+block 10 2 30 4
+done 10 2 30 4
+exit=0

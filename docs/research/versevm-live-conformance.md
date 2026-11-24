@@ -893,29 +893,49 @@ run the admitted ones on the Verse VM.
 ## Differential corpus
 
 **Result (UEFN 43.12, CL 60598086, Verse VM, 2026-11-20 01:45Z to 02:40Z).**
-Epic's compiler took 119 of the 120; 115 print the same lines on the Verse
+Epic's compiler took 119 of the 120; 115 printed the same lines on the Verse
 VM as on openverse (Lean and C), the float `ToString` probes among them.
-The differences, each row marked DIFFERS in `expectations.tsv`:
+Seven rows differed (six that ran and the one Epic refused); openverse now
+does what Epic does in each, and their notes in `expectations.tsv` read
+"Differed, now fixed":
 
 - **Archetype fields are evaluated in the order written.**
   `derived_cls{B := Note("b", 20), A := Note("a", 10)}` prints `value b`
-  then `value a` on the Verse VM (`cls-construction-order`), and a struct's
-  archetype likewise (`struct-archetype-order`: `c`, `a`, `b`). openverse
-  evaluates them in declaration order.
+  then `value a` on the Verse VM (`cls-construction-order`), then the
+  `block:` clauses from the top, and a struct's archetype likewise
+  (`struct-archetype-order`: `c`, `a`, `b`). openverse evaluated them in
+  declaration order; it now evaluates the fields given in the order written
+  ([the rule](../LANGUAGE.md#supported), Structs; `tests/verse/archetype_written_order`).
+  The probes give every field, so where an omitted default runs among the
+  given values is not recorded: openverse keeps each default at its field's
+  place in declaration order, the given values taking the given fields'
+  places, so an archetype written in declaration order runs as before.
 - **A comparison chain that changes direction groups from the left.**
-  `3 < 5 < 4` fails on both (each adjacent pair is checked), but
-  `5 > 1 < 3`, `3 > 1 < 2`, `9 > 1 < 5` and `3 > 1 <= 1` fail on the Verse
-  VM, where openverse checks adjacent pairs and succeeds: Epic compares the
-  left operand of the first comparison with the next (`(5 > 1) < 3` is
-  `5 < 3`). A comparison yields its left operand on both (`prec-compare-chain`,
-  `prec-compare-chain-mixed`). `1 < 5 > 3` does not parse on Epic (3100, S77:
-  `< 5 >` is read as brackets).
+  `3 < 5 < 4` and `5 > 3 > 4` fail on both (each adjacent pair is checked),
+  but `5 > 1 < 3`, `3 > 1 < 2`, `9 > 1 < 5` and `3 > 1 <= 1` fail on the
+  Verse VM, where openverse checked adjacent pairs and succeeded: Epic
+  compares the left operand of the first comparison with the next
+  (`(5 > 1) < 3` is `5 < 3`; `2 > 1 < 5` succeeds, `2 < 5`). A comparison
+  yields its left operand on both (`prec-compare-chain`,
+  `prec-compare-chain-mixed`). openverse's parser now makes `<` or `<=` after
+  `>` or `>=` the comparison of the chain before it with what follows, as it
+  did for `<>` (`tests/verse/compare_chain_turn`). The lines do not tell
+  whether `<` with `<=` is one direction (`1 <= 1 <= 2 < 3` and `4 >= 4 < 5`
+  succeed either way): openverse keeps them one chain. `1 < 5 > 3` does not
+  parse on Epic (3100, S77: `< 5 >` is read as brackets), no probe asks it,
+  and openverse keeps it a chain; `=` in a chain is not asked either.
 - **`Clamp` with a NaN argument is NaN** in any position on the Verse VM;
-  openverse gives a bound or the value (`float-minmax-nan`,
-  `float-clamp-nan`). Swapped bounds agree.
+  openverse gave a bound or the value (`float-minmax-nan`,
+  `float-clamp-nan`). Swapped bounds agree. openverse's `Clamp` of floats is
+  now NaN when any of the three is, and the median otherwise
+  (`tests/verse/float_clamp_nan`).
 - **`<` and `>` on rationals do not exist** on 43.12 (3509, "No overload of
   the function `operator'<'` matches the provided arguments
-  (:rational,:rational)"); openverse compares them (`rat-ordering`).
+  (:rational,:rational)"); openverse compared them (`rat-ordering`). The
+  Book declares the relational operators for `int` and `float` only and
+  none of its tests orders a rational, so openverse now refuses `<`, `<=`,
+  `>` and `>=` of a rational, citing 3509
+  (`tests/errors/rational_order_*`); `=` and `<>` stay.
 
 `ctl-err-call` raises its error on both; Epic's message carries the text
 given to `Err`.

@@ -366,7 +366,7 @@ def elabMinMax (isMin : Bool) (c : BuiltinCall) : EM R := do
 
 /-- `Clamp(Val, A, B)` and `Sgn(X)` (the Book's Runtime API and Epic's):
     `Clamp`, the median of the three, so the order of `A` and `B` does not
-    matter, of ints or of floats, among which NaN orders above +Inf; `Sgn`,
+    matter, of ints or of floats, NaN when any of the floats is (#724); `Sgn`,
     -1, 0 or 1 of an int or a float, NaN of NaN; each argument evaluated
     once, in order, the first deciding whether the call is of floats. -/
 def elabClampOrSgn (c : BuiltinCall) : EM R := do
@@ -397,17 +397,19 @@ def elabClampOrSgn (c : BuiltinCall) : EM R := do
     let rb := widenR ctx.types (← elabE ctx b (some t))
     let tc ← fresh t
     let eb ← operand b rb
-    -- `X ≤ Y`, NaN above every float: X ≤ Y (Verse Core's `fle`, which
-    -- holds of a NaN and itself), or Y is NaN (not ≤ +Inf)
-    let le (x y : Nat) : Expr :=
-      if isF then .ite (p2 .fle (.local x) (.local y)) (.local x)
-        (.ite (p2 .fle (.local y) (.lit (.float 0x7FF0000000000000))) (.prim .fail []) (.local x))
-      else p2 .le (.local x) (.local y)
+    let le (x y : Nat) : Expr := p2 (if isF then .fle else .le) (.local x) (.local y)
     let (lo, hi, m) := (← fresh t, ← fresh t, ← fresh t)
     let pick (cond : Expr) (x y : Nat) : Expr := .ite cond (.local x) (.local y)
-    return ⟨.seq (.assign ta ea) (.seq (.assign tb ea') (.seq (.assign tc eb)
-      (.seq (.assign lo (pick (le tb tc) tb tc)) (.seq (.assign hi (pick (le tb tc) tc tb))
-      (.seq (.assign m (pick (le ta hi) ta hi)) (pick (le lo m) m lo)))))), t⟩
+    let median : Expr := .seq (.assign lo (pick (le tb tc) tb tc)) (.seq (.assign hi (pick (le tb tc) tc tb))
+      (.seq (.assign m (pick (le ta hi) ta hi)) (pick (le lo m) m lo)))
+    -- (#724) of floats, NaN when any of the three is, as on Epic's Verse VM
+    -- (differential/float-clamp-nan, float-minmax-nan): `fmax` is NaN when
+    -- either operand is, and only a NaN is not ≤ +Inf
+    let result ← if !isF then pure median else do
+      let n ← fresh t
+      pure (.seq (.assign n (p2 .fmax (p2 .fmax (.local ta) (.local tb)) (.local tc)))
+        (.ite (p2 .fle (.local n) (.lit (.float 0x7FF0000000000000))) median (.local n)))
+    return ⟨.seq (.assign ta ea) (.seq (.assign tb ea') (.seq (.assign tc eb) result)), t⟩
   | _, _ => c.wrongArity "argument"
 
 /-- A bitwise function (the Book's ch. 4 and API): of ints, as two's

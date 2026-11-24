@@ -3,10 +3,17 @@
 # Built-ins: "Clamp(Val, A, B) (the median of the three, of ints or of
 # floats, NaN ordering above +Inf)", "Sgn(X) (-1, 0 or 1 of an int or a
 # float, NaN of NaN)". Epic's digest documents the same for Clamp and Min.
-# OpenVerse prints (Lean and C agree):
+# OpenVerse (#724) printed, until Epic's result below:
 #   min NaN NaN -Inf -2.500000 | max NaN NaN Inf 2.500000
 #   clamp 1.000000 5.000000 0.000000 0.500000
 #   abs 2.500000 Inf NaN sgn -1.000000 0.000000 NaN 1.000000
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use
+# Verse VM" on, 2026-11-20) printed
+#   min NaN NaN -Inf -2.500000 | max NaN NaN Inf 2.500000
+#   clamp NaN 5.000000 0.000000 NaN
+#   abs 2.500000 Inf NaN sgn -1.000000 0.000000 NaN 1.000000
+# Clamp of a NaN is NaN (float-clamp-nan asks each position). OpenVerse now
+# prints it too (#724, Lean and C agreeing).
 Main():void =
     Z:float = 0.0
     N:float = Z / Z

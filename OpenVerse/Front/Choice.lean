@@ -169,8 +169,8 @@ Lifting goes through the operands that are evaluated left to right, once
 each: those of arithmetic, comparisons, calls (the receiver first), member
 access, `?`, tuples, arrays, maps and string interpolation; a call's
 named arguments after its positional ones, as they are evaluated; a
-block's clauses; a construction's fields, in its type's declaration order,
-as they are evaluated; a range's bounds; the operands of `and`, each as a
+block's clauses; a construction's fields, as they are evaluated (those
+given in the order written, #724); a range's bounds; the operands of `and`, each as a
 block, and the right of `or`, as the `if` it stands for (`orIf`) (#283). A
 choice elsewhere (a branch that is more than a value, an alternative, which
 the elaborator takes apart) is not lifted here. -/
@@ -991,8 +991,8 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
   | .cmp p a rest => liftCmp isVal isField p (a :: rest.map (·.2)) (rest.map (·.1))
   | .construct p n ts fs =>
     -- (#283) a construction's field values, as a call's arguments, in the
-    -- order it evaluates them: its type's declaration order, not as written
-    -- (so they are put in that order first, which changes nothing else).
+    -- order it evaluates them (so they are put in that order first, which
+    -- changes nothing else).
     -- Keep unknown layouts and duplicate fields for their normal errors.
     -- Computed defaults before a choice are explicit typed operands; object
     -- allocation, blocks and trailing defaults remain in the construction.
@@ -1008,10 +1008,19 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     if let some f := names.find? (fun f => (names.filter (· == f)).length > 1) then
       return noLift p s!"a construction that gives field '{f}' twice" e
     let idx := fun (f : String) => (ord.map (·.1)).idxOf f
+    -- (#724) When each value runs: the fields given take, in the order
+    -- written, the places the given fields have in declaration order (so
+    -- `pt{Y := F(), X := G()}` runs `F` first, as on Epic's Verse VM,
+    -- differential/struct-archetype-order), and an omitted default keeps its
+    -- own place. `at f` is that place, a declaration index.
+    let places := (names.map idx).mergeSort (· ≤ ·)
+    let at_ := fun (f : String) => match names.idxOf? f with
+      | some k => places.getD k (idx f)
+      | none => idx f
     let fs := fs.mergeSort fun a b => match a, b with
-      | .decl _ f _ _ _, .decl _ g _ _ _ => idx f ≤ idx g
+      | .decl _ f _ _ _, .decl _ g _ _ _ => at_ f ≤ at_ g
       | _, _ => true
-    let lastAt := (fs.filterMap fun | .decl _ f _ _ x => if hasLiftable x then some (idx f) else none | _ => none).foldl max 0
+    let lastAt := (fs.filterMap fun | .decl _ f _ _ x => if hasLiftable x then some (at_ f) else none | _ => none).foldl max 0
     -- Defaults before the last choice are explicit operands of this
     -- construction. The marker restores their home scope and field type.
     let context : List SExpr := [.str p [.text site], .str p [.text info.origin],
@@ -1021,11 +1030,11 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
       SExpr.decl p f none false (.app p (.ident p "$fieldDefault")
         (context ++ [.ident p f]) false)
     let fs : List SExpr := (fs ++ defaults).mergeSort fun a b => match a, b with
-      | .decl _ f _ _ _, .decl _ g _ _ _ => idx f ≤ idx g
+      | .decl _ f _ _ _, .decl _ g _ _ _ => at_ f ≤ at_ g
       | _, _ => true
     let fs : List SExpr := fs.map fun
       | .decl q f t v x =>
-        if idx f < lastAt && !hasLiftable x && !stable isVal x &&
+        if at_ f < lastAt && !hasLiftable x && !stable isVal x &&
             !(match x with | .app _ (.ident _ "$fieldDefault") _ false => true | _ => false) then
           .decl q f t v (.app q (.ident q "$fieldValue")
             (context ++ [.ident p f, x]) false)
