@@ -316,11 +316,27 @@ one, as classes, interfaces and structs do: `<transacts>` implies `<reads>`,
 (ch. 13: "A function may have at most one exclusive specifier but can
 combine multiple additive ones"; `Attributes/allocates.versetest` 4-32).
 
-`predicts` and `converges` are explicitly unsupported, including on abstract
-signatures and function types. The pinned Book calls prediction unreleased
+`predicts` is explicitly unsupported, including on abstract signatures and
+function types, and so is `converges` on a function or method with a body
+and in a function type. The pinned Book calls prediction unreleased
 and divergence checking planned; this does not establish their availability
 in every released engine. OpenVerse does not implement predicting call
-propagation or explicit function termination contracts. Ordinary recursion
+propagation or explicit function termination contracts.
+
+`<converges>` is admitted on a method without a body, of an `<abstract>`
+class or of an interface (#724): "The converges effect is only allowed on
+native and abstract functions" (the Book's tests, `Effects.versetest:304`),
+and UEFN 43.12 admits `shape := class<abstract>: Area()<converges>:int`
+(`followup-refused/converges-abstract-method`) while refusing `<converges>`
+on a function with a body (3565, `followup-3582/div-const-converges`). Such
+a method has no effect of the heap (it is checked as `<computes>` where it
+is called, and excludes `<computes>` and `<transacts>` beside it), and no
+method with a body overrides it: an override has no effect its method
+lacks, and a body cannot be `<converges>`, so the override is refused
+whatever its specifiers (Epic's verdict on a `<computes>` override is not
+recorded). A class below it that is not `<abstract>` is therefore refused
+too (3591), and a call of the method never runs; in a data member's
+definition it is still refused as a call of the program's own (3582). Ordinary recursion
 and loops remain available outside the initializer admission boundary;
 `computes` and execution fuel do not prove termination.
 

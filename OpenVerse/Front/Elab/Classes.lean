@@ -699,6 +699,11 @@ def classMethods (tops : List STop) (classes : Classes) (fields : Fields) : Exce
             | some (.fn _ _ _ qtps qeffs _ _) =>
               if qeffs.contains "final" then
                 throw s!"{mp.show}: {q}.{x} is <final>: it cannot be overridden"
+              -- (#724) a <converges> abstract method has no implementation
+              -- in Verse: an override has no effect its method lacks, and
+              -- no method with a body may be <converges> (3565)
+              if qeffs.contains EffectPolicy.convergesMarker && !effs.contains "$abstract" then
+                throw s!"{mp.show}: {q}.{x} is <converges>, so {mn} cannot override it with a body: only a native function or a method without a body may be <converges> (Epic's Verse compiler, UEFN 43.12: error 3565), and an override has no effect the method it overrides lacks"
               -- (a method with its own type parameters overrides one with as
               -- many, compared up to their names below)
               if qtps.length != mtps.length then

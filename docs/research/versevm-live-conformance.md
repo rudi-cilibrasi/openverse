@@ -874,6 +874,8 @@ its row's note in `followup-refused/expectations.tsv`:
 - `get-random-int`: a generator with a fixed seed ([LANGUAGE.md](../LANGUAGE.md#random-numbers-the-clock-and-the-player-map)).
 - `get-seconds-since-epoch`: a frozen clock (the same section).
 - `fits-in-player-map`: the value, of a type that persists; it always succeeds.
+- `converges-abstract-method`: `<converges>` on a method without a body.
+
 Left unasked (38 cases besides the parse-only ones): custom accessors
 (3; the API reference marks `accessor` `<epic_internal>`), the engine's
 attributes and specifiers (4), a parametric class applied as a value (2),

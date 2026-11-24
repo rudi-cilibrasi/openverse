@@ -186,6 +186,9 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   -- 1. effects and specifiers, and the source profile
   EffectPolicy.check allTops0r opts.entry
   EffectPolicy.checkPlaces allTops0r
+  -- (#724) an admitted <converges> abstract method, as the elaboration
+  -- takes it
+  let allTops0r := allTops0r.map EffectPolicy.normalizeConverges
   SourceProfile.check opts.profile allTops0r opts.entry
   -- 2. the rules of the source as written, on the definitions as parsed
   --    (`SourceRules`)
