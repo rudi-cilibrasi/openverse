@@ -5,9 +5,17 @@
 # above it first, each class's in order"; Accessors, Order: "A construction
 # evaluates its fields' values in the order they are declared". The
 # archetype below gives B before A, each value printed as it is computed.
-# OpenVerse prints (Lean and C agree):
+# OpenVerse (#724) printed, until Epic's result below (the fields' values in
+# declaration order):
 #   value a | value b | base block A 10 | derived block one B 20
 #   derived block two A 10 | done 10 20
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086, "Use
+# Verse VM" on, 2026-11-20) printed
+#   value b | value a | base block A 10 | derived block one B 20
+#   derived block two A 10 | done 10 20
+# the fields given are evaluated in the order written, then the blocks from
+# the top. OpenVerse now prints it too (#724, Lean and C agreeing; an omitted
+# default's place among given values is not asked here).
 Note(S:string, V:int):int =
     Print("OVPROBE value {S}")
     V
