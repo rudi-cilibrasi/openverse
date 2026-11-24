@@ -1,6 +1,6 @@
 # (#283) Choice points in sequence where the lifter takes them: a call of
 # itself in a named argument, a struct construction's field (evaluated in the
-# struct's declaration order, not as written), a comparison's later operand,
+# order written, #724), a comparison's later operand,
 # `and`'s operands, and a `set`'s value (its old value read before the call).
 pt := struct:
     X:int = 0

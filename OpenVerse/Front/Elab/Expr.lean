@@ -2786,17 +2786,46 @@ partial def elabConstructionValue (ctx : Ctx) (p : Pos) (name : String) (targs :
   -- (only the first would be evaluated)
   if let some f := (given.map (·.1)).find? (fun f => (given.filter (·.1 == f)).length > 1) then
     eerr p s!"field '{f}' of {name} is given twice"
-  let storedValue (f : String) (t : Ty) (dflt : Option SExpr) : EM Expr := do
+  -- (#724) The fields given are evaluated in the order written, as on Epic's
+  -- Verse VM (tests/conformance/versevm/differential/cls-construction-order,
+  -- struct-archetype-order): they take, in that order, the places the given
+  -- fields have in declaration order, so an archetype written in declaration
+  -- order runs as it did, omitted defaults at their own places. `written` is
+  -- the order written, `declared` the same fields as declared.
+  let written := given.map (·.1)
+  let declared := (fs.map (·.1)).filter written.contains
+  let reorder := written != declared
+  -- (the value evaluated at field `f`'s place, and its type)
+  let storedValue (f : String) (t : Ty) (dflt : Option SExpr) : EM (Expr × Ty) := do
     match given.lookup f, dflt with
-    | some rhs, _ => coerce p (← elabE ctx rhs (some t)) t
+    | some rhs, _ =>
+      let (g, rhs) := if reorder then given.getD (declared.idxOf f) (f, rhs) else (f, rhs)
+      let tg := ((fs.find? (·.1 == g)).map (·.2.1)).getD t
+      return (← coerce p (← elabE ctx rhs (some tg)) tg, tg)
     | none, some d =>
-      elabFieldDefault ctx p name tas f t d
+      return (← elabFieldDefault ctx p name tas f t d, t)
     | none, none => eerr p s!"field '{f}' of {name} has no default value and must be given"
-  -- (with fields with accessors given, every value in a slot, in the order
-  -- the fields are declared, `accessorValues`)
-  let (pre, es, accVals) ← if accGiven.isEmpty then
-      pure ([], ← fs.mapM fun (f, t, dflt) => storedValue f t dflt, [])
+  -- (with fields with accessors given, or given in another order than
+  -- declared, every value in a slot, `accessorValues`)
+  let (pre, es, accVals) ← if accGiven.isEmpty && !reorder then
+      pure ([], ← fs.mapM fun (f, t, dflt) => do return (← storedValue f t dflt).1, [])
+    else if accGiven.isEmpty then do
+      let mut pre : Array Expr := #[]
+      let mut slots : Array Expr := #[]
+      for (f, t, dflt) in fs do
+        let (e, t) ← storedValue f t dflt
+        let s ← fresh t
+        pre := pre.push (.assign s e)
+        slots := slots.push (.local s)
+      pure (pre.toList, slots.toList, [])
     else accessorValues elabE ctx name tas fs storedValue accGiven
+  -- (each field's value is in the slot of the place it was evaluated at)
+  let es := if !reorder then es else fs.zipIdx.map fun ((f, _, _), i) =>
+    let at_ := match written.idxOf? f with
+      | some k => (fs.map (·.1)).idxOf (declared.getD k f)
+      | none => i
+    es.getD at_ (.lit (.int 0))
+  let withPre (e : Expr) : Expr := if accGiven.isEmpty then pre.foldr .seq e else e
   if ctx.types.classes.contains name then
     let i := ctx.types.info name
     if i.isIface then eerr p s!"{name} is an interface: it cannot be constructed"
@@ -2817,9 +2846,9 @@ partial def elabConstructionValue (ctx : Ctx) (p : Pos) (name : String) (targs :
         -- which gives the checker its type arguments (#39)
         -- (and so does a pinned class's, whose pins may be on more type
         -- arguments than the type it is used at, #209)
-        if tas.isEmpty && (ctx.types.corePins name).isEmpty then return ⟨.heap (.new (ctx.types.tagOf name)) es, ty⟩
+        if tas.isEmpty && (ctx.types.corePins name).isEmpty then return ⟨withPre (.heap (.new (ctx.types.tagOf name)) es), ty⟩
         let x ← fresh ty
-        return ⟨.assign x (.heap (.new (ctx.types.tagOf name)) es), ty⟩
+        return ⟨withPre (.assign x (.heap (.new (ctx.types.tagOf name)) es)), ty⟩
       let x ← fresh ty
       let mut calls : List Expr := []
       for (d, s) in blocks do
@@ -2842,12 +2871,12 @@ partial def elabConstructionValue (ctx : Ctx) (p : Pos) (name : String) (targs :
     if !accGiven.isEmpty then
       let setters ← accessorSetters elabApp ctx ty accVals x
       return ⟨(pre ++ [Expr.assign x (classWrap ctx.types name name (.prim .mkTup es))] ++ setters).foldr .seq (.local x), ty⟩
-    return ⟨.assign x (classWrap ctx.types name name (.prim .mkTup es)), ty⟩
+    return ⟨withPre (.assign x (classWrap ctx.types name name (.prim .mkTup es))), ty⟩
   -- A struct's fields may need their expected types (empty arrays/options
   -- and computed defaults). Preserve the resolved instance before a Core
   -- consumer, such as tuple projection, has to infer its operand's type.
   let x ← fresh ty
-  return ⟨.assign x (.prim .mkTup es), ty⟩
+  return ⟨withPre (.assign x (.prim .mkTup es)), ty⟩
 
 /-- `map{k₁ => v₁, …}`: entries are evaluated in order; a key given twice
     keeps its last value, at the position of its last occurrence (Book of

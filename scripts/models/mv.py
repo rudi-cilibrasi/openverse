@@ -101,7 +101,7 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
        nocase    (no case whose arms are a branchy if's branches, #283; on with bif otherwise)
        noretscope (no return of RT2 or RT3 in a block or a case's arm, #283; on otherwise)
        nocls     (no call of a generator of itself in a field of a class's construction,
-                  ocls{A := …, B := …}, whose superclass's field B is evaluated first,
+                  ocls{A := …, B := …}, whose fields are evaluated as written (#724),
                   #283; on with seq otherwise)
        noovw     (no overloads Ow of one name with one value or several, OwOne calling
                   the one with one value, OwR recursive, owc/owd's overloaded method Om,
@@ -434,9 +434,9 @@ ALTCH = LAZY and 'noaltch' not in flags and 'cf' not in flags
 # ---- #302, flag cb (on with lazy; nocb turns it off): a test's expression may be
 # block{B := e1; e2} (B is the block's own name, e2 may use it) or
 # PS(pt{Y := e2, X := e1}), a construction of pt := struct{X, Y} written against
-# its declaration order at times. A construction evaluates its fields in
-# declaration order, not as written (LANGUAGE.md), so the model evaluates e1,
-# then e2, as Tw(e1, e2); a block's clauses are the context's own. Choices may be
+# its declaration order at times. A construction evaluates the fields it gives
+# as written (LANGUAGE.md, #724), so the model evaluates e2, then e1, where Y is
+# written first, and e1, then e2, as Tw(e1, e2), otherwise; a block's clauses are the context's own. Choices may be
 # inside both. Not in a set's value, a branchy if, nor the generated functions.
 CB = LAZY and 'nocb' not in flags and 'cf' not in flags
 # ---- #305, flag na (on with lazy; nona turns it off): a test's expression may call
@@ -2629,14 +2629,24 @@ def ev(e, st, k, mode):
             return body(s, k)
         return ev(e[2], st, kgx, mode)
     if t == 'ccons':
-        # (#283: a class's construction, the superclass's field B first, then A: A * 10 + B)
-        def kcb(vb, s1):
-            def kca(va, s2):
+        # (#283: a class's construction; #724: its fields as written, A then B, though
+        # the superclass's field B is declared first, as on Epic's Verse VM,
+        # differential/cls-construction-order: A * 10 + B)
+        def kca(va, s1):
+            def kcb(vb, s2):
                 return k(chks(chks(va * 10, s2) + vb, s2), s2)
-            return ev(e[1], s1, kca, mode)
-        return ev(e[2], st, kcb, mode)
+            return ev(e[2], s1, kcb, mode)
+        return ev(e[1], st, kca, mode)
+    if t == 'cons' and e[3]:
+        # (#724: a construction written Y then X evaluates Y's value first, as on
+        # Epic's Verse VM, differential/struct-archetype-order)
+        def kyb(vb, s1):
+            def kya(va, s2):
+                return k(chks(chks(va * 10, s2) + vb, s2), s2)
+            return ev(e[1], s1, kya, mode)
+        return ev(e[2], st, kyb, mode)
     if t in ('bin', 'tw', 'twt', 'cons'):
-        # (a construction: its fields in declaration order, X then Y, as written or not)
+        # (a construction written in declaration order, X then Y)
         a, b = (e[2], e[3]) if t == 'bin' else (e[1], e[2])
 
         def ka(va, s1):

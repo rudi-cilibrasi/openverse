@@ -1,4 +1,6 @@
-# An omitted computed default runs before the later field choice.
+# An omitted computed default runs at its field's place: here after the
+# choice, which is written first and so runs at X's place (#724: the fields
+# given are evaluated in the order written), once for each of its values.
 G()<transacts>:int =
     Print("g")
     7
