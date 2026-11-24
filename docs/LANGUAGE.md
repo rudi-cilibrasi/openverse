@@ -2025,8 +2025,14 @@ Main():void =
     or, if none did, from the state the choice was reached in; each value
     runs the body, whose effects stay. A choice whose alternatives are
     values (`X := (set N += 1; 1) | 2`, also inside an expression, a
-    parenthesized one spliced in) is such a choice point. A `for` whose
-    clauses have a call of a function with several values, a choice whose
+    parenthesized one spliced in) is such a choice point, and so is an
+    inlined call of a function whose values are a flat choice (`F(A)` for
+    `F(X:int):int = X | X + 1`), with the code of that function before its
+    choice, a `for` of its own there too: the bodies that inner `for` ran
+    commit nothing of the outer search (#709, #723;
+    `tests/verse/multi_for_self_for_exhausted.verse`). A `for` whose
+    clauses have a call of a function with several values that is taken
+    lazily (a generator of its own), a choice whose
     alternatives have choices of their own, or an `if`, `case` or `or` that
     picks a branch with a choice keeps, for now, the old rule, entirely: an
     alternative whose own clauses (up to the next generator) fail is rolled
@@ -4573,7 +4579,7 @@ Main()<suspends>:void =
 | A choice in an operand of `and` or `or` | not stated (the left of `or` is a failure context, the right is not, §6.2) | `A and B`: `A`'s clauses, then `B`'s, in the context the `and` is in, so `B`'s values for each of `A`'s; `A or B`: `if (T := A) then T else B`, so the left's first success, if it has one, is the only value (the right is not tried when what follows fails), else the right's values, taken by the context the `or` is in (all of them in a `for`), not only its first (#283) |
 | A call of another function with several values in a recursive one's code | not stated (the Verse Calculus: a call is its body) | a choice point of the recursive one, taken with it: when the callee's clauses fail it has no values (#283); in a `for`, which keeps the old rule for now when it takes such a call, what came before the call stays, as at a call of the recursive one itself, not undone as at an inlined call: **the Book is silent** |
 | A `defer:` in a function with several values, or in a block of its code | not stated (ch. 7: it runs when its scope exits) | it runs as each value leaves the scope, after the value is computed and before the code after the call or the block, and at a `return` after the return's value; a call or a block whose clauses fail gives no value and runs none; in a `for`, what it does is part of that value's code, undone with it when a later filter rejects the value, whether the call is inlined or taken lazily (#283): **the Book is silent** |
-| A recursive function with several values whose only calls of itself are in failure contexts of its own code | not stated (the Verse Calculus: a call is its body) | inlined, as a function recursive only through another function that consumes it is (the contexts are functions of their own): where its clauses fail in a `for`'s clauses (which keeps the old rule for now, as any `for` taking a call of a function with several values), what those clauses did since their last generator is undone with them, as for any inlined call, not kept as at a lazily taken call, which is a generator of its own (#283): **the Book is silent** |
+| A recursive function with several values whose only calls of itself are in failure contexts of its own code | not stated (the Verse Calculus: a call is its body) | inlined, as a function recursive only through another function that consumes it is (the contexts are functions of their own): where its clauses fail in a `for`'s clauses, what those clauses did since their last generator is undone with them, as for any inlined call, not kept as at a lazily taken call, which is a generator of its own (#283); when its values are a flat choice the `for` follows the Book's rule (What a `for` undoes, above), so a row that reaches no body is undone whole, with what a `for` over its call of itself did (#723): **the Book is silent** |
 | A clause of a `for` with a choice in it | (the Book has no choice; ch. 7: "Each filter must be failable") | a generator over its values, as a clause that calls a function with several values is: not a filter, so it need not fail (`for (X := 1..2, set N = (1 \| 2))` runs the body for each value); the statements of a function with several values that a `for` takes are the function's, not the `for`'s filters |
 | Precedence of `\|` | (not in the Book) | below `+`, above the comparisons: `X = 1 \| 2` is `X = (1 \| 2)` (#208) |
 | `Sleep(0.0)` | "may resume in the same tick" (ch. 14), "One frame" (ch. 14); the API reference: it always yields; the tested ch. 14 examples (`03`, `05` to `11`): it completes at once, in a `race`, a `sync` and plain code: the Book disagrees with itself ([the rules](research/scheduler-conformance.md#sleep00-yields)) | **Epic's**: it yields, as both of Epic's VMs do (UEFN 43.12, `++Fortnite+Release-43.12-CL-60598086`, `vm-sleep-zero-yields`), and as the API reference says: it waits one tick, the next update; a negative or NaN duration completes at once |
