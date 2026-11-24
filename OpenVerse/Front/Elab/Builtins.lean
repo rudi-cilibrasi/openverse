@@ -425,6 +425,17 @@ def elabBitwise (shift : Bool) (c : BuiltinCall) : EM R := do
   let some s := c.ctx.sig? helper | eerr c.p s!"internal error: the bitwise helper {helper} is missing"
   return ⟨.call s.idx es, .int⟩
 
+/-- (#724) `GetRandomInt(Low, High)` (the Book's Runtime API reference,
+    `/Verse.org/Random`): an int of `[Low, High]`, the bounds in either
+    order, `<transacts>`. openverse is deterministic: the helper
+    `$randomInt`, written in Verse (`Front/Random.lean`), draws from a
+    generator with a fixed seed. -/
+def elabGetRandomInt (c : BuiltinCall) : EM R := do
+  c.noBracket
+  c.checkArity "int"
+  if (c.ctx.sig? "$randomInt").isNone then eerr c.p "internal error: the helper $randomInt is missing"
+  c.elabE c.ctx (.app c.p (.ident c.p "$randomInt") c.args false) c.exp
+
 /-- `Err()`, `Err(Message)`: the program stops with an error; its value is
     of every type. The first place it is called is noted (`errAt`). Its one
     argument, if written, is a string, evaluated before it stops (Book of
@@ -529,6 +540,7 @@ def builtinFunctions : List Builtin := [
   ⟨"BitNot", .exactly 1, elabBitwise false⟩,
   ⟨"BitShiftLeft", .exactly 2, elabBitwise true⟩,
   ⟨"BitShiftRight", .exactly 2, elabBitwise true⟩,
+  ⟨"GetRandomInt", .exactly 2, elabGetRandomInt⟩,
   ⟨"Err", .upToOne, elabErr⟩,
   ⟨"$Show", .exactly 1, elabShow⟩,
   ⟨"$asAnything", .exactly 1, elabAsAnything⟩,

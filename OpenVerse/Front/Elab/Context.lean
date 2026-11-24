@@ -31,6 +31,7 @@ import OpenVerse.Front.SignalAdmission
 import OpenVerse.Front.MetadataFlow
 import OpenVerse.Front.Suspend
 import OpenVerse.Front.Rational
+import OpenVerse.Front.Random
 import OpenVerse.Front.Modules
 import OpenVerse.Front.FnValues
 import OpenVerse.Front.Choice
@@ -993,7 +994,8 @@ def builtins : List String :=
 def softBuiltins : List String :=
   ["Round", "Int", "Sqrt", "Exp", "Ln", "Log", "Pow", "Sin", "Cos", "Tan", "ArcSin", "ArcCos", "ArcTan",
    "IsFinite", "Concatenate", "Sinh", "Cosh", "Tanh", "ArSinh", "ArCosh", "ArTanh", "Lerp", "Clamp", "Sgn",
-   "BitAnd", "BitOr", "BitXor", "BitNot", "BitShiftLeft", "BitShiftRight"]
+   "BitAnd", "BitOr", "BitXor", "BitNot", "BitShiftLeft", "BitShiftRight",
+   "GetRandomInt"]
 
 /-- The type arguments `ts` of the parametric type `n` as its type
     parameters take them: `void` given as a program's type's argument is

@@ -7,6 +7,7 @@ import OpenVerse.Front.BuiltinValues
 import OpenVerse.Front.FinalSuper
 import OpenVerse.Front.CompoundPlaces
 import OpenVerse.Front.Bitwise
+import OpenVerse.Front.Random
 import OpenVerse.Front.Localization
 import OpenVerse.Front.TypeValues
 import OpenVerse.Front.TypeArguments
@@ -234,9 +235,15 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   -- (not `ToDiagnostic`'s: it calls a `diagnosable` object's own method,
   -- which may not converge)
   let helpers := helpers ++ (← if usesDiagnostic then Diagnostic.tops else pure [])
+  -- (#724; nor `GetRandomInt`'s, which is <transacts>: unless the program
+  -- defines the name itself, and then its own is the one it calls)
+  let definesRandom := allTops0r.any fun
+    | .fn _ n .. | .const _ n .. | .classDef _ n .. => n == "GetRandomInt"
+  let usesRandom := (marked randomMarker || (opts.entry.map mentionsRandom).getD false) && !definesRandom
+  let helpers := helpers ++ (← if usesRandom then randomTops else pure [])
   let ignoredArms := ignoredArmsOf allTops0r
   let unmarked := allTops0r.filter fun
-    | .const _ n _ _ _ => ![ratMarker, replaceAllMarker, ignoredArmsMarker, bitwiseMarker, diagnosticMarker].contains n
+    | .const _ n _ _ _ => ![ratMarker, replaceAllMarker, ignoredArmsMarker, bitwiseMarker, diagnosticMarker, randomMarker].contains n
     | _ => true
   -- 4. access levels written out (Book of Verse ch. 12), and the levels of
   --    the definitions and modules; modules (#112): every reference to a

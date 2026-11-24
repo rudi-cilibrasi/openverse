@@ -15,7 +15,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 **Contents**
 
 - The language: [Supported](#supported) · [Source text](#source-text) · [Parametric functions](#parametric-functions) · [Effect contracts](#effect-contracts) · [Function values](#function-values) · [Extension methods](#extension-methods) · [defer](#defer) · [Overloading](#overloading) · [Parametric structs](#parametric-structs) · [Classes](#classes) · [Attributes](#attributes) · [Mutation, macros, tooling](#mutation-macros-tooling) · [Warnings](#warnings) · [Source profiles](#source-profiles) · [Choice](#choice)
-- More types: [any](#any) · [comparable](#comparable) · [Weak maps](#weak-maps) · [Module-scoped variables](#module-scoped-variables) · [Types as values](#types-as-values) · [Equality and the empty value](#equality-and-the-empty-value) · [Refinement types](#refinement-types) · [Type aliases](#type-aliases) · [float](#float) · [Bitwise functions](#bitwise-functions) · [rational](#rational) · [char32](#char32)
+- More types: [any](#any) · [comparable](#comparable) · [Weak maps](#weak-maps) · [Module-scoped variables](#module-scoped-variables) · [Types as values](#types-as-values) · [Equality and the empty value](#equality-and-the-empty-value) · [Refinement types](#refinement-types) · [Type aliases](#type-aliases) · [float](#float) · [Bitwise functions](#bitwise-functions) · [Random numbers, the clock and the player map](#random-numbers-the-clock-and-the-player-map) · [rational](#rational) · [char32](#char32)
 - Programs: [Modules](#modules) · [Access](#access) · [Shadowing](#shadowing) · [Qualified names](#qualified-names) · [Programs of several files](#programs-of-several-files) · [Concurrency](#concurrency)
 - [Readings openverse takes](#readings-openverse-takes) · [Not supported in v1](#not-supported-in-v1)
 
@@ -42,7 +42,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Enums | `name := enum:` / `enum{A, B}`, `name.A`, equality, `case` that needs no `_` when every value is named (an enumerator is its index in Verse Core); `enum<open>` may gain values, so a `case` on one needs `_` or a failure context (`<closed>` is the default); at most 256 values (UEFN 43.12 refuses the 257th, error 3552, "out of byte-range", and admits 256, `followup-book2/enum-wide`, #724) | ch. 9 |
 | Maps | `[k]v` (a comparable key with no array or map in it, through its options, tuples and a struct's fields, but `string`: "neither may serve as a map key", ch. 3), `map{k => v, …}` (a key given twice keeps its last value, at its last position; a key cannot fail, ch. 3: "failure in map literal keys is not implemented"; [the rules](research/book-remaining-rules.md#map-keys-and-a-refinements-range)), `M[k]` (fails on a missing key), `set M[k] = v` (insert or update; in Verse the key's reference is `<decides>`, the Book's API reference, so such a `set`, also as a path's last step, `set S.M[k] = v`, is written in a failure context, as the Book's tests do, `if (set M0[0] = 42)`, `(set Map[I] = I) or Err()`; its last key inserts, so it succeeds; its value is `v`), `set M[k] op= v` (fails on a missing key), `.Length`, `for (V : M)`, `for (K -> V : M)` in insertion order, `ConcatenateMaps(M1, M2)` (exactly two maps, ch. 3: more by chained calls; their pairs laid down in turn, as `map{…}` lays its own: a key both maps have takes the second map's value at the second map's place, the Book's API reference and `ConcatenateMaps.versetest` 21, 33), order-sensitive equality (a map is the array of its pairs in Verse Core); a key of a class above or beside the map's key class reads, looked up at the class above both; `weak_map(k, v)`, a supertype of `[k]v` with entry access only (see [Weak maps](#weak-maps)) | §3, §9.3 |
 | Array methods | (also of a tuple of one element type, which is an array where one is expected: `('a', 'b', 'c').Slice[1]`) `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`, `A.RemoveFirstElement[x]`, `A.Remove[i, j]` (half-open), `A.ReplaceElement[i, x]`, `A.ReplaceFirstElement[x, y]`, `A.Insert[i, B]`, `A.Last[]`, `A.Last[n]` (the element n before the last) (all failable); `A.RemoveAllElements(x)`, `A.ReplaceAllElements(x, y)`, `A.ReplaceAll(Pattern, Replacement)` (contiguous subarrays, left to right, not overlapping; an empty pattern changes nothing), `Concatenate(A, B, …)` or `Concatenate(Arrays)` (#150) (never failing) | §9.1 |
-| Built-ins | `Print(s)`, `ToString(x)` (int, float, char, char32, string; of an int beyond 64 bits, the overflow error: [int](#int)), `Floor[F]`, `Ceil[F]`, `Round[F]`, `Int[F]` (of a float, failable), `Floor(R)`, `Ceil(R)` (of a rational or an int, never failing; `Floor(X / Y)` fails when `Y = 0`, as `X / Y` does), `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Clamp(Val, A, B)` (the median of the three, of ints or of floats, NaN ordering above +Inf), `Sgn(X)` (-1, 0 or 1 of an int or a float, NaN of NaN), `F.IsFinite[]` (as `IsFinite[F]`), `BitAnd(X, Y)`, `BitOr`, `BitXor`, `BitNot(X)`, `BitShiftLeft[X, N]`, `BitShiftRight[X, N]` (see [Bitwise functions](#bitwise-functions)), `Err()` and `Err(Message)` (stops the program; ch. 8: "a runtime error with an optional message", the API reference `Err(Message:string)`: no argument or one string, which is evaluated first); a built-in given another number of arguments than it takes is refused (`Quotient takes two ints, found 3 argument(s)`); the conversions of chars and code points as methods (see [char32](#char32)): `C.ToCodeUnit()`, `C.ToAsciiChar32[]` of a char, `C.ToCodePoint()`, `C.ToAsciiString()` of a char32, `N.ToChar[]`, `N.ToChar32[]` of an int | API reference |
+| Built-ins | `Print(s)`, `ToString(x)` (int, float, char, char32, string; of an int beyond 64 bits, the overflow error: [int](#int)), `Floor[F]`, `Ceil[F]`, `Round[F]`, `Int[F]` (of a float, failable), `Floor(R)`, `Ceil(R)` (of a rational or an int, never failing; `Floor(X / Y)` fails when `Y = 0`, as `X / Y` does), `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Clamp(Val, A, B)` (the median of the three, of ints or of floats, NaN ordering above +Inf), `Sgn(X)` (-1, 0 or 1 of an int or a float, NaN of NaN), `F.IsFinite[]` (as `IsFinite[F]`), `BitAnd(X, Y)`, `BitOr`, `BitXor`, `BitNot(X)`, `BitShiftLeft[X, N]`, `BitShiftRight[X, N]` (see [Bitwise functions](#bitwise-functions)), `GetRandomInt(Low, High)` (deterministic in openverse: see [Random numbers, the clock and the player map](#random-numbers-the-clock-and-the-player-map)), `Err()` and `Err(Message)` (stops the program; ch. 8: "a runtime error with an optional message", the API reference `Err(Message:string)`: no argument or one string, which is evaluated first); a built-in given another number of arguments than it takes is refused (`Quotient takes two ints, found 3 argument(s)`); the conversions of chars and code points as methods (see [char32](#char32)): `C.ToCodeUnit()`, `C.ToAsciiChar32[]` of a char, `C.ToCodePoint()`, `C.ToAsciiString()` of a char32, `N.ToChar[]`, `N.ToChar32[]` of an int | API reference |
 | Modules | `name := module:` (nested), `M.F`, `A.B.F`, the types `M.c` and values `M.c{…}`, `(M:)F`, `using{M}` at file or module scope (a `using` of a path is accepted and ignored, but of `/localhost` and the paths below it, which the Book's tests refuse, "Explicitly using a "/localhost" package is not allowed", `Modules/Using2.versetest` 84-90), `<public>` members (`<internal>` is the default); see [Modules](#modules) | ch. 16 |
 | Access | `<public>`, `<internal>` (the default), `<protected>`, `<private>`, `<scoped{M, …}>` and `S := scoped{…}`, `<epic_internal>`, on modules, their definitions, a class's members and constructor, and `var<w> X<r>:t`; checked where each use is written, and no definition exposes a less visible one; see [Access](#access) | ch. 12 |
 | Attributes | `@deprecated`, `@experimental`, `@available{MinUploadedAtFNVersion := N}`, custom attributes (a class below `attribute` with its scopes `@attribscope_…`, `@c{F := e}` or a constructor's `@f(…)`) before a definition, a member, a struct's field or an enum's value; `@ignore_unreachable` on an expression or a `case` arm: checked where the Book checks them, metadata but `@available`; see [Attributes](#attributes) | ch. 12 |
@@ -3726,6 +3726,46 @@ Main():void =
   takes as many steps as `N` has bits; `BitAnd`, `BitOr` and `BitXor` take
   one step per bit of their operands.
 
+## Random numbers, the clock and the player map
+
+Some functions of Epic's library read the world outside the program: a
+random source, the wall clock, a player's persistent storage. UEFN 43.12
+admits and runs them (the probes named below, #724). openverse is
+deterministic and has none of these, so each has a fixed, documented
+definition, the same in the reference interpreter and the C runtime; **each
+is a difference from Epic's**, which no program that only checks a range,
+an order or a success can see. Each is a soft built-in, as `Clamp` is (a
+program's own function of the name is the one its calls mean), and none is
+supported as a value (`F := GetRandomInt`). A `using` of a `/Verse.org`
+path is accepted and ignored ([Modules](#modules)), so none needs the
+`using` Epic's requires.
+
+```verse
+using { /Verse.org/Random }
+Main():void =
+    Print("{GetRandomInt(1, 6)} {GetRandomInt(6, 1)}")   # 1 5, in every run
+```
+
+- `GetRandomInt(Low:int, High:int)<transacts>:int` (the Book's Runtime API
+  reference, `/Verse.org/Random`: "A uniformly distributed int in [Low,
+  High], both ends included, with the bounds accepted in either order";
+  `followup-refused/get-random-int`). Epic's numbers come from a hardware
+  entropy seed ("There is no seed parameter and no way to replay a
+  sequence"). openverse's come from a generator with a fixed seed, so every
+  run of a program draws the same sequence: Knuth's 64-bit linear
+  congruential generator, `S' = (6364136223846793005·S +
+  1442695040888963407) mod 2^64` from `S = 0`, whose draw is the high 32
+  bits of the new state. A call draws until it has 32 bits more than its
+  range `|High - Low| + 1` needs (one draw for a range below 2^32), reads
+  the draws as one number `R`, the first the most significant, and gives
+  `Min(Low, High) + R mod range` (a bias below 2^-32). `GetRandomInt(3, 3)`
+  is 3 and still draws. The state is the program's, one for all its tasks,
+  written as any `var` is: a failure context that fails undoes its draws,
+  where Epic's draw "is deliberately taken outside the enclosing
+  transaction". It is written in Verse (`Front/Random.lean`): no Verse
+  Core, format or runtime change. In a data member's definition it is
+  refused, as a call that is not `<converges>` (3582). `GetRandomFloat` and
+  `Shuffle` are not supported.
 ## rational
 
 `X / Y` on ints is a `rational`, and fails when `Y = 0` (Book of Verse

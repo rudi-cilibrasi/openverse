@@ -1,12 +1,15 @@
 # Book: Tests/Bugs/FORT-995029-CrashHashingDynamicallyTypedMapKey.versetest
 # 10, 18 (2 cases): GetRandomInt of /Verse.org/Random, with a using of the
 # module. The Book's tests expect them valid.
-# OpenVerse (ce8632ea, Lean) refuses this probe: "unknown function
+# OpenVerse (ce8632ea, Lean) refused this probe: "unknown function
 # 'GetRandomInt'"
-# If UEFN 43.12 admits it, it prints
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# 2026-11-20) admitted it and printed
 #   random 3
-# and OpenVerse has a gap on Verse that Epic ships; if it refuses it, the Book
-# is ahead of the shipped compiler here and OpenVerse's refusal is Epic's.
+# OpenVerse now prints it too (#724, Lean and C): GetRandomInt draws from a
+# generator with a fixed seed, a documented difference from Epic's entropy
+# (docs/LANGUAGE.md, "Random numbers, the clock and the player map";
+# tests/verse/get_random_int).
 using { /Verse.org/Random }
 
 Main():void =
