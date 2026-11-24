@@ -3,13 +3,12 @@
 half equal
 div by zero fails
 lowest terms
-ordered
+unequal
 int is rational
 between
 chain
-not less
 1 2 4
 3
-big ordered
-tiny ordered
+big unequal
+tiny unequal
 exit=0

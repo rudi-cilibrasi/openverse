@@ -22,5 +22,5 @@ Main():void =
     if (R := (Big * 6) / (Big * 4), R = 3 / 2) then Print("reduced {Floor(R)} {Ceil(R)}")
     if (R := 1 / Top, S := R / 2, Floor(S * Big * Top * 2) = Big) then Print("denominator beyond 64 bits")
     if (R := 1 / Top, S := R * R, Floor(1 / S) = Top * Top) then Print("product of denominators")
-    if (R := -Big / 3, R < -Top / 3, Floor(R) = -3074457345618258603) then Print("ordering")
+    if (R := -Big / 3, R <> -Top / 3, Floor(R) = -3074457345618258603) then Print("unequal")
     if (R := Top / 2, S := R + R + 1 / 2, Floor(S) = Top) then Print("sum")

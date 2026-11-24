@@ -1352,9 +1352,17 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
   let rational (op : String) (ta tb : Ty) : Bool :=
     let num (t : Ty) := t == .int || t == .rational
     (ta == .rational || tb == .rational) && (!(op == "=" || op == "<>") || (num ta && num tb))
+  -- (#724) rationals have no ordering: Epic's compiler declares `<`, `<=`,
+  -- `>` and `>=` for ints and for floats only, as the Book's table does
+  -- (ch. 4, Relational Operators), and refuses them of rationals
+  -- (tests/conformance/versevm/differential/rat-ordering)
+  let noRatOrder (op : String) (q : Pos) (ta tb : Ty) : EM Unit := do
+    if !(op == "=" || op == "<>") && (ta == .rational || tb == .rational) then
+      eerr q s!"'{op}' does not order a rational: it compares two ints or two floats, and a rational has only = and <> (found {ta.show} and {tb.show}; compare Floor or Ceil of it, or cross-multiply) (Epic's Verse compiler, UEFN 43.12: error 3509, \"No overload of the function `operator'<'` matches the provided arguments (:rational,:rational)\")"
   match rest with
   | [(op, b)] =>
     let rb ← numeric (← operand b ra.ty)
+    noRatOrder op p ra.ty rb.ty
     if rational op ra.ty rb.ty then
       let ta ← fresh ra.ty
       let tb ← fresh rb.ty
@@ -1391,6 +1399,7 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
       -- (the previous operand, as an array when this one is)
       let prevR ← toOther ⟨.local prev, prevTy⟩ rb.ty
       let tb ← fresh rb.ty
+      noRatOrder op p prevTy rb.ty
       if rational op prevTy rb.ty then
         steps := steps.push (.assign tb rb.e)
         steps := steps.push (← ratTest ctx p op ⟨.local prev, prevTy⟩ ⟨.local tb, rb.ty⟩)
