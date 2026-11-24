@@ -177,6 +177,10 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   -- 0. localized messages written out (`Localization`): `<localizes>`
   --    definitions as the strings of their default text, `Localize` and
   --    `Join` as calls of their helpers
+  -- (#724) a definition whose value is a definition, `X:int = Y:int = 4`,
+  -- written as the two it is (`SExpr.flattenChainedDecls`)
+  let written := written.map STop.flattenChainedDecls
+  let opts := { opts with entry := opts.entry.map (SExpr.mapAll id SExpr.flattenChainedDecls) }
   let (allTops0r, usesLocalization) ← Localization.desugar written
   -- 1. effects and specifiers, and the source profile
   EffectPolicy.check allTops0r opts.entry
