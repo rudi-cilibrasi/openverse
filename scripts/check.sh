@@ -208,6 +208,7 @@ check "waiting consumers in parameter defaults (${FUZZ_MODEL_WAITING_DEFAULTS:-1
 check "float fuzzing (${FUZZ_FLOATS:-200} programs, against Python's doubles)" scripts/fuzz-floats.sh "${FUZZ_FLOATS:-200}" "$seed"
 check "bitwise fuzzing (${FUZZ_BITWISE:-200} programs, against Python's ints)" scripts/fuzz-bitwise.sh "${FUZZ_BITWISE:-200}" "$seed"
 check "ints beyond 64 bits (${FUZZ_BIGINT:-200} programs, against Python's ints)" scripts/fuzz-bigint.sh "${FUZZ_BIGINT:-200}" "$seed"
+check "ints beyond 64 bits, a compound assignment's long value (seed 20776025, #723)" scripts/fuzz-bigint.sh 1 20776025
 check "scalar float math (${FUZZ_FLOAT_MATH:-64} random cases and fixed edges)" \
   bash tests/scripts/test-float-math.sh "${FUZZ_FLOAT_MATH:-64}" "$seed"
 check "scalar float math regression (one-ulp tiny normal, seed 23801198)" \
@@ -220,6 +221,8 @@ check "scheduler model regression (running branch stopped inside Signal, seed 63
   scripts/fuzz-model-sched.sh 1 630059
 check "scheduler running rush arm cancellation (seed 646094)" \
   scripts/fuzz-model-sched.sh 1 646094
+check "scheduler Main ending inside a task's end, its children stopped there (seeds 20776326, 20777477, #723)" \
+  bash -c 'scripts/fuzz-model-sched.sh 1 20776326 && scripts/fuzz-model-sched.sh 1 20777477'
 check "GADT model fuzzing (${FUZZ_MODEL_GADT:-150} programs, against twenty-nine models of the docs)" \
   scripts/fuzz-model-gadt.sh "${FUZZ_MODEL_GADT:-150}" "$seed"
 check "GADT models through type aliases (${FUZZ_MODEL_GADT_ALIASES:-150} programs, their types' names written through aliases)" \

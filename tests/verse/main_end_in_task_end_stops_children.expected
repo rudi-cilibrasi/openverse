@@ -1,0 +1,7 @@
+rush = 1
+work defer
+main end 7
+branch defer
+rush loser defer
+later awaiter got 7
+exit=0
