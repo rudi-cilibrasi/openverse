@@ -872,6 +872,7 @@ its row's note in `followup-refused/expectations.tsv`:
 - `spawn-in-defer`: a `defer:` of a function that cannot suspend may spawn.
 - `definition-in-expression`: a definition whose value is a definition defines both names.
 - `get-random-int`: a generator with a fixed seed ([LANGUAGE.md](../LANGUAGE.md#random-numbers-the-clock-and-the-player-map)).
+- `get-seconds-since-epoch`: a frozen clock (the same section).
 Left unasked (38 cases besides the parse-only ones): custom accessors
 (3; the API reference marks `accessor` `<epic_internal>`), the engine's
 attributes and specifiers (4), a parametric class applied as a value (2),

@@ -87,7 +87,7 @@ a decision of its own.
 |---|---:|---|---|
 | `GetCastableFinalSuperClass`, `…FromType` | 15 | API reference; `<castable>` and `<final_super>` classes | the class specifiers of #11 |
 | `FitsInPlayerMap` | 3 | API reference, persistence: "Succeeds when Value is something a player's persistent map is allowed to hold" | persistence (engine) |
-| `GetSecondsSinceEpoch` | 2 | listed in the API reference's module index; the tests check two calls in one transaction agree and the value is after 2024 | a clock: openverse is deterministic, so a new Core primitive and a stated source of time |
+| `GetSecondsSinceEpoch` | 2 | listed in the API reference's module index; the tests check two calls in one transaction agree and the value is after 2024 | built (#724): openverse is deterministic, so a frozen clock, a documented constant (no Core primitive) |
 | `GetRandomInt` | 2 | API reference, `/Verse.org/Random` (`FORT-995029`) | built (#724): a generator with a fixed seed, written in Verse (no Core primitive) |
 | extension methods `PlusTwo`, `TestParametricExtensionMethod` | 2 | the test runner's, as its `TakeExtension` is (`ExtensionFields.versetest:157`) | not translatable since [extension methods](extension-methods.md) were built |
 

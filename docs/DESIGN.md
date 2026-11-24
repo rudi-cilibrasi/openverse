@@ -2295,6 +2295,10 @@ the clock and the player map") states each as a difference from Epic's.
   state needs no parameter and no module-scoped variable. It is `<transacts>`,
   as Epic's is, and a failure context undoes its draws with its other
   writes.
+- `GetSecondsSinceEpoch()` is a float literal, `<reads>`: a frozen clock.
+  The scheduler's virtual time is a field of the scheduler object, which
+  only code lowered for suspension can reach, so the clock does not follow
+  it.
 ## Ints beyond 64 bits: a fast path and a heap representation
 
 Verse Core's ints are Lean's `Int`, as long as the Verse VM's (2^20 bits,

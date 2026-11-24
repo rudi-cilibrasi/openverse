@@ -995,7 +995,7 @@ def softBuiltins : List String :=
   ["Round", "Int", "Sqrt", "Exp", "Ln", "Log", "Pow", "Sin", "Cos", "Tan", "ArcSin", "ArcCos", "ArcTan",
    "IsFinite", "Concatenate", "Sinh", "Cosh", "Tanh", "ArSinh", "ArCosh", "ArTanh", "Lerp", "Clamp", "Sgn",
    "BitAnd", "BitOr", "BitXor", "BitNot", "BitShiftLeft", "BitShiftRight",
-   "GetRandomInt"]
+   "GetRandomInt", "GetSecondsSinceEpoch"]
 
 /-- The type arguments `ts` of the parametric type `n` as its type
     parameters take them: `void` given as a program's type's argument is

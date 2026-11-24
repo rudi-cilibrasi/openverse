@@ -436,6 +436,21 @@ def elabGetRandomInt (c : BuiltinCall) : EM R := do
   if (c.ctx.sig? "$randomInt").isNone then eerr c.p "internal error: the helper $randomInt is missing"
   c.elabE c.ctx (.app c.p (.ident c.p "$randomInt") c.args false) c.exp
 
+/-- What openverse's clock reads, in seconds since the Unix epoch:
+    2026-11-20T00:00:00Z, the day Epic's answers to the probes of #724
+    were recorded. -/
+def secondsSinceEpoch : Int := 1795132800
+
+/-- (#724) `GetSecondsSinceEpoch()` (the Book's Runtime API reference,
+    `/Verse.org/Verse`; ch. 14, "Time is frozen within a transaction"): a
+    float, `<reads>`. openverse is deterministic and has no wall clock:
+    every call gives `secondsSinceEpoch`, in every run. -/
+def elabGetSecondsSinceEpoch (c : BuiltinCall) : EM R := do
+  c.noBracket
+  c.checkArity "argument"
+  noteFx c.p ["reads"] (some c.name)
+  return ⟨.lit (.float (VFloat.canon (Float.ofInt secondsSinceEpoch))), .float⟩
+
 /-- `Err()`, `Err(Message)`: the program stops with an error; its value is
     of every type. The first place it is called is noted (`errAt`). Its one
     argument, if written, is a string, evaluated before it stops (Book of
@@ -541,6 +556,7 @@ def builtinFunctions : List Builtin := [
   ⟨"BitShiftLeft", .exactly 2, elabBitwise true⟩,
   ⟨"BitShiftRight", .exactly 2, elabBitwise true⟩,
   ⟨"GetRandomInt", .exactly 2, elabGetRandomInt⟩,
+  ⟨"GetSecondsSinceEpoch", .exactly 0, elabGetSecondsSinceEpoch⟩,
   ⟨"Err", .upToOne, elabErr⟩,
   ⟨"$Show", .exactly 1, elabShow⟩,
   ⟨"$asAnything", .exactly 1, elabAsAnything⟩,
