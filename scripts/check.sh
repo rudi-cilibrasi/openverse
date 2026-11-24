@@ -298,6 +298,10 @@ check "generic functions with several values (${FUZZ_MODEL_GENERIC:-150} program
   scripts/fuzz-model-generic.sh "${FUZZ_MODEL_GENERIC:-150}" "$seed"
 check "generic choice regression (omitted named argument in a <decides> wrapper)" \
   scripts/fuzz-model-generic.sh 1 20768200
+check "generic choice regression (a for over a function with a for over itself, no row reaching the body, seed 20781465, #723)" \
+  scripts/fuzz-model-generic.sh 1 20781465
+check "generic choice regression (the inner for's bodies commit nothing of the outer search, seed 20781534, #723)" \
+  scripts/fuzz-model-generic.sh 1 20781534
 check "concurrency fuzzing (${FUZZ_CONC:-160} programs)" scripts/fuzz-conc.sh "${FUZZ_CONC:-160}" "$seed"
 check "polymorphic-recursion concurrency fuzzing (${FUZZ_CONC_POLY:-60} programs, #244)" \
   scripts/fuzz-conc-poly.sh "${FUZZ_CONC_POLY:-60}" "$seed"

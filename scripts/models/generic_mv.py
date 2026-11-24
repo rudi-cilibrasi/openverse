@@ -545,8 +545,10 @@ d{n}({child_tps}) := class({parent}):{extra_field}
             return {'plain'}
         if self.kind == 'INest':
             return self.helper.for_kinds() | {'choice'}
-        if self.kind in ('I2', 'I3', 'IArr', 'IFx', 'IFx2', 'I2i',
+        if self.kind in ('I2', 'I3', 'IArr', 'IFx', 'IFx2', 'I2i', 'LNf',
                          'IW', 'IWArr', 'IWOpt', 'IWPair'):
+            # (LNf, #723: inlined, the for over its call of itself a statement before
+            # its flat choice, so the header it leaves is as flat as I2's)
             return {'choice'}
         # A selected branch or a lazy call retains its own boundary.
         return {'call'}
@@ -808,6 +810,10 @@ class Machine:
                 del self.out[snap:]
         finally:
             self.book.pop()
+            # (the bodies this for ran are its own: a for inside a clause of an outer
+            # search, LNf's in the function a for calls, commits nothing of that search,
+            # whose row is undone with it when it reaches no body, #723)
+            self.commits = commits
 
 # ---------------------------------------------------------------- the program
 class Gen:
