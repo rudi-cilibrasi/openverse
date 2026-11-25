@@ -1,0 +1,45 @@
+advance 3 3 1000 2
+cleanup 3 3 1010
+advance 3 3 2010 1
+cleanup 3 3 2020
+advance 3 3 3020 0
+cleanup 3 3 3030
+cleanup 1 1 3040
+cleanup 1 1 3050
+cleanup 1 1 3060
+all 1
+cleanup 1 1 3070
+all 1001
+cleanup 1 101 3080
+all 101
+cleanup 1 101 3090
+all 1101
+advance 3 103 3090 2
+cleanup 3 103 3100
+advance 3 3 4100 1
+cleanup 3 3 4110
+advance 3 3 5110 0
+cleanup 3 3 5120
+cleanup 1 1 5130
+cleanup 1 1 5140
+cleanup 1 1 5150
+all 1
+cleanup 1 1 5160
+all 1001
+cleanup 1 101 5170
+all 101
+cleanup 1 101 5180
+all 1101
+state 5180
+advance 3 3 1000 2
+cleanup 3 3 1010
+advance 3 3 2010 1
+cleanup 3 3 2020
+advance 3 3 3020 0
+cleanup 3 3 3030
+cleanup 1 1 3040
+cleanup 1 1 3050
+cleanup 1 101 3060
+first 101
+state 3060
+exit=0

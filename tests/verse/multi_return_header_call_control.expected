@@ -1,0 +1,144 @@
+advance 3 3 0
+cleanup 3 3 10
+advance 0 0 11
+cleanup 0 0 21
+cleanup 1 1 31
+composed 1
+cleanup 1 1 41
+composed 1001
+cleanup 1 101 51
+composed 101
+cleanup 1 101 61
+composed 1101
+advance 0 100 61
+cleanup 0 100 71
+cleanup 1 1 81
+composed 1
+cleanup 1 1 91
+composed 1001
+cleanup 1 101 101
+composed 101
+cleanup 1 101 111
+composed 1101
+advance 3 103 111
+cleanup 3 103 121
+advance 0 0 122
+cleanup 0 0 132
+cleanup 1 1 142
+composed 1
+cleanup 1 1 152
+composed 1001
+cleanup 1 101 162
+composed 101
+cleanup 1 101 172
+composed 1101
+advance 0 100 172
+cleanup 0 100 182
+cleanup 1 1 192
+composed 1
+cleanup 1 1 202
+composed 1001
+cleanup 1 101 212
+composed 101
+cleanup 1 101 222
+composed 1101
+state 222
+advance 3 3 1000
+cleanup 3 3 1010
+advance 0 0 1011
+cleanup 0 0 1021
+cleanup 1 1 1031
+then 1
+cleanup 1 1 1041
+then 1001
+cleanup 1 101 1051
+then 101
+cleanup 1 101 1061
+then 1101
+advance 0 100 1061
+cleanup 0 100 1071
+cleanup 1 1 1081
+then 1
+cleanup 1 1 1091
+then 1001
+cleanup 1 101 1101
+then 101
+cleanup 1 101 1111
+then 1101
+advance 3 103 1111
+cleanup 3 103 1121
+advance 0 0 1122
+cleanup 0 0 1132
+cleanup 1 1 1142
+then 1
+cleanup 1 1 1152
+then 1001
+cleanup 1 101 1162
+then 101
+cleanup 1 101 1172
+then 1101
+advance 0 100 1172
+cleanup 0 100 1182
+cleanup 1 1 1192
+then 1
+cleanup 1 1 1202
+then 1001
+cleanup 1 101 1212
+then 101
+cleanup 1 101 1222
+then 1101
+state 1222
+advance 4 4 0
+cleanup 4 4 10
+advance 0 0 11
+cleanup 0 0 21
+cleanup 1 1 31
+else 1
+cleanup 1 1 41
+else 1001
+cleanup 1 101 51
+else 101
+cleanup 1 101 61
+else 1101
+advance 0 100 61
+cleanup 0 100 71
+cleanup 1 1 81
+else 1
+cleanup 1 1 91
+else 1001
+cleanup 1 101 101
+else 101
+cleanup 1 101 111
+else 1101
+advance 4 104 111
+cleanup 4 104 121
+advance 0 0 122
+cleanup 0 0 132
+cleanup 1 1 142
+else 1
+cleanup 1 1 152
+else 1001
+cleanup 1 101 162
+else 101
+cleanup 1 101 172
+else 1101
+advance 0 100 172
+cleanup 0 100 182
+cleanup 1 1 192
+else 1
+cleanup 1 1 202
+else 1001
+cleanup 1 101 212
+else 101
+cleanup 1 101 222
+else 1101
+state 222
+advance 3 3 1000
+cleanup 3 3 1010
+advance 0 0 1011
+cleanup 0 0 1021
+cleanup 1 101 1031
+first 101
+state 1031
+reject 0
+exit=0

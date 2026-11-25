@@ -641,7 +641,14 @@ branches. Type notes keep their lexical keys through refinement copies.
 A refining conditional stores the selected branch's cursor and proof
 captures in a generated object. Its public interface returns the visible
 row and the next cursor. Each resume reads the selected branch's saved
-captures without replaying the condition. The metadata checker tracks
+captures without replaying the condition. A header that calls a function
+with several values steps in a function of its own (#754): the body
+helper's choice machine would otherwise lift the call out of the header,
+leaving a cursor of another layout than the header's probe recorded. When
+such a call reaches the loop's own function, that call's frame holds a
+cursor of this header and the cursor holds the frame. The same kind of
+generated object then owns the whole header's cursor, and its class names
+the type that would not otherwise close. The metadata checker tracks
 immutable choice-frame fields through calls. It interprets the stacks of
 pending frames that a body builds only when the ordinary summary refuses
 the program, and only in bodies that start no concurrent work: the second

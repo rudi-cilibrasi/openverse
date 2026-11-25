@@ -2666,6 +2666,11 @@ Main():void =
   header with a type-refining condition can also resume when the selected
   alternatives produce a row type visible outside the branch. Its branch
   bindings and refined types remain available while that branch resumes.
+  A header clause can call a function with several values, also inside
+  an alternative of a conditional. That function can be the loop's own,
+  directly or through other functions, in a generic function too: each
+  recursive call then steps a header of its own. Its values are rows
+  like any others, so a reached return skips the ones it has left.
 
   A second type-refining conditional in the same header, such a header
   on a loop inside another loop, mutable implicit proof

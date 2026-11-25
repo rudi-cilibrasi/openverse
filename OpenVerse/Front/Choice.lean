@@ -1471,6 +1471,7 @@ partial def checkBody : SExpr → SExpr :=
     -- The cursor elaborator prepares the header itself. Scalarizing its
     -- choices here would change the saved frame's layout.
     | e@(.app _ (.ident _ "$forCursorNext") _ false)
+      | e@(.app _ (.ident _ "$forOwnedCursorNext") _ false)
       | e@(.app _ (.ident _ "$forNestedCursorNext") _ false)
       | e@(.app _ (.ident _ "$noteForCursor") _ false) => some e
     | .app p (.ident _ "$methodMiss") [] false => some (.app p (.ident p "Err") [] false)
@@ -4273,9 +4274,11 @@ private inductive ReturnLoopSource where
   | cursor (clauses : List SExpr) (outputs : List String) (recursive : List String)
   | loop
 
+/-- The step of a resumable header. An `owned` one keeps its cursor in a
+    generated object, so the packet's type does not spell the cursor's. -/
 private def forCursorNext (p : Pos) (clauses : List SExpr) (outputs : List String)
-    (prior : SExpr) : SExpr :=
-  .app p (.ident p "$forCursorNext")
+    (prior : SExpr) (owned : Bool := false) : SExpr :=
+  .app p (.ident p (if owned then "$forOwnedCursorNext" else "$forCursorNext"))
     [.block p clauses, .block p (outputs.map (SExpr.ident p)), prior] false
 
 private def cursorHeaderCells (clauses : List SExpr) : List String :=
@@ -4294,6 +4297,15 @@ private structure ReturnLoopSite where
   body : SExpr
   captures : List LoopCapture
   boxed : List String
+  /-- The header calls a function with several values. The body helper's
+      choice machine would lift that call out of the header and so change
+      the cursor that the header's probe recorded: the header steps in a
+      function of its own. -/
+  isolated : Bool := false
+  /-- A call in the header reaches the loop's own function. That call's
+      frame then holds this loop's cursor, and the cursor holds the frame:
+      a generated object owns the cursor, and its class names the type. -/
+  owned : Bool := false
 
 private def loopSiteKey (owner : String) (p : Pos) : String :=
   s!"$loopReturn:{sitePart owner}:{p.file}:{p.line}:{p.col}/"
@@ -4669,7 +4681,7 @@ private partial def noteReturnLoops (owner : String) (ret : STy) (parameters : L
           | .cursor clauses outputs _ =>
             let p := e.pos
             [.app p (.ident p "$noteForCursor") [.str p [.text (site.key ++ "$cursor")],
-              forCursorNext p (boxCursorHeader clauses) outputs (.ident p "false")] false]
+              forCursorNext p (boxCursorHeader clauses) outputs (.ident p "false") site.owned] false]
           | _ => []
         return .block e.pos ([note e.pos site.key
           (.app e.pos (.ident e.pos "$captureEvidence") [] false :: site.captures.map (fun binding => .ident e.pos binding.name) ++
@@ -4881,13 +4893,13 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
     -- The recursive header has its own continuation. A scalar call keeps
     -- its search out of the body helper's choice machine.
     let views := cursorPacket.toList.flatMap STy.names |>.filterMap (refinedCursorView? p)
-    let isolate := !views.isEmpty || match site.source with
+    let isolate := !views.isEmpty || site.isolated || site.owned || match site.source with
       | .cursor _ _ recursive => !recursive.isEmpty
       | _ => false
     let advance := match site.source, cursorPacket with
       | .cursor clauses outputs _, some ty@(.opt (.tup [prior, _])) =>
         if isolate then
-          let body := forCursorNext p (prepareHeader clauses) outputs (.ident p cursorInput)
+          let body := forCursorNext p (prepareHeader clauses) outputs (.ident p cursorInput) site.owned
           [STop.fn p advanceName ({ name := cursorInput, ty := .opt prior } :: caps) tparams f.fx ty body]
         else []
       | _, _ => []
@@ -5223,7 +5235,15 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
   let loopTargets := rawMfs.filterMap fun (owner, original) =>
     if !hasReturningLoop original.body then none else
     let f : MFn := { original with body := alphaReturnLoopLocals owner original.body }
-    let sites := returnLoopSites owner f mv recursiveProducer
+    let sites := (returnLoopSites owner f mv recursiveProducer).map fun site =>
+      match site.source with
+      | .cursor clauses _ _ =>
+        let called := (clauses.flatMap namesUsed).filter mv.contains |>.eraseDups
+        { site with
+          isolated := !called.isEmpty
+          owned := called.any fun name =>
+            name == owner || (reachableFunctions rawCalls name).contains owner }
+      | _ => site
     let sites := if sites.any (fun site => match site.source with | .cursor .. => true | _ => false) then
       let selected := choiceReturnLoopSites owner { f with body := moveTerminalLoopChoices mv f.body } mv
       sites.filter fun site => match site.source with
