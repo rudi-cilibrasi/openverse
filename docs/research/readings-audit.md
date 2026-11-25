@@ -52,7 +52,7 @@ Verdicts:
 | `ToString` of a float | the shortest round-trip decimal | `02_primitives.md:858`: `# Both produce: "Age: 25, Score: 98.5"`; the API (line 4555, `ToString(Val:float)`): "Fixed point with exactly six digits after the decimal point, always" | `Intrinsics/FloatToString.versetest` 15-24: `"1.000000"`, `"1234567890123456.000000"`, 1e100 in full | **contradicts** the API and the tests (the ch. 2 example dissents, owner list); needs the C runtime and Core's formatter: designed here, **changed** in `feat/core-book-primitives` ([below](#tostring-of-a-float)) |
 | `NaN < X` | fails; `NaN = NaN` succeeds | `01_expressions.md:124-126`: `not (Nan < 1.0)`, `Nan = Nan  # But equality succeeds`; `02_primitives.md:378-379` | `Operators/CompareFloat.versetest:57, 58` | **agrees**; the row's "not stated" corrected |
 | `=` between different types, `false` as a map, `X?` of a logic, `true` as a type | #600's | ch. 2 and ch. 4, as the rows quote | as the rows quote | #600's (equality and the empty value), not changed here; `false` as a map is on the owner's page already |
-| Ordering of rationals | exact; an int compares with a rational | `04_operators.md:318-321` and the API declare `<` … for `int` and `float` only | none order rationals (`CompareRational.versetest` 5, 11 test `=`) | **Book silent** (the Book declares no ordering of rationals; no test refuses one): keep |
+| Ordering of rationals | exact; an int compares with a rational | `04_operators.md:318-321` and the API declare `<` … for `int` and `float` only | none order rationals (`CompareRational.versetest` 5, 11 test `=`) | **Book silent** (the Book declares no ordering of rationals; no test refuses one): kept then; Epic's compiler refuses it (UEFN 43.12, 3509, `differential/rat-ordering`), so openverse now refuses it too (#724) |
 | Order of a choice's values | spatial | no choice `\|` in the chapters; `07_control.md:711-716`: nested generators give the cartesian product, leftmost outermost | `Operators/BinaryOps.versetest:3`: `a\|b` is a syntax error (3101, the code of syntax not yet supported) | **Book silent**: choice is an openverse feature from the Verse Calculus; keep |
 | Code before a choice | runs once; alternatives rolled back in `if`/`first{}`; in a `for` only an alternative's own clauses | `08_failure.md:147`: "changes … are provisional—they only become permanent if the entire context succeeds"; `07_control.md:196-198` | none with a choice; for a `for` without one see [what a `for` undoes](#what-a-for-undoes) | **Book silent** on choice; the `for` part follows the rollback reading below: a choice is one more choice point of the `for`'s search, so in a `for` too an alternative none of whose values reaches the body is undone (implemented for flat prepared clauses, including inlined and computed producers. Composed or exclusive choices and retained producer boundaries still use the older lowering.) |
 | A choice in an operand of `and` or `or` | `A`'s clauses then `B`'s; `if (T := A) then T else B` | `08_failure.md:216-218`: `or` "tries each option in order, stopping at the first success" | none with a choice | **Book silent** |
@@ -81,7 +81,7 @@ The readings outside the table that the survey names:
 | Rollback of a `for` iteration | a source's or a range bound's effects kept when later clauses fail | `08_failure.md:92`: "The `for` expression creates a failure context for each iteration of the domain clause"; `:147` (provisional changes) | `FlowControl/for.versetest` 344, 362, 371, 392; `Range.versetest` 140, 159; `SoftwareTransactionalMemory.versetest` 88 (74 and 81 moved with the range bound) | **contradicts**, deeply load-bearing: **changed** for the `for`s of the Book's forms and of choices of values; designed for the rest ([below](#what-a-for-undoes)) |
 | Commas and semicolons in blocks | `,` separates a block's statements like `;` | `01_expressions.md:1048`: "Commas within parentheses create *tuples*"; `:1153-1156`: `option{1, 2}?` is `(1, 2)`; `:1119-1129`: in a block "semicolons and commas are interchangeable as separators between definitions" | `SemicolonsVsCommas.versetest` 70 (`Value :=` then `1, 2, 3` is `(1,2,3)`), 95 (`{3,X}`), 100 (`option{1,2}`); `Option.versetest:44`; `for.versetest:293`; 22 parser cases (`TimSyntax.versetest:224` `"1,2"`, …) | **contradicts**: **changed** ([below](#commas-in-blocks)) |
 | What the Book calls warnings | code after `return`/`break`, `_` after a closed enum's every value, `return 3` in a `:void` function: accepted silently | `09_structs_enums.md:297-318`, `:411` ("⚠ Warning - unreachable wildcard"), `07_control.md:423-435` ("you'll get a warning") | `assert_semantic_error(2000)` (`Reachability.versetest` 5, 11, 23 "Treat unreachable expressions after break as warning not error"), 2302 (`Enum.versetest:356`), 2002 (`Return.versetest:179`, "produces a warning"): the runner counts a warning as a diagnostic | **contradicts** (a diagnostic the Book gives and openverse did not): **changed**, with the warning channel ([below](#warnings)) |
-| `break` in a `for` body | refused ("only inside loop (not for)") | `07_control.md:764`: "The `break` statement cannot exit `for` loops early" | `SOL-4199-BreakFromIf.versetest:38-48`: "`break` in a `for` body is allowed and breaks the surrounding `loop`" | **the Book disagrees with itself** (owner list); not changed |
+| `break` in a `for` body | refused ("only inside loop (not for)") | `07_control.md:764`: "The `break` statement cannot exit `for` loops early" | `SOL-4199-BreakFromIf.versetest:38-48`: "`break` in a `for` body is allowed and breaks the surrounding `loop`" | **the Book disagrees with itself**; since #724 the tests' reading, which UEFN 43.12 takes (`followup-refused/break-in-for-in-loop`): allowed in a `for` inside a `loop` |
 
 ## The changes
 
@@ -466,8 +466,10 @@ marked with `<decides>` create a failure context for their entire body").
   `for`'s body is where the Book disagrees with itself ([For the
   owner](#break-in-a-for-body)): the tests allow it (`:38-48`), the prose
   refuses it; the failure-context rule does not refuse it (a `for`'s body is
-  no failure context), and openverse keeps its own refusal ("break is only
-  allowed inside loop (not for)").
+  no failure context), and openverse kept its own refusal ("break is only
+  allowed inside loop (not for)") until #724; it now takes the tests'
+  reading, as Epic's compiler does: the `break` leaves the `loop` around
+  the `for`.
 - Not this rule: 3534, a `return` as a strict subexpression of the value a
   function returns, explicitly or implicitly (`Return.versetest:110-133`,
   `F(X:int):int=X+(return 0)`): openverse accepts those still (with a
@@ -803,7 +805,8 @@ page](https://github.com/rudi-cilibrasi/openverse/wiki/Where-the-Book-disagrees-
 
 - **Prose** (`07_control.md:764`): "The `break` statement cannot exit `for` loops early."
 - **Tests:** `Bugs/SOL-4199-BreakFromIf.versetest:38-48`: "`break` in a `for` body is allowed and breaks the surrounding `loop`", which leaves the `for` too.
-- **openverse today:** refuses a `break` in a `for` body ("break is only allowed inside loop (not for)").
+- **Epic's compiler** (UEFN 43.12, build ++Fortnite+Release-43.12-CL-60598086, Verse VM, 2026-11-20): admits it and leaves the loop (`followup-refused/break-in-for-in-loop` prints `count 1`).
+- **openverse today:** the tests' and Epic's (#724): a `break` in the body of a `for` inside a `loop` leaves that loop; a `for` in no `loop` has nothing to leave, and its `break` is refused ("break is only allowed inside loop (not for: …)").
 
 ### `break` as part of an expression
 

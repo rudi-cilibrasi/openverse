@@ -1790,7 +1790,12 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       let notRun : List Expr := [.assign 5 (.heap (.get curTaskF) [sch]),
         .heap (.set curTaskF) [sch, .heap (.get mainTaskF) [sch]],
         .heap (.set rootRunIdx[j]!) [.local 0, Suspend.int 1]] ++
-        inScopeW (some (.heap (.get mainScopeF) [sch])) [.assign 2 (.call mainSig.idx [.local 0, sch])] ++ [
+        -- (#723: `Main` ended in this `Signal`: its children are stopped
+        -- here, as a task's are when it ends, before the awaiters after it
+        -- in the `Signal` go on; `$Run`'s stop then finds none)
+        inScopeW (some (.heap (.get mainScopeF) [sch])) ([.assign 2 (.call mainSig.idx [.local 0, sch])] ++
+          (if scopes then [.ite (.prim .eq [.local 2, Suspend.int 1])
+            (.seq (.call stopScopeMark [sch, .heap (.get mainScopeF) [sch]]) Suspend.vd) Suspend.vd] else [])) ++ [
         .heap (.set rootRunIdx[j]!) [.local 0, Suspend.int 0],
         .heap (.set curTaskF) [sch, .local 5]] ++
         (if leafy then [.heap (.set topIdx[j]!) [.local 0, sch]] else []) ++ forget sch ++ [

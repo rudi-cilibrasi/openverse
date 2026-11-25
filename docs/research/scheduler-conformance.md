@@ -591,8 +591,10 @@ root's `start`, which links the root and runs it to its first wait; in a
 context that fails, the link and the run are undone with it, so the task
 never runs again (`LiveVariables.versetest:450-545`). In a suspends
 function, a `spawn` in a condition or filter is started in place (it is
-not a suspension point). A `spawn` in a `defer:` stays refused (a
-separate rule), as do a spawned call whose arguments suspend and the
+not a suspension point). A `spawn` in a `defer:` of a `<suspends>`
+function stays refused (a separate rule; a defer of a function that cannot
+suspend may spawn since #724, as UEFN 43.12 has it,
+`followup-refused/spawn-in-defer`), as do a spawned call whose arguments suspend and the
 `bp_vm_only` refusal of `SoftwareTransactionalMemory.versetest:503-508`
 (the older VM's).
 

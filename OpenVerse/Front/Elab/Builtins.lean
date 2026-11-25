@@ -182,8 +182,15 @@ partial def elabConcatenateMaps (c : BuiltinCall) : EM R := do
       pure found
   let mut rs : Array R := #[]
   let mut jt? : Option Ty := none
+  -- (#724) with no map type expected, a map that is not of the first one's
+  -- type is typed alone, and the maps' key types are joined (`keyJoined`)
+  let inferred := match exp with | some (.map ..) => false | _ => true
   for a in args do
-    let r ← elabE ctx a mapExp
+    let stA ← get
+    let r ← tryCatch (elabE ctx a mapExp) fun err => do
+      if !inferred || jt?.isNone then throw err
+      set stA
+      tryCatch (elabE ctx a none) (fun _ => throw err)
     let r ← elabContainerReceiverWith elabE ctx a.pos r (fun | .map .. => true | _ => false) "ConcatenateMaps"
     if let .weakMap .. := r.ty then
       eerr a.pos s!"ConcatenateMaps takes maps, and a weak_map is not one (Book of Verse ch. 3: \"you cannot use `ConcatenateMaps`\"): {r.ty.show}"
@@ -191,10 +198,30 @@ partial def elabConcatenateMaps (c : BuiltinCall) : EM R := do
     match jt? with
     | none => jt? := some r.ty
     | some j =>
-      let j' ← tryCatch (join a.pos j r.ty mapExp) (fun _ =>
-        match SubtypeEvidence.joinView? ctx.types ctx.evidenceTypes [j, r.ty] mapExp with
+      -- (#724) maps keyed by different types: a map keyed by the join of
+      -- the two, a class or interface above both or `comparable`
+      -- (`mapKeyJoin`), its values' type their join, at `comparable` or
+      -- `any` when they have nothing else in common (the Book of Verse's
+      -- tests, `ConcatenateMaps.versetest` 44, 67: "Concatenating two maps
+      -- should result in a map with a key type and value type that are
+      -- joins of the input key types and value types"). Each map is
+      -- converted to it, so a key is looked up as a key of the joined type.
+      let keyJoined : Option Ty := match inferred, j, r.ty with
+        | true, .map k x, .map k' y =>
+          if k == k' || j.hasNever || r.ty.hasNever then none else
+          let env := ctx.types
+          (mapKeyJoin env k k' true).bind fun kj =>
+            let vj := if x == y then some x else match joinTy env x y none true with
+              | some v => some v
+              | none => if ambiguousJoin env x y then none else some (fallbackJoin env x y)
+            vj.map (Ty.map kj)
+        | _, _, _ => none
+      let j' ← match keyJoined with
         | some target => pure target
-        | none => eerr a.pos s!"ConcatenateMaps takes maps of one type, not {j.show} and {r.ty.show}")
+        | none => tryCatch (join a.pos j r.ty mapExp) (fun _ =>
+          match SubtypeEvidence.joinView? ctx.types ctx.evidenceTypes [j, r.ty] mapExp with
+          | some target => pure target
+          | none => eerr a.pos s!"ConcatenateMaps takes maps of one type, not {j.show} and {r.ty.show}")
       jt? := some j'
     rs := rs.push r
   let some jt := jt? | eerr p "ConcatenateMaps takes at least one map"
@@ -366,7 +393,7 @@ def elabMinMax (isMin : Bool) (c : BuiltinCall) : EM R := do
 
 /-- `Clamp(Val, A, B)` and `Sgn(X)` (the Book's Runtime API and Epic's):
     `Clamp`, the median of the three, so the order of `A` and `B` does not
-    matter, of ints or of floats, among which NaN orders above +Inf; `Sgn`,
+    matter, of ints or of floats, NaN when any of the floats is (#724); `Sgn`,
     -1, 0 or 1 of an int or a float, NaN of NaN; each argument evaluated
     once, in order, the first deciding whether the call is of floats. -/
 def elabClampOrSgn (c : BuiltinCall) : EM R := do
@@ -397,17 +424,19 @@ def elabClampOrSgn (c : BuiltinCall) : EM R := do
     let rb := widenR ctx.types (← elabE ctx b (some t))
     let tc ← fresh t
     let eb ← operand b rb
-    -- `X ≤ Y`, NaN above every float: X ≤ Y (Verse Core's `fle`, which
-    -- holds of a NaN and itself), or Y is NaN (not ≤ +Inf)
-    let le (x y : Nat) : Expr :=
-      if isF then .ite (p2 .fle (.local x) (.local y)) (.local x)
-        (.ite (p2 .fle (.local y) (.lit (.float 0x7FF0000000000000))) (.prim .fail []) (.local x))
-      else p2 .le (.local x) (.local y)
+    let le (x y : Nat) : Expr := p2 (if isF then .fle else .le) (.local x) (.local y)
     let (lo, hi, m) := (← fresh t, ← fresh t, ← fresh t)
     let pick (cond : Expr) (x y : Nat) : Expr := .ite cond (.local x) (.local y)
-    return ⟨.seq (.assign ta ea) (.seq (.assign tb ea') (.seq (.assign tc eb)
-      (.seq (.assign lo (pick (le tb tc) tb tc)) (.seq (.assign hi (pick (le tb tc) tc tb))
-      (.seq (.assign m (pick (le ta hi) ta hi)) (pick (le lo m) m lo)))))), t⟩
+    let median : Expr := .seq (.assign lo (pick (le tb tc) tb tc)) (.seq (.assign hi (pick (le tb tc) tc tb))
+      (.seq (.assign m (pick (le ta hi) ta hi)) (pick (le lo m) m lo)))
+    -- (#724) of floats, NaN when any of the three is, as on Epic's Verse VM
+    -- (differential/float-clamp-nan, float-minmax-nan): `fmax` is NaN when
+    -- either operand is, and only a NaN is not ≤ +Inf
+    let result ← if !isF then pure median else do
+      let n ← fresh t
+      pure (.seq (.assign n (p2 .fmax (p2 .fmax (.local ta) (.local tb)) (.local tc)))
+        (.ite (p2 .fle (.local n) (.lit (.float 0x7FF0000000000000))) median (.local n)))
+    return ⟨.seq (.assign ta ea) (.seq (.assign tb ea') (.seq (.assign tc eb) result)), t⟩
   | _, _ => c.wrongArity "argument"
 
 /-- A bitwise function (the Book's ch. 4 and API): of ints, as two's
@@ -424,6 +453,49 @@ def elabBitwise (shift : Bool) (c : BuiltinCall) : EM R := do
   let helper := "$bit" ++ (c.name.drop 3).toString
   let some s := c.ctx.sig? helper | eerr c.p s!"internal error: the bitwise helper {helper} is missing"
   return ⟨.call s.idx es, .int⟩
+
+/-- (#724) `GetRandomInt(Low, High)` (the Book's Runtime API reference,
+    `/Verse.org/Random`): an int of `[Low, High]`, the bounds in either
+    order, `<transacts>`. openverse is deterministic: the helper
+    `$randomInt`, written in Verse (`Front/Random.lean`), draws from a
+    generator with a fixed seed. -/
+def elabGetRandomInt (c : BuiltinCall) : EM R := do
+  c.noBracket
+  c.checkArity "int"
+  if (c.ctx.sig? "$randomInt").isNone then eerr c.p "internal error: the helper $randomInt is missing"
+  c.elabE c.ctx (.app c.p (.ident c.p "$randomInt") c.args false) c.exp
+
+/-- What openverse's clock reads, in seconds since the Unix epoch:
+    2026-11-20T00:00:00Z, the day Epic's answers to the probes of #724
+    were recorded. -/
+def secondsSinceEpoch : Int := 1795132800
+
+/-- (#724) `GetSecondsSinceEpoch()` (the Book's Runtime API reference,
+    `/Verse.org/Verse`; ch. 14, "Time is frozen within a transaction"): a
+    float, `<reads>`. openverse is deterministic and has no wall clock:
+    every call gives `secondsSinceEpoch`, in every run. -/
+def elabGetSecondsSinceEpoch (c : BuiltinCall) : EM R := do
+  c.noBracket
+  c.checkArity "argument"
+  noteFx c.p ["reads"] (some c.name)
+  return ⟨.lit (.float (VFloat.canon (Float.ofInt secondsSinceEpoch))), .float⟩
+
+/-- (#724) `FitsInPlayerMap[Value]` (the Book's Runtime API reference:
+    `FitsInPlayerMap(Value:t where t:subtype(persistable))<converges><reads><decides>:t`,
+    "Succeeds when Value is something a player's persistent map is allowed
+    to hold, and produces the value unchanged when it does"): the value, of
+    a type that persists (`TyEnv.persists`). openverse has no limit on what
+    a player's map holds, so it always succeeds, as Epic's Verse VM does of
+    an int (UEFN 43.12, followup-refused/fits-in-player-map). -/
+def elabFitsInPlayerMap (c : BuiltinCall) : EM R := do
+  c.needBracket
+  let [a] := c.args | c.wrongArity "argument"
+  let r ← c.elabE c.ctx a c.exp
+  if !c.ctx.types.persists r.ty then
+    eerr a.pos s!"FitsInPlayerMap takes a value of a persistable type, and {r.ty.show} is not (Book of Verse ch. 17; the API reference: Value:t where t:subtype(persistable))"
+  noteFx c.p ["reads"] (some c.name)
+  -- (it can fail, as a failure context's checks ask of its code; it never does)
+  return ⟨.seq (.prim .query [.lit (.logic true)]) r.e, r.ty⟩
 
 /-- `Err()`, `Err(Message)`: the program stops with an error; its value is
     of every type. The first place it is called is noted (`errAt`). Its one
@@ -529,6 +601,9 @@ def builtinFunctions : List Builtin := [
   ⟨"BitNot", .exactly 1, elabBitwise false⟩,
   ⟨"BitShiftLeft", .exactly 2, elabBitwise true⟩,
   ⟨"BitShiftRight", .exactly 2, elabBitwise true⟩,
+  ⟨"GetRandomInt", .exactly 2, elabGetRandomInt⟩,
+  ⟨"GetSecondsSinceEpoch", .exactly 0, elabGetSecondsSinceEpoch⟩,
+  ⟨"FitsInPlayerMap", .exactly 1, elabFitsInPlayerMap⟩,
   ⟨"Err", .upToOne, elabErr⟩,
   ⟨"$Show", .exactly 1, elabShow⟩,
   ⟨"$asAnything", .exactly 1, elabAsAnything⟩,

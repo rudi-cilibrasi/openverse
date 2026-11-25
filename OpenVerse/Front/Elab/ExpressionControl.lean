@@ -516,8 +516,13 @@ partial def elabExprControlWith
     return ⟨code, .void⟩
   | .brk p =>
     if !ctx.inLoop then
+      -- (#724: a break in a for's body leaves the loop around the for, as
+      -- the Book's tests have it, SOL-4199-BreakFromIf.versetest:39, and
+      -- Epic's compiler, UEFN 43.12, followup-refused/break-in-for-in-loop;
+      -- `inLoop` is the for's, `elabForWith`'s `bodyCtx`; not where the
+      -- for's body is code of its own, behind a wait or a choice's values)
       eerr p (if ctx.inDefer then "break is only allowed inside loop (not for), and cannot leave a defer: block"
-              else "break is only allowed inside loop (not for)")
+              else "break is only allowed inside loop (not for: a break in a for's body leaves the loop around the for, and this one has none it can leave)")
     -- the defers of the scopes it leaves, inside its loop (none of them a
     -- failure context's clauses: `checkJumps`)
     let ds ← elabDefers (ctx.exitDefers ctx.loopRollback) (ctx.defers.take (ctx.defers.length - ctx.loopDefers))

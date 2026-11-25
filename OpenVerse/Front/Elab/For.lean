@@ -609,7 +609,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
   -- (#515: a body's failure is a source failure context only where the
   -- for is in one; otherwise it is the function's own, or the lowering's)
   let bodyCtx (c : Ctx) : Ctx := { c with
-    canFail := bodyFail, inLoop := false, inRepeat := true,
+    canFail := bodyFail, inLoop := c.inLoop, inRepeat := true,
     bodyFailure := if ctx.canFail && !firstDecides then ctx.bodyFailure else true,
     refineExits := { c.refineExits with brk := none },
     forExitPacket := failure.orElse fun _ => c.forExitPacket }

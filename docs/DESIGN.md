@@ -350,8 +350,10 @@ places their own `defer:`s too, at their end, with the marker outside;
 with no exit gets none, so the code of a block without one does not
 change.
 
-A construction evaluates its fields in its type's declaration order, so its
-fields are first put in that order, which by itself changes nothing. Then
+A construction evaluates the fields it gives in the order written (#724, as
+Epic's Verse VM does), at the places the given fields have in its type's
+declaration order, and an omitted default at its own place; its fields are
+first put in that order of evaluation, which by itself changes nothing. Then
 they are lifted as a call's arguments. `Choice` works on syntax, so the
 elaborator passes the order in (`choiceOrder`, through `prepare`,
 `hasChoice` and `takeFirst?`). Each field's entry also says whether its default is more than a literal.
@@ -1445,7 +1447,7 @@ where an elaboration asks for something and goes no further
 8. `upperBounds`: the bounds of type parameters and the relations fields declare, resolved for every header, then checked; then `checkAliasBounds`, the bounds of the type applications type aliases write.
 9. `interfaceViews`: the interfaces referred to through views; a class that then needs hidden fields for all its type parameters makes the elaboration ask for them (`Views`, tier 2).
 10. `pinsAndAccessors`: the pins of the classes dispatched to under a refinement, and the fields read through accessors.
-11. `addPlaceholders`: placeholder classes and prototypes; no struct contains itself, and map keys are comparable.
+11. `addPlaceholders`: placeholder classes and prototypes; no struct contains itself, and map keys are comparable. Then `addConstantObjects` (#724): one more object among the prototypes for each module constant `N:c = c{}` of a `<unique>` class without fields (`TyEnv.constObjects`).
 12. `functionOverloads` (`Elab/Signatures.lean`): overloaded functions renamed, and the overloads of functions and methods, which the environment records (`Overloads`).
 13. `declareSignatures`: each function's and constant's signature as declared (`Declared`); then the Book's variances of the classes and interfaces, and every type parameter of a source function given by its parameters, by them (`checkDeterminedTypeParams`, the Book's 3503).
 14. `inferSignatures`: the types of unannotated constants, then the defaults function types write checked (#503), then the effects inferred in rounds (`Signatures`).
@@ -2275,6 +2277,33 @@ marker `$uses:bitwise`, or the entry expression), renamed `$bitAnd` etc.:
 unbounded ints, programs ending with `ToString` of an int beyond 64 bits
 (the overflow error) included; `scripts/fuzz-bigint.sh` checks them on
 operands beyond 64 bits.
+
+## Random numbers and the clock: no primitive, no nondeterminism
+
+Epic's library has functions that read a random source, the wall clock and
+a player's storage (#724; its shipped compiler admits and runs them). A
+Core primitive for one would either make a run's result depend on the
+machine, so the Lean interpreter and the C runtime could not be compared
+byte for byte, or carry a state through Verse Core's semantics, its proofs,
+the format and the runtime. None is needed; LANGUAGE.md ("Random numbers,
+the clock and the player map") states each as a difference from Epic's.
+
+- `GetRandomInt` is a helper written in Verse (`Front/Random.lean`, added
+  to a program that names it, as the bitwise helpers are): a 64-bit linear
+  congruential generator with a fixed seed. Its state is the one `var`
+  field of the prototype of a hidden class, `$randomState`, read by the
+  name `$randomCell` as the module state is read (`ModuleVars`): a
+  prototype is an object every function can reach as a literal, so the
+  state needs no parameter and no module-scoped variable. It is `<transacts>`,
+  as Epic's is, and a failure context undoes its draws with its other
+  writes.
+- `GetSecondsSinceEpoch()` is a float literal, `<reads>`: a frozen clock.
+  The scheduler's virtual time is a field of the scheduler object, which
+  only code lowered for suspension can reach, so the clock does not follow
+  it.
+- `FitsInPlayerMap[X]` is `X` behind a query that succeeds, its argument's
+  type checked to persist (`TyEnv.persists`, the predicate `<persistable>`
+  structs are checked with).
 
 ## Ints beyond 64 bits: a fast path and a heap representation
 
@@ -3215,7 +3244,12 @@ position in every class below the one that declares it.
   which every heap starts with (`HeapOK`), and `Runs.typed` evaluates the
   prelude before preservation takes over. A class without a prototype
   falls back to a parameter of a subtype or a new placeholder object
-  (`DefaultE.new`). The generic witness of a class type argument is a slot
+  (`DefaultE.new`). A module constant `N:c = c{}` of a `<unique>` class
+  without type parameters and without fields has an object of its own
+  after the classes' prototypes, allocated by the same prelude
+  (`addConstantObjects`, #724): the constant, which is computed at each
+  use, is the literal reference to it, so it is one object, as Epic's
+  module constants are. No change to Verse Core: it is one more prototype. The generic witness of a class type argument is a slot
   of exactly that type, so that the checker infers the instantiation
   exactly.
 - **Parametric classes** (#39) are references with type arguments. Their

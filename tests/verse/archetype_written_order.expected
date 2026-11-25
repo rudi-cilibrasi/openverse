@@ -1,0 +1,25 @@
+value b
+value a
+base block A 10
+derived block one B 20
+derived block two A 10
+done 10 20
+value c
+value a
+value b
+done 123
+value a
+value b
+value c
+done 123
+value ctor y
+value ctor x
+done 6 y5
+value n
+value s
+done s3 2.500000 1
+value b
+pick
+value a
+done 12107
+exit=0
