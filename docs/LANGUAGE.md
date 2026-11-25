@@ -2955,6 +2955,12 @@ clauses, first, later or alone, takes it as any (`if (X := Xs[1], X > 1)
 then array{X} else array{}` is a `[]int`), and a cast that refines type
 arguments types the branch under its refinement (#243, #583).
 
+An `any` inside a generic function's parameter type takes any type and
+binds nothing (#724): `MapCount(M:[t]any where t:subtype(comparable))` given
+an `[int]string` is called at `t := int`, the argument converted to
+`[int]any` (the Book's tests, `Any.versetest:60`; UEFN 43.12 admits and runs
+`followup-refused/map-any-value-generic`).
+
 Nothing can be done with an `any`: it has no equality (so it is no map
 key), no `ToString`, and no cast back. So in Verse Core it is `void`: a
 value becomes an `any` by being evaluated. In a program that calls

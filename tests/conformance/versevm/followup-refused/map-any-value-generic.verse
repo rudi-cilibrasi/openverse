@@ -1,11 +1,13 @@
 # Book: Tests/Any.versetest:60 (1 case): an [int]string map given for a [t]any
 # parameter, t:subtype(comparable). The Book's tests expect it valid.
-# OpenVerse (ce8632ea, Lean) refuses this probe: "expected [t]any, found
+# OpenVerse (ce8632ea, Lean) refused this probe: "expected [t]any, found
 # [int]string (in a call of MapCount)"
-# If UEFN 43.12 admits it, it prints
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# 2026-11-20) admitted it and printed
 #   count 2
-# and OpenVerse has a gap on Verse that Epic ships; if it refuses it, the Book
-# is ahead of the shipped compiler here and OpenVerse's refusal is Epic's.
+# OpenVerse now prints it too (#724, Lean and C): an any inside a generic
+# parameter's type takes any type and binds nothing
+# (tests/verse/generic_any_inside).
 MapCount(M:[t]any where t:subtype(comparable)):int = M.Length
 
 Main():void =

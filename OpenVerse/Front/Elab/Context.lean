@@ -1301,6 +1301,12 @@ where
     if seen.contains (pattern, actual) then none else do
       let seen := (pattern, actual) :: seen
       match pattern, actual with
+      -- (#724: every value is an `any`, so an `any` inside a pattern takes
+      -- any type and binds nothing, `M:[t]any` given an `[int]string`: the
+      -- Book of Verse's `Any.versetest:60`; UEFN 43.12 admits and runs
+      -- followup-refused/map-any-value-generic. The argument is then
+      -- converted to the parameter's type at the instance.)
+      | .any, _ => some substitution
       | _, .param .. =>
         let results := (SubtypeEvidence.valueViews ctx.types ctx.evidenceTypes actual).filterMap fun view =>
           go seen substitution pattern view
