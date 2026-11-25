@@ -31,7 +31,6 @@ class-interface-same-field	gap	UEFN 43.12 admits and runs it; OpenVerse refuses 
 class-type-param-as-arg	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a class's type parameter given as a type argument
 class-value-construct	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a class bound to a local and constructed through it
 classifiable-subset	gap	UEFN 43.12 admits and runs it; OpenVerse refuses the library type classifiable_subset
-concatenate-maps-key-join	gap	UEFN 43.12 admits and runs it; OpenVerse refuses ConcatenateMaps joining maps whose keys are int and string
 concrete-subtype-bound	gap	UEFN 43.12 admits and runs it; OpenVerse refuses concrete_subtype(…) as a type parameter's bound
 constructor-delegation-archetype	gap	UEFN 43.12 admits and runs it; OpenVerse refuses MakeBase<constructor>(…) in an archetype outside a constructor
 fbounded-class	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a class in its own parent's type argument (F-bounded)
@@ -41,14 +40,8 @@ generic-fn-local	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a generic 
 infer-from-empty-array	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a type parameter given only by `array{}`
 join-fn-refinement-result	gap	UEFN 43.12 admits and runs it; OpenVerse refuses function values joined at a refinement's base type
 join-fn-type-params	gap	UEFN 43.12 admits and runs it; OpenVerse refuses function values of two type parameters joined
-map-any-value-generic	gap	UEFN 43.12 admits and runs it; OpenVerse refuses [int]string passed as [t]any
-map-literal-sibling-keys	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a map literal whose keys are of sibling classes
-module-const-empty-map-unique-key	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a module constant holding an empty map keyed by a <unique> class
-module-const-unique	gap	UEFN 43.12 admits and runs it; OpenVerse refuses module constants of a class<unique><allocates>
-named-fn-any-result	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a function named where a function with an `any` result is expected
 named-tuple-param	gap	UEFN 43.12 admits and runs it; OpenVerse refuses named parameters inside a tuple parameter
 named-tuple-value	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a tuple value with a named element
-overloads-struct-and-array	gap	UEFN 43.12 admits and runs it; OpenVerse refuses the overloads F(:a) and F(:[]a)
 override-array-param	gap	UEFN 43.12 admits and runs it; OpenVerse refuses an override taking one []int where the overridden method takes two ints
 override-parametric-result-control	gap	UEFN 43.12 admits and runs it; OpenVerse refuses the control of override-parametric-result: boxing a value of an extension type as comparable
 override-parametric-result	gap	UEFN 43.12 admits and runs it; OpenVerse refuses an override whose result is t where the overridden method's is comparable
@@ -57,10 +50,8 @@ override-wider-param	gap	UEFN 43.12 admits and runs it; OpenVerse refuses an ove
 persistable-class	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a <persistable> class
 qualified-second-method	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a second method `(derived:)F` beside an inherited F
 refinement-literal-local	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a literal-bound local's negation at a refinement type without a cast
-refinement-overloads	gap	UEFN 43.12 admits and runs it; OpenVerse refuses overloads on disjoint refinement types
 subtype-alias	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a type alias of subtype(c)
 two-interfaces-same-method	gap	UEFN 43.12 admits and runs it; OpenVerse refuses two interfaces' default methods of one name in one class
 type-argument-array	gap	UEFN 43.12 admits and runs it; OpenVerse refuses `[]int` as a type argument
-unique-interface-equality	gap	UEFN 43.12 admits and runs it; OpenVerse refuses equality on an interface<unique> no class implements
 variance-contravariant-concat	gap	UEFN 43.12 admits and runs it; OpenVerse refuses arrays of a contravariant parametric class concatenated at two type arguments
 variance-covariant-join	gap	UEFN 43.12 admits and runs it; OpenVerse refuses a covariant parametric class joined at int and any
