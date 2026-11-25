@@ -1,0 +1,15 @@
+advance lit 3 1000 1000
+cleanup 10 0 1010
+cleanup 1 0 1020
+all a!
+cleanup 1 0 1030
+all a?
+state 1030
+advance plain 0 0
+cleanup 7 0 10
+cleanup 1 0 20
+all b!
+cleanup 1 0 30
+all b?
+state 30
+exit=0

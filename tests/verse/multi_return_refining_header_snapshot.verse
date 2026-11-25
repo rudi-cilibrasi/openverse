@@ -1,14 +1,14 @@
 Expr(t:type) := class<abstract>:
-    Eval():t
+    Eval()<transacts>:t
 Lit := class(Expr(int)):
     V:int
-    Eval<override>():int=V
+    Eval<override>()<transacts>:int=V
 Pair(a:type,b:type) := class(Expr(tuple(a,b))):
     var L:Expr(a)
     R:Expr(b)
-    Eval<override>():tuple(a,b)=(L.Eval(),R.Eval())
+    Eval<override>()<transacts>:tuple(a,b)=(L.Eval(),R.Eval())
 PlainPair:=class(Expr(tuple(int,int))):
-    Eval<override>():tuple(int,int)=(4,8)
+    Eval<override>()<transacts>:tuple(int,int)=(4,8)
 Cell:=class{var N:int=0}
 Choose(S:Cell,Pass:logic)<transacts><decides>:void=
     set S.N+=1000

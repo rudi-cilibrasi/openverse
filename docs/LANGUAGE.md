@@ -2667,8 +2667,10 @@ Main():void =
   alternatives produce a row type visible outside the branch. Its branch
   bindings and refined types remain available while that branch resumes.
 
-  Mutable implicit proof captures and direct concurrency in a captured
-  expression remain implementation limits (#686). Restrictions on other
+  A second type-refining conditional in the same header, such a header
+  on a loop inside another loop, mutable implicit proof
+  captures and direct concurrency in a captured expression remain
+  implementation limits (#686). Restrictions on other
   return-containing initializers and on returns inside expressions or
   conditions still apply.
 

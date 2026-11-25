@@ -2501,8 +2501,21 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
   let openRoots := roots.filter (fun i => !closedEntry i)
   let capable := cellCapabilities fns infos cellTag
   let transportTag := infos.findSome? (·.cellTransportTag)
+  let borrowed := MetadataPlan.borrows fns (infos.map (·.source))
+  let bodies := fns.mapIdx fun i f => { f with body := (infos[i]?.getD {}).body.getD f.body }
+  let borrowedWork := MetadataPlan.borrowedWork bodies (infos.map (·.source)) (infos.map (·.borrowTasks))
+  let borrowedTasks := MetadataPlan.borrowedTasks bodies (infos.map (·.borrowTasks))
+  let sites := fns.mapIdx fun i fn =>
+    let (background, cleanups) := MetadataPlan.sites fns ((infos[i]?.getD {}).body.getD fn.body)
+    (background || borrowedWork[i]!, cleanups)
+  -- Tracking a body's own pending frames is a sequential interpretation of
+  -- its heap. A body that starts concurrent work, or that runs as a
+  -- background task, keeps the conservative summary: enabling cells there
+  -- would demand a schedule replay that immutable frames do not need.
   let localTransport := fns.mapIdx fun i fn =>
-    transportTag.any fun tag => cellConstructor tag ((infos[i]?.getD {}).body.getD fn.body)
+    let body := (infos[i]?.getD {}).body.getD fn.body
+    !(sites[i]?.getD (false, [])).1 && !cellConcurrentBody fns body &&
+      transportTag.any fun tag => cellConstructor tag body
   let transferSafe := if cellTag.isSome then closedTransferSafety fns infos referencedOwners else #[]
   -- The static path proves private-irrelevant formal inputs. Other functions may
   -- use the same all-real transfer only in a caller context whose complete
@@ -2743,13 +2756,6 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       let key := (← get).live[index]!
       index := index + 1
       discard <| runContext key
-  let borrowed := MetadataPlan.borrows fns (infos.map (·.source))
-  let bodies := fns.mapIdx fun i f => { f with body := (infos[i]?.getD {}).body.getD f.body }
-  let borrowedWork := MetadataPlan.borrowedWork bodies (infos.map (·.source)) (infos.map (·.borrowTasks))
-  let borrowedTasks := MetadataPlan.borrowedTasks bodies (infos.map (·.borrowTasks))
-  let sites := fns.mapIdx fun i fn =>
-    let (background, cleanups) := MetadataPlan.sites fns ((infos[i]?.getD {}).body.getD fn.body)
-    (background || borrowedWork[i]!, cleanups)
   -- Each premise owns fresh queues, summaries, proofs, aliases and graph
   -- state. A callable root with open arguments is still checked independently
   -- even when it is also reached from a certified closed entry.
@@ -2777,6 +2783,16 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       let summary := closedState.summaries[index]!
       out.insert g (!closedEntry g, summary.result, summary.parts, summary.yielded)) {}
   if !openRoots.isEmpty then
-    discard <| run openRoots cellTag capable closedResults true
+    -- The ordinary summary decides nearly every program. Interpreting the
+    -- pending frames a body builds costs several times as much, so it runs
+    -- only for a program the summary refuses. Either proof admits it; a
+    -- program neither admits keeps the summary's diagnostic.
+    match run openRoots cellTag capable closedResults false with
+    | .ok _ => pure ()
+    | .error refusal =>
+      unless localTransport.any id do throw refusal
+      match run openRoots cellTag capable closedResults true with
+      | .ok _ => pure ()
+      | .error _ => throw refusal
 
 end OpenVerse.Front.MetadataFlow

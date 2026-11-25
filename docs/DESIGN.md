@@ -642,8 +642,11 @@ A refining conditional stores the selected branch's cursor and proof
 captures in a generated object. Its public interface returns the visible
 row and the next cursor. Each resume reads the selected branch's saved
 captures without replaying the condition. The metadata checker tracks
-immutable choice-frame fields through calls and retains local heap
-tracking for stacks of pending frames.
+immutable choice-frame fields through calls. It interprets the stacks of
+pending frames that a body builds only when the ordinary summary refuses
+the program, and only in bodies that start no concurrent work: the second
+pass costs several times the first, and a program that neither pass admits
+keeps the first refusal.
 
 `returnLoopSites` records
 eligible sites and `$noteTypes` discovers the capture types, type parameters,

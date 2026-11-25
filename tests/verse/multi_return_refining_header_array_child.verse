@@ -14,8 +14,11 @@ Choose(S:Cell,Pass:logic)<transacts><decides>:void=
     set S.N+=1000
     Pass?
 Inner(S:Cell,V:int)<transacts>:[]int=
-    set S.N+=100
-    if(V=1)then array{1} else array{}
+    if(V=1):
+        set S.N+=100
+        array{1}
+    else:
+        array{}
 Cleanup(S:Cell,V:int,Y:int)<transacts>:void=
     set S.N+=10
     Print("cleanup {V} {Y} {S.N}")

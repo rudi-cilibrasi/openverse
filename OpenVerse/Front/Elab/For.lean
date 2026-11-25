@@ -1597,8 +1597,11 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           .app q (.ident q "$refinementIfPacket")
             [optionHint, .block q conditions, owner yes, choose no] false
         | branch => owner branch
+      -- The clauses before the conditional run once, as a condition whose
+      -- failure gives no rows. A prefix of definitions alone cannot fail,
+      -- which a source `if` refuses; the guard keeps this one admissible.
       let cold := if before.isEmpty then choose conditional else
-        .ite p before (choose conditional) (some (.ident p "false"))
+        .ite p (before ++ [.query p (.ident p "true")]) (choose conditional) (some (.ident p "false"))
       let name := s!"$refinedCursorInput{(← get).nslots}"
       let selected := s!"{name}$selected"
       let prior := SExpr.ite p

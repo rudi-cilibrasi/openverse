@@ -92,8 +92,9 @@ with tempfile.TemporaryDirectory(prefix='openverse-loop-return-guards-') as tmp:
 
 fixtures = sorted(
     source
-    for kind in ('loop', 'array')
-    for source in (ROOT / 'tests/verse').glob(f'multi_return_{kind}_operand_*.verse')
+    for pattern in ('multi_return_loop_operand_*', 'multi_return_array_operand_*',
+                    'multi_return_refining_header_*')
+    for source in (ROOT / 'tests/verse').glob(pattern + '.verse')
 )
 for source in fixtures:
     expected = source.with_suffix('.expected').read_text()
@@ -106,6 +107,22 @@ for source in fixtures:
             assert run([CV, bytecode]) == expected, (source, profile, 'C')
 
 print(f'loop operand contracts passed ({len(fixtures)} complete contracts, both profiles and VMs)')
+
+# A refining header's expected output is that of a source control: the same
+# program with the conditional selected once into an array before the loop,
+# a form with no refined cursor. Every such fixture has one.
+controls = ROOT / 'tests/fixtures/loop-return-operands/refining-header-controls'
+refining = [source for source in fixtures if source.name.startswith('multi_return_refining_header_')]
+assert len(refining) == 15 and len(list(controls.glob('*.verse'))) == len(refining), refining
+for source in refining:
+    control = controls / source.name[len('multi_return_refining_header_'):]
+    expected = source.with_suffix('.expected').read_text()[:-len('exit=0\n')]
+    with tempfile.TemporaryDirectory(prefix='openverse-refining-control-') as tmp:
+        for profile in ([], ['--extended-defaults']):
+            bytecode = Path(tmp) / 'control.vbc'
+            assert run([OV, 'run', control, *profile, '--emit', bytecode]) == expected, (control, profile, 'Lean')
+            assert run([CV, bytecode]) == expected, (control, profile, 'C')
+print(f'refining header controls passed ({len(refining)} source controls, both profiles and VMs)')
 
 # Original source checking precedes helper extraction and packet rewriting.
 refusals = [
