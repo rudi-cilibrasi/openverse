@@ -4,7 +4,9 @@
 # own in turn, and keeps what each iteration does. Its value may be used, its
 # body may set the function's vars or fail (which fails the for, as
 # anywhere), and a condition in a for's body that takes the call's first
-# success moves with it.
+# success moves with it. A call none of whose values reaches the consumer's
+# body is undone with what its own code printed (Count(1) in Count(2), whose
+# values 1 and 1 fail X > 1: no "count 1 1", #759).
 Sum(N:int)<transacts>:int =
     if (N <= 0) then 1 else:
         var S:int = 0

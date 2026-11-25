@@ -42,8 +42,9 @@ import sys
 # composed (one whose alternatives have choices of their own), exclusive (an
 # `if` picking a branch with choices, an `or` with a choice on its right),
 # inlined-call (a flat inlined producer) and call (a producer that retains
-# its own lowering). The call flag also enables inlined-call.
-FOR_BOOK = set(os.environ.get('OV_FOR_BOOK', 'plain,choice,inlined-call').split(',')) - {''}
+# its own lowering: one called inside an exclusive choice's clause too,
+# #759). The call flag also enables inlined-call.
+FOR_BOOK = set(os.environ.get('OV_FOR_BOOK', 'plain,choice,inlined-call,exclusive').split(',')) - {''}
 if 'call' in FOR_BOOK:
     FOR_BOOK.add('inlined-call')
 
@@ -61,7 +62,9 @@ def call_kinds(x, inline=True):
 
 def clause_kinds(c):
     k = c[0]
-    kinds = call_kinds(c)
+    # (a call inside an `if` or an `or` that picks a branch is lifted with
+    # that branch, not into the for's clauses: it keeps its boundary)
+    kinds = call_kinds(c, k not in ('bchoice', 'or'))
     if k == 'range':
         kinds.add('plain')
     elif k in ('choice', 'setchoice'):

@@ -550,7 +550,12 @@ d{n}({child_tps}) := class({parent}):{extra_field}
             # (LNf, #723: inlined, the for over its call of itself a statement before
             # its flat choice, so the header it leaves is as flat as I2's)
             return {'choice'}
-        # A selected branch or a lazy call retains its own boundary.
+        if self.kind in ('IIf', 'ICmp', 'LNc'):
+            # (#759: an inlined `if` that picks a branch with a flat choice is
+            # an exclusive choice of the for's own search; LNc's condition,
+            # its call of itself, is a failure context of its own)
+            return {'exclusive'}
+        # A dispatched method or a lazy call retains its own boundary.
         return {'call'}
 
     def call(self, args):
@@ -722,7 +727,7 @@ d{n}({child_tps}) := class({parent}):{extra_field}
 # clauses lead to no body is undone as a whole (FlowControl/for.versetest
 # 317-392, Range.versetest 140, 159). The old rule keeps what an alternative's
 # own clauses did once they succeed, even when later generators give nothing.
-FOR_BOOK = set(os.environ.get('OV_FOR_BOOK', 'plain,choice').split(',')) - {''}
+FOR_BOOK = set(os.environ.get('OV_FOR_BOOK', 'plain,choice,exclusive').split(',')) - {''}
 
 
 class Machine:

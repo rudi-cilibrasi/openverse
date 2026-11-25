@@ -1,0 +1,19 @@
+direct 101
+direct 1101
+direct state 100
+direct 101
+direct 1101
+direct state 100
+advance 1 1 100
+advance 1 1 200
+resumed 200
+resumed 211
+resumed 211
+resumed state 200
+advance 1 1 100
+advance 1 1 200
+resumed 200
+resumed 211
+resumed 211
+resumed state 200
+exit=0

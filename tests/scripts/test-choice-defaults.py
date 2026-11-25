@@ -34,7 +34,7 @@ default_effect.install()
 ROOT = Path(__file__).resolve().parents[2]
 # (the kinds of choice point whose fors follow the Book's rule, as in
 # scripts/models/mv.py: by default those the compiler gives it)
-FOR_BOOK = set(__import__('os').environ.get('OV_FOR_BOOK', 'plain,choice').split(',')) - {''}
+FOR_BOOK = set(__import__('os').environ.get('OV_FOR_BOOK', 'plain,choice,exclusive').split(',')) - {''}
 COUNT = int(sys.argv[1]) if len(sys.argv) > 1 else 60
 FIRST = int(sys.argv[2]) if len(sys.argv) > 2 else 1
 

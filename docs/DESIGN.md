@@ -150,23 +150,88 @@ suspension lowering turns the round into a loop, as for any `for`), fail
 or return. The rounds, each a `forE` over a range twice as long as the last,
 collect the values in linear time, as `elabLoopGen`'s do for a lazily taken
 call, and, as there, a nested continuation's failed outcome, which breaks
-the nearest `loop` (`forOutcomeSlot`), is forwarded after the rounds. Every
+the nearest `loop` (`forOutcomeSlot`), is forwarded after the rounds. A
+`break` in the body leaves that `loop` too, with the search not done: it
+is forwarded the same way, to the loop around the `for`, where one from a
+`forE`'s body goes by itself (#759; before, the `for` ended and the loop
+around it went round again, `tests/verse/for_search_break.verse`). Every
 level's code appears once. When nothing before the last generator's
 elements can change what undoing would restore (`forClauseEffects`: a
 `Print`, a field's `set`, a call, a write of a variable of the code around
 or a `var` of the clauses), the nested `forE`s below are that search, and
 the `for` keeps them, byte for byte.
 
-**Which `for`s.** The search can handle ranges, arrays, maps, strings, and
-flat choices of values. The compiler selects the search after preparing
+**Which `for`s.** The search can handle ranges, arrays, maps, strings,
+flat choices of values, and exclusive choices whose paths have those. The
+compiler selects the search after preparing
 the clauses. Flat inlined producers contribute their bindings and filters
 to that search. A producer computed as an array at the call contributes
 an array level. The search uses its usual checkpoints even when a
 producer's first alternatives never reach the body.
 
+**An exclusive choice in the search (#759).** An `if`, `case` or `or` that
+picks a branch with a choice (#314) has a path for each branch, and each
+path generators of its own, so the levels would be a tree. They stay a
+list. The selector and the picked path's clauses up to that path's first
+generator are a step where the choice is written: code of the filter of
+the level it is in, or of the clauses before the first generator. The
+paths' generators are the levels after it, side by side: the first
+generators of all the paths share one level, the second ones the next
+(`ForLevel.others`), each with a *guard* that reads the selector, so the
+generator of the picked path is the one whose source is evaluated, whose
+element is bound and whose filters run. A level with no generator of the
+picked path is *passed through*: one element that evaluates nothing, so the
+search goes through it once to the levels after it. The choice's name is
+bound from the picked path's value where that path ends (in the step, or
+after the filters of the path's last level), and the clauses after the
+choice run after the paths' last level, whichever path ran. Those clauses,
+the generators after them and the body are therefore in the code once,
+whatever the number of paths, where the older lowering copies them into
+each path or moves them into a continuation (#335), and the number of
+levels is that of the longest path, not the sum over the paths: an
+`else if` chain of twenty branches adds one level, not twenty. A choice
+inside a path is the same again, its guard the path's and its own
+selector's.
+
+```
+for (V := if (c) then (3 | 1) else (4 | 1), W : Inner(S, V)) { body }
+
+step₀  = sel := (if (c) then 0 else 1)             # before the first generator
+level₁ = [0, 1]: V₀ := 3 | 1 if sel = 0             # the paths' first generators
+                 V₁ := 4 | 1 if sel = 1
+         then V := V₀ if sel = 0; V := V₁ if sel = 1
+level₂ = Inner(S, V)                                  # W
+```
+
+A row that reaches no body is then undone back to the element or
+alternative it is in, the source of the generator after the choice
+included, and when no row at all reaches the body the condition's effects
+go with the search's first step. A resumable header (#686) whose request
+is the loop's own takes the same levels; its cursor saves the selector, the
+paths' names and each path's source with the level's index.
+
+The older lowering still serves an exclusive choice whose `for` does
+nothing that undoing would change (it keeps its bytes), one whose
+condition has a type-refining cast, one whose path has a composed choice
+or a producer boundary, one with a call of a function with several values
+in a branch or a condition (the call is lifted with its branch, not into
+the `for`'s clauses, so it keeps a boundary, as a method reached by
+dispatch does: its implementations are the branches of such a choice), one
+whose search would have more than eight levels (`maxBranchLevels`), and
+one inside clauses that another lowering prepared: an alternative of a
+composed choice, a continuation, a staged suffix, a side of a resumable
+product. The limit of eight is the storage metadata pass's
+(`MetadataFlow`), not the search's: that pass iterates each `loop` to a
+fixed point, a level is a `loop` inside the level before, and its time
+doubles with each (a `for` of fourteen generators with effects, with no
+exclusive choice, already takes it seconds). Exclusive choices one after
+another, as a function with many guarded returns is when a `for` takes
+it, have a level each; the continuations of the older lowering (#335)
+keep those linear.
+
 The [Choice](#choice-iteration-over-alternatives) lowerings still serve
-clauses with a remaining producer boundary or a composed or exclusive
-choice. The [readings audit](research/readings-audit.md#what-a-for-undoes)
+clauses with a remaining producer boundary or a composed choice. The
+[readings audit](research/readings-audit.md#what-a-for-undoes)
 describes what each needs to join the search.
 
 ## Choice: iteration over alternatives

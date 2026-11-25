@@ -2100,11 +2100,23 @@ Main():void =
     `F(X:int):int = X | X + 1`), with the code of that function before its
     choice, a `for` of its own there too: the bodies that inner `for` ran
     commit nothing of the outer search (#709, #723;
-    `tests/verse/multi_for_self_for_exhausted.verse`). A `for` whose
+    `tests/verse/multi_for_self_for_exhausted.verse`). An `if`, `case` or
+    `or` that picks a branch with a choice is a step of that search, and
+    the choice of the branch it picks one of its choice points (#759): what
+    its condition and the picked branch did is undone with a row that
+    reaches no body, as any clause's is, so `for (V := if (C[S]) then (3 | 1)
+    else (4 | 1), W : Inner(S, V))` keeps nothing of `Inner(S, 3)` when
+    that array is empty, as `V := (3 | 1)` keeps nothing
+    (`tests/verse/for_exclusive_empty_generator.verse`,
+    `for_exclusive_generator_shapes.verse`). A `for` whose
     clauses have a call of a function with several values that is taken
-    lazily (a generator of its own), a choice whose
-    alternatives have choices of their own, or an `if`, `case` or `or` that
-    picks a branch with a choice keeps, for now, the old rule, entirely: an
+    lazily (a generator of its own) or a choice whose
+    alternatives have choices of their own, or such an `if` with a call of
+    a function with several values in a branch or in its condition (a call
+    of an overridden method is one: its implementations are the branches)
+    or with a type-refining cast in its condition, or with so many such
+    choices and generators that its search would have more than eight levels,
+    keeps, for now, the old rule, entirely: an
     alternative whose own clauses (up to the next generator) fail is rolled
     back; one whose clauses succeed keeps their effects, even when the
     generators after it give no value. The places below that say what stays
@@ -4748,7 +4760,7 @@ Main()<suspends>:void =
 | Value of a successful `not e` | unspecified | `void` |
 | Type of `if` without `else` | unspecified | `void` |
 | A failing `for` body | unspecified (VC: the `for` fails) | the `for` fails (as in VC) |
-| What a `for` undoes | its clauses are one search: what they did since the last value that reached the body is kept at the body and undone when the search ends; a failure undoes back to its own element or alternative (`FlowControl/for.versetest` 317-392, `Range.versetest` 140, 159, `SoftwareTransactionalMemory.versetest` 74-88; `08_failure.md:92`: "a failure context for each iteration of the domain clause"): **the Book decides** | the Book's, for a `for` whose prepared clauses have only range, array, map, string, or flat value-choice generators. This includes flat inlined calls and producers computed as arrays at the call. A `for` with a remaining producer boundary, composed choice, or exclusive choice keeps the older rule. A producer keeps a boundary when it is not inlined into the clauses: a recursive function taken lazily, a method reached by dispatch (overridden below the receiver's class, or implementing an interface's method), and any call of a function with several values inside a failure context nested in the clauses (`not`, `logic{…}`, an `if`'s or `option{…}`'s condition, the left of `or`). An inlined one brings what its body has: a choice of values is flat, a composed or exclusive choice in it is the `for`'s (#723). Its generator's successful clauses keep their effects even when the generators after it give no value. See [the audit](research/readings-audit.md#what-a-for-undoes). |
+| What a `for` undoes | its clauses are one search: what they did since the last value that reached the body is kept at the body and undone when the search ends; a failure undoes back to its own element or alternative (`FlowControl/for.versetest` 317-392, `Range.versetest` 140, 159, `SoftwareTransactionalMemory.versetest` 74-88; `08_failure.md:92`: "a failure context for each iteration of the domain clause"): **the Book decides** | the Book's, for a `for` whose prepared clauses have only range, array, map, string, or flat value-choice generators, and exclusive choices (an `if`, `case` or `or` that picks a branch with a choice) whose branches have only those (#759). This includes flat inlined calls and producers computed as arrays at the call. A `for` with a remaining producer boundary or a composed choice, or with an exclusive choice that has a call of a function with several values in a branch or a type-refining cast in its condition, or whose search would have more than eight levels (an implementation limit: [the audit](research/readings-audit.md#what-a-for-undoes)), keeps the older rule. A producer keeps a boundary when it is not inlined into the clauses: a recursive function taken lazily, a method reached by dispatch (overridden below the receiver's class, or implementing an interface's method), and any call of a function with several values inside a failure context nested in the clauses (`not`, `logic{…}`, an `if`'s or `option{…}`'s condition, the left of `or`) or in a branch of an exclusive choice. An inlined one brings what its body has: a choice of values is flat, a composed or exclusive choice in it is the `for`'s (#723). Under the older rule a generator's successful clauses keep their effects even when the generators after it give no value. See [the audit](research/readings-audit.md#what-a-for-undoes). |
 | A failing `for` source | "When any expression in the iteration header fails, that iteration is skipped" (ch. 7); `for.versetest:317`: a failing range bound gives `array{}`: **the Book decides** | zero iterations, for an iterated source (`X : F[]`) and a range bound (`I := 1..F[]`) alike, what the source did rolled back (with what the search did since its last value, by the rule above); the `for` itself does not fail |
 | `?` on other values | conflict (§6.1) | only `logic` and `?t` (the API's typed reading) |
 | Output inside a failed failure context | unspecified for `Print` (the API's `log` class, another function, prints rolled-back lines prefixed "(Rolling Back)"); Epic's Verse VM (UEFN 43.12, 2026-11-19) logs it with that label: `if (Print("x"), false?)` logs `(Rolling Back) x`, the label it gives every line of a rolled-back transaction, also the lines before a runtime error (followup/print-in-condition; which lines get it: followup-print, #724) | rolled back with the writes (transactional `Print`), and not echoed: whether to print the Verse VM's labelled lines is open (#724) |
