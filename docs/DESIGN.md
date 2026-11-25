@@ -679,6 +679,12 @@ recent and older identities; strong replacement requires one unique,
 unescaped object. Actual-call summaries transport heap state and aliases
 through returns, normal cleanup, rollback snapshots and cancellation.
 Caller and pending-operand aliases remain tracked during recency changes.
+The recursive subtype coercions (`$subtype….Up`: a composition, a container's
+lift) are not replayed in a caller's heap, where each dictionary field they
+call through multiplied the contexts of one use (#721). When their bodies are
+certified to store no field, read only their own dictionary and build no
+cell, they keep the roles of their ordinary summaries, leave the heap as it
+is, and return an unknown alias of their arguments.
 Private-cell concurrency uses graph replay even when a worker introduces
 metadata and never returns. `MetadataReceivers` adds typed virtual locals
 only to the metadata body and analysis frame; emitted Core and runtime
