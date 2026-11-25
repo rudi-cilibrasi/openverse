@@ -356,7 +356,8 @@ def no_join(members):
     else: return None
     above = [x for (x, _) in ifaces_of(d, [('var', v) for v in CL[d][1]])]
     if all(x in above for (x, b) in ifaces_of(*tys[0]) if all((x, b) in ifaces_of(c, g) for c, g in tys)): return None
-    return ', '.join(f"{c}({', '.join(ty(x) for x in g)})" if g else c for c, g in tys), d
+    # (the compiler's message writes []char as string, nested too)
+    return ', '.join(f"{c}({', '.join(ty(x) for x in g)})" if g else c for c, g in tys).replace('[]char', 'string'), d
 refused = None
 gi = 0
 for (n, a), members in groups.items():
