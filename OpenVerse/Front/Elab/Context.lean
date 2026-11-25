@@ -3004,6 +3004,33 @@ def ambiguousClassJoin (env : TyEnv) (tys : List Ty) : Option (List String) :=
     if minimal.length > 1 && minimal.any (fun U => !(env.info U).isIface) then some minimal else none
   | _ => none
 
+/-- (#724) The key type of a map whose keys are of types `a` and `b`: their
+    join, a comparable type both convert to. Two classes join at their
+    nearest common class or interface, which must be `<unique>` (the Book of
+    Verse's tests, `Map.versetest:143`: "Map literals should infer common key
+    and value types that are joins of the key and value types of each pair";
+    UEFN 43.12 admits and runs followup-refused/map-literal-sibling-keys), a
+    refinement and its base at the base, options and tuples of such inside.
+    With `atComparable`, two comparable types with nothing else in common
+    join at `comparable` (`ConcatenateMaps(map{0=>"0"}, map{"0"=>"zero"})`,
+    `ConcatenateMaps.versetest:67`; followup-refused/concatenate-maps-key-join);
+    without it they do not join, nor do classes with more than one nearest
+    common supertype (`ambiguousClassJoin`), nor an `int` and a `rational`,
+    whose keys would change. -/
+def mapKeyJoin (env : TyEnv) (a b : Ty) (atComparable : Bool) : Option Ty :=
+  if a == b then some a
+  else if (ambiguousClassJoin env [a, b]).isSome || a == .rational || b == .rational then none
+  else
+    let ok (j : Ty) : Bool := isComparable env j && (j.keyContainer? env).isNone
+    match joinTyShaped env a b none true with
+    | some j =>
+      if ok j && (atComparable || !j.mentionsComparable || a.mentionsComparable || b.mentionsComparable) then some j
+      else none
+    | none =>
+      if atComparable && isComparable env a && isComparable env b && a.params.isEmpty && b.params.isEmpty then
+        some .dyn
+      else none
+
 /-- What two types with nothing else in common join at (`fallbackJoin`):
     an `if`'s branches and a choice's alternatives that join so are tried
     against each other's types first (#366). -/

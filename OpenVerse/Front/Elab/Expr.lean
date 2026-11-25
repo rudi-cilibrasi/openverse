@@ -2883,8 +2883,28 @@ partial def elabMapLit (ctx : Ctx) (p : Pos) (entries : List (SExpr × SExpr)) (
       -- and its real code still runs once in the original entry order.
       checkMapKeyCanFail ctx k0.pos rk0.e
       let mut rs : Array (SExpr × R × SExpr × R) := #[(k0, rk0, v0, rv0)]
+      -- (#724) with no key type expected, a key that is not of the type of
+      -- those before it widens the map's key type to their join
+      -- (`mapKeyJoin`): `map{A => 1, B => 2}` of sibling classes is keyed by
+      -- their `<unique>` base. Every key is converted to it below.
+      let mut kt := kt
       for (k, v) in entries.drop 1 do
-        let rk ← elabE ctx k (some kt)
+        let stK ← get
+        let first ← tryCatch (Except.ok <$> elabE ctx k (some kt)) (fun err => pure (Except.error err))
+        let rk ← match first with
+          | .ok r => pure r
+          | .error err =>
+            if kt?.isSome then throw err
+            set stK
+            tryCatch (elabE ctx k none) (fun _ => throw err)
+        if kt?.isNone && rk.ty != kt then
+          let stC ← get
+          let refusal ← tryCatch (do discard <| coerce k.pos rk kt; pure none) (fun err => pure (some err))
+          set stC
+          if let some err := refusal then
+            match mapKeyJoin (← get).env kt rk.ty false with
+            | some j => kt := j
+            | none => throw err
         -- (a key that can fail: "failure in map literal keys is not
         -- implemented", Book of Verse ch. 3, and its tests, Map.versetest:249)
         checkMapKeyCanFail ctx k.pos rk.e
