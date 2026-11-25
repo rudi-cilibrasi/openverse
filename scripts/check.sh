@@ -230,6 +230,8 @@ check "GADT model fuzzing (${FUZZ_MODEL_GADT:-150} programs, against twenty-nine
   scripts/fuzz-model-gadt.sh "${FUZZ_MODEL_GADT:-150}" "$seed"
 check "GADT models through type aliases (${FUZZ_MODEL_GADT_ALIASES:-150} programs, their types' names written through aliases)" \
   scripts/fuzz-model-gadt.sh "${FUZZ_MODEL_GADT_ALIASES:-150}" "$seed" --aliases
+check "GADT views refusal naming a string argument (seed 20783080, #723)" \
+  bash -c 'scripts/fuzz-model-gadt.sh 1 20783080 && scripts/fuzz-model-gadt.sh 1 20783080 --aliases'
 check "event order model fuzzing (${FUZZ_MODEL_FIFO:-60} programs, awaiters inside Signal)" \
   scripts/fuzz-model-fifo.sh "${FUZZ_MODEL_FIFO:-60}" "$seed"
 check "variance model fuzzing (${FUZZ_MODEL_VARIANCE:-150} programs, against a model of the Book and Verse Core)" \
