@@ -614,6 +614,12 @@ private structure CellEffect where
 private structure CellSummary where
   input : CellInput
   effect : CellEffect := {}
+  /-- Counts the times `input` grew (recursive summaries only). -/
+  version : Nat := 0
+  /-- The input that the last finished run of the body started from, with
+      its `version`: `effect` answers only the calls that input covers
+      (recursive summaries only). -/
+  solved : Option (Nat × CellInput) := none
   deriving Inhabited
 
 private def joinCellEffect (a b : CellEffect) : CellEffect := {
@@ -716,6 +722,10 @@ private structure State where
   cellVisited : Std.HashMap (Nat × Nat) Unit := {}
   /-- Some session summary's input or effect grew during the current pass. -/
   cellGrew : Bool := false
+  /-- A stored effect answers only the calls that the input it was computed
+      from covers. Off in the first attempt at a program, whose refusals
+      are not final (`check`). -/
+  cellCovering : Bool := false
   /-- The body being interpreted is a plain sequential one, entered once:
       its loops may resume from `cellLoopHeads`. -/
   cellWarm : Bool := false
@@ -1360,6 +1370,22 @@ private partial def invoke (fns : Array Fn) (infos : Array Info)
       -- was entered with an input that covers each of its calls and every
       -- call was answered with the final effect. A pass enters each body at
       -- most once per validation mode.
+      -- Before the last pass a stored effect can come from a smaller input
+      -- than the call it answers. Its heap then lacks the objects the caller
+      -- has made since, and replacing the caller's heap with it leaves the
+      -- caller's aliases without an object. A read through such an alias is
+      -- unknown, so that pass can refuse a program whose fixed point is all
+      -- real, and whatever it stores stays in the summaries, which only grow.
+      -- A pass that admits is not affected: the last pass answers every call
+      -- with the final effect, which covers it. So the first attempt at a
+      -- program applies such an effect as it is, which reaches the fixed
+      -- point in the fewest passes, and only its refusals are not final
+      -- (`check`). The attempt that decides a refused program sets
+      -- `cellCovering`: an effect answers a call only when the input that a
+      -- finished run of the body started from covers the call, the summary's
+      -- present input or an earlier one that this call adds nothing to. Any
+      -- other call is taken not to return in this pass, as a call of a
+      -- summary with no effect yet, and the pass is repeated.
       let key : Key := (g, keyArgs)
       let root := state.cellSession.isNone
       let table := state.cellSession.getD {}
@@ -1376,22 +1402,32 @@ private partial def invoke (fns : Array Fn) (infos : Array Info)
       if joined != known.input then
         modify fun st => { st with
           cellGrew := true
-          cellSummaries := st.cellSummaries.modify index fun summary => { summary with input := joined } }
+          cellSummaries := st.cellSummaries.modify index fun summary =>
+            { summary with input := joined, version := summary.version + 1 } }
       -- Validation only weakens inside a body, so an active summary was
       -- entered in a mode at least as strict as this call's.
       let mode := (if state.validateUses then 1 else 0) + (if state.validateShared then 2 else 0) +
         (if state.discovery then 4 else 0)
       if !root && (state.cellActive.contains index || state.cellVisited.contains (index, mode)) then
-        let heap := applyCellEffect out.slots.heap known.effect
-        return ({ out with slots := { out.slots with heap }, valueRefs := known.effect.references },
-          known.effect.role, known.effect.parts, known.effect.yielded)
+        let summary := (← get).cellSummaries[index]!
+        let covered := !state.cellCovering || match summary.solved with
+          | some (version, solved) => version == summary.version || joinCellInput solved input == solved
+          | none => false
+        -- No finished run yet means no effect yet, which needs no repeat of
+        -- its own: the effect's first growth asks for one.
+        if !covered && summary.solved.isSome then modify fun st => { st with cellGrew := true }
+        let answer : CellEffect := if covered then summary.effect else {}
+        let heap := applyCellEffect out.slots.heap answer
+        return ({ out with slots := { out.slots with heap }, valueRefs := answer.references },
+          answer.role, answer.parts, answer.yielded)
       let (background, cleanups) := MetadataPlan.sites fns body
       let scheduled := background || !cleanups.isEmpty || cellConcurrentBody fns body
       let mut effect := known.effect
       repeat
         if root then modify fun st => { st with cellGrew := false, cellVisited := {} }
         modify fun st => { st with cellVisited := st.cellVisited.insert (index, mode) () }
-        let current := ((← get).cellSummaries[index]!).input
+        let entered := (← get).cellSummaries[index]!
+        let current := entered.input
         if state.debug then
           dbg_trace s!"metadata recursive summary {callee.name} root={root} depth={state.cellActive.length} nodes={current.heap.nodes.size}"
         -- The entry state is the summary's input alone: its heap, its
@@ -1447,6 +1483,8 @@ private partial def invoke (fns : Array Fn) (infos : Array Info)
           modify fun st => { st with
             cellGrew := true
             cellSummaries := st.cellSummaries.modify index fun summary => { summary with effect } }
+        modify fun st => { st with
+          cellSummaries := st.cellSummaries.modify index fun summary => { summary with solved := some (entered.version, current) } }
         if !root || !(← get).cellGrew then break
       if root then modify fun st => { st with cellSession := none, cellVisited := {}, cellGrew := false }
       let heap := applyCellEffect out.slots.heap effect
@@ -3044,10 +3082,10 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
   -- state. A callable root with open arguments is still checked independently
   -- even when it is also reached from a certified closed entry.
   let run (entries : List Nat) (tag : Option Nat) (capabilities : Array Bool)
-      (closed : Std.HashMap Nat (Bool × Option Bool × TupleParts × Bool)) (trackTransports : Bool) :
-      Except String State := do
+      (closed : Std.HashMap Nat (Bool × Option Bool × TupleParts × Bool)) (trackTransports : Bool)
+      (covering : Bool := false) : Except String State := do
     let (_, final) ← (action entries trackTransports).run {
-      debug := debug, scalarReturns
+      debug := debug, scalarReturns, cellCovering := covering
       cellTag := tag, cellCapable := capabilities, closedTransfers := closed
       cellInert := if tag.isSome then inert else #[]
       cellCyclic := if tag.isSome then cyclic else #[]
@@ -3073,11 +3111,20 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
     -- pending frames a body builds costs several times as much, so it runs
     -- only for a program the summary refuses. Either proof admits it; a
     -- program neither admits keeps the summary's diagnostic.
-    match run openRoots cellTag capable closedResults false with
+    -- A recursive summary's refusal is final only when its effects answer
+    -- the calls they cover (`cellCovering`). That takes more passes, so it
+    -- too runs only for a program the first attempt refuses.
+    let attempt (trackTransports : Bool) : Except String Unit :=
+      match run openRoots cellTag capable closedResults trackTransports with
+      | .ok _ => pure ()
+      | .error refusal =>
+        if cyclic.any id then discard <| run openRoots cellTag capable closedResults trackTransports true
+        else throw refusal
+    match attempt false with
     | .ok _ => pure ()
     | .error refusal =>
       unless localTransport.any id do throw refusal
-      match run openRoots cellTag capable closedResults true with
+      match attempt true with
       | .ok _ => pure ()
       | .error _ => throw refusal
 

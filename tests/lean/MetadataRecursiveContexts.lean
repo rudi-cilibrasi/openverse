@@ -99,6 +99,59 @@ private def classify (recursive viaStep : Bool) (shape : String) (metadata : Boo
   IO.println s!"recursive={recursive} viaStep={viaStep} shape={shape} metadata={metadata} admitted={admitted}"
   return admitted
 
+/-- A call of a summary whose body is still running, or has already run in
+    this pass, is answered with the stored effect. Until the fixed point that
+    effect can come from a smaller input than the call's: its heap then lacks
+    the cells the caller has made since. Applying it left the caller's aliases
+    without an object, a read through one is unknown, and the pass refused a
+    program whose fixed point is all real. `Walk(cell, value, count, frame)`
+    makes a cell at every level and, after the level below returns, uses its
+    own cell (`own-cell`) or a frame that every level passes on (`frame-field`,
+    which executes the frame's value). The functions are 0 `Execute`, 1 `Walk`,
+    2 `Root(first, real, count)` with a cell of `first` in slot 3, a cell of
+    `real` in slot 4 and in slot 5 a frame of a cell and `real`, or of `first`
+    when `frameFirst`, 3 the closed entry. `Walk` never receives slot 3. -/
+private def classifyReturn (shape : String) (metadata frameFirst : Bool) : IO Bool := do
+  let frame : VTy := .ref [2] []
+  let more : Expr := .prim .eq [.local 2, .lit (.int 1)]
+  let again : Expr := .call 1 [freshCell (.local 1), .local 1, .local 2, .local 3]
+  let walk : Expr := match shape with
+    | "own-cell" => .seq (.ite more (.seq (.seq again (.lit .void))
+        (.seq (.heap (.set 0) [.local 0, payload 0]) (.lit .void))) (.lit .void)) (.local 1)
+    | _ => .seq (.seq (.ite more (.seq (.heap (.set 0) [.local 0, again]) (.lit .void)) (.lit .void))
+        (.seq (execute (.heap (.get 1) [.local 3])) (.lit .void))) (.local 1)
+  let fns : Array Fn := #[
+    { name := "Execute", arity := 1, nslots := 1, decides := false, body := .lit .void },
+    { name := "Walk", arity := 4, nslots := 4, decides := true, writes := true, body := walk },
+    { name := "Root", arity := 3, nslots := 6, decides := true, writes := true
+      body := .seq (.assign 3 (freshCell (.local 0))) (.seq (.assign 4 (freshCell (.local 1)))
+        (.seq (.assign 5 (.heap (.new 2) [freshCell (.local 1), .local (if frameFirst then 0 else 1)]))
+          (.seq (.seq (.call 1 [.local 4, .local 1, .local 2, .local 5]) (.lit .void)) (.lit .void)))) },
+    { name := "ClosedRoot", arity := 0, nslots := 0, decides := false, body := .lit .void }]
+  let sigs : Sigs := {
+    fns := [([callable], .void), ([cell, callable, .int, frame], callable),
+      ([callable, callable, .int], .void), ([], .void)]
+    classes := [[.var 0], [], [cell, callable]], pins := [[none], [], []] }
+  let slots := [[callable], [cell, callable, .int, frame], [callable, callable, .int, cell, cell, frame], []]
+  let prog : Prog := { fns := fns.toList, main := 3 }
+  let valid := prog.check && prog.checkControl && prog.checkTypes sigs slots && checkPrelude prog sigs
+  unless valid do
+    throw <| IO.userError s!"INVALID recursive-return model {shape}: check={prog.check} control={prog.checkControl} types={prog.checkTypes sigs slots} prelude={checkPrelude prog sigs}"
+  let infos : Array MetadataFlow.Info := fns.mapIdx fun index fn => {
+    body := some fn.body
+    cellTag := some 0
+    cellTransportTag := some 2
+    cellHelper := index ≤ 1
+    cellParams := if index == 1 then [0] else []
+    cellSlots := if index == 1 then [0] else if index == 2 then [3, 4] else []
+    inputs := if index == 2 && metadata then [0] else []
+    required := if index == 0 then [0] else [] }
+  let results := sigs.fns.toArray.map fun (_, result) => MetadataValues.objectFree result
+  let actual := MetadataFlow.check fns infos #[[], [], []] false results
+  let admitted := match actual with | .ok _ => true | .error _ => false
+  IO.println s!"return shape={shape} metadata={metadata} frameFirst={frameFirst} admitted={admitted}"
+  return admitted
+
 def main : IO Unit := do
   let mut bad := 0
   let mut count := 0
@@ -118,6 +171,15 @@ def main : IO Unit := do
         if summary && !control then bad := bad + 1
         -- Metadata that is only kept, and every all-real program, is admitted.
         if !(metadata && executes) && !(control && summary) then bad := bad + 1
+  -- A level that uses its own cell, or a frame passed on, after the level
+  -- below returns: refused only when the frame's value is metadata, which
+  -- `frame-field` executes.
+  for (shape, metadata, frameFirst, expected) in [
+      ("own-cell", false, false, true), ("own-cell", true, false, true), ("own-cell", true, true, true),
+      ("frame-field", false, false, true), ("frame-field", true, false, true),
+      ("frame-field", false, true, true), ("frame-field", true, true, false)] do
+    count := count + 1
+    if (← classifyReturn shape metadata frameFirst) != expected then bad := bad + 1
   IO.println s!"{count} recursive-context policy classifications; {bad} mismatches"
   if bad > 0 then throw <| IO.userError "recursive context policy mismatch"
 end MetadataRecursiveContexts

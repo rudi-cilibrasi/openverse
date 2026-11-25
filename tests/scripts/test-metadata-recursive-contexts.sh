@@ -19,5 +19,5 @@ if ! timeout 120 lake env lean -j1 --run tests/lean/MetadataRecursiveContexts.le
   cat "$out"; exit 1
 fi
 tail -n 1 "$out"
-grep -qx '36 recursive-context policy classifications; 0 mismatches' "$out"
+grep -qx '43 recursive-context policy classifications; 0 mismatches' "$out"
 echo "recursive contexts: lazy array-loop return with a captured local checked within 15s (4 GiB)"

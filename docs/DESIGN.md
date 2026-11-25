@@ -691,7 +691,21 @@ loop return, gives each level a new heap, and each level restarted the ones
 below it (#753). From the outermost such call to its return, each ordinary
 key has one summary. Its input is the join of the contexts it is called in,
 and the outermost call repeats until no input and no effect grows, entering
-each body at most once per pass and validation mode. A loop that an enclosing
+each body at most once per pass and validation mode. The cost is the join:
+argument aliases and heaps of different contexts of one key are merged, so an
+update that is strong in one context can be weak in the summary, and a program
+the exact replay admits can be refused. Before the last pass a stored effect
+can come from a smaller input than the call it answers; its heap then lacks
+the objects the caller has made since, the caller's aliases are left without
+an object, and a read through one is unknown. A pass that admits is not
+affected, since the last pass answers every call with the final effect, but
+such a pass could refuse a program whose fixed point is all real. So a
+refusal of the first attempt is not final when the program has a function on
+a cycle: the check runs again with each stored effect answering only the
+calls that the input it was computed from covers. Any other call is taken not
+to return in that pass and the pass is repeated, which takes more passes and
+is why it is not the first attempt.
+A loop that an enclosing
 loop reaches again resumes from its last stable head joined with the new
 entry, in a sequential body without shared locals, where the passes of nested
 loops multiplied before.
