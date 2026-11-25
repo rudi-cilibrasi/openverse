@@ -1248,6 +1248,11 @@ partial def Ty.comparable (env : TyEnv) : Ty → Bool
   -- class, or a type argument)
   | .struct n ts =>
     if env.isRefClass n then env.isUnique n
+    -- (#724: a `<unique>` interface or class with no concrete class below
+    -- it, which has no value, is comparable as one with values is: the
+    -- Book of Verse's `ComparableInterface.versetest` 5 to 37, valid;
+    -- UEFN 43.12 admits followup-refused/unique-interface-equality)
+    else if env.classes.contains n && (env.concreteBelow n).isEmpty then env.isUnique n
     else !env.classes.contains n && ts.all (Ty.comparable env) &&
       (env.fields n ts).all fun (_, t, _) => t.comparable env
   | _ => true

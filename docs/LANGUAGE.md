@@ -1682,7 +1682,11 @@ circle := class(shape, labelled):
   constructs the type. Interfaces have no blocks.
 - **`<unique>`.** A `<unique>` class (and every class below it) is
   comparable: `=` and `<>` test identity, so two instances with equal
-  fields differ, and an alias equals its original.
+  fields differ, and an alias equals its original. A `<unique>` interface
+  or abstract class that no concrete class is below is comparable too,
+  though it has no value to compare (#724; the Book's tests,
+  `ComparableInterface.versetest` 5 to 37; UEFN 43.12 admits
+  `followup-refused/unique-interface-equality`).
 - **Comparability.** Other classes and interfaces are not comparable (Book §4.9), nor
   is a struct or container that holds one.
 - **Refined conditional choices.** A `for` may use the name bound by a refining
