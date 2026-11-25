@@ -628,6 +628,14 @@ private def joinCellEffect (a b : CellEffect) : CellEffect := {
     out.insert key (MetadataCells.joinRefs (out[key]?.getD []) refs)) a.images
   yielded := a.yielded || b.yielded }
 
+/-- The least input that covers two contexts of one function and one
+    argument key: their heaps joined as at a loop head, their argument aliases
+    joined slot by slot. -/
+private def joinCellInput (a b : CellInput) : CellInput := { a with
+  references := a.references.zipIdx.map fun (refs, i) =>
+    MetadataCells.joinRefs refs (b.references[i]?.getD [])
+  heap := MetadataCells.join a.heap b.heap }
+
 private def cellPair (a b : Nat) : Nat :=
   let sum := a + b
   sum * (sum + 1) / 2 + b
@@ -698,6 +706,22 @@ private structure State where
   cellCapable : Array Bool := #[]
   /-- Recursive subtype coercions certified heap-inert (`inertCoercions`). -/
   cellInert : Array Bool := #[]
+  /-- Functions on a cycle of the call graph (`cyclicFunctions`). -/
+  cellCyclic : Array Bool := #[]
+  /-- The one summary of each ordinary key in the running recursive fixed
+      point, from its outermost cyclic private call to that call's return. -/
+  cellSession : Option (Std.HashMap Key Nat) := none
+  /-- The session summaries whose body the current pass has entered, each
+      with the validation mode it was entered in. -/
+  cellVisited : Std.HashMap (Nat × Nat) Unit := {}
+  /-- Some session summary's input or effect grew during the current pass. -/
+  cellGrew : Bool := false
+  /-- The body being interpreted is a plain sequential one, entered once:
+      its loops may resume from `cellLoopHeads`. -/
+  cellWarm : Bool := false
+  /-- The stable head of each loop of that body, by its path, from the last
+      time the loop was reached. -/
+  cellLoopHeads : Std.HashMap (List Nat) Slots := {}
   /-- Independently validated all-real transfers. The leading flag requires
       the caller's complete alias state to prove empty private input refs. -/
   closedTransfers : Std.HashMap Nat (Bool × Option Bool × TupleParts × Bool) := {}
@@ -1105,6 +1129,10 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
           nslots := max source.slots.heap.nslots (itemsKey + 1) } sourceKey source.valueRefs) itemsKey []
       else source.slots.heap
     let mut head := { source.slots with heap }
+    let resume := enabled && (← get).cellWarm && info.shared.isEmpty
+    let loopKey := (← get).cellPath
+    if resume then
+      if let some known := (← get).cellLoopHeads[loopKey]? then head := joinSlots head known
     let mut result := false
     let mut exits := source
     let mut growing := true
@@ -1130,6 +1158,7 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
       let next := if body.value.isSome then freshLocals info.shared source.slots (joinSlots head body.slots) else head
       growing := next != head
       head := next
+    if resume then modify fun st => { st with cellLoopHeads := st.cellLoopHeads.insert loopKey head }
     let items := if enabled then MetadataCells.getLocal head.heap itemsKey else []
     if items.isEmpty then return { exits with slots := head, value := some result, valueParts := none, valueRefs := [] }
     -- The array is a compiler-owned immutable carrier. Its stored item aliases
@@ -1137,7 +1166,18 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
     let (refs, heap) := MetadataCells.allocate head.heap site false [{ role := result, refs := items }]
     return { exits with slots := { head with heap }, value := some result, valueParts := none, valueRefs := refs }
   | .loop body => do
+    -- An enclosing loop reaches this one once per pass, each time with an
+    -- entry that covers the last one. Starting again from the entry alone
+    -- repeats every pass of the last fixed point, so the passes of nested
+    -- loops multiply (#753). The head resumes from the last stable head
+    -- joined with the entry instead: that is below the new fixed point when
+    -- the entry grew, and any head that covers the entry and its own body's
+    -- exit is a sound one.
+    let resume := (← get).cellEnabled && (← get).cellWarm && info.shared.isEmpty
+    let loopKey := (← get).cellPath
     let mut head := slots
+    if resume then
+      if let some known := (← get).cellLoopHeads[loopKey]? then head := joinSlots slots known
     let mut returned := none
     let mut returnedParts := none
     let mut exits : Flow := { slots, value := none }
@@ -1158,6 +1198,7 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
       let next := if out.value.isSome then freshLocals info.shared slots (joinSlots head out.slots) else head
       growing := next != head
       head := next
+    if resume then modify fun st => { st with cellLoopHeads := st.cellLoopHeads.insert loopKey head }
     return { exits with slots := broken.getD head, value := broken.map (fun _ => false), returned, returnedParts, yielded }
   | .brk => pure { slots, value := none, broken := some slots }
   | .ret e => do
@@ -1306,6 +1347,111 @@ private partial def invoke (fns : Array Fn) (infos : Array Info)
       arguments := keyArgs
       references := out.argumentRefs
       heap := { out.slots.heap with locals := {}, nslots := 0 } }
+    if state.cellCyclic[g]?.getD false then
+      -- A function on a call cycle is not replayed once per caller heap: a
+      -- recursion that allocates gives every level a new heap, so a context
+      -- per heap nests one replay per abstract iteration and each level
+      -- restarts the levels below it (#753). From the outermost such call to
+      -- its return there is instead one summary per ordinary key. A call
+      -- joins its context into that summary's input, as a loop head joins a
+      -- back edge, and a summary whose body this pass has already entered
+      -- answers with its stored effect. The outermost call repeats the pass
+      -- until no input and no effect grows, so in the last pass every body
+      -- was entered with an input that covers each of its calls and every
+      -- call was answered with the final effect. A pass enters each body at
+      -- most once per validation mode.
+      let key : Key := (g, keyArgs)
+      let root := state.cellSession.isNone
+      let table := state.cellSession.getD {}
+      let index ← match table[key]? with
+        | some index => pure index
+        | none => do
+          let index := state.cellSummaries.size
+          modify fun st => { st with
+            cellSummaries := st.cellSummaries.push { input }
+            cellSession := some (table.insert key index) }
+          pure index
+      let known := (← get).cellSummaries[index]!
+      let joined := joinCellInput known.input input
+      if joined != known.input then
+        modify fun st => { st with
+          cellGrew := true
+          cellSummaries := st.cellSummaries.modify index fun summary => { summary with input := joined } }
+      -- Validation only weakens inside a body, so an active summary was
+      -- entered in a mode at least as strict as this call's.
+      let mode := (if state.validateUses then 1 else 0) + (if state.validateShared then 2 else 0) +
+        (if state.discovery then 4 else 0)
+      if !root && (state.cellActive.contains index || state.cellVisited.contains (index, mode)) then
+        let heap := applyCellEffect out.slots.heap known.effect
+        return ({ out with slots := { out.slots with heap }, valueRefs := known.effect.references },
+          known.effect.role, known.effect.parts, known.effect.yielded)
+      let (background, cleanups) := MetadataPlan.sites fns body
+      let scheduled := background || !cleanups.isEmpty || cellConcurrentBody fns body
+      let mut effect := known.effect
+      repeat
+        if root then modify fun st => { st with cellGrew := false, cellVisited := {} }
+        modify fun st => { st with cellVisited := st.cellVisited.insert (index, mode) () }
+        let current := ((← get).cellSummaries[index]!).input
+        if state.debug then
+          dbg_trace s!"metadata recursive summary {callee.name} root={root} depth={state.cellActive.length} nodes={current.heap.nodes.size}"
+        -- The entry state is the summary's input alone: its heap, its
+        -- argument aliases and a witness for each of its objects.
+        let mut entry : Slots := { child with
+          heap := { current.heap with nslots := max out.slots.heap.nslots (base + callee.nslots) } }
+        for (refs, i) in current.references.zipIdx do
+          entry := { entry with heap := MetadataCells.setLocal entry.heap (base + i) refs }
+        for (object, _) in current.heap.nodes do
+          let heap := { entry.heap with nslots := max entry.heap.nslots (cellWitness base object + 1) }
+          entry := { entry with heap := MetadataCells.setLocal heap (cellWitness base object) [object] }
+        modify fun st => { st with
+          active := some (g, keyArgs), cellEnabled := true, cellRefBase := base,
+          cellScope := g, cellGraphOwner := none,
+          cellPath := [0],
+          cellWarm := !scheduled, cellLoopHeads := {},
+          cellActive := index :: state.cellActive }
+        let result ← if scheduled then do
+          let bodies := fns.mapIdx fun index function =>
+            { function with body := (infos[index]?.getD {}).body.getD function.body }
+          let plan := MetadataPlan.build bodies gi.metadataWrites callee.nslots body (some g)
+            (infos.map (·.metadataWrites)) (infos.map (·.source)) (infos.map (·.borrowTasks))
+          let referenceLive := MetadataLiveness.build fns plan
+          schedule { fns, infos, fields, fn := callee, info := gi, plan, referenceLive } entry
+        else expr fns infos fields callee gi entry body
+        modify fun st => { st with
+          active := state.active, cellEnabled := state.cellEnabled, cellRefBase := state.cellRefBase,
+          cellScope := state.cellScope, cellGraphOwner := state.cellGraphOwner,
+          cellPath := state.cellPath,
+          cellWarm := state.cellWarm, cellLoopHeads := state.cellLoopHeads,
+          cellActive := state.cellActive, seen := state.seen }
+        let role := (joinRole result.value result.returned).map (· || gi.metadataResult)
+        let parts := if gi.metadataResult then none else
+          joinParts result.value result.valueParts result.returned result.returnedParts
+        let heap := match result.value, result.returnedHeap with
+          | some _, some returned => some (MetadataCells.join result.slots.heap returned)
+          | none, some returned => some returned
+          | some _, none => some result.slots.heap
+          | none, none => none
+        let refs := if state.scalarReturns[g]?.getD false then [] else
+          MetadataCells.joinRefs (if result.value.isSome then result.valueRefs else []) result.returnedRefs
+        let images := match heap with
+          | none => {}
+          | some heap => current.heap.nodes.fold (fun out object _ =>
+              out.insert object (MetadataCells.getLocal heap (cellWitness base object))) {}
+        let next := joinCellEffect effect {
+          role, parts, references := refs
+          heap := heap.map (fun heap => { heap with locals := {}, nslots := 0 })
+          images
+          yielded := result.yielded }
+        if next != effect then
+          effect := next
+          modify fun st => { st with
+            cellGrew := true
+            cellSummaries := st.cellSummaries.modify index fun summary => { summary with effect } }
+        if !root || !(← get).cellGrew then break
+      if root then modify fun st => { st with cellSession := none, cellVisited := {}, cellGrew := false }
+      let heap := applyCellEffect out.slots.heap effect
+      return ({ out with slots := { out.slots with heap }, valueRefs := effect.references },
+        effect.role, effect.parts, effect.yielded)
     let index ← match (state.cellSummaryIndices[g]?.getD []).find? (fun index =>
         state.cellSummaries[index]!.input == input) with
       | some index => pure index
@@ -1331,6 +1477,7 @@ private partial def invoke (fns : Array Fn) (infos : Array Info)
         active := some (g, keyArgs), cellEnabled := true, cellRefBase := base,
         cellScope := g, cellGraphOwner := none,
         cellPath := [0],
+        cellWarm := !(background || !cleanups.isEmpty || cellConcurrentBody fns body), cellLoopHeads := {},
         cellActive := index :: state.cellActive }
       let result ← if background || !cleanups.isEmpty || cellConcurrentBody fns body then do
         let bodies := fns.mapIdx fun index function =>
@@ -1344,6 +1491,7 @@ private partial def invoke (fns : Array Fn) (infos : Array Info)
         active := state.active, cellEnabled := state.cellEnabled, cellRefBase := state.cellRefBase,
         cellScope := state.cellScope, cellGraphOwner := state.cellGraphOwner,
         cellPath := state.cellPath,
+        cellWarm := state.cellWarm, cellLoopHeads := state.cellLoopHeads,
         cellActive := state.cellActive, seen := state.seen }
       let role := (joinRole result.value result.returned).map (· || gi.metadataResult)
       let parts := if gi.metadataResult then none else
@@ -2219,6 +2367,7 @@ private def probeCleanup (fns : Array Fn) (infos : Array Info)
         discard <| expr fns infos fields callee ci possible d
   let (_, result) ← action.run { state with
     discovery := false, validateUses := true, validateShared := true
+    cellWarm := false, cellLoopHeads := {}
     live := #[], liveSeen := {} }
   return result
 
@@ -2476,6 +2625,45 @@ private def inertCoercions (fns : Array Fn) (infos : Array Info) (capable : Arra
     recursive := recursive.set! index (seen.contains index)
   return recursive
 
+/-- The functions that can call themselves, directly or through others, in
+    the bodies this check analyses. Only these can be entered again while a
+    replay of them is running. Functions that reach no cycle are removed
+    first, so the search runs over the remainder alone. -/
+private def cyclicFunctions (fns : Array Fn) (infos : Array Info) : Array Bool := Id.run do
+  let callees := fns.mapIdx fun index fn =>
+    let targets := (MetadataPlan.calls ((infos[index]?.getD {}).body.getD fn.body)).foldl
+      (fun (seen : Std.HashMap Nat Unit) callee => if callee < fns.size then seen.insert callee () else seen) {}
+    targets.toList.map (·.1)
+  let mut callers := Array.replicate fns.size ([] : List Nat)
+  for index in [:fns.size] do
+    for callee in callees[index]! do callers := callers.modify callee (index :: ·)
+  let mut degree := callees.map (·.length)
+  let mut remaining := Array.replicate fns.size true
+  let mut queue := (List.range fns.size).filter (fun index => degree[index]! == 0) |>.toArray
+  let mut cursor := 0
+  while cursor < queue.size do
+    let leaf := queue[cursor]!
+    cursor := cursor + 1
+    remaining := remaining.set! leaf false
+    for caller in callers[leaf]! do
+      degree := degree.modify caller (· - 1)
+      if degree[caller]! == 0 then queue := queue.push caller
+  let mut cyclic := Array.replicate fns.size false
+  for index in [:fns.size] do
+    if !remaining[index]! then continue
+    let mut seen : Std.HashMap Nat Unit := {}
+    let mut pending := callees[index]!
+    let mut found := false
+    while !found do
+      let callee :: rest := pending | break
+      pending := rest
+      if callee == index then found := true
+      else if remaining[callee]! && !seen.contains callee then
+        seen := seen.insert callee ()
+        pending := callees[callee]! ++ pending
+    cyclic := cyclic.set! index found
+  return cyclic
+
 private partial def cellReferenceLiteral (cleanPrototypes : Array Bool) : Expr → Bool
   | .lit value => MetadataValues.hasUnsafeObjectRef cleanPrototypes value
   | .assign _ value | .loop value | .ret value | .print value => cellReferenceLiteral cleanPrototypes value
@@ -2608,6 +2796,7 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       transportTag.any fun tag => cellConstructor tag body
   let transferSafe := if cellTag.isSome then closedTransferSafety fns infos referencedOwners else #[]
   let inert := inertCoercions fns infos capable cellTag
+  let cyclic := if cellTag.isSome then cyclicFunctions fns infos else #[]
   if debug && cellTag.isSome then
     dbg_trace s!"metadata inert coercions={(fns.zipIdx.filter (fun (_, i) => inert[i]!)).toList.map (·.1.name)}"
   -- The static path proves private-irrelevant formal inputs. Other functions may
@@ -2628,6 +2817,7 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       let info := infos[i]?.getD {}
       modify fun st => { st with
         active := some key, captureMismatch := false, contextDeferred := false, cellPath := [0]
+        cellWarm := false, cellLoopHeads := {}
         cellEnabled := (st.cellCapable[i]?.getD false) ||
           (trackTransports && (localTransport[i]?.getD false)), cellRefBase := 0,
         cellScope := i, cellGraphOwner := none }
@@ -2662,6 +2852,7 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       let (background, cleanups) := (← get).sites[i]?.getD (false, [])
       let privateConcurrent := (← get).cellEnabled && cellConcurrentBody fns body
       if !background && cleanups.isEmpty && !privateConcurrent && !((← get).borrowers[i]?.getD false) then
+        modify fun st => { st with cellWarm := true }
         return ← expr fns infos fields fn info slots body
       let saved ← get
       -- Discover potential metadata without validating provisional or
@@ -2859,6 +3050,7 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       debug := debug, scalarReturns
       cellTag := tag, cellCapable := capabilities, closedTransfers := closed
       cellInert := if tag.isSome then inert else #[]
+      cellCyclic := if tag.isSome then cyclic else #[]
       cellTransportTag := transportTag
       plans := Array.replicate fns.size none
       referenceLives := Array.replicate fns.size none

@@ -685,6 +685,16 @@ call through multiplied the contexts of one use (#721). When their bodies are
 certified to store no field, read only their own dictionary and build no
 cell, they keep the roles of their ordinary summaries, leave the heap as it
 is, and return an unknown alias of their arguments.
+A function on a cycle of the call graph is not replayed once per caller heap
+either: a recursion that allocates, such as the functions that resume a lazy
+loop return, gives each level a new heap, and each level restarted the ones
+below it (#753). From the outermost such call to its return, each ordinary
+key has one summary. Its input is the join of the contexts it is called in,
+and the outermost call repeats until no input and no effect grows, entering
+each body at most once per pass and validation mode. A loop that an enclosing
+loop reaches again resumes from its last stable head joined with the new
+entry, in a sequential body without shared locals, where the passes of nested
+loops multiplied before.
 Private-cell concurrency uses graph replay even when a worker introduces
 metadata and never returns. `MetadataReceivers` adds typed virtual locals
 only to the metadata body and analysis frame; emitted Core and runtime
