@@ -133,6 +133,8 @@ echo "== failed local-copy metadata rollback contracts"
 tests/scripts/test-metadata-rollback-copies.sh
 echo "== owner-private metadata store contracts"
 tests/scripts/test-metadata-private-stores.sh
+echo "== metadata storage audit contracts"
+tests/scripts/test-metadata-storage-audit.sh
 echo "== invocation-local return metadata compiler API contracts"
 bash tests/scripts/test-return-boundary-metadata.sh
 echo "== lazy range-loop return metadata contracts"
