@@ -14,6 +14,12 @@ private def normalize (refs : Refs) : Refs :=
 def joinRefs (a b : Refs) : Refs :=
   ((normalize a).merge (normalize b) (· ≤ ·)).eraseReps
 
+/-- Strictly ascending, which is what `normalize` returns: `normalize` leaves
+    such a list as it is, and so does `joinRefs` of it with itself. -/
+private def ascending : Refs → Bool
+  | a :: b :: rest => a < b && ascending (b :: rest)
+  | _ => true
+
 /-- A tuple column can retain the tuple carried by that column, including
     through option wrappers. An opaque metadata column has no known fields. -/
 inductive Column where
@@ -116,40 +122,59 @@ private def joinFieldPayload (facts : Std.HashMap (Nat × Nat) Payload)
   facts.insert key (facts[key]?.map (joinPayload · value) |>.getD value)
 
 /-- Missing facts on an existing object mean an unknown field, rather than
-    a real field. A path where the object is absent contributes no value. -/
+    a real field. A path where the object is absent contributes no value.
+    The result is built from `a`, and only an entry that differs is written:
+    two paths mostly agree, and a join runs at every merge of control. -/
 private def joinFieldPayloads (a b : Memory) : Std.HashMap (Nat × Nat) Payload :=
-  a.fieldPayloads.fold (fun out key value =>
-    match b.fieldPayloads[key]? with
-    | some other => out.insert key (joinPayload value other)
-    | none => if b.nodes.contains key.1 then out else out.insert key value)
-    (b.fieldPayloads.fold (fun out key value =>
-      if a.nodes.contains key.1 then out else out.insert key value) {})
+  let merged := b.fieldPayloads.fold (fun out key value =>
+    match a.fieldPayloads[key]? with
+    | some old =>
+      let joined := joinPayload old value
+      if joined == old then out else out.insert key joined
+    | none => if a.nodes.contains key.1 then out else out.insert key value) a.fieldPayloads
+  a.fieldPayloads.fold (fun out key _ =>
+    if !b.fieldPayloads.contains key && b.nodes.contains key.1 then out.erase key else out) merged
 
 /-- An absent field on an existing incoming object is unknown, not empty.
     An absent object contributes no field on that path. -/
 private def joinFields (a b : Memory) : Std.HashMap (Nat × Nat) Refs :=
-  a.fields.fold (fun out key value =>
-    match b.fields[key]? with
-    | some other => out.insert key (joinRefs value other)
-    | none => if (b.nodes[key.1]?.map (·.external)).getD false then out
-        else out.insert key value)
-    (b.fields.fold (fun out key value =>
-      if (a.nodes[key.1]?.map (·.external)).getD false then out
-      else out.insert key value) {})
+  let merged := b.fields.fold (fun out key value =>
+    match a.fields[key]? with
+    | some old => if old == value && ascending value then out else out.insert key (joinRefs old value)
+    | none => if (a.nodes[key.1]?.map (·.external)).getD false then out else out.insert key value) a.fields
+  if b.nodes.fold (fun found _ node => found || node.external) false then
+    a.fields.fold (fun out key _ =>
+      if !b.fields.contains key && (b.nodes[key.1]?.map (·.external)).getD false then out.erase key
+      else out) merged
+  else merged
 
 /-- Missing nodes describe paths on which that allocation has not occurred.
     A node present on both paths is unique only when both paths prove it. -/
-def join (a b : Memory) : Memory := {
-  nslots := min a.nslots b.nslots
-  locals := b.locals.fold (fun out i refs =>
-    if i < min a.nslots b.nslots then
-      out.insert i (joinRefs (out[i]?.getD []) refs) else out)
-    (a.locals.filter fun i _ => i < min a.nslots b.nslots)
-  fields := joinFields a b
-  fieldPayloads := joinFieldPayloads a b
-  cells := b.cells.fold joinCell a.cells
-  nodes := b.nodes.fold (fun out id node =>
-    out.insert id (out[id]?.map (joinNode · node) |>.getD node)) a.nodes }
+def join (a b : Memory) : Memory :=
+  let nslots := min a.nslots b.nslots
+  { nslots
+    locals := b.locals.fold (fun out i refs =>
+        if i < nslots then
+          match out[i]? with
+          | some old => if old == refs && ascending refs then out else out.insert i (joinRefs old refs)
+          | none => out.insert i (joinRefs [] refs)
+        else out)
+      (if a.locals.fold (fun inside i _ => inside && i < nslots) true then a.locals
+        else a.locals.filter fun i _ => i < nslots)
+    fields := joinFields a b
+    fieldPayloads := joinFieldPayloads a b
+    cells := b.cells.fold (fun out id payload =>
+      match out[id]? with
+      | some old =>
+        let joined := joinPayload old payload
+        if joined == old then out else out.insert id joined
+      | none => out.insert id payload) a.cells
+    nodes := b.nodes.fold (fun out id node =>
+      match out[id]? with
+      | some old =>
+        let joined := joinNode old node
+        if joined == old then out else out.insert id joined
+      | none => out.insert id node) a.nodes }
 
 def recent (site : Nat) : Nat := 2 + 2 * site
 
