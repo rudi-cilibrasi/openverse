@@ -691,6 +691,8 @@ private structure State where
   cellRecursive : Std.HashMap Nat Unit := {}
   cellRefBase : Nat := 0
   cellCapable : Array Bool := #[]
+  /-- Recursive subtype coercions certified heap-inert (`inertCoercions`). -/
+  cellInert : Array Bool := #[]
   /-- Independently validated all-real transfers. The leading flag requires
       the caller's complete alias state to prove empty private input refs. -/
   closedTransfers : Std.HashMap Nat (Bool × Option Bool × TupleParts × Bool) := {}
@@ -1234,6 +1236,18 @@ private partial def invoke (fns : Array Fn) (infos : Array Info)
   let references := out.argumentRefs.flatten
   let privateCall := state.cellTag.isSome &&
     ((state.cellCapable[g]?.getD false) || MetadataCells.mayReachPrivate out.slots.heap references)
+  if privateCall && (state.cellInert[g]?.getD false) then
+    -- A certified coercion stores nothing, reads no cell payload and creates
+    -- no cell, so the caller's heap is unchanged and no argument escapes. Its
+    -- roles are those of its ordinary summary. No alias contract is assumed
+    -- for its result, not even for the carriers it rebuilds: the result may
+    -- be an argument, any object reachable from one, or an object the heap
+    -- does not know.
+    let (result, parts, yielded) ← request (g, keyArgs)
+    let refs := if state.scalarReturns[g]?.getD false then [] else
+      MetadataCells.joinRefs (if cellExternal out.slots.heap references then [0, 1] else [0]) references
+    if state.debug then dbg_trace s!"inert coercion {(fns[g]?.map (·.name)).getD "?"} refs={refs}"
+    return ({ out with valueRefs := refs }, result, parts, yielded)
   if privateCall then
     let some callee := fns[g]? | throw "internal: private-cell call has no body"
     let body := gi.body.getD callee.body
@@ -2371,6 +2385,77 @@ private def cellCapabilities (fns : Array Fn) (infos : Array Info) (tag : Option
         queue := queue.push caller
   return capable
 
+/-- The shape of a heap-inert coercion body: it stores no field, reads fields
+    of its own receiver only, allocates neither a cell nor a transport nor an
+    object with fields, prints nothing, and calls only other candidates. -/
+private partial def inertCoercionBody (candidate : Nat → Bool) (cellTag transportTag : Option Nat) : Expr → Bool
+  | .lit _ | .local _ | .brk => true
+  | .assign _ value | .loop value | .ret value => inertCoercionBody candidate cellTag transportTag value
+  | .print _ => false
+  | .seq left right =>
+    inertCoercionBody candidate cellTag transportTag left && inertCoercionBody candidate cellTag transportTag right
+  | .prim _ args => args.all (inertCoercionBody candidate cellTag transportTag)
+  | .heap (.get _) [.local 0] => true
+  | .heap (.new tag) [] => some tag != cellTag && some tag != transportTag
+  | .heap (.isTag _) args | .heap .tag args => args.all (inertCoercionBody candidate cellTag transportTag)
+  | .heap _ _ => false
+  | .call g args => candidate g && args.all (inertCoercionBody candidate cellTag transportTag)
+  | .ite condition yes no =>
+    inertCoercionBody candidate cellTag transportTag condition &&
+      inertCoercionBody candidate cellTag transportTag yes && inertCoercionBody candidate cellTag transportTag no
+  | .forE _ source filter body =>
+    inertCoercionBody candidate cellTag transportTag source &&
+      inertCoercionBody candidate cellTag transportTag filter && inertCoercionBody candidate cellTag transportTag body
+
+/-- The recursive subtype-evidence coercions (`$subtype….Up`) whose replay in
+    a caller's heap is replaced by their ordinary summary and an unknown
+    result alias. Replay is exact but keyed by the complete heap; these
+    coercions call each other through every dictionary field, so the contexts
+    of one use multiply (#721). The certificate is the greatest set of
+    compiler-owned coercions closed under calls in which every member, in its
+    emitted and in its analysed body, has the inert shape, has a receiver that
+    is no cell, is not cell-capable and uses no frame, cleanup or task. A
+    coercion that is not recursive keeps its exact replay. -/
+private def inertCoercions (fns : Array Fn) (infos : Array Info) (capable : Array Bool)
+    (cellTag : Option Nat) : Array Bool := Id.run do
+  if cellTag.isNone then return Array.replicate fns.size false
+  let transportTag := infos.findSome? (·.cellTransportTag)
+  let bodies (index : Nat) : List Expr :=
+    match fns[index]? with
+    | none => []
+    | some fn => fn.body :: ((infos[index]?.getD {}).body.map ([·])).getD []
+  let mut inert := fns.mapIdx fun index fn =>
+    let info := infos[index]?.getD {}
+    fn.name.startsWith "$subtype" && fn.name.endsWith ".Up" && fn.arity > 0 &&
+      !(capable[index]?.getD true) && info.nonCellMask.testBit 0 &&
+      info.cellParams.isEmpty && info.cellSlots.isEmpty && info.shared.isEmpty &&
+      info.metadataWrites.isEmpty && !info.metadataResult && !info.borrowTasks && !info.cellHelper &&
+      info.source.slots.isEmpty && info.source.copies.isEmpty && info.source.forwarded.isEmpty &&
+      (bodies index).all fun body =>
+        let (background, cleanups) := MetadataPlan.sites fns body
+        !background && cleanups.isEmpty
+  let mut shrinking := true
+  while shrinking do
+    shrinking := false
+    for index in [:fns.size] do
+      if inert[index]! && !(bodies index).all
+          (inertCoercionBody (fun g => inert[g]?.getD false) cellTag transportTag) then
+        inert := inert.set! index false
+        shrinking := true
+  -- Within the certificate, the functions that can reach themselves.
+  let mut recursive := Array.replicate fns.size false
+  for index in [:fns.size] do
+    if !inert[index]! then continue
+    let mut seen : Std.HashMap Nat Unit := {}
+    let mut pending := (bodies index).flatMap MetadataPlan.calls
+    while let callee :: rest := pending do
+      pending := rest
+      if seen.contains callee then continue
+      seen := seen.insert callee ()
+      pending := (bodies callee).flatMap MetadataPlan.calls ++ pending
+    recursive := recursive.set! index (seen.contains index)
+  return recursive
+
 private partial def cellReferenceLiteral (cleanPrototypes : Array Bool) : Expr → Bool
   | .lit value => MetadataValues.hasUnsafeObjectRef cleanPrototypes value
   | .assign _ value | .loop value | .ret value | .print value => cellReferenceLiteral cleanPrototypes value
@@ -2486,6 +2571,9 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
   let openRoots := roots.filter (fun i => !closedEntry i)
   let capable := cellCapabilities fns infos cellTag
   let transferSafe := if cellTag.isSome then closedTransferSafety fns infos referencedOwners else #[]
+  let inert := inertCoercions fns infos capable cellTag
+  if debug && cellTag.isSome then
+    dbg_trace s!"metadata inert coercions={(fns.zipIdx.filter (fun (_, i) => inert[i]!)).toList.map (·.1.name)}"
   -- The static path proves private-irrelevant formal inputs. Other functions may
   -- use the same all-real transfer only in a caller context whose complete
   -- alias state proves that no private input identity is reachable.
@@ -2739,6 +2827,7 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
     let (_, final) ← (action entries).run {
       debug := debug, scalarReturns
       cellTag := tag, cellCapable := capabilities, closedTransfers := closed
+      cellInert := if tag.isSome then inert else #[]
       cellTransportTag := infos.findSome? (·.cellTransportTag)
       plans := Array.replicate fns.size none
       referenceLives := Array.replicate fns.size none
