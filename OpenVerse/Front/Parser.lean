@@ -736,7 +736,13 @@ partial def parseCmp (stop : Nat) : PM SExpr := do
         -- `1 <> 2 <> 1` is `(1 <> 2) <> 1`, which fails; the others chain,
         -- `0 <= X <= 9` checks `0 <= X` and `X <= 9`: the Book of Verse's
         -- tests, `Operators/Associativity.versetest` 6-33)
-        if op == "<>" && !rest.isEmpty then
+        -- (#724: `<` or `<=` after `>` or `>=` groups from the left too, as
+        -- on Epic's Verse VM: `5 > 1 < 3` is `(5 > 1) < 3`, that is `5 < 3`,
+        -- which fails; `3 < 5 < 4`, `5 > 3 > 4` and `1 < 5 > 3` stay chains:
+        -- tests/conformance/versevm/differential/prec-compare-chain-mixed)
+        let turns := (op == "<" || op == "<=") &&
+          (rest.back?.map (·.1)).any fun o => o == ">" || o == ">="
+        if (op == "<>" || turns) && !rest.isEmpty then
           a := .cmp a.pos a rest.toList
           rest := #[]
         rest := rest.push (op, ← parseChoice stop)
@@ -1465,6 +1471,12 @@ partial def parseEnumBody (p : Pos) : PM SExpr := do
       if a.isSym "," || a.isSym ";" then bump; continue
       names := names.push (← value)
   else perr o "expected ':' or '{' after enum"
+  -- (#724: at most 256 values, each a byte. UEFN 43.12,
+  -- ++Fortnite+Release-43.12-CL-60598086, refuses the 257th, error 3552,
+  -- followup-book2/enum-wide, and admits 256, enum-wide-control; the
+  -- Book's Blueprint VM test, Enum.versetest:171)
+  if h : 256 < names.size then
+    throw s!"{p.show}: this enum has {names.size} values, and its 257th, {names[256]}, is out of byte range: an enum has at most 256 values (Epic's Verse compiler, UEFN 43.12: error 3552, \"Enumerator value … is out of byte-range which is not yet supported\")"
   return .enumDef p names.toList seen
 
 partial def parseInterp (parts : List StrPart) : PM (List SPart) := do
@@ -2620,6 +2632,15 @@ partial def usesBitwise (toks : Array Token) : Bool :=
     | .ident n => n != "BitNot" && bitwiseFunctions.contains n
     | _ => inInterpolations usesBitwise t
 
+/-- A marker that the source may call `GetRandomInt` (#724): the elaborator
+    then adds its helper (`Front/Random.lean`). -/
+def randomMarker : String := "$uses:random"
+
+/-- Whether the source names `GetRandomInt`, also in a string's
+    interpolations. -/
+partial def usesRandom (toks : Array Token) : Bool :=
+  toks.any fun t => t.identName? == some "GetRandomInt" || inInterpolations usesRandom t
+
 /-- A marker that the source may call `ToDiagnostic`: the elaborator then
     adds its helpers, and an `any` keeps what it needs to print itself
     (`Front/Diagnostic.lean`). -/
@@ -2636,6 +2657,7 @@ def withRatMarker (toks : Array Token) (tops : List STop) : List STop :=
   let tops := if usesQualifiers toks then tops ++ [.const p qualifierMarker [] none (.block p [])] else tops
   let tops := if usesReplaceAll toks then tops ++ [.const p replaceAllMarker [] none (.block p [])] else tops
   let tops := if usesDiagnostic toks then tops ++ [.const p diagnosticMarker [] none (.block p [])] else tops
+  let tops := if usesRandom toks then tops ++ [.const p randomMarker [] none (.block p [])] else tops
   if usesBitwise toks then tops ++ [.const p bitwiseMarker [] none (.block p [])] else tops
 
 /-- The definitions of a source file, and the marker of its `case` arms

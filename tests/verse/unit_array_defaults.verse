@@ -1,9 +1,10 @@
+# (run with --parametric-var-fields, openverse's extension: Epic's compiler refuses a generic function over a parametric class whose mutable data holds an implicit type parameter, or a var field in a parametric interface, UEFN 43.12 errors 3552 and 3502, #724)
 buffer(t:type) := class:
     var Items:[]t = ()
 
     Add(X:t):void = set Items += array{X}
 
-    Take()<decides>:t =
+    Take()<transacts><decides>:t =
         Result := Items[0]
         set Items = for (I -> X : Items, I > 0) { X }
         Result

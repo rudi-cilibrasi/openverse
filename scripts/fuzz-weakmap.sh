@@ -18,6 +18,8 @@ for ((s=first; s<first+n; s++)); do
     genbad=$((genbad+1)); echo "GENERATOR FAILED seed $s"; continue
   fi
   rm -f "$tmp/p.vbc"
+  # (#515: Epic's default effect, written out: <transacts> where a function without one is called from a failure context or <transacts> code)
+  python3 -I "$root/scripts/models/default_effect.py" "$tmp/p.verse"
   timeout 60 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" > "$tmp/l.out" 2>"$tmp/l.err"; le=$?
   timeout 60 "$cv" "$tmp/p.vbc" > "$tmp/c.out" 2>/dev/null; ce=$?
   ran=$((ran+1))

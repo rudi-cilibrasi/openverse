@@ -13,6 +13,7 @@
 -/
 import OpenVerse.Front.Modules
 import OpenVerse.Front.Refine
+import OpenVerse.Front.Lexer
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -121,6 +122,95 @@ def checkDefinedOnce (tops : List STop) : Except String Unit := do
       | some a, none => [a]
       | some a, some (_, types) => types ++ [a]
       | none, _ => [])
+
+/-- (#724) No two types of one scope, the top level or a module, have names
+    that differ only in case: Epic's toolchain gives each a name its own,
+    and its names are case-insensitive. UEFN 43.12
+    (++Fortnite+Release-43.12-CL-60598086) refuses `cc := class{V:int = 1}`
+    beside `CC := class{V:int = 2}`, error 9002, "Found existing type 'CC'
+    that is already being created this compile. Please rename the class to
+    be case insensitive unique" (followup-book3/case-collision-classes); a
+    function and a constant of such names it admits
+    (case-collision-function-constant). Interfaces, structs and enums are
+    taken to be types as classes are, each against every other kind
+    (followup-book4 asks). A type alias is no type of its own. -/
+def checkTypeCaseCollisions (tops : List STop) : Except String Unit := do
+  let mut seen : Std.HashMap String String := {}
+  for t in tops do
+    let def? : Option (Pos × String) := match t with
+      | .classDef p n .. => some (p, n)
+      | .const p n _ none (.structDef ..) => some (p, n)
+      | .const p n _ _ (.enumDef ..) => some (p, n)
+      | _ => none
+    if let some (p, n) := def? then
+      if (qualParts n).any (·.contains '$') then continue
+      let parts := qualParts n
+      let simple := parts.getLastD n
+      let key := qualJoin (parts.dropLast ++ [simple.toLower])
+      match seen[key]? with
+      | some m =>
+        if m != n then
+          let shown (x : String) := ".".intercalate (qualParts x)
+          throw s!"{p.show}: the types {shown m} and {shown n} have names that differ only in case: Epic's toolchain makes the two one, its names being case-insensitive, so rename one (Epic's Verse compiler, UEFN 43.12: error 9002, \"Found existing type '{simple}' that is already being created this compile. Please rename the class to be case insensitive unique\")"
+      | none => seen := seen.insert key n
+
+/-- (#724) The names Epic's compiler takes, by kind (`maxDataNameLength`,
+    `maxFunctionNameLength`, `maxMethodNamesLength`, `maxClassNameLength`
+    for a struct; a class's is `classHierarchy`'s, every identifier's past
+    1024 the lexer's): measured on UEFN 43.12 for definitions without
+    parameters (followup-book3). A function or method with parameters may
+    be refused shorter by Epic's compiler (followup-book4/long-ident-function-param,
+    -method-param): not modelled, a known difference. -/
+def checkNameLengths (tops : List STop) : Except String Unit := do
+  let simple (n : String) : String := (qualParts n).getLastD n
+  let tooLong (p : Pos) (what n : String) (limit : Nat) : Except String Unit :=
+    if n.length > limit then
+      throw s!"{p.show}: the name of {what}, {(n.take 16).toString}…, has {n.length} characters, more than {limit}, the most Epic's compiler takes there (UEFN 43.12, measured for definitions without parameters: error 3655, \"Identifier is too long\")"
+    else pure ()
+  let data (body : SExpr) : Except String Unit := do
+    for (q, x) in body.definedNames do
+      if !x.contains '$' then tooLong q "a local" x maxDataNameLength
+  -- (a parameter's name is not measured: UEFN 43.12 admits one of 1005
+  -- characters, followup-book4/long-ident-parameter-1005, so it has the
+  -- lexer's 1024; its default's locals are measured)
+  let params (ps : List SParam) : Except String Unit := do
+    for prm in ps do
+      if let some d := prm.default then data d
+  for t in tops do
+    match t with
+    | .fn p n ps _ _ _ body =>
+      let f := simple n
+      if !n.startsWith "(" && !n.contains '$' then tooLong p "a function" f maxFunctionNameLength
+      params ps
+      data body
+    | .const p n _ _ body =>
+      if !n.contains '$' then
+        match body with
+        | .structDef .. =>
+          if (simple n).length > maxClassNameLength then
+            throw s!"{p.show}: the struct name {((simple n).take 16).toString}… has {(simple n).length} characters, more than {maxClassNameLength} (Epic's Verse compiler, UEFN 43.12: error 9002, \"Cannot find struct\")"
+        | .enumDef .. | .typeAlias .. => pure ()
+        | _ => tooLong p "a constant" (simple n) maxDataNameLength
+      match body with
+      | .structDef _ _ _ fs =>
+        for fd in fs do
+          tooLong p "a field" (bareName fd.name) maxDataNameLength
+          if let some d := fd.default then data d
+      | .enumDef .. | .typeAlias .. => pure ()
+      | _ => data body
+    | .classDef p c _ _ _ _ isIface fs ms =>
+      for fd in fs do
+        tooLong p "a field" (bareName fd.name) maxDataNameLength
+        if let some d := fd.default then data d
+      for m in ms do
+        if let .fn q mn ps _ _ _ body := m then
+          let mname := match (mn.drop 1).toString.splitOn ":)" with
+            | [_, x] => if mn.startsWith "(" then x else mn
+            | _ => mn
+          if !isIface && !mname.startsWith "$" && (simple c).length + mname.length > maxMethodNamesLength then
+            throw s!"{q.show}: the method {(mname.take 16).toString}… of {((simple c).take 16).toString}…: their names have {(simple c).length + mname.length} characters together, more than {maxMethodNamesLength}, the most Epic's compiler takes for a method's (UEFN 43.12, measured for methods without parameters, 983 + 1 and 6 + 981: error 3655, \"Identifier is too long\")"
+          params ps
+          data body
 
 /-- No definition takes the name of a definition of a scope around it
     (Book of Verse ch. 10, "Shadowing and Qualification": "you cannot

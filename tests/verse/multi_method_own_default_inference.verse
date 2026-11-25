@@ -31,8 +31,8 @@ iroot(a:type) := interface:
 iextra(b:type,c:type) := class(iroot(b)):
     Implied<override>(?X:u=DefaultString() where u:type)<transacts>:u = X|X
 holder(x:type,y:type) := class(iextra(x,y)) {}
-All(C:leaf(z) where z:type):[]tuple(z,string,int) = for(V:=C.Pick()): V
-IfaceAll(H:holder(z,w) where z:type,w:type):[]string = for(V:=H.Implied()): V
+All(C:leaf(z) where z:type)<transacts>:[]tuple(z,string,int) = for(V:=C.Pick()): V
+IfaceAll(H:holder(z,w) where z:type,w:type)<transacts>:[]string = for(V:=H.Implied()): V
 Main():void =
     C:=leaf(int){Value:=5}
     for(V:All(C)): Print("all {V(0)} {V(1)} {V(2)}")

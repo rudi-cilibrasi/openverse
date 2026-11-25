@@ -1,4 +1,4 @@
-Send(To:signalable(t), Payload:t where t:type):void =
+Send(To:signalable(t), Payload:t where t:type)<transacts>:void =
     To.Signal(Payload)
 
 Main()<suspends>:void =

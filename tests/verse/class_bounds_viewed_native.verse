@@ -1,5 +1,5 @@
 # Comparable facts from a selected class case remain local to that case (#209).
-NeedCmp(X:t,Y:t where t:subtype(comparable))<decides>:void = X = Y
+NeedCmp(X:t,Y:t where t:subtype(comparable))<transacts><decides>:void = X = Y
 root(t:type) := interface:
     A:t
     Hit(N:t):int

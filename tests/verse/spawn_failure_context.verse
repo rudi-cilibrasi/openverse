@@ -1,3 +1,4 @@
+# (run with --default-rollback, the legacy rule: by default a spawn has the no_rollback effect, which this program's spawn's context excludes, UEFN 43.12 error 3512, #724)
 # spawn in a failure context (the Book's tests: assertions spawn, and
 # LiveVariables.versetest:450-545 spawn in a condition that fails): the
 # task's start, its first run included, is the context's code; when the

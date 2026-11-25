@@ -28,12 +28,17 @@ interrupted = cancel and len(values) > 1
 for v in values[:1] if interrupted else values:
     state += v
     lines.append(f'body {state}')
+# The default's branch is a child of the task that evaluates it, not of Use
+# (#724, the Verse VM's: a branch outlives the function that started it):
+# a race arm's task ends, or is cancelled, before the race gives its result;
+# Main's task ends after the last line. A cancelled arm stops it before its
+# own code unwinds (Epic's Verse VM, UEFN 43.12, branch-cancel-order); an
+# arm that ends, after.
+background, result = f'background {state}', f'result {-1 if interrupted else len(values)} state {state}'
 if interrupted:
-    lines.append(f'body {state}')
+    lines += [background, f'body {state}', f'source {state}', result]
 else:
-    lines.append(f'after {state}')
-lines += [f'source {state}', f'background {state}',
-          f'result {-1 if interrupted else len(values)} state {state}']
+    lines += [f'after {state}', f'source {state}'] + ([background, result] if cancel else [result, background])
 args.expected.write_text('exit=0\n' + '\n'.join(lines) + '\n')
 # (root and extra, holder, box and Make are <computes>: the constants Global
 # and B construct one, and a module's constant has no side effect, Book of Verse

@@ -8,7 +8,7 @@ Pairs(X:t, N:int where t:type):[]tuple(t, int) =
 Nested(X:t, N:int where t:type):[]t =
     for (I := Upto[1, N], J := Upto[I, N]):
         X
-FirstOver(X:t, N:int where t:type):?t =
+FirstOver(X:t, N:int where t:type)<transacts>:?t =
     if (I := Upto[1, 9], I > N) then option{X} else false
 Main():void =
     P := Pairs("a", 3)

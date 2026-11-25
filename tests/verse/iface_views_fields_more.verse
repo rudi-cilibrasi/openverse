@@ -1,3 +1,4 @@
+# (run with --parametric-var-fields, openverse's extension: Epic's compiler refuses a generic function over a parametric class whose mutable data holds an implicit type parameter, or a var field in a parametric interface, UEFN 43.12 errors 3552 and 3502, #724)
 # Fields of interfaces referred to through views (#351), as the review found
 # them: a read or set tests only the classes whose view can be the
 # reference's (c gives i2 string, d int; ifix gives sink int), and is typed

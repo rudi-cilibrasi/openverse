@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Immediate refined loops spawn generic calls; model task/cleanup ordering."""
+"""Immediate refined loops spawn generic calls; model task/cleanup ordering.
+
+The function that spawns has no heap specifier: a spawn has the no_rollback
+effect (#724, UEFN 43.12: error 3512 in a <transacts> function), as its
+default effect does."""
 import argparse
 import pathlib
 import random
@@ -52,7 +56,7 @@ Child(N:int,X:t,?E:[]t=Concatenate() where t:type)<suspends>:void=
     Print("start {N} {E.Length}")
     Sleep(0.5)
     Print("done {N} {E.Length}")
-Use(P:pair(a,b),Q:pair(c,d),H:cell,Z:t where a:type,b:type,c:type,d:type,t:type)<transacts>:int=
+Use(P:pair(a,b),Q:pair(c,d),H:cell,Z:t where a:type,b:type,c:type,d:type,t:type):int=
     var Total:int=0
     var Count:int=0
     defer:Print("source {Total} {H.N}")''')

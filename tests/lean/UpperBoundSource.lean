@@ -48,7 +48,7 @@ def main (args : List String) : IO Unit := do
     "fifo-bound-two-losers", "fifo-bound-two-losers-control", "fifo-bound-sleep", "fifo-bound-sleep-control"]
   let methodValues := ["method-value-argument", "method-value-argument-control",
     "method-value-result", "method-value-result-control", "method-value-state", "method-value-state-control",
-    "method-value-cancel", "method-value-cancel-control"]
+    "method-value-cancel", "method-value-cancel-control", "method-value-stored-control"]
   let callables := ["callable-upper", "callable-upper-control", "callable-default", "callable-default-control",
     "callable-state", "callable-state-control", "callable-waiting", "callable-waiting-control",
     "callable-decides", "callable-decides-control", "callable-bound-only", "callable-bound-only-control",
@@ -85,7 +85,7 @@ def main (args : List String) : IO Unit := do
     "choice-method-bound-refusal", "peer-void-narrow-refusal", "peer-void-comparable-refusal",
     "peer-comparable-equality-refusal", "choice-class-unproved-refusal",
     "method-value-argument-refusal", "method-value-result-refusal",
-    "method-value-stored-refusal", "method-value-stored-control-refusal",
+    "method-value-stored-refusal",
     "callable-bracket-refusal", "callable-decides-refusal", "callable-suspends-refusal",
     "callable-effect-refusal", "callable-effect-control-refusal", "callable-unproved-refusal",
     "container-view-unproved-refusal", "container-view-query-unproved-refusal", "container-view-element-refusal",
@@ -106,12 +106,21 @@ def main (args : List String) : IO Unit := do
     "bound-concurrency-unproved-refusal", "bound-concurrency-cancel-effects-refusal", "bound-concurrency-cancel-effects-control-refusal",
     "bound-undetermined-refusal", "bound-visibility-refusal", "bound-alias-refusal", "peer-void-tuple-refusal",
     "castable-bound-refusal", "castable-bound-peer-refusal", "concrete-bound-refusal"]
+  -- (#724: generic functions whose results have a type parameter inside a
+  -- function type, `Build(…):type{_(:t)<reads>:vehicle}`, compile with
+  -- openverse's conversions, `--function-coercions`; Epic's compiler refuses
+  -- their calls, error 3502)
+  let functionCoerced := ["method-value-argument", "method-value-cancel", "method-value-state"]
   let mut failures := 0
   let cases := (positive ++ fifo ++ methodValues ++ callables ++ containers ++ iterators ++ operators ++ formatting ++ concatenate ++ construction ++ concurrency ++ negative).map (fun name => (name, name))
   for (name, artifact) in cases do
     let root := s!"tests/upper-bounds/{name}"
     let source ← IO.FS.readFile (root ++ ".verse")
-    let result := parseProgram source >>= fun tops => elabProgram tops {}
+    -- (#515: the programs that signal in a failure context compile in the
+    -- legacy transactional mode, `--signal-rollback`; the default refuses them)
+    let options : Options := { signalNoRollback := !signalRefused.contains name }
+    let options := { options with functionCoercions := functionCoerced.contains name }
+    let result := parseProgram source >>= fun tops => elabProgram tops options
     if negative.contains name then
       let fragment := (← IO.FS.readFile (root ++ ".error")).trimAscii.toString
       match result with
@@ -140,11 +149,15 @@ def main (args : List String) : IO Unit := do
         else
           if signalAdmitted.contains name || signalRefused.contains name then
             for profile in [SourceProfile.full, .choiceFree] do
-              let flagged := parseProgram source >>= fun tops => elabProgram tops { profile, signalNoRollback := true }
+              let coerced := functionCoerced.contains name
+              let flagged := parseProgram source >>= fun tops =>
+                elabProgram tops { profile := profile, signalNoRollback := true, functionCoercions := coerced }
               if signalRefused.contains name then
                 match flagged with
                 | .error message =>
-                  unless (message.splitOn "in a failure context, which --signal-no-rollback refuses").length > 1 do
+                  -- (Touch is <transacts>: its own Signal is reported first)
+                  unless (message.splitOn "may signal an event").length > 1 &&
+                      (message.splitOn "no_rollback").length > 1 do
                     throw (IO.userError s!"{artifact}: wrong signal policy refusal: {message}")
                 | .ok _ => throw (IO.userError s!"{artifact}: signal policy admitted a bounded rollback signal")
               else
@@ -163,8 +176,9 @@ def main (args : List String) : IO Unit := do
                 throw (IO.userError s!"{artifact}: wrong choice-free refusal: {message}")
             | .ok _ => throw (IO.userError s!"{artifact}: --no-choice admitted collection iteration")
           if profiled.contains name then
-            let strict ← match parseProgram source >>= fun tops =>
-                elabProgram tops { profile := .choiceFree } with
+            let options : Options := { profile := .choiceFree, signalNoRollback := !signalRefused.contains name }
+            let options := { options with functionCoercions := functionCoerced.contains name }
+            let strict ← match parseProgram source >>= fun tops => elabProgram tops options with
               | .ok strict => pure strict
               | .error message => throw (IO.userError s!"{artifact}: --no-choice refused: {message}")
             unless strict.prog.encode == compiled.prog.encode do

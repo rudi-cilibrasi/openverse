@@ -10,7 +10,7 @@ against it. This page records the decisions behind the shape of the code.
 
 - Semantics: [Two languages, one semantics](#two-languages-one-semantics) · [Failure and rollback](#failure-and-rollback) · [What a `for` undoes](#what-a-for-undoes-one-search) · [Choice](#choice-iteration-over-alternatives) · [Fuel](#fuel)
 - Elaboration: [The elaborator's mutual block](#the-elaborators-mutual-block-325) · [Elaboration in phases](#elaboration-in-phases) · [Applications, in order](#applications-in-order) · [Elaboration in rounds](#elaboration-in-rounds) · [Translation validation](#translation-validation-instead-of-a-verified-front-end)
-- Front end: [Modules](#modules-a-renaming-before-elaboration) · [Qualified names](#qualified-names-one-resolver-for-every-qualifier) · [Access](#access-one-order-checked-where-names-are-resolved) · [Attributes](#attributes-checked-and-taken-out-first) · [Markers](#markers-what-the-passes-before-elaboration-write-for-one-another) · [Types as values](#types-as-values-classes-the-front-end-writes) · [Fields with accessors](#fields-with-accessors-calls-of-their-classs-methods) · [Type aliases](#type-aliases-a-substitution-before-elaboration) · [Commas in blocks](#commas-in-blocks-tuples-in-the-parser) · [Destructured parameters](#destructured-parameters-a-desugaring-in-the-parser) · [Extension methods](#extension-methods-functions-that-method-calls-find) · [Floats](#floats-canonical-bits) · [Equality](#equality-verse-cores-veq-and-the-front-end-across-types) · [comparable](#comparable-boxes-in-verse-cores-dyn) · [Weak maps and module-scoped vars](#weak-maps-and-module-scoped-vars) · [Rationals](#rationals-helpers-written-in-verse) · [Bitwise functions](#bitwise-functions-helpers-written-in-verse) · [Generic functions](#generic-functions-polymorphic-verse-core) · [Function values](#function-values-hidden-interfaces-and-classes) · [Concurrency](#concurrency-suspends-functions-as-frames)
+- Front end: [Modules](#modules-a-renaming-before-elaboration) · [Qualified names](#qualified-names-one-resolver-for-every-qualifier) · [Access](#access-one-order-checked-where-names-are-resolved) · [Attributes](#attributes-checked-and-taken-out-first) · [Markers](#markers-what-the-passes-before-elaboration-write-for-one-another) · [Types as values](#types-as-values-classes-the-front-end-writes) · [Fields with accessors](#fields-with-accessors-calls-of-their-classs-methods) · [Type aliases](#type-aliases-a-substitution-before-elaboration) · [Commas in blocks](#commas-in-blocks-tuples-in-the-parser) · [Destructured parameters](#destructured-parameters-a-desugaring-in-the-parser) · [Extension methods](#extension-methods-functions-that-method-calls-find) · [Floats](#floats-canonical-bits) · [Equality](#equality-verse-cores-veq-and-the-front-end-across-types) · [comparable](#comparable-boxes-in-verse-cores-dyn) · [Weak maps and module-scoped vars](#weak-maps-and-module-scoped-vars) · [Rationals](#rationals-helpers-written-in-verse) · [Bitwise functions](#bitwise-functions-helpers-written-in-verse) · [Ints beyond 64 bits](#ints-beyond-64-bits-a-fast-path-and-a-heap-representation) · [Generic functions](#generic-functions-polymorphic-verse-core) · [Function values](#function-values-hidden-interfaces-and-classes) · [Concurrency](#concurrency-suspends-functions-as-frames)
 - Classes and the heap: [Classes as references](#classes-as-references) · [Unification](#unification) · [Typing the heap](#typing-the-heap) · [Typed defaults](#why-every-slot-starts-with-a-typed-default)
 - C runtime: [The binary format and the loader](#the-binary-format-and-the-loader) · [Two semantics, one seam](#two-semantics-one-seam) · [Objects in the C runtime](#objects-in-the-c-runtime)
 - [Readings of the Book](#readings-of-the-book)
@@ -350,8 +350,10 @@ places their own `defer:`s too, at their end, with the marker outside;
 with no exit gets none, so the code of a block without one does not
 change.
 
-A construction evaluates its fields in its type's declaration order, so its
-fields are first put in that order, which by itself changes nothing. Then
+A construction evaluates the fields it gives in the order written (#724, as
+Epic's Verse VM does), at the places the given fields have in its type's
+declaration order, and an omitted default at its own place; its fields are
+first put in that order of evaluation, which by itself changes nothing. Then
 they are lifted as a call's arguments. `Choice` works on syntax, so the
 elaborator passes the order in (`choiceOrder`, through `prepare`,
 `hasChoice` and `takeFirst?`). Each field's entry also says whether its default is more than a literal.
@@ -1451,16 +1453,16 @@ where an elaboration asks for something and goes no further
 8. `upperBounds`: the bounds of type parameters and the relations fields declare, resolved for every header, then checked; then `checkAliasBounds`, the bounds of the type applications type aliases write.
 9. `interfaceViews`: the interfaces referred to through views; a class that then needs hidden fields for all its type parameters makes the elaboration ask for them (`Views`, tier 2).
 10. `pinsAndAccessors`: the pins of the classes dispatched to under a refinement, and the fields read through accessors.
-11. `addPlaceholders`: placeholder classes and prototypes; no struct contains itself, and map keys are comparable.
+11. `addPlaceholders`: placeholder classes and prototypes; no struct contains itself, and map keys are comparable. Then `addConstantObjects` (#724): one more object among the prototypes for each module constant `N:c = c{}` of a `<unique>` class without fields (`TyEnv.constObjects`).
 12. `functionOverloads` (`Elab/Signatures.lean`): overloaded functions renamed, and the overloads of functions and methods, which the environment records (`Overloads`).
 13. `declareSignatures`: each function's and constant's signature as declared (`Declared`); then the Book's variances of the classes and interfaces, and every type parameter of a source function given by its parameters, by them (`checkDeterminedTypeParams`, the Book's 3503).
 14. `inferSignatures`: the types of unannotated constants, then the defaults function types write checked (#503), then the effects inferred in rounds (`Signatures`).
 15. `checkSignatures`: overloads, overrides, implementations and overriding fields agree, and no field has two interfaces' defaults.
-16. `elabFieldDefaults` (`Elab/Functions.lean`): construction effects, and each field default elaborated once (`FieldDefaults`).
-17. `elabFunctions`: each function and constant, then each generic function once (`ElaboratedFn`), the environment knowing where the accessors are.
+16. `elabFieldDefaults` (`Elab/Functions.lean`): construction effects, and each field default elaborated once (`FieldDefaults`), as a data member's definition: a call in it of a function that might not complete is refused (Epic's 3582, #724: `Ctx.dataMember`, `noteDivergentCall`, `divergentCallError`; not with `--extended-defaults`).
+17. `elabFunctions`: each function and constant, then each generic function once (`ElaboratedFn`), the environment knowing where the accessors are; a constant's value, a data member's definition, as a field default's (3582, #724), then its writes.
 18. `roundNeeds` (`Elab.lean`): what the round asks for; an elaboration that asks how choices are inlined (tier 1), for the await mode's prelude (tier 2: it calls a task's `Await`, `$Await`, without it), or for functions (tier 3), goes no further.
 19. `mainSignature` and `prepareLowering`: the function the program runs; the accessors, the class table, prototypes and pins, and the refined tests that cannot pass removed (`Lowering`).
-20. The checks of the prepared functions, in order: functions with several values computed at their calls (`checkEager`, which may ask for lazy ones), event signals in failure contexts (with `--signal-no-rollback`), lazily taken calls that need functions of their own (`checkLoopFirst`, which may ask for them), the convergence of field defaults (`checkInitializerConvergence`) and the flow of type metadata (`MetadataFlow.check`).
+20. The checks of the prepared functions, in order: functions with several values computed at their calls (`checkEager`, which may ask for lazy ones), event signals in failure contexts and in bodies whose effects exclude `no_rollback` (unless `--signal-rollback`), lazily taken calls that need functions of their own (`checkLoopFirst`, which may ask for them), the convergence of field defaults (`checkInitializerConvergence`) and the flow of type metadata (`MetadataFlow.check`).
 21. `lowerProgram`: failure capture, concurrency and the `$Main` prelude (`LoweredProgram`).
 22. `certify`: no call names a family's stub, and the program passes `Prog.check`, `Prog.checkControl` and `Prog.checkTypes` (`Compiled`).
 
@@ -1847,7 +1849,7 @@ beside the pass that makes it:
 | `$typeArgument:t` (`TypeArguments.paramPrefix`) | a type given as an argument, as a parameter | `TypeArguments` | `TypeArguments` |
 | `$type:C` (`TypeValues.valueClass`), `$castable` (`TypeValues.castableMark`) | the class of the value `C`; a `<castable>` class's metatype | `TypeValues` | the join of type values, messages |
 | `$accessor` (`Accessors.accessorStruct`) | the struct of an accessor's first parameter, `(:accessor)`, which no program can name, so that only a field's reads and writes call the accessors | `Accessors` | the elaboration of a field's reads and writes (`accessorArg`) |
-| `$initializerOrdinaryCall` (`InitializerConvergence.sourceCallMarker`) | a source function, among its specifiers: a field's default may not call it | `admitSource` (`InitializerConvergence.markSource`, but with `--extended-defaults`) | `checkInitializerConvergence` |
+| `$initializerOrdinaryCall` (`InitializerConvergence.sourceCallMarker`) | a source function, among its specifiers: a field's default, or a constant's value, may not call it | `admitSource` (`InitializerConvergence.markSource`, but with `--extended-defaults`) | `checkInitializerConvergence`; `Sig.sourceCall`, for the calls the elaboration notes in a data member's definition (#724) |
 | `$castableClass` (`castableClassMarker`) | the interface every `<castable>` class is below | `UpperBounds.markCastable` | the bounds' evidence (`Context`, `SubtypeEvidence`), messages |
 
 The constants the parser writes beside a definition (a qualifier's, a
@@ -2202,12 +2204,15 @@ projecting their parts. Unary negation saves one operand and negates its
 numerator. The ordinary two-int forms and loader remain unchanged.
 
 `Core/Prims.lean` defines these operations with exact `Int` intermediates
-and checks int64 bounds after gcd reduction and sign normalization. C uses
-signed 128-bit intermediates: with int64 numerators and positive int64
-denominators, each product and each add/subtract sum fits that range.
+and checks the parts' length (the ints', 2^20 bits, #724; before, int64
+bounds) after gcd reduction and sign normalization. C uses signed 128-bit
+intermediates for four parts that fit in 64 bits: each product and each
+add/subtract sum fits that range, and a reduced part past 64 bits becomes
+an int on the heap (`vx_big_words`); a part already past 64 bits takes
+`bigint.c`'s path (`vx_big_rational`, Euclid's gcd on magnitudes).
 Unsigned magnitudes support reduction without negating a signed minimum.
-Only rational division can fail, on a zero divisor; an unrepresentable
-reduced result raises overflow. The extended primitive typing, checker
+Only rational division can fail, on a zero divisor; a reduced part longer
+than an int raises overflow. The extended primitive typing, checker
 soundness, type-safety, scoping and control proofs build as before. The C
 wide implementation is tested against independent exact-fraction oracles;
 it is outside QuickProof's existing two-int arithmetic law. See
@@ -2264,17 +2269,81 @@ marker `$uses:bitwise`, or the entry expression), renamed `$bitAnd` etc.:
   `Floor(X / 2)` (toward minus infinity, so a negative number's bits are
   its two's complement), until both operands are 0 or -1, every bit above
   being the sign's; the bits seen are summed, and the rest, the operation
-  of the two signs from bit `i` up, weigh `-2^i` together. At most 63
-  rounds; every number computed is in range.
-- `BitShiftLeft[X, N]`: fails for `N < 0`, else doubles `X` up to `N` times
-  or until it is 0, a doubling out of range being the overflow error
-  (which an out-of-range result always reaches, and an in-range one never).
-- `BitShiftRight[X, N]`: fails for `N < 0`, else halves `X` up to `N` times
-  or until it is 0 or -1.
+  of the two signs from bit `i` up, weigh `-2^i` together, added as twice
+  the last bit's weight so that no number computed is longer than an
+  operand. As many rounds as the operands' highest differing bit.
+- `BitShiftLeft[X, N]`: fails for `N < 0`, else `X · 2^N`, with `2^N` by
+  squaring (`$bitPow2`, which squares only while bits of `N` remain, so
+  nothing it computes exceeds `2^N`); past the ints' 2^20 bits, the
+  overflow error.
+- `BitShiftRight[X, N]`: fails for `N < 0`, else `Floor(X / 2^N)`, or 0 or
+  -1 once `N` is 2^20 or more (no int is that long).
 
 `scripts/fuzz-bitwise.sh` checks both implementations against Python's
-unbounded ints with the int64 range, programs ending with the overflow
-error included.
+unbounded ints, programs ending with `ToString` of an int beyond 64 bits
+(the overflow error) included; `scripts/fuzz-bigint.sh` checks them on
+operands beyond 64 bits.
+
+## Random numbers and the clock: no primitive, no nondeterminism
+
+Epic's library has functions that read a random source, the wall clock and
+a player's storage (#724; its shipped compiler admits and runs them). A
+Core primitive for one would either make a run's result depend on the
+machine, so the Lean interpreter and the C runtime could not be compared
+byte for byte, or carry a state through Verse Core's semantics, its proofs,
+the format and the runtime. None is needed; LANGUAGE.md ("Random numbers,
+the clock and the player map") states each as a difference from Epic's.
+
+- `GetRandomInt` is a helper written in Verse (`Front/Random.lean`, added
+  to a program that names it, as the bitwise helpers are): a 64-bit linear
+  congruential generator with a fixed seed. Its state is the one `var`
+  field of the prototype of a hidden class, `$randomState`, read by the
+  name `$randomCell` as the module state is read (`ModuleVars`): a
+  prototype is an object every function can reach as a literal, so the
+  state needs no parameter and no module-scoped variable. It is `<transacts>`,
+  as Epic's is, and a failure context undoes its draws with its other
+  writes.
+- `GetSecondsSinceEpoch()` is a float literal, `<reads>`: a frozen clock.
+  The scheduler's virtual time is a field of the scheduler object, which
+  only code lowered for suspension can reach, so the clock does not follow
+  it.
+- `FitsInPlayerMap[X]` is `X` behind a query that succeeds, its argument's
+  type checked to persist (`TyEnv.persists`, the predicate `<persistable>`
+  structs are checked with).
+
+## Ints beyond 64 bits: a fast path and a heap representation
+
+Verse Core's ints are Lean's `Int`, as long as the Verse VM's (2^20 bits,
+#724): `Res.ofInt` gives the exact result of every int operation, and the
+overflow error only past that length. The Lean interpreter computes with
+`Int` directly; `IntBits.fits` tests the 64-bit range first, so an int
+that fits costs what it did.
+
+The C runtime keeps one representation per int. An int that fits in 64 bits
+is `(INT, bits)`, as before, and the interpreter's two-INT case calls
+`arith.c`, whose QuickProof law is unchanged: its `VX_OVERFLOW` used to be
+the program's error and is now the signal that the exact result does not
+fit (`Seams.lean`: the law's condition is `Int64.inRange` of the result).
+Then, or when an operand is not INT, `bigint.c` computes it. An int outside
+64 bits is `(BIG, o)`, an object of the value heap whose first cell is its
+sign and whose others are its magnitude's 64-bit words, the last nonzero. As
+the representation is unique, the value heap's structural equality is the
+equality of ints (map keys, `=`, `<>`), and its reclamation keeps a BIG as
+it keeps an array: `vx_isref` counts it, and its cells are no references.
+The arithmetic unpacks magnitudes into 32-bit limbs, computes there
+(schoolbook multiplication; Knuth's algorithm D for division, in unsigned
+arithmetic only), and packs the result, as INT when it fits. No primitive,
+literal kind or opcode is new, so the loader and the header that QuickProof
+pins are unchanged; an int literal outside 64 bits, which no source has,
+is encoded as arithmetic on 64-bit literals (`Encode.encInt`).
+
+`bigint.c` is not proved: `runtime/tests/test_bigint.c` checks it against
+Python's ints (`scripts/gen-bigint-vectors.py`: 4,800 cases, divisions that
+take algorithm D's rare add-back step among them, nearest doubles at ties,
+the length limit), and `scripts/fuzz-bigint.sh` checks both interpreters
+against Python on random programs. Its multiplication is quadratic, so the
+longest ints cost the C runtime seconds where Lean's (GMP's) cost
+milliseconds.
 
 ## Generic functions: polymorphic Verse Core
 
@@ -2443,20 +2512,31 @@ flowchart LR
   dispatch infers from all given positional
   and named arguments together, then emits them in their original order
   before evaluating the selected implementation's defaults.
-- **`subscribable_event(t)`** is Verse code in a prelude (`subPrelude`):
-  `event(t)` with an array of (subscription, handler) pairs, the handlers
-  of type `type{_(:t):void}`, called under the refinement in `Signal`. A
-  subscription is a non-generic object with a live flag; `Signal`
-  drops the cancelled ones, so the array holds the live subscriptions and
-  those cancelled since the last `Signal` (a loop that subscribes and
-  cancels without signalling grows it until the next `Signal`). `Signal`
-  calls a snapshot of the array and checks each flag just before the call,
-  so a function subscribed during a `Signal` waits for the next one and one
-  cancelled before its turn is skipped.
-  `subscribable_event()` (#220) is a second prelude class, `subVoidPrelude`'s
-  `$subev0 := class(event(void))`, whose handlers take no value
-  (`type{_():void}`); the parser maps the type and its constructor to it,
-  and it is added only to a program that mentions it.
+- **An event's `Subscribe`** (#210, #724) is Verse code in the preludes:
+  in a program that subscribes (one that names a member `Subscribe` and
+  uses the prelude's events, `PreludeNeeds.subscribeMark`, or mentions
+  `subscribable_event` or `cancelable`), `withSubscriptions` gives
+  `event(t)` an array of (subscription, handler) pairs, the handlers of
+  type `type{_(:t):void}`, and `Subscribe`; `subPrelude` adds the
+  subscription class and `cancelable`. Other programs' events are as
+  before. A subscription is a non-generic object with a live flag;
+  `Signal` (a sticky event's too) resumes the awaiters, then takes a
+  snapshot of the array, drops the cancelled pairs, so the array holds the
+  live subscriptions and those cancelled since the last `Signal` (a loop
+  that subscribes and cancels without signalling grows it until the next
+  `Signal`), and calls the snapshot's handlers, checking each flag just
+  before the call. So a function a resumed awaiter subscribes is called by
+  that `Signal`, one a called handler subscribes waits for the next one,
+  and one cancelled before its turn is skipped, as on Epic's Verse VM
+  (UEFN 43.12, `tests/conformance/versevm/followup-event`). An event without a value (`event()`, `sticky_event()`) takes
+  handlers of `type{_():void}`: the elaborator calls `$subscribeUnit(E, F)`
+  for its `Subscribe` (`elabEventSubscribe?`), which subscribes a bound
+  `CallUnit` of an object holding `F` (a `$` method is no value, so that
+  one name is public). `subscribable_event(t)`, an openverse extension
+  (Epic has none), is `class(event(t)){}`; `subscribable_event()` (#220)
+  is `subVoidPrelude`'s `$subev0 := class(event(void)){}`, to which the
+  parser maps the type and its constructor, added only to a program that
+  mentions it.
 - **Over-approximation.** The pass makes a method's value class whenever
   `X.M` is written outside a call for some `X` and a class declares `M`,
   as it cannot tell a method from a field, or from an array's `Length`.
@@ -2489,8 +2569,8 @@ flowchart LR
   several at one tuple of them, `$call(X0)` calls `F(X0(0), X0(1))`.
 - **The cost of that choice.** A class implements an interface at one
   instantiation, so a value of one function type does not convert to
-  another by variance (that would need a wrapper object made at the
-  conversion), and variance applies only where a closed type is written.
+  another by variance for free: that needs a wrapper object made at the
+  conversion (below), and variance applies only where a closed type is written.
   At an open expected type, a generic function instead uses its generic
   value class (`Identity$fn(t)` implementing `$fn1(t, t)`). `fnValueArgs`
   matches its declared parameter/result shape against that expected type,
@@ -2507,6 +2587,38 @@ flowchart LR
   from the expected type. Tuple arguments are stored once before projection.
   Other closed requests keep the specialization path above. These adapters
   do not convert already-bound function values to different function types.
+- **Variance of values, by adapters** (#724). Epic's Verse compiler
+  converts any function value by class variance, with no wrapper (UEFN
+  43.12, `value-class-variance`, `value-class-result`). Verse Core cannot
+  relate the two types: its variances are `co`, `inv` and `bi`, and a value
+  class pins its shape's type arguments, which makes them invariant
+  (`Sigs.VarOK`), and a contravariant pin would break the equational
+  refinement a dispatch is typed under (`PinRefines`;
+  research/variance.md). Contravariance in Verse Core would change its
+  checker, `hasTy_sub`'s and the dispatch's proofs and `Sigs.VarOK`; an
+  adapter changes none of them, nor the format or the C runtime. So where
+  `convert` meets two closed function types that `FnCoercion.byVariance`
+  relates (the same effects and parameters, each parameter and the result
+  equal, `void`/`true`, or a class or interface below or above, or such a
+  function type), it makes `new $fnAdapter`*i*`(value)`: a class
+  `FnValues.desugar` writes for the pair (asked for as #214's classes are,
+  `Requests.fnAdapters`, `Err()` standing for the object until the next
+  round), implementing the target's shape and the shapes above it at the
+  target's arguments, whose `$call…` calls its field `$f` with the
+  arguments it is given. The call converts each argument from the
+  target's parameter type to the value's (a reference as it is, a nested
+  function value by an adapter of its own) and the result back, so the
+  value runs as it would, with its effects; the object is the only cost
+  (no `var` field, so no heap effect is charged), and an extra call frame
+  per call. Containers convert element by element through `convert` as
+  before, and joins of two such types take the expected function type or
+  the type with the lower parameters and the joined result (`fnJoinTy`).
+  `ToDiagnostic`'s printer of a function type prints an adapter as the
+  value in `$f`, so the conversion is not seen; printers made before a
+  round that adds function value classes are made again after it
+  (`elabProgram`), so a function named at another type prints its name too.
+  Generic code is left: a type parameter in either type is refused with a
+  message, as #214's classes are made for closed types only.
 
 ## Concurrency: suspends functions as frames
 
@@ -2612,22 +2724,63 @@ helper, which no code calls.
 A `branch` is an arm over the enclosing frame, run as a root through a
 wrapper `[pc, frame, owner]`, its owner the task whose code started it
 (the scheduler's `$CurTask`, a dummy task for `Main`'s code). The
-wrapper's trampoline resumes the arm unless the function stopped it. Every exit of the function, and its cancel function,
-stops its branches: it marks each wrapper done (through a test of its
-class, kept in a frame field) and cancels each arm still pending. A frame
-reused for another call so never shares an arm with an old wrapper. They
-are stopped last started first: each branch and `rush` arm records a
-start number (a counter in the frame) when it starts, and the stop is a
-loop that picks the highest recorded number, stops that one and clears
-it (#187). Each unwinds whole (#254): the branches and `rush` arms whose
-start is in a branch's or a `rush` arm's own code are owned by it
-(`St.killOwner`, from the entries of `kills` its region's lowering adds),
-and stopping it first stops those, by the same loop over its own, then
-itself; the function's loop picks among the unowned. A function with no
-such nesting keeps the flat loop, so its code is as before. A
-`rush` is a `race` whose arms each get such a wrapper: when the first arm
-ends, the others that are pending are registered as roots (not run again
-at once) instead of cancelled.
+wrapper's trampoline resumes the arm unless it was stopped. A `rush` is a
+`race` whose arms each get such a wrapper: when the first arm ends, the
+others that are pending are registered as roots (not run again at once)
+instead of cancelled.
+
+**Task scopes (#724).** A branch and a `rush` arm that goes on are
+children of the task whose code started them, stopped when that task
+ends, as on Epic's Verse VM; the function that started them may return
+first. The tasks are `Main`, a spawned call, and each arm (a `branch`'s
+body and each arm of a `sync`, `race` or `rush`). In a program with a
+`branch` or a `rush` (its prelude `withScopes`), each has a scope, a
+`$scope` object listing its children in the root list's cells, newest
+first: `Main`'s is the scheduler's `MainScope` (the class's prototype), a
+spawned task's its task's `TScope`, an arm's a frame field after the
+arms' records (`armScopeMark`, emptied, or made the first time, when the
+arm starts, `resetScope`). The scheduler's `Scope` is the running task's:
+a spawned root's and a branch's trampoline, `$Run` for `Main`, the code
+that runs a `sync`'s, `race`'s or `rush`'s arms (`inScope`) and the wake
+functions of event mode set it around the run and restore it after. A
+wrapper's `start` registers it in the current scope. An arm's end (its
+last statement, or a `return`), once its code ran, and its cancel, before
+its first defer and after the waits it is in (the arms of a `sync`, `race`
+or `rush`, its newest children) are cancelled, as Epic's Verse VM does
+(`followup-conc/branch-cancel-order`, `cancel-branch-before-sync-arms`),
+stop its scope. For the cancel the region's cancel body makes the scope due
+first (`$unwindPush(sched, scope)`: it becomes the scheduler's `Unwinding`,
+the one it hides kept in its `OuterUnwind`), each site's cancel stops a due
+scope (`$unwindFlush(sched)`) between the waits it cancels and its defers,
+in whatever function the task waits, and the body ends with `$unwindPop`,
+which stops it if still due and restores the hidden one
+(`$stopScope(sched, scope)`: each child popped, newest
+first, and stopped by `$stopRoot`'s dispatch on its class to its
+wrapper's `stopKid`, which marks the wrapper done and cancels its arm,
+whose cancel stops the arm's own scope first in turn; in event mode an arm that
+runs is left to its trampoline, which cancels it when the run returns). A
+spawned root stops its task's scope once its call ended, before the task
+is done (its result is set first, so the prelude's `Await` of await mode,
+with scopes, tests `Done` before the result: one made meanwhile waits for
+the task's end with the other awaiters); a cancelled task's (`$spawnK$cancelT`) is made due once the task is marked
+cancelled, around its root's unwinding, and the wake function of event mode
+resumes no root whose task is marked cancelled, so a `Signal` in a defer
+that runs meanwhile wakes none of its waits; `$Run` stops `Main`'s
+once `Main` ended, or as `Main` unwinds when it is cancelled. A function's exit stops nothing, so a function that
+starts tasks over its frame (`Callee.fresh`) gets a new frame at each
+call instead of the call site's reset one. Until #724 every exit of a
+function, and its cancel function, stopped its branches, last started
+first by start numbers in the frame (#187), each unwinding whole (#254);
+that code (`St.kills`) is no longer emitted. The compiler-only metadata
+analysis (`MetadataFlow`) follows: a function's return makes its branches
+and continuing `rush` arms late groups, analysed on after the result
+(`orphanBackground`), and once the owner has returned, metadata entering
+one of its frame's shared locals is checked where the surviving tasks
+execute it, not refused as it enters (only they can read the frame). Its
+cancellation (`cancelSteps`) stops an actor's children (the arms it waits
+in, then its branches) before the actor's own cleanups, as the lowering does;
+while the owner is being cancelled, its children's cleanups are checked
+the same way, and its own cleanups where they execute.
 
 `T.Cancel()` reaches the task's root (recorded in the task when it starts)
 through `$cancelRoot`, which calls the root's cancel function. That marks
@@ -2753,8 +2906,10 @@ field, `$taskEnds`, `$taskEnd` and the `$Await` above) and the roots' call of
 `$taskEnd`. Programs that do not await a task compile byte for byte as
 before, also those that use events and spawn tasks.
 
-**Signal admission (opt-in, `Options.signalNoRollback`,
-`--signal-no-rollback`, #515).** The front end records each call,
+**Signal admission (the default, `Options.signalNoRollback`, #515).** An
+event's `Signal` has the `no_rollback` effect, as in Epic's Verse compiler
+(UEFN 43.12 refuses each case below with error 3512:
+`docs/research/versevm-live-conformance.md`). The front end records each call,
 construction (its classes' `block:`s), use of a constant (its
 initialiser) and `spawn` (its arguments, not the spawned call) that it
 elaborates in a failure context (`Ctx.canFail`) or inside one where the
@@ -2775,8 +2930,20 @@ clauses are recorded where it is elaborated, and its body is not a
 failure context unless the source `for`'s body is, or the `for` is inside
 one (`FirstLift.rollback`, which starts the continuation's frame with
 `inRollback`; under the option, `contKey` tells the two apart, so a
-`defer:` run at a `return` and at the end of its scope has one of each). The default records
-nothing and refuses nothing.
+`defer:` run at a `return` and at the end of its scope has one of each).
+The bodies whose effects exclude `no_rollback` are checked the same way,
+first: a source function with a heap specifier (`<transacts>`,
+`<computes>`, `<reads>`, `<writes>`, `<allocates>`; marked
+`SignalAdmission.rollbackOnlyMarker` before the source is rewritten, so
+the mark survives overloads, modules and extraction) and a class's
+`block:`. Each records its calls where it is elaborated
+(`Ctx.rollbackOnly`, `ESt.bodyCalls`), continuations followed, and then
+its whole Verse Core body is checked (`SignalAdmission.checkBodies`), so
+code the lowering moved into a helper counts. Epic's compiler reports a
+`Signal` in a `<transacts>` helper, not the helper's call in a condition,
+so these come before the failure contexts. The legacy transactional mode
+(`--signal-rollback`, `Options.signalNoRollback := false`) records nothing
+and refuses nothing.
 
 The roots are a list of cells `[root, next]` (adding one costs a cell; an
 array would be copied at each spawn, and C keeps every copy). A pass follows
@@ -2972,11 +3139,11 @@ byte.
 rationals' are). A suspends `Main` starts a loop of passes, one per tick,
 each resuming `Main`'s frame. A sleeping frame reports the tick it waits
 for, and the clock then moves to the earliest of them, so idle ticks cost
-nothing. A sleep of `S > 0` seconds waits `Ceil(30·S)` ticks of the binary64
+nothing. A sleep of `S >= 0` seconds waits `Ceil(30·S)` ticks of the binary64
 product, at least one (the first tick at or after its deadline, the Book's
-API); `Sleep(0.0)`, a negative or a NaN duration completes at once, with no
-suspension (`sleepResume` gives 1 on its first poll), as the Book's tested
-examples of ch. 14 have it for zero.
+API), so `Sleep(0.0)` yields and waits one tick, as Epic's Verse VM and
+Blueprint VM do (UEFN 43.12); a negative or a NaN duration completes at
+once, with no suspension (`sleepResume` gives 1 on its first poll).
 
 The scheduler holds its task roots as references without type
 arguments; a generic frame that is not a root is resumed by its caller,
@@ -3083,7 +3250,12 @@ position in every class below the one that declares it.
   which every heap starts with (`HeapOK`), and `Runs.typed` evaluates the
   prelude before preservation takes over. A class without a prototype
   falls back to a parameter of a subtype or a new placeholder object
-  (`DefaultE.new`). The generic witness of a class type argument is a slot
+  (`DefaultE.new`). A module constant `N:c = c{}` of a `<unique>` class
+  without type parameters and without fields has an object of its own
+  after the classes' prototypes, allocated by the same prelude
+  (`addConstantObjects`, #724): the constant, which is computed at each
+  use, is the literal reference to it, so it is one object, as Epic's
+  module constants are. No change to Verse Core: it is one more prototype. The generic witness of a class type argument is a slot
   of exactly that type, so that the checker infers the instantiation
   exactly.
 - **Parametric classes** (#39) are references with type arguments. Their
@@ -3925,6 +4097,10 @@ flowchart LR
     lf <-. "read by a person:<br/>the same formula" .-> cf
 ```
 
+Since ints are as long as the Verse VM's (#724), `arith.c` is the fast
+path: where the law's condition fails, the exact result does not fit in 64
+bits and the unproved `bigint.c` computes it (`apply_add` … say so).
+
 The interpreter itself is not proved. It is a transcription of
 `Interp.lean`, and it is compared with the Lean interpreter on the Verse test
 suite, on thousands of random Core programs that exercise every node and
@@ -3982,8 +4158,9 @@ value heap, and kept out of the proved `store.c`, whose law
 Where the Book of Verse is silent or contradicts itself, openverse takes
 one reading and records it in `docs/LANGUAGE.md`. The most consequential:
 
-- `int` is 64-bit with overflow as a runtime error, as on BPVM. The other
-  choice, VerseVM's unbounded integers, would need bignums in the C runtime.
+- `int` is the Verse VM's (#724): exact past 64 bits, up to 2^20 bits; the
+  Blueprint VM's 64-bit ints with overflow as a runtime error were the
+  reading until Epic's Verse VM was observed (UEFN 43.12).
 - comparisons return their left operand;
 - a failing `for` body makes the `for` fail, as in the Verse Calculus.
 - a choice's values come in the Verse Calculus's spatial order, and the code

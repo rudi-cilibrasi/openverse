@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Interleaved source-task roots keep chronological, hierarchical cleanup.
+"""Interleaved source-task roots keep their task's hierarchical cleanup.
 
 --control replaces refining casts with Boolean guards for the preceding compiler.
-The oracle sorts source roots by start time, then drains each owned subtree.
+The oracle (#724): a branch is a child of the task whose code starts it, here
+an arm of the sync, stopped when that arm ends, newest first, its own defer
+before its children; the first arm (A, then B) always ends before the second
+(C), and A's child AA would start only after the first arm has ended.
 Every 64 consecutive seeds cover both cast outcomes, opened types, nested
 helpers, owned children, both sibling orders and explicit/implicit source exit.
 """
@@ -22,11 +25,7 @@ explicit = bool((seed // 32) % 2)
 n = rng.randint(3, 20)
 value = n if hit else 0
 roots = [('A', 0.0), ('B', 0.1 if reverse else 0.2), ('C', 0.2 if reverse else 0.1)]
-lines = ['joined', 'source']
-for name, _ in sorted(roots, key=lambda root: root[1], reverse=True):
-    if name == 'A' and owned:
-        lines.append(f'AA {value}')
-    lines.append('C' if name == 'C' else f'{name} {value}')
+lines = [f'B {value}', f'A {value}', 'C', 'joined', 'source']
 Path(sys.argv[2]).write_text('exit=0\n' + '\n'.join(lines) + '\n')
 
 print('''root(t:type):=class{}

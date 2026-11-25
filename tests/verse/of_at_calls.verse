@@ -7,8 +7,8 @@ SomeFuncThatTakesArray(A : []int) : int =
     for (E : A):
         set Result += E
     return Result
-Pick(A : []int)<decides> : int = A[1]
-Twice(A : int)<decides> : int = A * 2
+Pick(A : []int)<transacts><decides> : int = A[1]
+Twice(A : int)<transacts><decides> : int = A * 2
 TwoArgs(I : int, F : float) : float = 1.0 * I + F
 Defined of {I:int} : int = I * 3
 F1(A:int):int = A*10

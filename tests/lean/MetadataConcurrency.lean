@@ -45,6 +45,12 @@ private def extras : List (String × String × Bool) := [
     s!"    var Stored:{functionTy}=Dummy\n    branch:\n        defer:\n            Value:=Stored()\n        loop:\n            Sleep(1.0)\n    set Stored=F\n    0", true),
   ("race: sibling startup makes cleanup data real", header ++
     s!"    var Stored:{functionTy}=Dummy\n    race:\n        block:\n            defer:\n                Value:=Stored()\n            loop:\n                Sleep(1.0)\n        block:\n            set Stored=F\n            Sleep(0.1)\n            0", true),
+  -- (#724: a cancelled task stops its children before its own cleanups
+  -- run, Epic's Verse VM, UEFN 43.12: the branch's cleanup makes the data
+  -- real first; until then a refusal, "owner cleanup precedes background
+  -- cleanup")
+  ("branch: child cleanup precedes owner cleanup at cancellation", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    defer:\n        Value:=Stored()\n    branch:\n        defer:\n            set Stored=F\n        loop:\n            Sleep(1.0)\n    loop:\n        Sleep(1.0)", true),
   ("sync: child cleanup precedes owner cleanup", header ++
     s!"    var Stored:{functionTy}=Dummy\n    defer:\n        Value:=Stored()\n    Values:=sync:\n        block:\n            defer:\n                set Stored=F\n            loop:\n                Sleep(1.0)\n        block:\n            loop:\n                Sleep(1.0)\n    0", true),
   ("branch: opaque helper return retains metadata",
@@ -96,8 +102,6 @@ private def backgroundRefusals : List (String × String × Bool) := [
     "    Saved:=Later(Dummy,F)\n    Saved()", true),
   ("branch: owner return executes child cleanup", header ++
     "    branch:\n        defer:\n            Value:=Dummy()\n        loop:\n            Sleep(1.0)\n    0", true),
-  ("branch: owner cleanup precedes background cleanup", header ++
-    s!"    var Stored:{functionTy}=Dummy\n    defer:\n        Value:=Stored()\n    branch:\n        defer:\n            set Stored=F\n        loop:\n            Sleep(1.0)\n    loop:\n        Sleep(1.0)", true),
   ("branch: nonreturning background child does not hide owner return",
     "Finish()<suspends>:void=\n    branch:\n        loop:\n            Sleep(1.0)\n" ++ header ++
     "    spawn{Finish()}\n    Dummy()", true),
@@ -112,6 +116,10 @@ private def backgroundRefusals : List (String × String × Bool) := [
   ("branch: caller reads before background real overwrite", header ++
     s!"    var Stored:{functionTy}=Dummy\n    branch:\n        Sleep(0.2)\n        set Stored=F\n    Sleep(0.1)\n    Stored()", true)]
 
+-- (#724: two cases write through Store(B:box(t),V:t where t:type) over a
+-- class with a var field, which Epic's compiler refuses, 3552; these
+-- contracts are about metadata, so openverse's extension is kept,
+-- `--parametric-var-fields`)
 private def compileCase (source : String) (dummy live : Bool) : Except String Compiled := do
   let implementations := if live then
     s!"One()<computes>:int=1\nTwo()<computes>:int=2\nPick(C:logic)<computes>:{functionTy}=if(C?)then One else Two\n" else ""
@@ -120,7 +128,7 @@ private def compileCase (source : String) (dummy live : Bool) : Except String Co
     | .fn p name ps tps specs ret body => .fn p name (ps.map fun param =>
         { param with typeValue := dummy && name == "Caller" && param.name == "Dummy" }) tps specs ret body
     | top => top
-  elabProgram tops
+  elabProgram tops { parametricVarFields := true }
 
 def main : IO Unit := do
   let kinds := ["sync", "race", "rush"]

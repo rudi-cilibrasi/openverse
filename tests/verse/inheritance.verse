@@ -3,45 +3,45 @@
 
 shape := class<abstract>:
     Name:string = "shape"
-    Area():int
+    Area()<transacts>:int
     Describe():string = "{Name} of area {Area()}"
 
 square := class(shape):
     Side:int
-    Area<override>():int = Side * Side
+    Area<override>()<transacts>:int = Side * Side
 
 labelled := interface:
-    Label():string
+    Label()<transacts>:string
     # a default method
     Shout():string = "{Label()}!"
 
 circle := class(shape, labelled):
     Name<override>:string = "circle"
     R:int
-    Area<override>():int = 3 * R * R
-    Label<override>():string = "a circle of radius {R}"
+    Area<override>()<transacts>:int = 3 * R * R
+    Label<override>()<transacts>:string = "a circle of radius {R}"
     Describe<override>():string = "round: {(super:)Describe()}"
 
 # two levels, and an override of an override
 cube := class(square):
     Name<override>:string = "cube"
-    Area<override>():int = 6 * (super:)Area()
+    Area<override>()<transacts>:int = 6 * (super:)Area()
 
 # an interface implemented by an unrelated class
 tag := class(labelled):
     Text:string
-    Label<override>():string = Text
+    Label<override>()<transacts>:string = Text
 
 # a <decides> virtual method
 animal := class<abstract>:
-    Legs():int
-    Walks()<decides>:void = Legs() > 0
+    Legs()<transacts>:int
+    Walks()<transacts><decides>:void = Legs() > 0
 
 fish := class(animal):
-    Legs<override>():int = 0
+    Legs<override>()<transacts>:int = 0
 
 dog := class(animal):
-    Legs<override>():int = 4
+    Legs<override>()<transacts>:int = 4
     Fetch():string = "fetching"
 
 # the most specific implementation wins, whatever the order of the parents:
@@ -104,7 +104,7 @@ catmaker := class(maker):
     Make<override>():cat = cat{Age := 9}
 
 # classes and interfaces in generic code, and as parameters
-Labels(Items:[]labelled):[]string = for (I : Items) { I.Label() }
+Labels(Items:[]labelled)<transacts>:[]string = for (I : Items) { I.Label() }
 
 Largest(Shapes:[]shape):string =
     var Best:string = "none"
@@ -114,7 +114,7 @@ Largest(Shapes:[]shape):string =
         set Best = S.Name
     Best
 
-Count(Items:[]t where t:type):int = Items.Length
+Count(Items:[]t where t:type)<transacts>:int = Items.Length
 
 Main():void =
     Shapes:[]shape = array{square{Side := 2}, circle{R := 1}, cube{Side := 1}}
@@ -145,8 +145,10 @@ Main():void =
     Print(host{}.Greet())
     G:greeter = host{}
     Print(G.Greet())
-    # the expected type of an if: a common interface, not the common class
-    N:named = if (Count(Animals) > 1) then cat{} else bird{}
+    # the expected type of an if: a common interface, not the common class,
+    # each branch upcast to it (cat and bird have two nearest supertypes, pet
+    # and named, so their join is an any: Epic's Verse compiler, 3510)
+    N:named = if (Count(Animals) > 1) then named(cat{}) else named(bird{})
     Print(N.Title())
     # a cast used only as a condition, and a subclass passed to a generic function
     if (dog[Animals[1]]) then Print("the second animal is a dog")

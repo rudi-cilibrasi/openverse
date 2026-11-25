@@ -43,6 +43,8 @@ for ((s=first; s<first+n; s++)); do
   python3 -I "$root/scripts/models/$g.py" "$s" "$tmp/p.exp" "${mode_args[@]}" > "$tmp/p.verse" 2> "$tmp/gen.err" ||
     { bad=$((bad+1)); echo "GENERATOR FAILED $g seed $s: $(tail -1 "$tmp/gen.err")"; continue; }
   rm -f "$tmp/p.vbc"
+  # (#515: Epic's default effect, written out: <transacts> where a function without one is called from a failure context or <transacts> code)
+  python3 -I "$root/scripts/models/default_effect.py" "$tmp/p.verse"
   timeout 120 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.err"
   want=$(head -1 "$tmp/p.exp" | sed 's/exit=//')
   if [[ $le != "$want" ]]; then

@@ -1,7 +1,7 @@
 # (#283) A call of the recursive function in a field of a class's
-# construction is a choice point there, in the class's field order (its
-# superclass's fields first), the elaborator's, as an earlier elaboration
-# noted it; so is a choice of values there.
+# construction is a choice point there, in the order the construction evaluates
+# its fields (those given as written, #724, whatever the class's field order,
+# its superclass's fields first), as an earlier elaboration noted it; so is a choice of values there.
 base := class:
     B:int
 c := class(base):

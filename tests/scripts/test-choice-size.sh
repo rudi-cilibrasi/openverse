@@ -592,10 +592,12 @@ kinds=(
   waiting-refined-state
 )
 for kind in "${kinds[@]}"; do
-  # These six schemas deliberately retain ordinary computed field defaults.
+  # These schemas deliberately retain ordinary computed field defaults (the
+  # field-default contexts call Concatenate and the program's functions,
+  # which a data member may not, UEFN 43.12 error 3582, #724).
   compat=()
   case $kind in
-    construct-first|construct-for|construct-failure|context-field-default-lazy-first|context-refining-field-first|context-refining-field-for)
+    construct-first|construct-for|construct-failure|context-field-default-*|context-refining-field-*)
       compat+=(--extended-defaults) ;;
     # (and these a named parameter's default that suspends, #283's waiting
     # defaults, which the Book refuses: DefaultNamed.versetest:844)
@@ -661,7 +663,7 @@ if kind.startswith('callpacking-'):
         print(cls+':=class{'+fields+'}')
     clauses=[f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))' for i in range(n)];calls=[]
     for i in range(n):
-        args='PairValue' if shape in ['tuplevar','tuple-generic','callable'] else '(array{},false,7)' if shape=='literal-generic' else '1,2' if shape in ['arraypack','tuplepack','named','callable-array','mixedpack'] else '(1,2)' if shape=='mixedliteral' else '7' if shape in ['singleton','mixedsingle'] else ''
+        args='PairValue' if shape in ['tuplevar','tuple-generic','callable'] else '(array{},false,7)' if shape=='literal-generic' else '1,2' if shape in ['arraypack','tuplepack','callable-array','mixedpack'] else '(1,2)' if shape in ['mixedliteral','named'] else '7' if shape in ['singleton','mixedsingle'] else ''
         calls.append(f'A{i}.'+('F' if shape.startswith('callable') else 'M')+'('+args+')')
     params='V:t where t:type' if shape=='tuple-generic' else ''
     print('Run('+params+')'+('<suspends>' if mode=='waiting' else '')+':int=')
@@ -2209,6 +2211,8 @@ elif kind == 'refined-for':
 else:
     print('Main():void = Print("{Run(7)}")' if kind.startswith('typed-') else 'Main():void = Print("{Run(7).Length}")')
 PY
+    # (#515: Epic's default effect written out)
+    python3 -I "$root/scripts/models/default_effect.py" "$tmp/p.verse"
     timeout "$limit" "$root/.lake/build/bin/openverse" emit "$tmp/p.verse" "${compat[@]}" -o "$tmp/p.vbc" || {
       rc=$?
       if (( rc == 124 )); then

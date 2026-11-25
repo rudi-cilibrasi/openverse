@@ -1,0 +1,8 @@
+branch cleanup
+first 1
+watcher got 11
+branch cleanup done
+task cleanup
+cancelled
+end
+exit=0

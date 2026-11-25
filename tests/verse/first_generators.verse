@@ -3,8 +3,8 @@
 # iteration whose clauses succeed gives the body; a failed one is undone
 # (FirstPos2: one Inc kept). A range binding may state its type, int
 # (for.versetest:17, Exercises/TwoSum.versetest:20).
-F(X:int, Xs:[]int)<decides>:int = first(I->Y:Xs; X = Y){I}
-G(Xs:[]int)<decides>:int = first{X:Xs; X > 2}
+F(X:int, Xs:[]int)<transacts><decides>:int = first(I->Y:Xs; X = Y){I}
+G(Xs:[]int)<transacts><decides>:int = first{X:Xs; X > 2}
 value := class:
     var V:int = 0
     Inc()<decides><transacts>:int =

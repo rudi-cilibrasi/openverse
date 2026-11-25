@@ -23,7 +23,7 @@ labelled := struct<computes>:
     Name:string
     At:pair(int, int)
 
-MakePair(A:t, B:u where t:type, u:type):pair(t, u) = pair(t, u){First := A, Second := B}
+MakePair(A:t, B:u where t:type, u:type)<transacts>:pair(t, u) = pair(t, u){First := A, Second := B}
 
 Swap(P:pair(t, u) where t:type, u:type):pair(u, t) = pair(u, t){First := P.Second, Second := P.First}
 
@@ -37,7 +37,7 @@ Put(K:keyed(k, v), Key:k, Value:v where k:subtype(comparable), v:type):keyed(k, 
     if (set M[Key] = Value) {}
     keyed(k, v){Entries := M}
 
-FirstsOf(Ps:[]pair(t, u) where t:type, u:type):[]t = for (P : Ps) { P.First }
+FirstsOf(Ps:[]pair(t, u) where t:type, u:type)<transacts>:[]t = for (P : Ps) { P.First }
 
 # polymorphic recursion through a parametric struct: d(t), d(d(t)), …
 d(t:type) := struct<computes>:
@@ -49,7 +49,7 @@ Nest(X:t, N:int where t:type):int =
 
 # a field default that calls a generic function, constructed in generic code
 # with type parameter names different from the struct's
-Empty(Like:[]e where e:type):[]e = array{}
+Empty(Like:[]e where e:type)<transacts>:[]e = array{}
 
 listing(a:type, b:type) := struct:
     Firsts:[]a = Empty(array{})

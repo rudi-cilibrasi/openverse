@@ -1,5 +1,8 @@
 # Active cancellation must drain children registered after the owner returned.
 # Expected independently by both scheduler models in test-scheduler-model.py.
+# (#724: a branch and a rush's arm that goes on are children of the task whose
+# code started them, stopped when it ends, after its defers, or is cancelled,
+# before them (Epic's Verse VM, UEFN 43.12); not when their function exits.)
 Owner(X:t,Y:t,Tag:string,N:int where t:type)<suspends>:t=
     defer:
         Print("{Tag} owner cleanup {N}")

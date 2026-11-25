@@ -37,7 +37,8 @@ def diagnoseMethod : String := "$Diagnose"
 /-- The names of the helpers' definitions, parameters and locals that no
     program may write: each becomes `$name` (`parsePrelude`). -/
 def preludeNames : List String :=
-  ["anything", "anyEmpty", "Diagnose", "asAnything", "diagHex", "diagHex2", "diagEscaped", "diagChar",
+  ["anything", "anyEmpty", "Diagnose", "asAnything", "diagInt", "diagDigits18", "diagHex", "diagHex2",
+   "diagEscaped", "diagChar",
    "diagChar32", "diagByte", "diagCont", "diagSeq", "diagString", "diagJoin", "diagArray", "diagMap",
    "diagRational", "rationalParts", "dValue", "dN", "dM", "dOut", "dR", "dQ", "dD", "dE", "dC", "dS",
    "dI", "dB", "dB0", "dC1", "dC2", "dC3", "dLo", "dHi", "dSeq", "dCP", "dP", "dParts"]
@@ -50,7 +51,9 @@ def preludeNames : List String :=
     more than one byte as `{0uX}` and a byte of no valid sequence, or a
     control character, as `{0oXX}`; an array of one element `array{X}`, of
     any other number `(X, Y)`; a map `map{K => V, …}`; a rational reduced,
-    `N/D`, or its int. -/
+    `N/D`, or its int; an int in decimal, also one beyond 64 bits
+    (`ToDiagnostic.versetest:35-40`, `verse_vm_only`), which `ToString`
+    refuses (#724): its decimal digits are taken 18 at a time. -/
 def prelude : String := "
 anything := interface<computes>:
     Diagnose()<reads>:string
@@ -66,6 +69,20 @@ diagnostic := class<computes>(diagnosable):
     GetDiagnostic<override>()<reads>:diagnostic = Self
 
 ToDiagnostic(dValue:any)<reads>:diagnostic = diagnostic{String := asAnything(dValue).Diagnose()}
+
+diagDigits18(dN:int)<computes>:string =
+    var dOut:string = ToString(dN)
+    loop:
+        if (dOut.Length >= 18) then break
+        set dOut = \"0\" + dOut
+    dOut
+
+diagInt(dN:int)<computes>:string =
+    if (dN >= -9223372036854775807, dN <= 9223372036854775807) then ToString(dN)
+    else if (dN < 0) then \"-\" + diagInt(-dN)
+    else if (dQ := Quotient[dN, 1000000000000000000], dR := Mod[dN, 1000000000000000000]) then
+        diagInt(dQ) + diagDigits18(dR)
+    else \"\"
 
 diagHex(dN:int)<computes>:string =
     var dOut:string = \"\"
@@ -146,7 +163,7 @@ diagArray(dParts:[]string)<computes>:string =
 diagMap(dParts:[]string)<computes>:string = \"map\\{\" + diagJoin(dParts) + \"\\}\"
 
 diagRational(dP:tuple(int, int))<computes>:string =
-    if (dP(1) = 1) then ToString(dP(0)) else ToString(dP(0)) + \"/\" + ToString(dP(1))
+    if (dP(1) = 1) then diagInt(dP(0)) else diagInt(dP(0)) + \"/\" + diagInt(dP(1))
 "
 
 /-- The names of the Book's definitions the helpers give: a program that
@@ -213,7 +230,7 @@ def printer (env : TyEnv) (p : Pos) (t : Ty) : Except String (STop × List Ty) :
       [s "}"])
   let partTys (parts : List (SExpr × Option Ty)) : List Ty := parts.filterMap (·.2)
   let (body, deps) ← match t with
-    | .int => pure (call p "ToString" [x], [])
+    | .int => pure (call p "$diagInt" [x], [])
     | .logic => pure (SExpr.ite p [.query p x] (s "true") (some (s "false")), [])
     | .rational => pure (call p "$diagRational" [call p "$rationalParts" [x]], [])
     | .char => pure (call p "$diagChar" [x], [])
@@ -257,10 +274,20 @@ def printer (env : TyEnv) (p : Pos) (t : Ty) : Except String (STop × List Ty) :
           | [f] => if bookNames.contains f || BuiltinValues.signatures.any (·.1 == f) then s!"(/Verse.org/Verse:){f}"
             else displayName f
           | parts => s!"({".".intercalate (parts.dropLast.map displayName)}:){parts.getLast!}"
+        -- (#724) a function value converted by class variance is an object
+        -- of an adapter class that holds it (`FnValues.adapterName`): it
+        -- prints as the value it holds, which Epic's Verse compiler makes no
+        -- wrapper for, so the conversion is not seen
+        let held (d : String) : Option Ty :=
+          if FnValues.isAdapter d then ((env.fields d []).find? (·.1 == "$f")).map (·.2.1) else none
         let e := below.foldr (fun d e =>
-          SExpr.ite p [.decl p "$Y" none false (.app p (.ident p d) [x] true)] (s (named d ++ params)) (some e))
+          let y := SExpr.ident p "$Y"
+          let shown := match held d with
+            | some u => pr u (.member p y "$f")
+            | none => s (named d ++ params)
+          SExpr.ite p [.decl p "$Y" none false (.app p (.ident p d) [x] true)] shown (some e))
           (s ("function" ++ params))
-        pure (e, [])
+        pure (e, below.filterMap held)
       else if hiddenName n then
         if n.startsWith "$type" then refuse "a type"
         else refuse s!"a value of the compiler's type {n}"

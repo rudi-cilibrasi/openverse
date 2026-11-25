@@ -1,22 +1,22 @@
 # Receiver first; tuple producer once; names as written; selected defaults.
 cell := class:
     var N:int = 0
-Tick(C:cell,Tag:string):int =
+Tick(C:cell,Tag:string)<transacts>:int =
     set C.N += 1
     Print("{Tag} {C.N}")
     C.N
-Pair(C:cell):tuple(int,string) =
+Pair(C:cell)<transacts>:tuple(int,string) =
     Tick(C,"tuple")
     (10,"value")
 box := class:
     C:cell
-    M(X:tuple(int,string),?A:int,?B:int,?D:int=Tick(C,"default")):int =
+    M(X:tuple(int,string),?A:int,?B:int,?D:int=Tick(C,"default"))<transacts>:int =
         Print("body {X(0)} {A} {B} {D}")
         X(0)+A+B+D
-    M(X:[]int,?A:int,?B:int,?D:int=Tick(C,"wrong-default")):int =
+    M(X:[]int,?A:int,?B:int,?D:int=Tick(C,"wrong-default"))<transacts>:int =
         Print("wrong-body")
         0
-Touch(B:box):box =
+Touch(B:box)<transacts>:box =
     Tick(B.C,"receiver")
     B
 Main():void =

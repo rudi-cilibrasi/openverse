@@ -10,9 +10,13 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
+# (#515: a tag-stripped control has Epic's default effect written out)
+sys.path.insert(0, str(ROOT / 'scripts/models'))
+from default_effect import annotate  # noqa: E402
 override = os.environ.get('OV_EFFECT_COMMAND')
 OV = shlex.split(override) if override else [str(ROOT / '.lake/build/bin/openverse')]
 CV = ROOT / 'runtime/build/cverse'
@@ -77,7 +81,7 @@ with tempfile.TemporaryDirectory(prefix='openverse-effect-admission-') as direct
         # These annotations are semantically refused, rather than rejected
         # because the surrounding program was already malformed.
         control = tmp / 'control.verse'
-        control.write_text(TAGS.sub('', source))
+        control.write_text(annotate(TAGS.sub('', source)))
         name = fixture.stem.removeprefix('effect_admission_')
         # These stripped controls call an ordinary function in a field
         # default; they isolate effect admission from convergence admission.
@@ -90,7 +94,7 @@ with tempfile.TemporaryDirectory(prefix='openverse-effect-admission-') as direct
         root.write_text('using{"Dependency.verse"}\nMain():void={}\n')
         result = reject(root, needle, 'check')
         require('Dependency.verse' in result.stderr, f'import location missing: {result.stderr}')
-        dependency.write_text(TAGS.sub('', dependency.read_text()))
+        dependency.write_text(annotate(TAGS.sub('', dependency.read_text())))
         accepted(root, '', extended=extended)
 
     plain = tmp / 'Plain.verse'

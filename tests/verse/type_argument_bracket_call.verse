@@ -2,8 +2,8 @@
 # function's, as one in parentheses: First[string, Xs] (Book of Verse
 # ch. 11, types as values; the tests' FalseOption(int),
 # ParametricTypes.versetest 613-624).
-First(t:type, Xs:[]t)<decides>:t = Xs[0]
-Pick(t:type, Xs:[]t, I:int)<decides>:t =
+First(t:type, Xs:[]t)<transacts><decides>:t = Xs[0]
+Pick(t:type, Xs:[]t, I:int)<transacts><decides>:t =
     I >= 0
     Xs[I]
 Main():void =

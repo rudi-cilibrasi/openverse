@@ -1,4 +1,5 @@
-# a function's own defers run first, then its branches are stopped, last started first, whether it returns or is cancelled (#156)
+# a task's branches are stopped last started first: after its own defers when it ends, before them when it is cancelled (#156, #724: the
+# task's, not the function's, which no longer stops them when it returns; Epic's Verse VM, UEFN 43.12, branch-cancel-order)
 F(Tag:string, D:float)<suspends>:void =
     defer:
         Print("{Tag} F defer")

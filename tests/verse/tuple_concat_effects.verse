@@ -1,7 +1,7 @@
 counter := class { var N:int = 0 }
 holder := class { var Values:[]int = array{9} }
 
-Pair(C:counter, Tag:string, N:int):tuple(int, int) =
+Pair(C:counter, Tag:string, N:int)<transacts>:tuple(int, int) =
     set C.N += 1
     Print("{Tag} {C.N}")
     (N, N + 1)

@@ -59,9 +59,9 @@ def classify(b):
         return dict(kind='immediate' if immediate else 'indefinite',
                     ticks=0 if immediate else None)
     seconds = rational(b)
-    # (a zero, of either sign, completes at once, as a negative duration
-    # does: the Book's tested examples in ch. 14)
-    if seconds <= 0:
+    # (a zero, of either sign, waits one tick below: it yields, as Epic's
+    # VMs do, UEFN 43.12; a negative duration completes at once)
+    if seconds < 0:
         return dict(kind='immediate', ticks=0)
     product = binary64_nearest(seconds * 30)
     if product is None:

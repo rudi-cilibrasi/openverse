@@ -1,4 +1,5 @@
 # expect: pcell, a class below cell, fixes it
+# (run with --parametric-var-fields, openverse's extension: Epic's compiler refuses a generic function over a parametric class whose mutable data holds an implicit type parameter, or a var field in a parametric interface, UEFN 43.12 errors 3552 and 3502, #724)
 # A class that fixes a covariant parameter, cast to in code generic over the
 # parent: the cast refines t := player, which a cell(entity) holding a pcell
 # would make false (docs/research/variance.md, "Pins").

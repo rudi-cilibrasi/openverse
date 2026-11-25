@@ -2,11 +2,11 @@
 leading(t:type) := interface:
     Tag():t
 sink(t:type) := interface:
-    F(?N:int=0):int
+    F(?N:int=0)<transacts>:int
 both(a:type,b:type) := class(leading(a),sink(b)):
     V:a
     Tag<override>():a=V
-    F<override>(?N:int="bad"):int=N
+    F<override>(?N:int="bad")<transacts>:int=N
 unused := struct:
     N:int=block{P:sink(string)=both(int,string){V:=1};P.F()}
 Main():void=Print("ok")

@@ -1,4 +1,7 @@
 # Receiver-free packing through direct, inherited, dynamic and qualified calls.
+# (#724: beside a named parameter the tuple is written out: Epic's compiler packs no
+# several arguments into a tuple parameter there, UEFN 43.12 error 3509,
+# followup-book2/overload-tuple-named-call)
 i := interface:
     Pair(P:tuple(int,string),?N:int=2):string
 base := class(i):
@@ -13,10 +16,10 @@ sub := class(base):
     # ((super:)Pair only in an override of Pair, the Book's: Parent reaches
     # it through Pair)
     Pair<override>(P:tuple(int,string),?N:int=Seed):string=
-        if(P(1)="super") then (super:)Pair(1,"super") else "sub {P(0)} {P(1)} {N}"
-    Parent():string=Pair(0,"super")
+        if(P(1)="super") then (super:)Pair((1,"super")) else "sub {P(0)} {P(1)} {N}"
+    Parent():string=Pair((0,"super"))
 Run(X:base):void=
-    Print(X.Pair(2,"dynamic"))
+    Print(X.Pair((2,"dynamic")))
     Print("{X.Unit()} {X.One(3)} {X.Count(4,5)}")
     A:[]int=X.Pass(6,7)
     Print("{A.Length}")
@@ -26,11 +29,11 @@ MakeBox<constructor>(P:tuple(t,t) where t:type):=box(t):
     Value:=P(1)
 Main():void=
     X:=sub{}
-    Print(X.Pair(8,"direct",?N:=9))
+    Print(X.Pair((8,"direct"),?N:=9))
     Print(X.Parent())
     Run(X)
     I:i=X
-    Print(I.Pair(10,"interface"))
-    Print(X.(i:)Pair(11,"qualified"))
+    Print(I.Pair((10,"interface")))
+    Print(X.(i:)Pair((11,"qualified")))
     B:=MakeBox(12,13)
     Print("{B.Value}")

@@ -9,7 +9,7 @@ box(a:type) := class:
             Print("fall")
         defer:Print("late")
         (Anchor,X,false)|(Anchor,Y,false)
-All(C:box(t),X:u,Y:u,Mode:?int where t:type,u:type):[]tuple(t,u,?u) =
+All(C:box(t),X:u,Y:u,Mode:?int where t:type,u:type)<transacts>:[]tuple(t,u,?u) =
     for(V:=C.Pick(X,Y,Mode)):V
 Main():void =
     for(Mode:array{option{0},option{1},false}):

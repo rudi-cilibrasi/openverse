@@ -1,7 +1,7 @@
 # The bitwise functions (Book of Verse ch. 4, "Bitwise Operations" and "Bit
 # Shift Operations", and its API reference): two's complement sign-extended
-# without limit, on openverse's 64-bit ints (the Blueprint VM's: a result out
-# of range is the overflow error, bitwise_overflow_*). BitNot(X) is -X - 1;
+# without limit, on the Verse VM's ints (#724: past 64 bits too,
+# int_verse_vm_bitwise; bitwise_overflow_*). BitNot(X) is -X - 1;
 # the shifts fail on a negative count, and a right shift rounds toward minus
 # infinity, 0 or -1 once every bit is shifted out.
 Top:int = 9223372036854775807

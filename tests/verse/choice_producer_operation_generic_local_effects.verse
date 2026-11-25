@@ -1,21 +1,21 @@
 # Preserve typed later-local arguments, default effects and waiting order (#335).
 cell:=class{var Count:int=0}
-Arg(C:cell,N:int):int=
+Arg(C:cell,N:int)<transacts>:int=
     set C.Count+=1
     Print("arg {N} step {C.Count}")
     N+1
-Default(N:int):int=
+Default(N:int)<transacts>:int=
     Print("default {N}")
     N+3
 a:=class:
     N:int=1
-    M(V:t,?D:int=Default(N) where t:type):t=
+    M(V:t,?D:int=Default(N) where t:type)<transacts>:t=
         Print("a start {D}")
         defer{Print("a cleanup {D}")}
         V|V
 b:=class:
     N:int=2
-    M(V:t,?D:int=Default(N) where t:type):t=
+    M(V:t,?D:int=Default(N) where t:type)<transacts>:t=
         Print("b start {D}")
         defer{Print("b cleanup {D}")}
         V|V

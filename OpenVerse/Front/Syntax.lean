@@ -40,6 +40,12 @@ def qualifierMarker : String := "$uses:qualifiers"
 def afterPrefix? (pre n : String) : Option String :=
   if n.startsWith pre then some (n.drop pre.length).toString else none
 
+/-- (#515, `--default-no-rollback`) The private marker of Epic's default
+    effect, `no_rollback`, on a source function and on a function type
+    written without a heap specifier or `<decides>`
+    (`SignalAdmission.markDefault`); no source can write it. -/
+def noRollbackMarker : String := "$noRollback"
+
 /-- A module's marker, `$module:A::B`: a constant the parser writes where
     the module `A::B` is defined, with the module's specifiers, and
     `resolveModules` reads and takes out. -/
@@ -518,6 +524,28 @@ partial def STop.mapAll (g : STy → STy) (f : SExpr → SExpr) : STop → STop
   | .classDef p n ns tps specs ps isI fs ms =>
     .classDef p n ns tps specs ps isI (fs.map fun fl => { fl with ty := g fl.ty, default := fl.default.map (SExpr.mapAll g f) })
       (ms.map (STop.mapAll g f))
+
+/-- (#724) A definition whose value is a definition, `X:int = Y:int = 4`, as
+    the definitions it stands for, in the order they are made: the inner one,
+    then the outer one with the inner name as its value ("the result of a
+    definition is its value", the Book's tests, Definitions.versetest:37;
+    of a `var`'s, its contents). Both names are bound in the scope the
+    definition is in, as Epic's compiler binds them (UEFN 43.12,
+    followup-refused/definition-in-expression). -/
+partial def SExpr.splitChainedDecl : SExpr → List SExpr
+  | .decl p n t v (.decl q m u w rhs) =>
+    if n.startsWith "?" || m.startsWith "?" then [.decl p n t v (.decl q m u w rhs)]
+    else SExpr.splitChainedDecl (.decl q m u w rhs) ++ [.decl p n t v (.ident q m)]
+  | e => [e]
+
+/-- The chained definitions among a block's expressions and an `if`'s
+    conditions, each written out (`splitChainedDecl`). -/
+def SExpr.flattenChainedDecls : SExpr → SExpr
+  | .block p es => .block p (es.flatMap SExpr.splitChainedDecl)
+  | .ite p cs t e => .ite p (cs.flatMap SExpr.splitChainedDecl) t e
+  | e => e
+
+def STop.flattenChainedDecls (t : STop) : STop := t.mapAll id SExpr.flattenChainedDecls
 
 /-- A module-scoped variable's specifier, `$var` among a constant's
     specifiers, for `var X:t = e` at the top level or in a module (Book of

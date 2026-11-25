@@ -1,6 +1,7 @@
-# expect: 10:17: this construction may signal an event (loud's block → event.Signal) in a failure context
-# (#515) under --signal-no-rollback, a construction in an if's condition
-# runs the class's block:, which signals
+# expect: 8:16: this call may signal an event (event.Signal), whose Signal has the no_rollback effect, in the block: of class loud
+# (#515) a class's block: excludes no_rollback (Book of Verse tests,
+# Effects.versetest:551; Epic's Verse compiler, UEFN 43.12: error 3512), so
+# it cannot signal, also where no construction is in a failure context
 loud := class:
     E:event(int)
     block:

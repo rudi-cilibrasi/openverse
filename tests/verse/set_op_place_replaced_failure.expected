@@ -1,0 +1,16 @@
+failed later [[1, 2, 3]]
+right side failed [[1, 2, 3]]
+no row in the replaced array []
+row in the replaced array []
+row
+column
+replaced row
+value
+keys once [[1] [8]]
+first alternative [7]
+second alternative [3]
+replaced in a loop [2, 2]
+replacement undone [1, 11]
+break before the replacement 11
+break after the replacement 9
+exit=0

@@ -169,8 +169,8 @@ Lifting goes through the operands that are evaluated left to right, once
 each: those of arithmetic, comparisons, calls (the receiver first), member
 access, `?`, tuples, arrays, maps and string interpolation; a call's
 named arguments after its positional ones, as they are evaluated; a
-block's clauses; a construction's fields, in its type's declaration order,
-as they are evaluated; a range's bounds; the operands of `and`, each as a
+block's clauses; a construction's fields, as they are evaluated (those
+given in the order written, #724); a range's bounds; the operands of `and`, each as a
 block, and the right of `or`, as the `if` it stands for (`orIf`) (#283). A
 choice elsewhere (a branch that is more than a value, an alternative, which
 the elaborator takes apart) is not lifted here. -/
@@ -952,8 +952,37 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     -- path; only newly hoisted ordinary keys need this additional check.
     let keys := (entries.map (·.1)).filter (!hasLiftable ·)
     return .app p (.ident p "$mapKeySources") [.block p keys, value] false
-  | .bin .. | .range .. | .member .. | .query .. | .neg .. | .tuple .. | .arrayLit .. | .str .. =>
+  | .bin .. | .range .. | .member .. | .query .. | .neg .. | .tuple .. | .arrayLit .. =>
     return e.withChildren (← liftOps isVal isField e.children)
+  -- (#723) a string's interpolated values, as `liftOps` takes operands, but
+  -- one before the last with something to lift is bound as its text,
+  -- `"{e}"`, not as its value: interpolation calls `ToString` on each value
+  -- where it is written, before the code of the next one runs, and
+  -- `ToString` of an int beyond 64 bits is the overflow error (#724), which
+  -- must stop the program before what the later values' lifted clauses do
+  | .str p parts =>
+    let codes := parts.filterMap fun | .code c => some c | .text _ => none
+    match (codes.zipIdx.filter (hasLiftable ·.1)).getLast?.map (·.2) with
+    | none => return e
+    | some j =>
+      let mut out : Array SPart := #[]
+      let mut i := 0
+      for part in parts do
+        match part with
+        | .text _ => out := out.push part
+        | .code c =>
+          if i < j then
+            let c' ← liftE isVal isField c
+            -- (a literal's text is its own: nothing to do before the rest)
+            let literal := match c' with
+              | .int .. | .char .. | .char32 .. | .float .. => true
+              | .str _ ps => ps.all fun | .text _ => true | .code _ => false
+              | _ => false
+            out := out.push (.code (← if literal then pure c' else LM.bind c.pos "t" (.str c.pos [.code c'])))
+          else if i == j then out := out.push (.code (← liftE isVal isField c))
+          else out := out.push part
+          i := i + 1
+      return .str p out.toList
   -- (#283) `A and B`: its operands in order, in one block, as the `and` is
   -- a scope of its own whose names `B` sees (Book of Verse ch. 7): `A` a
   -- clause, then `B` the value
@@ -962,8 +991,8 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
   | .cmp p a rest => liftCmp isVal isField p (a :: rest.map (·.2)) (rest.map (·.1))
   | .construct p n ts fs =>
     -- (#283) a construction's field values, as a call's arguments, in the
-    -- order it evaluates them: its type's declaration order, not as written
-    -- (so they are put in that order first, which changes nothing else).
+    -- order it evaluates them (so they are put in that order first, which
+    -- changes nothing else).
     -- Keep unknown layouts and duplicate fields for their normal errors.
     -- Computed defaults before a choice are explicit typed operands; object
     -- allocation, blocks and trailing defaults remain in the construction.
@@ -979,10 +1008,19 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     if let some f := names.find? (fun f => (names.filter (· == f)).length > 1) then
       return noLift p s!"a construction that gives field '{f}' twice" e
     let idx := fun (f : String) => (ord.map (·.1)).idxOf f
+    -- (#724) When each value runs: the fields given take, in the order
+    -- written, the places the given fields have in declaration order (so
+    -- `pt{Y := F(), X := G()}` runs `F` first, as on Epic's Verse VM,
+    -- differential/struct-archetype-order), and an omitted default keeps its
+    -- own place. `at f` is that place, a declaration index.
+    let places := (names.map idx).mergeSort (· ≤ ·)
+    let at_ := fun (f : String) => match names.idxOf? f with
+      | some k => places.getD k (idx f)
+      | none => idx f
     let fs := fs.mergeSort fun a b => match a, b with
-      | .decl _ f _ _ _, .decl _ g _ _ _ => idx f ≤ idx g
+      | .decl _ f _ _ _, .decl _ g _ _ _ => at_ f ≤ at_ g
       | _, _ => true
-    let lastAt := (fs.filterMap fun | .decl _ f _ _ x => if hasLiftable x then some (idx f) else none | _ => none).foldl max 0
+    let lastAt := (fs.filterMap fun | .decl _ f _ _ x => if hasLiftable x then some (at_ f) else none | _ => none).foldl max 0
     -- Defaults before the last choice are explicit operands of this
     -- construction. The marker restores their home scope and field type.
     let context : List SExpr := [.str p [.text site], .str p [.text info.origin],
@@ -992,11 +1030,11 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
       SExpr.decl p f none false (.app p (.ident p "$fieldDefault")
         (context ++ [.ident p f]) false)
     let fs : List SExpr := (fs ++ defaults).mergeSort fun a b => match a, b with
-      | .decl _ f _ _ _, .decl _ g _ _ _ => idx f ≤ idx g
+      | .decl _ f _ _ _, .decl _ g _ _ _ => at_ f ≤ at_ g
       | _, _ => true
     let fs : List SExpr := fs.map fun
       | .decl q f t v x =>
-        if idx f < lastAt && !hasLiftable x && !stable isVal x &&
+        if at_ f < lastAt && !hasLiftable x && !stable isVal x &&
             !(match x with | .app _ (.ident _ "$fieldDefault") _ false => true | _ => false) then
           .decl q f t v (.app q (.ident q "$fieldValue")
             (context ++ [.ident p f, x]) false)
@@ -2874,6 +2912,11 @@ structure SourceContext where
   inArm : Bool := false
   inBranch : Bool := false
   defaults : List (String × String) := []
+  /-- (#515, `--default-no-rollback` only) The source body excludes
+      `no_rollback` (`Ctx.rollbackOnly`), or is a plain `<decides>` one's
+      (`Ctx.bodyFailure`). -/
+  rollbackOnly : Bool := false
+  bodyFailure : Bool := false
   deriving Inhabited, BEq, Repr
 
 /-- Metadata for a typed continuation environment's method. -/

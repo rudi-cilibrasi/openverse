@@ -26,6 +26,9 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
         some { frame := ctx.frameName, name := s!"{p.file}:{p.line}:{p.col}:{n}", args := ctx.frameArgs } else none
       if let some s := storage then
         modify fun st => { st with frameSlots := st.frameSlots ++ [(slot, s)] }
+      -- (#724: a `var` of the source, not one the compiler made)
+      if isVar && !n.contains '$' && !n.contains '\'' then
+        modify fun st => { st with sourceVars := (slot, n) :: st.sourceVars }
       if envInit then
         if let .local result := e then
           modify fun st => { st with frameCopies := st.frameCopies ++ [{ target := slot, result }] }

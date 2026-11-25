@@ -1,0 +1,13 @@
+big computed
+and zero
+or unchanged
+not negated
+and, or: 2^64
+or: mixed signs
+xor: mixed signs
+not: mixed signs
+shifts past 64 bits
+multi-word shifts
+counts past 64 bits
+2^20 bits
+exit=0

@@ -1,12 +1,12 @@
 F defer
-second branch defer
-inner branch defer
-outer branch defer
 0
-late branch 0 defer
-loser 0 defer
+1
 1
 late branch 1 defer
 loser 1 defer
-1
+late branch 0 defer
+loser 0 defer
+second branch defer
+inner branch defer
+outer branch defer
 exit=0

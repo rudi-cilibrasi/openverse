@@ -1,4 +1,4 @@
-# expect: spawn in a defer is not supported (#156)
+# expect: spawn in a defer of a <suspends> function is not supported (#156)
 pair(a:type,b:type):=class{}
 dup(t:type):=class(pair(t,t)){C:int=4}
 Child(N:int)<suspends>:void=Sleep(0.1)

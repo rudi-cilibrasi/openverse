@@ -3,16 +3,16 @@ pair(t:type, u:type) := class:
     A:t
     B:u
     Describe():string = "pair"
-    Second():u = B
+    Second()<transacts>:u = B
 pair_int(u:type) := class(pair(int, u)):
     Describe<override>():string = "pair_int {A}"
 pair_int_str := class(pair_int(string)):
     Extra:int = 0
 pair_int_logic := class(pair_int(logic)):
-    Second<override>():logic = false
+    Second<override>()<transacts>:logic = false
 Show(P:pair(t, u) where t:type, u:type):string = P.Describe()
-SecondOf(P:pair(t, u) where t:type, u:type):u = P.Second()
-SecondInt(P:pair(int, u) where u:type):u = P.Second()
+SecondOf(P:pair(t, u) where t:type, u:type)<transacts>:u = P.Second()
+SecondInt(P:pair(int, u) where u:type)<transacts>:u = P.Second()
 Main():void =
     Print(Show(pair_int(int){A := 1, B := 2}))
     Print(Show(pair_int_str{A := 3, B := "x"}))

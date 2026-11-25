@@ -1,0 +1,19 @@
+alias [8, 9]
+call [8, 9]
+element in place [1, 51]
+appended in place [1, 3, 7]
+another object [1, 3] [8, 9]
+row replaced [[1, 2] [9, 9]]
+other row replaced [[5] [13, 4]]
+field replaced [[0] [7, 7]]
+map 100
+option 9
+struct 50
+rolled back [1, 2]
+after the rollback [30, 3]
+nested [9, 9]
+generic [40]
+interface [8, 9]
+module entry [8, 9]
+another task 50
+exit=0

@@ -6,7 +6,7 @@ sup := class:
 sub := class(sup):
     Sub:int
 source(t:type) := interface:
-    Next():t
+    Next()<transacts>:t
 sink(t:type) := interface:
     Put(X:t):int
 tagged(t:type) := interface:
@@ -15,7 +15,7 @@ source2(t:type) := interface(source(t)):
 sink2(t:type) := interface(sink(t)):
 gen(t:type) := class(source2(t)):
     Item:t
-    Next<override>():t = Item
+    Next<override>()<transacts>:t = Item
 taker(t:type) := class(sink2(t)):
     Put<override>(X:t):int = 7
 label(t:type) := class(tagged(t)):

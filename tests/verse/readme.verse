@@ -1,4 +1,4 @@
-Half(N:int)<decides>:int =
+Half(N:int)<transacts><decides>:int =
     Mod[N, 2] = 0
     Quotient[N, 2]
 

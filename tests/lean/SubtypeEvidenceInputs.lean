@@ -156,7 +156,8 @@ def main : IO Unit := do
       "t has no method 'Await'"),
     ("bounded task cancel", "Caller(X:t,D:evidence(task(int),t) where t:type)<suspends>:void=X.Cancel()",
       "t has no method 'Cancel'"),
-    ("bounded unit signal", "Caller(X:t,D:evidence(event(void),t) where t:type)<transacts>:void=X.Signal()",
+    -- (#515: no <transacts>, whose function cannot signal, UEFN 43.12: 3512)
+    ("bounded unit signal", "Caller(X:t,D:evidence(event(void),t) where t:type):void=X.Signal()",
       "t has no method 'Signal'"),
     ("ordinary Await before redundant intrinsic", "worker:=class(event(int)):\n    Await()<computes>:int=7\nCaller(X:t,D:evidence(worker,t),E:evidence(event(int),t) where t:type)<computes>:int=X.Await()",
       "Await suspends"),

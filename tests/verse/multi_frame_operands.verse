@@ -2,7 +2,7 @@
 # after literals and the function's own names, in an operation, a call's
 # arguments, a tuple, an interpolation, a comparison or a block, its result's
 # member; each value of the call runs the code after it.
-Tw(A:int, B:int):int = A * 10 + B
+Tw(A:int, B:int)<transacts>:int = A * 10 + B
 G(N:int)<transacts><decides>:int =
     N > 0
     Y := N * 2

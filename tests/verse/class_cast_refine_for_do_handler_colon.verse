@@ -6,7 +6,7 @@ Touch(H:holder,Reject:int)<transacts><decides>:int=
     Print("touch {H.N}")
     H.N<>Reject
     H.N
-Rows(P:pair(a,b),H:holder where a:type,b:type):[]int=
+Rows(P:pair(a,b),H:holder where a:type,b:type)<transacts>:[]int=
     for(V:=if(D:=dup[P])then(D.A|D.B)else P.B): if(Touch[H,2])then 1 else 0
 Main():void=
     H:=holder{}

@@ -1,4 +1,5 @@
-# Declared field order wins over written order. Prefix and inherited
+# The fields given run in the order written (#724), at the places the given
+# fields have in declaration order. Prefix and inherited
 # defaults run before the next cast, trailing defaults/blocks after it.
 pair(a:type,b:type):=class{}
 dup(t:type):=class(pair(t,t)){C:int=4}

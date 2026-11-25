@@ -24,17 +24,30 @@ import OpenVerse.Front.PhysicalWrites
 import OpenVerse.Front.Attributes
 import OpenVerse.Front.Reachability
 import OpenVerse.Front.Variance
+import OpenVerse.Front.LinkCheck
 
 namespace OpenVerse.Front
 open OpenVerse
 
 /-- What an elaboration asks for (`Requests`, by tiers: `Requests.tier`): what
     its functions and the fields' defaults ask, and (#283) the families and
-    overloads of the inlining's sites it did not reach (`Source`). -/
-def roundNeeds (elaborated : Array ElaboratedFn) (fieldNeeds : Requests) (source : Source) : Requests := Id.run do
+    overloads of the inlining's sites it did not reach (`Source`).
+    A site reached only in the copies of a suffix (`Ctx.noteOverload`'s
+    `copiedOverloads`, this elaboration's and those `granted` before it)
+    is not one of no overload: where the copies agree it has theirs (#723),
+    as the code a later elaboration moves into a function of its own
+    (`$cont`) is the source's, not a copy's, and would call the family's
+    stub. -/
+def roundNeeds (elaborated : Array ElaboratedFn) (fieldNeeds : Requests) (source : Source)
+    (granted : List (String × Pos × String) := []) : Requests := Id.run do
   let mut needs := elaborated.foldl (fun acc f => acc.merge f.needs) fieldNeeds
   if needs.families.isEmpty then needs := needs.merge { families := source.familySites.map fun (q, _) => (q, "") }
-  if needs.overloads.isEmpty then needs := needs.merge { overloads := source.overloadSites.map fun (q, _) => (q, "") }
+  if needs.overloads.isEmpty then
+    let copied := needs.copiedOverloads ++ granted
+    needs := needs.merge { overloads := source.overloadSites.map fun (q, _) =>
+      match (copied.filterMap fun (_, q', o) => if q' == q then some o else none).eraseDups with
+      | [o] => (q, o)
+      | _ => (q, "") }
   return needs
 
 /-- The function the program runs: `Main`, or with an entry expression its
@@ -45,6 +58,38 @@ def mainSignature (sigs : Signatures) (entry : Option SExpr) : Except String Sig
     if s.isConst || !s.params.isEmpty then throw "Main must be a function with no parameters"
     pure s
   | none => throw "the program has no Main() function"
+
+mutual
+/-- A query of a logic is elaborated as `(query X; false)`, its value the
+    empty value (#724). Where the code drops that value (an `if`'s
+    condition, a statement of a sequence, a loop's body, a `for`'s
+    filter), it is `query X` alone, as before, so that only code that takes
+    the value changes. -/
+partial def dropQueryValues : Expr → Expr
+  | .ite c t e => .ite (droppedQuery (dropQueryValues c)) (dropQueryValues t) (dropQueryValues e)
+  | .seq a b => .seq (droppedQuery (dropQueryValues a)) (dropQueryValues b)
+  | .loop b => .loop (droppedQuery (dropQueryValues b))
+  | .assign i e => .assign i (dropQueryValues e)
+  | .prim p es => .prim p (es.map dropQueryValues)
+  | .heap op es => .heap op (es.map dropQueryValues)
+  | .call f es => .call f (es.map dropQueryValues)
+  | .forE i it f b => .forE i (dropQueryValues it) (droppedQuery (dropQueryValues f)) (dropQueryValues b)
+  | .ret e => .ret (dropQueryValues e)
+  | .print e => .print (dropQueryValues e)
+  | e => e
+
+/-- `e`, whose value is dropped, without a query's value at its end: a
+    sequence's last part's, an `if`'s branches' (also an `or`'s, `if (T :=
+    A) then T else B`, whose `T` is read only by its own branch). -/
+partial def droppedQuery : Expr → Expr
+  | .seq (.prim .query [x]) (.lit (.logic false)) => .prim .query [x]
+  | .seq a b => .seq a (droppedQuery b)
+  | .ite (.assign i v) (.local j) e =>
+    if i == j then .ite (.assign i (droppedQuery v)) (.local j) (droppedQuery e)
+    else .ite (.assign i v) (.local j) (droppedQuery e)
+  | .ite c t e => .ite c (droppedQuery t) (droppedQuery e)
+  | e => e
+end
 
 /-- The functions of a program prepared for lowering (`prepareLowering`). -/
 structure Lowering where
@@ -113,9 +158,9 @@ def prepareLowering (env : TyEnv) (sigs : Signatures) (elaborated : Array Elabor
   let S00 : Sigs := { fns := fsigs0, classes := classTable, protos, pins, variances := env.coreVariances }
   for gi in List.range fns.size do
     let fn := fns[gi]!
-    fns := fns.set! gi { fn with body := Suspend.pruneDead S00 ((slotTys[gi]?).getD []) fn.body }
+    fns := fns.set! gi { fn with body := dropQueryValues (Suspend.pruneDead S00 ((slotTys[gi]?).getD []) fn.body) }
     metadataInfo := metadataInfo.modify gi fun info => { info with
-      body := info.body.map (Suspend.pruneDead S00 ((slotTys[gi]?).getD [])) }
+      body := info.body.map fun b => dropQueryValues (Suspend.pruneDead S00 ((slotTys[gi]?).getD []) b) }
   -- Source effects have already been checked. Compiler-owned local cells
   -- still need truthful physical write flags before metadata/capture analysis.
   return { fns := PhysicalWrites.annotate fns, slotTys, metadata := metadataInfo, sigs := S00 }
@@ -311,10 +356,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let admitted ← admitSource allTops0r opts
   let source ← inlineSource opts.requests admitted
   let defs ← argsAndMethodOverloads source.tops source.entry opts.args
-  let classes ← classHierarchy defs.tops source.constructionFx
+  let classes ← classHierarchy defs.tops source.constructionFx opts.parametricVarFields
   let fields ← classFields classes opts.requests
   let methods ← classMethods defs.tops classes fields
   let env ← typeEnvironment classes fields methods source admitted.concurrencyNames opts.requests opts.signalNoRollback
+  let env := { env with defaultNoRollback := opts.defaultNoRollback, functionCoercions := opts.functionCoercions }
   let env ← upperBounds env methods.tops
   checkAliasBounds env admitted.aliases
   let views ← interfaceViews env classes.defs opts.requests
@@ -322,6 +368,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     return .asking { witnesses := views.witnessNeeds }
   let env ← pinsAndAccessors { env with viewed := views.viewed } methods opts.requests
   let env ← addPlaceholders env
+  let env := addConstantObjects env methods.tops
   -- (Verse Core's variances, once the class table, the pins and the views
   -- are known: what the certificate gives, docs/research/variance.md)
   let env := { env with coreVariances := env.coreVariancesOf }
@@ -343,7 +390,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   checkSignatures env sigs classes.defs fields methods admitted.scopePairs
   let defaults ← elabFieldDefaults env sigs methods.tops classes.defs opts.extendedDefaults
   let elaborated ← elabFunctions env sigs opts.requests opts.extendedDefaults
-  let needs := roundNeeds elaborated defaults.needs source
+  let needs := roundNeeds elaborated defaults.needs source opts.requests.copiedOverloads
   -- (#283) the eager groups, the families of the uses of methods whose
   -- receivers' classes this one found, and the overloads of the calls whose
   -- arguments' types it found; those it did not reach, of no family or
@@ -389,11 +436,34 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     | _ => none)) opts.requests.lazy
   if !lazyNeeds.isEmpty then
     return .asking { lazy := lazyNeeds }
-  let failCalls := elaborated.foldl (fun acc f => acc ++ f.failCalls) #[]
-  -- (#515, `--signal-no-rollback`) no event signal from a failure context
+  -- (#515) no event signal from a failure context, nor from a body whose
+  -- effects exclude no_rollback: an event's Signal has that effect (Epic's
+  -- Verse compiler, UEFN 43.12: error 3512), unless the program is compiled
+  -- in the legacy transactional mode (`--signal-rollback`)
+  -- (the bodies first: Epic's compiler reports the call in a `<transacts>`
+  -- function, not a call of that function, which has no no_rollback)
   if opts.signalNoRollback then
+    let specsOf : Std.HashMap String (Pos × List String) := (sigs.tops ++ sigs.generics).foldl
+      (fun m t => match t with | .fn p n _ _ specs .. => m.insert n (p, specs) | _ => m) {}
+    let bodies : List (Nat × (Pos × String) × Array ((Pos × String) × List Nat)) :=
+      (elaborated.toList.zipIdx).filterMap fun (f, i) =>
+        (specsOf.get? f.fn.name).bind fun (p, specs) =>
+          (SignalAdmission.excludesNoRollback f.fn.name specs).map fun desc =>
+            (i, (p, desc), f.bodyCalls ++ f.failCalls)
+    -- (of the calls in the bodies, failure contexts in them included, the
+    -- one closest to a `Signal`)
+    let found := bodies.filterMap fun (_, (_, desc), calls) =>
+      (SignalAdmission.checkSites lowering.fns calls (continuations := true)).map
+        fun site => (site, desc)
+    if let some (((p, what), way), desc) := found.foldl (fun best c => match best with
+        | some b => if c.1.2.length < b.1.2.length then some c else best
+        | none => some c) none then
+      throw s!"{p.show}: this {what} may signal an event ({" → ".intercalate way}), whose Signal has the no_rollback effect, in {desc} (Epic's Verse compiler, UEFN 43.12: error 3512; #515)"
+    if let some ((p, desc), way) := SignalAdmission.checkBodies lowering.fns (bodies.toArray.map fun (i, site, _) => (site, i)) then
+      throw s!"{p.show}: this code may signal an event ({" → ".intercalate way}), whose Signal has the no_rollback effect, in {desc} (Epic's Verse compiler, UEFN 43.12: error 3512; #515)"
+    let failCalls := elaborated.foldl (fun acc f => acc ++ f.failCalls) #[]
     if let some ((p, what), way) := SignalAdmission.checkSites lowering.fns failCalls then
-      throw s!"{p.show}: this {what} may signal an event ({" → ".intercalate way}) in a failure context, which --signal-no-rollback refuses: the published Verse API makes an event's Signal <no_rollback> (#515)"
+      throw s!"{p.show}: this {what} may signal an event ({" → ".intercalate way}) in a failure context, which the no_rollback effect of an event's Signal does not allow (Epic's Verse compiler, UEFN 43.12: error 3512; #515)"
   -- (the lazily taken functions with several values that contexts taking
   -- their first success consume, #246)
   let loopFirst := elaborated.toList.flatMap (·.loopFirst)
@@ -421,6 +491,22 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     { info with dataOnlySlots := (((elaborated[index]?).map (·.slotTys)).getD []).zipIdx.filterMap fun (ty, slot) =>
         if MetadataValues.dataOnly dataClasses ty then some slot else none }
   MetadataFlow.check lowering.fns metadata fields opts.debug scalarReturns dataReturns cleanPrototypes
+  -- (#724) a module constant whose computation allocates a var: Epic's
+  -- Verse VM computes a module's constants when it links the program, where
+  -- that is an error (`LinkCheck`)
+  let constants := (sigs.tops.zip (List.range sigs.tops.length)).filterMap fun
+    | (.const p n .., i) =>
+      if n.startsWith "$" || ((lowering.fns[i]?).map (·.name)) != some n then none else some (i, n, p)
+    | _ => none
+  if !constants.isEmpty then
+    let vars := lowering.fns.mapIdx fun i _ => ((elaborated[i]?).map (·.sourceVars)).getD []
+    let withVar (c : String) : Bool := (env.fields c).any (fun (f, _, _) => env.isVarField c f) ||
+      (env.supers c).any fun d => (env.fields d).any fun (f, _, _) => env.isVarField d f
+    let varTags := (env.classes.filter fun c => !c.contains '$' && env.isRefClass c && withVar c).map
+      fun c => (env.tagOf c, c)
+    let protos := env.protos.map fun (_, t, vs) => (t, vs)
+    if let some (n, p, what) := LinkCheck.firstAllocating lowering.fns vars varTags protos constants then
+      throw s!"{p.show}: computing the constant {n} allocates {what}: Epic's Verse VM computes a module's constants when it links the program, and allocating a var there fails the link (error 9003, as the Book's tests have it, GlobalVariables.versetest:86-105; UEFN 43.12, #724): make it a function, or keep the var out of the code its value runs"
   let frameInfo := elaborated.map (·.frames)
   let c ← certify (← lowerProgram env sigs mainSig lowering frameInfo admitted.usesConc admitted.usesEvents
     admitted.awaitsTasks) methods.stubs
@@ -489,15 +575,17 @@ partial def topDefaultCount : STop → Nat
        field orders of what that code constructs, and the calls a group's
        machine takes at another instance of a generic callee;
     2. the classes' layout (#351): hidden fields for all of a class's type
-       parameters, and the await mode's prelude for a program that awaits a
-       task (`Requests.awaits`);
+       parameters, hidden fields of watches on the containers in fields that
+       compound `set`s resolve before their right sides (#704,
+       `Requests.watches`), and the await mode's prelude for a program that
+       awaits a task (`Requests.awaits`);
     3. the functions added: functions as values (#214), method adapters, the
        branches of refining casts (#243), and the functions of lazily taken
        calls and the helpers of consumers of choices (#246, #335). -/
 def Requests.tier (r : Requests) : Nat :=
   if !r.eager.isEmpty || !r.families.isEmpty || !r.overloads.isEmpty || !r.copiedOverloads.isEmpty || !r.lazy.isEmpty || !r.nested.isEmpty ||
       !r.fieldOrders.isEmpty || !r.instanceCalls.isEmpty then 1
-  else if !r.witnesses.isEmpty || r.awaits then 2
+  else if !r.witnesses.isEmpty || !r.watches.isEmpty || r.awaits then 2
   else 3
 
 /-- The requests of tier `k` and of the tiers above it (`Requests.tier`). -/
@@ -505,6 +593,7 @@ def Requests.upTo (r : Requests) (k : Nat) : Requests :=
   if k ≥ 3 then r else
   { eager := r.eager, families := r.families, overloads := r.overloads, copiedOverloads := r.copiedOverloads, lazy := r.lazy, nested := r.nested,
     fieldOrders := r.fieldOrders, instanceCalls := r.instanceCalls, witnesses := if k = 2 then r.witnesses else [],
+    watches := if k = 2 then r.watches else [],
     awaits := k == 2 && r.awaits,
     -- (what a function's body boxes: kept, as the source is)
     boxes := r.boxes }
@@ -567,10 +656,18 @@ def elabProgram (allTops000 : List STop) (opts : Options := {}) : Except String 
       | 0 =>
         if !newDefaults.isEmpty then throw "internal error: default forwarding helpers still to infer after several elaborations"
         if !new.methods.isEmpty then throw "internal error: method variance adapters still to infer after several elaborations"
+        if !new.fnAdapters.isEmpty then throw "internal error: function values' variance adapters still to make after several elaborations (#724)"
         -- (a program with a placeholder left is never given out)
         if !new.fns.isEmpty then throw "internal error: functions still wanted as values after several elaborations (#214)"
         throw "internal error: casts that refine type arguments, or lazily taken calls, still to lift after several elaborations (#243, #246)"
       | fuel + 1 =>
+        -- (#724) the printer of a function type for `ToDiagnostic` casts to
+        -- the classes of the values it may be (`Diagnostic.printer`): those
+        -- made before a round that adds such classes (functions as values
+        -- at other types, method adapters, function value adapters) are made
+        -- again, in the round after, with them
+        let (req, new) := if new.fns.isEmpty && new.methods.isEmpty && new.fnAdapters.isEmpty then (req, new)
+          else ({ req with anys := [] }, { new with anys := [] })
         if newDefaults.isEmpty then return ← loop eagerFuel witnessFuel fuel (req.merge new)
         -- A newly materialized dispatch-default helper can reveal heap effects
         -- absent from an earlier suffix trial. Rediscover consumers after those
@@ -578,7 +675,7 @@ def elabProgram (allTops000 : List STop) (opts : Options := {}) : Except String 
         -- interfaces, prefixes and resume methods must agree on permissions.
         -- Each restart retains the new bridges, so discovery still progresses.
         let bridges := req.loops.filter fun l => defaultBridge l.name || spawnAdapter l.name
-        loop eagerFuel witnessFuel fuel { req.merge { fns := new.fns, methods := new.methods, subtypes := new.subtypes, anys := new.anys } with
+        loop eagerFuel witnessFuel fuel { req.merge { fns := new.fns, methods := new.methods, fnAdapters := new.fnAdapters, subtypes := new.subtypes, anys := new.anys } with
           casts := [], loops := bridges ++ newDefaults }
   termination_by (eagerFuel, witnessFuel, fuel)
   let c ← (loop eagerRounds witnessRounds rounds opts.requests).mapError fun msg =>
@@ -600,7 +697,7 @@ def compile (src : String) (opts : Options := {}) : Except String Prog := do
     bound to `Args` when given or mentioned, and an optional `do` expression. -/
 def compileTops (tops : List STop) (args : List String) (mentionsArgs : Bool) (doExpr : Option String)
     (debug : Bool := false) (profile : SourceProfile := .full)
-    (extendedDefaults : Bool := false) (signalNoRollback : Bool := false) : Except String Prog := do
+    (extendedDefaults : Bool := false) (signalNoRollback : Bool := true) : Except String Prog := do
   let entry ← match doExpr with
     | some t => some <$> parseExprText t
     | none => pure none
@@ -612,14 +709,16 @@ def compileTops (tops : List STop) (args : List String) (mentionsArgs : Bool) (d
     (`Compiled.warnings`), in the order of the source. -/
 def compileTopsWarned (tops : List STop) (args : List String) (mentionsArgs : Bool) (doExpr : Option String)
     (debug : Bool := false) (profile : SourceProfile := .full)
-    (extendedDefaults : Bool := false) (signalNoRollback : Bool := false) :
+    (extendedDefaults : Bool := false) (signalNoRollback : Bool := true) (defaultNoRollback : Bool := true)
+    (functionCoercions : Bool := false) (parametricVarFields : Bool := false) :
     Except String (Prog × List String) := do
   let entry ← match doExpr with
     | some t => some <$> parseExprText t
     | none => pure none
   let useArgs := !args.isEmpty || mentionsArgs
-  let opts : Options := { args := if useArgs then some args else none, entry, debug, profile, extendedDefaults }
-  let c ← elabProgram tops { opts with signalNoRollback }
+  let opts : Options := { args := if useArgs then some args else none, entry, debug, profile, extendedDefaults,
+                          parametricVarFields }
+  let c ← elabProgram tops { opts with signalNoRollback, defaultNoRollback, functionCoercions }
   return (c.prog, c.warnings.map fun (p, m) => s!"{p.show}: warning: {m}")
 
 /-- Compile with shell arguments (bound to `Args` when given or used) and an

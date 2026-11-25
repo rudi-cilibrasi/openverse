@@ -1,16 +1,16 @@
 pair(a:type,b:type):=class{A:a;B:b}
 dup(t:type):=class(pair(t,t)){Index:int=0}
-Echo(X:t,?Other:t=X where t:type):t=Other
-Wrap(X:t where t:type):t=X
-Outer(X:t,Y:u,?Other:u=Y where t:type,u:type):t=X
+Echo(X:t,?Other:t=X where t:type)<transacts>:t=Other
+Wrap(X:t where t:type)<transacts>:t=X
+Outer(X:t,Y:u,?Other:u=Y where t:type,u:type)<transacts>:t=X
 box(t:type):=struct{Value:t}
-Deep(P:pair(a,b) where a:type,b:type)<decides>:b=Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Echo(P.A,?Other:=dup[P].B)))))))))))))))))))))))))
-Context(P:pair(a,b) where a:type,b:type)<decides>:b=Outer(P.A,P.B,?Other:=Echo(P.A,?Other:=dup[P].B))
-Construct(P:pair(a,b) where a:type,b:type)<decides>:box(b)=box(b){Value:=Outer(P.A,P.B,?Other:=Echo(P.A,?Other:=dup[P].B))}
-Named(P:pair(a,b) where a:type,b:type)<decides>:b=
+Deep(P:pair(a,b) where a:type,b:type)<transacts><decides>:b=Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Wrap(Echo(P.A,?Other:=dup[P].B)))))))))))))))))))))))))
+Context(P:pair(a,b) where a:type,b:type)<transacts><decides>:b=Outer(P.A,P.B,?Other:=Echo(P.A,?Other:=dup[P].B))
+Construct(P:pair(a,b) where a:type,b:type)<transacts><decides>:box(b)=box(b){Value:=Outer(P.A,P.B,?Other:=Echo(P.A,?Other:=dup[P].B))}
+Named(P:pair(a,b) where a:type,b:type)<transacts><decides>:b=
     D:=dup[P]
     Outer(P.A,P.B,?Other:=Echo(P.A,?Other:=D.B))
-Sequence(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<decides>:tuple(b,d)=
+Sequence(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<transacts><decides>:tuple(b,d)=
     V:b=Echo(P.A,?Other:=dup[P].B)
     W:d=Echo(Q.A,?Other:=dup[Q].B)
     (V,W)

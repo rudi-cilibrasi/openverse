@@ -67,6 +67,9 @@ rule("type-checks-other", ACC)
 
 # --- different output
 rule("int-precision", OUT, diag=r"overflow")
+# (the Blueprint VM's 64-bit ints: a runtime error where openverse, with the
+# Verse VM's ints, #724, goes on)
+rule("int-precision", OUT, form="assert_runtime_error", prog=r"922337203685477580[78]|Pow2_64|BitShiftLeft\[")
 rule("empty-values-equal", OUT, prog=r"(Y:(void|logic|tuple\(\)|\?int|\[\]int|\[int\]int|string)\s*=\s*"
      r"(\{\}|false|\(\)|array\{\}|map\{\}|\"\"))|\(\)\s*=\s*\"\"|\"\"\s*=\s*\(\)|X:void\s*=|true\?\s*\??|"
      r"X\s*=\s*\(\)$|\(true\? and true\?\) = false|true\?\s+or true")
@@ -80,9 +83,16 @@ rule("comments-in-strings", OUT, prog=r'"[^"\n]*<#')
 rule("output-other", OUT)
 
 # --- refusals: first by openverse's diagnostic, where it names the feature
+# (the Blueprint VM's twins of the Verse VM's module-evaluation link errors,
+# GlobalVariables.versetest 115-141: openverse follows the Verse VM, #724)
+rule("module-evaluation", REF, diag=r"computing the constant .* allocates")
+# (the Verse VM's twins of the Blueprint VM's 3502 function coercions, which
+# UEFN 43.12 refuses as the Blueprint VM does, #724)
+rule("function-coercions", REF, diag=r"is not yet implemented: .*error 3502; #724")
 K = r"(?:class|struct|module|interface|enum|union|scoped|type)\b"
 rule("override-defaults", REF, diag=r"must give a new default|must have the type it inherits|"
      r"must have the signature of")
+rule("int-module-constants", REF, diag=r"leaves the 64-bit range when the module is evaluated")
 rule("partial-modules", REF, diag=r"module \S+ is defined twice")
 rule("empty-containers", REF, diag=r"the type of an empty (array|map)")
 rule("comparisons", REF, diag=r"compares values of different types|no operator '(=|<>)'|"

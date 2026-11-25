@@ -1,0 +1,17 @@
+contents 1
+find 1 -1
+for body defer 1
+for body defer 2
+for body defer 3
+round 1 done
+loop body defer
+for body defer 1
+for body defer 2
+loop body defer
+rounds 2
+seen 4
+k 3
+c 12
+susp 6
+keys 3
+exit=0

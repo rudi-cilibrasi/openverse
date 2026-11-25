@@ -277,14 +277,21 @@ def resolve(cls, root, skip_own=False):
     The nearest qualified or plain implementation in the class chain wins.  Otherwise
     the candidates are the most specific interface default of root, and (as in Java)
     what the class above the one that introduced the slot has for the name; two
-    different candidates are a conflict that the class must resolve by overriding."""
+    different candidates are a conflict that the class must resolve by overriding.
+    An interface's abstract method is implemented below the interface only (#724,
+    UEFN 43.12: error 3591)."""
     full = cls.chain()
     chain = full[1:] if skip_own else full
+    # (#724: an interface's slot is implemented below the interface, so a plain
+    # method of a class of the chain that is not below it is not its
+    # implementation: UEFN 43.12 refuses such a class, error 3591,
+    # followup-book2/final-method-interface)
+    below = (lambda c: not root.owner.is_iface or c.below(root.owner))
     for c in chain:
         if root in c.impls:
             return c.impls[root]
         im = c.plain.get(root.name)
-        if good(im):
+        if good(im) and below(c):
             return im
     d1 = iface_default(cls.all_ifaces(), root)
     top = [c for c in full if root in c.all_roots()][-1]
@@ -300,7 +307,9 @@ def resolve(cls, root, skip_own=False):
         return 'ambig'
     if good(d1):
         return d1
-    if good(d2):
+    # (as in Java, what the class above has, but not for an interface's
+    # abstract method, #724)
+    if good(d2) and not root.owner.is_iface:
         return d2
     return d1
 
@@ -1275,8 +1284,8 @@ class Gen:
         R.shuffle(As)
         R.shuffle(Bs)
         a, b = tmpname('QA'), tmpname('QB')
-        M.append('%s:[]%s = array{%s}' % (a, qa, ', '.join(As)))
-        M.append('%s:[]%s = array{%s}' % (b, qb, ', '.join(Bs)))
+        M.append('%s:[]%s = array{%s}' % (a, qa, ', '.join('%s(%s)' % (qa, e) for e in As)))
+        M.append('%s:[]%s = array{%s}' % (b, qb, ', '.join('%s(%s)' % (qb, e) for e in Bs)))
         y = tmpname('X')
         M.append('for (%s : %s) { Print("qa {%s.%s()}") }' % (y, a, y, m))
         y = tmpname('X')
@@ -2052,7 +2061,7 @@ class Gen:
                         # reference is <decides>, the Book of Verse's API reference)
                         M.append('if (set %s.%s["%s"] = %s) {}' % (v, f.name, key, R.choice(cands)))
                 else:
-                    ws = [R.choice(cands) for _ in range(R.randint(1, 3))]
+                    ws = ['%s(%s)' % (fty[1].name, R.choice(cands)) for _ in range(R.randint(1, 3))]
                     M.append('set %s.%s = %s.%s + array{%s}' % (v, f.name, v, f.name, ', '.join(ws)))
         mctx = self.main_ctx(objs)
         # show each object
@@ -2114,7 +2123,10 @@ class Gen:
             narr += 1
             arr = tmpname('Xs')
             R.shuffle(below_)
-            M.append('%s:[]%s = array{%s}' % (arr, t.name, ', '.join(v for v, _ in below_)))
+            # (each element upcast to t: classes with a common base class and
+            # a common interface not above it make an array of any, which
+            # Epic's compiler refuses where an array of t is expected, #515)
+            M.append('%s:[]%s = array{%s}' % (arr, t.name, ', '.join('%s(%s)' % (t.name, v) for v, _ in below_)))
             x = tmpname('X')
             ictx = self.main_ctx(objs + [(x, t)])
             parts = []

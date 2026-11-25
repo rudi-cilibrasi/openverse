@@ -171,6 +171,9 @@ check "initializer convergence and extended-default models" \
   bash tests/scripts/test-initializer-convergence.sh "${FUZZ_MODEL_INITIALIZERS:-96}" "$seed"
 check "scheduler conformance traces and controls" bash tests/scripts/test-scheduler-conformance.sh
 check "scheduler model cancellation contracts" python3 -I tests/scripts/test-scheduler-model.py
+check "live VerseVM probe tools (generation, UEFN logs, comparison)" python3 -I tests/scripts/test-versevm-live.py
+check "compatibility scoreboard (every probe against Epic's recorded results, docs/COMPATIBILITY.md)" \
+  bash tests/scripts/test-compat-scoreboard.sh
 check "bounded clock domain (${FUZZ_CLOCK_DOMAIN:-100} programs and boundary traces)" \
   bash tests/scripts/test-clock-domain.sh "${FUZZ_CLOCK_DOMAIN:-100}" "$seed"
 check "overload domains (${FUZZ_OVERLOAD_SHAPES:-546} programs, across seven contexts)" \
@@ -203,7 +206,9 @@ check "refining source-task cleanup (${FUZZ_MODEL_TASK_ORDER:-64} seed pairs)" \
 check "waiting consumers in parameter defaults (${FUZZ_MODEL_WAITING_DEFAULTS:-144} seed pairs)" \
   bash tests/scripts/test-waiting-defaults.sh "${FUZZ_MODEL_WAITING_DEFAULTS:-144}" "$seed"
 check "float fuzzing (${FUZZ_FLOATS:-200} programs, against Python's doubles)" scripts/fuzz-floats.sh "${FUZZ_FLOATS:-200}" "$seed"
-check "bitwise fuzzing (${FUZZ_BITWISE:-200} programs, against Python's ints in 64 bits)" scripts/fuzz-bitwise.sh "${FUZZ_BITWISE:-200}" "$seed"
+check "bitwise fuzzing (${FUZZ_BITWISE:-200} programs, against Python's ints)" scripts/fuzz-bitwise.sh "${FUZZ_BITWISE:-200}" "$seed"
+check "ints beyond 64 bits (${FUZZ_BIGINT:-200} programs, against Python's ints)" scripts/fuzz-bigint.sh "${FUZZ_BIGINT:-200}" "$seed"
+check "ints beyond 64 bits, a compound assignment's long value (seed 20776025, #723)" scripts/fuzz-bigint.sh 1 20776025
 check "scalar float math (${FUZZ_FLOAT_MATH:-64} random cases and fixed edges)" \
   bash tests/scripts/test-float-math.sh "${FUZZ_FLOAT_MATH:-64}" "$seed"
 check "scalar float math regression (one-ulp tiny normal, seed 23801198)" \
@@ -216,6 +221,8 @@ check "scheduler model regression (running branch stopped inside Signal, seed 63
   scripts/fuzz-model-sched.sh 1 630059
 check "scheduler running rush arm cancellation (seed 646094)" \
   scripts/fuzz-model-sched.sh 1 646094
+check "scheduler Main ending inside a task's end, its children stopped there (seeds 20776326, 20777477, #723)" \
+  bash -c 'scripts/fuzz-model-sched.sh 1 20776326 && scripts/fuzz-model-sched.sh 1 20777477'
 check "GADT model fuzzing (${FUZZ_MODEL_GADT:-150} programs, against twenty-nine models of the docs)" \
   scripts/fuzz-model-gadt.sh "${FUZZ_MODEL_GADT:-150}" "$seed"
 check "GADT models through type aliases (${FUZZ_MODEL_GADT_ALIASES:-150} programs, their types' names written through aliases)" \
@@ -292,10 +299,24 @@ check "choice model regression (copied first-success early-return argument order
   scripts/fuzz-model-mv.sh 1 653109
 check "choice model regression (copied recursive suffix bindings, seed 20773114)" \
   scripts/fuzz-model-mv.sh 1 20773114
+check "choice model regression (a for over an inlined producer follows the search, seed 20779098)" \
+  scripts/fuzz-model-mv.sh 1 20779098
+check "choice model regression (a for over a lazily taken generator keeps the old rule beside an inlined one, seed 20776478)" \
+  scripts/fuzz-model-mv.sh 1 20776478
+check "choice model regression (a for over a recursive producer's array follows the search, seed 20776995)" \
+  scripts/fuzz-model-mv.sh 1 20776995
+check "choice model regression (an interpolated int's overflow before the next value's lifted code, seed 20778801)" \
+  scripts/fuzz-model-mv.sh 1 20778801
+check "choice model regression (an overloaded method's call reached only in copies, seed 20782035)" \
+  scripts/fuzz-model-mv.sh 1 20782035
 check "generic functions with several values (${FUZZ_MODEL_GENERIC:-150} programs, against a model of the docs)" \
   scripts/fuzz-model-generic.sh "${FUZZ_MODEL_GENERIC:-150}" "$seed"
 check "generic choice regression (omitted named argument in a <decides> wrapper)" \
   scripts/fuzz-model-generic.sh 1 20768200
+check "generic choice regression (a for over a function with a for over itself, no row reaching the body, seed 20781465, #723)" \
+  scripts/fuzz-model-generic.sh 1 20781465
+check "generic choice regression (the inner for's bodies commit nothing of the outer search, seed 20781534, #723)" \
+  scripts/fuzz-model-generic.sh 1 20781534
 check "concurrency fuzzing (${FUZZ_CONC:-160} programs)" scripts/fuzz-conc.sh "${FUZZ_CONC:-160}" "$seed"
 check "polymorphic-recursion concurrency fuzzing (${FUZZ_CONC_POLY:-60} programs, #244)" \
   scripts/fuzz-conc-poly.sh "${FUZZ_CONC_POLY:-60}" "$seed"

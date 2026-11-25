@@ -110,6 +110,9 @@ partial def elabExprMarkersWith
     | .app _ (.ident _ "$producerAnchorEnd") [_] false
     | .app _ (.ident _ "$producerFrameStart") [] false
     | .app _ (.ident _ "$producerFrameEnd") [] false => return ⟨.lit .void, .void⟩
+  -- (#704) a guarded compound set's right side, met where the set did not
+  -- take it (`CompoundPlaces`): its value
+  | .app _ (.ident _ "$placeGuard") [e, _, _] false => elabE ctx e exp
   | .app _ (.ident _ "$nofail") [e] false =>
     elabE { ctx with canFail := false, inRollback := ctx.inRollback || ctx.canFail, inBlock := true } e exp
   | .app p (.ident _ "$defer") _ _ => eerr p "defer: is a statement: it has no value"
@@ -149,8 +152,11 @@ partial def elabExprMarkersWith
     return ⟨← witness ctx.types ctx.dictBase ctx.dictVars ty, ty⟩
   | .app p (.ident _ "$fxOf") [.ident _ f] false =>
     -- (an inlined call of a function with several values: its declared
-    -- effects, as at a call, #235)
-    if let some s := ctx.sig? f then noteFx p s.fx (some s!"calls {Choice.shownFnName f}")
+    -- effects, as at a call, #235; and, as the program's function, one
+    -- that might not complete, none in a data member's definition, #724)
+    if let some s := ctx.sig? f then
+      noteFx p s.fx (some s!"calls {Choice.shownFnName f}")
+      if s.sourceCall then noteDivergentCall ctx p (Choice.shownFnName f)
     return ⟨.lit .void, .void⟩
   -- (a continuation's body, #335: clauses lifted already, failing where their
   -- first filter does, then the values)
@@ -611,7 +617,7 @@ partial def elabExprMarkersWith
       let ls ← f.lives.mapM fun l => do return { l with slot := ← fresh l.ty }
       let hty := f.inTy.getD vty
       let h ← fresh hty
-      let c : Ctx := { ctx with canFail := true, inTaking := true, locals :=
+      let c : Ctx := { ctx with canFail := true, bodyFailure := false, inTaking := true, locals :=
         { name := "$Krest", slot := kk, ty := rk.ty, mutable := false } ::
         { name := f.hole, slot := h, ty := hty, mutable := false } :: ls.reverse ++ ctx.locals }
       let r ← elabE c f.code (some pty)
@@ -644,8 +650,8 @@ partial def elabExprMarkersWith
     -- (#246) `first{…}` of clauses that are lifted already (a consumer's,
     -- taken into a lazily taken call's function of its own): not again,
     -- which would bind their lifted names a second time
-    let (code, c1) ← elabFirstGo { ctx with canFail := true } items.dropLast
-    let rv ← elabE { c1 with canFail := ctx.canFail } (items.getLastD (.tuple p [])) exp
+    let (code, c1) ← elabFirstGo { ctx with canFail := true, bodyFailure := false } items.dropLast
+    let rv ← elabE { c1 with canFail := ctx.canFail, bodyFailure := ctx.bodyFailure } (items.getLastD (.tuple p [])) exp
     return ⟨.seq code rv.e, rv.ty⟩
   | .app p (.ident _ "$first") [.block bp items] false =>
     if !ctx.refinementTransportActive && hasRefinementClauses ctx items then
@@ -685,14 +691,14 @@ partial def elabExprMarkersWith
           let casts := Refine.castsIn ctx.types.classes.contains clause
           if !casts.isEmpty then
             let filterPrefix? ← tryCatch (do
-              let (_, before) ← elabOneClauses { ctx with canFail := true, typeOnly := true } (clauses.take k)
+              let (_, before) ← elabOneClauses { ctx with canFail := true, bodyFailure := false, typeOnly := true } (clauses.take k)
               pure (some (before, ← get))) (fun _ => pure none)
             set saved
             if let some (before, prefixState) := filterPrefix? then
               for bound in [lo, hi] do
                 set prefixState
                 let refusal? ← tryCatch (do
-                  discard <| elabE { before with canFail := true, inTaking := true, typeOnly := true } bound none
+                  discard <| elabE { before with canFail := true, bodyFailure := false, inTaking := true, typeOnly := true } bound none
                   pure none) (fun err => pure (Refine.castRefusal? err))
                 set saved
                 if let some refusal := refusal? then

@@ -31,6 +31,7 @@ import OpenVerse.Front.SignalAdmission
 import OpenVerse.Front.MetadataFlow
 import OpenVerse.Front.Suspend
 import OpenVerse.Front.Rational
+import OpenVerse.Front.Random
 import OpenVerse.Front.Modules
 import OpenVerse.Front.FnValues
 import OpenVerse.Front.Choice
@@ -39,6 +40,7 @@ import OpenVerse.Front.FrameRefs
 import OpenVerse.Front.SourceFrames
 import OpenVerse.Front.FailCapture
 import OpenVerse.Front.Types
+import OpenVerse.Front.FnCoercion
 import OpenVerse.Front.Variance
 import OpenVerse.Front.ChoiceTypes
 import OpenVerse.Front.UpperBounds
@@ -139,6 +141,14 @@ structure Sig where
   fx : List String := heapFx
   /-- `<suspends>` (#156): lowered to a frame and a resume function. -/
   suspends : Bool := false
+  /-- (#515, `--default-no-rollback`) It has the `no_rollback` effect
+      (`SignalAdmission.noRollbackMarker`). -/
+  noRollback : Bool := false
+  /-- (#511, #724) A function the program defines (a function, a method, a
+      constructor; `InitializerConvergence.sourceCallMarker`): no program's
+      function is `<converges>`, so a call of it might not complete, and a
+      data member's definition may not make one (Epic's error 3582). -/
+  sourceCall : Bool := false
   /-- Of a method of a class with type parameters that its parent's type
       arguments do not give (#209): those type parameters, whose values it
       reads from its receiver's hidden fields (`$w.…`), not from hidden
@@ -161,7 +171,8 @@ structure Sig where
     shape's order. -/
 def Sig.valueShape (s : Sig) : FnValues.Shape × List Ty :=
   let npos := s.params.length - s.named.length
-  let (sh, order) := ({ arity := 0, decides := s.decides, suspends := s.suspends, fx := s.fx } : FnValues.Shape).withParams
+  let (sh, order) := ({ arity := 0, decides := s.decides, suspends := s.suspends, fx := s.fx,
+                        noRollback := s.noRollback } : FnValues.Shape).withParams
     (s.params.zipIdx.map fun (_, i) => if i < npos then none else (s.named[i - npos]?).map fun (n, d) => (n, d.isSome))
   (sh, order.filterMap (s.params[·]?))
 
@@ -259,7 +270,7 @@ def fnFits (env : TyEnv) (s : Sig) (t : Ty) : Bool :=
       -- (the effects and names only: a tuple parameter may be flattened)
       { own with arity := k + own.named.length }.within tsh &&
         if s.tparams.isEmpty then
-          (qs.zip ps).all (fun (q, p) => subAt q p) && subAt s.ret u
+          (qs.zip ps).all (fun (q, p) => subAt q p) && env.resultConvertsAt s.ret u
         else
           match ((ps ++ [s.ret]).zip (qs ++ [u])).foldlM (fun σ (a, b) => a.matchArg env σ b) [] with
           | some σ => match SubtypeEvidence.infer env s.bounds σ true ((s.tparams.filter (·.2)).map (·.1)) with
@@ -374,6 +385,17 @@ structure Ctx where
       frame where the code itself cannot fail (a `defer:` body, a `block`,
       a named argument's default): still rolled back with it. -/
   inRollback : Bool := false
+  /-- (#515) In the body of a function whose effects exclude `no_rollback`,
+      or of a class's `block:` (`SignalAdmission.excludesNoRollback`):
+      nothing here may signal an event, failure context or not. -/
+  rollbackOnly : Bool := false
+  /-- (#515) The failure context here is only the enclosing `<decides>`
+      function's own body: its top level may call a function that has
+      `no_rollback` (UEFN 43.12 admits followup/decides-body-default-call).
+      A failure context inside it, a condition or a `for`'s clause, resets
+      it: there such a call is refused, as everywhere (decides-plain-if,
+      for-range-default-call, for-filter-default-call). -/
+  bodyFailure : Bool := false
   /-- (#515) The innermost loop is in a failure context (or inside one):
       the `defer:`s a `break` runs, out of the scopes inside the loop, run
       in that context, not in the one at the `break`. -/
@@ -436,6 +458,12 @@ structure Ctx where
       elaborated again at each construction that omits the field, in that
       construction's context (#156). -/
   inDefaultCheck : Bool := false
+  /-- (#724) The definition of a data member being elaborated, as a message
+      names it ("the constant Limit", "the default of field 'Size' of
+      thing"): each call in it of a function that might not complete is
+      noted (`noteDivergentCall`), and refused after its elaboration
+      (Epic's error 3582). None elsewhere, and with `--extended-defaults`. -/
+  dataMember : Option String := none
   /-- In the body of a `loop` or `for`, also through arms (#156): a
       `branch` there would start again before the last one ended. -/
   inRepeat : Bool := false
@@ -535,10 +563,12 @@ def Requests.merge (a b : Requests) : Requests where
   instanceCalls := mergeByKey id a.instanceCalls b.instanceCalls
   fns := mergeByKey id a.fns b.fns
   methods := mergeByKey (·.key) a.methods b.methods
+  fnAdapters := mergeByKey id a.fnAdapters b.fnAdapters
   subtypes := SubtypeEvidence.mergeRequests a.subtypes b.subtypes
   casts := mergeByKey (·.key) a.casts b.casts
   loops := mergeByKey (·.key) a.loops b.loops
   witnesses := mergeByKey id a.witnesses b.witnesses
+  watches := mergeByKey (fun w => (w.owner, w.field, w.steps)) a.watches b.watches
   awaits := a.awaits || b.awaits
   boxes := mergeByKey id a.boxes b.boxes
   anys := SubtypeEvidence.mergeRequests a.anys b.anys
@@ -559,10 +589,12 @@ def Requests.without (r old : Requests) : Requests where
   instanceCalls := dropByKey id r.instanceCalls old.instanceCalls
   fns := dropByKey id r.fns old.fns
   methods := dropByKey (·.key) r.methods old.methods
+  fnAdapters := dropByKey id r.fnAdapters old.fnAdapters
   subtypes := dropByKey SubtypeEvidence.declarationName r.subtypes old.subtypes
   casts := dropByKey (·.key) r.casts old.casts
   loops := dropByKey (·.key) r.loops old.loops
   witnesses := dropByKey id r.witnesses old.witnesses
+  watches := dropByKey (fun w => (w.owner, w.field, w.steps)) r.watches old.watches
   awaits := r.awaits && !old.awaits
   boxes := dropByKey id r.boxes old.boxes
   anys := dropByKey SubtypeEvidence.declarationName r.anys old.anys
@@ -570,8 +602,8 @@ def Requests.without (r old : Requests) : Requests where
 def Requests.isEmpty (r : Requests) : Bool :=
   r.eager.isEmpty && r.lazy.isEmpty && r.families.isEmpty && r.overloads.isEmpty && r.copiedOverloads.isEmpty && r.nested.isEmpty &&
     r.fieldOrders.isEmpty && r.instanceCalls.isEmpty &&
-    r.fns.isEmpty && r.methods.isEmpty &&
-    r.casts.isEmpty && r.loops.isEmpty && r.witnesses.isEmpty && !r.awaits && r.subtypes.isEmpty && r.boxes.isEmpty &&
+    r.fns.isEmpty && r.methods.isEmpty && r.fnAdapters.isEmpty &&
+    r.casts.isEmpty && r.loops.isEmpty && r.witnesses.isEmpty && r.watches.isEmpty && !r.awaits && r.subtypes.isEmpty && r.boxes.isEmpty &&
     r.anys.isEmpty
 
 /-- A lazily taken call where the first success is taken (#246): its
@@ -675,6 +707,9 @@ structure ESt where
       constant, `spawn`) in a failure context, what it is, and the Verse
       Core functions it calls. -/
   failCalls : Array ((Pos × String) × List Nat) := #[]
+  /-- (#515) Likewise, each outside a failure context in a body whose effects
+      exclude `no_rollback` (`Ctx.rollbackOnly`). -/
+  bodyCalls : Array ((Pos × String) × List Nat) := #[]
   /-- The program's types, for conversions between class types (`coerce`). -/
   env : TyEnv := {}
   nslots : Nat := 0
@@ -721,6 +756,14 @@ structure ESt where
   /-- The warnings found so far (`warnAt`): what the Book of Verse's compiler
       reports and compiles all the same, each with where it is. -/
   warnings : Array (Pos × String) := #[]
+  /-- The slots of the source's `var` locals declared so far (#724: a
+      module constant that allocates one is refused, `LinkCheck`). -/
+  sourceVars : List (Nat × String) := []
+  /-- (#724) The calls in a data member's definition (`Ctx.dataMember`) of
+      functions that might not complete, each with where it is, what calls
+      it and what it calls (`noteDivergentCall`; a trial whose state is
+      discarded discards its own). -/
+  divergentCalls : Array (Pos × String × String) := #[]
   deriving Inhabited
 
 abbrev EM := StateT ESt (Except String)
@@ -951,7 +994,8 @@ def builtins : List String :=
 def softBuiltins : List String :=
   ["Round", "Int", "Sqrt", "Exp", "Ln", "Log", "Pow", "Sin", "Cos", "Tan", "ArcSin", "ArcCos", "ArcTan",
    "IsFinite", "Concatenate", "Sinh", "Cosh", "Tanh", "ArSinh", "ArCosh", "ArTanh", "Lerp", "Clamp", "Sgn",
-   "BitAnd", "BitOr", "BitXor", "BitNot", "BitShiftLeft", "BitShiftRight"]
+   "BitAnd", "BitOr", "BitXor", "BitNot", "BitShiftLeft", "BitShiftRight",
+   "GetRandomInt", "GetSecondsSinceEpoch", "FitsInPlayerMap"]
 
 /-- The type arguments `ts` of the parametric type `n` as its type
     parameters take them: `void` given as a program's type's argument is
@@ -1259,6 +1303,12 @@ where
     if seen.contains (pattern, actual) then none else do
       let seen := (pattern, actual) :: seen
       match pattern, actual with
+      -- (#724: every value is an `any`, so an `any` inside a pattern takes
+      -- any type and binds nothing, `M:[t]any` given an `[int]string`: the
+      -- Book of Verse's `Any.versetest:60`; UEFN 43.12 admits and runs
+      -- followup-refused/map-any-value-generic. The argument is then
+      -- converted to the parameter's type at the instance.)
+      | .any, _ => some substitution
       | _, .param .. =>
         let results := (SubtypeEvidence.valueViews ctx.types ctx.evidenceTypes actual).filterMap fun view =>
           go seen substitution pattern view
@@ -1316,14 +1366,103 @@ def Ctx.captureEvidence (ctx : Ctx) (captures : List Local) (excluded : List Str
 def Ctx.exitDefers (ctx : Ctx) (rollback : Bool) : Ctx :=
   { ctx with canFail := false, inRollback := rollback }
 
-/-- (#515, `--signal-no-rollback`) Record the functions code `e` at `p`
-    (`what` it is: a call, a construction, …) calls when it runs in a
-    failure context (or inside one, `inRollback`), for
-    `SignalAdmission.checkSites`. -/
+/-- (#515) Record the functions code `e` at `p` (`what` it is: a call, a
+    construction, …) calls when it runs in a failure context (or inside one,
+    `inRollback`), or in a body whose effects exclude `no_rollback`
+    (`rollbackOnly`), for `SignalAdmission.checkSites`. -/
 def noteFailCalls (ctx : Ctx) (p : Pos) (what : String) (e : Expr) : EM Unit := do
-  if ctx.types.signalNoRollback && (ctx.canFail || ctx.inRollback) then
+  if ctx.types.signalNoRollback && (ctx.canFail || ctx.inRollback || ctx.rollbackOnly) then
     let spawn := (ctx.sig? "$spawnMark").map (·.idx)
-    modify fun st => { st with failCalls := st.failCalls.push ((p, what), SignalAdmission.calls spawn e) }
+    let site := ((p, what), SignalAdmission.calls spawn e)
+    if ctx.canFail || ctx.inRollback then
+      modify fun st => { st with failCalls := st.failCalls.push site }
+    else
+      modify fun st => { st with bodyCalls := st.bodyCalls.push site }
+
+/-- (#724) A call at `p` of `shown` in a data member's definition
+    (`Ctx.dataMember`) that might not complete: noted, and refused once the
+    definition is elaborated (`divergentCallError`). Elsewhere nothing. A
+    call of a function with several values leaves no call: its code is put
+    in its place (`Choice.inlineCalls`), and `$fxOf` notes the call. The
+    calls in that code (`Ctx.inlineScopes`) are the function's, not the
+    data member's, and are not noted (a recursive one taken a value at a
+    time, #246, has its code elaborated outside such a scope: its calls
+    are noted too, which changes only which call is named). -/
+def noteDivergentCall (ctx : Ctx) (p : Pos) (shown : String) : EM Unit := do
+  if let some what := ctx.dataMember then
+    if ctx.inlineScopes.isEmpty then
+      modify fun st => { st with divergentCalls := st.divergentCalls.push (p, what, shown) }
+
+/-- (#724) Epic's rule for data members: the definition of a module's
+    constant or of a field's default may call only a function that is
+    `<converges>`, which only a native function may be (3565). So no
+    function, method or constructor of the program qualifies, nor a
+    function value; of the built-ins, those the Book's Runtime API
+    reference declares `<converges>` (its "Intrinsic functions": the
+    operators, `Abs`, `Floor` and `Ceil` of a rational, `BitAnd`,
+    `BitOr`, `BitXor`, `BitNot`, `ConcatenateMaps`, indexing, `Length`,
+    the char conversions; `builtinConverges`) do, the others
+    (`Min`, `Max`, `Clamp`, `Sqrt`, `ToString`, …) do not. UEFN 43.12
+    (++Fortnite+Release-43.12-CL-60598086) refuses a call of each kind
+    (error 3582, `tests/conformance/versevm/followup-3582`). The first such
+    call of `calls`, in the order of the source. -/
+def divergentCallError (calls : Array (Pos × String × String)) : Option String :=
+  let before (a b : Pos × String × String) : Bool :=
+    a.1.line < b.1.line || (a.1.line == b.1.line && a.1.col < b.1.col)
+  match (calls.qsort before)[0]? with
+  | some (p, what, shown) => some s!"{p.show}: {what} calls {shown}, which might not complete: a data member's definition (a module's constant, a field's default) may call only a function that converges, which no function, method or constructor of the program is, and of the built-ins only those the Verse API declares <converges> (operators, Abs, Floor and Ceil of a rational, BitAnd, BitOr, BitXor, BitNot, indexing): Epic's Verse compiler, UEFN 43.12, error 3582 \"Divergent calls (calls that might not complete) cannot be used to define data-members\" (#724; --extended-defaults keeps openverse's extension)"
+  | none => none
+
+/-- (#724) Whether a call of the built-in function `name` (a row of
+    `builtinFunctions`) converges: it is one of the intrinsics the Book's
+    Runtime API reference (`docs/api/verse_runtime_api.html` at the pinned
+    revision, "Intrinsic functions", generated from the Verse runtime of UE
+    6.0.0) declares `<converges>`. `Floor` and `Ceil` are, of a rational or
+    an int; of a float they are natives with `<reads>` and are not
+    (`elabFloorCeil` notes those). `any` and `comparable` are conversions,
+    and the `$` names the compiler's own. Every other built-in function is
+    a native without `<converges>` (`Sqrt`, `Quotient`, `ToString`, `Err`,
+    …) or written in Verse (`Min`, `Max`, `Sgn`, `Concatenate`, `Print`,
+    …), and might not complete; UEFN 43.12 refuses `Min` in a constant
+    (followup-3582/div-const-intrinsic). -/
+def builtinConverges (name : String) : Bool :=
+  ["Abs", "Floor", "Ceil", "BitAnd", "BitOr", "BitXor", "BitNot", "ConcatenateMaps",
+   "FitsInPlayerMap", "any", "comparable"].contains name || name.startsWith "$"
+
+/-- (#515, `--default-no-rollback`) A call at `p` of `s`, which may have
+    the `no_rollback` effect: refused in a failure context (or inside one)
+    and in a body whose effects exclude it, as Epic's compiler does (UEFN
+    43.12: error 3512). (#724) In a data member's definition, a call of the
+    program's own function is refused as divergent instead (3582), as
+    UEFN 43.12 does: no 3512 for it there. -/
+def checkNoRollbackCall (ctx : Ctx) (p : Pos) (s : Sig) (shown : String) : EM Unit := do
+  if ctx.dataMember.isSome && s.sourceCall then return
+  if s.noRollback && !ctx.typeOnly && ((ctx.canFail || ctx.inRollback) && !ctx.bodyFailure || ctx.rollbackOnly) &&
+      !(ctx.frameName.splitOn "$call").tail.any (fun _ => true) then
+    let context := if (ctx.canFail || ctx.inRollback) && !ctx.bodyFailure then "a failure context" else "a body whose effects exclude it"
+    throw s!"{p.show}: this invocation calls a function ({shown}) that has the 'no_rollback' effect, which {context} does not allow: a function without a heap specifier (<transacts>, <computes>, <reads>, …) has it (Epic's Verse compiler, UEFN 43.12: error 3512; --default-rollback keeps the old rule)"
+
+/-- (#724, `--default-no-rollback`) `spawn{…}` at `p` has the `no_rollback`
+    effect, as a call of a function without a heap specifier does
+    (`checkNoRollbackCall`): refused in a failure context (or inside one)
+    and in a body whose effects exclude it, a `<transacts>`, `<computes>`
+    or other heap-specified function's or a class's `block:`, and admitted
+    at the top of a plain `<decides>` function's body. UEFN 43.12
+    (++Fortnite+Release-43.12-CL-60598086) refuses a spawn in a
+    `<transacts>` function and in a `<transacts><decides>` one with error
+    3512, "This 'spawn' macro has the 'no_rollback' effect, which is not
+    allowed by its context", and admits one in a function without
+    specifiers (tests/conformance/versevm/followup-book2,
+    spawn-in-transacts-*; the Book's Blueprint VM tests, Effects.versetest
+    557, 565 and SoftwareTransactionalMemory.versetest:505, against their
+    Verse VM twins). `--default-rollback` keeps the old rule, under which a
+    spawn has `<transacts>`'s heap effects only, as it keeps an event's
+    `Await` (`awaitSig`). -/
+def checkSpawnNoRollback (ctx : Ctx) (p : Pos) : EM Unit := do
+  if ctx.types.defaultNoRollback && !ctx.typeOnly && ((ctx.canFail || ctx.inRollback) && !ctx.bodyFailure || ctx.rollbackOnly) &&
+      !(ctx.frameName.splitOn "$call").tail.any (fun _ => true) then
+    let context := if (ctx.canFail || ctx.inRollback) && !ctx.bodyFailure then "a failure context" else "a body whose effects exclude it"
+    throw s!"{p.show}: this spawn has the 'no_rollback' effect, which {context} does not allow, as a call of a function without a heap specifier would not be (Epic's Verse compiler, UEFN 43.12: error 3512, \"This 'spawn' macro has the 'no_rollback' effect, which is not allowed by its context\"; --default-rollback keeps the old rule)"
 
 /-- `ctx` with the `defer:` body `d` pending for every `return` and `break`
     that leaves its scope (#80), with the locals in scope here. -/
@@ -1716,11 +1855,13 @@ def Ctx.rootsOf (ctx : Ctx) (c m : String) : List String :=
 
 /-- Whether this elaboration knows if an expression can fail: not one for
     types, nor one to be done again with functions as values (#214, #231)
-    or with the families of methods' uses or the overloads of calls (#283),
-    which may make a call fail or have several values. -/
+    or their adapters (#724), or with the families of methods' uses or the
+    overloads of calls (#283), which may make a call fail or have several
+    values. -/
 def Ctx.failabilityKnown (ctx : Ctx) : EM Bool := do
   let st ← get
-  return st.needs.fns.isEmpty && st.needs.methods.isEmpty && st.needs.copiedOverloads.isEmpty && ctx.types.familySites.isEmpty &&
+  return st.needs.fns.isEmpty && st.needs.methods.isEmpty && st.needs.fnAdapters.isEmpty &&
+    st.needs.copiedOverloads.isEmpty && ctx.types.familySites.isEmpty &&
     ctx.types.overloadSites.isEmpty && ctx.types.nestedSites.isEmpty && ctx.types.fieldSites.isEmpty &&
     !ctx.typeOnly
 
@@ -2292,6 +2433,26 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
       let y ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push b })
       return some (.seq (.assign x e) (.ite (.assign y (.heap (.isTag fits) [.local x])) (.local y) (.prim .userErr [])))
     | _, _, _ => return some e
+  -- (#724) a function value at another function type it is one of by class
+  -- variance (contravariant parameters, a covariant result: a class or an
+  -- interface below or above, `void` and `true`, such function types
+  -- nested), which Epic's Verse compiler admits for any function value, no
+  -- wrapper needed, and which Verse Core's types do not relate (a function
+  -- value's class fixes its shape's type arguments): an object of an adapter
+  -- class that holds the value, the same function to every caller, whose
+  -- `$call…` calls it (`FnCoercion.byVariance`, `FnValues.desugar`). Asked
+  -- for the first time, `Err()` stands for it, and the program is
+  -- elaborated again with the class made.
+  if FnCoercion.byVariance env a b then
+    if let some i := env.requests.fnAdapters.idxOf? (a, b) then
+      let name := FnValues.adapterName i
+      if env.classes.contains name then
+        -- (its one field, `$f`: no type parameters, no parent class)
+        if (env.fields name).map (·.1) != ["$f"] then
+          throw s!"internal error: the function value adapter {name} has fields {(env.fields name).map (·.1)} (#724)"
+        return some (.heap (.new (env.tagOf name)) [e])
+    noteNeeds { fnAdapters := [(a, b)] }
+    return some (.seq (← discardValue ⟨e, a⟩) (.prim .userErr []))
   -- no value has a class type with no concrete class below it (an interface
   -- nothing implements, an abstract class with no subclass): the conversion
   -- to a type above it is unreachable (#98)
@@ -2431,6 +2592,16 @@ partial def unwrapNever : Expr → Ty → Ty → Expr
       | e => e)
   | e, _, _ => e
 
+/-- (#724) `fnTyFits` inside arrays, options, tuples and maps' values: a
+    container of function values whose every function value fits the other
+    container's by variance. -/
+partial def fnTyFitsDeep (env : TyEnv) : Ty → Ty → Bool
+  | a@(.struct _ _), b@(.struct _ _) => FnCoercion.isFn a && FnCoercion.isFn b && fnTyFits env a b
+  | .arr a, .arr b | .opt a, .opt b => fnTyFitsDeep env a b
+  | .tup as, .tup bs => as.length == bs.length && (as.zip bs).all fun (a, b) => a == b || fnTyFitsDeep env a b
+  | .map k a, .map k' b => k == k' && fnTyFitsDeep env a b
+  | _, _ => false
+
 /-- Convert `r` to type `target`: equal types, `false` (bottom) to anything,
     anything to `void` (Book of Verse: "void accepts any value"), and a
     class to a class or interface above it (`convert`). -/
@@ -2451,6 +2622,20 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
     let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push target })
     return .assign x (.seq r.e (.prim .userErr []))
   if r.ty == target || r.ty == .never then return r.e
+  -- (#724) a function value that needs a wrapper to be one of the target's
+  -- function type: Epic's Verse compiler makes it only for a function named
+  -- where its type is expected (whose elaboration converts it before this,
+  -- from its value class, `.ident`, `.member`), for no other value: a
+  -- local, a parameter, a field, a call's result, an option's content
+  -- (UEFN 43.12, error 3502: followup-coerce's `value-computes-as-transacts`,
+  -- `value-plain-as-decides`, `value-default-drop`, `option-of-fn-default`)
+  -- (only a conversion openverse makes, of a value of a subtype: another
+  -- is the type error it is, 3509, `name-decides-as-plain`)
+  let wrapperless (e : Expr) : EM Expr := do
+    let env := (← get).env
+    if !env.functionCoercions && FnCoercion.needsWrapperDeep env r.ty target then
+      eerr p s!"using a value of type {r.ty.show} as a value of type {target.show} is not yet implemented: a function value that is no function named where its type is expected needs a wrapper to be one of another function type, which Epic's compiler does not make {FnCoercion.cite}"
+    return e
   -- (an empty `array{}` or `map{}` with no type from its context, of
   -- `false`: the literal is the empty array of every array and map type, as
   -- one with an expected type is written)
@@ -2468,6 +2653,7 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
     if msg.startsWith "ToDiagnostic" then eerr p msg else throw msg
   match converted with
   | some e =>
+    let e ← wrapperless e
     -- a typed temporary: the checker cannot infer the type of an empty option
     let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push target })
     return .assign x e
@@ -2490,6 +2676,26 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
     -- (a class at other type arguments: why its variance does not allow it)
     if let some why := (← get).env.varianceWhy r.ty target then
       eerr p s!"expected {target.show}, found {r.ty.show}: {why}"
+    -- (#724) a function value at a function type a function named there
+    -- would be a value of (`fnTyFits`), by variance: where that needs a
+    -- wrapper, Epic's Verse compiler refuses it too, 3502 (UEFN 43.12,
+    -- followup-coerce2's `value-int-rational-result`, `value-void-result`);
+    -- where it needs none, a class's reference, `convert` makes an adapter
+    -- (`FnCoercion.byVariance`), for closed types only: a type parameter in
+    -- either type is left
+    let env := (← get).env
+    if FnCoercion.isFn r.ty && FnCoercion.isFn target && fnTyFits env r.ty target then
+      if FnCoercion.needsWrapper env r.ty target then
+        if !env.functionCoercions then
+          eerr p s!"using a value of type {r.ty.show} as a value of type {target.show} is not yet implemented: a function value that is no function named where its type is expected needs a wrapper to be one of another function type, which Epic's compiler does not make {FnCoercion.cite}"
+      else
+        eerr p s!"expected {target.show}, found {r.ty.show}: openverse converts a function value by class variance at function types without type parameters only, as it does a function named (#214), not yet in generic code where they have them (Epic's Verse compiler converts any function value so, UEFN 43.12: followup-coerce's value-class-variance; #724)"
+    -- (and an array, an option, a tuple or a map of such values, one of
+    -- which needs a wrapper: "Using a value of type []type{_(:int)<computes>:int}
+    -- as a value of type []type{_(:int)<transacts>:int}", followup-coerce2's
+    -- `value-array-effect`, here with class variance besides)
+    if !env.functionCoercions && fnTyFitsDeep env r.ty target && FnCoercion.needsWrapperDeep env r.ty target then
+      eerr p s!"using a value of type {r.ty.show} as a value of type {target.show} is not yet implemented: a function value that is no function named where its type is expected needs a wrapper to be one of another function type, which Epic's compiler does not make {FnCoercion.cite}"
     eerr p s!"expected {target.show}, found {r.ty.show}"
 
 /-- `coerce`, whose error says why a name is an `any` (`Ctx.anyWhy`). -/
@@ -2600,6 +2806,114 @@ def methodVarianceRequest (ctx : Ctx) (p : Pos) (owner method : String)
   return none
 
 mutual
+/-- `joinTy` of two class or interface types (or function types, of
+    their shapes), at the same value: the expected type when both are
+    below it, else the nearest common class above both, else the one
+    interface above both that no other common one is below. -/
+partial def joinClassTy (env : TyEnv) (S : String) (as : List Ty) (T : String) (bs : List Ty)
+    (exp : Option Ty) (inner : Bool) : Option Ty :=
+  -- (inside a container, only references convert for free)
+  if env.classes.contains S && env.classes.contains T &&
+      (!inner || (env.isRefClass S && env.isRefClass T)) then
+    -- the expected type, when both are below it, else the nearest common
+    -- class above both, else the one interface above both that no other
+    -- common one is below (at the same type arguments, #39)
+    -- (a class's instance fits one of a class above at type arguments
+    -- that fit by the Book's variance, as `refUp`: the same value)
+    let fitsAt (C : String) (cs : List Ty) (U : String) (us : List Ty) : Bool :=
+      env.upArgs C cs U == us ||
+        (env.isRefClass C && env.isRefClass U && refUp env (.struct C cs) (.struct U us)) ||
+        (C == U && !env.isRefClass C && (env.concreteBelow C).isEmpty && env.argsFit U cs us)
+    let up (U : String) (us : List Ty) : Bool :=
+      env.isSub S U && env.isSub T U && fitsAt S as U us && fitsAt T bs U us
+    -- (the type arguments of `U` above both: equal ones, else at each
+    -- position by `U`'s variance, the first where bivariant, the one above
+    -- (or their join) where covariant, the one below where contravariant)
+    let joinArgsAt (U : String) : Option (List Ty) := do
+      if !(env.isSub S U && env.isSub T U) then none
+      let xs := env.upArgs S as U
+      let ys := env.upArgs T bs U
+      if xs == ys then return xs
+      if xs.length != ys.length then none
+      let vs := env.varianceOf U
+      let js ← (xs.zip ys).zipIdx.mapM fun ((x, y), j) => match vs[j]?.getD .inv with
+        | .inv => if x == y then some x else none
+        | .bi => some x
+        | .co =>
+          if env.argFits x y then some y else if env.argFits y x then some x else
+          match joinTy env x y none true with
+          | some z => if env.argFits x z && env.argFits y z then some z else none
+          | none => none
+        | .contra => if env.argFits x y then some x else if env.argFits y x then some y else none
+      if up U js then some js else none
+    let atU (U : String) : Ty :=
+      let old := (Ty.struct U (env.upArgs S as U)).commonBounds (.struct U (env.upArgs T bs U))
+      if env.upArgs S as U == env.upArgs T bs U then old else
+      match joinArgsAt U with
+      | some js => Ty.struct U js
+      | none => old
+    -- (two type values join at a metatype that constructs neither, as
+    -- a class value's type is its own class, and a join of two keeps only
+    -- the bound above both: Book of Verse tests, Archetypes.versetest:110,
+    -- "Ensure a particular class (rather than a bound)"; `TypeValues`)
+    let typeValues := (TypeValues.valueClass? S).isSome && (TypeValues.valueClass? T).isSome
+    let kind (U : String) : Option String := (TypeValues.bound? U).map (·.1)
+    let cands := (env.supers S).filter fun U => (up U (env.upArgs S as U) || (joinArgsAt U).isSome) &&
+      !(typeValues && (kind U == some "concrete_subtype" || U == TypeValues.castableMark ||
+        (kind U == some "castable_subtype" && !env.isSub U TypeValues.castableMark)))
+    let minimal := cands.filter (fun U => !cands.any fun U' => U' != U && env.isSub U' U)
+    let common : Option Ty :=
+      match cands.find? fun U => !(env.info U).isIface with
+      | some U => some (atU U)
+      | none =>
+        match minimal with
+        | [U] => some (atU U)
+        | _ => none
+    -- (a common class and a common interface not above it are two
+    -- nearest common supertypes: no join, whatever is expected, so the
+    -- value is an `any`. UEFN 43.12 refuses an if of two such classes
+    -- where either supertype is expected, error 3510,
+    -- followup/join-if-common-base-interface, join-if-expected-interface;
+    -- `ambiguousClassJoin` for an array's elements, 3509)
+    if !typeValues && minimal.length > 1 && (minimal.any fun U => !(env.info U).isIface) then none else
+    -- (two type values join at their metatype before the expected type
+    -- is met: Castable.versetest:145, "array-type is []{false, class1}
+    -- which is NOT castable")
+    match exp with
+    | some (.struct U us) => if !typeValues && env.classes.contains U && up U us then some (atU U) else common
+    | _ => common
+  else none
+
+/-- (#724) The join of two function types of one shape whose values convert
+    to it by class variance, as Epic's Verse compiler converts any function
+    value whose conversion needs no wrapper (`FnCoercion.byVariance`): the
+    expected type when both do, else the type whose parameters are the lower
+    of the two (contravariant) and whose result is their join (covariant),
+    when both do. Each branch is then converted, by an adapter where it needs
+    one (`convert`). -/
+partial def fnJoinTy (env : TyEnv) (a b : Ty) (exp : Option Ty) : Option Ty :=
+  -- (a value of `x` is one of `y` as it is, or by an adapter)
+  let to (x y : Ty) : Bool :=
+    x == y || (x.isUnit && y.isUnit) || refUp env x y || FnCoercion.byVariance env x y
+  match a, b with
+  | .struct S as, .struct T bs =>
+    if !(FnCoercion.isFn a && FnCoercion.isFn b) || S != T || as.length != bs.length then none else
+    -- (each parameter the lower of the two, the result their join)
+    let natural : Option Ty := do
+      let k := as.length - 1
+      let ps ← ((as.take k).zip (bs.take k)).mapM fun (x, y) =>
+        if to x y then some x else if to y x then some y else none
+      let x := as.getLastD .void
+      let y := bs.getLastD .void
+      let r ← if to x y then some y else if to y x then some x else
+        (joinTy env x y none true).filter fun z => to x z && to y z
+      let c := Ty.struct S (ps ++ [r])
+      if to a c && to b c then some c else none
+    match exp with
+    | some e => if FnCoercion.isFn e && to a e && to b e then some e else natural
+    | none => natural
+  | _, _ => none
+
 /-- `joinTy`, but for the join at `comparable` of two comparable types with
     nothing else in common. -/
 partial def joinTyShaped (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Bool := false) : Option Ty :=
@@ -2632,69 +2946,10 @@ partial def joinTyShaped (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Boo
     | some (base, _), b => if base == b then some base else none
     | none, _ => none
   | .struct S as, .struct T bs =>
-    -- (inside a container, only references convert for free)
-    if env.classes.contains S && env.classes.contains T &&
-        (!inner || (env.isRefClass S && env.isRefClass T)) then
-      -- the expected type, when both are below it, else the nearest common
-      -- class above both, else the one interface above both that no other
-      -- common one is below (at the same type arguments, #39)
-      -- (a class's instance fits one of a class above at type arguments
-      -- that fit by the Book's variance, as `refUp`: the same value)
-      let fitsAt (C : String) (cs : List Ty) (U : String) (us : List Ty) : Bool :=
-        env.upArgs C cs U == us ||
-          (env.isRefClass C && env.isRefClass U && refUp env (.struct C cs) (.struct U us)) ||
-          (C == U && !env.isRefClass C && (env.concreteBelow C).isEmpty && env.argsFit U cs us)
-      let up (U : String) (us : List Ty) : Bool :=
-        env.isSub S U && env.isSub T U && fitsAt S as U us && fitsAt T bs U us
-      -- (the type arguments of `U` above both: equal ones, else at each
-      -- position by `U`'s variance, the first where bivariant, the one above
-      -- (or their join) where covariant, the one below where contravariant)
-      let joinArgsAt (U : String) : Option (List Ty) := do
-        if !(env.isSub S U && env.isSub T U) then none
-        let xs := env.upArgs S as U
-        let ys := env.upArgs T bs U
-        if xs == ys then return xs
-        if xs.length != ys.length then none
-        let vs := env.varianceOf U
-        let js ← (xs.zip ys).zipIdx.mapM fun ((x, y), j) => match vs[j]?.getD .inv with
-          | .inv => if x == y then some x else none
-          | .bi => some x
-          | .co =>
-            if env.argFits x y then some y else if env.argFits y x then some x else
-            match joinTy env x y none true with
-            | some z => if env.argFits x z && env.argFits y z then some z else none
-            | none => none
-          | .contra => if env.argFits x y then some x else if env.argFits y x then some y else none
-        if up U js then some js else none
-      let atU (U : String) : Ty :=
-        let old := (Ty.struct U (env.upArgs S as U)).commonBounds (.struct U (env.upArgs T bs U))
-        if env.upArgs S as U == env.upArgs T bs U then old else
-        match joinArgsAt U with
-        | some js => Ty.struct U js
-        | none => old
-      -- (two type values join at a metatype that constructs neither, as
-      -- a class value's type is its own class, and a join of two keeps only
-      -- the bound above both: Book of Verse tests, Archetypes.versetest:110,
-      -- "Ensure a particular class (rather than a bound)"; `TypeValues`)
-      let typeValues := (TypeValues.valueClass? S).isSome && (TypeValues.valueClass? T).isSome
-      let kind (U : String) : Option String := (TypeValues.bound? U).map (·.1)
-      let cands := (env.supers S).filter fun U => (up U (env.upArgs S as U) || (joinArgsAt U).isSome) &&
-        !(typeValues && (kind U == some "concrete_subtype" || U == TypeValues.castableMark ||
-          (kind U == some "castable_subtype" && !env.isSub U TypeValues.castableMark)))
-      let common : Option Ty :=
-        match cands.find? fun U => !(env.info U).isIface with
-        | some U => some (atU U)
-        | none =>
-          match cands.filter (fun U => !cands.any fun U' => U' != U && env.isSub U' U) with
-          | [U] => some (atU U)
-          | _ => none
-      -- (two type values join at their metatype before the expected type
-      -- is met: Castable.versetest:145, "array-type is []{false, class1}
-      -- which is NOT castable")
-      match exp with
-      | some (.struct U us) => if !typeValues && env.classes.contains U && up U us then some (atU U) else common
-      | _ => common
-    else none
+    -- (#724) two function types whose values convert to a third by class
+    -- variance: after the joins of their shapes (effects, names) at the
+    -- same type arguments
+    (joinClassTy env S as T bs exp inner).orElse fun _ => fnJoinTy env a b exp
   | .arr x, .arr y => (joinTy env x y (match exp with | some (.arr e) => some e | _ => none) true).map .arr
   | .opt x, .opt y => (joinTy env x y (match exp with | some (.opt e) => some e | _ => none) true).map .opt
   -- (an empty `map{}` with no type from its context, of `false`, joins
@@ -2737,6 +2992,52 @@ partial def joinTy (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Bool := f
         a.params.isEmpty && b.params.isEmpty then some .dyn
     else none
 end
+
+/-- Class types (no type values) with more than one nearest common supertype
+    at the same type arguments, a class among them: a common base class and
+    a common interface not above it. Epic's Verse compiler, UEFN 43.12,
+    types an array of such elements `[]any` and refuses it where `[]base`
+    is expected (error 3509; the Book of Verse's tests,
+    SOL-5838-JoinOfClassesWithCommonBaseClassWithInterfaceInheritance.versetest:13). -/
+def ambiguousClassJoin (env : TyEnv) (tys : List Ty) : Option (List String) :=
+  let classes := tys.filterMap fun
+    | .struct S as => if env.classes.contains S && (TypeValues.valueClass? S).isNone then some (S, as) else none
+    | _ => none
+  match classes with
+  | (S, as) :: rest@(_ :: _) =>
+    if classes.length != tys.length then none else
+    let common := (env.supers S).filter fun U =>
+      rest.all fun (T, bs) => env.isSub T U && env.upArgs S as U == env.upArgs T bs U
+    let minimal := common.filter fun U => !common.any fun U' => U' != U && env.isSub U' U
+    if minimal.length > 1 && minimal.any (fun U => !(env.info U).isIface) then some minimal else none
+  | _ => none
+
+/-- (#724) The key type of a map whose keys are of types `a` and `b`: their
+    join, a comparable type both convert to. Two classes join at their
+    nearest common class or interface, which must be `<unique>` (the Book of
+    Verse's tests, `Map.versetest:143`: "Map literals should infer common key
+    and value types that are joins of the key and value types of each pair";
+    UEFN 43.12 admits and runs followup-refused/map-literal-sibling-keys), a
+    refinement and its base at the base, options and tuples of such inside.
+    With `atComparable`, two comparable types with nothing else in common
+    join at `comparable` (`ConcatenateMaps(map{0=>"0"}, map{"0"=>"zero"})`,
+    `ConcatenateMaps.versetest:67`; followup-refused/concatenate-maps-key-join);
+    without it they do not join, nor do classes with more than one nearest
+    common supertype (`ambiguousClassJoin`), nor an `int` and a `rational`,
+    whose keys would change. -/
+def mapKeyJoin (env : TyEnv) (a b : Ty) (atComparable : Bool) : Option Ty :=
+  if a == b then some a
+  else if (ambiguousClassJoin env [a, b]).isSome || a == .rational || b == .rational then none
+  else
+    let ok (j : Ty) : Bool := isComparable env j && (j.keyContainer? env).isNone
+    match joinTyShaped env a b none true with
+    | some j =>
+      if ok j && (atComparable || !j.mentionsComparable || a.mentionsComparable || b.mentionsComparable) then some j
+      else none
+    | none =>
+      if atComparable && isComparable env a && isComparable env b && a.params.isEmpty && b.params.isEmpty then
+        some .dyn
+      else none
 
 /-- What two types with nothing else in common join at (`fallbackJoin`):
     an `if`'s branches and a choice's alternatives that join so are tried
@@ -2801,6 +3102,8 @@ def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty := do
           | some w, _ | none, some w => s!": {w}"
           | none, none => ""
         | none => ""
+      if let some us := ambiguousClassJoin env [a, b] then
+        eerr p s!"the branches have different types: {a.show} and {b.show}, which have more than one nearest common supertype ({", ".intercalate us}), so the value is an any{(exp.map fun e => s!", not {withArticle e.show}").getD ""} (Epic's Verse compiler, UEFN 43.12: error 3510)"
       eerr p s!"the branches have different types: {a.show} and {b.show}{why}"
 
 /-- (#283, #335) The first success of clauses lifted already (`$firstP`),
@@ -2815,6 +3118,131 @@ def firstPacketCode : SExpr → SExpr
 def isFirstPacket (expression : SExpr) : Bool := match firstPacketCode expression with
   | .app _ (.ident _ "$firstP") [_] false => true
   | _ => false
+
+/-- The expression whose value a branch is: the one of a block of one. -/
+partial def branchValue : SExpr → SExpr
+  | .block _ [e] => branchValue e
+  | e => e
+
+/-- (#724) `e` names a function of the program (not a local, a field or
+    a constant), or a method of `Self`: a function named, which Epic's
+    compiler converts to the function type expected. -/
+def Ctx.namesFunction (ctx : Ctx) (e : SExpr) : Bool :=
+  match branchValue e with
+  | .ident _ n =>
+    (ctx.lookup n).isNone &&
+      (match ctx.selfClass with
+       | some c => !(ctx.types.fields c).any (·.1 == n) && ctx.hasMethod c n
+       | none => false) ||
+      ((ctx.lookup n).isNone && !(ctx.selfClass.any fun c => (ctx.types.fields c).any (·.1 == n)) &&
+        (ctx.sig? n).any (!·.isConst))
+  | _ => false
+
+/-- (#724) The own type of `v`, whose value `r` is used at the function type
+    `ty`: a named function's (a generic one's at the instance `ty` gives, its
+    own effects and named parameters, `ty`'s parameters and result), a
+    method's or a field's as `elabE` gives it without an expected type (in a
+    trial whose state is not kept), another value's `r.ty`; `none` when it
+    is no function. -/
+def fnOwnType (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (v : SExpr) (r : R) (ty : Ty) :
+    EM (Option Ty) := do
+  let some tsh := FnCoercion.shape? ty | return none
+  let alone : EM (Option Ty) := do
+    let st ← get
+    let o ← tryCatch (some <$> elabE ctx v none) (fun _ => pure none)
+    set st
+    return o.map (·.ty)
+  let own? : Option Ty ← match v with
+    | .ident _ n =>
+      if (ctx.lookup n).isSome then pure (some r.ty)
+      else if (ctx.selfClass.any fun c => (ctx.types.fields c).any (·.1 == n) || ctx.hasMethod c n) then alone
+      else match ctx.sig? n with
+        | some s =>
+          if s.isConst then pure (some r.ty) else
+          let (sh, ts) := s.valueShape
+          if s.tparams.isEmpty then pure (some (.struct sh.name (ts ++ [s.ret])))
+          else match ty with
+            | .struct _ targs =>
+              if sh.positional == tsh.positional && sh.named == tsh.named && sh.optional == tsh.optional then
+                let inst : FnValues.Shape :=
+                  { tsh with decides := sh.decides, suspends := sh.suspends, fx := sh.fx, noRollback := sh.noRollback }
+                pure (some (.struct inst.name targs))
+              else pure (some (.struct sh.name (ts ++ [s.ret])))
+            | _ => pure none
+        | none => pure (some r.ty)
+    | .member .. => alone
+    | _ => pure (some r.ty)
+  return own?.filter FnCoercion.isFn
+
+/-- (#724) A branch `branch` of an `if`, of value `r`, whose value is a
+    function used at the `if`'s function type `ty`, other than its own, that
+    needs a wrapper (`FnCoercion.needsWrapper`): refused, as Epic's Verse
+    compiler refuses it (UEFN 43.12, error 3502:
+    tests/conformance/versevm/followup-book2's `join-named-default-fn`,
+    `join-named-default-param`, `join-named-tuple`,
+    `join-generic-effects-decides` and `-transacts`, followup-coerce's
+    `join-computes-transacts` and `join-method-values`; the Book of Verse's
+    `bp_vm_only` tests, `DefaultNamed.versetest` 629, 640, 741, 751,
+    `Tuple.versetest:456`, `Function.versetest` 238, 271), even a branch that
+    names a function: Epic's compiler makes the wrapper for a function named
+    where its type is expected (`F:type{_():int} = F2`, the controls), and a
+    branch is a block whose value is converted. Its own type: `fnOwnType`. -/
+def checkJoinBranch (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (branch : SExpr) (r : R) (ty : Ty) :
+    EM Unit := do
+  if ctx.types.functionCoercions then return
+  if r.ty == .never then return
+  let v := branchValue branch
+  let some own ← fnOwnType elabE ctx v r ty | return
+  if FnCoercion.needsWrapper (← get).env own ty then
+    eerr v.pos s!"using a value of type {own.show} as a value of type {ty.show} is not yet implemented: this branch of an if is a function of another type than the if's, which needs a wrapper Epic's compiler makes only for a function named where a function type is expected {FnCoercion.cite}"
+
+/-- (#724) `option{e}` where an option of the function type `ty` is
+    expected, `e` (of value `r`) a function of another type that needs a
+    wrapper to be one: Epic's Verse compiler types the option at `e`'s own
+    type and converts the option, which needs the wrapper it does not make
+    (UEFN 43.12, error 3502, "Using a value of type ?((?A:int = ...)->int) as
+    a value of type ?(tuple()->int)": followup-coerce's
+    `option-of-fn-default`), where an array's or a tuple's elements are
+    named at their types (`array-of-fns-default`, `tuple-of-fns-default`,
+    admitted). -/
+def checkOptionContent (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (e : SExpr) (r : R) (ty : Ty) :
+    EM Unit := do
+  if ctx.types.functionCoercions then return
+  if r.ty == .never then return
+  let v := branchValue e
+  let some own ← fnOwnType elabE ctx v r ty | return
+  if FnCoercion.needsWrapper (← get).env own ty then
+    eerr v.pos s!"using a value of type {(Ty.opt own).show} as a value of type {(Ty.opt ty).show} is not yet implemented: option\{…} has the function's own type, and the option needs a wrapper to be one of another function type, which Epic's compiler does not make {FnCoercion.cite}"
+
+/-- (#724) A generic function `n` named as a value at the function type
+    `ty`, one of whose type parameters is inside a function type of its
+    own (a parameter `F(:t)<transacts>:t`, a result `t->void`): its
+    instance as a value needs a wrapper that converts a function value,
+    which Epic's Verse compiler does not make (UEFN 43.12, error 3502:
+    tests/conformance/versevm/followup-book2's `generic-higher-order`,
+    `Plus(One, One, Succ, 0)`; the Book of Verse's
+    `ParametricFunctions.versetest:276`, `bp_vm_only`). It makes one for a
+    generic function whose type parameters are not inside a function type
+    (`F:type{_(:int)<computes><decides>:int} = Identity`,
+    `join-generic-effects-decides-control`; `Apply(Identity, (1, 2))`,
+    `ParametricFunctions.versetest:192`), and a call of `One` is no value
+    of it (`generic-higher-order-control`). -/
+def checkGenericValue (ctx : Ctx) (p : Pos) (n : String) (s : Sig) (ty : Ty) : EM Unit := do
+  if ctx.types.functionCoercions then return
+  let tps := s.tparams.map (·.1)
+  let inFn := ((s.params ++ [s.ret]).flatMap FnCoercion.paramsInFn).filter tps.contains
+  if inFn.isEmpty then return
+  let (sh, ts) := s.valueShape
+  let own : Ty := .struct sh.name (ts ++ [s.ret])
+  -- (its instance: its parameters and result matched with the type's; one
+  -- in generic code, at the code's own type parameters, needs no wrapper)
+  let σ : List (String × Ty) := match ty with
+    | .struct _ targs =>
+      if targs.length != ts.length + 1 then []
+      else (((ts ++ [s.ret]).zip targs).foldlM (fun σ ((a : Ty), (b : Ty)) => Ty.matchArg ctx.types σ a b) ([] : List (String × Ty))).getD []
+    | _ => []
+  let some v := (FnCoercion.changedBy σ inFn (unknown := true)).head? | return
+  eerr p s!"using a value of type {FnCoercion.showGeneric own tps} as a value of type {ty.show} is not yet implemented: {n} is generic, its type parameter {v} inside a function type of its own, and as a value at an instance it needs a wrapper that converts a function value, which Epic's compiler makes for no generic function {FnCoercion.cite}"
 
 /-- An `if … then … else …`'s branches and its type, which `finish` takes
     (#32, #366): at an expected type, both at it; with none, the `then`
@@ -3189,6 +3617,26 @@ def toStringOf (p : Pos) (r0 : R) : EM Expr := do
   | .arr .char => pure r.e
   | t => eerr p s!"no ToString for {t.show} (Verse defines it for int, float, char, char32 and string)"
 
+/-- (#724) For an arity message: why `found` positional arguments do not
+    fit `s`'s single tuple, array or generic parameter (after `off`
+    receivers) when it has a named one too, where `packCallArgs` packs none (UEFN 43.12:
+    3509). -/
+def namedPackNote (s : Sig) (off found : Nat) : String :=
+  match s.params.drop off |>.take (s.params.length - s.named.length - off) with
+  | [.tup _] =>
+    if found > 1 && !s.named.isEmpty then
+      ": several arguments are not packed into a tuple parameter beside a named one, since the function's parameter is then the tuple of all its parameters; write the tuple, (…) (Epic's Verse compiler, UEFN 43.12: error 3509, \"This function parameter expects a value of type tuple(…), but this argument is an incompatible value\")"
+    else ""
+  | [.param ..] =>
+    if found > 1 && !s.named.isEmpty then
+      ": several arguments are not packed into a generic parameter beside a named one, since the function's parameter is then the tuple of all its parameters; write the tuple, (…) (Epic's Verse compiler, UEFN 43.12: error 3509, \"This function parameter expects a value of type tuple(any,…), but this argument is an incompatible value\")"
+    else ""
+  | [.arr _] =>
+    if found > 1 && !s.named.isEmpty then
+      ": several arguments do not make an array parameter beside a named one, since the function's parameter is then the tuple of all its parameters; write the array, array{…} (Epic's Verse compiler, UEFN 43.12: error 3509, \"This function parameter expects a value of type tuple([]…), but this argument is an incompatible value\")"
+    else ""
+  | _ => ""
+
 /-- Canonicalise the user positional arguments before binding a call. A
     receiver is not part of the argument tuple; named arguments retain their
     written order. A lone scalar keeps its meaning for arrays and bare type
@@ -3206,6 +3654,14 @@ def packCallArgs (p : Pos) (s : Sig) (args : List SExpr)
   match pt with
   | .void => if user.isEmpty then return packed (.tuple p []) else return args
   | .tup _ =>
+    -- (#724: not beside a named parameter. The function's parameter is
+    -- then the tuple of its parameters, named ones included, which several
+    -- arguments do not fit: UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+    -- refuses F(1.0, 2.0) of F(X:tuple(float, float), ?E:float = 0.1),
+    -- error 3509, followup-book2/overload-tuple-named-call, and admits
+    -- F((1.0, 2.0), ?E := 10.0), the control; the Book's tests,
+    -- Bugs/FORT-744399-DefaultTupleFieldsCrashComplier.versetest:62)
+    if user.length > 1 && !s.named.isEmpty then return args
     if user.length != 1 then return packed (.tuple p user)
     if let .tup [_] := pt then
       let [a] := user | return args
@@ -3213,8 +3669,14 @@ def packCallArgs (p : Pos) (s : Sig) (args : List SExpr)
       | .tuple _ [_] | .app _ (.ident _ "$callSingleton") [_] false => return args
       | _ => return packed (.app a.pos (.ident a.pos "$callSingleton") [a] false)
     return args
-  | .arr _ => if user.length > 1 then return packed (.arrayLit p user) else return args
-  | .param .. => if user.length != 1 then return packed (.tuple p user) else return args
+  -- (#724: nor into an array parameter beside a named one: UEFN 43.12
+  -- refuses F(1, 2) of F(A:[]int, ?B:int = 2), error 3509,
+  -- followup-book3/array-named-pack)
+  | .arr _ => if user.length > 1 && s.named.isEmpty then return packed (.arrayLit p user) else return args
+  -- (#724: nor into a generic parameter's tuple beside a named one: UEFN
+  -- 43.12 refuses F(1, 2, ?E := 5) of F(X:t, ?E:int where t:type), error
+  -- 3509, followup-book4/generic-param-named-pack)
+  | .param .. => if user.length != 1 && !(user.length > 1 && !s.named.isEmpty) then return packed (.tuple p user) else return args
   | _ => return args
 
 /-- The tag of the lifts of the refining casts in a function (#53, #243):
@@ -3260,6 +3722,10 @@ def functionBodyCtx (req : Requests) (ctx : Ctx) (p : Pos) (name : String)
     inDefaultCheck := source.inDefaultCheck || ctx.inDefaultCheck
     inArm := source.inArm || ctx.inArm
     inBranch := source.inBranch || ctx.inBranch
+    rollbackOnly := source.rollbackOnly || ctx.rollbackOnly
+    -- (a helper's failure is its source code's: `bodyFailure` only where
+    -- that code is at the top of a `<decides>` function's body)
+    bodyFailure := if lifted.isSome || loopLift.isSome || resume.isSome then source.bodyFailure else ctx.bodyFailure
     defaults := source.defaults ++ ctx.defaults
     refineExits := (lifted.map (·.exits)).getD {}
     inBlock := source.inBlock || name.endsWith ".$block"

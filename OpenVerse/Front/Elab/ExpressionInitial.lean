@@ -245,7 +245,7 @@ partial def elabExprInitialWith
     return r
   | .app p (.ident _ "$constructValuesType") [value] false =>
     let name := s!"$constructValue{p.line}_{p.col}"
-    let (r, c) ← elabOneClauses { ctx with canFail := true, inTaking := true }
+    let (r, c) ← elabOneClauses { ctx with canFail := true, bodyFailure := false, inTaking := true }
       [.decl p name (exp.map Ty.toSTy) false value]
     let some valueLocal := c.lookup name | eerr p "construction type probe did not bind its value"
     return ⟨.seq r.e (.local valueLocal.slot), valueLocal.ty⟩
@@ -276,7 +276,17 @@ partial def elabExprInitialWith
       | .text s => pure (Expr.lit (Value.ofString s))
       | .code (.app p (.ident _ "$interpolationArgs") args false) => do
         elabToStringWith elabE ctx p (← elabE ctx (.app p (.ident p "ToString") args false) none)
-      | .code e => do elabToStringWith elabE ctx e.pos (← elabE ctx e none)
+      | .code e => do
+        let r ← elabE ctx e none
+        -- (#724) a value that is not a string is interpolated by a call of
+        -- its `ToString`, which is not `<converges>`: none in a data member
+        -- (3582). A character written as a literal, `{0u004d}`, is the
+        -- character itself (the Book's tests interpolate them in constants,
+        -- Localization.versetest:34, SOL-3734-UnicodeCausesCompilerErrors)
+        let literal := match e with | .char .. | .char32 .. => true | _ => false
+        if !literal && (widenR ctx.types r).ty != Ty.string then
+          noteDivergentCall ctx e.pos s!"ToString (to interpolate {withArticle r.ty.show})"
+        elabToStringWith elabE ctx e.pos r
     let _ := p
     match pieces with
     | [] => return ⟨.lit (Value.ofString ""), Ty.string⟩
@@ -294,6 +304,13 @@ partial def elabExprInitialWith
       match ModuleVars.stateRef? ctx.types with
       | some a => return ⟨.lit (.ref a), .struct ModuleVars.stateClass []⟩
       | none => eerr p "internal error: no module state"
+    else
+    -- (#724) the state of `GetRandomInt`'s generator, likewise the
+    -- prototype of its class (`Front/Random.lean`)
+    if n == randomCellName then
+      match ctx.types.protos.findIdx? (·.1 == randomStateClass) with
+      | some a => return ⟨.lit (.ref a), .struct randomStateClass []⟩
+      | none => eerr p "internal error: no state for GetRandomInt"
     else
     match n with
     | "true" => return ⟨.lit (.logic true), .logic⟩
@@ -356,6 +373,9 @@ partial def elabExprInitialWith
             if let some ty := exp then
               if let .struct shape _ := ty then
                 if let some sh := FnValues.parse shape then
+                  -- (#724: not one whose type parameter is inside a
+                  -- function type of its own, Epic's 3502)
+                  checkGenericValue ctx p n s ty
                   for cls in [s!"{n}$fn", s!"{n}$fnPack", s!"{n}$fnUnpack{sh.positional}"] do
                     let some args := fnClassArgs ctx.types cls ty | continue
                     let r ← elabConstruct ctx p cls [] [] (some (.struct cls args))
@@ -382,10 +402,13 @@ partial def elabExprInitialWith
               | _ => own
             -- (through its own type; when the expected one does not fit, as
             -- its own, which the caller then joins or names in a mismatch)
-            let r ← elabE ctx (.construct p s!"{n}$fn" [] []) none
-            let r : R := ⟨← coerce p r own, own⟩
+            let obj ← elabE ctx (.construct p s!"{n}$fn" [] []) none
+            let r : R := ⟨← coerce p obj own, own⟩
             if ty == own then return r
-            match ← tryCatch (some <$> coerce p r ty) (fun _ => pure none) with
+            -- (from its value class, which fits every function type it
+            -- fits: a function named where its type is expected is
+            -- converted, as Epic's compiler converts it, #724)
+            match ← tryCatch (some <$> coerce p obj ty) (fun _ => pure none) with
             | some e => return ⟨e, ty⟩
             | none =>
               if let some t := askFor then
@@ -398,7 +421,7 @@ partial def elabExprInitialWith
           else eerr p s!"'{n}' is a function: call it with {n}(…)"
         | none =>
           if (ctx.types.overloads.lookup n).isSome then
-            eerr p s!"{n} is overloaded: an overloaded function cannot be used as a value (Book of Verse ch. 6)"
+            eerr p s!"{n} is overloaded: an overloaded function cannot be used as a value (Book of Verse ch. 6; Epic's Verse compiler, UEFN 43.12: error 3502, \"Referencing an overloaded function without immediately calling it is not yet implemented\", followup-coerce/overloaded-fn-value)"
           -- the float constants (#132), unless the program defines them
           match n with
           | "PiFloat" => return ⟨.lit (.float (VFloat.canon 3.141592653589793)), .float⟩

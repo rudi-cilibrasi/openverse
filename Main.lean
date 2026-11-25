@@ -38,28 +38,54 @@ def runProg (P : Prog) (fuel : Nat) : IO UInt32 := do
     | .err k => IO.eprintln s!"error: {errName k}"; return 2
 
 def usage : String :=
-  "usage: openverse run FILE.verse [--no-choice] [--signal-no-rollback] [--extended-defaults] [--fuel N] [--emit FILE.vbc] [ARG…] [do EXPR]\n" ++
+  "usage: openverse run FILE.verse [--no-choice] [--signal-rollback] [--default-rollback] [--extended-defaults] [--function-coercions] [--parametric-var-fields] [--fuel N] [--emit FILE.vbc] [ARG…] [do EXPR]\n" ++
   "                                               run Main() (or EXPR) with the reference interpreter;\n" ++
   "                                               the ARGs are the program's Args:[]string; --emit also\n" ++
   "                                               writes what emit would, compiling the program once\n" ++
-  "       openverse emit FILE.verse [--no-choice] [--signal-no-rollback] [--extended-defaults] -o FILE.vbc [ARG…] [do EXPR]\n" ++
+  "       openverse emit FILE.verse [--no-choice] [--signal-rollback] [--default-rollback] [--extended-defaults] [--function-coercions] [--parametric-var-fields] -o FILE.vbc [ARG…] [do EXPR]\n" ++
   "                                               compile to OVBC for the C runtime (cverse)\n" ++
-  "       openverse check FILE.verse [--no-choice] [--signal-no-rollback] [--extended-defaults]\n" ++
+  "       openverse check FILE.verse [--no-choice] [--signal-rollback] [--default-rollback] [--extended-defaults] [--function-coercions] [--parametric-var-fields]\n" ++
   "                                               parse, elaborate and check only\n" ++
-  "       openverse core FILE.verse [--no-choice] [--signal-no-rollback] [--extended-defaults]\n" ++
+  "       openverse core FILE.verse [--no-choice] [--signal-rollback] [--default-rollback] [--extended-defaults] [--function-coercions] [--parametric-var-fields]\n" ++
   "                                               print the elaborated Verse Core\n" ++
   "       --no-choice excludes |, first, for/generators and ranges from all loaded source;\n" ++
   "       it may also precede the command or file. In run/emit, -- passes literal Args.\n" ++
-  "       --signal-no-rollback refuses an event's Signal that a failure context may call (#515).\n" ++
-  "       --extended-defaults retains extended field defaults without a convergence assertion (#511).\n" ++
+  "       An event's Signal has the no_rollback effect, as in Epic's Verse compiler: a failure context\n" ++
+  "       or a <transacts> function cannot call it (#515). --signal-rollback keeps the legacy\n" ++
+  "       transactional mode, which rolls it back; --signal-no-rollback, the default, is accepted.\n" ++
+  "       A function without a heap specifier has the no_rollback effect, Epic's default: a failure\n" ++
+  "       context or a <transacts> function cannot call it (#515), nor spawn, which has it too (#724).\n" ++
+  "       --default-rollback keeps the old rule, which rolls both back; --default-no-rollback, the\n" ++
+  "       default, is accepted.\n" ++
+  "       --extended-defaults retains extended field defaults without a convergence assertion (#511),\n" ++
+  "       and module constants and field defaults that call functions which might not complete (#724).\n" ++
+  "       --function-coercions keeps the conversions of function values Epic's Verse compiler does not\n" ++
+  "       make (UEFN 43.12, error 3502, #724): a branch of an if that is a function of another type, a\n" ++
+  "       higher-order generic function as a value, a generic function's result with a type parameter\n" ++
+  "       inside a function type, an override of a parametric type's method with one.\n" ++
+  "       --parametric-var-fields retains generic functions over parametric classes whose var fields\n" ++
+  "       hold an implicit type parameter, and var fields in parametric interfaces (#724).\n" ++
   "       openverse example NAME [--emit FILE.vbc] | openverse examples"
 
-/-- The compiler's opt-in semantic policies: no event signal in a failure
-    context (#515, `--signal-no-rollback`), and extended field defaults kept
-    without a convergence assertion (#511, `--extended-defaults`). -/
+/-- The compiler's semantic policies: no event signal in a failure context
+    or a body whose effects exclude `no_rollback` (#515, the default;
+    `--signal-rollback` keeps the legacy transactional mode, and
+    `--signal-no-rollback` is accepted as the default's name), and extended
+    field defaults kept without a convergence assertion (#511,
+    `--extended-defaults`). -/
 structure Policies where
-  signalNoRollback : Bool := false
+  signalNoRollback : Bool := true
+  /-- (#515) Epic's default effect, `no_rollback`, on a function without a
+      heap specifier, and (#724) on `spawn`; `--default-rollback` keeps the
+      old rule. -/
+  defaultNoRollback : Bool := true
   extendedDefaults : Bool := false
+  /-- (#724) Keep the conversions of function values that Epic's Verse
+      compiler does not make (error 3502); `--function-coercions`. -/
+  functionCoercions : Bool := false
+  /-- (#724) Keep openverse's parametric `var` fields, which Epic's
+      compiler refuses (3552, 3502). -/
+  parametricVarFields : Bool := false
 
 /-- Load a program, a file or a directory with everything it imports, and
     compile it: malformed UTF-8 is a front-end error (exit 4), as is any
@@ -76,7 +102,9 @@ def loadAndCompile (file : String) (args : List String) (doExpr : Option String)
     -- (OPENVERSE_DEBUG=1: an internal error also prints the rejected Verse Core)
     let debug := (← IO.getEnv "OPENVERSE_DEBUG").any fun v => v != "" && v != "0"
     match Front.compileTopsWarned tops args mentionsArgs doExpr debug profile
-        (extendedDefaults := pol.extendedDefaults) (signalNoRollback := pol.signalNoRollback) with
+        (extendedDefaults := pol.extendedDefaults) (signalNoRollback := pol.signalNoRollback)
+        (defaultNoRollback := pol.defaultNoRollback) (functionCoercions := pol.functionCoercions)
+        (parametricVarFields := pol.parametricVarFields) with
     | .error e => return .error e
     | .ok (P, warnings) =>
       for w in warnings do IO.eprintln s!"{file}:{w}"
@@ -112,7 +140,12 @@ def runCmd (file : String) (fuel : Nat) (emit : Option String)
     (profile : Front.SourceProfile) (pol : Policies := {}) : List String → IO UInt32
   | "--no-choice" :: rest => runCmd file fuel emit .choiceFree pol rest
   | "--signal-no-rollback" :: rest => runCmd file fuel emit profile { pol with signalNoRollback := true } rest
+  | "--signal-rollback" :: rest => runCmd file fuel emit profile { pol with signalNoRollback := false } rest
+  | "--default-no-rollback" :: rest => runCmd file fuel emit profile { pol with defaultNoRollback := true } rest
+  | "--default-rollback" :: rest => runCmd file fuel emit profile { pol with defaultNoRollback := false } rest
   | "--extended-defaults" :: rest => runCmd file fuel emit profile { pol with extendedDefaults := true } rest
+  | "--function-coercions" :: rest => runCmd file fuel emit profile { pol with functionCoercions := true } rest
+  | "--parametric-var-fields" :: rest => runCmd file fuel emit profile { pol with parametricVarFields := true } rest
   | "--fuel" :: n :: rest => runCmd file n.toNat! emit profile pol rest
   | "--emit" :: out :: rest => runCmd file fuel (some out) profile pol rest
   | rest =>
@@ -131,13 +164,23 @@ def optionsPrefix (profile : Front.SourceProfile) (pol : Policies) :
     List String → Front.SourceProfile × Policies × List String
   | "--no-choice" :: rest => optionsPrefix .choiceFree pol rest
   | "--signal-no-rollback" :: rest => optionsPrefix profile { pol with signalNoRollback := true } rest
+  | "--signal-rollback" :: rest => optionsPrefix profile { pol with signalNoRollback := false } rest
+  | "--default-no-rollback" :: rest => optionsPrefix profile { pol with defaultNoRollback := true } rest
+  | "--default-rollback" :: rest => optionsPrefix profile { pol with defaultNoRollback := false } rest
   | "--extended-defaults" :: rest => optionsPrefix profile { pol with extendedDefaults := true } rest
+  | "--function-coercions" :: rest => optionsPrefix profile { pol with functionCoercions := true } rest
+  | "--parametric-var-fields" :: rest => optionsPrefix profile { pol with parametricVarFields := true } rest
   | rest => (profile, pol, rest)
 
 def emitCmd (file : String) (profile : Front.SourceProfile) (pol : Policies := {}) : List String → IO UInt32
   | "--no-choice" :: rest => emitCmd file .choiceFree pol rest
   | "--signal-no-rollback" :: rest => emitCmd file profile { pol with signalNoRollback := true } rest
+  | "--signal-rollback" :: rest => emitCmd file profile { pol with signalNoRollback := false } rest
+  | "--default-no-rollback" :: rest => emitCmd file profile { pol with defaultNoRollback := true } rest
+  | "--default-rollback" :: rest => emitCmd file profile { pol with defaultNoRollback := false } rest
   | "--extended-defaults" :: rest => emitCmd file profile { pol with extendedDefaults := true } rest
+  | "--function-coercions" :: rest => emitCmd file profile { pol with functionCoercions := true } rest
+  | "--parametric-var-fields" :: rest => emitCmd file profile { pol with parametricVarFields := true } rest
   | "-o" :: out :: rest =>
     let (profile, pol, rest) := optionsPrefix profile pol rest
     let (literal, rest) := match rest with | "--" :: rest => (true, rest) | _ => (false, rest)

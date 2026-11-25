@@ -86,6 +86,9 @@ else:
     supplied = rng.choice([True, False])
     actual = rng.randrange(10, 30) if supplied else n
     named = f'?N:=Note({actual})' if supplied else ''
+    # (child and other implement out's Get themselves, with carrier's code: a
+    # method of a class not below an interface does not implement its
+    # abstract method, #724, UEFN 43.12 error 3591)
     recv = f'{selected}(u)' if control else 'out(v)'
     params = 'u:type' if control else 'v:type'
     ret = 'dog(u)' if control else 'v'
@@ -101,8 +104,17 @@ carrier(t:type) := class:
         Sleep(0.001)
         Value
 out(v:type) := interface {{ Get(?N:int=0)<suspends><computes>:v }}
-child(u:type) := class(carrier(dog(u)),out(animal(u))) {{}}
-other(u:type) := class(carrier(dog(u)),out(animal(u))) {{ Pad:int=9 }}
+child(u:type) := class(carrier(dog(u)),out(animal(u))):
+    Get<override>(?N:int=block{{set Calls+=1;Print("default {{Seed}}");Seed}})<suspends><computes>:dog(u)=
+        Print("body {{N}}")
+        Sleep(0.001)
+        Value
+other(u:type) := class(carrier(dog(u)),out(animal(u))):
+    Pad:int=9
+    Get<override>(?N:int=block{{set Calls+=1;Print("default {{Seed}}");Seed}})<suspends><computes>:dog(u)=
+        Print("body {{N}}")
+        Sleep(0.001)
+        Value
 Start(P:{recv} where {params}){suspends}:task({ret})=spawn{{P.Get({named})}}
 Main()<suspends>:void=
     C:={selected}({ty}){{Value:=dog({ty}){{Value:={value}}}}}

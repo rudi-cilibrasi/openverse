@@ -2,34 +2,34 @@
 # head, a receiver and a field are read before the choice; set op= reads its
 # old value after its new one; operands before a choice keep their expected types
 negative_percent := type{_X:float where -1.0 <= _X, _X <= 0.0}
-Arr():[]int =
+Arr()<transacts>:[]int =
     Print("arr")
     array{10, 20}
 c := class:
     V:int
-    Get(X:int):int = V * 10 + X
+    Get(X:int)<transacts>:int = V * 10 + X
 store := class:
     var Items:[]int = array{10, 20}
-    Clear():int =
+    Clear()<transacts>:int =
         set Items = array{7, 8}
         0
 counter := class:
     var N:int = 0
-    Bump():int =
+    Bump()<transacts>:int =
         set N = 100
         1
-    Run():void =
+    Run()<transacts>:void =
         set N = 0
         if (set N += Bump() + (0 | 1)) then Print("op= new value first: {N}")
-TakeOpt(O:?int, X:int):int = X
-TakeArr(A:[]int, X:int):int = A.Length + X
-Id(X:t where t:type):t = X
-Apply(F:int->int, X:int):int = F(X)
-Take(P:negative_percent, X:int):int = X
-TakeOpts(X:[]?int, Y:int):int = X.Length + Y
+TakeOpt(O:?int, X:int)<transacts>:int = X
+TakeArr(A:[]int, X:int)<transacts>:int = A.Length + X
+Id(X:t where t:type)<transacts>:t = X
+Apply(F:type{_(:int)<transacts>:int}, X:int)<transacts>:int = F(X)
+Take(P:negative_percent, X:int)<transacts>:int = X
+TakeOpts(X:[]?int, Y:int)<transacts>:int = X.Length + Y
 inner := class:
     V:int
-    Get(X:int):int = V * 10 + X
+    Get(X:int)<transacts>:int = V * 10 + X
 outer := class:
     In:inner = inner{V := 1}
 Main():void =

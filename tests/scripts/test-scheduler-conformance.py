@@ -34,10 +34,10 @@ def require(condition, message):
 with tempfile.TemporaryDirectory(prefix='openverse-scheduler-conformance-') as directory:
     tmp = Path(directory)
 
-    def trace(label, source, expected):
+    def trace(label, source, expected, options=()):
         output = tmp / 'program.vbc'
         output.unlink(missing_ok=True)
-        result = run(OV + ['run', source, '--emit', output])
+        result = run(OV + ['run', source, *options, '--emit', output])
         require((result.returncode, result.stdout, result.stderr) == expected,
                 f'{label}: wrong Lean trace: '
                 f'{result.returncode,result.stdout,result.stderr}; expected {expected}')
@@ -48,7 +48,7 @@ with tempfile.TemporaryDirectory(prefix='openverse-scheduler-conformance-') as d
                 f'{label}: wrong C trace: {c.returncode,c.stdout,c.stderr}')
         profile_output = tmp / 'profile.vbc'
         profile_output.unlink(missing_ok=True)
-        profile = run(OV + ['run', source, '--no-choice', '--emit', profile_output])
+        profile = run(OV + ['run', source, *options, '--no-choice', '--emit', profile_output])
         require((profile.returncode, profile.stdout, profile.stderr) == expected,
                 f'{label}: wrong choice-free trace: '
                 f'{profile.returncode,profile.stdout,profile.stderr}')
@@ -60,8 +60,13 @@ with tempfile.TemporaryDirectory(prefix='openverse-scheduler-conformance-') as d
     for fixture in fixtures:
         stdout, code = fixture.with_suffix('.expected').read_text().rsplit('exit=', 1)
         stderr = fixture.with_suffix('.stderr')
+        # (the fixture's options, as scripts/test-verse.sh reads them:
+        # scheduler_audit_transactions runs in the legacy transactional
+        # mode, --signal-rollback, #515)
+        args = fixture.with_suffix('.args')
+        options = [a for a in args.read_text().split('\n') if a.startswith('--')] if args.exists() else []
         trace(fixture.stem, fixture,
-              (int(code.strip()), stdout, stderr.read_text() if stderr.exists() else ''))
+              (int(code.strip()), stdout, stderr.read_text() if stderr.exists() else ''), options)
 
     controls = [
         ('deadlock', 'Sleep(Inf)', 'Sleep(0.01)', 'waiting\nafter\n'),

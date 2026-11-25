@@ -1,4 +1,4 @@
-# expect: 8:15: default of field 'V' of c requires convergence: ordinary function 'GetCastableFinalSuperClass' has no checked convergence contract
+# expect: 8:50: the default of field 'V' of c calls GetCastableFinalSuperClass, which might not complete
 # A message names the built-in a program calls, not the helper openverse
 # writes for the call.
 base := class<castable>:

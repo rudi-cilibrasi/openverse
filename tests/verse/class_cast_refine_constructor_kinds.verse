@@ -11,22 +11,22 @@ child(t:type):=class(cbox(t)){Flag:int=9}
 alias(t:type):=cbox(t)
 nested(t:type):=struct{Inner:cbox(t)}
 gbox(t:type):=class{Before:?t=false;Value:t;After:[]t=array{}}
-DirectClass(P:pair(a,b) where a:type,b:type)<decides>:cbox(b)=cbox(b){Value:=dup[P].A}
-NamedClass(P:pair(a,b) where a:type,b:type)<decides>:cbox(b)=(D:=dup[P];cbox(b){Value:=D.A})
-DirectValue(P:pair(a,b) where a:type,b:type)<decides>:vbox(b)=vbox(b){Value:=dup[P].A}
-NamedValue(P:pair(a,b) where a:type,b:type)<decides>:vbox(b)=(D:=dup[P];vbox(b){Value:=D.A})
-DirectStruct(P:pair(a,b) where a:type,b:type)<decides>:sbox(b)=sbox(b){Value:=dup[P].A}
-NamedStruct(P:pair(a,b) where a:type,b:type)<decides>:sbox(b)=(D:=dup[P];sbox(b){Value:=D.A})
-DirectChild(P:pair(a,b) where a:type,b:type)<decides>:child(b)=child(b){Value:=dup[P].A}
-NamedChild(P:pair(a,b) where a:type,b:type)<decides>:child(b)=(D:=dup[P];child(b){Value:=D.A})
-DirectAlias(P:pair(a,b) where a:type,b:type)<decides>:alias(b)=alias(b){Value:=dup[P].A}
-NamedAlias(P:pair(a,b) where a:type,b:type)<decides>:alias(b)=(D:=dup[P];alias(b){Value:=D.A})
-DirectNested(P:pair(a,b) where a:type,b:type)<decides>:nested(b)=nested(b){Inner:=cbox(b){Value:=dup[P].A}}
-NamedNested(P:pair(a,b) where a:type,b:type)<decides>:nested(b)=(D:=dup[P];nested(b){Inner:=cbox(b){Value:=D.A}})
-DirectDefaults(P:pair(a,b) where a:type,b:type)<decides>:gbox(b)=gbox(b){Value:=dup[P].A}
-NamedDefaults(P:pair(a,b) where a:type,b:type)<decides>:gbox(b)=(D:=dup[P];gbox(b){Value:=D.A})
-Rest(P:pair(a,b) where a:type,b:type)<decides>:b=(X:=cbox(b){Value:=dup[P].A};P.A)
-RestNamed(P:pair(a,b) where a:type,b:type)<decides>:b=(D:=dup[P];X:=cbox(b){Value:=D.A};P.A)
+DirectClass(P:pair(a,b) where a:type,b:type)<transacts><decides>:cbox(b)=cbox(b){Value:=dup[P].A}
+NamedClass(P:pair(a,b) where a:type,b:type)<transacts><decides>:cbox(b)=(D:=dup[P];cbox(b){Value:=D.A})
+DirectValue(P:pair(a,b) where a:type,b:type)<transacts><decides>:vbox(b)=vbox(b){Value:=dup[P].A}
+NamedValue(P:pair(a,b) where a:type,b:type)<transacts><decides>:vbox(b)=(D:=dup[P];vbox(b){Value:=D.A})
+DirectStruct(P:pair(a,b) where a:type,b:type)<transacts><decides>:sbox(b)=sbox(b){Value:=dup[P].A}
+NamedStruct(P:pair(a,b) where a:type,b:type)<transacts><decides>:sbox(b)=(D:=dup[P];sbox(b){Value:=D.A})
+DirectChild(P:pair(a,b) where a:type,b:type)<transacts><decides>:child(b)=child(b){Value:=dup[P].A}
+NamedChild(P:pair(a,b) where a:type,b:type)<transacts><decides>:child(b)=(D:=dup[P];child(b){Value:=D.A})
+DirectAlias(P:pair(a,b) where a:type,b:type)<transacts><decides>:alias(b)=alias(b){Value:=dup[P].A}
+NamedAlias(P:pair(a,b) where a:type,b:type)<transacts><decides>:alias(b)=(D:=dup[P];alias(b){Value:=D.A})
+DirectNested(P:pair(a,b) where a:type,b:type)<transacts><decides>:nested(b)=nested(b){Inner:=cbox(b){Value:=dup[P].A}}
+NamedNested(P:pair(a,b) where a:type,b:type)<transacts><decides>:nested(b)=(D:=dup[P];nested(b){Inner:=cbox(b){Value:=D.A}})
+DirectDefaults(P:pair(a,b) where a:type,b:type)<transacts><decides>:gbox(b)=gbox(b){Value:=dup[P].A}
+NamedDefaults(P:pair(a,b) where a:type,b:type)<transacts><decides>:gbox(b)=(D:=dup[P];gbox(b){Value:=D.A})
+Rest(P:pair(a,b) where a:type,b:type)<transacts><decides>:b=(X:=cbox(b){Value:=dup[P].A};P.A)
+RestNamed(P:pair(a,b) where a:type,b:type)<transacts><decides>:b=(D:=dup[P];X:=cbox(b){Value:=D.A};P.A)
 Main():void=
     if(V:=DirectClass[dup(int){A:=7,B:=9}],W:=NamedClass[dup(int){A:=7,B:=9}]) then Print("class int {V.Value} {W.Value}") else Print("wrong")
     if(V:=DirectClass[dup(string){A:="left",B:="right"}],W:=NamedClass[dup(string){A:="left",B:="right"}]) then Print("class string {V.Value} {W.Value}") else Print("wrong")

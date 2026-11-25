@@ -10,12 +10,12 @@ dup(t:type) := class(pair(t, t)):
         var Q:int = C
         if (D := dup[P]) then set Q += D.C
         Q
-More(P:pair(a, b) where a:type, b:type):int =
+More(P:pair(a, b) where a:type, b:type)<transacts>:int =
     var N:int = 0
     if (D := dup[P], D.C > 2):
         set N = D.C
     N
-MoreElse(P:pair(a, b) where a:type, b:type):int =
+MoreElse(P:pair(a, b) where a:type, b:type)<transacts>:int =
     var N:int = 0
     V := if (D := dup[P], D.C > 2):
         set N = D.C
@@ -24,22 +24,22 @@ MoreElse(P:pair(a, b) where a:type, b:type):int =
         set N = -1
         0
     N + V
-Gen(P:pair(a, b), X:a where a:type, b:type):a =
+Gen(P:pair(a, b), X:a where a:type, b:type)<transacts>:a =
     var V:a = X
     if (D := dup[P]) then set V = D.B
     V
-Arr(P:pair(a, b) where a:type, b:type):int =
+Arr(P:pair(a, b) where a:type, b:type)<transacts>:int =
     var Xs:[]int = array{1, 2, 3}
     if (D := dup[P]):
         if (set Xs[1] = D.C) {}
         for (I := 0..1) { if (set Xs[I] = Xs[I] + 10) {} }
     Xs[0] + Xs[1] + Xs[2] or 0
-F(P:pair(a, b) where a:type, b:type):int =
+F(P:pair(a, b) where a:type, b:type)<transacts>:int =
     var N:int = 0
     if (D := dup[P]):
         set N = D.C
     N
-G(P:pair(a, b), X:a where a:type, b:type):a =
+G(P:pair(a, b), X:a where a:type, b:type)<transacts>:a =
     var N:int = 1
     var M:int = 2
     R := if (D := dup[P]):
@@ -51,7 +51,7 @@ G(P:pair(a, b), X:a where a:type, b:type):a =
         X
     Print("N={N} M={M}")
     R
-H(P:pair(a, b) where a:type, b:type):int =
+H(P:pair(a, b) where a:type, b:type)<transacts>:int =
     var K:int = 5
     if (D := dup[P]) then set K += D.C else set K = 0
     K

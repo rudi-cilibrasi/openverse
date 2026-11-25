@@ -1,7 +1,7 @@
 # An inherited interface default retains class, opened and method arguments.
 root(t:type) := interface:
-    Read():t
-    Tag():int
+    Read()<transacts>:t
+    Tag()<transacts>:int
     Both(X:u,?Y:u=X,?E:[]u=Concatenate() where u:type)<transacts>:tuple(t,u,int) =
         Print("default {Tag()}")
         (Read(),X,Tag())|(Read(),Y,Tag()+1)
@@ -11,9 +11,9 @@ extra(a:type,b:type) := class<abstract>(root(a)):
 holder(a:type,b:type) := class(extra(a,b)):
     Store:a
     Extra:b
-    Read<override>():a=Store
-    Tag<override>():int=3
-Get(B:root(u),X:t,Y:t where t:type,u:type):[]tuple(u,t,int) =
+    Read<override>()<transacts>:a=Store
+    Tag<override>()<transacts>:int=3
+Get(B:root(u),X:t,Y:t where t:type,u:type)<transacts>:[]tuple(u,t,int) =
     for(V:=B.Both(X,?Y:=Y)): V
 Main():void =
     B:root(int)=holder(int,string){Store:=7,Extra:="hidden"}

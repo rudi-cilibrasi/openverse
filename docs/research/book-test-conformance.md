@@ -59,32 +59,35 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
 
 ## Where things stand
 
-With [tuple and array concatenation](#after-tuple-and-array-concatenation) on `cf0ced0e` (#630): **8,799 agree, 602 refuse, 55 accept, 92 differ, 3,956 not translatable** of 13,504 cases (a fresh full comparison with causes; before this change, 8,797 agreed and 604 were refused). This is the one table of what is left; the sections below are the history, each written when its work landed, and the four maps ([the first map](#the-remaining-causes-a-map), [classes](#classes-and-subtyping-the-map), [forms](#forms-of-expressions-statements-and-the-library-a-map), [the forms still on the list](#the-forms-still-on-the-list-a-map)) hold the case-by-case reading each row points to.
+With nine more forms of the Book's valid programs that UEFN 43.12 runs and openverse refused (#724, [the probes](versevm-live-conformance.md#the-books-valid-programs-openverse-refuses): a map literal's key type the join of its keys', `ConcatenateMaps` of maps keyed by different types, an `any` inside a generic parameter's type, a function named at an `any` result, a `<unique>` interface no class implements compared, a module constant's `<unique>` object and an empty map keyed by a `<unique>` class, `F(:a)` beside `F(:[]a)`, overloads on disjoint refinements): **8,875 agree, 636 refuse, 1 accept, 36 differ, 3,956 not translatable** of 13,504 cases (a full comparison against the baseline below; 20 better: `Any.versetest` 60 and 152, `SOL-3799-AddToMembersWhileIteratingOverThem.versetest:16`, `ComparableInterface.versetest` 5, 13, 26 and 37, `GlobalVariables.versetest` 72 to 74 and its declarations, `Intrinsics/ConcatenateMaps.versetest` 44 and 67, `Map.versetest:143` and its declarations, `Overloading.versetest:260`, `WhereConstrainedFloats.versetest:59` and `WhereConstrainedInts.versetest:179` with the declarations of both; none worse but `SOL-4284-InfiniteLoopTriggersUObjectLimit.versetest:18`, which spends all of Lean's fuel and ran past its 90 s limit on the loaded machine (past nine minutes there, on this branch's binary and on main's alike, run side by side), so its line is kept; the 20 lines were patched from the comparison). Before it:
 
-**Accepted where the tests refuse (55)**
+With seven forms of the Book's valid programs that UEFN 43.12 runs and openverse refused (#724, [the probes](versevm-live-conformance.md#the-books-valid-programs-openverse-refuses): a `break` in a `for` inside a `loop`, `spawn` in a `defer`, a definition whose value is a definition, `GetRandomInt`, `GetSecondsSinceEpoch`, `FitsInPlayerMap`, `<converges>` on a method without a body): **8,864 agree, 645 refuse, 1 accept, 38 differ, 3,956 not translatable** of 13,504 cases (a full comparison against the baseline below; 9 better: `SOL-4199-BreakFromIf.versetest:39`, `FlowControl/defer.versetest:1094`, `Definitions.versetest:37`, `FORT-995029` 10 and 18, `GetSecondsSinceEpoch.versetest` 6 and 12, `weak_map.versetest:605`, `Effects.versetest:304`; 2 from refused to differing, `weak_map.versetest` 611 and 615, which expect the test runner's `FitsInPlayerMap` to raise a runtime error where Epic's Verse VM, and now openverse, gives the value; `SOL-4284:18`, which spends all of Lean's fuel, ran out of its 90 s on the loaded machine with and without the change, and keeps its verdict). Left of these forms: `<converges>` in a function type and on a parametric class (`Effects.versetest:305`, `ParametricTypes.versetest:375`), the path-qualified `(/Verse.org/Verse:)GetSecondsSinceEpoch` (`:16`), and a definition deeper in an expression (`CustomClassVarAccessors.versetest:642`).
+
+With class variance of function values (#724: a function value converts to a function type it is one of as it is, a class or an interface below in a parameter or above in the result, `void` and `true`, through an adapter object, [the rule](../LANGUAGE.md#function-values-epics-compiler-does-not-convert-724)): **8,855 agree, 656 refuse, 1 accept, 36 differ, 3,956 not translatable** of 13,504 cases (a fresh full comparison, the baseline regenerated: 1 better, `Void.versetest:100`, `VoidOutput` named where an `int->true` is expected, which no `F$fn` class gave and the adapter of its `int->void` value does; none worse). Before it, with [Epic's verdicts on the accepted refusals](#after-epics-verdicts-on-the-accepted-refusals) and [function coercions](#after-function-coercions) (#724, the two merged): 8,854 agree, 657 refuse, 1 accept, 36 differ, 3,956 not translatable of 13,504 cases (a fresh full comparison of the merge, the baseline regenerated; the two rule sets move disjoint cases, each as it did alone, and none is moved by both; the 1 left is a method's mangled name with a parameter, `FORT-555217:31`). With the verdicts alone: 8,853 agree, 648 refuse, 11 accept, 36 differ (27 cases better, the accepted refusals of `FORT-793952` (16), `FORT-555217` 25, 37, `FORT-744399:62`, `Enum.versetest:171`, `final.versetest:125`, `Effects.versetest` 557, 565, `SoftwareTransactionalMemory.versetest:505` and `ParametricFunctions.versetest` 431, 438, 496, and 3 worse, the Verse VM twins `Effects.versetest` 572, 580 and `Enum.versetest:233`, which Epic's shipped compiler refuses; the 11 left: the function-value coercions Epic refuses with 3502 (10, which [function coercions](#after-function-coercions) takes) and `FORT-555217:31`); with function coercions alone, 8,830, 654, 28, 36. Before them, with [ints beyond 64 bits](#after-ints-beyond-64-bits) and [Epic's VM results](#after-epics-vm-results) (#724, merged): 8,829 agree, 645 refuse, 38 accept, 36 differ, 3,956 not translatable of 13,504 cases (a fresh full comparison of the merge, the baseline regenerated; against the ints' baseline 8 cases better, `BoolQuery.versetest` 3, 4, `LogicalAnd.versetest:29`, `Precedence.versetest:121` and `GlobalVariables.versetest` 86, 90, 97, 105, and 4 worse, their `bp_vm_only` twins 115, 119, 126, 134). With ints beyond 64 bits alone, on main `b640fa6d`: 8,825 agree, 641 refuse, 42 accept, 40 differ; with Epic's VM results alone, 8,815, 606, 38, 89. Before them, with [the UEFN 43.12 probes](#after-the-uefn-4312-probes), merged with [compound places](#after-compound-places) (#704), with Epic's default effect the default: 8,811 agree, 602 refuse, 42 accept, 93 differ, 3,956 not translatable of 13,504 cases (a fresh full comparison, the baseline regenerated; before the default effect, 8,806, 603, 46, 93). Before both, on main `617c89f1`: 8,801 agreed, 600 refused, 55 accepted and 92 differed; compound places alone gave 8,802 agreed and 91 differed; with [tuple and array concatenation](#after-tuple-and-array-concatenation) on `cf0ced0e` (#630), 8,799 agreed and 602 were refused, the count the refusals' table below still has. This is the one table of what is left; the sections below are the history, each written when its work landed, and the four maps ([the first map](#the-remaining-causes-a-map), [classes](#classes-and-subtyping-the-map), [forms](#forms-of-expressions-statements-and-the-library-a-map), [the forms still on the list](#the-forms-still-on-the-list-a-map)) hold the case-by-case reading each row points to.
+
+**Accepted where the tests refuse (51)**
 
 | Cause | Cases | What it is, and what it needs | Who decided what |
 |---|---:|---|---|
-| name-limits | 19 | names equal but for case, names too long for the engine (`FORT-793952`, `FORT-555217`, BPVM link errors); no rule of the language to check | left: an engine's limit, [the first map](#the-remaining-causes-a-map) |
-| epic-limits | 11 | the BPVM's code generation and Epic's limits (`DefaultNamed`, `ParametricFunctions`, `Function`, …); no rule to check | left, [the first map](#the-remaining-causes-a-map) |
-| concrete-classes | 7 | a class below a `<concrete>` one: is it concrete? | the owner's question ([the wiki](https://github.com/rudi-cilibrasi/openverse/wiki/Concrete-classes-and-their-subclasses)) |
+| name-limits | 19 → 1 | names equal but for case, names too long for the engine (`FORT-793952`, `FORT-555217`, BPVM link errors) | UEFN 43.12 refuses them (9200, 9002, 9000, 3655), and openverse does since [Epic's verdicts](#after-epics-verdicts-on-the-accepted-refusals); left: `FORT-555217:31`, a method's mangled name |
+| epic-limits | 11 | the BPVM's code generation and Epic's limits (`DefaultNamed`, `ParametricFunctions`, `Function`, …) | UEFN 43.12 refuses all of them (3502), [Epic's verdicts](#after-epics-verdicts-on-the-accepted-refusals): the function-value coercions (10) agree since [function coercions](#after-function-coercions); `ParametricFunctions.versetest:496` agrees since (`--parametric-var-fields` keeps openverse's extension) |
+| concrete-classes | 7 → 0 | a class below a `<concrete>` one: is it concrete? | settled by UEFN 43.12 (3519), as the tests have it ([After the UEFN 43.12 probes](#after-the-uefn-4312-probes)) |
 | type-checks-other | 7 | Epic's compiler limits (`ParametricFunctions` 431, 438, `FORT-744399`, an enum of 256 values), a join of two classes at a type both are below (`SOL-5838`, 2), a function without `<decides>` as a `<transacts><decides>` value (`FunctionTypes.versetest:191`) | left, [the forms still on the list](#the-forms-still-on-the-list-a-map): `FunctionTypes:191` is where the Book disagrees with itself (ch. 13 against the test's comment), `SOL-5838` the owner's reading |
-| effect-checks | 6 | `no_rollback` as a function's default effect (3), the BPVM's `spawn` in a `<transacts>` function (2, their VerseVM twins agree) and in a `<transacts><decides>` one (`SoftwareTransactionalMemory.versetest:505`) | left: the Book disagrees with itself, and its tests split by VM, [the held rules](#after-the-held-rules), [the forms still on the list](#the-forms-still-on-the-list-a-map) |
-| initializer-effects | 4 | a module constant whose construction runs a `block` that allocates a `var` (VerseVM's link error 9003, `GlobalVariables.versetest` 86-105); the BPVM's twins are valid, and `:143` is valid where the `var` is not reached: a check of what the initializer does when it runs | left: a VM split and a check at run time, [the forms still on the list](#the-forms-still-on-the-list-a-map) |
-| final-members | 1 | a `<final>` method that does not implement an interface's method of its name (`final.versetest:125`): members keyed by qualifier | left with the two members of one name, [the forms still on the list](#the-forms-still-on-the-list-a-map) |
+| effect-checks | 6 → 0 | `no_rollback` as a function's default effect (3), the BPVM's `spawn` in a `<transacts>` function (2) and in a `<transacts><decides>` one (`SoftwareTransactionalMemory.versetest:505`) | settled by UEFN 43.12: the default effect (#515), and a spawn has `no_rollback` (3512, [Epic's verdicts](#after-epics-verdicts-on-the-accepted-refusals)) |
+| final-members | 1 → 0 | a `<final>` method that does not implement an interface's method of its name (`final.versetest:125`) | UEFN 43.12 refuses it, `<final>` or not (3591), and openverse does, [Epic's verdicts](#after-epics-verdicts-on-the-accepted-refusals) |
 
-**Different output (92)**
-
-| Cause | Cases | What it is, and what it needs | Who decided what |
-|---|---:|---|---|
-| int-precision | 87 | VerseVM's unbounded `int` against openverse's 64 bits (`Bitwise`, the arithmetic operators, 5 `ToDiagnostic` operands): bignums in the C runtime | openverse's reading, the BPVM's, [Readings](../LANGUAGE.md#readings-openverse-takes) |
-| empty-values-equal | 4 | the value of `X?` on a `logic`, `true?` (the empty value in the tests) | the Book disagrees with itself; built and measured: right for the 4 and no output changed, but 722 programs' bytes, which the elaborator's own `or` and `void` conversions take; needs a flag every value-dropping context sets ([the rule](book-forms-rules.md#the-value-of-true)), [After the forms still on the list](#after-the-forms-still-on-the-list) |
-| compound-set-order | 1 | `set X[0] +=` whose value sets `X` (`ArrayAppend.versetest:12`, VerseVM's) | left: a VM split; the untagged tests agree, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
-
-**Refused where the tests accept (602)**
+**Different output (36; 40 before Epic's VM results)**
 
 | Cause | Cases | What it is, and what it needs | Who decided what |
 |---|---:|---|---|
+| int-precision | 36 | the Blueprint VM's 64-bit `int` (`bp_vm_only`: `MathIntrinsicCallFailure` in `Bitwise`, the arithmetic operators, `Abs`, `Negate`) against openverse's, the Verse VM's (#724) | the owner's: OpenVerse targets the Verse VM, which Epic's UEFN 43.12 confirms, [int](../LANGUAGE.md#int) |
+| empty-values-equal | 4 → 0 | the value of `X?` on a `logic`, `true?` (the empty value in the tests) | settled by Epic's VMs (UEFN 43.12, `book-query-*`): `X?` of a logic succeeds with the empty value, as the tests have it ([After Epic's VM results](#after-epics-vm-results)); before, the Book disagrees with itself; built and measured: right for the 4 and no output changed, but 722 programs' bytes, which the elaborator's own `or` and `void` conversions take; needs a flag every value-dropping context sets ([the rule](book-forms-rules.md#the-value-of-true)), [After the forms still on the list](#after-the-forms-still-on-the-list) |
+
+**Refused where the tests accept (602; 641 since ints beyond 64 bits, the 39 of `int-module-constants`; 645 with Epic's VM results, the 4 of `module-evaluation`)**
+
+| Cause | Cases | What it is, and what it needs | Who decided what |
+|---|---:|---|---|
+| int-module-constants | 39 | `Math/Bitwise.versetest`'s `verse_vm_only` module constant `Pow2_64 : int = (9223372036854775807 + 1) * 2` (`:73`) and the 38 cases that use it: Epic's UEFN 43.12 refuses it, 9003 (`book-int-pow64-module-const`), as openverse does since #724 | the owner's: keep Epic's compiler over the Book's tests (UEFN 43.12 also refuses `int-module-const-back`, a constant in range that leaves it on the way, 9003), [int](../LANGUAGE.md#int) |
 | union-types | 136 | `union{…}` (VerseVM only, in no chapter) | left, [the first map](#the-remaining-causes-a-map) |
 | types-other | 91 | sorted in [the forms still on the list](#the-forms-still-on-the-list-a-map) (T1-T24): `true` in a function type (5), function values joined through `any` (8, v), F-bounded classes (6), refinement overloads (6), two interfaces' methods (3), `spawn` forms (7), inference from an expected type (3), a generic function as a value (4), library (12), cyclic defaults (4), a parametric class as a value (2), others one each | left, listed there |
 | syntax-other | 68 | sorted in [the forms still on the list](#the-forms-still-on-the-list-a-map) (S1-S11): `TimSyntax.versetest`'s grammar (35: specifiers after an expression, `:` and `where` as expressions, keywords as names, `try`/`catch`, `&x`, units), a type written as an argument (6), constructor delegation outside a constructor (4), roundtrip and function-type syntax (11), VerseVM's (4), one each (8) | left: no prose for the `TimSyntax` grammar; a type written as an argument with the metatypes |
@@ -102,6 +105,7 @@ With [tuple and array concatenation](#after-tuple-and-array-concatenation) on `c
 | unnamed-parameters | 7 | parser forms (`TimSyntax`, `Roundtrip`) | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 | module-objects | 5 | module constants of `<unique>` classes, made once before `Main`: the module state of [weak-map.md](weak-map.md) | left (designed there), [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 | subtyping-to-any | 5 | conversions to a type with `any` inside | left, [classes](#classes-and-subtyping-the-map) |
+| module-evaluation | 4 | the Blueprint VM's twins (`bp_vm_only`, `GlobalVariables.versetest` 115, 119, 126, 134) of the Verse VM's module-evaluation link errors, which openverse now gives ([Modules](../LANGUAGE.md#modules)) | the owner's: the Verse VM where the VMs differ, [After Epic's VM results](#after-epics-vm-results) |
 | attributes | 4 | an attribute of the engine's (`@expose_to_web_data_sync_service_reads`, 2) and two parser forms | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 | comparable-classes | 4 | `<unique>` interfaces with no class below them, compared (`ComparableInterface.versetest`) | left: a class rule, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 | nested-tuple-parameters | 4 | parser forms (`TimSyntax`, `Roundtrip`) | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
@@ -533,7 +537,7 @@ expects:
 | qualifiers | 13 → 6 | `Tests/Bugs/SOL-3564-CallingSuperClassMethodFromOverriddenMethod.versetest:7`: `F<override>():void= (a:)F()` in `b := class(a)` | accepted | `(a:)F()` in an override where `(super:)` is meant (2003, 2004: the tests' warnings), `(super:)` of a method no class above has, or in a class block (3612); a qualified call through a class that inherits or overrides the method (3506) and a qualified `using` (3506, 3612) are refused now | none | no | messages |
 | float literal out of range | 12 → 0 | `Tests/Literals/Float.versetest:248`: `F():float=+2.0e+308` | accepted (infinity) | error 3554 | none | no: literals are "the nearest double" | a message |
 | redundant effects | 9 → 0 | `Tests/Effects.versetest:229`: `F()<transacts><reads>:void={}` | accepted | error 3565: an effect implied by another, on functions and on classes, interfaces and structs | none | no ([effect conformance](effect-conformance.md) refuses contradictory ones) | a message |
-| effects of initializers | 8 → 8 | `Tests/GlobalVariables.versetest:86`: `c0 := class<allocates>{block{var X:int = 0}}` and `C0:c0 = c0{}` | accepted | 3582: a module constant whose initializer writes; link error 9003 (4 `verse_vm_only`) | 4 `verse_vm_only` | in part (#511) | a message |
+| effects of initializers | 8 → 8 | `Tests/GlobalVariables.versetest:86`: `c0 := class<allocates>{block{var X:int = 0}}` and `C0:c0 = c0{}` | accepted | 3582: a module constant whose initializer writes, or that calls a function that is not `<converges>` (#724: UEFN 43.12 refuses any call of the program's function, method or constructor, and of `Min`, in a constant or a field default); link error 9003 (4 `verse_vm_only`) | 4 `verse_vm_only` | in part (#511, #724) | a message |
 | `<castable>` and parametric types | 7 → 0 | `Tests/Castable.versetest:54`: `class1(t:type) := class<castable> {}` | accepted | error 3678 | none | no | a message |
 | interface inheritance | 7 → 7 | `Tests/Interface.versetest:92`: `C := class(T, T) {}` | accepted | 3592: an interface inherited twice directly; 3523: `<override>` in an interface | none | no | a message |
 | comment lexing | 6 → 0 | `Tests/TimSyntax.versetest:45`: `#>` | accepted (a `#` comment) | a syntax error: `#>` with no `<#`, an unclosed `<#` after `<#>` | none | no | a message in the lexer |
@@ -1238,7 +1242,7 @@ same 110 and 56 were measured before the merge: 7,842, 1,710, 136, 95).
 |---|---|---|---|
 | `ToString` of a float: six digits after the point, the exact value rounded half to even, every integer digit, the sign kept, as the API and `FloatToString.versetest` (Verse Core's `VFloat.fixed6`, the C runtime's `%.6f`) | 7 different | 7: `Intrinsics/FloatToString.versetest` 15, 18, 19, 21, 22, 23, 24 | 0 (25 and 26 use the test runner's `FloatConstants`) |
 | the bitwise functions, written with Verse Core's operations on 64-bit ints (no Core, format or runtime change) | 159 refused | 103: `Math/Bitwise.versetest`'s 84 untagged cases within int64, its 13 `bp_vm_only` cases (the overflow error), and 6 `verse_vm_only` ones whose result is the same (a negative count's failure, a runtime error) | 56 `verse_vm_only` cases now differ (cause int-precision, 26 → 82): they assume unbounded ints, and their own operands overflow here (`9223372036854775807 + 1`, `Pow2_64`), the Blueprint VM's documented behaviour, as the 26 before them |
-| `Sleep(S)` rounds up; `Sleep(0.0)` completes at once | none translatable (the Book tests no `Sleep`; ch. 14's examples are not run by the harness) | | |
+| `Sleep(S)` rounds up; `Sleep(0.0)` completes at once (yields again since Epic's VMs were measured, UEFN 43.12) | none translatable (the Book tests no `Sleep`; ch. 14's examples are not run by the harness) | | |
 
 `scripts/book-conformance.sh compare` reports the 56 as worse (a refusal
 became a different result); each is a `verse_vm_only` case of unbounded
@@ -1421,7 +1425,7 @@ Each of these is a rule openverse lacks; they come first.
 | | E5. a function with no heap specifier is `no_rollback`: a `<transacts>` function or a class's `block` cannot call it (3512) | 3: `Effects.versetest` 490, 551, 552 (and T16) | ch. 13 line 302: "The `<transacts>` is the default for functions"; line 122: `no_rollback`, "To be deprecated; Transactions disallowed"; the tests `Effects.versetest:489-495` | unannotated means `<transacts>` | a rule over every call, and a harness question: the runner's `assert{F0(…)}` (`Any.versetest:9`) calls unannotated functions in what must be a failure context, where `no_rollback` is refused | left: the Book disagrees with itself, an owner decision |
 | | E6. a `for`'s filter must be able to fail (3513) | 1: `FlowControl/for.versetest:223` | ch. 7 line 657: "Each filter must be failable"; line 836: "Filters must be failable" | accepted | one check in `elabFor` | do |
 | | E7. a module constant constructing a `<transacts>` class (3512) | 1: `ParametricTypes.versetest:465` | as I1 | accepted | as I1 | do with I1 |
-| initializer-effects (8) | I1. a module constant's initializer has no side effect (3582): no `<writes>`, which a call of an unannotated function has | 4: `Features/DefaultValueAssignment.versetest` 200, 215, 225; `Modules/ModuleDefinitions.versetest:279` | the tests: "all non-local variables initializers (module, instance) can't have side effects" (`DefaultValueAssignment.versetest:199`), "calling methods (which may have side-effects) produces an error" (`ModuleDefinitions.versetest:278`); prose silent (ch. 16 line 617 lets a module make `<allocates>` objects "as long as their construction does not actually allocate mutable memory") | a constant's effects are inferred, any allowed | one check where they are inferred | do |
+| initializer-effects (8) | I1. a module constant's initializer has no side effect (3582): no `<writes>`, which a call of an unannotated function has | 4: `Features/DefaultValueAssignment.versetest` 200, 215, 225; `Modules/ModuleDefinitions.versetest:279` | the tests: "all non-local variables initializers (module, instance) can't have side effects" (`DefaultValueAssignment.versetest:199`), "calling methods (which may have side-effects) produces an error" (`ModuleDefinitions.versetest:278`); prose silent (ch. 16 line 617 lets a module make `<allocates>` objects "as long as their construction does not actually allocate mutable memory") | a constant's effects are inferred, any allowed | one check where they are inferred; then (#724) UEFN 43.12's reading of 3582, a call of a function that is not `<converges>` refused in a constant or a field default, as each is elaborated ([the rule](../LANGUAGE.md#data-members-call-only-converging-functions)) | done |
 | | I2. a module constant whose construction allocates mutable memory (link error 9003) | 4, all `verse_vm_only`: `GlobalVariables.versetest` 86, 90, 97, 105 | ch. 16 line 617 | accepted (openverse refuses a constant that holds a mutable object, not one whose construction makes one it drops) | a link-time check of what construction runs | left (VerseVM's link time) |
 | interface-rules (7) | R1. an interface named twice among one definition's parents (3592) | 4: `Interface.versetest` 33, 40, 92; `InterfaceDiamond.versetest:74` | the tests: "It's ok to inherit the same interface more than once, but not directly" (`Interface.versetest:31`); prose silent | accepted | one check in `classHierarchy` | do |
 | | R2. `<override>` in an interface (3523) | 3: `Interface.versetest` 194, 199; `InterfaceDiamond.versetest:89` | the tests: "Interfaces can not override anything" (`Interface.versetest:193`, also `InterfaceWithFields.versetest:312`); prose silent | accepted | one row of `EffectPolicy.checkPlaces` | do |
@@ -2418,7 +2422,7 @@ chapter at the pinned revision, `docs/NN_*.md` and line; a test is
 | T4. a function type converted: an `int` result to `void`, a `void` parameter to `int` | 2: `Void.versetest` 92, 104 | the tests; adapters between shapes | left |
 | T5. function values joined through `any` and called (v) | 8: `SOL-6945…` 53, 61; `FunctionTypes.versetest` 220, 227; `Void.versetest` 140-152 | VerseVM's; an `any` that keeps a callable value | left |
 | T6. F-bounded classes, `class1(t:type) := class(base(class1(t)))` | 6: `FORT-642876…` 23-46, `:decls` | the tests; Verse Core types a class by its own arguments (#63) | left (Core) |
-| T7. refinement types: overloads on disjoint refinements, a refinement given its base's value | 6: `WhereConstrainedFloats.versetest` 59, 114, `:decls`; `WhereConstrainedInts.versetest` 179, 203, `:decls` | the tests: `positive` and `negative` overloads are distinct by their ranges, a constant converts where its value lies in the range; openverse: overloads must take disjoint types, a cast for every conversion | left (a rule of refinements' disjointness) |
+| T7. refinement types: overloads on disjoint refinements, a refinement given its base's value | 6: `WhereConstrainedFloats.versetest` 59, 114, `:decls`; `WhereConstrainedInts.versetest` 179, 203, `:decls` | the tests: `positive` and `negative` overloads are distinct by their ranges, a constant converts where its value lies in the range; openverse: overloads must take disjoint types, a cast for every conversion | the overloads done since (#724: refinements of one base whose intervals have no number in common are disjoint, as UEFN 43.12 has them, `followup-refused/refinement-overloads`; 59, 179 and the two declarations agree); the constant's conversion left |
 | T8. two interfaces' methods of one name | 3: `InterfaceWithFields.versetest` 86, 238, 463 | ch. 10, "Methods with Same Name"; members keyed by qualifier | left (with M13) |
 | T9. `spawn` forms (#156) | 7: `FORT-571286…` 26, 34, 42 (v); `SOL-4209…` 30, 39, 48 (v); `defer.versetest:1094` | ch. 14; the scheduler's work | left (other work) |
 | T10. inference from an expected type | 3: `MapMemoryLeak…:11`, `SOL-5452…:6`, `ArrayReplaceAll.versetest:12` | #214 | left |
@@ -2677,6 +2681,63 @@ pair retains a whole-tuple proof's custom conversion. The full default
 gate includes these fixtures and the model fuzzers. Core semantics,
 proofs, OVBC and the C runtime are unchanged.
 
+## After compound places
+
+`set P op= e` resolves its place before `e` runs: when `e` replaces, with
+a plain `set`, the container the last step writes into (or one above it),
+the update goes to the container `e` replaced, and the variable or field
+keeps what `e` left; `set X += …` in `e` appends in place and replaces
+nothing. Epic's VerseVM on UEFN 43.12 (++Fortnite+Release-43.12-CL-60598086,
+"Use Verse VM", 2026-11-18) gives these results for twelve probes,
+`tests/conformance/versevm/compound-*.verse`: `ArrayAppend.versetest:12`'s
+case (a row of length 1 holding 0, as the test expects) and the whole
+variable's control (`:7`), nested indices, maps, struct fields, the
+operators, an array in an object's field, an object variable, the element
+read from the replaced container, the update's value and `+=` in place.
+`:140` and `:183`, whose `e` writes into the container, are unchanged. A
+local variable's writes are guarded in the source (`Front/CompoundPlaces.lean`);
+past an object's field, a watch in a hidden field of the object sees a
+replacement through any reference, call or task (`PlaceWatch`,
+[the rule](../LANGUAGE.md#mutation-macros-tooling)).
+
+On top of main `617c89f1`, one case newly agrees (`ArrayAppend.versetest:12`,
+from a different result) and none is worse. The baseline records it.
+Three Lean/C execution fixtures (`set_op_place_replaced`,
+`set_op_place_replaced_failure`, `set_op_place_object`) cover nested
+indices, map entries, struct fields, objects reached through other names,
+calls and tasks, generic classes, interface fields, module-scoped entries,
+the four operators, the set's value, failure and rollback, single
+evaluation of keys, choices, loops and `break`; `set_op_order` and
+`set_op_order_paths` now expect the replaced container's reading for an
+object's field. Core semantics, proofs, OVBC and the C runtime are
+unchanged.
+
+## After ints beyond 64 bits
+
+`int` is the Verse VM's (#724): exact past the signed 64-bit range, up to
+2^20 bits (the Book's `MaxLengthBits`), as Epic's Verse VM on UEFN 43.12
+(++Fortnite+Release-43.12-CL-60598086, "Use Verse VM", 2026-11-18) prints
+for every integer probe of `tests/conformance/versevm`; `ToString` of an
+int beyond 64 bits is the overflow error, as it is there; a module
+constant whose literal arithmetic leaves 64 bits is refused when it
+compiles, as Epic's compiler refuses it (9003). Verse Core's `Res.ofInt`
+checks the length instead of the range; the C runtime keeps an int beyond
+64 bits on its heap (`runtime/src/bigint.c`) and `arith.c`, proved, is its
+fast path ([int](../LANGUAGE.md#int); DESIGN.md, "Ints beyond 64 bits").
+
+On top of main `b640fa6d`: 51 cases newly agree (the `verse_vm_only` cases
+of `Math/Bitwise.versetest`, the arithmetic operators, `Abs`, `Negate`, five
+`ToDiagnostic` operands, `WhereConstrainedInts.versetest` 219, 222, 224 and
+227: `int[X]` and `i64[X]` of ints past 64 bits); 36 are worse, the
+`bp_vm_only` cases that expect the Blueprint VM's
+`MathIntrinsicCallFailure` (now int-precision, different output); 39 are
+now refused, the `verse_vm_only` cases that use the module constant
+`Pow2_64` (`int-module-constants`; 38 were different output, and `:247`,
+which expects a runtime error from `BitShiftLeft[1, Pow2_64]`, agreed by
+the constant's own overflow), which would agree were module constants
+computed at run time, as the Book's tests expect and Epic's compiler does
+not do. The baseline records them.
+
 ## Ten causes to remove first
 
 Ranked by cases moved per unit of risk. A count is the upper bound above;
@@ -2756,6 +2817,240 @@ outputs) is dangerous but changes Core equality: it needs an owner
 decision first; [the readings audit](readings-audit.md) designs the
 readings the tests contradict that it did not change.
 
+## After the UEFN 43.12 probes
+
+Epic's shipped compiler, UEFN 43.12 (build
+`++Fortnite+Release-43.12-CL-60598086`), compiled the probes of
+[`tests/conformance/versevm`](../../tests/conformance/versevm) on
+2026-11-18 ([the results](versevm-live-conformance.md#epic-observations-uefn-4312-compiler)).
+openverse, whose target is the Verse VM, follows its front end where it
+rules (#515):
+
+- An event's `Signal` has the `no_rollback` effect: refused in a failure
+  context, a function with a heap specifier and a class's `block:` (3512).
+  7 cases go from agrees to disagrees-refuses: assertion bodies, translated
+  as `<decides>` functions, that signal (`Event.versetest:54`,
+  `FORT-1088027` 4, `FORT-1126351` 2). `--signal-rollback` keeps the
+  tests' reading.
+- A class below a `<concrete>` one gives its own fields defaults (3519):
+  `concrete.versetest:38, 76`, `SOL-3366:8, 15, 24`, `SOL-7781:28, 54`
+  agree (7).
+- An array of classes with two nearest common supertypes is an array of
+  `any` (3509): `SOL-5838:13, 22` agree (2).
+- `int[X]` of an int is a cast: `WhereConstrainedInts.versetest:220, 221`
+  agree; `:219` and `:222` now differ instead of being refused, by the
+  64-bit overflow.
+
+- Epic's default effect, `no_rollback` on a function without a heap
+  specifier, is the default since the follow-up probes settled `<decides>`
+  and `for` clauses ([the default effect](effect-conformance.md#the-default-effect-515)):
+  `Effects.versetest:490, 551, 552` and `FunctionTypes.versetest:191`
+  agree, and `Function.versetest:83`, once refused through a call of a
+  `<decides>` function type no function value implements, which cannot
+  fail no more; none is worse.
+
+## After Epic's VM results
+
+Epic's Verse VM and Blueprint VM ran the live probes on UEFN 43.12
+(`++Fortnite+Release-43.12-CL-60598086`, 2026-11-18, #724), and openverse
+follows the Verse VM where the two differ (the owner's decision). Four
+changes, one commit each on `fix/verse-vm-branch-sleep-query`:
+
+- `Sleep(0.0)` yields, a tick, as both VMs do ([the
+  rule](scheduler-conformance.md#sleep00-yields)); no case of the Book's
+  tests calls it, and ch. 14's tested examples are not run by the
+  harness: no verdict moves.
+- `X?` of a `logic` succeeds with the empty value, as both VMs and the
+  Book's tests have it ([the rule](book-forms-rules.md#the-value-of-true)):
+  `BoolQuery.versetest` 3 and 4, `LogicalAnd.versetest:29` and
+  `Precedence.versetest:121` move from different output to agree (the
+  empty-values-equal cause is gone).
+- A module constant whose computation allocates a `var` is refused before
+  the program runs, as the Verse VM's link does ([Modules](../LANGUAGE.md#modules)):
+  `GlobalVariables.versetest` 86, 90, 97 and 105 (`verse_vm_only`) move from
+  accepted to agree (the initializer-effects cause is gone); their
+  `bp_vm_only` twins, 115, 119, 126 and 134, move from agree to refused
+  (cause module-evaluation); `:143`, the control, still agrees.
+- A `branch` lives until its task ends, not its function ([the
+  rule](scheduler-conformance.md#a-branch-lives-as-long-as-its-task)): the
+  Book cases that show it (`AsyncContextCancellation.versetest`,
+  `NestedUpdateStateCorruption.versetest`, `SOL-4332-BranchRace.versetest`,
+  `branch.versetest`'s timed ones) use the test runner's `CoroUtils` and are
+  not translatable; no verdict moves. Their Verse VM expectations are
+  translated by hand into `tests/verse/branch_task_scopes.verse` and
+  `branch_task_scopes_events.verse`, which give them.
+
+Against the baseline of main `b640fa6d` (Epic's default effect the
+default): 8 cases better, 4 worse, none changed otherwise: 8,815 agree,
+606 refuse, 38 accept, 89 differ. The baseline records it.
+
+## After Epic's verdicts on the accepted refusals
+
+UEFN 43.12 (`++Fortnite+Release-43.12-CL-60598086`) compiled the probes of
+[`followup-book2/`](../../tests/conformance/versevm/followup-book2) on
+2026-11-19 and refused every probe of an accepted refusal, admitting every
+control, which then printed on the Verse VM what openverse prints
+([the results](versevm-live-conformance.md#the-books-accepted-refusals)).
+openverse takes Epic's compiler's refusals, one commit each (#724):
+
+- **`spawn` has the `no_rollback` effect** (3512, "This 'spawn' macro has
+  the 'no_rollback' effect, which is not allowed by its context"): refused
+  where a call of a function without a heap specifier is, a `<transacts>`
+  or other heap-specified function, a class's `block:`, a failure context;
+  admitted in a function without one and at the top of a plain
+  `<decides>` body. `--default-rollback` keeps the old rule, as it does for
+  an event's `Await`. `Effects.versetest` 557, 565 and
+  `SoftwareTransactionalMemory.versetest:505` (`bp_vm_only`) move from
+  accepted to agree; their Verse VM twins, `Effects.versetest` 572 and 580,
+  from agree to refused: the Book's Verse VM admits what Epic's shipped
+  compiler refuses.
+- **Names that differ only in case** (9200, "Found multiple functions that
+  map to the same target function"; 9002, 9000): two functions of one
+  module or of the top level, or two methods of one class, whose names are
+  equal but for case and that take the same parameters (types, a named
+  one's name) and are `<suspends>` alike, are refused. The 16 `bp_vm_only`
+  cases of `Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest` move
+  from accepted to agree; its valid cases (other parameters, `<suspends>`
+  beside a function that is not) still agree. The edges the evidence
+  leaves open are probes (`followup-book3/case-collision-*`).
+- **Long names** (3655, "Identifier is too long"; 9002, "Cannot find
+  class"): an identifier has at most 1024 characters, a class's name 1023.
+  `Bugs/FORT-555217-VeryLongIdentifier.versetest` 25 and 37 move to agree;
+  `:31`, a method whose mangled name is too long in a class of 976
+  characters, stays accepted: Epic's limit counts names of its toolchain
+  (the project's path among them) that a program does not fix, and
+  `followup-book3/long-ident-*` asks its edges.
+- **Enums of at most 256 values** (3552, "out of byte-range").
+  `Enum.versetest:171` (`bp_vm_only`) moves to agree; its Verse VM twin,
+  `:233`, from agree to refused: Epic's shipped compiler refuses what the
+  Book's Verse VM admits.
+- **An interface's abstract method is implemented below the interface**
+  (3591, "Non-abstract class inherits abstract function … but does not
+  provide an implementation"): a class that adds an interface no longer
+  takes a method of its name from a class that is not below it, `<final>`
+  or not, as `slotImpls` did, as Java does; a default of such an interface
+  still yields to the class chain's method (`followup-book3` asks Epic).
+  `Attributes/final.versetest:125` moves to agree. Six of openverse's tests
+  relied on the Java reading: four now implement the method in the class,
+  and two error tests give the interface a default, which keeps the
+  signature check they test.
+- **No packing beside a named parameter** (3509): several positional
+  arguments are not packed into the single tuple parameter of a function
+  that has a named one too; the arity message says why and cites 3509.
+  `Bugs/FORT-744399-DefaultTupleFieldsCrashComplier.versetest:62` moves to
+  agree. Four of openverse's tests (#501's packing) write the tuple out.
+- **Parametric mutable data** (3552, 3502), the rules built and stopped
+  before for their cost, are taken with an opt-out,
+  `--parametric-var-fields`: a generic function's type applies no class to
+  an implicit type parameter that the class's mutable data holds, its own
+  `var` field or one of a class in its fields (`followup-book3/
+  parametric-var-where-nested`), and a parametric interface has no `var`
+  field. `ParametricFunctions.versetest` 431, 438 and 496 move to agree,
+  none worse; the 32 run tests and 4 error tests of openverse's they refuse
+  take the flag.
+- **Type names that differ only in case**, and an interface's methods
+  (Epic's verdicts on `followup-book3`: 9002 "Found existing type 'CC'"
+  for two classes, 9200 for an interface's two methods): no two types of
+  one scope, classes, interfaces, structs or enums, have names equal but
+  for case (the kinds other than classes taken alike, asked in
+  `followup-book4`), and an interface's methods are measured as a class's.
+  No Book case moves.
+- **No array of several arguments beside a named parameter** (3509,
+  `followup-book3/array-named-pack`). No Book case moves; the call-packing
+  model gives its array shapes no named parameters.
+- **The measured name lengths** (3655; 9002 for a struct): Epic's
+  bisection on UEFN 43.12, for definitions without parameters, gives a
+  field, a local, a parameter and a constant at most 1004 characters, a
+  module function 990, a class and a struct 1023, and a method's name and
+  its class's together 987. No Book case moves: `FORT-555217:31`'s
+  `Function(Param:int)` in a class of 976 is 984, within 987, which its
+  parameter lowers in Epic's compiler and openverse does not model.
+
+Before: 8,829 agree, 645 refuse, 38 accept, 36 differ; after: 8,853, 648,
+11, 36 (27 better, 3 worse, as [Where things stand](#where-things-stand)
+lists). The edges were asked in
+[`followup-book3/`](../../tests/conformance/versevm/followup-book3), which
+UEFN 43.12 compiled on 2026-11-19: 13 as openverse had them, 9 not (two
+classes and an interface's methods of case-different names, an array
+beside a named parameter, mutable data through a class's field, the long
+names), which the rules above now follow, with Epic's bisection of the
+name lengths. Their own edges are
+[`followup-book4/`](../../tests/conformance/versevm/followup-book4)'s,
+which UEFN 43.12 compiled on 2026-11-19 (~19:55Z): 13 as openverse had
+them (the six type collisions refused, 9002); openverse now refuses mutable
+data through a struct's field (3552) and admits a parameter of 1005
+characters, as Epic does; a function and a method with a parameter at the
+measured limits, refused by Epic (3655), stay a known difference; and
+the generic parameter beside a named one, refused first for its form (`0
+where t:type` read as one expression), was rewritten and is refused
+(3509), which openverse follows: no several arguments pack into a
+generic parameter beside a named one. No Book case moves with these.
+
+## After function coercions
+
+UEFN 43.12 refuses, with error 3502 ("not yet implemented"), the
+conversions of function values its compiler would need a wrapper for and
+makes none for: a branch of an `if` of another function type, a generic
+function with a type parameter inside a function type of its own as a
+value, the call of a generic function whose result has one, and an
+override through a parametric interface's declaration
+([versevm-live-conformance.md](versevm-live-conformance.md#function-value-coercions-3502)).
+openverse refuses them too since #724 ([the
+rule](../LANGUAGE.md#function-values-epics-compiler-does-not-convert-724);
+`--function-coercions` keeps its conversions). Against the baseline of
+`af036ef5` (8,829 agree, 645 refuse, 38 accept, 36 differ, 3,956 not
+translatable): 10 cases better, 11 worse, none changed otherwise: **8,828
+agree, 656 refuse, 28 accept, 36 differ, 3,956 not translatable**. The
+baseline records it.
+
+- Better, accepted to agree (the `bp_vm_only` cases of the epic-limits
+  cause): `DefaultNamed.versetest` 629, 640, 741, 751; `Tuple.versetest:456`;
+  `Function.versetest` 238, 271; `ParametricFunctions.versetest:276`;
+  `FORT-592189-MaybeCoerceToTypeCrash.versetest:4`;
+  `SOL-5477-CrashInGenClassDefinition.versetest:5`.
+- Worse, agree to refused (cause function-coercions): their `verse_vm_only`
+  twins, the same programs, which UEFN 43.12 refuses:
+  `DefaultNamed.versetest` 653, 664, 678, 682, 764, 768;
+  `Function.versetest` 249, 281; `ParametricFunctions.versetest:288`;
+  `FORT-592189…:44`; `SOL-5477…:21` (`Tuple.versetest:473`, the twin of 456,
+  is not translatable).
+- Still agreeing, by the rule's exemptions: the joins that need no wrapper
+  (`FunctionTypes.versetest` 200, 201, classes; `DefaultNamed.versetest`
+  623, 731, 735, a default kept; the `verse_vm_only` `Rational.versetest`
+  131, 132, 139, 140, `int` and `rational`, not yet asked of Epic), and
+  `Identity` passed as a value (`ParametricFunctions.versetest` 182).
+- Refused by the rule first, the verdict unchanged:
+  `ParametricFunctions.versetest` 263 and 269 (expected 3509, still
+  agreeing: `MakeIdentity(0)` returns `type{_(:t)<computes>:t}` at `int`,
+  and openverse reports that call before the argument `"0"`'s type), and
+  `:546` (refused before for another cause: openverse infers `F(1)`'s `t` as
+  `int`, where the Book's flow types widen it to `comparable`, which needs
+  no wrapper). The cause function-coercions counts 12: the 11 twins and
+  `:546`.
+
+UEFN 43.12's answers to the boundary probes (`followup-coerce`, 31 of 37 as
+openverse had them) widened the rule to every function value that is no
+function named where its type is expected (a local, a parameter, a field, a
+call's result, an option's content), and to a parametric class's method
+returning a function of its type parameter. Against the baseline above it
+moves no case: 0 better, 0 worse, the same counts. A function named as an
+argument of a generic call is named at the parameter's type once the call
+gives it, as Epic's compiler does (`ParametricFunctions.versetest` 189 and
+208, `Apply(Incr, 1)`, still agree).
+
+Its answers to the second set (`followup-coerce2`, 14 of 17 as openverse
+had them) removed the rule's `int`/`rational` exemption and let a function
+named convert to a `void` result or from a `void` parameter. Against the
+baseline above: 6 better, `Void.versetest` 92 and 104 (a function named at
+`int->void`, `VoidInput` at `int->int`) and 161, 165, 169, 173 (joins of
+`true` and `void` functions, now named at the `if`'s type); 4 worse,
+`Rational.versetest` 131, 132, 139 and 140, `verse_vm_only` joins of an
+`int` and a `rational` result, the form UEFN 43.12 refuses
+(`join-int-rational`). `Void.versetest` 140-152, refused before, are now
+refused by the rule (cause function-coercions, 20 cases). **8,830 agree,
+654 refuse, 28 accept, 36 differ, 3,956 not translatable**; the baseline
+records it.
+
 ## Not covered, and why it matters
 
 - 1,264 cases need the runner's virtual packages and modules (`vpackage`,
@@ -2820,15 +3115,12 @@ Grouped by the causes of the tables above. Lines are given per file, with
 
 **Accepted: effect-checks** (6): `Effects.versetest` 490, 551, 552, 557(b), 565(b); `SoftwareTransactionalMemory.versetest` 505(b)
 
-**Accepted: initializer-effects** (4): `GlobalVariables.versetest` 86(v), 90(v), 97(v), 105(v)
 
 **Accepted: final-members** (1): `Attributes/final.versetest` 125
 
 **Different output: int-precision** (87): `Intrinsics/Abs.versetest` 17(v); `Intrinsics/ToDiagnostic.versetest` 36(v), 37(v), 38(v), 39(v), 40(v); `Math/Bitwise.versetest` 62(v), 63(v), 64(v), 65(v), 66(v), 67(v), 73(v), 76(v), 77(v), 78(v), 79(v), 80(v), 83(v), 84(v), 85(v), 86(v), 87(v), 90(v), 91(v), 92(v), 95(v), 96(v), 97(v), 98(v), 204(v), 205(v), 206(v), 207(v), 208(v), 209(v), 210(v), 215(v), 220(v), 221(v), 222(v), 223(v), 224(v), 229(v), 230(v), 231(v), 232(v), 233(v), 234(v), 235(v), 236(v), 237(v), 238(v), 243(v), 244(v), 245(v), 246(v), 248(v), 249(v), 254(v), 255(v), 256(v); `Operators/BinaryAddInt.versetest` 35(v), 36(v), 37(v), 38(v), 65(v), 66(v), 67(v), 68(v); `Operators/BinaryDivInt.versetest` 49(v), 50(v); `Operators/BinaryMulInt.versetest` 49(v), 50(v), 52(v), 53(v); `Operators/BinarySubInt.versetest` 39(v), 40(v), 41(v), 42(v), 44(v), 45(v), 47(v), 48(v); `Operators/Negate.versetest` 14(v); `WhereConstrainedInts.versetest` 224(v), 227(v)
 
-**Different output: empty-values-equal** (4): `Operators/BoolQuery.versetest` 3, 4; `Operators/LogicalAnd.versetest` 29; `Operators/Precedence.versetest` 121
 
-**Different output: compound-set-order** (1): `ArrayAppend.versetest` 12(v)
 
 ## Appendix B: totals per file
 

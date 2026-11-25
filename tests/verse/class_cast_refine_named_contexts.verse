@@ -3,9 +3,9 @@ pair(a:type,b:type):=class:
     B:b
 dup(t:type):=class(pair(t,t)){Index:int=0}
 reader:=class:
-    Pick(?Index:int=0):int=Index
-Pack(X:t,?Other:[]t=array{} where t:type):[]t=Other
-Choose(P:pair(a,b) where a:type,b:type)<decides>:b=
+    Pick(?Index:int=0)<transacts>:int=Index
+Pack(X:t,?Other:[]t=array{} where t:type)<transacts>:[]t=Other
+Choose(P:pair(a,b) where a:type,b:type)<transacts><decides>:b=
     R:=reader{}.Pick(?Index:=dup[P].Index)
     Values:=Pack(P.A,?Other:=array{dup[P].B})
     Values[0]

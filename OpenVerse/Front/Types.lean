@@ -206,6 +206,26 @@ structure ClassInfo where
   isFinal : Bool := false
   deriving Inhabited
 
+/-- (#704) A container inside an object's field that a compound `set`
+    resolves before its right side runs: the class or interface that
+    declares the field (`TyEnv.fieldSrc`), the field, and the steps from the
+    field's value to the container (`some g` a struct's field `g`, `some "?"`
+    an option's value, `none` an index or a key). Its watches are a hidden
+    `var` field of the declaring class, of type `ty` in that class's type
+    parameters: one entry per compound `set` running, the container's keys,
+    whether a write has replaced it, and the field's value just before that
+    write. -/
+structure PlaceWatch where
+  owner : String
+  field : String
+  steps : List (Option String)
+  ty : STy
+  deriving Inhabited, BEq
+
+/-- The hidden field that holds a watch's entries. -/
+def PlaceWatch.name (w : PlaceWatch) : String :=
+  s!"$watch.{w.field}" ++ String.join (w.steps.map fun | some g => s!".{g}" | none => "[]")
+
 /-- What an elaboration of the program asks for that only types tell, for
     the program to be elaborated again with it (`Compiled.needs`), and what
     earlier elaborations asked for (`Options.requests`): `elabProgram`
@@ -249,6 +269,11 @@ structure Requests where
   /-- Methods wanted as values at function types their own fit only by
       variance: an adapter for each, by key. -/
   methods : List FnValues.MethodRequest := []
+  /-- (#724) Function values converted to another closed function type by
+      class variance (`FnCoercion.byVariance`), each by its type and the
+      other: an adapter class for each pair, the `i`-th
+      `FnValues.adapterName i`, whose object holds the value. -/
+  fnAdapters : List (Ty × Ty) := []
   /-- Canonical checked upcast dictionaries discovered by elaboration. -/
   subtypes : List STop := []
   /-- Branches of casts that refine type arguments (#243): a function for
@@ -263,6 +288,9 @@ structure Requests where
       that are not a prefix of their own (#351): hidden fields for all of
       their type parameters. -/
   witnesses : List String := []
+  /-- (#704) The containers in objects' fields that compound `set`s resolve
+      before their right sides: a hidden field of watches for each. -/
+  watches : List PlaceWatch := []
   /-- The program awaits a task: its prelude is the await mode's, whose
       task's end resumes the awaiters inside it (`concPreludeAwaits`; the
       Book's API, `task`'s `Await`). Only types tell a task's `Await` from
@@ -385,6 +413,15 @@ structure TyEnv where
       class each one is of, with its tag and fields. A slot of class type
       starts as a reference to one. -/
   protos : List (String × Nat × List Value) := []
+  /-- (#724) The module constants that hold an object of their own, with
+      its address among `protos`, after the classes' prototypes
+      (`addConstantObjects`): `Instance:c = c{}` of a `<unique>` class
+      without fields is one object, the same at every use, as the program
+      starts with it. -/
+  constObjects : List (String × Nat) := []
+  /-- The structs and enums declared `<persistable>` (Book of Verse
+      ch. 17), as `TyEnv.persists` asks. -/
+  persistable : List String := []
   /-- The classes whose fixed type arguments Verse Core records as pins
       (#142): those at or below a class whose implementation of a method
       fixes type arguments that the method's declaring class leaves open. -/
@@ -394,9 +431,19 @@ structure TyEnv where
       of an interface below them that does), so a reference to it relates
       its type arguments to each class's through the class's view. -/
   viewed : List String := []
-  /-- (#515, `--signal-no-rollback`) Record the calls failure contexts make
-      (`ESt.failCalls`). -/
+  /-- (#515; off with `--signal-rollback`) Record the calls failure
+      contexts and bodies whose effects exclude `no_rollback` make
+      (`ESt.failCalls`, `ESt.bodyCalls`). -/
   signalNoRollback : Bool := false
+  /-- (#515, strict, `--default-no-rollback`) Generated helpers keep the
+      `no_rollback` context of the code they come from
+      (`Choice.SourceContext.rollbackOnly`, `bodyFailure`). -/
+  defaultNoRollback : Bool := false
+  /-- (#724, `--function-coercions`) Keep openverse's conversions of
+      function values that Epic's Verse compiler does not make (UEFN 43.12,
+      error 3502, "not yet implemented"; `FnCoercion`). Off by default:
+      they are refused. -/
+  functionCoercions : Bool := false
   /-- The variances of the classes in Verse Core, by tag and Verse Core type
       argument position (docs/research/variance.md): what the certificate
       gives (`Sigs.variances`), so that a conversion the front end makes by
@@ -1210,6 +1257,11 @@ partial def Ty.comparable (env : TyEnv) : Ty → Bool
   -- class, or a type argument)
   | .struct n ts =>
     if env.isRefClass n then env.isUnique n
+    -- (#724: a `<unique>` interface or class with no concrete class below
+    -- it, which has no value, is comparable as one with values is: the
+    -- Book of Verse's `ComparableInterface.versetest` 5 to 37, valid;
+    -- UEFN 43.12 admits followup-refused/unique-interface-equality)
+    else if env.classes.contains n && (env.concreteBelow n).isEmpty then env.isUnique n
     else !env.classes.contains n && ts.all (Ty.comparable env) &&
       (env.fields n ts).all fun (_, t, _) => t.comparable env
   | _ => true
@@ -1217,6 +1269,42 @@ partial def Ty.comparable (env : TyEnv) : Ty → Bool
 def isComparable (env : TyEnv) : Ty → Bool
   | .never => false
   | t => t.comparable env
+
+/-- `v < w` on numbers of one base. -/
+def numLt : Value → Value → Bool
+  | .int x, .int y => x < y
+  | .float x, .float y => VFloat.ofBits x < VFloat.ofBits y
+  | _, _ => false
+
+/-- A refinement's interval: its tightest lower and upper bounds, each with
+    whether it is strict (#143). -/
+def refineInterval (conds : List (String × Value)) : Option (Value × Bool) × Option (Value × Bool) :=
+  conds.foldl (fun (lo, hi) (op0, b0) =>
+    -- (an int's strict bound is the next one, not strict: `< 10` is `<= 9`)
+    let (op, b) : String × Value := match op0, b0 with
+      | "<", .int x => ("<=", .int (x - 1))
+      | ">", .int x => (">=", .int (x + 1))
+      | o, v => (o, v)
+    let strict := op == "<" || op == ">"
+    if op == ">" || op == ">=" then
+      let lo' := match lo with
+        | none => some (b, strict)
+        | some (l, ls) => if numLt l b || (l == b && strict && !ls) then some (b, strict) else some (l, ls)
+      (lo', hi)
+    else
+      let hi' := match hi with
+        | none => some (b, strict)
+        | some (h, hs) => if numLt b h || (h == b && strict && !hs) then some (b, strict) else some (h, hs)
+      (lo, hi')) (none, none)
+
+/-- Two refinements' intervals have no number in common: one ends before
+    the other starts, or where it starts when either bound is strict
+    (numerically: `-0.0` is `0.0`). -/
+def intervalsApart (a b : Option (Value × Bool) × Option (Value × Bool)) : Bool :=
+  let before (hi lo : Option (Value × Bool)) : Bool := match hi, lo with
+    | some (h, hs), some (l, ls) => numLt h l || (!numLt l h && (hs || ls))
+    | _, _ => false
+  before a.2 b.1 || before b.2 a.1
 
 /-- Disjoint overload domains (Book ch. 6 and `IndistinctOverloads.versetest`).
     Types that both have the empty value (`Ty.emptyValue?`: a logic, an
@@ -1242,6 +1330,14 @@ private def TyEnv.disjointStep (env : TyEnv) (apart : Ty → Ty → Bool) (a b :
   | .dyn, b | b, .dyn => match b with
     | .struct n _ => if env.classes.contains n then !env.isUnique n else !b.comparable env
     | _ => !b.comparable env
+  -- (#724) two refinements of one base whose intervals have no number in
+  -- common are disjoint: no value is of both, and a literal is of the one
+  -- whose conditions it meets (the Book of Verse's tests,
+  -- `WhereConstrainedInts.versetest:179`, `WhereConstrainedFloats.versetest:59`;
+  -- UEFN 43.12 admits and runs followup-refused/refinement-overloads)
+  | .refine n, .refine m => match env.refines.lookup n, env.refines.lookup m with
+    | some (bn, cn), some (bm, cm) => apart bn bm || intervalsApart (refineInterval cn) (refineInterval cm)
+    | _, _ => false
   -- (a refinement overlaps what its base does, #136)
   | .refine n, b => match env.refines.lookup n with
     | some (base, _) => apart base b
@@ -1342,7 +1438,14 @@ def TyEnv.paramsDistinct (env : TyEnv) (as bs : List Ty)
   let tupleInputApart (cmp : Ty → Ty → Bool) (xs ys : List Ty) := match ys with
     | [t] => match t with
       | .tup ts => apart cmp xs ts
-      | .arr t => xs.isEmpty || xs.any (cmp · t)
+      -- (#724: one argument is no tuple of the arguments, so it is an
+      -- array only when its own type is one: `F(:a)` beside `F(:[]a)`, the
+      -- Book of Verse's `Overloading.versetest:260`, valid, and beside it
+      -- `F(:a, :a)` and `F(:[]a)`, 3532; UEFN 43.12 admits and runs
+      -- followup-refused/overloads-struct-and-array)
+      | .arr t => xs.isEmpty || xs.any (cmp · t) || match xs with
+        | [x] => cmp x (.arr t)
+        | _ => false
       | .param .. | .dyn => cmp (.tup xs) t
       | .void | .any => false
       | _ => true
@@ -1473,6 +1576,23 @@ def TyEnv.makeProtos (env : TyEnv) : List (String × Nat × List Value) :=
     ((env.fields d).mapM fun (f : String × Ty × Option SExpr) => protoValue env addrs f.2.1).map
       fun vs => (d, env.tagOf d, vs)
 
+/-- Whether a type persists (Book of Verse ch. 17): not `any`, `comparable`
+    (ch. 17, 178: "Abstract interface type"), a rational, a type parameter,
+    a function, an interface or a class (openverse has no persistable
+    classes), nor a struct or an enum that is not `<persistable>` (ch. 17:
+    "Enums without `<persistable>` specifier cannot be used"); a container
+    persists when its parts do. -/
+partial def TyEnv.persists (env : TyEnv) : Ty → Bool
+  | .any | .dyn | .rational | .param .. => false
+  | .arr t | .opt t => env.persists t
+  | .tup ts => ts.all env.persists
+  | .map k v => env.persists k && env.persists v
+  -- (Book of Verse ch. 17: "`weak_map` - Weak references are not persistable")
+  | .weakMap .. => false
+  | .struct n args => !env.classes.contains n && env.persistable.contains n && args.all env.persists
+  | .enum n => env.persistable.contains n
+  | _ => true
+
 /-- The type parameters a type mentions, with whether each is comparable. -/
 partial def Ty.paramsC : Ty → List (String × Bool)
   | .param n c => [(n, c)]
@@ -1552,7 +1672,11 @@ def Ty.mergeParamBounds (xs : List (String × Bool)) : List (String × Bool) :=
     function type to one whose shape is above its own at the same
     arguments (#503). -/
 def TyEnv.convertsAt (env : TyEnv) (a b : Ty) : Bool :=
-  a == b || (a == .int && b == .rational) || match a, b with
+  -- (and any value to `void`, which accepts any value: a function named
+  -- where a `type{_(:int):void}` is expected discards its result, as
+  -- Epic's compiler admits, UEFN 43.12, followup-coerce2/name-void-result,
+  -- and the Book of Verse's `Void.versetest` 91, 104 have it, #724)
+  a == b || b == .void || (a == .int && b == .rational) || match a, b with
     | .struct x [], .struct y [] => x != y && env.isSub x y
     -- (a map is a weak map of its key and value types, the same value,
     -- Book of Verse ch. 3)
@@ -1562,6 +1686,17 @@ def TyEnv.convertsAt (env : TyEnv) (a b : Ty) : Bool :=
       | some s, some t => s.within t && s.select t xs == ys
       | _, _ => false
     | _, _ => false
+
+/-- A function's result of type `r` is one of a function type's result `u`:
+    `TyEnv.convertsAt`, and any result where an `any` is expected, which
+    every value is: `Succ(X:int):int` named where a `type{_(:int):any}` is
+    expected, the Book of Verse's `Any.versetest:152` and SOL-3799's
+    `Apply(F(:t):any, X:t)`; UEFN 43.12 admits and runs
+    followup-refused/named-fn-any-result (#724). A result only: Epic's
+    answer on an `any` parameter named at another type is not recorded
+    (followup-variance/any-param). -/
+def TyEnv.resultConvertsAt (env : TyEnv) (r u : Ty) : Bool :=
+  env.convertsAt r u || u == .any
 
 /-- A value of function type `own` (a shape's interface at its arguments)
     fits function type `t` by variance (#231): a shape above its own (the
@@ -1576,7 +1711,7 @@ def fnTyFits (env : TyEnv) (own t : Ty) : Bool :=
       let ots := os.select ts ots
       os.within ts && ots.length == tts.length &&
         ((tts.take ts.arity).zip (ots.take ts.arity)).all (fun (q, p) => subAt q p) &&
-        subAt ((ots.drop ts.arity).headD .void) ((tts.drop ts.arity).headD .void)
+        env.resultConvertsAt ((ots.drop ts.arity).headD .void) ((tts.drop ts.arity).headD .void)
     | _, _ => false
   | _, _ => false
 
@@ -1691,37 +1826,10 @@ def TyEnv.nominalSubtype (env : TyEnv) (derived base : Ty) : Bool :=
         env.upArgs source args target == targets
     | _, _ => false
 
-/-- `v < w` on numbers of one base. -/
-def numLt : Value → Value → Bool
-  | .int x, .int y => x < y
-  | .float x, .float y => VFloat.ofBits x < VFloat.ofBits y
-  | _, _ => false
-
 def numNeg : Value → Value
   | .int x => .int (-x)
   | .float x => .float (VFloat.canon (-(VFloat.ofBits x)))
   | v => v
-
-/-- A refinement's interval: its tightest lower and upper bounds, each with
-    whether it is strict (#143). -/
-def refineInterval (conds : List (String × Value)) : Option (Value × Bool) × Option (Value × Bool) :=
-  conds.foldl (fun (lo, hi) (op0, b0) =>
-    -- (an int's strict bound is the next one, not strict: `< 10` is `<= 9`)
-    let (op, b) : String × Value := match op0, b0 with
-      | "<", .int x => ("<=", .int (x - 1))
-      | ">", .int x => (">=", .int (x + 1))
-      | o, v => (o, v)
-    let strict := op == "<" || op == ">"
-    if op == ">" || op == ">=" then
-      let lo' := match lo with
-        | none => some (b, strict)
-        | some (l, ls) => if numLt l b || (l == b && strict && !ls) then some (b, strict) else some (l, ls)
-      (lo', hi)
-    else
-      let hi' := match hi with
-        | none => some (b, strict)
-        | some (h, hs) => if numLt b h || (h == b && strict && !hs) then some (b, strict) else some (h, hs)
-      (lo, hi')) (none, none)
 
 /-- Interval `a` lies within `b`. -/
 def intervalWithin (a b : Option (Value × Bool) × Option (Value × Bool)) : Bool :=

@@ -55,8 +55,18 @@ def model(seed, control):
             provided['Empty'] = f'array{{{element}}}' if i == 2 else f'Make(array{{}},{tag})'
         if control or i != 0:
             provided['Value'] = f'Log({first+10})' if i == 1 else f'Get[{n+(i==2)}]'
-        items = list(provided.items())
-        rng.shuffle(items)
+        # (#724) The fields given run in the order written, at the places the
+        # given fields have in declaration order (Epic's Verse VM:
+        # differential/cls-construction-order); an omitted default runs at
+        # its own place. The program with defaults writes its fields in a
+        # random order; the control, which gives every field, writes them
+        # in the order that program evaluates them, so both print the same.
+        declared = ['Before', 'Empty', 'Value']
+        written = ['Before'] + (['Empty'] if i == 2 else []) + (['Value'] if i != 0 else [])
+        places = [key for key in declared if key in written]
+        rng.shuffle(written)
+        order = [written[places.index(key)] if key in places else key for key in declared]
+        items = [(key, provided[key]) for key in (order if control else written)]
         fields = ','.join(f'{key}:={value}' for key, value in items)
         source += (f'    if(0<=0,C{i}:={ty}{{{fields}}})then '
                    f'Print("value {{C{i}.Before}} {{C{i}.Empty.Length}} {{C{i}.Value}}") '
@@ -64,10 +74,11 @@ def model(seed, control):
         value = first + 10 if i == 1 else n + (i == 2) + 3
         succeeds = i == 1 or n + (i == 2) >= 0
         if succeeds:
-            want.append(f'arg {first+i}')
-            if i != 2:
-                want.append(f'default {tag}')
-            want.append(f'arg {first+10}' if i == 1 else f'try {n+(i==2)}')
+            printed = {'Before': [f'arg {first+i}'],
+                       'Empty': [f'default {tag}'] if i != 2 else [],
+                       'Value': [f'arg {first+10}' if i == 1 else f'try {n+(i==2)}']}
+            for key in order:
+                want.extend(printed[key])
             want.append(f'value {first+i} {int(i==2)} {value}')
         else:
             # The complete failed construction, including earlier argument
@@ -116,11 +127,27 @@ with tempfile.TemporaryDirectory(prefix='openverse-initializer-') as directory:
         text = fixture.read_text()
         want, status = fixture.with_suffix('.expected').read_text().rsplit('exit=', 1)
         require(status.strip() == '0', fixture.stem+' oracle')
+        # (one whose `.args` selects --extended-defaults calls a function of
+        # the program's in a default, with several values: refused without
+        # the option, as a data member's definition calls none, UEFN 43.12
+        # error 3582, #724)
+        args = fixture.with_suffix('.args')
+        divergent = args.exists() and '--extended-defaults' in args.read_text().split()
+        # (#724: one whose `.args` selects --parametric-var-fields keeps
+        # openverse's parametric var fields, which Epic's compiler refuses)
+        extra = [a for a in args.read_text().split() if a == '--parametric-var-fields'] if args.exists() else []
         for profile in [[], ['--no-choice']]:
             if profile and fixture.stem.endswith(('choice_literal', 'choice_function')):
                 continue
-            strict = runtime(text, profile, want, fixture.stem)
-            extended = runtime(text, ['--extended-defaults', *profile], want, fixture.stem+' extension')
+            if divergent:
+                source.write_text(text)
+                result = invoke([OV, 'check', source, *extra, *profile])
+                require(result.returncode == 4 and 'which might not complete' in result.stderr,
+                        fixture.stem+' divergent', (result.returncode, result.stderr))
+                runtime(text, ['--extended-defaults', *extra, *profile], want, fixture.stem+' extension')
+                continue
+            strict = runtime(text, [*extra, *profile], want, fixture.stem)
+            extended = runtime(text, ['--extended-defaults', *extra, *profile], want, fixture.stem+' extension')
             require(strict == extended, fixture.stem+' mode bytecode')
 
     # An unused imported default has the same admission boundary and retains
@@ -129,7 +156,7 @@ with tempfile.TemporaryDirectory(prefix='openverse-initializer-') as directory:
     dependency.write_text('Helper()<computes>:int=42\nc:=class{N:int=Helper()}\n')
     source.write_text('using{"Dependency.verse"}\nMain():void={}\n')
     result = invoke([OV, 'check', source])
-    require(result.returncode == 4 and 'requires convergence' in result.stderr and
+    require(result.returncode == 4 and 'calls Helper, which might not complete' in result.stderr and
             'Dependency.verse' in result.stderr, 'unused import', result.stderr)
 
     for seed in range(FIRST, FIRST+COUNT):
@@ -137,21 +164,24 @@ with tempfile.TemporaryDirectory(prefix='openverse-initializer-') as directory:
         control, control_want = model(seed, True)
         require(want == control_want, f'model {seed} oracle identity')
         for profile in [[], ['--no-choice']]:
-            # Value's default can fail, which the Book refuses (ch. 13 and its
-            # tests, Effects.versetest:537) before convergence is asked.
+            # Empty's default, before Value's, calls a function of the
+            # program's: a data member's definition may not (UEFN 43.12,
+            # error 3582, #724), which is checked as each default is
+            # elaborated, before Value's can fail (the Book refuses that too,
+            # ch. 13 and its tests, Effects.versetest:537).
             source.write_text(text)
             result = invoke([OV, 'check', source, *profile])
             require(result.returncode == 4 and not result.stdout and
-                    "default of field 'Value'" in result.stderr and 'can fail' in result.stderr,
-                    f'model {seed} failing default', result.stderr)
+                    "default of field 'Empty'" in result.stderr and 'calls Make, which might not complete' in result.stderr,
+                    f'model {seed} divergent default', result.stderr)
             # With its failure caught in the default, the defaults' calls are
-            # past the convergence boundary.
+            # still refused.
             caught = re.sub(r'Value:int=Get\[(-?[0-9]+)\]', r'Value:int=if(V:=Get[\1])then V else 0', text)
             require(caught != text, f'model {seed} caught default')
             source.write_text(caught)
             result = invoke([OV, 'check', source, *profile])
             require(result.returncode == 4 and not result.stdout and
-                    'requires convergence' in result.stderr, f'model {seed} boundary', result.stderr)
+                    'which might not complete' in result.stderr, f'model {seed} boundary', result.stderr)
             runtime(text, ['--extended-defaults', *profile], want, f'model {seed} extension')
             runtime(control, profile, want, f'model {seed} explicit control')
 

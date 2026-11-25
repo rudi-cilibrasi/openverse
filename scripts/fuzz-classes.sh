@@ -19,11 +19,20 @@ for ((s=first; s<first+n; s++)); do
     bad=$((bad+1)); echo "GENERATOR FAILED seed $s"; continue
   fi
   rm -f "$tmp/p.vbc"
-  compat=()
+  # (#724: the generator writes parametric interfaces with var fields and generic
+  # functions over parametric classes whose var fields hold their parameters,
+  # openverse's extension, which Epic's compiler refuses, 3552 and 3502)
+  compat=(--parametric-var-fields)
   if head -1 "$tmp/p.verse" | grep -qx '# openverse: extended-defaults'; then
     compat+=(--extended-defaults)
   fi
-  timeout 60 "$ov" run "$tmp/p.verse" "${compat[@]}" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.err"
+  # (#724: the generator converts function values between effects, a
+  # <computes> one held by a local or a field to <reads> or <transacts>,
+  # which Epic's compiler refuses, error 3502: openverse's conversions,
+  # --function-coercions after the run's own arguments)
+  # (#515: Epic's default effect, written out: <transacts> where a function without one is called from a failure context or <transacts> code)
+  python3 -I "$root/scripts/models/default_effect.py" "$tmp/p.verse"
+  timeout 60 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" "${compat[@]}" --function-coercions > "$tmp/l.out" 2> "$tmp/l.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.err"
   # (the generator writes no Err(), so a user error is unreachable code run:
   # a lowering bug; other runtime errors are compared with C)
   if [[ $le -ne 0 && $le -ne 3 && $le -ne 2 ]] || grep -q "error: user" "$tmp/l.err"; then

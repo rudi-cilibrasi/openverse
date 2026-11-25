@@ -3,7 +3,7 @@
 # member, whose calls of the name each take the overload their arguments
 # fit, the other overload too (a function of its group through them), and
 # calls where the lifter takes a choice (a named argument, an if's branch).
-Tw(A:int, ?B:int = 1):int = A * 10 + B
+Tw(A:int, ?B:int = 1)<transacts>:int = A * 10 + B
 Down(N:int)<transacts>:int =
     if (N <= 0) then 0 else block:
         X := Down(N - 1) | N

@@ -30,9 +30,10 @@ Swap(A:counter, B:counter)<reads><writes>:void =
     set A.Count = B.Count
     set B.Count = T
 
-# a constant has the effects of its initialiser
+# a constant has the effects of its initialiser (its operators; a call
+# would be refused, UEFN 43.12 error 3582, #724)
 Origin:point = point{X := 0}
-Half:int = Twice(Origin.X + 5)
+Half:int = (Origin.X + 5) * 2
 
 Main():void =
     C := Make()

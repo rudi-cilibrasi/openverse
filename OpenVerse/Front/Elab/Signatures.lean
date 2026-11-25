@@ -2,6 +2,7 @@
    declarations retain OpenVerse.Front names. -/
 import OpenVerse.Front.Elab.Classes
 import OpenVerse.Front.BuiltinValues
+import OpenVerse.Front.InitializerConvergence
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -120,6 +121,8 @@ def declareSignatures (env : TyEnv) (tops : List STop) (requests : Requests) :
       checkExclusive p n effs
       sigs := sigs.push { idx, name := n, params := tys, ret := rt, decides := effs.contains "decides",
                           suspends := effs.contains "suspends",
+                          noRollback := effs.contains SignalAdmission.noRollbackMarker,
+                          sourceCall := effs.contains InitializerConvergence.sourceCallMarker,
                           -- (a `block:`'s effects are inferred below, from none, as a
                           -- constant's: blocks that construct each other's classes)
                           fx := if n.endsWith ".$block" || defaultBridge n || (n.splitOn "$default$").length > 1 then [] else allowedFx effs,
@@ -204,6 +207,8 @@ def declareSignatures (env : TyEnv) (tops : List STop) (requests : Requests) :
       gsigs := gsigs.push { idx := tops.length + gidx, name := n, params := tys, ret := rt, selfTps,
                             decides := effs.contains "decides", isConst := false,
                             suspends := effs.contains "suspends",
+                            noRollback := effs.contains SignalAdmission.noRollbackMarker,
+                            sourceCall := effs.contains InitializerConvergence.sourceCallMarker,
                             -- (a parametric class's `block:`: inferred from none, #41)
                             fx := if n.endsWith ".$block" || defaultBridge n then [] else allowedFx effs,
                             tparams, bounds := resolved.bounds, selfBounds,
@@ -451,6 +456,49 @@ def checkSignatures (env : TyEnv) (sigs : Signatures) (cdefs : List CDef) (field
   let primitiveString (name : String) := sigs.tops.any fun
     | .fn _ n _ _ specs .. => n == name && specs.contains BuiltinValues.toStringMarker
     | _ => false
+  -- (#724) no two functions of one module (or of the top level), nor two
+  -- methods of one class, have names that differ only in case and the same
+  -- parameters (types, named ones by name) and `<suspends>`: Epic's
+  -- toolchain maps them to one function. UEFN 43.12
+  -- (++Fortnite+Release-43.12-CL-60598086) refuses `Function():int` and
+  -- `FUNCTION():int` among a module's functions and a class's methods, error
+  -- 9200, "Found multiple functions that map to the same target function.
+  -- Please rename the function to be case insensitive unique", two
+  -- `<suspends>` methods with 9002 and 9200, and two of one parameter type
+  -- with 9000 ("Local variable `Value` not found internally in VM"), and
+  -- admits `Function(Value:int)` beside `FUNCTION()`
+  -- (followup-book2/case-collision-*). The Book's tests,
+  -- Bugs/FORT-793952-CaseInsensitiveNameCollisions.versetest, refuse them so
+  -- whatever the return types, effects (but `<suspends>`) and access
+  -- specifiers, and accept different parameter types, a `<suspends>` beside
+  -- one that is not, and names in different classes or modules (a method
+  -- and a subclass's method, followup-book3/case-collision-inherited). An
+  -- interface's methods are one scope as a class's are. A function's own
+  -- overloads share one spelling, and are checked above.
+  let caseKey (s : Sig) : Option (String × String) :=
+    if !s.sourceCall then none else
+    let base := (s.name.splitOn "$ov").headD s.name
+    if base.contains '$' || base.contains '(' then none else
+    let parts := qualParts base
+    let last := parts.getLastD base
+    let (cls, simple) := match last.splitOn "." with
+      | [c, m] => (some c, m)
+      | _ => (none, last)
+    -- (an interface's methods too: UEFN 43.12 refuses two of them so, 9200,
+    -- followup-book3/case-collision-interface)
+    some (qualJoin (parts.dropLast ++ cls.toList), simple)
+  let keyed := allSigs.filterMap fun s => (caseKey s).map (s, ·)
+  for (sa, (scopeA, a), i) in keyed.zipIdx.map (fun ((s, k), i) => (s, k, i)) do
+    for (sb, (scopeB, b)) in keyed.take i do
+      if scopeA == scopeB && a != b && a.toLower == b.toLower && sa.suspends == sb.suspends &&
+          sa.params == sb.params && sa.named.map (·.1) == sb.named.map (·.1) then
+        let posOf (n : String) : Pos := ((sigs.tops ++ sigs.generics).findSome? fun
+          | .fn q m .. => if m == n then some q else none
+          | _ => none).getD { line := 0, col := 0 }
+        let (pa, pb) := (posOf sa.name, posOf sb.name)
+        let later := if pa.line > pb.line || (pa.line == pb.line && pa.col >= pb.col) then pa else pb
+        let what := if scopeA.isEmpty then "the top level" else scopeA.replace "::" "."
+        throw s!"{later.show}: {b} and {a}, of {what}, have names that differ only in case and take the same parameters: Epic's toolchain maps the two to one function, its names being case-insensitive, so rename one (Epic's Verse compiler, UEFN 43.12: error 9200, \"Found multiple functions that map to the same target function. Please rename the function to be case insensitive unique\"; 9002 for <suspends> ones, 9000 when they have parameters)"
   -- overloads take parameters no call fits both of (Book of Verse ch. 6)
   let sigNamed (s : Sig) : List (String × Bool × Ty) :=
     let npos := s.params.length - s.named.length
@@ -601,6 +649,32 @@ def checkSignatures (env : TyEnv) (sigs : Signatures) (cdefs : List CDef) (field
         throw s!"{mp.show}: {mine} must {if b.suspends then "be" else "not be"} <suspends>, as {theirs}, which it overrides, is{if b.suspends then "" else " not"} (#156)"
       if let some k := fxOver a b then
         throw s!"{mp.show}: {mine} allows the effect <{k}>, which {theirs}, which it overrides, does not"
+      -- (#724) an override of a method of a parametric class or interface
+      -- whose type has one of that type's type parameters inside a
+      -- function type (`F(G(:t):void)` of `a(t)`), in a class that gives
+      -- it another type argument than one of its own, `any` or
+      -- `comparable` (`class(a(int))`): Epic's Verse compiler calls the
+      -- override through the declaration's type, its type parameters as
+      -- `any` (`type{_(:any->void)<transacts>:void}`), which needs a
+      -- wrapper that converts a function value, and refuses it (UEFN
+      -- 43.12, error 3502: followup-book2's `interface-fn-param-generic`;
+      -- the Book of Verse's `SOL-5477-CrashInGenClassDefinition.versetest:5`,
+      -- `bp_vm_only`). A parameter `X:t` it converts
+      -- (`interface-fn-param-generic-control`).
+      if !env.functionCoercions then
+        let c := clsOf mine
+        let e := clsOf theirs
+        let eps := ((env.sparams.lookup e).getD []).map (·.1)
+        let decl := { b with params := b.params.drop 1 }
+        let inFn := ((decl.params ++ [decl.ret]).flatMap FnCoercion.paramsInFn).filter eps.contains
+        let cps := ((env.sparams.lookup c).getD []).map fun (v, k) => Ty.param v k
+        let σ := eps.zip (env.upArgs c cps e)
+        let changed := FnCoercion.changedBy σ inFn
+        if let some v := changed.head? then
+          let (shb, tsb) := decl.valueShape
+          let (sha, tsa) := { a with params := a.params.drop 1 }.valueShape
+          let erased : Ty := (Ty.struct shb.name (tsb ++ [decl.ret])).subst (eps.map (·, Ty.any))
+          throw s!"{mp.show}: using a value of type {(Ty.struct sha.name (tsa ++ [a.ret])).show} as a value of type {erased.show} is not yet implemented: {mine.replace "::" "."} overrides {theirs.replace "::" "."}, whose type has {e}'s type parameter {v} inside a function type, here {((σ.lookup v).getD .any).show}, and a call through the declaration needs a wrapper that converts a function value, which Epic's compiler does not make {FnCoercion.cite}"
     | _, _ => pure ()
   -- the implementation a concrete class uses has the signature of every
   -- declaration of the method above it

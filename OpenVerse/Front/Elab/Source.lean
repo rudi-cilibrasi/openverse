@@ -5,7 +5,9 @@ import OpenVerse.Front.InitializerConvergence
 import OpenVerse.Front.Aliases
 import OpenVerse.Front.BuiltinValues
 import OpenVerse.Front.FinalSuper
+import OpenVerse.Front.CompoundPlaces
 import OpenVerse.Front.Bitwise
+import OpenVerse.Front.Random
 import OpenVerse.Front.Localization
 import OpenVerse.Front.TypeValues
 import OpenVerse.Front.TypeArguments
@@ -81,7 +83,8 @@ def concurrencyHelpers (resolved : List STop) (requests : Requests) :
     requests.methods.map (fun r => STop.fn r.pos "$methodRequest"
       ((r.receiver :: r.params).map fun t => { name := "$arg", ty := t }) r.tparams r.effs r.ret (.block r.pos r.args))
   let uses := PreludeNeeds.uses (resolved ++ requestTops) ++
-    requests.fns.flatMap (fun (_, t) => t.helperUses)
+    requests.fns.flatMap (fun (_, t) => t.helperUses) ++
+    requests.fnAdapters.flatMap (fun (a, b) => a.helperUses ++ b.helperUses)
   let privateNames := PreludeNeeds.privateNames owned uses
   let concurrencyNames := privateNames.map fun n => (n, "$" ++ n)
   let needs (n : String) := uses.contains ((concurrencyNames.lookup n).getD n)
@@ -92,6 +95,11 @@ def concurrencyHelpers (resolved : List STop) (requests : Requests) :
   if usesSub then
     if let some p := defines0 "cancelable" then
       throw s!"{p.show}: cancelable is the type subscribable_event's Subscribe gives: a program that uses subscribable_event cannot define its own (#210)"
+  -- (#724) a program that may call an event's `Subscribe` (it names a
+  -- member `Subscribe`, and uses the prelude's events): Epic's `event(t)`
+  -- has it (UEFN 43.12), so its events keep subscriptions
+  let subscribes := usesSub ||
+    (uses.contains PreludeNeeds.subscribeMark && (needs "event" || needs "sticky_event"))
   let usesConc := usesSub || uses.contains "$suspends" || PreludeNeeds.names.any needs
   -- (the program's own definitions of the prelude's names kept apart from
   -- the prelude's: its sticky_event extends its own event when the program
@@ -102,9 +110,14 @@ def concurrencyHelpers (resolved : List STop) (requests : Requests) :
   -- awaiters inside it, `concPreludeAwaits`; event mode too)
   let awaits := usesConc && requests.awaits
   let usesEvents := usesConc && (usesSub || needs "event" || needs "sticky_event" || awaits)
-  let conc ← if usesConc then concTops privateNames usesEvents awaits (needs "signalable") else pure []
+  -- (scopes, #724: a program with a `branch` or a `rush`, whose tasks are
+  -- stopped when the task that started them ends)
+  let scopes := uses.contains "$scopes"
+  let conc ← if usesConc then
+      concTops privateNames usesEvents awaits (needs "signalable") (subscribes := subscribes) (scopes := scopes)
+    else pure []
   let helpers := conc ++
-    (← if usesSub then subTops privateNames else pure []) ++ (← if usesSubVoid then subVoidTops privateNames else pure [])
+    (← if subscribes then subTops privateNames else pure []) ++ (← if usesSubVoid then subVoidTops privateNames else pure [])
   return (concurrencyNames, usesConc, usesEvents, awaits, helpers)
 
 /-- Source admission, the first phase of `elabProgramCore`: the program as
@@ -147,7 +160,9 @@ def concurrencyHelpers (resolved : List STop) (requests : Requests) :
        and constructions, parents and overrides used where they may be
        (`Access.checkUses`, with `Access.Env`, which the elaboration reads);
     7. the desugarings: module-scoped `var`s, checked and made the `var`
-       fields of the module state's object (`ModuleVars`), types given as
+       fields of the module state's object (`ModuleVars`), compound `set`s
+       whose right side may replace their place's container
+       (`CompoundPlaces`, #704), types given as
        arguments (`TypeArguments`), the calls of the final super class
        queries (`FinalSuper`), types as values (`TypeValues`), fields
        with accessors (`Accessors`), castable bounds
@@ -163,10 +178,17 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   -- 0. localized messages written out (`Localization`): `<localizes>`
   --    definitions as the strings of their default text, `Localize` and
   --    `Join` as calls of their helpers
+  -- (#724) a definition whose value is a definition, `X:int = Y:int = 4`,
+  -- written as the two it is (`SExpr.flattenChainedDecls`)
+  let written := written.map STop.flattenChainedDecls
+  let opts := { opts with entry := opts.entry.map (SExpr.mapAll id SExpr.flattenChainedDecls) }
   let (allTops0r, usesLocalization) ← Localization.desugar written
   -- 1. effects and specifiers, and the source profile
   EffectPolicy.check allTops0r opts.entry
   EffectPolicy.checkPlaces allTops0r
+  -- (#724) an admitted <converges> abstract method, as the elaboration
+  -- takes it
+  let allTops0r := allTops0r.map EffectPolicy.normalizeConverges
   SourceProfile.check opts.profile allTops0r opts.entry
   -- 2. the rules of the source as written, on the definitions as parsed
   --    (`SourceRules`)
@@ -174,6 +196,8 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   checkReservedNames allTops0r
   checkBuiltinTypeNames allTops0r
   checkDefinedOnce allTops0r
+  checkTypeCaseCollisions allTops0r
+  checkNameLengths allTops0r
   let scopePairs ← checkNoShadowing allTops0r
   checkReturns allTops0r
   checkJumps allTops0r
@@ -185,6 +209,9 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   checkProfiles allTops0r
   checkDefers allTops0r
   checkForClauses allTops0r
+  -- (#515, `--default-no-rollback`) the functions with Epic's default
+  -- effect, `no_rollback`, marked as written, before any is generated
+  let allTops0r := if opts.defaultNoRollback then allTops0r.map SignalAdmission.markDefault else allTops0r
   -- 3. the helpers the markers and the entry expression ask for: the
   --    rationals' (#116), ReplaceAll's, the bitwise
   --    functions'. They expand finite intrinsic operations
@@ -211,9 +238,15 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   -- (not `ToDiagnostic`'s: it calls a `diagnosable` object's own method,
   -- which may not converge)
   let helpers := helpers ++ (← if usesDiagnostic then Diagnostic.tops else pure [])
+  -- (#724; nor `GetRandomInt`'s, which is <transacts>: unless the program
+  -- defines the name itself, and then its own is the one it calls)
+  let definesRandom := allTops0r.any fun
+    | .fn _ n .. | .const _ n .. | .classDef _ n .. => n == "GetRandomInt"
+  let usesRandom := (marked randomMarker || (opts.entry.map mentionsRandom).getD false) && !definesRandom
+  let helpers := helpers ++ (← if usesRandom then randomTops else pure [])
   let ignoredArms := ignoredArmsOf allTops0r
   let unmarked := allTops0r.filter fun
-    | .const _ n _ _ _ => ![ratMarker, replaceAllMarker, ignoredArmsMarker, bitwiseMarker, diagnosticMarker].contains n
+    | .const _ n _ _ _ => ![ratMarker, replaceAllMarker, ignoredArmsMarker, bitwiseMarker, diagnosticMarker, randomMarker].contains n
     | _ => true
   -- 4. access levels written out (Book of Verse ch. 12), and the levels of
   --    the definitions and modules; modules (#112): every reference to a
@@ -245,6 +278,10 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   --    built-ins the program names as values: definitions of their own
   --    (after the aliases, whose names are no values' and bind nothing)
   let resolved ← ModuleVars.desugar resolved
+  -- (#704) a compound `set` whose right side may replace its place's
+  -- container, guarded so that its write goes where the place was
+  -- resolved (`CompoundPlaces`)
+  let resolved := CompoundPlaces.desugar resolved
   let resolved ← TypeArguments.desugar resolved
   let resolved ← FinalSuper.desugar resolved
   let resolved ← TypeValues.desugar resolved
@@ -258,6 +295,8 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   checkConstantOrder resolved
   let resolved := if opts.extendedDefaults then resolved
     else resolved.map InitializerConvergence.markSource
+  -- (#515) and the functions whose heap specifiers exclude `no_rollback`
+  let resolved := resolved.map SignalAdmission.markSource
   -- Primitive overloads keep their intrinsic convergence contract; the
   -- program's overloads above retain their ordinary source-call contract.
   let resolved := resolved ++ BuiltinValues.toStringOverloads resolved
@@ -267,6 +306,8 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   --    packets implement source expressions, and acquire no contract
   --    merely because their implementation uses a data type
   let (concurrencyNames, usesConc, usesEvents, awaitsTasks, prelude) ← concurrencyHelpers resolved opts.requests
+  -- (#515, `--default-no-rollback`) its callbacks' types have Epic's default
+  let prelude := if opts.defaultNoRollback then prelude.map SignalAdmission.markTypes else prelude
   let constructionFx := resolved.foldl (fun budgets top => match top with
     | .classDef _ n _ _ specs .. | .const _ n _ _ (.structDef _ _ specs _) =>
       budgets.insert n (EffectPolicy.constructionFx specs)
@@ -402,6 +443,9 @@ def inlineSource (requests : Requests) (admitted : Admitted) :
     | none => budgets) admitted.constructionFx
   for (_, ty) in requests.fns do
     EffectPolicy.checkTy { line := 0, col := 0 } ty.toSTy
+  for (a, b) in requests.fnAdapters do
+    EffectPolicy.checkTy { line := 0, col := 0 } a.toSTy
+    EffectPolicy.checkTy { line := 0, col := 0 } b.toSTy
   for request in requests.methods do
     EffectPolicy.checkSpecs request.pos request.key request.effs
     EffectPolicy.checkTParams request.tparams
@@ -416,7 +460,7 @@ def inlineSource (requests : Requests) (admitted : Admitted) :
   let allTops00 := (SubtypeEvidence.addFields
     (FnValues.desugar (resolved.take (resolved.length - admitted.rawEntry.length) ++ helpers)
       (resolved.drop (resolved.length - admitted.rawEntry.length)) (requests.fns.map fun (n, t) => (n, t.toSTy))
-      requests.methods written))
+      requests.methods written (requests.fnAdapters.map fun (a, b) => (a.toSTy, b.toSTy))))
   -- Templates cross the same effect, function-value and witness transforms as
   -- ordinary source. Keep their checking stubs single-valued as before.
   let templateName (n : String) : Bool := copiedOverloadNames.any fun k => n == "$copiedOverload:" ++ k

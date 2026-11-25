@@ -1,4 +1,4 @@
-# expect: requires convergence
+# expect: the default of field 'Before' of box calls Plain, which might not complete
 # Constructor lifting does not bypass the standard default contract.
 pair(a:type,b:type):=class{}
 dup(t:type):=class(pair(t,t)){C:int=4}

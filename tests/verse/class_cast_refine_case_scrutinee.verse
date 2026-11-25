@@ -9,7 +9,7 @@ cell:=class:
 Mark(H:cell)<transacts>:int=
     set H.N+=10
     10
-Keep(X:t,Y:t where t:type):t=Y
+Keep(X:t,Y:t where t:type)<transacts>:t=Y
 Direct(H:cell,P:pair(a,b) where a:type,b:type)<transacts><decides>:b=
     set H.N+=1
     X:b=case(Mark(H)+dup[P].C):

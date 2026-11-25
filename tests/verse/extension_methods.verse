@@ -43,7 +43,7 @@ point := struct:
 (P:point).Translate(DX:int, DY:int):point = point{X := P.X + DX, Y := P.Y + DY}
 
 dir := enum{North, South}
-(D:dir).Opposite():dir = if (D = dir.North) then dir.South else dir.North
+(D:dir).Opposite()<transacts>:dir = if (D = dir.North) then dir.South else dir.North
 
 named := interface:
     Label():string
@@ -64,7 +64,7 @@ without_q := class{}
     for (X : Xs, X = Y):
         set N += 1
     N
-(Xs:[]t where t:type).Zip(Ys:[]u where u:type):[]tuple(t, u) =
+(Xs:[]t where t:type).Zip(Ys:[]u where u:type)<transacts>:[]tuple(t, u) =
     for (I -> X : Xs, Y := Ys[I]) { (X, Y) }
 
 # recursion, and one extension method calling another

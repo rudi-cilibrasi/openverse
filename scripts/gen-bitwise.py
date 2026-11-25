@@ -4,11 +4,11 @@ Verse gives it, computed with Python's unbounded ints under the Book's rules
 (ch. 4 and its API reference): BitAnd, BitOr, BitXor and BitNot of two's
 complement bit patterns sign-extended without limit (Python's &, |, ^, ~);
 BitShiftLeft[X, N] = X * 2^N and BitShiftRight[X, N] = floor(X / 2^N)
-(Python's << and >>), both failing when N < 0; and openverse's 64-bit ints,
-where a result out of range is the overflow error, which ends the program.
-Every statement whose value would be out of range is left out but the last
-one, which, with a quarter of the seeds, is a call whose result is out of
-range: the program then ends with exit 2 and `error: overflow`.
+(Python's << and >>), both failing when N < 0; and ints unbounded, as the
+Verse VM's (#724), whose `ToString` is the overflow error beyond 64 bits.
+Every statement whose value would not fit in 64 bits is left out but the
+last one, which, with a quarter of the seeds, prints a call whose result
+does not: the program then ends with exit 2 and `error: overflow`.
 
 usage: gen-bitwise.py SEED OUT.verse OUT.expected
 (OUT.expected is the output, then `exit=N`, then stderr's lines)
@@ -129,11 +129,13 @@ for i in range(stmts):
 
 exit_code, err = 0, ""
 if end_error:
-    # a call whose result is out of range: the overflow error ends the program
+    # a call whose result does not fit in 64 bits: printing it is the
+    # overflow error, which ends the program (a count of 2^63 - 1 would
+    # double an int that many times)
     a = rng.choice(names)
     x = env[a]
     if x != 0:
-        n = rng.choice([63, 64, 65, 1000, HI])
+        n = rng.choice([63, 64, 65, 1000])
         if not fits(x << min(n, 65)):
             lines.append(f'    if (S := BitShiftLeft[{a}, {lit(n)}]) then Print("unreachable {{S}}")')
             lines.append('    Print("not reached")')

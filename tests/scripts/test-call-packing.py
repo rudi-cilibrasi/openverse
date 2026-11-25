@@ -7,6 +7,10 @@ import shlex
 import subprocess
 import sys
 import tempfile
+# (#515: Epic's default effect written out in every program this writes)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts/models'))
+import default_effect  # noqa: E402
+default_effect.install()
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -108,7 +112,6 @@ with tempfile.TemporaryDirectory(prefix='ov-call-packing-') as directory:
             ('P:t where t:type', 'X:int,Y:string'),
             ('P:tuple(int)', 'P:tuple(tuple(int))'),
             ('X:int', 'P:tuple(tuple(int))'),
-            ('X:int', 'P:[]int'),
             ('P:void', 'X:string,Y:string')):
         for params in ((left, right), (right, left)):
             program = f'F({params[0]}):int=1\nF({params[1]}):int=2\nMain():void={{}}\n'
@@ -121,6 +124,29 @@ with tempfile.TemporaryDirectory(prefix='ov-call-packing-') as directory:
                 saved = ROOT / 'fuzz-call-packing-overlap.verse'
                 saved.write_text(program)
                 raise SystemExit(f'packed overload overlap: bad refusal, saved {saved.name}: {result.stderr}')
+    # (#724) A scalar and an array of it are two admitted declarations, as
+    # Epic's compiler admits them (UEFN 43.12,
+    # followup-refused/overloads-struct-and-array): the call that fits both,
+    # a tuple of one element, is refused where it is made instead.
+    for params in (('X:int', 'P:[]int'), ('P:[]int', 'X:int')):
+        program = (f'F({params[0]}):int=1\nF({params[1]}):int=2\n'
+                   'One(X:tuple(u) where u:type)<computes>:tuple(u)=X\n'
+                   'Main():void=\n    P:type{_(:int)<computes>:tuple(int)}=One\n')
+        for call, status, wanted in (
+                ('    Print("{F(1)} {F(array{1})} {F((1,2))}")\n', 0, None),
+                ('    Print("{F(P(1))}")\n', 4, 'fits more than one overload')):
+            source.write_text(program + call)
+            bytecode.unlink(missing_ok=True)
+            result = subprocess.run(compiler + ['run', str(source), '--emit', str(bytecode)],
+                                    cwd=ROOT, capture_output=True, text=True, timeout=30)
+            valid = result.returncode == status and (
+                (wanted in result.stderr and not result.stdout and not bytecode.exists()) if wanted
+                else (not result.stderr and len(set(result.stdout.split())) == 2))
+            if not valid:
+                saved = ROOT / 'fuzz-call-packing-overlap.verse'
+                saved.write_text(program + call)
+                raise SystemExit(f'scalar/array overloads: saved {saved.name}: '
+                                 f'{result.returncode, result.stdout, result.stderr}')
     # Successful and invalid nesting must not repeatedly elaborate inner
     # singleton operands. Check real diagnostics as well as the time bound.
     for name, depth, leaf, diagnostic in (

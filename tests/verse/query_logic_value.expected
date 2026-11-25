@@ -1,0 +1,12 @@
+true? = false holds
+(true? and true?) = false holds
+true? or true is false
+false? or true is true
+not true?? holds
+Flag? succeeded with false
+false? failed
+Queried[true] gave false
+logic of Flag? is true
+option of Flag? holds false
+count 2
+exit=0

@@ -1,4 +1,4 @@
-Same(X:t,Y:t where t:subtype(comparable))<decides>:t=
+Same(X:t,Y:t where t:subtype(comparable))<transacts><decides>:t=
     X=Y
     X
 token:=class<unique>:
@@ -7,8 +7,8 @@ point:=struct:
     X:int
     Y:int
 Main():void=
-    F:type{_(:token,:token)<decides>:token}=Same
-    P:type{_(:point,:point)<decides>:point}=Same
+    F:type{_(:token,:token)<transacts><decides>:token}=Same
+    P:type{_(:point,:point)<transacts><decides>:point}=Same
     A:=token{N:=3}
     B:=token{N:=3}
     if(R:=F[A,A])then Print("same {R.N}")else Print("wrong")

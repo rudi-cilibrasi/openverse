@@ -1,0 +1,37 @@
+1: helper returning
+1: runner after helper
+1: branch tick
+1: runner ending
+1: branch cleanup
+1: main after wait
+2: arm one done
+2: branch cleanup
+2: arm two done
+2: after sync
+2: after wait
+3: winner done
+3: winner branch cleanup
+3: loser cleanup
+3: after race
+3: after wait
+4: function returned
+4: outer done
+4: outer cleanup
+4: inner cleanup
+4: after wait
+5: fast arm
+5: function returning
+5: returned
+5: slow arm done
+5: slow cleanup
+5: after wait
+6: winner done
+6: branch cleanup
+6: arm cleanup
+6: after race
+7: runner ending
+7: branch cleanup
+7: awaited 5
+8: main returning
+8: branch cleanup
+exit=0

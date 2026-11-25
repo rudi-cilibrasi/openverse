@@ -20,7 +20,7 @@ Between(X:small,Y:int,Z:int)<computes><decides>:small=(X<Y<Z;X)
 Equal(X:small,Y:small)<computes><decides>:small=(X=Y;X)
 FloatLess(X:float,Y:float)<computes><decides>:float=X<Y
 FloatLe(X:float,Y:float)<computes><decides>:float=X<=Y
-RatLess(X:rational,Y:rational)<computes><decides>:rational=X<Y
+RatDiffer(X:rational,Y:rational)<computes><decides>:rational=X<>Y
 Main():void=
     I:=Ints(7,2)
     Print("ints {I(0)} {I(1)} {I(2)} {I(3)} {I(4)} {I(5)} {I(6)}")
@@ -34,7 +34,7 @@ Main():void=
         R:=Rats(Half,2)
         Print("rats {Floor(R(0))} {Ceil(R(1))} {Floor(R(2))}")
         if(D:=RatDivide[Half,2])then Print("rat divide {Floor(D)} {Ceil(D)}")
-        if(V:=RatLess[Half,4])then Print("rat comparison {Floor(V)}")
+        if(V:=RatDiffer[Half,4])then Print("rat comparison {Floor(V)}")
     if(FloorN:=FloorFloat[7.5],Q:=Quo[7,2],M:=Modular[7,2],D:=RoundDiv[7,2])then Print("builtins {FloorN} {Q} {M} {D(0)} {D(1)}")
     S:small=5
     SmallFloat:fsmall=4.0

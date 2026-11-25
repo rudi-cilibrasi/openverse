@@ -1,10 +1,10 @@
+D
 A
 B
 C
-D
 T
 K
-direct 1 4 3 4 9 3 BDK
+direct 1 4 3 4 9 3 DBK
 A
 B
 C
@@ -12,8 +12,8 @@ D
 T
 K
 named 1 4 3 4 9 3 BDK
-lower 3 BDK
+lower 3 DBK
 lower named 3 BDK
-upper 3 BDK
+upper 3 DBK
 upper named 3 BDK
 exit=0

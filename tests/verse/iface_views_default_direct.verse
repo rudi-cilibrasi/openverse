@@ -1,3 +1,4 @@
+# (run with --parametric-var-fields, openverse's extension: Epic's compiler refuses a generic function over a parametric class whose mutable data holds an implicit type parameter, or a var field in a parametric interface, UEFN 43.12 errors 3552 and 3502, #724)
 # An interface's default method, declared in an interface referred to through
 # views (i0, which c4 gives []t0), called through one below it that is not
 # (i1): the receiver is converted to i0, narrowed to the classes whose view

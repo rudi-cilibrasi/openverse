@@ -543,7 +543,8 @@ static void eval_for_iter(vx_ctx *c, const vx_fn *fn, size_t base, const vx_node
  *
  * When `it` is a PRIM range node, `eval P n s it` is unfolded -- the fuel
  * check of eval, then `evalList P (n-1) s es`, then Prim.apply .range --
- * and two int arguments are iterated without building the array.
+ * and two INT arguments are iterated without building the array (a range
+ * with a BIG bound is built, as any other source).
  */
 static void eval_for(vx_ctx *c, const vx_fn *fn, size_t base, const vx_node *nd,
                      uint64_t n, vx_res *r)
@@ -570,7 +571,8 @@ static void eval_for(vx_ctx *c, const vx_fn *fn, size_t base, const vx_node *nd,
             eval_for_iter(c, fn, base, nd, n, &src, r);
             return;
         }
-        vx_prim_apply(c, it->op, it->a, &c->vs[sp0], it->b, r);   /* .err .type */
+        /* not two INTs: a BIG bound builds the array (bigint.c), others are .err .type */
+        vx_prim_apply(c, it->op, it->a, &c->vs[sp0], it->b, r);
         c->vsp = sp0;
         if (r->kind != VX_R_OK)
             return;

@@ -31,7 +31,7 @@ MakeBumped(N:string):counter =
     set X.Count = 42
     X
 
-Insert(T:?tree, K:int):tree =
+Insert(T:?tree, K:int)<transacts>:tree =
     if (N := T?):
         if (K < N.Key) then tree{Key := N.Key, Left := option{Insert(N.Left, K)}, Right := N.Right}
         else tree{Key := N.Key, Left := N.Left, Right := option{Insert(N.Right, K)}}

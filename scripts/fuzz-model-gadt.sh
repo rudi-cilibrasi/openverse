@@ -45,9 +45,14 @@ for ((s=first; s<first+n; s++)); do
     mv "$tmp/a.verse" "$tmp/p.verse"
   fi
   rm -f "$tmp/p.vbc"
-  # Only these lexical-field variants call ordinary Sum/Lazy default helpers.
-  compat=()
-  if [[ $g == gadt_contexts ]] && (( s % 9 == 1 && (s / 9) % 4 >= 2 )); then
+  # The lexical-field variants call Concatenate and Id, and their for/lazy
+  # ones the ordinary Sum/Lazy helpers, in a field's default, which a data
+  # member may not (#511; UEFN 43.12 error 3582, #724).
+  # (#724: the models write parametric interfaces with var fields and generic
+  # functions over parametric classes whose var fields hold their parameters,
+  # openverse's extension, which Epic's compiler refuses, 3552 and 3502)
+  compat=(--parametric-var-fields)
+  if [[ $g == gadt_contexts ]] && (( s % 9 == 1 )); then
     compat+=(--extended-defaults)
   fi
   # These two models are of openverse's own reading of a named parameter's
@@ -56,11 +61,32 @@ for ((s=first; s<first+n; s++)); do
   # (gadt_spawn_defaults, #468), and a default that waits (gadt_waiting_contexts,
   # #283).
   case $g in gadt_spawn_defaults|gadt_waiting_contexts) compat+=(--extended-defaults) ;; esac
+  # This model signals in a <decides> function's for body and checks that a
+  # failure rolls the signal back: the legacy transactional mode (#515; Epic's
+  # compiler, and openverse's default, refuse such a Signal).
+  # (its <decides> function signals, so it keeps Epic's default effect,
+  # no_rollback, which its call in a condition cannot have: the old rule
+  # too, --default-rollback)
+  case $g in gadt_event_body) compat+=(--signal-rollback --default-rollback) ;; esac
+  # These models bind functions and methods of generic receivers through
+  # generic functions (`Bind(…):type{_()<computes>:t}`), a conversion of
+  # function values whose calls Epic's compiler refuses (UEFN 43.12, error
+  # 3502, #724): openverse's conversions, --function-coercions.
+  case $g in gadt_function_*|gadt_method_*|gadt_context_methods|gadt_choice_values) compat+=(--function-coercions) ;; esac
+  # (#515: Epic's default effect, written out: <transacts> where a function without one is called from a failure context or <transacts> code;
+  # not for the models whose functions spawn, written for the default effect already: a spawn has no_rollback,
+  # which no <transacts> function may have, #724)
+  case $g in
+    gadt_spawn_callers|gadt_spawn_body|gadt_spawn_defaults) ;;
+    *) python3 -I "$root/scripts/models/default_effect.py" "$tmp/p.verse" ;;
+  esac
   timeout 120 "$ov" run "$tmp/p.verse" "${compat[@]}" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.err"
   want=$(head -1 "$tmp/p.exp" | sed 's/exit=//')
   if [[ $want == 4 ]]; then
     msg=$(sed -n 2p "$tmp/p.exp")
-    if [[ $le == 4 ]] && grep -qF "$msg" "$tmp/l.err" && ! grep -q "internal" "$tmp/l.err"; then ref=$((ref+1)); continue; fi
+    # (the model's message has the types it wrote; the program has them with
+    # <transacts> written out, #515)
+    if [[ $le == 4 ]] && sed 's/<transacts>//g' "$tmp/l.err" | grep -qF "$msg" && ! grep -q "internal" "$tmp/l.err"; then ref=$((ref+1)); continue; fi
     bad=$((bad+1)); save; echo "EXPECTED REFUSAL $g seed $s (exit $le, saved fuzz-model-$tag-$g-$s.verse): $(head -c 200 "$tmp/l.err")"; continue
   fi
   if [[ $le != "$want" ]]; then

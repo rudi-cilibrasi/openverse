@@ -52,13 +52,13 @@ Verdicts:
 | `ToString` of a float | the shortest round-trip decimal | `02_primitives.md:858`: `# Both produce: "Age: 25, Score: 98.5"`; the API (line 4555, `ToString(Val:float)`): "Fixed point with exactly six digits after the decimal point, always" | `Intrinsics/FloatToString.versetest` 15-24: `"1.000000"`, `"1234567890123456.000000"`, 1e100 in full | **contradicts** the API and the tests (the ch. 2 example dissents, owner list); needs the C runtime and Core's formatter: designed here, **changed** in `feat/core-book-primitives` ([below](#tostring-of-a-float)) |
 | `NaN < X` | fails; `NaN = NaN` succeeds | `01_expressions.md:124-126`: `not (Nan < 1.0)`, `Nan = Nan  # But equality succeeds`; `02_primitives.md:378-379` | `Operators/CompareFloat.versetest:57, 58` | **agrees**; the row's "not stated" corrected |
 | `=` between different types, `false` as a map, `X?` of a logic, `true` as a type | #600's | ch. 2 and ch. 4, as the rows quote | as the rows quote | #600's (equality and the empty value), not changed here; `false` as a map is on the owner's page already |
-| Ordering of rationals | exact; an int compares with a rational | `04_operators.md:318-321` and the API declare `<` … for `int` and `float` only | none order rationals (`CompareRational.versetest` 5, 11 test `=`) | **Book silent** (the Book declares no ordering of rationals; no test refuses one): keep |
+| Ordering of rationals | exact; an int compares with a rational | `04_operators.md:318-321` and the API declare `<` … for `int` and `float` only | none order rationals (`CompareRational.versetest` 5, 11 test `=`) | **Book silent** (the Book declares no ordering of rationals; no test refuses one): kept then; Epic's compiler refuses it (UEFN 43.12, 3509, `differential/rat-ordering`), so openverse now refuses it too (#724) |
 | Order of a choice's values | spatial | no choice `\|` in the chapters; `07_control.md:711-716`: nested generators give the cartesian product, leftmost outermost | `Operators/BinaryOps.versetest:3`: `a\|b` is a syntax error (3101, the code of syntax not yet supported) | **Book silent**: choice is an openverse feature from the Verse Calculus; keep |
 | Code before a choice | runs once; alternatives rolled back in `if`/`first{}`; in a `for` only an alternative's own clauses | `08_failure.md:147`: "changes … are provisional—they only become permanent if the entire context succeeds"; `07_control.md:196-198` | none with a choice; for a `for` without one see [what a `for` undoes](#what-a-for-undoes) | **Book silent** on choice; the `for` part follows the rollback reading below: a choice is one more choice point of the `for`'s search, so in a `for` too an alternative none of whose values reaches the body is undone (implemented for flat prepared clauses, including inlined and computed producers. Composed or exclusive choices and retained producer boundaries still use the older lowering.) |
 | A choice in an operand of `and` or `or` | `A`'s clauses then `B`'s; `if (T := A) then T else B` | `08_failure.md:216-218`: `or` "tries each option in order, stopping at the first success" | none with a choice | **Book silent** |
 | The three rows on functions with several values (#283) | as the rows say | silent (`yield` is not supported, `Yield.versetest:4-7`) | none | **Book silent** |
 | Precedence of `\|` | below `+`, above comparisons | the precedence table (`04_operators.md:44-55`) has no `\|` | `BinaryOps.versetest:3` refuses `a\|b`; the commented-out `TimSyntax.versetest:280` puts `\|` below `:=` | **Book silent** |
-| `Sleep(0.0)` | always yields, resumes next tick | `14_concurrency.md:1210`: "One frame, the smallest possible delay"; `:1227-1228`: "may resume in the same tick if no other work is pending"; the API (line 3939): "0.0 resumes on the next update and, crucially, does yield" | the tested example `14_concurrency.md:385-406` (`<!--versetest-->`): `Sleep(0.0)` "Completes at once, and wins" a `race` before a later arm begins | **the Book disagrees with itself**; the tested example contradicts openverse; openverse follows the tested examples: **changed** in `feat/core-book-primitives`, `Sleep(0.0)` completes at once ([the rules](scheduler-conformance.md#sleep00-completes-at-once)) |
+| `Sleep(0.0)` | always yields, resumes next tick | `14_concurrency.md:1210`: "One frame, the smallest possible delay"; `:1227-1228`: "may resume in the same tick if no other work is pending"; the API (line 3939): "0.0 resumes on the next update and, crucially, does yield" | the tested example `14_concurrency.md:385-406` (`<!--versetest-->`): `Sleep(0.0)` "Completes at once, and wins" a `race` before a later arm begins | **the Book disagrees with itself**; the tested example contradicts openverse; openverse follows the tested examples: **changed** in `feat/core-book-primitives`, `Sleep(0.0)` completes at once; **changed back** after Epic's Verse VM and Blueprint VM both yielded on UEFN 43.12 (`++Fortnite+Release-43.12-CL-60598086`) (probe `vm-sleep-zero-yields`): it yields, a tick ([the rule](scheduler-conformance.md#sleep00-yields)) |
 | `Sleep(S)` rounding | `Round(30·S)`, at least one tick | no tick rate; the API (line 3939): "a sleep resumes on the first update at or after its deadline and never sooner than the next one. Short sleeps therefore round up" | none | **contradicts** the API (it rounds up, openverse to nearest): **changed** in `feat/core-book-primitives` (the scheduler is Verse in the front end's prelude: [the rules](scheduler-conformance.md#the-books-scheduler-rules)) |
 | End of a program with tasks | ends with `Main`; `Main` waiting on nothing is exit 2 | no entry point; `14_concurrency.md:829-832` leaves a task suspended at the end | none | **Book silent** |
 | Order of a `subscribable_event`'s functions | subscription order; awaiters woken first, run after `Signal` returns | `14_concurrency.md:1606` (unreleased): listed in subscription order; the API (line 4341): "invoked in a randomised order on every signal"; line 4346: awaiting tasks "resumed first, in the order they suspended", line 4510: "Signal returns before the resumed tasks have finished" | `Event.versetest:27` (four `Signal`s in a loop all received: the awaiter runs inside `Signal`); `Bugs/BPVMOnly/RaceCompletionTiming.versetest` 65, 95 | **contradicts** (awaiters run inside `Signal`, before the code after it); runtime: **designed, not changed** |
@@ -81,7 +81,7 @@ The readings outside the table that the survey names:
 | Rollback of a `for` iteration | a source's or a range bound's effects kept when later clauses fail | `08_failure.md:92`: "The `for` expression creates a failure context for each iteration of the domain clause"; `:147` (provisional changes) | `FlowControl/for.versetest` 344, 362, 371, 392; `Range.versetest` 140, 159; `SoftwareTransactionalMemory.versetest` 88 (74 and 81 moved with the range bound) | **contradicts**, deeply load-bearing: **changed** for the `for`s of the Book's forms and of choices of values; designed for the rest ([below](#what-a-for-undoes)) |
 | Commas and semicolons in blocks | `,` separates a block's statements like `;` | `01_expressions.md:1048`: "Commas within parentheses create *tuples*"; `:1153-1156`: `option{1, 2}?` is `(1, 2)`; `:1119-1129`: in a block "semicolons and commas are interchangeable as separators between definitions" | `SemicolonsVsCommas.versetest` 70 (`Value :=` then `1, 2, 3` is `(1,2,3)`), 95 (`{3,X}`), 100 (`option{1,2}`); `Option.versetest:44`; `for.versetest:293`; 22 parser cases (`TimSyntax.versetest:224` `"1,2"`, …) | **contradicts**: **changed** ([below](#commas-in-blocks)) |
 | What the Book calls warnings | code after `return`/`break`, `_` after a closed enum's every value, `return 3` in a `:void` function: accepted silently | `09_structs_enums.md:297-318`, `:411` ("⚠ Warning - unreachable wildcard"), `07_control.md:423-435` ("you'll get a warning") | `assert_semantic_error(2000)` (`Reachability.versetest` 5, 11, 23 "Treat unreachable expressions after break as warning not error"), 2302 (`Enum.versetest:356`), 2002 (`Return.versetest:179`, "produces a warning"): the runner counts a warning as a diagnostic | **contradicts** (a diagnostic the Book gives and openverse did not): **changed**, with the warning channel ([below](#warnings)) |
-| `break` in a `for` body | refused ("only inside loop (not for)") | `07_control.md:764`: "The `break` statement cannot exit `for` loops early" | `SOL-4199-BreakFromIf.versetest:38-48`: "`break` in a `for` body is allowed and breaks the surrounding `loop`" | **the Book disagrees with itself** (owner list); not changed |
+| `break` in a `for` body | refused ("only inside loop (not for)") | `07_control.md:764`: "The `break` statement cannot exit `for` loops early" | `SOL-4199-BreakFromIf.versetest:38-48`: "`break` in a `for` body is allowed and breaks the surrounding `loop`" | **the Book disagrees with itself**; since #724 the tests' reading, which UEFN 43.12 takes (`followup-refused/break-in-for-in-loop`): allowed in a `for` inside a `loop` |
 
 ## The changes
 
@@ -466,8 +466,10 @@ marked with `<decides>` create a failure context for their entire body").
   `for`'s body is where the Book disagrees with itself ([For the
   owner](#break-in-a-for-body)): the tests allow it (`:38-48`), the prose
   refuses it; the failure-context rule does not refuse it (a `for`'s body is
-  no failure context), and openverse keeps its own refusal ("break is only
-  allowed inside loop (not for)").
+  no failure context), and openverse kept its own refusal ("break is only
+  allowed inside loop (not for)") until #724; it now takes the tests'
+  reading, as Epic's compiler does: the `break` leaves the `loop` around
+  the `for`.
 - Not this rule: 3534, a `return` as a strict subexpression of the value a
   function returns, explicitly or implicitly (`Return.versetest:110-133`,
   `F(X:int):int=X+(return 0)`): openverse accepts those still (with a
@@ -631,8 +633,10 @@ nor the C runtime's: it is Verse in the front end's prelude
 (`Front/ConcurrencyPrelude.lean`), lowered with every suspends function into
 ordinary Verse Core (DESIGN, "Concurrency"), so Core, its proofs and the C
 runtime are unchanged by all three. `Sleep(S)` rounds up and `Sleep(0.0)`
-completes at once, unconditionally, as eight tested examples have it, not
-only in a `race`'s first pass ([the rules](scheduler-conformance.md#the-books-scheduler-rules));
+completed at once, unconditionally, as eight tested examples have it, not
+only in a `race`'s first pass ([the rules](scheduler-conformance.md#the-books-scheduler-rules)),
+until Epic's VMs were measured: both yield, and so does openverse again
+([`Sleep(0.0)` yields](scheduler-conformance.md#sleep00-yields));
 the later arms of a `race` resolved in its first pass already never began.
 An awaiter running inside `Signal` is not built: [the
 obstacle](scheduler-conformance.md#awaiters-run-inside-signal-not-built).
@@ -781,7 +785,8 @@ page](https://github.com/rudi-cilibrasi/openverse/wiki/Where-the-Book-disagrees-
 - **Prose:** `14_concurrency.md:1210`: "`Sleep(0.0)      # One frame, the smallest possible delay`"; `:1227-1228`: "Unlike `Sleep(0.0)` which yields control and may resume in the same tick if no other work is pending"; the API (line 3939): "0.0 resumes on the next update and, crucially, does yield".
 - **Tested example** (`14_concurrency.md:385-406`, a `<!--versetest-->` block): in a `race`, an arm `Sleep(0.0); 2` "Completes at once, and wins", and a later arm never begins.
 - **More tested examples:** ch. 14's `<!-- 03 -->`, `05`, `06`, `07`, `09`, `10` and `11` check a task's effects right after its `spawn`, every `Sleep(0.0)` on its path having completed without suspending, in `sync` arms and plain code too ([the scheduler note](scheduler-conformance.md#sleep00-completes-at-once)).
-- **openverse now:** the tested examples': `Sleep(0.0)` completes at once, without suspending (`feat/core-book-primitives`); until then it always yielded, to the next tick (#156).
+- **Epic's VMs** (UEFN 43.12 (`++Fortnite+Release-43.12-CL-60598086`), probe `vm-sleep-zero-yields`): both the Verse VM and the Blueprint VM yield, `main after spawn` before `worker after sleep`.
+- **openverse now:** Epic's and the API's: `Sleep(0.0)` yields and resumes on the next tick; from `feat/core-book-primitives` (#608) until this change, the tested examples': it completed at once; before #608 it yielded, as now (#156).
 
 ### How many awaiters one `Signal` wakes
 
@@ -793,13 +798,15 @@ page](https://github.com/rudi-cilibrasi/openverse/wiki/Where-the-Book-disagrees-
 
 - **API** (agent_group, line 1070): "subscribable_event_intrnl.Signal has the no_rollback effect, which a `<transacts>` function cannot call"; line 1067: event delivery "is not un-run if the surrounding transaction later rolls back".
 - **Tests:** `Event.versetest` 83 and 117 call `Signal` inside `<decides>` functions and expect success.
-- **openverse today:** allowed and rolled back by default, as the tests (with the awaiters it resumed inside it, since awaiters run inside `Signal`); `--signal-no-rollback` gives the API's.
+- **Epic's compiler** (UEFN 43.12, build ++Fortnite+Release-43.12-CL-60598086, 2026-11-18): refused with error 3512 in a failure context and in a `<transacts>` function (`docs/research/versevm-live-conformance.md`).
+- **openverse today:** refused, as Epic's compiler and the API have it (#515); `--signal-rollback` keeps the tests' reading, allowed and rolled back (with the awaiters it resumed inside it, since awaiters run inside `Signal`).
 
 ### `break` in a `for` body
 
 - **Prose** (`07_control.md:764`): "The `break` statement cannot exit `for` loops early."
 - **Tests:** `Bugs/SOL-4199-BreakFromIf.versetest:38-48`: "`break` in a `for` body is allowed and breaks the surrounding `loop`", which leaves the `for` too.
-- **openverse today:** refuses a `break` in a `for` body ("break is only allowed inside loop (not for)").
+- **Epic's compiler** (UEFN 43.12, build ++Fortnite+Release-43.12-CL-60598086, Verse VM, 2026-11-20): admits it and leaves the loop (`followup-refused/break-in-for-in-loop` prints `count 1`).
+- **openverse today:** the tests' and Epic's (#724): a `break` in the body of a `for` inside a `loop` leaves that loop; a `for` in no `loop` has nothing to leave, and its `break` is refused ("break is only allowed inside loop (not for: …)").
 
 ### `break` as part of an expression
 
@@ -811,8 +818,22 @@ page](https://github.com/rudi-cilibrasi/openverse/wiki/Where-the-Book-disagrees-
 
 - **Prose** (`01_expressions.md:753`): `set Total += 1  # Equivalent to: set Total = Total + 1`, which, taken literally for a right side with an effect, reads `Total` first.
 - **Tests:** `ArrayAppend.versetest` 140 and 183 run `e` first and see what it wrote; `:12` (`verse_vm_only`) and its native twin `:23-27` ("TODO (SOL-9022): This doesn't produce the same result as the non-native array. Either it should or we should runtime error") show VerseVM writing through a reference taken before `e`.
-- **openverse now:** the tests' (`e`, then the old value read); `:12` still differs.
+- **openverse now:** the tests' (`e`, then the old value read), and VerseVM's reference behaviour of `:12` too (#704, [Mutation](../LANGUAGE.md#mutation-macros-tooling)): when `e` replaces the place's container with a plain `set`, through a variable or an object's field, the write goes to the container `e` replaced; `set X += …` in `e` appends in place. Epic's VerseVM on UEFN 43.12 gives these results for the probes `tests/conformance/versevm/compound-*.verse`.
 
 ### Integer range, by VM
 
 Already on the wiki page (entry 5).
+
+### `branch` lifetime, by VM
+
+- **Prose** (ch. 14, "The branch Expression"): "a branch task is automatically canceled when execution leaves the enclosing function scope"; its tested example 13 runs the function in a spawned task, which ends when the function returns, so it does not tell the readings apart.
+- **Tests:** `Bugs/BPVMOnly/AsyncContextCancellation.versetest` (Verse VM expectations, with Blueprint VM ones beside): a branch's parent is the current task (a spawn, a branch, each arm of a `sync`, `race` or `rush`), and it is cancelled when that task ends, "NOT by function/loop/block boundaries"; a `rush`'s arms that go on likewise (TEST 6: they outlive the function that ran the `rush`).
+- **Epic's VMs** (UEFN 43.12, `++Fortnite+Release-43.12-CL-60598086`, probes `vm-branch-outlives-return`, `vm-branch-await-after-return`): the Verse VM lets the branch outlive the function; the Blueprint VM cancels it at the return.
+- **openverse now:** the Verse VM's (#724; [the rule](scheduler-conformance.md#a-branch-lives-as-long-as-its-task)); until then the prose's.
+
+### A module constant that allocates a `var`, by VM
+
+- **Tests:** `GlobalVariables.versetest` 86, 90, 97, 105 (`verse_vm_only`): link error 9003 for a module constant whose class's `block:` declares a `var`, constructs an object with a `var` field, or calls a function that declares one on the path taken; their `bp_vm_only` twins (114-141): valid, "BPVM doesn't run blocks on global instances of classes"; `:143`, untagged: valid where the `var` is not reached.
+- **Prose** (ch. 16, `16_modules.md:617`): `<allocates>` objects at module scope "as long as their construction does not actually allocate mutable memory".
+- **Epic's VMs** (UEFN 43.12, `++Fortnite+Release-43.12-CL-60598086`, probes `book-global-block-*`): the Verse VM's session cook fails with "Script error 9003: Runtime error while evaluating module." for the four, and the control links; the Blueprint VM links all five.
+- **openverse now:** the Verse VM's (#724): refused before the program runs ([Modules](../LANGUAGE.md#modules)); the four `bp_vm_only` twins now differ.

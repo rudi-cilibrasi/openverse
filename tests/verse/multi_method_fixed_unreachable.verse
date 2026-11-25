@@ -5,7 +5,7 @@ wide(u:type) := class(root(int)):
         E:[]u = Concatenate()
         E.Length + 10 | E.Length + 20
 plain(u:type) := class(wide(u)) {}
-Get(P:root(t) where t:type):[]int = for (V:=P.Picks()) { V }
+Get(P:root(t) where t:type)<transacts>:[]int = for (V:=P.Picks()) { V }
 Main():void =
     for (V : Get(plain(string){})) { Print("{V}") }
     var Maybe:?root(string) = false

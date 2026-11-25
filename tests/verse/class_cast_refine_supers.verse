@@ -7,30 +7,30 @@ pair(t:type, u:type) := class:
 dup(t:type) := class(pair(t, t)):
     C:int = 0
 named := interface:
-    Tag(N:int):string = "named{N}"
-    Tag(P:pair(a, b) where a:type, b:type):void = {}
+    Tag(N:int)<transacts>:string = "named{N}"
+    Tag(P:pair(a, b) where a:type, b:type)<transacts>:void = {}
 base := class(named):
-    Name(N:int):string = "base{N}"
-    Twice(N:int):int = N * 2
-    Name(P:pair(a, b), X:a where a:type, b:type):b = P.B
-    Twice(P:pair(a, b) where a:type, b:type):void = {}
+    Name(N:int)<transacts>:string = "base{N}"
+    Twice(N:int)<transacts>:int = N * 2
+    Name(P:pair(a, b), X:a where a:type, b:type)<transacts>:b = P.B
+    Twice(P:pair(a, b) where a:type, b:type)<transacts>:void = {}
     Name(P:pair(a, b) where a:type, b:type)<transacts>:void = {}
 mid := class(base):
-    Name<override>(N:int):string = "mid{N}"
-    Twice<override>(N:int):int = N * 3
+    Name<override>(N:int)<transacts>:string = "mid{N}"
+    Twice<override>(N:int)<transacts>:int = N * 3
 top := class(mid):
-    Name<override>(N:int):string = "top{N}"
-    Tag<override>(N:int):string = "top-tag"
-    Name<override>(P:pair(a, b), X:a where a:type, b:type):b =
+    Name<override>(N:int)<transacts>:string = "top{N}"
+    Tag<override>(N:int)<transacts>:string = "top-tag"
+    Name<override>(P:pair(a, b), X:a where a:type, b:type)<transacts>:b =
         if (D := dup[P]):
             Print((super:)Name(D.C))
             X
         else:
             P.B
-    Twice<override>(P:pair(a, b) where a:type, b:type):void =
+    Twice<override>(P:pair(a, b) where a:type, b:type)<transacts>:void =
         if (D := dup[P]):
             Print("{(super:)Twice((super:)Twice(D.C))}")
-    Tag<override>(P:pair(a, b) where a:type, b:type):void =
+    Tag<override>(P:pair(a, b) where a:type, b:type)<transacts>:void =
         if (D := dup[P]):
             Print((super:)Tag(D.C + 1))
     Name<override>(P:pair(a, b) where a:type, b:type)<transacts>:void =

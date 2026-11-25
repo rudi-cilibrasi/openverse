@@ -1,4 +1,4 @@
-F(E:event(int),N:int)<transacts>:int=
+F(E:event(int),N:int):int=
     for(I:=1..N):
         if(I=2):return block{E.Signal(I);I|I+1}
     N|N+1

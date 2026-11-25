@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Construction fields, modeled in declaration order independently of lowering.
+"""Construction fields, modeled in evaluation order independently of lowering.
+
+A construction evaluates the fields it gives in the order written (#724, as
+Epic's Verse VM does: tests/conformance/versevm/differential/
+cls-construction-order, struct-archetype-order), each omitted default at its
+field's place in declaration order. The default model writes its two given
+fields as declared, X then Y, so its prefix and trailing defaults are where
+they were; the eager model's given fields are declared in a random order and
+always written J, K, V, which is the order their choices nest in.
 
 A prefix default commits when the next field opens a generator (the old rule
 for what a for undoes); by the Book of Verse's rule, which a for whose choices
@@ -17,6 +25,10 @@ import random
 import subprocess
 import sys
 import tempfile
+# (#515: Epic's default effect written out in every program this writes)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts/models'))
+import default_effect  # noqa: E402
+default_effect.install()
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -63,7 +75,7 @@ def program(seed):
     cty = f'pack({ty})' if generic else 'pack'
     context = r.choice(['explicit', 'binding', 'argument'])
     ctor = cty if context == 'explicit' else 'pack'
-    value = f'{ctor}{{Y := {yexpr}, X := {xexpr}}}'
+    value = f'{ctor}{{X := {xexpr}, Y := {yexpr}}}'
     if context == 'argument':
         value = f'Wrap({value})'
     binding = f'P:{cty} = {value}' if context == 'binding' else f'P := {value}'
@@ -174,7 +186,7 @@ Wrap(P:{cty}):{cty} = P
 
 
 def eager_program(seed):
-    """Enumerate pure recursive trees and field products in declaration order.
+    """Enumerate pure recursive trees and field products in the order written.
 
     This models the source values directly, without an array/generator
     lowering. Eager producers cannot allocate mutable objects or print.
@@ -257,11 +269,13 @@ Fail()<decides>:int =
             'failure': [n*10, n*10+1],
         }[kind]
         choices = {'V': [shown, shown], 'K': ks, 'J': [0, 1]}
-        # Non-choice defaults have one value at their declaration position.
-        products = itertools.product(*(choices.get(f, [None]) for f in order))
+        # (#724) The given fields' choices nest as written, J, K, V, whatever
+        # the declaration order; the defaults have one value each.
+        written = ['J', 'K', 'V']
+        products = itertools.product(*(choices[f] for f in written))
         result = []
         for product in products:
-            record = dict(zip(order, product))
+            record = dict(zip(written, product))
             result.append((record['K'], record['J']))
         for argument in [n, n+1]:
             result.extend(values(argument-step))
@@ -292,8 +306,11 @@ def projection_program(seed):
     x = r.choice(['7', '"s"', 'array{1,2}', 'option{7}', '(7,"s")'])
     y = r.choice(['2', '"key"', "(2,'k')"])
     n, depth, default = r.randint(2, 6), r.randint(1, 4), r.randint(10, 20)
-    fields = ['E:[]a=Concatenate()', 'O:?a=false', 'M:[b]a=map{}',
-              'T:tuple(?a,[]b)=(false,Concatenate())', 'W:leaf(a)=leaf{}',
+    # (empty arrays as literals: a data member calls no Concatenate, which
+    # is not <converges>, UEFN 43.12 error 3582, #724; N's default is the
+    # computed one)
+    fields = ['E:[]a=array{}', 'O:?a=false', 'M:[b]a=map{}',
+              'T:tuple(?a,[]b)=(false,array{})', 'W:leaf(a)=leaf{}',
               'V:a', 'K:b', f'N:int={default}+0']
     r.shuffle(fields)
     suffix = r.choice(['N', 'E.Length', 'M.Length', 'T(1).Length', 'W.E.Length'])
@@ -306,7 +323,7 @@ def projection_program(seed):
     failure = f'\n        if(V={stop})then Fail[] else 0' if fail else ''
     specs = '<decides>' if fail else ''
     source = f'''# struct projection model seed {seed}
-leaf(t:type) := struct<computes> {{ E:[]t=Concatenate() }}
+leaf(t:type) := struct<computes> {{ E:[]t=array{{}} }}
 pack(a:type,b:subtype(comparable)) := struct<computes>:
 ''' + ''.join('    ' + field + '\n' for field in fields) + f'''
 One(X:a,Y:b,N:int where a:type,b:subtype(comparable))<computes>:int = pack(a,b){{{scalar_fields}}}.{suffix}

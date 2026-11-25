@@ -2,7 +2,7 @@
 box := class:
     var A:[]int = array{}
 
-F(B:box):int =
+F(B:box)<transacts>:int =
     set B.A = array{4}
     set B.A = array{}
     0

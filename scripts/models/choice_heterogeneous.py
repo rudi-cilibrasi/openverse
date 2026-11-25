@@ -175,6 +175,9 @@ else:
                 h += bump
                 bumped = True
             if cancel and finish > 0.250001:
+                # (the arm cancelled: its child, Use's branch, is stopped
+                # before its code unwinds, Epic's Verse VM, #724)
+                lines.append(f'background {h}')
                 lines.append(f'body {h} {total}')
                 interrupted = True
                 raise Interrupted()
@@ -226,9 +229,15 @@ else:
         pass
     answer = -1 if interrupted else 10000 * len(values) + 100 * total + (sum(values) if packed else 0)
 lines.append(f'source {h} {total}')
-if mode == 'waiting':
+# (#724: Use's branch is a child of the task that runs Use, not stopped when
+# Use returns: in a race's arm, stopped when that arm ends, at once, or, when
+# the arm is cancelled, before its code unwinds, above; called from Main,
+# stopped when Main ends, after its last line)
+if mode == 'waiting' and cancel and not interrupted:
     lines.append(f'background {h}')
 lines.append(f'result {answer} state {h}')
+if mode == 'waiting' and not cancel:
+    lines.append(f'background {h}')
 a.expected.write_text('exit=0\n' + '\n'.join(lines) + '\n')
 print('cell:=class{var N:int=0}\nInts(N:int)<computes>:[]int=for(I:=1..N):I\nbox(t:type):=class{V:t;K:int=0}\nbase:=class{K:int}\nca:=class(base){}\ncb:=class(base){}\nSame(X:t,?Y:t=X where t:subtype(comparable))<computes>:int=if(X=Y)then 1 else 0\nPrefix(H:cell,X:t,Y:t,Tag:int where t:type)<transacts>:t=\n    Print("p {Tag}")\n    set H.N+=Tag\n    X|Y')
 if a.methods:

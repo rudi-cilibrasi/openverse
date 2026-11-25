@@ -13,7 +13,7 @@ dup(t:type) := class(pair(t, t)):
 cell := class:
     var N:int = 0
 # a filter past the generator that uses the cast
-Keep(P:pair(a, b) where a:type, b:type):[]a =
+Keep(P:pair(a, b) where a:type, b:type)<transacts>:[]a =
     for (D := dup[P], X : D.Items, D.C > 0) { X }
 # a binding past the generator, its name in the body; a range's bound; a set
 Sum(H:cell, Ps:[]pair(a, b) where a:type, b:type)<transacts>:[]b =
@@ -21,9 +21,9 @@ Sum(H:cell, Ps:[]pair(a, b) where a:type, b:type)<transacts>:[]b =
         Print("{I}")
         W
 # a choice past the generator, of the cast's, and one inside an expression
-Choose(P:pair(a, b) where a:type, b:type):[]int =
+Choose(P:pair(a, b) where a:type, b:type)<transacts>:[]int =
     for (D := dup[P], X : D.Items, Y := (D.C | D.C + 10)) { Y }
-Nested(P:pair(a, b) where a:type, b:type):[]int =
+Nested(P:pair(a, b) where a:type, b:type)<transacts>:[]int =
     for (D := dup[P], X : D.Items, Y := (D.C | 10) + 1) { Y }
 Main()<transacts>:void =
     H := cell{}

@@ -41,7 +41,7 @@ flowchart TD
         direction LR
         load["load.c: validating loader<br/>QuickProof law (WellScoped)"]
         store["store.c: frame + undo journal<br/>QuickProof law (rollback)"]
-        arith["arith.c: int64 operations<br/>QuickProof law + Lean seam (Seams.lean)"]
+        arith["arith.c: int64 operations, the fast path<br/>QuickProof law + Lean seam (Seams.lean)"]
         cint["interp.c: transcription of Interp.lean<br/>differential tests and fuzzing"]
         load ~~~ store ~~~ arith ~~~ cint
     end
@@ -75,7 +75,7 @@ flowchart TD
 | `Prog.check_ok` | `Core/Check.lean` | `Prog.check` establishes the hypotheses of `<decides>` soundness and scoping |
 | `Eval.no_control`, `Runs.no_control` | `Core/Control.lean` | a `break` never escapes its loop (no control errors) |
 | `Eval.no_writes`, `Prog.accepted_no_writes` | `Core/Writes.lean`, `Core/Guarantees.lean` | **heap effects**: a function without `<writes>` (`<computes>`, `<reads>`, `<allocates>`) leaves every existing object as it was |
-| **`Prog.accepted`** | `Core/Guarantees.lean` | **every program the front end accepts** has one outcome and one output; it never raises a slot, call, type or control error, so the only runtime errors left are integer overflow and `Err()`; `Main`'s value has its type; and it never fails unless `Main` is `<decides>` |
+| **`Prog.accepted`** | `Core/Guarantees.lean` | **every program the front end accepts** has one outcome and one output; it never raises a slot, call, type or control error, so the only runtime errors left are the overflow error (an int longer than 2^20 bits, an int beyond 64 bits given to `ToString`, a float too large for an int) and `Err()`; `Main`'s value has its type; and it never fails unless `Main` is `<decides>` |
 | `add_seam` … `modulo_seam`, `apply_*` | `Core/Seams.lean` | each int operation equals the C99 formula that the QuickProof law `arith_exact` asserts |
 
 **In Rocq, with QuickProof** (`proofs/quickproof/`; a separate evidence class,
@@ -83,7 +83,7 @@ flowchart TD
 
 | Law | C under test | Status |
 |---|---|---|
-| `arith_exact` | `runtime/src/arith.c` | **PROVED**: `qp verify` PASS, 10 axioms (standard + VST malloc). With `Seams.lean`, the nine int operations compute `Prim.apply` on every pair of 64-bit inputs |
+| `arith_exact` | `runtime/src/arith.c` | **PROVED**: `qp verify` PASS, 10 axioms (standard + VST malloc). With `Seams.lean`, the nine int operations compute `Prim.apply` on every pair of 64-bit inputs whose result fits in 64 bits, and report the others, which `bigint.c` (tested, not proved) computes |
 | `store_rollback_model` | `runtime/src/store.c` | **PROVED**: `qp verify` PASS, 12 axioms (standard + VST malloc). For any 32 operations on up to 3 nested contexts, 4 slots, and journal and output capacities up to 8, rollback restores the slots and the output, and commit keeps them, against a naive snapshot model |
 | `loader_wellscoped` | `runtime/src/load.c` | **PROVED**: `qp verify` PASS, 13 axioms (standard + VST malloc). For every buffer of up to 4 KiB, `vx_load` reads only inside it; when it accepts, the program is well formed and `Prog.WellScoped`, so its Verse Core semantics raises no slot or call error (`Eval.scoped_ok`) |
 
@@ -126,7 +126,9 @@ scripts/worktree.sh feat/x                  # a worktree ../openverse-x on branc
 OPENVERSE_DEBUG=1 .lake/build/bin/openverse check F.verse   # an internal error also prints the rejected Verse Core
 .lake/build/bin/openverse core F.verse                      # each function's Verse Core, one statement per line
 .lake/build/bin/openverse check F.verse --no-choice         # enforce the choice-free source profile
-.lake/build/bin/openverse check F.verse --signal-no-rollback  # refuse an event Signal in a failure context
+.lake/build/bin/openverse check F.verse --signal-rollback     # legacy: roll an event Signal back with its context
+.lake/build/bin/openverse check F.verse --default-rollback    # legacy: a function without a heap specifier is rolled back
+.lake/build/bin/openverse check F.verse --function-coercions  # keep function-value conversions Epic refuses (3502)
 ```
 
 `--no-choice` is an opt-in source profile for `check`, `core`, `emit`, and
@@ -138,11 +140,31 @@ run at runtime. Both modes use the same deterministic Core semantics.
 
 A `Signal` resumes the tasks awaiting it inside it, in the order they began
 to wait, each until it waits again, as the Book's API and tests have it
-(#513). `--signal-no-rollback` is an opt-in event policy: it refuses, before
-the program runs, an event's `Signal` that a failure context may call, as
-Epic's published `<no_rollback>` `Signal` would be (#515); by default, as the
-Book's tests, it is allowed and undone with a failing context. See
-[events](docs/LANGUAGE.md#concurrency).
+(#513). An event's `Signal` has the `no_rollback` effect, as in Epic's
+Verse compiler (UEFN 43.12, error 3512; #515): a program that may call it
+from a failure context, a `<transacts>` function (or another with a heap
+specifier) or a class's `block:` is refused before it runs.
+`--signal-rollback` keeps the legacy transactional mode, the Book's tests'
+reading, in which it is allowed and undone with a failing context. See
+[events](docs/LANGUAGE.md#concurrency). A function without a heap specifier
+has `no_rollback` too, Epic's default effect: a failure context or a
+`<transacts>` function cannot call it ([effect
+contracts](docs/LANGUAGE.md#effect-contracts)); `--default-rollback` keeps
+the old rule.
+
+A function value of one function type is used as one of another only where
+Epic's Verse compiler makes the wrapper that needs (UEFN 43.12, error 3502,
+#724): a function or method named where a function type is expected, not a
+local, a parameter, a field, a call's result, an option's content or a
+branch of an `if` of another function type, a generic function with a type
+parameter inside a function type of its own as a value, the call of a
+generic function or parametric class's method returning a function of its
+type parameter, nor an override of such a parametric method ([the
+rule](docs/LANGUAGE.md#function-values-epics-compiler-does-not-convert-724));
+`--function-coercions` keeps openverse's conversions. A conversion that
+needs no wrapper, by class variance (a class or interface below in a
+parameter, above in the result), is made for any function value, as Epic
+makes it: openverse holds the value in an adapter object.
 
 ```verse
 Half(N:int)<decides>:int =
@@ -161,6 +183,7 @@ Main():void =
 
 | Page | What it covers |
 |---|---|
+| [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) | how closely openverse matches Epic's shipped Verse (UEFN 43.12): the count of probes that agree and every known difference with its cause (generated, checked by the gate) |
 | [`docs/LANGUAGE.md`](docs/LANGUAGE.md) | the supported Verse subset, and the reading taken wherever the Book of Verse is silent or contradicts itself |
 | [`docs/DESIGN.md`](docs/DESIGN.md) | the decisions behind the code: Verse Core, rollback, fuel, translation validation, classes and the heap, the C runtime |
 | [`docs/CLAIMS.md`](docs/CLAIMS.md) | the statement and axioms of every theorem, as Lean prints them (generated) |
@@ -189,6 +212,12 @@ Trusted, besides Lean's kernel:
   `proofs/quickproof/README.md`), and the reading that each C law formula and
   its Lean restatement are the same formula (`docs/SEAMS.md`);
 - the gap between CompCert's C and the GCC build of `cverse`.
+
+Ints are the Verse VM's (#724): exact past 64 bits, up to 2^20 bits. The C
+runtime's ints beyond 64 bits (`runtime/src/bigint.c`) are tested against
+Python's ints and the Lean interpreter, outside QuickProof's law, which
+covers the 64-bit fast path. See [the arithmetic
+seam](docs/SEAMS.md#1-integer-arithmetic-runtimesrcarithc).
 
 Exact rational arithmetic (#489) is an OpenVerse extension. Its Lean Core
 semantics and safety proofs cover the four-int primitive forms; the C

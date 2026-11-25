@@ -82,7 +82,7 @@ RefinedReturn(P:pair(a, b) where a:type, b:type):b =
     P.B
 # (a <decides> function's return is in tail position, a branch of its last if,
 # Return.versetest:157)
-DecidesReturn(P:pair(a, b), Values:[]int where a:type, b:type)<decides>:int =
+DecidesReturn(P:pair(a, b), Values:[]int where a:type, b:type)<transacts><decides>:int =
     var Value:int = 0
     defer: Print("decides cleanup {Value}")
     if (D := dup[P]):

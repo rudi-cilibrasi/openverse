@@ -80,7 +80,9 @@ Issue [#500](https://github.com/rudi-cilibrasi/openverse/issues/500) implements
 this symmetric admission table; swapping the two types has the same result.
 Here `D(a,b)` means their domains are known disjoint. `any`/`void`, opaque type
 parameters, bottom and unknown refinements never supply disjointness evidence.
-Refinements otherwise use their base, and `int` overlaps `rational`.
+Refinements otherwise use their base, but two refinements of one base whose
+intervals have no number in common are disjoint (#724, UEFN 43.12:
+`followup-refused/refinement-overloads`), and `int` overlaps `rational`.
 
 | Pair | Distinct exactly when |
 | --- | --- |
@@ -195,16 +197,22 @@ pinned Book restriction.
 Overload admission compares both direct and adapted domains. A single array
 formal can collide with several scalar formals; a bare generic formal can
 accept their argument tuple; singleton tuple/scalar and empty tuple/no-formal
-overloads also collide. The same `tuple(int)` value can unpack for `int`,
-wrap for `tuple(tuple(int))`, or convert to `[]int`, so these domains also
-overlap. Nested direct/flattened overlap and the existing wide `void` domain
+overloads also collide. The same `tuple(int)` value can unpack for `int`
+or wrap for `tuple(tuple(int))`, so these domains also overlap. It can
+convert to `[]int` too, but `F(:int)` beside `F(:[]int)` are two overloads
+since #724, as UEFN 43.12 admits `F(:a)` beside `F(:[]a)`
+(`followup-refused/overloads-struct-and-array`; the Book's
+`Overloading.versetest:260`): one argument is no tuple of the arguments, and
+the call whose one argument is a `tuple(int)` is refused where it is made,
+as fitting both. Nested direct/flattened overlap and the existing wide `void` domain
 are included. These are declaration refusals, rather than
 an arbitrary preference for an overload with matching written arity.
 
 Packing applies at a function boundary, retaining nested tuple fields. A
 single scalar is not packed into an array; zero-element arrays use an explicit
 `array{}` value with an inferable element type. Zero-formal/array overloads
-remain distinct; scalar/array overloads can overlap through a tuple input. The
+remain distinct; scalar/array overloads of one parameter are distinct too (#724),
+and a singleton tuple input that fits both is refused at the call. The
 generic-array extension combines the pinned array and parametric rules; it
 is not a claim of measured behavior in a released Epic compiler.
 

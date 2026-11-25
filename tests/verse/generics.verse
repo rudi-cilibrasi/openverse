@@ -6,24 +6,24 @@ Identity(X:t where t:type)<computes>:t = X
 
 Swap(P:tuple(t, u) where t:type, u:type):tuple(u, t) = (P(1), P(0))
 
-Combine(A:t1, B:t2 where t1:type, t2:type):tuple(t1, t2) = (A, B)
+Combine(A:t1, B:t2 where t1:type, t2:type)<transacts>:tuple(t1, t2) = (A, B)
 
 # a comparable type parameter supports = and <>
-Find(Items:[]t, Target:t where t:subtype(comparable))<decides>:int =
+Find(Items:[]t, Target:t where t:subtype(comparable))<transacts><decides>:int =
     var Result:int = -1
     for (I -> X : Items, Result < 0, X = Target):
         set Result = I
     Result >= 0
     Result
 
-Contains(Items:[]t, Target:t where t:subtype(comparable))<decides>:void =
+Contains(Items:[]t, Target:t where t:subtype(comparable))<transacts><decides>:void =
     Find[Items, Target]
 
-First(Items:[]t where t:type)<decides>:t = Items[0]
+First(Items:[]t where t:type)<transacts><decides>:t = Items[0]
 
-Last(Items:[]t where t:type)<decides>:t = Items[Items.Length - 1]
+Last(Items:[]t where t:type)<transacts><decides>:t = Items[Items.Length - 1]
 
-Reverse(Items:[]t where t:type):[]t =
+Reverse(Items:[]t where t:type)<transacts>:[]t =
     var Out:[]t = array{}
     for (X : Items):
         set Out = array{X} + Out
@@ -37,14 +37,14 @@ Repeat(X:t, N:int where t:type)<computes>:[]t =
 Depth(X:t, N:int where t:type):int =
     if (N > 0) then 1 + Depth((X, X), N - 1) else 0
 
-Flatten(X:t, N:int where t:type):[]t =
+Flatten(X:t, N:int where t:type)<transacts>:[]t =
     if (N <= 0) then array{X}
     else for (P : Flatten((X, X), N - 1), Y : array{P(0), P(1)}) { Y }
 
 # generic code calling generic code
-Twice(X:t where t:type):tuple(t, t) = Combine(Identity(X), X)
+Twice(X:t where t:type)<transacts>:tuple(t, t) = Combine(Identity(X), X)
 
-Pairs(Items:[]t where t:type):[]tuple(t, t) =
+Pairs(Items:[]t where t:type)<transacts>:[]tuple(t, t) =
     for (X : Items) { Twice(X) }
 
 # t appears only in the result: a type given as an argument gives it (the
@@ -79,13 +79,15 @@ Log():void = Print("logged")
 
 # a generic body is checked and compiled once: = against a literal means the
 # same at every type argument
-IsTrue(X:t where t:subtype(comparable))<decides>:void = X = true
+IsTrue(X:t where t:subtype(comparable))<transacts><decides>:void = X = true
 
-# constants may call generic functions, and refer to constants defined before
-# them in their scope
+# constants refer to constants defined before them in their scope; a
+# function, not a constant, calls generic functions (UEFN 43.12 refuses a
+# call in a constant's value, error 3582, #724)
 Later:int = 42
-Answer:int = Identity(Later)
-Names:[]string = Repeat("n", 2)
+Answer:int = Later
+AnswerOf():int = Identity(Answer)
+Names():[]string = Repeat("n", 2)
 
 point := struct:
     X:int = 0
@@ -127,7 +129,7 @@ Main():void =
     Checked(Log(), 1)
     if (IsTrue[true]) then Print("true is true")
     if (not IsTrue[1], not IsTrue[option{true}]) then Print("1 and an option are not")
-    Print("{Answer} {Names.Length}")
+    Print("{AnswerOf()} {Names().Length}")
     Print("depth {Depth('x', 10)}, {Flatten(7, 3).Length} leaves")
     # deeply nested calls: the Core checker checks each argument once
     Print("{Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(30))))))))))))))))))))))))))))))}")

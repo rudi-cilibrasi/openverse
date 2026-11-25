@@ -31,6 +31,12 @@ def checkFilterCanFail (ctx : Ctx) (s : SExpr) (r : R) : EM Unit := do
     if isFilter && !(r.e.mayFail ctx.sigProg) && (← ctx.failabilityKnown) then
       eerr s.pos "this filter cannot fail: each filter of a for, or of a first with a generator, must be able to fail (Book of Verse ch. 7: \"Each filter must be failable, and if any fails, that iteration is skipped\"; its tests, for.versetest: \"Filter can not fail\", first.versetest: \"same as `for`\"); an effect among the clauses goes in one that can, as the Book's tests write (set X = E; true?), or in the body"
 
+/-- Why a call whose one argument is a tuple of one element fits an overload
+    on its element's type and one on an array's (`resolveOverload`): the
+    retry of a call with its tuple argument flattened leaves this refusal
+    as it is (`elabApp`). -/
+def singletonBoth : String := "its argument is a tuple of one element, which is that element and an array"
+
 set_option maxHeartbeats 800000 in
 mutual
 partial def choiceCoerceResult (ctx : Ctx) (p : Pos) (r : R) (exp : Option Ty) : EM R := do
@@ -342,9 +348,14 @@ partial def elabConc (ctx : Ctx) (p : Pos) (isSync : Bool) (arms : List SExpr) (
     the task, a `task(t)`. The lowering (`Suspend.lean`) turns the marker
     `$spawnMark(array{F(…), T})` into a new task root. -/
 partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
+  -- (#724: the spawn itself has the no_rollback effect, UEFN 43.12: 3512)
+  checkSpawnNoRollback ctx p
   -- (#515: the task runs the call later, outside a failure context the
   -- `spawn` is in; its arguments, evaluated now, are recorded here)
-  let r ← elabSpawnIn { ctx with inRollback := false } p body
+  -- (the no_rollback of the spawned function is not judged apart: where a
+  -- spawn is admitted, so is a call that has it; UEFN 43.12 reports both
+  -- where neither is, followup-book2/spawn-in-transacts-decides)
+  let r ← elabSpawnIn { ctx with inRollback := false, rollbackOnly := false, bodyFailure := true } p body
   noteFailCalls ctx p "spawn's arguments" r.e
   -- (a spawn has <transacts>'s heap effects, besides its call's: "spawn
   -- requires the transacts effect in addition to the effects of the
@@ -355,7 +366,17 @@ partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
 
 partial def elabSpawnIn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   let sourceBefore := (← get).pendingSourceSuspends
-  if ctx.inDefer then eerr p "spawn in a defer is not supported (#156)"
+  -- (#724) a defer of a function that cannot suspend may spawn, as the
+  -- Book's tests have it ("Ensure that defer allows immediate `spawn`
+  -- expression", FlowControl/defer.versetest:1094) and Epic's compiler
+  -- (UEFN 43.12, followup-refused/spawn-in-defer): the task starts where
+  -- the defer runs, and runs to its first wait there, as any spawn's. In a
+  -- <suspends> function a defer is also the code of the function's
+  -- cancellation (`withDeferMark`), which is left as it was: refused.
+  if ctx.inDefer && ctx.suspends then
+    eerr p "spawn in a defer of a <suspends> function is not supported (#156); a defer of a function that cannot suspend may spawn"
+  -- (the spawned call is no code of the defer: it may suspend)
+  let ctx := { ctx with inDefer := false }
   -- (a failure context may spawn, the Book's tests: assertions spawn, and
   -- `LiveVariables.versetest:450-545` spawn in `if: …; false?`; the task's
   -- start, its link and its first run, is the context's code, undone with
@@ -460,9 +481,13 @@ partial def elabSpawnIn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   let ty : Ty := .struct task [r.ty]
   let tagT := ctx.types.tagOf task
   let t ← fresh ty
-  -- (its fields: the done flag `false`, the others empty options)
+  -- (its fields: the done flag `false`, the others empty options; with
+  -- scopes, #724, a scope of its own, for its children)
   let fieldVals := (ctx.types.fields task [r.ty]).map fun (_, ft, _) =>
-    if ft == .logic then Expr.lit (.logic false) else Expr.lit .none
+    if ft == .logic then Expr.lit (.logic false)
+    else if ft == .struct "$scope" [] then
+      .heap (.new (ctx.types.tagOf "$scope")) [.lit .none, .lit (.logic false), .lit .none, .lit (.logic false)]
+    else Expr.lit .none
   let spawnE : Expr := .seq (.assign t (.heap (.new tagT) fieldVals))
     (.seq (.call mark.idx [.prim .mkArr [.seq callE (.lit .void), .seq (.local t) (.lit .void)]]) (.local t))
   modify fun st => { st with pendingSourceSuspends := sourceBefore }
@@ -607,6 +632,26 @@ partial def resolveOverload (ctx : Ctx) (p : Pos) (name : String) (ovs : List St
       if ← fits o then ok := ok ++ [o]
   let call' (o : String) : EM R :=
     tryCatch (call o) fun msg => throw (msg.replace o name)
+  -- (#724) one argument that is a tuple of one element is that element for
+  -- a parameter of its type, and an array for an array parameter: `F(:int)`
+  -- beside `F(:[]int)` are two overloads (one argument is no tuple of the
+  -- arguments, `TyEnv.paramsDistinct`), and such a call fits both
+  if let ([a], true) := (posArgs, namedArgs.isEmpty && cands.length > 1) then
+    if let some (.tup [x]) ← natTy a then
+      let mut asElement : List String := []
+      let mut asArray : List String := []
+      for o in cands do
+        let some so := sigOf o | continue
+        if !so.tparams.isEmpty then continue
+        let [u] := so.params | continue
+        match u with
+        | .arr _ => if ← coercible (.tup [x]) u then asArray := asArray ++ [o]
+        | .tup _ => pure ()
+        | _ => if ← coercible x u then asElement := asElement ++ [o]
+      if !asElement.isEmpty && !asArray.isEmpty then
+        let shown := (asElement ++ asArray).map fun o =>
+          s!"({", ".intercalate (((sigOf o).map (·.params)).getD [] |>.map Ty.show)})"
+        eerr p s!"this call of {name} fits more than one overload: {" and ".intercalate shown} ({singletonBoth})"
   match ok, cands with
   | [o], _ => call' o
   | [], [o] => call' o   -- its error
@@ -783,6 +828,9 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
       let tupleErr := err.startsWith s!"{a.pos.show}:" &&
         (err.splitOn ", found tuple(").length > 1
       if !(shapeErr || callErr || tupleErr) then throw err
+      -- (#724: flattening the tuple would choose one of the two overloads
+      -- the call fits)
+      if (err.splitOn singletonBoth).length > 1 then throw err
       restore
       let c2 := { ctx with retries := ctx.retries + 1 }
       let fnTy : Ty → Bool := fun | .struct n _ => (FnValues.parseName n).isSome | _ => false
@@ -975,6 +1023,9 @@ partial def elabMethod (ctx : Ctx) (p : Pos) (r : R) (m : String) (args : List S
     EM R := do
   -- (the methods of chars, code points, ints and floats)
   if let some res ← scalarMethod? p r m args bracket then return res
+  -- (#724) an array's methods are the library's, none `<converges>` (the
+  -- char conversions above are): none in a data member (3582)
+  noteDivergentCall ctx p s!"the array method {m}"
   -- (a tuple of one element type is an array of its elements where an array
   -- is expected, as its receiver is: `('a', 'b').Slice[1]`)
   let r ← match r.ty with
@@ -1123,6 +1174,11 @@ partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bra
       -- are passed by name, #503)
       let k := sh.positional
       let shape : Sig := { idx := 0, name := n, params := ts.take k, ret := .void, decides := false, isConst := false }
+      -- (#724) a function value's call might not complete: openverse has no
+      -- `<converges>` function types (#494), so none in a data member (3582)
+      noteDivergentCall ctx p s!"a value of type {r.ty.show}"
+      -- (#515, `--default-no-rollback`) a value of a type with no_rollback
+      checkNoRollbackCall ctx p { shape with noRollback := sh.noRollback, sourceCall := true } s!"a value of type {r.ty.show}"
       let args := packCallArgs p shape args false
       let names := args.filterMap fun | .decl _ x .. => if x.startsWith "?" then some (x.drop 1).toString else none | _ => none
       if let some x := names.find? (!sh.named.contains ·) then
@@ -1336,9 +1392,17 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
   let rational (op : String) (ta tb : Ty) : Bool :=
     let num (t : Ty) := t == .int || t == .rational
     (ta == .rational || tb == .rational) && (!(op == "=" || op == "<>") || (num ta && num tb))
+  -- (#724) rationals have no ordering: Epic's compiler declares `<`, `<=`,
+  -- `>` and `>=` for ints and for floats only, as the Book's table does
+  -- (ch. 4, Relational Operators), and refuses them of rationals
+  -- (tests/conformance/versevm/differential/rat-ordering)
+  let noRatOrder (op : String) (q : Pos) (ta tb : Ty) : EM Unit := do
+    if !(op == "=" || op == "<>") && (ta == .rational || tb == .rational) then
+      eerr q s!"'{op}' does not order a rational: it compares two ints or two floats, and a rational has only = and <> (found {ta.show} and {tb.show}; compare Floor or Ceil of it, or cross-multiply) (Epic's Verse compiler, UEFN 43.12: error 3509, \"No overload of the function `operator'<'` matches the provided arguments (:rational,:rational)\")"
   match rest with
   | [(op, b)] =>
     let rb ← numeric (← operand b ra.ty)
+    noRatOrder op p ra.ty rb.ty
     if rational op ra.ty rb.ty then
       let ta ← fresh ra.ty
       let tb ← fresh rb.ty
@@ -1375,6 +1439,7 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
       -- (the previous operand, as an array when this one is)
       let prevR ← toOther ⟨.local prev, prevTy⟩ rb.ty
       let tb ← fresh rb.ty
+      noRatOrder op p prevTy rb.ty
       if rational op prevTy rb.ty then
         steps := steps.push (.assign tb rb.e)
         steps := steps.push (← ratTest ctx p op ⟨.local prev, prevTy⟩ ⟨.local tb, rb.ty⟩)
@@ -1496,16 +1561,16 @@ partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) 
     match cs? with
     | some cs =>
       let (rc, cT, refines) ← if ctx.typeOnly && choiceHasCast ctx i then
-          elabChoiceTypeCondition { ctx with canFail := true, inTaking := true } cs
+          elabChoiceTypeCondition { ctx with canFail := true, bodyFailure := false, inTaking := true } cs
         else do
-          let (rc, cT) ← if Choice.hasChoice cs (choiceOrder ctx) then elabOneClauses { ctx with canFail := true } cs
-            else elabSeq { ctx with canFail := true, inTaking := true } cs none
+          let (rc, cT) ← if Choice.hasChoice cs (choiceOrder ctx) then elabOneClauses { ctx with canFail := true, bodyFailure := false } cs
+            else elabSeq { ctx with canFail := true, bodyFailure := false, inTaking := true } cs none
           pure (rc, cT, false)
       refined := refined || refines
       if !(rc.e.mayFail ctx.sigProg) && (← ctx.failabilityKnown) then
         eerr p "the condition of this if cannot fail (Verse requires a failable condition)"
       conds := conds.push (some rc.e)
-      ctxs := ctxs.push { cT with canFail := ctx.canFail, inTaking := ctx.inTaking }
+      ctxs := ctxs.push { cT with canFail := ctx.canFail, bodyFailure := ctx.bodyFailure, inTaking := ctx.inTaking }
     | none =>
       conds := conds.push none
       ctxs := ctxs.push ctx
@@ -1958,7 +2023,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
             -- too, so that nesting takes no more elaborations)
             let mut tys : List Ty := []
             for (a, i) in b.alts.zipIdx do
-              let r ← elabE { ctx with canFail := true, inTaking := true }
+              let r ← elabE { ctx with canFail := true, bodyFailure := false, inTaking := true }
                 (.app p (.ident p "$firstP") [.block p (liftAlt a i ++ [.ident p b.name])] false) none
               tys := tys ++ [r.ty]
             let same := tys.all (some · == tys.head?)
@@ -2168,7 +2233,7 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
   let lctx : Ctx := { ctx with locals := pls.reverse ++ ctx.locals }
   let newOf (c : Ctx) : List Local := c.locals.take (c.locals.length - lctx.locals.length)
   -- (the clauses, then each branch's conditions)
-  let (rc, cc) ← elabSeq { lctx with canFail := true, inTaking := true } cls none
+  let (rc, cc) ← elabSeq { lctx with canFail := true, bodyFailure := false, inTaking := true } cls none
   let k ← fresh .int
   let code ← elabLoopTailWith elabSeq cc tail k 0
   let armCode := code.arms
@@ -2215,7 +2280,7 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
   for ((ca, as), start) in armCode.toList.zip starts do
     for (a, j) in as.zipIdx do
       let i := start + j
-      let actx : Ctx := { ca with canFail := true, inTaking := true }
+      let actx : Ctx := { ca with canFail := true, bodyFailure := false, inTaking := true }
       let next? : Option Nat := if j + 1 < as.length then some (i + 1) else none
       let cont : Expr := match next? with
         | some n => push (item (.lit (.int (n : Nat))) cur)
@@ -2230,7 +2295,7 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
       -- (its prefix, if any: before the arguments, in whose context they are)
       let pre? : Option Expr := if kE.isSome then fr?.bind (·.pre) else none
       let actx : Ctx := match pre?, fr? with
-        | some _, some f => { f.ctx with canFail := true, inTaking := true }
+        | some _, some f => { f.ctx with canFail := true, bodyFailure := false, inTaking := true }
         | _, _ => actx
       if kE.isSome then fi := fi + 1
       match a with
@@ -2770,17 +2835,46 @@ partial def elabConstructionValue (ctx : Ctx) (p : Pos) (name : String) (targs :
   -- (only the first would be evaluated)
   if let some f := (given.map (·.1)).find? (fun f => (given.filter (·.1 == f)).length > 1) then
     eerr p s!"field '{f}' of {name} is given twice"
-  let storedValue (f : String) (t : Ty) (dflt : Option SExpr) : EM Expr := do
+  -- (#724) The fields given are evaluated in the order written, as on Epic's
+  -- Verse VM (tests/conformance/versevm/differential/cls-construction-order,
+  -- struct-archetype-order): they take, in that order, the places the given
+  -- fields have in declaration order, so an archetype written in declaration
+  -- order runs as it did, omitted defaults at their own places. `written` is
+  -- the order written, `declared` the same fields as declared.
+  let written := given.map (·.1)
+  let declared := (fs.map (·.1)).filter written.contains
+  let reorder := written != declared
+  -- (the value evaluated at field `f`'s place, and its type)
+  let storedValue (f : String) (t : Ty) (dflt : Option SExpr) : EM (Expr × Ty) := do
     match given.lookup f, dflt with
-    | some rhs, _ => coerce p (← elabE ctx rhs (some t)) t
+    | some rhs, _ =>
+      let (g, rhs) := if reorder then given.getD (declared.idxOf f) (f, rhs) else (f, rhs)
+      let tg := ((fs.find? (·.1 == g)).map (·.2.1)).getD t
+      return (← coerce p (← elabE ctx rhs (some tg)) tg, tg)
     | none, some d =>
-      elabFieldDefault ctx p name tas f t d
+      return (← elabFieldDefault ctx p name tas f t d, t)
     | none, none => eerr p s!"field '{f}' of {name} has no default value and must be given"
-  -- (with fields with accessors given, every value in a slot, in the order
-  -- the fields are declared, `accessorValues`)
-  let (pre, es, accVals) ← if accGiven.isEmpty then
-      pure ([], ← fs.mapM fun (f, t, dflt) => storedValue f t dflt, [])
+  -- (with fields with accessors given, or given in another order than
+  -- declared, every value in a slot, `accessorValues`)
+  let (pre, es, accVals) ← if accGiven.isEmpty && !reorder then
+      pure ([], ← fs.mapM fun (f, t, dflt) => do return (← storedValue f t dflt).1, [])
+    else if accGiven.isEmpty then do
+      let mut pre : Array Expr := #[]
+      let mut slots : Array Expr := #[]
+      for (f, t, dflt) in fs do
+        let (e, t) ← storedValue f t dflt
+        let s ← fresh t
+        pre := pre.push (.assign s e)
+        slots := slots.push (.local s)
+      pure (pre.toList, slots.toList, [])
     else accessorValues elabE ctx name tas fs storedValue accGiven
+  -- (each field's value is in the slot of the place it was evaluated at)
+  let es := if !reorder then es else fs.zipIdx.map fun ((f, _, _), i) =>
+    let at_ := match written.idxOf? f with
+      | some k => (fs.map (·.1)).idxOf (declared.getD k f)
+      | none => i
+    es.getD at_ (.lit (.int 0))
+  let withPre (e : Expr) : Expr := if accGiven.isEmpty then pre.foldr .seq e else e
   if ctx.types.classes.contains name then
     let i := ctx.types.info name
     if i.isIface then eerr p s!"{name} is an interface: it cannot be constructed"
@@ -2801,9 +2895,9 @@ partial def elabConstructionValue (ctx : Ctx) (p : Pos) (name : String) (targs :
         -- which gives the checker its type arguments (#39)
         -- (and so does a pinned class's, whose pins may be on more type
         -- arguments than the type it is used at, #209)
-        if tas.isEmpty && (ctx.types.corePins name).isEmpty then return ⟨.heap (.new (ctx.types.tagOf name)) es, ty⟩
+        if tas.isEmpty && (ctx.types.corePins name).isEmpty then return ⟨withPre (.heap (.new (ctx.types.tagOf name)) es), ty⟩
         let x ← fresh ty
-        return ⟨.assign x (.heap (.new (ctx.types.tagOf name)) es), ty⟩
+        return ⟨withPre (.assign x (.heap (.new (ctx.types.tagOf name)) es)), ty⟩
       let x ← fresh ty
       let mut calls : List Expr := []
       for (d, s) in blocks do
@@ -2826,12 +2920,12 @@ partial def elabConstructionValue (ctx : Ctx) (p : Pos) (name : String) (targs :
     if !accGiven.isEmpty then
       let setters ← accessorSetters elabApp ctx ty accVals x
       return ⟨(pre ++ [Expr.assign x (classWrap ctx.types name name (.prim .mkTup es))] ++ setters).foldr .seq (.local x), ty⟩
-    return ⟨.assign x (classWrap ctx.types name name (.prim .mkTup es)), ty⟩
+    return ⟨withPre (.assign x (classWrap ctx.types name name (.prim .mkTup es))), ty⟩
   -- A struct's fields may need their expected types (empty arrays/options
   -- and computed defaults). Preserve the resolved instance before a Core
   -- consumer, such as tuple projection, has to infer its operand's type.
   let x ← fresh ty
-  return ⟨.assign x (.prim .mkTup es), ty⟩
+  return ⟨withPre (.assign x (.prim .mkTup es)), ty⟩
 
 /-- `map{k₁ => v₁, …}`: entries are evaluated in order; a key given twice
     keeps its last value, at the position of its last occurrence (Book of
@@ -2867,8 +2961,28 @@ partial def elabMapLit (ctx : Ctx) (p : Pos) (entries : List (SExpr × SExpr)) (
       -- and its real code still runs once in the original entry order.
       checkMapKeyCanFail ctx k0.pos rk0.e
       let mut rs : Array (SExpr × R × SExpr × R) := #[(k0, rk0, v0, rv0)]
+      -- (#724) with no key type expected, a key that is not of the type of
+      -- those before it widens the map's key type to their join
+      -- (`mapKeyJoin`): `map{A => 1, B => 2}` of sibling classes is keyed by
+      -- their `<unique>` base. Every key is converted to it below.
+      let mut kt := kt
       for (k, v) in entries.drop 1 do
-        let rk ← elabE ctx k (some kt)
+        let stK ← get
+        let first ← tryCatch (Except.ok <$> elabE ctx k (some kt)) (fun err => pure (Except.error err))
+        let rk ← match first with
+          | .ok r => pure r
+          | .error err =>
+            if kt?.isSome then throw err
+            set stK
+            tryCatch (elabE ctx k none) (fun _ => throw err)
+        if kt?.isNone && rk.ty != kt then
+          let stC ← get
+          let refusal ← tryCatch (do discard <| coerce k.pos rk kt; pure none) (fun err => pure (some err))
+          set stC
+          if let some err := refusal then
+            match mapKeyJoin (← get).env kt rk.ty false with
+            | some j => kt := j
+            | none => throw err
         -- (a key that can fail: "failure in map literal keys is not
         -- implemented", Book of Verse ch. 3, and its tests, Map.versetest:249)
         checkMapKeyCanFail ctx k.pos rk.e
@@ -2934,7 +3048,7 @@ partial def elabCase (ctx : Ctx) (p : Pos) (scrut : SExpr) (arms : List (Option 
       let some refusal := Refine.castRefusal? err | throw err
       if !casts.contains refusal.pos then throw err
       set st
-      let partCtx := if pattern then { ctx with canFail := true } else ctx
+      let partCtx := if pattern then { ctx with canFail := true, bodyFailure := false } else ctx
       elabE partCtx (.block e.pos [e]) expected
   let rs := widenR ctx.types (← elabE ctx scrut none)
   match rs.ty with

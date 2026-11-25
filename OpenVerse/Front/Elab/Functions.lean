@@ -2,6 +2,7 @@
    `elabProgramCore`); public declarations retain OpenVerse.Front names. -/
 import OpenVerse.Front.Elab.Signatures
 import OpenVerse.Front.MetadataReceivers
+import OpenVerse.Front.ConstantRange
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -67,16 +68,26 @@ def elabFieldDefaults (env : TyEnv) (sigs : Signatures) (tops : List STop) (cdef
         tvars := (env.sparams.lookup n).getD [] |>.map fun (v, c) => (v, Ty.param v c)
         boundFacts := (env.sbounds.lookup n).getD [] }
       let allowed := env.constructionFx[n]?.getD heapFx
-      let ctx : Ctx := { sigs := allSigs, sigProg := sigs.prog, types := senv, canFail := true,
+      let ctx : Ctx := { sigs := allSigs, sigProg := sigs.prog, types := senv, canFail := true, bodyFailure := false,
                           fnFx := allowed, inDefaultCheck := true }
       for (f, ft, d) in (env.structs.lookup n).getD [] do
         if let some d := d then
           -- (an inherited default sees its home class's type parameters, #39)
           let home := (env.defaultHome.lookup (n, f)).getD n
           let hσ := (((env.sparams.lookup home).getD []).map (·.1)).zip (env.argsAt n nps home)
-          let ctx := { ctx with defaults := [(n, f)], types := { senv with tvars := hσ } }
+          -- (#724) a field's default is a data member's definition: it calls
+          -- no function that might not complete (Epic's error 3582), unless
+          -- `--extended-defaults` (the compiler's own classes have no
+          -- source defaults, but for the module-scoped vars' state)
+          let dataMember : Option String :=
+            if extendedDefaults then none
+            else if n == ModuleVars.stateClass then some s!"the module-scoped var {ModuleVars.shown f}"
+            else if n.contains '$' then none
+            else some s!"the default of field '{f}' of {n}"
+          let ctx := { ctx with defaults := [(n, f)], types := { senv with tvars := hσ }, dataMember }
           match (do coerce d.pos (← elabE ctx d (some ft)) ft : EM Expr).run { env } with
           | .ok (body, st) =>
+            if let some msg := divergentCallError st.divergentCalls then throw msg
             -- (a class declares no <decides>, and "Class member initializers
             -- and block clauses are implicitly restricted to have no more
             -- effects than what the class declares", Book of Verse ch. 13;
@@ -86,7 +97,7 @@ def elabFieldDefaults (env : TyEnv) (sigs : Signatures) (tops : List STop) (cdef
             fxCheck s!"default of field '{f}' of {n}" allowed st
             initializerBodies := initializerBodies ++ [(n, f, d.pos, body)]
             fieldNeeds := fieldNeeds.merge
-              { methods := st.needs.methods, loops := st.needs.loops, subtypes := st.needs.subtypes, anys := st.needs.anys }
+              { methods := st.needs.methods, fnAdapters := st.needs.fnAdapters, loops := st.needs.loops, subtypes := st.needs.subtypes, anys := st.needs.anys }
           | .error msg => throw s!"{msg} (in the default of field '{f}' of {n})"
     | _ => pure ()
   return { needs := fieldNeeds, bodies := initializerBodies }
@@ -183,8 +194,13 @@ structure ElaboratedFn where
   loopFirst : List LoopUse
   /-- (#515) Its calls in failure contexts (`ESt.failCalls`). -/
   failCalls : Array ((Pos × String) × List Nat)
+  /-- (#515) Its other calls, in a body whose effects exclude `no_rollback`
+      (`ESt.bodyCalls`). -/
+  bodyCalls : Array ((Pos × String) × List Nat) := #[]
   /-- The warnings its elaboration found (`ESt.warnings`). -/
   warnings : Array (Pos × String) := #[]
+  /-- The slots of its source `var` locals (`ESt.sourceVars`, #724). -/
+  sourceVars : List (Nat × String) := []
 
 /-- A function: its body under the type environment `env` (which binds the
     type parameters `tps` of a generic function to themselves), after the
@@ -198,7 +214,8 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
     (suspends : Bool := false) (selfTps : List String := [])
     (selfFieldOf : Option (String → Option Nat) := none)
     (evidenceSignature : Option Sig := none) (extendedDefaults : Bool := false)
-    (callOnly : Bool := false) (fnReturns : Array (Option MetadataReceivers.CallType) := #[]) :
+    (callOnly : Bool := false) (fnReturns : Array (Option MetadataReceivers.CallType) := #[])
+    (rollbackOnly : Bool := false) (bodyFailure : Bool := false) :
     Except String ElaboratedFn := do
   -- (#209) the values of `selfTps` come from the receiver's hidden
   -- fields, in slots after the hidden parameters: a method's own class's
@@ -235,6 +252,8 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
     types := env
     fnFx := allowed
     canFail := decides
+    rollbackOnly
+    bodyFailure
     retTy := ret
     dictBase := frame.witnessBase
     suspends := suspends
@@ -320,7 +339,8 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
                    body := initPrefixE arity inits e },
            slotTys := spawnParamTypes env name (st.slotTys.toList.map (Ty.toVTy env)), errAt := st.errAt,
            frames,
-           needs := st.needs, loopFirst := st.loopFirst, failCalls := st.failCalls, warnings := st.warnings, metadata }
+           needs := st.needs, loopFirst := st.loopFirst, failCalls := st.failCalls, bodyCalls := st.bodyCalls,
+           warnings := st.warnings, metadata, sourceVars := st.sourceVars }
 
 /-- Function elaboration, a phase of `elabProgramCore`: each function and
     constant of `sigs`, by index (a constant may not hold a mutable object, as
@@ -346,17 +366,48 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
   for (top, idx) in sigs.tops.zip (List.range sigs.tops.length) do
     let sig := sigs.sigs[idx]!
     match top with
-    | .fn p n ps _ _ _ body =>
+    | .fn p n ps _ specs _ body =>
       elaborated := elaborated.push (← elabFn allSigs sigs.prog requests env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
-        (evidenceSignature := some sig) (extendedDefaults := extendedDefaults) (callOnly := firstHelpers.contains n) (fnReturns := fnReturns))
+        (evidenceSignature := some sig) (extendedDefaults := extendedDefaults) (callOnly := firstHelpers.contains n) (fnReturns := fnReturns)
+        (rollbackOnly := (SignalAdmission.excludesNoRollback n specs).isSome)
+        (bodyFailure := sig.decides))
     | .const p n _ sty body =>
       -- a constant is computed at each use, so it would be a new object each
       -- time (until Verse Core has global state)
-      if sig.ret.holdsMutable env then
+      -- (#724: an empty `map{}`, `array{}` or `false` holds no object,
+      -- whatever its type: `Empty:[c0]int = map{}` keyed by a `<unique>`
+      -- class, the Book of Verse's `Map.versetest`; UEFN 43.12 admits and
+      -- runs followup-refused/module-const-empty-map-unique-key)
+      let holdsNone := match body with
+        | .mapLit _ [] | .arrayLit _ [] | .ident _ "false" => true
+        | _ => false
+      -- (#724: or it is one object the program starts with, the same at
+      -- every use, `addConstantObjects`: `Instance:c = c{}` of a `<unique>`
+      -- class without fields, at its own class)
+      let ownObject : Option (Nat × String) := match body with
+        | .construct _ c [] [] =>
+          if sig.ret == .struct c [] then (env.constObjects.lookup n).map (·, c) else none
+        | _ => none
+      if sig.ret.holdsMutable env && !holdsNone && ownObject.isNone then
         throw s!"{p.show}: the constant {n} would hold an object with var fields or of a <unique> class, which would be a new one at each use: make it a function"
-      let ctx : Ctx := { sigs := allSigs, sigProg := sigs.prog, types := env }
+      -- (#724) a module's constant is a data member: its definition calls
+      -- no function that might not complete (Epic's error 3582), unless
+      -- `--extended-defaults`
+      let dataMember := if extendedDefaults || n.startsWith "$" then none
+        else some s!"the value of the constant {n}"
+      let ctx : Ctx := { sigs := allSigs, sigProg := sigs.prog, types := env, dataMember }
       let (r, st) ← elabBody ctx body (some sig.ret) { env }
+      if let some msg := divergentCallError st.divergentCalls then throw msg
       let (e, st) ← (coerce p r.1 sig.ret).run st
+      -- (#724) the constant's own object, in place of its construction,
+      -- which was elaborated for its checks only; a construction that
+      -- runs code (a `block:` clause) is no such object
+      let e ← match ownObject with
+        | some (a, c) =>
+          if e.printsOrCalls then
+            throw s!"{p.show}: the constant {n} would hold an object with var fields or of a <unique> class, which would be a new one at each use: make it a function (its class {c} runs code when constructed)"
+          pure (Expr.lit (.ref a))
+        | none => pure e
       -- a module's constant has no side effect: its initializer writes
       -- nothing, also through what it calls or constructs ("all non-local
       -- variables initializers (module, instance) can't have side
@@ -372,7 +423,14 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
           let what := match via with
             | some f => s!"{f}, which has the effect <writes>"
             | none => "sets a var field"
-          throw s!"{kp.show}: the value of the constant {n} {what}: a module's constant has no side effect (Book of Verse tests, DefaultValueAssignment.versetest); make it a function, or call one that does not write"
+          -- (#724) UEFN 43.12's codes: a construction of a class without
+          -- specifiers, 3512 (followup-3582/div-const-constructor); other
+          -- side effects, 3582 (a call is refused as divergent before this,
+          -- `divergentCallError`, unless `--extended-defaults`)
+          let epic := if (via.map (·.startsWith "constructs")).getD false then
+              "UEFN 43.12 refuses it with error 3512, \"This archetype instantiation constructs a class that has the 'transacts' effect, which is not allowed by its context\""
+            else "UEFN 43.12 refuses it with error 3582, \"Expressions with side effects cannot be used when defining data-members\""
+          throw s!"{kp.show}: the value of the constant {n} {what}: a module's constant has no side effect (Book of Verse tests, DefaultValueAssignment.versetest:199; {epic}); make it a function, or give it a value that writes nothing"
       -- slots start like a function's (a class-typed one as a placeholder)
       let inits ← match st.slotTys.toList.mapM (slotDefault env 0 [] []) with
         | .ok ds => pure ds
@@ -383,20 +441,32 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
                 writes := sig.fx.contains "writes", body := initPrefixE 0 inits e }
         slotTys := st.slotTys.toList.map (Ty.toVTy env), errAt := st.errAt, needs := st.needs,
         loopFirst := st.loopFirst, failCalls := st.failCalls, warnings := st.warnings
+        sourceVars := st.sourceVars
         metadata := {
           pos := p, seeds := st.metadataSeeds, uses := st.metadataUses
           metadataWrites := st.metadataWrites, body := some e } }
     | .classDef .. => pure ()   -- expanded above
+  -- (#724) a module constant that Epic's linker evaluates in 64 bits, and
+  -- that leaves them, is refused (`ConstantRange`)
+  let constBody (f : Nat) : Option Expr := match sigs.tops[f]?, elaborated[f]? with
+    | some (.const _ n ..), some ef => if n.startsWith "$" then none else some ef.fn.body
+    | _, _ => none
+  for (top, idx) in sigs.tops.zip (List.range sigs.tops.length) do
+    if let .const p n .. := top then
+      if let some b := constBody idx then
+        if let some what := ConstantRange.check constBody b then
+          throw s!"{p.show}: the value of the module constant {n} leaves the 64-bit range when the module is evaluated ({what}): Epic's Verse compiler evaluates module constants with 64-bit ints and refuses this (error 9003, UEFN 43.12), though at run time ints go past 64 bits; compute it in a function"
   -- each generic function is elaborated once, with its type parameters
   -- opaque, as Verse checks it, into one Verse Core function whose types
   -- mention type variables; `Prog.checkTypes` checks it once, for every
   -- instantiation (`Typed.subst`)
   for (top, g) in sigs.generics.zip sigs.gsigs.toList do
     match top with
-    | .fn p n ps _ _ _ body =>
+    | .fn p n ps _ specs _ body =>
       elaborated := elaborated.push (← elabFn allSigs sigs.prog requests (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body
         g.suspends g.selfTps ((requests.casts.find? (·.name == n)).map fun l => fun v =>
-          (l.opened.lookup v).bind (env.witnessField? l.target ·)) (some g) extendedDefaults (firstHelpers.contains n) fnReturns)
+          (l.opened.lookup v).bind (env.witnessField? l.target ·)) (some g) extendedDefaults (firstHelpers.contains n) fnReturns
+        (SignalAdmission.excludesNoRollback n specs).isSome g.decides)
     | _ => pure ()
   return elaborated
 

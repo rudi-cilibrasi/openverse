@@ -1,4 +1,5 @@
-# Eager recursion lifts fields in declaration order, including nested calls.
+# Eager recursion lifts fields in the order they are evaluated (those given
+# as written, #724), including nested calls.
 box := struct<computes>:
     D:int = 1+2
     V:int
