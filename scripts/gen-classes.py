@@ -383,6 +383,17 @@ def below(t, k):
     return t is k or t.below(k)
 
 
+def joins(t, u):
+    """Whether values of types t and u have a join: one nearest common supertype, or
+    interfaces only (then the expected one above both). A common class and a common
+    interface not above it are two, and the value is an any whatever is expected, which
+    Epic's compiler refuses where a type is (UEFN 43.12, errors 3509 and 3510, #724)."""
+    sups = lambda x: x.closure() if x.is_iface else x.chain() + x.all_ifaces()
+    common = [s for s in sups(t) if below(u, s)]
+    nearest = [s for s in common if not any(q is not s and below(q, s) for q in common)]
+    return len(nearest) == 1 or all(s.is_iface for s in nearest)
+
+
 def args_text(root, ctx, d):
     out = []
     for t in root.ptypes:
@@ -698,11 +709,14 @@ class Gen:
         rw = 'r' in eff
         self.rw = rw
         if isobj(root.ret):
-            cands = [e for e, u in ctx.objs if below(u, ret or root.ret)]
-            e = R.choice(cands)
+            want = ret or root.ret
+            cands = [(e, u) for e, u in ctx.objs if below(u, want)]
+            e = R.choice(cands)[0]
             if len(cands) > 1 and chance(0.6):
-                e = 'if (%s %s %s) then %s else %s' % (iatom(ctx), R.choice(['>', '<']), iatom(ctx),
-                                                     R.choice(cands), R.choice(cands))
+                c, a, b = '%s %s %s' % (iatom(ctx), R.choice(['>', '<']), iatom(ctx)), R.choice(cands), R.choice(cands)
+                # (#723: branches with no join, each upcast to the result type)
+                up = '%s' if joins(a[1], b[1]) else want.name + '(%s)'
+                e = 'if (%s) then %s else %s' % (c, up % a[0], up % b[0])
             lines = [e]
             if vars_ and chance(0.3):
                 lines = ['set %s = %s' % (R.choice(vars_), iexpr(ctx, 1))] + lines

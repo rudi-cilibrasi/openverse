@@ -4,7 +4,8 @@ through views (#351, #405, #523, #526, #529, #530): random hierarchies of
 interfaces with fields and default methods and classes below them (with
 class parents, compound and closed arguments), whose values are read,
 set, dispatched on and cast back, directly and from generic code, also
-through <suspends> methods. Each program's output is predicted.
+through <suspends> methods. Each program's output is predicted, or its
+refusal: an array of objects whose classes have no join (#723, no_join).
 On a stream of its own, at times casts beside the object's type (ja[I] for
 I:jc(u), related through jb; jd[I], opened, given through a view) and to
 an interface that gives its parent type arguments of its own (jx[C] for
@@ -334,9 +335,34 @@ for (c, args, e, init) in objs:
     for (n, a) in ifaces_of(c, args):
         key = (n, tuple(a))
         groups.setdefault(key, []).append((c, args, e, init))
+def class_at(c, args, d):
+    # the type arguments of class d above an object of class c at args
+    while c != d:
+        cc = CL[c]; s = dict(zip(cc[1], args))
+        c, args = cc[2][0], [sub(x, s) for x in cc[2][1]]
+    return args
+def no_join(members):
+    # (#723) elements of different types with more than one nearest common
+    # supertype, a class among them (the nearest class above all at the same
+    # type arguments, and an interface above all that is not above it), make an
+    # array of any, whatever is expected, which Epic's compiler refuses (UEFN
+    # 43.12, error 3509; #724): the elements' types and that class, or None
+    tys = []
+    for m in members:
+        if (m[0], m[1]) not in tys: tys.append((m[0], m[1]))
+    if len(tys) < 2: return None
+    for d in chain(tys[0][0]):
+        if all(d in chain(c) for c, _ in tys) and all(class_at(c, g, d) == class_at(*tys[0], d) for c, g in tys): break
+    else: return None
+    above = [x for (x, _) in ifaces_of(d, [('var', v) for v in CL[d][1]])]
+    if all(x in above for (x, b) in ifaces_of(*tys[0]) if all((x, b) in ifaces_of(c, g) for c, g in tys)): return None
+    return ', '.join(f"{c}({', '.join(ty(x) for x in g)})" if g else c for c, g in tys), d
+refused = None
 gi = 0
 for (n, a), members in groups.items():
     tyI = f"{n}({', '.join(ty(x) for x in a)})" if a else n
+    if refused is None and no_join(members):
+        refused = "the elements of this array (%s) have more than one nearest common supertype (%s, " % no_join(members)
     mt = sub(IF[n][3], dict(zip(IF[n][1], a)))
     lines.append(f"    A{gi}:[]{tyI} = array{{{', '.join(m[2] for m in members)}}}")
     lines.append(f'    for (X : A{gi}) {{ Print("{{X.M{n}({lit(mt)})}} {{G{n}(X, {lit(mt)})}}") }}')
@@ -530,4 +556,4 @@ XWrap(X:t where t:type):[]t = array{{X}}'''.split('\n')
         lines.append(f'    Print("f3 {{XF3({o[2]})}}")')
         exp.append(f'f3 {1 if o[0] == "kb" else 0}')
 sys.stdout.write('\n'.join(lines) + '\n')
-open(sys.argv[2], 'w').write('exit=0\n' + '\n'.join(exp) + '\n')
+open(sys.argv[2], 'w').write('exit=4\n' + refused + '\n' if refused else 'exit=0\n' + '\n'.join(exp) + '\n')
