@@ -467,6 +467,41 @@ a `<concrete>` one cannot be `<abstract>`; `int[X]` of an `any` is refused.
 transactional in Core and in the C runtime and echoes nothing (#724,
 `followup-print/`).
 
+### Corners not yet asked
+
+[`followup-corners`](../../tests/conformance/versevm/followup-corners)
+holds 24 probes of corners the sets above leave open (#724). **None has
+been compiled or run by UEFN**: Epic's columns of its
+[`expectations.tsv`](../../tests/conformance/versevm/followup-corners/expectations.tsv)
+are `-`, and the scoreboard counts them as not asked. OpenVerse's column is
+its default, Lean and C agreeing; each header says what either answer
+changes. Run them as [below](#running-many-probes), single mode first: the
+refusals here are answers too.
+
+| Question | Probes | OpenVerse |
+| --- | --- | --- |
+| A task with a child `branch` is resumed by `Signal` and ends at once: does the branch's `defer` run before the event's next awaiter? | `signal-branch-defer-before-awaiter` | `runner resumed`, `branch cleanup`, `second awaiter`, `after signal`, `after wait` |
+| The same with the task a `race` arm that wins | `signal-race-arm-defer-before-awaiter` | `arm resumed`, `branch cleanup`, `loser cleanup`, `after race`, `second awaiter`, `after signal`, `after wait` |
+| Where an omitted field's default runs among an archetype's values given out of order (`B`, then `A`; `C` between them omitted, its default an archetype of a class whose block prints) | `cls-omitted-default-order`, `struct-omitted-default-order`, each with a `-control` | `value b`, `default c`, `value a`, `done 10 20` for both; the controls `default c`, `done 1 2` |
+| The same with a default that calls a printing `<transacts>` function | `cls-omitted-default-call` | refused, 3582's reason (expected of Epic too) |
+| `4 >= 4 < 5`, `1 <= 1 <= 2 < 3`, `5 >= 1 <= 3` | `compare-chain-ordered` | `ordered y y n` |
+| `1 < 2 = 2`, `2 = 2 < 1` | `compare-chain-equal` | `equal y n` |
+| A rational compared with an int by `<` (compile only) | `rational-less-than-int` | refused, citing 3509 |
+| `<converges>` on a method without a body, overridden by a `<computes>` method and by one with no specifier | `converges-abstract-computes-override`, `converges-abstract-plain-override`, `converges-abstract-control` | both refused (the override has a body; 3565); the control, `<computes>` throughout, `sides 4` |
+| `spawn` in a `defer` of a `<suspends>` function | `spawn-in-suspends-defer` | refused, not supported (#156) |
+| `map{0 => "a", "0" => "b"}` with no type written, looked up by `0` and by `"0"` | `map-int-and-string-keys` | refused, `expected int, found string` |
+| A map literal keyed by two `<unique>` classes whose only common class is not `<unique>` | `map-unique-sibling-keys`, `map-unique-sibling-keys-control` | refused, `expected cat, found dog`; the control, the common class `<unique>`, `length 2 cat 1 dog 2` |
+| A function with an `any` parameter named where a `type{_(:int):int}` is expected | `named-fn-any-param` | refused, `expected type{_(:int):int}, found type{_(:any):int}` |
+| A function with a `<unique>` class result named at a `comparable` result | `named-fn-comparable-result` | refused, `expected type{_():comparable}, found type{_():token}` |
+| A module constant of a `<unique>` class with a field, alone, in an option and in an array: admitted, and one object at every use? | `const-unique-object`, `const-unique-in-option`, `const-unique-in-array` | all refused: the constant "would hold an object with var fields or of a `<unique>` class, which would be a new one at each use" |
+| A `<computes>` function that reads a module constant of a `class<unique><allocates>` | `const-unique-allocates-computes` | refused, the same reason, before the function is judged |
+| Refinement overloads called with an `int` that is no literal | `refinement-overload-int-variable` | refused, `no overload of F takes (int)` |
+
+Not asked: whether `GetRandomInt` in a condition that then fails advances
+the generator. UEFN's results are not reproducible (a program can neither
+set nor read a seed), so nothing a probe prints would tell a rolled-back
+draw from a kept one.
+
 ### Subscribe follow-up probes
 
 [`followup-event/`](../../tests/conformance/versevm/followup-event) asks

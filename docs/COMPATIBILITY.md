@@ -71,8 +71,10 @@ show that the labelled lines are exactly the ones openverse drops).
 - **The Blueprint VM is not the target.** Where it differs from the Verse VM
   (integer overflow, `branch` lifetime, compound assignment, module
   constants) openverse does what the Verse VM does.
-- **16 probes are not asked yet** (`followup-variance`, class variance of
-  function values). They wait for the next Windows run.
+- **40 probes are not asked yet** (`followup-variance`, class variance of
+  function values; `followup-corners`, corners of signals, archetype
+  order, comparison chains, map keys and module constants). They wait for
+  the next Windows run.
 
 The Book of Verse's own test suite is the second measure. Of its 13,504
 cases, openverse agrees with 8,855, refuses 656 the Book calls valid, accepts
@@ -127,7 +129,7 @@ the gate fails until the row is gone and this page is regenerated.
 | Same result (refused by both, or the same lines, or the same lines then a runtime error) | 432 |
 | Admitted by both, not run on Epic | 55 |
 | Different | 52 |
-| Not asked of Epic | 16 |
+| Not asked of Epic | 40 |
 
 The 52 differences by cause (each is listed below):
 
@@ -158,6 +160,7 @@ A set is a directory of `tests/conformance/versevm` (`original`: the directory i
 | `followup-coerce` | 37 | 14 | 23 | 0 | 0 |
 | `followup-coerce2` | 17 | 11 | 6 | 0 | 0 |
 | `followup-conc` | 24 | 23 | 0 | 1 | 0 |
+| `followup-corners` | 24 | 0 | 0 | 0 | 24 |
 | `followup-event` | 14 | 12 | 0 | 2 | 0 |
 | `followup-int` | 27 | 19 | 0 | 8 | 0 |
 | `followup-print` | 10 | 10 | 0 | 0 | 0 |
