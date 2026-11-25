@@ -210,16 +210,18 @@ private def controls : List (String × String) := [
     "holder:=class{E:event(int)}\nCount(N:int)<computes>:int=if(N>0)then Count(N-1)else 0\n" ++
     header ++ setup ++
     "    Other:=event(int){}\n    Alias:=holder{E:=Other}\n    N:=Count(1)\n    Alias.E.Signal(N)\n    Stored()"),
+  -- (#724: Sleep(0.0) waits a tick now, so the arm that makes these three
+  -- rushes complete at once calls NoWait(), which does not wait. #572)
   ("A nested arm return stops at an already completed rush",
-    "Later(V:v,R:v where v:type)<suspends>:v=\n    Release:=event(int){}\n    Never:=event(int){}\n    Value:=rush:\n        block:\n            Inner:=race:\n                block:\n                    Release.Await()\n                    return V\n                block:\n                    Never.Await()\n                    R\n            R\n        block:\n            Sleep(0.0)\n            R\n    Release.Signal(0)\n    R\n" ++
+    "NoWait()<suspends>:void={}\nLater(V:v,R:v where v:type)<suspends>:v=\n    Release:=event(int){}\n    Never:=event(int){}\n    Value:=rush:\n        block:\n            Inner:=race:\n                block:\n                    Release.Await()\n                    return V\n                block:\n                    Never.Await()\n                    R\n            R\n        block:\n            NoWait()\n            R\n    Release.Signal(0)\n    R\n" ++
     scheduledCaller "    Saved:=Later(Shadow,F)\n    Saved()"),
   ("A helper's late rush return only stops its background arm",
-    "Later(V:v,R:v where v:type)<suspends>:v=\n    Release:=event(int){}\n    Value:=rush:\n        block:\n            Release.Await()\n            return V\n        block:\n            Sleep(0.0)\n            R\n    Release.Signal(0)\n    R\n" ++
+    "NoWait()<suspends>:void={}\nLater(V:v,R:v where v:type)<suspends>:v=\n    Release:=event(int){}\n    Value:=rush:\n        block:\n            Release.Await()\n            return V\n        block:\n            NoWait()\n            R\n    Release.Signal(0)\n    R\n" ++
     scheduledCaller "    Saved:=Later(Shadow,F)\n    Saved()"),
   ("A source late rush return only stops its background arm",
     (header.replace "<suspends>:int=" s!"<suspends>:{functionTy}=") ++
-    "    Value:=rush:\n        block:\n            E.Await()\n            return Dummy\n        block:\n            Sleep(0.0)\n            F\n    E.Signal(0)\n    F\n" ++
-    s!"Use(E:event(int),F:{functionTy},D:{functionTy})<suspends>:int=\n    Saved:=Caller(E,F,D)\n    Saved()"),
+    "    Value:=rush:\n        block:\n            E.Await()\n            return Dummy\n        block:\n            NoWait()\n            F\n    E.Signal(0)\n    F\n" ++
+    s!"NoWait()<suspends>:void=\{}\nUse(E:event(int),F:{functionTy},D:{functionTy})<suspends>:int=\n    Saved:=Caller(E,F,D)\n    Saved()"),
   ("An inlined helper arm can return real data to its caller",
     returningHelper "R" ++ scheduledCaller "    Saved:=Later(Shadow,F)\n    Saved()"),
   ("A user's Signal method preserves a fresh unrelated event",

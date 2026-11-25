@@ -572,6 +572,11 @@ private def poolTransitions (plan : MetadataPlan.Plan) (c : Configuration)
       output := output ++ emit completed pool.task true
   return output
 
+/-- Whether a `Sleep` of this constant duration waits: zero does, for a tick,
+    as every duration that is not negative (and `-0.0` is zero); a negative
+    or NaN one completes at once (`sleepResume`, ConcurrencyPrelude.lean). -/
+private def sleepWaits (seconds : Float) : Bool := decide (seconds ≥ 0.0)
+
 private partial def constantSleep : Expr → Option Float
   | .lit (.float bits) => some (VFloat.ofBits bits)
   | .seq _ b | .assign _ b => constantSleep b
@@ -1342,8 +1347,8 @@ private partial def invoke (fns : Array Fn) (infos : Array Info)
   let name := (fns[g]?.map (·.name)).getD ""
   let yielded : Bool := if name == "$Sleep" then
     match es with
-    | [.lit (.float bits)] => decide (VFloat.ofBits bits > 0.0)
-    | [.prim .fneg [.lit (.float bits)]] => decide (-(VFloat.ofBits bits) > 0.0)
+    | [.lit (.float bits)] => sleepWaits (VFloat.ofBits bits)
+    | [.prim .fneg [.lit (.float bits)]] => sleepWaits (-(VFloat.ofBits bits))
     | _ => true
     else name == "$WaitDone" || yielded
   -- An ordinary transfer may return an alias before any private cell has
@@ -1936,10 +1941,10 @@ private partial def schedule (env : ScheduleEnv) (entry : Slots) : M Flow := do
       let name := (env.fns[g]?.map (·.name)).getD ""
       let duration := if name == "$Sleep" then original.head?.bind constantSleep else none
       let mayYield := if name == "$Sleep" then
-          duration.map (fun n => decide (n > 0.0)) |>.getD true
+          duration.map sleepWaits |>.getD true
         else mayYield
       let mustYield := name == "$EvAwait" ||
-        (name == "$Sleep" && duration.any (fun n => decide (n > 0.0)))
+        (name == "$Sleep" && duration.any sleepWaits)
       let slots := match role with
         | some role => { putRole out.slots dst role parts with
             heap := MetadataCells.setLocal out.slots.heap (refBase + dst) out.valueRefs }

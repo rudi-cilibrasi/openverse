@@ -8,6 +8,12 @@ private def header (ret : String := "int") : String :=
 private def keep := "Keep(V:v where v:type)<suspends>:v=block{Sleep(0.1);V}\n"
 
 private def refusals : List (String × String) := [
+  -- (#724: Sleep(0.0) waits a tick, as Epic's Verse VM and Blueprint VM do, so
+  -- the task that loops on it gives its caller its turn, and the caller
+  -- executes the dummy; until then a control, "zero sleep cannot reach a
+  -- nonreturning task's caller", and admitted. #572)
+  ("zero sleep reaches a nonreturning task's caller", "Forever()<suspends>:void=loop{Sleep(0.0)}\n" ++ header ++
+    "    spawn{Forever()}\n    Dummy()"),
   ("awaited generic result", keep ++ header ++
     "    T:=spawn{Keep(Dummy)}\n    Saved:=T.Await()\n    Saved()"),
   ("result forwarded through helpers", keep ++
@@ -50,8 +56,6 @@ private def controls : List (String × String) := [
   ("nonreturning task with real continuation", "Forever()<suspends>:void=loop{Sleep(0.1)}\n" ++ header ++
     "    spawn{Forever()}\n    F()"),
   ("nonwaiting task cannot reach its caller", "NoWait()<suspends>:void={}\nForever()<suspends>:void=loop{NoWait()}\n" ++ header ++
-    "    spawn{Forever()}\n    Dummy()"),
-  ("zero sleep cannot reach a nonreturning task's caller", "Forever()<suspends>:void=loop{Sleep(0.0)}\n" ++ header ++
     "    spawn{Forever()}\n    Dummy()"),
   ("negative sleep cannot reach a nonreturning task's caller", "Forever()<suspends>:void=loop{Sleep(-0.1)}\n" ++ header ++
     "    spawn{Forever()}\n    Dummy()"),
