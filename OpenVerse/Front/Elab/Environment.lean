@@ -466,4 +466,31 @@ def addPlaceholders (env : TyEnv) : Except String TyEnv := do
         throw s!"field '{f}' of {sn}: a map key must be comparable, and {ft.show} has a key that is not"
   return env
 
+/-- (#724) The objects of the module constants `N:c = c{}` of a `<unique>`
+    class without type parameters and without fields: one more object of
+    `c` each among the prototypes, after the classes' own, which the
+    program starts by allocating (#37). A constant is computed at each use,
+    so its construction would be a new object each time; a reference to its
+    object is the same one, as the Book of Verse's module constants are
+    (`GlobalVariables.versetest` 72 to 74: `Instance1 = Instance1`,
+    `Instance1 <> Instance2`; UEFN 43.12 admits and runs
+    followup-refused/module-const-unique). An object without fields holds
+    nothing its class's defaults or `block:` clauses could give, and the
+    constant's elaboration checks its construction as any other
+    (`elabFunctions`). -/
+def addConstantObjects (env : TyEnv) (tops : List STop) : TyEnv :=
+  let own := tops.filterMap fun
+    | .const _ n _ _ (.construct _ c [] []) =>
+      let i := env.info c
+      if !n.startsWith "$" && env.classes.contains c && env.isRefClass c && !i.isIface && !i.isAbstract &&
+          (env.sparams.lookup c).isNone && env.isUnique c && (env.fields c).isEmpty &&
+          env.protos.any (·.1 == c) then
+        some (n, c)
+      else none
+    | _ => none
+  let base := env.protos.length
+  { env with
+    protos := env.protos ++ own.map (fun (_, c) => (c, env.tagOf c, [])),
+    constObjects := own.zipIdx.map fun ((n, _), i) => (n, base + i) }
+
 end OpenVerse.Front

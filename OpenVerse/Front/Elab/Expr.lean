@@ -31,6 +31,12 @@ def checkFilterCanFail (ctx : Ctx) (s : SExpr) (r : R) : EM Unit := do
     if isFilter && !(r.e.mayFail ctx.sigProg) && (← ctx.failabilityKnown) then
       eerr s.pos "this filter cannot fail: each filter of a for, or of a first with a generator, must be able to fail (Book of Verse ch. 7: \"Each filter must be failable, and if any fails, that iteration is skipped\"; its tests, for.versetest: \"Filter can not fail\", first.versetest: \"same as `for`\"); an effect among the clauses goes in one that can, as the Book's tests write (set X = E; true?), or in the body"
 
+/-- Why a call whose one argument is a tuple of one element fits an overload
+    on its element's type and one on an array's (`resolveOverload`): the
+    retry of a call with its tuple argument flattened leaves this refusal
+    as it is (`elabApp`). -/
+def singletonBoth : String := "its argument is a tuple of one element, which is that element and an array"
+
 set_option maxHeartbeats 800000 in
 mutual
 partial def choiceCoerceResult (ctx : Ctx) (p : Pos) (r : R) (exp : Option Ty) : EM R := do
@@ -626,6 +632,26 @@ partial def resolveOverload (ctx : Ctx) (p : Pos) (name : String) (ovs : List St
       if ← fits o then ok := ok ++ [o]
   let call' (o : String) : EM R :=
     tryCatch (call o) fun msg => throw (msg.replace o name)
+  -- (#724) one argument that is a tuple of one element is that element for
+  -- a parameter of its type, and an array for an array parameter: `F(:int)`
+  -- beside `F(:[]int)` are two overloads (one argument is no tuple of the
+  -- arguments, `TyEnv.paramsDistinct`), and such a call fits both
+  if let ([a], true) := (posArgs, namedArgs.isEmpty && cands.length > 1) then
+    if let some (.tup [x]) ← natTy a then
+      let mut asElement : List String := []
+      let mut asArray : List String := []
+      for o in cands do
+        let some so := sigOf o | continue
+        if !so.tparams.isEmpty then continue
+        let [u] := so.params | continue
+        match u with
+        | .arr _ => if ← coercible (.tup [x]) u then asArray := asArray ++ [o]
+        | .tup _ => pure ()
+        | _ => if ← coercible x u then asElement := asElement ++ [o]
+      if !asElement.isEmpty && !asArray.isEmpty then
+        let shown := (asElement ++ asArray).map fun o =>
+          s!"({", ".intercalate (((sigOf o).map (·.params)).getD [] |>.map Ty.show)})"
+        eerr p s!"this call of {name} fits more than one overload: {" and ".intercalate shown} ({singletonBoth})"
   match ok, cands with
   | [o], _ => call' o
   | [], [o] => call' o   -- its error
@@ -801,6 +827,9 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
       let tupleErr := err.startsWith s!"{a.pos.show}:" &&
         (err.splitOn ", found tuple(").length > 1
       if !(shapeErr || callErr || tupleErr) then throw err
+      -- (#724: flattening the tuple would choose one of the two overloads
+      -- the call fits)
+      if (err.splitOn singletonBoth).length > 1 then throw err
       restore
       let c2 := { ctx with retries := ctx.retries + 1 }
       let fnTy : Ty → Bool := fun | .struct n _ => (FnValues.parseName n).isSome | _ => false
@@ -2931,8 +2960,28 @@ partial def elabMapLit (ctx : Ctx) (p : Pos) (entries : List (SExpr × SExpr)) (
       -- and its real code still runs once in the original entry order.
       checkMapKeyCanFail ctx k0.pos rk0.e
       let mut rs : Array (SExpr × R × SExpr × R) := #[(k0, rk0, v0, rv0)]
+      -- (#724) with no key type expected, a key that is not of the type of
+      -- those before it widens the map's key type to their join
+      -- (`mapKeyJoin`): `map{A => 1, B => 2}` of sibling classes is keyed by
+      -- their `<unique>` base. Every key is converted to it below.
+      let mut kt := kt
       for (k, v) in entries.drop 1 do
-        let rk ← elabE ctx k (some kt)
+        let stK ← get
+        let first ← tryCatch (Except.ok <$> elabE ctx k (some kt)) (fun err => pure (Except.error err))
+        let rk ← match first with
+          | .ok r => pure r
+          | .error err =>
+            if kt?.isSome then throw err
+            set stK
+            tryCatch (elabE ctx k none) (fun _ => throw err)
+        if kt?.isNone && rk.ty != kt then
+          let stC ← get
+          let refusal ← tryCatch (do discard <| coerce k.pos rk kt; pure none) (fun err => pure (some err))
+          set stC
+          if let some err := refusal then
+            match mapKeyJoin (← get).env kt rk.ty false with
+            | some j => kt := j
+            | none => throw err
         -- (a key that can fail: "failure in map literal keys is not
         -- implemented", Book of Verse ch. 3, and its tests, Map.versetest:249)
         checkMapKeyCanFail ctx k.pos rk.e

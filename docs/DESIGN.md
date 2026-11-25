@@ -1447,7 +1447,7 @@ where an elaboration asks for something and goes no further
 8. `upperBounds`: the bounds of type parameters and the relations fields declare, resolved for every header, then checked; then `checkAliasBounds`, the bounds of the type applications type aliases write.
 9. `interfaceViews`: the interfaces referred to through views; a class that then needs hidden fields for all its type parameters makes the elaboration ask for them (`Views`, tier 2).
 10. `pinsAndAccessors`: the pins of the classes dispatched to under a refinement, and the fields read through accessors.
-11. `addPlaceholders`: placeholder classes and prototypes; no struct contains itself, and map keys are comparable.
+11. `addPlaceholders`: placeholder classes and prototypes; no struct contains itself, and map keys are comparable. Then `addConstantObjects` (#724): one more object among the prototypes for each module constant `N:c = c{}` of a `<unique>` class without fields (`TyEnv.constObjects`).
 12. `functionOverloads` (`Elab/Signatures.lean`): overloaded functions renamed, and the overloads of functions and methods, which the environment records (`Overloads`).
 13. `declareSignatures`: each function's and constant's signature as declared (`Declared`); then the Book's variances of the classes and interfaces, and every type parameter of a source function given by its parameters, by them (`checkDeterminedTypeParams`, the Book's 3503).
 14. `inferSignatures`: the types of unannotated constants, then the defaults function types write checked (#503), then the effects inferred in rounds (`Signatures`).
@@ -3244,7 +3244,12 @@ position in every class below the one that declares it.
   which every heap starts with (`HeapOK`), and `Runs.typed` evaluates the
   prelude before preservation takes over. A class without a prototype
   falls back to a parameter of a subtype or a new placeholder object
-  (`DefaultE.new`). The generic witness of a class type argument is a slot
+  (`DefaultE.new`). A module constant `N:c = c{}` of a `<unique>` class
+  without type parameters and without fields has an object of its own
+  after the classes' prototypes, allocated by the same prelude
+  (`addConstantObjects`, #724): the constant, which is computed at each
+  use, is the literal reference to it, so it is one object, as Epic's
+  module constants are. No change to Verse Core: it is one more prototype. The generic witness of a class type argument is a slot
   of exactly that type, so that the checker infers the instantiation
   exactly.
 - **Parametric classes** (#39) are references with type arguments. Their

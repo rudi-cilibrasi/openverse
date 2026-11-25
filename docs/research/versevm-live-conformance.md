@@ -870,6 +870,20 @@ accepts and Epic refuses: `ToDiagnostic(15).String`. Each probe's row in
 | `module-const-unique` (and control), `module-const-empty-map-unique-key`, `unique-interface-equality` (and control), `constructor-delegation-archetype` (and control), `persistable-class`, `converges-abstract-method` | 4, 1, 4, 4, 1, 3 | classes and modules: module constants of a `class<unique><allocates>` (made `<computes>` too), an empty map keyed by a `<unique>` class, an `interface<unique>` no class implements compared, `MakeBase<constructor>(…)` in an archetype outside a constructor, a `<persistable>` class, `<converges>` on an abstract method (43.12 refuses it on a function with a body, 3565) |
 | `definition-in-expression`, `spawn-in-defer`, `break-in-for-in-loop`, `overloads-struct-and-array` | 2, 1, 1, 1 | `X:int = Y:int = 4`, `spawn` in a `defer`, `break` in a `for` inside a `loop`, `F(:a)` beside `F(:[]a)` |
 
+Closed since (#724, joins, maps, constants and overloads), each now
+printing Epic's lines in Lean and C, with its row's note in
+`followup-refused/expectations.tsv`:
+
+- `map-literal-sibling-keys`: a map literal's key type is the join of its keys' types, the `<unique>` class above them.
+- `concatenate-maps-key-join`: `ConcatenateMaps` of maps keyed by different types gives a map keyed by their join, a class above both or `comparable`.
+- `map-any-value-generic`: an `any` inside a generic parameter's type takes any type and binds nothing.
+- `named-fn-any-result`: a function named where a function type with an `any` result is expected is converted, as at a `void` result.
+- `unique-interface-equality`: a `<unique>` interface no class implements is comparable.
+- `module-const-unique`: a module constant `N:c = c{}` of a `<unique>` class without fields is one object, the same at every use.
+- `module-const-empty-map-unique-key`: an empty `map{}`, `array{}` or `false` holds no object, whatever its type.
+- `overloads-struct-and-array`: `F(:t)` beside `F(:[]t)` are two overloads; `F(:a, :a)` beside `F(:[]a)` is still refused.
+- `refinement-overloads`: refinements of one base whose intervals have no number in common are disjoint overload domains.
+
 Closed since (#724), each now printing Epic's lines in Lean and C, with
 its row's note in `followup-refused/expectations.tsv`:
 

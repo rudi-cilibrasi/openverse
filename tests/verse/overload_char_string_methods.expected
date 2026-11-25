@@ -1,0 +1,10 @@
+int 1
+string a
+int 2 string 2
+int 3
+LOUD string b
+char
+LOUD string c
+string d
+LOUD string d
+exit=0

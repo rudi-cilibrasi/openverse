@@ -182,8 +182,15 @@ partial def elabConcatenateMaps (c : BuiltinCall) : EM R := do
       pure found
   let mut rs : Array R := #[]
   let mut jt? : Option Ty := none
+  -- (#724) with no map type expected, a map that is not of the first one's
+  -- type is typed alone, and the maps' key types are joined (`keyJoined`)
+  let inferred := match exp with | some (.map ..) => false | _ => true
   for a in args do
-    let r ← elabE ctx a mapExp
+    let stA ← get
+    let r ← tryCatch (elabE ctx a mapExp) fun err => do
+      if !inferred || jt?.isNone then throw err
+      set stA
+      tryCatch (elabE ctx a none) (fun _ => throw err)
     let r ← elabContainerReceiverWith elabE ctx a.pos r (fun | .map .. => true | _ => false) "ConcatenateMaps"
     if let .weakMap .. := r.ty then
       eerr a.pos s!"ConcatenateMaps takes maps, and a weak_map is not one (Book of Verse ch. 3: \"you cannot use `ConcatenateMaps`\"): {r.ty.show}"
@@ -191,10 +198,30 @@ partial def elabConcatenateMaps (c : BuiltinCall) : EM R := do
     match jt? with
     | none => jt? := some r.ty
     | some j =>
-      let j' ← tryCatch (join a.pos j r.ty mapExp) (fun _ =>
-        match SubtypeEvidence.joinView? ctx.types ctx.evidenceTypes [j, r.ty] mapExp with
+      -- (#724) maps keyed by different types: a map keyed by the join of
+      -- the two, a class or interface above both or `comparable`
+      -- (`mapKeyJoin`), its values' type their join, at `comparable` or
+      -- `any` when they have nothing else in common (the Book of Verse's
+      -- tests, `ConcatenateMaps.versetest` 44, 67: "Concatenating two maps
+      -- should result in a map with a key type and value type that are
+      -- joins of the input key types and value types"). Each map is
+      -- converted to it, so a key is looked up as a key of the joined type.
+      let keyJoined : Option Ty := match inferred, j, r.ty with
+        | true, .map k x, .map k' y =>
+          if k == k' || j.hasNever || r.ty.hasNever then none else
+          let env := ctx.types
+          (mapKeyJoin env k k' true).bind fun kj =>
+            let vj := if x == y then some x else match joinTy env x y none true with
+              | some v => some v
+              | none => if ambiguousJoin env x y then none else some (fallbackJoin env x y)
+            vj.map (Ty.map kj)
+        | _, _, _ => none
+      let j' ← match keyJoined with
         | some target => pure target
-        | none => eerr a.pos s!"ConcatenateMaps takes maps of one type, not {j.show} and {r.ty.show}")
+        | none => tryCatch (join a.pos j r.ty mapExp) (fun _ =>
+          match SubtypeEvidence.joinView? ctx.types ctx.evidenceTypes [j, r.ty] mapExp with
+          | some target => pure target
+          | none => eerr a.pos s!"ConcatenateMaps takes maps of one type, not {j.show} and {r.ty.show}")
       jt? := some j'
     rs := rs.push r
   let some jt := jt? | eerr p "ConcatenateMaps takes at least one map"

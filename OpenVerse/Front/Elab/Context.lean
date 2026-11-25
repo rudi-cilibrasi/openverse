@@ -270,7 +270,7 @@ def fnFits (env : TyEnv) (s : Sig) (t : Ty) : Bool :=
       -- (the effects and names only: a tuple parameter may be flattened)
       { own with arity := k + own.named.length }.within tsh &&
         if s.tparams.isEmpty then
-          (qs.zip ps).all (fun (q, p) => subAt q p) && subAt s.ret u
+          (qs.zip ps).all (fun (q, p) => subAt q p) && env.resultConvertsAt s.ret u
         else
           match ((ps ++ [s.ret]).zip (qs ++ [u])).foldlM (fun σ (a, b) => a.matchArg env σ b) [] with
           | some σ => match SubtypeEvidence.infer env s.bounds σ true ((s.tparams.filter (·.2)).map (·.1)) with
@@ -1303,6 +1303,12 @@ where
     if seen.contains (pattern, actual) then none else do
       let seen := (pattern, actual) :: seen
       match pattern, actual with
+      -- (#724: every value is an `any`, so an `any` inside a pattern takes
+      -- any type and binds nothing, `M:[t]any` given an `[int]string`: the
+      -- Book of Verse's `Any.versetest:60`; UEFN 43.12 admits and runs
+      -- followup-refused/map-any-value-generic. The argument is then
+      -- converted to the parameter's type at the instance.)
+      | .any, _ => some substitution
       | _, .param .. =>
         let results := (SubtypeEvidence.valueViews ctx.types ctx.evidenceTypes actual).filterMap fun view =>
           go seen substitution pattern view
@@ -3005,6 +3011,33 @@ def ambiguousClassJoin (env : TyEnv) (tys : List Ty) : Option (List String) :=
     let minimal := common.filter fun U => !common.any fun U' => U' != U && env.isSub U' U
     if minimal.length > 1 && minimal.any (fun U => !(env.info U).isIface) then some minimal else none
   | _ => none
+
+/-- (#724) The key type of a map whose keys are of types `a` and `b`: their
+    join, a comparable type both convert to. Two classes join at their
+    nearest common class or interface, which must be `<unique>` (the Book of
+    Verse's tests, `Map.versetest:143`: "Map literals should infer common key
+    and value types that are joins of the key and value types of each pair";
+    UEFN 43.12 admits and runs followup-refused/map-literal-sibling-keys), a
+    refinement and its base at the base, options and tuples of such inside.
+    With `atComparable`, two comparable types with nothing else in common
+    join at `comparable` (`ConcatenateMaps(map{0=>"0"}, map{"0"=>"zero"})`,
+    `ConcatenateMaps.versetest:67`; followup-refused/concatenate-maps-key-join);
+    without it they do not join, nor do classes with more than one nearest
+    common supertype (`ambiguousClassJoin`), nor an `int` and a `rational`,
+    whose keys would change. -/
+def mapKeyJoin (env : TyEnv) (a b : Ty) (atComparable : Bool) : Option Ty :=
+  if a == b then some a
+  else if (ambiguousClassJoin env [a, b]).isSome || a == .rational || b == .rational then none
+  else
+    let ok (j : Ty) : Bool := isComparable env j && (j.keyContainer? env).isNone
+    match joinTyShaped env a b none true with
+    | some j =>
+      if ok j && (atComparable || !j.mentionsComparable || a.mentionsComparable || b.mentionsComparable) then some j
+      else none
+    | none =>
+      if atComparable && isComparable env a && isComparable env b && a.params.isEmpty && b.params.isEmpty then
+        some .dyn
+      else none
 
 /-- What two types with nothing else in common join at (`fallbackJoin`):
     an `if`'s branches and a choice's alternatives that join so are tried

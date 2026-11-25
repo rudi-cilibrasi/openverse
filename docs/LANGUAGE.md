@@ -40,7 +40,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Parametric structs | `pair(t:type, u:type) := struct:`, the type `pair(int, string)`, values `pair(int, string){First := 1, Second := "a"}` (or `pair{…}` where the expected type gives the type arguments); see [Parametric structs](#parametric-structs) | ch. 9 |
 | Classes | `name := class:` and `name(t:type) := class:` with fields and methods; `class(parent, interface, …)` (`class()` has none, as `class`; a type `t()` or value `t(){…}` with no type arguments is `t`, `t{…}`), `interface`, `<abstract>`, `<override>`, `<final>`, `(super:)`, virtual dispatch, casts `T[X]` and `T(X)`, `var` fields; members in braces on one line separated by `,` or `;` (`class{X:int block{}}` is refused, as the Book's tests have it, `ClassBlockClause.versetest:19`); see [Classes](#classes) | ch. 10 |
 | Enums | `name := enum:` / `enum{A, B}`, `name.A`, equality, `case` that needs no `_` when every value is named (an enumerator is its index in Verse Core); `enum<open>` may gain values, so a `case` on one needs `_` or a failure context (`<closed>` is the default); at most 256 values (UEFN 43.12 refuses the 257th, error 3552, "out of byte-range", and admits 256, `followup-book2/enum-wide`, #724) | ch. 9 |
-| Maps | `[k]v` (a comparable key with no array or map in it, through its options, tuples and a struct's fields, but `string`: "neither may serve as a map key", ch. 3), `map{k => v, …}` (a key given twice keeps its last value, at its last position; a key cannot fail, ch. 3: "failure in map literal keys is not implemented"; [the rules](research/book-remaining-rules.md#map-keys-and-a-refinements-range)), `M[k]` (fails on a missing key), `set M[k] = v` (insert or update; in Verse the key's reference is `<decides>`, the Book's API reference, so such a `set`, also as a path's last step, `set S.M[k] = v`, is written in a failure context, as the Book's tests do, `if (set M0[0] = 42)`, `(set Map[I] = I) or Err()`; its last key inserts, so it succeeds; its value is `v`), `set M[k] op= v` (fails on a missing key), `.Length`, `for (V : M)`, `for (K -> V : M)` in insertion order, `ConcatenateMaps(M1, M2)` (exactly two maps, ch. 3: more by chained calls; their pairs laid down in turn, as `map{…}` lays its own: a key both maps have takes the second map's value at the second map's place, the Book's API reference and `ConcatenateMaps.versetest` 21, 33), order-sensitive equality (a map is the array of its pairs in Verse Core); a key of a class above or beside the map's key class reads, looked up at the class above both; `weak_map(k, v)`, a supertype of `[k]v` with entry access only (see [Weak maps](#weak-maps)) | §3, §9.3 |
+| Maps | `[k]v` (a comparable key with no array or map in it, through its options, tuples and a struct's fields, but `string`: "neither may serve as a map key", ch. 3), `map{k => v, …}` (a key given twice keeps its last value, at its last position; a key cannot fail, ch. 3: "failure in map literal keys is not implemented"; [the rules](research/book-remaining-rules.md#map-keys-and-a-refinements-range); with no key type expected, the key type is the join of the keys' types, `map{A => 1, B => 2}` of sibling classes being keyed by the `<unique>` class above them: [comparable](#comparable), "Map keys"), `M[k]` (fails on a missing key), `set M[k] = v` (insert or update; in Verse the key's reference is `<decides>`, the Book's API reference, so such a `set`, also as a path's last step, `set S.M[k] = v`, is written in a failure context, as the Book's tests do, `if (set M0[0] = 42)`, `(set Map[I] = I) or Err()`; its last key inserts, so it succeeds; its value is `v`), `set M[k] op= v` (fails on a missing key), `.Length`, `for (V : M)`, `for (K -> V : M)` in insertion order, `ConcatenateMaps(M1, M2)` (exactly two maps, ch. 3: more by chained calls; their pairs laid down in turn, as `map{…}` lays its own: a key both maps have takes the second map's value at the second map's place, the Book's API reference and `ConcatenateMaps.versetest` 21, 33; maps keyed by different types make a map keyed by their join, a class above both or `comparable`, #724), order-sensitive equality (a map is the array of its pairs in Verse Core); a key of a class above or beside the map's key class reads, looked up at the class above both; `weak_map(k, v)`, a supertype of `[k]v` with entry access only (see [Weak maps](#weak-maps)) | §3, §9.3 |
 | Array methods | (also of a tuple of one element type, which is an array where one is expected: `('a', 'b', 'c').Slice[1]`) `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`, `A.RemoveFirstElement[x]`, `A.Remove[i, j]` (half-open), `A.ReplaceElement[i, x]`, `A.ReplaceFirstElement[x, y]`, `A.Insert[i, B]`, `A.Last[]`, `A.Last[n]` (the element n before the last) (all failable); `A.RemoveAllElements(x)`, `A.ReplaceAllElements(x, y)`, `A.ReplaceAll(Pattern, Replacement)` (contiguous subarrays, left to right, not overlapping; an empty pattern changes nothing), `Concatenate(A, B, …)` or `Concatenate(Arrays)` (#150) (never failing) | §9.1 |
 | Built-ins | `Print(s)`, `ToString(x)` (int, float, char, char32, string; of an int beyond 64 bits, the overflow error: [int](#int)), `Floor[F]`, `Ceil[F]`, `Round[F]`, `Int[F]` (of a float, failable), `Floor(R)`, `Ceil(R)` (of a rational or an int, never failing; `Floor(X / Y)` fails when `Y = 0`, as `X / Y` does), `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Clamp(Val, A, B)` (the median of the three, of ints or of floats, NaN when any of the floats is, as on Epic's Verse VM, [`float-clamp-nan`](../tests/conformance/versevm/differential/float-clamp-nan.verse), #724), `Sgn(X)` (-1, 0 or 1 of an int or a float, NaN of NaN), `F.IsFinite[]` (as `IsFinite[F]`), `BitAnd(X, Y)`, `BitOr`, `BitXor`, `BitNot(X)`, `BitShiftLeft[X, N]`, `BitShiftRight[X, N]` (see [Bitwise functions](#bitwise-functions)), `GetRandomInt(Low, High)`, `GetSecondsSinceEpoch()`, `FitsInPlayerMap[Value]` (deterministic in openverse: see [Random numbers, the clock and the player map](#random-numbers-the-clock-and-the-player-map)), `Err()` and `Err(Message)` (stops the program; ch. 8: "a runtime error with an optional message", the API reference `Err(Message:string)`: no argument or one string, which is evaluated first); a built-in given another number of arguments than it takes is refused (`Quotient takes two ints, found 3 argument(s)`); the conversions of chars and code points as methods (see [char32](#char32)): `C.ToCodeUnit()`, `C.ToAsciiChar32[]` of a char, `C.ToCodePoint()`, `C.ToAsciiString()` of a char32, `N.ToChar[]`, `N.ToChar32[]` of an int | API reference |
 | Modules | `name := module:` (nested), `M.F`, `A.B.F`, the types `M.c` and values `M.c{…}`, `(M:)F`, `using{M}` at file or module scope (a `using` of a path is accepted and ignored, but of `/localhost` and the paths below it, which the Book's tests refuse, "Explicitly using a "/localhost" package is not allowed", `Modules/Using2.versetest` 84-90), `<public>` members (`<internal>` is the default); see [Modules](#modules) | ch. 16 |
@@ -719,7 +719,15 @@ every function type it fits, `FnValues`), so it refuses, by the same error
    A function named converts by variance with `void` above every type too:
    its result discarded (`Run(IntIdentity)` with `Run(F(:int):void)`), an
    argument given to its `void` parameter (`G:int->int = VoidInput`), as
-   Epic admits and the Book's `Void.versetest` 91, 104 have it.
+   Epic admits and the Book's `Void.versetest` 91, 104 have it. And with
+   `any` above every type: `Call(Succ)` with `Call(G(:int):any)` and
+   `Succ(X:int):int`, `Apply(IntFun, 1)` with `Apply(F(:t):any, X:t)` (the
+   Book's `Any.versetest:152`, SOL-3799; UEFN 43.12 admits and runs
+   `followup-refused/named-fn-any-result`), at a result only. A function
+   with an `any` parameter named where another parameter type is expected
+   is not converted (Epic's answer is not recorded,
+   `followup-variance/any-param`), nor is a result at `comparable`
+   (`Call(G(:int):comparable)` given `Succ` is refused).
 2. **A generic function as a value with one of its type parameters inside a
    function type of its own**, a parameter's (`One(F(:t)<transacts>:t, X:t
    where t:type)`) or its result's, at an instance other than generic code's
@@ -953,10 +961,30 @@ kinds are taken alike, and `followup-book4` asks).
   flattened positional types are compared element by element: the same
   domains overlap, while a disjoint position distinguishes the overloads.
   The comparison also includes a tuple containing the positional inputs.
-  Thus `int` overlaps `tuple(tuple(int))` and `[]int`: a `tuple(int)`
-  argument can unpack for the scalar, wrap for the nested tuple, or convert
-  to the array. This does not implicitly turn a scalar into an array.
+  Thus `int` overlaps `tuple(tuple(int))`: a `tuple(int)` argument can
+  unpack for the scalar or wrap for the nested tuple. One parameter of type
+  `t` and one of type `[]t` are distinct when `t` and `[]t` are (#724): one
+  argument is no tuple of the arguments, so `F(:a)` beside `F(:[]a)`, and
+  `G(:int)` beside `G(:[]int)`, and `Show(:char)` beside `Show(:string)`,
+  are two overloads, while `F(:a, :a)` beside
+  `F(:[]a)` is refused, two arguments being a tuple, which is an array (the
+  Book's tests, `Overloading.versetest` 260 valid and 265 with 3532; UEFN
+  43.12 admits and runs `followup-refused/overloads-struct-and-array`). A
+  call whose one argument is a `tuple(int)`, which is its element for the
+  first and an array for the second, fits both and is refused where it is
+  made. This does not implicitly turn a scalar into an array.
   See the [complete tuple/container table](research/overloading-conformance.md#tuplecontainer-rules).
+- **Refinements** (#724). Two refinements of one base are distinct when
+  their intervals have no number in common (`small`, 0 to 65534, and
+  `negative`, below 0; a float's `_X > -0.0` and `_X < 0.0`, `-0.0` being
+  `0.0`): no value is of both. A call takes the overload its argument is
+  of, by its type when compiled, not by its value when run: a literal that
+  meets the conditions, or a value of a refinement within the parameter's
+  (`F(-1)`, `F(S)` with `S:small`); an `int` that is no literal is of
+  neither without a cast (the Book's tests,
+  `WhereConstrainedInts.versetest:179`, `WhereConstrainedFloats.versetest:59`;
+  UEFN 43.12 admits and runs `followup-refused/refinement-overloads`).
+  Refinements that share a number, and a refinement and its base, overlap.
 - **Overlapping types:** `void`, a type parameter, two array, map or option
   types (they share the empty one), an array, option or `logic` with
   another (`false` is each), and a
@@ -1686,7 +1714,23 @@ circle := class(shape, labelled):
   budget still counts at every construction, even for an empty type. Lean proves that a
   function without `writes` keeps every existing object as it was
   (`Prog.accepted_no_writes`). A constant cannot hold an object with `var`
-  fields or of a `<unique>` class, since it is computed at each use.
+  fields or of a `<unique>` class, since it is computed at each use, with
+  two exceptions (#724). A module constant `N:c = c{}`, its value the
+  construction itself and its type the class, of a `<unique>` class without
+  type parameters, without fields and without `block:` clauses, is one
+  object, the same at every use: the program starts with it, as with its
+  classes' prototypes (`TyEnv.constObjects`), so `Instance1 = Instance1`
+  and `Instance1 <> Instance2` hold, and a failure context that fails
+  leaves it the same object (the Book's tests, `GlobalVariables.versetest`
+  72 to 74; UEFN 43.12 admits and runs
+  `followup-refused/module-const-unique`). Its construction is checked as
+  any constant's, and its uses have its effects (a `<computes>` function
+  cannot use a constant of an `<allocates>` class). And a constant whose
+  value is an empty `map{}`, `array{}` or `false` holds no object, whatever
+  its type (`Empty:[c0]int = map{}` keyed by a `<unique>` class,
+  `module-const-empty-map-unique-key`). A `<unique>` object with fields,
+  one inside an option, an array or a tuple, a call's result and another
+  constant's object (`J:u = I`) are still refused.
 - **`block:`.** A class's `block:` clauses run when an instance is
   constructed, after its fields are given, those of the classes above it
   first, each class's in order; they see the fields by name, as a method
@@ -1696,7 +1740,11 @@ circle := class(shape, labelled):
   constructs the type. Interfaces have no blocks.
 - **`<unique>`.** A `<unique>` class (and every class below it) is
   comparable: `=` and `<>` test identity, so two instances with equal
-  fields differ, and an alias equals its original.
+  fields differ, and an alias equals its original. A `<unique>` interface
+  or abstract class that no concrete class is below is comparable too,
+  though it has no value to compare (#724; the Book's tests,
+  `ComparableInterface.versetest` 5 to 37; UEFN 43.12 admits
+  `followup-refused/unique-interface-equality`).
 - **Comparability.** Other classes and interfaces are not comparable (Book §4.9), nor
   is a struct or container that holds one.
 - **Refined conditional choices.** A `for` may use the name bound by a refining
@@ -2991,6 +3039,12 @@ clauses, first, later or alone, takes it as any (`if (X := Xs[1], X > 1)
 then array{X} else array{}` is a `[]int`), and a cast that refines type
 arguments types the branch under its refinement (#243, #583).
 
+An `any` inside a generic function's parameter type takes any type and
+binds nothing (#724): `MapCount(M:[t]any where t:subtype(comparable))` given
+an `[int]string` is called at `t := int`, the argument converted to
+`[int]any` (the Book's tests, `Any.versetest:60`; UEFN 43.12 admits and runs
+`followup-refused/map-any-value-generic`).
+
 Nothing can be done with an `any`: it has no equality (so it is no map
 key), no `ToString`, and no cast back. So in Verse Core it is `void`: a
 value becomes an `any` by being evaluated. In a program that calls
@@ -3098,6 +3152,26 @@ Main():void =
   map{1 => 2.0}` is a `[int]comparable`) and beside a `comparable`
   (`array{1} + CA` with `CA:[]comparable`). One that is not comparable
   makes the join `any`.
+- **Map keys** (#724). With no key type expected, a map literal's key type
+  is the join of its keys' types, as its value type is of its values' (the
+  Book's tests, `Map.versetest:143`: "Map literals should infer common key
+  and value types that are joins of the key and value types of each pair"):
+  keys of classes join at the nearest class or interface above them, which
+  must be `<unique>` (`map{A => 1, B => 2, S => 3}` of two sibling classes
+  and their base is keyed by the base), a refinement and its base at the
+  base, options and tuples of such inside. A key is converted to the joined
+  type and looked up by it, an object by identity. `ConcatenateMaps` of
+  maps keyed by different types gives a map keyed by their join alike, and
+  there two key types with nothing else in common join at `comparable`
+  (`ConcatenateMaps(map{0 => "0"}, map{"0" => "zero"})` is a
+  `[comparable]string` of two entries, `ConcatenateMaps.versetest` 44, 67);
+  the values' types join as a map literal's do. UEFN 43.12 admits and runs
+  both (`followup-refused/map-literal-sibling-keys`,
+  `concatenate-maps-key-join`). Still refused, for want of Epic's answer: a
+  map *literal* whose keys have nothing in common but `comparable`
+  (`map{0 => "a", "0" => "b"}`; write `M:[comparable]string = …`, the form
+  the Book's tests have), classes with no `<unique>` class above both or
+  with more than one nearest one, and an `int` key beside a `rational` one.
 - **Overloads.** `comparable` overlaps every comparable type and `<unique>`
   classes and interfaces (`F(:int)` and `F(:comparable)` cannot both be
   defined), and is distinct from the types that are not comparable.
@@ -3433,8 +3507,9 @@ Main():void =
   next one (`_X < 10` is `_X <= 9`). The negation of a refined value is of
   an expected refinement whose interval holds the flipped one
   (`NegValue:negative_percent = -MakePercent()`).
-- Not supported: overloads on disjoint refinements (refinements of one base
-  overlap).
+- Overloads on refinements of one base are distinct when their intervals
+  have no number in common ([Overloading](#overloading), #724); otherwise
+  refinements of one base overlap.
 
 ## Type aliases
 

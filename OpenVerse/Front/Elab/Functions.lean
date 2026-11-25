@@ -374,7 +374,21 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
     | .const p n _ sty body =>
       -- a constant is computed at each use, so it would be a new object each
       -- time (until Verse Core has global state)
-      if sig.ret.holdsMutable env then
+      -- (#724: an empty `map{}`, `array{}` or `false` holds no object,
+      -- whatever its type: `Empty:[c0]int = map{}` keyed by a `<unique>`
+      -- class, the Book of Verse's `Map.versetest`; UEFN 43.12 admits and
+      -- runs followup-refused/module-const-empty-map-unique-key)
+      let holdsNone := match body with
+        | .mapLit _ [] | .arrayLit _ [] | .ident _ "false" => true
+        | _ => false
+      -- (#724: or it is one object the program starts with, the same at
+      -- every use, `addConstantObjects`: `Instance:c = c{}` of a `<unique>`
+      -- class without fields, at its own class)
+      let ownObject : Option (Nat × String) := match body with
+        | .construct _ c [] [] =>
+          if sig.ret == .struct c [] then (env.constObjects.lookup n).map (·, c) else none
+        | _ => none
+      if sig.ret.holdsMutable env && !holdsNone && ownObject.isNone then
         throw s!"{p.show}: the constant {n} would hold an object with var fields or of a <unique> class, which would be a new one at each use: make it a function"
       -- (#724) a module's constant is a data member: its definition calls
       -- no function that might not complete (Epic's error 3582), unless
@@ -385,6 +399,15 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
       let (r, st) ← elabBody ctx body (some sig.ret) { env }
       if let some msg := divergentCallError st.divergentCalls then throw msg
       let (e, st) ← (coerce p r.1 sig.ret).run st
+      -- (#724) the constant's own object, in place of its construction,
+      -- which was elaborated for its checks only; a construction that
+      -- runs code (a `block:` clause) is no such object
+      let e ← match ownObject with
+        | some (a, c) =>
+          if e.printsOrCalls then
+            throw s!"{p.show}: the constant {n} would hold an object with var fields or of a <unique> class, which would be a new one at each use: make it a function (its class {c} runs code when constructed)"
+          pure (Expr.lit (.ref a))
+        | none => pure e
       -- a module's constant has no side effect: its initializer writes
       -- nothing, also through what it calls or constructs ("all non-local
       -- variables initializers (module, instance) can't have side

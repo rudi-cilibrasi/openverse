@@ -34,7 +34,7 @@ Tests/Any.versetest:50	agrees
 Tests/Any.versetest:51	agrees
 Tests/Any.versetest:52	agrees
 Tests/Any.versetest:55	agrees
-Tests/Any.versetest:60	disagrees-refuses
+Tests/Any.versetest:60	agrees
 Tests/Any.versetest:64	agrees
 Tests/Any.versetest:72	agrees
 Tests/Any.versetest:82	agrees
@@ -68,7 +68,7 @@ Tests/Any.versetest:134	agrees
 Tests/Any.versetest:137	agrees
 Tests/Any.versetest:138	agrees
 Tests/Any.versetest:145	not-translatable
-Tests/Any.versetest:152	disagrees-refuses
+Tests/Any.versetest:152	agrees
 Tests/Any.versetest:163	agrees
 Tests/Any.versetest:164	agrees
 Tests/Any.versetest:168	agrees
@@ -1812,7 +1812,7 @@ Tests/Bugs/SOL-3793-StackingSuperQualifiers.versetest:4	agrees
 Tests/Bugs/SOL-3793-StackingSuperQualifiers.versetest:16	agrees
 Tests/Bugs/SOL-3793-StackingSuperQualifiers.versetest:28	agrees
 Tests/Bugs/SOL-3793-StackingSuperQualifiers.versetest:39	agrees
-Tests/Bugs/SOL-3799-AddToMembersWhileIteratingOverThem.versetest:16	disagrees-refuses
+Tests/Bugs/SOL-3799-AddToMembersWhileIteratingOverThem.versetest:16	agrees
 Tests/Bugs/SOL-3799-AddToMembersWhileIteratingOverThem.versetest:decls	agrees
 Tests/Bugs/SOL-3819-DefinitionsInTypeSpecifiers.versetest:5	agrees
 Tests/Bugs/SOL-3819-DefinitionsInTypeSpecifiers.versetest:9	agrees
@@ -2816,10 +2816,10 @@ Tests/Comparable.versetest:209	agrees
 Tests/Comparable.versetest:216	disagrees-refuses
 Tests/Comparable.versetest:222	agrees
 Tests/Comparable.versetest:decls	agrees
-Tests/ComparableInterface.versetest:5	disagrees-refuses
-Tests/ComparableInterface.versetest:13	disagrees-refuses
-Tests/ComparableInterface.versetest:26	disagrees-refuses
-Tests/ComparableInterface.versetest:37	disagrees-refuses
+Tests/ComparableInterface.versetest:5	agrees
+Tests/ComparableInterface.versetest:13	agrees
+Tests/ComparableInterface.versetest:26	agrees
+Tests/ComparableInterface.versetest:37	agrees
 Tests/ComparableInterface.versetest:60	agrees
 Tests/ComparableInterface.versetest:71	agrees
 Tests/ComparableInterface.versetest:89	agrees
@@ -5027,9 +5027,9 @@ Tests/GlobalVariables.versetest:46	agrees
 Tests/GlobalVariables.versetest:49	agrees
 Tests/GlobalVariables.versetest:53	agrees
 Tests/GlobalVariables.versetest:59	agrees
-Tests/GlobalVariables.versetest:72	disagrees-refuses
-Tests/GlobalVariables.versetest:73	disagrees-refuses
-Tests/GlobalVariables.versetest:74	disagrees-refuses
+Tests/GlobalVariables.versetest:72	agrees
+Tests/GlobalVariables.versetest:73	agrees
+Tests/GlobalVariables.versetest:74	agrees
 Tests/GlobalVariables.versetest:76	agrees
 Tests/GlobalVariables.versetest:81	agrees
 Tests/GlobalVariables.versetest:86	agrees
@@ -5042,7 +5042,7 @@ Tests/GlobalVariables.versetest:126	disagrees-refuses
 Tests/GlobalVariables.versetest:134	disagrees-refuses
 Tests/GlobalVariables.versetest:143	agrees
 Tests/GlobalVariables.versetest:165	not-translatable
-Tests/GlobalVariables.versetest:decls	disagrees-refuses
+Tests/GlobalVariables.versetest:decls	agrees
 Tests/Incremental/01_null_compile.versetest:9	not-translatable
 Tests/Incremental/02_leaf_body_change.versetest:14	not-translatable
 Tests/Incremental/03_leaf_interface_change.versetest:14	not-translatable
@@ -5568,10 +5568,10 @@ Tests/Intrinsics/ConcatenateMaps.versetest:15	agrees
 Tests/Intrinsics/ConcatenateMaps.versetest:21	agrees
 Tests/Intrinsics/ConcatenateMaps.versetest:27	agrees
 Tests/Intrinsics/ConcatenateMaps.versetest:33	agrees
-Tests/Intrinsics/ConcatenateMaps.versetest:44	disagrees-refuses
+Tests/Intrinsics/ConcatenateMaps.versetest:44	agrees
 Tests/Intrinsics/ConcatenateMaps.versetest:51	agrees
 Tests/Intrinsics/ConcatenateMaps.versetest:60	agrees
-Tests/Intrinsics/ConcatenateMaps.versetest:67	disagrees-refuses
+Tests/Intrinsics/ConcatenateMaps.versetest:67	agrees
 Tests/Intrinsics/ConcatenateMaps.versetest:77	agrees
 Tests/Intrinsics/ConcatenateMaps.versetest:81	agrees
 Tests/Intrinsics/ConcatenateMaps.versetest:85	agrees
@@ -6942,7 +6942,7 @@ Tests/Map.versetest:119	agrees
 Tests/Map.versetest:120	agrees
 Tests/Map.versetest:121	agrees
 Tests/Map.versetest:124	agrees
-Tests/Map.versetest:143	disagrees-refuses
+Tests/Map.versetest:143	agrees
 Tests/Map.versetest:151	agrees
 Tests/Map.versetest:164	agrees
 Tests/Map.versetest:167	agrees
@@ -7015,7 +7015,7 @@ Tests/Map.versetest:460	agrees
 Tests/Map.versetest:464	agrees
 Tests/Map.versetest:468	agrees
 Tests/Map.versetest:472	agrees
-Tests/Map.versetest:decls	disagrees-refuses
+Tests/Map.versetest:decls	agrees
 Tests/MapOrder.versetest:3	agrees
 Tests/MapOrder.versetest:12	agrees
 Tests/MapOrder.versetest:23	agrees
@@ -9242,7 +9242,7 @@ Tests/Overloading.versetest:241	not-translatable
 Tests/Overloading.versetest:252	agrees
 Tests/Overloading.versetest:257	agrees
 Tests/Overloading.versetest:258	agrees
-Tests/Overloading.versetest:260	disagrees-refuses
+Tests/Overloading.versetest:260	agrees
 Tests/Overloading.versetest:265	agrees
 Tests/Overloading.versetest:decls	not-translatable
 Tests/PackageCycles.versetest:4	not-translatable
@@ -13106,7 +13106,7 @@ Tests/WhereConstrainedFloats.versetest:20	agrees
 Tests/WhereConstrainedFloats.versetest:27	agrees
 Tests/WhereConstrainedFloats.versetest:43	agrees
 Tests/WhereConstrainedFloats.versetest:49	agrees
-Tests/WhereConstrainedFloats.versetest:59	disagrees-refuses
+Tests/WhereConstrainedFloats.versetest:59	agrees
 Tests/WhereConstrainedFloats.versetest:66	agrees
 Tests/WhereConstrainedFloats.versetest:70	agrees
 Tests/WhereConstrainedFloats.versetest:74	agrees
@@ -13125,7 +13125,7 @@ Tests/WhereConstrainedFloats.versetest:144	agrees
 Tests/WhereConstrainedFloats.versetest:147	agrees
 Tests/WhereConstrainedFloats.versetest:151	agrees
 Tests/WhereConstrainedFloats.versetest:156	agrees
-Tests/WhereConstrainedFloats.versetest:decls	disagrees-refuses
+Tests/WhereConstrainedFloats.versetest:decls	agrees
 Tests/WhereConstrainedInts.versetest:8	agrees
 Tests/WhereConstrainedInts.versetest:18	agrees
 Tests/WhereConstrainedInts.versetest:24	agrees
@@ -13156,7 +13156,7 @@ Tests/WhereConstrainedInts.versetest:152	agrees
 Tests/WhereConstrainedInts.versetest:160	agrees
 Tests/WhereConstrainedInts.versetest:165	agrees
 Tests/WhereConstrainedInts.versetest:170	agrees
-Tests/WhereConstrainedInts.versetest:179	disagrees-refuses
+Tests/WhereConstrainedInts.versetest:179	agrees
 Tests/WhereConstrainedInts.versetest:184	agrees
 Tests/WhereConstrainedInts.versetest:190	agrees
 Tests/WhereConstrainedInts.versetest:203	disagrees-refuses
@@ -13178,7 +13178,7 @@ Tests/WhereConstrainedInts.versetest:237	disagrees-refuses
 Tests/WhereConstrainedInts.versetest:238	agrees
 Tests/WhereConstrainedInts.versetest:241	disagrees-refuses
 Tests/WhereConstrainedInts.versetest:242	agrees
-Tests/WhereConstrainedInts.versetest:decls	disagrees-refuses
+Tests/WhereConstrainedInts.versetest:decls	agrees
 Tests/await-regalloc-transactional-unification-variables.versetest:28	disagrees-refuses
 Tests/await.versetest:6	disagrees-refuses
 Tests/await.versetest:10	agrees
