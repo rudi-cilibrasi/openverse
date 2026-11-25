@@ -1391,7 +1391,14 @@ def TyEnv.paramsDistinct (env : TyEnv) (as bs : List Ty)
   let tupleInputApart (cmp : Ty → Ty → Bool) (xs ys : List Ty) := match ys with
     | [t] => match t with
       | .tup ts => apart cmp xs ts
-      | .arr t => xs.isEmpty || xs.any (cmp · t)
+      -- (#724: one argument is no tuple of the arguments, so it is an
+      -- array only when its own type is one: `F(:a)` beside `F(:[]a)`, the
+      -- Book of Verse's `Overloading.versetest:260`, valid, and beside it
+      -- `F(:a, :a)` and `F(:[]a)`, 3532; UEFN 43.12 admits and runs
+      -- followup-refused/overloads-struct-and-array)
+      | .arr t => xs.isEmpty || xs.any (cmp · t) || match xs with
+        | [x] => cmp x (.arr t)
+        | _ => false
       | .param .. | .dyn => cmp (.tup xs) t
       | .void | .any => false
       | _ => true

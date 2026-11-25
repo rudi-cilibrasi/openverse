@@ -940,9 +940,18 @@ kinds are taken alike, and `followup-book4` asks).
   flattened positional types are compared element by element: the same
   domains overlap, while a disjoint position distinguishes the overloads.
   The comparison also includes a tuple containing the positional inputs.
-  Thus `int` overlaps `tuple(tuple(int))` and `[]int`: a `tuple(int)`
-  argument can unpack for the scalar, wrap for the nested tuple, or convert
-  to the array. This does not implicitly turn a scalar into an array.
+  Thus `int` overlaps `tuple(tuple(int))`: a `tuple(int)` argument can
+  unpack for the scalar or wrap for the nested tuple. One parameter of type
+  `t` and one of type `[]t` are distinct when `t` and `[]t` are (#724): one
+  argument is no tuple of the arguments, so `F(:a)` beside `F(:[]a)`, and
+  `G(:int)` beside `G(:[]int)`, and `Show(:char)` beside `Show(:string)`,
+  are two overloads, while `F(:a, :a)` beside
+  `F(:[]a)` is refused, two arguments being a tuple, which is an array (the
+  Book's tests, `Overloading.versetest` 260 valid and 265 with 3532; UEFN
+  43.12 admits and runs `followup-refused/overloads-struct-and-array`). A
+  call whose one argument is a `tuple(int)`, which is its element for the
+  first and an array for the second, fits both and is refused where it is
+  made. This does not implicitly turn a scalar into an array.
   See the [complete tuple/container table](research/overloading-conformance.md#tuplecontainer-rules).
 - **Overlapping types:** `void`, a type parameter, two array, map or option
   types (they share the empty one), an array, option or `logic` with

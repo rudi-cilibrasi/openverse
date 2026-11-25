@@ -1,4 +1,7 @@
-# expect: base has overloads of F a call cannot tell apart
+# Overloaded methods on []t and int, each with a default the dispatch fills
+# (#724): one argument is no tuple of the arguments, so the two are distinct,
+# as F(:a) beside F(:[]a) is (tests/verse/overload_scalar_array; the refusal
+# this program pinned since #510 was openverse's own).
 base(t:type) := class:
     F(X:[]t,?N:int=0):int=N
     F(X:int,?N:int=0):int=N

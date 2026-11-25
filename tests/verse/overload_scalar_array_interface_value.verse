@@ -1,4 +1,7 @@
-# expect: box has overloads of Echo a call cannot tell apart
+# Echo(:[]t) beside Echo(:int) in a class (#724): two overloads, as F(:a)
+# beside F(:[]a) is (tests/verse/overload_scalar_array; the refusal this
+# program pinned since #510 was openverse's own). With --function-coercions,
+# as tests/verse/overload_audit_interface_value_scope.
 source(t:type):=interface:
     Echo(X:t)<computes>:t
 nested(t:type):=interface(source([]t)):
