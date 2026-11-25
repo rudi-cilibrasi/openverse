@@ -214,7 +214,7 @@ class Fail(Exception):
 # body fails (FlowControl/for.versetest 317-392, Range.versetest 140, 159). The
 # old rule: a failure undoes back to the most recent generator, whose
 # alternative's clauses that succeeded stay, even when later ones give nothing.
-FOR_BOOK = set(os.environ.get('OV_FOR_BOOK', 'plain,choice').split(',')) - {''}
+FOR_BOOK = set(os.environ.get('OV_FOR_BOOK', 'plain,choice,exclusive').split(',')) - {''}
 FOR_RULE = ['old']    # (the rule of the innermost for being run)
 
 # The kinds of choice point a for's clauses reach, as LANGUAGE.md tells them
@@ -230,13 +230,16 @@ FOR_RULE = ['old']    # (the rule of the innermost for being run)
 # own; a recursive one whose values are computed at the call is an array; a
 # lazily taken one, a method reached by dispatch and a call in a nested
 # failure context (`not`, `logic{}`, a condition), whose clauses are not
-# the for's, keep their boundary.
+# the for's, keep their boundary, and so does a call in a branch of an
+# exclusive choice (#759), which is lifted with that branch.
 # mvm2 is the ordinary two-argument overload; only its arguments can choose.
 MANY_VALUED = {'mcall', 'rcall', 'gcall', 'gself', 'rt', 'rt2', 'rt3', 'nam', 'mvm',
                'ovl', 'ows', 'ow2', 'om', 'owr', 'gx', 'gchoice', 'gbif', 'gblk'}
 # Inlined, their bodies a choice of values after plain clauses: Ov's
 # overloads, Ow(string), NAM, RT (its return a guarded alternative), Oxv, Oyv
 # and Odv.
+# RT2 and RT3 are inlined too, an exclusive choice among their clauses
+# (`call_kinds`).
 FLAT_CALLS = {'ovl', 'ows', 'nam', 'rt', 'gx'}
 FUNC_KINDS = {}
 
@@ -304,12 +307,18 @@ def call_kinds(x, local_search=False):
             out.add('plain')
         elif kind == 'mvm':
             out |= mvm_kinds()
+        elif kind in ('rt2', 'rt3'):
+            # (RT2 and RT3, inlined: a choice of values, then an `if` with a
+            # return before another choice, which is an exclusive choice, #314)
+            out |= {'choice', 'exclusive'}
         elif kind not in FLAT_CALLS:
             return {'call'}
     if kind in ('not', 'logic'):
         return out | call_kinds(x[1], True)
-    if kind in ('optor', 'orx', 'ifx'):
-        return out.union(call_kinds(x[1], True), *(call_kinds(value, local_search) for value in x[2:]))
+    if kind in ('optor', 'orx', 'ifx', 'bif', 'casex'):
+        # (a branch's calls are lifted with the branch, not into the for's
+        # clauses: each keeps a boundary, as one in the condition does)
+        return out.union(*(call_kinds(value, True) for value in x[1:]))
     return out.union(*(call_kinds(value, local_search) for value in x))
 
 
@@ -3331,8 +3340,14 @@ def gen_incomplete_if(rng):
     ]
     output = []
     score = 0
+    # (what the for undoes, OV_FOR_BOOK: its kinds are a range, an exclusive
+    # choice and its branch's choice of values. By the Book's rule a K none of
+    # whose values reaches the body is undone with its guard's print, #759;
+    # by the old rule the guard's print stays)
+    book = 'all' in FOR_BOOK or {'plain', 'choice', 'exclusive'} <= FOR_BOOK
     for i, values in enumerate(arms):
-        output.append(f"guard {i}")
+        if not book or any(v >= cutoff for v in values):
+            output.append(f"guard {i}")
         for v in values:
             if v >= cutoff:
                 score = v

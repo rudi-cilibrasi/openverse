@@ -3,7 +3,9 @@
 # whose picked branch is a plain value adds no choice, so a value the
 # filters after it reject undoes what came before it, as the same function
 # written with a return does (F, G); a picked branch with a choice of its
-# own is a generator, which keeps it (j); names its condition binds
+# own is a generator of the for's search, so when none of its values passes
+# the filter, what came before it is undone as well (j, #759: the old rule
+# kept it); names its condition binds
 F(X : int)<transacts>:int =
     if (X < 0):
         return 0

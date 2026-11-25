@@ -48,6 +48,17 @@ private def ForDomain.retained : ForDomain → List Nat
   | .sequence _ _ slots => slots
   | .bounds _ => []
 
+/-- A level's generator in one path of an exclusive choice: whether that path
+    was picked (`guard`, which reads the choice's selector), and the
+    generator's own element, source and source value. -/
+structure ForPathLevel where
+  guard : Expr
+  slot : Nat
+  src : Expr
+  arr : Nat
+  range : Option (Nat × Nat) := none
+  retained : List Nat := []
+
 /-- One generator of a `for` searched by the Book's rule: the slot of its
     element, its source, the code that binds the element's names and runs the
     filters after it, and the slots of the search: the source's value, the
@@ -65,6 +76,15 @@ structure ForLevel where
   range : Option (Nat × Nat) := none
   /-- Source slots read by later steps, such as the array behind its indices. -/
   retained : List Nat := []
+  /-- The level belongs to one path of an exclusive choice, and this tells
+      whether that path was picked. -/
+  guard : Option Expr := none
+  /-- The generators at this place of the choice's other paths, which share
+      the level's index and flags: one path is picked, so at most one of them
+      runs. When none does, the level is *passed through*: one element that
+      evaluates no source, binds nothing and runs no filter, so the levels
+      after it are searched once. -/
+  others : List ForPathLevel := []
 
 /-- Whether the `logic` in slot `s` is `true` (fails if not). -/
 def isTrueIn (s : Nat) : Expr := p2 .eq (.local s) (.lit (.logic true))
@@ -72,29 +92,66 @@ def isTrueIn (s : Nat) : Expr := p2 .eq (.local s) (.lit (.logic true))
 private def ForLevel.enter (level : ForLevel) : Expr :=
   let clear := Expr.seq (.assign level.ix (.lit (.int (-1))))
     (.seq (.assign level.act (.lit (.logic false))) (.lit .void))
-  let clear := match level.range with
-    | none => clear
-    | some (first, _) => .seq (.assign first (.lit (.logic true))) clear
-  .seq (.assign level.arr level.src) clear
+  let firsts := (level.range.toList ++ level.others.filterMap (·.range)).map (·.1)
+  let clear := firsts.foldr (fun first rest => .seq (.assign first (.lit (.logic true))) rest) clear
+  ((level.arr, level.src) :: level.others.map fun other => (other.arr, other.src)).foldr
+    (fun (arr, src) rest => .seq (.assign arr src) rest) clear
 
-private def ForLevel.advance (level : ForLevel) (exhausted : Expr) : Expr :=
-  let next := Expr.assign level.ix (p2 .add (.local level.ix) (.lit (.int 1)))
+/-- Move the index `ix` to the next element of the source in `arr`. -/
+private def advanceIn (ix arr : Nat) (range : Option (Nat × Nat)) (exhausted : Expr) : Expr :=
+  let next := Expr.assign ix (p2 .add (.local ix) (.lit (.int 1)))
   let ready := Expr.lit .void
-  match level.range with
+  match range with
   | none => .seq next
-    (.ite (p2 .lt (.local level.ix) (.prim .len [.local level.arr])) ready exhausted)
+    (.ite (p2 .lt (.local ix) (.prim .len [.local arr])) ready exhausted)
   | some (first, bounds) =>
     let bound (i : Nat) := Expr.prim (.tupGet i) [.local bounds]
-    .ite (.assign bounds (.prim .query [.local level.arr]))
+    .ite (.assign bounds (.prim .query [.local arr]))
       (.ite (isTrueIn first)
-        (.seq (.assign first (.lit (.logic false))) (.seq (.assign level.ix (bound 0))
-          (.ite (p2 .le (.local level.ix) (bound 1)) ready exhausted)))
-        (.ite (p2 .lt (.local level.ix) (bound 1)) (.seq next ready) exhausted))
+        (.seq (.assign first (.lit (.logic false))) (.seq (.assign ix (bound 0))
+          (.ite (p2 .le (.local ix) (bound 1)) ready exhausted)))
+        (.ite (p2 .lt (.local ix) (bound 1)) (.seq next ready) exhausted))
       exhausted
 
+private def ForLevel.advance (level : ForLevel) (exhausted : Expr) : Expr :=
+  let own := advanceIn level.ix level.arr level.range exhausted
+  match level.guard with
+  | none => own
+  | some picked =>
+    -- (passed through: one element)
+    let once := Expr.seq (.assign level.ix (p2 .add (.local level.ix) (.lit (.int 1))))
+      (.ite (p2 .lt (.local level.ix) (.lit (.int 1))) (.lit .void) exhausted)
+    .ite picked own (level.others.foldr (fun other rest =>
+      .ite other.guard (advanceIn level.ix other.arr other.range exhausted) rest) once)
+
+private def elementIn (slot ix arr : Nat) (range : Option (Nat × Nat)) : Expr :=
+  .assign slot (if range.isSome then .local ix else p2 .index (.local arr) (.local ix))
+
 private def ForLevel.bindElement (level : ForLevel) : Expr :=
-  .assign level.slot (if level.range.isSome then .local level.ix
-    else p2 .index (.local level.arr) (.local level.ix))
+  let own := elementIn level.slot level.ix level.arr level.range
+  match level.guard with
+  | none => own
+  | some picked =>
+    .ite picked (.seq own (.lit .void)) (level.others.foldr (fun other rest =>
+      .ite other.guard (.seq (elementIn other.slot level.ix other.arr other.range) (.lit .void)) rest) (.lit .void))
+
+/-- A generator where a level is made: the slot of its element, its source,
+    its filters, and for a path of an exclusive choice whether it was picked. -/
+structure ForLevelPart where
+  slot : Nat
+  domain : ForDomain
+  filter : Expr
+  guard : Option Expr := none
+
+/-- A level of the search: its generator, or the generators at one place of
+    an exclusive choice's paths, then what follows the paths that end here,
+    after their filters: a path's value bound to the choice's name, under
+    that path's guard, and the clauses after the choice, under the guard of
+    the path the choice is in, if any. This runs whichever generator ran, and
+    when the level is passed through. -/
+structure ForLevelPlan where
+  parts : List ForLevelPart
+  after : List (Option Expr × Expr) := []
 
 private def newForLevel (slot : Nat) (domain : ForDomain) (filter : Expr) : EM ForLevel := do
   let range ← match domain with
@@ -104,6 +161,32 @@ private def newForLevel (slot : Nat) (domain : ForDomain) (filter : Expr) : EM F
     slot, src := domain.code, filt := filter, arr := ← fresh domain.ty
     ix := ← fresh .int, act := ← fresh .logic, res := ← fresh .logic,
     range, retained := domain.retained }
+
+/-- The level of a plan. A generator of a path that was not picked evaluates
+    no source: an empty sequence, or the range `0..0`, never read. -/
+private def ForLevelPlan.level (plan : ForLevelPlan) : EM ForLevel := do
+  let first :: rest := plan.parts | throw "internal: a for level without a generator"
+  let level ← newForLevel first.slot first.domain first.filter
+  let some picked := first.guard | return level
+  let idle (domain : ForDomain) : Expr := match domain with
+    | .bounds _ => .prim .mkSome [.prim .mkTup [.lit (.int 0), .lit (.int 0)]]
+    | .sequence .. => .lit Value.emptyArray
+  let void := Expr.lit .void
+  let mut others : List ForPathLevel := []
+  let mut filters : List (Expr × Expr) := [(picked, first.filter)]
+  for part in rest do
+    let some guard := part.guard | throw "internal: a for level shared with an unguarded generator"
+    let other ← newForLevel part.slot part.domain part.filter
+    others := others ++ [{
+      guard, slot := other.slot, src := .ite guard other.src (idle part.domain), arr := other.arr
+      range := other.range, retained := other.retained }]
+    filters := filters ++ [(guard, part.filter)]
+  let filt := filters.foldr (fun (guard, filter) rest => Expr.ite guard (.seq filter void) rest) void
+  let filt := plan.after.foldl (fun done (guard, code) => Expr.seq done (match guard with
+    | some guard => .ite guard (.seq code void) void
+    | none => .seq code void)) filt
+  return { level with
+    src := .ite picked level.src (idle first.domain), filt, guard := some picked, others }
 
 /-- Preserve the traditional per-generator transaction boundaries while
     collecting a range's results in growing batches. -/
@@ -214,7 +297,10 @@ def ForSearch.cursorSlots (search : ForSearch) (bindings : List Nat) : List Nat 
     | [] => []
     | level :: rest =>
       [level.arr, level.ix] ++ level.retained ++ level.range.toList.map (·.1) ++
-        (if rest.isEmpty then [] else [level.act, level.slot]) ++ levels rest
+        (if rest.isEmpty then [] else [level.act, level.slot]) ++
+        level.others.flatMap (fun other =>
+          [other.arr] ++ other.retained ++ other.range.toList.map (·.1) ++
+            (if rest.isEmpty then [] else [other.slot])) ++ levels rest
   (search.started :: (levels (search.head :: search.tail) ++ bindings)).eraseDups
 
 private def packCursorSlots (slots : List Nat) : EM R := do
@@ -436,6 +522,10 @@ partial def forClauseEffects (observable : Nat → Bool) : Expr → Bool
   | .ite c t e => forClauseEffects observable c || forClauseEffects observable t || forClauseEffects observable e
   | .forE _ it f b => forClauseEffects observable it || forClauseEffects observable f || forClauseEffects observable b
   | .loop e | .ret e => forClauseEffects observable e
+
+/-- The most levels a search with an exclusive choice may have: one with more
+    keeps the lowering it had (`elabForWith`, `branchSearch`). -/
+def maxBranchLevels : Nat := 8
 
 /-- A call of a function with several values anywhere in `e`, as the
     functions are marked before their calls are lifted (`Choice.inlineCalls`:
@@ -824,6 +914,18 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       let idx := Expr.lit (.arr (choiceIdx es.length))
       pure (k, .sequence ((pre.map (Expr.seq · idx)).getD idx) (.arr .int), c1, Expr.assign xs (Expr.altE k es))
     | _ => eerr g.pos "bad for clause"
+  -- (a path of the exclusive choice bound to `x`: its guards, then its
+  -- value bound to the choice's name)
+  let exclPath (cA : Ctx) (x : String) (xty : Option STy) (gs : List SExpr) (r : SExpr) (i : Nat) : List SExpr :=
+    let rcl : List SExpr := match r with
+      | .block rp ss => match ss.getLast? with
+        | some (.decl q y t v e) => ss.dropLast ++ [.decl q y t v e, .decl rp x xty false (.ident rp y)]
+        | some l => ss.dropLast ++ [.decl rp x xty false l]
+        | none => [.decl rp x xty false (.tuple rp [])]
+      | e => [.decl e.pos x xty false e]
+    normGens (Choice.prepare (gs ++ rcl) (choiceValues cA) (choiceField cA)
+      (site := s!"$x{x}a{i}") (fieldOrder := choiceOrder cA) (keepExcl := true)
+      (keepBranches := choiceHasCast cA))
   -- (`peel`: the first group's filter, then its values, without the loop
   -- over its one element, for a continuation's clauses below)
   let rec build (c : Ctx) (gs : List (SExpr × List SExpr)) (bd : SExpr)
@@ -1083,17 +1185,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           .ite gp gs (.int gp (i : Int)) (some acc)) (.int gp (-1))
         let rsel ← elabE { cA with canFail := true, bodyFailure := false, inTaking := true } selS (some .int)
         let sel ← fresh .int
-        -- (a path's clauses: its guards, then its value bound to the choice's name)
-        let liftP (gs : List SExpr) (r : SExpr) (i : Nat) : List SExpr :=
-          let rcl : List SExpr := match r with
-            | .block rp ss => match ss.getLast? with
-              | some (.decl q y t v e) => ss.dropLast ++ [.decl q y t v e, .decl rp x xty false (.ident rp y)]
-              | some l => ss.dropLast ++ [.decl rp x xty false l]
-              | none => [.decl rp x xty false (.tuple rp [])]
-            | e => [.decl e.pos x xty false e]
-          normGens (Choice.prepare (gs ++ rcl) (choiceValues cA) (choiceField cA)
-            (site := s!"$x{x}a{i}") (fieldOrder := choiceOrder cA) (keepExcl := true)
-            (keepBranches := choiceHasCast cA))
+        let liftP := exclPath cA x xty
         -- (a path: its clauses up to its first generator into this filter, its
         -- generators into the body, with `pb` as the body; `flat`: `pb` is an
         -- array of the values, a continuation's, to flatten)
@@ -1480,7 +1572,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         | _ => eerr p "internal: nested for"
   -- (A `for` whose generators are over ranges, arrays, maps, strings and
   -- choices of values, with no producer calls left after clause
-  -- preparation and no exclusive choice: by the Book's rule, above. One
+  -- preparation, and with exclusive choices of those, `branchSearch`
+  -- below: by the Book's rule, above. One
   -- whose clauses can do nothing that undoing would change before its last
   -- generator's elements is the nested `forE`s, as they are that search;
   -- another is the search. The others keep their lowerings below, which
@@ -1585,7 +1678,140 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     let take := SExpr.app p (.member p (.ident p name) Choice.refinedCursorMethod) [] false
     elabE ctx (.ite p [.decl p name none false (.query p prior)] take
       (some (.ident p "false"))) (some resultTy)
-  if let some request := cursor then
+  let searchForm := stagePlan.isNone && (!prepared || searchPrepared || cursor.isSome) && !firstDecides && failure.isNone
+  let exclusive := pre.any isExcl || gs.any (fun (_, fs) => fs.any isExcl)
+  let start := (← get).nslots
+  -- (An exclusive choice, #314, in a `for` that undoes: its selector and the
+  -- clauses of the path it picks up to that path's first generator are a step
+  -- where the choice is written. The paths' generators are levels after it:
+  -- the first generators of all the paths share one level, the second ones
+  -- the next, each under its path's guard, `ForLevel.others`, so that the
+  -- number of levels is that of the longest path and the picked path's are
+  -- the ones that run. The choice's name is bound from the picked path's
+  -- value where that path ends, and the clauses after the choice run after
+  -- the paths' last level, then the generators after it: all of them are
+  -- here once, for every path. So the levels stay
+  -- a list, the picked path's are searched with the generators after the
+  -- choice by the Book's rule, and a row that reaches no body is undone back
+  -- to the element or alternative it is in. A path with a refining
+  -- condition, a composed choice or a producer of its own is not this:
+  -- those `for`s keep their lowering below, as does one whose clauses do
+  -- nothing that undoing would change, or have a call of a function with
+  -- several values left where a clause is compiled, or one with more than
+  -- `maxBranchLevels` levels.)
+  -- (A resumable header, #686, is searched this way when the request is the
+  -- loop's own: one for an alternative, a product's side or an owner keeps
+  -- the cursor it has.)
+  let ownRequest := cursor.all fun request =>
+    !prepared && !request.nested && !request.owned && request.attach.isNone
+  let branchSearch ← if !(searchForm && exclusive && ownRequest && !clauses.any callsManyValued) then pure none else do
+    let saved ← get
+    let refused : EM Unit := throw "this exclusive choice keeps its own lowering"
+    let stream := cursor.isSome || Choice.hasReturn body
+    let named (c : Ctx) : List (Nat × Bool) :=
+      c.locals.filterMap fun l => if l.slot >= start then some (l.slot, l.mutable) else none
+    -- The clauses `fs` where the search is, then the generators `more`: the
+    -- step's code, the levels after it, the context of the body, and the
+    -- slots the paths keep between steps (the names they bind, each with
+    -- whether it is a `var`, and the selectors).
+    let rec levelsOf (c : Ctx) (guard : Option Expr) (fs : List SExpr) (more : List (SExpr × List SExpr)) :
+        EM (Expr × List ForLevelPlan × Ctx × List (Nat × Bool)) := do
+      match fs.findIdx? isExcl with
+      | none =>
+        let (filt, c1) ← elabFilters c fs
+        match more with
+        | [] => return (filt, [], c1, [])
+        | (g, filters) :: rest =>
+          unless plainGen g do refused
+          let (slot, domain, c2, bind) ← elabSource c1 g stream
+          let (inner, levels, last, kept) ← levelsOf c2 guard filters rest
+          let filter := match bind with
+            | .lit _ => inner
+            | e => .seq e inner
+          return (filt, { parts := [{ slot, domain, filter, guard }] } :: levels, last, kept)
+      | some j =>
+        let (codeA, cA) ← elabFilters c (fs.take j)
+        let after := fs.drop (j + 1)
+        if let some b@{ branchy := some i, .. } := fs[j]?.bind Choice.binding? then
+          let i := pruneMethodCases cA i
+          let st ← get
+          let (_, _, _, refined) ← elabBranchAlts { cA with canFail := true, bodyFailure := false, inTaking := true, typeOnly := true }
+            b.pos i b.ty b.place
+          restoreConstructProbe cA st
+          if refined then refused
+          let cl := pruneMethodBinding cA (fs[j]?.getD (.tuple p []))
+          let (f, levels, last, kept) ← levelsOf cA guard (Choice.bifToExcl cl ++ after) more
+          return (.seq codeA f, levels, last, kept)
+        let some (.decl gp x xty _ (.app _ _ alts _)) := fs[j]? | eerr p "internal: an exclusive choice"
+        let xty ← match xty with
+          | none => joinOfType elabBranchAlts cA gp alts
+          | t => pure t
+        let some written := xty | eerr gp "this exclusive choice has no common type"
+        let bty ← resolveTy cA.types gp written
+        let alts : List (List SExpr × SExpr) := alts.filterMap fun
+          | .app _ (.ident _ "$alt") [.block _ gs, r] false => some (gs, r)
+          | _ => none
+        let selS : SExpr := alts.zipIdx.foldr (fun ((gs, _), i) acc =>
+          .ite gp gs (.int gp (i : Int)) (some acc)) (.int gp (-1))
+        let rsel ← elabE { cA with canFail := true, bodyFailure := false, inTaking := true } selS (some .int)
+        let sel ← fresh .int
+        let joined ← fresh bty
+        let mut steps : Array Expr := #[]
+        let mut levels : List ForLevelPlan := []
+        let mut kept : List (Nat × Bool) := [(sel, false), (joined, false)]
+        for ((gs, r), i) in alts.zipIdx do
+          let cl := exclPath cA x xty gs r i
+          let here := p2 .eq (.local sel) (.lit (.int (i : Int)))
+          let picked := match guard with
+            | none => here
+            | some outer => .seq outer here
+          let (f, ls, ci, ks) ← levelsOf cA (some picked) (cl.takeWhile (!isGen ·)) (groups (cl.dropWhile (!isGen ·)))
+          let some value := ci.lookup x | eerr gp "internal: an exclusive choice's path without its value"
+          unless value.ty == bty do refused
+          let bind := Expr.assign joined (.local value.slot)
+          kept := kept ++ ks ++ named ci
+          -- (the path's value where the path ends: in its step, or after the
+          -- filters of its last level, whichever of that level's generators ran)
+          let (step, ls) := match ls.reverse with
+            | [] => (Expr.seq f (.seq bind (.lit .void)), ls)
+            | final :: before =>
+              (Expr.seq f (.lit .void), before.reverse ++ [{ final with after := final.after ++ [(some picked, bind)] }])
+          steps := steps.push step
+          -- (the paths' levels side by side: one path is picked)
+          let shared := (levels.zip ls).map fun (mine, theirs) =>
+            { parts := mine.parts ++ theirs.parts, after := mine.after ++ theirs.after : ForLevelPlan }
+          levels := shared ++ levels.drop ls.length ++ ls.drop levels.length
+        let step := Expr.seq codeA (.seq (.assign sel rsel.e)
+          (steps.toList.zipIdx.foldr (fun (f, i) acc =>
+            .ite (p2 .eq (.local sel) (.lit (.int (i : Int)))) f acc) Expr.failV))
+        let cJ := { cA with locals := { name := x, slot := joined, ty := bty, mutable := false } :: cA.locals }
+        -- (the clauses after the choice: in its step when no path has a
+        -- generator, else after the paths' last level, whichever path ran)
+        let (f, rest, last, ks) ← levelsOf cJ guard after more
+        match levels.reverse with
+        | [] => return (.seq step f, rest, last, kept ++ ks)
+        | final :: before =>
+          let final := if after.isEmpty then final else { final with after := final.after ++ [(guard, f)] }
+          return (step, before.reverse ++ final :: rest, last, kept ++ ks)
+    let found ← tryCatch (do
+      let (filt, levels, last, kept) ← levelsOf ctx none pre gs
+      -- (each level is a `loop` inside the one before, and the storage
+      -- metadata pass, `MetadataFlow`, iterates every `loop` to a fixed
+      -- point: its time doubles with each level. Choices in a row, as a
+      -- function's many guarded returns are, #686, would have a level each)
+      if levels.isEmpty || levels.length > maxBranchLevels then return none
+      let kept := (kept ++ named last).eraseDups
+      let mutable := kept.filterMap fun (slot, written) => if written then some slot else none
+      let fx := forClauseEffects fun s => s < start || mutable.contains s
+      let n := levels.length
+      let undoes := (!pre.isEmpty && fx filt) || (levels.zipIdx.any fun (level, k) =>
+        level.parts.any (fun part => fx part.domain.code || (k + 1 < n && fx part.filter)) ||
+          (k + 1 < n && level.after.any fun (_, code) => fx code))
+      if !undoes then return none
+      return some ((if pre.isEmpty then none else some filt), levels, last, kept.map (·.1))) (fun _ => pure none)
+    if found.isNone then set saved
+    pure found
+  if let (some request, none) := (cursor, branchSearch) then
     let before := pre.takeWhile (!isExcl ·)
     -- A header whose own call reaches this function. Its cursor holds that
     -- call's frame, which holds a cursor of this header again: the owner's
@@ -1631,13 +1857,13 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           .ite p (before ++ [.query p (.ident p "true")]) (choose conditional) (some (.ident p "false"))
     if (pre[before.length]?).any isBranch then
       eerr p "a loop return with this refining conditional header is not supported yet (#686)"
-  if let (some request, (g, fs) :: more) := (cursor, gs) then
+  if let (some request, (g, fs) :: more, none) := (cursor, gs, branchSearch) then
     if let some binding := Choice.binding? g then
       if binding.composed && !pre.any isExcl then
         let suffix := fs ++ more.flatMap fun (next, filters) => next :: filters
         return ← cursorArms request pre suffix fun _ =>
           pure (binding.alts.map fun alt => [.decl binding.pos binding.name binding.ty false alt])
-  if let (some request, (g, fs) :: more) := (cursor, gs) then
+  if let (some request, (g, fs) :: more, none) := (cursor, gs, branchSearch) then
     let isRecursive (g : SExpr) : Bool := (Choice.binding? g).any fun binding =>
       match binding.each with
       | some (.app _ (.ident _ "$loop") _ false) => true
@@ -1684,26 +1910,31 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
   let cursorGroups := if cursor.isSome && gs.isEmpty then
     [(.gen p s!"$cursorUnit{p.line}_{p.col}" none (.arrayLit p [.tuple p []]), [])]
     else gs
-  if stagePlan.isNone && (!prepared || searchPrepared || cursor.isSome) && !firstDecides && failure.isNone && !cursorGroups.isEmpty &&
-      !clauses.any callsManyValued && !pre.any isExcl && cursorGroups.all (fun (g, fs) => plainGen g && !fs.any isExcl) then
-    let start := (← get).nslots
-    let (preE, unit, c0) ← match pre with
-      | [] => pure (none, 0, ctx)
-      | _ => do
+  let searchable := searchForm && !cursorGroups.isEmpty && !clauses.any callsManyValued
+  if branchSearch.isSome || (searchable && !exclusive && cursorGroups.all (fun (g, _) => plainGen g)) then
+    let (preE, unit, c0) ← match branchSearch, pre with
+      | some (filt, _, _, _), _ => pure (filt, 0, ctx)
+      | none, [] => pure (none, 0, ctx)
+      | none, _ => do
         let (filt, c1) ← elabFilters ctx pre
         pure (some filt, ← fresh .void, c1)
     let mut c := c0
     let mut levels : Array (Nat × ForDomain × Expr) := #[]
-    for (g, fs) in cursorGroups do
-      let (slot, domain, c1, bind) ← elabSource c g (cursor.isSome || Choice.hasReturn body)
-      let (filt, c2) ← elabFilters c1 fs
-      let filt := if fs.isEmpty then bind else match bind with
-        | .lit _ => filt
-        | e => .seq e filt
-      levels := levels.push (slot, domain, filt)
-      c := c2
+    if let some (_, _, last, _) := branchSearch then
+      c := last
+    else
+      for (g, fs) in cursorGroups do
+        let (slot, domain, c1, bind) ← elabSource c g (cursor.isSome || Choice.hasReturn body)
+        let (filt, c2) ← elabFilters c1 fs
+        let filt := if fs.isEmpty then bind else match bind with
+          | .lit _ => filt
+          | e => .seq e filt
+        levels := levels.push (slot, domain, filt)
+        c := c2
     let newSearch : EM ForSearch := do
-      let ls ← levels.toList.mapM fun (slot, domain, filt) => newForLevel slot domain filt
+      let ls ← match branchSearch with
+        | some (_, plans, _, _) => plans.mapM (·.level)
+        | none => levels.toList.mapM fun (slot, domain, filt) => newForLevel slot domain filt
       let head :: tail := ls | eerr p "internal: a for without generators"
       let found ← fresh .logic
       let started ← fresh .logic
@@ -1712,7 +1943,10 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         nested := (prepared || cursor.any (·.nested)) && !searchPrepared }
     if let some request := cursor then
       let search ← newSearch
-      let bindings := c.locals.filterMap fun l => if l.slot >= start then some l.slot else none
+      -- (with an exclusive choice, the paths' names and selectors too)
+      let bindings := match branchSearch with
+        | some (_, _, _, kept) => kept
+        | none => c.locals.filterMap fun l => if l.slot >= start then some l.slot else none
       let fields ← if request.attach.isSome then pure (c.locals.filter (·.slot >= start)) else
         request.outputs.mapM fun name =>
           match c.lookup name with
@@ -1732,7 +1966,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     let mutable := c.locals.filterMap fun l => if l.mutable && l.slot >= start then some l.slot else none
     let fx := forClauseEffects fun s => s < start || mutable.contains s
     let n := levels.size
-    let undoes := preE.any fx || (levels.toList.zipIdx.any fun ((_, domain, filt), k) =>
+    let undoes := branchSearch.isSome || preE.any fx || (levels.toList.zipIdx.any fun ((_, domain, filt), k) =>
       fx domain.code || (k + 1 < n && fx filt))
     if !undoes then
       -- (the nested `forE`s, as `build` makes them)
@@ -1772,6 +2006,11 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     let values := match c.forOutcomeSlot with
       | some flag => Expr.ite (.prim .query [.local flag]) (.local acc) (.seq .brk (.prim .userErr []))
       | none => Expr.local acc
+    -- (a `break` in the body leaves the rounds' loop with the search not
+    -- done: it goes on outward, to the loop around the `for`, as one from a
+    -- `forE`'s body does, `iterateForDomain`)
+    let values := if r.e.brkSafe false then values else
+      Expr.ite (isTrueIn done) values (.seq .brk (.lit Value.emptyArray))
     return ⟨.seq search.init (.seq (.assign done (.lit (.logic false)))
       (.seq (.assign acc (.lit Value.emptyArray)) (.seq (.assign size (.lit (.int 16)))
         (.seq (.loop roundBody) values)))), .arr r.ty⟩

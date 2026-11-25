@@ -1,0 +1,17 @@
+if-call 1 1 100
+if-call state 100
+call 1 1 100
+call state 100
+if-plain 1 1 100
+if-plain state 100
+else 1 1 100
+else state 100
+choice 1 1 100
+choice state 100
+array 1 1 100
+array state 100
+inside 1 1 100
+inside state 100
+index 1 1 100
+index state 100
+exit=0

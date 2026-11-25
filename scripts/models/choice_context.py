@@ -21,15 +21,29 @@ av = list(range(a, -1, -1)) if consumer == 'lazy' else list(range(a, a + (2 if c
 bv = list(range(b, -1, -1)) if consumer == 'lazy' else list(range(b, b + (2 if consumer == 'exclusive' else 4)))
 heap = total = count = 0
 lines = ['start'] if context == 'defer' else []
+# The rule a `for` follows (docs/research/readings-audit.md, "What a for
+# undoes"): `OV_FOR_BOOK`, the kinds of choice point whose fors follow the
+# Book of Verse's rule, as in scripts/models/mv.py. Early's for has an
+# exclusive choice (its `if` with a return) and a choice of values: by the
+# Book's rule a value of A none of whose B reaches the body is undone with
+# its prefix (#759). The composed consumer's for keeps the old rule, by
+# which the prefix commits before the B generator starts.
+FOR_BOOK = set(__import__('os').environ.get('OV_FOR_BOOK', 'plain,choice,exclusive').split(',')) - {''}
+book = consumer == 'exclusive' and ('all' in FOR_BOOK or {'choice', 'exclusive'} <= FOR_BOOK)
 for x in av:
     if x % ma != ra:
         continue
+    pending = 0
     if not first:
-        heap += da  # This prefix commits before the B generator starts.
+        if book:
+            pending = da
+        else:
+            heap += da
     for y in bv:
         if (x + y) % mb != rb:
             continue
-        heap = da + db if first else heap + db
+        heap = da + db if first else heap + pending + db
+        pending = 0
         total += x + y
         count += 1
         lines.append(f'row {x} {y} {total} {heap}')
