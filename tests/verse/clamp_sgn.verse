@@ -1,6 +1,6 @@
 # Clamp(Val, A, B), the median of the three, so the order of A and B does not
-# matter (the Book's Runtime API), of ints or of floats, among which NaN
-# orders above +Inf (Epic's API); Sgn(X) of an int or a float, NaN of NaN;
+# matter (the Book's Runtime API), of ints or of floats, NaN when any
+# of the floats is (Epic's Verse VM, #724, differential/float-clamp-nan); Sgn(X) of an int or a float, NaN of NaN;
 # and F.IsFinite[] of a float, F unless it is infinite or NaN.
 Show(X:float):string = if (X = NaN) then "NaN" else "{X}"
 Main():void =

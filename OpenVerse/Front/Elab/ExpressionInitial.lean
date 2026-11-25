@@ -305,6 +305,13 @@ partial def elabExprInitialWith
       | some a => return ⟨.lit (.ref a), .struct ModuleVars.stateClass []⟩
       | none => eerr p "internal error: no module state"
     else
+    -- (#724) the state of `GetRandomInt`'s generator, likewise the
+    -- prototype of its class (`Front/Random.lean`)
+    if n == randomCellName then
+      match ctx.types.protos.findIdx? (·.1 == randomStateClass) with
+      | some a => return ⟨.lit (.ref a), .struct randomStateClass []⟩
+      | none => eerr p "internal error: no state for GetRandomInt"
+    else
     match n with
     | "true" => return ⟨.lit (.logic true), .logic⟩
     | "false" =>

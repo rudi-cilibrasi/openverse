@@ -1,4 +1,6 @@
-# expect: spawn in a defer
+# A call in a defer whose callee's default spawns (#724, spawn_in_defer;
+# refused before, "spawn in a defer"): the default is evaluated where the
+# defer runs.
 Work()<suspends>:int=1
 base(t:type) := interface:
     F(?T:task(int)):int

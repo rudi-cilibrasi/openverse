@@ -1,4 +1,6 @@
-# expect: loud has overloads of Show a call cannot tell apart
+# Show(:string) beside Show(:char) (#724): a char and an array of chars are
+# two overloads, as F(:a) beside F(:[]a) is (tests/verse/overload_scalar_array;
+# the refusal this program pinned since #510 was openverse's own).
 # overloaded methods (Book of Verse ch. 6): in an interface, a class and a
 # subclass that overrides one overload and adds another; bare calls, (super:)
 # and dispatch through the interface

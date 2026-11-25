@@ -360,6 +360,11 @@ def subAt (anc : String → List String) (a0 b0 : STy) : Bool :=
       s.within t && reprStr (s.select t (ts ++ [r])) == reprStr (us ++ [u])
     | _, _ => false
 
+/-- `subAt` at a result, and any result where an `any` is expected, which
+    every value is (#724: `TyEnv.resultConvertsAt`). -/
+def resultSubAt (anc : String → List String) (r u : STy) : Bool :=
+  subAt anc r u || reprStr (normS u) == reprStr (STy.name "any")
+
 /-- A match of a generic function's types (its type parameters `tps`)
     against closed ones: each parameter's type, or none. -/
 partial def matchTy (tps : List String) (θ : List (String × STy)) (a b : STy) : Option (List (String × STy)) :=
@@ -809,7 +814,7 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
       let some named := namedAt own t ts | continue
       -- (contravariant parameters, a covariant result)
       if !exactly own t (ts ++ [r]) (tqs ++ [u]) && (qs'.zip ps').all (fun (a, b) => subAt anc a b) &&
-          ((tqs.drop t.positional).zip named).all (fun (a, b) => subAt anc a b) && subAt anc r u then
+          ((tqs.drop t.positional).zip named).all (fun (a, b) => subAt anc a b) && resultSubAt anc r u then
         if let some c := variant p s!"{n}$fn${k}" own t (tqs ++ [u]) args
             (fun args => .app p (.ident p n) args own.decides) then
           out := out ++ [c]
@@ -863,7 +868,7 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
         let (t, tqs, u) := fnTyShape qs es u
         let some named := namedAt own t ts | continue
         if !exactly own t (ts ++ [r]) (tqs ++ [u]) && t.positional == own.positional &&
-            (tqs.zip (ts.take own.positional ++ named)).all (fun (a, b) => subAt anc a b) && subAt anc r u then
+            (tqs.zip (ts.take own.positional ++ named)).all (fun (a, b) => subAt anc a b) && resultSubAt anc r u then
           if let some v := variant p s!"{c}${m}$fn${k}" own t (tqs ++ [u]) (xs p own.positional) call
               [{ name := "$self", ty := .name c }] then
             out := out ++ [v]

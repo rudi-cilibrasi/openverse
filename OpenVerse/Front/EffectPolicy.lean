@@ -17,11 +17,26 @@ def metadata : List String :=
 def reject (p : Pos) (message : String) : Except String Unit :=
   .error s!"{p.show}: {message}"
 
+/-- The mark of a `<converges>` abstract method, once admitted
+    (`convergesAbstract`): no method with a body overrides it. -/
+def convergesMarker : String := "$converges"
+
+/-- (#724) `<converges>` on a method without a body, of a class or an
+    interface: admitted, as Epic's compiler admits it (UEFN 43.12,
+    followup-refused/converges-abstract-method; the Book's tests,
+    Effects.versetest:304, "The converges effect is only allowed on native
+    and abstract functions"). On a function with a body it is refused
+    (3565), and in a function type. -/
+def convergesAbstract (specs : List String) : Bool :=
+  specs.contains "converges" && specs.contains "$abstract"
+
 def checkUnsupported (p : Pos) (specs : List String) : Except String Unit := do
   for sp in specs do
     match sp with
+    | "converges" =>
+      if !convergesAbstract specs then
+        reject p "<converges> is unsupported on a function with a body: only a native function or a method without a body may be <converges> (Epic's Verse compiler, UEFN 43.12: error 3565), and termination contracts are not checked (#494); execution fuel is not a termination proof"
     | "predicts" => reject p "<predicts> is unsupported: prediction call propagation and client/server execution are not implemented (#494; unreleased in the pinned Book)"
-    | "converges" => reject p "<converges> is unsupported: termination contracts are not checked (#494); execution fuel is not a termination proof"
     | "native" | "native_callable" =>
       reject p s!"<{sp}> is unsupported: source annotations cannot create a trusted native binding (#494)"
     | "no_rollback" =>
@@ -234,6 +249,7 @@ def checkSpecs (p : Pos) (subject : String) (specs : List String)
     if !typeOnly && (metadata.contains sp || sp.startsWith "$" || isAccess sp || !known sp) then continue
     -- (#515, `--default-no-rollback`: the compiler's own mark)
     if sp == noRollbackMarker then continue
+    if sp == "converges" && !typeOnly && convergesAbstract specs then continue
     reject p s!"unknown or unsupported {if typeOnly then "function-type effect" else "function specifier"} <{sp}> on {subject} (#494)"
 
 /-- Construction has the same heap family as functions, but is immediate and
@@ -355,6 +371,22 @@ def checkPlaces (tops : List STop) : Except String Unit := do
           reject p s!"{n} is <concrete>, so its field '{f.name}' needs a default"
 
     | .const .. => pure ()
+
+/-- (#724) An admitted `<converges>` abstract method (`convergesAbstract`)
+    as the elaboration takes it: `<computes>`, which has no effect of the
+    heap as `<converges>` has none, and `convergesMarker`, by which an
+    override of it is refused (no method with a body may be `<converges>`,
+    3565, and an override has no effect its method lacks). -/
+def normalizeConverges : STop → STop
+  | .classDef p n ns tps specs ps isI fs ms =>
+    .classDef p n ns tps specs ps isI fs (ms.map fun
+      | .fn mp mn mps mtps mspecs r b =>
+        if convergesAbstract mspecs then
+          .fn mp mn mps mtps
+            ((mspecs.map fun sp => if sp == "converges" then "computes" else sp) ++ [convergesMarker]) r b
+        else .fn mp mn mps mtps mspecs r b
+      | m => m)
+  | t => t
 
 /-- Check every loaded definition, including unused imports, before a source
     annotation can be erased or normalized into generated helper signatures. -/

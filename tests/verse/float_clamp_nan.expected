@@ -1,0 +1,6 @@
+clamp val NaN lo NaN hi NaN both NaN
+clamp swapped 0.500000 1.000000 0.000000 below NaN above NaN
+clamp NaN 5.000000 0.000000 NaN
+all NaN inf NaN 1.000000 0.000000 0.500000
+int 3 0 2
+exit=0

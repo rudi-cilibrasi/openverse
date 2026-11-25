@@ -22,7 +22,9 @@ for ((s=first; s<first+n; s++)); do
     { bad=$((bad+1)); echo "GENERATOR FAILED ${m:-plain} seed $s: $(tail -1 "$tmp/gen.err")"; continue; }
   # (SKIP long: the model gave up on a program that prints more than 12000 lines)
   if grep -q '^SKIP long' "$tmp/p.expected"; then long=$((long+1)); continue; fi
-  # (a program whose ints overflow, which the model does not follow: skipped)
+  # (another SKIP: a program the model does not follow. None since #724: ints are exact past 64
+  # bits, and the model predicts the overflow error of the ToString of one, exit 2; before, a
+  # recursive function's 64-bit overflow in a value never taken was skipped here)
   if grep -q '^SKIP' "$tmp/p.expected"; then skip=$((skip+1)); continue; fi
   # (a program the model predicts to print more than 12000 lines may not finish within the
   # timeout below, rec mode's enumerations at times: skipped, not counted as bad)
@@ -35,6 +37,12 @@ for ((s=first; s<first+n; s++)); do
   # (Lean timed out: the reference interpreter is far slower than C on some long backtracking
   # programs, 78 s against 0.1 s at mv seed 20767547; run --emit wrote the bytecode before
   # interpreting, so C is checked against the model alone)
+  # (Lean timed out before it wrote the bytecode, still compiling: 85 s of CPU at rec seed
+  # 20781867, 54 s at bif seed 20779149, more on a loaded machine (#723); compiled alone with
+  # more time, so that C is checked against the model as for a slow run)
+  if [[ $le -eq 124 && ! -s "$tmp/p.vbc" ]]; then
+    timeout 600 "$ov" emit "$tmp/p.verse" -o "$tmp/p.vbc" > /dev/null 2>&1
+  fi
   if [[ $le -eq 124 && -s "$tmp/p.vbc" ]]; then
     (ulimit -v 4000000; timeout 60 "$cv" "$tmp/p.vbc") > "$tmp/c.out" 2> /dev/null; ce=$?
     { cat "$tmp/c.out"; echo "exit=$ce"; } > "$tmp/c.full"

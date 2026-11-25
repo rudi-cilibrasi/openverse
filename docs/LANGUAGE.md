@@ -15,7 +15,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 **Contents**
 
 - The language: [Supported](#supported) · [Source text](#source-text) · [Parametric functions](#parametric-functions) · [Effect contracts](#effect-contracts) · [Function values](#function-values) · [Extension methods](#extension-methods) · [defer](#defer) · [Overloading](#overloading) · [Parametric structs](#parametric-structs) · [Classes](#classes) · [Attributes](#attributes) · [Mutation, macros, tooling](#mutation-macros-tooling) · [Warnings](#warnings) · [Source profiles](#source-profiles) · [Choice](#choice)
-- More types: [any](#any) · [comparable](#comparable) · [Weak maps](#weak-maps) · [Module-scoped variables](#module-scoped-variables) · [Types as values](#types-as-values) · [Equality and the empty value](#equality-and-the-empty-value) · [Refinement types](#refinement-types) · [Type aliases](#type-aliases) · [float](#float) · [Bitwise functions](#bitwise-functions) · [rational](#rational) · [char32](#char32)
+- More types: [any](#any) · [comparable](#comparable) · [Weak maps](#weak-maps) · [Module-scoped variables](#module-scoped-variables) · [Types as values](#types-as-values) · [Equality and the empty value](#equality-and-the-empty-value) · [Refinement types](#refinement-types) · [Type aliases](#type-aliases) · [float](#float) · [Bitwise functions](#bitwise-functions) · [Random numbers, the clock and the player map](#random-numbers-the-clock-and-the-player-map) · [rational](#rational) · [char32](#char32)
 - Programs: [Modules](#modules) · [Access](#access) · [Shadowing](#shadowing) · [Qualified names](#qualified-names) · [Programs of several files](#programs-of-several-files) · [Concurrency](#concurrency)
 - [Readings openverse takes](#readings-openverse-takes) · [Not supported in v1](#not-supported-in-v1)
 
@@ -26,23 +26,23 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Comments | `#` to the end of the line, nested `<# … #>`, `<#>` indented comments (the rest of the line and every following line indented more than it; see [Source text](#source-text)) | ch. 0 |
 | Literals | `int` (decimal, `0x` hex; must fit in 64 bits, though ints go past it: [int](#int)), `'c'` `char` (`c` an ASCII character other than a line break, a tab included, or an escape; a non-ASCII one, `'é'`, is a `char32`, Book of Verse ch. 1), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates), `float` `1.5`, `2.0e-7`, `1e3`, `12.34f64`, `1234f64` (digits, then a point and digits or an exponent or both, or the suffix `f64`, which may follow either; the nearest double, which must be finite: `2.0e308` is refused; `f32` and `f16` are read and refused as not supported); paths `/Verse.org/Random` parse (in `using{…}`, ignored when in a package openverse knows, `/Verse.org/…`, `/Fortnite.com/…`, `/UnrealEngine.com/…`, and refused otherwise, as naming nothing, ch. 16, `Using2.versetest:94`; as values, refused; see [Source text](#source-text)) | §1.3–1.7 |
 | Types | `int`, `logic`, `char`, `char32`, `any` (see [any](#any)), `comparable` (see [comparable](#comparable)), `rational` (see [rational](#rational)), `float` (see [float](#float)), refinement types `type{_X:int where 0 <= _X, _X <= 120}` (see [Refinement types](#refinement-types)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void` (which takes any value; `tuple()` is the type of the empty value alone, see [Equality and the empty value](#equality-and-the-empty-value)), `message` (a localized message, `X<localizes>:message = "…"`, `F<localizes>(N:int):message = "… {N}"`, rendered by `Localize` and joined by `Join`; openverse has no culture, so a message is its default text, an int written with comma separators: ch. 12, [the rule](research/book-forms-rules.md#localized-messages)), `false` (the type with no value, below every type: a function whose result is `false` never returns, ch. 2, [the rule](research/book-forms-rules.md#false-as-a-type); `true`, the type of the empty value alone, as `tuple()` is, below `logic`, [the rule](research/book-forms-rules.md#true-as-a-type)), function types `type{_(:int)<decides>:int}`, with named parameters `type{_(:int, ?B:int):int}`, and `int->int` (see [Function values](#function-values)); type aliases `player_id := int`, `pair(t:type) := tuple(t, t)` (see [Type aliases](#type-aliases)); types as values of classes and interfaces, `subtype(c)`, `castable_subtype(c)`, `concrete_subtype(c)` and `type` (see [Types as values](#types-as-values)); a conversion written as a call, `int(0)`, `void(0)`, `(?int)(option{0})`, `s(s{})`, of a value of a type that is a subtype of the one named; `int[X]` of an int, a failable cast that no int fails, past 64 bits too ([int](#int); UEFN 43.12 admits it, and it succeeds there for 2^63; the Book's tests, `WhereConstrainedInts.versetest:219-222`; of a class's value it is refused, `Cast.versetest:35`); a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
-| Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e`, which state their type there as in a module (ch. 16: "type inference with `:=` alone is not allowed"; `C := e` names a type, when `e` is one: [Type aliases](#type-aliases)) (definitions on one line, at the top level, in a module or in a block, are separated by `;` or `,`: `X:int=0, Y:int=0`; a constant may use one defined before it in its own scope, a module's or the top level's, and one of another module or of an enclosing scope wherever it is defined, as the Book's tests have it (`DefaultValueAssignment.versetest` 102, 128); not itself, directly or through other constants; and its value has no side effect, writing nothing, also through what it calls or constructs, as the Book's tests have it, `DefaultValueAssignment.versetest:199`, `ModuleDefinitions.versetest:278`, `ParametricTypes.versetest:465`: a function with no heap specifier, or a class or struct with none, has `<transacts>`, and so writes, [the rule](research/book-remaining-rules.md#a-module-constant-has-no-side-effect); nor does it call a function that might not complete, as Epic's compiler has it, UEFN 43.12, error 3582: [data members](#data-members-call-only-converging-functions)); module-scoped `var X:weak_map(k, v) = map{}` (see [Module-scoped variables](#module-scoped-variables)); locals `X := e`, `X:t = e`, `var X:t = e`, and a tuple destructured, `(X:int, _, Z:string) = e` (each named element a local of the block, `_` skipping one, `e` evaluated once); no shadowing; no name defined twice in a scope but [overloaded](#overloading) functions; no [reserved name](#reserved-names) | §3.1–3.4 |
+| Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e`, which state their type there as in a module (ch. 16: "type inference with `:=` alone is not allowed"; `C := e` names a type, when `e` is one: [Type aliases](#type-aliases)) (definitions on one line, at the top level, in a module or in a block, are separated by `;` or `,`: `X:int=0, Y:int=0`; a constant may use one defined before it in its own scope, a module's or the top level's, and one of another module or of an enclosing scope wherever it is defined, as the Book's tests have it (`DefaultValueAssignment.versetest` 102, 128); not itself, directly or through other constants; and its value has no side effect, writing nothing, also through what it calls or constructs, as the Book's tests have it, `DefaultValueAssignment.versetest:199`, `ModuleDefinitions.versetest:278`, `ParametricTypes.versetest:465`: a function with no heap specifier, or a class or struct with none, has `<transacts>`, and so writes, [the rule](research/book-remaining-rules.md#a-module-constant-has-no-side-effect); nor does it call a function that might not complete, as Epic's compiler has it, UEFN 43.12, error 3582: [data members](#data-members-call-only-converging-functions)); module-scoped `var X:weak_map(k, v) = map{}` (see [Module-scoped variables](#module-scoped-variables)); locals `X := e`, `X:t = e`, `var X:t = e`, a definition whose value is a definition, `X:int = Y:int = 4`, among a block's expressions or an `if`'s conditions, which defines both in that scope, the inner one first ("the result of a definition is its value", the Book's tests, `Definitions.versetest:37`; a `var`'s, its contents; UEFN 43.12 prints `x 4 y 4`, `followup-refused/definition-in-expression`, #724; a definition deeper in an expression, `(Y := 4) + 1`, binds nothing after it yet), and a tuple destructured, `(X:int, _, Z:string) = e` (each named element a local of the block, `_` skipping one, `e` evaluated once); no shadowing; no name defined twice in a scope but [overloaded](#overloading) functions; no [reserved name](#reserved-names) | §3.1–3.4 |
 | Mutation | `set X = e`, `set X += e` (`-=`, `*=`), `set A[i] = e` (fails out of range; returns `e`), and paths `set S.F.G = e`, `set A[i][j] op= e`, `set M[k].F = e`: indices and keys evaluated once, left to right, then the new value, then the variable rebuilt (for `op=`, the old value is read after the new one, from the variable as the new one left it, which is then rebuilt from that: `set X += e` is `V := e; set X = X + V`, the Book's tests, `ArrayAppend.versetest` 140, 183); but when `e` replaces, with a plain `set`, the container the path's last step writes into, the old value is read from, and the new one written into, the container `e` replaced, through a variable or an object's field, as Epic's VerseVM does ([below](#mutation-macros-tooling), #704); an index out of range or a missing intermediate key fails, while the last key of a path inserts | §3.3, §3.5, §9.3 |
 | Blocks | indented (`:`), braced (`{ }`), inline (`then`/`do`), `.` and an expression on its line wherever `:` or `{…}` may start a body (`if (c). e else. f`, `for (X:Xs). e`, `spawn. F()`, `loop. break`; also `option`, `logic`, and `array` and `map`, whose `:` blocks separate their items by `,`, `;` or new lines: `array:` and the lines `1`, `2`; in braces an array's elements are separated by commas, or by `;` and new lines, not both: `array{1; 2; 3}`), `block:`, `( a; b )` sequences, also as an argument (`F(Log(); 42)` passes 42) and as a `case`'s value (`case(a; b)`); `;` and new lines separate the items of a block, and `;` may end a line or a braced block (`{1; 2;}` is `{1; 2}`) (the next item then follows the line rules, so a class's last field may end in `;`); in a block, statements that commas join on a line are a tuple (ch. 1, "Semicolons vs Commas", and its tests, `SemicolonsVsCommas.versetest` 70, 95, 100: `{1.0, 2}` is a `tuple(float, int)`, `option{1, 2}` holds `(1, 2)`, `for (X := 1..2) {3, X}` is an array of pairs), definitions joined so are the block's definitions in turn (`X:int = 0, Y:int = 0`), and a group of definitions and values is each in order, a definition visible to what follows it, then the tuple of their values (`option{V := 3, V > 0, V}` holds `(3, 3, 3)`, a `var`'s value taken where it is defined); the clauses of `if`, `for`, `first` and the clause macros, the arms of `sync`, `race` and `rush`, a construction's fields and an array's or map's items keep commas as separators; a comma that starts a line is not the block's but the list's around it; a body after `:` may be empty wherever one may be written, as `{}` may (`class:`, `struct:`, `then:`, … whose next line is no deeper than the construct, or nothing follows); a function's or method's braced body may put its `{` on the next line, at the definition's column; a value after `=`, `:=`, `set … =` or a `case` arm's `=>` that starts a later line, deeper, is the indented block of those lines (`Value :=` and the lines `1`, `2`, `3` is `3`; and the line `1, 2, 3`, `(1, 2, 3)`), as a function's body is | §2.2–2.4 |
-| Operators | `* + -`, unary `-`, comparisons `= <> < <= > >=` (failable, return the left operand, chains check every pair, but `<>` is left-associative: `1 <> 2 <> 1` is `(1 <> 2) <> 1`, which fails, as the Book's tests have it, `Associativity.versetest:6-9`, [the rule](research/book-forms-rules.md#-is-left-associative); `=` and `<>` of any two comparable types, by value: see [Equality and the empty value](#equality-and-the-empty-value)), `and` (a scope of its own, ch. 7: names its left operand defines are visible on its right, and neither side's escape; `A and B and C` is `(A and B) and C`), `or`, `not` (below the comparisons, above `and`: `not X = Y` is `not (X = Y)`), `?`, `.Length`, `A[i]`, `T(k)` | ch. 4 |
+| Operators | `* + -`, unary `-`, comparisons `= <> < <= > >=` (failable, return the left operand, chains check every pair, but `<>` is left-associative: `1 <> 2 <> 1` is `(1 <> 2) <> 1`, which fails, as the Book's tests have it, `Associativity.versetest:6-9`, [the rule](research/book-forms-rules.md#-is-left-associative); and `<` or `<=` after `>` or `>=` groups from the left as well, as on Epic's Verse VM: `5 > 1 < 3` is `(5 > 1) < 3`, that is `5 < 3`, which fails, [`prec-compare-chain-mixed`](../tests/conformance/versevm/differential/prec-compare-chain-mixed.verse), #724; `<`, `<=`, `>` and `>=` of two ints or of two floats, not of a rational; `=` and `<>` of any two comparable types, by value: see [Equality and the empty value](#equality-and-the-empty-value)), `and` (a scope of its own, ch. 7: names its left operand defines are visible on its right, and neither side's escape; `A and B and C` is `(A and B) and C`), `or`, `not` (below the comparisons, above `and`: `not X = Y` is `not (X = Y)`), `?`, `.Length`, `A[i]`, `T(k)` | ch. 4 |
 | Failure | failure contexts (`if` conditions, `for` clauses, `option{}`, `logic{}`, `not`, left of `or`, `<decides>` bodies) with rollback of `var` writes **and output** (a `loop`'s body is none, also in a `<decides>` function, nor is a field's default: "`decides` is not allowed in `loop`", the Book's tests, `SOL-4199-BreakFromIf.versetest:79`, and ch. 13, [the rules](research/book-remaining-rules.md#a-loops-body-and-a-fields-default-are-no-failure-contexts); `--extended-defaults` keeps failing field defaults, which make a construction fail); an `if` condition, `logic{…}`, the operand of `not` and the left of `or` must be able to fail (the Book's tests refuse `not` of one that cannot, and an `or` whose left cannot, `LogicalOr.versetest:143`; its own `(set Map[I] = I) or Err()` has a failable left, a set through a map's key) | ch. 8 |
-| Control | `if`/`else if`/`else` (all styles: the conditions in `(…)`, followed by a body or `then`; or as `{…}`, `:` and a block, or `.` and an expression, followed by `then` and a branch, or by nothing, which is the clause macro `if{c}` (see [Mutation, macros, tooling](#mutation-macros-tooling)): `if:`…`then:`, `if:`…`else:`, `if. c then. a else. b`; `for` likewise, with `do`), `for` with `X : array`, `I -> X : array`, `X := a..b` (`X:int := a..b` too), filters, bindings, several generators (cartesian product), and with none, failable clauses that run the body at most once (clauses of literals only, `for(X := array{1, 2})`, are refused: `X : array{1, 2}` iterates); each filter, a clause that is neither a generator nor a definition (`X := e`, `X:t = e`, `var X:t = e`), must be able to fail, as "Each filter must be failable" (ch. 7, `for.versetest:223`, [the rule](research/book-remaining-rules.md#every-filter-of-a-for-can-fail)): a print, a `set` or a call that cannot fail is refused as a filter, and goes with a check that can, as the Book's tests write it, `(set Temp = Element; true?)` (`for.versetest:233`), or in a definition's value or a generator's source, where effects stay among the clauses, or in the body; a clause with a choice in it, or a call of a function with several values, is a generator over their values (the Book has no choice: openverse's reading); a `for`'s clauses are one search, as the Book's tests have it (`FlowControl/for.versetest` 317-392): reaching the body keeps what they did since the last value, a failure undoes back to the element or alternative being tried, and what they did since the last value is undone when no more reaches the body, a source's or a range's bounds' included (which `for`s keep an older rule for now: [Readings](#readings-openverse-takes), "What a `for` undoes"), `loop`/`break` (a loop that nothing leaves, no `break` of its own and no `return`, is refused outside a `<suspends>` function, as the Book's tests have it, `Break.versetest` 117, 160, [the rule](research/book-remaining-rules.md#a-loop-that-nothing-leaves)), `return` (in a function's body: not in a constant's value or a field's default, which no function encloses; in a function whose result is not `void`, not a part of the value it returns: a `return` is the body's value, a branch of it or of a `case`, a `return`'s operand, or in code whose value is not returned, a block's other items, an `if`'s conditions or an `if` with no `else`, a `loop`, as the Book's tests have it, `Return.versetest` 114-162; `array{0, return A}` and `X + (return 0)` are refused), `profile(Tag): body`, `profile: body` and `profile{body}` (the tag a string, the value the body's; openverse measures nothing; not in an initializer, ch. 7, "Profiling"), `case` with literal or computed scalar patterns and `_` (an arm after `_`, or with an earlier arm's pattern, is never reached and refused, ch. 9; a `_` after every value of a closed enum is a [warning](#warnings)); code after a `return` or `break` that is never reached is a [warning](#warnings); no `return` or `break` leaves a failure context, as the Book's tests have it (`Reachability.versetest:12`, "Explicit return out of a failure context is not allowed"; `SOL-4199-BreakFromIf.versetest`): a `return` is refused in an `if`'s conditions, a `for`'s clauses (its body may return), `first`'s clauses, `option{…}`, `logic{…}`, `not`'s operand and the left of `or`, and, in a `<decides>` function, whose body is a failure context, anywhere but in tail position (`Return.versetest:157`: the body's last expression, the branches of an `if` with an `else` and the arms of a `case` in tail position, a block's last expression in tail position, a `return`'s value); a `break`, in those contexts between it and its loop | ch. 7 |
+| Control | `if`/`else if`/`else` (all styles: the conditions in `(…)`, followed by a body or `then`; or as `{…}`, `:` and a block, or `.` and an expression, followed by `then` and a branch, or by nothing, which is the clause macro `if{c}` (see [Mutation, macros, tooling](#mutation-macros-tooling)): `if:`…`then:`, `if:`…`else:`, `if. c then. a else. b`; `for` likewise, with `do`), `for` with `X : array`, `I -> X : array`, `X := a..b` (`X:int := a..b` too), filters, bindings, several generators (cartesian product), and with none, failable clauses that run the body at most once (clauses of literals only, `for(X := array{1, 2})`, are refused: `X : array{1, 2}` iterates); each filter, a clause that is neither a generator nor a definition (`X := e`, `X:t = e`, `var X:t = e`), must be able to fail, as "Each filter must be failable" (ch. 7, `for.versetest:223`, [the rule](research/book-remaining-rules.md#every-filter-of-a-for-can-fail)): a print, a `set` or a call that cannot fail is refused as a filter, and goes with a check that can, as the Book's tests write it, `(set Temp = Element; true?)` (`for.versetest:233`), or in a definition's value or a generator's source, where effects stay among the clauses, or in the body; a clause with a choice in it, or a call of a function with several values, is a generator over their values (the Book has no choice: openverse's reading); a `for`'s clauses are one search, as the Book's tests have it (`FlowControl/for.versetest` 317-392): reaching the body keeps what they did since the last value, a failure undoes back to the element or alternative being tried, and what they did since the last value is undone when no more reaches the body, a source's or a range's bounds' included (which `for`s keep an older rule for now: [Readings](#readings-openverse-takes), "What a `for` undoes"), `loop`/`break` (a `break` in a `for`'s body leaves the `loop` around the `for`, and the `for` with it, as the Book's tests and UEFN 43.12 have it: [Readings](#readings-openverse-takes); a `for` alone is no loop to leave; a loop that nothing leaves, no `break` of its own and no `return`, is refused outside a `<suspends>` function, as the Book's tests have it, `Break.versetest` 117, 160, [the rule](research/book-remaining-rules.md#a-loop-that-nothing-leaves)), `return` (in a function's body: not in a constant's value or a field's default, which no function encloses; in a function whose result is not `void`, not a part of the value it returns: a `return` is the body's value, a branch of it or of a `case`, a `return`'s operand, or in code whose value is not returned, a block's other items, an `if`'s conditions or an `if` with no `else`, a `loop`, as the Book's tests have it, `Return.versetest` 114-162; `array{0, return A}` and `X + (return 0)` are refused), `profile(Tag): body`, `profile: body` and `profile{body}` (the tag a string, the value the body's; openverse measures nothing; not in an initializer, ch. 7, "Profiling"), `case` with literal or computed scalar patterns and `_` (an arm after `_`, or with an earlier arm's pattern, is never reached and refused, ch. 9; a `_` after every value of a closed enum is a [warning](#warnings)); code after a `return` or `break` that is never reached is a [warning](#warnings); no `return` or `break` leaves a failure context, as the Book's tests have it (`Reachability.versetest:12`, "Explicit return out of a failure context is not allowed"; `SOL-4199-BreakFromIf.versetest`): a `return` is refused in an `if`'s conditions, a `for`'s clauses (its body may return), `first`'s clauses, `option{…}`, `logic{…}`, `not`'s operand and the left of `or`, and, in a `<decides>` function, whose body is a failure context, anywhere but in tail position (`Return.versetest:157`: the body's last expression, the branches of an `if` with an `else` and the arms of a `case` in tail position, a block's last expression in tail position, a `return`'s value); a `break`, in those contexts between it and its loop | ch. 7 |
 | Choice | `a \| b \| …` with several values in spatial order, in a clause of an `if` condition, `first{…}`, `option{…}`, `logic{…}`, `not` or `or` (the first success) or of a `for` (all of them), also inside expressions (`(1 \| 2) + (10 \| 20)`, `X = 1 \| 2`, `X > 0 and (1 \| 2)`, `M? or (1 \| 2)`); see [Choice](#choice) (#208) | (the Verse Calculus) |
 | Functions | a parameter may be unnamed, `F(:int):void = {}`, as in function types (the body cannot name it; so may a parametric type's, `t(:type) := class{}`); a parameter may destructure a tuple, `Func(A:int, (B:int, C:int), D:int)`, to any depth: it is a parameter of the tuple type whose names the body sees (see [the rules](research/tuple-parameters.md); named parameters inside such a group are not supported); a tuple argument expands into parameters (`Describe(MyTuple)`); positional arguments pack into a single tuple parameter, including `tuple()` and singleton tuples, but not several beside a named parameter (`F(1.0, 2.0)` of `F(X:tuple(float, float), ?E:float = 0.1)`: the function's parameter is then the tuple of its parameters, named ones included, and UEFN 43.12 refuses it, error 3509, `followup-book2/overload-tuple-named-call`, the Book's `FORT-744399…:62`; write the tuple, `F((1.0, 2.0))`, #724); several arguments make a single array parameter (`Sum(1, 2, 3)`; not beside a named parameter: UEFN 43.12 refuses `F(1, 2)` of `F(A:[]int, ?B:int = 2)`, 3509, `followup-book3/array-named-pack`, #724, nor pack into a generic parameter beside one, `F(1, 2, ?E := 5)` of `F(X:t, ?E:int where t:type)`, `followup-book4/generic-param-named-pack`), including generic, overloaded, method and spawned calls (#134, #140, #501; nested fields retain their shape, and empty/singleton arrays use explicit array values); recursion, mutual recursion, `<decides>` (called with `F[…]`; other functions with `F(…)`; also `F of X` for `F(X)` and `F at X` for `F[X]`, the argument in braces `F of {42}`, a body after `:` or `.`, or an operand `F of array: …`, and a function defined `F of {I:int}:int = …`, the Book's tests, `Operators/Of.versetest`; `F at {…}` defines nothing), named parameters `?P:t = default` passed as `?P := e`, after the positional arguments (only a named parameter has a default, and a positional argument after a named one is refused, ch. 6, [the rules](research/book-remaining-rules.md#five-forms-the-tests-refuse)) (positional, then named as written, then defaults; a default may use the parameters before it, and a method's default the method's fields; a call dispatched to an override evaluates that override's own default for an omitted argument; a default is evaluated at the call and cannot return, break or use itself; it is its function's: it has only the heap effects the function allows and neither fails nor suspends, also of a `<decides>` or `<suspends>` function, checked once at the definition where the default can be elaborated in the function's scope, the Book's tests, `DefaultNamed.versetest` 805-878; `--extended-defaults` keeps openverse's reading, the default's effects the caller's, see [the rule](research/book-remaining-rules.md#a-named-parameters-default)), the heap effects `<computes>`, `<reads>`, `<writes>`, `<allocates>`, `<transacts>` (checked, see [Classes](#classes)), unsupported effect contracts are diagnosed before lowering (see [Effect contracts](#effect-contracts)) | ch. 6, 13 |
 | Extension methods | `(R:t).M(…)<effects>:r = body`, at the top level, in a module or in a class, on a receiver of any type (`(:t)` unnamed; a `where` in its parentheses for a generic one), called `X.M(…)`, or `X.M[…]` when `<decides>`; overloaded by the receiver's type and the parameters', scoped like functions, never values; see [Extension methods](#extension-methods) | ch. 6 |
 | Parametric functions | `F(X:t, … where t:type, u:subtype(comparable))`: type parameters in parameter types, the result type and local declarations; type arguments inferred at each call (see [Parametric functions](#parametric-functions)) | Types: where clauses |
-| Structs | `name := struct:` with typed fields and defaults, `name{F := e, …}` (each field given at most once, evaluated in declaration order; separated by commas, or by `;` and new lines, not both; or as an indented block after `name:`, an archetype block; the type may be parenthesized, `(pair(int)){…}`; with `let:` clauses, whose definitions the field values after them see, and `block` clauses, which run where they are written and can neither fail nor `return`, the clauses and the field values run in the order written, ch. 10, "Let Clauses in Archetypes", [the rule](research/book-forms-rules.md#a-constructions-let-and-block-clauses)), `S.F`, `set S.F = e` / `op=` of a `struct<computes>` (ch. 5: "Only structs marked `<computes>` (pure structs) allow field mutation through a variable"; a path that reaches an object reads the structs before it, [the rule](research/book-forms-rules.md#a-structs-field-set)), structural equality (a struct is the tuple of its fields in Verse Core) | ch. 9 |
+| Structs | `name := struct:` with typed fields and defaults, `name{F := e, …}` (each field given at most once, those given evaluated in the order written, as on Epic's Verse VM, [`struct-archetype-order`](../tests/conformance/versevm/differential/struct-archetype-order.verse), #724; separated by commas, or by `;` and new lines, not both; or as an indented block after `name:`, an archetype block; the type may be parenthesized, `(pair(int)){…}`; with `let:` clauses, whose definitions the field values after them see, and `block` clauses, which run where they are written and can neither fail nor `return`, the clauses and the field values run in the order written, ch. 10, "Let Clauses in Archetypes", [the rule](research/book-forms-rules.md#a-constructions-let-and-block-clauses)), `S.F`, `set S.F = e` / `op=` of a `struct<computes>` (ch. 5: "Only structs marked `<computes>` (pure structs) allow field mutation through a variable"; a path that reaches an object reads the structs before it, [the rule](research/book-forms-rules.md#a-structs-field-set)), structural equality (a struct is the tuple of its fields in Verse Core) | ch. 9 |
 | Parametric structs | `pair(t:type, u:type) := struct:`, the type `pair(int, string)`, values `pair(int, string){First := 1, Second := "a"}` (or `pair{…}` where the expected type gives the type arguments); see [Parametric structs](#parametric-structs) | ch. 9 |
 | Classes | `name := class:` and `name(t:type) := class:` with fields and methods; `class(parent, interface, …)` (`class()` has none, as `class`; a type `t()` or value `t(){…}` with no type arguments is `t`, `t{…}`), `interface`, `<abstract>`, `<override>`, `<final>`, `(super:)`, virtual dispatch, casts `T[X]` and `T(X)`, `var` fields; members in braces on one line separated by `,` or `;` (`class{X:int block{}}` is refused, as the Book's tests have it, `ClassBlockClause.versetest:19`); see [Classes](#classes) | ch. 10 |
 | Enums | `name := enum:` / `enum{A, B}`, `name.A`, equality, `case` that needs no `_` when every value is named (an enumerator is its index in Verse Core); `enum<open>` may gain values, so a `case` on one needs `_` or a failure context (`<closed>` is the default); at most 256 values (UEFN 43.12 refuses the 257th, error 3552, "out of byte-range", and admits 256, `followup-book2/enum-wide`, #724) | ch. 9 |
-| Maps | `[k]v` (a comparable key with no array or map in it, through its options, tuples and a struct's fields, but `string`: "neither may serve as a map key", ch. 3), `map{k => v, …}` (a key given twice keeps its last value, at its last position; a key cannot fail, ch. 3: "failure in map literal keys is not implemented"; [the rules](research/book-remaining-rules.md#map-keys-and-a-refinements-range)), `M[k]` (fails on a missing key), `set M[k] = v` (insert or update; in Verse the key's reference is `<decides>`, the Book's API reference, so such a `set`, also as a path's last step, `set S.M[k] = v`, is written in a failure context, as the Book's tests do, `if (set M0[0] = 42)`, `(set Map[I] = I) or Err()`; its last key inserts, so it succeeds; its value is `v`), `set M[k] op= v` (fails on a missing key), `.Length`, `for (V : M)`, `for (K -> V : M)` in insertion order, `ConcatenateMaps(M1, M2)` (exactly two maps, ch. 3: more by chained calls; their pairs laid down in turn, as `map{…}` lays its own: a key both maps have takes the second map's value at the second map's place, the Book's API reference and `ConcatenateMaps.versetest` 21, 33), order-sensitive equality (a map is the array of its pairs in Verse Core); a key of a class above or beside the map's key class reads, looked up at the class above both; `weak_map(k, v)`, a supertype of `[k]v` with entry access only (see [Weak maps](#weak-maps)) | §3, §9.3 |
+| Maps | `[k]v` (a comparable key with no array or map in it, through its options, tuples and a struct's fields, but `string`: "neither may serve as a map key", ch. 3), `map{k => v, …}` (a key given twice keeps its last value, at its last position; a key cannot fail, ch. 3: "failure in map literal keys is not implemented"; [the rules](research/book-remaining-rules.md#map-keys-and-a-refinements-range); with no key type expected, the key type is the join of the keys' types, `map{A => 1, B => 2}` of sibling classes being keyed by the `<unique>` class above them: [comparable](#comparable), "Map keys"), `M[k]` (fails on a missing key), `set M[k] = v` (insert or update; in Verse the key's reference is `<decides>`, the Book's API reference, so such a `set`, also as a path's last step, `set S.M[k] = v`, is written in a failure context, as the Book's tests do, `if (set M0[0] = 42)`, `(set Map[I] = I) or Err()`; its last key inserts, so it succeeds; its value is `v`), `set M[k] op= v` (fails on a missing key), `.Length`, `for (V : M)`, `for (K -> V : M)` in insertion order, `ConcatenateMaps(M1, M2)` (exactly two maps, ch. 3: more by chained calls; their pairs laid down in turn, as `map{…}` lays its own: a key both maps have takes the second map's value at the second map's place, the Book's API reference and `ConcatenateMaps.versetest` 21, 33; maps keyed by different types make a map keyed by their join, a class above both or `comparable`, #724), order-sensitive equality (a map is the array of its pairs in Verse Core); a key of a class above or beside the map's key class reads, looked up at the class above both; `weak_map(k, v)`, a supertype of `[k]v` with entry access only (see [Weak maps](#weak-maps)) | §3, §9.3 |
 | Array methods | (also of a tuple of one element type, which is an array where one is expected: `('a', 'b', 'c').Slice[1]`) `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`, `A.RemoveFirstElement[x]`, `A.Remove[i, j]` (half-open), `A.ReplaceElement[i, x]`, `A.ReplaceFirstElement[x, y]`, `A.Insert[i, B]`, `A.Last[]`, `A.Last[n]` (the element n before the last) (all failable); `A.RemoveAllElements(x)`, `A.ReplaceAllElements(x, y)`, `A.ReplaceAll(Pattern, Replacement)` (contiguous subarrays, left to right, not overlapping; an empty pattern changes nothing), `Concatenate(A, B, …)` or `Concatenate(Arrays)` (#150) (never failing) | §9.1 |
-| Built-ins | `Print(s)`, `ToString(x)` (int, float, char, char32, string; of an int beyond 64 bits, the overflow error: [int](#int)), `Floor[F]`, `Ceil[F]`, `Round[F]`, `Int[F]` (of a float, failable), `Floor(R)`, `Ceil(R)` (of a rational or an int, never failing; `Floor(X / Y)` fails when `Y = 0`, as `X / Y` does), `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Clamp(Val, A, B)` (the median of the three, of ints or of floats, NaN ordering above +Inf), `Sgn(X)` (-1, 0 or 1 of an int or a float, NaN of NaN), `F.IsFinite[]` (as `IsFinite[F]`), `BitAnd(X, Y)`, `BitOr`, `BitXor`, `BitNot(X)`, `BitShiftLeft[X, N]`, `BitShiftRight[X, N]` (see [Bitwise functions](#bitwise-functions)), `Err()` and `Err(Message)` (stops the program; ch. 8: "a runtime error with an optional message", the API reference `Err(Message:string)`: no argument or one string, which is evaluated first); a built-in given another number of arguments than it takes is refused (`Quotient takes two ints, found 3 argument(s)`); the conversions of chars and code points as methods (see [char32](#char32)): `C.ToCodeUnit()`, `C.ToAsciiChar32[]` of a char, `C.ToCodePoint()`, `C.ToAsciiString()` of a char32, `N.ToChar[]`, `N.ToChar32[]` of an int | API reference |
+| Built-ins | `Print(s)`, `ToString(x)` (int, float, char, char32, string; of an int beyond 64 bits, the overflow error: [int](#int)), `Floor[F]`, `Ceil[F]`, `Round[F]`, `Int[F]` (of a float, failable), `Floor(R)`, `Ceil(R)` (of a rational or an int, never failing; `Floor(X / Y)` fails when `Y = 0`, as `X / Y` does), `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Clamp(Val, A, B)` (the median of the three, of ints or of floats, NaN when any of the floats is, as on Epic's Verse VM, [`float-clamp-nan`](../tests/conformance/versevm/differential/float-clamp-nan.verse), #724), `Sgn(X)` (-1, 0 or 1 of an int or a float, NaN of NaN), `F.IsFinite[]` (as `IsFinite[F]`), `BitAnd(X, Y)`, `BitOr`, `BitXor`, `BitNot(X)`, `BitShiftLeft[X, N]`, `BitShiftRight[X, N]` (see [Bitwise functions](#bitwise-functions)), `GetRandomInt(Low, High)`, `GetSecondsSinceEpoch()`, `FitsInPlayerMap[Value]` (deterministic in openverse: see [Random numbers, the clock and the player map](#random-numbers-the-clock-and-the-player-map)), `Err()` and `Err(Message)` (stops the program; ch. 8: "a runtime error with an optional message", the API reference `Err(Message:string)`: no argument or one string, which is evaluated first); a built-in given another number of arguments than it takes is refused (`Quotient takes two ints, found 3 argument(s)`); the conversions of chars and code points as methods (see [char32](#char32)): `C.ToCodeUnit()`, `C.ToAsciiChar32[]` of a char, `C.ToCodePoint()`, `C.ToAsciiString()` of a char32, `N.ToChar[]`, `N.ToChar32[]` of an int | API reference |
 | Modules | `name := module:` (nested), `M.F`, `A.B.F`, the types `M.c` and values `M.c{…}`, `(M:)F`, `using{M}` at file or module scope (a `using` of a path is accepted and ignored, but of `/localhost` and the paths below it, which the Book's tests refuse, "Explicitly using a "/localhost" package is not allowed", `Modules/Using2.versetest` 84-90), `<public>` members (`<internal>` is the default); see [Modules](#modules) | ch. 16 |
 | Access | `<public>`, `<internal>` (the default), `<protected>`, `<private>`, `<scoped{M, …}>` and `S := scoped{…}`, `<epic_internal>`, on modules, their definitions, a class's members and constructor, and `var<w> X<r>:t`; checked where each use is written, and no definition exposes a less visible one; see [Access](#access) | ch. 12 |
 | Attributes | `@deprecated`, `@experimental`, `@available{MinUploadedAtFNVersion := N}`, custom attributes (a class below `attribute` with its scopes `@attribscope_…`, `@c{F := e}` or a constructor's `@f(…)`) before a definition, a member, a struct's field or an enum's value; `@ignore_unreachable` on an expression or a `case` arm: checked where the Book checks them, metadata but `@available`; see [Attributes](#attributes) | ch. 12 |
@@ -316,11 +316,27 @@ one, as classes, interfaces and structs do: `<transacts>` implies `<reads>`,
 (ch. 13: "A function may have at most one exclusive specifier but can
 combine multiple additive ones"; `Attributes/allocates.versetest` 4-32).
 
-`predicts` and `converges` are explicitly unsupported, including on abstract
-signatures and function types. The pinned Book calls prediction unreleased
+`predicts` is explicitly unsupported, including on abstract signatures and
+function types, and so is `converges` on a function or method with a body
+and in a function type. The pinned Book calls prediction unreleased
 and divergence checking planned; this does not establish their availability
 in every released engine. OpenVerse does not implement predicting call
-propagation or explicit function termination contracts. Ordinary recursion
+propagation or explicit function termination contracts.
+
+`<converges>` is admitted on a method without a body, of an `<abstract>`
+class or of an interface (#724): "The converges effect is only allowed on
+native and abstract functions" (the Book's tests, `Effects.versetest:304`),
+and UEFN 43.12 admits `shape := class<abstract>: Area()<converges>:int`
+(`followup-refused/converges-abstract-method`) while refusing `<converges>`
+on a function with a body (3565, `followup-3582/div-const-converges`). Such
+a method has no effect of the heap (it is checked as `<computes>` where it
+is called, and excludes `<computes>` and `<transacts>` beside it), and no
+method with a body overrides it: an override has no effect its method
+lacks, and a body cannot be `<converges>`, so the override is refused
+whatever its specifiers (Epic's verdict on a `<computes>` override is not
+recorded). A class below it that is not `<abstract>` is therefore refused
+too (3591), and a call of the method never runs; in a data member's
+definition it is still refused as a call of the program's own (3582). Ordinary recursion
 and loops remain available outside the initializer admission boundary;
 `computes` and execution fuel do not prove termination.
 
@@ -703,7 +719,15 @@ every function type it fits, `FnValues`), so it refuses, by the same error
    A function named converts by variance with `void` above every type too:
    its result discarded (`Run(IntIdentity)` with `Run(F(:int):void)`), an
    argument given to its `void` parameter (`G:int->int = VoidInput`), as
-   Epic admits and the Book's `Void.versetest` 91, 104 have it.
+   Epic admits and the Book's `Void.versetest` 91, 104 have it. And with
+   `any` above every type: `Call(Succ)` with `Call(G(:int):any)` and
+   `Succ(X:int):int`, `Apply(IntFun, 1)` with `Apply(F(:t):any, X:t)` (the
+   Book's `Any.versetest:152`, SOL-3799; UEFN 43.12 admits and runs
+   `followup-refused/named-fn-any-result`), at a result only. A function
+   with an `any` parameter named where another parameter type is expected
+   is not converted (Epic's answer is not recorded,
+   `followup-variance/any-param`), nor is a result at `comparable`
+   (`Call(G(:int):comparable)` given `Succ` is refused).
 2. **A generic function as a value with one of its type parameters inside a
    function type of its own**, a parameter's (`One(F(:t)<transacts>:t, X:t
    where t:type)`) or its result's, at an instance other than generic code's
@@ -875,7 +899,8 @@ No `return` or `break` can leave a failure context ([Control](#supported),
 the Book of Verse's tests): a `defer:` runs at one that leaves its scope from
 a branch or a block, and a new local loop keeps its own target even inside
 a lifted branch. Breaks in a body's own `loop` stay local; a `for` body
-itself is not a break target.
+itself is not a break target: a `break` in it leaves the `loop` around the
+`for`, running the body's `defer:`s and then the loop body's.
 
 ## Overloading
 
@@ -913,7 +938,11 @@ kinds are taken alike, and `followup-book4` asks).
   same lexical scope, argument order, defaults and effects. Interpolation
   calls `ToString`, then combines the pieces with `+`, so a program's
   overloads of both may produce another type (the Book's tests,
-  `StringInterpolationPlus.versetest`). An explicit call inside an
+  `StringInterpolationPlus.versetest`). Each value is made text where
+  it is written, before the code of the next one runs, also when a later
+  one has a choice or a call of a function with several values (#723): in
+  `"{A}-{F(G())}"` the overflow error of an `A` beyond 64 bits ([int](#int))
+  comes before what `G()` does. An explicit call inside an
   interpolant is its value: `"{ToString(X)}"` also converts that result.
   Primitive overloads remain available in the scope of a program's
   `ToString`; a source overload overlapping one is refused.
@@ -932,10 +961,30 @@ kinds are taken alike, and `followup-book4` asks).
   flattened positional types are compared element by element: the same
   domains overlap, while a disjoint position distinguishes the overloads.
   The comparison also includes a tuple containing the positional inputs.
-  Thus `int` overlaps `tuple(tuple(int))` and `[]int`: a `tuple(int)`
-  argument can unpack for the scalar, wrap for the nested tuple, or convert
-  to the array. This does not implicitly turn a scalar into an array.
+  Thus `int` overlaps `tuple(tuple(int))`: a `tuple(int)` argument can
+  unpack for the scalar or wrap for the nested tuple. One parameter of type
+  `t` and one of type `[]t` are distinct when `t` and `[]t` are (#724): one
+  argument is no tuple of the arguments, so `F(:a)` beside `F(:[]a)`, and
+  `G(:int)` beside `G(:[]int)`, and `Show(:char)` beside `Show(:string)`,
+  are two overloads, while `F(:a, :a)` beside
+  `F(:[]a)` is refused, two arguments being a tuple, which is an array (the
+  Book's tests, `Overloading.versetest` 260 valid and 265 with 3532; UEFN
+  43.12 admits and runs `followup-refused/overloads-struct-and-array`). A
+  call whose one argument is a `tuple(int)`, which is its element for the
+  first and an array for the second, fits both and is refused where it is
+  made. This does not implicitly turn a scalar into an array.
   See the [complete tuple/container table](research/overloading-conformance.md#tuplecontainer-rules).
+- **Refinements** (#724). Two refinements of one base are distinct when
+  their intervals have no number in common (`small`, 0 to 65534, and
+  `negative`, below 0; a float's `_X > -0.0` and `_X < 0.0`, `-0.0` being
+  `0.0`): no value is of both. A call takes the overload its argument is
+  of, by its type when compiled, not by its value when run: a literal that
+  meets the conditions, or a value of a refinement within the parameter's
+  (`F(-1)`, `F(S)` with `S:small`); an `int` that is no literal is of
+  neither without a cast (the Book's tests,
+  `WhereConstrainedInts.versetest:179`, `WhereConstrainedFloats.versetest:59`;
+  UEFN 43.12 admits and runs `followup-refused/refinement-overloads`).
+  Refinements that share a number, and a refinement and its base, overlap.
 - **Overlapping types:** `void`, a type parameter, two array, map or option
   types (they share the empty one), an array, option or `logic` with
   another (`false` is each), and a
@@ -1269,8 +1318,9 @@ circle := class(shape, labelled):
     `O.X.Length` reads `O.X`.
   - **Order.** `O`, then the indices, then `v`; for `set O.X op= v`, then the
     old value through `G`, then `S`. A construction evaluates its fields'
-    values in the order they are declared, those with accessors among them,
-    makes the object, calls the setters of the fields with accessors it
+    values (those given in the order written, at the places the given
+    fields have in declaration order; an omitted default and a field with
+    accessors at its own place), makes the object, calls the setters of the fields with accessors it
     gives, in that order, then runs the `block:` clauses.
   - **Access.** A use of the field is judged by the field's access (and its
     `var`'s for a `set`), not by its accessors': a `<public>` field may have
@@ -1392,8 +1442,8 @@ circle := class(shape, labelled):
   evaluated before it are bound first, so they still run before it.
   Supplied field values of `name{Field := …}` constructions are operands
   too, including generic classes, structs, inherited and nested values.
-  Their fields keep declaration order, including omitted defaults, and
-  class blocks run after the fields. Defaults retain their own effects
+  Those given run in the order written, omitted defaults at their places
+  in declaration order, and class blocks run after the fields. Defaults retain their own effects
   and convergence contracts. Mutable-path indices in `set` are ordered
   operands too: a cast there keeps index evaluation, path reads and the
   RHS in their ordinary order, with its refinement available to the RHS
@@ -1664,7 +1714,23 @@ circle := class(shape, labelled):
   budget still counts at every construction, even for an empty type. Lean proves that a
   function without `writes` keeps every existing object as it was
   (`Prog.accepted_no_writes`). A constant cannot hold an object with `var`
-  fields or of a `<unique>` class, since it is computed at each use.
+  fields or of a `<unique>` class, since it is computed at each use, with
+  two exceptions (#724). A module constant `N:c = c{}`, its value the
+  construction itself and its type the class, of a `<unique>` class without
+  type parameters, without fields and without `block:` clauses, is one
+  object, the same at every use: the program starts with it, as with its
+  classes' prototypes (`TyEnv.constObjects`), so `Instance1 = Instance1`
+  and `Instance1 <> Instance2` hold, and a failure context that fails
+  leaves it the same object (the Book's tests, `GlobalVariables.versetest`
+  72 to 74; UEFN 43.12 admits and runs
+  `followup-refused/module-const-unique`). Its construction is checked as
+  any constant's, and its uses have its effects (a `<computes>` function
+  cannot use a constant of an `<allocates>` class). And a constant whose
+  value is an empty `map{}`, `array{}` or `false` holds no object, whatever
+  its type (`Empty:[c0]int = map{}` keyed by a `<unique>` class,
+  `module-const-empty-map-unique-key`). A `<unique>` object with fields,
+  one inside an option, an array or a tuple, a call's result and another
+  constant's object (`J:u = I`) are still refused.
 - **`block:`.** A class's `block:` clauses run when an instance is
   constructed, after its fields are given, those of the classes above it
   first, each class's in order; they see the fields by name, as a method
@@ -1674,7 +1740,11 @@ circle := class(shape, labelled):
   constructs the type. Interfaces have no blocks.
 - **`<unique>`.** A `<unique>` class (and every class below it) is
   comparable: `=` and `<>` test identity, so two instances with equal
-  fields differ, and an alias equals its original.
+  fields differ, and an alias equals its original. A `<unique>` interface
+  or abstract class that no concrete class is below is comparable too,
+  though it has no value to compare (#724; the Book's tests,
+  `ComparableInterface.versetest` 5 to 37; UEFN 43.12 admits
+  `followup-refused/unique-interface-equality`).
 - **Comparability.** Other classes and interfaces are not comparable (Book §4.9), nor
   is a struct or container that holds one.
 - **Refined conditional choices.** A `for` may use the name bound by a refining
@@ -2025,8 +2095,14 @@ Main():void =
     or, if none did, from the state the choice was reached in; each value
     runs the body, whose effects stay. A choice whose alternatives are
     values (`X := (set N += 1; 1) | 2`, also inside an expression, a
-    parenthesized one spliced in) is such a choice point. A `for` whose
-    clauses have a call of a function with several values, a choice whose
+    parenthesized one spliced in) is such a choice point, and so is an
+    inlined call of a function whose values are a flat choice (`F(A)` for
+    `F(X:int):int = X | X + 1`), with the code of that function before its
+    choice, a `for` of its own there too: the bodies that inner `for` ran
+    commit nothing of the outer search (#709, #723;
+    `tests/verse/multi_for_self_for_exhausted.verse`). A `for` whose
+    clauses have a call of a function with several values that is taken
+    lazily (a generator of its own), a choice whose
     alternatives have choices of their own, or an `if`, `case` or `or` that
     picks a branch with a choice keeps, for now, the old rule, entirely: an
     alternative whose own clauses (up to the next generator) fail is rolled
@@ -2073,7 +2149,9 @@ Main():void =
     method's receiver, or any other expression (`Arr()[0 | 1]` calls `Arr`
     once);
   - in a comparison chain, the pairs before the choice are checked first,
-    so the chain stops before it when one fails;
+    so the chain stops before it when one fails (a chain that turns from
+    `>` to `<` is the comparison of its left part with the rest:
+    [Operators](#supported));
   - a name that is no value (a function, class, module, enumerator, `true`,
     `false`) and a literal, `array{}` or `map{}` stay in place, so they keep
     the type their place expects, and so do arrays, tuples, maps and
@@ -2193,16 +2271,22 @@ Main():void =
   ```
 
   A choice inside a struct or class construction is lifted as one in a
-  call's arguments, in the order the construction evaluates its fields: its
-  type's declaration order, not as written (`pt{Y := F(), X := 1 | 2}`
-  takes X's value first, then calls `F`). A call's named arguments are
+  call's arguments, in the order the construction evaluates its fields: those
+  given in the order written (`pt{Y := F(), X := 1 | 2}` calls `F`
+  first, then takes X's value; #724, as Epic's Verse VM evaluates an
+  archetype, [`cls-construction-order`](../tests/conformance/versevm/differential/cls-construction-order.verse)). A call's named arguments are
   lifted after its positional ones, in the order written, as a call
   evaluates them (the defaults of those omitted come after):
   `F(?C := G(), 1 | 2)` takes the choice, then calls `G`. Nothing is lifted from the body
   of `first{…}`, `spawn`, `branch`, `sync`, `race`, `rush` or `defer:`:
   such a body takes its own choices or runs apart.
 
-  Omitted field defaults run in declaration order too. A computed default
+  Omitted field defaults run in declaration order, each at its field's
+  place: the fields given take, in the order written, the places the given
+  fields have in declaration order, so `q{D := F(), B := G()}` of a struct
+  with fields `A` to `D` runs `A`'s default, `F`, `C`'s default, then `G`
+  (the Verse VM's order of defaults among given values is not recorded;
+  this keeps an archetype written in declaration order as it was). A computed default
   before a choice runs once for that prefix; later values share any object
   it creates. Trailing defaults and the constructed class's blocks run for
   each completed value. Defaults retain their declaration scope and type
@@ -2955,6 +3039,12 @@ clauses, first, later or alone, takes it as any (`if (X := Xs[1], X > 1)
 then array{X} else array{}` is a `[]int`), and a cast that refines type
 arguments types the branch under its refinement (#243, #583).
 
+An `any` inside a generic function's parameter type takes any type and
+binds nothing (#724): `MapCount(M:[t]any where t:subtype(comparable))` given
+an `[int]string` is called at `t := int`, the argument converted to
+`[int]any` (the Book's tests, `Any.versetest:60`; UEFN 43.12 admits and runs
+`followup-refused/map-any-value-generic`).
+
 Nothing can be done with an `any`: it has no equality (so it is no map
 key), no `ToString`, and no cast back. So in Verse Core it is `void`: a
 value becomes an `any` by being evaluated. In a program that calls
@@ -3062,6 +3152,26 @@ Main():void =
   map{1 => 2.0}` is a `[int]comparable`) and beside a `comparable`
   (`array{1} + CA` with `CA:[]comparable`). One that is not comparable
   makes the join `any`.
+- **Map keys** (#724). With no key type expected, a map literal's key type
+  is the join of its keys' types, as its value type is of its values' (the
+  Book's tests, `Map.versetest:143`: "Map literals should infer common key
+  and value types that are joins of the key and value types of each pair"):
+  keys of classes join at the nearest class or interface above them, which
+  must be `<unique>` (`map{A => 1, B => 2, S => 3}` of two sibling classes
+  and their base is keyed by the base), a refinement and its base at the
+  base, options and tuples of such inside. A key is converted to the joined
+  type and looked up by it, an object by identity. `ConcatenateMaps` of
+  maps keyed by different types gives a map keyed by their join alike, and
+  there two key types with nothing else in common join at `comparable`
+  (`ConcatenateMaps(map{0 => "0"}, map{"0" => "zero"})` is a
+  `[comparable]string` of two entries, `ConcatenateMaps.versetest` 44, 67);
+  the values' types join as a map literal's do. UEFN 43.12 admits and runs
+  both (`followup-refused/map-literal-sibling-keys`,
+  `concatenate-maps-key-join`). Still refused, for want of Epic's answer: a
+  map *literal* whose keys have nothing in common but `comparable`
+  (`map{0 => "a", "0" => "b"}`; write `M:[comparable]string = …`, the form
+  the Book's tests have), classes with no `<unique>` class above both or
+  with more than one nearest one, and an `int` key beside a `rational` one.
 - **Overloads.** `comparable` overlaps every comparable type and `<unique>`
   classes and interfaces (`F(:int)` and `F(:comparable)` cannot both be
   defined), and is distinct from the types that are not comparable.
@@ -3397,8 +3507,9 @@ Main():void =
   next one (`_X < 10` is `_X <= 9`). The negation of a refined value is of
   an expected refinement whose interval holds the flipped one
   (`NegValue:negative_percent = -MakePercent()`).
-- Not supported: overloads on disjoint refinements (refinements of one base
-  overlap).
+- Overloads on refinements of one base are distinct when their intervals
+  have no number in common ([Overloading](#overloading), #724); otherwise
+  refinements of one base overlap.
 
 ## Type aliases
 
@@ -3676,7 +3787,10 @@ already supported. The pinned Math page declares only an integer `Clamp`,
 the median of its three arguments, so the order of `A` and `B` does not
 matter; Epic's published API adds
 [`Clamp(Val:float, A:float, B:float)`](https://dev.epicgames.com/documentation/en-us/fortnite/verse-api/versedotorg/verse/clamp),
-whose comparisons order NaN above +Inf, and
+which is NaN when any of the three is on Epic's Verse VM (#724,
+[`float-clamp-nan`](../tests/conformance/versevm/differential/float-clamp-nan.verse),
+[`float-minmax-nan`](../tests/conformance/versevm/differential/float-minmax-nan.verse): `Clamp(0.5, 0.0, NaN)`
+is NaN, not 0.5), and
 [`Sgn`](https://dev.epicgames.com/documentation/en-us/fortnite/verse-api/versedotorg/verse/sgn)
 of an int and of a float (NaN of NaN), which the Book's tests call
 (`Math.versetest`); openverse has the three, written with Verse Core's
@@ -3725,6 +3839,70 @@ Main():void =
   takes as many steps as `N` has bits; `BitAnd`, `BitOr` and `BitXor` take
   one step per bit of their operands.
 
+## Random numbers, the clock and the player map
+
+Some functions of Epic's library read the world outside the program: a
+random source, the wall clock, a player's persistent storage. UEFN 43.12
+admits and runs them (the probes named below, #724). openverse is
+deterministic and has none of these, so each has a fixed, documented
+definition, the same in the reference interpreter and the C runtime; **each
+is a difference from Epic's**, which no program that only checks a range,
+an order or a success can see. Each is a soft built-in, as `Clamp` is (a
+program's own function of the name is the one its calls mean), and none is
+supported as a value (`F := GetRandomInt`). A `using` of a `/Verse.org`
+path is accepted and ignored ([Modules](#modules)), so none needs the
+`using` Epic's requires.
+
+```verse
+using { /Verse.org/Random }
+Main():void =
+    Print("{GetRandomInt(1, 6)} {GetRandomInt(6, 1)}")   # 1 5, in every run
+    if (GetSecondsSinceEpoch() > 1716411409.0) then Print("after 2024")
+    if (Y := FitsInPlayerMap[5]) then Print("fits {Y}")   # fits 5
+```
+
+- `GetRandomInt(Low:int, High:int)<transacts>:int` (the Book's Runtime API
+  reference, `/Verse.org/Random`: "A uniformly distributed int in [Low,
+  High], both ends included, with the bounds accepted in either order";
+  `followup-refused/get-random-int`). Epic's numbers come from a hardware
+  entropy seed ("There is no seed parameter and no way to replay a
+  sequence"). openverse's come from a generator with a fixed seed, so every
+  run of a program draws the same sequence: Knuth's 64-bit linear
+  congruential generator, `S' = (6364136223846793005·S +
+  1442695040888963407) mod 2^64` from `S = 0`, whose draw is the high 32
+  bits of the new state. A call draws until it has 32 bits more than its
+  range `|High - Low| + 1` needs (one draw for a range below 2^32), reads
+  the draws as one number `R`, the first the most significant, and gives
+  `Min(Low, High) + R mod range` (a bias below 2^-32). `GetRandomInt(3, 3)`
+  is 3 and still draws. The state is the program's, one for all its tasks,
+  written as any `var` is: a failure context that fails undoes its draws,
+  where Epic's draw "is deliberately taken outside the enclosing
+  transaction". It is written in Verse (`Front/Random.lean`): no Verse
+  Core, format or runtime change. In a data member's definition it is
+  refused, as a call that is not `<converges>` (3582). `GetRandomFloat` and
+  `Shuffle` are not supported.
+- `GetSecondsSinceEpoch()<reads>:float` (the API reference,
+  `/Verse.org/Verse`; ch. 14, "Time is frozen within a transaction";
+  `followup-refused/get-seconds-since-epoch`): Epic's is the wall clock,
+  the current Unix time. openverse's clock is frozen: every call, in every
+  run, gives `1795132800.0`, 2026-11-20T00:00:00Z (the day Epic's answers
+  to these probes were recorded). It does not advance with the scheduler's
+  virtual time ([Concurrency](#concurrency), "Time"): a `Sleep` does not
+  move it, so a program cannot measure a duration with it. In a data
+  member's definition it is refused, as a call that is not `<converges>`
+  (3582).
+- `FitsInPlayerMap[Value]` (the API reference: `FitsInPlayerMap(Value:t
+  where t:subtype(persistable))<converges><reads><decides>:t`, "Succeeds
+  when Value is something a player's persistent map is allowed to hold, and
+  produces the value unchanged when it does";
+  `followup-refused/fits-in-player-map`): the value, of a type that
+  persists (ch. 17: not a class, an interface, a function, `any`,
+  `comparable`, a rational, a `weak_map`, nor a struct or an enum without
+  `<persistable>`; another is refused). openverse has no limit on what a
+  player's map holds, so the call always succeeds, as it does of an int on
+  Epic's Verse VM (the Book's tests expect a runtime error of the test
+  runner's default implementation, `weak_map.versetest:611`).
+
 ## rational
 
 `X / Y` on ints is a `rational`, and fails when `Y = 0` (Book of Verse
@@ -3734,16 +3912,21 @@ ch. 2, #116):
 Half(X:int)<decides>:rational = X / 2
 
 Main():void =
-    if (R := 7 / 2, R = 14 / 4, 3 < R, R < 4) then
+    if (R := 7 / 2, R = 14 / 4, 3 < Ceil(R), Floor(R) < 4) then
         Print("{Floor(R)} {Ceil(R)}")    # 3 4
 ```
 
 - `int` is a subtype of `rational`: an int passes as one, and an int joins
   a rational to a rational. The reverse needs `Floor` or `Ceil`, which never
   fail on a rational.
-- `=` and `<>` compare rationals in lowest terms (`6 / 4 = 3 / 2`). The
-  orderings `<`, `<=`, `>` and `>=` compare them exactly; an operand may be
-  an int.
+- `=` and `<>` compare rationals in lowest terms (`6 / 4 = 3 / 2`); an
+  operand may be an int. There is no ordering: `<`, `<=`, `>` and `>=` of a
+  rational are refused, as Epic's compiler refuses them (UEFN 43.12, error
+  3509, "No overload of the function `operator'<'` matches the provided
+  arguments (:rational,:rational)",
+  [`rat-ordering`](../tests/conformance/versevm/differential/rat-ordering.verse), #724) and as the Book's
+  table has the relational operators, of `int` and `float` only. Compare
+  `Floor` or `Ceil` of it, or cross-multiply.
 - `rational` is a type of variables, parameters, results, fields and
   containers. It is comparable, so it can be a map key.
 - There are no rational literals and no `ToString` of one.
@@ -4280,8 +4463,14 @@ Main()<suspends>:void =
   false?`): its start, the task's first run included, is the context's
   code, so a context that fails undoes it, and the task never runs again;
   in a suspends function a `spawn` in a condition or a filter starts the
-  task there (it is not a suspension point). A `spawn` in a `defer:` is
-  refused (#156).
+  task there (it is not a suspension point). A `defer:` of a function that
+  cannot suspend may spawn (#724: the Book's tests, "Ensure that defer
+  allows immediate `spawn` expression", `FlowControl/defer.versetest:1094`;
+  UEFN 43.12, `followup-refused/spawn-in-defer`): the task starts where
+  the defer runs, at each exit of its scope, and runs to its first wait
+  before the defer goes on. A `spawn` in a `defer:` of a `<suspends>`
+  function is refused (#156; the defer is also the code of the function's
+  cancellation), though a function it calls there may spawn.
   Without a suspends `Main`, a task runs up to its first wait, and on only
   inside a `Signal` that resumes it (below).
   `T.Cancel()` (in a suspends function) cancels a task that has not ended:
@@ -4518,7 +4707,11 @@ Main()<suspends>:void =
   (its code's branches and `rush` arms that go on, wherever in the
   functions it called they started) are stopped first, as any task's when
   it ends (#724), but unfinished unstructured tasks are not cancelled, so
-  their pending defers do not run.
+  their pending defers do not run. A `Main` that ends inside a `Signal` or
+  a task's end that resumed it has its children stopped there, before the
+  awaiters after it in that `Signal` go on (#723; Epic's recorded probes do
+  not reach this corner, which has no `Main`: it is the task's rule, a
+  task's children stopped when it ends, before its awaiters resume).
   If `Main` waits
   and no task can run again (for example after `Sleep(Inf)`, or awaiting a
   task that never ends or was cancelled), it ends as `Err()` does: exit 2,
@@ -4542,16 +4735,17 @@ Main()<suspends>:void =
 |---|---|---|
 | `int` range | arbitrary precision on VerseVM; 64-bit with a runtime error on BPVM (§4.1) | **VerseVM** (#724, Epic's Verse VM on UEFN 43.12 agrees): exact past 64 bits, up to 2^20 bits (the Book's tests' `MaxLengthBits`), a longer result the overflow error; `ToString` of one beyond 64 bits the overflow error, as on Epic's Verse VM; module constants evaluated in 64 bits, as Epic's compiler does; `Quotient` and `Clamp` exact past 64 bits, where Epic's natives stop (a known difference) ([int](#int)) |
 | `X = Y` result | the operators page says `logic`; elsewhere the left operand (§5.4) | the left operand |
-| Associativity of comparisons | the prose: chains "check all adjacent pairs" (ch. 1); the table: right (ch. 4); the tests: `<>` left-associative (`Associativity.versetest:9`), the others as a chain: the Book disagrees with itself ([the audit](research/readings-audit.md#comparison-chains-with-)) | chains: every adjacent pair checked, each operand evaluated once, result is the leftmost |
+| Associativity of comparisons | the prose: chains "check all adjacent pairs" (ch. 1); the table: right (ch. 4); the tests: `<>` left-associative (`Associativity.versetest:9`), the others as a chain: the Book disagrees with itself ([the audit](research/readings-audit.md#comparison-chains-with-)) | chains: every adjacent pair checked, each operand evaluated once, result is the leftmost; `<>` groups from the left, and so does `<` or `<=` after `>` or `>=`, as on Epic's Verse VM (#724: `5 > 1 < 3`, `3 > 1 < 2`, `9 > 1 < 5` and `3 > 1 <= 1` fail there, `3 < 5 < 4` and `5 > 3 > 4` fail as chains, `2 > 1 < 5` succeeds; [`prec-compare-chain`](../tests/conformance/versevm/differential/prec-compare-chain.verse), [`prec-compare-chain-mixed`](../tests/conformance/versevm/differential/prec-compare-chain-mixed.verse)). `<` or `<=` then `>` or `>=` stays a chain (`1 < 5 > 3` does not parse on Epic, 3100) |
 | Value of a successful `not e` | unspecified | `void` |
 | Type of `if` without `else` | unspecified | `void` |
 | A failing `for` body | unspecified (VC: the `for` fails) | the `for` fails (as in VC) |
-| What a `for` undoes | its clauses are one search: what they did since the last value that reached the body is kept at the body and undone when the search ends; a failure undoes back to its own element or alternative (`FlowControl/for.versetest` 317-392, `Range.versetest` 140, 159, `SoftwareTransactionalMemory.versetest` 74-88; `08_failure.md:92`: "a failure context for each iteration of the domain clause"): **the Book decides** | the Book's, for a `for` whose prepared clauses have only range, array, map, string, or flat value-choice generators. This includes flat inlined calls and producers computed as arrays at the call. A `for` with a remaining producer boundary, composed choice, or exclusive choice keeps the older rule. Its generator's successful clauses keep their effects even when the generators after it give no value. See [the audit](research/readings-audit.md#what-a-for-undoes). |
+| What a `for` undoes | its clauses are one search: what they did since the last value that reached the body is kept at the body and undone when the search ends; a failure undoes back to its own element or alternative (`FlowControl/for.versetest` 317-392, `Range.versetest` 140, 159, `SoftwareTransactionalMemory.versetest` 74-88; `08_failure.md:92`: "a failure context for each iteration of the domain clause"): **the Book decides** | the Book's, for a `for` whose prepared clauses have only range, array, map, string, or flat value-choice generators. This includes flat inlined calls and producers computed as arrays at the call. A `for` with a remaining producer boundary, composed choice, or exclusive choice keeps the older rule. A producer keeps a boundary when it is not inlined into the clauses: a recursive function taken lazily, a method reached by dispatch (overridden below the receiver's class, or implementing an interface's method), and any call of a function with several values inside a failure context nested in the clauses (`not`, `logic{…}`, an `if`'s or `option{…}`'s condition, the left of `or`). An inlined one brings what its body has: a choice of values is flat, a composed or exclusive choice in it is the `for`'s (#723). Its generator's successful clauses keep their effects even when the generators after it give no value. See [the audit](research/readings-audit.md#what-a-for-undoes). |
 | A failing `for` source | "When any expression in the iteration header fails, that iteration is skipped" (ch. 7); `for.versetest:317`: a failing range bound gives `array{}`: **the Book decides** | zero iterations, for an iterated source (`X : F[]`) and a range bound (`I := 1..F[]`) alike, what the source did rolled back (with what the search did since its last value, by the rule above); the `for` itself does not fail |
 | `?` on other values | conflict (§6.1) | only `logic` and `?t` (the API's typed reading) |
 | Output inside a failed failure context | unspecified for `Print` (the API's `log` class, another function, prints rolled-back lines prefixed "(Rolling Back)"); Epic's Verse VM (UEFN 43.12, 2026-11-19) logs it with that label: `if (Print("x"), false?)` logs `(Rolling Back) x`, the label it gives every line of a rolled-back transaction, also the lines before a runtime error (followup/print-in-condition; which lines get it: followup-print, #724) | rolled back with the writes (transactional `Print`), and not echoed: whether to print the Verse VM's labelled lines is open (#724) |
 | `Main` failing | (no entry point in the book) | exit code 1; output already printed stays |
-| `return` or `break` inside a failure context | refused by the tests (`SOL-4199-BreakFromIf.versetest`, `Reachability.versetest` 12-15, `Return.versetest` 157-163; [the audit](research/readings-audit.md#return-and-break-in-a-failure-context)) | the Book's: refused ([Control](#supported)); a `break` in a `for`'s body, which the Book's tests allow and its prose refuses, stays refused |
+| `return` or `break` inside a failure context | refused by the tests (`SOL-4199-BreakFromIf.versetest`, `Reachability.versetest` 12-15, `Return.versetest` 157-163; [the audit](research/readings-audit.md#return-and-break-in-a-failure-context)) | the Book's: refused ([Control](#supported)) |
+| `break` in a `for`'s body | the prose refuses it (ch. 7: "The `break` statement cannot exit `for` loops early"); the tests allow it inside a `loop` (`SOL-4199-BreakFromIf.versetest:39`: "`break` in a `for` body is allowed and breaks the surrounding `loop`"), and so does Epic's compiler (UEFN 43.12, `followup-refused/break-in-for-in-loop`, which prints `count 1` on the Verse VM; #724) | the tests' and Epic's: the `break` leaves the innermost `loop` around the `for`, abandoning the `for` (its value too) and running the `defer:`s of the scopes it leaves, innermost first; a `for` that is in no `loop` has nothing to leave, and its `break` is refused, as is one in a `for`'s clauses (a failure context) and one in the body of a `for` in a `<suspends>` function whose clauses take a choice's values across a wait (the body is then code of its own) |
 | Comparability | `comparable` covers the primitive types, enums, structs, `<unique>` classes and containers of comparable types (ch. 4); not functions, `any`, nor classes and interfaces without `<unique>` (ch. 11, `CompareInstance.versetest:11`) | the Book's: the types it names, and a type parameter declared `subtype(comparable)`; `comparable` itself is a type ([comparable](#comparable)) |
 | Inferring type arguments | not described; the tests refuse a type parameter no parameter's type determines (`ParametricFunctions.versetest` 336-374, 586, 3503), take one named in the result's function type's parameter (`:376`), and refuse one a contravariant class's parameter names (`:356`) | first-order matching against the expected result type, then the arguments; no subtyping other than `false` (matches anything) and `void` (accepts anything), and a bound's (an argument below it gives its instance); every type parameter of a source function must be given by its parameters, by the Book's variance: the expected result gives none any more ([Parametric functions](#parametric-functions), [the rule](research/book-forms-rules.md#a-type-parameter-the-parameters-determine)); a class that does not use its type parameter gives it (the Book is silent) |
 | A qualifier without a `using` | "A qualifier only says which `F` is meant among the ones already in scope" (ch. 10): `(Top.M:)F` with no `using` is unknown | the qualifier is found as any name is, then the name is looked up in exactly that scope: `(M:)F` is `M.F` (#145) |
@@ -4563,13 +4757,13 @@ Main()<suspends>:void =
 | `X?` of a logic | "equivalent to comparing against true" (ch. 4); ch. 8: "succeeds with that value"; the tests: `true?` is the empty value (`BoolQuery.versetest` 3, 4, `LogicalAnd.versetest:29`, `Precedence.versetest:121`) | the tests' and **Epic's**: `X?` succeeds when `X` is `true`, with the empty value, `false`, so `true? = false` holds; both of Epic's VMs agree (UEFN 43.12 (`++Fortnite+Release-43.12-CL-60598086`), probes `book-query-*`) ([the rule](research/book-forms-rules.md#the-value-of-true)) |
 | `true` as a type | the type of the empty value, as `tuple()` (ch. 2); `void` and `true` interchange (`Void.versetest`); `Result:true = branch: …` refused, `Result:any = branch: …` valid (`FORT-582630-BranchResult.versetest`) | the Book's: `tuple()`; `void` and it interchange inside options, arrays and maps; a `branch:`'s value is an `any` ([the rule](research/book-forms-rules.md#true-as-a-type)); not yet in a function type (`int->true` and `int->void` are two types) |
 | A function value of another function type | `bp_vm_only`: refused, 3502 "not yet implemented" (`DefaultNamed` 629, 640, 741, 751, `Function` 238, 271, …); `verse_vm_only`: valid (their twins) | **Epic's UEFN 43.12**: refused, 3502, where it needs a wrapper and is no function named at the type, as the Blueprint VM's tests have it; `--function-coercions` keeps openverse's conversion ([the rule](#function-values-epics-compiler-does-not-convert-724)) |
-| Ordering of rationals | not stated (§2 lists `<` … for `int` and `float`) | exact (by continued fractions, so it cannot overflow), and an int compares with a rational |
+| Ordering of rationals | not stated (§2 lists `<` … for `int` and `float`) | refused, as Epic's compiler refuses it (#724: UEFN 43.12, error 3509, [`rat-ordering`](../tests/conformance/versevm/differential/rat-ordering.verse)); `=` and `<>` are exact, and an int compares equal with a rational |
 | Order of a choice's values | (not in the Book; the Verse Calculus: spatial) | spatial: the leftmost choice varies slowest, as nested generators do (#208) |
 | Code before a choice | (the Verse Calculus is pure) | runs once, also within an expression (the operands before the choice are evaluated first, as written); each alternative runs the code after the choice, from where the choice was reached; in an `if` or `first{}`, one that leads to no success is rolled back (as backtracking does); in a `for` too, one none of whose values reaches the body (the Book's rule for a `for`, above, a choice being one more choice point); a `for` that keeps the old rule for now rolls back only an alternative whose own clauses fail (#208): **the Book is silent** on choice |
 | A choice in an operand of `and` or `or` | not stated (the left of `or` is a failure context, the right is not, §6.2) | `A and B`: `A`'s clauses, then `B`'s, in the context the `and` is in, so `B`'s values for each of `A`'s; `A or B`: `if (T := A) then T else B`, so the left's first success, if it has one, is the only value (the right is not tried when what follows fails), else the right's values, taken by the context the `or` is in (all of them in a `for`), not only its first (#283) |
 | A call of another function with several values in a recursive one's code | not stated (the Verse Calculus: a call is its body) | a choice point of the recursive one, taken with it: when the callee's clauses fail it has no values (#283); in a `for`, which keeps the old rule for now when it takes such a call, what came before the call stays, as at a call of the recursive one itself, not undone as at an inlined call: **the Book is silent** |
 | A `defer:` in a function with several values, or in a block of its code | not stated (ch. 7: it runs when its scope exits) | it runs as each value leaves the scope, after the value is computed and before the code after the call or the block, and at a `return` after the return's value; a call or a block whose clauses fail gives no value and runs none; in a `for`, what it does is part of that value's code, undone with it when a later filter rejects the value, whether the call is inlined or taken lazily (#283): **the Book is silent** |
-| A recursive function with several values whose only calls of itself are in failure contexts of its own code | not stated (the Verse Calculus: a call is its body) | inlined, as a function recursive only through another function that consumes it is (the contexts are functions of their own): where its clauses fail in a `for`'s clauses (which keeps the old rule for now, as any `for` taking a call of a function with several values), what those clauses did since their last generator is undone with them, as for any inlined call, not kept as at a lazily taken call, which is a generator of its own (#283): **the Book is silent** |
+| A recursive function with several values whose only calls of itself are in failure contexts of its own code | not stated (the Verse Calculus: a call is its body) | inlined, as a function recursive only through another function that consumes it is (the contexts are functions of their own): where its clauses fail in a `for`'s clauses, what those clauses did since their last generator is undone with them, as for any inlined call, not kept as at a lazily taken call, which is a generator of its own (#283); when its values are a flat choice the `for` follows the Book's rule (What a `for` undoes, above), so a row that reaches no body is undone whole, with what a `for` over its call of itself did (#723): **the Book is silent** |
 | A clause of a `for` with a choice in it | (the Book has no choice; ch. 7: "Each filter must be failable") | a generator over its values, as a clause that calls a function with several values is: not a filter, so it need not fail (`for (X := 1..2, set N = (1 \| 2))` runs the body for each value); the statements of a function with several values that a `for` takes are the function's, not the `for`'s filters |
 | Precedence of `\|` | (not in the Book) | below `+`, above the comparisons: `X = 1 \| 2` is `X = (1 \| 2)` (#208) |
 | `Sleep(0.0)` | "may resume in the same tick" (ch. 14), "One frame" (ch. 14); the API reference: it always yields; the tested ch. 14 examples (`03`, `05` to `11`): it completes at once, in a `race`, a `sync` and plain code: the Book disagrees with itself ([the rules](research/scheduler-conformance.md#sleep00-yields)) | **Epic's**: it yields, as both of Epic's VMs do (UEFN 43.12, `++Fortnite+Release-43.12-CL-60598086`, `vm-sleep-zero-yields`), and as the API reference says: it waits one tick, the next update; a negative or NaN duration completes at once |

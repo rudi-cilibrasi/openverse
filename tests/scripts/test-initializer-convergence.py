@@ -55,8 +55,18 @@ def model(seed, control):
             provided['Empty'] = f'array{{{element}}}' if i == 2 else f'Make(array{{}},{tag})'
         if control or i != 0:
             provided['Value'] = f'Log({first+10})' if i == 1 else f'Get[{n+(i==2)}]'
-        items = list(provided.items())
-        rng.shuffle(items)
+        # (#724) The fields given run in the order written, at the places the
+        # given fields have in declaration order (Epic's Verse VM:
+        # differential/cls-construction-order); an omitted default runs at
+        # its own place. The program with defaults writes its fields in a
+        # random order; the control, which gives every field, writes them
+        # in the order that program evaluates them, so both print the same.
+        declared = ['Before', 'Empty', 'Value']
+        written = ['Before'] + (['Empty'] if i == 2 else []) + (['Value'] if i != 0 else [])
+        places = [key for key in declared if key in written]
+        rng.shuffle(written)
+        order = [written[places.index(key)] if key in places else key for key in declared]
+        items = [(key, provided[key]) for key in (order if control else written)]
         fields = ','.join(f'{key}:={value}' for key, value in items)
         source += (f'    if(0<=0,C{i}:={ty}{{{fields}}})then '
                    f'Print("value {{C{i}.Before}} {{C{i}.Empty.Length}} {{C{i}.Value}}") '
@@ -64,10 +74,11 @@ def model(seed, control):
         value = first + 10 if i == 1 else n + (i == 2) + 3
         succeeds = i == 1 or n + (i == 2) >= 0
         if succeeds:
-            want.append(f'arg {first+i}')
-            if i != 2:
-                want.append(f'default {tag}')
-            want.append(f'arg {first+10}' if i == 1 else f'try {n+(i==2)}')
+            printed = {'Before': [f'arg {first+i}'],
+                       'Empty': [f'default {tag}'] if i != 2 else [],
+                       'Value': [f'arg {first+10}' if i == 1 else f'try {n+(i==2)}']}
+            for key in order:
+                want.extend(printed[key])
             want.append(f'value {first+i} {int(i==2)} {value}')
         else:
             # The complete failed construction, including earlier argument

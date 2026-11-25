@@ -1,4 +1,6 @@
-# expect: Depth is defined twice with parameters a call cannot tell apart
+# Depth(:string) beside Depth(:char) (#724): a char and an array of chars are
+# two overloads, as F(:a) beside F(:[]a) is (tests/verse/overload_scalar_array;
+# the refusal this program pinned since #510 was openverse's own).
 # overloading (#74, Book of Verse ch. 6): functions of one name taking
 # disjoint parameter types; a call takes the one its arguments fit
 
@@ -21,10 +23,10 @@ Describe(K:color):string = "color"
 Describe(X:int, Y:int):string = "two {X + Y}"
 Describe():string = "nothing"
 
-Half(X:int)<decides>:int =
+Half(X:int)<transacts><decides>:int =
     X > 0
     Floor(X / 2)
-Half(S:string):string = "half of {S}"
+Half(S:string)<transacts>:string = "half of {S}"
 
 # nested overloaded calls resolve in polynomial time
 Depth(X:int):int = X + 1

@@ -1,11 +1,13 @@
 # Book: Tests/Intrinsics/ConcatenateMaps.versetest:67 (1 case):
 # ConcatenateMaps of an [int]string and a [string]string map, keys joined at
 # comparable. The Book's tests expect it valid.
-# OpenVerse (ce8632ea, Lean) refuses this probe: "expected int, found string"
-# If UEFN 43.12 admits it, it prints
+# OpenVerse (ce8632ea, Lean) refused this probe: "expected int, found string"
+# Epic's Verse VM (UEFN 43.12, ++Fortnite+Release-43.12-CL-60598086,
+# 2026-11-20) admitted it and printed
 #   length 2
-# and OpenVerse has a gap on Verse that Epic ships; if it refuses it, the Book
-# is ahead of the shipped compiler here and OpenVerse's refusal is Epic's.
+# OpenVerse now prints it too (#724, Lean and C): ConcatenateMaps of maps
+# keyed by different types gives a map keyed by their join, here comparable
+# (tests/verse/concatenate_maps_key_join).
 Main():void =
     M := ConcatenateMaps(map{0 => "zero"}, map{"0" => "string zero"})
     Print("OVPROBE length {M.Length}")

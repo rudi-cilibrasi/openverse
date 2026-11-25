@@ -101,7 +101,7 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
        nocase    (no case whose arms are a branchy if's branches, #283; on with bif otherwise)
        noretscope (no return of RT2 or RT3 in a block or a case's arm, #283; on otherwise)
        nocls     (no call of a generator of itself in a field of a class's construction,
-                  ocls{A := …, B := …}, whose superclass's field B is evaluated first,
+                  ocls{A := …, B := …}, whose fields are evaluated as written (#724),
                   #283; on with seq otherwise)
        noovw     (no overloads Ow of one name with one value or several, OwOne calling
                   the one with one value, OwR recursive, owc/owd's overloaded method Om,
@@ -218,33 +218,99 @@ FOR_BOOK = set(os.environ.get('OV_FOR_BOOK', 'plain,choice').split(',')) - {''}
 FOR_RULE = ['old']    # (the rule of the innermost for being run)
 
 # The kinds of choice point a for's clauses reach, as LANGUAGE.md tells them
-# apart: plain (a range), choice (a choice whose alternatives are values: none
-# has a choice or a call with several values of its own, a parenthesized
-# choice spliced in), composed (one whose alternatives do), exclusive (an `if`
-# or `case` that picks a branch with a choice, an `or` with one on its right),
-# call (a producer that retains its own boundary, including calls in a
-# nested failure context).
+# apart: plain (a range, or the array of an eager producer's values), choice
+# (a choice whose alternatives are values: none has a choice or a call with
+# several values of its own, a parenthesized choice spliced in), composed
+# (one whose alternatives do), exclusive (an `if` or `case` that picks a
+# branch with a choice, an `or` with one on its right), call (a producer
+# that keeps a boundary of its own).
+# The compiler picks the rule once the clauses are prepared (#709, #723): a
+# call of a function with several values that is inlined is then its body's
+# clauses and choices, so it brings the kinds its body has, not one of its
+# own; a recursive one whose values are computed at the call is an array; a
+# lazily taken one, a method reached by dispatch and a call in a nested
+# failure context (`not`, `logic{}`, a condition), whose clauses are not
+# the for's, keep their boundary.
 # mvm2 is the ordinary two-argument overload; only its arguments can choose.
 MANY_VALUED = {'mcall', 'rcall', 'gcall', 'gself', 'rt', 'rt2', 'rt3', 'nam', 'mvm',
                'ovl', 'ows', 'ow2', 'om', 'owr', 'gx', 'gchoice', 'gbif', 'gblk'}
+# Inlined, their bodies a choice of values after plain clauses: Ov's
+# overloads, Ow(string), NAM, RT (its return a guarded alternative), Oxv, Oyv
+# and Odv.
+FLAT_CALLS = {'ovl', 'ows', 'nam', 'rt', 'gx'}
+FUNC_KINDS = {}
 
 
-def has_unexpanded_call(x, local_search=False):
-    if not isinstance(x, (tuple, list)):
+def has_rrec(e):
+    if isinstance(e, tuple) and e and e[0] == 'rrec':
+        return True
+    return isinstance(e, (tuple, list)) and any(has_rrec(y) for y in e)
+
+
+def rfunc_lazy(fi):
+    """Whether the recursive function Rq{fi} is shaped as a generator, which
+    is taken lazily (LANGUAGE.md, #246): its clauses have no choice and its
+    last expression is a choice, or an if whose else is one, each alternative
+    a value with no choice in it or a whole call of the function itself. Any
+    other (code after the call, a call of another such function, one in an
+    argument) has its values computed at the call, an array."""
+    f = RFUNCS[fi]
+    sh = f['shape']
+    if sh[0] == 'operand' or any(has_rrec(e) for _, e in f['locals']):
         return False
+    if sh[0] == 'branchy' and has_rrec(sh[1]):
+        return False
+    for a in (sh[1] if sh[0] == 'plain' else sh[2]):
+        if a[0] == 'rrec':
+            if a[1] != fi or has_rrec(a[2]):
+                return False
+        elif has_rrec(a):
+            return False
+    return True
+
+
+def mvm_kinds():
+    """The kinds a call of the test's class's method Mv brings. With one
+    implementation (the class's own, or the interface's default, #375) it is
+    inlined, a choice of two values. With an override below Run's class
+    (#328), or as the implementation of an interface's method (#372), it is
+    reached by dispatch on the receiver's class, which keeps a boundary."""
+    if SNX['ovm'] or (CTX.get('mvm_ifc') and not SNX['dflt']):
+        return {'call'}
+    return set()
+
+
+def func_kinds(fi):
+    """The kinds an inlined call of M{fi} brings: its body's."""
+    if fi not in FUNC_KINDS:
+        f = FUNCS[fi]
+        FUNC_KINDS[fi] = for_kinds(list(f['stmts']) + [f['val']])
+    return FUNC_KINDS[fi]
+
+
+def call_kinds(x, local_search=False):
+    """The kinds the calls of functions with several values in x bring."""
+    if not isinstance(x, (tuple, list)):
+        return set()
     kind = x[0] if isinstance(x, tuple) and x and isinstance(x[0], str) else None
+    out = set()
     if kind in MANY_VALUED:
-        # The generated Ov overloads and Ow(string) have flat alternatives.
-        # OwR computes an array at the call because its recursive body uses
-        # the composed Ow(int,int) overload. Other recursion can stay lazy.
-        if local_search or kind not in {'ovl', 'ows', 'owr'}:
-            return True
+        if local_search:
+            return {'call'}
+        if kind == 'mcall':
+            out |= func_kinds(x[1])
+        elif kind == 'owr' or (kind == 'rcall' and not rfunc_lazy(x[1])):
+            # OwR's and such a function's values are an array made at the call.
+            out.add('plain')
+        elif kind == 'mvm':
+            out |= mvm_kinds()
+        elif kind not in FLAT_CALLS:
+            return {'call'}
     if kind in ('not', 'logic'):
-        return has_unexpanded_call(x[1], True)
+        return out | call_kinds(x[1], True)
     if kind in ('optor', 'orx', 'ifx'):
-        return has_unexpanded_call(x[1], True) or any(
-            has_unexpanded_call(value, local_search) for value in x[2:])
-    return any(has_unexpanded_call(value, local_search) for value in x)
+        return out.union(call_kinds(x[1], True), *(call_kinds(value, local_search) for value in x[2:]))
+    return out.union(*(call_kinds(value, local_search) for value in x))
 
 
 def has_choice(x):
@@ -289,7 +355,7 @@ def e_kinds(x):
 
 
 def for_kinds(cl):
-    return e_kinds(list(cl)) | ({'call'} if has_unexpanded_call(cl) else set())
+    return e_kinds(list(cl)) | call_kinds(list(cl))
 
 
 def for_book():
@@ -434,9 +500,9 @@ ALTCH = LAZY and 'noaltch' not in flags and 'cf' not in flags
 # ---- #302, flag cb (on with lazy; nocb turns it off): a test's expression may be
 # block{B := e1; e2} (B is the block's own name, e2 may use it) or
 # PS(pt{Y := e2, X := e1}), a construction of pt := struct{X, Y} written against
-# its declaration order at times. A construction evaluates its fields in
-# declaration order, not as written (LANGUAGE.md), so the model evaluates e1,
-# then e2, as Tw(e1, e2); a block's clauses are the context's own. Choices may be
+# its declaration order at times. A construction evaluates the fields it gives
+# as written (LANGUAGE.md, #724), so the model evaluates e2, then e1, where Y is
+# written first, and e1, then e2, as Tw(e1, e2), otherwise; a block's clauses are the context's own. Choices may be
 # inside both. Not in a set's value, a branchy if, nor the generated functions.
 CB = LAZY and 'nocb' not in flags and 'cf' not in flags
 # ---- #305, flag na (on with lazy; nona turns it off): a test's expression may call
@@ -2629,14 +2695,24 @@ def ev(e, st, k, mode):
             return body(s, k)
         return ev(e[2], st, kgx, mode)
     if t == 'ccons':
-        # (#283: a class's construction, the superclass's field B first, then A: A * 10 + B)
-        def kcb(vb, s1):
-            def kca(va, s2):
+        # (#283: a class's construction; #724: its fields as written, A then B, though
+        # the superclass's field B is declared first, as on Epic's Verse VM,
+        # differential/cls-construction-order: A * 10 + B)
+        def kca(va, s1):
+            def kcb(vb, s2):
                 return k(chks(chks(va * 10, s2) + vb, s2), s2)
-            return ev(e[1], s1, kca, mode)
-        return ev(e[2], st, kcb, mode)
+            return ev(e[2], s1, kcb, mode)
+        return ev(e[1], st, kca, mode)
+    if t == 'cons' and e[3]:
+        # (#724: a construction written Y then X evaluates Y's value first, as on
+        # Epic's Verse VM, differential/struct-archetype-order)
+        def kyb(vb, s1):
+            def kya(va, s2):
+                return k(chks(chks(va * 10, s2) + vb, s2), s2)
+            return ev(e[1], s1, kya, mode)
+        return ev(e[2], st, kyb, mode)
     if t in ('bin', 'tw', 'twt', 'cons'):
-        # (a construction: its fields in declaration order, X then Y, as written or not)
+        # (a construction written in declaration order, X then Y)
         a, b = (e[2], e[3]) if t == 'bin' else (e[1], e[2])
 
         def ka(va, s1):
@@ -3385,13 +3461,18 @@ for ti in range(NT):
         return (f"st {s.vars[vars_[0]]} {s.vars[vars_[1]]} {s.vars['K.C']} {s.vars['J.C']} "
                 + "".join(str(x) for x in s.A) + " " + fmt_float(s.F) + (f" {s.vars['S.Cn']}" if meth else ""))
 
+    # (#372's draw, made before the test runs since #723: whether Mv is an
+    # interface's, implemented below it, tells which rule a for calling it
+    # follows, `mvm_kinds`; the stream is the same)
+    CTX['mvm_ifc'] = bool(meth and CTX.get('mvm_used')) and R13.random() < 0.5
+
     def as_method(L):
         """the test as the method Run of a class of its own, its vars fields."""
         if not meth:
             return L
         split = CTX.get('mvm_used') and SNX['ovm']     # (#328: Run in a parent class)
         top = f"{name}b" if split else f"{name}c"
-        ifc = CTX.get('mvm_used') and R13.random() < 0.5
+        ifc = CTX['mvm_ifc']
         dflt = CTX.get('mvm_used') and SNX['dflt']     # (#375: the interface's default)
         ifc = ifc or dflt
         mv = "Mv" if SHARED else f"Mv{ti}"         # (#283: one name for every test's)

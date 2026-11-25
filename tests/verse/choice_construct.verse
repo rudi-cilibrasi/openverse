@@ -1,6 +1,7 @@
 # Choices inside a struct or class construction (#283): its field values
 # lifted as a call's arguments, in the order the construction evaluates
-# them, its type's declaration order
+# them: as written (#724, as Epic's Verse VM evaluates an archetype,
+# differential/struct-archetype-order)
 pt := struct { X : int; Y : int }
 G(S : string, V : int)<transacts>:int =
     Print(S)
@@ -17,7 +18,7 @@ Digit():int = 0 | 1
 Main()<transacts>:void =
     for (P := pt{X := 1 | 2, Y := 10 | 20}):
         Print("{P.X} {P.Y}")
-    # written out of declaration order: X's value first, as without a choice
+    # written out of declaration order: Y's value first, as without a choice
     P0 := pt{Y := G("y", 2), X := G("x", 1)}
     Print("{P0.X} {P0.Y}")
     for (P := pt{Y := G("y", 2), X := G("x", 1) | 3}):

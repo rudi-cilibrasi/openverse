@@ -365,7 +365,7 @@ def elabAccessorSet? (elabE : Ctx → SExpr → Option Ty → EM R)
     given, at their types. Gives the code, the slots of the stored ones (the
     object's fields) and those of the others, for their setters. -/
 def accessorValues (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (name : String) (tas : List Ty)
-    (fs : List (String × Ty × Option SExpr)) (storedValue : String → Ty → Option SExpr → EM Expr)
+    (fs : List (String × Ty × Option SExpr)) (storedValue : String → Ty → Option SExpr → EM (Expr × Ty))
     (gives : List (String × SExpr)) : EM (List Expr × List Expr × List (AccessorField × Nat × Ty × Pos)) := do
   let env := ctx.types
   let declIx (a : AccessorField) : Nat :=
@@ -389,7 +389,9 @@ def accessorValues (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (n
   for item in order do
     match item with
     | .inl (f, t, dflt) =>
-      let e ← storedValue f t dflt
+      -- (the value may be another given field's, at its type: those given
+      -- run in the order written, #724)
+      let (e, t) ← storedValue f t dflt
       let s ← fresh t
       pre := pre.push (.assign s e)
       stored := stored.push (.local s)
