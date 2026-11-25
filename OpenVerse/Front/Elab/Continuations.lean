@@ -1392,7 +1392,8 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
     available in a refined scope. The public view has a caller-nameable
     row type. A successful step returns a new owner for the next step. -/
 def refinedCursorOwnerOf (ctx : Ctx) (p : Pos) (base row cursor : Ty) (method : String)
-    (clauses outputs : List SExpr) (scalar : Bool) : Except String (Choice.FirstLift × SExpr) := do
+    (clauses outputs : List SExpr) (scalar : Bool) (stepMarker : String := "$forNestedCursorNext") :
+    Except String (Choice.FirstLift × SExpr) := do
   let ctx := ctx.choiceCoercionScope
   let qualify := match ctx.selfClass with | some c => selfQualify ctx c | none => id
   let clauses := clauses.map qualify
@@ -1400,7 +1401,7 @@ def refinedCursorOwnerOf (ctx : Ctx) (p : Pos) (base row cursor : Ty) (method : 
   let caps := ctx.capturesOf written
   let t := (base :: row :: cursor :: caps.map (·.ty)) ++ caps.flatMap (fun l => l.storage.toList.flatMap (·.args))
   let (parameters, _, _) ← contTypes ctx p t [] written
-  let key := "refinedCursor" ++ contKey ctx p method [written] ++ forStageCaptureKey ctx t caps
+  let key := "refinedCursor" ++ contKey ctx p (method ++ stepMarker) [written] ++ forStageCaptureKey ctx t caps
   let name := s!"$refinedCursor{p.line}_{p.col}_{key.hash}"
   let arguments := parameters.map fun tp => STy.name tp.name
   let ident := SExpr.ident p
@@ -1426,7 +1427,7 @@ def refinedCursorOwnerOf (ctx : Ctx) (p : Pos) (base row cursor : Ty) (method : 
   let aliases := ctx.types.tvars.map fun (n, ty) => (n, ty.toSTy)
   let clauses := clauses.map (fun clause =>
     Choice.renameE [("Self", "$cursorSourceSelf")] (Refine.substTypes aliases clause))
-  let step := SExpr.app p (ident "$forNestedCursorNext") [.block p clauses, .block p outputs, member "$cursorState"] false
+  let step := SExpr.app p (ident stepMarker) [.block p clauses, .block p outputs, member "$cursorState"] false
   let packet := "$cursorPacket"
   let get (i : Int) (value : SExpr) := SExpr.app p value [.int p i] false
   let make (values : List SExpr) (state : SExpr) :=
