@@ -64,8 +64,6 @@ private def extras : List (String × String × Bool) := [
     s!"    var Stored:{functionTy}=Dummy\n    race:\n        block:\n            defer:\n                Saved:=Stored\n            loop:\n                Sleep(1.0)\n        block:\n            Sleep(0.1)\n            0", true),
   ("race: nonwaiting call cannot run cancellation cleanup", "NoWait()<suspends>:void={}\n" ++ header ++
     s!"    var Stored:{functionTy}=Dummy\n    race:\n        block:\n            defer:\n                Value:=Stored()\n            loop:\n                NoWait()\n        block:\n            Sleep(0.1)\n            0", true),
-  ("race: zero sleep cannot run cancellation cleanup", header ++
-    s!"    var Stored:{functionTy}=Dummy\n    race:\n        block:\n            defer:\n                Value:=Stored()\n            loop:\n                Sleep(0.0)\n        block:\n            Sleep(0.1)\n            0", true),
   ("branch: opaque metadata-only forwarding", header functionTy ++
       s!"    var Stored:{functionTy}=Dummy\n    branch:\n        Sleep(0.1)\n        set Stored=Dummy\n    Sleep(0.2)\n    Stored", true),
     ("branch: immediate metadata writer completes before real overwrite", header ++
@@ -88,6 +86,12 @@ private def extras : List (String × String × Bool) := [
     s!"    var Stored:{functionTy}=Dummy\n    Values:=sync:\n        block:\n            Sleep(0.1)\n            set Stored=F\n            0\n        block:\n            Sleep(0.2)\n            0\n    Stored()", true)]
 
 private def backgroundRefusals : List (String × String × Bool) := [
+  -- (#724: Sleep(0.0) waits a tick, as Epic's Verse VM and Blueprint VM do, so
+  -- the arm that loops on it is cancelled when the other one ends and its
+  -- cleanup executes the dummy; until then a forward, "zero sleep cannot run
+  -- cancellation cleanup", and admitted. #572)
+  ("race: zero sleep runs cancellation cleanup", header ++
+    s!"    var Stored:{functionTy}=Dummy\n    race:\n        block:\n            defer:\n                Value:=Stored()\n            loop:\n                Sleep(0.0)\n        block:\n            Sleep(0.1)\n            0", true),
   ("race: cancellation invokes an executable cleanup helper",
     "reader:=class<computes>{Read()<computes>:int=7}\nUse(V:reader)<computes>:int=V.Read()\nCaller(F:reader,Dummy:reader)<suspends>:int=\n    Values:=race:\n        block:\n            defer:\n                Value:=Use(Dummy)\n            loop{Sleep(1.0)}\n        block:\n            Sleep(0.1)\n            0\n    0", false),
   ("owner: cancellation invokes an executable cleanup helper",
