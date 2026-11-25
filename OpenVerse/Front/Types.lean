@@ -1267,6 +1267,42 @@ def isComparable (env : TyEnv) : Ty → Bool
   | .never => false
   | t => t.comparable env
 
+/-- `v < w` on numbers of one base. -/
+def numLt : Value → Value → Bool
+  | .int x, .int y => x < y
+  | .float x, .float y => VFloat.ofBits x < VFloat.ofBits y
+  | _, _ => false
+
+/-- A refinement's interval: its tightest lower and upper bounds, each with
+    whether it is strict (#143). -/
+def refineInterval (conds : List (String × Value)) : Option (Value × Bool) × Option (Value × Bool) :=
+  conds.foldl (fun (lo, hi) (op0, b0) =>
+    -- (an int's strict bound is the next one, not strict: `< 10` is `<= 9`)
+    let (op, b) : String × Value := match op0, b0 with
+      | "<", .int x => ("<=", .int (x - 1))
+      | ">", .int x => (">=", .int (x + 1))
+      | o, v => (o, v)
+    let strict := op == "<" || op == ">"
+    if op == ">" || op == ">=" then
+      let lo' := match lo with
+        | none => some (b, strict)
+        | some (l, ls) => if numLt l b || (l == b && strict && !ls) then some (b, strict) else some (l, ls)
+      (lo', hi)
+    else
+      let hi' := match hi with
+        | none => some (b, strict)
+        | some (h, hs) => if numLt b h || (h == b && strict && !hs) then some (b, strict) else some (h, hs)
+      (lo, hi')) (none, none)
+
+/-- Two refinements' intervals have no number in common: one ends before
+    the other starts, or where it starts when either bound is strict
+    (numerically: `-0.0` is `0.0`). -/
+def intervalsApart (a b : Option (Value × Bool) × Option (Value × Bool)) : Bool :=
+  let before (hi lo : Option (Value × Bool)) : Bool := match hi, lo with
+    | some (h, hs), some (l, ls) => numLt h l || (!numLt l h && (hs || ls))
+    | _, _ => false
+  before a.2 b.1 || before b.2 a.1
+
 /-- Disjoint overload domains (Book ch. 6 and `IndistinctOverloads.versetest`).
     Types that both have the empty value (`Ty.emptyValue?`: a logic, an
     option, an array, a string, a map, `tuple()`) overlap; `void`, which
@@ -1291,6 +1327,14 @@ private def TyEnv.disjointStep (env : TyEnv) (apart : Ty → Ty → Bool) (a b :
   | .dyn, b | b, .dyn => match b with
     | .struct n _ => if env.classes.contains n then !env.isUnique n else !b.comparable env
     | _ => !b.comparable env
+  -- (#724) two refinements of one base whose intervals have no number in
+  -- common are disjoint: no value is of both, and a literal is of the one
+  -- whose conditions it meets (the Book of Verse's tests,
+  -- `WhereConstrainedInts.versetest:179`, `WhereConstrainedFloats.versetest:59`;
+  -- UEFN 43.12 admits and runs followup-refused/refinement-overloads)
+  | .refine n, .refine m => match env.refines.lookup n, env.refines.lookup m with
+    | some (bn, cn), some (bm, cm) => apart bn bm || intervalsApart (refineInterval cn) (refineInterval cm)
+    | _, _ => false
   -- (a refinement overlaps what its base does, #136)
   | .refine n, b => match env.refines.lookup n with
     | some (base, _) => apart base b
@@ -1762,37 +1806,10 @@ def TyEnv.nominalSubtype (env : TyEnv) (derived base : Ty) : Bool :=
         env.upArgs source args target == targets
     | _, _ => false
 
-/-- `v < w` on numbers of one base. -/
-def numLt : Value → Value → Bool
-  | .int x, .int y => x < y
-  | .float x, .float y => VFloat.ofBits x < VFloat.ofBits y
-  | _, _ => false
-
 def numNeg : Value → Value
   | .int x => .int (-x)
   | .float x => .float (VFloat.canon (-(VFloat.ofBits x)))
   | v => v
-
-/-- A refinement's interval: its tightest lower and upper bounds, each with
-    whether it is strict (#143). -/
-def refineInterval (conds : List (String × Value)) : Option (Value × Bool) × Option (Value × Bool) :=
-  conds.foldl (fun (lo, hi) (op0, b0) =>
-    -- (an int's strict bound is the next one, not strict: `< 10` is `<= 9`)
-    let (op, b) : String × Value := match op0, b0 with
-      | "<", .int x => ("<=", .int (x - 1))
-      | ">", .int x => (">=", .int (x + 1))
-      | o, v => (o, v)
-    let strict := op == "<" || op == ">"
-    if op == ">" || op == ">=" then
-      let lo' := match lo with
-        | none => some (b, strict)
-        | some (l, ls) => if numLt l b || (l == b && strict && !ls) then some (b, strict) else some (l, ls)
-      (lo', hi)
-    else
-      let hi' := match hi with
-        | none => some (b, strict)
-        | some (h, hs) => if numLt b h || (h == b && strict && !hs) then some (b, strict) else some (h, hs)
-      (lo, hi')) (none, none)
 
 /-- Interval `a` lies within `b`. -/
 def intervalWithin (a b : Option (Value × Bool) × Option (Value × Bool)) : Bool :=

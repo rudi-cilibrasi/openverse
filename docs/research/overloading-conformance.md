@@ -80,7 +80,9 @@ Issue [#500](https://github.com/rudi-cilibrasi/openverse/issues/500) implements
 this symmetric admission table; swapping the two types has the same result.
 Here `D(a,b)` means their domains are known disjoint. `any`/`void`, opaque type
 parameters, bottom and unknown refinements never supply disjointness evidence.
-Refinements otherwise use their base, and `int` overlaps `rational`.
+Refinements otherwise use their base, but two refinements of one base whose
+intervals have no number in common are disjoint (#724, UEFN 43.12:
+`followup-refused/refinement-overloads`), and `int` overlaps `rational`.
 
 | Pair | Distinct exactly when |
 | --- | --- |

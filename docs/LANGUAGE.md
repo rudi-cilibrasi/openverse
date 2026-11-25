@@ -953,6 +953,17 @@ kinds are taken alike, and `followup-book4` asks).
   first and an array for the second, fits both and is refused where it is
   made. This does not implicitly turn a scalar into an array.
   See the [complete tuple/container table](research/overloading-conformance.md#tuplecontainer-rules).
+- **Refinements** (#724). Two refinements of one base are distinct when
+  their intervals have no number in common (`small`, 0 to 65534, and
+  `negative`, below 0; a float's `_X > -0.0` and `_X < 0.0`, `-0.0` being
+  `0.0`): no value is of both. A call takes the overload its argument is
+  of, by its type when compiled, not by its value when run: a literal that
+  meets the conditions, or a value of a refinement within the parameter's
+  (`F(-1)`, `F(S)` with `S:small`); an `int` that is no literal is of
+  neither without a cast (the Book's tests,
+  `WhereConstrainedInts.versetest:179`, `WhereConstrainedFloats.versetest:59`;
+  UEFN 43.12 admits and runs `followup-refused/refinement-overloads`).
+  Refinements that share a number, and a refinement and its base, overlap.
 - **Overlapping types:** `void`, a type parameter, two array, map or option
   types (they share the empty one), an array, option or `logic` with
   another (`false` is each), and a
@@ -3460,8 +3471,9 @@ Main():void =
   next one (`_X < 10` is `_X <= 9`). The negation of a refined value is of
   an expected refinement whose interval holds the flipped one
   (`NegValue:negative_percent = -MakePercent()`).
-- Not supported: overloads on disjoint refinements (refinements of one base
-  overlap).
+- Overloads on refinements of one base are distinct when their intervals
+  have no number in common ([Overloading](#overloading), #724); otherwise
+  refinements of one base overlap.
 
 ## Type aliases
 
