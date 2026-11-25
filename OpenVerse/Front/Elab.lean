@@ -356,6 +356,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     return .asking { witnesses := views.witnessNeeds }
   let env ← pinsAndAccessors { env with viewed := views.viewed } methods opts.requests
   let env ← addPlaceholders env
+  let env := addConstantObjects env methods.tops
   -- (Verse Core's variances, once the class table, the pins and the views
   -- are known: what the certificate gives, docs/research/variance.md)
   let env := { env with coreVariances := env.coreVariancesOf }

@@ -413,6 +413,12 @@ structure TyEnv where
       class each one is of, with its tag and fields. A slot of class type
       starts as a reference to one. -/
   protos : List (String × Nat × List Value) := []
+  /-- (#724) The module constants that hold an object of their own, with
+      its address among `protos`, after the classes' prototypes
+      (`addConstantObjects`): `Instance:c = c{}` of a `<unique>` class
+      without fields is one object, the same at every use, as the program
+      starts with it. -/
+  constObjects : List (String × Nat) := []
   /-- The classes whose fixed type arguments Verse Core records as pins
       (#142): those at or below a class whose implementation of a method
       fixes type arguments that the method's declaring class leaves open. -/

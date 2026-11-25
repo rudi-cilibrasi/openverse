@@ -1672,7 +1672,23 @@ circle := class(shape, labelled):
   budget still counts at every construction, even for an empty type. Lean proves that a
   function without `writes` keeps every existing object as it was
   (`Prog.accepted_no_writes`). A constant cannot hold an object with `var`
-  fields or of a `<unique>` class, since it is computed at each use.
+  fields or of a `<unique>` class, since it is computed at each use, with
+  two exceptions (#724). A module constant `N:c = c{}`, its value the
+  construction itself and its type the class, of a `<unique>` class without
+  type parameters, without fields and without `block:` clauses, is one
+  object, the same at every use: the program starts with it, as with its
+  classes' prototypes (`TyEnv.constObjects`), so `Instance1 = Instance1`
+  and `Instance1 <> Instance2` hold, and a failure context that fails
+  leaves it the same object (the Book's tests, `GlobalVariables.versetest`
+  72 to 74; UEFN 43.12 admits and runs
+  `followup-refused/module-const-unique`). Its construction is checked as
+  any constant's, and its uses have its effects (a `<computes>` function
+  cannot use a constant of an `<allocates>` class). And a constant whose
+  value is an empty `map{}`, `array{}` or `false` holds no object, whatever
+  its type (`Empty:[c0]int = map{}` keyed by a `<unique>` class,
+  `module-const-empty-map-unique-key`). A `<unique>` object with fields,
+  one inside an option, an array or a tuple, a call's result and another
+  constant's object (`J:u = I`) are still refused.
 - **`block:`.** A class's `block:` clauses run when an instance is
   constructed, after its fields are given, those of the classes above it
   first, each class's in order; they see the fields by name, as a method
