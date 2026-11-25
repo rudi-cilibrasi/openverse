@@ -1471,6 +1471,7 @@ partial def checkBody : SExpr → SExpr :=
     -- The cursor elaborator prepares the header itself. Scalarizing its
     -- choices here would change the saved frame's layout.
     | e@(.app _ (.ident _ "$forCursorNext") _ false)
+      | e@(.app _ (.ident _ "$forNestedCursorNext") _ false)
       | e@(.app _ (.ident _ "$noteForCursor") _ false) => some e
     | .app p (.ident _ "$methodMiss") [] false => some (.app p (.ident p "Err") [] false)
     -- (an exclusive choice, #314: an if-chain on its guards)
@@ -4748,6 +4749,28 @@ private partial def returnLoopWrittenTypes (e : SExpr) : List STy :=
     | _ => []
   own ++ e.children.flatMap returnLoopWrittenTypes
 
+def refinedCursorMethod : String := "$takeRefinedRow"
+
+private def refinedCursorEffects : List String := ["reads", "writes", "allocates"]
+
+def refinedCursorViewName (effects : List String) : String :=
+  "$refinedRows" ++ String.join (refinedCursorEffects.map fun effect =>
+    if effects.contains effect then "1" else "0")
+
+private def refinedCursorView? (p : Pos) (name : String) : Option STop := do
+  guard (name.startsWith "$refinedRows")
+  let bits := (name.drop "$refinedRows".length).toString.toList
+  guard (bits.length == 3 && bits.all (fun c => c == '0' || c == '1'))
+  let effects := (refinedCursorEffects.zip bits).filterMap fun (effect, bit) =>
+    if bit == '1' then some effect else none
+  let effects := if effects.isEmpty then ["computes"] else effects
+  let parameter : TParam := { pos := p, name := "$Row", constraint := "type" }
+  let row := STy.name parameter.name
+  let view := STy.app name [row]
+  return .classDef p name [] [parameter] [] [] true []
+    [.fn p refinedCursorMethod [] [] ("$abstract" :: effects)
+      (.opt (.tup [view, row])) (.tuple p [])]
+
 private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoopSite)
     (types : List (String × STy)) : Except String (SExpr × List STop) := do
   let body := boxReturnLoopCaptures owner sites types f.body
@@ -4857,13 +4880,19 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
       (boxCursorHeader clauses).map (fun e => cellVars boxed (e.mapAll (·.substNames substitution) id))
     -- The recursive header has its own continuation. A scalar call keeps
     -- its search out of the body helper's choice machine.
+    let views := cursorPacket.toList.flatMap STy.names |>.filterMap (refinedCursorView? p)
+    let isolate := !views.isEmpty || match site.source with
+      | .cursor _ _ recursive => !recursive.isEmpty
+      | _ => false
     let advance := match site.source, cursorPacket with
-      | .cursor clauses outputs (_ :: _), some ty@(.opt (.tup [prior, _])) =>
-        let body := forCursorNext p (prepareHeader clauses) outputs (.ident p cursorInput)
-        [STop.fn p advanceName ({ name := cursorInput, ty := .opt prior } :: caps) tparams f.fx ty body]
+      | .cursor clauses outputs _, some ty@(.opt (.tup [prior, _])) =>
+        if isolate then
+          let body := forCursorNext p (prepareHeader clauses) outputs (.ident p cursorInput)
+          [STop.fn p advanceName ({ name := cursorInput, ty := .opt prior } :: caps) tparams f.fx ty body]
+        else []
       | _, _ => []
     let (parameters, helperRet, helperBody, replacement) : List SParam × STy × SExpr × SExpr ← match site.source with
-      | .cursor clauses outputs recursive => do
+      | .cursor clauses outputs _ => do
         let some (.opt (.tup [prior, .tup rowTypes])) := cursorPacket
           | throw "internal: malformed for cursor type"
         if outputs.length != rowTypes.length then throw "internal: malformed for cursor row"
@@ -4879,7 +4908,7 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
         let next := call [.optionLit p (project (ident row) 0)]
         let iteration := returnLoopOperands ret site.helper (some noneValue) nested bodyWithCells
         let rest := if loopIterationTerminal iterationBody then [iteration] else [iteration,next]
-        let rows := if !recursive.isEmpty then SExpr.app p (ident advanceName) (ident input :: args) false
+        let rows := if isolate then SExpr.app p (ident advanceName) (ident input :: args) false
           else forCursorNext p (prepareHeader clauses) outputs (ident input)
         let helperBody := SExpr.block p [.decl p nextRow none false rows,
           .ite p [.decl p row none false (.query p (ident nextRow))]
@@ -4964,7 +4993,7 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
           else SExpr.block p [iteration, call []]
         let replacement := if mayBreak then resume [] else .ret p (some (call []))
         pure ([], if mayBreak then .opt ret else ret, helperBody, replacement)
-    helpers := helpers ++ advance ++ [.fn p site.helper (parameters ++ caps) tparams f.fx helperRet helperBody]
+    helpers := helpers ++ views ++ advance ++ [.fn p site.helper (parameters ++ caps) tparams f.fx helperRet helperBody]
     replacements := replacements ++ [(p, replacement)]
   let changed := mapE (fun
     | .forE p .. | .loop p _ => replacements.lookup p
@@ -5225,7 +5254,11 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
           | .fn p name params tparams fx ret old =>
             .fn p name params tparams fx ret (if p == f.pos then body else old)
           | top => top
-        rewritten := rewritten ++ helpers
+        for helper in helpers do
+          if let .classDef _ name .. := helper then
+            unless rewritten.any (fun | .classDef _ existing .. => existing == name | _ => false) do
+              rewritten := rewritten ++ [helper]
+          else rewritten := rewritten ++ [helper]
         original := original ++ [(f.pos, checked)]
         helperNames := helperNames ++ helpers.filterMap fun | .fn _ name .. => some name | _ => none
       let result ← inlineFns rewritten eager (lazy ++ helperNames) overloadPicks nested orders sites methodOvSites pending original nestDone methodTemplates

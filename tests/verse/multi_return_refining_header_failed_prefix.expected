@@ -1,0 +1,60 @@
+advance 3 3 2000
+cleanup 3 3 2010
+cleanup 1 1 2020
+all 1
+cleanup 1 1 2030
+all 1001
+cleanup 1 101 2040
+all 101
+cleanup 1 101 2050
+all 1101
+advance 3 103 2050
+cleanup 3 103 2060
+cleanup 1 1 2070
+all 1
+cleanup 1 1 2080
+all 1001
+cleanup 1 101 2090
+all 101
+cleanup 1 101 2100
+all 1101
+state 2100
+advance 3 3 2000
+cleanup 3 3 2010
+cleanup 1 101 2020
+first 101
+state 2020
+reject 0
+all 0
+state 0
+missed
+state 0
+reject 0
+advance 4 4 1000
+cleanup 4 4 1010
+cleanup 1 1 1020
+all 1
+cleanup 1 1 1030
+all 1001
+cleanup 1 101 1040
+all 101
+cleanup 1 101 1050
+all 1101
+advance 4 104 1050
+cleanup 4 104 1060
+cleanup 1 1 1070
+all 1
+cleanup 1 1 1080
+all 1001
+cleanup 1 101 1090
+all 101
+cleanup 1 101 1100
+all 1101
+state 1100
+advance 4 4 1000
+cleanup 4 4 1010
+cleanup 1 101 1020
+first 101
+state 1020
+reject 0
+exit=0

@@ -1,0 +1,31 @@
+advance 3 203 1000
+cleanup 3 203 1010
+cleanup 1 101 1020
+all 101
+cleanup 1 101 1030
+all 1101
+state 1030
+advance 3 203 1000
+cleanup 3 203 1010
+cleanup 1 101 1020
+first 101
+state 1020
+reject 0
+advance 4 104 0
+cleanup 4 104 10
+advance 4 204 10
+cleanup 4 204 20
+cleanup 1 101 30
+all 101
+cleanup 1 101 40
+all 1101
+state 40
+advance 4 104 0
+cleanup 4 104 10
+advance 4 204 10
+cleanup 4 204 20
+cleanup 1 101 30
+first 101
+state 30
+reject 0
+exit=0

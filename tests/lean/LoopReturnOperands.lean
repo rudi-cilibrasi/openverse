@@ -48,6 +48,12 @@ def main (args : List String) : IO Unit := do
         let value := if safe then 11 else 22
         check out s!"exec-{extended}-{safe}-{dummy}" text dummy extended (safe || !dummy)
           s!"got {value}\ngot {value}\ncount 2\n" "dummy type value cannot"
+    -- A refining header keeps its alternatives in a generated cursor owner.
+    -- A dummy that one of them yields is still refused where the row runs.
+    let refining ← IO.FS.readFile "tests/fixtures/loop-return-operands/refining-metadata-bad-exec.verse"
+    for dummy in [false,true] do
+      check out s!"refining-exec-{extended}-{dummy}" refining dummy extended (!dummy)
+        "got 22\ngot 22\ncount 2\n" "dummy type value cannot"
     -- No consumer or constructor survives in Main, but the boxed generic
     -- helper signature still needs the private cell class registered.
     let unused ← IO.FS.readFile "tests/fixtures/loop-return-operands/generic-unused.verse"
@@ -75,4 +81,4 @@ def main (args : List String) : IO Unit := do
             throw (IO.userError "implicit proof admission or Core mismatch")
         | .error message => unless dummy && (message.splitOn "has no member 'N'").length > 1 do
             throw (IO.userError s!"implicit proof refusal: {message}")
-  IO.println "loop operand API passed (30 classifications, 14 complete Lean oracles, operational proof roles)"
+  IO.println "loop operand API passed (34 classifications, 16 complete Lean oracles, operational proof roles)"

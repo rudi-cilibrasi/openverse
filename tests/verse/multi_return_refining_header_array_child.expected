@@ -1,0 +1,14 @@
+cleanup 1 1 1110
+all 1
+cleanup 1 1 1120
+all 1001
+cleanup 1 101 1130
+all 101
+cleanup 1 101 1140
+all 1101
+state 1140
+cleanup 1 101 110
+first 101
+state 110
+reject 0
+exit=0

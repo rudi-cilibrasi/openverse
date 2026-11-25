@@ -748,12 +748,13 @@ partial def elabInts (ctx : Ctx) (p : Pos) (args : List SExpr) : EM (List Expr) 
     generic function as of any other (`elabAppBase` does plain calls). -/
 partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (bracket : Bool)
     (exp : Option Ty) : EM R := do
-  if let (.ident _ "$forCursorNext", [.block _ clauses, .block _ names, prior], false) := (f, args, bracket) then
-    let outputs ← names.mapM fun
-      | .ident _ name => pure name
-      | e => eerr e.pos "internal: expected a resumable for binding"
-    return ← elabForWith elabAlts (fun c q i t pl => elabBranchAlts c q i t pl) elabE elabInts elabLoopGen elabSeq
-      ctx p clauses (.tuple p []) (cursor := some { prior, outputs })
+  if let (.ident _ marker, [.block _ clauses, .block _ names, prior], false) := (f, args, bracket) then
+    if marker == "$forCursorNext" || marker == "$forNestedCursorNext" then
+      let outputs ← names.mapM fun
+        | .ident _ name => pure name
+        | e => eerr e.pos "internal: expected a resumable for binding"
+      return ← elabForWith elabAlts (fun c q i t pl => elabBranchAlts c q i t pl) elabE elabInts elabLoopGen elabSeq
+        ctx p clauses (.tuple p []) (cursor := some { prior, outputs, nested := marker == "$forNestedCursorNext" })
   let isNamed : SExpr → Bool := fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false
   let positional := args.filter (!isNamed ·)
   let namedArgs := args.filter isNamed

@@ -1,0 +1,82 @@
+advance 3 3 0
+cleanup 3 3 10
+cleanup 1 1 20
+all 1
+cleanup 1 1 30
+all 1001
+cleanup 1 101 40
+all 101
+cleanup 1 101 50
+all 1101
+advance 3 103 50
+cleanup 3 103 60
+cleanup 1 1 70
+all 1
+cleanup 1 1 80
+all 1001
+cleanup 1 101 90
+all 101
+cleanup 1 101 100
+all 1101
+state 100
+advance 3 3 0
+cleanup 3 3 10
+cleanup 1 101 20
+first 101
+state 20
+reject 0
+advance 9 9 0
+cleanup 9 9 10
+cleanup 1 1 20
+all 1
+cleanup 1 1 30
+all 1001
+cleanup 1 101 40
+all 101
+cleanup 1 101 50
+all 1101
+advance 9 109 50
+cleanup 9 109 60
+cleanup 1 1 70
+all 1
+cleanup 1 1 80
+all 1001
+cleanup 1 101 90
+all 101
+cleanup 1 101 100
+all 1101
+state 100
+advance 9 9 0
+cleanup 9 9 10
+cleanup 1 101 20
+first 101
+state 20
+reject 0
+advance 4 4 0
+cleanup 4 4 10
+cleanup 1 1 20
+all 1
+cleanup 1 1 30
+all 1001
+cleanup 1 101 40
+all 101
+cleanup 1 101 50
+all 1101
+advance 4 104 50
+cleanup 4 104 60
+cleanup 1 1 70
+all 1
+cleanup 1 1 80
+all 1001
+cleanup 1 101 90
+all 101
+cleanup 1 101 100
+all 1101
+state 100
+advance 4 4 0
+cleanup 4 4 10
+cleanup 1 101 20
+first 101
+state 20
+reject 0
+exit=0

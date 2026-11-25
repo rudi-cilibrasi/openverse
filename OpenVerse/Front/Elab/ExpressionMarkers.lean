@@ -47,6 +47,33 @@ private partial def captureReturns (slot : Nat) : Expr → Expr
   | .print value => .print (captureReturns slot value)
   | value => value
 
+/-- The owner object of a refined cursor (`$refinedCursorOwner`): its class
+    is requested on the first elaboration and constructed once it exists.
+    It stands apart from `elabExprMarkersWith`, whose generated C function
+    has a size budget (tests/scripts/test-frontend-c-size.sh). -/
+def elabRefinedCursorOwner (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p : Pos)
+    (arguments : List SExpr) : EM R := do
+  let [.decl _ _ (some view) _ _, .decl _ _ (some payload) _ _, .str _ [.text method],
+       .block _ clauses, .block _ outputs] := arguments
+    | eerr p "internal: malformed refined cursor owner"
+  let base ← resolveTy ctx.types p view
+  let row ← resolveTy ctx.types p payload
+  let saved ← get
+  let probe ← elabE { ctx with typeOnly := true }
+    (.app p (.ident p "$forNestedCursorNext") [.block p clauses, .block p outputs, .ident p "false"] false) none
+  restoreConstructProbe ctx saved
+  let .opt (.tup [state, actual]) := probe.ty | eerr p "internal: malformed refined cursor"
+  let scalar := actual != row && actual == .tup [row]
+  unless actual == row || scalar do eerr p "internal: refined cursor payload changed type"
+  let (request, object) ← match refinedCursorOwnerOf ctx p base row state method clauses outputs scalar with
+    | .ok answer => pure answer
+    | .error why => eerr p why
+  if !ctx.types.requests.loops.any (·.key == request.key) then
+    if !ctx.typeOnly then askHelper p request
+    return ⟨.prim .userErr [], base⟩
+  let r ← elabE ctx object (some base)
+  return ⟨← coerce p r base, base⟩
+
 set_option maxHeartbeats 800000 in
 partial def elabExprMarkersWith
     (elabE : Ctx → SExpr → Option Ty → EM R)
@@ -186,6 +213,8 @@ partial def elabExprMarkersWith
       return ⟨.seq (.assign result r.e) (.ite (.assign slot (.prim .query [.local result]))
         (.prim .mkSome [.prim .flatten [.local slot]]) (.lit .none)), .opt (.arr t)⟩
     | _ => eerr p "internal: staged flatten values"
+  | .app p (.ident _ "$refinedCursorOwner") arguments false =>
+    elabRefinedCursorOwner elabE ctx p arguments
   | .app p (.ident _ "$refinementIfPacket")
       [.decl _ _ (some packetType) _ _, .block _ clauses, body, otherwise] false => do
     let ty ← resolveTy ctx.types p packetType

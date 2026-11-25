@@ -1,0 +1,18 @@
+advance 1000
+cleanup 1 0 1010
+advance 1010
+cleanup 1 0 1020
+all 99 99
+cleanup 1 1 1030
+all 3 7
+cleanup 1 1 1040
+all 3 7
+state 1040
+advance 0
+cleanup 1 0 10
+all 99 99
+cleanup 1 1 20
+all 4 8
+state 20
+reject 0
+exit=0

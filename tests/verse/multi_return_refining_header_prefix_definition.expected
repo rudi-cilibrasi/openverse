@@ -1,0 +1,55 @@
+advance 3 7 3 1000
+cleanup 3 7 1010
+cleanup 1 7 1020
+all 1
+cleanup 1 7 1030
+all 8
+cleanup 1 7 1040
+all 101
+cleanup 1 7 1050
+all 108
+advance 3 7 103 1050
+cleanup 3 7 1060
+cleanup 1 7 1070
+all 1
+cleanup 1 7 1080
+all 8
+cleanup 1 7 1090
+all 101
+cleanup 1 7 1100
+all 108
+state 1100
+advance 3 7 3 1000
+cleanup 3 7 1010
+cleanup 1 7 1020
+first 101
+state 1020
+reject 0
+advance 4 7 4 0
+cleanup 4 7 10
+cleanup 1 7 20
+all 1
+cleanup 1 7 30
+all 8
+cleanup 1 7 40
+all 101
+cleanup 1 7 50
+all 108
+advance 4 7 104 50
+cleanup 4 7 60
+cleanup 1 7 70
+all 1
+cleanup 1 7 80
+all 8
+cleanup 1 7 90
+all 101
+cleanup 1 7 100
+all 108
+state 100
+advance 4 7 4 0
+cleanup 4 7 10
+cleanup 1 7 20
+first 101
+state 20
+reject 0
+exit=0
