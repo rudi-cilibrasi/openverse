@@ -703,7 +703,15 @@ every function type it fits, `FnValues`), so it refuses, by the same error
    A function named converts by variance with `void` above every type too:
    its result discarded (`Run(IntIdentity)` with `Run(F(:int):void)`), an
    argument given to its `void` parameter (`G:int->int = VoidInput`), as
-   Epic admits and the Book's `Void.versetest` 91, 104 have it.
+   Epic admits and the Book's `Void.versetest` 91, 104 have it. And with
+   `any` above every type: `Call(Succ)` with `Call(G(:int):any)` and
+   `Succ(X:int):int`, `Apply(IntFun, 1)` with `Apply(F(:t):any, X:t)` (the
+   Book's `Any.versetest:152`, SOL-3799; UEFN 43.12 admits and runs
+   `followup-refused/named-fn-any-result`), at a result only. A function
+   with an `any` parameter named where another parameter type is expected
+   is not converted (Epic's answer is not recorded,
+   `followup-variance/any-param`), nor is a result at `comparable`
+   (`Call(G(:int):comparable)` given `Succ` is refused).
 2. **A generic function as a value with one of its type parameters inside a
    function type of its own**, a parameter's (`One(F(:t)<transacts>:t, X:t
    where t:type)`) or its result's, at an instance other than generic code's

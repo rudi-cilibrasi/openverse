@@ -269,7 +269,7 @@ def fnFits (env : TyEnv) (s : Sig) (t : Ty) : Bool :=
       -- (the effects and names only: a tuple parameter may be flattened)
       { own with arity := k + own.named.length }.within tsh &&
         if s.tparams.isEmpty then
-          (qs.zip ps).all (fun (q, p) => subAt q p) && subAt s.ret u
+          (qs.zip ps).all (fun (q, p) => subAt q p) && env.resultConvertsAt s.ret u
         else
           match ((ps ++ [s.ret]).zip (qs ++ [u])).foldlM (fun σ (a, b) => a.matchArg env σ b) [] with
           | some σ => match SubtypeEvidence.infer env s.bounds σ true ((s.tparams.filter (·.2)).map (·.1)) with

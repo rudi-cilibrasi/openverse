@@ -1605,6 +1605,17 @@ def TyEnv.convertsAt (env : TyEnv) (a b : Ty) : Bool :=
       | _, _ => false
     | _, _ => false
 
+/-- A function's result of type `r` is one of a function type's result `u`:
+    `TyEnv.convertsAt`, and any result where an `any` is expected, which
+    every value is: `Succ(X:int):int` named where a `type{_(:int):any}` is
+    expected, the Book of Verse's `Any.versetest:152` and SOL-3799's
+    `Apply(F(:t):any, X:t)`; UEFN 43.12 admits and runs
+    followup-refused/named-fn-any-result (#724). A result only: Epic's
+    answer on an `any` parameter named at another type is not recorded
+    (followup-variance/any-param). -/
+def TyEnv.resultConvertsAt (env : TyEnv) (r u : Ty) : Bool :=
+  env.convertsAt r u || u == .any
+
 /-- A value of function type `own` (a shape's interface at its arguments)
     fits function type `t` by variance (#231): a shape above its own (the
     same positional parameters, effects among `t`'s, names it has, #503),
@@ -1618,7 +1629,7 @@ def fnTyFits (env : TyEnv) (own t : Ty) : Bool :=
       let ots := os.select ts ots
       os.within ts && ots.length == tts.length &&
         ((tts.take ts.arity).zip (ots.take ts.arity)).all (fun (q, p) => subAt q p) &&
-        subAt ((ots.drop ts.arity).headD .void) ((tts.drop ts.arity).headD .void)
+        env.resultConvertsAt ((ots.drop ts.arity).headD .void) ((tts.drop ts.arity).headD .void)
     | _, _ => false
   | _, _ => false
 
