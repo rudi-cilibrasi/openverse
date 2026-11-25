@@ -8,10 +8,9 @@ stop being true.
 
 <!-- scoreboard-summary:begin -->
 Epic's shipped compiler and Verse VM (UEFN 43.12) have answered 539 probe programs. openverse
-gives the same answer on 464 of them and a different one on 75:
+gives the same answer on 478 of them and a different one on 61:
 
-- **7** openverse bugs: it runs the program and prints something else than the Verse VM.
-- **48** gaps: Verse that Epic admits and runs, and openverse refuses because the form is not implemented. openverse says so at compile time; it does not run these programs wrongly.
+- **41** gaps: Verse that Epic admits and runs, and openverse refuses because the form is not implemented. openverse says so at compile time; it does not run these programs wrongly.
 - **9** where Epic stops with an internal error or stalls, and openverse computes the result.
 - **3** where openverse has a form of the Book of Verse that 43.12 does not ship yet.
 - **3** library names Epic keeps internal or restricted, which openverse lets a program use.
@@ -125,17 +124,16 @@ the gate fails until the row is gone and this page is regenerated.
 | | Probes |
 | --- | ---: |
 | Probes Epic has answered | 539 |
-| Same result (refused by both, or the same lines, or the same lines then a runtime error) | 409 |
+| Same result (refused by both, or the same lines, or the same lines then a runtime error) | 423 |
 | Admitted by both, not run on Epic | 55 |
-| Different | 75 |
+| Different | 61 |
 | Not asked of Epic | 16 |
 
-The 75 differences by cause (each is listed below):
+The 61 differences by cause (each is listed below):
 
 | Cause | Probes | Meaning |
 | --- | ---: | --- |
-| bug | 7 | OpenVerse does something else than the Verse VM, and is to be fixed |
-| gap | 48 | Verse that UEFN 43.12 admits and runs, and OpenVerse refuses: not implemented yet |
+| gap | 41 | Verse that UEFN 43.12 admits and runs, and OpenVerse refuses: not implemented yet |
 | book-ahead | 3 | OpenVerse has a form of the Book of Verse that UEFN 43.12 does not have yet |
 | restricted-name | 3 | A library name UEFN 43.12 keeps internal or restricted; OpenVerse lets a program use it |
 | kept | 4 | OpenVerse's behaviour is kept on purpose, where Epic's is unspecified or not worth imitating |
@@ -150,7 +148,7 @@ A set is a directory of `tests/conformance/versevm` (`original`: the directory i
 | --- | ---: | ---: | ---: | ---: | ---: |
 | `original` | 34 | 33 | 0 | 1 | 0 |
 | `book` | 45 | 44 | 0 | 1 | 0 |
-| `differential` | 122 | 115 | 0 | 7 | 0 |
+| `differential` | 122 | 122 | 0 | 0 | 0 |
 | `fingerprint` | 4 | 4 | 0 | 0 | 0 |
 | `followup` | 19 | 18 | 0 | 1 | 0 |
 | `followup-3582` | 40 | 26 | 12 | 2 | 0 |
@@ -163,34 +161,19 @@ A set is a directory of `tests/conformance/versevm` (`original`: the directory i
 | `followup-event` | 14 | 12 | 0 | 2 | 0 |
 | `followup-int` | 27 | 19 | 0 | 8 | 0 |
 | `followup-print` | 10 | 10 | 0 | 0 | 0 |
-| `followup-refused` | 60 | 11 | 0 | 49 | 0 |
+| `followup-refused` | 60 | 18 | 0 | 42 | 0 |
 | `followup-variance` | 16 | 0 | 0 | 0 | 16 |
 
 ### Every difference
 
 Lines are separated by `|`. Epic's column is the Verse VM's output, or its compiler's verdict.
 
-#### `bug` (7)
-
-OpenVerse does something else than the Verse VM, and is to be fixed.
-
-| Probe | Epic's Verse VM | OpenVerse | Why |
-| --- | --- | --- | --- |
-| `cls-construction-order` | ran: value b \| value a \| base block A 10 \| derived block one B 20 \| derived block two A 10 \| done 10 20 | ran: value a \| value b \| base block A 10 \| derived block one B 20 \| derived block two A 10 \| done 10 20 | An archetype's fields are evaluated in the order written on the Verse VM; OpenVerse evaluates them in declaration order |
-| `float-clamp-nan` | ran: clamp val NaN lo NaN hi NaN both NaN \| clamp swapped 0.500000 1.000000 0.000000 below NaN above NaN \| min NaN NaN max NaN NaN | ran: clamp val 1.000000 lo 1.000000 hi 0.500000 both NaN \| clamp swapped 0.500000 1.000000 0.000000 below 0.000000 above 2.000000 \| min NaN NaN max NaN NaN | Clamp with a NaN argument is NaN on the Verse VM; OpenVerse gives a bound or the value |
-| `float-minmax-nan` | ran: min NaN NaN -Inf -2.500000 \| max NaN NaN Inf 2.500000 \| clamp NaN 5.000000 0.000000 NaN \| abs 2.500000 Inf NaN sgn -1.000000 0.000000 NaN 1.000000 | ran: min NaN NaN -Inf -2.500000 \| max NaN NaN Inf 2.500000 \| clamp 1.000000 5.000000 0.000000 0.500000 \| abs 2.500000 Inf NaN sgn -1.000000 0.000000 NaN 1.000000 | Clamp with a NaN argument is NaN on the Verse VM; OpenVerse gives a bound or the value |
-| `prec-compare-chain-mixed` | ran: mixed n n n n y n n y \| values 2 5 2 9 2 2 2 -1 \| grouped 2 2 n y | ran: mixed y n n y y y y y \| values 2 5 2 9 2 2 2 9 \| grouped 2 2 n y | A comparison chain that changes direction compares the first comparison's left operand with the next on the Verse VM; OpenVerse checks adjacent pairs |
-| `prec-compare-chain` | ran: y n n y ne n y value 2 | ran: y n y y ne n y value 2 | A comparison chain that changes direction compares the first comparison's left operand with the next on the Verse VM; OpenVerse checks adjacent pairs |
-| `rat-ordering` | refused | ran: order y y y y y n | UEFN 43.12 has no `<` or `>` on rationals (3509); OpenVerse compares them |
-| `struct-archetype-order` | ran: value c \| value a \| value b \| done 123 | ran: value a \| value b \| value c \| done 123 | An archetype's fields are evaluated in the order written on the Verse VM; OpenVerse evaluates them in declaration order |
-
-#### `gap` (48)
+#### `gap` (41)
 
 Verse that UEFN 43.12 admits and runs, and OpenVerse refuses: not implemented yet.
 
 | Probe | Epic's Verse VM | OpenVerse | Why |
 | --- | --- | --- | --- |
-| `break-in-for-in-loop` | ran: count 1 | refused: tests/conformance/versevm/followup-refused/break-in-for-in-loop.verse:15:12: break is only allowed inside loop (not for) | UEFN 43.12 admits and runs it; OpenVerse refuses `break` in a `for` inside a `loop` |
 | `castable-concrete-subtype` | ran: called | refused: tests/conformance/versevm/followup-refused/castable-concrete-subtype.verse:13:0: unknown parametric type 'castable_concrete_subtype' (only structs can be parametric) | UEFN 43.12 admits and runs it; OpenVerse refuses the library type castable_concrete_subtype |
 | `castable-param-result-type` | ran: found 1 | refused: tests/conformance/versevm/followup-refused/castable-param-result-type.verse:14:14: unknown function 'Y' | UEFN 43.12 admits and runs it; OpenVerse refuses a castable_subtype parameter used as a type in its function's result |
 | `castable-subtype-any` | ran: length 1 | refused: tests/conformance/versevm/followup-refused/castable-subtype-any.verse:13:0: castable_subtype(any): openverse writes castable_subtype of a class or an interface only, not of any (types as values: docs/research/t… | UEFN 43.12 admits and runs it; OpenVerse refuses castable_subtype(any) |
@@ -202,15 +185,10 @@ Verse that UEFN 43.12 admits and runs, and OpenVerse refuses: not implemented ye
 | `concatenate-maps-key-join` | ran: length 2 | refused: tests/conformance/versevm/followup-refused/concatenate-maps-key-join.verse:10:47: expected int, found string | UEFN 43.12 admits and runs it; OpenVerse refuses ConcatenateMaps joining maps whose keys are int and string |
 | `concrete-subtype-bound` | ran: called | refused: tests/conformance/versevm/followup-refused/concrete-subtype-bound.verse:15:12: t:concrete_subtype(…) is not supported as a type parameter's bound: a concrete class's subclasses need not be concrete, so it is no… | UEFN 43.12 admits and runs it; OpenVerse refuses concrete_subtype(…) as a type parameter's bound |
 | `constructor-delegation-archetype` | ran: label made extra 2 | refused: tests/conformance/versevm/followup-refused/constructor-delegation-archetype.verse:26:8: MakeBase<constructor>(…) delegates to a constructor: it can only be an item of a constructor's body; call it as MakeBase(…) | UEFN 43.12 admits and runs it; OpenVerse refuses MakeBase<constructor>(…) in an archetype outside a constructor |
-| `converges-abstract-method` | ran: compiled | refused: tests/conformance/versevm/followup-refused/converges-abstract-method.verse:14:4: <converges> is unsupported: termination contracts are not checked (#494); execution fuel is not a termination proof | UEFN 43.12 admits and runs it; OpenVerse refuses <converges> on an abstract method |
-| `definition-in-expression` | ran: x 4 y 4 | refused: tests/conformance/versevm/followup-refused/definition-in-expression.verse:12:28: unknown identifier 'Y' | UEFN 43.12 admits and runs it; OpenVerse refuses a definition inside an expression, `X:int = Y:int = 4` |
 | `fbounded-class` | ran: clone 13 | refused: tests/conformance/versevm/followup-refused/fbounded-class.verse:the Verse Core type of class item would contain itself, through its type arguments (#63) | UEFN 43.12 admits and runs it; OpenVerse refuses a class in its own parent's type argument (F-bounded) |
-| `fits-in-player-map` | ran: fits 5 | refused: tests/conformance/versevm/followup-refused/fits-in-player-map.verse:13:28: unknown function 'FitsInPlayerMap' | UEFN 43.12 admits and runs it; OpenVerse refuses the library function FitsInPlayerMap |
 | `fn-type-named-signature` | ran: called | refused: tests/conformance/versevm/followup-refused/fn-type-named-signature.verse:11:16: a top-level definition must start at column 0 | UEFN 43.12 admits and runs it; OpenVerse refuses the function type `type{f():void}` with a named signature |
 | `generic-arg-result-param` | ran: value 1 | refused: tests/conformance/versevm/followup-refused/generic-arg-result-param.verse:17:32: cannot infer type parameter u of Apply from the arguments of this call | UEFN 43.12 admits and runs it; OpenVerse refuses a type parameter given only by a generic argument's result |
 | `generic-fn-local` | ran: value 1 | refused: tests/conformance/versevm/followup-refused/generic-fn-local.verse:14:9: 'Identity' is generic: a function type determining all its type arguments and satisfying its bounds must be expected (#214, #209) | UEFN 43.12 admits and runs it; OpenVerse refuses a generic function bound to a local |
-| `get-random-int` | ran: random 3 | refused: tests/conformance/versevm/followup-refused/get-random-int.verse:13:39: unknown function 'GetRandomInt' | UEFN 43.12 admits and runs it; OpenVerse refuses the library function GetRandomInt |
-| `get-seconds-since-epoch` | ran: after 2001 | refused: tests/conformance/versevm/followup-refused/get-seconds-since-epoch.verse:11:29: unknown function 'GetSecondsSinceEpoch' | UEFN 43.12 admits and runs it; OpenVerse refuses the library function GetSecondsSinceEpoch |
 | `infer-from-empty-array` | ran: count 0 | refused: tests/conformance/versevm/followup-refused/infer-from-empty-array.verse:16:32: cannot infer type parameter t of Count from the arguments of this call | UEFN 43.12 admits and runs it; OpenVerse refuses a type parameter given only by `array{}` |
 | `join-fn-refinement-result` | ran: value 1 | refused: tests/conformance/versevm/followup-refused/join-fn-refinement-result.verse:16:66: the branches have different types: type{_():small} and type{_():int} | UEFN 43.12 admits and runs it; OpenVerse refuses function values joined at a refinement's base type |
 | `join-fn-type-params` | ran: compiled | refused: tests/conformance/versevm/followup-refused/join-fn-type-params.verse:14:4: the branches have different types: type{_(:t):void} and type{_(:u):void} | UEFN 43.12 admits and runs it; OpenVerse refuses function values of two type parameters joined |
@@ -231,7 +209,6 @@ Verse that UEFN 43.12 admits and runs, and OpenVerse refuses: not implemented ye
 | `qualified-second-method` | ran: base 1 own 2 | refused: tests/conformance/versevm/followup-refused/qualified-second-method.verse:20:4: (derived:)F: a second method F beside the one derived inherits (Book of Verse ch. 10, "Methods with Same Name"): openverse does not… | UEFN 43.12 admits and runs it; OpenVerse refuses a second method `(derived:)F` beside an inherited F |
 | `refinement-literal-local` | ran: negated -200 | refused: tests/conformance/versevm/followup-refused/refinement-literal-local.verse:16:4: an int is a negative_uchar only after a cast: write negative_uchar[X], which fails when X is not one | UEFN 43.12 admits and runs it; OpenVerse refuses a literal-bound local's negation at a refinement type without a cast |
 | `refinement-overloads` | ran: negative 0 small 1 | refused: tests/conformance/versevm/followup-refused/refinement-overloads.verse:17:0: F is defined twice with parameters a call cannot tell apart, (small) and (negative): overloads must take disjoint types | UEFN 43.12 admits and runs it; OpenVerse refuses overloads on disjoint refinement types |
-| `spawn-in-defer` | ran: body \| after spawn in defer | refused: tests/conformance/versevm/followup-refused/spawn-in-defer.verse:13:8: spawn in a defer is not supported (#156) | UEFN 43.12 admits and runs it; OpenVerse refuses `spawn` in a `defer` |
 | `subtype-alias` | ran: called | refused: tests/conformance/versevm/followup-refused/subtype-alias.verse:13:0: unknown type 'class_of_c0' (supported: int, logic, char, string, void, []t, ?t, tuple(…), and structs and enums) | UEFN 43.12 admits and runs it; OpenVerse refuses a type alias of subtype(c) |
 | `two-interfaces-same-method` | ran: a 12 b 21 | refused: tests/conformance/versevm/followup-refused/two-interfaces-same-method.verse:16:0: both inherits Method from both i_a and i_b: override it in both | UEFN 43.12 admits and runs it; OpenVerse refuses two interfaces' default methods of one name in one class |
 | `type-argument-array` | ran: outer 2 | refused: tests/conformance/versevm/followup-refused/type-argument-array.verse:17:14: unexpected '[' | UEFN 43.12 admits and runs it; OpenVerse refuses `[]int` as a type argument |
