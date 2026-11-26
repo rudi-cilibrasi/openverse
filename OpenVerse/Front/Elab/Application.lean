@@ -526,9 +526,15 @@ def warnQualifiedSelfCall (ctx : Ctx) (p : Pos) (obj : SExpr) (m0 m : String) : 
 /-- `X.M(…)` of a method `M` overloaded (#106) at the class `c` of `X`: the
     overload visible at `c` the call fits, then a call of that method (a
     qualified call stays qualified, `X.(q:)M$ovK(…)`, #125). `none` when `M`
-    is not overloaded at `c` or no overload of it is visible there. -/
-partial def elabOverloadedMethodCall? (cb : AppElab) (ctx : Ctx) (p mp : Pos) (obj : SExpr) (c m m0 : String)
-    (spawning : Bool) (args : List SExpr) (bracket : Bool) (exp : Option Ty) : EM (Option R) := do
+    is not overloaded at `c` or no overload of it is visible there. The
+    call of the overload has the same receiver, which is elaborated already
+    (`recv`, before its binding and qualification, which the call makes
+    again): it is handed over (`Ctx.knownReceiver`, #771), since elaborating
+    it once here and once there made a chain `X.M(…).M(…)…` of such calls
+    take twice as long for each call in it. -/
+partial def elabOverloadedMethodCall? (cb : AppElab) (ctx : Ctx) (p mp : Pos) (obj : SExpr) (recv : R)
+    (c m m0 : String) (spawning : Bool) (args : List SExpr) (bracket : Bool) (exp : Option Ty) :
+    EM (Option R) := do
   let env := ctx.types
   let some ms := (if env.classes.contains c && (ctx.methodDecl? c m).isNone then
       env.methodOverloads.lookup m else none) | return none
@@ -544,7 +550,8 @@ partial def elabOverloadedMethodCall? (cb : AppElab) (ctx : Ctx) (p mp : Pos) (o
   if vis.isEmpty then return none
   return some (← cb.resolveOverload ctx p m vis sigOf (fun o => do
     ctx.noteOverload p m o
-    cb.elabApp ctx p (.member mp obj ((if spawning then "$spawnMethod:" else "") ++ qualOf o)) args bracket exp) args)
+    cb.elabApp { ctx with knownReceiver := some (obj, recv.e, recv.ty) } p
+      (.member mp obj ((if spawning then "$spawnMethod:" else "") ++ qualOf o)) args bracket exp) args)
 
 /-! ## A call of a class's or interface's method through a value -/
 
@@ -1089,6 +1096,10 @@ partial def elabMemberApp (cb : AppElab) (ctx : Ctx) (p : Pos) (f : SExpr) (mp :
   -- helpers require a real first argument. Both use emitted provenance.
   let spawning := m0.startsWith "$spawnMethod:"
   let m0 := if spawning then (m0.drop 13).toString else m0
+  -- (the receiver, where this is the call of the overload an overloaded
+  -- method's call fits, #771; nothing inside the call is that call)
+  let known := ctx.knownReceiver.bind fun (o, e, ty) => if o == obj then some (⟨e, ty⟩ : R) else none
+  let ctx := { ctx with knownReceiver := none }
   if let some r ← elabParamConcurrencyCall? cb ctx p mp obj m0 spawning args bracket exp then return r
   if let some r ← elabTaskCancel? cb ctx p obj m0 args then return r
   if let some r ← elabEventSignal? cb ctx p mp obj m0 args bracket exp then return r
@@ -1096,12 +1107,15 @@ partial def elabMemberApp (cb : AppElab) (ctx : Ctx) (p : Pos) (f : SExpr) (mp :
   if let some r ← elabAwait? cb ctx p mp obj m0 args exp then return r
   -- (a receiver that is refused is refused again where an overloaded method's
   -- call is retried with a tuple's elements: its refusal is kept, #769)
-  let r0 ← elabBoundReceiverWith cb.elabE ctx p (← elabRefusableWith cb.elabE ctx obj none) m0
+  let recv ← match known with
+    | some r => pure r
+    | none => elabRefusableWith cb.elabE ctx obj none
+  let r0 ← elabBoundReceiverWith cb.elabE ctx p recv m0
   ctx.noteFamily mp r0.ty m0
   let (r, m) ← qualifiedReceiver ctx p r0 m0
   match r.ty with
   | .struct c targs =>
-    if let some r' ← elabOverloadedMethodCall? cb ctx p mp obj c m m0 spawning args bracket exp then
+    if let some r' ← elabOverloadedMethodCall? cb ctx p mp obj recv c m m0 spawning args bracket exp then
       return r'
     -- (#283) a method overloaded in another hierarchy than `c`'s: the
     -- call takes `c`'s one list

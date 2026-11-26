@@ -534,6 +534,17 @@ partial def elabDefersCore (ctx : Ctx) (ds : List (SExpr × List Local)) : EM Ex
 partial def elabTrialArg (ctx : Ctx) (a : SExpr) (exp : Option Ty) : EM R :=
   elabRefusableWith elabE ctx a exp
 
+/-- The type `e` has alone, if it has one, for a question about a call's
+    callee: elaborated apart (`typeOnly`), and nothing of that kept but what
+    was refused in it, so that a callee no retry can use is refused once and
+    not once for every retry around it (#771). -/
+partial def probedTy (ctx : Ctx) (e : SExpr) : EM (Option Ty) := do
+  let st ← get
+  let ty ← tryCatch (do return some (← elabTrialArg { ctx with typeOnly := true } e none).ty)
+    (fun _ => pure none)
+  set { st with refusals := (← get).refusals }
+  return ty
+
 /-- A call of an overloaded function or method (#74): the one overload
     (`ovs`, each with its signature `sigOf`, a method's without `Self`) the
     call's shape and arguments fit, then `call` it. -/
@@ -838,7 +849,7 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
       -- the call fits)
       if (err.splitOn singletonBoth).length > 1 then throw err
       restore
-      let c2 := { ctx with retries := ctx.retries + 1 }
+      let c2 := { ctx with retries := ctx.retries + 1, knownReceiver := none }
       let fnTy : Ty → Bool := fun | .struct n _ => (FnValues.parseName n).isSome | _ => false
       -- a method's receiver is evaluated first, then the tuple
       let (pre, c2, f') ← match f with
@@ -860,14 +871,11 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
         | .ident _ n => pure (((c2.lookup n).map (fun l => fnTy l.ty)).getD false ||
             (c2.sig? n).any (fun s => s.isConst && fnTy s.ret))
         | .member _ obj m =>
-          match (elabE { c2 with typeOnly := true } obj none).run (← get) with
-          | .ok (⟨_, .struct c as⟩, _) =>
+          match ← probedTy c2 obj with
+          | some (.struct c as) =>
             pure ((c2.types.fields c as).any fun (n, ft, _) => n == m && fnTy ft)
           | _ => pure false
-        | _ =>
-          match (elabE { c2 with typeOnly := true } f' none).run (← get) with
-          | .ok (r, _) => pure (fnTy r.ty)
-          | _ => pure false
+        | _ => pure (((← probedTy c2 f').map fnTy).getD false)
       let (pre, c2, f') ← if valueCallee then do
           let value ← elabE c2 f' none
           let slot ← fresh value.ty
@@ -891,16 +899,13 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
                 (c2.types.overloads.lookup s!"{n}$init").isSome || c2.selfClass.any (c2.hasMethod · n))
             | .member _ (.ident _ "(super:)") _ => pure true
             | .member _ obj m =>
-              match (elabE { c2 with typeOnly := true } obj none).run (← get) with
-              | .ok (⟨_, .struct c as⟩, _) =>
+              match ← probedTy c2 obj with
+              | some (.struct c as) =>
                 match (c2.types.fields c as).find? (·.1 == m) with
                 | some (_, ft, _) => pure (fnTy ft)
                 | none => pure (c2.types.classes.contains c)
               | _ => pure false
-            | _ =>
-              match (elabE { c2 with typeOnly := true } f' none).run (← get) with
-              | .ok (r, _) => pure (fnTy r.ty)
-              | _ => pure false
+            | _ => pure (((← probedTy c2 f').map fnTy).getD false)
           if !functionHead then restore; throw err
         let tt ← fresh ty
         let nm := s!"$tuple{tt}"

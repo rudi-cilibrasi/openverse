@@ -504,6 +504,13 @@ structure Ctx where
       of its own an earlier elaboration asked for (#275, #335), which is
       keyed by place and may take clauses that bind other names. -/
   typeOnly : Bool := false
+  /-- The receiver of the method call being elaborated, already elaborated
+      here (#771): the expression as written, its code and its type. A call
+      of an overloaded method elaborates its receiver to find the overloads,
+      then is elaborated again as a call of the overload it fits, which
+      takes the receiver from here instead of elaborating it a second time
+      (`elabMemberApp`, which clears it for everything inside the call). -/
+  knownReceiver : Option (SExpr × Expr × Ty) := none
   /-- An isolated argument classification probe already owns this subtree.
       Do not recursively probe its nested generic applications again. -/
   argumentTypeProbe : Bool := false

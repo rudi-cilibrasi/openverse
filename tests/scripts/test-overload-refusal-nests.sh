@@ -15,6 +15,21 @@
 # is refused with, within a limit that is a guard against never ending and no
 # measure of speed (a nest of twenty-four takes a third of a second; before,
 # the quickest of these shapes took more than twice as long per level).
+#
+# And chains (#771), `X.M(…).M(…)…`, where the receiver of each call of an
+# overloaded method is the call before it. A call of an overloaded method
+# elaborated its receiver to find the overloads and then again in the call of
+# the overload it fits, so a chain whose calls all fit took twice as long for
+# each call in it: four tenths of a second for twelve calls, ten seconds for
+# sixteen, and twenty-four did not end within a minute. The receiver is now
+# handed to that call (`Ctx.knownReceiver`). A chain whose calls are refused
+# was slow for another reason: the retry of a call with a tuple's elements
+# asks what its callee is in a run that dropped what was refused in it, so
+# each retry refused the chain before it again (twenty seconds for forty-eight
+# calls); those refusals are kept now too.
+# Here: the refused chain of ninety-six and a hundred and ninety-two calls, and
+# every shape of chain that fits at twenty-four and ninety-six calls, each
+# printing what its calls make, which says which overload each call took.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ov="$root/.lake/build/bin/openverse"
@@ -92,7 +107,7 @@ def shapes(n):
         'plain-mismatch': (D + 'Pl(S:string):int = 0\n' + main(nest(n - 1, 'Pl(1)', lambda e: f'Depth({e})')),
                            'expected string, found int'),
     }
-for n in (3, 12, 16, 24, 48):
+for n in (3, 24, 48, 96, 192):
     for name, (program, refusal) in shapes(n).items():
         open(f'{out}/{name}.{n}.verse', 'w').write(program)
         open(f'{out}/{name}.want', 'w').write(refusal + '\n')
@@ -108,9 +123,9 @@ for short in "$tmp"/*.3.verse; do
     echo "FAIL overload refusal nests: $name of 3 levels, wanted '$(cat "$tmp/$name.want")', got:"
     cat "$tmp/$name.3.err"; exit 1
   fi
-  # (a chain of receivers is slower by the square of its length, a second
-  # for twelve calls, which took 2.3 times longer per call before)
-  deep=(24 48); [[ $name == method-receiver ]] && deep=(12 16)
+  # (the chain of receivers at lengths that took longer than the limit
+  # before #771)
+  deep=(24 48); [[ $name == method-receiver ]] && deep=(96 192)
   for n in "${deep[@]}"; do
     status=0
     (cd "$tmp" && ulimit -v 4194304 && timeout "$limit" "$ov" check "$name.$n.verse") \
@@ -135,4 +150,81 @@ open(sys.argv[1], 'w').write('Depth(X:int):int = X + 1\nDepth(S:string):int = 0\
 PY
 (ulimit -v 4194304; timeout "$limit" "$ov" run "$tmp/fits.verse") >"$tmp/fits.out"
 [[ "$(cat "$tmp/fits.out")" == 97 ]] || { echo "FAIL overload refusal nests: the nest that fits printed $(cat "$tmp/fits.out")"; exit 1; }
-echo "overload refusal nests: $count shapes of 24 and 48 levels refused as at 3 levels, each within ${limit}s"
+# Chains that fit (#771). Each call appends a letter that says which overload
+# took it (`s`, `c`, or the digit of an `int`), `.` for the method that is not
+# overloaded and `g` for the overloaded function, so what a chain prints is its
+# calls in order.
+python3 -I - "$tmp" <<'PY'
+import sys
+out = sys.argv[1]
+ARGS = [('"a"', 's'), ("'b'", 'c'), ('7', '7'), ('"d"', 's'), ("'e'", 'c')]
+def calls(n, m='M', o='(', c=')', before='', after=''):
+    picked = [ARGS[(i * i + i // 3) % 5] for i in range(n)]
+    return (''.join(f'{before}.{m}{o}{a}{c}{after}' for a, _ in picked), [letter for _, letter in picked])
+def methods(t, m='M', fx='', guard=' ', new=None, ov=''):
+    new = new or (lambda e: f'trail{{T := {e}}}')
+    return ''.join(f'    {m}{ov}({p}){fx}:{t} ={guard}' + new(e) + '\n' for p, e in
+                   (('S:string', '"{T}s"'), ('K:char', '"{T}c"'), ('N:int', '"{T}{N}"')))
+TR = 'trail := class:\n    T:string = ""\n' + methods('trail') + '    P():trail = trail{T := "{T}."}\n'
+def main(e, pre='    X := trail{}\n'): return 'Main():void =\n' + pre + f'    Print({e})\n'
+def chains(n):
+    ch, ls = calls(n)
+    want = ''.join(ls)
+    s = {}
+    s['overloaded'] = (TR + main(f'X{ch}.T'), want)
+    ch2, ls2 = calls(n, after='.P()')
+    s['with-plain-methods'] = (TR + main(f'X{ch2}.T'), ''.join(l + '.' for l in ls2))
+    ch3, ls3 = calls(n, before='.Inner')
+    s['through-a-field'] = ('holder := class:\n    Inner:trail\ntrail := class:\n    T:string = ""\n'
+        + methods('holder', new=lambda e: f'holder{{Inner := trail{{T := {e}}}}}')
+        + main(f'X{ch3}.Inner.T', '    X := holder{Inner := trail{}}\n'), ''.join(ls3))
+    e, ls4 = 'X', []
+    for i in range(n):
+        a, l = ARGS[(i * 2) % 5]
+        e, ls4 = f'G({e}).M({a})', ls4 + ['g', l]
+    s['on-an-overloaded-function'] = (TR + 'G(V:trail):trail = trail{T := "{V.T}g"}\nG(S:string):trail = trail{}\n'
+        + main(e + '.T'), ''.join(ls4))
+    def failable(most):
+        return 'trail := class:\n    T:string = ""\n' + methods(
+            'trail', m='F', fx='<decides><transacts>', guard=f'\n        T.Length < {most}\n        ')
+    ch5, ls5 = calls(n, m='F', o='[', c=']')
+    taken = ('Main():void =\n    X := trail{}\n    if (Y := X' + ch5 + '):\n        Print(Y.T)\n'
+             '    else:\n        Print("failed")\n')
+    s['failable'] = (failable(1000) + taken, ''.join(ls5))
+    s['failable-that-fails'] = (failable(2) + taken, 'failed')
+    s['generic-class'] = ('box(t:type) := class:\n    V:t\n    T:string = ""\n'
+        + methods('box(t)', new=lambda e: f'box(t){{V := V, T := {e}}}')
+        + main(f'X{ch}.T', '    X := box(float){V := 1.5}\n'), want)
+    s['interface'] = ('walk := interface:\n    M(S:string):walk\n    M(K:char):walk\n    M(N:int):walk\n    Said():string\n'
+        'trail := class(walk):\n    T:string = ""\n' + methods('walk', ov='<override>')
+        + '    Said<override>():string = T\n' + main(f'X{ch}.Said()', '    X:walk = trail{}\n'), want)
+    ch6, ls6 = calls(n, m='E')
+    s['extension-methods'] = ('trail := class:\n    T:string = ""\n(V:trail).E(S:string):trail = trail{T := "{V.T}s"}\n'
+        '(V:trail).E(K:char):trail = trail{T := "{V.T}c"}\n(V:trail).E(N:int):trail = trail{T := "{V.T}{N}"}\n'
+        + main(f'X{ch6}.T'), ''.join(ls6))
+    s['argument-of-an-overloaded-call'] = (TR + 'D(V:trail):string = "trail {V.T}"\nD(S:string):string = "string"\n'
+        + main(f'D(X{ch})'), 'trail ' + want)
+    s['in-a-method-on-Self'] = (TR + f'    Run():string = Self{ch}.T\n' + main('trail{}.Run()', ''), want)
+    return s
+for n in (3, 24, 96):
+    for name, (program, want) in chains(n).items():
+        open(f'{out}/chain-{name}.{n}.verse', 'w').write(program)
+        open(f'{out}/chain-{name}.{n}.want', 'w').write(want + '\n')
+PY
+chains=0
+for short in "$tmp"/chain-*.3.verse; do
+  name="$(basename "$short" .3.verse)"
+  for n in 3 24 96; do
+    status=0
+    (cd "$tmp" && ulimit -v 4194304 && timeout "$limit" "$ov" run "$name.$n.verse") \
+      >"$tmp/$name.$n.out" 2>"$tmp/$name.$n.err" || status=$?
+    if [[ $status != 0 ]] || ! cmp -s "$tmp/$name.$n.want" "$tmp/$name.$n.out"; then
+      echo "FAIL overload refusal nests: ${name#chain-} of $n calls, status $status (124: not within ${limit}s)," \
+        "wanted '$(head -c 200 "$tmp/$name.$n.want")', got:"
+      head -c 400 "$tmp/$name.$n.out" "$tmp/$name.$n.err"; exit 1
+    fi
+  done
+  chains=$((chains + 1))
+done
+echo "overload refusal nests: $count shapes of 24 and 48 levels refused as at 3 levels, $chains shapes of chains of" \
+  "24 and 96 calls that fit, each within ${limit}s"
