@@ -69,9 +69,15 @@ def elabRefinedCursorOwner (elabE : Ctx → SExpr → Option Ty → EM R) (ctx :
   let base ← resolveTy ctx.types p view
   let row ← resolveTy ctx.types p payload
   let saved ← get
-  let probe ← elabE { ctx with typeOnly := true }
-    (.app p (.ident p step) [.block p clauses, .block p outputs, .ident p "false"] false) none
+  -- (#780) A header that the cursor's elaboration cannot step is noted as
+  -- refused (`Choice.cursorRefusal`): the next analysis does not take it.
+  let probe ← tryCatch (some <$> elabE { ctx with typeOnly := true }
+      (.app p (.ident p step) [.block p clauses, .block p outputs, .ident p "false"] false) none)
+    fun message => if Choice.cursorRefusal message then pure none else throw message
   restoreConstructProbe ctx saved
+  let some probe := probe
+    | noteNeeds { nested := [(Choice.cursorRefusedKey p, .name "void")] }
+      return ⟨.prim .userErr [], base⟩
   let .opt (.tup [state, actual]) := probe.ty | eerr p "internal: malformed refined cursor"
   let scalar := actual != row && actual == .tup [row]
   unless actual == row || scalar do eerr p "internal: refined cursor payload changed type"

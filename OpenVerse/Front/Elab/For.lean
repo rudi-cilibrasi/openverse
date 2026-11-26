@@ -419,7 +419,7 @@ def forCursorChoice (p : Pos) (prior : Option Nat) (arms : List ForCursorArm)
     (prelude : ForCursorPrefix := {}) : EM R := do
   let some first := arms.head? | eerr p "internal: a cursor choice without alternatives"
   unless arms.all (fun arm => arm.row == first.row) do
-    eerr p "internal: composed cursor alternatives have different row types"
+    eerr p Choice.cursorRowsDiffer
   let cursor := forCursorChoiceType arms prelude
   let resultTy := Ty.opt (.tup [cursor, first.row])
   let previous ← fresh cursor
@@ -2072,7 +2072,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       (.seq (.assign acc (.lit Value.emptyArray)) (.seq (.assign size (.lit (.int 16)))
         (.seq (.loop roundBody) values)))), .arr r.ty⟩
   if cursor.isSome then
-    eerr p "internal: resumable for header needs flat prepared clauses"
+    eerr p Choice.cursorNotSearch
   match pre with
   | [] =>
     let r ← build ctx gs body

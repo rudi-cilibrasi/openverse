@@ -2763,7 +2763,13 @@ Main():void =
   overloaded function that is the header's only choice, a call inside
   `first{}`, `option{}`, `not` or a condition nested in the clause, and
   such a header on a loop inside another loop are refused with the
-  general message (#686).
+  general message (#686). So are a header whose choice has such a call
+  among alternatives of different types (`V := (Many(S) | false?)`,
+  `V := (Many(S) | 2.5)`: the alternatives are stepped apart, and the
+  rows of one header have one type), and one with a call inside `first{}`
+  and the like beside a flat written choice (#780). Whether a header can
+  be stepped is the verdict of its cursor's elaboration, which knows the
+  types: a header it cannot step is not taken.
   A second type-refining conditional in the same header, such a header
   on a loop inside another loop, mutable implicit proof
   captures and direct concurrency in a captured expression remain
