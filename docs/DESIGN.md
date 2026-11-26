@@ -216,18 +216,17 @@ condition has a type-refining cast, one whose path has a composed choice
 or a producer boundary, one with a call of a function with several values
 in a branch or a condition (the call is lifted with its branch, not into
 the `for`'s clauses, so it keeps a boundary, as a method reached by
-dispatch does: its implementations are the branches of such a choice), one
-whose search would have more than eight levels (`maxBranchLevels`), and
+dispatch does: its implementations are the branches of such a choice), and
 one inside clauses that another lowering prepared: an alternative of a
 composed choice, a continuation, a staged suffix, a side of a resumable
-product. The limit of eight is the storage metadata pass's
-(`MetadataFlow`), not the search's: that pass iterates each `loop` to a
-fixed point, a level is a `loop` inside the level before, and its time
-doubles with each (a `for` of fourteen generators with effects, with no
-exclusive choice, already takes it seconds). Exclusive choices one after
-another, as a function with many guarded returns is when a `for` takes
-it, have a level each; the continuations of the older lowering (#335)
-keep those linear.
+product. The number of levels does not decide it (#761). Exclusive choices
+one after another, as a function with many guarded returns is when a `for`
+takes it, have a level each, and a level is a `loop` inside the level
+before. The storage metadata pass (`MetadataFlow`) iterates each `loop` to
+a fixed point and took time that doubled with each level, so such a search
+had at most eight until its loops resumed in the bodies without private
+cells too (below, "A loop that an enclosing loop reaches again"): a header
+of sixty-four levels is now checked in half a second.
 
 The [Choice](#choice-iteration-over-alternatives) lowerings still serve
 clauses with a remaining producer boundary or a composed choice. The
@@ -779,8 +778,28 @@ to return in that pass and the pass is repeated, which takes more passes and
 is why it is not the first attempt.
 A loop that an enclosing
 loop reaches again resumes from its last stable head joined with the new
-entry, in a sequential body without shared locals, where the passes of nested
-loops multiplied before.
+entry, where the passes of nested loops multiplied before. A loop takes two
+passes at least, one that binds its body's locals and one that finds nothing
+new, so a nest of n loops cost 2^n passes of its innermost body whatever the
+bodies did: sixteen generators with a write in each source, in one `for`, took
+the check nine seconds (#761). Resumed, a loop's second pass costs one pass of
+each loop inside it, and the nest a number of passes quadratic in n. A
+resumed loop still ends on a head that covers its entry and its own body's
+exit, which is what soundness needs. When the transfer is monotone that head
+is the fixed point the restart reaches, since the entry only grows from one
+pass of the enclosing loop to the next; what differs is that the states on
+the way to it are interpreted once, not once per enclosing pass, so a call
+context that only such a state gives is not requested again.
+This holds wherever one body is interpreted from its entry, with or without
+private cells or shared locals: the plain sequential pass, the discovery and
+validating passes of a body with a cleanup or background work, and a
+cleanup's probes. A back edge still forgets the modes of the shared locals of
+one iteration, against the loop's present entry. The heads are kept by the
+loop's path in the body and dropped at every entry, so a head never comes
+from another context. A schedule replay, whose steps are not one pass over
+the body, keeps the restart, as does a spawn's own expression, whose parts
+have one path. `OPENVERSE_DEBUG=1` prints the loop bodies interpreted
+(`metadata loop passes=`).
 Private-cell concurrency uses graph replay even when a worker introduces
 metadata and never returns. `MetadataReceivers` adds typed virtual locals
 only to the metadata body and analysis frame; emitted Core and runtime

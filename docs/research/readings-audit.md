@@ -387,11 +387,11 @@ Each form needs its own resumable search state.
   `loop` per branch, and the storage metadata pass, which iterates each
   `loop` to a fixed point, takes time exponential in that depth (twelve
   levels, six seconds). For the same reason a search with an exclusive
-  choice has at most eight levels (`maxBranchLevels`): with more, as when
-  a `for` takes a function with many guarded returns, each an exclusive
-  choice after the last, the `for` keeps the old rule and #335's
-  continuations, until that pass no longer doubles its time with each
-  nested `loop`. A call of a function with several values in a
+  choice had at most eight levels until #761: with more, as when a `for`
+  takes a function with many guarded returns, each an exclusive choice
+  after the last, the `for` kept the old rule and #335's continuations.
+  That pass now resumes a `loop` an enclosing one reaches again, with or
+  without private cells, and the limit is gone. A call of a function with several values in a
   branch is not built: the call is lifted with its branch, so the `for`
   keeps the old rule, as with a method reached by dispatch. Before this, a `for`
   with such a choice kept, entirely, what a generator's source after the
