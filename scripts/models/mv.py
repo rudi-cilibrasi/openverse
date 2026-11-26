@@ -2772,8 +2772,11 @@ def ev(e, st, k, mode):
             # (`<>` is left-associative: past the first operator, its left
             # operand is the comparisons before it, whose value is the
             # leftmost operand; the others chain with the operand before
-            # them, Book of Verse tests, Operators/Associativity.versetest)
-            lhs = first if op == '<>' and i >= 1 else prev
+            # them, Book of Verse tests, Operators/Associativity.versetest;
+            # `<` or `<=` after `>` or `>=` groups from the left as well,
+            # as on Epic's Verse VM: `5 > 1 < 3` is `5 < 3`, #724, #765)
+            left = i >= 1 and (op == '<>' or (op in ('<', '<=') and e[2][i - 1][0] in ('>', '>=')))
+            lhs = first if left else prev
 
             def kc(v, s2):
                 if not cmpf(lhs, op, v):
