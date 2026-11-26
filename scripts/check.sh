@@ -316,6 +316,8 @@ check "choice model regression (an interpolated int's overflow before the next v
   scripts/fuzz-model-mv.sh 1 20778801
 check "choice model regression (an overloaded method's call reached only in copies, seed 20782035)" \
   scripts/fuzz-model-mv.sh 1 20782035
+check "choice model regression (a < after a > groups from the left, seeds 9016 and 9056, #765)" \
+  bash -c 'scripts/fuzz-model-mv.sh 1 9016 && scripts/fuzz-model-mv.sh 1 9056'
 check "generic functions with several values (${FUZZ_MODEL_GENERIC:-150} programs, against a model of the docs)" \
   scripts/fuzz-model-generic.sh "${FUZZ_MODEL_GENERIC:-150}" "$seed"
 check "generic choice regression (omitted named argument in a <decides> wrapper)" \
