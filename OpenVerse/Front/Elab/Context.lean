@@ -790,11 +790,20 @@ abbrev EM := StateT ESt (Except EErr)
 /-- Errors are messages. Raising one takes the known refusals along, and
     catching one resumes from the state before the attempt with them: the
     one part of a failed attempt's state that outlives it. -/
+-- (not inlined: the elaborator raises and catches errors in thousands of
+-- places, and its largest generated functions are near the browser
+-- compiler's limit, tests/scripts/test-frontend-c-size.sh)
+@[noinline] def EM.raise {α : Type} (msg : String) : EM α :=
+  fun st => .error { msg, refusals := st.refusals }
+
+@[noinline] def EM.caught {α : Type} (handler : String → EM α) (st : ESt) (e : EErr) : Except EErr (α × ESt) :=
+  handler e.msg { st with refusals := e.refusals }
+
 instance (priority := high) : MonadExcept String EM where
-  throw msg := fun st => .error { msg, refusals := st.refusals }
+  throw := EM.raise
   tryCatch body handler := fun st => match body st with
     | .ok result => .ok result
-    | .error e => handler e.msg { st with refusals := e.refusals }
+    | .error e => EM.caught handler st e
 
 instance : MonadLift (Except String) EM where
   monadLift
