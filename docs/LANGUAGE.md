@@ -2696,11 +2696,31 @@ Main():void =
   directly or through other functions, in a generic function too: each
   recursive call then steps a header of its own. Its values are rows
   like any others, so a reached return skips the ones it has left.
+  The call can be of an overridden method, or of an interface's (#764):
+  its receiver and arguments are evaluated once, in order, as clauses of
+  the header, and the receiver's class picks the implementation whose
+  values are the rows.
+
+  ```verse
+  base := class:
+      Vals()<transacts>:int = 4 | 1
+  derived := class(base):
+      Vals<override>()<transacts>:int = 3 | 1
+  Find(B:base)<transacts>:int =
+      for (V := B.Vals()):
+          return V | V + 10
+      0
+  # Find(derived{}): 3, 13; Find(base{}): 4, 14
+  ```
 
   A second type-refining conditional in the same header, such a header
   on a loop inside another loop, mutable implicit proof
   captures and direct concurrency in a captured expression remain
-  implementation limits (#686). Restrictions on other
+  implementation limits (#686). So does a call of an overridden method
+  with several values in the body, outside an `if`'s conditions, or in a
+  returned value, of a loop that returns several values and goes on to
+  another iteration (#764): it is refused, and the call goes among a
+  `for`'s clauses or an `if`'s conditions. Restrictions on other
   return-containing initializers and on returns inside expressions or
   conditions still apply.
 

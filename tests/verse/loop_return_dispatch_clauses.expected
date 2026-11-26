@@ -1,0 +1,48 @@
+pick
+effect 2
+effect 12
+effect state 1
+pick
+effect row 2
+effect rows state 1
+pick
+tick 5
+args 20
+args 21
+args state 11
+pick
+tick 5
+args row 20
+args rows state 11
+args base 0
+args base state 0
+args base rows state 0
+earlier 1: 1
+earlier 1: 11
+earlier row 1: 1
+earlier 2: 2
+earlier 2: 12
+earlier row 2: 2
+earlier 3: 3
+earlier 3: 13
+earlier row 3: 3
+earlier 4: 4
+earlier 4: 14
+earlier row 4: 4
+earlier 5: 0
+branch true 3
+branch true 13
+branch true row 3
+branch true row 2
+branch false 7
+branch false 17
+branch false row 7
+after 31
+after 0
+after row 31
+after row 22
+before 31
+before 0
+before row 31
+before row 22
+exit=0

@@ -4244,6 +4244,19 @@ private partial def alphaReturnLoopExpr (owner : String) (aliases : List (String
         return .decl q name (annotation.map (styRename aliases)) mutable (← alphaReturnLoopExpr owner aliases rhs).1
       | field => return (← alphaReturnLoopExpr owner aliases field).1
     return (.construct p ((aliases.lookup name).getD name) (arguments.map (styRename aliases)) fields, aliases)
+  -- An alternative of an exclusive choice, which a method's dispatch is made
+  -- of (`rwFamCalls`): its guards bind names for its value, as an `if`'s
+  -- conditions do for its branch. Renamed apart, the value would use a name
+  -- that nothing binds (#764).
+  | .app p fn@(.ident _ "$alt") [.block q guards, value] false =>
+    let mut selected := aliases
+    let mut output := []
+    for guard in guards do
+      let (guard, next) ← alphaReturnLoopExpr owner selected guard
+      output := output ++ [guard]
+      selected := next
+    let (value, _) ← alphaReturnLoopExpr owner selected value
+    return (.app p fn [.block q output, value] false, aliases)
   | .app p fn arguments bracket =>
     let (fn, _) ← alphaReturnLoopExpr owner aliases fn
     let arguments ← arguments.mapM fun argument => do
@@ -5499,8 +5512,17 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
   -- shows every call, `checkEager`)
   for g in needAll do
     let some f := rawMfs.lookup g | continue
+    -- A loop's return helper (#686) steps itself, and a dispatch in its code
+    -- is no call that its machine takes lazily: said of the loop, which is
+    -- what the program wrote (#764), not of a function the compiler made.
+    let dispatching := g.startsWith "$sourceLoopReturn" && anyE (fun
+      | .app _ (.ident _ "$dispatch") _ false => true
+      | _ => false) f.body
     let why (w : String) : String :=
-      s!"{f.pos.show}: {shownFnName g} has several values and is recursive, or called by a recursive one, {w}: {eagerWhy}"
+      if dispatching then
+        s!"{f.pos.show}: this loop is left by a return of a function with several values, and its body or a returned value calls an overridden method with several values: not supported yet (#686, #764); call the method among a for's clauses or an if's conditions"
+      else
+        s!"{f.pos.show}: {shownFnName g} has several values and is recursive, or called by a recursive one, {w}: {eagerWhy}"
     if !f.fx.contains "computes" || ["reads", "writes", "allocates"].any f.fx.contains then throw (why "and it is not <computes>")
     if anyE (fun | .set .. | .decl _ _ _ true _ => true | _ => false) f.body then
       throw (why "and it has a var or a set")

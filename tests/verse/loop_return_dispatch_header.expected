@@ -1,0 +1,51 @@
+found 3
+found 13
+row 3
+row 1
+base found 4
+base found 14
+base row 4
+base row 1
+in if 1
+miss 7
+miss 8
+fixed 5
+fixed 6
+in block 5
+body 1
+body 11
+operand 3
+operand 1
+operand 7
+in loop 8
+in loop 9
+square 3
+square 13
+square row 3
+square row 1
+circle 5
+circle 15
+circle row 5
+circle row 6
+swapped 2
+swapped 12
+swapped row 2
+swapped row 1
+pair 1
+pair 11
+pair row 1
+pair row 2
+dog d1
+dog more
+dog row d1
+dog row d2
+animal a1
+animal more
+leaf 104
+leaf 114
+leaf row 104
+leaf row 101
+link 0
+leaf seek 104
+leaf seek 114
+exit=0
