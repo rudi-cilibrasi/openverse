@@ -200,6 +200,8 @@ check "invocation-local loop and initializer returns" python3 tests/scripts/test
 check "choice-bearing initializer continuations" python3 tests/scripts/test-initializer-choice.py
 check "refinement hint probe scaling" bash tests/scripts/test-refine-hint-probes.sh
 check "nested overloaded calls that no overload fits, and chains of overloaded method calls" bash tests/scripts/test-overload-refusal-nests.sh
+check "chains of calls of the program's own Signal, Cancel, Await and Subscribe methods (#773)" \
+  bash tests/scripts/test-concurrency-name-chains.sh
 check "refining conditional refusal scaling" python3 tests/scripts/test-refining-chain-refusals.py
 check "construction/default choice models (${FUZZ_MODEL_CONSTRUCT:-60} seeds each)" \
   bash tests/scripts/test-choice-defaults.sh "${FUZZ_MODEL_CONSTRUCT:-60}" "$seed"
