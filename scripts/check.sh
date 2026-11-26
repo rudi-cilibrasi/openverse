@@ -199,7 +199,7 @@ check "return cleanup growth and state contracts" python3 tests/scripts/test-ret
 check "invocation-local loop and initializer returns" python3 tests/scripts/test-return-boundaries.py
 check "choice-bearing initializer continuations" python3 tests/scripts/test-initializer-choice.py
 check "refinement hint probe scaling" bash tests/scripts/test-refine-hint-probes.sh
-check "nested overloaded calls that no overload fits" bash tests/scripts/test-overload-refusal-nests.sh
+check "nested overloaded calls that no overload fits, and chains of overloaded method calls" bash tests/scripts/test-overload-refusal-nests.sh
 check "refining conditional refusal scaling" python3 tests/scripts/test-refining-chain-refusals.py
 check "construction/default choice models (${FUZZ_MODEL_CONSTRUCT:-60} seeds each)" \
   bash tests/scripts/test-choice-defaults.sh "${FUZZ_MODEL_CONSTRUCT:-60}" "$seed"
