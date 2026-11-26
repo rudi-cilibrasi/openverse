@@ -1,0 +1,31 @@
+receiver of Subscribe
+receiver of Signal
+subscriber called
+receiver of Await of an event()
+signalling event()
+event() awaited
+receiver of Await of an event(int)
+event(int) gave 7
+receiver of Await of a sticky_event(int)
+sticky_event(int) gave 9
+receiver of Subscribe of a subscribable_event()
+receiver of Signal of a subscribable_event()
+subscriber called
+receiver of a chain of two Await
+the chain gave 7
+receiver of Await of a task
+task gave 5
+receiver of Cancel of a task
+sleeper cancelled
+receivers evaluated: 10
+an event's dog
+a sticky event's dog
+a task's dog
+shown a dog
+shown a dog
+2 animals
+events gave 7
+tasks gave 8
+subscriber called
+done
+exit=0

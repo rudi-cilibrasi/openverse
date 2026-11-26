@@ -509,7 +509,12 @@ structure Ctx where
       of an overloaded method elaborates its receiver to find the overloads,
       then is elaborated again as a call of the overload it fits, which
       takes the receiver from here instead of elaborating it a second time
-      (`elabMemberApp`, which clears it for everything inside the call). -/
+      (`elabMemberApp`, which clears it for everything inside the call).
+      So with the receiver of an event's or a task's own `Await`, `Signal()`
+      and `Subscribe` (#775), which is elaborated to see that it is one and
+      is then the argument of the helper the call becomes, `$Await(X)`: an
+      expression that is this one, to the place, asked for at no type or at
+      the type it has, is this code (`elabE`). -/
   knownReceiver : Option (SExpr × Expr × Ty) := none
   /-- An isolated argument classification probe already owns this subtree.
       Do not recursively probe its nested generic applications again. -/
@@ -1257,6 +1262,11 @@ def resolveSignatureTypes (env : TyEnv) (p : Pos) (ps : List SParam) (ret : STy)
     | .ok _ => pure ()
     | .error message => throw s!"{p.show}: {message}"
   return (tys, rt)
+
+/-- `ctx` for a call that is elaborated again with the receiver `obj`, which
+    is elaborated already, `recv` (`Ctx.knownReceiver`). -/
+def Ctx.receiverKnown (ctx : Ctx) (obj : SExpr) (recv : R) : Ctx :=
+  { ctx with knownReceiver := some (obj, recv.e, recv.ty) }
 
 def Ctx.lookup (ctx : Ctx) (n : String) : Option Local := ctx.locals.find? (·.name == n)
 def Ctx.sig? (ctx : Ctx) (n : String) : Option Sig := ctx.sigs.find? (·.name == n)

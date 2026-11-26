@@ -55,6 +55,13 @@ partial def choiceCoerceResult (ctx : Ctx) (p : Pos) (r : R) (exp : Option Ty) :
   return ⟨.seq (.assign slot r.e) converted.e, converted.ty⟩
 
 partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
+  -- (the receiver of an event's or a task's own method, elaborated where the
+  -- call was seen to be one, as the argument of the helper it becomes, #775;
+  -- where the helper asks for it at another type than it has, the type the
+  -- call is to give makes it another, `A:animal = Wrap(dog{}).Await()`, or
+  -- refuses it: it is elaborated at that type, as it was)
+  if let some (known, e, ty) := ctx.knownReceiver then
+    if exp.all (· == ty) && known == se then return ⟨e, ty⟩
   let ctx := ctx.choiceCoercionScope
   let result ← elabECore ctx se exp
   let result ← choiceCoerceResult ctx se.pos result exp
