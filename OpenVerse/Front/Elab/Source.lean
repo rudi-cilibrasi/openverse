@@ -374,7 +374,10 @@ def inlineSource (requests : Requests) (admitted : Admitted) :
   -- These are public compiler-request payloads, so validate their source
   -- contracts before inlining can replace a declaration by a checking stub.
   EffectPolicy.check producerTops
-  let written := producerTops ++ admitted.resolved
+  -- (#208) a `for` whose body has several values, as the call that has them
+  let productHelpers ← forProductTops
+  let (resolvedTops, usesProduct) := Choice.forProducts productHelpers admitted.resolved
+  let written := producerTops ++ resolvedTops ++ (if usesProduct then productHelpers else [])
   let ⟨resolved, lazy, logicalCells, familySites, overloadSites, nestedSites, fieldSites, copiedOverloadNames, copiedOverloadClashes, copiedMethods⟩ ← Choice.inlineMulti written reserved
     requests.eager requests.families requests.lazy requests.overloads requests.nested
     requests.fieldOrders requests.instanceCalls

@@ -25,6 +25,10 @@ def refuseSeveral (ctx : Ctx) (p : Pos) (what several issue : String) : EM R := 
 
 /-- `refuseSeveral` for a call of `f`, a function with several values (#235). -/
 def refuseCall (ctx : Ctx) (p : Pos) (f : String) : EM R :=
+  -- (#208) a `for` whose body has several values (`Choice.forProducts`)
+  if f == Choice.forProductName then
+    refuseSeveral ctx p "a for whose body has several values" "this for has several values, as its body has, so it" "#208"
+  else
   let shown := Choice.shownFnName f
   refuseSeveral ctx p s!"a call of {shown}, which has several values," s!"{shown} has several values, so a call of it" "#235"
 

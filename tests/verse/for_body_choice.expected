@@ -1,0 +1,55 @@
+[4,4,4]
+[4,4,3]
+[4,2,4]
+[4,2,3]
+[1,4,4]
+[1,4,3]
+[1,2,4]
+[1,2,3]
+header choice: [1,2]
+header choice: [1,12]
+header choice: [11,2]
+header choice: [11,12]
+first: [11,2]
+call: [1,2]
+call: [1,12]
+call: [11,2]
+call: [11,12]
+function: [1,2]
+function: [1,12]
+function: [11,2]
+function: [11,12]
+method: [5,6]
+method: [5,0]
+method: [0,6]
+method: [0,0]
+branch: [1,20,3]
+branch: [1,21,3]
+no iteration: 0
+nested: [1]
+nested: [2]
+nested: [1]
+nested: [7]
+nested: [7]
+nested: [2]
+nested: [7]
+nested: [7]
+strings: ab
+strings: az
+strings: zb
+strings: zz
+in an expression: 3
+in an expression: 4
+in an expression: 3
+in an expression: 4
+in an expression: 3
+in an expression: 4
+in an expression: 3
+in an expression: 4
+a for over a for: 256
+effects: [1,2] 22
+effects: [1,7] 22
+effects: [7,2] 22
+effects: [7,7] 22
+effects, first: [7,2] 22
+exit=0

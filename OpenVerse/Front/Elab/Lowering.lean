@@ -320,6 +320,21 @@ lazycell(t:type) := class:
 
 def lazyTops : Except String (List STop) := parsePrelude lazyPrelude ["lazycell", "LItem", "LNext"]
 
+/-- The functions that a `for` whose body has several values calls
+    (`Choice.forProducts`): the values of the row `A` from its `K`th on, in
+    order; and one array for each way to pick a value from every row of
+    `Rows` from the `I`th on, the earlier row's choice varying slower. A
+    row with no value leaves no array: a `for` fails when a body does. -/
+def forProductPrelude : String := "
+forElems(A:[]t, K:int where t:type)<computes><decides>:t =
+    if (X := A[K]) then (X | forElems[A, K + 1]) else (false?; A[K])
+forProduct(Rows:[][]t, I:int where t:type)<computes><decides>:[]t =
+    if (Row := Rows[I]) then (array{forElems[Row, 0]} + forProduct[Rows, I + 1]) else array{}
+"
+
+def forProductTops : Except String (List STop) :=
+  parsePrelude forProductPrelude ["forElems", "forProduct", "A", "K", "X", "Rows", "Row", "I", "t"]
+
 /-- (#283) A `var` of a lazily taken recursive function that a return frame
     sets, as a cell (`Choice.cellVars`). -/
 def varcellPrelude : String := "

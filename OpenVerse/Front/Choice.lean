@@ -3173,6 +3173,59 @@ def multiValued (fns : List (String × MFn)) : List String := Id.run do
         mv := mv ++ [n]; changed := true
   return mv
 
+/-- The function that a `for` whose body has several values is a call of
+    (`forProducts`), and the one that gives the values of one of its rows. -/
+def forProductName : String := "$forProduct"
+def forElemsName : String := "$forElems"
+
+/-- Whether a `for` body has several values: a choice, or a call of one of
+    the functions `mv`, that nothing in the body takes. One with a `return`
+    is a returning loop (#686), which has its own lowering. -/
+def forBodySeveral (mv : List String) (body : SExpr) : Bool :=
+  !hasReturn body &&
+    (let ss := stmtsOf (markCalls mv body)
+     hasChoice ss || ss.any liftsHere)
+
+/-- Each `for` in `e` whose body has several values as the call that has
+    its values, innermost first, so that a `for` around one sees that call:
+
+        for (cs) { b }   ⟶   $forProduct[for (cs) { for ($v := b) { $v } }, 0]
+
+    The inner `for` collects the values of `b` for one iteration (a row);
+    the call has one array for each way to pick a value from every row, the
+    first row's choice varying slowest. This is the Verse Calculus's
+    `for`, whose iterations' bodies are the elements of the array it
+    builds, so that their choices are choices of the array. -/
+partial def forProductsE (mv : List String) (e : SExpr) : SExpr :=
+  match Id.run (descendM (m := Id) (fun c => pure (forProductsE mv c)) e) with
+  | .forE p cs body =>
+    if forBodySeveral mv body then
+      let q := body.pos
+      let v := madeName "fb" "" q
+      .app p (.ident p forProductName)
+        [.forE p cs (.forE q [.decl q v none false body] (.ident q v)), .int p 0] true
+    else .forE p cs body
+  | e => e
+
+/-- The program with every `for` whose body has several values as the call
+    that has them (`forProductsE`), and whether there is one, so that the
+    two functions it calls (`helpers`, parsed) are to be added. A function
+    whose `for` is rewritten has several values from then on, and a `for`
+    whose body calls it is rewritten in turn: repeated until no function
+    joins those that have several values. -/
+def forProducts (helpers : List STop) (tops : List STop) : List STop × Bool := Id.run do
+  let several (ts : List STop) : List String := multiValued (multiCandidates (ts ++ helpers))
+  let uses (ts : List STop) : Bool := ts.any fun t =>
+    t.code.any (anyE fun | .ident _ n => n == forProductName | _ => false)
+  let mut tops := tops
+  let mut mv := several tops
+  for _ in [0:tops.length + 1] do
+    tops := tops.map (STop.mapAll id (forProductsE mv))
+    let mv' := several tops
+    if mv' == mv then break
+    mv := mv'
+  return (tops, uses tops)
+
 /-- (#283) The place of an overload among its function's, `K` of `F$ovK`,
     as the elaborator names it. -/
 def overloadIndex? (o : String) : Option Nat :=
