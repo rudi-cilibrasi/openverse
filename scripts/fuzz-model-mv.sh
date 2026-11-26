@@ -18,7 +18,12 @@ for ((s=first; s<first+n; s++)); do
   m="${modes[$((s % ${#modes[@]}))]}"
   save() { cp "$tmp/p.verse" "$root/fuzz-model-mv-$s.verse"; cp "$tmp/p.expected" "$root/fuzz-model-mv-$s.expected"; }
   # (the mode is a flag of its own, or none)
-  python3 -I "$root/scripts/models/mv.py" "$s" "$tmp" $m 2> "$tmp/gen.err" ||
+  # (the model has step and copy budgets of its own, but a few programs stay under both and
+  # still run for a quarter of an hour and more, mv seed 30784198 (#723): with no limit here
+  # one such seed held the nightly run until its job was cancelled. Skipped as a long one.)
+  timeout "${FUZZ_MODEL_MV_TIMEOUT:-300}" python3 -I "$root/scripts/models/mv.py" "$s" "$tmp" $m 2> "$tmp/gen.err"; ge=$?
+  if [[ $ge -eq 124 ]]; then long=$((long+1)); echo "model over ${FUZZ_MODEL_MV_TIMEOUT:-300} s: seed $s (skipped)"; continue; fi
+  [[ $ge -eq 0 ]] ||
     { bad=$((bad+1)); echo "GENERATOR FAILED ${m:-plain} seed $s: $(tail -1 "$tmp/gen.err")"; continue; }
   # (SKIP long: the model gave up on a program that prints more than 12000 lines)
   if grep -q '^SKIP long' "$tmp/p.expected"; then long=$((long+1)); continue; fi
@@ -63,5 +68,5 @@ for ((s=first; s<first+n; s++)); do
     bad=$((bad+1)); save; echo "C MISMATCH ${m:-plain} seed $s (C exit $ce, saved fuzz-model-mv-$s.verse)"
   fi
 done
-echo "fuzz-model-mv: $n programs from seed $first, $ran ran in both, $ref refused as the model says, $fuel out of fuel, $skip skipped (an overflow), $long skipped (over 12000 lines), $slow slow in Lean (C matches the model), $bad bad"
+echo "fuzz-model-mv: $n programs from seed $first, $ran ran in both, $ref refused as the model says, $fuel out of fuel, $skip skipped (an overflow), $long skipped (over 12000 lines, or a model over its time limit), $slow slow in Lean (C matches the model), $bad bad"
 [[ $bad -eq 0 ]]
