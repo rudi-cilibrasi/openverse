@@ -72,19 +72,26 @@ class G:
             else:
                 e = s.expr(s.depth - 1, vars)
                 o.append(f'{name}:={e[0]}'); v.append(f'{name.upper()} := {e[1]}'); vars.append(name)
+        if r.random() < 0.25:   # the values are arrays: a for, whose body may have several values
+            a = s.expr(s.depth - 1, vars); b = s.expr(s.depth - 1, vars + ['k'])
+            o.append(f'for(k:={a[0]}){{{b[0]}}}')
+            v.append(f'R := for (EK : array{{0}}, K := {a[1]}) {{ {b[1]} }}')
+            return ('; '.join(odefs + ['all{' + '; '.join(o) + '}']),
+                    '\n'.join(vdefs), 'for (D : array{0}, ' + ', '.join(v) + ') { "<{Show(R)}>" }', True)
         e = s.expr(s.depth, vars)
         o.append(e[0]); v.append(f'R := {e[1]}')
         return ('; '.join(odefs + ['all{' + '; '.join(o) + '}']),
-                '\n'.join(vdefs), 'for (D : array{0}, ' + ', '.join(v) + ') { R }')
+                '\n'.join(vdefs), 'for (D : array{0}, ' + ', '.join(v) + ') { R }', False)
 
-def run_ov(binp, defs, body, d, n):
+def run_ov(binp, defs, body, arrays, d, n):
+    shown = 'Join(' + body + ', "")' if arrays else 'Show(' + body + ')'
     src = ('Show(A:[]int):string = Join(for (X : A) { "{X}" }, ",")\n' + defs +
-           '\nMain():void =\n    Print("[{Show(' + body + ')}]")\n')
+           '\nMain():void =\n    Print("[{' + shown + '}]")\n')
     f = os.path.join(d, f'p{n}.verse'); open(f, 'w').write(src)
     try: p = subprocess.run([binp, 'run', f], capture_output=True, text=True, timeout=120)
     except subprocess.TimeoutExpired: return 'TIMEOUT'
     out = (p.stdout + p.stderr).strip()
-    if re.fullmatch(r'\[[-\d,]*\]', out): return out
+    if re.fullmatch(r'\[[-\d,<>]*\]', out): return out
     return 'REFUSED: ' + re.sub(r'^\S+\.verse:\d+:\d+: ', '', out.split('\n')[0])[:150]
 
 def main():
@@ -95,12 +102,14 @@ def main():
     cases = [g.case() for _ in range(count)]
     with tempfile.TemporaryDirectory() as d:
         with cf.ThreadPoolExecutor(12) as ex:
-            ovs = list(ex.map(lambda ic: run_ov(binp, ic[1][1], ic[1][2], d, ic[0]), enumerate(cases)))
+            ovs = list(ex.map(lambda ic: run_ov(binp, ic[1][1], ic[1][2], ic[1][3], d, ic[0]), enumerate(cases)))
         tf = os.path.join(d, 't.versetest'); lines = []
         for i, (c, rv) in enumerate(zip(cases, ovs)):
             if rv.startswith('['):
                 neg = lambda x: f'(0-{x[1:]})' if x.startswith('-') else x
-                exp = 'array{' + ','.join(neg(x) for x in rv[1:-1].split(',') if x) + '}'
+                arr = lambda t: 'array{' + ','.join(neg(x) for x in t.split(',') if x) + '}'
+                exp = ('array{' + ','.join(arr(t) for t in re.findall(r'<([-\d,]*)>', rv)) + '}'
+                       if c[3] else arr(rv[1:-1]))
                 lines.append(f'testeq("c{i}",pass){{ {c[0]} }} {{ {exp} }}')
         open(tf, 'w').write('\n'.join(lines) + '\n')
         out = subprocess.run([tester, tf, '--assume-verified', '-m', '200000'], capture_output=True, text=True, timeout=3000).stdout

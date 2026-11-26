@@ -9,7 +9,7 @@ comparison, made on 2026-11-26 against the prototype at `d0eababf` and openverse
 
 ## Result
 
-- On 2,000 random programs in the fragment both accept, openverse and the prototype give the
+- On 3,000 random programs in the fragment both accept, openverse and the prototype give the
   same values in the same order, with the same repetitions, on every one.
 - openverse refused one form the prototype has: a choice in the body of a `for`. It is supported
   now (`docs/LANGUAGE.md`, [Choice](../LANGUAGE.md#choice), "In the body of a `for`"), with the
@@ -32,6 +32,7 @@ pure choice:
 | `not(a<b)` as a clause | `not (A < B)` |
 | `(a,b)[i]` | `(A, B)(I)` |
 | `a := for(x:=e){b}`, `a[i]`, `Length[a]` | `A := for (X := e) { b }`, `A[I]`, `A.Length` |
+| `all{…; for(k:=e){b}}` (the values are arrays) | `for (…, R := for (K := e) { b }) { R }` |
 | `f(a:int)<closed>:int := e`, `f[x]` | `F(A:int)<computes><decides>:int = e`, `F[X]` |
 
 Two of the Book's rules shape the openverse side and do not change the values: a `for` needs a
@@ -50,6 +51,7 @@ for function definitions).
 | Expressions and bindings, depth 2 to 4, main at `652a0f1d` | 1,350 | 1,350 | 0 | 0 |
 | With functions, arrays, `not`, binding conditions, main at `652a0f1d` | 1,500 | 1,430 | 70 | 0 |
 | The same generator, with a `for` body's choice supported, at this change | 2,000 | 2,000 | 0 | 0 |
+| With programs whose values are the arrays of a `for`, its body's choices included | 1,000 | 1,000 | 0 | 0 |
 
 All 70 refusals in the second batch were a choice, or a call of a function with several values,
 in the body of a `for`.
