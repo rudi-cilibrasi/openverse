@@ -529,6 +529,11 @@ partial def elabDefersCore (ctx : Ctx) (ds : List (SExpr × List Local)) : EM Ex
     acc := .seq (← inferable r) acc
   return acc
 
+/-- `elabRefusableWith` of an expression of this elaboration: an argument of
+    an overloaded call, or a receiver, that a trial may ask for again (#769). -/
+partial def elabTrialArg (ctx : Ctx) (a : SExpr) (exp : Option Ty) : EM R :=
+  elabRefusableWith elabE ctx a exp
+
 /-- A call of an overloaded function or method (#74): the one overload
     (`ovs`, each with its signature `sigOf`, a method's without `Self`) the
     call's shape and arguments fit, then `call` it. -/
@@ -578,14 +583,14 @@ partial def resolveOverload (ctx : Ctx) (p : Pos) (name : String) (ovs : List St
     let key := s!"{a.pos.line}:{a.pos.col}:{a.pos.file}:{shape}:{typing}"
     if let some r := (← get).natTys[key]? then return r
     let st ← get
-    let r ← tryCatch (do return some (← elabE ctx a none).ty) (fun _ => pure none)
+    let r ← tryCatch (do return some (← elabTrialArg ctx a none).ty) (fun _ => pure none)
     let cache := (← get).natTys
-    set { st with natTys := cache.insert key r, methodReceivers := (← get).methodReceivers, naturalArguments := (← get).naturalArguments, naturalArgumentScopes := (← get).naturalArgumentScopes, nextNaturalArgumentScope := (← get).nextNaturalArgumentScope }
+    set { st.withCachesOf (← get) with natTys := cache.insert key r }
     return r
   let coercible (t u : Ty) : EM Bool := do
     let st ← get
     let ok ← tryCatch (do discard <| coerce p ⟨.lit .void, t⟩ u; pure true) (fun _ => pure false)
-    set { st with natTys := (← get).natTys, methodReceivers := (← get).methodReceivers, naturalArguments := (← get).naturalArguments, naturalArgumentScopes := (← get).naturalArgumentScopes, nextNaturalArgumentScope := (← get).nextNaturalArgumentScope }
+    set (st.withCachesOf (← get))
     return ok
   let mut byNat : List String := []
   for o in cands do
@@ -612,14 +617,14 @@ partial def resolveOverload (ctx : Ctx) (p : Pos) (name : String) (ovs : List St
     let st ← get
     if !s.tparams.isEmpty then
       let ok ← tryCatch (do discard <| call o; pure true) (fun _ => pure false)
-      set { st with natTys := (← get).natTys, methodReceivers := (← get).methodReceivers, naturalArguments := (← get).naturalArguments, naturalArgumentScopes := (← get).naturalArgumentScopes, nextNaturalArgumentScope := (← get).nextNaturalArgumentScope }
+      set (st.withCachesOf (← get))
       return ok
     let ok ← tryCatch (do
         for (a, t) in argTys s do
-          let r ← elabE ctx a (some t)
+          let r ← elabTrialArg ctx a (some t)
           discard <| coerce a.pos r t
         pure true) (fun _ => pure false)
-    set { st with natTys := (← get).natTys, methodReceivers := (← get).methodReceivers, naturalArguments := (← get).naturalArguments, naturalArgumentScopes := (← get).naturalArgumentScopes, nextNaturalArgumentScope := (← get).nextNaturalArgumentScope }
+    set (st.withCachesOf (← get))
     return ok
   -- the overloads the arguments' own types fit, then those the arguments
   -- elaborated at each one's parameter types fit
@@ -665,8 +670,8 @@ partial def resolveOverload (ctx : Ctx) (p : Pos) (name : String) (ovs : List St
     eerr p s!"no overload of {name} fits a call with {posArgs.length} positional argument(s){nm}; its overloads take {" and ".intercalate shown}"
   | [], _ =>
     let st ← get
-    let tys ← posArgs.mapM fun a => do return (← elabE ctx a none).ty.show
-    let ntys ← namedArgs.mapM fun (n, a) => do return s!"?{n}:{(← elabE ctx a none).ty.show}"
+    let tys ← posArgs.mapM fun a => do return (← elabTrialArg ctx a none).ty.show
+    let ntys ← namedArgs.mapM fun (n, a) => do return s!"?{n}:{(← elabTrialArg ctx a none).ty.show}"
     let tys := tys ++ ntys
     set st
     -- (a localized message's parameter, rendered by the helper: said in the
@@ -814,7 +819,7 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     if ctx.retries ≥ 8 then return ← elabAppBase ctx p f args bracket exp
     let saved ← get
     -- (the state is restored between attempts, but not the overload cache)
-    let restore : EM Unit := do set { saved with natTys := (← get).natTys, methodReceivers := (← get).methodReceivers, naturalArguments := (← get).naturalArguments, naturalArgumentScopes := (← get).naturalArgumentScopes, nextNaturalArgumentScope := (← get).nextNaturalArgumentScope }
+    let restore : EM Unit := do set (saved.withCachesOf (← get))
     tryCatch (elabAppBase ctx p f args bracket exp) fun err => do
       -- A one-argument candidate may fail its type, effects or call syntax
       -- before discovering a tuple for a different flattened overload.
@@ -839,7 +844,7 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
       let (pre, c2, f') ← match f with
         | .member mp obj m =>
           if (match obj with | .ident _ "(super:)" => true | _ => false) then pure ([], c2, f) else
-          match ← tryCatch (some <$> elabE c2 obj none) (fun _ => pure none) with
+          match ← tryCatch (some <$> elabTrialArg c2 obj none) (fun _ => pure none) with
           | some ro =>
             let to ← fresh ro.ty
             let nm := s!"$receiver{to}"
@@ -871,7 +876,7 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
             { c2 with locals := { name, slot, ty := value.ty, mutable := false } :: c2.locals },
             SExpr.ident f'.pos name)
         else pure (pre, c2, f')
-      match ← tryCatch (some <$> elabE c2 a none) (fun _ => pure none) with
+      match ← tryCatch (some <$> elabTrialArg c2 a none) (fun _ => pure none) with
       | some ⟨e, ty⟩ =>
         let some ts := (match ty with | .tup ts => some ts | .void => some [] | _ => none)
           | restore; throw err

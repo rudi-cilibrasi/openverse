@@ -46,9 +46,11 @@ partial def elabExprValuesWith
       let mut hasArray := false
       let mut naturalTypes : List (Option Ty) := []
       for e in operands do
-        let ty := match (elabE { ctx with typeOnly := true } e none).run st with
-          | .ok (r, _) => some r.ty
-          | .error _ => none
+        -- (its type alone; of what the probe does, only a refusal is kept, #769)
+        let ty ← tryCatch (do
+            let r ← elabRefusableWith elabE { ctx with typeOnly := true } e none
+            set { st with refusals := (← get).refusals }
+            pure (some r.ty)) (fun _ => pure none)
         naturalTypes := naturalTypes ++ [ty]
         let builtin := match ty with
           | some (.int) | some (.float) | some (.rational) | some (.refine _) | some (.never) => true
@@ -98,7 +100,7 @@ partial def elabExprValuesWith
                 | .ok _ => true
                 | .error _ => false
             if sourceFits then throw original
-            set st
+            set { st with refusals := (← get).refusals }
   match se with
   | .app p f args bracket => do
     let r ← elabApp ctx p f args bracket exp

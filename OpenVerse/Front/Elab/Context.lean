@@ -687,6 +687,12 @@ private def NaturalArgumentScope.matches (scope : NaturalArgumentScope) (ctx : C
     scope.defaults == ctx.defaults && sameNaturalVariables scope.variables ctx.types.tvars &&
     sameNaturalLocals scope.locals ctx.locals
 
+/-- Refused arguments (`ESt.refusals`), by where each is (line, column and
+    file, so that code nothing was refused at costs one lookup): how it was
+    elaborated (`Ctx.refusalKey`), the expression, to tell copies at one
+    position apart, and its error. -/
+abbrev Refusals := Std.HashMap (Nat × Nat × String) (List (String × SExpr × String))
+
 structure ESt where
   /-- A result-hint discovery probe cannot recursively retry its failing
       children. Kept in state so fresh source contexts inherit the guard. -/
@@ -728,6 +734,12 @@ structure ESt where
   naturalArguments : Std.HashMap String SExpr := {}
   naturalArgumentScopes : Std.HashMap (String × Option Nat) (List NaturalArgumentScope) := {}
   nextNaturalArgumentScope : Nat := 0
+  /-- The arguments of overloaded calls that a trial refused, each with its
+      error, by where and how it was elaborated (`elabRefusableWith`; #769).
+      A failed elaboration loses its state, and with it what it had cached,
+      so these travel with the error (`EErr`): nested overloaded calls that
+      no overload fits are refused in polynomial time too. -/
+  refusals : Refusals := {}
   /-- Successful receiver-class probes, keyed by syntax and lexical typing
       context. Shared by isolated trials so nested callbacks stay polynomial. -/
   methodReceivers : Std.HashMap String (Option String) := {}
@@ -766,7 +778,56 @@ structure ESt where
   divergentCalls : Array (Pos × String × String) := #[]
   deriving Inhabited
 
-abbrev EM := StateT ESt (Except String)
+/-- An elaboration's error: its message, and the refusals known where it was
+    raised (`ESt.refusals`), which whoever catches it keeps. -/
+structure EErr where
+  msg : String
+  refusals : Refusals := {}
+  deriving Inhabited
+
+abbrev EM := StateT ESt (Except EErr)
+
+/-- Errors are messages. Raising one takes the known refusals along, and
+    catching one resumes from the state before the attempt with them: the
+    one part of a failed attempt's state that outlives it. -/
+-- (not inlined: the elaborator raises and catches errors in thousands of
+-- places, and its largest generated functions are near the browser
+-- compiler's limit, tests/scripts/test-frontend-c-size.sh)
+@[noinline] def EM.raise {α : Type} (msg : String) : EM α :=
+  fun st => .error { msg, refusals := st.refusals }
+
+@[noinline] def EM.caught {α : Type} (handler : String → EM α) (st : ESt) (e : EErr) : Except EErr (α × ESt) :=
+  handler e.msg { st with refusals := e.refusals }
+
+instance (priority := high) : MonadExcept String EM where
+  throw := EM.raise
+  tryCatch body handler := fun st => match body st with
+    | .ok result => .ok result
+    | .error e => EM.caught handler st e
+
+instance : MonadLift (Except String) EM where
+  monadLift
+    | .ok a => pure a
+    | .error msg => throw msg
+
+/-- Run an elaboration from `st`: its result and final state, or its error's message. -/
+def EM.run {α : Type} (x : EM α) (st : ESt) : Except String (α × ESt) :=
+  match x st with
+  | .ok result => .ok result
+  | .error e => .error e.msg
+
+def EM.run' {α : Type} (x : EM α) (st : ESt) : Except String α :=
+  (·.1) <$> EM.run x st
+
+/-- `saved`, with the caches of `now`: what a trial learned is kept when the
+    rest of its state is discarded. -/
+def ESt.withCachesOf (saved now : ESt) : ESt :=
+  { saved with
+    natTys := now.natTys, methodReceivers := now.methodReceivers
+    naturalArguments := now.naturalArguments
+    naturalArgumentScopes := now.naturalArgumentScopes
+    nextNaturalArgumentScope := now.nextNaturalArgumentScope
+    refusals := now.refusals }
 
 /-- Note a warning at `p` (a trial whose state is discarded discards it). -/
 def warnAt (p : Pos) (msg : String) : EM Unit :=
@@ -1778,11 +1839,7 @@ partial def argNeedsTypeWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx
     -- type from the other arguments)
     | .ok (r, probed) =>
       if r.ty.hasNever then return true
-      modify fun st => { st with
-        natTys := probed.natTys, methodReceivers := probed.methodReceivers
-        naturalArguments := probed.naturalArguments
-        naturalArgumentScopes := probed.naturalArgumentScopes
-        nextNaturalArgumentScope := probed.nextNaturalArgumentScope }
+      modify fun st => st.withCachesOf probed
       return false
     | .error error =>
       -- A cast refusal needs the normal clause-lifting retry, rather than

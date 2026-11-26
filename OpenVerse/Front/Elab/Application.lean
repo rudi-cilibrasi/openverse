@@ -1094,7 +1094,9 @@ partial def elabMemberApp (cb : AppElab) (ctx : Ctx) (p : Pos) (f : SExpr) (mp :
   if let some r ← elabEventSignal? cb ctx p mp obj m0 args bracket exp then return r
   if let some r ← elabEventSubscribe? cb ctx p mp obj m0 args bracket exp then return r
   if let some r ← elabAwait? cb ctx p mp obj m0 args exp then return r
-  let r0 ← elabBoundReceiverWith cb.elabE ctx p (← cb.elabE ctx obj none) m0
+  -- (a receiver that is refused is refused again where an overloaded method's
+  -- call is retried with a tuple's elements: its refusal is kept, #769)
+  let r0 ← elabBoundReceiverWith cb.elabE ctx p (← elabRefusableWith cb.elabE ctx obj none) m0
   ctx.noteFamily mp r0.ty m0
   let (r, m) ← qualifiedReceiver ctx p r0 m0
   match r.ty with

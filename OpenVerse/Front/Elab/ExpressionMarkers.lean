@@ -80,6 +80,54 @@ def elabRefinedCursorOwner (elabE : Ctx → SExpr → Option Ty → EM R) (ctx :
   let r ← elabE ctx object (some base)
   return ⟨← coerce p r base, base⟩
 
+/-- The preparation of a refinement world (`$refinementPrepare`): its stage
+    plan and prefix helper are requested on the elaborations before they
+    exist, then called. Like `elabRefinedCursorOwner`, it stands apart from
+    `elabExprMarkersWith`, whose generated C function has a size budget
+    (tests/scripts/test-frontend-c-size.sh). -/
+def elabRefinementPrepare (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p : Pos)
+    (arguments : List SExpr) (exp : Option Ty) : EM R := do
+  let [.decl _ _ (some valueType) _ _, .ident _ outcome, .ident _ rollback, .int _ flags,
+       .block _ filterPrefix, .block _ suffix, body] := arguments
+    | eerr p "internal: malformed refinement preparation"
+  let value ← resolveTy ctx.types p valueType
+  let key := "refinementWorld" ++ contKey ctx p "$ready" (filterPrefix ++ suffix ++ [body]) ++
+    reprStr (value, outcome, rollback, flags)
+  let request ← match refinementStagePlanOf ctx p key filterPrefix suffix body value (outcome == "true") with
+    | .ok request => pure request
+    | .error message => eerr p s!"cannot prepare this refinement world: {message}"
+  let some plan := request.stagePlan | eerr p "internal: refinement plan"
+  let source := { (sourceContextOf ctx) with
+    inRepeat := flags.toNat % 2 == 1, inChoice := (flags.toNat / 2) % 2 == 1 }
+  let originalFor := (flags.toNat / 4) % 2 == 1
+  let plan := { plan with
+    resumeRollback := rollback == "true", resumeContext := some source,
+    resumeOriginalFor := originalFor,
+    resumeCanFail := if originalFor then some ((flags.toNat / 8) % 2 == 1) else none }
+  let request := { request with stagePlan := some plan }
+  let args := plan.tparams.map fun tp =>
+    (ctx.types.tvars.lookup tp.name).getD (.param tp.name (tp.constraint == "comparable"))
+  if !(ctx.types.requests.loops.any (·.key == request.key)) then
+    askHelper p request
+    return ⟨.prim .fail [], .arr (.struct plan.base args)⟩
+  let helper ← match refinementPrefixOf ctx plan args p filterPrefix suffix body with
+    | .ok helper => pure helper
+    | .error message => eerr p s!"cannot capture this refinement world: {message}"
+  if !(ctx.types.requests.loops.any (·.key == helper.key)) then
+    askHelper p helper
+    return ⟨.prim .fail [], .arr (.struct plan.base args)⟩
+  let call := SExpr.app p (.ident p helper.name) helper.args true
+  if plan.copies.isEmpty then return ← elabE ctx call exp
+  -- Copy-out belongs to the preparation transaction. The opaque Ready
+  -- value alone crosses into the committing consumer; evaluate its
+  -- preparation exactly once before assigning the mutable outputs.
+  let packet := s!"{plan.base}$prepared"
+  let get (j : Nat) := SExpr.app p (.ident p packet) [.int p (j : Int)] false
+  let assignments := plan.copies.zipIdx.map fun ((name, _), j) =>
+    SExpr.set p (.ident p name) none
+      (.app p (.ident p "$refineCopyOut") [get (j + 1)] false)
+  elabE ctx (.block p (.decl p packet none false call :: assignments ++ [get 0])) exp
+
 set_option maxHeartbeats 800000 in
 partial def elabExprMarkersWith
     (elabE : Ctx → SExpr → Option Ty → EM R)
@@ -355,45 +403,8 @@ partial def elabExprMarkersWith
         (.app p (.ident p "$refineCopyOut") [get (index+1)] false)
     elabE ctx (.block p (.decl p packet none false call :: copied ++ [get 0])) exp
   | .app p (.ident _ "$refinementPrepare")
-      [.decl _ _ (some valueType) _ _, .ident _ outcome, .ident _ rollback, .int _ flags,
-       .block _ filterPrefix, .block _ suffix, body] false => do
-    let value ← resolveTy ctx.types p valueType
-    let key := "refinementWorld" ++ contKey ctx p "$ready" (filterPrefix ++ suffix ++ [body]) ++
-      reprStr (value, outcome, rollback, flags)
-    let request ← match refinementStagePlanOf ctx p key filterPrefix suffix body value (outcome == "true") with
-      | .ok request => pure request
-      | .error message => eerr p s!"cannot prepare this refinement world: {message}"
-    let some plan := request.stagePlan | eerr p "internal: refinement plan"
-    let source := { (sourceContextOf ctx) with
-      inRepeat := flags.toNat % 2 == 1, inChoice := (flags.toNat / 2) % 2 == 1 }
-    let originalFor := (flags.toNat / 4) % 2 == 1
-    let plan := { plan with
-      resumeRollback := rollback == "true", resumeContext := some source,
-      resumeOriginalFor := originalFor,
-      resumeCanFail := if originalFor then some ((flags.toNat / 8) % 2 == 1) else none }
-    let request := { request with stagePlan := some plan }
-    let args := plan.tparams.map fun tp =>
-      (ctx.types.tvars.lookup tp.name).getD (.param tp.name (tp.constraint == "comparable"))
-    if !(ctx.types.requests.loops.any (·.key == request.key)) then
-      askHelper p request
-      return ⟨.prim .fail [], .arr (.struct plan.base args)⟩
-    let helper ← match refinementPrefixOf ctx plan args p filterPrefix suffix body with
-      | .ok helper => pure helper
-      | .error message => eerr p s!"cannot capture this refinement world: {message}"
-    if !(ctx.types.requests.loops.any (·.key == helper.key)) then
-      askHelper p helper
-      return ⟨.prim .fail [], .arr (.struct plan.base args)⟩
-    let call := SExpr.app p (.ident p helper.name) helper.args true
-    if plan.copies.isEmpty then return ← elabE ctx call exp
-    -- Copy-out belongs to the preparation transaction. The opaque Ready
-    -- value alone crosses into the committing consumer; evaluate its
-    -- preparation exactly once before assigning the mutable outputs.
-    let packet := s!"{plan.base}$prepared"
-    let get (j : Nat) := SExpr.app p (.ident p packet) [.int p (j : Int)] false
-    let assignments := plan.copies.zipIdx.map fun ((name, _), j) =>
-      SExpr.set p (.ident p name) none
-        (.app p (.ident p "$refineCopyOut") [get (j + 1)] false)
-    elabE ctx (.block p (.decl p packet none false call :: assignments ++ [get 0])) exp
+      arguments@(.decl _ _ (some _) _ _ :: .ident _ _ :: .ident _ _ :: .int _ _ :: .block _ _ :: .block _ _ :: _ :: []) false =>
+    elabRefinementPrepare elabE ctx p arguments exp
   | .app p (.ident _ "$refinementResume") [environments] false
   | .app p (.ident _ "$refinementFilterResume") [environments] false => do
     let ctx := match se with

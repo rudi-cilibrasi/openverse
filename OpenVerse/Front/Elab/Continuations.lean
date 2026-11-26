@@ -326,6 +326,47 @@ def Ctx.usedLocals (ctx : Ctx) (code : SExpr) : List Local :=
 def Ctx.capturesOf (ctx : Ctx) (code : SExpr) (excluded : List String := []) : List Local :=
   ctx.captureEvidence ((ctx.usedLocals code).filter (!excluded.contains ·.name)) excluded
 
+/-- How `a` is elaborated in `ctx` for a value of type `exp`, for the refusal
+    of it that is kept (`ESt.refusals`, #769): the types of the names it
+    uses, and everything of the context that a judgment of it reads. A copy
+    of the code at the same position with other names in scope, another
+    expected type or another context is another entry. -/
+def Ctx.refusalKey (ctx : Ctx) (a : SExpr) (exp : Option Ty) (hintProbe : Bool) : String :=
+  let names := (ctx.capturesOf a).map fun l => (l.name, l.ty, l.typeValue, l.mutable)
+  let flags := [ctx.canFail, ctx.inTaking, ctx.suspends, ctx.inLoop, ctx.inParamDefault, ctx.inDefer,
+    ctx.inBlock, ctx.inCtor, ctx.inArm, ctx.inBranch, ctx.inDefaultCheck, ctx.inRepeat,
+    ctx.inChoice, ctx.asWritten, ctx.constructProbe, ctx.typeOnly, ctx.argumentTypeProbe,
+    ctx.inRollback, ctx.rollbackOnly, ctx.bodyFailure, ctx.loopRollback, ctx.accessorCall,
+    ctx.refinementTransportActive, ctx.discoveringStagePrefix, ctx.forStageFlat, hintProbe]
+  reprStr (exp, names, ctx.types.tvars) ++
+  reprStr (ctx.selfClass, ctx.selfMethod, ctx.fnFx, ctx.retTy, ctx.frameName, ctx.frameArgs,
+    ctx.retries, flags) ++
+  reprStr (ctx.defaults, ctx.inlineScopes, ctx.constructOrigin, ctx.unrefine,
+    ctx.copiedOverloadScope, ctx.liftTag, ctx.refineScope, ctx.callInstanceProbe, ctx.dataMember,
+    ctx.refinementTransportValue, ctx.liftWhy) ++
+  reprStr (ctx.choiceCoercions.map fun (dictionary, source, target) => (dictionary.name, source, target))
+
+/-- An argument of an overloaded call, or an operand of an overloaded
+    operator, elaborated to see what the call fits (#769). One call asks this
+    of each argument several times: alone, at each candidate's parameter
+    type, again for the types its error names, and once more where the call
+    is retried with a tuple's elements. An argument that is refused is
+    refused each time, and where it is itself such a call, each of those
+    attempts made all of its own again: five times the work at every level
+    of a nested call that no overload fits. A refusal is kept, with its
+    error, and given again to whoever asks the same of the same code. -/
+def elabRefusableWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (a : SExpr)
+    (exp : Option Ty) : EM R := do
+  let place := (a.pos.line, a.pos.col, a.pos.file)
+  if let some known := (← get).refusals[place]? then
+    let key := ctx.refusalKey a exp (← get).refiningHintProbe
+    if let some (_, _, err) := known.find? fun (k, b, _) => k == key && b == a then throw err
+  tryCatch (elabE ctx a exp) fun err => do
+    let key := ctx.refusalKey a exp (← get).refiningHintProbe
+    modify fun st => { st with
+      refusals := st.refusals.insert place ((key, a, err) :: st.refusals.getD place []) }
+    throw err
+
 /-- (#246, #338) The key of a lazily taken call's function of its own: its
     place, binding and code (`lp`, the clauses with it, `rest`, those after
     it), the locals they use with their types and whether they are `var`s,
