@@ -432,7 +432,7 @@ partial def elabEventSignal? (cb : AppElab) (ctx : Ctx) (p mp : Pos) (obj : SExp
   | .struct n ts =>
     if ((n == ctx.types.concurrencyName "event" || n == ctx.types.concurrencyName "sticky_event") &&
         ts == [.void]) || (n == "$subev0" && ts.isEmpty) then
-      return some (← cb.elabApp ctx p (.member mp obj "Signal") [.tuple p []] bracket exp)
+      return some (← cb.elabApp (ctx.receiverKnown obj recv) p (.member mp obj "Signal") [.tuple p []] bracket exp)
     else return none
   | _ => return none
 
@@ -448,7 +448,7 @@ partial def elabEventSubscribe? (cb : AppElab) (ctx : Ctx) (p mp : Pos) (obj : S
   | .struct n ts =>
     if ((n == ctx.types.concurrencyName "event" || n == ctx.types.concurrencyName "sticky_event") &&
         ts == [.void]) || (n == "$subev0" && ts.isEmpty) then
-      return some (← cb.elabApp ctx p (.ident mp "$subscribeUnit") (obj :: args) false exp)
+      return some (← cb.elabApp (ctx.receiverKnown obj recv) p (.ident mp "$subscribeUnit") (obj :: args) false exp)
     else return none
   | _ => return none
 
@@ -467,16 +467,16 @@ partial def elabAwait? (cb : AppElab) (ctx : Ctx) (p mp : Pos) (obj : SExpr) (re
   match recv.ty with
   | .struct n ts =>
     if n == ctx.types.concurrencyName "task" && ts.length == 1 then
-      return some (← cb.elabApp ctx p (.ident mp "$Await") [obj] false exp)
+      return some (← cb.elabApp (ctx.receiverKnown obj recv) p (.ident mp "$Await") [obj] false exp)
     else if ((n == ctx.types.concurrencyName "event" || n == ctx.types.concurrencyName "subscribable_event") &&
         ts.length == 1) || (n == "$subev0" && ts.isEmpty) then
-      let r ← cb.elabApp ctx p (.ident mp "$EvAwait") [obj] false exp
+      let r ← cb.elabApp (ctx.receiverKnown obj recv) p (.ident mp "$EvAwait") [obj] false exp
       checkNoRollbackCall ctx p (awaitSig ctx) "event.Await"
       return some r
     else if n == ctx.types.concurrencyName "sticky_event" && ts.length == 1 then
       -- (#515: an event's Await has no_rollback, UEFN 43.12: 3512,
       -- followup/await-in-transacts)
-      let r ← cb.elabApp ctx p (.ident mp "$StickyAwait") [obj] false exp
+      let r ← cb.elabApp (ctx.receiverKnown obj recv) p (.ident mp "$StickyAwait") [obj] false exp
       checkNoRollbackCall ctx p (awaitSig ctx) "sticky_event.Await"
       return some r
     else return none
@@ -552,7 +552,7 @@ partial def elabOverloadedMethodCall? (cb : AppElab) (ctx : Ctx) (p mp : Pos) (o
   if vis.isEmpty then return none
   return some (← cb.resolveOverload ctx p m vis sigOf (fun o => do
     ctx.noteOverload p m o
-    cb.elabApp { ctx with knownReceiver := some (obj, recv.e, recv.ty) } p
+    cb.elabApp (ctx.receiverKnown obj recv) p
       (.member mp obj ((if spawning then "$spawnMethod:" else "") ++ qualOf o)) args bracket exp) args)
 
 /-! ## A call of a class's or interface's method through a value -/

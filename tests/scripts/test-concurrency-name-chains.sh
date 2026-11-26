@@ -15,9 +15,19 @@
 # chains that are refused, with the error the chain of three calls is refused
 # with. Each within a limit that is a guard against never ending and no measure
 # of speed: a chain of ninety-six takes a tenth of a second.
+# And chains of an event's and a task's own Await (#775), `E.Await().Await()…`
+# of an event of events, or a task of tasks: the call becomes a call of a helper
+# with the receiver as its argument, `$EvAwait(E)`, which elaborated the
+# receiver a second time, twice as long for each call, and left the slots of
+# the first behind, so that sixteen calls made a program the C runtime does not
+# load. The helper takes the receiver as it is elaborated. Twenty-four and
+# forty-eight deep, in both runtimes; and those that are refused, among them the
+# chain asked for at a type it does not give, where the receiver is elaborated
+# again at the type asked for, as it was, once for each call.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ov="$root/.lake/build/bin/openverse"
+cv="$root/runtime/build/cverse"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 limit="${CONCURRENCY_NAME_CHAIN_TIMEOUT:-60}"
 python3 -I - "$tmp" <<'PY'
@@ -104,6 +114,72 @@ def refused(n):
         + 'Main():void =\n    X := holder{Ev := event(){}}\n    X' + calls([SIGNAL, AWAIT], n)[0] + '.Ev.Await()\n',
         'Await suspends: it can only be called in a <suspends> function (#156)')
     return s
+# An event's and a task's own Await, called on what the Await before it gives
+# (#775): an event of events, a task of tasks, n deep. name: (the program, what
+# it prints)
+def nested(n):
+    def of(kind, k, last='int'): return last if k == 0 else f'{kind}({of(kind, k - 1, last)})'
+    awaits = '.Await()' * n
+    # each level is signalled, after a wait, with the event of the level below
+    def senders(last, signal):
+        t = f'Send1(E:{of("event", 1, last)})<suspends>:void =\n    Sleep(0.0)\n    {signal}\n'
+        for k in range(2, n + 1):
+            t += (f'Send{k}(E:{of("event", k, last)})<suspends>:void =\n    Sleep(0.0)\n'
+                  f'    I := {of("event", k - 1, last)}{{}}\n    spawn{{Send{k - 1}(I)}}\n    E.Signal(I)\n')
+        return t
+    def start(last): return f'    E := {of("event", n, last)}{{}}\n    spawn{{Send{n}(E)}}\n'
+    s = {}
+    s['events'] = (senders('int', 'E.Signal(7)') + 'Main()<suspends>:void =\n' + start('int')
+                   + f'    Print("got {{E{awaits}}}")\n', 'got 7')
+    # the receiver of the first is a call that prints: it is called once
+    s['events-of-a-call'] = (senders('int', 'E.Signal(7)')
+        + f'Seen(E:{of("event", n)}):{of("event", n)} =\n    Print("seen")\n    E\n'
+        + 'Main()<suspends>:void =\n' + start('int') + f'    Print("got {{Seen(E){awaits}}}")\n', 'seen\ngot 7')
+    tasks = 'F0()<suspends>:int =\n    Sleep(0.0)\n    7\n' + ''.join(
+        f'F{k}()<suspends>:{of("task", k)} =\n    Sleep(0.0)\n    spawn{{F{k - 1}()}}\n' for k in range(1, n))
+    s['tasks'] = (tasks + f'Main()<suspends>:void =\n    T := spawn{{F{n - 1}()}}\n    Print("got {{T{awaits}}}")\n',
+                  'got 7')
+    s['tasks-of-a-spawn'] = (tasks + f'Main()<suspends>:void =\n    Print("got {{spawn{{F{n - 1}()}}{awaits}}}")\n',
+                             'got 7')
+    # each is signalled before it is awaited: a sticky event keeps what it was given
+    sticky = '    S0 := 7\n' + ''.join(
+        f'    S{k} := {of("sticky_event", k)}{{}}\n    S{k}.Signal(S{k - 1})\n' for k in range(1, n + 1))
+    s['sticky-events'] = ('Main()<suspends>:void =\n' + sticky + f'    Print("got {{S{n}{awaits}}}")\n', 'got 7')
+    # then the Signal(), and the Subscribe, of the event() the chain gives
+    unit = 'event()'
+    on = 'On():void = Print("on")\n'
+    s['events-then-signal'] = (on + senders(unit, 'I := event(){}\n    I.Subscribe(On)\n    E.Signal(I)')
+        + 'Main()<suspends>:void =\n' + start(unit) + f'    E{awaits}.Signal()\n    Print("done")\n', 'on\ndone')
+    s['events-then-subscribe'] = (on
+        + senders(unit, 'I := event(){}\n    E.Signal(I)\n    Sleep(0.0)\n    Print("signals")\n    I.Signal()')
+        + 'Main()<suspends>:void =\n' + start(unit) + f'    S := E{awaits}.Subscribe(On)\n    Print("subscribed")\n'
+        + '    Sleep(0.0)\n    Sleep(0.0)\n    S.Cancel()\n    Print("done")\n', 'subscribed\nsignals\non\ndone')
+    return s
+# name: (the program, its refusal)
+def nested_refused(n):
+    def of(kind, k, last='int'): return last if k == 0 else f'{kind}({of(kind, k - 1, last)})'
+    awaits = '.Await()' * n
+    s = {}
+    for kind in ('event', 'task'):
+        use = f'Use(E:{of(kind, n)})'
+        s[f'{kind}s-one-too-many'] = (use + f'<suspends>:void =\n    Print("{{E{awaits}.Await()}}")\n',
+                                      "int has no method 'Await'")
+        s[f'{kind}s-outside-suspends'] = (use + f':void =\n    Print("{{E{awaits}}}")\n',
+                                          'can only be called in a <suspends> function')
+        # (the type asked for reaches the first receiver, which is refused as it was:
+        # it is elaborated at that type, each call's on the way)
+        s[f'{kind}s-wrong-type'] = (use + f'<suspends>:void =\n    X:string = E{awaits}\n',
+                                    f':2:15: expected {of(kind, n, "string")}, found {of(kind, n)}: {kind} is invariant')
+        s[f'{kind}s-unknown-receiver'] = (use + f'<suspends>:void =\n    Print("{{Nowhere{awaits}}}")\n',
+                                          "unknown identifier 'Nowhere'")
+    return s
+for n in (3, 24, 48):
+    for name, (program, want) in nested(n).items():
+        open(f'{out}/nested-{name}.{n}.verse', 'w').write(program)
+        open(f'{out}/nested-{name}.{n}.want', 'w').write(want + '\n')
+    for name, (program, refusal) in nested_refused(n).items():
+        open(f'{out}/nestedrefused-{name}.{n}.verse', 'w').write(program)
+        open(f'{out}/nestedrefused-{name}.{n}.want', 'w').write(refusal + '\n')
 for n in (3, 24, 96):
     for name, (program, want) in chains(n).items():
         open(f'{out}/chain-{name}.{n}.verse', 'w').write(program)
@@ -126,6 +202,44 @@ for short in "$tmp"/chain-*.3.verse; do
     fi
   done
   chains=$((chains + 1))
+done
+nested=0
+for short in "$tmp"/nested-*.3.verse; do
+  name="$(basename "$short" .3.verse)"
+  for n in 3 24 48; do
+    status=0
+    (cd "$tmp" && ulimit -v 4194304 && timeout "$limit" "$ov" run "$name.$n.verse" --emit "$tmp/$name.$n.vbc") \
+      >"$tmp/$name.$n.out" 2>"$tmp/$name.$n.err" || status=$?
+    if [[ $status != 0 ]] || ! cmp -s "$tmp/$name.$n.want" "$tmp/$name.$n.out"; then
+      echo "FAIL concurrency name chains: ${name#nested-} $n deep, status $status (124: not within ${limit}s)," \
+        "wanted '$(head -c 200 "$tmp/$name.$n.want")', got:"
+      head -c 400 "$tmp/$name.$n.out" "$tmp/$name.$n.err"; exit 1
+    fi
+    # (the C runtime: a receiver elaborated twice left its slots behind, twice
+    # as many for each call, and sixteen calls made more than it loads)
+    status=0
+    timeout "$limit" "$cv" "$tmp/$name.$n.vbc" >"$tmp/$name.$n.cout" 2>"$tmp/$name.$n.cerr" || status=$?
+    if [[ $status != 0 ]] || ! cmp -s "$tmp/$name.$n.want" "$tmp/$name.$n.cout"; then
+      echo "FAIL concurrency name chains: ${name#nested-} $n deep in the C runtime, status $status, got:"
+      head -c 400 "$tmp/$name.$n.cout" "$tmp/$name.$n.cerr"; exit 1
+    fi
+  done
+  nested=$((nested + 1))
+done
+nestedrefused=0
+for short in "$tmp"/nestedrefused-*.3.verse; do
+  name="$(basename "$short" .3.verse)"
+  for n in 3 24 48; do
+    status=0
+    (cd "$tmp" && ulimit -v 4194304 && timeout "$limit" "$ov" check "$name.$n.verse") \
+      >/dev/null 2>"$tmp/$name.$n.err" || status=$?
+    if [[ $status != 4 ]] || ! grep -qF -f "$tmp/$name.$n.want" "$tmp/$name.$n.err"; then
+      echo "FAIL concurrency name chains: ${name#nestedrefused-} $n deep, status $status (124: not within" \
+        "${limit}s), wanted '$(cat "$tmp/$name.$n.want")', got:"
+      head -c 400 "$tmp/$name.$n.err"; exit 1
+    fi
+  done
+  nestedrefused=$((nestedrefused + 1))
 done
 count=0
 for short in "$tmp"/refused-*.3.verse; do
@@ -152,4 +266,5 @@ for short in "$tmp"/refused-*.3.verse; do
   count=$((count + 1))
 done
 echo "concurrency name chains: $chains shapes of chains of 24 and 96 calls that fit, $count shapes refused as at" \
-  "3 calls, each within ${limit}s"
+  "3 calls; $nested shapes of an event's and a task's own Await 24 and 48 deep, in both runtimes," \
+  "$nestedrefused refused; each within ${limit}s"
