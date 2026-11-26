@@ -726,20 +726,29 @@ private structure State where
       from covers. Off in the first attempt at a program, whose refusals
       are not final (`check`). -/
   cellCovering : Bool := false
-  /-- The body being interpreted is a plain sequential one, entered once:
-      its loops may resume from `cellLoopHeads`. -/
+  /-- One body is being interpreted from its entry by `expr`, with or without
+      private cells or shared locals: its loops may resume from
+      `cellLoopHeads`. Off under a
+      schedule replay, whose steps are not one pass over the body, and in a
+      spawn's own expression, whose parts share one path (`spawned`). -/
   cellWarm : Bool := false
-  /-- The stable head of each loop of that body, by its path, from the last
-      time the loop was reached. -/
+  /-- The stable head of each loop of that body, by its path (`cellPath`),
+      from the last time the loop was reached. Emptied wherever a body is
+      entered (`freshLoops`): a head of another entry is not below this
+      entry's fixed point. -/
   cellLoopHeads : Std.HashMap (List Nat) Slots := {}
+  /-- Bodies of `loop` and `forE` interpreted so far (`OPENVERSE_DEBUG`). -/
+  loopPasses : Nat := 0
   /-- Independently validated all-real transfers. The leading flag requires
       the caller's complete alias state to prove empty private input refs. -/
   closedTransfers : Std.HashMap Nat (Bool × Option Bool × TupleParts × Bool) := {}
 
 private abbrev M := StateT State (Except String)
 
+/-- The path of the expression being interpreted in its body. It names the
+    allocation sites of a body with private cells (`cellSite`) and, in every
+    body, its loops (`cellLoopHeads`). -/
 private def cellChild (child : Nat) (action : M α) : M α := do
-  if !(← get).cellEnabled then return ← action
   let path := (← get).cellPath
   modify fun st => { st with cellPath := child :: path }
   let result ← action
@@ -785,6 +794,11 @@ private def cellInputSite (owner slot : Nat) : M Nat := do
     cellTransports := st.cellTransports.push false
     cellArraySummaries := st.cellArraySummaries.push false }
   return site
+
+/-- A body is entered from its start: its loops have no head yet, and may
+    resume when an enclosing loop of this entry reaches them again. -/
+private def freshLoops (warm : Bool := true) : M Unit :=
+  modify fun st => { st with cellWarm := warm, cellLoopHeads := {} }
 
 private def cellExternal (heap : MetadataCells.Memory) (objects : MetadataCells.Refs) : Bool :=
   objects.any fun object => object == 1 ||
@@ -909,7 +923,12 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
     let name := (fns[g]?.map (·.name)).getD ""
     if name == "$spawnMark" then
       if let [.prim .mkArr [.seq target _, .seq (.local _) _]] := es then
+        -- (`spawned` gives the parts of its expression one path, so a loop
+        -- in one could take the head of a loop in another)
+        let warm := (← get).cellWarm
+        modify fun st => { st with cellWarm := false }
         let (result, out) ← spawned fns infos fields fn info slots target
+        modify fun st => { st with cellWarm := warm }
         -- Lowering stores the call's result in task.Result. It is an
         -- ordinary mutable field, subject to the same rule as heap.set.
         if (← get).validateUses && result.getD false then
@@ -1139,7 +1158,7 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
           nslots := max source.slots.heap.nslots (itemsKey + 1) } sourceKey source.valueRefs) itemsKey []
       else source.slots.heap
     let mut head := { source.slots with heap }
-    let resume := enabled && (← get).cellWarm && info.shared.isEmpty
+    let resume := (← get).cellWarm
     let loopKey := (← get).cellPath
     if resume then
       if let some known := (← get).cellLoopHeads[loopKey]? then head := joinSlots head known
@@ -1151,6 +1170,7 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
       iterations := iterations + 1
       if (← get).debug && iterations % 32 == 0 then
         dbg_trace s!"metadata fixedpoint {fn.name} iterations={iterations} nodes={head.heap.nodes.size} fields={head.heap.fields.size} cells={head.heap.cells.size} locals={head.heap.locals.size}"
+      modify fun st => { st with loopPasses := st.loopPasses + 1 }
       let state ← get
       let entry := { head with
         values := head.values.set! i item, tuples := head.tuples.erase i
@@ -1183,7 +1203,15 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
     -- joined with the entry instead: that is below the new fixed point when
     -- the entry grew, and any head that covers the entry and its own body's
     -- exit is a sound one.
-    let resume := (← get).cellEnabled && (← get).cellWarm && info.shared.isEmpty
+    -- This holds with and without private cells or shared locals (#761: a
+    -- back edge forgets a shared local's mode against the present entry
+    -- either way, `freshLocals`). A loop takes two
+    -- passes at least, one that binds its body's locals and one that finds
+    -- nothing new, so without it a nest of n loops costs 2^n passes of the
+    -- innermost body whatever the bodies do: each level of a `for`'s search
+    -- is a loop inside the level before. Resumed, the second pass of a loop
+    -- costs one pass of each loop inside it.
+    let resume := (← get).cellWarm
     let loopKey := (← get).cellPath
     let mut head := slots
     if resume then
@@ -1199,6 +1227,7 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
       iterations := iterations + 1
       if (← get).debug && iterations % 32 == 0 then
         dbg_trace s!"metadata fixedpoint {fn.name} iterations={iterations} nodes={head.heap.nodes.size} fields={head.heap.fields.size} cells={head.heap.cells.size} locals={head.heap.locals.size}"
+      modify fun st => { st with loopPasses := st.loopPasses + 1 }
       let out ← cellChild 0 (expr fns infos fields fn info head body)
       exits := withExits out exits
       returnedParts := joinParts returned returnedParts out.returned out.returnedParts
@@ -2379,6 +2408,7 @@ private def probeCleanup (fns : Array Fn) (infos : Array Info)
     (fields : Array (List Nat)) (fn : Fn) (info : Info) (slots : Slots)
     (cleanup : Expr) (state : State) : Except String State := do
   let action : M Unit := do
+    freshLoops
     discard <| expr fns infos fields fn info slots cleanup
     let mut index := 0
     while index < (← get).live.size do
@@ -2396,12 +2426,14 @@ private def probeCleanup (fns : Array Fn) (infos : Array Info)
           (fun j => j < callee.arity : Nat → Bool) |>.toArray |> Bits.ofArray
         written := Bits.replicate callee.nslots false }
       modify fun st => { st with seen := values }
+      freshLoops
       discard <| expr fns infos fields callee ci entry (ci.body.getD callee.body)
       let observed := (← get).seen
       let possible := { entry with
         values := observed, tuples := {}, initialized := Bits.replicate callee.nslots true
         sharedMetadata := Bits.replicate callee.nslots false }
       for d in ((← get).sites[i]?.getD (false, [])).2 do
+        freshLoops
         discard <| expr fns infos fields callee ci possible d
   let (_, result) ← action.run { state with
     discovery := false, validateUses := true, validateShared := true
@@ -2890,7 +2922,7 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       let (background, cleanups) := (← get).sites[i]?.getD (false, [])
       let privateConcurrent := (← get).cellEnabled && cellConcurrentBody fns body
       if !background && cleanups.isEmpty && !privateConcurrent && !((← get).borrowers[i]?.getD false) then
-        modify fun st => { st with cellWarm := true }
+        freshLoops
         return ← expr fns infos fields fn info slots body
       let saved ← get
       -- Discover potential metadata without validating provisional or
@@ -2898,7 +2930,12 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       modify fun st => { st with
         seen := values, discovery := true
         validateUses := false, validateShared := false }
+      -- (this pass and the validating one below each interpret the body
+      -- from its entry, so their loops resume as well: a body with a
+      -- cleanup holds as deep a nest as one without)
+      freshLoops
       let out ← expr fns infos fields fn info slots body
+      freshLoops false
       let seen := (← get).seen
       let captureMismatch := (← get).captureMismatch
       modify fun st => { st with
@@ -3013,6 +3050,7 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
             else st.scheduleProofs.erase key }
         return out
       if saved.validateUses then
+        freshLoops
         return ← expr fns infos fields fn info slots body
       return out
     let seedRoots : M Unit := do
@@ -3096,6 +3134,7 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
       borrowers := borrowed
       borrowedWork := borrowedWork
       borrowedTasks := borrowedTasks }
+    if debug then dbg_trace s!"metadata loop passes={final.loopPasses}"
     return final
   let closedState ← if closedSeeds.isEmpty then pure ({} : State)
     else run closedSeeds none (Array.replicate fns.size false) {} false

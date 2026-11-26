@@ -2108,14 +2108,15 @@ Main():void =
     else (4 | 1), W : Inner(S, V))` keeps nothing of `Inner(S, 3)` when
     that array is empty, as `V := (3 | 1)` keeps nothing
     (`tests/verse/for_exclusive_empty_generator.verse`,
-    `for_exclusive_generator_shapes.verse`). A `for` whose
+    `for_exclusive_generator_shapes.verse`), however many choices and
+    generators it has (`for_exclusive_many_levels.verse`: a function with
+    twenty guarded returns, each a choice, is one). A `for` whose
     clauses have a call of a function with several values that is taken
     lazily (a generator of its own) or a choice whose
     alternatives have choices of their own, or such an `if` with a call of
     a function with several values in a branch or in its condition (a call
     of an overridden method is one: its implementations are the branches)
-    or with a type-refining cast in its condition, or with so many such
-    choices and generators that its search would have more than eight levels,
+    or with a type-refining cast in its condition,
     keeps, for now, the old rule, entirely: an
     alternative whose own clauses (up to the next generator) fail is rolled
     back; one whose clauses succeed keeps their effects, even when the

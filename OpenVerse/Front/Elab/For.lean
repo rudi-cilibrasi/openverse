@@ -523,10 +523,6 @@ partial def forClauseEffects (observable : Nat → Bool) : Expr → Bool
   | .forE _ it f b => forClauseEffects observable it || forClauseEffects observable f || forClauseEffects observable b
   | .loop e | .ret e => forClauseEffects observable e
 
-/-- The most levels a search with an exclusive choice may have: one with more
-    keeps the lowering it had (`elabForWith`, `branchSearch`). -/
-def maxBranchLevels : Nat := 8
-
 /-- A call of a function with several values anywhere in `e`, as the
     functions are marked before their calls are lifted (`Choice.inlineCalls`:
     inlined, computed at the call, taken lazily, dispatched, or a point of a
@@ -1697,8 +1693,9 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
   -- condition, a composed choice or a producer of its own is not this:
   -- those `for`s keep their lowering below, as does one whose clauses do
   -- nothing that undoing would change, or have a call of a function with
-  -- several values left where a clause is compiled, or one with more than
-  -- `maxBranchLevels` levels.)
+  -- several values left where a clause is compiled. The number of levels
+  -- does not decide it (#761): choices in a row, as a function's many
+  -- guarded returns are when a `for` takes it (#686), have a level each.)
   -- (A resumable header, #686, is searched this way when the request is the
   -- loop's own: one for an alternative, a product's side or an owner keeps
   -- the cursor it has.)
@@ -1713,10 +1710,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     -- The clauses `fs` where the search is, then the generators `more`: the
     -- step's code, the levels after it, the context of the body, and the
     -- slots the paths keep between steps (the names they bind, each with
-    -- whether it is a `var`, and the selectors). `room` is the number of
-    -- levels there may still be: with none left the search is given up
-    -- here, before the rest of a long `for` is compiled for nothing.
-    let rec levelsOf (room : Nat) (c : Ctx) (guard : Option Expr) (fs : List SExpr) (more : List (SExpr × List SExpr)) :
+    -- whether it is a `var`, and the selectors).
+    let rec levelsOf (c : Ctx) (guard : Option Expr) (fs : List SExpr) (more : List (SExpr × List SExpr)) :
         EM (Expr × List ForLevelPlan × Ctx × List (Nat × Bool)) := do
       match fs.findIdx? isExcl with
       | none =>
@@ -1724,9 +1719,9 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         match more with
         | [] => return (filt, [], c1, [])
         | (g, filters) :: rest =>
-          unless plainGen g && room > 0 do refused
+          unless plainGen g do refused
           let (slot, domain, c2, bind) ← elabSource c1 g stream
-          let (inner, levels, last, kept) ← levelsOf (room - 1) c2 guard filters rest
+          let (inner, levels, last, kept) ← levelsOf c2 guard filters rest
           let filter := match bind with
             | .lit _ => inner
             | e => .seq e inner
@@ -1742,7 +1737,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           restoreConstructProbe cA st
           if refined then refused
           let cl := pruneMethodBinding cA (fs[j]?.getD (.tuple p []))
-          let (f, levels, last, kept) ← levelsOf room cA guard (Choice.bifToExcl cl ++ after) more
+          let (f, levels, last, kept) ← levelsOf cA guard (Choice.bifToExcl cl ++ after) more
           return (.seq codeA f, levels, last, kept)
         let some (.decl gp x xty _ (.app _ _ alts _)) := fs[j]? | eerr p "internal: an exclusive choice"
         let xty ← match xty with
@@ -1767,7 +1762,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           let picked := match guard with
             | none => here
             | some outer => .seq outer here
-          let (f, ls, ci, ks) ← levelsOf room cA (some picked) (cl.takeWhile (!isGen ·)) (groups (cl.dropWhile (!isGen ·)))
+          let (f, ls, ci, ks) ← levelsOf cA (some picked) (cl.takeWhile (!isGen ·)) (groups (cl.dropWhile (!isGen ·)))
           let some value := ci.lookup x | eerr gp "internal: an exclusive choice's path without its value"
           unless value.ty == bty do refused
           let bind := Expr.assign joined (.local value.slot)
@@ -1789,19 +1784,15 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         let cJ := { cA with locals := { name := x, slot := joined, ty := bty, mutable := false } :: cA.locals }
         -- (the clauses after the choice: in its step when no path has a
         -- generator, else after the paths' last level, whichever path ran)
-        let (f, rest, last, ks) ← levelsOf (room - levels.length) cJ guard after more
+        let (f, rest, last, ks) ← levelsOf cJ guard after more
         match levels.reverse with
         | [] => return (.seq step f, rest, last, kept ++ ks)
         | final :: before =>
           let final := if after.isEmpty then final else { final with after := final.after ++ [(guard, f)] }
           return (step, before.reverse ++ final :: rest, last, kept ++ ks)
     let found ← tryCatch (do
-      let (filt, levels, last, kept) ← levelsOf maxBranchLevels ctx none pre gs
-      -- (each level is a `loop` inside the one before, and the storage
-      -- metadata pass, `MetadataFlow`, iterates every `loop` to a fixed
-      -- point: its time doubles with each level. Choices in a row, as a
-      -- function's many guarded returns are, #686, would have a level each)
-      if levels.isEmpty || levels.length > maxBranchLevels then return none
+      let (filt, levels, last, kept) ← levelsOf ctx none pre gs
+      if levels.isEmpty then return none
       let kept := (kept ++ named last).eraseDups
       let mutable := kept.filterMap fun (slot, written) => if written then some slot else none
       let fx := forClauseEffects fun s => s < start || mutable.contains s
