@@ -1,0 +1,40 @@
+left 4
+left 14
+left row 4
+left row 1
+right 7
+right 17
+right row 7
+right row 8
+single 5
+single 6
+both 7
+both 70
+pair 18
+pair 81
+pair row 18
+after 12
+after 0
+after row 12
+tick 5
+args 20
+args 21
+args state 10
+args left 0
+args left state 0
+defer 4
+defer found 4
+defer 4
+defer found 14
+defer 4
+defer first 14
+in if 1
+seek other 8
+seek other 18
+in loop 7
+in loop 17
+generic string 4
+generic string 14
+generic int 4
+generic int 14
+exit=0

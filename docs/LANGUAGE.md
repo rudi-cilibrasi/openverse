@@ -2713,6 +2713,12 @@ Main():void =
   # Find(derived{}): 3, 13; Find(base{}): 4, 14
   ```
 
+  The method's name may be one that unrelated classes declare (#686): the
+  receiver's class tells the family, as at any call, and the function with
+  the loop waits for the elaboration that finds it. A call in a family
+  with no override is its one implementation's, and one in a family with
+  overrides is a dispatch, each as when no other class has the name.
+
   A second type-refining conditional in the same header, such a header
   on a loop inside another loop, mutable implicit proof
   captures and direct concurrency in a captured expression remain
