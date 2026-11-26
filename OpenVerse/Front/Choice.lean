@@ -4320,6 +4320,13 @@ private structure ReturnLoopSite where
       a generated object owns the cursor, and its class names the type. -/
   owned : Bool := false
 
+/-- Where a header's cursor type is noted. A header whose call is found to
+    have several values only by a later analysis (an overload's, or a method
+    whose name unrelated classes share) is another header then, stepped
+    apart: the type noted for the call as written is not its cursor's. -/
+private def cursorNoteKey (site : ReturnLoopSite) : String :=
+  site.key ++ (if site.isolated then "$isolatedCursor" else "$cursor")
+
 private def loopSiteKey (owner : String) (p : Pos) : String :=
   s!"$loopReturn:{sitePart owner}:{p.file}:{p.line}:{p.col}/"
 
@@ -4483,7 +4490,30 @@ private partial def returnLoopSites (owner : String) (f : MFn) (mv : List String
         else if clauses.all (fun clause => (producer clause).isSome || valid clause) then
           (clauses.filterMap producer).eraseDups
         else []
-      if (flat || composed || exclusive || !recursive.isEmpty) && !clauses.any loopConcurrent &&
+      -- (#761) A clause that calls a function with several values where it
+      -- is written (its value, a part of its expression, a filter), not as
+      -- a choice's alternative or in a branch; or one with a choice inside
+      -- its expression. The call is inlined into the header that the cursor
+      -- steps, as an alternative's is, so its values are rows. One such
+      -- clause, among clauses with flat choices or none.
+      let calling clause := (alternatives clause).isNone && !exclusiveClause clause &&
+        liftsHere (markCalls mv clause)
+      let beforeCall := clauses.takeWhile (!calling ·)
+      -- (a call that stays where its clause is compiled, in a failure
+      -- context nested in the clause, is not a clause of the header)
+      let calls (e : SExpr) : Bool := (namesUsed e).any mv.contains
+      let enclosed : SExpr → Bool := anyE fun
+        | .optionLit _ value | .logicLit _ value | .notE _ value => calls value
+        | .orE _ attempted _ => calls attempted
+        | .ite _ conditions .. => conditions.any calls
+        | .app _ (.ident _ name) args false =>
+          name.startsWith "$" && !["$dispatch", "$choice"].contains name && args.any fun
+            | arg@(.block ..) => calls arg
+            | _ => false
+        | _ => false
+      let called := beforeCall.length < clauses.length && beforeCall.all valid &&
+        (clauses.drop (beforeCall.length + 1)).all valid && !clauses.any enclosed
+      if (flat || composed || exclusive || called || !recursive.isEmpty) && !clauses.any loopConcurrent &&
           !loopBodySupported mv body then
         record scope defers p (.cursor clauses (boundIn clauses) recursive) body
     | .loop p body => record scope defers p .loop body
@@ -4666,7 +4696,7 @@ private def loopNotesReady (owner : String) (parameters : List TParam) (sites : 
   sites.all fun site => (types.lookup (site.key ++ "$return")).isSome &&
     (match site.source with
      | .collection .. => (types.lookup (site.key ++ site.helper ++ "$iterable")).isSome
-     | .cursor .. => (types.lookup (site.key ++ "$cursor")).isSome
+     | .cursor .. => (types.lookup (cursorNoteKey site)).isSome
      | _ => true) &&
     parameters.all (fun parameter => (types.lookup (site.key ++ "$type/" ++ parameter.name)).isSome) &&
     site.captures.all fun binding =>
@@ -4693,7 +4723,7 @@ private partial def noteReturnLoops (owner : String) (ret : STy) (parameters : L
         let cursor := match site.source with
           | .cursor clauses outputs _ =>
             let p := e.pos
-            [.app p (.ident p "$noteForCursor") [.str p [.text (site.key ++ "$cursor")],
+            [.app p (.ident p "$noteForCursor") [.str p [.text (cursorNoteKey site)],
               forCursorNext p (boxCursorHeader clauses) outputs (.ident p "false") site.owned] false]
           | _ => []
         return .block e.pos ([note e.pos site.key
@@ -4840,7 +4870,7 @@ private def lowerReturnLoops (owner : String) (f : MFn) (sites : List ReturnLoop
       pure (binding, ty)
     let cursorPacket ← match site.source with
       | .cursor .. =>
-        let some ty := types.lookup (site.key ++ "$cursor") | throw "internal: missing for cursor type"
+        let some ty := types.lookup (cursorNoteKey site) | throw "internal: missing for cursor type"
         pure (some (ty.substNames substitution))
       | _ => pure none
     let used := namesUsed site.body ++ (match site.source with

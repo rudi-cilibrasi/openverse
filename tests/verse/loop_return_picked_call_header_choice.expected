@@ -1,0 +1,26 @@
+direct 4 4 4
+d 5
+d 105
+direct 4 4 104
+d 5
+d 105
+branch 4 4 4
+b 5
+b 105
+branch 4 4 104
+b 5
+b 105
+one 5 5 5
+o 6
+o 106
+one 5 5 105
+o 6
+o 106
+over 4 4 4
+v 5
+v 105
+over 4 4 104
+v 5
+v 105
+3
+exit=0

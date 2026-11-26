@@ -2692,7 +2692,13 @@ Main():void =
   alternatives produce a row type visible outside the branch. Its branch
   bindings and refined types remain available while that branch resumes.
   A header clause can call a function with several values, also inside
-  an alternative of a conditional. That function can be the loop's own,
+  an alternative of a conditional. The call can be the clause's value
+  (`V := Many(S)`), a part of its expression (`V := Many(S) + 1`) or of a
+  filter (`Many(S) > 3`), before or after the header's other clauses and
+  generators (#761): its code is inlined into the header, so the function's
+  writes and choices are the header's own, and a row that reaches no body
+  is undone back to the value it is in, as with the choice written there.
+  That function can be the loop's own,
   directly or through other functions, in a generic function too: each
   recursive call then steps a header of its own. Its values are rows
   like any others, so a reached return skips the ones it has left.
@@ -2718,7 +2724,14 @@ Main():void =
   the loop waits for the elaboration that finds it. A call in a family
   with no override is its one implementation's, and one in a family with
   overrides is a dispatch, each as when no other class has the name.
+  The header's other clauses can have written choices.
 
+  One clause of a header can have such a call outside a conditional's
+  branches and a choice's alternatives. A second one, a call of an
+  overloaded function that is the header's only choice, a call inside
+  `first{}`, `option{}`, `not` or a condition nested in the clause, and
+  such a header on a loop inside another loop are refused with the
+  general message (#686).
   A second type-refining conditional in the same header, such a header
   on a loop inside another loop, mutable implicit proof
   captures and direct concurrency in a captured expression remain
