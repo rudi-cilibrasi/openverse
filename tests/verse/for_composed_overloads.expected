@@ -1,0 +1,15 @@
+after 1 5 2 1 100
+after 1 5 9 1 200
+after state 200
+after 1 5 2 1 100
+after 1 5 9 1 200
+after state 200
+pair 9 1 100
+pair state 100
+pair 9 1 100
+pair state 100
+method 1 12 1 100
+method state 100
+method 1 12 1 100
+method state 100
+exit=0

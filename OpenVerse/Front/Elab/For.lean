@@ -1568,8 +1568,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         | _ => eerr p "internal: nested for"
   -- (A `for` whose generators are over ranges, arrays, maps, strings and
   -- choices of values, with no producer calls left after clause
-  -- preparation, and with exclusive choices of those, `branchSearch`
-  -- below: by the Book's rule, above. One
+  -- preparation, and with exclusive and composed choices of those,
+  -- `branchSearch` below: by the Book's rule, above. One
   -- whose clauses can do nothing that undoing would change before its last
   -- generator's elements is the nested `forE`s, as they are that search;
   -- another is the search. The others keep their lowerings below, which
@@ -1689,11 +1689,19 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
   -- here once, for every path. So the levels stay
   -- a list, the picked path's are searched with the generators after the
   -- choice by the Book's rule, and a row that reaches no body is undone back
-  -- to the element or alternative it is in. A path with a refining
-  -- condition, a composed choice or a producer of its own is not this:
-  -- those `for`s keep their lowering below, as does one whose clauses do
-  -- nothing that undoing would change, or have a call of a function with
-  -- several values left where a clause is compiled. The number of levels
+  -- to the element or alternative it is in. A composed choice, #283, is
+  -- the same below a level of its own over its alternatives' indices: the
+  -- index is its selector, and each alternative is taken in turn (#761).
+  -- A call of a function with several values in a branch or an alternative
+  -- is inlined where that path's clauses are prepared, so it is the path's
+  -- clauses and choices; a method reached by dispatch is such a choice of
+  -- its implementations (#761). A path with a refining condition, a
+  -- producer of its own (one taken lazily, or through a dictionary) or a
+  -- call of a function with several values left where a clause is compiled
+  -- (in a failure context nested in it) is not this, nor is a composed
+  -- choice whose alternatives have different types (#335): those `for`s
+  -- keep their lowering below, as does one whose clauses do nothing that
+  -- undoing would change. The number of levels
   -- does not decide it (#761): choices in a row, as a function's many
   -- guarded returns are when a `for` takes it (#686), have a level each.)
   -- (A resumable header, #686, is searched this way when the request is the
@@ -1701,7 +1709,15 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
   -- the cursor it has.)
   let ownRequest := cursor.all fun request =>
     !prepared && !request.nested && !request.owned && request.attach.isNone
-  let branchSearch ← if !(searchForm && exclusive && ownRequest && !clauses.any callsManyValued) then pure none else do
+  let composedGen (g : SExpr) : Bool := (Choice.binding? g).any (·.composed)
+  let branching := exclusive || gs.any (fun (g, _) => composedGen g)
+  -- (the loop of a producer's visit, which a choice of alternatives of
+  -- different types is taken through, #335: that `for` keeps its lowering,
+  -- and this loop is a part of it)
+  let visits := clauses.any fun
+    | .gen _ "$producerUnit" _ _ => true
+    | _ => false
+  let branchSearch ← if !(searchForm && branching && ownRequest && !visits) then pure none else do
     let saved ← get
     let refused : EM Unit := throw "this exclusive choice keeps its own lowering"
     let stream := cursor.isSome || Choice.hasReturn body
@@ -1711,15 +1727,95 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     -- step's code, the levels after it, the context of the body, and the
     -- slots the paths keep between steps (the names they bind, each with
     -- whether it is a `var`, and the selectors).
-    let rec levelsOf (c : Ctx) (guard : Option Expr) (fs : List SExpr) (more : List (SExpr × List SExpr)) :
+    -- With `paths`, the clauses of a choice's paths, each ending in a binding
+    -- of the choice's name `x`, and the slot that tells which path is taken
+    -- (an exclusive choice's selector, or the index of a composed choice's
+    -- alternative): the code that runs the taken path up to its first
+    -- generator, the paths' levels side by side, then `fs` and `more`, the
+    -- clauses after the choice.
+    let rec levelsOf (c : Ctx) (guard : Option Expr) (fs : List SExpr) (more : List (SExpr × List SExpr))
+        (paths : Option (Nat × Option (Nat × Ty) × Pos × String × List (List SExpr) × (Expr → Expr)) := none) :
         EM (Expr × List ForLevelPlan × Ctx × List (Nat × Bool)) := do
+      if let some (sel, known, gp, x, paths, entered) := paths then
+        let mut joined := known
+        let mut steps : Array Expr := #[]
+        let mut levels : List ForLevelPlan := []
+        let mut kept : List (Nat × Bool) := []
+        for (cl, i) in paths.zipIdx do
+          let here := p2 .eq (.local sel) (.lit (.int (i : Int)))
+          let picked := match guard with
+            | none => here
+            | some outer => .seq outer here
+          let (f, ls, ci, ks) ← levelsOf c (some picked) (cl.takeWhile (!isGen ·)) (groups (cl.dropWhile (!isGen ·)))
+          let some value := ci.lookup x | eerr gp "internal: a choice's path without its value"
+          -- (a composed choice with no type written: its alternatives' own,
+          -- when they have one type; with several, #335, it keeps its lowering)
+          let (slot, bty) ← match joined with
+            | some known => pure known
+            | none => pure (← fresh value.ty, value.ty)
+          joined := some (slot, bty)
+          unless value.ty == bty do refused
+          let bind := Expr.assign slot (.local value.slot)
+          kept := kept ++ ks ++ named ci
+          -- (the path's value where the path ends: in its step, or after the
+          -- filters of its last level, whichever of that level's generators ran)
+          let (step, ls) := match ls.reverse with
+            | [] => (Expr.seq f (.seq bind (.lit .void)), ls)
+            | final :: before =>
+              (Expr.seq f (.lit .void), before.reverse ++ [{ final with after := final.after ++ [(some picked, bind)] }])
+          steps := steps.push step
+          -- (the paths' levels side by side: one path is taken at a time)
+          let shared := (levels.zip ls).map fun (mine, theirs) =>
+            { parts := mine.parts ++ theirs.parts, after := mine.after ++ theirs.after : ForLevelPlan }
+          levels := shared ++ levels.drop ls.length ++ ls.drop levels.length
+        let some (slot, bty) := joined | eerr gp "internal: a choice without paths"
+        let step := entered (steps.toList.zipIdx.foldr (fun (f, i) acc =>
+          .ite (p2 .eq (.local sel) (.lit (.int (i : Int)))) f acc) Expr.failV)
+        let cJ := { c with locals := { name := x, slot, ty := bty, mutable := false } :: c.locals }
+        -- (the clauses after the choice: in its step when no path has a
+        -- generator, else after the paths' last level, whichever path ran)
+        let (f, rest, last, ks) ← levelsOf cJ guard fs more
+        let slots := (slot, false) :: kept ++ ks
+        match levels.reverse with
+        | [] => return (.seq step f, rest, last, slots)
+        | final :: before =>
+          let final := if fs.isEmpty then final else { final with after := final.after ++ [(guard, f)] }
+          return (step, before.reverse ++ final :: rest, last, slots)
       match fs.findIdx? isExcl with
       | none =>
+        -- (a call of a function with several values left where a clause is
+        -- compiled, in a failure context nested in it: it keeps its boundary)
+        if fs.any callsManyValued then refused
         let (filt, c1) ← elabFilters c fs
         match more with
         | [] => return (filt, [], c1, [])
         | (g, filters) :: rest =>
-          unless plainGen g do refused
+          -- (a composed choice, #283: a level over its alternatives' indices,
+          -- whose element is the alternative taken; the alternatives are the
+          -- paths below it, each with the clauses and generators it has, and
+          -- every alternative is taken in turn, where an exclusive choice
+          -- takes one. The levels after the index are entered again for each.
+          -- The clauses after the choice are here once, so a call of an
+          -- overloaded function among them picks its overload as anywhere,
+          -- where the older lowering picks one in each alternative's copy.)
+          if let some b := (Choice.binding? g).filter (·.composed) then
+            let site := s!"$cf{b.pos.line}_{b.pos.col}{b.name}"
+            let alternatives := b.alts.zipIdx.map fun (a, i) =>
+              normGens (Choice.prepare [.decl b.pos b.name b.ty false a] (choiceValues c1) (choiceField c1)
+                (fieldOrder := choiceOrder c1) (site := s!"{site}a{i}") (keepExcl := true)
+                (keepBranches := choiceHasCast c1))
+            let known ← match b.ty with
+              | some written => do
+                let bty ← resolveTy c1.types b.pos written
+                pure (some (← fresh bty, bty))
+              | none => pure none
+            let index ← fresh .int
+            let (step, levels, last, kept) ← levelsOf c1 guard filters rest
+              (some (index, known, b.pos, b.name, alternatives, id))
+            let domain := ForDomain.sequence (.lit (.arr (choiceIdx b.alts.length))) (.arr .int)
+            return (filt, { parts := [{ slot := index, domain, filter := step, guard }] } :: levels, last,
+              (index, false) :: kept)
+          unless plainGen g && !callsManyValued g do refused
           let (slot, domain, c2, bind) ← elabSource c1 g stream
           let (inner, levels, last, kept) ← levelsOf c2 guard filters rest
           let filter := match bind with
@@ -1727,6 +1823,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             | e => .seq e inner
           return (filt, { parts := [{ slot, domain, filter, guard }] } :: levels, last, kept)
       | some j =>
+        if (fs.take j).any callsManyValued then refused
         let (codeA, cA) ← elabFilters c (fs.take j)
         let after := fs.drop (j + 1)
         if let some b@{ branchy := some i, .. } := fs[j]?.bind Choice.binding? then
@@ -1753,43 +1850,10 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         let rsel ← elabE { cA with canFail := true, bodyFailure := false, inTaking := true } selS (some .int)
         let sel ← fresh .int
         let joined ← fresh bty
-        let mut steps : Array Expr := #[]
-        let mut levels : List ForLevelPlan := []
-        let mut kept : List (Nat × Bool) := [(sel, false), (joined, false)]
-        for ((gs, r), i) in alts.zipIdx do
-          let cl := exclPath cA x xty gs r i
-          let here := p2 .eq (.local sel) (.lit (.int (i : Int)))
-          let picked := match guard with
-            | none => here
-            | some outer => .seq outer here
-          let (f, ls, ci, ks) ← levelsOf cA (some picked) (cl.takeWhile (!isGen ·)) (groups (cl.dropWhile (!isGen ·)))
-          let some value := ci.lookup x | eerr gp "internal: an exclusive choice's path without its value"
-          unless value.ty == bty do refused
-          let bind := Expr.assign joined (.local value.slot)
-          kept := kept ++ ks ++ named ci
-          -- (the path's value where the path ends: in its step, or after the
-          -- filters of its last level, whichever of that level's generators ran)
-          let (step, ls) := match ls.reverse with
-            | [] => (Expr.seq f (.seq bind (.lit .void)), ls)
-            | final :: before =>
-              (Expr.seq f (.lit .void), before.reverse ++ [{ final with after := final.after ++ [(some picked, bind)] }])
-          steps := steps.push step
-          -- (the paths' levels side by side: one path is picked)
-          let shared := (levels.zip ls).map fun (mine, theirs) =>
-            { parts := mine.parts ++ theirs.parts, after := mine.after ++ theirs.after : ForLevelPlan }
-          levels := shared ++ levels.drop ls.length ++ ls.drop levels.length
-        let step := Expr.seq codeA (.seq (.assign sel rsel.e)
-          (steps.toList.zipIdx.foldr (fun (f, i) acc =>
-            .ite (p2 .eq (.local sel) (.lit (.int (i : Int)))) f acc) Expr.failV))
-        let cJ := { cA with locals := { name := x, slot := joined, ty := bty, mutable := false } :: cA.locals }
-        -- (the clauses after the choice: in its step when no path has a
-        -- generator, else after the paths' last level, whichever path ran)
-        let (f, rest, last, ks) ← levelsOf cJ guard after more
-        match levels.reverse with
-        | [] => return (.seq step f, rest, last, kept ++ ks)
-        | final :: before =>
-          let final := if after.isEmpty then final else { final with after := final.after ++ [(guard, f)] }
-          return (step, before.reverse ++ final :: rest, last, kept ++ ks)
+        let paths := alts.zipIdx.map fun ((gs, r), i) => exclPath cA x xty gs r i
+        let (step, levels, last, kept) ← levelsOf cA guard after more
+          (some (sel, some (joined, bty), gp, x, paths, fun picked => .seq codeA (.seq (.assign sel rsel.e) picked)))
+        return (step, levels, last, (sel, false) :: kept)
     let found ← tryCatch (do
       let (filt, levels, last, kept) ← levelsOf ctx none pre gs
       if levels.isEmpty then return none

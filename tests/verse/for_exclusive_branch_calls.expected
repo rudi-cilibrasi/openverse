@@ -1,0 +1,47 @@
+then 1 1 100
+then state 100
+else 1 1 100
+else state 100
+both 1 1 100
+both state 100
+nested 1 1 100
+nested state 100
+or 1 1 100
+or state 100
+case 1 1 100
+case state 100
+control 1 1 100
+control state 100
+written 1 1 110
+written state 110
+written 1 1 110
+written state 110
+none state 0
+none state 0
+alt 1 1 100
+alt state 100
+alt 1 1 100
+alt state 100
+alt-written 1 1 110
+alt-written state 110
+after 0 1 1 100
+after 1 1 1 200
+after state 200
+after 0 1 1 100
+after 1 1 1 200
+after state 200
+returns 101
+returns 1101
+returns state 100
+returns 101
+returns 1101
+returns state 100
+advance 1 1 100
+resumes 100
+resumes 111
+resumes state 100
+advance 1 1 100
+resumes 100
+resumes 111
+resumes state 100
+exit=0

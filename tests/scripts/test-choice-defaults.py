@@ -34,7 +34,7 @@ default_effect.install()
 ROOT = Path(__file__).resolve().parents[2]
 # (the kinds of choice point whose fors follow the Book's rule, as in
 # scripts/models/mv.py: by default those the compiler gives it)
-FOR_BOOK = set(__import__('os').environ.get('OV_FOR_BOOK', 'plain,choice,exclusive').split(',')) - {''}
+FOR_BOOK = set(__import__('os').environ.get('OV_FOR_BOOK', 'plain,choice,composed,exclusive').split(',')) - {''}
 COUNT = int(sys.argv[1]) if len(sys.argv) > 1 else 60
 FIRST = int(sys.argv[2]) if len(sys.argv) > 2 else 1
 
@@ -139,7 +139,9 @@ Wrap(P:{cty}):{cty} = P
     Print("length {{Ps.Length}}")
 '''
 
-    kinds = ({'choice'} | ({'call'} if composed_x or kind == 'composed' else set())
+    # (a choice of calls of functions with several values is a composed
+    # choice, each call inlined into its alternative, #761)
+    kinds = ({'choice'} | ({'composed'} if composed_x or kind == 'composed' else set())
              | ({'exclusive'} if kind.startswith('branch') else set()))
     book = 'all' in FOR_BOOK or kinds <= FOR_BOOK
     out, saved, code = [], [], 0
