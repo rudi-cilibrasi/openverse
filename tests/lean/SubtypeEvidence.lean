@@ -536,12 +536,17 @@ Main()<suspends>:void=
 private def refinedCancelControlSource := refinedCancelSource
   |>.replace "A:=Q.A" "A:=D.Up(Q.A)"
 
+-- (The last clause takes a recursive producer lazily, a generator of its
+-- own, so this `for` keeps the lowering that moves the clauses after each
+-- composed choice into a continuation function: without it the choices are
+-- levels of the `for`'s one search, #761, and no helper carries the evidence.)
 private def composedHelperSource : String :=
   let clauses := (List.range 14).map fun i => s!"A{i}:=(Steps(H,0)|Steps(H,2)),A{i}=0,(set H.N+=1; true?)"
   "vehicle:=class<computes>{Speed:int=9}\ncar:=class<computes>(vehicle){}\n" ++
   "counter:=class<allocates>{var N:int=0}\nSteps(H:counter,N:int)<computes>:int=N|N+1\n" ++
+  "Last(N:int)<computes><decides>:int=\n    N>=0\n    N|Last[N-1]\n" ++
   "F(X:t,D:evidence(vehicle,t),H:counter where t:type)<transacts>:[]int=\n    for(" ++
-  ",".intercalate clauses ++ "){X.Speed}\nMain():void=\n    H:=counter{}\n" ++
+  ",".intercalate clauses ++ ",Z:=Last[0]){X.Speed}\nMain():void=\n    H:=counter{}\n" ++
   "    R:=F(car{},CarEvidence(),H)\n    if(V:=R[0]):Print(\"composed {R.Length} {V} {H.N}\")\n"
 
 private def composedHelperControlSource := composedHelperSource

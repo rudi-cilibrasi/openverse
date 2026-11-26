@@ -54,7 +54,7 @@ Verdicts:
 | `=` between different types, `false` as a map, `X?` of a logic, `true` as a type | #600's | ch. 2 and ch. 4, as the rows quote | as the rows quote | #600's (equality and the empty value), not changed here; `false` as a map is on the owner's page already |
 | Ordering of rationals | exact; an int compares with a rational | `04_operators.md:318-321` and the API declare `<` … for `int` and `float` only | none order rationals (`CompareRational.versetest` 5, 11 test `=`) | **Book silent** (the Book declares no ordering of rationals; no test refuses one): kept then; Epic's compiler refuses it (UEFN 43.12, 3509, `differential/rat-ordering`), so openverse now refuses it too (#724) |
 | Order of a choice's values | spatial | no choice `\|` in the chapters; `07_control.md:711-716`: nested generators give the cartesian product, leftmost outermost | `Operators/BinaryOps.versetest:3`: `a\|b` is a syntax error (3101, the code of syntax not yet supported) | **Book silent**: choice is an openverse feature from the Verse Calculus; keep |
-| Code before a choice | runs once; alternatives rolled back in `if`/`first{}`; in a `for` only an alternative's own clauses | `08_failure.md:147`: "changes … are provisional—they only become permanent if the entire context succeeds"; `07_control.md:196-198` | none with a choice; for a `for` without one see [what a `for` undoes](#what-a-for-undoes) | **Book silent** on choice; the `for` part follows the rollback reading below: a choice is one more choice point of the `for`'s search, so in a `for` too an alternative none of whose values reaches the body is undone (implemented for flat prepared clauses, including inlined and computed producers, and for exclusive choices whose branches are flat, #759. Composed choices and retained producer boundaries still use the older lowering.) |
+| Code before a choice | runs once; alternatives rolled back in `if`/`first{}`; in a `for` only an alternative's own clauses | `08_failure.md:147`: "changes … are provisional—they only become permanent if the entire context succeeds"; `07_control.md:196-198` | none with a choice; for a `for` without one see [what a `for` undoes](#what-a-for-undoes) | **Book silent** on choice; the `for` part follows the rollback reading below: a choice is one more choice point of the `for`'s search, so in a `for` too an alternative none of whose values reaches the body is undone (implemented for flat prepared clauses, including inlined and computed producers, for exclusive choices, #759, and for composed choices, calls in their branches and alternatives, and dispatched methods, #761. Composed choices of alternatives of different types, refining conditions and retained producer boundaries still use the older lowering.) |
 | A choice in an operand of `and` or `or` | `A`'s clauses then `B`'s; `if (T := A) then T else B` | `08_failure.md:216-218`: `or` "tries each option in order, stopping at the first success" | none with a choice | **Book silent** |
 | The three rows on functions with several values (#283) | as the rows say | silent (`yield` is not supported, `Yield.versetest:4-7`) | none | **Book silent** |
 | Precedence of `\|` | below `+`, above comparisons | the precedence table (`04_operators.md:44-55`) has no `\|` | `BinaryOps.versetest:3` refuses `a\|b`; the commented-out `TimSyntax.versetest:280` puts `\|` below `:=` | **Book silent** |
@@ -340,9 +340,13 @@ their bytes.
 
 **Current lowering.** The resumable search serves flat prepared clauses
 over ranges, arrays, maps, strings, and choices of values, and exclusive
-choices whose paths have those (#759, below). This includes all
+and composed choices whose paths have those (#759, #761, below). This
+includes all
 of the pinned Book's `for` cases and flat producers inlined into their
-headers (#709). An eager producer computed as an array contributes an
+headers (#709), into a branch of an exclusive choice or an alternative of
+a composed one too, and a method reached by dispatch, which is an
+exclusive choice of its implementations (#761). An eager producer
+computed as an array contributes an
 array level. Its arguments and call run within the search's rollback
 checkpoints. A producer retained in a nested failure context keeps that
 boundary.
@@ -366,8 +370,9 @@ their common type. A preceding generator supplies the lexical context
 for the selection and advances after that branch is exhausted.
 
 The older lowering applies when clauses retain other lazy producers
-(#246), composed choices (#283, #335), an exclusive choice with one of
-those in a path or a type-refining cast in its condition (#314, #331), or
+(#246), a composed choice whose alternatives have different types
+(#335), an exclusive or composed choice with a lazy producer in a path
+or a type-refining cast in its condition (#314, #331), or
 a continuation for a refining cast or a waiting consumer
 (#243, #417).
 Each form needs its own resumable search state.
@@ -392,8 +397,14 @@ Each form needs its own resumable search state.
   after the last, the `for` kept the old rule and #335's continuations.
   That pass now resumes a `loop` an enclosing one reaches again, with or
   without private cells, and the limit is gone. A call of a function with several values in a
-  branch is not built: the call is lifted with its branch, so the `for`
-  keeps the old rule, as with a method reached by dispatch. Before this, a `for`
+  branch is inlined where the branch's path is prepared (#761): it was
+  lifted with its branch, not with the clauses around the choice, and the
+  search was refused for any header with a call still marked; the check is
+  now made on each path's own prepared clauses, so the callee's clauses and
+  choices are the path's. A method reached by dispatch is the same: its
+  implementations are the branches of an exclusive choice on the
+  receiver's class. A call in the condition, or in another failure context
+  nested in the clauses, keeps its boundary and the old rule. Before #759, a `for`
   with such a choice kept, entirely, what a generator's source after the
   choice did on a row that reached no body (`for (V := if (C[S]) then
   (3 | 1) else (4 | 1), W : Inner(S, V))` kept `Inner(S, 3)`'s write when
@@ -410,19 +421,49 @@ Each form needs its own resumable search state.
   a `Print` or a write of the clauses before the choice, or of its
   condition, is undone, as with no choice there). The models take
   the kind `exclusive` by default (`OV_FOR_BOOK`).
-- *Composed choices* (#283): their alternatives
-  have levels of their own, so the levels are a tree, not a list: a
-  level over the alternatives' indices
-  whose element code picks the subtree, and which picks it again from the
-  saved index when the step resumes it. The clauses after such a choice are copied
-  into each subtree, which #335's continuations avoided by moving them and
-  the body into a function; a continuation cannot hold a search's cursors
-  across the body (its frame is gone), so under the rule the clauses after
-  the choice must be copied, or their levels' slots kept in an object the
-  continuation is given (the guarded levels of an exclusive choice, above,
-  are a third way, but a composed choice's alternatives are all taken, one
-  after another, so a level they share must be re-entered for each). The heterogeneous copies (#335, a binding of a
-  different type per alternative) are subtrees with bodies of their own.
+- *Composed choices* (#283; built, #761): their alternatives
+  have levels of their own, so the levels would be a tree. They are kept a
+  list as an exclusive choice's are: a level over the alternatives'
+  indices, whose element is the alternative taken, and the alternatives as
+  paths below it, their generators side by side in the levels after it,
+  each guarded by the index. Where an exclusive choice picks one path in a
+  step, this level takes each in turn, and the levels below it are entered
+  again for each, as any level is for each element of the one above. The
+  choice's name is bound where the taken alternative ends and the clauses
+  after the choice run after the alternatives' last level, so nothing is
+  copied into the alternatives and #335's continuations are not needed for
+  it: before, the clauses after such a choice were copied into each
+  alternative's own `for`, or moved with the body into a function, where a
+  search's cursors cannot live across the body. An alternative that is a
+  call of a function with several values is inlined there, as in a branch.
+  Before this, `for (V := (if (C[S]) then (3 | 5) else 4) | 1, W :
+  Inner(S, V))` kept the writes of `Inner(S, 3)` and `Inner(S, 5)`. Not
+  built: alternatives of different types (#335, a binding of a different
+  type per alternative), which are taken through a producer's visit with
+  the clauses after them in a consumer, subtrees with bodies of their own;
+  those `for`s keep the old rule, and so do the loops of the visit. Tests:
+  `for_composed_empty_generator`,
+  `multi_return_composed_header_empty_generator`,
+  `for_exclusive_branch_calls`, `for_dispatch_empty_generator`,
+  `for_composed_overloads`; three
+  tests pinned the old rule on a `for` or an alternative that reaches no
+  body and moved with it (`choice_for_cont`, `choice_for_generic_cont`,
+  `multi_return_composed_prelude_empty`). The models take the kind
+  `composed` by default, a call in a branch or an alternative as what its
+  body has, and a dispatched method as an exclusive choice.
+- *Refining conditions* (#243; not built): the picked branch, the clauses
+  after the choice and the body are compiled in a helper of the refined
+  types, called from the filter that picks the branch (`exclIter`'s
+  refined path, `$forFirst`), or from an owner's cursor in a loop with a
+  `return`. The body therefore runs inside the alternative's filter, and
+  the generators after the choice are nested `forE`s inside that helper:
+  there is no step to return to between bodies. A method's dispatch to a
+  class with a type parameter that the receiver's type does not give has
+  such a condition, its class test, and keeps the old rule with it (the
+  `added`, `wrapped` and `interface` hierarchies of `generic_mv.py`).
+  Following the rule there
+  needs the search inside the helper, with the body in the transaction or
+  the helper resumable, which is the continuations' redesign, not a guard.
 - *Lazy producers* (#246) can produce a tree of unbounded depth. Their
   nested transactions need a recursive search step, similar to
   `Choice.FirstLift` for first-success contexts. Each step resumes the
@@ -435,11 +476,10 @@ Each form needs its own resumable search state.
   rest of the clauses and the body in a filter or a continuation, and
   would go with them.
 
-The smallest complete next step is the levels for composed choices
-without continuations, which needs the continuation's
-clauses copied (or its slots in an object, or shared guarded levels as for an
-exclusive choice) and #335's code-size test to
-stay within bounds; the lazily taken calls are the largest.
+The remaining forms are the refining conditions and the composed choices
+of alternatives of different types, which both run the clauses after the
+choice and the body in a helper, and the lazily taken calls, which are
+the largest.
 
 **The models and the programs.** Each of the five models that encoded "a
 failure rolls back to the most recent generator" (`mv.py`, `generic_mv.py`,
@@ -449,7 +489,7 @@ failure rolls back to the most recent generator" (`mv.py`, `generic_mv.py`,
 step does; reaching the body commits), behind `OV_FOR_BOOK`: the kinds of
 choice point whose `for`s follow it (`plain`, `choice`, `composed`,
 `exclusive`, `call`, or `all`), each model classifying its `for`s by what
-their clauses reach. By default the kinds built, `plain,choice`; with the
+their clauses reach. By default the kinds built, `plain,choice` at first, `exclusive` since #759 and `composed` since #761 (a call in a branch or an alternative then counts as what its body has, and a dispatched method as an exclusive choice); with the
 flag off (`OV_FOR_BOOK=none`) every prediction is the original model's.
 The whole reading (`all`) changes the prediction of 61 of 300 `gen-choice`
 programs, 77 of 300 `choice_break`, 181 of 300 `choice_heterogeneous`, 134
