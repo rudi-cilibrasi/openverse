@@ -276,7 +276,14 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
       pure (r, ctx.withTypeValue name (ctx.isTypeValue se))
     | _ => do pure (← elabE ctx se exp, ctx)
   if !ctx.canFail && ((FailCapture.admissionBody r.e).mayFail ctx.sigProg) then
-    eerr se.pos ("this expression can fail, but it is not in a failure context (an if " ++
+    -- (#208) a `for` whose body has several values (`Choice.forProducts`)
+    let what := match se with
+      | .app _ (.ident _ f) _ _ =>
+        if f == Choice.forProductName then
+          "this for has several values, as its body has, and none when a body has none, so it can fail"
+        else "this expression can fail"
+      | _ => "this expression can fail"
+    eerr se.pos (s!"{what}, but it is not in a failure context (an if " ++
       "condition, a for clause, option{…}, logic{…}, not, the left of or, or a <decides> function)" ++
       (if ctx.inLoop then "; a loop's body is none, also in a <decides> function (Book of Verse tests, SOL-4199-BreakFromIf.versetest)" else ""))
   return (r, ctx')
