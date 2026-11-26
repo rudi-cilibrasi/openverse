@@ -1,0 +1,13 @@
+advance 4 40 40 40 1101
+all 6040 2201
+all 6140 2201
+advance 4 40 41 81 2201
+all 6081 3301
+all 6181 3301
+state 3301
+advance 4 40 41 41 1101
+fourth 6141 2201
+state 2201
+none 0
+odd 0 0
+exit=0
