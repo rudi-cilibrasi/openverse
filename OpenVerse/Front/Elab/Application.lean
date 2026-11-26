@@ -378,13 +378,19 @@ partial def elabSuperCall (cb : AppElab) (ctx : Ctx) (p mp : Pos) (m : String) (
 
 /-- `X.Await()`, `X.Cancel()`, `X.Signal()` of a value of a type parameter
     whose bound gives it the method (`Ctx.concurrencyView`): the call
-    through `X` converted to that type. `none`, with nothing elaborated,
-    for any other call. -/
-partial def elabParamConcurrencyCall? (cb : AppElab) (ctx : Ctx) (p mp : Pos) (obj : SExpr) (m0 : String)
-    (spawning : Bool) (args : List SExpr) (bracket : Bool) (exp : Option Ty) : EM (Option R) := do
+    through `X` (`receiver`, elaborated) converted to that type. `none` for
+    any other call.
+
+    This and the four that follow ask what the receiver is. They take it
+    elaborated, once for all of them and for the call that is none of
+    theirs (`elabMemberApp`, #773): each elaborated it for itself, and the
+    call again, so a chain `X.Signal().Signal()…` of calls of the program's
+    own method of one of these names took three times as long for each call
+    in it (twice for `Subscribe`). -/
+partial def elabParamConcurrencyCall? (cb : AppElab) (ctx : Ctx) (p mp : Pos) (obj : SExpr) (receiver : R)
+    (m0 : String) (spawning : Bool) (args : List SExpr) (bracket : Bool) (exp : Option Ty) :
+    EM (Option R) := do
   if !(args.isEmpty && ["Await", "Cancel", "Signal"].contains m0) then return none
-  let before ← get
-  let receiver ← cb.elabE ctx obj none
   if let .param .. := receiver.ty then
     let view ← match ctx.concurrencyView mp receiver.ty m0 with
       | .ok view => pure view
@@ -399,17 +405,14 @@ partial def elabParamConcurrencyCall? (cb : AppElab) (ctx : Ctx) (p mp : Pos) (o
       let method := if spawning then "$spawnMethod:" ++ m0 else m0
       let result ← cb.elabApp inner p (.member mp (.ident mp name) method) args bracket exp
       return some ⟨.seq (.assign slot converted) result.e, result.ty⟩
-  set before
   return none
 
 /-- `T.Cancel()` of a task (#156): the mark `$cancelMark(T)`, which the
     lowering turns into the cancellation of the task's root; only where a
-    call may suspend. `none` for any other call (its receiver is
-    elaborated). -/
-partial def elabTaskCancel? (cb : AppElab) (ctx : Ctx) (p : Pos) (obj : SExpr) (m0 : String)
-    (args : List SExpr) : EM (Option R) := do
+    call may suspend. `none` for any other call. -/
+partial def elabTaskCancel? (ctx : Ctx) (p : Pos) (rt : R) (m0 : String) (args : List SExpr) :
+    EM (Option R) := do
   if !(m0 == "Cancel" && args.isEmpty) then return none
-  let rt ← cb.elabE ctx obj none
   if let .struct n [_] := rt.ty then
     if n == ctx.types.concurrencyName "task" then
       if !ctx.suspends then eerr p "Cancel suspends: it can only be called in a <suspends> function (#156)"
@@ -421,11 +424,11 @@ partial def elabTaskCancel? (cb : AppElab) (ctx : Ctx) (p : Pos) (obj : SExpr) (
   return none
 
 /-- `E.Signal()` of an `event()` (#156): `E.Signal(())`, with the value
-    `void`. `none` for any other call (its receiver is elaborated). -/
-partial def elabEventSignal? (cb : AppElab) (ctx : Ctx) (p mp : Pos) (obj : SExpr) (m0 : String)
+    `void`. `none` for any other call. -/
+partial def elabEventSignal? (cb : AppElab) (ctx : Ctx) (p mp : Pos) (obj : SExpr) (recv : R) (m0 : String)
     (args : List SExpr) (bracket : Bool) (exp : Option Ty) : EM (Option R) := do
   if !(m0 == "Signal" && args.isEmpty) then return none
-  match (← cb.elabE ctx obj none).ty with
+  match recv.ty with
   | .struct n ts =>
     if ((n == ctx.types.concurrencyName "event" || n == ctx.types.concurrencyName "sticky_event") &&
         ts == [.void]) || (n == "$subev0" && ts.isEmpty) then
@@ -436,13 +439,12 @@ partial def elabEventSignal? (cb : AppElab) (ctx : Ctx) (p mp : Pos) (obj : SExp
 /-- `E.Subscribe(F)` of an event without a value, an `event()`, a
     `sticky_event()` or a `subscribable_event()` (#220, #724): the
     subscriptions' helper `$subscribeUnit(E, F)`, whose `F` takes no value,
-    as `Signal()` gives none. `none` for any other call (its receiver is
-    elaborated). -/
-partial def elabEventSubscribe? (cb : AppElab) (ctx : Ctx) (p mp : Pos) (obj : SExpr) (m0 : String)
+    as `Signal()` gives none. `none` for any other call. -/
+partial def elabEventSubscribe? (cb : AppElab) (ctx : Ctx) (p mp : Pos) (obj : SExpr) (recv : R) (m0 : String)
     (args : List SExpr) (bracket : Bool) (exp : Option Ty) : EM (Option R) := do
   if !(m0 == "Subscribe" && args.length == 1 && !bracket) || (ctx.sig? "$subscribeUnit").isNone then
     return none
-  match (← cb.elabE ctx obj none).ty with
+  match recv.ty with
   | .struct n ts =>
     if ((n == ctx.types.concurrencyName "event" || n == ctx.types.concurrencyName "sticky_event") &&
         ts == [.void]) || (n == "$subev0" && ts.isEmpty) then
@@ -458,11 +460,11 @@ def awaitSig (ctx : Ctx) : Sig :=
 
 /-- `T.Await()` of a task, and `E.Await()` of an event (#156): the helper
     `$Await(T)`, `$EvAwait(E)` or, of a sticky event, `$StickyAwait(E)`.
-    `none` for any other call (its receiver is elaborated). -/
-partial def elabAwait? (cb : AppElab) (ctx : Ctx) (p mp : Pos) (obj : SExpr) (m0 : String)
+    `none` for any other call. -/
+partial def elabAwait? (cb : AppElab) (ctx : Ctx) (p mp : Pos) (obj : SExpr) (recv : R) (m0 : String)
     (args : List SExpr) (exp : Option Ty) : EM (Option R) := do
   if !(m0 == "Await" && args.isEmpty) then return none
-  match (← cb.elabE ctx obj none).ty with
+  match recv.ty with
   | .struct n ts =>
     if n == ctx.types.concurrencyName "task" && ts.length == 1 then
       return some (← cb.elabApp ctx p (.ident mp "$Await") [obj] false exp)
@@ -1100,16 +1102,18 @@ partial def elabMemberApp (cb : AppElab) (ctx : Ctx) (p : Pos) (f : SExpr) (mp :
   -- method's call fits, #771; nothing inside the call is that call)
   let known := ctx.knownReceiver.bind fun (o, e, ty) => if o == obj then some (⟨e, ty⟩ : R) else none
   let ctx := { ctx with knownReceiver := none }
-  if let some r ← elabParamConcurrencyCall? cb ctx p mp obj m0 spawning args bracket exp then return r
-  if let some r ← elabTaskCancel? cb ctx p obj m0 args then return r
-  if let some r ← elabEventSignal? cb ctx p mp obj m0 args bracket exp then return r
-  if let some r ← elabEventSubscribe? cb ctx p mp obj m0 args bracket exp then return r
-  if let some r ← elabAwait? cb ctx p mp obj m0 args exp then return r
   -- (a receiver that is refused is refused again where an overloaded method's
   -- call is retried with a tuple's elements: its refusal is kept, #769)
   let recv ← match known with
     | some r => pure r
     | none => elabRefusableWith cb.elabE ctx obj none
+  -- (the concurrency methods ask what the receiver is, and take it as it
+  -- is elaborated here, #773)
+  if let some r ← elabParamConcurrencyCall? cb ctx p mp obj recv m0 spawning args bracket exp then return r
+  if let some r ← elabTaskCancel? ctx p recv m0 args then return r
+  if let some r ← elabEventSignal? cb ctx p mp obj recv m0 args bracket exp then return r
+  if let some r ← elabEventSubscribe? cb ctx p mp obj recv m0 args bracket exp then return r
+  if let some r ← elabAwait? cb ctx p mp obj recv m0 args exp then return r
   let r0 ← elabBoundReceiverWith cb.elabE ctx p recv m0
   ctx.noteFamily mp r0.ty m0
   let (r, m) ← qualifiedReceiver ctx p r0 m0
