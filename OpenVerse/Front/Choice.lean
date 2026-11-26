@@ -5149,6 +5149,20 @@ private partial def lowerChoiceReturnLoops (owner : String) (f : MFn) (sites : L
     | _ => none) f.body
   return (lowered, helpers)
 
+/-- (#686) Whether `body` has a returning loop and a use `R.M` whose family
+    only the class of `R` tells and no elaboration has noted yet (`sites`,
+    `methodFns`). -/
+private def unpickedLoopCall (sites : List (Pos × String)) (body : SExpr) : Bool :=
+  hasReturningLoop body && (memberUses body).any fun (_, q, _, m) => sites.contains (q, (qualified m).2)
+
+/-- The functions at `kept` with their bodies for checking only
+    (`checkBody`), as those kept with one value for an elaboration are. -/
+private def checkedAt (kept : List Pos) (tops : List STop) : List STop :=
+  tops.map fun
+    | .fn p name params tparams fx ret body =>
+      .fn p name params tparams fx ret (if kept.contains p then checkBody body else body)
+    | top => top
+
 /-- What `inlineMulti` gives: the program with the functions that have
     several values inlined at their calls; whether some are taken lazily
     (#246), whose consumers need a class of stack cells; the uses of methods
@@ -5337,19 +5351,35 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
   -- (#283) Its own `defer:`s after its value, as an inlined body's are, so
   -- they run as each value leaves it where it is taken lazily or computed
   -- at the call too: with returns, `elimReturns` places them at each exit.
-  let mfs ← rawMfs.mapM fun (n, f) => do
+  let exits : List (String × MFn × Option MFn) := rawMfs.map fun (n, f) =>
     if !anyE (fun | .ret .. => true | _ => false) f.body then
-      return (n, if (stmtsOf f.body).any isDefer then { f with body := .block f.pos (deferLastLeaves f.pos (stmtsOf f.body)) } else f)
+      (n, f, some (if (stmtsOf f.body).any isDefer then { f with body := .block f.pos (deferLastLeaves f.pos (stmtsOf f.body)) } else f))
+    else
     let retIfs := (stmtsOf f.body).foldl (init := 0) fun acc s => acc + countRetIfs s
     let resultType := if retIfs > 16 || (stmtsOf f.body).any needsReturnBoundary then some f.ret else none
-    let some (ss, _) := elimReturns (fun i => s!"$k{i}") 0 (fun _ => false) resultType (stmtsOf f.body) true
-      (fun e => hasLiftable (markCalls mv e))
-      | throw (if (stmtsOf f.body).any needsReturnBoundary then
+    (n, f, (elimReturns (fun i => s!"$k{i}") 0 (fun _ => false) resultType (stmtsOf f.body) true
+      (fun e => hasLiftable (markCalls mv e))).map fun (ss, _) => { f with body := .block f.pos ss })
+  -- (#686) A returning loop over a call `R.M` of a method whose name
+  -- several unrelated classes declare: until an elaboration has noted the
+  -- class of `R` (`sites`, `rootsAt`), the call is as written and its
+  -- values are not seen, so the loop is none of the forms above. Its
+  -- function is kept with one value for that elaboration, not refused: the
+  -- next analysis has the call as its family's, an override's dispatch or
+  -- the one implementation's plain call. Only where it would be refused
+  -- here: a loop that is one of those forms without the call is noted as
+  -- before.
+  let unpicked := exits.filterMap fun (_, f, out) =>
+    if out.isNone && unpickedLoopCall sites f.body then some f.pos else none
+  if !unpicked.isEmpty then
+    return ← inlineFns (checkedAt unpicked tops) eager lazy overloadPicks nested orders sites methodOvSites
+      (pending ++ unpicked) checking nestDone methodTemplates
+  let mfs ← exits.mapM fun
+    | (n, _, some g) => pure (n, g)
+    | (n, f, none) => throw (if (stmtsOf f.body).any needsReturnBoundary then
           s!"{f.pos.show}: {shownFnName n} has several values and a return in a loop or binding initializer whose expression is not single-valued or starts concurrent work: not supported yet (#686, #687)"
         else if anyE (fun | x@(.forE ..) | x@(.loop ..) => hasReturn x | _ => false) f.body then
           s!"{f.pos.show}: {shownFnName n} has several values and a return in a for or a loop, which would leave its caller once inlined: not supported yet (#235, #283); find what the loop looks for first (in a var it sets, or a for's array) and return in an if after it"
         else s!"{f.pos.show}: {shownFnName n} has several values and a return inside an expression or a condition, which would leave its caller once inlined (#235, #283): return in an if's branch, a block or a case's arm")
-    return (n, { f with body := .block f.pos ss })
   -- (every name the program binds: parameters, locals, fields, methods)
   let binders : List String := (tops.flatMap fun
     | .fn _ _ ps _ _ _ b => ps.map (·.name) ++ localsOf b

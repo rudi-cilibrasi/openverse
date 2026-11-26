@@ -1,0 +1,36 @@
+base 4
+base 14
+base row 4
+base row 1
+derived 3
+derived 13
+derived row 3
+derived row 1
+late 9
+late 19
+late row 9
+late row 2
+plain 6
+plain 16
+plain row 6
+plain row 5
+square 30
+square 40
+square row 30
+square row 31
+circle 50
+circle 60
+as derived 3
+as derived 13
+as derived late 9
+as derived late 19
+pair 35
+pair 53
+pair base 0
+below base 4
+below base 14
+below derived 3
+below derived 13
+below late 9
+below late 19
+exit=0
