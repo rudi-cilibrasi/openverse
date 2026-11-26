@@ -697,8 +697,8 @@ partial def checkForClauses (tops : List STop) : Except String Unit := do
     generator, as written: each clause that is neither a generator (`X : A`,
     `X := A..B`; a `first`'s are the parser's `$each` bindings) nor a
     definition (`X := e`, `X:t = e`, `var X:t = e`), and has no choice in it
-    and calls no function with several values, which make it a generator
-    over their values (#208, #283). The elaboration checks that each can
+    and calls no function with several values, and no `for` whose body
+    has them, which make it a generator over their values (#208, #283). The elaboration checks that each can
     fail (`elabSeqIn`; Book of Verse ch. 7: "Each filter must be failable";
     its tests, `first.versetest:28`: "Only allow expressions that can fail
     (same as `for`)"); a clause that inlining or a choice's preparation
@@ -708,9 +708,12 @@ partial def forFilterPositions (tops : List STop) : List (Pos × String) :=
   let mv := Choice.multiValued (Choice.multiCandidates tops)
   let callsMulti (c : SExpr) : Bool :=
     Choice.anyE (fun | .app _ (.ident _ f) _ _ => mv.contains f | _ => false) c
+  -- (a `for` whose body has several values has several itself, #208)
+  let severalFor (c : SExpr) : Bool :=
+    Choice.anyE (fun | .forE _ _ b => Choice.forBodySeveral mv b | _ => false) c
   let filters (cs : List SExpr) : List (Pos × String) := cs.filterMap fun c => match c with
     | .gen .. | .decl .. => none
-    | c => if Choice.hasChoice [c] || callsMulti c then none else some (c.pos, SExpr.filterKind c)
+    | c => if Choice.hasChoice [c] || callsMulti c || severalFor c then none else some (c.pos, SExpr.filterKind c)
   let isEach : SExpr → Bool
     | .decl _ _ _ false (.app _ (.ident _ "$each") _ false) => true
     | _ => false

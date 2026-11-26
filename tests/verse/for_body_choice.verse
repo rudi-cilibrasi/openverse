@@ -31,3 +31,9 @@ Main():void =
     for (A := for (X : array{1, 2}) { (set N += 1; X) | (set N += 10; 7) }) { Print("effects: [{Show(A)}] {N}") }
     set N = 0
     if (A := for (X : array{1, 2}) { (set N += 1; X) | (set N += 10; 7) }, A[0] = 7) then Print("effects, first: [{Show(A)}] {N}")
+    # as a clause of its own, and as the value a `set` clause writes: a generator over its values
+    var Clauses:int = 0
+    for (for (X : array{1, 2}) { X | 0 }) { set Clauses += 1 }
+    Print("a clause of its own: {Clauses}")
+    var R:[]int = array{}
+    for (set R = for (X : array{1, 2}) { X | 0 }) { Print("set: [{Show(R)}]") }
