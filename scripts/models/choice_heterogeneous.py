@@ -78,7 +78,7 @@ lines = []
 # for's choices are composed of calls of producers with several values (kinds
 # `composed`, `call`), of different types, with an array generator after them;
 # its body waits in the waiting mode.
-FOR_BOOK = set(__import__('os').environ.get('OV_FOR_BOOK', 'plain,choice,exclusive').split(',')) - {''}
+FOR_BOOK = set(__import__('os').environ.get('OV_FOR_BOOK', 'plain,choice,composed,exclusive').split(',')) - {''}
 
 
 def for_book():

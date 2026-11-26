@@ -162,10 +162,12 @@ or a `var` of the clauses), the nested `forE`s below are that search, and
 the `for` keeps them, byte for byte.
 
 **Which `for`s.** The search can handle ranges, arrays, maps, strings,
-flat choices of values, and exclusive choices whose paths have those. The
-compiler selects the search after preparing
+flat choices of values, and exclusive and composed choices whose paths
+have those. The compiler selects the search after preparing
 the clauses. Flat inlined producers contribute their bindings and filters
-to that search. A producer computed as an array at the call contributes
+to that search, in a path of an exclusive or composed choice too, where
+the call is inlined when the path's clauses are prepared (#761). A
+producer computed as an array at the call contributes
 an array level. The search uses its usual checkpoints even when a
 producer's first alternatives never reach the body.
 
@@ -210,15 +212,62 @@ go with the search's first step. A resumable header (#686) whose request
 is the loop's own takes the same levels; its cursor saves the selector, the
 paths' names and each path's source with the level's index.
 
-The older lowering still serves an exclusive choice whose `for` does
-nothing that undoing would change (it keeps its bytes), one whose
-condition has a type-refining cast, one whose path has a composed choice
-or a producer boundary, one with a call of a function with several values
-in a branch or a condition (the call is lifted with its branch, not into
-the `for`'s clauses, so it keeps a boundary, as a method reached by
-dispatch does: its implementations are the branches of such a choice), and
-one inside clauses that another lowering prepared: an alternative of a
-composed choice, a continuation, a staged suffix, a side of a resumable
+**A composed choice in the search (#761).** A choice with an alternative
+that has choices or clauses of its own (#283) takes its alternatives one
+after another, where an exclusive choice takes one. It is a level over
+the alternatives' indices, and its alternatives are paths below that
+level, exactly as an exclusive choice's are below its selector: the
+index is the selector (`levelsOf` with `paths`). The level's element
+code runs the taken alternative's clauses up to its first generator; the
+alternatives' generators share the levels after it under guards that
+read the index; the choice's name is bound where the taken alternative
+ends, and the clauses after the choice run after the alternatives' last
+level. A level below the index is entered again for each alternative, as
+any level is for each element of the level above, so nothing of the
+alternatives or of the clauses after them is copied, and #335's
+continuations are not needed. An alternative none of whose rows reaches
+the body is undone with its own clauses, as an element is.
+
+```
+for (V := (if (c) then (3 | 5) else 4) | 1, W : Inner(S, V)) { body }
+
+level₁ = [0, 1]: K                                    # the alternatives
+         then sel := (if (c) then 0 else 1); X := 4 if sel = 1    if K = 0
+              V := 1                                              if K = 1
+level₂ = [0, 1]: X₀ := 3 | 5 if K = 0 and sel = 0     # the picked branch's
+         then X := X₀ if K = 0 and sel = 0; V := X if K = 0
+level₃ = Inner(S, V)                                  # W
+```
+
+**A call in a path (#761).** A call of a function with several values in
+a branch of an exclusive choice or in an alternative of a composed one is
+still marked (`$inline`) when the `for`'s clauses are prepared: the
+branch's value is lifted with its path, not with the clauses around the
+choice. `levelsOf` prepares each path (`exclPath`, or the alternative's
+binding), which inlines the call there, so the callee's clauses and
+choices are the path's, in the search. A method reached by dispatch
+(`$dispatch`) is such an exclusive choice: its template tests the
+receiver's class and each implementation is a call in its branch. What
+is refused is a call still marked where a clause is compiled
+(`callsManyValued`, checked on the clauses of each path, not on the
+header as a whole): one in a failure context nested in the clauses, a
+condition among them, or a producer taken lazily or through a
+dictionary, which are generators of their own.
+
+The older lowering still serves an exclusive or composed choice whose
+`for` does nothing that undoing would change (it keeps its bytes), an
+exclusive choice whose condition has a type-refining cast (the branch,
+the clauses after it and the body are compiled in the refined types'
+own helper, called from the filter that picks the branch, so the body
+runs inside that filter: it has no search step to return to; a dispatch
+whose class test opens a type parameter of the overriding class is such
+a condition), a
+composed choice whose alternatives have different types (#335: each is
+taken through a producer's visit with the clauses after it in a
+consumer, whose `for`s keep their lowering too), one whose path has a
+producer boundary (a lazily taken call, a call in a nested failure
+context), and one inside clauses that another lowering prepared: a
+continuation, a staged suffix, a side of a resumable
 product. The number of levels does not decide it (#761). Exclusive choices
 one after another, as a function with many guarded returns is when a `for`
 takes it, have a level each, and a level is a `loop` inside the level
@@ -229,7 +278,8 @@ cells too (below, "A loop that an enclosing loop reaches again"): a header
 of sixty-four levels is now checked in half a second.
 
 The [Choice](#choice-iteration-over-alternatives) lowerings still serve
-clauses with a remaining producer boundary or a composed choice. The
+clauses with a remaining producer boundary, a composed choice of
+alternatives of different types, or a refining condition. The
 [readings audit](research/readings-audit.md#what-a-for-undoes)
 describes what each needs to join the search.
 

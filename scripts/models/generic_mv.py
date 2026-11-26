@@ -555,7 +555,22 @@ d{n}({child_tps}) := class({parent}):{extra_field}
             # an exclusive choice of the for's own search; LNc's condition,
             # its call of itself, is a failure context of its own)
             return {'exclusive'}
-        # A dispatched method or a lazy call retains its own boundary.
+        if self.kind == 'IMeth' and self.ovr:
+            # (#761: a method reached by dispatch is an exclusive choice of
+            # its implementations, each inlined in its branch; the override's
+            # are a value and the parent's through `(super:)`, a composed
+            # choice. Where the overriding class has a type parameter the
+            # receiver's type does not give (`added`, `wrapped` and the
+            # interface's classes), the test of the receiver's class refines
+            # types, and a for with a refining condition keeps its lowering)
+            shape = self.method_shape
+            for prefix in ('own-', 'cross-'):
+                if shape.startswith(prefix):
+                    shape = shape[len(prefix):]
+            if shape in ('added', 'wrapped', 'interface'):
+                return {'call'}
+            return {'exclusive', 'composed', 'choice'}
+        # A lazy call retains its own boundary.
         return {'call'}
 
     def call(self, args):
@@ -727,7 +742,7 @@ d{n}({child_tps}) := class({parent}):{extra_field}
 # clauses lead to no body is undone as a whole (FlowControl/for.versetest
 # 317-392, Range.versetest 140, 159). The old rule keeps what an alternative's
 # own clauses did once they succeed, even when later generators give nothing.
-FOR_BOOK = set(os.environ.get('OV_FOR_BOOK', 'plain,choice,exclusive').split(',')) - {''}
+FOR_BOOK = set(os.environ.get('OV_FOR_BOOK', 'plain,choice,composed,exclusive').split(',')) - {''}
 
 
 class Machine:
@@ -1296,7 +1311,10 @@ class Gen:
                 self.m.out.append(f"method first {got['V']}" if got is not None else 'method none')
             else:
                 self.main.append(f'for (V := {call}, V > {cut}) {{ Print("method all {{V}}") }}')
-                self.m.forall(seq, lambda e: self.m.out.append(f"method all {e['V']}"))
+                # (what the for undoes, OV_FOR_BOOK: the dispatch is an exclusive
+                # choice of the implementations, #761, so the arguments' prints
+                # are undone when no value passes the cut)
+                self.m.forall(seq, lambda e: self.m.out.append(f"method all {e['V']}"), kinds=p.for_kinds())
         self.main.append(f'for (V := {p.name}("x","y")) {{ Print("method string {{V}}") }}')
         self.m.forall(p.top({'X':'x','Y':'y'},'V'), lambda e: self.m.out.append(f"method string {e['V']}"))
     def recursive_named(self):
@@ -1536,11 +1554,18 @@ class Gen:
             result = self.fresh("ContResult")
             self.main.append(f"{result} := {name}({literal}, {limit})")
             self.main.append(f'for (V : {result}) {{ Print("cont value {{V(0)}} {{V(1)}}") }}')
+            # (what the for undoes, OV_FOR_BOOK: its kinds are two composed
+            # choices, their alternatives inlined calls, and an exclusive one.
+            # By the Book's rule, #761, an A's `set Total` is kept only when
+            # one of its rows reaches the body; by the old rule it stays once
+            # B is a generator, or its own filter passes)
+            book = 'all' in FOR_BOOK or {'composed', 'choice', 'exclusive'} <= FOR_BOOK
             total, values = 0, []
             for a in range(1, 5):
                 before = total
                 total += a
                 generated = a > cut
+                reached = False
                 bs = [10, 11] if generated else [0]
                 for b in bs:
                     if b <= limit:
@@ -1549,8 +1574,13 @@ class Gen:
                         continue
                     for c in range(1, 5):
                         if c <= bound:
+                            if book and not reached:
+                                total = before + a
+                            reached = True
                             total += b + c
                             values.append(a * 100 + b * 10 + c)
+                if book and not reached:
+                    total = before
             self.m.out.append(f"cont state {total} {len(values)}")
             self.m.out.extend(f"cont value {value} {code}" for code in values)
             self.main.append(f'Print("cont written {{{written}({literal}).Length}}")')

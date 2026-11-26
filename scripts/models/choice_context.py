@@ -26,10 +26,14 @@ lines = ['start'] if context == 'defer' else []
 # Book of Verse's rule, as in scripts/models/mv.py. Early's for has an
 # exclusive choice (its `if` with a return) and a choice of values: by the
 # Book's rule a value of A none of whose B reaches the body is undone with
-# its prefix (#759). The composed consumer's for keeps the old rule, by
-# which the prefix commits before the B generator starts.
-FOR_BOOK = set(__import__('os').environ.get('OV_FOR_BOOK', 'plain,choice,exclusive').split(',')) - {''}
-book = consumer == 'exclusive' and ('all' in FOR_BOOK or {'choice', 'exclusive'} <= FOR_BOOK)
+# its prefix (#759). The composed consumer's for has two composed choices,
+# their alternatives inlined calls, and follows the same rule (#761); each of
+# its A has a B that reaches the body, so both rules print the same for it.
+# By the old rule the prefix commits before the B generator starts.
+FOR_BOOK = set(__import__('os').environ.get('OV_FOR_BOOK', 'plain,choice,composed,exclusive').split(',')) - {''}
+book = 'all' in FOR_BOOK or (
+    {'choice', 'exclusive'} <= FOR_BOOK if consumer == 'exclusive' else
+    {'choice', 'composed'} <= FOR_BOOK if consumer == 'composed' else False)
 for x in av:
     if x % ma != ra:
         continue

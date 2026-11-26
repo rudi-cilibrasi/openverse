@@ -214,7 +214,7 @@ class Fail(Exception):
 # body fails (FlowControl/for.versetest 317-392, Range.versetest 140, 159). The
 # old rule: a failure undoes back to the most recent generator, whose
 # alternative's clauses that succeeded stay, even when later ones give nothing.
-FOR_BOOK = set(os.environ.get('OV_FOR_BOOK', 'plain,choice,exclusive').split(',')) - {''}
+FOR_BOOK = set(os.environ.get('OV_FOR_BOOK', 'plain,choice,composed,exclusive').split(',')) - {''}
 FOR_RULE = ['old']    # (the rule of the innermost for being run)
 
 # The kinds of choice point a for's clauses reach, as LANGUAGE.md tells them
@@ -228,10 +228,12 @@ FOR_RULE = ['old']    # (the rule of the innermost for being run)
 # call of a function with several values that is inlined is then its body's
 # clauses and choices, so it brings the kinds its body has, not one of its
 # own; a recursive one whose values are computed at the call is an array; a
-# lazily taken one, a method reached by dispatch and a call in a nested
-# failure context (`not`, `logic{}`, a condition), whose clauses are not
-# the for's, keep their boundary, and so does a call in a branch of an
-# exclusive choice (#759), which is lifted with that branch.
+# lazily taken one and a call in a nested failure context (`not`,
+# `logic{}`, a condition), whose clauses are not the for's, keep their
+# boundary. A call in a branch of an exclusive choice or in an alternative
+# of a composed one is inlined into that path of the search, and a method
+# reached by dispatch is an exclusive choice of its implementations, each
+# inlined in its branch (#761).
 # mvm2 is the ordinary two-argument overload; only its arguments can choose.
 MANY_VALUED = {'mcall', 'rcall', 'gcall', 'gself', 'rt', 'rt2', 'rt3', 'nam', 'mvm',
                'ovl', 'ows', 'ow2', 'om', 'owr', 'gx', 'gchoice', 'gbif', 'gblk'}
@@ -277,9 +279,14 @@ def mvm_kinds():
     implementation (the class's own, or the interface's default, #375) it is
     inlined, a choice of two values. With an override below Run's class
     (#328), or as the implementation of an interface's method (#372), it is
-    reached by dispatch on the receiver's class, which keeps a boundary."""
-    if SNX['ovm'] or (CTX.get('mvm_ifc') and not SNX['dflt']):
-        return {'call'}
+    reached by dispatch on the receiver's class: an exclusive choice of the
+    implementations, each inlined in its branch (#761). The override's are a
+    value, the parent's two through `(super:)`, and a value: a composed
+    choice."""
+    if SNX['ovm']:
+        return {'exclusive', 'composed', 'choice'}
+    if CTX.get('mvm_ifc') and not SNX['dflt']:
+        return {'exclusive', 'choice'}
     return set()
 
 
@@ -311,14 +318,27 @@ def call_kinds(x, local_search=False):
             # (RT2 and RT3, inlined: a choice of values, then an `if` with a
             # return before another choice, which is an exclusive choice, #314)
             out |= {'choice', 'exclusive'}
+        elif kind == 'ow2':
+            # (Ow(OA, OB), inlined: `Ow(OA) | Ow("{OB}")`, whose second
+            # alternative has two values of its own, a composed choice)
+            out |= {'composed', 'choice'}
+        elif kind == 'om':
+            # (Om(), overridden in owd: reached by dispatch, an exclusive
+            # choice of the implementations, #761; owd's takes the parent's
+            # values through `(super:)`, a composed choice)
+            out |= {'exclusive', 'composed', 'choice'}
         elif kind not in FLAT_CALLS:
             return {'call'}
     if kind in ('not', 'logic'):
         return out | call_kinds(x[1], True)
-    if kind in ('optor', 'orx', 'ifx', 'bif', 'casex'):
-        # (a branch's calls are lifted with the branch, not into the for's
-        # clauses: each keeps a boundary, as one in the condition does)
-        return out.union(*(call_kinds(value, True) for value in x[1:]))
+    if kind in ('optor', 'orx', 'ifx'):
+        # (the condition, or the left of `or`, is a failure context of its
+        # own, where a call keeps a boundary; a branch's calls are inlined
+        # into the branch's path, #761)
+        return out.union(call_kinds(x[1], True), *(call_kinds(value, local_search) for value in x[2:]))
+    if kind == 'bif':
+        return out.union(*(call_kinds(cl, True) | call_kinds(alts, local_search) for cl, alts in x[1]),
+                         call_kinds(x[2], local_search))
     return out.union(*(call_kinds(value, local_search) for value in x))
 
 

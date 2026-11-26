@@ -1,0 +1,25 @@
+override 1 1 100
+override state 100
+base 1 1 100
+base state 100
+control 1 1 100
+control state 100
+writes 1 1 110
+writes state 110
+writes 1 1 110
+writes state 110
+each 1 1 100
+each 1 1 200
+each 1 1 310
+each state 310
+faces 1 1 100
+faces 1 1 200
+faces state 200
+faces 1 1 100
+faces 1 1 200
+faces state 200
+super 1 1 100
+super state 100
+super 1 1 100
+super state 100
+exit=0
