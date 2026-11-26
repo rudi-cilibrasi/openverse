@@ -90,11 +90,16 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
       for n in ns do
         if let .ident q n := n then checkNewLocal ctx q n
       pure (⟨.lit .void, .void⟩, ctx)
-    | .app _ (.ident _ "$noteForCursor") [.str _ [.text key], code] false => do
+    | .app p (.ident _ "$noteForCursor") [.str _ [.text key], code] false => do
       let saved ← get
-      let probe ← elabE { ctx with typeOnly := true } code none
+      -- (#780) a header that the cursor's elaboration cannot step is noted
+      -- as refused: the next analysis does not take it
+      let probe ← tryCatch (some <$> elabE { ctx with typeOnly := true } code none) fun message =>
+        if Choice.cursorRefusal message then pure none else throw message
       set saved
-      noteNeeds { nested := [(key, probe.ty.toSTy)] }
+      match probe with
+      | some probe => noteNeeds { nested := [(key, probe.ty.toSTy)] }
+      | none => noteNeeds { nested := [(Choice.cursorRefusedKey p, .name "void")] }
       pure (⟨.lit .void, .void⟩, ctx)
     | .app _ (.ident _ "$noteTypes") (.str _ [.text key] :: ns) false => do
       -- (#283) a consumer in a recursive group's code, kept for checking

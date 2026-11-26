@@ -4380,6 +4380,25 @@ private structure ReturnLoopSite where
 private def cursorNoteKey (site : ReturnLoopSite) : String :=
   site.key ++ (if site.isolated then "$isolatedCursor" else "$cursor")
 
+/-- (#780) What the elaboration of a header's cursor (`elabForWith`) says of
+    a header it cannot step: a composed choice whose alternatives have rows
+    of different types, and clauses that are not a search's after their
+    preparation (a call of a function with several values that stays where
+    its clause is compiled, inside `first{}` and the like). The types are
+    known to the elaboration only. So where a header's cursor is elaborated
+    for its type, such a header is noted as refused instead, under its
+    loop's position, and the next analysis does not take it: its function
+    is refused as one with a header that is none of the forms. That is
+    where the header's cursor is noted (`$noteForCursor`), and, for a header
+    that calls its loop's own function, which has one value in that
+    elaboration, where the cursor's owner is made (`$refinedCursorOwner`).
+    Anywhere else they are internal errors. -/
+def cursorRowsDiffer : String := "internal: composed cursor alternatives have different row types"
+def cursorNotSearch : String := "internal: resumable for header needs flat prepared clauses"
+def cursorRefusal (message : String) : Bool :=
+  message.endsWith cursorRowsDiffer || message.endsWith cursorNotSearch
+def cursorRefusedKey (p : Pos) : String := s!"$cursorRefused:{p.file}:{p.line}:{p.col}"
+
 private def loopSiteKey (owner : String) (p : Pos) : String :=
   s!"$loopReturn:{sitePart owner}:{p.file}:{p.line}:{p.col}/"
 
@@ -5354,6 +5373,8 @@ partial def inlineFns (tops : List STop) (eager : List String) (lazy : List Stri
           owned := called.any fun name =>
             name == owner || (reachableFunctions rawCalls name).contains owner }
       | _ => site
+    -- (#780) not a header that the cursor's elaboration has refused
+    let sites := sites.filter fun site => (nested.lookup (cursorRefusedKey site.pos)).isNone
     let sites := if sites.any (fun site => match site.source with | .cursor .. => true | _ => false) then
       let selected := choiceReturnLoopSites owner { f with body := moveTerminalLoopChoices mv f.body } mv
       sites.filter fun site => match site.source with
