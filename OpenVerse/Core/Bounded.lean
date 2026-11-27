@@ -114,7 +114,7 @@ def evalB (P : Prog) : Nat → Nat → St → Expr → Bounded (Res × St)
   | n+1, d+1, s, .ret e => bindRB (evalB P n d s e) fun v s₁ => .res (.ret v, s₁)
   | n+1, d+1, s, .print e => bindRB (evalB P n d s e) fun v s₁ =>
       match printBytes v with
-      | some bs => .res (.ok .void, { s₁ with g := { s₁.g with out := s₁.g.out ++ bs } })
+      | some bs => .res (.ok .void, { s₁ with g := { s₁.g with outRev := bs.reverse ++ s₁.g.outRev } })
       | none => .res (.err .type, s₁)
 
 /-- `evalList` with fuel `n` and depth budget `d`. -/

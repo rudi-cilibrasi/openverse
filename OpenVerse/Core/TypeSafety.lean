@@ -2867,7 +2867,7 @@ theorem Eval.of_protoPrelude {P : Prog} : ∀ (objs : List (Nat × List Value)) 
     `τ`. -/
 theorem Runs.typed {P : Prog} {S : Sigs} (hP : ProgTyped P S) {τ r out}
     (hm : S.fns[P.main]? = some ([], τ)) (h : Runs P r out) :
-    r ≠ .err .type ∧ ∃ fr heap, Eval P Prog.initSt (.call P.main []) r ⟨fr, ⟨out, heap⟩⟩ ∧
+    r ≠ .err .type ∧ ∃ fr heap, Eval P Prog.initSt (.call P.main []) r ⟨fr, ⟨out.reverse, heap⟩⟩ ∧
       ∃ Ξ, HeapOK S Ξ heap ∧ ∀ v, r = .ok v → hasTy S.var Ξ v τ = true := by
   obtain ⟨fr, heap, h⟩ := h
   rcases hP.2.2.2 with hnil | ⟨fn, objs, m, hfn, har, hns, hbody, hHo, hsm⟩

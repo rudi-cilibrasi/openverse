@@ -55,6 +55,11 @@ by the same rule, with no journal in the semantics.
 Output is rolled back as well. A `Print` in a condition that fails is not
 observed, which is the reading of "nothing changes" in Book §6.3.
 
+The state keeps the output newest byte first (`Glob.outRev`), so that a
+`Print` costs the length of what it prints and not of everything printed
+before it (#782). `Glob.out` is the bytes in the order printed, and that
+is the output `Runs` and `Prog.run` speak of.
+
 Because Verse has no closures and frames are not shared, a callee cannot
 write its caller's frame. So rollback only ever restores slots of the frames
 that are live. The C runtime implements this with one value stack and an

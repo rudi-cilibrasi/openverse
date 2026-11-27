@@ -12,7 +12,7 @@ private def frameContracts : IO Unit := do
   let fld (j : Nat) : Option Nat := if j == 2 then some 0 else none
   let st : St := {
     fr := [.ref 0, .void, .int 0],
-    g := { out := [], heap := #[{ tag := 0, fields := [.int 0] }] } }
+    g := { outRev := [], heap := #[{ tag := 0, fields := [.int 0] }] } }
   let cases : List (String × Expr × Int) := [
     ("condition break commits its latest slot", .loop (.ite (.seq (.assign 2 (int 9)) .brk) (int 1) (int 2)), 9),
     ("condition failure rolls back", .loop (.ite (.seq (.assign 2 (int 9)) (.prim .fail [])) .brk .brk), 0),
@@ -67,7 +67,7 @@ private def frameContracts : IO Unit := do
     (decide (tc sigs [root, .void, .int, receiver] .int rewritten (some .int) = some .int))
   let state : St := {
     fr := [.ref 0, .void, .int 0, .ref 1],
-    g := { out := [], heap := #[{ tag := 0, fields := [.int 0, .ref 1] }, { tag := 1, fields := [] }] } }
+    g := { outRev := [], heap := #[{ tag := 0, fields := [.int 0, .ref 1] }, { tag := 1, fields := [] }] } }
   match eval { fns := [stop], main := 0 } 4000 state rewritten with
   | some (.ret (.int 7), state) =>
     demand "dispatched cleanup sees committed writes and keeps its changes"
@@ -105,7 +105,7 @@ private def loopContracts : IO Unit := do
         let .ok (lowered, state) := ((Suspend.loopify original).run env).run { Γ }
           | throw (IO.userError "loop conversion failed")
         let fr := initial ++ ((state.Γ.toList.drop Γ.size).map VTy.default)
-        let st : St := { fr, g := { out := [], heap := #[{ tag := 0, fields := [.int 0] }] } }
+        let st : St := { fr, g := { outRev := [], heap := #[{ tag := 0, fields := [.int 0] }] } }
         let p : Prog := { fns := [], main := 0 }
         let before := eval p 10000 st original
         let after := eval p 10000 st lowered
