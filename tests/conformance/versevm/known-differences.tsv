@@ -17,6 +17,7 @@ div-const-for-choice-call-control	book-ahead	The choice operator `|` is in the B
 subscribable-event-control	book-ahead	subscribable_event is the Book's name; on UEFN 43.12 Subscribe is on event and the name is unknown (3506)
 sticky-event-subscribe	restricted-name	sticky_event needs /Verse.org/Restricted on UEFN 43.12 (3506)
 cancel-task-child	restricted-name	task.Cancel is <epic_internal> on UEFN 43.12 (3593)
+todiagnostic-float	restricted-name	diagnostic's String is <epic_internal> on UEFN 43.12 (3593)
 todiagnostic-float-control	restricted-name	diagnostic's String is <epic_internal> on UEFN 43.12 (3593)
 subscribe-order	kept	Subscribers are called in subscription order; the Verse VM's order varies from one Signal to the next (the API: "randomised"), so no program may rely on it
 long-ident-mangled	kept	Epic's identifier limit (3655) is on a derived name that a parameter lengthens; OpenVerse applies the measured limits without parameters

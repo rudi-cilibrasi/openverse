@@ -3,10 +3,8 @@
 # through the diagnostic's String (the Book's API reference declares
 # ToDiagnostic <public> and diagnostic's String <epic_internal>). The Book's
 # tests expect them valid.
-# OpenVerse (ce8632ea, Lean) refuses this probe: "ToDiagnostic of a float (the
-# shortest decimal that reads back is a Verse Core primitive not written yet)
-# is not supported yet: a value of type float is converted to any in a program
-# that calls ToDiagnostic"
+# OpenVerse refused this probe at ce8632ea ("ToDiagnostic of a float … is not
+# supported yet") and runs it now, printing the line below.
 # If UEFN 43.12 admits it, it prints
 #   diagnostic 1.5
 # and OpenVerse has a gap on Verse that Epic ships; if it refuses it, the Book
