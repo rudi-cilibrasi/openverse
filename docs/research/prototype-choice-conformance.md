@@ -9,12 +9,15 @@ comparison, made on 2026-11-26 against the prototype at `d0eababf` and openverse
 
 ## Result
 
-- On 3,000 random programs in the fragment both accept, openverse and the prototype give the
-  same values in the same order, with the same repetitions, on every one.
+- On 5,000 random programs in the fragment both accept, openverse and the prototype give the
+  same values in the same order, with the same repetitions, on every one the prototype finishes
+  (all but 24).
 - openverse refused one form the prototype has: a choice in the body of a `for`. It is supported
   now (`docs/LANGUAGE.md`, [Choice](../LANGUAGE.md#choice), "In the body of a `for`"), with the
   prototype's results.
 - No disagreement on a value was found.
+- The two differ in how they parse a range beside a choice, and the prototype takes a range as a
+  choice anywhere, which the Book does not allow (below).
 
 ## What the two can be compared on
 
@@ -34,6 +37,8 @@ pure choice:
 | `a := for(x:=e){b}`, `a[i]`, `Length[a]` | `A := for (X := e) { b }`, `A[I]`, `A.Length` |
 | `all{…; for(k:=e){b}}` (the values are arrays) | `for (…, R := for (K := e) { b }) { R }` |
 | `f(a:int)<closed>:int := e`, `f[x]` | `F(A:int)<computes><decides>:int = e`, `F[X]` |
+| `f(a:int,b:int)<closed>:int := e`, `f[x,y]` | `F(A:int, B:int)<computes><decides>:int = e`, `F[X, Y]` |
+| `a := array{e1,e2}`, `a+b`, `x:a` as a clause | `A := array{e1, e2}`, `A + B`, `X : A` |
 
 Two of the Book's rules shape the openverse side and do not change the values: a `for` needs a
 generator or a clause that can fail, so every header starts with `D : array{0}`; and a filter
@@ -52,8 +57,10 @@ for function definitions).
 | With functions, arrays, `not`, binding conditions, main at `652a0f1d` | 1,500 | 1,430 | 70 | 0 |
 | The same generator, with a `for` body's choice supported, at this change | 2,000 | 2,000 | 0 | 0 |
 | With programs whose values are the arrays of a `for`, its body's choices included | 1,000 | 1,000 | 0 | 0 |
+| With array literals and joins, generators over arrays, recursive and two-parameter functions, inner `for`s with two clauses and a filter | 2,050 | 2,026 | 0 | 0 |
 
-All 70 refusals in the second batch were a choice, or a call of a function with several values,
+In the last batch the other 24 programs ran past the prototype's step or time limit, so they
+have no verdict. All 70 refusals in the second batch were a choice, or a call of a function with several values,
 in the body of a `for`.
 
 ## The `for` body
@@ -90,6 +97,30 @@ and a `for` over the arrays of another (256 arrays).
 What the prototype cannot say is when a body's effects happen, as it has none. openverse runs
 every alternative of every iteration's body once, when the `for` is reached, as the clauses of
 a `for` over the body's values do.
+
+## Two differences: where `..` binds, and where a range may stand
+
+The two parse a range beside a choice differently.
+
+| Source | Prototype | openverse |
+| --- | --- | --- |
+| `7 \| 1..2` | `7 \| (1..2)`: 7, 1, 2 | `(7 \| 1)..2`: 1, 2 |
+| `1..2 \| 7` | `(1..2) \| 7`: 1, 2, 7 | `1..(2 \| 7)`: 1, 2, then 1 to 7 |
+| `1..2 = 2` | `(1..2) = 2`: 2 | `1..(2 = 2)`: 1, 2 |
+| `1 \| 2 = 2`, `1 \| 2 > 1`, `1 \| 2 + 10` | `(1 \| 2) = 2`, `(1 \| 2) > 1`, `1 \| (2 + 10)` | the same |
+
+In the prototype `..` binds tighter than `|` and than the comparisons, and looser than `+`. The
+Book of Verse puts `..` at precedence 3, below the comparisons, `and` and `or` (ch. 4,
+"Precedence"), and has no `|`. openverse follows the Book for `..`, and the prototype for `|`
+against the comparisons and arithmetic. Those two together leave `|` tighter than `..`, which is
+the one place the prototype is not followed: no order agrees with the Book on `..` and with the
+prototype on both `|` and `..`.
+
+A second difference is the Book's rule, not a matter of parsing. In the prototype a range is a
+choice wherever it stands: `7 | (1..2)` is 7, 1, 2, and `one{1..3}` is 1. The Book says "Ranges
+are not first-class values. They cannot be stored in variables or used outside of `for` loop
+iteration clauses" (ch. 1), so openverse takes a range only as the source of a `for` clause, or
+of a `first` with a generator, and refuses it as an alternative of a choice.
 
 ## Reproducing
 

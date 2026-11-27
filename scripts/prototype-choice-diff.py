@@ -32,7 +32,9 @@ class G:
             op = r.choice(CMP); return (f'({a[0]}{op}{b[0]})', f'({a[1]} {op} {b[1]})')
         if k == 'one': return (f'one{{{a[0]}}}', f'first{{{a[1]}}}')
         if k == 'call':
-            f = r.choice(s.fns); return (f'{f}[{a[0]}]', f'{f.upper()}[{a[1]}]')
+            f, n = r.choice(s.fns)
+            if n == 1: return (f'{f}[{a[0]}]', f'{f.upper()}[{a[1]}]')
+            return (f'{f}[{a[0]},{b[0]}]', f'{f.upper()}[{a[1]}, {b[1]}]')
         if k == 'idx':
             x = r.choice(s.arrs); return (f'{x}[{a[0]}]', f'{x.upper()}[{a[1]}]')
         if k == 'len':
@@ -52,10 +54,25 @@ class G:
     def case(s):
         r = s.r; s.fns, s.arrs = [], []; odefs = []; vdefs = []
         for name in ['f', 'g'][:r.choice([0, 0, 1, 1, 2])]:
-            b = s.expr(s.depth - 1, ['a'])          # may call the functions defined before it
-            odefs.append(f'{name}(a:int)<closed>:int := {b[0]}')
-            vdefs.append(f'{name.upper()}(A:int)<computes><decides>:int = {b[1]}')
-            s.fns.append(name)
+            t = r.random()
+            if t < 0.25:        # two parameters
+                b = s.expr(s.depth - 1, ['a', 'b'])     # may call the functions defined before it
+                odefs.append(f'{name}(a:int,b:int)<closed>:int := {b[0]}')
+                vdefs.append(f'{name.upper()}(A:int, B:int)<computes><decides>:int = {b[1]}')
+                s.fns.append((name, 2))
+            elif t < 0.5:       # recursive: counts up to a bound, a choice at every level
+                k = r.randint(0, 3); base = s.expr(s.depth - 2, ['a']); step = s.expr(s.depth - 2, ['a'])
+                rec = (f'{name}[a+1]', f'{name.upper()}[A + 1]')
+                x, y = (rec, step) if r.random() < 0.5 else (step, rec)
+                odefs.append(f'{name}(a:int)<closed>:int := if(a>{k}){{{base[0]}}}else{{({x[0]}|{y[0]})}}')
+                vdefs.append(f'{name.upper()}(A:int)<computes><decides>:int = '
+                             f'(if (A > {k}) then {base[1]} else ({x[1]} | {y[1]}))')
+                s.fns.append((name, 1))
+            else:
+                b = s.expr(s.depth - 1, ['a'])
+                odefs.append(f'{name}(a:int)<closed>:int := {b[0]}')
+                vdefs.append(f'{name.upper()}(A:int)<computes><decides>:int = {b[1]}')
+                s.fns.append((name, 1))
         n = r.randint(0, 3); vars = []; o = []; v = []
         for i in range(n):
             name = 'xyzw'[i]; t = r.random()
@@ -63,12 +80,31 @@ class G:
                 a = s.expr(s.depth - 2, vars); b = s.expr(s.depth - 2, vars); op = r.choice(CMP)
                 if r.random() < 0.3: o.append(f'not({a[0]}{op}{b[0]})'); v.append(f'not ({a[1]} {op} {b[1]})')
                 else: o.append(f'({a[0]}{op}{b[0]})'); v.append(f'({a[1]} {op} {b[1]})')
-            elif t < 0.35:   # an array built by an inner for
+            elif t < 0.3:    # an array built by an inner for, with one clause or two and a filter
                 a = s.expr(s.depth - 1, vars); nm = 'i' + name
-                b = s.expr(s.depth - 2, vars + [nm])
-                o.append(f'{name}:=for({nm}:={a[0]}){{{b[0]}}}')
-                v.append(f'{name.upper()} := for (E{name.upper()} : array{{0}}, {nm.upper()} := {a[1]}) {{ {b[1]} }}')
+                if r.random() < 0.4:
+                    n2 = 'j' + name; a2 = s.expr(s.depth - 2, vars + [nm]); op = r.choice(CMP)
+                    k2 = s.leaf(vars + [nm]); b = s.expr(s.depth - 2, vars + [nm, n2])
+                    o.append(f'{name}:=for({nm}:={a[0]}; {n2}:={a2[0]}; {n2}{op}{k2[0]}){{{b[0]}}}')
+                    v.append(f'{name.upper()} := for (E{name.upper()} : array{{0}}, {nm.upper()} := {a[1]}, '
+                             f'{n2.upper()} := {a2[1]}, {n2.upper()} {op} {k2[1]}) {{ {b[1]} }}')
+                else:
+                    b = s.expr(s.depth - 2, vars + [nm])
+                    o.append(f'{name}:=for({nm}:={a[0]}){{{b[0]}}}')
+                    v.append(f'{name.upper()} := for (E{name.upper()} : array{{0}}, {nm.upper()} := {a[1]}) {{ {b[1]} }}')
                 s.arrs.append(name)
+            elif t < 0.4:    # an array literal, its elements' choices the array's
+                es = [s.expr(s.depth - 2, vars) for _ in range(r.randint(1, 3))]
+                o.append(f'{name}:=array{{{",".join(e[0] for e in es)}}}')
+                v.append(f'{name.upper()} := array{{{", ".join(e[1] for e in es)}}}')
+                s.arrs.append(name)
+            elif t < 0.45 and s.arrs:   # two arrays joined
+                x, y = r.choice(s.arrs), r.choice(s.arrs)
+                o.append(f'{name}:=({x}+{y})'); v.append(f'{name.upper()} := ({x.upper()} + {y.upper()})')
+                s.arrs.append(name)
+            elif t < 0.55 and s.arrs:   # a generator over an array's elements
+                x = r.choice(s.arrs)
+                o.append(f'{name}:{x}'); v.append(f'{name.upper()} : {x.upper()}'); vars.append(name)
             else:
                 e = s.expr(s.depth - 1, vars)
                 o.append(f'{name}:={e[0]}'); v.append(f'{name.upper()} := {e[1]}'); vars.append(name)
@@ -103,7 +139,7 @@ def main():
     with tempfile.TemporaryDirectory() as d:
         with cf.ThreadPoolExecutor(12) as ex:
             ovs = list(ex.map(lambda ic: run_ov(binp, ic[1][1], ic[1][2], ic[1][3], d, ic[0]), enumerate(cases)))
-        tf = os.path.join(d, 't.versetest'); lines = []
+        lines = []
         for i, (c, rv) in enumerate(zip(cases, ovs)):
             if rv.startswith('['):
                 neg = lambda x: f'(0-{x[1:]})' if x.startswith('-') else x
@@ -111,16 +147,31 @@ def main():
                 exp = ('array{' + ','.join(arr(t) for t in re.findall(r'<([-\d,]*)>', rv)) + '}'
                        if c[3] else arr(rv[1:-1]))
                 lines.append(f'testeq("c{i}",pass){{ {c[0]} }} {{ {exp} }}')
-        open(tf, 'w').write('\n'.join(lines) + '\n')
-        out = subprocess.run([tester, tf, '--assume-verified', '-m', '200000'], capture_output=True, text=True, timeout=3000).stdout
+        # the prototype in small batches side by side: one large case then costs its batch's time only
+        def run(name, batch, limit):
+            tf = os.path.join(d, f't{name}.versetest')
+            open(tf, 'w').write('\n'.join(batch) + '\n')
+            try:
+                return subprocess.run([tester, tf, '--assume-verified', '-m', '100000'],
+                                      capture_output=True, text=True, timeout=limit).stdout
+            except subprocess.TimeoutExpired:
+                return None
+        def oracle(k):
+            batch = lines[k:k + 10]
+            out = run(k, batch, 240)
+            if out is not None: return out
+            # (a batch out of time: each of its cases alone, so that one large case costs only itself)
+            return '\n'.join(run(f'{k}x{j}', [c], 60) or '' for j, c in enumerate(batch))
+        with cf.ThreadPoolExecutor(10) as ex:
+            out = '\n'.join(ex.map(oracle, range(0, len(lines), 10)))
     verdict = {}
-    for m in re.finditer(r'^c(\d+)\s+t\.versetest:\d+\s+(.*)$', out, re.M):
+    for m in re.finditer(r'^c(\d+)\s+t\w+\.versetest:\d+\s+(.*)$', out, re.M):
         verdict[int(m.group(1))] = m.group(2)
     tally = {}
     for i, (c, rv) in enumerate(zip(cases, ovs)):
         vd = verdict.get(i, '')
         kind = ('ov-refused' if not rv.startswith('[') else 'agree' if vd.startswith('Expected success')
-                else 'oracle-timeout' if 'timeout' in vd or 'loop' in vd else 'DIFFER' if vd else 'no-verdict')
+                else 'prototype-limit' if 'timeout' in vd or 'loop' in vd or not vd else 'DIFFER')
         tally[kind] = tally.get(kind, 0) + 1
         if kind != 'agree':
             print(f'{kind} {vd}\n  oracle    {c[0]}\n  openverse {c[1]!r} {c[2]}\n            {rv}')

@@ -3065,7 +3065,13 @@ Main():void =
   context cannot suspend (#156); a choice in its body outside a failure
   context is refused, saying so.
 - **Precedence.** `|` binds looser than arithmetic and tighter than the
-  comparisons: `X = 1 | 2` is `X = (1 | 2)`.
+  comparisons: `X = 1 | 2` is `X = (1 | 2)`. A range's `..` binds looser
+  than all of them (the Book's precedence 3), so `7 | 1..2` is `(7 | 1)..2`
+  and `1..2 | 7` is `1..(2 | 7)`. A range is no alternative of a choice:
+  it is the source of a `for` clause only (the Book, ch. 1: "Ranges are
+  not first-class values").
+  (The Verse team's prototype binds `..` tighter than `|`;
+  [the comparison](research/prototype-choice-conformance.md) has the table.)
 
 **What is proved, and what is tested.** In Verse Core a choice is
 iteration over its alternatives' indices (`Expr.altE`, `Expr.chooseFirst`
