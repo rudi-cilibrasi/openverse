@@ -72,9 +72,9 @@ def main : IO Unit := do
   -- Await mode (a task's end resumes its awaiters): the prelude's text
   -- replacements all took, and a program that awaits a task asks for the
   -- mode in its first elaboration and compiles with it.
-  unless (concPreludeAwaits.splitOn "taskEnd(T:taskBase):void").length == 2 &&
-      (concPreludeAwaits.splitOn "var Ends:?event(void)").length == 2 &&
-      (concPreludeAwaits.splitOn "    WaitDone(T)\n    if (R := T.Result?)").length == 1 do
+  unless (concPreludeAwaits.get.splitOn "taskEnd(T:taskBase):void").length == 2 &&
+      (concPreludeAwaits.get.splitOn "var Ends:?event(void)").length == 2 &&
+      (concPreludeAwaits.get.splitOn "    WaitDone(T)\n    if (R := T.Result?)").length == 1 do
     throw (IO.userError "await prelude: a replacement did not apply")
   let awaiting ← need "awaiting parse" (parseProgram
     "F()<suspends>:int = 1\nMain()<suspends>:void =\n    T := spawn{F()}\n    Print(\"{T.Await()}\")\n")
